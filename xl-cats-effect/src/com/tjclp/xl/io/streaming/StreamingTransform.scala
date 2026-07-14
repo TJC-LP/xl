@@ -1,12 +1,11 @@
 package com.tjclp.xl.io.streaming
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InputStream, OutputStream}
-import javax.xml.parsers.SAXParserFactory
 import org.xml.sax.{Attributes, InputSource}
 import org.xml.sax.helpers.DefaultHandler
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.ooxml.{SaxWriter, StaxSaxWriter, XmlUtil}
+import com.tjclp.xl.ooxml.{SaxWriter, StaxSaxWriter, XmlSecurity, XmlUtil}
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import scala.collection.mutable
 
@@ -294,13 +293,12 @@ object StreamingTransform:
     val writer = StaxSaxWriter.create(output)
     val handler = new TransformHandler(writer, patches, worksheetMetadata)
 
-    val factory = SAXParserFactory.newInstance()
-    factory.setNamespaceAware(true)
-    val parser = factory.newSAXParser()
+    // GH-350: shared XXE hardening + benign-doctype strip, matching the in-memory parseSafe path
+    val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
 
     // Note: Caller is responsible for closing input stream.
     // When used with ZipInputStream, the entry is managed by the caller.
-    parser.parse(InputSource(input), handler)
+    parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(input)), handler)
     writer.flush()
 
   /**
@@ -349,12 +347,17 @@ object StreamingTransform:
         val writer = StaxSaxWriter.create(baos)
         val handler = new EarlyAbortTransformHandler(writer, patches, analysis.maxRow)
 
-        val factory = SAXParserFactory.newInstance()
-        factory.setNamespaceAware(true)
-        val parser = factory.newSAXParser()
+        // GH-350: hardened parser + doctype strip; the splice below pattern-matches on the
+        // ORIGINAL entryBytes, so stripping the parse input cannot skew it
+        val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
 
         try
-          parser.parse(InputSource(new ByteArrayInputStream(entryBytes)), handler)
+          parser.parse(
+            InputSource(
+              XmlSecurity.stripLeadingDoctypeStream(new ByteArrayInputStream(entryBytes))
+            ),
+            handler
+          )
           writer.flush()
           // Full parse completed - no early abort
           EarlyAbortResult(baos.toByteArray, aborted = false, abortedAtRow = 0)
@@ -383,11 +386,10 @@ object StreamingTransform:
     val result = mutable.Map[ARef, Int]()
     val handler = new StyleScanHandler(range, result)
 
-    val factory = SAXParserFactory.newInstance()
-    factory.setNamespaceAware(true)
-    val parser = factory.newSAXParser()
+    // GH-350: shared XXE hardening + benign-doctype strip, matching the in-memory parseSafe path
+    val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
 
-    try parser.parse(InputSource(input), handler)
+    try parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(input)), handler)
     finally
       scala.util.Try(input.close()) // Log-worthy but not fatal; stream may already be closed
 

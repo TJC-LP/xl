@@ -1,12 +1,11 @@
 package com.tjclp.xl.io.streaming
 
 import java.io.InputStream
-import javax.xml.parsers.SAXParserFactory
 import org.xml.sax.{Attributes, InputSource}
 import org.xml.sax.helpers.DefaultHandler
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{CellError, CellValue}
-import com.tjclp.xl.ooxml.{SharedStrings, XmlUtil}
+import com.tjclp.xl.ooxml.{SharedStrings, XmlSecurity, XmlUtil}
 
 /**
  * SAX-based single cell reader with early-abort optimization.
@@ -61,11 +60,10 @@ object SaxSingleCellReader:
     sst: Option[SharedStrings]
   ): Option[CellResult] =
     try
-      val factory = SAXParserFactory.newInstance()
-      factory.setNamespaceAware(true)
-      val parser = factory.newSAXParser()
+      // GH-350: shared XXE hardening + benign-doctype strip, matching the in-memory parseSafe path
+      val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
       val handler = new SingleCellHandler(targetRef, sst)
-      parser.parse(InputSource(stream), handler)
+      parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
       // Reached end of document without finding cell
       None
     catch

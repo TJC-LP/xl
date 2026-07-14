@@ -4,12 +4,11 @@ import cats.effect.Sync
 import cats.syntax.all.*
 import fs2.Stream
 import java.io.InputStream
-import javax.xml.parsers.SAXParserFactory
 import org.xml.sax.{InputSource, Attributes}
 import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
 import com.tjclp.xl.cells.{CellValue, CellError}
-import com.tjclp.xl.ooxml.{SharedStrings, XmlUtil}
+import com.tjclp.xl.ooxml.{SharedStrings, XmlSecurity, XmlUtil}
 import java.util.concurrent.{ArrayBlockingQueue, BlockingQueue}
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -120,11 +119,10 @@ object SaxStreamingReader:
       if rowBuffer.size >= chunkSize then flushBuffer()
 
     try
-      val factory = SAXParserFactory.newInstance()
-      factory.setNamespaceAware(true)
-      val parser = factory.newSAXParser()
+      // GH-350: shared XXE hardening + benign-doctype strip, matching the in-memory parseSafe path
+      val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
       val handler = new WorksheetHandler(sst, rowBounds, colBounds, emitRow, cancelled)
-      parser.parse(InputSource(stream), handler)
+      parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
       // Flush any remaining rows
       flushBuffer()
       queue.put(ChunkEvent.End)

@@ -277,10 +277,10 @@ object WorkbookMetadataReader:
  */
 private[metadata] object DimensionExtractor:
   import java.io.InputStream
-  import javax.xml.parsers.SAXParserFactory
   import org.xml.sax.{Attributes, InputSource}
   import org.xml.sax.helpers.DefaultHandler
   import com.tjclp.xl.addressing.{ARef, CellRange}
+  import com.tjclp.xl.ooxml.XmlSecurity
 
   // Exception to abort SAX parsing early (no stacktrace for efficiency)
   @SuppressWarnings(Array("org.wartremover.warts.Null"))
@@ -297,11 +297,10 @@ private[metadata] object DimensionExtractor:
    */
   def extract(stream: InputStream): Option[CellRange] =
     try
-      val factory = SAXParserFactory.newInstance()
-      factory.setNamespaceAware(true)
-      val parser = factory.newSAXParser()
+      // GH-350: shared XXE hardening + benign-doctype strip, matching the in-memory parseSafe path
+      val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
       val handler = new DimensionHandler()
-      parser.parse(InputSource(stream), handler)
+      parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
       // If we get here, no dimension was found before end of document
       None
     catch

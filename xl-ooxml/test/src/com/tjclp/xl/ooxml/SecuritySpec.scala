@@ -276,6 +276,60 @@ class SecuritySpec extends FunSuite:
     )
   }
 
+  test("GH-350: stripLeadingDoctype skips comments inside the internal subset (apostrophe)") {
+    // The apostrophe inside the comment must not open quote state and swallow the doctype end.
+    val in = """<?xml version="1.0"?><!DOCTYPE x [ <!-- don't --> ]><x/>"""
+    assertEquals(XmlSecurity.stripLeadingDoctype(in), """<?xml version="1.0"?><x/>""")
+  }
+
+  test("GH-350: stripLeadingDoctype skips comments inside the internal subset (bracket)") {
+    // The ']' inside the comment must not close the subset early and truncate the strip.
+    val in = """<?xml version="1.0"?><!DOCTYPE x [ <!-- ] --> ]><x/>"""
+    assertEquals(XmlSecurity.stripLeadingDoctype(in), """<?xml version="1.0"?><x/>""")
+  }
+
+  test("GH-350: doctype with a comment-laden internal subset parses via parseSafe") {
+    val xml = "<?xml version=\"1.0\"?>\n<!DOCTYPE x [ <!-- don't ] --> <!ELEMENT x ANY> ]>\n<x/>"
+    XmlSecurity.parseSafe(xml, "test.xml") match
+      case Right(elem) => assertEquals(elem.label, "x")
+      case Left(err) => fail(s"comment-laden internal subset must parse: ${err.message}")
+  }
+
+  test("GH-350: stripLeadingDoctype strips a doctype behind a UTF-8 BOM (and drops the BOM)") {
+    // Xerces rejects U+FEFF at the start of a character stream, so once bytes are decoded the
+    // BOM char is junk: drop it along with the doctype.
+    val in = "\uFEFF<?xml version=\"1.0\"?>\n<!DOCTYPE x SYSTEM \"x.dtd\">\n<x/>"
+    assertEquals(XmlSecurity.stripLeadingDoctype(in), "<?xml version=\"1.0\"?>\n\n<x/>")
+  }
+
+  test("GH-350: BOM + DOCTYPE part parses via parseSafe") {
+    val xml =
+      "\uFEFF<?xml version=\"1.0\"?>\n<!DOCTYPE x SYSTEM \"http://example.invalid/x.dtd\">\n<x/>"
+    XmlSecurity.parseSafe(xml, "test.xml") match
+      case Right(elem) => assertEquals(elem.label, "x")
+      case Left(err) => fail(s"BOM + DOCTYPE part must parse: ${err.message}")
+  }
+
+  test("GH-350: stripLeadingDoctypeStream strips a doctype (with BOM) at the byte level") {
+    val xml = "\uFEFF<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+      "<!DOCTYPE x [ <!-- don't ] --> <!ENTITY e \"v\"> ]>\n<x>héllo</x>"
+    val in = new java.io.ByteArrayInputStream(xml.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+    val out = new String(
+      XmlSecurity.stripLeadingDoctypeStream(in).readAllBytes(),
+      java.nio.charset.StandardCharsets.UTF_8
+    )
+    assertEquals(out, "\uFEFF<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<x>héllo</x>")
+  }
+
+  test("GH-350: stripLeadingDoctypeStream passes doctype-free input through byte-identical") {
+    val bytes = "<?xml version=\"1.0\"?>\n<x>日本語 🚀</x>"
+      .getBytes(java.nio.charset.StandardCharsets.UTF_8)
+    val out = XmlSecurity
+      .stripLeadingDoctypeStream(new java.io.ByteArrayInputStream(bytes))
+      .readAllBytes()
+    assert(java.util.Arrays.equals(out, bytes), "doctype-free stream must be untouched")
+  }
+
   test("GH-350: stripLeadingDoctype leaves content after the first element untouched") {
     val in = "<x><![CDATA[<!DOCTYPE y [ ]>]]></x>"
     assertEquals(XmlSecurity.stripLeadingDoctype(in), in)

@@ -45,7 +45,11 @@ class StreamingParitySpec extends CatsEffectSuite:
     "small-values-lo.xlsx",
     "styled-lo.xlsx",
     "formulas-lo.xlsx",
-    "image-shape.xlsx"
+    "image-shape.xlsx",
+    // GH-350: DOCTYPE prologs (with comment-trap internal subsets), BOM'd styles, externalLinks —
+    // pins that the streaming SAX readers tolerate the same hostile-but-Excel-valid class as the
+    // in-memory reader (both paths share secureSaxParserFactory + the doctype strip).
+    "doctype-hostile.xlsx"
   )
 
   private def fixturePath(name: String): Path =

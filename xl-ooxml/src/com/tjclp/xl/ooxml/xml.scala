@@ -439,6 +439,24 @@ object XmlUtil:
 
 object XmlSecurity:
   /**
+   * SAXParserFactory carrying the XXE hardening posture shared by EVERY parse surface: doctype
+   * declarations rejected, external general/parameter entities and external DTD loading disabled,
+   * XInclude off, namespaces on. Streaming SAX sites (worksheet/SST/dimension readers, streaming
+   * transforms) must build their parsers from this factory so the hardening cannot drift per-site
+   * (GH-350) — pair it with [[stripLeadingDoctypeStream]] on the input so benign doctypes still
+   * read.
+   */
+  def secureSaxParserFactory(): javax.xml.parsers.SAXParserFactory =
+    val factory = javax.xml.parsers.SAXParserFactory.newInstance()
+    factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+    factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
+    factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+    factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+    factory.setXIncludeAware(false)
+    factory.setNamespaceAware(true)
+    factory
+
+  /**
    * Thread-local pool of XXE-safe SAX parsers for performance.
    *
    * Optimization: Parser creation is expensive (factory + security features setup). Reuse parsers
@@ -446,16 +464,7 @@ object XmlSecurity:
    * speedup).
    */
   private val parserPool: ThreadLocal[javax.xml.parsers.SAXParser] =
-    ThreadLocal.withInitial(() => {
-      val factory = javax.xml.parsers.SAXParserFactory.newInstance()
-      factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-      factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
-      factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-      factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-      factory.setXIncludeAware(false)
-      factory.setNamespaceAware(true)
-      factory.newSAXParser()
-    })
+    ThreadLocal.withInitial(() => secureSaxParserFactory().newSAXParser())
 
   /**
    * Strip a benign leading <!DOCTYPE ...> declaration from the XML prolog (GH-350).
@@ -467,13 +476,31 @@ object XmlSecurity:
    * stripped internal subset are simply never honored (any reference to them fails as an undeclared
    * entity), which is safe for OOXML parts since they never rely on DTD entities.
    *
+   * A leading UTF-8 BOM (which survives the bytes->String decode as U+FEFF and which Xerces REJECTS
+   * in a character stream) is dropped first — third-party producers that emit DOCTYPEs are exactly
+   * the ones that emit BOMs, and a BOM char is meaningless once already decoded.
+   *
    * The scanner only walks the prolog (whitespace, the XML declaration / processing instructions,
    * comments); on the first non-prolog construct it stops, so element content can never be eaten.
-   * Within the DOCTYPE it tracks quotes and `[`/`]` internal-subset nesting, handling both the
-   * `<!DOCTYPE x SYSTEM "...">` and `<!DOCTYPE x [ ... ]>` forms. An unterminated DOCTYPE is left
-   * untouched for the parser to report.
+   * Within the DOCTYPE it tracks quotes and `[`/`]` internal-subset nesting and skips
+   * `<!-- ... -->` / `<? ... ?>` spans wholesale (a `]`, `>`, or quote inside a subset comment must
+   * not confuse the state machine), handling both the `<!DOCTYPE x SYSTEM "...">` and
+   * `<!DOCTYPE x [ ... ]>` forms. An unterminated DOCTYPE is left untouched for the parser to
+   * report.
    */
   private[ooxml] def stripLeadingDoctype(xml: String): String =
+    val body = if xml.nonEmpty && xml.charAt(0) == '\uFEFF' then xml.substring(1) else xml
+    doctypeSpan(body) match
+      case Some((start, end)) =>
+        // Keep the stripped region's newlines so reported line numbers still match the source
+        body.substring(0, start) + body.substring(start, end).filter(_ == '\n') +
+          body.substring(end)
+      case None => body
+
+  /**
+   * Locate the `[start, end)` span of a leading DOCTYPE declaration (see [[stripLeadingDoctype]]).
+   */
+  private def doctypeSpan(xml: String): Option[(Int, Int)] =
     @annotation.tailrec
     def doctypeEnd(i: Int, depth: Int, quote: Option[Char]): Option[Int] =
       if i >= xml.length then None
@@ -482,12 +509,21 @@ object XmlSecurity:
         quote match
           case Some(q) => doctypeEnd(i + 1, depth, if c == q then None else quote)
           case None =>
-            c match
-              case '"' | '\'' => doctypeEnd(i + 1, depth, Some(c))
-              case '[' => doctypeEnd(i + 1, depth + 1, None)
-              case ']' => doctypeEnd(i + 1, depth - 1, None)
-              case '>' if depth == 0 => Some(i + 1)
-              case _ => doctypeEnd(i + 1, depth, None)
+            // Comments and PIs are legal in the internal subset; skip them wholesale so their
+            // content (']', '>', quotes) can't corrupt the depth/quote state (GH-350).
+            if xml.startsWith("<!--", i) then
+              val end = xml.indexOf("-->", i + 4)
+              if end < 0 then None else doctypeEnd(end + 3, depth, None)
+            else if xml.startsWith("<?", i) then
+              val end = xml.indexOf("?>", i + 2)
+              if end < 0 then None else doctypeEnd(end + 2, depth, None)
+            else
+              c match
+                case '"' | '\'' => doctypeEnd(i + 1, depth, Some(c))
+                case '[' => doctypeEnd(i + 1, depth + 1, None)
+                case ']' => doctypeEnd(i + 1, depth - 1, None)
+                case '>' if depth == 0 => Some(i + 1)
+                case _ => doctypeEnd(i + 1, depth, None)
 
     @annotation.tailrec
     def prologScan(i: Int): Option[(Int, Int)] =
@@ -502,11 +538,43 @@ object XmlSecurity:
       else if xml.startsWith("<!DOCTYPE", i) then doctypeEnd(i + 9, 0, None).map(end => (i, end))
       else None // first element (or malformed input) — nothing to strip
 
-    prologScan(0) match
+    prologScan(0)
+
+  /** Upper bound on the prolog + DOCTYPE region [[stripLeadingDoctypeStream]] will buffer/scan. */
+  private val MaxPrologScanBytes = 16384
+
+  /**
+   * Stream-level [[stripLeadingDoctype]] for SAX paths that parse InputStreams directly (GH-350):
+   * the streaming worksheet/SST/dimension readers and streaming transforms build their parsers from
+   * [[secureSaxParserFactory]] (doctype disallowed), so a benign leading DOCTYPE must be removed
+   * before the parser sees the bytes — same tolerance as the in-memory path.
+   *
+   * Buffers at most [[MaxPrologScanBytes]] from the head, removes a leading DOCTYPE (newlines kept
+   * so reported line numbers still match), and returns head + untouched remainder as one stream.
+   * The scan runs on an ISO-8859-1 view of the head (1 char = 1 byte, so span indexes map straight
+   * back to byte offsets; UTF-8 continuation bytes can never alias the ASCII delimiters the scanner
+   * tracks). A UTF-8 BOM is skipped for scanning but kept in the output. If the scan is
+   * inconclusive within the buffer (no doctype, truncated doctype, non-UTF-8-family encoding), the
+   * input passes through unchanged for the parser to report.
+   */
+  def stripLeadingDoctypeStream(in: java.io.InputStream): java.io.InputStream =
+    val head = in.readNBytes(MaxPrologScanBytes)
+    val bomLen =
+      if head.length >= 3 && head(0) == 0xef.toByte && head(1) == 0xbb.toByte &&
+        head(2) == 0xbf.toByte
+      then 3
+      else 0
+    val headStr =
+      new String(head, bomLen, head.length - bomLen, java.nio.charset.StandardCharsets.ISO_8859_1)
+    val cleaned = doctypeSpan(headStr) match
       case Some((start, end)) =>
-        // Keep the stripped region's newlines so reported line numbers still match the source
-        xml.substring(0, start) + xml.substring(start, end).filter(_ == '\n') + xml.substring(end)
-      case None => xml
+        val out = new java.io.ByteArrayOutputStream(head.length)
+        out.write(head, 0, bomLen + start)
+        (start until end).foreach(i => if headStr.charAt(i) == '\n' then out.write('\n'))
+        out.write(head, bomLen + end, head.length - bomLen - end)
+        out.toByteArray
+      case None => head
+    new java.io.SequenceInputStream(new java.io.ByteArrayInputStream(cleaned), in)
 
   /** Shared XXE-safe XML parser with pooling optimization. */
   def parseSafe(xmlString: String, location: String): XLResult[Elem] =

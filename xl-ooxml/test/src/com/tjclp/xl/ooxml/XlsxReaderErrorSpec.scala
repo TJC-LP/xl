@@ -146,6 +146,130 @@ class XlsxReaderErrorSpec extends FunSuite:
     assertEquals(wb.sheets(0)(ref"A1").value, CellValue.Text("Hello"))
   }
 
+  test("XlsxReader tolerates a UTF-8 BOM before a leading DOCTYPE (GH-350)") {
+    // Producers that emit DOCTYPEs are exactly the ones that emit BOMs; the strip must see
+    // through the BOM (which survives the bytes->String decode as U+FEFF).
+    val bomDoctypeWorkbook = "\uFEFF" +
+      """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE workbook SYSTEM "http://example.invalid/workbook.dtd">
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+    val bytes = buildWorkbook(overrides = Map("xl/workbook.xml" -> bomDoctypeWorkbook))
+    val wb = XlsxReader
+      .readFromBytes(bytes)
+      .fold(err => fail(s"BOM + DOCTYPE workbook must read: $err"), identity)
+    assertEquals(wb.sheets(0)(ref"A1").value, CellValue.Text("Hello"))
+  }
+
+  test("GH-350: synthesized field-class workbook reads (doctypes + huge styles + externalLinks)") {
+    // The field databook class GH-350 names: DOCTYPE headers on core parts, a styles part with
+    // thousands of cellXfs, and an externalLinks part. Every dimension at once must read.
+    val doctypeWorkbook =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE workbook SYSTEM "http://example.invalid/workbook.dtd">
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+  <externalReferences>
+    <externalReference r:id="rId2"/>
+  </externalReferences>
+</workbook>"""
+    val relsWithExternalLink =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="externalLinks/externalLink1.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>"""
+    val contentTypesWithExtras =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+  <Override PartName="/xl/externalLinks/externalLink1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/>
+</Types>"""
+    val externalLinkXml =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<externalLink xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <externalBook r:id="rId1">
+    <sheetNames><sheetName val="Extern"/></sheetNames>
+  </externalBook>
+</externalLink>"""
+    val externalLinkRels =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath" Target="extern.xlsx" TargetMode="External"/>
+</Relationships>"""
+    // BOM + DOCTYPE + ~4000 cellXfs: the huge-styles dimension of the field class. The xfs are
+    // VARIED (cycling numFmtId/alignment) so the part stays under the reader's 100:1 zip-bomb
+    // compression-ratio guard, like real field styles would.
+    val horiz = Vector("general", "left", "center", "right", "fill", "justify")
+    val hugeXfs = (1 to 4000).map { i =>
+      s"""<xf numFmtId="${i % 50}" fontId="0" fillId="0" borderId="0" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="${horiz(
+          i % 6
+        )}" indent="${i % 16}" textRotation="${i % 91}"/></xf>"""
+    }.mkString
+    val bomDoctypeHugeStyles = "\uFEFF" +
+      s"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE styleSheet SYSTEM "http://example.invalid/styles.dtd">
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+  <borders count="1"><border/></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="4001"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>$hugeXfs</cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"""
+    val doctypeSharedStrings =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE sst [ <!-- producers put comments here, don't choke --> ]>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1">
+  <si><t>Shared</t></si>
+</sst>"""
+    val sheetUsingSst =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE worksheet [
+  <!ELEMENT worksheet ANY>
+  <!-- a ']' in a comment: ] must not truncate the strip -->
+]>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="s"><v>0</v></c>
+      <c r="B1" s="3999"><v>42</v></c>
+    </row>
+  </sheetData>
+</worksheet>"""
+    val bytes = buildWorkbook(overrides =
+      Map(
+        "[Content_Types].xml" -> contentTypesWithExtras,
+        "xl/workbook.xml" -> doctypeWorkbook,
+        "xl/_rels/workbook.xml.rels" -> relsWithExternalLink,
+        "xl/worksheets/sheet1.xml" -> sheetUsingSst,
+        "xl/styles.xml" -> bomDoctypeHugeStyles,
+        "xl/sharedStrings.xml" -> doctypeSharedStrings,
+        "xl/externalLinks/externalLink1.xml" -> externalLinkXml,
+        "xl/externalLinks/_rels/externalLink1.xml.rels" -> externalLinkRels
+      )
+    )
+    val wb = XlsxReader
+      .readFromBytes(bytes)
+      .fold(err => fail(s"field-class workbook must read: $err"), identity)
+    assertEquals(wb.sheets(0)(ref"A1").value, CellValue.Text("Shared"))
+    assertEquals(wb.sheets(0)(ref"B1").value, CellValue.Number(BigDecimal(42)))
+  }
+
   test("XlsxReader parse errors name the offending line and column (GH-350)") {
     val malformed =
       """<?xml version="1.0" encoding="UTF-8"?>
