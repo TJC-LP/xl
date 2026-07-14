@@ -677,7 +677,47 @@ object WriteCommands:
     ColumnAutoFit.calculateWidth(sheet, col)
 
   /**
+   * Whether a batch op can change a cell's value or formula, requiring recalculation before write
+   * (GH-352).
+   *
+   * Rule: recalculate whenever any op writes, clears, or copies cell content — such an op can
+   * invalidate cached formula values anywhere in the workbook (cross-sheet dependents included),
+   * and `BatchParser` stores batch formulas uncached (`Formula(expr, None)`). Ops that only touch
+   * presentation or metadata (styles, comments, widths, visibility, merges, freeze panes, sheet
+   * management, hyperlinks) leave every existing cached value correct — a rename even rewrites
+   * referencing formulas without changing their values — so a batch made exclusively of them skips
+   * the recalculation and preserves the input's caches as-is.
+   */
+  private def isCellMutating(op: BatchParser.BatchOp): Boolean =
+    op match
+      case _: BatchParser.BatchOp.Put | _: BatchParser.BatchOp.PutFormula |
+          _: BatchParser.BatchOp.PutFormulaDragging | _: BatchParser.BatchOp.PutFormulas |
+          _: BatchParser.BatchOp.PutValues | _: BatchParser.BatchOp.Clear |
+          _: BatchParser.BatchOp.CopyRange =>
+        true
+      case _ => false
+
+  /**
+   * One-line recalculation summary: formula count plus the first few failing refs (GH-352). Formula
+   * errors are data conditions — they are reported, never thrown.
+   */
+  private def formatRecalcSummary(result: RecalcResult): String =
+    val formulaCount = result.evaluated.valuesIterator.map(_.size).sum
+    val formulasLabel = if formulaCount == 1 then "formula" else "formulas"
+    if result.isClean then s"Recalculated $formulaCount $formulasLabel"
+    else
+      val maxShown = 3
+      val shown = result.errors.take(maxShown).map(_.render).mkString("; ")
+      val ellipsis = if result.errors.size > maxShown then "; ..." else ""
+      val errorsLabel = if result.errors.size == 1 then "error" else "errors"
+      s"Recalculated $formulaCount $formulasLabel; ${result.errors.size} $errorsLabel ($shown$ellipsis)"
+
+  /**
    * Apply multiple operations atomically (JSON from stdin or file).
+   *
+   * Ends with one global `recalculate()` when any op mutates cell content (GH-352), so batch putf
+   * carries cached values (`<v>`) exactly like single-op putf. Formula errors do not abort the
+   * write: the workbook is written regardless and errors surface in the summary.
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer
@@ -695,13 +735,39 @@ object WriteCommands:
         // Print warnings to stderr within IO monad
         IO(result.warnings.foreach(System.err.println)) *>
           BatchParser.applyBatchOperations(wb, sheetOpt, result.ops).flatMap { updatedWb =>
-            writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
+            val recalcOpt =
+              if result.ops.exists(isCellMutating) then Some(updatedWb.recalculate())
+              else None
+            val finalWb = recalcOpt.fold(updatedWb)(_.workbook)
+            writeWorkbook(finalWb, outputPath, config, stream).map { _ =>
               val ops = result.ops
               val summary = BatchParser.formatSummary(ops)
-              s"Applied ${ops.size} operations:\n$summary\n${saveSuffix(outputPath, stream)}"
+              val recalcLine = recalcOpt.fold("")(r => s"${formatRecalcSummary(r)}\n")
+              s"Applied ${ops.size} operations:\n$summary\n$recalcLine${saveSuffix(outputPath, stream)}"
             }
           }
       }
+    }
+
+  /**
+   * Recalculate every formula in the workbook and cache the results (GH-352).
+   *
+   * Formula errors (circular references, bad refs) are data conditions, not tool failures: failing
+   * cells are left uncached — exactly as Excel leaves them — the workbook is still written, and the
+   * errors are reported in the summary. Callers exit 0 either way.
+   *
+   * @param stream
+   *   If true, uses the SAX/StAX workbook writer
+   */
+  def recalc(
+    wb: Workbook,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    val result = wb.recalculate()
+    writeWorkbook(result.workbook, outputPath, config, stream).map { _ =>
+      s"${formatRecalcSummary(result)}\n${saveSuffix(outputPath, stream)}"
     }
 
   /**

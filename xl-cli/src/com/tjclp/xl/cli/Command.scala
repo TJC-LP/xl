@@ -98,6 +98,8 @@ enum CliCommand:
   case RowOp(row: Int, height: Option[Double], hide: Boolean, show: Boolean)
   case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean, autoFit: Boolean)
   case Batch(source: String, dryRun: Boolean = false) // "-" for stdin or file path
+  // Whole-workbook recalculation: cache every formula's value (GH-352)
+  case Recalc
   case Import(
     csvPath: String,
     startRef: Option[String],

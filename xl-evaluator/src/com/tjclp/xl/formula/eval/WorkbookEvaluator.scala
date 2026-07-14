@@ -280,8 +280,18 @@ object WorkbookEvaluator:
           }
         }
 
+        // Reinstall changed sheets via Workbook.put — not copy — so the surgical-write
+        // ModificationTracker sees every sheet whose caches were refreshed (GH-352). A raw
+        // copy leaves disk-read workbooks looking untouched, and the writer then preserves
+        // the original worksheet XML verbatim, silently dropping the new cached values.
+        // Sheets with no evaluated cells are left alone to keep byte-for-byte preservation.
+        val workbookWithCaches =
+          cachedSheets.foldLeft(wb) { (acc, cached) =>
+            if evaluated.getOrElse(cached.name, Map.empty).nonEmpty then acc.put(cached) else acc
+          }
+
         RecalcResult(
-          workbook = wb.copy(sheets = cachedSheets),
+          workbook = workbookWithCaches,
           evaluated = wb.sheets.map(s => s.name -> evaluated.getOrElse(s.name, Map.empty)).toMap,
           errors = cycleErrors ++ blockedErrors ++ evalErrors
         )
