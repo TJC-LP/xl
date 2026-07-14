@@ -1322,7 +1322,8 @@ object XlsxReader:
    * REQUIRES: xmlString is a valid XML string ENSURES:
    *   - Returns Right(elem) if parsing succeeds
    *   - Returns Left(XLError) if parsing fails
-   *   - Rejects XML with DOCTYPE declarations (XXE attack prevention)
+   *   - Strips a benign leading DOCTYPE pre-parse (GH-350); its entity definitions are never
+   *     honored (XXE attack prevention)
    *   - Rejects external entity references
    * DETERMINISTIC: Yes (for same input) ERROR CASES: Malformed XML, XXE attempts, parser
    * configuration failures

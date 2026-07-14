@@ -457,10 +457,69 @@ object XmlSecurity:
       factory.newSAXParser()
     })
 
+  /**
+   * Strip a benign leading <!DOCTYPE ...> declaration from the XML prolog (GH-350).
+   *
+   * Some third-party producers emit a DOCTYPE before the root element; the pooled parser hard-fails
+   * on ANY doctype (`disallow-doctype-decl=true`). Rather than weakening that security posture,
+   * remove the declaration before the parser ever sees it — the parser keeps
+   * doctype/external-entity features disabled (defense in depth), and entity definitions in a
+   * stripped internal subset are simply never honored (any reference to them fails as an undeclared
+   * entity), which is safe for OOXML parts since they never rely on DTD entities.
+   *
+   * The scanner only walks the prolog (whitespace, the XML declaration / processing instructions,
+   * comments); on the first non-prolog construct it stops, so element content can never be eaten.
+   * Within the DOCTYPE it tracks quotes and `[`/`]` internal-subset nesting, handling both the
+   * `<!DOCTYPE x SYSTEM "...">` and `<!DOCTYPE x [ ... ]>` forms. An unterminated DOCTYPE is left
+   * untouched for the parser to report.
+   */
+  private[ooxml] def stripLeadingDoctype(xml: String): String =
+    @annotation.tailrec
+    def doctypeEnd(i: Int, depth: Int, quote: Option[Char]): Option[Int] =
+      if i >= xml.length then None
+      else
+        val c = xml.charAt(i)
+        quote match
+          case Some(q) => doctypeEnd(i + 1, depth, if c == q then None else quote)
+          case None =>
+            c match
+              case '"' | '\'' => doctypeEnd(i + 1, depth, Some(c))
+              case '[' => doctypeEnd(i + 1, depth + 1, None)
+              case ']' => doctypeEnd(i + 1, depth - 1, None)
+              case '>' if depth == 0 => Some(i + 1)
+              case _ => doctypeEnd(i + 1, depth, None)
+
+    @annotation.tailrec
+    def prologScan(i: Int): Option[(Int, Int)] =
+      if i >= xml.length then None
+      else if xml.charAt(i).isWhitespace then prologScan(i + 1)
+      else if xml.startsWith("<?", i) then
+        val end = xml.indexOf("?>", i + 2)
+        if end < 0 then None else prologScan(end + 2)
+      else if xml.startsWith("<!--", i) then
+        val end = xml.indexOf("-->", i + 4)
+        if end < 0 then None else prologScan(end + 3)
+      else if xml.startsWith("<!DOCTYPE", i) then doctypeEnd(i + 9, 0, None).map(end => (i, end))
+      else None // first element (or malformed input) — nothing to strip
+
+    prologScan(0) match
+      case Some((start, end)) =>
+        // Keep the stripped region's newlines so reported line numbers still match the source
+        xml.substring(0, start) + xml.substring(start, end).filter(_ == '\n') + xml.substring(end)
+      case None => xml
+
   /** Shared XXE-safe XML parser with pooling optimization. */
   def parseSafe(xmlString: String, location: String): XLResult[Elem] =
     try
       val loader = XML.withSAXParser(parserPool.get())
-      Right(loader.loadString(xmlString))
+      Right(loader.loadString(stripLeadingDoctype(xmlString)))
     catch
+      // GH-350: name the offending construct's position so a failed core part is diagnosable
+      case e: org.xml.sax.SAXParseException =>
+        Left(
+          XLError.ParseError(
+            location,
+            s"XML parse error at line ${e.getLineNumber}, column ${e.getColumnNumber}: ${e.getMessage}"
+          )
+        )
       case e: Exception => Left(XLError.ParseError(location, s"XML parse error: ${e.getMessage}"))

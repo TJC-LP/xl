@@ -84,7 +84,8 @@ class SecuritySpec extends FunSuite:
     // Attempt to read malicious XLSX
     val result = XlsxReader.read(tempFile)
 
-    // Should fail with parse error (DOCTYPE rejected)
+    // Should fail with parse error (GH-350: the DOCTYPE itself is stripped pre-parse, so the
+    // undeclared &xxe; reference is what fails — its entity definition is never honored)
     result match
       case Left(error) =>
         val errorMsg = error.toString.toLowerCase
@@ -242,6 +243,52 @@ class SecuritySpec extends FunSuite:
         assertEquals(workbook.sheets.head.cells.size, 1, "Should have 1 cell")
       case Left(error) =>
         fail(s"Legitimate XLSX should parse successfully, got error: $error")
+  }
+
+  test("GH-350: entity defined in a stripped DOCTYPE subset is not honored") {
+    val xml = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE x [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+<x>&xxe;</x>"""
+    XmlSecurity.parseSafe(xml, "test.xml") match
+      case Left(err) =>
+        assert(
+          err.message.toLowerCase.contains("xxe") || err.message.toLowerCase.contains("entity"),
+          s"Expected undeclared-entity failure, got: ${err.message}"
+        )
+      case Right(_) => fail("Entity defined in a stripped DOCTYPE subset must not resolve")
+  }
+
+  test("GH-350: stripLeadingDoctype removes a SYSTEM-form doctype from the prolog") {
+    val in = "<?xml version=\"1.0\"?>\n<!DOCTYPE workbook SYSTEM \"wb.dtd\">\n<workbook/>"
+    assertEquals(XmlSecurity.stripLeadingDoctype(in), "<?xml version=\"1.0\"?>\n\n<workbook/>")
+  }
+
+  test("GH-350: stripLeadingDoctype tracks quotes and bracket nesting in an internal subset") {
+    val in = """<?xml version="1.0"?><!DOCTYPE x [ <!ENTITY e "tricky > ] value"> ]><x/>"""
+    assertEquals(XmlSecurity.stripLeadingDoctype(in), """<?xml version="1.0"?><x/>""")
+  }
+
+  test("GH-350: stripLeadingDoctype skips prolog comments before the doctype") {
+    val in = "<?xml version=\"1.0\"?><!-- produced by tool --><!DOCTYPE x SYSTEM \"x.dtd\"><x/>"
+    assertEquals(
+      XmlSecurity.stripLeadingDoctype(in),
+      "<?xml version=\"1.0\"?><!-- produced by tool --><x/>"
+    )
+  }
+
+  test("GH-350: stripLeadingDoctype leaves content after the first element untouched") {
+    val in = "<x><![CDATA[<!DOCTYPE y [ ]>]]></x>"
+    assertEquals(XmlSecurity.stripLeadingDoctype(in), in)
+  }
+
+  test("GH-350: stripLeadingDoctype leaves an unterminated doctype for the parser to report") {
+    val in = "<?xml version=\"1.0\"?><!DOCTYPE x [ <!ENTITY e \"v\">"
+    assertEquals(XmlSecurity.stripLeadingDoctype(in), in)
+  }
+
+  test("GH-350: stripLeadingDoctype preserves newlines for accurate error line numbers") {
+    val in = "<?xml version=\"1.0\"?>\n<!DOCTYPE x [\n<!ELEMENT x ANY>\n]>\n<x/>"
+    assertEquals(XmlSecurity.stripLeadingDoctype(in), "<?xml version=\"1.0\"?>\n\n\n\n<x/>")
   }
 
   test("XlsxReader rejects comment relationship path traversal") {

@@ -103,6 +103,64 @@ class XlsxReaderErrorSpec extends FunSuite:
       case other => fail(s"Expected ParseError for malformed workbook, got $other")
   }
 
+  test("XlsxReader tolerates a leading DOCTYPE without internal subset (GH-350)") {
+    // Third-party producers may emit a benign DOCTYPE; Excel/openpyxl read such files fine.
+    val doctypeWorkbook =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE workbook SYSTEM "http://example.com/workbook.dtd">
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+    val bytes = buildWorkbook(overrides = Map("xl/workbook.xml" -> doctypeWorkbook))
+    val wb = XlsxReader
+      .readFromBytes(bytes)
+      .fold(err => fail(s"DOCTYPE-bearing workbook must read: $err"), identity)
+    assertEquals(wb.sheets(0)(ref"A1").value, CellValue.Text("Hello"))
+  }
+
+  test("XlsxReader tolerates a leading DOCTYPE with bracketed internal subset (GH-350)") {
+    // Internal subset with quoted '>' and ']' stresses the conservative prolog scanner. The
+    // declared entity is never referenced in the document, so not honoring it is benign.
+    val doctypeSheet =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE worksheet [
+  <!ELEMENT worksheet ANY>
+  <!ENTITY unused "tricky > ] value">
+]>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr">
+        <is><t>Hello</t></is>
+      </c>
+    </row>
+  </sheetData>
+</worksheet>"""
+    val bytes = buildWorkbook(overrides = Map("xl/worksheets/sheet1.xml" -> doctypeSheet))
+    val wb = XlsxReader
+      .readFromBytes(bytes)
+      .fold(err => fail(s"DOCTYPE-bearing worksheet must read: $err"), identity)
+    assertEquals(wb.sheets(0)(ref"A1").value, CellValue.Text("Hello"))
+  }
+
+  test("XlsxReader parse errors name the offending line and column (GH-350)") {
+    val malformed =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheets></wrong>
+</workbook>"""
+    val bytes = buildWorkbook(overrides = Map("xl/workbook.xml" -> malformed))
+    XlsxReader.readFromBytes(bytes) match
+      case Left(XLError.ParseError(location, message)) =>
+        assertEquals(location, "xl/workbook.xml")
+        assert(message.contains("line 3"), s"Expected line 3 in message, got: $message")
+        assert(message.contains("column"), s"Expected column in message, got: $message")
+      case other => fail(s"Expected ParseError with position info, got $other")
+  }
+
   test("XlsxReader rejects workbook.xml missing required sheets element") {
     val invalidWorkbook =
       """<?xml version="1.0" encoding="UTF-8"?>
