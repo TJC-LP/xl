@@ -28,6 +28,15 @@ object RendererCommon:
     else "#ERROR!"
 
   /**
+   * Human-readable truncation notice emitted when --limit clips output (GH-351).
+   *
+   * Rendered as a trailer line after markdown tables, or on stderr for machine-parseable formats
+   * (CSV) so stdout stays clean.
+   */
+  def truncationNotice(shown: Int, total: Int, noun: String = "rows"): String =
+    s"… showing $shown of $total $noun (use --limit to raise; --limit 0 = no limit)"
+
+  /**
    * Check if a cell is effectively empty.
    *
    * Handles: - Empty cells - Whitespace-only text - Formulas returning empty values

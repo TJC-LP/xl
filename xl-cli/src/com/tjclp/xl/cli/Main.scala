@@ -210,7 +210,9 @@ object Main
   private val evalOpt = Opts.flag("eval", "Evaluate formulas (compute live values)").orFalse
   private val strictOpt =
     Opts.flag("strict", "Fail on formula evaluation errors (use with --eval)").orFalse
-  private val limitOpt = Opts.option[Int]("limit", "Maximum rows to display").withDefault(50)
+  private val limitOpt = Opts
+    .option[Int]("limit", "Maximum rows to display (default: 50; 0 = no limit)")
+    .withDefault(50)
   private val formatOpt = Opts
     .option[String]("format", "Output format: markdown, html, svg, json, csv, png, jpeg, webp, pdf")
     .withDefault("markdown")
@@ -283,6 +285,9 @@ FORMATS:
 
 OUTPUT FLAGS:
   --format <fmt>      Output format
+  --limit <n>         Max rows to display (default: 50; 0 = no limit).
+                      When output is clipped, markdown appends a "… showing X of Y rows"
+                      trailer, json adds "truncated"/"totalRows" fields, csv notes on stderr.
   --formulas          Show formulas instead of values
   --eval              Evaluate formulas (compute live values)
   --strict            Fail on formula evaluation errors (use with --eval)

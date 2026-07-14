@@ -12,7 +12,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.helpers.ValueParser
-import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
+import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown, RendererCommon}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.io.{ExcelIO, RowData}
 import com.tjclp.xl.ooxml.style.WorkbookStyles
@@ -56,7 +56,7 @@ object StreamingReadCommands:
             excel.readSheetStream(filePath, sheetName).map(row => (sheetName, row))
           }
 
-        rowStream
+        val matchStream = rowStream
           .flatMap { case (sheetName, row) =>
             Stream.emits(
               row.cells.toSeq.collect { case (colIdx, value) =>
@@ -67,9 +67,11 @@ object StreamingReadCommands:
               }.flatten
             )
           }
-          .take(limit)
-          .compile
-          .toVector
+
+        // GH-351: --limit 0 means "no limit"; otherwise the scan aborts early at the limit.
+        val limited = if limit > 0 then matchStream.take(limit) else matchStream
+
+        limited.compile.toVector
           .map { results =>
             val sheetDesc = targetSheets match
               case Vector(single) => single
@@ -79,7 +81,12 @@ object StreamingReadCommands:
                 (s"$sheetName!${ref.toA1}", value)
               }
             )
-            s"Found ${results.size} matches in $sheetDesc (streaming):\n\n$formatted"
+            val base = s"Found ${results.size} matches in $sheetDesc (streaming):\n\n$formatted"
+            // The streaming scan stops at --limit, so the true total is unknown; flag
+            // the possible clip when the limit was reached (GH-351).
+            if limit > 0 && results.size == limit then
+              s"$base\n… showing first $limit matches (streaming scan stopped at --limit; use --limit to raise; --limit 0 = no limit)"
+            else base
           }
       }
     }
@@ -452,22 +459,36 @@ object StreamingReadCommands:
             resolvedSheetOpt =>
               // Limit rows and filter to range
               val limitedRange = limitRange(range, limit)
+              // GH-351: report truncation when --limit clips the requested range
+              val totalRows = range.end.row.index0 - range.start.row.index0 + 1
+              val shownRows = limitedRange.end.row.index0 - limitedRange.start.row.index0 + 1
+              val isTruncated = shownRows < totalRows
+              val notice = RendererCommon.truncationNotice(shownRows, totalRows)
               val rowStream = resolvedSheetOpt match
                 case Some(name) => excel.readSheetStreamRange(filePath, name, limitedRange)
                 case None => excel.readStreamRange(filePath, limitedRange)
 
               excel.loadStyles(filePath).flatMap { styles =>
                 rowStream.compile.toVector
-                  .map { rows =>
+                  .flatMap { rows =>
                     val s = Some(styles)
                     format match
                       case ViewFormat.Markdown =>
-                        formatMarkdown(rows, limitedRange, showFormulas, skipEmpty, showLabels, s)
+                        val table =
+                          formatMarkdown(rows, limitedRange, showFormulas, skipEmpty, showLabels, s)
+                        IO.pure(if isTruncated then s"$table\n$notice" else table)
                       case ViewFormat.Csv =>
-                        formatCsv(rows, limitedRange, showFormulas, skipEmpty, showLabels, s)
+                        // stdout must stay machine-parseable: notice goes to stderr only
+                        IO(System.err.println(notice))
+                          .whenA(isTruncated)
+                          .as(formatCsv(rows, limitedRange, showFormulas, skipEmpty, showLabels, s))
                       case ViewFormat.Json =>
-                        formatJson(rows, limitedRange, showFormulas, skipEmpty, headerRow, s)
-                      case _ => "" // unreachable due to earlier check
+                        // Streaming JSON is a bare array (no top-level object to extend):
+                        // notice goes to stderr only
+                        IO(System.err.println(notice))
+                          .whenA(isTruncated)
+                          .as(formatJson(rows, limitedRange, showFormulas, skipEmpty, headerRow, s))
+                      case _ => IO.pure("") // unreachable due to earlier check
                   }
               }
           }
@@ -616,10 +637,10 @@ object StreamingReadCommands:
       .filter { case (col, _) => col >= startCol && col <= endCol }
       .map(_._2)
 
-  /** Limit range to max rows. */
+  /** Limit range to max rows. maxRows <= 0 means "no limit" (GH-351). */
   private def limitRange(range: CellRange, maxRows: Int): CellRange =
     val rowCount = range.end.row.index0 - range.start.row.index0 + 1
-    if rowCount <= maxRows then range
+    if maxRows <= 0 || rowCount <= maxRows then range
     else
       val newEndRow = range.start.row.index0 + maxRows - 1
       CellRange(range.start, ARef.from0(range.end.col.index0, newEndRow))
