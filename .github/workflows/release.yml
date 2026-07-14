@@ -23,6 +23,9 @@ jobs:
           - os: ubuntu-latest
             platform: linux-amd64
             extension: ""
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            extension: ""
           - os: macos-latest
             platform: darwin-amd64
             extension: ""
@@ -297,11 +300,12 @@ jobs:
           cp xl-scripting-skill-$VERSION.zip release-assets/
           # Copy native binaries (versioned names)
           cp native-binaries/xl-$VERSION-linux-amd64/xl-$VERSION-linux-amd64 release-assets/
+          cp native-binaries/xl-$VERSION-linux-arm64/xl-$VERSION-linux-arm64 release-assets/
           cp native-binaries/xl-$VERSION-darwin-amd64/xl-$VERSION-darwin-amd64 release-assets/
           cp native-binaries/xl-$VERSION-darwin-arm64/xl-$VERSION-darwin-arm64 release-assets/
           cp native-binaries/xl-$VERSION-windows-amd64/xl-$VERSION-windows-amd64.exe release-assets/
           # Make Unix binaries executable
-          chmod +x release-assets/xl-$VERSION-linux-amd64 release-assets/xl-$VERSION-darwin-amd64 release-assets/xl-$VERSION-darwin-arm64
+          chmod +x release-assets/xl-$VERSION-linux-amd64 release-assets/xl-$VERSION-linux-arm64 release-assets/xl-$VERSION-darwin-amd64 release-assets/xl-$VERSION-darwin-arm64
           ls -la release-assets/
 
       - name: Create GitHub Release
@@ -316,6 +320,7 @@ jobs:
             release-assets/xl-skill-${{ steps.version.outputs.version }}.zip
             release-assets/xl-scripting-skill-${{ steps.version.outputs.version }}.zip
             release-assets/xl-${{ steps.version.outputs.version }}-linux-amd64
+            release-assets/xl-${{ steps.version.outputs.version }}-linux-arm64
             release-assets/xl-${{ steps.version.outputs.version }}-darwin-amd64
             release-assets/xl-${{ steps.version.outputs.version }}-darwin-arm64
             release-assets/xl-${{ steps.version.outputs.version }}-windows-amd64.exe
