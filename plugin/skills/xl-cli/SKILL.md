@@ -27,7 +27,10 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "Unsupported: $(uname -s)-$(uname -m)" && exit 1 ;;
 esac
 mkdir -p ~/.local/bin
-curl -sL "https://github.com/$REPO/releases/download/$LATEST/$BINARY" -o ~/.local/bin/xl
+curl -fsSL "https://github.com/$REPO/releases/download/$LATEST/$BINARY" -o ~/.local/bin/xl || {
+  echo "Error: no $BINARY published for $LATEST — use the JAR distribution xl-cli-$VERSION.tar.gz instead" >&2
+  exit 1
+}
 chmod +x ~/.local/bin/xl
 echo "Installed xl $VERSION to ~/.local/bin/xl"
 ```
