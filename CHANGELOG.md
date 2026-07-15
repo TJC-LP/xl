@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.6] "Fieldwork" - 2026-07-15
+
+Production-feedback hardening from agent-fleet use on real deal workbooks
+(#349–#354, PRs #363–#368): external-workbook references parse and keep their
+Excel caches, batch writes recalculate, output truncation is visible,
+DOCTYPE-bearing workbooks read, the native binary reports real parse errors,
+and linux-arm64 binaries ship.
+
+### Added
+
+- **`xl recalc` command** (#352): recalculate any workbook from the CLI
+  (`xl -f model.xlsx -i recalc`), reporting per-cell formula errors without
+  failing the write.
+- **Truncation reporting** (#351): `view`/`search` now say when `--limit`
+  (default 50) clips output — a `… showing N of M rows` trailer in markdown,
+  a stderr notice for csv (stdout stays machine-parseable), and
+  `truncated`/`totalRows` fields in json; `--limit 0` means unlimited, and
+  `search` reports its true match total.
+- **linux-arm64 native binaries** (#354): the release matrix builds on
+  `ubuntu-24.04-arm` with arch-safe cache keys and a per-platform binary smoke
+  test; the generated installer maps `Linux-aarch64` and fails loud when an
+  asset is missing instead of installing an error page.
+
+### Fixed
+
+- **External-workbook references parse and pin their Excel caches** (#353):
+  `[2]Book1!A1` / `'[3]Sheet Name'!B2` forms parse to a dedicated AST node
+  with exact printer round-trip and anchor-aware shifting; they contribute no
+  dependency edges, `recalculate()` preserves the Excel-written cached value
+  of external-formula cells verbatim (dependents compute from those caches),
+  uncached external cells report a clear per-cell error instead of
+  `UnexpectedChar([`, and one such formula no longer poisons evaluation of
+  the rest of the workbook. Resolving external workbooks / reading
+  `externalLinks` cache parts remains future work.
+- **Batch writes recalculate** (#352): cell-mutating `batch` runs end with one
+  global recalculation, so `putf` cells carry cached `<v>` values (previously
+  blank in `data_only` readers, pandas, and previewers); formula errors are
+  surfaced in the batch summary without aborting the write. Also fixes a
+  latent core bug: recalculated caches now survive surgical writes of
+  disk-read workbooks (the modification tracker never saw cache-only changes,
+  so the writer preserved stale worksheet XML verbatim); sheets whose caches
+  are unchanged still ride byte-for-byte preservation.
+- **Benign leading DOCTYPE no longer rejects core parts** (#350): a
+  `<!DOCTYPE …>` prolog (with or without an internal subset) on
+  workbook/sheet/styles/sharedStrings parts is stripped by a conservative
+  scanner before parsing — the parser itself stays fully locked down
+  (doctype disallowed, external entities off) — and core-part parse errors
+  now carry line/column plus the offending construct. A hostile-but-valid
+  fixture joins the corpus laws.
+- **Native-image parse diagnostics** (#349): the JDK-internal Xerces/Xalan
+  message bundles are registered for native-image, so the shipped binary
+  reports real parse errors (line/column and reason) instead of
+  `Could not load any resource bundle by …XMLMessages`; the release workflow
+  now smoke-tests every native binary against a valid and a malformed
+  workbook.
+
+### Docs
+
+- **Skill field-gotchas refresh** (#362): production-verified gotchas,
+  warning triage, and 0.12.5 recalculation notes in the `xl-cli` and
+  `xl-scripting` skills (updated again in this release for the fixes above).
+
 ## [0.12.5] "Memo" - 2026-07-13
 
 Kills an exponential blowup in the formula evaluator on recursive multi-branch

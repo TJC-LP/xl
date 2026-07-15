@@ -1,12 +1,19 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-13 (0.12.5)
+**Last Updated**: 2026-07-15 (0.12.6)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.12.6** (2026-07-15):
+- ✅ **External-workbook references** (#353) — `[2]Book1!A1` forms parse (dedicated AST node, exact printer round-trip, anchor-aware shifting), contribute no dependency edges, and `recalculate()` pins their Excel-written caches verbatim while dependents compute from them; uncached external cells report a clear per-cell error instead of `UnexpectedChar([`
+- ✅ **Batch recalculation + `xl recalc`** (#352) — cell-mutating batches end with one global recalculation (cached `<v>` for `putf` cells, errors surfaced in the summary), plus a latent fix: recalculated caches survive surgical writes of disk-read workbooks
+- ✅ **Visible truncation** (#351) — `view`/`search` report `showing N of M rows` when `--limit` clips (markdown trailer, stderr for csv, `truncated`/`totalRows` in json); `--limit 0` = unlimited
+- ✅ **DOCTYPE-tolerant core-part reads** (#350) — benign `<!DOCTYPE>` prologs stripped by a conservative scanner (parser stays locked down); parse errors carry line/column
+- ✅ **Native-image diagnostics + arm64** (#349, #354) — Xerces message bundles registered (real parse errors on the shipped binary, release smoke test per platform); linux-arm64 native binaries join the release matrix
 
 **New in 0.12.5** (2026-07-13):
 - ✅ **Evaluator memoization + workbook-level recalculation** (#346) — recursive uncached-reference evaluation is memoized per pass, and `recalculate()` runs one topological order over the qualified (sheet!cell) graph: the recursive debt-schedule shape drops from hours (exponential in dependency paths) to milliseconds; cross-sheet cycles now report circular/blocked like same-sheet ones; cross-sheet aggregates over uncached formula cells compute correctly regardless of sheet order
