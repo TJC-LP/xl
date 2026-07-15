@@ -54,6 +54,11 @@ object JsonRenderer:
    *   If true, omit cells where type is "empty" from output (reduces token usage for sparse ranges)
    * @param headerRow
    *   If provided, use values from this row (1-based) as object keys in JSON output
+   * @param truncatedTotalRows
+   *   When --limit clipped the requested range (GH-351), the total row count that would have been
+   *   rendered without the limit. Emits top-level `"truncated": true` and `"totalRows": N` fields.
+   *   Fields are omitted entirely when output is not clipped, keeping the payload byte-identical to
+   *   previous releases for unclipped output.
    */
   def renderRange(
     sheet: Sheet,
@@ -61,13 +66,22 @@ object JsonRenderer:
     showFormulas: Boolean = false,
     skipEmpty: Boolean = false,
     headerRow: Option[Int] = None,
-    evalFormulas: Boolean = false
+    evalFormulas: Boolean = false,
+    truncatedTotalRows: Option[Int] = None
   ): String =
     headerRow match
       case Some(headerRowNum) =>
-        renderAsRecords(sheet, range, showFormulas, skipEmpty, headerRowNum, evalFormulas)
+        renderAsRecords(
+          sheet,
+          range,
+          showFormulas,
+          skipEmpty,
+          headerRowNum,
+          evalFormulas,
+          truncatedTotalRows
+        )
       case None =>
-        renderAsRows(sheet, range, showFormulas, skipEmpty, evalFormulas)
+        renderAsRows(sheet, range, showFormulas, skipEmpty, evalFormulas, truncatedTotalRows)
 
   /**
    * Render range as array of records with header row values as keys.
@@ -78,7 +92,8 @@ object JsonRenderer:
     showFormulas: Boolean,
     skipEmpty: Boolean,
     headerRowNum: Int,
-    evalFormulas: Boolean
+    evalFormulas: Boolean,
+    truncatedTotalRows: Option[Int]
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -107,6 +122,7 @@ object JsonRenderer:
     sb.append("{\n")
     sb.append(s"""  "sheet": ${escapeJsonString(sheet.name.value)},\n""")
     sb.append(s"""  "range": "${range.toA1}",\n""")
+    appendTruncationFields(sb, truncatedTotalRows)
     sb.append("""  "records": [""")
 
     val recordJsons = dataRows.flatMap { rowIdx =>
@@ -148,7 +164,8 @@ object JsonRenderer:
     range: CellRange,
     showFormulas: Boolean,
     skipEmpty: Boolean,
-    evalFormulas: Boolean
+    evalFormulas: Boolean,
+    truncatedTotalRows: Option[Int]
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -163,6 +180,7 @@ object JsonRenderer:
     sb.append("{\n")
     sb.append(s"""  "sheet": ${escapeJsonString(sheet.name.value)},\n""")
     sb.append(s"""  "range": "${range.toA1}",\n""")
+    appendTruncationFields(sb, truncatedTotalRows)
     sb.append("""  "rows": [""")
 
     val rowJsons = visibleRows.flatMap { rowIdx =>
@@ -216,6 +234,13 @@ object JsonRenderer:
     sb.append("]\n")
     sb.append("}")
     sb.toString
+
+  /** Append `"truncated": true` / `"totalRows": N` fields when --limit clipped output (GH-351). */
+  private def appendTruncationFields(sb: StringBuilder, truncatedTotalRows: Option[Int]): Unit =
+    truncatedTotalRows.foreach { total =>
+      sb.append("  \"truncated\": true,\n")
+      sb.append(s"""  "totalRows": $total,\n""")
+    }
 
   private def renderCell(
     ref: ARef,

@@ -199,7 +199,7 @@ View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG
 | `--formulas` | flag | No | false | Show formulas instead of values |
 | `--eval` | flag | No | false | Evaluate formulas (compute live values) |
 | `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
-| `--limit` | int | No | 50 | Max rows to display |
+| `--limit` | int | No | 50 | Max rows to display (0 = no limit). When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (with `--stream` the notice goes to stderr instead); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
 | `--skip-empty` | flag | No | false | Skip empty cells (JSON) or empty rows/columns (tabular) |
 | `--show-labels` | flag | No | false | Include column letters and row numbers |
 | `--header-row` | int | No | — | Use values from this row as keys in JSON output (1-based) |
@@ -257,7 +257,7 @@ Find cells containing text matching pattern. Searches all sheets by default (no 
 |-----|------|----------|---------|-------------|
 | `pattern` | string | Yes | — | Search pattern (supports regex) |
 | `--sheets` | string | No | all | Comma-separated list of sheets to search |
-| `--limit` | int | No | 50 | Max results |
+| `--limit` | int | No | 50 | Max results (0 = no limit). Reports the true total ("Found Y matches") and appends a "… showing X of Y matches" trailer when the hit list is clipped |
 
 **Output**:
 ```markdown

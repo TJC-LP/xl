@@ -9,7 +9,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.helpers.{SheetResolver, ValueParser}
-import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
+import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown, RendererCommon}
 import com.tjclp.xl.cli.raster.{RasterFormat, RasterizerChain}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.{DependencyGraph, FormulaParser, SheetEvaluator}
@@ -74,6 +74,13 @@ object ReadCommands:
         case Right(r) => r
         case Left(ref) => CellRange(ref, ref) // Single cell as range
       limitedRange = limitRange(range, limit)
+      // GH-351: report truncation when --limit clips the requested range.
+      // totalRows = rows the renderer would have been fed without the limit;
+      // shownRows = rows actually fed after clipping.
+      totalRows = range.end.row.index0 - range.start.row.index0 + 1
+      shownRows = limitedRange.end.row.index0 - limitedRange.start.row.index0 + 1
+      isTruncated = shownRows < totalRows
+      notice = RendererCommon.truncationNotice(shownRows, totalRows)
       theme = wb.metadata.theme // Use workbook's parsed theme
       result <- format match
         case ViewFormat.Markdown =>
@@ -82,43 +89,45 @@ object ReadCommands:
             if evalFormulas then
               evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
-          IO.pure(
-            Markdown.renderRange(
-              sheetToRender,
-              limitedRange,
-              showFormulas,
-              skipEmpty,
-              evalFormulas = false
-            )
+          val table = Markdown.renderRange(
+            sheetToRender,
+            limitedRange,
+            showFormulas,
+            skipEmpty,
+            evalFormulas = false
           )
+          IO.pure(if isTruncated then s"$table\n$notice" else table)
         case ViewFormat.Html =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
             if evalFormulas then
               evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
-          IO.pure(
-            sheetToRender.toHtml(
-              limitedRange,
-              theme = theme,
-              applyPrintScale = printScale,
-              showLabels = showLabels
-            )
+          val html = sheetToRender.toHtml(
+            limitedRange,
+            theme = theme,
+            applyPrintScale = printScale,
+            showLabels = showLabels
           )
+          // In-band marker as a trailing HTML comment (comments after the root
+          // element are valid HTML), plus a human-visible notice on stderr.
+          IO(System.err.println(notice))
+            .whenA(isTruncated)
+            .as(if isTruncated then s"$html\n<!-- $notice -->" else html)
         case ViewFormat.Svg =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
             if evalFormulas then
               evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
-          IO.pure(
-            sheetToRender.toSvg(
-              limitedRange,
-              theme = theme,
-              showGridlines = showGridlines,
-              showLabels = showLabels
-            )
+          val svg = sheetToRender.toSvg(
+            limitedRange,
+            theme = theme,
+            showGridlines = showGridlines,
+            showLabels = showLabels
           )
+          // SVG stdout must stay a clean XML document: notice goes to stderr only.
+          IO(System.err.println(notice)).whenA(isTruncated).as(svg)
         case ViewFormat.Json =>
           // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
           val sheetToRender =
@@ -132,7 +141,8 @@ object ReadCommands:
               showFormulas,
               skipEmpty,
               headerRow,
-              evalFormulas = false
+              evalFormulas = false,
+              truncatedTotalRows = Option.when(isTruncated)(totalRows)
             )
           )
         case ViewFormat.Csv =>
@@ -141,16 +151,16 @@ object ReadCommands:
             if evalFormulas then
               evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
-          IO.pure(
-            CsvRenderer.renderRange(
-              sheetToRender,
-              limitedRange,
-              showFormulas,
-              showLabels,
-              skipEmpty,
-              evalFormulas = false
-            )
+          val csv = CsvRenderer.renderRange(
+            sheetToRender,
+            limitedRange,
+            showFormulas,
+            showLabels,
+            skipEmpty,
+            evalFormulas = false
           )
+          // CSV stdout must stay machine-parseable: truncation notice goes to stderr only.
+          IO(System.err.println(notice)).whenA(isTruncated).as(csv)
         case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
           rasterOutput match
             case None =>
@@ -184,7 +194,10 @@ object ReadCommands:
               RasterizerChain
                 .convert(svg, outputPath, rasterFormat, dpi, rasterizer)
                 .map { usedRasterizer =>
-                  s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, $usedRasterizer)"
+                  val exported =
+                    s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, $usedRasterizer)"
+                  // Binary goes to --raster-output, so the notice can ride the status line.
+                  if isTruncated then s"$exported\n$notice" else exported
                 }
     yield result
 
@@ -283,25 +296,29 @@ object ReadCommands:
           IO.pure(wb.sheets)
 
       targetSheets.map { sheets =>
-        val results = sheets.iterator
-          .flatMap { s =>
-            s.cells.iterator
-              .filter { case (_, cell) =>
-                val text = ValueParser.formatCellValue(cell.value)
-                regex.findFirstIn(text).isDefined
-              }
-              .map { case (ref, cell) =>
-                val value = ValueParser.formatCellValue(cell.value)
-                // Always use qualified refs for clarity
-                (s"${s.name.value}!${ref.toA1}", value)
-              }
-          }
-          .take(limit)
-          .toVector
+        // GH-351: materialize all matches so we can report the true total when
+        // --limit clips the hit list (cells are already in memory).
+        val allMatches = sheets.iterator.flatMap { s =>
+          s.cells.iterator
+            .filter { case (_, cell) =>
+              val text = ValueParser.formatCellValue(cell.value)
+              regex.findFirstIn(text).isDefined
+            }
+            .map { case (ref, cell) =>
+              val value = ValueParser.formatCellValue(cell.value)
+              // Always use qualified refs for clarity
+              (s"${s.name.value}!${ref.toA1}", value)
+            }
+        }.toVector
+        val results = if limit > 0 then allMatches.take(limit) else allMatches
         val sheetDesc =
           if sheets.size == 1 then sheets.headOption.map(_.name.value).getOrElse("sheet")
           else s"${sheets.size} sheets"
-        s"Found ${results.size} matches in $sheetDesc:\n\n${Markdown.renderSearchResultsWithRef(results)}"
+        val table = Markdown.renderSearchResultsWithRef(results)
+        val base = s"Found ${allMatches.size} matches in $sheetDesc:\n\n$table"
+        if results.size < allMatches.size then
+          s"$base\n${RendererCommon.truncationNotice(results.size, allMatches.size, "matches")}"
+        else base
       }
     }
 
@@ -594,7 +611,8 @@ object ReadCommands:
 
   private def limitRange(range: CellRange, maxRows: Int): CellRange =
     val rowCount = range.end.row.index0 - range.start.row.index0 + 1
-    if rowCount <= maxRows then range
+    // maxRows <= 0 means "no limit" (GH-351)
+    if maxRows <= 0 || rowCount <= maxRows then range
     else
       val newEndRow = range.start.row.index0 + maxRows - 1
       CellRange(range.start, ARef.from0(range.end.col.index0, newEndRow))
