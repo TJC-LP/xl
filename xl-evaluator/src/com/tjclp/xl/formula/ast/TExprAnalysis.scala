@@ -89,6 +89,50 @@ trait TExprAnalysis:
     // Default: no time function
     case _ => false
 
+  // ===== External-Workbook Reference Detection (GH-353) =====
+
+  /**
+   * Check if an expression contains any external-workbook reference ([2]Book1!A1).
+   *
+   * Used by the evaluation layer to apply Excel's closed-workbook semantics: a formula cell whose
+   * expression touches an external workbook keeps its Excel-written cached value instead of being
+   * re-evaluated (the external workbook is not loaded, so evaluation can only fail).
+   */
+  def containsExternalRef(expr: TExpr[?]): Boolean = expr match
+    case ExternalRef(_, _, _, _) => true
+    case ExternalRange(_, _, _) => true
+    case call: Call[?] =>
+      call.spec.argSpec
+        .toValues(call.args)
+        .exists {
+          case ArgValue.Expr(e) => containsExternalRef(e)
+          // Range positions carry externality via RangeLocation.External (SUMIF([2]Book1!…, …));
+          // Cells positions hold local literal ranges only
+          case ArgValue.Range(RangeLocation.External(_, _, _)) => true
+          case _ => false
+        }
+    case Aggregate(_, RangeLocation.External(_, _, _)) => true
+    case Add(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Sub(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Mul(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Div(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Pow(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Concat(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Eq(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Neq(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Lt(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Lte(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Gt(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Gte(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case ToInt(e) => containsExternalRef(e)
+    case DateToSerial(e) => containsExternalRef(e)
+    case DateTimeToSerial(e) => containsExternalRef(e)
+    case Let(bindings, body) =>
+      bindings.exists((_, value) => containsExternalRef(value)) || containsExternalRef(body)
+    case Coerced(inner, _) => containsExternalRef(inner)
+    // Lit, Ref/PolyRef, SheetRef/SheetPolyRef, RangeRef, SheetRange, Aggregate, BindingRef, ...
+    case _ => false
+
   // ===== Range Collection and Transformation =====
   // GH-197: Used by SUMPRODUCT to bound full-column ranges in array expressions
 
@@ -106,6 +150,8 @@ trait TExprAnalysis:
         .toValues(call.args)
         .flatMap {
           case ArgValue.Expr(e) => collectRanges(e)
+          // GH-353: external-workbook ranges are not in this workbook — nothing to bound
+          case ArgValue.Range(RangeLocation.External(_, _, _)) => Nil
           case ArgValue.Range(l) => List((l.sheetName, l.range))
           case _ => Nil
         }

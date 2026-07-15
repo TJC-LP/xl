@@ -21,6 +21,8 @@ import scala.annotation.tailrec
  *   - Literals: numbers (42, 3.14), booleans (TRUE, FALSE), strings ("text")
  *   - Cell references: A1, $A$1, Sheet1!A1, 'Quoted Name'!A1
  *   - Ranges: A1:B10
+ *   - External-workbook references (GH-353): [2]Book1!A1, [2]Book1!A1:B2, '[3]Sheet Name'!B2
+ *     (unresolvable — carried as ExternalRef/ExternalRange for closed-workbook cache semantics)
  *   - Operators: +, -, *, /, =, <>, <, <=, >, >=, &
  *   - Functions: SUM, COUNT, IF, AND, OR, NOT, etc.
  *   - Parentheses for grouping
@@ -602,6 +604,9 @@ object FormulaParser:
       case Some('\'') =>
         // Quoted sheet name reference (e.g., 'Q1 Report'!A1, 'Debt-Schedule'!H29)
         parseQuotedSheetRef(s)
+      case Some('[') =>
+        // GH-353: external-workbook reference (e.g., [2]Book1!A1, [2]Consolidation.xlsx!D5:D9)
+        parseExternalRef(s)
       case Some(c) =>
         Left(ParseError.UnexpectedChar(c, s.pos, "expected expression"))
 
@@ -1013,8 +1018,14 @@ object FormulaParser:
       // Expect '!' after closing quote
       s2.currentChar match
         case Some('!') =>
-          // Delegate to existing sheet-qualified ref parser
-          parseSheetQualifiedRef(sheetName, s2.advance(), startPos)
+          // GH-353: quoted external-workbook reference — the bracket prefix sits INSIDE the
+          // quotes ('[3]Sheet Name'!B2). Split it off and route to the external-ref parser.
+          splitExternalPrefix(sheetName) match
+            case Some((index, externalName)) =>
+              parseExternalQualifiedRef(index, externalName, s2.advance(), startPos)
+            case None =>
+              // Delegate to existing sheet-qualified ref parser
+              parseSheetQualifiedRef(sheetName, s2.advance(), startPos)
         case Some(c) =>
           Left(ParseError.UnexpectedChar(c, s2.pos, "expected '!' after quoted sheet name"))
         case None =>
@@ -1074,6 +1085,125 @@ object FormulaParser:
               Right((TExpr.SheetPolyRef(sheetName, aref.asInstanceOf[ARef], anchor), s2))
             case Left(err) =>
               Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
+
+  // ===== GH-353: external-workbook references =====
+
+  /**
+   * Split a `[N]Name` external-workbook prefix off a quoted sheet-name string (the quoted form
+   * carries the bracket INSIDE the quotes: `'[3]Sheet Name'!B2`). Returns the 1-based workbook
+   * index and the external sheet name, or None when the string is not external-shaped.
+   */
+  private def splitExternalPrefix(name: String): Option[(Int, String)] =
+    if name.startsWith("[") then
+      val close = name.indexOf(']')
+      if close > 1 then
+        val digits = name.substring(1, close)
+        val rest = name.substring(close + 1)
+        if digits.forall(_.isDigit) && rest.nonEmpty then
+          digits.toIntOption.filter(_ > 0).map(index => (index, rest))
+        else None
+      else None
+    else None
+
+  /**
+   * Parse an unquoted external-workbook reference: `[2]Book1!A1`, `[2]Book1!A1:B2`,
+   * `[2]Consolidation.xlsx!D5:D9`.
+   *
+   * The workbook index is the positive integer Excel assigns to the external link; the unquoted
+   * sheet name accepts letters, digits, underscores, and periods (names needing more get the quoted
+   * form, handled in parseQuotedSheetRef). The referenced cells live outside this workbook, so the
+   * result is a dedicated [[TExpr.ExternalRef]]/[[TExpr.ExternalRange]] node — never resolved here,
+   * only carried for closed-workbook cache semantics (GH-353).
+   *
+   * @param state
+   *   Parser state positioned at the opening '['
+   */
+  private def parseExternalRef(state: ParserState): ParseResult[TExpr[?]] =
+    val startPos = state.pos
+    val s1 = state.advance() // skip '['
+
+    @tailrec
+    def readDigits(s: ParserState): ParserState =
+      s.currentChar match
+        case Some(c) if c.isDigit => readDigits(s.advance())
+        case _ => s
+
+    val s2 = readDigits(s1)
+    val digits = state.input.substring(s1.pos, s2.pos)
+    (digits.toIntOption.filter(_ > 0), s2.currentChar) match
+      case (Some(index), Some(']')) =>
+        val s3 = s2.advance()
+        @tailrec
+        def readName(s: ParserState): ParserState =
+          s.currentChar match
+            case Some(c) if c.isLetterOrDigit || c == '_' || c == '.' => readName(s.advance())
+            case _ => s
+        val s4 = readName(s3)
+        val name = state.input.substring(s3.pos, s4.pos)
+        s4.currentChar match
+          case Some('!') if name.nonEmpty =>
+            parseExternalQualifiedRef(index, name, s4.advance(), startPos)
+          case _ =>
+            Left(
+              ParseError.InvalidCellRef(
+                state.input.substring(startPos, s4.pos),
+                startPos,
+                "expected external sheet name followed by '!' after workbook index [n]"
+              )
+            )
+      case _ =>
+        Left(
+          ParseError.InvalidCellRef(
+            state.input.substring(startPos, s2.pos),
+            startPos,
+            "expected external workbook index [n] (a positive integer in brackets)"
+          )
+        )
+
+  /**
+   * Parse the cell/range part of an external-workbook reference: `[index]name!<here>`.
+   *
+   * Mirrors parseSheetQualifiedRef but produces [[TExpr.ExternalRef]]/[[TExpr.ExternalRange]].
+   *
+   * @param state
+   *   Parser state positioned after the '!'
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def parseExternalQualifiedRef(
+    index: Int,
+    name: String,
+    state: ParserState,
+    startPos: Int
+  ): ParseResult[TExpr[?]] =
+    val refStartPos = state.pos
+
+    @tailrec
+    def readRef(s: ParserState): ParserState =
+      s.currentChar match
+        case Some(c) if c.isLetterOrDigit || c == '$' || c == ':' => readRef(s.advance())
+        case _ => s
+
+    val s2 = readRef(state)
+    val refPart = state.input.substring(refStartPos, s2.pos)
+    val prefix = s"[$index]$name"
+
+    if refPart.isEmpty then
+      Left(ParseError.InvalidCellRef(s"$prefix!", startPos, "missing cell reference after !"))
+    else if refPart.contains(':') then
+      // External range reference: [2]Book1!A1:B2
+      CellRange.parse(refPart) match
+        case Right(range) =>
+          Right((TExpr.ExternalRange(index, name, range), s2))
+        case Left(err) =>
+          Left(ParseError.InvalidCellRef(s"$prefix!$refPart", startPos, err))
+    else
+      // External single cell reference: [2]Book1!A1
+      val (cleanRef, anchor) = Anchor.parse(refPart)
+      ARef.parse(cleanRef) match
+        case Right(aref) =>
+          Right((TExpr.ExternalRef(index, name, aref.asInstanceOf[ARef], anchor), s2))
+        case Left(err) =>
+          Left(ParseError.InvalidCellRef(s"$prefix!$refPart", startPos, err))
 
   /**
    * Parse anchored cell reference starting with $.

@@ -140,6 +140,9 @@ object DependencyGraph:
       case TExpr.SheetRef(_, _, _, _) => true
       case TExpr.SheetPolyRef(_, _, _) => true
       case TExpr.SheetRange(_, _) => true
+      // GH-353: external-workbook refs ARE cell references (they just live outside the workbook)
+      case TExpr.ExternalRef(_, _, _, _) => true
+      case TExpr.ExternalRange(_, _, _) => true
       case TExpr.Aggregate(_, _) => true
 
       // Function calls - check arguments
@@ -295,7 +298,11 @@ object DependencyGraph:
       case TExpr.SheetRef(_, _, _, _) => false
       case TExpr.SheetPolyRef(_, _, _) => false
       case TExpr.SheetRange(_, _) => false
+      // GH-353: external refs are fully qualified (workbook + sheet) — no ambient sheet needed
+      case TExpr.ExternalRef(_, _, _, _) => false
+      case TExpr.ExternalRange(_, _, _) => false
       case TExpr.Aggregate(_, TExpr.RangeLocation.CrossSheet(_, _)) => false
+      case TExpr.Aggregate(_, TExpr.RangeLocation.External(_, _, _)) => false
 
       // Function calls - check arguments
       case call: TExpr.Call[?] =>
@@ -307,6 +314,8 @@ object DependencyGraph:
               loc match
                 case TExpr.RangeLocation.Local(_) => true
                 case TExpr.RangeLocation.CrossSheet(_, _) => false
+                // GH-353: fully qualified (workbook + sheet) — no ambient sheet needed
+                case TExpr.RangeLocation.External(_, _, _) => false
             case ArgValue.Cells(_) => true
           }
 
@@ -391,6 +400,9 @@ object DependencyGraph:
       case TExpr.SheetRef(_, _, _, _) => Set.empty
       case TExpr.SheetPolyRef(_, _, _) => Set.empty
       case TExpr.SheetRange(_, _) => Set.empty
+      // GH-353: external-workbook refs target cells OUTSIDE the workbook — no edges ever
+      case TExpr.ExternalRef(_, _, _, _) => Set.empty
+      case TExpr.ExternalRange(_, _, _) => Set.empty
       case TExpr.RangeRef(range) =>
         range.cells.toSet
 
@@ -468,6 +480,9 @@ object DependencyGraph:
       case TExpr.SheetRef(_, _, _, _) => Set.empty
       case TExpr.SheetPolyRef(_, _, _) => Set.empty
       case TExpr.SheetRange(_, _) => Set.empty
+      // GH-353: external-workbook refs target cells OUTSIDE the workbook — no edges ever
+      case TExpr.ExternalRef(_, _, _, _) => Set.empty
+      case TExpr.ExternalRange(_, _, _) => Set.empty
       case TExpr.RangeRef(range) => boundRange(range)
 
       // Recursive cases (binary operators)
@@ -1032,6 +1047,8 @@ object DependencyGraph:
       location match
         case TExpr.RangeLocation.Local(range) => cellsFor(currentSheet, range)
         case TExpr.RangeLocation.CrossSheet(sheet, range) => cellsFor(sheet, range)
+        // GH-353: external-workbook ranges target cells OUTSIDE the workbook — no edges ever
+        case TExpr.RangeLocation.External(_, _, _) => Set.empty
 
     def go(e: TExpr[?]): Set[QualifiedRef] =
       e match
@@ -1044,6 +1061,9 @@ object DependencyGraph:
         case TExpr.SheetRef(sheet, at, _, _) => Set(QualifiedRef(sheet, at))
         case TExpr.SheetPolyRef(sheet, at, _) => Set(QualifiedRef(sheet, at))
         case TExpr.SheetRange(sheet, range) => cellsFor(sheet, range)
+        // GH-353: external-workbook refs target cells OUTSIDE the workbook — no edges ever
+        case TExpr.ExternalRef(_, _, _, _) => Set.empty
+        case TExpr.ExternalRange(_, _, _) => Set.empty
         case TExpr.Add(l, r) => go(l) ++ go(r)
         case TExpr.Sub(l, r) => go(l) ++ go(r)
         case TExpr.Mul(l, r) => go(l) ++ go(r)

@@ -104,6 +104,33 @@ enum TExpr[A] derives CanEqual:
       extends TExpr[Nothing]
 
   /**
+   * GH-353: external-workbook cell reference — `[2]Sheet1!A1` or `'[3]Sheet Name'!B2`.
+   *
+   * `workbookIndex` is the 1-based external-link index Excel stores in formulas of saved workbooks;
+   * `sheetName` is the sheet (or workbook-file) name in that EXTERNAL workbook, kept as a raw
+   * String because external names are not bound by this workbook's SheetName invariants. The target
+   * lives outside the workbook, so this node contributes no dependency edges and cannot be
+   * evaluated: Excel's closed-workbook semantics apply — the containing cell's cached value is the
+   * source of truth (see SheetEvaluator/Recalc), and evaluating the node directly is a clean
+   * per-cell error.
+   *
+   * Example: ExternalRef(2, "Book1", A1) represents [2]Book1!A1
+   */
+  case ExternalRef(
+    workbookIndex: Int,
+    sheetName: String,
+    at: ARef,
+    anchor: Anchor = Anchor.Relative
+  ) extends TExpr[Nothing]
+
+  /**
+   * GH-353: external-workbook range reference — `[2]Book1!A1:B2`.
+   *
+   * The range analog of [[ExternalRef]]; same closed-workbook semantics.
+   */
+  case ExternalRange(workbookIndex: Int, sheetName: String, range: CellRange) extends TExpr[Nothing]
+
+  /**
    * Local range reference.
    *
    * Represents a range like A1:B10 before being consumed by a function.

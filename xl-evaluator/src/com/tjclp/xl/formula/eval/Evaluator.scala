@@ -108,6 +108,21 @@ object Evaluator:
       None
     )
 
+  /**
+   * GH-353: external-workbook references cannot be resolved (the external workbook is not loaded).
+   * Closed-workbook semantics live OUTSIDE the evaluator: a formula cell bearing an external ref
+   * keeps its Excel-written cached value (SheetEvaluator.pinnedExternalCache) and is never
+   * re-evaluated; this error surfaces only for direct evaluation or cells with no cache, and
+   * propagates to dependents as a normal per-cell error.
+   */
+  private[formula] def externalRefUnsupported(refStr: String): EvalError =
+    EvalError.EvalFailed(
+      s"External workbook reference $refStr cannot be resolved: external workbooks are not " +
+        "loaded. Excel's cached value is used when the cell has one; recalculate in Excel to " +
+        "refresh it.",
+      None
+    )
+
   private[formula] def sheetNotFoundError(
     sheetName: SheetName,
     err: com.tjclp.xl.error.XLError
@@ -141,6 +156,11 @@ object Evaluator:
             wb(sheetName) match
               case Left(err) => Left(sheetNotFoundError(sheetName, err))
               case Right(targetSheet) => Right(targetSheet)
+      // GH-353: the target workbook is not loaded — same friendly error as a direct external
+      // ref; cells CONTAINING such calls are pinned to their Excel cache upstream and never
+      // reach this point
+      case loc @ TExpr.RangeLocation.External(_, _, _) =>
+        Left(externalRefUnsupported(loc.toA1))
 
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
@@ -374,6 +394,16 @@ private class EvaluatorImpl(
                   case _ =>
                     // Cached formula or non-formula cell - use decoder
                     decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+
+      // ===== GH-353: External-Workbook References =====
+      //
+      // The target workbook is not loaded, so these can never evaluate. Cells CONTAINING them
+      // are pinned to their Excel-written cached value upstream (SheetEvaluator) and never
+      // reach this point; direct evaluation and uncached cells get a clear per-cell error.
+      case TExpr.ExternalRef(index, name, at, _) =>
+        Left(Evaluator.externalRefUnsupported(s"[$index]$name!${(at: ARef).toA1}"))
+      case TExpr.ExternalRange(index, name, range) =>
+        Left(Evaluator.externalRefUnsupported(s"[$index]$name!${range.toA1}"))
 
       case TExpr.SheetRange(sheetName, range) =>
         // SheetRange should be wrapped in a function (SUM, COUNT, etc.) before evaluation

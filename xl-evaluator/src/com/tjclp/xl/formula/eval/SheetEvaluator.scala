@@ -133,9 +133,13 @@ object SheetEvaluator:
     ): XLResult[CellValue] =
       val cell = sheet(ref)
       cell.value match
-        case CellValue.Formula(expr, _) =>
-          // Pass the current cell ref for ROW()/COLUMN() without arguments
-          evaluateFormula(expr, clock, workbook, Some(ref))
+        case value @ CellValue.Formula(expr, _) =>
+          pinnedExternalCache(value) match
+            // GH-353: closed-workbook semantics — the Excel-written cache IS the value
+            case Some(cached) => scala.util.Right(cached)
+            case None =>
+              // Pass the current cell ref for ROW()/COLUMN() without arguments
+              evaluateFormula(expr, clock, workbook, Some(ref))
         case other =>
           scala.util.Right(other)
 
@@ -153,8 +157,12 @@ object SheetEvaluator:
       workbook: Option[Workbook]
     ): XLResult[CellValue] =
       sheet(ref).value match
-        case CellValue.Formula(expr, _) =>
-          evaluateFormulaWith(sheet, expr, Evaluator.instance(rng), clock, workbook, Some(ref))
+        case value @ CellValue.Formula(expr, _) =>
+          pinnedExternalCache(value) match
+            // GH-353: closed-workbook semantics — the Excel-written cache IS the value
+            case Some(cached) => scala.util.Right(cached)
+            case None =>
+              evaluateFormulaWith(sheet, expr, Evaluator.instance(rng), clock, workbook, Some(ref))
         case other =>
           scala.util.Right(other)
 
@@ -544,6 +552,40 @@ object SheetEvaluator:
             }
 
             evalResult.map(_._2)
+
+  /**
+   * GH-353: Excel closed-workbook semantics — Some(cached) when this is a formula cell whose
+   * expression touches an external workbook ([2]Book1!A1) AND Excel wrote a cached value.
+   *
+   * Such cells are PINNED: the cached value is the only source of truth (the external workbook is
+   * not loaded, so re-evaluation can only fail) and must be preserved verbatim. Callers skip
+   * evaluation and use the cache directly; dependents then read it exactly as they read any cached
+   * precedent. Uncached external formulas return None and fall through to normal evaluation, which
+   * yields a clear per-cell error (Evaluator.externalRefUnsupported).
+   *
+   * The '[' pre-filter keeps the common recalculation path parse-free (same trick as
+   * DependencyGraph.dynamicCells).
+   *
+   * Parse-failure fallback: some external shapes are beyond xl's parser (e.g. an external range in
+   * an XLOOKUP array slot, or external defined names `[2]!name`). Re-evaluating such a cell can
+   * only produce a parse error, and clearing its cache would destroy the sole source of truth, so a
+   * CACHED formula that fails to parse but lexically carries the external-workbook prefix (`[n]…` /
+   * `'[n]…`) is pinned too. A false positive (a `[n]`-looking substring in an unparseable
+   * non-external formula) merely keeps that cell's existing cache — the same value every earlier xl
+   * version reported for it.
+   */
+  private[eval] def pinnedExternalCache(value: CellValue): Option[CellValue] =
+    value match
+      case CellValue.Formula(expr, Some(cached)) if expr.contains('[') =>
+        FormulaParser.parse(expr) match
+          case scala.util.Right(ast) if TExpr.containsExternalRef(ast) => Some(cached)
+          case scala.util.Right(_) => None
+          case scala.util.Left(_) if externalPrefixPattern.matcher(expr).find() => Some(cached)
+          case scala.util.Left(_) => None
+      case _ => None
+
+  /** GH-353: lexical external-workbook prefix — `[2]Book1!`, `'[3]Sheet Name'!`, `[2]!name`. */
+  private val externalPrefixPattern = java.util.regex.Pattern.compile("""'?\[\d+\]""")
 
   /**
    * GH-274: strip stale formula caches from the given cells.

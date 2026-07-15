@@ -110,6 +110,8 @@ object FormulaFormatting:
         case TExpr.RangeLocation.Local(range) => boundedCells(sheet, range)
         case TExpr.RangeLocation.CrossSheet(name, range) =>
           resolve(name).map(boundedCells(_, range)).getOrElse(Vector.empty)
+        // GH-353: the target cells are not in this workbook — no format to inherit from
+        case TExpr.RangeLocation.External(_, _, _) => Vector.empty
 
     def loop(e: TExpr[?]): Vector[(Sheet, ARef)] =
       e match
@@ -126,6 +128,11 @@ object FormulaFormatting:
         case TExpr.SheetRange(name, range) =>
           resolve(name).map(boundedCells(_, range)).getOrElse(Vector.empty)
         case TExpr.Aggregate(_, location) => locationRefs(location)
+
+        // GH-353: external-workbook refs — the target cells are not in this workbook, so
+        // there is no format to inherit from
+        case TExpr.ExternalRef(_, _, _, _) => Vector.empty
+        case TExpr.ExternalRange(_, _, _) => Vector.empty
 
         // Function calls: arguments in declaration order
         case call: TExpr.Call[?] =>
