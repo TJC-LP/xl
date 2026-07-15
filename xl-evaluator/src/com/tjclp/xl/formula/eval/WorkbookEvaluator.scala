@@ -270,18 +270,34 @@ object WorkbookEvaluator:
         }
 
         // Cache computed values into formula cells on the original sheets; failed cells stay
-        // uncached (Excel recalculates them on open)
-        val cachedSheets = wb.sheets.map { orig =>
-          evaluated.getOrElse(orig.name, Map.empty).foldLeft(orig) { case (s, (ref, computed)) =>
-            s.cells.get(ref).map(_.value) match
-              case Some(CellValue.Formula(expr, _)) =>
-                s.put(ref, CellValue.Formula(expr, Some(computed)))
-              case _ => s
+        // uncached (Excel recalculates them on open). Track per sheet whether any recomputed
+        // value actually differs from the pre-existing cache (a newly cached cell — prior
+        // cache None — counts as a change).
+        val cachedSheets: Vector[(Sheet, Boolean)] = wb.sheets.map { orig =>
+          evaluated.getOrElse(orig.name, Map.empty).foldLeft((orig, false)) {
+            case ((s, changed), (ref, computed)) =>
+              s.cells.get(ref).map(_.value) match
+                case Some(CellValue.Formula(expr, cached)) if !cached.contains(computed) =>
+                  (s.put(ref, CellValue.Formula(expr, Some(computed))), true)
+                case _ => (s, changed)
           }
         }
 
+        // Reinstall changed sheets via Workbook.put — not copy — so the surgical-write
+        // ModificationTracker sees every sheet whose caches actually changed (GH-352). A raw
+        // copy leaves disk-read workbooks looking untouched, and the writer then preserves
+        // the original worksheet XML verbatim, silently dropping the new cached values.
+        // Sheets whose recomputed caches all equal the existing ones are left alone: putting
+        // them would mark them modified, forcing the writer to regenerate their XML and drop
+        // any unparsed parts (pivot tables, slicers, ctrlProps) that can only survive via
+        // byte-for-byte preservation.
+        val workbookWithCaches =
+          cachedSheets.foldLeft(wb) { case (acc, (cached, changed)) =>
+            if changed then acc.put(cached) else acc
+          }
+
         RecalcResult(
-          workbook = wb.copy(sheets = cachedSheets),
+          workbook = workbookWithCaches,
           evaluated = wb.sheets.map(s => s.name -> evaluated.getOrElse(s.name, Map.empty)).toMap,
           errors = cycleErrors ++ blockedErrors ++ evalErrors
         )

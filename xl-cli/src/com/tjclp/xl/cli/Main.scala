@@ -99,7 +99,7 @@ object Main
     // Sheet-level write: --file, --sheet, and --output (required)
     // --stream uses SAX/StAX workbook writes for modifying commands.
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd
 
     val sheetWriteOpts =
       (
@@ -947,6 +947,26 @@ Use --dry-run to validate JSON without writing."""
   val batchCmd: Opts[CliCommand] =
     Opts.subcommand("batch", batchHelp) {
       (batchArg, dryRunOpt).mapN(CliCommand.Batch.apply)
+    }
+
+  // --- Recalc command (GH-352) ---
+  private val recalcHelp = """Recalculate all formulas and rewrite cached values.
+
+Runs one whole-workbook recalculation and writes the result, so every formula
+cell carries a cached value (<v>) that cached-value readers see (pandas,
+openpyxl data_only=True, previewers, Excel before a manual recalc).
+
+Formula errors (e.g. circular references) are data conditions, not tool
+failures: affected cells are left uncached, the file is still written, the
+errors are listed in the summary, and the exit code is 0.
+
+USAGE:
+  xl -f in.xlsx -o out.xlsx recalc
+  xl -f in.xlsx -i recalc"""
+
+  val recalcCmd: Opts[CliCommand] =
+    Opts.subcommand("recalc", recalcHelp) {
+      Opts(CliCommand.Recalc)
     }
 
   // --- Import command ---
@@ -1836,6 +1856,11 @@ Use --dry-run to validate JSON without writing."""
     case CliCommand.Batch(source, _) =>
       requireOutput(outputOpt, backendOpt, stream)(
         WriteCommands.batch(wb, sheetOpt, source, _, _, _)
+      )
+
+    case CliCommand.Recalc =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.recalc(wb, _, _, _)
       )
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
