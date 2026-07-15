@@ -685,10 +685,12 @@ private def stripFitToPage(existing: Option[Elem]): Option[Elem] =
  */
 private[ooxml] def applyDomainRowProps(row: OoxmlRow, props: RowProperties): OoxmlRow =
   row.copy(
-    height = props.height.orElse(row.height),
-    customHeight = props.height.isDefined || row.customHeight,
+    // A RowProperties entry is authoritative for the fields emitted here. None actively clears
+    // optional source attributes; other preserved row metadata remains intact via case-class copy.
+    height = props.height,
+    customHeight = props.height.isDefined,
     hidden = props.hidden, // Domain always wins (allows unhide)
-    outlineLevel = props.outlineLevel.orElse(row.outlineLevel),
+    outlineLevel = props.outlineLevel,
     collapsed = props.collapsed // Domain always wins (allows uncollapse)
     // Note: styleId would need remapping to workbook-level index (deferred)
   )
