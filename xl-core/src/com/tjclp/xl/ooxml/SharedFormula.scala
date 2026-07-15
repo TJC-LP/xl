@@ -1,7 +1,5 @@
 package com.tjclp.xl.ooxml
 
-import scala.collection.mutable.StringBuilder
-
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 
 /**

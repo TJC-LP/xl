@@ -80,6 +80,10 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * Stream rows from first sheet with constant memory.
    *
    * Uses SAX parser (javax.xml.parsers.SAXParser) for 3-4x speedup vs fs2-data-xml.
+   *
+   * Shared formulas are expanded when their master appears first. A dependent with no active master
+   * is emitted as a `#REF!` formula with its cached value preserved. Use `read` when shared formula
+   * cells may appear in arbitrary physical order.
    */
   def readStream(path: Path): Stream[F, RowData] =
     Stream
@@ -90,7 +94,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         readStreamByIndex(zipFile, 1)
       }
 
-  /** Stream rows from first sheet within a bounded range (rows/cols). */
+  /**
+   * Stream rows from first sheet within a bounded range (rows/cols).
+   *
+   * The shared-formula ordering constraint documented on `readStream` also applies.
+   */
   def readStreamRange(path: Path, range: CellRange): Stream[F, RowData] =
     Stream
       .bracket(
@@ -103,7 +111,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   /**
    * Stream rows from sheet by name with constant memory.
    *
-   * Uses SAX parser (javax.xml.parsers.SAXParser) for 3-4x speedup vs fs2-data-xml.
+   * Uses SAX parser (javax.xml.parsers.SAXParser) for 3-4x speedup vs fs2-data-xml. The
+   * shared-formula ordering constraint documented on `readStream` also applies.
    */
   def readSheetStream(path: Path, sheetName: String): Stream[F, RowData] =
     Stream
@@ -114,7 +123,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         readStreamByName(zipFile, sheetName, None)
       }
 
-  /** Stream rows from sheet by name within a bounded range (rows/cols). */
+  /**
+   * Stream rows from sheet by name within a bounded range (rows/cols).
+   *
+   * The shared-formula ordering constraint documented on `readStream` also applies.
+   */
   def readSheetStreamRange(path: Path, sheetName: String, range: CellRange): Stream[F, RowData] =
     Stream
       .bracket(
@@ -124,7 +137,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         readStreamByName(zipFile, sheetName, Some(range))
       }
 
-  /** Stream rows from sheet by index (1-based) with constant memory. */
+  /**
+   * Stream rows from sheet by index (1-based) with constant memory.
+   *
+   * The shared-formula ordering constraint documented on `readStream` also applies.
+   */
   def readStreamByIndex(path: Path, sheetIndex: Int): Stream[F, RowData] =
     Stream
       .bracket(
@@ -134,7 +151,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         readStreamByIndex(zipFile, sheetIndex)
       }
 
-  /** Stream rows from sheet by index within a bounded range (rows/cols). */
+  /**
+   * Stream rows from sheet by index within a bounded range (rows/cols).
+   *
+   * The shared-formula ordering constraint documented on `readStream` also applies.
+   */
   def readStreamByIndexRange(
     path: Path,
     sheetIndex: Int,

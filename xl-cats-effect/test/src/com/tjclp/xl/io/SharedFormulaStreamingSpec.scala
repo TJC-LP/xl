@@ -53,7 +53,7 @@ class SharedFormulaStreamingSpec extends CatsEffectSuite:
     }
   }
 
-  test("row stream fails visibly when a dependent physically precedes its master") {
+  test("row stream keeps a dependent-before-master formula-shaped") {
     val xml =
       """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
         |  <sheetData>
@@ -62,13 +62,9 @@ class SharedFormulaStreamingSpec extends CatsEffectSuite:
         |  </sheetData>
         |</worksheet>""".stripMargin
 
-    rows(xml).attempt.map {
-      case Left(error) =>
-        assert(
-          Option(error.getMessage).exists(_.contains("requires the master to appear")),
-          s"unexpected failure: $error"
-        )
-      case Right(result) => fail(s"expected stream failure, got $result")
+    rows(xml).map { parsed =>
+      assertEquals(valueAt(parsed, 1, 1), formula("#REF!", 1))
+      assertEquals(valueAt(parsed, 2, 1), formula("A2", 2))
     }
   }
 
@@ -83,6 +79,25 @@ class SharedFormulaStreamingSpec extends CatsEffectSuite:
 
     rows(xml).map { parsed =>
       assertEquals(valueAt(parsed, 2, 0), formula("#REF!", 3))
+    }
+  }
+
+  test("row stream keeps a past-end out-of-range dependent formula-shaped") {
+    val xml =
+      """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <sheetData>
+        |    <row r="1"><c r="B1"><f t="shared" si="5" ref="B1:B2">A1</f><v>1</v></c></row>
+        |    <row r="2"><c r="B2"><f t="shared" si="5"/><v>2</v></c></row>
+        |    <row r="3">
+        |      <c r="A3"><v>0</v></c>
+        |      <c r="C3"><f t="shared" si="5"/><v>3</v></c>
+        |    </row>
+        |  </sheetData>
+        |</worksheet>""".stripMargin
+
+    rows(xml).map { parsed =>
+      assertEquals(valueAt(parsed, 2, 1), formula("A2", 2))
+      assertEquals(valueAt(parsed, 3, 2), formula("#REF!", 3))
     }
   }
 

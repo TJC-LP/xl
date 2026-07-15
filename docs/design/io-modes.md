@@ -89,6 +89,7 @@ Characteristics:
 - Features:
   - Write: inline strings only, default styles, no row-stream API for merged cells or advanced sheet metadata.
   - Read: values and basic types; you typically use it for ETL/analytics rather than formatting‑preserving workflows.
+  - Shared formulas: the one-pass row reader expands dependents when their master appears first. A dependent with no active master remains formula-shaped as `#REF!` with its cached value preserved. This includes a dependent that physically precedes its master; use `read` for arbitrary physical ordering. The targeted single-cell reader can scan ahead and does not share this limitation.
 
 For an already-materialized `Workbook`, `writeWorkbookStream` uses the SAX/StAX OOXML backend. It is a lower-allocation full-workbook write path, not a row-input streaming API, and it preserves the full metadata handled by `XlsxWriter`.
 
@@ -374,4 +375,4 @@ test("streaming read uses constant memory"):
 
 ## Author
 
-Documented 2025-11-11. Last updated 2026-06-10 (SAX read backend, streaming transforms, feature-matrix corrections).
+Documented 2025-11-11. Last updated 2026-07-15 (shared-formula ordering behavior for row streaming).

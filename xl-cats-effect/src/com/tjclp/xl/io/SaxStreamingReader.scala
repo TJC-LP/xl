@@ -355,13 +355,12 @@ object SaxStreamingReader:
                               .getOrElse("#REF!")
                           )
                         case None =>
-                          // A one-pass row stream cannot look ahead for a later master without
-                          // buffering already-emitted rows. Fail explicitly instead of silently
-                          // converting the dependent's cached result into a literal.
-                          val address = currentCellRef.getOrElse("<unknown>")
-                          throw new IllegalArgumentException(
-                            s"Shared formula at $address with si=$index requires the master to appear earlier in the worksheet"
-                          )
+                          // The group may be malformed, expired, or physically later in the XML. A
+                          // one-pass row stream cannot distinguish those cases without retaining
+                          // lifetime history or buffering emitted rows. Use the same visible #REF!
+                          // representation that the DOM reader uses for an unresolved group; unlike
+                          // the DOM path, this one-pass reader cannot resolve a later master.
+                          Some("#REF!")
 
               val cellValue = (expandedFormula, inlineText, cachedValue) match
                 case (Some(formula), _, Some(cached)) =>
@@ -415,8 +414,7 @@ object SaxStreamingReader:
     /**
      * Masters with a valid `ref` range are live only through that range's row-major end. Eviction
      * keeps memory proportional to overlapping shared groups, not total sheet groups. A dependent
-     * encountered after its master has expired is indistinguishable from a not-yet-seen/orphan
-     * group and fails visibly instead of silently becoming a cached constant.
+     * encountered after its master has expired remains visibly formula-shaped as `#REF!`.
      */
     private def evictExpiredSharedMasters(current: ARef): Unit =
       sharedFormulaMasters.filterInPlace { case (_, master) =>
