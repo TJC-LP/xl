@@ -3,15 +3,15 @@ package com.tjclp.xl.io.streaming
 import java.io.InputStream
 import org.xml.sax.{Attributes, InputSource}
 import org.xml.sax.helpers.DefaultHandler
-import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{CellError, CellValue}
-import com.tjclp.xl.ooxml.{SharedStrings, XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{SharedFormula, SharedStrings, XmlSecurity, XmlUtil}
 
 /**
  * SAX-based single cell reader with early-abort optimization.
  *
- * Uses stackless exception pattern for O(position) time, O(1) memory extraction of a single cell.
- * Aborts parsing as soon as target cell is found or row index exceeds target.
+ * Uses a stackless exception pattern for O(position) time and O(1) target state. Parsing normally
+ * aborts as soon as the target is resolved; a shared dependent may scan ahead for its master.
  */
 object SaxSingleCellReader:
 
@@ -40,10 +40,22 @@ object SaxSingleCellReader:
   @SuppressWarnings(Array("org.wartremover.warts.Null"))
   private final class CellNotFound extends RuntimeException(null, null, false, false)
 
+  /** Target data retained only when its shared master has not appeared yet. */
+  private final case class PendingSharedTarget(
+    ref: ARef,
+    sharedIndex: SharedFormula.Index,
+    cachedValue: Option[String],
+    cellType: Option[String],
+    styleId: Option[Int]
+  )
+
   /**
    * Extract a single cell from worksheet XML using SAX parser with early-abort.
    *
-   * Time complexity: O(position of cell in file) Memory: O(1) - only current cell buffered
+   * Time complexity: O(position of cell in file) for ordinary/master-first cells. A shared
+   * dependent whose master physically follows it scans until that master. Only shared masters whose
+   * declared ranges contain the target are retained, so memory does not grow with total sheet
+   * groups.
    *
    * @param stream
    *   Worksheet XML input stream
@@ -88,6 +100,7 @@ object SaxSingleCellReader:
     // Mutable state for current parsing context
     var currentRowIndex: Int = 0
     var inTargetCell = false
+    var currentCellRef: Option[ARef] = None
     var currentCellStyleId: Option[Int] = None
 
     // Cell content state
@@ -97,8 +110,15 @@ object SaxSingleCellReader:
     var inTextElement = false
     var cachedValue: Option[String] = None
     var formulaText: Option[String] = None
+    var formulaType: Option[String] = None
+    var sharedFormulaIndex: Option[SharedFormula.Index] = None
+    var sharedFormulaRange: Option[CellRange] = None
     var currentCellType: Option[String] = None
+    var pendingTarget: Option[PendingSharedTarget] = None
     val valueText = new StringBuilder
+    val sharedFormulaMasters
+      : scala.collection.mutable.Map[SharedFormula.Index, SharedFormula.Master] =
+      scala.collection.mutable.Map.empty
 
     override def startElement(
       uri: String,
@@ -112,24 +132,34 @@ object SaxSingleCellReader:
             .flatMap(_.toIntOption)
             .getOrElse(currentRowIndex + 1)
           // Early abort if we've passed the target row
-          if currentRowIndex > targetRowIndex then throw new CellNotFound
+          if currentRowIndex > targetRowIndex && pendingTarget.isEmpty then throw new CellNotFound
 
         case "c" =>
-          val cellRef = Option(attributes.getValue("r"))
-          if cellRef.contains(targetRefA1) then
-            inTargetCell = true
+          val cellRefText = Option(attributes.getValue("r"))
+          currentCellRef = cellRefText.flatMap(ARef.parse(_).toOption)
+          inTargetCell = cellRefText.contains(targetRefA1)
+          currentCellType = None
+          currentCellStyleId = None
+          cachedValue = None
+          formulaText = None
+          formulaType = None
+          sharedFormulaIndex = None
+          sharedFormulaRange = None
+          if inTargetCell then
             currentCellType = Option(attributes.getValue("t"))
             currentCellStyleId = Option(attributes.getValue("s")).flatMap(_.toIntOption)
             valueText.clear()
-            cachedValue = None
-            formulaText = None
 
         case "v" if inTargetCell =>
           inValue = true
           valueText.clear()
 
-        case "f" if inTargetCell =>
+        case "f" =>
           inFormula = true
+          formulaType = Option(attributes.getValue("t"))
+          sharedFormulaIndex = Option(attributes.getValue("si")).flatMap(SharedFormula.parseIndex)
+          sharedFormulaRange = Option(attributes.getValue("ref"))
+            .flatMap(CellRange.parse(_).toOption)
           valueText.clear()
 
         case "is" if inTargetCell =>
@@ -142,7 +172,8 @@ object SaxSingleCellReader:
         case _ => ()
 
     override def characters(ch: Array[Char], start: Int, length: Int): Unit =
-      if inTargetCell && (inValue || inFormula || inTextElement) then
+      // Every formula is observed so a shared master before or after the target can be retained.
+      if inFormula || (inTargetCell && (inValue || inTextElement)) then
         valueText.appendAll(ch, start, length)
 
     override def endElement(uri: String, localName: String, qName: String): Unit =
@@ -152,8 +183,29 @@ object SaxSingleCellReader:
           inValue = false
           valueText.clear()
 
-        case "f" if inFormula && inTargetCell =>
-          formulaText = Some(valueText.toString)
+        case "f" if inFormula =>
+          val trimmed = valueText.toString.trim
+          if inTargetCell then formulaText = Option.when(trimmed.nonEmpty)(trimmed)
+
+          if formulaType.contains("shared") && trimmed.nonEmpty then
+            for
+              index <- sharedFormulaIndex
+              ref <- currentCellRef
+              range <- sharedFormulaRange.filter(_.contains(ref))
+            do
+              val master = SharedFormula.Master(ref, trimmed, Some(range))
+              // A dependent may physically precede its master. Resolve it only from a true
+              // master whose declared range contains both its origin and the target.
+              pendingTarget
+                .filter(pending => pending.sharedIndex == index && range.contains(pending.ref))
+                .foreach { pending =>
+                  throw new CellFound(resultForPending(pending, master))
+                }
+              // Retain only target-relevant masters, keeping memory independent of unrelated
+              // shared-formula groups elsewhere in the sheet.
+              if range.contains(targetRef) && !sharedFormulaMasters.contains(index) then
+                sharedFormulaMasters(index) = master
+
           inFormula = false
           valueText.clear()
 
@@ -166,28 +218,94 @@ object SaxSingleCellReader:
           valueText.clear()
 
         case "c" if inTargetCell =>
-          // Cell complete - construct result and abort
-          val cellValue = (formulaText, cachedValue) match
-            case (Some(formula), Some(cached)) =>
-              val parsedCached = interpretCellValue(cached, currentCellType, sst)
-              val cachedOpt =
-                if parsedCached == CellValue.Empty then None else Some(parsedCached)
-              CellValue.Formula(formula, cachedOpt)
-            case (Some(formula), None) =>
-              CellValue.Formula(formula, None)
-            case (None, Some(value)) =>
-              interpretCellValue(value, currentCellType, sst)
-            case (None, None) =>
-              CellValue.Empty
+          val isSharedMaster =
+            formulaType.contains("shared") &&
+              formulaText.nonEmpty &&
+              sharedFormulaIndex.nonEmpty &&
+              currentCellRef.exists(ref => sharedFormulaRange.exists(_.contains(ref)))
+          val expandedFormula =
+            if !formulaType.contains("shared") || isSharedMaster then formulaText
+            else
+              sharedFormulaIndex match
+                // With no usable group index, retain a non-empty expression as a tolerant
+                // isolated formula fallback; otherwise surface the malformed reference.
+                case None => Some(formulaText.getOrElse("#REF!"))
+                case Some(index) =>
+                  for
+                    master <- sharedFormulaMasters.get(index)
+                    ref <- currentCellRef
+                    if master.range.exists(_.contains(ref))
+                  yield SharedFormula.translate(master, ref)
 
-          val result = CellResult(
-            value = cellValue,
-            styleId = currentCellStyleId,
-            formulaText = formulaText
-          )
-          throw new CellFound(result)
+          if formulaType.contains("shared") && expandedFormula.isEmpty then
+            val index = sharedFormulaIndex.getOrElse(
+              throw new IllegalStateException(s"Shared formula at $targetRefA1 lost its si")
+            )
+            pendingTarget = Some(
+              PendingSharedTarget(
+                targetRef,
+                index,
+                cachedValue,
+                currentCellType,
+                currentCellStyleId
+              )
+            )
+            resetCellState()
+          else
+            throw new CellFound(
+              buildResult(expandedFormula, cachedValue, currentCellType, currentCellStyleId)
+            )
+
+        case "c" => resetCellState()
 
         case _ => ()
+
+    override def endDocument(): Unit =
+      pendingTarget.foreach { pending =>
+        throw new CellFound(
+          buildResult(Some("#REF!"), pending.cachedValue, pending.cellType, pending.styleId)
+        )
+      }
+
+    private def resultForPending(
+      pending: PendingSharedTarget,
+      master: SharedFormula.Master
+    ): CellResult =
+      val formula = SharedFormula.translate(master, pending.ref)
+      buildResult(Some(formula), pending.cachedValue, pending.cellType, pending.styleId)
+
+    private def buildResult(
+      expandedFormula: Option[String],
+      cached: Option[String],
+      cellType: Option[String],
+      styleId: Option[Int]
+    ): CellResult =
+      val cellValue = (expandedFormula, cached) match
+        case (Some(formula), Some(cachedText)) =>
+          val parsedCached = interpretCellValue(cachedText, cellType, sst)
+          val cachedOpt = Option.when(parsedCached != CellValue.Empty)(parsedCached)
+          CellValue.Formula(formula, cachedOpt)
+        case (Some(formula), None) => CellValue.Formula(formula, None)
+        case (None, Some(value)) => interpretCellValue(value, cellType, sst)
+        case (None, None) => CellValue.Empty
+
+      CellResult(cellValue, styleId, expandedFormula)
+
+    private def resetCellState(): Unit =
+      currentCellRef = None
+      inTargetCell = false
+      currentCellStyleId = None
+      currentCellType = None
+      cachedValue = None
+      formulaText = None
+      formulaType = None
+      sharedFormulaIndex = None
+      sharedFormulaRange = None
+      inValue = false
+      inFormula = false
+      inInlineStr = false
+      inTextElement = false
+      valueText.clear()
 
     private def interpretCellValue(
       value: String,

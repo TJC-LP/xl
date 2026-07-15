@@ -13,7 +13,7 @@ import com.tjclp.xl.ooxml.XmlUtil.{
   getTextPreservingWhitespace,
   parseTextRuns
 }
-import com.tjclp.xl.ooxml.{SharedStrings, XmlReadable}
+import com.tjclp.xl.ooxml.{SharedFormula, SharedStrings, XmlReadable}
 
 /** Reader for parsing OoxmlWorksheet from XML */
 object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
@@ -28,7 +28,13 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
       // Parse sheetData (required)
       sheetDataElem <- getChild(elem, "sheetData")
       rowElems = getChildren(sheetDataElem, "row")
-      rows <- parseRows(rowElems, sst)
+      // GH-370: collect shared masters before parsing any cells. Although Excel normally emits
+      // the master first, OOXML does not require physical row/cell order to match coordinates.
+      // A two-pass DOM read therefore also handles a dependent that precedes its master in XML.
+      sharedFormulaMasters = parseSharedFormulaMasters(
+        rowElems.flatMap(row => getChildren(row, "c"))
+      )
+      rows <- parseRows(rowElems, sst, sharedFormulaMasters)
 
       // Parse mergeCells (optional)
       mergedRanges <- parseMergeCells(elem)
@@ -146,7 +152,8 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
 
   private def parseRows(
     elems: Seq[Elem],
-    sst: Option[SharedStrings]
+    sst: Option[SharedStrings],
+    sharedFormulaMasters: Map[SharedFormula.Index, SharedFormula.Master]
   ): Either[String, Seq[OoxmlRow]] =
     val parsed = elems.map { e =>
       for
@@ -171,7 +178,7 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
         dyDescent = attrs.get("x14ac:dyDescent").flatMap(_.toDoubleOption)
 
         cellElems = getChildren(e, "c")
-        cells <- parseCells(cellElems, sst)
+        cells <- parseCells(cellElems, sst, sharedFormulaMasters)
       yield OoxmlRow(
         rowIdx,
         cells,
@@ -195,7 +202,8 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
 
   private def parseCells(
     elems: Seq[Elem],
-    sst: Option[SharedStrings]
+    sst: Option[SharedStrings],
+    sharedFormulaMasters: Map[SharedFormula.Index, SharedFormula.Master]
   ): Either[String, Seq[OoxmlCell]] =
     val parsed = elems.map { e =>
       for
@@ -203,7 +211,7 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
         ref <- ARef.parse(refStr)
         cellType = getAttrOpt(e, "t").getOrElse("")
         styleIdx = getAttrOpt(e, "s").flatMap(_.toIntOption)
-        value <- parseCellValue(e, cellType, sst)
+        value <- parseCellValue(e, ref, cellType, sst, sharedFormulaMasters)
       yield OoxmlCell(ref, value, styleIdx, cellType)
     }
 
@@ -213,36 +221,85 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
 
   private def parseCellValue(
     elem: Elem,
+    ref: ARef,
     cellType: String,
-    sst: Option[SharedStrings]
+    sst: Option[SharedStrings],
+    sharedFormulaMasters: Map[SharedFormula.Index, SharedFormula.Master]
   ): Either[String, CellValue] =
-    // Check for formula element first (before cellType dispatch)
-    (elem \ "f").headOption.map(_.text.trim) match
-      case Some(formulaExpr) if formulaExpr.nonEmpty =>
-        // Formula cell - parse cached value from <v> if present
-        val cachedValue: Option[CellValue] = (elem \ "v").headOption.map(_.text).flatMap { vText =>
-          // Infer cached value type from cellType attribute
-          cellType match
-            case "n" | "" =>
-              try Some(CellValue.Number(BigDecimal(vText)))
-              catch case _: NumberFormatException => None
-            case "b" =>
-              vText match
-                case "1" | "true" => Some(CellValue.Bool(true))
-                case "0" | "false" => Some(CellValue.Bool(false))
-                case _ => None
-            case "e" =>
-              import com.tjclp.xl.cells.CellError
-              CellError.parse(vText).toOption.map(CellValue.Error.apply)
-            case "str" | "inlineStr" =>
-              Some(CellValue.Text(decodeXstring(vText)))
-            case _ => None
-        }
-        Right(CellValue.Formula(formulaExpr, cachedValue))
+    // Check for formula element first (before cellType dispatch). A shared dependent has an empty
+    // <f t="shared" si="N"/>; resolve it from the master's expression instead of treating its
+    // cached <v> as a literal (GH-370).
+    (elem \ "f").headOption.collect { case formula: Elem => formula } match
+      case Some(formulaElem) if getAttrOpt(formulaElem, "t").contains("shared") =>
+        val ownExpression = formulaElem.text.trim
+        val sharedIndex = getAttrOpt(formulaElem, "si").flatMap(SharedFormula.parseIndex)
+        val masterRange = getAttrOpt(formulaElem, "ref")
+          .flatMap(CellRange.parse(_).toOption)
+          .filter(_.contains(ref))
+        val isMaster = ownExpression.nonEmpty && sharedIndex.isDefined && masterRange.isDefined
+        val expression =
+          if isMaster then ownExpression
+          else
+            sharedIndex
+              .flatMap(sharedFormulaMasters.get)
+              .filter(_.range.exists(_.contains(ref)))
+              .map(master => SharedFormula.translate(master, ref))
+              // A malformed shared formula with no usable group index remains readable using its
+              // own text. When si is valid, however, non-master text is stale/junk by definition
+              // and must never override the real master.
+              .orElse(Option.when(sharedIndex.isEmpty && ownExpression.nonEmpty)(ownExpression))
+              // A malformed/orphan shared dependent must remain visibly formula-shaped. Falling
+              // back to its cached literal would recreate the silent data loss GH-370 fixes.
+              .getOrElse("#REF!")
+        Right(CellValue.Formula(expression, parseFormulaCache(elem, cellType)))
+
+      case Some(formulaElem) if formulaElem.text.trim.nonEmpty =>
+        Right(CellValue.Formula(formulaElem.text.trim, parseFormulaCache(elem, cellType)))
 
       case _ =>
-        // No formula - dispatch on cellType as before
+        // No material formula - dispatch on cellType as before.
         parseCellValueWithoutFormula(elem, cellType, sst)
+
+  /** Collect every well-formed non-empty shared master; first duplicate wins. */
+  private def parseSharedFormulaMasters(
+    cells: Seq[Elem]
+  ): Map[SharedFormula.Index, SharedFormula.Master] =
+    cells.foldLeft(Map.empty[SharedFormula.Index, SharedFormula.Master]) { (masters, cell) =>
+      (cell \ "f").headOption.collect { case formula: Elem => formula } match
+        case Some(formula)
+            if getAttrOpt(formula, "t").contains("shared") && formula.text.trim.nonEmpty =>
+          (for
+            refText <- getAttrOpt(cell, "r")
+            ref <- ARef.parse(refText).toOption
+            sharedIndex <- getAttrOpt(formula, "si").flatMap(SharedFormula.parseIndex)
+            range <- getAttrOpt(formula, "ref")
+              .flatMap(CellRange.parse(_).toOption)
+              .filter(_.contains(ref))
+          yield (sharedIndex, SharedFormula.Master(ref, formula.text.trim, Some(range)))) match
+            case Some((sharedIndex, master)) if !masters.contains(sharedIndex) =>
+              masters.updated(sharedIndex, master)
+            case _ => masters
+        case _ => masters
+    }
+
+  /** Parse the cached result of a formula according to the cell's `t` attribute. */
+  private def parseFormulaCache(elem: Elem, cellType: String): Option[CellValue] =
+    (elem \ "v").headOption.map(_.text).flatMap { valueText =>
+      cellType match
+        case "n" | "" =>
+          try Some(CellValue.Number(BigDecimal(valueText)))
+          catch case _: NumberFormatException => None
+        case "b" =>
+          valueText match
+            case "1" | "true" => Some(CellValue.Bool(true))
+            case "0" | "false" => Some(CellValue.Bool(false))
+            case _ => None
+        case "e" =>
+          import com.tjclp.xl.cells.CellError
+          CellError.parse(valueText).toOption.map(CellValue.Error.apply)
+        case "str" | "inlineStr" => Some(CellValue.Text(decodeXstring(valueText)))
+        case _ => None
+    }
 
   /** Parse cell value when no formula element is present */
   private def parseCellValueWithoutFormula(

@@ -101,8 +101,13 @@ trait Excel[F[_]]:
   /**
    * Stream rows from first sheet.
    *
-   * Good for: Large files (>10k rows), sequential processing, aggregations Memory: O(1) - constant
-   * memory regardless of file size
+   * Good for: Large files (>10k rows), sequential processing, aggregations. Memory is independent
+   * of emitted row count, apart from shared strings and active shared-formula groups.
+   *
+   * Shared formulas are expanded in one pass when the master appears before its dependents. A
+   * dependent with no active master remains formula-shaped as `#REF!` with its cached value
+   * preserved. This includes the spec-legal case where a dependent physically precedes its master;
+   * use `read` for order-independent two-pass handling.
    *
    * Example:
    * {{{
@@ -118,14 +123,16 @@ trait Excel[F[_]]:
   /**
    * Stream rows from specific sheet by name.
    *
-   * Good for: Processing specific sheet in multi-sheet workbook Memory: O(1) constant
+   * Good for: Processing a specific sheet in a multi-sheet workbook. The shared-formula ordering
+   * constraint documented on `readStream` also applies.
    */
   def readSheetStream(path: Path, sheetName: String): Stream[F, RowData]
 
   /**
    * Stream rows from specific sheet by index (1-based).
    *
-   * Good for: Processing sheets by position rather than name Memory: O(1) constant
+   * Good for: Processing sheets by position rather than name. The shared-formula ordering
+   * constraint documented on `readStream` also applies.
    *
    * Example:
    * {{{
