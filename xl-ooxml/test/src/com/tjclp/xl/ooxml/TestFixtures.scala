@@ -34,12 +34,16 @@ object TestFixtures:
   )
 
   /**
-   * Fixtures derived from the openpyxl set by deterministic zip surgery (see PROVENANCE.md).
+   * Fixtures derived from the committed set by deterministic zip surgery (see PROVENANCE.md).
    * image-shape.xlsx = image.xlsx with an `<sp>` shape anchor appended to the same wsDr (GH-221
-   * mixed typed-picture + preserved-fragment coverage).
+   * mixed typed-picture + preserved-fragment coverage). doctype-hostile.xlsx = small-values-lo.xlsx
+   * made "hostile but Excel-valid" (GH-350): DOCTYPE prologs on workbook/sheet/sst/styles (internal
+   * subsets with comment traps), a UTF-8 BOM on styles.xml, 3000 extra cellXfs, and an
+   * externalLinks part.
    */
   val derived: List[String] = List(
-    "image-shape.xlsx"
+    "image-shape.xlsx",
+    "doctype-hostile.xlsx"
   )
 
   /**

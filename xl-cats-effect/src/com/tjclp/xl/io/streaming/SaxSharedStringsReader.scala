@@ -1,7 +1,7 @@
 package com.tjclp.xl.io.streaming
 
 import java.io.InputStream
-import javax.xml.parsers.SAXParserFactory
+
 import org.xml.sax.{Attributes, InputSource}
 import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
@@ -23,17 +23,10 @@ object SaxSharedStringsReader:
 
   def parse(stream: InputStream): Either[String, SharedStrings] =
     try
-      val factory = SAXParserFactory.newInstance()
-      factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-      factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
-      factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-      factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-      factory.setXIncludeAware(false)
-      factory.setNamespaceAware(true)
-
-      val parser = factory.newSAXParser()
+      // GH-350: shared hardening + benign-doctype strip, matching the in-memory parseSafe path
+      val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
       val handler = new SharedStringsHandler()
-      parser.parse(InputSource(stream), handler)
+      parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
       Right(handler.result())
     catch
       case err: ParseFailure => Left(err.getMessage)
