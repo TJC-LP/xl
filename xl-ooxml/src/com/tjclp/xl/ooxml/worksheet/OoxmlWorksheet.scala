@@ -466,14 +466,24 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
       rowWithDomainProps
     }
 
-    // Preserve empty rows from original (critical for Row 1!)
-    val emptyRowsFromOriginal = preservedMetadata.toList.flatMap { preserved =>
-      preserved.rows.filter(_.cells.isEmpty)
+    // Reconcile source rows that have no cells in the domain model. This preserves formatting-only
+    // rows and the non-cell metadata of rows whose cells were removed. Exclude rows that still have
+    // (or gained) domain cells so every row index is emitted exactly once by one branch.
+    val rowsWithCellsIndices = rowsWithCells.iterator.map(_.rowIndex).toSet
+    val preservedRowsWithoutDomainCells = preservedMetadata.toList.flatMap { preserved =>
+      preserved.rows
+        .filterNot(row => rowsWithCellsIndices.contains(row.rowIndex))
+        .map { original =>
+          val withoutSourceCells = original.copy(cells = Seq.empty)
+          sheet.rowProperties
+            .get(Row.from1(original.rowIndex))
+            .fold(withoutSourceCells)(props => applyDomainRowProps(withoutSourceCells, props))
+        }
     }
 
     // Generate empty rows for domain row properties not already represented
     val existingRowIndices =
-      cellsByRow.map(_._1).toSet ++ emptyRowsFromOriginal.map(_.rowIndex).toSet
+      cellsByRow.map(_._1).toSet ++ preservedRowsWithoutDomainCells.map(_.rowIndex).toSet
     val emptyRowsFromDomain = sheet.rowProperties
       .filterNot { case (row, _) => existingRowIndices.contains(row.index1) }
       .map { case (row, props) =>
@@ -481,8 +491,9 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
       }
       .toSeq
 
-    // Combine rows with cells + empty rows from original + empty rows from domain, sort by index
-    val allRows = (rowsWithCells ++ emptyRowsFromOriginal ++ emptyRowsFromDomain).sortBy(_.rowIndex)
+    // Combine rows with cells + cell-free preserved/domain rows, then sort by index.
+    val allRows =
+      (rowsWithCells ++ preservedRowsWithoutDomainCells ++ emptyRowsFromDomain).sortBy(_.rowIndex)
 
     // Generate legacyDrawing element if sheet has comments but no preserved legacyDrawing
     val legacyDrawingElem =

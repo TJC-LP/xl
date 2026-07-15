@@ -9,6 +9,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.styleSyntax.withCellStyle
 import com.tjclp.xl.styles.{CellStyle, Color, Fill}
@@ -204,6 +205,154 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     outputZip.close()
     Files.deleteIfExists(source)
     Files.deleteIfExists(output)
+  }
+
+  List(
+    "ScalaXml" -> WriterConfig(backend = XmlBackend.ScalaXml),
+    "SaxStax" -> WriterConfig(backend = XmlBackend.SaxStax)
+  ).foreach { case (backendName, config) =>
+    test(s"GH-371: explicit properties override a preserved empty row ($backendName)") {
+      val source = createWorkbookWithRichRowAttributes()
+      val output = Files.createTempFile(s"row-props-$backendName", ".xlsx")
+
+      try
+        val updated = for
+          wb <- XlsxReader.read(source)
+          sheet <- wb("Sheet1")
+          row1 = Row.from1(1)
+          edited = sheet
+            .setRowProperties(
+              row1,
+              RowProperties(
+                height = Some(42.0),
+                hidden = true,
+                outlineLevel = Some(2),
+                collapsed = true
+              )
+            )
+            .setRowProperties(Row.from1(2), RowProperties(hidden = true))
+            .setRowProperties(Row.from1(4), RowProperties())
+        yield wb.put(edited)
+
+        val wb = updated.fold(err => fail(s"Failed to modify: $err"), identity)
+        XlsxWriter
+          .writeWith(wb, output, config)
+          .fold(err => fail(s"Failed to write: $err"), identity)
+
+        val outputZip = new ZipFile(output.toFile)
+        val sheetXml =
+          try readEntryString(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
+          finally outputZip.close()
+        val row1Xml = """<row\b[^>]*\br="1"[^>]*>""".r
+          .findFirstIn(sheetXml)
+          .getOrElse(fail(s"Row 1 missing from regenerated worksheet:\n$sheetXml"))
+        val row2Xml = """<row\b[^>]*\br="2"[^>]*>""".r
+          .findFirstIn(sheetXml)
+          .getOrElse(fail(s"Row 2 missing from regenerated worksheet:\n$sheetXml"))
+        val row4Xml = """<row\b[^>]*\br="4"[^>]*>""".r
+          .findFirstIn(sheetXml)
+          .getOrElse(fail(s"Row 4 missing from regenerated worksheet:\n$sheetXml"))
+
+        // Explicit domain properties win over the source row attributes.
+        assert(row1Xml.contains("""ht="42.0"""), row1Xml)
+        assert(row1Xml.contains("""customHeight="1"""), row1Xml)
+        assert(row1Xml.contains("""hidden="1"""), row1Xml)
+        assert(row1Xml.contains("""outlineLevel="2"""), row1Xml)
+        assert(row1Xml.contains("""collapsed="1"""), row1Xml)
+
+        // Preserved row metadata not emitted by applyDomainRowProps still rides through. Source
+        // row style `s` is preserved; authoring RowProperties.styleId remains deferred.
+        assert(row1Xml.contains("""spans="1:5"""), row1Xml)
+        assert(row1Xml.contains("""s="1"""), row1Xml)
+        assert(row1Xml.contains("""customFormat="1"""), row1Xml)
+        assert(row1Xml.contains("""x14ac:dyDescent="0.25"""), row1Xml)
+
+        // None actively clears modeled optional properties, while preserved metadata survives.
+        assert(row2Xml.contains("""hidden="1"""), row2Xml)
+        assert(!row2Xml.contains("""ht="""), row2Xml)
+        assert(!row2Xml.contains("""customHeight="""), row2Xml)
+        assert(row2Xml.contains("""spans="1:5"""), row2Xml)
+        assert(row2Xml.contains("""s="1"""), row2Xml)
+        assert(row2Xml.contains("""customFormat="1"""), row2Xml)
+        assert(row2Xml.contains("""x14ac:dyDescent="0.3"""), row2Xml)
+
+        // A default RowProperties explicitly clears every modeled source attribute on an empty
+        // row, including true booleans, without disturbing the preserved non-domain attributes.
+        assert(!row4Xml.contains("""ht="""), row4Xml)
+        assert(!row4Xml.contains("""customHeight="""), row4Xml)
+        assert(!row4Xml.contains("""hidden="""), row4Xml)
+        assert(!row4Xml.contains("""outlineLevel="""), row4Xml)
+        assert(!row4Xml.contains("""collapsed="""), row4Xml)
+        assert(row4Xml.contains("""thickTop="1"""), row4Xml)
+        assert(row4Xml.contains("""x14ac:dyDescent="0.4"""), row4Xml)
+
+        val reloaded = XlsxReader
+          .read(output)
+          .fold(err => fail(s"Round-trip reload failed: $err"), identity)
+        val reloadedRow = reloaded("Sheet1")
+          .fold(err => fail(s"Failed to get Sheet1: $err"), identity)
+          .getRowProperties(Row.from1(1))
+        assertEquals(reloadedRow.height, Some(42.0))
+        assert(reloadedRow.hidden)
+        assertEquals(reloadedRow.outlineLevel, Some(2))
+        assert(reloadedRow.collapsed)
+        val clearedRow = reloaded("Sheet1")
+          .fold(err => fail(s"Failed to get Sheet1: $err"), identity)
+          .getRowProperties(Row.from1(2))
+        assertEquals(clearedRow.height, None)
+        assert(clearedRow.hidden)
+        val resetEmptyRow = reloaded("Sheet1")
+          .fold(err => fail(s"Failed to get Sheet1: $err"), identity)
+          .getRowProperties(Row.from1(4))
+        assertEquals(resetEmptyRow, RowProperties())
+      finally
+        Files.deleteIfExists(source)
+        Files.deleteIfExists(output)
+    }
+
+    test(s"GH-371: source row cells reconcile without duplicate or dropped rows ($backendName)") {
+      val source = createWorkbookWithRichRowAttributes()
+      val output = Files.createTempFile(s"row-cell-reconcile-$backendName", ".xlsx")
+
+      try
+        val updated = for
+          wb <- XlsxReader.read(source)
+          sheet <- wb("Sheet1")
+          // Row 1 was empty and gains B1; row 2 had A2 and loses its only domain cell.
+          edited = sheet.put(ref"B1" -> "Added").remove(ref"A2")
+        yield wb.put(edited)
+
+        val wb = updated.fold(err => fail(s"Failed to modify: $err"), identity)
+        XlsxWriter
+          .writeWith(wb, output, config)
+          .fold(err => fail(s"Failed to write: $err"), identity)
+
+        val outputZip = new ZipFile(output.toFile)
+        val sheetXml =
+          try readEntryString(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
+          finally outputZip.close()
+        val worksheet = scala.xml.XML.loadString(sheetXml)
+        val rows = (worksheet \ "sheetData" \ "row").collect { case elem: scala.xml.Elem => elem }
+        def at(index: Int): Seq[scala.xml.Elem] = rows.filter(_ \@ "r" == index.toString)
+
+        val row1 = at(1)
+        assertEquals(row1.size, 1, "the originally empty row must be emitted exactly once")
+        assertEquals((row1.head \ "c").map(_ \@ "r").toList, List("B1"))
+
+        val row2 = at(2)
+        assertEquals(row2.size, 1, "the source row must remain once after removing its cells")
+        assertEquals((row2.head \ "c").size, 0, "removed source cells must not reappear")
+        val row2Attrs = row2.head.attributes.asAttrMap
+        assertEquals(row2Attrs.get("spans"), Some("1:5"))
+        assertEquals(row2Attrs.get("s"), Some("1"), "preserved source row style")
+        assertEquals(row2Attrs.get("customFormat"), Some("1"))
+        assertEquals(row2Attrs.get("ht"), Some("15.0"))
+        assertEquals(row2Attrs.get("customHeight"), Some("1"))
+        assertEquals(row2Attrs.get("x14ac:dyDescent"), Some("0.3"))
+      finally
+        Files.deleteIfExists(source)
+        Files.deleteIfExists(output)
+    }
   }
 
   test("SST count vs uniqueCount correctness and RichText SST references") {
@@ -535,6 +684,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     <row r="3" thickBot="1" x14ac:dyDescent="0.2">
       <c r="A3" t="inlineStr"><is><t>Row 3 Data</t></is></c>
     </row>
+    <row r="4" ht="28" customHeight="1" hidden="1" outlineLevel="3" collapsed="1" thickTop="1" x14ac:dyDescent="0.4"/>
   </sheetData>
 </worksheet>"""
       )
