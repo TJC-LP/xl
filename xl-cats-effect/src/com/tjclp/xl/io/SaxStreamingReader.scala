@@ -11,6 +11,8 @@ import com.tjclp.xl.cells.{CellValue, CellError}
 import com.tjclp.xl.ooxml.{SharedStrings, XmlSecurity, XmlUtil}
 import java.util.concurrent.{ArrayBlockingQueue, BlockingQueue}
 import java.util.concurrent.atomic.AtomicBoolean
+import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.ooxml.SharedFormula
 
 /**
  * SAX-based streaming XML reader for maximum performance.
@@ -37,8 +39,8 @@ object SaxStreamingReader:
   /**
    * Stream worksheet rows using SAX parser (3-4x faster than fs2-data-xml).
    *
-   * Uses chunked batching to minimize queue synchronization overhead. Memory usage is O(chunkSize)
-   * rather than O(total rows).
+   * Uses chunked batching to minimize queue synchronization overhead. Memory usage is O(chunkSize +
+   * active shared-formula groups), rather than O(total rows or total formula groups).
    *
    * @param stream
    *   Worksheet XML input stream
@@ -163,6 +165,7 @@ object SaxStreamingReader:
 
     // Current cell state
     var currentCellRef: Option[String] = None
+    var currentCellARef: Option[ARef] = None
     var currentCellType: Option[String] = None
     var currentCellColIdx: Option[Int] = None
     var currentCellStyleId: Option[Int] = None
@@ -176,6 +179,9 @@ object SaxStreamingReader:
     var inTextElement = false
     var cachedValue: Option[String] = None
     var formulaText: Option[String] = None
+    var formulaType: Option[String] = None
+    var sharedFormulaIndex: Option[SharedFormula.Index] = None
+    var sharedFormulaRange: Option[CellRange] = None
     var inlineValue: Option[String] = None
     val valueText = new StringBuilder
     // Decoded inline-string runs for the current cell (each run decoded at </t>, GH-305)
@@ -183,6 +189,11 @@ object SaxStreamingReader:
     // Bare <t> text directly under <is> (CT_Rst is (t?, r*, rPh*, phoneticPr?)); the DOM
     // reader ignores it whenever <r> runs exist, so it is accumulated separately.
     val bareInlineText = new StringBuilder
+    // GH-370: shared formula masters are tiny compared with row data and let a one-pass stream
+    // expand every spec-normal (master-first) dependent. Masters are captured even when their
+    // cells fall outside requested row/column bounds.
+    val sharedFormulaMasters: mutable.Map[SharedFormula.Index, SharedFormula.Master] =
+      mutable.Map.empty
 
     // Check cancelled less frequently - every 10k elements
     private var elementCount = 0
@@ -213,6 +224,8 @@ object SaxStreamingReader:
 
         case "c" =>
           currentCellRef = Option(attributes.getValue("r"))
+          currentCellARef = currentCellRef.flatMap(ARef.parse(_).toOption)
+          currentCellARef.foreach(evictExpiredSharedMasters)
           currentCellType = Option(attributes.getValue("t"))
           currentCellStyleId = Option(attributes.getValue("s")).flatMap(_.toIntOption)
           currentCellColIdx = currentCellRef.flatMap(parseCellColumn)
@@ -227,6 +240,10 @@ object SaxStreamingReader:
 
         case "f" =>
           inFormula = true
+          formulaType = Option(attributes.getValue("t"))
+          sharedFormulaIndex = Option(attributes.getValue("si")).flatMap(SharedFormula.parseIndex)
+          sharedFormulaRange = Option(attributes.getValue("ref"))
+            .flatMap(CellRange.parse(_).toOption)
           valueText.clear()
 
         case "is" =>
@@ -250,7 +267,9 @@ object SaxStreamingReader:
         case _ => ()
 
     override def characters(ch: Array[Char], start: Int, length: Int): Unit =
-      if (inValue || inFormula || inTextElement) && !skipRow && !skipCell then
+      // Formula metadata must be read even for a skipped cell: a bounded stream may select a
+      // dependent while its shared master lies just outside the requested row/column range.
+      if inFormula || ((inValue || inTextElement) && !skipRow && !skipCell) then
         valueText.appendAll(ch, start, length)
 
     override def endElement(uri: String, localName: String, qName: String): Unit =
@@ -261,11 +280,17 @@ object SaxStreamingReader:
           valueText.clear()
 
         case "f" if inFormula =>
-          if !skipRow && !skipCell then
-            // GH-293: the in-memory reader trims <f> text and treats a whitespace-only
-            // formula as absent (WorksheetReader `.text.trim` + nonEmpty guard); match it.
-            val trimmed = valueText.toString.trim
-            formulaText = Option.when(trimmed.nonEmpty)(trimmed)
+          // GH-293: the in-memory reader trims <f> text and treats a whitespace-only formula as
+          // absent. Keep that behavior while retaining empty shared dependents (GH-370).
+          val trimmed = valueText.toString.trim
+          formulaText = Option.when(trimmed.nonEmpty)(trimmed)
+          if formulaType.contains("shared") && trimmed.nonEmpty then
+            for
+              index <- sharedFormulaIndex
+              ref <- currentCellARef
+              range <- sharedFormulaRange.filter(_.contains(ref))
+              if !sharedFormulaMasters.contains(index) // malformed active duplicate: first wins
+            do sharedFormulaMasters(index) = SharedFormula.Master(ref, trimmed, Some(range))
           inFormula = false
           valueText.clear()
 
@@ -308,7 +333,37 @@ object SaxStreamingReader:
               // a nonEmpty formula wins; otherwise <is> wins for inline-string cell
               // types; otherwise interpret <v>.
               val inlineText = inlineValue.filter(_ => isInlineStringType)
-              val cellValue = (formulaText, inlineText, cachedValue) match
+              val isSharedMaster =
+                formulaType.contains("shared") &&
+                  formulaText.nonEmpty &&
+                  sharedFormulaIndex.nonEmpty &&
+                  currentCellARef.exists(ref => sharedFormulaRange.exists(_.contains(ref)))
+              val expandedFormula =
+                if !formulaType.contains("shared") || isSharedMaster then formulaText
+                else
+                  sharedFormulaIndex match
+                    // A malformed/missing si cannot identify a group. Preserve a non-empty
+                    // expression when present, otherwise keep the cell visibly formula-shaped.
+                    case None => Some(formulaText.getOrElse("#REF!"))
+                    case Some(index) =>
+                      sharedFormulaMasters.get(index) match
+                        case Some(master) =>
+                          Some(
+                            currentCellARef
+                              .filter(ref => master.range.exists(_.contains(ref)))
+                              .map(ref => SharedFormula.translate(master, ref))
+                              .getOrElse("#REF!")
+                          )
+                        case None =>
+                          // A one-pass row stream cannot look ahead for a later master without
+                          // buffering already-emitted rows. Fail explicitly instead of silently
+                          // converting the dependent's cached result into a literal.
+                          val address = currentCellRef.getOrElse("<unknown>")
+                          throw new IllegalArgumentException(
+                            s"Shared formula at $address with si=$index requires the master to appear earlier in the worksheet"
+                          )
+
+              val cellValue = (expandedFormula, inlineText, cachedValue) match
                 case (Some(formula), _, Some(cached)) =>
                   val parsedCached = interpretCellValue(cached, currentCellType, sst)
                   val cachedOpt =
@@ -327,12 +382,16 @@ object SaxStreamingReader:
                 currentCellStyleId.foreach(sid => currentRowStyles(colIdx) = sid)
 
           currentCellRef = None
+          currentCellARef = None
           currentCellType = None
           currentCellColIdx = None
           currentCellStyleId = None
           skipCell = false
           cachedValue = None
           formulaText = None
+          formulaType = None
+          sharedFormulaIndex = None
+          sharedFormulaRange = None
           inlineValue = None
           inValue = false
           inFormula = false
@@ -352,6 +411,21 @@ object SaxStreamingReader:
           skipRow = false
 
         case _ => ()
+
+    /**
+     * Masters with a valid `ref` range are live only through that range's row-major end. Eviction
+     * keeps memory proportional to overlapping shared groups, not total sheet groups. A dependent
+     * encountered after its master has expired is indistinguishable from a not-yet-seen/orphan
+     * group and fails visibly instead of silently becoming a cached constant.
+     */
+    private def evictExpiredSharedMasters(current: ARef): Unit =
+      sharedFormulaMasters.filterInPlace { case (_, master) =>
+        master.range.exists { range =>
+          val end = range.end
+          end.row.index0 > current.row.index0 ||
+          (end.row.index0 == current.row.index0 && end.col.index0 >= current.col.index0)
+        }
+      }
 
     /** Cell types whose value may come from an <is> inline string (DOM reader contract). */
     private def isInlineStringType: Boolean =
