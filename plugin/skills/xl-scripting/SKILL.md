@@ -38,7 +38,7 @@ The canonical header for every script (this is the single source of truth — re
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.5
+//> using dep com.tjclp::xl:0.12.6
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -100,7 +100,7 @@ wb.update("Sales", f).unsafe                       // throws structured XLExcept
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.5
+//> using dep com.tjclp::xl:0.12.6
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -235,7 +235,7 @@ Or lean on totality so there is nothing to unwrap: literal refs, `upsert`, range
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.5
+//> using dep com.tjclp::xl:0.12.6
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -257,7 +257,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.5
+//> using dep com.tjclp::xl:0.12.6
 import com.tjclp.xl.scripting.{*, given}
 
 val data = List(("North", 125000.50), ("South", 98000.25), ("West", 143500.00))
@@ -285,7 +285,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.5
+//> using dep com.tjclp::xl:0.12.6
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -315,7 +315,7 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 - **First run is slow** (dependency download); afterwards scala-cli caches everything.
 - **`.sc` files**: top-level statements, no `@main`. A `.scala` file needs `@main def run(): Unit`.
 - **`Excel.write` does NOT recalculate** — freshly built `fx"…"` cells are written with no cached values, so Excel-before-recalc, openpyxl `data_only`, pandas, and previewers all show blanks. Always `val result = wb.recalculate()` and write `result.workbook` (a single pass is sufficient on 0.12.5+; see "Formulas & recalculation" above). Tracking a recalculating-write affordance: [#360](https://github.com/TJC-LP/xl/issues/360).
-- **Formulas containing external-workbook refs (`[2]Book!A1`) or percent literals (`10%`)** fail to parse/evaluate ([#353](https://github.com/TJC-LP/xl/issues/353), [#355](https://github.com/TJC-LP/xl/issues/355)) — compute external-linked cells from their cached values, and write `/100` instead of `%`.
+- **Percent literals (`10%`) fail to parse** ([#355](https://github.com/TJC-LP/xl/issues/355)) — write `/100` instead of `%`. External-workbook refs (`[2]Book!A1`) parse and pin their Excel-written caches **since 0.12.6** ([#353](https://github.com/TJC-LP/xl/issues/353)): `recalculate()` preserves those cells verbatim and dependents compute from the caches (uncached external cells yield a per-cell error); on ≤0.12.5 they fail to parse entirely — compute from cached values there.
 - **`setColumnProperties` wants a compile-time literal** (`ref"D1".col`); runtime-parsed refs don't expose `.col`, so column loops over runtime letters can't feed it directly ([#361](https://github.com/TJC-LP/xl/issues/361)). Until then, set widths with literal refs per column.
 
 ## Reference

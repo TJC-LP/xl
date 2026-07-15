@@ -19,9 +19,9 @@ LATEST=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"t
 VERSION=${LATEST#v}
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)  BINARY="xl-$VERSION-linux-amd64" ;;
-  # linux-arm64 native binaries are not published yet (xl#354) — on aarch64 Linux use
-  # the JAR distribution (xl-$VERSION-cli.tar.gz, needs a JRE) instead.
-  Linux-aarch64) echo "No linux-arm64 binary published (see TJC-LP/xl#354); use xl-$VERSION-cli.tar.gz" && exit 1 ;;
+  # linux-arm64 binaries ship from v0.12.6 (xl#354); on older releases the curl below
+  # fails loud — fall back to the JAR distribution (xl-$VERSION-cli.tar.gz, needs a JRE).
+  Linux-aarch64) BINARY="xl-$VERSION-linux-arm64" ;;
   Darwin-x86_64) BINARY="xl-$VERSION-darwin-amd64" ;;
   Darwin-arm64)  BINARY="xl-$VERSION-darwin-arm64" ;;
   *) echo "Unsupported: $(uname -s)-$(uname -m)" && exit 1 ;;
@@ -89,7 +89,7 @@ xl -f <file> -s <sheet> view <range> --formulas   # Show formulas
 xl -f <file> -s <sheet> view <range> --eval       # Computed values
 ```
 
-**Note**: since 0.12.5, `--eval` computes deep multi-hop cross-sheet chains in one pass (global dependency order with memoization). The remaining exception: formulas whose precedents include **external-workbook references** (`[2]Book!A1`) fail to evaluate ([#353](https://github.com/TJC-LP/xl/issues/353)) — read those cells' cached values with a plain `view` instead.
+**Note**: since 0.12.5, `--eval` computes deep multi-hop cross-sheet chains in one pass (global dependency order with memoization). Since 0.12.6, formulas containing **external-workbook references** (`[2]Book!A1`) evaluate from their Excel-written cached values ([#353](https://github.com/TJC-LP/xl/issues/353)); on ≤0.12.5 they fail with `UnexpectedChar([` — read those cells with a plain `view` there.
 
 ### Write Operations (require `-o` or `-i`)
 ```bash
@@ -553,25 +553,25 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 
 ## Field Gotchas (verified in production)
 
-Hard-won rules from fleet use on real deal workbooks. Issue links track the underlying fixes; until they land, treat these as law.
+Hard-won rules from fleet use on real deal workbooks. Items marked **fixed in 0.12.6** still apply when the installed binary is older — check `xl --version`.
 
 **Reading**
-- **`view` and `search` clip at `--limit` (default 50) with no truncation marker** ([#351](https://github.com/TJC-LP/xl/issues/351)). A `view A1:A259` returning ~50 rows is NOT the whole range — pass `--limit <n>` explicitly, or chunk long scans into ≤45-row windows and verify the last row you expected is present.
+- **`view` and `search` clip at `--limit` (default 50)** ([#351](https://github.com/TJC-LP/xl/issues/351)). Since 0.12.6 the clip is visible (`… showing N of M rows` trailer; stderr notice for csv; `truncated`/`totalRows` in json; `--limit 0` = unlimited). **On ≤0.12.5 the clip is SILENT** — a `view A1:A259` returning ~50 rows is NOT the whole range; pass `--limit <n>` explicitly and verify the last expected row is present.
 - **Use `--show-labels` whenever row numbers matter** in CSV output — hidden rows shift positional counting silently.
 - **`--formulas --format json` replaces `value` with the formula text** and emits no separate `formula` key ([#357](https://github.com/TJC-LP/xl/issues/357)). To scan formulas programmatically, use `--format csv --formulas --show-labels` and parse with a CSV reader.
-- **`eval` fails on formulas whose precedents include external-workbook refs** (`[2]Book!A1` → `Parse error: UnexpectedChar([`, [#353](https://github.com/TJC-LP/xl/issues/353)) and on **percent literals** (`=A1*10%`, [#355](https://github.com/TJC-LP/xl/issues/355) — write `/100` instead). For external-link workbooks, compute from cached values (plain `view`).
+- **Percent literals fail to evaluate** (`=A1*10%`, [#355](https://github.com/TJC-LP/xl/issues/355)) — write `/100` instead. External-workbook refs are **fixed in 0.12.6** (evaluate from Excel-written caches; uncached external cells report a clear per-cell error); on ≤0.12.5 any formula whose precedents include one dies with `UnexpectedChar([` — use plain `view` there.
 
 **Writing**
-- **`batch` writes formulas with no cached values** — `data_only` readers, pandas, and previewers show blanks for every `putf` cell ([#352](https://github.com/TJC-LP/xl/issues/352)). Until fixed: prefer single `putf` commands (they recalculate dependents), verify with `--eval`, or recalculate via the scripting API before shipping.
+- **`batch` recalculates at the end since 0.12.6** ([#352](https://github.com/TJC-LP/xl/issues/352)): `putf` cells carry cached values and formula errors appear in the batch summary; `xl recalc` (also 0.12.6+) refreshes any workbook. **On ≤0.12.5 batch writes formulas with NO cached values** — `data_only` readers, pandas, and previewers show blanks for every `putf` cell; prefer single `putf` commands there, verify with `--eval`, or recalculate via the scripting API before shipping.
 - **Batch `putf` has no `format` field** ([#356](https://github.com/TJC-LP/xl/issues/356)) — number formats on formula cells need a follow-up `style` op / `xl style RANGE --format '…'`.
 - **Batch JSON style keys are camelCase**: `numFormat`, `borderTop`, `borderBottom`, `borderLeft`, `borderRight`, `borderColor`. Kebab-case (`border-top`) is treated as an unknown property — the warning goes to stderr only, so it is easy to miss.
-- **Build cross-sheet models in dependency order** (put referenced cells before the formulas that use them) — batches evaluate nothing, and single-command recalcs are dependents-only.
+- **Build cross-sheet models in dependency order** (put referenced cells before the formulas that use them) — on ≤0.12.5 batches evaluate nothing and single-command recalcs are dependents-only; on 0.12.6+ the batch-end recalculation makes order matter less, but dependency order remains the safe habit.
 - **`-i` (in-place) round-trips preserve hand-patched XML**: sheetPr/tabColor, pageSetup, headerFooter, sheetView gridlines/zoom, sheet-local `_xlnm.Print_Area`, and hand-inserted cached `<v>` values all survive later xl writes.
 - **Sheet appearance/print setup (gridlines off, zoom, tab color, landscape, footers) has no CLI yet** ([#358](https://github.com/TJC-LP/xl/issues/358)) — until then it requires zip round-trip XML patching.
 
 **Rendering & environment**
 - **PNG/PDF on the native binary needs an external rasterizer** (Batik is JAR-only; [#359](https://github.com/TJC-LP/xl/issues/359)): install `cairosvg` (`pip install cairosvg`) or `rsvg-convert`, and check availability with `xl rasterizers`. Add `--eval` when rendering or formula cells show as text.
-- **Style-bloated real-world workbooks can fail to read** with an opaque `Parse error at xl/workbook.xml … XMLMessages` ([#349](https://github.com/TJC-LP/xl/issues/349)/[#350](https://github.com/TJC-LP/xl/issues/350)). Fallback: read with openpyxl, rebuild clean, then xl works on the rebuilt file.
+- **Real-world workbooks that fail to read**: since 0.12.6, benign `<!DOCTYPE>` prologs are tolerated and parse errors name the construct with line/column ([#350](https://github.com/TJC-LP/xl/issues/350)); the native binary reports real Xerces messages instead of the opaque `Could not load any resource bundle …XMLMessages` ([#349](https://github.com/TJC-LP/xl/issues/349)). If a file still refuses to read (on any version): read with openpyxl, rebuild clean, then xl works on the rebuilt file — and report the 0.12.6+ error message upstream.
 
 ---
 
