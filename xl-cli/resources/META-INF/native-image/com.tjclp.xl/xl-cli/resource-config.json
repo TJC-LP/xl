@@ -7,6 +7,15 @@
     ]
   },
   "bundles": [
+    { "name": "com.sun.org.apache.xerces.internal.impl.msg.DOMMessages" },
+    { "name": "com.sun.org.apache.xerces.internal.impl.msg.DatatypeMessages" },
+    { "name": "com.sun.org.apache.xerces.internal.impl.msg.JAXPValidationMessages" },
+    { "name": "com.sun.org.apache.xerces.internal.impl.msg.SAXMessages" },
+    { "name": "com.sun.org.apache.xerces.internal.impl.msg.XIncludeMessages" },
+    { "name": "com.sun.org.apache.xerces.internal.impl.msg.XMLMessages" },
+    { "name": "com.sun.org.apache.xerces.internal.impl.msg.XMLSchemaMessages" },
+    { "name": "com.sun.org.apache.xerces.internal.impl.msg.XPointerMessages" },
+    { "name": "com.sun.org.apache.xml.internal.res.XMLErrorResources" },
     { "name": "org.apache.batik.anim.resources.Messages" },
     { "name": "org.apache.batik.bridge.resources.Messages" },
     { "name": "org.apache.batik.css.engine.resources.Messages" },

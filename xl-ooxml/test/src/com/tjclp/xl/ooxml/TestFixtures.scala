@@ -42,7 +42,18 @@ object TestFixtures:
     "image-shape.xlsx"
   )
 
-  /** Every committed fixture. */
+  /**
+   * Intentionally broken fixtures (GH-349): NOT part of `all` — corpus laws (parse, round-trip)
+   * must not run against them. malformed-workbook.xlsx = small-values.xlsx with the closing
+   * `</workbook>` tag mangled, so Xerces raises a well-formedness error whose text comes from the
+   * `com.sun.org.apache.xerces.internal.impl.msg.XMLMessages` bundle. Guards that parse failures
+   * surface the real Xerces diagnostic (also exercised against the native binary in release.yml).
+   */
+  val malformed: List[String] = List(
+    "malformed-workbook.xlsx"
+  )
+
+  /** Every committed well-formed fixture (excludes `malformed`). */
   val all: List[String] = openpyxl ++ libreOffice ++ derived
 
   /**

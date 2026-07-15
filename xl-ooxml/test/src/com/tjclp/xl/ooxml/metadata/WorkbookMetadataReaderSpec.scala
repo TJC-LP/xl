@@ -6,7 +6,7 @@ import munit.FunSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.ooxml.XlsxWriter
+import com.tjclp.xl.ooxml.{TestFixtures, XlsxWriter}
 
 // Test code uses .get/.head for brevity in assertions
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
@@ -137,4 +137,26 @@ class WorkbookMetadataReaderSpec extends FunSuite:
       val meta = WorkbookMetadataReader.read(path).toOption.get
       assert(!meta.date1904)
     finally Files.deleteIfExists(path)
+  }
+
+  test("read: malformed workbook.xml surfaces the human-readable Xerces message (GH-349)") {
+    // Fixture: small-values.xlsx with the closing </workbook> tag mangled. The parse failure
+    // must carry the real Xerces diagnostic (text backed by the XMLMessages resource bundle) —
+    // under native-image an unregistered bundle degrades this to "Could not load any resource
+    // bundle by com.sun.org.apache.xerces.internal.impl.msg.XMLMessages", masking the real
+    // error. The same fixture is exercised against the native binary in release.yml.
+    val path = TestFixtures.copyToTemp("malformed-workbook.xlsx")
+    val result = WorkbookMetadataReader.read(path)
+    assert(result.isLeft, s"Expected Left for malformed workbook, got $result")
+    val msg = result.left.toOption.get.message
+    // Full Xerces text (XMLMessages ETagUnterminated):
+    //   The end-tag for element type "workbook" must end with a '>' delimiter.
+    assert(
+      msg.contains("end-tag for element type \"workbook\""),
+      s"expected the Xerces well-formedness diagnostic, got: $msg"
+    )
+    assert(
+      !msg.contains("Could not load any resource bundle"),
+      s"resource-bundle lookup failure leaked into the parse error: $msg"
+    )
   }

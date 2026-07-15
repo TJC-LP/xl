@@ -82,6 +82,38 @@ jobs:
         env:
           PUBLISH_VERSION: ${{ steps.version.outputs.version }}
 
+      # GH-349: run the built binary against a valid and an intentionally-malformed
+      # workbook. native-image only WARNS when a registered resource bundle cannot be
+      # resolved at build time, so without this gate a silently-ineffective Xerces
+      # bundle registration ships and parse errors degrade to the unreadable
+      # "Could not load any resource bundle by com.sun...XMLMessages".
+      - name: Smoke test native binary (GH-349)
+        shell: bash
+        run: |
+          BIN="out/xl-cli/nativeImage.dest/native-executable${{ matrix.extension }}"
+
+          # Healthy path: a valid workbook lists sheets successfully.
+          "$BIN" -f xl-ooxml/test/resources/fixtures/small-values.xlsx sheets
+
+          # Malformed path: the failure must surface the real Xerces diagnostic.
+          set +e
+          OUTPUT=$("$BIN" -f xl-ooxml/test/resources/fixtures/malformed-workbook.xlsx sheets 2>&1)
+          STATUS=$?
+          set -e
+          echo "$OUTPUT"
+          if [ "$STATUS" -eq 0 ]; then
+            echo "::error::expected non-zero exit for the malformed workbook"
+            exit 1
+          fi
+          if echo "$OUTPUT" | grep -qF "Could not load any resource bundle"; then
+            echo "::error::Xerces message bundles missing from the native image (GH-349)"
+            exit 1
+          fi
+          if ! echo "$OUTPUT" | grep -qF 'end-tag for element type "workbook"'; then
+            echo "::error::parse failure did not surface the human-readable Xerces message"
+            exit 1
+          fi
+
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
         run: mv out/xl-cli/nativeImage.dest/native-executable xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}
