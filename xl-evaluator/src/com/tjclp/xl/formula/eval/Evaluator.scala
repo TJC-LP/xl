@@ -10,7 +10,7 @@ import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 import com.tjclp.xl.SheetName
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
 import scala.math.BigDecimal
@@ -162,6 +162,37 @@ object Evaluator:
       case loc @ TExpr.RangeLocation.External(_, _, _) =>
         Left(externalRefUnsupported(loc.toA1))
 
+  // ===== GH-384: defined-name resolution =====
+
+  /**
+   * Look up a defined name visible from `currentSheet`.
+   *
+   * OOXML/Excel scoping: a sheet-scoped entry (localSheetId is a POSITIONAL index into `wb.sheets`)
+   * SHADOWS a workbook-scoped entry of the same identifier; lookup is case-insensitive like Excel.
+   * (GH-384's issue text said "workbook-scoped first" — that contradicts OOXML §18.2.5/Excel
+   * behavior, so shadowing is implemented instead.)
+   */
+  private[formula] def lookupDefinedName(
+    wb: Workbook,
+    currentSheet: SheetName,
+    name: String
+  ): Option[DefinedName] =
+    val names = wb.metadata.definedNames
+    val sheetIdx = wb.sheets.indexWhere(_.name == currentSheet)
+    val sheetScoped =
+      if sheetIdx >= 0 then
+        names.find(dn => dn.name.equalsIgnoreCase(name) && dn.localSheetId.contains(sheetIdx))
+      else None
+    sheetScoped.orElse(names.find(dn => dn.name.equalsIgnoreCase(name) && dn.localSheetId.isEmpty))
+
+  /**
+   * The sheet a defined name's refersTo evaluates against when the name is sheet-scoped; None for
+   * workbook-scoped names (callers fall back to the referencing formula's sheet — refersTo text is
+   * almost always fully qualified anyway).
+   */
+  private[formula] def definedNameScope(wb: Workbook, dn: DefinedName): Option[Sheet] =
+    dn.localSheetId.flatMap(idx => wb.sheets.lift(idx))
+
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
 
@@ -299,11 +330,17 @@ object Evaluator:
  * @param rng
  *   GH-115: randomness capability for RAND/RANDBETWEEN, threaded like bindings so derived
  *   evaluators (array args, cross-sheet recursion, LET bodies) draw from the same source.
+ * @param resolvingNames
+ *   GH-384: UPPERCASED defined names currently being resolved on this evaluation path — the
+ *   name→name cycle guard. A refersTo chain that revisits a member (aa → bb → aa) is a clean
+ *   per-cell error instead of unbounded recursion. Cell-mediated cycles (name → cell → name) are
+ *   covered separately by the depth-guarded cross-sheet recursion.
  */
 private class EvaluatorImpl(
   allowArrayResults: Boolean = false,
   bindings: Map[String, Any] = Map.empty,
-  rng: Rng = Rng.system
+  rng: Rng = Rng.system,
+  resolvingNames: Set[String] = Set.empty
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
@@ -626,7 +663,8 @@ private class EvaluatorImpl(
             allowArrayResults = true,
             bindings,
             rng,
-            Some(callMemo)
+            Some(callMemo),
+            resolvingNames // GH-384: the name-cycle guard survives array-argument evaluation
           )
             .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -683,6 +721,13 @@ private class EvaluatorImpl(
         evalLet(letBindings, body, sheet, clock, workbook, currentCell)
           .asInstanceOf[Either[EvalError, A]]
 
+      // ===== GH-384: defined-name references =====
+      // Resolved here (not at parse) because only the workbook knows the name table. Same
+      // Either-container cast rationale as BindingRef (TExpr[Nothing] refinement).
+      case TExpr.NameRef(name) =>
+        evalNameRef(name, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
+
   // ===== GH-193: LET evaluation =====
 
   /**
@@ -710,7 +755,14 @@ private class EvaluatorImpl(
             // Bare cell refs resolve to the cell's effective value (cached formula extracted,
             // Empty → 0) — same treatment as top-level refs and equality operands (GH-233).
             val resolved = TExpr.asResolvedValueExpr(valueExpr)
-            new EvaluatorWithDepth(currentDepth, allowArrayResults = true, env, rng, memoOpt)
+            new EvaluatorWithDepth(
+              currentDepth,
+              allowArrayResults = true,
+              env,
+              rng,
+              memoOpt,
+              resolvingNames
+            )
               .eval(resolved.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
               .map(value => env + (name -> unwrapBindingValue(value)))
               .left
@@ -734,9 +786,109 @@ private class EvaluatorImpl(
             .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
         case other =>
           val resolvedBody = TExpr.asResolvedValueExpr(other)
-          new EvaluatorWithDepth(currentDepth, allowArrayResults, env, rng, memoOpt)
+          new EvaluatorWithDepth(currentDepth, allowArrayResults, env, rng, memoOpt, resolvingNames)
             .eval(resolvedBody.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
     }
+
+  // ===== GH-384: defined-name resolution =====
+
+  /**
+   * Resolve a defined-name reference to its value.
+   *
+   * Lookup (sheet-scoped SHADOWS workbook-scoped, case-insensitive — see
+   * Evaluator.lookupDefinedName), then parse the refersTo text and evaluate it in the DEFINING
+   * context: sheet-scoped names evaluate against their scope sheet, workbook-scoped names against
+   * the referencing formula's sheet (refersTo text is almost always fully qualified, so the ambient
+   * sheet rarely matters). Range-shaped targets materialize to an ArrayResult against the defining
+   * sheet — aggregate positions consume it directly (=SUM(rev_range)), operand positions broadcast,
+   * and scalar contexts collapse to the top-left value, exactly like a literal range.
+   *
+   * Every failure mode is a clean Left: no workbook context (the SheetRef posture), unknown name,
+   * unparseable refersTo, and name→name cycles (via `resolvingNames`). The environment for the
+   * refersTo body is fresh (no LET bindings leak into a name's definition), and the result unwraps
+   * CellValue wrappers to primitives exactly like LET binding values so names compose with
+   * arithmetic/comparison/text machinery.
+   */
+  private def evalNameRef(
+    name: String,
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, Any] =
+    workbook match
+      case None =>
+        Left(
+          EvalError.EvalFailed(
+            s"Defined name '$name' requires workbook context, but none was provided.",
+            None
+          )
+        )
+      case Some(wb) =>
+        val key = name.toUpperCase
+        if resolvingNames.contains(key) then
+          Left(
+            EvalError.EvalFailed(
+              s"Defined name cycle detected while resolving '$name'.",
+              None
+            )
+          )
+        else
+          Evaluator.lookupDefinedName(wb, sheet.name, name) match
+            case None =>
+              Left(
+                EvalError.EvalFailed(
+                  s"Name '$name' is not defined in this workbook.",
+                  None
+                )
+              )
+            case Some(dn) =>
+              FormulaParser.parse(dn.formula) match
+                case Left(parseErr) =>
+                  Left(
+                    EvalError.EvalFailed(
+                      s"Defined name '$name' has an unparseable definition '${dn.formula}': " +
+                        s"${ParseError.toXLError(parseErr, dn.formula).message}",
+                      None
+                    )
+                  )
+                case Right(target) =>
+                  val definingSheet = Evaluator.definedNameScope(wb, dn).getOrElse(sheet)
+                  target match
+                    // Range-shaped names materialize like literal ranges in array positions:
+                    // consumers collapse (scalar), broadcast (operands), or aggregate (SUM)
+                    case TExpr.RangeRef(range) =>
+                      Right(ArrayArithmetic.rangeToArray(range, definingSheet))
+                    case TExpr.SheetRange(sheetName, range) =>
+                      Evaluator
+                        .resolveRangeLocation(
+                          TExpr.RangeLocation.CrossSheet(sheetName, range),
+                          definingSheet,
+                          workbook
+                        )
+                        .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
+                    case other =>
+                      // Bare refs resolve to the cell's effective value (cached formula
+                      // extracted, Empty → 0) like top-level refs; the derived evaluator
+                      // carries the cycle guard and a FRESH binding environment (LET
+                      // bindings never leak into a name's definition).
+                      val resolved = TExpr.asResolvedValueExpr(other)
+                      new EvaluatorWithDepth(
+                        currentDepth,
+                        allowArrayResults = true,
+                        Map.empty,
+                        rng,
+                        memoOpt,
+                        resolvingNames + key
+                      )
+                        .eval(
+                          resolved.asInstanceOf[TExpr[Any]],
+                          definingSheet,
+                          clock,
+                          workbook,
+                          currentCell
+                        )
+                        .map(unwrapBindingValue)
 
   /**
    * Total text coercion for '&' operands, mirroring the decodeAsString conventions (Number →
@@ -1045,7 +1197,8 @@ private class EvaluatorWithDepth(
   allowArrayResults: Boolean = false,
   bindings: Map[String, Any] = Map.empty,
   rng: Rng = Rng.system,
-  memo: Option[Evaluator.EvalMemo] = None
-) extends EvaluatorImpl(allowArrayResults, bindings, rng):
+  memo: Option[Evaluator.EvalMemo] = None,
+  resolvingNames: Set[String] = Set.empty
+) extends EvaluatorImpl(allowArrayResults, bindings, rng, resolvingNames):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo

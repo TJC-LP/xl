@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Defined-name resolution in formulas** (#384): `=IF(case=2,…)`,
+  `=entry_mult*ltm_ebitda`, `=SUM(rev_range)` parse, evaluate, and
+  round-trip byte-faithfully via a dedicated name AST node — workbook- and
+  sheet-scoped names (sheet-scoped shadows global per OOXML), constants,
+  ranges, and name→name chains with a cycle guard; unresolvable names are
+  clean per-cell errors. Names contribute dependency edges, so
+  `recalculate()` orders name-gated formula families correctly — on one
+  real LBO gold this class was 926 of 1,571 recalc-probe rejections.
+- **Opt-in bounded iterative recalculation** (#373, completing part b):
+  `recalculate(IterativeCalc(maxIter, maxChange))` Jacobi-fixpoints
+  declared cycles (seeded at 0, per-Excel keep-last-values on maxIter,
+  dependents evaluate off converged values, clock pinned across
+  iterations, per-cell containment inside the loop); default
+  `recalculate()` still isolates cycles as errors.
+  `IterativeCalc.fromCalcPr` bridges the workbook's authored calcPr.
+  Circular LBO debt schedules now verify end-to-end.
+- **MROUND** (#386): the 108th registry function —
+  `multiple × ROUND(number/multiple)`, `MROUND(x, 0) = 0`, sign-mismatch
+  errors — the standard term-loan sizing idiom.
+
+### Fixed
+
+- **Coercion parity with Excel** (#385): raw serial `Number` cells coerce
+  in date positions (YEAR/MONTH/DAY/EOMONTH/EDATE/DATEDIF/NETWORKDAYS/
+  WORKDAY/YEARFRAC — professional workbooks store dates exclusively as
+  serials), and blank cells coerce to 0 in scalar numeric positions
+  (`=A1+1`, `=-A1`, `=A1%`) — while range aggregates still skip blanks and
+  error cells still propagate. Two real-model recalc-probe rejection
+  classes eliminated.
+
 - **Data-validation authoring** (#375): typed list dropdowns —
   `sheet.withDataValidation(range, DataValidation.list("\"Yes,No\""))` or a
   range-ref formula — with allowBlank/showDropdown (OOXML's inverted

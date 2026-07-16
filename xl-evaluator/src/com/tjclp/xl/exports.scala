@@ -49,7 +49,7 @@ object formulaExports:
   export formula.eval.WorkbookEvaluator.*
 
   // Recalc result types (workbook-level total recalculation with per-cell errors)
-  export formula.eval.{CellEvalError, RecalcResult}
+  export formula.eval.{CellEvalError, IterativeCalc, RecalcResult}
 
   // DependentRecalculation extension methods (GH-163)
   // Note: Extension methods with default parameters must be imported directly,

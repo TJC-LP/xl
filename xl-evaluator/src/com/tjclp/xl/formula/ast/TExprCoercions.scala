@@ -20,6 +20,9 @@ trait TExprCoercions:
    */
   private def isRuntimePolymorphic(expr: TExpr[?]): Boolean = expr match
     case _: TExpr.Call[?] | _: TExpr.Let[?] | _: TExpr.Aggregate | _: TExpr.Coerced[?] => true
+    // GH-384: a defined name's runtime value comes from the workbook's name table — coerce it
+    // at evaluation time like a call result (=EOMONTH(named_date, 0), =IF(case=2, ...))
+    case _: TExpr.NameRef => true
     case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
         _: TExpr.Percent =>
       true
@@ -131,10 +134,13 @@ trait TExprCoercions:
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asNumericExpr(expr: TExpr[?]): TExpr[BigDecimal] = expr match
-    case PolyRef(at, anchor) => Ref(at, anchor, decodeNumeric)
+    // GH-385: scalar numeric positions treat a blank cell as 0 (=A1+1 with blank A1 is 1, like
+    // Excel); range FOLDS keep strict decodeNumeric (TExpr.Aggregate, cashflow collection) so
+    // MIN/MEDIAN skip blanks and NPV periods don't shift
+    case PolyRef(at, anchor) => Ref(at, anchor, decodeNumericScalar)
     // GH-374: push through the transparent unary-plus wrapper (see asStringExpr)
     case UnaryPlus(inner) => UnaryPlus(asNumericExpr(inner))
-    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeNumeric)
+    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeNumericScalar)
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[BigDecimal](name, BindingCoercion.Numeric)
     // GH-307: cross-typed literals coerce at evaluation time (=SQRT("16") → 4, TRUE → 1);

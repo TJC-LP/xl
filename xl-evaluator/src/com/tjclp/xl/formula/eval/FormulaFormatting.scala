@@ -177,6 +177,10 @@ object FormulaFormatting:
         case TExpr.BindingRef(_) => Vector.empty
         case TExpr.CoercedBindingRef(_, _) => Vector.empty
 
+        // GH-384: a defined-name reference's target cells live behind workbook metadata this
+        // sheet-level walk cannot see — no format to inherit (like cross-sheet refs)
+        case TExpr.NameRef(_) => Vector.empty
+
         // GH-306: runtime coercion wrapper — transparent for format inference
         case TExpr.Coerced(inner, _) => loop(inner)
 

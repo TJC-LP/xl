@@ -245,6 +245,34 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
       yield result
     }
 
+  val mround: FunctionSpec[BigDecimal] { type Args = BinaryNumeric } =
+    FunctionSpec.simple[BigDecimal, BinaryNumeric](
+      "MROUND",
+      Arity.two,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (numberExpr, multipleExpr) = args
+      for
+        number <- ctx.evalExpr(numberExpr)
+        multiple <- ctx.evalExpr(multipleExpr)
+        result <-
+          // Excel: MROUND(x, 0) = 0 — unlike CEILING/FLOOR, a zero multiple is NOT an error
+          if multiple == 0 then Right(BigDecimal(0))
+          else if (number > 0 && multiple < 0) || (number < 0 && multiple > 0) then
+            Left(
+              EvalError.EvalFailed(
+                "MROUND: number and multiple must have same sign",
+                Some(s"MROUND($number, $multiple)")
+              )
+            )
+          else
+            // multiple * ROUND(number/multiple, 0); HALF_UP matches Excel's half-away-from-zero
+            // on the sign-equal domain (7.5/5 = 1.5 -> 2 -> 10; -7.5/-5 = 1.5 -> 2 -> -10)
+            val quotient = (number / multiple).setScale(0, BigDecimal.RoundingMode.HALF_UP)
+            Right(quotient * multiple)
+      yield result
+    }
+
   val trunc: FunctionSpec[BigDecimal] { type Args = BinaryNumericOpt } =
     FunctionSpec.simple[BigDecimal, BinaryNumericOpt](
       "TRUNC",

@@ -3,7 +3,9 @@ package com.tjclp.xl.formula.graph
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.functions.{FunctionSpecs, FunctionRegistry, ArgValue}
 import com.tjclp.xl.formula.parser.FormulaParser
-import com.tjclp.xl.formula.eval.EvalError
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+
+import com.tjclp.xl.workbooks.Workbook
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.CellRange
@@ -182,6 +184,10 @@ object DependencyGraph:
         containsCellReferences(body)
       case TExpr.BindingRef(_) => false
       case TExpr.CoercedBindingRef(_, _) => false
+
+      // GH-384: a defined name resolves to cells (or a formula over cells) at evaluation time —
+      // it behaves like a reference for "does this formula read data?" checks
+      case TExpr.NameRef(_) => true
 
       // GH-306: runtime coercion wrapper — transparent for analysis
       case TExpr.Coerced(inner, _) => containsCellReferences(inner)
@@ -363,6 +369,10 @@ object DependencyGraph:
       case TExpr.BindingRef(_) => false
       case TExpr.CoercedBindingRef(_, _) => false
 
+      // GH-384: name resolution depends on the ambient sheet (sheet-scoped names SHADOW
+      // workbook-scoped ones), so a name-bearing formula needs a sheet context
+      case TExpr.NameRef(_) => true
+
       // GH-306: runtime coercion wrapper — transparent for analysis
       case TExpr.Coerced(inner, _) => containsUnqualifiedCellReferences(inner)
 
@@ -448,6 +458,9 @@ object DependencyGraph:
         }
       case TExpr.BindingRef(_) => Set.empty
       case TExpr.CoercedBindingRef(_, _) => Set.empty
+      // GH-384: name targets live behind workbook metadata this sheet-level walk cannot see —
+      // no intra-sheet edges (consistent with cross-sheet refs; the qualified extractor resolves)
+      case TExpr.NameRef(_) => Set.empty
 
       // GH-306: runtime coercion wrapper — transparent for analysis
       case TExpr.Coerced(inner, _) => extractDependencies(inner)
@@ -540,6 +553,9 @@ object DependencyGraph:
         }
       case TExpr.BindingRef(_) => Set.empty
       case TExpr.CoercedBindingRef(_, _) => Set.empty
+      // GH-384: name targets live behind workbook metadata this sheet-level walk cannot see —
+      // no intra-sheet edges (consistent with cross-sheet refs; the qualified extractor resolves)
+      case TExpr.NameRef(_) => Set.empty
 
       // GH-306: runtime coercion wrapper — transparent for analysis
       case TExpr.Coerced(inner, _) => extractDependenciesBounded(inner, bounds)
@@ -938,7 +954,8 @@ object DependencyGraph:
         cell.value match
           case CellValue.Formula(expression, _) =>
             val deps = FormulaParser.parse(expression) match
-              case scala.util.Right(expr) => extractQualifiedDependencies(expr, sheet.name)
+              case scala.util.Right(expr) =>
+                extractQualifiedDependencies(expr, sheet.name, workbook = Some(workbook))
               case scala.util.Left(_) => Set.empty[QualifiedRef]
             Some(QualifiedRef(sheet.name, cellRef) -> deps)
           case _ => None
@@ -974,7 +991,7 @@ object DependencyGraph:
           case CellValue.Formula(expression, _) =>
             val deps = FormulaParser.parse(expression) match
               case scala.util.Right(expr) =>
-                extractQualifiedDependencies(expr, sheet.name, cellsFor)
+                extractQualifiedDependencies(expr, sheet.name, cellsFor, Some(workbook))
               case scala.util.Left(_) => Set.empty[QualifiedRef]
             Some(QualifiedRef(sheet.name, cellRef) -> deps)
           case _ => None
@@ -1046,6 +1063,10 @@ object DependencyGraph:
    *   The sheet containing the formula (used for same-sheet ref qualification)
    * @param cellsFor
    *   Expands a range on a named sheet to qualified cells (possibly bounded)
+   * @param workbook
+   *   GH-384: name table for defined-name resolution (None disables name edges)
+   * @param visitingNames
+   *   GH-384: UPPERCASED names on the current resolution path — the name→name cycle guard
    * @return
    *   Set of qualified cell references used in the expression
    */
@@ -1053,7 +1074,9 @@ object DependencyGraph:
   private def extractQualifiedDependencies[A](
     expr: TExpr[A],
     currentSheet: SheetName,
-    cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells
+    cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells,
+    workbook: Option[Workbook] = None,
+    visitingNames: Set[String] = Set.empty
   ): Set[QualifiedRef] =
     def locCells(location: TExpr.RangeLocation): Set[QualifiedRef] =
       location match
@@ -1110,6 +1133,32 @@ object DependencyGraph:
           bindings.foldLeft(go(body)) { case (acc, (_, value)) => acc ++ go(value) }
         case TExpr.BindingRef(_) => Set.empty
         case TExpr.CoercedBindingRef(_, _) => Set.empty
+
+        // GH-384: resolve the defined name and recurse into its refersTo, qualifying its
+        // same-sheet refs to the DEFINING sheet — =IF(case=2, ...) contributes an edge to the
+        // cells 'case' targets, so Kahn orders a computed toggle before its name-gated
+        // dependents and Tarjan sees cycles routed through names. Name→name chains carry a
+        // visited guard; unresolvable/unparseable names contribute no edges (evaluation
+        // reports the per-cell error).
+        case TExpr.NameRef(name) =>
+          val key = name.toUpperCase
+          if visitingNames.contains(key) then Set.empty
+          else
+            (for
+              wb <- workbook
+              dn <- Evaluator.lookupDefinedName(wb, currentSheet, name)
+              target <- FormulaParser.parse(dn.formula).toOption
+            yield
+              val definingSheet =
+                Evaluator.definedNameScope(wb, dn).map(_.name).getOrElse(currentSheet)
+              extractQualifiedDependencies(
+                target,
+                definingSheet,
+                cellsFor,
+                workbook,
+                visitingNames + key
+              )
+            ).getOrElse(Set.empty)
 
         // GH-306: runtime coercion wrapper — transparent for analysis
         case TExpr.Coerced(inner, _) => go(inner)

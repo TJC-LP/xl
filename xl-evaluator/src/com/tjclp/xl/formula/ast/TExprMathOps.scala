@@ -104,6 +104,14 @@ trait TExprMathOps:
     Call(FunctionSpecs.ceiling, (number, significance))
 
   /**
+   * MROUND: round to the nearest multiple (half away from zero).
+   *
+   * Example: TExpr.mround(TExpr.Lit(10), TExpr.Lit(3))
+   */
+  def mround(number: TExpr[BigDecimal], multiple: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Call(FunctionSpecs.mround, (number, multiple))
+
+  /**
    * TRUNC: truncate to specified number of decimal places.
    *
    * Example: TExpr.trunc(TExpr.Lit(8.9), TExpr.Lit(0))

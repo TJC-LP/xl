@@ -1062,8 +1062,15 @@ class FormulaParserSpec extends ScalaCheckSuite:
   }
 
   test("error: invalid cell reference") {
-    val result = FormulaParser.parse("=ZZZ9999999")
+    // GH-384: a bare out-of-grid token (ZZZ9999999) is a LEGAL Excel defined name — Excel's
+    // name rules only reject IN-grid collisions — so it now parses as NameRef and fails at
+    // evaluation instead (#NAME? posture). Anchored '$' forms are unambiguous cell-ref
+    // syntax and still fail at parse.
+    val result = FormulaParser.parse("=$ZZZ$9999999")
     assert(result.isLeft)
+    FormulaParser.parse("=ZZZ9999999") match
+      case Right(TExpr.NameRef(name)) => assertEquals(name, "ZZZ9999999")
+      case other => fail(s"Expected NameRef for out-of-grid token, got $other")
   }
 
   test("error: formula too long") {
@@ -1517,7 +1524,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("Known functions include all 107 functions") {
+  test("Known functions include all 108 functions") {
     val functions = FunctionRegistry.allNames
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -1572,6 +1579,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("EXP"))
     assert(functions.contains("FLOOR"))
     assert(functions.contains("CEILING"))
+    // GH-386: round to nearest multiple (LBO term-loan sizing idiom)
+    assert(functions.contains("MROUND"))
     assert(functions.contains("TRUNC"))
     assert(functions.contains("SIGN"))
     assert(functions.contains("INT"))
@@ -1634,7 +1643,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("RANDBETWEEN"))
     // GH-274 dynamic references
     assert(functions.contains("INDIRECT"))
-    assertEquals(functions.length, 107)
+    assertEquals(functions.length, 108)
   }
 
   // ==================== INDIRECT Parsing Tests (GH-274) ====================
@@ -1813,4 +1822,66 @@ class FormulaParserSpec extends ScalaCheckSuite:
       case Right(TExpr.Call(FunctionSpecs.yearfrac, (_, _, basis))) =>
         assert(basis != None)
       case _ => fail("Expected TExpr.Call(YEARFRAC) with basis")
+  }
+
+  // ==================== GH-384: defined-name references ====================
+  // A bare name-shaped identifier (=case, =entry_mult) parses to TExpr.NameRef and resolves
+  // against the workbook's defined names at evaluation time. Ref-shaped identifiers (TAX1)
+  // stay cell references — OOXML forbids ref-shaped defined names, so there is no ambiguity.
+
+  test("GH-384: bare name-shaped identifier parses to NameRef (=case)") {
+    FormulaParser.parse("=case") match
+      case Right(TExpr.NameRef(name)) => assertEquals(name, "case")
+      case other => fail(s"Expected NameRef(case), got $other")
+  }
+
+  test("GH-384: underscore and mixed-case names parse to NameRef preserving case") {
+    FormulaParser.parse("=Revolver_Toggle") match
+      case Right(TExpr.NameRef(name)) => assertEquals(name, "Revolver_Toggle")
+      case other => fail(s"Expected NameRef(Revolver_Toggle), got $other")
+    FormulaParser.parse("=_hidden1") match
+      case Right(TExpr.NameRef(name)) => assertEquals(name, "_hidden1")
+      case other => fail(s"Expected NameRef(_hidden1), got $other")
+  }
+
+  test("GH-384: ref-shaped identifier stays a cell reference (TAX1 is a cell, not a name)") {
+    FormulaParser.parse("=TAX1") match
+      case Right(TExpr.PolyRef(at, _)) => assertEquals(at.toA1, "TAX1")
+      case Right(TExpr.Ref(at, _, _)) => assertEquals(at.toA1, "TAX1")
+      case other => fail(s"Expected cell ref TAX1, got $other")
+  }
+
+  test("GH-384: names compose with operators (=entry_mult*ltm_ebitda)") {
+    FormulaParser.parse("=entry_mult*ltm_ebitda") match
+      case Right(TExpr.Mul(_, _)) => () // NameRefs live under numeric coercion wrappers
+      case other => fail(s"Expected Mul over names, got $other")
+  }
+
+  test("GH-384: names print back verbatim (round-trip)") {
+    assertPreserved("=case")
+    assertPreserved("=entry_mult*ltm_ebitda")
+    assertPreserved("=IF(case=2, 1, 0)")
+    assertPreserved("=SUM(rev_range)")
+  }
+
+  test("GH-384: parse-print-parse is identity for name-bearing formulas") {
+    for source <- List("=case", "=case*2", "=IF(case=2, 1, 0)", "=EOMONTH(named_date, 0)") do
+      val first = FormulaParser.parse(source)
+      assert(first.isRight, s"$source should parse: $first")
+      val reparsed = first.flatMap(e => FormulaParser.parse(FormulaPrinter.print(e)))
+      assertEquals(reparsed, first, s"parse-print-parse must be identity for $source")
+  }
+
+  test("GH-384: names do not shift on formula drag (=case*A1 dragged shifts A1 only)") {
+    FormulaParser.parse("=case*A1") match
+      case Right(expr) =>
+        val dragged = FormulaShifter.shift(expr, 0, 1)
+        assertEquals(FormulaPrinter.print(dragged), "=case*A2")
+      case Left(err) => fail(s"=case*A1 should parse: $err")
+  }
+
+  test("GH-384: tokens with '$' inside are not names — invalid cell ref preserved (=A$B)") {
+    FormulaParser.parse("=A$B") match
+      case Left(_) => ()
+      case Right(expr) => fail(s"'=A$$B' should not parse, got $expr")
   }
