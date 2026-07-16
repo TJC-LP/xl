@@ -242,6 +242,32 @@ class ErrorValueLawsSpec extends ScalaCheckSuite:
     }
   }
 
+  // ===== L6: the three TRUE/FALSE-text tables agree (item 5) =====
+
+  property("L6: decodeBool ≡ coerceBool ≡ conditionTruthy on text inputs") {
+    import com.tjclp.xl.cells.Cell
+    import com.tjclp.xl.formula.ast.BindingCoercion
+    import com.tjclp.xl.formula.eval.ScalarCoercion
+    val genText: Gen[String] = Gen.oneOf(
+      Gen.oneOf("TRUE", "true", "False", "FALSE", "tRuE", " TRUE", "TRUE ", "TRUEX", "abc", ""),
+      Gen.alphaNumStr.map(_.take(6))
+    )
+    forAll(genText) { s =>
+      val expected: Option[Boolean] =
+        if s.equalsIgnoreCase("TRUE") then Some(true)
+        else if s.equalsIgnoreCase("FALSE") then Some(false)
+        else None
+      val viaDecode = TExpr.decodeBool(Cell(ref"A1", CellValue.Text(s))).toOption
+      val viaCoerce = ScalarCoercion.coerce("t", s, BindingCoercion.Bool).toOption.collect {
+        case b: Boolean => b
+      }
+      val viaTruthy = ArrayArithmetic.conditionTruthy("t", CellValue.Text(s)).toOption
+      Prop(
+        viaDecode == expected && viaCoerce == expected && viaTruthy == expected
+      ) :| s"'$s': decode=$viaDecode coerce=$viaCoerce truthy=$viaTruthy expected=$expected"
+    }
+  }
+
   // ===== L4: Aggregate(id, range) ≡ Call(spec, range), including error policy =====
 
   property("L4: the TExpr.Aggregate node and the registry Call agree over error-bearing ranges") {

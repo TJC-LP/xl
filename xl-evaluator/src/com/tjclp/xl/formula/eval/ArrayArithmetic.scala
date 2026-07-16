@@ -410,6 +410,12 @@ object ArrayArithmetic:
     case CellValue.Formula(_, Some(cached)) => conditionTruthy(label, cached)
     case CellValue.Error(err) =>
       Left(EvalError.ErrorValue(err, Some(label)))
+    // GH-344 item 5: exactly "TRUE"/"FALSE" (case-insensitive, no trim) coerce via the shared
+    // ScalarCoercion.boolTextValue table — aligned with coerceBool and decodeBool (L6 parity)
+    case CellValue.Text(s) =>
+      ScalarCoercion.boolTextValue(s) match
+        case Some(b) => Right(b)
+        case None => Left(EvalError.TypeMismatch(label, "boolean", cv.toString))
     case other => Left(EvalError.TypeMismatch(label, "boolean", other.toString))
 
   /**

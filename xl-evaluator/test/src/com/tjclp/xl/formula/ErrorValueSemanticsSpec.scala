@@ -372,6 +372,49 @@ class ErrorValueSemanticsSpec extends FunSuite:
     assertEquals(updated(ref"D3").value, na)
   }
 
+  // ===== Item 5: TRUE/FALSE text coerces in condition positions =====
+
+  test("GH-344: literal \"TRUE\"/\"FALSE\" text coerces in condition positions") {
+    val sheet = Sheet("Test")
+    assertEquals(sheet.evaluateFormula("=IF(\"TRUE\",1,2)"), Right(num(1)))
+    assertEquals(sheet.evaluateFormula("=IF(\"false\",1,2)"), Right(num(2)))
+    assertEquals(sheet.evaluateFormula("=AND(\"TRUE\",\"true\")"), Right(CellValue.Bool(true)))
+    assertEquals(sheet.evaluateFormula("=OR(\"FALSE\",\"false\")"), Right(CellValue.Bool(false)))
+    assertEquals(sheet.evaluateFormula("=NOT(\"TRUE\")"), Right(CellValue.Bool(false)))
+  }
+
+  test("GH-344: recognition is exact — no trim, other text still refuses") {
+    val sheet = Sheet("Test")
+    assert(sheet.evaluateFormula("=IF(\" TRUE\",1,2)").isLeft, "\" TRUE\" must refuse (no trim)")
+    assert(sheet.evaluateFormula("=IF(\"TRUEX\",1,2)").isLeft)
+    assert(sheet.evaluateFormula("=IF(\"abc\",1,2)").isLeft)
+  }
+
+  test("GH-344: cell-sourced boolean text coerces too (documented micro-divergence)") {
+    // Excel coerces only literal text; provenance is invisible at the decode layer, so the
+    // direct/bound parity law wins and cell text coerces identically.
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Text("TRUE"))
+    assertEquals(sheet.evaluateFormula("=IF(A1,1,2)"), Right(num(1)))
+    assertEquals(sheet.evaluateFormula("=NOT(A1)"), Right(CellValue.Bool(false)))
+  }
+
+  test("GH-344: TRUE/FALSE text elements coerce in array condition positions") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Text("TRUE"))
+      .put(ref"A2", CellValue.Text("false"))
+    // AND folds the IF-selected text elements {"TRUE","TRUE"} via conditionTruthy
+    assertEquals(
+      sheet.evaluateFormula("=AND(IF(A1:A2<>0,\"TRUE\",\"FALSE\"))"),
+      Right(CellValue.Bool(true))
+    )
+    // NOT broadcasts over the IF-selected cell text {TRUE, false} elementwise
+    val result = sheet.evaluateArrayFormula("=NOT(IF(A1:A2<>\"\",A1:A2,\"FALSE\"))", ref"C1")
+    assert(result.isRight, s"expected Right, got $result")
+    val (updated, _) = result.toOption.get
+    assertEquals(updated(ref"C1").value, CellValue.Bool(false))
+    assertEquals(updated(ref"C2").value, CellValue.Bool(true))
+  }
+
   test("GH-344: SUMPRODUCT keeps exact-dimension enforcement as #VALUE! (never padding)") {
     val sheet = Sheet("Test")
       .put(ref"A1", num(1))

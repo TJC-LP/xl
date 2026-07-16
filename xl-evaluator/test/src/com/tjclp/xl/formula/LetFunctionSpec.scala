@@ -419,6 +419,19 @@ class LetFunctionSpec extends ScalaCheckSuite:
     assertEquals(evalNum("=LET(x, 1, LEN(x))"), BigDecimal(1))
   }
 
+  test("GH-344: boolean-text parity — LET(x, \"TRUE\", IF(x,1,2)) matches IF(\"TRUE\",1,2)") {
+    // Item 5 extends the direct/bound parity pin to TRUE/FALSE text: both forms coerce the
+    // literal text identically (and both refuse non-boolean text identically).
+    val direct = sheet.evaluateFormula("""=IF("TRUE", 1, 2)""")
+    val bound = sheet.evaluateFormula("""=LET(x, "TRUE", IF(x, 1, 2))""")
+    assertEquals(bound, direct)
+    assertEquals(direct, Right(CellValue.Number(BigDecimal(1))))
+    val directRefuse = sheet.evaluateFormula("""=IF(" TRUE", 1, 2)""")
+    val boundRefuse = sheet.evaluateFormula("""=LET(x, " TRUE", IF(x, 1, 2))""")
+    assert(directRefuse.isLeft, s"' TRUE' must refuse (no trim): $directRefuse")
+    assert(boundRefuse.isLeft, s"' TRUE' must refuse when bound: $boundRefuse")
+  }
+
   test("Boolean position: LET(x, A1, IF(x, 1, 2)) matches IF(A1, 1, 2) and never throws") {
     val direct = sheet.evaluateFormula("=IF(A1, 1, 2)")
     val bound = sheet.evaluateFormula("=LET(x, A1, IF(x, 1, 2))")
