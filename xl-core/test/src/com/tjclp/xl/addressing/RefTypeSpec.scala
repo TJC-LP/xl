@@ -80,6 +80,29 @@ class RefTypeSpec extends ScalaCheckSuite:
     }
   }
 
+  // ========== Column handle (GH-361) ==========
+
+  property("col is total: the cell's column, or the range's starting column") {
+    forAll { (rt: RefType) =>
+      val expected = rt match
+        case RefType.Cell(ref) => ref.col
+        case RefType.QualifiedCell(_, ref) => ref.col
+        case RefType.Range(range) => range.start.col
+        case RefType.QualifiedRange(_, range) => range.start.col
+      assertEquals(rt.col, expected)
+      true
+    }
+  }
+
+  test("col on a parsed runtime ref recovers the column") {
+    RefType.parse("D7") match
+      case Right(rt) => assertEquals(rt.col.toLetter, "D")
+      case Left(err) => fail(s"Failed to parse D7: $err")
+    RefType.parse("Sales!C2:E9") match
+      case Right(rt) => assertEquals(rt.col.toLetter, "C")
+      case Left(err) => fail(s"Failed to parse Sales!C2:E9: $err")
+  }
+
   // ========== Parsing Tests ==========
 
   test("Parse simple cell: A1") {

@@ -71,6 +71,17 @@ enum RefType derives CanEqual:
     case QualifiedRange(sheet, range) =>
       s"${SheetName.quoteForFormula(sheet.value)}!${range.toA1}"
 
+  /**
+   * Column handle (GH-361): the cell's column, or the range's starting (leftmost) column. Total —
+   * gives runtime-parsed refs the same `.col` ergonomics as the compile-time `ref` literal (e.g.
+   * `RefType.parse(s).map(rt => sheet.setColumnProperties(rt.col, props))`).
+   */
+  def col: Column = this match
+    case Cell(ref) => ref.col
+    case Range(range) => range.start.col
+    case QualifiedCell(_, ref) => ref.col
+    case QualifiedRange(_, range) => range.start.col
+
 end RefType
 
 object RefType:

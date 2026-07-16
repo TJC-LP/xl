@@ -60,6 +60,9 @@ case class OoxmlWorksheet(
   sheetFormatPr: Option[Elem] = None,
   cols: Option[Elem] = None,
   conditionalFormatting: Seq[Elem] = Seq.empty,
+  // GH-375: the single <dataValidations> container (modeled — emitted between
+  // conditionalFormatting and the preserved hyperlinks, its ECMA-376 18.3.1.99 slot)
+  dataValidations: Option[Elem] = None,
   printOptions: Option[Elem] = None,
   rowBreaks: Option[Elem] = None,
   colBreaks: Option[Elem] = None,
@@ -112,7 +115,8 @@ case class OoxmlWorksheet(
       oleObjects,
       controls,
       tableParts,
-      extLst
+      extLst,
+      dataValidations
     ).flatten ++ conditionalFormatting ++
       preservedKnown.toSeq.sortBy(_._1).map(_._2) ++ otherElements
 
@@ -173,7 +177,8 @@ case class OoxmlWorksheet(
 
       conditionalFormatting.foreach(writer.writeElem)
 
-      // GH-232: dataValidations, hyperlinks (after conditionalFormatting)
+      // GH-375: dataValidations (modeled), then GH-232: hyperlinks (schema order)
+      dataValidations.foreach(writer.writeElem)
       preservedAfterCondFmt.foreach(l => preservedKnown.get(l).foreach(writer.writeElem))
 
       printOptions.foreach(writer.writeElem)
@@ -245,7 +250,8 @@ case class OoxmlWorksheet(
     // Conditional formatting (multiple allowed)
     conditionalFormatting.foreach(e => children += cleanNamespaces(e))
 
-    // GH-232: dataValidations, hyperlinks (after conditionalFormatting)
+    // GH-375: dataValidations (modeled), then GH-232: hyperlinks (schema order)
+    dataValidations.foreach(e => children += cleanNamespaces(e))
     preservedAfterCondFmt.foreach(l =>
       preservedKnown.get(l).foreach(e => children += cleanNamespaces(e))
     )
@@ -337,7 +343,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     styleRemapping: Map[Int, Int] = Map.empty,
     tableParts: Option[Elem] = None,
     escapeFormulas: Boolean = false,
-    condFmt: Option[Seq[Elem]] = None
+    condFmt: Option[Seq[Elem]] = None,
+    dataValidations: Option[Option[Elem]] = None
   ): OoxmlWorksheet =
     fromDomainWithMetadata(
       sheet,
@@ -346,7 +353,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
       None,
       tableParts,
       escapeFormulas,
-      condFmt = condFmt
+      condFmt = condFmt,
+      dataValidations = dataValidations
     )
 
   /**
@@ -376,6 +384,11 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
    *   always passes `Some(elems)` from its cf plan (cf-clean → preserved source elements verbatim,
    *   cf-dirty/fresh → CfCodec-generated; `Some(Seq.empty)` actively clears). `None` falls back to
    *   the preserved elements (legacy direct-caller behavior).
+   * @param dataValidations
+   *   Data-validation slot (GH-375, the condFmt shape): `Some(container)` is the planned emission
+   *   (dv-clean → preserved source element verbatim, dv-dirty/fresh → DataValidationCodec;
+   *   `Some(None)` actively clears); `None` falls back to the preserved element (legacy
+   *   direct-caller behavior).
    */
   def fromDomainWithMetadata(
     sheet: Sheet,
@@ -385,7 +398,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     tableParts: Option[Elem] = None,
     escapeFormulas: Boolean = false,
     drawingRef: Option[Elem] = None,
-    condFmt: Option[Seq[Elem]] = None
+    condFmt: Option[Seq[Elem]] = None,
+    dataValidations: Option[Option[Elem]] = None
   ): OoxmlWorksheet =
     // Build a map of row indices to preserved row attributes
     val preservedRowAttrs = preservedMetadata
@@ -554,6 +568,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           preserved.sheetFormatPr,
           generatedCols.orElse(preserved.cols), // Prefer domain props over preserved XML
           condFmt.getOrElse(preserved.conditionalFormatting), // GH-136: planned slot wins
+          dataValidations.getOrElse(preserved.dataValidations), // GH-375: planned slot wins
           preserved.printOptions,
           preserved.rowBreaks,
           preserved.colBreaks,
@@ -586,6 +601,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           sheetViews = buildSheetViewsElem(None, sheet.freezePane, sheet.viewSettings),
           cols = generatedCols,
           conditionalFormatting = condFmt.getOrElse(Seq.empty), // GH-136: fresh workbooks get cf
+          dataValidations = dataValidations.flatten, // GH-375: fresh workbooks get validations
           pageMargins = buildPageMarginsElem(sheet.pageSetup),
           pageSetup = mergePageSetupElem(None, sheet.pageSetup),
           headerFooter = mergeHeaderFooterElem(None, sheet.pageSetup),

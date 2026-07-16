@@ -58,15 +58,19 @@ class ScriptingPreludeTest extends FunSuite:
       Right(Some(BigDecimal("1000.50"))): Either[CodecError, Option[BigDecimal]]
     )
 
-  test("Patch DSL composes: :=, ++, styled, merge"):
+  test("Patch DSL composes: :=, ++, styled, merge, comment, conditionalFormat"):
     val patch =
       (ref"A1" := "Report") ++
         ref"A1".styled(CellStyle.default.bold) ++
         ref"A1:C1".merge ++
-        (ref"B2" := 19.99)
+        (ref"B2" := 19.99) ++
+        ref"B2".comment(Comment.plainText("unit price", Some("gen"))) ++
+        ref"B2:B9".conditionalFormat(CfRule.expression("B2>10", Dxf.fill(Color.Rgb(0xffffcc00))))
     val sheet = Sheet("Patched").put(patch)
     assertEquals(sheet.cells.size, 2)
     assertEquals(sheet.mergedRanges.size, 1)
+    assertEquals(sheet.getComment(ref"B2").map(_.text.toPlainText), Some("unit price"))
+    assertEquals(sheet.conditionalFormats.size, 1)
 
   test("range fill := and ARef navigation resolve through the prelude"):
     val sheet = Sheet("Fill").put(ref"A1:B2" := 0)
@@ -79,6 +83,18 @@ class ScriptingPreludeTest extends FunSuite:
     yield refType := "dynamic").getOrElse(Patch.empty)
     val sheet = Sheet("Dyn").put(patch)
     assertEquals(sheet.cells.size, 1)
+
+  test("runtime column letters drive setColumnProperties (no macro literal, GH-361)"):
+    val widths = Vector("C" -> 14.0, "D" -> 22.0)
+    val sheet = widths.foldLeft(Sheet("Widths")) { case (s, (letter, w)) =>
+      val col = Column.parse(letter).getOrElse(fail(s"unparseable column: $letter"))
+      s.setColumnProperties(col, ColumnProperties(width = Some(w)))
+    }
+    assertEquals(sheet.columnProperties.size, 2)
+    assertEquals(sheet.getColumnProperties(Column.from0(3)).width, Some(22.0))
+    // Runtime-parsed RefType exposes the column handle directly
+    assertEquals(RefType.parse("E3").map(_.col.toLetter), Right("E"))
+    assertEquals(RefType.parse("Sales!C2:E9").map(_.col.toLetter), Right("C"))
 
   test("rich text extensions resolve"):
     val rich = "Status: ".bold + "ACTIVE".green
@@ -158,6 +174,89 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(
       loaded.sheets.headOption.map(_.cells.size),
       Some(3)
+    )
+
+  test("writeRecalculated caches uncached formulas on disk and returns the RecalcResult (GH-360)"):
+    val sheet = Sheet("Calc3")
+      .put(ref"A1", 10)
+      .put(ref"A2", 20)
+      .put(ref"A3", fx"=SUM(A1:A2)")
+    val path = java.nio.file.Files.createTempDirectory("xl-prelude-wrecalc").resolve("clean.xlsx")
+    val result: RecalcResult = Excel.writeRecalculated(Workbook(sheet), path.toString)
+    assert(result.isClean)
+    assertEquals(
+      result.evaluated.values.headOption.flatMap(_.get(ref"A3")),
+      Some(CellValue.Number(BigDecimal(30)))
+    )
+    val cached = Excel
+      .read(path.toString)
+      .sheets
+      .headOption
+      .flatMap(_.cells.get(ref"A3"))
+      .map(_.value)
+    cached match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)))) => assertEquals(n, BigDecimal(30))
+      case other => fail(s"expected a cached formula on disk, got $other")
+
+  test("writeRecalculated writes anyway on formula errors — errors are data (GH-360)"):
+    val sheet = Sheet("Err")
+      .put(ref"A1", 2)
+      .put(ref"A2", fx"=NOSUCHFN(A1)")
+      .put(ref"A3", fx"=A1*3")
+    val path = java.nio.file.Files.createTempDirectory("xl-prelude-wrecalc").resolve("partial.xlsx")
+    val result = Excel.writeRecalculated(Workbook(sheet), path.toString)
+    assert(!result.isClean)
+    assertEquals(result.errors.map(_.ref.toA1), Vector("A2"))
+    val cells = Excel.read(path.toString).sheets.headOption.map(_.cells).getOrElse(Map.empty)
+    cells.get(ref"A3").map(_.value) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)))) => assertEquals(n, BigDecimal(6))
+      case other => fail(s"expected A3 cached on disk, got $other")
+    cells.get(ref"A2").map(_.value) match
+      case Some(CellValue.Formula(_, None)) => () // failed cell stays uncached
+      case other => fail(s"expected A2 uncached on disk, got $other")
+
+  test("writeRecalculated accepts XLResult[Workbook], throwing only on Left (GH-360)"):
+    val wb = Workbook(Sheet("R").put(ref"A1", 4).put(ref"B1", fx"=A1*2"))
+    val dir = java.nio.file.Files.createTempDirectory("xl-prelude-wrecalc")
+    val okPath = dir.resolve("fromResult.xlsx")
+    val result = Excel.writeRecalculated(wb.update("R", _.put(ref"A2", 1)), okPath.toString)
+    assert(result.isClean)
+    assert(java.nio.file.Files.exists(okPath))
+    intercept[XLException]:
+      Excel.writeRecalculated(
+        wb.update("NoSuchSheet", identity),
+        dir.resolve("never.xlsx").toString
+      )
+
+  test("writeRecalculated threads the clock and rng overloads (GH-360)"):
+    val dir = java.nio.file.Files.createTempDirectory("xl-prelude-wrecalc")
+    val clock = Clock.fixedDate(java.time.LocalDate.of(2026, 7, 15))
+    val clocked = Excel.writeRecalculated(
+      Workbook(Sheet("Vol").put(ref"A1", fx"=TODAY()")),
+      dir.resolve("clock.xlsx").toString,
+      clock
+    )
+    assertEquals(
+      clocked.evaluated.values.headOption.flatMap(_.get(ref"A1")),
+      Some(CellValue.DateTime(java.time.LocalDate.of(2026, 7, 15).atStartOfDay()))
+    )
+    val seeded = Sheet("Rand").put(ref"A1", fx"=RANDBETWEEN(1,10)")
+    val r1 = Excel.writeRecalculated(
+      Workbook(seeded),
+      dir.resolve("rng1.xlsx").toString,
+      Clock.system,
+      Rng.seeded(42L)
+    )
+    val r2 = Excel.writeRecalculated(
+      Workbook(seeded),
+      dir.resolve("rng2.xlsx").toString,
+      Clock.system,
+      Rng.seeded(42L)
+    )
+    assert(r1.isClean && r2.isClean)
+    assertEquals(
+      r1.evaluated.values.headOption.flatMap(_.get(ref"A1")),
+      r2.evaluated.values.headOption.flatMap(_.get(ref"A1"))
     )
 
   test("smart detection: FormattedParsers.detect and String.toFormatted via the prelude"):

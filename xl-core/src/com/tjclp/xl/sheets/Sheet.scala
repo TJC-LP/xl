@@ -53,6 +53,11 @@ import scala.util.boundary, boundary.break
  *   existing tabColor XML on write (passive default, the viewSettings precedent); `Some(color)`
  *   overlays it onto the preserved sheetPr. Both RGB and theme+tint colors are legal; the reader
  *   populates it whenever the source color is in the typed subset (rgb / theme+tint / indexed).
+ *
+ * @param dataValidations
+ *   Data-validation entries (GH-375). Document order is emission order inside the single
+ *   `<dataValidations>` container; use [[withDataValidation]] to append. Unmodeled entries ride
+ *   through as [[DataValidation.Preserved]] (the conditionalFormats pattern).
  */
 final case class Sheet(
   name: SheetName,
@@ -70,7 +75,8 @@ final case class Sheet(
   viewSettings: Option[SheetView] = None,
   drawings: Vector[Drawing] = Vector.empty,
   conditionalFormats: Vector[ConditionalFormat] = Vector.empty,
-  tabColor: Option[Color] = None
+  tabColor: Option[Color] = None,
+  dataValidations: Vector[DataValidation] = Vector.empty
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -189,8 +195,10 @@ final case class Sheet(
           idx(col.index0).map(ni => Column.from0(ni) -> p)
         }
 
-    // Merged ranges: clamp the active-axis span; drop if it collapses entirely into the deletion.
-    val newMerges = mergedRanges.flatMap { range =>
+    // Shared range algebra on the active axis: clamp the span; None when it collapses entirely
+    // into the deletion. Used by merged ranges, conditional-format envelopes, and data
+    // validations — the three sqref-shaped structures that must shift identically.
+    def shiftRangeOnAxis(range: CellRange): Option[CellRange] =
       val s = axisOf(range.start)
       val e = axisOf(range.end)
       val (ns, ne) =
@@ -201,7 +209,9 @@ final case class Sheet(
           (ns0, ne0)
       if ns > ne then None
       else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
-    }
+
+    // Merged ranges: clamp the active-axis span; drop if it collapses entirely into the deletion.
+    val newMerges = mergedRanges.flatMap(shiftRangeOnAxis)
 
     // Freeze pane: shift/clamp BOTH the anchor and the scroll target on the active axis
     // (clamp a deleted ref to `at`) — dropping scrolledTo here would silently unscroll the
@@ -250,21 +260,21 @@ final case class Sheet(
     // xl-evaluator's StructuralEditor. ConditionalFormat.Preserved blocks are untouched.
     val newCondFmts = conditionalFormats.flatMap {
       case ConditionalFormat.Rules(ranges, rules, pivot) =>
-        val shiftedRanges = ranges.flatMap { range =>
-          val s = axisOf(range.start)
-          val e = axisOf(range.end)
-          val (ns, ne) =
-            if !deleting then (if s >= at then s + count else s, if e >= at then e + count else e)
-            else
-              val ns0 = if s < at then s else if s >= at + count then s - count else at
-              val ne0 = if e < at then e else if e >= at + count then e - count else at - 1
-              (ns0, ne0)
-          if ns > ne then None
-          else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
-        }
+        val shiftedRanges = ranges.flatMap(shiftRangeOnAxis)
         if shiftedRanges.isEmpty then None
         else Some(ConditionalFormat.Rules(shiftedRanges, rules, pivot))
       case preserved: ConditionalFormat.Preserved => Some(preserved)
+    }
+
+    // Data validations (GH-375): same envelope algebra — without it, dropdowns detach from their
+    // cells on row/column insert or delete. An entry whose ranges all drop is removed (Excel
+    // deletes validations whose entire range is deleted); Preserved entries are untouched.
+    val newDataValidations = dataValidations.flatMap {
+      case DataValidation.Rules(ranges, kind, allowBlank, showDropdown) =>
+        val shiftedRanges = ranges.flatMap(shiftRangeOnAxis)
+        if shiftedRanges.isEmpty then None
+        else Some(DataValidation.Rules(shiftedRanges, kind, allowBlank, showDropdown))
+      case preserved: DataValidation.Preserved => Some(preserved)
     }
 
     copy(
@@ -275,7 +285,8 @@ final case class Sheet(
       mergedRanges = newMerges,
       freezePane = newFreeze,
       drawings = newDrawings,
-      conditionalFormats = newCondFmts
+      conditionalFormats = newCondFmts,
+      dataValidations = newDataValidations
     )
 
   /** Put CellValue at reference (always succeeds - CellValue is pre-validated) */
@@ -738,6 +749,35 @@ final case class Sheet(
   /** All typed conditional-format blocks in document order (Preserved fragments excluded). */
   def typedConditionalFormats: Vector[ConditionalFormat.Rules] =
     conditionalFormats.collect { case r: ConditionalFormat.Rules => r }
+
+  // ===== Data validation (GH-375) =====
+
+  /**
+   * Append ONE data validation applying `dv` to `range` — list dropdowns first:
+   * {{{
+   * sheet.withDataValidation(ref"B2:B10", DataValidation.listOf("Low", "Med", "High"))
+   * sheet.withDataValidation(ref"C2:C10", DataValidation.list("$Z$1:$Z$3", allowBlank = false))
+   * }}}
+   * Authoring always appends a new entry (Excel accepts several validations per sheet); any ranges
+   * already on `dv` are replaced by `range`.
+   */
+  def withDataValidation(range: CellRange, dv: DataValidation.Rules): Sheet =
+    withDataValidation(Vector(range), dv)
+
+  /** Multi-range variant of [[withDataValidation]]: one entry, several sqref ranges. */
+  def withDataValidation(ranges: Vector[CellRange], dv: DataValidation.Rules): Sheet =
+    if ranges.isEmpty then this
+    else copy(dataValidations = dataValidations :+ dv.copy(ranges = ranges))
+
+  /** Remove the data validation at `index` (document order); identity when out of range. */
+  def removeDataValidation(index: Int): Sheet =
+    if dataValidations.isDefinedAt(index) then
+      copy(dataValidations = dataValidations.patch(index, Nil, 1))
+    else this
+
+  /** All typed data validations in document order (Preserved entries excluded). */
+  def typedDataValidations: Vector[DataValidation.Rules] =
+    dataValidations.collect { case r: DataValidation.Rules => r }
 
   /** Add or update table in sheet */
   def withTable(table: TableSpec): Sheet =

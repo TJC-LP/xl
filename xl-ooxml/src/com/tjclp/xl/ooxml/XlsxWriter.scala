@@ -1406,6 +1406,32 @@ object XlsxWriter:
     CfWritePlan(condFmt, dxfPlan.merged)
 
   /**
+   * Pre-pass for the data-validation slot (GH-375, the planCfWrites contract): per regenerated
+   * sheet, CLEAN (reparse of the preserved container equals the model — pass the source element
+   * through verbatim, zero trust regression) or DIRTY (emit from the model via DataValidationCodec,
+   * overlaying unmodeled container attributes of the source). A cleared model compares dirty and
+   * emits nothing (no resurrection).
+   */
+  private def planDvWrites(
+    workbook: Workbook,
+    sheetsToRegenerate: Set[Int],
+    preservedWorksheets: Map[Int, XLResult[Option[OoxmlWorksheet]]]
+  ): Map[Int, Option[Elem]] =
+    import com.tjclp.xl.ooxml.worksheet.DataValidationCodec
+    sheetsToRegenerate.toVector.sorted
+      .flatMap(idx => workbook.sheets.lift(idx).map(idx -> _))
+      .map { case (idx, sheet) =>
+        val sourceDv: Option[Elem] =
+          preservedWorksheets.get(idx).flatMap(_.toOption).flatten.flatMap(_.dataValidations)
+        sourceDv match
+          case Some(src) if DataValidationCodec.parseAll(Some(src)) == sheet.dataValidations =>
+            idx -> Some(src)
+          case _ if sheet.dataValidations.isEmpty => idx -> None
+          case _ => idx -> DataValidationCodec.toElem(sheet.dataValidations, sourceDv)
+      }
+      .toMap
+
+  /**
    * Unified write: intelligently regenerates only what changed, preserves the rest.
    *
    * Strategy:
@@ -1626,6 +1652,10 @@ object XlsxWriter:
     // GH-136: plan conditional-formatting emission + dxf-table merge BEFORE writeStyles —
     // styles.xml is written before the sheet loop, so dxf indices must be assigned up front.
     val cfPlan = planCfWrites(workbook, sheetsToRegenerate, preservedWorksheets, preservedDxfs)
+
+    // GH-375: plan the per-sheet data-validation slot (clean → verbatim source container,
+    // dirty/fresh → DataValidationCodec emission)
+    val dvPlan = planDvWrites(workbook, sheetsToRegenerate, preservedWorksheets)
 
     val styles =
       OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, cfPlan.mergedDxfs)
@@ -2033,9 +2063,11 @@ object XlsxWriter:
           // (bypasses intermediate OOXML types for 5-7x performance improvement).
           // GH-221: sheets with drawings force the OoxmlWorksheet path — DirectSaxEmitter has no
           // <drawing> support yet (deferred). GH-136: same for conditional formats.
+          // GH-375: same for data validations.
           (config.backend, preservedMetadata) match
             case (XmlBackend.SaxStax, None)
-                if sheet.drawings.isEmpty && sheet.conditionalFormats.isEmpty =>
+                if sheet.drawings.isEmpty && sheet.conditionalFormats.isEmpty &&
+                  sheet.dataValidations.isEmpty =>
               writeWorksheetDirect(
                 zip,
                 sheetOutputPaths(idx),
@@ -2056,7 +2088,8 @@ object XlsxWriter:
                   tablePartsXml,
                   escapeFormulas,
                   drawingPlan.drawingRefs.get(idx),
-                  condFmt = Some(cfPlan.condFmtBySheet.getOrElse(idx, Seq.empty))
+                  condFmt = Some(cfPlan.condFmtBySheet.getOrElse(idx, Seq.empty)),
+                  dataValidations = Some(dvPlan.getOrElse(idx, None))
                 )
               writeWorksheet(zip, sheetOutputPaths(idx), ooxmlSheet, config)
 

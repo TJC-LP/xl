@@ -250,12 +250,20 @@ object WorkbookStyles:
           .flatMap(attr => attr.text.toIntOption)
           .filter(_ >= 0)
           .getOrElse(Align.default.indent)
+        // ST_TextRotation admits 0-180 plus 255 (vertical stacked); drop anything else from
+        // malformed files so the parser stays total (Align requires the same range)
+        val textRotation = alignElem
+          .attribute("textRotation")
+          .flatMap(attr => attr.text.toIntOption)
+          .filter(v => (v >= 0 && v <= 180) || v == Align.VerticalTextRotation)
+          .getOrElse(Align.default.textRotation)
         Some(
           Align(
             horizontal = horizontal.getOrElse(Align.default.horizontal),
             vertical = vertical.getOrElse(Align.default.vertical),
             wrapText = wrap,
-            indent = indent
+            indent = indent,
+            textRotation = textRotation
           )
         )
       case Some(_) => None

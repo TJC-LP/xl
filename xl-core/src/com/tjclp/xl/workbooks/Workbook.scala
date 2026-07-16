@@ -408,6 +408,35 @@ final case class Workbook(
     val newMetadata = metadata.copy(definedNames = others :+ dn)
     copy(metadata = newMetadata, sourceContext = sourceContext.map(_.markMetadataModified))
 
+  /**
+   * Set the workbook's iterative-calculation properties (GH-373), serialized as `<calcPr>`
+   * attributes (`iterate` / `iterateCount` / `iterateDelta`). Unmodeled calcPr attributes of a
+   * source file (calcId, fullCalcOnLoad, refMode, ...) ride through unchanged. Marks metadata
+   * modified so a surgical write regenerates workbook.xml instead of copying the source verbatim
+   * (which would silently drop the change — the GH-294 setActiveSheet precedent).
+   *
+   * Example (the circular-LBO shape: bounded iteration like Excel's UI defaults):
+   * {{{
+   * wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))
+   * }}}
+   */
+  def withCalcPr(calcPr: CalcPr): Workbook =
+    copy(
+      metadata = metadata.copy(calcPr = Some(calcPr)),
+      sourceContext = sourceContext.map(_.markMetadataModified)
+    )
+
+  /**
+   * Clear the modeled iterative-calculation settings (GH-373): the three iterate attributes are
+   * stripped from `<calcPr>` on write while unmodeled attributes (calcId, refMode, ...) survive.
+   * Marks metadata modified (see [[withCalcPr]]).
+   */
+  def removeCalcPr: Workbook =
+    copy(
+      metadata = metadata.copy(calcPr = None),
+      sourceContext = sourceContext.map(_.markMetadataModified)
+    )
+
   /** Remove a workbook-scoped defined name by identifier (GH-236). Marks metadata modified. */
   def removeDefinedName(name: String): Workbook =
     val newMetadata =

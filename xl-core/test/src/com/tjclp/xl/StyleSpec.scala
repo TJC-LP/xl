@@ -135,7 +135,12 @@ class StyleSpec extends ScalaCheckSuite:
     v <- genVAlign
     wrap <- Gen.oneOf(true, false)
     indent <- Gen.choose(0, 10)
-  yield Align(h, v, wrap, indent)
+    rotation <- Gen.frequency(
+      3 -> Gen.const(0),
+      1 -> Gen.choose(1, 180),
+      1 -> Gen.const(255)
+    )
+  yield Align(h, v, wrap, indent, rotation)
 
   val genCellStyle: Gen[CellStyle] = for
     font <- genFont
@@ -425,6 +430,18 @@ class StyleSpec extends ScalaCheckSuite:
     assertNotEquals(indent0.canonicalKey, indent1.canonicalKey)
     assertNotEquals(indent1.canonicalKey, indent2.canonicalKey)
     assertNotEquals(indent0.canonicalKey, indent2.canonicalKey)
+  }
+
+  test("CellStyle.canonicalKey distinguishes styles differing only by textRotation (GH-380)") {
+    // Style dedup must account for textRotation: two styles that differ only by rotation
+    // would otherwise collapse to one xf in styles.xml, losing the rotation.
+    val flat = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val up = CellStyle.default.withAlign(Align(horizontal = HAlign.Left, textRotation = 90))
+    val stacked = CellStyle.default.withAlign(Align(horizontal = HAlign.Left, textRotation = 255))
+
+    assertNotEquals(flat.canonicalKey, up.canonicalKey)
+    assertNotEquals(up.canonicalKey, stacked.canonicalKey)
+    assertNotEquals(flat.canonicalKey, stacked.canonicalKey)
   }
 
   property("CellStyle.canonicalKey: equal styles have equal keys") {

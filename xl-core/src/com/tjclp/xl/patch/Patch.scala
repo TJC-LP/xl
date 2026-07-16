@@ -2,7 +2,8 @@ package com.tjclp.xl.patch
 
 import cats.Monoid
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, Comment}
+import com.tjclp.xl.cf.CfRule
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
@@ -20,7 +21,9 @@ import com.tjclp.xl.styles.units.StyleId
  * Laws:
  *   - Associativity: (p1 |+| p2) |+| p3 == p1 |+| (p2 |+| p3)
  *   - Identity: Patch.empty |+| p == p == p |+| Patch.empty
- *   - Idempotence: Applying the same patch twice yields the same result
+ *   - Idempotence: Applying the same patch twice yields the same result (SetConditionalFormat
+ *     excepted — it appends one CF block per application, matching Sheet.conditionalFormat's
+ *     append-only authoring semantics)
  */
 enum Patch:
   /** Put a cell value at a reference */
@@ -68,6 +71,21 @@ enum Patch:
 
   /** Put a grid of values starting at origin (for array formula spill) */
   case PutArray(origin: ARef, values: Vector[Vector[CellValue]])
+
+  /**
+   * Attach a comment to a cell (later comments to the same ref win). Comments live on
+   * `Sheet.comments`, so no cell is materialized.
+   */
+  case SetComment(ref: ARef, comment: Comment)
+
+  /**
+   * Append ONE conditional-formatting block applying `rules` to `ranges` (multi-range sqref).
+   *
+   * Applied via [[com.tjclp.xl.sheets.Sheet.conditionalFormat]], which owns auto-priority stamping:
+   * rules left at [[CfRule.AutoPriority]] are assigned above every priority already on the sheet.
+   * Append-only like the Sheet method — applying the same patch twice appends two blocks.
+   */
+  case SetConditionalFormat(ranges: Vector[CellRange], rules: Vector[CfRule])
 
   /** Batch multiple patches together */
   case Batch(patches: Vector[Patch])
@@ -162,6 +180,13 @@ object Patch:
         }
       }
       sheet.copy(cells = newCells)
+
+    case SetComment(ref, cmt) =>
+      sheet.comment(ref, cmt)
+
+    case SetConditionalFormat(ranges, rules) =>
+      // Route through Sheet.conditionalFormat — it owns AutoPriority stamping
+      sheet.conditionalFormat(ranges, rules)
 
     case Batch(patches) =>
       patches.foldLeft(sheet) { (acc, p) =>

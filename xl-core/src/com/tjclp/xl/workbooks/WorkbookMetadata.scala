@@ -14,6 +14,11 @@ import com.tjclp.xl.styles.color.ThemePalette
  *   Excel): date serials count days since 1904-01-01 instead of the default 1900 system (GH-243).
  *   Read from workbookPr and preserved on write; DateTime cells are serialized with the matching
  *   epoch (see `CellValue.dateTimeToExcelSerial(dt, date1904)`).
+ * @param calcPr
+ *   Iterative-calculation settings of `<calcPr>` (GH-373). None reflects a file whose calcPr
+ *   carries no iterate attributes (or has no calcPr at all); unmodeled calcPr attributes (calcId,
+ *   fullCalcOnLoad, refMode, ...) ride through on write either way. Author via
+ *   `Workbook.withCalcPr` so surgical writes see the change.
  */
 final case class WorkbookMetadata(
   creator: Option[String] = None,
@@ -25,5 +30,6 @@ final case class WorkbookMetadata(
   theme: ThemePalette = ThemePalette.office,
   definedNames: Vector[DefinedName] = Vector.empty,
   sheetStates: Map[SheetName, Option[String]] = Map.empty,
-  date1904: Boolean = false
+  date1904: Boolean = false,
+  calcPr: Option[CalcPr] = None
 )

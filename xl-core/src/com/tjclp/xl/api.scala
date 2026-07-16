@@ -46,7 +46,7 @@ object api:
   export richtext.{TextRun, RichText}
 
   // Sheet types
-  export sheets.{Sheet, ColumnProperties, RowProperties}
+  export sheets.{Sheet, ColumnProperties, RowProperties, DataValidation, DvKind}
 
   // Drawing types (GH-221) — case classes/enums, so plain export forwarders are safe.
   // NEVER export anything named `Anchor` here (taken by addressing above).
@@ -72,7 +72,7 @@ object api:
   export patch.Patch
 
   // Workbook types
-  export workbooks.{Workbook, WorkbookMetadata}
+  export workbooks.{Workbook, WorkbookMetadata, CalcPr}
 
   // Context types (for surgical modification)
   export context.{SourceContext, SourceFingerprint}

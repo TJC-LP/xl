@@ -215,7 +215,9 @@ private[worksheet] val preservedAfterSheetData: Seq[String] =
     "customSheetViews"
   )
 private[worksheet] val preservedAfterMergeCells: Seq[String] = Seq("phoneticPr")
-private[worksheet] val preservedAfterCondFmt: Seq[String] = Seq("dataValidations", "hyperlinks")
+// GH-375: dataValidations graduated from this group to a dedicated modeled field on
+// OoxmlWorksheet (emitted between conditionalFormatting and hyperlinks, its schema slot).
+private[worksheet] val preservedAfterCondFmt: Seq[String] = Seq("hyperlinks")
 private[worksheet] val preservedAfterCustomProps: Seq[String] =
   Seq("cellWatches", "ignoredErrors", "smartTags")
 private[worksheet] val preservedAfterLegacyDrawing: Seq[String] = Seq("legacyDrawingHF")

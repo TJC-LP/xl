@@ -472,6 +472,7 @@ object XlsxReader:
         sheetStates,
         commentPathMapping,
         date1904 = ooxmlWb.date1904,
+        calcPr = ooxmlWb.calcPrSettings,
         activeSheetIndex = activeSheetIndex,
         docProps,
         drawingPathMapping = parsedSheets.drawingPathMapping,
@@ -1066,6 +1067,11 @@ object XlsxReader:
     val conditionalFormats =
       com.tjclp.xl.ooxml.worksheet.CfCodec.parseAll(ooxmlSheet.conditionalFormatting, styles.dxfs)
 
+    // Parse data validations into the typed model (GH-375). Total: unmodeled entries ride
+    // through Preserved, so read→edit→write keeps them on rewritten sheets.
+    val dataValidations =
+      com.tjclp.xl.ooxml.worksheet.DataValidationCodec.parseAll(ooxmlSheet.dataValidations)
+
     Right(
       Sheet(
         name = name,
@@ -1081,7 +1087,8 @@ object XlsxReader:
         viewSettings = viewSettings,
         drawings = drawings,
         conditionalFormats = conditionalFormats,
-        tabColor = tabColor
+        tabColor = tabColor,
+        dataValidations = dataValidations
       )
     )
 
@@ -1308,6 +1315,8 @@ object XlsxReader:
    *   "xl/comments1.xml")
    * @param date1904
    *   True when workbookPr declares the 1904 date system (GH-243)
+   * @param calcPr
+   *   Iterative-calculation settings parsed from `<calcPr>` (GH-373)
    * @param activeSheetIndex
    *   Active tab parsed from bookViews, already clamped to the sheet count (GH-294)
    * @param docProps
@@ -1325,6 +1334,7 @@ object XlsxReader:
     sheetStates: Map[SheetName, Option[String]],
     commentPathMapping: Map[SheetName, String],
     date1904: Boolean,
+    calcPr: Option[com.tjclp.xl.workbooks.CalcPr],
     activeSheetIndex: Int,
     docProps: DocProps.Data,
     drawingPathMapping: Map[SheetName, String],
@@ -1374,7 +1384,8 @@ object XlsxReader:
           theme = theme,
           definedNames = remainingNames,
           sheetStates = sheetStates,
-          date1904 = date1904
+          date1904 = date1904,
+          calcPr = calcPr
         )
       sourceContextEither.map(ctx =>
         Workbook(

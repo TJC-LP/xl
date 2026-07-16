@@ -68,6 +68,25 @@ Excel.write(updated, "output.xlsx")
   replacement (no ZIP corruption on a crashed write).
 - `Excel.write` also accepts an `XLResult[Workbook]` directly.
 
+> **Formulas are written with whatever cache they carry — recalculate first.** A freshly built
+> `fx"…"` cell has no cached value, so a plain `Excel.write` produces a file whose formulas show
+> up **blank** in every cached-value consumer (openpyxl `data_only`, pandas, previewers, Excel
+> before its first recalc). If the workbook contains formulas, write it with
+> `Excel.writeRecalculated` (since 0.13.0) instead — one call recalculates and writes, returning
+> the `RecalcResult` so failures are visible instead of silent:
+>
+> ```scala
+> val result = Excel.writeRecalculated(updated, "output.xlsx") // recalc → write → report
+> if !result.isClean then result.errors.foreach(e => println(e.render))
+> ```
+>
+> The file is written even when some formulas fail — errors are data conditions; failed cells
+> stay uncached and Excel recalculates them on open. Overloads take an explicit `Clock`
+> (deterministic `TODAY`/`NOW`), a `Clock` + `Rng` (reproducible `RAND`/`RANDBETWEEN`), or an
+> `XLResult[Workbook]` directly. For full control (e.g. fail-hard pipelines), drop to
+> `wb.recalculate()` and write `result.workbook` yourself — see
+> [Formulas: build, recalculate, inspect](#formulas-build-recalculate-inspect).
+
 ## Compile-time vs runtime refs (and the `fx` rule)
 
 Literal refs and formulas are validated **at compile time** — a typo fails the build, not the
@@ -106,6 +125,19 @@ base.shift(1, 2) // B4   (colOffset, rowOffset)
 
 Navigation is total but **unchecked at the sheet edges**: `ref"A1".up()` produces the
 non-existent "A0", which corrupts output if written. Keep loop bounds inside your data extent.
+
+For **runtime column handles** (since 0.13.0) — column-oriented builders that fold over letters
+computed at runtime — use `Column.parse` instead of special-casing macro literals; a runtime
+`RefType` also exposes `.col` (the cell's column, or the range's starting column):
+
+```scala
+Vector("C" -> 14.0, "D" -> 22.0).foldLeft(sheet) { case (s, (letter, w)) =>
+  val col = Column.parse(letter).getOrElse(sys.error(s"bad column: $letter"))
+  s.setColumnProperties(col, ColumnProperties(width = Some(w)))
+}
+Column.parse("D1")                      // Right(D) — trailing row digits tolerated
+RefType.parse("Sales!C2:E9").map(_.col) // Right(C) — starting column of the range
+```
 
 ## Range fill and the patch DSL
 
@@ -192,6 +224,11 @@ For Excel-style format inheritance on formula entry, use the opt-in
 Reference cycles are **isolated**: the participants and their downstream dependents are reported
 (e.g. `Model!A7: Formula error in '=B7': Circular reference` via `CellEvalError.render`) while
 the acyclic remainder still evaluates and caches.
+
+When the very next step is a write, `Excel.writeRecalculated(wb, path)` (since 0.13.0) fuses the
+two — recalculate, write the cached workbook (even on partial failure), return the same
+`RecalcResult`. Use the explicit `recalculate().toEither` pattern above when a dirty result must
+abort *before* anything lands on disk.
 
 For one-off questions, `wb.evaluateFormula("=SUM(Data!A1:A9)", "Summary")` returns
 `XLResult[CellValue]` with cross-sheet context wired automatically (107 functions supported —
