@@ -849,7 +849,7 @@ Apply multiple operations atomically from JSON input.
 | Operation | Required Fields | Optional Fields | Description |
 |-----------|-----------------|-----------------|-------------|
 | `put` | `ref`, `value` | `format`, `values`, `detect` | Write value to cell |
-| `putf` | `ref`, `value` | `from`, `values` | Write formula(s) to cell(s) |
+| `putf` | `ref`, `value` | `from`, `values`, `format` | Write formula(s) to cell(s); `format` applies a number format to the formula cell(s) |
 | `style` | `range` | styling options | Apply cell styling |
 | `merge` | `range` | | Merge cells |
 | `unmerge` | `range` | | Unmerge cells |
@@ -949,6 +949,18 @@ Strings are automatically detected and formatted:
 
 // Explicit formulas for each cell (no dragging)
 {"op": "putf", "ref": "B2:B4", "values": ["=A2*2", "=A3*2", "=A4*2"]}
+```
+
+**Formula Number Formats** (`putf` with `format`, parity with `put`):
+
+The `format` field accepts the same named formats and custom codes as `put` and
+applies the number format to the formula cell(s) — no second `style` pass needed.
+Works with all three variants (single, dragging, explicit `values`):
+
+```json
+{"op": "putf", "ref": "C1", "value": "=A1*2", "format": "#,##0.0"}
+{"op": "putf", "ref": "B2:B10", "value": "=A2/A$1", "from": "B2", "format": "percent"}
+{"op": "putf", "ref": "D1:D2", "values": ["=SUM(A:A)", "=SUM(B:B)"], "format": "currency"}
 ```
 
 **Style Options**:

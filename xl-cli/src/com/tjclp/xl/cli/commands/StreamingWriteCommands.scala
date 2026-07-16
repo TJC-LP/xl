@@ -526,18 +526,30 @@ object StreamingWriteCommands:
                 StreamingTransform.CellPatch.SetValue(cellValue, preserveStyle = true)
           summaryLines += s"  PUT $refStr = $cellValue"
 
-        case BatchParser.BatchOp.PutFormula(refStr, formula) =>
+        case BatchParser.BatchOp.PutFormula(refStr, formula, formatOpt) =>
           val ref = ARef.parse(refStr) match
             case Right(r) => r
             case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
           val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
-          cellPatches(ref) = StreamingTransform.CellPatch.SetValue(
-            CellValue.Formula(formulaText, None),
-            preserveStyle = true
-          )
+          val formulaValue = CellValue.Formula(formulaText, None)
+          formatOpt match
+            case Some(numFmt) =>
+              // GH-356: apply numFmt to the formula cell (same styles.xml patching as put)
+              val cellStyle = CellStyle.default.withNumFmt(numFmt)
+              val (updatedStyles, styleId) =
+                StylePatcher.addStyle(currentStylesXml, cellStyle) match
+                  case Right(result) => result
+                  case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
+              currentStylesXml = updatedStyles
+              stylesModified = true
+              cellPatches(ref) =
+                StreamingTransform.CellPatch.SetStyleAndValue(styleId, formulaValue)
+            case None =>
+              cellPatches(ref) =
+                StreamingTransform.CellPatch.SetValue(formulaValue, preserveStyle = true)
           summaryLines += s"  PUTF $refStr = $formula"
 
-        case BatchParser.BatchOp.PutFormulaDragging(rangeStr, formula, fromRef) =>
+        case BatchParser.BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, formatOpt) =>
           // Parse formula and apply with shifting (same as non-streaming batch mode)
           val fromARef = ARef.parse(fromRef) match
             case Right(r) => r
@@ -556,6 +568,18 @@ object StreamingWriteCommands:
                 s"Invalid formula '$fullFormula': ${ParseError.formatWithContext(e, fullFormula)}"
               )
 
+          // GH-356: register the format's style once, reuse across the dragged range
+          val styleIdOpt = formatOpt.map { numFmt =>
+            val cellStyle = CellStyle.default.withNumFmt(numFmt)
+            val (updatedStyles, styleId) =
+              StylePatcher.addStyle(currentStylesXml, cellStyle) match
+                case Right(result) => result
+                case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
+            currentStylesXml = updatedStyles
+            stylesModified = true
+            styleId
+          }
+
           // Apply formula with shifting
           val startCol = Column.index0(fromARef.col)
           val startRow = Row.index0(fromARef.row)
@@ -565,14 +589,16 @@ object StreamingWriteCommands:
             val rowDelta = Row.index0(targetRef.row) - startRow
             val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
             val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
-            cellPatches(targetRef) = StreamingTransform.CellPatch.SetValue(
-              CellValue.Formula(shiftedFormula, None),
-              preserveStyle = true
-            )
+            val formulaValue = CellValue.Formula(shiftedFormula, None)
+            cellPatches(targetRef) = styleIdOpt match
+              case Some(styleId) =>
+                StreamingTransform.CellPatch.SetStyleAndValue(styleId, formulaValue)
+              case None =>
+                StreamingTransform.CellPatch.SetValue(formulaValue, preserveStyle = true)
           }
           summaryLines += s"  PUTF $rangeStr = $formula (from $fromRef, ${range.cells.size} formulas)"
 
-        case BatchParser.BatchOp.PutFormulas(rangeStr, formulas) =>
+        case BatchParser.BatchOp.PutFormulas(rangeStr, formulas, formatOpt) =>
           val range = CellRange.parse(rangeStr) match
             case Right(r) => r
             case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
@@ -581,12 +607,25 @@ object StreamingWriteCommands:
             throw new Exception(
               s"Range $rangeStr has ${cells.length} cells but ${formulas.length} formulas provided"
             )
+          // GH-356: register the format's style once, reuse across the range
+          val styleIdOpt = formatOpt.map { numFmt =>
+            val cellStyle = CellStyle.default.withNumFmt(numFmt)
+            val (updatedStyles, styleId) =
+              StylePatcher.addStyle(currentStylesXml, cellStyle) match
+                case Right(result) => result
+                case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
+            currentStylesXml = updatedStyles
+            stylesModified = true
+            styleId
+          }
           cells.zip(formulas).foreach { case (ref, formula) =>
             val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
-            cellPatches(ref) = StreamingTransform.CellPatch.SetValue(
-              CellValue.Formula(formulaText, None),
-              preserveStyle = true
-            )
+            val formulaValue = CellValue.Formula(formulaText, None)
+            cellPatches(ref) = styleIdOpt match
+              case Some(styleId) =>
+                StreamingTransform.CellPatch.SetStyleAndValue(styleId, formulaValue)
+              case None =>
+                StreamingTransform.CellPatch.SetValue(formulaValue, preserveStyle = true)
           }
           summaryLines += s"  PUTF $rangeStr = [${formulas.length} formulas]"
 

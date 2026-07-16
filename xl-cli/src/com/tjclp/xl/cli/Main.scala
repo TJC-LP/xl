@@ -913,7 +913,8 @@ USAGE:
 
 OPERATIONS:
   put       {"op": "put", "ref": "A1", "value": "Hello"}
-  putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}  (also accepts "formula")
+  putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}  (also accepts "formula";
+            optional "format" applies a number format to the formula cell(s))
   style     {"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}
   merge     {"op": "merge", "range": "A1:D1"}
   unmerge   {"op": "unmerge", "range": "A1:D1"}

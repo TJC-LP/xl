@@ -865,3 +865,37 @@ class StreamingWriteSpec extends FunSuite:
       Files.deleteIfExists(outputPath)
       Files.deleteIfExists(jsonPath)
   }
+
+  test("streaming batch: putf with format writes formula and numFmt (GH-356)") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val jsonPath = tempJson("""[{"op":"putf","ref":"C1","value":"=A1*2","format":"#,##0.0"}]""")
+    try
+      val wb = Workbook(Sheet("Test").put(ARef.from0(0, 0), CellValue.Number(BigDecimal("10"))))
+      ExcelIO.instance[IO].write(wb, sourcePath).unsafeRunSync()
+
+      val result = StreamingWriteCommands
+        .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+        .unsafeRunSync()
+
+      assert(result.contains("Saved (streaming)"), result)
+
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val sheet = imported.sheets.head
+      val c1 = sheet.cells.get(ARef.from0(2, 0))
+
+      c1.map(_.value) match
+        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A1*2")
+        case other => fail(s"C1: expected Formula(A1*2), got $other")
+
+      val styleOpt = c1.flatMap(_.styleId).flatMap(sheet.styleRegistry.get)
+      assert(styleOpt.isDefined, "C1 should carry a style with the numFmt")
+      assertEquals(
+        styleOpt.map(_.numFmt),
+        Some(com.tjclp.xl.styles.numfmt.NumFmt.Custom("#,##0.0"))
+      )
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }

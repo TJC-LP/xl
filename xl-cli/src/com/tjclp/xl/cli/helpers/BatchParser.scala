@@ -65,14 +65,19 @@ object BatchParser:
     /** Put a single value to a cell with optional format */
     case Put(ref: String, value: CellValue, format: Option[NumFmt])
 
-    /** Put a formula to a single cell */
-    case PutFormula(ref: String, formula: String)
+    /** Put a formula to a single cell with optional number format (GH-356) */
+    case PutFormula(ref: String, formula: String, format: Option[NumFmt] = None)
 
     /** Put a formula to a range with dragging (from anchor cell) */
-    case PutFormulaDragging(range: String, formula: String, from: String)
+    case PutFormulaDragging(
+      range: String,
+      formula: String,
+      from: String,
+      format: Option[NumFmt] = None
+    )
 
     /** Put explicit formulas to a range (no dragging) */
-    case PutFormulas(range: String, formulas: Vector[String])
+    case PutFormulas(range: String, formulas: Vector[String], format: Option[NumFmt] = None)
 
     /** Put explicit values to a range (row-major order) */
     case PutValues(range: String, values: Vector[ParsedValue])
@@ -106,23 +111,27 @@ object BatchParser:
    */
   final case class ParseResult(ops: Vector[BatchOp], warnings: Vector[String])
 
+  /** Render an optional format suffix like " (Currency)" / " (#,##0.0)". */
+  private def formatSuffix(fmt: Option[NumFmt]): String =
+    fmt
+      .map {
+        case NumFmt.Custom(code) => s" ($code)"
+        case f => s" ($f)"
+      }
+      .getOrElse("")
+
   /** Format a human-readable summary of batch operations. */
   def formatSummary(ops: Vector[BatchOp]): String =
     ops
       .map {
         case BatchOp.Put(ref, value, fmt) =>
-          val fmtStr = fmt
-            .map {
-              case NumFmt.Custom(code) => s" ($code)"
-              case f => s" ($f)"
-            }
-            .getOrElse("")
-          s"  PUT $ref = $value$fmtStr"
-        case BatchOp.PutFormula(ref, formula) => s"  PUTF $ref = $formula"
-        case BatchOp.PutFormulaDragging(range, formula, from) =>
-          s"  PUTF $range = $formula (from $from)"
-        case BatchOp.PutFormulas(range, formulas) =>
-          s"  PUTF $range = [${formulas.length} formulas]"
+          s"  PUT $ref = $value${formatSuffix(fmt)}"
+        case BatchOp.PutFormula(ref, formula, fmt) =>
+          s"  PUTF $ref = $formula${formatSuffix(fmt)}"
+        case BatchOp.PutFormulaDragging(range, formula, from, fmt) =>
+          s"  PUTF $range = $formula (from $from)${formatSuffix(fmt)}"
+        case BatchOp.PutFormulas(range, formulas, fmt) =>
+          s"  PUTF $range = [${formulas.length} formulas]${formatSuffix(fmt)}"
         case BatchOp.PutValues(range, values) =>
           s"  PUT $range = [${values.length} values]"
         case BatchOp.Style(range, _) => s"  STYLE $range"
@@ -260,6 +269,8 @@ object BatchParser:
           case "putf" =>
             collectUnknownPropsWarning(objMap, knownPutfProps, "putf", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
+            // Optional number format applied to the formula cell(s) — parity with put (GH-356)
+            val format = objMap.get("format").flatMap(_.strOpt).flatMap(parseFormatName)
             // Check for explicit formulas array first
             objMap.get("values") match
               case Some(arr) if arr.arrOpt.isDefined =>
@@ -270,13 +281,13 @@ object BatchParser:
                     )
                   )
                 }
-                BatchOp.PutFormulas(ref, formulas)
+                BatchOp.PutFormulas(ref, formulas, format)
               case _ =>
                 val formula = requireStringValue(objMap, idx)
                 // Check for 'from' field for formula dragging
                 objMap.get("from").flatMap(_.strOpt) match
-                  case Some(fromRef) => BatchOp.PutFormulaDragging(ref, formula, fromRef)
-                  case None => BatchOp.PutFormula(ref, formula)
+                  case Some(fromRef) => BatchOp.PutFormulaDragging(ref, formula, fromRef, format)
+                  case None => BatchOp.PutFormula(ref, formula, format)
 
           case "style" =>
             collectUnknownPropsWarning(objMap, knownStyleProps, "style", idx).foreach(warnings += _)
@@ -404,7 +415,7 @@ object BatchParser:
   private val knownPutProps = Set("op", "ref", "value", "values", "format", "detect")
 
   /** Known properties for 'putf' operation */
-  private val knownPutfProps = Set("op", "ref", "value", "formula", "values", "from")
+  private val knownPutfProps = Set("op", "ref", "value", "formula", "values", "from", "format")
 
   /** Known properties for 'style' operation */
   private val knownStyleProps = Set(
@@ -769,14 +780,14 @@ object BatchParser:
           case BatchOp.Put(refStr, cellValue, format) =>
             applyPutTyped(currentWb, defaultSheetName, refStr, cellValue, format)
 
-          case BatchOp.PutFormula(refStr, formula) =>
-            applyPutFormula(currentWb, defaultSheetName, refStr, formula)
+          case BatchOp.PutFormula(refStr, formula, format) =>
+            applyPutFormula(currentWb, defaultSheetName, refStr, formula, format)
 
-          case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef) =>
-            applyPutFormulaDragging(currentWb, defaultSheetName, rangeStr, formula, fromRef)
+          case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
+            applyPutFormulaDragging(currentWb, defaultSheetName, rangeStr, formula, fromRef, format)
 
-          case BatchOp.PutFormulas(rangeStr, formulas) =>
-            applyPutFormulas(currentWb, defaultSheetName, rangeStr, formulas)
+          case BatchOp.PutFormulas(rangeStr, formulas, format) =>
+            applyPutFormulas(currentWb, defaultSheetName, rangeStr, formulas, format)
 
           case BatchOp.PutValues(rangeStr, values) =>
             applyPutValues(currentWb, defaultSheetName, rangeStr, values)
@@ -926,12 +937,27 @@ object BatchParser:
         // No format - just put the value
         updateSheet(wb, sheetName)(_.put(ref, cellValue))
 
+  /**
+   * Merge a number format into the cell's existing style (GH-356).
+   *
+   * Formula cells cannot reuse `Formatted` (that wraps VALUES); instead the numFmt is applied as a
+   * style write on top of whatever style the cell already has — the same semantics as the style
+   * batch op's numFormat property.
+   */
+  private def applyNumFmt(sheet: Sheet, ref: ARef, format: Option[NumFmt]): Sheet =
+    format match
+      case Some(numFmt) =>
+        val existing = sheet.getCellStyle(ref).getOrElse(CellStyle.default)
+        sheet.style(ref, existing.withNumFmt(numFmt))
+      case None => sheet
+
   /** Apply a single formula to a cell */
   private def applyPutFormula(
     wb: Workbook,
     defaultSheetName: Option[SheetName],
     refStr: String,
-    formulaStr: String
+    formulaStr: String,
+    format: Option[NumFmt]
   ): IO[Workbook] =
     val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
     val value = CellValue.Formula(formula, None)
@@ -940,12 +966,12 @@ object BatchParser:
       case RefType.Cell(ref) =>
         defaultSheetName match
           case Some(sheetName) =>
-            updateSheet(wb, sheetName)(_.put(ref -> value))
+            updateSheet(wb, sheetName)(s => applyNumFmt(s.put(ref -> value), ref, format))
           case None =>
             IO.raiseError(new Exception(s"batch requires --sheet for unqualified ref '$refStr'"))
 
       case RefType.QualifiedCell(sheetName, ref) =>
-        updateSheet(wb, sheetName)(_.put(ref -> value))
+        updateSheet(wb, sheetName)(s => applyNumFmt(s.put(ref -> value), ref, format))
 
       case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
         IO.raiseError(
@@ -962,7 +988,8 @@ object BatchParser:
     defaultSheetName: Option[SheetName],
     rangeStr: String,
     formulaStr: String,
-    fromRef: String
+    fromRef: String,
+    format: Option[NumFmt]
   ): IO[Workbook] =
     val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
     val fullFormula = s"=$formula"
@@ -995,7 +1022,11 @@ object BatchParser:
           val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
           val cachedValue =
             SheetEvaluator.evaluateFormula(s)(s"=$shiftedFormula", workbook = Some(wb)).toOption
-          s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
+          applyNumFmt(
+            s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue)),
+            targetRef,
+            format
+          )
         }
       }
     yield result
@@ -1005,7 +1036,8 @@ object BatchParser:
     wb: Workbook,
     defaultSheetName: Option[SheetName],
     rangeStr: String,
-    formulas: Vector[String]
+    formulas: Vector[String],
+    format: Option[NumFmt]
   ): IO[Workbook] =
     for
       rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
@@ -1028,7 +1060,7 @@ object BatchParser:
           val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
           val cachedValue =
             SheetEvaluator.evaluateFormula(s)(s"=$formula", workbook = Some(wb)).toOption
-          s.put(ref, CellValue.Formula(formula, cachedValue))
+          applyNumFmt(s.put(ref, CellValue.Formula(formula, cachedValue)), ref, format)
         }
       }
     yield result
