@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Data-validation authoring** (#375): typed list dropdowns —
+  `sheet.withDataValidation(range, DataValidation.list("\"Yes,No\""))` or a
+  range-ref formula — with allowBlank/showDropdown (OOXML's inverted
+  `showDropDown` handled), multi-range sqref, structural-edit range
+  shifting, and read-side parse into the model (read→edit→write keeps
+  validations on rewritten sheets); unmodeled validation kinds survive
+  byte-faithfully as `Preserved`, mirroring conditional formatting.
+- **calcPr authoring** (#373, part a): `WorkbookMetadata.calcPr` /
+  `Workbook.withCalcPr(CalcPr(iterativeCalculation, maxIterations,
+  maxChange))` emits `<calcPr iterate iterateCount iterateDelta/>` on
+  scratch builds and overlays onto preserved calcPr (calcId/refMode
+  survive) — from-scratch replicas of circular models open in Excel with
+  iterative calc ON. Bounded iterative evaluation (part b) remains open.
+- **Patch comment + conditional-format cases** (#379):
+  `Patch.SetComment` / `Patch.SetConditionalFormat` with DSL operators
+  (`ref.comment(...)`, `range.conditionalFormat(rule)`) — section builders
+  composed as patches can now attach provenance comments and CF rules;
+  auto-priority stamping routes through `Sheet.conditionalFormat`.
+- **Text rotation** (#380): `Align.textRotation` (0–180 + 255 stacked, with
+  `CellStyle.rotated(deg)` accepting Excel-UI negative degrees) — rotated
+  sensitivity-grid captions author, serialize on both backends, stream
+  through `StylePatcher`, and participate in style dedup correctly.
+- **Runtime column handles** (#361): `Column.parse("D")` and a total
+  `RefType.col` — column-oriented builders can fold over runtime letters
+  (`Column.parse(c)` → `setColumnProperties`) with no compile-time literal.
+- **Recalculating write** (#360): `Excel.writeRecalculated(wb, path)` (xl
+  aggregator/scripting prelude) recalculates, writes the cached workbook,
+  and returns the `RecalcResult` — the one-call answer to the
+  "wrote blanks because nothing recalculated" footgun; formula errors are
+  data (the file still writes; inspect `result.errors`).
+
 - **Excel percent postfix operator** (#355): `=A1*10%`, `=10%`, `=(1+5%)^2`
   parse, evaluate (`10%` → exact `0.1`), broadcast over ranges (`=A1:C1%`),
   and print back byte-identically (never rewritten to `/100`); precedence
