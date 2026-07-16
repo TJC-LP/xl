@@ -28,6 +28,22 @@ object Column:
       if index < 0 || index > MaxIndex0 then Left(s"Column index out of range: $index")
       else Right(index)
 
+  /**
+   * Parse a column from Excel letter notation at runtime (`"D"`, `"aa"` — case-insensitive).
+   *
+   * Runtime counterpart of the compile-time `ref` literal for code that computes column letters
+   * dynamically (e.g. folding over `Vector("C", "D")` to set widths). Trailing row digits are
+   * tolerated and discarded (`"D1"` parses as column D) so full A1 refs can be passed directly; any
+   * other suffix (anchors, ranges, mixed letters) is rejected. Strict letters-only parsing is
+   * [[fromLetter]].
+   */
+  def parse(input: String): Either[String, Column] =
+    val normalized = input.toUpperCase(Locale.ROOT)
+    val (letters, rest) = normalized.span(c => c >= 'A' && c <= 'Z')
+    if letters.isEmpty then Left(s"No column letters in: $input")
+    else if !rest.forall(c => c >= '0' && c <= '9') then Left(s"Invalid column: $input")
+    else fromLetter(letters)
+
   extension (col: Column)
     /** Get 0-based index (0 = A, 1 = B, ...) */
     def index0: Int = col

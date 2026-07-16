@@ -23,6 +23,9 @@ object BaseImportProbe:
   val constructed: ARef = ARef(column, theRow)
   val fromIdx: ARef = ARef.from0(2, 2)
   val parsed: Either[String, ARef] = ARef.parse("C3")
+  val colParsed: Either[String, Column] = Column.parse("D")
+  val colFromRef: Either[String, Column] = Column.parse("D1") // trailing row tolerated
+  val refTypeCol: Either[String, Column] = RefType.parse("Sales!C2:E9").map(_.col)
 
   // Extension methods chained directly on factory results (demo.sc regression)
   val chainedLetter: String = Column.from0(0).toLetter

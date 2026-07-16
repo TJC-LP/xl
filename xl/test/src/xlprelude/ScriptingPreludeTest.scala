@@ -84,6 +84,18 @@ class ScriptingPreludeTest extends FunSuite:
     val sheet = Sheet("Dyn").put(patch)
     assertEquals(sheet.cells.size, 1)
 
+  test("runtime column letters drive setColumnProperties (no macro literal, GH-361)"):
+    val widths = Vector("C" -> 14.0, "D" -> 22.0)
+    val sheet = widths.foldLeft(Sheet("Widths")) { case (s, (letter, w)) =>
+      val col = Column.parse(letter).getOrElse(fail(s"unparseable column: $letter"))
+      s.setColumnProperties(col, ColumnProperties(width = Some(w)))
+    }
+    assertEquals(sheet.columnProperties.size, 2)
+    assertEquals(sheet.getColumnProperties(Column.from0(3)).width, Some(22.0))
+    // Runtime-parsed RefType exposes the column handle directly
+    assertEquals(RefType.parse("E3").map(_.col.toLetter), Right("E"))
+    assertEquals(RefType.parse("Sales!C2:E9").map(_.col.toLetter), Right("C"))
+
   test("rich text extensions resolve"):
     val rich = "Status: ".bold + "ACTIVE".green
     val sheet = Sheet("Rich").put(ref"A1", rich)
