@@ -19,7 +19,7 @@ Everything below is in scope after `import com.tjclp.xl.scripting.{*, given}`.
 | `SheetView` | display settings: `(showGridLines, zoomScale, tabSelected)` — see Sheet View & Print Setup |
 | `PageSetup` | print settings: scale, orientation, fit, header/footer, margins, print area, repeat rows |
 | `DataValidation` | `.Rules(ranges, kind, allowBlank, showDropdown)` \| `.Preserved` — list dropdowns via `DataValidation.list`/`listOf` |
-| `CalcPr` | workbook `<calcPr>`: `(iterativeCalculation, maxIterations, maxChange)` — iterative-calc authoring |
+| `CalcPr` | workbook `<calcPr>`: `(iterativeCalculation, maxIterations, maxChange, calcMode, fullCalcOnLoad, calcId)` — iterative-calc + calculation-mode authoring; `CalcMode.Manual/Auto/AutoNoTable` (0.14.0) |
 | `IterativeCalc` | `(maxIter, maxChange)` — opt-in bounded circular recalc; `fromCalcPr` bridges a file's `CalcPr` |
 | `NumFmt` | `General`, `Currency`, `Percent`, `Date`, `DateTime`, `Decimal`, custom |
 | `Formatted` | `(value: CellValue, numFmt: NumFmt)` — value + display format pair |

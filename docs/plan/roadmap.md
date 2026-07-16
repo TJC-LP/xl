@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **108 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 4,085 tests passing.
 
-**Current Version**: **0.13.0 "Fixpoint"** (released 2026-07-16)
+**Current Version**: **0.14.0 "Candor"** (released 2026-07-16)
 
 ---
 
@@ -60,6 +60,10 @@ Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture cor
 ### v0.12.1 "Clean Sweep" — wave 7 (Released 2026-06-11)
 
 Every remaining open issue closed in one wave. **Conditional formatting** ([#136](https://github.com/TJC-LP/xl/issues/136)) is the headline — typed cellIs/expression/colorScale/dataBar/top10/text rules + `dxf` differential formats, `sheet.conditionalFormat` authoring with auto-priority, structural-edit range shifting, unmodeled families preserved byte-faithfully — alongside twelve fidelity/writer fixes: openpyxl comment subdirectory dialect (#292), RichText SST keying (#303), exact surgical SST counts (#304), `[Content_Types]` preservation (#314), identity-keyed source mappings (#315), activeTab (#294), fitToPage tri-state (#284), `Cell.comment` deprecated→`Sheet.comments` (#295). Codec `put` paths 2.4x faster (#297).
+
+### v0.14.0 "Candor" — wave 17 + #400 (Released 2026-07-16)
+
+The replication campaign's finale (PRs #401, #402): the **typed-result refactor** ([#344](https://github.com/TJC-LP/xl/issues/344), design-panel-directed) makes Excel error values first-class evaluation results — `=1/0` → `#DIV/0!` as a catchable, cacheable value; aggregate/logical/comparison propagation per Excel per-function policy; op-level `#NUM!` classification; `#N/A` dimension padding; TRUE/FALSE text conditions; host failures stay loud behind a law-tested boundary — plus xl-agent robustness (pause_turn auto-resume, errored-task accounting, trace-overwrite guard) and **full calcPr authoring** ([#400](https://github.com/TJC-LP/xl/issues/400): calcMode/fullCalcOnLoad/calcId — the last tjc-modeling zip patch retired). Campaign complete: every issue in waves W1–W7 closed across 0.12.7 → 0.13.0 → 0.14.0. Open follow-ups: [#394](https://github.com/TJC-LP/xl/issues/394)–[#397](https://github.com/TJC-LP/xl/issues/397).
 
 ### v0.13.0 "Fixpoint" — waves 13–16 (Released 2026-07-16)
 

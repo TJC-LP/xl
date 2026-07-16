@@ -170,7 +170,7 @@ chmod +x examples/my_example.sc
 ./examples/my_example.sc
 ```
 
-The `project.scala` file centralizes dependencies (`com.tjclp::xl:0.13.0`) for all examples.
+The `project.scala` file centralizes dependencies (`com.tjclp::xl:0.14.0`) for all examples.
 
 ## Scripting Prelude & Skill
 

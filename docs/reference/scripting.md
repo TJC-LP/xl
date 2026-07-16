@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.13.0
+//> using dep com.tjclp::xl:0.14.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.13.0
+//> using dep com.tjclp::xl:0.14.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -167,7 +167,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.13.0
+//> using dep com.tjclp::xl:0.14.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -217,8 +217,9 @@ For Excel-style format inheritance on formula entry, use the opt-in
 |--------|---------|
 | `workbook` | The workbook with every successful formula cached (`Formula(expr, Some(value))`) |
 | `evaluated` | `Map[SheetName, Map[ARef, CellValue]]` — computed values for inspection |
-| `errors` | `Vector[CellEvalError]` — per-cell failures (parse/eval errors, cycle participants, cells blocked by a cycle) |
-| `isClean` | `true` when `errors.isEmpty` |
+| `errors` | `Vector[CellEvalError]` — per-cell **host failures** (parse errors, missing sheets, cycle participants, cells blocked by a cycle). Since 0.14.0, Excel **error values** (`#DIV/0!`, `#N/A`, …) are *results*, not failures — they cache like any value and do not appear here |
+| `excelErrors` | (0.14.0) `Vector[(SheetName, ARef, CellError)]` — cells whose cached result is an Excel error value, sorted; inspect when you want to surface `#DIV/0!`s without treating them as host failures |
+| `isClean` | `true` when `errors.isEmpty` — a workbook full of cached `#DIV/0!`s is "clean" (the recalculation succeeded; the errors are data) |
 | `toEither` | `Right(workbook)` when clean, `Left(errors)` otherwise — for fail-hard pipelines |
 
 Reference cycles are **isolated**: the participants and their downstream dependents are reported
@@ -298,7 +299,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.13.0
+//> using dep com.tjclp::xl:0.14.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -352,7 +353,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.13.0
+//> using dep com.tjclp::xl:0.14.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
