@@ -206,7 +206,7 @@ View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG
 | `--raster-output` | path | For raster | — | Output file (required for png/jpeg/webp/pdf) |
 | `--dpi` | int | No | 144 | Resolution for raster output |
 | `--quality` | int | No | 90 | JPEG quality 1-100 |
-| `--rasterizer` | string | No | batik | PNG/JPEG export uses Apache Batik by default (pure JVM, no external tools). Force another backend: cairosvg, rsvg-convert, resvg, imagemagick (explicit opt-in since 0.11.3) |
+| `--rasterizer` | string | No | batik | PNG/JPEG export uses Apache Batik by default (pure JVM, no external tools). Force another backend: cairosvg, rsvg-convert, resvg, imagemagick (explicit opt-in since 0.11.3). Native binaries need an external backend — see [`xl rasterizers`](#xl-rasterizers) |
 | `--gridlines` | flag | No | false | Show cell gridlines in SVG output |
 | `--print-scale` | flag | No | false | Apply print scaling (for PDF-like output) |
 
@@ -218,6 +218,29 @@ View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG
 | 2 | COGS        |         | $400,000   |         |
 | 4 | Gross Profit|         | =C1-C2     |         |
 ```
+
+---
+
+### `xl rasterizers`
+
+List SVG-to-raster backends with live availability on this machine (no `-f` needed). PNG/JPEG/WebP/PDF export probes backends in this order: `batik` → `cairosvg` → `rsvg-convert` → `resvg`; `imagemagick` is never probed automatically (fragile SVG delegate) and must be forced with `--rasterizer imagemagick`.
+
+**Platform matrix**:
+
+| Distribution | Rasterization |
+|--------------|---------------|
+| JAR (`java -jar`, `make install-jar`) | Works out of the box — Batik is bundled (pure JVM, needs AWT) |
+| Native binary (GitHub releases, `make install`) | Batik cannot work (no AWT under native-image, by design) — one external tool is required |
+
+**External tool installs** (any one is enough):
+
+```bash
+pip install cairosvg          # Python, most portable
+apt install librsvg2-bin      # rsvg-convert (Debian/Ubuntu); brew install librsvg (macOS)
+cargo install resvg           # or a prebuilt binary: github.com/linebender/resvg/releases
+```
+
+When no backend is available, raster exports fail with an error naming the probed chain and pointing back at `xl rasterizers`. `--format svg` always works (pure vector, no backend needed).
 
 ---
 

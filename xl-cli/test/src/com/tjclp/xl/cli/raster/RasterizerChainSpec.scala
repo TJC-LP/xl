@@ -116,10 +116,55 @@ class RasterizerChainSpec extends CatsEffectSuite:
     )
   }
 
+  test("NoRasterizerAvailable message points at xl rasterizers (GH-359)") {
+    val error =
+      RasterError.NoRasterizerAvailable(List("Batik", "cairosvg", "rsvg-convert", "resvg"))
+    assert(
+      error.message.contains("xl rasterizers"),
+      s"Should point at the xl rasterizers command: ${error.message}"
+    )
+  }
+
+  test("NoRasterizerAvailable message mentions resvg prebuilt releases (GH-359)") {
+    val error = RasterError.NoRasterizerAvailable(List("Batik"))
+    assert(
+      error.message.contains("releases"),
+      s"Should mention resvg prebuilt release binaries: ${error.message}"
+    )
+  }
+
+  test("NoRasterizerAvailable on the native binary says Batik is unavailable by design (GH-359)") {
+    val error = RasterError.NoRasterizerAvailable(
+      List("Batik", "cairosvg", "rsvg-convert", "resvg"),
+      runningNativeImage = true
+    )
+    assert(error.message.contains("native binary"), s"native wording: ${error.message}")
+    assert(error.message.contains("by design"), s"by-design wording: ${error.message}")
+    assert(error.message.contains("pip install cairosvg"), "install one-liner: cairosvg")
+    assert(error.message.contains("librsvg2-bin"), "install one-liner: rsvg-convert")
+  }
+
+  test("NoRasterizerAvailable on the JVM explains the JAR-vs-native matrix (GH-359)") {
+    val error = RasterError.NoRasterizerAvailable(List("Batik"), runningNativeImage = false)
+    assert(error.message.contains("JAR distribution"), s"jar wording: ${error.message}")
+    assert(
+      !error.message.contains("Running as a native binary"),
+      s"must not claim native on the JVM: ${error.message}"
+    )
+  }
+
   test("RasterizerNotFound message includes name and hint") {
     val error = RasterError.RasterizerNotFound("cairosvg", "Install: pip install cairosvg")
     assert(error.message.contains("cairosvg"), "Should mention rasterizer name")
     assert(error.message.contains("pip install"), "Should include install hint")
+  }
+
+  test("RasterizerNotFound message points at xl rasterizers (GH-359)") {
+    val error = RasterError.RasterizerNotFound("batik", "Batik requires AWT")
+    assert(
+      error.message.contains("xl rasterizers"),
+      s"Should point at the xl rasterizers command: ${error.message}"
+    )
   }
 
   test("FormatNotSupported message includes rasterizer and format") {
@@ -139,6 +184,30 @@ class RasterizerChainSpec extends CatsEffectSuite:
     val error = RasterError.FormatNotSupported("test", RasterFormat.Png)
     assertEquals(error.getMessage, error.message)
     assert(error.isInstanceOf[Exception])
+  }
+
+  // ========== Native-Image Detection Tests (GH-359) ==========
+
+  test("NativeImage.detect: true when Substrate sets imagecode=runtime") {
+    assert(NativeImage.detect(Map("org.graalvm.nativeimage.imagecode" -> "runtime").get))
+  }
+
+  test("NativeImage.detect: false at image build time (imagecode=buildtime)") {
+    // Build-time init runs on a hosting JVM where AWT may exist; only image runtime matters.
+    assert(!NativeImage.detect(Map("org.graalvm.nativeimage.imagecode" -> "buildtime").get))
+  }
+
+  test("NativeImage.detect: true when java.vm.name reports Substrate VM (fallback)") {
+    assert(NativeImage.detect(Map("java.vm.name" -> "Substrate VM").get))
+  }
+
+  test("NativeImage.detect: false on a standard JVM") {
+    assert(!NativeImage.detect(Map("java.vm.name" -> "OpenJDK 64-Bit Server VM").get))
+    assert(!NativeImage.detect(_ => None))
+  }
+
+  test("NativeImage.inNativeImage is false when tests run on the JVM") {
+    assert(!NativeImage.inNativeImage)
   }
 
   // ========== RasterizerChain Configuration Tests ==========

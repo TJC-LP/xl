@@ -69,6 +69,28 @@ enum RasterFormat:
     case Pdf => "pdf"
 
 /**
+ * GraalVM native-image runtime detection, used to explain why the bundled Batik backend (which
+ * needs AWT) can never work in the shipped native binary.
+ *
+ * Mirrors `org.graalvm.nativeimage.ImageInfo.inImageRuntimeCode()` without a compile-time GraalVM
+ * dependency: ImageInfo itself answers by reading the `org.graalvm.nativeimage.imagecode` system
+ * property, which Substrate VM sets to "runtime" inside every native binary. A reflective
+ * `Class.forName("org.graalvm.nativeimage.ImageInfo")` would be strictly less reliable here - the
+ * class is absent from JVM classpaths and may be unregistered for reflection inside the image - so
+ * the property is read directly. `java.vm.name` containing "Substrate VM" is kept as a fallback for
+ * older GraalVM releases.
+ */
+object NativeImage:
+
+  /** True when running inside a GraalVM native binary (never true on a regular JVM). */
+  lazy val inNativeImage: Boolean = detect(sys.props.get)
+
+  /** Detection core with injectable properties so both environments are unit-testable. */
+  private[cli] def detect(prop: String => Option[String]): Boolean =
+    prop("org.graalvm.nativeimage.imagecode").exists(_.equalsIgnoreCase("runtime")) ||
+      prop("java.vm.name").exists(_.contains("Substrate"))
+
+/**
  * Errors that can occur during rasterization.
  */
 sealed trait RasterError extends Exception:
@@ -77,14 +99,29 @@ sealed trait RasterError extends Exception:
 
 object RasterError:
   /** No rasterizer available on the system */
-  case class NoRasterizerAvailable(triedRasterizers: List[String]) extends RasterError:
+  case class NoRasterizerAvailable(
+    triedRasterizers: List[String],
+    runningNativeImage: Boolean = NativeImage.inNativeImage
+  ) extends RasterError:
     def message: String =
+      val platformNote =
+        if runningNativeImage then
+          "Running as a native binary: the bundled Batik backend needs AWT and is\n" +
+            "unavailable by design - install one of the external tools below."
+        else
+          "Note: the JAR distribution rasterizes out-of-the-box (bundled Batik); the\n" +
+            "native binary always needs one of the external tools below."
       s"""No SVG rasterizer available. Tried: ${triedRasterizers.mkString(", ")}
+         |
+         |$platformNote
+         |
+         |Run `xl rasterizers` to see backend status on this machine.
          |
          |Install one of:
          |  - cairosvg: pip install cairosvg
          |  - rsvg-convert: apt install librsvg2-bin (Debian/Ubuntu)
-         |  - resvg: cargo install resvg
+         |  - resvg: cargo install resvg, or a prebuilt binary from
+         |    https://github.com/linebender/resvg/releases
          |  - ImageMagick (not tried automatically): apt install imagemagick,
          |    then pass --rasterizer imagemagick
          |
@@ -92,7 +129,8 @@ object RasterError:
 
   /** Specific rasterizer requested but not available */
   case class RasterizerNotFound(name: String, installHint: String) extends RasterError:
-    def message: String = s"Rasterizer '$name' not found. $installHint"
+    def message: String =
+      s"Rasterizer '$name' not found. $installHint (run `xl rasterizers` for backend status)"
 
   /** Format not supported by this rasterizer */
   case class FormatNotSupported(rasterizer: String, format: RasterFormat) extends RasterError:
@@ -263,10 +301,14 @@ object RasterizerChain:
         }
 
   private def installHintFor(name: String): String = name match
-    case "batik" => "Batik is bundled but requires AWT (unavailable in this native image)"
+    case "batik" =>
+      if NativeImage.inNativeImage then
+        "Batik is bundled but needs AWT - unavailable in the native binary by design"
+      else "Batik is bundled but requires AWT, which is unavailable in this environment"
     case "cairosvg" => "Install: pip install cairosvg"
     case "rsvg-convert" => "Install: apt install librsvg2-bin (Debian/Ubuntu)"
-    case "resvg" => "Install: cargo install resvg"
+    case "resvg" =>
+      "Install: cargo install resvg, or a prebuilt binary from https://github.com/linebender/resvg/releases"
     case "imagemagick" => "Install: apt install imagemagick"
     case _ => s"Unknown rasterizer: $name"
 

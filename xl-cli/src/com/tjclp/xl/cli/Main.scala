@@ -31,6 +31,7 @@ import com.tjclp.xl.cli.raster.{
   BatikRasterizer,
   CairoSvg,
   ImageMagick,
+  NativeImage,
   RasterizerChain,
   Resvg,
   RsvgConvert
@@ -1263,12 +1264,6 @@ USAGE:
    *
    * Returns (formatted output, true if at least one rasterizer works). Checks run in parallel for
    * better performance.
-   *
-   * Status terminology:
-   *   - available: Works correctly
-   *   - missing: Binary not in PATH
-   *   - broken: Found but non-functional (e.g., delegate missing)
-   *   - unavailable: Cannot be used in current environment (e.g., Batik on native-image)
    */
   private def formatRasterizerList(): IO[(String, Boolean)] =
     // Run all availability checks in parallel
@@ -1281,60 +1276,99 @@ USAGE:
       ImageMagick.diagnostics
     ).parMapN {
       (batikAvail, cairoAvail, rsvgAvail, resvgAvail, imageMagickAvail, imageMagickDiag) =>
-        val sb = new StringBuilder
-        sb.append("SVG Rasterizer Status\n")
-        sb.append("=" * 60 + "\n\n")
-        sb.append(f"${"Backend"}%-14s | ${"Status"}%-11s | ${"Notes"}\n")
-        sb.append("-" * 60 + "\n")
-
-        // Batik - the default backend; "unavailable" when AWT not present (native image)
-        val batikStatus = if batikAvail then "available" else "unavailable"
-        val batikNote = "Built-in default (requires AWT)"
-        sb.append(f"${"batik"}%-14s | ${batikStatus}%-11s | $batikNote\n")
-
-        // CairoSvg
-        val cairoStatus = if cairoAvail then "available" else "missing"
-        val cairoNote = if cairoAvail then "pip install cairosvg" else "Not in PATH"
-        sb.append(f"${"cairosvg"}%-14s | ${cairoStatus}%-11s | $cairoNote\n")
-
-        // rsvg-convert
-        val rsvgStatus = if rsvgAvail then "available" else "missing"
-        val rsvgNote = if rsvgAvail then "librsvg2-bin" else "Not in PATH"
-        sb.append(f"${"rsvg-convert"}%-14s | ${rsvgStatus}%-11s | $rsvgNote\n")
-
-        // resvg
-        val resvgStatus = if resvgAvail then "available" else "missing"
-        val resvgNote = if resvgAvail then "cargo install resvg" else "Not in PATH"
-        sb.append(f"${"resvg"}%-14s | ${resvgStatus}%-11s | $resvgNote\n")
-
-        // ImageMagick (with delegate check) - explicit opt-in only, never tried automatically
-        // "broken" = found but delegate missing, "missing" = not in PATH
-        val imStatus =
-          if imageMagickAvail then "available"
-          else if imageMagickDiag.contains("missing") then "broken"
-          else "missing"
-        val imNote =
-          val cleaned = imageMagickDiag.replaceAll("ImageMagick \\d+ \\((magick|convert)\\) ", "")
-          val withOptIn =
-            if imageMagickAvail then s"--rasterizer imagemagick only; $cleaned" else cleaned
-          if withOptIn.length > 40 then withOptIn.take(37) + "..." else withOptIn
-        sb.append(f"${"imagemagick"}%-14s | ${imStatus}%-11s | $imNote\n")
-
-        sb.append("\n")
-
-        val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
-        if anyAvailable then
-          sb.append("At least one rasterizer is available for PNG/JPEG/PDF export.\n")
-        else
-          sb.append("WARNING: No rasterizers available! PNG/JPEG/PDF export will fail.\n")
-          sb.append("\nInstall one of:\n")
-          sb.append("  pip install cairosvg           # Python, most portable\n")
-          sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
-          sb.append("  cargo install resvg            # Rust, best quality\n")
-          sb.append("  apt install imagemagick        # then pass --rasterizer imagemagick\n")
-
-        (sb.toString, anyAvailable)
+        renderRasterizerTable(
+          batikAvail = batikAvail,
+          cairoAvail = cairoAvail,
+          rsvgAvail = rsvgAvail,
+          resvgAvail = resvgAvail,
+          imageMagickAvail = imageMagickAvail,
+          imageMagickDiag = imageMagickDiag,
+          nativeImage = NativeImage.inNativeImage
+        )
     }
+
+  /**
+   * Pure formatting core of `xl rasterizers` - separated from the availability probes so every
+   * environment (JVM, native binary, nothing installed) is unit-testable.
+   *
+   * Returns (formatted output, true if at least one rasterizer works).
+   *
+   * Status terminology:
+   *   - available: Works correctly
+   *   - missing: Binary not in PATH
+   *   - broken: Found but non-functional (e.g., delegate missing)
+   *   - unavailable: Cannot be used in current environment (e.g., Batik on native-image)
+   */
+  private[cli] def renderRasterizerTable(
+    batikAvail: Boolean,
+    cairoAvail: Boolean,
+    rsvgAvail: Boolean,
+    resvgAvail: Boolean,
+    imageMagickAvail: Boolean,
+    imageMagickDiag: String,
+    nativeImage: Boolean
+  ): (String, Boolean) =
+    val sb = new StringBuilder
+    sb.append("SVG Rasterizer Status\n")
+    sb.append("=" * 60 + "\n\n")
+    sb.append(f"${"Backend"}%-14s | ${"Status"}%-11s | ${"Notes"}\n")
+    sb.append("-" * 60 + "\n")
+
+    // Batik - the default backend; "unavailable" when AWT not present (native image)
+    val batikStatus = if batikAvail then "available" else "unavailable"
+    val batikNote =
+      if batikAvail then "Built-in default (requires AWT)"
+      else if nativeImage then "Native binary: no AWT, by design"
+      else "Requires AWT (not present here)"
+    sb.append(f"${"batik"}%-14s | ${batikStatus}%-11s | $batikNote\n")
+
+    // CairoSvg
+    val cairoStatus = if cairoAvail then "available" else "missing"
+    val cairoNote = if cairoAvail then "pip install cairosvg" else "Not in PATH"
+    sb.append(f"${"cairosvg"}%-14s | ${cairoStatus}%-11s | $cairoNote\n")
+
+    // rsvg-convert
+    val rsvgStatus = if rsvgAvail then "available" else "missing"
+    val rsvgNote = if rsvgAvail then "librsvg2-bin" else "Not in PATH"
+    sb.append(f"${"rsvg-convert"}%-14s | ${rsvgStatus}%-11s | $rsvgNote\n")
+
+    // resvg
+    val resvgStatus = if resvgAvail then "available" else "missing"
+    val resvgNote = if resvgAvail then "cargo install resvg" else "Not in PATH"
+    sb.append(f"${"resvg"}%-14s | ${resvgStatus}%-11s | $resvgNote\n")
+
+    // ImageMagick (with delegate check) - explicit opt-in only, never tried automatically
+    // "broken" = found but delegate missing, "missing" = not in PATH
+    val imStatus =
+      if imageMagickAvail then "available"
+      else if imageMagickDiag.contains("missing") then "broken"
+      else "missing"
+    val imNote =
+      val cleaned = imageMagickDiag.replaceAll("ImageMagick \\d+ \\((magick|convert)\\) ", "")
+      val withOptIn =
+        if imageMagickAvail then s"--rasterizer imagemagick only; $cleaned" else cleaned
+      if withOptIn.length > 40 then withOptIn.take(37) + "..." else withOptIn
+    sb.append(f"${"imagemagick"}%-14s | ${imStatus}%-11s | $imNote\n")
+
+    sb.append("\n")
+
+    val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
+    if anyAvailable then
+      sb.append("At least one rasterizer is available for PNG/JPEG/PDF export.\n")
+    else
+      sb.append("WARNING: No rasterizers available! PNG/JPEG/PDF export will fail.\n")
+      if nativeImage then
+        sb.append("This is the native binary: the bundled Batik backend needs AWT and can\n")
+        sb.append("never work here - install one of the external tools below.\n")
+      sb.append("\nInstall one of:\n")
+      sb.append("  pip install cairosvg           # Python, most portable\n")
+      sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
+      sb.append(
+        "  cargo install resvg            # or prebuilt: github.com/linebender/resvg/releases\n"
+      )
+      sb.append("  apt install imagemagick        # then pass --rasterizer imagemagick\n")
+
+    (sb.toString, anyAvailable)
 
   private def formatFunctionList(): String =
     // Dynamically get all functions from the registry
