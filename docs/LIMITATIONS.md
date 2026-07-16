@@ -832,7 +832,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 ### If you hit a limitation today:
 
 1. **Need advanced charts/shapes**: XL authors typed bar/line/pie charts + embedded pictures (#222, #221; scoped — see §12/§13) and preserves everything else through edits; reach for POI only for chart types XL doesn't model yet (scatter/area/combo/3D, shapes)
-2. **Unsupported formula function**: Store the formula as a string and let Excel recalculate on open (XL evaluates the 107 built-ins)
+2. **Unsupported formula function**: Store the formula as a string and let Excel recalculate on open (XL evaluates the 108 built-ins)
 3. **Streaming update of one sheet in a huge workbook**: Use the in-memory read → modify → write path (surgical modification preserves untouched parts)
 
 ---
