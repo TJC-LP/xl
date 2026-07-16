@@ -250,7 +250,9 @@ class ContentTypesReconcileSpec extends FunSuite:
       s"legacyDrawing element must not reference a dropped VML rel:\n$sheetXml"
     )
 
-  test("GH-328: cell edit removing the last comment prunes CT override, sheet rels, legacyDrawing") {
+  test(
+    "GH-328: cell edit removing the last comment prunes CT override, sheet rels, legacyDrawing"
+  ) {
     // Excel-dialect source written by XL itself: comments1.xml + vmlDrawing1.vml
     val notes = Sheet(SheetName.unsafe("Notes"))
       .put(ref"A1" -> "hello")

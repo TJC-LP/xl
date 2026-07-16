@@ -221,7 +221,10 @@ class DirectSaxEmitterParitySpec extends FunSuite:
       .put(
         e1,
         // GH-378: cached DateTime must serialize identically on both backends
-        CellValue.Formula("EDATE(B2,1)", Some(CellValue.DateTime(LocalDateTime.of(2024, 2, 2, 3, 4))))
+        CellValue.Formula(
+          "EDATE(B2,1)",
+          Some(CellValue.DateTime(LocalDateTime.of(2024, 2, 2, 3, 4)))
+        )
       )
       .put(a2, CellValue.RichText(rich))
       .put(b2, CellValue.DateTime(LocalDateTime.of(2024, 1, 2, 3, 4)))

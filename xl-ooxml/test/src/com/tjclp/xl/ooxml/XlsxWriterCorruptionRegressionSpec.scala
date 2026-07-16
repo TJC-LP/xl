@@ -14,7 +14,17 @@ import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-import com.tjclp.xl.styles.{Border, BorderSide, BorderStyle, CellStyle, Color, Dxf, Fill, Font, ThemeSlot}
+import com.tjclp.xl.styles.{
+  Border,
+  BorderSide,
+  BorderStyle,
+  CellStyle,
+  Color,
+  Dxf,
+  Fill,
+  Font,
+  ThemeSlot
+}
 import munit.FunSuite
 
 /**
@@ -950,7 +960,8 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     val style = CellStyle(
       font = Font(color = Some(Color.Theme(ThemeSlot.Dark1, 0.0))),
       fill = Fill.Solid(Color.Theme(ThemeSlot.Accent2, 0.25)),
-      border = Border(bottom = BorderSide(BorderStyle.Thin, Some(Color.Theme(ThemeSlot.Accent6, -0.1))))
+      border =
+        Border(bottom = BorderSide(BorderStyle.Thin, Some(Color.Theme(ThemeSlot.Accent6, -0.1))))
     )
     val sheet = Sheet(SheetName.unsafe("Themed"))
       .put(ref"A1" -> "themed")
