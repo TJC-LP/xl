@@ -5,6 +5,8 @@ import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
+import com.tjclp.xl.cells.CellError
+
 trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
   val pmt: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
     FunctionSpec.simple[BigDecimal, TvmArgs](
@@ -176,10 +178,11 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
           @annotation.tailrec
           def loop(iter: Int, r: Double): Either[EvalError, BigDecimal] =
             if iter >= maxIter then
+              // GH-344: Excel #NUM! for non-convergence (op-level classification)
               Left(
-                EvalError.EvalFailed(
-                  s"RATE did not converge after $maxIter iterations",
-                  Some("RATE(nper, pmt, pv, [fv], [type], [guess])")
+                EvalError.ErrorValue(
+                  CellError.Num,
+                  Some(s"RATE did not converge after $maxIter iterations")
                 )
               )
             else

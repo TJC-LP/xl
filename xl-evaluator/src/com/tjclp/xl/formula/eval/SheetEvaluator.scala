@@ -435,11 +435,14 @@ object SheetEvaluator:
           )
         )
 
-      // Evaluate TExpr against sheet
-      result <- evaluator
-        .eval(expr, sheet, clock, workbook, Some(originRef))
-        .left
-        .map(evalError => evalErrorToXLError(evalError, Some(formula)))
+      // Evaluate TExpr against sheet. GH-344: a Left carrying an Excel error VALUE promotes to
+      // a 1x1 CellValue.Error spilled at the origin; host failures stay loud Lefts.
+      result <- evaluator.eval(expr, sheet, clock, workbook, Some(originRef)) match
+        case scala.util.Right(value) => scala.util.Right(value)
+        case scala.util.Left(evalError) =>
+          EvalError.toErrorValue(evalError) match
+            case Some(code) => scala.util.Right(CellValue.Error(code): Any)
+            case None => scala.util.Left(evalErrorToXLError(evalError, Some(formula)))
 
       // Handle array vs scalar result
       updated <- result match
@@ -448,7 +451,7 @@ object SheetEvaluator:
           val endRef = originRef.shift(ar.cols - 1, ar.rows - 1)
           scala.util.Right((Patch.applyPatch(sheet, patch), CellRange(originRef, endRef)))
         case other =>
-          val cv = toCellValue(other)
+          val cv = EvalResult.toCellValue(other)
           scala.util.Right((sheet.put(originRef, cv), CellRange(originRef, originRef)))
     yield updated
 
@@ -481,7 +484,16 @@ object SheetEvaluator:
           case _ => withFormula
       }
 
-  /** Shared parse → evaluate → CellValue pipeline, parameterized by evaluator (GH-115: rng). */
+  /**
+   * Shared parse → evaluate → CellValue pipeline, parameterized by evaluator (GH-115: rng).
+   *
+   * GH-344: THE boundary-promotion site — a Left classified as an Excel error VALUE by
+   * [[EvalError.toErrorValue]] becomes `Right(CellValue.Error(code))` here, funneling every
+   * `evaluateFormula` overload, `evaluateCell`, `evaluateWithDependencyCheck`,
+   * `wb.evaluateFormula`, `recalculate`, and the CLI. Headline contract:
+   * `sheet.evaluateFormula("=1/0")` is `Right(CellValue.Error(Div0))`. Host failures (parse,
+   * missing workbook/sheet, unknown function, cycles) stay loud Lefts.
+   */
   private def evaluateFormulaWith(
     sheet: Sheet,
     formula: String,
@@ -500,11 +512,13 @@ object SheetEvaluator:
             s"Parse error: $parseError"
           )
         )
-      result <- evaluator
-        .eval(expr, sheet, clock, workbook, currentCell)
-        .left
-        .map(evalError => evalErrorToXLError(evalError, Some(formula)))
-    yield toCellValue(result)
+      result <- evaluator.eval(expr, sheet, clock, workbook, currentCell) match
+        case scala.util.Right(value) => scala.util.Right(EvalResult.toCellValue(value))
+        case scala.util.Left(evalError) =>
+          EvalError.toErrorValue(evalError) match
+            case Some(code) => scala.util.Right(CellValue.Error(code))
+            case None => scala.util.Left(evalErrorToXLError(evalError, Some(formula)))
+    yield result
 
   /** Shared dependency-ordered evaluation, optionally with an explicit rng (GH-115). */
   private def evaluateWithDependencyCheckImpl(
@@ -619,28 +633,6 @@ object SheetEvaluator:
       (DependencyGraph.deferDynamic(evalOrder, bucket), stripFormulaCaches(sheet, bucket))
 
   /**
-   * Convert typed TExpr evaluation result to CellValue.
-   *
-   * Handles all result types: BigDecimal, String, Boolean, Int, LocalDate, LocalDateTime.
-   */
-  private def toCellValue(result: Any): CellValue =
-    result match
-      case cv: CellValue => cv // IFERROR and similar functions return CellValue directly
-      case bd: BigDecimal => CellValue.Number(bd)
-      case s: String => CellValue.Text(s)
-      case b: Boolean => CellValue.Bool(b)
-      case i: Int => CellValue.Number(BigDecimal(i))
-      case ld: LocalDate => CellValue.DateTime(ld.atStartOfDay())
-      case ldt: LocalDateTime => CellValue.DateTime(ldt)
-      case ar: ArrayResult =>
-        // For non-array formula contexts, return top-left value (Excel behavior)
-        if ar.isEmpty then CellValue.Empty
-        else ar(0, 0)
-      case other =>
-        // Fallback for unexpected types (should never happen with well-typed TExpr)
-        CellValue.Text(other.toString)
-
-  /**
    * Convert EvalError to XLError for integration.
    *
    * @param error
@@ -686,6 +678,13 @@ object SheetEvaluator:
         XLError.FormulaError(
           formulaContext.getOrElse(""),
           s"Evaluation failed: $reason${if fullContext.nonEmpty then s" ($fullContext)" else ""}"
+        )
+      // GH-344: unreachable after boundary promotion (toErrorValue promotes every ErrorValue),
+      // kept total for direct callers of this table.
+      case EvalError.ErrorValue(err, ctx) =>
+        XLError.FormulaError(
+          formulaContext.getOrElse(""),
+          ctx.fold(err.toExcel)(c => s"${err.toExcel} ($c)")
         )
       case other =>
         XLError.FormulaError(

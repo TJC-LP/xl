@@ -718,18 +718,24 @@ object WriteCommands:
 
   /**
    * One-line recalculation summary: formula count plus the first few failing refs (GH-352). Formula
-   * errors are data conditions — they are reported, never thrown.
+   * errors are data conditions — they are reported, never thrown. GH-344: formulas that COMPUTE an
+   * Excel error value (#DIV/0!, ...) evaluate cleanly and cache; their count appears as a
+   * parenthetical (only when > 0), separate from could-not-evaluate host failures.
    */
   private def formatRecalcSummary(result: RecalcResult): String =
     val formulaCount = result.evaluated.valuesIterator.map(_.size).sum
     val formulasLabel = if formulaCount == 1 then "formula" else "formulas"
-    if result.isClean then s"Recalculated $formulaCount $formulasLabel"
+    val errorValueCount = result.excelErrors.size
+    val errorValues =
+      if errorValueCount == 0 then ""
+      else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
+    if result.isClean then s"Recalculated $formulaCount $formulasLabel$errorValues"
     else
       val maxShown = 3
       val shown = result.errors.take(maxShown).map(_.render).mkString("; ")
       val ellipsis = if result.errors.size > maxShown then "; ..." else ""
       val errorsLabel = if result.errors.size == 1 then "error" else "errors"
-      s"Recalculated $formulaCount $formulasLabel; ${result.errors.size} $errorsLabel ($shown$ellipsis)"
+      s"Recalculated $formulaCount $formulasLabel$errorValues; ${result.errors.size} $errorsLabel ($shown$ellipsis)"
 
   /**
    * Apply multiple operations atomically (JSON from stdin or file).

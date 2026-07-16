@@ -829,12 +829,18 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
   // ==================== GH-388: TVM Numeric Containment ====================
 
-  /** Expect a contained EvalFailed naming the function — the eval must never throw. */
+  /**
+   * Expect a contained failure naming the function — the eval must never throw. GH-344: a
+   * non-convergence now classifies as the #NUM! error VALUE (still contained, still Left on the
+   * direct-eval channel); NumericGuard blowups stay EvalFailed.
+   */
   private def assertContained(expr: TExpr[BigDecimal], fn: String): Unit =
     evalErr(expr, sheetWith()) match
       case EvalError.EvalFailed(reason, _) =>
         assert(reason.contains(fn), s"unexpected reason: $reason")
-      case other => fail(s"Expected EvalFailed, got $other")
+      case EvalError.ErrorValue(com.tjclp.xl.cells.CellError.Num, Some(ctx)) =>
+        assert(ctx.contains(fn), s"unexpected context: $ctx")
+      case other => fail(s"Expected contained failure, got $other")
 
   test("PMT: zero rate with zero periods is a contained error, never throws (GH-388)") {
     // rate ≈ 0, nper = 0 hits the BigDecimal(Double.NaN) branch

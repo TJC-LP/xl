@@ -11,7 +11,7 @@ import com.tjclp.xl.agent.benchmark.skills.{CaseFailure, Skill, SkillContext}
 import com.tjclp.xl.agent.benchmark.task.*
 import com.tjclp.xl.agent.benchmark.tracing.ConversationTracer
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import java.time.{Duration, Instant}
 
 // ============================================================================
@@ -113,11 +113,18 @@ case class SkillRunResult(
 
 /**
  * Summary statistics for a skill's benchmark run.
+ *
+ * Errored-task accounting (issue #344): a task whose every case errored carries a task-level
+ * `error` (see `ExecutionResult.fromCases`). Such tasks consumed budget and represent real
+ * failures, so they COUNT in `total`, `failed`, usage/latency sums, and the pass-rate denominator —
+ * previously they dropped out of every sum — and are reported distinctly via `errored` (a subset of
+ * `failed`).
  */
 case class SkillSummary(
   total: Int,
   passed: Int,
   failed: Int,
+  errored: Int,
   totalUsage: TokenUsage,
   avgLatencyMs: Double,
   estimatedCost: Option[BigDecimal]
@@ -130,19 +137,20 @@ object SkillSummary:
     results: Vector[ExecutionResult],
     pricing: Option[ModelPricing] = None
   ): SkillSummary =
-    val completed = results.filterNot(_.error.isDefined)
-    val passed = completed.count(_.passed)
+    // ExecutionResult.passed is false whenever error is set, so errored can never pass
+    val passed = results.count(_.passed)
     val totalUsage = {
       import cats.kernel.Monoid
-      Monoid[TokenUsage].combineAll(completed.map(_.usage))
+      Monoid[TokenUsage].combineAll(results.map(_.usage))
     }
     val avgLatency =
-      if completed.isEmpty then 0.0 else completed.map(_.latencyMs).sum.toDouble / completed.size
+      if results.isEmpty then 0.0 else results.map(_.latencyMs).sum.toDouble / results.size
 
     SkillSummary(
-      total = completed.length,
+      total = results.length,
       passed = passed,
-      failed = completed.length - passed,
+      failed = results.length - passed,
+      errored = results.count(_.error.isDefined),
       totalUsage = totalUsage,
       avgLatencyMs = avgLatency,
       estimatedCost = pricing.map(p => totalUsage.estimatedCost(p))
@@ -347,7 +355,8 @@ private class DefaultBenchmarkEngine(
   /**
    * Total fallback for a work unit whose Skill raised: best-effort save of a metadata-only trace
    * (error + model, zero events) so even third-party skill crashes leave forensics on disk (issue
-   * #340).
+   * #340). A skill may have saved its own, richer trace before raising — that one is never
+   * overwritten: the fallback is diverted to a `-engine-fallback` case dir instead (issue #344).
    */
   private def lastResortFailure(
     unit: WorkUnit,
@@ -356,14 +365,26 @@ private class DefaultBenchmarkEngine(
     error: Throwable
   ): IO[WorkUnitResult] =
     val message = s"Execution failed: ${CaseFailure.describe(error)}"
+    val primaryDir = ConversationTracer.caseDir(
+      config.outputDir,
+      unit.task.taskIdValue,
+      unit.skillName,
+      unit.testCase.caseNum,
+      dirSuffix = ""
+    )
     val saveTrace = for
+      hasOwnTrace <- IO.blocking(
+        Files.exists(primaryDir.resolve("conversation.json")) ||
+          Files.exists(primaryDir.resolve("conversation.md"))
+      )
       tracer <- ConversationTracer.create(
         outputDir = config.outputDir,
         taskId = unit.task.taskIdValue,
         skillName = unit.skillName,
         caseNum = unit.testCase.caseNum,
         streaming = false,
-        model = Some(agentConfig.model)
+        model = Some(agentConfig.model),
+        dirSuffix = if hasOwnTrace then ConversationTracer.EngineFallbackDirSuffix else ""
       )
       _ <- tracer.complete(AgentTokenUsage.zero, passed = false, error = Some(message)).attempt
       saved <- tracer.save().attempt

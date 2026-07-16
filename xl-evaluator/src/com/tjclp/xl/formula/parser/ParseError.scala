@@ -157,7 +157,7 @@ enum ParseError derives CanEqual:
    * @param maxDepth
    *   The maximum allowed nesting depth
    *
-   * Example: "=((((...))))" 300 levels deep → NestingTooDeep(256, 256)
+   * Example: "=((((...))))" 300 levels deep → NestingTooDeep(128, 128)
    */
   case NestingTooDeep(depth: Int, maxDepth: Int)
 

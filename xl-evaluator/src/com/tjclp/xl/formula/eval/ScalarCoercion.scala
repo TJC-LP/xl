@@ -46,6 +46,20 @@ private[formula] object ScalarCoercion:
     if ar.isEmpty then CellValue.Empty else ar(0, 0)
 
   /**
+   * GH-344 item 5: Excel coerces exactly the text literals "TRUE"/"FALSE" (case-insensitive, NO
+   * trim — `" TRUE"` refuses; strict is loosening-safe) in condition positions. The single
+   * recognition table shared by [[coerceBool]], `TExprDecoders.decodeBool` and
+   * `ArrayArithmetic.conditionTruthy` — the three condition tables must stay aligned (see the L6
+   * parity law). Documented accepted micro-divergence: cell-sourced boolean text coerces too (Excel
+   * coerces only literals; provenance is invisible at the decode layer — the direct/bound parity
+   * law wins).
+   */
+  private[formula] def boolTextValue(s: String): Option[Boolean] =
+    if s.equalsIgnoreCase("TRUE") then Some(true)
+    else if s.equalsIgnoreCase("FALSE") then Some(false)
+    else None
+
+  /**
    * Totally coerce a runtime value into a typed argument position.
    *
    * @param label
@@ -53,8 +67,12 @@ private[formula] object ScalarCoercion:
    */
   def coerce(label: String, value: Any, target: BindingCoercion): Either[EvalError, Any] =
     unwrapCellValue(value) match
+      // GH-344: an Excel error VALUE entering a typed position propagates AS that error (the
+      // strict-position absorption rule) — the single highest-leverage arm: every typed argument
+      // position, IF/IFS scalar conditions, toIntArg, LET/Coerced positions, and the scalar-entry
+      // top-left collapse all funnel through here.
       case CellValue.Error(err) =>
-        Left(EvalError.EvalFailed(s"$label: cannot coerce ${err.toExcel} error value", None))
+        Left(EvalError.ErrorValue(err, Some(label)))
       case unwrapped =>
         target match
           case BindingCoercion.Text => coerceText(label, unwrapped)
@@ -107,6 +125,12 @@ private[formula] object ScalarCoercion:
     // Excel truthiness: 0 = FALSE, any other number = TRUE (GH-306)
     case bd: BigDecimal => Right(bd.signum != 0)
     case i: Int => Right(i != 0)
+    // GH-344 item 5: exactly "TRUE"/"FALSE" (case-insensitive, no trim) coerce; other text
+    // refuses — the [[boolTextValue]] table, aligned with decodeBool and conditionTruthy
+    case s: String =>
+      boolTextValue(s) match
+        case Some(b) => Right(b)
+        case None => mismatch(label, "boolean", s)
     case CellValue.Empty => Right(false)
     case other => mismatch(label, "boolean", other)
 

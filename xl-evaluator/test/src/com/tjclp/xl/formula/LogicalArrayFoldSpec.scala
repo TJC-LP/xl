@@ -150,20 +150,32 @@ class LogicalArrayFoldSpec extends FunSuite:
 
   // ===== Text in a condition position refuses cleanly (total, no throw) =====
 
-  test("GH-338: text condition elements refuse with a clean Left") {
+  test("GH-338: text condition elements refuse the AND/OR folds with a clean Left") {
     assert(mixedTF.evaluateFormula("=AND(IF(A1:A2>0,\"x\",\"y\"))").isLeft)
     assert(mixedTF.evaluateFormula("=OR(IF(A1:A2>0,\"x\",\"y\"))").isLeft)
-    assert(mixedTF.evaluateFormula("=NOT(IF(A1:A2>0,\"x\",\"y\"))").isLeft)
     assert(mixedTF.evaluateArrayFormula("=AND(IF(A1:A2>0,\"x\",\"y\"))", ref"D1").isLeft)
     assert(mixedTF.evaluateFormula("=OR(\"abc\")").isLeft)
   }
 
-  // ===== Pre-existing semantics stay frozen =====
+  test("GH-344: NOT demotes text elements to #VALUE! elements (Excel broadcast semantics)") {
+    // GH-344 supersedes the whole-formula refusal for NOT's array path: like broadcastIf, a
+    // text element becomes a #VALUE! OUTPUT element; scalar entry collapses to the top-left.
+    assertEquals(
+      mixedTF.evaluateFormula("=NOT(IF(A1:A2>0,\"x\",\"y\"))"),
+      Right(CellValue.Error(CellError.Value))
+    )
+  }
 
-  test("GH-338: cross-argument short-circuit is preserved") {
-    // The second argument would divide by zero; a decisive first argument must skip it
-    assertScalar(mixedTF, "=AND(1>2, 1/0>0)", CellValue.Bool(false))
-    assertScalar(mixedTF, "=OR(1<2, 1/0>0)", CellValue.Bool(true))
+  // ===== GH-344: Excel does NOT short-circuit logical functions =====
+
+  test("GH-344: every argument evaluates — a failing later argument surfaces its error") {
+    // GH-344 supersedes the GH-338 cross-argument short-circuit pin: Excel evaluates every
+    // AND/OR argument, so =AND(1>2, 1/0>0) is #DIV/0! even though the first is decisive.
+    assertScalar(mixedTF, "=AND(1>2, 1/0>0)", CellValue.Error(CellError.Div0))
+    assertScalar(mixedTF, "=OR(1<2, 1/0>0)", CellValue.Error(CellError.Div0))
+    // Decisive folds still answer when every argument evaluates cleanly
+    assertScalar(mixedTF, "=AND(1>2, 2>1)", CellValue.Bool(false))
+    assertScalar(mixedTF, "=OR(1<2, 2<1)", CellValue.Bool(true))
   }
 
   test("GH-338: bare-range arguments keep their pre-existing error (out of scope)") {

@@ -71,6 +71,66 @@ class BenchmarkEngineSpec extends CatsEffectSuite:
     ): IO[CaseResult] =
       IO.raiseError(new IllegalStateException("skill exploded outside its guard"))
 
+  tempDir.test("engine fallback never overwrites a trace the skill saved itself") { dir =>
+    val testCase = TestCaseFile(1, dir.resolve("in.xlsx"), dir.resolve("answer.xlsx"))
+    val task = BenchmarkTask(
+      id = TaskId("999"),
+      instruction = "test instruction",
+      category = TaskCategory.CellLevel,
+      inputSource = InputSource.TestCases(Vector(testCase)),
+      evaluation = EvaluationSpec.fileOnly
+    )
+    // A third-party skill saved its own (richer) trace before raising
+    val skillTraceDir = dir.resolve("tasks").resolve("999").resolve("exploding").resolve("case1")
+    val sentinelJson = """{"metadata":{"note":"skill-saved trace, must survive"}}"""
+    val sentinelMd = "# skill-saved trace, must survive"
+    Files.createDirectories(skillTraceDir)
+    Files.writeString(skillTraceDir.resolve("conversation.json"), sentinelJson)
+    Files.writeString(skillTraceDir.resolve("conversation.md"), sentinelMd)
+
+    AnthropicClientIO.resource("dummy-key-never-used").use { client =>
+      BenchmarkEngine
+        .default(client)
+        .run(
+          tasks = List(task),
+          skills = List(ExplodingSkill),
+          agentConfig = AgentConfig(model = "claude-test"),
+          config = EngineConfig.default.copy(outputDir = dir, stream = false)
+        )
+        .map { run =>
+          // The skill's own trace is byte-for-byte intact
+          assertEquals(Files.readString(skillTraceDir.resolve("conversation.json")), sentinelJson)
+          assertEquals(Files.readString(skillTraceDir.resolve("conversation.md")), sentinelMd)
+
+          // The metadata-only fallback landed in a suffixed dir instead
+          val fallbackDir = skillTraceDir.resolveSibling("case1-engine-fallback")
+          assert(
+            Files.exists(fallbackDir.resolve("conversation.json")),
+            s"fallback trace must land beside the skill's own: $fallbackDir"
+          )
+          val fallbackJson = Files.readString(fallbackDir.resolve("conversation.json"))
+          val parsed =
+            io.circe.parser.parse(fallbackJson).getOrElse(fail("unparseable fallback JSON"))
+          assert(
+            parsed.hcursor
+              .downField("metadata")
+              .get[String]("error")
+              .exists(_.contains("skill exploded")),
+            s"fallback metadata must carry the error: $fallbackJson"
+          )
+
+          // And the case result points at the diverted trace, not the skill's
+          val caseResult = run
+            .skillResults("exploding")
+            .results
+            .headOption
+            .flatMap(_.caseResults.headOption)
+            .getOrElse(fail("missing case result"))
+          assertEquals(caseResult.tracePath, Some(fallbackDir))
+        }
+    }
+  }
+
   tempDir.test("a raising Skill yields a failing CaseResult with a metadata-only trace") { dir =>
     val testCase = TestCaseFile(1, dir.resolve("in.xlsx"), dir.resolve("answer.xlsx"))
     val task = BenchmarkTask(

@@ -150,7 +150,8 @@ class ConversationTracer private (
   streaming: Boolean,
   streamContext: StreamingConsole.StreamContext,
   events: Ref[IO, Vector[TracedEvent]],
-  metadata: Ref[IO, ConversationMetadata]
+  metadata: Ref[IO, ConversationMetadata],
+  dirSuffix: String
 ):
 
   /** Callback for Agent.runStreaming */
@@ -200,11 +201,13 @@ class ConversationTracer private (
   def save(): IO[Path] =
     for
       trace <- getTrace
-      dir = outputDir
-        .resolve("tasks")
-        .resolve(trace.metadata.taskId)
-        .resolve(trace.metadata.skillName)
-        .resolve(s"case${trace.metadata.caseNum}")
+      dir = ConversationTracer.caseDir(
+        outputDir,
+        trace.metadata.taskId,
+        trace.metadata.skillName,
+        trace.metadata.caseNum,
+        dirSuffix
+      )
       _ <- IO.blocking(Files.createDirectories(dir))
 
       // Save markdown
@@ -219,14 +222,39 @@ class ConversationTracer private (
     yield dir
 
 object ConversationTracer:
-  /** Create a new conversation tracer */
+
+  /**
+   * Case-dir suffix for the engine's metadata-only fallback trace: when a skill already saved its
+   * own trace before raising, the fallback is diverted here instead of overwriting it (issue #344).
+   */
+  val EngineFallbackDirSuffix: String = "-engine-fallback"
+
+  /** Directory `save()` writes a case's trace to */
+  def caseDir(
+    outputDir: Path,
+    taskId: String,
+    skillName: String,
+    caseNum: Int,
+    dirSuffix: String
+  ): Path =
+    outputDir
+      .resolve("tasks")
+      .resolve(taskId)
+      .resolve(skillName)
+      .resolve(s"case$caseNum$dirSuffix")
+
+  /**
+   * Create a new conversation tracer. `dirSuffix` is appended to the case dir name on save (see
+   * [[caseDir]]); non-empty only for the engine's never-overwrite fallback trace.
+   */
   def create(
     outputDir: Path,
     taskId: String,
     skillName: String,
     caseNum: Int,
     streaming: Boolean = false,
-    model: Option[String] = None
+    model: Option[String] = None,
+    dirSuffix: String = ""
   ): IO[ConversationTracer] =
     for
       now <- IO.realTimeInstant
@@ -241,5 +269,6 @@ object ConversationTracer:
       streaming,
       streamContext,
       eventsRef,
-      metaRef
+      metaRef,
+      dirSuffix
     )

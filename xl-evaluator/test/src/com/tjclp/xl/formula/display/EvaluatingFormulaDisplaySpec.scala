@@ -71,8 +71,9 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
     val result = summon[FormulaDisplayStrategy].format("=A1/A2", sheet)
-    // Should fallback to raw formula on error
-    assertEquals(result, "=A1/A2")
+    // GH-344: division by zero evaluates to Excel's #DIV/0! error VALUE, displayed as Excel
+    // shows it (was a fallback to the raw formula text)
+    assertEquals(result, "#DIV/0!")
   }
 
   // ========== Excel Interpolator with Evaluation ==========

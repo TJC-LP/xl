@@ -636,8 +636,9 @@ class ConditionalFunctionsSpec extends FunSuite:
       ref"A2" -> "Banana",
       ref"B2" -> 20
     )
+    // GH-344: no-match is Excel's #DIV/0! error VALUE at the boundary (was a loud Left)
     val result = sheet.evaluateFormula("=AVERAGEIF(A1:A2, \"Cherry\", B1:B2)")
-    assert(result.isLeft, "Should fail with division by zero")
+    assertEquals(result, Right(CellValue.Error(CellError.Div0)))
   }
 
   test("AVERAGEIF: skip non-numeric values in average range") {
@@ -660,8 +661,9 @@ class ConditionalFunctionsSpec extends FunSuite:
       ref"A2" -> "Apple",
       ref"B2" -> "text2"
     )
+    // GH-344: zero numeric matches is Excel's #DIV/0! error VALUE (was a loud Left)
     val result = sheet.evaluateFormula("=AVERAGEIF(A1:A2, \"Apple\", B1:B2)")
-    assert(result.isLeft, "Should fail when all matching cells are non-numeric")
+    assertEquals(result, Right(CellValue.Error(CellError.Div0)))
   }
 
   // ===== AVERAGEIF Wildcard Tests =====
@@ -775,8 +777,9 @@ class ConditionalFunctionsSpec extends FunSuite:
       ref"C2" -> 20
     )
     // Apple + Blue matches nothing
+    // GH-344: no-match is Excel's #DIV/0! error VALUE at the boundary (was a loud Left)
     val result = sheet.evaluateFormula("=AVERAGEIFS(C1:C2, A1:A2, \"Apple\", B1:B2, \"Blue\")")
-    assert(result.isLeft, "Should fail with division by zero")
+    assertEquals(result, Right(CellValue.Error(CellError.Div0)))
   }
 
   test("AVERAGEIFS: wildcard in multiple criteria") {

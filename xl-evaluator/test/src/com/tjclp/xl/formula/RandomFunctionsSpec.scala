@@ -109,9 +109,13 @@ class RandomFunctionsSpec extends ScalaCheckSuite:
     assert(n.isWhole && n >= -10 && n <= -5, s"out of range: $n")
   }
 
-  test("RANDBETWEEN(10, 1) with bottom > top is an evaluation error") {
+  test("RANDBETWEEN(10, 1) with bottom > top is #NUM!") {
+    // GH-344: the #NUM!-domain failure surfaces as Excel's error VALUE (was a loud Left)
     val result = sheet.evaluateFormula("=RANDBETWEEN(10, 1)", Clock.system, Rng.seeded(1L))
-    assert(result.isLeft, s"expected error, got $result")
+    assertEquals(
+      result,
+      Right(com.tjclp.xl.cells.CellValue.Error(com.tjclp.xl.cells.CellError.Num))
+    )
   }
 
   test("RANDBETWEEN is deterministic under a fixed seed") {

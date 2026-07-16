@@ -254,9 +254,17 @@ class LetFunctionSpec extends ScalaCheckSuite:
 
   // ===== Error propagation =====
 
-  test("binding evaluation error short-circuits and names the failing binding") {
-    val result = sheet.evaluateFormula("=LET(bad, 1/0, 42)")
-    result match
+  test("GH-344: an error-VALUE binding binds the value; host failures still name the binding") {
+    // GH-344 supersedes the short-circuit pin for Excel error VALUES: the binding holds the
+    // error as a VALUE and the body decides whether to consume it (Excel-exact).
+    assertEquals(sheet.evaluateFormula("=LET(bad, 1/0, 42)"), Right(CellValue.Number(42)))
+    assertEquals(
+      sheet.evaluateFormula("=LET(bad, 1/0, bad)"),
+      Right(CellValue.Error(com.tjclp.xl.cells.CellError.Div0))
+    )
+    // A host failure in a binding (cross-sheet ref without workbook context) still
+    // short-circuits and names the binding
+    sheet.evaluateFormula("=LET(bad, Missing!A1, 42)") match
       case Left(err) =>
         assert(err.message.contains("bad"), s"error should name the binding: ${err.message}")
       case Right(v) => fail(s"expected error, got $v")
@@ -409,6 +417,19 @@ class LetFunctionSpec extends ScalaCheckSuite:
 
   test("String position: LET(x, 1, LEN(x)) = 1") {
     assertEquals(evalNum("=LET(x, 1, LEN(x))"), BigDecimal(1))
+  }
+
+  test("GH-344: boolean-text parity — LET(x, \"TRUE\", IF(x,1,2)) matches IF(\"TRUE\",1,2)") {
+    // Item 5 extends the direct/bound parity pin to TRUE/FALSE text: both forms coerce the
+    // literal text identically (and both refuse non-boolean text identically).
+    val direct = sheet.evaluateFormula("""=IF("TRUE", 1, 2)""")
+    val bound = sheet.evaluateFormula("""=LET(x, "TRUE", IF(x, 1, 2))""")
+    assertEquals(bound, direct)
+    assertEquals(direct, Right(CellValue.Number(BigDecimal(1))))
+    val directRefuse = sheet.evaluateFormula("""=IF(" TRUE", 1, 2)""")
+    val boundRefuse = sheet.evaluateFormula("""=LET(x, " TRUE", IF(x, 1, 2))""")
+    assert(directRefuse.isLeft, s"' TRUE' must refuse (no trim): $directRefuse")
+    assert(boundRefuse.isLeft, s"' TRUE' must refuse when bound: $boundRefuse")
   }
 
   test("Boolean position: LET(x, A1, IF(x, 1, 2)) matches IF(A1, 1, 2) and never throws") {

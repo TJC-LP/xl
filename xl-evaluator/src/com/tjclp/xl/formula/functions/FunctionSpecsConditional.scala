@@ -112,23 +112,35 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
    */
   val switchFn: FunctionSpec[Any] { type Args = List[TExpr[Any]] } =
     FunctionSpec.simple[Any, List[TExpr[Any]]]("SWITCH", Arity.AtLeast(3)) { (args, ctx) =>
+      // GH-344: an error VALUE in the target or an evaluated case propagates with its code
+      // (`=SWITCH(#N/A-cell, …)` is #N/A, not a silent never-match) — errors are never "equal",
+      // so without the pre-check the walk would fall through to the wrong #N/A.
+      def carried(value: Any): Option[CellError] =
+        ArrayArithmetic.carriedError(ArrayArithmetic.anyToCellValue(value))
       args match
         case target :: rest =>
           evalAny(ctx, target).flatMap { targetVal =>
-            val tcv = ArrayArithmetic.anyToCellValue(targetVal)
-            @annotation.tailrec
-            def loop(pairs: List[TExpr[Any]]): Either[EvalError, Any] =
-              pairs match
-                case caseExpr :: value :: rest2 =>
-                  evalAny(ctx, caseExpr) match
-                    case Left(err) => Left(err)
-                    case Right(cv) =>
-                      if ArrayArithmetic.cellValueEquals(tcv, ArrayArithmetic.anyToCellValue(cv))
-                      then evalAny(ctx, value)
-                      else loop(rest2)
-                case default :: Nil => evalAny(ctx, default) // trailing default
-                case _ => Right(CellValue.Error(CellError.NA))
-            loop(rest)
+            carried(targetVal) match
+              case Some(err) => Left(EvalError.ErrorValue(err, Some("SWITCH")))
+              case None =>
+                val tcv = ArrayArithmetic.anyToCellValue(targetVal)
+                @annotation.tailrec
+                def loop(pairs: List[TExpr[Any]]): Either[EvalError, Any] =
+                  pairs match
+                    case caseExpr :: value :: rest2 =>
+                      evalAny(ctx, caseExpr) match
+                        case Left(err) => Left(err)
+                        case Right(cv) =>
+                          carried(cv) match
+                            case Some(err) => Left(EvalError.ErrorValue(err, Some("SWITCH")))
+                            case None =>
+                              if ArrayArithmetic
+                                  .cellValueEquals(tcv, ArrayArithmetic.anyToCellValue(cv))
+                              then evalAny(ctx, value)
+                              else loop(rest2)
+                    case default :: Nil => evalAny(ctx, default) // trailing default
+                    case _ => Right(CellValue.Error(CellError.NA))
+                loop(rest)
           }
         case _ => Right(CellValue.Error(CellError.NA))
     }

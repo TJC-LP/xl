@@ -16,7 +16,85 @@ import scala.jdk.OptionConverters.*
 /** Handles code execution requests to the Anthropic API */
 object CodeExecution:
 
-  /** Send a message with code execution capability and stream the response */
+  /**
+   * Build the request params for one API turn.
+   *
+   * On a pause_turn resume (issue #344) the request is the original one with each paused assistant
+   * message appended to `messages` verbatim (`BetaMessage.toParam`) — per the Anthropic contract
+   * for server-side tools, the API detects the trailing server-tool state and resumes the turn; a
+   * synthetic "continue" user message must NOT be added. The last paused turn's container id is
+   * passed back so files written by earlier bash cycles stay visible to the resumed turn.
+   *
+   * The container id is applied AFTER `configureRequest`: strategies declare a fresh skills
+   * container via `builder.container(BetaContainerParams)` and the last `.container()` write on the
+   * builder wins, so setting the id first would provision a new container and lose the paused
+   * turn's files. Per the documented container-reuse shape, the id alone is passed on resume — the
+   * container already holds the skill files loaded at creation, so skills are not re-declared.
+   */
+  private[anthropic] def buildParams(
+    config: AgentConfig,
+    systemPrompt: String,
+    userPrompt: String,
+    containerUploads: List[String],
+    resumeTurns: Vector[BetaMessage],
+    configureRequest: MessageCreateParams.Builder => MessageCreateParams.Builder = identity
+  ): MessageCreateParams =
+    // Prompt caching (5m TTL): the code-execution loop re-samples the
+    // conversation on every server-side sub-turn, and a task's cases
+    // share tools + system + skill context — both re-read from cache.
+    val cacheMarker = BetaCacheControlEphemeral.builder().build()
+
+    // System block breakpoint: shared read point across a task's cases
+    val systemBlock = BetaTextBlockParam
+      .builder()
+      .text(systemPrompt)
+      .cacheControl(cacheMarker)
+      .build()
+
+    // Build content blocks: text + container uploads
+    val contentBlocks = new java.util.ArrayList[BetaContentBlockParam]()
+    contentBlocks.add(
+      BetaContentBlockParam.ofText(BetaTextBlockParam.builder().text(userPrompt).build())
+    )
+    containerUploads.foreach { fileId =>
+      contentBlocks.add(
+        BetaContentBlockParam.ofContainerUpload(
+          BetaContainerUploadBlockParam.builder().fileId(fileId).build()
+        )
+      )
+    }
+
+    val baseBuilder = MessageCreateParams
+      .builder()
+      .model(config.model)
+      .maxTokens(config.maxTokens.toLong)
+      .systemOfBetaTextBlockParams(java.util.List.of(systemBlock))
+      .addUserMessageOfBetaContentBlockParams(contentBlocks)
+      // Top-level cache_control auto-places on the last cacheable
+      // block, covering the whole initial prompt for the loop
+      .cacheControl(cacheMarker)
+
+    // pause_turn resume: paused assistant turns go back into messages verbatim
+    resumeTurns.foreach(paused => baseBuilder.addMessage(paused.toParam()))
+
+    // Apply strategy-specific configuration (tools, betas, container)
+    val configured = configureRequest(baseBuilder)
+
+    // Reuse the paused turn's container so the resumed bash cycles see its files. Must come
+    // after configureRequest: the strategy's container(BetaContainerParams) write would
+    // otherwise clobber the id and provision a fresh, empty container (see scaladoc).
+    resumeTurns.lastOption
+      .flatMap(_.container().toScala)
+      .foreach(container => configured.container(container.id()))
+
+    configured.build()
+
+  /**
+   * Send a message with code execution capability and stream the response.
+   *
+   * `resumeTurns` carries the paused assistant turns of a pause_turn resume (issue #344), oldest
+   * first; empty for the initial request. See [[buildParams]] for the re-send shape.
+   */
   def sendRequest(
     client: JAnthropicClient,
     config: AgentConfig,
@@ -26,7 +104,8 @@ object CodeExecution:
     eventQueue: Queue[IO, AgentEvent],
     configureRequest: MessageCreateParams.Builder => MessageCreateParams.Builder =
       identity, // Strategy-specific configuration (tools, betas, container)
-    onEvent: AgentEvent => IO[Unit] = _ => IO.unit // Real-time event callback for tracing
+    onEvent: AgentEvent => IO[Unit] = _ => IO.unit, // Real-time event callback for tracing
+    resumeTurns: Vector[BetaMessage] = Vector.empty // Paused turns to append (pause_turn resume)
   ): IO[BetaMessage] =
     val promptsEvent = AgentEvent.Prompts(systemPrompt, userPrompt)
 
@@ -40,43 +119,14 @@ object CodeExecution:
         streamProcessor <- StreamEventProcessor.create(eventQueue, onEvent, config.verbose)
         result <- IO
           .blocking {
-            // Prompt caching (5m TTL): the code-execution loop re-samples the
-            // conversation on every server-side sub-turn, and a task's cases
-            // share tools + system + skill context — both re-read from cache.
-            val cacheMarker = BetaCacheControlEphemeral.builder().build()
-
-            // System block breakpoint: shared read point across a task's cases
-            val systemBlock = BetaTextBlockParam
-              .builder()
-              .text(systemPrompt)
-              .cacheControl(cacheMarker)
-              .build()
-
-            // Build content blocks: text + container uploads
-            val contentBlocks = new java.util.ArrayList[BetaContentBlockParam]()
-            contentBlocks.add(
-              BetaContentBlockParam.ofText(BetaTextBlockParam.builder().text(userPrompt).build())
+            val params = buildParams(
+              config,
+              systemPrompt,
+              userPrompt,
+              containerUploads,
+              resumeTurns,
+              configureRequest
             )
-            containerUploads.foreach { fileId =>
-              contentBlocks.add(
-                BetaContentBlockParam.ofContainerUpload(
-                  BetaContainerUploadBlockParam.builder().fileId(fileId).build()
-                )
-              )
-            }
-
-            val baseBuilder = MessageCreateParams
-              .builder()
-              .model(config.model)
-              .maxTokens(config.maxTokens.toLong)
-              .systemOfBetaTextBlockParams(java.util.List.of(systemBlock))
-              .addUserMessageOfBetaContentBlockParams(contentBlocks)
-              // Top-level cache_control auto-places on the last cacheable
-              // block, covering the whole initial prompt for the loop
-              .cacheControl(cacheMarker)
-
-            // Apply strategy-specific configuration (tools, betas, container)
-            val params = configureRequest(baseBuilder).build()
 
             // Stream response
             val accumulator = BetaMessageAccumulator.create()

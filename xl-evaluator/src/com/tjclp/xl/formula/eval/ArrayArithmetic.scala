@@ -16,8 +16,9 @@ import com.tjclp.xl.sheets.Sheet
  * GH-337: errors propagate ELEMENTWISE through the broadcasts (compare, arithmetic, IF), matching
  * Excel: a carried `CellValue.Error` input element (left operand's error wins) or an element-local
  * failure (non-numeric text, division by zero) becomes an error OUTPUT element via
- * [[EvalError.toCellError]] instead of failing the whole formula. The broadcasts return Left only
- * for broadcast-dimension mismatch; aggregators decide whether consumed error elements propagate.
+ * [[EvalError.toCellError]] instead of failing the whole formula. GH-344 4b: the broadcasts are
+ * TOTAL in Right — mismatched dimensions pad with #N/A elements ([[getWithBroadcastCV]]);
+ * aggregators decide whether consumed error elements propagate.
  */
 object ArrayArithmetic:
 
@@ -54,7 +55,10 @@ object ArrayArithmetic:
         // Fall back to Double for fractional/negative exponents
         Right(BigDecimal(scala.math.pow(x.toDouble, y.toDouble)))
     catch
-      case _: ArithmeticException => Left(EvalError.EvalFailed("Power overflow", None))
+      // GH-344: a genuine magnitude/scale overflow is Excel's #NUM! (op-level classification);
+      // any other failure stays a generic loud EvalFailed
+      case _: ArithmeticException =>
+        Left(EvalError.ErrorValue(CellError.Num, Some("power overflow")))
       case e: Exception => Left(EvalError.EvalFailed(s"Power failed: ${e.getMessage}", None))
 
   /**
@@ -145,20 +149,24 @@ object ArrayArithmetic:
    * case-insensitively and lexicographically, booleans FALSE < TRUE. Across types Excel ranks
    * number < text < logical — text never parses as a number under comparison (unlike arithmetic).
    * Empty cells coerce to the other operand's zero value (0 against numbers, "" against text, FALSE
-   * against booleans; two empties are equal). Error values refuse to compare with a clean Left
-   * naming the Excel error code — on the SCALAR path only: the array broadcasts pre-check both
-   * operands with [[carriedError]] and carry error elements through instead (GH-337), so this
-   * refusal surfaces solely from scalar comparisons like `=A1<B1` on an error cell.
+   * against booleans; two empties are equal). GH-344: error values propagate with
+   * Left(ErrorValue(code)), left operand first — on the SCALAR path this surfaces as the error
+   * VALUE at the result boundary (`=1<#REF!` is #REF!, Excel-exact); the array broadcasts pre-check
+   * both operands with [[carriedError]] and carry error elements through instead (GH-337), so this
+   * arm fires solely for scalar comparisons like `=A1<B1` on an error cell.
    *
    * @return
    *   the comparison sign (negative, zero, positive), or Left for incomparable values
    */
   def compareCellValues(a: CellValue, b: CellValue): Either[EvalError, Int] =
     (normalizeForCompare(a), normalizeForCompare(b)) match
+      // GH-344: an error OPERAND propagates as that error VALUE, left operand first (matching
+      // equalityElement). The whole-formula refusal became Excel's absorption: `=1<#REF!` is
+      // #REF! at the boundary. Array paths still pre-check carriedError and never reach here.
       case (CellValue.Error(err), _) =>
-        Left(EvalError.EvalFailed(s"comparison: cannot compare ${err.toExcel} error value", None))
+        Left(EvalError.ErrorValue(err, Some("comparison")))
       case (_, CellValue.Error(err)) =>
-        Left(EvalError.EvalFailed(s"comparison: cannot compare ${err.toExcel} error value", None))
+        Left(EvalError.ErrorValue(err, Some("comparison")))
       case (CellValue.Number(x), CellValue.Number(y)) => Right(x.compare(y))
       case (CellValue.Text(x), CellValue.Text(y)) => Right(x.compareToIgnoreCase(y))
       case (CellValue.Bool(x), CellValue.Bool(y)) => Right(java.lang.Boolean.compare(x, y))
@@ -201,7 +209,8 @@ object ArrayArithmetic:
    *
    * GH-337: error elements carry through elementwise — a carried error on either operand (left
    * wins) becomes the OUTPUT element, and a residual per-element comparison refusal (e.g. an
-   * uncomparable value) demotes to #VALUE!. Returns Left ONLY for broadcast-dimension mismatch.
+   * uncomparable value) demotes to #VALUE!. GH-344 4b: total in Right — mismatched dimensions pad
+   * with #N/A elements.
    *
    * @param op
    *   interprets the comparison sign from [[compareCellValues]] (e.g. `_ < 0` for Lt)
@@ -241,8 +250,8 @@ object ArrayArithmetic:
    * Eq/Neq operators.
    *
    * GH-337: a carried error on either operand (left wins) becomes the OUTPUT element — errors are
-   * never "equal" or "unequal", they propagate (negate does not flip them). Returns Left ONLY for
-   * broadcast-dimension mismatch.
+   * never "equal" or "unequal", they propagate (negate does not flip them). GH-344 4b: total in
+   * Right — mismatched dimensions pad with #N/A elements.
    */
   def broadcastEqualityCompare(
     left: ArrayResult,
@@ -277,7 +286,11 @@ object ArrayArithmetic:
         val eq = cellValueEquals(l, r)
         CellValue.Bool(if negate then !eq else eq)
 
-  /** Get CellValue with broadcasting. */
+  /**
+   * Get CellValue with broadcasting. GH-344 4b: a position beyond an operand's extent (extent ≠ 1,
+   * so not a broadcast axis) reads as a #N/A element — Excel pads mismatched array dimensions with
+   * #N/A rather than failing the operation.
+   */
   private def getWithBroadcastCV(
     arr: Vector[Vector[CellValue]],
     row: Int,
@@ -287,7 +300,8 @@ object ArrayArithmetic:
   ): CellValue =
     val r = if arrRows == 1 then 0 else row
     val c = if arrCols == 1 then 0 else col
-    arr(r)(c)
+    if r >= arrRows || c >= arrCols then CellValue.Error(CellError.NA)
+    else arr(r)(c)
 
   /**
    * GH-337: the Excel error an element carries, if any — a `CellValue.Error` directly or cached
@@ -312,9 +326,8 @@ object ArrayArithmetic:
   /**
    * GH-337: apply a numeric binary op to two elements, carrying errors elementwise: a carried error
    * on either operand wins (left first), and element-local failures (non-numeric text → #VALUE!,
-   * division by zero → #DIV/0!) become error elements rather than failing the whole broadcast.
-   * Accepted micro-divergence: pow overflow arrives as a generic EvalFailed and surfaces as #VALUE!
-   * (Excel: #NUM!).
+   * division by zero → #DIV/0!, pow overflow → #NUM! via its GH-344 op-level classification) become
+   * error elements rather than failing the whole broadcast.
    */
   private def applyOpCarrying(
     l: CellValue,
@@ -345,7 +358,7 @@ object ArrayArithmetic:
    * Condition elements follow Excel truthiness (booleans as-is, numbers zero/non-zero, empty is
    * FALSE). GH-337: a condition element carrying an error emits THAT error at its output position
    * (masking whatever the branches hold there); a text condition element demotes to a #VALUE!
-   * element. Returns Left ONLY for broadcast-dimension mismatch.
+   * element. GH-344 4b: total in Right — mismatched dimensions pad with #N/A elements.
    */
   def broadcastIf(
     cond: ArrayResult,
@@ -381,12 +394,14 @@ object ArrayArithmetic:
    * GH-333/GH-338: Excel truthiness for a condition element, shared by broadcastIf (IF over an
    * array condition) and the logical functions' array paths (AND/OR aggregation, NOT broadcast):
    * booleans as-is, numbers zero/non-zero, empty is FALSE (the ScalarCoercion Bool conventions);
-   * text and errors refuse cleanly with a Left naming the position via `label`.
+   * text refuses cleanly with a Left naming the position via `label`.
    *
-   * GH-337: the refusal Left is the ABORT convention of the logical folds (AND/OR/NOT keep it — a
-   * text or error element fails those formulas whole). broadcastIf instead pre-checks errors with
-   * [[carriedError]] and demotes its residual refusals to error elements, so its condition failures
-   * stay positional.
+   * GH-344: an error element propagates as its Excel error VALUE (Left(ErrorValue) — the AND/OR
+   * folds short-circuit with it and the boundary promotes it to the error cell, Excel-exact).
+   * broadcastIf and broadcastNot pre-check errors with [[carriedError]] and demote their residual
+   * text refusals to #VALUE! elements, so their condition failures stay positional; the AND/OR
+   * folds keep the text refusal loud (full #VALUE! parity arrives with the TypeMismatch boundary
+   * demotion follow-up).
    */
   def conditionTruthy(label: String, cv: CellValue): Either[EvalError, Boolean] = cv match
     case CellValue.Bool(b) => Right(b)
@@ -394,25 +409,39 @@ object ArrayArithmetic:
     case CellValue.Empty => Right(false)
     case CellValue.Formula(_, Some(cached)) => conditionTruthy(label, cached)
     case CellValue.Error(err) =>
-      Left(EvalError.EvalFailed(s"$label: cannot coerce ${err.toExcel} error value", None))
+      Left(EvalError.ErrorValue(err, Some(label)))
+    // GH-344 item 5: exactly "TRUE"/"FALSE" (case-insensitive, no trim) coerce via the shared
+    // ScalarCoercion.boolTextValue table — aligned with coerceBool and decodeBool (L6 parity)
+    case CellValue.Text(s) =>
+      ScalarCoercion.boolTextValue(s) match
+        case Some(b) => Right(b)
+        case None => Left(EvalError.TypeMismatch(label, "boolean", cv.toString))
     case other => Left(EvalError.TypeMismatch(label, "boolean", other.toString))
 
   /**
    * GH-338: truthiness of every element (row-major), for the AND/OR aggregation folds (AND =
-   * forall, OR = exists). The first refusing element (text/error) short-circuits with its Left —
-   * the logical functions keep abort semantics, deliberately NOT the positional error carriage
-   * broadcastIf gained in GH-337.
+   * forall, OR = exists). The first refusing element short-circuits with its Left — GH-344: an
+   * error element's Left carries its Excel error VALUE (the fold's result at the boundary), a text
+   * element's stays a loud TypeMismatch.
    */
   def truthyElements(label: String, arr: ArrayResult): Either[EvalError, Vector[Boolean]] =
     traverseV(arr.values.flatten)(cv => conditionTruthy(label, cv))
 
   /**
    * GH-338: elementwise NOT over an array condition, preserving shape (Excel broadcasts NOT rather
-   * than aggregating). Elements follow the conditionTruthy conventions.
+   * than aggregating). GH-344: mirrors broadcastIf's positional carriage — an element carrying an
+   * error emits THAT error at its output position, and a residual refusal (text) demotes to a
+   * #VALUE! element. Total in Right.
    */
   def broadcastNot(label: String, arr: ArrayResult): Either[EvalError, ArrayResult] =
-    traverseVV(arr.values)(cv => conditionTruthy(label, cv).map(b => CellValue.Bool(!b)))
-      .map(ArrayResult(_))
+    traverseVV(arr.values) { cv =>
+      carriedError(cv) match
+        case Some(err) => Right(CellValue.Error(err))
+        case None =>
+          conditionTruthy(label, cv) match
+            case Right(b) => Right(CellValue.Bool(!b))
+            case Left(e) => toErrorElement(e)
+    }.map(ArrayResult(_))
 
   /** Convert any value to CellValue for comparison. */
   def anyToCellValue(v: Any): CellValue = v match
@@ -443,7 +472,8 @@ object ArrayArithmetic:
 
   /**
    * Broadcast two arrays together, operating per CellValue element (GH-337: errors carry
-   * elementwise via [[applyOpCarrying]]; Left ONLY for broadcast-dimension mismatch).
+   * elementwise via [[applyOpCarrying]]; GH-344 4b: total in Right — mismatched dimensions pad with
+   * #N/A elements).
    */
   private def broadcastArrays(
     left: ArrayResult,
@@ -466,19 +496,17 @@ object ArrayArithmetic:
     yield ArrayResult(result)
 
   /**
-   * Compute broadcast output dimension for a single axis.
+   * Compute broadcast output dimension for a single axis. GH-344 4b: unequal non-1 dimensions no
+   * longer fail — the output extends to the larger extent and [[getWithBroadcastCV]] pads the
+   * beyond-extent positions with #N/A (Excel's array-mismatch semantics). The Either shape is kept
+   * for the callers' comprehensions; this function is total in Right. SUMPRODUCT deliberately does
+   * NOT ride this law — it enforces exact dimensions as #VALUE! (Excel).
    */
   private def broadcastDim(l: Int, r: Int, dimName: String): Either[EvalError, Int] =
     if l == r then Right(l)
     else if l == 1 then Right(r)
     else if r == 1 then Right(l)
-    else
-      Left(
-        EvalError.EvalFailed(
-          s"Cannot broadcast arrays: $dimName mismatch ($l vs $r). Broadcasting requires dimensions to match or be 1.",
-          None
-        )
-      )
+    else Right(math.max(l, r))
 
   // ===== Helper: traverse for Vector[Vector[A]] =====
   // We don't have Cats, so implement manually
