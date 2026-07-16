@@ -191,12 +191,16 @@ final case class Sheet(
       else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
     }
 
-    // Freeze pane: shift/clamp its anchor on the active axis (clamp a deleted anchor to `at`).
+    // Freeze pane: shift/clamp BOTH the anchor and the scroll target on the active axis
+    // (clamp a deleted ref to `at`) — dropping scrolledTo here would silently unscroll the
+    // pane on a structural edit (GH-382).
     val newFreeze = freezePane.map {
-      case FreezePane.At(ref) =>
-        val cur = axisOf(ref)
-        val ni = idx(cur).getOrElse(at)
-        FreezePane.At(rebuild(ref, ni))
+      case FreezePane.At(ref, scrolledTo) =>
+        val ni = idx(axisOf(ref)).getOrElse(at)
+        val newScrolled = scrolledTo.map { s =>
+          rebuild(s, idx(axisOf(s)).getOrElse(at))
+        }
+        FreezePane.At(rebuild(ref, ni), newScrolled)
       case other => other
     }
 
@@ -789,6 +793,13 @@ final case class Sheet(
 
   /** Freeze panes at the given cell (rows above and columns left are frozen). */
   def freezeAt(ref: ARef): Sheet = copy(freezePane = Some(FreezePane.At(ref)))
+
+  /**
+   * Freeze panes at `ref` with the scrollable pane scrolled so `scrolledTo` is its top-left visible
+   * cell (GH-382) — the OOXML `<pane topLeftCell=".."/>` attribute.
+   */
+  def freezeAt(ref: ARef, scrolledTo: ARef): Sheet =
+    copy(freezePane = Some(FreezePane.At(ref, Some(scrolledTo))))
 
   /** Remove freeze panes. */
   def unfreeze: Sheet = copy(freezePane = Some(FreezePane.Remove))

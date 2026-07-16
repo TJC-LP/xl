@@ -94,6 +94,18 @@ class SheetViewRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-382: scrolled frozen pane writes anchor-derived splits and the scroll topLeftCell") {
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).freezeAt(ref"C11", ref"F40"))
+    val out = Files.createTempFile("scrolled-pane", ".xlsx")
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("xSplit=\"2\""), s"xSplit derived from the anchor missing: $xml")
+    assert(xml.contains("ySplit=\"10\""), s"ySplit derived from the anchor missing: $xml")
+    assert(xml.contains("topLeftCell=\"F40\""), s"scroll target must win topLeftCell: $xml")
+    assert(xml.contains("state=\"frozen\""), s"frozen state missing: $xml")
+    Files.deleteIfExists(out)
+  }
+
   test("GH-258: surgical write (cell edit) preserves view settings from the source file") {
     val view = SheetView(showGridLines = false, zoomScale = Some(75))
     val wb0 = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withViewSettings(view))

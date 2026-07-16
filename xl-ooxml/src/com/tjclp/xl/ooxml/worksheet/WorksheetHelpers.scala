@@ -473,7 +473,7 @@ private def applyFreezePaneOverride(
         }
         sv.copy(child = newChildren)
       }
-    case Some(FreezePane.At(ref)) =>
+    case Some(FreezePane.At(ref, scrolledTo)) =>
       val colSplit = ref.col.index0
       val rowSplit = ref.row.index0
       if colSplit == 0 && rowSplit == 0 then existing
@@ -488,7 +488,9 @@ private def applyFreezePaneOverride(
           (if colSplit > 0 then Vector("xSplit" -> colSplit.toString) else Vector.empty) ++
             (if rowSplit > 0 then Vector("ySplit" -> rowSplit.toString) else Vector.empty) ++
             Vector(
-              "topLeftCell" -> ref.toA1,
+              // The OOXML topLeftCell attribute is the SCROLL target of the scrollable pane;
+              // unscrolled panes point it at the freeze anchor (GH-382)
+              "topLeftCell" -> scrolledTo.getOrElse(ref).toA1,
               "activePane" -> activePane,
               "state" -> "frozen"
             )
