@@ -136,7 +136,10 @@ object StylePatcher:
         val wrap = overlay.align.wrapText || existing.align.wrapText
         val indent =
           if overlay.align.indent > 0 then overlay.align.indent else existing.align.indent
-        Align(h, v, wrap, indent)
+        val rotation =
+          if overlay.align.textRotation != 0 then overlay.align.textRotation
+          else existing.align.textRotation
+        Align(h, v, wrap, indent, rotation)
 
     CellStyle(mergedFont, mergedFill, mergedBorder, mergedNumFmt, align = mergedAlign)
 
@@ -470,6 +473,7 @@ object StylePatcher:
       attrs += "vertical" -> vAlignStr
     if align.wrapText then attrs += "wrapText" -> "1"
     if align.indent > 0 then attrs += "indent" -> align.indent.toString
+    if align.textRotation != 0 then attrs += "textRotation" -> align.textRotation.toString
 
     val attrMeta = attrs.foldRight(Null: MetaData) { case ((k, v), acc) =>
       new UnprefixedAttribute(k, v, acc)
@@ -605,7 +609,11 @@ object StylePatcher:
       // OOXML indent is an unsigned int; ignore negative values from malformed files so the
       // streaming path stays total (Align requires indent >= 0), matching the DOM StyleParser
       val indent = (alignment \ "@indent").text.toIntOption.filter(_ >= 0).getOrElse(0)
-      Align(h, v, wrap, indent)
+      // ST_TextRotation admits 0-180 plus 255; drop anything else, matching the DOM StyleParser
+      val rotation = (alignment \ "@textRotation").text.toIntOption
+        .filter(v => (v >= 0 && v <= 180) || v == Align.VerticalTextRotation)
+        .getOrElse(0)
+      Align(h, v, wrap, indent, rotation)
 
   private def extractColor(nodes: NodeSeq): Option[Color] =
     nodes.headOption.flatMap { c =>

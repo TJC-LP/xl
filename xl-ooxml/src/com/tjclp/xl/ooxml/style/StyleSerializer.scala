@@ -353,7 +353,7 @@ final case class OoxmlStyles(
    * REQUIRES: align is valid Align instance ENSURES:
    *   - Returns None if align == Align.default (optimization)
    *   - Returns Some(<alignment .../>) if any property differs from default
-   *   - Only emits non-default attributes (horizontal, vertical, wrapText, indent)
+   *   - Only emits non-default attributes (horizontal, vertical, wrapText, indent, textRotation)
    *   - Attribute values match OOXML spec enum names (lowercase)
    *   - VAlign.Middle serializes as "center" per OOXML spec
    *   - wrapText serializes as "1" (true) or "0" (false)
@@ -390,6 +390,9 @@ final case class OoxmlStyles(
 
       if align.indent != Align.default.indent then attrs += ("indent" -> align.indent.toString)
 
+      if align.textRotation != Align.default.textRotation then
+        attrs += ("textRotation" -> align.textRotation.toString)
+
       val attrSeq = attrs.result()
       // If no attributes, don't emit element (though this shouldn't happen since align != default)
       if attrSeq.isEmpty then None
@@ -417,6 +420,9 @@ final case class OoxmlStyles(
           attrs += ("wrapText" -> (if align.wrapText then "1" else "0"))
 
         if align.indent != Align.default.indent then attrs += ("indent" -> align.indent.toString)
+
+        if align.textRotation != Align.default.textRotation then
+          attrs += ("textRotation" -> align.textRotation.toString)
 
         val attrSeq = attrs.result()
         if attrSeq.nonEmpty then

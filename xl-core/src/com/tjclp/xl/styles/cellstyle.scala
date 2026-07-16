@@ -57,7 +57,7 @@ final case class CellStyle(
       s"B:${border.left},${border.right},${border.top},${border.bottom}"
     val numFmtKey = s"N:${numFmt}"
     val alignKey =
-      s"A:${align.horizontal},${align.vertical},${align.wrapText},${align.indent}"
+      s"A:${align.horizontal},${align.vertical},${align.wrapText},${align.indent},${align.textRotation}"
     s"$fontKey|$fillKey|$borderKey|$numFmtKey|$alignKey"
 
 object CellStyle:

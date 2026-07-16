@@ -199,6 +199,18 @@ object dsl:
     inline def indent(n: Int): CellStyle =
       style.withAlign(style.align.withIndent(math.max(0, n)))
 
+    /**
+     * Set the text rotation (Excel's alignment `textRotation` attribute) — the rotated axis
+     * captions of sensitivity grids and tall merged header cells.
+     *
+     * Accepts Excel-UI-style degrees: positive 1-90 rotates counter-clockwise (90 = straight up),
+     * negative -1 to -90 rotates clockwise (encoded per OOXML ST_TextRotation as `90 + |deg|`), and
+     * 255 stacks letters vertically. Raw OOXML values 91-180 (the downward encoding) pass through
+     * unchanged; out-of-range values are clamped to the nearest valid rotation.
+     */
+    inline def rotated(deg: Int): CellStyle =
+      style.withAlign(style.align.withRotation(Align.normalizeRotation(deg)))
+
     // ========== Borders ==========
 
     /** Set all borders to thin */

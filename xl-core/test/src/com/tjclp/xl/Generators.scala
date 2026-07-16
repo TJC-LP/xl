@@ -394,7 +394,13 @@ object Generators:
       v <- Gen.oneOf(VAlign.values.toIndexedSeq)
       wrap <- Gen.oneOf(true, false)
       indent <- Gen.frequency(3 -> Gen.const(0), 1 -> Gen.choose(1, 15))
-    yield Align(h, v, wrap, indent)
+      // ST_TextRotation: 0-180 (91-180 = downward encoding) or 255 (vertical stacked)
+      rotation <- Gen.frequency(
+        3 -> Gen.const(0),
+        1 -> Gen.choose(1, 180),
+        1 -> Gen.const(255)
+      )
+    yield Align(h, v, wrap, indent, rotation)
 
   /** Generate complete cell style (numFmtId left writer-assigned) */
   val genCellStyle: Gen[CellStyle] =

@@ -217,6 +217,41 @@ class StyleDslSpec extends ScalaCheckSuite:
     assertEquals(style.align, Align.default)
   }
 
+  // ========== Text Rotation Tests (GH-380) ==========
+
+  test("rotated sets alignment textRotation") {
+    val style = CellStyle.default.rotated(90)
+    assertEquals(style.align.textRotation, 90)
+  }
+
+  test("rotated preserves other alignment properties") {
+    val style = CellStyle.default.left.wrap.rotated(45)
+    assertEquals(style.align.horizontal, HAlign.Left)
+    assert(style.align.wrapText)
+    assertEquals(style.align.textRotation, 45)
+  }
+
+  test("rotated maps Excel-UI negative degrees to the OOXML downward encoding") {
+    // Excel UI -45 (45 degrees clockwise, slanting down) is ST_TextRotation 90 + 45 = 135
+    assertEquals(CellStyle.default.rotated(-45).align.textRotation, 135)
+    assertEquals(CellStyle.default.rotated(-90).align.textRotation, 180)
+  }
+
+  test("rotated(255) sets vertical stacked text") {
+    assertEquals(CellStyle.default.rotated(255).align.textRotation, 255)
+  }
+
+  test("rotated clamps out-of-range values (total, never throws)") {
+    assertEquals(CellStyle.default.rotated(200).align.textRotation, 180)
+    assertEquals(CellStyle.default.rotated(-120).align.textRotation, 180)
+  }
+
+  test("rotated(0) clears an existing rotation") {
+    val style = CellStyle.default.rotated(90).rotated(0)
+    assertEquals(style.align.textRotation, 0)
+    assertEquals(style.align, Align.default)
+  }
+
   // ========== Border Tests ==========
 
   test("bordered sets all borders to thin") {

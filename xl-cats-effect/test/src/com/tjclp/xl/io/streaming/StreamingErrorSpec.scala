@@ -4,7 +4,7 @@ import munit.FunSuite
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.style.WorkbookStyles
 import com.tjclp.xl.styles.CellStyle
-import com.tjclp.xl.styles.alignment.HAlign
+import com.tjclp.xl.styles.alignment.{Align, HAlign}
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.color.Color
@@ -162,6 +162,85 @@ class StreamingErrorSpec extends FunSuite:
     result match
       case Right(Some(style)) => assertEquals(style.align.indent, 3)
       case other => fail(s"Expected Right(Some(style)), got: $other")
+  }
+
+  test("StylePatcher.getStyle: out-of-range textRotation is ignored, not thrown (GH-380)") {
+    // ST_TextRotation admits 0-180 plus 255; 181-254, negatives, and junk must fall back to 0
+    for bad <- List("181", "200", "-10", "junk") do
+      val xml = stylesXmlWith(
+        defaultFontsXml,
+        s"""<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" textRotation="$bad"/></xf>"""
+      )
+
+      val result = StylePatcher.getStyle(xml, 1)
+      result match
+        case Right(Some(style)) =>
+          assertEquals(style.align.textRotation, 0, s"for textRotation=$bad")
+          assertEquals(style.align.horizontal, HAlign.Left, "fallback must only affect rotation")
+        case other => fail(s"Expected Right(Some(style)) for textRotation=$bad, got: $other")
+  }
+
+  test("StylePatcher.getStyle: valid textRotation values are preserved (GH-380)") {
+    for (attr, expected) <- List("90" -> 90, "135" -> 135, "180" -> 180, "255" -> 255) do
+      val xml = stylesXmlWith(
+        defaultFontsXml,
+        s"""<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" textRotation="$attr"/></xf>"""
+      )
+
+      val result = StylePatcher.getStyle(xml, 1)
+      result match
+        case Right(Some(style)) =>
+          assertEquals(style.align.textRotation, expected, s"for textRotation=$attr")
+        case other => fail(s"Expected Right(Some(style)) for textRotation=$attr, got: $other")
+  }
+
+  test("StylePatcher.getStyle: out-of-range textRotation behaves identically to DOM StyleParser") {
+    val xml = stylesXmlWith(
+      defaultFontsXml,
+      """<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" textRotation="200"/></xf>"""
+    )
+
+    val streamingAlign = StylePatcher.getStyle(xml, 1).toOption.flatten.map(_.align)
+    val domAlign = XmlSecurity
+      .parseSafe(xml, "styles.xml")
+      .toOption
+      .flatMap(elem => WorkbookStyles.fromXml(elem).toOption)
+      .flatMap(_.styleAt(1))
+      .map(_.align)
+
+    assert(streamingAlign.isDefined, "streaming path should produce an alignment")
+    assert(domAlign.isDefined, "DOM path should produce an alignment")
+    assertEquals(streamingAlign, domAlign)
+  }
+
+  test("StylePatcher: textRotation round-trips through addStyle + getStyle (GH-380)") {
+    val rotated =
+      CellStyle.default.withAlign(Align(horizontal = HAlign.Left, textRotation = 90))
+
+    val result =
+      for
+        added <- StylePatcher.addStyle(minimalStylesXml, rotated)
+        (updatedXml, id) = added
+        parsed <- StylePatcher.getStyle(updatedXml, id)
+      yield parsed
+
+    result match
+      case Right(Some(style)) => assertEquals(style.align.textRotation, 90)
+      case other => fail(s"Expected Right(Some(style)), got: $other")
+  }
+
+  test("StylePatcher.mergeStyles: textRotation follows overlay-wins-when-set semantics (GH-380)") {
+    val existing = CellStyle.default.withAlign(Align(horizontal = HAlign.Left, textRotation = 90))
+
+    // Default overlay preserves the existing rotation
+    val keptRotation = StylePatcher.mergeStyles(existing, CellStyle.default)
+    assertEquals(keptRotation.align.textRotation, 90)
+
+    // Non-default overlay rotation wins
+    val overlay = CellStyle.default.withAlign(Align(textRotation = 135))
+    val merged = StylePatcher.mergeStyles(existing, overlay)
+    assertEquals(merged.align.textRotation, 135)
+    assertEquals(merged.align.horizontal, HAlign.Left, "unset overlay components inherit existing")
   }
 
   test("StylePatcher.getStyle: non-positive font size falls back to default, not thrown") {
