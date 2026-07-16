@@ -5,9 +5,11 @@ import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
+import com.tjclp.xl.workbooks.Workbook
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 
+import java.time.LocalDate
 import scala.math.BigDecimal
 
 /**
@@ -239,6 +241,116 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
     val printed = FormulaPrinter.print(parsed)
     assertEquals(printed, formula)
+  }
+
+  // ==================== GH-388: Newton Divergence Containment ====================
+
+  // Issue repro: a thin one-entry/one-exit strip whose exit approaches zero. Newton
+  // overshoots below -1 and diverges doubly-exponentially until BigDecimal's int scale
+  // overflows (java.lang.ArithmeticException from checkScale). Totality requires the same
+  // contained EvalFailed as the documented non-convergence path — never a thrown exception.
+  private def divergingStrip: Sheet = sheetWith(
+    ARef.from0(0, 0) -> CellValue.Number(BigDecimal("-228")),
+    ARef.from0(0, 1) -> CellValue.Number(BigDecimal("0")),
+    ARef.from0(0, 2) -> CellValue.Number(BigDecimal("0")),
+    ARef.from0(0, 3) -> CellValue.Number(BigDecimal("0")),
+    ARef.from0(0, 4) -> CellValue.Number(BigDecimal("0")),
+    ARef.from0(0, 5) -> CellValue.Number(BigDecimal("0.0001"))
+  )
+
+  test("IRR: Newton divergence returns contained error, never throws (GH-388)") {
+    val expr = TExpr.irr(CellRange.parse("A1:A6").getOrElse(fail("Invalid range")))
+    evalErr(expr, divergingStrip) match
+      case EvalError.EvalFailed(reason, _) =>
+        assert(reason.contains("IRR"), s"unexpected reason: $reason")
+      case other => fail(s"Expected EvalFailed, got $other")
+  }
+
+  test("IRR: Newton divergence inside recalculate() is a per-cell error, never throws (GH-388)") {
+    val s = divergingStrip
+      .put(ARef.from0(1, 0), CellValue.Formula("=IRR(A1:A6)", None))
+      .put(ARef.from0(1, 1), CellValue.Formula("=SUM(A1:A6)", None))
+    // Documented contract (see also LetFunctionSpec): recalculate is total — per-cell
+    // error reporting, never a thrown exception.
+    val result = Workbook(Vector(s)).recalculate()
+    assert(
+      result.errors.exists(e => e.ref == ARef.from0(1, 0)),
+      s"expected a per-cell error for B1, got: ${result.errors}"
+    )
+    val evaluated = result.evaluated.getOrElse(SheetName.unsafe("Test"), Map.empty)
+    assert(evaluated.get(ARef.from0(1, 0)).isEmpty, "diverging IRR must not cache a value")
+    assertEquals(
+      evaluated.get(ARef.from0(1, 1)),
+      Some(CellValue.Number(BigDecimal("-227.9999")))
+    )
+  }
+
+  // ==================== XNPV / XIRR Evaluation Tests ====================
+
+  /** Two cash flows anchored at 2020-01-01 with a parameterized exit flow and date. */
+  private def xSchedule(entry: BigDecimal, exit: BigDecimal, exitDate: LocalDate): Sheet =
+    sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(entry),
+      ARef.from0(0, 1) -> CellValue.Number(exit),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDate.of(2020, 1, 1).atStartOfDay),
+      ARef.from0(1, 1) -> CellValue.DateTime(exitDate.atStartOfDay)
+    )
+
+  test("XNPV: discounts irregular cash flows by actual/365 year fractions") {
+    val expr = TExpr.xnpv(
+      TExpr.Lit(BigDecimal("0.1")),
+      CellRange.parse("A1:A2").getOrElse(fail("Invalid range")),
+      CellRange.parse("B1:B2").getOrElse(fail("Invalid range"))
+    )
+    val sheet = xSchedule(BigDecimal("-1000"), BigDecimal("1200"), LocalDate.of(2021, 1, 1))
+    val result = evalOk(expr, sheet)
+    // -1000 + 1200 / 1.1^(366/365) — 2020 is a leap year, 366 days between the dates
+    val expected = -1000.0 + 1200.0 / math.pow(1.1, 366.0 / 365.0)
+    assert((result.toDouble - expected).abs < 0.01, s"got $result, expected ~$expected")
+  }
+
+  test("XIRR: two-flow investment rate makes XNPV zero") {
+    val expr = TExpr.xirr(
+      CellRange.parse("A1:A2").getOrElse(fail("Invalid range")),
+      CellRange.parse("B1:B2").getOrElse(fail("Invalid range"))
+    )
+    val sheet = xSchedule(BigDecimal("-1000"), BigDecimal("1100"), LocalDate.of(2021, 1, 1))
+    val result = evalOk(expr, sheet)
+    val npvAtResult = -1000.0 + 1100.0 / math.pow(1.0 + result.toDouble, 366.0 / 365.0)
+    assert(
+      math.abs(npvAtResult) < 0.001,
+      s"XNPV at computed XIRR should be ~0, got $npvAtResult (rate: $result)"
+    )
+  }
+
+  test("XIRR: Newton divergence returns contained error, never throws (GH-388)") {
+    // Same shape as the IRR repro: near-zero exit five years out. Newton overshoots to a
+    // hugely negative rate; math.pow(negative base, fractional exponent) yields NaN, and
+    // BigDecimal(NaN) must not escape as a NumberFormatException.
+    val expr = TExpr.xirr(
+      CellRange.parse("A1:A2").getOrElse(fail("Invalid range")),
+      CellRange.parse("B1:B2").getOrElse(fail("Invalid range"))
+    )
+    val sheet = xSchedule(BigDecimal("-228"), BigDecimal("0.0001"), LocalDate.of(2025, 1, 1))
+    evalErr(expr, sheet) match
+      case EvalError.EvalFailed(reason, _) =>
+        assert(reason.contains("XIRR"), s"unexpected reason: $reason")
+      case other => fail(s"Expected EvalFailed, got $other")
+  }
+
+  test("XNPV: non-finite discount factor is a contained error, never throws (GH-388)") {
+    // Rate 1e300 over a ~5-year fraction: math.pow(1e300, ~5) = Infinity, and
+    // BigDecimal(Infinity) must not escape as a NumberFormatException.
+    val expr = TExpr.xnpv(
+      TExpr.Lit(BigDecimal("1e300")),
+      CellRange.parse("A1:A2").getOrElse(fail("Invalid range")),
+      CellRange.parse("B1:B2").getOrElse(fail("Invalid range"))
+    )
+    val sheet = xSchedule(BigDecimal("-1000"), BigDecimal("1200"), LocalDate.of(2025, 1, 1))
+    evalErr(expr, sheet) match
+      case EvalError.EvalFailed(reason, _) =>
+        assert(reason.contains("XNPV"), s"unexpected reason: $reason")
+      case other => fail(s"Expected EvalFailed, got $other")
   }
 
   // ==================== VLOOKUP Tests ====================
@@ -713,4 +825,71 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     val fvFormula = s"=FV(0.005, $nper, -200, 10000)"
     val fv = evalNumeric(fvFormula)
     assertApprox(fv, 0.0, 1.0)
+  }
+
+  // ==================== GH-388: TVM Numeric Containment ====================
+
+  /** Expect a contained EvalFailed naming the function — the eval must never throw. */
+  private def assertContained(expr: TExpr[BigDecimal], fn: String): Unit =
+    evalErr(expr, sheetWith()) match
+      case EvalError.EvalFailed(reason, _) =>
+        assert(reason.contains(fn), s"unexpected reason: $reason")
+      case other => fail(s"Expected EvalFailed, got $other")
+
+  test("PMT: zero rate with zero periods is a contained error, never throws (GH-388)") {
+    // rate ≈ 0, nper = 0 hits the BigDecimal(Double.NaN) branch
+    val expr = TExpr.pmt(
+      TExpr.Lit(BigDecimal(0)),
+      TExpr.Lit(BigDecimal(0)),
+      TExpr.Lit(BigDecimal(10000))
+    )
+    assertContained(expr, "PMT")
+  }
+
+  test("PMT: non-finite intermediate (huge rate and nper) is a contained error (GH-388)") {
+    // pow(1e300, 1e300) = Infinity, -Inf/Inf = NaN → BigDecimal(NaN) must be contained
+    val expr = TExpr.pmt(
+      TExpr.Lit(BigDecimal("1e300")),
+      TExpr.Lit(BigDecimal("1e300")),
+      TExpr.Lit(BigDecimal(10000))
+    )
+    assertContained(expr, "PMT")
+  }
+
+  test("FV: non-finite intermediate (huge rate and nper) is a contained error (GH-388)") {
+    val expr = TExpr.fv(
+      TExpr.Lit(BigDecimal("1e300")),
+      TExpr.Lit(BigDecimal("1e300")),
+      TExpr.Lit(BigDecimal(100))
+    )
+    assertContained(expr, "FV")
+  }
+
+  test("PV: non-finite intermediate (huge rate and nper) is a contained error (GH-388)") {
+    val expr = TExpr.pv(
+      TExpr.Lit(BigDecimal("1e300")),
+      TExpr.Lit(BigDecimal("1e300")),
+      TExpr.Lit(BigDecimal(100))
+    )
+    assertContained(expr, "PV")
+  }
+
+  test("NPER: zero rate with zero payment is a contained error, never throws (GH-388)") {
+    val expr = TExpr.nper(
+      TExpr.Lit(BigDecimal(0)),
+      TExpr.Lit(BigDecimal(0)),
+      TExpr.Lit(BigDecimal(10000))
+    )
+    assertContained(expr, "NPER")
+  }
+
+  test("RATE: NaN-producing inputs yield a contained non-convergence error (GH-388)") {
+    // pow(1.1, 1e10) = Infinity → f and df both NaN; the Newton loop must exhaust its
+    // iterations with a contained EvalFailed rather than surfacing NaN or throwing.
+    val expr = TExpr.rate(
+      TExpr.Lit(BigDecimal("1e10")),
+      TExpr.Lit(BigDecimal(-500)),
+      TExpr.Lit(BigDecimal(10000))
+    )
+    assertContained(expr, "RATE")
   }

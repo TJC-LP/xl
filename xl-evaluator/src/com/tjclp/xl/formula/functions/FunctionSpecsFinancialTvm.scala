@@ -23,13 +23,18 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
         pmtType <- typeOpt match
           case Some(expr) => ctx.evalExpr(expr).map(v => if v.toInt != 0 then 1 else 0)
           case None => Right(0)
-      yield
-        if math.abs(rate) < 1e-10 then
-          if nper == 0.0 then BigDecimal(Double.NaN)
-          else BigDecimal(-(pv + fv) / nper)
-        else
-          val pvif = math.pow(1.0 + rate, nper)
-          BigDecimal(-rate * (pv * pvif + fv) / ((1.0 + rate * pmtType) * (pvif - 1.0)))
+        // GH-388: BigDecimal(Double) throws NumberFormatException on NaN/Infinity
+        result <- NumericGuard.contained("PMT", "PMT(rate, nper, pv, [fv], [type])") {
+          val payment =
+            if math.abs(rate) < 1e-10 then
+              if nper == 0.0 then BigDecimal(Double.NaN)
+              else BigDecimal(-(pv + fv) / nper)
+            else
+              val pvif = math.pow(1.0 + rate, nper)
+              BigDecimal(-rate * (pv * pvif + fv) / ((1.0 + rate * pmtType) * (pvif - 1.0)))
+          Right(payment)
+        }
+      yield result
     }
 
   val fv: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
@@ -49,12 +54,17 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
         pmtType <- typeOpt match
           case Some(expr) => ctx.evalExpr(expr).map(v => if v.toInt != 0 then 1 else 0)
           case None => Right(0)
-      yield
-        if math.abs(rate) < 1e-10 then BigDecimal(-pv - pmt * nper)
-        else
-          val pvif = math.pow(1.0 + rate, nper)
-          val fvifa = (pvif - 1.0) / rate
-          BigDecimal(-pv * pvif - pmt * (1.0 + rate * pmtType) * fvifa)
+        // GH-388: BigDecimal(Double) throws NumberFormatException on NaN/Infinity
+        result <- NumericGuard.contained("FV", "FV(rate, nper, pmt, [pv], [type])") {
+          val futureValue =
+            if math.abs(rate) < 1e-10 then BigDecimal(-pv - pmt * nper)
+            else
+              val pvif = math.pow(1.0 + rate, nper)
+              val fvifa = (pvif - 1.0) / rate
+              BigDecimal(-pv * pvif - pmt * (1.0 + rate * pmtType) * fvifa)
+          Right(futureValue)
+        }
+      yield result
     }
 
   val pv: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
@@ -74,12 +84,17 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
         pmtType <- typeOpt match
           case Some(expr) => ctx.evalExpr(expr).map(v => if v.toInt != 0 then 1 else 0)
           case None => Right(0)
-      yield
-        if math.abs(rate) < 1e-10 then BigDecimal(-fv - pmt * nper)
-        else
-          val pvif = math.pow(1.0 + rate, nper)
-          val fvifa = (pvif - 1.0) / rate
-          BigDecimal((-fv - pmt * (1.0 + rate * pmtType) * fvifa) / pvif)
+        // GH-388: BigDecimal(Double) throws NumberFormatException on NaN/Infinity
+        result <- NumericGuard.contained("PV", "PV(rate, nper, pmt, [fv], [type])") {
+          val presentValue =
+            if math.abs(rate) < 1e-10 then BigDecimal(-fv - pmt * nper)
+            else
+              val pvif = math.pow(1.0 + rate, nper)
+              val fvifa = (pvif - 1.0) / rate
+              BigDecimal((-fv - pmt * (1.0 + rate * pmtType) * fvifa) / pvif)
+          Right(presentValue)
+        }
+      yield result
     }
 
   val nper: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
@@ -99,15 +114,21 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
         pmtType <- typeOpt match
           case Some(expr) => ctx.evalExpr(expr).map(v => if v.toInt != 0 then 1 else 0)
           case None => Right(0)
-      yield
-        if math.abs(rate) < 1e-10 then
-          if pmt == 0.0 then BigDecimal(Double.NaN)
-          else BigDecimal(-(pv + fv) / pmt)
-        else
-          val ratep1 = 1.0 + rate
-          val numerator = -fv * rate + pmt * (1.0 + rate * pmtType)
-          val denominator = pv * rate + pmt * (1.0 + rate * pmtType)
-          BigDecimal(math.log(numerator / denominator) / math.log(ratep1))
+        // GH-388: BigDecimal(Double) throws NumberFormatException on NaN/Infinity
+        // (zero payment, or math.log of a non-positive ratio)
+        result <- NumericGuard.contained("NPER", "NPER(rate, pmt, pv, [fv], [type])") {
+          val periods =
+            if math.abs(rate) < 1e-10 then
+              if pmt == 0.0 then BigDecimal(Double.NaN)
+              else BigDecimal(-(pv + fv) / pmt)
+            else
+              val ratep1 = 1.0 + rate
+              val numerator = -fv * rate + pmt * (1.0 + rate * pmtType)
+              val denominator = pv * rate + pmt * (1.0 + rate * pmtType)
+              BigDecimal(math.log(numerator / denominator) / math.log(ratep1))
+          Right(periods)
+        }
+      yield result
     }
 
   val rate: FunctionSpec[BigDecimal] { type Args = RateArgs } =
@@ -130,7 +151,9 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
         guess <- guessOpt match
           case Some(expr) => ctx.evalExpr(expr).map(_.toDouble)
           case None => Right(0.1)
-        result <- {
+        // GH-388: the converged Right(BigDecimal(next)) must never explode on a
+        // non-finite double
+        result <- NumericGuard.contained("RATE", "RATE(nper, pmt, pv, [fv], [type], [guess])") {
           val maxIter = 100
           val tolerance = 1e-7
 

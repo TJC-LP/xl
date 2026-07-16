@@ -8,6 +8,25 @@ import com.tjclp.xl.formula.{Clock, Arity}
 import com.tjclp.xl.addressing.CellRange
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+import scala.util.control.NonFatal
+
+/**
+ * GH-388: containment for numeric blowups in financial math.
+ *
+ * Newton–Raphson divergence can push BigDecimal scales past `Int.MaxValue`
+ * (`java.lang.ArithmeticException` from `checkScale`), and NaN/Infinity doubles explode in
+ * `BigDecimal.apply` (`NumberFormatException`). Totality requires those to surface as the same
+ * contained per-cell `EvalFailed` the non-convergence path produces — never as an exception
+ * unwinding `recalculate()`. Same precedent as the `ArrayArithmetic.pow` guard.
+ */
+private[functions] object NumericGuard:
+  def contained[A](fn: String, usage: String)(
+    body: => Either[EvalError, A]
+  ): Either[EvalError, A] =
+    try body
+    catch
+      case NonFatal(_) =>
+        Left(EvalError.EvalFailed(s"$fn diverged (numeric overflow)", Some(usage)))
 
 trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
   private def numericValues(range: CellRange, ctx: EvalContext): List[BigDecimal] =
@@ -39,14 +58,16 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
             )
           )
         else
-          val cashFlows = numericValues(range, ctx)
+          NumericGuard.contained("NPV", "NPV(rate, values)") {
+            val cashFlows = numericValues(range, ctx)
 
-          val npv =
-            cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
-              val period = idx + 1
-              acc + cf / onePlusR.pow(period)
-            }
-          Right(npv)
+            val npv =
+              cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
+                val period = idx + 1
+                acc + cf / onePlusR.pow(period)
+              }
+            Right(npv)
+          }
       }
     }
 
@@ -115,7 +136,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                 if (next - r).abs <= tolerance then Right(next)
                 else loop(iter + 1, next)
 
-          loop(0, guess0)
+          NumericGuard.contained("IRR", "IRR(values[, guess])")(loop(0, guess0))
         }
     }
 
@@ -149,14 +170,17 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
           else
             dates match
               case date0 :: _ =>
-                val onePlusR = BigDecimal(1) + rate
-                val npv = values.zip(dates).foldLeft(BigDecimal(0)) { case (acc, (value, date)) =>
-                  val daysDiff = ChronoUnit.DAYS.between(date0, date)
-                  val yearFraction = BigDecimal(daysDiff) / BigDecimal(365)
-                  val discountFactor = math.pow(onePlusR.toDouble, yearFraction.toDouble)
-                  acc + value / BigDecimal(discountFactor)
+                NumericGuard.contained("XNPV", "XNPV(rate, values, dates)") {
+                  val onePlusR = BigDecimal(1) + rate
+                  val npv =
+                    values.zip(dates).foldLeft(BigDecimal(0)) { case (acc, (value, date)) =>
+                      val daysDiff = ChronoUnit.DAYS.between(date0, date)
+                      val yearFraction = BigDecimal(daysDiff) / BigDecimal(365)
+                      val discountFactor = math.pow(onePlusR.toDouble, yearFraction.toDouble)
+                      acc + value / BigDecimal(discountFactor)
+                    }
+                  Right(npv)
                 }
-                Right(npv)
               case Nil =>
                 Left(EvalError.EvalFailed("XNPV: dates cannot be empty", None))
         }
@@ -248,7 +272,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                     if (next - r).abs <= tolerance then Right(next)
                     else loop(iter + 1, next)
 
-              loop(0, guess0)
+              NumericGuard.contained("XIRR", "XIRR(values, dates[, guess])")(loop(0, guess0))
             case Nil =>
               Left(EvalError.EvalFailed("XIRR: dates cannot be empty", None))
         }
