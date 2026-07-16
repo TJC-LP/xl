@@ -1,8 +1,10 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.time.{LocalDate, LocalDateTime}
+import java.util.zip.ZipFile
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
@@ -169,6 +171,44 @@ class WriteFastSpec extends FunSuite:
           assertEquals(expr, "SUM(A1:A2)")
           assertEquals(cached, Some(CellValue.Number(BigDecimal(30))))
         case other => fail(s"Expected Formula, got $other")
+    }
+  }
+
+  test("writeFast preserves formula cached DateTime as Excel serial with t=\"n\" (GH-378)") {
+    // Jan 1, 2000 noon = serial 36526.5 exactly
+    val cached = LocalDateTime.of(2000, 1, 1, 12, 0, 0)
+    val sheet = Sheet("Formulas")
+      .put(ref"A1" -> CellValue.DateTime(cached))
+      .put(ref"A2" -> CellValue.Formula("EDATE(A1,0)", Some(CellValue.DateTime(cached))))
+    val wb = Workbook(Vector(sheet))
+
+    val outputPath = tempDir.resolve("formula-cached-datetime-fast.xlsx")
+    val writeResult = XlsxWriter.writeWith(wb, outputPath, saxConfig)
+    assert(writeResult.isRight, s"writeFast failed: $writeResult")
+
+    // Raw XML: the formula cell must carry t="n" and the cached serial in <v>
+    val zip = new ZipFile(outputPath.toFile)
+    val sheetXml =
+      try
+        new String(
+          zip.getInputStream(zip.getEntry("xl/worksheets/sheet1.xml")).readAllBytes(),
+          StandardCharsets.UTF_8
+        )
+      finally zip.close()
+    val cellXml = """(?s)<c r="A2".*?</c>""".r
+      .findFirstIn(sheetXml)
+      .getOrElse(fail(s"A2 cell missing from worksheet XML:\n$sheetXml"))
+    assert(cellXml.contains("""t="n""""), cellXml)
+    assert(cellXml.contains("<v>36526.5</v>"), cellXml)
+
+    val readResult = XlsxReader.read(outputPath)
+    assert(readResult.isRight, s"Read failed: $readResult")
+    readResult.foreach { readWb =>
+      readWb.sheets.head(ref"A2").value match
+        case CellValue.Formula(expr, Some(CellValue.Number(serial))) =>
+          assertEquals(expr, "EDATE(A1,0)")
+          assertEquals(serial.toDouble, 36526.5, 0.000001)
+        case other => fail(s"Expected Formula with cached serial Number, got $other")
     }
   }
 

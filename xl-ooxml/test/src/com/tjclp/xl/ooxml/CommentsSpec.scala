@@ -542,5 +542,69 @@ class CommentsSpec extends FunSuite:
     assertEquals(rereadSheet.comments.get(ref"A1").flatMap(_.author), Some("Author"))
   }
 
+  test("GH-383: authored comment rPr emits <rFont> (CT_RPrElt), never <name>") {
+    // xl/commentsN.xml run properties are CT_RPrElt, whose font element is <rFont val=…/>.
+    // <name val=…/> is the CT_Font (styles.xml) spelling; strict parsers (openpyxl)
+    // reject the whole workbook over it. The author-prefix run makes every authored
+    // comment carry an rPr, so this exercises the exact GH-383 repro.
+    val sheet = Sheet("Sheet1").comment(
+      ref"A1",
+      Comment.plainText("Important note", Some("Report Author"))
+    )
+    val bytes = XlsxWriter.writeToBytes(Workbook(Vector(sheet))) match
+      case Right(b) => b
+      case Left(err) => fail(s"Write failed: $err")
+
+    val commentsXml = zipEntryString(bytes, "xl/comments1.xml")
+      .getOrElse(fail("Expected xl/comments1.xml part"))
+
+    assert(
+      commentsXml.contains("<rFont val="),
+      s"Author-prefix run must serialize its font as <rFont val=…>: $commentsXml"
+    )
+    assert(
+      !commentsXml.contains("<name val="),
+      s"CT_RPrElt forbids <name val=…> inside <rPr>: $commentsXml"
+    )
+  }
+
+  test("GH-383: comment run font name survives encode → parse round-trip") {
+    val richText = com.tjclp.xl.richtext.RichText(
+      Vector(
+        com.tjclp.xl.richtext.TextRun(
+          "Styled note",
+          Some(com.tjclp.xl.styles.font.Font(name = "Times New Roman", sizePt = 12.0, bold = true))
+        )
+      )
+    )
+    val comments = OoxmlComments(
+      authors = Vector("Author"),
+      comments = Vector(OoxmlComment(ref"A1", 0, richText))
+    )
+
+    val reparsed = OoxmlComments.fromXml(OoxmlComments.toXml(comments)) match
+      case Right(c) => c
+      case Left(err) => fail(s"Reparse failed: $err")
+
+    val run = reparsed.comments.headOption
+      .flatMap(_.text.runs.headOption)
+      .getOrElse(fail("Expected rich text run"))
+    assertEquals(run.font.map(_.name), Some("Times New Roman"))
+    assertEquals(run.font.map(_.bold), Some(true))
+  }
+
   private def extractShapeIds(vml: String): Set[Int] =
     "_x0000_s(\\d+)".r.findAllMatchIn(vml).map(_.group(1).toInt).toSet
+
+  private def zipEntryString(bytes: Array[Byte], entryName: String): Option[String] =
+    val zis = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))
+    try
+      Iterator
+        .continually(Option(zis.getNextEntry))
+        .takeWhile(_.isDefined)
+        .flatten
+        .collectFirst {
+          case entry if entry.getName == entryName =>
+            new String(zis.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+        }
+    finally zis.close()

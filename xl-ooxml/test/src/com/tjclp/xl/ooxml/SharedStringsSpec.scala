@@ -108,3 +108,34 @@ class SharedStringsSpec extends FunSuite:
     assertEquals(sst.totalCount, 3)
     assertEquals(sst.strings.size, 3)
   }
+
+  test("GH-383: freshly-authored rich text emits <rFont val=> in DOM toXml, never <name val=>") {
+    // No rawRPrXml here (fresh authoring), so the rPr is built from the Font model:
+    // CT_RPrElt spells the font element <rFont val=…/>, not the CT_Font <name val=…/>.
+    val sst = SharedStrings.fromEntries(Vector(Right(freshRichText("Arial")): SSTEntry))
+    val xml = sst.toXml.toString
+
+    assert(xml.contains("<rFont val=\"Arial\""), s"Expected <rFont val=\"Arial\"> in: $xml")
+    assert(!xml.contains("<name val="), s"CT_RPrElt forbids <name val=…> inside <rPr>: $xml")
+  }
+
+  test("GH-383: freshly-authored rich text emits <rFont val=> in SAX writeSax, never <name val=>") {
+    val sst = SharedStrings.fromEntries(Vector(Right(freshRichText("Georgia")): SSTEntry))
+    val writer = ScalaXmlSaxWriter()
+    sst.writeSax(writer)
+    val root = writer.result.getOrElse(fail("Expected <sst> root from SAX emission"))
+
+    val rPr = (root \\ "rPr").headOption.getOrElse(fail(s"Expected <rPr> in: $root"))
+    assertEquals((rPr \ "rFont" \ "@val").text, "Georgia", s"rPr was: $rPr")
+    assert((rPr \ "name").isEmpty, s"CT_RPrElt forbids <name> inside <rPr>: $rPr")
+  }
+
+  private def freshRichText(fontName: String): com.tjclp.xl.richtext.RichText =
+    com.tjclp.xl.richtext.RichText(
+      Vector(
+        com.tjclp.xl.richtext.TextRun(
+          "Styled",
+          Some(com.tjclp.xl.styles.font.Font(name = fontName, sizePt = 10.0))
+        )
+      )
+    )

@@ -14,6 +14,8 @@ import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
+import scala.util.control.NonFatal
+
 // Import SheetEvaluator extension methods
 import SheetEvaluator.*
 
@@ -256,9 +258,23 @@ object WorkbookEvaluator:
             case Some(idx) =>
               val tempSheet = sheets(idx)
               val tempWb = wb.copy(sheets = sheets)
-              val evaluatedCell = rngOpt match
-                case Some(rng) => tempSheet.evaluateCell(q.ref, clock, rng, Some(tempWb))
-                case None => tempSheet.evaluateCell(q.ref, clock, Some(tempWb))
+              // GH-388 defense in depth: recalculate is documented total — a numeric blowup
+              // escaping a function implementation (e.g. BigDecimal scale overflow in a
+              // diverging Newton loop) must degrade to this cell's per-cell error, never
+              // unwind the whole recalculation.
+              val evaluatedCell =
+                try
+                  rngOpt match
+                    case Some(rng) => tempSheet.evaluateCell(q.ref, clock, rng, Some(tempWb))
+                    case None => tempSheet.evaluateCell(q.ref, clock, Some(tempWb))
+                catch
+                  case NonFatal(e) =>
+                    Left(
+                      XLError.FormulaError(
+                        formulaText(q),
+                        s"Evaluation threw ${e.getClass.getName}"
+                      )
+                    )
               evaluatedCell match
                 case Right(value) =>
                   (

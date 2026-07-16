@@ -70,6 +70,25 @@ class DirectSaxEmitterParitySpec extends FunSuite:
     assertEquals(formulaElem.get.text, "SUM(B1:B10)")
   }
 
+  test("GH-378: formula with cached DateTime emits t=\"n\" and the Excel serial in <v>") {
+    val a1 = ARef.from1(1, 1)
+    // Jan 1, 2000 noon = serial 36526.5 exactly
+    val cached = LocalDateTime.of(2000, 1, 1, 12, 0, 0)
+    val sheet = Sheet(SheetName.unsafe("Test"))
+      .put(a1, CellValue.Formula("EOMONTH(A1,0)", Some(CellValue.DateTime(cached))))
+
+    val saxCell = (emitDirect(sheet, None) \\ "c").head
+    assertEquals(saxCell.attribute("t").map(_.text), Some("n"))
+    assertEquals((saxCell \ "f").text, "EOMONTH(A1,0)")
+    assertEquals((saxCell \ "v").map(_.text).toList, List("36526.5"))
+
+    // The DOM writer must emit the identical cached serial (backend parity)
+    val domCell =
+      (OoxmlWorksheet.fromDomainWithSST(sheet, None, Map.empty, None).toXml \\ "c").head
+    assertEquals(domCell.attribute("t").map(_.text), Some("n"))
+    assertEquals((domCell \ "v").map(_.text).toList, List("36526.5"))
+  }
+
   test("GH-265: direct SAX emission matches DOM writer for fresh-sheet metadata") {
     // Freeze panes, view settings, page setup (incl. even header + fitToPage), hyperlinks:
     // everything the DOM writer emits for a fresh sheet must come out of the streaming path too.
@@ -126,6 +145,22 @@ class DirectSaxEmitterParitySpec extends FunSuite:
     Files.deleteIfExists(domPath)
   }
 
+  test("GH-383: rich text inline cell emits <rFont> under rPr and matches DOM writer") {
+    val a1 = ARef.from1(1, 1)
+    val rich = "Styled".fontFamily("Times New Roman") + " plain"
+    val sheet = Sheet(SheetName.unsafe("Sheet1")).put(a1, CellValue.RichText(rich))
+
+    val dom = OoxmlWorksheet.fromDomainWithSST(sheet, None, Map.empty, None).toXml
+    val sax = emitDirect(sheet, None)
+
+    for (label, xml) <- List("DOM" -> dom, "SAX" -> sax) do
+      val rPr = (xml \\ "rPr").headOption.getOrElse(fail(s"$label: expected <rPr> in: $xml"))
+      assertEquals((rPr \ "rFont" \ "@val").text, "Times New Roman", s"$label rPr was: $rPr")
+      assert((rPr \ "name").isEmpty, s"$label: CT_RPrElt forbids <name> inside <rPr>: $rPr")
+
+    assertEquals(normalize(dom), normalize(sax))
+  }
+
   private def zipEntryString(path: Path, entry: String): String =
     val zf = new ZipFile(path.toFile)
     try
@@ -169,6 +204,7 @@ class DirectSaxEmitterParitySpec extends FunSuite:
     val b1 = ARef.from1(2, 1)
     val c1 = ARef.from1(3, 1)
     val d1 = ARef.from1(4, 1)
+    val e1 = ARef.from1(5, 1)
     val a2 = ARef.from1(1, 2)
     val b2 = ARef.from1(2, 2)
 
@@ -182,6 +218,14 @@ class DirectSaxEmitterParitySpec extends FunSuite:
         d1,
         CellValue.Formula("SUM(A1:B1)", Some(CellValue.Number(BigDecimal(3))))
       )
+      .put(
+        e1,
+        // GH-378: cached DateTime must serialize identically on both backends
+        CellValue.Formula(
+          "EDATE(B2,1)",
+          Some(CellValue.DateTime(LocalDateTime.of(2024, 2, 2, 3, 4)))
+        )
+      )
       .put(a2, CellValue.RichText(rich))
       .put(b2, CellValue.DateTime(LocalDateTime.of(2024, 1, 2, 3, 4)))
       .merge(CellRange(ARef.from1(1, 3), ARef.from1(2, 3)))
@@ -190,6 +234,8 @@ class DirectSaxEmitterParitySpec extends FunSuite:
         Row.from1(2),
         RowProperties(height = Some(24.0), hidden = true, outlineLevel = Some(1), collapsed = true)
       )
+      // GH-381: property-only row (no cells in row 4) must survive on both backends
+      .setRowProperties(Row.from1(4), RowProperties(height = Some(5.25)))
       .setColumnProperties(
         Column.from1(1),
         ColumnProperties(width = Some(12.5), outlineLevel = Some(1))

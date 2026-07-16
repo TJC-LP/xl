@@ -5,7 +5,9 @@ import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import scala.jdk.CollectionConverters.*
 
+import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.*
+import com.tjclp.xl.cells.Comment
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import munit.FunSuite
@@ -201,6 +203,160 @@ class ContentTypesReconcileSpec extends FunSuite:
 
     val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
     assertEquals(reloaded.sheetNames.map(_.value), Vector("Sheet1"))
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  // ========== GH-328: removing a sheet's LAST comment must not leave orphans behind ==========
+
+  private def sheetRelationships(path: Path, relsEntry: String): Seq[Relationship] =
+    if !zipEntryNames(path).contains(relsEntry) then Seq.empty
+    else
+      val xml = scala.xml.XML.loadString(new String(readEntry(path, relsEntry), "UTF-8"))
+      Relationships.fromXml(xml).fold(err => fail(s"rels parse failed: $err"), _.relationships)
+
+  private def assertNoCommentResidue(output: Path, commentPart: String, vmlPart: String): Unit =
+    val entries = zipEntryNames(output)
+    assert(!entries.contains(commentPart), s"removed comment part must not ship: $entries")
+    assert(!entries.contains(vmlPart), s"removed VML part must not ship: $entries")
+
+    val ct = parseContentTypes(output)
+    assertEquals(
+      ct.overrides.get(s"/$commentPart"),
+      None,
+      s"orphan comments override survived. Overrides: ${ct.overrides}"
+    )
+    assertEquals(
+      ct.overrides.get(s"/$vmlPart"),
+      None,
+      s"orphan VML override survived. Overrides: ${ct.overrides}"
+    )
+    val dangling = ct.overrides.keys.filterNot(p => entries.contains(p.stripPrefix("/")))
+    assert(
+      dangling.isEmpty,
+      s"overrides point at parts that do not ship: ${dangling.mkString(", ")}"
+    )
+
+    val sheetRels = sheetRelationships(output, "xl/worksheets/_rels/sheet1.xml.rels")
+    val commentish = sheetRels.filter(r =>
+      r.`type` == XmlUtil.relTypeComments || r.`type` == XmlUtil.relTypeVmlDrawing
+    )
+    assert(commentish.isEmpty, s"dangling comment/VML sheet rels survived: $commentish")
+
+    val sheetXml = new String(readEntry(output, "xl/worksheets/sheet1.xml"), "UTF-8")
+    assert(
+      !sheetXml.contains("<legacyDrawing"),
+      s"legacyDrawing element must not reference a dropped VML rel:\n$sheetXml"
+    )
+
+  test(
+    "GH-328: cell edit removing the last comment prunes CT override, sheet rels, legacyDrawing"
+  ) {
+    // Excel-dialect source written by XL itself: comments1.xml + vmlDrawing1.vml
+    val notes = Sheet(SheetName.unsafe("Notes"))
+      .put(ref"A1" -> "hello")
+      .comment(ref"A1", Comment.plainText("note", Some("Ann")))
+    val source = Files.createTempFile("gh328-source", ".xlsx")
+    XlsxWriter
+      .write(Workbook(Vector(notes)), source)
+      .fold(err => fail(s"source write failed: $err"), identity)
+    assert(zipEntryNames(source).contains("xl/comments1.xml"), "fixture sanity: comments ship")
+
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+    // Remove ALL comments + edit a cell: sheet modified, metadata stable → preserved-CT branch
+    val modified = wb
+      .update(SheetName.unsafe("Notes"), s => s.removeComment(ref"A1").put(ref"B1" -> 42))
+      .fold(err => fail(s"update failed: $err"), identity)
+
+    val output = Files.createTempFile("gh328-out", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    assertNoCommentResidue(output, "xl/comments1.xml", "xl/drawings/vmlDrawing1.vml")
+
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    val sheet = reloaded("Notes").fold(err => fail(s"Sheet missing: $err"), identity)
+    assert(sheet.comments.isEmpty, s"comments must stay removed, got ${sheet.comments}")
+    assertEquals(sheet.cells.get(ref"B1").map(_.value.toString).isDefined, true)
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  test("GH-328: removing ONE of two comments keeps the part, its override, and its rels") {
+    val notes = Sheet(SheetName.unsafe("Notes"))
+      .put(ref"A1" -> "hello")
+      .comment(ref"A1", Comment.plainText("first", Some("Ann")))
+      .comment(ref"B2", Comment.plainText("second", Some("Bob")))
+    val source = Files.createTempFile("gh328-partial-source", ".xlsx")
+    XlsxWriter
+      .write(Workbook(Vector(notes)), source)
+      .fold(err => fail(s"source write failed: $err"), identity)
+
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+    val modified = wb
+      .update(SheetName.unsafe("Notes"), _.removeComment(ref"A1"))
+      .fold(err => fail(s"update failed: $err"), identity)
+
+    val output = Files.createTempFile("gh328-partial-out", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    // The sheet still emits comments NOW → part, override, and rels all stay
+    val entries = zipEntryNames(output)
+    assert(entries.contains("xl/comments1.xml"), s"surviving comment part must ship: $entries")
+    val ct = parseContentTypes(output)
+    assertEquals(ct.overrides.get("/xl/comments1.xml"), Some(XmlUtil.ctComments))
+    val sheetRels = sheetRelationships(output, "xl/worksheets/_rels/sheet1.xml.rels")
+    assert(
+      sheetRels.exists(_.`type` == XmlUtil.relTypeComments),
+      s"comments rel must survive a partial removal: $sheetRels"
+    )
+
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    val sheet = reloaded("Notes").fold(err => fail(s"Sheet missing: $err"), identity)
+    assertEquals(sheet.comments.keySet, Set(ref"B2"), "only the removed comment disappears")
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  test("GH-328: foreign-dialect (openpyxl) comment removal prunes by RESOLVED part path") {
+    val source = TestFixtures.copyToTemp("comments-hyperlinks.xlsx")
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+
+    val hadComments = wb("Notes").fold(err => fail(s"Sheet missing: $err"), identity).comments
+    assert(hadComments.nonEmpty, "fixture sanity: the sheet starts with a comment")
+
+    val modified = wb
+      .update(
+        SheetName.unsafe("Notes"),
+        s => hadComments.keys.foldLeft(s)(_.removeComment(_)).put(ref"D4" -> "edited")
+      )
+      .fold(err => fail(s"update failed: $err"), identity)
+
+    val output = Files.createTempFile("gh328-openpyxl-out", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    // openpyxl names its parts xl/comments/comment1.xml + xl/drawings/commentsDrawing1.vml —
+    // pruning must key on the RESOLVED paths, not the legacy comments{n}.xml guess
+    assertNoCommentResidue(output, "xl/comments/comment1.xml", "xl/drawings/commentsDrawing1.vml")
+
+    // The model-owned EXTERNAL hyperlink keeps its rel (the internal one serializes inline
+    // via location=, no rel needed)
+    val sheetRels = sheetRelationships(output, "xl/worksheets/_rels/sheet1.xml.rels")
+    assertEquals(
+      sheetRels.count(_.`type` == XmlUtil.relTypeHyperlink),
+      1,
+      s"external hyperlink rel must survive: $sheetRels"
+    )
+
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    val sheet = reloaded("Notes").fold(err => fail(s"Sheet missing: $err"), identity)
+    assert(sheet.comments.isEmpty, s"comments must stay removed, got ${sheet.comments}")
+    assert(
+      sheet.cells.get(ref"B1").exists(_.hyperlink.isDefined),
+      "hyperlink must survive the comment removal"
+    )
 
     Files.deleteIfExists(source)
     Files.deleteIfExists(output)

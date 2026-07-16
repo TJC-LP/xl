@@ -80,7 +80,12 @@ case class OoxmlCell(
               writer.startElement("v")
               writer.writeCharacters(err.toExcel)
               writer.endElement()
-            case _ => () // Empty, RichText, Formula, DateTime - don't write
+            case CellValue.DateTime(dt) =>
+              // GH-378: cached DateTime serializes as the Excel serial (t="n"), like Excel itself
+              writer.startElement("v")
+              writer.writeCharacters(XmlUtil.plainNumber(CellValue.dateTimeToExcelSerial(dt)))
+              writer.endElement()
+            case _ => () // Empty, RichText, Formula - don't write
           }
 
         case CellValue.Error(err) =>
@@ -157,7 +162,8 @@ case class OoxmlCell(
     writer.writeAttribute("val", font.sizePt.toString)
     writer.endElement()
 
-    writer.startElement("name")
+    // CT_RPrElt spells the font element <rFont>, not the CT_Font <name> (GH-383)
+    writer.startElement("rFont")
     writer.writeAttribute("val", font.name)
     writer.endElement()
 
@@ -230,7 +236,8 @@ case class OoxmlCell(
 
                 // Font size and name
                 fontProps += elem("sz", "val" -> f.sizePt.toString)()
-                fontProps += elem("name", "val" -> f.name)()
+                // CT_RPrElt spells the font element <rFont>, not the CT_Font <name> (GH-383)
+                fontProps += elem("rFont", "val" -> f.name)()
 
                 elem("rPr")(fontProps.result()*)
               }.toList
@@ -271,7 +278,10 @@ case class OoxmlCell(
           case CellValue.Error(err) =>
             import com.tjclp.xl.cells.CellError.toExcel
             Some(elem("v")(Text(err.toExcel)))
-          case _ => None // Empty, RichText, Formula, DateTime - don't write
+          case CellValue.DateTime(dt) =>
+            // GH-378: cached DateTime serializes as the Excel serial (t="n"), like Excel itself
+            Some(elem("v")(Text(XmlUtil.plainNumber(CellValue.dateTimeToExcelSerial(dt)))))
+          case _ => None // Empty, RichText, Formula - don't write
         }
         Seq(formulaElem) ++ cachedElem.toList
       case CellValue.Error(err) =>

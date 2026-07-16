@@ -46,11 +46,35 @@ case class ContentTypes(
     if commentAdds.isEmpty && vmlAdds.isEmpty then this
     else copy(overrides = overrides ++ commentAdds ++ vmlAdds)
 
+  /**
+   * Prune comment-class overrides (comments + VML) whose parts are NOT in `shippedParts` (zip paths
+   * without the leading slash) — the mirror of [[withEmittedCommentParts]] for the preserved-CT
+   * branch (GH-328): a cell edit that removes a sheet's LAST comment keeps the preserved
+   * [Content_Types].xml byte-stable, whose comment/VML overrides would otherwise dangle behind the
+   * withheld parts. Only the writer-owned comment classes are touched — every other preserved
+   * override (pivots, customXml, threadedComments, macro payloads) rides through untouched (the
+   * GH-314 invariant). The metadata-modified branch gets the same guarantee from
+   * [[ContentTypes.reconcile]] (GH-322).
+   */
+  def withoutOrphanCommentParts(shippedParts: Set[String]): ContentTypes =
+    val shippedNames = shippedParts.map(p => s"/$p")
+    copy(overrides = overrides.filter { case (partName, ct) =>
+      (ct != ctComments && ct != ctVmlDrawing) || shippedNames.contains(partName)
+    })
+
   def withTableOverrides(tableCount: Int): ContentTypes =
     if tableCount == 0 then this
     else
       val overridesToAdd = ContentTypes.tableOverrides(tableCount)
       copy(overrides = overrides ++ overridesToAdd)
+
+  /**
+   * Register the generated default theme part (GH-387) — only when the write actually emits it (a
+   * scratch workbook whose styles reference theme colors). Idempotent.
+   */
+  def withThemeOverride(hasGeneratedTheme: Boolean): ContentTypes =
+    if !hasGeneratedTheme then this
+    else copy(overrides = overrides + ("/xl/theme/theme1.xml" -> ctTheme))
 
   /**
    * Register drawing-part overrides (GH-221). `partPaths` are zip paths without the leading slash
@@ -145,14 +169,32 @@ object ContentTypes extends XmlReadable[ContentTypes]:
     hasSharedStrings: Boolean = false,
     sheetsWithComments: Set[Int] = Set.empty
   ): ContentTypes =
+    forSheetPaths(
+      sheetIndices.distinct.sorted.map(idx => s"xl/worksheets/sheet$idx.xml"),
+      hasStyles,
+      hasSharedStrings,
+      sheetsWithComments
+    )
+
+  /**
+   * Create content types registering worksheet parts at their ACTUAL part paths (GH-327): a
+   * source-backed write keeps every sheet's identity-resolved part name, which need not follow the
+   * sheet1..sheetN index scheme. `sheetPaths` are zip paths without the leading slash.
+   */
+  def forSheetPaths(
+    sheetPaths: Seq[String],
+    hasStyles: Boolean = false,
+    hasSharedStrings: Boolean = false,
+    sheetsWithComments: Set[Int] = Set.empty
+  ): ContentTypes =
     val baseDefaults = Map(
       "rels" -> ctRelationships,
       "xml" -> "application/xml",
       "vml" -> ctVmlDrawing
     )
 
-    val sheetOverrides = sheetIndices.distinct.sorted.map { idx =>
-      s"/xl/worksheets/sheet$idx.xml" -> ctWorksheet
+    val sheetOverrides = sheetPaths.distinct.map { path =>
+      s"/$path" -> ctWorksheet
     }
 
     // Add comment overrides for sheets with comments

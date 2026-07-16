@@ -5,14 +5,26 @@ import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 import javax.xml.parsers.DocumentBuilderFactory
 
+import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cf.{CfOperator, CfRule}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-import com.tjclp.xl.styles.{CellStyle, Color, Fill}
+import com.tjclp.xl.styles.{
+  Border,
+  BorderSide,
+  BorderStyle,
+  CellStyle,
+  Color,
+  Dxf,
+  Fill,
+  Font,
+  ThemeSlot
+}
 import munit.FunSuite
 
 /**
@@ -927,6 +939,131 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     // Clean up
     outputZip.close()
     Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  // ===== GH-387: scratch workbooks that reference theme colors must ship a theme part =====
+
+  /** Zip entry names + the three theme-registration surfaces of a written package. */
+  private def themeRegistration(output: Path): (Boolean, Boolean, Boolean) =
+    val zip = new ZipFile(output.toFile)
+    try
+      val hasPart = zip.getEntry("xl/theme/theme1.xml") != null
+      val ct = readEntryString(zip, zip.getEntry("[Content_Types].xml"))
+      val hasOverride = ct.contains("PartName=\"/xl/theme/theme1.xml\"")
+      val rels = readEntryString(zip, zip.getEntry("xl/_rels/workbook.xml.rels"))
+      val hasRel = rels.contains("/relationships/theme")
+      (hasPart, hasOverride, hasRel)
+    finally zip.close()
+
+  test("GH-387: scratch workbook with theme-colored styles ships a resolvable default theme") {
+    val style = CellStyle(
+      font = Font(color = Some(Color.Theme(ThemeSlot.Dark1, 0.0))),
+      fill = Fill.Solid(Color.Theme(ThemeSlot.Accent2, 0.25)),
+      border =
+        Border(bottom = BorderSide(BorderStyle.Thin, Some(Color.Theme(ThemeSlot.Accent6, -0.1))))
+    )
+    val sheet = Sheet(SheetName.unsafe("Themed"))
+      .put(ref"A1" -> "themed")
+      .withCellStyle(ref"A1", style)
+
+    val output = Files.createTempFile("gh387-theme", ".xlsx")
+    XlsxWriter
+      .write(Workbook(Vector(sheet)), output)
+      .fold(err => fail(s"Failed to write: $err"), identity)
+
+    val zip = new ZipFile(output.toFile)
+    try
+      // The emitted styles carry theme="N" records — the reason the part must ship
+      val stylesXml = readEntryString(zip, zip.getEntry("xl/styles.xml"))
+      assert(stylesXml.contains("theme="), s"styles must reference theme colors:\n$stylesXml")
+
+      // (1) the part ships and parses to the SAME palette the reader assumes as fallback,
+      // so resolved colors are identical whether a consumer reads or defaults the part
+      val themeEntry = zip.getEntry("xl/theme/theme1.xml")
+      assert(themeEntry != null, "scratch workbook with theme colors must ship xl/theme/theme1.xml")
+      val themeXml = readEntryString(zip, themeEntry)
+      val palette = ThemeParser
+        .parse(themeXml)
+        .fold(err => fail(s"generated theme unparseable: $err"), identity)
+      assertEquals(palette.dark1, 0xff000000)
+      assertEquals(palette.light1, 0xffffffff)
+      assertEquals(palette.accent2, 0xffed7d31)
+      assertEquals(palette.accent6, 0xff70ad47)
+
+      // (2) [Content_Types].xml Override
+      val ct = readEntryString(zip, zip.getEntry("[Content_Types].xml"))
+      assert(
+        ct.contains("PartName=\"/xl/theme/theme1.xml\""),
+        s"missing theme Override:\n$ct"
+      )
+
+      // (3) workbook.xml.rels Relationship, resolvable, with a unique rId
+      val relsXml = readEntryString(zip, zip.getEntry("xl/_rels/workbook.xml.rels"))
+      val rels = Relationships
+        .fromXml(scala.xml.XML.loadString(relsXml))
+        .fold(err => fail(s"rels parse failed: $err"), identity)
+      val themeRels = rels.relationships.filter(_.`type`.endsWith("/relationships/theme"))
+      assertEquals(themeRels.size, 1, s"exactly one theme rel expected: ${rels.relationships}")
+      assertEquals(
+        themeRels.map(r => Relationships.resolveWorkbookTarget(r.target)),
+        Seq("xl/theme/theme1.xml")
+      )
+      val ids = rels.relationships.map(_.id)
+      assertEquals(ids.distinct.size, ids.size, s"duplicate rIds: $ids")
+    finally zip.close()
+
+    // Round trip: the theme colors survive (slot + tint), resolved against the shipped palette
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    val reloadedSheet = reloaded.sheets(0)
+    val resolved = reloadedSheet.cells
+      .get(ref"A1")
+      .flatMap(_.styleId)
+      .flatMap(reloadedSheet.styleRegistry.get)
+      .getOrElse(fail("styled cell lost its style"))
+    assertEquals(resolved.fill, Fill.Solid(Color.Theme(ThemeSlot.Accent2, 0.25)))
+
+    Files.deleteIfExists(output)
+  }
+
+  test("GH-387: theme color only in a conditional-format dxf still triggers the theme part") {
+    val dxf = Dxf(fill = Some(Fill.Solid(Color.Theme(ThemeSlot.Accent4, 0.0))))
+    val sheet = Sheet(SheetName.unsafe("CfThemed"))
+      .put(ref"A1" -> 1)
+      .conditionalFormat(ref"A1:A9", CfRule.cellIs(CfOperator.GreaterThan, "0", dxf))
+
+    val output = Files.createTempFile("gh387-dxf", ".xlsx")
+    XlsxWriter
+      .write(Workbook(Vector(sheet)), output)
+      .fold(err => fail(s"Failed to write: $err"), identity)
+
+    val (hasPart, hasOverride, hasRel) = themeRegistration(output)
+    assert(hasPart, "dxf theme color must trigger the theme part")
+    assert(hasOverride, "dxf theme color must trigger the CT Override")
+    assert(hasRel, "dxf theme color must trigger the workbook rel")
+
+    Files.deleteIfExists(output)
+  }
+
+  test("GH-387: scratch workbook with only RGB/indexed colors ships NO theme part") {
+    val style = CellStyle(
+      font = Font(color = Some(Color.Rgb(0xff112233))),
+      fill = Fill.Solid(Color.Rgb(0xff4472c4))
+    )
+    val sheet = Sheet(SheetName.unsafe("Plain"))
+      .put(ref"A1" -> "plain")
+      .withCellStyle(ref"A1", style)
+
+    val output = Files.createTempFile("gh387-rgb", ".xlsx")
+    XlsxWriter
+      .write(Workbook(Vector(sheet)), output)
+      .fold(err => fail(s"Failed to write: $err"), identity)
+
+    val (hasPart, hasOverride, hasRel) = themeRegistration(output)
+    assert(!hasPart, "RGB-only scratch workbook must NOT gain a theme part")
+    assert(!hasOverride, "RGB-only scratch workbook must NOT gain a theme Override")
+    assert(!hasRel, "RGB-only scratch workbook must NOT gain a theme Relationship")
+
     Files.deleteIfExists(output)
   }
 

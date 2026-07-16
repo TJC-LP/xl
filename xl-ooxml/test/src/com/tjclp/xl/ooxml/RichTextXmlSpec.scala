@@ -72,14 +72,28 @@ class RichTextXmlSpec extends FunSuite:
     assert(xmlString.contains("val=\"18.0\""), "Should have size value")
   }
 
-  test("OoxmlCell: rich text with font family generates <name val=>") {
+  test("OoxmlCell: rich text with font family generates <rFont val=> (CT_RPrElt, GH-383)") {
     val richText = RichText("Text".fontFamily("Calibri"))
     val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
-    assert(xmlString.contains("<name"), "Should have name element")
+    assert(xmlString.contains("<rFont"), "Should have rFont element (CT_RPrElt)")
     assert(xmlString.contains("val=\"Calibri\""), "Should have font name")
+    assert(!xmlString.contains("<name"), "CT_RPrElt forbids <name> inside <rPr>")
+  }
+
+  test("OoxmlCell: SAX writeSax emits <rFont> for rich text runs (GH-383)") {
+    val richText = RichText("Text".fontFamily("Georgia"))
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
+
+    val writer = ScalaXmlSaxWriter()
+    ooxmlCell.writeSax(writer)
+    val cellElem = writer.result.getOrElse(fail("Expected <c> root from SAX emission"))
+
+    val rPr = (cellElem \\ "rPr").headOption.getOrElse(fail(s"Expected <rPr> in: $cellElem"))
+    assertEquals((rPr \ "rFont" \ "@val").text, "Georgia", s"rPr was: $rPr")
+    assert((rPr \ "name").isEmpty, s"CT_RPrElt forbids <name> inside <rPr>: $rPr")
   }
 
   test("OoxmlCell: rich text with multiple runs generates multiple <r> elements") {

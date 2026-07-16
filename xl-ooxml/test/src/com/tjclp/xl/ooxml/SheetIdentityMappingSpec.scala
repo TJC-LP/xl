@@ -364,6 +364,118 @@ class SheetIdentityMappingSpec extends FunSuite:
     assertCommentPartsRegistered(out)
   }
 
+  // ===== GH-327: physical part numbering permuted vs logical order (Excel reorders on disk) =====
+
+  /**
+   * Rewrite the file so the PHYSICAL worksheet part names are permuted vs the logical `<sheets>`
+   * order: the two parts' bytes swap places and the workbook rels re-target, exactly like a file
+   * Excel has reordered and saved. workbook.xml (logical order) is untouched, so the reader
+   * resolves each sheet through the rels and records the permutation in sheetPathMapping. The
+   * permutation MUST be a property of the source file on disk — an in-session reorder marks
+   * metadata modified and regenerates everything, hiding the collision.
+   */
+  private def permutePhysicalSheetParts(path: Path): Unit =
+    val entries: Vector[(String, Array[Byte])] =
+      val zip = new ZipFile(path.toFile)
+      try
+        zip.entries().asScala.toVector.map { e =>
+          e.getName -> zip.getInputStream(e).readAllBytes()
+        }
+      finally zip.close()
+    val byName = entries.toMap
+    def part(entry: String): Array[Byte] =
+      byName.getOrElse(entry, fail(s"$entry missing from ${entries.map(_._1)}"))
+    val out = new java.util.zip.ZipOutputStream(Files.newOutputStream(path))
+    try
+      entries.foreach { case (entryName, bytes) =>
+        val content = entryName match
+          case "xl/worksheets/sheet1.xml" => part("xl/worksheets/sheet2.xml")
+          case "xl/worksheets/sheet2.xml" => part("xl/worksheets/sheet1.xml")
+          case "xl/_rels/workbook.xml.rels" =>
+            new String(bytes, "UTF-8")
+              .replace("worksheets/sheet1.xml", "worksheets/sheetSWAP.xml")
+              .replace("worksheets/sheet2.xml", "worksheets/sheet1.xml")
+              .replace("worksheets/sheetSWAP.xml", "worksheets/sheet2.xml")
+              .getBytes("UTF-8")
+          case _ => bytes
+        out.putNextEntry(new java.util.zip.ZipEntry(entryName))
+        out.write(content)
+        out.closeEntry()
+      }
+    finally out.close()
+
+  test("GH-327: cell edit on a sheet whose index name is an unmodified neighbor's source part") {
+    val alpha = Sheet(name("Alpha")).put(ref"A1" -> "AlphaContent")
+    val beta = Sheet(name("Beta")).put(ref"A1" -> "BetaContent")
+    val source = write(Workbook(Vector(alpha, beta)), "permuted-source")
+    permutePhysicalSheetParts(source)
+
+    val wb = reread(source)
+    // Sanity: the reader recorded the on-disk permutation by identity
+    val ctx = wb.sourceContext.getOrElse(fail("source context missing"))
+    assertEquals(ctx.sheetPathMapping.get(name("Alpha")), Some("xl/worksheets/sheet2.xml"))
+    assertEquals(ctx.sheetPathMapping.get(name("Beta")), Some("xl/worksheets/sheet1.xml"))
+    assertEquals(textAt(wb, "Alpha", ref"A1"), Some("AlphaContent"))
+
+    // Edit ONE cell on Alpha (index 0, source part sheet2.xml). Index naming would emit its
+    // output at sheet1.xml — the very part unmodified Beta rides verbatim copy to — and the
+    // duplicate zip entry killed the ENTIRE write with an IOError.
+    val edited = wb
+      .update(name("Alpha"), _.put(ref"B1" -> "Edited"))
+      .fold(e => fail(e.message), identity)
+    val out = write(edited, "permuted")
+
+    // No duplicate entries (ZipFile.entries reports raw central-directory rows)
+    val allEntries =
+      val zip = new ZipFile(out.toFile)
+      try zip.entries().asScala.toVector.map(_.getName)
+      finally zip.close()
+    assertEquals(allEntries.distinct.size, allEntries.size, s"duplicate entries: $allEntries")
+
+    // The modified sheet regenerated at its SOURCE part name; the neighbor kept its own
+    val sheet2Xml = entryText(out, "xl/worksheets/sheet2.xml")
+    assert(sheet2Xml.contains("Edited") || sheet2Xml.contains("t=\"s\""), s"got:\n$sheet2Xml")
+
+    val result = reread(out)
+    assertEquals(result.sheetNames.map(_.value), Vector("Alpha", "Beta"))
+    assertEquals(textAt(result, "Alpha", ref"A1"), Some("AlphaContent"))
+    assertEquals(textAt(result, "Alpha", ref"B1"), Some("Edited"))
+    assertEquals(textAt(result, "Beta", ref"A1"), Some("BetaContent"))
+    assertWorksheetRelsResolve(out)
+
+    // The workbook rels resolve: every worksheet rel target ships, one per live sheet
+    val wbRels = scala.xml.XML.loadString(entryText(out, "xl/_rels/workbook.xml.rels"))
+    val sheetTargets = (wbRels \ "Relationship")
+      .filter(r => (r \ "@Type").text.endsWith("/worksheet"))
+      .map(r => (r \ "@Target").text)
+    assertEquals(sheetTargets.size, 2)
+    sheetTargets.foreach { t =>
+      val resolved = if t.startsWith("/") then t.drop(1) else s"xl/$t"
+      assert(allEntries.contains(resolved), s"workbook rel target $t missing from $allEntries")
+    }
+  }
+
+  test("GH-327: permuted source + edit BOTH sheets — each regenerates at its own source part") {
+    val alpha = Sheet(name("Alpha")).put(ref"A1" -> "AlphaContent")
+    val beta = Sheet(name("Beta")).put(ref"A1" -> "BetaContent")
+    val source = write(Workbook(Vector(alpha, beta)), "permuted-both-source")
+    permutePhysicalSheetParts(source)
+
+    val wb = reread(source)
+    val edited = wb
+      .update(name("Alpha"), _.put(ref"B1" -> "EditedA"))
+      .flatMap(_.update(name("Beta"), _.put(ref"B1" -> "EditedB")))
+      .fold(e => fail(e.message), identity)
+    val out = write(edited, "permuted-both")
+
+    val result = reread(out)
+    assertEquals(textAt(result, "Alpha", ref"A1"), Some("AlphaContent"))
+    assertEquals(textAt(result, "Alpha", ref"B1"), Some("EditedA"))
+    assertEquals(textAt(result, "Beta", ref"A1"), Some("BetaContent"))
+    assertEquals(textAt(result, "Beta", ref"B1"), Some("EditedB"))
+    assertWorksheetRelsResolve(out)
+  }
+
   // ===== combined stress: every tracked structural+content operation in ONE write =====
 
   test("GH-315: delete middle + reorder + image edit + comment edit + fresh comment in ONE write") {

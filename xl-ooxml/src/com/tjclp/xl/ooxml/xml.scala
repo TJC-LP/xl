@@ -58,6 +58,8 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
   val relTypeChart =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
+  val relTypeTheme =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"
   // docProps relationships (GH-242): core props is a PACKAGE relationship type, app is officeDocument
   val relTypeCoreProperties =
     "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
@@ -75,6 +77,7 @@ object XmlUtil:
   val ctTable = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
   val ctDrawing = "application/vnd.openxmlformats-officedocument.drawing+xml"
   val ctChart = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
+  val ctTheme = "application/vnd.openxmlformats-officedocument.theme+xml"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
   val ctCoreProperties = "application/vnd.openxmlformats-package.core-properties+xml"
   val ctExtendedProperties =
@@ -348,7 +351,8 @@ object XmlUtil:
    *   - <u/> → underline
    *   - <color rgb="RRGGBB"/> → font color (hex without # prefix)
    *   - <sz val="14.0"/> → size in points
-   *   - <name val="Arial"/> → font family
+   *   - <rFont val="Arial"/> → font family (CT_RPrElt spelling; legacy <name val=…/> read as
+   *     fallback, GH-383)
    *
    * @param rPrElem
    *   The <rPr> element to parse
@@ -380,11 +384,16 @@ object XmlUtil:
       .filter(_ > 0)
       .getOrElse(11.0)
 
-    val name = (rPrElem \ "name").headOption
-      .collect { case elem: Elem => elem }
-      .flatMap(e => getAttrOpt(e, "val"))
-      .filter(_.nonEmpty)
-      .getOrElse("Calibri")
+    // CT_RPrElt spells the font element <rFont val=…/> (real Excel files use it
+    // exclusively); older xl versions wrote the CT_Font spelling <name val=…/>,
+    // which stays readable as a fallback (GH-383).
+    def fontName(label: String): Option[String] =
+      (rPrElem \ label).headOption
+        .collect { case elem: Elem => elem }
+        .flatMap(e => getAttrOpt(e, "val"))
+        .filter(_.nonEmpty)
+
+    val name = fontName("rFont").orElse(fontName("name")).getOrElse("Calibri")
 
     Font(
       name = name,

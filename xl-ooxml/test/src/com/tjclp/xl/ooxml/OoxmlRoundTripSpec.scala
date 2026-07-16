@@ -17,7 +17,7 @@ import com.tjclp.xl.richtext.RichText.given
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.sheets.styleSyntax.*
 import com.tjclp.xl.styles.dsl.*
-import java.util.zip.ZipInputStream
+import java.util.zip.{ZipFile, ZipInputStream}
 
 /** Round-trip tests for XLSX write → read */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
@@ -485,6 +485,48 @@ class OoxmlRoundTripSpec extends FunSuite:
         assertEquals(serial.toDouble, 36526.5, 0.001)
       case other =>
         fail(s"Expected Number, got: $other")
+  }
+
+  test("Formula cell with cached DateTime writes the Excel serial with t=\"n\" (GH-378)") {
+    import java.time.LocalDateTime
+
+    // Jan 1, 2000 noon = serial 36526.5 exactly (pinned by the DateTime literal test above)
+    val cached = LocalDateTime.of(2000, 1, 1, 12, 0, 0)
+    val initial = Workbook("Dates")
+    val sheet = initial
+      .sheets(0)
+      .put(ref"A1", CellValue.DateTime(cached))
+      .put(ref"B1", CellValue.Formula("EOMONTH(A1,0)", Some(CellValue.DateTime(cached))))
+
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+
+    val outputPath = tempDir.resolve("formula-cached-datetime.xlsx")
+    XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
+
+    // Raw XML: the formula cell must carry t="n" and the cached serial in <v>
+    val zip = new ZipFile(outputPath.toFile)
+    val sheetXml =
+      try
+        new String(
+          zip.getInputStream(zip.getEntry("xl/worksheets/sheet1.xml")).readAllBytes(),
+          StandardCharsets.UTF_8
+        )
+      finally zip.close()
+    val cellXml = """(?s)<c r="B1".*?</c>""".r
+      .findFirstIn(sheetXml)
+      .getOrElse(fail(s"B1 cell missing from worksheet XML:\n$sheetXml"))
+    assert(cellXml.contains("""t="n""""), cellXml)
+    assert(cellXml.contains("<v>36526.5</v>"), cellXml)
+
+    // Read back: cached value comes back as the serial Number (matching Excel's storage)
+    val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
+    readWb.sheets(0)(ref"B1").value match
+      case CellValue.Formula(expr, Some(CellValue.Number(serial))) =>
+        assertEquals(expr, "EOMONTH(A1,0)")
+        assertEquals(serial.toDouble, 36526.5, 0.000001)
+      case other =>
+        fail(s"Expected Formula with cached serial Number, got $other")
   }
 
   test("Full-feature workbook round-trips values, styles, merges, and bytes") {
