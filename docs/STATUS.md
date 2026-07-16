@@ -1,12 +1,21 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-16 (0.12.7)
+**Last Updated**: 2026-07-16 (0.13.0)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.13.0** (2026-07-16):
+- ✅ **Defined-name resolution** (#384) — `=IF(case=2,…)`, `=entry_mult*ltm_ebitda` evaluate; sheet-scoped shadowing, name-chains with cycle guard, dependency-graph edges; was 926/1,571 probe rejections on a real LBO
+- ✅ **Opt-in iterative recalculation** (#373) — `recalculate(IterativeCalc(maxIter, maxChange))` Jacobi-fixpoints declared cycles (circular debt schedules verify); calcPr authoring for scratch workbooks
+- ✅ **Coercion parity** (#385) + **MROUND** (#386) — serial Numbers in date positions, blanks as 0 in scalar numeric contexts (aggregates still skip); 108 registry functions
+- ✅ **Parser parity** (#355, #374) — percent postfix operator with Excel precedence and byte-identical round-trip; leading unary plus preserved through print
+- ✅ **Appearance round-trip** (#372, #382, #358) — freeze panes read into the model (incl. scrolled panes), `tabSelected`, `Sheet.tabColor`; CLI: `sheet-view`, `tab-color` (theme syntax), `page-setup`, `header-footer`
+- ✅ **Authoring API** (#375, #379, #380, #361, #360) — data-validation dropdowns (typed + preserved), Patch comment/CF cases, `Align.textRotation`, `Column.parse` runtime handles, `Excel.writeRecalculated`
+- ✅ **CLI tooling** (#356, #357, #324, #359) — batch `putf` format field, JSON `formula` field, `cf add`/`cf list`, actionable rasterizer diagnostics with native-image awareness
 
 **New in 0.12.7** (2026-07-16):
 - ✅ **Property-only rows survive scratch writes** (#381) — rows with only `RowProperties` (no cells) emit `<row>` on the default backend; backend parity pinned by tests

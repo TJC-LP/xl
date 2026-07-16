@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] "Fixpoint" - 2026-07-16
+
+The replication-campaign feature train (waves 13–16): professional models
+now parse (`=+`, `%`, defined names), compute (coercion parity, opt-in
+iterative recalculation for circular schedules), author (data validation,
+calcPr, comments/CF via Patch, text rotation, tab colors, scrolled panes),
+and finish (appearance/print-setup/cf CLI) — end to end, no XML surgery.
+
 ### Added
 
 - **Sheet appearance & print-setup CLI commands** (#358, completing the
