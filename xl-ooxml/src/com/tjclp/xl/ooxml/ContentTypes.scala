@@ -46,6 +46,22 @@ case class ContentTypes(
     if commentAdds.isEmpty && vmlAdds.isEmpty then this
     else copy(overrides = overrides ++ commentAdds ++ vmlAdds)
 
+  /**
+   * Prune comment-class overrides (comments + VML) whose parts are NOT in `shippedParts` (zip paths
+   * without the leading slash) — the mirror of [[withEmittedCommentParts]] for the preserved-CT
+   * branch (GH-328): a cell edit that removes a sheet's LAST comment keeps the preserved
+   * [Content_Types].xml byte-stable, whose comment/VML overrides would otherwise dangle behind the
+   * withheld parts. Only the writer-owned comment classes are touched — every other preserved
+   * override (pivots, customXml, threadedComments, macro payloads) rides through untouched (the
+   * GH-314 invariant). The metadata-modified branch gets the same guarantee from
+   * [[ContentTypes.reconcile]] (GH-322).
+   */
+  def withoutOrphanCommentParts(shippedParts: Set[String]): ContentTypes =
+    val shippedNames = shippedParts.map(p => s"/$p")
+    copy(overrides = overrides.filter { case (partName, ct) =>
+      (ct != ctComments && ct != ctVmlDrawing) || shippedNames.contains(partName)
+    })
+
   def withTableOverrides(tableCount: Int): ContentTypes =
     if tableCount == 0 then this
     else

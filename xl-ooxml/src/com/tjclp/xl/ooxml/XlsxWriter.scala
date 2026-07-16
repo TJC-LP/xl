@@ -1807,6 +1807,25 @@ object XlsxWriter:
     val corePropsXml = DocProps.buildCoreXml(workbook.metadata)
     val appPropsXml = DocProps.buildAppXml(workbook.metadata)
 
+    // GH-328: every comment/VML part this write actually SHIPS — emitted for regenerated sheets
+    // plus everything riding verbatim (unmodified sheets' comment parts, surviving VML). A
+    // preserved-CT override of the comment classes naming a part outside this set is an orphan
+    // (a sheet whose comments were ALL removed) and is pruned below; every other content type
+    // rides through untouched (GH-314). Pruning keys on the RESOLVED paths, so foreign comment
+    // dialects (openpyxl's xl/comments/comment1.xml) prune correctly too.
+    val shippedCommentParts: Set[String] =
+      commentPathBySheet.values.toSet ++ vmlPathBySheet.values.toSet ++
+        (sourceContext match
+          case Some(ctx) =>
+            workbook.sheets.zipWithIndex
+              .collect {
+                case (sheet, idx) if !sheetsToRegenerate.contains(idx) =>
+                  ctx.commentPathMapping.get(sheet.name).filter(ctx.partManifest.contains)
+              }
+              .flatten
+              .toSet ++ (preservableParts -- vmlPathsToSkip)
+          case None => Set.empty)
+
     // Content types: preserve from source when available, otherwise generate minimal.
     // GH-315: comment/VML registrations follow the EMITTED part paths (identity-mapped or freshly
     // allocated) — withEmittedCommentParts is conservative, so source-declared parts ride through
@@ -1829,6 +1848,7 @@ object XlsxWriter:
           .withChartOverrides(drawingPlan.freshChartPaths)
           .withImageDefaults(drawingPlan.imageDefaults)
           .withEmittedCommentParts(commentPathBySheet.values.toSet, vmlPathBySheet.values.toSet)
+          .withoutOrphanCommentParts(shippedCommentParts)
       case None =>
         // GH-221: this branch regenerates [Content_Types].xml from scratch while preserved
         // drawing/media parts still ride the copy loop, so register EVERY drawing part shipping
@@ -1918,20 +1938,30 @@ object XlsxWriter:
           // identity, and the OUTPUT entry keeps that same name (sheetOutputPaths) so it can
           // never collide with a neighbor riding verbatim copy.
           val sourcePathOpt = sourceContext.flatMap(sourceSheetPath(_, idx))
-          val preservedMetadata = preservedWorksheets.getOrElse(idx, Right(None)) match
+          val hasComments = commentsBySheet.contains(idx)
+          val mappedCommentPart = sourceContext.flatMap(_.commentPathMapping.get(sheet.name))
+          // GH-328: this write removes the sheet's LAST comment — the comment/VML parts are
+          // withheld (vmlPathsToSkip / buildCommentsData), so the preserved legacyDrawing
+          // element and the preserved comment/VML rels must fall with them or they dangle.
+          // Keyed on "emits none NOW while the source HAD a part", never on the source alone:
+          // form-control VML on a never-commented sheet rides through untouched.
+          val staleCommentRels = !hasComments && mappedCommentPart.isDefined
+          val parsedMetadata = preservedWorksheets.getOrElse(idx, Right(None)) match
             case Right(value) => value
             case Left(err) =>
               throw new IllegalStateException(
                 s"Failed to parse preserved worksheet " +
                   s"${sourcePathOpt.getOrElse(graph.pathForSheet(idx))}: ${err.message}"
               )
+          val preservedMetadata =
+            if staleCommentRels then parsedMetadata.map(_.copy(legacyDrawing = None))
+            else parsedMetadata
           val remapping = sheetRemappings.getOrElse(idx, Map.empty)
 
           // Generate tableParts XML element for modified sheet
           val tablePartsXml = tablesBySheet.get(idx).flatMap { tablesForSheet =>
             if tablesForSheet.isEmpty then None
             else
-              val hasComments = commentsBySheet.contains(idx)
               val rIdOffset = if hasComments then 3 else 1
 
               val tablePartElems =
@@ -2002,7 +2032,6 @@ object XlsxWriter:
           // GH-292: foreign comment dialects resolve the VML target through the preserved rels
           val vmlPath = vmlPathForSheet(sourceContext, sourceRelsPathOpt, idx, commentPath)
 
-          val hasComments = commentsBySheet.contains(idx)
           val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
           val hlRels = hyperlinkRelationships(sheet) // GH-235
 
@@ -2014,22 +2043,28 @@ object XlsxWriter:
           // rels appended — the source rels predate them. (A mapped comment part implies the
           // source rels already reference it: the reader resolved the part THROUGH those rels,
           // GH-292 — so only an unmapped emission appends.)
-          val needsCommentRels = hasComments &&
-            sourceContext.flatMap(_.commentPathMapping.get(sheet.name)).isEmpty
+          val needsCommentRels = hasComments && mappedCommentPart.isEmpty
           (sourceContext, sourceRelsPathOpt) match
             case (Some(ctx), Some(sourceRelsPath)) if ctx.partManifest.contains(sourceRelsPath) =>
               if hlRels.isEmpty && drawingRelAdd.isEmpty && !needsCommentRels &&
-                sourceRelsPath == relsPath
+                !staleCommentRels && sourceRelsPath == relsPath
               then copyPreservedPart(ctx.sourcePath, relsPath, zip)
               else
                 // Merge authored hyperlink rels into the preserved sheet rels (parse + append);
-                // also the path for source rels riding to a DIFFERENT output slot (GH-315).
+                // also the path for source rels riding to a DIFFERENT output slot (GH-315) and
+                // for dropping comment/VML rels behind a full comment removal (GH-328).
                 val preserved = withZipFile(ctx.sourcePath) { z =>
                   parseOptionalEntry(z, sourceRelsPath)(Relationships.fromXml)
                 }.getOrElse(Relationships(Seq.empty))
-                // Drop the source's hyperlink rels (we regenerate them from the model) to avoid
-                // orphans, but keep everything else (printerSettings, drawings, ...).
-                val kept = preserved.relationships.filterNot(_.`type` == XmlUtil.relTypeHyperlink)
+                // Drop the source's hyperlink rels (we regenerate them from the model) and the
+                // comment/VML rels when this write emits no comments for the sheet (GH-328 —
+                // the parts no longer ship); keep everything else (printerSettings, ...).
+                val kept = preserved.relationships.filterNot(rel =>
+                  rel.`type` == XmlUtil.relTypeHyperlink ||
+                    (staleCommentRels &&
+                      (rel.`type` == XmlUtil.relTypeComments ||
+                        rel.`type` == XmlUtil.relTypeVmlDrawing))
+                )
                 val commentRelAdds =
                   if needsCommentRels && !kept.exists(_.`type` == XmlUtil.relTypeComments) then
                     Seq(
@@ -2045,12 +2080,11 @@ object XlsxWriter:
                       )
                     )
                   else Seq.empty
-                writePart(
-                  zip,
-                  relsPath,
-                  Relationships(kept ++ hlRels ++ drawingRelAdd.toList ++ commentRelAdds),
-                  config
-                )
+                val merged = kept ++ hlRels ++ drawingRelAdd.toList ++ commentRelAdds
+                // A rels part with nothing left is dropped entirely (GH-328): the regenerated
+                // worksheet no longer references any rId, and an empty <Relationships/> part
+                // serves nothing.
+                if merged.nonEmpty then writePart(zip, relsPath, Relationships(merged), config)
             case _
                 if hasComments || tableIds.nonEmpty || hlRels.nonEmpty || drawingRelAdd.nonEmpty =>
               val base =
