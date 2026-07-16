@@ -38,7 +38,7 @@ The canonical header for every script (this is the single source of truth — re
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.13.0
+//> using dep com.tjclp::xl:0.14.0
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -101,7 +101,7 @@ wb.update("Sales", f).unsafe                       // throws structured XLExcept
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.13.0
+//> using dep com.tjclp::xl:0.14.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -207,7 +207,7 @@ if !result.isClean then
 Excel.write(result.workbook, "model.xlsx")       // computed values cached for Excel/viewers
 ```
 
-`recalculate` evaluates every formula across all sheets in dependency order, resolves cross-sheet references automatically, isolates reference cycles (the rest of the workbook still computes), and reports failures per cell in `result.errors`. `result.toEither` gives `Left(errors)` for fail-hard pipelines. For one-off questions: `wb.evaluateFormula("=SUM(Data!A:A)", "Summary")`. When the very next step is a write, `Excel.writeRecalculated(wb, path)` (0.13.0) fuses recalculate + write and returns the same `RecalcResult` — see the gotcha below.
+`recalculate` evaluates every formula across all sheets in dependency order, resolves cross-sheet references automatically, isolates reference cycles (the rest of the workbook still computes), and reports failures per cell in `result.errors`. `result.toEither` gives `Left(errors)` for fail-hard pipelines. **Excel error values are results, not failures** (0.14.0): `=1/0` evaluates to `#DIV/0!` — catchable with `IFERROR`, cached into the written file exactly like Excel would, and listed via `result.excelErrors` rather than `result.errors` (which now carries only host failures: parse errors, missing sheets, cycles). For one-off questions: `wb.evaluateFormula("=SUM(Data!A:A)", "Summary")`. When the very next step is a write, `Excel.writeRecalculated(wb, path)` (0.13.0) fuses recalculate + write and returns the same `RecalcResult` — see the gotcha below.
 
 **Defined names resolve** (0.13.0): `fx"=IF(case=2,rev,cost)"`, `fx"=entry_mult*ltm_ebitda"`, `fx"=SUM(rev_range)"` evaluate against workbook- and sheet-scoped defined names (sheet-scoped shadows global), contribute dependency edges so recalc orders name-gated families correctly, and round-trip byte-faithfully; an unresolvable name is a clean per-cell error.
 
@@ -240,7 +240,7 @@ Or lean on totality so there is nothing to unwrap: literal refs, `upsert`, range
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.13.0
+//> using dep com.tjclp::xl:0.14.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -262,7 +262,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.13.0
+//> using dep com.tjclp::xl:0.14.0
 import com.tjclp.xl.scripting.{*, given}
 
 val data = List(("North", 125000.50), ("South", 98000.25), ("West", 143500.00))
@@ -290,7 +290,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.13.0
+//> using dep com.tjclp::xl:0.14.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

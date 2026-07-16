@@ -1,12 +1,17 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-16 (0.13.0)
+**Last Updated**: 2026-07-16 (0.14.0)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.14.0** (2026-07-16):
+- ✅ **Excel error values as first-class results** (#344) — `=1/0` evaluates to `#DIV/0!` (IFERROR/ISERROR-catchable, cached as `t="e"` cells) instead of failing the formula; aggregates/logical folds/comparisons propagate per Excel policy (COUNT-family still skips); op-level `#NUM!`/`#DIV/0!`/`#N/A` codes; `#N/A` dimension padding; `"TRUE"`/`"FALSE"` text coerces in conditions; host failures stay loud — the boundary is law-tested (`RecalcResult.excelErrors` vs `errors`); design record `docs/design/error-propagation.md`
+- ✅ **Full calcPr authoring** (#400) — `calcMode`/`fullCalcOnLoad`/`calcId` join the iterate triple; the TJC house `<calcPr>` authors byte-exactly; last tjc-modeling zip patch retired
+- ✅ **xl-agent robustness** (#344) — bounded `pause_turn` auto-resume with preserved container id, errored tasks counted in summaries, skill traces never overwritten by the engine fallback
 
 **New in 0.13.0** (2026-07-16):
 - ✅ **Defined-name resolution** (#384) — `=IF(case=2,…)`, `=entry_mult*ltm_ebitda` evaluate; sheet-scoped shadowing, name-chains with cycle guard, dependency-graph edges; was 926/1,571 probe rejections on a real LBO

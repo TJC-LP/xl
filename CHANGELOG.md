@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] "Candor" - 2026-07-16
+
+Errors tell the truth now: Excel error values are first-class evaluation
+results (the #344 typed-result refactor — the campaign's final deliberate
+divergences closed), and full calcPr authoring retires tjc-modeling's last
+zip patch. This completes the replication-campaign roadmap: W1–W7 shipped
+across 0.12.7, 0.13.0, and 0.14.0.
+
 ### Added
 
 - **Full calcPr authoring** (#400): `CalcPr` models `calcMode`
