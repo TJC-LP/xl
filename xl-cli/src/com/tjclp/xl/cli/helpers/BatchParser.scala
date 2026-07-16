@@ -100,6 +100,26 @@ object BatchParser:
     case Unfreeze
     case CopyRange(source: String, target: String, valuesOnly: Boolean)
     case Hyperlink(ref: String, target: Option[String]) // GH-235: target None clears
+    // Sheet appearance & print setup (GH-358)
+    case SetSheetView(gridlines: Option[Boolean], zoom: Option[Int], tabSelected: Option[Boolean])
+    case SetTabColor(color: Option[String], clear: Boolean)
+    case SetPageSetup(
+      orientation: Option[String],
+      scale: Option[Int],
+      fitToWidth: Option[Int],
+      fitToHeight: Option[Int],
+      fitToPage: Option[Boolean]
+    )
+    case SetHeaderFooter(
+      oddHeader: Option[String],
+      oddFooter: Option[String],
+      evenHeader: Option[String],
+      evenFooter: Option[String],
+      firstHeader: Option[String],
+      firstFooter: Option[String],
+      differentOddEven: Boolean,
+      differentFirst: Boolean
+    )
 
   /**
    * Result of batch parsing with optional warnings.
@@ -154,6 +174,25 @@ object BatchParser:
         case BatchOp.Unfreeze => "  UNFREEZE"
         case BatchOp.CopyRange(src, tgt, vo) =>
           s"  COPY $src -> $tgt${if vo then " (values-only)" else ""}"
+        case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
+          val desc = AppearanceOps.describe(
+            "gridlines" -> gridlines.map(g => if g then "on" else "off"),
+            "zoom" -> zoom.map(_.toString),
+            "tabSelected" -> tabSelected.map(_.toString)
+          )
+          s"  SHEET-VIEW $desc"
+        case BatchOp.SetTabColor(color, clear) =>
+          s"  TAB-COLOR ${color.getOrElse(if clear then "(clear)" else "")}"
+        case BatchOp.SetPageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
+          val desc = AppearanceOps.describe(
+            "orientation" -> orientation,
+            "scale" -> scale.map(_.toString),
+            "fitToWidth" -> fitToWidth.map(_.toString),
+            "fitToHeight" -> fitToHeight.map(_.toString),
+            "fitToPage" -> fitToPage.map(_.toString)
+          )
+          s"  PAGE-SETUP $desc"
+        case _: BatchOp.SetHeaderFooter => "  HEADER-FOOTER"
       }
       .mkString("\n")
 
@@ -390,12 +429,55 @@ object BatchParser:
             val valuesOnly = objMap.get("valuesOnly").flatMap(_.boolOpt).getOrElse(false)
             BatchOp.CopyRange(source, target, valuesOnly)
 
+          case "sheet-view" =>
+            collectUnknownPropsWarning(objMap, knownSheetViewProps, "sheet-view", idx)
+              .foreach(warnings += _)
+            BatchOp.SetSheetView(
+              gridlines = objMap.get("gridlines").flatMap(_.boolOpt),
+              zoom = objMap.get("zoom").flatMap(_.numOpt).map(_.toInt),
+              tabSelected = objMap.get("tabSelected").flatMap(_.boolOpt)
+            )
+
+          case "tab-color" =>
+            collectUnknownPropsWarning(objMap, knownTabColorProps, "tab-color", idx)
+              .foreach(warnings += _)
+            BatchOp.SetTabColor(
+              color = objMap.get("color").flatMap(_.strOpt),
+              clear = objMap.get("clear").flatMap(_.boolOpt).getOrElse(false)
+            )
+
+          case "page-setup" =>
+            collectUnknownPropsWarning(objMap, knownPageSetupProps, "page-setup", idx)
+              .foreach(warnings += _)
+            BatchOp.SetPageSetup(
+              orientation = objMap.get("orientation").flatMap(_.strOpt),
+              scale = objMap.get("scale").flatMap(_.numOpt).map(_.toInt),
+              fitToWidth = objMap.get("fitToWidth").flatMap(_.numOpt).map(_.toInt),
+              fitToHeight = objMap.get("fitToHeight").flatMap(_.numOpt).map(_.toInt),
+              fitToPage = objMap.get("fitToPage").flatMap(_.boolOpt)
+            )
+
+          case "header-footer" =>
+            collectUnknownPropsWarning(objMap, knownHeaderFooterProps, "header-footer", idx)
+              .foreach(warnings += _)
+            BatchOp.SetHeaderFooter(
+              oddHeader = objMap.get("oddHeader").flatMap(_.strOpt),
+              oddFooter = objMap.get("oddFooter").flatMap(_.strOpt),
+              evenHeader = objMap.get("evenHeader").flatMap(_.strOpt),
+              evenFooter = objMap.get("evenFooter").flatMap(_.strOpt),
+              firstHeader = objMap.get("firstHeader").flatMap(_.strOpt),
+              firstFooter = objMap.get("firstFooter").flatMap(_.strOpt),
+              differentOddEven = objMap.get("differentOddEven").flatMap(_.boolOpt).getOrElse(false),
+              differentFirst = objMap.get("differentFirst").flatMap(_.boolOpt).getOrElse(false)
+            )
+
           case other =>
             throw new Exception(
               s"Object ${idx + 1}: Unknown operation '$other'. " +
                 "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
                 "comment, remove-comment, hyperlink, clear, col-hide, col-show, " +
-                "row-hide, row-show, autofit, add-sheet, rename-sheet, freeze, unfreeze, copy"
+                "row-hide, row-show, autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, " +
+                "sheet-view, tab-color, page-setup, header-footer"
             )
       }
 
@@ -456,6 +538,29 @@ object BatchParser:
 
   /** Known properties for 'rename-sheet' operation */
   private val knownRenameSheetProps = Set("op", "from", "to")
+
+  /** Known properties for 'sheet-view' operation (GH-358) */
+  private val knownSheetViewProps = Set("op", "gridlines", "zoom", "tabSelected")
+
+  /** Known properties for 'tab-color' operation (GH-358) */
+  private val knownTabColorProps = Set("op", "color", "clear")
+
+  /** Known properties for 'page-setup' operation (GH-358) */
+  private val knownPageSetupProps =
+    Set("op", "orientation", "scale", "fitToWidth", "fitToHeight", "fitToPage")
+
+  /** Known properties for 'header-footer' operation (GH-358) */
+  private val knownHeaderFooterProps = Set(
+    "op",
+    "oddHeader",
+    "oddFooter",
+    "evenHeader",
+    "evenFooter",
+    "firstHeader",
+    "firstFooter",
+    "differentOddEven",
+    "differentFirst"
+  )
 
   /** Collect warning about unknown properties in a batch operation (if any) */
   private def collectUnknownPropsWarning(
@@ -892,6 +997,33 @@ object BatchParser:
 
           case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
             applyCopyRange(currentWb, defaultSheetName, sourceStr, targetStr, valuesOnly)
+
+          case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
+            updateSheetE(currentWb, defaultSheetName, "sheet-view")(
+              AppearanceOps.applySheetView(_, gridlines, zoom, tabSelected)
+            )
+
+          case BatchOp.SetTabColor(color, clear) =>
+            updateSheetE(currentWb, defaultSheetName, "tab-color")(
+              AppearanceOps.applyTabColor(_, color, clear)
+            )
+
+          case BatchOp.SetPageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
+            updateSheetE(currentWb, defaultSheetName, "page-setup")(
+              AppearanceOps.applyPageSetup(
+                _,
+                orientation,
+                scale,
+                fitToWidth,
+                fitToHeight,
+                fitToPage
+              )
+            )
+
+          case BatchOp.SetHeaderFooter(oh, of, eh, ef, fh, ff, diffOddEven, diffFirst) =>
+            updateSheetE(currentWb, defaultSheetName, "header-footer")(
+              AppearanceOps.applyHeaderFooter(_, oh, of, eh, ef, fh, ff, diffOddEven, diffFirst)
+            )
       }
     }
 
@@ -1565,3 +1697,26 @@ object BatchParser:
         )
       case Some(sheet) =>
         IO.pure(wb.put(f(sheet)))
+
+  /**
+   * Update the default sheet with a validated (Either-returning) transform; requires --sheet. Used
+   * by the appearance ops (GH-358) whose appliers pre-validate and report clean errors.
+   */
+  private def updateSheetE(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    opName: String
+  )(f: Sheet => Either[String, Sheet]): IO[Workbook] =
+    defaultSheetName match
+      case None => IO.raiseError(new Exception(s"batch $opName requires --sheet"))
+      case Some(sheetName) =>
+        wb.sheets.find(_.name == sheetName) match
+          case None =>
+            IO.raiseError(
+              new Exception(
+                s"Sheet '${sheetName.value}' not found. " +
+                  s"Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+              )
+            )
+          case Some(sheet) =>
+            IO.fromEither(f(sheet).left.map(msg => new Exception(msg))).map(wb.put)

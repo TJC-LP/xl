@@ -83,6 +83,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | **Mutate cells** | `put`, `putf`, `style`, `fill`, `clear`, `copy`, `sort`, `merge`, `unmerge`, `comment`, `remove-comment`, `batch`, `import` | Make changes (require `-o` or `-i`) |
 | **Rows/columns** | `row`, `col`, `autofit`, `insert-rows`, `delete-rows`, `insert-cols`, `delete-cols` | Sizing, visibility, structural editing |
 | **Sheets & view** | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide/show`, `freeze`, `unfreeze`, `name` | Workbook structure |
+| **Appearance & print** | `sheet-view`, `tab-color`, `page-setup`, `header-footer` | Deliverable finish: gridlines, zoom, tab colors, print setup, footers |
 
 ### Command Summary
 
@@ -118,6 +119,10 @@ xl rasterizers                                     # List available PNG/PDF back
 | `remove-comment` | `<ref>` | Remove cell comment (requires `-o`) |
 | `freeze` | `<ref>` | Freeze panes at cell (requires `-o`) |
 | `unfreeze` | | Remove freeze panes (requires `-o`) |
+| `sheet-view` | `[--gridlines on\|off] [--zoom n] [--tab-selected on\|off]` | Set sheet view options (requires `-o`) |
+| `tab-color` | `<color>` \| `--clear` | Set/clear the sheet tab color (requires `-o`) |
+| `page-setup` | `[--orientation portrait\|landscape] [--scale n] [--fit-to-width n] [--fit-to-height n] [--fit-to-page on\|off]` | Set print page setup (requires `-o`) |
+| `header-footer` | `[--odd-header s] [--odd-footer s] [--even-\*] [--first-\*] [--different-odd-even] [--different-first]` | Set print header/footer text (requires `-o`) |
 | `chart add` | `--type <t> --data <range> --at <ref> [options]` | Add a chart built from sheet ranges (requires `-o`) |
 | `add-image` | `<image-file> --at <ref> [--size WxH]` | Embed an image (requires `-o`) |
 | `import` | `<csv-file> [start-ref] [options]` | Import CSV with type detection (requires `-o`) |
@@ -685,6 +690,64 @@ xl -f input.xlsx -s S1 -o output.xlsx unfreeze
 
 ---
 
+### Appearance & print setup: `sheet-view`, `tab-color`, `page-setup`, `header-footer`
+
+The "deliverable finish" commands (GH-358). Each merges into the sheet's current settings:
+unspecified options are preserved. All require `-o` (or `-i`).
+
+```bash
+# Gridlines off + 85% zoom
+xl -f in.xlsx -s Model -o out.xlsx sheet-view --gridlines off --zoom 85
+
+# Tab colors: named, #hex, rgb(r,g,b), or theme:<slot>[:<tint>]
+xl -f in.xlsx -s Model -o out.xlsx tab-color "#1F4E79"
+xl -f in.xlsx -s Model -o out.xlsx tab-color theme:accent2:0.25
+xl -f in.xlsx -s Model -o out.xlsx tab-color --clear     # clears a modeled color only
+
+# Landscape, fit to one page wide and tall
+xl -f in.xlsx -s Model -o out.xlsx page-setup --orientation landscape \
+   --fit-to-width 1 --fit-to-height 1
+
+# Confidential footer (&L/&C/&R sections; &P page, &N total, &D date, &F file, &A sheet)
+xl -f in.xlsx -s Model -o out.xlsx header-footer \
+   --odd-footer "&LProprietary & Confidential&RPage &P of &N"
+```
+
+**Options**:
+
+| Command | Options |
+|---------|---------|
+| `sheet-view` | `--gridlines on\|off`, `--zoom <10-400>`, `--tab-selected on\|off` |
+| `tab-color` | `<color>` or `--clear` |
+| `page-setup` | `--orientation portrait\|landscape`, `--scale <10-400>`, `--fit-to-width <n>`, `--fit-to-height <n>`, `--fit-to-page on\|off` |
+| `header-footer` | `--odd-header/--odd-footer`, `--even-header/--even-footer`, `--first-header/--first-footer`, `--different-odd-even`, `--different-first` |
+
+**Notes**:
+- Validation is up-front with clean errors (zoom/scale 10-400, orientation values, fit counts >= 1).
+- `tab-color --clear` removes the *modeled* color; a tab color already present in the source file's
+  XML is preserved on write (preserve-if-None semantics) and cannot be stripped by the CLI.
+- `page-setup --fit-to-page` is tri-state: omitted derives the sheetPr `fitToPage` flag from
+  `--fit-to-width`/`--fit-to-height` and preserves whatever the source carries; `on` forces the
+  flag; `off` actively strips a preserved flag.
+- Even-page text sets `different-odd-even` automatically, first-page text sets `different-first`
+  (Excel ignores the text while the corresponding flag is off).
+- Each command has a batch-op twin (`sheet-view`, `tab-color`, `page-setup`, `header-footer`) —
+  the full deliverable finish is one batch file:
+
+```bash
+cat > finish.json <<'EOF'
+[
+  {"op": "sheet-view", "gridlines": false, "zoom": 85},
+  {"op": "tab-color", "color": "#1F4E79"},
+  {"op": "page-setup", "orientation": "landscape", "fitToWidth": 1, "fitToHeight": 1},
+  {"op": "header-footer", "oddFooter": "&LProprietary & Confidential&RPage &P of &N"}
+]
+EOF
+xl -f in.xlsx -s Model -o out.xlsx batch finish.json
+```
+
+---
+
 ### `xl chart add --type <t> --data <range> --at <ref> [options]`
 
 Add a typed chart built from sheet data ranges. Supported types: `column`, `bar` (horizontal),
@@ -869,6 +932,10 @@ Apply multiple operations atomically from JSON input.
 | `freeze` | `ref` | | Freeze panes at cell |
 | `unfreeze` | | | Remove freeze panes |
 | `copy` | `source`, `target` | `valuesOnly` | Copy range with formula adjustment |
+| `sheet-view` | | `gridlines`, `zoom`, `tabSelected` | Set sheet view options (operates on `--sheet`) |
+| `tab-color` | | `color`, `clear` | Set (`color`) or clear (`clear: true`) the sheet tab color |
+| `page-setup` | | `orientation`, `scale`, `fitToWidth`, `fitToHeight`, `fitToPage` | Set print page setup |
+| `header-footer` | | `oddHeader`, `oddFooter`, `evenHeader`, `evenFooter`, `firstHeader`, `firstFooter`, `differentOddEven`, `differentFirst` | Set print header/footer text |
 
 **Native JSON Types** (recommended):
 

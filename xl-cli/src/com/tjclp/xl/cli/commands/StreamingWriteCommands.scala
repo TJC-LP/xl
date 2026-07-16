@@ -750,7 +750,9 @@ object StreamingWriteCommands:
             _: BatchParser.BatchOp.Clear | _: BatchParser.BatchOp.AutoFit |
             _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
             _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
-            _: BatchParser.BatchOp.CopyRange | _: BatchParser.BatchOp.Hyperlink =>
+            _: BatchParser.BatchOp.CopyRange | _: BatchParser.BatchOp.Hyperlink |
+            _: BatchParser.BatchOp.SetSheetView | _: BatchParser.BatchOp.SetTabColor |
+            _: BatchParser.BatchOp.SetPageSetup | _: BatchParser.BatchOp.SetHeaderFooter =>
           throw new Exception(
             "This batch operation is not supported in streaming mode. " +
               "Remove --stream to use full workbook mode."

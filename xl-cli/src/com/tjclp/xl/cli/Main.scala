@@ -100,7 +100,7 @@ object Main
     // Sheet-level write: --file, --sheet, and --output (required)
     // --stream uses SAX/StAX workbook writes for modifying commands.
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd orElse sheetViewCmd orElse tabColorCmd orElse pageSetupCmd orElse headerFooterCmd
 
     val sheetWriteOpts =
       (
@@ -921,6 +921,17 @@ OPERATIONS:
   colwidth  {"op": "colwidth", "col": "A", "width": 15.5}
   rowheight {"op": "rowheight", "row": 1, "height": 30}
 
+APPEARANCE & PRINT SETUP (GH-358):
+  sheet-view    {"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
+  tab-color     {"op": "tab-color", "color": "#1F4E79"}  (or {"clear": true};
+                colors: named, #hex, rgb(r,g,b), theme:accent1[:tint])
+  page-setup    {"op": "page-setup", "orientation": "landscape", "scale": 90,
+                "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
+  header-footer {"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N",
+                "oddHeader": ..., "evenHeader/evenFooter": ..., "firstHeader/firstFooter": ...,
+                "differentOddEven": true, "differentFirst": true}
+                (&L/&C/&R sections; &P page, &N total, &D date, &F file, &A sheet)
+
 STYLE PROPERTIES:
   Font:      bold, italic, underline, fg, fontSize, fontName
   Fill:      bg (background color, e.g., "#FFFF00" or "yellow")
@@ -1131,6 +1142,96 @@ USAGE:
   private val unfreezeCmd: Opts[CliCommand] =
     Opts.subcommand("unfreeze", "Remove freeze panes") {
       Opts(CliCommand.Unfreeze)
+    }
+
+  // --- Sheet appearance & print setup commands (GH-358) ---
+
+  /** Parse an on|off (also true|false) option value. */
+  private def onOffOpt(name: String, help: String): Opts[Option[Boolean]] =
+    Opts
+      .option[String](name, help)
+      .mapValidated {
+        case "on" | "true" => cats.data.Validated.valid(true)
+        case "off" | "false" => cats.data.Validated.valid(false)
+        case other =>
+          cats.data.Validated.invalidNel(s"--$name expects on or off, got: $other")
+      }
+      .orNone
+
+  private val sheetViewCmd: Opts[CliCommand] =
+    Opts.subcommand(
+      "sheet-view",
+      "Set sheet view options: gridlines, zoom, tab selection (requires -o)"
+    ) {
+      val viewGridlines = onOffOpt("gridlines", "Show cell gridlines: on or off")
+      val viewZoom = Opts.option[Int]("zoom", "Zoom percentage (10-400)").orNone
+      val viewTabSelected = onOffOpt("tab-selected", "Select this sheet's tab: on or off")
+      (viewGridlines, viewZoom, viewTabSelected).mapN(CliCommand.SheetViewOp.apply)
+    }
+
+  private val tabColorCmd: Opts[CliCommand] =
+    Opts.subcommand(
+      "tab-color",
+      "Set the sheet tab color: named, #hex, rgb(r,g,b), or theme:accent1[:tint] (requires -o). " +
+        "--clear removes a modeled color (a color preserved from the source XML is not stripped)."
+    ) {
+      val colorArg = Opts.argument[String]("color").orNone
+      val clearFlag = Opts.flag("clear", "Clear the modeled tab color").orFalse
+      (colorArg, clearFlag).mapN(CliCommand.TabColorOp.apply)
+    }
+
+  private val pageSetupCmd: Opts[CliCommand] =
+    Opts.subcommand(
+      "page-setup",
+      "Set print page setup: orientation, scale, fit-to-page (requires -o)"
+    ) {
+      val orientationOpt =
+        Opts.option[String]("orientation", "Page orientation: portrait or landscape").orNone
+      val scaleOpt = Opts.option[Int]("scale", "Print scale percent (10-400)").orNone
+      val fitToWidthOpt = Opts.option[Int]("fit-to-width", "Fit printout to N pages wide").orNone
+      val fitToHeightOpt = Opts.option[Int]("fit-to-height", "Fit printout to N pages tall").orNone
+      val fitToPageOpt = onOffOpt(
+        "fit-to-page",
+        "Force the sheetPr fitToPage flag: on or off. Omit to derive from --fit-to-width/height " +
+          "and preserve whatever the source file carries (off actively strips a preserved flag)"
+      )
+      (orientationOpt, scaleOpt, fitToWidthOpt, fitToHeightOpt, fitToPageOpt)
+        .mapN(CliCommand.PageSetupOp.apply)
+    }
+
+  private val headerFooterCmd: Opts[CliCommand] =
+    Opts.subcommand(
+      "header-footer",
+      "Set print header/footer text with Excel codes: &L/&C/&R sections, &P page, &N total, " +
+        "&D date, &F file, &A sheet (requires -o)"
+    ) {
+      val oddHeaderOpt = Opts.option[String]("odd-header", "Header for odd/all pages").orNone
+      val oddFooterOpt = Opts.option[String]("odd-footer", "Footer for odd/all pages").orNone
+      val evenHeaderOpt =
+        Opts.option[String]("even-header", "Header for even pages (sets different-odd-even)").orNone
+      val evenFooterOpt =
+        Opts.option[String]("even-footer", "Footer for even pages (sets different-odd-even)").orNone
+      val firstHeaderOpt =
+        Opts
+          .option[String]("first-header", "Header for the first page (sets different-first)")
+          .orNone
+      val firstFooterOpt =
+        Opts
+          .option[String]("first-footer", "Footer for the first page (sets different-first)")
+          .orNone
+      val diffOddEvenFlag =
+        Opts.flag("different-odd-even", "Use even-page text on even pages").orFalse
+      val diffFirstFlag = Opts.flag("different-first", "Use first-page text on page 1").orFalse
+      (
+        oddHeaderOpt,
+        oddFooterOpt,
+        evenHeaderOpt,
+        evenFooterOpt,
+        firstHeaderOpt,
+        firstFooterOpt,
+        diffOddEvenFlag,
+        diffFirstFlag
+      ).mapN(CliCommand.HeaderFooterOp.apply)
     }
 
   // --- Copy command ---
@@ -2014,6 +2115,61 @@ USAGE:
     case CliCommand.Unfreeze =>
       requireOutput(outputOpt, backendOpt, stream)(
         WriteCommands.unfreeze(wb, sheetOpt, _, _, _)
+      )
+
+    // Sheet appearance & print setup (GH-358)
+    case CliCommand.SheetViewOp(gridlines, zoom, tabSelected) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.sheetView(wb, sheetOpt, gridlines, zoom, tabSelected, _, _, _)
+      )
+
+    case CliCommand.TabColorOp(color, clear) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.tabColor(wb, sheetOpt, color, clear, _, _, _)
+      )
+
+    case CliCommand.PageSetupOp(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.pageSetup(
+          wb,
+          sheetOpt,
+          orientation,
+          scale,
+          fitToWidth,
+          fitToHeight,
+          fitToPage,
+          _,
+          _,
+          _
+        )
+      )
+
+    case CliCommand.HeaderFooterOp(
+          oddHeader,
+          oddFooter,
+          evenHeader,
+          evenFooter,
+          firstHeader,
+          firstFooter,
+          differentOddEven,
+          differentFirst
+        ) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.headerFooter(
+          wb,
+          sheetOpt,
+          oddHeader,
+          oddFooter,
+          evenHeader,
+          evenFooter,
+          firstHeader,
+          firstFooter,
+          differentOddEven,
+          differentFirst,
+          _,
+          _,
+          _
+        )
       )
 
     case CliCommand.Copy(source, target, valuesOnly) =>
