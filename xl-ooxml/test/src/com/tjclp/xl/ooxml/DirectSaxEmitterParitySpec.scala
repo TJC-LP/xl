@@ -127,6 +127,12 @@ class DirectSaxEmitterParitySpec extends FunSuite:
     assert(xml.contains("<pageMargins "), s"pageMargins missing: $xml")
     assert(xml.contains("<evenHeader>"), s"even header (GH-266) missing: $xml")
     assert(xml.contains("fitToPage=\"1\""), s"sheetPr fitToPage flag missing: $xml")
+    // StAX writes <tabColor ...></tabColor>, the DOM writer self-closes — match the open tag only
+    assert(xml.contains("<tabColor rgb=\"FF1F4E79\""), s"tabColor (GH-358) missing: $xml")
+    assert(
+      xml.indexOf("<tabColor ") < xml.indexOf("<pageSetUpPr "),
+      s"CT_SheetPr order: tabColor before pageSetUpPr: $xml"
+    )
     // Schema order (ECMA-376 18.3.1.99): sheetPr < sheetViews < cols < sheetData < page*
     val order = Seq(
       "<sheetPr>",
@@ -184,6 +190,8 @@ class DirectSaxEmitterParitySpec extends FunSuite:
       .withViewSettings(
         SheetView(showGridLines = false, zoomScale = Some(85), tabSelected = Some(true))
       )
+      // GH-358: tabColor must come out of the streaming path too, first among sheetPr children
+      .withTabColor(com.tjclp.xl.styles.color.Color.Rgb(0xff1f4e79))
       .withPageSetup(
         PageSetup(
           orientation = Some("landscape"),

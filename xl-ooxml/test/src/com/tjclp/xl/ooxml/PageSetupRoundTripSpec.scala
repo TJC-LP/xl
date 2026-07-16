@@ -8,6 +8,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
+import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 import com.tjclp.xl.workbooks.DefinedName
 import munit.FunSuite
 
@@ -15,6 +16,9 @@ import munit.FunSuite
  * GH-259: PageSetup print extensions round-trip — scale/orientation/fit via `<pageSetup>`, margins
  * via `<pageMargins>`, header/footer via `<headerFooter>`, and print area / repeat title rows via
  * sheet-scoped workbook defined names (`_xlnm.Print_Area` / `_xlnm.Print_Titles`).
+ *
+ * GH-358: `Sheet.tabColor` ⇄ `<sheetPr><tabColor .../>` with preserve-if-None merge semantics (the
+ * sheetPr overlay lives beside the fitToPage reconciliation, hence this spec).
  */
 class PageSetupRoundTripSpec extends FunSuite:
 
@@ -441,7 +445,8 @@ class PageSetupRoundTripSpec extends FunSuite:
         .fold(e => fail(s"parse failed: $e"), identity)
     val merged = com.tjclp.xl.ooxml.worksheet.mergeSheetPrElem(
       Some(preserved),
-      Some(PageSetup(fitToPage = Some(false)))
+      Some(PageSetup(fitToPage = Some(false))),
+      None
     )
     val elem = merged.getOrElse(fail("sheetPr with codeName/tabColor must survive the strip"))
     assertEquals(elem \@ "codeName", "Sheet1", "codeName attribute lost")
@@ -452,9 +457,134 @@ class PageSetupRoundTripSpec extends FunSuite:
   test("GH-284: Some(false) with nothing preserved emits no sheetPr at all") {
     val merged = com.tjclp.xl.ooxml.worksheet.mergeSheetPrElem(
       None,
-      Some(PageSetup(fitToPage = Some(false)))
+      Some(PageSetup(fitToPage = Some(false))),
+      None
     )
     assertEquals(merged, None)
+  }
+
+  // ===== Tab color (GH-358, model half) =====
+
+  test("GH-358: rgb tabColor round-trips (write → read → equality + XML shape)") {
+    val navy = Color.Rgb(0xff1f4e79)
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withTabColor(navy))
+    val (reread, out) = writeRead(wb)
+
+    val sheet = reread("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet.tabColor, Some(navy))
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("<sheetPr>"), s"sheetPr missing: $xml")
+    assert(xml.contains("<tabColor rgb=\"FF1F4E79\"/>"), s"tabColor element missing: $xml")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-358: theme tabColor (slot + tint) round-trips") {
+    val theme = Color.Theme(ThemeSlot.Accent2, 0.25)
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withTabColor(theme))
+    val (reread, out) = writeRead(wb)
+    val sheet = reread("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet.tabColor, Some(theme))
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-358: workbook without tabColor reads back None") {
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1))
+    val (reread, out) = writeRead(wb)
+    val sheet = reread("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet.tabColor, None)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-358: tabColor + fitToPage keep CT_SheetPr child order (tabColor FIRST)") {
+    val wb = Workbook(
+      Sheet("Sheet1")
+        .put(ref"A1" -> 1)
+        .withTabColor(Color.Rgb(0xffff0000))
+        .withPageSetup(PageSetup(fitToWidth = Some(1)))
+    )
+    val (_, out) = writeRead(wb)
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    val tabColorIdx = xml.indexOf("<tabColor ")
+    val pageSetUpPrIdx = xml.indexOf("<pageSetUpPr ")
+    assert(tabColorIdx >= 0, s"tabColor missing: $xml")
+    assert(pageSetUpPrIdx >= 0, s"pageSetUpPr missing: $xml")
+    assert(
+      tabColorIdx < pageSetUpPrIdx,
+      s"CT_SheetPr sequence: tabColor must precede pageSetUpPr or Excel repairs the file: $xml"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-358: tabColor overlay REPLACES an existing tabColor child in place") {
+    import scala.xml.*
+    val preserved =
+      XmlSecurity
+        .parseSafe(
+          """<sheetPr codeName="Sheet1"><tabColor rgb="FF00FF00"/><pageSetUpPr fitToPage="1"/></sheetPr>""",
+          "test sheetPr"
+        )
+        .fold(e => fail(s"parse failed: $e"), identity)
+    val merged = com.tjclp.xl.ooxml.worksheet.mergeSheetPrElem(
+      Some(preserved),
+      None,
+      Some(Color.Rgb(0xff1f4e79))
+    )
+    val elem = merged.getOrElse(fail("merged sheetPr missing"))
+    assertEquals(elem \@ "codeName", "Sheet1", "codeName attribute lost")
+    val tabColors = (elem \ "tabColor").collect { case e: Elem => e }
+    assertEquals(tabColors.length, 1, s"exactly one tabColor expected: $elem")
+    assertEquals(tabColors.headOption.map(_ \@ "rgb"), Some("FF1F4E79"))
+    assert((elem \ "pageSetUpPr").nonEmpty, "unrelated pageSetUpPr child lost")
+  }
+
+  test("GH-358: tabColor overlay PREPENDS when the preserved sheetPr has no tabColor") {
+    import scala.xml.*
+    val preserved =
+      XmlSecurity
+        .parseSafe(
+          """<sheetPr><outlinePr summaryBelow="0"/><pageSetUpPr fitToPage="1"/></sheetPr>""",
+          "test sheetPr"
+        )
+        .fold(e => fail(s"parse failed: $e"), identity)
+    val merged = com.tjclp.xl.ooxml.worksheet.mergeSheetPrElem(
+      Some(preserved),
+      None,
+      Some(Color.Rgb(0xffff0000))
+    )
+    val elem = merged.getOrElse(fail("merged sheetPr missing"))
+    val childLabels = elem.child.collect { case e: Elem => e.label }
+    assertEquals(
+      childLabels.headOption,
+      Some("tabColor"),
+      s"tabColor must be the FIRST CT_SheetPr child (schema order): $childLabels"
+    )
+    assertEquals(childLabels, Seq("tabColor", "outlinePr", "pageSetUpPr"))
+  }
+
+  test("GH-358: tabColor = None leaves a preserved sheetPr untouched (preserve-if-None)") {
+    import scala.xml.*
+    val preserved =
+      XmlSecurity
+        .parseSafe(
+          """<sheetPr codeName="S1"><tabColor theme="5" tint="0.25"/></sheetPr>""",
+          "test sheetPr"
+        )
+        .fold(e => fail(s"parse failed: $e"), identity)
+    val merged =
+      com.tjclp.xl.ooxml.worksheet.mergeSheetPrElem(Some(preserved), None, None)
+    assertEquals(merged, Some(preserved), "None must not touch the preserved sheetPr")
+  }
+
+  test("GH-358: theme tabColor emits theme/tint attributes (not a resolved rgb)") {
+    val theme = Color.Theme(ThemeSlot.Accent1, 0.5)
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withTabColor(theme))
+    val (_, out) = writeRead(wb)
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("<tabColor "), s"tabColor missing: $xml")
+    assert(xml.contains("theme=\"4\""), s"theme index missing (Accent1 = 4): $xml")
+    assert(xml.contains("tint=\"0.5\""), s"tint missing: $xml")
+    Files.deleteIfExists(out)
   }
 
   test("GH-284: fitToPage=Some(true) forces the flag without fitToWidth/fitToHeight") {

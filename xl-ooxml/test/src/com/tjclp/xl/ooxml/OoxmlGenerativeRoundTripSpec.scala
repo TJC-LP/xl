@@ -152,7 +152,8 @@ class OoxmlGenerativeRoundTripSpec extends ScalaCheckSuite:
             margins = Some(PageMargins(0.5, 0.5, 0.75, 0.75, 0.3, 0.3))
           )
         ),
-        freezePane = Some(FreezePane.At(ref"B2", Some(ref"B40")))
+        freezePane = Some(FreezePane.At(ref"B2", Some(ref"B40"))),
+        tabColor = Some(Color.Theme(ThemeSlot.Accent4, -0.25))
       )
     val wb = Workbook(Vector(sheet))
     val diffs = roundTripDiff(wb)

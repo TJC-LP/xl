@@ -8,6 +8,7 @@ import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
 import com.tjclp.xl.drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
+import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.tables.TableSpec
 
@@ -46,6 +47,12 @@ import scala.util.boundary, boundary.break
  * @param conditionalFormats
  *   Conditional-formatting blocks (GH-136). Document order is emission order; use
  *   [[conditionalFormat]] to append (it assigns priorities) rather than constructing directly.
+ *
+ * @param tabColor
+ *   Sheet tab color (GH-358), serialized as `<sheetPr><tabColor .../>`. `None` preserves any
+ *   existing tabColor XML on write (passive default, the viewSettings precedent); `Some(color)`
+ *   overlays it onto the preserved sheetPr. Both RGB and theme+tint colors are legal; the reader
+ *   populates it whenever the source color is in the typed subset (rgb / theme+tint / indexed).
  */
 final case class Sheet(
   name: SheetName,
@@ -62,7 +69,8 @@ final case class Sheet(
   freezePane: Option[FreezePane] = None,
   viewSettings: Option[SheetView] = None,
   drawings: Vector[Drawing] = Vector.empty,
-  conditionalFormats: Vector[ConditionalFormat] = Vector.empty
+  conditionalFormats: Vector[ConditionalFormat] = Vector.empty,
+  tabColor: Option[Color] = None
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -830,6 +838,22 @@ final case class Sheet(
    * }}}
    */
   def withPageSetup(setup: PageSetup): Sheet = copy(pageSetup = Some(setup))
+
+  /**
+   * Set the sheet tab color (GH-358). Both RGB and theme colors are legal:
+   * {{{
+   * sheet.withTabColor(Color.Rgb(0xFF1F4E79))                 // navy
+   * sheet.withTabColor(Color.Theme(ThemeSlot.Accent2, 0.25))  // theme + tint
+   * }}}
+   */
+  def withTabColor(color: Color): Sheet = copy(tabColor = Some(color))
+
+  /**
+   * Clear the modeled tab color back to the passive default. NOTE: on write, `None` PRESERVES any
+   * tabColor already present in the source XML (preserve-if-None, the viewSettings precedent) — it
+   * does not actively strip a preserved color.
+   */
+  def withoutTabColor: Sheet = copy(tabColor = None)
 
   /** Count of non-empty cells */
   def cellCount: Int = cells.size

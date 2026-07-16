@@ -1058,6 +1058,9 @@ object XlsxReader:
     // Parse frozen panes into the model (GH-372) so read→modify→write keeps them
     val freezePane = parseFreezePane(ooxmlSheet.sheetViews)
 
+    // Parse the tab color from <sheetPr><tabColor .../> — GH-358
+    val tabColor = parseTabColor(ooxmlSheet.sheetPr)
+
     // Parse conditional formatting into the typed model (GH-136); dxfId attrs resolve through
     // the styles.xml <dxfs> table. Total: unmodeled content rides through Preserved.
     val conditionalFormats =
@@ -1077,7 +1080,8 @@ object XlsxReader:
         freezePane = freezePane,
         viewSettings = viewSettings,
         drawings = drawings,
-        conditionalFormats = conditionalFormats
+        conditionalFormats = conditionalFormats,
+        tabColor = tabColor
       )
     )
 
@@ -1267,6 +1271,19 @@ object XlsxReader:
         .flatMap(t => ARef.parse(t).toOption)
         .filter(_ != anchor)
       FreezePane.At(anchor, scrolledTo)
+
+  /**
+   * Parse the sheet tab color (GH-358) from `<sheetPr><tabColor .../>`, reusing the strict dxf
+   * color parser (rgb / theme+tint / indexed-with-palette-mapping). Colors outside that subset
+   * (`auto`, unmapped indexed, foreign attrs) yield None and ride the preserved sheetPr XML — the
+   * preserve-if-None writer never loses them.
+   */
+  private def parseTabColor(sheetPrElem: Option[Elem]): Option[com.tjclp.xl.styles.color.Color] =
+    for
+      sheetPr <- sheetPrElem
+      tabColorElem <- (sheetPr \ "tabColor").collectFirst { case e: Elem => e }
+      color <- com.tjclp.xl.ooxml.style.DxfCodec.parseColor(tabColorElem)
+    yield color
 
   /**
    * Assemble final workbook with optional SourceContext for surgical modification.

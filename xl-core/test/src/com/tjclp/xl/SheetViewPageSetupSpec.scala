@@ -3,6 +3,7 @@ package com.tjclp.xl
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.render.SvgRenderer
 import com.tjclp.xl.sheets.{FreezePane, HeaderFooter, PageMargins, PageSetup, SheetView}
+import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 import munit.FunSuite
 
 /**
@@ -37,6 +38,21 @@ class SheetViewPageSetupSpec extends FunSuite:
     assertEquals(SheetView.default.tabSelected, None)
     assertEquals(SheetView(tabSelected = Some(true)).tabSelected, Some(true))
     assertEquals(SheetView(tabSelected = Some(false)).tabSelected, Some(false))
+  }
+
+  // ===== Tab color (GH-358) =====
+
+  test("Sheet.tabColor defaults to None; withTabColor sets it; withoutTabColor clears it") {
+    val navy = Color.Rgb(0xff1f4e79)
+    assertEquals(Sheet("S").tabColor, None)
+    val sheet = Sheet("S").withTabColor(navy)
+    assertEquals(sheet.tabColor, Some(navy))
+    assertEquals(sheet.withoutTabColor.tabColor, None)
+  }
+
+  test("Sheet.tabColor supports theme colors with tint (GH-358)") {
+    val theme = Color.Theme(ThemeSlot.Accent2, 0.25)
+    assertEquals(Sheet("S").withTabColor(theme).tabColor, Some(theme))
   }
 
   // ===== FreezePane scroll state (GH-382) =====

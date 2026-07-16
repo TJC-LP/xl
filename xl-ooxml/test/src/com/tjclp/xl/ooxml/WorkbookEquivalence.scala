@@ -39,7 +39,7 @@ import com.tjclp.xl.styles.fill.Fill
  *     XML and reads back None by design — generators only produce visible ones); freezePane equal
  *     after WRITER-CANONICAL mapping (GH-372: the reader populates it from the pane XML) — an A1
  *     anchor or Remove emits no pane and reads back None, a scroll target equal to the anchor reads
- *     back None
+ *     back None; tabColor equal after color canonicalization (GH-358)
  *   - (d) workbook-level: docProps metadata fields equal (GH-242 — creator, lastModifiedBy,
  *     application, appVersion exact; created/modified at W3CDTF second precision)
  *
@@ -150,8 +150,16 @@ object WorkbookEquivalence:
             s"(authored ${expected.freezePane}), actual ${actual.freezePane}"
         )
       else Nil
+    val tabColorDiffs =
+      if expected.tabColor.map(normalizeColor) != actual.tabColor.map(normalizeColor) then
+        List(
+          s"$name: tabColor mismatch (GH-358): expected ${expected.tabColor}, " +
+            s"actual ${actual.tabColor}"
+        )
+      else Nil
     refDiffs ++ cellDiffs ++ commentDiffs ++ mergeDiffs ++ viewDiffs ++ pageSetupDiffs ++
-      freezeDiffs ++ drawingsDiff(name, expected, actual) ++ cfDiff(name, expected, actual)
+      freezeDiffs ++ tabColorDiffs ++ drawingsDiff(name, expected, actual) ++
+      cfDiff(name, expected, actual)
 
   /**
    * Writer-canonical freeze pane (GH-372): the reader populates freezePane from the pane XML, so it

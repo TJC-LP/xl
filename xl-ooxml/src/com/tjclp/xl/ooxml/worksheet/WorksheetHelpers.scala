@@ -5,6 +5,7 @@ import scala.xml.*
 import com.tjclp.xl.addressing.{ARef, Column}
 import com.tjclp.xl.ooxml.XmlUtil
 import com.tjclp.xl.ooxml.XmlUtil.nsSpreadsheetML
+import com.tjclp.xl.ooxml.style.DxfCodec
 import com.tjclp.xl.sheets.{
   ColumnProperties,
   FreezePane,
@@ -13,6 +14,7 @@ import com.tjclp.xl.sheets.{
   Sheet,
   SheetView
 }
+import com.tjclp.xl.styles.color.Color
 
 // Default namespaces for generated worksheets. Real files capture the original scope/attributes to
 // avoid redundant declarations and preserve mc/x14/xr bindings from the source sheet.
@@ -629,8 +631,8 @@ private[ooxml] def mergeHeaderFooterElem(
       if flagged.child.isEmpty && flagged.attributes == Null then None else Some(flagged)
 
 /**
- * Reconcile `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>` with the model (GH-266, GH-284):
- * Excel ignores pageSetup's fitToWidth/fitToHeight without this flag.
+ * Reconcile `<sheetPr>` with the model: the pageSetUpPr fitToPage flag (GH-266, GH-284 — Excel
+ * ignores pageSetup's fitToWidth/fitToHeight without it) and the tab color (GH-358).
  *
  * `PageSetup.fitToPage` is a write-only tri-state (GH-284):
  *   - Some(true): force the flag (even without fitTo* fields)
@@ -641,16 +643,46 @@ private[ooxml] def mergeHeaderFooterElem(
  *     preserved element rides through verbatim. Absence of the model fields is not evidence the
  *     source flag should be cleared (fitToWidth/fitToHeight default to 1 in OOXML, so a bare flag
  *     without pageSetup attributes is still meaningful).
+ *
+ * `tabColor` overlays a `<tabColor>` child when Some (replacing an existing one in place,
+ * PREPENDING otherwise — tabColor is FIRST in the CT_SheetPr child sequence, unlike pageSetUpPr
+ * which is last; misplacing it makes Excel show a repair prompt) and leaves the preserved sheetPr
+ * untouched when None (preserve-if-None, the viewSettings precedent).
  */
 private[ooxml] def mergeSheetPrElem(
   existing: Option[Elem],
-  pageSetup: Option[PageSetup]
+  pageSetup: Option[PageSetup],
+  tabColor: Option[Color]
 ): Option[Elem] =
   val derivedFit = pageSetup.exists(ps => ps.fitToWidth.isDefined || ps.fitToHeight.isDefined)
-  pageSetup.flatMap(_.fitToPage) match
+  val withFit = pageSetup.flatMap(_.fitToPage) match
     case Some(false) => stripFitToPage(existing)
     case Some(true) => ensureFitToPage(existing)
     case None => if derivedFit then ensureFitToPage(existing) else existing
+  applyTabColor(withFit, tabColor)
+
+/** Overlay the modeled tab color onto sheetPr (GH-358); None preserves the input untouched. */
+private def applyTabColor(existing: Option[Elem], tabColor: Option[Color]): Option[Elem] =
+  tabColor match
+    case None => existing
+    case Some(color) =>
+      // Theme colors keep their theme/tint attrs (DxfCodec.colorToXml), relabeled per the
+      // fgColor/bgColor pattern
+      val colorElem = DxfCodec.colorToXml(color).copy(label = "tabColor")
+      val base = existing.getOrElse(XmlUtil.elem("sheetPr")())
+      val hasTabColor = base.child.exists {
+        case e: Elem => e.label == "tabColor"
+        case _ => false
+      }
+      val children =
+        if hasTabColor then
+          base.child.map {
+            case e: Elem if e.label == "tabColor" => colorElem
+            case other => other
+          }
+        // CT_SheetPr's child sequence STARTS with tabColor — prepend (pageSetUpPr appends)
+        else colorElem +: base.child
+      Some(base.copy(child = children))
 
 /** Set fitToPage="1", creating sheetPr/pageSetUpPr as needed (GH-266 behavior). */
 private def ensureFitToPage(existing: Option[Elem]): Option[Elem] =

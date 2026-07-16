@@ -192,6 +192,50 @@ class SheetViewRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  // ===== GH-358: foreign sheetPr / tabColor shapes =====
+
+  test("GH-358: unparseable tabColor (auto) stays out of the model and rides preservation") {
+    val src = rawWorksheetFixture("""<sheetPr><tabColor auto="1"/></sheetPr>""")
+    val wb = XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity)
+    val sheet = wb("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet.tabColor, None, "auto tabColor is outside the typed color subset")
+
+    val out = Files.createTempFile("tabcolor-auto", ".xlsx")
+    XlsxWriter
+      .write(wb.put(sheet.put(ref"B1" -> 2)), out)
+      .fold(e => fail(s"write failed: $e"), identity)
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("<tabColor auto=\"1\"/>"), s"foreign tabColor lost on rewrite: $xml")
+    Files.deleteIfExists(src)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-358: setting tabColor on a read sheet keeps foreign sheetPr attrs and children") {
+    val src = rawWorksheetFixture(
+      """<sheetPr codeName="Hoja1" filterMode="1"><outlinePr summaryBelow="0"/></sheetPr>"""
+    )
+    val recolored = for
+      wb <- XlsxReader.read(src)
+      updated <- wb.updateAt(0, _.withTabColor(com.tjclp.xl.styles.color.Color.Rgb(0xff1f4e79)))
+    yield updated
+    val wb1 = recolored.fold(e => fail(s"edit failed: $e"), identity)
+
+    val out = Files.createTempFile("tabcolor-foreign", ".xlsx")
+    XlsxWriter.write(wb1, out).fold(e => fail(s"write failed: $e"), identity)
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("<tabColor rgb=\"FF1F4E79\"/>"), s"tabColor missing: $xml")
+    assert(xml.contains("codeName=\"Hoja1\""), s"foreign sheetPr attr lost: $xml")
+    assert(xml.contains("filterMode=\"1\""), s"foreign sheetPr attr lost: $xml")
+    assert(xml.contains("summaryBelow=\"0\""), s"foreign sheetPr child lost: $xml")
+    // CT_SheetPr sequence: tabColor precedes outlinePr
+    assert(
+      xml.indexOf("<tabColor ") < xml.indexOf("<outlinePr "),
+      s"tabColor must be prepended before other sheetPr children: $xml"
+    )
+    Files.deleteIfExists(src)
+    Files.deleteIfExists(out)
+  }
+
   // ===== GH-372: tabSelected =====
 
   test("GH-372: tabSelected round-trips (write → read)") {

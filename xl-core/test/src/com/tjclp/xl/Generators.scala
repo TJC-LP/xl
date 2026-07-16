@@ -958,6 +958,8 @@ object Generators:
       view <- Gen.option(genSheetView)
       pageSetup <- Gen.option(genPageSetup)
       freeze <- Gen.frequency(3 -> Gen.const(None), 1 -> genFreezePane.map(Some.apply))
+      // GH-358: tab color at freeze-like frequency (rgb and theme+tint both round-trip)
+      tabColor <- Gen.frequency(3 -> Gen.const(None), 1 -> genColor.map(Some.apply))
       // GH-221/GH-222: pictures at comment-like frequency, charts rarer still
       drawings <- Gen.frequency(
         3 -> Gen.const(Vector.empty[Drawing]),
@@ -982,7 +984,8 @@ object Generators:
         pageSetup = pageSetup,
         freezePane = freeze,
         drawings = drawings,
-        conditionalFormats = condFmts
+        conditionalFormats = condFmts,
+        tabColor = tabColor
       )
 
   /**
