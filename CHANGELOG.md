@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+File-integrity wave from the tjc-modeling byte-exact replication campaign
+(#327, #328, #378, #381, #383, #387, #388): every workaround that campaign
+shipped as post-write zip surgery is now unnecessary — packages are
+self-consistent, schema-valid, and `recalculate()` is total.
+
+### Fixed
+
+- **Property-only rows survive scratch-build writes** (#381): rows carrying
+  only `RowProperties` (height/hidden/outline via `setRowProperties`, no
+  cells) now emit their `<row>` element on the default writer backend —
+  spacer-row heights and collapsed outline groups no longer vanish. The
+  streaming (SaxStax) backend already handled this; backends now agree,
+  pinned by cross-backend parity tests.
+- **Formula cells keep cached DateTime results** (#378): `=TODAY()`,
+  `=EDATE(...)`, `=EOMONTH(...)` cells written after `recalculate()` now
+  carry their cached value as an Excel serial in `<v>` (with `t="n"`) on all
+  three writer backends, so `data_only` readers, pandas, and previewers see
+  values instead of blanks. The cats-effect streaming writer also gained the
+  missing `t="str"` mapping for cached text.
+- **Comment rich runs are schema-valid** (#383): run properties in
+  `xl/comments*.xml` (and freshly-authored shared-string/inline rich runs)
+  emit `<rFont val=…/>` per CT_RPrElt instead of the styles.xml `<name>`
+  shape — strict parsers (openpyxl) can open XL-authored comments again.
+  The reader now parses `<rFont>` (real Excel comments no longer silently
+  lose their font) while still accepting legacy `<name>` files.
+- **Modified sheets keep their source part names** (#327): on source-backed
+  writes, a modified sheet's output part, its rels, and the workbook-rels
+  reconciliation all derive from one identity-resolved source path — writes
+  against Excel-reordered files no longer fail with a duplicate-zip-entry
+  `IOError` when an index-derived name collides with an unmodified
+  neighbor's part.
+- **Removing a sheet's last comment prunes its package footprint** (#328):
+  a cell-edit write that drops a sheet's final comment no longer leaves the
+  orphan comments/VML `[Content_Types].xml` overrides, dangling sheet rels,
+  or `legacyDrawing` reference behind; other sheets' comments survive, and
+  foreign part dialects (openpyxl naming) prune by resolved path.
+- **Scratch workbooks with theme colors ship a theme part** (#387): writing
+  a from-scratch workbook whose styles (or conditional-formatting dxfs)
+  reference `Color.Theme` now emits a default Office `xl/theme/theme1.xml`
+  plus its content-type override and workbook relationship — packages are
+  self-consistent for strict consumers. RGB-only workbooks gain nothing;
+  source-backed writes keep preserving the original theme.
+- **Financial-function divergence is contained per-cell** (#388): `IRR()`
+  Newton divergence (and the same overflow class in XIRR/XNPV/NPV and the
+  TVM family) returns a per-cell evaluation error instead of throwing
+  `ArithmeticException` out of `recalculate()`; a defense-in-depth backstop
+  in the workbook evaluator guarantees recalculation is total even if a
+  future function forgets to guard.
+
 ## [0.12.6] "Fieldwork" - 2026-07-15
 
 Production-feedback hardening from agent-fleet use on real deal workbooks
