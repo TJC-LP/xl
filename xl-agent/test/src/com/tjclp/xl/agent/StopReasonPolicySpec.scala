@@ -66,3 +66,25 @@ class StopReasonPolicySpec extends FunSuite:
       Some("turn incomplete: stop_reason=some_future_reason")
     )
   }
+
+  test("pause_turn after exhausting auto-resumes names the resumes spent (issue #344)") {
+    assertEquals(
+      StopReasonPolicy.errorFor(Some("pause_turn"), resumesUsed = 3),
+      Some("turn incomplete: stop_reason=pause_turn (auto-resume exhausted after 3 resumes)")
+    )
+  }
+
+  test("pause_turn with zero resumes keeps the plain incomplete-turn error") {
+    assertEquals(
+      StopReasonPolicy.errorFor(Some("pause_turn"), resumesUsed = 0),
+      Some("turn incomplete: stop_reason=pause_turn")
+    )
+  }
+
+  test("resume count never decorates non-pause stop reasons") {
+    assertEquals(StopReasonPolicy.errorFor(Some("end_turn"), resumesUsed = 3), None)
+    assertEquals(
+      StopReasonPolicy.errorFor(Some("refusal"), resumesUsed = 3),
+      Some("model refused: stop_reason=refusal")
+    )
+  }

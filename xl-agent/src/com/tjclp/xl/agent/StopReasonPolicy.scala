@@ -14,6 +14,17 @@ object StopReasonPolicy:
   /** Stop reasons that mark a cleanly finished turn (wire values from `BetaStopReason`) */
   private val CleanStops: Set[String] = Set("end_turn", "tool_use", "stop_sequence")
 
+  /** Wire value of the resumable pause stop: the server-side tool loop hit its iteration cap */
+  val PauseTurn: String = "pause_turn"
+
+  /**
+   * Cap on automatic pause_turn resumes per logical turn (issue #344). Each resume re-sends the
+   * request with the paused assistant turns appended (see `CodeExecution.buildParams`); the cap
+   * keeps a stuck server loop from consuming budget forever. A turn still paused past the cap
+   * surfaces through [[errorFor(stopReason:Option[String],resumesUsed:Int)*]].
+   */
+  val MaxPauseTurnResumes: Int = 3
+
   /**
    * Error text for a final stop reason; None when the turn finished cleanly.
    *
@@ -25,4 +36,16 @@ object StopReasonPolicy:
       case "max_tokens" => "turn truncated: stop_reason=max_tokens (raise --max-tokens)"
       case "refusal" => "model refused: stop_reason=refusal"
       case other => s"turn incomplete: stop_reason=$other"
+    }
+
+  /**
+   * Error text for a final stop reason after `resumesUsed` pause_turn auto-resumes (issue #344): a
+   * pause_turn that survived the resume loop is flagged as exhausted, not merely incomplete. All
+   * other reasons map exactly as [[errorFor(stopReason:Option[String])*]].
+   */
+  def errorFor(stopReason: Option[String], resumesUsed: Int): Option[String] =
+    errorFor(stopReason).map { message =>
+      if stopReason.contains(PauseTurn) && resumesUsed > 0 then
+        s"$message (auto-resume exhausted after $resumesUsed resumes)"
+      else message
     }

@@ -3,6 +3,7 @@ package com.tjclp.xl.agent
 import cats.effect.{Clock, IO, Ref, Resource}
 import cats.effect.std.Queue
 import cats.syntax.all.*
+import com.anthropic.models.beta.messages.BetaMessage
 import com.tjclp.xl.agent.anthropic.{AnthropicClientIO, CodeExecution, SkillsApi}
 import com.tjclp.xl.agent.approach.{ApproachStrategy, XlApproachStrategy}
 import com.tjclp.xl.agent.benchmark.common.FileManager
@@ -35,6 +36,58 @@ trait Agent:
 
 object Agent:
 
+  /**
+   * One logical turn's API responses: the pause_turn responses the API `paused` (oldest first)
+   * followed by the `last` response that ended the resume loop. Every element was a separately
+   * billed request, so result merging must span all of them.
+   */
+  private[agent] final case class TurnResponses(paused: Vector[BetaMessage], last: BetaMessage):
+    def all: Vector[BetaMessage] = paused :+ last
+    def resumesUsed: Int = paused.size
+
+  /**
+   * Drive one logical turn, auto-resuming while the API pauses it (stop_reason=pause_turn, issue
+   * #344). `send` receives the paused turns accumulated so far — empty on the initial call — and
+   * must re-send the original request with them appended verbatim (see
+   * `CodeExecution.buildParams`). Caps at `maxResumes` re-sends; a response still paused at the cap
+   * is returned as-is and surfaces through `StopReasonPolicy.errorFor(stopReason, resumesUsed)`.
+   */
+  private[agent] def sendWithPauseTurnResume(
+    send: Vector[BetaMessage] => IO[BetaMessage],
+    maxResumes: Int = StopReasonPolicy.MaxPauseTurnResumes
+  ): IO[TurnResponses] =
+    def go(paused: Vector[BetaMessage]): IO[TurnResponses] =
+      send(paused).flatMap { response =>
+        val stopReason = response.stopReason().toScala.map(_.asString)
+        if stopReason.contains(StopReasonPolicy.PauseTurn) && paused.size < maxResumes then
+          go(paused :+ response)
+        else IO.pure(TurnResponses(paused, response))
+      }
+    go(Vector.empty)
+
+  /** Token usage of a single API response */
+  private[agent] def usageOf(response: BetaMessage): TokenUsage =
+    TokenUsage(
+      inputTokens = response.usage().inputTokens(),
+      outputTokens = response.usage().outputTokens(),
+      cacheCreationTokens =
+        response.usage().cacheCreationInputTokens().toScala.map(Long.unbox).getOrElse(0L),
+      cacheReadTokens =
+        response.usage().cacheReadInputTokens().toScala.map(Long.unbox).getOrElse(0L)
+    )
+
+  /** Summed usage across a turn's responses (each pause_turn resume is billed separately) */
+  private[agent] def mergedUsage(turn: TurnResponses): TokenUsage =
+    turn.all.foldLeft(TokenUsage.zero)((acc, response) => acc + usageOf(response))
+
+  /** Concatenated visible text across a turn's responses (a resume does not re-emit paused text) */
+  private[agent] def mergedResponseText(turn: TurnResponses): String =
+    turn.all.map(CodeExecution.extractResponseText).filter(_.nonEmpty).mkString("\n")
+
+  /** Last output file id across a turn's responses (the file may pre-date the final resume) */
+  private[agent] def mergedOutputFileId(turn: TurnResponses, verbose: Boolean): Option[String] =
+    turn.all.flatMap(response => CodeExecution.extractOutputFileId(response, verbose)).lastOption
+
   /** Create an Agent instance with the given configuration and approach strategy */
   def create(
     client: AnthropicClientIO,
@@ -63,35 +116,33 @@ object Agent:
         systemPrompt = strategy.systemPrompt
         userPrompt = strategy.userPrompt(task, task.inputFile.getFileName.toString)
 
-        // Send request with streaming - pass onEvent for real-time tracing
-        response <- CodeExecution.sendRequest(
-          client.underlying,
-          config,
-          systemPrompt,
-          userPrompt,
-          containerUploads = strategy.containerUploads(inputFile.id),
-          eventQueue,
-          configureRequest = strategy.configureRequest,
-          onEvent = onEvent
-        )
+        // Send request with streaming - pass onEvent for real-time tracing. A turn the API
+        // pauses (stop_reason=pause_turn) is auto-resumed with the paused assistant turns
+        // appended verbatim, bounded by StopReasonPolicy.MaxPauseTurnResumes (issue #344).
+        turn <- sendWithPauseTurnResume { resumeTurns =>
+          CodeExecution.sendRequest(
+            client.underlying,
+            config,
+            systemPrompt,
+            userPrompt,
+            containerUploads = strategy.containerUploads(inputFile.id),
+            eventQueue,
+            configureRequest = strategy.configureRequest,
+            onEvent = onEvent,
+            resumeTurns = resumeTurns
+          )
+        }
 
         // Drain event queue and collect events (onEvent already called during streaming)
         collectedEvents <- drainQueue(eventQueue, events)
 
-        // Extract response info
-        responseText = CodeExecution.extractResponseText(response)
-        outputFileId = CodeExecution.extractOutputFileId(response, config.verbose)
-        // Final stop_reason of the accumulated message: max_tokens/refusal/pause_turn
-        // silently end the code-execution loop and must not read as clean completions
-        stopReason = response.stopReason().toScala.map(_.asString)
-        usage = TokenUsage(
-          inputTokens = response.usage().inputTokens(),
-          outputTokens = response.usage().outputTokens(),
-          cacheCreationTokens =
-            response.usage().cacheCreationInputTokens().toScala.map(Long.unbox).getOrElse(0L),
-          cacheReadTokens =
-            response.usage().cacheReadInputTokens().toScala.map(Long.unbox).getOrElse(0L)
-        )
+        // Extract response info across the whole turn (paused responses + final response)
+        responseText = mergedResponseText(turn)
+        outputFileId = mergedOutputFileId(turn, config.verbose)
+        // Final stop_reason of the accumulated message: max_tokens/refusal (or a pause_turn
+        // that survived the resume loop) must not read as clean completions
+        stopReason = turn.last.stopReason().toScala.map(_.asString)
+        usage = mergedUsage(turn)
 
         // Download output file if found
         outputPath <- outputFileId match
@@ -111,7 +162,7 @@ object Agent:
       // For file modification tasks, success = output file created.
       // For analysis tasks (no expected output), success = agent completed.
       // Don't set error for missing output files - let grading layer handle this;
-      // error only reports non-clean stops (truncation/refusal), issue #340.
+      // error only reports non-clean stops (truncation/refusal/resume exhaustion), issue #340.
       yield AgentResult(
         success = outputPath.isDefined || responseText.nonEmpty,
         outputFileId = outputFileId,
@@ -120,7 +171,7 @@ object Agent:
         latencyMs = latencyMs,
         transcript = collectedEvents,
         responseText = Some(responseText),
-        error = StopReasonPolicy.errorFor(stopReason),
+        error = StopReasonPolicy.errorFor(stopReason, turn.resumesUsed),
         stopReason = stopReason
       )
 
