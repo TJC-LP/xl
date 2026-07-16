@@ -115,34 +115,6 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         case None => Right(extractNumericValue(resolved))
     }
 
-  // GH-187: Helper to extract numeric value, evaluating uncached formulas if needed.
-  // Used by the conditional aggregates (SUMIF, SUMIFS, etc.) for matched value cells.
-  private def extractOrEvalNumeric(
-    cellValue: CellValue,
-    targetSheet: com.tjclp.xl.sheets.Sheet,
-    ctx: EvalContext
-  ): Either[EvalError, Option[BigDecimal]] =
-    cellValue match
-      case CellValue.Formula(formulaStr, None) =>
-        // Recursively evaluate uncached formula (GH-346: memoized once per pass)
-        Evaluator
-          .evalCrossSheetFormula(
-            formulaStr,
-            targetSheet,
-            ctx.clock,
-            ctx.workbook,
-            ctx.depth + 1,
-            ctx.rng,
-            ctx.memo.getOrElse(new Evaluator.EvalMemo)
-          )
-          .map {
-            case CellValue.Number(n) => Some(n)
-            case _ => None // Non-numeric result, skip
-          }
-      case _ =>
-        // Fall back to standard extraction
-        Right(extractNumericValue(cellValue))
-
   // GH-187: Helper to coerce cell value to numeric, evaluating uncached formulas if needed.
   // Used by SUMPRODUCT which needs BigDecimal(0) for non-numeric values instead of None.
   // GH-344 item 6: carried error cells propagate as the error VALUE (the raw-range coerce-to-0
@@ -555,7 +527,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     evalCellValueForMatch(criteriaSheet(testRef).value, criteriaSheet, ctx)
                       .flatMap { testValue =>
                         if CriteriaMatcher.matches(testValue, criterion) then
-                          extractOrEvalNumeric(sumSheet(sumRef).value, sumSheet, ctx).map {
+                          resolveNumericPolicing(
+                            sumSheet(sumRef).value,
+                            sumSheet,
+                            ctx,
+                            "SUMIF",
+                            propagateErrors = true
+                          ).map {
                             case Some(n) => acc + n
                             case None => acc
                           }
@@ -684,7 +662,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                           }
                         matchResult.flatMap { allMatch =>
                           if allMatch then
-                            extractOrEvalNumeric(sumSheet(sumCells(idx)).value, sumSheet, ctx)
+                            resolveNumericPolicing(
+                              sumSheet(sumCells(idx)).value,
+                              sumSheet,
+                              ctx,
+                              "SUMIFS",
+                              propagateErrors = true
+                            )
                               .map {
                                 case Some(n) => acc + n
                                 case None => acc
@@ -769,7 +753,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       }
                     matchResult.flatMap { allMatch =>
                       if allMatch then
-                        extractOrEvalNumeric(valueSheet(valueCells(idx)).value, valueSheet, ctx)
+                        resolveNumericPolicing(
+                          valueSheet(valueCells(idx)).value,
+                          valueSheet,
+                          ctx,
+                          fnName,
+                          propagateErrors = true
+                        )
                           .map {
                             case Some(n) => acc :+ n
                             case None => acc
@@ -949,7 +939,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     evalCellValueForMatch(criteriaSheet(testRef).value, criteriaSheet, ctx)
                       .flatMap { testValue =>
                         if CriteriaMatcher.matches(testValue, criterion) then
-                          extractOrEvalNumeric(avgSheet(avgRef).value, avgSheet, ctx).map {
+                          resolveNumericPolicing(
+                            avgSheet(avgRef).value,
+                            avgSheet,
+                            ctx,
+                            "AVERAGEIF",
+                            propagateErrors = true
+                          ).map {
                             case Some(n) => (accSum + n, accCount + 1)
                             case None => (accSum, accCount)
                           }
@@ -1052,7 +1048,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                             }
                           matchResult.flatMap { allMatch =>
                             if allMatch then
-                              extractOrEvalNumeric(avgSheet(avgCells(idx)).value, avgSheet, ctx)
+                              resolveNumericPolicing(
+                                avgSheet(avgCells(idx)).value,
+                                avgSheet,
+                                ctx,
+                                "AVERAGEIFS",
+                                propagateErrors = true
+                              )
                                 .map {
                                   case Some(n) => (accSum + n, accCount + 1)
                                   case None => (accSum, accCount)

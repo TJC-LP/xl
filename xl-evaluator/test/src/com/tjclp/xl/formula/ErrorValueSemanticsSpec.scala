@@ -205,3 +205,46 @@ class ErrorValueSemanticsSpec extends FunSuite:
     assertEquals(sheet.evaluateFormula("=SUMPRODUCT((A1:A2)*1)"), err(CellError.Div0))
     assertEquals(sheet.evaluateFormula("=COUNT((A1:A2)*1)"), Right(num(1)))
   }
+
+  // ===== Item 6 (SUMIF family): matched value cells propagate; error criteria never match =====
+
+  test("GH-344: SUMIF/AVERAGEIF propagate an error in a MATCHED value cell") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Text("x"))
+      .put(ref"A2", CellValue.Text("x"))
+      .put(ref"B1", div0)
+      .put(ref"B2", num(2))
+    assertEquals(sheet.evaluateFormula("=SUMIF(A1:A2,\"x\",B1:B2)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=AVERAGEIF(A1:A2,\"x\",B1:B2)"), err(CellError.Div0))
+  }
+
+  test("GH-344: an error value cell that is NOT matched never propagates") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Text("x"))
+      .put(ref"A2", CellValue.Text("y"))
+      .put(ref"B1", num(1))
+      .put(ref"B2", div0)
+    assertEquals(sheet.evaluateFormula("=SUMIF(A1:A2,\"x\",B1:B2)"), Right(num(1)))
+  }
+
+  test("GH-344: error cells in a CRITERIA range simply never match (Excel)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", refErr)
+      .put(ref"A2", CellValue.Text("x"))
+      .put(ref"B1", num(1))
+      .put(ref"B2", num(2))
+    assertEquals(sheet.evaluateFormula("=SUMIF(A1:A2,\"x\",B1:B2)"), Right(num(2)))
+    assertEquals(sheet.evaluateFormula("=COUNTIF(A1:A2,\"x\")"), Right(num(1)))
+  }
+
+  test("GH-344: SUMIFS/MAXIFS/MINIFS propagate an error in a MATCHED value cell") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Text("x"))
+      .put(ref"A2", CellValue.Text("x"))
+      .put(ref"B1", na)
+      .put(ref"B2", num(2))
+    assertEquals(sheet.evaluateFormula("=SUMIFS(B1:B2,A1:A2,\"x\")"), err(CellError.NA))
+    assertEquals(sheet.evaluateFormula("=MAXIFS(B1:B2,A1:A2,\"x\")"), err(CellError.NA))
+    assertEquals(sheet.evaluateFormula("=MINIFS(B1:B2,A1:A2,\"x\")"), err(CellError.NA))
+    assertEquals(sheet.evaluateFormula("=AVERAGEIFS(B1:B2,A1:A2,\"x\")"), err(CellError.NA))
+  }
