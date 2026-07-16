@@ -392,6 +392,143 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertEquals(result, Right(Some("=+A7")))
   }
 
+  // ==================== GH-355: postfix percent operator ====================
+  // Excel treats % as a postfix operator (value ÷ 100) binding tighter than ^ (and every
+  // other operator): =A1*10% ≡ A1*(0.1), =2^3% ≡ 2^(0.03), =(1+5%)^2 ≡ 1.05².
+  // Round-trip must preserve the % (no rewrite to /100).
+
+  private def evalIn(sheet: Sheet, source: String): Either[Any, Any] =
+    for
+      expr <- FormulaParser.parse(source)
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+
+  test("GH-355: =10% parses and evaluates to 0.1") {
+    assertEquals(evalIn(Sheet("Test"), "=10%"), Right(BigDecimal("0.1")))
+  }
+
+  test("GH-355: =A1*10% evaluates against a cell (A1=50 → 5)") {
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Number(BigDecimal(50)))
+    assertEquals(evalIn(sheet, "=A1*10%"), Right(BigDecimal(5)))
+  }
+
+  test("GH-355: =A1% applies percent directly to a cell (A1=50 → 0.5)") {
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Number(BigDecimal(50)))
+    assertEquals(evalIn(sheet, "=A1%"), Right(BigDecimal("0.5")))
+  }
+
+  test("GH-355: =(1+5%)^2 evaluates to 1.1025") {
+    assertEquals(evalIn(Sheet("Test"), "=(1+5%)^2"), Right(BigDecimal("1.1025")))
+  }
+
+  test("GH-355: percent binds tighter than ^ (=2^3% = 2^(3%))") {
+    val result = evalIn(Sheet("Test"), "=2^3%")
+    val expected = BigDecimal(scala.math.pow(2.0, 0.03))
+    result match
+      case Right(value: BigDecimal) =>
+        assert((value - expected).abs < BigDecimal("1e-12"), s"got $value, expected ~$expected")
+      case other => fail(s"Expected numeric result, got $other")
+  }
+
+  test("GH-355: percent binds tighter than unary minus (=-2% = -0.02)") {
+    assertEquals(evalIn(Sheet("Test"), "=-2%"), Right(BigDecimal("-0.02")))
+  }
+
+  test("GH-355: chained percent (=10%% = 0.001)") {
+    assertEquals(evalIn(Sheet("Test"), "=10%%"), Right(BigDecimal("0.001")))
+  }
+
+  test("GH-355: percent of a parenthesized sum (=(1+5)% = 0.06)") {
+    assertEquals(evalIn(Sheet("Test"), "=(1+5)%"), Right(BigDecimal("0.06")))
+  }
+
+  test("GH-355: percent inside a function argument (=SUM(1, 50%) = 1.5)") {
+    assertEquals(evalIn(Sheet("Test"), "=SUM(1, 50%)"), Right(BigDecimal("1.5")))
+  }
+
+  test("GH-355: percent interacts with unary plus (=+A1% = 0.5)") {
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Number(BigDecimal(50)))
+    assertEquals(evalIn(sheet, "=+A1%"), Right(BigDecimal("0.5")))
+  }
+
+  test("GH-355: percent round-trips byte-identically (no rewrite to /100)") {
+    List("=10%", "=A1*10%", "=(1+5%)^2", "=2^3%", "=-2%", "=10%%", "=B2%+C3%")
+      .foreach(assertPreserved)
+  }
+
+  test("GH-355: parenthesized pow under percent round-trips (=(2^3)%)") {
+    assertPreserved("=(2^3)%")
+  }
+
+  test("GH-355: division by zero through percent still errors (=1/0%)") {
+    FormulaParser.parse("=1/0%") match
+      case Right(expr) =>
+        Evaluator.eval(expr, Sheet("Test")) match
+          case Left(_: com.tjclp.xl.formula.eval.EvalError.DivByZero) => ()
+          case other => fail(s"Expected DivByZero, got $other")
+      case Left(err) => fail(s"=1/0% should parse: $err")
+  }
+
+  test("GH-355: =A1*10% parses to Mul with Percent on the right operand") {
+    FormulaParser.parse("=A1*10%") match
+      case Right(TExpr.Mul(TExpr.Ref(at, _, _), TExpr.Percent(TExpr.Lit(n: BigDecimal)))) =>
+        assertEquals(at.toA1, "A1")
+        assertEquals(n, BigDecimal(10))
+      case other => fail(s"Expected Mul(Ref(A1), Percent(Lit(10))), got $other")
+  }
+
+  test("GH-355: =2^3% parses to Pow with Percent exponent (binds tighter than ^)") {
+    FormulaParser.parse("=2^3%") match
+      case Right(TExpr.Pow(TExpr.Lit(b: BigDecimal), TExpr.Percent(TExpr.Lit(e: BigDecimal)))) =>
+        assertEquals(b, BigDecimal(2))
+        assertEquals(e, BigDecimal(3))
+      case other => fail(s"Expected Pow(Lit(2), Percent(Lit(3))), got $other")
+  }
+
+  test("GH-355: =-2% parses to unary minus OVER percent (-(2%))") {
+    FormulaParser.parse("=-2%") match
+      case Right(
+            TExpr.Sub(TExpr.Lit(zero: BigDecimal), TExpr.Percent(TExpr.Lit(n: BigDecimal)))
+          ) =>
+        assertEquals(zero, BigDecimal(0))
+        assertEquals(n, BigDecimal(2))
+      case other => fail(s"Expected Sub(Lit(0), Percent(Lit(2))), got $other")
+  }
+
+  test("GH-355: =10%% parses to nested Percent") {
+    FormulaParser.parse("=10%%") match
+      case Right(TExpr.Percent(TExpr.Percent(TExpr.Lit(n: BigDecimal)))) =>
+        assertEquals(n, BigDecimal(10))
+      case other => fail(s"Expected Percent(Percent(Lit(10))), got $other")
+  }
+
+  test("GH-355: =A1:B1% preserves the range under Percent for array broadcast") {
+    FormulaParser.parse("=A1:B1%") match
+      case Right(TExpr.Percent(_: TExpr.RangeRef)) => ()
+      case other => fail(s"Expected Percent(RangeRef(A1:B1)), got $other")
+  }
+
+  property("GH-355: parse ∘ print = id for Percent ASTs over integer literals") {
+    forAll(Gen.choose(0, 1000000)) { n =>
+      val expr = TExpr.Percent(TExpr.Lit(BigDecimal(n)))
+      FormulaParser.parse(FormulaPrinter.print(expr)) == Right(expr)
+    }
+  }
+
+  test("GH-355: formula drag shifts references under percent (=A1%*$B$1)") {
+    val result =
+      for expr <- FormulaParser.parse("=A1%*$B$1")
+      yield FormulaPrinter.print(FormulaShifter.shift(expr, colDelta = 0, rowDelta = 1))
+    assertEquals(result, Right("=A2%*$B$1"))
+  }
+
+  property("GH-355: print ∘ parse is byte-identity for ref*10% sources") {
+    forAll(genARef) { r =>
+      val source = s"=${r.toA1}*10%"
+      FormulaParser.parse(source).map(FormulaPrinter.print(_)) == Right(source)
+    }
+  }
+
   // ==================== GH-263: cell-ref-shaped sheet names ====================
   // A sheet named Q1/A1/R1C1 must be single-quoted by the printer or the generated
   // formula is spec-invalid (Excel would read Q1!A1 as something else entirely).

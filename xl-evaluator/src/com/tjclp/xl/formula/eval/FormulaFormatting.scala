@@ -162,6 +162,7 @@ object FormulaFormatting:
         // Unary wrappers
         case TExpr.ToInt(inner) => loop(inner)
         case TExpr.UnaryPlus(inner) => loop(inner)
+        case TExpr.Percent(inner) => loop(inner)
         case TExpr.DateToSerial(inner) => loop(inner)
         case TExpr.DateTimeToSerial(inner) => loop(inner)
 

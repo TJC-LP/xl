@@ -23,7 +23,7 @@ import scala.annotation.tailrec
  *   - Ranges: A1:B10
  *   - External-workbook references (GH-353): [2]Book1!A1, [2]Book1!A1:B2, '[3]Sheet Name'!B2
  *     (unresolvable — carried as ExternalRef/ExternalRange for closed-workbook cache semantics)
- *   - Operators: +, -, *, /, =, <>, <, <=, >, >=, &
+ *   - Operators: +, -, *, /, ^, =, <>, <, <=, >, >=, &, postfix % (GH-355)
  *   - Functions: SUM, COUNT, IF, AND, OR, NOT, etc.
  *   - Parentheses for grouping
  *
@@ -39,14 +39,15 @@ import scala.annotation.tailrec
  * Operator precedence (highest to lowest, Excel-compatible):
  *   1. Parentheses ()
  *   2. Function calls
- *   3. Exponentiation ^ (right-associative)
- *   4. Unary minus -
- *   5. Multiplication *, Division /
- *   6. Addition +, Subtraction -
- *   7. Concatenation &
- *   8. Comparison =, <>, <, <=, >, >=
- *   9. Logical AND
- *   10. Logical OR
+ *   3. Postfix percent % (GH-355: binds tighter than ^, 2^3% = 2^(3%))
+ *   4. Exponentiation ^ (right-associative)
+ *   5. Unary minus -, unary plus +
+ *   6. Multiplication *, Division /
+ *   7. Addition +, Subtraction -
+ *   8. Concatenation &
+ *   9. Comparison =, <>, <, <=, >, >=
+ *   10. Logical AND
+ *   11. Logical OR
  *
  * @note
  *   Suppression rationale:
@@ -481,7 +482,7 @@ object FormulaParser:
    * than unary minus, so -2^2 = -(2^2) = -4 But the exponent can have unary minus: 2^-1 = 0.5
    */
   private def parsePow(state: ParserState): ParseResult[TExpr[?]] =
-    parsePrimary(state).flatMap { case (left, s1) =>
+    parsePostfix(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
       s2.currentChar match
         case Some('^') =>
@@ -500,6 +501,30 @@ object FormulaParser:
             }
           }
         case _ => Right((left, s2))
+    }
+
+  /**
+   * GH-355: parse postfix percent — Excel's tightest-binding operator (value ÷ 100).
+   *
+   * Sits between parsePow and parsePrimary in the precedence ladder so `%` binds tighter than `^`
+   * (2^3% ≡ 2^(3%)) and tighter than unary minus (-2% ≡ -(2%)). A loop consumes chained percents
+   * (10%% = 0.001), each wrapping in TExpr.Percent and counting against the depth budget (chained
+   * postfixes nest the AST like chained '+' terms, GH-56). The operand coerces numerically with
+   * ranges preserved so `=A1:A3%` broadcasts through the array machinery.
+   */
+  private def parsePostfix(state: ParserState): ParseResult[TExpr[?]] =
+    parsePrimary(state).flatMap { case (first, s1) =>
+      @tailrec
+      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
+        val s2 = skipWhitespace(s)
+        s2.currentChar match
+          case Some('%') =>
+            descend(s2) match
+              case Left(err) => Left(err)
+              case Right(sd) =>
+                loop(TExpr.Percent(TExpr.asNumericOrRangeExpr(acc)), sd.advance())
+          case _ => Right((acc, s2))
+      loop(first, s1)
     }
 
   /**

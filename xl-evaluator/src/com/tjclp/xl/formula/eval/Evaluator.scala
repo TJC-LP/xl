@@ -487,6 +487,20 @@ private class EvaluatorImpl(
       case TExpr.UnaryPlus(e) =>
         eval(e, sheet, clock, workbook, currentCell)
 
+      // GH-355: postfix percent is ÷100 routed through the same array machinery as the binary
+      // operators, so range operands broadcast elementwise (=A1:A3% divides each cell by 100)
+      // and scalars stay exact (BigDecimal(10)/100 = 0.1).
+      case TExpr.Percent(e) =>
+        evalArithmetic(
+          e,
+          TExpr.Lit(BigDecimal(100)),
+          ArrayArithmetic.div,
+          sheet,
+          clock,
+          workbook,
+          currentCell
+        ).asInstanceOf[Either[EvalError, A]]
+
       // ===== String Operators =====
       case TExpr.Concat(x, y) =>
         // Concatenate: join two strings. Operands are statically String, but erased upstream

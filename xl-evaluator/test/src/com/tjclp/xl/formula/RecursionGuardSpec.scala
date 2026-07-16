@@ -36,6 +36,13 @@ class RecursionGuardSpec extends FunSuite:
       case other => fail(s"expected NestingTooDeep, got $other")
   }
 
+  test("GH-355: deeply chained percent → NestingTooDeep, not StackOverflowError") {
+    val formula = "=1" + ("%" * 300)
+    FormulaParser.parse(formula) match
+      case Left(_: ParseError.NestingTooDeep) => ()
+      case other => fail(s"expected NestingTooDeep, got $other")
+  }
+
   test("deeply nested function calls → NestingTooDeep") {
     val formula = "=" + ("ABS(" * 300) + "1" + (")" * 300)
     FormulaParser.parse(formula) match

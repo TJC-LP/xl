@@ -56,7 +56,9 @@ object FormulaPrinter:
     val MulDiv = 6
     val Pow = 7
     val Unary = 8
-    val Primary = 9
+    // GH-355: postfix % binds tighter than ^ AND tighter than unary minus (-2% = -(2%))
+    val Percent = 9
+    val Primary = 10
 
   /**
    * Print expression with appropriate parentheses based on precedence.
@@ -133,6 +135,14 @@ object FormulaPrinter:
       case TExpr.UnaryPlus(e) =>
         val result = s"+${printExpr(e, Precedence.Pow)}"
         parenthesizeIf(result, precedence > Precedence.Unary)
+
+      // GH-355: postfix percent is preserved (never rewritten to /100). The operand prints at
+      // Percent context, so anything looser — including unary minus and ^ — parenthesizes:
+      // Percent(Sub(0,2)) prints (-2)%, Percent(Pow(2,3)) prints (2^3)%, while chained percents
+      // stay flat (10%%). Percent itself never needs outer parens (tightest operator).
+      case TExpr.Percent(e) =>
+        val result = s"${printExpr(e, Precedence.Percent)}%"
+        parenthesizeIf(result, precedence > Precedence.Percent)
 
       // String operators
       case TExpr.Concat(x, y) =>
@@ -400,6 +410,8 @@ object FormulaPrinter:
         s"Pow(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.UnaryPlus(e) =>
         s"UnaryPlus(${printWithTypes(e)})"
+      case TExpr.Percent(e) =>
+        s"Percent(${printWithTypes(e)})"
       case TExpr.Concat(x, y) =>
         s"Concat(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Eq(x, y) =>

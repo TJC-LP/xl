@@ -20,7 +20,9 @@ trait TExprCoercions:
    */
   private def isRuntimePolymorphic(expr: TExpr[?]): Boolean = expr match
     case _: TExpr.Call[?] | _: TExpr.Let[?] | _: TExpr.Aggregate | _: TExpr.Coerced[?] => true
-    case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow => true
+    case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+        _: TExpr.Percent =>
+      true
     case _: TExpr.Concat => true
     case _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] | _: TExpr.Gt[?] |
         _: TExpr.Gte[?] =>
@@ -113,7 +115,8 @@ trait TExprCoercions:
     // Arithmetic expressions return BigDecimal — wrap in ToInt to avoid
     // a runtime ClassCastException when used in Int-arg positions
     // (e.g. =MID(A1, FIND("@", A1) + 1, 100)).
-    case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow =>
+    case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+        _: TExpr.Percent =>
       ToInt(expr.asInstanceOf[TExpr[BigDecimal]])
     case agg: TExpr.Aggregate => ToInt(agg)
     // GH-302/GH-306: non-numeric call results (text, boolean, arrays, IF branches) coerce at
@@ -148,7 +151,7 @@ trait TExprCoercions:
     case call: TExpr.Call[?] if call.spec.flags.returnsNumeric =>
       call.asInstanceOf[TExpr[BigDecimal]]
     case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
-        _: TExpr.Aggregate | _: TExpr.DateToSerial | _: TExpr.DateTimeToSerial =>
+        _: TExpr.Percent | _: TExpr.Aggregate | _: TExpr.DateToSerial | _: TExpr.DateTimeToSerial =>
       expr.asInstanceOf[TExpr[BigDecimal]]
     // GH-302/GH-306: text/boolean/array call results coerce at evaluation time (numeric text
     // parses, booleans are 1/0, 1×1 arrays collapse; arrays still broadcast in operand positions)

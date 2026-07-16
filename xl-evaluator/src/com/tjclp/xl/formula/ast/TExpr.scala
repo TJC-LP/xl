@@ -203,6 +203,18 @@ enum TExpr[A] derives CanEqual:
    */
   case UnaryPlus[A](expr: TExpr[A]) extends TExpr[A]
 
+  /**
+   * GH-355: postfix percent — `=A1*10%`, Excel's tightest-binding operator (value ÷ 100).
+   *
+   * Binds tighter than `^` and unary minus: `2^3%` ≡ `2^(3%)`, `-2%` ≡ `-(2%)` = -0.02; chained
+   * percents nest (`10%%` = 0.001). Preserved through print (never rewritten to `/100`). Evaluation
+   * routes through the array arithmetic machinery (like the binary operators), so a range operand
+   * broadcasts elementwise: `=A1:A3%` divides each cell by 100.
+   *
+   * Law: eval(Percent(x)) == eval(Div(x, Lit(100)))
+   */
+  case Percent(expr: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
   // String operators
 
   /**
