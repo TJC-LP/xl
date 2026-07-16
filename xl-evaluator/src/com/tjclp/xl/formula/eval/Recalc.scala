@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.eval
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
-import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.workbooks.{CalcPr, Workbook}
 
 /**
  * A formula cell that failed to evaluate during `Workbook.recalculate`, with its location and
@@ -19,6 +19,42 @@ final case class CellEvalError(
    * sheet names quote (`'A1'!B2: ...`) so the location reads unambiguously.
    */
   def render: String = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}: ${error.message}"
+
+/**
+ * GH-373: opt-in bounded iterative calculation for circular workbooks.
+ *
+ * Professional models are routinely circular by design (interest on average debt balances) and ship
+ * with `<calcPr iterate="1">`. Passing an `IterativeCalc` to `recalculate` fixpoints cycle members
+ * with Jacobi iteration (every member reads PREVIOUS-iteration values, matching Excel): members
+ * seed to 0, iterate until every member's |Δ| < `maxChange` or `maxIter` rounds, and
+ * non-convergence keeps the last values with NO error — Excel's semantics, and the deliberate
+ * inversion of the default path's circular-reference errors.
+ *
+ * Deliberately NOT auto-derived from `wb.metadata.calcPr` — iteration is opt-in so the default
+ * `recalculate()` stays byte-identical. Bridge explicitly when honoring a file's settings:
+ * {{{
+ * wb.metadata.calcPr
+ *   .filter(_.iterativeCalculation)
+ *   .map(IterativeCalc.fromCalcPr)
+ *   .fold(wb.recalculate())(it => wb.recalculate(it))
+ * }}}
+ *
+ * @param maxIter
+ *   Iteration cap (Excel UI default 100; values < 1 are treated as 1)
+ * @param maxChange
+ *   Convergence threshold: iteration stops when every cycle member changes by LESS than this
+ *   between rounds (Excel UI default 0.001)
+ */
+final case class IterativeCalc(maxIter: Int, maxChange: BigDecimal) derives CanEqual
+
+object IterativeCalc:
+  /**
+   * Lift a workbook's modeled `<calcPr>` into iteration settings, applying Excel's defaults (100,
+   * 0.001) for absent attributes. Callers gate on `calcPr.iterativeCalculation` themselves — see
+   * the bridge example on [[IterativeCalc]].
+   */
+  def fromCalcPr(cp: CalcPr): IterativeCalc =
+    IterativeCalc(cp.maxIterations.getOrElse(100), cp.maxChange.getOrElse(BigDecimal("0.001")))
 
 /**
  * Result of a total, whole-workbook recalculation (`wb.recalculate()`).

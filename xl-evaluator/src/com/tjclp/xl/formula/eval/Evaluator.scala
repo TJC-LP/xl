@@ -167,10 +167,10 @@ object Evaluator:
   /**
    * Look up a defined name visible from `currentSheet`.
    *
-   * OOXML/Excel scoping: a sheet-scoped entry (localSheetId is a POSITIONAL index into
-   * `wb.sheets`) SHADOWS a workbook-scoped entry of the same identifier; lookup is
-   * case-insensitive like Excel. (GH-384's issue text said "workbook-scoped first" — that
-   * contradicts OOXML §18.2.5/Excel behavior, so shadowing is implemented instead.)
+   * OOXML/Excel scoping: a sheet-scoped entry (localSheetId is a POSITIONAL index into `wb.sheets`)
+   * SHADOWS a workbook-scoped entry of the same identifier; lookup is case-insensitive like Excel.
+   * (GH-384's issue text said "workbook-scoped first" — that contradicts OOXML §18.2.5/Excel
+   * behavior, so shadowing is implemented instead.)
    */
   private[formula] def lookupDefinedName(
     wb: Workbook,
@@ -187,8 +187,8 @@ object Evaluator:
 
   /**
    * The sheet a defined name's refersTo evaluates against when the name is sheet-scoped; None for
-   * workbook-scoped names (callers fall back to the referencing formula's sheet — refersTo text
-   * is almost always fully qualified anyway).
+   * workbook-scoped names (callers fall back to the referencing formula's sheet — refersTo text is
+   * almost always fully qualified anyway).
    */
   private[formula] def definedNameScope(wb: Workbook, dn: DefinedName): Option[Sheet] =
     dn.localSheetId.flatMap(idx => wb.sheets.lift(idx))
@@ -333,8 +333,8 @@ object Evaluator:
  * @param resolvingNames
  *   GH-384: UPPERCASED defined names currently being resolved on this evaluation path — the
  *   name→name cycle guard. A refersTo chain that revisits a member (aa → bb → aa) is a clean
- *   per-cell error instead of unbounded recursion. Cell-mediated cycles (name → cell → name)
- *   are covered separately by the depth-guarded cross-sheet recursion.
+ *   per-cell error instead of unbounded recursion. Cell-mediated cycles (name → cell → name) are
+ *   covered separately by the depth-guarded cross-sheet recursion.
  */
 private class EvaluatorImpl(
   allowArrayResults: Boolean = false,
@@ -798,16 +798,16 @@ private class EvaluatorImpl(
    * Lookup (sheet-scoped SHADOWS workbook-scoped, case-insensitive — see
    * Evaluator.lookupDefinedName), then parse the refersTo text and evaluate it in the DEFINING
    * context: sheet-scoped names evaluate against their scope sheet, workbook-scoped names against
-   * the referencing formula's sheet (refersTo text is almost always fully qualified, so the
-   * ambient sheet rarely matters). Range-shaped targets materialize to an ArrayResult against the
-   * defining sheet — aggregate positions consume it directly (=SUM(rev_range)), operand positions
-   * broadcast, and scalar contexts collapse to the top-left value, exactly like a literal range.
+   * the referencing formula's sheet (refersTo text is almost always fully qualified, so the ambient
+   * sheet rarely matters). Range-shaped targets materialize to an ArrayResult against the defining
+   * sheet — aggregate positions consume it directly (=SUM(rev_range)), operand positions broadcast,
+   * and scalar contexts collapse to the top-left value, exactly like a literal range.
    *
    * Every failure mode is a clean Left: no workbook context (the SheetRef posture), unknown name,
    * unparseable refersTo, and name→name cycles (via `resolvingNames`). The environment for the
-   * refersTo body is fresh (no LET bindings leak into a name's definition), and the result
-   * unwraps CellValue wrappers to primitives exactly like LET binding values so names compose
-   * with arithmetic/comparison/text machinery.
+   * refersTo body is fresh (no LET bindings leak into a name's definition), and the result unwraps
+   * CellValue wrappers to primitives exactly like LET binding values so names compose with
+   * arithmetic/comparison/text machinery.
    */
   private def evalNameRef(
     name: String,

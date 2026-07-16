@@ -360,14 +360,14 @@ enum TExpr[A] derives CanEqual:
    * `=SUM(rev_range)`. OOXML forbids defined names that collide with cell-ref shapes, so the
    * disambiguation is total: ARef-parseable identifiers (TAX1) stay PolyRef.
    *
-   * Resolution is deferred to evaluation (the parser has no workbook): the evaluator looks the
-   * name up in `WorkbookMetadata.definedNames` — sheet-scoped names SHADOW workbook-scoped ones
-   * per OOXML, lookup is case-insensitive — parses the refersTo text and evaluates it in the
-   * DEFINING sheet's context. Unresolvable names, unparseable refersTo text, and name→name
-   * cycles are clean per-cell errors. Existential-typed like PolyRef; the typed coercion
-   * boundary wraps it in [[Coerced]] so names work in typed argument positions. Prints as the
-   * bare identifier, verbatim. Never shifts on drag and contributes no local dependencies
-   * (workbook-level dependency extraction resolves it to its target cells).
+   * Resolution is deferred to evaluation (the parser has no workbook): the evaluator looks the name
+   * up in `WorkbookMetadata.definedNames` — sheet-scoped names SHADOW workbook-scoped ones per
+   * OOXML, lookup is case-insensitive — parses the refersTo text and evaluates it in the DEFINING
+   * sheet's context. Unresolvable names, unparseable refersTo text, and name→name cycles are clean
+   * per-cell errors. Existential-typed like PolyRef; the typed coercion boundary wraps it in
+   * [[Coerced]] so names work in typed argument positions. Prints as the bare identifier, verbatim.
+   * Never shifts on drag and contributes no local dependencies (workbook-level dependency
+   * extraction resolves it to its target cells).
    */
   case NameRef(name: String) extends TExpr[Nothing]
 
