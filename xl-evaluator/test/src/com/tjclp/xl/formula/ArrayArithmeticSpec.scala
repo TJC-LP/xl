@@ -305,8 +305,9 @@ class ArrayArithmeticSpec extends FunSuite:
       .put(ref"A1", CellValue.Number(100))
       .put(ref"B1", CellValue.Number(0))
 
+    // GH-344: division by zero is Excel's #DIV/0! error VALUE at the boundary (was a loud Left)
     val result = sheet.evaluateFormula("=A1/B1")
-    assert(result.isLeft, s"Expected Left (div by zero), got $result")
+    assertEquals(result, Right(CellValue.Error(com.tjclp.xl.cells.CellError.Div0)))
   }
 
   test("range subtraction") {

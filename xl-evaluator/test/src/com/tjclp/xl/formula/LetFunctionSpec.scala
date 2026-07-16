@@ -254,9 +254,17 @@ class LetFunctionSpec extends ScalaCheckSuite:
 
   // ===== Error propagation =====
 
-  test("binding evaluation error short-circuits and names the failing binding") {
-    val result = sheet.evaluateFormula("=LET(bad, 1/0, 42)")
-    result match
+  test("GH-344: an error-VALUE binding binds the value; host failures still name the binding") {
+    // GH-344 supersedes the short-circuit pin for Excel error VALUES: the binding holds the
+    // error as a VALUE and the body decides whether to consume it (Excel-exact).
+    assertEquals(sheet.evaluateFormula("=LET(bad, 1/0, 42)"), Right(CellValue.Number(42)))
+    assertEquals(
+      sheet.evaluateFormula("=LET(bad, 1/0, bad)"),
+      Right(CellValue.Error(com.tjclp.xl.cells.CellError.Div0))
+    )
+    // A host failure in a binding (cross-sheet ref without workbook context) still
+    // short-circuits and names the binding
+    sheet.evaluateFormula("=LET(bad, Missing!A1, 42)") match
       case Left(err) =>
         assert(err.message.contains("bad"), s"error should name the binding: ${err.message}")
       case Right(v) => fail(s"expected error, got $v")

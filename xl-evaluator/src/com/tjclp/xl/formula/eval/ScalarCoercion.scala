@@ -53,8 +53,12 @@ private[formula] object ScalarCoercion:
    */
   def coerce(label: String, value: Any, target: BindingCoercion): Either[EvalError, Any] =
     unwrapCellValue(value) match
+      // GH-344: an Excel error VALUE entering a typed position propagates AS that error (the
+      // strict-position absorption rule) — the single highest-leverage arm: every typed argument
+      // position, IF/IFS scalar conditions, toIntArg, LET/Coerced positions, and the scalar-entry
+      // top-left collapse all funnel through here.
       case CellValue.Error(err) =>
-        Left(EvalError.EvalFailed(s"$label: cannot coerce ${err.toExcel} error value", None))
+        Left(EvalError.ErrorValue(err, Some(label)))
       case unwrapped =>
         target match
           case BindingCoercion.Text => coerceText(label, unwrapped)

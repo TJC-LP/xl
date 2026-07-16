@@ -250,23 +250,14 @@ object Evaluator:
           // bindings never leak across formula boundaries (fresh empty environment). The memo
           // threads too (GH-346): every cell in this recursion tree evaluates at most once.
           new EvaluatorWithDepth(depth + 1, rng = rng, memo = Some(memo))
-            .eval(expr, targetSheet, clock, workbook)
-            .map { result =>
-              // Convert typed result to CellValue
-              result match
-                case cv: CellValue => cv
-                case bd: BigDecimal => CellValue.Number(bd)
-                case s: String => CellValue.Text(s)
-                case b: Boolean => CellValue.Bool(b)
-                case i: Int => CellValue.Number(BigDecimal(i))
-                case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())
-                case ldt: java.time.LocalDateTime => CellValue.DateTime(ldt)
-                // GH-274: an array-returning call (INDIRECT/OFFSET standalone) read through a
-                // reference collapses to its top-left value (the SheetEvaluator.toCellValue
-                // scalar-context convention) instead of stringifying.
-                case ar: ArrayResult => if ar.isEmpty then CellValue.Empty else ar(0, 0)
-                case other => CellValue.Text(other.toString)
-            }
+            .eval(expr, targetSheet, clock, workbook) match
+            case Right(result) => Right(EvalResult.toCellValue(result))
+            // GH-344: an error-computing precedent delivers its Excel error VALUE to readers
+            // (the cell-mediated cascade); host failures stay loud Lefts.
+            case Left(evalError) =>
+              EvalError.toErrorValue(evalError) match
+                case Some(code) => Right(CellValue.Error(code))
+                case None => Left(evalError)
 
   /**
    * GH-346: per-pass memo for recursively evaluated uncached formula cells.
@@ -317,6 +308,27 @@ object Evaluator:
           val computed = compute
           forSheet.update(at, computed)
           computed
+
+/**
+ * GH-344: the single typed-result → CellValue table, shared by the cross-sheet recursion
+ * (Evaluator.evalCrossSheetFormula) and the public evaluation boundary (SheetEvaluator) so a value
+ * reads identically wherever it lands in a cell.
+ */
+private[formula] object EvalResult:
+  /**
+   * Convert a typed evaluation result to its CellValue form. Scalar context: an ArrayResult
+   * collapses to its top-left value (Excel non-array entry), Empty when empty.
+   */
+  def toCellValue(result: Any): CellValue = result match
+    case cv: CellValue => cv // IFERROR and similar functions return CellValue directly
+    case bd: BigDecimal => CellValue.Number(bd)
+    case s: String => CellValue.Text(s)
+    case b: Boolean => CellValue.Bool(b)
+    case i: Int => CellValue.Number(BigDecimal(i))
+    case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())
+    case ldt: java.time.LocalDateTime => CellValue.DateTime(ldt)
+    case ar: ArrayResult => if ar.isEmpty then CellValue.Empty else ar(0, 0)
+    case other => CellValue.Text(other.toString)
 
 /**
  * Private implementation of Evaluator.
@@ -424,13 +436,12 @@ private class EvaluatorImpl(
                           memo
                         )
                       }
-                      .flatMap { evaluatedValue =>
-                        val resultCell = Cell(at, evaluatedValue)
-                        decode(resultCell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
-                      }
+                      .flatMap(evaluatedValue =>
+                        decodeOrCarried(at, Cell(at, evaluatedValue), decode)
+                      )
                   case _ =>
                     // Cached formula or non-formula cell - use decoder
-                    decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+                    decodeOrCarried(at, cell, decode)
 
       // ===== GH-353: External-Workbook References =====
       //
@@ -489,12 +500,9 @@ private class EvaluatorImpl(
                     memo
                   )
               }
-              .flatMap { evaluatedValue =>
-                val resultCell = Cell(at, evaluatedValue)
-                decode(resultCell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
-              }
+              .flatMap(evaluatedValue => decodeOrCarried(at, Cell(at, evaluatedValue), decode))
           case _ =>
-            decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+            decodeOrCarried(at, cell, decode)
 
       // ===== Arithmetic Operators =====
       // These support array arithmetic with broadcasting when operands are ranges or array results
@@ -544,10 +552,14 @@ private class EvaluatorImpl(
         // casts (e.g. a numeric LET binding or a numeric-returning call coerced via
         // asStringExpr) can deliver non-String runtime values — evaluate as Any (a String-typed
         // binder would checkcast and throw) and coerce totally with the decodeAsString
-        // conventions instead of crashing (GH-193).
+        // conventions instead of crashing (GH-193). GH-344: an operand carrying an Excel error
+        // VALUE (an Any-typed call result holding CellValue.Error) propagates the error instead
+        // of silently stringifying it.
         for
           xv <- eval(x.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+          _ <- carriedOperandError("text concatenation", xv)
           yv <- eval(y.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+          _ <- carriedOperandError("text concatenation", yv)
         yield concatText(xv) + concatText(yv)
 
       // ===== Comparison Operators =====
@@ -763,15 +775,21 @@ private class EvaluatorImpl(
               memoOpt,
               resolvingNames
             )
-              .eval(resolved.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
-              .map(value => env + (name -> unwrapBindingValue(value)))
-              .left
-              .map { err =>
-                EvalError.EvalFailed(
-                  s"LET binding '$name': ${EvalError.toXLError(err).message}",
-                  None
-                )
-              }
+              .eval(resolved.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell) match
+              case Right(value) => Right(env + (name -> unwrapBindingValue(value)))
+              case Left(err) =>
+                // GH-344: a binding that computes an Excel error VALUE binds it as a VALUE and
+                // continues — `=LET(x,1/0,x)` is #DIV/0! while `=LET(x,1/0,IFERROR(x,5))` is 5,
+                // Excel-exact. Host failures keep the loud wrap naming the binding.
+                EvalError.toErrorValue(err) match
+                  case Some(code) => Right(env + (name -> (CellValue.Error(code): Any)))
+                  case None =>
+                    Left(
+                      EvalError.EvalFailed(
+                        s"LET binding '$name': ${EvalError.toXLError(err).message}",
+                        None
+                      )
+                    )
     }
     envResult.flatMap { env =>
       body match
@@ -889,6 +907,33 @@ private class EvaluatorImpl(
                           currentCell
                         )
                         .map(unwrapBindingValue)
+
+  /**
+   * GH-344: decode a cell for a typed reference position, falling back to the Excel error VALUE the
+   * cell carries when the decode refuses — `=A1+1` over a #REF! cell is #REF!, not a type mismatch.
+   * Decode failures over non-error values keep their loud CodecFailed; positions whose decoders
+   * accept error cells (decodeCellValue/decodeResolvedValue: ISERROR, IFERROR, bare `=A1`) never
+   * reach the fallback.
+   */
+  private def decodeOrCarried[B](
+    at: ARef,
+    cell: Cell,
+    decode: Cell => Either[com.tjclp.xl.codec.CodecError, B]
+  ): Either[EvalError, B] =
+    decode(cell).left.map { codecErr =>
+      ArrayArithmetic.carriedError(cell.value) match
+        case Some(err) => EvalError.ErrorValue(err)
+        case None => EvalError.CodecFailed(at, codecErr)
+    }
+
+  /**
+   * GH-344: the strict-position guard for Any-typed operands — Left(ErrorValue) when the evaluated
+   * operand carries an Excel error VALUE, Right(()) otherwise.
+   */
+  private def carriedOperandError(label: String, value: Any): Either[EvalError, Unit] =
+    ArrayArithmetic.carriedError(ArrayArithmetic.anyToCellValue(value)) match
+      case Some(err) => Left(EvalError.ErrorValue(err, Some(label)))
+      case None => Right(())
 
   /**
    * Total text coercion for '&' operands, mirroring the decodeAsString conventions (Number →
@@ -1177,12 +1222,18 @@ private class EvaluatorImpl(
         // GH-234: use the same case-insensitive/coercing semantics as the array path
         // (ArrayArithmetic.cellValueEquals) so scalar and array equality agree with Excel
         // (e.g. ="A"="a" -> TRUE). Previously used raw `x == y` (case-sensitive).
+        // GH-344: an error OPERAND propagates before equality is judged (left first, matching
+        // equalityElement) — errors are never "equal" or "unequal". cellValueEquals itself stays
+        // total fold-to-false: CriteriaMatcher and the lookups depend on error cells in
+        // criteria/lookup ranges simply never matching.
         case (x, y) =>
-          val eq = ArrayArithmetic.cellValueEquals(
-            ArrayArithmetic.anyToCellValue(x),
-            ArrayArithmetic.anyToCellValue(y)
-          )
-          Right(if negate then !eq else eq)
+          val xcv = ArrayArithmetic.anyToCellValue(x)
+          val ycv = ArrayArithmetic.anyToCellValue(y)
+          ArrayArithmetic.carriedError(xcv).orElse(ArrayArithmetic.carriedError(ycv)) match
+            case Some(err) => Left(EvalError.ErrorValue(err, Some("comparison")))
+            case None =>
+              val eq = ArrayArithmetic.cellValueEquals(xcv, ycv)
+              Right(if negate then !eq else eq)
     yield result
 
 /**

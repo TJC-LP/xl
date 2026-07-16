@@ -233,28 +233,21 @@ class ArrayErrorPropagationSpec extends ScalaCheckSuite:
     assertEquals(updatedEq(ref"D2").value, na)
   }
 
-  test("GH-337: SCALAR comparison against an error cell still refuses (unchanged boundary)") {
-    // Carriage is an array-path behavior: the scalar compare path keeps its clean Left.
+  test("GH-344: SCALAR comparison against an error cell propagates the error VALUE") {
+    // GH-344 supersedes the GH-337 refusal pin: `=A1<B1` over an error cell is the error at
+    // the boundary (Excel), no longer a whole-formula Left.
     val sheet = Sheet("Test").put(ref"A1", num(1)).put(ref"B1", na)
-    val result = sheet.evaluateFormula("=A1<B1")
-    assert(result.isLeft, s"expected Left, got $result")
-    assert(
-      result.left.toOption.get.message.contains("cannot compare"),
-      s"unexpected error: $result"
-    )
+    assertEquals(sheet.evaluateFormula("=A1<B1"), Right(na))
   }
 
-  test("GH-337: scalar entry collapses — error at top-left refuses, error elsewhere intersects") {
-    // Implicit intersection takes the top-left element; a carried error there refuses cleanly,
-    // while an error elsewhere in the array no longer poisons the collapsed scalar (improvement
-    // over the pre-GH-337 whole-formula Left).
+  test(
+    "GH-344: scalar entry collapses — error at top-left propagates, error elsewhere intersects"
+  ) {
+    // Implicit intersection takes the top-left element; a carried error there IS the result
+    // (GH-344 supersedes the GH-337 refusal pin), while an error elsewhere in the array stays
+    // invisible to the collapsed scalar.
     val errTopLeft = Sheet("Test").put(ref"A1", div0).put(ref"A2", num(5))
-    val collapsed = errTopLeft.evaluateFormula("=A1:A2*2")
-    assert(collapsed.isLeft, s"expected Left, got $collapsed")
-    assert(
-      collapsed.left.toOption.get.message.contains("cannot coerce"),
-      s"unexpected error: $collapsed"
-    )
+    assertEquals(errTopLeft.evaluateFormula("=A1:A2*2"), Right(div0))
 
     val errBelow = Sheet("Test").put(ref"A1", num(5)).put(ref"A2", div0)
     assertEquals(errBelow.evaluateFormula("=A1:A2*2"), Right(num(10)))

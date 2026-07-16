@@ -145,20 +145,24 @@ object ArrayArithmetic:
    * case-insensitively and lexicographically, booleans FALSE < TRUE. Across types Excel ranks
    * number < text < logical — text never parses as a number under comparison (unlike arithmetic).
    * Empty cells coerce to the other operand's zero value (0 against numbers, "" against text, FALSE
-   * against booleans; two empties are equal). Error values refuse to compare with a clean Left
-   * naming the Excel error code — on the SCALAR path only: the array broadcasts pre-check both
-   * operands with [[carriedError]] and carry error elements through instead (GH-337), so this
-   * refusal surfaces solely from scalar comparisons like `=A1<B1` on an error cell.
+   * against booleans; two empties are equal). GH-344: error values propagate with
+   * Left(ErrorValue(code)), left operand first — on the SCALAR path this surfaces as the error
+   * VALUE at the result boundary (`=1<#REF!` is #REF!, Excel-exact); the array broadcasts pre-check
+   * both operands with [[carriedError]] and carry error elements through instead (GH-337), so this
+   * arm fires solely for scalar comparisons like `=A1<B1` on an error cell.
    *
    * @return
    *   the comparison sign (negative, zero, positive), or Left for incomparable values
    */
   def compareCellValues(a: CellValue, b: CellValue): Either[EvalError, Int] =
     (normalizeForCompare(a), normalizeForCompare(b)) match
+      // GH-344: an error OPERAND propagates as that error VALUE, left operand first (matching
+      // equalityElement). The whole-formula refusal became Excel's absorption: `=1<#REF!` is
+      // #REF! at the boundary. Array paths still pre-check carriedError and never reach here.
       case (CellValue.Error(err), _) =>
-        Left(EvalError.EvalFailed(s"comparison: cannot compare ${err.toExcel} error value", None))
+        Left(EvalError.ErrorValue(err, Some("comparison")))
       case (_, CellValue.Error(err)) =>
-        Left(EvalError.EvalFailed(s"comparison: cannot compare ${err.toExcel} error value", None))
+        Left(EvalError.ErrorValue(err, Some("comparison")))
       case (CellValue.Number(x), CellValue.Number(y)) => Right(x.compare(y))
       case (CellValue.Text(x), CellValue.Text(y)) => Right(x.compareToIgnoreCase(y))
       case (CellValue.Bool(x), CellValue.Bool(y)) => Right(java.lang.Boolean.compare(x, y))

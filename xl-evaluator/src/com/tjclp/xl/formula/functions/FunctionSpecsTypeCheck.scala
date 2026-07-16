@@ -34,6 +34,9 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
   val iserr: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
     FunctionSpec.simple[Boolean, UnaryCellValue]("ISERR", Arity.one) { (expr, ctx) =>
       evalValue(ctx, expr) match
+        // GH-344: Excel's ISERR excludes #N/A on the Left channel too (`=ISERR(1<na-cell)` is
+        // FALSE); every other failure — error value or host — stays TRUE like ISERROR.
+        case Left(EvalError.ErrorValue(CellError.NA, _)) => Right(false)
         case Left(_) => Right(true)
         case Right(ExprValue.Cell(CellValue.Error(err))) => Right(err != CellError.NA)
         case Right(_) => Right(false)

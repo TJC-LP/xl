@@ -101,6 +101,23 @@ enum EvalError derives CanEqual:
    */
   case EvalFailed(reason: String, context: Option[String] = None)
 
+  /**
+   * GH-344: an Excel error VALUE in flight (#DIV/0!, #N/A, #NUM!, ...).
+   *
+   * Travels the Left channel — Either short-circuit IS Excel's strict-position absorption — so it
+   * stays IFERROR/ISERROR-catchable like every other failure, and promotes to
+   * `Right(CellValue.Error(err))` only at CellValue result boundaries (see [[toErrorValue]]).
+   * Raised where evaluation encounters a genuine Excel error value: a carried error cell entering a
+   * scalar position (comparison, equality, coercion, concatenation), an aggregate consuming an
+   * error element, or an op-level domain failure classified at source (SQRT(-1) → #NUM!).
+   *
+   * @param err
+   *   The Excel error code this value carries
+   * @param context
+   *   Optional position description for diagnostics (e.g. "LET binding 'x'", "SUM: array element")
+   */
+  case ErrorValue(err: CellError, context: Option[String] = None)
+
 object EvalError:
   /**
    * Convert EvalError to XLError for integration with existing error handling.
@@ -140,6 +157,9 @@ object EvalError:
           s"Evaluation failed: $reason (context: $ctx)"
         )
 
+      case ErrorValue(err, contextOpt) =>
+        contextOpt.fold(err.toExcel)(ctx => s"${err.toExcel} ($ctx)")
+
     formula match
       case Some(f) => XLError.FormulaError(f, message)
       case None => XLError.Other(s"Formula evaluation error: $message")
@@ -148,20 +168,39 @@ object EvalError:
    * GH-337: map an evaluation failure to the Excel error VALUE it carries as an array element.
    *
    * Elementwise error carriage (array compare/arithmetic/IF) demotes element-local failures to
-   * `CellValue.Error` elements instead of failing the whole formula; this is the single
+   * `CellValue.Error` elements instead of failing the whole formula; this is the single PERMISSIVE
    * EvalError→CellError table for that demotion. `None` marks errors that must stay a fatal `Left`
    * (CircularRef — a structural property of the sheet, not of any one element).
    *
-   * Known micro-divergences from Excel, accepted by design: pow overflow surfaces as #VALUE!
-   * (Excel: #NUM!) because it arrives as a generic EvalFailed.
+   * GH-344: an [[EvalError.ErrorValue]] demotes to exactly the code it carries, so op-level
+   * classifications (pow overflow → #NUM!) keep their code as elements. Distinct judgment from
+   * [[toErrorValue]]: this table is permissive (EvalFailed → #VALUE! keeps element carriage total),
+   * the boundary table is strict.
    */
   def toCellError(error: EvalError): Option[CellError] = error match
+    case ErrorValue(err, _) => Some(err)
     case DivByZero(_, _) => Some(CellError.Div0)
     case RefError(_, _) => Some(CellError.Ref)
     case TypeMismatch(_, _, _) => Some(CellError.Value)
     case CodecFailed(_, _) => Some(CellError.Value)
     case EvalFailed(_, _) => Some(CellError.Value)
     case CircularRef(_) => None
+
+  /**
+   * GH-344: the STRICT boundary-promotion table — the Excel error VALUE a Left becomes at a
+   * CellValue result boundary (evaluateFormula / evaluateCell / evaluateArrayFormula / cross-sheet
+   * reads), or None for failures that must stay loud.
+   *
+   * Only two arms promote: an [[EvalError.ErrorValue]] (an Excel error value already in flight) and
+   * [[EvalError.DivByZero]] (every raise site is a genuine Excel #DIV/0!; scalar `=1/0` must agree
+   * with the array path's element carriage). Everything else — TypeMismatch, CodecFailed, RefError,
+   * EvalFailed, CircularRef — stays a loud Left: infrastructure failures (missing workbook, parse,
+   * unknown function, unresolved PolyRef, LET-name, cycles) must never launder into #VALUE! cells.
+   */
+  def toErrorValue(error: EvalError): Option[CellError] = error match
+    case ErrorValue(err, _) => Some(err)
+    case DivByZero(_, _) => Some(CellError.Div0)
+    case _ => None
 
   /**
    * Create a RefError with standard "cell not found" message.

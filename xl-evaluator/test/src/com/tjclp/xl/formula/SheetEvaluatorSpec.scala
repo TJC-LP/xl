@@ -2,7 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 // SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 import com.tjclp.xl.sheets.Sheet
 import munit.FunSuite
@@ -153,8 +153,9 @@ class SheetEvaluatorSpec extends FunSuite:
   }
 
   test("evaluateFormula: eval error (division by zero)") {
+    // GH-344: division by zero is Excel's #DIV/0! error VALUE at the boundary (was a loud Left)
     val result = emptySheet.evaluateFormula("=10/0")
-    assert(result.isLeft)
+    assertEquals(result, Right(CellValue.Error(CellError.Div0)))
   }
 
   test("evaluateFormula: MIN function") {
@@ -238,9 +239,10 @@ class SheetEvaluatorSpec extends FunSuite:
   }
 
   test("evaluateCell: formula with eval error") {
+    // GH-344: the error VALUE is the cell's computed value (was a loud Left)
     val sheet = sheetWith(ref"A1" -> CellValue.Formula("=10/0"))
     val result = sheet.evaluateCell(ref"A1")
-    assert(result.isLeft)
+    assertEquals(result, Right(CellValue.Error(CellError.Div0)))
   }
 
   // ===== evaluateAllFormulas Tests =====
@@ -288,13 +290,28 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateAllFormulas: stops on first error") {
+  test("evaluateAllFormulas: error VALUES thread as values, host failures still abort") {
+    // GH-344: an Excel error value is a RESULT — it no longer aborts the bulk evaluation
+    // (fail-fast now applies to host failures only, e.g. unknown functions below).
     val sheet = sheetWith(
       ref"A1" -> CellValue.Formula("=10/0"),
       ref"B1" -> CellValue.Formula("=20+2")
     )
     val result = sheet.evaluateAllFormulas()
-    assert(result.isLeft)
+    assertEquals(
+      result,
+      Right(
+        Map(
+          ref"A1" -> CellValue.Error(CellError.Div0),
+          ref"B1" -> CellValue.Number(BigDecimal(22))
+        )
+      )
+    )
+    val hostFailure = sheetWith(
+      ref"A1" -> CellValue.Formula("=NOSUCHFN(1)"),
+      ref"B1" -> CellValue.Formula("=20+2")
+    )
+    assert(hostFailure.evaluateAllFormulas().isLeft, "host failures keep fail-fast")
   }
 
   test("evaluateAllFormulas: text functions with literals") {
@@ -531,27 +548,42 @@ class SheetEvaluatorSpec extends FunSuite:
     assert(result.isLeft)
   }
 
-  test("evaluateForRange: stops on first error in a dependency outside the range") {
-    // GH-48 behavioral pin: evaluation is fail-fast — an eval error in a transitive
-    // dependency (even outside the requested range) fails the whole call.
+  test("evaluateForRange: an error VALUE in a dependency outside the range cascades in") {
+    // GH-344 supersedes the GH-48 fail-fast pin for error VALUES: the dependency's #DIV/0!
+    // is a computed value that cascades to its dependents (host failures still fail the call).
     val sheet = sheetWith(
-      ref"B1" -> CellValue.Formula("=10/0"), // Outside range, fails
+      ref"B1" -> CellValue.Formula("=10/0"), // Outside range, computes #DIV/0!
       ref"C1" -> CellValue.Formula("=B1+1") // In range, depends on B1
     )
     val range = CellRange(ref"C1", ref"C1")
     val result = sheet.evaluateForRange(range)
-    assert(result.isLeft)
+    assertEquals(result, Right(Map(ref"C1" -> CellValue.Error(CellError.Div0))))
   }
 
-  test("evaluateForRange: error in one component does not yield partial results") {
-    // GH-48 behavioral pin: fail-fast discards results from independent components too.
+  test("evaluateForRange: an error VALUE in one component leaves other components intact") {
+    // GH-344 supersedes the GH-48 fail-fast pin for error VALUES: independent components
+    // compute their values; the erroring cell reports its error VALUE.
     val sheet = sheetWith(
-      ref"A1" -> CellValue.Formula("=10/0"), // In range, fails
-      ref"B1" -> CellValue.Formula("=1+1") // In range, independent, would succeed
+      ref"A1" -> CellValue.Formula("=10/0"), // In range, computes #DIV/0!
+      ref"B1" -> CellValue.Formula("=1+1") // In range, independent
     )
     val range = CellRange(ref"A1", ref"B1")
     val result = sheet.evaluateForRange(range)
-    assert(result.isLeft)
+    assertEquals(
+      result,
+      Right(
+        Map(
+          ref"A1" -> CellValue.Error(CellError.Div0),
+          ref"B1" -> CellValue.Number(BigDecimal(2))
+        )
+      )
+    )
+    // Host failures keep the fail-fast contract
+    val hostFailure = sheetWith(
+      ref"A1" -> CellValue.Formula("=NOSUCHFN(1)"),
+      ref"B1" -> CellValue.Formula("=1+1")
+    )
+    assert(hostFailure.evaluateForRange(range).isLeft, "host failures keep fail-fast")
   }
 
   test("evaluateForRange: complex dependency chain") {

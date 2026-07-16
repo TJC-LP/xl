@@ -309,8 +309,11 @@ class TypeCoercionSpec extends FunSuite:
 
   test("GH-385: an error-valued cell still propagates through =A1+1 (not masked to 1)") {
     val sheet = sheetWith(ref"A1" -> CellValue.Error(com.tjclp.xl.cells.CellError.Div0))
-    val result = sheet.evaluateFormula("=A1+1")
-    assert(result.isLeft, s"expected error propagation for #DIV/0! cell, got $result")
+    // GH-344: propagation now carries the Excel error VALUE with its code (was a loud Left)
+    assertEquals(
+      sheet.evaluateFormula("=A1+1"),
+      Right(CellValue.Error(com.tjclp.xl.cells.CellError.Div0))
+    )
   }
 
   test("GH-385: text cell in numeric position is still a clean error (not 0)") {

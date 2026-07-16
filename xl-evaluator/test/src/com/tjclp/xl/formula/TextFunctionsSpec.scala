@@ -414,8 +414,8 @@ class TextFunctionsSpec extends ScalaCheckSuite:
 
   test("§8.4 TRIM(A1) where A1 is Error propagates the error variant") {
     val sheet = sheetWith(ref"A1" -> CellValue.Error(CellError.Ref))
-    val result = sheet.evaluateFormula("=TRIM(A1)")
-    assert(result.isLeft, s"error must propagate; got $result")
+    // GH-344: propagation now carries the Excel error VALUE with its code (was a loud Left)
+    assertEquals(sheet.evaluateFormula("=TRIM(A1)"), Right(CellValue.Error(CellError.Ref)))
   }
 
   // ============================================================

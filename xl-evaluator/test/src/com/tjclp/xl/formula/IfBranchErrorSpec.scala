@@ -86,8 +86,16 @@ class IfBranchErrorSpec extends FunSuite:
 
   test("GH-339: the CURRENT pair's condition failure stays fatal (scalar condition shape)") {
     // A scalar condition that fails to evaluate is not a branch — it aborts the formula.
-    assert(allPositive.evaluateFormula("=SUM(IF(1/0>0,A1:A2,0))").isLeft)
-    assert(allPositive.evaluateFormula("=IFS(1/0>0,1,TRUE,2)").isLeft)
+    // GH-344: the abort surfaces as Excel's error VALUE at the boundary (=IF(1/0>0,…) is
+    // #DIV/0! in Excel), still failing the whole formula rather than selecting a branch.
+    assertEquals(
+      allPositive.evaluateFormula("=SUM(IF(1/0>0,A1:A2,0))"),
+      Right(CellValue.Error(CellError.Div0))
+    )
+    assertEquals(
+      allPositive.evaluateFormula("=IFS(1/0>0,1,TRUE,2)"),
+      Right(CellValue.Error(CellError.Div0))
+    )
   }
 
   // ===== Scalar laziness re-pins (adjacent to the array semantics they contrast with) =====
