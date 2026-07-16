@@ -311,7 +311,8 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
         }
 
         props += elem("sz", "val" -> f.sizePt.toString)()
-        props += elem("name", "val" -> f.name)()
+        // CT_RPrElt spells the font element <rFont>, not the CT_Font <name> (GH-383)
+        props += elem("rFont", "val" -> f.name)()
 
         elem("rPr")(props.result()*)
       }

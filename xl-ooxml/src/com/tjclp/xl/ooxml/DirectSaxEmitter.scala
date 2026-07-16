@@ -502,7 +502,8 @@ object DirectSaxEmitter:
     writer.writeAttribute("val", font.sizePt.toString)
     writer.endElement()
 
-    writer.startElement("name")
+    // CT_RPrElt spells the font element <rFont>, not the CT_Font <name> (GH-383)
+    writer.startElement("rFont")
     writer.writeAttribute("val", font.name)
     writer.endElement()
 

@@ -91,3 +91,30 @@ class StyleParserHardeningSpec extends FunSuite:
     assertEquals(font.sizePt, 9.5)
     assertEquals(font.name, "Consolas")
   }
+
+  // ---- GH-383: CT_RPrElt (rich runs in SST/inline strings/comments) spells the font
+  // ---- element <rFont val=…/>; real Excel files use it exclusively. Legacy xl-written
+  // ---- files used the CT_Font spelling <name val=…/>, kept as a read fallback.
+
+  test("GH-383: rich-run <rPr> reads <rFont val=> as the font name") {
+    val rPr = XML.loadString("""<rPr><rFont val="Times New Roman"/></rPr>""")
+    assertEquals(XmlUtil.parseRunProperties(rPr).name, "Times New Roman")
+  }
+
+  test("GH-383: rich-run <rPr> legacy <name val=> still parses as fallback") {
+    val rPr = XML.loadString("""<rPr><name val="Arial"/></rPr>""")
+    assertEquals(XmlUtil.parseRunProperties(rPr).name, "Arial")
+  }
+
+  test("GH-383: <rFont> wins over legacy <name> when both present") {
+    val rPr = XML.loadString("""<rPr><rFont val="Georgia"/><name val="Arial"/></rPr>""")
+    assertEquals(XmlUtil.parseRunProperties(rPr).name, "Georgia")
+  }
+
+  test("GH-383: empty <rFont> falls back to legacy <name>, then to default") {
+    val rPrBoth = XML.loadString("""<rPr><rFont val=""/><name val="Arial"/></rPr>""")
+    assertEquals(XmlUtil.parseRunProperties(rPrBoth).name, "Arial")
+
+    val rPrEmptyOnly = XML.loadString("""<rPr><rFont val=""/></rPr>""")
+    assertEquals(XmlUtil.parseRunProperties(rPrEmptyOnly).name, Font.default.name)
+  }

@@ -136,7 +136,8 @@ final case class SharedStrings(
                 }
 
                 fontProps += elem("sz", "val" -> f.sizePt.toString)()
-                fontProps += elem("name", "val" -> f.name)()
+                // CT_RPrElt spells the font element <rFont>, not the CT_Font <name> (GH-383)
+                fontProps += elem("rFont", "val" -> f.name)()
 
                 elem("rPr")(fontProps.result()*)
               }.toList
@@ -247,7 +248,8 @@ final case class SharedStrings(
     writer.writeAttribute("val", font.sizePt.toString)
     writer.endElement()
 
-    writer.startElement("name")
+    // CT_RPrElt spells the font element <rFont>, not the CT_Font <name> (GH-383)
+    writer.startElement("rFont")
     writer.writeAttribute("val", font.name)
     writer.endElement()
 

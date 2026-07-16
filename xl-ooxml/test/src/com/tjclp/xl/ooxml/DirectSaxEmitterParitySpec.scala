@@ -126,6 +126,22 @@ class DirectSaxEmitterParitySpec extends FunSuite:
     Files.deleteIfExists(domPath)
   }
 
+  test("GH-383: rich text inline cell emits <rFont> under rPr and matches DOM writer") {
+    val a1 = ARef.from1(1, 1)
+    val rich = "Styled".fontFamily("Times New Roman") + " plain"
+    val sheet = Sheet(SheetName.unsafe("Sheet1")).put(a1, CellValue.RichText(rich))
+
+    val dom = OoxmlWorksheet.fromDomainWithSST(sheet, None, Map.empty, None).toXml
+    val sax = emitDirect(sheet, None)
+
+    for (label, xml) <- List("DOM" -> dom, "SAX" -> sax) do
+      val rPr = (xml \\ "rPr").headOption.getOrElse(fail(s"$label: expected <rPr> in: $xml"))
+      assertEquals((rPr \ "rFont" \ "@val").text, "Times New Roman", s"$label rPr was: $rPr")
+      assert((rPr \ "name").isEmpty, s"$label: CT_RPrElt forbids <name> inside <rPr>: $rPr")
+
+    assertEquals(normalize(dom), normalize(sax))
+  }
+
   private def zipEntryString(path: Path, entry: String): String =
     val zf = new ZipFile(path.toFile)
     try
