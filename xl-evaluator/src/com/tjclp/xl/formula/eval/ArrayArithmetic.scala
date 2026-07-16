@@ -385,12 +385,14 @@ object ArrayArithmetic:
    * GH-333/GH-338: Excel truthiness for a condition element, shared by broadcastIf (IF over an
    * array condition) and the logical functions' array paths (AND/OR aggregation, NOT broadcast):
    * booleans as-is, numbers zero/non-zero, empty is FALSE (the ScalarCoercion Bool conventions);
-   * text and errors refuse cleanly with a Left naming the position via `label`.
+   * text refuses cleanly with a Left naming the position via `label`.
    *
-   * GH-337: the refusal Left is the ABORT convention of the logical folds (AND/OR/NOT keep it — a
-   * text or error element fails those formulas whole). broadcastIf instead pre-checks errors with
-   * [[carriedError]] and demotes its residual refusals to error elements, so its condition failures
-   * stay positional.
+   * GH-344: an error element propagates as its Excel error VALUE (Left(ErrorValue) — the AND/OR
+   * folds short-circuit with it and the boundary promotes it to the error cell, Excel-exact).
+   * broadcastIf and broadcastNot pre-check errors with [[carriedError]] and demote their residual
+   * text refusals to #VALUE! elements, so their condition failures stay positional; the AND/OR
+   * folds keep the text refusal loud (full #VALUE! parity arrives with the TypeMismatch boundary
+   * demotion follow-up).
    */
   def conditionTruthy(label: String, cv: CellValue): Either[EvalError, Boolean] = cv match
     case CellValue.Bool(b) => Right(b)
@@ -398,25 +400,33 @@ object ArrayArithmetic:
     case CellValue.Empty => Right(false)
     case CellValue.Formula(_, Some(cached)) => conditionTruthy(label, cached)
     case CellValue.Error(err) =>
-      Left(EvalError.EvalFailed(s"$label: cannot coerce ${err.toExcel} error value", None))
+      Left(EvalError.ErrorValue(err, Some(label)))
     case other => Left(EvalError.TypeMismatch(label, "boolean", other.toString))
 
   /**
    * GH-338: truthiness of every element (row-major), for the AND/OR aggregation folds (AND =
-   * forall, OR = exists). The first refusing element (text/error) short-circuits with its Left —
-   * the logical functions keep abort semantics, deliberately NOT the positional error carriage
-   * broadcastIf gained in GH-337.
+   * forall, OR = exists). The first refusing element short-circuits with its Left — GH-344: an
+   * error element's Left carries its Excel error VALUE (the fold's result at the boundary), a text
+   * element's stays a loud TypeMismatch.
    */
   def truthyElements(label: String, arr: ArrayResult): Either[EvalError, Vector[Boolean]] =
     traverseV(arr.values.flatten)(cv => conditionTruthy(label, cv))
 
   /**
    * GH-338: elementwise NOT over an array condition, preserving shape (Excel broadcasts NOT rather
-   * than aggregating). Elements follow the conditionTruthy conventions.
+   * than aggregating). GH-344: mirrors broadcastIf's positional carriage — an element carrying an
+   * error emits THAT error at its output position, and a residual refusal (text) demotes to a
+   * #VALUE! element. Total in Right.
    */
   def broadcastNot(label: String, arr: ArrayResult): Either[EvalError, ArrayResult] =
-    traverseVV(arr.values)(cv => conditionTruthy(label, cv).map(b => CellValue.Bool(!b)))
-      .map(ArrayResult(_))
+    traverseVV(arr.values) { cv =>
+      carriedError(cv) match
+        case Some(err) => Right(CellValue.Error(err))
+        case None =>
+          conditionTruthy(label, cv) match
+            case Right(b) => Right(CellValue.Bool(!b))
+            case Left(e) => toErrorElement(e)
+    }.map(ArrayResult(_))
 
   /** Convert any value to CellValue for comparison. */
   def anyToCellValue(v: Any): CellValue = v match

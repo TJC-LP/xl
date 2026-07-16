@@ -130,7 +130,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     }
   }
 
-  property("Short-circuit: And(Lit(false), error) doesn't evaluate error") {
+  property("GH-344 eager AND: And(Lit(false), failing operand) surfaces the failure") {
+    // GH-344 supersedes the short-circuit law: Excel evaluates EVERY logical argument, so a
+    // decisive FALSE no longer hides a failing second operand (=AND(FALSE,1/0) is #DIV/0!).
     forAll(genARef) { missingRef =>
       val errorExpr = TExpr.Ref[Boolean](
         missingRef,
@@ -139,12 +141,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
       )
       val andExpr = TExpr.Lit(false) && errorExpr
       val sheet = new Sheet(name = SheetName.unsafe("Empty"))
-      // Should return Right(false) without evaluating errorExpr
-      evaluator.eval(andExpr, sheet) == Right(false)
+      evaluator.eval(andExpr, sheet).isLeft
     }
   }
 
-  property("Short-circuit: Or(Lit(true), error) doesn't evaluate error") {
+  property("GH-344 eager OR: Or(Lit(true), failing operand) surfaces the failure") {
     forAll(genARef) { missingRef =>
       val errorExpr = TExpr.Ref[Boolean](
         missingRef,
@@ -153,8 +154,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
       )
       val orExpr = TExpr.Lit(true) || errorExpr
       val sheet = new Sheet(name = SheetName.unsafe("Empty"))
-      // Should return Right(true) without evaluating errorExpr
-      evaluator.eval(orExpr, sheet) == Right(true)
+      evaluator.eval(orExpr, sheet).isLeft
     }
   }
 

@@ -26,7 +26,8 @@ import scala.util.boundary.break
  * Laws satisfied:
  *   1. Literal identity: eval(Lit(x)) == Right(x)
  *   2. Arithmetic laws: eval(Add(Lit(a), Lit(b))) == Right(a + b)
- *   3. Short-circuit: And(Lit(false), error) == Right(false) (no error raised)
+ *   3. Eager logicals (GH-344): AND/OR evaluate every argument left-to-right — the first failure
+ *      wins (Excel does not short-circuit logical functions)
  *   4. Totality: eval always returns Either[EvalError, A] (never throws)
  *
  * Example:

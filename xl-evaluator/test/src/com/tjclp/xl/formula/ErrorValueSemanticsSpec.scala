@@ -248,3 +248,52 @@ class ErrorValueSemanticsSpec extends FunSuite:
     assertEquals(sheet.evaluateFormula("=MINIFS(B1:B2,A1:A2,\"x\")"), err(CellError.NA))
     assertEquals(sheet.evaluateFormula("=AVERAGEIFS(B1:B2,A1:A2,\"x\")"), err(CellError.NA))
   }
+
+  // ===== Item 3: AND/OR/NOT propagate error values; AND/OR evaluate eagerly =====
+
+  test("GH-344: AND/OR over an error operand return the error VALUE") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Bool(true))
+      .put(ref"B1", refErr)
+    assertEquals(sheet.evaluateFormula("=AND(A1,B1)"), err(CellError.Ref))
+    assertEquals(sheet.evaluateFormula("=OR(A1,B1)"), err(CellError.Ref))
+    assertEquals(sheet.evaluateFormula("=NOT(B1)"), err(CellError.Ref))
+  }
+
+  test("GH-344: AND/OR evaluate EVERY argument (Excel does not short-circuit logicals)") {
+    val sheet = Sheet("Test").put(ref"B1", na)
+    assertEquals(sheet.evaluateFormula("=AND(FALSE,1/0)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=OR(TRUE,B1)"), err(CellError.NA))
+    // Decisive values still fold when no argument fails
+    assertEquals(sheet.evaluateFormula("=AND(FALSE,TRUE)"), Right(CellValue.Bool(false)))
+    assertEquals(sheet.evaluateFormula("=OR(TRUE,FALSE)"), Right(CellValue.Bool(true)))
+  }
+
+  test("GH-344: first failing argument wins in argument order") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", refErr)
+      .put(ref"B1", div0)
+    assertEquals(sheet.evaluateFormula("=AND(A1,B1)"), err(CellError.Ref))
+    assertEquals(sheet.evaluateFormula("=AND(B1,A1)"), err(CellError.Div0))
+  }
+
+  test("GH-344: an error ELEMENT in an AND/OR array argument propagates as the error VALUE") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(5))
+      .put(ref"A2", div0)
+    assertEquals(sheet.evaluateFormula("=AND(A1:A2>0)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=OR(A1:A2>0)"), err(CellError.Div0))
+    // IFERROR catches
+    assertEquals(sheet.evaluateFormula("=IFERROR(AND(A1:A2>0),42)"), Right(num(42)))
+  }
+
+  test("GH-344: NOT over an array carries error elements positionally") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(5))
+      .put(ref"A2", div0)
+    val result = sheet.evaluateArrayFormula("=NOT(A1:A2>0)", ref"C1")
+    assert(result.isRight, s"expected Right, got $result")
+    val (updated, _) = result.toOption.get
+    assertEquals(updated(ref"C1").value, CellValue.Bool(false))
+    assertEquals(updated(ref"C2").value, div0)
+  }
