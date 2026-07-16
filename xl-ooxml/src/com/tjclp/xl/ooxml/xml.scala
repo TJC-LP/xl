@@ -58,6 +58,8 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
   val relTypeChart =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
+  val relTypeTheme =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"
   // docProps relationships (GH-242): core props is a PACKAGE relationship type, app is officeDocument
   val relTypeCoreProperties =
     "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
@@ -75,6 +77,7 @@ object XmlUtil:
   val ctTable = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
   val ctDrawing = "application/vnd.openxmlformats-officedocument.drawing+xml"
   val ctChart = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
+  val ctTheme = "application/vnd.openxmlformats-officedocument.theme+xml"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
   val ctCoreProperties = "application/vnd.openxmlformats-package.core-properties+xml"
   val ctExtendedProperties =

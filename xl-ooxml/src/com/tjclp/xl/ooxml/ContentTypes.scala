@@ -69,6 +69,14 @@ case class ContentTypes(
       copy(overrides = overrides ++ overridesToAdd)
 
   /**
+   * Register the generated default theme part (GH-387) — only when the write actually emits it (a
+   * scratch workbook whose styles reference theme colors). Idempotent.
+   */
+  def withThemeOverride(hasGeneratedTheme: Boolean): ContentTypes =
+    if !hasGeneratedTheme then this
+    else copy(overrides = overrides + ("/xl/theme/theme1.xml" -> ctTheme))
+
+  /**
    * Register drawing-part overrides (GH-221). `partPaths` are zip paths without the leading slash
    * ("xl/drawings/drawing1.xml"). Idempotent.
    */

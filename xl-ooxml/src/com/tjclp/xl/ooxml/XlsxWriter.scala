@@ -14,6 +14,7 @@ import com.tjclp.xl.drawings.ImageFormat
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext}
 import com.tjclp.xl.richtext.RichText
+import com.tjclp.xl.styles.{Border, Color, Fill}
 import com.tjclp.xl.tables.TableSpec
 import com.tjclp.xl.ooxml.chart.{ChartCaches, OoxmlChart}
 import com.tjclp.xl.ooxml.drawing.{DrawingReader, OoxmlDrawing}
@@ -468,18 +469,21 @@ object XlsxWriter:
         zip.write(bytes)
         zip.closeEntry()
 
-  /** Write VML part to ZIP (VML is plain text, not standard XML) */
-  private def writeVmlPart(
+  /**
+   * Write a pre-serialized text part to ZIP byte-exact (VML — plain text, not standard XML — and
+   * the generated default theme, GH-387).
+   */
+  private def writeRawTextPart(
     zip: ZipOutputStream,
     entryName: String,
-    vmlXml: String,
+    content: String,
     config: WriterConfig
   ): Unit =
     val entry = new ZipEntry(entryName)
     entry.setTime(0L) // Deterministic timestamps
     entry.setMethod(config.compression.zipMethod)
 
-    val bytes = vmlXml.getBytes(StandardCharsets.UTF_8)
+    val bytes = content.getBytes(StandardCharsets.UTF_8)
 
     config.compression match
       case Compression.Stored =>
@@ -1626,6 +1630,32 @@ object XlsxWriter:
     val styles =
       OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, cfPlan.mergedDxfs)
 
+    // GH-387: a scratch write (no source theme to copy) whose emitted artifacts reference theme
+    // colors must ship a theme part — the <color theme="N"/> records in styles.xml/dxfs/rich-text
+    // runs are otherwise unresolvable inside the package (Excel silently substitutes its built-in
+    // Office theme; strict consumers see a self-inconsistent package). RGB/indexed-only workbooks
+    // gain no part; source-backed writes keep the preservation path untouched.
+    val needsGeneratedTheme: Boolean =
+      sourceContext.isEmpty && {
+        def isThemeColor(c: Color): Boolean = c match
+          case Color.Theme(_, _) => true
+          case Color.Rgb(_) => false
+        def fillHasTheme(f: Fill): Boolean = f match
+          case Fill.Solid(c) => isThemeColor(c)
+          case Fill.Pattern(fg, bg, _) => isThemeColor(fg) || isThemeColor(bg)
+          case Fill.None => false
+        def borderHasTheme(b: Border): Boolean =
+          Seq(b.left, b.right, b.top, b.bottom).exists(_.color.exists(isThemeColor))
+        styleIndex.fonts.exists(_.color.exists(isThemeColor)) ||
+        styleIndex.fills.exists(fillHasTheme) ||
+        styleIndex.borders.exists(borderHasTheme) ||
+        cfPlan.mergedDxfs.exists(dxfs => (dxfs \\ "_").exists(_.attribute("theme").isDefined)) ||
+        workbook.sheets.exists(_.cells.valuesIterator.exists(_.value match
+          case CellValue.RichText(rt) =>
+            rt.runs.exists(_.font.exists(_.color.exists(isThemeColor)))
+          case _ => false))
+      }
+
     // Build comments data and VML drawings
     val commentsBySheet = buildCommentsData(workbook)
     val vmlDrawings = commentsBySheet.map { case (idx, comments) =>
@@ -1761,17 +1791,26 @@ object XlsxWriter:
           ensureSharedStrings = sharedStringsInOutput
         )
       case None =>
-        (
-          OoxmlWorkbook.sequentialRelIds(workbook.sheets.size),
-          // GH-327: fresh rels target the SAME output paths the physical writes use (for a
-          // scratch workbook these are exactly worksheets/sheet1..N — byte-identical to the
-          // legacy sheetCount form).
-          Relationships.workbookForPaths(
-            sheetOutputPaths,
-            hasStyles = true,
-            hasSharedStrings = sharedStringsInOutput
-          )
+        // GH-327: fresh rels target the SAME output paths the physical writes use (for a
+        // scratch workbook these are exactly worksheets/sheet1..N — byte-identical to the
+        // legacy sheetCount form). GH-387: the generated theme part gets its relationship
+        // appended with the next free rId.
+        val base = Relationships.workbookForPaths(
+          sheetOutputPaths,
+          hasStyles = true,
+          hasSharedStrings = sharedStringsInOutput
         )
+        val withTheme =
+          if needsGeneratedTheme then
+            Relationships(
+              base.relationships :+ Relationship(
+                s"rId${base.relationships.size + 1}",
+                XmlUtil.relTypeTheme,
+                "theme/theme1.xml"
+              )
+            )
+          else base
+        (OoxmlWorkbook.sequentialRelIds(workbook.sheets.size), withTheme)
 
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
@@ -1867,6 +1906,7 @@ object XlsxWriter:
           .withDrawingOverrides(drawingPlan.allPartPaths)
           .withChartOverrides(drawingPlan.allChartPartPaths)
           .withImageDefaults(drawingPlan.manifestImageDefaults ++ drawingPlan.imageDefaults)
+          .withThemeOverride(needsGeneratedTheme)
         // GH-314: a source can still exist here (metadata-modified write) — merge its preserved
         // content types so exotic parts riding the copy loop keep their registrations. docProps
         // reconciliation is re-applied AFTER the merge: it removes stale preserved overrides for
@@ -1915,12 +1955,14 @@ object XlsxWriter:
       writeStyles(zip, "xl/styles.xml", styles, config)
 
       // Preserve theme file from source if available
-      // Theme is parsed (in "known parts") but not regenerated, so we must copy it explicitly
-      val themePath = "xl/theme/theme1.xml"
+      // Theme is parsed (in "known parts") but not regenerated, so we must copy it explicitly.
+      // GH-387: with no source, a workbook whose styles reference theme colors ships the
+      // generated default Office theme instead (registered in CT + workbook rels below).
       sourceContext.foreach { ctx =>
-        if ctx.partManifest.contains(themePath) then
-          copyPreservedPart(ctx.sourcePath, themePath, zip)
+        if ctx.partManifest.contains(DefaultTheme.path) then
+          copyPreservedPart(ctx.sourcePath, DefaultTheme.path, zip)
       }
+      if needsGeneratedTheme then writeRawTextPart(zip, DefaultTheme.path, DefaultTheme.xml, config)
 
       if regenerateSharedStrings then
         sst.foreach { sharedStrings =>
@@ -2103,7 +2145,7 @@ object XlsxWriter:
             writePart(zip, commentPath, comments, config)
 
             vmlDrawings.get(idx).foreach { vmlXml =>
-              writeVmlPart(zip, vmlPath, vmlXml, config)
+              writeRawTextPart(zip, vmlPath, vmlXml, config)
             }
           }
         else
