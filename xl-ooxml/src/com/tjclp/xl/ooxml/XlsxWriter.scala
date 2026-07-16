@@ -1129,6 +1129,9 @@ object XlsxWriter:
   private val legacyCommentPathPattern = "^xl/comments(\\d+)\\.xml$".r
   private val legacyVmlPathPattern = "^xl/drawings/vmlDrawing(\\d+)\\.vml$".r
 
+  /** Excel's worksheet part scheme — fresh allocations number above every claimed N (GH-327). */
+  private val worksheetPathPattern = "^xl/worksheets/sheet(\\d+)\\.xml$".r
+
   /**
    * VML drawing part path for a sheet's regenerated comments (GH-292). Excel's numbering scheme is
    * derived from the comment path; foreign comment dialects (openpyxl's xl/comments/comment1.xml)
@@ -1723,11 +1726,32 @@ object XlsxWriter:
     // verbatim rels made the first sheet resolve to xl/theme/theme1.xml: a data-corruption class.)
     val sheetSourcePaths: Vector[Option[String]] =
       workbook.sheets.indices.toVector.map(idx => sourceContext.flatMap(sourceSheetPath(_, idx)))
+    // GH-327: a sheet's OUTPUT part keeps its identity-resolved SOURCE name whether it is
+    // regenerated or copied verbatim. Naming regenerated parts by INDEX collided with an
+    // unmodified neighbor riding verbatim copy to the same physical path whenever the source's
+    // sheetN.xml numbering was permuted vs logical order (Excel reorders on disk) — a duplicate
+    // zip entry that killed the whole write. Sheets with no source part (fresh, or no source at
+    // all) allocate numbers ABOVE everything any manifest worksheet part or identity mapping
+    // claims (the comment-part precedent), so a fresh part can never collide either. Physical
+    // writes, sheet rels, and the workbook-rels reconciliation ALL consume this one vector.
     val sheetOutputPaths: Vector[String] =
-      workbook.sheets.indices.toVector.map { idx =>
-        if sheetsToRegenerate.contains(idx) then s"xl/worksheets/sheet${idx + 1}.xml"
-        else sheetSourcePaths(idx).getOrElse(s"xl/worksheets/sheet${idx + 1}.xml")
-      }
+      val claimedPaths =
+        sourceContext.map(_.partManifest.entries.keySet).getOrElse(Set.empty) ++
+          sheetSourcePaths.flatten
+      val maxClaimedNum = claimedPaths
+        .flatMap {
+          case worksheetPathPattern(n) => Some(n.toInt)
+          case _ => None
+        }
+        .maxOption
+        .getOrElse(0)
+      workbook.sheets.indices.toVector
+        .foldLeft((Vector.empty[String], maxClaimedNum + 1)) { case ((acc, next), idx) =>
+          sheetSourcePaths(idx) match
+            case Some(path) => (acc :+ path, next)
+            case None => (acc :+ s"xl/worksheets/sheet$next.xml", next + 1)
+        }
+        ._1
     val (sheetRelIds, workbookRels) = preservedStructWbRels match
       case Some(preservedRels) =>
         Relationships.reconcileWorkbook(
@@ -1739,8 +1763,11 @@ object XlsxWriter:
       case None =>
         (
           OoxmlWorkbook.sequentialRelIds(workbook.sheets.size),
-          Relationships.workbook(
-            sheetCount = workbook.sheets.size,
+          // GH-327: fresh rels target the SAME output paths the physical writes use (for a
+          // scratch workbook these are exactly worksheets/sheet1..N — byte-identical to the
+          // legacy sheetCount form).
+          Relationships.workbookForPaths(
+            sheetOutputPaths,
             hasStyles = true,
             hasSharedStrings = sharedStringsInOutput
           )
@@ -1806,12 +1833,13 @@ object XlsxWriter:
         // GH-221: this branch regenerates [Content_Types].xml from scratch while preserved
         // drawing/media parts still ride the copy loop, so register EVERY drawing part shipping
         // (manifest + fresh) and every known media extension (manifest + written). GH-222: chart
-        // parts follow the same allPartPaths pattern.
+        // parts follow the same allPartPaths pattern. GH-327: worksheet overrides register the
+        // ACTUAL output paths — identity-named parts need not be sheet1..sheetN.
         val model = ContentTypes
-          .minimal(
+          .forSheetPaths(
+            sheetOutputPaths,
             hasStyles = true,
-            hasSharedStrings = sharedStringsInOutput,
-            sheetCount = workbook.sheets.size
+            hasSharedStrings = sharedStringsInOutput
           )
           .withEmittedCommentParts(commentPathBySheet.values.toSet, vmlPathBySheet.values.toSet)
           .withTableOverrides(totalTableCount)
@@ -1886,8 +1914,9 @@ object XlsxWriter:
         if sheetsToRegenerate.contains(idx) then
           // Regenerate modified sheet with preserved metadata (if available, via the GH-136
           // pre-pass cache — parsed once, consumed by both the cf plan and this loop).
-          // GH-315: the sheet's SOURCE parts (worksheet metadata, rels) resolve by identity; the
-          // OUTPUT entry names follow the current index.
+          // GH-315/GH-327: the sheet's SOURCE parts (worksheet metadata, rels) resolve by
+          // identity, and the OUTPUT entry keeps that same name (sheetOutputPaths) so it can
+          // never collide with a neighbor riding verbatim copy.
           val sourcePathOpt = sourceContext.flatMap(sourceSheetPath(_, idx))
           val preservedMetadata = preservedWorksheets.getOrElse(idx, Right(None)) match
             case Right(value) => value
@@ -1937,7 +1966,7 @@ object XlsxWriter:
                 if sheet.drawings.isEmpty && sheet.conditionalFormats.isEmpty =>
               writeWorksheetDirect(
                 zip,
-                s"xl/worksheets/sheet${idx + 1}.xml",
+                sheetOutputPaths(idx),
                 sheet,
                 sstForSheets,
                 remapping,
@@ -1957,17 +1986,17 @@ object XlsxWriter:
                   drawingPlan.drawingRefs.get(idx),
                   condFmt = Some(cfPlan.condFmtBySheet.getOrElse(idx, Seq.empty))
                 )
-              writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet, config)
+              writeWorksheet(zip, sheetOutputPaths(idx), ooxmlSheet, config)
 
           // For modified sheets:
           // 1. Copy relationships from source (preserves printerSettings, drawings, customProperty)
           // 2. Regenerate comments/VML from domain model (handles comment add/remove/modify)
-          // GH-315: the OUTPUT rels entry is named by current index; the PRESERVED rels are
-          // looked up by the sheet's identity-resolved source path (they differ after deletion
-          // or reorder). The comment part comes from the per-write assignment (identity-mapped
-          // or collision-free fresh allocation); the index fallback is only reachable for sheets
-          // that emit no comments, where the value is never written.
-          val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+          // GH-315/GH-327: the OUTPUT rels entry is the sibling of the sheet's OUTPUT part; the
+          // PRESERVED rels are looked up by the sheet's identity-resolved source path (they only
+          // differ for a fresh sheet). The comment part comes from the per-write assignment
+          // (identity-mapped or collision-free fresh allocation); the index fallback is only
+          // reachable for sheets that emit no comments, where the value is never written.
+          val relsPath = partRelsPathOf(sheetOutputPaths(idx))
           val sourceRelsPathOpt = sourceContext.flatMap(sourceSheetRelsPath(_, idx))
           val commentPath = commentPathBySheet.getOrElse(idx, s"xl/comments${idx + 1}.xml")
           // GH-292: foreign comment dialects resolve the VML target through the preserved rels
@@ -2045,11 +2074,12 @@ object XlsxWriter:
           }
         else
           // Copy unmodified sheet from source (only if source available). Only reachable with
-          // stable indices — deletion/reorder/metadata changes force full regeneration — but the
-          // source paths resolve by identity anyway (GH-315); the legacy index fallback covers
-          // untracked direct surgery exactly as before.
+          // stable indices — deletion/reorder/metadata changes force full regeneration — and the
+          // copy target is the SAME output-path vector the regeneration and the workbook-rels
+          // reconciliation consume (GH-327): for an unmodified sheet it is always the
+          // identity-resolved source part (GH-315), so the paths cannot desync.
           sourceContext.foreach { ctx =>
-            val sheetPath = sourceSheetPath(ctx, idx).getOrElse(graph.pathForSheet(idx))
+            val sheetPath = sheetOutputPaths(idx)
             copyPreservedPart(ctx.sourcePath, sheetPath, zip)
 
             // Copy comments and relationships using source's actual paths (from mapping)

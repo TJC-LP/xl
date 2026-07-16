@@ -145,14 +145,32 @@ object ContentTypes extends XmlReadable[ContentTypes]:
     hasSharedStrings: Boolean = false,
     sheetsWithComments: Set[Int] = Set.empty
   ): ContentTypes =
+    forSheetPaths(
+      sheetIndices.distinct.sorted.map(idx => s"xl/worksheets/sheet$idx.xml"),
+      hasStyles,
+      hasSharedStrings,
+      sheetsWithComments
+    )
+
+  /**
+   * Create content types registering worksheet parts at their ACTUAL part paths (GH-327): a
+   * source-backed write keeps every sheet's identity-resolved part name, which need not follow the
+   * sheet1..sheetN index scheme. `sheetPaths` are zip paths without the leading slash.
+   */
+  def forSheetPaths(
+    sheetPaths: Seq[String],
+    hasStyles: Boolean = false,
+    hasSharedStrings: Boolean = false,
+    sheetsWithComments: Set[Int] = Set.empty
+  ): ContentTypes =
     val baseDefaults = Map(
       "rels" -> ctRelationships,
       "xml" -> "application/xml",
       "vml" -> ctVmlDrawing
     )
 
-    val sheetOverrides = sheetIndices.distinct.sorted.map { idx =>
-      s"/xl/worksheets/sheet$idx.xml" -> ctWorksheet
+    val sheetOverrides = sheetPaths.distinct.map { path =>
+      s"/$path" -> ctWorksheet
     }
 
     // Add comment overrides for sheets with comments

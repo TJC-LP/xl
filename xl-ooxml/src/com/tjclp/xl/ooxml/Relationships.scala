@@ -120,11 +120,28 @@ object Relationships extends XmlReadable[Relationships]:
     hasStyles: Boolean = false,
     hasSharedStrings: Boolean = false
   ): Relationships =
-    val sheets = sheetIndices.zipWithIndex.map { case (sheetIdx, i) =>
-      Relationship(s"rId${i + 1}", relTypeWorksheet, s"worksheets/sheet$sheetIdx.xml")
+    workbookForPaths(
+      sheetIndices.map(idx => s"xl/worksheets/sheet$idx.xml"),
+      hasStyles,
+      hasSharedStrings
+    )
+
+  /**
+   * Create workbook .rels targeting explicit worksheet part paths (GH-327): the writer's fresh rels
+   * must name the SAME output parts the physical writes emit, which need not follow the
+   * sheet1..sheetN index scheme. `sheetPaths` are zip paths ("xl/worksheets/sheet2.xml"); rIds are
+   * sequential in sheet order.
+   */
+  def workbookForPaths(
+    sheetPaths: Seq[String],
+    hasStyles: Boolean = false,
+    hasSharedStrings: Boolean = false
+  ): Relationships =
+    val sheets = sheetPaths.zipWithIndex.map { case (path, i) =>
+      Relationship(s"rId${i + 1}", relTypeWorksheet, workbookTargetOf(path))
     }
 
-    val nextId = sheetIndices.size + 1
+    val nextId = sheetPaths.size + 1
     val styles =
       if hasStyles then Seq(Relationship(s"rId$nextId", relTypeStyles, "styles.xml")) else Seq.empty
     val sst =

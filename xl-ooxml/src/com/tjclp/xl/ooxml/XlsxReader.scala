@@ -514,6 +514,11 @@ object XlsxReader:
   /**
    * Parse worksheet relationships to find comment, table, hyperlink, and drawing references.
    *
+   * The rels part is the SIBLING of the sheet's resolved part path (GH-327): sources whose physical
+   * sheetN.xml numbering is permuted vs logical order (Excel reorders on disk; the surgical writer
+   * preserves identity names) keep each sheet's rels with THAT sheet — an index-derived lookup read
+   * a neighbor's rels and mis-associated comments/tables/hyperlinks.
+   *
    * Returns (commentPath, tableTargets, hyperlinkRels, drawingPath) where:
    *   - commentPath: Optional path to comments file (e.g., "../comments1.xml")
    *   - tableTargets: Sequence of table file paths (e.g., ["../tables/table1.xml",
@@ -523,9 +528,12 @@ object XlsxReader:
    */
   private def parseWorksheetRelationships(
     parts: Map[String, String],
-    sheetIndex: Int
+    sheetPath: String
   ): XLResult[(Option[String], Seq[String], Map[String, String], Option[String])] =
-    val relsPath = s"xl/worksheets/_rels/sheet$sheetIndex.xml.rels"
+    val relsPath =
+      val slash = sheetPath.lastIndexOf('/')
+      val (dir, name) = sheetPath.splitAt(slash + 1)
+      s"${dir}_rels/$name.rels"
     parts.get(relsPath) match
       case None => Right((None, Seq.empty, Map.empty, None)) // No relationships for this sheet
       case Some(xml) =>
@@ -856,9 +864,10 @@ object XlsxReader:
             .fromXmlWithSST(elem, sst)
             .left
             .map(err => XLError.ParseError(sheetPath, err): XLError)
-          // Parse worksheet relationships to find comment/table references (1-based sheet index)
+          // Parse worksheet relationships to find comment/table references — resolved from the
+          // sheet's OWN part path, never its index (GH-327: physical numbering can be permuted)
           (commentTarget, tableTargets, hyperlinkRels, drawingTarget) <-
-            parseWorksheetRelationships(parts, idx + 1)
+            parseWorksheetRelationships(parts, sheetPath)
 
           // Parse comments if relationship exists
           comments <- commentTarget match
