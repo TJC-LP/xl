@@ -40,6 +40,9 @@ trait TExprCoercions:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asStringExpr(expr: TExpr[?]): TExpr[String] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsString)
+    // GH-374: unary plus is a type-preserving transparent wrapper — push the coercion through
+    // so wrapped PolyRefs still resolve (and the node survives for byte-faithful printing)
+    case UnaryPlus(inner) => UnaryPlus(asStringExpr(inner))
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsString)
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[String](name, BindingCoercion.Text)
@@ -63,6 +66,8 @@ trait TExprCoercions:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asDateExpr(expr: TExpr[?]): TExpr[java.time.LocalDate] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsDate)
+    // GH-374: push through the transparent unary-plus wrapper (see asStringExpr)
+    case UnaryPlus(inner) => UnaryPlus(asDateExpr(inner))
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsDate)
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time (bound dates from
     // cells are stored as Excel serial numbers, which the Date target converts back)
@@ -90,6 +95,8 @@ trait TExprCoercions:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asIntExpr(expr: TExpr[?]): TExpr[Int] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsInt)
+    // GH-374: push through the transparent unary-plus wrapper (see asStringExpr)
+    case UnaryPlus(inner) => UnaryPlus(asIntExpr(inner))
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsInt)
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[Int](name, BindingCoercion.Integer)
@@ -122,6 +129,8 @@ trait TExprCoercions:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asNumericExpr(expr: TExpr[?]): TExpr[BigDecimal] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeNumeric)
+    // GH-374: push through the transparent unary-plus wrapper (see asStringExpr)
+    case UnaryPlus(inner) => UnaryPlus(asNumericExpr(inner))
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeNumeric)
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[BigDecimal](name, BindingCoercion.Numeric)
@@ -160,6 +169,9 @@ trait TExprCoercions:
   def asNumericOrRangeExpr(expr: TExpr[?]): TExpr[BigDecimal] = expr match
     case r: TExpr.RangeRef => r.asInstanceOf[TExpr[BigDecimal]] // Preserve for array eval
     case sr: TExpr.SheetRange => sr.asInstanceOf[TExpr[BigDecimal]] // Preserve for array eval
+    // GH-374: push through the transparent unary-plus wrapper so a wrapped range stays
+    // range-shaped for array arithmetic (=+A1:A3*10 broadcasts)
+    case UnaryPlus(inner) => UnaryPlus(asNumericOrRangeExpr(inner))
     case other => asNumericExpr(other)
 
   /**
@@ -170,6 +182,8 @@ trait TExprCoercions:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asBooleanExpr(expr: TExpr[?]): TExpr[Boolean] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeBool)
+    // GH-374: push through the transparent unary-plus wrapper (see asStringExpr)
+    case UnaryPlus(inner) => UnaryPlus(asBooleanExpr(inner))
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeBool)
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[Boolean](name, BindingCoercion.Bool)
@@ -197,6 +211,8 @@ trait TExprCoercions:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asCellValueExpr(expr: TExpr[?]): TExpr[CellValue] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeCellValue)
+    // GH-374: push through the transparent unary-plus wrapper (see asStringExpr)
+    case UnaryPlus(inner) => UnaryPlus(asCellValueExpr(inner))
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeCellValue)
     case other =>
       other.asInstanceOf[TExpr[CellValue]] // Safe: non-PolyRef already has correct type
@@ -210,6 +226,8 @@ trait TExprCoercions:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asResolvedValueExpr(expr: TExpr[?]): TExpr[CellValue] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeResolvedValue)
+    // GH-374: push through the transparent unary-plus wrapper (see asStringExpr)
+    case UnaryPlus(inner) => UnaryPlus(asResolvedValueExpr(inner))
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeResolvedValue)
     case other =>
       other.asInstanceOf[TExpr[CellValue]] // Safe: non-PolyRef already has correct type
@@ -224,6 +242,8 @@ trait TExprCoercions:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asComparableValueExpr(expr: TExpr[?]): TExpr[CellValue] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeComparableValue)
+    // GH-374: push through the transparent unary-plus wrapper (see asStringExpr)
+    case UnaryPlus(inner) => UnaryPlus(asComparableValueExpr(inner))
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeComparableValue)
     case other =>
       other.asInstanceOf[TExpr[CellValue]] // Safe: non-PolyRef already has correct type

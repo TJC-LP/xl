@@ -171,6 +171,7 @@ object DependencyGraph:
 
       // Unary operators
       case TExpr.ToInt(e) => containsCellReferences(e)
+      case TExpr.UnaryPlus(e) => containsCellReferences(e)
       case TExpr.DateToSerial(e) => containsCellReferences(e)
       case TExpr.DateTimeToSerial(e) => containsCellReferences(e)
 
@@ -218,6 +219,7 @@ object DependencyGraph:
       case TExpr.Gt(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
       case TExpr.Gte(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
       case TExpr.ToInt(e) => containsDynamicReference(e)
+      case TExpr.UnaryPlus(e) => containsDynamicReference(e)
       case TExpr.DateToSerial(e) => containsDynamicReference(e)
       case TExpr.DateTimeToSerial(e) => containsDynamicReference(e)
       // GH-306: runtime coercion wrapper — a coerced INDIRECT/OFFSET is still dynamic
@@ -347,6 +349,7 @@ object DependencyGraph:
 
       // Unary operators
       case TExpr.ToInt(e) => containsUnqualifiedCellReferences(e)
+      case TExpr.UnaryPlus(e) => containsUnqualifiedCellReferences(e)
       case TExpr.DateToSerial(e) => containsUnqualifiedCellReferences(e)
       case TExpr.DateTimeToSerial(e) => containsUnqualifiedCellReferences(e)
 
@@ -429,6 +432,8 @@ object DependencyGraph:
       case TExpr.Gte(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.ToInt(expr) =>
         extractDependencies(expr) // Type conversion - extract from wrapped expr
+      // GH-374: unary plus is transparent — dependencies under it feed recalc edges
+      case TExpr.UnaryPlus(expr) => extractDependencies(expr)
       case TExpr.Aggregate(_, location) => location.localCells
 
       // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
@@ -511,6 +516,7 @@ object DependencyGraph:
       case TExpr.Gte(l, r) =>
         extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
       case TExpr.ToInt(expr) => extractDependenciesBounded(expr, bounds)
+      case TExpr.UnaryPlus(expr) => extractDependenciesBounded(expr, bounds)
       case TExpr.Aggregate(_, location) => location.localCellsBounded(bounds)
 
       case call: TExpr.Call[?] =>
@@ -1078,6 +1084,7 @@ object DependencyGraph:
         case TExpr.Gte(l, r) => go(l) ++ go(r)
         // Unary operators
         case TExpr.ToInt(x) => go(x)
+        case TExpr.UnaryPlus(x) => go(x)
 
         // Reference functions
         case TExpr.Aggregate(_, location) => locCells(location)

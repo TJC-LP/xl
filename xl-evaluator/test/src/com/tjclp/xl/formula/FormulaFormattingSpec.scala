@@ -49,6 +49,12 @@ class FormulaFormattingSpec extends FunSuite:
     assertEquals(inferred, Some(NumFmt.Currency))
   }
 
+  test("GH-374: format inheritance walks through a leading unary plus (=+B2*2)") {
+    val sheet = base.put(ref"B2", 100, currency)
+    val inferred = FormulaFormatting.inferFormatFromReferences(parseOrFail("=+B2*2"), sheet)
+    assertEquals(inferred, Some(NumFmt.Currency))
+  }
+
   test("multiple references with identical format inherit that format") {
     val sheet = base
       .put(ref"B2", 1000000, currency)

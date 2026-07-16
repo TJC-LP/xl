@@ -218,60 +218,178 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  // ==================== GH-271: Leading unary plus ====================
-  // Excel accepts a leading unary plus (=+E43, =+SUM(...)) — a pervasive banker idiom.
-  // Unary plus is identity: it parses to the SAME AST as the formula without it, so the
-  // printer normalizes it away and the parse∘print=id round-trip law stays intact.
+  // ==================== GH-374 (supersedes GH-271): leading unary plus ====================
+  // Excel accepts a leading unary plus (=+E43, =+SUM(...)) — the Lotus-era banker idiom,
+  // endemic in professional models. GH-271 parsed '+' as identity and NORMALIZED it away on
+  // print; GH-374 deliberately reverses that spec: the plus is preserved as TExpr.UnaryPlus
+  // so parse→print replicates the source formula text byte-for-byte.
 
-  test("GH-271: unary plus parses to the same AST as without it (=+A1)") {
-    val plus = FormulaParser.parse("=+A1")
-    assert(plus.isRight, s"=+A1 should parse, got $plus")
-    assertEquals(plus, FormulaParser.parse("=A1"))
+  private def assertPreserved(source: String): Unit =
+    FormulaParser.parse(source) match
+      case Right(expr) => assertEquals(FormulaPrinter.print(expr), source)
+      case Left(err) => fail(s"$source should parse: $err")
+
+  test("GH-374: leading unary plus is preserved byte-for-byte (=+A1)") {
+    assertPreserved("=+A1")
   }
 
-  test("GH-271: unary plus before function call (=+SUM(A1:B2))") {
-    val plus = FormulaParser.parse("=+SUM(A1:B2)")
-    assert(plus.isRight, s"=+SUM(A1:B2) should parse, got $plus")
-    assertEquals(plus, FormulaParser.parse("=SUM(A1:B2)"))
+  test("GH-374: unary plus before function call is preserved (=+SUM(A1:B2))") {
+    assertPreserved("=+SUM(A1:B2)")
   }
 
-  test("GH-271: chained unary plus (=++A1)") {
-    val plus = FormulaParser.parse("=++A1")
-    assert(plus.isRight, s"=++A1 should parse, got $plus")
-    assertEquals(plus, FormulaParser.parse("=A1"))
+  test("GH-374: chained unary plus is preserved (=++A1)") {
+    assertPreserved("=++A1")
   }
 
-  test("GH-271: unary plus followed by binary plus (=+1+2)") {
-    val plus = FormulaParser.parse("=+1+2")
-    assert(plus.isRight, s"=+1+2 should parse, got $plus")
-    assertEquals(plus, FormulaParser.parse("=1+2"))
+  test("GH-374: unary plus followed by binary plus is preserved (=+1+2)") {
+    assertPreserved("=+1+2")
   }
 
-  test("GH-271: unary plus mixes with unary minus (=+-2)") {
-    val plus = FormulaParser.parse("=+-2")
-    assert(plus.isRight, s"=+-2 should parse, got $plus")
-    assertEquals(plus, FormulaParser.parse("=-2"))
+  test("GH-374: unary plus mixed with unary minus is preserved (=+-2)") {
+    assertPreserved("=+-2")
   }
 
-  test("GH-271: unary plus in power exponent (=2^+2)") {
-    val plus = FormulaParser.parse("=2^+2")
-    assert(plus.isRight, s"=2^+2 should parse, got $plus")
-    assertEquals(plus, FormulaParser.parse("=2^2"))
+  test("GH-374: unary plus in power exponent is preserved (=2^+2)") {
+    assertPreserved("=2^+2")
   }
 
-  test("GH-271: printer normalizes unary plus away (=+A1 prints as =A1)") {
-    FormulaParser.parse("=+A1") match
-      case Right(expr) => assertEquals(FormulaPrinter.print(expr), "=A1")
-      case Left(err) => fail(s"=+A1 should parse: $err")
+  test("GH-374: unary plus before sheet-qualified ref is preserved (=+Model!B2)") {
+    assertPreserved("=+Model!B2")
   }
 
-  test("GH-271: unary plus formula evaluates (=+1+2 = 3)") {
+  test("GH-374: unary plus before IF call is preserved (=+IF(A1=2, 3, 4))") {
+    // Call arguments print with the pre-existing canonical ", " separator; the leading plus
+    // itself must survive (canonical-source formulas round-trip byte-identically).
+    FormulaParser.parse("=+IF(A1=2,3,4)") match
+      case Right(expr) => assertEquals(FormulaPrinter.print(expr), "=+IF(A1=2, 3, 4)")
+      case Left(err) => fail(s"=+IF(A1=2,3,4) should parse: $err")
+    assertPreserved("=+IF(A1=2, 3, 4)")
+  }
+
+  test("GH-374: unary plus before parenthesized expression is preserved (=+(A1+B2))") {
+    assertPreserved("=+(A1+B2)")
+  }
+
+  test("GH-374: unary plus before numeric literal is preserved (=+123)") {
+    assertPreserved("=+123")
+  }
+
+  test("GH-374: unary plus before power expression is preserved (=+2^3)") {
+    assertPreserved("=+2^3")
+  }
+
+  test("GH-374: unary plus formula evaluates (=+1+2 = 3)") {
     val sheet = Sheet("Test")
     val result = for
       expr <- FormulaParser.parse("=+1+2")
       value <- Evaluator.eval(expr, sheet)
     yield value
     assertEquals(result, Right(BigDecimal(3)))
+  }
+
+  test("GH-374: =+A1 parses to UnaryPlus wrapping a resolved Ref") {
+    FormulaParser.parse("=+A1") match
+      case Right(TExpr.UnaryPlus(TExpr.Ref(at, _, _))) => assertEquals(at.toA1, "A1")
+      case other => fail(s"Expected UnaryPlus(Ref(A1)), got $other")
+  }
+
+  test("GH-374: =++A1 parses to nested UnaryPlus") {
+    FormulaParser.parse("=++A1") match
+      case Right(TExpr.UnaryPlus(TExpr.UnaryPlus(TExpr.Ref(at, _, _)))) =>
+        assertEquals(at.toA1, "A1")
+      case other => fail(s"Expected UnaryPlus(UnaryPlus(Ref(A1))), got $other")
+  }
+
+  test("GH-374: =+1+2 parses to Add with UnaryPlus on the left operand only") {
+    FormulaParser.parse("=+1+2") match
+      case Right(TExpr.Add(TExpr.UnaryPlus(TExpr.Lit(x: BigDecimal)), TExpr.Lit(y: BigDecimal))) =>
+        assertEquals(x, BigDecimal(1))
+        assertEquals(y, BigDecimal(2))
+      case other => fail(s"Expected Add(UnaryPlus(Lit(1)), Lit(2)), got $other")
+  }
+
+  test("GH-374: =2^+2 parses to Pow with UnaryPlus exponent") {
+    FormulaParser.parse("=2^+2") match
+      case Right(TExpr.Pow(_, TExpr.UnaryPlus(TExpr.Lit(e: BigDecimal)))) =>
+        assertEquals(e, BigDecimal(2))
+      case other => fail(s"Expected Pow(2, UnaryPlus(Lit(2))), got $other")
+  }
+
+  test("GH-374: unary plus is the identity at evaluation (=+A1 = A1's value)") {
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Number(BigDecimal(42)))
+    val result = for
+      expr <- FormulaParser.parse("=+A1")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right(CellValue.Number(BigDecimal(42))))
+  }
+
+  test("GH-374: unary plus before function call evaluates (=+SUM(A1:B1))") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(BigDecimal(2)))
+      .put(ref"B1", CellValue.Number(BigDecimal(3)))
+    val result = for
+      expr <- FormulaParser.parse("=+SUM(A1:B1)")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right(BigDecimal(5)))
+  }
+
+  test("GH-374: unary plus operand participates in arithmetic (=+A1*2)") {
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Number(BigDecimal(21)))
+    val result = for
+      expr <- FormulaParser.parse("=+A1*2")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right(BigDecimal(42)))
+  }
+
+  test("GH-374: unary plus round-trips inside larger formulas (=B1*+A1)") {
+    assertPreserved("=B1*+A1")
+  }
+
+  test("GH-374: parenthesized unary plus as pow base round-trips ((+2)^3)") {
+    FormulaParser.parse("=(+2)^3") match
+      case Right(expr) =>
+        assertEquals(FormulaPrinter.print(expr), "=(+2)^3")
+        assertEquals(FormulaParser.parse(FormulaPrinter.print(expr)), Right(expr))
+      case Left(err) => fail(s"=(+2)^3 should parse: $err")
+  }
+
+  property("GH-374: print ∘ parse is byte-identity for leading-plus refs") {
+    forAll(genARef) { r =>
+      val source = s"=+${r.toA1}"
+      FormulaParser.parse(source).map(FormulaPrinter.print(_)) == Right(source)
+    }
+  }
+
+  property("GH-374: parse ∘ print = id for UnaryPlus ASTs over integer literals") {
+    forAll(Gen.choose(0, 1000000)) { n =>
+      val expr = TExpr.UnaryPlus(TExpr.Lit(BigDecimal(n)))
+      FormulaParser.parse(FormulaPrinter.print(expr)) == Right(expr)
+    }
+  }
+
+  test("GH-374: formula drag shifts references under unary plus (=+A1*$B$1)") {
+    val result =
+      for expr <- FormulaParser.parse("=+A1*$B$1")
+      yield FormulaPrinter.print(FormulaShifter.shift(expr, colDelta = 0, rowDelta = 1))
+    assertEquals(result, Right("=+A2*$B$1"))
+  }
+
+  test("GH-374: structural row insert shifts references under unary plus") {
+    val result = for
+      expr <- FormulaParser.parse("=+A5")
+      shifted = FormulaShifter.shiftStructural(
+        expr,
+        shiftLocal = true,
+        editedSheet = "Test",
+        isRow = true,
+        at = 0,
+        delta = 2
+      )
+    yield shifted.map(FormulaPrinter.print(_))
+    assertEquals(result, Right(Some("=+A7")))
   }
 
   // ==================== GH-263: cell-ref-shaped sheet names ====================

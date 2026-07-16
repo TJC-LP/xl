@@ -481,6 +481,12 @@ private class EvaluatorImpl(
         evalArithmetic(x, y, ArrayArithmetic.pow, sheet, clock, workbook, currentCell)
           .asInstanceOf[Either[EvalError, A]]
 
+      // GH-374: unary plus is the identity — preserved in the AST only so the printer can
+      // replicate source text byte-for-byte; at evaluation time the operand's value (scalar,
+      // array, whatever) passes through untouched.
+      case TExpr.UnaryPlus(e) =>
+        eval(e, sheet, clock, workbook, currentCell)
+
       // ===== String Operators =====
       case TExpr.Concat(x, y) =>
         // Concatenate: join two strings. Operands are statically String, but erased upstream
@@ -831,6 +837,10 @@ private class EvaluatorImpl(
             workbook
           )
           .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
+      // GH-374: unary plus is transparent in operand positions — =+A1:A3*10 broadcasts
+      // exactly like =A1:A3*10
+      case TExpr.UnaryPlus(inner) =>
+        evalMaybeArray(inner, sheet, clock, workbook, currentCell)
       // GH-302: coerced nodes in OPERAND positions pass ArrayResults through (so
       // =INDIRECT("A1:A3")*10 broadcasts exactly like =A1:A3*10) and coerce scalars totally
       // (so ="16"&"" or a text call result still enters arithmetic per the Numeric table).

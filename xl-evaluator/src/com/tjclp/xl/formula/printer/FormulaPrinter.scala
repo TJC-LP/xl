@@ -126,6 +126,14 @@ object FormulaPrinter:
         val result = s"$base^$exponent"
         parenthesizeIf(result, precedence > Precedence.Pow)
 
+      // GH-374: unary plus is preserved byte-for-byte. The operand prints at Pow context — the
+      // loosest level the parser's unary-plus operand slot accepts without parens — so `=+2^3`
+      // and `=+-2` replicate their source exactly (parseUnary recurses through unary chains into
+      // parsePow).
+      case TExpr.UnaryPlus(e) =>
+        val result = s"+${printExpr(e, Precedence.Pow)}"
+        parenthesizeIf(result, precedence > Precedence.Unary)
+
       // String operators
       case TExpr.Concat(x, y) =>
         val result = s"${printExpr(x, Precedence.Concat)}&${printExpr(y, Precedence.Concat)}"
@@ -273,6 +281,8 @@ object FormulaPrinter:
     unwrapTransparent(expr) match
       case TExpr.Pow(_, _) => true
       case TExpr.Sub(TExpr.Lit(n: BigDecimal), _) if n == BigDecimal(0) => true
+      // GH-374: a bare `+2^3` re-parses as +(2^3), so a UnaryPlus BASE needs parens: (+2)^3
+      case TExpr.UnaryPlus(_) => true
       case _ => false
 
   private def unwrapTransparent(expr: TExpr[?]): TExpr[?] =
@@ -388,6 +398,8 @@ object FormulaPrinter:
         s"Div(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Pow(x, y) =>
         s"Pow(${printWithTypes(x)}, ${printWithTypes(y)})"
+      case TExpr.UnaryPlus(e) =>
+        s"UnaryPlus(${printWithTypes(e)})"
       case TExpr.Concat(x, y) =>
         s"Concat(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Eq(x, y) =>

@@ -191,6 +191,18 @@ enum TExpr[A] derives CanEqual:
    */
   case Pow(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
 
+  /**
+   * GH-374: unary plus — `=+A1`, the Lotus-era leading-plus idiom endemic in professional models.
+   *
+   * Semantically the identity (Excel evaluates `+x` as `x`, whatever x's type), but carried as an
+   * explicit type-preserving node — not erased at parse — so the printer replicates the source
+   * formula text byte-for-byte (`=+Model!B2` round-trips as `=+Model!B2`). Transparent wrapper in
+   * the ToInt/Coerced mold: analysis, shifting, and dependency extraction recurse through it.
+   *
+   * Law: eval(UnaryPlus(x)) == eval(x)
+   */
+  case UnaryPlus[A](expr: TExpr[A]) extends TExpr[A]
+
   // String operators
 
   /**

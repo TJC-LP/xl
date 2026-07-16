@@ -118,6 +118,8 @@ object FormulaParser:
    */
   private def resolveTopLevelPolyRef(expr: TExpr[?]): TExpr[?] = expr match
     case _: TExpr.PolyRef | _: TExpr.SheetPolyRef => TExpr.asResolvedValueExpr(expr)
+    // GH-374: unary plus is a transparent wrapper — a bare `=+A1` must resolve exactly like `=A1`
+    case TExpr.UnaryPlus(inner) => TExpr.UnaryPlus(resolveTopLevelPolyRef(inner))
     case other => other
 
   /**
@@ -502,7 +504,8 @@ object FormulaParser:
 
   /**
    * Parse the exponent of a power expression, allowing unary minus and plus. This handles cases
-   * like 2^-1 = 0.5 while keeping -2^2 = -(2^2) = -4. Unary plus is identity (GH-271).
+   * like 2^-1 = 0.5 while keeping -2^2 = -(2^2) = -4. Unary plus wraps in TExpr.UnaryPlus so
+   * `=2^+2` prints back byte-identically (GH-271 acceptance, GH-374 preservation).
    */
   private def parsePowExponent(state: ParserState): ParseResult[TExpr[?]] =
     val s = skipWhitespace(state)
@@ -521,7 +524,7 @@ object FormulaParser:
         descend(s).flatMap { sd =>
           val s2 = skipWhitespace(sd.advance())
           parsePowExponent(s2).map { case (expr, s3) =>
-            (expr, s3.copy(depth = s.depth))
+            (TExpr.UnaryPlus(expr), s3.copy(depth = s.depth))
           }
         }
       case _ => parsePow(s)
@@ -531,8 +534,9 @@ object FormulaParser:
    *
    * Excel precedence: unary minus has lower precedence than ^, so -2^2 = -(2^2) = -4
    *
-   * Unary plus (GH-271: =+A1, the pervasive banker idiom) is identity: it parses to the same AST as
-   * the operand alone, so the printer normalizes it away while parse∘print=id holds on the AST.
+   * Unary plus (GH-271: =+A1, the pervasive banker idiom) is semantically the identity, but since
+   * GH-374 it parses to an explicit TExpr.UnaryPlus node so the printer preserves the source text
+   * byte-for-byte (replicated model formulas must match their source). Chained pluses nest.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseUnary(state: ParserState): ParseResult[TExpr[?]] =
@@ -554,7 +558,7 @@ object FormulaParser:
         descend(s).flatMap { sd =>
           val s2 = skipWhitespace(sd.advance())
           parseUnary(s2).map { case (expr, s3) =>
-            (expr, s3.copy(depth = s.depth))
+            (TExpr.UnaryPlus(expr), s3.copy(depth = s.depth))
           }
         }
       case Some('N') | Some('n') if isKeywordAt(s, "NOT") =>
