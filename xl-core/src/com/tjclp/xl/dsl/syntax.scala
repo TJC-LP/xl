@@ -1,7 +1,8 @@
 package com.tjclp.xl.dsl
 
 import com.tjclp.xl.addressing.{ARef, CellRange, RefType}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellValue, Comment}
+import com.tjclp.xl.cf.CfRule
 import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
@@ -64,6 +65,12 @@ object syntax:
      * The style will be auto-registered in the sheet's StyleRegistry when applied.
      */
     def styled(style: CellStyle): Patch = Patch.SetCellStyle(ref, style)
+
+    /**
+     * Create a SetComment patch attaching a comment to this cell (later comments to the same ref
+     * win when composed).
+     */
+    def comment(c: Comment): Patch = Patch.SetComment(ref, c)
 
     /** Create a SetStyle patch using a StyleId (for pre-registered styles) */
     def styleId(id: StyleId): Patch = Patch.SetStyle(ref, id)
@@ -143,6 +150,19 @@ object syntax:
 
     /** Create a Merge patch */
     def merge: Patch = Patch.Merge(range)
+
+    /**
+     * Create a SetConditionalFormat patch: ONE conditional-formatting block applying `rule` (and
+     * `more`) to this range. Applying appends the block via `Sheet.conditionalFormat`, which stamps
+     * [[com.tjclp.xl.cf.CfRule.AutoPriority]] rules above every priority already on the sheet.
+     *
+     * Deliberately NOT named `cf`: the package-level `export syntax.*` in com.tjclp.xl would then
+     * mint a term forwarder named `cf`, which collides with the `com.tjclp.xl.cf` PACKAGE and fails
+     * compilation. Mirroring the Sheet method name is the export-safe (and more discoverable)
+     * choice.
+     */
+    def conditionalFormat(rule: CfRule, more: CfRule*): Patch =
+      Patch.SetConditionalFormat(Vector(range), (rule +: more).toVector)
 
     /** Create an Unmerge patch */
     def unmerge: Patch = Patch.Unmerge(range)
@@ -232,8 +252,9 @@ object syntax:
    *   yield (rangeRef := 0)            // fills A1:B5 with 0
    * }}}
    *
-   * `styled`, `merge`, and `remove` also work on both cells and ranges (merge of a single cell is
-   * meaningless and returns the empty patch).
+   * `styled`, `merge`, `remove`, `comment`, and `conditionalFormat` also work across cells and
+   * ranges where meaningful: merge of a single cell and comment of a range are meaningless and
+   * return the empty patch; `conditionalFormat` of a single cell becomes a 1x1-range block.
    */
   extension (refType: RefType)
     /** Create Put patch from RefType (delegates to underlying ARef) */
@@ -307,6 +328,21 @@ object syntax:
       case RefType.QualifiedCell(_, aref) => aref.styled(style)
       case RefType.Range(range) => range.styled(style)
       case RefType.QualifiedRange(_, range) => range.styled(style)
+
+    /** Comment RefType (only works for cells; comments anchor to one cell, ranges yield empty) */
+    @annotation.targetName("refTypeComment")
+    def comment(c: Comment): Patch = refType match
+      case RefType.Cell(aref) => aref.comment(c)
+      case RefType.QualifiedCell(_, aref) => aref.comment(c)
+      case _ => Patch.empty // A range can't carry a single comment
+
+    /** Conditional-format RefType (works for both; a cell becomes a 1x1-range block) */
+    @annotation.targetName("refTypeConditionalFormat")
+    def conditionalFormat(rule: CfRule, more: CfRule*): Patch = refType match
+      case RefType.Cell(aref) => CellRange(aref, aref).conditionalFormat(rule, more*)
+      case RefType.QualifiedCell(_, aref) => CellRange(aref, aref).conditionalFormat(rule, more*)
+      case RefType.Range(range) => range.conditionalFormat(rule, more*)
+      case RefType.QualifiedRange(_, range) => range.conditionalFormat(rule, more*)
 
     /** Merge RefType (only works for ranges, returns empty for cells) */
     @annotation.targetName("refTypeMerge")

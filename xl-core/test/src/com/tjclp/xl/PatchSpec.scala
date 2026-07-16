@@ -7,13 +7,15 @@ import Generators.given
 import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.patch.Patch.{*, given}
 import com.tjclp.xl.api.*
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
+import com.tjclp.xl.cells.{Cell, CellValue, Comment}
+import com.tjclp.xl.cf.{CfRule, ConditionalFormat}
 import com.tjclp.xl.codec.CellCodec.given
+import com.tjclp.xl.dsl.syntax.*
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
 import com.tjclp.xl.sheets.syntax.*
-import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.{CellStyle, Dxf}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
@@ -207,6 +209,98 @@ class PatchSpec extends ScalaCheckSuite:
     assertEquals(updated.getRowProperties(row), props)
   }
 
+  test("SetComment patch attaches a comment to a cell (GH-379)") {
+    val sheet = emptySheet.put(ref"A1", CellValue.Text("Revenue"))
+    val comment = Comment.plainText("Q1 2025 data", Some("Analyst"))
+    val patch = Patch.SetComment(ref"A1", comment)
+
+    val updated = Patch.applyPatch(sheet, patch)
+    assertEquals(updated.getComment(ref"A1"), Some(comment))
+  }
+
+  test("SetComment works on a cell with no value (comments live on Sheet.comments)") {
+    val patch = Patch.SetComment(ref"B2", Comment.plainText("provenance"))
+    val updated = Patch.applyPatch(emptySheet, patch)
+
+    assertEquals(updated.getComment(ref"B2").map(_.text.toPlainText), Some("provenance"))
+    assert(!updated.contains(ref"B2"), "SetComment must not materialize a cell")
+  }
+
+  test("SetConditionalFormat patch appends one CF block via Sheet.conditionalFormat (GH-379)") {
+    val rule = CfRule.expression("A1>10", Dxf.fill(Color.Rgb(0xffff0000)))
+    val patch = Patch.SetConditionalFormat(Vector(ref"A1:B10"), Vector(rule))
+
+    val updated = Patch.applyPatch(emptySheet, patch)
+    updated.conditionalFormats match
+      case Vector(ConditionalFormat.Rules(ranges, rules, _)) =>
+        assertEquals(ranges, Vector[CellRange](ref"A1:B10"))
+        assertEquals(rules.size, 1)
+      case other => fail(s"Expected one Rules block, got: $other")
+  }
+
+  test("SetConditionalFormat stamps auto priorities through the patch path (GH-379)") {
+    // Two AutoPriority rules in one patched block must come out stamped 1, 2 — the arm must
+    // route through Sheet.conditionalFormat (which owns allocation), not a raw copy.
+    val dxf = Dxf.fill(Color.Rgb(0xffffcc00))
+    val patch = Patch.SetConditionalFormat(
+      Vector(ref"A1:A10"),
+      Vector(CfRule.expression("A1>10", dxf), CfRule.expression("A1>20", dxf))
+    )
+
+    val updated = Patch.applyPatch(emptySheet, patch)
+    val priorities = updated.conditionalFormats.flatMap {
+      case ConditionalFormat.Rules(_, rules, _) => rules.flatMap(CfRule.priorityOf)
+      case _ => Vector.empty
+    }
+    assertEquals(priorities, Vector(1, 2))
+  }
+
+  // ========== DSL Tests (GH-379) ==========
+
+  test("ARef.comment DSL builds a SetComment patch") {
+    val comment = Comment.plainText("note", Some("Author"))
+    val patch = ref"C3".comment(comment)
+    assertEquals(patch, Patch.SetComment(ref"C3", comment): Patch)
+
+    val updated = Patch.applyPatch(emptySheet, patch)
+    assertEquals(updated.getComment(ref"C3"), Some(comment))
+  }
+
+  test("CellRange.conditionalFormat DSL builds a single-block SetConditionalFormat patch") {
+    val dxf = Dxf.fill(Color.Rgb(0xff00ff00))
+    val r1 = CfRule.expression("A1>1", dxf)
+    val r2 = CfRule.expression("A1>2", dxf)
+
+    val patch = ref"A1:A10".conditionalFormat(r1, r2)
+    assertEquals(
+      patch,
+      Patch.SetConditionalFormat(Vector[CellRange](ref"A1:A10"), Vector(r1, r2)): Patch
+    )
+  }
+
+  test("RefType comment and conditionalFormat mirror the ARef/CellRange DSL (runtime refs)") {
+    val comment = Comment.plainText("dynamic")
+    val dxf = Dxf.fill(Color.Rgb(0xff0000ff))
+    val rule = CfRule.expression("A1>5", dxf)
+
+    val cellRef: RefType = RefType.Cell(ref"A1")
+    val rangeRef: RefType = RefType.Range(ref"A1:B2")
+
+    assertEquals(cellRef.comment(comment), Patch.SetComment(ref"A1", comment): Patch)
+    // Comments anchor to a single cell; a range comment is meaningless and yields the empty patch
+    assertEquals(rangeRef.comment(comment), Patch.empty)
+
+    assertEquals(
+      rangeRef.conditionalFormat(rule),
+      Patch.SetConditionalFormat(Vector[CellRange](ref"A1:B2"), Vector(rule)): Patch
+    )
+    // A CF on a single cell is meaningful: it becomes a 1x1-range block
+    assertEquals(
+      cellRef.conditionalFormat(rule),
+      Patch.SetConditionalFormat(Vector(CellRange(ref"A1", ref"A1")), Vector(rule)): Patch
+    )
+  }
+
   test("Batch patch applies multiple patches in order") {
     val sheet = emptySheet
     val r1 = ARef.from1(1, 1)
@@ -291,6 +385,34 @@ class PatchSpec extends ScalaCheckSuite:
     val updated = Patch.applyPatch(sheet, patch)
 
     assertEquals(updated(ref).styleId, Some(StyleId(2)))
+  }
+
+  test("Later SetComment overrides earlier SetComment to same ref (last-wins, GH-379)") {
+    val first = Comment.plainText("first draft")
+    val second = Comment.plainText("final note")
+
+    val patch =
+      (Patch.SetComment(ref"A1", first): Patch) |+| (Patch.SetComment(ref"A1", second): Patch)
+    val updated = Patch.applyPatch(emptySheet, patch)
+
+    assertEquals(updated.getComment(ref"A1"), Some(second))
+  }
+
+  test("SetConditionalFormat patches append blocks under Batch composition (GH-379)") {
+    // CF authoring is append-only (Excel accepts multiple blocks); the second block's auto
+    // priorities continue above the first block's.
+    val dxf = Dxf.fill(Color.Rgb(0xffffcc00))
+    val p1 = Patch.SetConditionalFormat(Vector(ref"A1:A10"), Vector(CfRule.expression("A1>1", dxf)))
+    val p2 = Patch.SetConditionalFormat(Vector(ref"B1:B10"), Vector(CfRule.expression("B1>2", dxf)))
+
+    val updated = Patch.applyPatch(emptySheet, (p1: Patch) |+| (p2: Patch))
+    assertEquals(updated.conditionalFormats.size, 2)
+
+    val priorities = updated.conditionalFormats.flatMap {
+      case ConditionalFormat.Rules(_, rules, _) => rules.flatMap(CfRule.priorityOf)
+      case _ => Vector.empty
+    }
+    assertEquals(priorities, Vector(1, 2))
   }
 
   // ========== Extension Method Tests ==========

@@ -58,15 +58,19 @@ class ScriptingPreludeTest extends FunSuite:
       Right(Some(BigDecimal("1000.50"))): Either[CodecError, Option[BigDecimal]]
     )
 
-  test("Patch DSL composes: :=, ++, styled, merge"):
+  test("Patch DSL composes: :=, ++, styled, merge, comment, conditionalFormat"):
     val patch =
       (ref"A1" := "Report") ++
         ref"A1".styled(CellStyle.default.bold) ++
         ref"A1:C1".merge ++
-        (ref"B2" := 19.99)
+        (ref"B2" := 19.99) ++
+        ref"B2".comment(Comment.plainText("unit price", Some("gen"))) ++
+        ref"B2:B9".conditionalFormat(CfRule.expression("B2>10", Dxf.fill(Color.Rgb(0xffffcc00))))
     val sheet = Sheet("Patched").put(patch)
     assertEquals(sheet.cells.size, 2)
     assertEquals(sheet.mergedRanges.size, 1)
+    assertEquals(sheet.getComment(ref"B2").map(_.text.toPlainText), Some("unit price"))
+    assertEquals(sheet.conditionalFormats.size, 1)
 
   test("range fill := and ARef navigation resolve through the prelude"):
     val sheet = Sheet("Fill").put(ref"A1:B2" := 0)
