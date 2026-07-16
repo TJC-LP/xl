@@ -154,6 +154,18 @@ enum CliCommand:
     differentOddEven: Boolean,
     differentFirst: Boolean
   )
+  // Conditional formatting (GH-324): add requires -o; list is read-only
+  case CfAdd(
+    range: String,
+    rule: String,
+    bold: Boolean,
+    italic: Boolean,
+    underline: Boolean,
+    strike: Boolean,
+    bg: Option[String],
+    fg: Option[String]
+  )
+  case CfList
   // Drawing layer (GH-221/GH-222, require -o)
   case ChartAdd(
     chartType: String, // column | bar | line | pie

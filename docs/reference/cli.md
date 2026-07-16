@@ -84,6 +84,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | **Rows/columns** | `row`, `col`, `autofit`, `insert-rows`, `delete-rows`, `insert-cols`, `delete-cols` | Sizing, visibility, structural editing |
 | **Sheets & view** | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide/show`, `freeze`, `unfreeze`, `name` | Workbook structure |
 | **Appearance & print** | `sheet-view`, `tab-color`, `page-setup`, `header-footer` | Deliverable finish: gridlines, zoom, tab colors, print setup, footers |
+| **Conditional formatting** | `cf add`, `cf list` | Highlight rules, color scales, data bars, top-N, text matches |
 
 ### Command Summary
 
@@ -123,6 +124,8 @@ xl rasterizers                                     # List available PNG/PDF back
 | `tab-color` | `<color>` \| `--clear` | Set/clear the sheet tab color (requires `-o`) |
 | `page-setup` | `[--orientation portrait\|landscape] [--scale n] [--fit-to-width n] [--fit-to-height n] [--fit-to-page on\|off]` | Set print page setup (requires `-o`) |
 | `header-footer` | `[--odd-header s] [--odd-footer s] [--even-\*] [--first-\*] [--different-odd-even] [--different-first]` | Set print header/footer text (requires `-o`) |
+| `cf add` | `--range <range> --rule <dsl> [format flags]` | Add a conditional-formatting rule (requires `-o`) |
+| `cf list` | | List conditional-formatting rules on the sheet (read-only) |
 | `chart add` | `--type <t> --data <range> --at <ref> [options]` | Add a chart built from sheet ranges (requires `-o`) |
 | `add-image` | `<image-file> --at <ref> [--size WxH]` | Embed an image (requires `-o`) |
 | `import` | `<csv-file> [start-ref] [options]` | Import CSV with type detection (requires `-o`) |
@@ -748,6 +751,49 @@ xl -f in.xlsx -s Model -o out.xlsx batch finish.json
 
 ---
 
+### `xl cf add --range <range> --rule <dsl>` / `xl cf list`
+
+Author conditional formatting (GH-324). `cf add` appends one rule to a range (requires `-o`);
+`cf list` shows the sheet's rules (read-only). Priorities are auto-assigned in add order
+(lower priority wins in Excel) — the CLI never hand-stamps them.
+
+**Rule DSL** (`--rule`):
+
+| Family | Syntax | Example |
+|--------|--------|---------|
+| Cell value | `cellIs:<op>:<value>` | `cellIs:greaterThan:100` (ops: `lessThan`/`lt`, `lessThanOrEqual`/`lte`, `equal`/`eq`, `notEqual`/`ne`, `greaterThanOrEqual`/`gte`, `greaterThan`/`gt`) |
+| Range | `between:<lo>:<hi>`, `notBetween:<lo>:<hi>` | `between:10:100` |
+| Formula | `expression:<formula>` | `expression:MOD(ROW(),2)=0` (formula may contain `:`) |
+| Color scale | `colorScale:<c1>:<c2>[:<c3>]` | `colorScale:red:white:green` (3-point mid at 50th percentile) |
+| Data bar | `dataBar:<color>` | `dataBar:#638EC6` |
+| Top/bottom N | `top10:<n>[:percent]`, `bottom10:<n>[:percent]` | `top10:5:percent` |
+| Text match | `text:<op>:<s>` | `text:contains:overdue` (ops: `contains`, `notContains`, `beginsWith`, `endsWith`; `<s>` may contain `:`) |
+
+**Format flags** (highlight rules — `cellIs`, `between`, `notBetween`, `expression`, `top10`,
+`bottom10`, `text` — require at least one; `colorScale`/`dataBar` carry inline colors and reject
+them): `--bold`, `--italic`, `--underline`, `--strike`, `--bg <color>`, `--fg <color>`.
+Flag colors accept the full color syntax including `theme:accent1[:tint]`; color tokens *inside*
+`colorScale:`/`dataBar:` rule strings accept named/`#hex`/`rgb(r,g,b)` only (the `:` separator
+conflicts with theme syntax).
+
+```bash
+# Red highlight for values over 100
+xl -f f.xlsx -s S1 -o o.xlsx cf add --range A1:A10 \
+   --rule 'cellIs:greaterThan:100' --bold --bg '#FFC7CE' --fg '#9C0006'
+
+# 3-point color scale, then inspect
+xl -f f.xlsx -s S1 -o o.xlsx cf add --range B2:B20 --rule 'colorScale:red:white:green'
+xl -f o.xlsx -s S1 cf list
+```
+
+**Batch op** `cf` mirrors the command:
+
+```json
+{"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100", "bold": true, "bg": "#FFC7CE"}
+```
+
+---
+
 ### `xl chart add --type <t> --data <range> --at <ref> [options]`
 
 Add a typed chart built from sheet data ranges. Supported types: `column`, `bar` (horizontal),
@@ -936,6 +982,7 @@ Apply multiple operations atomically from JSON input.
 | `tab-color` | | `color`, `clear` | Set (`color`) or clear (`clear: true`) the sheet tab color |
 | `page-setup` | | `orientation`, `scale`, `fitToWidth`, `fitToHeight`, `fitToPage` | Set print page setup |
 | `header-footer` | | `oddHeader`, `oddFooter`, `evenHeader`, `evenFooter`, `firstHeader`, `firstFooter`, `differentOddEven`, `differentFirst` | Set print header/footer text |
+| `cf` | `range`, `rule` | `bold`, `italic`, `underline`, `strike`, `bg`, `fg` | Add a conditional-formatting rule (see `cf add`) |
 
 **Native JSON Types** (recommended):
 

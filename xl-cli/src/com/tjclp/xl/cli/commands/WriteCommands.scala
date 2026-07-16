@@ -10,6 +10,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.helpers.{
   AppearanceOps,
   BatchParser,
+  CfRuleParser,
   ColumnAutoFit,
   CopyOps,
   SheetResolver,
@@ -712,7 +713,7 @@ object WriteCommands:
           _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
           _: BatchParser.BatchOp.Hyperlink | _: BatchParser.BatchOp.SetSheetView |
           _: BatchParser.BatchOp.SetTabColor | _: BatchParser.BatchOp.SetPageSetup |
-          _: BatchParser.BatchOp.SetHeaderFooter =>
+          _: BatchParser.BatchOp.SetHeaderFooter | _: BatchParser.BatchOp.AddConditionalFormat =>
         false
 
   /**
@@ -1242,6 +1243,70 @@ object WriteCommands:
         "first-footer" -> firstFooter
       )
       s"Set header/footer on '${sheet.name.value}': $desc"
+    }
+
+  // ===== Conditional formatting (GH-324) =====
+
+  /**
+   * Add one conditional-formatting rule to a range. The rule string is the `cf add` colon DSL (see
+   * [[CfRuleParser]]); the dxf comes from the formatting flags. Priorities are stamped by
+   * `Sheet.conditionalFormat` (auto-priority, append order) — never by the CLI.
+   */
+  def cfAdd(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    rangeStr: String,
+    ruleStr: String,
+    bold: Boolean,
+    italic: Boolean,
+    underline: Boolean,
+    strike: Boolean,
+    bg: Option[String],
+    fg: Option[String],
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "cf add")
+      (sheet, refOrRange) = resolved
+      range = refOrRange match
+        case Left(ref) => CellRange(ref, ref)
+        case Right(r) => r
+      dxf <- IO.fromEither(
+        CfRuleParser.buildDxf(bold, italic, underline, strike, bg, fg).left.map(new Exception(_))
+      )
+      rule <- IO.fromEither(CfRuleParser.parse(ruleStr, dxf).left.map(new Exception(_)))
+      updatedSheet = sheet.conditionalFormat(range, rule)
+      priority = updatedSheet.typedConditionalFormats.lastOption
+        .flatMap(_.rules.lastOption)
+        .flatMap(com.tjclp.xl.cf.CfRule.priorityOf)
+      _ <- writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
+    yield
+      val priorityNote = priority.fold("")(p => s" (priority $p)")
+      s"Added conditional format on '${sheet.name.value}': ${CfRuleParser.describe(rule)} " +
+        s"over ${range.toA1}$priorityNote\n${saveSuffix(outputPath, stream)}"
+
+  /** List conditional-formatting rules on the sheet (read-only — no output file needed). */
+  def cfList(wb: Workbook, sheetOpt: Option[Sheet]): IO[String] =
+    SheetResolver.requireSheet(wb, sheetOpt, "cf list").map { sheet =>
+      val blocks = sheet.conditionalFormats
+      if blocks.isEmpty then s"No conditional formatting on '${sheet.name.value}'"
+      else
+        blocks.zipWithIndex
+          .map {
+            case (com.tjclp.xl.cf.ConditionalFormat.Rules(ranges, rules, _), i) =>
+              val header = s"[$i] ${ranges.map(_.toA1).mkString(" ")}"
+              val ruleLines = rules.map { r =>
+                val priorityNote =
+                  com.tjclp.xl.cf.CfRule.priorityOf(r).fold("")(p => s" (priority $p)")
+                s"    ${CfRuleParser.describe(r)}$priorityNote"
+              }
+              (header +: ruleLines).mkString("\n")
+            case (com.tjclp.xl.cf.ConditionalFormat.Preserved(_), i) =>
+              s"[$i] (preserved block)"
+          }
+          .mkString("\n")
     }
 
   // ===== Structural editing: insert/delete rows & columns (GH-128, GH-129) =====

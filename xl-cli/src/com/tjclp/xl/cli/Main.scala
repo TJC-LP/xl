@@ -100,7 +100,7 @@ object Main
     // Sheet-level write: --file, --sheet, and --output (required)
     // --stream uses SAX/StAX workbook writes for modifying commands.
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd orElse sheetViewCmd orElse tabColorCmd orElse pageSetupCmd orElse headerFooterCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd orElse sheetViewCmd orElse tabColorCmd orElse pageSetupCmd orElse headerFooterCmd orElse cfCmd
 
     val sheetWriteOpts =
       (
@@ -932,6 +932,11 @@ APPEARANCE & PRINT SETUP (GH-358):
                 "differentOddEven": true, "differentFirst": true}
                 (&L/&C/&R sections; &P page, &N total, &D date, &F file, &A sheet)
 
+CONDITIONAL FORMATTING (GH-324):
+  cf            {"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100",
+                "bold": true, "bg": "#FFC7CE", "fg": "#9C0006"}
+                (rule DSL and flags as `xl cf add`; priorities auto-assigned in order)
+
 STYLE PROPERTIES:
   Font:      bold, italic, underline, fg, fontSize, fontName
   Fill:      bg (background color, e.g., "#FFFF00" or "yellow")
@@ -1243,6 +1248,51 @@ USAGE:
       val valuesOnlyOpt =
         Opts.flag("values-only", "Copy values only (no formula adjustment)").orFalse
       (copySrcArg, copyTgtArg, valuesOnlyOpt).mapN(CliCommand.Copy.apply)
+    }
+
+  // --- Conditional formatting command (GH-324) ---
+
+  private val cfCmd: Opts[CliCommand] =
+    Opts.subcommand("cf", "Conditional formatting: add, list") {
+      val addSub = Opts.subcommand(
+        "add",
+        """Add a conditional-formatting rule to a range (requires -o).
+
+RULE DSL (--rule):
+  cellIs:<op>:<value>       op: lessThan|lt, lessThanOrEqual|lte, equal|eq,
+                            notEqual|ne, greaterThanOrEqual|gte, greaterThan|gt
+  between:<lo>:<hi>         inclusive bounds (notBetween:<lo>:<hi> for the inverse)
+  expression:<formula>      custom formula, e.g. expression:MOD(ROW(),2)=0
+  colorScale:<c1>:<c2>[:<c3>]  2- or 3-point scale (mid at 50th percentile)
+  dataBar:<color>
+  top10:<n>[:percent]       bottom10:<n>[:percent] for bottom ranks
+  text:<op>:<s>             op: contains, notContains, beginsWith, endsWith
+
+FORMAT FLAGS (highlight rules; colorScale/dataBar carry inline colors instead):
+  --bold --italic --underline --strike --bg <color> --fg <color>
+
+Priorities are auto-assigned in add order (lower priority wins in Excel).
+
+EXAMPLES:
+  xl -f f.xlsx -s S1 -o o.xlsx cf add --range A1:A10 --rule 'cellIs:greaterThan:100' --bold --bg '#FFC7CE'
+  xl -f f.xlsx -s S1 -o o.xlsx cf add --range B2:B20 --rule 'colorScale:red:white:green'
+  xl -f f.xlsx -s S1 -o o.xlsx cf add --range C1:C50 --rule 'text:contains:overdue' --fg '#9C0006'"""
+      ) {
+        val cfRangeOpt =
+          Opts.option[String]("range", "Target range, e.g. A1:A10 (qualified refs accepted)")
+        val cfRuleOpt = Opts.option[String](
+          "rule",
+          "Rule DSL string, e.g. cellIs:greaterThan:100 (see cf add --help)"
+        )
+        val strikeOpt = Opts.flag("strike", "Strikethrough text").orFalse
+        (cfRangeOpt, cfRuleOpt, boldOpt, italicOpt, underlineOpt, strikeOpt, bgOpt, fgOpt)
+          .mapN(CliCommand.CfAdd.apply)
+      }
+      val listSub =
+        Opts.subcommand("list", "List conditional-formatting rules on the sheet (read-only)") {
+          Opts(CliCommand.CfList)
+        }
+      addSub orElse listSub
     }
 
   // --- Chart + image commands (GH-222) ---
@@ -2171,6 +2221,29 @@ USAGE:
           _
         )
       )
+
+    // Conditional formatting (GH-324)
+    case CliCommand.CfAdd(range, rule, bold, italic, underline, strike, bg, fg) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.cfAdd(
+          wb,
+          sheetOpt,
+          range,
+          rule,
+          bold,
+          italic,
+          underline,
+          strike,
+          bg,
+          fg,
+          _,
+          _,
+          _
+        )
+      )
+
+    case CliCommand.CfList =>
+      WriteCommands.cfList(wb, sheetOpt)
 
     case CliCommand.Copy(source, target, valuesOnly) =>
       requireOutput(outputOpt, backendOpt, stream)(

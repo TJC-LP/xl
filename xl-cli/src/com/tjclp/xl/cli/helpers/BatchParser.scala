@@ -120,6 +120,17 @@ object BatchParser:
       differentOddEven: Boolean,
       differentFirst: Boolean
     )
+    // Conditional formatting (GH-324): rule is the cf add colon DSL, flags build the dxf
+    case AddConditionalFormat(
+      range: String,
+      rule: String,
+      bold: Boolean,
+      italic: Boolean,
+      underline: Boolean,
+      strike: Boolean,
+      bg: Option[String],
+      fg: Option[String]
+    )
 
   /**
    * Result of batch parsing with optional warnings.
@@ -193,6 +204,8 @@ object BatchParser:
           )
           s"  PAGE-SETUP $desc"
         case _: BatchOp.SetHeaderFooter => "  HEADER-FOOTER"
+        case BatchOp.AddConditionalFormat(range, rule, _, _, _, _, _, _) =>
+          s"  CF $range $rule"
       }
       .mkString("\n")
 
@@ -471,13 +484,26 @@ object BatchParser:
               differentFirst = objMap.get("differentFirst").flatMap(_.boolOpt).getOrElse(false)
             )
 
+          case "cf" =>
+            collectUnknownPropsWarning(objMap, knownCfProps, "cf", idx).foreach(warnings += _)
+            BatchOp.AddConditionalFormat(
+              range = requireString(objMap, "range", idx),
+              rule = requireString(objMap, "rule", idx),
+              bold = objMap.get("bold").flatMap(_.boolOpt).getOrElse(false),
+              italic = objMap.get("italic").flatMap(_.boolOpt).getOrElse(false),
+              underline = objMap.get("underline").flatMap(_.boolOpt).getOrElse(false),
+              strike = objMap.get("strike").flatMap(_.boolOpt).getOrElse(false),
+              bg = objMap.get("bg").flatMap(_.strOpt),
+              fg = objMap.get("fg").flatMap(_.strOpt)
+            )
+
           case other =>
             throw new Exception(
               s"Object ${idx + 1}: Unknown operation '$other'. " +
                 "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
                 "comment, remove-comment, hyperlink, clear, col-hide, col-show, " +
                 "row-hide, row-show, autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, " +
-                "sheet-view, tab-color, page-setup, header-footer"
+                "sheet-view, tab-color, page-setup, header-footer, cf"
             )
       }
 
@@ -561,6 +587,10 @@ object BatchParser:
     "differentOddEven",
     "differentFirst"
   )
+
+  /** Known properties for 'cf' operation (GH-324) */
+  private val knownCfProps =
+    Set("op", "range", "rule", "bold", "italic", "underline", "strike", "bg", "fg")
 
   /** Collect warning about unknown properties in a batch operation (if any) */
   private def collectUnknownPropsWarning(
@@ -1023,6 +1053,29 @@ object BatchParser:
           case BatchOp.SetHeaderFooter(oh, of, eh, ef, fh, ff, diffOddEven, diffFirst) =>
             updateSheetE(currentWb, defaultSheetName, "header-footer")(
               AppearanceOps.applyHeaderFooter(_, oh, of, eh, ef, fh, ff, diffOddEven, diffFirst)
+            )
+
+          case BatchOp.AddConditionalFormat(
+                rangeStr,
+                rule,
+                bold,
+                italic,
+                underline,
+                strike,
+                bg,
+                fg
+              ) =>
+            applyConditionalFormat(
+              currentWb,
+              defaultSheetName,
+              rangeStr,
+              rule,
+              bold,
+              italic,
+              underline,
+              strike,
+              bg,
+              fg
             )
       }
     }
@@ -1652,6 +1705,32 @@ object BatchParser:
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
       )
     yield CopyOps.copyRange(wb, sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
+
+  /**
+   * Add one conditional-formatting rule to a range (GH-324). Rule DSL + dxf flags are parsed by
+   * [[CfRuleParser]]; priorities are auto-stamped by `Sheet.conditionalFormat` in add order.
+   */
+  private def applyConditionalFormat(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    rangeStr: String,
+    ruleStr: String,
+    bold: Boolean,
+    italic: Boolean,
+    underline: Boolean,
+    strike: Boolean,
+    bg: Option[String],
+    fg: Option[String]
+  ): IO[Workbook] =
+    for
+      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      (sheetName, range) = rangeRef
+      dxf <- IO.fromEither(
+        CfRuleParser.buildDxf(bold, italic, underline, strike, bg, fg).left.map(new Exception(_))
+      )
+      rule <- IO.fromEither(CfRuleParser.parse(ruleStr, dxf).left.map(new Exception(_)))
+      result <- updateSheet(wb, sheetName)(_.conditionalFormat(range, rule))
+    yield result
 
   // ========== Utilities ==========
 
