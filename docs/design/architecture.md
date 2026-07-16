@@ -194,7 +194,7 @@ The evaluator implements: `Evaluator.eval: TExpr[A] => Sheet => Either[EvalError
 - Topological sort for evaluation order (Kahn's algorithm)
 - Short-circuit evaluation for And/Or
 - Division by zero handling (returns `CellError.Div0`)
-- 107 Excel functions: SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, OFFSET, SUMIF, COUNTIF, NPV, IRR, dynamic arrays (SEQUENCE/SORT/UNIQUE/FILTER), and more
+- 108 Excel functions: SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, OFFSET, SUMIF, COUNTIF, NPV, IRR, dynamic arrays (SEQUENCE/SORT/UNIQUE/FILTER), and more
 - Whole-workbook recalculation: `Workbook.recalculate(clock)` is total and returns `RecalcResult` (recached workbook + per-sheet values + per-cell `CellEvalError`s); cycle participants are isolated while the acyclic remainder still evaluates
 
 See `docs/STATUS.md` for the complete function list.

@@ -1,6 +1,6 @@
 # Supported Formula Functions
 
-The `eval` command supports 107 Excel functions (run `xl functions` for the live list).
+The `eval` command supports 108 Excel functions (run `xl functions` for the live list).
 
 ## Math Functions
 
@@ -16,6 +16,7 @@ The `eval` command supports 107 Excel functions (run `xl functions` for the live
 | ABS | `=ABS(number)` | `=ABS(-5)` |
 | SQRT | `=SQRT(number)` | `=SQRT(16)` → 4 |
 | MOD | `=MOD(number, divisor)` | `=MOD(7, 3)` → 1 |
+| MROUND | `=MROUND(number, multiple)` | `=MROUND(10, 3)` → 9 |
 | POWER | `=POWER(number, power)` | `=POWER(2, 10)` → 1024 |
 | LOG | `=LOG(number, [base])` | `=LOG(100)` → 2 (base 10) |
 | LN | `=LN(number)` | `=LN(2.718)` → 1 |

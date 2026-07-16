@@ -9,7 +9,7 @@ library. The plugin packages two complementary skills.
 ### xl-cli — stateless CLI operations
 
 Drives the `xl` command-line binary: view ranges, read cells, search, evaluate formulas
-(107 supported functions), export to CSV/JSON/PNG/PDF, style cells, edit rows/columns, and apply
+(108 supported functions), export to CSV/JSON/PNG/PDF, style cells, edit rows/columns, and apply
 atomic batch operations. Every invocation reads the file, applies one change set, and writes the
 result — no session state. The skill auto-detects the latest released binary from the GitHub API,
 so it never needs a version bump. See [`skills/xl-cli/SKILL.md`](skills/xl-cli/SKILL.md).

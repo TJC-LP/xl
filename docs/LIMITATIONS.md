@@ -1,9 +1,9 @@
 # XL Current Limitations and Future Roadmap
 
 **Last Updated**: 2026-06-15
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**107 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes); scripting prelude + whole-workbook recalculation + print setup authoring (0.11.0); typed bar/line/pie charts + embedded pictures (0.12.0); conditional formatting (0.12.1); LibreOffice-edit interop fixes (0.12.2).
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**108 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes); scripting prelude + whole-workbook recalculation + print setup authoring (0.11.0); typed bar/line/pie charts + embedded pictures (0.12.0); conditional formatting (0.12.1); LibreOffice-edit interop fixes (0.12.2).
 
-> **Note (through 0.12.2):** Sections below largely predate the 0.10.0 "Trust & Author", 0.11.0 "Scripting", and 0.12.0–0.12.2 ("Visual"/"Clean Sweep"/"Interop") releases and may understate current capabilities. **Charts, drawings/pictures, and conditional formatting now ship** — see §12, §13, and §10 below. Hyperlinks (#9) and named ranges (#15) are **supported**; inline worksheet elements like data validation (#11) are **preserved through edits** (authoring still pending); print setup is **partially supported** as of 0.11.0 (#16). 0.11.0 also added the scripting prelude (`com.tjclp.xl.scripting`), whole-workbook `recalculate` with per-cell errors, per-side borders/outlines, and sheet view settings — see the [CHANGELOG](../CHANGELOG.md). For the 0.10.0 rationale, see [archive/plan/v0.10.0-execution.md](archive/plan/v0.10.0-execution.md).
+> **Note (through 0.12.2):** Sections below largely predate the 0.10.0 "Trust & Author", 0.11.0 "Scripting", and 0.12.0–0.12.2 ("Visual"/"Clean Sweep"/"Interop") releases and may understate current capabilities. **Charts, drawings/pictures, and conditional formatting now ship** — see §12, §13, and §10 below. Hyperlinks (#9) and named ranges (#15) are **supported**; inline worksheet elements like data validation (#11) are **preserved through edits**, and **list-dropdown authoring shipped in 0.13.0** (#375); print setup is **partially supported** as of 0.11.0 (#16). 0.11.0 also added the scripting prelude (`com.tjclp.xl.scripting`), whole-workbook `recalculate` with per-cell errors, per-side borders/outlines, and sheet view settings — see the [CHANGELOG](../CHANGELOG.md). For the 0.10.0 rationale, see [archive/plan/v0.10.0-execution.md](archive/plan/v0.10.0-execution.md).
 >
 > **Known open issues**: the issues previously listed here (#262–#266, #271) were closed in the v0.11.1 "Totality" wave, and charts (#222) / drawings (#221) shipped in 0.12.0. For the current open set, see [GitHub Issues](https://github.com/TJC-LP/xl/issues).
 
@@ -120,7 +120,7 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 #### 6. Formula System ✅ **PRODUCTION READY**
 **Status**: Complete (WI-07, WI-08, WI-09a-h + TJC-351 cross-sheet formulas)
-**Features**: Parser, evaluator, **107 functions** (including SUMIF, COUNTIF, SUMIFS, COUNTIFS, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, XIRR, XNPV, and dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER), dependency graph, cycle detection, cross-sheet references
+**Features**: Parser, evaluator, **108 functions** (including SUMIF, COUNTIF, SUMIFS, COUNTIFS, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, XIRR, XNPV, and dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER), dependency graph, cycle detection, cross-sheet references
 **Phase**: WI-07, WI-08, WI-09a/b/c/d Complete + Financial Functions + Cross-Sheet Formulas
 
 **What Works** (Production Ready — 1198 xl-evaluator tests):
@@ -155,14 +155,14 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 **Capabilities**:
 - ✅ **Parsing** (WI-07): Typed GADT AST (TExpr), FormulaParser, FormulaPrinter, round-trip laws (57 tests)
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics (58 tests)
-- ✅ **107 Built-in Functions** (complete current registry, verified against `xl functions`):
+- ✅ **108 Built-in Functions** (complete current registry, verified against `xl functions`):
   - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
   - **Statistical** (5): LARGE, SMALL, RANK, PERCENTILE, QUARTILE
   - **Conditional** (9): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, SUMPRODUCT
   - **Logical / Selection** (13): IF, IFS, IFERROR, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
   - **Text** (12): CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE
   - **Date** (12): TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
-  - **Math** (16): ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
+  - **Math** (17): ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, MROUND, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
   - **Random** (2, GH-115): RAND, RANDBETWEEN — volatile; deterministic via the `Rng.seeded` capability
   - **Financial** (9): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
   - **Lookup / Reference** (12): VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
@@ -188,7 +188,7 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 - ⏳ Array formulas - Future work
 - ⏳ Structured references (Table[@Column]) - Requires WI-10 integration
 - ✅ Quoted sheet names in formulas (`='Q1 Report'!A1`) are parsed and printed; quoting of sheet names *shaped like cell refs* is tracked in #263
-- ⏳ Leading `=+` formula prefix (legacy Lotus style) is rejected by the parser - #271
+- ✅ Leading unary plus (`=+A1`, `=++A1`, `=2^+2`) parses and is **preserved through print** (0.13.0, #374) — round-trips byte-for-byte via a dedicated identity AST node (reverses #271's earlier normalization); evaluation is pure identity
 - 🛡️ **Formula depth cap (GH-56 totality guard):** nesting + operator-chain depth is capped at 256 levels so pathological input returns `ParseError.NestingTooDeep` instead of `StackOverflowError`. Excel allows 64 nesting levels and no operator-chain limit (within 8192 chars); xl additionally counts each operator in a *flat, paren-less* chain, so a chain of 256+ consecutive operators (e.g. `=A1+A2+…` ×256) is rejected — use `SUM`/ranges, or parenthesize to reset the budget. No real-world formula approaches this.
 
 **INDIRECT — dynamic references (GH-274)**: `INDIRECT(ref_text, [a1])` resolves A1-style text — `"B5"`, `"A1:B10"`, `"$A$1:B10"`, `"A:A"`, `"Sheet2!A1"`, `"'My Sheet'!A1:C3"` — at evaluation time and composes with aggregates (`=SUM(INDIRECT("A1:A"&B1))`), array arithmetic, and spill (`evala`) via the same ArrayResult mechanism as OFFSET. Unresolvable, out-of-grid, defined-name, external-workbook, or structured-reference text evaluates to `#REF!` (a value — total, never throws). Full column/row text is clamped to the sheet's used range before materializing; resolved ranges are capped at 1,048,576 cells.
@@ -213,6 +213,8 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 - `putf` accepts external formulas and stores them **uncached** (Excel computes on open) — so an xl-written external formula reports the uncached error on recalc until Excel has cached it once.
 
 **RAND/RANDBETWEEN — volatile functions (GH-115)**: `RAND()`/`RANDBETWEEN(bottom, top)` are supported. Volatility: xl re-evaluates volatile formulas on every `recalculate`/`withCachedFormulas` pass, so cached values change per recalculation (matching Excel). Determinism: randomness is an explicit `Rng` capability (Clock pattern) — pass `Rng.seeded(seed)` to the rng-taking overloads (`sheet.evaluateFormula(f, clock, rng)`, `wb.recalculate(clock, rng)`, ...) for reproducible output; default paths use `Rng.system`. RANDBETWEEN tightens fractional bounds inward (bottom rounds up, top down) and errors when bottom > top.
+
+**Iterative calculation — circular models (GH-373, 0.13.0)**: professional schedules (interest on average debt) are circular by design. `recalculate(IterativeCalc(maxIter, maxChange))` opt-in Jacobi-fixpoints declared cycles — members seed to 0, read previous-iteration values, converge when every |Δ| < maxChange or after maxIter rounds; non-convergence keeps the last values with NO error (Excel's semantics). Default `recalculate()` still isolates cycles as errors. `IterativeCalc.fromCalcPr` bridges a file's authored `<calcPr>`; `Workbook.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))` authors it on scratch builds.
 
 **No workarounds needed** - formula system is complete and production-ready!
 
@@ -287,13 +289,10 @@ the emitted indices — formatted 100k+ row files no longer require the in-memor
 
 ---
 
-#### 11. Data Validation Authoring Not Supported
-**Status**: Existing `dataValidations` are **preserved through edits** since 0.10.0 (C1); no authoring API yet
-**Impact**: Cannot add new dropdown lists or input validation
-**Plan**: see [plan/roadmap.md](plan/roadmap.md)
-
-**Effort**: 3-4 days
-**LOC**: ~200
+#### 11. Data Validation Authoring ✅ LIST DROPDOWNS SUPPORTED (0.13.0, #375)
+**Status**: List dropdowns author via `Sheet.withDataValidation(range, DataValidation.list("\"Yes,No\""))` (or `DataValidation.listOf("Yes", "No")`, or a range-ref formula), with `allowBlank`/`showDropdown` (OOXML's inverted `showDropDown` handled), multi-range sqref, structural-edit range shifting, and read-side parse into the model (read→edit→write keeps validations on rewritten sheets). Existing `dataValidations` are still **preserved through edits** since 0.10.0; unmodeled kinds (whole/decimal/date/custom, operators, prompt/error messages) survive byte-faithfully as `DataValidation.Preserved`.
+**Impact**: List dropdowns are authorable programmatically; other validation kinds are preserved but not yet authorable.
+**Remaining**: typed whole/decimal/date/textLength/custom authoring (list-only in v1); no CLI/batch op yet.
 
 ---
 
@@ -345,7 +344,7 @@ the emitted indices — formatted 100k+ row files no longer require the in-memor
 
 #### 15. Named Ranges ✅ NOW SUPPORTED (0.10.0)
 **Status**: Implemented
-**Impact**: `WorkbookMetadata.definedNames` is serialized to `<definedNames>` (previously read-only), with a CLI `name add` / `name rm` verb. Structured references inside formulas remain future work.
+**Impact**: `WorkbookMetadata.definedNames` is serialized to `<definedNames>` (previously read-only), with a CLI `name add` / `name rm` verb. Since 0.13.0 (#384), defined names also **resolve in formula evaluation** — `=IF(case=2,…)`, `=entry_mult*ltm_ebitda`, `=SUM(rev_range)` evaluate against workbook- and sheet-scoped names (sheet-scoped shadows global) via a dedicated `TExpr.NameRef` node, contribute dependency edges so `recalculate()` orders name-gated families correctly, and round-trip byte-faithfully; unresolvable names are clean per-cell errors. Structured references (`Table[@Column]`) inside formulas remain future work.
 
 ---
 
@@ -706,7 +705,7 @@ See: [plan/roadmap.md](plan/roadmap.md)
 | **Streaming Read** | ✅ | ✅ | XL: 55k rows/s, POI: ~40k rows/s |
 | **Multi-sheet** | ✅ | ✅ | XL: Arbitrary, POI: Sequential |
 | **Styles** | ✅ | ✅ | XL: Full in-memory; streaming uses minimal default styles |
-| **Formulas (eval)** | ✅ | ✅ | XL: 107 functions, dependency graph, cycle detection |
+| **Formulas (eval)** | ✅ | ✅ | XL: 108 functions, dependency graph, cycle detection |
 | **Tables** | ✅ | ✅ | XL: Full table support with AutoFilter, structured refs |
 | **Charts** | ⚠️ | ✅ | XL: typed bar/line/pie (scoped, §12); POI: full |
 | **Drawings** | ⚠️ | ✅ | XL: embedded pictures (scoped, §13); POI: images/shapes |
@@ -765,13 +764,13 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 - Multi-sheet workbooks
 - Core cell types and rich text
 - Styling in in-memory workflows (full styles supported)
-- Formula evaluation (107 functions, dependency graph, cycle detection)
+- Formula evaluation (108 functions, dependency graph, cycle detection)
 - Excel Tables (structured data with AutoFilter, headers, styling)
 - Performance-critical workloads (benchmarked vs POI)
 
 **No/Not yet, if you need**:
 - Advanced chart types (scatter/area/combo/3D), shapes, or chart styling — typed bar/line/pie charts + embedded pictures **do** ship (scoped, §12/§13)
-- Pivot tables or data-validation authoring (planned)
+- Pivot tables (planned), or data-validation authoring beyond list dropdowns (list dropdowns shipped in 0.13.0, #375)
 - Excel macros (not planned to execute; preservation planned)
 
 ---
@@ -814,7 +813,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 **Status**: ✅ Production Ready (as of WI-07/08/09)
 
 **What's implemented**:
-- 107 built-in functions (SUM, SUMIF, COUNTIF, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, XIRR, XNPV, dynamic arrays, etc.)
+- 108 built-in functions (SUM, SUMIF, COUNTIF, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, XIRR, XNPV, dynamic arrays, etc.)
 - Full dependency graph with cycle detection
 - Safe evaluation with `evaluateWithDependencyCheck()`
 - Type coercion and error handling
@@ -833,7 +832,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 ### If you hit a limitation today:
 
 1. **Need advanced charts/shapes**: XL authors typed bar/line/pie charts + embedded pictures (#222, #221; scoped — see §12/§13) and preserves everything else through edits; reach for POI only for chart types XL doesn't model yet (scatter/area/combo/3D, shapes)
-2. **Unsupported formula function**: Store the formula as a string and let Excel recalculate on open (XL evaluates the 107 built-ins)
+2. **Unsupported formula function**: Store the formula as a string and let Excel recalculate on open (XL evaluates the 108 built-ins)
 3. **Streaming update of one sheet in a huge workbook**: Use the in-memory read → modify → write path (surgical modification preserves untouched parts)
 
 ---

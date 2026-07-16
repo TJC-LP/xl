@@ -12,19 +12,19 @@ import mill._, scalalib._
 
 object myproject extends ScalaModule {
   def scalaVersion = "3.8.3"
-  def ivyDeps = Agg(ivy"com.tjclp::xl:0.12.7")
+  def ivyDeps = Agg(ivy"com.tjclp::xl:0.13.0")
 }
 ```
 
 ### With sbt (build.sbt)
 ```scala
 scalaVersion := "3.8.3"
-libraryDependencies += "com.tjclp" %% "xl" % "0.12.7"
+libraryDependencies += "com.tjclp" %% "xl" % "0.13.0"
 ```
 
 ### With Scala CLI
 ```scala
-//> using dep com.tjclp::xl:0.12.7
+//> using dep com.tjclp::xl:0.13.0
 ```
 
 ### Individual Modules (Optional)
@@ -44,7 +44,7 @@ For scripts, skip the build setup entirely: a two-line `scala-cli` header and ON
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.7
+//> using dep com.tjclp::xl:0.13.0
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -307,14 +307,14 @@ cyclicSheet.evaluateWithDependencyCheck() match
   case Right(_) => // Won't happen
 ```
 
-**Available Functions** (107 total):
+**Available Functions** (108 total):
 - **Aggregate**: SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
 - **Statistical**: LARGE, SMALL, RANK, PERCENTILE, QUARTILE
 - **Conditional**: SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, SUMPRODUCT
 - **Logical / Selection**: IF, IFS, IFERROR, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
 - **Text**: CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE
 - **Date**: TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
-- **Math**: ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
+- **Math**: ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, MROUND, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
 - **Financial**: NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
 - **Lookup / Reference**: VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
 - **Dynamic Arrays**: TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER

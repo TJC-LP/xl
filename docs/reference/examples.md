@@ -119,7 +119,7 @@ parsedFormula.foreach { expr =>
 }
 ```
 
-**Note**: Evaluation is fully operational — 107 functions, whole-workbook `recalculate()`, dependency graphs with cycle detection. See the runnable scripts below.
+**Note**: Evaluation is fully operational — 108 functions, whole-workbook `recalculate()`, dependency graphs with cycle detection. See the runnable scripts below.
 
 ## 3) Example Scripts Catalog
 
