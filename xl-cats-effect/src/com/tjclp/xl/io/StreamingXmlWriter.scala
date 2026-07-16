@@ -284,13 +284,22 @@ object StreamingXmlWriter:
               XmlEvent.XmlString(err.toExcel, false),
               XmlEvent.EndTag(QName("v"))
             )
-          case _ => Nil // Empty, RichText, Formula, DateTime - don't write
+          case CellValue.DateTime(dt) =>
+            // GH-378: cached DateTime serializes as the Excel serial (t="n"), like Excel itself
+            List(
+              XmlEvent.StartTag(QName("v"), Nil, false),
+              XmlEvent.XmlString(XmlUtil.plainNumber(CellValue.dateTimeToExcelSerial(dt)), false),
+              XmlEvent.EndTag(QName("v"))
+            )
+          case _ => Nil // Empty, RichText, Formula - don't write
         }
-        // Cell type based on cached value
+        // Cell type based on cached value (mirrors OoxmlWorksheet.fromDomainWithMetadata)
         val cellType = cachedValue match
           case Some(CellValue.Number(_)) => "n"
           case Some(CellValue.Bool(_)) => "b"
           case Some(CellValue.Error(_)) => "e"
+          case Some(CellValue.Text(_)) => "str"
+          case Some(CellValue.DateTime(_)) => "n"
           case _ => ""
         (cellType, formulaEvents ++ cachedEvents)
 

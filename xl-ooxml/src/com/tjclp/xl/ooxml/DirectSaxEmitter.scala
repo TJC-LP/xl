@@ -431,6 +431,11 @@ object DirectSaxEmitter:
         writer.startElement("v")
         writer.writeCharacters(err.toExcel)
         writer.endElement()
+      case CellValue.DateTime(dt) =>
+        // GH-378: cached DateTime serializes as the Excel serial (t="n"), like Excel itself
+        writer.startElement("v")
+        writer.writeCharacters(XmlUtil.plainNumber(CellValue.dateTimeToExcelSerial(dt)))
+        writer.endElement()
       case _ => ()
     }
 
