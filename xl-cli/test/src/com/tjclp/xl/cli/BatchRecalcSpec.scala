@@ -96,6 +96,38 @@ class BatchRecalcSpec extends FunSuite:
       case Some(CellValue.Number(n)) => assertEquals(n.toDouble, expected)
       case other => fail(s"Expected cached Number($expected), got $other")
 
+  test("GH-344: recalc summary counts error VALUES and the error cell round-trips the file") {
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(5)))
+        .put(ARef.from0(2, 0), CellValue.Formula("1/0", None))
+    )
+    val out = tempXlsx()
+    val result = WriteCommands.recalc(wb, out, config).unsafeRunSync()
+
+    // Error values are data conditions: the run is clean, the summary reports the count
+    assert(result.contains("Recalculated 1 formula (1 error value)"), s"summary was: $result")
+
+    // The cached #DIV/0! survives the write/read round-trip (t="e" cell)
+    cachedFormulaValue(readBack(out), 2, 0) match
+      case Some(CellValue.Error(err)) => assertEquals(err.toExcel, "#DIV/0!")
+      case other => fail(s"expected cached #DIV/0!, got $other")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-344: recalc summary reports host failures and error values side by side") {
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ARef.from0(0, 0), CellValue.Formula("NOSUCHFN(1)", None))
+        .put(ARef.from0(1, 0), CellValue.Formula("1/0", None))
+    )
+    val out = tempXlsx()
+    val result = WriteCommands.recalc(wb, out, config).unsafeRunSync()
+    assert(result.contains("(1 error value)"), s"summary was: $result")
+    assert(result.contains("1 error ("), s"summary was: $result")
+    Files.deleteIfExists(out)
+  }
+
   test("batch put+putf caches the formula value (GH-352 repro)") {
     val wb = Workbook(Sheet("Data"))
     val ops = writeOps("""[

@@ -119,3 +119,27 @@ class EvalCommandSpec extends CatsEffectSuite:
       // D1 and E1 should NOT be evaluated (optimization - but result is same)
       assert(result.contains("450"), s"Expected 450, got: $result")
   }
+
+  test("GH-344: eval renders an error VALUE as Excel shows it (no exception)") {
+    for
+      wb <- createFormulaChainWorkbook
+      sheet = wb.sheets.head
+      result <- ReadCommands.eval(wb, Some(sheet), "=1/0", Nil)
+    yield assert(result.contains("Result: #DIV/0! (error)"), s"got: $result")
+  }
+
+  test("GH-344: eval over an error-valued precedent no longer aborts the closure walk") {
+    for
+      wb <- IO {
+        val sheet = Sheet("Test")
+          .put(ref"X1", CellValue.Formula("=1/0")) // precedent computes #DIV/0!
+          .put(ref"Y1", CellValue.Formula("=X1+1")) // dependent reads it
+        Workbook(Vector(sheet))
+      }
+      sheet = wb.sheets.head
+      result <- ReadCommands.eval(wb, Some(sheet), "=Y1", Nil)
+      caught <- ReadCommands.eval(wb, Some(sheet), "=IFERROR(Y1,42)", Nil)
+    yield
+      assert(result.contains("Result: #DIV/0! (error)"), s"got: $result")
+      assert(caught.contains("42"), s"got: $caught")
+  }

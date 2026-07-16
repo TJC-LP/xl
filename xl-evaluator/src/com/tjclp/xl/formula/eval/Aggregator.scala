@@ -63,13 +63,13 @@ trait Aggregator[A]:
   def countsEmpty: Boolean = false
 
   /**
-   * GH-337: whether a carried error ELEMENT in an evaluated expression array (e.g. `SUM((A1:A2)*1)`
-   * where the broadcast carried a #DIV/0!) fails the aggregate loudly.
+   * GH-337/GH-344: whether a carried error ELEMENT consumed by this aggregate — from an evaluated
+   * expression array (`SUM((A1:A2)*1)`) or a raw-range cell (`SUM(A1:A2)`, GH-344 item 6's
+   * resolve-then-police) — propagates as the element's Excel error VALUE.
    *
    * Excel propagates errors through nearly every aggregate; COUNT alone genuinely ignores them (it
    * counts numbers, and an error is not a number). COUNTA/COUNTBLANK are governed by their counts*
-   * modes instead (an error element is non-empty). Raw-RANGE arguments keep their pre-existing skip
-   * semantics — this flag governs expression-array elements only.
+   * modes instead (an error element is non-empty).
    */
   def propagatesErrors: Boolean = true
 

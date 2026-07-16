@@ -132,6 +132,11 @@ object WorkbookEvaluator:
      * [[CellEvalError]] and stays uncached; cycle participants are isolated (reported as circular,
      * their downstream dependents as blocked) while the acyclic remainder still evaluates.
      *
+     * GH-344: a formula that COMPUTES an Excel error value (#DIV/0!, #N/A, ...) evaluates
+     * successfully — the error value caches (`Formula(expr, Some(Error(code)))`), writes as a
+     * `t="e"` cell, and cascades to dependents like any precedent value. Such cells report via
+     * [[RecalcResult.excelErrors]], never [[RecalcResult.errors]].
+     *
      * {{{
      * val result = wb.recalculate()
      * result.errors.foreach(e => println(e.render))
@@ -433,7 +438,9 @@ object WorkbookEvaluator:
     val maxRounds = math.max(1, iterative.maxIter)
 
     // Convergence: numeric values compare by |Δ| < maxChange (strict, per Excel); non-numeric
-    // results converge only on exact equality.
+    // results converge only on exact equality — GH-344: an error VALUE arriving as a member's
+    // Right converges the moment it repeats (Error(Div0) == Error(Div0)), so error-valued cycle
+    // members fixpoint like any other value with no code change.
     def changeBelowThreshold(prev: CellValue, next: CellValue): Boolean =
       (prev, next) match
         case (CellValue.Number(a), CellValue.Number(b)) => (a - b).abs < iterative.maxChange

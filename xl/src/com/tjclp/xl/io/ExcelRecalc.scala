@@ -17,14 +17,17 @@ import com.tjclp.xl.workbooks.Workbook
  *
  * The workbook is written even when some formulas fail — errors are data conditions, reported in
  * the returned [[com.tjclp.xl.formula.eval.RecalcResult]]; failed cells stay uncached and Excel
- * recalculates them on open. Scripts that must not proceed on partial results use `result.toEither`
- * / `result.errors`:
+ * recalculates them on open. GH-344: a formula that COMPUTES an Excel error value (#DIV/0!, #N/A,
+ * ...) is a successful evaluation — the error value caches and writes as a `t="e"` cell; inspect
+ * `result.excelErrors` for those. Scripts that must not proceed on partial results use
+ * `result.toEither` / `result.errors` (and `result.excelErrors` to also reject error cells):
  *
  * {{{
  * import com.tjclp.xl.scripting.{*, given}
  *
  * val result = Excel.writeRecalculated(wb, "out.xlsx")
  * if !result.isClean then result.errors.foreach(e => println(e.render))
+ * result.excelErrors.foreach((sheet, ref, err) => println(s"$${sheet.value}!$${ref.toA1}: $${err.toExcel}"))
  * }}}
  *
  * Lives in the aggregate `xl` module — the only module that sees both the evaluator and the sync IO

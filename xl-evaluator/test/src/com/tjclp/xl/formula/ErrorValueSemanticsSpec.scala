@@ -424,3 +424,46 @@ class ErrorValueSemanticsSpec extends FunSuite:
       .put(ref"B3", num(30))
     assertEquals(sheet.evaluateFormula("=SUMPRODUCT(A1:A2,B1:B3)"), err(CellError.Value))
   }
+
+  // ===== recalculate() contract: error VALUES are results, not failures =====
+
+  test("GH-344: recalculate() caches error values, isClean holds, excelErrors reports them") {
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", CellValue.Formula("=1/0", None))
+      .put(ref"B1", CellValue.Formula("=A1+1", None))
+      .put(ref"C1", CellValue.Formula("=IFERROR(B1,7)", None))
+    val result = Workbook(sheet).recalculate()
+    // Every formula COMPUTED a value (two of them error values) — the run is clean
+    assert(result.isClean, s"expected clean, got: ${result.errors.map(_.render)}")
+    assertEquals(result.errors, Vector.empty)
+    // The error values cache like any computed value (Excel writes them as t="e")
+    def cachedValue(r: com.tjclp.xl.addressing.ARef): Option[CellValue] =
+      result.workbook("S").toOption.flatMap(_.cells.get(r)).map(_.value).collect {
+        case CellValue.Formula(_, Some(v)) => v
+      }
+    assertEquals(cachedValue(ref"A1"), Some(div0))
+    assertEquals(cachedValue(ref"B1"), Some(div0))
+    assertEquals(cachedValue(ref"C1"), Some(num(7)))
+    // excelErrors: deterministic (sheet, ref) order, code included
+    assertEquals(
+      result.excelErrors,
+      Vector(
+        (SheetName.unsafe("S"), ref"A1", CellError.Div0),
+        (SheetName.unsafe("S"), ref"B1", CellError.Div0)
+      )
+    )
+    assertEquals(result.toEither.map(_.sheets.size), Right(1))
+  }
+
+  test("GH-344: recalculate() keeps host failures in errors, disjoint from excelErrors") {
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", CellValue.Formula("=NOSUCHFN(1)", None))
+      .put(ref"B1", CellValue.Formula("=1/0", None))
+    val result = Workbook(sheet).recalculate()
+    assert(!result.isClean)
+    assertEquals(result.errors.map(_.ref), Vector(ref"A1"))
+    assertEquals(
+      result.excelErrors,
+      Vector((SheetName.unsafe("S"), ref"B1", CellError.Div0))
+    )
+  }
