@@ -472,6 +472,7 @@ object XlsxReader:
         sheetStates,
         commentPathMapping,
         date1904 = ooxmlWb.date1904,
+        calcPr = ooxmlWb.calcPrSettings,
         activeSheetIndex = activeSheetIndex,
         docProps,
         drawingPathMapping = parsedSheets.drawingPathMapping,
@@ -1308,6 +1309,8 @@ object XlsxReader:
    *   "xl/comments1.xml")
    * @param date1904
    *   True when workbookPr declares the 1904 date system (GH-243)
+   * @param calcPr
+   *   Iterative-calculation settings parsed from `<calcPr>` (GH-373)
    * @param activeSheetIndex
    *   Active tab parsed from bookViews, already clamped to the sheet count (GH-294)
    * @param docProps
@@ -1325,6 +1328,7 @@ object XlsxReader:
     sheetStates: Map[SheetName, Option[String]],
     commentPathMapping: Map[SheetName, String],
     date1904: Boolean,
+    calcPr: Option[com.tjclp.xl.workbooks.CalcPr],
     activeSheetIndex: Int,
     docProps: DocProps.Data,
     drawingPathMapping: Map[SheetName, String],
@@ -1374,7 +1378,8 @@ object XlsxReader:
           theme = theme,
           definedNames = remainingNames,
           sheetStates = sheetStates,
-          date1904 = date1904
+          date1904 = date1904,
+          calcPr = calcPr
         )
       sourceContextEither.map(ctx =>
         Workbook(

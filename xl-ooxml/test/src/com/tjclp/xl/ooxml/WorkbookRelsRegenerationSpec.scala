@@ -266,6 +266,54 @@ class WorkbookRelsRegenerationSpec extends FunSuite:
     assertEquals(back.sheets(0)(ref"A2").value, CellValue.Text("héllo wörld"))
   }
 
+  test("GH-373: authoring iterate onto formulas-lo.xlsx flips iterate and keeps refMode") {
+    val (_, wb) = readFixture("formulas-lo.xlsx")
+    // the LO fixture ships <calcPr iterateCount="100" refMode="A1" iterate="false" iterateDelta="0.0001"/>
+    assertEquals(
+      wb.metadata.calcPr,
+      Some(
+        CalcPr(
+          iterativeCalculation = false,
+          maxIterations = Some(100),
+          maxChange = Some(BigDecimal("0.0001"))
+        )
+      )
+    )
+    val authored = wb.withCalcPr(
+      CalcPr(
+        iterativeCalculation = true,
+        maxIterations = Some(100),
+        maxChange = Some(BigDecimal("0.0001"))
+      )
+    )
+    val out = writeTo(authored, "lo-calcpr")
+    val calcPr = (parseEntry(out, "xl/workbook.xml") \ "calcPr").headOption
+      .getOrElse(fail("calcPr dropped"))
+    assertEquals(calcPr \@ "iterate", "1", "authored iterate must flip on")
+    assertEquals(calcPr \@ "iterateCount", "100")
+    assertEquals(calcPr \@ "iterateDelta", "0.0001")
+    assertEquals(calcPr \@ "refMode", "A1", "unmodeled refMode dropped by the overlay")
+    // preserved siblings still ride through on this metadata write (the GH-320 carry-through)
+    val workbookElem = parseEntry(out, "xl/workbook.xml")
+    assert((workbookElem \ "fileVersion").nonEmpty, "fileVersion dropped")
+    assert(
+      (workbookElem \ "extLst").exists(_.toString.contains("extCalcPr")),
+      "loext extLst dropped"
+    )
+    val back = reread(out)
+    assertEquals(
+      back.metadata.calcPr,
+      Some(
+        CalcPr(
+          iterativeCalculation = true,
+          maxIterations = Some(100),
+          maxChange = Some(BigDecimal("0.0001"))
+        )
+      )
+    )
+    assertEquals(back.sheets(0)(ref"A5").value, CellValue.Number(BigDecimal(50)))
+  }
+
   // ===== new sheets allocate fresh non-colliding ids =====
 
   test("GH-320: adding a sheet to small-values-lo.xlsx allocates a fresh rId above the max") {

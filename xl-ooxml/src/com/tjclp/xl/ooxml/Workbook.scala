@@ -11,7 +11,7 @@ private val defaultWorkbookScope =
   NamespaceBinding(null, nsSpreadsheetML, NamespaceBinding("r", nsRelationships, TopScope))
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.workbooks.DefinedName
+import com.tjclp.xl.workbooks.{CalcPr, DefinedName}
 
 /**
  * Sheet reference in workbook.xml
@@ -81,6 +81,9 @@ case class OoxmlWorkbook(
    * serials then count days since 1904-01-01 instead of the default 1900 system.
    */
   def date1904: Boolean = OoxmlWorkbook.parseDate1904(workbookPr)
+
+  /** The typed iterative-calculation settings of the raw `<calcPr>` element (GH-373). */
+  def calcPrSettings: Option[CalcPr] = OoxmlWorkbook.parseCalcPr(calcPr)
 
   /**
    * Overlay the model's active tab onto the bookViews element (GH-294, model wins). See
@@ -267,7 +270,8 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
           .withActiveTab(clampActiveTab(wb.activeSheetIndex, wb.sheets.size))
           .copy(
             workbookPr = reconcileDate1904(p.workbookPr, wb.metadata.date1904),
-            definedNames = reconcileDefinedNames(p.definedNames, PrintNames.effective(wb))
+            definedNames = reconcileDefinedNames(p.definedNames, PrintNames.effective(wb)),
+            calcPr = reconcileCalcPr(p.calcPr, wb.metadata.calcPr)
           )
       case None =>
         val sheetRefs = wb.sheets.zipWithIndex.map { case (sheet, idx) =>
@@ -288,7 +292,10 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
           workbookPr = workbookPr,
           // GH-294: fresh workbooks always ship bookViews/activeTab (Excel always writes bookViews)
           bookViews = buildBookViews(None, clampActiveTab(wb.activeSheetIndex, wb.sheets.size)),
-          definedNames = buildDefinedNames(PrintNames.effective(wb))
+          definedNames = buildDefinedNames(PrintNames.effective(wb)),
+          // GH-373: scratch builds emit authored iterative-calculation settings (no calcId needed,
+          // the LibreOffice precedent)
+          calcPr = reconcileCalcPr(None, wb.metadata.calcPr)
         )
 
   /**
@@ -315,6 +322,56 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
         case (Some(pr), false) => Some(pr.copy(attributes = pr.attributes.remove("date1904")))
         case (None, true) => Some(elem("workbookPr", "date1904" -> "1")())
         case (None, false) => None
+
+  /**
+   * Parse the iterative-calculation attributes of a raw `<calcPr>` element (GH-373). OOXML
+   * CT_CalcPr spells them `iterate` / `iterateCount` / `iterateDelta`; the model uses friendly
+   * names. Some only when at least one of the three attributes is present — a calcPr carrying only
+   * unmodeled attributes (calcId, refMode, ...) parses to None and rides through on write. Lenient:
+   * malformed numeric values contribute no field (a read must never fail on them).
+   */
+  def parseCalcPr(calcPr: Option[Elem]): Option[CalcPr] =
+    calcPr.flatMap { e =>
+      val attrs = e.attributes.asAttrMap
+      val iterate = attrs.get("iterate")
+      val iterateCount = attrs.get("iterateCount")
+      val iterateDelta = attrs.get("iterateDelta")
+      Option.when(iterate.isDefined || iterateCount.isDefined || iterateDelta.isDefined)(
+        CalcPr(
+          iterativeCalculation = iterate.exists(v => v == "1" || v == "true"),
+          maxIterations = iterateCount.flatMap(_.toIntOption),
+          maxChange = iterateDelta.flatMap(s => scala.util.Try(BigDecimal(s.trim)).toOption)
+        )
+      )
+    }
+
+  /**
+   * Reconcile the `<calcPr>` iterative-calculation attributes with the model (model wins, GH-373 —
+   * the reconcileDate1904 pattern) while every unmodeled preserved attribute (calcId,
+   * fullCalcOnLoad, refMode, ...) rides through. Byte-identical when the model agrees with the
+   * preserved spelling; a fresh element is built when nothing is preserved (no calcId needed — the
+   * LibreOffice precedent). A model of None strips the three modeled attributes and keeps the rest.
+   */
+  def reconcileCalcPr(preservedPr: Option[Elem], model: Option[CalcPr]): Option[Elem] =
+    if parseCalcPr(preservedPr) == model then preservedPr
+    else
+      val modelAttrs: Seq[(String, String)] = model.toList.flatMap { cp =>
+        (if cp.iterativeCalculation then List("iterate" -> "1") else Nil) ++
+          cp.maxIterations.map(n => "iterateCount" -> n.toString).toList ++
+          cp.maxChange.map(d => "iterateDelta" -> d.toString).toList
+      }
+      preservedPr match
+        case None =>
+          // model must be Some here (the equal-guard covers None/None); an all-default CalcPr
+          // carries no attributes and emits nothing
+          if modelAttrs.isEmpty then None else Some(elem("calcPr", modelAttrs*)())
+        case Some(pr) =>
+          val stripped =
+            pr.attributes.remove("iterate").remove("iterateCount").remove("iterateDelta")
+          val overlaid = modelAttrs.foldRight(stripped) { case ((k, v), acc) =>
+            new UnprefixedAttribute(k, v, acc)
+          }
+          Some(pr.copy(attributes = overlaid))
 
   /** Clamp an active-tab index into [0, sheetCount-1] (write side; the reader clamps too). */
   def clampActiveTab(index: Int, sheetCount: Int): Int =

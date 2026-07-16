@@ -72,7 +72,7 @@ object api:
   export patch.Patch
 
   // Workbook types
-  export workbooks.{Workbook, WorkbookMetadata}
+  export workbooks.{Workbook, WorkbookMetadata, CalcPr}
 
   // Context types (for surgical modification)
   export context.{SourceContext, SourceFingerprint}
