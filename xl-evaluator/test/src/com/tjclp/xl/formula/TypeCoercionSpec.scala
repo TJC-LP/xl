@@ -275,6 +275,137 @@ class TypeCoercionSpec extends FunSuite:
   }
 
   // ============================================================================
+  // GH-385: blank cells coerce to 0 in scalar numeric positions
+  // ============================================================================
+
+  test("GH-385: =A1+1 with explicitly Empty A1 is 1 (blank-as-zero)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Empty)
+    assertEquals(sheet.evaluateFormula("=A1+1"), Right(CellValue.Number(BigDecimal(1))))
+  }
+
+  test("GH-385: =A1+1 with absent A1 is 1 (blank-as-zero)") {
+    val sheet = sheetWith(ref"Z9" -> CellValue.Text("unrelated"))
+    assertEquals(sheet.evaluateFormula("=A1+1"), Right(CellValue.Number(BigDecimal(1))))
+  }
+
+  test("GH-385: blank cells are 0 across the scalar operators (*, %, unary -, ^)") {
+    val sheet = sheetWith(ref"Z9" -> CellValue.Text("unrelated"))
+    assertEquals(sheet.evaluateFormula("=A1*1"), Right(CellValue.Number(BigDecimal(0))))
+    assertEquals(sheet.evaluateFormula("=A1%"), Right(CellValue.Number(BigDecimal(0))))
+    assertEquals(sheet.evaluateFormula("=-A1"), Right(CellValue.Number(BigDecimal(0))))
+    assertEquals(sheet.evaluateFormula("=A1^2"), Right(CellValue.Number(BigDecimal(0))))
+  }
+
+  test("GH-385: blank ref as a scalar function argument is 0 (=ABS(A1))") {
+    val sheet = sheetWith(ref"Z9" -> CellValue.Text("unrelated"))
+    assertEquals(sheet.evaluateFormula("=ABS(A1)"), Right(CellValue.Number(BigDecimal(0))))
+  }
+
+  test("GH-385: SUM args mixing blank direct refs no longer reject (issue repro)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(10)))
+    // A2 is blank: Excel evaluates SUM(A1, A2) = 10 rather than a strict-typing error
+    assertEquals(sheet.evaluateFormula("=SUM(A1, A2)"), Right(CellValue.Number(BigDecimal(10))))
+  }
+
+  test("GH-385: an error-valued cell still propagates through =A1+1 (not masked to 1)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Error(com.tjclp.xl.cells.CellError.Div0))
+    val result = sheet.evaluateFormula("=A1+1")
+    assert(result.isLeft, s"expected error propagation for #DIV/0! cell, got $result")
+  }
+
+  test("GH-385: text cell in numeric position is still a clean error (not 0)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Text("abc"))
+    val result = sheet.evaluateFormula("=A1+1")
+    assert(result.isLeft, s"expected error for text cell in numeric position, got $result")
+  }
+
+  test("GH-385: range aggregates still SKIP blanks while scalar refs coerce to 0") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      // A2 deliberately blank
+      ref"A3" -> CellValue.Number(BigDecimal(20))
+    )
+    // Both must hold simultaneously: blank-skip in range folds, blank-as-zero at scalar refs
+    assertEquals(sheet.evaluateFormula("=SUM(A1:A3)"), Right(CellValue.Number(BigDecimal(30))))
+    assertEquals(sheet.evaluateFormula("=COUNT(A1:A3)"), Right(CellValue.Number(BigDecimal(2))))
+    assertEquals(sheet.evaluateFormula("=MIN(A1:A3)"), Right(CellValue.Number(BigDecimal(10))))
+    assertEquals(sheet.evaluateFormula("=AVERAGE(A1:A3)"), Right(CellValue.Number(BigDecimal(15))))
+    assertEquals(sheet.evaluateFormula("=A2+1"), Right(CellValue.Number(BigDecimal(1))))
+  }
+
+  // ============================================================================
+  // GH-385: date functions coerce raw Excel serial Numbers in date positions
+  // ============================================================================
+
+  private val serialDate = LocalDateTime.of(2024, 3, 15, 0, 0)
+  private val dateSerial = BigDecimal(CellValue.dateTimeToExcelSerial(serialDate))
+
+  test("GH-385: YEAR/MONTH/DAY accept a raw serial Number cell") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(dateSerial))
+    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Number(BigDecimal(2024))))
+    assertEquals(sheet.evaluateFormula("=MONTH(A1)"), Right(CellValue.Number(BigDecimal(3))))
+    assertEquals(sheet.evaluateFormula("=DAY(A1)"), Right(CellValue.Number(BigDecimal(15))))
+  }
+
+  test("GH-385: EOMONTH accepts a raw serial Number cell (issue repro)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(dateSerial))
+    sheet.evaluateFormula("=EOMONTH(A1, 0)") match
+      case Right(CellValue.DateTime(dt)) =>
+        assertEquals(dt.toLocalDate, java.time.LocalDate.of(2024, 3, 31))
+      case other => fail(s"Expected DateTime, got $other")
+  }
+
+  test("GH-385: EDATE accepts a raw serial Number cell") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(dateSerial))
+    sheet.evaluateFormula("=EDATE(A1, 1)") match
+      case Right(CellValue.DateTime(dt)) =>
+        assertEquals(dt.toLocalDate, java.time.LocalDate.of(2024, 4, 15))
+      case other => fail(s"Expected DateTime, got $other")
+  }
+
+  test("GH-385: YEARFRAC accepts raw serial Number cells") {
+    val start = BigDecimal(CellValue.dateTimeToExcelSerial(LocalDateTime.of(2024, 1, 1, 0, 0)))
+    val end = BigDecimal(CellValue.dateTimeToExcelSerial(LocalDateTime.of(2025, 1, 1, 0, 0)))
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(start),
+      ref"B1" -> CellValue.Number(end)
+    )
+    assertEquals(sheet.evaluateFormula("=YEARFRAC(A1, B1)"), Right(CellValue.Number(BigDecimal(1))))
+  }
+
+  test("GH-385: fractional serial (date + time) still lands on the right date") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(dateSerial + BigDecimal("0.5")))
+    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Number(BigDecimal(2024))))
+    assertEquals(sheet.evaluateFormula("=DAY(A1)"), Right(CellValue.Number(BigDecimal(15))))
+  }
+
+  test("GH-385: formula cell with cached serial Number coerces in date position") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Formula("=B1*1", Some(CellValue.Number(dateSerial)))
+    )
+    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Number(BigDecimal(2024))))
+  }
+
+  test("GH-385: formula cell with cached DateTime coerces in date position") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Formula("=DATE(2024,3,15)", Some(CellValue.DateTime(serialDate)))
+    )
+    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Number(BigDecimal(2024))))
+  }
+
+  test("GH-385: negative serial in a date position is a clean error") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(-1)))
+    val result = sheet.evaluateFormula("=YEAR(A1)")
+    assert(result.isLeft, s"expected error for negative serial in date position, got $result")
+  }
+
+  test("GH-385: oversized serial (> 9999-12-31) in a date position is a clean error") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(2958466)))
+    val result = sheet.evaluateFormula("=YEAR(A1)")
+    assert(result.isLeft, s"expected error for oversized serial in date position, got $result")
+  }
+
+  // ============================================================================
   // GH-306: cross-type CALL-RESULT coercion in typed argument positions
   // (the wave-3 let-rand reviewer's probe list + totality sweep)
   // ============================================================================

@@ -34,8 +34,12 @@ import scala.math.BigDecimal
  */
 private[formula] object ScalarCoercion:
 
-  /** Largest Excel date serial (9999-12-31); guards excelSerialToDateTime against overflow. */
-  private val MaxExcelDateSerial = BigDecimal(2958465)
+  /**
+   * Largest Excel date serial (9999-12-31); guards excelSerialToDateTime against overflow. Shared
+   * with TExprDecoders.decodeAsDate (GH-385) so the direct-cell and Coerced date boundaries accept
+   * the same serial domain.
+   */
+  val MaxExcelDateSerial: BigDecimal = BigDecimal(2958465)
 
   /** Collapse an ArrayResult to its scalar value: top-left, Empty when empty (GH-302). */
   def collapseArray(ar: ArrayResult): CellValue =
