@@ -11,7 +11,7 @@ import com.tjclp.xl.agent.benchmark.skills.{CaseFailure, Skill, SkillContext}
 import com.tjclp.xl.agent.benchmark.task.*
 import com.tjclp.xl.agent.benchmark.tracing.ConversationTracer
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import java.time.{Duration, Instant}
 
 // ============================================================================
@@ -355,7 +355,8 @@ private class DefaultBenchmarkEngine(
   /**
    * Total fallback for a work unit whose Skill raised: best-effort save of a metadata-only trace
    * (error + model, zero events) so even third-party skill crashes leave forensics on disk (issue
-   * #340).
+   * #340). A skill may have saved its own, richer trace before raising — that one is never
+   * overwritten: the fallback is diverted to a `-engine-fallback` case dir instead (issue #344).
    */
   private def lastResortFailure(
     unit: WorkUnit,
@@ -364,14 +365,26 @@ private class DefaultBenchmarkEngine(
     error: Throwable
   ): IO[WorkUnitResult] =
     val message = s"Execution failed: ${CaseFailure.describe(error)}"
+    val primaryDir = ConversationTracer.caseDir(
+      config.outputDir,
+      unit.task.taskIdValue,
+      unit.skillName,
+      unit.testCase.caseNum,
+      dirSuffix = ""
+    )
     val saveTrace = for
+      hasOwnTrace <- IO.blocking(
+        Files.exists(primaryDir.resolve("conversation.json")) ||
+          Files.exists(primaryDir.resolve("conversation.md"))
+      )
       tracer <- ConversationTracer.create(
         outputDir = config.outputDir,
         taskId = unit.task.taskIdValue,
         skillName = unit.skillName,
         caseNum = unit.testCase.caseNum,
         streaming = false,
-        model = Some(agentConfig.model)
+        model = Some(agentConfig.model),
+        dirSuffix = if hasOwnTrace then ConversationTracer.EngineFallbackDirSuffix else ""
       )
       _ <- tracer.complete(AgentTokenUsage.zero, passed = false, error = Some(message)).attempt
       saved <- tracer.save().attempt

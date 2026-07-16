@@ -48,6 +48,26 @@ class ConversationTracerSpec extends CatsEffectSuite:
       )
   }
 
+  tempDir.test("a dirSuffix diverts save() to a suffixed case dir (issue #344)") { dir =>
+    for
+      tracer <- ConversationTracer.create(
+        outputDir = dir,
+        taskId = "999",
+        skillName = "xl",
+        caseNum = 2,
+        dirSuffix = ConversationTracer.EngineFallbackDirSuffix
+      )
+      _ <- tracer.complete(TokenUsage.zero, passed = false, error = Some("boom"))
+      traceDir <- tracer.save()
+    yield
+      assertEquals(
+        traceDir,
+        dir.resolve("tasks").resolve("999").resolve("xl").resolve("case2-engine-fallback")
+      )
+      assert(Files.exists(traceDir.resolve("conversation.json")))
+      assert(Files.exists(traceDir.resolve("conversation.md")))
+  }
+
   tempDir.test("stop reason is null in metadata when never provided") { dir =>
     for
       tracer <- ConversationTracer.create(
