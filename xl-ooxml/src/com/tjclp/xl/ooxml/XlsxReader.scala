@@ -1316,7 +1316,8 @@ object XlsxReader:
    * @param date1904
    *   True when workbookPr declares the 1904 date system (GH-243)
    * @param calcPr
-   *   Iterative-calculation settings parsed from `<calcPr>` (GH-373)
+   *   Modeled `<calcPr>` settings — iterate triple plus calcMode/fullCalcOnLoad/calcId (GH-373,
+   *   GH-400)
    * @param activeSheetIndex
    *   Active tab parsed from bookViews, already clamped to the sheet count (GH-294)
    * @param docProps

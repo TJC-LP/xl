@@ -15,10 +15,11 @@ import com.tjclp.xl.styles.color.ThemePalette
  *   Read from workbookPr and preserved on write; DateTime cells are serialized with the matching
  *   epoch (see `CellValue.dateTimeToExcelSerial(dt, date1904)`).
  * @param calcPr
- *   Iterative-calculation settings of `<calcPr>` (GH-373). None reflects a file whose calcPr
- *   carries no iterate attributes (or has no calcPr at all); unmodeled calcPr attributes (calcId,
- *   fullCalcOnLoad, refMode, ...) ride through on write either way. Author via
- *   `Workbook.withCalcPr` so surgical writes see the change.
+ *   Modeled `<calcPr>` settings (GH-373, GH-400): the iterate triple plus calcMode / fullCalcOnLoad
+ *   / calcId. None reflects a file whose calcPr carries none of the modeled attributes (or has no
+ *   calcPr at all); still-unmodeled attributes (refMode, concurrentCalc, ...) ride through on write
+ *   either way. Author via `Workbook.withCalcPr` so surgical writes see the change; see [[CalcPr]]
+ *   for the per-family write semantics.
  */
 final case class WorkbookMetadata(
   creator: Option[String] = None,

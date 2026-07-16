@@ -11,7 +11,7 @@ private val defaultWorkbookScope =
   NamespaceBinding(null, nsSpreadsheetML, NamespaceBinding("r", nsRelationships, TopScope))
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.workbooks.{CalcPr, DefinedName}
+import com.tjclp.xl.workbooks.{CalcMode, CalcPr, DefinedName}
 
 /**
  * Sheet reference in workbook.xml
@@ -82,7 +82,7 @@ case class OoxmlWorkbook(
    */
   def date1904: Boolean = OoxmlWorkbook.parseDate1904(workbookPr)
 
-  /** The typed iterative-calculation settings of the raw `<calcPr>` element (GH-373). */
+  /** The typed modeled settings of the raw `<calcPr>` element (GH-373, GH-400). */
   def calcPrSettings: Option[CalcPr] = OoxmlWorkbook.parseCalcPr(calcPr)
 
   /**
@@ -293,8 +293,8 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
           // GH-294: fresh workbooks always ship bookViews/activeTab (Excel always writes bookViews)
           bookViews = buildBookViews(None, clampActiveTab(wb.activeSheetIndex, wb.sheets.size)),
           definedNames = buildDefinedNames(PrintNames.effective(wb)),
-          // GH-373: scratch builds emit authored iterative-calculation settings (no calcId needed,
-          // the LibreOffice precedent)
+          // GH-373/GH-400: scratch builds emit all authored calcPr settings — the iterate triple
+          // plus calcMode/fullCalcOnLoad/calcId (no calcId unless authored, the LO precedent)
           calcPr = reconcileCalcPr(None, wb.metadata.calcPr)
         )
 
@@ -323,51 +323,95 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
         case (None, true) => Some(elem("workbookPr", "date1904" -> "1")())
         case (None, false) => None
 
+  /** OOXML ST_CalcMode token for a [[CalcMode]] (GH-400). */
+  private def calcModeToken(mode: CalcMode): String = mode match
+    case CalcMode.Manual => "manual"
+    case CalcMode.Auto => "auto"
+    case CalcMode.AutoNoTable => "autoNoTable"
+
+  /** Total ST_CalcMode parse (GH-400): unknown tokens yield None — a read never fails on them. */
+  private def parseCalcModeToken(value: String): Option[CalcMode] = value match
+    case "manual" => Some(CalcMode.Manual)
+    case "auto" => Some(CalcMode.Auto)
+    case "autoNoTable" => Some(CalcMode.AutoNoTable)
+    case _ => None
+
+  /** Total xsd:boolean parse: canonical and lexical forms; anything else yields None. */
+  private def parseXsdBoolean(value: String): Option[Boolean] = value match
+    case "1" | "true" => Some(true)
+    case "0" | "false" => Some(false)
+    case _ => None
+
+  /** The CT_CalcPr attributes the model represents (GH-373 iterate triple + GH-400 facts). */
+  private val modeledCalcPrAttrs =
+    Seq("iterate", "iterateCount", "iterateDelta", "calcMode", "fullCalcOnLoad", "calcId")
+
   /**
-   * Parse the iterative-calculation attributes of a raw `<calcPr>` element (GH-373). OOXML
-   * CT_CalcPr spells them `iterate` / `iterateCount` / `iterateDelta`; the model uses friendly
-   * names. Some only when at least one of the three attributes is present — a calcPr carrying only
-   * unmodeled attributes (calcId, refMode, ...) parses to None and rides through on write. Lenient:
-   * malformed numeric values contribute no field (a read must never fail on them).
+   * Parse the modeled attributes of a raw `<calcPr>` element: the iterative-calculation triple
+   * (GH-373 — OOXML spells it `iterate` / `iterateCount` / `iterateDelta`, the model uses friendly
+   * names) plus `calcMode` / `fullCalcOnLoad` / `calcId` (GH-400). Some only when at least one
+   * modeled attribute NAME is present — a calcPr carrying only still-unmodeled attributes (refMode,
+   * concurrentCalc, ...) parses to None and rides through on write. Lenient: malformed values
+   * (unknown calcMode token, non-numeric calcId, ...) contribute no field — a read must never fail
+   * on them.
    */
   def parseCalcPr(calcPr: Option[Elem]): Option[CalcPr] =
     calcPr.flatMap { e =>
       val attrs = e.attributes.asAttrMap
-      val iterate = attrs.get("iterate")
-      val iterateCount = attrs.get("iterateCount")
-      val iterateDelta = attrs.get("iterateDelta")
-      Option.when(iterate.isDefined || iterateCount.isDefined || iterateDelta.isDefined)(
+      Option.when(modeledCalcPrAttrs.exists(attrs.contains))(
         CalcPr(
-          iterativeCalculation = iterate.exists(v => v == "1" || v == "true"),
-          maxIterations = iterateCount.flatMap(_.toIntOption),
-          maxChange = iterateDelta.flatMap(s => scala.util.Try(BigDecimal(s.trim)).toOption)
+          iterativeCalculation = attrs.get("iterate").flatMap(parseXsdBoolean).getOrElse(false),
+          maxIterations = attrs.get("iterateCount").flatMap(_.toIntOption),
+          maxChange =
+            attrs.get("iterateDelta").flatMap(s => scala.util.Try(BigDecimal(s.trim)).toOption),
+          calcMode = attrs.get("calcMode").flatMap(parseCalcModeToken),
+          fullCalcOnLoad = attrs.get("fullCalcOnLoad").flatMap(parseXsdBoolean),
+          calcId = attrs.get("calcId").flatMap(_.toIntOption)
         )
       )
     }
 
   /**
-   * Reconcile the `<calcPr>` iterative-calculation attributes with the model (model wins, GH-373 —
-   * the reconcileDate1904 pattern) while every unmodeled preserved attribute (calcId,
-   * fullCalcOnLoad, refMode, ...) rides through. Byte-identical when the model agrees with the
-   * preserved spelling; a fresh element is built when nothing is preserved (no calcId needed — the
-   * LibreOffice precedent). A model of None strips the three modeled attributes and keeps the rest.
+   * Reconcile the `<calcPr>` modeled attributes with the model (model wins, GH-373/GH-400 — the
+   * reconcileDate1904 pattern) while every still-unmodeled preserved attribute (refMode,
+   * concurrentCalc, ...) rides through. Byte-identical when the model agrees with the preserved
+   * spelling; a fresh element is built when nothing is preserved (no calcId needed unless authored
+   * — the LibreOffice precedent), with ascending-sorted attributes on both XML backends.
+   *
+   * Two write semantics by attribute family:
+   *   - Iterate triple (GH-373): the model is the full truth — a default/None field emits no
+   *     attribute and removes a stale preserved one (absent means the Excel defaults 100/0.001). A
+   *     model of None strips the triple too.
+   *   - Facts (GH-400: calcMode / fullCalcOnLoad / calcId): Some(x) overlays x in place; a None
+   *     field NEVER strips a preserved attribute — nothing is emitted on scratch and the preserved
+   *     spelling rides through on source-backed writes, exactly like still-unmodeled attributes.
    */
   def reconcileCalcPr(preservedPr: Option[Elem], model: Option[CalcPr]): Option[Elem] =
     if parseCalcPr(preservedPr) == model then preservedPr
     else
-      val modelAttrs: Seq[(String, String)] = model.toList.flatMap { cp =>
+      val iterateAttrs: Seq[(String, String)] = model.toList.flatMap { cp =>
         (if cp.iterativeCalculation then List("iterate" -> "1") else Nil) ++
           cp.maxIterations.map(n => "iterateCount" -> n.toString).toList ++
           cp.maxChange.map(d => "iterateDelta" -> d.toString).toList
       }
+      val factAttrs: Seq[(String, String)] = model.toList.flatMap { cp =>
+        cp.calcMode.map(m => "calcMode" -> calcModeToken(m)).toList ++
+          cp.fullCalcOnLoad.map(b => "fullCalcOnLoad" -> (if b then "1" else "0")).toList ++
+          cp.calcId.map(id => "calcId" -> id.toString).toList
+      }
+      val modelAttrs = (iterateAttrs ++ factAttrs).sortBy(_._1)
       preservedPr match
         case None =>
           // model must be Some here (the equal-guard covers None/None); an all-default CalcPr
-          // carries no attributes and emits nothing
-          if modelAttrs.isEmpty then None else Some(elem("calcPr", modelAttrs*)())
+          // carries no attributes and emits nothing. elemOrdered keeps the pre-sorted order on
+          // the scala-xml backend (elem's fold would reverse it); the SAX backend re-sorts
+          // ascending itself — so both backends emit identical, deterministic attribute order.
+          if modelAttrs.isEmpty then None else Some(elemOrdered("calcPr", modelAttrs*)())
         case Some(pr) =>
-          val stripped =
-            pr.attributes.remove("iterate").remove("iterateCount").remove("iterateDelta")
+          // strip the iterate triple always (model truth) and the fact keys the model re-sets
+          // (replace, never duplicate); a None fact key is NOT stripped and rides through
+          val stripped = (Seq("iterate", "iterateCount", "iterateDelta") ++ factAttrs.map(_._1))
+            .foldLeft(pr.attributes)(_.remove(_))
           val overlaid = modelAttrs.foldRight(stripped) { case ((k, v), acc) =>
             new UnprefixedAttribute(k, v, acc)
           }

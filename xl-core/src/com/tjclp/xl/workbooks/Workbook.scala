@@ -409,15 +409,17 @@ final case class Workbook(
     copy(metadata = newMetadata, sourceContext = sourceContext.map(_.markMetadataModified))
 
   /**
-   * Set the workbook's iterative-calculation properties (GH-373), serialized as `<calcPr>`
-   * attributes (`iterate` / `iterateCount` / `iterateDelta`). Unmodeled calcPr attributes of a
-   * source file (calcId, fullCalcOnLoad, refMode, ...) ride through unchanged. Marks metadata
-   * modified so a surgical write regenerates workbook.xml instead of copying the source verbatim
-   * (which would silently drop the change — the GH-294 setActiveSheet precedent).
+   * Set the workbook's calculation properties (GH-373, GH-400), serialized as `<calcPr>`
+   * attributes: the iterate triple (`iterate` / `iterateCount` / `iterateDelta`) plus `calcMode`,
+   * `fullCalcOnLoad` and `calcId`. A None fact field (calcMode / fullCalcOnLoad / calcId) leaves a
+   * source file's preserved attribute untouched; still-unmodeled attributes (refMode,
+   * concurrentCalc, ...) always ride through — see [[CalcPr]] for the per-family semantics. Marks
+   * metadata modified so a surgical write regenerates workbook.xml instead of copying the source
+   * verbatim (which would silently drop the change — the GH-294 setActiveSheet precedent).
    *
-   * Example (the circular-LBO shape: bounded iteration like Excel's UI defaults):
+   * Example (the TJC house shape: sticky data tables plus bounded iteration):
    * {{{
-   * wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))
+   * wb.withCalcPr(CalcPr(iterativeCalculation = true, calcMode = Some(CalcMode.AutoNoTable), calcId = Some(191029)))
    * }}}
    */
   def withCalcPr(calcPr: CalcPr): Workbook =
@@ -427,9 +429,10 @@ final case class Workbook(
     )
 
   /**
-   * Clear the modeled iterative-calculation settings (GH-373): the three iterate attributes are
-   * stripped from `<calcPr>` on write while unmodeled attributes (calcId, refMode, ...) survive.
-   * Marks metadata modified (see [[withCalcPr]]).
+   * Clear the modeled calculation settings (GH-373): the three iterate attributes are stripped from
+   * `<calcPr>` on write while every other attribute — the independent facts (calcMode,
+   * fullCalcOnLoad, calcId; a cleared model has no opinion on them, GH-400) and still-unmodeled
+   * attributes (refMode, ...) — survives. Marks metadata modified (see [[withCalcPr]]).
    */
   def removeCalcPr: Workbook =
     copy(
