@@ -139,3 +139,69 @@ class ErrorValueSemanticsSpec extends FunSuite:
     assertEquals(sheet.evaluateFormula("=ISERROR(1<A1)"), Right(CellValue.Bool(true)))
     assertEquals(sheet.evaluateFormula("=ISERR(1<A1)"), Right(CellValue.Bool(false)))
   }
+
+  // ===== Items 1+6: aggregates propagate error VALUES; COUNT-family policies pinned =====
+
+  test("GH-344: raw-range aggregates propagate an error cell as the error VALUE") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(1))
+      .put(ref"A2", div0)
+      .put(ref"A3", num(2))
+    assertEquals(sheet.evaluateFormula("=SUM(A1:A3)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=MIN(A1:A3)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=MAX(A1:A3)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=AVERAGE(A1:A3)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=MEDIAN(A1:A3)"), err(CellError.Div0))
+    // IFERROR still catches the aggregate's error
+    assertEquals(sheet.evaluateFormula("=IFERROR(SUM(A1:A3),0)"), Right(num(0)))
+  }
+
+  test("GH-344: COUNT skips error cells; COUNTA counts them; COUNTBLANK does not") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(1))
+      .put(ref"A2", div0)
+      .put(ref"A3", num(2))
+    assertEquals(sheet.evaluateFormula("=COUNT(A1:A3)"), Right(num(2)))
+    assertEquals(sheet.evaluateFormula("=COUNTA(A1:A3)"), Right(num(3)))
+    assertEquals(sheet.evaluateFormula("=COUNTBLANK(A1:A3)"), Right(num(0)))
+  }
+
+  test("GH-344: an UNCACHED formula cell that errors no longer vanishes from a raw range") {
+    // The verified silent swallow: pre-GH-344 the uncached =1/0 recursed to an error and
+    // mapped to None — SUM produced a wrong number instead of the error.
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Formula("=1/0", None))
+      .put(ref"A2", num(2))
+    assertEquals(sheet.evaluateFormula("=SUM(A1:A2)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=COUNT(A1:A2)"), Right(num(1)))
+  }
+
+  test("GH-344: order statistics over an error-bearing range propagate") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(3))
+      .put(ref"A2", refErr)
+      .put(ref"A3", num(1))
+    assertEquals(sheet.evaluateFormula("=LARGE(A1:A3,1)"), err(CellError.Ref))
+    assertEquals(sheet.evaluateFormula("=SMALL(A1:A3,1)"), err(CellError.Ref))
+    assertEquals(sheet.evaluateFormula("=RANK(3,A1:A3)"), err(CellError.Ref))
+    assertEquals(sheet.evaluateFormula("=PERCENTILE(A1:A3,0.5)"), err(CellError.Ref))
+    assertEquals(sheet.evaluateFormula("=QUARTILE(A1:A3,2)"), err(CellError.Ref))
+  }
+
+  test("GH-344: SUMPRODUCT raw ranges propagate error cells (no longer coerce to 0)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(2))
+      .put(ref"A2", div0)
+      .put(ref"B1", num(3))
+      .put(ref"B2", num(4))
+    assertEquals(sheet.evaluateFormula("=SUMPRODUCT(A1:A2,B1:B2)"), err(CellError.Div0))
+  }
+
+  test("GH-344: expression-array aggregates surface the element's error VALUE") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(3))
+      .put(ref"A2", div0)
+    assertEquals(sheet.evaluateFormula("=SUM((A1:A2)*1)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=SUMPRODUCT((A1:A2)*1)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=COUNT((A1:A2)*1)"), Right(num(1)))
+  }

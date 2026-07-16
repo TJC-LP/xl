@@ -620,28 +620,7 @@ private class EvaluatorImpl(
             Left(EvalError.EvalFailed(s"Unknown aggregator: $aggregatorId", None))
           case Some(agg) =>
             Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
-              val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
-              // Fold over cells using the aggregator's combine function
-              val result = cells.foldLeft(agg.empty) { (acc, cell) =>
-                if agg.countsNonEmpty then
-                  // COUNTA mode: count any non-empty cell
-                  cell.value match
-                    case CellValue.Empty => acc
-                    case _ => agg.combine(acc, BigDecimal(1))
-                else if agg.countsEmpty then
-                  // COUNTBLANK mode: count only empty cells
-                  cell.value match
-                    case CellValue.Empty => agg.combine(acc, BigDecimal(1))
-                    case _ => acc
-                else
-                  // Standard mode: only process numeric values
-                  TExpr.decodeNumeric(cell) match
-                    case Right(value) => agg.combine(acc, value)
-                    case Left(_) if agg.skipNonNumeric => acc
-                    case Left(_) => acc // Skip non-numeric cells
-              }
-              // Finalize and return the result (may return error for AVERAGE on empty range)
-              agg.finalizeWithError(result)
+              evalAggregateNode(agg, location, targetSheet)
             }
 
       case call: TExpr.Call[?] =>
@@ -907,6 +886,50 @@ private class EvaluatorImpl(
                           currentCell
                         )
                         .map(unwrapBindingValue)
+
+  /**
+   * Fold one raw range for the [[TExpr.Aggregate]] node. Mirrors the FunctionSpec variadic
+   * aggregate's raw-range branch, including the GH-344 item 6 error gate — carried error CELLS
+   * propagate as the element's Excel error VALUE per the aggregator's policy (COUNT skips them) —
+   * pinning the `Aggregate(id, r) ≡ Call(spec, r)` law.
+   */
+  private def evalAggregateNode[Acc](
+    agg: Aggregator[Acc],
+    location: TExpr.RangeLocation,
+    targetSheet: Sheet
+  ): Either[EvalError, BigDecimal] =
+    val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+    val result = cells.foldLeft[Either[EvalError, Acc]](Right(agg.empty)) { (accE, cell) =>
+      accE.flatMap { acc =>
+        if agg.countsNonEmpty then
+          // COUNTA mode: count any non-empty cell (error cells are non-empty)
+          cell.value match
+            case CellValue.Empty => Right(acc)
+            case _ => Right(agg.combine(acc, BigDecimal(1)))
+        else if agg.countsEmpty then
+          // COUNTBLANK mode: count only empty cells
+          cell.value match
+            case CellValue.Empty => Right(agg.combine(acc, BigDecimal(1)))
+            case _ => Right(acc)
+        else
+          ArrayArithmetic.carriedError(cell.value) match
+            case Some(err) if agg.propagatesErrors =>
+              Left(
+                EvalError.ErrorValue(
+                  err,
+                  Some(s"${agg.name}: array element contains ${err.toExcel} error")
+                )
+              )
+            case Some(_) => Right(acc) // COUNT: errors are not numbers
+            case None =>
+              // Standard mode: only process numeric values
+              TExpr.decodeNumeric(cell) match
+                case Right(value) => Right(agg.combine(acc, value))
+                case Left(_) => Right(acc) // Skip non-numeric cells
+      }
+    }
+    // Finalize and return the result (may return error for AVERAGE on empty range)
+    result.flatMap(agg.finalizeWithError)
 
   /**
    * GH-344: decode a cell for a typed reference position, falling back to the Excel error VALUE the

@@ -24,11 +24,12 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   private type ColBounds = (Column, Column)
 
   /**
-   * GH-337: the loud failure for a carried error element consumed from an evaluated expression
-   * array — names the function and the Excel error code, and stays IFERROR-catchable.
+   * GH-337/GH-344: the propagated failure for a carried error element consumed by an aggregate —
+   * the element's Excel error VALUE (surfacing as `Right(CellValue.Error(code))` at the result
+   * boundary, Excel-exact), IFERROR-catchable, with a context naming the function.
    */
   private def propagatedElementError(fnName: String, err: CellError): EvalError =
-    EvalError.EvalFailed(s"$fnName: array element contains ${err.toExcel} error", None)
+    EvalError.ErrorValue(err, Some(s"$fnName: array element contains ${err.toExcel} error"))
 
   /**
    * GH-192: Compute shared bounds across all involved sheets for full-column/row optimization.
@@ -92,8 +93,30 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           range.endAnchor
         )
 
+  /**
+   * GH-344 item 6: resolve-then-police for raw-range numeric extraction — resolve the cell to its
+   * effective CellValue FIRST (recursively evaluating uncached formulas via
+   * [[evalCellValueForMatch]], which also fixes the pre-GH-344 swallow where an uncached formula
+   * recursing to an error mapped to None and vanished), THEN police carried errors: propagate as
+   * the element's Excel error VALUE when the caller's policy says so, or skip (COUNT — an error is
+   * not a number). Non-error values keep the numeric extract-or-skip semantics.
+   */
+  private def resolveNumericPolicing(
+    cellValue: CellValue,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext,
+    fnName: String,
+    propagateErrors: Boolean
+  ): Either[EvalError, Option[BigDecimal]] =
+    evalCellValueForMatch(cellValue, targetSheet, ctx).flatMap { resolved =>
+      ArrayArithmetic.carriedError(resolved) match
+        case Some(err) if propagateErrors => Left(propagatedElementError(fnName, err))
+        case Some(_) => Right(None) // COUNT: errors are not numbers
+        case None => Right(extractNumericValue(resolved))
+    }
+
   // GH-187: Helper to extract numeric value, evaluating uncached formulas if needed.
-  // Moved to class level so it can be reused by conditional aggregates (SUMIF, SUMIFS, etc.)
+  // Used by the conditional aggregates (SUMIF, SUMIFS, etc.) for matched value cells.
   private def extractOrEvalNumeric(
     cellValue: CellValue,
     targetSheet: com.tjclp.xl.sheets.Sheet,
@@ -122,27 +145,18 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
   // GH-187: Helper to coerce cell value to numeric, evaluating uncached formulas if needed.
   // Used by SUMPRODUCT which needs BigDecimal(0) for non-numeric values instead of None.
+  // GH-344 item 6: carried error cells propagate as the error VALUE (the raw-range coerce-to-0
+  // leniency produced wrong sums); non-error non-numerics keep coercing to 0.
   private def coerceToNumericWithEval(
     cellValue: CellValue,
     targetSheet: com.tjclp.xl.sheets.Sheet,
     ctx: EvalContext
   ): Either[EvalError, BigDecimal] =
-    cellValue match
-      case CellValue.Formula(formulaStr, None) =>
-        // Recursively evaluate uncached formula (GH-346: memoized once per pass)
-        Evaluator
-          .evalCrossSheetFormula(
-            formulaStr,
-            targetSheet,
-            ctx.clock,
-            ctx.workbook,
-            ctx.depth + 1,
-            ctx.rng,
-            ctx.memo.getOrElse(new Evaluator.EvalMemo)
-          )
-          .map(coerceToNumeric)
-      case _ =>
-        Right(coerceToNumeric(cellValue))
+    evalCellValueForMatch(cellValue, targetSheet, ctx).flatMap { resolved =>
+      ArrayArithmetic.carriedError(resolved) match
+        case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+        case None => Right(coerceToNumeric(resolved))
+    }
 
   // GH-187: Helper to evaluate cell value for criteria matching.
   // Evaluates uncached formulas before matching, returning the resolved CellValue.
@@ -225,11 +239,19 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     case CellValue.Empty => Right(values :+ BigDecimal(1))
                     case _ => Right(values)
                 else
-                  // Standard numeric mode: extract or evaluate formulas
-                  extractOrEvalNumeric(cellValue, targetSheet, ctx).map {
-                    case Some(n) => values :+ n
-                    case None => values
-                  }
+                  // Standard numeric mode: resolve the effective value, police carried errors
+                  // per the aggregator's policy (GH-344 item 6), then extract-or-skip
+                  resolveNumericPolicing(
+                    cellValue,
+                    targetSheet,
+                    ctx,
+                    agg.name,
+                    agg.propagatesErrors
+                  )
+                    .map {
+                      case Some(n) => values :+ n
+                      case None => values
+                    }
             }
           }
         case (Right(acc), Right(expr)) =>
@@ -346,10 +368,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
   // ===== GH-120: statistical functions over a single range =====
 
-  /** Collect numeric values from one range (standard numeric mode), for LARGE/SMALL/RANK/etc. */
+  /**
+   * Collect numeric values from one range (standard numeric mode), for LARGE/SMALL/RANK/etc. GH-344
+   * item 6: carried error cells always propagate here — every order statistic returns the error
+   * VALUE when its data contains one (Excel).
+   */
   private def collectRangeNumerics(
     location: TExpr.RangeLocation,
-    ctx: EvalContext
+    ctx: EvalContext,
+    fnName: String
   ): Either[EvalError, Vector[BigDecimal]] =
     Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap { targetSheet =>
       val bounds = computeBounds(List((location.range, targetSheet)))
@@ -357,7 +384,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       constrainedRange.cells.foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
         case (Left(err), _) => Left(err)
         case (Right(values), cellRef) =>
-          extractOrEvalNumeric(targetSheet(cellRef).value, targetSheet, ctx).map {
+          resolveNumericPolicing(
+            targetSheet(cellRef).value,
+            targetSheet,
+            ctx,
+            fnName,
+            propagateErrors = true
+          ).map {
             case Some(n) => values :+ n
             case None => values
           }
@@ -373,7 +406,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ) { (args, ctx) =>
       val (loc, kExpr) = args
       for
-        nums <- collectRangeNumerics(loc, ctx)
+        nums <- collectRangeNumerics(loc, ctx, "LARGE")
         k <- ctx.evalExpr(kExpr)
         result <-
           val desc = nums.sorted.reverse
@@ -391,7 +424,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ) { (args, ctx) =>
       val (loc, kExpr) = args
       for
-        nums <- collectRangeNumerics(loc, ctx)
+        nums <- collectRangeNumerics(loc, ctx, "SMALL")
         k <- ctx.evalExpr(kExpr)
         result <-
           val asc = nums.sorted
@@ -410,7 +443,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       val (numExpr, loc, orderOpt) = args
       for
         num <- ctx.evalExpr(numExpr)
-        nums <- collectRangeNumerics(loc, ctx)
+        nums <- collectRangeNumerics(loc, ctx, "RANK")
         order <- orderOpt match
           case Some(e) => ctx.evalExpr(e)
           case None => Right(0)
@@ -445,7 +478,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ) { (args, ctx) =>
       val (loc, pExpr) = args
       for
-        nums <- collectRangeNumerics(loc, ctx)
+        nums <- collectRangeNumerics(loc, ctx, "PERCENTILE")
         p <- ctx.evalExpr(pExpr)
         result <- percentileInc(nums.sorted, p) match
           case Some(v) => Right(v)
@@ -463,7 +496,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ) { (args, ctx) =>
       val (loc, qExpr) = args
       for
-        nums <- collectRangeNumerics(loc, ctx)
+        nums <- collectRangeNumerics(loc, ctx, "QUARTILE")
         q <- ctx.evalExpr(qExpr)
         result <-
           if q < 0 || q > 4 then

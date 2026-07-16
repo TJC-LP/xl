@@ -194,3 +194,35 @@ class ErrorValueLawsSpec extends ScalaCheckSuite:
     assertEquals(sheet.evaluateFormula("=ABS(A1+1)*2"), Right(CellValue.Error(CellError.NA)))
     assertEquals(sheet.evaluateFormula("=(1<A1)=TRUE"), Right(CellValue.Error(CellError.NA)))
   }
+
+  // ===== L4: Aggregate(id, range) ≡ Call(spec, range), including error policy =====
+
+  property("L4: the TExpr.Aggregate node and the registry Call agree over error-bearing ranges") {
+    import com.tjclp.xl.formula.parser.FormulaParser
+    val aggregates = List("SUM", "COUNT", "COUNTA", "COUNTBLANK", "MIN", "MAX", "AVERAGE")
+    forAll(genError) { err =>
+      val sheet = Sheet("Test")
+        .put(ref"A1", num(1))
+        .put(ref"A2", CellValue.Error(err))
+        .put(ref"A3", num(2))
+      val range = com.tjclp.xl.addressing.CellRange(ref"A1", ref"A3")
+      Prop.all(
+        aggregates.map { name =>
+          val node = TExpr.Aggregate(name, TExpr.RangeLocation.Local(range))
+          val nodeResult = Evaluator.eval(node, sheet)
+          val callResult = FormulaParser
+            .parse(s"=$name(A1:A3)")
+            .left
+            .map(pe => EvalError.EvalFailed(pe.toString, None): EvalError)
+            .flatMap(expr => Evaluator.eval(expr, sheet))
+          val agree = (nodeResult, callResult) match
+            case (Right(a), Right(b)) => a == b
+            case (Left(a), Left(b)) =>
+              EvalError.toErrorValue(a) == EvalError.toErrorValue(b) &&
+              EvalError.toErrorValue(a).isDefined
+            case _ => false
+          Prop(agree) :| s"$name with $err: node=$nodeResult call=$callResult"
+        }*
+      )
+    }
+  }
