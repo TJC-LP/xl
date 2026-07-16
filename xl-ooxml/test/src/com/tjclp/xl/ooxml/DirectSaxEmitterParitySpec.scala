@@ -117,11 +117,22 @@ class DirectSaxEmitterParitySpec extends FunSuite:
 
     val xml = zipEntryString(saxPath, "xl/worksheets/sheet1.xml")
     assert(xml.contains("<pane "), s"freeze pane missing from streaming output: $xml")
+    assert(
+      xml.contains("topLeftCell=\"D20\""),
+      s"scrolled pane topLeftCell (GH-382) missing from streaming output: $xml"
+    )
     assert(xml.contains("showGridLines=\"0\""), s"view settings missing: $xml")
+    assert(xml.contains("tabSelected=\"1\""), s"tabSelected (GH-372) missing: $xml")
     assert(xml.contains("orientation=\"landscape\""), s"pageSetup missing: $xml")
     assert(xml.contains("<pageMargins "), s"pageMargins missing: $xml")
     assert(xml.contains("<evenHeader>"), s"even header (GH-266) missing: $xml")
     assert(xml.contains("fitToPage=\"1\""), s"sheetPr fitToPage flag missing: $xml")
+    // StAX writes <tabColor ...></tabColor>, the DOM writer self-closes — match the open tag only
+    assert(xml.contains("<tabColor rgb=\"FF1F4E79\""), s"tabColor (GH-358) missing: $xml")
+    assert(
+      xml.indexOf("<tabColor ") < xml.indexOf("<pageSetUpPr "),
+      s"CT_SheetPr order: tabColor before pageSetUpPr: $xml"
+    )
     // Schema order (ECMA-376 18.3.1.99): sheetPr < sheetViews < cols < sheetData < page*
     val order = Seq(
       "<sheetPr>",
@@ -174,8 +185,13 @@ class DirectSaxEmitterParitySpec extends FunSuite:
     val b2 = ARef.from1(2, 2)
     buildSheet()
       .put(Cell(ARef.from1(4, 2), CellValue.Text("link")).withHyperlink("https://example.com"))
-      .freezeAt(b2)
-      .withViewSettings(SheetView(showGridLines = false, zoomScale = Some(85)))
+      // GH-382: scrolled freeze — both backends must emit the scroll target as topLeftCell
+      .freezeAt(b2, ARef.from1(4, 20))
+      .withViewSettings(
+        SheetView(showGridLines = false, zoomScale = Some(85), tabSelected = Some(true))
+      )
+      // GH-358: tabColor must come out of the streaming path too, first among sheetPr children
+      .withTabColor(com.tjclp.xl.styles.color.Color.Rgb(0xff1f4e79))
       .withPageSetup(
         PageSetup(
           orientation = Some("landscape"),

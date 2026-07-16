@@ -43,6 +43,9 @@ trait TExprAnalysis:
     // Error handling
     // Type conversion
     case ToInt(e) => containsDateFunction(e)
+    // GH-374/GH-355: unary plus and percent are transparent for analysis
+    case UnaryPlus(e) => containsDateFunction(e)
+    case Percent(e) => containsDateFunction(e)
     // GH-193: LET — check binding values (the body may reference them) and the body
     case Let(bindings, body) =>
       bindings.exists((_, value) => containsDateFunction(value)) || containsDateFunction(body)
@@ -81,6 +84,9 @@ trait TExprAnalysis:
     // Error handling
     // Type conversion
     case ToInt(e) => containsTimeFunction(e)
+    // GH-374/GH-355: unary plus and percent are transparent for analysis
+    case UnaryPlus(e) => containsTimeFunction(e)
+    case Percent(e) => containsTimeFunction(e)
     // GH-193: LET — check binding values (the body may reference them) and the body
     case Let(bindings, body) =>
       bindings.exists((_, value) => containsTimeFunction(value)) || containsTimeFunction(body)
@@ -125,6 +131,8 @@ trait TExprAnalysis:
     case Gt(l, r) => containsExternalRef(l) || containsExternalRef(r)
     case Gte(l, r) => containsExternalRef(l) || containsExternalRef(r)
     case ToInt(e) => containsExternalRef(e)
+    case UnaryPlus(e) => containsExternalRef(e)
+    case Percent(e) => containsExternalRef(e)
     case DateToSerial(e) => containsExternalRef(e)
     case DateTimeToSerial(e) => containsExternalRef(e)
     case Let(bindings, body) =>
@@ -169,6 +177,9 @@ trait TExprAnalysis:
     case Gte(l, r) => collectRanges(l) ++ collectRanges(r)
     // Type conversion
     case ToInt(e) => collectRanges(e)
+    // GH-374/GH-355: unary plus and percent are transparent — nested ranges still get bounded
+    case UnaryPlus(e) => collectRanges(e)
+    case Percent(e) => collectRanges(e)
     // GH-193: LET — ranges from binding values and the body
     case Let(bindings, body) =>
       bindings.flatMap((_, value) => collectRanges(value)) ++ collectRanges(body)
@@ -221,6 +232,11 @@ trait TExprAnalysis:
       // Type conversion
       case ToInt(e) =>
         ToInt(transformRanges(e, f))
+      // GH-374/GH-355: unary plus and percent are transparent — transform ranges under them
+      case UnaryPlus(e) =>
+        UnaryPlus(transformRanges(e, f))
+      case Percent(e) =>
+        Percent(transformRanges(e, f))
       // GH-193: LET — transform ranges in binding values and the body
       case Let(bindings, body) =>
         Let(

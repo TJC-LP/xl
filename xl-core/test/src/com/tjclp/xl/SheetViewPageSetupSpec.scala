@@ -2,7 +2,8 @@ package com.tjclp.xl
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.render.SvgRenderer
-import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
+import com.tjclp.xl.sheets.{FreezePane, HeaderFooter, PageMargins, PageSetup, SheetView}
+import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 import munit.FunSuite
 
 /**
@@ -31,6 +32,54 @@ class SheetViewPageSetupSpec extends FunSuite:
     val view = SheetView(showGridLines = false, zoomScale = Some(85))
     val sheet = Sheet("S").withViewSettings(view)
     assertEquals(sheet.viewSettings, Some(view))
+  }
+
+  test("SheetView.tabSelected defaults to None and is settable (GH-372)") {
+    assertEquals(SheetView.default.tabSelected, None)
+    assertEquals(SheetView(tabSelected = Some(true)).tabSelected, Some(true))
+    assertEquals(SheetView(tabSelected = Some(false)).tabSelected, Some(false))
+  }
+
+  // ===== Tab color (GH-358) =====
+
+  test("Sheet.tabColor defaults to None; withTabColor sets it; withoutTabColor clears it") {
+    val navy = Color.Rgb(0xff1f4e79)
+    assertEquals(Sheet("S").tabColor, None)
+    val sheet = Sheet("S").withTabColor(navy)
+    assertEquals(sheet.tabColor, Some(navy))
+    assertEquals(sheet.withoutTabColor.tabColor, None)
+  }
+
+  test("Sheet.tabColor supports theme colors with tint (GH-358)") {
+    val theme = Color.Theme(ThemeSlot.Accent2, 0.25)
+    assertEquals(Sheet("S").withTabColor(theme).tabColor, Some(theme))
+  }
+
+  // ===== FreezePane scroll state (GH-382) =====
+
+  test("FreezePane.At defaults to an unscrolled pane (scrolledTo = None)") {
+    assertEquals(FreezePane.At(ref"B2"), FreezePane.At(ref"B2", None))
+  }
+
+  test("Sheet.freezeAt(anchor, scrolledTo) records the scroll target (GH-382)") {
+    val sheet = Sheet("S").freezeAt(ref"C11", ref"F40")
+    assertEquals(sheet.freezePane, Some(FreezePane.At(ref"C11", Some(ref"F40"))))
+  }
+
+  test("Sheet.freezeAt(anchor) keeps the unscrolled default") {
+    assertEquals(Sheet("S").freezeAt(ref"B2").freezePane, Some(FreezePane.At(ref"B2", None)))
+  }
+
+  test("insertRows shifts BOTH the freeze anchor and the scroll target (GH-382)") {
+    val sheet = Sheet("S").freezeAt(ref"B3", ref"B10")
+    val shifted = sheet.insertRows(at = 0, count = 2)
+    assertEquals(shifted.freezePane, Some(FreezePane.At(ref"B5", Some(ref"B12"))))
+  }
+
+  test("deleteColumns shifts the scroll target with the anchor (GH-382)") {
+    val sheet = Sheet("S").freezeAt(ref"C11", ref"F40")
+    val shifted = sheet.deleteColumns(at = 0, count = 1)
+    assertEquals(shifted.freezePane, Some(FreezePane.At(ref"B11", Some(ref"E40"))))
   }
 
   // ===== PageSetup extensions (GH-259) =====

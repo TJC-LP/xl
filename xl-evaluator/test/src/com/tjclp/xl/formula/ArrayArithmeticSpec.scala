@@ -188,6 +188,39 @@ class ArrayArithmeticSpec extends FunSuite:
     assertEquals(updatedSheet(ref"G1").value, CellValue.Number(30))
   }
 
+  test("GH-355: postfix percent broadcasts over a range (=A1:C1%)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(10))
+      .put(ref"B1", CellValue.Number(20))
+      .put(ref"C1", CellValue.Number(30))
+
+    val result = sheet.evaluateArrayFormula("=A1:C1%", ref"E1")
+
+    assert(result.isRight, s"Expected Right, got $result")
+    val (updatedSheet, spillRange) = result.toOption.get
+
+    assertEquals(spillRange.width, 3)
+    assertEquals(spillRange.height, 1)
+    assertEquals(updatedSheet(ref"E1").value, CellValue.Number(BigDecimal("0.1")))
+    assertEquals(updatedSheet(ref"F1").value, CellValue.Number(BigDecimal("0.2")))
+    assertEquals(updatedSheet(ref"G1").value, CellValue.Number(BigDecimal("0.3")))
+  }
+
+  test("GH-355: range * percent literal broadcasts (=A1:C1*10%)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(10))
+      .put(ref"B1", CellValue.Number(20))
+      .put(ref"C1", CellValue.Number(30))
+
+    val result = sheet.evaluateArrayFormula("=A1:C1*10%", ref"E1")
+
+    assert(result.isRight, s"Expected Right, got $result")
+    val (updatedSheet, _) = result.toOption.get
+    assertEquals(updatedSheet(ref"E1").value, CellValue.Number(BigDecimal(1)))
+    assertEquals(updatedSheet(ref"F1").value, CellValue.Number(BigDecimal(2)))
+    assertEquals(updatedSheet(ref"G1").value, CellValue.Number(BigDecimal(3)))
+  }
+
   test("range * TRANSPOSE(range) via evaluateArrayFormula") {
     // This is the key SpreadsheetBench 52292 pattern!
     // 1x3 row * TRANSPOSE(3x1 col) = 1x3 * 1x3 = 1x3 element-wise

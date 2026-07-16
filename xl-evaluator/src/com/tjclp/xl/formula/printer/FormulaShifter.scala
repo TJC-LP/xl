@@ -141,6 +141,14 @@ object FormulaShifter:
       case ToInt(e) =>
         ToInt(shiftInternal(e, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
+      // GH-374: unary plus is transparent — recurse so refs under it drag
+      case UnaryPlus(e) =>
+        UnaryPlus(shiftInternal(e, colDelta, rowDelta))
+
+      // GH-355: postfix percent — recurse so refs under it drag
+      case Percent(e) =>
+        Percent(shiftInternal(e, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+
       // Arithmetic range functions (now using RangeLocation)
       case Aggregate(aggregatorId, location) =>
         Aggregate(aggregatorId, shiftLocation(location, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
@@ -406,6 +414,10 @@ object FormulaShifter:
       case Gt(x, y) => for sx <- go(x); sy <- go(y) yield Gt(sx, sy).asInstanceOf[TExpr[A]]
       case Gte(x, y) => for sx <- go(x); sy <- go(y) yield Gte(sx, sy).asInstanceOf[TExpr[A]]
       case ToInt(e) => go(e).map(se => ToInt(se).asInstanceOf[TExpr[A]])
+      // GH-374: unary plus is transparent — recurse so refs under it move/void structurally
+      case UnaryPlus(e) => go(e).map(UnaryPlus.apply)
+      // GH-355: postfix percent — recurse so refs under it move/void structurally
+      case Percent(e) => go(e).map(se => Percent(se).asInstanceOf[TExpr[A]])
       case Aggregate(aggId, location) =>
         shiftLocationStructural(location, shiftLocal, editedSheet, isRow, at, delta)
           .map(l => Aggregate(aggId, l).asInstanceOf[TExpr[A]])

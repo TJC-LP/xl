@@ -8,6 +8,7 @@ import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
 import com.tjclp.xl.drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
+import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.tables.TableSpec
 
@@ -26,14 +27,18 @@ import scala.util.boundary, boundary.break
  *   - `Some(FreezePane.At(ref))`: inject/replace `<pane>` in sheetViews
  *   - `Some(FreezePane.Remove)`: strip any existing `<pane>` from sheetViews
  *
- * The distinction between `None` and `Some(Remove)` matters: `None` is the passive default
- * (round-trip preserves the original); `Some(Remove)` is the active intent to remove freeze panes
- * even when the source XML had them.
+ * The distinction between `None` and `Some(Remove)` matters: `None` is the passive default;
+ * `Some(Remove)` is the active intent to remove freeze panes even when the source XML had them.
+ * Since GH-372 the reader populates this from frozen `<pane>` elements (anchor from xSplit/ySplit,
+ * scroll target from the pane's topLeftCell attribute), so a read→modify→write regenerates the pane
+ * from the model and keeps the freeze through the rewrite. Plain SPLIT panes stay unmodeled
+ * (`None`) and ride the preserved XML.
  *
  * @param viewSettings
- *   Sheet view settings (gridline visibility, zoom). `None` preserves any existing `<sheetView>`
- *   attributes on write; `Some(view)` sets them. Freeze panes and view settings share a single
- *   `<sheetView>` element in the serialized XML.
+ *   Sheet view settings (gridline visibility, zoom, tab selection). `None` preserves any existing
+ *   `<sheetView>` attributes on write; `Some(view)` sets them. The reader populates this whenever a
+ *   modeled attribute is present in the source (GH-258/GH-372). Freeze panes and view settings
+ *   share a single `<sheetView>` element in the serialized XML.
  *
  * @param drawings
  *   Drawing objects (pictures and preserved fragments, GH-221). Document order is z-order is
@@ -42,6 +47,12 @@ import scala.util.boundary, boundary.break
  * @param conditionalFormats
  *   Conditional-formatting blocks (GH-136). Document order is emission order; use
  *   [[conditionalFormat]] to append (it assigns priorities) rather than constructing directly.
+ *
+ * @param tabColor
+ *   Sheet tab color (GH-358), serialized as `<sheetPr><tabColor .../>`. `None` preserves any
+ *   existing tabColor XML on write (passive default, the viewSettings precedent); `Some(color)`
+ *   overlays it onto the preserved sheetPr. Both RGB and theme+tint colors are legal; the reader
+ *   populates it whenever the source color is in the typed subset (rgb / theme+tint / indexed).
  */
 final case class Sheet(
   name: SheetName,
@@ -58,7 +69,8 @@ final case class Sheet(
   freezePane: Option[FreezePane] = None,
   viewSettings: Option[SheetView] = None,
   drawings: Vector[Drawing] = Vector.empty,
-  conditionalFormats: Vector[ConditionalFormat] = Vector.empty
+  conditionalFormats: Vector[ConditionalFormat] = Vector.empty,
+  tabColor: Option[Color] = None
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -191,12 +203,16 @@ final case class Sheet(
       else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
     }
 
-    // Freeze pane: shift/clamp its anchor on the active axis (clamp a deleted anchor to `at`).
+    // Freeze pane: shift/clamp BOTH the anchor and the scroll target on the active axis
+    // (clamp a deleted ref to `at`) — dropping scrolledTo here would silently unscroll the
+    // pane on a structural edit (GH-382).
     val newFreeze = freezePane.map {
-      case FreezePane.At(ref) =>
-        val cur = axisOf(ref)
-        val ni = idx(cur).getOrElse(at)
-        FreezePane.At(rebuild(ref, ni))
+      case FreezePane.At(ref, scrolledTo) =>
+        val ni = idx(axisOf(ref)).getOrElse(at)
+        val newScrolled = scrolledTo.map { s =>
+          rebuild(s, idx(axisOf(s)).getOrElse(at))
+        }
+        FreezePane.At(rebuild(ref, ni), newScrolled)
       case other => other
     }
 
@@ -790,6 +806,13 @@ final case class Sheet(
   /** Freeze panes at the given cell (rows above and columns left are frozen). */
   def freezeAt(ref: ARef): Sheet = copy(freezePane = Some(FreezePane.At(ref)))
 
+  /**
+   * Freeze panes at `ref` with the scrollable pane scrolled so `scrolledTo` is its top-left visible
+   * cell (GH-382) — the OOXML `<pane topLeftCell=".."/>` attribute.
+   */
+  def freezeAt(ref: ARef, scrolledTo: ARef): Sheet =
+    copy(freezePane = Some(FreezePane.At(ref, Some(scrolledTo))))
+
   /** Remove freeze panes. */
   def unfreeze: Sheet = copy(freezePane = Some(FreezePane.Remove))
 
@@ -815,6 +838,22 @@ final case class Sheet(
    * }}}
    */
   def withPageSetup(setup: PageSetup): Sheet = copy(pageSetup = Some(setup))
+
+  /**
+   * Set the sheet tab color (GH-358). Both RGB and theme colors are legal:
+   * {{{
+   * sheet.withTabColor(Color.Rgb(0xFF1F4E79))                 // navy
+   * sheet.withTabColor(Color.Theme(ThemeSlot.Accent2, 0.25))  // theme + tint
+   * }}}
+   */
+  def withTabColor(color: Color): Sheet = copy(tabColor = Some(color))
+
+  /**
+   * Clear the modeled tab color back to the passive default. NOTE: on write, `None` PRESERVES any
+   * tabColor already present in the source XML (preserve-if-None, the viewSettings precedent) — it
+   * does not actively strip a preserved color.
+   */
+  def withoutTabColor: Sheet = copy(tabColor = None)
 
   /** Count of non-empty cells */
   def cellCount: Int = cells.size

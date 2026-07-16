@@ -56,7 +56,9 @@ object FormulaPrinter:
     val MulDiv = 6
     val Pow = 7
     val Unary = 8
-    val Primary = 9
+    // GH-355: postfix % binds tighter than ^ AND tighter than unary minus (-2% = -(2%))
+    val Percent = 9
+    val Primary = 10
 
   /**
    * Print expression with appropriate parentheses based on precedence.
@@ -125,6 +127,22 @@ object FormulaPrinter:
         val exponent = printPowExponent(y)
         val result = s"$base^$exponent"
         parenthesizeIf(result, precedence > Precedence.Pow)
+
+      // GH-374: unary plus is preserved byte-for-byte. The operand prints at Pow context — the
+      // loosest level the parser's unary-plus operand slot accepts without parens — so `=+2^3`
+      // and `=+-2` replicate their source exactly (parseUnary recurses through unary chains into
+      // parsePow).
+      case TExpr.UnaryPlus(e) =>
+        val result = s"+${printExpr(e, Precedence.Pow)}"
+        parenthesizeIf(result, precedence > Precedence.Unary)
+
+      // GH-355: postfix percent is preserved (never rewritten to /100). The operand prints at
+      // Percent context, so anything looser — including unary minus and ^ — parenthesizes:
+      // Percent(Sub(0,2)) prints (-2)%, Percent(Pow(2,3)) prints (2^3)%, while chained percents
+      // stay flat (10%%). Percent itself never needs outer parens (tightest operator).
+      case TExpr.Percent(e) =>
+        val result = s"${printExpr(e, Precedence.Percent)}%"
+        parenthesizeIf(result, precedence > Precedence.Percent)
 
       // String operators
       case TExpr.Concat(x, y) =>
@@ -273,6 +291,8 @@ object FormulaPrinter:
     unwrapTransparent(expr) match
       case TExpr.Pow(_, _) => true
       case TExpr.Sub(TExpr.Lit(n: BigDecimal), _) if n == BigDecimal(0) => true
+      // GH-374: a bare `+2^3` re-parses as +(2^3), so a UnaryPlus BASE needs parens: (+2)^3
+      case TExpr.UnaryPlus(_) => true
       case _ => false
 
   private def unwrapTransparent(expr: TExpr[?]): TExpr[?] =
@@ -388,6 +408,10 @@ object FormulaPrinter:
         s"Div(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Pow(x, y) =>
         s"Pow(${printWithTypes(x)}, ${printWithTypes(y)})"
+      case TExpr.UnaryPlus(e) =>
+        s"UnaryPlus(${printWithTypes(e)})"
+      case TExpr.Percent(e) =>
+        s"Percent(${printWithTypes(e)})"
       case TExpr.Concat(x, y) =>
         s"Concat(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Eq(x, y) =>

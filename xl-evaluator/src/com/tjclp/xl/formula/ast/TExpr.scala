@@ -191,6 +191,30 @@ enum TExpr[A] derives CanEqual:
    */
   case Pow(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
 
+  /**
+   * GH-374: unary plus — `=+A1`, the Lotus-era leading-plus idiom endemic in professional models.
+   *
+   * Semantically the identity (Excel evaluates `+x` as `x`, whatever x's type), but carried as an
+   * explicit type-preserving node — not erased at parse — so the printer replicates the source
+   * formula text byte-for-byte (`=+Model!B2` round-trips as `=+Model!B2`). Transparent wrapper in
+   * the ToInt/Coerced mold: analysis, shifting, and dependency extraction recurse through it.
+   *
+   * Law: eval(UnaryPlus(x)) == eval(x)
+   */
+  case UnaryPlus[A](expr: TExpr[A]) extends TExpr[A]
+
+  /**
+   * GH-355: postfix percent — `=A1*10%`, Excel's tightest-binding operator (value ÷ 100).
+   *
+   * Binds tighter than `^` and unary minus: `2^3%` ≡ `2^(3%)`, `-2%` ≡ `-(2%)` = -0.02; chained
+   * percents nest (`10%%` = 0.001). Preserved through print (never rewritten to `/100`). Evaluation
+   * routes through the array arithmetic machinery (like the binary operators), so a range operand
+   * broadcasts elementwise: `=A1:A3%` divides each cell by 100.
+   *
+   * Law: eval(Percent(x)) == eval(Div(x, Lit(100)))
+   */
+  case Percent(expr: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
   // String operators
 
   /**

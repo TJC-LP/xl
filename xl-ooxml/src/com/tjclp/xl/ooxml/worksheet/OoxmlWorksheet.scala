@@ -545,7 +545,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           sheet.mergedRanges,
           // Preserve all metadata from original, but use recalculated dimension.
           // GH-266: fitToWidth/fitToHeight require sheetPr/pageSetUpPr fitToPage="1"
-          mergeSheetPrElem(preserved.sheetPr, sheet.pageSetup),
+          // GH-358: modeled tabColor overlays the preserved sheetPr
+          mergeSheetPrElem(preserved.sheetPr, sheet.pageSetup, sheet.tabColor),
           calculatedDimension.orElse(
             preserved.dimension
           ), // Use calculated dimension, fallback to preserved
@@ -579,7 +580,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
         OoxmlWorksheet(
           allRows, // GH-381: include property-only rows (rowProperties without cells)
           sheet.mergedRanges,
-          sheetPr = mergeSheetPrElem(None, sheet.pageSetup), // GH-266: fitToPage flag
+          // GH-266: fitToPage flag; GH-358: tabColor
+          sheetPr = mergeSheetPrElem(None, sheet.pageSetup, sheet.tabColor),
           dimension = calculatedDimension,
           sheetViews = buildSheetViewsElem(None, sheet.freezePane, sheet.viewSettings),
           cols = generatedCols,

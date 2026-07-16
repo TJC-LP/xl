@@ -48,6 +48,34 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1", ref"B1"))
   }
 
+  test("GH-374: extractDependencies walks through unary plus (=+A1+B1)") {
+    FormulaParser.parse("=+A1+B1") match
+      case Right(expr) =>
+        assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1", ref"B1"))
+        assertEquals(
+          DependencyGraph.extractDependenciesBounded(expr, None),
+          Set(ref"A1", ref"B1")
+        )
+        assert(DependencyGraph.containsCellReferences(expr))
+      case Left(err) => fail(s"=+A1+B1 should parse: $err")
+  }
+
+  test("GH-355: extractDependencies walks through postfix percent (=A1%)") {
+    FormulaParser.parse("=A1%") match
+      case Right(expr) =>
+        assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1"))
+        assertEquals(DependencyGraph.extractDependenciesBounded(expr, None), Set(ref"A1"))
+        assert(DependencyGraph.containsCellReferences(expr))
+      case Left(err) => fail(s"=A1% should parse: $err")
+  }
+
+  test("GH-355/GH-374: dependencies survive percent nested under unary plus (=+A1%)") {
+    FormulaParser.parse("=+A1%") match
+      case Right(expr) =>
+        assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1"))
+      case Left(err) => fail(s"=+A1% should parse: $err")
+  }
+
   test("extractDependencies: range arguments expand to all cells in range") {
     val range = parseRange("A1:A3")
     val expr = TExpr.sum(range)

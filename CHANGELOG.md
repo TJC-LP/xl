@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Excel percent postfix operator** (#355): `=A1*10%`, `=10%`, `=(1+5%)^2`
+  parse, evaluate (`10%` → exact `0.1`), broadcast over ranges (`=A1:C1%`),
+  and print back byte-identically (never rewritten to `/100`); precedence
+  matches Excel (`2^3%` ≡ `2^(3%)`), and deep `%` chains respect the
+  parser's nesting guard.
+- **Leading unary plus preserved through print** (#374): `=+A1`,
+  `=+Model!B2`, `=++A1`, `=2^+2` round-trip byte-for-byte via a dedicated
+  identity AST node — replicated formula text now matches professional-model
+  sources exactly. This deliberately reverses #271's printer normalization
+  (`=+A1` no longer prints as `=A1`); evaluation is unchanged (pure
+  identity), and references under `+`/`%` still shift on drag and
+  structural edits and contribute dependency edges.
+- **Freeze panes read into the model** (#372): the reader populates
+  `Sheet.freezePane` from `<pane>` (frozen and frozenSplit states), so
+  read→modify→write keeps freeze state through model regeneration and
+  typed dumps see it; `SheetView` gains `tabSelected`. Unmodified sheets
+  still round-trip byte-identically.
+- **Scrolled frozen panes** (#382): `FreezePane.At` carries an optional
+  scroll target (`freezeAt(anchor, scrolledTo)`), representing
+  `<pane ySplit="9" topLeftCell="F40"/>` — frozen at one row, scrolled to
+  another; structural edits shift both refs.
+- **Sheet tab color, model half** (#358): `Sheet.tabColor: Option[Color]`
+  (rgb and theme+tint forms) with `withTabColor`, read + write on both
+  writer backends with preserve-if-None semantics and schema-correct
+  `sheetPr` child order. CLI exposure remains open in #358.
+
 ## [0.12.7] "Integrity" - 2026-07-16
 
 File-integrity wave from the tjc-modeling byte-exact replication campaign

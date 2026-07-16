@@ -76,8 +76,8 @@ object DirectSaxEmitter:
     // OoxmlWorksheet.fromDomainWithMetadata. The tiny metadata Elems reuse the SAME builders as the
     // DOM writer (parity by construction); only the bulk sheetData stays hand-emitted for speed.
     SaxWriter.withAttributes(writer, "xmlns" -> nsSpreadsheetML, "xmlns:r" -> nsRelationships) {
-      // sheetPr carries the pageSetUpPr fitToPage flag (GH-266)
-      mergeSheetPrElem(None, sheet.pageSetup).foreach(writer.writeElem)
+      // sheetPr carries the pageSetUpPr fitToPage flag (GH-266) and tabColor (GH-358)
+      mergeSheetPrElem(None, sheet.pageSetup, sheet.tabColor).foreach(writer.writeElem)
 
       // Calculate dimension from cells
       emitDimension(writer, sheet)
