@@ -48,6 +48,11 @@ object scripting:
   export com.tjclp.xl.io.ExcelIO
   export com.tjclp.xl.io.RowData // streaming row type (readStream/writeStream)
 
+  // Recalculating write (GH-360): Excel.writeRecalculated — recalculate, write, return the
+  // RecalcResult. Defined in this aggregate module (the only one seeing both the evaluator and
+  // the sync facade) as extensions on Excel.type; the wildcard export puts them in scope here.
+  export com.tjclp.xl.io.ExcelRecalc.*
+
   // The one sanctioned unwrap: .unsafe / .getOrElse on XLResult
   export com.tjclp.xl.unsafe.*
 
