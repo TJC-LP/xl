@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Full calcPr authoring** (#400): `CalcPr` models `calcMode`
+  (manual/auto/autoNoTable), `fullCalcOnLoad`, and `calcId` alongside the
+  iterate triple — a from-scratch workbook can author the TJC house
+  `<calcPr calcId="191029" calcMode="autoNoTable" iterate="1"/>` exactly,
+  retiring tjc-modeling's last post-write zip patch. Reader populates the
+  new fields; preserved-but-unmodeled attrs (`refMode`, `concurrentCalc`,
+  …) still ride through byte-faithfully, and a `None` field never strips a
+  preserved attribute. Freshly-authored calcPr attributes now emit in
+  deterministic ascending order on both writer backends.
+
 ### Changed
 
 - **Excel error VALUES are first-class evaluation results** (#344): `=1/0`
