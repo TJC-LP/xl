@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Excel error VALUES are first-class evaluation results** (#344): `=1/0`
+  now evaluates to `Right(CellValue.Error(#DIV/0!))` — catchable by
+  IFERROR/ISERROR, cached by `recalculate()` (written as `t="e"` cells),
+  rendered by the CLI as `#DIV/0!` — instead of failing the whole formula.
+  Aggregates propagate error elements per Excel policy (SUM/MIN/MAX/AVERAGE/
+  SUMPRODUCT propagate — including raw ranges and SUMIF-matched cells —
+  while COUNT skips and COUNTA counts); AND/OR/NOT evaluate arguments
+  eagerly and return the first error; scalar comparisons AND equality
+  propagate (`=1=#REF!` no longer swallows to FALSE); numeric domain
+  failures carry op-level Excel codes (`=2^1024` → `#NUM!`, SQRT/LOG/LN
+  domains → `#NUM!`, `MOD(x,0)` → `#DIV/0!`, RANK → `#N/A`); mismatched
+  broadcast dimensions pad with `#N/A` per Excel; literal `"TRUE"`/`"FALSE"`
+  text coerces in condition positions. Host failures (parse errors, missing
+  sheets, cycles) remain loud `Left`s — the boundary is law-tested, and
+  `RecalcResult` distinguishes cached error values (`excelErrors`) from
+  host failures (`errors`). Design record: `docs/design/error-propagation.md`.
+
+### Fixed
+
+- **xl-agent robustness** (#344 items 7–9): `pause_turn` stops auto-resume
+  with bounded re-sends (usage summed across resumes, container id
+  preserved past strategy request configuration — a real bug found by
+  adversarial review); errored tasks now count in benchmark summary totals
+  (reported distinctly, never as passes); the engine's last-resort trace
+  writer never overwrites a skill-saved trace (fallback lands suffixed).
+
 ## [0.13.0] "Fixpoint" - 2026-07-16
 
 The replication-campaign feature train (waves 13–16): professional models
