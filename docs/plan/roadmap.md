@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **107 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 4,085 tests passing.
 
-**Current Version**: **0.12.6 "Fieldwork"** (released 2026-07-15)
+**Current Version**: **0.12.7 "Integrity"** (released 2026-07-16)
 
 ---
 
@@ -60,6 +60,10 @@ Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture cor
 ### v0.12.1 "Clean Sweep" — wave 7 (Released 2026-06-11)
 
 Every remaining open issue closed in one wave. **Conditional formatting** ([#136](https://github.com/TJC-LP/xl/issues/136)) is the headline — typed cellIs/expression/colorScale/dataBar/top10/text rules + `dxf` differential formats, `sheet.conditionalFormat` authoring with auto-priority, structural-edit range shifting, unmodeled families preserved byte-faithfully — alongside twelve fidelity/writer fixes: openpyxl comment subdirectory dialect (#292), RichText SST keying (#303), exact surgical SST counts (#304), `[Content_Types]` preservation (#314), identity-keyed source mappings (#315), activeTab (#294), fitToPage tri-state (#284), `Cell.comment` deprecated→`Sheet.comments` (#295). Codec `put` paths 2.4x faster (#297).
+
+### v0.12.7 "Integrity" — wave 12 (Released 2026-07-16)
+
+File-integrity bugs from the tjc-modeling byte-exact replication campaign (PR #389, four worktree-isolated TDD clusters, each adversarially reviewed with revert-and-rerun refutation + openpyxl 3.1.5 cross-checks): property-only rows survive scratch writes ([#381](https://github.com/TJC-LP/xl/issues/381)), formula cells keep cached DateTime as Excel serials on all backends ([#378](https://github.com/TJC-LP/xl/issues/378)), schema-valid `<rFont>` comment/SST/inline rich runs + reader acceptance ([#383](https://github.com/TJC-LP/xl/issues/383)), identity-named modified-sheet parts on reordered sources ([#327](https://github.com/TJC-LP/xl/issues/327)), comment-removal CT/rels/legacyDrawing pruning ([#328](https://github.com/TJC-LP/xl/issues/328)), default theme part for scratch theme-color workbooks ([#387](https://github.com/TJC-LP/xl/issues/387)), and per-cell containment of financial-function divergence with a recalculate() totality backstop ([#388](https://github.com/TJC-LP/xl/issues/388)). Remaining campaign backlog: W2 parser unblockers (#374, #355) → W3 read/write parity (#372, #382, #358) → W4 authoring API (#373, #379, #380, #375, #361, #360) → W5 evaluator (#386, #385, #384) → W6 CLI/tooling (#356, #357, #324, #359) composing 0.13.0; then #344 as 0.14.0.
 
 ### v0.12.6 "Fieldwork" (Released 2026-07-15)
 
