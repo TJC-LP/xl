@@ -291,6 +291,89 @@ class MathFunctionsSpec extends FunSuite:
     assertEquals(result, Right(BigDecimal(-6)))
   }
 
+  // ===== MROUND Tests (GH-386) =====
+
+  test("MROUND: mround(10, 3) = 9") {
+    val expr = TExpr.mround(TExpr.Lit(BigDecimal(10)), TExpr.Lit(BigDecimal(3)))
+    val result = evaluator.eval(expr, emptySheet)
+    assertEquals(result, Right(BigDecimal(9)))
+  }
+
+  test("MROUND: mround(1.3, 0.2) = 1.4 (decimal multiple)") {
+    val expr = TExpr.mround(TExpr.Lit(BigDecimal("1.3")), TExpr.Lit(BigDecimal("0.2")))
+    val result = evaluator.eval(expr, emptySheet)
+    assertEquals(result, Right(BigDecimal("1.4")))
+  }
+
+  test("MROUND: mround(7.5, 5) = 10 (half rounds away from zero)") {
+    val expr = TExpr.mround(TExpr.Lit(BigDecimal("7.5")), TExpr.Lit(BigDecimal(5)))
+    val result = evaluator.eval(expr, emptySheet)
+    assertEquals(result, Right(BigDecimal(10)))
+  }
+
+  test("MROUND: mround(-7.5, -5) = -10 (half away from zero, negative domain)") {
+    val expr = TExpr.mround(TExpr.Lit(BigDecimal("-7.5")), TExpr.Lit(BigDecimal(-5)))
+    val result = evaluator.eval(expr, emptySheet)
+    assertEquals(result, Right(BigDecimal(-10)))
+  }
+
+  test("MROUND: mround(-10, -3) = -9 (negative pair)") {
+    val expr = TExpr.mround(TExpr.Lit(BigDecimal(-10)), TExpr.Lit(BigDecimal(-3)))
+    val result = evaluator.eval(expr, emptySheet)
+    assertEquals(result, Right(BigDecimal(-9)))
+  }
+
+  test("MROUND: multiple 0 returns 0, not an error (divergence from CEILING/FLOOR)") {
+    val expr = TExpr.mround(TExpr.Lit(BigDecimal("2.5")), TExpr.Lit(BigDecimal(0)))
+    val result = evaluator.eval(expr, emptySheet)
+    assertEquals(result, Right(BigDecimal(0)))
+  }
+
+  test("MROUND: positive number with negative multiple returns error") {
+    val expr = TExpr.mround(TExpr.Lit(BigDecimal(10)), TExpr.Lit(BigDecimal(-3)))
+    val result = evaluator.eval(expr, emptySheet)
+    assert(result.isLeft, "MROUND(10, -3) should return error (mismatched signs)")
+  }
+
+  test("MROUND: negative number with positive multiple returns error") {
+    val expr = TExpr.mround(TExpr.Lit(BigDecimal(-10)), TExpr.Lit(BigDecimal(3)))
+    val result = evaluator.eval(expr, emptySheet)
+    assert(result.isLeft, "MROUND(-10, 3) should return error (mismatched signs)")
+  }
+
+  test("MROUND parser: parse and evaluate =MROUND(10, 3)") {
+    val result = emptySheet.evaluateFormula("=MROUND(10, 3)")
+    assertEquals(result, Right(CellValue.Number(BigDecimal(9))))
+  }
+
+  test("MROUND parser: decimal multiple =MROUND(1.3, 0.2) = 1.4") {
+    val result = emptySheet.evaluateFormula("=MROUND(1.3, 0.2)")
+    assertEquals(result, Right(CellValue.Number(BigDecimal("1.4"))))
+  }
+
+  test("MROUND parser: half rounds away from zero =MROUND(7.5, 5) = 10") {
+    // 7.5/5 = 1.5 -> HALF_UP -> 2 -> 10 (Excel rounds half away from zero)
+    val result = emptySheet.evaluateFormula("=MROUND(7.5, 5)")
+    assertEquals(result, Right(CellValue.Number(BigDecimal(10))))
+  }
+
+  test("MROUND parser: negative pair =MROUND(-10, -3) = -9") {
+    val result = emptySheet.evaluateFormula("=MROUND(-10, -3)")
+    assertEquals(result, Right(CellValue.Number(BigDecimal(-9))))
+  }
+
+  test("MROUND parser: multiple 0 returns 0 (unlike CEILING/FLOOR's error)") {
+    val result = emptySheet.evaluateFormula("=MROUND(10, 0)")
+    assertEquals(result, Right(CellValue.Number(BigDecimal(0))))
+  }
+
+  test("MROUND parser: mismatched signs return error") {
+    val result = emptySheet.evaluateFormula("=MROUND(-10, 3)")
+    assert(result.isLeft, "MROUND(-10, 3) should return error (mismatched signs)")
+    val result2 = emptySheet.evaluateFormula("=MROUND(10, -3)")
+    assert(result2.isLeft, "MROUND(10, -3) should return error (mismatched signs)")
+  }
+
   // ===== TRUNC Tests =====
 
   test("TRUNC: trunc(8.9) = 8") {

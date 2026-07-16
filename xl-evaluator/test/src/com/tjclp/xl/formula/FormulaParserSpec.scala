@@ -1517,7 +1517,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("Known functions include all 107 functions") {
+  test("Known functions include all 108 functions") {
     val functions = FunctionRegistry.allNames
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -1572,6 +1572,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("EXP"))
     assert(functions.contains("FLOOR"))
     assert(functions.contains("CEILING"))
+    // GH-386: round to nearest multiple (LBO term-loan sizing idiom)
+    assert(functions.contains("MROUND"))
     assert(functions.contains("TRUNC"))
     assert(functions.contains("SIGN"))
     assert(functions.contains("INT"))
@@ -1634,7 +1636,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("RANDBETWEEN"))
     // GH-274 dynamic references
     assert(functions.contains("INDIRECT"))
-    assertEquals(functions.length, 107)
+    assertEquals(functions.length, 108)
   }
 
   // ==================== INDIRECT Parsing Tests (GH-274) ====================
