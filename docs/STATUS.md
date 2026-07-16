@@ -1,12 +1,21 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-15 (0.12.6)
+**Last Updated**: 2026-07-16 (0.12.7)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.12.7** (2026-07-16):
+- ✅ **Property-only rows survive scratch writes** (#381) — rows with only `RowProperties` (no cells) emit `<row>` on the default backend; backend parity pinned by tests
+- ✅ **Cached DateTime on formula cells** (#378) — `=TODAY()`/`=EDATE()`/`=EOMONTH()` caches serialize as Excel serials (`t="n"` + `<v>`) on all three writer backends; streaming writer gained cached-Text `t="str"`
+- ✅ **Schema-valid comment rich runs** (#383) — `<rFont>` per CT_RPrElt (was styles-shape `<name>`); openpyxl opens XL-authored comments; reader accepts both dialects
+- ✅ **Identity-named modified-sheet parts** (#327) — no duplicate-zip-entry failure on Excel-reordered sources; physical writes, sheet rels, and workbook rels derive from one path
+- ✅ **Comment-removal package pruning** (#328) — dropping a sheet's last comment prunes CT overrides, sheet rels, and legacyDrawing (resolved-path-aware, openpyxl dialect included)
+- ✅ **Default theme part for scratch theme colors** (#387) — `Color.Theme` styles/dxfs ship `xl/theme/theme1.xml` + override + rel; RGB-only workbooks unaffected
+- ✅ **Total recalculate() under financial divergence** (#388) — IRR/XIRR/XNPV/NPV + TVM overflow class returns per-cell errors; workbook-evaluator NonFatal backstop guarantees totality
 
 **New in 0.12.6** (2026-07-15):
 - ✅ **External-workbook references** (#353) — `[2]Book1!A1` forms parse (dedicated AST node, exact printer round-trip, anchor-aware shifting), contribute no dependency edges, and `recalculate()` pins their Excel-written caches verbatim while dependents compute from them; uncached external cells report a clear per-cell error instead of `UnexpectedChar([`

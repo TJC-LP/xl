@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.7] "Integrity" - 2026-07-16
+
 File-integrity wave from the tjc-modeling byte-exact replication campaign
 (#327, #328, #378, #381, #383, #387, #388): every workaround that campaign
 shipped as post-write zip surgery is now unnecessary — packages are

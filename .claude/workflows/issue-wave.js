@@ -72,7 +72,7 @@ const HOUSE_RULES = `HOUSE RULES (xl repo, ${REPO}):
 - Purity charter: no null, no thrown exceptions in pure code, total functions returning Either/Option (XLResult), opaque types, enums with derives CanEqual. WartRemover enforces; .head/.tail and Option.get are warnings, var/while acceptable only in tests/macros.
 - NEVER re-inline extension methods or factories on opaque types (compiler landmines — see NOTE in xl-core addressing/ARef.scala). No default params on exported extension methods (use @targetName overloads).
 - Do NOT edit CHANGELOG.md or docs/plan/roadmap.md (the integrator owns them — avoids 6-way conflicts).
-- Style: ./mill <module>.reformat before committing; match surrounding code idiom; comments only for constraints code cannot express.
+- Style: ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources before committing (module-scoped <module>.reformat MISSES test sources — CI runs checkFormatAll __.sources and will fail on them); match surrounding code idiom; comments only for constraints code cannot express.
 - Commit with --no-verify (you run the format/test gates explicitly instead of the slow pre-commit hook), conventional message ending with "Refs #<issue>" per issue (NOT "Closes" — the wave PR owns closing).`
 
 phase('Baseline')
@@ -125,7 +125,7 @@ ${HOUSE_RULES}
 METHOD (mandatory):
 1. TDD: for each issue, FIRST write the failing test that pins the bug/feature from the issue's repro, run it, SEE IT FAIL, then implement until green. Tests live in the module's existing spec files where the brief names them.
 2. Touch only files within this cluster's footprint. If a fix genuinely requires a file another cluster owns, STOP that part and report it as a gap instead.
-3. Local gates before declaring done: ./mill <module>.test for every module you touched (timeout 600000), ./mill __.checkFormat after ./mill <module>.reformat. All green.
+3. Local gates before declaring done: ./mill <module>.test for every module you touched (timeout 600000), then ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources && ./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources (the CI form — module reformat/checkFormat miss test sources). All green.
 4. Commit (git commit --no-verify) with a conventional message; one commit per issue is ideal, a single clean cluster commit acceptable. Message body: "Refs #<n>" lines.
 5. Report: outcome (fixed | not-reproducible [only if the brief says verify-first and you proved it] | partial | blocked), sha (git rev-parse HEAD), branch (git branch --show-current), worktreePath (pwd), summary, filesChanged, testsAdded (test names), gateEvidence (the actual gate commands + tail of their output), gaps (anything discovered worth filing as a new issue — be specific).
 Your final structured output is consumed by an adversarial reviewer who will try to refute your work — include enough evidence that an honest reviewer can retrace every claim.`
@@ -157,7 +157,7 @@ REWORK INSTRUCTIONS: ${review.reworkInstructions || '(see findings)'}
 
 ${HOUSE_RULES}
 
-Fix, keep TDD discipline (failing test first for any finding that lacks one), rerun local gates (./mill <module>.test + ./mill __.checkFormat after reformat), commit on top (--no-verify), and report the same structured output as an implementer (outcome/sha/branch/worktreePath/summary/filesChanged/testsAdded/gateEvidence/gaps). The reviewer re-reviews after you.`
+Fix, keep TDD discipline (failing test first for any finding that lacks one), rerun local gates (./mill <module>.test + ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources && ./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources), commit on top (--no-verify), and report the same structured output as an implementer (outcome/sha/branch/worktreePath/summary/filesChanged/testsAdded/gateEvidence/gaps). The reviewer re-reviews after you.`
 
 const results = await pipeline(
   CLUSTERS,
