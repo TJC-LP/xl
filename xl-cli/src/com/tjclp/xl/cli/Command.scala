@@ -134,6 +134,38 @@ enum CliCommand:
   // Freeze pane operations (require -o)
   case Freeze(ref: String) // Freeze panes at ref (rows above + columns left)
   case Unfreeze // Remove freeze panes
+  // Sheet appearance & print setup (GH-358, require -o)
+  case SheetViewOp(gridlines: Option[Boolean], zoom: Option[Int], tabSelected: Option[Boolean])
+  case TabColorOp(color: Option[String], clear: Boolean)
+  case PageSetupOp(
+    orientation: Option[String],
+    scale: Option[Int],
+    fitToWidth: Option[Int],
+    fitToHeight: Option[Int],
+    fitToPage: Option[Boolean] // tri-state: None derives/preserves (GH-284)
+  )
+  case HeaderFooterOp(
+    oddHeader: Option[String],
+    oddFooter: Option[String],
+    evenHeader: Option[String],
+    evenFooter: Option[String],
+    firstHeader: Option[String],
+    firstFooter: Option[String],
+    differentOddEven: Boolean,
+    differentFirst: Boolean
+  )
+  // Conditional formatting (GH-324): add requires -o; list is read-only
+  case CfAdd(
+    range: String,
+    rule: String,
+    bold: Boolean,
+    italic: Boolean,
+    underline: Boolean,
+    strike: Boolean,
+    bg: Option[String],
+    fg: Option[String]
+  )
+  case CfList
   // Drawing layer (GH-221/GH-222, require -o)
   case ChartAdd(
     chartType: String, // column | bar | line | pie

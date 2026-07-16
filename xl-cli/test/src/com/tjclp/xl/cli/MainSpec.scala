@@ -904,7 +904,7 @@ class MainSpec extends CatsEffectSuite:
     assert(result.isRight, s"Should parse: $result")
     val op = result.toOption.get.ops.head
     op match
-      case BatchOp.PutFormulaDragging(range, formula, from) =>
+      case BatchOp.PutFormulaDragging(range, formula, from, None) =>
         assertEquals(range, "B2:B10")
         assertEquals(formula, "=SUM($A$1:A2)")
         assertEquals(from, "B2")
@@ -918,7 +918,7 @@ class MainSpec extends CatsEffectSuite:
     assert(result.isRight, s"Should parse: $result")
     val op = result.toOption.get.ops.head
     op match
-      case BatchOp.PutFormulas(range, formulas) =>
+      case BatchOp.PutFormulas(range, formulas, None) =>
         assertEquals(range, "B2:B4")
         assertEquals(formulas, Vector("=A2*2", "=A3*2", "=A4*2"))
       case other => fail(s"Expected PutFormulas, got $other")
@@ -931,7 +931,7 @@ class MainSpec extends CatsEffectSuite:
     assert(result.isRight, s"Should parse: $result")
     val op = result.toOption.get.ops.head
     op match
-      case BatchOp.PutFormula(ref, formula) =>
+      case BatchOp.PutFormula(ref, formula, None) =>
         assertEquals(ref, "D14")
         assertEquals(formula, "=SUM(D5:D12)")
       case other => fail(s"Expected PutFormula, got $other")
@@ -944,7 +944,7 @@ class MainSpec extends CatsEffectSuite:
     assert(result.isRight, s"Should parse: $result")
     val op = result.toOption.get.ops.head
     op match
-      case BatchOp.PutFormulaDragging(range, formula, from) =>
+      case BatchOp.PutFormulaDragging(range, formula, from, None) =>
         assertEquals(range, "B2:B10")
         assertEquals(formula, "=A2*2")
         assertEquals(from, "B2")
@@ -958,9 +958,138 @@ class MainSpec extends CatsEffectSuite:
     assert(result.isRight, s"Should parse: $result")
     val op = result.toOption.get.ops.head
     op match
-      case BatchOp.PutFormula(_, formula) =>
+      case BatchOp.PutFormula(_, formula, _) =>
         assertEquals(formula, "=B1")
       case other => fail(s"Expected PutFormula with 'value' winning, got $other")
+  }
+
+  test("parseBatchJson: putf accepts 'format' without unknown-prop warning (GH-356)") {
+    val json = """[{"op": "putf", "ref": "C1", "value": "=A1*2", "format": "#,##0.0"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(
+      result.toOption.get.warnings,
+      Vector.empty[String],
+      "format is a known putf property and must not be warned about"
+    )
+  }
+
+  test("parseBatchJson: putf with custom format code creates PutFormula with NumFmt (GH-356)") {
+    val json = """[{"op": "putf", "ref": "C1", "value": "=A1*2", "format": "#,##0.0"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    result.toOption.get.ops.head match
+      case BatchOp.PutFormula(ref, formula, Some(NumFmt.Custom(code))) =>
+        assertEquals(ref, "C1")
+        assertEquals(formula, "=A1*2")
+        assertEquals(code, "#,##0.0")
+      case other => fail(s"Expected PutFormula with Custom format, got $other")
+  }
+
+  test("parseBatchJson: putf named format applies to dragging variant (GH-356)") {
+    val json =
+      """[{"op": "putf", "ref": "B2:B10", "value": "=A2*2", "from": "B2", "format": "percent"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    result.toOption.get.ops.head match
+      case BatchOp.PutFormulaDragging(range, formula, from, Some(NumFmt.Percent)) =>
+        assertEquals(range, "B2:B10")
+        assertEquals(formula, "=A2*2")
+        assertEquals(from, "B2")
+      case other => fail(s"Expected PutFormulaDragging with Percent format, got $other")
+  }
+
+  test("parseBatchJson: putf format applies to 'values' array variant (GH-356)") {
+    val json =
+      """[{"op": "putf", "ref": "B2:B4", "values": ["=A2*2", "=A3*2", "=A4*2"], "format": "currency"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    result.toOption.get.ops.head match
+      case BatchOp.PutFormulas(range, formulas, Some(NumFmt.Currency)) =>
+        assertEquals(range, "B2:B4")
+        assertEquals(formulas.length, 3)
+      case other => fail(s"Expected PutFormulas with Currency format, got $other")
+  }
+
+  test("batch: putf with format writes formula and numFmt style (GH-356)") {
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Number(BigDecimal(10)))
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(
+      BatchOp.PutFormula("C1", "=A1*2", Some(NumFmt.Custom("#,##0.0")))
+    )
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+
+      updatedSheet.cells.get(ref"C1").map(_.value) match
+        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A1*2")
+        case other => fail(s"Expected Formula at C1, got $other")
+
+      val style = updatedSheet.getCellStyle(ref"C1")
+      assert(style.isDefined, "numFmt style should be set on the formula cell")
+      assertEquals(style.get.numFmt, NumFmt.Custom("#,##0.0"))
+    }
+  }
+
+  test("batch: putf dragging with format applies numFmt to every cell (GH-356)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(BigDecimal(1)))
+      .put(ref"A2", CellValue.Number(BigDecimal(2)))
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(
+      BatchOp.PutFormulaDragging("B1:B2", "=A1*2", "B1", Some(NumFmt.Percent))
+    )
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+      List(ref"B1", ref"B2").foreach { r =>
+        updatedSheet.cells.get(r).map(_.value) match
+          case Some(CellValue.Formula(_, _)) => ()
+          case other => fail(s"Expected Formula at ${r.toA1}, got $other")
+        val style = updatedSheet.getCellStyle(r)
+        assert(style.isDefined, s"numFmt style should be set at ${r.toA1}")
+        assertEquals(style.get.numFmt, NumFmt.Percent)
+      }
+    }
+  }
+
+  test("batch: putf explicit formulas with format applies numFmt to every cell (GH-356)") {
+    val sheet = Sheet("Test")
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(
+      BatchOp.PutFormulas("B1:B2", Vector("=1+1", "=2+2"), Some(NumFmt.Currency))
+    )
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+      List(ref"B1", ref"B2").foreach { r =>
+        val style = updatedSheet.getCellStyle(r)
+        assert(style.isDefined, s"numFmt style should be set at ${r.toA1}")
+        assertEquals(style.get.numFmt, NumFmt.Currency)
+      }
+    }
+  }
+
+  test("batch: putf without format leaves existing cell style untouched (GH-356)") {
+    val ops = BatchParser
+      .parseBatchJson("""[{"op": "putf", "ref": "C1", "value": "=A1*2"}]""")
+      .toOption
+      .get
+      .ops
+    val sheet = Sheet("Test")
+    val wb = Workbook(Vector(sheet))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+      assertEquals(updatedSheet.getCellStyle(ref"C1"), None)
+    }
   }
 
   test("formatSummary: produces expected summary lines") {

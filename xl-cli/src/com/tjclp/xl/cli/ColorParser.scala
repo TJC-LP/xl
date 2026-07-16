@@ -1,6 +1,6 @@
 package com.tjclp.xl.cli
 
-import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 
 /**
  * Color parser for CLI input.
@@ -9,6 +9,7 @@ import com.tjclp.xl.styles.color.Color
  *   - Named colors: red, blue, yellow, green, white, black, etc.
  *   - Hex: #RGB, #RRGGBB, #AARRGGBB
  *   - RGB: rgb(r,g,b)
+ *   - Theme: theme:accent1 or theme:accent1:0.25 (slot + optional tint in [-1.0, 1.0])
  */
 object ColorParser:
 
@@ -41,8 +42,42 @@ object ColorParser:
     "lime" -> Color.fromRgb(0, 255, 0)
   )
 
+  /** Theme slot names for the `theme:<slot>[:<tint>]` syntax (GH-358). */
+  private val themeSlots: Map[String, ThemeSlot] = Map(
+    "dark1" -> ThemeSlot.Dark1,
+    "light1" -> ThemeSlot.Light1,
+    "dark2" -> ThemeSlot.Dark2,
+    "light2" -> ThemeSlot.Light2,
+    "accent1" -> ThemeSlot.Accent1,
+    "accent2" -> ThemeSlot.Accent2,
+    "accent3" -> ThemeSlot.Accent3,
+    "accent4" -> ThemeSlot.Accent4,
+    "accent5" -> ThemeSlot.Accent5,
+    "accent6" -> ThemeSlot.Accent6
+  )
+
   private val rgbPattern = """rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)""".r
   private val shortHexPattern = """#([0-9A-Fa-f]{3})""".r
+
+  /** Parse `theme:<slot>[:<tint>]`, e.g. `theme:accent1` or `theme:accent2:0.25`. */
+  private def parseTheme(input: String): Either[String, Color] =
+    input.split(":", -1).toList match
+      case "theme" :: slotName :: rest if rest.length <= 1 =>
+        for
+          slot <- themeSlots
+            .get(slotName)
+            .toRight(
+              s"Unknown theme slot: $slotName. Use ${themeSlots.keys.toList.sorted.mkString(", ")}"
+            )
+          tint <- rest.headOption match
+            case None => Right(0.0)
+            case Some(t) =>
+              t.toDoubleOption
+                .toRight(s"Invalid theme tint: $t (expected a number in [-1.0, 1.0])")
+                .flatMap(Color.validTint)
+        yield Color.Theme(slot, tint)
+      case _ =>
+        Left(s"Invalid theme color: $input. Use theme:<slot>[:<tint>], e.g. theme:accent1:0.25")
 
   /**
    * Parse a color string.
@@ -58,6 +93,10 @@ object ColorParser:
       case Some(color) => Right(color)
       case None =>
         input match
+          // theme:<slot>[:<tint>] format (GH-358)
+          case theme if theme.startsWith("theme:") =>
+            parseTheme(theme)
+
           // rgb(r,g,b) format
           case rgbPattern(r, g, b) =>
             try
@@ -80,7 +119,8 @@ object ColorParser:
 
           case _ =>
             Left(
-              s"Unknown color: $s. Use named (red, blue, ...), hex (#RRGGBB), or rgb(r,g,b)"
+              s"Unknown color: $s. Use named (red, blue, ...), hex (#RRGGBB), rgb(r,g,b), " +
+                "or theme:<slot>[:<tint>] (e.g. theme:accent1:0.25)"
             )
 
   /** List available named colors */

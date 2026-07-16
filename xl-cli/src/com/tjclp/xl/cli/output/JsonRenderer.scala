@@ -31,12 +31,16 @@ object JsonRenderer:
    *       "row": 1,
    *       "cells": [
    *         {"ref": "A1", "type": "text", "value": "Revenue", "formatted": "Revenue"},
-   *         {"ref": "B1", "type": "number", "value": 1000000, "formatted": "$1,000,000"}
+   *         {"ref": "B1", "type": "number", "value": 1000000, "formatted": "$1,000,000"},
+   *         {"ref": "C1", "type": "formula", "formula": "=B1*2", "value": 2000000, "formatted": "$2,000,000"}
    *       ]
    *     }
    *   ]
    * }
    * }}}
+   *
+   * Formula cells always carry the expression in a dedicated `formula` field (GH-357); `value` and
+   * `formatted` hold the computed (`evalFormulas`) or cached value — `null`/`""` when uncached.
    *
    * Output format (with headerRow):
    * {{{
@@ -50,6 +54,10 @@ object JsonRenderer:
    * }
    * }}}
    *
+   * @param showFormulas
+   *   Ignored for JSON output (GH-357): the formula expression is always present in the `formula`
+   *   field, so there is nothing to swap. Retained for signature compatibility with the other
+   *   renderers — `--formulas` only controls non-JSON display formats.
    * @param skipEmpty
    *   If true, omit cells where type is "empty" from output (reduces token usage for sparse ranges)
    * @param headerRow
@@ -74,14 +82,13 @@ object JsonRenderer:
         renderAsRecords(
           sheet,
           range,
-          showFormulas,
           skipEmpty,
           headerRowNum,
           evalFormulas,
           truncatedTotalRows
         )
       case None =>
-        renderAsRows(sheet, range, showFormulas, skipEmpty, evalFormulas, truncatedTotalRows)
+        renderAsRows(sheet, range, skipEmpty, evalFormulas, truncatedTotalRows)
 
   /**
    * Render range as array of records with header row values as keys.
@@ -89,7 +96,6 @@ object JsonRenderer:
   private def renderAsRecords(
     sheet: Sheet,
     range: CellRange,
-    showFormulas: Boolean,
     skipEmpty: Boolean,
     headerRowNum: Int,
     evalFormulas: Boolean,
@@ -136,7 +142,7 @@ object JsonRenderer:
             if skipEmpty && isEmpty then None
             else
               Some(
-                s"${escapeJsonString(headerName)}: ${renderCellValue(cell, sheet, showFormulas, evalFormulas)}"
+                s"${escapeJsonString(headerName)}: ${renderCellValue(cell, sheet, evalFormulas)}"
               )
           case None =>
             if skipEmpty then None
@@ -162,7 +168,6 @@ object JsonRenderer:
   private def renderAsRows(
     sheet: Sheet,
     range: CellRange,
-    showFormulas: Boolean,
     skipEmpty: Boolean,
     evalFormulas: Boolean,
     truncatedTotalRows: Option[Int]
@@ -192,7 +197,7 @@ object JsonRenderer:
             // Check if cell is effectively empty (including formulas returning empty)
             val isEmpty = RendererCommon.isCellEmpty(cell)
             if skipEmpty && isEmpty then None
-            else Some(renderCell(ref, cell, sheet, showFormulas, evalFormulas))
+            else Some(renderCell(ref, cell, sheet, evalFormulas))
           case None =>
             if skipEmpty then None
             else Some(renderEmptyCell(ref))
@@ -246,7 +251,6 @@ object JsonRenderer:
     ref: ARef,
     cell: Cell,
     sheet: Sheet,
-    showFormulas: Boolean,
     evalFormulas: Boolean
   ): String =
     val numFmt = cell.styleId
@@ -286,23 +290,52 @@ object JsonRenderer:
         ("empty", "null", "\"\"")
 
       case CellValue.Formula(expr, cached) =>
-        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
-        if showFormulas then
-          ("formula", escapeJsonString(displayExpr), escapeJsonString(displayExpr))
-        else if evalFormulas then
-          SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
-            case Right(result) =>
-              val formatted = NumFmtFormatter.formatValue(result, numFmt)
-              ("formula", escapeJsonString(displayExpr), escapeJsonString(formatted))
-            case Left(err) =>
-              val errStr = RendererCommon.formatEvalError(err.message)
-              ("formula", escapeJsonString(displayExpr), escapeJsonString(errStr))
-        else
-          val cachedValue =
-            cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
-          ("formula", escapeJsonString(displayExpr), escapeJsonString(cachedValue))
+        val (raw, fmt) =
+          formulaValueJson(sheet, displayExpression(expr), cached, numFmt, evalFormulas)
+        ("formula", raw, fmt)
 
-    s"""{"ref": "${ref.toA1}", "type": "$typeStr", "value": $rawValue, "formatted": $formatted}"""
+    // GH-357: formula cells always carry the expression in a dedicated field; value/formatted
+    // hold the computed or cached value. --formulas only affects non-JSON display formats.
+    val formulaField = cell.value match
+      case CellValue.Formula(expr, _) =>
+        s""", "formula": ${escapeJsonString(displayExpression(expr))}"""
+      case _ => ""
+
+    s"""{"ref": "${ref.toA1}", "type": "$typeStr"$formulaField, "value": $rawValue, "formatted": $formatted}"""
+
+  /** Formula expression as displayed: always with a leading `=`. */
+  private def displayExpression(expr: String): String =
+    if expr.startsWith("=") then expr else s"=$expr"
+
+  /**
+   * Raw JSON value + formatted string for a formula cell (GH-357): evaluated when `evalFormulas`
+   * (error token on failure), else the cached value; `null`/`""` when uncached.
+   */
+  private def formulaValueJson(
+    sheet: Sheet,
+    displayExpr: String,
+    cached: Option[CellValue],
+    numFmt: NumFmt,
+    evalFormulas: Boolean
+  ): (String, String) =
+    if evalFormulas then
+      SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
+        case Right(result) =>
+          (
+            renderCellValueFromCellValue(result, numFmt),
+            escapeJsonString(NumFmtFormatter.formatValue(result, numFmt))
+          )
+        case Left(err) =>
+          val errStr = escapeJsonString(RendererCommon.formatEvalError(err.message))
+          (errStr, errStr)
+    else
+      cached match
+        case Some(cv) =>
+          (
+            renderCellValueFromCellValue(cv, numFmt),
+            escapeJsonString(NumFmtFormatter.formatValue(cv, numFmt))
+          )
+        case None => ("null", "\"\"")
 
   private def renderEmptyCell(ref: ARef): String =
     s"""{"ref": "${ref.toA1}", "type": "empty", "value": null, "formatted": ""}"""
@@ -362,7 +395,6 @@ object JsonRenderer:
   private def renderCellValue(
     cell: Cell,
     sheet: Sheet,
-    showFormulas: Boolean,
     evalFormulas: Boolean
   ): String =
     val numFmt = cell.styleId
@@ -381,16 +413,9 @@ object JsonRenderer:
       case CellValue.Error(err) => escapeJsonString(err.toExcel)
       case CellValue.Empty => "null"
       case CellValue.Formula(expr, cached) =>
-        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
-        if showFormulas then escapeJsonString(displayExpr)
-        else if evalFormulas then
-          SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
-            case Right(result) => renderCellValueFromCellValue(result, numFmt)
-            case Left(err) => escapeJsonString(RendererCommon.formatEvalError(err.message))
-        else
-          cached match
-            case Some(cv) => renderCellValueFromCellValue(cv, numFmt)
-            case None => escapeJsonString(displayExpr)
+        // GH-357: records mode is a scalar projection — always the computed/cached value,
+        // never the expression; null when uncached (matches empty cells).
+        formulaValueJson(sheet, displayExpression(expr), cached, numFmt, evalFormulas)._1
 
   private def renderCellValueFromCellValue(value: CellValue, numFmt: NumFmt): String =
     value match

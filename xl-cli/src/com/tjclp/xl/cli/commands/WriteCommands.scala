@@ -8,7 +8,9 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.helpers.{
+  AppearanceOps,
   BatchParser,
+  CfRuleParser,
   ColumnAutoFit,
   CopyOps,
   SheetResolver,
@@ -709,7 +711,9 @@ object WriteCommands:
           _: BatchParser.BatchOp.RowShow | _: BatchParser.BatchOp.AutoFit |
           _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
           _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
-          _: BatchParser.BatchOp.Hyperlink =>
+          _: BatchParser.BatchOp.Hyperlink | _: BatchParser.BatchOp.SetSheetView |
+          _: BatchParser.BatchOp.SetTabColor | _: BatchParser.BatchOp.SetPageSetup |
+          _: BatchParser.BatchOp.SetHeaderFooter | _: BatchParser.BatchOp.AddConditionalFormat =>
         false
 
   /**
@@ -1103,6 +1107,207 @@ object WriteCommands:
       updatedWb = wb.put(updatedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
     yield s"Removed freeze panes from sheet '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+
+  // ===== Sheet appearance & print setup (GH-358) =====
+
+  /** Shared shape of the four appearance handlers: requireSheet → pure applier → write. */
+  private def applyAppearance(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    context: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean
+  )(f: Sheet => Either[String, Sheet])(message: Sheet => String): IO[String] =
+    for
+      sheet <- SheetResolver.requireSheet(wb, sheetOpt, context)
+      updatedSheet <- IO.fromEither(f(sheet).left.map(new Exception(_)))
+      _ <- writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
+    yield s"${message(sheet)}\n${saveSuffix(outputPath, stream)}"
+
+  /**
+   * Set sheet view options: gridline visibility, zoom scale (10-400), tab selection. Unspecified
+   * options preserve the sheet's current view settings.
+   */
+  def sheetView(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    gridlines: Option[Boolean],
+    zoom: Option[Int],
+    tabSelected: Option[Boolean],
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    applyAppearance(wb, sheetOpt, "sheet-view", outputPath, config, stream)(
+      AppearanceOps.applySheetView(_, gridlines, zoom, tabSelected)
+    ) { sheet =>
+      val desc = AppearanceOps.describe(
+        "gridlines" -> gridlines.map(g => if g then "on" else "off"),
+        "zoom" -> zoom.map(_.toString),
+        "tab-selected" -> tabSelected.map(t => if t then "on" else "off")
+      )
+      s"Set sheet view on '${sheet.name.value}': $desc"
+    }
+
+  /**
+   * Set or clear the sheet tab color (GH-358). `--clear` removes the modeled color only — a
+   * tabColor preserved from the source XML survives (preserve-if-None write semantics).
+   */
+  def tabColor(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    colorStr: Option[String],
+    clear: Boolean,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    applyAppearance(wb, sheetOpt, "tab-color", outputPath, config, stream)(
+      AppearanceOps.applyTabColor(_, colorStr, clear)
+    ) { sheet =>
+      colorStr match
+        case Some(c) => s"Set tab color on '${sheet.name.value}': $c"
+        case None =>
+          s"Cleared tab color on '${sheet.name.value}' " +
+            "(a color preserved from the source file is not stripped)"
+    }
+
+  /**
+   * Set print page setup: orientation, scale, fit-to-width/height, and the tri-state fitToPage
+   * flag. Unspecified options preserve the sheet's current page setup.
+   */
+  def pageSetup(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    orientation: Option[String],
+    scale: Option[Int],
+    fitToWidth: Option[Int],
+    fitToHeight: Option[Int],
+    fitToPage: Option[Boolean],
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    applyAppearance(wb, sheetOpt, "page-setup", outputPath, config, stream)(
+      AppearanceOps.applyPageSetup(_, orientation, scale, fitToWidth, fitToHeight, fitToPage)
+    ) { sheet =>
+      val desc = AppearanceOps.describe(
+        "orientation" -> orientation,
+        "scale" -> scale.map(_.toString),
+        "fit-to-width" -> fitToWidth.map(_.toString),
+        "fit-to-height" -> fitToHeight.map(_.toString),
+        "fit-to-page" -> fitToPage.map(f => if f then "on" else "off")
+      )
+      s"Set page setup on '${sheet.name.value}': $desc"
+    }
+
+  /**
+   * Set print header/footer text (Excel codes: &L/&C/&R sections, &P page, &N total, &D date, &F
+   * file, &A sheet). Even/first text auto-sets the corresponding different-* flag.
+   */
+  def headerFooter(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    oddHeader: Option[String],
+    oddFooter: Option[String],
+    evenHeader: Option[String],
+    evenFooter: Option[String],
+    firstHeader: Option[String],
+    firstFooter: Option[String],
+    differentOddEven: Boolean,
+    differentFirst: Boolean,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    applyAppearance(wb, sheetOpt, "header-footer", outputPath, config, stream)(
+      AppearanceOps.applyHeaderFooter(
+        _,
+        oddHeader,
+        oddFooter,
+        evenHeader,
+        evenFooter,
+        firstHeader,
+        firstFooter,
+        differentOddEven,
+        differentFirst
+      )
+    ) { sheet =>
+      val desc = AppearanceOps.describe(
+        "odd-header" -> oddHeader,
+        "odd-footer" -> oddFooter,
+        "even-header" -> evenHeader,
+        "even-footer" -> evenFooter,
+        "first-header" -> firstHeader,
+        "first-footer" -> firstFooter
+      )
+      s"Set header/footer on '${sheet.name.value}': $desc"
+    }
+
+  // ===== Conditional formatting (GH-324) =====
+
+  /**
+   * Add one conditional-formatting rule to a range. The rule string is the `cf add` colon DSL (see
+   * [[CfRuleParser]]); the dxf comes from the formatting flags. Priorities are stamped by
+   * `Sheet.conditionalFormat` (auto-priority, append order) — never by the CLI.
+   */
+  def cfAdd(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    rangeStr: String,
+    ruleStr: String,
+    bold: Boolean,
+    italic: Boolean,
+    underline: Boolean,
+    strike: Boolean,
+    bg: Option[String],
+    fg: Option[String],
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "cf add")
+      (sheet, refOrRange) = resolved
+      range = refOrRange match
+        case Left(ref) => CellRange(ref, ref)
+        case Right(r) => r
+      dxf <- IO.fromEither(
+        CfRuleParser.buildDxf(bold, italic, underline, strike, bg, fg).left.map(new Exception(_))
+      )
+      rule <- IO.fromEither(CfRuleParser.parse(ruleStr, dxf).left.map(new Exception(_)))
+      updatedSheet = sheet.conditionalFormat(range, rule)
+      priority = updatedSheet.typedConditionalFormats.lastOption
+        .flatMap(_.rules.lastOption)
+        .flatMap(com.tjclp.xl.cf.CfRule.priorityOf)
+      _ <- writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
+    yield
+      val priorityNote = priority.fold("")(p => s" (priority $p)")
+      s"Added conditional format on '${sheet.name.value}': ${CfRuleParser.describe(rule)} " +
+        s"over ${range.toA1}$priorityNote\n${saveSuffix(outputPath, stream)}"
+
+  /** List conditional-formatting rules on the sheet (read-only — no output file needed). */
+  def cfList(wb: Workbook, sheetOpt: Option[Sheet]): IO[String] =
+    SheetResolver.requireSheet(wb, sheetOpt, "cf list").map { sheet =>
+      val blocks = sheet.conditionalFormats
+      if blocks.isEmpty then s"No conditional formatting on '${sheet.name.value}'"
+      else
+        blocks.zipWithIndex
+          .map {
+            case (com.tjclp.xl.cf.ConditionalFormat.Rules(ranges, rules, _), i) =>
+              val header = s"[$i] ${ranges.map(_.toA1).mkString(" ")}"
+              val ruleLines = rules.map { r =>
+                val priorityNote =
+                  com.tjclp.xl.cf.CfRule.priorityOf(r).fold("")(p => s" (priority $p)")
+                s"    ${CfRuleParser.describe(r)}$priorityNote"
+              }
+              (header +: ruleLines).mkString("\n")
+            case (com.tjclp.xl.cf.ConditionalFormat.Preserved(_), i) =>
+              s"[$i] (preserved block)"
+          }
+          .mkString("\n")
+    }
 
   // ===== Structural editing: insert/delete rows & columns (GH-128, GH-129) =====
   // Cell shift (xl-core) + formula rewriting across all sheets (StructuralEditor). #REF! on loss.
