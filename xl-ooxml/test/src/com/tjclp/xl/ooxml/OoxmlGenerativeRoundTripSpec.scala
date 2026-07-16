@@ -34,8 +34,9 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  * text, author); hyperlinks equal; merges set-equal; viewSettings/pageSetup equal; docProps
  * metadata fields equal (GH-242). Explicitly ignored serialization noise: styleId numbering, SST
  * ordering, activeSheetIndex (not serialized), dimension/defaultColWidth-style derived props,
- * write-only freezePane, cached formula values, and Rgb alpha-00 ≡ alpha-FF (the parser
- * deliberately canonicalizes 00 alpha to opaque, matching Excel/openpyxl's 00RRGGBB convention).
+ * cached formula values, and Rgb alpha-00 ≡ alpha-FF (the parser deliberately canonicalizes 00
+ * alpha to opaque, matching Excel/openpyxl's 00RRGGBB convention). freezePane compares under the
+ * writer-canonical mapping since GH-372 (the reader populates it from the pane XML).
  *
  * Determinism: the suite fixes the ScalaCheck initial seed so CI failures are reproducible.
  * Locally, crank the run count to shake out new bugs:
@@ -151,7 +152,7 @@ class OoxmlGenerativeRoundTripSpec extends ScalaCheckSuite:
             margins = Some(PageMargins(0.5, 0.5, 0.75, 0.75, 0.3, 0.3))
           )
         ),
-        freezePane = Some(FreezePane.At(ref"B2"))
+        freezePane = Some(FreezePane.At(ref"B2", Some(ref"B40")))
       )
     val wb = Workbook(Vector(sheet))
     val diffs = roundTripDiff(wb)

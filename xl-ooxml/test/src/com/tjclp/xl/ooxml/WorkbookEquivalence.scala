@@ -5,6 +5,7 @@ import java.time.Duration
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.sheets.FreezePane
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.border.{Border, BorderSide}
 import com.tjclp.xl.styles.color.Color
@@ -35,7 +36,10 @@ import com.tjclp.xl.styles.fill.Fill
  *   - merged ranges set-equal
  *   - (c) sheet-level: viewSettings equal; pageSetup equal (an authored PageSetup always
  *     round-trips when it has at least one visible field; all-default PageSetup serializes to no
- *     XML and reads back None by design — generators only produce visible ones)
+ *     XML and reads back None by design — generators only produce visible ones); freezePane equal
+ *     after WRITER-CANONICAL mapping (GH-372: the reader populates it from the pane XML) — an A1
+ *     anchor or Remove emits no pane and reads back None, a scroll target equal to the anchor reads
+ *     back None
  *   - (d) workbook-level: docProps metadata fields equal (GH-242 — creator, lastModifiedBy,
  *     application, appVersion exact; created/modified at W3CDTF second precision)
  *
@@ -45,8 +49,6 @@ import com.tjclp.xl.styles.fill.Fill
  *   - metadata theme/definedNames/sheetStates (separate parts with their own round-trip specs);
  *     activeSheetIndex compares since GH-294 (bookViews/activeTab serializes both directions)
  *   - the worksheet dimension element and derived defaults (defaultColWidth etc.)
- *   - freezePane (three-valued write-only override: None means "preserve", so the reader never
- *     populates it)
  *   - Cell.comment / rich-text comment formatting (Sheet.comments is the comment model; the
  *     author-prefix run the writer adds is presentation, so comments compare by plain text)
  *   - cached formula values (see Formula rule above)
@@ -140,8 +142,29 @@ object WorkbookEquivalence:
           s"$name: pageSetup mismatch: expected ${expected.pageSetup}, actual ${actual.pageSetup}"
         )
       else Nil
+    val freezeDiffs =
+      val canonical = canonicalFreeze(expected.freezePane)
+      if canonical != actual.freezePane then
+        List(
+          s"$name: freezePane mismatch (GH-372): expected $canonical " +
+            s"(authored ${expected.freezePane}), actual ${actual.freezePane}"
+        )
+      else Nil
     refDiffs ++ cellDiffs ++ commentDiffs ++ mergeDiffs ++ viewDiffs ++ pageSetupDiffs ++
-      drawingsDiff(name, expected, actual) ++ cfDiff(name, expected, actual)
+      freezeDiffs ++ drawingsDiff(name, expected, actual) ++ cfDiff(name, expected, actual)
+
+  /**
+   * Writer-canonical freeze pane (GH-372): the reader populates freezePane from the pane XML, so it
+   * participates in ≈ mapped through what the writer actually emits — an A1 anchor is a no-op the
+   * writer elides, Remove strips the pane, and a scroll target equal to the anchor is the
+   * unscrolled spelling; all three read back as the model's passive default.
+   */
+  private def canonicalFreeze(freeze: Option[FreezePane]): Option[FreezePane] = freeze match
+    case Some(FreezePane.At(anchor, scrolledTo)) =>
+      if anchor == ARef.from0(0, 0) then None
+      else Some(FreezePane.At(anchor, scrolledTo.filter(_ != anchor)))
+    case Some(FreezePane.Remove) => None
+    case None => None
 
   /**
    * Conditional-format equality (GH-136): PLAIN structural equality — typed blocks/rules compare by

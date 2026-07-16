@@ -508,7 +508,8 @@ object Generators:
     for
       gridLines <- Gen.oneOf(true, false)
       zoom <- Gen.option(Gen.oneOf(25, 75, 85, 100, 150, 200, 400))
-    yield SheetView(gridLines, zoom)
+      tabSelected <- Gen.option(Gen.oneOf(true, false))
+    yield SheetView(gridLines, zoom, tabSelected)
 
   /** Header/footer with at least one visible part or flag (all-default reads back as None) */
   val genHeaderFooter: Gen[HeaderFooter] =
@@ -562,17 +563,20 @@ object Generators:
       if ps == PageSetup() then ps.copy(orientation = Some("landscape")) else ps
 
   /**
-   * Freeze pane at a non-A1 cell (freezing at A1 is a no-op the writer elides). NOTE: freezePane
-   * has write-only three-valued semantics (None = preserve) — the reader never populates it, so
-   * generating it exercises the writer without participating in round-trip equality.
+   * Freeze pane at a non-A1 cell (freezing at A1 is a no-op the writer elides), optionally scrolled
+   * (GH-382). The reader populates freezePane from the pane XML since GH-372, so generated panes
+   * participate in round-trip equality; the scroll target sits strictly below the anchor so it
+   * never canonicalizes back to the unscrolled spelling on read.
    */
   val genFreezePane: Gen[FreezePane] =
     for
       col <- Gen.choose(0, 3)
       row <- Gen.choose(0, 5)
+      scrollRows <- Gen.option(Gen.choose(1, 30))
     yield
       val ref = if col == 0 && row == 0 then ARef.from0(1, 1) else ARef.from0(col, row)
-      FreezePane.At(ref)
+      val scrolledTo = scrollRows.map(dr => ARef.from0(ref.col.index0, ref.row.index0 + dr))
+      FreezePane.At(ref, scrolledTo)
 
   /** Cell reference within a compact grid (A1:H12) so merges/comments cluster realistically */
   val genGridRef: Gen[ARef] =

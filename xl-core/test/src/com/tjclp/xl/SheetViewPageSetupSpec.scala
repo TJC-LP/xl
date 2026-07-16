@@ -33,6 +33,12 @@ class SheetViewPageSetupSpec extends FunSuite:
     assertEquals(sheet.viewSettings, Some(view))
   }
 
+  test("SheetView.tabSelected defaults to None and is settable (GH-372)") {
+    assertEquals(SheetView.default.tabSelected, None)
+    assertEquals(SheetView(tabSelected = Some(true)).tabSelected, Some(true))
+    assertEquals(SheetView(tabSelected = Some(false)).tabSelected, Some(false))
+  }
+
   // ===== FreezePane scroll state (GH-382) =====
 
   test("FreezePane.At defaults to an unscrolled pane (scrolledTo = None)") {

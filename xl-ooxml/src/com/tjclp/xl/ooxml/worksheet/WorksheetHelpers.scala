@@ -408,10 +408,11 @@ private[ooxml] def buildSheetViewsElem(
  * Apply sheet view settings to sheetViews XML.
  *
  * When `None`, preserves existing sheetViews unchanged (passive default, mirroring freezePane).
- * When `Some(view)`, sets `showGridLines` ("1"/"0", always written so the setting round-trips) and
- * `zoomScale` (written when defined, removed when None) on every `<sheetView>` element, creating a
- * minimal `<sheetViews><sheetView workbookViewId="0"/></sheetViews>` when absent. Unmodeled
- * attributes (tabSelected, topLeftCell, view, ...) are preserved.
+ * When `Some(view)`, sets `showGridLines` ("1"/"0", always written so the setting round-trips),
+ * `zoomScale` (written when defined, removed when None), and `tabSelected` (GH-372: overlaid when
+ * defined, LEFT AS PRESERVED when None) on every `<sheetView>` element, creating a minimal
+ * `<sheetViews><sheetView workbookViewId="0"/></sheetViews>` when absent. Unmodeled attributes
+ * (rightToLeft, topLeftCell, view, workbookViewId, ...) are preserved.
  */
 private def applyViewSettingsOverride(
   existing: Option[Elem],
@@ -444,9 +445,16 @@ private def applyViewAttrs(sheetView: Elem, view: SheetView): Elem =
     if view.showGridLines then "1" else "0",
     Null
   )
-  view.zoomScale match
+  val withZoom = view.zoomScale match
     case Some(zoom) => withGrid % new UnprefixedAttribute("zoomScale", zoom.toString, Null)
     case None => withGrid.copy(attributes = withGrid.attributes.remove("zoomScale"))
+  view.tabSelected match
+    case Some(selected) =>
+      withZoom % new UnprefixedAttribute("tabSelected", if selected then "1" else "0", Null)
+    // Three-valued (GH-372): None means "not modeled" — a preserved tabSelected attribute
+    // must ride through, so it is never removed here (unlike zoomScale, where the reader
+    // always models an in-range source value)
+    case None => withZoom
 
 /**
  * Apply freeze pane override to sheetViews XML.

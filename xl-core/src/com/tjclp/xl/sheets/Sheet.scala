@@ -26,14 +26,18 @@ import scala.util.boundary, boundary.break
  *   - `Some(FreezePane.At(ref))`: inject/replace `<pane>` in sheetViews
  *   - `Some(FreezePane.Remove)`: strip any existing `<pane>` from sheetViews
  *
- * The distinction between `None` and `Some(Remove)` matters: `None` is the passive default
- * (round-trip preserves the original); `Some(Remove)` is the active intent to remove freeze panes
- * even when the source XML had them.
+ * The distinction between `None` and `Some(Remove)` matters: `None` is the passive default;
+ * `Some(Remove)` is the active intent to remove freeze panes even when the source XML had them.
+ * Since GH-372 the reader populates this from frozen `<pane>` elements (anchor from xSplit/ySplit,
+ * scroll target from the pane's topLeftCell attribute), so a read→modify→write regenerates the pane
+ * from the model and keeps the freeze through the rewrite. Plain SPLIT panes stay unmodeled
+ * (`None`) and ride the preserved XML.
  *
  * @param viewSettings
- *   Sheet view settings (gridline visibility, zoom). `None` preserves any existing `<sheetView>`
- *   attributes on write; `Some(view)` sets them. Freeze panes and view settings share a single
- *   `<sheetView>` element in the serialized XML.
+ *   Sheet view settings (gridline visibility, zoom, tab selection). `None` preserves any existing
+ *   `<sheetView>` attributes on write; `Some(view)` sets them. The reader populates this whenever a
+ *   modeled attribute is present in the source (GH-258/GH-372). Freeze panes and view settings
+ *   share a single `<sheetView>` element in the serialized XML.
  *
  * @param drawings
  *   Drawing objects (pictures and preserved fragments, GH-221). Document order is z-order is

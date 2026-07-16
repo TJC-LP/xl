@@ -5,6 +5,7 @@ import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.api.{Sheet, Workbook}
 import com.tjclp.xl.sheets.{
   ColumnProperties,
+  FreezePane,
   HeaderFooter,
   PageMargins,
   PageSetup,
@@ -1051,8 +1052,11 @@ object XlsxReader:
     val pageSetup =
       parsePageSetup(ooxmlSheet.pageSetup, ooxmlSheet.pageMargins, ooxmlSheet.headerFooter)
 
-    // Parse view settings (gridlines, zoom) from <sheetViews> — GH-258
+    // Parse view settings (gridlines, zoom, tabSelected) from <sheetViews> — GH-258/GH-372
     val viewSettings = parseSheetView(ooxmlSheet.sheetViews)
+
+    // Parse frozen panes into the model (GH-372) so read→modify→write keeps them
+    val freezePane = parseFreezePane(ooxmlSheet.sheetViews)
 
     // Parse conditional formatting into the typed model (GH-136); dxfId attrs resolve through
     // the styles.xml <dxfs> table. Total: unmodeled content rides through Preserved.
@@ -1070,6 +1074,7 @@ object XlsxReader:
         columnProperties = columnProperties,
         rowProperties = rowProperties,
         pageSetup = pageSetup,
+        freezePane = freezePane,
         viewSettings = viewSettings,
         drawings = drawings,
         conditionalFormats = conditionalFormats
@@ -1208,12 +1213,12 @@ object XlsxReader:
     if parsed == HeaderFooter() then None else Some(parsed)
 
   /**
-   * Parse sheet view settings (GH-258) from the first <sheetView>.
+   * Parse sheet view settings (GH-258/GH-372) from the first <sheetView>.
    *
-   * Returns Some only when a modeled attribute (showGridLines, zoomScale) is present, so typical
-   * files keep viewSettings = None and the raw sheetViews XML rides through unchanged on rewrite
-   * (passive preserve, mirroring freezePane semantics). Out-of-range zoom values are dropped rather
-   * than violating the SheetView invariant.
+   * Returns Some only when a modeled attribute (showGridLines, zoomScale, tabSelected) is present,
+   * so typical files keep viewSettings = None and the raw sheetViews XML rides through unchanged on
+   * rewrite (passive preserve). Out-of-range zoom values are dropped rather than violating the
+   * SheetView invariant.
    */
   private def parseSheetView(sheetViewsElem: Option[Elem]): Option[SheetView] =
     for
@@ -1222,8 +1227,46 @@ object XlsxReader:
       attrs = view.attributes.asAttrMap
       showGridLines = attrs.get("showGridLines").map(v => v != "0" && v != "false")
       zoomScale = attrs.get("zoomScale").flatMap(_.toIntOption).filter(z => z >= 10 && z <= 400)
-      if showGridLines.isDefined || zoomScale.isDefined
-    yield SheetView(showGridLines = showGridLines.getOrElse(true), zoomScale = zoomScale)
+      tabSelected = attrs.get("tabSelected").map(v => v == "1" || v == "true")
+      if showGridLines.isDefined || zoomScale.isDefined || tabSelected.isDefined
+    yield SheetView(
+      showGridLines = showGridLines.getOrElse(true),
+      zoomScale = zoomScale,
+      tabSelected = tabSelected
+    )
+
+  /**
+   * Parse the freeze pane (GH-372) from the first <sheetView>'s <pane> child.
+   *
+   * Only FROZEN panes (state="frozen"/"frozenSplit") enter the model: for those, xSplit/ySplit
+   * count frozen columns/rows, so the freeze anchor derives as (col=xSplit, row=ySplit). Plain
+   * split panes (state="split", the schema default) measure the split in 1/20 pt and stay unmodeled
+   * — they ride the preserved sheetViews XML. The pane's topLeftCell attribute is the SCROLL
+   * target, captured as scrolledTo when it differs from the derived anchor (GH-382) — without it
+   * the first read→write of a scrolled pane would lose the scroll.
+   *
+   * Total: a missing, degenerate (no split), or out-of-range pane yields None — the passive
+   * default, never Some(Remove).
+   */
+  private def parseFreezePane(sheetViewsElem: Option[Elem]): Option[FreezePane] =
+    for
+      views <- sheetViewsElem
+      view <- (views \ "sheetView").collectFirst { case e: Elem => e }
+      pane <- (view \ "pane").collectFirst { case e: Elem => e }
+      attrs = pane.attributes.asAttrMap
+      state <- attrs.get("state")
+      if state == "frozen" || state == "frozenSplit"
+      xSplit = attrs.get("xSplit").flatMap(_.toIntOption).getOrElse(0)
+      ySplit = attrs.get("ySplit").flatMap(_.toIntOption).getOrElse(0)
+      if xSplit > 0 || ySplit > 0
+      if xSplit >= 0 && xSplit <= Column.MaxIndex0 && ySplit >= 0 && ySplit <= Row.MaxIndex0
+    yield
+      val anchor = ARef.from0(xSplit, ySplit)
+      val scrolledTo = attrs
+        .get("topLeftCell")
+        .flatMap(t => ARef.parse(t).toOption)
+        .filter(_ != anchor)
+      FreezePane.At(anchor, scrolledTo)
 
   /**
    * Assemble final workbook with optional SourceContext for surgical modification.
