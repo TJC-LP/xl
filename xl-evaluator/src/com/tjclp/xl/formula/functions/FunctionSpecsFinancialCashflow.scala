@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.cells.CellError
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import scala.util.control.NonFatal
@@ -115,10 +116,11 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
           @annotation.tailrec
           def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
             if iter >= maxIter then
+              // GH-344: Excel #NUM! for non-convergence (op-level classification)
               Left(
-                EvalError.EvalFailed(
-                  s"IRR did not converge after $maxIter iterations",
-                  Some("IRR(values[, guess])")
+                EvalError.ErrorValue(
+                  CellError.Num,
+                  Some(s"IRR did not converge after $maxIter iterations")
                 )
               )
             else
@@ -251,10 +253,11 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
               @annotation.tailrec
               def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
                 if iter >= maxIter then
+                  // GH-344: Excel #NUM! for non-convergence (op-level classification)
                   Left(
-                    EvalError.EvalFailed(
-                      s"XIRR did not converge after $maxIter iterations",
-                      Some("XIRR(values, dates[, guess])")
+                    EvalError.ErrorValue(
+                      CellError.Num,
+                      Some(s"XIRR did not converge after $maxIter iterations")
                     )
                   )
                 else

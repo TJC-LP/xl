@@ -195,6 +195,53 @@ class ErrorValueLawsSpec extends ScalaCheckSuite:
     assertEquals(sheet.evaluateFormula("=(1<A1)=TRUE"), Right(CellValue.Error(CellError.NA)))
   }
 
+  // ===== L5: broadcasts are TOTAL in Right — mismatched dims pad with #N/A =====
+
+  property("L5: broadcast compare/arith/equality never Left; beyond-extent positions are #N/A") {
+    val genPlain: Gen[CellValue] =
+      Gen.chooseNum(-9, 9).map(n => CellValue.Number(BigDecimal(n)))
+    def genArray(rows: Int, cols: Int): Gen[ArrayResult] =
+      Gen.listOfN(rows * cols, genPlain).map(vs => ArrayResult.fromFlat(vs.toVector, rows, cols))
+    val genDims = Gen.choose(1, 4)
+    forAll(genDims, genDims, genDims, genDims) { (lr, lc, rr, rc) =>
+      forAll(genArray(lr, lc), genArray(rr, rc)) { (left, right) =>
+        def outDim(l: Int, r: Int): Int = if l == 1 then r else if r == 1 then l else math.max(l, r)
+        val outRows = outDim(lr, rr)
+        val outCols = outDim(lc, rc)
+        def padded(aRows: Int, aCols: Int, row: Int, col: Int): Boolean =
+          (aRows != 1 && row >= aRows) || (aCols != 1 && col >= aCols)
+        val compare = ArrayArithmetic.broadcastOrderedCompare(left, right, _ < 0)
+        val arith = ArrayArithmetic.broadcast(
+          ArrayArithmetic.ArrayOperand.Array(left),
+          ArrayArithmetic.ArrayOperand.Array(right),
+          ArrayArithmetic.add
+        )
+        val equality = ArrayArithmetic.broadcastEqualityCompare(left, Left(right), false)
+        (compare, arith, equality) match
+          case (Right(cmp), Right(ArrayArithmetic.ArrayOperand.Array(sum)), Right(eq)) =>
+            Prop.all(
+              (for
+                row <- 0 until outRows
+                col <- 0 until outCols
+              yield
+                val isPadded = padded(lr, lc, row, col) || padded(rr, rc, row, col)
+                val expectNA =
+                  if isPadded then
+                    cmp(row, col) == CellValue.Error(CellError.NA) &&
+                    sum(row, col) == CellValue.Error(CellError.NA) &&
+                    eq(row, col) == CellValue.Error(CellError.NA)
+                  else
+                    cmp(row, col) != CellValue.Error(CellError.NA) &&
+                    sum(row, col) != CellValue.Error(CellError.NA) &&
+                    eq(row, col) != CellValue.Error(CellError.NA)
+                Prop(expectNA) :| s"($row,$col) padded=$isPadded dims=($lr,$lc)x($rr,$rc)"
+              )*
+            ) && Prop(cmp.rows == outRows && cmp.cols == outCols) :| "output dims"
+          case other => Prop.falsified :| s"expected all Right, got $other"
+      }
+    }
+  }
+
   // ===== L4: Aggregate(id, range) ≡ Call(spec, range), including error policy =====
 
   property("L4: the TExpr.Aggregate node and the registry Call agree over error-bearing ranges") {

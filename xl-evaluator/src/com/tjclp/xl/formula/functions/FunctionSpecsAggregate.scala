@@ -383,7 +383,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         result <-
           val desc = nums.sorted.reverse
           if k >= 1 && k <= desc.length then Right(desc(k - 1))
-          else Left(EvalError.EvalFailed(s"LARGE: k=$k out of range (#NUM!)", None))
+          // GH-344: Excel #NUM! (op-level classification)
+          else Left(EvalError.ErrorValue(CellError.Num, Some(s"LARGE: k=$k out of range")))
       yield result
     }
 
@@ -401,7 +402,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         result <-
           val asc = nums.sorted
           if k >= 1 && k <= asc.length then Right(asc(k - 1))
-          else Left(EvalError.EvalFailed(s"SMALL: k=$k out of range (#NUM!)", None))
+          // GH-344: Excel #NUM! (op-level classification)
+          else Left(EvalError.ErrorValue(CellError.Num, Some(s"SMALL: k=$k out of range")))
       yield result
     }
 
@@ -421,7 +423,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           case None => Right(0)
         result <-
           if !nums.contains(num) then
-            Left(EvalError.EvalFailed(s"RANK: $num not found in range (#N/A)", None))
+            // GH-344: Excel #N/A (op-level classification)
+            Left(EvalError.ErrorValue(CellError.NA, Some(s"RANK: $num not found in range")))
           else if order == 0 then Right(BigDecimal(nums.count(_ > num) + 1))
           else Right(BigDecimal(nums.count(_ < num) + 1))
       yield result
@@ -455,7 +458,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         result <- percentileInc(nums.sorted, p) match
           case Some(v) => Right(v)
           case None =>
-            Left(EvalError.EvalFailed(s"PERCENTILE: invalid p=$p or empty range (#NUM!)", None))
+            // GH-344: Excel #NUM! (op-level classification)
+            Left(
+              EvalError.ErrorValue(CellError.Num, Some(s"PERCENTILE: invalid p=$p or empty range"))
+            )
       yield result
     }
 
@@ -472,11 +478,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         q <- ctx.evalExpr(qExpr)
         result <-
           if q < 0 || q > 4 then
-            Left(EvalError.EvalFailed(s"QUARTILE: quart=$q must be 0-4 (#NUM!)", None))
+            // GH-344: Excel #NUM! (op-level classification)
+            Left(EvalError.ErrorValue(CellError.Num, Some(s"QUARTILE: quart=$q must be 0-4")))
           else
             percentileInc(nums.sorted, BigDecimal(q) / 4) match
               case Some(v) => Right(v)
-              case None => Left(EvalError.EvalFailed("QUARTILE: empty range (#NUM!)", None))
+              // GH-344: Excel #NUM! (op-level classification)
+              case None => Left(EvalError.ErrorValue(CellError.Num, Some("QUARTILE: empty range")))
       yield result
     }
 
@@ -1234,11 +1242,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case Nil => Right(BigDecimal(0))
                 case first :: rest =>
                   // Validate dimensions match
+                  // GH-344 4b: SUMPRODUCT keeps exact-dimension enforcement — Excel raises
+                  // #VALUE! here, never the broadcast #N/A padding
                   val dimensionError = rest.collectFirst {
                     case arr if arr.rows != first.rows || arr.cols != first.cols =>
-                      EvalError.EvalFailed(
-                        s"SUMPRODUCT: all arrays must have same dimensions (first is ${first.rows}×${first.cols}, got ${arr.rows}×${arr.cols})",
-                        Some("SUMPRODUCT(...)")
+                      EvalError.ErrorValue(
+                        CellError.Value,
+                        Some(
+                          s"SUMPRODUCT: all arrays must have same dimensions (first is ${first.rows}×${first.cols}, got ${arr.rows}×${arr.cols})"
+                        )
                       )
                   }
 

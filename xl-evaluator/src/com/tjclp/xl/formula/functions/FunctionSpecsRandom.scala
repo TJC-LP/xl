@@ -4,6 +4,8 @@ import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.EvalError
 import com.tjclp.xl.formula.Arity
 
+import com.tjclp.xl.cells.CellError
+
 /**
  * GH-115: random number functions.
  *
@@ -42,20 +44,22 @@ trait FunctionSpecsRandom extends FunctionSpecsBase:
         top <- ctx.evalExpr(topExpr)
         result <-
           if bottom > top then
+            // GH-344: Excel #NUM! (op-level classification)
             Left(
-              EvalError.EvalFailed(
-                s"RANDBETWEEN: bottom must be <= top (#NUM!)",
-                Some(s"RANDBETWEEN($bottom, $top)")
+              EvalError.ErrorValue(
+                CellError.Num,
+                Some(s"RANDBETWEEN: bottom must be <= top ($bottom, $top)")
               )
             )
           else
             val lo = bottom.setScale(0, BigDecimal.RoundingMode.CEILING)
             val hi = top.setScale(0, BigDecimal.RoundingMode.FLOOR)
             if lo > hi then
+              // GH-344: Excel #NUM! (op-level classification)
               Left(
-                EvalError.EvalFailed(
-                  s"RANDBETWEEN: no integer between $bottom and $top (#NUM!)",
-                  Some(s"RANDBETWEEN($bottom, $top)")
+                EvalError.ErrorValue(
+                  CellError.Num,
+                  Some(s"RANDBETWEEN: no integer between $bottom and $top")
                 )
               )
             else

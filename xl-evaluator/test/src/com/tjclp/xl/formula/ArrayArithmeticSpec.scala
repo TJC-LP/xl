@@ -120,8 +120,8 @@ class ArrayArithmeticSpec extends FunSuite:
       case other => fail(s"Expected Array, got $other")
   }
 
-  test("incompatible dimensions returns error") {
-    // 2x3 * 2x2 -> error (cols don't match and neither is 1)
+  test("incompatible dimensions pad with #N/A (GH-344 4b: Excel array-mismatch semantics)") {
+    // 2x3 * 2x2 -> the output extends to 2x3 and positions beyond b's extent read #N/A
     val a = ArrayResult(
       Vector(
         Vector(CellValue.Number(1), CellValue.Number(2), CellValue.Number(3)),
@@ -141,8 +141,17 @@ class ArrayArithmeticSpec extends FunSuite:
       ArrayArithmetic.mul
     )
 
-    assert(result.isLeft, s"Expected Left (error), got $result")
-    assert(result.swap.toOption.get.toString.contains("mismatch"))
+    result match
+      case Right(ArrayArithmetic.ArrayOperand.Array(out)) =>
+        assertEquals(out.rows, 2)
+        assertEquals(out.cols, 3)
+        assertEquals(out(0, 0), CellValue.Number(1))
+        assertEquals(out(0, 1), CellValue.Number(4))
+        assertEquals(out(0, 2), CellValue.Error(com.tjclp.xl.cells.CellError.NA))
+        assertEquals(out(1, 0), CellValue.Number(12))
+        assertEquals(out(1, 1), CellValue.Number(20))
+        assertEquals(out(1, 2), CellValue.Error(com.tjclp.xl.cells.CellError.NA))
+      case other => fail(s"Expected Array, got $other")
   }
 
   test("division by zero in array yields an elementwise #DIV/0! (GH-337)") {

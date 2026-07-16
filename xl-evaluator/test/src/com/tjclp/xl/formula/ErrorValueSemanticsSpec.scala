@@ -297,3 +297,87 @@ class ErrorValueSemanticsSpec extends FunSuite:
     assertEquals(updated(ref"C1").value, CellValue.Bool(false))
     assertEquals(updated(ref"C2").value, div0)
   }
+
+  // ===== Item 4: #NUM!/code classification at source =====
+
+  test("GH-344: pow overflow is #NUM! (scalar and element)") {
+    // BigDecimal computes =2^1024 exactly (unlike Excel's doubles); the #NUM! arm fires on a
+    // genuine ArithmeticException — a scale/magnitude overflow of the exact representation.
+    val sheet = Sheet("Test").put(ref"A1", num(2)).put(ref"A2", num(3))
+    assertEquals(sheet.evaluateFormula("=2^1.5E9"), err(CellError.Num))
+    // Elementwise: the overflow element demotes to a #NUM! ELEMENT via the toCellError
+    // identity arm; the scalar entry collapses to the top-left #NUM!.
+    assertEquals(sheet.evaluateFormula("=A1:A2^1.5E9"), err(CellError.Num))
+  }
+
+  test("GH-344: math domain failures carry their Excel codes") {
+    val sheet = Sheet("Test")
+    assertEquals(sheet.evaluateFormula("=SQRT(-1)"), err(CellError.Num))
+    assertEquals(sheet.evaluateFormula("=LOG(0)"), err(CellError.Num))
+    assertEquals(sheet.evaluateFormula("=LOG(8,0)"), err(CellError.Num))
+    assertEquals(sheet.evaluateFormula("=LOG(8,1)"), err(CellError.Div0))
+    assertEquals(sheet.evaluateFormula("=LN(0)"), err(CellError.Num))
+    assertEquals(sheet.evaluateFormula("=MOD(5,0)"), err(CellError.Div0))
+  }
+
+  test("GH-344: order-statistic domain failures carry their Excel codes") {
+    val sheet = Sheet("Test").put(ref"A1", num(1)).put(ref"A2", num(2))
+    assertEquals(sheet.evaluateFormula("=LARGE(A1:A2,5)"), err(CellError.Num))
+    assertEquals(sheet.evaluateFormula("=SMALL(A1:A2,0)"), err(CellError.Num))
+    assertEquals(sheet.evaluateFormula("=PERCENTILE(A1:A2,2)"), err(CellError.Num))
+    assertEquals(sheet.evaluateFormula("=QUARTILE(A1:A2,9)"), err(CellError.Num))
+    assertEquals(sheet.evaluateFormula("=RANK(99,A1:A2)"), err(CellError.NA))
+  }
+
+  test("GH-344: RANDBETWEEN with bottom > top is #NUM!") {
+    val sheet = Sheet("Test")
+    assertEquals(
+      sheet
+        .evaluateFormula("=RANDBETWEEN(10,1)", Clock.system, com.tjclp.xl.formula.Rng.seeded(1L)),
+      err(CellError.Num)
+    )
+  }
+
+  // ===== Item 4b: #N/A dimension padding in the shared broadcast machinery =====
+
+  test("GH-344: mismatched broadcast dims pad with #N/A elements (Excel)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(1))
+      .put(ref"A2", num(2))
+      .put(ref"A3", num(3))
+      .put(ref"B1", num(10))
+      .put(ref"B2", num(20))
+    val result = sheet.evaluateArrayFormula("=A1:A3*B1:B2", ref"D1")
+    assert(result.isRight, s"expected Right, got $result")
+    val (updated, spill) = result.toOption.get
+    assertEquals(spill.height, 3)
+    assertEquals(updated(ref"D1").value, num(10))
+    assertEquals(updated(ref"D2").value, num(40))
+    assertEquals(updated(ref"D3").value, na)
+  }
+
+  test("GH-344: dimension mismatch inside an IF pads with #N/A (was 1x1 #VALUE!)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(1))
+      .put(ref"A2", num(2))
+      .put(ref"A3", num(3))
+      .put(ref"B1", num(10))
+      .put(ref"B2", num(20))
+    val result = sheet.evaluateArrayFormula("=IF(A1:A3>0,B1:B2,0)", ref"D1")
+    assert(result.isRight, s"expected Right, got $result")
+    val (updated, spill) = result.toOption.get
+    assertEquals(spill.height, 3)
+    assertEquals(updated(ref"D1").value, num(10))
+    assertEquals(updated(ref"D2").value, num(20))
+    assertEquals(updated(ref"D3").value, na)
+  }
+
+  test("GH-344: SUMPRODUCT keeps exact-dimension enforcement as #VALUE! (never padding)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(1))
+      .put(ref"A2", num(2))
+      .put(ref"B1", num(10))
+      .put(ref"B2", num(20))
+      .put(ref"B3", num(30))
+    assertEquals(sheet.evaluateFormula("=SUMPRODUCT(A1:A2,B1:B3)"), err(CellError.Value))
+  }

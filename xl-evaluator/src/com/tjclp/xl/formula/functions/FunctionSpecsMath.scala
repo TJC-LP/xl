@@ -5,6 +5,8 @@ import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
+import com.tjclp.xl.cells.CellError
+
 trait FunctionSpecsMath extends FunctionSpecsBase:
   private def roundToDigits(
     value: BigDecimal,
@@ -35,10 +37,11 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).flatMap { value =>
         if value < 0 then
+          // GH-344: Excel #NUM! (op-level classification)
           Left(
-            EvalError.EvalFailed(
-              s"SQRT: cannot take square root of negative number ($value)",
-              Some(s"SQRT($value)")
+            EvalError.ErrorValue(
+              CellError.Num,
+              Some(s"SQRT: cannot take square root of negative number ($value)")
             )
           )
         else Right(BigDecimal(Math.sqrt(value.toDouble)))
@@ -104,7 +107,11 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
         divisor <- ctx.evalExpr(divisorExpr)
         result <-
           if divisor == 0 then
-            Left(EvalError.EvalFailed("MOD: division by zero", Some(s"MOD($number, $divisor)")))
+            // GH-344: Excel #DIV/0! (op-level classification)
+            Left(
+              EvalError
+                .ErrorValue(CellError.Div0, Some(s"MOD: division by zero ($number, $divisor)"))
+            )
           else
             val quotient = (number / divisor).setScale(0, BigDecimal.RoundingMode.FLOOR)
             Right(number - divisor * quotient)
@@ -136,22 +143,15 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
         number <- ctx.evalExpr(numberExpr)
         base <- ctx.evalExpr(baseExpr)
         result <-
+          // GH-344: Excel codes at source — non-positive domain is #NUM!, base 1 is #DIV/0!
           if number <= 0 then
             Left(
-              EvalError.EvalFailed(
-                s"LOG: argument must be positive ($number)",
-                Some(s"LOG($number, $base)")
-              )
+              EvalError.ErrorValue(CellError.Num, Some(s"LOG: argument must be positive ($number)"))
             )
           else if base <= 0 then
-            Left(
-              EvalError.EvalFailed(
-                s"LOG: base must be positive ($base)",
-                Some(s"LOG($number, $base)")
-              )
-            )
+            Left(EvalError.ErrorValue(CellError.Num, Some(s"LOG: base must be positive ($base)")))
           else if base == 1 then
-            Left(EvalError.EvalFailed("LOG: base cannot be 1", Some(s"LOG($number, $base)")))
+            Left(EvalError.ErrorValue(CellError.Div0, Some("LOG: base cannot be 1")))
           else Right(BigDecimal(Math.log(number.toDouble) / Math.log(base.toDouble)))
       yield result
     }
@@ -164,9 +164,8 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).flatMap { value =>
         if value <= 0 then
-          Left(
-            EvalError.EvalFailed(s"LN: argument must be positive ($value)", Some(s"LN($value)"))
-          )
+          // GH-344: Excel #NUM! (op-level classification)
+          Left(EvalError.ErrorValue(CellError.Num, Some(s"LN: argument must be positive ($value)")))
         else Right(BigDecimal(Math.log(value.toDouble)))
       }
     }

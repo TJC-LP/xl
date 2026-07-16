@@ -159,20 +159,24 @@ class ArrayErrorPropagationSpec extends ScalaCheckSuite:
       case other => fail(s"expected Array result, got $other")
   }
 
-  test("GH-337: dimension mismatch stays a whole-broadcast Left even with error elements") {
+  test("GH-344: dimension mismatch pads with #N/A elements (broadcasts are total in Right)") {
+    // GH-344 4b supersedes the whole-broadcast Left: positions beyond an operand's extent
+    // (extent != 1) read as #N/A, matching Excel's ={1,x,3}*{1,2} -> {1, x*2, #N/A}.
     val left = rowOf(num(1), div0, num(3)) // 1x3
     val right = rowOf(num(1), num(2)) // 1x2
-    assert(ArrayArithmetic.broadcastOrderedCompare(left, right, _ < 0).isLeft)
-    assert(
-      ArrayArithmetic
-        .broadcast(
-          ArrayArithmetic.ArrayOperand.Array(left),
-          ArrayArithmetic.ArrayOperand.Array(right),
-          ArrayArithmetic.mul
-        )
-        .isLeft
+    val compared = ArrayArithmetic.broadcastOrderedCompare(left, right, _ < 0)
+    assertEquals(elementsOf(compared), Vector(CellValue.Bool(false), div0, na))
+    val multiplied = ArrayArithmetic.broadcast(
+      ArrayArithmetic.ArrayOperand.Array(left),
+      ArrayArithmetic.ArrayOperand.Array(right),
+      ArrayArithmetic.mul
     )
-    assert(ArrayArithmetic.broadcastEqualityCompare(left, Left(right), false).isLeft)
+    multiplied match
+      case Right(ArrayArithmetic.ArrayOperand.Array(out)) =>
+        assertEquals(out.values.flatten, Vector(num(1), div0, na))
+      case other => fail(s"expected Array result, got $other")
+    val equality = ArrayArithmetic.broadcastEqualityCompare(left, Left(right), false)
+    assertEquals(elementsOf(equality), Vector(CellValue.Bool(true), div0, na))
   }
 
   // ===== Commit 2: end-to-end shapes =====
