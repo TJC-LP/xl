@@ -2,11 +2,13 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import java.nio.file.{Files, Path}
+import java.util.zip.ZipFile
 import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.dsl.*
 import com.tjclp.xl.macros.{col, ref}
+import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 
@@ -317,6 +319,53 @@ class RowColumnOperationsSpec extends FunSuite:
 
     assertEquals(readSheet.getRowProperties(Row.from0(3)).collapsed, true)
     assertEquals(readSheet.getRowProperties(Row.from0(3)).outlineLevel, Some(1))
+  }
+
+  // GH-381: rows carrying only properties (no cells in that row) must survive a scratch-build
+  // write on every backend. The SaxStax emitter already merged property-only rows into sheetData;
+  // the ScalaXml scratch branch dropped them entirely (no <row> element emitted).
+  List(
+    "ScalaXml" -> WriterConfig(backend = XmlBackend.ScalaXml),
+    "SaxStax" -> WriterConfig(backend = XmlBackend.SaxStax)
+  ).foreach { case (backendName, config) =>
+    test(s"GH-381: property-only row survives scratch-build write ($backendName)") {
+      val initial = Workbook("Test")
+      val sheet = initial
+        .sheets(0)
+        .put(ref"A1", CellValue.Text("Header"))
+        .setRowProperties(
+          Row.from1(5),
+          RowProperties(height = Some(5.25), hidden = true, outlineLevel = Some(1))
+        )
+      val wb =
+        initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+
+      val outputPath = tempDir.resolve(s"property-only-row-$backendName.xlsx")
+      XlsxWriter.writeWith(wb, outputPath, config).getOrElse(fail("Write failed"))
+
+      val zip = new ZipFile(outputPath.toFile)
+      val sheetXml =
+        try
+          new String(
+            zip.getInputStream(zip.getEntry("xl/worksheets/sheet1.xml")).readAllBytes(),
+            "UTF-8"
+          )
+        finally zip.close()
+
+      val row5Xml = """<row\b[^>]*\br="5"[^>]*>""".r
+        .findFirstIn(sheetXml)
+        .getOrElse(fail(s"Property-only row 5 missing from scratch-built worksheet:\n$sheetXml"))
+      assert(row5Xml.contains("""ht="5.25""""), row5Xml)
+      assert(row5Xml.contains("""customHeight="1""""), row5Xml)
+      assert(row5Xml.contains("""hidden="1""""), row5Xml)
+      assert(row5Xml.contains("""outlineLevel="1""""), row5Xml)
+
+      val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
+      val readProps = readWb.sheets(0).getRowProperties(Row.from1(5))
+      assertEquals(readProps.height, Some(5.25))
+      assertEquals(readProps.hidden, true)
+      assertEquals(readProps.outlineLevel, Some(1))
+    }
   }
 
   test("multiple columns with different widths round-trip") {

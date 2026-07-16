@@ -577,7 +577,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
       case None =>
         // No preserved metadata - create minimal worksheet with cols from domain
         OoxmlWorksheet(
-          rowsWithCells,
+          allRows, // GH-381: include property-only rows (rowProperties without cells)
           sheet.mergedRanges,
           sheetPr = mergeSheetPrElem(None, sheet.pageSetup), // GH-266: fitToPage flag
           dimension = calculatedDimension,
