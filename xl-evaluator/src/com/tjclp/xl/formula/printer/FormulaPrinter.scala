@@ -212,6 +212,10 @@ object FormulaPrinter:
 
       case TExpr.BindingRef(name) => name
 
+      // GH-384: a defined-name reference prints as the bare identifier, verbatim —
+      // =IF(case=2, 1, 0) round-trips byte-for-byte
+      case TExpr.NameRef(name) => name
+
       // A binding in a typed argument position prints as the bare name, exactly like BindingRef
       case TExpr.CoercedBindingRef(name, _) => name
 
@@ -447,6 +451,8 @@ object FormulaPrinter:
         s"Let($bindingsStr, ${printWithTypes(body)})"
       case TExpr.BindingRef(name) =>
         s"BindingRef($name)"
+      case TExpr.NameRef(name) =>
+        s"NameRef($name)"
       case TExpr.CoercedBindingRef(name, target) =>
         s"CoercedBindingRef($name, $target)"
       case TExpr.Coerced(inner, target) =>

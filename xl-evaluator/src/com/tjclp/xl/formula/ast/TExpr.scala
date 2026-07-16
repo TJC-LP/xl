@@ -353,6 +353,25 @@ enum TExpr[A] derives CanEqual:
   case BindingRef(name: String) extends TExpr[Nothing]
 
   /**
+   * GH-384: reference to a workbook defined name (named range / named formula) by identifier.
+   *
+   * Emitted by the parser for a bare name-shaped identifier that is NOT a cell reference, NOT an
+   * in-scope LET binding, and NOT followed by `(` or `!` — `=case`, `=entry_mult*ltm_ebitda`,
+   * `=SUM(rev_range)`. OOXML forbids defined names that collide with cell-ref shapes, so the
+   * disambiguation is total: ARef-parseable identifiers (TAX1) stay PolyRef.
+   *
+   * Resolution is deferred to evaluation (the parser has no workbook): the evaluator looks the
+   * name up in `WorkbookMetadata.definedNames` — sheet-scoped names SHADOW workbook-scoped ones
+   * per OOXML, lookup is case-insensitive — parses the refersTo text and evaluates it in the
+   * DEFINING sheet's context. Unresolvable names, unparseable refersTo text, and name→name
+   * cycles are clean per-cell errors. Existential-typed like PolyRef; the typed coercion
+   * boundary wraps it in [[Coerced]] so names work in typed argument positions. Prints as the
+   * bare identifier, verbatim. Never shifts on drag and contributes no local dependencies
+   * (workbook-level dependency extraction resolves it to its target cells).
+   */
+  case NameRef(name: String) extends TExpr[Nothing]
+
+  /**
    * GH-193: An in-scope LET binding used in a statically-typed argument position.
    *
    * BindingRef is Any-typed like PolyRef, so the typed coercion boundary (asStringExpr, asIntExpr,

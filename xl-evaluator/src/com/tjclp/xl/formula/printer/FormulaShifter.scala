@@ -175,6 +175,8 @@ object FormulaShifter:
           shiftInternal(body, colDelta, rowDelta)
         ).asInstanceOf[TExpr[A]]
       case bref: BindingRef => bref.asInstanceOf[TExpr[A]]
+      // GH-384: defined names are identifiers, not coordinates — they never shift on drag
+      case nref: NameRef => nref.asInstanceOf[TExpr[A]]
       case cbref: CoercedBindingRef[?] => cbref.asInstanceOf[TExpr[A]]
 
       // GH-306: runtime coercion wrapper — shift the wrapped expression, preserve the wrapper
@@ -450,6 +452,9 @@ object FormulaShifter:
           sb <- go(body)
         yield Let(bs.reverse, sb).asInstanceOf[TExpr[A]]
       case _: BindingRef => Some(expr)
+      // GH-384: defined names are identifiers — structural edits never move or void them
+      // (their refersTo text lives in workbook metadata, not in this formula)
+      case _: NameRef => Some(expr)
       case _: CoercedBindingRef[?] => Some(expr)
 
       // GH-306: runtime coercion wrapper — shift the wrapped expression, preserve the wrapper

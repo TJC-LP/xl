@@ -1002,7 +1002,14 @@ object FormulaParser:
         // Cast needed due to opaque type erasure in pattern matching
         Right((TExpr.PolyRef(aref.asInstanceOf[ARef], anchor), state))
       case Left(err) =>
-        Left(ParseError.InvalidCellRef(refStr, startPos, err))
+        // GH-384: a name-shaped identifier that is not a cell reference is a defined-name
+        // reference (=case, =entry_mult), resolved against the workbook at evaluation time.
+        // Disambiguation is total: ARef.parse SUCCESS above means cell ref (TAX1 is a cell —
+        // OOXML forbids ref-shaped defined names); name-shaped failure means NameRef; anything
+        // else (e.g. '$' inside the token) keeps today's InvalidCellRef. Reuses the LET name
+        // shape (letter/underscore start, [A-Za-z0-9_]*, not TRUE/FALSE/AND/OR/NOT).
+        if isValidLetName(refStr) then Right((TExpr.NameRef(refStr), state))
+        else Left(ParseError.InvalidCellRef(refStr, startPos, err))
 
   /**
    * Parse quoted sheet name reference: 'Sheet Name'!A1 or 'Sheet-Name'!A1:B10

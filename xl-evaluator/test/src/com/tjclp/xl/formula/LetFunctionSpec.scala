@@ -241,8 +241,15 @@ class LetFunctionSpec extends ScalaCheckSuite:
     assertParseError("=LET(x, 1, y, 2)")
   }
 
-  test("unknown bare identifier in body is a parse error") {
-    assertParseError("=LET(x, 1, y)")
+  test("unknown bare identifier in body parses as a defined-name ref, then errors at eval") {
+    // GH-384 supersedes the old parse-error pin: Excel treats an unbound identifier in a LET
+    // body as a defined-name reference (#NAME? at evaluation when undefined), and so do we.
+    FormulaParser.parse("=LET(x, 1, y)") match
+      case Right(TExpr.Let(_, TExpr.NameRef(name))) => assertEquals(name, "y")
+      case other => fail(s"expected LET body to parse as NameRef(y), got $other")
+    sheet.evaluateFormula("=LET(x, 1, y)") match
+      case Left(err) => assert(err.message.contains("y"), s"got: ${err.message}")
+      case Right(v) => fail(s"unbound name must not evaluate, got $v")
   }
 
   // ===== Error propagation =====

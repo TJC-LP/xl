@@ -20,6 +20,9 @@ trait TExprCoercions:
    */
   private def isRuntimePolymorphic(expr: TExpr[?]): Boolean = expr match
     case _: TExpr.Call[?] | _: TExpr.Let[?] | _: TExpr.Aggregate | _: TExpr.Coerced[?] => true
+    // GH-384: a defined name's runtime value comes from the workbook's name table — coerce it
+    // at evaluation time like a call result (=EOMONTH(named_date, 0), =IF(case=2, ...))
+    case _: TExpr.NameRef => true
     case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
         _: TExpr.Percent =>
       true
