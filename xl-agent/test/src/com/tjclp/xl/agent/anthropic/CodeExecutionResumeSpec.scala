@@ -5,7 +5,8 @@ import java.util.Optional
 
 import com.anthropic.models.beta.messages.*
 import munit.FunSuite
-import com.tjclp.xl.agent.AgentConfig
+import com.tjclp.xl.agent.{AgentConfig, UploadedFile}
+import com.tjclp.xl.agent.approach.{XlApproachStrategy, XlsxApproachStrategy}
 
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
@@ -118,4 +119,52 @@ class CodeExecutionResumeSpec extends FunSuite:
     )
     assertEquals(params.container().toScala, None)
     assertEquals(params.messages().asScala.toList.lastOption.map(roleOf), Some("assistant"))
+  }
+
+  // The production strategies set builder.container(BetaContainerParams with skills) inside
+  // configureRequest, and the last .container() write on the builder wins. These tests pin the
+  // wire shape after composition with a REAL strategy — not the identity default — so the paused
+  // container id can never be silently clobbered into a fresh container again (issue #344).
+
+  private val realStrategies = List(
+    "xl" -> new XlApproachStrategy(UploadedFile("file_bin", "xl"), "skill_1").configureRequest,
+    "xlsx" -> new XlsxApproachStrategy().configureRequest
+  )
+
+  realStrategies.foreach { case (name, strategyConfigure) =>
+    test(s"a resume through the real $name strategy still reuses the paused container (#344)") {
+      val paused = pausedResponse(containerId = Some("cont_123"))
+      val params = CodeExecution.buildParams(
+        config = config,
+        systemPrompt = "system",
+        userPrompt = "do the task",
+        containerUploads = List("file_1"),
+        resumeTurns = Vector(paused),
+        configureRequest = strategyConfigure
+      )
+      // The paused id must be what reaches the wire — the documented reuse shape: the skill
+      // files already live in the existing container, so no skills params are re-declared.
+      assertEquals(params.container().toScala.flatMap(_.string().toScala), Some("cont_123"))
+      // The rest of the strategy configuration must survive the resume unchanged
+      assert(params.tools().toScala.exists(!_.isEmpty), "strategy tools must survive a resume")
+    }
+  }
+
+  test("an initial request through a real strategy declares the skills container with no id") {
+    val params = CodeExecution.buildParams(
+      config = config,
+      systemPrompt = "system",
+      userPrompt = "do the task",
+      containerUploads = List("file_1"),
+      resumeTurns = Vector.empty,
+      configureRequest =
+        new XlApproachStrategy(UploadedFile("file_bin", "xl"), "skill_1").configureRequest
+    )
+    val containerParams = params.container().toScala.flatMap(_.betaContainerParams().toScala)
+    assert(containerParams.isDefined, "initial request must carry the strategy's container params")
+    assertEquals(containerParams.flatMap(_.id().toScala), None)
+    assert(
+      containerParams.exists(_.skills().toScala.exists(!_.isEmpty)),
+      "initial request must declare the strategy's skills"
+    )
   }

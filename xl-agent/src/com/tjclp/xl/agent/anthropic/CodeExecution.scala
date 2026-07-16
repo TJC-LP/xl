@@ -24,6 +24,12 @@ object CodeExecution:
    * for server-side tools, the API detects the trailing server-tool state and resumes the turn; a
    * synthetic "continue" user message must NOT be added. The last paused turn's container id is
    * passed back so files written by earlier bash cycles stay visible to the resumed turn.
+   *
+   * The container id is applied AFTER `configureRequest`: strategies declare a fresh skills
+   * container via `builder.container(BetaContainerParams)` and the last `.container()` write on the
+   * builder wins, so setting the id first would provision a new container and lose the paused
+   * turn's files. Per the documented container-reuse shape, the id alone is passed on resume — the
+   * container already holds the skill files loaded at creation, so skills are not re-declared.
    */
   private[anthropic] def buildParams(
     config: AgentConfig,
@@ -70,13 +76,18 @@ object CodeExecution:
 
     // pause_turn resume: paused assistant turns go back into messages verbatim
     resumeTurns.foreach(paused => baseBuilder.addMessage(paused.toParam()))
-    // Reuse the paused turn's container so the resumed bash cycles see its files
-    resumeTurns.lastOption
-      .flatMap(_.container().toScala)
-      .foreach(container => baseBuilder.container(container.id()))
 
     // Apply strategy-specific configuration (tools, betas, container)
-    configureRequest(baseBuilder).build()
+    val configured = configureRequest(baseBuilder)
+
+    // Reuse the paused turn's container so the resumed bash cycles see its files. Must come
+    // after configureRequest: the strategy's container(BetaContainerParams) write would
+    // otherwise clobber the id and provision a fresh, empty container (see scaladoc).
+    resumeTurns.lastOption
+      .flatMap(_.container().toScala)
+      .foreach(container => configured.container(container.id()))
+
+    configured.build()
 
   /**
    * Send a message with code execution capability and stream the response.
