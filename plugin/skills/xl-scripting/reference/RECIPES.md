@@ -1,6 +1,6 @@
 # XL Scripting Recipes
 
-Seven complete, runnable scripts. Save as `recipe.sc`, adjust paths, run `scala-cli run recipe.sc`.
+Nine complete, runnable scripts. Save as `recipe.sc`, adjust paths, run `scala-cli run recipe.sc`.
 
 Convention: every fenced block starting with `//> using` is a complete script and is compile-verified in CI; the headers are byte-identical so a release bump is a mechanical substitution.
 
@@ -222,4 +222,69 @@ val sheet = lines.zipWithIndex.foldLeft(Sheet("Imported")) { case (s, (line, row
 
 Excel.write(Workbook(sheet), "imported.xlsx")
 println(s"imported ${lines.size} rows × ${lines.headOption.map(_.split(',').length).getOrElse(0)} cols")
+```
+
+## 8. Recalculated write + runtime column widths
+
+A percent-postfix formula model (`=B2*10%`, 0.13.0), column widths folded from runtime letters
+(`Column.parse`), and a one-call recalc-and-write (`Excel.writeRecalculated`) so every formula
+cell ships a cached value for `data_only` readers, pandas, and Excel-before-recalc.
+
+```scala
+//> using scala 3.8.3
+//> using dep com.tjclp::xl:0.13.0
+import com.tjclp.xl.scripting.{*, given}
+
+val reps = List(("Alice", 120000.0), ("Bob", 98000.0), ("Carol", 143500.0))
+
+val body = reps.zipWithIndex.foldLeft(Patch.empty) { case (acc, ((name, sales), i)) =>
+  val r = ref"A2".down(i)
+  acc ++ (r := name) ++ (r.right(1) := BigDecimal(sales)) ++
+    (r.right(2) := fx"=B${i + 2}*10%".unsafe) // percent postfix: 10% evaluates to exact 0.1
+}
+
+val built = Sheet("Commission").put(
+  (ref"A1" := "Rep") ++ (ref"B1" := "Sales") ++ (ref"C1" := "Bonus") ++
+    ref"A1:C1".styled(CellStyle.default.bold) ++ body ++
+    (ref"A5" := "Total") ++ (ref"C5" := fx"=SUM(C2:C4)") ++ ref"C5".styled(CellStyle.default.bold) ++
+    (ref"A7" := "Sample rate") ++ (ref"C7" := fx"=B2*10%") // literal percent — compile-time checked
+)
+
+// Runtime column widths: fold over letters computed at runtime (Column.parse → Either[String, Column])
+val sheet = Vector("A" -> 16.0, "B" -> 14.0, "C" -> 14.0).foldLeft(built) {
+  case (s, (letter, w)) =>
+    Column.parse(letter).fold(_ => s, col => s.setColumnProperties(col, ColumnProperties(width = Some(w))))
+}
+
+val result = Excel.writeRecalculated(Workbook(sheet), "/tmp/commission.xlsx")
+println(if result.isClean then "✓ wrote commission.xlsx" else result.errors.map(_.render).mkString("\n"))
+```
+
+## 9. Deliverable finish: gridlines off, tab color, freeze, dropdown, comment
+
+The professional-polish pass (0.13.0): gridline-free view at 85% zoom, a colored sheet tab, a
+frozen header, a list-dropdown data validation, and a provenance comment — no XML surgery.
+
+```scala
+//> using scala 3.8.3
+//> using dep com.tjclp::xl:0.13.0
+import com.tjclp.xl.scripting.{*, given}
+import com.tjclp.xl.sheets.SheetView // SheetView lives one import deeper than the prelude
+
+// Color.fromHex returns Either[String, Color] — resolve before use
+val navy = Color.fromHex("#1F4E79").getOrElse(Color.fromRgb(31, 78, 121))
+
+val sheet = Sheet("Summary")
+  .put(
+    (ref"A1" := "Deal Summary") ++ ref"A1".styled(CellStyle.default.bold.size(14.0)) ++
+      (ref"A3" := "Status") ++ (ref"A4" := "Reviewer")
+  )
+  .withViewSettings(SheetView(showGridLines = false, zoomScale = Some(85))) // gridline-free, 85%
+  .withTabColor(navy) // colored sheet tab
+  .freezeAt(ref"A3") // freeze rows 1-2 above the scroll area
+  .withDataValidation(ref"B3:B3", DataValidation.list("\"Draft,Review,Final\"")) // inline dropdown
+  .comment(ref"A1", Comment.plainText("Auto-generated", Some("xl"))) // provenance comment
+
+Excel.write(Workbook(sheet), "/tmp/summary.xlsx")
+println("✓ wrote deliverable-finished summary.xlsx")
 ```

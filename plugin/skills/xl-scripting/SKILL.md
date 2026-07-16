@@ -89,6 +89,7 @@ sheet.put(ref"D2", fx"=B2*C2")                     // compile-time validated lit
 wb.evaluateFormula("=SUM(Sales!A1:A9)", "Summary") // XLResult[CellValue], cross-sheet aware
 val r = wb.recalculate()                           // RecalcResult: total, per-cell errors
 r.isClean; r.errors.map(_.render); r.workbook      // inspect, then write r.workbook
+Excel.writeRecalculated(wb, "out.xlsx")            // 0.13.0: recalc + write + RecalcResult in one call
 
 // Errors: XLResult[A] = Either[XLError, A]; unwrap ONCE at the edge
 wb.update("Sales", f).unsafe                       // throws structured XLException if Left
@@ -206,9 +207,13 @@ if !result.isClean then
 Excel.write(result.workbook, "model.xlsx")       // computed values cached for Excel/viewers
 ```
 
-`recalculate` evaluates every formula across all sheets in dependency order, resolves cross-sheet references automatically, isolates reference cycles (the rest of the workbook still computes), and reports failures per cell in `result.errors`. `result.toEither` gives `Left(errors)` for fail-hard pipelines. For one-off questions: `wb.evaluateFormula("=SUM(Data!A:A)", "Summary")`.
+`recalculate` evaluates every formula across all sheets in dependency order, resolves cross-sheet references automatically, isolates reference cycles (the rest of the workbook still computes), and reports failures per cell in `result.errors`. `result.toEither` gives `Left(errors)` for fail-hard pipelines. For one-off questions: `wb.evaluateFormula("=SUM(Data!A:A)", "Summary")`. When the very next step is a write, `Excel.writeRecalculated(wb, path)` (0.13.0) fuses recalculate + write and returns the same `RecalcResult` — see the gotcha below.
 
-107 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/RAND/NPV/IRR/... plus LET) — full list in `reference/API.md`.
+**Defined names resolve** (0.13.0): `fx"=IF(case=2,rev,cost)"`, `fx"=entry_mult*ltm_ebitda"`, `fx"=SUM(rev_range)"` evaluate against workbook- and sheet-scoped defined names (sheet-scoped shadows global), contribute dependency edges so recalc orders name-gated families correctly, and round-trip byte-faithfully; an unresolvable name is a clean per-cell error.
+
+**Circular models are opt-in** (0.13.0): professional schedules (interest on average debt) ship circular by design. `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` Jacobi-fixpoints declared cycles instead of erroring; plain `recalculate()` still isolates cycles as errors. Honor a file's own `<calcPr>` with `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr).fold(wb.recalculate())(wb.recalculate)`, and author it on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))`.
+
+108 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/MROUND/RAND/NPV/IRR/... plus LET) — full list in `reference/API.md`.
 
 ### Error handling: Either everywhere, unsafe once
 
@@ -314,13 +319,13 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 - **Navigation is unchecked at the edges**: `ref"A1".up()` produces an invalid "A0" ref that corrupts output if written; keep loop bounds inside your data extent.
 - **First run is slow** (dependency download); afterwards scala-cli caches everything.
 - **`.sc` files**: top-level statements, no `@main`. A `.scala` file needs `@main def run(): Unit`.
-- **`Excel.write` does NOT recalculate** — freshly built `fx"…"` cells are written with no cached values, so Excel-before-recalc, openpyxl `data_only`, pandas, and previewers all show blanks. Always `val result = wb.recalculate()` and write `result.workbook` (a single pass is sufficient on 0.12.5+; see "Formulas & recalculation" above). Tracking a recalculating-write affordance: [#360](https://github.com/TJC-LP/xl/issues/360).
-- **Percent literals (`10%`) fail to parse** ([#355](https://github.com/TJC-LP/xl/issues/355)) — write `/100` instead of `%`. External-workbook refs (`[2]Book!A1`) parse and pin their Excel-written caches **since 0.12.6** ([#353](https://github.com/TJC-LP/xl/issues/353)): `recalculate()` preserves those cells verbatim and dependents compute from the caches (uncached external cells yield a per-cell error); on ≤0.12.5 they fail to parse entirely — compute from cached values there.
-- **`setColumnProperties` wants a compile-time literal** (`ref"D1".col`); runtime-parsed refs don't expose `.col`, so column loops over runtime letters can't feed it directly ([#361](https://github.com/TJC-LP/xl/issues/361)). Until then, set widths with literal refs per column.
+- **`Excel.write` does NOT recalculate** — freshly built `fx"…"` cells are written with no cached values, so Excel-before-recalc, openpyxl `data_only`, pandas, and previewers all show blanks. Since 0.13.0 the one-call fix is **`Excel.writeRecalculated(wb, path)`** ([#360](https://github.com/TJC-LP/xl/issues/360)): it recalculates, writes the cached workbook (even when some formulas fail — errors are data), and returns the `RecalcResult` (inspect `result.errors` / `result.isClean`). For fail-hard pipelines that must abort *before* anything lands on disk, keep the explicit `val result = wb.recalculate(); …; Excel.write(result.workbook, path)` pattern. On ≤0.12.x, `writeRecalculated` is unavailable — recalculate then write `result.workbook` (a single pass suffices on 0.12.5+).
+- **Percent postfix works since 0.13.0** ([#355](https://github.com/TJC-LP/xl/issues/355)): `fx"=A1*10%"`, `fx"=10%"`, `fx"=(1+5%)^2"` parse, evaluate (`10%` → exact `0.1`), broadcast over ranges, and print back byte-identically (never rewritten to `/100`). On ≤0.12.x the parser rejects `%` — write `/100` there. External-workbook refs (`[2]Book!A1`) parse and pin their Excel-written caches **since 0.12.6** ([#353](https://github.com/TJC-LP/xl/issues/353)): `recalculate()` preserves those cells verbatim and dependents compute from the caches (uncached external cells yield a per-cell error); on ≤0.12.5 they fail to parse entirely — compute from cached values there.
+- **Runtime column handles for `setColumnProperties`** ([#361](https://github.com/TJC-LP/xl/issues/361), since 0.13.0): fold over letters computed at runtime with `Column.parse("D")` (`Either[String, Column]`; trailing row digits tolerated, so `"D1"` works) — e.g. `Column.parse(letter).map(c => sheet.setColumnProperties(c, ColumnProperties(width = Some(w))))`. A runtime `RefType` also exposes `.col` (`RefType.parse(s).map(_.col)`). On ≤0.12.x only the compile-time `ref"D1".col` existed — set widths with literal refs per column there.
 
 ## Reference
 
-- `reference/API.md` — types, extension methods, style builders, all 107 formula functions, streaming API
-- `reference/RECIPES.md` — 7 complete, runnable scripts (bulk transform, typed extraction, model build, merge, streaming, diff, CSV ingest)
+- `reference/API.md` — types, extension methods, style builders, all 108 formula functions, streaming API
+- `reference/RECIPES.md` — 9 complete, runnable scripts (bulk transform, typed extraction, model build, merge, streaming, diff, CSV ingest, recalculated write + runtime column widths, deliverable finish)
 - Repo examples: `examples/*.sc` in https://github.com/TJC-LP/xl (start with `scripting_tour.sc`)
 - The `xl-cli` skill for CLI operations (visual exports, quick inspection)

@@ -225,13 +225,28 @@ Reference cycles are **isolated**: the participants and their downstream depende
 (e.g. `Model!A7: Formula error in '=B7': Circular reference` via `CellEvalError.render`) while
 the acyclic remainder still evaluates and caches.
 
+Since 0.13.0, **circular models are opt-in** rather than always errors: pass an `IterativeCalc` to
+fixpoint declared cycles instead —
+`wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` runs Jacobi
+iteration (each member reads previous-iteration values, seeded at 0, until every |Δ| < `maxChange`
+or `maxIter` rounds; non-convergence keeps the last values with no error, per Excel). Plain
+`recalculate()` still isolates cycles. Honor a file's own settings with
+`wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)`, and author them
+on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100),
+maxChange = Some(BigDecimal("0.001"))))` (emits `<calcPr iterate iterateCount iterateDelta/>`).
+
+Also since 0.13.0, **defined names resolve** in formulas: `=IF(case=2,…)`,
+`=entry_mult*ltm_ebitda`, and `=SUM(rev_range)` evaluate against workbook- and sheet-scoped names
+(sheet-scoped shadows global), contribute dependency edges so `recalculate()` orders name-gated
+families correctly, and round-trip byte-faithfully; unresolvable names are clean per-cell errors.
+
 When the very next step is a write, `Excel.writeRecalculated(wb, path)` (since 0.13.0) fuses the
 two — recalculate, write the cached workbook (even on partial failure), return the same
 `RecalcResult`. Use the explicit `recalculate().toEither` pattern above when a dirty result must
 abort *before* anything lands on disk.
 
 For one-off questions, `wb.evaluateFormula("=SUM(Data!A1:A9)", "Summary")` returns
-`XLResult[CellValue]` with cross-sheet context wired automatically (107 functions supported —
+`XLResult[CellValue]` with cross-sheet context wired automatically (108 functions supported —
 see the [skill API reference](../../plugin/skills/xl-scripting/reference/API.md) for the full
 list).
 

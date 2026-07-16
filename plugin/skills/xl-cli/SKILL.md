@@ -164,6 +164,22 @@ xl -f <file> -s <sheet> -o <out> clear A1:D10 --all
 xl -f <file> -s <sheet> -o <out> comment A1 "Note" --author "John"
 ```
 
+### Appearance & Print Setup (require `-o`, 0.13.0)
+```bash
+xl -f <file> -s <sheet> -o <out> sheet-view --gridlines off --zoom 85 --tab-selected on
+xl -f <file> -s <sheet> -o <out> tab-color "#1F4E79"     # named, #hex, rgb(r,g,b), theme:accent1[:tint]
+xl -f <file> -s <sheet> -o <out> tab-color --clear       # clear a modeled tab color
+xl -f <file> -s <sheet> -o <out> page-setup --orientation landscape --scale 90 --fit-to-width 1
+xl -f <file> -s <sheet> -o <out> header-footer --odd-footer "&LConfidential&RPage &P of &N"
+```
+
+### Conditional Formatting (0.13.0)
+```bash
+xl -f <file> -s <sheet> -o <out> cf add --range A1:A10 --rule 'cellIs:greaterThan:100' --bold --bg '#FFC7CE'
+xl -f <file> -s <sheet> -o <out> cf add --range B2:B20 --rule 'colorScale:red:white:green'
+xl -f <file> -s <sheet> cf list                          # list rules (read-only, no -o)
+```
+
 ### Batch Operations (require `-o`)
 ```bash
 xl -f <file> -s <sheet> -o <out> batch operations.json
@@ -308,7 +324,7 @@ Apply multiple operations atomically:
 ]
 ```
 
-**Operations**: put, putf, style, merge, unmerge, colwidth, rowheight, and more — all 21 listed under "All batch operations" below
+**Operations**: put, putf, style, merge, unmerge, colwidth, rowheight, and more — all 26 listed under "All batch operations" below
 
 **Native JSON types** (recommended for numeric data):
 ```json
@@ -343,6 +359,9 @@ Apply multiple operations atomically:
 // Single formula (use "value" or "formula" — both accepted)
 {"op": "putf", "ref": "D14", "value": "=SUM(D5:D12)"}
 {"op": "putf", "ref": "D14", "formula": "=SUM(D5:D12)"}
+
+// Number format on a formula cell in one op (0.13.0 — no second style pass; works with values[]/from too)
+{"op": "putf", "ref": "C1", "value": "=A1*2", "format": "#,##0.0"}
 
 // Drag formula across range (Excel-style $ anchoring)
 {"op": "putf", "ref": "B2:B10", "value": "=SUM($A$1:A2)", "from": "B2"}
@@ -466,7 +485,7 @@ echo '[{"op":"putf","ref":"A1","formula":"=SUM(B1:B10)"},{"op":"style","range":"
 echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
 ```
 
-**All batch operations** (21): `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`
+**All batch operations** (26): `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`, `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `cf` (last five: 0.13.0)
 
 **Freeze/unfreeze/copy/hyperlink in batch:**
 ```json
@@ -479,6 +498,18 @@ echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batc
 ```
 
 `hyperlink` sets a cell's hyperlink target; omit `target` to clear an existing hyperlink.
+
+**Appearance, print setup & conditional formatting in batch (0.13.0):**
+```json
+{"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
+{"op": "tab-color", "color": "#1F4E79"}
+{"op": "tab-color", "clear": true}
+{"op": "page-setup", "orientation": "landscape", "scale": 90, "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
+{"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N", "differentFirst": true, "firstHeader": "&CDRAFT"}
+{"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100", "bold": true, "bg": "#FFC7CE", "fg": "#9C0006"}
+```
+
+Tab colors accept named/`#hex`/`rgb(r,g,b)`/`theme:accent1[:tint]`. The `cf` rule DSL and flags match `xl cf add` (see below); priorities auto-assign in order. Header/footer strings use Excel codes (`&L`/`&C`/`&R` sections; `&P` page, `&N` total, `&D` date, `&F` file, `&A` sheet). The full deliverable finish is one batch file with zero XML patching.
 
 ### CSV to Styled Table
 
@@ -556,21 +587,21 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 
 ## Field Gotchas (verified in production)
 
-Hard-won rules from fleet use on real deal workbooks. Items marked **fixed in 0.12.6** still apply when the installed binary is older — check `xl --version`.
+Hard-won rules from fleet use on real deal workbooks. Items marked **fixed in 0.12.6** / **fixed in 0.13.0** still apply when the installed binary is older — check `xl --version`.
 
 **Reading**
 - **`view` and `search` clip at `--limit` (default 50)** ([#351](https://github.com/TJC-LP/xl/issues/351)). Since 0.12.6 the clip is visible (`… showing N of M rows` trailer; stderr notice for csv; `truncated`/`totalRows` in json; `--limit 0` = unlimited). **On ≤0.12.5 the clip is SILENT** — a `view A1:A259` returning ~50 rows is NOT the whole range; pass `--limit <n>` explicitly and verify the last expected row is present.
 - **Use `--show-labels` whenever row numbers matter** in CSV output — hidden rows shift positional counting silently.
-- **`--formulas --format json` replaces `value` with the formula text** and emits no separate `formula` key ([#357](https://github.com/TJC-LP/xl/issues/357)). To scan formulas programmatically, use `--format csv --formulas --show-labels` and parse with a CSV reader.
-- **Percent literals fail to evaluate** (`=A1*10%`, [#355](https://github.com/TJC-LP/xl/issues/355)) — write `/100` instead. External-workbook refs are **fixed in 0.12.6** (evaluate from Excel-written caches; uncached external cells report a clear per-cell error); on ≤0.12.5 any formula whose precedents include one dies with `UnexpectedChar([` — use plain `view` there.
+- **JSON formula cells carry a dedicated `formula` field, fixed in 0.13.0** ([#357](https://github.com/TJC-LP/xl/issues/357)): `view --format json` now always emits `{"ref", "type":"formula", "formula", "value", "formatted"}` — `value`/`formatted` hold the computed/cached value, `formula` the expression. **Behavioral change**: on ≤0.12.x, `--formulas --format json` put the formula *text* in `value` and emitted no `formula` key — consumers keying on `value` under `--formulas` were reading the misfeature this fixes; update them to read `formula`. CSV/markdown are unchanged (on ≤0.12.x, scan formulas via `--format csv --formulas --show-labels`).
+- **Percent postfix works, fixed in 0.13.0** (`=A1*10%`, `=10%`, `=(1+5%)^2`; [#355](https://github.com/TJC-LP/xl/issues/355)): parses, evaluates (`10%` → exact `0.1`), and round-trips byte-identically. On ≤0.12.x the parser rejects `%` — write `/100` there. External-workbook refs are **fixed in 0.12.6** (evaluate from Excel-written caches; uncached external cells report a clear per-cell error); on ≤0.12.5 any formula whose precedents include one dies with `UnexpectedChar([` — use plain `view` there.
 
 **Writing**
 - **`batch` recalculates at the end since 0.12.6** ([#352](https://github.com/TJC-LP/xl/issues/352)): `putf` cells carry cached values and formula errors appear in the batch summary; `xl recalc` (also 0.12.6+) refreshes any workbook. **On ≤0.12.5 batch writes formulas with NO cached values** — `data_only` readers, pandas, and previewers show blanks for every `putf` cell; prefer single `putf` commands there, verify with `--eval`, or recalculate via the scripting API before shipping.
-- **Batch `putf` has no `format` field** ([#356](https://github.com/TJC-LP/xl/issues/356)) — number formats on formula cells need a follow-up `style` op / `xl style RANGE --format '…'`.
+- **Batch `putf` takes a `format` field, fixed in 0.13.0** ([#356](https://github.com/TJC-LP/xl/issues/356)): `{"op":"putf","ref":"C1","value":"=A1*2","format":"#,##0.0"}` applies the numFmt with the formula (single, `values[]`, and `from`-dragging variants; in-memory and streaming paths) — no second `style` pass. On ≤0.12.x the field is ignored — follow with a `style` op / `xl style RANGE --format '…'` there.
 - **Batch JSON style keys are camelCase**: `numFormat`, `borderTop`, `borderBottom`, `borderLeft`, `borderRight`, `borderColor`. Kebab-case (`border-top`) is treated as an unknown property — the warning goes to stderr only, so it is easy to miss.
 - **Build cross-sheet models in dependency order** (put referenced cells before the formulas that use them) — on ≤0.12.5 batches evaluate nothing and single-command recalcs are dependents-only; on 0.12.6+ the batch-end recalculation makes order matter less, but dependency order remains the safe habit.
 - **`-i` (in-place) round-trips preserve hand-patched XML**: sheetPr/tabColor, pageSetup, headerFooter, sheetView gridlines/zoom, sheet-local `_xlnm.Print_Area`, and hand-inserted cached `<v>` values all survive later xl writes.
-- **Sheet appearance/print setup (gridlines off, zoom, tab color, landscape, footers) has no CLI yet** ([#358](https://github.com/TJC-LP/xl/issues/358)) — until then it requires zip round-trip XML patching.
+- **Sheet appearance/print setup has a CLI, fixed in 0.13.0** ([#358](https://github.com/TJC-LP/xl/issues/358)): `sheet-view` (gridlines/zoom/tab-selected), `tab-color`, `page-setup` (orientation/scale/fit), and `header-footer` — each with a batch-op twin (see the tables below). The full deliverable finish (gridlines off, zoom 85, tab color, landscape + fit, confidential footer) is one batch file with zero XML patching. On ≤0.12.x it still requires zip round-trip XML patching.
 
 **Rendering & environment**
 - **PNG/PDF on the native binary needs an external rasterizer** (Batik is JAR-only; [#359](https://github.com/TJC-LP/xl/issues/359)): install `cairosvg` (`pip install cairosvg`) or `rsvg-convert`, and check availability with `xl rasterizers`. Add `--eval` when rendering or formula cells show as text.
@@ -635,7 +666,7 @@ Run `xl view --help` for complete options.
 | `copy <source> <target>` | `--values-only` (no formula adjustment) |
 | `freeze <ref>` | Freeze panes (rows above + columns left of ref) |
 | `unfreeze` | Remove freeze panes |
-| `batch <json-file>` | 21 operations (see below) |
+| `batch <json-file>` | 26 operations (see below) |
 | `import <csv> [ref]` | `--new-sheet`, `--delimiter`, `--no-type-inference` |
 
 Run `xl <command> --help` for complete options.
@@ -668,6 +699,26 @@ Run `xl <command> --help` for complete options.
 | `sort <range>` | `--by`, `--then-by`, `--desc`, `--numeric`, `--header` |
 
 Run `xl sort --help` for sorting details.
+
+### Appearance & Print Setup Commands (0.13.0, require `-o`)
+
+| Command | Options |
+|---------|---------|
+| `sheet-view` | `--gridlines on\|off`, `--zoom <10-400>`, `--tab-selected on\|off` |
+| `tab-color <color>` | named / `#hex` / `rgb(r,g,b)` / `theme:accent1[:tint]`; `--clear` removes a modeled color |
+| `page-setup` | `--orientation portrait\|landscape`, `--scale <10-400>`, `--fit-to-width <n>`, `--fit-to-height <n>`, `--fit-to-page on\|off` |
+| `header-footer` | `--odd-header/--odd-footer`, `--even-header/--even-footer`, `--first-header/--first-footer`, `--different-odd-even`, `--different-first` |
+
+Each has a batch-op twin (`sheet-view`/`tab-color`/`page-setup`/`header-footer`). Header/footer strings use Excel codes: `&L`/`&C`/`&R` sections; `&P` page, `&N` total, `&D` date, `&F` file, `&A` sheet.
+
+### Conditional Formatting Commands (0.13.0)
+
+| Command | Options |
+|---------|---------|
+| `cf add` | `--range <A1:A10>`, `--rule '<dsl>'`, `--bold`, `--italic`, `--underline`, `--strike`, `--bg <color>`, `--fg <color>` (requires `-o`) |
+| `cf list` | list rules on the sheet (read-only) |
+
+Rule DSL (`--rule`): `cellIs:<op>:<value>`, `between:<lo>:<hi>` (`notBetween:…`), `expression:<formula>`, `colorScale:<c1>:<c2>[:<c3>]`, `dataBar:<color>`, `top10:<n>[:percent]` (`bottom10:…`), `text:<op>:<s>`. A batch `cf` op mirrors `cf add`; priorities auto-assign in add order. Run `xl cf add --help` for the full DSL.
 
 ### Row/Column Commands
 

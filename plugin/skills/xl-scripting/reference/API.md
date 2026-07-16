@@ -14,10 +14,13 @@ Everything below is in scope after `import com.tjclp.xl.scripting.{*, given}`.
 | `CellValue` | enum: `Text`, `Number(BigDecimal)`, `Bool`, `DateTime`, `Formula(expr, cached)`, `RichText`, `Error`, `Empty` |
 | `Sheet` | Immutable sheet: `cells: Map[ARef, Cell]`, name, merges, comments, col/row properties |
 | `Workbook` | `sheets: Vector[Sheet]` + metadata |
-| `Patch` | Composable change set (monoid): `Put`, `SetCellStyle`, `SetRangeStyle`, `Merge`, `MergeBorder`, `Remove`, `Batch`, ... |
-| `CellStyle` | font, fill, border, numFmt, alignment |
-| `SheetView` | display settings: `(showGridLines, zoomScale)` — see Sheet View & Print Setup |
+| `Patch` | Composable change set (monoid): `Put`, `SetCellStyle`, `SetRangeStyle`, `Merge`, `MergeBorder`, `SetComment`, `SetConditionalFormat`, `Remove`, `Batch`, ... |
+| `CellStyle` | font, fill, border, numFmt, alignment (incl. `textRotation`) |
+| `SheetView` | display settings: `(showGridLines, zoomScale, tabSelected)` — see Sheet View & Print Setup |
 | `PageSetup` | print settings: scale, orientation, fit, header/footer, margins, print area, repeat rows |
+| `DataValidation` | `.Rules(ranges, kind, allowBlank, showDropdown)` \| `.Preserved` — list dropdowns via `DataValidation.list`/`listOf` |
+| `CalcPr` | workbook `<calcPr>`: `(iterativeCalculation, maxIterations, maxChange)` — iterative-calc authoring |
+| `IterativeCalc` | `(maxIter, maxChange)` — opt-in bounded circular recalc; `fromCalcPr` bridges a file's `CalcPr` |
 | `NumFmt` | `General`, `Currency`, `Percent`, `Date`, `DateTime`, `Decimal`, custom |
 | `Formatted` | `(value: CellValue, numFmt: NumFmt)` — value + display format pair |
 | `XLResult[A]` | `Either[XLError, A]` — every fallible operation |
@@ -55,6 +58,8 @@ ref"A1:B10".cells            // Iterator[ARef], row-major
 ref"A1:B10".width / .height / .size
 ARef.parse("C3")             // Either[String, ARef]
 ARef.from0(colIdx, rowIdx)   // 0-based construction
+Column.parse("D")            // Either[String, Column] — runtime column letter (0.13.0; "D1" tolerated)
+RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting) column (0.13.0)
 "C3".asCell                  // XLResult[ARef]   (String helpers; also .asRange, .asSheetName)
 ```
 
@@ -76,8 +81,11 @@ ARef.from0(colIdx, rowIdx)   // 0-based construction
 | `sheet.comment(ref, Comment.plainText("note", Some("author")))` | `Sheet` | |
 | `sheet.toHtml(ref"A1:B10")` | `String` | inline-CSS HTML table |
 | `sheet.usedRange` | `Option[CellRange]` | |
-| `sheet.withViewSettings(view)` | `Sheet` | gridlines/zoom — see Sheet View & Print Setup |
+| `sheet.withViewSettings(view)` | `Sheet` | gridlines/zoom/tabSelected — see Sheet View & Print Setup |
 | `sheet.withPageSetup(setup)` | `Sheet` | print settings — see Sheet View & Print Setup |
+| `sheet.freezeAt(ref"A3")` | `Sheet` | freeze rows above + cols left; `freezeAt(anchor, scrolledTo)` sets the pane scroll target (0.13.0) |
+| `sheet.withTabColor(color)` | `Sheet` | sheet tab color (rgb or theme; 0.13.0). `unfreeze` removes freeze panes |
+| `sheet.withDataValidation(range, DataValidation.list("\"Yes,No\""))` | `Sheet` | list dropdown (0.13.0); also `DataValidation.listOf("Yes", "No")` and a `Vector[CellRange]` overload |
 
 Codec types for `put`/`readTyped*`: String, Int, Long, Double, BigDecimal, Boolean, LocalDate (→ Date format), LocalDateTime (→ DateTime format), RichText.
 
@@ -95,6 +103,7 @@ Codec types for `put`/`readTyped*`: String, Int, Long, Double, BigDecimal, Boole
 | `wb.update("Name", f)` | `XLResult[Workbook]` | fails if sheet absent |
 | `wb.remove("Name")` | `XLResult[Workbook]` | can't remove last sheet |
 | `wb.rename(old, new)` | `XLResult[Workbook]` | |
+| `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))` | `Workbook` | author `<calcPr>` iterative calc (0.13.0); `wb.metadata.calcPr` reads it back |
 
 ## Patch DSL
 
@@ -108,6 +117,8 @@ ref"A1:C1".styled(style)        // style a range
 ref"A1:C1".merge                // merge cells (also .unmerge)
 ref"A1:C10".remove              // clear cells
 ref"A1".clearStyle
+ref"A1".comment(Comment.plainText("provenance", Some("me")))          // Patch.SetComment (0.13.0)
+ref"A1:C10".conditionalFormat(CfRule.cellIs(CfOperator.GreaterThan, "100", dxf))  // Patch.SetConditionalFormat (0.13.0)
 ref"B2:D6".outlined(BorderStyle.Medium)                       // box the range's outer edges
 ref"B2:D6".outlined(BorderStyle.Thin, Color.fromRgb(128, 128, 128))  // colored outline
 Patch.empty                     // identity — fold seed
@@ -132,6 +143,7 @@ CellStyle.default
   .top / .middle / .bottom          // vertical align
   .wrap
   .indent(2)                        // alignment indent level (~3 chars each); negatives clamp to 0
+  .rotated(90)                      // text rotation (Excel-UI degrees: -90..90, 255 = stacked; 0.13.0)
   .bordered / .borderedMedium / .borderedThick / .borderNone
   .borderTop(BorderStyle.Thin)      // per-side: also borderBottom/borderLeft/borderRight
   .borderBottom(BorderStyle.Medium, Color.fromRgb(0, 0, 128))  // color overloads on each side
@@ -177,7 +189,8 @@ sheet.conditionalFormat(
 )
 // also CfRule.expression / dataBar / top10 / text ops; unmodeled rule families preserved byte-faithfully
 
-sheet.withViewSettings(SheetView(showGridLines = false, zoomScale = Some(90)))
+sheet.withViewSettings(SheetView(showGridLines = false, zoomScale = Some(90), tabSelected = Some(true)))
+// tabSelected (0.13.0): tab SELECTION/grouping, not the active sheet (that is Workbook.activeSheetIndex)
 
 // Print/PDF setup — all fields optional with Excel defaults
 sheet.withPageSetup(
@@ -206,6 +219,7 @@ Header/footer strings support Excel codes — `&P` page, `&N` total pages, `&D` 
 |--------|---------|-------|
 | `wb.evaluateFormula(formula, onSheet[, clock])` | `XLResult[CellValue]` | cross-sheet context automatic; onSheet: String or SheetName |
 | `wb.recalculate([clock][, rng])` | `RecalcResult` | total whole-workbook recalc, per-cell errors, cycle isolation; `rng` (0.11.2+) seeds RAND — `Rng.seeded(42L)` for reproducible scripts |
+| `wb.recalculate(IterativeCalc(maxIter, maxChange))` | `RecalcResult` | 0.13.0: opt-in Jacobi fixpoint for declared cycles (also `(clock, iterative)` / `(clock, rng, iterative)`); `IterativeCalc.fromCalcPr(cp)` bridges a file's `<calcPr>` |
 | `wb.withCachedFormulas([clock])` | `Workbook` | = `recalculate(clock).workbook` |
 | `sheet.evaluateFormula(formula[, clock][, rng][, workbook])` | `XLResult[CellValue]` | pass `Some(wb)` iff formula references other sheets |
 | `sheet.putFormulaInheriting(ref, formula[, workbook])` | `XLResult[Sheet]` | 0.11.2+: puts the formula AND inherits the referenced cells' number format into a General target (Excel's entry behavior) |
@@ -216,9 +230,11 @@ Header/footer strings support Excel codes — `&P` page, `&N` total pages, `&D` 
 
 `RecalcResult`: `.workbook` (successful formulas cached), `.evaluated: Map[SheetName, Map[ARef, CellValue]]`, `.errors: Vector[CellEvalError]`, `.isClean`, `.toEither`.
 
-### All 107 functions
+**Formula syntax notes (0.13.0)**: percent postfix `=A1*10%` / `=10%` / `=(1+5%)^2` parses, evaluates (`10%` → exact `0.1`), broadcasts over ranges, and prints byte-identically (never rewritten to `/100`). Leading unary plus is preserved through print (`=+A1`, `=++A1`, `=2^+2` round-trip; evaluation is pure identity). Defined names resolve — `=IF(case=2,…)`, `=entry_mult*ltm_ebitda`, `=SUM(rev_range)` evaluate against workbook- and sheet-scoped names (sheet-scoped shadows global) and contribute dependency edges; unresolvable names are clean per-cell errors.
 
-SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, MIN, MAX, IF, IFS, IFERROR, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER, RAND, RANDBETWEEN — plus LET (lexical bindings; a parser-level special form, not in the registry listing)
+### All 108 functions
+
+SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, MIN, MAX, IF, IFS, IFERROR, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC, ABS, ROUND, ROUNDUP, ROUNDDOWN, MROUND, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER, RAND, RANDBETWEEN — plus LET (lexical bindings; a parser-level special form, not in the registry listing)
 
 ## IO
 
@@ -228,6 +244,7 @@ SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AV
 |--------|-------|
 | `Excel.read(path: String): Workbook` | throws `XLException`/IO errors at this edge |
 | `Excel.write(wb, path: String): Unit` | also accepts `XLResult[Workbook]` |
+| `Excel.writeRecalculated(wb, path: String): RecalcResult` | 0.13.0: recalc + write (even on partial failure) + return the result; overloads add `Clock`, `Clock`+`Rng`, or accept `XLResult[Workbook]` |
 | `Excel.modify(path)(f: Workbook => Workbook): Unit` | atomic in-place replacement |
 
 ### Streaming (`ExcelIO`) — 100k+ rows, O(1) memory
