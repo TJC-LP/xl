@@ -529,6 +529,15 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
+  test("GH-355: percent works inside comparisons (=50%=0.5 → TRUE)") {
+    assertEquals(evalIn(Sheet("Test"), "=50%=0.5"), Right(true))
+    assertEquals(evalIn(Sheet("Test"), "=200%>1"), Right(true))
+  }
+
+  test("GH-374: unary plus before quoted sheet ref round-trips (=+'Q1 Report'!B2)") {
+    assertPreserved("=+'Q1 Report'!B2")
+  }
+
   // ==================== GH-263: cell-ref-shaped sheet names ====================
   // A sheet named Q1/A1/R1C1 must be single-quoted by the printer or the generated
   // formula is spec-invalid (Excel would read Q1!A1 as something else entirely).
