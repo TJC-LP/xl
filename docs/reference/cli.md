@@ -90,7 +90,7 @@ xl rasterizers                                     # List available PNG/PDF back
 
 | Command | Arguments | Description |
 |---------|-----------|-------------|
-| `functions` | | List all 107 supported Excel functions (no `-f` needed) |
+| `functions` | | List all 108 supported Excel functions (no `-f` needed) |
 | `rasterizers` | | List available SVG-to-raster backends (no `-f` needed) |
 | `new` | `<output> [--sheet <name>]...` | Create a blank xlsx file (no `-f` needed) |
 | `sheets` | `[list\|hide <name> [--very]\|show <name>]` | List sheets (default) or hide/show one |
