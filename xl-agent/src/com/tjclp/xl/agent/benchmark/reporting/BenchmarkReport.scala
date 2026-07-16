@@ -138,13 +138,22 @@ object TokenSummary:
 // Skill Summary
 // ============================================================================
 
-/** Summary for a single skill */
+/**
+ * Summary for a single skill.
+ *
+ * Errored-task accounting (issue #344): tasks that died with an execution error consumed budget and
+ * represent real failures, so they COUNT in `taskCount`, `failCount`, token/latency sums, and the
+ * pass-rate denominator — but are reported distinctly via `erroredCount` (a subset of `failCount`),
+ * and `averageScore` is over graded (non-errored) results only so infrastructure crashes never
+ * masquerade as zero grades.
+ */
 case class SkillSummary(
   skillName: String,
   displayName: String,
   taskCount: Int,
   passCount: Int,
   failCount: Int,
+  erroredCount: Int,
   averageScore: Double,
   totalTokens: TokenSummary,
   averageLatencyMs: Long
@@ -162,11 +171,13 @@ object SkillSummary:
   ): SkillSummary =
     val skillResults = results.filter(_.skill == skillName)
     val completed = skillResults.filterNot(_.skipped)
-    val passed = completed.count(_.passed)
+    // Errored tasks can never pass; graded results are the only ones with a meaningful score
+    val graded = completed.filter(_.error.isEmpty)
+    val passed = graded.count(_.passed)
     val totalUsage = completed.foldLeft(TokenSummary.zero)((acc, r) => acc + r.usage)
     val avgScore =
-      if completed.isEmpty then 0.0
-      else completed.map(_.score.normalized).sum / completed.size
+      if graded.isEmpty then 0.0
+      else graded.map(_.score.normalized).sum / graded.size
 
     SkillSummary(
       skillName = skillName,
@@ -174,6 +185,7 @@ object SkillSummary:
       taskCount = completed.length,
       passCount = passed,
       failCount = completed.length - passed,
+      erroredCount = completed.length - graded.length,
       averageScore = avgScore,
       totalTokens = totalUsage,
       averageLatencyMs =

@@ -113,11 +113,18 @@ case class SkillRunResult(
 
 /**
  * Summary statistics for a skill's benchmark run.
+ *
+ * Errored-task accounting (issue #344): a task whose every case errored carries a task-level
+ * `error` (see `ExecutionResult.fromCases`). Such tasks consumed budget and represent real
+ * failures, so they COUNT in `total`, `failed`, usage/latency sums, and the pass-rate denominator —
+ * previously they dropped out of every sum — and are reported distinctly via `errored` (a subset of
+ * `failed`).
  */
 case class SkillSummary(
   total: Int,
   passed: Int,
   failed: Int,
+  errored: Int,
   totalUsage: TokenUsage,
   avgLatencyMs: Double,
   estimatedCost: Option[BigDecimal]
@@ -130,19 +137,20 @@ object SkillSummary:
     results: Vector[ExecutionResult],
     pricing: Option[ModelPricing] = None
   ): SkillSummary =
-    val completed = results.filterNot(_.error.isDefined)
-    val passed = completed.count(_.passed)
+    // ExecutionResult.passed is false whenever error is set, so errored can never pass
+    val passed = results.count(_.passed)
     val totalUsage = {
       import cats.kernel.Monoid
-      Monoid[TokenUsage].combineAll(completed.map(_.usage))
+      Monoid[TokenUsage].combineAll(results.map(_.usage))
     }
     val avgLatency =
-      if completed.isEmpty then 0.0 else completed.map(_.latencyMs).sum.toDouble / completed.size
+      if results.isEmpty then 0.0 else results.map(_.latencyMs).sum.toDouble / results.size
 
     SkillSummary(
-      total = completed.length,
+      total = results.length,
       passed = passed,
-      failed = completed.length - passed,
+      failed = results.length - passed,
+      errored = results.count(_.error.isDefined),
       totalUsage = totalUsage,
       avgLatencyMs = avgLatency,
       estimatedCost = pricing.map(p => totalUsage.estimatedCost(p))

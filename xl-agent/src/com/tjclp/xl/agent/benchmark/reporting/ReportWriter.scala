@@ -159,7 +159,7 @@ object ReportWriter:
   private def formatSkillSummary(summary: SkillSummary): String =
     s"""- **Tasks:** ${summary.taskCount}
        |- **Passed:** ${summary.passCount} (${summary.passRatePercent}%)
-       |- **Failed:** ${summary.failCount}
+       |- **Failed:** ${summary.failCount} (${summary.erroredCount} errored)
        |- **Avg Score:** ${f"${summary.averageScore}%.2f"}
        |- **Total Tokens:** ${formatNumber(summary.totalTokens.total)}
        |- **Avg Latency:** ${formatDuration(summary.averageLatencyMs)}
@@ -279,6 +279,7 @@ object UnifiedReportWriter:
           "displayName" -> Json.fromString(sr.displayName),
           "passed" -> Json.fromInt(sr.summary.passed),
           "failed" -> Json.fromInt(sr.summary.failed),
+          "errored" -> Json.fromInt(sr.summary.errored),
           "total" -> Json.fromInt(sr.summary.total),
           "passRate" -> Json.fromDoubleOrNull(sr.summary.passRate),
           "inputTokens" -> Json.fromLong(sr.summary.totalUsage.inputTokens),
@@ -370,19 +371,19 @@ object UnifiedReportWriter:
       sb.append(s"**Tasks:** ${run.tasks.length}  \n")
       sb.append(s"**Overall Pass Rate:** ${(run.overallPassRate * 100).toInt}%  \n\n")
 
-      // Skill comparison table
+      // Skill comparison table (errored is the subset of failed that never completed, issue #344)
       sb.append("## Results by Skill\n\n")
       sb.append(
-        "| Skill | Pass Rate | Passed | Failed | Input Tokens | Output Tokens | Avg Latency | Est. Cost |\n"
+        "| Skill | Pass Rate | Passed | Failed | Errored | Input Tokens | Output Tokens | Avg Latency | Est. Cost |\n"
       )
       sb.append(
-        "|-------|-----------|--------|--------|--------------|---------------|-------------|----------|\n"
+        "|-------|-----------|--------|--------|---------|--------------|---------------|-------------|----------|\n"
       )
 
       run.skillResults.values.toList.sortBy(-_.summary.passRate).foreach { sr =>
         val cost = sr.summary.estimatedCost.map(c => f"$$$c%.2f").getOrElse("-")
         sb.append(
-          s"| ${sr.displayName} | ${sr.summary.passRatePercent}% | ${sr.summary.passed} | ${sr.summary.failed} | "
+          s"| ${sr.displayName} | ${sr.summary.passRatePercent}% | ${sr.summary.passed} | ${sr.summary.failed} | ${sr.summary.errored} | "
         )
         sb.append(
           s"${formatNumber(sr.summary.totalUsage.inputTokens)} | ${formatNumber(sr.summary.totalUsage.outputTokens)} | "
@@ -534,6 +535,7 @@ object UnifiedReportWriter:
           "total" -> Json.fromInt(sr.summary.total),
           "passed" -> Json.fromInt(sr.summary.passed),
           "failed" -> Json.fromInt(sr.summary.failed),
+          "errored" -> Json.fromInt(sr.summary.errored),
           "passRate" -> Json.fromDoubleOrNull(sr.summary.passRate),
           "avgLatencyMs" -> Json.fromDoubleOrNull(sr.summary.avgLatencyMs),
           "totalInputTokens" -> Json.fromLong(sr.summary.totalUsage.inputTokens),
