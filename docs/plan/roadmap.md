@@ -10,7 +10,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **107 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 4,085 tests passing.
+**Current Status**: Production-ready with **108 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 4,085 tests passing.
 
 **Current Version**: **0.13.0 "Fixpoint"** (released 2026-07-16)
 
@@ -152,7 +152,7 @@ Authoring and rendering features not yet shipped:
 All completed phases are documented in git history. Key milestones:
 
 - **P0-P8**: Foundation, OOXML, streaming, codecs, macros
-- **WI-07/08/09**: Formula parser, evaluator (**107 functions**; the 0.10.0 breadth pass took the registry 88→104, then 0.11.2 added INDIRECT/RAND/RANDBETWEEN/LET)
+- **WI-07/08/09**: Formula parser, evaluator (**108 functions**; the 0.10.0 breadth pass took the registry 88→104, then 0.11.2 added INDIRECT/RAND/RANDBETWEEN/LET)
 - **TJC-1055** (closes GH-116): Text functions — TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT
 - **WI-10**: Excel table support
 - **WI-17**: SAX streaming write (36% faster than POI)

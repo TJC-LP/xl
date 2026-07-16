@@ -64,7 +64,7 @@ xl -f model.xlsx -s S1 eval "=B1*1.1" --with "B1=100"      # Evaluate with tempo
 
 # No file needed
 xl new report.xlsx --sheet Data --sheet Summary   # Create a blank workbook
-xl functions                                       # List all 107 supported functions
+xl functions                                       # List all 108 supported functions
 xl rasterizers                                     # List available PNG/PDF backends
 ```
 
