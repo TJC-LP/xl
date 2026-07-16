@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Sheet appearance & print-setup CLI commands** (#358, completing the
+  issue): `sheet-view --gridlines on|off --zoom N [--tab-selected]`,
+  `tab-color <color>|--clear` (hex, named, `rgb()`, and new
+  `theme:<slot>[:<tint>]` syntax), `page-setup --orientation --scale
+  --fit-to-width/--fit-to-height/--fit-to-page`, and `header-footer`
+  (odd/even/first) — each with a batch-op twin. The full deliverable
+  finish (gridlines off, zoom 85, tab colors, landscape + fit, confidential
+  footer) is one batch file with zero XML patching.
+- **Conditional-formatting CLI** (#324): `xl cf add --range A1:A10 --rule
+  'cellIs:greaterThan:100' --bold --bg #FFC7CE` (+ `cf list` and a batch
+  `cf` op) — colon rule DSL covering cellIs/between/expression/colorScale/
+  dataBar/top10/text families with clean errors; priorities auto-stamp.
+- **Batch `putf` format field** (#356): `{"op":"putf","ref":"C1",
+  "value":"=A1*2","format":"#,##0.0"}` applies the numFmt with the formula
+  in all three variants (single, `values[]`, `from`-dragging), on both the
+  in-memory and streaming batch paths — no more second `style` pass.
+- **Rasterizer diagnostics** (#359): failed PNG/PDF exports now name the
+  probed backend chain, point at `xl rasterizers`, and say when you're on
+  the native binary (where Batik is unavailable by design) with one-liner
+  installs; `xl rasterizers` gains explicit native-image awareness.
+
+### Changed
+
+- **JSON formula cells carry a dedicated `formula` field** (#357):
+  `view --format json` now always emits `{ref, type:"formula", formula,
+  value, formatted}` — `value`/`formatted` hold the computed/cached value.
+  Previously, under `--formulas`, `value` held the formula *text* and the
+  computed value was absent; consumers keying on `value` there were reading
+  the misfeature this fixes. CSV/markdown behavior is unchanged.
+
 - **Defined-name resolution in formulas** (#384): `=IF(case=2,…)`,
   `=entry_mult*ltm_ebitda`, `=SUM(rev_range)` parse, evaluate, and
   round-trip byte-faithfully via a dedicated name AST node — workbook- and
