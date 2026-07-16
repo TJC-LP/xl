@@ -1067,6 +1067,11 @@ object XlsxReader:
     val conditionalFormats =
       com.tjclp.xl.ooxml.worksheet.CfCodec.parseAll(ooxmlSheet.conditionalFormatting, styles.dxfs)
 
+    // Parse data validations into the typed model (GH-375). Total: unmodeled entries ride
+    // through Preserved, so read→edit→write keeps them on rewritten sheets.
+    val dataValidations =
+      com.tjclp.xl.ooxml.worksheet.DataValidationCodec.parseAll(ooxmlSheet.dataValidations)
+
     Right(
       Sheet(
         name = name,
@@ -1082,7 +1087,8 @@ object XlsxReader:
         viewSettings = viewSettings,
         drawings = drawings,
         conditionalFormats = conditionalFormats,
-        tabColor = tabColor
+        tabColor = tabColor,
+        dataValidations = dataValidations
       )
     )
 

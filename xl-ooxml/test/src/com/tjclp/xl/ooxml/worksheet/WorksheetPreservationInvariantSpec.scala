@@ -28,6 +28,7 @@ class WorksheetPreservationInvariantSpec extends FunSuite:
     "sheetData",
     "mergeCells",
     "conditionalFormatting",
+    "dataValidations", // GH-375: dedicated OoxmlWorksheet field (was preservedKnown)
     "printOptions",
     "rowBreaks",
     "colBreaks",

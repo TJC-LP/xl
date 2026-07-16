@@ -55,6 +55,10 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
       conditionalFormatting = elem.child.collect {
         case e: Elem if e.label == "conditionalFormatting" => rebindUsedNamespaces(e)
       }
+      // GH-375: the single <dataValidations> container gets a dedicated field (was preservedKnown)
+      dataValidations = (elem \ "dataValidations").headOption.collect { case e: Elem =>
+        rebindUsedNamespaces(e)
+      }
       printOptions = (elem \ "printOptions").headOption.collect { case e: Elem =>
         rebindUsedNamespaces(e)
       }
@@ -113,6 +117,7 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
       sheetFormatPr,
       cols,
       conditionalFormatting,
+      dataValidations,
       printOptions,
       rowBreaks,
       colBreaks,

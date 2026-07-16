@@ -76,15 +76,16 @@ object CfCodec:
    * WorksheetReader hoists used prefixes onto the block root and cleans descendant scopes, so a
    * RULE captured in isolation must resolve x14/xm (the dataBar extLst pairing) against its parent
    * block's scope or the stored payload is unbound XML that parsePreserved silently drops at dirty
-   * emission.
+   * emission. Shared with DataValidationCodec (GH-375), which captures entries below a rebound
+   * container the same way.
    */
-  private def preservedXml(e: Elem, inheritedScope: NamespaceBinding): String =
+  private[worksheet] def preservedXml(e: Elem, inheritedScope: NamespaceBinding): String =
     XmlUtil.compact(rebindUsedNamespaces(e, includeDefault = true, inheritedScope))
 
-  private def attrKeys(e: Elem): Set[String] = e.attributes.asAttrMap.keySet
+  private[worksheet] def attrKeys(e: Elem): Set[String] = e.attributes.asAttrMap.keySet
 
   /** Element children; Left when any non-whitespace non-element content is present. */
-  private def childElems(e: Elem): Either[Unit, Vector[Elem]] =
+  private[worksheet] def childElems(e: Elem): Either[Unit, Vector[Elem]] =
     val nonWs = e.child.filterNot {
       case Text(t) => t.forall(_.isWhitespace)
       case _ => false
@@ -92,7 +93,7 @@ object CfCodec:
     val elems = nonWs.collect { case c: Elem => c }.toVector
     if elems.sizeIs == nonWs.size then Right(elems) else Left(())
 
-  private def parseBool(value: String): Option[Boolean] = value match
+  private[worksheet] def parseBool(value: String): Option[Boolean] = value match
     case "1" | "true" => Some(true)
     case "0" | "false" => Some(false)
     case _ => None
@@ -114,7 +115,7 @@ object CfCodec:
     typed.getOrElse(ConditionalFormat.Preserved(preservedXml(block, TopScope)))
 
   /** Space-split sqref; a single-cell token becomes a 1×1 range. None on any corrupt token. */
-  private def parseSqref(sqref: String): Option[Vector[CellRange]] =
+  private[worksheet] def parseSqref(sqref: String): Option[Vector[CellRange]] =
     val tokens = sqref.trim.split("\\s+").toVector.filter(_.nonEmpty)
     if tokens.isEmpty then None
     else
