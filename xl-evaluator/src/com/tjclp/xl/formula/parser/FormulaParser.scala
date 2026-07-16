@@ -169,7 +169,12 @@ object FormulaParser:
    * evaluator/parser stack. Capping the parser keeps the AST shallow enough that evaluation is also
    * safe, so a single guard covers both the parser and the evaluator.
    */
-  private val MaxNestingDepth = 256
+  // 2x Excel's own 64-level function-nesting cap. Must stay small enough that the
+  // guard fires before JVM stack exhaustion: each nesting level costs ~11 recursive-
+  // descent frames (the precedence ladder incl. the postfix tier), and 256 levels sat
+  // at the edge of a default 1MB thread stack under interpreted execution (CI-observed
+  // StackOverflowError in the depth-guard tests themselves).
+  private val MaxNestingDepth = 128
 
   /**
    * Guarded descent into a nested sub-expression: deepen the state, or fail if already too deep.
