@@ -62,3 +62,14 @@ class WorksheetPreservationInvariantSpec extends FunSuite:
   test("worksheetKnownElements is exactly modeled + preserved (no stragglers either way)") {
     assertEquals(worksheetKnownElements, modeledOrRegenerated ++ preservedKnownLabels)
   }
+
+  test("every known worksheet element is a CT_Worksheet member (GH-397 lint order table)") {
+    // worksheetCanonicalOrder is the lint's canonical CT_Worksheet sequence; a knownElement
+    // outside it would be modeled/preserved by the writer but invisible to the order check.
+    val strays = worksheetKnownElements -- worksheetCanonicalOrder.toSet
+    assert(strays.isEmpty, s"known elements missing from the canonical order table: $strays")
+  }
+
+  test("worksheetCanonicalOrder has no duplicate labels") {
+    assertEquals(worksheetCanonicalOrder.distinct, worksheetCanonicalOrder)
+  }

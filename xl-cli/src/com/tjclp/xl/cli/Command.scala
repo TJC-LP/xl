@@ -192,6 +192,8 @@ enum CliCommand:
   case DeleteColumns(col: String, count: Int) // Delete `count` columns starting at column `col`
   // Compare two workbooks (-f vs -g); exit code 0 = identical, 1 = differs, 2 = error
   case Diff(file2: Path, format: DiffFormat)
+  // Validate package structure on the raw zip (GH-397); exit 0 = clean, 1 = findings, 2 = error
+  case Lint(format: LintFormat)
 
 /** Fill direction for the fill command */
 enum FillDirection derives CanEqual:
@@ -201,6 +203,11 @@ enum FillDirection derives CanEqual:
 /** Output format for the diff command */
 enum DiffFormat derives CanEqual:
   case Markdown // Human-readable, grouped by sheet (default)
+  case Json // Stable machine-readable schema
+
+/** Output format for the lint command */
+enum LintFormat derives CanEqual:
+  case Text // Human-readable findings list (default)
   case Json // Stable machine-readable schema
 
 /** Output format for the filter command */

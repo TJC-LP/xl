@@ -278,6 +278,54 @@ private[ooxml] val worksheetKnownElements: Set[String] = Set(
   "webPublishItems"
 )
 
+/**
+ * The full CT_Worksheet child sequence (ECMA-376 Part 1 §18.3.1.99, transitional sml.xsd) — the
+ * canonical order table for the structural lint (GH-397). Includes members xl neither models nor
+ * preserves (drawingHF); `worksheetKnownElements` must stay a subset of this set, enforced by
+ * WorksheetPreservationInvariantSpec.
+ */
+private[ooxml] val worksheetCanonicalOrder: Vector[String] = Vector(
+  "sheetPr",
+  "dimension",
+  "sheetViews",
+  "sheetFormatPr",
+  "cols",
+  "sheetData",
+  "sheetCalcPr",
+  "sheetProtection",
+  "protectedRanges",
+  "scenarios",
+  "autoFilter",
+  "sortState",
+  "dataConsolidate",
+  "customSheetViews",
+  "mergeCells",
+  "phoneticPr",
+  "conditionalFormatting",
+  "dataValidations",
+  "hyperlinks",
+  "printOptions",
+  "pageMargins",
+  "pageSetup",
+  "headerFooter",
+  "rowBreaks",
+  "colBreaks",
+  "customProperties",
+  "cellWatches",
+  "ignoredErrors",
+  "smartTags",
+  "drawing",
+  "legacyDrawing",
+  "legacyDrawingHF",
+  "drawingHF",
+  "picture",
+  "oleObjects",
+  "controls",
+  "webPublishItems",
+  "tableParts",
+  "extLst"
+)
+
 // ===== Hyperlink authoring (GH-235) =====
 // Cell.hyperlink is the typed model. On write we emit a <hyperlinks> element (and, for external
 // targets, sheet .rels relationships) so the model is no longer a silent no-op.
