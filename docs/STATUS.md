@@ -1,12 +1,20 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-16 (0.14.0)
+**Last Updated**: 2026-07-17 (0.15.0)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.15.0** (2026-07-17):
+- ✅ **numFmt round-trip fidelity** (#404) — `<numFmts>` declarations survive read→write verbatim (built-in-equal codes like `"0.00%"` no longer degrade to `General`); total `NumFmt.formatCode` inverse; whole-code `"General"` renders correctly (incl. `TEXT(n,"General")`)
+- ✅ **Range-date serial coercion** (#405) — XIRR/XNPV date ranges and NETWORKDAYS/WORKDAY holidays accept raw serial Numbers; post-round-trip recalc no longer poisons returns blocks
+- ✅ **Variadic blank-arg parity** (#395) + **decoder coercion edges** (#396) — direct blank refs ignored by COUNT/COUNTA/AVERAGE (`=AVERAGE(blank,blank)` → `#DIV/0!`); `decodeAsInt`/`decodeAsDate` mirror ScalarCoercion (Empty/Bool/cached-formula arms)
+- ✅ **Names + sheet-qualified refs in range-typed slots** (#394) — `=VLOOKUP(x, named_table, 2)`, ad-hoc `=XIRR(S!A1:B1,…)`, sheet-scoped names (`=Model!case`), `.`/`\` in names; new `RangeLocation.Name`/`TExpr.SheetNameRef`; latent cross-sheet wrong-sheet bug fixed for INDEX/MATCH/XLOOKUP/XIRR/NPV
+- ✅ **Chart series styling** (#407) — every series emits type-appropriate `<c:spPr>` (bar fills, line strokes, pie per-slice `dPt`) cycling `DefaultTheme.accents`; `Series.fill`, `chart add --series-colors`, `chart` batch op (27 ops), `<c:tx>` always emitted — LibreOffice renders chart output out of the box
+- ✅ **`xl lint`** (#397) — raw-zip validation of CT child order + r:id resolution (exit 0/1/2, `--format json`); preserved CT_Workbook children re-emit in schema position; hyperlink `#` normalization (#406)
 
 **New in 0.14.0** (2026-07-16):
 - ✅ **Excel error values as first-class results** (#344) — `=1/0` evaluates to `#DIV/0!` (IFERROR/ISERROR-catchable, cached as `t="e"` cells) instead of failing the formula; aggregates/logical folds/comparisons propagate per Excel policy (COUNT-family still skips); op-level `#NUM!`/`#DIV/0!`/`#N/A` codes; `#N/A` dimension padding; `"TRUE"`/`"FALSE"` text coerces in conditions; host failures stay loud — the boundary is law-tested (`RecalcResult.excelErrors` vs `errors`); design record `docs/design/error-propagation.md`

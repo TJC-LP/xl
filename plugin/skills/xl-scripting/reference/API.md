@@ -175,6 +175,8 @@ sheet.addImage(image, ref"B2").unsafe                          // natural size (
 sheet.addImage(image, ref"B2:D8")                              // stretched over a range — total
 val chart = Chart.bar(series, title = Some("Revenue")).unsafe  // XLResult: validated; also Chart.line/pie
 sheet.addChart(chart, ref"F2:K16")                             // anchored over the range — total
+val branded = firstSeries.copy(fill = Some(Color.Rgb(0xFF307FE2))) // explicit series color (0.15.0, packed
+                                                               // ARGB); fill = None cycles theme accents (LO-visible)
 sheet.pictures; sheet.charts                                   // typed views (unmodeled drawings preserved)
 
 // Conditional formatting (0.12.1+) — typed rules with dxf differential formats

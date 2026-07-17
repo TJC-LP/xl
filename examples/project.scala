@@ -2,4 +2,4 @@
 //> using repository ivy2Local
 
 // XL aggregate - includes all modules (core, ooxml, cats-effect, evaluator)
-//> using dep com.tjclp::xl:0.14.0
+//> using dep com.tjclp::xl:0.15.0
