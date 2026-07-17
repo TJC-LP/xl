@@ -173,6 +173,7 @@ enum CliCommand:
     data: String, // values range, e.g. B2:D10 (qualified accepted)
     categories: Option[String], // categories vector, e.g. A2:A10
     seriesNames: Option[String], // comma-separated literal names, positional
+    seriesColors: Option[String], // comma-separated colors (hex/named), positional (GH-407)
     title: Option[String],
     legend: Option[String], // right | left | top | bottom | top-right | none
     at: String // placement: range -> two-cell anchor, single cell -> default extent

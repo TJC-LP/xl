@@ -1318,6 +1318,13 @@ EXAMPLES:
         val seriesNamesOpt = Opts
           .option[String]("series-names", "Comma-separated literal series names (positional)")
           .orNone
+        val seriesColorsOpt = Opts
+          .option[String](
+            "series-colors",
+            "Comma-separated series colors (positional), e.g. #307FE2,#005670; " +
+              "unset series cycle the theme accents (bar/column/line only)"
+          )
+          .orNone
         val titleOpt = Opts.option[String]("title", "Chart title").orNone
         val legendOpt = Opts
           .option[String](
@@ -1329,8 +1336,17 @@ EXAMPLES:
           "at",
           "Placement: a range (chart stretches over it) or a single cell (default size)"
         )
-        (typeOpt, groupingOpt, dataOpt, categoriesOpt, seriesNamesOpt, titleOpt, legendOpt, atOpt)
-          .mapN(CliCommand.ChartAdd.apply)
+        (
+          typeOpt,
+          groupingOpt,
+          dataOpt,
+          categoriesOpt,
+          seriesNamesOpt,
+          seriesColorsOpt,
+          titleOpt,
+          legendOpt,
+          atOpt
+        ).mapN(CliCommand.ChartAdd.apply)
       }
     }
 
@@ -2250,7 +2266,17 @@ EXAMPLES:
         WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _)
       )
 
-    case CliCommand.ChartAdd(typeStr, grouping, data, categories, seriesNames, title, legend, at) =>
+    case CliCommand.ChartAdd(
+          typeStr,
+          grouping,
+          data,
+          categories,
+          seriesNames,
+          seriesColors,
+          title,
+          legend,
+          at
+        ) =>
       requireOutput(outputOpt, backendOpt, stream)(
         ChartCommands.chartAdd(
           wb,
@@ -2260,6 +2286,7 @@ EXAMPLES:
           data,
           categories,
           seriesNames,
+          seriesColors,
           title,
           legend,
           at,

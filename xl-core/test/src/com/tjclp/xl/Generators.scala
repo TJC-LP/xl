@@ -696,7 +696,13 @@ object Generators:
         1 -> Gen.alphaNumStr.map(s => Some(SeriesName.Literal(s.take(12)))),
         1 -> genGridRef.map(ref => Some(SeriesName.FromCell(sheet, ref)))
       )
-    yield Series(values, categories, name)
+      // GH-407: explicit fills are opaque (alpha FF) — chart XML's a:srgbClr has no alpha slot,
+      // so only opaque colors round-trip exactly; None exercises the writer's accent-cycle default
+      fill <- Gen.frequency[Option[Color.Rgb]](
+        2 -> Gen.const(None),
+        1 -> Gen.choose(0, 0xffffff).map(rgb => Some(Color.Rgb(0xff000000 | rgb)))
+      )
+    yield Series(values, categories, name, fill)
 
   /** Typed chart in the validated shape: ≥1 series, pie forced to exactly one. */
   def genChart(sheet: SheetName): Gen[com.tjclp.xl.charts.Chart] =

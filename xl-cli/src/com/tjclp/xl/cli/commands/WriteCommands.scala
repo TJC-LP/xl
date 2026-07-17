@@ -711,9 +711,10 @@ object WriteCommands:
           _: BatchParser.BatchOp.RowShow | _: BatchParser.BatchOp.AutoFit |
           _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
           _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
-          _: BatchParser.BatchOp.Hyperlink | _: BatchParser.BatchOp.SetSheetView |
-          _: BatchParser.BatchOp.SetTabColor | _: BatchParser.BatchOp.SetPageSetup |
-          _: BatchParser.BatchOp.SetHeaderFooter | _: BatchParser.BatchOp.AddConditionalFormat =>
+          _: BatchParser.BatchOp.Hyperlink | _: BatchParser.BatchOp.AddChart |
+          _: BatchParser.BatchOp.SetSheetView | _: BatchParser.BatchOp.SetTabColor |
+          _: BatchParser.BatchOp.SetPageSetup | _: BatchParser.BatchOp.SetHeaderFooter |
+          _: BatchParser.BatchOp.AddConditionalFormat =>
         false
 
   /**

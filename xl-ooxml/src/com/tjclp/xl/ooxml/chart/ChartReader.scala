@@ -13,7 +13,8 @@ import com.tjclp.xl.charts.{
   Series,
   SeriesName
 }
-import com.tjclp.xl.ooxml.{XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{DefaultTheme, XmlSecurity, XmlUtil}
+import com.tjclp.xl.styles.color.Color
 
 /**
  * Parser for `xl/charts/chartN.xml` parts (GH-222). TOTAL: anything outside a STRICT whitelist of
@@ -25,13 +26,18 @@ import com.tjclp.xl.ooxml.{XmlSecurity, XmlUtil}
  * canonical emitter re-derives are accepted-and-dropped: `idx`/`order` (re-derived 0..n-1), axis
  * ids (re-derived 10/100), any `axPos` (TRAP-4: the fixture writes the l/l quirk Excel ignores),
  * tick marks, label alignment/offset, `numFmt`, empty `majorGridlines`, num/str caches anywhere
- * (write-only hints), the fixture's no-op `ser/spPr` of exactly `a:ln/a:prstDash val="solid"`, and
- * `lang`/`roundedCorners`. The loss only materializes on a dirty regeneration of the chart part
- * (the GH-221 drawing-layer contract).
+ * (write-only hints), the fixture's no-op `ser/spPr` of exactly `a:ln/a:prstDash val="solid"`, pie
+ * accent-cycle `c:dPt` fills (re-derived per slice — GH-407), and `lang`/`roundedCorners`. The loss
+ * only materializes on a dirty regeneration of the chart part (the GH-221 drawing-layer contract).
+ *
+ * CAPTURED since GH-407: the writer's own per-series fill shapes — bar/pie `ser/spPr/a:solidFill`
+ * and line `ser/spPr/a:ln/a:solidFill`, each holding one bare `a:srgbClr` — parse into
+ * [[Series.fill]].
  *
  * Deliberately rejected (visible state the model cannot represent): every other chart group,
- * `c:style`/spPr/txPr formatting, externalData, dLbls/dPt/trendlines/errBars, hidden or inverted
- * axes, non-default gapWidth/overlap, smooth lines, real markers, multi-level categories,
+ * `c:style`/txPr formatting, any other spPr content (gradients, color transforms, mixed
+ * fill+stroke), externalData, dLbls/trendlines/errBars, non-accent-cycle dPt fills, hidden or
+ * inverted axes, non-default gapWidth/overlap, smooth lines, real markers, multi-level categories,
  * `mc:AlternateContent`, and `autoTitleDeleted val="0"` without a title (Excel's auto-title state
  * is unrepresentable).
  */
@@ -205,7 +211,7 @@ object ChartReader:
         case (None, BarGrouping.Clustered) => Some(())
         case (Some("100"), BarGrouping.Stacked | BarGrouping.PercentStacked) => Some(())
         case _ => None
-      series <- traverseOpt(kids.filter(_.label == "ser"))(parseSer(_, line = false))
+      series <- traverseOpt(kids.filter(_.label == "ser"))(parseSer(_, SerKind.Bar))
       axIds = kids.filter(_.label == "axId").flatMap(valAttr)
       _ <- Option.when(axIds.sizeIs == 2)(())
     yield (ChartType.Bar(direction, grouping), series, axIds.toVector)
@@ -225,7 +231,7 @@ object ChartReader:
       _ <- kids
         .find(_.label == "marker")
         .fold(Option(()))(m => Option.when(valAttr(m).contains("1") && elems(m).isEmpty)(()))
-      series <- traverseOpt(kids.filter(_.label == "ser"))(parseSer(_, line = true))
+      series <- traverseOpt(kids.filter(_.label == "ser"))(parseSer(_, SerKind.Line))
       axIds = kids.filter(_.label == "axId").flatMap(valAttr)
       _ <- Option.when(axIds.sizeIs == 2)(())
     yield (series, axIds.toVector)
@@ -240,7 +246,7 @@ object ChartReader:
         .find(_.label == "firstSliceAng")
         .fold(Option(()))(f => Option.when(valAttr(f).contains("0"))(()))
       ser <- single(kids.filter(_.label == "ser"))
-      series <- parseSer(ser, line = false)
+      series <- parseSer(ser, SerKind.Pie)
     yield Vector(series)
 
   private def varyColors(kids: Seq[Elem], expected: String): Option[Unit] =
@@ -250,16 +256,25 @@ object ChartReader:
 
   // ===== series =====
 
-  private def parseSer(ser: Elem, line: Boolean): Option[Series] =
+  /** Which chart group hosts a `c:ser` — decides the extra whitelist and the spPr fill shape. */
+  private enum SerKind derives CanEqual:
+    case Bar, Line, Pie
+
+  private def parseSer(ser: Elem, kind: SerKind): Option[Series] =
     val base = Set("idx", "order", "tx", "spPr", "cat", "val")
-    val allowed = if line then base ++ Set("marker", "smooth") else base
+    val allowed = kind match
+      case SerKind.Line => base ++ Set("marker", "smooth")
+      case SerKind.Pie => base ++ Set("dPt")
+      case SerKind.Bar => base
     val kids = elems(ser)
     for
       _ <- Option.when(kids.forall(k => isC(k) && allowed(k.label)))(())
-      _ <- Option.when(allowed.forall(l => kids.count(_.label == l) <= 1))(())
-      _ <- Option.when(kids.filter(_.label == "spPr").forall(noOpSpPr))(())
+      _ <- Option.when((allowed - "dPt").forall(l => kids.count(_.label == l) <= 1))(())
+      fill <- kids.find(_.label == "spPr") match
+        case None => Some(None)
+        case Some(spPr) => parseSpPrFill(spPr, kind)
       _ <-
-        if line then
+        if kind == SerKind.Line then
           for
             _ <- kids.find(_.label == "marker") match
               case None => Some(())
@@ -281,7 +296,10 @@ object ChartReader:
         case Some(cat) => parseCatRef(cat).map(Some(_))
       valEl <- kids.find(_.label == "val")
       values <- parseValRef(valEl)
-    yield Series(values, cats, name)
+      _ <-
+        if kind == SerKind.Pie then checkPieDPts(kids.filter(_.label == "dPt"), values.cellCount)
+        else Some(())
+    yield Series(values, cats, name, fill)
 
   /**
    * The fixture's no-op `ser/spPr`: exactly `a:ln/a:prstDash val="solid"`. Anything else rejects.
@@ -294,6 +312,71 @@ object ChartReader:
             valAttr(dash).contains("solid") && elems(dash).isEmpty
           case _ => false
       case _ => false)
+
+  /**
+   * The exact fill shapes the emitter produces (GH-407): bar/pie `spPr/a:solidFill`; line rides the
+   * stroke, `spPr/a:ln/a:solidFill`. `Some(None)` = accepted no-op (the fixture dialect),
+   * `Some(Some(c))` = captured fill, `None` = out-of-fence (rejects the whole chart).
+   */
+  private def parseSpPrFill(spPr: Elem, kind: SerKind): Option[Option[Color.Rgb]] =
+    if noOpSpPr(spPr) then Some(None)
+    else if spPr.attributes != Null then None
+    else
+      (kind, elems(spPr)) match
+        case (SerKind.Bar | SerKind.Pie, Seq(sf)) => solidFillRgb(sf).map(Some(_))
+        case (SerKind.Line, Seq(ln)) if ln.label == "ln" && isA(ln) && ln.attributes == Null =>
+          elems(ln) match
+            case Seq(sf) => solidFillRgb(sf).map(Some(_))
+            case _ => None
+        case _ => None
+
+  /** `a:solidFill` holding exactly one bare `a:srgbClr val="RRGGBB"` (no transforms). */
+  private def solidFillRgb(sf: Elem): Option[Color.Rgb] =
+    for
+      _ <- Option.when(sf.label == "solidFill" && isA(sf) && sf.attributes == Null)(())
+      clr <- single(elems(sf))
+      _ <- Option.when(clr.label == "srgbClr" && isA(clr) && elems(clr).isEmpty)(())
+      _ <- Option.when(clr.attributes.asAttrMap.keySet == Set("val"))(())
+      hex <- XmlUtil.getAttrOpt(clr, "val")
+      rgb <- parseHex6(hex)
+    yield Color.Rgb(0xff000000 | rgb)
+
+  private def parseHex6(s: String): Option[Int] =
+    Option.when(s.length == 6 && s.forall(ch => Character.digit(ch, 16) >= 0))(
+      Integer.parseInt(s, 16)
+    )
+
+  /**
+   * Writer-emitted pie slice fills (GH-407): either NO dPts (pre-fill output) or exactly one per
+   * value cell — idx 0..n-1 in document order, each the accent-cycle solid fill. They re-derive on
+   * emission, so they are dropped; anything richer (custom slice colors, extra dPt children)
+   * rejects to Preserved.
+   */
+  private def checkPieDPts(dPts: Seq[Elem], cellCount: Int): Option[Unit] =
+    if dPts.isEmpty then Some(())
+    else
+      for
+        _ <- Option.when(dPts.sizeIs == cellCount)(())
+        parsed <- traverseOpt(dPts)(parseDPt)
+        _ <- Option.when(parsed.zipWithIndex.forall { case ((idx, rgb), k) =>
+          idx == k && rgb == Color.Rgb(DefaultTheme.accentArgb(k))
+        })(())
+      yield ()
+
+  /** One `c:dPt`: exactly `c:idx` + fill-shaped `c:spPr`. */
+  private def parseDPt(dPt: Elem): Option[(Int, Color.Rgb)] =
+    if dPt.attributes != Null then None
+    else
+      elems(dPt) match
+        case Seq(idxEl, spPr)
+            if idxEl.label == "idx" && isC(idxEl) && elems(idxEl).isEmpty &&
+              spPr.label == "spPr" && isC(spPr) && spPr.attributes == Null =>
+          for
+            idx <- valAttr(idxEl).flatMap(_.toIntOption)
+            sf <- single(elems(spPr))
+            rgb <- solidFillRgb(sf)
+          yield (idx, rgb)
+        case _ => None
 
   /** `c:tx` = literal `c:v` or single-cell `c:strRef/c:f` (cache optional, dropped — TRAP-7). */
   private def parseTx(tx: Elem): Option[SeriesName] =

@@ -45,8 +45,17 @@ class OoxmlChartSpec extends FunSuite:
       .drop(1) // XML declaration
       .mkString
 
-  private val serGolden =
-    """<ser><idx val="0"/><order val="0"/><tx><strRef><f>Data!$B$1</f><strCache><ptCount val="1"/><pt idx="0"><v>Units</v></pt></strCache></strRef></tx><cat><strRef><f>Data!$A$2:$A$3</f><strCache><ptCount val="2"/><pt idx="0"><v>Q1</v></pt><pt idx="1"><v>Q2</v></pt></strCache></strRef></cat><val><numRef><f>Data!$B$2:$B$3</f><numCache><formatCode>General</formatCode><ptCount val="2"/><pt idx="0"><v>12</v></pt><pt idx="1"><v>0.5</v></pt></numCache></numRef></val></ser>"""
+  /** Golden `c:ser` body; `extras` slots between `</tx>` and `<cat>` (spPr / marker / dPt). */
+  private def serGolden(extras: String): String =
+    s"""<ser><idx val="0"/><order val="0"/><tx><strRef><f>Data!$$B$$1</f><strCache><ptCount val="1"/><pt idx="0"><v>Units</v></pt></strCache></strRef></tx>$extras<cat><strRef><f>Data!$$A$$2:$$A$$3</f><strCache><ptCount val="2"/><pt idx="0"><v>Q1</v></pt><pt idx="1"><v>Q2</v></pt></strCache></strRef></cat><val><numRef><f>Data!$$B$$2:$$B$$3</f><numCache><formatCode>General</formatCode><ptCount val="2"/><pt idx="0"><v>12</v></pt><pt idx="1"><v>0.5</v></pt></numCache></numRef></val></ser>"""
+
+  /** GH-407 golden spPr shapes: bar/pie fill vs line stroke. */
+  private def fillSpPr(hex: String): String =
+    s"""<spPr><a:solidFill><a:srgbClr val="$hex"/></a:solidFill></spPr>"""
+  private def strokeSpPr(hex: String): String =
+    s"""<spPr><a:ln><a:solidFill><a:srgbClr val="$hex"/></a:solidFill></a:ln></spPr>"""
+  private def dPt(idx: Int, hex: String): String =
+    s"""<dPt><idx val="$idx"/>${fillSpPr(hex)}</dPt>"""
 
   private def axesGolden(catPos: String, valPos: String) =
     s"""<catAx><axId val="10"/><scaling><orientation val="minMax"/></scaling><delete val="0"/><axPos val="$catPos"/><majorTickMark val="out"/><minorTickMark val="none"/><tickLblPos val="nextTo"/><crossAx val="100"/><crosses val="autoZero"/><auto val="1"/><lblAlgn val="ctr"/><lblOffset val="100"/><noMultiLvlLbl val="0"/></catAx><valAx><axId val="100"/><scaling><orientation val="minMax"/></scaling><delete val="0"/><axPos val="$valPos"/><majorGridlines/><numFmt formatCode="General" sourceLinked="1"/><majorTickMark val="out"/><minorTickMark val="none"/><tickLblPos val="nextTo"/><crossAx val="10"/><crosses val="autoZero"/><crossBetween val="between"/></valAx>"""
@@ -55,11 +64,13 @@ class OoxmlChartSpec extends FunSuite:
     """<chartSpace xmlns="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><chart>"""
   private val suffix = """<plotVisOnly val="1"/><dispBlanksAs val="gap"/></chart></chartSpace>"""
 
-  test("golden: clustered column bar with title and legend") {
+  test("golden: clustered column bar with title and legend (accent-cycle spPr, GH-407)") {
     val chart = Chart(ChartType.Bar(), Vector(series), Some("T"), Some(Legend()))
     val expected = prefix +
       """<title><tx><rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>T</a:t></a:r></a:p></rich></tx><overlay val="0"/></title><autoTitleDeleted val="0"/>""" +
-      s"""<plotArea><barChart><barDir val="col"/><grouping val="clustered"/><varyColors val="0"/>$serGolden<gapWidth val="150"/><axId val="10"/><axId val="100"/></barChart>${axesGolden(
+      s"""<plotArea><barChart><barDir val="col"/><grouping val="clustered"/><varyColors val="0"/>${serGolden(
+          fillSpPr("4472C4")
+        )}<gapWidth val="150"/><axId val="10"/><axId val="100"/></barChart>${axesGolden(
           "b",
           "l"
         )}</plotArea>""" +
@@ -75,7 +86,9 @@ class OoxmlChartSpec extends FunSuite:
       None
     )
     val expected = prefix + """<autoTitleDeleted val="1"/>""" +
-      s"""<plotArea><barChart><barDir val="bar"/><grouping val="stacked"/><varyColors val="0"/>$serGolden<gapWidth val="150"/><overlap val="100"/><axId val="10"/><axId val="100"/></barChart>${axesGolden(
+      s"""<plotArea><barChart><barDir val="bar"/><grouping val="stacked"/><varyColors val="0"/>${serGolden(
+          fillSpPr("4472C4")
+        )}<gapWidth val="150"/><overlap val="100"/><axId val="10"/><axId val="100"/></barChart>${axesGolden(
           "l",
           "b"
         )}</plotArea>""" +
@@ -83,15 +96,14 @@ class OoxmlChartSpec extends FunSuite:
     assertEquals(emit(chart), expected)
   }
 
-  test("golden: line chart — per-ser marker BEFORE cat, smooth AFTER val, chart marker=1") {
+  test("golden: line chart — spPr colors the STROKE, marker BEFORE cat, smooth AFTER val") {
     val chart = Chart(
       ChartType.Line,
       Vector(series),
       None,
       Some(Legend(LegendPosition.Bottom, overlay = true))
     )
-    val lineSer = serGolden
-      .replace("</tx><cat>", "</tx><marker><symbol val=\"none\"/></marker><cat>")
+    val lineSer = serGolden(strokeSpPr("4472C4") + """<marker><symbol val="none"/></marker>""")
       .replace("</val></ser>", "</val><smooth val=\"0\"/></ser>")
     val expected = prefix + """<autoTitleDeleted val="1"/>""" +
       s"""<plotArea><lineChart><grouping val="standard"/><varyColors val="0"/>$lineSer<marker val="1"/><axId val="10"/><axId val="100"/></lineChart>${axesGolden(
@@ -102,12 +114,58 @@ class OoxmlChartSpec extends FunSuite:
     assertEquals(emit(chart), expected)
   }
 
-  test("golden: pie chart — no axes, varyColors=1, firstSliceAng=0") {
+  test("golden: pie chart — no axes, varyColors=1, per-slice accent dPts, no series spPr") {
     val chart = Chart(ChartType.Pie, Vector(series), None, Some(Legend()))
     val expected = prefix + """<autoTitleDeleted val="1"/>""" +
-      s"""<plotArea><pieChart><varyColors val="1"/>$serGolden<firstSliceAng val="0"/></pieChart></plotArea>""" +
+      s"""<plotArea><pieChart><varyColors val="1"/>${serGolden(
+          dPt(0, "4472C4") + dPt(1, "ED7D31")
+        )}<firstSliceAng val="0"/></pieChart></plotArea>""" +
       """<legend><legendPos val="r"/><overlay val="0"/></legend>""" + suffix
     assertEquals(emit(chart), expected)
+  }
+
+  // ===== GH-407: explicit fills, accent cycling, always-on c:tx =====
+
+  test("GH-407: explicit Series.fill lands byte-exact; unset series keep the accent cycle") {
+    import com.tjclp.xl.styles.color.Color
+    val s0 = Series(DataRef(data, ref"B2:B3"), None, None, Some(Color.Rgb(0xff307fe2)))
+    val s1 = Series(DataRef(data, ref"A2:A3"), None, None)
+    val chart = Chart(ChartType.Bar(), Vector(s0, s1), None, None)
+    val xml = emit(chart)
+    assert(xml.contains(fillSpPr("307FE2")), xml)
+    // second series (index 1) defaults to accent2
+    assert(xml.contains(fillSpPr("ED7D31")), xml)
+  }
+
+  test("GH-407: c:tx is ALWAYS emitted — unnamed series get the literal 'Series N' (1-based)") {
+    val unnamed = Series(DataRef(data, ref"B2:B3"), None, None)
+    val chart = Chart(ChartType.Bar(), Vector(unnamed, unnamed), None, None)
+    val xml = emit(chart)
+    assert(xml.contains("<tx><v>Series 1</v></tx>"), xml)
+    assert(xml.contains("<tx><v>Series 2</v></tx>"), xml)
+  }
+
+  test("GH-407: accent cycle wraps after 6 series (series 7 gets accent1 again)") {
+    val unnamed = Series(DataRef(data, ref"B2:B3"), None, None)
+    val chart = Chart(ChartType.Bar(), Vector.fill(7)(unnamed), None, None)
+    val xml = emit(chart)
+    val hexes = """<a:srgbClr val="([0-9A-F]{6})"/>""".r.findAllMatchIn(xml).map(_.group(1)).toList
+    assertEquals(
+      hexes,
+      List("4472C4", "ED7D31", "A5A5A5", "FFC000", "5B9BD5", "70AD47", "4472C4")
+    )
+  }
+
+  test("GH-407: line explicit fill rides the stroke; pie explicit fill emits series-level spPr") {
+    import com.tjclp.xl.styles.color.Color
+    val filled = Series(DataRef(data, ref"B2:B3"), None, None, Some(Color.Rgb(0xff005670)))
+    val lineXml = emit(Chart(ChartType.Line, Vector(filled), None, None))
+    assert(lineXml.contains(strokeSpPr("005670")), lineXml)
+    assert(!lineXml.contains(fillSpPr("005670")), lineXml)
+    // pie: the explicit series fill round-trips at series level; slices stay dPt accent-cycled
+    val pieXml = emit(Chart(ChartType.Pie, Vector(filled), None, None))
+    assert(pieXml.contains(fillSpPr("005670")), pieXml)
+    assert(pieXml.contains(dPt(0, "4472C4") + dPt(1, "ED7D31")), pieXml)
   }
 
   // ===== caches =====
@@ -229,7 +287,11 @@ class OoxmlChartSpec extends FunSuite:
       ChartReader.parse(saxXml),
       "backends must agree on the parsed chart model"
     )
-    assertEquals(ChartReader.parse(domXml), Some(chart))
+    // GH-407: the reader captures the writer's materialized accent fill into Series.fill
+    val materialized = chart.copy(series =
+      chart.series.map(_.copy(fill = Some(com.tjclp.xl.styles.color.Color.Rgb(0xff4472c4))))
+    )
+    assertEquals(ChartReader.parse(domXml), Some(materialized))
 
     def decls(xml: String): List[String] =
       """xmlns(:[a-z0-9]+)?="[^"]*"""".r.findAllIn(xml).toList

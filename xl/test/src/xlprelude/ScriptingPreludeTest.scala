@@ -303,7 +303,11 @@ class ScriptingPreludeTest extends FunSuite:
     val loaded = Excel.read(path.toString)
     val frames = loaded.sheets.headOption.map(_.charts).getOrElse(Vector.empty)
     assertEquals(frames.size, 1)
-    assertEquals(frames.headOption.map(_.chart), Some(chart))
+    // GH-407: the writer materializes an accent-cycle fill for fill-less series (LibreOffice
+    // renders spPr-less series invisible) and the reader captures it back into the model
+    val materialized =
+      chart.copy(series = chart.series.map(_.copy(fill = Some(Color.Rgb(0xff4472c4)))))
+    assertEquals(frames.headOption.map(_.chart), Some(materialized))
 
   test("drawing layer resolves through the prelude: addImage round-trips an embedded image"):
     // 1x1-style tiny PNG (the 2x3 generator template, inlined: prelude tests are self-contained)

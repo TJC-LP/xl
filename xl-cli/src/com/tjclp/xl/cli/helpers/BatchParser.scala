@@ -100,6 +100,18 @@ object BatchParser:
     case Unfreeze
     case CopyRange(source: String, target: String, valuesOnly: Boolean)
     case Hyperlink(ref: String, target: Option[String]) // GH-235: target None clears
+    // Chart authoring (GH-407): mirrors the `chart add` CLI params
+    case AddChart(
+      chartType: String, // column | bar | line | pie
+      grouping: Option[String], // clustered | stacked | percent-stacked (column/bar only)
+      data: String, // values range (qualified accepted)
+      categories: Option[String], // categories vector
+      seriesNames: Option[String], // comma-separated literal names, positional
+      seriesColors: Option[String], // comma-separated colors, positional
+      title: Option[String],
+      legend: Option[String], // right | left | top | bottom | top-right | none
+      at: String // placement: range or single cell
+    )
     // Sheet appearance & print setup (GH-358)
     case SetSheetView(gridlines: Option[Boolean], zoom: Option[Int], tabSelected: Option[Boolean])
     case SetTabColor(color: Option[String], clear: Boolean)
@@ -185,6 +197,8 @@ object BatchParser:
         case BatchOp.Unfreeze => "  UNFREEZE"
         case BatchOp.CopyRange(src, tgt, vo) =>
           s"  COPY $src -> $tgt${if vo then " (values-only)" else ""}"
+        case BatchOp.AddChart(chartType, _, data, _, _, _, _, _, at) =>
+          s"  CHART $chartType $data at $at"
         case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
           val desc = AppearanceOps.describe(
             "gridlines" -> gridlines.map(g => if g then "on" else "off"),
@@ -273,6 +287,9 @@ object BatchParser:
    *   - `freeze`: {"op": "freeze", "ref": "B2"}
    *   - `unfreeze`: {"op": "unfreeze"}
    *   - `copy`: {"op": "copy", "source": "A1:B2", "target": "D1", "valuesOnly": false}
+   *   - `chart`: {"op": "chart", "type": "column", "data": "B2:C4", "categories": "A2:A4",
+   *     "seriesNames": "N,S", "seriesColors": "#307FE2,#005670", "title": "T", "legend": "right",
+   *     "at": "E2:K15"} (GH-407 — mirrors `chart add`)
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def parseBatchJson(json: String): Either[Exception, ParseResult] =
@@ -442,6 +459,21 @@ object BatchParser:
             val valuesOnly = objMap.get("valuesOnly").flatMap(_.boolOpt).getOrElse(false)
             BatchOp.CopyRange(source, target, valuesOnly)
 
+          case "chart" =>
+            collectUnknownPropsWarning(objMap, knownChartProps, "chart", idx)
+              .foreach(warnings += _)
+            BatchOp.AddChart(
+              chartType = requireString(objMap, "type", idx),
+              grouping = objMap.get("grouping").flatMap(_.strOpt),
+              data = requireString(objMap, "data", idx),
+              categories = objMap.get("categories").flatMap(_.strOpt),
+              seriesNames = objMap.get("seriesNames").flatMap(_.strOpt),
+              seriesColors = objMap.get("seriesColors").flatMap(_.strOpt),
+              title = objMap.get("title").flatMap(_.strOpt),
+              legend = objMap.get("legend").flatMap(_.strOpt),
+              at = requireString(objMap, "at", idx)
+            )
+
           case "sheet-view" =>
             collectUnknownPropsWarning(objMap, knownSheetViewProps, "sheet-view", idx)
               .foreach(warnings += _)
@@ -503,7 +535,7 @@ object BatchParser:
                 "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
                 "comment, remove-comment, hyperlink, clear, col-hide, col-show, " +
                 "row-hide, row-show, autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, " +
-                "sheet-view, tab-color, page-setup, header-footer, cf"
+                "chart, sheet-view, tab-color, page-setup, header-footer, cf"
             )
       }
 
@@ -552,6 +584,20 @@ object BatchParser:
   /** Known properties for 'comment' operation */
   private val knownCommentProps = Set("op", "ref", "text", "author")
   private val knownHyperlinkProps = Set("op", "ref", "target")
+
+  /** Known properties for 'chart' operation (GH-407) */
+  private val knownChartProps = Set(
+    "op",
+    "type",
+    "grouping",
+    "data",
+    "categories",
+    "seriesNames",
+    "seriesColors",
+    "title",
+    "legend",
+    "at"
+  )
 
   /** Known properties for 'clear' operation */
   private val knownClearProps = Set("op", "range", "all", "styles", "comments")
@@ -950,6 +996,9 @@ object BatchParser:
 
           case BatchOp.Hyperlink(refStr, target) =>
             applyHyperlink(currentWb, defaultSheetName, refStr, target)
+
+          case op: BatchOp.AddChart =>
+            applyAddChart(currentWb, defaultSheetName, op)
 
           case BatchOp.Clear(rangeStr, all, stylesFlag, commentsFlag) =>
             applyClear(currentWb, defaultSheetName, rangeStr, all, stylesFlag, commentsFlag)
@@ -1437,6 +1486,38 @@ object BatchParser:
         IO.raiseError(
           new Exception(s"batch hyperlink requires single cell ref, not range: $refStr")
         )
+    }
+
+  /**
+   * Add a chart through the same construction path as `chart add` (GH-407). The default sheet is
+   * re-resolved by name against the CURRENT workbook (earlier batch ops may have changed it);
+   * qualified data/at refs work without a default sheet, exactly like the CLI command.
+   */
+  private def applyAddChart(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    op: BatchOp.AddChart
+  ): IO[Workbook] =
+    val sheetIO: IO[Option[Sheet]] = defaultSheetName match
+      case None => IO.pure(None)
+      case Some(name) =>
+        IO.fromEither(wb(name).left.map(e => new Exception(e.message))).map(Some(_))
+    sheetIO.flatMap { sheetOpt =>
+      com.tjclp.xl.cli.commands.ChartCommands
+        .buildChartAdd(
+          wb,
+          sheetOpt,
+          op.chartType,
+          op.grouping,
+          op.data,
+          op.categories,
+          op.seriesNames,
+          op.seriesColors,
+          op.title,
+          op.legend,
+          op.at
+        )
+        .map(_._1)
     }
 
   private def applyRemoveComment(

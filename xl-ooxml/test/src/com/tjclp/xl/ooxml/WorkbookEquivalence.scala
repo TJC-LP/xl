@@ -194,11 +194,15 @@ object WorkbookEquivalence:
    * pictures), so equality is taken after the same canonicalization. ChartFrames compare by anchor
    * + typed chart with DataRef ranges ANCHOR-NORMALIZED (CellRange equality includes anchors; parse
    * always produces Relative) + the writer-canonical "Chart {ordinal}" name, chart ordinals counted
-   * separately from image ordinals. Preserved fragments compare by exact canonical XML string.
+   * separately from image ordinals. Series compare after WRITER-DEFAULT materialization (GH-407,
+   * the "Chart {ordinal}" precedent): an unnamed series reads back as the emitted literal "Series
+   * {n}", a fill-less bar/line series as its accent-cycle color (pie fills emit only when explicit,
+   * so they need no canonicalization). Preserved fragments compare by exact canonical XML string.
    */
   private def drawingsDiff(sheet: String, expected: Sheet, actual: Sheet): List[String] =
-    import com.tjclp.xl.charts.{Chart, DataRef}
+    import com.tjclp.xl.charts.{Chart, ChartType, DataRef, SeriesName}
     import com.tjclp.xl.drawings.Drawing
+    import com.tjclp.xl.styles.color.Color as XlColor
     def canonicalNames(drawings: Vector[Drawing]): Vector[String] =
       drawings
         .foldLeft((Vector.empty[String], 1, 1)) {
@@ -214,8 +218,17 @@ object WorkbookEquivalence:
     def normalizeRef(ref: DataRef): DataRef =
       ref.copy(range = com.tjclp.xl.addressing.CellRange(ref.range.start, ref.range.end))
     def normalizeChart(chart: Chart): Chart =
-      chart.copy(series = chart.series.map { s =>
-        s.copy(values = normalizeRef(s.values), categories = s.categories.map(normalizeRef))
+      val pie = chart.chartType == ChartType.Pie
+      chart.copy(series = chart.series.zipWithIndex.map { case (s, i) =>
+        s.copy(
+          values = normalizeRef(s.values),
+          categories = s.categories.map(normalizeRef),
+          // GH-407 writer defaults: always-emitted tx and (bar/line) accent-cycle fill
+          name = s.name.orElse(Some(SeriesName.Literal(s"Series ${i + 1}"))),
+          fill =
+            if pie then s.fill
+            else s.fill.orElse(Some(XlColor.Rgb(DefaultTheme.accentArgb(i))))
+        )
       })
     if expected.drawings.sizeIs != actual.drawings.size then
       List(
