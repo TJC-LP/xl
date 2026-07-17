@@ -6,7 +6,7 @@ import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.CellRange
-import com.tjclp.xl.cells.CellError
+import com.tjclp.xl.cells.{CellError, CellValue}
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import scala.util.control.NonFatal
@@ -36,10 +36,23 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
       .toList
 
+  /**
+   * GH-405: date-range collection uses the serial-COERCING decoder (decodeAsDate, the GH-385/396
+   * table: DateTime, raw serial Numbers guarded to 0..MaxExcelDateSerial, cached formula values) —
+   * a date anchor authored as DateTime writes to xlsx as a serial and re-reads as Number, so any
+   * post-round-trip recalc hands XIRR/XNPV a MIXED Number/DateTime range. The strict decodeDate
+   * silently dropped the serials, producing a values/dates length mismatch. Cashflow
+   * [[numericValues]] deliberately KEEPS strict decodeNumeric: a blank cashflow must skip, not
+   * become a period-shifting 0 (see TExprDecoders.decodeNumericScalar's rationale).
+   */
   private def dateValues(range: CellRange, ctx: EvalContext): List[LocalDate] =
     range.cells
       .map(ref => ctx.sheet(ref))
-      .flatMap(cell => TExpr.decodeDate(cell).toOption)
+      // Blank cells stay SKIPS in range folds (decodeAsDate's scalar Empty -> 1900-01-01 arm
+      // must not apply here): numericValues skips blank cashflows, so a sparse XIRR block
+      // drops aligned blank (value, date) pairs together and the lengths keep matching
+      .filterNot(_.value == CellValue.Empty)
+      .flatMap(cell => TExpr.decodeAsDate(cell).toOption)
       .toList
 
   val npv: FunctionSpec[BigDecimal] { type Args = NpvArgs } =

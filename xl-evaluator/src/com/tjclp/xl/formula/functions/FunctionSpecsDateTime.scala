@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.cells.CellValue
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
@@ -23,11 +24,20 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
       EvalError.EvalFailed(s"$fnName: month offset $months is out of range: ${ex.getMessage}", None)
     }
 
+  /**
+   * GH-405: holiday collection uses the serial-COERCING decoder (decodeAsDate) — holidays authored
+   * as DateTime re-read from xlsx as raw serial Numbers, and the strict decodeDate silently dropped
+   * them (NETWORKDAYS/WORKDAY quietly ignored the holiday: a wrong count, not even an error).
+   */
   private def holidaySet(rangeOpt: Option[CellRange], ctx: EvalContext): Set[LocalDate] =
     rangeOpt
       .map { range =>
         range.cells
-          .flatMap(ref => TExpr.decodeDate(ctx.sheet(ref)).toOption)
+          .map(ref => ctx.sheet(ref))
+          // Blank cells stay SKIPS in range folds — a blank holiday cell must not become a
+          // phantom 1900-01-01 holiday via decodeAsDate's scalar Empty arm
+          .filterNot(_.value == CellValue.Empty)
+          .flatMap(cell => TExpr.decodeAsDate(cell).toOption)
           .toSet
       }
       .getOrElse(Set.empty)

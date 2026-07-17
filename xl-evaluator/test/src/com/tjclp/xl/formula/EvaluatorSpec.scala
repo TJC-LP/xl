@@ -1228,6 +1228,38 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case other => fail(s"Expected Number(4), got $other")
   }
 
+  test("GH-405: NETWORKDAYS accepts serial-number holiday cells (post-round-trip state)") {
+    import java.time.LocalDateTime
+    // A holiday authored as DateTime re-reads from OOXML as a raw serial Number; the strict
+    // holiday decode silently DROPPED it (wrong count, no error)
+    val holidaySerial =
+      BigDecimal(CellValue.dateTimeToExcelSerial(LocalDateTime.of(2025, 1, 8, 0, 0)))
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 6, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 10, 0, 0)),
+      ARef.from0(2, 0) -> CellValue.Number(holidaySerial) // Wed 2025-01-08 as a serial
+    )
+    sheet.evaluateFormula("=NETWORKDAYS(A1, B1, C1:C1)") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(4)) // 5 working days minus the serial holiday
+      case other => fail(s"Expected Number(4), got $other")
+  }
+
+  test("GH-405: WORKDAY skips serial-number holiday cells") {
+    import java.time.LocalDateTime
+    val holidaySerial =
+      BigDecimal(CellValue.dateTimeToExcelSerial(LocalDateTime.of(2025, 1, 7, 0, 0)))
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 6, 0, 0)), // Mon
+      ARef.from0(2, 0) -> CellValue.Number(holidaySerial) // Tue 2025-01-07 as a serial
+    )
+    sheet.evaluateFormula("=WORKDAY(A1, 1, C1:C1)") match
+      case Right(CellValue.DateTime(dt)) =>
+        // Mon + 1 working day would be Tue, but Tue is a holiday → Wed 2025-01-08
+        assertEquals(dt.toLocalDate, java.time.LocalDate.of(2025, 1, 8))
+      case other => fail(s"Expected DateTime, got $other")
+  }
+
   test("WORKDAY: adds working days") {
     import java.time.LocalDateTime
     val sheet = sheetWith(
