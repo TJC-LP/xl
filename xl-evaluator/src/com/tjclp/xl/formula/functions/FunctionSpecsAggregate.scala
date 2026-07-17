@@ -177,6 +177,46 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           evalVariadicAggregate(agg, args, ctx)
     }
 
+  /**
+   * GH-395: the per-CELL triage shared by the raw-range fold and direct single-cell reference
+   * arguments — COUNTA counts non-empty, COUNTBLANK counts empty, numeric mode resolves the
+   * effective value (recursively evaluating uncached formulas), polices carried errors per the
+   * aggregator's policy (GH-344 item 6), then extracts-or-skips. Factored so =COUNT(A1, A2) with a
+   * blank A2 triages A2 exactly like the 1×1 range =COUNT(A2:A2) would (Excel ignores it) instead
+   * of coercing it to a genuine 0 through the scalar decode boundary.
+   */
+  private def triageCellForAggregate[A](
+    agg: Aggregator[A],
+    cellValue: CellValue,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext,
+    values: Vector[BigDecimal]
+  ): Either[EvalError, Vector[BigDecimal]] =
+    if agg.countsNonEmpty then
+      // COUNTA mode: count any non-empty cell
+      cellValue match
+        case CellValue.Empty => Right(values)
+        case _ => Right(values :+ BigDecimal(1))
+    else if agg.countsEmpty then
+      // COUNTBLANK mode: count only empty cells
+      cellValue match
+        case CellValue.Empty => Right(values :+ BigDecimal(1))
+        case _ => Right(values)
+    else
+      // Standard numeric mode: resolve the effective value, police carried errors
+      // per the aggregator's policy (GH-344 item 6), then extract-or-skip
+      resolveNumericPolicing(
+        cellValue,
+        targetSheet,
+        ctx,
+        agg.name,
+        agg.propagatesErrors
+      )
+        .map {
+          case Some(n) => values :+ n
+          case None => values
+        }
+
   /** Helper to evaluate variadic aggregates with proper type handling. */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def evalVariadicAggregate[A](
@@ -198,34 +238,28 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             constrainedRange.cells.foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(acc)) {
               case (Left(err), _) => Left(err)
               case (Right(values), cellRef) =>
-                val cellValue = targetSheet(cellRef).value
-                // Handle different cell types for aggregation
-                if agg.countsNonEmpty then
-                  // COUNTA mode: count any non-empty cell
-                  cellValue match
-                    case CellValue.Empty => Right(values)
-                    case _ => Right(values :+ BigDecimal(1))
-                else if agg.countsEmpty then
-                  // COUNTBLANK mode: count only empty cells
-                  cellValue match
-                    case CellValue.Empty => Right(values :+ BigDecimal(1))
-                    case _ => Right(values)
-                else
-                  // Standard numeric mode: resolve the effective value, police carried errors
-                  // per the aggregator's policy (GH-344 item 6), then extract-or-skip
-                  resolveNumericPolicing(
-                    cellValue,
-                    targetSheet,
-                    ctx,
-                    agg.name,
-                    agg.propagatesErrors
-                  )
-                    .map {
-                      case Some(n) => values :+ n
-                      case None => values
-                    }
+                triageCellForAggregate(agg, targetSheet(cellRef).value, targetSheet, ctx, values)
             }
           }
+        // GH-395: direct single-cell references triage per-cell like a 1×1 range. In NumericArg
+        // position Ref/SheetRef can ONLY arise from direct refs (asNumericExpr rewrites
+        // PolyRef → Ref and SheetPolyRef → SheetRef; no other NumericArg source produces these
+        // shapes), so matching them BEFORE the scalar evaluation keeps Excel's semantics: a
+        // blank direct arg is ignored by COUNT/AVERAGE (not coerced to a genuine 0 by the
+        // scalar decode), a text cell skips like the range fold, and COUNTBLANK still counts
+        // the blank.
+        case (Right(acc), Right(TExpr.Ref(at, _, _))) =>
+          triageCellForAggregate(agg, ctx.sheet(at).value, ctx.sheet, ctx, acc)
+        case (Right(acc), Right(TExpr.SheetRef(sheetName, at, _, _))) =>
+          Evaluator
+            .resolveRangeLocation(
+              TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
+              ctx.sheet,
+              ctx.workbook
+            )
+            .flatMap { targetSheet =>
+              triageCellForAggregate(agg, targetSheet(at).value, targetSheet, ctx, acc)
+            }
         case (Right(acc), Right(expr)) =>
           // GH-122: evaluate array-aware so a range-returning call (e.g. OFFSET) flattens into the
           // aggregate exactly like a literal range would; scalars keep their existing behavior.
@@ -257,13 +291,27 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                           case None => Right(values)
               }
             case value: BigDecimal =>
+              // GH-395: a numeric scalar (literal, arithmetic result) is never blank —
+              // COUNTBLANK must not count it (=COUNTBLANK(5) is 0); COUNTA counts it
               Right(
-                if agg.countsNonEmpty || agg.countsEmpty then acc :+ BigDecimal(1) else acc :+ value
+                if agg.countsNonEmpty then acc :+ BigDecimal(1)
+                else if agg.countsEmpty then acc
+                else acc :+ value
               )
             case other =>
-              if agg.countsNonEmpty || agg.countsEmpty then Right(acc :+ BigDecimal(1))
+              // GH-395: non-numeric scalars triage on their CellValue shape — only a genuine
+              // CellValue.Empty counts for COUNTBLANK (and is NOT counted by COUNTA); the
+              // numeric-mode error policing is unchanged
+              val cellValue = ArrayArithmetic.anyToCellValue(other)
+              if agg.countsNonEmpty then
+                cellValue match
+                  case CellValue.Empty => Right(acc)
+                  case _ => Right(acc :+ BigDecimal(1))
+              else if agg.countsEmpty then
+                cellValue match
+                  case CellValue.Empty => Right(acc :+ BigDecimal(1))
+                  case _ => Right(acc)
               else
-                val cellValue = ArrayArithmetic.anyToCellValue(other)
                 ArrayArithmetic.carriedError(cellValue) match
                   case Some(err) if agg.propagatesErrors =>
                     Left(propagatedElementError(agg.name, err))

@@ -110,6 +110,109 @@ class CountFunctionsSpec extends FunSuite:
     assertEquals(result, Right(BigDecimal(2)))
   }
 
+  // ===== GH-395: direct single-cell args triage like 1×1 ranges =====
+
+  test("GH-395: =COUNT(A1, A2) with blank A2 is 1 (issue repro — Excel ignores the blank)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(10))
+    assertEquals(
+      sheet.evaluateFormula("=COUNT(A1, A2)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
+  }
+
+  test("GH-395: =COUNT over a text direct ref skips it like the range fold (not an error)") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(10),
+      ref"A2" -> CellValue.Text("abc")
+    )
+    assertEquals(
+      sheet.evaluateFormula("=COUNT(A1, A2)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
+    // range form agrees (the direct/range parity law)
+    assertEquals(
+      sheet.evaluateFormula("=COUNT(A1:A2)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
+  }
+
+  test("GH-395: =COUNTA(A1, A2) with blank A2 counts only the filled cell") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Text("x"))
+    assertEquals(
+      sheet.evaluateFormula("=COUNTA(A1, A2)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
+  }
+
+  test("GH-395: =COUNTBLANK(A1) with blank A1 stays 1 (the countsEmpty trap)") {
+    val sheet = sheetWith(ref"Z9" -> CellValue.Text("unrelated"))
+    assertEquals(
+      sheet.evaluateFormula("=COUNTBLANK(A1)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
+    // and a FILLED direct ref is not blank
+    val filled = sheetWith(ref"A1" -> CellValue.Number(5))
+    assertEquals(
+      filled.evaluateFormula("=COUNTBLANK(A1)"),
+      Right(CellValue.Number(BigDecimal(0)))
+    )
+  }
+
+  test("GH-395: =COUNTBLANK(5) is 0 — a literal is never blank") {
+    assertEquals(
+      emptySheet.evaluateFormula("=COUNTBLANK(5)"),
+      Right(CellValue.Number(BigDecimal(0)))
+    )
+  }
+
+  test("GH-395: direct-ref triage keeps cached and uncached formula cells counted") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Formula("=1+1", Some(CellValue.Number(2))),
+      ref"A2" -> CellValue.Formula("=2+3", None)
+    )
+    assertEquals(
+      sheet.evaluateFormula("=COUNT(A1, A2)"),
+      Right(CellValue.Number(BigDecimal(2)))
+    )
+    assertEquals(
+      sheet.evaluateFormula("=SUM(A1, A2)"),
+      Right(CellValue.Number(BigDecimal(7)))
+    )
+  }
+
+  test("GH-395: cross-sheet direct single-cell ref triages against the target sheet") {
+    import com.tjclp.xl.workbooks.Workbook
+    val data = Sheet(SheetName.unsafe("Data")).put(ref"B1", CellValue.Number(BigDecimal(7)))
+    val main = Sheet(SheetName.unsafe("Main"))
+    val wb = Workbook(Vector(main, data))
+    // Data!B2 is blank: COUNT ignores it, SUM folds only the filled cell
+    assertEquals(
+      wb.evaluateFormula("=COUNT(Data!B1, Data!B2)", SheetName.unsafe("Main")),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
+    assertEquals(
+      wb.evaluateFormula("=SUM(Data!B1, Data!B2)", SheetName.unsafe("Main")),
+      Right(CellValue.Number(BigDecimal(7)))
+    )
+  }
+
+  test("GH-395: error-valued direct ref still propagates through SUM and skips in COUNT") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(10),
+      ref"A2" -> CellValue.Error(com.tjclp.xl.cells.CellError.Div0)
+    )
+    // SUM propagates the element's error VALUE (GH-344 policy)
+    assertEquals(
+      sheet.evaluateFormula("=SUM(A1, A2)"),
+      Right(CellValue.Error(com.tjclp.xl.cells.CellError.Div0))
+    )
+    // COUNT: errors are not numbers — skipped, not counted
+    assertEquals(
+      sheet.evaluateFormula("=COUNT(A1, A2)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
+  }
+
   // ===== COUNTBLANK Parser Test =====
 
   test("COUNTBLANK: parse from string") {

@@ -562,6 +562,52 @@ class TypeCoercionSpec extends FunSuite:
   }
 
   // ============================================================================
+  // GH-395: variadic-aggregate DIRECT blank args are ignored (Excel parity),
+  // while scalar positions keep blank-as-zero
+  // ============================================================================
+
+  test("GH-395: =AVERAGE(A1, A2) ignores the blank direct arg (denominator is 1)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(10)))
+    // Pre-fix the blank coerced to a genuine 0 and AVERAGE divided by 2 (Excel: 10)
+    assertEquals(
+      sheet.evaluateFormula("=AVERAGE(A1, A2)"),
+      Right(CellValue.Number(BigDecimal(10)))
+    )
+  }
+
+  test("GH-395: =AVERAGE(blank, blank) is the #DIV/0! error VALUE") {
+    val sheet = sheetWith(ref"Z9" -> CellValue.Text("unrelated"))
+    assertEquals(
+      sheet.evaluateFormula("=AVERAGE(A1, A2)"),
+      Right(CellValue.Error(com.tjclp.xl.cells.CellError.Div0))
+    )
+  }
+
+  test("GH-395: =SUM(A1, A2) with blank stays 10 (blank-skip and blank-as-zero agree)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(10)))
+    assertEquals(sheet.evaluateFormula("=SUM(A1, A2)"), Right(CellValue.Number(BigDecimal(10))))
+    // and the scalar-operator blank-as-zero convention is untouched
+    assertEquals(sheet.evaluateFormula("=A2+1"), Right(CellValue.Number(BigDecimal(1))))
+    assertEquals(sheet.evaluateFormula("=ABS(A2)"), Right(CellValue.Number(BigDecimal(0))))
+  }
+
+  test("GH-395: =MIN/=MAX direct blank args are ignored, not folded as 0") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(5)),
+      ref"A3" -> CellValue.Number(BigDecimal(9))
+    )
+    // With blank-as-zero MIN would wrongly be 0
+    assertEquals(
+      sheet.evaluateFormula("=MIN(A1, A2, A3)"),
+      Right(CellValue.Number(BigDecimal(5)))
+    )
+    assertEquals(
+      sheet.evaluateFormula("=MAX(A1, A2, A3)"),
+      Right(CellValue.Number(BigDecimal(9)))
+    )
+  }
+
+  // ============================================================================
   // GH-396: remaining coercion edges — the decoder tables mirror ScalarCoercion
   // exactly (int positions, blank/Bool cells in date positions)
   // ============================================================================
