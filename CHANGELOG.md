@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] "Fidelity" - 2026-07-17
+
 Field-hardening from the first production QA cycle (FinAgent LBO build):
 every open issue closed — the numFmt round-trip corruption, the
 post-round-trip XIRR poisoning, blank-arg parity, names in lookup
