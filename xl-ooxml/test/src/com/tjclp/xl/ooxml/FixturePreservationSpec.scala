@@ -132,6 +132,42 @@ class FixturePreservationSpec extends FunSuite:
       }
   }
 
+  // GH-404: declared <numFmt> formatCode strings are load-bearing display data. A cell-modified
+  // write regenerates styles.xml from the parsed model, so every (numFmtId, formatCode) binding
+  // declared by the source must survive verbatim — including codes that EQUAL a built-in format
+  // string (styled-lo.xlsx declares formatCode="0.00%", the exact field-corruption shape; the
+  // LibreOffice fixtures also declare formatCode="General" at id 164).
+  TestFixtures.all.foreach { fixture =>
+    test(s"$fixture: declared numFmt formatCodes survive a cell-modified write (GH-404)") {
+      val (in, wb) = readFixture(fixture)
+      val before = declaredNumFmts(in)
+      val sheetName = wb.sheets(0).name
+      val modified = wb
+        .update(sheetName, _.put(ref"A30", CellValue.Text("gh-404 probe")))
+        .fold(err => fail(s"$fixture update failed: $err"), identity)
+      val out = writeTo(modified, "numfmt")
+      val after = declaredNumFmts(out)
+      before.foreach { case (id, code) =>
+        assertEquals(
+          after.get(id),
+          Some(code),
+          s"$fixture: numFmt $id lost its declared code '$code' on read->write (got ${after.get(id)})"
+        )
+      }
+    }
+  }
+
+  /** (numFmtId -> formatCode) declared in a file's styles.xml numFmts table. */
+  private def declaredNumFmts(path: Path): Map[Int, String] =
+    // strip a possible UTF-8 BOM (doctype-hostile.xlsx carries one on styles.xml)
+    val text = entryText(path, "xl/styles.xml").stripPrefix("\uFEFF")
+    val root = XmlSecurity
+      .parseSafe(text, "xl/styles.xml")
+      .fold(err => fail(s"styles.xml parse failed: ${err.message}"), identity)
+    (root \ "numFmts" \ "numFmt").flatMap { n =>
+      (n \ "@numFmtId").text.toIntOption.map(_ -> (n \ "@formatCode").text)
+    }.toMap
+
   test("chart-bar.xlsx: workbook relationships to drawings survive a modified write") {
     val (in, wb) = readFixture("chart-bar.xlsx")
     val sheetName = wb.sheets(0).name

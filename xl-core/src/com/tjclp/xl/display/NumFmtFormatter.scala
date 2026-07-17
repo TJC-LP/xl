@@ -64,16 +64,13 @@ object NumFmtFormatter:
         f"${n.toDouble}%.2f"
 
       case NumFmt.ThousandsSeparator =>
-        val formatter = DecimalFormat("#,##0")
-        formatter.format(n.toDouble)
+        decimalFormat("#,##0").format(n.underlying)
 
       case NumFmt.ThousandsDecimal =>
-        val formatter = DecimalFormat("#,##0.00")
-        formatter.format(n.toDouble)
+        decimalFormat("#,##0.00").format(n.underlying)
 
       case NumFmt.Currency =>
-        val formatter = DecimalFormat("$#,##0.00")
-        formatter.format(n.toDouble)
+        decimalFormat("$#,##0.00").format(n.underlying)
 
       case NumFmt.Percent =>
         // Excel stores 0.15 for 15%, multiply by 100 for display
@@ -111,10 +108,30 @@ object NumFmtFormatter:
         // Text format displays numbers as text
         n.toString
 
+      case NumFmt.Custom(code) if isGeneralCode(code) =>
+        // The literal code "General" (ECMA-376 §18.8.30, case-insensitive) means General
+        // rendering, not the literal characters. Reached since GH-404: file-declared
+        // <numFmt formatCode="General"/> entries (LibreOffice writes them) stay Custom.
+        formatGeneral(n)
+
       case NumFmt.Custom(code) =>
         FormatCodeParser.parse(code) match
           case Right(fmt) => formatCustom(n, serialToDateTime(n), fmt)
           case Left(_) => formatGeneral(n) // Fallback for unparseable formats
+
+  /** ECMA-376 §18.8.30: the whole-code "General" keyword, matched case-insensitively. */
+  private def isGeneralCode(code: String): Boolean = code.equalsIgnoreCase("General")
+
+  /**
+   * DecimalFormat with Excel's display rounding: half away from zero (HALF_UP), not Java's default
+   * HALF_EVEN — keeps the enum arms in parity with FormatCodeParser rendering of the same codes
+   * (GH-404: 1234.5 under "#,##0" is "1,235" in Excel). Formatting the BigDecimal itself (not
+   * .toDouble) rounds in decimal, avoiding binary-representation drift on half-way values.
+   */
+  private def decimalFormat(pattern: String): DecimalFormat =
+    val formatter = DecimalFormat(pattern)
+    formatter.setRoundingMode(java.math.RoundingMode.HALF_UP)
+    formatter
 
   /**
    * Format in General style (Excel's default number format).
@@ -167,6 +184,10 @@ object NumFmtFormatter:
 
       case NumFmt.Time =>
         dt.toLocalTime.format(DateTimeFormatter.ofPattern("H:mm:ss")) // 24-hour format
+
+      case NumFmt.Custom(code) if isGeneralCode(code) =>
+        // "General" keyword code: dates ARE numbers in Excel, so render the serial (GH-283)
+        formatNumber(dateTimeSerial(dt), NumFmt.General)
 
       case NumFmt.Custom(code) =>
         // Route through section selection on the serial (GH-283): ';;;' hides dates,

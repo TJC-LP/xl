@@ -169,11 +169,22 @@ class DxfCodecSpec extends ScalaCheckSuite:
   test("numFmt round-trips by format code") {
     val d = Dxf(numFmt = Some(NumFmt.Custom("#,##0.0")))
     assertEquals(DxfCodec.parse(DxfCodec.toXml(d)), Some(d))
-    // built-in code strings parse back to the enum case
+    // built-in ids carrying their built-in code string parse back to the enum case
     val pct = DxfCodec.parse(
       xml("""<dxf><numFmt numFmtId="9" formatCode="0%"/></dxf>""")
     )
     assertEquals(pct, Some(Dxf(numFmt = Some(NumFmt.Percent))))
+  }
+
+  test("numFmt: custom-id declaration with built-in-equal code stays Custom (GH-404)") {
+    // A custom-id (>= 164) declaration is a verbatim custom code even when the string equals a
+    // built-in format's code; collapsing it breaks parse(toXml(d)) == Some(d)
+    val d = Dxf(numFmt = Some(NumFmt.Custom("0.00%")))
+    assertEquals(DxfCodec.parse(DxfCodec.toXml(d)), Some(d))
+    val declared = DxfCodec.parse(
+      xml("""<dxf><numFmt numFmtId="164" formatCode="0.00%"/></dxf>""")
+    )
+    assertEquals(declared, Some(Dxf(numFmt = Some(NumFmt.Custom("0.00%")))))
   }
 
 /**

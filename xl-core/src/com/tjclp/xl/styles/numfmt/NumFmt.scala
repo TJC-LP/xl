@@ -95,6 +95,37 @@ object NumFmt:
     case Text => Some(49)
     case Custom(_) => None
 
+  /**
+   * First numFmtId available for custom format declarations. Ids 0-163 are reserved for built-in
+   * formats (ECMA-376 Part 1, §18.8.30); `<numFmt>` declarations Excel writes start here.
+   */
+  val FirstCustomId: Int = 164
+
+  /**
+   * The canonical format-code string for a format — a TOTAL inverse of [[parse]] (GH-404).
+   *
+   * `parse(formatCode(fmt)) == fmt` for every case except Currency, whose code "$#,##0.00" parses
+   * back as Custom ([[parse]] cannot claim it without shadowing genuine custom declarations). Every
+   * emitter that writes a formatCode attribute must use this; a partial mapping with an "unknown →
+   * General" fallback is what silently un-formatted cells in GH-404.
+   */
+  def formatCode(fmt: NumFmt): String = fmt match
+    case General => "General"
+    case Integer => "0"
+    case Decimal => "0.00"
+    case ThousandsSeparator => "#,##0"
+    case ThousandsDecimal => "#,##0.00"
+    case Currency => "$#,##0.00" // NB: parses back as Custom — documented one-way case
+    case Percent => "0%"
+    case PercentDecimal => "0.00%"
+    case Scientific => "0.00E+00"
+    case Fraction => "# ?/?"
+    case Date => "m/d/yy"
+    case DateTime => "m/d/yy h:mm"
+    case Time => "h:mm:ss"
+    case Text => "@"
+    case Custom(code) => code
+
   /** Parse format code to NumFmt */
   def parse(code: String): NumFmt = code match
     case "General" => General

@@ -234,9 +234,9 @@ object Generators:
   //     per ECMA-376 ST_Xstring (GH-288)
   //   - non-NFC text (decomposed accents) IS generated — the SST deduplicates
   //     exact strings, so NFC/NFD spellings round-trip byte-faithfully (GH-289)
-  //   - Custom numFmt codes avoid the exact code strings NumFmt.parse maps
-  //     back to built-in enum cases (those are the SAME format semantically,
-  //     but would compare unequal as enum values)
+  //   - Custom numFmt codes INCLUDE the exact code strings that equal built-in
+  //     formats: the reader keeps <numFmt> declarations verbatim as Custom
+  //     (GH-404), so they round-trip as themselves and MUST be generated
   //   - degenerate style states the writer cannot represent are avoided:
   //     BorderSide(None, Some(color)) drops its color, Fill.Pattern with
   //     pattern None/Solid collapses to Fill.None/Fill.Solid
@@ -351,8 +351,11 @@ object Generators:
     yield Border(left, right, top, bottom)
 
   /**
-   * Representative number formats: every built-in enum case plus Custom codes (codes chosen to not
-   * collide with the built-in code strings NumFmt.parse recognizes).
+   * Representative number formats: every built-in enum case plus Custom codes — INCLUDING codes
+   * that equal built-in code strings. The reader keeps `<numFmt>` declarations verbatim as Custom
+   * (GH-404), so built-in-equal Custom codes must round-trip as themselves; the previous generator
+   * deliberately dodged them, which is why 4,500 tests never caught the GH-404 degradation to
+   * formatCode="General".
    */
   val genNumFmt: Gen[NumFmt] =
     Gen.frequency(
@@ -384,6 +387,10 @@ object Generators:
           "[$€-407] #,##0.00",
           "0.00 \"units\""
         )
+        .map(NumFmt.Custom.apply),
+      // built-in-equal codes declared as custom (the GH-404 field shape)
+      1 -> Gen
+        .oneOf("General", "0.00", "#,##0", "0%", "0.00%", "m/d/yy", "h:mm:ss", "@")
         .map(NumFmt.Custom.apply)
     )
 
@@ -741,8 +748,9 @@ object Generators:
   // Constraints for the round-trip law (mirroring the style-generator notes above):
   //   - colors come from the stable pool/theme subset (an alpha-00 Rgb canonicalizes to FF on
   //     parse, which plain cf equality would flag)
-  //   - dxf numFmts avoid NumFmt.Currency (no format-code string parses back to that case) and
-  //     Custom codes that collide with built-in code strings
+  //   - dxf numFmts avoid only NumFmt.Currency (no format-code string parses back to that case);
+  //     Custom codes that collide with built-in code strings ARE generated — custom-id dxf
+  //     declarations parse back verbatim since GH-404
   //   - priorities are stamped concrete (1..n in document order) — the model always holds final
   //     priorities, so equivalence is plain equality with no canonicalization clause
 
@@ -780,7 +788,11 @@ object Generators:
       NumFmt.Date,
       NumFmt.Custom("0.000"),
       NumFmt.Custom("#,##0.0"),
-      NumFmt.Custom("yyyy-mm-dd")
+      NumFmt.Custom("yyyy-mm-dd"),
+      // built-in-equal codes declared as custom (GH-404: verbatim, not collapsed)
+      NumFmt.Custom("0.00%"),
+      NumFmt.Custom("General"),
+      NumFmt.Custom("m/d/yy")
     )
 
   /** Differential format within the modeled subset (font/fill/border/numFmt deltas). */

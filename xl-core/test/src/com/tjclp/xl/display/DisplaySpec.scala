@@ -36,6 +36,57 @@ class DisplaySpec extends FunSuite:
     assertEquals(result, "15.6%")
   }
 
+  test("formatValue - Custom 0.00% renders two decimals (GH-404 delta pin)") {
+    // Since GH-404 the reader keeps file-declared codes verbatim, so a declared "0.00%" renders
+    // through FormatCodeParser as Excel does ("15.60%") — not the PercentDecimal enum arm above
+    // ("15.6%"). Deliberate behavioral delta: the Custom rendering is the Excel-correct one.
+    val value = CellValue.Number(BigDecimal("0.156"))
+    val result = NumFmtFormatter.formatValue(value, NumFmt.Custom("0.00%"))
+    assertEquals(result, "15.60%")
+  }
+
+  test("formatValue - Custom thousands/currency codes match the enum arms (GH-404 parity)") {
+    // File-declared codes render via FormatCodeParser (Custom) while the programmatic enum arms
+    // use java DecimalFormat; the enum arms round HALF_UP (Excel's half-away-from-zero display
+    // rounding — 1234.5 under "#,##0" is "1,235"), keeping both paths in parity (GH-404)
+    val values =
+      List(BigDecimal("1234567"), BigDecimal("1234.5"), BigDecimal("0.5"), BigDecimal("2.5"))
+    values.foreach { n =>
+      assertEquals(
+        NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.Custom("#,##0")),
+        NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.ThousandsSeparator),
+        s"#,##0 diverged for $n"
+      )
+      assertEquals(
+        NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.Custom("#,##0.00")),
+        NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.ThousandsDecimal),
+        s"#,##0.00 diverged for $n"
+      )
+      assertEquals(
+        NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.Custom("$#,##0.00")),
+        NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.Currency),
+        s"$$#,##0.00 diverged for $n"
+      )
+    }
+    assertEquals(
+      NumFmtFormatter.formatValue(CellValue.Number(BigDecimal("1234.5")), NumFmt.Custom("#,##0")),
+      "1,235"
+    )
+  }
+
+  test("formatValue - Custom General renders like the General format (GH-404 delta pin)") {
+    // LibreOffice-produced files declare <numFmt numFmtId="164" formatCode="General"/>; since
+    // GH-404 those resolve to Custom("General") and must render exactly like NumFmt.General.
+    val values = List(BigDecimal("100"), BigDecimal("123.45"), BigDecimal("0.156"))
+    values.foreach { n =>
+      assertEquals(
+        NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.Custom("General")),
+        NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.General),
+        s"Custom(General) diverged from General for $n"
+      )
+    }
+  }
+
   test("formatValue - ThousandsSeparator format") {
     val value = CellValue.Number(BigDecimal("1234567"))
     val result = NumFmtFormatter.formatValue(value, NumFmt.ThousandsSeparator)
