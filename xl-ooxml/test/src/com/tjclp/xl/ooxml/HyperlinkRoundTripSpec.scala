@@ -56,3 +56,63 @@ class HyperlinkRoundTripSpec extends FunSuite:
     assertEquals(sheet(ref"A1").hyperlink, Some("Sheet1!B2"))
     Files.deleteIfExists(out)
   }
+
+  test("GH-406: '#'-prefixed internal target normalizes in withHyperlink and round-trips clean") {
+    // The '#Sheet1!A1' dialect is common agent/browser spelling; OOXML location wants no '#'.
+    val cell = Cell(ref"A1", CellValue.Text("Go")).withHyperlink("#Sheet1!B2")
+    assertEquals(cell.hyperlink, Some("Sheet1!B2"))
+
+    val wb = Workbook(Sheet("Sheet1").put(cell))
+    val out = Files.createTempFile("hl-hash", ".xlsx")
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val zip = new ZipFile(out.toFile)
+    val sheetXml = entryText(zip, "xl/worksheets/sheet1.xml")
+    zip.close()
+    assert(
+      sheetXml.contains("""location="Sheet1!B2""""),
+      s"location must not carry the leading '#':\n$sheetXml"
+    )
+
+    val reread = XlsxReader.read(out).fold(e => fail(s"read failed: $e"), identity)
+    val sheet = reread("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet(ref"A1").hyperlink, Some("Sheet1!B2"))
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-406: writer strips a leading '#' even when the field bypassed withHyperlink") {
+    // Direct construction (copy/generators) skips the chokepoint; the location emit defends.
+    val cell = Cell(ref"A1", CellValue.Text("Go"), None, None, Some("#Sheet1!C3"))
+    val wb = Workbook(Sheet("Sheet1").put(cell))
+    val out = Files.createTempFile("hl-hash-direct", ".xlsx")
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val zip = new ZipFile(out.toFile)
+    val sheetXml = entryText(zip, "xl/worksheets/sheet1.xml")
+    zip.close()
+    assert(
+      sheetXml.contains("""location="Sheet1!C3""""),
+      s"location must not carry the leading '#':\n$sheetXml"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-406: external URL fragments are untouched (only a LEADING '#' strips)") {
+    val target = "https://example.com/page#section"
+    val cell = Cell(ref"A1", CellValue.Text("Docs")).withHyperlink(target)
+    assertEquals(cell.hyperlink, Some(target))
+
+    val wb = Workbook(Sheet("Sheet1").put(cell))
+    val out = Files.createTempFile("hl-frag", ".xlsx")
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val reread = XlsxReader.read(out).fold(e => fail(s"read failed: $e"), identity)
+    val sheet = reread("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet(ref"A1").hyperlink, Some(target))
+
+    val zip = new ZipFile(out.toFile)
+    val relsXml = entryText(zip, "xl/worksheets/_rels/sheet1.xml.rels")
+    zip.close()
+    assert(relsXml.contains("page#section"), s"external rel must keep its fragment:\n$relsXml")
+    Files.deleteIfExists(out)
+  }

@@ -318,9 +318,11 @@ private[ooxml] def buildHyperlinksElem(entries: Seq[HyperlinkEntry]): Option[Ele
   if entries.isEmpty then None
   else
     val children = entries.map { e =>
+      // GH-406: OOXML location wants no leading '#' — defense for targets that bypassed
+      // Cell.withHyperlink (direct construction). External targets keep their fragments.
       val tail: MetaData =
         if e.external then new PrefixedAttribute("r", "id", e.relId, Null)
-        else new UnprefixedAttribute("location", e.target, Null)
+        else new UnprefixedAttribute("location", e.target.stripPrefix("#"), Null)
       val attrs = new UnprefixedAttribute("ref", e.ref.toA1, tail)
       Elem(null, "hyperlink", attrs, TopScope, minimizeEmpty = true)
     }
