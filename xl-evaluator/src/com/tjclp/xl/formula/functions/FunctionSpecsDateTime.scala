@@ -28,19 +28,26 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
    * GH-405: holiday collection uses the serial-COERCING decoder (decodeAsDate) — holidays authored
    * as DateTime re-read from xlsx as raw serial Numbers, and the strict decodeDate silently dropped
    * them (NETWORKDAYS/WORKDAY quietly ignored the holiday: a wrong count, not even an error).
+   * GH-394: the argument is a RangeLocation — sheet-qualified holiday ranges and defined names
+   * resolve through the single boundary and read their TARGET sheet's cells.
    */
-  private def holidaySet(rangeOpt: Option[CellRange], ctx: EvalContext): Set[LocalDate] =
-    rangeOpt
-      .map { range =>
-        range.cells
-          .map(ref => ctx.sheet(ref))
-          // Blank cells stay SKIPS in range folds — a blank holiday cell must not become a
-          // phantom 1900-01-01 holiday via decodeAsDate's scalar Empty arm
-          .filterNot(_.value == CellValue.Empty)
-          .flatMap(cell => TExpr.decodeAsDate(cell).toOption)
-          .toSet
-      }
-      .getOrElse(Set.empty)
+  private def holidaySet(
+    locationOpt: Option[TExpr.RangeLocation],
+    ctx: EvalContext
+  ): Either[EvalError, Set[LocalDate]] =
+    locationOpt match
+      case None => Right(Set.empty)
+      case Some(location) =>
+        Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map {
+          case (targetSheet, range) =>
+            range.cells
+              .map(ref => targetSheet(ref))
+              // Blank cells stay SKIPS in range folds — a blank holiday cell must not become a
+              // phantom 1900-01-01 holiday via decodeAsDate's scalar Empty arm
+              .filterNot(_.value == CellValue.Empty)
+              .flatMap(cell => TExpr.decodeAsDate(cell).toOption)
+              .toSet
+        }
 
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def countWorkingDays(
@@ -235,9 +242,8 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
       for
         start <- ctx.evalExpr(startDateExpr)
         end <- ctx.evalExpr(endDateExpr)
+        holidays <- holidaySet(holidaysOpt, ctx)
       yield
-        val holidays = holidaySet(holidaysOpt, ctx)
-
         val (earlier, later) = if start.isBefore(end) then (start, end) else (end, start)
         val count = countWorkingDays(earlier, later, holidays)
         BigDecimal(if start.isBefore(end) || start.isEqual(end) then count else -count)
@@ -254,9 +260,8 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
         start <- ctx.evalExpr(startDateExpr)
         daysRaw <- evalValue(ctx, daysExpr)
         daysValue <- toIntArg("WORKDAY", daysRaw)
-      yield
-        val holidays = holidaySet(holidaysOpt, ctx)
-        addWorkingDays(start, daysValue, holidays)
+        holidays <- holidaySet(holidaysOpt, ctx)
+      yield addWorkingDays(start, daysValue, holidays)
     }
 
   val yearfrac: FunctionSpec[BigDecimal] { type Args = DatePairOptBasis } =

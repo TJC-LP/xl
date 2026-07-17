@@ -12,7 +12,9 @@ import com.tjclp.xl.sheets.Sheet
 trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
   private def performXLookup(
     lookupValue: ExprValue,
+    lookupSheet: Sheet,
     lookupArray: CellRange,
+    returnSheet: Sheet,
     returnArray: CellRange,
     ifNotFoundOpt: Option[AnyExpr],
     matchMode: Int,
@@ -42,23 +44,23 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     val matchedIndexOpt = matchMode match
       case 0 =>
         indices.find { idx =>
-          val cellValue = ctx.sheet(lookupCells(idx)).value
+          val cellValue = lookupSheet(lookupCells(idx)).value
           matchesExactForXLookup(cellValue, lookupValue)
         }
       case -1 =>
-        findNextSmaller(lookupValue, lookupCells, ctx.sheet, indices)
+        findNextSmaller(lookupValue, lookupCells, lookupSheet, indices)
       case 1 =>
-        findNextLarger(lookupValue, lookupCells, ctx.sheet, indices)
+        findNextLarger(lookupValue, lookupCells, lookupSheet, indices)
       case 2 =>
         indices.find { idx =>
-          val cellValue = ctx.sheet(lookupCells(idx)).value
+          val cellValue = lookupSheet(lookupCells(idx)).value
           matchesExactForXLookup(cellValue, lookupValue) ||
           wildcardCriterionOpt.exists(CriteriaMatcher.matches(cellValue, _))
         }
       case _ => None
 
     matchedIndexOpt match
-      case Some(idx) => Right(ctx.sheet(returnCells(idx)).value)
+      case Some(idx) => Right(returnSheet(returnCells(idx)).value)
       case None =>
         ifNotFoundOpt match
           case Some(expr) => evalValue(ctx, expr).map(toCellValue)
@@ -112,19 +114,20 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         lookupValue <- evalValue(ctx, lookupExpr)
         colIndex <- ctx.evalExpr(colIndexExpr)
         rangeMatch <- ctx.evalExpr(rangeLookupExpr)
-        targetSheet <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
+        resolved <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
+        (targetSheet, tableRange) = resolved
         result <-
-          if colIndex < 1 || colIndex > table.range.width then
+          if colIndex < 1 || colIndex > tableRange.width then
             Left(
               EvalError.EvalFailed(
-                s"VLOOKUP: col_index_num $colIndex is outside 1..${table.range.width}",
-                Some(s"VLOOKUP(…, ${table.range.toA1})")
+                s"VLOOKUP: col_index_num $colIndex is outside 1..${tableRange.width}",
+                Some(s"VLOOKUP(…, ${table.toA1})")
               )
             )
           else
-            val rowIndices = 0 until table.range.height
-            val keyCol0 = table.range.colStart.index0
-            val rowStart0 = table.range.rowStart.index0
+            val rowIndices = 0 until tableRange.height
+            val keyCol0 = tableRange.colStart.index0
+            val rowStart0 = tableRange.rowStart.index0
             val resultCol0 = keyCol0 + (colIndex - 1)
 
             def renderValue(value: ExprValue): String = value match
@@ -204,7 +207,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                     if rangeMatch then "VLOOKUP approximate match not found"
                     else "VLOOKUP exact match not found",
                     Some(
-                      s"VLOOKUP(${renderValue(normalizedLookup)}, ${table.range.toA1}, $colIndex, $rangeMatch)"
+                      s"VLOOKUP(${renderValue(normalizedLookup)}, ${table.toA1}, $colIndex, $rangeMatch)"
                     )
                   )
                 )
@@ -236,19 +239,20 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         lookupValue <- evalValue(ctx, lookupExpr)
         rowIndex <- ctx.evalExpr(rowIndexExpr)
         rangeMatch <- ctx.evalExpr(rangeLookupExpr)
-        targetSheet <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
+        resolved <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
+        (targetSheet, tableRange) = resolved
         result <-
-          if rowIndex < 1 || rowIndex > table.range.height then
+          if rowIndex < 1 || rowIndex > tableRange.height then
             Left(
               EvalError.EvalFailed(
-                s"HLOOKUP: row_index_num $rowIndex is outside 1..${table.range.height}",
-                Some(s"HLOOKUP(…, ${table.range.toA1})")
+                s"HLOOKUP: row_index_num $rowIndex is outside 1..${tableRange.height}",
+                Some(s"HLOOKUP(…, ${table.toA1})")
               )
             )
           else
-            val colIndices = 0 until table.range.width
-            val keyRow0 = table.range.rowStart.index0
-            val colStart0 = table.range.colStart.index0
+            val colIndices = 0 until tableRange.width
+            val keyRow0 = tableRange.rowStart.index0
+            val colStart0 = tableRange.colStart.index0
             val resultRow0 = keyRow0 + (rowIndex - 1)
 
             val normalizedLookup: ExprValue = lookupValue match
@@ -312,7 +316,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                     if rangeMatch then "HLOOKUP approximate match not found"
                     else "HLOOKUP exact match not found",
                     Some(
-                      s"HLOOKUP(${exprValueToText(normalizedLookup)}, ${table.range.toA1}, $rowIndex, $rangeMatch)"
+                      s"HLOOKUP(${exprValueToText(normalizedLookup)}, ${table.toA1}, $rowIndex, $rangeMatch)"
                     )
                   )
                 )
@@ -321,32 +325,42 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
 
   val xlookup: FunctionSpec[CellValue] { type Args = XLookupArgs } =
     FunctionSpec.simple[CellValue, XLookupArgs]("XLOOKUP", Arity.Range(3, 6)) { (args, ctx) =>
-      val (lookupValue, lookupArray, returnArray, ifNotFoundOpt, matchModeOpt, searchModeOpt) =
+      val (lookupValue, lookupLoc, returnLoc, ifNotFoundOpt, matchModeOpt, searchModeOpt) =
         args
       val matchModeExpr = matchModeOpt.getOrElse(TExpr.Lit(0))
       val searchModeExpr = searchModeOpt.getOrElse(TExpr.Lit(1))
-      if lookupArray.width != returnArray.width || lookupArray.height != returnArray.height then
-        Left(
-          EvalError.EvalFailed(
-            s"XLOOKUP: lookup_array and return_array must have same dimensions (${lookupArray.height}×${lookupArray.width} vs ${returnArray.height}×${returnArray.width})",
-            Some(s"XLOOKUP(..., ${lookupArray.toA1}, ${returnArray.toA1}, ...)")
-          )
+      // GH-394: resolve locations first (Name locations have no static range), then validate
+      // dimensions on the resolved shapes
+      for
+        resolvedLookup <- Evaluator.resolveRangeLocation(lookupLoc, ctx.sheet, ctx.workbook)
+        resolvedReturn <- Evaluator.resolveRangeLocation(returnLoc, ctx.sheet, ctx.workbook)
+        (lookupSheet, lookupArray) = resolvedLookup
+        (returnSheet, returnArray) = resolvedReturn
+        _ <-
+          if lookupArray.width != returnArray.width || lookupArray.height != returnArray.height
+          then
+            Left(
+              EvalError.EvalFailed(
+                s"XLOOKUP: lookup_array and return_array must have same dimensions (${lookupArray.height}×${lookupArray.width} vs ${returnArray.height}×${returnArray.width})",
+                Some(s"XLOOKUP(..., ${lookupLoc.toA1}, ${returnLoc.toA1}, ...)")
+              )
+            )
+          else Right(())
+        lookupValueEval <- evalValue(ctx, lookupValue)
+        matchModeRaw <- evalValue(ctx, matchModeExpr)
+        searchModeRaw <- evalValue(ctx, searchModeExpr)
+        matchMode <- toIntArg("XLOOKUP", matchModeRaw)
+        searchMode <- toIntArg("XLOOKUP", searchModeRaw)
+        result <- performXLookup(
+          lookupValueEval,
+          lookupSheet,
+          lookupArray,
+          returnSheet,
+          returnArray,
+          ifNotFoundOpt,
+          matchMode,
+          searchMode,
+          ctx
         )
-      else
-        for
-          lookupValueEval <- evalValue(ctx, lookupValue)
-          matchModeRaw <- evalValue(ctx, matchModeExpr)
-          searchModeRaw <- evalValue(ctx, searchModeExpr)
-          matchMode <- toIntArg("XLOOKUP", matchModeRaw)
-          searchMode <- toIntArg("XLOOKUP", searchModeRaw)
-          result <- performXLookup(
-            lookupValueEval,
-            lookupArray,
-            returnArray,
-            ifNotFoundOpt,
-            matchMode,
-            searchMode,
-            ctx
-          )
-        yield result
+      yield result
     }

@@ -216,6 +216,10 @@ object FormulaPrinter:
       // =IF(case=2, 1, 0) round-trips byte-for-byte
       case TExpr.NameRef(name) => name
 
+      // GH-394: a sheet-qualified name prints as Sheet!name (quoted sheet when needed) —
+      // =Model!case round-trips byte-for-byte, the NameRef precedent qualified
+      case TExpr.SheetNameRef(sheet, name) => s"${formatSheetName(sheet)}!$name"
+
       // A binding in a typed argument position prints as the bare name, exactly like BindingRef
       case TExpr.CoercedBindingRef(name, _) => name
 
@@ -250,6 +254,13 @@ object FormulaPrinter:
       // GH-353: external-workbook range args round-trip their surface form exactly
       case TExpr.RangeLocation.External(index, name, range) =>
         s"${formatExternalSheet(index, name)}!${formatRange(range)}"
+      // GH-394: a defined name in a range slot prints as its identifier (optionally
+      // sheet-qualified), matching the TExpr.NameRef / SheetNameRef precedent — the
+      // parse∘print=id law holds because re-parsing re-derives the same Name location
+      case TExpr.RangeLocation.Name(name, scope) =>
+        scope match
+          case Some(sheet) => s"${formatSheetName(sheet)}!$name"
+          case None => name
 
   /**
    * Format ARef to A1 notation with anchor support.
@@ -453,6 +464,8 @@ object FormulaPrinter:
         s"BindingRef($name)"
       case TExpr.NameRef(name) =>
         s"NameRef($name)"
+      case TExpr.SheetNameRef(sheet, name) =>
+        s"SheetNameRef(${sheet.value}, $name)"
       case TExpr.CoercedBindingRef(name, target) =>
         s"CoercedBindingRef($name, $target)"
       case TExpr.Coerced(inner, target) =>

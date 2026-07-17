@@ -247,8 +247,8 @@ trait TExprDecoders:
    * GH-396: mirrors ScalarCoercion.coerceInteger exactly — the direct-cell and Coerced integer
    * boundaries previously diverged (a blank/numeric-text/fractional cell errored where the same
    * value as a literal or call result coerced):
-   *   - Number -> truncates toward zero like Excel (LEFT("hello", 2.7) -> "he"); values outside
-   *     the Int range are a clean error
+   *   - Number -> truncates toward zero like Excel (LEFT("hello", 2.7) -> "he"); values outside the
+   *     Int range are a clean error
    *   - Boolean -> 1 for TRUE, 0 for FALSE
    *   - Text -> numeric text parses ("3" -> 3; "abc" is a clean error — Excel #VALUE!)
    *   - Empty -> 0 (=LEFT("hello", <blank>) is "")

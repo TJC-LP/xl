@@ -372,6 +372,19 @@ enum TExpr[A] derives CanEqual:
   case NameRef(name: String) extends TExpr[Nothing]
 
   /**
+   * GH-394: sheet-qualified reference to a defined name — `=Model!case`, legal Excel syntax for
+   * addressing a sheet-scoped name from anywhere in the workbook.
+   *
+   * Emitted by the parser when a sheet-qualified tail is name-shaped rather than ref-shaped
+   * (`Model!case` fails ARef/CellRange parsing but is a valid name identifier). Resolution mirrors
+   * [[NameRef]] except the lookup runs AS SEEN FROM the qualifying sheet: a name scoped to that
+   * sheet shadows a workbook-scoped one of the same identifier. Prints as `Sheet!name` (quoted
+   * sheet when needed), never shifts on drag, and contributes no sheet-local dependency edges
+   * (workbook-level extraction resolves it like NameRef).
+   */
+  case SheetNameRef(sheet: SheetName, name: String) extends TExpr[Nothing]
+
+  /**
    * GH-193: An in-scope LET binding used in a statically-typed argument position.
    *
    * BindingRef is Any-typed like PolyRef, so the typed coercion boundary (asStringExpr, asIntExpr,

@@ -14,7 +14,7 @@ trait TExprFinancialOps:
    * Example: TExpr.npv(TExpr.Lit(BigDecimal("0.1")), CellRange("A2:A6"))
    */
   def npv(rate: TExpr[BigDecimal], values: CellRange): TExpr[BigDecimal] =
-    Call(FunctionSpecs.npv, (rate, values))
+    Call(FunctionSpecs.npv, (rate, RangeLocation.Local(values)))
 
   /**
    * Smart constructor for IRR with optional guess.
@@ -22,7 +22,7 @@ trait TExprFinancialOps:
    * Example: TExpr.irr(CellRange("A1:A6"), Some(TExpr.Lit(BigDecimal("0.15"))))
    */
   def irr(values: CellRange, guess: Option[TExpr[BigDecimal]] = None): TExpr[BigDecimal] =
-    Call(FunctionSpecs.irr, (values, guess))
+    Call(FunctionSpecs.irr, (RangeLocation.Local(values), guess))
 
   /**
    * Smart constructor for XNPV with irregular dates.
@@ -41,7 +41,7 @@ trait TExprFinancialOps:
     values: CellRange,
     dates: CellRange
   ): TExpr[BigDecimal] =
-    Call(FunctionSpecs.xnpv, (rate, values, dates))
+    Call(FunctionSpecs.xnpv, (rate, RangeLocation.Local(values), RangeLocation.Local(dates)))
 
   /**
    * Smart constructor for XIRR with irregular dates.
@@ -60,7 +60,7 @@ trait TExprFinancialOps:
     dates: CellRange,
     guess: Option[TExpr[BigDecimal]] = None
   ): TExpr[BigDecimal] =
-    Call(FunctionSpecs.xirr, (values, dates, guess))
+    Call(FunctionSpecs.xirr, (RangeLocation.Local(values), RangeLocation.Local(dates), guess))
 
   // ===== TVM Smart Constructors =====
 

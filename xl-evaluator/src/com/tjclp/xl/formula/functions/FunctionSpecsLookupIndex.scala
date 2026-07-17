@@ -40,11 +40,13 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         colNum <- colNumOpt match
           case Some(expr) => ctx.evalExpr(expr).map(Some(_))
           case None => Right(None)
+        resolved <- Evaluator.resolveRangeLocation(array, ctx.sheet, ctx.workbook)
+        (targetSheet, arrayRange) = resolved
         result <- {
-          val startCol = array.colStart.index0
-          val startRow = array.rowStart.index0
-          val numCols = array.colEnd.index0 - startCol + 1
-          val numRows = array.rowEnd.index0 - startRow + 1
+          val startCol = arrayRange.colStart.index0
+          val startRow = arrayRange.rowStart.index0
+          val numCols = arrayRange.colEnd.index0 - startCol + 1
+          val numRows = arrayRange.rowEnd.index0 - startRow + 1
 
           // Excel INDEX behavior for 2-arg form:
           // - Single-row array: second arg is col_num
@@ -82,7 +84,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
             )
           else
             val targetRef = ARef.from0(startCol + colIdx, startRow + rowIdx)
-            Right(ctx.sheet(targetRef).value)
+            Right(targetSheet(targetRef).value)
         }
       yield result
     }
@@ -98,11 +100,13 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       for
         lookupValueEval <- evalValue(ctx, lookupValue)
         matchType <- ctx.evalExpr(matchTypeExpr)
+        resolved <- Evaluator.resolveRangeLocation(lookupArray, ctx.sheet, ctx.workbook)
+        (targetSheet, lookupRange) = resolved
         result <- {
           val matchTypeInt = matchType.toInt
           val cells: List[(Int, CellValue)] =
-            lookupArray.cells.toList.zipWithIndex.map { case (ref, idx) =>
-              (idx + 1, ctx.sheet(ref).value)
+            lookupRange.cells.toList.zipWithIndex.map { case (ref, idx) =>
+              (idx + 1, targetSheet(ref).value)
             }
 
           val positionOpt: Option[Int] = matchTypeInt match

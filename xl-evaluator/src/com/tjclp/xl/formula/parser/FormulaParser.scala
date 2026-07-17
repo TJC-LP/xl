@@ -628,9 +628,10 @@ object FormulaParser:
         else
           // Starts with '.' - definitely a number like .5
           parseNumberLiteral(s)
-      case Some(c) if c.isLetter || c == '_' =>
-        // Function call, cell reference, boolean literal, or LET binding reference
-        // ('_' admits underscore-led LET names, GH-193)
+      case Some(c) if c.isLetter || c == '_' || c == '\\' =>
+        // Function call, cell reference, boolean literal, LET binding reference, or defined
+        // name ('_' admits underscore-led LET names, GH-193; '\\' admits backslash-led
+        // defined names, GH-394 — legal Excel name characters)
         parseFunctionOrRef(s)
       case Some('$') =>
         // Anchored cell reference (e.g., $A$1, $A1)
@@ -754,11 +755,14 @@ object FormulaParser:
   private def parseFunctionOrRef(state: ParserState): ParseResult[TExpr[?]] =
     val startPos = state.pos
 
-    // Read identifier (letters, digits, underscores, $ for anchored refs like A$1)
+    // Read identifier (letters, digits, underscores, $ for anchored refs like A$1; '.' and
+    // '\\' are Excel name characters, GH-394 — ARef/range parsing rejects them downstream so
+    // ref-shaped tokens are unaffected)
     @tailrec
     def readIdent(s: ParserState): ParserState =
       s.currentChar match
-        case Some(c) if c.isLetterOrDigit || c == '_' || c == '$' => readIdent(s.advance())
+        case Some(c) if c.isLetterOrDigit || c == '_' || c == '$' || c == '.' || c == '\\' =>
+          readIdent(s.advance())
         case Some('!') => s // Sheet reference separator
         case _ => s
 
@@ -869,14 +873,17 @@ object FormulaParser:
   private val ReservedLetNames = Set("TRUE", "FALSE", "AND", "OR", "NOT")
 
   /**
-   * Valid Excel LET binding name: starts with a letter or underscore, continues with
-   * letters/digits/underscores, is not cell-ref shaped (A1, XFD100, ...), and is not a reserved
-   * literal/operator keyword.
+   * Valid Excel name identifier (shared by LET binding names and defined-name references): starts
+   * with a letter, underscore, or backslash, continues with letters/digits/underscores plus '.' and
+   * '\\' (GH-394 — Excel allows both in defined names, e.g. Sales.Total), is not cell-ref shaped
+   * (A1, XFD100, ...), and is not a reserved literal/operator keyword. Number literals (3.14) can
+   * never reach this predicate: it runs on identifier-shaped tokens, which always start with a
+   * letter/underscore/backslash.
    */
   private def isValidLetName(name: String): Boolean =
     name.nonEmpty
-      && (name.charAt(0).isLetter || name.charAt(0) == '_')
-      && name.forall(c => c.isLetterOrDigit || c == '_')
+      && (name.charAt(0).isLetter || name.charAt(0) == '_' || name.charAt(0) == '\\')
+      && name.forall(c => c.isLetterOrDigit || c == '_' || c == '.' || c == '\\')
       && ARef.parse(name).isLeft
       && !ReservedLetNames.contains(name.toUpperCase)
 
@@ -888,11 +895,15 @@ object FormulaParser:
       if name.isEmpty then "empty name" else s"'$name'"
     )
 
-  /** Read an identifier-shaped token (letters/digits/underscores) at the current position. */
+  /**
+   * Read an identifier-shaped token at the current position (letters/digits/underscores plus '.'
+   * and '\\' — the Excel name character set, GH-394).
+   */
   @tailrec
   private def readLetName(s: ParserState): ParserState =
     s.currentChar match
-      case Some(c) if c.isLetterOrDigit || c == '_' => readLetName(s.advance())
+      case Some(c) if c.isLetterOrDigit || c == '_' || c == '.' || c == '\\' =>
+        readLetName(s.advance())
       case _ => s
 
   /**
@@ -1100,10 +1111,16 @@ object FormulaParser:
         // Read the cell reference or range after the !
         val refStartPos = state.pos
 
+        // '.'/'_'/'\\' are Excel name characters (GH-394): a name-shaped tail becomes a
+        // sheet-qualified defined name below; ref shapes are unaffected (ARef/CellRange
+        // parsing decides)
         @tailrec
         def readRef(s: ParserState): ParserState =
           s.currentChar match
-            case Some(c) if c.isLetterOrDigit || c == '$' || c == ':' => readRef(s.advance())
+            case Some(c)
+                if c.isLetterOrDigit || c == '$' || c == ':' || c == '_' || c == '.' ||
+                  c == '\\' =>
+              readRef(s.advance())
             case _ => s
 
         val s2 = readRef(state)
@@ -1125,7 +1142,13 @@ object FormulaParser:
             case Right(aref) =>
               Right((TExpr.SheetPolyRef(sheetName, aref.asInstanceOf[ARef], anchor), s2))
             case Left(err) =>
-              Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
+              // GH-394: a name-shaped tail is a sheet-qualified defined name (=Model!case —
+              // legal Excel syntax for sheet-scoped names), resolved against the workbook at
+              // evaluation. Total disambiguation like parseCellReference: ARef success means
+              // cell ref, name-shaped failure means SheetNameRef, anything else keeps the
+              // InvalidCellRef.
+              if isValidLetName(refPart) then Right((TExpr.SheetNameRef(sheetName, refPart), s2))
+              else Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
 
   // ===== GH-353: external-workbook references =====
 

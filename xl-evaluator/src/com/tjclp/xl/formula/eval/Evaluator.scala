@@ -8,7 +8,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 import com.tjclp.xl.SheetName
@@ -134,19 +134,26 @@ object Evaluator:
     )
 
   /**
-   * Resolve a RangeLocation to the target sheet.
+   * Resolve a RangeLocation to its target (sheet, range) pair — THE single resolution boundary for
+   * range-typed argument slots (GH-394).
    *
-   * For Local ranges, returns the current sheet. For CrossSheet ranges, looks up the target sheet
-   * in the workbook context.
+   * For Local ranges, returns the current sheet with the carried range. For CrossSheet ranges,
+   * looks up the target sheet in the workbook context. For Name locations the carried range is
+   * unknown until here: the name resolves against the workbook's name table (sheet-scoped SHADOWS
+   * workbook-scoped, case-insensitive — [[lookupDefinedName]]; a sheet-qualified name looks up as
+   * seen from its qualifier), its refersTo text parses, and range/cell-shaped targets yield the
+   * resolved pair (a single-cell target acts as a 1×1 range, like Excel). Non-range targets
+   * (constants, formulas, name→name chains) are a clean per-cell #VALUE! error — never a
+   * MatchError.
    */
   private[formula] def resolveRangeLocation(
     location: TExpr.RangeLocation,
     currentSheet: Sheet,
     workbook: Option[Workbook]
-  ): Either[EvalError, Sheet] =
+  ): Either[EvalError, (Sheet, CellRange)] =
     location match
-      case TExpr.RangeLocation.Local(_) =>
-        Right(currentSheet)
+      case TExpr.RangeLocation.Local(range) =>
+        Right((currentSheet, range))
       case TExpr.RangeLocation.CrossSheet(sheetName, range) =>
         workbook match
           case None =>
@@ -156,12 +163,90 @@ object Evaluator:
           case Some(wb) =>
             wb(sheetName) match
               case Left(err) => Left(sheetNotFoundError(sheetName, err))
-              case Right(targetSheet) => Right(targetSheet)
+              case Right(targetSheet) => Right((targetSheet, range))
       // GH-353: the target workbook is not loaded — same friendly error as a direct external
       // ref; cells CONTAINING such calls are pinned to their Excel cache upstream and never
       // reach this point
       case loc @ TExpr.RangeLocation.External(_, _, _) =>
         Left(externalRefUnsupported(loc.toA1))
+      // GH-394: a defined name in a range slot resolves through the name table
+      case TExpr.RangeLocation.Name(name, scope) =>
+        resolveNameToRange(name, scope, currentSheet, workbook)
+
+  /**
+   * GH-394: resolve a defined name used in a RANGE-typed argument slot to its (sheet, range).
+   *
+   * Mirrors [[EvaluatorWithDepth.evalNameRef]]'s lookup (missing workbook, unknown name, and
+   * unparseable refersTo produce the same message shapes) but restricts the TARGET to reference
+   * shapes: ranges, sheet-qualified ranges, and single cells (1×1 ranges). Anything else —
+   * constants, formulas, name→name chains — is Excel's #VALUE! as a clean error value. The
+   * defining-sheet convention matches evalNameRef: sheet-scoped names resolve their unqualified
+   * refersTo against their scope sheet.
+   */
+  private def resolveNameToRange(
+    name: String,
+    scope: Option[SheetName],
+    currentSheet: Sheet,
+    workbook: Option[Workbook]
+  ): Either[EvalError, (Sheet, CellRange)] =
+    workbook match
+      case None =>
+        Left(
+          EvalError.EvalFailed(
+            s"Defined name '$name' requires workbook context, but none was provided.",
+            None
+          )
+        )
+      case Some(wb) =>
+        val lookupFrom = scope.getOrElse(currentSheet.name)
+        lookupDefinedName(wb, lookupFrom, name) match
+          case None =>
+            Left(EvalError.EvalFailed(s"Name '$name' is not defined in this workbook.", None))
+          case Some(dn) =>
+            FormulaParser.parse(dn.formula) match
+              case Left(parseErr) =>
+                Left(
+                  EvalError.EvalFailed(
+                    s"Defined name '$name' has an unparseable definition '${dn.formula}': " +
+                      s"${ParseError.toXLError(parseErr, dn.formula).message}",
+                    None
+                  )
+                )
+              case Right(target) =>
+                val definingSheet = definedNameScope(wb, dn).getOrElse(currentSheet)
+                target match
+                  case TExpr.RangeRef(range) => Right((definingSheet, range))
+                  case TExpr.SheetRange(sheetName, range) =>
+                    resolveRangeLocation(
+                      TExpr.RangeLocation.CrossSheet(sheetName, range),
+                      definingSheet,
+                      workbook
+                    )
+                  // Single-cell targets act as 1×1 ranges (names routinely point at one cell).
+                  // A standalone ref at the top of a parsed formula surfaces as the TYPED
+                  // Ref/SheetRef (the resolved-value rewrite); Poly forms are kept for safety.
+                  case TExpr.Ref(at, _, _) => Right((definingSheet, CellRange(at, at)))
+                  case TExpr.PolyRef(at, _) => Right((definingSheet, CellRange(at, at)))
+                  case TExpr.SheetRef(sheetName, at, _, _) =>
+                    resolveRangeLocation(
+                      TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
+                      definingSheet,
+                      workbook
+                    )
+                  case TExpr.SheetPolyRef(sheetName, at, _) =>
+                    resolveRangeLocation(
+                      TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
+                      definingSheet,
+                      workbook
+                    )
+                  case _ =>
+                    // Excel: a non-reference name in a range position is #VALUE!
+                    Left(
+                      EvalError.ErrorValue(
+                        com.tjclp.xl.cells.CellError.Value,
+                        Some(s"name '$name' does not refer to a range (refersTo: ${dn.formula})")
+                      )
+                    )
 
   // ===== GH-384: defined-name resolution =====
 
@@ -620,8 +705,8 @@ private class EvaluatorImpl(
           case None =>
             Left(EvalError.EvalFailed(s"Unknown aggregator: $aggregatorId", None))
           case Some(agg) =>
-            Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
-              evalAggregateNode(agg, location, targetSheet)
+            Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap {
+              case (targetSheet, range) => evalAggregateNode(agg, range, targetSheet)
             }
 
       case call: TExpr.Call[?] =>
@@ -717,7 +802,13 @@ private class EvaluatorImpl(
       // Resolved here (not at parse) because only the workbook knows the name table. Same
       // Either-container cast rationale as BindingRef (TExpr[Nothing] refinement).
       case TExpr.NameRef(name) =>
-        evalNameRef(name, sheet, clock, workbook, currentCell)
+        evalNameRef(name, scope = None, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
+
+      // GH-394: sheet-qualified name (=Model!case) — identical resolution, but the lookup runs
+      // as seen from the QUALIFYING sheet (its sheet-scoped names shadow workbook-scoped ones)
+      case TExpr.SheetNameRef(qualifier, name) =>
+        evalNameRef(name, scope = Some(qualifier), sheet, clock, workbook, currentCell)
           .asInstanceOf[Either[EvalError, A]]
 
   // ===== GH-193: LET evaluation =====
@@ -781,7 +872,7 @@ private class EvaluatorImpl(
         case TExpr.SheetRange(sheetName, range) if allowArrayResults =>
           Evaluator
             .resolveRangeLocation(TExpr.RangeLocation.CrossSheet(sheetName, range), sheet, workbook)
-            .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
+            .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(range, targetSheet) }
         case other =>
           val resolvedBody = TExpr.asResolvedValueExpr(other)
           new EvaluatorWithDepth(currentDepth, allowArrayResults, env, rng, memoOpt, resolvingNames)
@@ -809,6 +900,7 @@ private class EvaluatorImpl(
    */
   private def evalNameRef(
     name: String,
+    scope: Option[SheetName],
     sheet: Sheet,
     clock: Clock,
     workbook: Option[Workbook],
@@ -832,7 +924,8 @@ private class EvaluatorImpl(
             )
           )
         else
-          Evaluator.lookupDefinedName(wb, sheet.name, name) match
+          // GH-394: a sheet-qualified name (=Model!case) looks up AS SEEN FROM its qualifier
+          Evaluator.lookupDefinedName(wb, scope.getOrElse(sheet.name), name) match
             case None =>
               Left(
                 EvalError.EvalFailed(
@@ -864,7 +957,9 @@ private class EvaluatorImpl(
                           definingSheet,
                           workbook
                         )
-                        .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
+                        .map { case (targetSheet, _) =>
+                          ArrayArithmetic.rangeToArray(range, targetSheet)
+                        }
                     case other =>
                       // Bare refs resolve to the cell's effective value (cached formula
                       // extracted, Empty → 0) like top-level refs; the derived evaluator
@@ -896,10 +991,10 @@ private class EvaluatorImpl(
    */
   private def evalAggregateNode[Acc](
     agg: Aggregator[Acc],
-    location: TExpr.RangeLocation,
+    range: CellRange,
     targetSheet: Sheet
   ): Either[EvalError, BigDecimal] =
-    val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+    val cells = range.cells.map(cellRef => targetSheet(cellRef))
     val result = cells.foldLeft[Either[EvalError, Acc]](Right(agg.empty)) { (accE, cell) =>
       accE.flatMap { acc =>
         if agg.countsNonEmpty then
@@ -1071,7 +1166,7 @@ private class EvaluatorImpl(
             sheet,
             workbook
           )
-          .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
+          .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(range, targetSheet) }
       // GH-374: unary plus is transparent in operand positions — =+A1:A3*10 broadcasts
       // exactly like =A1:A3*10
       case TExpr.UnaryPlus(inner) =>

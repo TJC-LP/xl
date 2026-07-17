@@ -30,11 +30,21 @@ private[functions] object NumericGuard:
         Left(EvalError.EvalFailed(s"$fn diverged (numeric overflow)", Some(usage)))
 
 trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
-  private def numericValues(range: CellRange, ctx: EvalContext): List[BigDecimal] =
-    range.cells
-      .map(ref => ctx.sheet(ref))
-      .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
-      .toList
+  /**
+   * GH-394: cashflow/date ranges are RangeLocations resolved through the single boundary —
+   * sheet-qualified ranges and defined names read their TARGET sheet's cells.
+   */
+  private def numericValues(
+    location: TExpr.RangeLocation,
+    ctx: EvalContext
+  ): Either[EvalError, List[BigDecimal]] =
+    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map {
+      case (targetSheet, range) =>
+        range.cells
+          .map(ref => targetSheet(ref))
+          .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+          .toList
+    }
 
   /**
    * GH-405: date-range collection uses the serial-COERCING decoder (decodeAsDate, the GH-385/396
@@ -45,15 +55,21 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
    * [[numericValues]] deliberately KEEPS strict decodeNumeric: a blank cashflow must skip, not
    * become a period-shifting 0 (see TExprDecoders.decodeNumericScalar's rationale).
    */
-  private def dateValues(range: CellRange, ctx: EvalContext): List[LocalDate] =
-    range.cells
-      .map(ref => ctx.sheet(ref))
-      // Blank cells stay SKIPS in range folds (decodeAsDate's scalar Empty -> 1900-01-01 arm
-      // must not apply here): numericValues skips blank cashflows, so a sparse XIRR block
-      // drops aligned blank (value, date) pairs together and the lengths keep matching
-      .filterNot(_.value == CellValue.Empty)
-      .flatMap(cell => TExpr.decodeAsDate(cell).toOption)
-      .toList
+  private def dateValues(
+    location: TExpr.RangeLocation,
+    ctx: EvalContext
+  ): Either[EvalError, List[LocalDate]] =
+    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map {
+      case (targetSheet, range) =>
+        range.cells
+          .map(ref => targetSheet(ref))
+          // Blank cells stay SKIPS in range folds (decodeAsDate's scalar Empty -> 1900-01-01 arm
+          // must not apply here): numericValues skips blank cashflows, so a sparse XIRR block
+          // drops aligned blank (value, date) pairs together and the lengths keep matching
+          .filterNot(_.value == CellValue.Empty)
+          .flatMap(cell => TExpr.decodeAsDate(cell).toOption)
+          .toList
+    }
 
   val npv: FunctionSpec[BigDecimal] { type Args = NpvArgs } =
     FunctionSpec.simple[BigDecimal, NpvArgs](
@@ -73,14 +89,12 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
           )
         else
           NumericGuard.contained("NPV", "NPV(rate, values)") {
-            val cashFlows = numericValues(range, ctx)
-
-            val npv =
+            numericValues(range, ctx).map { cashFlows =>
               cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
                 val period = idx + 1
                 acc + cf / onePlusR.pow(period)
               }
-            Right(npv)
+            }
           }
       }
     }
@@ -92,67 +106,67 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       flags = FunctionFlags(returnsNumeric = true)
     ) { (args, ctx) =>
       val (range, guessOpt) = args
-      val cashFlows = numericValues(range, ctx)
-
-      if cashFlows.isEmpty || !cashFlows.exists(_ < 0) || !cashFlows.exists(_ > 0) then
-        Left(
-          EvalError.EvalFailed(
-            "IRR requires at least one positive and one negative cash flow",
-            Some("IRR(values[, guess])")
+      numericValues(range, ctx).flatMap { cashFlows =>
+        if cashFlows.isEmpty || !cashFlows.exists(_ < 0) || !cashFlows.exists(_ > 0) then
+          Left(
+            EvalError.EvalFailed(
+              "IRR requires at least one positive and one negative cash flow",
+              Some("IRR(values[, guess])")
+            )
           )
-        )
-      else
-        val guessEither: Either[EvalError, BigDecimal] =
-          guessOpt match
-            case Some(guessExpr) => ctx.evalExpr(guessExpr)
-            case None => Right(BigDecimal("0.1"))
+        else
+          val guessEither: Either[EvalError, BigDecimal] =
+            guessOpt match
+              case Some(guessExpr) => ctx.evalExpr(guessExpr)
+              case None => Right(BigDecimal("0.1"))
 
-        guessEither.flatMap { guess0 =>
-          val maxIter = 50
-          val tolerance = BigDecimal("1e-7")
-          val one = BigDecimal(1)
+          guessEither.flatMap { guess0 =>
+            val maxIter = 50
+            val tolerance = BigDecimal("1e-7")
+            val one = BigDecimal(1)
 
-          def npvAt(rate: BigDecimal): BigDecimal =
-            val onePlusR = one + rate
-            cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
-              if idx == 0 then acc + cf
-              else acc + cf / onePlusR.pow(idx)
-            }
+            def npvAt(rate: BigDecimal): BigDecimal =
+              val onePlusR = one + rate
+              cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
+                if idx == 0 then acc + cf
+                else acc + cf / onePlusR.pow(idx)
+              }
 
-          def dNpvAt(rate: BigDecimal): BigDecimal =
-            val onePlusR = one + rate
-            cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
-              if idx == 0 then acc
-              else acc - (idx * cf) / onePlusR.pow(idx + 1)
-            }
+            def dNpvAt(rate: BigDecimal): BigDecimal =
+              val onePlusR = one + rate
+              cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
+                if idx == 0 then acc
+                else acc - (idx * cf) / onePlusR.pow(idx + 1)
+              }
 
-          @annotation.tailrec
-          def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
-            if iter >= maxIter then
-              // GH-344: Excel #NUM! for non-convergence (op-level classification)
-              Left(
-                EvalError.ErrorValue(
-                  CellError.Num,
-                  Some(s"IRR did not converge after $maxIter iterations")
-                )
-              )
-            else
-              val f = npvAt(r)
-              val df = dNpvAt(r)
-              if df == BigDecimal(0) then
+            @annotation.tailrec
+            def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
+              if iter >= maxIter then
+                // GH-344: Excel #NUM! for non-convergence (op-level classification)
                 Left(
-                  EvalError.EvalFailed(
-                    "IRR derivative is zero; cannot continue iteration",
-                    Some("IRR(values[, guess])")
+                  EvalError.ErrorValue(
+                    CellError.Num,
+                    Some(s"IRR did not converge after $maxIter iterations")
                   )
                 )
               else
-                val next = r - f / df
-                if (next - r).abs <= tolerance then Right(next)
-                else loop(iter + 1, next)
+                val f = npvAt(r)
+                val df = dNpvAt(r)
+                if df == BigDecimal(0) then
+                  Left(
+                    EvalError.EvalFailed(
+                      "IRR derivative is zero; cannot continue iteration",
+                      Some("IRR(values[, guess])")
+                    )
+                  )
+                else
+                  val next = r - f / df
+                  if (next - r).abs <= tolerance then Right(next)
+                  else loop(iter + 1, next)
 
-          NumericGuard.contained("IRR", "IRR(values[, guess])")(loop(0, guess0))
-        }
+            NumericGuard.contained("IRR", "IRR(values[, guess])")(loop(0, guess0))
+          }
+      }
     }
 
   val xnpv: FunctionSpec[BigDecimal] { type Args = XnpvArgs } =
@@ -164,10 +178,9 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       val (rateExpr, valuesRange, datesRange) = args
       for
         rate <- ctx.evalExpr(rateExpr)
+        values <- numericValues(valuesRange, ctx)
+        dates <- dateValues(datesRange, ctx)
         result <- {
-          val values = numericValues(valuesRange, ctx)
-          val dates = dateValues(datesRange, ctx)
-
           if values.isEmpty || dates.isEmpty then
             Left(
               EvalError.EvalFailed(
@@ -209,87 +222,90 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       flags = FunctionFlags(returnsNumeric = true)
     ) { (args, ctx) =>
       val (valuesRange, datesRange, guessOpt) = args
-      val values = numericValues(valuesRange, ctx)
-      val dates = dateValues(datesRange, ctx)
+      for
+        values <- numericValues(valuesRange, ctx)
+        dates <- dateValues(datesRange, ctx)
+        result <- {
+          if values.isEmpty || dates.isEmpty then
+            Left(
+              EvalError.EvalFailed(
+                "XIRR requires non-empty values and dates ranges",
+                Some("XIRR(values, dates[, guess])")
+              )
+            )
+          else if values.length != dates.length then
+            Left(
+              EvalError.EvalFailed(
+                s"XIRR: values (${values.length}) and dates (${dates.length}) must have same length",
+                Some("XIRR(values, dates[, guess])")
+              )
+            )
+          else if !values.exists(_ < 0) || !values.exists(_ > 0) then
+            Left(
+              EvalError.EvalFailed(
+                "XIRR requires at least one positive and one negative cash flow",
+                Some("XIRR(values, dates[, guess])")
+              )
+            )
+          else
+            val guessEither: Either[EvalError, BigDecimal] =
+              guessOpt match
+                case Some(guessExpr) => ctx.evalExpr(guessExpr)
+                case None => Right(BigDecimal("0.1"))
 
-      if values.isEmpty || dates.isEmpty then
-        Left(
-          EvalError.EvalFailed(
-            "XIRR requires non-empty values and dates ranges",
-            Some("XIRR(values, dates[, guess])")
-          )
-        )
-      else if values.length != dates.length then
-        Left(
-          EvalError.EvalFailed(
-            s"XIRR: values (${values.length}) and dates (${dates.length}) must have same length",
-            Some("XIRR(values, dates[, guess])")
-          )
-        )
-      else if !values.exists(_ < 0) || !values.exists(_ > 0) then
-        Left(
-          EvalError.EvalFailed(
-            "XIRR requires at least one positive and one negative cash flow",
-            Some("XIRR(values, dates[, guess])")
-          )
-        )
-      else
-        val guessEither: Either[EvalError, BigDecimal] =
-          guessOpt match
-            case Some(guessExpr) => ctx.evalExpr(guessExpr)
-            case None => Right(BigDecimal("0.1"))
+            guessEither.flatMap { guess0 =>
+              val maxIter = 100
+              val tolerance = BigDecimal("1e-7")
+              dates match
+                case date0 :: _ =>
+                  val yearFractions: List[BigDecimal] = dates.map { date =>
+                    val daysDiff = ChronoUnit.DAYS.between(date0, date)
+                    BigDecimal(daysDiff) / BigDecimal(365)
+                  }
 
-        guessEither.flatMap { guess0 =>
-          val maxIter = 100
-          val tolerance = BigDecimal("1e-7")
-          dates match
-            case date0 :: _ =>
-              val yearFractions: List[BigDecimal] = dates.map { date =>
-                val daysDiff = ChronoUnit.DAYS.between(date0, date)
-                BigDecimal(daysDiff) / BigDecimal(365)
-              }
+                  def xnpvAt(rate: BigDecimal): BigDecimal =
+                    val onePlusR = BigDecimal(1) + rate
+                    values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
+                      val discountFactor = math.pow(onePlusR.toDouble, yf.toDouble)
+                      acc + cf / BigDecimal(discountFactor)
+                    }
 
-              def xnpvAt(rate: BigDecimal): BigDecimal =
-                val onePlusR = BigDecimal(1) + rate
-                values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
-                  val discountFactor = math.pow(onePlusR.toDouble, yf.toDouble)
-                  acc + cf / BigDecimal(discountFactor)
-                }
+                  def dXnpvAt(rate: BigDecimal): BigDecimal =
+                    val onePlusR = BigDecimal(1) + rate
+                    values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
+                      val discountFactor = math.pow(onePlusR.toDouble, (yf + 1).toDouble)
+                      acc - (yf * cf) / BigDecimal(discountFactor)
+                    }
 
-              def dXnpvAt(rate: BigDecimal): BigDecimal =
-                val onePlusR = BigDecimal(1) + rate
-                values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
-                  val discountFactor = math.pow(onePlusR.toDouble, (yf + 1).toDouble)
-                  acc - (yf * cf) / BigDecimal(discountFactor)
-                }
-
-              @annotation.tailrec
-              def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
-                if iter >= maxIter then
-                  // GH-344: Excel #NUM! for non-convergence (op-level classification)
-                  Left(
-                    EvalError.ErrorValue(
-                      CellError.Num,
-                      Some(s"XIRR did not converge after $maxIter iterations")
-                    )
-                  )
-                else
-                  val f = xnpvAt(r)
-                  val df = dXnpvAt(r)
-                  if df.abs < BigDecimal("1e-10") then
-                    Left(
-                      EvalError.EvalFailed(
-                        "XIRR derivative is near zero; cannot continue iteration",
-                        Some("XIRR(values, dates[, guess])")
+                  @annotation.tailrec
+                  def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
+                    if iter >= maxIter then
+                      // GH-344: Excel #NUM! for non-convergence (op-level classification)
+                      Left(
+                        EvalError.ErrorValue(
+                          CellError.Num,
+                          Some(s"XIRR did not converge after $maxIter iterations")
+                        )
                       )
-                    )
-                  else
-                    val next = r - f / df
-                    if (next - r).abs <= tolerance then Right(next)
-                    else loop(iter + 1, next)
+                    else
+                      val f = xnpvAt(r)
+                      val df = dXnpvAt(r)
+                      if df.abs < BigDecimal("1e-10") then
+                        Left(
+                          EvalError.EvalFailed(
+                            "XIRR derivative is near zero; cannot continue iteration",
+                            Some("XIRR(values, dates[, guess])")
+                          )
+                        )
+                      else
+                        val next = r - f / df
+                        if (next - r).abs <= tolerance then Right(next)
+                        else loop(iter + 1, next)
 
-              NumericGuard.contained("XIRR", "XIRR(values, dates[, guess])")(loop(0, guess0))
-            case Nil =>
-              Left(EvalError.EvalFailed("XIRR: dates cannot be empty", None))
+                  NumericGuard.contained("XIRR", "XIRR(values, dates[, guess])")(loop(0, guess0))
+                case Nil =>
+                  Left(EvalError.EvalFailed("XIRR: dates cannot be empty", None))
+            }
         }
+      yield result
     }

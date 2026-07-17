@@ -1711,10 +1711,11 @@ class FormulaParserSpec extends ScalaCheckSuite:
     result match
       case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.xnpv =>
         val (_, values, dates) = call.args.asInstanceOf[FunctionSpecs.XnpvArgs]
-        assert(values.start == ref"A1")
-        assert(values.end == ref"A5")
-        assert(dates.start == ref"B1")
-        assert(dates.end == ref"B5")
+        // GH-394: cashflow/date args are RangeLocations now; literal ranges parse as Local
+        assert(values.staticRange.map(_.start).contains(ref"A1"))
+        assert(values.staticRange.map(_.end).contains(ref"A5"))
+        assert(dates.staticRange.map(_.start).contains(ref"B1"))
+        assert(dates.staticRange.map(_.end).contains(ref"B5"))
       case _ => fail("Expected TExpr.Call(XNPV)")
   }
 
@@ -1724,10 +1725,11 @@ class FormulaParserSpec extends ScalaCheckSuite:
     result match
       case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.xirr =>
         val (values, dates, guess) = call.args.asInstanceOf[FunctionSpecs.XirrArgs]
-        assert(values.start == ref"A1")
-        assert(values.end == ref"A5")
-        assert(dates.start == ref"B1")
-        assert(dates.end == ref"B5")
+        // GH-394: cashflow/date args are RangeLocations now; literal ranges parse as Local
+        assert(values.staticRange.map(_.start).contains(ref"A1"))
+        assert(values.staticRange.map(_.end).contains(ref"A5"))
+        assert(dates.staticRange.map(_.start).contains(ref"B1"))
+        assert(dates.staticRange.map(_.end).contains(ref"B5"))
         assert(guess.isEmpty)
       case _ => fail("Expected TExpr.Call(XIRR)")
   }
@@ -1738,8 +1740,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     result match
       case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.xirr =>
         val (values, _, guess) = call.args.asInstanceOf[FunctionSpecs.XirrArgs]
-        assert(values.start == ref"A1")
-        assert(values.end == ref"A5")
+        assert(values.staticRange.map(_.start).contains(ref"A1"))
+        assert(values.staticRange.map(_.end).contains(ref"A5"))
         assert(guess.isDefined)
       case _ => fail("Expected TExpr.Call(XIRR) with guess")
   }

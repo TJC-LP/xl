@@ -23,6 +23,8 @@ trait TExprCoercions:
     // GH-384: a defined name's runtime value comes from the workbook's name table — coerce it
     // at evaluation time like a call result (=EOMONTH(named_date, 0), =IF(case=2, ...))
     case _: TExpr.NameRef => true
+    // GH-394: sheet-qualified names likewise (=EOMONTH(Model!named_date, 0))
+    case _: TExpr.SheetNameRef => true
     case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
         _: TExpr.Percent =>
       true

@@ -98,18 +98,19 @@ class ExternalRefSpec extends ScalaCheckSuite:
         case Left(err) => fail(s"parse failed for $text: $err")
     }
 
-  test("parse: LOCAL-literal-range slots reject external ranges naming the construct"):
-    // MATCH/INDEX/XLOOKUP array slots require a LOCAL literal range (same envelope as
-    // INDIRECT/OFFSET there); the rejection must name the unsupported construct, and cached
-    // cells bearing these shapes still pin via the pinnedExternalCache parse-failure fallback
+  test("parse: former LOCAL-literal-range slots now accept external ranges (GH-394)"):
+    // GH-394 migrated the MATCH/INDEX/XLOOKUP/XIRR array slots from local-only CellRange to
+    // RangeLocation, so external ranges PARSE like the SUMIF slots (GH-353): the parsed shape
+    // carries External, evaluation is the friendly external-unsupported error, and cached
+    // cells bearing these shapes pin via containsExternalRef (no longer via the parse-failure
+    // fallback)
     List(
       "=XLOOKUP(1, [2]Book1!A1:A9, B1:B9)",
       "=MATCH(1, [2]Book1!A1:A9, 0)"
     ).foreach { text =>
       FormulaParser.parse(text) match
-        case Left(err) =>
-          assert(err.toString.contains("external-workbook"), s"unhelpful rejection for $text: $err")
-        case Right(v) => fail(s"expected parse rejection for $text, got $v")
+        case Right(expr) => assert(TExpr.containsExternalRef(expr), s"not external: $text")
+        case Left(err) => fail(s"parse failed for $text: $err")
     }
 
   // ==================== Printer round-trips ====================

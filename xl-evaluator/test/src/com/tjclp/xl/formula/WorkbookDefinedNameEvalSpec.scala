@@ -213,3 +213,199 @@ class WorkbookDefinedNameEvalSpec extends FunSuite:
     assert(!result.isClean)
     assertEquals(result.errors.map(_.ref), Vector(a1))
   }
+
+  // ==========================================================================
+  // GH-394: names + sheet-qualified refs in RANGE-TYPED argument positions
+  // ==========================================================================
+
+  test("GH-394: =VLOOKUP(x, named_table, 2) parses and evaluates (issue repro)") {
+    // Lookup table on Model: A1:B3 = (10, 20), (20, 30), (30, 40)-ish — reuse model column A
+    // as keys and add a value column
+    val sheet = model
+      .put(ARef.from0(1, 0), num(101))
+      .put(ARef.from0(1, 2), num(103))
+    val wb = Workbook(sheet).withDefinedName("named_table", "Model!$A$1:$B$3")
+    assertEquals(
+      wb.evaluateFormula("=VLOOKUP(10, named_table, 2, FALSE)", "Model"),
+      Right(num(101))
+    )
+  }
+
+  test("GH-394: =SUMIF(named_range, criteria) works") {
+    val wb = Workbook(model).withDefinedName("rev_range", "Model!$A$1:$A$3")
+    assertEquals(
+      wb.evaluateFormula("=SUMIF(rev_range, \">15\")", "Model"),
+      Right(num(50)) // 20 + 30
+    )
+  }
+
+  test("GH-394: =INDEX(named_range, n) and =MATCH(x, named_range) work") {
+    val wb = Workbook(model).withDefinedName("rev_range", "Model!$A$1:$A$3")
+    assertEquals(wb.evaluateFormula("=INDEX(rev_range, 2)", "Model"), Right(num(20)))
+    assertEquals(
+      wb.evaluateFormula("=MATCH(30, rev_range, 0)", "Model"),
+      Right(CellValue.Number(BigDecimal(3)))
+    )
+  }
+
+  test("GH-394: XIRR with sheet-qualified literal ranges parses WITHOUT sheet context") {
+    // Field repro: `xl eval "=XIRR(S!A1:B1,S!A2:B2)"` failed at parse with
+    // InvalidArguments(XIRR,0,range,...) while the in-sheet form worked
+    val serial2020 = CellValue.Number(
+      BigDecimal(CellValue.dateTimeToExcelSerial(java.time.LocalDateTime.of(2020, 1, 1, 0, 0)))
+    )
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ARef.from0(0, 0), num(-1000)) // S!A1
+      .put(ARef.from0(1, 0), num(1100)) // S!B1
+      .put(ARef.from0(0, 1), serial2020) // S!A2
+      .put(
+        ARef.from0(1, 1),
+        CellValue.DateTime(java.time.LocalDateTime.of(2021, 1, 1, 0, 0))
+      ) // S!B2
+    val wb = Workbook(sheet)
+    // Parse with NO sheet context (the ad-hoc eval path)
+    val parsed = FormulaParser.parse("=XIRR(S!A1:B1,S!A2:B2)")
+    assert(parsed.isRight, s"sheet-qualified ranges must parse in range slots, got $parsed")
+    wb.evaluateFormula("=XIRR(S!A1:B1, S!A2:B2)", "S") match
+      case Right(CellValue.Number(rate)) =>
+        assert((rate.toDouble - 0.1).abs < 0.01, s"expected ~0.1, got $rate")
+      case other => fail(s"expected XIRR rate, got $other")
+  }
+
+  test("GH-394: NPV/XNPV with sheet-qualified ranges evaluate") {
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ARef.from0(0, 0), num(100))
+      .put(ARef.from0(0, 1), num(200))
+    val wb = Workbook(sheet)
+    wb.evaluateFormula("=NPV(0.1, S!A1:A2)", "S") match
+      case Right(CellValue.Number(v)) =>
+        val expected = 100.0 / 1.1 + 200.0 / 1.21
+        assert((v.toDouble - expected).abs < 0.01, s"got $v, expected ~$expected")
+      case other => fail(s"expected NPV value, got $other")
+  }
+
+  test("GH-394: =Model!case (sheet-qualified NAME) parses and evaluates") {
+    val wb = Workbook(model).withDefinedName("case", "Model!$B$2")
+    val parsed = FormulaParser.parse("=Model!case")
+    assert(parsed.isRight, s"sheet-qualified name must parse, got $parsed")
+    assertEquals(wb.evaluateFormula("=Model!case", "Model"), Right(num(2)))
+    // and from ANOTHER sheet (the point of qualification)
+    val other = Sheet(SheetName.unsafe("Other"))
+    val wb2 = Workbook(model, other).withDefinedName("case", "Model!$B$2")
+    assertEquals(wb2.evaluateFormula("=Model!case*10", "Other"), Right(num(20)))
+  }
+
+  test("GH-394: sheet-qualified name picks the SHEET-SCOPED binding of its qualifier") {
+    val other = Sheet(SheetName.unsafe("Other")).put(a1, num(99))
+    val wb0 = Workbook(model, other)
+    val wb = withName(
+      withName(wb0, DefinedName("case", "Model!$B$2")), // workbook-scoped -> 2
+      DefinedName("case", "Other!$A$1", localSheetId = Some(1)) // Other-scoped -> 99
+    )
+    assertEquals(wb.evaluateFormula("=Other!case", "Model"), Right(num(99)))
+  }
+
+  test("GH-394: name bound to a CONSTANT in a range slot is a clean error VALUE, not a crash") {
+    val wb = Workbook(model).withDefinedName("tax_rate", "0.25")
+    wb.evaluateFormula("=SUMIF(tax_rate, \">0\")", "Model") match
+      case Right(CellValue.Error(_)) => () // Excel-class error value
+      case Left(err) =>
+        // a clean per-cell Left is also acceptable; a THROW is not (this line proves no throw)
+        assert(err.message.contains("tax_rate"), s"error should name the identifier: $err")
+      case Right(v) => fail(s"constant name in range slot must not evaluate to $v")
+  }
+
+  test("GH-394: unknown name in a range slot is a clean error naming the identifier") {
+    val wb = Workbook(model)
+    wb.evaluateFormula("=SUM(INDEX(no_such_table, 1))", "Model") match
+      case Right(CellValue.Error(_)) => ()
+      case Left(err) => assert(err.message.contains("no_such_table"), s"got: ${err.message}")
+      case Right(v) => fail(s"unknown name must not evaluate, got $v")
+  }
+
+  test("GH-394: name whose target is a single CELL acts as a 1x1 range in range slots") {
+    val wb = Workbook(model).withDefinedName("case", "Model!$B$2")
+    assertEquals(wb.evaluateFormula("=SUMIF(case, \">0\")", "Model"), Right(num(2)))
+  }
+
+  test("GH-394: XLOOKUP with named lookup/return ranges") {
+    val sheet = model
+      .put(ARef.from0(1, 0), num(101))
+      .put(ARef.from0(1, 1), num(102))
+      .put(ARef.from0(1, 2), num(103))
+    val wb = Workbook(sheet)
+      .withDefinedName("keys", "Model!$A$1:$A$3")
+      .withDefinedName("vals", "Model!$B$1:$B$3")
+    assertEquals(
+      wb.evaluateFormula("=XLOOKUP(20, keys, vals)", "Model"),
+      Right(num(102))
+    )
+  }
+
+  test("GH-394: NETWORKDAYS holiday range accepts a sheet-qualified range and a name") {
+    val sheet = Sheet(SheetName.unsafe("Cal"))
+      .put(ARef.from0(0, 0), CellValue.DateTime(java.time.LocalDateTime.of(2025, 1, 6, 0, 0)))
+      .put(ARef.from0(1, 0), CellValue.DateTime(java.time.LocalDateTime.of(2025, 1, 10, 0, 0)))
+      .put(ARef.from0(2, 0), CellValue.DateTime(java.time.LocalDateTime.of(2025, 1, 8, 0, 0)))
+    val wb = Workbook(sheet).withDefinedName("holidays", "Cal!$C$1:$C$1")
+    assertEquals(
+      wb.evaluateFormula("=NETWORKDAYS(A1, B1, Cal!C1:C1)", "Cal"),
+      Right(num(4))
+    )
+    assertEquals(
+      wb.evaluateFormula("=NETWORKDAYS(A1, B1, holidays)", "Cal"),
+      Right(num(4))
+    )
+  }
+
+  test("GH-394: Excel name characters '.' and '\\' parse and resolve (Sales.Total)") {
+    val wb = Workbook(model).withDefinedName("Sales.Total", "Model!$A$1:$A$3")
+    assertEquals(wb.evaluateFormula("=SUM(Sales.Total)", "Model"), Right(num(60)))
+    assertEquals(wb.evaluateFormula("=Sales.Total*0+1", "Model"), Right(num(1)))
+  }
+
+  test("GH-394: dotted LET binding names work and number literals (3.14) are unaffected") {
+    val wb = Workbook(model)
+    assertEquals(
+      wb.evaluateFormula("=LET(sales.total, 5, sales.total*2)", "Model"),
+      Right(num(10))
+    )
+    assertEquals(
+      wb.evaluateFormula("=3.14*100", "Model"),
+      Right(CellValue.Number(BigDecimal(314)))
+    )
+  }
+
+  test("GH-394: round-trip — named and sheet-qualified range args print byte-identically") {
+    val formulas = List(
+      "=VLOOKUP(10, named_table, 2, FALSE)",
+      "=SUMIF(rev_range, \">15\")",
+      "=XIRR(Model!A1:A3, Model!B1:B3)",
+      "=INDEX(rev_range, 2)",
+      "=Model!case",
+      "=SUM(Sales.Total)"
+    )
+    formulas.foreach { f =>
+      FormulaParser.parse(f) match
+        case Right(expr) =>
+          assertEquals(FormulaPrinter.print(expr), f, s"print mismatch for $f")
+          assertEquals(FormulaParser.parse(FormulaPrinter.print(expr)), Right(expr))
+        case Left(err) => fail(s"parse failed for $f: $err")
+    }
+  }
+
+  test("GH-394: recalculate() orders computed cells before a name-in-range-slot dependent") {
+    // Model!A1..A3 are COMPUTED; Calc!A1 aggregates them through a NAMED range in a
+    // range-typed slot. Without the workbook-level name edges, Kahn could order Calc!A1
+    // first and read stale/uncached precedents.
+    val m = Sheet(SheetName.unsafe("Model"))
+      .put(ARef.from0(0, 0), formula("=1+9")) // 10
+      .put(ARef.from0(0, 1), formula("=A1*2")) // 20
+      .put(ARef.from0(0, 2), formula("=A2+10")) // 30
+    val calc = Sheet(SheetName.unsafe("Calc"))
+      .put(a1, formula("=SUMIF(rev_range, \">15\")"))
+    val wb = Workbook(m, calc).withDefinedName("rev_range", "Model!$A$1:$A$3")
+    val result = wb.recalculate()
+    assert(result.isClean, s"expected clean recalc, got: ${result.errors.map(_.render)}")
+    assertEquals(cached(result.workbook, "Calc", a1), Some(num(50))) // 20 + 30
+  }
