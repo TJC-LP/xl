@@ -74,8 +74,14 @@ final case class Cell(
   )
   def clearComment: Cell = copy(comment = None)
 
-  /** Add hyperlink to cell */
-  def withHyperlink(url: String): Cell = copy(hyperlink = Some(url))
+  /**
+   * Add hyperlink to cell.
+   *
+   * A single LEADING '#' is stripped (GH-406): the `#Sheet1!A1` internal-link dialect is common,
+   * but the OOXML `location` attribute wants no '#'. External URLs start with a scheme, so their
+   * fragments (`https://x/page#s`) are untouched.
+   */
+  def withHyperlink(url: String): Cell = copy(hyperlink = Some(url.stripPrefix("#")))
 
   /** Clear hyperlink */
   def clearHyperlink: Cell = copy(hyperlink = None)

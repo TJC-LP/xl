@@ -145,14 +145,29 @@ case class OoxmlWorkbook(
       }
     copy(sheets = updatedRefs)
 
+  /**
+   * Preserved CT_Workbook children from `otherElements` with the given label, in source order
+   * (fileRecoveryPr is maxOccurs>1). GH-397: these are emitted at their canonical schema slots by
+   * both backends — appending them after extLst produced the exact child-order violation the
+   * structural lint flags, on every surgical write.
+   */
+  private def slotted(labels: Seq[String]): Seq[Elem] =
+    labels.flatMap(label => otherElements.filter(_.label == label))
+
+  /** `otherElements` with no canonical slot (unknown labels), emitted last like before. */
+  private def unslottedOtherElements: Seq[Elem] =
+    otherElements.filterNot(e => OoxmlWorkbook.slottedLabels.contains(e.label))
+
   def toXml: Elem =
     val children = Seq.newBuilder[Node]
 
     // Emit elements in OOXML Part 1 schema order (critical for Excel compatibility)
     fileVersion.foreach(children += _)
+    slotted(OoxmlWorkbook.preservedAfterFileVersion).foreach(children += _)
     workbookPr.foreach(children += _)
     alternateContent.foreach(children += _)
     revisionPtr.foreach(children += _)
+    slotted(OoxmlWorkbook.preservedAfterWorkbookPr).foreach(children += _)
     bookViews.foreach(children += _)
 
     // Sheets element (regenerated with current names/order/visibility)
@@ -176,17 +191,23 @@ case class OoxmlWorkbook(
     }
     children += Elem(null, "sheets", Null, TopScope, minimizeEmpty = false, sheetElems*)
 
+    // GH-397: functionGroups / externalReferences (between sheets and definedNames)
+    slotted(OoxmlWorkbook.preservedAfterSheets).foreach(children += _)
+
     // Defined names (CRITICAL - preserve all named ranges)
     definedNames.foreach(children += _)
 
     // Calculation properties
     calcPr.foreach(children += _)
 
+    // GH-397: oleSize .. webPublishObjects (between calcPr and extLst)
+    slotted(OoxmlWorkbook.preservedAfterCalcPr).foreach(children += _)
+
     // Extensions
     extLst.foreach(children += _)
 
-    // Any other elements
-    otherElements.foreach(children += _)
+    // Any other elements (no canonical slot)
+    unslottedOtherElements.foreach(children += _)
 
     val scope = Option(rootScope).getOrElse(defaultWorkbookScope)
     val attrs = Option(rootAttributes).getOrElse(Null)
@@ -202,9 +223,11 @@ case class OoxmlWorkbook(
 
     SaxWriter.withAttributes(writer, writer.combinedAttributes(scope, attrs)*) {
       fileVersion.foreach(writer.writeElem)
+      slotted(OoxmlWorkbook.preservedAfterFileVersion).foreach(writer.writeElem)
       workbookPr.foreach(writer.writeElem)
       alternateContent.foreach(writer.writeElem)
       revisionPtr.foreach(writer.writeElem)
+      slotted(OoxmlWorkbook.preservedAfterWorkbookPr).foreach(writer.writeElem)
       bookViews.foreach(writer.writeElem)
 
       writer.startElement("sheets")
@@ -223,10 +246,13 @@ case class OoxmlWorkbook(
       }
       writer.endElement() // sheets
 
+      // GH-397: preserved CT_Workbook children at their canonical slots (mirrors toXml)
+      slotted(OoxmlWorkbook.preservedAfterSheets).foreach(writer.writeElem)
       definedNames.foreach(writer.writeElem)
       calcPr.foreach(writer.writeElem)
+      slotted(OoxmlWorkbook.preservedAfterCalcPr).foreach(writer.writeElem)
       extLst.foreach(writer.writeElem)
-      otherElements.foreach(writer.writeElem)
+      unslottedOtherElements.foreach(writer.writeElem)
     }
 
     writer.endElement()
@@ -241,6 +267,60 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   /** Sequential rId1..N — the fresh-workbook id scheme (matches Relationships.workbook). */
   private[ooxml] def sequentialRelIds(count: Int): Vector[String] =
     (1 to count).map(idx => s"rId$idx").toVector
+
+  // ===== Preserved known CT_Workbook children (GH-397) =====
+  // CT_Workbook members captured in `otherElements` (no dedicated field) that must be re-emitted at
+  // their canonical schema positions rather than appended after extLst — appending produced the
+  // exact child-order violation the structural lint flags, on EVERY surgical write (workbook.xml
+  // always regenerates). The worksheet preservedAfter* groups (GH-232) are the template. Note
+  // mc:AlternateContent / xr:revisionPtr are markup-compatibility members, not CT_Workbook sequence
+  // members — they ride between workbookPr and workbookProtection like Excel emits them.
+  private[ooxml] val preservedAfterFileVersion: Seq[String] = Seq("fileSharing")
+  private[ooxml] val preservedAfterWorkbookPr: Seq[String] = Seq("workbookProtection")
+  private[ooxml] val preservedAfterSheets: Seq[String] =
+    Seq("functionGroups", "externalReferences")
+  private[ooxml] val preservedAfterCalcPr: Seq[String] = Seq(
+    "oleSize",
+    "customWorkbookViews",
+    "pivotCaches",
+    "smartTagPr",
+    "smartTagTypes",
+    "webPublishing",
+    "fileRecoveryPr",
+    "webPublishObjects"
+  )
+
+  /** Union of the position-slotted labels (emitted by the groups above, never re-appended). */
+  private[ooxml] val slottedLabels: Set[String] =
+    (preservedAfterFileVersion ++ preservedAfterWorkbookPr ++ preservedAfterSheets ++
+      preservedAfterCalcPr).toSet
+
+  /**
+   * The full CT_Workbook child sequence (ECMA-376 Part 1 §18.2.27, transitional sml.xsd). Single
+   * source of truth for the writer's slot positions (WorkbookPreservationInvariantSpec ties the
+   * emission order to it) and for the structural lint's child-order check (GH-397).
+   */
+  val canonicalChildOrder: Vector[String] = Vector(
+    "fileVersion",
+    "fileSharing",
+    "workbookPr",
+    "workbookProtection",
+    "bookViews",
+    "sheets",
+    "functionGroups",
+    "externalReferences",
+    "definedNames",
+    "calcPr",
+    "oleSize",
+    "customWorkbookViews",
+    "pivotCaches",
+    "smartTagPr",
+    "smartTagTypes",
+    "webPublishing",
+    "fileRecoveryPr",
+    "webPublishObjects",
+    "extLst"
+  )
 
   /** Create workbook from domain model */
   def fromDomain(wb: Workbook): OoxmlWorkbook =

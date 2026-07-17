@@ -67,7 +67,13 @@ object WorkbookStyles:
           val idOpt = fmtElem.attribute("numFmtId").flatMap(attr => attr.text.toIntOption)
           val codeOpt = fmtElem.attribute("formatCode").map(_.text)
           (idOpt, codeOpt) match
-            case (Some(id), Some(code)) => Some(id -> NumFmt.parse(code))
+            // A <numFmt> table entry is by definition a custom declaration: keep the id -> code
+            // binding VERBATIM, never NumFmt.parse it to a built-in enum case. Collapsing a
+            // built-in-equal code (e.g. "0.00%") discarded the code and the writer degraded the
+            // still-referenced custom id to formatCode="General" on the next write (GH-404).
+            // Cost of verbatim: a file-declared Custom("0.00%") no longer canonicalKey-dedups
+            // with a programmatic NumFmt.PercentDecimal — an extra xf, bloat not corruption.
+            case (Some(id), Some(code)) => Some(id -> NumFmt.Custom(code))
             case _ => None
         }.toMap
       case Some(_) => Map.empty

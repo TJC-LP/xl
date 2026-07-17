@@ -5,7 +5,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.sheets.syntax.*
-import com.tjclp.xl.styles.{CellStyle, Font, Fill, Color}
+import com.tjclp.xl.styles.{CellStyle, Font, Fill, Color, NumFmt}
 import com.tjclp.xl.macros.ref
 
 /** Tests for StyleIndex.fromWorkbook with style remapping */
@@ -235,5 +235,43 @@ class StyleIndexSpec extends FunSuite:
         assert(fontIds.exists(_ > 0), "No non-default fontId found in cellXfs")
         assert(fillIds.exists(_ > 1), "No non-default fillId found in cellXfs (0=none, 1=gray125)")
       finally Files.deleteIfExists(outputPath)
+    finally Files.deleteIfExists(path)
+  }
+
+  test("fromWorkbookWithSource keeps built-in-equal declared codes and dedups new uses (GH-404)") {
+    import java.nio.file.Files
+
+    // Source file declares numFmtId 164 -> "0.00%", a code equal to built-in id 10's string
+    val initialSheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(BigDecimal("0.073")))
+      .withCellStyle(ref"A1", CellStyle.default.withNumFmt(NumFmt.Custom("0.00%")))
+    val initialWb = Workbook(Vector(initialSheet))
+    val path = Files.createTempFile("gh404-styleindex", ".xlsx")
+    try
+      XlsxWriter.write(initialWb, path).fold(err => fail(s"Write failed: $err"), identity)
+      val readWb = XlsxReader.read(path).fold(err => fail(s"Read failed: $err"), identity)
+
+      // A new cell uses the SAME custom code; another introduces a genuinely new code
+      val modifiedSheet = readWb.sheets.head
+        .put(ref"B1", CellValue.Number(BigDecimal("0.5")))
+        .withCellStyle(ref"B1", CellStyle.default.withNumFmt(NumFmt.Custom("0.00%")))
+        .put(ref"C1", CellValue.Number(BigDecimal("2")))
+        .withCellStyle(ref"C1", CellStyle.default.withNumFmt(NumFmt.Custom("0.000000")))
+      val modifiedWb = readWb.put(modifiedSheet)
+
+      val (index, _) = StyleIndex.fromWorkbook(modifiedWb)
+
+      // The declared binding survives verbatim under its original id (not collapsed to a
+      // built-in enum case, which is what degraded to formatCode="General" in GH-404)...
+      assertEquals(
+        index.numFmts.filter(_._2 == NumFmt.Custom("0.00%")).map(_._1),
+        Vector(164),
+        s"declared 0.00% binding corrupted: ${index.numFmts}"
+      )
+      // ...and the genuinely new code got its own custom id
+      assert(
+        index.numFmts.exists { case (id, fmt) => fmt == NumFmt.Custom("0.000000") && id > 164 },
+        s"new custom code missing: ${index.numFmts}"
+      )
     finally Files.deleteIfExists(path)
   }

@@ -20,6 +20,7 @@ import com.tjclp.xl.cli.commands.{
   DiffCommands,
   FilterCommands,
   ImportCommands,
+  LintCommands,
   ReadCommands,
   SheetCommands,
   StreamingReadCommands,
@@ -27,6 +28,7 @@ import com.tjclp.xl.cli.commands.{
   WorkbookCommands,
   WriteCommands
 }
+import com.tjclp.xl.ooxml.lint.WorkbookLint
 import com.tjclp.xl.cli.raster.{
   BatikRasterizer,
   CairoSvg,
@@ -131,6 +133,14 @@ object Main
           IO.println(Format.errorSimple(s"Unexpected diff command: $other")).as(ExitCode.Error)
     }
 
+    // Lint: raw-zip structural validation (GH-397, no output file); custom exit codes
+    val lintOpts = (fileOpt, lintCmd).mapN { (file, cmd) =>
+      cmd match
+        case CliCommand.Lint(format) => runLint(file, format)
+        case other =>
+          IO.println(Format.errorSimple(s"Unexpected lint command: $other")).as(ExitCode.Error)
+    }
+
     // Info commands: no file required
     val infoOpts = functionsCmd.map(_ => runInfo())
     val rasterOpts = rasterizersCmd.map(_ => runRasterizers())
@@ -145,7 +155,7 @@ object Main
         }
         .map(src => batchDryRun(src).flatMap(IO.println).as(ExitCode.Success))
 
-    rasterOpts orElse infoOpts orElse standaloneOpts orElse diffOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
+    rasterOpts orElse infoOpts orElse standaloneOpts orElse diffOpts orElse lintOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
 
   // ==========================================================================
   // Global options
@@ -543,6 +553,56 @@ EXAMPLES:
   val diffCmd: Opts[CliCommand] =
     Opts.subcommand("diff", diffHelp) {
       (file2Opt, diffFormatOpt).mapN(CliCommand.Diff.apply)
+    }
+
+  // --- Lint command (GH-397) ---
+
+  private val lintHelp =
+    """Validate workbook package structure against the Excel-repair classes.
+
+Lints the RAW ZIP PARTS (never the parsed model — a full load would repair
+the very structure being checked). Flags what Excel repairs loudly but every
+lenient reader accepts silently:
+  - Child-element order in xl/workbook.xml (CT_Workbook) and each worksheet
+    (CT_Worksheet) vs the ECMA-376 schema sequence
+  - r:id references (sheet, externalReference, pivotCache, drawing,
+    legacyDrawing, hyperlink, tablePart, ...) that do not resolve in the
+    paired .rels, resolve to a relationship of the wrong type, or target a
+    part missing from the package
+
+USAGE:
+  xl -f report.xlsx lint
+  xl -f report.xlsx lint --format json       # Stable machine-readable schema
+
+FINDING CATEGORIES:
+  child-order | unresolved-rel-id | wrong-rel-type | missing-part
+
+EXIT CODES:
+  0 = no findings (package structure is clean)
+  1 = findings reported
+  2 = error (unreadable file, missing/malformed core part, ...)
+
+Docs: xl lint is read-only; it never repairs or rewrites the file.
+
+EXAMPLES:
+  xl -f deliverable.xlsx lint && echo "safe to send"
+  xl -f deliverable.xlsx lint --format json | jq '.findings'"""
+
+  private val lintFormatOpt: Opts[LintFormat] =
+    Opts
+      .option[String]("format", "Output format: text (default), json")
+      .withDefault("text")
+      .mapValidated { s =>
+        s.toLowerCase match
+          case "text" => cats.data.Validated.valid(LintFormat.Text)
+          case "json" => cats.data.Validated.valid(LintFormat.Json)
+          case other =>
+            cats.data.Validated.invalidNel(s"Unknown format: $other. Use text or json")
+      }
+
+  val lintCmd: Opts[CliCommand] =
+    Opts.subcommand("lint", lintHelp) {
+      lintFormatOpt.map(CliCommand.Lint.apply)
     }
 
   // --- Info commands (no --file required) ---
@@ -1318,6 +1378,13 @@ EXAMPLES:
         val seriesNamesOpt = Opts
           .option[String]("series-names", "Comma-separated literal series names (positional)")
           .orNone
+        val seriesColorsOpt = Opts
+          .option[String](
+            "series-colors",
+            "Comma-separated series colors (positional), e.g. #307FE2,#005670; " +
+              "unset series cycle the theme accents (bar/column/line only)"
+          )
+          .orNone
         val titleOpt = Opts.option[String]("title", "Chart title").orNone
         val legendOpt = Opts
           .option[String](
@@ -1329,8 +1396,17 @@ EXAMPLES:
           "at",
           "Placement: a range (chart stretches over it) or a single cell (default size)"
         )
-        (typeOpt, groupingOpt, dataOpt, categoriesOpt, seriesNamesOpt, titleOpt, legendOpt, atOpt)
-          .mapN(CliCommand.ChartAdd.apply)
+        (
+          typeOpt,
+          groupingOpt,
+          dataOpt,
+          categoriesOpt,
+          seriesNamesOpt,
+          seriesColorsOpt,
+          titleOpt,
+          legendOpt,
+          atOpt
+        ).mapN(CliCommand.ChartAdd.apply)
       }
     }
 
@@ -1598,6 +1674,22 @@ EXAMPLES:
         IO.println(output).as(if identical then ExitCode.Success else ExitCode(1))
       case Left(err) =>
         IO.println(Format.errorSimple(err.getMessage)).as(ExitCode(2))
+    }
+
+  /**
+   * Run the lint command with its exit-code convention: 0 = clean, 1 = findings, 2 = error
+   * (unreadable file, missing/malformed core part). Opens the zip directly — NOT ExcelIO.read —
+   * because a full parse would repair/normalize the very structure lint inspects (GH-397).
+   */
+  private[cli] def runLint(file: Path, format: LintFormat): IO[ExitCode] =
+    IO.blocking(WorkbookLint.lint(file)).flatMap {
+      case Right(findings) =>
+        val output = format match
+          case LintFormat.Text => LintCommands.renderText(file.toString, findings)
+          case LintFormat.Json => LintCommands.renderJson(file.toString, findings)
+        IO.println(output).as(if findings.isEmpty then ExitCode.Success else ExitCode(1))
+      case Left(err) =>
+        IO.println(Format.errorSimple(err.message)).as(ExitCode(2))
     }
 
   private def runStandalone(
@@ -2250,7 +2342,17 @@ EXAMPLES:
         WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _)
       )
 
-    case CliCommand.ChartAdd(typeStr, grouping, data, categories, seriesNames, title, legend, at) =>
+    case CliCommand.ChartAdd(
+          typeStr,
+          grouping,
+          data,
+          categories,
+          seriesNames,
+          seriesColors,
+          title,
+          legend,
+          at
+        ) =>
       requireOutput(outputOpt, backendOpt, stream)(
         ChartCommands.chartAdd(
           wb,
@@ -2260,6 +2362,7 @@ EXAMPLES:
           data,
           categories,
           seriesNames,
+          seriesColors,
           title,
           legend,
           at,
@@ -2297,6 +2400,10 @@ EXAMPLES:
     // Diff has its own runner (two input files, custom exit codes) — never reaches here
     case CliCommand.Diff(_, _) =>
       IO.raiseError(new Exception("Internal: diff is dispatched via runDiff"))
+
+    // Lint has its own runner (raw-zip inspection, custom exit codes) — never reaches here
+    case CliCommand.Lint(_) =>
+      IO.raiseError(new Exception("Internal: lint is dispatched via runLint"))
 
   // ==========================================================================
   // Helpers

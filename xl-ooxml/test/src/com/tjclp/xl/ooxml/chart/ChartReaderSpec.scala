@@ -127,9 +127,31 @@ class ChartReaderSpec extends FunSuite:
         "<c:chart>",
         """<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice/></mc:AlternateContent><c:chart>"""
       ),
-      "ser spPr with fill" -> minimalBar.replace(
+      // GH-407: bar ser fills are captured now, but only the EXACT emitted shape — anything
+      // richer stays visible-state-we-cannot-represent and rejects
+      "ser spPr gradient fill" -> minimalBar.replace(
         "<c:val>",
-        """<c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr><c:val>"""
+        """<c:spPr><a:gradFill><a:gsLst/></a:gradFill></c:spPr><c:val>"""
+      ),
+      "ser spPr srgbClr with transform child" -> minimalBar.replace(
+        "<c:val>",
+        """<c:spPr><a:solidFill><a:srgbClr val="FF0000"><a:lumMod val="60000"/></a:srgbClr></a:solidFill></c:spPr><c:val>"""
+      ),
+      "ser spPr srgbClr bad hex" -> minimalBar.replace(
+        "<c:val>",
+        """<c:spPr><a:solidFill><a:srgbClr val="RED"/></a:solidFill></c:spPr><c:val>"""
+      ),
+      "ser spPr solidFill + ln combined" -> minimalBar.replace(
+        "<c:val>",
+        """<c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr><c:val>"""
+      ),
+      "line-shaped spPr on a bar ser" -> minimalBar.replace(
+        "<c:val>",
+        """<c:spPr><a:ln><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr><c:val>"""
+      ),
+      "dPt on a bar ser" -> minimalBar.replace(
+        "<c:val>",
+        """<c:dPt><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></c:spPr></c:dPt><c:val>"""
       ),
       "title without tx" -> minimalBar.replace(
         "<c:chart>",
@@ -159,11 +181,110 @@ class ChartReaderSpec extends FunSuite:
           """<c:grouping val="standard"/>"""
         )
         .replace("""<c:gapWidth val="150"/>""", "")
-        .replace("</c:ser>", """<c:smooth val="1"/></c:ser>""")
+        .replace("</c:ser>", """<c:smooth val="1"/></c:ser>"""),
+      "bar-shaped spPr on a line ser" -> minimalBar
+        .replace("c:barChart>", "c:lineChart>")
+        .replace(
+          """<c:barDir val="col"/><c:grouping val="clustered"/>""",
+          """<c:grouping val="standard"/>"""
+        )
+        .replace("""<c:gapWidth val="150"/>""", "")
+        .replace(
+          "<c:val>",
+          """<c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr><c:val>"""
+        )
     )
     cases.foreach { case (label, xml) =>
       assertEquals(ChartReader.parse(xml), None, s"case '$label' must reject:\n$xml")
     }
+  }
+
+  // ===== GH-407: emitted spPr fills are captured; pie dPts accepted-and-dropped =====
+
+  test("GH-407: bar solidFill and line ln/solidFill spPr shapes capture into Series.fill") {
+    import com.tjclp.xl.styles.color.Color
+    val barFill = minimalBar.replace(
+      "<c:val>",
+      """<c:spPr><a:solidFill><a:srgbClr val="307FE2"/></a:solidFill></c:spPr><c:val>"""
+    )
+    assertEquals(
+      ChartReader.parse(barFill).flatMap(_.series.headOption).flatMap(_.fill),
+      Some(Color.Rgb(0xff307fe2)): Option[Color.Rgb]
+    )
+    val lineFill = minimalBar
+      .replace("c:barChart>", "c:lineChart>")
+      .replace(
+        """<c:barDir val="col"/><c:grouping val="clustered"/>""",
+        """<c:grouping val="standard"/>"""
+      )
+      .replace("""<c:gapWidth val="150"/>""", "")
+      .replace(
+        "<c:val>",
+        """<c:spPr><a:ln><a:solidFill><a:srgbClr val="307FE2"/></a:solidFill></a:ln></c:spPr><c:val>"""
+      )
+    assertEquals(
+      ChartReader.parse(lineFill).flatMap(_.series.headOption).flatMap(_.fill),
+      Some(Color.Rgb(0xff307fe2)): Option[Color.Rgb]
+    )
+  }
+
+  test("GH-407: the fixture's no-op spPr still parses with NO fill captured") {
+    val noOp = minimalBar.replace(
+      "<c:val>",
+      """<c:spPr><a:ln><a:prstDash val="solid"/></a:ln></c:spPr><c:val>"""
+    )
+    val parsed = ChartReader.parse(noOp)
+    assert(parsed.isDefined, s"no-op spPr must stay in-fence: $noOp")
+    assertEquals(parsed.flatMap(_.series.headOption).flatMap(_.fill), None)
+  }
+
+  private def pieWith(extras: String): String =
+    """<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      |<c:chart><c:plotArea>
+      |<c:pieChart><c:varyColors val="1"/>
+      |<c:ser><c:idx val="0"/><c:order val="0"/>
+      |EXTRAS<c:val><c:numRef><c:f>Data!$B$2:$B$4</c:f></c:numRef></c:val>
+      |</c:ser><c:firstSliceAng val="0"/></c:pieChart>
+      |</c:plotArea><c:plotVisOnly val="1"/></c:chart></c:chartSpace>""".stripMargin
+      .replace("EXTRAS", extras)
+
+  private def dPt(idx: Int, hex: String): String =
+    s"""<c:dPt><c:idx val="$idx"/><c:spPr><a:solidFill><a:srgbClr val="$hex"/></a:solidFill></c:spPr></c:dPt>"""
+
+  test("GH-407: pie accent-cycle dPts (one per value cell) are accepted-and-dropped") {
+    import com.tjclp.xl.styles.color.Color
+    val exact = pieWith(dPt(0, "4472C4") + dPt(1, "ED7D31") + dPt(2, "A5A5A5"))
+    val parsed = ChartReader.parse(exact)
+    assert(parsed.isDefined, s"writer-shaped pie dPts must parse: $exact")
+    assertEquals(parsed.map(_.chartType), Some(ChartType.Pie))
+    assertEquals(parsed.flatMap(_.series.headOption).flatMap(_.fill), None)
+
+    // dPt-less pie (pre-GH-407 output) still parses
+    assert(ChartReader.parse(pieWith("")).isDefined)
+
+    // explicit series-level fill coexists with the accent dPts
+    val withFill = pieWith(
+      """<c:spPr><a:solidFill><a:srgbClr val="005670"/></a:solidFill></c:spPr>""" +
+        dPt(0, "4472C4") + dPt(1, "ED7D31") + dPt(2, "A5A5A5")
+    )
+    assertEquals(
+      ChartReader.parse(withFill).flatMap(_.series.headOption).flatMap(_.fill),
+      Some(Color.Rgb(0xff005670)): Option[Color.Rgb]
+    )
+  }
+
+  test("GH-407: pie dPts outside the exact accent-cycle shape reject to Preserved") {
+    val wrongColor = pieWith(dPt(0, "FF0000") + dPt(1, "ED7D31") + dPt(2, "A5A5A5"))
+    assertEquals(ChartReader.parse(wrongColor), None, "non-accent slice color must reject")
+    val wrongCount = pieWith(dPt(0, "4472C4"))
+    assertEquals(ChartReader.parse(wrongCount), None, "dPt count != value cells must reject")
+    val wrongOrder = pieWith(dPt(1, "ED7D31") + dPt(0, "4472C4") + dPt(2, "A5A5A5"))
+    assertEquals(ChartReader.parse(wrongOrder), None, "out-of-order idx must reject")
+    val richDPt = pieWith(
+      """<c:dPt><c:idx val="0"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></c:spPr></c:dPt>""" +
+        dPt(1, "ED7D31") + dPt(2, "A5A5A5")
+    )
+    assertEquals(ChartReader.parse(richDPt), None, "dPt with extra children must reject")
   }
 
   test("line chart with markers=none and smooth=0 parses; tx variants parse") {

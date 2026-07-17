@@ -9,10 +9,12 @@ import munit.FunSuite
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.charts.SeriesName
 import com.tjclp.xl.drawings.TestImages
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.ooxml.{TestFixtures, XlsxReader, XlsxWriter}
+import com.tjclp.xl.ooxml.{DefaultTheme, TestFixtures, XlsxReader, XlsxWriter}
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.units.Emu
 
 /**
@@ -68,6 +70,21 @@ class ChartWriteSpec extends FunSuite:
     wb.sheets(0).charts.headOption.getOrElse(fail("fixture chart missing"))
 
   /**
+   * Writer-materialized view of an authored chart (GH-407): a regenerated part always carries
+   * per-series fills (bar/line accent cycle unless explicit; pie fills only when explicit) and a
+   * c:tx ("Series N" literal for unnamed series), and the reader captures both — so a read-back
+   * chart equals this, not the bare authored value.
+   */
+  private def materialized(chart: Chart): Chart =
+    val pie = chart.chartType == ChartType.Pie
+    chart.copy(series = chart.series.zipWithIndex.map { case (s, i) =>
+      s.copy(
+        name = s.name.orElse(Some(SeriesName.Literal(s"Series ${i + 1}"))),
+        fill = if pie then s.fill else s.fill.orElse(Some(Color.Rgb(DefaultTheme.accentArgb(i))))
+      )
+    })
+
+  /**
    * Replace the first sheet's drawings through the tracked update path (the real caller shape — an
    * untracked direct copy on a CLEAN source-backed workbook takes the whole-file verbatim-copy fast
    * path and never reaches the drawing planner).
@@ -100,7 +117,7 @@ class ChartWriteSpec extends FunSuite:
 
     val readBack = reread(out)
     assertEquals(readBack.sheets(0).charts.size, 1)
-    assertEquals(readBack.sheets(0).charts(0).chart, edited.chart)
+    assertEquals(readBack.sheets(0).charts(0).chart, materialized(edited.chart))
   }
 
   test("data edit through Sheet.addChart-style update re-reads with regenerated caches") {
@@ -115,7 +132,7 @@ class ChartWriteSpec extends FunSuite:
     // caches regenerated from STORED values: B2=12, B3=19, B4=7 in the fixture
     assert(chartXml.contains("""<f>ChartData!$B$2:$B$4</f>"""), chartXml)
     assert(chartXml.contains("""<pt idx="0"><v>12</v></pt>"""), chartXml)
-    assertEquals(reread(out).sheets(0).charts(0).chart, widened)
+    assertEquals(reread(out).sheets(0).charts(0).chart, materialized(widened))
   }
 
   test("reorder+edit degenerate allocates a fresh part + appended rel; old part stays on disk") {
@@ -138,7 +155,7 @@ class ChartWriteSpec extends FunSuite:
     val drawings = readBack.sheets(0).drawings
     assertEquals(drawings.size, 2)
     drawings(1) match
-      case Drawing.ChartFrame(_, chart, _) => assertEquals(chart, edited.chart)
+      case Drawing.ChartFrame(_, chart, _) => assertEquals(chart, materialized(edited.chart))
       case other => fail(s"expected ChartFrame second, got $other")
   }
 
@@ -248,7 +265,7 @@ class ChartWriteSpec extends FunSuite:
 
     val readBack = reread(out)
     assertEquals(readBack.sheets(0).charts.size, 1)
-    assertEquals(readBack.sheets(0).charts(0).chart, chart)
+    assertEquals(readBack.sheets(0).charts(0).chart, materialized(chart))
     assertEquals(readBack.sheets(0).charts(0).name, "Chart 1") // writer default
   }
 
@@ -319,5 +336,8 @@ class ChartWriteSpec extends FunSuite:
     assert(c1.contains("""<pt idx="0"><v>7</v></pt>"""), c1)
     assert(c2.contains("<val><numRef><f>Ghost!$A$1:$A$2</f></numRef></val>"), c2)
     val readBack = reread(out)
-    assertEquals(readBack.sheets(1).charts.map(_.chart), Vector(chart, ghost))
+    assertEquals(
+      readBack.sheets(1).charts.map(_.chart),
+      Vector(materialized(chart), materialized(ghost))
+    )
   }

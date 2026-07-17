@@ -350,7 +350,7 @@ xl-cats-effect/src/com/tjclp/xl/io/
 
 ### Completed Modules (Additional)
 - `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 108 functions, dependency graph, structural editing, recalculation)
-- `xl-cli/` ✅ **Complete** (stateless `xl` CLI: 45 subcommands, 21 batch ops, rendering, streaming mode)
+- `xl-cli/` ✅ **Complete** (stateless `xl` CLI: 46 subcommands, 27 batch ops, rendering, streaming mode)
 - `xl-agent/` ✅ **Complete** (AI agent benchmark runner)
 - `xl-benchmarks/` ✅ **Complete** (WI-15 - JMH performance benchmarks)
 

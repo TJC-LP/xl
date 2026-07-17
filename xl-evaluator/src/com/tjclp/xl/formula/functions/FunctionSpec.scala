@@ -212,6 +212,14 @@ object ArgSpec:
         // never resolve at evaluation time, but the cell's Excel-written cache pins its value
         case TExpr.ExternalRange(index, name, range) :: tail =>
           Right((TExpr.RangeLocation.External(index, name, range), tail))
+        // GH-394: defined names are accepted in range-typed argument positions —
+        // =VLOOKUP(x, named_table, 2), =SUMIF(rev_range, ">1"), =SUMIF(Model!rev_range, …).
+        // The target range resolves at evaluation (Evaluator.resolveRangeLocation); a name
+        // bound to a non-range is a clean per-cell error there, never a parse failure.
+        case TExpr.NameRef(name) :: tail =>
+          Right((TExpr.RangeLocation.Name(name, None), tail))
+        case TExpr.SheetNameRef(sheet, name) :: tail =>
+          Right((TExpr.RangeLocation.Name(name, Some(sheet)), tail))
         case _ =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
 

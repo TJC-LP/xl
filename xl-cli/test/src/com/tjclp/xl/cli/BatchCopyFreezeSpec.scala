@@ -360,6 +360,31 @@ class BatchCopyFreezeSpec extends FunSuite:
     assertEquals(sheet2.freezePane, Some(FreezePane.At(ARef.from0(2, 2))))
   }
 
+  // =========================================================================
+  // batch hyperlink — '#' normalization (GH-406)
+  // =========================================================================
+
+  test("GH-406: batch hyperlink accepts both internal dialects ('#'-prefixed and bare)") {
+    val sheet = Sheet("Sheet1")
+      .put(ARef.from0(0, 0), CellValue.Text("a"))
+      .put(ARef.from0(0, 1), CellValue.Text("b"))
+    val wb = Workbook(Vector(sheet))
+
+    val json =
+      """[
+        |{"op":"hyperlink","ref":"A1","target":"#Sheet1!C3"},
+        |{"op":"hyperlink","ref":"A2","target":"Sheet1!C3"},
+        |{"op":"hyperlink","ref":"A3","target":"https://example.com/page#frag"}
+        |]""".stripMargin
+    val result = runBatch(wb, wb.sheets.headOption, json)
+    val s = result.sheets.headOption.getOrElse(fail("sheet missing"))
+
+    def linkAt(row: Int): Option[String] = s.cells.get(ARef.from0(0, row)).flatMap(_.hyperlink)
+    assertEquals(linkAt(0), Some("Sheet1!C3"), "leading '#' must be stripped")
+    assertEquals(linkAt(1), Some("Sheet1!C3"))
+    assertEquals(linkAt(2), Some("https://example.com/page#frag"), "URL fragments untouched")
+  }
+
   test("batch copy: invalid ref produces user-facing error (not bypass JVM exception)") {
     val sheet = Sheet("Test")
     val wb = Workbook(sheet)

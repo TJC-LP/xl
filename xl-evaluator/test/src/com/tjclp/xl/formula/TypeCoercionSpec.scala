@@ -561,6 +561,128 @@ class TypeCoercionSpec extends FunSuite:
     }
   }
 
+  // ============================================================================
+  // GH-395: variadic-aggregate DIRECT blank args are ignored (Excel parity),
+  // while scalar positions keep blank-as-zero
+  // ============================================================================
+
+  test("GH-395: =AVERAGE(A1, A2) ignores the blank direct arg (denominator is 1)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(10)))
+    // Pre-fix the blank coerced to a genuine 0 and AVERAGE divided by 2 (Excel: 10)
+    assertEquals(
+      sheet.evaluateFormula("=AVERAGE(A1, A2)"),
+      Right(CellValue.Number(BigDecimal(10)))
+    )
+  }
+
+  test("GH-395: =AVERAGE(blank, blank) is the #DIV/0! error VALUE") {
+    val sheet = sheetWith(ref"Z9" -> CellValue.Text("unrelated"))
+    assertEquals(
+      sheet.evaluateFormula("=AVERAGE(A1, A2)"),
+      Right(CellValue.Error(com.tjclp.xl.cells.CellError.Div0))
+    )
+  }
+
+  test("GH-395: =SUM(A1, A2) with blank stays 10 (blank-skip and blank-as-zero agree)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(10)))
+    assertEquals(sheet.evaluateFormula("=SUM(A1, A2)"), Right(CellValue.Number(BigDecimal(10))))
+    // and the scalar-operator blank-as-zero convention is untouched
+    assertEquals(sheet.evaluateFormula("=A2+1"), Right(CellValue.Number(BigDecimal(1))))
+    assertEquals(sheet.evaluateFormula("=ABS(A2)"), Right(CellValue.Number(BigDecimal(0))))
+  }
+
+  test("GH-395: =MIN/=MAX direct blank args are ignored, not folded as 0") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(5)),
+      ref"A3" -> CellValue.Number(BigDecimal(9))
+    )
+    // With blank-as-zero MIN would wrongly be 0
+    assertEquals(
+      sheet.evaluateFormula("=MIN(A1, A2, A3)"),
+      Right(CellValue.Number(BigDecimal(5)))
+    )
+    assertEquals(
+      sheet.evaluateFormula("=MAX(A1, A2, A3)"),
+      Right(CellValue.Number(BigDecimal(9)))
+    )
+  }
+
+  // ============================================================================
+  // GH-396: remaining coercion edges — the decoder tables mirror ScalarCoercion
+  // exactly (int positions, blank/Bool cells in date positions)
+  // ============================================================================
+
+  test("GH-396: =LEFT(\"hello\", A1) with blank A1 is \"\" (Empty is 0 in int positions)") {
+    // Issue repro: Excel evaluates LEFT("hello", <blank>) as LEFT("hello", 0) = ""
+    val sheet = sheetWith(ref"Z9" -> CellValue.Text("unrelated"))
+    assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", A1)"), Right(CellValue.Text("")))
+  }
+
+  test("GH-396: numeric-text cell in int position parses (coerceInteger mirror)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Text("3"))
+    assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", A1)"), Right(CellValue.Text("hel")))
+  }
+
+  test("GH-396: cached-formula Number cell in int position unwraps") {
+    val sheet =
+      sheetWith(ref"A1" -> CellValue.Formula("=1+2", Some(CellValue.Number(BigDecimal(3)))))
+    assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", A1)"), Right(CellValue.Text("hel")))
+  }
+
+  test("GH-396: cached-formula Text cell in int position parses numeric text") {
+    val sheet =
+      sheetWith(ref"A1" -> CellValue.Formula("=\"3\"", Some(CellValue.Text("3"))))
+    assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", A1)"), Right(CellValue.Text("hel")))
+  }
+
+  test("GH-396: fractional Number cell in int position TRUNCATES like Excel") {
+    // The cached-call boundary already truncated (GH-306/307 pin above); the direct-cell
+    // boundary must agree — LEFT("hello", 2.7) is "he" whether 2.7 is a literal, a call
+    // result, or a cell value
+    val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal("2.7")))
+    assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", A1)"), Right(CellValue.Text("he")))
+  }
+
+  test("GH-396: non-numeric text cell in int position is a clean error (not 0)") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Text("abc"))
+    val result = sheet.evaluateFormula("=LEFT(\"hello\", A1)")
+    assert(result.isLeft, s"expected error for non-numeric text in int position, got $result")
+  }
+
+  test("GH-396: YEAR/MONTH of a blank cell match Excel's serial-0 rendering (1900/1)") {
+    // Excel renders a blank date argument as serial 0 = the phantom "January 0, 1900":
+    // =YEAR(blank) is 1900, =MONTH(blank) is 1, =DAY(blank) is 0. LocalDate cannot represent
+    // a day-0 date, so the Empty arm maps to 1900-01-01 — YEAR and MONTH are Excel-exact,
+    // DAY reads 1 instead of 0 (documented divergence, the phantom day is unrepresentable).
+    val sheet = sheetWith(ref"Z9" -> CellValue.Text("unrelated"))
+    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Number(BigDecimal(1900))))
+    assertEquals(sheet.evaluateFormula("=MONTH(A1)"), Right(CellValue.Number(BigDecimal(1))))
+    assertEquals(sheet.evaluateFormula("=DAY(A1)"), Right(CellValue.Number(BigDecimal(1))))
+  }
+
+  test("GH-396: blank call result in a date position (coerceDate Empty arm, table mirror)") {
+    // INDEX returns the raw cell value, so a blank hit routes CellValue.Empty through the
+    // Coerced(Date) path — both tables (decodeAsDate, coerceDate) must agree on 1900-01-01
+    val sheet = sheetWith(ref"A2" -> CellValue.Number(BigDecimal(99)))
+    assertEquals(
+      sheet.evaluateFormula("=YEAR(INDEX(A1:A2, 1))"),
+      Right(CellValue.Number(BigDecimal(1900)))
+    )
+  }
+
+  test("GH-396: Bool CELL in a date position matches the =YEAR(TRUE) literal (GH-307)") {
+    // Pre-existing asymmetry: the literal coerced via ScalarCoercion (TRUE = serial 1 =
+    // 1900-01-01) while the cell errored via decodeAsDate
+    val sheet = sheetWith(ref"A1" -> CellValue.Bool(true))
+    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Number(BigDecimal(1900))))
+    assertEquals(sheet.evaluateFormula("=YEAR(TRUE)"), Right(CellValue.Number(BigDecimal(1900))))
+  }
+
+  test("GH-396: cached-formula Bool cell in a date position unwraps") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Formula("=1=1", Some(CellValue.Bool(true))))
+    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Number(BigDecimal(1900))))
+  }
+
   test("GH-306: round-trip — coercion wrappers print transparently") {
     val formulas = List(
       "=UPPER(SUM(A1:A2))",

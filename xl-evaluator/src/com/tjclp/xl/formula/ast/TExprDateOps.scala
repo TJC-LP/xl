@@ -122,7 +122,7 @@ trait TExprDateOps:
     endDate: TExpr[java.time.LocalDate],
     holidays: Option[CellRange] = None
   ): TExpr[BigDecimal] =
-    Call(FunctionSpecs.networkdays, (startDate, endDate, holidays))
+    Call(FunctionSpecs.networkdays, (startDate, endDate, holidays.map(RangeLocation.Local(_))))
 
   /**
    * WORKDAY add working days to date.
@@ -141,7 +141,7 @@ trait TExprDateOps:
     days: TExpr[Int],
     holidays: Option[CellRange] = None
   ): TExpr[java.time.LocalDate] =
-    Call(FunctionSpecs.workday, (startDate, days, holidays))
+    Call(FunctionSpecs.workday, (startDate, days, holidays.map(RangeLocation.Local(_))))
 
   /**
    * YEARFRAC year fraction between dates.

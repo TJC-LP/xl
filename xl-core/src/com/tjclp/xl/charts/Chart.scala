@@ -2,6 +2,7 @@ package com.tjclp.xl.charts
 
 import com.tjclp.xl.addressing.{ARef, CellRange, RefParser, RefType, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.styles.color.Color
 
 /**
  * A sheet-qualified data range for a chart series (GH-222).
@@ -78,14 +79,23 @@ enum SeriesName derives CanEqual:
   case FromCell(sheet: SheetName, ref: ARef)
 
 /**
- * One chart series: a values vector, optional categories vector, optional name. Values and
- * categories must be 1×N or N×1 vectors (enforced by [[Chart.validated]]; the writer stays total
- * regardless).
+ * One chart series: a values vector, optional categories vector, optional name, optional explicit
+ * fill color. Values and categories must be 1×N or N×1 vectors (enforced by [[Chart.validated]];
+ * the writer stays total regardless).
+ *
+ * `fill` is the explicit series color (GH-407): bar/column fill; for line charts the color rides
+ * the STROKE. `None` lets the writer cycle the default Office accent palette (deterministic by
+ * series index) so LibreOffice renders series visibly out of the box. The chart XML slot
+ * (`a:srgbClr`) carries no alpha: the writer emits RRGGBB and the reader restores an opaque color,
+ * so only opaque fills round-trip exactly. Pie slices are colored per-point from the accent cycle
+ * (`c:dPt`, one per value cell); a pie series' `fill` round-trips at series level but never
+ * repaints slices.
  */
 final case class Series(
   values: DataRef,
   categories: Option[DataRef] = None,
-  name: Option[SeriesName] = None
+  name: Option[SeriesName] = None,
+  fill: Option[Color.Rgb] = None
 ) derives CanEqual
 
 /** Bar chart direction (`c:barDir`): Col = vertical columns, Bar = horizontal bars. */

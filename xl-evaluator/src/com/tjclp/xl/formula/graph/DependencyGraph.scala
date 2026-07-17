@@ -188,6 +188,8 @@ object DependencyGraph:
       // GH-384: a defined name resolves to cells (or a formula over cells) at evaluation time —
       // it behaves like a reference for "does this formula read data?" checks
       case TExpr.NameRef(_) => true
+      // GH-394: sheet-qualified names likewise
+      case TExpr.SheetNameRef(_, _) => true
 
       // GH-306: runtime coercion wrapper — transparent for analysis
       case TExpr.Coerced(inner, _) => containsCellReferences(inner)
@@ -313,6 +315,9 @@ object DependencyGraph:
       case TExpr.ExternalRange(_, _, _) => false
       case TExpr.Aggregate(_, TExpr.RangeLocation.CrossSheet(_, _)) => false
       case TExpr.Aggregate(_, TExpr.RangeLocation.External(_, _, _)) => false
+      // GH-394: an unqualified name's lookup depends on the ambient sheet (sheet-scoped names
+      // shadow workbook-scoped ones); a sheet-qualified name carries its own context
+      case TExpr.Aggregate(_, TExpr.RangeLocation.Name(_, scope)) => scope.isEmpty
 
       // Function calls - check arguments
       case call: TExpr.Call[?] =>
@@ -326,6 +331,8 @@ object DependencyGraph:
                 case TExpr.RangeLocation.CrossSheet(_, _) => false
                 // GH-353: fully qualified (workbook + sheet) — no ambient sheet needed
                 case TExpr.RangeLocation.External(_, _, _) => false
+                // GH-394: unqualified name lookup depends on the ambient sheet
+                case TExpr.RangeLocation.Name(_, scope) => scope.isEmpty
             case ArgValue.Cells(_) => true
           }
 
@@ -372,6 +379,8 @@ object DependencyGraph:
       // GH-384: name resolution depends on the ambient sheet (sheet-scoped names SHADOW
       // workbook-scoped ones), so a name-bearing formula needs a sheet context
       case TExpr.NameRef(_) => true
+      // GH-394: a sheet-qualified name carries its own lookup context
+      case TExpr.SheetNameRef(_, _) => false
 
       // GH-306: runtime coercion wrapper — transparent for analysis
       case TExpr.Coerced(inner, _) => containsUnqualifiedCellReferences(inner)
@@ -459,8 +468,12 @@ object DependencyGraph:
       case TExpr.BindingRef(_) => Set.empty
       case TExpr.CoercedBindingRef(_, _) => Set.empty
       // GH-384: name targets live behind workbook metadata this sheet-level walk cannot see —
-      // no intra-sheet edges (consistent with cross-sheet refs; the qualified extractor resolves)
+      // no intra-sheet edges (consistent with cross-sheet refs; the qualified extractor resolves).
+      // GH-394: sheet-qualified names likewise — NOTE this means an edit to a name's TARGET does
+      // not trigger sheet-level targeted recalc of name users; the workbook-level qualified
+      // extractor below carries the real edges.
       case TExpr.NameRef(_) => Set.empty
+      case TExpr.SheetNameRef(_, _) => Set.empty
 
       // GH-306: runtime coercion wrapper — transparent for analysis
       case TExpr.Coerced(inner, _) => extractDependencies(inner)
@@ -554,8 +567,12 @@ object DependencyGraph:
       case TExpr.BindingRef(_) => Set.empty
       case TExpr.CoercedBindingRef(_, _) => Set.empty
       // GH-384: name targets live behind workbook metadata this sheet-level walk cannot see —
-      // no intra-sheet edges (consistent with cross-sheet refs; the qualified extractor resolves)
+      // no intra-sheet edges (consistent with cross-sheet refs; the qualified extractor resolves).
+      // GH-394: sheet-qualified names likewise — NOTE this means an edit to a name's TARGET does
+      // not trigger sheet-level targeted recalc of name users; the workbook-level qualified
+      // extractor below carries the real edges.
       case TExpr.NameRef(_) => Set.empty
+      case TExpr.SheetNameRef(_, _) => Set.empty
 
       // GH-306: runtime coercion wrapper — transparent for analysis
       case TExpr.Coerced(inner, _) => extractDependenciesBounded(inner, bounds)
@@ -1084,6 +1101,14 @@ object DependencyGraph:
         case TExpr.RangeLocation.CrossSheet(sheet, range) => cellsFor(sheet, range)
         // GH-353: external-workbook ranges target cells OUTSIDE the workbook — no edges ever
         case TExpr.RangeLocation.External(_, _, _) => Set.empty
+        // GH-394: a name in a range slot resolves like the equivalent name EXPRESSION — its
+        // target's cells contribute edges (qualified to the DEFINING sheet) so recalc orders
+        // name-gated dependents correctly; a sheet-qualified name looks up relative to its
+        // qualifier. Unresolvable names contribute no edges (evaluation reports the error).
+        case TExpr.RangeLocation.Name(name, scope) =>
+          scope match
+            case None => go(TExpr.NameRef(name))
+            case Some(qualifier) => go(TExpr.SheetNameRef(qualifier, name))
 
     def go(e: TExpr[?]): Set[QualifiedRef] =
       e match
@@ -1147,6 +1172,28 @@ object DependencyGraph:
             (for
               wb <- workbook
               dn <- Evaluator.lookupDefinedName(wb, currentSheet, name)
+              target <- FormulaParser.parse(dn.formula).toOption
+            yield
+              val definingSheet =
+                Evaluator.definedNameScope(wb, dn).map(_.name).getOrElse(currentSheet)
+              extractQualifiedDependencies(
+                target,
+                definingSheet,
+                cellsFor,
+                workbook,
+                visitingNames + key
+              )
+            ).getOrElse(Set.empty)
+
+        // GH-394: a sheet-qualified name resolves like NameRef, but the lookup runs as seen
+        // from its QUALIFIER (sheet-scoped names on that sheet shadow workbook-scoped ones)
+        case TExpr.SheetNameRef(qualifier, name) =>
+          val key = name.toUpperCase
+          if visitingNames.contains(key) then Set.empty
+          else
+            (for
+              wb <- workbook
+              dn <- Evaluator.lookupDefinedName(wb, qualifier, name)
               target <- FormulaParser.parse(dn.formula).toOption
             yield
               val definingSheet =

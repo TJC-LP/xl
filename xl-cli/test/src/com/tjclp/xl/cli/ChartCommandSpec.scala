@@ -79,6 +79,7 @@ class ChartCommandSpec extends CatsEffectSuite:
         "B2:C4",
         Some("A2:A4"),
         Some("North,South"),
+        None,
         Some("Revenue"),
         None,
         "E2:K15",
@@ -109,6 +110,7 @@ class ChartCommandSpec extends CatsEffectSuite:
         "bar",
         Some("stacked"),
         "B2:C4",
+        None,
         None,
         None,
         None,
@@ -144,6 +146,7 @@ class ChartCommandSpec extends CatsEffectSuite:
         None,
         None,
         None,
+        None,
         "E2:K15",
         out,
         config
@@ -168,6 +171,7 @@ class ChartCommandSpec extends CatsEffectSuite:
         None,
         None,
         None,
+        None,
         "E2:K15",
         out,
         config
@@ -177,6 +181,76 @@ class ChartCommandSpec extends CatsEffectSuite:
       assertEquals(chart.series.size, 3) // one per data row 2..4
       assertEquals(chart.series(0).values, DataRef(SheetName.unsafe("Data"), ref"B2:C2"))
     }
+  }
+
+  test(
+    "GH-407: --series-colors stamps explicit fills that round-trip; short lists leave the rest"
+  ) {
+    import com.tjclp.xl.styles.color.Color
+    roundTrip(dataWorkbook()) { (wb, sheet, out) =>
+      ChartCommands.chartAdd(
+        wb,
+        sheet,
+        "column",
+        None,
+        "B2:C4",
+        Some("A2:A4"),
+        Some("North,South"),
+        Some("#307FE2"), // one color for two series: second keeps the accent-cycle default
+        None,
+        None,
+        "E2:K15",
+        out,
+        config
+      )
+    }.map { result =>
+      val chart = result.sheets.head.charts.head.chart
+      assertEquals(chart.series.size, 2)
+      assertEquals(chart.series(0).fill, Some(Color.Rgb(0xff307fe2)): Option[Color.Rgb])
+      // unset second series reads back as the writer's accent2 default
+      assertEquals(chart.series(1).fill, Some(Color.Rgb(0xffed7d31)): Option[Color.Rgb])
+    }
+  }
+
+  test("GH-407: batch chart op mirrors chart add (same construction path)") {
+    import com.tjclp.xl.cli.helpers.BatchParser
+    import com.tjclp.xl.styles.color.Color
+    val json =
+      """[{"op":"chart","type":"column","data":"B2:C4","categories":"A2:A4",""" +
+        """"seriesNames":"North,South","seriesColors":"#307FE2,#005670",""" +
+        """"title":"Revenue","legend":"right","at":"E2:K15"}]"""
+    val wb = dataWorkbook()
+    for
+      parsed <- IO.fromEither(BatchParser.parseBatchJson(json))
+      _ = assertEquals(parsed.warnings, Vector.empty[String])
+      updated <- BatchParser.applyBatchOperations(wb, wb.sheets.headOption, parsed.ops)
+      // write→read so the assertion covers the full emission path, like the CLI tests above
+      out = tmp("batch-chart")
+      _ <- excel.write(updated, out)
+      result <- excel.read(out)
+    yield
+      val frames = result.sheets.head.charts
+      assertEquals(frames.size, 1)
+      val chart = frames.head.chart
+      assertEquals(chart.title, Some("Revenue"))
+      assertEquals(chart.series.size, 2)
+      assertEquals(chart.series(0).name, Some(SeriesName.Literal("North")))
+      assertEquals(chart.series(0).fill, Some(Color.Rgb(0xff307fe2)): Option[Color.Rgb])
+      assertEquals(chart.series(1).fill, Some(Color.Rgb(0xff005670)): Option[Color.Rgb])
+  }
+
+  test("GH-407: batch chart op surfaces the shared validation errors") {
+    import com.tjclp.xl.cli.helpers.BatchParser
+    val json =
+      """[{"op":"chart","type":"pie","data":"B2:B4","seriesColors":"#307FE2","at":"E2"}]"""
+    val wb = dataWorkbook()
+    for
+      parsed <- IO.fromEither(BatchParser.parseBatchJson(json))
+      err <- BatchParser.applyBatchOperations(wb, wb.sheets.headOption, parsed.ops).attempt
+    yield assert(
+      err.left.exists(_.getMessage.contains("not supported for pie charts")),
+      err.toString
+    )
   }
 
   test(
@@ -198,6 +272,7 @@ class ChartCommandSpec extends CatsEffectSuite:
           None,
           None,
           None,
+          None,
           "E2",
           out,
           config
@@ -210,6 +285,7 @@ class ChartCommandSpec extends CatsEffectSuite:
           "line",
           Some("stacked"),
           "B2:C4",
+          None,
           None,
           None,
           None,
@@ -230,6 +306,7 @@ class ChartCommandSpec extends CatsEffectSuite:
           None,
           None,
           None,
+          None,
           "E2",
           out,
           config
@@ -244,6 +321,58 @@ class ChartCommandSpec extends CatsEffectSuite:
           "B2:C4",
           None,
           Some("Only One"),
+          None,
+          None,
+          None,
+          "E2",
+          out,
+          config
+        )
+      )
+      colorCount <- attempt(
+        ChartCommands.chartAdd(
+          wb,
+          sheet,
+          "column",
+          None,
+          "B2:C4",
+          None,
+          None,
+          Some("#307FE2,#005670,#FF0000"),
+          None,
+          None,
+          "E2",
+          out,
+          config
+        )
+      )
+      badColor <- attempt(
+        ChartCommands.chartAdd(
+          wb,
+          sheet,
+          "column",
+          None,
+          "B2:C4",
+          None,
+          None,
+          Some("#307FE2,not-a-color"),
+          None,
+          None,
+          "E2",
+          out,
+          config
+        )
+      )
+      pieColors <- attempt(
+        ChartCommands.chartAdd(
+          wb,
+          sheet,
+          "pie",
+          None,
+          "B2:B4",
+          None,
+          None,
+          Some("#307FE2"),
           None,
           None,
           "E2",
@@ -262,6 +391,7 @@ class ChartCommandSpec extends CatsEffectSuite:
           None,
           None,
           None,
+          None,
           "E2",
           out,
           config
@@ -269,7 +399,21 @@ class ChartCommandSpec extends CatsEffectSuite:
       )
       missingSheet <- attempt(
         ChartCommands
-          .chartAdd(wb, None, "column", None, "B2:C4", None, None, None, None, "E2", out, config)
+          .chartAdd(
+            wb,
+            None,
+            "column",
+            None,
+            "B2:C4",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "E2",
+            out,
+            config
+          )
       )
     yield
       assert(badType.left.exists(_.getMessage.contains("Invalid --type")), badType.toString)
@@ -281,6 +425,20 @@ class ChartCommandSpec extends CatsEffectSuite:
       assert(
         nameCount.left.exists(_.getMessage.contains("--series-names count")),
         nameCount.toString
+      )
+      assert(
+        colorCount.left.exists(_.getMessage.contains("--series-colors count")),
+        colorCount.toString
+      )
+      assert(
+        badColor.left.exists(_.getMessage.contains("Invalid --series-colors entry")),
+        badColor.toString
+      )
+      assert(
+        pieColors.left.exists(
+          _.getMessage.contains("--series-colors is not supported for pie charts")
+        ),
+        pieColors.toString
       )
       assert(
         pieMulti.left.exists(_.getMessage.contains("pie charts require exactly 1")),

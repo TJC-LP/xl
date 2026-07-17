@@ -158,9 +158,12 @@ trait TExprAnalysis:
         .toValues(call.args)
         .flatMap {
           case ArgValue.Expr(e) => collectRanges(e)
-          // GH-353: external-workbook ranges are not in this workbook — nothing to bound
-          case ArgValue.Range(RangeLocation.External(_, _, _)) => Nil
-          case ArgValue.Range(l) => List((l.sheetName, l.range))
+          case ArgValue.Range(RangeLocation.Local(range)) => List((None, range))
+          case ArgValue.Range(RangeLocation.CrossSheet(sheet, range)) =>
+            List((Some(sheet), range))
+          // GH-353: external-workbook ranges are not in this workbook — nothing to bound.
+          // GH-394: a Name's target range is behind the workbook name table — statically unknown
+          case ArgValue.Range(_) => Nil
           case _ => Nil
         }
     // Arithmetic - recursively collect from operands

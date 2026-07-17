@@ -141,6 +141,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `delete-cols` | `<at-col> [count]` | Delete columns; `#REF!` on lost references (requires `-o`) |
 | `batch` | `<file\|-> [--dry-run]` | Apply multiple operations from JSON (requires `-o`; `--dry-run` validates without a file) |
 | `diff` | `-g <file2> [--format markdown\|json]` | Compare two workbooks; exit 0 identical, 1 differs, 2 error |
+| `lint` | `[--format text\|json]` | Validate package structure (child order, r:id resolution); exit 0 clean, 1 findings, 2 error |
 
 ---
 
@@ -821,6 +822,7 @@ xl -f in.xlsx -s Data -o out.xlsx chart add --type pie \
 | `--data` | Values range; qualified refs (`Data!B2:D10`) accepted (required) |
 | `--categories` | Categories vector (one row or one column) |
 | `--series-names` | Comma-separated literal names, applied positionally |
+| `--series-colors` | Comma-separated colors (`#307FE2,#005670`), applied positionally; unset series cycle the theme accents |
 | `--title` | Chart title |
 | `--legend` | `right` (default), `left`, `top`, `bottom`, `top-right`, `none` |
 | `--at` | Placement: a range (chart stretches over it) or a single cell (required) |
@@ -983,6 +985,7 @@ Apply multiple operations atomically from JSON input.
 | `page-setup` | | `orientation`, `scale`, `fitToWidth`, `fitToHeight`, `fitToPage` | Set print page setup |
 | `header-footer` | | `oddHeader`, `oddFooter`, `evenHeader`, `evenFooter`, `firstHeader`, `firstFooter`, `differentOddEven`, `differentFirst` | Set print header/footer text |
 | `cf` | `range`, `rule` | `bold`, `italic`, `underline`, `strike`, `bg`, `fg` | Add a conditional-formatting rule (see `cf add`) |
+| `chart` | `type`, `data`, `at` | `categories`, `seriesNames`, `seriesColors`, `title`, `legend`, `grouping` | Add a chart (mirrors `chart add`) |
 
 **Native JSON Types** (recommended):
 
@@ -1184,6 +1187,37 @@ xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
 ```
 
 **Limitations**: both workbooks load in memory (`--max-size` applies to each); no range-level filter yet.
+
+---
+
+### `xl lint [--format text|json]`
+
+Validate the raw package structure against the Excel-repair classes — the defects Excel
+repairs loudly (repair dialog, content stripped) but every lenient reader, xl's own
+`read` included, accepts silently. Lint inspects the **raw zip parts**, never the parsed
+model, so nothing gets normalized before it's checked.
+
+```bash
+xl -f deliverable.xlsx lint                      # Human-readable findings
+xl -f deliverable.xlsx lint --format json        # Stable schema for pipelines
+xl -f deliverable.xlsx lint && echo "safe to send"
+```
+
+**What it flags**:
+- **`child-order`** — child elements of `xl/workbook.xml` (CT_Workbook) or a worksheet
+  (CT_Worksheet) out of ECMA-376 schema sequence (e.g. `<externalReferences>` after
+  `<extLst>`)
+- **`unresolved-rel-id`** — an `r:id` (sheet, externalReference, pivotCache, drawing,
+  legacyDrawing, hyperlink, tablePart, …) with no entry in the paired `.rels`
+- **`wrong-rel-type`** — the `r:id` resolves, but to a relationship of the wrong type
+- **`missing-part`** — the relationship target part is absent from the package
+
+**Exit codes** (diff-tool convention): `0` no findings · `1` findings reported · `2` error
+(unreadable file, malformed core part).
+
+`xl lint` is read-only — it never repairs or rewrites the file. xl's own output always
+lints clean; use it as a pre-send self-check in agent pipelines that splice or post-process
+workbooks.
 
 ---
 

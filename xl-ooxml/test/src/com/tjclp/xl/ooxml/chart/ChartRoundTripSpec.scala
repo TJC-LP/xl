@@ -14,10 +14,16 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
 /**
- * GH-222 KEYSTONE self-coherence law: `ChartReader.parse(emit(chart)) == Some(chart)` for arbitrary
- * generated charts — proves the emitted dialect is a subset of the read fence mechanically (every
- * element/attribute the canonical emitter produces must pass the strict whitelist, with
- * caches/idx/order/axes dropped losslessly for the model).
+ * GH-222 KEYSTONE self-coherence law, GH-407 form: `emit(parse(emit(chart))) == emit(chart)` for
+ * arbitrary generated charts — the writer MATERIALIZES defaults (accent-cycle series fills, "Series
+ * N" literal names) that the reader captures back into the model, so re-emission is a fixpoint.
+ * This still proves the emitted dialect is a subset of the read fence mechanically (parse must
+ * succeed for the law to hold), with caches/idx/order/axes/pie-dPts dropped losslessly for the XML.
+ *
+ * PLUS the exact identity `ChartReader.parse(emit(chart)) == Some(chart)` on the fully-explicit
+ * subspace — every series carries an explicit fill AND name, so the writer materializes nothing.
+ * (Exception: pie slices are always dPt accent-cycled; the pie series-level fill still round-trips
+ * exactly.)
  *
  * Exercised under BOTH cache regimes: bare `c:f` (referenced sheet absent from the workbook) and
  * fully-resolved caches over a sheet mixing numbers, text, booleans, blanks, dates, and
@@ -45,11 +51,39 @@ class ChartRoundTripSpec extends ScalaCheckSuite:
   private def emit(chart: Chart, workbook: Workbook): String =
     XmlUtil.compact(OoxmlChart(chart, ChartCaches.resolve(workbook, chart)).toXml)
 
+  /** GH-407 law: emit∘parse∘emit == emit (the materialized model is an emission fixpoint). */
   private def lawProp(chart: Chart, workbook: Workbook): Prop =
+    val first = emit(chart, workbook)
+    ChartReader.parse(first) match
+      case None =>
+        Prop.falsified :| s"parse(emit(chart)) == None\nchart: $chart\nxml: $first"
+      case Some(parsed) =>
+        val second = emit(parsed, workbook)
+        Prop(second == first) :|
+          s"emit(parse(emit(chart))) != emit(chart)\nchart:  $chart\nparsed: $parsed\nfirst:  $first\nsecond: $second"
+
+  /** Exact identity on the fully-explicit subspace: nothing left for the writer to materialize. */
+  private def exactProp(chart: Chart, workbook: Workbook): Prop =
     val xml = emit(chart, workbook)
     val parsed = ChartReader.parse(xml)
     Prop(parsed == Some(chart)) :|
       s"parse(emit(chart)) != Some(chart)\nchart:  $chart\nparsed: $parsed\nxml: $xml"
+
+  /**
+   * Deterministically lift a generated chart into the fully-explicit subspace: every series gets an
+   * explicit name and fill (generated values kept where present, writer defaults filled in where
+   * absent — so explicit fills also cover arbitrary non-accent colors).
+   */
+  private def explicit(chart: Chart): Chart =
+    import com.tjclp.xl.charts.SeriesName
+    import com.tjclp.xl.ooxml.DefaultTheme
+    import com.tjclp.xl.styles.color.Color
+    chart.copy(series = chart.series.zipWithIndex.map { case (s, i) =>
+      s.copy(
+        name = s.name.orElse(Some(SeriesName.Literal(s"Series ${i + 1}"))),
+        fill = s.fill.orElse(Some(Color.Rgb(DefaultTheme.accentArgb(i))))
+      )
+    })
 
   /** Grid sheet covering the generator space with every cache-relevant value class. */
   private def materialized(name: SheetName): Sheet =
@@ -84,21 +118,33 @@ class ChartRoundTripSpec extends ScalaCheckSuite:
   private val plain = SheetName.unsafe("Data")
   private val quoted = SheetName.unsafe("Q1 'Report") // needsQuoting: space + quote + cell-shaped
 
-  property("LAW: parse(emit(chart)) == chart — bare c:f (referenced sheet absent)") {
+  property("LAW: emit∘parse∘emit == emit — bare c:f (referenced sheet absent)") {
     forAll(Generators.genChart(plain)) { chart =>
       lawProp(chart, Workbook(Vector(Sheet(SheetName.unsafe("Other")))))
     }
   }
 
-  property("LAW: parse(emit(chart)) == chart — resolved caches over a mixed-value sheet") {
+  property("LAW: emit∘parse∘emit == emit — resolved caches over a mixed-value sheet") {
     forAll(Generators.genChart(plain)) { chart =>
       lawProp(chart, Workbook(Vector(materialized(plain))))
     }
   }
 
-  property("LAW: parse(emit(chart)) == chart — quoting-positive sheet name, resolved caches") {
+  property("LAW: emit∘parse∘emit == emit — quoting-positive sheet name, resolved caches") {
     forAll(Generators.genChart(quoted)) { chart =>
       lawProp(chart, Workbook(Vector(materialized(quoted))))
+    }
+  }
+
+  property("LAW: parse(emit(chart)) == chart on the fully-explicit subspace — bare c:f") {
+    forAll(Generators.genChart(plain)) { chart =>
+      exactProp(explicit(chart), Workbook(Vector(Sheet(SheetName.unsafe("Other")))))
+    }
+  }
+
+  property("LAW: parse(emit(chart)) == chart on the fully-explicit subspace — resolved caches") {
+    forAll(Generators.genChart(plain)) { chart =>
+      exactProp(explicit(chart), Workbook(Vector(materialized(plain))))
     }
   }
 

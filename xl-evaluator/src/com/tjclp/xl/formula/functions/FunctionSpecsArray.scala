@@ -31,8 +31,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
     FunctionSpec.simple[ArrayResult, UnaryRange]("TRANSPOSE", Arity.one) { (location, ctx) =>
       Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook) match
         case Left(err) => Left(err)
-        case Right(targetSheet) =>
-          val range = location.range
+        case Right((targetSheet, range)) =>
           val values = extractRangeAsMatrix(range, targetSheet)
           Right(ArrayResult(values.transpose))
     }
@@ -228,9 +227,10 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       for
         sortIndex <- idxOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
         sortOrder <- orderOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
-        targetSheet <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        resolved <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        (targetSheet, range) = resolved
         result <-
-          val matrix = extractRangeAsMatrix(location.range, targetSheet)
+          val matrix = extractRangeAsMatrix(range, targetSheet)
           val width = matrix.headOption.map(_.size).getOrElse(0)
           val colIdx = sortIndex - 1
           if matrix.isEmpty then Right(ArrayResult(matrix))
@@ -255,9 +255,10 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       for
         byCol <- byColOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
         exactlyOnce <- onceOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
-        targetSheet <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        resolved <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        (targetSheet, range) = resolved
       yield
-        val matrix0 = extractRangeAsMatrix(location.range, targetSheet)
+        val matrix0 = extractRangeAsMatrix(range, targetSheet)
         val matrix = if byCol then matrix0.transpose else matrix0
         val resultRows =
           if exactlyOnce then
@@ -285,11 +286,13 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
     FunctionSpec.simple[ArrayResult, FilterArgs]("FILTER", Arity.Range(2, 3)) { (args, ctx) =>
       val (arrayLoc, includeLoc, ifEmptyOpt) = args
       for
-        arraySheet <- Evaluator.resolveRangeLocation(arrayLoc, ctx.sheet, ctx.workbook)
-        includeSheet <- Evaluator.resolveRangeLocation(includeLoc, ctx.sheet, ctx.workbook)
+        resolvedArray <- Evaluator.resolveRangeLocation(arrayLoc, ctx.sheet, ctx.workbook)
+        resolvedInclude <- Evaluator.resolveRangeLocation(includeLoc, ctx.sheet, ctx.workbook)
+        (arraySheet, arrayRange) = resolvedArray
+        (includeSheet, includeRange) = resolvedInclude
         result <-
-          val matrix = extractRangeAsMatrix(arrayLoc.range, arraySheet)
-          val flags = extractRangeAsMatrix(includeLoc.range, includeSheet)
+          val matrix = extractRangeAsMatrix(arrayRange, arraySheet)
+          val flags = extractRangeAsMatrix(includeRange, includeSheet)
             .map(row => row.headOption.exists(isTruthy))
           val kept = matrix.zip(flags).collect { case (row, true) => row }
           if kept.nonEmpty then Right(ArrayResult(kept))

@@ -18,9 +18,11 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  * ("typed = fully understood"). `toXml` emits the Excel-native dialect; the parser additionally
  * accepts the openpyxl dialect (patternType="solid" with fgColor/bgColor).
  *
- * Law: `parse(toXml(d)) == Some(d)` for every representable Dxf whose colors/numFmt codes are
- * stable under the house parse (alpha-FF colors; format codes that NumFmt.parse maps back to the
- * same case — every case except Currency).
+ * Law: `parse(toXml(d)) == Some(d)` for every representable Dxf whose colors are stable under the
+ * house parse (alpha-FF colors) and whose numFmt is any case except Currency (its code "$#,##0.00"
+ * parses back as Custom — the documented one-way case). Custom codes round-trip verbatim even when
+ * they equal a built-in code string: emission stamps them with a custom id (>= 164), and parse
+ * treats custom-id declarations as verbatim Custom (GH-404).
  */
 object DxfCodec:
 
@@ -196,7 +198,15 @@ object DxfCodec:
   private def parseNumFmt(e: Elem): Option[NumFmt] =
     childElems(e).toOption.filter(_.isEmpty).flatMap { _ =>
       if attrKeys(e).exists(k => k != "numFmtId" && k != "formatCode") then None
-      else e.attribute("formatCode").map(a => NumFmt.parse(a.text))
+      else
+        e.attribute("formatCode").map { a =>
+          // A custom-id declaration keeps its code verbatim — NumFmt.parse would collapse a
+          // built-in-equal code (e.g. "0.00%") and break the round-trip law (GH-404). Built-in
+          // ids keep parsing by code: the code is authoritative, the id is vestigial.
+          val isCustomId =
+            e.attribute("numFmtId").flatMap(_.text.toIntOption).exists(_ >= NumFmt.FirstCustomId)
+          if isCustomId then NumFmt.Custom(a.text) else NumFmt.parse(a.text)
+        }
     }
 
   // ===== emission =====
@@ -267,27 +277,10 @@ object DxfCodec:
 
   /**
    * Dxf numFmts are self-contained (id + code inline, not a numFmts-table reference). Custom codes
-   * use the conventional first user id (164); consumers read the code, the id is vestigial.
+   * use the conventional first user id (164); consumers read the code, the id is vestigial except
+   * as the custom-declaration marker `parseNumFmt` keys on (GH-404).
    */
   private def numFmtToXml(fmt: NumFmt): Elem =
-    val code = formatCode(fmt)
-    val id = NumFmt.builtInId(fmt).getOrElse(164)
+    val code = NumFmt.formatCode(fmt)
+    val id = NumFmt.builtInId(fmt).getOrElse(NumFmt.FirstCustomId)
     elemOrdered("numFmt", "numFmtId" -> id.toString, "formatCode" -> code)()
-
-  /** The format-code string for emission (the NumFmt.parse retraction where one exists). */
-  private def formatCode(fmt: NumFmt): String = fmt match
-    case NumFmt.General => "General"
-    case NumFmt.Integer => "0"
-    case NumFmt.Decimal => "0.00"
-    case NumFmt.ThousandsSeparator => "#,##0"
-    case NumFmt.ThousandsDecimal => "#,##0.00"
-    case NumFmt.Currency => "$#,##0.00" // NB: parses back as Custom — documented one-way case
-    case NumFmt.Percent => "0%"
-    case NumFmt.PercentDecimal => "0.00%"
-    case NumFmt.Scientific => "0.00E+00"
-    case NumFmt.Fraction => "# ?/?"
-    case NumFmt.Date => "m/d/yy"
-    case NumFmt.DateTime => "m/d/yy h:mm"
-    case NumFmt.Time => "h:mm:ss"
-    case NumFmt.Text => "@"
-    case NumFmt.Custom(code) => code

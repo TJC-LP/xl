@@ -177,6 +177,8 @@ object FormulaShifter:
       case bref: BindingRef => bref.asInstanceOf[TExpr[A]]
       // GH-384: defined names are identifiers, not coordinates — they never shift on drag
       case nref: NameRef => nref.asInstanceOf[TExpr[A]]
+      // GH-394: sheet-qualified names are identifiers too
+      case snref: SheetNameRef => snref.asInstanceOf[TExpr[A]]
       case cbref: CoercedBindingRef[?] => cbref.asInstanceOf[TExpr[A]]
 
       // GH-306: runtime coercion wrapper — shift the wrapped expression, preserve the wrapper
@@ -238,6 +240,9 @@ object FormulaShifter:
       // GH-353: external-workbook range args drag anchor-aware like the TExpr.ExternalRange node
       case RangeLocation.External(index, name, range) =>
         RangeLocation.External(index, name, shiftRange(range, colDelta, rowDelta))
+      // GH-394: a defined name is an identifier, not coordinates — shifting is a no-op
+      // (its refersTo text lives in workbook metadata, not in this formula)
+      case name @ RangeLocation.Name(_, _) => name
 
   /**
    * Helper to shift TExpr[?] (wildcard type).
@@ -351,6 +356,9 @@ object FormulaShifter:
       // GH-353: external-workbook ranges point into ANOTHER workbook — structural edits here
       // never move or void them
       case RangeLocation.External(_, _, _) => Some(location)
+      // GH-394: a defined name is an identifier — structural edits never move or void it
+      // (its refersTo text lives in workbook metadata, not in this formula)
+      case RangeLocation.Name(_, _) => Some(location)
 
   @SuppressWarnings(
     Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Var")
@@ -455,6 +463,7 @@ object FormulaShifter:
       // GH-384: defined names are identifiers — structural edits never move or void them
       // (their refersTo text lives in workbook metadata, not in this formula)
       case _: NameRef => Some(expr)
+      case _: SheetNameRef => Some(expr)
       case _: CoercedBindingRef[?] => Some(expr)
 
       // GH-306: runtime coercion wrapper — shift the wrapped expression, preserve the wrapper

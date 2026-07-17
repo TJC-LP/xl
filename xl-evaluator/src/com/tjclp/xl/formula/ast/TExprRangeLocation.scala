@@ -29,13 +29,35 @@ trait TExprRangeLocation:
      */
     case External(workbookIndex: Int, sheetName: String, range: CellRange)
 
+    /**
+     * GH-394: a defined name in a range-typed argument slot — `=VLOOKUP(x, named_table, 2)`,
+     * `=SUMIF(rev_range, ">1")`, optionally sheet-qualified (`=SUMIF(Model!rev_range, …)`).
+     *
+     * The target range lives behind the workbook's name table, so it is UNKNOWN until evaluation:
+     * `Evaluator.resolveRangeLocation` is the single resolution boundary — it looks the name up
+     * (sheet-scoped shadows workbook-scoped, case-insensitive, relative to `scope` when qualified),
+     * parses the refersTo text, and yields the resolved (sheet, CellRange) pair for range-shaped
+     * targets (single-cell targets act as 1×1 ranges). Non-range targets (constants, formulas) are
+     * a clean per-cell error VALUE. This case deliberately has NO static range: the pre-resolution
+     * accessors below (`staticRange`, `localCells*`, …) return their empty forms for it, and every
+     * evaluation-time consumer goes through the resolution boundary.
+     */
+    case Name(name: String, scope: Option[SheetName])
+
   object RangeLocation:
     extension (loc: RangeLocation)
-      /** Extract the CellRange regardless of location */
-      def range: CellRange = loc match
-        case Local(r) => r
-        case CrossSheet(_, r) => r
-        case External(_, _, r) => r
+      /**
+       * The range carried STATICALLY by the location — None for [[RangeLocation.Name]], whose
+       * target range is only known after workbook resolution (GH-394). Evaluation-time consumers
+       * must use `Evaluator.resolveRangeLocation`, which returns the resolved (sheet, CellRange)
+       * pair for every case; this accessor exists for structural walks (printing, shifting,
+       * dependency extraction) that inspect locations without a workbook.
+       */
+      def staticRange: Option[CellRange] = loc match
+        case Local(r) => Some(r)
+        case CrossSheet(_, r) => Some(r)
+        case External(_, _, r) => Some(r)
+        case Name(_, _) => None
 
       /** Get sheet name for cross-sheet, None for local or external-workbook locations */
       def sheetName: Option[SheetName] = loc match
@@ -70,15 +92,6 @@ trait TExprRangeLocation:
         case CrossSheet(_, _) => true
         case _ => false
 
-      /** Get all cells in the range (delegates to underlying CellRange) */
-      def cells: Iterator[ARef] = loc.range.cells
-
-      /** Get width of the range */
-      def width: Int = loc.range.width
-
-      /** Get height of the range */
-      def height: Int = loc.range.height
-
       /**
        * Get A1 string representation. Used in diagnostics (never re-parsed); GH-280: cell-ref-
        * shaped sheet names quote so a sheet literally named "A1" reads unambiguously.
@@ -89,21 +102,9 @@ trait TExprRangeLocation:
         // GH-353: same quoting rule as FormulaPrinter.formatExternalSheet
         case External(i, n, r) =>
           s"${com.tjclp.xl.formula.printer.FormulaPrinter.formatExternalSheet(i, n)}!${r.toA1}"
-
-      /** Get starting column of the range */
-      def colStart: Column = loc.range.colStart
-
-      /** Get ending column of the range */
-      def colEnd: Column = loc.range.colEnd
-
-      /** Get starting row of the range */
-      def rowStart: Row = loc.range.rowStart
-
-      /** Get ending row of the range */
-      def rowEnd: Row = loc.range.rowEnd
-
-      /** Get start cell reference of the range */
-      def start: ARef = loc.range.start
-
-      /** Get end cell reference of the range */
-      def end: ARef = loc.range.end
+        // GH-394: a name prints as its identifier (optionally sheet-qualified) — correct
+        // diagnostics for the user's source text; the target range is not statically known
+        case Name(n, scope) =>
+          scope match
+            case Some(s) => s"${SheetName.quoteForFormula(s.value)}!$n"
+            case None => n

@@ -79,8 +79,10 @@ trait FunctionSpecsBase:
   type AverageIfsArgs = (TExpr.RangeLocation, RangeCriteriaList)
   type DateInt = (TExpr[LocalDate], TExpr[Int])
   type DatePairUnit = (TExpr[LocalDate], TExpr[LocalDate], TExpr[String])
-  type DatePairOptRange = (TExpr[LocalDate], TExpr[LocalDate], Option[CellRange])
-  type DateIntOptRange = (TExpr[LocalDate], TExpr[Int], Option[CellRange])
+  // GH-394: holiday args are RangeLocations (sheet-qualified ranges and defined names resolve
+  // at evaluation through Evaluator.resolveRangeLocation, like every range-typed slot)
+  type DatePairOptRange = (TExpr[LocalDate], TExpr[LocalDate], Option[TExpr.RangeLocation])
+  type DateIntOptRange = (TExpr[LocalDate], TExpr[Int], Option[TExpr.RangeLocation])
   type DatePairOptBasis = (TExpr[LocalDate], TExpr[LocalDate], Option[TExpr[Int]])
   type IfArgs = (TExpr[Boolean], TExpr[Any], TExpr[Any])
   // GH-120 statistical functions over a range
@@ -102,21 +104,23 @@ trait FunctionSpecsBase:
   type DateTripleInt = (TExpr[Int], TExpr[Int], TExpr[Int])
   type UnaryDate = TExpr[LocalDate]
   type AnyExpr = TExpr[Any]
-  type NpvArgs = (TExpr[BigDecimal], CellRange)
-  type IrrArgs = (CellRange, Option[TExpr[BigDecimal]])
+  // GH-394: cashflow/date ranges are RangeLocations — `=XIRR(S!A1:B1, S!A2:B2)` and named
+  // ranges resolve at evaluation; the CellRange-taking public builders wrap RangeLocation.Local
+  type NpvArgs = (TExpr[BigDecimal], TExpr.RangeLocation)
+  type IrrArgs = (TExpr.RangeLocation, Option[TExpr[BigDecimal]])
   type VlookupArgs = (TExpr[CellValue], TExpr.RangeLocation, TExpr[Int], Option[TExpr[Boolean]])
   // GH-197: Changed to accept both ranges AND array expressions
   type SumProductArgs = List[ArgSpec.SumProductArg]
   type XLookupArgs = (
     AnyExpr,
-    CellRange,
-    CellRange,
+    TExpr.RangeLocation,
+    TExpr.RangeLocation,
     Option[AnyExpr],
     Option[TExpr[Int]],
     Option[TExpr[Int]]
   )
-  type IndexArgs = (CellRange, TExpr[BigDecimal], Option[TExpr[BigDecimal]])
-  type MatchArgs = (AnyExpr, CellRange, Option[TExpr[BigDecimal]])
+  type IndexArgs = (TExpr.RangeLocation, TExpr[BigDecimal], Option[TExpr[BigDecimal]])
+  type MatchArgs = (AnyExpr, TExpr.RangeLocation, Option[TExpr[BigDecimal]])
   type AddressArgs = (
     TExpr[BigDecimal],
     TExpr[BigDecimal],
@@ -124,8 +128,8 @@ trait FunctionSpecsBase:
     Option[TExpr[Boolean]],
     Option[TExpr[String]]
   )
-  type XnpvArgs = (TExpr[BigDecimal], CellRange, CellRange)
-  type XirrArgs = (CellRange, CellRange, Option[TExpr[BigDecimal]])
+  type XnpvArgs = (TExpr[BigDecimal], TExpr.RangeLocation, TExpr.RangeLocation)
+  type XirrArgs = (TExpr.RangeLocation, TExpr.RangeLocation, Option[TExpr[BigDecimal]])
   type TvmArgs = (
     TExpr[BigDecimal],
     TExpr[BigDecimal],
@@ -170,7 +174,7 @@ trait FunctionSpecsBase:
             ctx.sheet,
             ctx.workbook
           )
-          .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
+          .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(range, targetSheet) }
       case _: TExpr.PolyRef | _: TExpr.SheetPolyRef =>
         ctx.evalArrayExpr(TExpr.asResolvedValueExpr(expr).asInstanceOf[TExpr[Any]])
       case other =>

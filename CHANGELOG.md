@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Field-hardening from the first production QA cycle (FinAgent LBO build):
+every open issue closed — the numFmt round-trip corruption, the
+post-round-trip XIRR poisoning, blank-arg parity, names in lookup
+positions, LibreOffice-invisible charts, and an Excel-repair-class lint.
+
+### Fixed
+
+- **Custom numFmt round-trip corruption** (#404): a `<numFmt>` declaration
+  whose formatCode equals a built-in (`"0.00%"`, `"#,##0"`, …) no longer
+  degrades to `formatCode="General"` on read→write. The reader now keeps
+  `<numFmts>` declarations verbatim as `Custom(code)`, and the writer
+  gained a total `NumFmt.formatCode` inverse (shared with DxfCodec) so the
+  `"General"` fallback is gone from both backends. Round-trip laws cover
+  built-in-colliding codes (the property generators previously dodged them
+  deliberately), plus a corpus law over every committed fixture. Whole-code
+  `"General"` (ECMA-376 §18.8.30) renders as General, fixing
+  `TEXT(n,"General")` too. Display deltas (deliberate, Excel-correct):
+  file-declared `"0.00%"` renders `15.60%` (was `15.6%` via the collapsed
+  enum arm); ThousandsSeparator/ThousandsDecimal/Currency enum arms now
+  round HALF_UP on the exact BigDecimal, matching Excel (`1234.5` under
+  `#,##0` → `1,235`).
+- **XIRR/XNPV date ranges accept raw serial Numbers** (#405): the
+  range-date decode used by XIRR/XNPV (and NETWORKDAYS/WORKDAY holiday
+  ranges) now coerces serials like the nine scalar date functions have
+  since #385 — a write→read→recalculate cycle no longer poisons returns
+  blocks whose date anchors re-read as serial Numbers (mixed
+  serial/DateTime ranges coerce uniformly; blank/invalid cells still
+  error, cashflow strictness untouched).
+- **Variadic direct blank args are ignored, not coerced to 0** (#395):
+  `=COUNT(A1, A2)` with blank A2 returns 1 (was 2), `=AVERAGE` no longer
+  inflates its denominator, direct text/bool refs follow the same
+  range-triage as range args, and `=AVERAGE(blank, blank)` yields
+  `#DIV/0!`. `=COUNTBLANK(A1)` on a blank stays 1 — and `=COUNTBLANK(5)`
+  wrongly returning 1 is fixed as a bonus.
+- **Decoder coercion parity** (#396): `decodeAsInt` gained the
+  Empty→0, numeric-text, and cached-formula arms its ScalarCoercion mirror
+  already had (`=LEFT("hello", A1)` with blank A1 returns `""`);
+  `decodeAsDate`/`coerceDate` gained Empty and Bool arms
+  (`=YEAR(A1)` on a blank returns 1900, matching Excel's serial-0;
+  `DAY(blank)` returns 1 — Excel's phantom "January 0" is unrepresentable,
+  documented). 1904 date system remains out of scope.
+- **Cross-sheet range args read the target sheet** (#394, latent bug):
+  INDEX/MATCH/XLOOKUP/XIRR/NPV over a sheet-qualified range previously
+  read the formula's own sheet silently; they now resolve the qualified
+  target.
+- **Internal hyperlink targets normalize a leading `#`** (#406):
+  `{"op":"hyperlink"}` (and `Cell.withHyperlink`) with `"#Sheet1!A1"`
+  writes `location="Sheet1!A1"`; external URLs with fragments untouched.
+- **Preserved CT_Workbook children re-emit in schema position** (#397):
+  `externalReferences`, `workbookProtection`, `pivotCaches`, … no longer
+  land after `extLst` on rewrite (an Excel-repair-class violation xl
+  itself produced); a `WorkbookPreservationInvariantSpec` now guards the
+  slotting.
+
+### Added
+
+- **Defined names and sheet-qualified refs in range-typed argument slots**
+  (#394): `=VLOOKUP(x, named_table, 2)`, `=SUMIF(named_range, ">1")`,
+  `=XIRR(S!A1:B1, S!A2:B2)` (context-free/ad-hoc eval), and sheet-scoped
+  names (`=Model!case`) all parse and evaluate. `RangeLocation.Name` and
+  `TExpr.SheetNameRef` are new (additive) enum cases — downstream
+  exhaustive matches need new arms, as with `NameRef` in 0.13.0. Names
+  may contain `.` and `\` (`Sales.Total`). Non-range name targets in
+  range slots produce clean error values, never crashes. External-workbook
+  ranges in these slots now parse and follow the cached-external pinning
+  (#353) instead of being rejected.
+- **Per-series chart styling** (#407): every emitted series carries
+  explicit type-appropriate `<c:spPr>` — bar/column fills, line strokes
+  (`a:ln`), pie per-slice `dPt` fills — cycling the modern theme accents
+  (now exposed as `DefaultTheme.accents`) so LibreOffice renders
+  chart-add output out of the box. `--series-colors "#307FE2,#005670"` on
+  `chart add`, a new `chart` batch op mirroring it, and `<c:tx>` always
+  emitted (default "Series N"). Chart self-coherence law is now
+  `emit∘parse∘emit == emit` plus exact round-trip on fully-explicit
+  charts.
+- **`xl lint`** (#397): validates raw package structure — CT_Workbook /
+  CT_Worksheet child-order violations and r:id references that are
+  unresolvable, wrong-typed, or target missing parts (the classes Excel
+  repairs loudly and every lenient reader accepts silently). Runs on raw
+  zip parts (never the parsed model), `--format text|json`, exit codes
+  0 clean / 1 findings / 2 error. xl's own output lints clean.
+
 ## [0.14.0] "Candor" - 2026-07-16
 
 Errors tell the truth now: Excel error values are first-class evaluation

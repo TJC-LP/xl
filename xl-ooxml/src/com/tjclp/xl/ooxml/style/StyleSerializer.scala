@@ -34,10 +34,8 @@ final case class OoxmlStyles(
         Some(
           elem("numFmts", "count" -> index.numFmts.size.toString)(
             index.numFmts.sortBy(_._1).map { case (id, fmt) =>
-              val code = fmt match
-                case NumFmt.Custom(c) => c
-                case _ => "General" // Shouldn't happen
-              elem("numFmt", "numFmtId" -> id.toString, "formatCode" -> code)()
+              // Total inverse — a "General" fallback here silently un-formats cells (GH-404)
+              elem("numFmt", "numFmtId" -> id.toString, "formatCode" -> NumFmt.formatCode(fmt))()
             }*
           )
         )
@@ -181,12 +179,8 @@ final case class OoxmlStyles(
         index.numFmts.sortBy(_._1).foreach { case (id, fmt) =>
           writer.startElement("numFmt")
           writer.writeAttribute("numFmtId", id.toString)
-          writer.writeAttribute(
-            "formatCode",
-            fmt match
-              case NumFmt.Custom(c) => c
-              case _ => "General"
-          )
+          // Total inverse — a "General" fallback here silently un-formats cells (GH-404)
+          writer.writeAttribute("formatCode", NumFmt.formatCode(fmt))
           writer.endElement()
         }
         writer.endElement() // numFmts

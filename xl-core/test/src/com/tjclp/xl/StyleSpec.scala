@@ -284,6 +284,63 @@ class StyleSpec extends ScalaCheckSuite:
       case _ => fail("Should be Custom")
   }
 
+  test("NumFmt.formatCode: LAW parse(formatCode(fmt)) == fmt for every case except Currency") {
+    val invertible = List(
+      NumFmt.General,
+      NumFmt.Integer,
+      NumFmt.Decimal,
+      NumFmt.ThousandsSeparator,
+      NumFmt.ThousandsDecimal,
+      NumFmt.Percent,
+      NumFmt.PercentDecimal,
+      NumFmt.Scientific,
+      NumFmt.Fraction,
+      NumFmt.Date,
+      NumFmt.DateTime,
+      NumFmt.Time,
+      NumFmt.Text,
+      NumFmt.Custom("0.000"),
+      NumFmt.Custom("0.00%_)"), // field workaround twin (GH-404) stays custom
+      NumFmt.Custom("[$€-407] #,##0.00")
+    )
+    invertible.foreach { fmt =>
+      assertEquals(NumFmt.parse(NumFmt.formatCode(fmt)), fmt, s"not invertible: $fmt")
+    }
+    // Currency is the documented one-way case: its code cannot parse back to the enum case
+    // without shadowing genuine custom "$#,##0.00" declarations
+    assertEquals(NumFmt.formatCode(NumFmt.Currency), "$#,##0.00")
+    assertEquals(NumFmt.parse("$#,##0.00"), NumFmt.Custom("$#,##0.00"))
+  }
+
+  test("NumFmt.formatCode: LAW formatCode(parse(code)) == code for all collapsible codes") {
+    // The 13 code strings parse maps to built-in enum cases (GH-404: these used to degrade to
+    // "General" on emission when bound to a custom numFmtId)
+    val collapsible = List(
+      "General",
+      "0",
+      "0.00",
+      "#,##0",
+      "#,##0.00",
+      "0%",
+      "0.00%",
+      "0.00E+00",
+      "# ?/?",
+      "m/d/yy",
+      "m/d/yy h:mm",
+      "h:mm:ss",
+      "@"
+    )
+    collapsible.foreach { code =>
+      assertEquals(NumFmt.formatCode(NumFmt.parse(code)), code, s"code not preserved: $code")
+    }
+  }
+
+  test("NumFmt.formatCode: Custom(code) emits code verbatim, never General") {
+    assertEquals(NumFmt.formatCode(NumFmt.Custom("0.00%")), "0.00%")
+    assertEquals(NumFmt.formatCode(NumFmt.Custom("General")), "General")
+    assertEquals(NumFmt.formatCode(NumFmt.Custom("yyyy-mm-dd")), "yyyy-mm-dd")
+  }
+
   // ========== Font Tests ==========
 
   test("Font.default has correct values") {

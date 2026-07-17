@@ -5,7 +5,8 @@ import scala.xml.*
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.charts.{BarDirection, BarGrouping, Chart, ChartType, DataRef, SeriesName}
-import com.tjclp.xl.ooxml.{SaxSerializable, SaxWriter, XmlUtil, XmlWritable}
+import com.tjclp.xl.ooxml.{DefaultTheme, SaxSerializable, SaxWriter, XmlUtil, XmlWritable}
+import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
@@ -21,9 +22,12 @@ import com.tjclp.xl.workbooks.Workbook
  * worksheet-parity precedent); each backend is individually write-twice byte-stable.
  *
  * Every emitted shape is inside [[ChartReader]]'s whitelist — the self-coherence law
- * (`ChartReader.parse(emit(chart)) == Some(chart)`) verifies this mechanically. Axis ids are the
- * FIXED 10/100 pair (Excel's random 9-digit ids would break write-twice stability); we emit
- * Excel-correct `axPos` values (the fixture's l/l quirk is read-tolerated, never reproduced).
+ * (`emit(parse(emit(chart))) == emit(chart)`, exact `parse(emit(chart)) == Some(chart)` on the
+ * fully-explicit subspace where every series has a fill AND a name) verifies this mechanically: the
+ * writer materializes defaults (accent-cycle fills, "Series N" names — GH-407) that the reader
+ * captures back into the model, making re-emission a fixpoint. Axis ids are the FIXED 10/100 pair
+ * (Excel's random 9-digit ids would break write-twice stability); we emit Excel-correct `axPos`
+ * values (the fixture's l/l quirk is read-tolerated, never reproduced).
  */
 private[ooxml] final case class OoxmlChart(chart: Chart, caches: ChartCacheData)
     extends XmlWritable,
@@ -117,7 +121,7 @@ private[ooxml] object OoxmlChart:
 
   private def plotAreaElem(chart: Chart, caches: ChartCacheData): Elem =
     val sers = chart.series.zipWithIndex.map { case (s, i) =>
-      serElem(s, i, caches.series.lift(i), line = chart.chartType == ChartType.Line)
+      serElem(s, i, caches.series.lift(i), chart.chartType)
     }
     chart.chartType match
       case ChartType.Bar(direction, grouping) =>
@@ -189,13 +193,25 @@ private[ooxml] object OoxmlChart:
 
   // ===== series =====
 
+  /** `a:solidFill` holding one bare `a:srgbClr` (GH-407). */
+  private def solidFill(hex: String): Elem = a("solidFill")(a("srgbClr", "val" -> hex)())
+
+  /** Fill-shaped ser/dPt spPr (bar, pie): `spPr/a:solidFill`. */
+  private def fillSpPr(hex: String): Elem = c("spPr")(solidFill(hex))
+
+  /** Stroke-shaped ser spPr (line): the color rides `spPr/a:ln/a:solidFill`. */
+  private def strokeSpPr(hex: String): Elem = c("spPr")(a("ln")(solidFill(hex)))
+
   private def serElem(
     series: com.tjclp.xl.charts.Series,
     index: Int,
     cache: Option[SeriesCache],
-    line: Boolean
+    chartType: ChartType
   ): Elem =
-    val txEls = series.name.toList.map {
+    val line = chartType == ChartType.Line
+    // GH-407: c:tx is ALWAYS emitted — unnamed series materialize the literal "Series N"
+    // (Excel's own display default), so downstream tooling never guesses names.
+    val txEl = series.name.getOrElse(SeriesName.Literal(s"Series ${index + 1}")) match
       case SeriesName.Literal(text) => c("tx")(c("v")(Text(text)))
       case SeriesName.FromCell(sheet, ref) =>
         val f = DataRef(sheet, CellRange(ref, ref)).toFormula
@@ -204,7 +220,26 @@ private[ooxml] object OoxmlChart:
             (Vector(c("f")(Text(f))) ++ strCacheEls(cache.flatMap(_.tx)))*
           )
         )
-    }
+    // GH-407: explicit per-series color, or the deterministic accent cycle — LibreOffice
+    // renders theme-default (spPr-less) series INVISIBLE, so bar/line always emit one.
+    // Pie is the exception: a series-level default fill would paint the WHOLE pie one color
+    // (one series = all slices), so unset pie fills emit nothing here and the per-slice
+    // dPt fills below carry the accent cycle instead.
+    val explicitHex = series.fill.map(f => DefaultTheme.hex6(f.argb))
+    val spPrEls: Vector[Elem] = chartType match
+      case _: ChartType.Bar =>
+        Vector(fillSpPr(explicitHex.getOrElse(DefaultTheme.accentHex(index))))
+      case ChartType.Line =>
+        Vector(strokeSpPr(explicitHex.getOrElse(DefaultTheme.accentHex(index))))
+      case ChartType.Pie => explicitHex.map(fillSpPr).toList.toVector
+    // CT_PieSer order: dPt sits after spPr, before cat — one accent-cycled slice fill per
+    // value cell (varyColors semantics made explicit for LO)
+    val dPtEls: Vector[Elem] = chartType match
+      case ChartType.Pie =>
+        (0 until series.values.cellCount).toVector.map { k =>
+          c("dPt")(valEl("idx", k.toString), fillSpPr(DefaultTheme.accentHex(k)))
+        }
+      case _ => Vector.empty[Elem]
     // CT_LineSer order: marker sits BEFORE cat, smooth AFTER val
     val markerEls =
       if line then Vector(c("marker")(valEl("symbol", "none"))) else Vector.empty[Elem]
@@ -222,8 +257,8 @@ private[ooxml] object OoxmlChart:
     )
     val smoothEls = if line then Vector(valEl("smooth", "0")) else Vector.empty[Elem]
     c("ser")(
-      (Vector(valEl("idx", index.toString), valEl("order", index.toString)) ++
-        txEls ++ markerEls ++ catEls ++ Vector(valElem) ++ smoothEls)*
+      (Vector(valEl("idx", index.toString), valEl("order", index.toString), txEl) ++
+        spPrEls ++ markerEls ++ dPtEls ++ catEls ++ Vector(valElem) ++ smoothEls)*
     )
 
   private def numCacheEls(payload: Option[CachePayload]): List[Elem] =

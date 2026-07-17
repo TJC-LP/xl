@@ -41,6 +41,18 @@ private[formula] object ScalarCoercion:
    */
   val MaxExcelDateSerial: BigDecimal = BigDecimal(2958465)
 
+  /**
+   * GH-396: the date a BLANK yields in a date position. Excel renders a blank date argument as
+   * serial 0 — the phantom "January 0, 1900" (=YEAR(blank) is 1900, =MONTH(blank) is 1, =DAY(blank)
+   * is 0). LocalDate cannot represent a day-0 date and the CellValue serial mapping normalizes
+   * serial 0 to 1899-12-31 (the pre-leap-bug shift), so neither reproduces Excel's observable
+   * year/month; the closest representable date is 1900-01-01 — YEAR and MONTH are Excel-exact, DAY
+   * reads 1 instead of 0 (documented divergence). Shared with TExprDecoders.decodeAsDate (the
+   * tables are mirrors). NOTE: deliberately NOT the serial-0 mapping — Bool FALSE keeps the GH-307
+   * serial convention (1899-12-31) while blank matches Excel's observed blank-argument outputs.
+   */
+  val BlankDate: java.time.LocalDate = java.time.LocalDate.of(1900, 1, 1)
+
   /** Collapse an ArrayResult to its scalar value: top-left, Empty when empty (GH-302). */
   def collapseArray(ar: ArrayResult): CellValue =
     if ar.isEmpty then CellValue.Empty else ar(0, 0)
@@ -159,6 +171,9 @@ private[formula] object ScalarCoercion:
     // GH-307: booleans are their Excel serial in date positions too (TRUE=1 → 1900-01-01,
     // so =YEAR(TRUE) is 1900 like Excel) — delegate so they match the numeric branch exactly
     case b: Boolean => coerceDate(label, if b then BigDecimal(1) else BigDecimal(0))
+    // GH-396: a blank in a date position renders like Excel's serial-0 year/month (see
+    // [[BlankDate]]) — previously a clean error while decodeAsDate/other targets accepted Empty
+    case CellValue.Empty => Right(BlankDate)
     case other => mismatch(label, "date", other)
 
   /** Excel truncates fractional values toward zero in integer positions; guard the Int range. */
@@ -167,6 +182,10 @@ private[formula] object ScalarCoercion:
     if truncated.isValidInt then Right(truncated.toInt)
     else mismatch(label, "valid integer", bd)
 
-  /** Numeric-text parse (the extractNumericForMatch convention): trimmed, total. */
-  private def parseNumericText(s: String): Option[BigDecimal] =
+  /**
+   * Numeric-text parse (the extractNumericForMatch convention): trimmed, total. Shared with
+   * TExprDecoders.decodeAsInt (GH-396) so the direct-cell and Coerced integer boundaries accept the
+   * same text domain.
+   */
+  private[formula] def parseNumericText(s: String): Option[BigDecimal] =
     scala.util.Try(BigDecimal(s.trim)).toOption

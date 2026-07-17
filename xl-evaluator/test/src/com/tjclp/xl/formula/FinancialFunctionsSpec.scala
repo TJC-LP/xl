@@ -353,6 +353,134 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
       case other => fail(s"Expected EvalFailed, got $other")
   }
 
+  // ==================== GH-405: serial-number dates in XIRR/XNPV ranges ====================
+
+  /** Excel serial for a date, exactly as OOXML stores (and XlsxReader re-reads) it. */
+  private def dateSerial(d: LocalDate): BigDecimal =
+    BigDecimal(CellValue.dateTimeToExcelSerial(d.atStartOfDay))
+
+  test("GH-405: XIRR accepts a MIXED serial/DateTime date range (issue repro)") {
+    // Post-round-trip state: authored DateTime anchors re-read as serial Numbers while
+    // EDATE-recomputed dependents are DateTime — the range decode must coerce uniformly
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal("-1000")),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal("500")),
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal("700")),
+      ARef.from0(1, 0) -> CellValue.Number(dateSerial(LocalDate.of(2020, 1, 1))),
+      ARef.from0(1, 1) -> CellValue.DateTime(LocalDate.of(2020, 7, 1).atStartOfDay),
+      ARef.from0(1, 2) -> CellValue.Number(dateSerial(LocalDate.of(2021, 1, 1)))
+    )
+    val expr = TExpr.xirr(
+      CellRange.parse("A1:A3").getOrElse(fail("Invalid range")),
+      CellRange.parse("B1:B3").getOrElse(fail("Invalid range"))
+    )
+    val rate = evalOk(expr, sheet)
+    // XIRR definition: XNPV at the computed rate is ~0 (2020-01-01 → 2020-07-01 is 182
+    // days, → 2021-01-01 is 366 — leap year)
+    val npvAtRate = -1000.0 +
+      500.0 / math.pow(1.0 + rate.toDouble, 182.0 / 365.0) +
+      700.0 / math.pow(1.0 + rate.toDouble, 366.0 / 365.0)
+    assert(math.abs(npvAtRate) < 0.001, s"XNPV at computed XIRR should be ~0, got $npvAtRate")
+  }
+
+  test("GH-405: XNPV accepts a MIXED serial/DateTime date range") {
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal("-1000")),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal("500")),
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal("700")),
+      ARef.from0(1, 0) -> CellValue.Number(dateSerial(LocalDate.of(2020, 1, 1))),
+      ARef.from0(1, 1) -> CellValue.DateTime(LocalDate.of(2020, 7, 1).atStartOfDay),
+      ARef.from0(1, 2) -> CellValue.Number(dateSerial(LocalDate.of(2021, 1, 1)))
+    )
+    val expr = TExpr.xnpv(
+      TExpr.Lit(BigDecimal("0.1")),
+      CellRange.parse("A1:A3").getOrElse(fail("Invalid range")),
+      CellRange.parse("B1:B3").getOrElse(fail("Invalid range"))
+    )
+    val result = evalOk(expr, sheet)
+    val expected = -1000.0 +
+      500.0 / math.pow(1.1, 182.0 / 365.0) +
+      700.0 / math.pow(1.1, 366.0 / 365.0)
+    assert((result.toDouble - expected).abs < 0.01, s"got $result, expected ~$expected")
+  }
+
+  test("GH-405: sparse XIRR block — aligned blank (value, date) pairs still drop together") {
+    // Range folds keep blank-SKIP semantics: the scalar Empty -> 1900-01-01 arm (GH-396) must
+    // not turn a blank date cell into a phantom date, or a sparse block's values/dates counts
+    // would diverge (values skip blanks) and the whole formula would error
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal("-1000")),
+      // A2/B2 deliberately blank — an unfilled row inside the block
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal("1100")),
+      ARef.from0(1, 0) -> CellValue.Number(dateSerial(LocalDate.of(2020, 1, 1))),
+      ARef.from0(1, 2) -> CellValue.DateTime(LocalDate.of(2021, 1, 1).atStartOfDay)
+    )
+    val expr = TExpr.xirr(
+      CellRange.parse("A1:A3").getOrElse(fail("Invalid range")),
+      CellRange.parse("B1:B3").getOrElse(fail("Invalid range"))
+    )
+    val rate = evalOk(expr, sheet)
+    assert((rate.toDouble - 0.1).abs < 0.01, s"expected ~0.1, got $rate")
+  }
+
+  test("GH-405: out-of-range serials in a date range still drop (MaxExcelDateSerial guard)") {
+    // A negative serial is not a date; the coercion guard (0..MaxExcelDateSerial) keeps it
+    // out, so the length mismatch surfaces as a clean error rather than a bogus 1899 date
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal("-1000")),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal("1100")),
+      ARef.from0(1, 0) -> CellValue.Number(dateSerial(LocalDate.of(2020, 1, 1))),
+      ARef.from0(1, 1) -> CellValue.Number(BigDecimal(-5))
+    )
+    val expr = TExpr.xirr(
+      CellRange.parse("A1:A2").getOrElse(fail("Invalid range")),
+      CellRange.parse("B1:B2").getOrElse(fail("Invalid range"))
+    )
+    val err = evalErr(expr, sheet)
+    assert(err.toString.contains("XIRR"), s"expected an XIRR-scoped error, got $err")
+  }
+
+  test("GH-405: XIRR returns block survives the OOXML value round trip (field chain)") {
+    // Field chain (FinAgent QA): a date anchor authored as CellValue.DateTime WRITES as a
+    // serial (correct xlsx) and RE-READS as CellValue.Number — typed DateTime is not
+    // recoverable from OOXML. The EDATE dependent recomputes to DateTime, so post-round-trip
+    // recalculation hands XIRR a mixed Number/DateTime date range. Simulate the reader's
+    // exact output (every DateTime becomes its serial; numFmt styling is invisible to the
+    // evaluator), then recalculate and assert the returns block yields the rate — not the
+    // house IF(ISERROR(...)) "NM " cache.
+    val authored = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal("-1000")),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal("1100")),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDate.of(2020, 1, 1).atStartOfDay),
+      ARef.from0(1, 1) -> CellValue.Formula("=EDATE(B1, 12)", None),
+      ARef.from0(2, 0) -> CellValue.Formula("=XIRR(A1:A2, B1:B2)", None),
+      ARef.from0(2, 1) -> CellValue.Formula(
+        "=IF(ISERROR(XIRR(A1:A2, B1:B2)), \"NM \", XIRR(A1:A2, B1:B2))",
+        None
+      )
+    )
+    val reread = authored.cells.foldLeft(authored) { case (s, (ref, cell)) =>
+      cell.value match
+        case CellValue.DateTime(dt) =>
+          s.put(ref, CellValue.Number(BigDecimal(CellValue.dateTimeToExcelSerial(dt))))
+        case _ => s
+    }
+    val result = Workbook(Vector(reread)).recalculate()
+    assert(
+      result.errors.isEmpty,
+      s"post-round-trip recalc must not error the returns block, got: ${result.errors}"
+    )
+    val evaluated = result.evaluated.getOrElse(SheetName.unsafe("Test"), Map.empty)
+    evaluated.get(ARef.from0(2, 0)) match
+      case Some(CellValue.Number(rate)) =>
+        // -1000 → 1100 over ~1 year ⇒ ~10%
+        assert((rate.toDouble - 0.1).abs < 0.01, s"expected ~0.1, got $rate")
+      case other => fail(s"expected XIRR rate at C1, got $other")
+    evaluated.get(ARef.from0(2, 1)) match
+      case Some(CellValue.Number(_)) => () // the NM guard passes the rate through
+      case other => fail(s"the IF(ISERROR(...)) guard must yield the rate, not $other")
+  }
+
   // ==================== VLOOKUP Tests ====================
 
   test("VLOOKUP: exact match (FALSE)") {

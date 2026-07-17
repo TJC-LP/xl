@@ -65,6 +65,15 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
   val relTypeExtendedProperties =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties"
+  // Workbook-level reference targets checked by the structural lint (GH-397)
+  val relTypeExternalLink =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
+  val relTypeChartsheet =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet"
+  val relTypeDialogsheet =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet"
+  val relTypePivotCacheDefinition =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition"
 
   /** Content type URIs */
   val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"

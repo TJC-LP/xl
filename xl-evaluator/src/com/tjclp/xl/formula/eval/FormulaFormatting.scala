@@ -112,6 +112,9 @@ object FormulaFormatting:
           resolve(name).map(boundedCells(_, range)).getOrElse(Vector.empty)
         // GH-353: the target cells are not in this workbook — no format to inherit from
         case TExpr.RangeLocation.External(_, _, _) => Vector.empty
+        // GH-394: the target range lives behind workbook metadata this walk cannot see —
+        // no format to inherit (the GH-384 NameRef precedent)
+        case TExpr.RangeLocation.Name(_, _) => Vector.empty
 
     def loop(e: TExpr[?]): Vector[(Sheet, ARef)] =
       e match
@@ -180,6 +183,7 @@ object FormulaFormatting:
         // GH-384: a defined-name reference's target cells live behind workbook metadata this
         // sheet-level walk cannot see — no format to inherit (like cross-sheet refs)
         case TExpr.NameRef(_) => Vector.empty
+        case TExpr.SheetNameRef(_, _) => Vector.empty
 
         // GH-306: runtime coercion wrapper — transparent for format inference
         case TExpr.Coerced(inner, _) => loop(inner)
