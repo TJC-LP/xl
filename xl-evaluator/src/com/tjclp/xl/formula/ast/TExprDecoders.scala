@@ -203,7 +203,11 @@ trait TExprDecoders:
    *     exclusively as serials with date numFmts; guarded to 0..MaxExcelDateSerial like
    *     ScalarCoercion.coerceDate, 1900 date system — the evaluator-wide assumption, see
    *     docs/LIMITATIONS.md)
-   *   - Formula -> cached DateTime or cached serial Number, same conversions
+   *   - Boolean -> its Excel serial (GH-396: mirrors coerceDate's GH-307 arm — previously the
+   *     literal =YEAR(TRUE) coerced while a TRUE cell errored)
+   *   - Empty -> 1900-01-01 (GH-396: Excel's blank-as-serial-0 rendering, see
+   *     ScalarCoercion.BlankDate for the day-0 caveat)
+   *   - Formula -> cached DateTime, serial Number, or Bool, same conversions
    *   - Text -> error (Excel does not coerce arbitrary text in date positions)
    */
   def decodeAsDate(cell: Cell): Either[CodecError, java.time.LocalDate] =
@@ -212,16 +216,23 @@ trait TExprDecoders:
         Some(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate)
       else None
 
+    def boolToDate(b: Boolean): Either[CodecError, java.time.LocalDate] =
+      serialToDate(if b then BigDecimal(1) else BigDecimal(0))
+        .toRight(CodecError.TypeMismatch("Date", cell.value))
+
     cell.value match
       case CellValue.DateTime(dt) => scala.util.Right(dt.toLocalDate)
       // Out-of-range serials (negative or beyond 9999-12-31) fold to a clean error, mirroring
       // ScalarCoercion.coerceDate's guard
       case CellValue.Number(serial) =>
         serialToDate(serial).toRight(CodecError.TypeMismatch("Date", cell.value))
+      case CellValue.Bool(b) => boolToDate(b)
+      case CellValue.Empty => scala.util.Right(ScalarCoercion.BlankDate)
       case CellValue.Formula(_, Some(CellValue.DateTime(cached))) =>
         scala.util.Right(cached.toLocalDate)
       case CellValue.Formula(_, Some(CellValue.Number(cached))) =>
         serialToDate(cached).toRight(CodecError.TypeMismatch("Date", cell.value))
+      case CellValue.Formula(_, Some(CellValue.Bool(cached))) => boolToDate(cached)
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(
@@ -233,27 +244,39 @@ trait TExprDecoders:
   /**
    * Decode cell as Int with automatic type coercion.
    *
-   * Matches Excel semantics:
-   *   - Number -> toInt if valid
+   * GH-396: mirrors ScalarCoercion.coerceInteger exactly — the direct-cell and Coerced integer
+   * boundaries previously diverged (a blank/numeric-text/fractional cell errored where the same
+   * value as a literal or call result coerced):
+   *   - Number -> truncates toward zero like Excel (LEFT("hello", 2.7) -> "he"); values outside
+   *     the Int range are a clean error
    *   - Boolean -> 1 for TRUE, 0 for FALSE
-   *   - Text -> parse as number (not yet implemented)
-   *   - Other -> error
+   *   - Text -> numeric text parses ("3" -> 3; "abc" is a clean error — Excel #VALUE!)
+   *   - Empty -> 0 (=LEFT("hello", <blank>) is "")
+   *   - Formula -> cached value unwraps first, same conversions (it was the only decoder missing
+   *     the cached arms)
    */
   def decodeAsInt(cell: Cell): Either[CodecError, Int] =
-    cell.value match
-      case CellValue.Number(n) if n.isValidInt => scala.util.Right(n.toInt)
+    def truncateToInt(n: BigDecimal): Either[CodecError, Int] =
+      val truncated = n.setScale(0, scala.math.BigDecimal.RoundingMode.DOWN)
+      if truncated.isValidInt then scala.util.Right(truncated.toInt)
+      else scala.util.Left(CodecError.TypeMismatch("Int", cell.value))
+
+    def convert(value: CellValue): Either[CodecError, Int] = value match
+      case CellValue.Number(n) => truncateToInt(n)
       case CellValue.Bool(b) => scala.util.Right(ArrayArithmetic.boolToNumeric(b).toInt)
-      case CellValue.Number(n) =>
+      case CellValue.Text(s) =>
+        ScalarCoercion.parseNumericText(s) match
+          case Some(n) => truncateToInt(n)
+          case None => scala.util.Left(CodecError.TypeMismatch("Int", cell.value))
+      case CellValue.Empty => scala.util.Right(0)
+      case _ =>
         scala.util.Left(
           CodecError.TypeMismatch(
             expected = "Int",
-            actual = CellValue.Number(n)
+            actual = cell.value
           )
         )
-      case other =>
-        scala.util.Left(
-          CodecError.TypeMismatch(
-            expected = "Int",
-            actual = other
-          )
-        )
+
+    cell.value match
+      case CellValue.Formula(_, Some(cached)) => convert(cached)
+      case other => convert(other)
