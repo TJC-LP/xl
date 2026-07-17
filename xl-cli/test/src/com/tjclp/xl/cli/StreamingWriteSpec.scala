@@ -760,6 +760,26 @@ class StreamingWriteSpec extends FunSuite:
       Files.deleteIfExists(jsonPath)
   }
 
+  test("streaming batch: chart is rejected with clear unsupported message") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val jsonPath = tempJson("""[{"op":"chart","type":"pie","data":"B2:B3","at":"E2"}]""")
+    try
+      ExcelIO.instance[IO].write(Workbook(Sheet("Test")), sourcePath).unsafeRunSync()
+
+      val ex = intercept[Exception] {
+        StreamingWriteCommands
+          .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+          .unsafeRunSync()
+      }
+
+      assert(ex.getMessage.contains("not supported in streaming mode"), ex.getMessage)
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }
+
   test("streaming batch: formula dragging shifts references correctly") {
     val sourcePath = tempXlsx()
     val outputPath = tempXlsx()
