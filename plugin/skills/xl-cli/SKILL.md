@@ -111,6 +111,7 @@ xl -f <file> -o <out> import-md <table.md> --start A1   # GFM markdown table imp
 ```bash
 xl -f a.xlsx diff -g b.xlsx --format markdown          # Workbook diff (exit 0 identical, 1 differs)
 xl -f a.xlsx diff -g b.xlsx --format json              # Stable JSON schema for tooling
+xl -f out.xlsx lint                                    # Validate package structure before sending (exit 0 clean, 1 findings) (0.15.0+)
 xl -f <file> -s <sheet> filter --where "B > 100 AND D = TRUE" --header --format csv
 xl -f <file> -s <sheet> filter --where "Name LIKE 'Acme%'" --columns A,C:E --limit 20
 ```
@@ -119,6 +120,7 @@ xl -f <file> -s <sheet> filter --where "Name LIKE 'Acme%'" --columns A,C:E --lim
 ```bash
 xl -f <file> -s <sheet> -o <out> add-image logo.png --at B2          # Embed picture (png/jpeg/gif/bmp...)
 xl -f <file> -s <sheet> -o <out> chart add --type bar --data B2:D10 --categories A2:A10 --title "Revenue" --at F2:K15
+xl -f <file> -s <sheet> -o <out> chart add --type column --data B2:D10 --series-colors "#307FE2,#005670" --at F2  # Brand colors (0.15.0+; unset series cycle theme accents)
 ```
 
 ### Row/Column Operations (require `-o`)
@@ -324,7 +326,7 @@ Apply multiple operations atomically:
 ]
 ```
 
-**Operations**: put, putf, style, merge, unmerge, colwidth, rowheight, and more — all 26 listed under "All batch operations" below
+**Operations**: put, putf, style, merge, unmerge, colwidth, rowheight, and more — all 27 listed under "All batch operations" below
 
 **Native JSON types** (recommended for numeric data):
 ```json
@@ -485,7 +487,7 @@ echo '[{"op":"putf","ref":"A1","formula":"=SUM(B1:B10)"},{"op":"style","range":"
 echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
 ```
 
-**All batch operations** (26): `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`, `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `cf` (last five: 0.13.0)
+**All batch operations** (27): `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`, `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `cf` (last five: 0.13.0), `chart` (0.15.0)
 
 **Freeze/unfreeze/copy/hyperlink in batch:**
 ```json
