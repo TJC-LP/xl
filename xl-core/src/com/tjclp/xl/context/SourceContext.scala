@@ -24,9 +24,30 @@ final case class ChartSnapshot(
 ) derives CanEqual
 
 /**
+ * Physical source archive a workbook was read from.
+ *
+ * OnDisk sources are re-opened by path for preserved-part access; InMemory sources (GH-412) carry
+ * the full archive bytes, so byte-array reads preserve unknown parts exactly like path reads — a
+ * workbook read from bytes and one read from a path over the same content write byte-identically.
+ */
+enum SourceContent derives CanEqual:
+  case OnDisk(path: Path)
+  case InMemory(bytes: ArraySeq[Byte])
+
+object SourceContent:
+  /**
+   * Zero-copy array view over in-memory archive bytes. The reader wraps a private clone at the
+   * byte-read boundary, so exposing the backing array within xl never aliases caller-owned memory.
+   */
+  private[xl] def rawArray(bytes: ArraySeq[Byte]): Array[Byte] = bytes match
+    case b: ArraySeq.ofByte => b.unsafeArray
+    case other => other.toArray
+
+/**
  * Captures metadata about the physical XLSX that produced a [[Workbook]]. The context enables
- * surgical write operations by preserving the manifest of ZIP entries. The PreservedPartStore can
- * be reconstructed from the sourcePath when needed for IO operations.
+ * surgical write operations by preserving the manifest of ZIP entries. Preserved parts are read
+ * back from [[SourceContent]] (the source file, or the in-memory archive) when needed for IO
+ * operations.
  *
  * Per-sheet source mappings are keyed by STABLE SHEET IDENTITY — the sheet NAME as read (unique per
  * workbook), kept current through tracked edits (GH-315):
@@ -60,7 +81,7 @@ final case class ChartSnapshot(
  *   in that case.
  */
 final case class SourceContext(
-  sourcePath: Path,
+  content: SourceContent,
   partManifest: PartManifest,
   modificationTracker: ModificationTracker,
   fingerprint: SourceFingerprint,
@@ -147,8 +168,33 @@ object SourceContext:
     chartSnapshots: Map[SheetName, Vector[ChartSnapshot]] = Map.empty,
     sheetPathMapping: Map[SheetName, String] = Map.empty
   ): SourceContext =
+    fromContent(
+      SourceContent.OnDisk(path),
+      manifest,
+      fingerprint,
+      commentPathMapping,
+      drawingPathMapping,
+      drawingSnapshots,
+      chartSnapshots,
+      sheetPathMapping
+    )
+
+  /**
+   * Construct a context over any [[SourceContent]] — a file on disk, or the in-memory archive of a
+   * byte-array read (GH-412). Same identity-keyed mapping semantics as [[fromFile]].
+   */
+  def fromContent(
+    content: SourceContent,
+    manifest: PartManifest,
+    fingerprint: SourceFingerprint,
+    commentPathMapping: Map[SheetName, String] = Map.empty,
+    drawingPathMapping: Map[SheetName, String] = Map.empty,
+    drawingSnapshots: Map[SheetName, Vector[Drawing]] = Map.empty,
+    chartSnapshots: Map[SheetName, Vector[ChartSnapshot]] = Map.empty,
+    sheetPathMapping: Map[SheetName, String] = Map.empty
+  ): SourceContext =
     SourceContext(
-      path,
+      content,
       manifest,
       ModificationTracker.clean,
       fingerprint,

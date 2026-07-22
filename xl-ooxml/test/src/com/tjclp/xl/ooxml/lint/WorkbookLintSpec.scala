@@ -436,6 +436,32 @@ class WorkbookLintSpec extends FunSuite:
     roundTripLintsClean(XmlBackend.SaxStax)
   }
 
+  test("GH-412: bytes-read round-trip with externalReferences lints clean too") {
+    // Same acceptance as the path-based round-trip, through readFromBytes: the in-memory
+    // SourceContext must feed the identical preservation machinery.
+    val output = Files.createTempFile("lint-roundtrip-bytes", ".xlsx")
+    try
+      val modified = for
+        wb <- XlsxReader.readFromBytes(zipBytes(externalParts))
+        sheet <- wb("Sheet1")
+      yield wb.put(sheet.put(ref"A1" -> "Modified"))
+      val wb = modified.fold(err => fail(s"read/modify failed: $err"), identity)
+      XlsxWriter.write(wb, output).fold(err => fail(s"write failed: $err"), identity)
+
+      val wbXml = readEntry(output, "xl/workbook.xml")
+      assert(wbXml.contains("<externalReferences>"), s"externalReferences dropped:\n$wbXml")
+      assert(wbXml.contains("<workbookProtection"), s"workbookProtection dropped:\n$wbXml")
+
+      val findings =
+        WorkbookLint.lint(output).fold(err => fail(s"lint errored on xl output: $err"), identity)
+      assertEquals(
+        findings,
+        Vector.empty[Finding],
+        s"xl's bytes-read output must lint clean:\n$wbXml"
+      )
+    finally Files.deleteIfExists(output)
+  }
+
   test("fresh scratch workbook written by xl lints clean") {
     val output = Files.createTempFile("lint-fresh", ".xlsx")
     try

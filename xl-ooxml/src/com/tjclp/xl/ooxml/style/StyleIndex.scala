@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml.style
 
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.context.SourceContext
+import com.tjclp.xl.context.{SourceContent, SourceContext}
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.border.Border
@@ -178,7 +178,7 @@ object StyleIndex:
    * @param wb
    *   The workbook with modified sheets
    * @param ctx
-   *   Source context providing modification tracker and original file path
+   *   Source context providing modification tracker and the source archive (file or in-memory)
    * @param sheetsRequiringRemapping
    *   Additional sheet indices that the writer will regenerate even if the modification tracker is
    *   clean, such as secure formula-escaping rewrites.
@@ -199,14 +199,18 @@ object StyleIndex:
   ): (StyleIndex, Map[Int, Map[Int, Int]]) =
     val tracker = ctx.modificationTracker
     val needsRemappingForAll = tracker.modifiedMetadata || tracker.reorderedSheets
-    val sourcePath = ctx.sourcePath
     import scala.collection.mutable
     import java.util.zip.ZipInputStream
-    import java.io.FileInputStream
+    import java.io.{ByteArrayInputStream, FileInputStream}
 
-    // Step 1: Parse original styles.xml to get ALL components (byte-perfect preservation)
+    // Step 1: Parse original styles.xml to get ALL components (byte-perfect preservation).
+    // GH-412: the source archive may live on disk or in memory (byte-array reads).
     val originalWorkbookStyles: WorkbookStyles = {
-      val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
+      val rawStream = ctx.content match
+        case SourceContent.OnDisk(path) => new FileInputStream(path.toFile)
+        case SourceContent.InMemory(bytes) =>
+          new ByteArrayInputStream(SourceContent.rawArray(bytes))
+      val sourceZip = new ZipInputStream(rawStream)
       try
         var entry = sourceZip.getNextEntry
         var result: WorkbookStyles = WorkbookStyles.default
