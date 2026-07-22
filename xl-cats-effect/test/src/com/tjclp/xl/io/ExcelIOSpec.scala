@@ -91,6 +91,24 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
     finally zipOut.close()
 
+  /** Read every ZIP entry of an xlsx into name -> UTF-8 content (all parts are XML text). */
+  private def zipEntryContents(path: Path): Map[String, String] =
+    import java.util.zip.ZipFile
+    import scala.jdk.CollectionConverters.*
+    val zipFile = new ZipFile(path.toFile)
+    try
+      zipFile
+        .entries()
+        .asScala
+        .map { entry =>
+          entry.getName -> new String(
+            zipFile.getInputStream(entry).readAllBytes(),
+            StandardCharsets.UTF_8
+          )
+        }
+        .toMap
+    finally zipFile.close()
+
   tempDir.test("read: loads workbook into memory") { dir =>
     // Create test file using current writer
     val initial = Workbook("Test")
@@ -1605,41 +1623,101 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("writeStream: single-pass is faster than auto-detect") { dir =>
+  // GH-414: the old form of these tests compared wall-clock times of the two
+  // write paths ("single-pass is faster than auto-detect") — a scheduling race
+  // that flaked under parallel load. The structural assertions below pin the
+  // properties the timing was a proxy for: the hinted path streams once,
+  // straight to the destination, with the dimension decided up-front — and
+  // produces output equivalent to the two-pass auto-detect path.
+
+  tempDir.test("writeStream: single-pass with hint matches auto-detect output") { dir =>
     val excel = ExcelIO.instance[IO]
-    val rows = fs2.Stream.range(1, 10001).map { i =>
-      RowData(i, Map(0 -> CellValue.Number(BigDecimal(i))))
+
+    def rows = fs2.Stream.range(1, 201).map { i =>
+      RowData(i, Map(0 -> CellValue.Text(s"Item $i"), 1 -> CellValue.Number(BigDecimal(i))))
     }
 
-    // Single-pass with hint (no temp file overhead)
-    val path1 = dir.resolve("single-pass.xlsx")
-    val dimHint = CellRange.parse("A1:A10000").toOption
-
-    // Auto-detect (temp file + two passes)
-    val path2 = dir.resolve("auto-detect.xlsx")
+    val hinted = dir.resolve("single-pass.xlsx")
+    val autoDetected = dir.resolve("auto-detect.xlsx")
+    // Hint equals the true data bounds, so both paths must agree on everything.
+    val dimHint = CellRange.parse("A1:B200").toOption
 
     for
-      // Time single-pass
-      start1 <- IO(System.nanoTime())
-      _ <- rows.through(excel.writeStream(path1, "Data", dimension = dimHint)).compile.drain
-      end1 <- IO(System.nanoTime())
-      singlePassMs = (end1 - start1) / 1000000
-
-      // Re-create stream (consumed by first write)
-      rows2 = fs2.Stream.range(1, 10001).map { i =>
-        RowData(i, Map(0 -> CellValue.Number(BigDecimal(i))))
-      }
-
-      // Time auto-detect
-      start2 <- IO(System.nanoTime())
-      _ <- rows2.through(excel.writeStreamWithAutoDetect(path2, "Data")).compile.drain
-      end2 <- IO(System.nanoTime())
-      autoDetectMs = (end2 - start2) / 1000000
+      _ <- rows.through(excel.writeStream(hinted, "Data", dimension = dimHint)).compile.drain
+      _ <- rows.through(excel.writeStreamWithAutoDetect(autoDetected, "Data")).compile.drain
+      hintedEntries <- IO(zipEntryContents(hinted))
+      autoEntries <- IO(zipEntryContents(autoDetected))
+      readBack <- excel.readStream(hinted).compile.toVector
     yield
-      // Single-pass should be faster (roughly 2x due to no temp file I/O)
-      // We allow some tolerance since timing can vary
+      // Dimension is present in the hinted output (so the equality below is not vacuous)
       assert(
-        singlePassMs < autoDetectMs * 1.5,
-        s"Single-pass ($singlePassMs ms) should be faster than auto-detect ($autoDetectMs ms)"
+        hintedEntries("xl/worksheets/sheet1.xml").contains("""<dimension ref="A1:B200"/>"""),
+        "hinted output should carry the dimension element"
       )
+      // Identical parts, entry for entry: the single pass produced exactly what
+      // the two-pass detection path produced — worksheet, shared strings, statics.
+      assertEquals(hintedEntries, autoEntries)
+      // And the data itself round-trips
+      assertEquals(readBack.size, 200)
+      assertEquals(readBack(0).cells(0), CellValue.Text("Item 1"))
+      assertEquals(readBack(0).cells(1), CellValue.Number(BigDecimal(1)))
+      assertEquals(readBack(199).cells(0), CellValue.Text("Item 200"))
+      assertEquals(readBack(199).cells(1), CellValue.Number(BigDecimal(200)))
+  }
+
+  tempDir.test("writeStream: hinted single-pass streams to destination with dimension up-front") {
+    dir =>
+      val excel = ExcelIO.instance[IO]
+      val hinted = dir.resolve("hinted.xlsx")
+      val autoDetected = dir.resolve("auto-detect.xlsx")
+
+      // A hint that covers MORE than the data (A1:C200 vs actual A1:A100): only a
+      // path that never scans the data can emit it verbatim — a detection pass
+      // would derive A1:A100, as the auto-detect output below proves.
+      val dimHint = CellRange.parse("A1:C200").toOption
+
+      def rows(onRow: Int => IO[Unit]) =
+        fs2.Stream
+          .range(1, 101)
+          .evalTap(onRow)
+          .map(i => RowData(i, Map(0 -> CellValue.Number(BigDecimal(i)))))
+
+      for
+        // Observed while the source is still producing rows: has the destination
+        // file started materializing?
+        midStream <- IO.ref(Option.empty[Boolean])
+        probe = (i: Int) =>
+          if i == 50 then
+            IO(Files.exists(hinted) && Files.size(hinted) > 0L).flatMap(b => midStream.set(Some(b)))
+          else IO.unit
+        _ <- rows(probe)
+          .through(excel.writeStream(hinted, "Data", dimension = dimHint))
+          .compile
+          .drain
+        observed <- midStream.get
+        _ <- rows(_ => IO.unit)
+          .through(excel.writeStreamWithAutoDetect(autoDetected, "Data"))
+          .compile
+          .drain
+        hintedSheet <- IO(zipEntryContents(hinted)("xl/worksheets/sheet1.xml"))
+        autoSheet <- IO(zipEntryContents(autoDetected)("xl/worksheets/sheet1.xml"))
+      yield
+        // Single-pass: static parts + worksheet header hit the destination before
+        // the source is exhausted — no buffer-then-assemble second pass.
+        assertEquals(
+          observed,
+          Some(true),
+          "hinted writeStream should be writing the destination while rows still stream"
+        )
+        // The hint is emitted verbatim, so the dimension was decided before any
+        // row was seen.
+        assert(
+          hintedSheet.contains("""<dimension ref="A1:C200"/>"""),
+          s"hinted path should emit the hint verbatim, got: ${hintedSheet.take(300)}"
+        )
+        // Contrast: auto-detect derives bounds from the data it scanned.
+        assert(
+          autoSheet.contains("""<dimension ref="A1:A100"/>"""),
+          s"auto-detect should emit detected bounds, got: ${autoSheet.take(300)}"
+        )
   }
