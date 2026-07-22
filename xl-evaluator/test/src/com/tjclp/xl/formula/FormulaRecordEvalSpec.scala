@@ -177,9 +177,11 @@ class FormulaRecordEvalSpec extends FunSuite:
     val arr = FormulaKind.ArrayFormula(range("C8:C9"))
     val sheet = Sheet(S).put(ref"C8", CellValue.Formula("=A8*2", Some(num(2)), arr))
     val out = StructuralEditor.insertRows(Workbook(Vector(sheet)), S, at = 0, count = 1)
+    // GH-427 (merged in-wave): shifted formulas re-print equals-free and KEEP their cache —
+    // a successful shift means every reference survived, so the cached value is still valid.
     assertEquals(
       sheetNamed(out, "S")(ref"C9").value,
-      CellValue.Formula("=A9*2", None, FormulaKind.ArrayFormula(range("C9:C10")))
+      CellValue.Formula("A9*2", Some(num(2)), FormulaKind.ArrayFormula(range("C9:C10")))
     )
   }
 
@@ -187,8 +189,9 @@ class FormulaRecordEvalSpec extends FunSuite:
     val arr = FormulaKind.ArrayFormula(range("C8:C9"))
     val sheet = Sheet(S).put(ref"C8", CellValue.Formula("=A1*2", Some(num(2)), arr))
     // Delete row 9 (index0 8): tears C8:C9; the anchor C8 (row index0 7) survives.
+    // GH-427 (merged in-wave): equals-free re-print, cache preserved (references untouched).
     val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 8, count = 1)
-    assertEquals(sheetNamed(out, "S")(ref"C8").value, CellValue.Formula("=A1*2", None))
+    assertEquals(sheetNamed(out, "S")(ref"C8").value, CellValue.Formula("A1*2", Some(num(2))))
   }
 
   test("a structural edit on ANOTHER sheet leaves dataTable records untouched") {
