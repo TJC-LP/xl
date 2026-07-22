@@ -47,9 +47,42 @@ class StructuralCommandSpec extends CatsEffectSuite:
       result <- excel.read(out)
     yield
       val s = result.sheets.head
-      assertEquals(s(ref"B1").value, CellValue.Formula("=A1+A4", None)) // A3 -> A4
+      // GH-427: the rewrite emits the model's equals-free canonical form
+      assertEquals(s(ref"B1").value, CellValue.Formula("A1+A4", None)) // A3 -> A4
       assertEquals(s(ref"A4").value, CellValue.Number(30)) // cell shifted down
       assertEquals(s(ref"A1").value, CellValue.Number(10)) // unchanged
+  }
+
+  test("GH-427: insert-rows keeps cached <v> and emits a single equals-free <f>") {
+    val cached = Some(CellValue.Number(BigDecimal(4)))
+    val wb = Workbook(
+      Vector(
+        Sheet("S")
+          .put(ref"A1", CellValue.Number(2))
+          .put(ref"B1", CellValue.Formula("A1*2", cached))
+      )
+    )
+    val in = tmp("in427")
+    val out = tmp("out427")
+    for
+      _ <- excel.write(wb, in)
+      read <- excel.read(in)
+      _ <- WriteCommands.insertRows(read, read.sheets.headOption, 2, 1, out, config)
+      result <- excel.read(out)
+      raw <- IO.blocking {
+        val zip = new java.util.zip.ZipFile(out.toFile)
+        try
+          val entry = zip.getEntry("xl/worksheets/sheet1.xml")
+          new String(zip.getInputStream(entry).readAllBytes(), "UTF-8")
+        finally zip.close()
+      }
+    yield
+      // model: formula text stays equals-free, cache survives the shift
+      assertEquals(result.sheets.head(ref"B1").value, CellValue.Formula("A1*2", cached))
+      // file: <f> carries no '=' and the cached <v> is still present
+      assert(raw.contains("<f>A1*2</f>"), s"expected equals-free <f> in: $raw")
+      assert(!raw.contains("<f>="), s"leading '=' must not land inside <f>: $raw")
+      assert(raw.contains("<v>4</v>"), s"cached <v> must survive the structural edit: $raw")
   }
 
   test("delete-rows: a reference into the deleted row becomes #REF!") {
@@ -87,8 +120,56 @@ class StructuralCommandSpec extends CatsEffectSuite:
       result <- excel.read(out)
     yield assertEquals(
       result.sheets.head(ref"A2").value,
-      CellValue.Formula("=D1", None)
-    ) // C1 -> D1
+      CellValue.Formula("D1", None) // C1 -> D1 (GH-427: equals-free canonical form)
+    )
+  }
+
+  test("GH-429: insert-rows moves DV + print area + table + autoFilter (the field repro)") {
+    import com.tjclp.xl.sheets.{AutoFilterState, PageSetup}
+    import com.tjclp.xl.tables.TableSpec
+    val table = TableSpec
+      .fromColumnNames("T1", "T1", ref"A1:C5", Vector("Region", "Product", "Units"))
+      .fold(e => fail(s"table: $e"), identity)
+    val sheet = Sheet("Alpha")
+      .put(ref"A1", CellValue.Text("Region"))
+      .put(ref"B1", CellValue.Text("Product"))
+      .put(ref"C1", CellValue.Text("Units"))
+      // the Excel field shape: list DV with prompt/error flags stamped
+      .withDataValidation(
+        ref"H5:H10",
+        DataValidation.listOf("yes", "no").withPrompt("Pick", "yes or no")
+      )
+      .withTable(table)
+      .copy(
+        pageSetup = Some(PageSetup(printArea = Some(ref"A1:D10"))),
+        autoFilter = Some(AutoFilterState.Ranged(ref"A1:C5"))
+      )
+    val in = tmp("in429")
+    val out = tmp("out429")
+    def zipEntry(p: java.nio.file.Path, name: String): String =
+      val zip = new java.util.zip.ZipFile(p.toFile)
+      try
+        val entry = Option(zip.getEntry(name)).getOrElse(fail(s"missing $name"))
+        new String(zip.getInputStream(entry).readAllBytes(), "UTF-8")
+      finally zip.close()
+    for
+      _ <- excel.write(Workbook(sheet), in)
+      read <- excel.read(in)
+      _ <- WriteCommands.insertRows(read, read.sheets.headOption, 2, 2, out, config)
+      result <- excel.read(out)
+    yield
+      val s = result.sheets.head
+      // model: all four range-bearing features moved with the data
+      assertEquals(s.typedDataValidations.flatMap(_.ranges.map(_.toA1)), Vector("H7:H12"))
+      assertEquals(s.pageSetup.flatMap(_.printArea).map(_.toA1), Some("A1:D12"))
+      assertEquals(s.tables.get("T1").map(_.range.toA1), Some("A1:C7"))
+      assertEquals(s.autoFilter, Some(AutoFilterState.Ranged(ref"A1:C7": CellRange)))
+      // file: zip-level proof for the adversarial reader
+      val sheetXml = zipEntry(out, "xl/worksheets/sheet1.xml")
+      assert(sheetXml.contains("sqref=\"H7:H12\""), sheetXml)
+      assert(sheetXml.contains("<autoFilter ref=\"A1:C7\""), sheetXml)
+      assert(zipEntry(out, "xl/tables/table1.xml").contains("ref=\"A1:C7\""))
+      assert(zipEntry(out, "xl/workbook.xml").contains("Alpha!$A$1:$D$12"))
   }
 
   test("delete-cols: range form C:E removes the whole span (GH-129)") {

@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.workbooks.Workbook
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{DataValidation, DvKind, Sheet}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.cf.{CfRule, Cfvo, ConditionalFormat}
@@ -82,13 +82,19 @@ object StructuralEditor:
   ): Sheet =
     val updatedCells = sheet.cells.map { case (ref, cell) =>
       cell.value match
-        case CellValue.Formula(formulaStr, _) =>
+        case CellValue.Formula(formulaStr, cachedValue) =>
           FormulaParser.parse(formulaStr) match
             case Right(expr) =>
               FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
                 case Some(shiftedExpr) =>
-                  val newStr = FormulaPrinter.print(shiftedExpr, includeEquals = true)
-                  (ref, cell.copy(value = CellValue.Formula(newStr, None)))
+                  // GH-427: the model's canonical formula form is equals-free (the reader strips
+                  // the '='; the writer serializes the string VERBATIM into <f>, where a leading
+                  // '=' is a spec deviation openpyxl reads back as '==...'). And a successful
+                  // shift means every reference survived, so the cached value is still the
+                  // Excel-valid display value — Excel itself keeps caches across structural
+                  // edits; discarding it blanked every formula cell until a recalc.
+                  val newStr = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+                  (ref, cell.copy(value = CellValue.Formula(newStr, cachedValue)))
                 case None =>
                   (ref, cell.copy(value = CellValue.Error(CellError.Ref)))
             // Unparseable formula: leave untouched rather than guess.
@@ -98,8 +104,31 @@ object StructuralEditor:
     sheet.copy(
       cells = updatedCells,
       conditionalFormats =
-        rewriteCfFormulas(sheet.conditionalFormats, shiftLocal, editedSheet, isRow, at, delta)
+        rewriteCfFormulas(sheet.conditionalFormats, shiftLocal, editedSheet, isRow, at, delta),
+      dataValidations =
+        rewriteDvFormulas(sheet.dataValidations, shiftLocal, editedSheet, isRow, at, delta)
     )
+
+  /**
+   * Rewrite bare formula TEXT (no leading '=') through the structural shift: unparseable text —
+   * including inline list literals like `"yes,no"`, which parse as string literals and print back
+   * verbatim — rides unchanged; a fully-deleted reference degrades the text to `"#REF!"` (the
+   * Excel-observable surface). Shared by the CF and DV formula rewrites.
+   */
+  private def shiftFormulaText(
+    formula: String,
+    shiftLocal: Boolean,
+    editedSheet: String,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): String =
+    FormulaParser.parse(s"=$formula") match
+      case Right(expr) =>
+        FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
+          case Some(shifted) => FormulaPrinter.print(shifted, includeEquals = false)
+          case None => "#REF!"
+      case Left(_) => formula
 
   /**
    * GH-136: rewrite TYPED conditional-format formula text (CellIs.formula1/formula2,
@@ -119,12 +148,7 @@ object StructuralEditor:
     delta: Int
   ): Vector[ConditionalFormat] =
     def shiftText(formula: String): String =
-      FormulaParser.parse(s"=$formula") match
-        case Right(expr) =>
-          FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
-            case Some(shifted) => FormulaPrinter.print(shifted, includeEquals = false)
-            case None => "#REF!"
-        case Left(_) => formula
+      shiftFormulaText(formula, shiftLocal, editedSheet, isRow, at, delta)
     def shiftCfvo(cfvo: Cfvo): Cfvo = cfvo match
       case Cfvo.Formula(f) => Cfvo.Formula(shiftText(f))
       case other => other
@@ -145,6 +169,35 @@ object StructuralEditor:
         }
         ConditionalFormat.Rules(ranges, shifted, pivot)
       case preserved: ConditionalFormat.Preserved => preserved
+    }
+
+  /**
+   * GH-429: rewrite TYPED data-validation formula text through the same shift as cell and cf
+   * formulas — without this, absolute list sources (`$Z$1:$Z$3`, `Lists!$A$1:$A$5`) detach from
+   * their data on every structural edit. Inline literals (`"yes,no"`) parse as string literals and
+   * ride verbatim; a fully-deleted source degrades to `"#REF!"` text; Preserved payload formulas
+   * are never rewritten (their sqref envelope was already shifted by the pure core shift).
+   */
+  private def rewriteDvFormulas(
+    dvs: Vector[DataValidation],
+    shiftLocal: Boolean,
+    editedSheet: String,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Vector[DataValidation] =
+    def shiftText(formula: String): String =
+      shiftFormulaText(formula, shiftLocal, editedSheet, isRow, at, delta)
+    dvs.map {
+      case rules: DataValidation.Rules =>
+        val newKind = rules.kind match
+          case DvKind.List(f) => DvKind.List(shiftText(f))
+          case DvKind.Custom(f) => DvKind.Custom(shiftText(f))
+          case DvKind.AnyValue => DvKind.AnyValue
+          case DvKind.Bounded(t, op, f1, f2) =>
+            DvKind.Bounded(t, op, shiftText(f1), f2.map(shiftText))
+        rules.copy(kind = newKind)
+      case preserved: DataValidation.Preserved => preserved
     }
 
   /** Ergonomic workbook extensions. */

@@ -256,6 +256,40 @@ object XmlUtil:
       sb.toString
 
   /**
+   * ST_Xstring escape for ATTRIBUTE values (GH-429): prompt/error message attributes on
+   * `<dataValidation>`.
+   *
+   * Attribute-value normalization (XML 1.0 §3.3.3) turns raw TAB/LF/CR into spaces on re-parse — a
+   * raw newline in an attr value survives serialization but comes back as a space — so all three
+   * must be escaped for fidelity, not just CR as in element content ([[escapeXstring]]). Literal
+   * `_xHHHH_` patterns protect their leading underscore as `_x005F_`.
+   *
+   * Law: `decodeXstring(escapeXstringAttr(s)) == s`.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def escapeXstringAttr(s: String): String =
+    var needs = false
+    var i = 0
+    while !needs && i < s.length do
+      val c = s.charAt(i)
+      if c == '\r' || c == '\n' || c == '\t' || (c == '_' && isXstringEscapeAt(s, i)) then
+        needs = true
+      i += 1
+    if !needs then s
+    else
+      val sb = new java.lang.StringBuilder(s.length + 16)
+      var j = 0
+      while j < s.length do
+        val c = s.charAt(j)
+        if c == '\r' then sb.append("_x000D_")
+        else if c == '\n' then sb.append("_x000A_")
+        else if c == '\t' then sb.append("_x0009_")
+        else if c == '_' && isXstringEscapeAt(s, j) then sb.append("_x005F_")
+        else sb.append(c)
+        j += 1
+      sb.toString
+
+  /**
    * Decode ECMA-376 `_xHHHH_` escapes (Part 1, §22.9.2.19) in `<t>`/`<v>` text content (GH-288).
    *
    * Single left-to-right pass: `_x000D_` → CR, `_x005F_` → `_` (so `_x005F_x000D_` decodes to the

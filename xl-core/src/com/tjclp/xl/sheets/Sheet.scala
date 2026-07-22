@@ -10,7 +10,7 @@ import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.units.StyleId
-import com.tjclp.xl.tables.TableSpec
+import com.tjclp.xl.tables.{TableColumn, TableSpec}
 
 import scala.collection.immutable.{Map, Set}
 import scala.util.boundary, boundary.break
@@ -58,6 +58,14 @@ import scala.util.boundary, boundary.break
  *   Data-validation entries (GH-375). Document order is emission order inside the single
  *   `<dataValidations>` container; use [[withDataValidation]] to append. Unmodeled entries ride
  *   through as [[DataValidation.Preserved]] (the conditionalFormats pattern).
+ *
+ * @param autoFilter
+ *   Sheet-level autoFilter overlay (GH-429, lift-and-overlay tri-state). `None` is the passive
+ *   default: any source `<autoFilter>` rides the preservedKnown passthrough verbatim.
+ *   `Some(Ranged(r))` overlays the `ref` attribute on write (filterColumn/sortState children ride
+ *   verbatim); the reader populates it from a parseable source `@ref` so structural edits keep the
+ *   filter attached to its data. `Some(Remove)` actively strips the element (a collapsed range must
+ *   not resurrect the stale source filter).
  */
 final case class Sheet(
   name: SheetName,
@@ -76,7 +84,8 @@ final case class Sheet(
   drawings: Vector[Drawing] = Vector.empty,
   conditionalFormats: Vector[ConditionalFormat] = Vector.empty,
   tabColor: Option[Color] = None,
-  dataValidations: Vector[DataValidation] = Vector.empty
+  dataValidations: Vector[DataValidation] = Vector.empty,
+  autoFilter: Option[AutoFilterState] = None
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -195,20 +204,15 @@ final case class Sheet(
           idx(col.index0).map(ni => Column.from0(ni) -> p)
         }
 
-    // Shared range algebra on the active axis: clamp the span; None when it collapses entirely
-    // into the deletion. Used by merged ranges, conditional-format envelopes, and data
-    // validations — the three sqref-shaped structures that must shift identically.
+    // Shared range algebra on the active axis (Sheet.shiftSpan): clamp the span at the sheet
+    // edge (GH-428) and drop it when it collapses into a deletion or is pushed fully past the
+    // edge. Used by merged ranges, conditional-format envelopes, data validations, print areas,
+    // tables, and the autoFilter range — every sqref-shaped structure must shift identically.
+    val axisMax = if rowAxis then Row.MaxIndex0 else Column.MaxIndex0
     def shiftRangeOnAxis(range: CellRange): Option[CellRange] =
-      val s = axisOf(range.start)
-      val e = axisOf(range.end)
-      val (ns, ne) =
-        if !deleting then (if s >= at then s + count else s, if e >= at then e + count else e)
-        else
-          val ns0 = if s < at then s else if s >= at + count then s - count else at
-          val ne0 = if e < at then e else if e >= at + count then e - count else at - 1
-          (ns0, ne0)
-      if ns > ne then None
-      else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
+      Sheet
+        .shiftSpan(axisOf(range.start), axisOf(range.end), at, count, deleting, axisMax)
+        .map((ns, ne) => CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
 
     // Merged ranges: clamp the active-axis span; drop if it collapses entirely into the deletion.
     val newMerges = mergedRanges.flatMap(shiftRangeOnAxis)
@@ -257,28 +261,92 @@ final case class Sheet(
     // block's envelope. A range collapsing entirely is dropped; a block whose ranges all drop is
     // removed (Excel deletes rules whose entire range is deleted). Rules themselves — including
     // CfRule.Preserved payloads — are untouched here; typed formula rewriting is layered in
-    // xl-evaluator's StructuralEditor. ConditionalFormat.Preserved blocks are untouched.
+    // xl-evaluator's StructuralEditor. ConditionalFormat.Preserved blocks shift their root
+    // sqref textually (GH-429, SqrefShift) — an unmovable payload rides unchanged, a fully
+    // collapsed one drops.
     val newCondFmts = conditionalFormats.flatMap {
-      case ConditionalFormat.Rules(ranges, rules, pivot) =>
-        val shiftedRanges = ranges.flatMap(shiftRangeOnAxis)
+      case cf: ConditionalFormat.Rules =>
+        val shiftedRanges = cf.ranges.flatMap(shiftRangeOnAxis)
         if shiftedRanges.isEmpty then None
-        else Some(ConditionalFormat.Rules(shiftedRanges, rules, pivot))
-      case preserved: ConditionalFormat.Preserved => Some(preserved)
+        else Some(cf.copy(ranges = shiftedRanges))
+      case ConditionalFormat.Preserved(xml) =>
+        SqrefShift
+          .shiftPayload(xml, "conditionalFormatting", shiftRangeOnAxis)
+          .map(ConditionalFormat.Preserved.apply)
     }
 
     // Data validations (GH-375): same envelope algebra — without it, dropdowns detach from their
     // cells on row/column insert or delete. An entry whose ranges all drop is removed (Excel
-    // deletes validations whose entire range is deleted); Preserved entries are untouched.
+    // deletes validations whose entire range is deleted); Preserved entries shift their sqref
+    // textually like Preserved cf blocks (GH-429).
     val newDataValidations = dataValidations.flatMap {
-      case DataValidation.Rules(ranges, kind, allowBlank, showDropdown) =>
-        val shiftedRanges = ranges.flatMap(shiftRangeOnAxis)
+      case dv: DataValidation.Rules =>
+        val shiftedRanges = dv.ranges.flatMap(shiftRangeOnAxis)
         if shiftedRanges.isEmpty then None
-        else Some(DataValidation.Rules(shiftedRanges, kind, allowBlank, showDropdown))
-      case preserved: DataValidation.Preserved => Some(preserved)
+        else Some(dv.copy(ranges = shiftedRanges))
+      case DataValidation.Preserved(xml) =>
+        SqrefShift
+          .shiftPayload(xml, "dataValidation", shiftRangeOnAxis)
+          .map(DataValidation.Preserved.apply)
+    }
+
+    // Print setup (GH-429): the print area shifts on both axes; the repeat-row span only on the
+    // row axis (via the same shiftSpan clamp, 1-based <-> 0-based at the boundary). A collapsed
+    // area/span clears its field — a documented divergence from Excel's #REF!-name (the model
+    // has no error state for print names).
+    val newPageSetup = pageSetup.map { ps =>
+      ps.copy(
+        printArea = ps.printArea.flatMap(shiftRangeOnAxis),
+        repeatRows =
+          if !rowAxis then ps.repeatRows
+          else
+            ps.repeatRows.flatMap((s, e) =>
+              Sheet
+                .shiftSpan(s - 1, e - 1, at, count, deleting, Row.MaxIndex0)
+                .map((ns, ne) => (ns + 1, ne + 1))
+            )
+      )
+    }
+
+    // Tables (GH-429): shift each spec's range; drop the table when the range collapses or
+    // shrinks below header+totals+one-data-row (never emit a table Excel must repair). Row-axis
+    // edits keep columns; column-axis edits retabulate them (drop deleted columns, splice
+    // synthesized ones for interior inserts) and stamp synthesized header names into their
+    // header-row cells — Excel itself writes "Column1" into the header cell, and a name/cell
+    // mismatch risks table repair.
+    val (newTables, headerStamps) =
+      tables.foldLeft((Map.empty[String, TableSpec], Vector.empty[(ARef, Cell)])) {
+        case ((accTables, accStamps), (key, spec)) =>
+          val shifted = shiftRangeOnAxis(spec.range).flatMap { newRange =>
+            val minHeight =
+              (if spec.showHeaderRow then 1 else 0) + (if spec.showTotalsRow then 1 else 0) + 1
+            if newRange.height < minHeight then None
+            else if rowAxis then Some((spec.copy(range = newRange), Vector.empty))
+            else Sheet.retabulateColumns(spec, newRange, at, count, deleting)
+          }
+          shifted match
+            case Some((newSpec, freshCols)) =>
+              val stamps =
+                if newSpec.showHeaderRow then
+                  freshCols.map { (colIdx, colName) =>
+                    val ref = ARef.from0(colIdx, newSpec.range.start.row.index0)
+                    ref -> Cell(ref, CellValue.Text(colName))
+                  }
+                else Vector.empty
+              (accTables.updated(key, newSpec), accStamps ++ stamps)
+            case None => (accTables, accStamps)
+      }
+
+    // Sheet-level autoFilter overlay (GH-429): Ranged shifts like every sqref; a collapse becomes
+    // an active Remove (a plain None would resurrect the stale source filter on write).
+    val newAutoFilter = autoFilter.map {
+      case AutoFilterState.Ranged(r) =>
+        shiftRangeOnAxis(r).fold(AutoFilterState.Remove)(AutoFilterState.Ranged.apply)
+      case AutoFilterState.Remove => AutoFilterState.Remove
     }
 
     copy(
-      cells = newCells,
+      cells = newCells ++ headerStamps,
       comments = newComments,
       rowProperties = newRowProps,
       columnProperties = newColProps,
@@ -286,7 +354,10 @@ final case class Sheet(
       freezePane = newFreeze,
       drawings = newDrawings,
       conditionalFormats = newCondFmts,
-      dataValidations = newDataValidations
+      dataValidations = newDataValidations,
+      pageSetup = newPageSetup,
+      tables = newTables,
+      autoFilter = newAutoFilter
     )
 
   /** Put CellValue at reference (always succeeds - CellValue is pre-validated) */
@@ -941,6 +1012,85 @@ final case class Sheet(
 object Sheet:
 
   /**
+   * Span algebra shared by every range-shaped structure a structural edit moves: merged ranges,
+   * cf/dv envelopes, print areas, repeat rows, tables, autoFilter, and chart data references.
+   *
+   * Maps an inclusive 0-based `[s, e]` span through an insert (`deleting = false`) or delete of
+   * `count` indices at `at` on one axis, clamped to the axis maximum (GH-428): an insert pins the
+   * span END at `axisMax` (Excel's behavior for full-height/width ranges — an unclamped shift emits
+   * rows past 1048576 / columns past XFD and Excel refuses the file); a span whose START passes the
+   * edge drops. A delete drops the overlap; `None` = the span vanished. Long intermediate math so a
+   * pathological `count` cannot overflow.
+   */
+  private[xl] def shiftSpan(
+    s: Int,
+    e: Int,
+    at: Int,
+    count: Int,
+    deleting: Boolean,
+    axisMax: Int
+  ): Option[(Int, Int)] =
+    if !deleting then
+      val ns = if s >= at then s.toLong + count else s.toLong
+      val ne = if e >= at then e.toLong + count else e.toLong
+      if ns > axisMax then None
+      else Some((ns.toInt, math.min(ne, axisMax.toLong).toInt))
+    else
+      val ns = if s < at then s else if s >= at + count then s - count else at
+      val ne = if e < at then e else if e >= at + count then e - count else at - 1
+      if ns > ne then None else Some((ns, ne))
+
+  /**
+   * Re-derive a table's column vector for a COLUMN-axis structural edit (GH-429). `newRange` is the
+   * spec's range already mapped through [[shiftSpan]] (so `TableSpec.isValid` holds by
+   * construction). Returns the updated spec plus the (absolute 0-based column index, name) of every
+   * SYNTHESIZED column so the caller can stamp header cells; `None` drops the table.
+   *
+   *   - edit outside the span / pure translation: columns untouched
+   *   - delete: drop the TableColumns at absolute indices in `[at, at+count)`; drop the table when
+   *     none survive
+   *   - insert strictly inside: splice `count` fresh `TableColumn(maxId+i, "ColumnN")` at the edit
+   *     offset, names case-insensitively unique against the existing ones (Excel's scheme)
+   */
+  private[xl] def retabulateColumns(
+    spec: TableSpec,
+    newRange: CellRange,
+    at: Int,
+    count: Int,
+    deleting: Boolean
+  ): Option[(TableSpec, Vector[(Int, String)])] =
+    val oldStart = spec.range.start.col.index0
+    val oldEnd = spec.range.end.col.index0
+    if deleting then
+      val survivors = spec.columns.zipWithIndex.collect {
+        case (c, i) if oldStart + i < at || oldStart + i >= at + count => c
+      }
+      Option.when(survivors.nonEmpty)(
+        (spec.copy(range = newRange, columns = survivors), Vector.empty)
+      )
+    else if at <= oldStart || at > oldEnd then
+      // left of the span (pure translation) or right of it (no-op): columns untouched
+      Some((spec.copy(range = newRange), Vector.empty))
+    else
+      def freshName(taken: Set[String]): String =
+        Iterator
+          .from(1)
+          .map(k => s"Column$k")
+          .find(nm => !taken.contains(nm.toLowerCase))
+          .getOrElse(s"Column${taken.size + 1}") // unreachable: the iterator is unbounded
+      val maxId = spec.columns.map(_.id).maxOption.getOrElse(0L)
+      val (fresh, _) = (0 until count).foldLeft(
+        (Vector.empty[TableColumn], spec.columns.map(_.name.toLowerCase).toSet)
+      ) { case ((acc, taken), i) =>
+        val n = freshName(taken)
+        (acc :+ TableColumn(maxId + i + 1, n), taken + n.toLowerCase)
+      }
+      val offset = at - newRange.start.col.index0
+      val spliced = spec.columns.take(offset) ++ fresh ++ spec.columns.drop(offset)
+      val stamps = fresh.zipWithIndex.map((c, i) => (at + i, c.name))
+      Some((spec.copy(range = newRange, columns = spliced), stamps))
+
+  /**
    * Highest priority present across the sheet's conditional formats (0 when none): typed rules'
    * priorities ∪ parsed `CfRule.Preserved` priorities ∪ priorities text-scanned from
    * `ConditionalFormat.Preserved` payloads (GH-136). Auto-priority allocation appends above this.
@@ -984,26 +1134,14 @@ object Sheet:
       if rowAxis then r.end.row.index0 else r.end.col.index0
     def rebuild(ref: ARef, newIdx: Int): ARef =
       if rowAxis then ARef.from0(ref.col.index0, newIdx) else ARef.from0(newIdx, ref.row.index0)
-    // The merged-range clamp algebra: shift both endpoints; collapse-to-empty = None.
+    val axisMax = if rowAxis then Row.MaxIndex0 else Column.MaxIndex0
+    // The shared shiftSpan clamp algebra: shift both endpoints; collapse-to-empty = None.
     def shiftRange(range: CellRange): Option[CellRange] =
-      val s = axisStart(range)
-      val e = axisEnd(range)
-      val (ns, ne) =
-        if !deleting then (if s >= at then s + count else s, if e >= at then e + count else e)
-        else
-          val ns0 = if s < at then s else if s >= at + count then s - count else at
-          val ne0 = if e < at then e else if e >= at + count then e - count else at - 1
-          (ns0, ne0)
-      if ns > ne then None
-      else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
+      shiftSpan(axisStart(range), axisEnd(range), at, count, deleting, axisMax)
+        .map((ns, ne) => CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
     def shiftCell(ref: ARef): Option[ARef] =
       val i = if rowAxis then ref.row.index0 else ref.col.index0
-      val ni =
-        if !deleting then Some(if i >= at then i + count else i)
-        else if i < at then Some(i)
-        else if i >= at + count then Some(i - count)
-        else None
-      ni.map(rebuild(ref, _))
+      shiftSpan(i, i, at, count, deleting, axisMax).map((ni, _) => rebuild(ref, ni))
     def matches(sheet: SheetName): Boolean = sheet.value.equalsIgnoreCase(edited)
     val shiftedSeries = chart.series.flatMap { series =>
       val newValues =

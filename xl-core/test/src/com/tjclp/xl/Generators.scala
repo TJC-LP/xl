@@ -1046,3 +1046,57 @@ object Generators:
     yield ModificationTracker(modifiedSheets, deletedSheets, reorderedSheets, modifiedMetadata)
 
   given Arbitrary[ModificationTracker] = Arbitrary(genModificationTracker)
+
+  // ===== Data validation generators (GH-429) =====
+
+  val genDvOperator: Gen[DvOperator] = Gen.oneOf(DvOperator.values.toIndexedSeq)
+  val genDvErrorStyle: Gen[DvErrorStyle] = Gen.oneOf(DvErrorStyle.values.toIndexedSeq)
+  val genDvBoundedType: Gen[DvBoundedType] = Gen.oneOf(DvBoundedType.values.toIndexedSeq)
+
+  /** Prompt/error text incl. the attribute-normalization hazards (LF/TAB, literal _xHHHH_). */
+  val genDvText: Gen[String] = Gen.oneOf(
+    "Pick one",
+    "Value must be 1-9",
+    "line1\nline2",
+    "tab\there",
+    "has a literal _x000A_ pattern",
+    "ünïcode ✓"
+  )
+
+  val genDvMessages: Gen[DvMessages] =
+    for
+      showInput <- Gen.oneOf(true, false)
+      showError <- Gen.oneOf(true, false)
+      promptTitle <- Gen.option(genDvText)
+      prompt <- Gen.option(genDvText)
+      errorTitle <- Gen.option(genDvText)
+      error <- Gen.option(genDvText)
+      style <- genDvErrorStyle
+    yield DvMessages(showInput, showError, promptTitle, prompt, errorTitle, error, style)
+
+  val genDvKind: Gen[DvKind] =
+    Gen.oneOf(
+      Gen.oneOf("\"Yes,No\"", "$Z$1:$Z$3", "Lists!$A$1:$A$5").map(DvKind.List.apply),
+      Gen.oneOf("ISNUMBER(A1)", "LEN(A1)<10").map(DvKind.Custom.apply),
+      Gen.const(DvKind.AnyValue),
+      for
+        t <- genDvBoundedType
+        op <- genDvOperator
+        f1 <- Gen.oneOf("1", "A1", "DATE(2020,1,1)")
+        f2 <- Gen.option(Gen.oneOf("9", "B1"))
+      yield DvKind.Bounded(t, op, f1, f2)
+    )
+
+  val genDvRules: Gen[DataValidation.Rules] =
+    for
+      ranges <- Gen
+        .nonEmptyListOf(Gen.oneOf(genSmallARef.map(r => CellRange(r, r)), genCellRange))
+        .map(_.toVector)
+      kind <- genDvKind
+      allowBlank <- Gen.oneOf(true, false)
+      showDropdown <- Gen.oneOf(true, false)
+      messages <- genDvMessages
+    yield DataValidation.Rules(ranges.distinct, kind, allowBlank, showDropdown, messages)
+
+  given Arbitrary[DataValidation.Rules] = Arbitrary(genDvRules)
+  given Arbitrary[DvMessages] = Arbitrary(genDvMessages)

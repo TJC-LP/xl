@@ -23,9 +23,11 @@ enum ConditionalFormat derives CanEqual:
   /**
    * Whole-block fallback ONLY for an unparseable/unknown envelope (sqref that fails to parse,
    * envelope attrs outside {sqref, pivot}). CONTRACT = [[com.tjclp.xl.drawings.Drawing.Preserved]]:
-   * constructed only by xl-ooxml's reader; the payload is the scope-self-contained canonical XML of
-   * one whole element, re-emitted verbatim. Users must not construct this case; a hand-built
-   * payload that is not canonical XML is silently dropped at emission.
+   * constructed only by xl-ooxml's reader — or derived from a reader-constructed payload by the
+   * structural envelope rewrite (GH-429, `SqrefShift`), which preserves canonicality; the payload
+   * is the scope-self-contained canonical XML of one whole element, re-emitted verbatim. Users must
+   * not construct this case; a hand-built payload that is not canonical XML is silently dropped at
+   * emission.
    */
   case Preserved(xml: String)
 

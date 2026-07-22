@@ -2119,10 +2119,15 @@ object XlsxWriter:
           // source rels already reference it: the reader resolved the part THROUGH those rels,
           // GH-292 — so only an unmapped emission appends.)
           val needsCommentRels = hasComments && mappedCommentPart.isEmpty
+          // GH-429: a sheet whose LAST table vanished (structural collapse or removeTable) ships
+          // no table part, so a source rels' table Relationship would dangle at a missing target
+          // and Excel demands repair — force the merge path and drop the stale rels there.
+          val staleTableRels =
+            tableIds.isEmpty && preservedMetadata.exists(_.tableParts.isDefined)
           (sourceContext, sourceRelsPathOpt) match
             case (Some(ctx), Some(sourceRelsPath)) if ctx.partManifest.contains(sourceRelsPath) =>
               if hlRels.isEmpty && drawingRelAdd.isEmpty && !needsCommentRels &&
-                !staleCommentRels && sourceRelsPath == relsPath
+                !staleCommentRels && !staleTableRels && sourceRelsPath == relsPath
               then copyPreservedPart(ctx.sourcePath, relsPath, zip)
               else
                 // Merge authored hyperlink rels into the preserved sheet rels (parse + append);
@@ -2131,11 +2136,13 @@ object XlsxWriter:
                 val preserved = withZipFile(ctx.sourcePath) { z =>
                   parseOptionalEntry(z, sourceRelsPath)(Relationships.fromXml)
                 }.getOrElse(Relationships(Seq.empty))
-                // Drop the source's hyperlink rels (we regenerate them from the model) and the
+                // Drop the source's hyperlink rels (we regenerate them from the model), the
                 // comment/VML rels when this write emits no comments for the sheet (GH-328 —
-                // the parts no longer ship); keep everything else (printerSettings, ...).
+                // the parts no longer ship), and the table rels when the model has no tables
+                // left (GH-429); keep everything else (printerSettings, ...).
                 val kept = preserved.relationships.filterNot(rel =>
                   rel.`type` == XmlUtil.relTypeHyperlink ||
+                    (staleTableRels && rel.`type` == XmlUtil.relTypeTable) ||
                     (staleCommentRels &&
                       (rel.`type` == XmlUtil.relTypeComments ||
                         rel.`type` == XmlUtil.relTypeVmlDrawing))
