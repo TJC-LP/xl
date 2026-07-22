@@ -1,14 +1,15 @@
 package com.tjclp.xl.ooxml.lint
 
-import java.io.ByteArrayInputStream
+import java.io.{ByteArrayInputStream, InputStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Path, Paths}
 import java.util.zip.{ZipFile, ZipInputStream}
 
 import scala.xml.Elem
 
+import com.tjclp.xl.addressing.{Column, Row}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.ooxml.{OoxmlWorkbook, Relationships, XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{ContentTypes, OoxmlWorkbook, Relationships, XmlSecurity, XmlUtil}
 import com.tjclp.xl.ooxml.worksheet.worksheetCanonicalOrder
 
 /**
@@ -31,12 +32,20 @@ enum LintCategory derives CanEqual:
   /** A resolved internal relationship targets a part that is absent from the package. */
   case MissingPart
 
+  /** A present-and-referenced part has no Override and no extension Default in [Content_Types]. */
+  case MissingContentType
+
+  /** A ref/sqref/dimension token lies past row 1048576 or column XFD (GH-428 corruption class). */
+  case RefOutOfBounds
+
   /** Stable kebab-case identifier used in CLI text and JSON output. */
   def slug: String = this match
     case LintCategory.ChildOrder => "child-order"
     case LintCategory.UnresolvedRelId => "unresolved-rel-id"
     case LintCategory.WrongRelType => "wrong-rel-type"
     case LintCategory.MissingPart => "missing-part"
+    case LintCategory.MissingContentType => "missing-content-type"
+    case LintCategory.RefOutOfBounds => "ref-out-of-bounds"
 
 /**
  * A single structural lint finding.
@@ -60,24 +69,41 @@ final case class Finding(
 
 /**
  * Structural validation of an XLSX package against the corruption classes Excel repairs loudly
- * (GH-397): CT_Workbook / CT_Worksheet child-order violations and r:id references that do not
- * resolve in the paired `.rels` (or resolve to the wrong relationship/part type).
+ * (GH-397, extended by GH-413):
+ *
+ *   - CT_Workbook / CT_Worksheet / CT_Chartsheet / CT_Dialogsheet child-order violations
+ *   - `r:id` references that do not resolve in the paired `.rels` (or resolve to the wrong
+ *     relationship/part type), including the externalLink part's own `<externalBook r:id>` hop
+ *   - present-and-referenced parts missing their [Content_Types].xml registration (a part covered
+ *     only by a generic extension Default is treated as registered — content-type correctness is
+ *     out of scope)
+ *   - ref/sqref/dimension tokens past row 1048576 / column XFD (the GH-428 overflow class Excel
+ *     refuses as corrupt)
  *
  * Lint runs on the RAW ZIP PARTS, never on the parsed domain model — a full read would
  * repair/normalize the very structure lint inspects (the reader silently falls back on unresolved
  * sheet r:ids and drops dangling hyperlink r:ids). Total: package-level failures (unreadable zip,
  * missing/malformed core part) surface as `Left`, never as a throw; structural problems in a
  * parseable package surface as findings.
+ *
+ * Two scanning modes produce IDENTICAL findings (pinned by the parity suite): the default DOM mode
+ * parses each sheet part with [[XmlSecurity.parseSafe]]; the streaming mode ([[lintStream]])
+ * SAX-scans sheet-class and table parts so memory stays O(1) in the row count (GH-413 item 4).
+ * Workbook, rels, [Content_Types].xml and externalLink parts are always DOM-parsed — they are
+ * bounded-size regardless of data volume.
  */
 object WorkbookLint:
 
   private val workbookPart = "xl/workbook.xml"
   private val workbookRelsPart = "xl/_rels/workbook.xml.rels"
+  private val rootRelsPart = "_rels/.rels"
+  private val contentTypesPart = "[Content_Types].xml"
 
   /** Access to package parts by zip entry name. */
   private trait PartSource:
     def has(name: String): Boolean
     def read(name: String): XLResult[Option[String]]
+    def openStream(name: String): XLResult[Option[InputStream]]
 
   private final class ZipFilePartSource(zip: ZipFile) extends PartSource:
     def has(name: String): Boolean = Option(zip.getEntry(name)).isDefined
@@ -92,22 +118,50 @@ object WorkbookLint:
           catch
             case e: Exception =>
               Left(XLError.IOError(s"Failed to read zip entry $name: ${e.getMessage}"))
+    def openStream(name: String): XLResult[Option[InputStream]] =
+      Option(zip.getEntry(name)) match
+        case None => Right(None)
+        case Some(entry) =>
+          try Right(Some(zip.getInputStream(entry)))
+          catch
+            case e: Exception =>
+              Left(XLError.IOError(s"Failed to open zip entry $name: ${e.getMessage}"))
 
   private final class MapPartSource(names: Set[String], parts: Map[String, String])
       extends PartSource:
     def has(name: String): Boolean = names.contains(name)
     def read(name: String): XLResult[Option[String]] = Right(parts.get(name))
+    def openStream(name: String): XLResult[Option[InputStream]] =
+      Right(parts.get(name).map(s => ByteArrayInputStream(s.getBytes(StandardCharsets.UTF_8))))
 
   /** Lint an XLSX file on disk. Only the structural parts are read (workbook, worksheets, rels). */
   def lint(path: Path): XLResult[Vector[Finding]] =
     openZipFile(path).flatMap { zip =>
-      try lintSource(ZipFilePartSource(zip))
+      try lintSource(ZipFilePartSource(zip), streaming = false)
       finally zip.close()
     }
 
   /** Lint an XLSX package from raw bytes. */
   def lintBytes(bytes: Array[Byte]): XLResult[Vector[Finding]] =
-    readEntries(bytes).flatMap(lintSource)
+    readEntries(bytes).flatMap(lintSource(_, streaming = false))
+
+  /**
+   * Streaming lint (GH-413 item 4): sheet-class and table parts are SAX-scanned instead of
+   * DOM-parsed, so memory stays O(1) in the row count — use for 100k+-row files. Findings are
+   * identical to [[lint]] (pinned by the parity suite).
+   */
+  def lintStream(path: Path): XLResult[Vector[Finding]] =
+    openZipFile(path).flatMap { zip =>
+      try lintSource(ZipFilePartSource(zip), streaming = true)
+      finally zip.close()
+    }
+
+  /**
+   * Streaming lint over raw bytes — the parity entry point for [[lintStream]]. The bytes are
+   * already in memory, so this mode saves only the DOM allocation, not the input buffer.
+   */
+  def lintStreamBytes(bytes: Array[Byte]): XLResult[Vector[Finding]] =
+    readEntries(bytes).flatMap(lintSource(_, streaming = true))
 
   /** Safely open a ZIP file, converting exceptions to XLResult errors (metadata-reader pattern). */
   private def openZipFile(path: Path): XLResult[ZipFile] =
@@ -147,7 +201,7 @@ object WorkbookLint:
 
   // ===== Pipeline =====
 
-  private def lintSource(parts: PartSource): XLResult[Vector[Finding]] =
+  private def lintSource(parts: PartSource, streaming: Boolean): XLResult[Vector[Finding]] =
     for
       wbXmlOpt <- parts.read(workbookPart)
       wbXml <- wbXmlOpt.toRight(
@@ -160,10 +214,22 @@ object WorkbookLint:
         XLError.ParseError(workbookPart, s"Root element is <${wbElem.label}>, expected <workbook>")
       )
       wbRels <- readRelationships(parts, workbookRelsPart)
-      sheetFindings <- lintWorksheets(wbElem, wbRels, parts)
-    yield checkChildOrder(workbookPart, wbElem, OoxmlWorkbook.canonicalChildOrder, "CT_Workbook") ++
+      rootRels <- readRelationships(parts, rootRelsPart)
+      sheetResult <- lintSheets(wbElem, wbRels, parts, streaming)
+      externalResult <- lintExternalLinks(wbElem, wbRels, parts)
+      referenced =
+        presentInternalTargets(rootRels, "", rootRelsPart, parts) ++
+          presentInternalTargets(wbRels, "xl", workbookRelsPart, parts) ++
+          sheetResult._2 ++ externalResult._2
+      ctFindings <- checkContentTypes(parts, referenced)
+    yield checkChildOrder(
+      workbookPart,
+      mainChildLabelsOf(wbElem),
+      OoxmlWorkbook.canonicalChildOrder,
+      "CT_Workbook"
+    ) ++
       checkRelRefs(workbookPart, workbookRelRefs(wbElem), wbRels, workbookRelsPart, parts, "xl") ++
-      sheetFindings
+      sheetResult._1 ++ externalResult._1 ++ ctFindings
 
   /** Parse a `.rels` part; absent part means no relationships (every r:id is then unresolved). */
   private def readRelationships(parts: PartSource, relsPath: String): XLResult[Relationships] =
@@ -177,27 +243,231 @@ object WorkbookLint:
           }
     }
 
+  // ===== Sheet-class parts (worksheet / chartsheet / dialogsheet) =====
+
+  /** One sheet-part flavor: its rel type, expected root, order table, and checked r:id specs. */
+  private final case class SheetKind(
+    relType: String,
+    expectedRoot: String,
+    schemaName: String,
+    canonical: Vector[String],
+    refSpecs: Vector[RefSpec]
+  )
+
+  /** An r:id-bearing element class to verify against the part's paired `.rels`. */
+  private final case class RefSpec(
+    label: String,
+    relIdRequired: Boolean,
+    expectedTypes: Set[String],
+    expectedDesc: String
+  )
+
+  private val drawingSpec = RefSpec("drawing", true, Set(XmlUtil.relTypeDrawing), "drawing")
+  private val legacyDrawingSpec =
+    RefSpec("legacyDrawing", true, Set(XmlUtil.relTypeVmlDrawing), "vmlDrawing")
+  private val legacyDrawingHFSpec =
+    RefSpec("legacyDrawingHF", true, Set(XmlUtil.relTypeVmlDrawing), "vmlDrawing")
+  private val pictureSpec = RefSpec("picture", true, Set(XmlUtil.relTypeImage), "image")
+  // hyperlink r:id is OPTIONAL — internal links carry location only (GH-235)
+  private val hyperlinkSpec =
+    RefSpec("hyperlink", false, Set(XmlUtil.relTypeHyperlink), "hyperlink")
+  private val tablePartSpec = RefSpec("tablePart", true, Set(XmlUtil.relTypeTable), "table")
+
+  private val worksheetKind = SheetKind(
+    XmlUtil.relTypeWorksheet,
+    "worksheet",
+    "CT_Worksheet",
+    worksheetCanonicalOrder,
+    Vector(
+      drawingSpec,
+      legacyDrawingSpec,
+      legacyDrawingHFSpec,
+      pictureSpec,
+      hyperlinkSpec,
+      tablePartSpec
+    )
+  )
+
+  /** CT_Chartsheet child sequence (ECMA-376 Part 1 §18.3.1.12, transitional sml.xsd). */
+  private val chartsheetCanonicalOrder: Vector[String] = Vector(
+    "sheetPr",
+    "sheetViews",
+    "sheetProtection",
+    "customSheetViews",
+    "pageMargins",
+    "pageSetup",
+    "headerFooter",
+    "drawing",
+    "legacyDrawing",
+    "legacyDrawingHF",
+    "drawingHF",
+    "picture",
+    "webPublishItems",
+    "extLst"
+  )
+
+  private val chartsheetKind = SheetKind(
+    XmlUtil.relTypeChartsheet,
+    "chartsheet",
+    "CT_Chartsheet",
+    chartsheetCanonicalOrder,
+    Vector(drawingSpec, legacyDrawingSpec, legacyDrawingHFSpec, pictureSpec)
+  )
+
+  /** CT_Dialogsheet child sequence (ECMA-376 Part 1 §18.3.1.34, transitional sml.xsd). */
+  private val dialogsheetCanonicalOrder: Vector[String] = Vector(
+    "sheetPr",
+    "sheetViews",
+    "sheetFormatPr",
+    "sheetProtection",
+    "customSheetViews",
+    "printOptions",
+    "pageMargins",
+    "pageSetup",
+    "headerFooter",
+    "drawing",
+    "legacyDrawing",
+    "legacyDrawingHF",
+    "drawingHF",
+    "oleObjects",
+    "controls",
+    "extLst"
+  )
+
+  private val dialogsheetKind = SheetKind(
+    XmlUtil.relTypeDialogsheet,
+    "dialogsheet",
+    "CT_Dialogsheet",
+    dialogsheetCanonicalOrder,
+    Vector(drawingSpec, legacyDrawingSpec, legacyDrawingHFSpec)
+  )
+
+  private val sheetKinds: Vector[SheetKind] = Vector(worksheetKind, chartsheetKind, dialogsheetKind)
+
+  /** A `<sheet>` may target a worksheet, chartsheet, or dialogsheet part. */
+  private val sheetRelTypes: Set[String] = sheetKinds.map(_.relType).toSet
+
   /**
-   * Lint every worksheet part reachable from a worksheet-typed sheet rel: CT_Worksheet child order
-   * plus the sheet-level r:id references against the sheet's own `.rels`. Sheets whose rel is
-   * unresolved / wrong-typed / missing are already reported at workbook level and skipped here.
+   * Lint every sheet-class part reachable from a sheet rel: CT child order, the part-level r:id
+   * references against the part's own `.rels`, ref/sqref bounds, and the bounds of any referenced
+   * table parts. Sheets whose rel is unresolved / wrong-typed / missing are already reported at
+   * workbook level and skipped here. Also returns the internal rel targets seen (for the
+   * [Content_Types].xml registration check).
    */
-  private def lintWorksheets(
+  private def lintSheets(
+    wbElem: Elem,
+    wbRels: Relationships,
+    parts: PartSource,
+    streaming: Boolean
+  ): XLResult[(Vector[Finding], Vector[(String, String)])] =
+    val targets: Vector[(String, SheetKind)] = nestedElems(wbElem, "sheets", "sheet")
+      .flatMap { e =>
+        for
+          id <- relIdOf(e)
+          rel <- wbRels.findById(id)
+          kind <- sheetKinds.find(_.relType == rel.`type`)
+        yield (Relationships.resolveWorkbookTarget(rel.target), kind)
+      }
+      .distinctBy(_._1)
+      .filter((path, _) => parts.has(path))
+
+    targets
+      .foldLeft[XLResult[(Vector[Finding], Vector[(String, String)], Set[String])]](
+        Right((Vector.empty, Vector.empty, Set.empty))
+      ) { case (acc, (path, kind)) =>
+        for
+          found <- acc
+          scan <- scanPart(parts, path, streaming)
+          relsPath = siblingRelsPath(path)
+          rels <- readRelationships(parts, relsPath)
+          rootMatches = scan.rootLabel == kind.expectedRoot
+          tableResult <-
+            if rootMatches then scanTableParts(parts, rels, parentDir(path), streaming, found._3)
+            else Right((Vector.empty[Finding], found._3))
+        yield
+          // A sheet-typed rel pointing at other CONTENT (root is <styleSheet>, ...) is the zip-patch
+          // renumber class: the rel Type lies about what the target actually is.
+          val findings =
+            if !rootMatches then
+              Vector(
+                Finding(
+                  path,
+                  LintCategory.WrongRelType,
+                  s"<${scan.rootLabel}>",
+                  s"Part is the target of a ${kind.expectedRoot}-typed relationship but its root element is <${scan.rootLabel}>, expected <${kind.expectedRoot}>"
+                )
+              )
+            else
+              checkChildOrder(path, scan.mainChildLabels, kind.canonical, kind.schemaName) ++
+                checkRelRefs(
+                  path,
+                  relRefsFor(kind, scan.captures),
+                  rels,
+                  relsPath,
+                  parts,
+                  parentDir(path)
+                ) ++
+                scan.boundsFindings ++ tableResult._1
+          (
+            found._1 ++ findings,
+            found._2 ++ presentInternalTargets(rels, parentDir(path), relsPath, parts),
+            tableResult._2
+          )
+      }
+      .map(acc => (acc._1, acc._2))
+
+  /**
+   * Scan referenced table parts for out-of-bounds refs (`<table ref>`, nested autoFilter). Parts in
+   * `alreadyScanned` are skipped — a table shared by two sheets' rels is reported once — and the
+   * returned set carries every target scanned so far.
+   */
+  private def scanTableParts(
+    parts: PartSource,
+    rels: Relationships,
+    baseDir: String,
+    streaming: Boolean,
+    alreadyScanned: Set[String]
+  ): XLResult[(Vector[Finding], Set[String])] =
+    val targets = rels.relationships.toVector
+      .filter(r => r.`type` == XmlUtil.relTypeTable && !r.targetMode.contains("External"))
+      .map(r => resolveTarget(baseDir, r.target))
+      .distinct
+      .filterNot(alreadyScanned.contains)
+      .filter(parts.has)
+    targets.foldLeft[XLResult[(Vector[Finding], Set[String])]](
+      Right((Vector.empty, alreadyScanned))
+    ) { (acc, target) =>
+      for
+        found <- acc
+        scan <- scanPart(parts, target, streaming)
+      yield (found._1 ++ scan.boundsFindings, found._2 + target)
+    }
+
+  // ===== externalLink parts (GH-413 item 2) =====
+
+  /**
+   * Lint each externalLink part reachable from a resolved workbook `externalReference`: the part's
+   * own `<externalBook r:id>` must resolve in its sibling `.rels` to an externalLinkPath-typed
+   * relationship — the one-more-hop of the workbook-level check. Parts are tiny (no data rows), so
+   * both scanning modes DOM-parse them.
+   */
+  private def lintExternalLinks(
     wbElem: Elem,
     wbRels: Relationships,
     parts: PartSource
-  ): XLResult[Vector[Finding]] =
-    val sheetPaths = nestedElems(wbElem, "sheets", "sheet")
-      .flatMap { e =>
-        relIdOf(e)
-          .flatMap(wbRels.findById)
-          .filter(rel => rel.`type` == XmlUtil.relTypeWorksheet)
-          .map(rel => Relationships.resolveWorkbookTarget(rel.target))
-      }
+  ): XLResult[(Vector[Finding], Vector[(String, String)])] =
+    val targets = nestedElems(wbElem, "externalReferences", "externalReference")
+      .flatMap(e => relIdOf(e).flatMap(wbRels.findById))
+      .filter(rel =>
+        rel.`type` == XmlUtil.relTypeExternalLink && !rel.targetMode.contains("External")
+      )
+      .map(rel => Relationships.resolveWorkbookTarget(rel.target))
       .distinct
       .filter(parts.has)
 
-    sheetPaths.foldLeft[XLResult[Vector[Finding]]](Right(Vector.empty)) { (acc, path) =>
+    targets.foldLeft[XLResult[(Vector[Finding], Vector[(String, String)])]](
+      Right((Vector.empty, Vector.empty))
+    ) { (acc, path) =>
       for
         found <- acc
         xmlOpt <- parts.read(path)
@@ -206,20 +476,106 @@ object WorkbookLint:
         relsPath = siblingRelsPath(path)
         rels <- readRelationships(parts, relsPath)
       yield
-        // A worksheet-typed rel pointing at non-worksheet CONTENT (root is <styleSheet>, ...) is
-        // the zip-patch renumber class: the rel Type lies about what the target actually is.
-        if elem.label != "worksheet" then
-          found :+ Finding(
-            path,
-            LintCategory.WrongRelType,
-            s"<${elem.label}>",
-            s"Part is the target of a worksheet-typed relationship but its root element is <${elem.label}>, expected <worksheet>"
-          )
-        else
-          found ++
-            checkChildOrder(path, elem, worksheetCanonicalOrder, "CT_Worksheet") ++
-            checkRelRefs(path, worksheetRelRefs(elem), rels, relsPath, parts, parentDir(path))
+        val findings =
+          if elem.label != "externalLink" then
+            Vector(
+              Finding(
+                path,
+                LintCategory.WrongRelType,
+                s"<${elem.label}>",
+                s"Part is the target of an externalLink-typed relationship but its root element is <${elem.label}>, expected <externalLink>"
+              )
+            )
+          else
+            val refs = childElems(elem, "externalBook").map { book =>
+              RelRef(
+                "externalBook",
+                relIdOf(book),
+                None,
+                relIdRequired = true,
+                Set(XmlUtil.relTypeExternalLinkPath),
+                "externalLinkPath"
+              )
+            }
+            checkRelRefs(path, refs, rels, relsPath, parts, parentDir(path))
+        (
+          found._1 ++ findings,
+          found._2 ++ presentInternalTargets(rels, parentDir(path), relsPath, parts)
+        )
     }
+
+  // ===== [Content_Types].xml registration (GH-413 item 3) =====
+
+  /** Internal-mode rel targets that exist in the package, tagged with the rels part naming them. */
+  private def presentInternalTargets(
+    rels: Relationships,
+    baseDir: String,
+    relsPath: String,
+    parts: PartSource
+  ): Vector[(String, String)] =
+    rels.relationships.toVector
+      .filterNot(_.targetMode.contains("External"))
+      .map(rel => resolveTarget(baseDir, rel.target))
+      .filter(parts.has)
+      .map(target => (target, relsPath))
+
+  /**
+   * Every present-and-referenced part must be registered in [Content_Types].xml — an Override for
+   * its exact part name or a Default for its extension (case-insensitive). A part covered only by a
+   * generic Default (e.g. `xml` -> application/xml) counts as registered: content-type CORRECTNESS
+   * is out of scope, absence is the Excel-repair class (GH-413 item 3). An absent
+   * [Content_Types].xml yields a single finding — the rest of the package is still lintable.
+   */
+  private def checkContentTypes(
+    parts: PartSource,
+    referenced: Vector[(String, String)]
+  ): XLResult[Vector[Finding]] =
+    parts.read(contentTypesPart).flatMap {
+      case None =>
+        Right(
+          Vector(
+            Finding(
+              contentTypesPart,
+              LintCategory.MissingContentType,
+              "<Types>",
+              s"Package has no $contentTypesPart part — Excel cannot open the file"
+            )
+          )
+        )
+      case Some(xml) =>
+        for
+          elem <- XmlSecurity.parseSafe(xml, contentTypesPart)
+          _ <- Either.cond(
+            elem.label == "Types",
+            (),
+            XLError.ParseError(
+              contentTypesPart,
+              s"Root element is <${elem.label}>, expected <Types>"
+            )
+          )
+          ct <- ContentTypes
+            .fromXml(elem)
+            .left
+            .map(err => XLError.ParseError(contentTypesPart, err))
+        yield referenced.distinctBy(_._1).flatMap { (path, via) =>
+          if registeredIn(ct, path) then Vector.empty
+          else
+            Vector(
+              Finding(
+                contentTypesPart,
+                LintCategory.MissingContentType,
+                s"""<Override PartName="/$path">""",
+                s"""Part "$path" is present and referenced ($via) but $contentTypesPart has no Override for "/$path" and no Default for its extension (Excel repairs this)"""
+              )
+            )
+        }
+    }
+
+  private def registeredIn(ct: ContentTypes, path: String): Boolean =
+    ct.overrides.contains(s"/$path") ||
+      ContentTypes
+        .extensionOf(path)
+        .exists(ext => ct.defaults.keysIterator.exists(_.equalsIgnoreCase(ext)))
 
   // ===== Child-order check =====
 
@@ -228,20 +584,18 @@ object WorkbookLint:
    * index (repeats allowed: cols, conditionalFormatting, fileRecoveryPr are maxOccurs>1). Unknown
    * labels — mc:AlternateContent, xr:revisionPtr, vendor extensions — are position-transparent.
    * Each adjacent inversion yields one finding naming the misordered pair.
+   *
+   * @param childLabels
+   *   the root's main-namespace child labels with their 1-based position among ALL child elements
    */
   private def checkChildOrder(
     part: String,
-    root: Elem,
+    childLabels: Vector[(String, Int)],
     canonical: Vector[String],
     schemaName: String
   ): Vector[Finding] =
     val index: Map[String, Int] = canonical.zipWithIndex.toMap
-    val recognized = root.child.toVector
-      .collect { case e: Elem => e }
-      .zipWithIndex
-      .collect {
-        case (e, i) if inMainNamespace(e) && index.contains(e.label) => (e.label, i + 1)
-      }
+    val recognized = childLabels.filter((label, _) => index.contains(label))
     recognized.zip(recognized.drop(1)).collect {
       case ((prevLabel, _), (label, pos)) if index(label) < index(prevLabel) =>
         Finding(
@@ -252,62 +606,250 @@ object WorkbookLint:
         )
     }
 
+  /** Main-namespace child labels with 1-based positions among all child elements. */
+  private def mainChildLabelsOf(root: Elem): Vector[(String, Int)] =
+    root.child.toVector
+      .collect { case e: Elem => e }
+      .zipWithIndex
+      .collect { case (e, i) if inMainNamespace(e) => (e.label, i + 1) }
+
   /** True when the element is in the main SpreadsheetML namespace (or none — lenient). */
   private def inMainNamespace(e: Elem): Boolean =
     Option(e.namespace).forall(ns => ns.isEmpty || ns == XmlUtil.nsSpreadsheetML)
 
+  // ===== Part scanning (shared DOM / SAX substrate) =====
+
+  /** Attributes that carry A1-style range tokens (dimension/autoFilter/mergeCell/CF/DV/...). */
+  private val refAttrNames = Vector("ref", "sqref")
+
+  /** Direct-child element labels whose r:id the sheet-level check verifies. */
+  private val topLevelRefLabels: Set[String] =
+    Set("drawing", "legacyDrawing", "legacyDrawingHF", "picture")
+
+  /** An r:id-bearing element observed while scanning a sheet part. */
+  private final case class CapturedRef(label: String, relId: Option[String])
+
+  /**
+   * Everything the per-part checks need, produced identically by the DOM and SAX scanners: root
+   * label, ordered main-namespace top-level labels (with positions among all top-level elements),
+   * the captured r:id-bearing elements, and the ref/sqref bounds findings.
+   */
+  private final case class SheetScan(
+    rootLabel: String,
+    mainChildLabels: Vector[(String, Int)],
+    captures: Vector[CapturedRef],
+    boundsFindings: Vector[Finding]
+  )
+
+  private def scanPart(parts: PartSource, path: String, streaming: Boolean): XLResult[SheetScan] =
+    if streaming then
+      parts.openStream(path).flatMap {
+        case None => Left(XLError.ParseError(path, s"Missing part: $path"))
+        case Some(stream) =>
+          try SheetStreamScanner.scan(path, stream)
+          finally stream.close()
+      }
+    else
+      for
+        xmlOpt <- parts.read(path)
+        xml <- xmlOpt.toRight(XLError.ParseError(path, s"Missing part: $path"))
+        elem <- XmlSecurity.parseSafe(xml, path)
+      yield scanElem(path, elem)
+
+  /** DOM scanner: same observation rules as [[SheetStreamScanner]] (parity-pinned). */
+  private def scanElem(part: String, root: Elem): SheetScan =
+    val children = root.child.toVector.collect { case e: Elem => e }
+    val captures = children.flatMap { e =>
+      val own =
+        if topLevelRefLabels.contains(e.label) then Vector(CapturedRef(e.label, relIdOf(e)))
+        else Vector.empty
+      val nested = e.label match
+        case "hyperlinks" =>
+          childElems(e, "hyperlink").map(h => CapturedRef("hyperlink", relIdOf(h)))
+        case "tableParts" =>
+          childElems(e, "tablePart").map(t => CapturedRef("tablePart", relIdOf(t)))
+        case _ => Vector.empty
+      own ++ nested
+    }
+    val bounds = root.descendant_or_self.toVector
+      .collect { case e: Elem => e }
+      .flatMap { e =>
+        refAttrNames.flatMap { attr =>
+          XmlUtil.getAttrOpt(e, attr).toList.flatMap(refBoundsFindings(part, e.label, attr, _))
+        }
+      }
+    SheetScan(root.label, mainChildLabelsOf(root), captures, bounds)
+
+  /**
+   * SAX scanner: O(1) memory in the row count — state is the top-level label list, the captured
+   * r:id elements, and any bounds findings; sheetData rows/cells pass through untouched (they carry
+   * `r`, never `ref`/`sqref`). No early abort: the full parse also validates well-formedness,
+   * matching the DOM mode's Left on malformed parts.
+   */
+  private object SheetStreamScanner:
+    import org.xml.sax.{Attributes, InputSource, SAXException}
+    import org.xml.sax.helpers.DefaultHandler
+
+    def scan(part: String, stream: InputStream): XLResult[SheetScan] =
+      try
+        // GH-350: shared XXE hardening + benign-doctype strip, matching the parseSafe path
+        val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
+        val handler = new ScanHandler(part)
+        parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
+        handler.result.toRight(XLError.ParseError(part, "Empty document (no root element)"))
+      catch
+        case e: SAXException =>
+          Left(XLError.ParseError(part, s"Malformed XML: ${e.getMessage}"))
+        case e: java.io.IOException =>
+          Left(XLError.IOError(s"Failed to read $part: ${e.getMessage}"))
+
+    @SuppressWarnings(Array("org.wartremover.warts.Var"))
+    private final class ScanHandler(part: String) extends DefaultHandler:
+      private var rootLabel: Option[String] = None
+      private var depth = 0
+      private var parents: List[String] = Nil
+      private var topPos = 0
+      private val labels = Vector.newBuilder[(String, Int)]
+      private val captures = Vector.newBuilder[CapturedRef]
+      private val bounds = Vector.newBuilder[Finding]
+
+      def result: Option[SheetScan] =
+        rootLabel.map(SheetScan(_, labels.result(), captures.result(), bounds.result()))
+
+      override def startElement(
+        uri: String,
+        localName: String,
+        qName: String,
+        atts: Attributes
+      ): Unit =
+        val label = if localName.nonEmpty then localName else qName
+        if depth == 0 then rootLabel = Some(label)
+        else if depth == 1 then
+          topPos += 1
+          if uri.isEmpty || uri == XmlUtil.nsSpreadsheetML then labels += ((label, topPos))
+          if topLevelRefLabels.contains(label) then captures += CapturedRef(label, relIdIn(atts))
+        else if depth == 2 then
+          val parent = parents.headOption.getOrElse("")
+          if (parent == "hyperlinks" && label == "hyperlink") ||
+            (parent == "tableParts" && label == "tablePart")
+          then captures += CapturedRef(label, relIdIn(atts))
+        refAttrNames.foreach { attr =>
+          Option(atts.getValue("", attr)).foreach { value =>
+            bounds ++= refBoundsFindings(part, label, attr, value)
+          }
+        }
+        parents = label :: parents
+        depth += 1
+
+      override def endElement(uri: String, localName: String, qName: String): Unit =
+        parents = parents.drop(1)
+        depth -= 1
+
+      private def relIdIn(atts: Attributes): Option[String] =
+        Option(atts.getValue(XmlUtil.nsRelationships, "id"))
+
+  // ===== ref/sqref bounds check (GH-428 corruption class) =====
+
+  private val maxRow1Based: Long = Row.MaxIndex0.toLong + 1
+  private val maxCol0Based: Long = Column.MaxIndex0.toLong
+
+  /**
+   * Flag every whitespace-separated `ref`/`sqref` token whose row exceeds 1048576 or whose column
+   * lies beyond XFD — the GH-428 overflow class (a range ending at the sheet edge shifted past it
+   * by a structural insert). Excel refuses such files as corrupt; LibreOffice opens them silently.
+   * Tokens that are not plain A1-style cells/ranges (row/column spans, anchored refs) are ignored —
+   * lint is not a syntax validator.
+   */
+  private def refBoundsFindings(
+    part: String,
+    elemLabel: String,
+    attrName: String,
+    value: String
+  ): Vector[Finding] =
+    value.split("\\s+").toVector.filter(_.nonEmpty).flatMap { token =>
+      val cells = token.split(":", -1).toVector
+      val parsed = if cells.sizeIs <= 2 then cells.map(cellTokenBounds) else Vector(None)
+      if parsed.exists(_.isEmpty) then Vector.empty
+      else
+        val bounds = parsed.flatten
+        val maxRow = bounds.map(_._2).maxOption.getOrElse(0L)
+        val maxCol = bounds.map(_._1).maxOption.getOrElse(0L)
+        val problems = Vector(
+          Option.when(maxRow > maxRow1Based)(s"row $maxRow > $maxRow1Based"),
+          Option.when(maxCol > maxCol0Based)(s"column ${columnName(maxCol)} > XFD")
+        ).flatten
+        if problems.isEmpty then Vector.empty
+        else
+          Vector(
+            Finding(
+              part,
+              LintCategory.RefOutOfBounds,
+              s"""<$elemLabel $attrName="$token">""",
+              s"""$attrName "$token" lies outside the sheet's addressable range (${problems
+                  .mkString(", ")}) — Excel refuses the file as corrupt"""
+            )
+          )
+    }
+
+  /** Lenient A1-token parse to (col0, row1) WITHOUT bounds validation — that is the whole point. */
+  private def cellTokenBounds(token: String): Option[(Long, Long)] =
+    val letters = token.takeWhile(c => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))
+    val digits = token.drop(letters.length)
+    if letters.isEmpty || letters.length > 4 || digits.isEmpty || digits.length > 9 ||
+      !digits.forall(c => c >= '0' && c <= '9')
+    then None
+    else
+      val col0 = letters.foldLeft(0L)((acc, c) => acc * 26 + (c.toUpper - 'A' + 1)) - 1
+      digits.toLongOption.map(row1 => (col0, row1))
+
+  /** 0-based column index to letters (16383 -> "XFD", 16384 -> "XFE"). */
+  private def columnName(col0: Long): String =
+    @annotation.tailrec
+    def loop(n: Long, acc: List[Char]): List[Char] =
+      if n < 0 then acc
+      else loop(n / 26 - 1, ('A' + (n % 26).toInt).toChar :: acc)
+    loop(col0, Nil).mkString
+
   // ===== r:id resolution checks =====
 
-  /** One r:id-bearing element to verify against its part's paired `.rels`. */
+  /** One r:id-bearing element occurrence to verify against its part's paired `.rels`. */
   private final case class RelRef(
-    elem: Elem,
     label: String,
+    relId: Option[String],
+    name: Option[String],
     relIdRequired: Boolean,
     expectedTypes: Set[String],
     expectedDesc: String
   )
 
-  /** A `<sheet>` may target a worksheet, chartsheet, or dialogsheet part. */
-  private val sheetRelTypes: Set[String] =
-    Set(XmlUtil.relTypeWorksheet, XmlUtil.relTypeChartsheet, XmlUtil.relTypeDialogsheet)
-
   private def workbookRelRefs(wbElem: Elem): Vector[RelRef] =
-    nestedElems(wbElem, "sheets", "sheet").map(
-      RelRef(_, "sheet", relIdRequired = true, sheetRelTypes, "worksheet")
-    ) ++
+    def relRef(e: Elem, label: String, types: Set[String], desc: String): RelRef =
+      RelRef(label, relIdOf(e), XmlUtil.getAttrOpt(e, "name"), relIdRequired = true, types, desc)
+    nestedElems(wbElem, "sheets", "sheet").map(relRef(_, "sheet", sheetRelTypes, "worksheet")) ++
       nestedElems(wbElem, "externalReferences", "externalReference").map(
-        RelRef(
-          _,
-          "externalReference",
-          relIdRequired = true,
-          Set(XmlUtil.relTypeExternalLink),
-          "externalLink"
-        )
+        relRef(_, "externalReference", Set(XmlUtil.relTypeExternalLink), "externalLink")
       ) ++
       nestedElems(wbElem, "pivotCaches", "pivotCache").map(
-        RelRef(
-          _,
-          "pivotCache",
-          relIdRequired = true,
-          Set(XmlUtil.relTypePivotCacheDefinition),
-          "pivotCacheDefinition"
-        )
+        relRef(_, "pivotCache", Set(XmlUtil.relTypePivotCacheDefinition), "pivotCacheDefinition")
       )
 
-  private def worksheetRelRefs(wsElem: Elem): Vector[RelRef] =
-    def direct(label: String, types: Set[String], desc: String): Vector[RelRef] =
-      childElems(wsElem, label).map(RelRef(_, label, relIdRequired = true, types, desc))
-    direct("drawing", Set(XmlUtil.relTypeDrawing), "drawing") ++
-      direct("legacyDrawing", Set(XmlUtil.relTypeVmlDrawing), "vmlDrawing") ++
-      direct("legacyDrawingHF", Set(XmlUtil.relTypeVmlDrawing), "vmlDrawing") ++
-      direct("picture", Set(XmlUtil.relTypeImage), "image") ++
-      // hyperlink r:id is OPTIONAL — internal links carry location only (GH-235)
-      nestedElems(wsElem, "hyperlinks", "hyperlink").map(
-        RelRef(_, "hyperlink", relIdRequired = false, Set(XmlUtil.relTypeHyperlink), "hyperlink")
-      ) ++
-      nestedElems(wsElem, "tableParts", "tablePart").map(
-        RelRef(_, "tablePart", relIdRequired = true, Set(XmlUtil.relTypeTable), "table")
-      )
+  /**
+   * Captured sheet-part elements resolved through the kind's spec table (grouped by spec order).
+   */
+  private def relRefsFor(kind: SheetKind, captures: Vector[CapturedRef]): Vector[RelRef] =
+    kind.refSpecs.flatMap { spec =>
+      captures.collect {
+        case c if c.label == spec.label =>
+          RelRef(
+            spec.label,
+            c.relId,
+            None,
+            spec.relIdRequired,
+            spec.expectedTypes,
+            spec.expectedDesc
+          )
+      }
+    }
 
   /**
    * Resolve each reference in the paired `.rels`: the id must exist (UnresolvedRelId), the
@@ -324,11 +866,10 @@ object WorkbookLint:
     baseDir: String
   ): Vector[Finding] =
     refs.flatMap { ref =>
-      val relId = relIdOf(ref.elem)
-      val nameAttr = XmlUtil.getAttrOpt(ref.elem, "name").fold("")(n => s""" name="$n"""")
-      val idAttr = relId.fold("")(id => s""" r:id="$id"""")
+      val nameAttr = ref.name.fold("")(n => s""" name="$n"""")
+      val idAttr = ref.relId.fold("")(id => s""" r:id="$id"""")
       val locator = s"<${ref.label}$nameAttr$idAttr>"
-      relId match
+      ref.relId match
         case None if ref.relIdRequired =>
           Vector(
             Finding(
