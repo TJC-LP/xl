@@ -68,6 +68,9 @@ object XmlUtil:
   // Workbook-level reference targets checked by the structural lint (GH-397)
   val relTypeExternalLink =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
+  // The externalLink part's own <externalBook r:id> target (GH-413)
+  val relTypeExternalLinkPath =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath"
   val relTypeChartsheet =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet"
   val relTypeDialogsheet =

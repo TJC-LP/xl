@@ -472,3 +472,362 @@ class WorkbookLintSpec extends FunSuite:
       assertEquals(WorkbookLint.lint(output), Right(Vector.empty[Finding]))
     finally Files.deleteIfExists(output)
   }
+
+  // ===== GH-413 (1): chartsheet / dialogsheet child-order tables =====
+
+  /** Base package plus a second sheet of the given kind wired through workbook rels + CT. */
+  private def withSecondSheet(
+    relType: String,
+    target: String,
+    contentType: String,
+    sheetXml: String
+  ): Map[String, String] =
+    baseParts ++ Map(
+      "[Content_Types].xml" -> contentTypesXml.replace(
+        "</Types>",
+        s"""  <Override PartName="/xl/$target" ContentType="$contentType"/>\n</Types>"""
+      ),
+      "xl/workbook.xml" -> workbookXml.replace(
+        "</sheets>",
+        "  <sheet name=\"Extra\" sheetId=\"2\" r:id=\"rId5\"/>\n  </sheets>"
+      ),
+      "xl/_rels/workbook.xml.rels" -> workbookRelsXml.replace(
+        "</Relationships>",
+        s"""  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/$relType" Target="$target"/>\n</Relationships>"""
+      ),
+      s"xl/$target" -> sheetXml
+    )
+
+  private val chartsheetXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<chartsheet xmlns="$nsMain" xmlns:r="$nsRel">
+  <sheetViews><sheetView workbookViewId="0"/></sheetViews>
+  <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+</chartsheet>"""
+
+  private val chartsheetCt =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"
+
+  private val chartsheetParts: Map[String, String] =
+    withSecondSheet("chartsheet", "chartsheets/sheet1.xml", chartsheetCt, chartsheetXml)
+
+  private val misorderedChartsheetXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<chartsheet xmlns="$nsMain">
+  <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+  <sheetViews><sheetView workbookViewId="0"/></sheetViews>
+</chartsheet>"""
+
+  private val dialogsheetXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<dialogsheet xmlns="$nsMain">
+  <sheetViews><sheetView workbookViewId="0"/></sheetViews>
+  <sheetFormatPr defaultRowHeight="15"/>
+</dialogsheet>"""
+
+  private val dialogsheetCt =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml"
+
+  private val dialogsheetParts: Map[String, String] =
+    withSecondSheet("dialogsheet", "dialogsheets/sheet1.xml", dialogsheetCt, dialogsheetXml)
+
+  private val misorderedDialogsheetXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<dialogsheet xmlns="$nsMain">
+  <sheetFormatPr defaultRowHeight="15"/>
+  <sheetViews><sheetView workbookViewId="0"/></sheetViews>
+</dialogsheet>"""
+
+  test("clean chartsheet part has no findings") {
+    assertEquals(lintOf(chartsheetParts), Vector.empty[Finding])
+  }
+
+  test("GH-413: chartsheet sheetViews after pageMargins is flagged as ChildOrder") {
+    val findings =
+      lintOf(chartsheetParts + ("xl/chartsheets/sheet1.xml" -> misorderedChartsheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.ChildOrder))
+    assertEquals(findings.head.part, "xl/chartsheets/sheet1.xml")
+    assert(findings.head.message.contains("CT_Chartsheet"), findings.head.toString)
+    assert(findings.head.message.contains("sheetViews"), findings.head.toString)
+  }
+
+  test("GH-413: chartsheet drawing r:id with no sibling rels is flagged as UnresolvedRelId") {
+    val withDrawing =
+      chartsheetXml.replace("</chartsheet>", "<drawing r:id=\"rId1\"/></chartsheet>")
+    val findings = lintOf(chartsheetParts + ("xl/chartsheets/sheet1.xml" -> withDrawing))
+    assertEquals(findings.map(_.category), Vector(LintCategory.UnresolvedRelId))
+    assertEquals(findings.head.part, "xl/chartsheets/sheet1.xml")
+    assert(findings.head.locator.contains("rId1"), findings.head.toString)
+  }
+
+  test("clean dialogsheet part has no findings") {
+    assertEquals(lintOf(dialogsheetParts), Vector.empty[Finding])
+  }
+
+  test("GH-413: dialogsheet sheetViews after sheetFormatPr is flagged as ChildOrder") {
+    val findings =
+      lintOf(dialogsheetParts + ("xl/dialogsheets/sheet1.xml" -> misorderedDialogsheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.ChildOrder))
+    assertEquals(findings.head.part, "xl/dialogsheets/sheet1.xml")
+    assert(findings.head.message.contains("CT_Dialogsheet"), findings.head.toString)
+  }
+
+  // ===== GH-413 (2): externalLink part's own <externalBook r:id> chain =====
+
+  private val danglingExternalBookXml = externalLinkXml.replace("r:id=\"rId1\"", "r:id=\"rId9\"")
+
+  private val wrongTypeExternalBookRelsXml = externalLinkRelsXml.replace(
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath",
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+  )
+
+  test("GH-413: externalBook r:id not resolving in the externalLink sibling rels is flagged") {
+    val findings =
+      lintOf(externalParts + ("xl/externalLinks/externalLink1.xml" -> danglingExternalBookXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.UnresolvedRelId))
+    assertEquals(findings.head.part, "xl/externalLinks/externalLink1.xml")
+    assert(findings.head.locator.contains("externalBook"), findings.head.toString)
+    assert(findings.head.locator.contains("rId9"), findings.head.toString)
+  }
+
+  test("GH-413: externalBook r:id resolving to a non-externalLinkPath rel is WrongRelType") {
+    val findings = lintOf(
+      externalParts +
+        ("xl/externalLinks/_rels/externalLink1.xml.rels" -> wrongTypeExternalBookRelsXml)
+    )
+    assertEquals(findings.map(_.category), Vector(LintCategory.WrongRelType))
+    assertEquals(findings.head.part, "xl/externalLinks/externalLink1.xml")
+    assert(findings.head.message.contains("image"), findings.head.toString)
+    assert(findings.head.message.contains("externalLinkPath"), findings.head.toString)
+  }
+
+  // ===== GH-413 (3): [Content_Types].xml registration =====
+
+  private val stylesOverrideLine =
+    "  <Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>\n"
+
+  private val xmlDefaultLine =
+    "  <Default Extension=\"xml\" ContentType=\"application/xml\"/>\n"
+
+  private val unregisteredStylesCt: String =
+    val ct = contentTypesXml.replace(stylesOverrideLine, "").replace(xmlDefaultLine, "")
+    assert(!ct.contains("/xl/styles.xml") && !ct.contains("Extension=\"xml\""), ct)
+    ct
+
+  test("GH-413: present-and-referenced part with no Override and no Default is flagged") {
+    val findings = lintOf(baseParts + ("[Content_Types].xml" -> unregisteredStylesCt))
+    assertEquals(findings.map(_.category), Vector(LintCategory.MissingContentType))
+    assertEquals(findings.head.part, "[Content_Types].xml")
+    assert(findings.head.locator.contains("/xl/styles.xml"), findings.head.toString)
+    assert(findings.head.message.contains("xl/styles.xml"), findings.head.toString)
+  }
+
+  test("GH-413: part covered only by an extension Default is treated as registered") {
+    // xml Default kept: styles.xml is still registered (content-type CORRECTNESS is out of scope)
+    val ct = contentTypesXml.replace(stylesOverrideLine, "")
+    assertEquals(lintOf(baseParts + ("[Content_Types].xml" -> ct)), Vector.empty[Finding])
+  }
+
+  test("GH-413: package without [Content_Types].xml gets a single MissingContentType finding") {
+    val findings = lintOf(baseParts - "[Content_Types].xml")
+    assertEquals(findings.map(_.category), Vector(LintCategory.MissingContentType))
+    assertEquals(findings.head.part, "[Content_Types].xml")
+  }
+
+  // ===== GH-428 class: sqref/ref/dimension tokens past row 1048576 / column XFD =====
+
+  private def worksheetWith(body: String): String =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="$nsMain">
+  $body
+</worksheet>"""
+
+  private val overMaxRowSheetXml = worksheetWith(
+    """<sheetData/>
+  <conditionalFormatting sqref="A1:XFD1048578"><cfRule type="expression" priority="1"><formula>TRUE</formula></cfRule></conditionalFormatting>"""
+  )
+
+  private val overMaxColSheetXml = worksheetWith(
+    """<sheetData/>
+  <mergeCells count="1"><mergeCell ref="A1:XFE10"/></mergeCells>"""
+  )
+
+  private val overMaxDimensionSheetXml = worksheetWith(
+    """<dimension ref="A1:B1048577"/>
+  <sheetData/>"""
+  )
+
+  private val atMaxSheetXml = worksheetWith(
+    """<dimension ref="A1:XFD1048576"/>
+  <sheetData/>
+  <mergeCells count="1"><mergeCell ref="XFD1048576"/></mergeCells>
+  <conditionalFormatting sqref="A1:XFD1048576"><cfRule type="expression" priority="1"><formula>TRUE</formula></cfRule></conditionalFormatting>"""
+  )
+
+  test("GH-428 class: conditionalFormatting sqref past row 1048576 is flagged as RefOutOfBounds") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> overMaxRowSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.RefOutOfBounds))
+    assertEquals(findings.head.part, "xl/worksheets/sheet1.xml")
+    assert(findings.head.locator.contains("A1:XFD1048578"), findings.head.toString)
+    assert(findings.head.message.contains("1048578"), findings.head.toString)
+  }
+
+  test("GH-428 class: mergeCell ref past column XFD is flagged as RefOutOfBounds") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> overMaxColSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.RefOutOfBounds))
+    assert(findings.head.locator.contains("A1:XFE10"), findings.head.toString)
+    assert(findings.head.message.contains("XFE"), findings.head.toString)
+  }
+
+  test("GH-428 class: dimension ref past the row limit is flagged as RefOutOfBounds") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> overMaxDimensionSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.RefOutOfBounds))
+    assert(findings.head.locator.contains("dimension"), findings.head.toString)
+  }
+
+  test("GH-428 coordination: ranges ending exactly at XFD1048576 are NOT flagged") {
+    // Post-#428 the writer clamps shifted ranges AT the sheet edge — that shape must lint clean.
+    assertEquals(
+      lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> atMaxSheetXml)),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("GH-428 class: only the offending token of a multi-range sqref is flagged") {
+    val sheet = worksheetWith(
+      """<sheetData/>
+  <conditionalFormatting sqref="A1:B2 C3:XFD1048999"><cfRule type="expression" priority="1"><formula>TRUE</formula></cfRule></conditionalFormatting>"""
+    )
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> sheet))
+    assertEquals(findings.map(_.category), Vector(LintCategory.RefOutOfBounds))
+    assert(findings.head.locator.contains("C3:XFD1048999"), findings.head.toString)
+    assert(!findings.head.locator.contains("A1:B2"), findings.head.toString)
+  }
+
+  private val tableSheetXml = worksheetWith(
+    """<sheetData/>
+  <tableParts count="1"><tablePart r:id="rId1"/></tableParts>"""
+  ).replace(s"""<worksheet xmlns="$nsMain">""", s"""<worksheet xmlns="$nsMain" xmlns:r="$nsRel">""")
+
+  private val tableSheetRelsXml =
+    """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>
+</Relationships>"""
+
+  private val overMaxTableXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<table xmlns="$nsMain" id="1" name="T1" displayName="T1" ref="A1:C1048999"/>"""
+
+  private val overMaxTableParts: Map[String, String] = baseParts +
+    ("xl/worksheets/sheet1.xml" -> tableSheetXml) +
+    ("xl/worksheets/_rels/sheet1.xml.rels" -> tableSheetRelsXml) +
+    ("xl/tables/table1.xml" -> overMaxTableXml)
+
+  test("GH-428 class: table part ref past the row limit is flagged on the table part") {
+    val findings = lintOf(overMaxTableParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.RefOutOfBounds))
+    assertEquals(findings.head.part, "xl/tables/table1.xml")
+    assert(findings.head.locator.contains("A1:C1048999"), findings.head.toString)
+  }
+
+  private val sharedTableParts: Map[String, String] = overMaxTableParts ++ Map(
+    "xl/workbook.xml" -> workbookXml.replace(
+      "</sheets>",
+      "  <sheet name=\"Two\" sheetId=\"2\" r:id=\"rId5\"/>\n  </sheets>"
+    ),
+    "xl/_rels/workbook.xml.rels" -> workbookRelsXml.replace(
+      "</Relationships>",
+      """  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+</Relationships>"""
+    ),
+    "xl/worksheets/sheet2.xml" -> tableSheetXml,
+    "xl/worksheets/_rels/sheet2.xml.rels" -> tableSheetRelsXml
+  )
+
+  test("GH-428 class: a table shared by two sheets' rels is reported once") {
+    val findings = lintOf(sharedTableParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.RefOutOfBounds))
+    assertEquals(findings.head.part, "xl/tables/table1.xml")
+  }
+
+  // ===== GH-413 (4): O(1) SAX scanning mode =====
+
+  private def lintStreamOf(parts: Map[String, String]): Vector[Finding] =
+    WorkbookLint
+      .lintStreamBytes(zipBytes(parts))
+      .fold(err => fail(s"streaming lint must not error on a parseable package: $err"), identity)
+
+  private def parityFixtures: Vector[(String, Map[String, String])] = Vector(
+    "clean minimal" -> baseParts,
+    "clean external" -> externalParts,
+    "clean chartsheet" -> chartsheetParts,
+    "clean dialogsheet" -> dialogsheetParts,
+    "misordered chartsheet" ->
+      (chartsheetParts + ("xl/chartsheets/sheet1.xml" -> misorderedChartsheetXml)),
+    "misordered dialogsheet" ->
+      (dialogsheetParts + ("xl/dialogsheets/sheet1.xml" -> misorderedDialogsheetXml)),
+    "dangling externalBook" ->
+      (externalParts + ("xl/externalLinks/externalLink1.xml" -> danglingExternalBookXml)),
+    "unregistered styles part" ->
+      (baseParts + ("[Content_Types].xml" -> unregisteredStylesCt)),
+    "over-max cf sqref" -> (baseParts + ("xl/worksheets/sheet1.xml" -> overMaxRowSheetXml)),
+    "over-max mergeCell" -> (baseParts + ("xl/worksheets/sheet1.xml" -> overMaxColSheetXml)),
+    "over-max table ref" -> overMaxTableParts,
+    "shared over-max table" -> sharedTableParts,
+    "at-max boundary" -> (baseParts + ("xl/worksheets/sheet1.xml" -> atMaxSheetXml)),
+    "dangling sheet r:id" ->
+      (baseParts + ("xl/workbook.xml" -> workbookXml.replace("r:id=\"rId1\"", "r:id=\"rId99\""))),
+    "worksheet order violation" -> (baseParts + ("xl/worksheets/sheet1.xml" ->
+      s"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="$nsMain">
+  <mergeCells count="1"><mergeCell ref="A1:B1"/></mergeCells>
+  <sheetData/>
+</worksheet>""")),
+    "dangling hyperlink r:id" -> (baseParts + ("xl/worksheets/sheet1.xml" ->
+      s"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="$nsMain" xmlns:r="$nsRel">
+  <sheetData/>
+  <hyperlinks><hyperlink ref="A1" r:id="rId9"/></hyperlinks>
+</worksheet>"""))
+  )
+
+  test("GH-413: lintStreamBytes agrees with lintBytes on every fixture (SAX/DOM parity)") {
+    parityFixtures.foreach { case (name, parts) =>
+      val bytes = zipBytes(parts)
+      assertEquals(
+        WorkbookLint.lintStreamBytes(bytes),
+        WorkbookLint.lintBytes(bytes),
+        s"parity broken for fixture: $name"
+      )
+    }
+  }
+
+  test("GH-413: lintStream(path) agrees with lint(path)") {
+    val bytes = zipBytes(externalParts)
+    val path = tempFile(bytes)
+    try
+      assertEquals(WorkbookLint.lintStream(path), WorkbookLint.lint(path))
+      assertEquals(WorkbookLint.lintStream(path), Right(Vector.empty[Finding]))
+    finally Files.deleteIfExists(path)
+  }
+
+  test("GH-428 class: the streaming scanner flags over-max sqref (O(1) mode carries the check)") {
+    val findings = lintStreamOf(baseParts + ("xl/worksheets/sheet1.xml" -> overMaxRowSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.RefOutOfBounds))
+    assert(findings.head.locator.contains("A1:XFD1048578"), findings.head.toString)
+  }
+
+  test("GH-413: streaming mode yields Left on malformed worksheet xml (parity with DOM mode)") {
+    val bad = zipBytes(
+      baseParts + ("xl/worksheets/sheet1.xml" -> "<worksheet><sheetData></worksheet>")
+    )
+    assert(WorkbookLint.lintStreamBytes(bad).isLeft)
+    assert(WorkbookLint.lintBytes(bad).isLeft)
+  }
+
+  test("GH-413: streaming mode yields Left on garbage bytes, never throws") {
+    assert(
+      WorkbookLint.lintStreamBytes("not a zip at all".getBytes(StandardCharsets.UTF_8)).isLeft
+    )
+  }
