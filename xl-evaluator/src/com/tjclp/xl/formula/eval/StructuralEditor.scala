@@ -82,13 +82,19 @@ object StructuralEditor:
   ): Sheet =
     val updatedCells = sheet.cells.map { case (ref, cell) =>
       cell.value match
-        case CellValue.Formula(formulaStr, _) =>
+        case CellValue.Formula(formulaStr, cachedValue) =>
           FormulaParser.parse(formulaStr) match
             case Right(expr) =>
               FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
                 case Some(shiftedExpr) =>
-                  val newStr = FormulaPrinter.print(shiftedExpr, includeEquals = true)
-                  (ref, cell.copy(value = CellValue.Formula(newStr, None)))
+                  // GH-427: the model's canonical formula form is equals-free (the reader strips
+                  // the '='; the writer serializes the string VERBATIM into <f>, where a leading
+                  // '=' is a spec deviation openpyxl reads back as '==...'). And a successful
+                  // shift means every reference survived, so the cached value is still the
+                  // Excel-valid display value — Excel itself keeps caches across structural
+                  // edits; discarding it blanked every formula cell until a recalc.
+                  val newStr = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+                  (ref, cell.copy(value = CellValue.Formula(newStr, cachedValue)))
                 case None =>
                   (ref, cell.copy(value = CellValue.Error(CellError.Ref)))
             // Unparseable formula: leave untouched rather than guess.
