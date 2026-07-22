@@ -1,9 +1,15 @@
 package com.tjclp.xl.ooxml
 
 import scala.xml.*
-import java.io.{ByteArrayOutputStream, FileOutputStream, OutputStream}
+import java.io.{
+  ByteArrayInputStream,
+  ByteArrayOutputStream,
+  FileOutputStream,
+  InputStream,
+  OutputStream
+}
 import java.security.MessageDigest
-import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
+import java.util.zip.{ZipEntry, ZipFile, ZipInputStream, ZipOutputStream}
 import java.nio.file.{Files, Path, Paths, StandardCopyOption}
 import java.nio.charset.StandardCharsets
 import scala.collection.immutable.ArraySeq
@@ -12,7 +18,7 @@ import scala.util.{Failure, Success, Try, Using}
 import com.tjclp.xl.api.{Sheet, Workbook, CellValue}
 import com.tjclp.xl.drawings.ImageFormat
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.context.{ModificationTracker, SourceContext}
+import com.tjclp.xl.context.{ModificationTracker, SourceContent, SourceContext}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.styles.{Border, Color, Fill}
 import com.tjclp.xl.tables.TableSpec
@@ -201,45 +207,58 @@ object XlsxWriter:
     config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
 
   /**
-   * Copy source file verbatim to destination (for clean workbooks).
+   * Copy the source archive verbatim to destination (for clean workbooks).
    *
-   * Fast path optimization: When a workbook has no modifications, just copy the source file
+   * Fast path optimization: When a workbook has no modifications, just copy the source archive
    * byte-for-byte instead of regenerating all XML. This is 10-11x faster than full regeneration.
    *
-   * Handles edge case where source == dest (no-op).
+   * Handles edge case where source file == dest (no-op). In-memory sources (GH-412) verify the same
+   * fingerprint before writing — a defense against contexts built over aliased arrays.
    */
   private def copyVerbatim(ctx: SourceContext, dest: Path): Unit =
-    val source = ctx.sourcePath
-    if source != dest then
-      val fingerprint = ctx.fingerprint
-      val currentSize = Files.size(source)
-      if currentSize != fingerprint.size then
-        throw new IllegalStateException(
-          s"Source file changed size since read (expected ${fingerprint.size} bytes, found $currentSize)"
-        )
+    ctx.content match
+      case SourceContent.OnDisk(source) =>
+        if source != dest then
+          val fingerprint = ctx.fingerprint
+          val currentSize = Files.size(source)
+          if currentSize != fingerprint.size then
+            throw new IllegalStateException(
+              s"Source file changed size since read (expected ${fingerprint.size} bytes, found $currentSize)"
+            )
 
-      val digest = MessageDigest.getInstance("SHA-256")
+          val digest = MessageDigest.getInstance("SHA-256")
 
-      val bytesCopied = usingOrThrow(Using.Manager { use =>
-        val in = use(Files.newInputStream(source))
-        val out = use(Files.newOutputStream(dest))
-        val buffer = new Array[Byte](8192)
+          val bytesCopied = usingOrThrow(Using.Manager { use =>
+            val in = use(Files.newInputStream(source))
+            val out = use(Files.newOutputStream(dest))
+            val buffer = new Array[Byte](8192)
 
-        def loop(total: Long): Long =
-          val read = in.read(buffer)
-          if read == -1 then total
-          else
-            digest.update(buffer, 0, read)
-            out.write(buffer, 0, read)
-            loop(total + read)
+            def loop(total: Long): Long =
+              val read = in.read(buffer)
+              if read == -1 then total
+              else
+                digest.update(buffer, 0, read)
+                out.write(buffer, 0, read)
+                loop(total + read)
 
-        loop(0L)
-      })
+            loop(0L)
+          })
 
-      val computedDigest = digest.digest()
-      if !fingerprint.matches(bytesCopied, computedDigest) then
-        Files.deleteIfExists(dest)
-        throw new IllegalStateException("Source file changed since read; refusing to copy verbatim")
+          val computedDigest = digest.digest()
+          if !fingerprint.matches(bytesCopied, computedDigest) then
+            Files.deleteIfExists(dest)
+            throw new IllegalStateException(
+              "Source file changed since read; refusing to copy verbatim"
+            )
+      case SourceContent.InMemory(bytes) =>
+        val arr = SourceContent.rawArray(bytes)
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(arr)
+        if !ctx.fingerprint.matches(arr.length.toLong, digest.digest()) then
+          throw new IllegalStateException(
+            "Source bytes changed since read; refusing to copy verbatim"
+          )
+        Files.write(dest, arr)
 
   /**
    * Canonical comment author: trimmed, whitespace-only → unauthored (GH-290).
@@ -997,11 +1016,11 @@ object XlsxWriter:
       val relsPath = partRelsPathOf(partPath)
       val sourceRelsOpt: Option[Relationships] =
         Try(
-          withZipFile(ctx.sourcePath)(z => parseOptionalEntry(z, relsPath)(Relationships.fromXml))
+          withSourceZip(ctx.content)(z => parseOptionalEntry(z, relsPath)(Relationships.fromXml))
         ).toOption.flatten
       val sourceRels = sourceRelsOpt.getOrElse(Relationships.empty)
       val sourceScope: Option[NamespaceBinding] =
-        Try(withZipFile(ctx.sourcePath)(z => readZipEntry(z, partPath))).toOption.flatten
+        Try(withSourceZip(ctx.content)(z => readZipEntry(z, partPath))).toOption.flatten
           .flatMap(xml => XmlSecurity.parseSafe(xml, partPath).toOption)
           .map(_.scope)
       // sha256 of each source image-rel target (hashed on demand, only on this dirty path)
@@ -1010,8 +1029,8 @@ object XlsxWriter:
           .filter(_.`type` == XmlUtil.relTypeImage)
           .flatMap { r =>
             DrawingReader.resolveMediaTarget(r.target).flatMap { mediaPath =>
-              Try(withZipFile(ctx.sourcePath) { z =>
-                Option(z.getEntry(mediaPath)).map(e => z.getInputStream(e).readAllBytes())
+              Try(withSourceZip(ctx.content) { z =>
+                z.withEntry(mediaPath)((_, in) => in.readAllBytes())
               }).toOption.flatten.map { bytes =>
                 ImageFormat
                   .fromExtension(extensionOf(mediaPath))
@@ -1122,11 +1141,59 @@ object XlsxWriter:
     zip.write(bytes)
     zip.closeEntry()
 
-  /** Helper to open a ZipFile with automatic resource management. */
-  private def withZipFile[A](path: Path)(f: ZipFile => A): A =
+  /**
+   * Uniform entry access over the source archive (GH-412): ZipFile random access for on-disk
+   * sources, ZipInputStream scan for in-memory sources — so every preservation read works
+   * identically whether the workbook came from a path or a byte array.
+   */
+  private trait SourceZip:
+    /** Apply f to the named entry's metadata and content stream; None when the entry is absent. */
+    def withEntry[A](name: String)(f: (ZipEntry, InputStream) => A): Option[A]
+
+  /** Open the source archive with automatic resource management. */
+  private def withSourceZip[A](content: SourceContent)(f: SourceZip => A): A =
+    content match
+      case SourceContent.OnDisk(path) =>
+        usingOrThrow(Using.Manager { use =>
+          val zip = use(new ZipFile(path.toFile))
+          f(
+            new SourceZip:
+              def withEntry[B](name: String)(g: (ZipEntry, InputStream) => B): Option[B] =
+                Option(zip.getEntry(name)).map { entry =>
+                  usingOrThrow(Using.Manager(u => g(entry, u(zip.getInputStream(entry)))))
+                }
+          )
+        })
+      case SourceContent.InMemory(bytes) =>
+        f(
+          new SourceZip:
+            def withEntry[B](name: String)(g: (ZipEntry, InputStream) => B): Option[B] =
+              findInMemoryEntry(bytes, name).map { case (entry, content) =>
+                g(entry, new ByteArrayInputStream(content))
+              }
+        )
+
+  /**
+   * Scan the in-memory archive for one entry. The content is fully read BEFORE the caller sees the
+   * ZipEntry, so streamed metadata (size/crc from a data descriptor) is finalized — copy loops that
+   * mirror STORED sizes read the same values a ZipFile would report.
+   */
+  private def findInMemoryEntry(
+    bytes: ArraySeq[Byte],
+    name: String
+  ): Option[(ZipEntry, Array[Byte])] =
     usingOrThrow(Using.Manager { use =>
-      val zip = use(new ZipFile(path.toFile))
-      f(zip)
+      val zip = use(new ZipInputStream(new ByteArrayInputStream(SourceContent.rawArray(bytes))))
+      @annotation.tailrec
+      def loop(): Option[(ZipEntry, Array[Byte])] =
+        Option(zip.getNextEntry) match
+          case None => None
+          case Some(entry) if entry.getName == name =>
+            val content = zip.readAllBytes()
+            zip.closeEntry()
+            Some((entry, content))
+          case Some(_) => loop()
+      loop()
     })
 
   /** Excel's comment-part scheme: xl/commentsN.xml pairs with xl/drawings/vmlDrawingN.vml. */
@@ -1163,7 +1230,7 @@ object XlsxWriter:
   private def preservedVmlTarget(ctx: SourceContext, sourceRelsPath: String): Option[String] =
     if !ctx.partManifest.contains(sourceRelsPath) then None
     else
-      withZipFile(ctx.sourcePath)(z => parseOptionalEntry(z, sourceRelsPath)(Relationships.fromXml))
+      withSourceZip(ctx.content)(z => parseOptionalEntry(z, sourceRelsPath)(Relationships.fromXml))
         .flatMap(_.relationships.find(_.`type` == XmlUtil.relTypeVmlDrawing))
         .flatMap(rel => normalizeSheetRelTarget(rel.target))
 
@@ -1189,17 +1256,12 @@ object XlsxWriter:
       Relationship(e.relId, XmlUtil.relTypeHyperlink, e.target, Some("External"))
     }
 
-  /** Read the contents of a ZIP entry as UTF-8 string if it exists. */
-  private def readZipEntry(zip: ZipFile, entryName: String): Option[String] =
-    Option(zip.getEntry(entryName)).map { entry =>
-      usingOrThrow(Using.Manager { use =>
-        val in = use(zip.getInputStream(entry))
-        new String(in.readAllBytes(), StandardCharsets.UTF_8)
-      })
-    }
+  /** Read the contents of a source archive entry as UTF-8 string if it exists. */
+  private def readZipEntry(zip: SourceZip, entryName: String): Option[String] =
+    zip.withEntry(entryName)((_, in) => new String(in.readAllBytes(), StandardCharsets.UTF_8))
 
   private def parseOptionalEntry[T](
-    zip: ZipFile,
+    zip: SourceZip,
     entryName: String
   )(parse: Elem => Either[String, T]): Option[T] =
     readZipEntry(zip, entryName).flatMap { xmlString =>
@@ -1207,43 +1269,43 @@ object XlsxWriter:
     }
 
   /**
-   * Copy a single preserved part from source ZIP to output ZIP.
+   * Copy a single preserved part from the source archive to output ZIP.
    *
-   * Streams bytes in 8KB chunks (constant memory). Preserves compression method and metadata.
+   * Streams bytes in 8KB chunks (constant memory for on-disk sources). Preserves compression method
+   * and metadata.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def copyPreservedPart(
-    sourcePath: Path,
+    source: SourceContent,
     partPath: String,
     outputZip: ZipOutputStream
   ): Unit =
-    withZipFile(sourcePath) { sourceZip =>
-      val entry = Option(sourceZip.getEntry(partPath)).getOrElse {
-        throw new IllegalStateException(s"Entry missing from source: $partPath")
-      }
+    withSourceZip(source) { sourceZip =>
+      sourceZip
+        .withEntry(partPath) { (entry, in) =>
+          val newEntry = new ZipEntry(partPath)
+          newEntry.setTime(0L)
+          newEntry.setMethod(entry.getMethod)
 
-      val newEntry = new ZipEntry(partPath)
-      newEntry.setTime(0L)
-      newEntry.setMethod(entry.getMethod)
+          if entry.getMethod == ZipEntry.STORED then
+            newEntry.setSize(entry.getSize)
+            newEntry.setCompressedSize(entry.getCompressedSize)
+            newEntry.setCrc(entry.getCrc)
 
-      if entry.getMethod == ZipEntry.STORED then
-        newEntry.setSize(entry.getSize)
-        newEntry.setCompressedSize(entry.getCompressedSize)
-        newEntry.setCrc(entry.getCrc)
-
-      var entryOpen = false
-      usingOrThrow(Using.Manager { use =>
-        val in = use(sourceZip.getInputStream(entry))
-        try
-          outputZip.putNextEntry(newEntry)
-          entryOpen = true
-          val buffer = new Array[Byte](8192)
-          var read = in.read(buffer)
-          while read != -1 do
-            outputZip.write(buffer, 0, read)
-            read = in.read(buffer)
-        finally if entryOpen then outputZip.closeEntry()
-      })
+          var entryOpen = false
+          try
+            outputZip.putNextEntry(newEntry)
+            entryOpen = true
+            val buffer = new Array[Byte](8192)
+            var read = in.read(buffer)
+            while read != -1 do
+              outputZip.write(buffer, 0, read)
+              read = in.read(buffer)
+          finally if entryOpen then outputZip.closeEntry()
+        }
+        .getOrElse {
+          throw new IllegalStateException(s"Entry missing from source: $partPath")
+        }
     }
 
   /**
@@ -1253,9 +1315,9 @@ object XlsxWriter:
    * file is missing or fails to parse, returns None for that component.
    */
   private def parsePreservedStructure(
-    sourcePath: Path
+    source: SourceContent
   ): (Option[ContentTypes], Option[Relationships], Option[Relationships], Option[OoxmlWorkbook]) =
-    withZipFile(sourcePath) { zip =>
+    withSourceZip(source) { zip =>
       val contentTypes = parseOptionalEntry(zip, "[Content_Types].xml")(ContentTypes.fromXml)
       val rootRels = parseOptionalEntry(zip, "_rels/.rels")(Relationships.fromXml)
       val workbookRels =
@@ -1271,10 +1333,10 @@ object XlsxWriter:
    * regeneration.
    */
   private def parsePreservedWorksheet(
-    sourcePath: Path,
+    source: SourceContent,
     sheetPath: String
   ): XLResult[Option[OoxmlWorksheet]] =
-    Try(withZipFile(sourcePath)(zip => readZipEntry(zip, sheetPath))) match
+    Try(withSourceZip(source)(zip => readZipEntry(zip, sheetPath))) match
       case Failure(e) =>
         Left(XLError.IOError(s"Failed to read preserved worksheet $sheetPath: ${e.getMessage}"))
       case Success(None) => Right(None)
@@ -1302,8 +1364,8 @@ object XlsxWriter:
    * attribute, so the sheet's actual post-edit references can be added back. Returns 0 when the
    * part is missing or unparseable (a new sheet, or a degenerate source).
    */
-  private def countSourceSstReferences(sourcePath: Path, sheetPath: String): Int =
-    Try(withZipFile(sourcePath)(zip => readZipEntry(zip, sheetPath))) match
+  private def countSourceSstReferences(source: SourceContent, sheetPath: String): Int =
+    Try(withSourceZip(source)(zip => readZipEntry(zip, sheetPath))) match
       case Success(Some(xmlString)) =>
         XmlSecurity
           .parseSafe(xmlString, sheetPath)
@@ -1314,8 +1376,8 @@ object XlsxWriter:
           .getOrElse(0)
       case _ => 0
 
-  private def parsePreservedSST(sourcePath: Path): Option[SharedStrings] =
-    Try(withZipFile(sourcePath)(zip => readZipEntry(zip, "xl/sharedStrings.xml"))) match
+  private def parsePreservedSST(source: SourceContent): Option[SharedStrings] =
+    Try(withSourceZip(source)(zip => readZipEntry(zip, "xl/sharedStrings.xml"))) match
       case Failure(_) => None
       case Success(None) => None
       case Success(Some(xmlString)) =>
@@ -1331,9 +1393,9 @@ object XlsxWriter:
    * differential formats used by conditional formatting.
    */
   private def parsePreservedStylesMetadata(
-    sourcePath: Path
+    source: SourceContent
   ): (Option[MetaData], NamespaceBinding, Option[Elem]) =
-    Try(withZipFile(sourcePath)(zip => readZipEntry(zip, "xl/styles.xml"))) match
+    Try(withSourceZip(source)(zip => readZipEntry(zip, "xl/styles.xml"))) match
       case Failure(_) => (None, TopScope, None)
       case Success(None) => (None, TopScope, None)
       case Success(Some(xmlString)) =>
@@ -1503,7 +1565,7 @@ object XlsxWriter:
         (Some(SharedStrings.fromWorkbook(workbook, escapeFormulas = true)), true)
       else if sourceHasSharedStrings then
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
-        val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.sourcePath)).getOrElse(None)
+        val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.content)).getOrElse(None)
 
         // GH-323: a NEW sheet (no source counterpart by identity, GH-315) never enters
         // tracker.modifiedSheets — Workbook.put of an unseen name marks only metadata — yet its
@@ -1553,7 +1615,7 @@ object XlsxWriter:
           .map { ctx =>
             sstAccountedSheets
               .map(idx =>
-                sourceSheetPath(ctx, idx).fold(0)(countSourceSstReferences(ctx.sourcePath, _))
+                sourceSheetPath(ctx, idx).fold(0)(countSourceSstReferences(ctx.content, _))
               )
               .sum
           }
@@ -1570,7 +1632,7 @@ object XlsxWriter:
               .filterNot(claimed)
               .toVector
               .sorted
-              .map(countSourceSstReferences(ctx.sourcePath, _))
+              .map(countSourceSstReferences(ctx.content, _))
               .sum
           }
           .getOrElse(0)
@@ -1629,7 +1691,7 @@ object XlsxWriter:
 
     // Parse preserved styles metadata (namespaces and dxfs) if source available
     val (preservedStylesAttrs, preservedStylesScope, preservedDxfs) = sourceContext match
-      case Some(ctx) => parsePreservedStylesMetadata(ctx.sourcePath)
+      case Some(ctx) => parsePreservedStylesMetadata(ctx.content)
       case None => (None, TopScope, None)
 
     // GH-136: parse each regenerated sheet's preserved worksheet ONCE — the cf pre-pass and the
@@ -1643,7 +1705,7 @@ object XlsxWriter:
             .filter(workbook.sheets.indices.contains)
             .map(idx =>
               idx -> (sourceSheetPath(ctx, idx) match
-                case Some(path) => parsePreservedWorksheet(ctx.sourcePath, path)
+                case Some(path) => parsePreservedWorksheet(ctx.content, path)
                 case None => Right(None))
             )
             .toMap
@@ -1762,7 +1824,7 @@ object XlsxWriter:
     // preserved rels (sheet-rId reconciliation) too, not just the byte-stable path.
     val (preservedStructCt, preservedStructRootRels, preservedStructWbRels, preservedStructWb) =
       sourceContext match
-        case Some(ctx) => parsePreservedStructure(ctx.sourcePath)
+        case Some(ctx) => parsePreservedStructure(ctx.content)
         case None => (None, None, None, None)
 
     // IMPORTANT: When metadata is modified (add/remove/rename/reorder sheets), the workbook
@@ -1990,7 +2052,7 @@ object XlsxWriter:
       // generated default Office theme instead (registered in CT + workbook rels below).
       sourceContext.foreach { ctx =>
         if ctx.partManifest.contains(DefaultTheme.path) then
-          copyPreservedPart(ctx.sourcePath, DefaultTheme.path, zip)
+          copyPreservedPart(ctx.content, DefaultTheme.path, zip)
       }
       if needsGeneratedTheme then writeRawTextPart(zip, DefaultTheme.path, DefaultTheme.xml, config)
 
@@ -1999,7 +2061,7 @@ object XlsxWriter:
           writeSharedStrings(zip, sharedStringsPath, sharedStrings, config)
         }
       else if sourceHasSharedStrings then
-        sourceContext.foreach(ctx => copyPreservedPart(ctx.sourcePath, sharedStringsPath, zip))
+        sourceContext.foreach(ctx => copyPreservedPart(ctx.content, sharedStringsPath, zip))
 
       // Write sheets: regenerate modified, copy unmodified (if source available)
       workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
@@ -2123,12 +2185,12 @@ object XlsxWriter:
             case (Some(ctx), Some(sourceRelsPath)) if ctx.partManifest.contains(sourceRelsPath) =>
               if hlRels.isEmpty && drawingRelAdd.isEmpty && !needsCommentRels &&
                 !staleCommentRels && sourceRelsPath == relsPath
-              then copyPreservedPart(ctx.sourcePath, relsPath, zip)
+              then copyPreservedPart(ctx.content, relsPath, zip)
               else
                 // Merge authored hyperlink rels into the preserved sheet rels (parse + append);
                 // also the path for source rels riding to a DIFFERENT output slot (GH-315) and
                 // for dropping comment/VML rels behind a full comment removal (GH-328).
-                val preserved = withZipFile(ctx.sourcePath) { z =>
+                val preserved = withSourceZip(ctx.content) { z =>
                   parseOptionalEntry(z, sourceRelsPath)(Relationships.fromXml)
                 }.getOrElse(Relationships(Seq.empty))
                 // Drop the source's hyperlink rels (we regenerate them from the model) and the
@@ -2189,17 +2251,17 @@ object XlsxWriter:
           // identity-resolved source part (GH-315), so the paths cannot desync.
           sourceContext.foreach { ctx =>
             val sheetPath = sheetOutputPaths(idx)
-            copyPreservedPart(ctx.sourcePath, sheetPath, zip)
+            copyPreservedPart(ctx.content, sheetPath, zip)
 
             // Copy comments and relationships using source's actual paths (from mapping)
             ctx.commentPathMapping.get(sheet.name).foreach { commentPath =>
               if ctx.partManifest.contains(commentPath) then
-                copyPreservedPart(ctx.sourcePath, commentPath, zip)
+                copyPreservedPart(ctx.content, commentPath, zip)
             }
 
             val relsPath = partRelsPathOf(sheetPath)
             if ctx.partManifest.contains(relsPath) then
-              copyPreservedPart(ctx.sourcePath, relsPath, zip)
+              copyPreservedPart(ctx.content, relsPath, zip)
           }
       }
 
@@ -2229,7 +2291,7 @@ object XlsxWriter:
           val shouldSkip =
             vmlPathsToSkip.contains(path) || drawingPlan.skipPaths.contains(path)
 
-          if !shouldSkip then copyPreservedPart(ctx.sourcePath, path, zip)
+          if !shouldSkip then copyPreservedPart(ctx.content, path, zip)
         }
       }
 
