@@ -13,8 +13,9 @@ import munit.FunSuite
 /**
  * GH-136: structural edits rewrite TYPED conditional-format formulas (CellIs, Expression,
  * Cfvo.Formula) through the formula engine, mirroring the cell-formula behavior — fully-deleted
- * references degrade the formula text to "#REF!" (rule kept), Preserved payloads stay byte-stable,
- * and Text rules need no rewriting (their formulas are derived at emission).
+ * references degrade the formula text to "#REF!" (rule kept), Preserved payload BODIES stay
+ * byte-stable (GH-429 shifts only their root sqref envelope), and Text rules need no rewriting
+ * (their formulas are derived at emission).
  */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class StructuralCfSpec extends FunSuite:
@@ -120,7 +121,7 @@ class StructuralCfSpec extends FunSuite:
     )
   }
 
-  test("Preserved blocks and rules are byte-stable through structural edits") {
+  test("Preserved blocks shift their sqref (GH-429); rule payloads stay byte-stable") {
     val blockXml =
       """<conditionalFormatting sqref="Z1"><cfRule type="iconSet" priority="9"/></conditionalFormatting>"""
     val ruleXml = """<cfRule type="timePeriod" timePeriod="today" priority="8"/>"""
@@ -136,7 +137,13 @@ class StructuralCfSpec extends FunSuite:
       )
     val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
     val s2 = sheetNamed(r, "S")
-    assertEquals(s2.conditionalFormats(0), ConditionalFormat.Preserved(blockXml))
+    // GH-429: the block-level sqref envelope moves textually; the payload body is untouched
+    assertEquals(
+      s2.conditionalFormats(0),
+      ConditionalFormat.Preserved(
+        """<conditionalFormatting sqref="Z2"><cfRule type="iconSet" priority="9"/></conditionalFormatting>"""
+      )
+    )
     s2.conditionalFormats(1) match
       case ConditionalFormat.Rules(ranges, rs, _) =>
         assertEquals(ranges.map(_.toA1), Vector("A6:A10")) // typed envelope shifts

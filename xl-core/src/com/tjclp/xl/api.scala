@@ -46,7 +46,18 @@ object api:
   export richtext.{TextRun, RichText}
 
   // Sheet types
-  export sheets.{Sheet, ColumnProperties, RowProperties, DataValidation, DvKind}
+  export sheets.{
+    Sheet,
+    ColumnProperties,
+    RowProperties,
+    DataValidation,
+    DvKind,
+    DvOperator,
+    DvErrorStyle,
+    DvBoundedType,
+    DvMessages,
+    AutoFilterState
+  }
 
   // Drawing types (GH-221) — case classes/enums, so plain export forwarders are safe.
   // NEVER export anything named `Anchor` here (taken by addressing above).

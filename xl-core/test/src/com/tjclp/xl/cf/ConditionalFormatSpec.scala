@@ -182,7 +182,7 @@ class ConditionalFormatSpec extends FunSuite:
     assertEquals(blockRanges(s.insertColumns(at = 1, count = 1)), Vector(Vector("A1:XFD1048576")))
   }
 
-  test("structural shifts leave Preserved blocks untouched and shift Preserved rules' envelopes") {
+  test("GH-429: structural shifts move Preserved blocks' sqref and Preserved rules' envelopes") {
     val preservedBlock = ConditionalFormat.Preserved("<conditionalFormatting sqref=\"Z9\"/>")
     val s = Sheet("CF")
       .copy(conditionalFormats = Vector(preservedBlock))
@@ -191,7 +191,10 @@ class ConditionalFormatSpec extends FunSuite:
         Vector(CfRule.Preserved("<cfRule type=\"iconSet\" priority=\"1\"/>", Some(1)))
       )
     val r = s.insertRows(at = 0, count = 1)
-    assertEquals(r.conditionalFormats(0), preservedBlock)
+    assertEquals(
+      r.conditionalFormats(0),
+      ConditionalFormat.Preserved("<conditionalFormatting sqref=\"Z10\"/>")
+    )
     r.conditionalFormats(1) match
       case ConditionalFormat.Rules(ranges, rules, _) =>
         assertEquals(ranges.map(_.toA1), Vector("A3:A5"))

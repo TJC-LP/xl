@@ -304,6 +304,19 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
   /** Create minimal empty worksheet */
   def empty: OoxmlWorksheet = OoxmlWorksheet(Seq.empty)
 
+  /**
+   * Apply the GH-429 autoFilter overlay to the preservedKnown map: `Ranged` replaces/creates the
+   * `autoFilter` entry (children verbatim, identity fast-path inside [[mergeAutoFilterElem]]),
+   * `Remove` deletes it, `None` passes the map through untouched.
+   */
+  private def overlayAutoFilter(
+    known: Map[String, Elem],
+    state: Option[com.tjclp.xl.sheets.AutoFilterState]
+  ): Map[String, Elem] =
+    mergeAutoFilterElem(known.get("autoFilter"), state) match
+      case Some(e) => known.updated("autoFilter", e)
+      case None => known.removed("autoFilter")
+
   /** Parse worksheet from XML (XmlReadable trait compatibility) */
   def fromXml(elem: scala.xml.Elem): Either[String, OoxmlWorksheet] =
     WorksheetReader.fromXml(elem)
@@ -588,7 +601,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           preserved.rootAttributes,
           preserved.rootScope,
           // GH-232 preserve inline elements + GH-235 model-driven hyperlinks (overrides any raw)
-          preserved.preservedKnown ++ hyperlinksMap
+          // + GH-429 autoFilter overlay (Ranged replaces @ref, Remove strips, None passthrough)
+          overlayAutoFilter(preserved.preservedKnown, sheet.autoFilter) ++ hyperlinksMap
         )
       case None =>
         // No preserved metadata - create minimal worksheet with cols from domain
@@ -608,5 +622,6 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           drawing = drawingRef, // GH-221
           legacyDrawing = legacyDrawingElem,
           tableParts = tableParts,
-          preservedKnown = hyperlinksMap
+          // GH-429: a modeled autoFilter materializes even without preserved source XML
+          preservedKnown = overlayAutoFilter(Map.empty, sheet.autoFilter) ++ hyperlinksMap
         )

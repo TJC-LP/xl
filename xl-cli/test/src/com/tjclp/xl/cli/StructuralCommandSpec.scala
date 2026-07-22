@@ -124,6 +124,54 @@ class StructuralCommandSpec extends CatsEffectSuite:
     )
   }
 
+  test("GH-429: insert-rows moves DV + print area + table + autoFilter (the field repro)") {
+    import com.tjclp.xl.sheets.{AutoFilterState, PageSetup}
+    import com.tjclp.xl.tables.TableSpec
+    val table = TableSpec
+      .fromColumnNames("T1", "T1", ref"A1:C5", Vector("Region", "Product", "Units"))
+      .fold(e => fail(s"table: $e"), identity)
+    val sheet = Sheet("Alpha")
+      .put(ref"A1", CellValue.Text("Region"))
+      .put(ref"B1", CellValue.Text("Product"))
+      .put(ref"C1", CellValue.Text("Units"))
+      // the Excel field shape: list DV with prompt/error flags stamped
+      .withDataValidation(
+        ref"H5:H10",
+        DataValidation.listOf("yes", "no").withPrompt("Pick", "yes or no")
+      )
+      .withTable(table)
+      .copy(
+        pageSetup = Some(PageSetup(printArea = Some(ref"A1:D10"))),
+        autoFilter = Some(AutoFilterState.Ranged(ref"A1:C5"))
+      )
+    val in = tmp("in429")
+    val out = tmp("out429")
+    def zipEntry(p: java.nio.file.Path, name: String): String =
+      val zip = new java.util.zip.ZipFile(p.toFile)
+      try
+        val entry = Option(zip.getEntry(name)).getOrElse(fail(s"missing $name"))
+        new String(zip.getInputStream(entry).readAllBytes(), "UTF-8")
+      finally zip.close()
+    for
+      _ <- excel.write(Workbook(sheet), in)
+      read <- excel.read(in)
+      _ <- WriteCommands.insertRows(read, read.sheets.headOption, 2, 2, out, config)
+      result <- excel.read(out)
+    yield
+      val s = result.sheets.head
+      // model: all four range-bearing features moved with the data
+      assertEquals(s.typedDataValidations.flatMap(_.ranges.map(_.toA1)), Vector("H7:H12"))
+      assertEquals(s.pageSetup.flatMap(_.printArea).map(_.toA1), Some("A1:D12"))
+      assertEquals(s.tables.get("T1").map(_.range.toA1), Some("A1:C7"))
+      assertEquals(s.autoFilter, Some(AutoFilterState.Ranged(ref"A1:C7": CellRange)))
+      // file: zip-level proof for the adversarial reader
+      val sheetXml = zipEntry(out, "xl/worksheets/sheet1.xml")
+      assert(sheetXml.contains("sqref=\"H7:H12\""), sheetXml)
+      assert(sheetXml.contains("<autoFilter ref=\"A1:C7\""), sheetXml)
+      assert(zipEntry(out, "xl/tables/table1.xml").contains("ref=\"A1:C7\""))
+      assert(zipEntry(out, "xl/workbook.xml").contains("Alpha!$A$1:$D$12"))
+  }
+
   test("delete-cols: range form C:E removes the whole span (GH-129)") {
     val wb = Workbook(
       Vector(

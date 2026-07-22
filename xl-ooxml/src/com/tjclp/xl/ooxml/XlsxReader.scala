@@ -1072,6 +1072,14 @@ object XlsxReader:
     val dataValidations =
       com.tjclp.xl.ooxml.worksheet.DataValidationCodec.parseAll(ooxmlSheet.dataValidations)
 
+    // GH-429: lift a parseable sheet-level <autoFilter @ref> into the tri-state overlay model so
+    // structural edits keep the filter attached to its data; anything without a parseable ref
+    // stays passive (None = the source element rides the preservedKnown passthrough verbatim).
+    val autoFilter = ooxmlSheet.preservedKnown
+      .get("autoFilter")
+      .flatMap(com.tjclp.xl.ooxml.worksheet.parseAutoFilterRef)
+      .map(com.tjclp.xl.sheets.AutoFilterState.Ranged.apply)
+
     Right(
       Sheet(
         name = name,
@@ -1088,7 +1096,8 @@ object XlsxReader:
         drawings = drawings,
         conditionalFormats = conditionalFormats,
         tabColor = tabColor,
-        dataValidations = dataValidations
+        dataValidations = dataValidations,
+        autoFilter = autoFilter
       )
     )
 
