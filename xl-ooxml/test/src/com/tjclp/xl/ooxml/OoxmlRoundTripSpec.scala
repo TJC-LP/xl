@@ -245,7 +245,7 @@ class OoxmlRoundTripSpec extends FunSuite:
     val readSheet = readWb.sheets(0)
 
     readSheet(ref"C1").value match
-      case CellValue.Formula(expr, _) =>
+      case CellValue.Formula(expr, _, _) =>
         assertEquals(expr, "A1+B1")
       case other =>
         fail(s"Expected Formula, got $other")
@@ -269,10 +269,10 @@ class OoxmlRoundTripSpec extends FunSuite:
     val readSheet = readWb.sheets(0)
 
     readSheet(ref"C1").value match
-      case CellValue.Formula(expr, Some(CellValue.Number(cached))) =>
+      case CellValue.Formula(expr, Some(CellValue.Number(cached)), _) =>
         assertEquals(expr, "A1+B1")
         assertEquals(cached, BigDecimal(300))
-      case CellValue.Formula(expr, None) =>
+      case CellValue.Formula(expr, None, _) =>
         fail(s"Formula $expr missing cached value")
       case other =>
         fail(s"Expected Formula with cached Number, got $other")
@@ -296,10 +296,10 @@ class OoxmlRoundTripSpec extends FunSuite:
     val readSheet = readWb.sheets(0)
 
     readSheet(ref"C1").value match
-      case CellValue.Formula(expr, Some(CellValue.Text(cached))) =>
+      case CellValue.Formula(expr, Some(CellValue.Text(cached)), _) =>
         assertEquals(expr, "CONCATENATE(A1,B1)")
         assertEquals(cached, "Hello World")
-      case CellValue.Formula(expr, cached) =>
+      case CellValue.Formula(expr, cached, _) =>
         fail(s"Formula $expr has unexpected cached value: $cached")
       case other =>
         fail(s"Expected Formula with cached Text, got $other")
@@ -323,10 +323,10 @@ class OoxmlRoundTripSpec extends FunSuite:
     val readSheet = readWb.sheets(0)
 
     readSheet(ref"C1").value match
-      case CellValue.Formula(expr, Some(CellValue.Bool(cached))) =>
+      case CellValue.Formula(expr, Some(CellValue.Bool(cached)), _) =>
         assertEquals(expr, "A1>B1")
         assertEquals(cached, true)
-      case CellValue.Formula(expr, cached) =>
+      case CellValue.Formula(expr, cached, _) =>
         fail(s"Formula $expr has unexpected cached value: $cached")
       case other =>
         fail(s"Expected Formula with cached Bool, got $other")
@@ -350,10 +350,10 @@ class OoxmlRoundTripSpec extends FunSuite:
     val readSheet = readWb.sheets(0)
 
     readSheet(ref"C1").value match
-      case CellValue.Formula(expr, Some(CellValue.Error(err))) =>
+      case CellValue.Formula(expr, Some(CellValue.Error(err)), _) =>
         assertEquals(expr, "A1/B1")
         assertEquals(err, CellError.Div0)
-      case CellValue.Formula(expr, cached) =>
+      case CellValue.Formula(expr, cached, _) =>
         fail(s"Formula $expr has unexpected cached value: $cached")
       case other =>
         fail(s"Expected Formula with cached Error, got $other")
@@ -382,19 +382,22 @@ class OoxmlRoundTripSpec extends FunSuite:
 
     // Verify all formulas roundtripped
     readSheet(ref"B1").value match
-      case CellValue.Formula("A1*2", Some(CellValue.Number(n))) => assertEquals(n, BigDecimal(20))
+      case CellValue.Formula("A1*2", Some(CellValue.Number(n)), _) =>
+        assertEquals(n, BigDecimal(20))
       case other => fail(s"B1: Expected Formula, got $other")
 
     readSheet(ref"B2").value match
-      case CellValue.Formula("A2*2", Some(CellValue.Number(n))) => assertEquals(n, BigDecimal(40))
+      case CellValue.Formula("A2*2", Some(CellValue.Number(n)), _) =>
+        assertEquals(n, BigDecimal(40))
       case other => fail(s"B2: Expected Formula, got $other")
 
     readSheet(ref"B3").value match
-      case CellValue.Formula("A3*2", Some(CellValue.Number(n))) => assertEquals(n, BigDecimal(60))
+      case CellValue.Formula("A3*2", Some(CellValue.Number(n)), _) =>
+        assertEquals(n, BigDecimal(60))
       case other => fail(s"B3: Expected Formula, got $other")
 
     readSheet(ref"C1").value match
-      case CellValue.Formula("SUM(B1:B3)", Some(CellValue.Number(n))) =>
+      case CellValue.Formula("SUM(B1:B3)", Some(CellValue.Number(n)), _) =>
         assertEquals(n, BigDecimal(120))
       case other => fail(s"C1: Expected Formula, got $other")
   }
@@ -411,7 +414,7 @@ class OoxmlRoundTripSpec extends FunSuite:
     val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
 
     readWb.sheets(0)(ref"B1").value match
-      case CellValue.Formula(expr, Some(CellValue.Number(n))) =>
+      case CellValue.Formula(expr, Some(CellValue.Number(n)), _) =>
         assertEquals(expr, "=A1*2")
         assertEquals(n, BigDecimal(42))
       case other => fail(s"Unexpected: $other")
@@ -522,7 +525,7 @@ class OoxmlRoundTripSpec extends FunSuite:
     // Read back: cached value comes back as the serial Number (matching Excel's storage)
     val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
     readWb.sheets(0)(ref"B1").value match
-      case CellValue.Formula(expr, Some(CellValue.Number(serial))) =>
+      case CellValue.Formula(expr, Some(CellValue.Number(serial)), _) =>
         assertEquals(expr, "EOMONTH(A1,0)")
         assertEquals(serial.toDouble, 36526.5, 0.000001)
       case other =>

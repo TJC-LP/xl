@@ -4,8 +4,14 @@ import fs2.Stream
 import fs2.data.xml.*
 import fs2.data.xml.XmlEvent.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.ooxml.{FormulaInjectionPolicy, SSTEntry, SharedStrings, XmlUtil}
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.ooxml.{
+  FormulaInjectionPolicy,
+  FormulaKindCodec,
+  SSTEntry,
+  SharedStrings,
+  XmlUtil
+}
 import com.tjclp.xl.ooxml.style.{OoxmlStyles, StyleIndex}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.border.Border
@@ -251,13 +257,24 @@ object StreamingXmlWriter:
           )
         )
 
-      case CellValue.Formula(expr, cachedValue) =>
+      case CellValue.Formula(expr, cachedValue, kind) =>
         // <c r="A1"><f>SUM(A1:A10)</f><v>100</v></c>
-        val formulaEvents = List(
-          XmlEvent.StartTag(QName("f"), Nil, false),
-          XmlEvent.XmlString(expr, false),
-          XmlEvent.EndTag(QName("f"))
-        )
+        // GH-430: record attrs via the shared codec; dataTable records carry no formula text.
+        val recordAttrs = FormulaKindCodec.toAttrs(kind).map { case (name, value) =>
+          Attr(QName(name), List(XmlString(value, false)))
+        }
+        val formulaEvents = kind match
+          case _: FormulaKind.DataTable =>
+            List(
+              XmlEvent.StartTag(QName("f"), recordAttrs, true),
+              XmlEvent.EndTag(QName("f"))
+            )
+          case _ =>
+            List(
+              XmlEvent.StartTag(QName("f"), recordAttrs, false),
+              XmlEvent.XmlString(expr, false),
+              XmlEvent.EndTag(QName("f"))
+            )
         val cachedEvents = cachedValue.toList.flatMap {
           case CellValue.Number(num) =>
             List(

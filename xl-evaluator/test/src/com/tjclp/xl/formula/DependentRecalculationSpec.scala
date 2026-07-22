@@ -106,7 +106,7 @@ class DependentRecalculationSpec extends FunSuite:
     val b1Cell = recalculated.cells.get(ref"B1")
     assert(b1Cell.isDefined)
     b1Cell.get.value match
-      case CellValue.Formula(_, Some(CellValue.Number(n))) =>
+      case CellValue.Formula(_, Some(CellValue.Number(n)), _) =>
         assertEquals(n, BigDecimal(100))
       case other =>
         fail(s"Expected Formula with cached Number(100), got $other")
@@ -128,7 +128,7 @@ class DependentRecalculationSpec extends FunSuite:
     val b1Value = recalculated.cells
       .get(ref"B1")
       .flatMap(_.value match
-        case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+        case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
         case _ => None)
     assertEquals(b1Value, Some(BigDecimal(100)))
 
@@ -136,7 +136,7 @@ class DependentRecalculationSpec extends FunSuite:
     val c1Value = recalculated.cells
       .get(ref"C1")
       .flatMap(_.value match
-        case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+        case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
         case _ => None)
     assertEquals(c1Value, Some(BigDecimal(105)))
   }
@@ -157,7 +157,7 @@ class DependentRecalculationSpec extends FunSuite:
     val c1Value = recalculated.cells
       .get(ref"C1")
       .flatMap(_.value match
-        case CellValue.Formula(expr, cached) => Some((expr, cached))
+        case CellValue.Formula(expr, cached, _) => Some((expr, cached))
         case _ => None)
     assertEquals(c1Value.map(_._1), Some("100"))
     assertEquals(
@@ -179,8 +179,8 @@ class DependentRecalculationSpec extends FunSuite:
     // B1 should have its cache cleared (None) due to error
     val b1Value = recalculated.cells.get(ref"B1").map(_.value)
     b1Value match
-      case Some(CellValue.Formula(_, None)) => () // Expected: cache cleared
-      case Some(CellValue.Formula(_, Some(CellValue.Error(_)))) => () // Also acceptable
+      case Some(CellValue.Formula(_, None, _)) => () // Expected: cache cleared
+      case Some(CellValue.Formula(_, Some(CellValue.Error(_)), _)) => () // Also acceptable
       case other => fail(s"Expected Formula with cleared cache or error, got $other")
   }
 
@@ -211,7 +211,7 @@ class DependentRecalculationSpec extends FunSuite:
     val b1Value = resultSheet.cells
       .get(ref"B1")
       .flatMap(_.value match
-        case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+        case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
         case _ => None)
     assertEquals(b1Value, Some(BigDecimal(100)))
   }
@@ -234,7 +234,7 @@ class DependentRecalculationSpec extends FunSuite:
     val a1Value = resultSheet2.cells
       .get(ref"A1")
       .flatMap(_.value match
-        case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+        case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
         case _ => None)
     assertEquals(a1Value, Some(BigDecimal(100)))
   }

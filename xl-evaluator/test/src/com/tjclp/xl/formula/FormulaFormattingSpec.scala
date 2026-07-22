@@ -202,7 +202,7 @@ class FormulaFormattingSpec extends FunSuite:
     sheet.putFormulaInheriting(ref"B4", "=B2-B3") match
       case Right(updated) =>
         updated.cells.get(ref"B4").map(_.value) match
-          case Some(CellValue.Formula(expr, _)) => assertEquals(expr, "=B2-B3")
+          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "=B2-B3")
           case other => fail(s"Expected formula cell at B4, got $other")
         assertEquals(numFmtOf(updated, ref"B4"), Some(NumFmt.Currency))
       case Left(err) => fail(s"putFormulaInheriting failed: $err")
@@ -216,7 +216,7 @@ class FormulaFormattingSpec extends FunSuite:
       case Right(updated) =>
         assertEquals(numFmtOf(updated, ref"B4"), None)
         updated.cells.get(ref"B4").map(_.value) match
-          case Some(CellValue.Formula(expr, _)) => assertEquals(expr, "=B2*B3")
+          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "=B2*B3")
           case other => fail(s"Expected formula cell at B4, got $other")
       case Left(err) => fail(s"putFormulaInheriting failed: $err")
   }
@@ -251,7 +251,7 @@ class FormulaFormattingSpec extends FunSuite:
     sheet.putFormulaInheriting(ref"B4", "B2*2") match
       case Right(updated) =>
         updated.cells.get(ref"B4").map(_.value) match
-          case Some(CellValue.Formula(expr, _)) => assertEquals(expr, "=B2*2")
+          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "=B2*2")
           case other => fail(s"Expected formula cell at B4, got $other")
         assertEquals(numFmtOf(updated, ref"B4"), Some(NumFmt.Currency))
       case Left(err) => fail(s"putFormulaInheriting failed: $err")
@@ -271,7 +271,7 @@ class FormulaFormattingSpec extends FunSuite:
     summary.putFormulaInheriting(ref"A1", "=Data!B2*2") match
       case Right(updated) =>
         updated.cells.get(ref"A1").map(_.value) match
-          case Some(CellValue.Formula(expr, _)) => assertEquals(expr, "=Data!B2*2")
+          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "=Data!B2*2")
           case other => fail(s"Expected formula cell at A1, got $other")
         assertEquals(numFmtOf(updated, ref"A1"), None)
       case Left(err) => fail(s"putFormulaInheriting failed: $err")
@@ -287,7 +287,7 @@ class FormulaFormattingSpec extends FunSuite:
         assert(recalced.errors.isEmpty, s"recalculate errors: ${recalced.errors}")
         val outSheet = recalced.workbook.sheets.headOption.getOrElse(fail("workbook has no sheet"))
         outSheet.cells.get(ref"B4").map(_.value) match
-          case Some(CellValue.Formula(_, Some(CellValue.Number(n)))) =>
+          case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
             assertEquals(n, BigDecimal(400000))
           case other => fail(s"Expected cached formula value at B4, got $other")
         assertEquals(numFmtOf(outSheet, ref"B4"), Some(NumFmt.Currency))

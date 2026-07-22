@@ -110,7 +110,7 @@ final case class RecalcResult(
   /** The Excel error a computed value carries, if any (cached formula values included). */
   private def carriedCellError(value: CellValue): Option[CellError] = value match
     case CellValue.Error(err) => Some(err)
-    case CellValue.Formula(_, Some(cached)) => carriedCellError(cached)
+    case CellValue.Formula(_, Some(cached), _) => carriedCellError(cached)
     case _ => None
 
   /**

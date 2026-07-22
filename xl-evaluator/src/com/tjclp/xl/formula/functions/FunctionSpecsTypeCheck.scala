@@ -47,7 +47,7 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
       evalValue(ctx, expr) match
         case Left(_) => Right(false)
         case Right(ExprValue.Cell(CellValue.Number(_))) => Right(true)
-        case Right(ExprValue.Cell(CellValue.Formula(_, Some(CellValue.Number(_))))) =>
+        case Right(ExprValue.Cell(CellValue.Formula(_, Some(CellValue.Number(_)), _))) =>
           Right(true)
         case Right(ExprValue.Number(_)) => Right(true)
         case Right(_) => Right(false)
@@ -58,7 +58,7 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
       evalValue(ctx, expr) match
         case Left(_) => Right(false)
         case Right(ExprValue.Cell(CellValue.Text(_))) => Right(true)
-        case Right(ExprValue.Cell(CellValue.Formula(_, Some(CellValue.Text(_))))) =>
+        case Right(ExprValue.Cell(CellValue.Formula(_, Some(CellValue.Text(_)), _))) =>
           Right(true)
         case Right(ExprValue.Text(_)) => Right(true)
         case Right(_) => Right(false)

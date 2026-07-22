@@ -32,7 +32,7 @@ class ScriptingPreludeTest extends FunSuite:
     assert(p.numFmt != NumFmt.General)
     assert(d.numFmt != NumFmt.General)
     f match
-      case CellValue.Formula(expr, _) => assert(expr.nonEmpty)
+      case CellValue.Formula(expr, _, _) => assert(expr.nonEmpty)
       case other => fail(s"fx literal should produce CellValue.Formula, got $other")
 
   test("Sheet construction and literal-string puts are infallible"):
@@ -195,7 +195,8 @@ class ScriptingPreludeTest extends FunSuite:
       .flatMap(_.cells.get(ref"A3"))
       .map(_.value)
     cached match
-      case Some(CellValue.Formula(_, Some(CellValue.Number(n)))) => assertEquals(n, BigDecimal(30))
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assertEquals(n, BigDecimal(30))
       case other => fail(s"expected a cached formula on disk, got $other")
 
   test("writeRecalculated writes anyway on formula errors — errors are data (GH-360)"):
@@ -209,10 +210,11 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(result.errors.map(_.ref.toA1), Vector("A2"))
     val cells = Excel.read(path.toString).sheets.headOption.map(_.cells).getOrElse(Map.empty)
     cells.get(ref"A3").map(_.value) match
-      case Some(CellValue.Formula(_, Some(CellValue.Number(n)))) => assertEquals(n, BigDecimal(6))
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assertEquals(n, BigDecimal(6))
       case other => fail(s"expected A3 cached on disk, got $other")
     cells.get(ref"A2").map(_.value) match
-      case Some(CellValue.Formula(_, None)) => () // failed cell stays uncached
+      case Some(CellValue.Formula(_, None, _)) => () // failed cell stays uncached
       case other => fail(s"expected A2 uncached on disk, got $other")
 
   test("writeRecalculated accepts XLResult[Workbook], throwing only on Left (GH-360)"):
@@ -332,3 +334,36 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(pictures.size, 2)
     assertEquals(pictures.map(_.image.format), Vector(ImageFormat.Png, ImageFormat.Png))
     assertEquals(pictures(0).image.bytes, bytes)
+
+  test("GH-430: a data-table record authors from scratch through the prelude and round-trips"):
+    // FormulaKind must resolve through the prelude export alone (export-forwarder landmine
+    // guard), and CellValue.dataTable must synthesize the derived TABLE(...) display text —
+    // proving #419's authoring sugar needs no remodel of the substrate.
+    val kind: FormulaKind.DataTable = FormulaKind.DataTable(
+      ref"F2:G2",
+      dt2D = true,
+      dtr = false,
+      r1 = Some(ref"A1"),
+      r2 = Some(ref"A2")
+    )
+    val anchor = CellValue.dataTable(kind, Some(CellValue.Number(BigDecimal(42))))
+    assertEquals(anchor.expression, "TABLE(A1,A2)")
+    val sheet = Sheet("DT")
+      .put(ref"A1", 8)
+      .put(ref"A2", 3)
+      .put(ref"F2", anchor)
+      .put(
+        ref"G2",
+        CellValue.dataTable(kind.copy(ca = true), Some(CellValue.Number(BigDecimal(7))))
+      )
+    val path = java.nio.file.Files.createTempDirectory("xl-prelude-dt").resolve("records.xlsx")
+    Excel.write(Workbook(sheet), path.toString)
+    val loaded = Excel.read(path.toString)
+    val cells = loaded.sheets.headOption.map(_.cells).getOrElse(Map.empty)
+    assertEquals(cells.get(ref"F2").map(_.value), Some(anchor))
+    cells.get(ref"G2").map(_.value) match
+      case Some(CellValue.Formula(expr, cached, k: FormulaKind.DataTable)) =>
+        assertEquals(expr, "TABLE(A1,A2)")
+        assertEquals(cached, Some(CellValue.Number(BigDecimal(7))))
+        assertEquals(k.ca, true)
+      case other => fail(s"G2 record lost through prelude round-trip: $other")

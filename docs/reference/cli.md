@@ -444,6 +444,15 @@ xl -f input.xlsx -s S1 -o output.xlsx putf C2:C10 "=SUM(\$B\$2:B2)"   # Running 
 
 (The batch JSON `putf` op additionally accepts a `"from"` field to drag from an explicit source cell.)
 
+**Formula records (GH-430)**: legacy CSE array formulas (`{=...}`) and Data Table cells read from a file
+survive all rewrites — `view --formulas` and `cell` render them braced (`{=SUM(A1:A3*10)}`,
+`{=TABLE(A1,A2)}`) and JSON output carries an additive `"formulaKind": "array" | "dataTable"` field.
+`putf` rejects a top-level `TABLE(` expression: `TABLE(...)` is a data-table record's derived display
+text, not a real function (Excel would show `#NAME?`); data-table *authoring* is tracked in GH-419.
+Writing any value or formula onto a record cell replaces the record; `copy` of a data-table cell
+pastes its cached constant (Excel's paste behavior) and `copy` of an array anchor pastes a plain
+shifted formula.
+
 ---
 
 ### `xl style <range> [options]`

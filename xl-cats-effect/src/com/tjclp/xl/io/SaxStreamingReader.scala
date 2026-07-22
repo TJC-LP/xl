@@ -7,8 +7,8 @@ import java.io.InputStream
 import org.xml.sax.{InputSource, Attributes}
 import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
-import com.tjclp.xl.cells.{CellValue, CellError}
-import com.tjclp.xl.ooxml.{SharedStrings, XmlSecurity, XmlUtil}
+import com.tjclp.xl.cells.{CellValue, CellError, FormulaKind}
+import com.tjclp.xl.ooxml.{FormulaKindCodec, SharedStrings, XmlSecurity, XmlUtil}
 import java.util.concurrent.{ArrayBlockingQueue, BlockingQueue}
 import java.util.concurrent.atomic.AtomicBoolean
 import com.tjclp.xl.addressing.{ARef, CellRange}
@@ -182,6 +182,8 @@ object SaxStreamingReader:
     var formulaType: Option[String] = None
     var sharedFormulaIndex: Option[SharedFormula.Index] = None
     var sharedFormulaRange: Option[CellRange] = None
+    // GH-430: t="array"/t="dataTable" record recognized from <f> attributes via the shared codec
+    var formulaRecordKind: Option[FormulaKind] = None
     var inlineValue: Option[String] = None
     val valueText = new StringBuilder
     // Decoded inline-string runs for the current cell (each run decoded at </t>, GH-305)
@@ -244,6 +246,10 @@ object SaxStreamingReader:
           sharedFormulaIndex = Option(attributes.getValue("si")).flatMap(SharedFormula.parseIndex)
           sharedFormulaRange = Option(attributes.getValue("ref"))
             .flatMap(CellRange.parse(_).toOption)
+          formulaRecordKind = FormulaKindCodec.fromAttrs(
+            formulaType,
+            name => Option(attributes.getValue(name))
+          )
           valueText.clear()
 
         case "is" =>
@@ -362,20 +368,32 @@ object SaxStreamingReader:
                           // the DOM path, this one-pass reader cannot resolve a later master.
                           Some("#REF!")
 
-              val cellValue = (expandedFormula, inlineText, cachedValue) match
-                case (Some(formula), _, Some(cached)) =>
-                  val parsedCached = interpretCellValue(cached, currentCellType, sst)
-                  val cachedOpt =
-                    if parsedCached == CellValue.Empty then None else Some(parsedCached)
-                  CellValue.Formula(formula, cachedOpt)
-                case (Some(formula), _, None) =>
-                  CellValue.Formula(formula, None)
-                case (None, Some(text), _) =>
-                  CellValue.Text(text)
-                case (None, None, Some(value)) =>
-                  interpretCellValue(value, currentCellType, sst)
-                case (None, None, None) =>
-                  CellValue.Empty
+              // GH-430: array kind attaches only when the record carried text (DOM parity);
+              // a dataTable record IS the formula — no text, display expression derived.
+              val arrayKind = formulaRecordKind match
+                case Some(arr: FormulaKind.ArrayFormula) if formulaText.nonEmpty => arr
+                case _ => FormulaKind.Normal
+              val cellValue = formulaRecordKind match
+                case Some(dt: FormulaKind.DataTable) =>
+                  val cachedOpt = cachedValue
+                    .map(interpretCellValue(_, currentCellType, sst))
+                    .filter(_ != CellValue.Empty)
+                  CellValue.Formula(FormulaKind.displayExpression(dt), cachedOpt, dt)
+                case _ =>
+                  (expandedFormula, inlineText, cachedValue) match
+                    case (Some(formula), _, Some(cached)) =>
+                      val parsedCached = interpretCellValue(cached, currentCellType, sst)
+                      val cachedOpt =
+                        if parsedCached == CellValue.Empty then None else Some(parsedCached)
+                      CellValue.Formula(formula, cachedOpt, arrayKind)
+                    case (Some(formula), _, None) =>
+                      CellValue.Formula(formula, None, arrayKind)
+                    case (None, Some(text), _) =>
+                      CellValue.Text(text)
+                    case (None, None, Some(value)) =>
+                      interpretCellValue(value, currentCellType, sst)
+                    case (None, None, None) =>
+                      CellValue.Empty
               if cellValue != CellValue.Empty then
                 currentRowCells(colIdx) = cellValue
                 currentCellStyleId.foreach(sid => currentRowStyles(colIdx) = sid)
@@ -391,6 +409,7 @@ object SaxStreamingReader:
           formulaType = None
           sharedFormulaIndex = None
           sharedFormulaRange = None
+          formulaRecordKind = None
           inlineValue = None
           inValue = false
           inFormula = false

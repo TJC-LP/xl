@@ -3,10 +3,10 @@ package com.tjclp.xl.ooxml.worksheet
 import scala.xml.*
 
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.ooxml.SaxSupport.*
 import com.tjclp.xl.ooxml.XmlUtil.{elem, elemOrdered, needsXmlSpacePreserve}
-import com.tjclp.xl.ooxml.{SaxWriter, XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{FormulaKindCodec, SaxWriter, XmlSecurity, XmlUtil}
 import com.tjclp.xl.styles.color.Color
 
 /** Cell data for worksheet - maps domain Cell to XML representation */
@@ -57,10 +57,19 @@ case class OoxmlCell(
           writer.writeCharacters(if b then "1" else "0")
           writer.endElement() // v
 
-        case CellValue.Formula(expr, cachedValue) =>
-          writer.startElement("f")
-          writer.writeCharacters(expr)
-          writer.endElement() // f
+        case CellValue.Formula(expr, cachedValue, kind) =>
+          // GH-430: record attrs (t/ref/dt2D/dtr/r1/r2/...) render via the shared codec; a
+          // dataTable record carries no formula text (self-closing <f/>).
+          kind match
+            case _: FormulaKind.DataTable =>
+              writer.emptyElement("f", FormulaKindCodec.toAttrs(kind))
+            case _ =>
+              writer.startElement("f")
+              FormulaKindCodec.toAttrs(kind).foreach { case (name, v) =>
+                writer.writeAttribute(name, v)
+              }
+              writer.writeCharacters(expr)
+              writer.endElement() // f
           // Write cached value if present
           cachedValue.foreach {
             case CellValue.Number(num) =>
@@ -267,9 +276,13 @@ case class OoxmlCell(
         Seq(elem("v")(Text(XmlUtil.plainNumber(num))))
       case CellValue.Bool(b) =>
         Seq(elem("v")(Text(if b then "1" else "0")))
-      case CellValue.Formula(expr, cachedValue) =>
-        // Write formula element
-        val formulaElem = elem("f")(Text(expr))
+      case CellValue.Formula(expr, cachedValue, kind) =>
+        // Write formula element. GH-430: record attrs via the shared codec in schema order
+        // (elemOrdered keeps the given order); dataTable records carry no text.
+        val recordAttrs = FormulaKindCodec.toAttrs(kind)
+        val formulaElem = kind match
+          case _: FormulaKind.DataTable => elemOrdered("f", recordAttrs*)()
+          case _ => elemOrdered("f", recordAttrs*)(Text(expr))
         // Write cached value if present
         val cachedElem = cachedValue.flatMap {
           case CellValue.Number(num) => Some(elem("v")(Text(XmlUtil.plainNumber(num))))

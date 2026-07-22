@@ -39,11 +39,14 @@ object TestFixtures:
    * mixed typed-picture + preserved-fragment coverage). doctype-hostile.xlsx = small-values-lo.xlsx
    * made "hostile but Excel-valid" (GH-350): DOCTYPE prologs on workbook/sheet/sst/styles (internal
    * subsets with comment traps), a UTF-8 BOM on styles.xml, 3000 extra cellXfs, and an
-   * externalLinks part.
+   * externalLinks part. formula-records.xlsx = deterministic zip assembly (GH-430): 2-D data table
+   * with a cached #NUM! `ca="1"` interior, 1-D row and column data tables, a multi-cell CSE array
+   * group, and a single-cell array record.
    */
   val derived: List[String] = List(
     "image-shape.xlsx",
-    "doctype-hostile.xlsx"
+    "doctype-hostile.xlsx",
+    "formula-records.xlsx"
   )
 
   /**

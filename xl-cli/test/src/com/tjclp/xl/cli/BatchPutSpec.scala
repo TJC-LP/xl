@@ -165,7 +165,7 @@ class BatchPutSpec extends FunSuite:
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     val sheet = imported.sheets.head
     sheet.cells.get(ARef.from0(1, 0)).map(_.value) match
-      case Some(CellValue.Formula(formula, _)) =>
+      case Some(CellValue.Formula(formula, _, _)) =>
         assertEquals(formula, "A1*2")
       case other => fail(s"Expected Formula, got $other")
   }
@@ -188,7 +188,7 @@ class BatchPutSpec extends FunSuite:
     val sheet = imported.sheets.head
     // Verify $ anchors work
     sheet.cells.get(ARef.from0(1, 0)).map(_.value) match
-      case Some(CellValue.Formula(formula, _)) => assert(formula.contains("$A$1"))
+      case Some(CellValue.Formula(formula, _, _)) => assert(formula.contains("$A$1"))
       case other => fail(s"Expected Formula with $$A$$1, got $other")
   }
 
@@ -218,13 +218,13 @@ class BatchPutSpec extends FunSuite:
     val sheet = imported.sheets.head
     // Verify formulas are as-is (no dragging)
     sheet.cells.get(ARef.from0(2, 0)).map(_.value) match
-      case Some(CellValue.Formula(formula, _)) => assertEquals(formula, "A1+B1")
+      case Some(CellValue.Formula(formula, _, _)) => assertEquals(formula, "A1+B1")
       case other => fail(s"Expected Formula A1+B1, got $other")
     sheet.cells.get(ARef.from0(2, 1)).map(_.value) match
-      case Some(CellValue.Formula(formula, _)) => assertEquals(formula, "A2*B2")
+      case Some(CellValue.Formula(formula, _, _)) => assertEquals(formula, "A2*B2")
       case other => fail(s"Expected Formula A2*B2, got $other")
     sheet.cells.get(ARef.from0(2, 2)).map(_.value) match
-      case Some(CellValue.Formula(formula, _)) => assertEquals(formula, "100")
+      case Some(CellValue.Formula(formula, _, _)) => assertEquals(formula, "100")
       case other => fail(s"Expected Formula 100, got $other")
   }
 

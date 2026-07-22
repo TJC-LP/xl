@@ -262,6 +262,10 @@ object WriteCommands:
     stream: Boolean = false
   ): IO[String] =
     for
+      // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
+      _ <- formulas.flatMap(ValueParser.dataTableFormulaError) match
+        case msg :: _ => IO.raiseError(new Exception(msg))
+        case Nil => IO.unit
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "putf")
       (targetSheet, refOrRange) = resolved
 
@@ -982,7 +986,7 @@ object WriteCommands:
       case None => sheet // Empty source cell, nothing to copy
       case Some(sourceCell) =>
         sourceCell.value match
-          case CellValue.Formula(formula, _) =>
+          case CellValue.Formula(formula, _, _) =>
             // Shift formula references
             val fullFormula = s"=$formula"
             FormulaParser.parse(fullFormula) match
@@ -1586,9 +1590,9 @@ object WriteCommands:
       case DateTime(dt) =>
         // Convert to Excel serial number for comparison
         SortValue.Num(CellValue.dateTimeToExcelSerial(dt))
-      case Formula(_, Some(cached)) =>
+      case Formula(_, Some(cached), _) =>
         getSortableValue(cached, mode)
-      case Formula(_, None) => SortValue.Str("")
+      case Formula(_, None, _) => SortValue.Str("")
       case RichText(rt) => SortValue.Str(rt.toPlainText.toLowerCase)
       case CellValue.Error(_) => SortValue.Error
 
@@ -1686,7 +1690,7 @@ object WriteCommands:
     if rowDelta == 0 then value
     else
       value match
-        case CellValue.Formula(formula, _) =>
+        case CellValue.Formula(formula, _, _) =>
           val fullFormula = s"=$formula"
           FormulaParser.parse(fullFormula) match
             case Left(_) =>

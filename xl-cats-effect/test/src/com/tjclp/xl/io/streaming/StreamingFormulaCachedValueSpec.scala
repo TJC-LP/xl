@@ -58,7 +58,7 @@ class StreamingFormulaCachedValueSpec extends CatsEffectSuite:
 
       val wb = XlsxReader.read(path).fold(e => fail(s"read: ${e.message}"), identity)
       wb.sheets(0)(ref"A2").value match
-        case CellValue.Formula(expr, Some(CellValue.Number(serial))) =>
+        case CellValue.Formula(expr, Some(CellValue.Number(serial)), _) =>
           assertEquals(expr, "EDATE(A1,0)")
           assertEquals(serial.toDouble, 36526.5, 0.000001)
         case other => fail(s"Expected Formula with cached serial Number, got $other")
@@ -87,7 +87,7 @@ class StreamingFormulaCachedValueSpec extends CatsEffectSuite:
 
       val wb = XlsxReader.read(path).fold(e => fail(s"read: ${e.message}"), identity)
       wb.sheets(0)(ref"A1").value match
-        case CellValue.Formula(expr, Some(CellValue.Text(t))) =>
+        case CellValue.Formula(expr, Some(CellValue.Text(t)), _) =>
           assertEquals(expr, """CONCATENATE("a","b")""")
           assertEquals(t, "ab")
         case other => fail(s"Expected Formula with cached Text, got $other")

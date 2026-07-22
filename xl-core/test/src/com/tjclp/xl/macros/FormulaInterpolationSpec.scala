@@ -11,14 +11,14 @@ class FormulaInterpolationSpec extends FunSuite:
 
   test("Compile-time literal: fx\"=SUM(A1:A10)\" returns CellValue directly") {
     fx"=SUM(A1:A10)" match
-      case CellValue.Formula(expr, _) => assertEquals(expr, "=SUM(A1:A10)")
+      case CellValue.Formula(expr, _, _) => assertEquals(expr, "=SUM(A1:A10)")
       case other => fail(s"Expected Formula, got $other")
   }
 
   test("GH-271: compile-time literal accepts leading unary plus (=+SUM(A1:B2))") {
     // The macro accepted '=+' before the full parser did; this pins the two staying in agreement
     fx"=+SUM(A1:B2)" match
-      case CellValue.Formula(expr, _) => assertEquals(expr, "=+SUM(A1:B2)")
+      case CellValue.Formula(expr, _, _) => assertEquals(expr, "=+SUM(A1:B2)")
       case other => fail(s"Expected Formula, got $other")
   }
 
@@ -27,7 +27,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("Runtime interpolation: simple SUM formula") {
     val formulaStr = "=SUM(A1:A10)"
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "=SUM(A1:A10)")
       case Left(err) =>
         fail(s"Expected Right(Formula), got Left($err)")
@@ -38,7 +38,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("Runtime interpolation: IF formula") {
     val formulaStr = "=IF(A1>0,B1,C1)"
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "=IF(A1>0,B1,C1)")
       case Left(err) =>
         fail(s"Expected Right(Formula), got Left($err)")
@@ -49,7 +49,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("Runtime interpolation: nested parentheses") {
     val formulaStr = "=IF(A1>0,SUM(B1:B10),0)"
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "=IF(A1>0,SUM(B1:B10),0)")
       case Left(err) =>
         fail(s"Should parse: $err")
@@ -67,7 +67,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("Runtime interpolation: formula without = prefix") {
     val formulaStr = "SUM(A1:A10)"
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "SUM(A1:A10)") // We don't require =
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -128,7 +128,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("Mixed interpolation: prefix + variable") {
     val range = "A1:A10"
     fx"=SUM($range)" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "=SUM(A1:A10)")
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -138,7 +138,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("Mixed interpolation: variable function name") {
     val func = "SUM"
     fx"=$func(A1:A10)" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "=SUM(A1:A10)")
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -151,7 +151,7 @@ class FormulaInterpolationSpec extends FunSuite:
     val thenVal = "B1"
     val elseVal = "C1"
     fx"=$func($cond,$thenVal,$elseVal)" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "=IF(A1>0,B1,C1)")
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -163,7 +163,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("String literal: formula with ) inside string") {
     val formulaStr = """=IF(A1=")", "yes", "no")"""
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, """=IF(A1=")", "yes", "no")""")
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -173,7 +173,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("String literal: formula with ( inside string") {
     val formulaStr = """=IF(A1="(", "left", "right")"""
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, """=IF(A1="(", "left", "right")""")
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -183,7 +183,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("String literal: escaped quotes inside string") {
     val formulaStr = "=CONCATENATE(\"Say \"\"hello\"\"\", A1)"
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "=CONCATENATE(\"Say \"\"hello\"\"\", A1)")
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -193,7 +193,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("String literal: double escaped quotes regression") {
     val formulaStr = "=IF(A1=\"\"test\"\", B1, C1)"
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "=IF(A1=\"\"test\"\", B1, C1)")
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -203,7 +203,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("String literal: multiple strings with parens") {
     val formulaStr = """=IF(A1=")", B1, "(other)")"""
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, """=IF(A1=")", B1, "(other)")""")
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -232,7 +232,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("Edge: formula with whitespace") {
     val formulaStr = " =SUM( A1:A10 ) "
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, " =SUM( A1:A10 ) ") // Preserve whitespace
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -249,7 +249,7 @@ class FormulaInterpolationSpec extends FunSuite:
   test("Edge: formula with array syntax {1,2,3}") {
     val formulaStr = "=SUM({1,2,3})"
     fx"$formulaStr" match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "=SUM({1,2,3})")
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>
@@ -280,7 +280,7 @@ class FormulaInterpolationSpec extends FunSuite:
       yield formula
 
     result match
-      case Right(CellValue.Formula(expr, _)) =>
+      case Right(CellValue.Formula(expr, _, _)) =>
         assertEquals(expr, "=SUM(A1:A10)")
       case Left(err) => fail(s"Should parse: $err")
       case Right(other) =>

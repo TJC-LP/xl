@@ -237,7 +237,7 @@ class FormulaInjectionSpec extends FunSuite:
 
           // Formula cells should NOT be escaped (they're actual formulas)
           readSheet.cells.get(ref"A1").map(_.value) match
-            case Some(CellValue.Formula(expr, _)) =>
+            case Some(CellValue.Formula(expr, _, _)) =>
               assertEquals(expr, "=A2+A3", "Formula should not be escaped")
             case other => fail(s"Expected Formula, got: $other")
 

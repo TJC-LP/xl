@@ -22,7 +22,7 @@ object api:
   export error.{XLError, XLResult}
 
   // Cell types
-  export cells.{Cell, CellValue, CellError, Comment}
+  export cells.{Cell, CellValue, CellError, Comment, FormulaKind}
 
   // Addressing types — non-opaque types use export forwarders as usual
   export addressing.{CellRange, RefType, Anchor}

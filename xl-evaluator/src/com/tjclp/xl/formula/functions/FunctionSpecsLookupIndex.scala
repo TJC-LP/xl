@@ -16,7 +16,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       case (CellValue.Bool(b1), ExprValue.Bool(b2)) => b1.compare(b2)
       case (CellValue.Error(e1), ExprValue.Cell(CellValue.Error(e2))) =>
         e1.ordinal.compareTo(e2.ordinal)
-      case (CellValue.Formula(_, Some(cached)), other) => compareCellValues(cached, other)
+      case (CellValue.Formula(_, Some(cached), _), other) => compareCellValues(cached, other)
       case _ => 0
 
   private def coerceToBigDecimal(value: ExprValue): BigDecimal =
@@ -28,7 +28,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       case ExprValue.Cell(CellValue.Text(s)) =>
         scala.util.Try(BigDecimal(s.trim)).getOrElse(BigDecimal(0))
       case ExprValue.Cell(CellValue.Bool(b)) => ArrayArithmetic.boolToNumeric(b)
-      case ExprValue.Cell(CellValue.Formula(_, Some(cached))) =>
+      case ExprValue.Cell(CellValue.Formula(_, Some(cached), _)) =>
         coerceToBigDecimal(ExprValue.Cell(cached))
       case _ => BigDecimal(0)
 

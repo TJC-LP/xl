@@ -74,7 +74,7 @@ object ArrayArithmetic:
     case CellValue.Number(n) => Right(n)
     case CellValue.Empty => Right(BigDecimal(0))
     case CellValue.Bool(b) => Right(boolToNumeric(b))
-    case CellValue.Formula(_, Some(cached)) => cellValueToNumeric(cached)
+    case CellValue.Formula(_, Some(cached), _) => cellValueToNumeric(cached)
     case CellValue.Text(s) =>
       scala.util.Try(BigDecimal(s.trim)).toOption match
         case Some(n) => Right(n)
@@ -91,7 +91,7 @@ object ArrayArithmetic:
         val ref = ARef.from0(colIdx, rowIdx)
         val cell = sheet(ref)
         cell.value match
-          case CellValue.Formula(_, Some(cached)) => cached
+          case CellValue.Formula(_, Some(cached), _) => cached
           case other => other
       }.toVector
     }.toVector
@@ -197,7 +197,7 @@ object ArrayArithmetic:
    * serial number, rich text flattens to its plain text.
    */
   private def normalizeForCompare(cv: CellValue): CellValue = cv match
-    case CellValue.Formula(_, Some(cached)) => normalizeForCompare(cached)
+    case CellValue.Formula(_, Some(cached), _) => normalizeForCompare(cached)
     case CellValue.DateTime(dt) =>
       CellValue.Number(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
     case CellValue.RichText(rt) => CellValue.Text(rt.toPlainText)
@@ -310,7 +310,7 @@ object ArrayArithmetic:
    */
   private[formula] def carriedError(cv: CellValue): Option[CellError] = cv match
     case CellValue.Error(err) => Some(err)
-    case CellValue.Formula(_, Some(cached)) => carriedError(cached)
+    case CellValue.Formula(_, Some(cached), _) => carriedError(cached)
     case _ => None
 
   /**
@@ -407,7 +407,7 @@ object ArrayArithmetic:
     case CellValue.Bool(b) => Right(b)
     case CellValue.Number(n) => Right(n.signum != 0)
     case CellValue.Empty => Right(false)
-    case CellValue.Formula(_, Some(cached)) => conditionTruthy(label, cached)
+    case CellValue.Formula(_, Some(cached), _) => conditionTruthy(label, cached)
     case CellValue.Error(err) =>
       Left(EvalError.ErrorValue(err, Some(label)))
     // GH-344 item 5: exactly "TRUE"/"FALSE" (case-insensitive, no trim) coerce via the shared

@@ -34,7 +34,7 @@ class IterativeRecalcSpec extends FunSuite:
       .find(_.name.value == sheetName)
       .flatMap(_.cells.get(ref))
       .map(_.value)
-      .collect { case CellValue.Formula(_, Some(v)) => v }
+      .collect { case CellValue.Formula(_, Some(v), _) => v }
 
   private def cachedNum(wb: Workbook, sheetName: String, ref: ARef): Option[BigDecimal] =
     cached(wb, sheetName, ref).collect { case CellValue.Number(n) => n }

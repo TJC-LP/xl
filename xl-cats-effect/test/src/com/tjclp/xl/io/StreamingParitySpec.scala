@@ -49,7 +49,10 @@ class StreamingParitySpec extends CatsEffectSuite:
     // GH-350: DOCTYPE prologs (with comment-trap internal subsets), BOM'd styles, externalLinks —
     // pins that the streaming SAX readers tolerate the same hostile-but-Excel-valid class as the
     // in-memory reader (both paths share secureSaxParserFactory + the doctype strip).
-    "doctype-hostile.xlsx"
+    "doctype-hostile.xlsx",
+    // GH-430: array/dataTable formula records — pins that the streaming reader models the same
+    // FormulaKind cells (incl. cached #NUM! interiors) as the DOM reader.
+    "formula-records.xlsx"
   )
 
   private def fixturePath(name: String): Path =

@@ -167,7 +167,7 @@ class WriteFastSpec extends FunSuite:
     readResult.foreach { readWb =>
       val readSheet = readWb.sheets.head
       readSheet(ref"A3").value match
-        case CellValue.Formula(expr, cached) =>
+        case CellValue.Formula(expr, cached, _) =>
           assertEquals(expr, "SUM(A1:A2)")
           assertEquals(cached, Some(CellValue.Number(BigDecimal(30))))
         case other => fail(s"Expected Formula, got $other")
@@ -205,7 +205,7 @@ class WriteFastSpec extends FunSuite:
     assert(readResult.isRight, s"Read failed: $readResult")
     readResult.foreach { readWb =>
       readWb.sheets.head(ref"A2").value match
-        case CellValue.Formula(expr, Some(CellValue.Number(serial))) =>
+        case CellValue.Formula(expr, Some(CellValue.Number(serial)), _) =>
           assertEquals(expr, "EDATE(A1,0)")
           assertEquals(serial.toDouble, 36526.5, 0.000001)
         case other => fail(s"Expected Formula with cached serial Number, got $other")

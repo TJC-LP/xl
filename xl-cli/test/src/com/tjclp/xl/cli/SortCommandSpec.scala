@@ -424,7 +424,7 @@ class SortCommandSpec extends FunSuite:
     assertEquals(s.cells.get(ref(2, 1)).map(_.value), Some(CellValue.Number(600)))
     // Formula should be =SUM(B2:C2) after moving from row 4 to row 2
     s.cells.get(ref(3, 1)).map(_.value) match
-      case Some(CellValue.Formula(formula, _)) =>
+      case Some(CellValue.Formula(formula, _, _)) =>
         assertEquals(formula, "SUM(B2:C2)")
       case other =>
         fail(s"Expected Formula, got $other")
@@ -432,7 +432,7 @@ class SortCommandSpec extends FunSuite:
     // Row 3 should be Bob (unchanged position, unchanged formula)
     assertEquals(s.cells.get(ref(0, 2)).map(_.value), Some(CellValue.Text("Bob")))
     s.cells.get(ref(3, 2)).map(_.value) match
-      case Some(CellValue.Formula(formula, _)) =>
+      case Some(CellValue.Formula(formula, _, _)) =>
         assertEquals(formula, "SUM(B3:C3)")
       case other =>
         fail(s"Expected Formula, got $other")
@@ -443,7 +443,7 @@ class SortCommandSpec extends FunSuite:
     assertEquals(s.cells.get(ref(2, 3)).map(_.value), Some(CellValue.Number(200)))
     // Formula should be =SUM(B4:C4) after moving from row 2 to row 4
     s.cells.get(ref(3, 3)).map(_.value) match
-      case Some(CellValue.Formula(formula, _)) =>
+      case Some(CellValue.Formula(formula, _, _)) =>
         assertEquals(formula, "SUM(B4:C4)")
       case other =>
         fail(s"Expected Formula, got $other")
@@ -477,7 +477,7 @@ class SortCommandSpec extends FunSuite:
     // Row 1: A=5, B=$A$1*3 (moved from row 2)
     assertEquals(s.cells.get(ref(0, 0)).map(_.value), Some(CellValue.Number(5)))
     s.cells.get(ref(1, 0)).map(_.value) match
-      case Some(CellValue.Formula(formula, _)) =>
+      case Some(CellValue.Formula(formula, _, _)) =>
         assertEquals(formula, "$A$1*3") // Absolute ref unchanged
       case other =>
         fail(s"Expected Formula, got $other")
@@ -485,7 +485,7 @@ class SortCommandSpec extends FunSuite:
     // Row 2: A=10, B=$A$1*2 (moved from row 1)
     assertEquals(s.cells.get(ref(0, 1)).map(_.value), Some(CellValue.Number(10)))
     s.cells.get(ref(1, 1)).map(_.value) match
-      case Some(CellValue.Formula(formula, _)) =>
+      case Some(CellValue.Formula(formula, _, _)) =>
         assertEquals(formula, "$A$1*2") // Absolute ref unchanged
       case other =>
         fail(s"Expected Formula, got $other")

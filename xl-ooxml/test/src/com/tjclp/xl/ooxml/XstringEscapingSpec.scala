@@ -126,7 +126,7 @@ class XstringEscapingSpec extends FunSuite:
     val got = back("Data").toOption
       .flatMap(_.cells.get(ref"A1"))
       .map(_.value)
-      .collect { case CellValue.Formula(_, Some(CellValue.Text(s))) => s }
+      .collect { case CellValue.Formula(_, Some(CellValue.Text(s)), _) => s }
       .getOrElse(fail("A1 cached text missing"))
     assertEquals(show(got), show("a\rb"), "cached string CR lost")
   }
