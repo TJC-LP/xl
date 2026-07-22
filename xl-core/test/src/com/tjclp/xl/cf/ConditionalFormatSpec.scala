@@ -175,6 +175,13 @@ class ConditionalFormatSpec extends FunSuite:
     assertEquals(blockRanges(r), Vector(Vector("C2:C3")))
   }
 
+  test("GH-428: a full-sheet sqref survives insertion clamped (Excel refuses rows past 1048576)") {
+    val s = Sheet("CF")
+      .conditionalFormat(ref"A1:XFD1048576", CfRule.cellIs(CfOperator.Equal, "1", dxf))
+    assertEquals(blockRanges(s.insertRows(at = 1, count = 2)), Vector(Vector("A1:XFD1048576")))
+    assertEquals(blockRanges(s.insertColumns(at = 1, count = 1)), Vector(Vector("A1:XFD1048576")))
+  }
+
   test("structural shifts leave Preserved blocks untouched and shift Preserved rules' envelopes") {
     val preservedBlock = ConditionalFormat.Preserved("<conditionalFormatting sqref=\"Z9\"/>")
     val s = Sheet("CF")

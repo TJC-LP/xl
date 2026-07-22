@@ -281,18 +281,32 @@ object FormulaShifter:
   ): Option[TExpr[A]] =
     shiftStructuralInternal(expr, shiftLocal, editedSheet, isRow, at, delta)
 
-  /** Map a 0-based position through a structural edit. None = the position was deleted. */
-  private def shiftPos(p: Int, at: Int, delta: Int): Option[Int] =
-    if delta >= 0 then Some(if p >= at then p + delta else p)
+  /**
+   * Map a 0-based position through a structural edit. None = the position was deleted — or pushed
+   * past the axis maximum `max` by an insert (GH-428): a ref past the sheet edge has no home, so
+   * the formula degrades to `#REF!` (the `SharedFormula.shiftedIndex` bound). Long intermediate
+   * math so a pathological delta cannot overflow.
+   */
+  private def shiftPos(p: Int, at: Int, delta: Int, max: Int): Option[Int] =
+    if delta >= 0 then
+      val np = if p >= at then p.toLong + delta else p.toLong
+      Option.when(np <= max)(np.toInt)
     else
       val n = -delta
       if p < at then Some(p)
       else if p < at + n then None
       else Some(p - n)
 
-  /** Map an inclusive [s,e] position range through a structural edit. None = fully deleted. */
-  private def shiftRangePos(s: Int, e: Int, at: Int, delta: Int): Option[(Int, Int)] =
-    if delta >= 0 then Some((if s >= at then s + delta else s, if e >= at then e + delta else e))
+  /**
+   * Map an inclusive [s,e] position range through a structural edit. None = fully deleted — or
+   * start pushed past the axis maximum by an insert (GH-428); an end past the maximum clamps to it
+   * (Excel's behavior for full-height/width ranges).
+   */
+  private def shiftRangePos(s: Int, e: Int, at: Int, delta: Int, max: Int): Option[(Int, Int)] =
+    if delta >= 0 then
+      val ns = if s >= at then s.toLong + delta else s.toLong
+      val ne = if e >= at then e.toLong + delta else e.toLong
+      if ns > max then None else Some((ns.toInt, math.min(ne, max.toLong).toInt))
     else
       val n = -delta
       val ns = if s < at then s else if s < at + n then at else s - n
@@ -307,8 +321,8 @@ object FormulaShifter:
   ): Option[ARef] =
     val colIdx = Column.index0(cellRef.col)
     val rowIdx = Row.index0(cellRef.row)
-    if isRow then shiftPos(rowIdx, at, delta).map(nr => ARef.from0(colIdx, nr))
-    else shiftPos(colIdx, at, delta).map(nc => ARef.from0(nc, rowIdx))
+    if isRow then shiftPos(rowIdx, at, delta, Row.MaxIndex0).map(nr => ARef.from0(colIdx, nr))
+    else shiftPos(colIdx, at, delta, Column.MaxIndex0).map(nc => ARef.from0(nc, rowIdx))
 
   private def shiftRangeStructural(
     range: CellRange,
@@ -319,7 +333,8 @@ object FormulaShifter:
     val (sPos, ePos) =
       if isRow then (Row.index0(range.start.row), Row.index0(range.end.row))
       else (Column.index0(range.start.col), Column.index0(range.end.col))
-    shiftRangePos(sPos, ePos, at, delta).map { case (ns, ne) =>
+    val axisMax = if isRow then Row.MaxIndex0 else Column.MaxIndex0
+    shiftRangePos(sPos, ePos, at, delta, axisMax).map { case (ns, ne) =>
       if isRow then
         new CellRange(
           ARef.from0(Column.index0(range.start.col), ns),

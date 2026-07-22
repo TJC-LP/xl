@@ -195,20 +195,15 @@ final case class Sheet(
           idx(col.index0).map(ni => Column.from0(ni) -> p)
         }
 
-    // Shared range algebra on the active axis: clamp the span; None when it collapses entirely
-    // into the deletion. Used by merged ranges, conditional-format envelopes, and data
-    // validations — the three sqref-shaped structures that must shift identically.
+    // Shared range algebra on the active axis (Sheet.shiftSpan): clamp the span at the sheet
+    // edge (GH-428) and drop it when it collapses into a deletion or is pushed fully past the
+    // edge. Used by merged ranges, conditional-format envelopes, data validations, print areas,
+    // tables, and the autoFilter range — every sqref-shaped structure must shift identically.
+    val axisMax = if rowAxis then Row.MaxIndex0 else Column.MaxIndex0
     def shiftRangeOnAxis(range: CellRange): Option[CellRange] =
-      val s = axisOf(range.start)
-      val e = axisOf(range.end)
-      val (ns, ne) =
-        if !deleting then (if s >= at then s + count else s, if e >= at then e + count else e)
-        else
-          val ns0 = if s < at then s else if s >= at + count then s - count else at
-          val ne0 = if e < at then e else if e >= at + count then e - count else at - 1
-          (ns0, ne0)
-      if ns > ne then None
-      else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
+      Sheet
+        .shiftSpan(axisOf(range.start), axisOf(range.end), at, count, deleting, axisMax)
+        .map((ns, ne) => CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
 
     // Merged ranges: clamp the active-axis span; drop if it collapses entirely into the deletion.
     val newMerges = mergedRanges.flatMap(shiftRangeOnAxis)
@@ -941,6 +936,35 @@ final case class Sheet(
 object Sheet:
 
   /**
+   * Span algebra shared by every range-shaped structure a structural edit moves: merged ranges,
+   * cf/dv envelopes, print areas, repeat rows, tables, autoFilter, and chart data references.
+   *
+   * Maps an inclusive 0-based `[s, e]` span through an insert (`deleting = false`) or delete of
+   * `count` indices at `at` on one axis, clamped to the axis maximum (GH-428): an insert pins the
+   * span END at `axisMax` (Excel's behavior for full-height/width ranges — an unclamped shift
+   * emits rows past 1048576 / columns past XFD and Excel refuses the file); a span whose START
+   * passes the edge drops. A delete drops the overlap; `None` = the span vanished. Long
+   * intermediate math so a pathological `count` cannot overflow.
+   */
+  private[xl] def shiftSpan(
+    s: Int,
+    e: Int,
+    at: Int,
+    count: Int,
+    deleting: Boolean,
+    axisMax: Int
+  ): Option[(Int, Int)] =
+    if !deleting then
+      val ns = if s >= at then s.toLong + count else s.toLong
+      val ne = if e >= at then e.toLong + count else e.toLong
+      if ns > axisMax then None
+      else Some((ns.toInt, math.min(ne, axisMax.toLong).toInt))
+    else
+      val ns = if s < at then s else if s >= at + count then s - count else at
+      val ne = if e < at then e else if e >= at + count then e - count else at - 1
+      if ns > ne then None else Some((ns, ne))
+
+  /**
    * Highest priority present across the sheet's conditional formats (0 when none): typed rules'
    * priorities ∪ parsed `CfRule.Preserved` priorities ∪ priorities text-scanned from
    * `ConditionalFormat.Preserved` payloads (GH-136). Auto-priority allocation appends above this.
@@ -984,26 +1008,14 @@ object Sheet:
       if rowAxis then r.end.row.index0 else r.end.col.index0
     def rebuild(ref: ARef, newIdx: Int): ARef =
       if rowAxis then ARef.from0(ref.col.index0, newIdx) else ARef.from0(newIdx, ref.row.index0)
-    // The merged-range clamp algebra: shift both endpoints; collapse-to-empty = None.
+    val axisMax = if rowAxis then Row.MaxIndex0 else Column.MaxIndex0
+    // The shared shiftSpan clamp algebra: shift both endpoints; collapse-to-empty = None.
     def shiftRange(range: CellRange): Option[CellRange] =
-      val s = axisStart(range)
-      val e = axisEnd(range)
-      val (ns, ne) =
-        if !deleting then (if s >= at then s + count else s, if e >= at then e + count else e)
-        else
-          val ns0 = if s < at then s else if s >= at + count then s - count else at
-          val ne0 = if e < at then e else if e >= at + count then e - count else at - 1
-          (ns0, ne0)
-      if ns > ne then None
-      else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
+      shiftSpan(axisStart(range), axisEnd(range), at, count, deleting, axisMax)
+        .map((ns, ne) => CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
     def shiftCell(ref: ARef): Option[ARef] =
       val i = if rowAxis then ref.row.index0 else ref.col.index0
-      val ni =
-        if !deleting then Some(if i >= at then i + count else i)
-        else if i < at then Some(i)
-        else if i >= at + count then Some(i - count)
-        else None
-      ni.map(rebuild(ref, _))
+      shiftSpan(i, i, at, count, deleting, axisMax).map((ni, _) => rebuild(ref, ni))
     def matches(sheet: SheetName): Boolean = sheet.value.equalsIgnoreCase(edited)
     val shiftedSeries = chart.series.flatMap { series =>
       val newValues =

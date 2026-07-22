@@ -119,6 +119,11 @@ class DataValidationSpec extends FunSuite:
     assertEquals(dvRanges(r), Vector(Vector("C2:C3")))
   }
 
+  test("GH-428: insertColumns clamps a full-width validation at XFD (never XFE)") {
+    val s = Sheet("DV").withDataValidation(ref"A1:XFD1", DataValidation.listOf("x"))
+    assertEquals(dvRanges(s.insertColumns(at = 1, count = 2)), Vector(Vector("A1:XFD1")))
+  }
+
   test("structural shifts leave Preserved entries untouched") {
     val preserved = DataValidation.Preserved("""<dataValidation type="whole" sqref="Z9"/>""")
     val s = Sheet("DV")

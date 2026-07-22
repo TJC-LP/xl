@@ -99,6 +99,31 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(sheetNamed(r, "Report")(ref"B1").value, formulaCell("Data!A5"))
   }
 
+  // ===== GH-428: insert-side clamp at the sheet edge =====
+
+  test("GH-428: a formula ref pushed past the last row degrades to #REF!") {
+    val s = new Sheet(name = S)
+      .put(ref"B1", formulaCell("A1048576"))
+      .put(ref"C1", formulaCell("XFD1"))
+    val rows = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    // the formula cell itself moved to B2; its ref had no home past the edge
+    assertEquals(sheetNamed(rows, "S")(ref"B2").value, CellValue.Error(CellError.Ref))
+    val cols = StructuralEditor.insertColumns(Workbook(Vector(s)), S, at = 0, count = 1)
+    assertEquals(sheetNamed(cols, "S")(ref"D1").value, CellValue.Error(CellError.Ref))
+  }
+
+  test("GH-428: a range end clamps at the edge; a range start pushed past it voids the formula") {
+    val s = new Sheet(name = S)
+      .put(ref"B1", formulaCell("SUM(A10:A1048576)"))
+      .put(ref"C1", formulaCell("SUM(A1048570:A1048576)"))
+    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 2)
+    val s2 = sheetNamed(r, "S")
+    assertEquals(s2(ref"B1").value, formulaCell("SUM(A12:A1048576)")) // end pinned at the max
+    val voided = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 10)
+    // the formula cell itself moved to C11; its range START passed the edge -> #REF!
+    assertEquals(sheetNamed(voided, "S")(ref"C11").value, CellValue.Error(CellError.Ref))
+  }
+
   // ===== GH-427: equals-free rewrite + cached-value preservation =====
 
   test("GH-427: rewrite prints the model's equals-free form (no '=' lands in <f>)") {

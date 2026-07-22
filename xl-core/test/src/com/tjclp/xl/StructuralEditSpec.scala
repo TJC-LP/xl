@@ -4,12 +4,14 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.FreezePane
-import munit.FunSuite
+import munit.ScalaCheckSuite
+import org.scalacheck.Gen
+import org.scalacheck.Prop.forAll
 
 /**
  * GH-128/#129: pure structural row/column insert/delete on Sheet (cells, merges, props, freeze).
  */
-class StructuralEditSpec extends FunSuite:
+class StructuralEditSpec extends ScalaCheckSuite:
 
   private def num(n: Int) = CellValue.Number(BigDecimal(n))
 
@@ -59,4 +61,62 @@ class StructuralEditSpec extends FunSuite:
   test("insertRows shifts the freeze-pane anchor") {
     val s = Sheet("S").copy(freezePane = Some(FreezePane.At(ref"B3")))
     assertEquals(s.insertRows(at = 0, count = 2).freezePane, Some(FreezePane.At(ref"B5")))
+  }
+
+  // ===== GH-428: insert-side clamp at the sheet edge =====
+
+  test("GH-428: insertRows clamps a full-height merge at row 1048576") {
+    val full = CellRange(ref"A1", ref"A1048576")
+    val s = Sheet("S").copy(mergedRanges = Set(full))
+    assertEquals(s.insertRows(at = 1, count = 2).mergedRanges, Set(full))
+  }
+
+  test("GH-428: insertColumns clamps a full-width merge at XFD") {
+    val full = CellRange(ref"A1", ref"XFD1")
+    val s = Sheet("S").copy(mergedRanges = Set(full))
+    assertEquals(s.insertColumns(at = 1, count = 2).mergedRanges, Set(full))
+  }
+
+  test("GH-428: a merge near the edge clamps its end; one pushed fully past the edge drops") {
+    val nearEdge = CellRange(ref"A1048570", ref"A1048576")
+    val s = Sheet("S").copy(mergedRanges = Set(nearEdge))
+    assertEquals(
+      s.insertRows(at = 0, count = 3).mergedRanges,
+      Set(CellRange(ref"A1048573", ref"A1048576"))
+    )
+    val last = CellRange(ref"A1048576", ref"A1048576")
+    assertEquals(
+      Sheet("S").copy(mergedRanges = Set(last)).insertRows(at = 0, count = 1).mergedRanges,
+      Set.empty[CellRange]
+    )
+  }
+
+  property("GH-428: shiftSpan results always stay within [0, axisMax] with start <= end") {
+    val max = com.tjclp.xl.addressing.Row.MaxIndex0
+    val genSpan = for
+      s <- Gen.chooseNum(0, max)
+      e <- Gen.chooseNum(s, max)
+    yield (s, e)
+    forAll(genSpan, Gen.chooseNum(0, max), Gen.chooseNum(1, 5000), Gen.oneOf(true, false)) {
+      case ((s, e), at, count, deleting) =>
+        Sheet.shiftSpan(s, e, at, count, deleting, max) match
+          case None => true
+          case Some((ns, ne)) => ns >= 0 && ns <= ne && ne <= max
+    }
+  }
+
+  property("GH-428: PageSetup construction never throws for shifted repeat rows") {
+    val max = com.tjclp.xl.addressing.Row.MaxIndex0
+    val genSpan = for
+      s <- Gen.chooseNum(0, max)
+      e <- Gen.chooseNum(s, max)
+    yield (s, e)
+    forAll(genSpan, Gen.chooseNum(0, max), Gen.chooseNum(1, 5000), Gen.oneOf(true, false)) {
+      case ((s, e), at, count, deleting) =>
+        Sheet.shiftSpan(s, e, at, count, deleting, max).forall { case (ns, ne) =>
+          // the clamp makes PageSetup's 1-based repeatRows invariant unreachable
+          val ps = com.tjclp.xl.sheets.PageSetup(repeatRows = Some((ns + 1, ne + 1)))
+          ps.repeatRows.contains((ns + 1, ne + 1))
+        }
+    }
   }
