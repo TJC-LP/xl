@@ -71,7 +71,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       case (CellValue.Number(n), ExprValue.Number(v)) => n == v
       case (CellValue.Text(s), ExprValue.Text(v)) => s.equalsIgnoreCase(v)
       case (CellValue.Bool(b), ExprValue.Bool(v)) => b == v
-      case (CellValue.Formula(_, Some(cached)), v) => matchesExactForXLookup(cached, v)
+      case (CellValue.Formula(_, Some(cached), _), v) => matchesExactForXLookup(cached, v)
       case _ => false
 
   private def findNextSmaller(
@@ -145,7 +145,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                   case CellValue.Number(n) => ExprValue.Number(n)
                   case CellValue.Text(s) => ExprValue.Text(s)
                   case CellValue.Bool(b) => ExprValue.Bool(b)
-                  case CellValue.Formula(_, Some(cached)) =>
+                  case CellValue.Formula(_, Some(cached), _) =>
                     cached match
                       case CellValue.Number(n) => ExprValue.Number(n)
                       case CellValue.Text(s) => ExprValue.Text(s)
@@ -261,7 +261,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                   case CellValue.Number(n) => ExprValue.Number(n)
                   case CellValue.Text(s) => ExprValue.Text(s)
                   case CellValue.Bool(b) => ExprValue.Bool(b)
-                  case CellValue.Formula(_, Some(cached)) =>
+                  case CellValue.Formula(_, Some(cached), _) =>
                     cached match
                       case CellValue.Number(n) => ExprValue.Number(n)
                       case CellValue.Text(s) => ExprValue.Text(s)

@@ -176,7 +176,7 @@ class StreamingWriteSpec extends FunSuite:
 
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
       imported.sheets.head.cells.get(ARef.from0(1, 0)).map(_.value) match
-        case Some(CellValue.Formula(formula, _)) =>
+        case Some(CellValue.Formula(formula, _, _)) =>
           assertEquals(formula, "A1*2")
         case other => fail(s"Expected Formula, got $other")
     finally Files.deleteIfExists(outputPath)
@@ -815,23 +815,23 @@ class StreamingWriteSpec extends FunSuite:
       val b5 = sheet.cells.get(ARef.from0(1, 4)).map(_.value)
 
       b1 match
-        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A1*2")
+        case Some(CellValue.Formula(f, _, _)) => assertEquals(f, "A1*2")
         case other => fail(s"B1: expected Formula(A1*2), got $other")
 
       b2 match
-        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A2*2")
+        case Some(CellValue.Formula(f, _, _)) => assertEquals(f, "A2*2")
         case other => fail(s"B2: expected Formula(A2*2), got $other")
 
       b3 match
-        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A3*2")
+        case Some(CellValue.Formula(f, _, _)) => assertEquals(f, "A3*2")
         case other => fail(s"B3: expected Formula(A3*2), got $other")
 
       b4 match
-        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A4*2")
+        case Some(CellValue.Formula(f, _, _)) => assertEquals(f, "A4*2")
         case other => fail(s"B4: expected Formula(A4*2), got $other")
 
       b5 match
-        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A5*2")
+        case Some(CellValue.Formula(f, _, _)) => assertEquals(f, "A5*2")
         case other => fail(s"B5: expected Formula(A5*2), got $other")
     finally
       Files.deleteIfExists(sourcePath)
@@ -870,15 +870,15 @@ class StreamingWriteSpec extends FunSuite:
       val b4 = sheet.cells.get(ARef.from0(1, 3)).map(_.value)
 
       b2 match
-        case Some(CellValue.Formula(f, _)) => assertEquals(f, "$A$1+A2")
+        case Some(CellValue.Formula(f, _, _)) => assertEquals(f, "$A$1+A2")
         case other => fail(s"B2: expected Formula($$A$$1+A2), got $other")
 
       b3 match
-        case Some(CellValue.Formula(f, _)) => assertEquals(f, "$A$1+A3")
+        case Some(CellValue.Formula(f, _, _)) => assertEquals(f, "$A$1+A3")
         case other => fail(s"B3: expected Formula($$A$$1+A3), got $other")
 
       b4 match
-        case Some(CellValue.Formula(f, _)) => assertEquals(f, "$A$1+A4")
+        case Some(CellValue.Formula(f, _, _)) => assertEquals(f, "$A$1+A4")
         case other => fail(s"B4: expected Formula($$A$$1+A4), got $other")
     finally
       Files.deleteIfExists(sourcePath)
@@ -905,7 +905,7 @@ class StreamingWriteSpec extends FunSuite:
       val c1 = sheet.cells.get(ARef.from0(2, 0))
 
       c1.map(_.value) match
-        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A1*2")
+        case Some(CellValue.Formula(f, _, _)) => assertEquals(f, "A1*2")
         case other => fail(s"C1: expected Formula(A1*2), got $other")
 
       val styleOpt = c1.flatMap(_.styleId).flatMap(sheet.styleRegistry.get)

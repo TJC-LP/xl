@@ -9,7 +9,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -214,7 +214,7 @@ object WorkbookEvaluator:
 
     def formulaText(q: QualifiedRef): String =
       wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-        case Some(CellValue.Formula(expr, _)) => expr
+        case Some(CellValue.Formula(expr, _, _)) => expr
         case _ => q.ref.toA1
 
     // GH-346: cycle isolation on the WORKBOOK-level graph — same-sheet and cross-sheet cycles
@@ -372,8 +372,12 @@ object WorkbookEvaluator:
           evaluated.getOrElse(orig.name, Map.empty).foldLeft((orig, false)) {
             case ((s, changed), (ref, computed)) =>
               s.cells.get(ref).map(_.value) match
-                case Some(CellValue.Formula(expr, cached)) if !cached.contains(computed) =>
-                  (s.put(ref, CellValue.Formula(expr, Some(computed))), true)
+                // GH-430: a data-table cache is never rewritten by recalculation — pinned
+                // evaluation echoes it, and an uncached record must stay uncached, not gain
+                // a synthetic Some(Empty).
+                case Some(CellValue.Formula(_, _, _: FormulaKind.DataTable)) => (s, changed)
+                case Some(f @ CellValue.Formula(_, cached, _)) if !cached.contains(computed) =>
+                  (s.put(ref, f.copy(cachedValue = Some(computed))), true)
                 case _ => (s, changed)
           }
         }

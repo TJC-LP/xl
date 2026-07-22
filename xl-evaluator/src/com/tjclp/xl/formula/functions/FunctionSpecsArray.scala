@@ -309,7 +309,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       case CellValue.Number(n) => (0, n, "")
       case CellValue.Text(s) => (1, BigDecimal(0), s.toLowerCase)
       case CellValue.Bool(b) => (2, if b then BigDecimal(1) else BigDecimal(0), "")
-      case CellValue.Formula(_, Some(c)) => cellSortKey(c)
+      case CellValue.Formula(_, Some(c), _) => cellSortKey(c)
       case _ => (3, BigDecimal(0), "")
 
   /** Canonical equality key for UNIQUE (case-insensitive text, normalized numbers). */
@@ -319,7 +319,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       case CellValue.Text(s) => "t:" + s.toLowerCase
       case CellValue.Bool(b) => "b:" + b
       case CellValue.Empty => "e:"
-      case CellValue.Formula(_, Some(c)) => cellKey(c)
+      case CellValue.Formula(_, Some(c), _) => cellKey(c)
       case other => "o:" + other.toString
 
   /** Truthiness for FILTER include flags. */
@@ -327,7 +327,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
     cv match
       case CellValue.Bool(b) => b
       case CellValue.Number(n) => n.signum != 0
-      case CellValue.Formula(_, Some(c)) => isTruthy(c)
+      case CellValue.Formula(_, Some(c), _) => isTruthy(c)
       case _ => false
 
   /**
@@ -347,7 +347,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
         val cell = sheet(ref)
         // For formulas with cached values, use the cached value
         cell.value match
-          case CellValue.Formula(_, Some(cachedValue)) => cachedValue
+          case CellValue.Formula(_, Some(cachedValue), _) => cachedValue
           case other => other
       }.toVector
     }.toVector
@@ -375,8 +375,8 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
               case (Left(err), _) => Left(err)
               case (Right(cols), colIdx) =>
                 targetSheet(ARef.from0(colIdx, rowIdx)).value match
-                  case CellValue.Formula(_, Some(cachedValue)) => Right(cols :+ cachedValue)
-                  case CellValue.Formula(formulaStr, None) =>
+                  case CellValue.Formula(_, Some(cachedValue), _) => Right(cols :+ cachedValue)
+                  case CellValue.Formula(formulaStr, None, _) =>
                     Evaluator
                       .evalCrossSheetFormula(
                         formulaStr,

@@ -24,15 +24,24 @@ enum CellValue:
    * Formula expression with optional cached result value.
    *
    * @param expression
-   *   The formula string (e.g., "=A1+B1"). Must be non-empty.
+   *   The formula string (e.g., "=A1+B1"). Must be non-empty. For a [[FormulaKind.DataTable]]-kind
+   *   formula this is the derived `TABLE(...)` display text — the OOXML record carries no formula
+   *   text.
    * @param cachedValue
    *   Optional cached result value from Excel (preserved during roundtrip). This is the last
    *   calculated value stored in the XLSX file. Can be Number, Text, Bool, Error, or Empty. Must
    *   never be another Formula.
+   * @param kind
+   *   OOXML CT_CellFormula record kind (GH-430): plain formulas are [[FormulaKind.Normal]];
+   *   `t="array"` / `t="dataTable"` records ride here so they survive sheet regeneration.
    * @note
    *   Use `CellValue.formula()` for validated construction.
    */
-  case Formula(expression: String, cachedValue: Option[CellValue] = None)
+  case Formula(
+    expression: String,
+    cachedValue: Option[CellValue] = None,
+    kind: FormulaKind = FormulaKind.Normal
+  )
 
   /** Empty cell */
   case Empty
@@ -60,16 +69,38 @@ object CellValue:
    *   The formula string (e.g., "=A1+B1"). Must be non-empty.
    * @param cachedValue
    *   Optional cached result value. Must not be a Formula.
+   * @param kind
+   *   OOXML record kind. A [[FormulaKind.DataTable]] kind requires the derived `TABLE(...)` display
+   *   text as `expression` (see [[dataTable]] which synthesizes it).
    * @throws IllegalArgumentException
-   *   if expression is empty or cachedValue contains a Formula
+   *   if expression is empty, cachedValue contains a Formula, or a DataTable kind carries an
+   *   expression that is not its derived display text
    */
-  def formula(expression: String, cachedValue: Option[CellValue] = None): Formula =
+  def formula(
+    expression: String,
+    cachedValue: Option[CellValue] = None,
+    kind: FormulaKind = FormulaKind.Normal
+  ): Formula =
     require(expression.nonEmpty, "Formula expression cannot be empty")
     require(
       !cachedValue.exists { case _: Formula => true; case _ => false },
       "Cached value cannot be a Formula"
     )
-    Formula(expression, cachedValue)
+    kind match
+      case dt: FormulaKind.DataTable =>
+        require(
+          expression == FormulaKind.displayExpression(dt),
+          "DataTable formula expression must be the derived TABLE(...) display text"
+        )
+      case _ => ()
+    Formula(expression, cachedValue, kind)
+
+  /**
+   * Smart constructor for a data table record cell (GH-430): synthesizes the derived `TABLE(...)`
+   * display expression from the record. This is the substrate #419's authoring sugar builds on.
+   */
+  def dataTable(kind: FormulaKind.DataTable, cachedValue: Option[CellValue] = None): Formula =
+    formula(FormulaKind.displayExpression(kind), cachedValue, kind)
 
   // Excel epoch for the 1900 date system: December 30, 1899 (not Jan 1, 1900, to account for
   // Excel's 1900 leap-year bug). Epoch for the 1904 date system (legacy Mac Excel): January 1,

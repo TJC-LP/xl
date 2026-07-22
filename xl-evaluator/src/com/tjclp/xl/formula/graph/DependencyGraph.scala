@@ -9,7 +9,7 @@ import com.tjclp.xl.workbooks.Workbook
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.CellRange
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.sheets.Sheet
 import scala.annotation.{nowarn, tailrec}
 
@@ -99,7 +99,11 @@ object DependencyGraph:
 
     val formulaCells = sheet.cells.flatMap { case (ref, cell) =>
       cell.value match
-        case CellValue.Formula(expression, _) => Some(ref -> expression)
+        // GH-430: dataTable-kind cells never enter the graph — their TABLE(...) display text is
+        // not evaluable (guaranteed-failing parse) and their cache is pinned, so they are pure
+        // value sources, not computation nodes.
+        case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
+        case CellValue.Formula(expression, _, _) => Some(ref -> expression)
         case _ => None
     }
 
@@ -253,7 +257,7 @@ object DependencyGraph:
     else
       sheet.cells.iterator.flatMap { case (ref, cell) =>
         cell.value match
-          case CellValue.Formula(expression, _)
+          case CellValue.Formula(expression, _, _)
               if names.exists(n => expression.toUpperCase.contains(n)) =>
             FormulaParser.parse(expression) match
               case scala.util.Right(expr) if containsDynamicReference(expr) => Some(ref)
@@ -969,7 +973,9 @@ object DependencyGraph:
     workbook.sheets.flatMap { sheet =>
       sheet.cells.flatMap { case (cellRef, cell) =>
         cell.value match
-          case CellValue.Formula(expression, _) =>
+          // GH-430: dataTable-kind cells are pinned value sources, never computation nodes
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
+          case CellValue.Formula(expression, _, _) =>
             val deps = FormulaParser.parse(expression) match
               case scala.util.Right(expr) =>
                 extractQualifiedDependencies(expr, sheet.name, workbook = Some(workbook))
@@ -1005,7 +1011,9 @@ object DependencyGraph:
     val dependencies = workbook.sheets.flatMap { sheet =>
       sheet.cells.flatMap { case (cellRef, cell) =>
         cell.value match
-          case CellValue.Formula(expression, _) =>
+          // GH-430: dataTable-kind cells are pinned value sources, never computation nodes
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
+          case CellValue.Formula(expression, _, _) =>
             val deps = FormulaParser.parse(expression) match
               case scala.util.Right(expr) =>
                 extractQualifiedDependencies(expr, sheet.name, cellsFor, Some(workbook))

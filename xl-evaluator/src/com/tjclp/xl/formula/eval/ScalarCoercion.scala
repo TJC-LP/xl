@@ -104,8 +104,8 @@ private[formula] object ScalarCoercion:
     case CellValue.Bool(b) => b
     case CellValue.DateTime(dt) => dt
     case CellValue.RichText(rt) => rt.toPlainText
-    case CellValue.Formula(_, Some(cached)) => unwrapCellValue(cached)
-    case CellValue.Formula(_, None) => BigDecimal(0)
+    case CellValue.Formula(_, Some(cached), _) => unwrapCellValue(cached)
+    case CellValue.Formula(_, None, _) => BigDecimal(0)
     case other => other
 
   private def mismatch(label: String, expected: String, value: Any): Either[EvalError, Any] =

@@ -358,7 +358,7 @@ private[ooxml] object ChartCaches:
   private def isNumericValue(value: CellValue): Boolean = value match
     case _: CellValue.Number => true
     case _: CellValue.DateTime => true
-    case CellValue.Formula(_, Some(cached)) => isNumericValue(cached)
+    case CellValue.Formula(_, Some(cached), _) => isNumericValue(cached)
     case _ => false
 
   /** numCache pt rendering; None skips the pt (it still counts in ptCount). TRAP-5: plainNumber. */
@@ -366,7 +366,7 @@ private[ooxml] object ChartCaches:
     case CellValue.Number(n) => Some(XmlUtil.plainNumber(n))
     case CellValue.Bool(b) => Some(if b then "1" else "0")
     case CellValue.DateTime(dt) => Some(XmlUtil.plainNumber(CellValue.dateTimeToExcelSerial(dt)))
-    case CellValue.Formula(_, Some(cached)) =>
+    case CellValue.Formula(_, Some(cached), _) =>
       cached match
         case CellValue.Number(n) => Some(XmlUtil.plainNumber(n))
         case CellValue.Text(t) => Some(t)
@@ -380,7 +380,7 @@ private[ooxml] object ChartCaches:
     case CellValue.Number(n) => Some(XmlUtil.plainNumber(n))
     case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
     case CellValue.DateTime(dt) => Some(XmlUtil.plainNumber(CellValue.dateTimeToExcelSerial(dt)))
-    case CellValue.Formula(_, Some(cached)) =>
+    case CellValue.Formula(_, Some(cached), _) =>
       cached match
         case CellValue.Text(t) => Some(t)
         case CellValue.Number(n) => Some(XmlUtil.plainNumber(n))

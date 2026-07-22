@@ -138,7 +138,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext
   ): Either[EvalError, CellValue] =
     cellValue match
-      case CellValue.Formula(formulaStr, None) =>
+      case CellValue.Formula(formulaStr, None, _) =>
         // Recursively evaluate uncached formula (GH-346: memoized once per pass)
         Evaluator
           .evalCrossSheetFormula(
@@ -150,7 +150,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             ctx.rng,
             ctx.memo.getOrElse(new Evaluator.EvalMemo)
           )
-      case CellValue.Formula(_, Some(cached)) =>
+      case CellValue.Formula(_, Some(cached), _) =>
         // Use cached value
         Right(cached)
       case other =>

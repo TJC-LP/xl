@@ -303,11 +303,11 @@ $headerRow$tableRows
 
       case CellValue.Empty => ""
 
-      case CellValue.Formula(_, Some(cached)) =>
+      case CellValue.Formula(_, Some(cached), _) =>
         // Show cached result formatted with NumFmt (matches Excel display)
         escapeHtml(NumFmtFormatter.formatValue(cached, numFmt))
 
-      case CellValue.Formula(expr, None) =>
+      case CellValue.Formula(expr, None, _) =>
         // No cached value, show raw formula
         escapeHtml(s"=$expr")
 
@@ -358,7 +358,7 @@ $headerRow$tableRows
   private def contentBasedAlignment(value: CellValue): HAlign = value match
     case CellValue.Number(_) | CellValue.DateTime(_) => HAlign.Right
     case CellValue.Bool(_) => HAlign.Center
-    case CellValue.Formula(_, Some(cached)) => contentBasedAlignment(cached)
+    case CellValue.Formula(_, Some(cached), _) => contentBasedAlignment(cached)
     case _ => HAlign.Left
 
   private def cellStyleToInlineCss(cell: Cell, sheet: Sheet, theme: ThemePalette): String =

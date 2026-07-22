@@ -4,8 +4,8 @@ import java.io.InputStream
 import org.xml.sax.{Attributes, InputSource}
 import org.xml.sax.helpers.DefaultHandler
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{CellError, CellValue}
-import com.tjclp.xl.ooxml.{SharedFormula, SharedStrings, XmlSecurity, XmlUtil}
+import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.ooxml.{FormulaKindCodec, SharedFormula, SharedStrings, XmlSecurity, XmlUtil}
 
 /**
  * SAX-based single cell reader with early-abort optimization.
@@ -113,6 +113,8 @@ object SaxSingleCellReader:
     var formulaType: Option[String] = None
     var sharedFormulaIndex: Option[SharedFormula.Index] = None
     var sharedFormulaRange: Option[CellRange] = None
+    // GH-430: t="array"/t="dataTable" record recognized from <f> attributes via the shared codec
+    var formulaRecordKind: Option[FormulaKind] = None
     var currentCellType: Option[String] = None
     var pendingTarget: Option[PendingSharedTarget] = None
     val valueText = new StringBuilder
@@ -145,6 +147,7 @@ object SaxSingleCellReader:
           formulaType = None
           sharedFormulaIndex = None
           sharedFormulaRange = None
+          formulaRecordKind = None
           if inTargetCell then
             currentCellType = Option(attributes.getValue("t"))
             currentCellStyleId = Option(attributes.getValue("s")).flatMap(_.toIntOption)
@@ -160,6 +163,10 @@ object SaxSingleCellReader:
           sharedFormulaIndex = Option(attributes.getValue("si")).flatMap(SharedFormula.parseIndex)
           sharedFormulaRange = Option(attributes.getValue("ref"))
             .flatMap(CellRange.parse(_).toOption)
+          formulaRecordKind = FormulaKindCodec.fromAttrs(
+            formulaType,
+            name => Option(attributes.getValue(name))
+          )
           valueText.clear()
 
         case "is" if inTargetCell =>
@@ -252,9 +259,33 @@ object SaxSingleCellReader:
             )
             resetCellState()
           else
-            throw new CellFound(
-              buildResult(expandedFormula, cachedValue, currentCellType, currentCellStyleId)
-            )
+            // GH-430: dataTable records carry no text (display expression derived); array kind
+            // attaches only when the record carried text — DOM reader parity.
+            formulaRecordKind match
+              case Some(dt: FormulaKind.DataTable) =>
+                throw new CellFound(
+                  buildResult(
+                    Some(FormulaKind.displayExpression(dt)),
+                    cachedValue,
+                    currentCellType,
+                    currentCellStyleId,
+                    dt
+                  )
+                )
+              case Some(arr: FormulaKind.ArrayFormula) if formulaText.nonEmpty =>
+                throw new CellFound(
+                  buildResult(
+                    expandedFormula,
+                    cachedValue,
+                    currentCellType,
+                    currentCellStyleId,
+                    arr
+                  )
+                )
+              case _ =>
+                throw new CellFound(
+                  buildResult(expandedFormula, cachedValue, currentCellType, currentCellStyleId)
+                )
 
         case "c" => resetCellState()
 
@@ -278,14 +309,15 @@ object SaxSingleCellReader:
       expandedFormula: Option[String],
       cached: Option[String],
       cellType: Option[String],
-      styleId: Option[Int]
+      styleId: Option[Int],
+      kind: FormulaKind = FormulaKind.Normal
     ): CellResult =
       val cellValue = (expandedFormula, cached) match
         case (Some(formula), Some(cachedText)) =>
           val parsedCached = interpretCellValue(cachedText, cellType, sst)
           val cachedOpt = Option.when(parsedCached != CellValue.Empty)(parsedCached)
-          CellValue.Formula(formula, cachedOpt)
-        case (Some(formula), None) => CellValue.Formula(formula, None)
+          CellValue.Formula(formula, cachedOpt, kind)
+        case (Some(formula), None) => CellValue.Formula(formula, None, kind)
         case (None, Some(value)) => interpretCellValue(value, cellType, sst)
         case (None, None) => CellValue.Empty
 
@@ -301,6 +333,7 @@ object SaxSingleCellReader:
       formulaType = None
       sharedFormulaIndex = None
       sharedFormulaRange = None
+      formulaRecordKind = None
       inValue = false
       inFormula = false
       inInlineStr = false

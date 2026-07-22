@@ -296,7 +296,7 @@ object FilterPredicate:
   ): Boolean =
     def valueOf(col: String): Option[CellValue] =
       resolve(col).flatMap(cellAt).map {
-        case CellValue.Formula(_, Some(cached)) => cached
+        case CellValue.Formula(_, Some(cached), _) => cached
         case other => other
       }
 

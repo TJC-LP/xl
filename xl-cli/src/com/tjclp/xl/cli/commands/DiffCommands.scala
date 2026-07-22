@@ -197,9 +197,9 @@ object DiffCommands:
   /** Formulas compare by normalized formula text; everything else by typed value. */
   private def sameValue(a: CellValue, b: CellValue): Boolean =
     (a, b) match
-      case (CellValue.Formula(exprA, _), CellValue.Formula(exprB, _)) =>
+      case (CellValue.Formula(exprA, _, _), CellValue.Formula(exprB, _, _)) =>
         normalizeFormula(exprA) == normalizeFormula(exprB)
-      case (CellValue.Formula(_, _), _) | (_, CellValue.Formula(_, _)) => false
+      case (CellValue.Formula(_, _, _), _) | (_, CellValue.Formula(_, _, _)) => false
       case (va, vb) => va == vb
 
   private def normalizeFormula(expr: String): String =
@@ -207,7 +207,7 @@ object DiffCommands:
 
   private def snapshot(cell: Cell, sheet: Sheet): CellSnapshot =
     cell.value match
-      case CellValue.Formula(expr, cached) =>
+      case CellValue.Formula(expr, cached, _) =>
         CellSnapshot(
           value = cached.map(ValueParser.formatCellValue).getOrElse(""),
           formula = Some(normalizeFormula(expr))

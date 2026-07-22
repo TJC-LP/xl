@@ -88,7 +88,7 @@ class BatchRecalcSpec extends FunSuite:
   /** Cached value of the formula cell at (col0, row0) on the first sheet, failing otherwise. */
   private def cachedFormulaValue(wb: Workbook, col0: Int, row0: Int): Option[CellValue] =
     wb.sheets.head.cells.get(ARef.from0(col0, row0)).map(_.value) match
-      case Some(CellValue.Formula(_, cached)) => cached
+      case Some(CellValue.Formula(_, cached, _)) => cached
       case other => fail(s"Expected Formula cell, got $other")
 
   private def assertCachedNumber(cached: Option[CellValue], expected: Double): Unit =
@@ -324,7 +324,7 @@ class BatchRecalcSpec extends FunSuite:
     )
     val report = imported.sheets.find(_.name.value == "Report").getOrElse(fail("no Report"))
     report.cells.get(ARef.from0(1, 0)).map(_.value) match
-      case Some(CellValue.Formula(_, Some(CellValue.Number(n)))) => assertEquals(n.toDouble, 6.0)
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) => assertEquals(n.toDouble, 6.0)
       case other => fail(s"Expected cached Report formula, got $other")
     Files.deleteIfExists(srcFile)
     Files.deleteIfExists(out)
@@ -420,7 +420,8 @@ class BatchRecalcSpec extends FunSuite:
     val imported = readBack(out)
     val otherSheet = imported.sheets.find(_.name.value == "Other").getOrElse(fail("no Other"))
     otherSheet.cells.get(ARef.from0(0, 0)).map(_.value) match
-      case Some(CellValue.Formula(_, Some(CellValue.Number(n)))) => assertEquals(n.toDouble, 70.0)
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assertEquals(n.toDouble, 70.0)
       case other => fail(s"Expected cached cross-sheet formula, got $other")
     Files.deleteIfExists(srcFile)
     Files.deleteIfExists(out)

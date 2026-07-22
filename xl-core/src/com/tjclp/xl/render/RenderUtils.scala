@@ -117,7 +117,7 @@ object RenderUtils:
   def measureCellValueWidth(value: CellValue, font: Option[Font]): Int = value match
     case CellValue.RichText(rt) =>
       rt.runs.map(run => measureTextWidth(run.text, run.font.orElse(font))).sum
-    case CellValue.Formula(_, Some(cached)) =>
+    case CellValue.Formula(_, Some(cached), _) =>
       measureCellValueWidth(cached, font)
     case CellValue.Empty => 0
     case CellValue.Text(s) => measureTextWidth(s, font)
@@ -341,7 +341,7 @@ object RenderUtils:
   def contentBasedAlignment(value: CellValue): HAlign = value match
     case CellValue.Number(_) | CellValue.DateTime(_) => HAlign.Right
     case CellValue.Bool(_) => HAlign.Center
-    case CellValue.Formula(_, Some(cached)) => contentBasedAlignment(cached)
+    case CellValue.Formula(_, Some(cached), _) => contentBasedAlignment(cached)
     case _ => HAlign.Left
 
   /** Calculate column widths for a range, respecting sheet properties. */
@@ -400,8 +400,8 @@ object RenderUtils:
   def cellValueToText(value: CellValue, numFmt: NumFmt): String = value match
     case CellValue.RichText(rt) => rt.toPlainText
     case CellValue.Empty => ""
-    case CellValue.Formula(_, Some(cached)) => NumFmtFormatter.formatValue(cached, numFmt)
-    case CellValue.Formula(expr, None) => s"=$expr"
+    case CellValue.Formula(_, Some(cached), _) => NumFmtFormatter.formatValue(cached, numFmt)
+    case CellValue.Formula(expr, None, _) => s"=$expr"
     case other => NumFmtFormatter.formatValue(other, numFmt)
 
 /**

@@ -142,7 +142,7 @@ object StreamingReadCommands:
       style = if noStyle then None else details.style
       numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
       valueToFormat = details.value match
-        case CellValue.Formula(_, Some(cached)) => cached
+        case CellValue.Formula(_, Some(cached), _) => cached
         case other => other
       formatted = NumFmtFormatter.formatValue(valueToFormat, numFmt)
 
@@ -182,7 +182,7 @@ object StreamingReadCommands:
 
     // For formulas, show expression and cached value separately
     value match
-      case CellValue.Formula(expr, cached) =>
+      case CellValue.Formula(expr, cached, _) =>
         val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
         sb.append(s"Formula: $displayExpr\n")
         cached.foreach { v =>
@@ -227,7 +227,7 @@ object StreamingReadCommands:
       case CellValue.Error(_) => "error"
       case CellValue.RichText(_) => "richtext"
       case CellValue.Empty => "empty"
-      case CellValue.Formula(_, _) => "formula"
+      case CellValue.Formula(_, _, _) => "formula"
 
   private def formatValue(value: CellValue): String =
     value match
@@ -240,7 +240,7 @@ object StreamingReadCommands:
       case CellValue.Error(err) => err.toExcel
       case CellValue.RichText(rt) => s"\"${rt.toPlainText}\""
       case CellValue.Empty => "(empty)"
-      case CellValue.Formula(expr, cached) =>
+      case CellValue.Formula(expr, cached, _) =>
         val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
         cached.map(formatValue).getOrElse(displayExpr)
 
@@ -343,7 +343,7 @@ object StreamingReadCommands:
           .flatMap(row => Stream.emits(cellsInRange(row, range)))
           .collect {
             case CellValue.Number(n) => n
-            case CellValue.Formula(_, Some(CellValue.Number(n))) => n
+            case CellValue.Formula(_, Some(CellValue.Number(n)), _) => n
           }
           .compile
           .fold(StatsAccumulator.empty)(_.add(_))
@@ -650,8 +650,8 @@ object StreamingReadCommands:
     value match
       case CellValue.Empty => true
       case CellValue.Text(s) if s.trim.isEmpty => true
-      case CellValue.Formula(_, Some(CellValue.Empty)) => true
-      case CellValue.Formula(_, Some(CellValue.Text(s))) if s.trim.isEmpty => true
+      case CellValue.Formula(_, Some(CellValue.Empty), _) => true
+      case CellValue.Formula(_, Some(CellValue.Text(s)), _) if s.trim.isEmpty => true
       case _ => false
 
   /** Select rows and columns to render, honoring skipEmpty semantics. */
@@ -846,7 +846,7 @@ object StreamingReadCommands:
     numFmt: NumFmt = NumFmt.General
   ): String =
     value match
-      case CellValue.Formula(formula, _) if showFormulas => formula
-      case CellValue.Formula(_, Some(cached)) => formatCellValue(cached, false, numFmt)
-      case CellValue.Formula(formula, None) => formula
+      case CellValue.Formula(formula, _, _) if showFormulas => formula
+      case CellValue.Formula(_, Some(cached), _) => formatCellValue(cached, false, numFmt)
+      case CellValue.Formula(formula, None, _) => formula
       case other => NumFmtFormatter.formatValue(other, numFmt)

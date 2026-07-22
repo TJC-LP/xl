@@ -439,7 +439,7 @@ class ErrorValueSemanticsSpec extends FunSuite:
     // The error values cache like any computed value (Excel writes them as t="e")
     def cachedValue(r: com.tjclp.xl.addressing.ARef): Option[CellValue] =
       result.workbook("S").toOption.flatMap(_.cells.get(r)).map(_.value).collect {
-        case CellValue.Formula(_, Some(v)) => v
+        case CellValue.Formula(_, Some(v), _) => v
       }
     assertEquals(cachedValue(ref"A1"), Some(div0))
     assertEquals(cachedValue(ref"B1"), Some(div0))

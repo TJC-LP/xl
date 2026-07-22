@@ -1027,7 +1027,7 @@ class MainSpec extends CatsEffectSuite:
       val updatedSheet = updatedWb.sheets.head
 
       updatedSheet.cells.get(ref"C1").map(_.value) match
-        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A1*2")
+        case Some(CellValue.Formula(f, _, _)) => assertEquals(f, "A1*2")
         case other => fail(s"Expected Formula at C1, got $other")
 
       val style = updatedSheet.getCellStyle(ref"C1")
@@ -1050,7 +1050,7 @@ class MainSpec extends CatsEffectSuite:
       val updatedSheet = updatedWb.sheets.head
       List(ref"B1", ref"B2").foreach { r =>
         updatedSheet.cells.get(r).map(_.value) match
-          case Some(CellValue.Formula(_, _)) => ()
+          case Some(CellValue.Formula(_, _, _)) => ()
           case other => fail(s"Expected Formula at ${r.toA1}, got $other")
         val style = updatedSheet.getCellStyle(r)
         assert(style.isDefined, s"numFmt style should be set at ${r.toA1}")

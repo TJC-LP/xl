@@ -1,7 +1,7 @@
 package com.tjclp.xl.cli.output
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.SheetEvaluator
 import com.tjclp.xl.sheets.Sheet
@@ -289,16 +289,31 @@ object JsonRenderer:
       case CellValue.Empty =>
         ("empty", "null", "\"\"")
 
-      case CellValue.Formula(expr, cached) =>
+      case CellValue.Formula(expr, cached, kind) =>
+        // GH-430: a dataTable record is never evaluated — its cache IS the value
+        val evaluable = kind match
+          case _: FormulaKind.DataTable => false
+          case _ => true
         val (raw, fmt) =
-          formulaValueJson(sheet, displayExpression(expr), cached, numFmt, evalFormulas)
+          formulaValueJson(
+            sheet,
+            displayExpression(expr),
+            cached,
+            numFmt,
+            evalFormulas && evaluable
+          )
         ("formula", raw, fmt)
 
     // GH-357: formula cells always carry the expression in a dedicated field; value/formatted
     // hold the computed or cached value. --formulas only affects non-JSON display formats.
+    // GH-430: non-Normal record kinds surface additively as "formulaKind".
     val formulaField = cell.value match
-      case CellValue.Formula(expr, _) =>
-        s""", "formula": ${escapeJsonString(displayExpression(expr))}"""
+      case CellValue.Formula(expr, _, kind) =>
+        val kindField = kind match
+          case FormulaKind.Normal => ""
+          case _: FormulaKind.ArrayFormula => """, "formulaKind": "array""""
+          case _: FormulaKind.DataTable => """, "formulaKind": "dataTable""""
+        s""", "formula": ${escapeJsonString(displayExpression(expr))}$kindField"""
       case _ => ""
 
     s"""{"ref": "${ref.toA1}", "type": "$typeStr"$formulaField, "value": $rawValue, "formatted": $formatted}"""
@@ -375,8 +390,8 @@ object JsonRenderer:
       case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
       case CellValue.DateTime(dt) => NumFmtFormatter.formatValue(cell.value, numFmt)
       case CellValue.RichText(rt) => rt.toPlainText
-      case CellValue.Formula(_, Some(cached)) => getCellTextValueFromCellValue(cached, numFmt)
-      case CellValue.Formula(expr, None) => expr
+      case CellValue.Formula(_, Some(cached), _) => getCellTextValueFromCellValue(cached, numFmt)
+      case CellValue.Formula(expr, None, _) => expr
       case CellValue.Error(err) => err.toExcel
       case CellValue.Empty => ""
 
@@ -389,7 +404,7 @@ object JsonRenderer:
       case CellValue.RichText(rt) => rt.toPlainText
       case CellValue.Error(err) => err.toExcel
       case CellValue.Empty => ""
-      case CellValue.Formula(_, _) => "" // Shouldn't happen
+      case CellValue.Formula(_, _, _) => "" // Shouldn't happen
 
   /** Render cell value as JSON value (unquoted for numbers/booleans) */
   private def renderCellValue(
@@ -412,10 +427,20 @@ object JsonRenderer:
       case CellValue.RichText(rt) => escapeJsonString(rt.toPlainText)
       case CellValue.Error(err) => escapeJsonString(err.toExcel)
       case CellValue.Empty => "null"
-      case CellValue.Formula(expr, cached) =>
+      case CellValue.Formula(expr, cached, kind) =>
         // GH-357: records mode is a scalar projection — always the computed/cached value,
         // never the expression; null when uncached (matches empty cells).
-        formulaValueJson(sheet, displayExpression(expr), cached, numFmt, evalFormulas)._1
+        // GH-430: a dataTable record is never evaluated — its cache IS the value.
+        val evaluable = kind match
+          case _: FormulaKind.DataTable => false
+          case _ => true
+        formulaValueJson(
+          sheet,
+          displayExpression(expr),
+          cached,
+          numFmt,
+          evalFormulas && evaluable
+        )._1
 
   private def renderCellValueFromCellValue(value: CellValue, numFmt: NumFmt): String =
     value match
@@ -428,4 +453,4 @@ object JsonRenderer:
       case CellValue.RichText(rt) => escapeJsonString(rt.toPlainText)
       case CellValue.Error(err) => escapeJsonString(err.toExcel)
       case CellValue.Empty => "null"
-      case CellValue.Formula(_, _) => "null" // Shouldn't happen
+      case CellValue.Formula(_, _, _) => "null" // Shouldn't happen

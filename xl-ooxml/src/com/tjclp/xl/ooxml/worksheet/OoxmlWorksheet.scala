@@ -444,7 +444,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
             // Convert to Excel serial number
             val serial = com.tjclp.xl.cells.CellValue.dateTimeToExcelSerial(dt)
             ("n", com.tjclp.xl.cells.CellValue.Number(BigDecimal(serial)))
-          case com.tjclp.xl.cells.CellValue.Formula(_, cachedValue) =>
+          case com.tjclp.xl.cells.CellValue.Formula(_, cachedValue, _) =>
             // Cell type determined by cached value. When no cached value,
             // omit type attribute (empty string) to let Excel infer.
             // Using "str" for formulas without cached values causes

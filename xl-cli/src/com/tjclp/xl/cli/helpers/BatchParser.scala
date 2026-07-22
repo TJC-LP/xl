@@ -340,19 +340,26 @@ object BatchParser:
             val ref = requireString(objMap, "ref", idx)
             // Optional number format applied to the formula cell(s) — parity with put (GH-356)
             val format = objMap.get("format").flatMap(_.strOpt).flatMap(parseFormatName)
+            // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
+            def rejectDataTable(formula: String): String =
+              ValueParser.dataTableFormulaError(formula) match
+                case Some(msg) => throw new Exception(s"Object ${idx + 1}: $msg")
+                case None => formula
             // Check for explicit formulas array first
             objMap.get("values") match
               case Some(arr) if arr.arrOpt.isDefined =>
                 val formulas = arr.arr.toVector.zipWithIndex.map { case (v, i) =>
-                  v.strOpt.getOrElse(
-                    throw new Exception(
-                      s"Object ${idx + 1}: 'values[$i]' must be a string formula"
+                  rejectDataTable(
+                    v.strOpt.getOrElse(
+                      throw new Exception(
+                        s"Object ${idx + 1}: 'values[$i]' must be a string formula"
+                      )
                     )
                   )
                 }
                 BatchOp.PutFormulas(ref, formulas, format)
               case _ =>
-                val formula = requireStringValue(objMap, idx)
+                val formula = rejectDataTable(requireStringValue(objMap, idx))
                 // Check for 'from' field for formula dragging
                 objMap.get("from").flatMap(_.strOpt) match
                   case Some(fromRef) => BatchOp.PutFormulaDragging(ref, formula, fromRef, format)

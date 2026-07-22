@@ -172,7 +172,7 @@ object FilterCommands:
           .map(_.numFmt)
           .getOrElse(NumFmt.General)
         cell.value match
-          case CellValue.Formula(expr, cached) =>
+          case CellValue.Formula(expr, cached, _) =>
             val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
             cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
           case CellValue.RichText(rt) => rt.toPlainText
@@ -275,7 +275,7 @@ object FilterCommands:
           case CellValue.Error(err) => ujson.Str(err.toExcel)
           case CellValue.RichText(rt) => ujson.Str(rt.toPlainText)
           case CellValue.Empty => ujson.Null
-          case CellValue.Formula(expr, cached) =>
+          case CellValue.Formula(expr, cached, _) =>
             cached
               .map(c => jsonValue(Some(c)))
               .getOrElse(ujson.Str(if expr.startsWith("=") then expr else s"=$expr"))

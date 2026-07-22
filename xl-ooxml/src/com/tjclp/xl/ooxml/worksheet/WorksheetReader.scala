@@ -3,7 +3,7 @@ package com.tjclp.xl.ooxml.worksheet
 import scala.xml.Elem
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.ooxml.XmlUtil.{
   decodeXstring,
   getAttr,
@@ -13,7 +13,7 @@ import com.tjclp.xl.ooxml.XmlUtil.{
   getTextPreservingWhitespace,
   parseTextRuns
 }
-import com.tjclp.xl.ooxml.{SharedFormula, SharedStrings, XmlReadable}
+import com.tjclp.xl.ooxml.{FormulaKindCodec, SharedFormula, SharedStrings, XmlReadable}
 
 /** Reader for parsing OoxmlWorksheet from XML */
 object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
@@ -258,11 +258,35 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
               .getOrElse("#REF!")
         Right(CellValue.Formula(expression, parseFormulaCache(elem, cellType)))
 
-      case Some(formulaElem) if formulaElem.text.trim.nonEmpty =>
-        Right(CellValue.Formula(formulaElem.text.trim, parseFormulaCache(elem, cellType)))
+      case Some(formulaElem) =>
+        // GH-430: non-shared records. `t="array"`/`t="dataTable"` attrs are modeled per cell —
+        // exactly the cells whose XML carried a record keep one (no group inference). A record
+        // whose load-bearing `ref` is missing/corrupt degrades VISIBLY (array keeps its text as a
+        // plain formula; dataTable falls back to its cached constant) — never invent a range.
+        val text = formulaElem.text.trim
+        FormulaKindCodec.fromAttrs(
+          getAttrOpt(formulaElem, "t"),
+          name => getAttrOpt(formulaElem, name)
+        ) match
+          case Some(dt: FormulaKind.DataTable) =>
+            // The record IS the formula: the XML carries no text; display text is derived.
+            Right(
+              CellValue.Formula(
+                FormulaKind.displayExpression(dt),
+                parseFormulaCache(elem, cellType),
+                dt
+              )
+            )
+          case Some(arr: FormulaKind.ArrayFormula) if text.nonEmpty =>
+            Right(CellValue.Formula(text, parseFormulaCache(elem, cellType), arr))
+          case _ if text.nonEmpty =>
+            Right(CellValue.Formula(text, parseFormulaCache(elem, cellType)))
+          case _ =>
+            // No material formula - dispatch on cellType as before.
+            parseCellValueWithoutFormula(elem, cellType, sst)
 
       case _ =>
-        // No material formula - dispatch on cellType as before.
+        // No formula element - dispatch on cellType as before.
         parseCellValueWithoutFormula(elem, cellType, sst)
 
   /** Collect every well-formed non-empty shared master; first duplicate wins. */

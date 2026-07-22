@@ -8,7 +8,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.patch.Patch
@@ -133,9 +133,9 @@ object SheetEvaluator:
     ): XLResult[CellValue] =
       val cell = sheet(ref)
       cell.value match
-        case value @ CellValue.Formula(expr, _) =>
-          pinnedExternalCache(value) match
-            // GH-353: closed-workbook semantics — the Excel-written cache IS the value
+        case value @ CellValue.Formula(expr, _, _) =>
+          pinnedCache(value) match
+            // GH-353/GH-430: pinned-cache semantics — the Excel-written cache IS the value
             case Some(cached) => scala.util.Right(cached)
             case None =>
               // Pass the current cell ref for ROW()/COLUMN() without arguments
@@ -157,9 +157,9 @@ object SheetEvaluator:
       workbook: Option[Workbook]
     ): XLResult[CellValue] =
       sheet(ref).value match
-        case value @ CellValue.Formula(expr, _) =>
-          pinnedExternalCache(value) match
-            // GH-353: closed-workbook semantics — the Excel-written cache IS the value
+        case value @ CellValue.Formula(expr, _, _) =>
+          pinnedCache(value) match
+            // GH-353/GH-430: pinned-cache semantics — the Excel-written cache IS the value
             case Some(cached) => scala.util.Right(cached)
             case None =>
               evaluateFormulaWith(sheet, expr, Evaluator.instance(rng), clock, workbook, Some(ref))
@@ -590,13 +590,26 @@ object SheetEvaluator:
    */
   private[eval] def pinnedExternalCache(value: CellValue): Option[CellValue] =
     value match
-      case CellValue.Formula(expr, Some(cached)) if expr.contains('[') =>
+      case CellValue.Formula(expr, Some(cached), _) if expr.contains('[') =>
         FormulaParser.parse(expr) match
           case scala.util.Right(ast) if TExpr.containsExternalRef(ast) => Some(cached)
           case scala.util.Right(_) => None
           case scala.util.Left(_) if externalPrefixPattern.matcher(expr).find() => Some(cached)
           case scala.util.Left(_) => None
       case _ => None
+
+  /**
+   * GH-430: the generalized GH-353 seam. A data-table record's cache is its only truthful value —
+   * xl does not evaluate `TABLE(...)` (the record, not the text, is the formula), so evaluation
+   * pins the Excel-written cache exactly like closed-workbook externals; an uncached record pins to
+   * Empty rather than parse-failing. ArrayFormula kinds are NOT pinned: their text evaluates
+   * scalar-wise as before GH-430.
+   */
+  private[eval] def pinnedCache(value: CellValue): Option[CellValue] =
+    value match
+      case CellValue.Formula(_, cached, _: FormulaKind.DataTable) =>
+        Some(cached.getOrElse(CellValue.Empty))
+      case _ => pinnedExternalCache(value)
 
   /** GH-353: lexical external-workbook prefix — `[2]Book1!`, `'[3]Sheet Name'!`, `[2]!name`. */
   private val externalPrefixPattern = java.util.regex.Pattern.compile("""'?\[\d+\]""")
@@ -612,7 +625,10 @@ object SheetEvaluator:
   private[eval] def stripFormulaCaches(sheet: Sheet, refs: Set[ARef]): Sheet =
     refs.foldLeft(sheet) { (s, r) =>
       s.cells.get(r).map(_.value) match
-        case Some(CellValue.Formula(expr, Some(_))) => s.put(r, CellValue.Formula(expr, None))
+        // GH-430: strip Normal-kind caches only — a DataTable cache is the sole source of truth
+        // (graph analysis keeps dataTable cells out of the dynamic bucket; structural safety).
+        case Some(f @ CellValue.Formula(_, Some(_), FormulaKind.Normal)) =>
+          s.put(r, f.copy(cachedValue = None))
         case _ => s
     }
 

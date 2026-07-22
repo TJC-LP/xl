@@ -40,7 +40,7 @@ class WorkbookDefinedNameEvalSpec extends FunSuite:
       .find(_.name.value == sheetName)
       .flatMap(_.cells.get(ref))
       .map(_.value)
-      .collect { case CellValue.Formula(_, Some(v)) => v }
+      .collect { case CellValue.Formula(_, Some(v), _) => v }
 
   test("GH-384: single-cell name resolves to the target cell's value (=case)") {
     val wb = Workbook(model).withDefinedName("case", "Model!$B$2")

@@ -124,7 +124,13 @@ object CopyOps:
     valuesOnly: Boolean
   ): (CellValue, Option[String]) =
     srcCell.value match
-      case CellValue.Formula(expr, cachedOpt) if valuesOnly =>
+      // GH-430: a data-table record cell always copies as its cached constant — pasting the
+      // TABLE(...) display text would be a #NAME? bomb, and pasting the record would claim a
+      // table interior that does not exist at the target. Excel pastes values here too.
+      case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
+        (cachedOpt.getOrElse(CellValue.Empty), None)
+
+      case CellValue.Formula(expr, cachedOpt, _) if valuesOnly =>
         // Materialize: prefer cached value, fall back to evaluating against source sheet.
         val materialized = cachedOpt.getOrElse {
           SheetEvaluator
@@ -137,8 +143,10 @@ object CopyOps:
         }
         (materialized, None)
 
-      case CellValue.Formula(expr, _) =>
-        // Shift formula references by the displacement.
+      case CellValue.Formula(expr, _, _) =>
+        // Shift formula references by the displacement. An ArrayFormula-kind source pastes as a
+        // plain formula (kind degrades to Normal by construction) — Excel's paste-of-anchor
+        // behavior (GH-430).
         FormulaParser.parse(s"=$expr") match
           case Right(parsed) =>
             val shifted = FormulaShifter.shift(parsed, colDelta, rowDelta)

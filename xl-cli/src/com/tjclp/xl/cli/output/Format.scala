@@ -1,7 +1,7 @@
 package com.tjclp.xl.cli.output
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{CellValue, Comment}
+import com.tjclp.xl.cells.{CellValue, Comment, FormulaKind}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.styles.{CellStyle, StyleId}
@@ -145,8 +145,8 @@ object Format:
 
     // For formulas, show expression and cached value separately
     value match
-      case CellValue.Formula(expr, cached) =>
-        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+      case CellValue.Formula(expr, cached, kind) =>
+        val displayExpr = RendererCommon.formulaDisplay(expr, kind)
         sb.append(s"Formula: $displayExpr\n")
         cached.foreach { v =>
           sb.append(s"Cached: ${formatValue(v)}\n")
@@ -270,7 +270,7 @@ object Format:
       case CellValue.Error(_) => "error"
       case CellValue.RichText(_) => "richtext"
       case CellValue.Empty => "empty"
-      case CellValue.Formula(_, _) => "formula"
+      case CellValue.Formula(_, _, _) => "formula"
 
   private def formatValue(value: CellValue): String =
     value match
@@ -283,8 +283,8 @@ object Format:
       case CellValue.Error(err) => err.toExcel
       case CellValue.RichText(rt) => s"\"${rt.toPlainText}\""
       case CellValue.Empty => "(empty)"
-      case CellValue.Formula(expr, cached) =>
-        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+      case CellValue.Formula(expr, cached, kind) =>
+        val displayExpr = RendererCommon.formulaDisplay(expr, kind)
         cached.map(formatValue).getOrElse(displayExpr)
 
   private def errorDetails(err: XLError): (String, String, String) =

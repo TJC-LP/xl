@@ -197,7 +197,7 @@ class CopyCommandSpec extends FunSuite:
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     val s = imported.sheets.head
     cellValueAt(s, 0, 4) match
-      case Some(CellValue.Formula(expr, _)) =>
+      case Some(CellValue.Formula(expr, _, _)) =>
         // Expr should reference A4 and B4 (shifted by +3 rows)
         assert(expr.contains("A4"), s"Expected A4 in shifted formula: $expr")
         assert(expr.contains("B4"), s"Expected B4 in shifted formula: $expr")
@@ -223,14 +223,14 @@ class CopyCommandSpec extends FunSuite:
       val s = imported.sheets.head
 
       cellValueAt(s, 3, 0) match
-        case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+        case Some(CellValue.Formula(expr, Some(CellValue.Number(n)), _)) =>
           assertEquals(expr, "1")
           assertEquals(n, BigDecimal(1))
         case other =>
           fail(s"Expected D1 = Formula(1, Some(Number(1))), got: $other")
 
       cellValueAt(s, 4, 0) match
-        case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+        case Some(CellValue.Formula(expr, Some(CellValue.Number(n)), _)) =>
           assert(expr.contains("D1:F1"), s"Expected shifted range D1:F1, got: $expr")
           assertEquals(
             n,

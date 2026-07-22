@@ -71,7 +71,7 @@ class BatchCopyFreezeSpec extends FunSuite:
     val updatedDest = result.sheets.find(_.name.value == "Dest").get
 
     cellValueAt(updatedDest, 3, 0) match
-      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)), _)) =>
         assert(expr.contains("C1"), s"Expected shifted formula to reference C1, got: $expr")
         assertEquals(n, BigDecimal(99), "Cache must be evaluated against Dest, not Source")
       case other =>
@@ -139,7 +139,7 @@ class BatchCopyFreezeSpec extends FunSuite:
 
     val s = result.sheets.head
     cellValueAt(s, 1, 4) match
-      case Some(CellValue.Formula(expr, _)) =>
+      case Some(CellValue.Formula(expr, _, _)) =>
         // Shifted from A1*2 by (+1 col, +3 rows) → B4*2
         assert(expr.contains("B4"), s"Expected B4 in shifted formula: $expr")
       case other => fail(s"Expected Formula, got: $other")
@@ -182,7 +182,7 @@ class BatchCopyFreezeSpec extends FunSuite:
     val s = result.sheets.head
 
     cellValueAt(s, 3, 0) match
-      case Some(CellValue.Formula(_, Some(CellValue.Number(n)))) =>
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
         assertEquals(n, BigDecimal(999), "D1's cache must be recalculated after B1 is overwritten")
       case other => fail(s"Expected D1 = Formula(B1, Some(Number(999))), got: $other")
   }
@@ -206,7 +206,7 @@ class BatchCopyFreezeSpec extends FunSuite:
     val s = result.sheets.head
 
     cellValueAt(s, 4, 0) match
-      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)), _)) =>
         assert(expr.contains("D1:F1"), s"Expected shifted range D1:F1, got: $expr")
         assertEquals(n, BigDecimal(42), "Cache must be 42 (copied formula sees copied siblings)")
       case other =>
@@ -233,14 +233,14 @@ class BatchCopyFreezeSpec extends FunSuite:
     val s = result.sheets.head
 
     cellValueAt(s, 3, 0) match
-      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)), _)) =>
         assertEquals(expr, "1")
         assertEquals(n, BigDecimal(1), "D1 should cache before E1 evaluates its lookup")
       case other =>
         fail(s"Expected D1 = Formula(1, Some(Number(1))), got: $other")
 
     cellValueAt(s, 4, 0) match
-      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)), _)) =>
         assert(expr.contains("D1:F1"), s"Expected shifted range D1:F1, got: $expr")
         assertEquals(
           n,
@@ -268,7 +268,7 @@ class BatchCopyFreezeSpec extends FunSuite:
     val s = result.sheets.head
 
     cellValueAt(s, 3, 0) match
-      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)), _)) =>
         assert(expr.contains("E1:F1"), s"Expected shifted range E1:F1, got: $expr")
         assertEquals(
           n,
@@ -279,7 +279,7 @@ class BatchCopyFreezeSpec extends FunSuite:
         fail(s"Expected D1 = Formula(VLOOKUP(...,Test!E1:F1,...), Some(Number(42))), got: $other")
 
     cellValueAt(s, 4, 0) match
-      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)), _)) =>
         assertEquals(expr, "1")
         assertEquals(n, BigDecimal(1))
       case other =>
@@ -297,7 +297,7 @@ class BatchCopyFreezeSpec extends FunSuite:
     val s = result.sheets.head
 
     cellValueAt(s, 1, 0) match
-      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)), _)) =>
         assert(expr.contains("C1"), s"Expected shifted formula to reference C1, got: $expr")
         assertEquals(n, BigDecimal(2), "Cache must see copied B1 -> C1 value in final target state")
       case other =>

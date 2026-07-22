@@ -1,7 +1,7 @@
 package com.tjclp.xl.cli.output
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.SheetEvaluator
 import com.tjclp.xl.ooxml.metadata.SheetInfo
@@ -194,15 +194,22 @@ object Markdown:
       .getOrElse(NumFmt.General)
 
     cell.value match
-      case CellValue.Formula(expr, cached) =>
-        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+      case CellValue.Formula(expr, cached, kind) =>
+        val evalExpr = if expr.startsWith("=") then expr else s"=$expr"
+        val displayExpr = RendererCommon.formulaDisplay(expr, kind)
         if showFormulas then displayExpr
-        else if evalFormulas then
-          // Evaluate formula live
-          SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
-            case Right(result) => NumFmtFormatter.formatValue(result, numFmt)
-            case Left(err) => RendererCommon.formatEvalError(err.message)
-        else cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
+        else
+          kind match
+            case _: FormulaKind.DataTable =>
+              // GH-430: TABLE(...) is a record, never evaluable — the cache IS the value
+              cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
+            case _ if evalFormulas =>
+              // Evaluate formula live
+              SheetEvaluator.evaluateFormula(sheet)(evalExpr) match
+                case Right(result) => NumFmtFormatter.formatValue(result, numFmt)
+                case Left(err) => RendererCommon.formatEvalError(err.message)
+            case _ =>
+              cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
       case CellValue.RichText(rt) =>
         // Rich text has its own formatting, don't apply NumFmt
         rt.toPlainText
