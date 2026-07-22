@@ -595,7 +595,10 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           preserved.picture,
           preserved.oleObjects,
           preserved.controls,
-          tableParts.orElse(preserved.tableParts), // Use parameter if provided, else preserve
+          // Use parameter if provided; fall back to the preserved element ONLY while the model
+          // still has tables — a table dropped by a structural collapse (GH-429) or removeTable
+          // must not resurrect a <tableParts> whose part file no longer ships.
+          tableParts.orElse(preserved.tableParts.filter(_ => sheet.tables.nonEmpty)),
           preserved.extLst,
           preserved.otherElements,
           preserved.rootAttributes,

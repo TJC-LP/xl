@@ -101,6 +101,32 @@ class StructuralWritePreservationSpec extends FunSuite:
     assert(entryText(out, "xl/worksheets/sheet1.xml").contains("<autoFilter ref=\"A1:C7\""))
   }
 
+  test("GH-429: a table collapsed by deleteRows leaves NO tableParts, rels, or part behind") {
+    val table = TableSpec
+      .fromColumnNames("T1", "T1", ref"A1:C5", Vector("R", "P", "U"))
+      .fold(e => fail(s"table: $e"), identity)
+    val sheet = Sheet("Alpha")
+      .put(ref"A1", CellValue.Text("R"))
+      .put(ref"D9", CellValue.Text("keep"))
+      .withTable(table)
+    val src = writeTo(Workbook(sheet), "tbl-src")
+    val read = reread(src)
+    val collapsed = markAllModified(read.copy(sheets = read.sheets.map(_.deleteRows(0, 5))))
+    assertEquals(collapsed.sheets.headOption.map(_.tables), Some(Map.empty[String, TableSpec]))
+    val out = writeTo(collapsed, "tbl-drop")
+    val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+    assert(!sheetXml.contains("<tablePart"), "a dropped table must not resurrect tableParts")
+    val zip = new ZipFile(out.toFile)
+    val entries =
+      try
+        val it = zip.entries()
+        Iterator.continually(it).takeWhile(_.hasMoreElements).map(_.nextElement.getName).toList
+      finally zip.close()
+    assert(!entries.exists(_.startsWith("xl/tables/")), s"no table part may ship: $entries")
+    // the round-trip must stay readable (the pre-fix output failed with 'Missing table file')
+    assertEquals(reread(out).sheets.headOption.map(_.tables.size), Some(0))
+  }
+
   test("GH-429: reader lifts a foreign autoFilter @ref; identity fast-path is churn-free") {
     val (path, wb) =
       val p = TestFixtures.copyToTemp("autofilter.xlsx")
