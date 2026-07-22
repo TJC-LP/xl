@@ -150,14 +150,18 @@ class DataValidationSpec extends FunSuite:
   }
 
   test("GH-429: structural shifts move Preserved entries' sqref (textual envelope rewrite)") {
-    val preserved = DataValidation.Preserved("""<dataValidation type="whole" sqref="Z9"/>""")
+    // the reader's payload shape (CfCodec.preservedXml via XmlUtil.compact): declaration + element
+    val decl = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+    val preserved =
+      DataValidation.Preserved(decl + """<dataValidation type="whole" sqref="Z9"/>""")
     val s = Sheet("DV")
       .copy(dataValidations = Vector(preserved))
       .withDataValidation(ref"A2:A4", DataValidation.listOf("x"))
     val r = s.insertRows(at = 0, count = 1)
     assertEquals(
       r.dataValidations(0),
-      DataValidation.Preserved("""<dataValidation type="whole" sqref="Z10"/>""")
+      DataValidation.Preserved(decl + """<dataValidation type="whole" sqref="Z10"/>"""),
+      "the sqref must move and the declaration prologue must survive byte-verbatim"
     )
     assertEquals(dvRanges(r), Vector(Vector("A3:A5")))
   }

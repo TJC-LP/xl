@@ -7,17 +7,20 @@ import com.tjclp.xl.addressing.{ARef, CellRange}
  * (GH-429).
  *
  * `DataValidation.Preserved` / `ConditionalFormat.Preserved` carry the scope-self-contained
- * canonical XML of one whole element; without this rewrite they are structurally inert and detach
- * from the cells they governed on every row/column insert or delete. Rather than parse XML in
- * xl-core, the rewrite exploits the payload's canonicality (serialized by scala.xml: attributes are
- * double-quoted, and `"` / `>` are escaped EVERYWHERE, so a raw `"` occurs only as an attribute
- * delimiter and the first `>` ends the start tag) to rewrite exactly the root element's `sqref`
- * attribute, byte-surgically.
+ * canonical XML of one whole element — as produced by the reader's `CfCodec.preservedXml`, i.e.
+ * `XmlUtil.compact`: an XML declaration, a newline, then the element. Without this rewrite they are
+ * structurally inert and detach from the cells they governed on every row/column insert or delete.
+ * Rather than parse XML in xl-core, the rewrite exploits the payload's canonicality (serialized by
+ * scala.xml: attributes are double-quoted, and `"` / `>` are escaped EVERYWHERE, so a raw `"`
+ * occurs only as an attribute delimiter and the first `>` past the prologue ends the start tag) to
+ * rewrite exactly the root element's `sqref` attribute, byte-surgically.
  *
  * Guards are layered and all-or-nothing — any failure returns the payload unchanged (today's
  * behavior; never a partial rewrite):
- *   - the payload must start with `<` + rootLabel (label ended by whitespace, `/` or `>`),
- *   - the match region is the start tag only (up to the first `>`),
+ *   - an optional leading `<?…?>` prologue plus following whitespace is skipped (and spliced back
+ *     verbatim on rewrite); every guard below applies to the element region after it,
+ *   - the element region must start with `<` + rootLabel (label ended by whitespace, `/` or `>`),
+ *   - the match region is the start tag only (up to the first `>` in the element region),
  *   - exactly ONE whitespace-preceded `sqref="…"` may match there (the whitespace guard rejects
  *     prefixed lookalikes like `xr:sqref`),
  *   - every whitespace-split token must parse as a range or single cell (the `CfCodec.parseSqref`
@@ -40,15 +43,27 @@ private[xl] object SqrefShift:
     rootLabel: String,
     shift: CellRange => Option[CellRange]
   ): Option[String] =
+    // Reader payloads open with the XmlUtil.compact declaration; skip one optional `<?…?>`
+    // prologue (plus whitespace) so the guards see the element region. A `<?` with no `?>`
+    // keeps bodyStart at 0 and fails the root-label guard below — unchanged, like any other
+    // guard failure.
+    val bodyStart =
+      if !xml.startsWith("<?") then 0
+      else
+        val close = xml.indexOf("?>")
+        if close < 0 then 0
+        else
+          val afterDecl = close + 2
+          afterDecl + xml.segmentLength(_.isWhitespace, afterDecl)
     val open = "<" + rootLabel
-    val boundaryOk = xml.startsWith(open) && {
-      val next = xml.lift(open.length)
+    val boundaryOk = xml.startsWith(open, bodyStart) && {
+      val next = xml.lift(bodyStart + open.length)
       next.exists(c => c.isWhitespace || c == '/' || c == '>')
     }
-    val gt = xml.indexOf('>')
+    val gt = xml.indexOf('>', bodyStart)
     if !boundaryOk || gt < 0 then Some(xml)
     else
-      val region = xml.substring(0, gt)
+      val region = xml.substring(bodyStart, gt)
       SqrefAttr.findAllMatchIn(region).toList match
         case m :: Nil =>
           val tokens = m.group(2).trim.split("\\s+").toVector.filter(_.nonEmpty)
@@ -68,7 +83,11 @@ private[xl] object SqrefShift:
             else
               val newSqref = shifted.mkString(" ")
               if newSqref == m.group(2) then Some(xml)
-              else Some(xml.substring(0, m.start(2)) + newSqref + xml.substring(m.end(2)))
+              else
+                Some(
+                  xml.substring(0, bodyStart + m.start(2)) + newSqref +
+                    xml.substring(bodyStart + m.end(2))
+                )
         case _ => Some(xml)
 
   /**

@@ -122,8 +122,11 @@ class StructuralCfSpec extends FunSuite:
   }
 
   test("Preserved blocks shift their sqref (GH-429); rule payloads stay byte-stable") {
+    // the reader's payload shape (CfCodec.preservedXml via XmlUtil.compact): declaration + element
+    val decl = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
     val blockXml =
-      """<conditionalFormatting sqref="Z1"><cfRule type="iconSet" priority="9"/></conditionalFormatting>"""
+      decl +
+        """<conditionalFormatting sqref="Z1"><cfRule type="iconSet" priority="9"/></conditionalFormatting>"""
     val ruleXml = """<cfRule type="timePeriod" timePeriod="today" priority="8"/>"""
     val s = new Sheet(name = S)
       .copy(conditionalFormats =
@@ -137,11 +140,13 @@ class StructuralCfSpec extends FunSuite:
       )
     val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
     val s2 = sheetNamed(r, "S")
-    // GH-429: the block-level sqref envelope moves textually; the payload body is untouched
+    // GH-429: the block-level sqref envelope moves textually; the payload body — declaration
+    // prologue included — is untouched
     assertEquals(
       s2.conditionalFormats(0),
       ConditionalFormat.Preserved(
-        """<conditionalFormatting sqref="Z2"><cfRule type="iconSet" priority="9"/></conditionalFormatting>"""
+        decl +
+          """<conditionalFormatting sqref="Z2"><cfRule type="iconSet" priority="9"/></conditionalFormatting>"""
       )
     )
     s2.conditionalFormats(1) match

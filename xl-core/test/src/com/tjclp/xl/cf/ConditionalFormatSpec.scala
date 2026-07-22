@@ -183,7 +183,9 @@ class ConditionalFormatSpec extends FunSuite:
   }
 
   test("GH-429: structural shifts move Preserved blocks' sqref and Preserved rules' envelopes") {
-    val preservedBlock = ConditionalFormat.Preserved("<conditionalFormatting sqref=\"Z9\"/>")
+    // the reader's payload shape (CfCodec.preservedXml via XmlUtil.compact): declaration + element
+    val decl = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+    val preservedBlock = ConditionalFormat.Preserved(decl + "<conditionalFormatting sqref=\"Z9\"/>")
     val s = Sheet("CF")
       .copy(conditionalFormats = Vector(preservedBlock))
       .conditionalFormat(
@@ -193,7 +195,8 @@ class ConditionalFormatSpec extends FunSuite:
     val r = s.insertRows(at = 0, count = 1)
     assertEquals(
       r.conditionalFormats(0),
-      ConditionalFormat.Preserved("<conditionalFormatting sqref=\"Z10\"/>")
+      ConditionalFormat.Preserved(decl + "<conditionalFormatting sqref=\"Z10\"/>"),
+      "the sqref must move and the declaration prologue must survive byte-verbatim"
     )
     r.conditionalFormats(1) match
       case ConditionalFormat.Rules(ranges, rules, _) =>

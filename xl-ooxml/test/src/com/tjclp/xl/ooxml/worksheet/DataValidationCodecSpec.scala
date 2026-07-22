@@ -246,18 +246,24 @@ class DataValidationCodecSpec extends ScalaCheckSuite:
               XARef.from0(r.end.col.index0, ne)
             )
           )
+      // derive the payload EXACTLY like parseEntry's Preserved fallback does — declaration
+      // prologue and all (a bare Elem.toString is not the production shape)
       val entryXml = DataValidationCodec
         .toElem(Vector(rules), None)
         .toList
-        .flatMap(c => (c \ "dataValidation").collect { case e: Elem => e.toString })
+        .flatMap(c =>
+          (c \ "dataValidation").collect { case e: Elem => CfCodec.preservedXml(e, c.scope) }
+        )
       entryXml match
         case entry :: Nil =>
           val textualShifted = SqrefShift
             .shiftPayload(entry, "dataValidation", shift)
             .toList
-            .flatMap(x =>
-              DataValidationCodec.parseAll(Some(xml(s"<dataValidations>$x</dataValidations>")))
-            )
+            .flatMap { x =>
+              // payloads parse standalone (declaration first), then re-enter via a container
+              val e = xml(x)
+              DataValidationCodec.parseAll(Some(<dataValidations>{e}</dataValidations>))
+            }
           textualShifted == typedShifted.toList
         case _ => false
     }

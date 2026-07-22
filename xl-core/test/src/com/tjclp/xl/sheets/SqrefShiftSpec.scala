@@ -11,6 +11,9 @@ import munit.FunSuite
  */
 class SqrefShiftSpec extends FunSuite:
 
+  /** The exact prologue XmlUtil.compact prepends — every reader-produced payload opens with it. */
+  private val Decl = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+
   private def rowInsert(at: Int, count: Int)(r: CellRange): Option[CellRange] =
     Sheet
       .shiftSpan(r.start.row.index0, r.end.row.index0, at, count, deleting = false, Row.MaxIndex0)
@@ -98,6 +101,64 @@ class SqrefShiftSpec extends FunSuite:
       SqrefShift.shiftPayload(cell, "dataValidation", rowInsert(0, 3)),
       Some("""<dataValidation sqref="B5"/>""")
     )
+  }
+
+  test("reader-shaped payload: the XML-declaration prologue is skipped and spliced back verbatim") {
+    // exact shape CfCodec.preservedXml produces (XmlUtil.compact) for an imeMode entry
+    val xml = Decl +
+      """<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" imeMode="hiragana" sqref="D5:D6"><formula1>&quot;a,b&quot;</formula1></dataValidation>"""
+    assertEquals(
+      SqrefShift.shiftPayload(xml, "dataValidation", rowInsert(1, 2)),
+      Some(
+        Decl +
+          """<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" imeMode="hiragana" sqref="D7:D8"><formula1>&quot;a,b&quot;</formula1></dataValidation>"""
+      )
+    )
+  }
+
+  test("reader-shaped payload with namespace bindings shifts (xmlns/xmlns:xr in the start tag)") {
+    val xml = Decl +
+      """<conditionalFormatting xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" sqref="B5:B6" xr:uid="{00000000-0001-0000-0000-000000000000}"><cfRule type="expression" priority="1"><formula>$B5&gt;0</formula></cfRule></conditionalFormatting>"""
+    assertEquals(
+      SqrefShift.shiftPayload(xml, "conditionalFormatting", rowInsert(1, 2)),
+      Some(
+        Decl +
+          """<conditionalFormatting xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" sqref="B7:B8" xr:uid="{00000000-0001-0000-0000-000000000000}"><cfRule type="expression" priority="1"><formula>$B5&gt;0</formula></cfRule></conditionalFormatting>"""
+      )
+    )
+  }
+
+  test(
+    "reader-shaped identity: an unmoved sqref keeps the payload byte-identical, prologue and all"
+  ) {
+    val xml = Decl + """<dataValidation sqref="H5:H10" type="whole"/>"""
+    assertEquals(SqrefShift.shiftPayload(xml, "dataValidation", Some(_)), Some(xml))
+    // a full-column token is a fixed point under row inserts even through the prologue
+    val fullCol = Decl + """<conditionalFormatting sqref="A:C"/>"""
+    assertEquals(
+      SqrefShift.shiftPayload(fullCol, "conditionalFormatting", rowInsert(1, 2)),
+      Some(fullCol)
+    )
+  }
+
+  test("reader-shaped refuse-matrix: guards apply to the element region behind the prologue") {
+    val shift = rowInsert(0, 1)
+    val xrOnly = Decl + """<dataValidation xr:sqref="A1"/>"""
+    assertEquals(SqrefShift.shiftPayload(xrOnly, "dataValidation", shift), Some(xrOnly))
+    val corrupt = Decl + """<dataValidation sqref="NOT A REF"/>"""
+    assertEquals(SqrefShift.shiftPayload(corrupt, "dataValidation", shift), Some(corrupt))
+    val mismatch = Decl + """<conditionalFormatting sqref="A1"/>"""
+    assertEquals(SqrefShift.shiftPayload(mismatch, "dataValidation", shift), Some(mismatch))
+    val missing = Decl + """<dataValidation type="whole"><formula1>1</formula1></dataValidation>"""
+    assertEquals(SqrefShift.shiftPayload(missing, "dataValidation", shift), Some(missing))
+    // a mangled prologue (no `?>`) never reaches the element guards: unchanged
+    val mangled = """<?xml version="1.0" <dataValidation sqref="A1"/>"""
+    assertEquals(SqrefShift.shiftPayload(mangled, "dataValidation", shift), Some(mangled))
+  }
+
+  test("reader-shaped all-drop still removes the entry (prologue does not shield a collapse)") {
+    val gone = Decl + """<dataValidation sqref="A2:A3 B2"/>"""
+    assertEquals(SqrefShift.shiftPayload(gone, "dataValidation", rowDelete(1, 3)), None)
   }
 
   test("adversarial sqref lookalike inside a child rides untouched (canonical escaping)") {

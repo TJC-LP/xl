@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import java.nio.file.{Files, Path}
-import java.util.zip.ZipFile
+import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import munit.FunSuite
 
@@ -99,6 +99,134 @@ class StructuralWritePreservationSpec extends FunSuite:
     // 4. the sheet autoFilter moved
     assertEquals(s.autoFilter, Some(AutoFilterState.Ranged(ref"A1:C7": CellRange)))
     assert(entryText(out, "xl/worksheets/sheet1.xml").contains("<autoFilter ref=\"A1:C7\""))
+  }
+
+  // ===== GH-429 rework: PRESERVED payloads (the reader's declaration-prefixed shape) must =====
+  // ===== shift too — the guard that only tolerated bare `<dataValidation…` made every real =====
+  // ===== Preserved entry structurally inert while hand-built test payloads passed.        =====
+
+  private def zipEntry(out: ZipOutputStream, name: String, content: String): Unit =
+    out.putNextEntry(new ZipEntry(name))
+    out.write(content.getBytes("UTF-8"))
+    out.closeEntry()
+
+  /**
+   * Minimal foreign fixture whose worksheet carries entries the typed models refuse: a Preserved CF
+   * block (xr:uid — an envelope attr outside {sqref, pivot}), an imeMode DV, and an unknown-type
+   * DV. The reader lifts all three into Preserved payloads via CfCodec.preservedXml, i.e.
+   * XML-declaration-prefixed canonical XML — the exact shape SqrefShift must tolerate.
+   */
+  private def preservedPayloadFixture(): Path =
+    val path = Files.createTempFile("xl-429-preserved-fixture", ".xlsx")
+    path.toFile.deleteOnExit()
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+    try
+      zipEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"""
+      )
+      zipEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+      )
+      zipEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Alpha" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+      )
+      zipEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"""
+      )
+      zipEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision">
+  <sheetData>
+    <row r="1"><c r="A1"><v>1</v></c></row>
+  </sheetData>
+  <conditionalFormatting sqref="B5:B6" xr:uid="{00000000-0001-0000-0000-000000000000}"><cfRule type="expression" priority="1"><formula>$B5&gt;0</formula></cfRule></conditionalFormatting>
+  <dataValidations count="2">
+    <dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" imeMode="hiragana" sqref="D5:D6"><formula1>"a,b"</formula1></dataValidation>
+    <dataValidation type="futureType" sqref="E5:E6"><formula1>1</formula1></dataValidation>
+  </dataValidations>
+</worksheet>"""
+      )
+    finally out.close()
+    path
+
+  test(
+    "GH-429 rework: reader-produced Preserved DV/CF payloads shift through insert -> write -> re-read"
+  ) {
+    val read = reread(preservedPayloadFixture())
+    val s0 = read.sheets.headOption.getOrElse(fail("no sheet"))
+    val dvBefore = s0.dataValidations.collect { case DataValidation.Preserved(x) => x }
+    val cfBefore = s0.conditionalFormats.collect { case ConditionalFormat.Preserved(x) => x }
+    assertEquals(dvBefore.size, 2, s"imeMode + unknown-type must ride Preserved: $dvBefore")
+    assertEquals(cfBefore.size, 1, s"xr:uid envelope must ride Preserved: $cfBefore")
+    assert(
+      (dvBefore ++ cfBefore).forall(_.startsWith("<?xml ")),
+      s"reader payloads open with the XML declaration: ${(dvBefore ++ cfBefore).map(_.take(60))}"
+    )
+
+    // the pure core structural edit must move the Preserved sqrefs, everything else byte-intact
+    val edited = markAllModified(read.copy(sheets = read.sheets.map(_.insertRows(1, 2))))
+    val s1 = edited.sheets.headOption.getOrElse(fail("no sheet"))
+    assertEquals(
+      s1.dataValidations.collect { case DataValidation.Preserved(x) => x },
+      dvBefore.map(
+        _.replace("sqref=\"D5:D6\"", "sqref=\"D7:D8\"")
+          .replace("sqref=\"E5:E6\"", "sqref=\"E7:E8\"")
+      ),
+      "Preserved DV payloads must shift their sqref and change nothing else"
+    )
+    assertEquals(
+      s1.conditionalFormats.collect { case ConditionalFormat.Preserved(x) => x },
+      cfBefore.map(_.replace("sqref=\"B5:B6\"", "sqref=\"B7:B8\"")),
+      "the Preserved CF block must shift its sqref and change nothing else"
+    )
+
+    // write: the shifted payloads land in the part with their foreign attrs intact
+    val out = writeTo(edited, "preserved-shift")
+    val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+    assert(sheetXml.contains("sqref=\"D7:D8\""), sheetXml)
+    assert(sheetXml.contains("sqref=\"E7:E8\""), sheetXml)
+    assert(sheetXml.contains("sqref=\"B7:B8\""), sheetXml)
+    assert(sheetXml.contains("imeMode=\"hiragana\""), sheetXml)
+    assert(sheetXml.contains("type=\"futureType\""), sheetXml)
+    assert(sheetXml.contains("xr:uid"), sheetXml)
+
+    // re-read clean: the shifted payloads parse right back to the same Preserved entries
+    val back = reread(out).sheets.headOption.getOrElse(fail("no sheet"))
+    assertEquals(
+      back.dataValidations.collect { case DataValidation.Preserved(x) => x },
+      s1.dataValidations.collect { case DataValidation.Preserved(x) => x }
+    )
+    assertEquals(
+      back.conditionalFormats.collect { case ConditionalFormat.Preserved(x) => x },
+      s1.conditionalFormats.collect { case ConditionalFormat.Preserved(x) => x }
+    )
   }
 
   test("GH-429: a table collapsed by deleteRows leaves NO tableParts, rels, or part behind") {
