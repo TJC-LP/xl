@@ -1328,6 +1328,9 @@ object WriteCommands:
 
   // ===== Structural editing: insert/delete rows & columns (GH-128, GH-129) =====
   // Cell shift (xl-core) + formula rewriting across all sheets (StructuralEditor). #REF! on loss.
+  // A structural edit invalidates every shifted formula's cache (stale aggregates/ROW() would be
+  // silently wrong), so each command ends with one global recalculate() before writing — the
+  // GH-352 batch contract: failing cells stay uncached, the workbook is written regardless.
 
   private def requirePositive(n: Int, label: String): IO[Unit] =
     if n >= 1 then IO.unit
@@ -1369,9 +1372,9 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      updatedWb = StructuralEditor.insertRows(wb, sheet.name, at - 1, count)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Inserted $count row(s) before row $at on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+      recalced = StructuralEditor.insertRows(wb, sheet.name, at - 1, count).recalculate()
+      _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
+    yield s"Inserted $count row(s) before row $at on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${saveSuffix(outputPath, stream)}"
 
   def deleteRows(
     wb: Workbook,
@@ -1386,9 +1389,9 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      updatedWb = StructuralEditor.deleteRows(wb, sheet.name, at - 1, count)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Deleted $count row(s) from row $at on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+      recalced = StructuralEditor.deleteRows(wb, sheet.name, at - 1, count).recalculate()
+      _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
+    yield s"Deleted $count row(s) from row $at on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${saveSuffix(outputPath, stream)}"
 
   def insertColumns(
     wb: Workbook,
@@ -1404,9 +1407,9 @@ object WriteCommands:
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      updatedWb = StructuralEditor.insertColumns(wb, sheet.name, at0, n)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+      recalced = StructuralEditor.insertColumns(wb, sheet.name, at0, n).recalculate()
+      _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
+    yield s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${saveSuffix(outputPath, stream)}"
 
   def deleteColumns(
     wb: Workbook,
@@ -1422,9 +1425,9 @@ object WriteCommands:
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      updatedWb = StructuralEditor.deleteColumns(wb, sheet.name, at0, n)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+      recalced = StructuralEditor.deleteColumns(wb, sheet.name, at0, n).recalculate()
+      _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
+    yield s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${saveSuffix(outputPath, stream)}"
 
   /**
    * Copy a range of cells to another location with optional formula adjustment.
