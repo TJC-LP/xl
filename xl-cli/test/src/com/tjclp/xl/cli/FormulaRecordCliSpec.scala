@@ -8,7 +8,7 @@ import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{CellRange, Sheet, Workbook}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
-import com.tjclp.xl.cli.commands.WriteCommands
+import com.tjclp.xl.cli.commands.{DiffCommands, WriteCommands}
 import com.tjclp.xl.cli.helpers.{BatchParser, CopyOps, ValueParser}
 import com.tjclp.xl.cli.output.{Format, JsonRenderer, Markdown}
 import com.tjclp.xl.io.ExcelIO
@@ -118,6 +118,43 @@ class FormulaRecordCliSpec extends FunSuite:
     assertEquals(s2(aref("F2")).value, CellValue.dataTable(tableKind, Some(num(42))))
   }
 
+  test("fill of a dataTable cell materializes its cached constant at each destination") {
+    val sheet = recordSheet
+    val wb = Workbook(sheet)
+    WriteCommands
+      .fill(wb, Some(sheet), "F2", "F2:F4", FillDirection.Down, outputPath, config)
+      .unsafeRunSync()
+
+    val reread = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val cells = reread.sheets.headOption.map(_.cells).getOrElse(fail("missing output sheet"))
+    assertEquals(
+      cells.get(aref("F2")).map(_.value),
+      Some(CellValue.dataTable(tableKind, Some(num(42))))
+    )
+    assertEquals(cells.get(aref("F3")).map(_.value), Some(num(42)))
+    assertEquals(cells.get(aref("F4")).map(_.value), Some(num(42)))
+  }
+
+  test("sort materializes a moved dataTable cell instead of creating a TABLE formula") {
+    val sheet = recordSheet
+    val wb = Workbook(sheet)
+    WriteCommands
+      .sort(
+        wb,
+        Some(sheet),
+        "A1:F2",
+        List(SortKey("A", SortDirection.Ascending, SortMode.Numeric)),
+        hasHeader = false,
+        outputPath = outputPath,
+        config = config
+      )
+      .unsafeRunSync()
+
+    val reread = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val cells = reread.sheets.headOption.map(_.cells).getOrElse(fail("missing output sheet"))
+    assertEquals(cells.get(aref("F1")).map(_.value), Some(num(42)))
+  }
+
   test("copy of an array anchor pastes a plain (Normal) shifted formula") {
     val sheet = recordSheet
     val wb = Workbook(sheet)
@@ -135,6 +172,42 @@ class FormulaRecordCliSpec extends FunSuite:
         assertEquals(expr, "SUM(A5:A6*10)")
         assertEquals(kind, FormulaKind.Normal)
       case other => fail(s"expected pasted Normal formula, got $other")
+  }
+
+  test("diff compares formula record kinds and payloads while ignoring cached values") {
+    val expression = "SUM(A1:A2)"
+    val normal = CellValue.Formula(expression, Some(num(3)))
+    val arrayC1 = CellValue.Formula(
+      expression,
+      Some(num(3)),
+      FormulaKind.ArrayFormula(range("C1:C1"))
+    )
+    val arrayC1DifferentCache = CellValue.Formula(
+      expression,
+      Some(num(99)),
+      FormulaKind.ArrayFormula(range("C1:C1"))
+    )
+    val arrayC1C2 = CellValue.Formula(
+      expression,
+      Some(num(3)),
+      FormulaKind.ArrayFormula(range("C1:C2"))
+    )
+
+    def diff(left: CellValue, right: CellValue): DiffCommands.WorkbookDiff =
+      DiffCommands
+        .computeDiff(
+          Workbook(Sheet("S").put(aref("C1"), left)),
+          Workbook(Sheet("S").put(aref("C1"), right)),
+          None
+        )
+        .fold(fail(_), identity)
+
+    assert(!diff(normal, arrayC1).identical, "Normal and array records must differ")
+    assert(!diff(arrayC1, arrayC1C2).identical, "array ref payloads must differ")
+    assert(
+      diff(arrayC1, arrayC1DifferentCache).identical,
+      "derived caches must remain outside formula identity"
+    )
   }
 
   test("view --formulas renders {=...} braces for record kinds") {

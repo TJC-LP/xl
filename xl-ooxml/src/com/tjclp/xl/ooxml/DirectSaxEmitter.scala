@@ -13,6 +13,7 @@ import com.tjclp.xl.ooxml.worksheet.{
   buildSheetViewsElem,
   collectHyperlinks,
   mergeHeaderFooterElem,
+  mergeAutoFilterElem,
   mergePageSetupElem,
   mergeSheetPrElem
 }
@@ -90,6 +91,10 @@ object DirectSaxEmitter:
 
       // Emit sheetData directly from domain cells
       emitSheetData(writer, sheet, sst, styleRemapping, escapeFormulas)
+
+      // GH-429: sheet-level autoFilter belongs after sheetData and before mergeCells.
+      // The direct path is source-free, so only a modeled Ranged state materializes here.
+      mergeAutoFilterElem(None, sheet.autoFilter).foreach(writer.writeElem)
 
       // Emit mergeCells if any
       emitMergeCells(writer, sheet)

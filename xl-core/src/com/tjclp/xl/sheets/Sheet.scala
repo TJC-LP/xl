@@ -1030,7 +1030,13 @@ object Sheet:
     deleting: Boolean,
     axisMax: Int
   ): Option[(Int, Int)] =
-    if !deleting then
+    // A range that covers the complete edited axis models a whole-column/whole-row reference
+    // (A:A / 1:1). Structural edits cannot make that reference partial: it must continue to cover
+    // the complete axis. Besides preserving the reference's semantics, this keeps print areas and
+    // preserved sqref tokens in their full-axis shape at the two cases the generic endpoint
+    // algebra cannot distinguish: inserts at index 0 and any deletion.
+    if s == 0 && e == axisMax then Some((0, axisMax))
+    else if !deleting then
       val ns = if s >= at then s.toLong + count else s.toLong
       val ne = if e >= at then e.toLong + count else e.toLong
       if ns > axisMax then None

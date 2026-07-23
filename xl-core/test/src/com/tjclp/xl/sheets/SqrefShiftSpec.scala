@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{ARef, CellRange, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import munit.FunSuite
 
 /**
@@ -26,6 +26,34 @@ class SqrefShiftSpec extends FunSuite:
       .shiftSpan(r.start.row.index0, r.end.row.index0, at, count, deleting = true, Row.MaxIndex0)
       .map((ns, ne) =>
         CellRange(ARef.from0(r.start.col.index0, ns), ARef.from0(r.end.col.index0, ne))
+      )
+
+  private def columnInsert(at: Int, count: Int)(r: CellRange): Option[CellRange] =
+    Sheet
+      .shiftSpan(
+        r.start.col.index0,
+        r.end.col.index0,
+        at,
+        count,
+        deleting = false,
+        Column.MaxIndex0
+      )
+      .map((ns, ne) =>
+        CellRange(ARef.from0(ns, r.start.row.index0), ARef.from0(ne, r.end.row.index0))
+      )
+
+  private def columnDelete(at: Int, count: Int)(r: CellRange): Option[CellRange] =
+    Sheet
+      .shiftSpan(
+        r.start.col.index0,
+        r.end.col.index0,
+        at,
+        count,
+        deleting = true,
+        Column.MaxIndex0
+      )
+      .map((ns, ne) =>
+        CellRange(ARef.from0(ns, r.start.row.index0), ARef.from0(ne, r.end.row.index0))
       )
 
   test("shifts the root sqref and nothing else") {
@@ -80,10 +108,26 @@ class SqrefShiftSpec extends FunSuite:
     assertEquals(SqrefShift.shiftPayload(gone, "dataValidation", rowDelete(1, 3)), None)
   }
 
-  test("full-column token is a byte-identical fixed point under row inserts (post GH-428)") {
+  test("full-column token is a byte-identical fixed point under row inserts and deletes") {
     val xml = """<conditionalFormatting sqref="A:C"/>"""
     assertEquals(
-      SqrefShift.shiftPayload(xml, "conditionalFormatting", rowInsert(1, 2)),
+      SqrefShift.shiftPayload(xml, "conditionalFormatting", rowInsert(0, 2)),
+      Some(xml)
+    )
+    assertEquals(
+      SqrefShift.shiftPayload(xml, "conditionalFormatting", rowDelete(10, 3)),
+      Some(xml)
+    )
+  }
+
+  test("full-row token is a byte-identical fixed point under column inserts and deletes") {
+    val xml = """<conditionalFormatting sqref="2:4"/>"""
+    assertEquals(
+      SqrefShift.shiftPayload(xml, "conditionalFormatting", columnInsert(0, 2)),
+      Some(xml)
+    )
+    assertEquals(
+      SqrefShift.shiftPayload(xml, "conditionalFormatting", columnDelete(10, 3)),
       Some(xml)
     )
   }

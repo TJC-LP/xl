@@ -14,8 +14,8 @@ import com.tjclp.xl.styles.CellStyle
  * differs, 2 error).
  *
  * Comparison semantics:
- *   - Cells are compared by formula text for formulas (cached values are derived and ignored) and
- *     by typed value otherwise
+ *   - Cells are compared by formula text and record kind for formulas (cached values are derived
+ *     and ignored) and by typed value otherwise
  *   - `styleChanged` compares RESOLVED styles (styleId looked up in the sheet's registry; missing
  *     style = default), so identical formatting under different style ids is not a difference
  *   - A cell with Empty value, default resolved style, and no hyperlink is equivalent to a missing
@@ -194,11 +194,11 @@ object DiffCommands:
   private def resolvedStyleKey(cell: Cell, sheet: Sheet): String =
     cell.styleId.flatMap(sheet.styleRegistry.get).getOrElse(CellStyle.default).canonicalKey
 
-  /** Formulas compare by normalized formula text; everything else by typed value. */
+  /** Formulas compare by normalized text and record payload; everything else by typed value. */
   private def sameValue(a: CellValue, b: CellValue): Boolean =
     (a, b) match
-      case (CellValue.Formula(exprA, _, _), CellValue.Formula(exprB, _, _)) =>
-        normalizeFormula(exprA) == normalizeFormula(exprB)
+      case (CellValue.Formula(exprA, _, kindA), CellValue.Formula(exprB, _, kindB)) =>
+        normalizeFormula(exprA) == normalizeFormula(exprB) && kindA == kindB
       case (CellValue.Formula(_, _, _), _) | (_, CellValue.Formula(_, _, _)) => false
       case (va, vb) => va == vb
 

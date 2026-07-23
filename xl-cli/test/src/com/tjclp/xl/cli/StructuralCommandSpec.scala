@@ -53,7 +53,7 @@ class StructuralCommandSpec extends CatsEffectSuite:
       assertEquals(s(ref"A1").value, CellValue.Number(10)) // unchanged
   }
 
-  test("GH-427: insert-rows keeps cached <v> and emits a single equals-free <f>") {
+  test("insert-rows invalidates cached <v> and emits a single equals-free <f>") {
     val cached = Some(CellValue.Number(BigDecimal(4)))
     val wb = Workbook(
       Vector(
@@ -77,12 +77,12 @@ class StructuralCommandSpec extends CatsEffectSuite:
         finally zip.close()
       }
     yield
-      // model: formula text stays equals-free, cache survives the shift
-      assertEquals(result.sheets.head(ref"B1").value, CellValue.Formula("A1*2", cached))
-      // file: <f> carries no '=' and the cached <v> is still present
+      // Model: formula text stays equals-free and the structural edit invalidates its cache.
+      assertEquals(result.sheets.head(ref"B1").value, CellValue.Formula("A1*2", None))
+      // File: <f> carries no '=' and the stale cached <v> is omitted.
       assert(raw.contains("<f>A1*2</f>"), s"expected equals-free <f> in: $raw")
       assert(!raw.contains("<f>="), s"leading '=' must not land inside <f>: $raw")
-      assert(raw.contains("<v>4</v>"), s"cached <v> must survive the structural edit: $raw")
+      assert(!raw.contains("<v>4</v>"), s"stale cached <v> must be omitted: $raw")
   }
 
   test("delete-rows: a reference into the deleted row becomes #REF!") {

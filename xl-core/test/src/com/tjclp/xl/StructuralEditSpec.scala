@@ -77,6 +77,32 @@ class StructuralEditSpec extends ScalaCheckSuite:
     assertEquals(s.insertColumns(at = 1, count = 2).mergedRanges, Set(full))
   }
 
+  test("full-axis print areas remain full-axis across inserts and deletes") {
+    val fullColumn = CellRange.parse("A:A").fold(fail(_), identity)
+    val columnArea =
+      Sheet("S").copy(pageSetup = Some(com.tjclp.xl.sheets.PageSetup(printArea = Some(fullColumn))))
+    assertEquals(
+      columnArea.insertRows(at = 0, count = 2).pageSetup.flatMap(_.printArea),
+      Some(fullColumn)
+    )
+    assertEquals(
+      columnArea.deleteRows(at = 10, count = 3).pageSetup.flatMap(_.printArea),
+      Some(fullColumn)
+    )
+
+    val fullRow = CellRange.parse("1:1").fold(fail(_), identity)
+    val rowArea =
+      Sheet("S").copy(pageSetup = Some(com.tjclp.xl.sheets.PageSetup(printArea = Some(fullRow))))
+    assertEquals(
+      rowArea.insertColumns(at = 0, count = 2).pageSetup.flatMap(_.printArea),
+      Some(fullRow)
+    )
+    assertEquals(
+      rowArea.deleteColumns(at = 10, count = 3).pageSetup.flatMap(_.printArea),
+      Some(fullRow)
+    )
+  }
+
   test("GH-428: a merge near the edge clamps its end; one pushed fully past the edge drops") {
     val nearEdge = CellRange(ref"A1048570", ref"A1048576")
     val s = Sheet("S").copy(mergedRanges = Set(nearEdge))

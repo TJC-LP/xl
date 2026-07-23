@@ -103,24 +103,27 @@ object StructuralEditor:
                 // "change part of a data table"; the total-function analog degrades the cell to
                 // its cached constant (visible, deterministic). del1/del2 fidelity: follow-up.
                 (ref, cell.copy(value = cachedOpt.getOrElse(CellValue.Empty)))
-        case CellValue.Formula(formulaStr, cachedValue, kind) =>
+        case f @ CellValue.Formula(formulaStr, _, kind) =>
           FormulaParser.parse(formulaStr) match
             case Right(expr) =>
               FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
                 case Some(shiftedExpr) =>
                   // GH-427: the model's canonical formula form is equals-free (the reader strips
                   // the '='; the writer serializes the string VERBATIM into <f>, where a leading
-                  // '=' is a spec deviation openpyxl reads back as '==...'). And a successful
-                  // shift means every reference survived, so the cached value is still the
-                  // Excel-valid display value — Excel itself keeps caches across structural
-                  // edits; discarding it blanked every formula cell until a recalc.
+                  // '=' is a spec deviation openpyxl reads back as '==...').
+                  //
+                  // A structural edit invalidates formula caches even when every parsed reference
+                  // survives: a shortened range can produce a different aggregate, and moving a
+                  // cell changes position-sensitive formulas such as ROW(). Leave the expression
+                  // evaluatable and uncached so the next recalculation cannot expose stale data.
                   val newStr = FormulaPrinter.print(shiftedExpr, includeEquals = false)
                   val newKind = shiftedArrayKind(kind, shiftLocal, isRow, at, delta)
-                  (ref, cell.copy(value = CellValue.Formula(newStr, cachedValue, newKind)))
+                  (ref, cell.copy(value = CellValue.Formula(newStr, None, newKind)))
                 case None =>
                   (ref, cell.copy(value = CellValue.Error(CellError.Ref)))
-            // Unparseable formula: leave untouched rather than guess.
-            case Left(_) => (ref, cell)
+            // Preserve unparseable text rather than guessing at a rewrite, but invalidate its
+            // cache too: the edit may have moved the cell or changed a dynamically-read value.
+            case Left(_) => (ref, cell.copy(value = f.copy(cachedValue = None)))
         case _ => (ref, cell)
     }
     sheet.copy(

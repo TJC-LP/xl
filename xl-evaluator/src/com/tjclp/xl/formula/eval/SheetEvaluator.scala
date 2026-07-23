@@ -619,15 +619,18 @@ object SheetEvaluator:
    *
    * Used on the deferred dynamic bucket before threading an evaluation fold: a dynamic read
    * (INDIRECT) of a not-yet-evaluated bucket cell then recursively evaluates the formula fresh
-   * (depth-guarded) instead of trusting a previous generation's cache. Only the threaded temp sheet
-   * is affected — final cache write-back overlays computed results on the original sheet.
+   * (depth-guarded) instead of trusting a previous generation's cache. Normal and ArrayFormula
+   * records are both evaluatable; DataTable records alone retain their pinned cache, which is their
+   * only source of truth. Only the threaded temp sheet is affected — final cache write-back
+   * overlays computed results on the original sheet.
    */
   private[eval] def stripFormulaCaches(sheet: Sheet, refs: Set[ARef]): Sheet =
     refs.foldLeft(sheet) { (s, r) =>
       s.cells.get(r).map(_.value) match
-        // GH-430: strip Normal-kind caches only — a DataTable cache is the sole source of truth
-        // (graph analysis keeps dataTable cells out of the dynamic bucket; structural safety).
-        case Some(f @ CellValue.Formula(_, Some(_), FormulaKind.Normal)) =>
+        // GH-430: a DataTable cache is the sole source of truth. Graph analysis normally keeps
+        // these records out of the dynamic bucket; keep this guard as structural safety.
+        case Some(CellValue.Formula(_, Some(_), _: FormulaKind.DataTable)) => s
+        case Some(f @ CellValue.Formula(_, Some(_), _)) =>
           s.put(r, f.copy(cachedValue = None))
         case _ => s
     }

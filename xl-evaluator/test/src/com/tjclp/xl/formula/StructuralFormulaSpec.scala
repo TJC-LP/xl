@@ -124,7 +124,7 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(sheetNamed(voided, "S")(ref"C11").value, CellValue.Error(CellError.Ref))
   }
 
-  // ===== GH-427: equals-free rewrite + cached-value preservation =====
+  // ===== GH-427: equals-free rewrite + structural cache invalidation =====
 
   test("GH-427: rewrite prints the model's equals-free form (no '=' lands in <f>)") {
     val s = new Sheet(name = S).put(ref"B1", formulaCell("A5*2")) // file-canonical form
@@ -132,15 +132,38 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(sheetNamed(r, "S")(ref"B1").value, formulaCell("A6*2"))
   }
 
-  test("GH-427: a successful shift preserves the cached value (Excel keeps caches)") {
+  test("structural edits invalidate caches even when every formula reference survives") {
     val cached = Some(CellValue.Number(BigDecimal(4)))
     val s = new Sheet(name = S)
       .put(ref"B1", CellValue.Formula("A5*2", cached))
       .put(ref"B2", CellValue.Formula("A1*3", cached)) // refs above the cut: position unchanged
     val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 1)
     val s2 = sheetNamed(r, "S")
-    assertEquals(s2(ref"B1").value, CellValue.Formula("A6*2", cached))
-    assertEquals(s2(ref"B2").value, CellValue.Formula("A1*3", cached))
+    assertEquals(s2(ref"B1").value, CellValue.Formula("A6*2", None))
+    assertEquals(s2(ref"B2").value, CellValue.Formula("A1*3", None))
+  }
+
+  test("deleting a row invalidates the old cached result of a shrinking SUM range") {
+    val s = new Sheet(name = S)
+      .put(ref"A1", CellValue.Number(BigDecimal(1)))
+      .put(ref"A2", CellValue.Number(BigDecimal(2)))
+      .put(ref"A3", CellValue.Number(BigDecimal(3)))
+      .put(
+        ref"C1",
+        CellValue.Formula("SUM(A1:A3)", Some(CellValue.Number(BigDecimal(6))))
+      )
+    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 1, count = 1)
+    assertEquals(
+      sheetNamed(r, "S")(ref"C1").value,
+      CellValue.Formula("SUM(A1:A2)", None)
+    )
+  }
+
+  test("moving a position-sensitive formula invalidates its cached result") {
+    val s = new Sheet(name = S)
+      .put(ref"B2", CellValue.Formula("ROW()", Some(CellValue.Number(BigDecimal(2)))))
+    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    assertEquals(sheetNamed(r, "S")(ref"B3").value, CellValue.Formula("ROW()", None))
   }
 
   test("GH-427: a fully-deleted reference still degrades to #REF! (cache dropped)") {
