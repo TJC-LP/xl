@@ -17,12 +17,13 @@ reads, and `xl lint` catches what Excel refuses.
 - **Structural edits no longer poison rewritten sheets** (#427):
   `insert-rows`/`delete-rows`/`insert-cols`/`delete-cols` re-printed every
   formula on every sheet with a leading `=` inside `<f>` (openpyxl read
-  them back as `==A4*2`) and discarded every cached `<v>` (files displayed
-  blank until a recalc). Shifted formulas now re-print equals-free (the
-  model's canonical form) and keep their caches — a successful shift means
-  every reference survived, so the cached value is still Excel-valid; a
-  formula whose reference is deleted still degrades to `#REF!` with no
-  stale cache.
+  them back as `==A4*2`). Shifted formulas now re-print equals-free (the
+  model's canonical form) and their caches are deliberately invalidated —
+  a structural edit can change referenced aggregates (a delete that
+  shrinks a `SUM` range) and position-sensitive results (`ROW()`), so a
+  preserved cache could ship silently-wrong values. A formula whose
+  reference is fully deleted degrades to `#REF!`. Re-bake display values
+  with `xl recalc` / `recalculate()` after structural edits.
 - **Range shifts clamp at the sheet edge** (#428): a full-height range
   (CF sqref `A1:XFD1048576`, DV, merges) shifted past row 1,048,576 /
   column XFD on insertion — `A144:XFD1048578`-class output that **Excel
