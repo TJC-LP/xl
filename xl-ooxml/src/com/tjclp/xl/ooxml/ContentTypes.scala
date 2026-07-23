@@ -314,7 +314,7 @@ object ContentTypes extends XmlReadable[ContentTypes]:
     }
 
   /** File extension of a zip part path ("xl/drawings/vmlDrawing2.vml" -> "vml"). */
-  private def extensionOf(path: String): Option[String] =
+  private[ooxml] def extensionOf(path: String): Option[String] =
     val slash = path.lastIndexOf('/')
     val dot = path.lastIndexOf('.')
     Option.when(dot > slash && dot < path.length - 1)(path.substring(dot + 1))

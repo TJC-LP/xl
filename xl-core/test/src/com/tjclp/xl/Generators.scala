@@ -2,7 +2,7 @@ package com.tjclp.xl
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{Cell, CellError, CellValue, Comment}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, Comment, FormulaKind}
 import com.tjclp.xl.cf.{CfOperator, CfPoint, CfRule, CfTextOp, Cfvo, ConditionalFormat}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.context.ModificationTracker
@@ -489,19 +489,55 @@ object Generators:
       second <- Gen.choose(0, 59)
     yield LocalDateTime.of(year, month, day, hour, minute, second)
 
-  /** Formula cell value with optional cached value (cached values are write-only metadata) */
+  /** Cached formula result value (write-only metadata; never another Formula) */
+  val genFormulaCache: Gen[Option[CellValue]] =
+    Gen.option(
+      Gen.oneOf(
+        genRoundTripNumber.map(CellValue.Number.apply),
+        Gen.oneOf(true, false).map(CellValue.Bool.apply),
+        Gen.alphaNumStr.map(CellValue.Text.apply),
+        genCellError.map(CellValue.Error.apply)
+      )
+    )
+
+  /** GH-430: `<f t="dataTable">` record payload (display expression derives from it). */
+  val genDataTableKind: Gen[FormulaKind.DataTable] =
+    for
+      range <- genCellRange
+      dt2D <- Gen.oneOf(true, false)
+      dtr <- Gen.oneOf(true, false)
+      r1 <- Gen.option(genARef)
+      r2 <- Gen.option(genARef)
+      del1 <- Gen.oneOf(true, false)
+      del2 <- Gen.oneOf(true, false)
+      ca <- Gen.oneOf(true, false)
+    yield FormulaKind.DataTable(range, dt2D, dtr, r1, r2, del1, del2, ca)
+
+  /** GH-430: CT_CellFormula record kind (Normal / CSE array anchor / data table). */
+  val genFormulaKind: Gen[FormulaKind] =
+    Gen.frequency(
+      4 -> Gen.const(FormulaKind.Normal),
+      3 -> (for
+        range <- genCellRange
+        aca <- Gen.oneOf(true, false)
+        ca <- Gen.oneOf(true, false)
+      yield FormulaKind.ArrayFormula(range, aca, ca): FormulaKind),
+      3 -> genDataTableKind.map(dt => dt: FormulaKind)
+    )
+
+  /**
+   * Formula cell value with optional cached value (cached values are write-only metadata) and an
+   * optional non-Normal record kind (GH-430). A DataTable kind forces its derived display
+   * expression, so the kind draws the expression too.
+   */
   val genFormulaCellValue: Gen[CellValue] =
     for
+      kind <- genFormulaKind
       expr <- genFormulaExpr
-      cached <- Gen.option(
-        Gen.oneOf(
-          genRoundTripNumber.map(CellValue.Number.apply),
-          Gen.oneOf(true, false).map(CellValue.Bool.apply),
-          Gen.alphaNumStr.map(CellValue.Text.apply),
-          genCellError.map(CellValue.Error.apply)
-        )
-      )
-    yield CellValue.Formula(expr, cached)
+      cached <- genFormulaCache
+    yield kind match
+      case dt: FormulaKind.DataTable => CellValue.dataTable(dt, cached)
+      case other => CellValue.Formula(expr, cached, other)
 
   /** Cell values for round-trip testing (all OOXML-representable variants) */
   val genRichCellValue: Gen[CellValue] =
@@ -1046,3 +1082,57 @@ object Generators:
     yield ModificationTracker(modifiedSheets, deletedSheets, reorderedSheets, modifiedMetadata)
 
   given Arbitrary[ModificationTracker] = Arbitrary(genModificationTracker)
+
+  // ===== Data validation generators (GH-429) =====
+
+  val genDvOperator: Gen[DvOperator] = Gen.oneOf(DvOperator.values.toIndexedSeq)
+  val genDvErrorStyle: Gen[DvErrorStyle] = Gen.oneOf(DvErrorStyle.values.toIndexedSeq)
+  val genDvBoundedType: Gen[DvBoundedType] = Gen.oneOf(DvBoundedType.values.toIndexedSeq)
+
+  /** Prompt/error text incl. the attribute-normalization hazards (LF/TAB, literal _xHHHH_). */
+  val genDvText: Gen[String] = Gen.oneOf(
+    "Pick one",
+    "Value must be 1-9",
+    "line1\nline2",
+    "tab\there",
+    "has a literal _x000A_ pattern",
+    "ünïcode ✓"
+  )
+
+  val genDvMessages: Gen[DvMessages] =
+    for
+      showInput <- Gen.oneOf(true, false)
+      showError <- Gen.oneOf(true, false)
+      promptTitle <- Gen.option(genDvText)
+      prompt <- Gen.option(genDvText)
+      errorTitle <- Gen.option(genDvText)
+      error <- Gen.option(genDvText)
+      style <- genDvErrorStyle
+    yield DvMessages(showInput, showError, promptTitle, prompt, errorTitle, error, style)
+
+  val genDvKind: Gen[DvKind] =
+    Gen.oneOf(
+      Gen.oneOf("\"Yes,No\"", "$Z$1:$Z$3", "Lists!$A$1:$A$5").map(DvKind.List.apply),
+      Gen.oneOf("ISNUMBER(A1)", "LEN(A1)<10").map(DvKind.Custom.apply),
+      Gen.const(DvKind.AnyValue),
+      for
+        t <- genDvBoundedType
+        op <- genDvOperator
+        f1 <- Gen.oneOf("1", "A1", "DATE(2020,1,1)")
+        f2 <- Gen.option(Gen.oneOf("9", "B1"))
+      yield DvKind.Bounded(t, op, f1, f2)
+    )
+
+  val genDvRules: Gen[DataValidation.Rules] =
+    for
+      ranges <- Gen
+        .nonEmptyListOf(Gen.oneOf(genSmallARef.map(r => CellRange(r, r)), genCellRange))
+        .map(_.toVector)
+      kind <- genDvKind
+      allowBlank <- Gen.oneOf(true, false)
+      showDropdown <- Gen.oneOf(true, false)
+      messages <- genDvMessages
+    yield DataValidation.Rules(ranges.distinct, kind, allowBlank, showDropdown, messages)
+
+  given Arbitrary[DataValidation.Rules] = Arbitrary(genDvRules)
+  given Arbitrary[DvMessages] = Arbitrary(genDvMessages)

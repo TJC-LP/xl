@@ -13,7 +13,7 @@ import com.tjclp.xl.sheets.{
   SheetView
 }
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.context.{ModificationTracker, SourceContext, SourceFingerprint}
+import com.tjclp.xl.context.{ModificationTracker, SourceContent, SourceContext, SourceFingerprint}
 import com.tjclp.xl.tables.TableSpec
 
 import scala.xml.*
@@ -106,14 +106,28 @@ object XlsxReader:
     )
 
   /**
-   * Handle for accessing source file during read (enables surgical modification).
+   * Handle for the physical source backing a read (enables surgical modification).
    *
-   * Provides the path to the original file, which allows XlsxReader to create a SourceContext with
-   * PreservedPartStore for unknown parts.
+   * OnDisk carries the original path plus the streaming digest that fingerprints the file as it is
+   * read; InMemory (GH-412) carries the archive itself — the bytes are already resident, so
+   * byte-array reads preserve unknown parts exactly like path-based reads.
    */
-  case class SourceHandle(path: Path, size: Long, digest: MessageDigest):
-    def finalizeFingerprint(): SourceFingerprint =
-      SourceFingerprint(size, ArraySeq.unsafeWrapArray(digest.digest()))
+  enum SourceHandle:
+    case OnDisk(path: Path, size: Long, digest: MessageDigest)
+    case InMemory(bytes: ArraySeq[Byte])
+
+    def finalizeFingerprint(): SourceFingerprint = this match
+      case OnDisk(_, size, digest) =>
+        SourceFingerprint(size, ArraySeq.unsafeWrapArray(digest.digest()))
+      case InMemory(bytes) =>
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(SourceContent.rawArray(bytes))
+        SourceFingerprint(bytes.length.toLong, ArraySeq.unsafeWrapArray(digest.digest()))
+
+    /** The [[SourceContent]] this handle resolves to (what the SourceContext carries). */
+    def toContent: SourceContent = this match
+      case OnDisk(path, _, _) => SourceContent.OnDisk(path)
+      case InMemory(bytes) => SourceContent.InMemory(bytes)
 
   /** Set of ZIP entry paths that XL knows how to parse. All other entries are preserved. */
   private val knownParts: Set[String] = Set(
@@ -193,9 +207,9 @@ object XlsxReader:
    *
    * Loads entire file into memory. For large files, use `ExcelIO.readStream()` instead.
    *
-   * **Surgical Modification**: When reading from a file (not a stream), XL creates a SourceContext
-   * that enables surgical writes. Unknown parts (charts, images, etc.) are indexed but not loaded
-   * into memory, allowing them to be preserved byte-for-byte on write.
+   * **Surgical Modification**: When reading from a file (or a byte array, GH-412), XL creates a
+   * SourceContext that enables surgical writes. Unknown parts (charts, images, etc.) are indexed
+   * but not loaded into memory, allowing them to be preserved byte-for-byte on write.
    *
    * @param inputPath
    *   Path to XLSX file
@@ -218,14 +232,20 @@ object XlsxReader:
       try
         readFromStreamWithWarnings(
           digestStream,
-          Some(SourceHandle(inputPath, size, digest)),
+          Some(SourceHandle.OnDisk(inputPath, size, digest)),
           config
         )
       finally
         digestStream.close()
     catch case e: Exception => Left(XLError.IOError(s"Failed to read XLSX: ${e.getMessage}"))
 
-  /** Read workbook from byte array (for testing) */
+  /**
+   * Read workbook from byte array.
+   *
+   * Creates an in-memory SourceContext (GH-412): the archive is already resident, so surgical
+   * writes preserve unknown parts and unmodeled workbook children exactly like path-based reads —
+   * `write(readFromBytes(bytes))` is byte-identical to `write(read(path))` over the same content.
+   */
   def readFromBytes(
     bytes: Array[Byte],
     config: ReaderConfig = ReaderConfig.default
@@ -236,7 +256,16 @@ object XlsxReader:
     bytes: Array[Byte],
     config: ReaderConfig = ReaderConfig.default
   ): XLResult[ReadResult] =
-    try readFromStreamWithWarnings(new ByteArrayInputStream(bytes), None, config)
+    try
+      // Private snapshot: the SourceContext outlives this call and the caller's array is mutable.
+      // Parsing reads the SAME snapshot, so the workbook and its preserved-part source can never
+      // desync (the path-read analogue is the fingerprint check against a file changing on disk).
+      val snapshot = ArraySeq.unsafeWrapArray(bytes.clone())
+      readFromStreamWithWarnings(
+        new ByteArrayInputStream(SourceContent.rawArray(snapshot)),
+        Some(SourceHandle.InMemory(snapshot)),
+        config
+      )
     catch case e: Exception => Left(XLError.IOError(s"Failed to read bytes: ${e.getMessage}"))
 
   /** Read workbook from input stream (no surgical modification support) */
@@ -253,8 +282,8 @@ object XlsxReader:
    * @param is
    *   Input stream containing XLSX ZIP data
    * @param source
-   *   Optional source handle providing path to original file. If provided, creates SourceContext
-   *   with indexed unknown parts for surgical writes.
+   *   Optional handle for the physical source (file path, or the in-memory archive). If provided,
+   *   creates SourceContext with indexed unknown parts for surgical writes.
    * @param config
    *   Reader configuration with security limits
    * @return
@@ -359,10 +388,13 @@ object XlsxReader:
           // Drain the remaining container bytes through the digest before fingerprinting:
           // ZipInputStream stops consuming at the central directory, but copyVerbatim hashes
           // the whole file — without this drain the fingerprints could never match and every
-          // clean file→file write failed loudly (GH-261).
-          if source.isDefined then
-            val drainBuf = new Array[Byte](8192)
-            while is.read(drainBuf) != -1 do ()
+          // clean file→file write failed loudly (GH-261). In-memory sources digest their full
+          // array in finalizeFingerprint, so only on-disk streaming digests need the drain.
+          source match
+            case Some(SourceHandle.OnDisk(_, _, _)) =>
+              val drainBuf = new Array[Byte](8192)
+              while is.read(drainBuf) != -1 do ()
+            case _ => ()
 
           // Compute fingerprint if reading from a file
           val fingerprint = source.map(_.finalizeFingerprint())
@@ -1072,6 +1104,14 @@ object XlsxReader:
     val dataValidations =
       com.tjclp.xl.ooxml.worksheet.DataValidationCodec.parseAll(ooxmlSheet.dataValidations)
 
+    // GH-429: lift a parseable sheet-level <autoFilter @ref> into the tri-state overlay model so
+    // structural edits keep the filter attached to its data; anything without a parseable ref
+    // stays passive (None = the source element rides the preservedKnown passthrough verbatim).
+    val autoFilter = ooxmlSheet.preservedKnown
+      .get("autoFilter")
+      .flatMap(com.tjclp.xl.ooxml.worksheet.parseAutoFilterRef)
+      .map(com.tjclp.xl.sheets.AutoFilterState.Ranged.apply)
+
     Right(
       Sheet(
         name = name,
@@ -1088,7 +1128,8 @@ object XlsxReader:
         drawings = drawings,
         conditionalFormats = conditionalFormats,
         tabColor = tabColor,
-        dataValidations = dataValidations
+        dataValidations = dataValidations,
+        autoFilter = autoFilter
       )
     )
 
@@ -1350,8 +1391,8 @@ object XlsxReader:
           case (Some(handle), Some(fp)) =>
             Right(
               Some(
-                SourceContext.fromFile(
-                  handle.path,
+                SourceContext.fromContent(
+                  handle.toContent,
                   manifest,
                   fp,
                   commentPathMapping,

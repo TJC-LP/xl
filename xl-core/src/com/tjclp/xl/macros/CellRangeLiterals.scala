@@ -90,7 +90,7 @@ object CellRangeLiterals:
       case Right(cellValue) =>
         // Valid - emit constant
         cellValue match
-          case CellValue.Formula(expr, _) =>
+          case CellValue.Formula(expr, _, _) =>
             '{ CellValue.Formula(${ Expr(expr) }) }
           case _ =>
             report.errorAndAbort("Unexpected cell value type in formula literal")

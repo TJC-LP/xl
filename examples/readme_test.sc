@@ -241,7 +241,7 @@ test("Formula Roundtrip - Write and Read Back") {
     case Some(readSheet) =>
       // Verify B1 formula
       readSheet.cell("B1").map(_.value) match
-        case Some(CellValue.Formula(expr, cached)) =>
+        case Some(CellValue.Formula(expr, cached, _)) =>
           assert(expr == "A1*2", s"B1 formula should be 'A1*2', got '$expr'")
           cached match
             case Some(CellValue.Number(n)) =>
@@ -253,7 +253,7 @@ test("Formula Roundtrip - Write and Read Back") {
 
       // Verify B3 SUM formula
       readSheet.cell("B3").map(_.value) match
-        case Some(CellValue.Formula(expr, cached)) =>
+        case Some(CellValue.Formula(expr, cached, _)) =>
           assert(expr == "SUM(A1:A3)", s"B3 formula should be 'SUM(A1:A3)', got '$expr'")
           cached match
             case Some(CellValue.Number(n)) =>

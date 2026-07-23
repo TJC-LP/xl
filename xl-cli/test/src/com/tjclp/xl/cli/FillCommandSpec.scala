@@ -115,7 +115,7 @@ class FillCommandSpec extends FunSuite:
     val b1 = s.cells.get(ref(1, 0)).map(_.value)
     assert(
       b1.exists {
-        case CellValue.Formula(f, _) => f == "A1*2"
+        case CellValue.Formula(f, _, _) => f == "A1*2"
         case _ => false
       },
       s"B1 formula should be =A1*2, got: $b1"
@@ -124,7 +124,7 @@ class FillCommandSpec extends FunSuite:
     val b2 = s.cells.get(ref(1, 1)).map(_.value)
     assert(
       b2.exists {
-        case CellValue.Formula(f, _) => f == "A2*2"
+        case CellValue.Formula(f, _, _) => f == "A2*2"
         case _ => false
       },
       s"B2 formula should be =A2*2, got: $b2"
@@ -133,7 +133,7 @@ class FillCommandSpec extends FunSuite:
     val b3 = s.cells.get(ref(1, 2)).map(_.value)
     assert(
       b3.exists {
-        case CellValue.Formula(f, _) => f == "A3*2"
+        case CellValue.Formula(f, _, _) => f == "A3*2"
         case _ => false
       },
       s"B3 formula should be =A3*2, got: $b3"
@@ -157,7 +157,7 @@ class FillCommandSpec extends FunSuite:
     val b2 = s.cells.get(ref(1, 1)).map(_.value)
     assert(
       b2.exists {
-        case CellValue.Formula(f, _) => f.contains("$A$1")
+        case CellValue.Formula(f, _, _) => f.contains("$A$1")
         case _ => false
       },
       s"B2 formula should contain $$A$$1, got: $b2"
@@ -230,7 +230,7 @@ class FillCommandSpec extends FunSuite:
     val a2 = s.cells.get(ref(0, 1)).map(_.value)
     assert(
       a2.exists {
-        case CellValue.Formula(f, _) => f == "A1*2"
+        case CellValue.Formula(f, _, _) => f == "A1*2"
         case _ => false
       },
       s"A2 formula should be =A1*2, got: $a2"
@@ -239,7 +239,7 @@ class FillCommandSpec extends FunSuite:
     val b2 = s.cells.get(ref(1, 1)).map(_.value)
     assert(
       b2.exists {
-        case CellValue.Formula(f, _) => f == "B1*2"
+        case CellValue.Formula(f, _, _) => f == "B1*2"
         case _ => false
       },
       s"B2 formula should be =B1*2, got: $b2"
@@ -248,7 +248,7 @@ class FillCommandSpec extends FunSuite:
     val c2 = s.cells.get(ref(2, 1)).map(_.value)
     assert(
       c2.exists {
-        case CellValue.Formula(f, _) => f == "C1*2"
+        case CellValue.Formula(f, _, _) => f == "C1*2"
         case _ => false
       },
       s"C2 formula should be =C1*2, got: $c2"
@@ -337,7 +337,7 @@ class FillCommandSpec extends FunSuite:
     val b2 = s.cells.get(ref(1, 1)).map(_.value)
     assert(
       b2.exists {
-        case CellValue.Formula(f, _) => f == "SUM(A2:A4)"
+        case CellValue.Formula(f, _, _) => f == "SUM(A2:A4)"
         case _ => false
       },
       s"B2 formula should be =SUM(A2:A4), got: $b2"
@@ -346,7 +346,7 @@ class FillCommandSpec extends FunSuite:
     val b3 = s.cells.get(ref(1, 2)).map(_.value)
     assert(
       b3.exists {
-        case CellValue.Formula(f, _) => f == "SUM(A3:A5)"
+        case CellValue.Formula(f, _, _) => f == "SUM(A3:A5)"
         case _ => false
       },
       s"B3 formula should be =SUM(A3:A5), got: $b3"

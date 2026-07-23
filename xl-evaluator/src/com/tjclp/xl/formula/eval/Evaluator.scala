@@ -9,7 +9,7 @@ import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 import com.tjclp.xl.SheetName
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
@@ -504,7 +504,11 @@ private class EvaluatorImpl(
                 val cell = targetSheet(at)
                 // GH-161: Handle formula cells without cached values by recursively evaluating
                 cell.value match
-                  case CellValue.Formula(formulaStr, None) =>
+                  // GH-430: TABLE(...) display text is not evaluable — the decoder path treats
+                  // the uncached record like any cached formula (pinned semantics, no parse)
+                  case CellValue.Formula(_, None, _: FormulaKind.DataTable) =>
+                    decodeOrCarried(at, cell, decode)
+                  case CellValue.Formula(formulaStr, None, _) =>
                     // Formula has no cached value - parse and evaluate against target sheet
                     // GH-161 review: Apply decoder to Cell with evaluated result (type-safe)
                     // GH-161 review: Pass currentDepth for cycle protection
@@ -570,7 +574,10 @@ private class EvaluatorImpl(
         val cell = sheet(at)
         // GH-208: Handle same-sheet formula cells without cached values by recursively evaluating
         cell.value match
-          case CellValue.Formula(formulaStr, None) =>
+          // GH-430: TABLE(...) display text is not evaluable — decoder path, pinned semantics
+          case CellValue.Formula(_, None, _: FormulaKind.DataTable) =>
+            decodeOrCarried(at, cell, decode)
+          case CellValue.Formula(formulaStr, None, _) =>
             // GH-346: memoized per pass — a cell evaluates once, not once per path
             val memo = memoOpt.getOrElse(new Evaluator.EvalMemo)
             memo
@@ -1083,7 +1090,7 @@ private class EvaluatorImpl(
     case CellValue.Bool(b) => b
     case CellValue.DateTime(dt) => BigDecimal(CellValue.dateTimeToExcelSerial(dt))
     case CellValue.Empty => BigDecimal(0)
-    case CellValue.Formula(_, Some(cached)) => unwrapBindingValue(cached)
+    case CellValue.Formula(_, Some(cached), _) => unwrapBindingValue(cached)
     case other => other
 
   /**

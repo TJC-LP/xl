@@ -225,7 +225,7 @@ object ReadCommands:
       numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
       // For formulas with cached values, format the cached value
       valueToFormat = value match
-        case CellValue.Formula(_, Some(cached)) => cached
+        case CellValue.Formula(_, Some(cached), _) => cached
         case other => other
       formatted = NumFmtFormatter.formatValue(valueToFormat, numFmt)
       // Get comment from sheet (sheet.getComment, not cell.comment)
@@ -340,7 +340,7 @@ object ReadCommands:
       numbers = cells.flatMap { cell =>
         cell.value match
           case CellValue.Number(n) => Some(n)
-          case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+          case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
           case _ => None
       }.toVector
       _ <- IO

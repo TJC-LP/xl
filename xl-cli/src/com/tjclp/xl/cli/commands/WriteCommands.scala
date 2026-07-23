@@ -262,6 +262,10 @@ object WriteCommands:
     stream: Boolean = false
   ): IO[String] =
     for
+      // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
+      _ <- formulas.flatMap(ValueParser.dataTableFormulaError) match
+        case msg :: _ => IO.raiseError(new Exception(msg))
+        case Nil => IO.unit
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "putf")
       (targetSheet, refOrRange) = resolved
 
@@ -982,7 +986,13 @@ object WriteCommands:
       case None => sheet // Empty source cell, nothing to copy
       case Some(sourceCell) =>
         sourceCell.value match
-          case CellValue.Formula(formula, _) =>
+          // A data-table record has only derived TABLE(...) display text, not an evaluable
+          // formula. Like CopyOps, fill destinations receive the cached constant rather than a
+          // degraded Normal formula that Excel would evaluate as #NAME?.
+          case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
+            sheet.put(targetRef, cachedOpt.getOrElse(CellValue.Empty))
+
+          case CellValue.Formula(formula, _, _) =>
             // Shift formula references
             val fullFormula = s"=$formula"
             FormulaParser.parse(fullFormula) match
@@ -1586,9 +1596,9 @@ object WriteCommands:
       case DateTime(dt) =>
         // Convert to Excel serial number for comparison
         SortValue.Num(CellValue.dateTimeToExcelSerial(dt))
-      case Formula(_, Some(cached)) =>
+      case Formula(_, Some(cached), _) =>
         getSortableValue(cached, mode)
-      case Formula(_, None) => SortValue.Str("")
+      case Formula(_, None, _) => SortValue.Str("")
       case RichText(rt) => SortValue.Str(rt.toPlainText.toLowerCase)
       case CellValue.Error(_) => SortValue.Error
 
@@ -1680,22 +1690,27 @@ object WriteCommands:
    * @param rowDelta
    *   The number of rows the cell moved (positive = down, negative = up)
    * @return
-   *   Shifted cell value (or original if not a formula or rowDelta is 0)
+   *   Shifted cell value, or the original when no relocation is needed. Data-table records are
+   *   always materialized because sorting can invalidate the table range they describe.
    */
   private def shiftCellValueForSort(value: CellValue, rowDelta: Int): CellValue =
-    if rowDelta == 0 then value
-    else
-      value match
-        case CellValue.Formula(formula, _) =>
-          val fullFormula = s"=$formula"
-          FormulaParser.parse(fullFormula) match
-            case Left(_) =>
-              // If formula can't be parsed, keep as-is
-              value
-            case Right(parsedExpr) =>
-              // Shift only row references, not columns (colDelta = 0)
-              val shiftedExpr = FormulaShifter.shift(parsedExpr, 0, rowDelta)
-              val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
-              // Clear cached value since it will need re-evaluation
-              CellValue.Formula(shiftedFormula, None)
-        case other => other
+    value match
+      // Sorting a data-table record can detach it or its table interior from the range described
+      // by its ref. Match CopyOps paste semantics and materialize the cached constant instead of
+      // turning the derived TABLE(...) display text into a Normal formula.
+      case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
+        cachedOpt.getOrElse(CellValue.Empty)
+      case _ if rowDelta == 0 => value
+      case CellValue.Formula(formula, _, _) =>
+        val fullFormula = s"=$formula"
+        FormulaParser.parse(fullFormula) match
+          case Left(_) =>
+            // If formula can't be parsed, keep as-is
+            value
+          case Right(parsedExpr) =>
+            // Shift only row references, not columns (colDelta = 0)
+            val shiftedExpr = FormulaShifter.shift(parsedExpr, 0, rowDelta)
+            val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+            // Clear cached value since it will need re-evaluation
+            CellValue.Formula(shiftedFormula, None)
+      case other => other

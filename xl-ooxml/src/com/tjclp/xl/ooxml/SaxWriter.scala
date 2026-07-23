@@ -16,6 +16,17 @@ trait SaxWriter:
   def endElement(): Unit
   def flush(): Unit
 
+  /**
+   * Emit a childless element as an empty-element tag (`<name a="b"/>`) with attributes in the given
+   * order (GH-430: `<f t="dataTable" .../>` records carry no text and Excel writes them minimized).
+   * The default start/end round already minimizes on tree-building backends; stream backends
+   * override to write a true empty-element tag.
+   */
+  def emptyElement(name: String, attrs: Seq[(String, String)]): Unit =
+    startElement(name)
+    attrs.foreach { case (attrName, value) => writeAttribute(attrName, value) }
+    endElement()
+
 /** Types that can serialize themselves using a SaxWriter */
 trait SaxSerializable:
   def writeSax(writer: SaxWriter): Unit

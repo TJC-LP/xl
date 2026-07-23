@@ -8,6 +8,9 @@
 
 ### What Works (Production-Ready)
 
+**Unreleased (wave 19)**:
+- ✅ **Array/data-table formula records survive rewrites** (#430) — `<f t="array" ref>` and `<f t="dataTable" ref dt2D dtr r1 r2 del1 del2 ca/>` are modeled per cell (`FormulaKind` on `CellValue.Formula`) and re-emit byte-exactly through dirty sheet regeneration on every writer (DOM, SAX, streaming); two-variable Data Tables no longer bake to static grids on `put`. DataTable caches are pinned (recalc/copy/eval never parse the derived `TABLE(...)` display text); StructuralEditor shifts record payloads and degrades tearing edits to cached constants; CLI shows `{=TABLE(A1,A2)}` braces + JSON `formulaKind`, and `putf` rejects top-level `TABLE(` (authoring lands with #419); new `formula-records.xlsx` corpus fixture rides every round-trip/parity law
+
 **New in 0.15.0** (2026-07-17):
 - ✅ **numFmt round-trip fidelity** (#404) — `<numFmts>` declarations survive read→write verbatim (built-in-equal codes like `"0.00%"` no longer degrade to `General`); total `NumFmt.formatCode` inverse; whole-code `"General"` renders correctly (incl. `TEXT(n,"General")`)
 - ✅ **Range-date serial coercion** (#405) — XIRR/XNPV date ranges and NETWORKDAYS/WORKDAY holidays accept raw serial Numbers; post-round-trip recalc no longer poisons returns blocks
@@ -155,7 +158,7 @@
 
 ### Test Coverage
 
-**3,996 tests** (verified via `./mill __.test`, 2026-07-09):
+**4,818 tests** (verified via `./mill __.test`, 2026-07-22):
 
 | Module | Tests | Covers |
 |--------|-------|--------|

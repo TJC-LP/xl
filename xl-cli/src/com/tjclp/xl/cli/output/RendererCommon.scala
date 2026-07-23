@@ -1,7 +1,7 @@
 package com.tjclp.xl.cli.output
 
 import com.tjclp.xl.addressing.{ARef, Column, Row}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.sheets.Sheet
 
 /**
@@ -28,6 +28,16 @@ object RendererCommon:
     else "#ERROR!"
 
   /**
+   * Formula display text: leading `=` always; `{=...}` braces when the cell carries a non-Normal
+   * CT_CellFormula record (array/dataTable) — Excel's own formula-bar convention (GH-430).
+   */
+  def formulaDisplay(expr: String, kind: FormulaKind): String =
+    val withEquals = if expr.startsWith("=") then expr else s"=$expr"
+    kind match
+      case FormulaKind.Normal => withEquals
+      case _ => s"{$withEquals}"
+
+  /**
    * Human-readable truncation notice emitted when --limit clips output (GH-351).
    *
    * Rendered as a trailer line after markdown tables, or on stderr for machine-parseable formats
@@ -45,8 +55,8 @@ object RendererCommon:
     cell.value match
       case CellValue.Empty => true
       case CellValue.Text(s) if s.trim.isEmpty => true
-      case CellValue.Formula(_, Some(CellValue.Empty)) => true
-      case CellValue.Formula(_, Some(CellValue.Text(s))) if s.trim.isEmpty => true
+      case CellValue.Formula(_, Some(CellValue.Empty), _) => true
+      case CellValue.Formula(_, Some(CellValue.Text(s)), _) if s.trim.isEmpty => true
       case _ => false
 
   /**

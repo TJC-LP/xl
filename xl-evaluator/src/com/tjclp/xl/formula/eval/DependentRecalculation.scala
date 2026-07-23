@@ -160,20 +160,21 @@ object DependentRecalculation:
         .get(ref)
         .map { cell =>
           cell.value match
-            // GH-353: external-workbook formulas keep their Excel-written cache verbatim —
-            // re-evaluating can only fail (the external workbook is not loaded), and clearing
-            // the cache would destroy the sole source of truth
-            case value: CellValue.Formula if SheetEvaluator.pinnedExternalCache(value).isDefined =>
+            // GH-353/GH-430: external-workbook and data-table formulas keep their Excel-written
+            // cache verbatim — re-evaluating can only fail (the external workbook is not loaded;
+            // TABLE(...) is a record, not evaluable text), and clearing the cache would destroy
+            // the sole source of truth
+            case value: CellValue.Formula if SheetEvaluator.pinnedCache(value).isDefined =>
               s
-            case CellValue.Formula(expr, _) =>
-              // Evaluate the formula and update cache
+            case f @ CellValue.Formula(expr, _, _) =>
+              // Evaluate the formula and update cache; .copy keeps the record kind (GH-430)
               val fullFormula = if expr.startsWith("=") then expr else s"=$expr"
               SheetEvaluator.evaluateFormula(s)(fullFormula, clock, workbook) match
                 case Right(newValue) =>
-                  s.put(ref, CellValue.Formula(expr, Some(newValue)))
+                  s.put(ref, f.copy(cachedValue = Some(newValue)))
                 case Left(_) =>
                   // Evaluation error - clear cache (will show error on next eval)
-                  s.put(ref, CellValue.Formula(expr, None))
+                  s.put(ref, f.copy(cachedValue = None))
             case _ => s
         }
         .getOrElse(s)

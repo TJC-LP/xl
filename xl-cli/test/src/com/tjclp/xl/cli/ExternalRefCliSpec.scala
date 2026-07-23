@@ -75,7 +75,7 @@ class ExternalRefCliSpec extends FunSuite:
 
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     imported.sheets.head.cells.get(ARef.from0(1, 0)).map(_.value) match
-      case Some(CellValue.Formula(formula, cachedValue)) =>
+      case Some(CellValue.Formula(formula, cachedValue, _)) =>
         assertEquals(formula, "SUM([2]Book1!A1:A2)")
         assertEquals(cachedValue, None, "unresolvable external formula must stay uncached")
       case other => fail(s"Expected Formula, got $other")
@@ -96,7 +96,7 @@ class ExternalRefCliSpec extends FunSuite:
 
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     imported.sheets.head.cells.get(d1).map(_.value) match
-      case Some(CellValue.Formula(_, cachedValue)) =>
+      case Some(CellValue.Formula(_, cachedValue, _)) =>
         assertEquals(cachedValue, Some(CellValue.Number(BigDecimal(42))))
       case other => fail(s"Expected cached external Formula, got $other")
   }
@@ -117,7 +117,7 @@ class ExternalRefCliSpec extends FunSuite:
 
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     imported.sheets.head.cells.get(d1).map(_.value) match
-      case Some(CellValue.Formula(_, cachedValue)) =>
+      case Some(CellValue.Formula(_, cachedValue, _)) =>
         assertEquals(
           cachedValue,
           Some(CellValue.Number(BigDecimal(42))),

@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.api.{Sheet, Cell}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.RowProperties
@@ -13,6 +13,7 @@ import com.tjclp.xl.ooxml.worksheet.{
   buildSheetViewsElem,
   collectHyperlinks,
   mergeHeaderFooterElem,
+  mergeAutoFilterElem,
   mergePageSetupElem,
   mergeSheetPrElem
 }
@@ -90,6 +91,10 @@ object DirectSaxEmitter:
 
       // Emit sheetData directly from domain cells
       emitSheetData(writer, sheet, sst, styleRemapping, escapeFormulas)
+
+      // GH-429: sheet-level autoFilter belongs after sheetData and before mergeCells.
+      // The direct path is source-free, so only a modeled Ranged state materializes here.
+      mergeAutoFilterElem(None, sheet.autoFilter).foreach(writer.writeElem)
 
       // Emit mergeCells if any
       emitMergeCells(writer, sheet)
@@ -333,7 +338,7 @@ object DirectSaxEmitter:
         val serial = CellValue.dateTimeToExcelSerial(dt)
         ("n", CellValue.Number(BigDecimal(serial)))
 
-      case CellValue.Formula(_, cachedValue) =>
+      case CellValue.Formula(_, cachedValue, _) =>
         // Cell type is determined by cached value type.
         // When no cached value exists, omit type attribute (empty string)
         // to let Excel infer the type. Using "str" for formulas without
@@ -391,10 +396,18 @@ object DirectSaxEmitter:
         writer.writeCharacters(if b then "1" else "0")
         writer.endElement()
 
-      case CellValue.Formula(expr, cachedValue) =>
-        writer.startElement("f")
-        writer.writeCharacters(expr)
-        writer.endElement()
+      case CellValue.Formula(expr, cachedValue, kind) =>
+        // GH-430: record attrs via the shared codec; dataTable records carry no formula text.
+        kind match
+          case _: FormulaKind.DataTable =>
+            writer.emptyElement("f", FormulaKindCodec.toAttrs(kind))
+          case _ =>
+            writer.startElement("f")
+            FormulaKindCodec.toAttrs(kind).foreach { case (name, v) =>
+              writer.writeAttribute(name, v)
+            }
+            writer.writeCharacters(expr)
+            writer.endElement()
         emitCachedValue(writer, cachedValue)
 
       case CellValue.Error(err) =>

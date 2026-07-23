@@ -22,6 +22,7 @@ import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.richtext.RichText.*
 import com.tjclp.xl.sheets.{
+  AutoFilterState,
   ColumnProperties,
   HeaderFooter,
   PageMargins,
@@ -98,6 +99,56 @@ class DirectSaxEmitterParitySpec extends FunSuite:
     val actual = emitDirect(sheet, None)
 
     assertEquals(normalize(expected.toXml), normalize(actual))
+  }
+
+  test("GH-429: direct SAX emits modeled autoFilter in worksheet schema order") {
+    val range = CellRange(ARef.from1(1, 1), ARef.from1(5, 4))
+    val sheet = buildSheet().copy(autoFilter = Some(AutoFilterState.Ranged(range)))
+
+    val expected = OoxmlWorksheet.fromDomainWithSST(sheet, None, Map.empty, None)
+    val actual = emitDirect(sheet, None)
+
+    assertEquals(normalize(expected.toXml), normalize(actual))
+    assertEquals((actual \ "autoFilter" \ "@ref").text, "A1:E4")
+
+    val childLabels = actual.child.collect { case e: Elem => e.label }
+    assert(
+      childLabels.indexOf("sheetData") < childLabels.indexOf("autoFilter"),
+      s"autoFilter must follow sheetData: $childLabels"
+    )
+    assert(
+      childLabels.indexOf("autoFilter") < childLabels.indexOf("mergeCells"),
+      s"autoFilter must precede mergeCells: $childLabels"
+    )
+  }
+
+  test("GH-429: source-free SaxStax write round-trips modeled autoFilter") {
+    val range = CellRange(ARef.from1(1, 1), ARef.from1(5, 4))
+    val sheet = buildSheet().copy(autoFilter = Some(AutoFilterState.Ranged(range)))
+    val path = Files.createTempFile("gh429-sax-autofilter", ".xlsx")
+
+    try
+      XlsxWriter
+        .writeWith(Workbook(Vector(sheet)), path, WriterConfig.saxStax)
+        .fold(e => fail(s"SaxStax write failed: $e"), identity)
+
+      val xml = zipEntryString(path, "xl/worksheets/sheet1.xml")
+      assert(xml.contains("<autoFilter ref=\"A1:E4\""), s"autoFilter missing: $xml")
+      assert(
+        xml.indexOf("</sheetData>") < xml.indexOf("<autoFilter "),
+        s"autoFilter must follow sheetData: $xml"
+      )
+      assert(
+        xml.indexOf("<autoFilter ") < xml.indexOf("<mergeCells "),
+        s"autoFilter must precede mergeCells: $xml"
+      )
+
+      val reread = XlsxReader.read(path).fold(e => fail(s"SaxStax read failed: $e"), identity)
+      assertEquals(
+        reread.sheets.headOption.flatMap(_.autoFilter),
+        Some(AutoFilterState.Ranged(range))
+      )
+    finally Files.deleteIfExists(path)
   }
 
   test("GH-265: SaxStax streaming write round-trips metadata equal to the DOM writer") {

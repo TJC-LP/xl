@@ -57,8 +57,8 @@ class DataValidationPreservationSpec extends FunSuite:
 
   /**
    * Minimal single-sheet fixture whose worksheet carries the given raw `<dataValidations>` block
-   * (may be empty). The decimal entry carries an operator + prompts — outside the typed subset, so
-   * it must ride [[com.tjclp.xl.sheets.DataValidation.Preserved]].
+   * (may be empty). The decimal entry carries `imeMode` — a foreign attribute outside the GH-429
+   * widened whitelist, so it must ride [[com.tjclp.xl.sheets.DataValidation.Preserved]].
    */
   private def rawDvFixture(dataValidationsXml: String): Path =
     val path = Files.createTempFile("dv-fixture", ".xlsx")
@@ -117,6 +117,12 @@ class DataValidationPreservationSpec extends FunSuite:
     path
 
   private val foreignDecimalDv =
+    """<dataValidations count="1">
+    <dataValidation type="decimal" operator="between" allowBlank="1" showInputMessage="1" showErrorMessage="1" errorTitle="Range" error="0 to 1 only" imeMode="hiragana" sqref="D2:D9"><formula1>0</formula1><formula2>1</formula2></dataValidation>
+  </dataValidations>"""
+
+  /** The same entry WITHOUT the foreign attr: inside the GH-429 widened typed subset. */
+  private val excelTypicalDv =
     """<dataValidations count="1">
     <dataValidation type="decimal" operator="between" allowBlank="1" showInputMessage="1" showErrorMessage="1" errorTitle="Range" error="0 to 1 only" sqref="D2:D9"><formula1>0</formula1><formula2>1</formula2></dataValidation>
   </dataValidations>"""
@@ -200,7 +206,7 @@ class DataValidationPreservationSpec extends FunSuite:
     assertEquals(before.size, 1)
     assert(
       before(0).isInstanceOf[com.tjclp.xl.sheets.DataValidation.Preserved],
-      s"decimal+operator+prompts must ride Preserved: $before"
+      s"the imeMode foreign attr must force Preserved: $before"
     )
 
     val updated = wb
@@ -221,6 +227,28 @@ class DataValidationPreservationSpec extends FunSuite:
     assertEquals(back.size, 2)
     assertEquals(back.take(1), before, "preserved entry must ride through unchanged")
     assertEquals(back.lastOption, updated.sheets(0).dataValidations.lastOption)
+  }
+
+  test("(a) GH-429: the Excel-typical decimal entry now parses TYPED and stays CLEAN-stable") {
+    val (in, wb) = readDvFixture(excelTypicalDv)
+    wb.sheets(0).dataValidations match
+      case Vector(r: com.tjclp.xl.sheets.DataValidation.Rules) =>
+        assertEquals(r.ranges.map(_.toA1), Vector("D2:D9"))
+        assertEquals(r.messages.errorTitle, Some("Range"))
+        assertEquals(r.messages.showInputMessage, true)
+      case other => fail(s"decimal+operator+prompts must parse typed post-GH-429: $other")
+    // an unrelated cell edit leaves the dv slot CLEAN: source element passes through verbatim
+    val edited = wb
+      .update(wb.sheets(0).name, _.put(ref"A5", CellValue.Text("unrelated edit")))
+      .fold(err => fail(s"update failed: $err"), identity)
+    val out = writeTo(edited, "typed-clean")
+    def dvElem(p: Path): Option[String] =
+      val ws = XmlSecurity
+        .parseSafe(entryText(p, "xl/worksheets/sheet1.xml"), "ws")
+        .fold(e => fail(e.message), identity)
+      (ws \ "dataValidations").headOption.map(_.toString)
+    assertEquals(dvElem(out), dvElem(in), "typed-parsing source must still pass through CLEAN")
+    assertEquals(reread(out).sheets(0).dataValidations, wb.sheets(0).dataValidations)
   }
 
   // ===== (b) the dirty-gate proof (the GH-372-family read→edit→write ask) =====

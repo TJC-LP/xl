@@ -2,11 +2,12 @@ package com.tjclp.xl.ooxml.worksheet
 
 import scala.xml.*
 
-import com.tjclp.xl.addressing.{ARef, Column}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column}
 import com.tjclp.xl.ooxml.XmlUtil
 import com.tjclp.xl.ooxml.XmlUtil.nsSpreadsheetML
 import com.tjclp.xl.ooxml.style.DxfCodec
 import com.tjclp.xl.sheets.{
+  AutoFilterState,
   ColumnProperties,
   FreezePane,
   PageSetup,
@@ -580,6 +581,39 @@ private def applyFreezePaneOverride(
               "workbookViewId" -> "0"
             )(paneElem)
             Some(XmlUtil.elem("sheetViews")(sheetView))
+
+// ===== Sheet-level autoFilter overlay (GH-429) =====
+
+/**
+ * Overlay the modeled [[AutoFilterState]] onto the preserved `<autoFilter>` element (the
+ * FreezePane/tabColor/mergePageSetupElem precedent):
+ *   - `None` → passthrough (the passive default; source XML rides verbatim)
+ *   - `Ranged` → replace ONLY the `ref` attribute, all children (filterColumn/sortState) verbatim;
+ *     identity fast-path when the source ref already parses to the same range (zero churn on
+ *     untouched sheets); a fresh minimal `<autoFilter ref="..."/>` when no source exists
+ *   - `Remove` → delete the element (a collapsed range must not resurrect the stale filter)
+ */
+private[ooxml] def mergeAutoFilterElem(
+  existing: Option[Elem],
+  state: Option[AutoFilterState]
+): Option[Elem] =
+  state match
+    case None => existing
+    case Some(AutoFilterState.Remove) => None
+    case Some(AutoFilterState.Ranged(range)) =>
+      existing match
+        case Some(e) if parseAutoFilterRef(e).contains(range) => Some(e)
+        case Some(e) => Some(setOrRemoveAttr(e, "ref", Some(range.toA1)))
+        case None => Some(XmlUtil.elem("autoFilter", "ref" -> range.toA1)())
+
+/** Parse `@ref` as a range (single-cell promotes to 1×1, the parseSqref grammar). */
+private[ooxml] def parseAutoFilterRef(e: Elem): Option[CellRange] =
+  Option(e \@ "ref").filter(_.nonEmpty).flatMap { refText =>
+    CellRange
+      .parse(refText)
+      .toOption
+      .orElse(ARef.parse(refText).toOption.map(r => CellRange(r, r)))
+  }
 
 // ===== Print setup authoring (GH-259, GH-266) =====
 // PageSetup is the typed model for <pageMargins>, <pageSetup>, <headerFooter>, and the

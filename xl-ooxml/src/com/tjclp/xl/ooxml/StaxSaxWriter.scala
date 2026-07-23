@@ -106,6 +106,11 @@ class StaxSaxWriter(underlying: XMLStreamWriter) extends SaxWriter:
   def endElement(): Unit =
     underlying.writeEndElement()
     if !namespaceStack.isEmpty then popScope()
+  // StAX start/end emits `<name></name>`; a true empty-element tag needs writeEmptyElement
+  // (closed with `/>` by the next write). No scope push: an empty element cannot nest children.
+  override def emptyElement(name: String, attrs: Seq[(String, String)]): Unit =
+    underlying.writeEmptyElement(name)
+    attrs.foreach { case (attrName, value) => writeAttribute(attrName, value) }
   def flush(): Unit = underlying.flush()
 
 object StaxSaxWriter:

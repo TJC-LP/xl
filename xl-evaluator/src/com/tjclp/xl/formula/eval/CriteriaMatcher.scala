@@ -81,8 +81,8 @@ object CriteriaMatcher:
         case CellValue.Bool(b) => Exact(ExprValue.Bool(b))
         case CellValue.DateTime(dt) => Exact(ExprValue.DateTime(dt))
         case CellValue.RichText(rt) => parseString(rt.toPlainText)
-        case CellValue.Formula(_, Some(cached)) => parse(ExprValue.Cell(cached))
-        case CellValue.Formula(_, None) => Exact(ExprValue.Cell(cellValue))
+        case CellValue.Formula(_, Some(cached), _) => parse(ExprValue.Cell(cached))
+        case CellValue.Formula(_, None, _) => Exact(ExprValue.Cell(cellValue))
         case CellValue.Empty => Exact(ExprValue.Text(""))
         case CellValue.Error(_) => Exact(ExprValue.Cell(cellValue))
     case ExprValue.Opaque(other) => Exact(ExprValue.Opaque(other))
@@ -276,11 +276,11 @@ object CriteriaMatcher:
               (cellSerial - n).abs < BigDecimal("0.00001")
           case _ => false
 
-      case CellValue.Formula(_, Some(cached)) =>
+      case CellValue.Formula(_, Some(cached), _) =>
         // Match against cached value
         matchesExact(cached, expected)
 
-      case CellValue.Formula(_, None) =>
+      case CellValue.Formula(_, None, _) =>
         false
 
       case CellValue.RichText(rt) =>
@@ -320,9 +320,9 @@ object CriteriaMatcher:
       case CellValue.DateTime(dt) =>
         // Convert to Excel serial number for comparison
         Some(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
-      case CellValue.Formula(_, Some(cached)) => extractNumeric(cached)
+      case CellValue.Formula(_, Some(cached), _) => extractNumeric(cached)
       // GH-197: Uncached formula - can't extract numeric without evaluation context
-      case CellValue.Formula(_, None) => None
+      case CellValue.Formula(_, None, _) => None
       case _ => None
 
   /**
@@ -355,9 +355,9 @@ object CriteriaMatcher:
         Some(plain)
       case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
       case CellValue.RichText(rt) => Some(rt.toPlainText)
-      case CellValue.Formula(_, Some(cached)) => extractText(cached)
+      case CellValue.Formula(_, Some(cached), _) => extractText(cached)
       // GH-197: Uncached formula - can't extract text without evaluation context
-      case CellValue.Formula(_, None) => None
+      case CellValue.Formula(_, None, _) => None
       case _ => None
 
   /**

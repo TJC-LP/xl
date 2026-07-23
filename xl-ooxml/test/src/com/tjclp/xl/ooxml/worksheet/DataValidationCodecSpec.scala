@@ -2,19 +2,29 @@ package com.tjclp.xl.ooxml.worksheet
 
 import scala.xml.Elem
 
-import munit.FunSuite
+import munit.ScalaCheckSuite
+import org.scalacheck.Prop.forAll
 
 import com.tjclp.xl.api.*
+import com.tjclp.xl.Generators.{genDvRules, genDvText}
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.ooxml.XmlSecurity
-import com.tjclp.xl.sheets.{DataValidation, DvKind}
+import com.tjclp.xl.ooxml.{XmlSecurity, XmlUtil}
+import com.tjclp.xl.sheets.{
+  DataValidation,
+  DvBoundedType,
+  DvErrorStyle,
+  DvKind,
+  DvMessages,
+  DvOperator
+}
 
 /**
- * GH-375: total data-validation codec — typed parse of the list family with entry-level Preserved
- * fallback, canonical single-container emission, and `parseAll(toElem(dvs)) == dvs` for typed
- * content (the CfCodecSpec contract).
+ * GH-375 (widened by GH-429): total data-validation codec — typed parse of the
+ * list/custom/anyValue/bounded families with prompt/error messages, entry-level Preserved fallback,
+ * canonical single-container emission, and `parseAll(toElem(dvs)) == dvs` for typed content (the
+ * CfCodecSpec contract).
  */
-class DataValidationCodecSpec extends FunSuite:
+class DataValidationCodecSpec extends ScalaCheckSuite:
 
   private def xml(s: String): Elem =
     XmlSecurity.parseSafe(s, "test").fold(e => fail(s"parse failed: ${e.message}"), identity)
@@ -81,23 +91,109 @@ class DataValidationCodecSpec extends FunSuite:
       """<dataValidations count="1"><dataValidation type="list" sqref="A1"><formula1>"Yes,No"</formula1></dataValidation></dataValidations>"""
     )
     DataValidationCodec.parseAll(Some(container)) match
-      case Vector(DataValidation.Rules(ranges, DvKind.List(f), allowBlank, showDropdown)) =>
+      case Vector(DataValidation.Rules(ranges, DvKind.List(f), allowBlank, showDropdown, msgs)) =>
         assertEquals(ranges.map(_.toA1), Vector("A1:A1"))
         assertEquals(f, "\"Yes,No\"")
         assertEquals(allowBlank, false) // schema default when the attribute is absent
         assertEquals(showDropdown, true)
+        assertEquals(msgs, DvMessages.default)
       case other => fail(s"expected one typed list, got $other")
+  }
+
+  // ===== GH-429: the widened typed subset =====
+
+  test("GH-429: the field-repro entry (Excel-stamped prompt/error flags) parses TYPED") {
+    val container = xml(
+      """<dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="H5:H10"><formula1>"yes,no"</formula1></dataValidation></dataValidations>"""
+    )
+    DataValidationCodec.parseAll(Some(container)) match
+      case Vector(r: DataValidation.Rules) =>
+        assertEquals(r.ranges.map(_.toA1), Vector("H5:H10"))
+        assertEquals(r.kind, DvKind.List("\"yes,no\""))
+        assertEquals(r.allowBlank, true)
+        assertEquals(r.showDropdown, true)
+        assertEquals(
+          r.messages,
+          DvMessages(showInputMessage = true, showErrorMessage = true)
+        )
+      case other => fail(s"the Excel field shape must parse typed, got $other")
+  }
+
+  test("GH-429: bounded, custom, and message-only anyValue entries parse typed and round-trip") {
+    val dvs: Vector[DataValidation] = Vector(
+      DataValidation.Rules(
+        Vector(ref"A1:A9": CellRange),
+        DvKind.Bounded(DvBoundedType.Whole, DvOperator.Between, "1", Some("9")),
+        allowBlank = false
+      ),
+      DataValidation.Rules(
+        Vector(ref"B1:B9": CellRange),
+        DvKind.Bounded(DvBoundedType.Date, DvOperator.GreaterThan, "DATE(2020,1,1)", None),
+        messages = DvMessages(showErrorMessage = true, errorStyle = DvErrorStyle.Warning)
+      ),
+      DataValidation.Rules(Vector(ref"C1:C9": CellRange), DvKind.Custom("ISNUMBER(C1)")),
+      DataValidation.Rules(
+        Vector(ref"D1:D9": CellRange),
+        DvKind.AnyValue,
+        messages = DvMessages(
+          showInputMessage = true,
+          promptTitle = Some("Hint"),
+          prompt = Some("Anything goes")
+        )
+      )
+    )
+    assertEquals(roundTrip(dvs), dvs)
+    // operator/errorStyle/type omit their schema defaults on the wire
+    val emitted = DataValidationCodec.toElem(dvs, None).getOrElse(fail("no container"))
+    val entries = (emitted \ "dataValidation").collect { case e: Elem => e }
+    assertEquals(entries.map(_ \@ "operator"), Seq("", "greaterThan", "", ""))
+    assertEquals(entries.map(_ \@ "errorStyle"), Seq("", "warning", "", ""))
+    assertEquals(entries.map(_ \@ "type"), Seq("whole", "date", "custom", ""))
+  }
+
+  property("GH-429: kind x operator x messages round-trip (parseAll . toElem = id)") {
+    forAll(genDvRules) { rules =>
+      roundTrip(Vector(rules)) == Vector[DataValidation](rules)
+    }
+  }
+
+  test("GH-429: a multiline prompt round-trips through _x000A_ (attr normalization survives)") {
+    val dv = DataValidation.Rules(
+      Vector(ref"A1:A2": CellRange),
+      DvKind.List("\"a,b\""),
+      messages = DvMessages(
+        showInputMessage = true,
+        promptTitle = Some("Two"),
+        prompt = Some("line1\nline2\tand tab")
+      )
+    )
+    val emitted = DataValidationCodec.toElem(Vector(dv), None).getOrElse(fail("no container"))
+    assert(emitted.toString.contains("_x000A_"), emitted.toString)
+    assert(emitted.toString.contains("_x0009_"), emitted.toString)
+    assertEquals(roundTrip(Vector(dv)), Vector[DataValidation](dv))
+  }
+
+  property("GH-429: decodeXstring . escapeXstringAttr = id") {
+    forAll { (s: String) =>
+      XmlUtil.decodeXstring(XmlUtil.escapeXstringAttr(s)) == s
+    }
+  }
+
+  property("GH-429: escaped attr text round-trips generator hazards") {
+    forAll(genDvText) { s =>
+      XmlUtil.decodeXstring(XmlUtil.escapeXstringAttr(s)) == s
+    }
   }
 
   // ===== Preserved fallback (total parse) =====
 
-  test("unmodeled entries ride Preserved: foreign type, extra attrs, formula2, no formula") {
+  test("unmodeled entries ride Preserved: foreign attrs, list formula2, no formula") {
     val container = xml(
-      """<dataValidations count="4">
-        |  <dataValidation type="whole" operator="between" sqref="A1"><formula1>1</formula1><formula2>9</formula2></dataValidation>
-        |  <dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="B1"><formula1>"a,b"</formula1></dataValidation>
+      """<dataValidations count="4" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision">
+        |  <dataValidation type="whole" operator="between" imeMode="hiragana" sqref="A1"><formula1>1</formula1><formula2>9</formula2></dataValidation>
+        |  <dataValidation type="list" xr:uid="{00000000-0002-0000-0000-000000000000}" sqref="B1"><formula1>"a,b"</formula1></dataValidation>
         |  <dataValidation type="list" sqref="C1"><formula1>"a"</formula1><formula2>"b"</formula2></dataValidation>
-        |  <dataValidation type="list" sqref="D1"/>
+        |  <dataValidation type="unknownKind" sqref="D1"/>
         |</dataValidations>""".stripMargin
     )
     val parsed = DataValidationCodec.parseAll(Some(container))
@@ -110,8 +206,67 @@ class DataValidationCodecSpec extends FunSuite:
     val emitted = DataValidationCodec.toElem(parsed, None).getOrElse(fail("no container"))
     assertEquals((emitted \ "dataValidation").size, 4)
     assertEquals(emitted \@ "count", "4")
-    assert(emitted.toString.contains("showInputMessage=\"1\""), emitted.toString)
+    assert(emitted.toString.contains("imeMode=\"hiragana\""), emitted.toString)
     assertEquals(DataValidationCodec.parseAll(Some(xml(emitted.toString))), parsed)
+  }
+
+  test("GH-429: an operator on a non-bounded type stays Preserved (no parse-and-drop)") {
+    val container = xml(
+      """<dataValidations count="1"><dataValidation type="list" operator="equal" sqref="A1"><formula1>"a"</formula1></dataValidation></dataValidations>"""
+    )
+    DataValidationCodec.parseAll(Some(container)) match
+      case Vector(p: DataValidation.Preserved) => assert(p.xml.contains("operator"))
+      case other => fail(s"expected Preserved, got $other")
+  }
+
+  // ===== GH-429: commuting square — textual Preserved shift == typed envelope shift =====
+
+  property("GH-429: parse(shiftPayload(emit(rules))) == shiftTyped(rules) over rules x edits") {
+    import org.scalacheck.Gen
+    import com.tjclp.xl.addressing.{ARef as XARef, Row as XRow, SheetName}
+    import com.tjclp.xl.sheets.{Sheet as CoreSheet, SqrefShift}
+    val genEdit = for
+      at <- Gen.chooseNum(0, 120)
+      count <- Gen.chooseNum(1, 5)
+      deleting <- Gen.oneOf(true, false)
+    yield (at, count, deleting)
+    forAll(genDvRules, genEdit) { case (rules, (at, count, deleting)) =>
+      // typed side: the Sheet envelope shift
+      val base = CoreSheet(SheetName.unsafe("S")).copy(dataValidations = Vector(rules))
+      val typedShifted =
+        (if deleting then base.deleteRows(at, count)
+         else base.insertRows(at, count)).dataValidations
+      // textual side: the same span algebra applied to the EMITTED payload string
+      def shift(r: CellRange): Option[CellRange] =
+        CoreSheet
+          .shiftSpan(r.start.row.index0, r.end.row.index0, at, count, deleting, XRow.MaxIndex0)
+          .map((ns, ne) =>
+            CellRange(
+              XARef.from0(r.start.col.index0, ns),
+              XARef.from0(r.end.col.index0, ne)
+            )
+          )
+      // derive the payload EXACTLY like parseEntry's Preserved fallback does — declaration
+      // prologue and all (a bare Elem.toString is not the production shape)
+      val entryXml = DataValidationCodec
+        .toElem(Vector(rules), None)
+        .toList
+        .flatMap(c =>
+          (c \ "dataValidation").collect { case e: Elem => CfCodec.preservedXml(e, c.scope) }
+        )
+      entryXml match
+        case entry :: Nil =>
+          val textualShifted = SqrefShift
+            .shiftPayload(entry, "dataValidation", shift)
+            .toList
+            .flatMap { x =>
+              // payloads parse standalone (declaration first), then re-enter via a container
+              val e = xml(x)
+              DataValidationCodec.parseAll(Some(<dataValidations>{e}</dataValidations>))
+            }
+          textualShifted == typedShifted.toList
+        case _ => false
+    }
   }
 
   test("corrupt sqref degrades to Preserved (never fails the read)") {

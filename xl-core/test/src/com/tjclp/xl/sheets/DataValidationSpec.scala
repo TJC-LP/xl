@@ -40,6 +40,31 @@ class DataValidationSpec extends FunSuite:
     )
   }
 
+  test("GH-429: bounded/custom/anyValue factories and the message combinators") {
+    assertEquals(
+      DataValidation.whole(DvOperator.Between, "1", Some("9")).kind,
+      DvKind.Bounded(DvBoundedType.Whole, DvOperator.Between, "1", Some("9"))
+    )
+    assertEquals(
+      DataValidation.textLength(DvOperator.LessThanOrEqual, "10").kind,
+      DvKind.Bounded(DvBoundedType.TextLength, DvOperator.LessThanOrEqual, "10", None)
+    )
+    assertEquals(DataValidation.custom("ISNUMBER(A1)").kind, DvKind.Custom("ISNUMBER(A1)"))
+    assertEquals(DataValidation.anyValue.kind, DvKind.AnyValue)
+    // attach-implies-show (Excel-UI parity)
+    val prompted = DataValidation.listOf("a", "b").withPrompt("Pick", "Choose one")
+    assertEquals(prompted.messages.showInputMessage, true)
+    assertEquals(prompted.messages.promptTitle, Some("Pick"))
+    assertEquals(prompted.messages.prompt, Some("Choose one"))
+    val errored = DataValidation.anyValue.withError("No", "Try again", DvErrorStyle.Warning)
+    assertEquals(errored.messages.showErrorMessage, true)
+    assertEquals(errored.messages.errorStyle, DvErrorStyle.Warning)
+    assertEquals(errored.messages.errorTitle, Some("No"))
+    assertEquals(errored.messages.error, Some("Try again"))
+    // defaults equal the OOXML schema defaults
+    assertEquals(DataValidation.listOf("x").messages, DvMessages.default)
+  }
+
   // ===== Sheet authoring =====
 
   test("withDataValidation appends one entry with the given range") {
@@ -119,12 +144,24 @@ class DataValidationSpec extends FunSuite:
     assertEquals(dvRanges(r), Vector(Vector("C2:C3")))
   }
 
-  test("structural shifts leave Preserved entries untouched") {
-    val preserved = DataValidation.Preserved("""<dataValidation type="whole" sqref="Z9"/>""")
+  test("GH-428: insertColumns clamps a full-width validation at XFD (never XFE)") {
+    val s = Sheet("DV").withDataValidation(ref"A1:XFD1", DataValidation.listOf("x"))
+    assertEquals(dvRanges(s.insertColumns(at = 1, count = 2)), Vector(Vector("A1:XFD1")))
+  }
+
+  test("GH-429: structural shifts move Preserved entries' sqref (textual envelope rewrite)") {
+    // the reader's payload shape (CfCodec.preservedXml via XmlUtil.compact): declaration + element
+    val decl = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+    val preserved =
+      DataValidation.Preserved(decl + """<dataValidation type="whole" sqref="Z9"/>""")
     val s = Sheet("DV")
       .copy(dataValidations = Vector(preserved))
       .withDataValidation(ref"A2:A4", DataValidation.listOf("x"))
     val r = s.insertRows(at = 0, count = 1)
-    assertEquals(r.dataValidations(0), preserved)
+    assertEquals(
+      r.dataValidations(0),
+      DataValidation.Preserved(decl + """<dataValidation type="whole" sqref="Z10"/>"""),
+      "the sqref must move and the declaration prologue must survive byte-verbatim"
+    )
     assertEquals(dvRanges(r), Vector(Vector("A3:A5")))
   }

@@ -1,9 +1,9 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.workbooks.Workbook
-import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.sheets.{DataValidation, DvKind, Sheet}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
+import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.cf.{CfRule, Cfvo, ConditionalFormat}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
@@ -82,24 +82,143 @@ object StructuralEditor:
   ): Sheet =
     val updatedCells = sheet.cells.map { case (ref, cell) =>
       cell.value match
-        case CellValue.Formula(formulaStr, _) =>
+        // GH-430: a data-table record's payload (ref/r1/r2) is LOCAL sheet geometry — it moves
+        // only when this sheet is the edited one; its TABLE(...) text is derived, never parsed.
+        case CellValue.Formula(_, cachedOpt, dt: FormulaKind.DataTable) =>
+          if !shiftLocal then (ref, cell)
+          else
+            val newRange = Option
+              .when(!editIntersects(dt.ref, isRow, at, delta))(())
+              .flatMap(_ => shiftedRange(dt.ref, isRow, at, delta))
+            val newR1 = dt.r1.map(r => shiftedRef(r, isRow, at, delta))
+            val newR2 = dt.r2.map(r => shiftedRef(r, isRow, at, delta))
+            (newRange, newR1, newR2) match
+              case (Some(range), r1, r2) if r1.forall(_.isDefined) && r2.forall(_.isDefined) =>
+                val newKind = dt.copy(ref = range, r1 = r1.flatten, r2 = r2.flatten)
+                val newValue =
+                  CellValue.Formula(FormulaKind.displayExpression(newKind), cachedOpt, newKind)
+                (ref, cell.copy(value = newValue))
+              case _ =>
+                // The band tears the table interior or deletes an input cell. Excel refuses to
+                // "change part of a data table"; the total-function analog degrades the cell to
+                // its cached constant (visible, deterministic). del1/del2 fidelity: follow-up.
+                (ref, cell.copy(value = cachedOpt.getOrElse(CellValue.Empty)))
+        case f @ CellValue.Formula(formulaStr, _, kind) =>
           FormulaParser.parse(formulaStr) match
             case Right(expr) =>
               FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
                 case Some(shiftedExpr) =>
-                  val newStr = FormulaPrinter.print(shiftedExpr, includeEquals = true)
-                  (ref, cell.copy(value = CellValue.Formula(newStr, None)))
+                  // GH-427: the model's canonical formula form is equals-free (the reader strips
+                  // the '='; the writer serializes the string VERBATIM into <f>, where a leading
+                  // '=' is a spec deviation openpyxl reads back as '==...').
+                  //
+                  // A structural edit invalidates formula caches even when every parsed reference
+                  // survives: a shortened range can produce a different aggregate, and moving a
+                  // cell changes position-sensitive formulas such as ROW(). Leave the expression
+                  // evaluatable and uncached so the next recalculation cannot expose stale data.
+                  val newStr = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+                  val newKind = shiftedArrayKind(kind, shiftLocal, isRow, at, delta)
+                  (ref, cell.copy(value = CellValue.Formula(newStr, None, newKind)))
                 case None =>
                   (ref, cell.copy(value = CellValue.Error(CellError.Ref)))
-            // Unparseable formula: leave untouched rather than guess.
-            case Left(_) => (ref, cell)
+            // Preserve unparseable text rather than guessing at a rewrite, but invalidate its
+            // cache too: the edit may have moved the cell or changed a dynamically-read value.
+            case Left(_) => (ref, cell.copy(value = f.copy(cachedValue = None)))
         case _ => (ref, cell)
     }
     sheet.copy(
       cells = updatedCells,
       conditionalFormats =
-        rewriteCfFormulas(sheet.conditionalFormats, shiftLocal, editedSheet, isRow, at, delta)
+        rewriteCfFormulas(sheet.conditionalFormats, shiftLocal, editedSheet, isRow, at, delta),
+      dataValidations =
+        rewriteDvFormulas(sheet.dataValidations, shiftLocal, editedSheet, isRow, at, delta)
     )
+
+  // ========== GH-430: record-payload geometry (FormulaKind ref/r1/r2 shifting) ==========
+
+  /** Shift a 0-based index for an axis edit at `at` by `delta`; None = deleted/out of bounds. */
+  private def shiftedIndex0(index0: Int, at: Int, delta: Int, max: Int): Option[Int] =
+    val shifted =
+      if delta >= 0 then Some(if index0 >= at then index0 + delta else index0)
+      else
+        val cut = at - delta // first index past the deleted band
+        if index0 >= cut then Some(index0 + delta)
+        else if index0 >= at then None // inside the deleted band
+        else Some(index0)
+    shifted.filter(i => i >= 0 && i <= max)
+
+  /** Shift a single cell ref along the edited axis; None = the cell was deleted/pushed out. */
+  private def shiftedRef(ref: ARef, isRow: Boolean, at: Int, delta: Int): Option[ARef] =
+    if isRow then
+      shiftedIndex0(ref.row.index0, at, delta, Row.MaxIndex0)
+        .map(r => ARef.from0(ref.col.index0, r))
+    else
+      shiftedIndex0(ref.col.index0, at, delta, Column.MaxIndex0)
+        .map(c => ARef.from0(c, ref.row.index0))
+
+  private def shiftedRange(
+    range: CellRange,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Option[CellRange] =
+    for
+      start <- shiftedRef(range.start, isRow, at, delta)
+      end <- shiftedRef(range.end, isRow, at, delta)
+    yield CellRange(start, end)
+
+  /**
+   * True when the edit band TEARS the range on the edited axis: a delete band overlapping any of
+   * it, or an insert strictly inside it (insert at the range start moves the whole range intact).
+   */
+  private def editIntersects(range: CellRange, isRow: Boolean, at: Int, delta: Int): Boolean =
+    val (s, e) =
+      if isRow then (range.start.row.index0, range.end.row.index0)
+      else (range.start.col.index0, range.end.col.index0)
+    if delta < 0 then at <= e && (at - delta - 1) >= s
+    else at > s && at <= e
+
+  /**
+   * GH-430: shift an ArrayFormula record's anchor range with the edit; a band tearing the range
+   * degrades the kind to Normal (the shifted TEXT is kept — Excel's visible-degradation analog).
+   * DataTable kinds never reach here (dedicated branch above); Normal is identity.
+   */
+  private def shiftedArrayKind(
+    kind: FormulaKind,
+    shiftLocal: Boolean,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): FormulaKind =
+    kind match
+      case arr: FormulaKind.ArrayFormula if shiftLocal =>
+        if editIntersects(arr.ref, isRow, at, delta) then FormulaKind.Normal
+        else
+          shiftedRange(arr.ref, isRow, at, delta)
+            .map(r => arr.copy(ref = r))
+            .getOrElse(FormulaKind.Normal)
+      case other => other
+
+  /**
+   * Rewrite bare formula TEXT (no leading '=') through the structural shift: unparseable text —
+   * including inline list literals like `"yes,no"`, which parse as string literals and print back
+   * verbatim — rides unchanged; a fully-deleted reference degrades the text to `"#REF!"` (the
+   * Excel-observable surface). Shared by the CF and DV formula rewrites.
+   */
+  private def shiftFormulaText(
+    formula: String,
+    shiftLocal: Boolean,
+    editedSheet: String,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): String =
+    FormulaParser.parse(s"=$formula") match
+      case Right(expr) =>
+        FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
+          case Some(shifted) => FormulaPrinter.print(shifted, includeEquals = false)
+          case None => "#REF!"
+      case Left(_) => formula
 
   /**
    * GH-136: rewrite TYPED conditional-format formula text (CellIs.formula1/formula2,
@@ -119,12 +238,7 @@ object StructuralEditor:
     delta: Int
   ): Vector[ConditionalFormat] =
     def shiftText(formula: String): String =
-      FormulaParser.parse(s"=$formula") match
-        case Right(expr) =>
-          FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
-            case Some(shifted) => FormulaPrinter.print(shifted, includeEquals = false)
-            case None => "#REF!"
-        case Left(_) => formula
+      shiftFormulaText(formula, shiftLocal, editedSheet, isRow, at, delta)
     def shiftCfvo(cfvo: Cfvo): Cfvo = cfvo match
       case Cfvo.Formula(f) => Cfvo.Formula(shiftText(f))
       case other => other
@@ -145,6 +259,35 @@ object StructuralEditor:
         }
         ConditionalFormat.Rules(ranges, shifted, pivot)
       case preserved: ConditionalFormat.Preserved => preserved
+    }
+
+  /**
+   * GH-429: rewrite TYPED data-validation formula text through the same shift as cell and cf
+   * formulas — without this, absolute list sources (`$Z$1:$Z$3`, `Lists!$A$1:$A$5`) detach from
+   * their data on every structural edit. Inline literals (`"yes,no"`) parse as string literals and
+   * ride verbatim; a fully-deleted source degrades to `"#REF!"` text; Preserved payload formulas
+   * are never rewritten (their sqref envelope was already shifted by the pure core shift).
+   */
+  private def rewriteDvFormulas(
+    dvs: Vector[DataValidation],
+    shiftLocal: Boolean,
+    editedSheet: String,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Vector[DataValidation] =
+    def shiftText(formula: String): String =
+      shiftFormulaText(formula, shiftLocal, editedSheet, isRow, at, delta)
+    dvs.map {
+      case rules: DataValidation.Rules =>
+        val newKind = rules.kind match
+          case DvKind.List(f) => DvKind.List(shiftText(f))
+          case DvKind.Custom(f) => DvKind.Custom(shiftText(f))
+          case DvKind.AnyValue => DvKind.AnyValue
+          case DvKind.Bounded(t, op, f1, f2) =>
+            DvKind.Bounded(t, op, shiftText(f1), f2.map(shiftText))
+        rules.copy(kind = newKind)
+      case preserved: DataValidation.Preserved => preserved
     }
 
   /** Ergonomic workbook extensions. */

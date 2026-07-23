@@ -300,7 +300,7 @@ object WorkbookEquivalence:
     actual: CellValue
   ): Option[String] =
     (expected, actual) match
-      case (CellValue.Formula(expExpr, _), CellValue.Formula(actExpr, _)) =>
+      case (CellValue.Formula(expExpr, _, _), CellValue.Formula(actExpr, _, _)) =>
         Option.when(expExpr != actExpr)(
           s"$sheet!${ref.toA1}: formula text mismatch: expected '$expExpr', actual '$actExpr'"
         )

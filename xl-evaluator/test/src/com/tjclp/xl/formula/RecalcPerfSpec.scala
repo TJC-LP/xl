@@ -84,7 +84,7 @@ class RecalcPerfSpec extends FunSuite:
       .find(_.name.value == sheetName)
       .flatMap(_.cells.get(ref))
       .map(_.value)
-      .collect { case CellValue.Formula(_, Some(v)) => v }
+      .collect { case CellValue.Formula(_, Some(v), _) => v }
 
   test("GH-346: whole-workbook recalculate() on a recursive schedule is linear and correct"):
     val wb = buildWorkbook(Periods)

@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Structural-integrity wave (wave 19): the 2026-07-22 field-gotcha audit's
+corruption/degradation class closed — structural edits no longer poison
+files, formula records survive rewrites, bytes reads preserve like path
+reads, and `xl lint` catches what Excel refuses.
+
+### Fixed
+
+- **Structural edits no longer poison rewritten sheets** (#427):
+  `insert-rows`/`delete-rows`/`insert-cols`/`delete-cols` re-printed every
+  formula on every sheet with a leading `=` inside `<f>` (openpyxl read
+  them back as `==A4*2`). Shifted formulas now re-print equals-free (the
+  model's canonical form) and their caches are deliberately invalidated —
+  a structural edit can change referenced aggregates (a delete that
+  shrinks a `SUM` range) and position-sensitive results (`ROW()`), so a
+  preserved cache could ship silently-wrong values. A formula whose
+  reference is fully deleted degrades to `#REF!`. Re-bake display values
+  with `xl recalc` / `recalculate()` after structural edits.
+- **Range shifts clamp at the sheet edge** (#428): a full-height range
+  (CF sqref `A1:XFD1048576`, DV, merges) shifted past row 1,048,576 /
+  column XFD on insertion — `A144:XFD1048578`-class output that **Excel
+  refuses as corrupt** (LibreOffice opens it silently). `shiftRangeOnAxis`
+  and `FormulaShifter` now clamp range ends at the sheet maxima (a range
+  whose start passes the edge drops; formula refs shifted past it go
+  `#REF!`), mirroring the existing `SharedFormula.shiftedIndex` idiom.
+- **Excel-authored dataValidations, print areas, tables, and autoFilter
+  shift under structural edits** (#429): the DV typed parse rejected any
+  validation carrying `showInputMessage`/`showErrorMessage` (Excel stamps
+  both on virtually every one) into an inert `Preserved` payload, and
+  `shiftAxis` skipped pageSetup print areas, tables, and preserved
+  autoFilter entirely — validations silently detached from their data. A
+  new `SqrefShift` engine shifts preserved-payload sqref/ref tokens
+  (prologue-aware, clamped per #428), print areas extend like Excel's, and
+  the writer's clean-passthrough check correctly goes dirty when anything
+  shifted.
+- **Array and data-table formula records survive rewrites** (#430):
+  `<f t="array" ref=…>` lost its CSE marker and `<f t="dataTable" …/>`
+  interiors **baked to static constants** on any sheet rewrite — the
+  GH-370 failure class applied to two-variable Data Tables (the house
+  sensitivity engine). `CellValue.Formula` gained
+  `kind: FormulaKind` (`Normal | ArrayFormula | DataTable`) carrying
+  `ref`/`dt2D`/`dtr`/`r1`/`r2` through read → model → dirty write on both
+  writer backends, with structural edits shifting record payload geometry.
+  Display renders a derived `TABLE(r1, r2)` text; evaluator treats
+  uncached data-table cells as totals-safe. Follow-ups filed as #435.
+- **Bytes-based reads preserve like path reads** (#412): 
+  `XlsxReader.readFromBytes` constructed no `SourceContext`, so
+  read-bytes→write dropped every preserved-but-unmodeled workbook child
+  (`externalReferences`, `workbookProtection`, `pivotCaches`, …) and
+  unknown part. Bytes reads now carry a bytes-backed source, and
+  `write(read(path)) ≡ write(readFromBytes(bytes))` is law-tested
+  byte-identically. (API change: `SourceContext.sourcePath: Path` →
+  `content: SourceContent` — `SourceContent.OnDisk(path) | InMemory(bytes)`;
+  `SourceContext.fromFile` unchanged.)
+- **ExcelIOSpec wall-clock flake** (#414): the "single-pass is faster than
+  auto-detect" timing race (the suite's only known parallel-load flake) is
+  replaced by structural assertions — byte-identical hinted output plus a
+  mid-stream probe proving the hinted path streams to the destination in
+  one pass. Verified 100/100 under saturated load where the original
+  failed 3–4/25.
+
+### Added
+
+- **`xl lint` extensions** (#413): chartsheet/dialogsheet child-order
+  tables, the externalLink part's own `<externalBook r:id>` chain,
+  `[Content_Types].xml` registration for present-and-referenced parts, an
+  O(1) SAX scanning mode — and a new `ref-out-of-bounds` check flagging
+  any `sqref`/`ref`/`dimension` past row 1,048,576 / column XFD (the #428
+  corruption class Excel refuses; lint previously reported such files
+  clean).
+
 ## [0.15.0] "Fidelity" - 2026-07-17
 
 Field-hardening from the first production QA cycle (FinAgent LBO build):

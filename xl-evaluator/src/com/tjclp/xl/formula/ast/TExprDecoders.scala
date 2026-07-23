@@ -24,13 +24,13 @@ trait TExprDecoders:
       // GH-196: Coerce booleans to numeric (TRUE→1, FALSE→0)
       case CellValue.Bool(true) => scala.util.Right(BigDecimal(1))
       case CellValue.Bool(false) => scala.util.Right(BigDecimal(0))
-      case CellValue.Formula(_, Some(CellValue.Number(cached))) =>
+      case CellValue.Formula(_, Some(CellValue.Number(cached)), _) =>
         // Extract cached numeric value from formula cell
         scala.util.Right(cached)
       // GH-196: Handle cached boolean values in formulas
-      case CellValue.Formula(_, Some(CellValue.Bool(true))) =>
+      case CellValue.Formula(_, Some(CellValue.Bool(true)), _) =>
         scala.util.Right(BigDecimal(1))
-      case CellValue.Formula(_, Some(CellValue.Bool(false))) =>
+      case CellValue.Formula(_, Some(CellValue.Bool(false)), _) =>
         scala.util.Right(BigDecimal(0))
       case other =>
         scala.util.Left(
@@ -65,7 +65,7 @@ trait TExprDecoders:
   def decodeDate(cell: Cell): Either[CodecError, java.time.LocalDate] =
     cell.value match
       case CellValue.DateTime(value) => scala.util.Right(value.toLocalDate)
-      case CellValue.Formula(_, Some(CellValue.DateTime(cached))) =>
+      case CellValue.Formula(_, Some(CellValue.DateTime(cached)), _) =>
         scala.util.Right(cached.toLocalDate)
       case other =>
         scala.util.Left(
@@ -99,11 +99,11 @@ trait TExprDecoders:
         ScalarCoercion.boolTextValue(s) match
           case Some(b) => scala.util.Right(b)
           case None => scala.util.Left(CodecError.TypeMismatch("Boolean", cell.value))
-      case CellValue.Formula(_, Some(CellValue.Bool(cached))) =>
+      case CellValue.Formula(_, Some(CellValue.Bool(cached)), _) =>
         scala.util.Right(cached)
-      case CellValue.Formula(_, Some(CellValue.Number(cached))) =>
+      case CellValue.Formula(_, Some(CellValue.Number(cached)), _) =>
         scala.util.Right(cached.signum != 0)
-      case CellValue.Formula(_, Some(CellValue.Text(cached))) =>
+      case CellValue.Formula(_, Some(CellValue.Text(cached)), _) =>
         ScalarCoercion.boolTextValue(cached) match
           case Some(b) => scala.util.Right(b)
           case None => scala.util.Left(CodecError.TypeMismatch("Boolean", cell.value))
@@ -134,8 +134,8 @@ trait TExprDecoders:
    */
   def decodeComparableValue(cell: Cell): Either[CodecError, CellValue] =
     val resolved = cell.value match
-      case CellValue.Formula(_, Some(cached)) => cached
-      case CellValue.Formula(_, None) => CellValue.Number(BigDecimal(0))
+      case CellValue.Formula(_, Some(cached), _) => cached
+      case CellValue.Formula(_, None, _) => CellValue.Number(BigDecimal(0))
       case other => other
     scala.util.Right(resolved)
 
@@ -158,7 +158,7 @@ trait TExprDecoders:
       case CellValue.Bool(b) => CellValue.Bool(b)
       case CellValue.DateTime(dt) => CellValue.DateTime(dt)
       case CellValue.RichText(rt) => CellValue.Text(rt.toPlainText)
-      case CellValue.Formula(_, cached) =>
+      case CellValue.Formula(_, cached, _) =>
         cached match
           case Some(CellValue.Number(n)) => CellValue.Number(n)
           case Some(CellValue.Text(s)) => CellValue.Text(s)
@@ -190,7 +190,7 @@ trait TExprDecoders:
       case CellValue.Number(n) => scala.util.Right(n.toString)
       case CellValue.Bool(b) => scala.util.Right(if b then "TRUE" else "FALSE")
       case CellValue.DateTime(dt) => scala.util.Right(dt.toString)
-      case CellValue.Formula(text, _) => scala.util.Right(text)
+      case CellValue.Formula(text, _, _) => scala.util.Right(text)
       case CellValue.RichText(rt) => scala.util.Right(rt.toPlainText)
       case other => scala.util.Left(CodecError.TypeMismatch("String", other))
 
@@ -228,11 +228,11 @@ trait TExprDecoders:
         serialToDate(serial).toRight(CodecError.TypeMismatch("Date", cell.value))
       case CellValue.Bool(b) => boolToDate(b)
       case CellValue.Empty => scala.util.Right(ScalarCoercion.BlankDate)
-      case CellValue.Formula(_, Some(CellValue.DateTime(cached))) =>
+      case CellValue.Formula(_, Some(CellValue.DateTime(cached)), _) =>
         scala.util.Right(cached.toLocalDate)
-      case CellValue.Formula(_, Some(CellValue.Number(cached))) =>
+      case CellValue.Formula(_, Some(CellValue.Number(cached)), _) =>
         serialToDate(cached).toRight(CodecError.TypeMismatch("Date", cell.value))
-      case CellValue.Formula(_, Some(CellValue.Bool(cached))) => boolToDate(cached)
+      case CellValue.Formula(_, Some(CellValue.Bool(cached)), _) => boolToDate(cached)
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(
@@ -278,5 +278,5 @@ trait TExprDecoders:
         )
 
     cell.value match
-      case CellValue.Formula(_, Some(cached)) => convert(cached)
+      case CellValue.Formula(_, Some(cached), _) => convert(cached)
       case other => convert(other)

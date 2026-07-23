@@ -39,7 +39,7 @@ class ExternalRefSpec extends ScalaCheckSuite:
       .find(_.name.value == sheetName)
       .flatMap(_.cells.get(ref))
       .map(_.value)
-      .collect { case CellValue.Formula(_, Some(v)) => v }
+      .collect { case CellValue.Formula(_, Some(v), _) => v }
 
   // ==================== Parser ====================
 

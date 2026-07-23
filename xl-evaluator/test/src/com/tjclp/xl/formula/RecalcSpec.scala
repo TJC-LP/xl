@@ -29,7 +29,7 @@ class RecalcSpec extends FunSuite:
       .find(_.name.value == sheetName)
       .flatMap(_.cells.get(ref))
       .map(_.value)
-      .collect { case CellValue.Formula(_, Some(v)) => v }
+      .collect { case CellValue.Formula(_, Some(v), _) => v }
 
   test("clean workbook: every formula evaluates, caches, and isClean holds"):
     val sheet = Sheet(SheetName.unsafe("S"))

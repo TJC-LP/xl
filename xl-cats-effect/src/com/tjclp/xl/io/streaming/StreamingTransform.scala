@@ -4,8 +4,8 @@ import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InputStream, Output
 import org.xml.sax.{Attributes, InputSource}
 import org.xml.sax.helpers.DefaultHandler
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.ooxml.{SaxWriter, StaxSaxWriter, XmlSecurity, XmlUtil}
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.ooxml.{FormulaKindCodec, SaxWriter, StaxSaxWriter, XmlSecurity, XmlUtil}
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import scala.collection.mutable
 
@@ -123,7 +123,7 @@ object StreamingTransform:
       case CellValue.Text(_) => "inlineStr"
       case CellValue.Number(_) => "" // Empty = number type
       case CellValue.Bool(_) => "b"
-      case CellValue.Formula(_, cachedValue) =>
+      case CellValue.Formula(_, cachedValue, _) =>
         cachedValue match
           case Some(CellValue.Number(_)) => ""
           case Some(CellValue.Bool(_)) => "b"
@@ -162,11 +162,19 @@ object StreamingTransform:
         writer.writeCharacters(if b then "1" else "0")
         writer.endElement()
 
-      case CellValue.Formula(expr, cachedValue) =>
+      case CellValue.Formula(expr, cachedValue, kind) =>
         // <f>formula</f><v>cached</v>
-        writer.startElement("f")
-        writer.writeCharacters(expr)
-        writer.endElement()
+        // GH-430: record attrs via the shared codec; dataTable records carry no formula text.
+        kind match
+          case _: FormulaKind.DataTable =>
+            writer.emptyElement("f", FormulaKindCodec.toAttrs(kind))
+          case _ =>
+            writer.startElement("f")
+            FormulaKindCodec.toAttrs(kind).foreach { case (name, v) =>
+              writer.writeAttribute(name, v)
+            }
+            writer.writeCharacters(expr)
+            writer.endElement()
         cachedValue.foreach(cv => writeCachedValue(writer, cv))
 
       case CellValue.Error(err) =>

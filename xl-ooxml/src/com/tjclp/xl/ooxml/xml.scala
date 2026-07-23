@@ -68,6 +68,9 @@ object XmlUtil:
   // Workbook-level reference targets checked by the structural lint (GH-397)
   val relTypeExternalLink =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
+  // The externalLink part's own <externalBook r:id> target (GH-413)
+  val relTypeExternalLinkPath =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath"
   val relTypeChartsheet =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet"
   val relTypeDialogsheet =
@@ -250,6 +253,40 @@ object XmlUtil:
       while j < s.length do
         val c = s.charAt(j)
         if c == '\r' then sb.append("_x000D_")
+        else if c == '_' && isXstringEscapeAt(s, j) then sb.append("_x005F_")
+        else sb.append(c)
+        j += 1
+      sb.toString
+
+  /**
+   * ST_Xstring escape for ATTRIBUTE values (GH-429): prompt/error message attributes on
+   * `<dataValidation>`.
+   *
+   * Attribute-value normalization (XML 1.0 §3.3.3) turns raw TAB/LF/CR into spaces on re-parse — a
+   * raw newline in an attr value survives serialization but comes back as a space — so all three
+   * must be escaped for fidelity, not just CR as in element content ([[escapeXstring]]). Literal
+   * `_xHHHH_` patterns protect their leading underscore as `_x005F_`.
+   *
+   * Law: `decodeXstring(escapeXstringAttr(s)) == s`.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def escapeXstringAttr(s: String): String =
+    var needs = false
+    var i = 0
+    while !needs && i < s.length do
+      val c = s.charAt(i)
+      if c == '\r' || c == '\n' || c == '\t' || (c == '_' && isXstringEscapeAt(s, i)) then
+        needs = true
+      i += 1
+    if !needs then s
+    else
+      val sb = new java.lang.StringBuilder(s.length + 16)
+      var j = 0
+      while j < s.length do
+        val c = s.charAt(j)
+        if c == '\r' then sb.append("_x000D_")
+        else if c == '\n' then sb.append("_x000A_")
+        else if c == '\t' then sb.append("_x0009_")
         else if c == '_' && isXstringEscapeAt(s, j) then sb.append("_x005F_")
         else sb.append(c)
         j += 1

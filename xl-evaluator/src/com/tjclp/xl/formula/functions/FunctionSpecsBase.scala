@@ -226,14 +226,14 @@ trait FunctionSpecsBase:
     value match
       case CellValue.Number(n) => n
       case CellValue.Bool(b) => ArrayArithmetic.boolToNumeric(b)
-      case CellValue.Formula(_, Some(cached)) => coerceToNumeric(cached)
+      case CellValue.Formula(_, Some(cached), _) => coerceToNumeric(cached)
       case _ => BigDecimal(0)
 
   /** Extract numeric value from CellValue, handling formulas with cached results. */
   protected def extractNumericValue(value: CellValue): Option[BigDecimal] =
     value match
       case CellValue.Number(n) => Some(n)
-      case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+      case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
       case _ => None
 
   /** Extract the anchor ARef from a reference expression (cell ref, or the start of a range). */
@@ -253,7 +253,7 @@ trait FunctionSpecsBase:
       case CellValue.Text(s) => Some(s)
       case CellValue.Number(n) => Some(n.bigDecimal.stripTrailingZeros().toPlainString)
       case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
-      case CellValue.Formula(_, Some(cached)) => extractTextForMatch(cached)
+      case CellValue.Formula(_, Some(cached), _) => extractTextForMatch(cached)
       case _ => None
 
   /** Extract numeric for matching, parsing text as numbers. */
@@ -262,7 +262,7 @@ trait FunctionSpecsBase:
       case CellValue.Number(n) => Some(n)
       case CellValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).toOption
       case CellValue.Bool(b) => Some(ArrayArithmetic.boolToNumeric(b))
-      case CellValue.Formula(_, Some(cached)) => extractNumericForMatch(cached)
+      case CellValue.Formula(_, Some(cached), _) => extractNumericForMatch(cached)
       case _ => None
 
   /** Validate that two ranges have the same dimensions. */
