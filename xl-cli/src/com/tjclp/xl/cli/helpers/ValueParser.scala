@@ -1,6 +1,8 @@
 package com.tjclp.xl.cli.helpers
 
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 import com.tjclp.xl.cli.output.RendererCommon
 
@@ -10,6 +12,22 @@ import com.tjclp.xl.cli.output.RendererCommon
  * Provides helpers for parsing string inputs to CellValue and formatting CellValue for display.
  */
 object ValueParser:
+
+  private def textValue(s: String): CellValue =
+    val text = if s.startsWith("\"") && s.endsWith("\"") then s.drop(1).dropRight(1) else s
+    CellValue.Text(text)
+
+  /**
+   * Parse a positional `put` value using the same detection as batch `put`.
+   *
+   * Detection is total: malformed lookalikes remain text. When disabled, the input is always text.
+   */
+  def parsePutValue(s: String, detect: Boolean): Formatted =
+    if detect then
+      FormattedParsers.detect(s) match
+        case Formatted(CellValue.Text(_), numFmt) => Formatted(textValue(s), numFmt)
+        case formatted => formatted
+    else Formatted(textValue(s), NumFmt.General)
 
   /**
    * Parse a string into a CellValue.
@@ -29,9 +47,7 @@ object ValueParser:
       s.toLowerCase match
         case "true" => CellValue.Bool(true)
         case "false" => CellValue.Bool(false)
-        case _ =>
-          val text = if s.startsWith("\"") && s.endsWith("\"") then s.drop(1).dropRight(1) else s
-          CellValue.Text(text)
+        case _ => textValue(s)
     }
 
   /**

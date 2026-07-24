@@ -11,6 +11,8 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Integration tests for batch put and fill pattern functionality.
@@ -42,6 +44,46 @@ class BatchPutSpec extends FunSuite:
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     val cellValue = imported.sheets.head.cells.get(ARef.from0(0, 0)).map(_.value)
     assertEquals(cellValue, Some(CellValue.Number(BigDecimal("100"))))
+  }
+
+  test("put: ISO date detection applies Date number format") {
+    val wb = Workbook(Sheet("Test"))
+    WriteCommands
+      .put(wb, Some(wb.sheets.head), "A1", List("2025-11-10"), outputPath, config)
+      .unsafeRunSync()
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val sheet = imported.sheets.head
+    val date = sheet.cells.get(ARef.from0(0, 0)).map(_.value) match
+      case Some(CellValue.DateTime(dateTime)) => dateTime.toLocalDate
+      case Some(CellValue.Number(serial)) =>
+        CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate
+      case other => fail(s"Expected detected DateTime, got $other")
+    assertEquals(date.toString, "2025-11-10")
+    assertEquals(sheet.getCellStyle(ARef.from0(0, 0)).map(_.numFmt), Some(NumFmt.Date))
+  }
+
+  test("put: detect=false preserves ISO date-like input as text") {
+    val wb = Workbook(Sheet("Test"))
+    WriteCommands
+      .put(
+        wb,
+        Some(wb.sheets.head),
+        "A1",
+        List("2025-11-10"),
+        outputPath,
+        config,
+        detect = false
+      )
+      .unsafeRunSync()
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val sheet = imported.sheets.head
+    assertEquals(
+      sheet.cells.get(ARef.from0(0, 0)).map(_.value),
+      Some(CellValue.Text("2025-11-10"))
+    )
+    assertEquals(sheet.getCellStyle(ARef.from0(0, 0)).map(_.numFmt), None)
   }
 
   test("put: fill pattern mode (1 value, range)") {

@@ -440,6 +440,10 @@ MODES:
   Fill:     put A1:A10 "TBD"        → Fill range with same value
   Batch:    put A1:C1 "X" "Y" "Z"   → Different value per cell (row-major)
 
+TYPE DETECTION:
+  Currency, percent, ISO dates, numbers, and booleans are detected automatically.
+  Use --no-detect to preserve every input as text.
+
 NEGATIVE NUMBERS:
   Use --value flag (- is interpreted as flag prefix):
   ❌ put A1 -100              → Error: unknown flag
@@ -447,6 +451,8 @@ NEGATIVE NUMBERS:
 
 EXAMPLES:
   xl -f f.xlsx -s S1 -o o.xlsx put A1 "Hello"
+  xl -f f.xlsx -s S1 -o o.xlsx put A1 2025-01-15
+  xl -f f.xlsx -s S1 -o o.xlsx put A1 2025-01-15 --no-detect
   xl -f f.xlsx -s S1 -o o.xlsx put B2:B10 0              # Fill with zeros
   xl -f f.xlsx -s S1 -o o.xlsx put A1:D1 "Q1" "Q2" "Q3" "Q4"
   xl -f f.xlsx -s S1 -o o.xlsx put A1 --value "-500"     # Negative number"""
@@ -862,10 +868,20 @@ EXAMPLES:
       )
       .orFalse
 
+  private val noDetectOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "no-detect",
+        "Preserve put values as text instead of detecting currency, percent, dates, or numbers"
+      )
+      .orFalse
+
   val putCmd: Opts[CliCommand] = Opts.subcommand("put", putHelp) {
     // Support both positional args and --value flag (for negative numbers)
     val valuesOrOpt = valueOpt.map(v => List(v)) orElse valuesArg.map(_.toList)
-    (refArg, valuesOrOpt, csvOpt).mapN(CliCommand.Put.apply)
+    (refArg, valuesOrOpt, csvOpt, noDetectOpt).mapN { (ref, values, csvSplit, noDetect) =>
+      CliCommand.Put(ref, values, csvSplit, detect = !noDetect)
+    }
   }
 
   // Variadic formulas for putf (supports single formula, dragging, or batch formulas)
@@ -1936,7 +1952,7 @@ EXAMPLES:
             replace
           )
 
-    case CliCommand.Put(refStr, values, csvSplit) =>
+    case CliCommand.Put(refStr, values, csvSplit, detect) =>
       if csvSplit then
         IO.raiseError(
           new Exception(
@@ -1948,7 +1964,14 @@ EXAMPLES:
           case None =>
             IO.raiseError(new Exception("--output is required for put command"))
           case Some(outputPath) =>
-            StreamingWriteCommands.put(filePath, outputPath, sheetNameOpt, refStr, values)
+            StreamingWriteCommands.put(
+              filePath,
+              outputPath,
+              sheetNameOpt,
+              refStr,
+              values,
+              detect
+            )
 
     case CliCommand.PutFormula(refStr, formulas) =>
       outputOpt match
@@ -2058,9 +2081,9 @@ EXAMPLES:
       ReadCommands.evalArray(wb, sheetOpt, formulaStr, targetRef, overrides)
 
     // Write commands (require output)
-    case CliCommand.Put(refStr, values, csvSplit) =>
+    case CliCommand.Put(refStr, values, csvSplit, detect) =>
       requireOutput(outputOpt, backendOpt, stream)(
-        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit)
+        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect)
       )
 
     case CliCommand.PutFormula(refStr, formulas) =>

@@ -781,17 +781,14 @@ object BatchParser:
                   .map(n => ParsedValue(CellValue.Number(n), Some(fmt)))
                   .getOrElse(ParsedValue(CellValue.Text(s), Some(fmt)))
               }
-          case NumFmt.Date =>
-            FormattedParsers
-              .parseDate(s)
-              .map(f => ParsedValue(f.value, Some(f.numFmt)))
-              .getOrElse(ParsedValue(CellValue.Text(s), Some(fmt)))
-          case NumFmt.DateTime | NumFmt.Time =>
-            // Try date parse (includes time in DateTime)
-            FormattedParsers
-              .parseDate(s)
-              .map(f => ParsedValue(f.value, Some(fmt)))
-              .getOrElse(ParsedValue(CellValue.Text(s), Some(fmt)))
+          case NumFmt.Date | NumFmt.DateTime | NumFmt.Time =>
+            FormattedParsers.parseDate(s) match
+              case Right(f) => ParsedValue(f.value, Some(fmt))
+              case Left(error) =>
+                throw new Exception(
+                  s"Object ${idx + 1}: value '$s' is invalid for explicit format '$fmt': " +
+                    error.message
+                )
           case NumFmt.Integer | NumFmt.Decimal | NumFmt.General =>
             // Try to parse as number
             scala.util
