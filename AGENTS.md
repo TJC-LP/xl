@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all
-./mill __.test             # Run all tests (4,836)
+./mill __.test             # Run all tests (4,818)
 ./mill xl-core.test        # Test specific module
 ./mill __.reformat         # Format (Scalafmt 3.10.1)
 ./mill __.checkFormat      # CI check
@@ -294,7 +294,7 @@ xl -f data.xlsx view "Sheet1"!A1:B4
 See `docs/reference/cli.md` for full command reference.
 
 **Directory Structure**:
-- `.claude/` - Dev-only commands (release-prep, docs-cleanup-xl)
+- `.Codex/` - Dev-only commands (release-prep, docs-cleanup-xl)
 - `plugin/` - User-facing skill distributed via plugin marketplace
 
 The CLI skill (`plugin/skills/xl-cli/SKILL.md`) auto-detects the latest release from GitHub API—no version placeholders to maintain. The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
@@ -396,12 +396,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**4,836 tests** by module: xl-evaluator (1855), xl-core (1191), xl-ooxml (923), xl-cli (585), xl-cats-effect (135), xl-agent (122), xl prelude probes (25). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**4,818 tests** by module: xl-evaluator (1852), xl-core (1189), xl-ooxml (921), xl-cli (574), xl-cats-effect (135), xl-agent (122), xl prelude probes (25). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 4,836 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 4,818 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 

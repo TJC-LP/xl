@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-17 (0.15.0)
+**Last Updated**: 2026-07-29 (0.16.0)
 
 ## Current State
 
@@ -8,8 +8,13 @@
 
 ### What Works (Production-Ready)
 
-**Unreleased (wave 19)**:
+**New in 0.16.0** (2026-07-29):
 - ✅ **Array/data-table formula records survive rewrites** (#430) — `<f t="array" ref>` and `<f t="dataTable" ref dt2D dtr r1 r2 del1 del2 ca/>` are modeled per cell (`FormulaKind` on `CellValue.Formula`) and re-emit byte-exactly through dirty sheet regeneration on every writer (DOM, SAX, streaming); two-variable Data Tables no longer bake to static grids on `put`. DataTable caches are pinned (recalc/copy/eval never parse the derived `TABLE(...)` display text); StructuralEditor shifts record payloads and degrades tearing edits to cached constants; CLI shows `{=TABLE(A1,A2)}` braces + JSON `formulaKind`, and `putf` rejects top-level `TABLE(` (authoring lands with #419); new `formula-records.xlsx` corpus fixture rides every round-trip/parity law
+- ✅ **Structural edits stop poisoning files** (#427/#428/#429) — equals-free `<f>` re-print with caches invalidated then **re-baked by a global recalc before write** (#352 contract); range shifts clamp at row 1,048,576/col XFD (full-axis `A:A`/`1:1` shapes preserved); Excel-authored dataValidations, print areas, tables, and preserved autoFilter shift with the edit via the `SqrefShift` engine
+- ✅ **Positional `put` smart detection** (#431) — currency/percent/ISO-date/number/boolean detection at batch parity incl. `--stream` (with style-preserving detected formats); `--no-detect` opt-out; explicit `format:"date"` on unparseable input errors instead of writing text dressed as a date
+- ✅ **Bytes-read preservation parity** (#412) — `SourceContent.OnDisk | InMemory`; `write(read(path)) ≡ write(readFromBytes(bytes))` law-tested byte-identically (breaking: `SourceContext.sourcePath: Path` → `content: SourceContent`; `fromFile` unchanged)
+- ✅ **`xl lint` extensions** (#413) — chartsheet/dialogsheet order tables, externalLink r:id chain, `[Content_Types]` registration, O(1) SAX mode, and `ref-out-of-bounds` (flags over-max ranges Excel refuses; previously reported clean)
+- ✅ **Suite flake removed** (#414) — the wall-clock single-pass race is now structural (100/100 under saturated load)
 
 **New in 0.15.0** (2026-07-17):
 - ✅ **numFmt round-trip fidelity** (#404) — `<numFmts>` declarations survive read→write verbatim (built-in-equal codes like `"0.00%"` no longer degrade to `General`); total `NumFmt.formatCode` inverse; whole-code `"General"` renders correctly (incl. `TEXT(n,"General")`)
@@ -158,7 +163,7 @@
 
 ### Test Coverage
 
-**4,818 tests** (verified via `./mill __.test`, 2026-07-22):
+**4,836 tests** (verified via `./mill __.test`, 2026-07-29):
 
 | Module | Tests | Covers |
 |--------|-------|--------|

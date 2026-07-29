@@ -7,12 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Structural-integrity wave (wave 19): the 2026-07-22 field-gotcha audit's
-corruption/degradation class closed — structural edits no longer poison
-files, formula records survive rewrites, bytes reads preserve like path
-reads, and `xl lint` catches what Excel refuses.
+## [0.16.0] "Bedrock" - 2026-07-29
+
+Structural-integrity wave (wave 19) plus two follow-through fixes: the
+2026-07-22 field-gotcha audit's corruption/degradation class closed —
+structural edits no longer poison files (and re-bake fresh caches before
+writing), formula records survive rewrites, bytes reads preserve like
+path reads, positional `put` detects like batch, and `xl lint` catches
+what Excel refuses.
 
 ### Fixed
+
+- **Positional `put` uses smart type detection** (#431): `xl put A1
+  2026-03-31` previously stored TEXT (only batch `put` detected), silently
+  breaking XIRR/EOMONTH-class formulas downstream. Positional values now
+  route through the same currency/percent/ISO-date/number/boolean
+  detection as batch — including the `--stream` path, which also gained
+  detected-format style writing that preserves existing cell styling —
+  with `--no-detect` for literal-text parity with batch `detect:false`.
+  Explicit batch `format:"date"/"datetime"/"time"` on an unparseable
+  string is now an **error** instead of a Text cell wearing a date format.
+  Detection stays deliberately ISO-date-only (`m/d/yyyy` remains text;
+  documented in LIMITATIONS).
 
 - **Structural edits no longer poison rewritten sheets** (#427):
   `insert-rows`/`delete-rows`/`insert-cols`/`delete-cols` re-printed every
