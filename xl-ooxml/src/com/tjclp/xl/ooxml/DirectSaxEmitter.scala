@@ -15,6 +15,7 @@ import com.tjclp.xl.ooxml.worksheet.{
   mergeHeaderFooterElem,
   mergeAutoFilterElem,
   mergePageSetupElem,
+  mergeSheetFormatPrElem,
   mergeSheetPrElem
 }
 import java.util.Arrays
@@ -85,6 +86,10 @@ object DirectSaxEmitter:
 
       // Freeze panes + view settings (GH-258) — BEFORE cols/sheetData
       buildSheetViewsElem(None, sheet.freezePane, sheet.viewSettings).foreach(writer.writeElem)
+
+      // GH-426: sheet-default row height / column width — the CT_Worksheet slot before <cols>
+      mergeSheetFormatPrElem(None, sheet.defaultColumnWidth, sheet.defaultRowHeight)
+        .foreach(writer.writeElem)
 
       // Emit column definitions if any
       emitCols(writer, sheet)
