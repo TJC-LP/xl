@@ -593,6 +593,177 @@ class CommentsSpec extends FunSuite:
     assertEquals(run.font.map(_.bold), Some(true))
   }
 
+  // GH-433 fixture: comment shaped like real Excel output — the author-prefix run is
+  // bold Tahoma 9 with <color indexed="81"/> and <charset/>, and the body run does NOT
+  // lead with the "\n" that XL's own canonical prefix carries (so stripAuthorPrefix
+  // deliberately leaves it in place on read).
+  private val excelAuthoredCommentsXml =
+    <comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <authors>
+        <author>Reviewer</author>
+      </authors>
+      <commentList>
+        <comment ref="A1" authorId="0">
+          <text>
+            <r><rPr><b/><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><charset val="1"/></rPr><t>Reviewer:</t></r>
+            <r><rPr><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><charset val="1"/></rPr><t xml:space="preserve"> check this figure</t></r>
+          </text>
+        </comment>
+      </commentList>
+    </comments>
+
+  /** Read the GH-433 fixture the way XlsxReader does: OOXML part → domain Comment. */
+  private def excelAuthoredDomainComment: Comment =
+    val parsed = OoxmlComments.fromXml(excelAuthoredCommentsXml) match
+      case Right(c) => c
+      case Left(err) => fail(s"Fixture parse failed: $err")
+    val domain = XlsxReader.convertToDomainComments(parsed) match
+      case Right(m) => m
+      case Left(err) => fail(s"Domain conversion failed: $err")
+    domain.get(ref"A1").getOrElse(fail("Expected comment at A1"))
+
+  private def commentsPartOf(bytes: Array[Byte]): String =
+    zipEntryString(bytes, "xl/comments1.xml")
+      .getOrElse(fail("Expected xl/comments1.xml part"))
+
+  private def parseCommentsPart(xml: String): OoxmlComments =
+    val elem = XmlSecurity.parseSafe(xml, "xl/comments1.xml") match
+      case Right(e) => e
+      case Left(err) => fail(s"Comments part parse failed: $err")
+    OoxmlComments.fromXml(elem) match
+      case Right(c) => c
+      case Left(err) => fail(s"Comments part decode failed: $err")
+
+  test("GH-433: rewrite does not synthesize a second author-prefix run") {
+    val comment = excelAuthoredDomainComment
+    // Pin the audit-verified read behavior: the foreign prefix is NOT stripped.
+    assertEquals(comment.author, Some("Reviewer"))
+    assertEquals(comment.text.runs.size, 2)
+    assertEquals(comment.text.toPlainText, "Reviewer: check this figure")
+
+    val sheet = Sheet("Sheet1").comment(ref"A1", comment)
+    val bytes = XlsxWriter.writeToBytes(Workbook(Vector(sheet))) match
+      case Right(b) => b
+      case Left(err) => fail(s"Write failed: $err")
+
+    val written = parseCommentsPart(commentsPartOf(bytes))
+    val writtenComment = written.comments.headOption.getOrElse(fail("Expected written comment"))
+
+    // Before GH-433 this came back as 3 runs reading "Reviewer:\nReviewer: check this figure".
+    assertEquals(writtenComment.text.toPlainText, "Reviewer: check this figure")
+    assertEquals(writtenComment.text.runs.size, 2)
+    assertEquals(writtenComment.text.runs.headOption.map(_.text), Some("Reviewer:"))
+  }
+
+  test("GH-433: indexed run color, font, and charset survive the rewrite") {
+    val sheet = Sheet("Sheet1").comment(ref"A1", excelAuthoredDomainComment)
+    val bytes = XlsxWriter.writeToBytes(Workbook(Vector(sheet))) match
+      case Right(b) => b
+      case Left(err) => fail(s"Write failed: $err")
+
+    val written = parseCommentsPart(commentsPartOf(bytes))
+    val runs = written.comments.headOption.map(_.text.runs).getOrElse(fail("Expected comment"))
+
+    runs.foreach { run =>
+      val rPr = run.rawRPrXml.getOrElse(fail(s"Run '${run.text}' lost its <rPr>"))
+      assert(rPr.contains("""indexed="81""""), s"<color indexed=\"81\"/> dropped from rPr: $rPr")
+      assert(rPr.contains("""val="Tahoma""""), s"Tahoma font dropped from rPr: $rPr")
+      assert(rPr.contains("charset"), s"<charset/> dropped from rPr: $rPr")
+    }
+    assertEquals(runs.headOption.flatMap(_.font.map(_.bold)), Some(true))
+  }
+
+  test("GH-433: rgb run color survives the rewrite") {
+    val richText = com.tjclp.xl.richtext.RichText(
+      Vector(
+        com.tjclp.xl.richtext.TextRun(
+          "Red note",
+          Some(
+            com.tjclp.xl.styles.font
+              .Font(name = "Calibri", sizePt = 11.0)
+              .withColor(com.tjclp.xl.styles.color.Color.Rgb(0xffff0000))
+          )
+        )
+      )
+    )
+    val comments = OoxmlComments(
+      authors = Vector("Author"),
+      comments = Vector(OoxmlComment(ref"A1", 0, richText))
+    )
+
+    val reparsed = OoxmlComments.fromXml(OoxmlComments.toXml(comments)) match
+      case Right(c) => c
+      case Left(err) => fail(s"Reparse failed: $err")
+
+    val run = reparsed.comments.headOption
+      .flatMap(_.text.runs.headOption)
+      .getOrElse(fail("Expected rich text run"))
+    assertEquals(
+      run.font.flatMap(_.color),
+      Some(com.tjclp.xl.styles.color.Color.Rgb(0xffff0000))
+    )
+  }
+
+  test("GH-433: second rewrite of an Excel-authored comment is byte-stable") {
+    val sheet = Sheet("Sheet1").comment(ref"A1", excelAuthoredDomainComment)
+    val bytes1 = XlsxWriter.writeToBytes(Workbook(Vector(sheet))) match
+      case Right(b) => b
+      case Left(err) => fail(s"First write failed: $err")
+
+    val reread = XlsxReader.readFromBytes(bytes1) match
+      case Right(wb) => wb
+      case Left(err) => fail(s"Read failed: $err")
+
+    // Touch an unrelated cell so the second write is a genuine re-serialization.
+    val touchedSheet = reread.sheets.headOption.getOrElse(fail("Expected sheet")).put(ref"Z99" -> 1)
+    val bytes2 = XlsxWriter.writeToBytes(Workbook(Vector(touchedSheet))) match
+      case Right(b) => b
+      case Left(err) => fail(s"Second write failed: $err")
+
+    assertEquals(commentsPartOf(bytes2), commentsPartOf(bytes1))
+  }
+
+  test("GH-433: prefix guard only fires on an exact author-prefix run") {
+    // A first run that merely STARTS with the author name is comment text, not a prefix:
+    // the canonical prefix must still be synthesized.
+    val comment = Comment(
+      com.tjclp.xl.richtext.RichText(Vector(com.tjclp.xl.richtext.TextRun("Alice: note"))),
+      author = Some("Alice")
+    )
+    val sheet = Sheet("Sheet1").comment(ref"A1", comment)
+    val bytes = XlsxWriter.writeToBytes(Workbook(Vector(sheet))) match
+      case Right(b) => b
+      case Left(err) => fail(s"Write failed: $err")
+
+    val written = parseCommentsPart(commentsPartOf(bytes))
+    val runs = written.comments.headOption.map(_.text.runs).getOrElse(fail("Expected comment"))
+    assertEquals(runs.headOption.map(_.text), Some("Alice:"))
+    assertEquals(runs.map(_.text).mkString, "Alice:\nAlice: note")
+  }
+
+  test("GH-433: prefix guard matches an unformatted author-prefix run") {
+    // "ANY formatting" includes none at all: an existing plain "Reviewer:" lead run
+    // must suppress synthesis too.
+    val comment = Comment(
+      com.tjclp.xl.richtext.RichText(
+        Vector(
+          com.tjclp.xl.richtext.TextRun("Reviewer:"),
+          com.tjclp.xl.richtext.TextRun("\nsee figure")
+        )
+      ),
+      author = Some("Reviewer")
+    )
+    val sheet = Sheet("Sheet1").comment(ref"A1", comment)
+    val bytes = XlsxWriter.writeToBytes(Workbook(Vector(sheet))) match
+      case Right(b) => b
+      case Left(err) => fail(s"Write failed: $err")
+
+    val written = parseCommentsPart(commentsPartOf(bytes))
+    val runs = written.comments.headOption.map(_.text.runs).getOrElse(fail("Expected comment"))
+    assertEquals(runs.size, 2)
+    assertEquals(runs.map(_.text).mkString, "Reviewer:\nsee figure")
+  }
+
   private def extractShapeIds(vml: String): Set[Int] =
     "_x0000_s(\\d+)".r.findAllMatchIn(vml).map(_.group(1).toInt).toSet
 
