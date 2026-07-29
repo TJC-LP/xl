@@ -917,6 +917,57 @@ class StreamingWriteSpec extends FunSuite:
       Files.deleteIfExists(jsonPath)
   }
 
+  test("streaming batch: autofilter is rejected with clear unsupported message (GH-432)") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val jsonPath = tempJson("""[{"op":"autofilter","range":"A1:M29"}]""")
+    try
+      ExcelIO.instance[IO].write(Workbook(Sheet("Test")), sourcePath).unsafeRunSync()
+
+      val ex = intercept[Exception] {
+        StreamingWriteCommands
+          .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+          .unsafeRunSync()
+      }
+
+      assert(ex.getMessage.contains("not supported in streaming mode"), ex.getMessage)
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }
+
+  test("streaming batch: grouping ops are rejected with clear unsupported message (GH-421)") {
+    val opJsons = List(
+      """[{"op":"group-rows","rows":"10:20","level":2}]""",
+      """[{"op":"group-cols","cols":"E:H"}]""",
+      """[{"op":"ungroup-rows","rows":"10:20"}]""",
+      """[{"op":"ungroup-cols","cols":"E:H"}]"""
+    )
+    opJsons.foreach { json =>
+      val sourcePath = tempXlsx()
+      val outputPath = tempXlsx()
+      val jsonPath = tempJson(json)
+      try
+        ExcelIO.instance[IO].write(Workbook(Sheet("Test")), sourcePath).unsafeRunSync()
+
+        val ex = intercept[Exception] {
+          StreamingWriteCommands
+            .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+            .unsafeRunSync()
+        }
+
+        assert(
+          ex.getMessage.contains("not supported in streaming mode"),
+          s"for $json: ${ex.getMessage}"
+        )
+      finally
+        Files.deleteIfExists(sourcePath)
+        Files.deleteIfExists(outputPath)
+        Files.deleteIfExists(jsonPath)
+    }
+  }
+
   test("streaming batch: chart is rejected with clear unsupported message") {
     val sourcePath = tempXlsx()
     val outputPath = tempXlsx()

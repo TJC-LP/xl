@@ -93,6 +93,11 @@ object BatchParser:
     case ColShow(col: String)
     case RowHide(row: Int)
     case RowShow(row: Int)
+    // Row/column outline grouping (GH-421)
+    case GroupRows(rows: String, level: Int, collapsed: Boolean)
+    case GroupCols(cols: String, level: Int, collapsed: Boolean)
+    case UngroupRows(rows: String)
+    case UngroupCols(cols: String)
     case AutoFit(columns: Option[String])
     case AddSheet(name: String, after: Option[String])
     case RenameSheet(from: String, to: String)
@@ -115,6 +120,8 @@ object BatchParser:
     // Sheet appearance & print setup (GH-358)
     case SetSheetView(gridlines: Option[Boolean], zoom: Option[Int], tabSelected: Option[Boolean])
     case SetTabColor(color: Option[String], clear: Boolean)
+    // Sheet-level autoFilter authoring (GH-432); range accepts qualified refs
+    case SetAutoFilter(range: Option[String], clear: Boolean)
     case SetPageSetup(
       orientation: Option[String],
       scale: Option[Int],
@@ -190,6 +197,12 @@ object BatchParser:
         case BatchOp.ColShow(col) => s"  COL-SHOW $col"
         case BatchOp.RowHide(row) => s"  ROW-HIDE $row"
         case BatchOp.RowShow(row) => s"  ROW-SHOW $row"
+        case BatchOp.GroupRows(rows, level, collapsed) =>
+          s"  GROUP-ROWS $rows level=$level${if collapsed then " (collapsed)" else ""}"
+        case BatchOp.GroupCols(cols, level, collapsed) =>
+          s"  GROUP-COLS $cols level=$level${if collapsed then " (collapsed)" else ""}"
+        case BatchOp.UngroupRows(rows) => s"  UNGROUP-ROWS $rows"
+        case BatchOp.UngroupCols(cols) => s"  UNGROUP-COLS $cols"
         case BatchOp.AutoFit(cols) => s"  AUTOFIT ${cols.getOrElse("all")}"
         case BatchOp.AddSheet(name, _) => s"  ADD-SHEET $name"
         case BatchOp.RenameSheet(from, to) => s"  RENAME-SHEET $from -> $to"
@@ -208,6 +221,8 @@ object BatchParser:
           s"  SHEET-VIEW $desc"
         case BatchOp.SetTabColor(color, clear) =>
           s"  TAB-COLOR ${color.getOrElse(if clear then "(clear)" else "")}"
+        case BatchOp.SetAutoFilter(range, clear) =>
+          s"  AUTOFILTER ${range.getOrElse(if clear then "(clear)" else "")}"
         case BatchOp.SetPageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
           val desc = AppearanceOps.describe(
             "orientation" -> orientation,
@@ -281,11 +296,16 @@ object BatchParser:
    *   - `col-show`: {"op": "col-show", "col": "C"}
    *   - `row-hide`: {"op": "row-hide", "row": 5}
    *   - `row-show`: {"op": "row-show", "row": 5}
+   *   - `group-rows`: {"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}
+   *     (GH-421; `group-cols` takes "cols": "E:H"; `ungroup-rows`/`ungroup-cols` clear the outline
+   *     level and collapse markers)
    *   - `autofit`: {"op": "autofit", "columns": "A:F"}
    *   - `add-sheet`: {"op": "add-sheet", "name": "New Sheet", "after": "Sheet1"}
    *   - `rename-sheet`: {"op": "rename-sheet", "from": "Old", "to": "New"}
    *   - `freeze`: {"op": "freeze", "ref": "B2"}
    *   - `unfreeze`: {"op": "unfreeze"}
+   *   - `autofilter`: {"op": "autofilter", "range": "A1:M29"} (or {"op": "autofilter", "clear":
+   *     true} to strip the sheet's autoFilter — GH-432)
    *   - `copy`: {"op": "copy", "source": "A1:B2", "target": "D1", "valuesOnly": false}
    *   - `chart`: {"op": "chart", "type": "column", "data": "B2:C4", "categories": "A2:A4",
    *     "seriesNames": "N,S", "seriesColors": "#307FE2,#005670", "title": "T", "legend": "right",
@@ -436,6 +456,34 @@ object BatchParser:
             val row = requireInt(objMap, "row", idx)
             BatchOp.RowShow(row)
 
+          case "group-rows" =>
+            collectUnknownPropsWarning(objMap, knownGroupRowsProps, "group-rows", idx)
+              .foreach(warnings += _)
+            BatchOp.GroupRows(
+              rows = requireString(objMap, "rows", idx),
+              level = objMap.get("level").flatMap(_.numOpt).map(_.toInt).getOrElse(1),
+              collapsed = objMap.get("collapsed").flatMap(_.boolOpt).getOrElse(false)
+            )
+
+          case "group-cols" =>
+            collectUnknownPropsWarning(objMap, knownGroupColsProps, "group-cols", idx)
+              .foreach(warnings += _)
+            BatchOp.GroupCols(
+              cols = requireString(objMap, "cols", idx),
+              level = objMap.get("level").flatMap(_.numOpt).map(_.toInt).getOrElse(1),
+              collapsed = objMap.get("collapsed").flatMap(_.boolOpt).getOrElse(false)
+            )
+
+          case "ungroup-rows" =>
+            collectUnknownPropsWarning(objMap, knownUngroupRowsProps, "ungroup-rows", idx)
+              .foreach(warnings += _)
+            BatchOp.UngroupRows(requireString(objMap, "rows", idx))
+
+          case "ungroup-cols" =>
+            collectUnknownPropsWarning(objMap, knownUngroupColsProps, "ungroup-cols", idx)
+              .foreach(warnings += _)
+            BatchOp.UngroupCols(requireString(objMap, "cols", idx))
+
           case "autofit" =>
             collectUnknownPropsWarning(objMap, knownAutoFitProps, "autofit", idx)
               .foreach(warnings += _)
@@ -501,6 +549,14 @@ object BatchParser:
               clear = objMap.get("clear").flatMap(_.boolOpt).getOrElse(false)
             )
 
+          case "autofilter" =>
+            collectUnknownPropsWarning(objMap, knownAutoFilterOpProps, "autofilter", idx)
+              .foreach(warnings += _)
+            BatchOp.SetAutoFilter(
+              range = objMap.get("range").flatMap(_.strOpt),
+              clear = objMap.get("clear").flatMap(_.boolOpt).getOrElse(false)
+            )
+
           case "page-setup" =>
             collectUnknownPropsWarning(objMap, knownPageSetupProps, "page-setup", idx)
               .foreach(warnings += _)
@@ -544,8 +600,9 @@ object BatchParser:
               s"Object ${idx + 1}: Unknown operation '$other'. " +
                 "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
                 "comment, remove-comment, hyperlink, clear, col-hide, col-show, " +
-                "row-hide, row-show, autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, " +
-                "chart, sheet-view, tab-color, page-setup, header-footer, cf"
+                "row-hide, row-show, group-rows, group-cols, ungroup-rows, ungroup-cols, " +
+                "autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, " +
+                "chart, sheet-view, tab-color, autofilter, page-setup, header-footer, cf"
             )
       }
 
@@ -626,6 +683,15 @@ object BatchParser:
 
   /** Known properties for 'tab-color' operation (GH-358) */
   private val knownTabColorProps = Set("op", "color", "clear")
+
+  /** Known properties for 'autofilter' operation (GH-432) */
+  private val knownAutoFilterOpProps = Set("op", "range", "clear")
+
+  /** Known properties for the grouping operations (GH-421) */
+  private val knownGroupRowsProps = Set("op", "rows", "level", "collapsed")
+  private val knownGroupColsProps = Set("op", "cols", "level", "collapsed")
+  private val knownUngroupRowsProps = Set("op", "rows")
+  private val knownUngroupColsProps = Set("op", "cols")
 
   /** Known properties for 'page-setup' operation (GH-358) */
   private val knownPageSetupProps =
@@ -1025,6 +1091,27 @@ object BatchParser:
           case BatchOp.RowShow(row) =>
             applyRowVisibility(currentWb, defaultSheetName, row, hidden = false)
 
+          // Row/column outline grouping (GH-421): appliers shared with the CLI commands
+          case BatchOp.GroupRows(rows, level, collapsed) =>
+            updateSheetE(currentWb, defaultSheetName, "group-rows")(
+              GroupingOps.groupRows(_, rows, level, collapsed)
+            )
+
+          case BatchOp.GroupCols(cols, level, collapsed) =>
+            updateSheetE(currentWb, defaultSheetName, "group-cols")(
+              GroupingOps.groupCols(_, cols, level, collapsed)
+            )
+
+          case BatchOp.UngroupRows(rows) =>
+            updateSheetE(currentWb, defaultSheetName, "ungroup-rows")(
+              GroupingOps.ungroupRows(_, rows)
+            )
+
+          case BatchOp.UngroupCols(cols) =>
+            updateSheetE(currentWb, defaultSheetName, "ungroup-cols")(
+              GroupingOps.ungroupCols(_, cols)
+            )
+
           case BatchOp.AutoFit(columnsOpt) =>
             applyAutoFit(currentWb, defaultSheetName, columnsOpt)
 
@@ -1096,6 +1183,9 @@ object BatchParser:
             updateSheetE(currentWb, defaultSheetName, "tab-color")(
               AppearanceOps.applyTabColor(_, color, clear)
             )
+
+          case BatchOp.SetAutoFilter(rangeStrOpt, clear) =>
+            applyAutoFilterOp(currentWb, defaultSheetName, rangeStrOpt, clear)
 
           case BatchOp.SetPageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
             updateSheetE(currentWb, defaultSheetName, "page-setup")(
@@ -1823,6 +1913,31 @@ object BatchParser:
       result <- updateSheet(wb, sheetName)(_.conditionalFormat(range, rule))
     yield result
 
+  /**
+   * Set or clear the sheet-level autoFilter (GH-432). The range accepts qualified refs
+   * (`Sheet2!A1:M29`); the clear form targets the default (--sheet) sheet. Validation lives in
+   * [[AppearanceOps.applyAutoFilter]], shared with the `xl autofilter` command.
+   */
+  private def applyAutoFilterOp(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    rangeStrOpt: Option[String],
+    clear: Boolean
+  ): IO[Workbook] =
+    rangeStrOpt match
+      case Some(rangeStr) =>
+        for
+          rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+          (sheetName, range) = rangeRef
+          result <- updateNamedSheetE(wb, sheetName)(
+            AppearanceOps.applyAutoFilter(_, Some(range), clear)
+          )
+        yield result
+      case None =>
+        updateSheetE(wb, defaultSheetName, "autofilter")(
+          AppearanceOps.applyAutoFilter(_, None, clear)
+        )
+
   // ========== Utilities ==========
 
   /** Parse a range reference (possibly qualified with sheet name). */
@@ -1879,14 +1994,20 @@ object BatchParser:
   )(f: Sheet => Either[String, Sheet]): IO[Workbook] =
     defaultSheetName match
       case None => IO.raiseError(new Exception(s"batch $opName requires --sheet"))
-      case Some(sheetName) =>
-        wb.sheets.find(_.name == sheetName) match
-          case None =>
-            IO.raiseError(
-              new Exception(
-                s"Sheet '${sheetName.value}' not found. " +
-                  s"Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
-              )
-            )
-          case Some(sheet) =>
-            IO.fromEither(f(sheet).left.map(msg => new Exception(msg))).map(wb.put)
+      case Some(sheetName) => updateNamedSheetE(wb, sheetName)(f)
+
+  /** Update a named sheet with a validated (Either-returning) transform. */
+  private def updateNamedSheetE(
+    wb: Workbook,
+    sheetName: SheetName
+  )(f: Sheet => Either[String, Sheet]): IO[Workbook] =
+    wb.sheets.find(_.name == sheetName) match
+      case None =>
+        IO.raiseError(
+          new Exception(
+            s"Sheet '${sheetName.value}' not found. " +
+              s"Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+          )
+        )
+      case Some(sheet) =>
+        IO.fromEither(f(sheet).left.map(msg => new Exception(msg))).map(wb.put)
