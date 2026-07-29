@@ -295,8 +295,13 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
    */
   private def encodeCommentText(text: RichText): Elem =
     val runElems = text.runs.map { run =>
-      // Build <rPr> if font formatting is present
-      val rPrElem = run.font.map { f =>
+      // Preserved raw <rPr> wins (byte-perfect: keeps indexed run colors, <charset>, … that
+      // the Font model cannot represent — GH-433, same pattern as SharedStrings); otherwise
+      // build <rPr> from the Font model if formatting is present.
+      val preservedRPr = run.rawRPrXml.flatMap { xmlString =>
+        XmlSecurity.parseSafe(xmlString, "comment rPr").toOption.map(stripNamespaces)
+      }
+      val rPrElem = preservedRPr.orElse(run.font.map { f =>
         val props = Seq.newBuilder[Elem]
 
         if f.bold then props += elem("b")()
@@ -315,7 +320,7 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
         props += elem("rFont", "val" -> f.name)()
 
         elem("rPr")(props.result()*)
-      }
+      })
 
       // Build <t> with xml:space="preserve" if needed (_xHHHH_-escaped per GH-288)
       val runText = escapeXstring(run.text)

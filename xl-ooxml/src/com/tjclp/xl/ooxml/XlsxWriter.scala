@@ -271,6 +271,22 @@ object XlsxWriter:
     author.map(_.trim).filter(_.nonEmpty)
 
   /**
+   * True when the comment text already leads with its own author-prefix run: the first run is
+   * exactly the author name with an optional colon (any formatting; trailing newline/space
+   * tolerated). Excel-authored comments carry such a run inside the text itself — read keeps it
+   * because it doesn't match XL's canonical `Author:` + `\n` shape — so synthesizing our prefix on
+   * top would duplicate the visible "Author:" line (GH-433).
+   */
+  private def hasLeadingAuthorPrefix(
+    text: com.tjclp.xl.richtext.RichText,
+    author: String
+  ): Boolean =
+    text.runs.headOption.exists { run =>
+      val normalized = run.text.replace("\u00A0", " ").trim // Excel can emit nbsp
+      normalized == author || normalized == s"$author:"
+    }
+
+  /**
    * Build per-sheet comment data for serialization: sheet index (0-based) -> comments to write.
    * Part paths are assigned separately — identity-mapped or freshly allocated above every
    * source-claimed number (GH-315) — never derived from the sheet index.
@@ -305,7 +321,7 @@ object XlsxWriter:
 
           // Excel displays author as part of comment text (bold first run)
           val textWithAuthor = canonicalAuthor match
-            case Some(author) =>
+            case Some(author) if !hasLeadingAuthorPrefix(comment.text, author) =>
               // Prepend author name as bold run
               val authorRun = com.tjclp.xl.richtext.TextRun(
                 s"$author:",
@@ -332,7 +348,10 @@ object XlsxWriter:
                     )
                   )
               textWithNewline
-            case None => comment.text
+            case _ =>
+              // Unauthored, or the text already leads with its own author-prefix run
+              // (file-authored comment) — never synthesize a second prefix (GH-433).
+              comment.text
 
           OoxmlComment(
             ref = ref,
