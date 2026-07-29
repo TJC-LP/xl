@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **109 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,047 tests passing.
 
-**Current Version**: **0.17.0 "Parity"** (released 2026-07-29)
+**Current Version**: **0.18.0 "Quill"** (released 2026-07-29)
 
 ---
 
@@ -60,6 +60,10 @@ Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture cor
 ### v0.12.1 "Clean Sweep" — wave 7 (Released 2026-06-11)
 
 Every remaining open issue closed in one wave. **Conditional formatting** ([#136](https://github.com/TJC-LP/xl/issues/136)) is the headline — typed cellIs/expression/colorScale/dataBar/top10/text rules + `dxf` differential formats, `sheet.conditionalFormat` authoring with auto-priority, structural-edit range shifting, unmodeled families preserved byte-faithfully — alongside twelve fidelity/writer fixes: openpyxl comment subdirectory dialect (#292), RichText SST keying (#303), exact surgical SST counts (#304), `[Content_Types]` preservation (#314), identity-keyed source mappings (#315), activeTab (#294), fitToPage tri-state (#284), `Cell.comment` deprecated→`Sheet.comments` (#295). Codec `put` paths 2.4x faster (#297).
+
+### v0.18.0 "Quill" — wave 21 (Released 2026-07-29)
+
+Burn-down finale (PR #443, five clusters, one design panel, one rework round): **the tracker hits zero** — every issue from the 2026-07-22 25-issue plan of record is closed across three waves/releases in one week. **Two-variable Data Table authoring** ([#419](https://github.com/TJC-LP/xl/issues/419) — `sheet.dataTable` on the 0.16.0 FormulaKind substrate, Excel-fixture-verified record placement, autoNoTable cache seeding), **AutoFilter CLI** ([#432](https://github.com/TJC-LP/xl/issues/432)) + **outline grouping** ([#421](https://github.com/TJC-LP/xl/issues/421)) — 32 batch ops, **Underline enum** ([#423](https://github.com/TJC-LP/xl/issues/423), breaking w/ bridge) + **Normal font** ([#425](https://github.com/TJC-LP/xl/issues/425)), **CELL()** ([#424](https://github.com/TJC-LP/xl/issues/424), 109 functions) + **range-slot name chains** ([#411](https://github.com/TJC-LP/xl/issues/411)), **pie per-slice dPt** ([#418](https://github.com/TJC-LP/xl/issues/418)). Follow-ups: #435, #442.
 
 ### v0.17.0 "Parity" — wave 20 (Released 2026-07-29)
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] "Quill" - 2026-07-29
+
 Authoring wave (wave 21, burn-down finale): the house sensitivity engine
 becomes authorable, the last CLI surface gaps close, and the style model
 learns the house dialect.

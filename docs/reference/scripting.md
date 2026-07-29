@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -123,14 +123,14 @@ val nm: String = config.sheetName
 val dyn = Sheet(nm)                             // : XLResult[Sheet] — the return type changed!
 ```
 
-For names computed at runtime, use **`Sheet.named`** (since 0.17.0) — the documented dynamic-name
+For names computed at runtime, use **`Sheet.named`** (since 0.18.0) — the documented dynamic-name
 factory. Validation is identical (Excel's rules: non-empty, ≤31 chars, no `: \ / ? * [ ]`); the
 difference is that `XLResult` is spelled in the signature, so the `.map`/`.unsafe` step reads as
 intended instead of surprising the chain:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 
 val region = Seq("North", "East").mkString(" ")                     // runtime name
@@ -138,7 +138,7 @@ val sheet = Sheet.named(region).map(_.put(ref"A1", "ready")).unsafe // XLResult,
 Excel.write(Workbook(sheet), "/tmp/named.xlsx")
 ```
 
-On ≤0.17.0 (no `named`), make the union explicit at the call site with an ascription:
+On ≤0.18.0 (no `named`), make the union explicit at the call site with an ascription:
 `val s: XLResult[Sheet] = Sheet(nm)`.
 
 Prefer **total navigation** over interpolated refs in loops — no `Either` at all:
@@ -196,7 +196,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -328,7 +328,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -382,7 +382,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

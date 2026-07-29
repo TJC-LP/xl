@@ -38,7 +38,7 @@ The canonical header for every script (this is the single source of truth — re
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -67,7 +67,7 @@ wb.upsert("Summary", _.put(ref"A1", "Total"))      // total: update-or-create, r
 wb.update("Sales", f)                              // XLResult[Workbook] (errors if absent)
 
 // Sheet creation: Sheet("lit") is compile-checked and returns Sheet; for RUNTIME names
-Sheet.named(dynamicName)                           // XLResult[Sheet] — the dynamic-name factory (0.17.0)
+Sheet.named(dynamicName)                           // XLResult[Sheet] — the dynamic-name factory (0.18.0)
 
 // Cell writes (literal refs are compile-time validated and infallible)
 sheet.put(ref"A1", "Title")                        // Sheet
@@ -104,7 +104,7 @@ wb.update("Sales", f).unsafe                       // throws structured XLExcept
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -142,7 +142,7 @@ val cell2 = fx"=B$row*2".unsafe           // explicit boundary
 **The same split applies to `Sheet(name)`** — with no `$` at the call site to warn you. A string
 literal validates at compile time and returns `Sheet`; a name held in a `val` makes the very same
 call return `XLResult[Sheet]`, so a chained `.put(...)` type-errors. For runtime names use
-`Sheet.named` (since 0.17.0), which spells the `XLResult` in its signature:
+`Sheet.named` (since 0.18.0), which spells the `XLResult` in its signature:
 
 ```scala
 val lit = Sheet("Acquisitions").put(ref"A1", 1)  // : Sheet (literal, compile-time validated)
@@ -236,7 +236,7 @@ Native Excel `TABLE()` two-variable data tables (0.18.0) — the house sensitivi
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 
 val model = Sheet("Sensitivity")
@@ -282,7 +282,7 @@ Or lean on totality so there is nothing to unwrap: literal refs, `upsert`, range
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -304,7 +304,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 
 val data = List(("North", 125000.50), ("South", 98000.25), ("West", 143500.00))
@@ -332,7 +332,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.17.0
+//> using dep com.tjclp::xl:0.18.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -364,7 +364,7 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 - **`Excel.write` does NOT recalculate** — freshly built `fx"…"` cells are written with no cached values, so Excel-before-recalc, openpyxl `data_only`, pandas, and previewers all show blanks. Since 0.13.0 the one-call fix is **`Excel.writeRecalculated(wb, path)`** ([#360](https://github.com/TJC-LP/xl/issues/360)): it recalculates, writes the cached workbook (even when some formulas fail — errors are data), and returns the `RecalcResult` (inspect `result.errors` / `result.isClean`). For fail-hard pipelines that must abort *before* anything lands on disk, keep the explicit `val result = wb.recalculate(); …; Excel.write(result.workbook, path)` pattern. On ≤0.12.x, `writeRecalculated` is unavailable — recalculate then write `result.workbook` (a single pass suffices on 0.12.5+).
 - **Percent postfix works since 0.13.0** ([#355](https://github.com/TJC-LP/xl/issues/355)): `fx"=A1*10%"`, `fx"=10%"`, `fx"=(1+5%)^2"` parse, evaluate (`10%` → exact `0.1`), broadcast over ranges, and print back byte-identically (never rewritten to `/100`). On ≤0.12.x the parser rejects `%` — write `/100` there. External-workbook refs (`[2]Book!A1`) parse and pin their Excel-written caches **since 0.12.6** ([#353](https://github.com/TJC-LP/xl/issues/353)): `recalculate()` preserves those cells verbatim and dependents compute from the caches (uncached external cells yield a per-cell error); on ≤0.12.5 they fail to parse entirely — compute from cached values there.
 - **Runtime column handles for `setColumnProperties`** ([#361](https://github.com/TJC-LP/xl/issues/361), since 0.13.0): fold over letters computed at runtime with `Column.parse("D")` (`Either[String, Column]`; trailing row digits tolerated, so `"D1"` works) — e.g. `Column.parse(letter).map(c => sheet.setColumnProperties(c, ColumnProperties(width = Some(w))))`. A runtime `RefType` also exposes `.col` (`RefType.parse(s).map(_.col)`). On ≤0.12.x only the compile-time `ref"D1".col` existed — set widths with literal refs per column there.
-- **`Sheet(name)` with a runtime name returns `XLResult[Sheet]`, not `Sheet`** ([#420](https://github.com/TJC-LP/xl/issues/420)): the factory is `transparent inline` — a string literal validates at compile time and returns `Sheet`, while a name held in a `val` makes the very same call return `XLResult[Sheet]`, so a chained `.put(...)` type-errors with nothing at the call site to warn you. For dynamic names use **`Sheet.named(name)`** (since 0.17.0) — identical validation, `XLResult` spelled in the signature: `Sheet.named(nm).map(_.put(ref"A1", 1))`. On ≤0.17.0, make the union explicit with an ascription: `val s: XLResult[Sheet] = Sheet(nm)`.
+- **`Sheet(name)` with a runtime name returns `XLResult[Sheet]`, not `Sheet`** ([#420](https://github.com/TJC-LP/xl/issues/420)): the factory is `transparent inline` — a string literal validates at compile time and returns `Sheet`, while a name held in a `val` makes the very same call return `XLResult[Sheet]`, so a chained `.put(...)` type-errors with nothing at the call site to warn you. For dynamic names use **`Sheet.named(name)`** (since 0.18.0) — identical validation, `XLResult` spelled in the signature: `Sheet.named(nm).map(_.put(ref"A1", 1))`. On ≤0.18.0, make the union explicit with an ascription: `val s: XLResult[Sheet] = Sheet(nm)`.
 
 ## Reference
 
