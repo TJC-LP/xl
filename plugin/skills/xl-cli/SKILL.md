@@ -301,9 +301,14 @@ xl ... put A1:D1 "Q1" "Q2" "Q3" "Q4"
 
 # CSV split (opt-in: requires --csv flag)
 xl ... put A1:D1 "Q1,Q2,Q3,Q4" --csv
+
+# Preserve date-like or numeric input as text
+xl ... put A1 2025-01-15 --no-detect
 ```
 
 **`--csv`**: Opt-in flag that splits a single comma-separated value across the target range. Required because comma-containing values are common in real data (`"Smith, John"`); without `--csv`, the value is written as literal text. The split count must match the range size exactly, otherwise the command errors. Smart type detection applies to each split value.
+
+**`--no-detect`**: Opt out of positional `put` type detection and preserve every supplied value as text.
 
 **Negative numbers**: Use `--value` flag (bare `-` is interpreted as flag):
 ```bash
@@ -662,7 +667,7 @@ Run `xl view --help` for complete options.
 
 | Command | Key Options |
 |---------|-------------|
-| `put <ref> <values>` | `--value` for negatives, `--stream` for O(1) memory, `--csv` to split comma-separated value |
+| `put <ref> <values>` | `--value` for negatives, `--stream` for O(1) memory, `--csv` to split comma-separated value, `--no-detect` for literal text |
 | `putf <ref> <formulas>` | Supports dragging (no dragging with `--stream`) |
 | `style <range>` | `--bold`, `--bg`, `--fg`, `--format`, `--border`, `--stream` for O(1) memory |
 | `copy <source> <target>` | `--values-only` (no formula adjustment) |

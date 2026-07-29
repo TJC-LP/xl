@@ -5,7 +5,7 @@ import munit.FunSuite
 import java.io.{ByteArrayOutputStream, FileInputStream, FileOutputStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
-import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
+import java.util.zip.{ZipEntry, ZipFile, ZipInputStream, ZipOutputStream}
 
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{Workbook, Sheet, given}
@@ -22,10 +22,13 @@ import com.tjclp.xl.cli.commands.{
 }
 import com.tjclp.xl.cli.helpers.{CsvParser, StreamingCsvParser}
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
+import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Integration tests for streaming write functionality.
@@ -100,6 +103,21 @@ class StreamingWriteSpec extends FunSuite:
       read = zipIn.read(buffer)
     baos.toByteArray
 
+  private def cellXfCount(path: Path): Int =
+    val zipFile = new ZipFile(path.toFile)
+    try
+      Option(zipFile.getEntry("xl/styles.xml")) match
+        case Some(entry) =>
+          val input = zipFile.getInputStream(entry)
+          val xml =
+            try new String(input.readAllBytes(), StandardCharsets.UTF_8)
+            finally input.close()
+          XmlSecurity.parseSafe(xml, "xl/styles.xml") match
+            case Right(root) => (root \ "cellXfs" \ "xf").size
+            case Left(error) => fail(s"Failed to parse styles.xml: ${error.message}")
+        case None => fail("Missing xl/styles.xml")
+    finally zipFile.close()
+
   // ========== Hybrid Streaming: put command ==========
 
   test("streaming put: basic value preserved") {
@@ -117,6 +135,92 @@ class StreamingWriteSpec extends FunSuite:
       val cellValue = imported.sheets.head.cells.get(ARef.from0(0, 0)).map(_.value)
       assertEquals(cellValue, Some(CellValue.Number(BigDecimal("100"))))
     finally Files.deleteIfExists(outputPath)
+  }
+
+  test("streaming put: ISO date detection applies Date number format") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    try
+      val existingStyle = CellStyle.default.withFont(Font.default.withBold(true))
+      val sourceSheet = Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Text("before"))
+        .style(ARef.from0(0, 0), existingStyle)
+      ExcelIO.instance[IO].write(Workbook(sourceSheet), sourcePath).unsafeRunSync()
+
+      StreamingWriteCommands
+        .put(sourcePath, outputPath, Some("Test"), "A1", List("2025-11-10"))
+        .unsafeRunSync()
+
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val sheet = imported.sheets.head
+      val date = sheet.cells.get(ARef.from0(0, 0)).map(_.value) match
+        case Some(CellValue.DateTime(dateTime)) => dateTime.toLocalDate
+        case Some(CellValue.Number(serial)) =>
+          CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate
+        case other => fail(s"Expected detected DateTime, got $other")
+      assertEquals(date.toString, "2025-11-10")
+      val style = sheet.getCellStyle(ARef.from0(0, 0))
+      assertEquals(style.map(_.numFmt), Some(NumFmt.Date))
+      assertEquals(style.map(_.font.bold), Some(true))
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+  }
+
+  test("streaming put: formatted ranges reuse one generated style") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    try
+      ExcelIO.instance[IO].write(Workbook(Sheet("Test")), sourcePath).unsafeRunSync()
+      val baselineCellXfs = cellXfCount(sourcePath)
+
+      StreamingWriteCommands
+        .put(sourcePath, outputPath, Some("Test"), "A1:A32", List("2025-11-10"))
+        .unsafeRunSync()
+
+      assertEquals(cellXfCount(outputPath), baselineCellXfs + 1)
+      val sheet = ExcelIO.instance[IO].read(outputPath).unsafeRunSync().sheets.head
+      List(ARef.from0(0, 0), ARef.from0(0, 31)).foreach { ref =>
+        assertEquals(sheet.getCellStyle(ref).map(_.numFmt), Some(NumFmt.Date))
+        val date = sheet.cells.get(ref).map(_.value) match
+          case Some(CellValue.DateTime(dateTime)) => dateTime.toLocalDate
+          case Some(CellValue.Number(serial)) =>
+            CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate
+          case other => fail(s"Expected detected DateTime at ${ref.toA1}, got $other")
+        assertEquals(date.toString, "2025-11-10")
+      }
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+  }
+
+  test("streaming put: detect=false preserves ISO date-like input as text") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    try
+      ExcelIO.instance[IO].write(Workbook(Sheet("Test")), sourcePath).unsafeRunSync()
+
+      StreamingWriteCommands
+        .put(
+          sourcePath,
+          outputPath,
+          Some("Test"),
+          "A1",
+          List("2025-11-10"),
+          detect = false
+        )
+        .unsafeRunSync()
+
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val sheet = imported.sheets.head
+      assertEquals(
+        sheet.cells.get(ARef.from0(0, 0)).map(_.value),
+        Some(CellValue.Text("2025-11-10"))
+      )
+      assertEquals(sheet.getCellStyle(ARef.from0(0, 0)).map(_.numFmt), None)
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
   }
 
   test("streaming put: multiple values (batch mode)") {

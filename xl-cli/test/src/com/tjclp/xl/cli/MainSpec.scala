@@ -30,6 +30,19 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 )
 class MainSpec extends CatsEffectSuite:
 
+  test("put command parser wires --no-detect") {
+    val parser = com.monovore.decline.Command("xl", "test")(Main.putCmd)
+
+    assertEquals(
+      parser.parse(Seq("put", "A1", "2025-11-10", "--no-detect")),
+      Right(CliCommand.Put("A1", List("2025-11-10"), detect = false))
+    )
+    assertEquals(
+      parser.parse(Seq("put", "A1", "2025-11-10")),
+      Right(CliCommand.Put("A1", List("2025-11-10"), detect = true))
+    )
+  }
+
   // Create a temporary Excel file for testing
   private def withTempExcelFile[A](test: Path => IO[A]): IO[A] =
     IO.blocking {
@@ -895,6 +908,20 @@ class MainSpec extends CatsEffectSuite:
       case BatchOp.Put(ref, CellValue.DateTime(dt), Some(NumFmt.Date)) =>
         assertEquals(dt.toLocalDate.toString, "2025-11-10")
       case other => fail(s"Expected Put with auto-detected date, got $other")
+  }
+
+  test("parseBatchJson: explicit date and time formats reject unparseable strings") {
+    List("date", "datetime", "time").foreach { format =>
+      val json =
+        s"""[{"op": "put", "ref": "A1", "value": "not-a-date", "format": "$format"}]"""
+      val result = BatchParser.parseBatchJson(json)
+
+      assert(result.isLeft, s"Explicit $format should reject unparseable input: $result")
+      val error = result.swap.toOption.getOrElse(fail(s"Expected $format parse error"))
+      assert(error.getMessage.contains("Object 1"))
+      assert(error.getMessage.contains("invalid for explicit format"))
+      assert(error.getMessage.contains("Expected ISO format (YYYY-MM-DD)"))
+    }
   }
 
   test("parseBatchJson: putf with range and 'from' creates PutFormulaDragging") {

@@ -72,7 +72,12 @@ enum CliCommand:
   case Eval(formula: String, overrides: List[String])
   case EvalArray(formula: String, targetRef: Option[String], overrides: List[String])
   // Mutate (require -o)
-  case Put(ref: String, values: List[String], csvSplit: Boolean = false)
+  case Put(
+    ref: String,
+    values: List[String],
+    csvSplit: Boolean = false,
+    detect: Boolean = true
+  )
   case PutFormula(ref: String, formulas: List[String])
   case Style(
     range: String,

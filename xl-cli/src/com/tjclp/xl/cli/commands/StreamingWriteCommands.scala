@@ -17,6 +17,7 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.cli.helpers.{BatchParser, StreamingCsvParser, StyleBuilder, ValueParser}
 import org.xml.sax.{Attributes, SAXException}
 import org.xml.sax.helpers.DefaultHandler
@@ -140,12 +141,9 @@ object StreamingWriteCommands:
     outputPath: Path,
     sheetNameOpt: Option[String],
     refStr: String,
-    values: List[String]
+    values: List[String],
+    detect: Boolean = true
   ): IO[String] =
-    import com.tjclp.xl.addressing.ARef
-    import com.tjclp.xl.cells.CellValue
-    import com.tjclp.xl.cli.helpers.ValueParser
-
     for
       // Resolve sheet path
       worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
@@ -164,24 +162,24 @@ object StreamingWriteCommands:
       )
 
       // Build value map based on mode
-      valueMap <- (refOrRange, values) match
+      parsedValues <- (refOrRange, values) match
         case (Left(ref), List(singleValue)) =>
           // Single cell
-          IO.pure(Map(ref -> ValueParser.parseValue(singleValue)))
+          IO.pure(Vector(ref -> ValueParser.parsePutValue(singleValue, detect)))
 
         case (Right(range), List(singleValue)) =>
           // Fill pattern: all cells get same value
-          val value = ValueParser.parseValue(singleValue)
-          IO.pure(range.cells.map(ref => ref -> value).toMap)
+          val value = ValueParser.parsePutValue(singleValue, detect)
+          IO.pure(range.cells.map(ref => ref -> value).toVector)
 
         case (Right(range), multipleValues) if multipleValues.length == range.cellCount.toInt =>
           // Batch values: exact count match
           val pairs = range.cellsRowMajor
             .zip(multipleValues.iterator)
             .map { (ref, v) =>
-              ref -> ValueParser.parseValue(v)
+              ref -> ValueParser.parsePutValue(v, detect)
             }
-            .toMap
+            .toVector
           IO.pure(pairs)
 
         case (Right(range), multipleValues) =>
@@ -198,8 +196,27 @@ object StreamingWriteCommands:
             )
           )
 
-      // Execute streaming transform
-      result <- ZipTransformer.transformValues[IO](sourcePath, outputPath, worksheetPath, valueMap)
+      batchOps = parsedValues.map { case (ref, formatted) =>
+        val format = Option.when(formatted.numFmt != NumFmt.General)(formatted.numFmt)
+        BatchParser.BatchOp.Put(ref.toA1, formatted.value, format)
+      }
+      patches <- buildStreamingBatchPatches(
+        sourcePath,
+        worksheetPath,
+        batchOps,
+        mergePutFormats = true
+      )
+      (cellPatches, updatedStylesXml, worksheetMetadata, _) = patches
+
+      // Execute streaming transform, including any detected number formats.
+      result <- ZipTransformer.transformWithMetadata[IO](
+        sourcePath,
+        outputPath,
+        worksheetPath,
+        cellPatches,
+        worksheetMetadata,
+        updatedStylesXml
+      )
     yield
       val desc = refOrRange match
         case Left(ref) => s"Put ${values.headOption.getOrElse("")} → ${ref.toA1}"
@@ -458,7 +475,8 @@ object StreamingWriteCommands:
   private def buildStreamingBatchPatches(
     sourcePath: Path,
     worksheetPath: String,
-    ops: Vector[BatchParser.BatchOp]
+    ops: Vector[BatchParser.BatchOp],
+    mergePutFormats: Boolean = false
   ): IO[
     (
       Map[ARef, StreamingTransform.CellPatch],
@@ -491,6 +509,18 @@ object StreamingWriteCommands:
       }.toSet
       val existingMetadata =
         readExistingWorksheetMetadata(sourcePath, worksheetPath, needsColumnMetadata, targetRows)
+      val formattedPutRefs =
+        if mergePutFormats then
+          ops.collect { case BatchParser.BatchOp.Put(refStr, _, Some(_)) =>
+            ARef.parse(refStr) match
+              case Right(ref) => ref
+              case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
+          }.toSet
+        else Set.empty[ARef]
+      val existingPutStyles =
+        if formattedPutRefs.nonEmpty then
+          scanExistingStyles(sourcePath, worksheetPath, formattedPutRefs)
+        else Map.empty[ARef, Int]
 
       // Accumulate patches and metadata
       val cellPatches = mutable.Map[ARef, StreamingTransform.CellPatch]()
@@ -499,6 +529,8 @@ object StreamingWriteCommands:
       val removeMerges = mutable.Set[CellRange]()
       val rowProps = mutable.Map[Row, RowProperties]() ++ existingMetadata.rowProps
       val summaryLines = mutable.ListBuffer[String]()
+      val existingStyleCache = mutable.Map[Int, CellStyle]()
+      val addedPutStyleIds = mutable.Map[String, Int]()
 
       var currentStylesXml = stylesXml
       var stylesModified = false
@@ -508,18 +540,41 @@ object StreamingWriteCommands:
           val ref = ARef.parse(refStr) match
             case Right(r) => r
             case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
-          // For streaming mode with format, we'd need to add style to styles.xml
-          // For now, streaming mode just sets the value; format requires full writer
           formatOpt match
             case Some(numFmt) =>
-              // Build style with numFmt and add to styles.xml
-              val cellStyle = CellStyle.default.withNumFmt(numFmt)
-              val (updatedStyles, styleId) =
-                StylePatcher.addStyle(currentStylesXml, cellStyle) match
-                  case Right(result) => result
-                  case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
-              currentStylesXml = updatedStyles
-              stylesModified = true
+              val (cellStyle, reusableStyleId) =
+                if mergePutFormats then
+                  val existingStyleId = existingPutStyles.get(ref)
+                  val existingStyle = existingStyleId
+                    .map { styleId =>
+                      existingStyleCache.getOrElseUpdate(
+                        styleId,
+                        StylePatcher.getStyle(stylesXml, styleId) match
+                          case Right(Some(style)) => style
+                          case Right(None) =>
+                            throw new Exception(s"Existing style ID $styleId was not found")
+                          case Left(e) =>
+                            throw new Exception(s"Failed to read existing style: ${e.message}")
+                      )
+                    }
+                    .getOrElse(CellStyle.default)
+                  // Match Sheet.put(Formatted): preserve explicitly formatted cells, otherwise
+                  // merge the detected number format into existing font/fill/border/alignment.
+                  if existingStyle.numFmt == NumFmt.General then
+                    (existingStyle.withNumFmt(numFmt), None)
+                  else (existingStyle, existingStyleId)
+                else (CellStyle.default.withNumFmt(numFmt), None)
+              val styleId = reusableStyleId.getOrElse {
+                addedPutStyleIds.getOrElseUpdate(
+                  cellStyle.canonicalKey,
+                  StylePatcher.addStyle(currentStylesXml, cellStyle) match
+                    case Right((updatedStyles, addedStyleId)) =>
+                      currentStylesXml = updatedStyles
+                      stylesModified = true
+                      addedStyleId
+                    case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
+                )
+              }
               cellPatches(ref) = StreamingTransform.CellPatch.SetStyleAndValue(styleId, cellValue)
             case None =>
               cellPatches(ref) =
@@ -771,6 +826,23 @@ object StreamingWriteCommands:
 
       (cellPatches.toMap, updatedStylesXml, worksheetMetadata, summaryLines.mkString("\n"))
     }
+
+  /** Read style IDs for selected cells without materializing the worksheet. */
+  private def scanExistingStyles(
+    sourcePath: Path,
+    worksheetPath: String,
+    refs: Set[ARef]
+  ): Map[ARef, Int] =
+    val normalizedPath =
+      val trimmed = worksheetPath.stripPrefix("/")
+      if trimmed.startsWith("xl/") then trimmed else s"xl/$trimmed"
+    val zipFile = new ZipFile(sourcePath.toFile)
+    try
+      Option(zipFile.getEntry(normalizedPath)) match
+        case Some(entry) =>
+          StreamingTransform.scanExistingStyles(zipFile.getInputStream(entry), refs)
+        case None => throw new Exception(s"Worksheet not found: $normalizedPath")
+    finally zipFile.close()
 
   private final case class ExistingWorksheetMetadata(
     columns: Map[Column, ColumnProperties],

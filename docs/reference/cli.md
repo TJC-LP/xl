@@ -104,7 +104,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `filter` | `--where <pred> [--columns A,C:E] [--limit n] [--format md\|csv\|json] [--header]` | Show rows matching a predicate (read-only) |
 | `eval` | `<formula> [--with overrides]` | Evaluate formula without modifying |
 | `evala` | `<formula> [--at <ref>] [--with overrides]` | Evaluate array formula; display or spill result grid |
-| `put` | `<ref\|range> <value...> [--csv]` | Write value(s) to cell or range (requires `-o`) |
+| `put` | `<ref\|range> <value...> [--csv] [--no-detect]` | Write value(s) to cell or range (requires `-o`) |
 | `putf` | `<ref\|range> <formula...>` | Write formula(s); single formula + range drags with `$` anchors (requires `-o`) |
 | `style` | `<range> [options]` | Apply styling (requires `-o`) |
 | `row` | `<n> [--height pt] [--hide\|--show]` | Set row properties (requires `-o`) |
@@ -406,10 +406,13 @@ Write value(s) to a cell or range.
 | CSV split | `put A1:C1 "X,Y,Z" --csv` | Split one comma-separated value across the range |
 
 **Type Inference**:
-- Numbers: `1000`, `1,234.56`, `$100`, `50%`
-- Dates: `2024-01-15`, `01/15/2024`
+- Numbers and formatted numbers: `1000`, `$1,234.56`, `50%`
+- ISO dates: `2024-01-15`
 - Booleans: `true`, `false`
 - Text: Everything else
+
+Use `--no-detect` to preserve all positional values as text, including numbers and ISO date-like
+strings.
 
 **Negative numbers**: use the `--value` flag (a leading `-` is parsed as a flag):
 ```bash

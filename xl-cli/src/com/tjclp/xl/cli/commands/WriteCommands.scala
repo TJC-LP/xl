@@ -28,6 +28,7 @@ import com.tjclp.xl.formula.{
 }
 import com.tjclp.xl.formula.eval.DependentRecalculation.*
 import com.tjclp.xl.formula.eval.StructuralEditor
+import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.sheets.styleSyntax
@@ -121,7 +122,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    csvSplit: Boolean = false
+    csvSplit: Boolean = false,
+    detect: Boolean = true
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "put")
@@ -137,18 +139,55 @@ object WriteCommands:
                 s"--csv requires a range target; ${ref.toA1} is a single cell."
               )
             )
-          else putSingleCell(wb, targetSheet, ref, singleValue, outputPath, config, stream)
+          else
+            putSingleCell(
+              wb,
+              targetSheet,
+              ref,
+              singleValue,
+              outputPath,
+              config,
+              stream,
+              detect
+            )
 
         case (Right(range), List(singleValue)) =>
           // Mode 2: Fill pattern (opt-in CSV split with --csv)
           if csvSplit then
-            putCsvSplit(wb, targetSheet, range, singleValue, outputPath, config, stream)
+            putCsvSplit(
+              wb,
+              targetSheet,
+              range,
+              singleValue,
+              outputPath,
+              config,
+              stream,
+              detect
+            )
           else
-            putFillPatternLiteral(wb, targetSheet, range, singleValue, outputPath, config, stream)
+            putFillPatternLiteral(
+              wb,
+              targetSheet,
+              range,
+              singleValue,
+              outputPath,
+              config,
+              stream,
+              detect
+            )
 
         case (Right(range), multipleValues @ (_ :: _ :: _)) =>
           // Mode 3: Batch values (validate count matches) - 2+ values
-          putBatchValues(wb, targetSheet, range, multipleValues, outputPath, config, stream)
+          putBatchValues(
+            wb,
+            targetSheet,
+            range,
+            multipleValues,
+            outputPath,
+            config,
+            stream,
+            detect
+          )
 
         case (Left(ref), multipleValues @ (_ :: _)) =>
           IO.raiseError(
@@ -170,14 +209,20 @@ object WriteCommands:
     valueStr: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean
+    stream: Boolean,
+    detect: Boolean
   ): IO[String] =
-    val value = ValueParser.parseValue(valueStr)
-    val updatedSheet = sheet.put(ref, value)
+    val formatted = ValueParser.parsePutValue(valueStr, detect)
+    val updatedSheet = putFormatted(sheet, ref, formatted)
     val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, Set(ref))
     writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-      s"${Format.putSuccess(ref, value)}\n${saveSuffix(outputPath, stream)}"
+      s"${Format.putSuccess(ref, formatted.value)}\n${saveSuffix(outputPath, stream)}"
     }
+
+  /** Apply a detected number format without creating a redundant General style. */
+  private def putFormatted(sheet: Sheet, ref: ARef, formatted: Formatted): Sheet =
+    if formatted.numFmt == NumFmt.General then sheet.put(ref, formatted.value)
+    else sheet.put(ref, formatted)
 
   /** Mode 2 with --csv: split a comma-separated value across the range. Requires exact count. */
   private def putCsvSplit(
@@ -187,7 +232,8 @@ object WriteCommands:
     valueStr: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean
+    stream: Boolean,
+    detect: Boolean
   ): IO[String] =
     val parts = valueStr.split(",", -1).map(_.trim).toList
     val cellCount = range.cellCount.toInt
@@ -198,7 +244,7 @@ object WriteCommands:
             "Adjust the range size or value count to match."
         )
       )
-    else putBatchValues(wb, sheet, range, parts, outputPath, config, stream)
+    else putBatchValues(wb, sheet, range, parts, outputPath, config, stream, detect)
 
   /** Fill all cells in range with the same literal value (no CSV splitting) */
   private def putFillPatternLiteral(
@@ -208,15 +254,16 @@ object WriteCommands:
     valueStr: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean
+    stream: Boolean,
+    detect: Boolean
   ): IO[String] =
-    val value = ValueParser.parseValue(valueStr)
+    val formatted = ValueParser.parsePutValue(valueStr, detect)
     val cellCount = range.cellCount
     val modifiedRefs = range.cells.toSet
-    val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => s.put(ref, value))
+    val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => putFormatted(s, ref, formatted))
     val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
     writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-      s"Filled $cellCount cells in ${range.toA1} with value ${value}\n${saveSuffix(outputPath, stream)}"
+      s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}\n${saveSuffix(outputPath, stream)}"
     }
 
   /** Mode 3: Put different values to each cell (row-major order) */
@@ -227,7 +274,8 @@ object WriteCommands:
     values: List[String],
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean
+    stream: Boolean,
+    detect: Boolean
   ): IO[String] =
     val cellCount = range.cellCount.toInt
     validateCountMatch("put", range, cellCount, values.length, "value") match
@@ -236,7 +284,7 @@ object WriteCommands:
         val updates = range.cellsRowMajor
           .zip(values.iterator)
           .map { (ref, valueStr) =>
-            (ref, ValueParser.parseValue(valueStr))
+            (ref, ValueParser.parsePutValue(valueStr, detect))
           }
           .toVector
         val modifiedRefs = updates.map(_._1).toSet
