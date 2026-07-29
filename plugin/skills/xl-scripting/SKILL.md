@@ -230,6 +230,33 @@ Excel.write(result.workbook, "model.xlsx")       // computed values cached for E
 
 108 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/MROUND/RAND/NPV/IRR/... plus LET) — full list in `reference/API.md`.
 
+### Data tables (what-if sensitivity)
+
+Native Excel `TABLE()` two-variable data tables (0.18.0) — the house sensitivity engine. `interior` is the RESULT GRID: for `D5:F6` the corner formula sits at C4 (one-up-one-left), the row-input axis rides D4:F4 (above) and the column-input axis rides C5:C6 (left). Only the corner cell carries the record — exactly Excel's own bytes.
+
+```scala
+//> using scala 3.8.3
+//> using dep com.tjclp::xl:0.17.0
+import com.tjclp.xl.scripting.{*, given}
+
+val model = Sheet("Sensitivity")
+  .put(ref"B1", 0.08)                        // row input (perturbed by D4:F4)
+  .put(ref"B2", 10.0)                        // column input (perturbed by C5:C6)
+  .put(ref"C4", fx"=B1*B2*100")              // corner formula the table re-evaluates
+  .put(ref"D4", 0.06).put(ref"E4", 0.08).put(ref"F4", 0.10)
+  .put(ref"C5", 9.0).put(ref"C6", 11.0)
+
+val authored = model.dataTable(ref"D5:F6", rowInput = ref"B1", colInput = ref"B2").unsafe
+
+// Seed the interior caches: under calcMode="autoNoTable" (the house dialect) Excel does NOT
+// recompute data tables on open — even with fullCalcOnLoad — so an unseeded grid opens BLANK.
+// Plain calcMode="auto" books self-heal on open; calc levers stay on Workbook.withCalcPr.
+val seeded = Workbook(authored).seedDataTables().unsafe
+Excel.write(seeded, "sensitivity.xlsx")
+```
+
+1-D shapes: `sheet.dataTableRow(interior, rowInput)` (axis above, source formulas in the column left — one per interior row) and `sheet.dataTableCol(interior, colInput)` (axis left, source formulas in the row above — one per interior column; multi-result-column tables are legal). All three take optional row-major `seeds` to ship byte-exact caches without evaluating; the corner absorbs a pre-existing plain scalar as its cache, so `fillBy`-then-`dataTable` composes. Authoring refuses to tear existing tables, overwrite real formulas, or accept inputs inside the table block — each with a structured `XLError`.
+
 ### Error handling: Either everywhere, unsafe once
 
 Everything fallible returns `XLResult[A]` (= `Either[XLError, A]`). Compose with for-comprehensions; unwrap **once** at the script edge:

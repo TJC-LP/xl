@@ -57,7 +57,7 @@ class FormulaRecordCliSpec extends FunSuite:
         )
       )
 
-  test("putf rejects a top-level TABLE( expression with a pointer at GH-419") {
+  test("putf rejects a top-level TABLE( expression, steering to the GH-419 authoring surfaces") {
     val wb = Workbook(recordSheet)
     val error = intercept[Exception] {
       WriteCommands
@@ -65,6 +65,16 @@ class FormulaRecordCliSpec extends FunSuite:
         .unsafeRunSync()
     }
     assert(error.getMessage.contains("GH-419"), s"unexpected message: ${error.getMessage}")
+    assert(
+      error.getMessage.contains(
+        """the data-table batch op ({"op":"data-table","ref":"D5:F6","rowInput":"B1","colInput":"B2"})"""
+      ),
+      s"steering must name the batch op: ${error.getMessage}"
+    )
+    assert(
+      error.getMessage.contains("sheet.dataTable(interior, rowInput, colInput)"),
+      s"steering must name the scripting API: ${error.getMessage}"
+    )
     assert(!Files.exists(outputPath) || Files.size(outputPath) == 0L, "nothing must be written")
   }
 
@@ -75,7 +85,12 @@ class FormulaRecordCliSpec extends FunSuite:
     assert(ValueParser.dataTableFormulaError("=SUM(TABLE1)").isEmpty)
     val json = """[{"op":"putf","ref":"B9","formula":"=TABLE(A1,A2)"}]"""
     BatchParser.parseBatchJson(json) match
-      case Left(err) => assert(err.getMessage.contains("GH-419"), err.getMessage)
+      case Left(err) =>
+        assert(err.getMessage.contains("GH-419"), err.getMessage)
+        assert(
+          err.getMessage.contains("sheet.dataTable(interior, rowInput, colInput)"),
+          err.getMessage
+        )
       case Right(_) => fail("batch putf must reject TABLE( formulas")
   }
 
