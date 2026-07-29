@@ -168,8 +168,9 @@ object ChartCommands:
 
   /**
    * Stamp explicit fills positionally (GH-407). Fewer colors than series is fine (the rest keep the
-   * writer's accent cycle); more is an error. Pie rejects: slices are colored per-slice from the
-   * accent cycle, so a single series color would repaint the whole pie.
+   * writer's accent cycle); more is an error. Pie maps colors per-SLICE instead (GH-418): a pie has
+   * one series, so tokens become per-point `c:dPt` fills, and slices past the list continue the
+   * accent cycle — the same fewer-than semantics as bar/line series.
    */
   private def applyColors(
     series: Vector[Series],
@@ -178,28 +179,38 @@ object ChartCommands:
   ): IO[Vector[Series]] =
     colorsOpt match
       case None => IO.pure(series)
-      case Some(_) if chartType == ChartType.Pie =>
-        fail(
-          "--series-colors is not supported for pie charts: slices are colored per-slice from " +
-            "the theme accent cycle (a pie has one series, so a series color would paint every " +
-            "slice the same)"
-        )
       case Some(raw) =>
         val tokens = raw.split(',').toVector.map(_.trim)
-        if tokens.sizeIs > series.size then
-          fail(
-            s"--series-colors count (${tokens.size}) must not exceed the series count (${series.size})"
-          )
-        else
-          tokens
-            .foldLeft(IO.pure(Vector.empty[Color.Rgb])) { (acc, token) =>
-              acc.flatMap(colors => parseSeriesColor(token).map(colors :+ _))
-            }
-            .map { colors =>
-              series.zipWithIndex.map { (s, i) =>
-                colors.lift(i).fold(s)(c => s.copy(fill = Some(c)))
+        def parsed: IO[Vector[Color.Rgb]] =
+          tokens.foldLeft(IO.pure(Vector.empty[Color.Rgb])) { (acc, token) =>
+            acc.flatMap(colors => parseSeriesColor(token).map(colors :+ _))
+          }
+        chartType match
+          case ChartType.Pie =>
+            series match
+              case Vector(single) =>
+                val slices = single.values.cellCount
+                if tokens.sizeIs > slices then
+                  fail(
+                    s"--series-colors count (${tokens.size}) must not exceed the pie slice " +
+                      s"count ($slices)"
+                  )
+                else parsed.map(colors => Vector(single.copy(pointFills = colors)))
+              case _ =>
+                // != 1 series: pass through — Chart.validated rejects with the canonical
+                // "pie charts require exactly 1 series" error downstream
+                IO.pure(series)
+          case _ =>
+            if tokens.sizeIs > series.size then
+              fail(
+                s"--series-colors count (${tokens.size}) must not exceed the series count (${series.size})"
+              )
+            else
+              parsed.map { colors =>
+                series.zipWithIndex.map { (s, i) =>
+                  colors.lift(i).fold(s)(c => s.copy(fill = Some(c)))
+                }
               }
-            }
 
   /**
    * Shared construction path for `chart add` and the batch `chart` op (GH-407): parse, resolve

@@ -148,6 +148,22 @@ class SheetChartSpec extends FunSuite:
     assertEquals(byCol.series(0).name, Some(SeriesName.FromCell(data, ref"A1")))
   }
 
+  test("structural shifts preserve series styling (fill + pointFills) while remapping refs") {
+    import com.tjclp.xl.styles.color.Color
+    val styled = series.copy(
+      fill = Some(Color.Rgb(0xff307fe2)),
+      pointFills = Vector(Color.Rgb(0xff005670), Color.Rgb(0xffff0000))
+    )
+    val s = sheet.addChart(
+      Chart(ChartType.Pie, Vector(styled), None, None),
+      DrawingAnchor.at(ref"D2", Extent(Emu(1), Emu(1)))
+    )
+    val c = chartOf(s.insertRows(0, 2))
+    assertEquals(c.series(0).values, dref(ref"B4:B7"))
+    assertEquals(c.series(0).fill, Some(Color.Rgb(0xff307fe2)): Option[Color.Rgb])
+    assertEquals(c.series(0).pointFills, styled.pointFills)
+  }
+
   test("core-only structural edit leaves cross-sheet chart refs untouched (documented)") {
     val other = SheetName.unsafe("Other")
     val crossSeries = series.copy(

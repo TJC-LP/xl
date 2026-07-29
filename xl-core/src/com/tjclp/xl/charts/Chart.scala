@@ -80,22 +80,29 @@ enum SeriesName derives CanEqual:
 
 /**
  * One chart series: a values vector, optional categories vector, optional name, optional explicit
- * fill color. Values and categories must be 1×N or N×1 vectors (enforced by [[Chart.validated]];
- * the writer stays total regardless).
+ * fill color, optional explicit per-point fills. Values and categories must be 1×N or N×1 vectors
+ * (enforced by [[Chart.validated]]; the writer stays total regardless).
  *
  * `fill` is the explicit series color (GH-407): bar/column fill; for line charts the color rides
  * the STROKE. `None` lets the writer cycle the default Office accent palette (deterministic by
  * series index) so LibreOffice renders series visibly out of the box. The chart XML slot
  * (`a:srgbClr`) carries no alpha: the writer emits RRGGBB and the reader restores an opaque color,
- * so only opaque fills round-trip exactly. Pie slices are colored per-point from the accent cycle
- * (`c:dPt`, one per value cell); a pie series' `fill` round-trips at series level but never
- * repaints slices.
+ * so only opaque fills round-trip exactly. Pie slices are colored per-point (`c:dPt`, one per value
+ * cell); a pie series' `fill` round-trips at series level but never repaints slices.
+ *
+ * `pointFills` are explicit per-point colors (GH-418), positional: point `k` paints `c:dPt` `k`,
+ * and points past the end continue the accent cycle (same fewer-than semantics as `fill` across
+ * series). Only pie emission consumes them today — bar/line ignore them — and entries beyond the
+ * values vector never emit. The reader canonicalizes on parse: trailing entries that coincide with
+ * the accent cycle re-derive on emission and are stripped, so only prefixes ending in a non-accent
+ * color round-trip as-written (emitted bytes are identical either way).
  */
 final case class Series(
   values: DataRef,
   categories: Option[DataRef] = None,
   name: Option[SeriesName] = None,
-  fill: Option[Color.Rgb] = None
+  fill: Option[Color.Rgb] = None,
+  pointFills: Vector[Color.Rgb] = Vector.empty
 ) derives CanEqual
 
 /** Bar chart direction (`c:barDir`): Col = vertical columns, Bar = horizontal bars. */

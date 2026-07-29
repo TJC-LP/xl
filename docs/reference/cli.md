@@ -834,7 +834,7 @@ xl -f in.xlsx -s Data -o out.xlsx chart add --type pie \
 | `--data` | Values range; qualified refs (`Data!B2:D10`) accepted (required) |
 | `--categories` | Categories vector (one row or one column) |
 | `--series-names` | Comma-separated literal names, applied positionally |
-| `--series-colors` | Comma-separated colors (`#307FE2,#005670`), applied positionally; unset series cycle the theme accents |
+| `--series-colors` | Comma-separated colors (`#307FE2,#005670`), applied positionally; unset series cycle the theme accents. Pie: colors map per **slice** (`c:dPt`), slices past the list continue the accent cycle |
 | `--title` | Chart title |
 | `--legend` | `right` (default), `left`, `top`, `bottom`, `top-right`, `none` |
 | `--at` | Placement: a range (chart stretches over it) or a single cell (required) |

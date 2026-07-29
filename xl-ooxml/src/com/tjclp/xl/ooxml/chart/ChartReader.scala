@@ -26,20 +26,23 @@ import com.tjclp.xl.styles.color.Color
  * canonical emitter re-derives are accepted-and-dropped: `idx`/`order` (re-derived 0..n-1), axis
  * ids (re-derived 10/100), any `axPos` (TRAP-4: the fixture writes the l/l quirk Excel ignores),
  * tick marks, label alignment/offset, `numFmt`, empty `majorGridlines`, num/str caches anywhere
- * (write-only hints), the fixture's no-op `ser/spPr` of exactly `a:ln/a:prstDash val="solid"`, pie
- * accent-cycle `c:dPt` fills (re-derived per slice — GH-407), and `lang`/`roundedCorners`. The loss
- * only materializes on a dirty regeneration of the chart part (the GH-221 drawing-layer contract).
+ * (write-only hints), the fixture's no-op `ser/spPr` of exactly `a:ln/a:prstDash val="solid"`, the
+ * trailing accent-cycle run of pie `c:dPt` fills (re-derived per slice — GH-407), and
+ * `lang`/`roundedCorners`. The loss only materializes on a dirty regeneration of the chart part
+ * (the GH-221 drawing-layer contract).
  *
  * CAPTURED since GH-407: the writer's own per-series fill shapes — bar/pie `ser/spPr/a:solidFill`
  * and line `ser/spPr/a:ln/a:solidFill`, each holding one bare `a:srgbClr` — parse into
- * [[Series.fill]].
+ * [[Series.fill]]. Since GH-418, writer-shaped pie `c:dPt` solid fills (one per value cell, idx in
+ * document order) parse into [[Series.pointFills]] with the trailing accent-cycle run stripped.
  *
  * Deliberately rejected (visible state the model cannot represent): every other chart group,
  * `c:style`/txPr formatting, any other spPr content (gradients, color transforms, mixed
- * fill+stroke), externalData, dLbls/trendlines/errBars, non-accent-cycle dPt fills, hidden or
- * inverted axes, non-default gapWidth/overlap, smooth lines, real markers, multi-level categories,
- * `mc:AlternateContent`, and `autoTitleDeleted val="0"` without a title (Excel's auto-title state
- * is unrepresentable).
+ * fill+stroke), externalData, dLbls/trendlines/errBars, dPt sets that are not one-bare-solid-fill
+ * per value cell in idx order (partial sets, extra dPt children like Excel's `c:bubble3D`), hidden
+ * or inverted axes, non-default gapWidth/overlap, smooth lines, real markers, multi-level
+ * categories, `mc:AlternateContent`, and `autoTitleDeleted val="0"` without a title (Excel's
+ * auto-title state is unrepresentable).
  */
 object ChartReader:
 
@@ -296,10 +299,10 @@ object ChartReader:
         case Some(cat) => parseCatRef(cat).map(Some(_))
       valEl <- kids.find(_.label == "val")
       values <- parseValRef(valEl)
-      _ <-
-        if kind == SerKind.Pie then checkPieDPts(kids.filter(_.label == "dPt"), values.cellCount)
-        else Some(())
-    yield Series(values, cats, name, fill)
+      pointFills <-
+        if kind == SerKind.Pie then parsePieDPts(kids.filter(_.label == "dPt"), values.cellCount)
+        else Some(Vector.empty[Color.Rgb])
+    yield Series(values, cats, name, fill, pointFills)
 
   /**
    * The fixture's no-op `ser/spPr`: exactly `a:ln/a:prstDash val="solid"`. Anything else rejects.
@@ -347,21 +350,26 @@ object ChartReader:
     )
 
   /**
-   * Writer-emitted pie slice fills (GH-407): either NO dPts (pre-fill output) or exactly one per
-   * value cell — idx 0..n-1 in document order, each the accent-cycle solid fill. They re-derive on
-   * emission, so they are dropped; anything richer (custom slice colors, extra dPt children)
-   * rejects to Preserved.
+   * Writer-emitted pie slice fills: either NO dPts (pre-GH-407 output) or exactly one per value
+   * cell — idx 0..n-1 in document order, each a bare solid fill. Explicit slice colors capture into
+   * [[Series.pointFills]] (GH-418) after canonicalization: the trailing run that coincides with the
+   * accent cycle re-derives on emission (GH-407), so it is stripped — all-accent output parses back
+   * to empty, an explicit prefix parses back to itself. Anything richer (wrong count, out-of-order
+   * idx, extra dPt children, non-solid fills) rejects to Preserved.
    */
-  private def checkPieDPts(dPts: Seq[Elem], cellCount: Int): Option[Unit] =
-    if dPts.isEmpty then Some(())
+  private def parsePieDPts(dPts: Seq[Elem], cellCount: Int): Option[Vector[Color.Rgb]] =
+    if dPts.isEmpty then Some(Vector.empty)
     else
       for
         _ <- Option.when(dPts.sizeIs == cellCount)(())
         parsed <- traverseOpt(dPts)(parseDPt)
-        _ <- Option.when(parsed.zipWithIndex.forall { case ((idx, rgb), k) =>
-          idx == k && rgb == Color.Rgb(DefaultTheme.accentArgb(k))
-        })(())
-      yield ()
+        _ <- Option.when(parsed.zipWithIndex.forall { case ((idx, _), k) => idx == k })(())
+      yield
+        val colors = parsed.map(_._2)
+        val trailingAccents = colors.zipWithIndex.reverse.takeWhile { case (rgb, k) =>
+          rgb == Color.Rgb(DefaultTheme.accentArgb(k))
+        }.size
+        colors.dropRight(trailingAccents)
 
   /** One `c:dPt`: exactly `c:idx` + fill-shaped `c:spPr`. */
   private def parseDPt(dPt: Elem): Option[(Int, Color.Rgb)] =

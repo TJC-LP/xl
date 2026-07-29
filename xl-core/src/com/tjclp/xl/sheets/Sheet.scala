@@ -1164,7 +1164,8 @@ object Sheet:
             shiftCell(ref).map(SeriesName.FromCell(sheet, _))
           case other => Some(other)
         }
-        Series(values, newCats, newName)
+        // copy, not reconstruct: styling (fill, pointFills) survives the structural shift
+        series.copy(values = values, categories = newCats, name = newName)
       }
     }
     chart.copy(series = shiftedSeries)
