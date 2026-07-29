@@ -133,10 +133,14 @@ object Main
           IO.println(Format.errorSimple(s"Unexpected diff command: $other")).as(ExitCode.Error)
     }
 
-    // Lint: raw-zip structural validation (GH-397, no output file); custom exit codes
-    val lintOpts = (fileOpt, lintCmd).mapN { (file, cmd) =>
+    // Lint: raw-zip structural validation (GH-397, no output file); custom exit codes.
+    // The file arrives via -f or positionally (GH-422); exactly one form must be used.
+    val lintOpts = (fileOpt.orNone, lintCmd).mapN { case (flagFile, (cmd, positional)) =>
       cmd match
-        case CliCommand.Lint(format) => runLint(file, format)
+        case CliCommand.Lint(format) =>
+          resolveLintFile(flagFile, positional) match
+            case Right(file) => runLint(file, format)
+            case Left(msg) => IO.println(Format.errorSimple(msg)).as(ExitCode(2))
         case other =>
           IO.println(Format.errorSimple(s"Unexpected lint command: $other")).as(ExitCode.Error)
     }
@@ -577,8 +581,9 @@ lenient reader accepts silently:
     part missing from the package
 
 USAGE:
-  xl -f report.xlsx lint
-  xl -f report.xlsx lint --format json       # Stable machine-readable schema
+  xl lint report.xlsx
+  xl -f report.xlsx lint                     # Equivalent flag form
+  xl lint report.xlsx --format json          # Stable machine-readable schema
 
 FINDING CATEGORIES:
   child-order | unresolved-rel-id | wrong-rel-type | missing-part
@@ -591,8 +596,8 @@ EXIT CODES:
 Docs: xl lint is read-only; it never repairs or rewrites the file.
 
 EXAMPLES:
-  xl -f deliverable.xlsx lint && echo "safe to send"
-  xl -f deliverable.xlsx lint --format json | jq '.findings'"""
+  xl lint deliverable.xlsx && echo "safe to send"
+  xl lint deliverable.xlsx --format json | jq '.findings'"""
 
   private val lintFormatOpt: Opts[LintFormat] =
     Opts
@@ -606,9 +611,15 @@ EXAMPLES:
             cats.data.Validated.invalidNel(s"Unknown format: $other. Use text or json")
       }
 
-  val lintCmd: Opts[CliCommand] =
+  /**
+   * Lint reads exactly one file and writes nothing, so it also accepts the file as a positional
+   * argument — `xl lint report.xlsx` — alongside the global `-f` form (GH-422).
+   */
+  val lintCmd: Opts[(CliCommand, Option[Path])] =
     Opts.subcommand("lint", lintHelp) {
-      lintFormatOpt.map(CliCommand.Lint.apply)
+      (lintFormatOpt, Opts.argument[Path]("file").orNone).mapN((format, positional) =>
+        (CliCommand.Lint(format), positional)
+      )
     }
 
   // --- Info commands (no --file required) ---
@@ -1693,6 +1704,22 @@ EXAMPLES:
     }
 
   /**
+   * Resolve lint's input file from the `-f` flag and the positional form — exactly one must be
+   * given (GH-422). Errors use lint's exit-code 2 convention at the call site.
+   */
+  private[cli] def resolveLintFile(
+    flagFile: Option[Path],
+    positional: Option[Path]
+  ): Either[String, Path] =
+    (flagFile, positional) match
+      case (Some(file), None) => Right(file)
+      case (None, Some(file)) => Right(file)
+      case (Some(f), Some(p)) =>
+        Left(s"lint takes exactly one file — got both -f '$f' and positional '$p'")
+      case (None, None) =>
+        Left("lint requires a file: xl lint <file> (or xl -f <file> lint)")
+
+  /**
    * Run the lint command with its exit-code convention: 0 = clean, 1 = findings, 2 = error
    * (unreadable file, missing/malformed core part). Opens the zip directly — NOT ExcelIO.read —
    * because a full parse would repair/normalize the very structure lint inspects (GH-397).
@@ -1997,7 +2024,7 @@ EXAMPLES:
         )
       )
 
-  private def executeCommand(
+  private[cli] def executeCommand(
     wb: Workbook,
     sheetOpt: Option[Sheet],
     outputOpt: Option[Path],
@@ -2010,11 +2037,11 @@ EXAMPLES:
       action match
         case SheetsAction.List(_) => WorkbookCommands.sheets(wb)
         case SheetsAction.Hide(name, veryHide) =>
-          requireOutput(outputOpt, backendOpt, stream)(
+          requireOutput("sheets hide", outputOpt, backendOpt, stream)(
             SheetCommands.hideSheet(wb, name, veryHide, _, _, _)
           )
         case SheetsAction.Show(name) =>
-          requireOutput(outputOpt, backendOpt, stream)(
+          requireOutput("sheets show", outputOpt, backendOpt, stream)(
             SheetCommands.showSheet(wb, name, _, _, _)
           )
 
@@ -2082,12 +2109,12 @@ EXAMPLES:
 
     // Write commands (require output)
     case CliCommand.Put(refStr, values, csvSplit, detect) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("put", outputOpt, backendOpt, stream)(
         WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect)
       )
 
     case CliCommand.PutFormula(refStr, formulas) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("putf", outputOpt, backendOpt, stream)(
         WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _)
       )
 
@@ -2112,7 +2139,7 @@ EXAMPLES:
           borderColor,
           replace
         ) =>
-      requireOutput(outputOpt, backendOpt, stream) { (outputPath, config, streamWrite) =>
+      requireOutput("style", outputOpt, backendOpt, stream) { (outputPath, config, streamWrite) =>
         WriteCommands.style(
           wb,
           sheetOpt,
@@ -2142,12 +2169,12 @@ EXAMPLES:
       }
 
     case CliCommand.RowOp(rowNum, height, hide, show) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("row", outputOpt, backendOpt, stream)(
         WriteCommands.row(wb, sheetOpt, rowNum, height, hide, show, _, _, _)
       )
 
     case CliCommand.ColOp(colStr, width, hide, show, autoFit) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("col", outputOpt, backendOpt, stream)(
         WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, autoFit, _, _, _)
       )
 
@@ -2155,146 +2182,152 @@ EXAMPLES:
       batchDryRun(source)
 
     case CliCommand.Batch(source, _) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("batch", outputOpt, backendOpt, stream)(
         WriteCommands.batch(wb, sheetOpt, source, _, _, _)
       )
 
     case CliCommand.Recalc =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("recalc", outputOpt, backendOpt, stream)(
         WriteCommands.recalc(wb, _, _, _)
       )
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
-      requireOutput(outputOpt, backendOpt, stream) { (outputPath, writerConfig, streamWrite) =>
-        ImportCommands.importCsv(
-          wb,
-          sheetOpt,
-          csvPath,
-          startRefOpt,
-          delim,
-          skipHeader,
-          enc,
-          newSheetOpt,
-          noInfer,
-          outputPath,
-          writerConfig,
-          streamWrite
-        )
+      requireOutput("import", outputOpt, backendOpt, stream) {
+        (outputPath, writerConfig, streamWrite) =>
+          ImportCommands.importCsv(
+            wb,
+            sheetOpt,
+            csvPath,
+            startRefOpt,
+            delim,
+            skipHeader,
+            enc,
+            newSheetOpt,
+            noInfer,
+            outputPath,
+            writerConfig,
+            streamWrite
+          )
       }
 
     case CliCommand.ImportMarkdown(mdPath, startRefOpt, skipHeader, newSheetOpt, noInfer) =>
-      requireOutput(outputOpt, backendOpt, stream) { (outputPath, writerConfig, streamWrite) =>
-        ImportCommands.importMarkdown(
-          wb,
-          sheetOpt,
-          mdPath,
-          startRefOpt,
-          skipHeader,
-          newSheetOpt,
-          noInfer,
-          outputPath,
-          writerConfig,
-          streamWrite
-        )
+      requireOutput("import-md", outputOpt, backendOpt, stream) {
+        (outputPath, writerConfig, streamWrite) =>
+          ImportCommands.importMarkdown(
+            wb,
+            sheetOpt,
+            mdPath,
+            startRefOpt,
+            skipHeader,
+            newSheetOpt,
+            noInfer,
+            outputPath,
+            writerConfig,
+            streamWrite
+          )
       }
 
     // Sheet management commands
     case CliCommand.AddSheet(name, afterOpt, beforeOpt) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("add-sheet", outputOpt, backendOpt, stream)(
         SheetCommands.addSheet(wb, name, afterOpt, beforeOpt, _, _, _)
       )
 
     case CliCommand.RemoveSheet(name) =>
-      requireOutput(outputOpt, backendOpt, stream)(SheetCommands.removeSheet(wb, name, _, _, _))
+      requireOutput("remove-sheet", outputOpt, backendOpt, stream)(
+        SheetCommands.removeSheet(wb, name, _, _, _)
+      )
 
     case CliCommand.RenameSheet(oldName, newName) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("rename-sheet", outputOpt, backendOpt, stream)(
         SheetCommands.renameSheet(wb, oldName, newName, _, _, _)
       )
 
     case CliCommand.Name(action) =>
       action match
         case NameAction.Add(nm, refersTo) =>
-          requireOutput(outputOpt, backendOpt, stream)(
+          requireOutput("name add", outputOpt, backendOpt, stream)(
             SheetCommands.nameAdd(wb, nm, refersTo, _, _, _)
           )
         case NameAction.Remove(nm) =>
-          requireOutput(outputOpt, backendOpt, stream)(SheetCommands.nameRemove(wb, nm, _, _, _))
+          requireOutput("name rm", outputOpt, backendOpt, stream)(
+            SheetCommands.nameRemove(wb, nm, _, _, _)
+          )
 
     case CliCommand.MoveSheet(name, toIndexOpt, afterOpt, beforeOpt) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("move-sheet", outputOpt, backendOpt, stream)(
         SheetCommands.moveSheet(wb, name, toIndexOpt, afterOpt, beforeOpt, _, _, _)
       )
 
     case CliCommand.CopySheet(sourceName, targetName) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("copy-sheet", outputOpt, backendOpt, stream)(
         SheetCommands.copySheet(wb, sourceName, targetName, _, _, _)
       )
 
     // Cell commands
     case CliCommand.Merge(rangeStr) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("merge", outputOpt, backendOpt, stream)(
         CellCommands.merge(wb, sheetOpt, rangeStr, _, _, _)
       )
 
     case CliCommand.Unmerge(rangeStr) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("unmerge", outputOpt, backendOpt, stream)(
         CellCommands.unmerge(wb, sheetOpt, rangeStr, _, _, _)
       )
 
     case CliCommand.AddComment(refStr, text, author) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("comment", outputOpt, backendOpt, stream)(
         CommentCommands.addComment(wb, sheetOpt, refStr, text, author, _, _, _)
       )
 
     case CliCommand.RemoveComment(refStr) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("remove-comment", outputOpt, backendOpt, stream)(
         CommentCommands.removeComment(wb, sheetOpt, refStr, _, _, _)
       )
 
     case CliCommand.Clear(rangeStr, all, styles, comments) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("clear", outputOpt, backendOpt, stream)(
         CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _)
       )
 
     case CliCommand.Fill(source, target, direction) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("fill", outputOpt, backendOpt, stream)(
         WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _, _)
       )
 
     case CliCommand.AutoFit(columnsOpt) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("autofit", outputOpt, backendOpt, stream)(
         WriteCommands.autoFit(wb, sheetOpt, columnsOpt, _, _, _)
       )
 
     case CliCommand.Sort(rangeStr, sortKeys, hasHeader) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("sort", outputOpt, backendOpt, stream)(
         WriteCommands.sort(wb, sheetOpt, rangeStr, sortKeys, hasHeader, _, _, _)
       )
 
     case CliCommand.Freeze(refStr) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("freeze", outputOpt, backendOpt, stream)(
         WriteCommands.freeze(wb, sheetOpt, refStr, _, _, _)
       )
 
     case CliCommand.Unfreeze =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("unfreeze", outputOpt, backendOpt, stream)(
         WriteCommands.unfreeze(wb, sheetOpt, _, _, _)
       )
 
     // Sheet appearance & print setup (GH-358)
     case CliCommand.SheetViewOp(gridlines, zoom, tabSelected) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("sheet-view", outputOpt, backendOpt, stream)(
         WriteCommands.sheetView(wb, sheetOpt, gridlines, zoom, tabSelected, _, _, _)
       )
 
     case CliCommand.TabColorOp(color, clear) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("tab-color", outputOpt, backendOpt, stream)(
         WriteCommands.tabColor(wb, sheetOpt, color, clear, _, _, _)
       )
 
     case CliCommand.PageSetupOp(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("page-setup", outputOpt, backendOpt, stream)(
         WriteCommands.pageSetup(
           wb,
           sheetOpt,
@@ -2319,7 +2352,7 @@ EXAMPLES:
           differentOddEven,
           differentFirst
         ) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("header-footer", outputOpt, backendOpt, stream)(
         WriteCommands.headerFooter(
           wb,
           sheetOpt,
@@ -2339,7 +2372,7 @@ EXAMPLES:
 
     // Conditional formatting (GH-324)
     case CliCommand.CfAdd(range, rule, bold, italic, underline, strike, bg, fg) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("cf add", outputOpt, backendOpt, stream)(
         WriteCommands.cfAdd(
           wb,
           sheetOpt,
@@ -2361,7 +2394,7 @@ EXAMPLES:
       WriteCommands.cfList(wb, sheetOpt)
 
     case CliCommand.Copy(source, target, valuesOnly) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("copy", outputOpt, backendOpt, stream)(
         WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _)
       )
 
@@ -2376,7 +2409,7 @@ EXAMPLES:
           legend,
           at
         ) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("chart add", outputOpt, backendOpt, stream)(
         ChartCommands.chartAdd(
           wb,
           sheetOpt,
@@ -2396,27 +2429,27 @@ EXAMPLES:
       )
 
     case CliCommand.AddImage(imagePath, at, size) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("add-image", outputOpt, backendOpt, stream)(
         ChartCommands.addImage(wb, sheetOpt, imagePath, at, size, _, _, _)
       )
 
     case CliCommand.InsertRows(at, count) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("insert-rows", outputOpt, backendOpt, stream)(
         WriteCommands.insertRows(wb, sheetOpt, at, count, _, _, _)
       )
 
     case CliCommand.DeleteRows(at, count) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("delete-rows", outputOpt, backendOpt, stream)(
         WriteCommands.deleteRows(wb, sheetOpt, at, count, _, _, _)
       )
 
     case CliCommand.InsertColumns(col, count) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("insert-cols", outputOpt, backendOpt, stream)(
         WriteCommands.insertColumns(wb, sheetOpt, col, count, _, _, _)
       )
 
     case CliCommand.DeleteColumns(col, count) =>
-      requireOutput(outputOpt, backendOpt, stream)(
+      requireOutput("delete-cols", outputOpt, backendOpt, stream)(
         WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _)
       )
 
@@ -2432,15 +2465,20 @@ EXAMPLES:
   // Helpers
   // ==========================================================================
 
-  private def requireOutput(
+  /** Usage message for write commands invoked without -o/-i — names the flag (GH-422). */
+  private def missingOutputError(commandName: String): String =
+    s"$commandName requires -o <out.xlsx> (or -i to modify in place)"
+
+  private[cli] def requireOutput(
+    commandName: String,
     outputOpt: Option[Path],
     backendOpt: Option[XmlBackend],
     stream: Boolean = false
   )(f: (Path, WriterConfig, Boolean) => IO[String]): IO[String] =
     val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
-    outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required")))(path =>
-      f(path, config, stream)
-    )
+    outputOpt.fold(
+      IO.raiseError[String](new Exception(missingOutputError(commandName)))
+    )(path => f(path, config, stream))
 
   /**
    * Dispatch `run` with effective output path from --output / --in-place flags.
@@ -2494,7 +2532,7 @@ EXAMPLES:
     outputOpt match
       case Some(path) => f(path)
       case None =>
-        IO.raiseError(new Exception(s"$commandName requires -o/--output"))
+        IO.raiseError(new Exception(missingOutputError(commandName)))
 
   /** Build WriterConfig from CLI backend option */
   private def buildWriterConfig(backendOpt: Option[XmlBackend]): WriterConfig =

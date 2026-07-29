@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+CLI & fidelity correctness wave (wave 20): display parity between every
+numFmt path, batch/CLI ergonomics, sheet-lifecycle bookkeeping, and the
+remaining comment/sheet-default round-trip gaps.
+
+### Fixed
+
+- **Streaming styles emit canonical builtin numFmt ids** (#408):
+  `StylePatcher.findOrAddNumFmt` hand-rolled its own table with three
+  wrong mappings — Decimal wrote id 4 (thousands separators appeared),
+  Percent wrote 10 (`12%` gained decimals), Currency wrote 44 (accounting
+  semantics leaked in). Every non-Custom arm now delegates to the
+  canonical `NumFmt.builtInId` (Decimal→2, Percent→9, Currency→7), so the
+  streaming path — including `--stream put` detected formats from #431 —
+  renders identically to the in-memory writer.
+- **Built-in display arms unified onto FormatCodeParser** (#410):
+  `NumFmtFormatter`'s enum arms hand-rolled rendering that diverged from
+  the same format code through `FormatCodeParser` — `PercentDecimal`
+  showed `15.6%` where Excel shows `15.60%`. Built-in arms now render via
+  `FormatCodeParser(NumFmt.formatCode(fmt))`, property-tested identical
+  to the file-declared path for every built-in variant.
+- **Batch `put` values[] honors the op-level `format`** (#416):
+  `{"op":"put","ref":"A1:A2","values":[1,2],"format":"0.00%"}` silently
+  wrote General cells (the field was accepted-and-ignored). The op-level
+  format now threads into every element with exact single-put semantics —
+  native numbers carry it, strings parse according to it (including the
+  #438 explicit-date rejection), booleans/nulls stay bare — on both the
+  in-memory and streaming batch paths.
+- **Sheet-scoped defined names survive sheet order mutations** (#434):
+  `removeAt`/`insertAt`/`reorder` never remapped
+  `DefinedName.localSheetId`, so sheet-local names (and verbatim-preserved
+  print names) attached to the wrong sheet after any add/remove/reorder.
+  All three now remap scopes (names scoped to a removed sheet are
+  dropped, matching Excel).
+- **remove-sheet prunes its orphaned chart/drawing parts** (#417):
+  deleting a sheet carrying charts left `xl/charts/*`, `xl/drawings/*`,
+  their `.rels` and `[Content_Types]` overrides as dead weight. Parts
+  reachable only via the removed sheet's relationship closure are pruned;
+  anything referenced by a surviving part (shared images) survives.
+- **Comment round-trip fidelity** (#433): a file-authored comment whose
+  first run already spells the author prefix no longer gains a second
+  synthesized prefix, and run colors (`<color indexed=…>`) survive —
+  raw rPr payloads now ride through rewrite byte-faithfully.
+- **Usage errors name their flags** (#422): every write verb without
+  `-o` now says `<verb> requires -o <out.xlsx> (or -i to modify in
+  place)` instead of `Error: Internal: output required`, and `xl lint
+  <file>` accepts the positional file form.
+
+### Added
+
+- **`<sheetFormatPr>` write path** (#426): `Sheet.defaultRowHeight` /
+  `defaultColumnWidth` now emit on both writer backends (and populate on
+  read), so from-scratch books can set sheet-default grid metrics (house
+  grids want 12.75); unmodeled attrs of a preserved `sheetFormatPr` ride
+  through dirty writes.
+- **`Sheet.named(name): XLResult[Sheet]`** (#420): the documented
+  dynamic-name factory beside the literal-specializing transparent-inline
+  `Sheet.apply`, ending the literal-vs-dynamic return-type surprise in
+  scripts; scripting docs and skills now explain the split.
+
 ## [0.16.0] "Bedrock" - 2026-07-29
 
 Structural-integrity wave (wave 19) plus two follow-through fixes: the

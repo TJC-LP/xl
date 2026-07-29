@@ -67,7 +67,8 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 
 | Method | Returns | Notes |
 |--------|---------|-------|
-| `Sheet("Name")` | `Sheet` | literal validated at compile time |
+| `Sheet("Name")` | `Sheet` (literal) / `XLResult[Sheet]` (runtime string) | literal validated at compile time; the specialization is invisible at the call site — prefer `Sheet.named` for runtime names ([#420](https://github.com/TJC-LP/xl/issues/420)) |
+| `Sheet.named(name)` | `XLResult[Sheet]` | THE dynamic-name factory (0.17.0): same validation as `Sheet(name)`, result type spelled in the signature — `Sheet.named(nm).map(_.put(ref"A1", 1))` |
 | `sheet.put(ref"A1", value)` | `Sheet` | value: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText, CellValue, Formatted |
 | `sheet.put(ref"A1", value, style)` | `Sheet` | put with inline style |
 | `sheet.put("A1", value)` | `Sheet` (literal) / `XLResult[Sheet]` (runtime string) | |

@@ -1184,10 +1184,33 @@ object Sheet:
    * Examples:
    *   - `Sheet("Sales")` → `Sheet` (compile-time validated)
    *   - `Sheet(userInput)` → `XLResult[Sheet]` (runtime validated)
+   *
+   * The literal-vs-dynamic specialization is invisible at the call site — nothing in `Sheet(nm)`
+   * hints that the return type changed. For names computed at runtime, prefer [[named]], which
+   * spells the `XLResult` in its signature (GH-420).
    */
   @annotation.targetName("applyStringLiteral")
   transparent inline def apply(inline name: String): Sheet | XLResult[Sheet] =
     ${ com.tjclp.xl.macros.SheetLiteral.sheetImpl('name) }
+
+  /**
+   * Create an empty sheet from a name computed at runtime — the documented dynamic-name factory
+   * (GH-420).
+   *
+   * Semantically identical to the dynamic branch of the union-typed `apply` (same [[SheetName]]
+   * validation, same [[com.tjclp.xl.error.XLError.InvalidSheetName]] error), but non-inline with
+   * the `XLResult` spelled in the signature, so the `.map`/`.unsafe` step is expected rather than a
+   * surprise:
+   *
+   * {{{
+   * val nm: String = config.sheetName
+   * val sheet: XLResult[Sheet] = Sheet.named(nm).map(_.put(ref"A1", 1))
+   * }}}
+   */
+  def named(name: String): XLResult[Sheet] =
+    SheetName(name) match
+      case Right(validName) => Right(Sheet(validName))
+      case Left(err) => Left(XLError.InvalidSheetName(name, err))
 
   /** Create empty sheet with validated name */
   @annotation.targetName("applySheetName")

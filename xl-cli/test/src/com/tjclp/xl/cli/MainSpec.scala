@@ -1119,6 +1119,105 @@ class MainSpec extends CatsEffectSuite:
     }
   }
 
+  // ========== Batch put values[] op-level format (GH-416) ==========
+
+  test("parseBatchJson: put values[] threads op-level format into every element (GH-416)") {
+    // Exact repro from GH-416: this used to write General cells, silently dropping the format
+    val json = """[{"op":"put","ref":"A1:A2","values":[1.0,2.0],"format":"0.00%"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    result.toOption.get.ops.head match
+      case BatchOp.PutValues(range, values) =>
+        assertEquals(range, "A1:A2")
+        assertEquals(
+          values.map(_.cellValue),
+          Vector[CellValue](
+            CellValue.Number(BigDecimal("1.0")),
+            CellValue.Number(BigDecimal("2.0"))
+          )
+        )
+        assertEquals(
+          values.map(_.format),
+          Vector[Option[NumFmt]](Some(NumFmt.Custom("0.00%")), Some(NumFmt.Custom("0.00%"))),
+          "op-level format must apply to every value the op writes"
+        )
+      case other => fail(s"Expected PutValues, got $other")
+  }
+
+  test("batch: put values[] with op-level format writes numFmt on every cell (GH-416)") {
+    val sheet = Sheet("Test")
+    val wb = Workbook(Vector(sheet))
+    val ops = BatchParser
+      .parseBatchJson("""[{"op":"put","ref":"A1:A2","values":[1.0,2.0],"format":"0.00%"}]""")
+      .toOption
+      .get
+      .ops
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+      assertEquals(
+        updatedSheet.cells.get(ref"A1").map(_.value),
+        Some[CellValue](CellValue.Number(BigDecimal("1.0")))
+      )
+      assertEquals(
+        updatedSheet.cells.get(ref"A2").map(_.value),
+        Some[CellValue](CellValue.Number(BigDecimal("2.0")))
+      )
+      List(ref"A1", ref"A2").foreach { r =>
+        val style = updatedSheet.getCellStyle(r)
+        assert(style.isDefined, s"numFmt style should be set at ${r.toA1}")
+        assertEquals(style.get.numFmt, NumFmt.Custom("0.00%"))
+      }
+    }
+  }
+
+  test("parseBatchJson: put values[] op-level format leaves bool/null elements bare (GH-416)") {
+    // Single-put parity: explicit format applies to numbers/strings, never to booleans/null
+    val json = """[{"op":"put","ref":"A1:A3","values":[1.5,true,null],"format":"currency"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    result.toOption.get.ops.head match
+      case BatchOp.PutValues(_, values) =>
+        assertEquals(values.map(_.format).toList, List(Some(NumFmt.Currency), None, None))
+      case other => fail(s"Expected PutValues, got $other")
+  }
+
+  test("parseBatchJson: put values[] element parses exactly like the single-value arm (GH-416)") {
+    val singleJson = """[{"op":"put","ref":"A1","value":"$99.00","format":"currency"}]"""
+    val arrayJson = """[{"op":"put","ref":"A1:A1","values":["$99.00"],"format":"currency"}]"""
+
+    val single = BatchParser.parseBatchJson(singleJson).toOption.get.ops.head match
+      case BatchOp.Put(_, cv, fmt) => (cv, fmt)
+      case other => fail(s"Expected Put, got $other")
+    val fromArray = BatchParser.parseBatchJson(arrayJson).toOption.get.ops.head match
+      case BatchOp.PutValues(_, values) => (values.head.cellValue, values.head.format)
+      case other => fail(s"Expected PutValues, got $other")
+
+    assertEquals(fromArray, single, "values[] elements must follow single-put format semantics")
+  }
+
+  test("parseBatchJson: put values[] explicit date format rejects unparseable strings (GH-416)") {
+    val json = """[{"op":"put","ref":"A1","values":["not-a-date"],"format":"date"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isLeft, s"Explicit date format should reject unparseable input: $result")
+    val error = result.swap.toOption.getOrElse(fail("Expected parse error"))
+    assert(error.getMessage.contains("invalid for explicit format"))
+  }
+
+  test("parseBatchJson: put values[] without op-level format keeps smart detection") {
+    val json = """[{"op":"put","ref":"A1:A2","values":["$99.00","59.4%"]}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    result.toOption.get.ops.head match
+      case BatchOp.PutValues(_, values) =>
+        assertEquals(values.map(_.format).toList, List(Some(NumFmt.Currency), Some(NumFmt.Percent)))
+      case other => fail(s"Expected PutValues, got $other")
+  }
+
   test("formatSummary: produces expected summary lines") {
     val ops = Vector(
       BatchOp.PutFormula("A1", "=SUM(B1:B10)"),
@@ -1202,6 +1301,44 @@ class MainSpec extends CatsEffectSuite:
       case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Currency)) =>
         assertEquals(n, BigDecimal("99.00"))
       case other => fail(s"Expected Put with Currency detection, got $other")
+  }
+
+  // ========== Write commands without -o: usage error, not "Internal:" (GH-422) ==========
+
+  test("recalc without -o reports a usage error naming the flag (GH-422)") {
+    val wb = Workbook(Vector(Sheet("T")))
+    Main.executeCommand(wb, None, None, None, false, CliCommand.Recalc).attempt.map {
+      case Left(err) =>
+        assert(
+          err.getMessage.contains("recalc requires -o"),
+          s"message must name the command and flag, got: ${err.getMessage}"
+        )
+        assert(
+          !err.getMessage.contains("Internal"),
+          s"usage error must not masquerade as internal, got: ${err.getMessage}"
+        )
+      case Right(out) => fail(s"Expected missing-output error, got: $out")
+    }
+  }
+
+  test("unfreeze without -o names the command in the usage error (GH-422)") {
+    val wb = Workbook(Vector(Sheet("T")))
+    Main.executeCommand(wb, None, None, None, false, CliCommand.Unfreeze).attempt.map {
+      case Left(err) =>
+        assert(
+          err.getMessage.contains("unfreeze requires -o"),
+          s"every write verb should name itself, got: ${err.getMessage}"
+        )
+      case Right(out) => fail(s"Expected missing-output error, got: $out")
+    }
+  }
+
+  test("requireOutput: with -o supplied invokes the write (GH-422)") {
+    Main
+      .requireOutput("recalc", Some(java.nio.file.Paths.get("out.xlsx")), None)((path, _, _) =>
+        IO.pure(s"wrote $path")
+      )
+      .map(out => assertEquals(out, "wrote out.xlsx"))
   }
 
   test("StyleBuilder.parseNumFmt: custom format codes accepted") {

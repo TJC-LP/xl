@@ -615,6 +615,55 @@ private[ooxml] def parseAutoFilterRef(e: Elem): Option[CellRange] =
       .orElse(ARef.parse(refText).toOption.map(r => CellRange(r, r)))
   }
 
+// ===== Sheet-default sizing (GH-426) =====
+
+/**
+ * Overlay the modeled sheet defaults (`Sheet.defaultColumnWidth` / `Sheet.defaultRowHeight`) onto
+ * the preserved `<sheetFormatPr>` element (the mergePageSetupElem precedent). Shared by both writer
+ * backends so the element serializes identically on the DOM and streaming paths.
+ *
+ *   - both fields None → passthrough (the passive default: a sheet that never had the element and
+ *     sets no defaults emits nothing; a preserved element rides verbatim)
+ *   - a modeled value equal to the parsed source attribute leaves the element untouched (identity
+ *     fast-path — zero churn when the reader populated the model from this very element)
+ *   - a model-driven defaultRowHeight also sets customHeight="1" (ECMA-376 18.3.1.81: true when the
+ *     default row height "has been manually set"), matching what Excel writes
+ *   - a FRESH element authored for a width-only model backfills defaultRowHeight="15" (the
+ *     Calibri-11 grid default) — CT_SheetFormatPr REQUIRES the attribute; preserved elements are
+ *     never healed, only overlaid
+ *
+ * Unmodeled attributes (baseColWidth, zeroHeight, thickTop/thickBottom, outlineLevelRow/Col, ...)
+ * ride through untouched.
+ */
+private[ooxml] def mergeSheetFormatPrElem(
+  existing: Option[Elem],
+  defaultColumnWidth: Option[Double],
+  defaultRowHeight: Option[Double]
+): Option[Elem] =
+  if defaultColumnWidth.isEmpty && defaultRowHeight.isEmpty then existing
+  else
+    def attrDouble(e: Elem, key: String): Option[Double] =
+      Option(e \@ key).filter(_.nonEmpty).flatMap(_.toDoubleOption)
+    val base = existing.getOrElse(XmlUtil.elem("sheetFormatPr")())
+    val withWidth =
+      defaultColumnWidth.filterNot(attrDouble(base, "defaultColWidth").contains) match
+        case Some(w) => setOrRemoveAttr(base, "defaultColWidth", Some(w.toString))
+        case None => base
+    val withHeight =
+      defaultRowHeight.filterNot(attrDouble(withWidth, "defaultRowHeight").contains) match
+        case Some(h) =>
+          setOrRemoveAttr(
+            setOrRemoveAttr(withWidth, "defaultRowHeight", Some(h.toString)),
+            "customHeight",
+            Some("1")
+          )
+        case None => withWidth
+    val withRequiredHeight =
+      if existing.isEmpty && (withHeight \@ "defaultRowHeight").isEmpty then
+        setOrRemoveAttr(withHeight, "defaultRowHeight", Some("15"))
+      else withHeight
+    Some(withRequiredHeight)
+
 // ===== Print setup authoring (GH-259, GH-266) =====
 // PageSetup is the typed model for <pageMargins>, <pageSetup>, <headerFooter>, and the
 // sheetPr/pageSetUpPr fitToPage flag. The merge helpers below overlay the modeled fields onto any

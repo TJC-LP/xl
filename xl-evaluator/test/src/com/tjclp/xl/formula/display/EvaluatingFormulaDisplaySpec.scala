@@ -107,8 +107,10 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
 
+    // Re-pinned by GH-410: the inferred PercentDecimal is "0.00%" (ECMA-376 id 10), which
+    // renders two forced decimals — 50.00%, not the old hand-rolled single-decimal 50.0%.
     val result = excel"Ratio: ${ref"B1"}"
-    assertEquals(result, "Ratio: 50.0%")
+    assertEquals(result, "Ratio: 50.00%")
   }
 
   test("excel interpolator evaluates AVERAGE formula") {

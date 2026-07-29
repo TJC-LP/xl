@@ -154,8 +154,20 @@ final case class Workbook(
       // GH-315: the deleted NAME drops out of the identity-keyed source mappings, so a later
       // sheet reusing the name carries no stale source identity.
       val updatedContext = sourceContext.map(_.markSheetDeleted(index, sheets(index).name))
+      // GH-434: localSheetId is positional — names above the removal shift down, names scoped
+      // to the removed sheet leave the workbook with it (Excel's delete-sheet semantics).
+      val remapped = remapDefinedNameScopes(i =>
+        if i == index then None
+        else if i > index then Some(i - 1)
+        else Some(i)
+      )
       Right(
-        copy(sheets = newSheets, activeSheetIndex = newActiveIndex, sourceContext = updatedContext)
+        copy(
+          sheets = newSheets,
+          metadata = remapped,
+          activeSheetIndex = newActiveIndex,
+          sourceContext = updatedContext
+        )
       )
     else Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
@@ -286,8 +298,18 @@ final case class Workbook(
       // Sheet reordering only modifies workbook.xml (order metadata), not individual sheet files.
       // Therefore we mark reordered but don't mark individual sheets as modified.
       val updatedContext = sourceContext.map(_.markReordered)
+      // GH-434: localSheetId is positional — apply the old-index -> new-index permutation.
+      val permutation = sheets.zipWithIndex.map { case (sheet, oldIdx) =>
+        oldIdx -> newOrder.indexWhere(_ == sheet.name)
+      }.toMap
+      val remapped = remapDefinedNameScopes(i => Some(permutation.getOrElse(i, i)))
       Right(
-        copy(sheets = reordered, activeSheetIndex = newActiveIndex, sourceContext = updatedContext)
+        copy(
+          sheets = reordered,
+          metadata = remapped,
+          activeSheetIndex = newActiveIndex,
+          sourceContext = updatedContext
+        )
       )
 
   /** Insert sheet at specific index (explicit positioning - rarely needed) */
@@ -298,7 +320,31 @@ final case class Workbook(
     else
       val (before, after) = sheets.splitAt(index)
       val updatedContext = sourceContext.map(_.markMetadataModified)
-      Right(copy(sheets = before ++ (sheet +: after), sourceContext = updatedContext))
+      // GH-434: localSheetId is positional — names at or above the insertion point shift up.
+      val remapped = remapDefinedNameScopes(i => if i >= index then Some(i + 1) else Some(i))
+      Right(
+        copy(
+          sheets = before ++ (sheet +: after),
+          metadata = remapped,
+          sourceContext = updatedContext
+        )
+      )
+
+  /**
+   * Remap sheet-scoped defined-name indices after a sheet-order mutation (GH-434). `localSheetId`
+   * stores a raw positional index, so every insert/remove/reorder must translate it or the name
+   * silently attaches to whatever sheet now occupies the old position. `remap` returns the new
+   * index for an old one, or None to drop the name (its sheet was removed). Workbook-scoped names
+   * (no localSheetId) always ride through untouched.
+   */
+  private def remapDefinedNameScopes(remap: Int => Option[Int]): WorkbookMetadata =
+    if metadata.definedNames.forall(_.localSheetId.isEmpty) then metadata
+    else
+      metadata.copy(definedNames = metadata.definedNames.flatMap { dn =>
+        dn.localSheetId match
+          case None => Some(dn)
+          case Some(idx) => remap(idx).map(newIdx => dn.copy(localSheetId = Some(newIdx)))
+      })
 
   // ========== Deprecated Methods (Removed in v0.3.0) ==========
 

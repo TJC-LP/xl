@@ -271,6 +271,22 @@ object XlsxWriter:
     author.map(_.trim).filter(_.nonEmpty)
 
   /**
+   * True when the comment text already leads with its own author-prefix run: the first run is
+   * exactly the author name with an optional colon (any formatting; trailing newline/space
+   * tolerated). Excel-authored comments carry such a run inside the text itself — read keeps it
+   * because it doesn't match XL's canonical `Author:` + `\n` shape — so synthesizing our prefix on
+   * top would duplicate the visible "Author:" line (GH-433).
+   */
+  private def hasLeadingAuthorPrefix(
+    text: com.tjclp.xl.richtext.RichText,
+    author: String
+  ): Boolean =
+    text.runs.headOption.exists { run =>
+      val normalized = run.text.replace("\u00A0", " ").trim // Excel can emit nbsp
+      normalized == author || normalized == s"$author:"
+    }
+
+  /**
    * Build per-sheet comment data for serialization: sheet index (0-based) -> comments to write.
    * Part paths are assigned separately — identity-mapped or freshly allocated above every
    * source-claimed number (GH-315) — never derived from the sheet index.
@@ -305,7 +321,7 @@ object XlsxWriter:
 
           // Excel displays author as part of comment text (bold first run)
           val textWithAuthor = canonicalAuthor match
-            case Some(author) =>
+            case Some(author) if !hasLeadingAuthorPrefix(comment.text, author) =>
               // Prepend author name as bold run
               val authorRun = com.tjclp.xl.richtext.TextRun(
                 s"$author:",
@@ -332,7 +348,10 @@ object XlsxWriter:
                     )
                   )
               textWithNewline
-            case None => comment.text
+            case _ =>
+              // Unauthored, or the text already leads with its own author-prefix run
+              // (file-authored comment) — never synthesize a second prefix (GH-433).
+              comment.text
 
           OoxmlComment(
             ref = ref,
@@ -753,6 +772,94 @@ object XlsxWriter:
       }
 
     regenerate.toSet
+
+  /**
+   * Resolve a relationship target against its owner part's directory to a zip path. Pure segment
+   * arithmetic — java.nio.Path would platform-mangle separators. Leading `/` targets are
+   * package-absolute; `.`/`..` segments normalize; fragments/queries are stripped; a target
+   * escaping the package root resolves to None.
+   */
+  private def resolveRelTarget(ownerPart: String, target: String): Option[String] =
+    val raw = target.takeWhile(c => c != '#' && c != '?')
+    if raw.isEmpty then None
+    else if raw.startsWith("/") then Some(raw.drop(1)).filter(_.nonEmpty)
+    else
+      val base = ownerPart.split('/').toVector.dropRight(1)
+      raw
+        .split('/')
+        .foldLeft(Option(base)) {
+          case (None, _) => None
+          case (Some(acc), "..") => if acc.isEmpty then None else Some(acc.dropRight(1))
+          case (Some(acc), "" | ".") => Some(acc)
+          case (Some(acc), seg) => Some(acc :+ seg)
+        }
+        .map(_.mkString("/"))
+        .filter(_.nonEmpty)
+
+  /**
+   * Parts orphaned by sheet removal (GH-417): everything reachable ONLY through the relationship
+   * closure of removed sheets' source parts — the drawing → chart → chart-colors/style chain, their
+   * media, and every part's `.rels` sibling. These fall out of the write instead of riding the
+   * verbatim copy loop as dead weight forever.
+   *
+   * Two guarantees bound the prune:
+   *   - a part reachable from ANY surviving part survives (a shared image stays — the survivor walk
+   *     runs over the SOURCE rels, which same-path drawing regeneration keeps verbatim, so survivor
+   *     references cannot be missed);
+   *   - only the removed sheets' closure is candidate — parts already unreferenced in the source
+   *     ride through untouched (removal-induced orphans only, never a general package GC).
+   *
+   * Removed sheets' source parts are the manifest worksheet parts no live sheet claims by identity
+   * (the GH-315 deleted-SST-refs convention: identity-keyed and rename-stable). The walk never
+   * expands THROUGH a removed worksheet part — the source workbook rels still name it, but the
+   * regenerated workbook.xml.rels will not.
+   */
+  private def removalOrphanedParts(
+    ctx: SourceContext,
+    liveSheetSourcePaths: Set[String]
+  ): Set[String] =
+    val manifestPaths = ctx.partManifest.entries.keySet
+    val deletedRoots = manifestPaths.filter(p =>
+      p.startsWith("xl/worksheets/") && !p.startsWith("xl/worksheets/_rels/") &&
+        !liveSheetSourcePaths.contains(p)
+    )
+    if deletedRoots.isEmpty then Set.empty
+    else
+      val targetsCache = mutable.Map.empty[String, Set[String]]
+      def targetsOf(partPath: String): Set[String] =
+        targetsCache.getOrElseUpdate(
+          partPath, {
+            val relsPath = partRelsPathOf(partPath)
+            if !manifestPaths.contains(relsPath) then Set.empty
+            else
+              Try(withSourceZip(ctx.content) { z =>
+                parseOptionalEntry(z, relsPath)(Relationships.fromXml)
+              }).toOption.flatten
+                .map(
+                  _.relationships
+                    .filterNot(_.targetMode.contains("External"))
+                    .flatMap(rel => resolveRelTarget(partPath, rel.target))
+                    .toSet
+                    .intersect(manifestPaths)
+                )
+                .getOrElse(Set.empty)
+          }
+        )
+
+      def closure(roots: Set[String], blocked: Set[String]): Set[String] =
+        @annotation.tailrec
+        def loop(frontier: Set[String], acc: Set[String]): Set[String] =
+          val next = frontier.flatMap(targetsOf).diff(acc).diff(blocked)
+          if next.isEmpty then acc else loop(next, acc ++ next)
+        loop(roots, roots)
+
+      def withRelsSiblings(parts: Set[String]): Set[String] =
+        parts ++ parts.map(partRelsPathOf).filter(manifestPaths.contains)
+
+      val deletedClosure = closure(deletedRoots, blocked = Set.empty)
+      val survivorRoots = manifestPaths -- withRelsSiblings(deletedClosure)
+      val survivorReachable = closure(survivorRoots, blocked = deletedRoots)
+      withRelsSiblings(deletedClosure -- survivorReachable)
 
   private def usingOrThrow[A](result: Try[A]): A =
     result match
@@ -1546,6 +1653,16 @@ object XlsxWriter:
     def sourceSheetRelsPath(ctx: SourceContext, idx: Int): Option[String] =
       sourceSheetPath(ctx, idx).map(partRelsPathOf)
 
+    // GH-417: after a removal, parts reachable ONLY via the removed sheet's rel closure (its
+    // drawing → chart → colors/style chain, exclusive media, their .rels) fall out of the write;
+    // anything a surviving part references stays. Pruned paths leave BOTH the copy loop
+    // (livePreservableParts below) and [Content_Types].xml (withoutParts on the final types).
+    val removalOrphans: Set[String] = sourceContext match
+      case Some(ctx) if tracker.deletedSheets.nonEmpty =>
+        removalOrphanedParts(ctx, workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet)
+      case _ => Set.empty
+    val livePreservableParts = preservableParts -- removalOrphans
+
     // Escaping must be applied to every text-bearing worksheet part; preserved sheets can contain
     // dangerous inline strings or shared-string references that would bypass WriterConfig.secure.
     val sheetsToRegenerate =
@@ -1954,14 +2071,14 @@ object XlsxWriter:
                   ctx.commentPathMapping.get(sheet.name).filter(ctx.partManifest.contains)
               }
               .flatten
-              .toSet ++ (preservableParts -- vmlPathsToSkip)
+              .toSet ++ (livePreservableParts -- vmlPathsToSkip)
           case None => Set.empty)
 
     // Content types: preserve from source when available, otherwise generate minimal.
     // GH-315: comment/VML registrations follow the EMITTED part paths (identity-mapped or freshly
     // allocated) — withEmittedCommentParts is conservative, so source-declared parts ride through
     // byte-identical and only genuinely fresh parts add overrides.
-    val contentTypes = preservedContentTypes match
+    val reconciledContentTypes = preservedContentTypes match
       case Some(preserved) =>
         // Add sharedStrings override if we're generating it but source didn't have it
         val withSst =
@@ -2013,10 +2130,15 @@ object XlsxWriter:
               .reconcile(
                 preserved,
                 model,
-                verbatimParts = preservableParts -- vmlPathsToSkip ++ vmlPathBySheet.values
+                verbatimParts = livePreservableParts -- vmlPathsToSkip ++ vmlPathBySheet.values
               )
               .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
           case None => model
+
+    // GH-417: registrations of removal-orphaned parts fall with the parts — including model-side
+    // re-registrations (withDrawingOverrides/withChartOverrides register every MANIFEST part) and
+    // non-writer-owned classes reconcile keeps (chart colors/style).
+    val contentTypes = reconciledContentTypes.withoutParts(removalOrphans)
 
     // GH-320: ungated like the content types (GH-314) — a metadata-modified write must keep the
     // preserved package-level rels (docProps/custom.xml and friends ride the verbatim copy loop).
@@ -2291,8 +2413,9 @@ object XlsxWriter:
       // Skip VML drawings for regenerated sheets - we regenerate VML from domain model
       // (or omit it if comments were removed); skip drawing parts superseded by same-path
       // regeneration (GH-221). vmlPathsToSkip is hoisted above (shared with GH-322).
+      // GH-417: removal-orphaned parts are already subtracted (livePreservableParts).
       sourceContext.foreach { ctx =>
-        preservableParts.foreach { path =>
+        livePreservableParts.foreach { path =>
           // vmlPathsToSkip holds the exact regeneration targets — including foreign-named VML
           // parts like openpyxl's commentsDrawing1.vml (GH-292), so no filename-prefix guard
           val shouldSkip =
