@@ -327,8 +327,11 @@ object BatchParser:
             // Check for explicit values array first (like putf's "values" support)
             objMap.get("values") match
               case Some(arr) if arr.arrOpt.isDefined =>
+                // GH-416: the op-level format threads into every element exactly as the
+                // single-value arm applies it (numbers/strings get it; bool/null stay bare)
+                val format = objMap.get("format").flatMap(_.strOpt).flatMap(parseFormatName)
                 val values = arr.arr.toVector.zipWithIndex.map { case (v, i) =>
-                  parseJsonValue(v, idx, i, detect)
+                  parseJsonValue(v, idx, i, detect, format)
                 }
                 BatchOp.PutValues(ref, values)
               case _ =>
@@ -841,17 +844,20 @@ object BatchParser:
    * Parse a single JSON value element (from a "values" array).
    *
    * Handles native JSON types and smart string detection, mirroring parseTypedValue but operating
-   * on a bare ujson.Value instead of an ObjMap with a "value" key.
+   * on a bare ujson.Value instead of an ObjMap with a "value" key. The op-level explicit format
+   * follows single-put semantics (GH-416): numbers carry it directly, strings are parsed according
+   * to it, booleans and nulls never take a format.
    */
   private def parseJsonValue(
     json: ujson.Value,
     objIdx: Int,
     elemIdx: Int,
-    detect: Boolean
+    detect: Boolean,
+    explicitFormat: Option[NumFmt]
   ): ParsedValue =
     json.numOpt match
       case Some(num) =>
-        ParsedValue(CellValue.Number(BigDecimal(num)), None)
+        ParsedValue(CellValue.Number(BigDecimal(num)), explicitFormat)
       case None =>
         json.boolOpt match
           case Some(b) => ParsedValue(CellValue.Bool(b), None)
@@ -860,7 +866,7 @@ object BatchParser:
             else
               json.strOpt match
                 case Some(s) =>
-                  parseStringValue(s, None, objIdx, detect)
+                  parseStringValue(s, explicitFormat, objIdx, detect)
                 case None =>
                   throw new Exception(
                     s"Object ${objIdx + 1}: 'values[$elemIdx]' must be string, number, boolean, or null"
