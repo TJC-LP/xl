@@ -112,6 +112,35 @@ val formE = fx"=B$row*C$row" // Either[XLError, CellValue]
 val cell2 = fx"=B$row*2".unsafe // explicit boundary when fail-fast is fine
 ```
 
+The **same split applies to `Sheet(name)`** — and it is easier to trip over because there is no
+`$` at the call site to warn you. A string **literal** validates at compile time and returns
+`Sheet`; a name held in a `val` makes the very same call return `XLResult[Sheet]`, so a chained
+`.put(...)` suddenly type-errors:
+
+```scala
+val lit = Sheet("Acquisitions").put(ref"A1", 1) // : Sheet
+val nm: String = config.sheetName
+val dyn = Sheet(nm)                             // : XLResult[Sheet] — the return type changed!
+```
+
+For names computed at runtime, use **`Sheet.named`** (since 0.17.0) — the documented dynamic-name
+factory. Validation is identical (Excel's rules: non-empty, ≤31 chars, no `: \ / ? * [ ]`); the
+difference is that `XLResult` is spelled in the signature, so the `.map`/`.unsafe` step reads as
+intended instead of surprising the chain:
+
+```scala
+//> using scala 3.8.3
+//> using dep com.tjclp::xl:0.16.0
+import com.tjclp.xl.scripting.{*, given}
+
+val region = Seq("North", "East").mkString(" ")                     // runtime name
+val sheet = Sheet.named(region).map(_.put(ref"A1", "ready")).unsafe // XLResult, spelled out
+Excel.write(Workbook(sheet), "/tmp/named.xlsx")
+```
+
+On ≤0.16.0 (no `named`), make the union explicit at the call site with an ascription:
+`val s: XLResult[Sheet] = Sheet(nm)`.
+
 Prefer **total navigation** over interpolated refs in loops — no `Either` at all:
 
 ```scala
