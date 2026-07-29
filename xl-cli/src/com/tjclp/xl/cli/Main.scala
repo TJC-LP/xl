@@ -102,7 +102,7 @@ object Main
     // Sheet-level write: --file, --sheet, and --output (required)
     // --stream uses SAX/StAX workbook writes for modifying commands.
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd orElse sheetViewCmd orElse tabColorCmd orElse autoFilterCmd orElse pageSetupCmd orElse headerFooterCmd orElse cfCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse groupRowsCmd orElse groupColsCmd orElse ungroupRowsCmd orElse ungroupColsCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd orElse sheetViewCmd orElse tabColorCmd orElse autoFilterCmd orElse pageSetupCmd orElse headerFooterCmd orElse cfCmd
 
     val sheetWriteOpts =
       (
@@ -990,6 +990,48 @@ EXAMPLES:
       autoFitColumnsOpt.map(CliCommand.AutoFit.apply)
     }
 
+  // --- Row/column outline grouping commands (GH-421) ---
+  private val groupLevelOpt =
+    Opts.option[Int]("level", "Outline level (1-7, default 1)").withDefault(1)
+  private val groupCollapsedOpt =
+    Opts
+      .flag(
+        "collapsed",
+        "Collapse the group: members are hidden and the summary row/column after the group " +
+          "gets the +/- marker"
+      )
+      .orFalse
+  private val groupRowsArg = Opts.argument[String]("rows")
+  private val groupColsArg = Opts.argument[String]("cols")
+
+  val groupRowsCmd: Opts[CliCommand] =
+    Opts.subcommand("group-rows", "Group rows into a collapsible outline (e.g., 10:20)") {
+      (groupRowsArg, groupLevelOpt, groupCollapsedOpt).mapN(CliCommand.GroupRows.apply)
+    }
+
+  val groupColsCmd: Opts[CliCommand] =
+    Opts.subcommand("group-cols", "Group columns into a collapsible outline (e.g., E:H)") {
+      (groupColsArg, groupLevelOpt, groupCollapsedOpt).mapN(CliCommand.GroupCols.apply)
+    }
+
+  val ungroupRowsCmd: Opts[CliCommand] =
+    Opts.subcommand(
+      "ungroup-rows",
+      "Remove outline grouping from rows (rows hidden by a collapse stay hidden; " +
+        "use `row <n> --show`)"
+    ) {
+      groupRowsArg.map(CliCommand.UngroupRows.apply)
+    }
+
+  val ungroupColsCmd: Opts[CliCommand] =
+    Opts.subcommand(
+      "ungroup-cols",
+      "Remove outline grouping from columns (columns hidden by a collapse stay hidden; " +
+        "use `col <letter> --show`)"
+    ) {
+      groupColsArg.map(CliCommand.UngroupCols.apply)
+    }
+
   // --- Batch command ---
   private val batchArg = Opts.argument[String]("operations").withDefault("-")
   private val batchHelp = """Apply multiple operations atomically from JSON.
@@ -1007,6 +1049,13 @@ OPERATIONS:
   unmerge   {"op": "unmerge", "range": "A1:D1"}
   colwidth  {"op": "colwidth", "col": "A", "width": 15.5}
   rowheight {"op": "rowheight", "row": 1, "height": 30}
+
+ROW/COLUMN GROUPING (GH-421):
+  group-rows    {"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}
+  group-cols    {"op": "group-cols", "cols": "E:H", "level": 1, "collapsed": false}
+  ungroup-rows  {"op": "ungroup-rows", "rows": "10:20"}
+  ungroup-cols  {"op": "ungroup-cols", "cols": "E:H"}
+                (collapsed hides the members and marks the summary row/col after the group)
 
 APPEARANCE & PRINT SETUP (GH-358):
   sheet-view    {"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
@@ -2190,6 +2239,27 @@ EXAMPLES:
     case CliCommand.ColOp(colStr, width, hide, show, autoFit) =>
       requireOutput("col", outputOpt, backendOpt, stream)(
         WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, autoFit, _, _, _)
+      )
+
+    // Row/column outline grouping (GH-421)
+    case CliCommand.GroupRows(rows, level, collapsed) =>
+      requireOutput("group-rows", outputOpt, backendOpt, stream)(
+        WriteCommands.groupRows(wb, sheetOpt, rows, level, collapsed, _, _, _)
+      )
+
+    case CliCommand.GroupCols(cols, level, collapsed) =>
+      requireOutput("group-cols", outputOpt, backendOpt, stream)(
+        WriteCommands.groupCols(wb, sheetOpt, cols, level, collapsed, _, _, _)
+      )
+
+    case CliCommand.UngroupRows(rows) =>
+      requireOutput("ungroup-rows", outputOpt, backendOpt, stream)(
+        WriteCommands.ungroupRows(wb, sheetOpt, rows, _, _, _)
+      )
+
+    case CliCommand.UngroupCols(cols) =>
+      requireOutput("ungroup-cols", outputOpt, backendOpt, stream)(
+        WriteCommands.ungroupCols(wb, sheetOpt, cols, _, _, _)
       )
 
     case CliCommand.Batch(source, dryRun) if dryRun =>

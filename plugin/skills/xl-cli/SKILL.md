@@ -129,6 +129,10 @@ xl -f <file> -s <sheet> -o <out> row <n> --height 30
 xl -f <file> -s <sheet> -o <out> col <letter> --width 20
 xl -f <file> -s <sheet> -o <out> col A:F --auto-fit
 xl -f <file> -s <sheet> -o <out> autofit              # All columns
+xl -f <file> -s <sheet> -o <out> group-rows 10:20     # Collapsible outline (0.18.0); --level N, --collapsed
+xl -f <file> -s <sheet> -o <out> group-cols E:H --collapsed
+xl -f <file> -s <sheet> -o <out> ungroup-rows 10:20   # Clear outline level + collapse markers
+xl -f <file> -s <sheet> -o <out> ungroup-cols E:H
 ```
 
 ### Structural Editing (require `-o`)
@@ -333,7 +337,7 @@ Apply multiple operations atomically:
 ]
 ```
 
-**Operations**: put, putf, style, merge, unmerge, colwidth, rowheight, and more — all 28 listed under "All batch operations" below
+**Operations**: put, putf, style, merge, unmerge, colwidth, rowheight, and more — all 32 listed under "All batch operations" below
 
 **Native JSON types** (recommended for numeric data):
 ```json
@@ -494,7 +498,7 @@ echo '[{"op":"putf","ref":"A1","formula":"=SUM(B1:B10)"},{"op":"style","range":"
 echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
 ```
 
-**All batch operations** (28): `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`, `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `cf` (last five: 0.13.0), `chart` (0.15.0), `autofilter` (0.18.0)
+**All batch operations** (32): `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`, `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `cf` (last five: 0.13.0), `chart` (0.15.0), `autofilter`, `group-rows`, `group-cols`, `ungroup-rows`, `ungroup-cols` (last five: 0.18.0)
 
 **Freeze/unfreeze/copy/hyperlink in batch:**
 ```json
@@ -737,6 +741,10 @@ Rule DSL (`--rule`): `cellIs:<op>:<value>`, `between:<lo>:<hi>` (`notBetween:…
 | `row <n>` | `--height`, `--hide`, `--show` |
 | `col <letter(s)>` | `--width`, `--auto-fit`, `--hide`, `--show` |
 | `autofit` | `--columns` (range like A:Z) |
+| `group-rows <10:20>` / `group-cols <E:H>` | collapsible outline grouping (0.18.0); `--level <1-7>` (default 1), `--collapsed` (hides members; the row/col after the group gets the +/- marker, Excel-style) |
+| `ungroup-rows <10:20>` / `ungroup-cols <E:H>` | clear outline level + collapse markers; members hidden by a collapse stay hidden (unhide via `row`/`col --show`) |
+
+Grouping batch twins: `{"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}`, `{"op": "group-cols", "cols": "E:H", ...}`, `{"op": "ungroup-rows", "rows": "10:20"}`, `{"op": "ungroup-cols", "cols": "E:H"}`.
 
 ### Structural Editing Commands
 

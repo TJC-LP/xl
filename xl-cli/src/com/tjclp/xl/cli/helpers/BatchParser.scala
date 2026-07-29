@@ -93,6 +93,11 @@ object BatchParser:
     case ColShow(col: String)
     case RowHide(row: Int)
     case RowShow(row: Int)
+    // Row/column outline grouping (GH-421)
+    case GroupRows(rows: String, level: Int, collapsed: Boolean)
+    case GroupCols(cols: String, level: Int, collapsed: Boolean)
+    case UngroupRows(rows: String)
+    case UngroupCols(cols: String)
     case AutoFit(columns: Option[String])
     case AddSheet(name: String, after: Option[String])
     case RenameSheet(from: String, to: String)
@@ -192,6 +197,12 @@ object BatchParser:
         case BatchOp.ColShow(col) => s"  COL-SHOW $col"
         case BatchOp.RowHide(row) => s"  ROW-HIDE $row"
         case BatchOp.RowShow(row) => s"  ROW-SHOW $row"
+        case BatchOp.GroupRows(rows, level, collapsed) =>
+          s"  GROUP-ROWS $rows level=$level${if collapsed then " (collapsed)" else ""}"
+        case BatchOp.GroupCols(cols, level, collapsed) =>
+          s"  GROUP-COLS $cols level=$level${if collapsed then " (collapsed)" else ""}"
+        case BatchOp.UngroupRows(rows) => s"  UNGROUP-ROWS $rows"
+        case BatchOp.UngroupCols(cols) => s"  UNGROUP-COLS $cols"
         case BatchOp.AutoFit(cols) => s"  AUTOFIT ${cols.getOrElse("all")}"
         case BatchOp.AddSheet(name, _) => s"  ADD-SHEET $name"
         case BatchOp.RenameSheet(from, to) => s"  RENAME-SHEET $from -> $to"
@@ -285,6 +296,9 @@ object BatchParser:
    *   - `col-show`: {"op": "col-show", "col": "C"}
    *   - `row-hide`: {"op": "row-hide", "row": 5}
    *   - `row-show`: {"op": "row-show", "row": 5}
+   *   - `group-rows`: {"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}
+   *     (GH-421; `group-cols` takes "cols": "E:H"; `ungroup-rows`/`ungroup-cols` clear the outline
+   *     level and collapse markers)
    *   - `autofit`: {"op": "autofit", "columns": "A:F"}
    *   - `add-sheet`: {"op": "add-sheet", "name": "New Sheet", "after": "Sheet1"}
    *   - `rename-sheet`: {"op": "rename-sheet", "from": "Old", "to": "New"}
@@ -442,6 +456,34 @@ object BatchParser:
             val row = requireInt(objMap, "row", idx)
             BatchOp.RowShow(row)
 
+          case "group-rows" =>
+            collectUnknownPropsWarning(objMap, knownGroupRowsProps, "group-rows", idx)
+              .foreach(warnings += _)
+            BatchOp.GroupRows(
+              rows = requireString(objMap, "rows", idx),
+              level = objMap.get("level").flatMap(_.numOpt).map(_.toInt).getOrElse(1),
+              collapsed = objMap.get("collapsed").flatMap(_.boolOpt).getOrElse(false)
+            )
+
+          case "group-cols" =>
+            collectUnknownPropsWarning(objMap, knownGroupColsProps, "group-cols", idx)
+              .foreach(warnings += _)
+            BatchOp.GroupCols(
+              cols = requireString(objMap, "cols", idx),
+              level = objMap.get("level").flatMap(_.numOpt).map(_.toInt).getOrElse(1),
+              collapsed = objMap.get("collapsed").flatMap(_.boolOpt).getOrElse(false)
+            )
+
+          case "ungroup-rows" =>
+            collectUnknownPropsWarning(objMap, knownUngroupRowsProps, "ungroup-rows", idx)
+              .foreach(warnings += _)
+            BatchOp.UngroupRows(requireString(objMap, "rows", idx))
+
+          case "ungroup-cols" =>
+            collectUnknownPropsWarning(objMap, knownUngroupColsProps, "ungroup-cols", idx)
+              .foreach(warnings += _)
+            BatchOp.UngroupCols(requireString(objMap, "cols", idx))
+
           case "autofit" =>
             collectUnknownPropsWarning(objMap, knownAutoFitProps, "autofit", idx)
               .foreach(warnings += _)
@@ -558,7 +600,8 @@ object BatchParser:
               s"Object ${idx + 1}: Unknown operation '$other'. " +
                 "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
                 "comment, remove-comment, hyperlink, clear, col-hide, col-show, " +
-                "row-hide, row-show, autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, " +
+                "row-hide, row-show, group-rows, group-cols, ungroup-rows, ungroup-cols, " +
+                "autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, " +
                 "chart, sheet-view, tab-color, autofilter, page-setup, header-footer, cf"
             )
       }
@@ -643,6 +686,12 @@ object BatchParser:
 
   /** Known properties for 'autofilter' operation (GH-432) */
   private val knownAutoFilterOpProps = Set("op", "range", "clear")
+
+  /** Known properties for the grouping operations (GH-421) */
+  private val knownGroupRowsProps = Set("op", "rows", "level", "collapsed")
+  private val knownGroupColsProps = Set("op", "cols", "level", "collapsed")
+  private val knownUngroupRowsProps = Set("op", "rows")
+  private val knownUngroupColsProps = Set("op", "cols")
 
   /** Known properties for 'page-setup' operation (GH-358) */
   private val knownPageSetupProps =
@@ -1041,6 +1090,27 @@ object BatchParser:
 
           case BatchOp.RowShow(row) =>
             applyRowVisibility(currentWb, defaultSheetName, row, hidden = false)
+
+          // Row/column outline grouping (GH-421): appliers shared with the CLI commands
+          case BatchOp.GroupRows(rows, level, collapsed) =>
+            updateSheetE(currentWb, defaultSheetName, "group-rows")(
+              GroupingOps.groupRows(_, rows, level, collapsed)
+            )
+
+          case BatchOp.GroupCols(cols, level, collapsed) =>
+            updateSheetE(currentWb, defaultSheetName, "group-cols")(
+              GroupingOps.groupCols(_, cols, level, collapsed)
+            )
+
+          case BatchOp.UngroupRows(rows) =>
+            updateSheetE(currentWb, defaultSheetName, "ungroup-rows")(
+              GroupingOps.ungroupRows(_, rows)
+            )
+
+          case BatchOp.UngroupCols(cols) =>
+            updateSheetE(currentWb, defaultSheetName, "ungroup-cols")(
+              GroupingOps.ungroupCols(_, cols)
+            )
 
           case BatchOp.AutoFit(columnsOpt) =>
             applyAutoFit(currentWb, defaultSheetName, columnsOpt)

@@ -13,6 +13,7 @@ import com.tjclp.xl.cli.helpers.{
   CfRuleParser,
   ColumnAutoFit,
   CopyOps,
+  GroupingOps,
   SheetResolver,
   StyleBuilder,
   ValueParser
@@ -664,6 +665,68 @@ object WriteCommands:
           }
     }
 
+  // ===== Row/column outline grouping (GH-421) =====
+
+  /** Human-readable suffix for group messages. */
+  private def groupSuffix(level: Int, collapsed: Boolean): String =
+    s" at outline level $level${if collapsed then " (collapsed)" else ""}"
+
+  /** Group rows into a collapsible outline (e.g., 10:20). */
+  def groupRows(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    rows: String,
+    level: Int,
+    collapsed: Boolean,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    applySheetUpdate(wb, sheetOpt, "group-rows", outputPath, config, stream)(
+      GroupingOps.groupRows(_, rows, level, collapsed)
+    )(sheet => s"Grouped rows $rows${groupSuffix(level, collapsed)} on '${sheet.name.value}'")
+
+  /** Group columns into a collapsible outline (e.g., E:H). */
+  def groupCols(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    cols: String,
+    level: Int,
+    collapsed: Boolean,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    applySheetUpdate(wb, sheetOpt, "group-cols", outputPath, config, stream)(
+      GroupingOps.groupCols(_, cols, level, collapsed)
+    )(sheet => s"Grouped columns $cols${groupSuffix(level, collapsed)} on '${sheet.name.value}'")
+
+  /** Remove outline grouping from rows (hidden members stay hidden; use `row <n> --show`). */
+  def ungroupRows(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    rows: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    applySheetUpdate(wb, sheetOpt, "ungroup-rows", outputPath, config, stream)(
+      GroupingOps.ungroupRows(_, rows)
+    )(sheet => s"Ungrouped rows $rows on '${sheet.name.value}'")
+
+  /** Remove outline grouping from columns (hidden members stay hidden; use `col --show`). */
+  def ungroupCols(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    cols: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    applySheetUpdate(wb, sheetOpt, "ungroup-cols", outputPath, config, stream)(
+      GroupingOps.ungroupCols(_, cols)
+    )(sheet => s"Ungrouped columns $cols on '${sheet.name.value}'")
+
   /**
    * Auto-fit all columns (or specified range) based on content.
    *
@@ -1175,8 +1238,11 @@ object WriteCommands:
 
   // ===== Sheet appearance & print setup (GH-358) =====
 
-  /** Shared shape of the four appearance handlers: requireSheet → pure applier → write. */
-  private def applyAppearance(
+  /**
+   * Shared shape of the appearance (GH-358) and grouping (GH-421) handlers: requireSheet → pure
+   * applier → write.
+   */
+  private def applySheetUpdate(
     wb: Workbook,
     sheetOpt: Option[Sheet],
     context: String,
@@ -1204,7 +1270,7 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean = false
   ): IO[String] =
-    applyAppearance(wb, sheetOpt, "sheet-view", outputPath, config, stream)(
+    applySheetUpdate(wb, sheetOpt, "sheet-view", outputPath, config, stream)(
       AppearanceOps.applySheetView(_, gridlines, zoom, tabSelected)
     ) { sheet =>
       val desc = AppearanceOps.describe(
@@ -1228,7 +1294,7 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean = false
   ): IO[String] =
-    applyAppearance(wb, sheetOpt, "tab-color", outputPath, config, stream)(
+    applySheetUpdate(wb, sheetOpt, "tab-color", outputPath, config, stream)(
       AppearanceOps.applyTabColor(_, colorStr, clear)
     ) { sheet =>
       colorStr match
@@ -1287,7 +1353,7 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean = false
   ): IO[String] =
-    applyAppearance(wb, sheetOpt, "page-setup", outputPath, config, stream)(
+    applySheetUpdate(wb, sheetOpt, "page-setup", outputPath, config, stream)(
       AppearanceOps.applyPageSetup(_, orientation, scale, fitToWidth, fitToHeight, fitToPage)
     ) { sheet =>
       val desc = AppearanceOps.describe(
@@ -1319,7 +1385,7 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean = false
   ): IO[String] =
-    applyAppearance(wb, sheetOpt, "header-footer", outputPath, config, stream)(
+    applySheetUpdate(wb, sheetOpt, "header-footer", outputPath, config, stream)(
       AppearanceOps.applyHeaderFooter(
         _,
         oddHeader,
