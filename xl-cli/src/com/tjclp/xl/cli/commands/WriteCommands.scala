@@ -806,8 +806,10 @@ object WriteCommands:
    * the recalculation and preserves the input's caches as-is.
    *
    * The match is deliberately exhaustive (no wildcard): a future `BatchOp` must be consciously
-   * classified here, or the compiler flags this match — a silent `false` default would skip the
-   * recalculation for a new cell-mutating op and reintroduce GH-352.
+   * classified here or the match fails loudly — in practice as a MatchError in the batch specs (the
+   * compiler does not always prove exhaustivity through these type-test alternatives) — where a
+   * silent `false` default would skip the recalculation for a new cell-mutating op and reintroduce
+   * GH-352.
    */
   private def isCellMutating(op: BatchParser.BatchOp): Boolean =
     op match
@@ -828,8 +830,10 @@ object WriteCommands:
           _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
           _: BatchParser.BatchOp.Hyperlink | _: BatchParser.BatchOp.AddChart |
           _: BatchParser.BatchOp.SetSheetView | _: BatchParser.BatchOp.SetTabColor |
-          _: BatchParser.BatchOp.SetPageSetup | _: BatchParser.BatchOp.SetHeaderFooter |
-          _: BatchParser.BatchOp.AddConditionalFormat =>
+          _: BatchParser.BatchOp.SetAutoFilter | _: BatchParser.BatchOp.GroupRows |
+          _: BatchParser.BatchOp.GroupCols | _: BatchParser.BatchOp.UngroupRows |
+          _: BatchParser.BatchOp.UngroupCols | _: BatchParser.BatchOp.SetPageSetup |
+          _: BatchParser.BatchOp.SetHeaderFooter | _: BatchParser.BatchOp.AddConditionalFormat =>
         false
 
   /**

@@ -297,6 +297,23 @@ class AutoFilterCommandSpec extends FunSuite:
     )
   }
 
+  test("batch: autofilter applies through the full WriteCommands.batch path") {
+    withTempOutput { out =>
+      val jsonPath = Files.createTempFile("autofilter-batch", ".json")
+      Files.writeString(jsonPath, """[{"op": "autofilter", "range": "A1:M29"}]""")
+      try
+        val wb = Workbook(Sheet("Data"))
+        val result = WriteCommands
+          .batch(wb, Some(wb.sheets.head), jsonPath.toString, out, config)
+          .unsafeRunSync()
+
+        assert(result.contains("Applied 1 operations"), result)
+        assert(result.contains("AUTOFILTER A1:M29"), result)
+        assert(sheetXml(out).contains("<autoFilter ref=\"A1:M29\"/>"), sheetXml(out))
+      finally Files.deleteIfExists(jsonPath)
+    }
+  }
+
   test("batch: autofilter with unqualified range requires --sheet") {
     val ops = BatchParser
       .parseBatchJson("""[{"op": "autofilter", "range": "A1:M29"}]""")

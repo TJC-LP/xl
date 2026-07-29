@@ -362,6 +362,38 @@ class GroupingCommandSpec extends FunSuite:
     assert(!props.get(Row.from1(9)).exists(_.collapsed), "summary row 9 marker should be cleared")
   }
 
+  test("batch: grouping ops apply through the full WriteCommands.batch path") {
+    withTempOutput { out =>
+      val jsonPath = Files.createTempFile("grouping-batch", ".json")
+      Files.writeString(
+        jsonPath,
+        """[
+          {"op": "group-rows", "rows": "3:5", "level": 1, "collapsed": true},
+          {"op": "group-cols", "cols": "B:C"},
+          {"op": "ungroup-cols", "cols": "B:C"}
+        ]"""
+      )
+      try
+        val wb = Workbook(Sheet("Data"))
+        val result = WriteCommands
+          .batch(wb, Some(wb.sheets.head), jsonPath.toString, out, config)
+          .unsafeRunSync()
+
+        assert(result.contains("Applied 3 operations"), result)
+        assert(result.contains("GROUP-ROWS 3:5 level=1 (collapsed)"), result)
+        assert(result.contains("UNGROUP-COLS B:C"), result)
+
+        val props = readBack(out).sheets.head
+        (3 to 5).foreach { r =>
+          assertEquals(props.rowProperties.get(Row.from1(r)).flatMap(_.outlineLevel), Some(1))
+        }
+        props.columnProperties.foreach { case (col, p) =>
+          assertEquals(p.outlineLevel, None, s"col ${col.toLetter} was ungrouped")
+        }
+      finally Files.deleteIfExists(jsonPath)
+    }
+  }
+
   test("batch: grouping ops require --sheet") {
     val ops = BatchParser
       .parseBatchJson("""[{"op": "group-rows", "rows": "1:2"}]""")
