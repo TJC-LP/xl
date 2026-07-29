@@ -333,3 +333,146 @@ class OoxmlStylesSpec extends FunSuite:
       .getOrElse(fail("B2 lost its style"))
     assertEquals(b2Style.font.underline, Underline.SingleAccounting)
   }
+
+  // ===== GH-425: workbook default (Normal) font =====
+
+  private val houseFont = Font("Times New Roman", 10.0)
+
+  private def entryText(path: Path, name: String): String =
+    val zip = new ZipFile(path.toFile)
+    try
+      Option(zip.getEntry(name)) match
+        case Some(e) => new String(zip.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8)
+        case None => fail(s"zip entry $name not found in $path")
+    finally zip.close()
+
+  test("GH-425: withDefaultFont drives font 0 + Normal cellStyleXf; reader populates it back") {
+    val tempDir = Files.createTempDirectory("xl-gh425-")
+    val initial = Workbook("Model").withDefaultFont(houseFont)
+    val wb = initial
+      .update(initial.sheets(0).name, _.put(ref"A1", CellValue.Text("typed into white space")))
+      .fold(e => fail(s"update failed: $e"), identity)
+    val path = tempDir.resolve("house.xlsx")
+    XlsxWriter.write(wb, path).fold(e => fail(s"write failed: ${e.message}"), identity)
+
+    val stylesXml = entryText(path, "xl/styles.xml")
+    val parsed = XmlSecurity
+      .parseSafe(stylesXml, "styles.xml")
+      .fold(e => fail(s"xml parse failed: ${e.message}"), identity)
+
+    // Font slot 0 IS the house font (the xfId-0 cellStyleXf hardcodes fontId=0)
+    val font0 = (parsed \ "fonts" \ "font").headOption.getOrElse(fail(s"no fonts: $stylesXml"))
+    assertEquals((font0 \ "name" \ "@val").text, "Times New Roman", stylesXml)
+    assertEquals((font0 \ "sz" \ "@val").text, "10.0", stylesXml)
+    // Normal master record references it
+    val styleXf0 = (parsed \ "cellStyleXfs" \ "xf").headOption
+      .getOrElse(fail(s"no cellStyleXfs: $stylesXml"))
+    assertEquals((styleXf0 \ "@fontId").text, "0", stylesXml)
+    // The unstyled cell's xf 0 resolves to the Normal font, not a stray Calibri entry
+    val xf0 = (parsed \ "cellXfs" \ "xf").headOption.getOrElse(fail(s"no cellXfs: $stylesXml"))
+    assertEquals((xf0 \ "@fontId").text, "0", stylesXml)
+    assert(!stylesXml.contains("Calibri"), s"stock Calibri leaked into the font table: $stylesXml")
+
+    // Reader populates the metadata back
+    val read = XlsxReader.read(path).fold(e => fail(s"read failed: ${e.message}"), identity)
+    assertEquals(read.metadata.defaultFont, Some(houseFont))
+  }
+
+  test("GH-425: both serializer backends emit the default font at slot 0 (DOM == SAX)") {
+    val wb = Workbook("S").withDefaultFont(houseFont)
+    val (index, _) = StyleIndex.fromWorkbook(wb)
+    val domFont0 = (OoxmlStyles(index).toXml \ "fonts" \ "font").headOption
+      .getOrElse(fail("DOM: no fonts"))
+    assertEquals((domFont0 \ "name" \ "@val").text, "Times New Roman")
+
+    val output = new ByteArrayOutputStream()
+    OoxmlStyles(index).writeSax(StaxSaxWriter.create(output))
+    val sax = new String(output.toByteArray, StandardCharsets.UTF_8)
+    assert(
+      sax.contains("""<name val="Times New Roman">""") ||
+        sax.contains("""<name val="Times New Roman"/>"""),
+      s"SAX backend lost the default font: $sax"
+    )
+    assert(!sax.contains("Calibri"), s"SAX backend leaked stock Calibri: $sax")
+  }
+
+  test("GH-425: a book whose Normal is already non-default keeps it (read -> scratch write)") {
+    val tempDir = Files.createTempDirectory("xl-gh425-keep-")
+    // Author a house book, read it back, DROP the source context (forces the from-scratch
+    // serializer path), write again: Normal must still be the house font.
+    val initial = Workbook("Model").withDefaultFont(houseFont)
+    val wb = initial
+      .update(initial.sheets(0).name, _.put(ref"A1", CellValue.Text("x")))
+      .fold(e => fail(s"update failed: $e"), identity)
+    val p1 = tempDir.resolve("v1.xlsx")
+    XlsxWriter.write(wb, p1).fold(e => fail(s"write failed: ${e.message}"), identity)
+
+    val read = XlsxReader.read(p1).fold(e => fail(s"read failed: ${e.message}"), identity)
+    val scratch = read.copy(sourceContext = None)
+    val p2 = tempDir.resolve("v2.xlsx")
+    XlsxWriter.write(scratch, p2).fold(e => fail(s"write failed: ${e.message}"), identity)
+
+    val parsed = XmlSecurity
+      .parseSafe(entryText(p2, "xl/styles.xml"), "styles.xml")
+      .fold(e => fail(s"xml parse failed: ${e.message}"), identity)
+    val font0 = (parsed \ "fonts" \ "font").headOption.getOrElse(fail("no fonts"))
+    assertEquals((font0 \ "name" \ "@val").text, "Times New Roman")
+
+    // And the surgical path (source retained) keeps it too
+    val edited = read
+      .update(read.sheets(0).name, _.put(ref"B1", CellValue.Text("y")))
+      .fold(e => fail(s"update failed: $e"), identity)
+    val p3 = tempDir.resolve("v3.xlsx")
+    XlsxWriter.write(edited, p3).fold(e => fail(s"write failed: ${e.message}"), identity)
+    val parsed3 = XmlSecurity
+      .parseSafe(entryText(p3, "xl/styles.xml"), "styles.xml")
+      .fold(e => fail(s"xml parse failed: ${e.message}"), identity)
+    val font0v3 = (parsed3 \ "fonts" \ "font").headOption.getOrElse(fail("no fonts"))
+    assertEquals((font0v3 \ "name" \ "@val").text, "Times New Roman")
+  }
+
+  test("GH-425: stock-default books read back defaultFont=None and stay byte-stable") {
+    val tempDir = Files.createTempDirectory("xl-gh425-stock-")
+    val initial = Workbook("S")
+    val wb = initial
+      .update(initial.sheets(0).name, _.put(ref"A1", CellValue.Text("x")))
+      .fold(e => fail(s"update failed: $e"), identity)
+    val path = tempDir.resolve("stock.xlsx")
+    XlsxWriter.write(wb, path).fold(e => fail(s"write failed: ${e.message}"), identity)
+    val read = XlsxReader.read(path).fold(e => fail(s"read failed: ${e.message}"), identity)
+    // Calibri-11 Normal is the modeled default — no phantom Some(Font.default)
+    assertEquals(read.metadata.defaultFont, None)
+  }
+
+  test("GH-425: explicitly styled cells keep their own font; sentinel styles follow Normal") {
+    val tempDir = Files.createTempDirectory("xl-gh425-styled-")
+    val arial = Font("Arial", 9.0, bold = true)
+    val initial = Workbook("Model").withDefaultFont(houseFont)
+    val wb = initial
+      .update(
+        initial.sheets(0).name,
+        s =>
+          s.put(ref"A1", CellValue.Text("headline"))
+            .withCellStyle(ref"A1", CellStyle.default.withFont(arial))
+            .put(ref"B1", CellValue.Number(BigDecimal(1)))
+            .withCellStyle(ref"B1", CellStyle.default.withNumFmt(NumFmt.Percent))
+      )
+      .fold(e => fail(s"update failed: $e"), identity)
+    val path = tempDir.resolve("styled.xlsx")
+    XlsxWriter.write(wb, path).fold(e => fail(s"write failed: ${e.message}"), identity)
+
+    val read = XlsxReader.read(path).fold(e => fail(s"read failed: ${e.message}"), identity)
+    val sheet = read.sheets(0)
+    val a1Font = sheet(ref"A1").styleId
+      .flatMap(sheet.styleRegistry.get)
+      .map(_.font)
+      .getOrElse(fail("A1 lost its style"))
+    assertEquals(a1Font, arial)
+    // B1's style only set a numFmt — its font was the Font.default sentinel, which resolves
+    // to the workbook default on write
+    val b1Font = sheet(ref"B1").styleId
+      .flatMap(sheet.styleRegistry.get)
+      .map(_.font)
+      .getOrElse(fail("B1 lost its style"))
+    assertEquals(b1Font, houseFont)
+  }

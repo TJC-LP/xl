@@ -86,7 +86,10 @@ final case class OoxmlStyles(
     )
 
     // CellXfs (cell format styles)
-    // Pre-build lookup maps for O(1) access instead of O(n) indexOf
+    // Pre-build lookup maps for O(1) access instead of O(n) indexOf.
+    // The getOrElse(_, 0) fallback doubles as the GH-425 sentinel resolution: a workbook
+    // defaultFont keeps Font.default out of the table (see StyleIndex), so styles carrying
+    // the "unspecified" sentinel resolve to font slot 0 — the Normal font.
     val fontMap = index.fonts.zipWithIndex.toMap
     val fillMap = allFills.zipWithIndex.toMap
     val borderMap = index.borders.zipWithIndex.toMap
@@ -122,8 +125,9 @@ final case class OoxmlStyles(
       }*
     )
 
-    // cellStyleXfs: Master formatting records (required per ECMA-376 section 18.8.9)
-    // At minimum, need one default entry that cellXfs can reference via xfId
+    // cellStyleXfs: Master formatting records (required per ECMA-376 section 18.8.9).
+    // One Normal entry that cellXfs reference via xfId; fontId 0 makes font slot 0 the
+    // workbook default font (GH-425 — StyleIndex puts metadata.defaultFont there).
     val cellStyleXfsElem = elem("cellStyleXfs", "count" -> "1")(
       elem(
         "xf",
@@ -221,7 +225,8 @@ final case class OoxmlStyles(
       index.borders.foreach(writeBorderSax(writer, _))
       writer.endElement()
 
-      // cellStyleXfs: Master formatting records (required per ECMA-376 section 18.8.9)
+      // cellStyleXfs: Master formatting records (required per ECMA-376 section 18.8.9).
+      // fontId 0 = workbook default font, same contract as the DOM backend (GH-425)
       writer.startElement("cellStyleXfs")
       writer.writeAttribute("count", "1")
       writer.startElement("xf")

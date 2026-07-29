@@ -24,6 +24,7 @@ import java.util.zip.ZipInputStream
 import scala.collection.mutable
 import scala.collection.immutable.ArraySeq
 import com.tjclp.xl.styles.StyleRegistry
+import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.color.ThemePalette
 import com.tjclp.xl.workbooks.{DefinedName, WorkbookMetadata}
@@ -507,6 +508,9 @@ object XlsxReader:
         calcPr = ooxmlWb.calcPrSettings,
         activeSheetIndex = activeSheetIndex,
         docProps,
+        // GH-425: a stock Calibri-11 Normal is the modeled default — populate only the
+        // non-default fact so authored-default books read back defaultFont = None
+        defaultFont = styles.normalFont.filter(_ != Font.default),
         drawingPathMapping = parsedSheets.drawingPathMapping,
         drawingSnapshots = parsedSheets.drawingSnapshots,
         chartSnapshots = parsedSheets.chartSnapshots,
@@ -1382,6 +1386,9 @@ object XlsxReader:
    *   Active tab parsed from bookViews, already clamped to the sheet count (GH-294)
    * @param docProps
    *   Document properties parsed from docProps/core.xml + app.xml (GH-242)
+   * @param defaultFont
+   *   The file's Normal font when non-default (GH-425) — populated into metadata so the write path
+   *   keeps a non-Calibri Normal even after the source context is dropped
    * @return
    *   Workbook with optional SourceContext
    */
@@ -1398,6 +1405,7 @@ object XlsxReader:
     calcPr: Option[com.tjclp.xl.workbooks.CalcPr],
     activeSheetIndex: Int,
     docProps: DocProps.Data,
+    defaultFont: Option[Font],
     drawingPathMapping: Map[SheetName, String],
     drawingSnapshots: Map[SheetName, Vector[com.tjclp.xl.drawings.Drawing]],
     chartSnapshots: Map[SheetName, Vector[com.tjclp.xl.context.ChartSnapshot]],
@@ -1446,7 +1454,8 @@ object XlsxReader:
           definedNames = remainingNames,
           sheetStates = sheetStates,
           date1904 = date1904,
-          calcPr = calcPr
+          calcPr = calcPr,
+          defaultFont = defaultFont
         )
       sourceContextEither.map(ctx =>
         Workbook(
