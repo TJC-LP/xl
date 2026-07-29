@@ -8,7 +8,7 @@ import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.fill.Fill
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -612,7 +612,7 @@ object SvgRenderer:
         if style.font.italic then attrs += """font-style="italic""""
 
         // Underline (SVG uses text-decoration, GH-256)
-        if style.font.underline then attrs += """text-decoration="underline""""
+        if style.font.underline != Underline.None then attrs += """text-decoration="underline""""
 
         // ALWAYS include font size (don't rely on CSS defaults) - convert pt to px (pt * 4/3)
         val fontSizePx = (style.font.sizePt * 4.0 / 3.0).toInt
@@ -654,7 +654,7 @@ object SvgRenderer:
         if f.italic then attrs += """font-style="italic""""
 
         // Underline (SVG uses text-decoration)
-        if f.underline then attrs += """text-decoration="underline""""
+        if f.underline != Underline.None then attrs += """text-decoration="underline""""
 
         // Font size - always include for exact fidelity - convert pt to px (pt * 4/3)
         val fontSizePx = (f.sizePt * 4.0 / 3.0).toInt

@@ -15,7 +15,7 @@ import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 import com.tjclp.xl.styles.fill.{Fill, PatternType}
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 import org.scalacheck.{Arbitrary, Gen}
 
@@ -308,7 +308,7 @@ object Generators:
       size <- Gen.oneOf(8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 22.0)
       bold <- Gen.oneOf(true, false)
       italic <- Gen.oneOf(true, false)
-      underline <- Gen.oneOf(true, false)
+      underline <- Gen.oneOf(Underline.values.toIndexedSeq)
       color <- Gen.option(genColor)
     yield Font(name, size, bold, italic, underline, color)
 
@@ -839,7 +839,7 @@ object Generators:
       bold <- flag
       italic <- flag
       strike <- flag
-      underline <- flag
+      underline <- Gen.option(Gen.oneOf(Underline.values.toIndexedSeq))
       color <- Gen.option(genCfColor)
     yield DxfFont(bold, italic, strike, underline, color)
 

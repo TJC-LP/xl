@@ -8,7 +8,7 @@ import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.{Fill, PatternType}
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -20,6 +20,10 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  * @param dxfs
  *   raw `<dxfs>` children (differential formats) in table order — conditional-formatting dxfId
  *   attributes index into this vector (GH-136)
+ * @param normalFont
+ *   the Normal (xfId-0 cellStyleXf) font, but only when it lives in font slot 0 — Excel's own
+ *   layout, and the only slot the GH-425 defaultFont write path targets. An exotic Normal at a
+ *   non-zero slot yields None (it still rides through surgical preservation).
  */
 final case class WorkbookStyles(
   cellStyles: Vector[CellStyle],
@@ -27,7 +31,8 @@ final case class WorkbookStyles(
   fills: Vector[Fill],
   borders: Vector[Border],
   customNumFmts: Vector[(Int, NumFmt)],
-  dxfs: Vector[Elem] = Vector.empty
+  dxfs: Vector[Elem] = Vector.empty,
+  normalFont: Option[Font] = None
 ):
   def styleAt(index: Int): Option[CellStyle] = cellStyles.lift(index)
 
@@ -56,9 +61,24 @@ object WorkbookStyles:
         fills = fills,
         borders = borders,
         customNumFmts = numFmts.toVector.sortBy(_._1),
-        dxfs = dxfs
+        dxfs = dxfs,
+        normalFont = parseNormalFont(elem, fonts)
       )
     )
+
+  /**
+   * The Normal font (GH-425): the first cellStyleXfs xf's fontId resolved against the font table,
+   * modeled only when it is slot 0 (see [[WorkbookStyles.normalFont]]). A styles.xml without
+   * cellStyleXfs implies fontId 0 — font slot 0 is the de-facto Normal font.
+   */
+  private def parseNormalFont(root: Elem, fonts: Vector[Font]): Option[Font] =
+    (root \ "cellStyleXfs").headOption match
+      case Some(cellStyleXfs: Elem) =>
+        getChildren(cellStyleXfs, "xf").headOption.flatMap { xf =>
+          val fontId = xf.attribute("fontId").flatMap(_.text.toIntOption).getOrElse(0)
+          if fontId == 0 then fonts.headOption else None
+        }
+      case _ => fonts.headOption
 
   private def parseNumFmts(root: Elem): Map[Int, NumFmt] =
     (root \ "numFmts").headOption match
@@ -102,7 +122,15 @@ object WorkbookStyles:
       .getOrElse(Font.default.sizePt)
     val bold = (fontElem \ "b").nonEmpty
     val italic = (fontElem \ "i").nonEmpty
-    val underline = (fontElem \ "u").nonEmpty
+    // u@val per ST_UnderlineValues (GH-423): bare <u/> means single (the schema default);
+    // unknown tokens from malformed files stay lenient and read as Single (the pre-typed
+    // truthy behavior for any present <u>)
+    val underline = (fontElem \ "u").headOption match
+      case Some(u) =>
+        u.attribute("val")
+          .map(attr => Underline.fromToken(attr.text).getOrElse(Underline.Single))
+          .getOrElse(Underline.Single)
+      case None => Underline.None
     val color = (fontElem \ "color").headOption.collect { case e: Elem => e }.flatMap(parseColor)
     Font(name, size, bold, italic, underline, color)
 

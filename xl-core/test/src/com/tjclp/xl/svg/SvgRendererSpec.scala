@@ -653,8 +653,8 @@ class SvgRendererSpec extends FunSuite:
   // ========== Underline Tests (GH-256) ==========
 
   test("toSvg: underlined cell emits text-decoration on text element (GH-256)") {
-    import com.tjclp.xl.styles.font.Font
-    val underlined = CellStyle.default.withFont(Font(bold = true, underline = true))
+    import com.tjclp.xl.styles.font.{Font, Underline}
+    val underlined = CellStyle.default.withFont(Font(bold = true, underline = Underline.Single))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "I. Valuation Analysis")
       .unsafe
@@ -686,8 +686,8 @@ class SvgRendererSpec extends FunSuite:
 
   test("toSvg: underlined rich text run emits text-decoration") {
     import com.tjclp.xl.richtext.{RichText, TextRun}
-    import com.tjclp.xl.styles.font.Font
-    val richText = RichText(TextRun("Key", Some(Font(underline = true))))
+    import com.tjclp.xl.styles.font.{Font, Underline}
+    val richText = RichText(TextRun("Key", Some(Font(underline = Underline.Single))))
     val sheet = Sheet("Test").put(ref"A1", CellValue.RichText(richText))
 
     val svg = sheet.toSvg(ref"A1:A1")

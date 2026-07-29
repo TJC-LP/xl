@@ -486,6 +486,23 @@ final case class Workbook(
       sourceContext = sourceContext.map(_.markMetadataModified)
     )
 
+  /**
+   * Set the workbook default (Normal cell style) font (GH-425), e.g. Times New Roman 10 on house
+   * models. Feeds font slot 0 and the xfId-0 cellStyleXf on write, so untouched grid cells — and
+   * cells authored without an explicit font — render in it instead of Excel's stock Calibri 11.
+   * Marks metadata modified so a surgical write reflects the change (the GH-294 precedent).
+   *
+   * Example:
+   * {{{
+   * wb.withDefaultFont(Font("Times New Roman", 10.0))
+   * }}}
+   */
+  def withDefaultFont(font: com.tjclp.xl.styles.font.Font): Workbook =
+    copy(
+      metadata = metadata.copy(defaultFont = Some(font)),
+      sourceContext = sourceContext.map(_.markMetadataModified)
+    )
+
   /** Remove a workbook-scoped defined name by identifier (GH-236). Marks metadata modified. */
   def removeDefinedName(name: String): Workbook =
     val newMetadata =

@@ -2,7 +2,7 @@ package com.tjclp.xl
 
 import munit.FunSuite
 import com.tjclp.xl.styles.color.Color
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.richtext.{RichText, TextRun}
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.cells.{Cell, CellValue}
@@ -31,7 +31,7 @@ class RichTextSpec extends FunSuite:
 
   test("TextRun: underline modifier creates run with underline font") {
     val run = TextRun("Underline").underline
-    assert(run.font.exists(_.underline), "Font should be underlined")
+    assert(run.font.exists(_.underline == Underline.Single), "Font should be underlined")
   }
 
   test("TextRun: red color modifier") {
@@ -44,7 +44,7 @@ class RichTextSpec extends FunSuite:
     run.font match
       case Some(f) =>
         assert(f.bold, "Should be bold")
-        assert(f.underline, "Should be underlined")
+        assert(f.underline == Underline.Single, "Should be underlined")
         assert(f.color.isDefined, "Should have color")
       case None => fail("Font should be defined")
   }

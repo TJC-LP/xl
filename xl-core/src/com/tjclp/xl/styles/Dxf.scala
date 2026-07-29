@@ -3,6 +3,7 @@ package com.tjclp.xl.styles
 import com.tjclp.xl.styles.border.Border
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Underline
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -24,13 +25,14 @@ final case class Dxf(
 /**
  * Differential font. The core [[com.tjclp.xl.styles.font.Font]] REQUIRES name/sizePt and has no
  * strike field, so it cannot express "bold only, inherit the rest" — hence all-Option by design.
- * `Some(false)` is force-off (`<b val="0"/>`), `None` inherits from the base style.
+ * `Some(false)` is force-off (`<b val="0"/>`), `None` inherits from the base style. For underline,
+ * `Some(Underline.None)` is force-off (`<u val="none"/>`) and `None` inherits.
  */
 final case class DxfFont(
   bold: Option[Boolean] = None,
   italic: Option[Boolean] = None,
   strike: Option[Boolean] = None,
-  underline: Option[Boolean] = None,
+  underline: Option[Underline] = None,
   color: Option[Color] = None
 ) derives CanEqual
 

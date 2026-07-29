@@ -976,7 +976,7 @@ object StreamingWriteCommands:
     import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
     import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
     import com.tjclp.xl.styles.fill.Fill
-    import com.tjclp.xl.styles.font.Font
+    import com.tjclp.xl.styles.font.{Font, Underline}
     import com.tjclp.xl.styles.numfmt.NumFmt
 
     // Parse colors
@@ -1002,7 +1002,7 @@ object StreamingWriteCommands:
     val font = Font.default
       .withBold(props.bold)
       .withItalic(props.italic)
-      .withUnderline(props.underline)
+      .withUnderline(if props.underline then Underline.Single else Underline.None)
       .pipe(f => fgColor.fold(f)(c => f.withColor(c)))
       .pipe(f => props.fontSize.fold(f)(s => f.withSize(s)))
       .pipe(f => props.fontName.fold(f)(n => f.withName(n)))

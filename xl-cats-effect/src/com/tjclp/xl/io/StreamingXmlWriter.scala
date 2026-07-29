@@ -16,7 +16,7 @@ import com.tjclp.xl.ooxml.style.{OoxmlStyles, StyleIndex}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.border.Border
 import com.tjclp.xl.styles.fill.Fill
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.units.StyleId
 
@@ -364,7 +364,14 @@ object StreamingXmlWriter:
             // Font style properties
             if f.bold then selfClosing("b")
             if f.italic then selfClosing("i")
-            if f.underline then selfClosing("u")
+            f.underline match
+              case Underline.None => ()
+              case Underline.Single => selfClosing("u")
+              case other =>
+                selfClosing(
+                  "u",
+                  List(Attr(QName("val"), List(XmlString(Underline.token(other), false))))
+                )
 
             // Color
             f.color.foreach { c =>

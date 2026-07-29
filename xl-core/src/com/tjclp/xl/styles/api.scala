@@ -20,8 +20,8 @@ object api:
   // Fill types
   export fill.{PatternType, Fill}
 
-  // Font type
-  export font.Font
+  // Font types
+  export font.{Font, Underline}
 
   // Number format type
   export numfmt.NumFmt

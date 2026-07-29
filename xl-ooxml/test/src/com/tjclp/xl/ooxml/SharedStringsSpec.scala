@@ -139,3 +139,32 @@ class SharedStringsSpec extends FunSuite:
         )
       )
     )
+
+  test("GH-423: rich-text run underline variants round-trip typed through SST") {
+    import com.tjclp.xl.styles.font.{Font, Underline}
+    val accounting = com.tjclp.xl.richtext.RichText(
+      Vector(
+        com.tjclp.xl.richtext.TextRun(
+          "Actual",
+          Some(
+            Font(name = "Times New Roman", sizePt = 10.0, underline = Underline.SingleAccounting)
+          )
+        )
+      )
+    )
+    val sst = SharedStrings.fromEntries(Vector(Right(accounting): SSTEntry))
+    val xml = sst.toXml
+    assert(
+      xml.toString.contains("""<u val="singleAccounting"/>"""),
+      s"SST rPr lost the accounting underline: $xml"
+    )
+
+    val parsed = SharedStrings.fromXml(xml).fold(e => fail(s"fromXml failed: $e"), identity)
+    parsed.strings.headOption match
+      case Some(Right(rt)) =>
+        assertEquals(
+          rt.runs.headOption.flatMap(_.font).map(_.underline),
+          Some(Underline.SingleAccounting)
+        )
+      case other => fail(s"expected rich text entry, got: $other")
+  }

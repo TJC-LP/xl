@@ -4,7 +4,7 @@ import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 import scala.quoted.*
@@ -45,9 +45,13 @@ object dsl:
     inline def italic: CellStyle =
       style.withFont(style.font.withItalic(true))
 
-    /** Set font to underline */
+    /** Set font to single underline */
     inline def underline: CellStyle =
-      style.withFont(style.font.withUnderline(true))
+      style.withFont(style.font.withUnderline(Underline.Single))
+
+    /** Set a specific underline style (double / accounting variants) */
+    inline def underline(u: Underline): CellStyle =
+      style.withFont(style.font.withUnderline(u))
 
     /** Set font size in points */
     inline def size(pt: Double): CellStyle =
