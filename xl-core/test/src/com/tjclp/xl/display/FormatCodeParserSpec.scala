@@ -617,11 +617,75 @@ class FormatCodeParserSpec extends FunSuite:
     val dateCode = FormatCodeParser.parse("m/d/yyyy").toOption.get
     val dt = java.time.LocalDateTime.of(2025, 3, 15, 14, 30, 45)
 
+    // Re-pinned by GH-410 per ECMA-376 §18.8.31: 'h' uses the 12-hour clock only when the
+    // code contains AM/PM; "h:mm:ss" has none, so 14:30:45 renders as 14:30:45 (was 2:30:45).
     val timeResult = FormatCodeParser.applyDateFormat(dt, timeCode)
-    assertEquals(timeResult, "2:30:45") // mm = 30 (minute)
+    assertEquals(timeResult, "14:30:45") // mm = 30 (minute)
 
     val dateResult = FormatCodeParser.applyDateFormat(dt, dateCode)
     assertEquals(dateResult, "3/15/2025") // m = 3 (month)
+  }
+
+  test("applyDateFormat: bare h is the 24-hour clock, AM/PM switches to 12-hour (GH-410)") {
+    // ECMA-376 §18.8.31: "If the format contains an AM or PM code, the hour is based on
+    // the 12-hour clock; otherwise, it is based on the 24-hour clock."
+    val bare = FormatCodeParser.parse("h:mm").toOption.get
+    val meridiem = FormatCodeParser.parse("h:mm AM/PM").toOption.get
+    val padded = FormatCodeParser.parse("hh:mm").toOption.get
+    val afternoon = java.time.LocalDateTime.of(2025, 1, 1, 16, 5, 0)
+    val morning = java.time.LocalDateTime.of(2025, 1, 1, 9, 5, 0)
+    val midnight = java.time.LocalDateTime.of(2025, 1, 1, 0, 5, 0)
+
+    assertEquals(FormatCodeParser.applyDateFormat(afternoon, bare), "16:05")
+    assertEquals(FormatCodeParser.applyDateFormat(morning, bare), "9:05")
+    assertEquals(FormatCodeParser.applyDateFormat(midnight, bare), "0:05")
+    assertEquals(FormatCodeParser.applyDateFormat(afternoon, padded), "16:05")
+    assertEquals(FormatCodeParser.applyDateFormat(midnight, padded), "00:05")
+    assertEquals(FormatCodeParser.applyDateFormat(afternoon, meridiem), "4:05 PM")
+    assertEquals(FormatCodeParser.applyDateFormat(midnight, meridiem), "12:05 AM")
+  }
+
+  // ========== Scientific Notation (GH-410) ==========
+
+  private def formatWith(code: String, value: BigDecimal): String =
+    FormatCodeParser.parse(code) match
+      case Right(fmt) => FormatCodeParser.applyFormat(value, fmt)._1
+      case Left(e) => fail(s"parse('$code') failed: $e")
+
+  test("applyFormat: scientific 0.00E+00 basics (GH-410)") {
+    assertEquals(formatWith("0.00E+00", BigDecimal("1234.5")), "1.23E+03")
+    assertEquals(formatWith("0.00E+00", BigDecimal("123456.789")), "1.23E+05")
+    assertEquals(formatWith("0.00E+00", BigDecimal("0")), "0.00E+00")
+    assertEquals(formatWith("0.00E+00", BigDecimal("1")), "1.00E+00")
+    assertEquals(formatWith("0.00E+00", BigDecimal("0.0001234")), "1.23E-04")
+    assertEquals(formatWith("0.00E+00", BigDecimal("-1234.5")), "-1.23E+03")
+  }
+
+  test("applyFormat: scientific mantissa rounding renormalizes (GH-410)") {
+    // 9.999 rounds to 10.00 at two decimals, which overflows one integer digit: Excel
+    // renormalizes to 1.00E+01.
+    assertEquals(formatWith("0.00E+00", BigDecimal("9.999")), "1.00E+01")
+  }
+
+  test("applyFormat: engineering ##0.0E+0 snaps exponent to placeholder multiples (GH-410)") {
+    // Three integer placeholders make the exponent a multiple of 3 (id 48's code).
+    assertEquals(formatWith("##0.0E+0", BigDecimal("123456")), "123.5E+3")
+    assertEquals(formatWith("##0.0E+0", BigDecimal("1234.5")), "1.2E+3")
+    assertEquals(formatWith("##0.0E+0", BigDecimal("0.01")), "10.0E-3")
+  }
+
+  test("applyFormat: E- shows the exponent sign only when negative (GH-410)") {
+    assertEquals(formatWith("0.00E-00", BigDecimal("1234.5")), "1.23E03")
+    assertEquals(formatWith("0.00E-00", BigDecimal("0.0001234")), "1.23E-04")
+  }
+
+  test("applyFormat: lowercase e is preserved (GH-410)") {
+    assertEquals(formatWith("0.00e+00", BigDecimal("1234.5")), "1.23e+03")
+  }
+
+  test("applyFormat: exponent placeholders pad, never truncate (GH-410)") {
+    assertEquals(formatWith("0.0E+0", BigDecimal("1.5E+12")), "1.5E+12")
+    assertEquals(formatWith("0.00E+000", BigDecimal("1234.5")), "1.23E+003")
   }
 
   test("applyDateFormat: 12-hour noon/midnight") {

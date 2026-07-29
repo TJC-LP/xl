@@ -10,9 +10,9 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  *
  * The streaming style path (addStyle) and the in-memory writer (StyleSerializer via
  * NumFmt.builtInId) must emit the same numFmtId for the same NumFmt value, and getStyle must
- * resolve ids the way the DOM StyleParser does (declared entries win verbatim, then
- * NumFmt.fromId). A hand-rolled id table here made Decimal/Percent/Currency render differently
- * between the two write paths.
+ * resolve ids the way the DOM StyleParser does (declared entries win verbatim, then NumFmt.fromId).
+ * A hand-rolled id table here made Decimal/Percent/Currency render differently between the two
+ * write paths.
  */
 class StylePatcherSpec extends FunSuite:
 

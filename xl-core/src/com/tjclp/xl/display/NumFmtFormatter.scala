@@ -3,9 +3,7 @@ package com.tjclp.xl.display
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.styles.numfmt.NumFmt
 
-import java.text.DecimalFormat
 import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 
 /**
  * Formats cell values according to Excel number format codes.
@@ -17,9 +15,30 @@ import java.time.format.DateTimeFormatter
  */
 object NumFmtFormatter:
 
-  /** Parsed pattern for the built-in NumFmt.Fraction (format id 12, "# ?/?"). */
-  private val builtInFractionFormat: Either[String, FormatCodeParser.FormatCode] =
-    FormatCodeParser.parse("# ?/?")
+  /**
+   * Parsed format codes for every built-in (non-Custom, non-General) NumFmt variant.
+   *
+   * The built-in enum arms render through FormatCodeParser on [[NumFmt.formatCode]], so a
+   * programmatic NumFmt.PercentDecimal and a file-declared "0.00%" are provably the same display
+   * (GH-410). Every code in the canonical table parses, making the map total over the variants
+   * listed; the lookup fallbacks below are defensive only.
+   */
+  private val builtInFormats: Map[NumFmt, FormatCodeParser.FormatCode] =
+    List(
+      NumFmt.Integer,
+      NumFmt.Decimal,
+      NumFmt.ThousandsSeparator,
+      NumFmt.ThousandsDecimal,
+      NumFmt.Currency,
+      NumFmt.Percent,
+      NumFmt.PercentDecimal,
+      NumFmt.Scientific,
+      NumFmt.Fraction,
+      NumFmt.Date,
+      NumFmt.DateTime,
+      NumFmt.Time,
+      NumFmt.Text
+    ).flatMap(fmt => FormatCodeParser.parse(NumFmt.formatCode(fmt)).toOption.map(fmt -> _)).toMap
 
   /**
    * Format a cell value according to its number format.
@@ -57,57 +76,6 @@ object NumFmtFormatter:
     numFmt match
       case NumFmt.General => formatGeneral(n)
 
-      case NumFmt.Integer =>
-        n.setScale(0, BigDecimal.RoundingMode.HALF_UP).toString
-
-      case NumFmt.Decimal =>
-        f"${n.toDouble}%.2f"
-
-      case NumFmt.ThousandsSeparator =>
-        decimalFormat("#,##0").format(n.underlying)
-
-      case NumFmt.ThousandsDecimal =>
-        decimalFormat("#,##0.00").format(n.underlying)
-
-      case NumFmt.Currency =>
-        decimalFormat("$#,##0.00").format(n.underlying)
-
-      case NumFmt.Percent =>
-        // Excel stores 0.15 for 15%, multiply by 100 for display
-        val pct = (n * 100).setScale(0, BigDecimal.RoundingMode.HALF_UP)
-        s"$pct%"
-
-      case NumFmt.PercentDecimal =>
-        val pct = (n * 100).setScale(1, BigDecimal.RoundingMode.HALF_UP)
-        s"$pct%"
-
-      case NumFmt.Scientific =>
-        f"${n.toDouble}%.2E"
-
-      case NumFmt.Date =>
-        // Interpret number as Excel date serial (days since 1900-01-01)
-        formatExcelDateSerial(n, "M/d/yy")
-
-      case NumFmt.DateTime =>
-        formatExcelDateSerial(n, "M/d/yy h:mm")
-
-      case NumFmt.Time =>
-        // Interpret fractional part as time of day
-        val hours = ((n % 1) * 24).toInt
-        val minutes = (((n % 1) * 24 * 60) % 60).toInt
-        val seconds = (((n % 1) * 24 * 60 * 60) % 60).toInt
-        f"$hours%d:$minutes%02d:$seconds%02d"
-
-      case NumFmt.Fraction =>
-        // Built-in fraction format id 12: "# ?/?" (up to one denominator digit, GH-243)
-        builtInFractionFormat match
-          case Right(fmt) => FormatCodeParser.applyFormat(n, fmt)._1
-          case Left(_) => formatGeneral(n)
-
-      case NumFmt.Text =>
-        // Text format displays numbers as text
-        n.toString
-
       case NumFmt.Custom(code) if isGeneralCode(code) =>
         // The literal code "General" (ECMA-376 §18.8.30, case-insensitive) means General
         // rendering, not the literal characters. Reached since GH-404: file-declared
@@ -119,19 +87,15 @@ object NumFmtFormatter:
           case Right(fmt) => formatCustom(n, serialToDateTime(n), fmt)
           case Left(_) => formatGeneral(n) // Fallback for unparseable formats
 
+      case builtin =>
+        // Built-in arms render through FormatCodeParser on their canonical format code, so
+        // the programmatic enum and a file-declared equal code display identically (GH-410).
+        builtInFormats.get(builtin) match
+          case Some(fmt) => formatCustom(n, serialToDateTime(n), fmt)
+          case None => formatGeneral(n) // unreachable: the map covers every such variant
+
   /** ECMA-376 §18.8.30: the whole-code "General" keyword, matched case-insensitively. */
   private def isGeneralCode(code: String): Boolean = code.equalsIgnoreCase("General")
-
-  /**
-   * DecimalFormat with Excel's display rounding: half away from zero (HALF_UP), not Java's default
-   * HALF_EVEN — keeps the enum arms in parity with FormatCodeParser rendering of the same codes
-   * (GH-404: 1234.5 under "#,##0" is "1,235" in Excel). Formatting the BigDecimal itself (not
-   * .toDouble) rounds in decimal, avoiding binary-representation drift on half-way values.
-   */
-  private def decimalFormat(pattern: String): DecimalFormat =
-    val formatter = DecimalFormat(pattern)
-    formatter.setRoundingMode(java.math.RoundingMode.HALF_UP)
-    formatter
 
   /**
    * Format in General style (Excel's default number format).
@@ -176,14 +140,13 @@ object NumFmtFormatter:
    */
   def formatDateTime(dt: LocalDateTime, numFmt: NumFmt): String =
     numFmt match
-      case NumFmt.Date =>
-        dt.toLocalDate.format(DateTimeFormatter.ofPattern("M/d/yy"))
-
-      case NumFmt.DateTime =>
-        dt.format(DateTimeFormatter.ofPattern("M/d/yy H:mm")) // 24-hour format
-
-      case NumFmt.Time =>
-        dt.toLocalTime.format(DateTimeFormatter.ofPattern("H:mm:ss")) // 24-hour format
+      case NumFmt.Date | NumFmt.DateTime | NumFmt.Time =>
+        // The calendar variants render straight off the LocalDateTime through their parsed
+        // canonical codes (GH-410) — no serial round-trip, which truncates seconds. Bare 'h'
+        // is the 24-hour clock (no AM/PM in these codes, ECMA-376 §18.8.31).
+        builtInFormats.get(numFmt) match
+          case Some(fmt) => FormatCodeParser.applyDateFormat(dt, fmt)
+          case None => dt.toString // unreachable: the map covers the three variants
 
       case NumFmt.Custom(code) if isGeneralCode(code) =>
         // "General" keyword code: dates ARE numbers in Excel, so render the serial (GH-283)
@@ -265,19 +228,6 @@ object NumFmtFormatter:
       val seconds = (((timeFraction * 24 * 60 * 60) % 60)).toInt
       date.atTime(hours, minutes, seconds)
     else date.atStartOfDay()
-
-  /**
-   * Format Excel date serial number (days since 1900-01-01).
-   *
-   * @param serial
-   *   Excel date serial number
-   * @param pattern
-   *   DateTimeFormatter pattern
-   * @return
-   *   Formatted date string
-   */
-  private def formatExcelDateSerial(serial: BigDecimal, pattern: String): String =
-    excelSerialToDateTime(serial).format(DateTimeFormatter.ofPattern(pattern))
 
   /**
    * Format error values in Excel style.
