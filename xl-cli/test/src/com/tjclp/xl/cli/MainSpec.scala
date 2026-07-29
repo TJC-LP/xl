@@ -1130,10 +1130,13 @@ class MainSpec extends CatsEffectSuite:
     result.toOption.get.ops.head match
       case BatchOp.PutValues(range, values) =>
         assertEquals(range, "A1:A2")
-        assertEquals(values.map(_.cellValue), Vector[CellValue](
-          CellValue.Number(BigDecimal("1.0")),
-          CellValue.Number(BigDecimal("2.0"))
-        ))
+        assertEquals(
+          values.map(_.cellValue),
+          Vector[CellValue](
+            CellValue.Number(BigDecimal("1.0")),
+            CellValue.Number(BigDecimal("2.0"))
+          )
+        )
         assertEquals(
           values.map(_.format),
           Vector[Option[NumFmt]](Some(NumFmt.Custom("0.00%")), Some(NumFmt.Custom("0.00%"))),
@@ -1298,6 +1301,44 @@ class MainSpec extends CatsEffectSuite:
       case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Currency)) =>
         assertEquals(n, BigDecimal("99.00"))
       case other => fail(s"Expected Put with Currency detection, got $other")
+  }
+
+  // ========== Write commands without -o: usage error, not "Internal:" (GH-422) ==========
+
+  test("recalc without -o reports a usage error naming the flag (GH-422)") {
+    val wb = Workbook(Vector(Sheet("T")))
+    Main.executeCommand(wb, None, None, None, false, CliCommand.Recalc).attempt.map {
+      case Left(err) =>
+        assert(
+          err.getMessage.contains("recalc requires -o"),
+          s"message must name the command and flag, got: ${err.getMessage}"
+        )
+        assert(
+          !err.getMessage.contains("Internal"),
+          s"usage error must not masquerade as internal, got: ${err.getMessage}"
+        )
+      case Right(out) => fail(s"Expected missing-output error, got: $out")
+    }
+  }
+
+  test("unfreeze without -o names the command in the usage error (GH-422)") {
+    val wb = Workbook(Vector(Sheet("T")))
+    Main.executeCommand(wb, None, None, None, false, CliCommand.Unfreeze).attempt.map {
+      case Left(err) =>
+        assert(
+          err.getMessage.contains("unfreeze requires -o"),
+          s"every write verb should name itself, got: ${err.getMessage}"
+        )
+      case Right(out) => fail(s"Expected missing-output error, got: $out")
+    }
+  }
+
+  test("requireOutput: with -o supplied invokes the write (GH-422)") {
+    Main
+      .requireOutput("recalc", Some(java.nio.file.Paths.get("out.xlsx")), None)((path, _, _) =>
+        IO.pure(s"wrote $path")
+      )
+      .map(out => assertEquals(out, "wrote out.xlsx"))
   }
 
   test("StyleBuilder.parseNumFmt: custom format codes accepted") {

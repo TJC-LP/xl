@@ -162,3 +162,64 @@ class LintCommandSpec extends CatsEffectSuite:
     assertEquals(parsed("clean").bool, true)
     assertEquals(parsed("findings").arr.size, 0)
   }
+
+  // ========== Arg shape: positional file form (GH-422) ==========
+
+  private def xlCommand = com.monovore.decline.Command("xl", "test")(Main.main)
+
+  private def parsedIO(args: Seq[String]): IO[IO[ExitCode]] =
+    IO.fromEither(
+      xlCommand.parse(args, Map.empty).left.map(help => new Exception(help.toString))
+    )
+
+  test("lint: positional file form parses (GH-422)") {
+    val result = xlCommand.parse(Seq("lint", "book.xlsx"), Map.empty)
+    assert(result.isRight, s"xl lint <file> must parse, got: $result")
+  }
+
+  test("lint: positional file form works end-to-end, exit 0 on clean file (GH-422)") {
+    for
+      path <- cleanXlsx()
+      io <- parsedIO(Seq("lint", path.toString))
+      code <- io
+      _ <- IO(Files.deleteIfExists(path))
+    yield assertEquals(code, ExitCode.Success)
+  }
+
+  test("lint: -f flag form still works end-to-end (GH-422)") {
+    for
+      path <- cleanXlsx()
+      io <- parsedIO(Seq("-f", path.toString, "lint"))
+      code <- io
+      _ <- IO(Files.deleteIfExists(path))
+    yield assertEquals(code, ExitCode.Success)
+  }
+
+  test("lint: giving the file both ways is rejected with exit 2 (GH-422)") {
+    for
+      io <- parsedIO(Seq("-f", "a.xlsx", "lint", "b.xlsx"))
+      code <- io
+    yield assertEquals(code, ExitCode(2))
+  }
+
+  test("lint: no file at all exits 2 with a hint instead of decline noise (GH-422)") {
+    for
+      io <- parsedIO(Seq("lint"))
+      code <- io
+    yield assertEquals(code, ExitCode(2))
+  }
+
+  test("resolveLintFile: exactly-one-file resolution and hint messages (GH-422)") {
+    val a = Paths.get("a.xlsx")
+    val b = Paths.get("b.xlsx")
+    assertEquals(Main.resolveLintFile(Some(a), None), Right(a))
+    assertEquals(Main.resolveLintFile(None, Some(b)), Right(b))
+    Main.resolveLintFile(Some(a), Some(b)) match
+      case Left(msg) => assert(msg.contains("exactly one file"), msg)
+      case Right(p) => fail(s"Expected rejection when the file is given twice, got $p")
+    Main.resolveLintFile(None, None) match
+      case Left(msg) =>
+        assert(msg.contains("lint requires a file"), msg)
+        assert(msg.contains("-f"), msg)
+      case Right(p) => fail(s"Expected rejection when no file is given, got $p")
+  }
