@@ -141,7 +141,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `delete-cols` | `<at-col> [count]` | Delete columns; `#REF!` on lost references (requires `-o`) |
 | `batch` | `<file\|-> [--dry-run]` | Apply multiple operations from JSON (requires `-o`; `--dry-run` validates without a file) |
 | `diff` | `-g <file2> [--format markdown\|json]` | Compare two workbooks; exit 0 identical, 1 differs, 2 error |
-| `lint` | `[--format text\|json]` | Validate package structure (child order, r:id resolution); exit 0 clean, 1 findings, 2 error |
+| `lint` | `[<file>] [--format text\|json]` | Validate package structure (child order, r:id resolution, over-max refs); positional file or `-f`; exit 0 clean, 1 findings, 2 error |
 
 ---
 
@@ -1202,7 +1202,7 @@ xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
 
 ---
 
-### `xl lint [--format text|json]`
+### `xl lint [<file>] [--format text|json]`
 
 Validate the raw package structure against the Excel-repair classes — the defects Excel
 repairs loudly (repair dialog, content stripped) but every lenient reader, xl's own
@@ -1210,7 +1210,8 @@ repairs loudly (repair dialog, content stripped) but every lenient reader, xl's 
 model, so nothing gets normalized before it's checked.
 
 ```bash
-xl -f deliverable.xlsx lint                      # Human-readable findings
+xl lint deliverable.xlsx                         # Positional file form
+xl -f deliverable.xlsx lint                      # Flag form (equivalent)
 xl -f deliverable.xlsx lint --format json        # Stable schema for pipelines
 xl -f deliverable.xlsx lint && echo "safe to send"
 ```
