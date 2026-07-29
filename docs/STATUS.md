@@ -1,12 +1,19 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-29 (0.16.0)
+**Last Updated**: 2026-07-29 (0.17.0)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.17.0** (2026-07-29):
+- ✅ **numFmt parity everywhere** (#408, #410) — StylePatcher delegates to NumFmt.builtInId (streamed Decimal/Percent/Currency ids 2/9/7 match in-memory); NumFmtFormatter built-in arms render via FormatCodeParser (PercentDecimal shows Excel's 15.60%)
+- ✅ **Batch values[] op-level format** (#416) + **usage errors name flags, lint positional file** (#422)
+- ✅ **Sheet lifecycle bookkeeping** (#434, #417) — localSheetId remap on remove/insert/reorder; removal-orphan chart/drawing part pruning (shared parts survive)
+- ✅ **Comment round-trip fidelity** (#433) — no duplicate author prefix; run colors survive via raw rPr preservation
+- ✅ **sheetFormatPr write path** (#426) + **Sheet.named dynamic factory** (#420)
 
 **New in 0.16.0** (2026-07-29):
 - ✅ **Array/data-table formula records survive rewrites** (#430) — `<f t="array" ref>` and `<f t="dataTable" ref dt2D dtr r1 r2 del1 del2 ca/>` are modeled per cell (`FormulaKind` on `CellValue.Formula`) and re-emit byte-exactly through dirty sheet regeneration on every writer (DOM, SAX, streaming); two-variable Data Tables no longer bake to static grids on `put`. DataTable caches are pinned (recalc/copy/eval never parse the derived `TABLE(...)` display text); StructuralEditor shifts record payloads and degrades tearing edits to cached constants; CLI shows `{=TABLE(A1,A2)}` braces + JSON `formulaKind`, and `putf` rejects top-level `TABLE(` (authoring lands with #419); new `formula-records.xlsx` corpus fixture rides every round-trip/parity law
