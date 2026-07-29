@@ -1,12 +1,17 @@
 package com.tjclp.xl.formula
 
+import java.io.ByteArrayInputStream
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.util.zip.ZipInputStream
+
 import munit.FunSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.error.XLError
-import com.tjclp.xl.ooxml.{TestFixtures, XlsxReader}
+import com.tjclp.xl.ooxml.{TestFixtures, XlsxReader, XlsxWriter}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
@@ -247,3 +252,59 @@ class DataTableSeederSpec extends FunSuite:
       CellValue.dataTable(colKind("C10:C10", "A2"), Some(num(107)))
     )
   }
+
+  test("a no-op seed never dirties: pristine fixture write stays byte-verbatim") {
+    // A pristine Excel book already carries every cache the seeder would compute, so seeding
+    // must not mark the sheet modified — otherwise the writer regenerates sheet1.xml instead of
+    // riding the verbatim-copy loop (attribute reordering, showGridLines, t="n" drift).
+    val in = TestFixtures.copyToTemp("datatable-excel.xlsx")
+    val wb = XlsxReader.read(in).fold(err => fail(err.message), identity)
+    val seeded = wb.seedDataTables().fold(err => fail(s"seeding failed: $err"), identity)
+    val out = Files.createTempFile("xl-dt-seeder-noop-", ".xlsx")
+    val outputBytes =
+      try
+        XlsxWriter.write(seeded, out).fold(err => fail(err.message), identity)
+        Files.readAllBytes(out)
+      finally Files.deleteIfExists(out)
+    assertEquals(
+      zipEntry(outputBytes, "xl/worksheets/sheet1.xml"),
+      zipEntry(Files.readAllBytes(in), "xl/worksheets/sheet1.xml"),
+      "a no-op seed must keep the clean read->write verbatim-copy fidelity law"
+    )
+  }
+
+  test("a grid-covering corrupt record ref is skipped untouched (interior area cap)") {
+    // The record ref comes from the FILE: a crafted B2:XFD1048576 interior is ~1.7e10 cells.
+    // The seeder must skip it like any other malformed record (tolerant, Right, fast) instead
+    // of materializing the extent — without the area cap this test OOMs/hangs.
+    val huge: FormulaKind.DataTable = FormulaKind.DataTable(
+      ref = range("B2:XFD1048576"),
+      dt2D = true,
+      dtr = true,
+      r1 = Some(aref("A1")),
+      r2 = Some(aref("A2"))
+    )
+    val sheet = Sheet("S")
+      .put(ref"A1", num(1))
+      .put(ref"A2", num(2))
+      .put(ref"B2", CellValue.dataTable(huge, None))
+    val seeded = Workbook(sheet)
+      .seedDataTables()
+      .fold(err => fail(s"oversized records must skip tolerantly, not fail the op: $err"), identity)
+    assertEquals(sheetNamed(seeded, "S")(ref"B2").value, sheet(ref"B2").value)
+  }
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def zipEntry(bytes: Array[Byte], name: String): String =
+    val zip = new ZipInputStream(new ByteArrayInputStream(bytes))
+    var current = zip.getNextEntry
+    var result: Option[String] = None
+    try
+      while current != null && result.isEmpty do
+        if current.getName == name then
+          result = Some(new String(zip.readAllBytes(), StandardCharsets.UTF_8))
+        else
+          zip.closeEntry()
+          current = zip.getNextEntry
+    finally zip.close()
+    result.getOrElse(fail(s"missing ZIP entry $name"))

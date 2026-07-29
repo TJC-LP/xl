@@ -24,14 +24,24 @@ import com.tjclp.xl.workbooks.Workbook
  *     (foreign every-interior books keep per-cell faithfulness — only re-authoring normalizes);
  *     plain interior cells get their values replaced; real (non-record) formulas are never
  *     overwritten;
- *   - records with `del1`/`del2`, missing required inputs, or no room for the corner/axes are
- *     skipped untouched.
+ *   - records with `del1`/`del2`, missing required inputs, no room for the corner/axes, or an
+ *     interior larger than [[MaxInteriorArea]] cells (the record ref is file-controlled — a
+ *     corrupt/hostile extent is a malformed record, never materialized) are skipped untouched;
+ *   - a seed that changes NOTHING never marks a sheet modified, so a pristine book keeps the
+ *     writer's verbatim-copy fidelity loop.
  *
  * Upstream formulas keep the landed pinned-cache doctrine: a cached precedent reads via its cache.
  * Cells are computed row-major against the group's base sheet, so results are order-independent
  * within a group; groups seed in row-major record-ref order, sheets in workbook order.
  */
 object DataTableSeeder:
+
+  /**
+   * Interior-area skip cap, in cells. The record ref comes from the file, so a crafted
+   * `B2:XFD1048576` interior (~1.7e10 cells) must skip like any other malformed record instead of
+   * being iterated. 1,000,000 cells (a 1000x1000 grid) is orders beyond any real sensitivity table.
+   */
+  private val MaxInteriorArea: Long = 1000000L
 
   extension (wb: Workbook)
 
@@ -67,10 +77,14 @@ object DataTableSeeder:
       case None => wb
       case Some(sheet) =>
         val groups = recordGroups(sheet).filter { case (ref, _) => only.forall(_.intersects(ref)) }
-        val seeded = groups.foldLeft(sheet) { case (acc, (_, kind)) =>
-          seedGroup(wb.put(acc), acc, kind, clock)
-        }
-        wb.put(seeded)
+        if groups.isEmpty then wb
+        else
+          val seeded = groups.foldLeft(sheet) { case (acc, (_, kind)) =>
+            seedGroup(wb.put(acc), acc, kind, clock)
+          }
+          // Only a real change may mark the sheet modified — a no-op seed (already-correct
+          // caches, or nothing but skips) must keep the verbatim-copy write fidelity.
+          if seeded == sheet then wb else wb.put(seeded)
 
   /**
    * Record groups by record ref, row-major; the representative kind comes from the group's
@@ -97,8 +111,9 @@ object DataTableSeeder:
     val interior = kind.ref
     val startRow = interior.start.row.index0
     val startCol = interior.start.col.index0
+    val oversized = interior.width.toLong * interior.height.toLong > MaxInteriorArea
     val inputs: Option[(ARef, Option[ARef])] =
-      if kind.del1 || kind.del2 || startRow < 1 || startCol < 1 then None
+      if kind.del1 || kind.del2 || startRow < 1 || startCol < 1 || oversized then None
       else
         (kind.r1, kind.r2) match
           case (Some(r1), Some(r2)) if kind.dt2D => Some((r1, Some(r2)))
@@ -107,16 +122,18 @@ object DataTableSeeder:
     inputs match
       case None => sheet // skip untouched
       case Some((input1, input2)) =>
-        val computed: Vector[(ARef, CellValue)] =
-          interior.cellsRowMajor.toVector.flatMap { cellRef =>
-            computeCell(wb, sheet, kind, cellRef, input1, input2, clock).map(cellRef -> _)
-          }
-        computed.foldLeft(sheet) { case (acc, (cellRef, value)) =>
-          acc.cells.get(cellRef).map(_.value) match
-            case Some(record @ CellValue.Formula(_, _, _: FormulaKind.DataTable)) =>
-              acc.put(cellRef, record.copy(cachedValue = Some(value))) // shape-preserving
-            case Some(_: CellValue.Formula) => acc // never overwrite a real formula
-            case _ => acc.put(cellRef, value)
+        // Fold the interior iterator directly — O(1) beyond the accumulating sheet, never a
+        // materialized extent. Every cell computes against the group's base `sheet`, so
+        // interleaving the puts stays order-independent.
+        interior.cellsRowMajor.foldLeft(sheet) { (acc, cellRef) =>
+          computeCell(wb, sheet, kind, cellRef, input1, input2, clock) match
+            case None => acc // tolerant: leave the cell untouched
+            case Some(value) =>
+              acc.cells.get(cellRef).map(_.value) match
+                case Some(record @ CellValue.Formula(_, _, _: FormulaKind.DataTable)) =>
+                  acc.put(cellRef, record.copy(cachedValue = Some(value))) // shape-preserving
+                case Some(_: CellValue.Formula) => acc // never overwrite a real formula
+                case _ => acc.put(cellRef, value)
         }
 
   /** One interior cell's what-if value; `None` leaves the cell untouched (tolerant). */
