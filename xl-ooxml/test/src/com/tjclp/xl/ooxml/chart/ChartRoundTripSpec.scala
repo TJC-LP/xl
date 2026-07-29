@@ -22,8 +22,9 @@ import com.tjclp.xl.workbooks.Workbook
  *
  * PLUS the exact identity `ChartReader.parse(emit(chart)) == Some(chart)` on the fully-explicit
  * subspace — every series carries an explicit fill AND name, so the writer materializes nothing.
- * (Exception: pie slices are always dPt accent-cycled; the pie series-level fill still round-trips
- * exactly.)
+ * (Pie slices: explicit `pointFills` prefixes emit as dPt fills with the accent cycle beyond them —
+ * GH-418; exactness additionally needs pointFills CANONICAL, i.e. sized within the values vector
+ * with no trailing accent-coincident entry, since trailing accents re-derive and strip on parse.)
  *
  * Exercised under BOTH cache regimes: bare `c:f` (referenced sheet absent from the workbook) and
  * fully-resolved caches over a sheet mixing numbers, text, booleans, blanks, dates, and
@@ -115,6 +116,40 @@ class ChartRoundTripSpec extends ScalaCheckSuite:
       }
     }
 
+  /**
+   * GH-418: stamp generated per-slice fills onto pie charts (0..cellCount arbitrary opaque colors;
+   * non-pie charts pass through untouched — the writer has no dPt slot for them). Kept OUT of the
+   * shared [[Generators.genSeries]] so the pinned-seed value streams of every other property using
+   * genChart/genChartFrame stay undisturbed.
+   */
+  private def withPointFills(chart: Chart): org.scalacheck.Gen[Chart] =
+    import com.tjclp.xl.charts.{ChartType, Series}
+    import com.tjclp.xl.styles.color.Color
+    chart.series match
+      case Vector(s) if chart.chartType == ChartType.Pie =>
+        for
+          n <- org.scalacheck.Gen.choose(0, s.values.cellCount)
+          colors <- org.scalacheck.Gen.listOfN[Color.Rgb](
+            n,
+            org.scalacheck.Gen.choose(0, 0xffffff).map(rgb => Color.Rgb(0xff000000 | rgb))
+          )
+        yield chart.copy(series = Vector(s.copy(pointFills = colors.toVector)))
+      case _ => org.scalacheck.Gen.const(chart)
+
+  /**
+   * Canonicalize pie pointFills the way the reader does (GH-418): trailing entries that coincide
+   * with the accent cycle re-derive on emission and strip on parse.
+   */
+  private def canonicalPointFills(chart: Chart): Chart =
+    import com.tjclp.xl.ooxml.DefaultTheme
+    import com.tjclp.xl.styles.color.Color
+    chart.copy(series = chart.series.map { s =>
+      val trailing = s.pointFills.zipWithIndex.reverse.takeWhile { case (c, k) =>
+        c == Color.Rgb(DefaultTheme.accentArgb(k))
+      }.size
+      s.copy(pointFills = s.pointFills.dropRight(trailing))
+    })
+
   private val plain = SheetName.unsafe("Data")
   private val quoted = SheetName.unsafe("Q1 'Report") // needsQuoting: space + quote + cell-shaped
 
@@ -145,6 +180,18 @@ class ChartRoundTripSpec extends ScalaCheckSuite:
   property("LAW: parse(emit(chart)) == chart on the fully-explicit subspace — resolved caches") {
     forAll(Generators.genChart(plain)) { chart =>
       exactProp(explicit(chart), Workbook(Vector(materialized(plain))))
+    }
+  }
+
+  property("GH-418 LAW: emit∘parse∘emit == emit — pie pointFills, resolved caches") {
+    forAll(Generators.genChart(plain).flatMap(withPointFills)) { chart =>
+      lawProp(chart, Workbook(Vector(materialized(plain))))
+    }
+  }
+
+  property("GH-418 LAW: parse(emit(chart)) == chart — explicit + canonical pointFills") {
+    forAll(Generators.genChart(plain).flatMap(withPointFills)) { chart =>
+      exactProp(canonicalPointFills(explicit(chart)), Workbook(Vector(materialized(plain))))
     }
   }
 

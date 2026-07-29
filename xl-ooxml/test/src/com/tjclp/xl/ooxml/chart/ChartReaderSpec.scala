@@ -258,6 +258,11 @@ class ChartReaderSpec extends FunSuite:
     assert(parsed.isDefined, s"writer-shaped pie dPts must parse: $exact")
     assertEquals(parsed.map(_.chartType), Some(ChartType.Pie))
     assertEquals(parsed.flatMap(_.series.headOption).flatMap(_.fill), None)
+    // the full accent cycle re-derives on emission: nothing captured
+    assertEquals(
+      parsed.flatMap(_.series.headOption).map(_.pointFills),
+      Some(Vector.empty[Color.Rgb]): Option[Vector[Color.Rgb]]
+    )
 
     // dPt-less pie (pre-GH-407 output) still parses
     assert(ChartReader.parse(pieWith("")).isDefined)
@@ -273,9 +278,27 @@ class ChartReaderSpec extends FunSuite:
     )
   }
 
-  test("GH-407: pie dPts outside the exact accent-cycle shape reject to Preserved") {
-    val wrongColor = pieWith(dPt(0, "FF0000") + dPt(1, "ED7D31") + dPt(2, "A5A5A5"))
-    assertEquals(ChartReader.parse(wrongColor), None, "non-accent slice color must reject")
+  test("GH-418: explicit slice colors capture into pointFills; trailing accents canonicalize") {
+    import com.tjclp.xl.styles.color.Color
+    // explicit prefix + accent remainder (the writer's own fewer-colors-than-slices shape):
+    // the remainder re-derives on emission, so only the prefix is captured
+    def capturedFills(xml: String): Option[Vector[Color.Rgb]] =
+      ChartReader.parse(xml).flatMap(_.series.headOption).map(_.pointFills)
+    def fills(cs: Color.Rgb*): Option[Vector[Color.Rgb]] = Some(cs.toVector)
+    val prefix = pieWith(dPt(0, "FF0000") + dPt(1, "ED7D31") + dPt(2, "A5A5A5"))
+    assertEquals(capturedFills(prefix), fills(Color.Rgb(0xffff0000)))
+    // fully explicit (last slice non-accent): captured as-written
+    val full = pieWith(dPt(0, "307FE2") + dPt(1, "005670") + dPt(2, "FF0000"))
+    assertEquals(
+      capturedFills(full),
+      fills(Color.Rgb(0xff307fe2), Color.Rgb(0xff005670), Color.Rgb(0xffff0000))
+    )
+    // an accent color AHEAD of a non-accent slice is not trailing: captured verbatim
+    val mid = pieWith(dPt(0, "4472C4") + dPt(1, "FF0000") + dPt(2, "A5A5A5"))
+    assertEquals(capturedFills(mid), fills(Color.Rgb(0xff4472c4), Color.Rgb(0xffff0000)))
+  }
+
+  test("GH-407/418: pie dPts outside the writer's shape reject to Preserved") {
     val wrongCount = pieWith(dPt(0, "4472C4"))
     assertEquals(ChartReader.parse(wrongCount), None, "dPt count != value cells must reject")
     val wrongOrder = pieWith(dPt(1, "ED7D31") + dPt(0, "4472C4") + dPt(2, "A5A5A5"))

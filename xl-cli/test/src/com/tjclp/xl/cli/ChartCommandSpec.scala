@@ -212,6 +212,62 @@ class ChartCommandSpec extends CatsEffectSuite:
     }
   }
 
+  test("GH-418: pie --series-colors maps per-slice; explicit dPt colors round-trip") {
+    import com.tjclp.xl.styles.color.Color
+    roundTrip(dataWorkbook()) { (wb, sheet, out) =>
+      ChartCommands.chartAdd(
+        wb,
+        sheet,
+        "pie",
+        None,
+        "B2:B4",
+        Some("A2:A4"),
+        None,
+        Some("#307FE2,#005670,#FF0000"),
+        None,
+        None,
+        "E2:K15",
+        out,
+        config
+      )
+    }.map { result =>
+      val chart = result.sheets.head.charts.head.chart
+      assertEquals(chart.chartType, ChartType.Pie)
+      assertEquals(chart.series.size, 1)
+      // colors land per-SLICE (c:dPt), never as the series-level fill
+      assertEquals(chart.series(0).fill, None: Option[Color.Rgb])
+      assertEquals(
+        chart.series(0).pointFills,
+        Vector(Color.Rgb(0xff307fe2), Color.Rgb(0xff005670), Color.Rgb(0xffff0000))
+      )
+    }
+  }
+
+  test("GH-418: fewer pie colors than slices leaves the remainder on the accent cycle") {
+    import com.tjclp.xl.styles.color.Color
+    roundTrip(dataWorkbook()) { (wb, sheet, out) =>
+      ChartCommands.chartAdd(
+        wb,
+        sheet,
+        "pie",
+        None,
+        "B2:B4",
+        None,
+        None,
+        Some("#307FE2"),
+        None,
+        None,
+        "E2",
+        out,
+        config
+      )
+    }.map { result =>
+      val chart = result.sheets.head.charts.head.chart
+      // slice 0 explicit; slices 1..2 ride the accent cycle (re-derived, so not captured back)
+      assertEquals(chart.series(0).pointFills, Vector(Color.Rgb(0xff307fe2)))
+    }
+  }
+
   test("GH-407: batch chart op mirrors chart add (same construction path)") {
     import com.tjclp.xl.cli.helpers.BatchParser
     import com.tjclp.xl.styles.color.Color
@@ -241,14 +297,16 @@ class ChartCommandSpec extends CatsEffectSuite:
 
   test("GH-407: batch chart op surfaces the shared validation errors") {
     import com.tjclp.xl.cli.helpers.BatchParser
+    // four colors for a three-slice pie: the shared per-slice count check rejects (GH-418)
     val json =
-      """[{"op":"chart","type":"pie","data":"B2:B4","seriesColors":"#307FE2","at":"E2"}]"""
+      """[{"op":"chart","type":"pie","data":"B2:B4",""" +
+        """"seriesColors":"#307FE2,#005670,#FF0000,#00AA00","at":"E2"}]"""
     val wb = dataWorkbook()
     for
       parsed <- IO.fromEither(BatchParser.parseBatchJson(json))
       err <- BatchParser.applyBatchOperations(wb, wb.sheets.headOption, parsed.ops).attempt
     yield assert(
-      err.left.exists(_.getMessage.contains("not supported for pie charts")),
+      err.left.exists(_.getMessage.contains("must not exceed the pie slice count")),
       err.toString
     )
   }
@@ -372,7 +430,7 @@ class ChartCommandSpec extends CatsEffectSuite:
           "B2:B4",
           None,
           None,
-          Some("#307FE2"),
+          Some("#307FE2,#005670,#FF0000,#00AA00"), // 4 colors, 3 slices (GH-418)
           None,
           None,
           "E2",
@@ -436,7 +494,7 @@ class ChartCommandSpec extends CatsEffectSuite:
       )
       assert(
         pieColors.left.exists(
-          _.getMessage.contains("--series-colors is not supported for pie charts")
+          _.getMessage.contains("must not exceed the pie slice count (3)")
         ),
         pieColors.toString
       )

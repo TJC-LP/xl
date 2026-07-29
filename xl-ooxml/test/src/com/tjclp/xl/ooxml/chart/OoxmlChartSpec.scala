@@ -168,6 +168,42 @@ class OoxmlChartSpec extends FunSuite:
     assert(pieXml.contains(dPt(0, "4472C4") + dPt(1, "ED7D31")), pieXml)
   }
 
+  // ===== GH-418: explicit per-slice pie fills =====
+
+  test("GH-418: pie pointFills replace the accent dPts positionally, idx in document order") {
+    import com.tjclp.xl.styles.color.Color
+    val slices = series.copy(
+      pointFills = Vector(Color.Rgb(0xff307fe2), Color.Rgb(0xff005670))
+    )
+    val chart = Chart(ChartType.Pie, Vector(slices), None, Some(Legend()))
+    val expected = prefix + """<autoTitleDeleted val="1"/>""" +
+      s"""<plotArea><pieChart><varyColors val="1"/>${serGolden(
+          dPt(0, "307FE2") + dPt(1, "005670")
+        )}<firstSliceAng val="0"/></pieChart></plotArea>""" +
+      """<legend><legendPos val="r"/><overlay val="0"/></legend>""" + suffix
+    assertEquals(emit(chart), expected)
+  }
+
+  test("GH-418: fewer pointFills than slices — the remainder continues the accent cycle") {
+    import com.tjclp.xl.styles.color.Color
+    val oneOfTwo = series.copy(pointFills = Vector(Color.Rgb(0xff307fe2)))
+    val xml = emit(Chart(ChartType.Pie, Vector(oneOfTwo), None, None))
+    assert(xml.contains(dPt(0, "307FE2") + dPt(1, "ED7D31")), xml)
+  }
+
+  test("GH-418: bar/line ignore pointFills — emission is byte-identical to the unset series") {
+    import com.tjclp.xl.styles.color.Color
+    val stamped = series.copy(pointFills = Vector(Color.Rgb(0xff307fe2)))
+    assertEquals(
+      emit(Chart(ChartType.Bar(), Vector(stamped), Some("T"), Some(Legend()))),
+      emit(Chart(ChartType.Bar(), Vector(series), Some("T"), Some(Legend())))
+    )
+    assertEquals(
+      emit(Chart(ChartType.Line, Vector(stamped), None, None)),
+      emit(Chart(ChartType.Line, Vector(series), None, None))
+    )
+  }
+
   // ===== caches =====
 
   test("cache: referenced sheet absent => cache elements OMITTED entirely (bare c:f)") {
