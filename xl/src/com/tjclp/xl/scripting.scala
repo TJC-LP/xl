@@ -4,7 +4,7 @@ package com.tjclp.xl
  * Scripting prelude: everything a script needs in one import.
  *
  * {{{
- * //> using dep com.tjclp::xl:0.17.0
+ * //> using dep com.tjclp::xl:0.18.0
  * import com.tjclp.xl.scripting.{*, given}
  *
  * val wb = Excel.read("input.xlsx")
