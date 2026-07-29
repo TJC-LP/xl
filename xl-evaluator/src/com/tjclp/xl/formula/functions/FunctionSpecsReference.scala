@@ -5,7 +5,8 @@ import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
+import com.tjclp.xl.cells.{CellError, CellValue}
 
 trait FunctionSpecsReference extends FunctionSpecsBase:
   // extractARef is inherited from FunctionSpecsBase (shared with OFFSET).
@@ -13,6 +14,13 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
   private def extractCellRange(expr: TExpr[?]): Option[CellRange] = expr match
     case TExpr.RangeRef(range) => Some(range)
     case TExpr.SheetRange(_, range) => Some(range)
+    case _ => None
+
+  /** The sheet a reference expression is qualified with, if any (CELL reads the qualifier). */
+  private def extractSheetName(expr: TExpr[?]): Option[SheetName] = expr match
+    case TExpr.SheetPolyRef(sheet, _, _) => Some(sheet)
+    case TExpr.SheetRef(sheet, _, _, _) => Some(sheet)
+    case TExpr.SheetRange(sheet, _) => Some(sheet)
     case _ => None
 
   @annotation.tailrec
@@ -165,4 +173,77 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
           sheetName match
             case Some(sn) => s"$sn!$refStr"
             case None => refStr
+    }
+
+  /**
+   * GH-424: CELL(info_type, [reference]) — the info arms the house corpus uses. Every print tab in
+   * the exemplar books carries `=CELL("Filename",$B$2)` as its path + tab self-label.
+   *
+   * Supported arms (case-insensitive like Excel): "filename" (directory + [file] + sheet from the
+   * eval context's workbook path — the empty string when no path is known, Excel's pre-save
+   * behavior), "address" (absolute A1 form of the reference's top-left cell), "row" and "col"
+   * (1-based coordinates). The reference argument is positional — its ADDRESS is the datum, so it
+   * is never evaluated; omitted, the arms fall back to the current cell (ROW()/COLUMN() convention;
+   * "filename" needs only the ambient sheet). Exotic arms (format, contents, parentheses, prefix,
+   * ...) are Excel's #VALUE! as a clean per-cell error value, never a throw.
+   *
+   * Volatile like NOW(): the value derives from the evaluation context (workbook path, position),
+   * never from cell data, so full recalculation always recomputes it fresh.
+   */
+  val cellFn: FunctionSpec[CellValue] { type Args = CellArgs } =
+    FunctionSpec.simple[CellValue, CellArgs]("CELL", Arity.Range(1, 2)) { (args, ctx) =>
+      val (infoTypeExpr, refOpt) = args
+      ctx.evalExpr(infoTypeExpr).flatMap { infoType =>
+        // (top-left ARef if the reference or cell context provides one, subject sheet)
+        val target: Either[EvalError, (Option[ARef], SheetName)] = refOpt match
+          case Some(expr) =>
+            extractARef(expr) match
+              case Some(aref) =>
+                Right((Some(aref), extractSheetName(expr).getOrElse(ctx.sheet.name)))
+              case None =>
+                Left(
+                  EvalError.EvalFailed(
+                    "CELL requires a cell reference",
+                    Some(s"CELL($infoType, $expr)")
+                  )
+                )
+          case None => Right((ctx.currentCell, ctx.sheet.name))
+        def positional(f: ARef => CellValue): Either[EvalError, CellValue] =
+          target.flatMap {
+            case (Some(aref), _) => Right(f(aref))
+            case (None, _) =>
+              Left(
+                EvalError.EvalFailed(
+                  s"CELL(\"$infoType\") with no reference requires a cell context",
+                  Some(s"CELL($infoType)")
+                )
+              )
+          }
+        infoType.toLowerCase match
+          case "filename" =>
+            target.map { case (_, sheetName) =>
+              ctx.workbookPath match
+                case None => CellValue.Text("") // Excel: empty until the workbook is saved
+                case Some(path) =>
+                  // Excel's shape: directory + [file] + sheet, e.g. /models/[lbo.xlsx]DCF
+                  val cut = math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1
+                  CellValue.Text(s"${path.take(cut)}[${path.drop(cut)}]${sheetName.value}")
+            }
+          case "address" =>
+            positional(aref =>
+              CellValue.Text(s"$$${columnToLetter(aref.col.index0)}$$${aref.row.index0 + 1}")
+            )
+          case "row" => positional(aref => CellValue.Number(BigDecimal(aref.row.index0 + 1)))
+          case "col" => positional(aref => CellValue.Number(BigDecimal(aref.col.index0 + 1)))
+          case other =>
+            Left(
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(
+                  s"CELL: info_type '$other' is not supported " +
+                    "(supported: filename, address, row, col)"
+                )
+              )
+            )
+      }
     }

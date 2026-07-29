@@ -1524,7 +1524,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("Known functions include all 108 functions") {
+  test("Known functions include all 109 functions") {
     val functions = FunctionRegistry.allNames
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -1643,7 +1643,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("RANDBETWEEN"))
     // GH-274 dynamic references
     assert(functions.contains("INDIRECT"))
-    assertEquals(functions.length, 108)
+    // GH-424 cell information (the house self-label idiom)
+    assert(functions.contains("CELL"))
+    assertEquals(functions.length, 109)
   }
 
   // ==================== INDIRECT Parsing Tests (GH-274) ====================

@@ -128,6 +128,9 @@ trait FunctionSpecsBase:
     Option[TExpr[Boolean]],
     Option[TExpr[String]]
   )
+  // GH-424 CELL: info_type + optional positional reference (never evaluated — its address is
+  // the datum)
+  type CellArgs = (TExpr[String], Option[AnyExpr])
   type XnpvArgs = (TExpr[BigDecimal], TExpr.RangeLocation, TExpr.RangeLocation)
   type XirrArgs = (TExpr.RangeLocation, TExpr.RangeLocation, Option[TExpr[BigDecimal]])
   type TvmArgs = (

@@ -63,7 +63,13 @@ final case class EvalContext(
    * read uncached cells (aggregates, array materialization) evaluate each precedent once per pass
    * instead of once per reference (see Evaluator.EvalMemo).
    */
-  memo: Option[Evaluator.EvalMemo] = None
+  memo: Option[Evaluator.EvalMemo] = None,
+  /**
+   * GH-424: the workbook's saved location, if the embedder knows one (thread it via
+   * `Evaluator.instance(workbookPath = ...)`). Read by CELL("filename"); None reproduces Excel's
+   * pre-save behavior (empty string).
+   */
+  workbookPath: Option[String] = None
 )
 
 sealed trait ArgValue

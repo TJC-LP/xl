@@ -80,6 +80,15 @@ object Evaluator:
   def instance(rng: Rng): Evaluator = new EvaluatorImpl(rng = rng)
 
   /**
+   * Evaluator instance that knows the workbook's saved location (GH-424).
+   *
+   * CELL("filename") reports `directory[file]sheet` from this path; without one it returns the
+   * empty string — Excel's behavior for a never-saved workbook.
+   */
+  def instance(workbookPath: Option[String]): Evaluator =
+    new EvaluatorImpl(workbookPath = workbookPath)
+
+  /**
    * Evaluator instance that allows array results to propagate.
    *
    * Used for array formula evaluation where arithmetic over ranges should spill arrays.
@@ -308,7 +317,8 @@ object Evaluator:
     workbook: Option[Workbook],
     depth: Int = 0,
     rng: Rng = Rng.system,
-    memo: EvalMemo = new EvalMemo
+    memo: EvalMemo = new EvalMemo,
+    workbookPath: Option[String] = None
   ): Either[EvalError, CellValue] =
     boundary:
       // GH-161 review: Add recursion depth limit to prevent stack overflow on circular refs
@@ -334,8 +344,14 @@ object Evaluator:
           // Recursively evaluate with depth-aware evaluator (GH-161 cycle protection).
           // The referenced formula is a separate lexical unit: the rng threads through, but LET
           // bindings never leak across formula boundaries (fresh empty environment). The memo
-          // threads too (GH-346): every cell in this recursion tree evaluates at most once.
-          new EvaluatorWithDepth(depth + 1, rng = rng, memo = Some(memo))
+          // threads too (GH-346): every cell in this recursion tree evaluates at most once, and
+          // the workbook path (GH-424) so nested CELL("filename") calls see the same location.
+          new EvaluatorWithDepth(
+            depth + 1,
+            rng = rng,
+            memo = Some(memo),
+            workbookPath = workbookPath
+          )
             .eval(expr, targetSheet, clock, workbook) match
             case Right(result) => Right(EvalResult.toCellValue(result))
             // GH-344: an error-computing precedent delivers its Excel error VALUE to readers
@@ -433,12 +449,16 @@ private[formula] object EvalResult:
  *   name→name cycle guard. A refersTo chain that revisits a member (aa → bb → aa) is a clean
  *   per-cell error instead of unbounded recursion. Cell-mediated cycles (name → cell → name) are
  *   covered separately by the depth-guarded cross-sheet recursion.
+ * @param workbookPath
+ *   GH-424: the workbook's saved location if the embedder knows one, surfaced to functions via
+ *   EvalContext (CELL("filename")). None reproduces Excel's pre-save behavior.
  */
 private class EvaluatorImpl(
   allowArrayResults: Boolean = false,
   bindings: Map[String, Any] = Map.empty,
   rng: Rng = Rng.system,
-  resolvingNames: Set[String] = Set.empty
+  resolvingNames: Set[String] = Set.empty,
+  workbookPath: Option[String] = None
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
@@ -523,7 +543,8 @@ private class EvaluatorImpl(
                           workbook,
                           currentDepth,
                           rng,
-                          memo
+                          memo,
+                          workbookPath
                         )
                       }
                       .flatMap(evaluatedValue =>
@@ -590,7 +611,8 @@ private class EvaluatorImpl(
                     workbook,
                     currentDepth,
                     rng,
-                    memo
+                    memo,
+                    workbookPath
                   )
               }
               .flatMap(evaluatedValue => decodeOrCarried(at, Cell(at, evaluatedValue), decode))
@@ -748,7 +770,8 @@ private class EvaluatorImpl(
             bindings,
             rng,
             Some(callMemo),
-            resolvingNames // GH-384: the name-cycle guard survives array-argument evaluation
+            resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
+            workbookPath
           )
             .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -762,7 +785,8 @@ private class EvaluatorImpl(
           currentDepth,
           bindings,
           rng,
-          Some(callMemo)
+          Some(callMemo),
+          workbookPath
         )
         call.spec.eval(call.args, ctx)
 
@@ -851,7 +875,8 @@ private class EvaluatorImpl(
               env,
               rng,
               memoOpt,
-              resolvingNames
+              resolvingNames,
+              workbookPath
             )
               .eval(resolved.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell) match
               case Right(value) => Right(env + (name -> unwrapBindingValue(value)))
@@ -882,7 +907,15 @@ private class EvaluatorImpl(
             .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(range, targetSheet) }
         case other =>
           val resolvedBody = TExpr.asResolvedValueExpr(other)
-          new EvaluatorWithDepth(currentDepth, allowArrayResults, env, rng, memoOpt, resolvingNames)
+          new EvaluatorWithDepth(
+            currentDepth,
+            allowArrayResults,
+            env,
+            rng,
+            memoOpt,
+            resolvingNames,
+            workbookPath
+          )
             .eval(resolvedBody.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
     }
 
@@ -979,7 +1012,8 @@ private class EvaluatorImpl(
                         Map.empty,
                         rng,
                         memoOpt,
-                        resolvingNames + key
+                        resolvingNames + key,
+                        workbookPath
                       )
                         .eval(
                           resolved.asInstanceOf[TExpr[Any]],
@@ -1375,7 +1409,8 @@ private class EvaluatorWithDepth(
   bindings: Map[String, Any] = Map.empty,
   rng: Rng = Rng.system,
   memo: Option[Evaluator.EvalMemo] = None,
-  resolvingNames: Set[String] = Set.empty
-) extends EvaluatorImpl(allowArrayResults, bindings, rng, resolvingNames):
+  resolvingNames: Set[String] = Set.empty,
+  workbookPath: Option[String] = None
+) extends EvaluatorImpl(allowArrayResults, bindings, rng, resolvingNames, workbookPath):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
