@@ -47,19 +47,21 @@ class StructuralCommandSpec extends CatsEffectSuite:
       result <- excel.read(out)
     yield
       val s = result.sheets.head
-      // GH-427: the rewrite emits the model's equals-free canonical form
-      assertEquals(s(ref"B1").value, CellValue.Formula("A1+A4", None)) // A3 -> A4
+      // GH-427: equals-free canonical form; the command's recalc re-bakes the cache (10+30).
+      assertEquals(s(ref"B1").value, CellValue.Formula("A1+A4", Some(CellValue.Number(40))))
       assertEquals(s(ref"A4").value, CellValue.Number(30)) // cell shifted down
       assertEquals(s(ref"A1").value, CellValue.Number(10)) // unchanged
   }
 
-  test("insert-rows invalidates cached <v> and emits a single equals-free <f>") {
-    val cached = Some(CellValue.Number(BigDecimal(4)))
+  test("insert-rows recomputes cached <v> and emits a single equals-free <f>") {
+    // Deliberately WRONG cache (999): only the command's recalc can produce 4, so the file
+    // assertion below distinguishes fresh-correct from stale-preserved.
+    val stale = Some(CellValue.Number(BigDecimal(999)))
     val wb = Workbook(
       Vector(
         Sheet("S")
           .put(ref"A1", CellValue.Number(2))
-          .put(ref"B1", CellValue.Formula("A1*2", cached))
+          .put(ref"B1", CellValue.Formula("A1*2", stale))
       )
     )
     val in = tmp("in427")
@@ -77,12 +79,43 @@ class StructuralCommandSpec extends CatsEffectSuite:
         finally zip.close()
       }
     yield
-      // Model: formula text stays equals-free and the structural edit invalidates its cache.
-      assertEquals(result.sheets.head(ref"B1").value, CellValue.Formula("A1*2", None))
-      // File: <f> carries no '=' and the stale cached <v> is omitted.
+      // Model: equals-free text; the structural edit invalidated the stale cache and the
+      // command's global recalc re-baked the true value.
+      assertEquals(
+        result.sheets.head(ref"B1").value,
+        CellValue.Formula("A1*2", Some(CellValue.Number(4)))
+      )
+      // File: <f> carries no '=' and <v> is the recomputed value, never the stale one.
       assert(raw.contains("<f>A1*2</f>"), s"expected equals-free <f> in: $raw")
       assert(!raw.contains("<f>="), s"leading '=' must not land inside <f>: $raw")
-      assert(!raw.contains("<v>4</v>"), s"stale cached <v> must be omitted: $raw")
+      assert(raw.contains("<v>4</v>"), s"recomputed <v> must be present: $raw")
+      assert(!raw.contains("<v>999</v>"), s"stale <v> must not survive: $raw")
+  }
+
+  test("delete-rows re-bakes a shrinking SUM to its new true value") {
+    val wb = Workbook(
+      Vector(
+        Sheet("S")
+          .put(ref"A1", CellValue.Number(1))
+          .put(ref"A2", CellValue.Number(2))
+          .put(ref"A3", CellValue.Number(3))
+          .put(ref"C1", CellValue.Formula("SUM(A1:A3)", Some(CellValue.Number(6))))
+      )
+    )
+    val in = tmp("inShrink")
+    val out = tmp("outShrink")
+    for
+      _ <- excel.write(wb, in)
+      read <- excel.read(in)
+      _ <- WriteCommands.deleteRows(read, read.sheets.headOption, 2, 1, out, config)
+      result <- excel.read(out)
+    yield
+      // A2 deleted: SUM(A1:A2) now spans A1=1 and A2=3 (was A3). The old cache (6) would be
+      // silently wrong; the command's recalc writes the true 4.
+      assertEquals(
+        result.sheets.head(ref"C1").value,
+        CellValue.Formula("SUM(A1:A2)", Some(CellValue.Number(4)))
+      )
   }
 
   test("delete-rows: a reference into the deleted row becomes #REF!") {
@@ -120,7 +153,9 @@ class StructuralCommandSpec extends CatsEffectSuite:
       result <- excel.read(out)
     yield assertEquals(
       result.sheets.head(ref"A2").value,
-      CellValue.Formula("D1", None) // C1 -> D1 (GH-427: equals-free canonical form)
+      // C1 -> D1 (GH-427: equals-free canonical form); the command's recalc caches the
+      // empty-reference result (0, Excel-consistent).
+      CellValue.Formula("D1", Some(CellValue.Number(0)))
     )
   }
 

@@ -22,8 +22,12 @@ reads, and `xl lint` catches what Excel refuses.
   a structural edit can change referenced aggregates (a delete that
   shrinks a `SUM` range) and position-sensitive results (`ROW()`), so a
   preserved cache could ship silently-wrong values. A formula whose
-  reference is fully deleted degrades to `#REF!`. Re-bake display values
-  with `xl recalc` / `recalculate()` after structural edits.
+  reference is fully deleted degrades to `#REF!`. The four structural CLI
+  commands then end with one global recalculate before writing (the #352
+  batch contract: failing cells stay uncached, the file is written
+  regardless) — so `insert-rows` output carries fresh-correct `<v>`, never
+  stale or absent ones. Library API callers use `recalculate()` /
+  `writeRecalculated` for the same effect.
 - **Range shifts clamp at the sheet edge** (#428): a full-height range
   (CF sqref `A1:XFD1048576`, DV, merges) shifted past row 1,048,576 /
   column XFD on insertion — `A144:XFD1048578`-class output that **Excel
