@@ -5,5 +5,6 @@ object syntax:
   export rangeSyntax.*
   export styleSyntax.*
   export iterationSyntax.*
+  export dataTableSyntax.*
 
 export syntax.*

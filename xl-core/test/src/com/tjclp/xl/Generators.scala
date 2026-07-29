@@ -513,6 +513,30 @@ object Generators:
       ca <- Gen.oneOf(true, false)
     yield FormulaKind.DataTable(range, dt2D, dtr, r1, r2, del1, del2, ca)
 
+  /**
+   * GH-419: a VALID-GEOMETRY authored data table — unlike [[genDataTableKind]] (wild shapes for
+   * read tolerance), this generates interiors the authoring API accepts: room for the corner and
+   * both axes, inputs outside the table block, distinct. Tuple: (interior, orientation, input1,
+   * input2) where orientation 0 = 2-D (input1=row, input2=col), 1 = 1-D row-oriented, 2 = 1-D
+   * column-oriented (1-D shapes use input1 only).
+   */
+  val genAuthoredDataTable: Gen[(CellRange, Int, ARef, ARef)] =
+    for
+      startCol <- Gen.choose(1, 40)
+      startRow <- Gen.choose(1, 400)
+      width <- Gen.choose(1, 6)
+      height <- Gen.choose(1, 8)
+      orientation <- Gen.choose(0, 2)
+    yield
+      val interior = CellRange(
+        ARef.from0(startCol, startRow),
+        ARef.from0(startCol + width - 1, startRow + height - 1)
+      )
+      // Below-right of the interior end on both axes: provably outside the block.
+      val input1 = ARef.from0(startCol + width + 1, startRow + height + 1)
+      val input2 = ARef.from0(startCol + width + 2, startRow + height + 2)
+      (interior, orientation, input1, input2)
+
   /** GH-430: CT_CellFormula record kind (Normal / CSE array anchor / data table). */
   val genFormulaKind: Gen[FormulaKind] =
     Gen.frequency(

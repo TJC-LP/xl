@@ -335,6 +335,62 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(pictures.map(_.image.format), Vector(ImageFormat.Png, ImageFormat.Png))
     assertEquals(pictures(0).image.bytes, bytes)
 
+  test("GH-419: dataTable authoring + seedDataTables resolve through the prelude"):
+    // The typed overload carries a DEFAULT seeds argument and the string overloads ride
+    // @targetName — both must survive the wildcard-export hop (the export-landmine gate).
+    val base = Sheet("DT419")
+      .put(ref"B1", 10)
+      .put(ref"B2", 20)
+      .put(ref"C4", fx"=B1*B2")
+      .put(ref"D4", 1)
+      .put(ref"E4", 2)
+      .put(ref"C5", 100)
+      .put(ref"C6", 200)
+    val authored: Sheet = base.dataTable(ref"D5:E6", ref"B1", ref"B2").unsafe
+    authored(ref"D5").value match
+      case CellValue.Formula(expr, cached, kind: FormulaKind.DataTable) =>
+        assertEquals(expr, "TABLE(B1,B2)")
+        assertEquals(cached, None)
+        assertEquals(kind.dt2D, true)
+        assertEquals(kind.ca, true)
+      case other => fail(s"expected the corner record, got $other")
+    // Explicit seeds + the runtime-string overload both resolve.
+    val seeds = Seq(
+      Seq(CellValue.Number(BigDecimal(1)), CellValue.Number(BigDecimal(2))),
+      Seq(CellValue.Number(BigDecimal(3)), CellValue.Number(BigDecimal(4)))
+    )
+    assert(base.dataTable(ref"D5:E6", ref"B1", ref"B2", seeds).isRight)
+    assert(base.dataTable("D5:E6", "B1", "B2").isRight)
+    // 1-D forms resolve (row axis above + formulas left / column axis left + formulas above).
+    val oneD = Sheet("DT419b")
+      .put(ref"A1", 3)
+      .put(ref"B20", 7)
+      .put(ref"A21", fx"=A1+1")
+    assert(oneD.dataTableRow(ref"B21:B21", ref"A1").isRight)
+    assert(oneD.dataTableRow("B21:B21", "A1").isRight)
+    val oneDCol = Sheet("DT419c")
+      .put(ref"A2", 3)
+      .put(ref"F9", fx"=A2*100")
+      .put(ref"E10", 5)
+    assert(oneDCol.dataTableCol(ref"F10:F10", ref"A2").isRight)
+    assert(oneDCol.dataTableCol("F10:F10", "A2").isRight)
+    // Seeding: the what-if engine computes Excel's grid (D5 = B1<-1, B2<-100 -> 100).
+    val seeded: Workbook = Workbook(authored).seedDataTables().unsafe
+    seeded.sheets.headOption.flatMap(_.cells.get(ref"D5")).map(_.value) match
+      case Some(CellValue.Formula(_, cached, _: FormulaKind.DataTable)) =>
+        assertEquals(cached, Some(CellValue.Number(BigDecimal(100))))
+      case other => fail(s"expected a seeded corner record, got $other")
+    assertEquals(
+      seeded.sheets.headOption.flatMap(_.cells.get(ref"E6")).map(_.value),
+      Some(CellValue.Number(BigDecimal(400)))
+    )
+    // The scoped overload resolves too.
+    assert(
+      Workbook(authored)
+        .seedDataTables(SheetName.unsafe("DT419"), Some(ref"D5:E6"), Clock.system)
+        .isRight
+    )
+
   test("GH-430: a data-table record authors from scratch through the prelude and round-trips"):
     // FormulaKind must resolve through the prelude export alone (export-forwarder landmine
     // guard), and CellValue.dataTable must synthesize the derived TABLE(...) display text —

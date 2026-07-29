@@ -34,6 +34,17 @@ object TestFixtures:
   )
 
   /**
+   * Fixtures authored by Microsoft Excel itself (GH-419): the first genuine-Excel files in the
+   * corpus. datatable-excel.xlsx carries all three native data-table shapes (2-D, 1-D row, 1-D
+   * column) in Excel's own record dialect; datatable-excel-edge.xlsx pins the edge geometry (empty
+   * corner, bare single-cell `ref="Q2"`, two-result-column 1-D table). See PROVENANCE.md.
+   */
+  val excel: List[String] = List(
+    "datatable-excel.xlsx",
+    "datatable-excel-edge.xlsx"
+  )
+
+  /**
    * Fixtures derived from the committed set by deterministic zip surgery (see PROVENANCE.md).
    * image-shape.xlsx = image.xlsx with an `<sp>` shape anchor appended to the same wsDr (GH-221
    * mixed typed-picture + preserved-fragment coverage). doctype-hostile.xlsx = small-values-lo.xlsx
@@ -61,7 +72,7 @@ object TestFixtures:
   )
 
   /** Every committed well-formed fixture (excludes `malformed`). */
-  val all: List[String] = openpyxl ++ libreOffice ++ derived
+  val all: List[String] = openpyxl ++ libreOffice ++ excel ++ derived
 
   /**
    * Copy a fixture from the test classpath to a temp file (readers need a real Path). The caller

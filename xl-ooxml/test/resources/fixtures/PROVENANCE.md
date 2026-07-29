@@ -1,7 +1,8 @@
 # Fixture corpus provenance (GH-240)
 
-Real-file test inputs produced by **foreign writers** (openpyxl, LibreOffice), so reader
-tests against them cannot be self-fulfilling round-trips of XL's own XML dialect.
+Real-file test inputs produced by **foreign writers** (openpyxl, LibreOffice, Microsoft
+Excel), so reader tests against them cannot be self-fulfilling round-trips of XL's own
+XML dialect.
 
 **All content is synthetic/invented for testing. No confidential data.**
 
@@ -42,6 +43,8 @@ python3 scripts/generate-fixtures.py --skip-lo  # openpyxl fixtures only
 | `styled-lo.xlsx` | LibreOffice (from styled.xlsx) | LibreOffice re-encoding of all styles (own styles.xml layout) |
 | `formulas-lo.xlsx` | LibreOffice (from formulas.xlsx) | Same formulas with **computed cached values** (`<f aca="false">…</f><v>150</v>`) |
 | `formula-records.xlsx` | derived (deterministic zip assembly) | GH-430 formula-record corpus, sheet `Records`: 2-D data table (`<f t="dataTable" ref="F2:G3" dt2D="1" dtr="0" r1="A1" r2="A2"/>` on every interior cell, one carrying a cached `#NUM!` with `ca="1"` and `t="e"`), 1-D column table (`H2:H4`, `dtr="0"`, `r1="G1"`), 1-D row table (`B6:D6`, `dtr="1"`, `r1="A6"`), multi-cell CSE array group (anchor `<f t="array" ref="C8:C9">A8:A9*10</f>` at C8; member C9 is a cached `<v>`-only constant — per-cell faithfulness), and a single-cell array record at E10. Derivation: `scripts` are not needed — six hand-authored parts (content types, rels, workbook, styles, sheet) zipped with timestamps pinned to 2026-07-22 09:30 (see FormulaRecordPreservationSpec for the byte laws it pins) |
+| `datatable-excel.xlsx` | Microsoft Excel 16.x (macOS), AppleScript `data table` command (GH-419 design panel); generator script xl419-p1-make-dt.applescript in ~/Downloads | Sheet `Sheet1`, all three native data-table shapes in Excel's own record dialect (corner-only records, `ca` as Excel left it): 3×3 2-D table (`<f t="dataTable" ref="F2:H4" dt2D="1" dtr="1" r1="A1" r2="A2" ca="1"/>` on F2 only; corner formula `E1=A1*A2`, row axis F1:H1, column axis E2:E4, cached interiors 1000..9000), 1-D column table (`ref="F10:F12" dt2D="0" dtr="0" r1="A2"`, source formula `F9=A2*100`, axis E10:E12), 1-D row table (`ref="B21:D21" dt2D="0" dtr="1" r1="A1"`, source formula `A21=A1+1`, axis B20:D20) |
+| `datatable-excel-edge.xlsx` | Microsoft Excel 16.x (macOS), AppleScript `data table` command (GH-419 design panel); generator script xl419-p1-make-dt.applescript in ~/Downloads | Sheet `Sheet1`, data-table edge geometry: 2×2 2-D table `L2:M3` with an EMPTY corner cell (K1 absent — Excel caches all-zero interiors), 1×1 2-D table with a BARE single-cell record ref (`<f t="dataTable" ref="Q2" dt2D="1" dtr="1" r1="A1" r2="A2"/>` — pins the writer's bare-ref rendering), two-result-column 1-D column table `T2:U4` (source formulas `T1=A2*100`, `U1=A2+7`, shared axis S2:S4). Sheet2 empty (tab-selected) |
 | `malformed-workbook.xlsx` | derived (zip surgery on small-values.xlsx) | **Intentionally NOT well-formed** (GH-349) — excluded from `TestFixtures.all`, corpus laws must not parse it. `xl/workbook.xml` closing tag replaced (`</workbook>` → `</workbook-truncated>`), so Xerces raises the XMLMessages-backed diagnostic `The end-tag for element type "workbook" must end with a '>' delimiter.` Pins that parse failures surface the real Xerces message (JVM: `WorkbookMetadataReaderSpec`; native binary: the GH-349 smoke step in `.github/workflows/release.yml`, where a missing bundle registration degrades it to `Could not load any resource bundle`). Zip timestamps pinned to 1980-01-01 |
 
 ## Consumers
@@ -53,3 +56,8 @@ python3 scripts/generate-fixtures.py --skip-lo  # openpyxl fixtures only
   (xl-cats-effect test resources include this directory via `xl-cats-effect/package.mill`)
 - `xl-ooxml/test/.../WorkbookMetadataReaderSpec.scala` + `.github/workflows/release.yml`
   ("Smoke test native binary" step) — malformed-workbook.xlsx only (GH-349 readable-diagnostic guard)
+- `xl-ooxml/test/.../DataTableAuthoringSpec.scala` — datatable-excel*.xlsx byte laws: authored
+  records equal Excel's own bytes; clean rewrite copies the worksheet parts verbatim (GH-419)
+- `xl-evaluator/test/.../DataTableSeederSpec.scala` — datatable-excel*.xlsx as the seeding oracle:
+  strip caches, re-seed, compare against Excel's computed interiors (GH-419; xl-evaluator test
+  resources include this directory via `xl-evaluator/package.mill`)

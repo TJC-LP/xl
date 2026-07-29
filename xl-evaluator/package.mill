@@ -13,6 +13,11 @@ object `package` extends build.XLModule {
   )
 
   object test extends ScalaTests with build.XLTestModule {
+    // Share the real-file fixture corpus (xl-ooxml/test/resources/fixtures) so the GH-419
+    // DataTableSeeder oracle reads the exact Excel-authored files (resources travel on the
+    // test classpath via moduleDeps, same pattern as xl-cats-effect).
+    override def moduleDeps = super.moduleDeps ++ Seq(build.`xl-ooxml`.test)
+
     override def mvnDeps = Seq(
       mvn"org.scalameta::munit:1.0.3",
       mvn"org.scalameta::munit-scalacheck:1.2.0",
