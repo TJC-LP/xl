@@ -10,13 +10,77 @@ import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.unsafe.* // For .unsafe extension
 
-import munit.FunSuite
+import munit.ScalaCheckSuite
+import org.scalacheck.Gen
+import org.scalacheck.Prop.forAll
 
 import java.time.LocalDateTime
 
-class DisplaySpec extends FunSuite:
+class DisplaySpec extends ScalaCheckSuite:
 
   // ========== NumFmtFormatter Tests ==========
+
+  /** Every built-in (non-Custom) NumFmt variant. */
+  private val builtInVariants: List[NumFmt] = List(
+    NumFmt.General,
+    NumFmt.Integer,
+    NumFmt.Decimal,
+    NumFmt.ThousandsSeparator,
+    NumFmt.ThousandsDecimal,
+    NumFmt.Currency,
+    NumFmt.Percent,
+    NumFmt.PercentDecimal,
+    NumFmt.Scientific,
+    NumFmt.Fraction,
+    NumFmt.Date,
+    NumFmt.DateTime,
+    NumFmt.Time,
+    NumFmt.Text
+  )
+
+  private val genNumeric: Gen[BigDecimal] = Gen
+    .oneOf(
+      Gen.chooseNum(-1e6, 1e6), // covers negative serials and general magnitudes
+      Gen.chooseNum(-1.0, 1.0), // percent/fraction territory
+      Gen.chooseNum(0.0, 60000.0) // Excel date-serial range for the calendar variants
+    )
+    .map(d => BigDecimal(java.lang.Double.toString(d)))
+
+  private val genDateTime: Gen[LocalDateTime] = for
+    day <- Gen.chooseNum(0, 59999)
+    hour <- Gen.chooseNum(0, 23)
+    minute <- Gen.chooseNum(0, 59)
+    second <- Gen.chooseNum(0, 59)
+  yield LocalDateTime.of(1900, 1, 1, hour, minute, second).plusDays(day.toLong)
+
+  property("built-in enum arms render numbers exactly like their format codes (GH-410)") {
+    // The enum arm and a file-declared Custom carrying NumFmt.formatCode(fmt) are the same
+    // format per ECMA-376; both must render through FormatCodeParser identically.
+    forAll(genNumeric) { (n: BigDecimal) =>
+      builtInVariants.foreach { fmt =>
+        assertEquals(
+          NumFmtFormatter.formatValue(CellValue.Number(n), fmt),
+          NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.Custom(NumFmt.formatCode(fmt))),
+          s"enum arm diverged from its own format code for $fmt on $n"
+        )
+      }
+      true
+    }
+  }
+
+  property("built-in enum arms render DateTime values exactly like their format codes (GH-410)") {
+    forAll(genDateTime) { (dt: LocalDateTime) =>
+      builtInVariants.foreach { fmt =>
+        assertEquals(
+          NumFmtFormatter.formatValue(CellValue.DateTime(dt), fmt),
+          NumFmtFormatter
+            .formatValue(CellValue.DateTime(dt), NumFmt.Custom(NumFmt.formatCode(fmt))),
+          s"enum arm diverged from its own format code for $fmt on $dt"
+        )
+      }
+      true
+    }
+  }
 
   test("formatValue - Currency format") {
     val value = CellValue.Number(BigDecimal("1234.56"))
@@ -31,18 +95,67 @@ class DisplaySpec extends FunSuite:
   }
 
   test("formatValue - PercentDecimal format") {
+    // Re-pinned by GH-410: PercentDecimal is "0.00%" (ECMA-376 id 10) — two forced decimal
+    // placeholders, so Excel renders 15.60%, not the old enum arm's single-decimal 15.6%.
     val value = CellValue.Number(BigDecimal("0.156"))
     val result = NumFmtFormatter.formatValue(value, NumFmt.PercentDecimal)
-    assertEquals(result, "15.6%")
+    assertEquals(result, "15.60%")
   }
 
-  test("formatValue - Custom 0.00% renders two decimals (GH-404 delta pin)") {
-    // Since GH-404 the reader keeps file-declared codes verbatim, so a declared "0.00%" renders
-    // through FormatCodeParser as Excel does ("15.60%") — not the PercentDecimal enum arm above
-    // ("15.6%"). Deliberate behavioral delta: the Custom rendering is the Excel-correct one.
+  test("formatValue - Custom 0.00% renders identically to PercentDecimal (GH-410)") {
+    // GH-404 kept file-declared codes verbatim, which made a declared "0.00%" render correctly
+    // ("15.60%") while the PercentDecimal enum arm hand-rolled "15.6%". GH-410 closed that
+    // delta: the enum arms now render through FormatCodeParser on NumFmt.formatCode.
     val value = CellValue.Number(BigDecimal("0.156"))
     val result = NumFmtFormatter.formatValue(value, NumFmt.Custom("0.00%"))
     assertEquals(result, "15.60%")
+    assertEquals(result, NumFmtFormatter.formatValue(value, NumFmt.PercentDecimal))
+  }
+
+  test("formatValue - Scientific format matches its 0.00E+00 code (GH-410)") {
+    // ECMA-376 id 11 is "0.00E+00": one mantissa integer digit, two decimals, signed
+    // two-digit exponent.
+    def sci(s: String): String =
+      NumFmtFormatter.formatValue(CellValue.Number(BigDecimal(s)), NumFmt.Scientific)
+    assertEquals(sci("1234.5"), "1.23E+03")
+    assertEquals(sci("0"), "0.00E+00")
+    assertEquals(sci("0.0001234"), "1.23E-04")
+    assertEquals(sci("-1234.5"), "-1.23E+03")
+  }
+
+  test("formatValue - Decimal rounds HALF_UP on the exact decimal value (GH-410)") {
+    // "0.00" of exactly 2.675 is 2.68 in decimal HALF_UP; the old arm detoured through
+    // Double where 2.675 is stored as 2.67499..., yielding 2.67.
+    val result = NumFmtFormatter.formatValue(CellValue.Number(BigDecimal("2.675")), NumFmt.Decimal)
+    assertEquals(result, "2.68")
+  }
+
+  test("formatValue - DateTime serial renders 24-hour like its m/d/yy h:mm code (GH-410)") {
+    // ECMA-376 §18.8.31: 'h' is the 12-hour clock only when the code contains AM/PM;
+    // "m/d/yy h:mm" (id 22) has none, so 14:30 renders as 14:30. The old arm used the
+    // Java pattern 'h' (clock-hour 1-12) and showed 2:30.
+    val serial = BigDecimal("45982.6041666666666667") // 2025-11-21 14:30
+    val result = NumFmtFormatter.formatValue(CellValue.Number(serial), NumFmt.DateTime)
+    assertEquals(result, "11/21/25 14:30")
+  }
+
+  test("formatValue - Time serial renders 24-hour (GH-410)") {
+    val result = NumFmtFormatter.formatValue(CellValue.Number(BigDecimal("0.75")), NumFmt.Time)
+    assertEquals(result, "18:00:00")
+  }
+
+  test("formatValue - Date format fills ###### for out-of-range serials (GH-410)") {
+    // Excel renders negative (pre-1900) serials under date formats as ######; the old arm
+    // fabricated an 1899 calendar date.
+    val result = NumFmtFormatter.formatValue(CellValue.Number(BigDecimal(-5)), NumFmt.Date)
+    assertEquals(result, "######")
+  }
+
+  test("formatValue - Text format renders numbers like General (GH-410)") {
+    // "@" (id 49) has no numeric section: Excel shows the number in General format. The old
+    // arm leaked BigDecimal.toString ("1E+3").
+    val result = NumFmtFormatter.formatValue(CellValue.Number(BigDecimal("1E+3")), NumFmt.Text)
+    assertEquals(result, "1000")
   }
 
   test("formatValue - Custom thousands/currency codes match the enum arms (GH-404 parity)") {

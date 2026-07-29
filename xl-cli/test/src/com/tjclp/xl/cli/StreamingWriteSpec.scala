@@ -118,6 +118,34 @@ class StreamingWriteSpec extends FunSuite:
         case None => fail("Missing xl/styles.xml")
     finally zipFile.close()
 
+  private def zipEntryXml(path: Path, entryName: String): scala.xml.Elem =
+    val zipFile = new ZipFile(path.toFile)
+    try
+      Option(zipFile.getEntry(entryName)) match
+        case Some(entry) =>
+          val input = zipFile.getInputStream(entry)
+          val xml =
+            try new String(input.readAllBytes(), StandardCharsets.UTF_8)
+            finally input.close()
+          XmlSecurity.parseSafe(xml, entryName) match
+            case Right(root) => root
+            case Left(error) => fail(s"Failed to parse $entryName: ${error.message}")
+        case None => fail(s"Missing $entryName")
+    finally zipFile.close()
+
+  /** The numFmtId of the style the given cell references (sheet1.xml s= index into cellXfs). */
+  private def numFmtIdOfCell(path: Path, cellRef: String): Int =
+    val sheetXml = zipEntryXml(path, "xl/worksheets/sheet1.xml")
+    val styleIdx = (sheetXml \\ "c")
+      .find(c => (c \ "@r").text == cellRef)
+      .map(c => (c \ "@s").text.toIntOption.getOrElse(0))
+      .getOrElse(fail(s"cell $cellRef not found in sheet1.xml"))
+    val stylesXml = zipEntryXml(path, "xl/styles.xml")
+    (stylesXml \ "cellXfs" \ "xf")
+      .lift(styleIdx)
+      .map(xf => (xf \ "@numFmtId").text.toIntOption.getOrElse(0))
+      .getOrElse(fail(s"cellXfs has no xf at index $styleIdx"))
+
   // ========== Hybrid Streaming: put command ==========
 
   test("streaming put: basic value preserved") {
@@ -162,6 +190,31 @@ class StreamingWriteSpec extends FunSuite:
       val style = sheet.getCellStyle(ARef.from0(0, 0))
       assertEquals(style.map(_.numFmt), Some(NumFmt.Date))
       assertEquals(style.map(_.font.bold), Some(true))
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+  }
+
+  test("streaming put: percent detection lands builtin numFmtId 9 (GH-408)") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    try
+      ExcelIO.instance[IO].write(Workbook(Sheet("Test")), sourcePath).unsafeRunSync()
+
+      StreamingWriteCommands
+        .put(sourcePath, outputPath, Some("Test"), "A1", List("45.5%"))
+        .unsafeRunSync()
+
+      // The streamed positional put writes detected formats through StylePatcher (PR #438);
+      // NumFmt.Percent must land the canonical builtin id 9 ("0%"), not 10 ("0.00%").
+      assertEquals(numFmtIdOfCell(outputPath, "A1"), 9)
+
+      val sheet = ExcelIO.instance[IO].read(outputPath).unsafeRunSync().sheets.head
+      assertEquals(
+        sheet.cells.get(ARef.from0(0, 0)).map(_.value),
+        Some(CellValue.Number(BigDecimal("0.455")))
+      )
+      assertEquals(sheet.getCellStyle(ARef.from0(0, 0)).map(_.numFmt), Some(NumFmt.Percent))
     finally
       Files.deleteIfExists(sourcePath)
       Files.deleteIfExists(outputPath)

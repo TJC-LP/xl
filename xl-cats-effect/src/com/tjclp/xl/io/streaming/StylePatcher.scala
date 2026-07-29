@@ -306,20 +306,6 @@ object StylePatcher:
     numFmt: NumFmt
   ): (Option[Elem], Int) =
     numFmt match
-      case NumFmt.General => (numFmts, 0)
-      case NumFmt.Text => (numFmts, 49)
-      case NumFmt.Decimal => (numFmts, 4)
-      case NumFmt.Percent => (numFmts, 10)
-      case NumFmt.Currency => (numFmts, 44)
-      case NumFmt.Date => (numFmts, 14)
-      case NumFmt.DateTime => (numFmts, 22)
-      case NumFmt.Time => (numFmts, 21)
-      case NumFmt.Integer => (numFmts, 1)
-      case NumFmt.ThousandsSeparator => (numFmts, 3)
-      case NumFmt.ThousandsDecimal => (numFmts, 4)
-      case NumFmt.PercentDecimal => (numFmts, 10)
-      case NumFmt.Scientific => (numFmts, 11)
-      case NumFmt.Fraction => (numFmts, 12)
       case NumFmt.Custom(code) =>
         val existing = numFmts.map(n => (n \ "numFmt").toSeq).getOrElse(Seq.empty)
 
@@ -360,6 +346,12 @@ object StylePatcher:
                 )
 
             (Some(updated), nextId)
+
+      case builtin =>
+        // One source of truth (GH-408): the canonical NumFmt.builtInId table — the same one
+        // the in-memory StyleSerializer writes — so both write paths emit identical ids.
+        // builtInId is total for every non-Custom variant; the fallback is unreachable.
+        (numFmts, NumFmt.builtInId(builtin).getOrElse(0))
 
   private def createCellXf(
     fontId: Int,
@@ -570,22 +562,12 @@ object StylePatcher:
       .getOrElse(Border.none)
 
   private def extractNumFmt(root: Elem, numFmtId: Int): NumFmt =
-    numFmtId match
-      case 0 => NumFmt.General
-      case 49 => NumFmt.Text
-      case 4 => NumFmt.Decimal
-      case 10 => NumFmt.Percent
-      case 44 => NumFmt.Currency
-      case 14 => NumFmt.Date
-      case 22 => NumFmt.DateTime
-      case 21 => NumFmt.Time
-      case id =>
-        // Look up custom format
-        val numFmts = (root \ "numFmts" \ "numFmt")
-        numFmts
-          .find(nf => (nf \ "@numFmtId").text.toIntOption.contains(id))
-          .map(nf => NumFmt.Custom((nf \ "@formatCode").text))
-          .getOrElse(NumFmt.General)
+    // DOM StyleParser parity (GH-408): declared <numFmt> entries win with their code kept
+    // VERBATIM as Custom (GH-404), then the canonical builtin table, then General.
+    val declared = (root \ "numFmts" \ "numFmt")
+      .find(nf => (nf \ "@numFmtId").text.toIntOption.contains(numFmtId))
+      .map(nf => NumFmt.Custom((nf \ "@formatCode").text))
+    declared.orElse(NumFmt.fromId(numFmtId)).getOrElse(NumFmt.General)
 
   private def extractAlignment(xf: Node): Align =
     val alignment = (xf \ "alignment")

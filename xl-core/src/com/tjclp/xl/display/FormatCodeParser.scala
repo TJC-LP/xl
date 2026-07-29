@@ -143,6 +143,12 @@ object FormatCodeParser:
     /** At sign: @ = text placeholder */
     case TextPlaceholder
 
+    /**
+     * Scientific exponent: `E`/`e` + sign convention + digit-placeholder run (GH-410). `E+` always
+     * writes the exponent sign, `E-` only when the exponent is negative.
+     */
+    case Exponent(letter: Char, sign: Char, digits: String)
+
   // ========== Parser ==========
 
   /**
@@ -392,6 +398,16 @@ object FormatCodeParser:
           tokens += FormatToken.AmPm("A/P")
           i += 3
 
+        case 'E' | 'e'
+            if i + 2 < pattern.length && (pattern(i + 1) == '+' || pattern(i + 1) == '-') &&
+              isDigitPlaceholder(pattern(i + 2)) =>
+          // Scientific exponent (GH-410): E/e, a sign convention, then digit placeholders.
+          // A bare E without sign+placeholder stays a literal (date-era codes, plain text).
+          var j = i + 2
+          while j < pattern.length && isDigitPlaceholder(pattern(j)) do j += 1
+          tokens += FormatToken.Exponent(c, pattern(i + 1), pattern.substring(i + 2, j))
+          i = j
+
         case '/' =>
           // Fraction when digit placeholders directly flank the slash (GH-243): pop the
           // numerator run and consume the denominator (placeholder run or fixed integer).
@@ -444,6 +460,10 @@ object FormatCodeParser:
   /** Characters that may appear in a fraction numerator/denominator run. */
   private def isFractionChar(c: Char): Boolean =
     c == '#' || c == '?' || (c >= '0' && c <= '9')
+
+  /** Digit placeholder characters: 0 (forced), # (optional), ? (space-padded). */
+  private def isDigitPlaceholder(c: Char): Boolean =
+    c == '0' || c == '#' || c == '?'
 
   // ========== Formatter ==========
 
@@ -552,7 +572,15 @@ object FormatCodeParser:
     }
     pattern.tokens.lift(fracIdx) match
       case Some(f: FormatToken.Fraction) => applyFractionPattern(value, pattern.tokens, fracIdx, f)
-      case _ => applyNumericPattern(value, pattern)
+      case _ =>
+        val expIdx = pattern.tokens.indexWhere {
+          case _: FormatToken.Exponent => true
+          case _ => false
+        }
+        pattern.tokens.lift(expIdx) match
+          case Some(e: FormatToken.Exponent) =>
+            applyScientificPattern(value, pattern, expIdx, e)
+          case _ => applyNumericPattern(value, pattern)
 
   private def applyNumericPattern(value: BigDecimal, pattern: FormatPattern): String =
     // Handle percent: multiply by 100
@@ -642,6 +670,104 @@ object FormatCodeParser:
           // Date/time tokens not applicable
           ()
 
+    result.toString
+
+  /**
+   * Render a scientific-notation pattern (GH-410).
+   *
+   * Excel semantics (ECMA-376 §18.8.30 ids 11 `0.00E+00` and 48 `##0.0E+0`, cross-checked against
+   * the Excel-corpus-tested SheetJS/SSF):
+   *   - the exponent snaps to the largest multiple of the mantissa's integer-placeholder count not
+   *     exceeding floor(log10 |x|) — one placeholder is normalized scientific (mantissa in [1,
+   *     10)), three is engineering notation
+   *   - `E+` always writes the exponent sign; `E-` writes it only when the exponent is negative
+   *   - exponent digits pad to the placeholder run and never truncate
+   *   - a mantissa that rounds up to 10^placeholders renormalizes (9.999 → 1.00E+01)
+   *
+   * The sign of the value is handled by [[applyFormat]] (default leading minus).
+   */
+  private def applyScientificPattern(
+    value: BigDecimal,
+    pattern: FormatPattern,
+    expIdx: Int,
+    exp: FormatToken.Exponent
+  ): String =
+    val tokens = pattern.tokens
+    val adjusted = (if pattern.hasPercent then value * 100 else value).abs
+
+    def digitCount(ts: Vector[FormatToken]): Int = ts.count {
+      case FormatToken.Digit(_) => true
+      case _ => false
+    }
+    val mantissaTokens = tokens.take(expIdx)
+    val decimalIdx = mantissaTokens.indexWhere {
+      case FormatToken.Decimal => true
+      case _ => false
+    }
+    val intTokens = if decimalIdx >= 0 then mantissaTokens.take(decimalIdx) else mantissaTokens
+    val intPlaceholders = math.max(digitCount(intTokens), 1)
+    val decimalDigits =
+      if decimalIdx >= 0 then digitCount(mantissaTokens.drop(decimalIdx + 1)) else 0
+    val minIntDigits = intTokens.count {
+      case FormatToken.Digit('0') => true
+      case _ => false
+    }
+
+    val (mantissa, exponent) =
+      if adjusted.signum == 0 then
+        (BigDecimal(0).setScale(decimalDigits, BigDecimal.RoundingMode.HALF_UP), 0)
+      else
+        // floor(log10 |x|), exact from the decimal representation (no Double detour)
+        val e10 = adjusted.precision - adjusted.scale - 1
+        val e = Math.floorDiv(e10, intPlaceholders) * intPlaceholders
+        val rounded = BigDecimal(adjusted.underlying.movePointLeft(e))
+          .setScale(decimalDigits, BigDecimal.RoundingMode.HALF_UP)
+        val limit = BigDecimal(10).pow(intPlaceholders)
+        if rounded >= limit then
+          (
+            BigDecimal(rounded.underlying.movePointLeft(intPlaceholders))
+              .setScale(decimalDigits, BigDecimal.RoundingMode.HALF_UP),
+            e + intPlaceholders
+          )
+        else (rounded, e)
+
+    // mantissa is non-negative with scale == decimalDigits, so toPlainString is "int[.dec]"
+    val plain = mantissa.underlying.toPlainString
+    val dotIdx = plain.indexOf('.')
+    val rawInt = if dotIdx >= 0 then plain.substring(0, dotIdx) else plain
+    val decStr = if dotIdx >= 0 then plain.substring(dotIdx + 1) else ""
+    val paddedInt =
+      if rawInt.length < minIntDigits then "0" * (minIntDigits - rawInt.length) + rawInt
+      else rawInt
+    val mantissaStr = if decimalIdx >= 0 then s"$paddedInt.$decStr" else paddedInt
+
+    val absExp = math.abs(exponent).toString
+    val paddedExp =
+      if absExp.length < exp.digits.length then "0" * (exp.digits.length - absExp.length) + absExp
+      else absExp
+    val expSign =
+      if exponent < 0 then "-"
+      else if exp.sign == '+' then "+"
+      else ""
+
+    val result = new StringBuilder
+    var numberEmitted = false
+    tokens.foreach {
+      case _: FormatToken.Exponent =>
+        result ++= s"${exp.letter}$expSign$paddedExp"
+      case FormatToken.Digit(_) | FormatToken.Decimal | FormatToken.Thousands =>
+        if !numberEmitted then
+          result ++= mantissaStr
+          numberEmitted = true
+      case FormatToken.Percent =>
+        result += '%'
+      case FormatToken.Literal(text) =>
+        result ++= text
+      case FormatToken.Spacer(_) =>
+        result += ' '
+      case _ =>
+        ()
+    }
     result.toString
 
   /**
@@ -871,8 +997,14 @@ object FormatCodeParser:
   def applyDateFormat(dt: LocalDateTime, section: FormatSection): String =
     val tokens = section.pattern.tokens
     val minutePositions = findMinutePositions(tokens)
+    // ECMA-376 §18.8.31: the hour uses the 12-hour clock only when the code contains an
+    // AM/PM marker; otherwise it is the 24-hour clock (GH-410).
+    val twelveHour = tokens.exists {
+      case FormatToken.AmPm(_) => true
+      case _ => false
+    }
     tokens.zipWithIndex.map { case (token, idx) =>
-      renderDateToken(dt, token, minutePositions.contains(idx))
+      renderDateToken(dt, token, minutePositions.contains(idx), twelveHour)
     }.mkString
 
   /**
@@ -917,8 +1049,15 @@ object FormatCodeParser:
    *   The format token
    * @param isMinute
    *   Whether 'm'/'mm' should render as minute (vs month)
+   * @param twelveHour
+   *   Whether 'h'/'hh' use the 12-hour clock (the section has an AM/PM marker, GH-410)
    */
-  private def renderDateToken(dt: LocalDateTime, token: FormatToken, isMinute: Boolean): String =
+  private def renderDateToken(
+    dt: LocalDateTime,
+    token: FormatToken,
+    isMinute: Boolean,
+    twelveHour: Boolean
+  ): String =
     token match
       // Year
       case FormatToken.DatePart("y") =>
@@ -953,13 +1092,17 @@ object FormatCodeParser:
       case FormatToken.DatePart("dddd") =>
         dt.getDayOfWeek.getDisplayName(TextStyle.FULL, Locale.US)
 
-      // Hour (12-hour format assumed when AM/PM present)
+      // Hour: 12-hour clock only when the section carries AM/PM (ECMA-376 §18.8.31)
       case FormatToken.DatePart("h") =>
-        val hour = dt.getHour % 12
-        (if hour == 0 then 12 else hour).toString
+        if twelveHour then
+          val hour = dt.getHour % 12
+          (if hour == 0 then 12 else hour).toString
+        else dt.getHour.toString
       case FormatToken.DatePart("hh") =>
-        val hour = dt.getHour % 12
-        f"${if hour == 0 then 12 else hour}%02d"
+        if twelveHour then
+          val hour = dt.getHour % 12
+          f"${if hour == 0 then 12 else hour}%02d"
+        else f"${dt.getHour}%02d"
 
       // Second
       case FormatToken.DatePart("s") =>
