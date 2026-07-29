@@ -1094,6 +1094,9 @@ object XlsxReader:
     // Parse the tab color from <sheetPr><tabColor .../> — GH-358
     val tabColor = parseTabColor(ooxmlSheet.sheetPr)
 
+    // Parse sheet-default sizing from <sheetFormatPr> (GH-426) so read→modify→write keeps it
+    val (defaultColumnWidth, defaultRowHeight) = parseSheetFormatPr(ooxmlSheet.sheetFormatPr)
+
     // Parse conditional formatting into the typed model (GH-136); dxfId attrs resolve through
     // the styles.xml <dxfs> table. Total: unmodeled content rides through Preserved.
     val conditionalFormats =
@@ -1122,6 +1125,8 @@ object XlsxReader:
         tables = tables,
         columnProperties = columnProperties,
         rowProperties = rowProperties,
+        defaultColumnWidth = defaultColumnWidth,
+        defaultRowHeight = defaultRowHeight,
         pageSetup = pageSetup,
         freezePane = freezePane,
         viewSettings = viewSettings,
@@ -1319,6 +1324,20 @@ object XlsxReader:
         .flatMap(t => ARef.parse(t).toOption)
         .filter(_ != anchor)
       FreezePane.At(anchor, scrolledTo)
+
+  /**
+   * Parse the sheet-default column width / row height (GH-426) from `<sheetFormatPr>` as
+   * (defaultColumnWidth, defaultRowHeight). Only the two modeled attributes are lifted; everything
+   * else (baseColWidth, outlineLevelRow, ...) rides the preserved element, and the writer's
+   * identity fast-path (mergeSheetFormatPrElem) keeps the element verbatim while the modeled values
+   * are unchanged.
+   */
+  private def parseSheetFormatPr(elem: Option[Elem]): (Option[Double], Option[Double]) =
+    val attrs = elem.map(_.attributes.asAttrMap).getOrElse(Map.empty)
+    (
+      attrs.get("defaultColWidth").flatMap(_.toDoubleOption),
+      attrs.get("defaultRowHeight").flatMap(_.toDoubleOption)
+    )
 
   /**
    * Parse the sheet tab color (GH-358) from `<sheetPr><tabColor .../>`, reusing the strict dxf
