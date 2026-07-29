@@ -7,6 +7,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.ooxml.{FormulaKindCodec, SaxWriter, StaxSaxWriter, XmlSecurity, XmlUtil}
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
+import com.tjclp.xl.styles.font.Underline
 import scala.collection.mutable
 
 /**
@@ -202,8 +203,10 @@ object StreamingTransform:
             if font.italic then
               writer.startElement("i")
               writer.endElement()
-            if font.underline then
+            if font.underline != Underline.None then
               writer.startElement("u")
+              if font.underline != Underline.Single then
+                writer.writeAttribute("val", Underline.token(font.underline))
               writer.endElement()
             font.color.foreach { color =>
               writer.startElement("color")

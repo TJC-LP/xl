@@ -51,6 +51,10 @@ object formulaExports:
   // Recalc result types (workbook-level total recalculation with per-cell errors)
   export formula.eval.{CellEvalError, IterativeCalc, RecalcResult}
 
+  // GH-419: explicit data-table cache seeding (autoNoTable books never recompute tables on open)
+  export formula.eval.DataTableSeeder
+  export formula.eval.DataTableSeeder.*
+
   // DependentRecalculation extension methods (GH-163)
   // Note: Extension methods with default parameters must be imported directly,
   // not via wildcard export (Scala 3 compiler bug)

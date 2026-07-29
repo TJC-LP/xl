@@ -54,13 +54,15 @@ object ValueParser:
    * GH-430: `TABLE(...)` is the derived display text of a `<f t="dataTable">` record, not a real
    * Excel function — writing it as a plain formula would be a #NAME? error on open. Returns the
    * rejection message for a top-level TABLE( expression (case-insensitive, leading `=` stripped);
-   * None when the formula is writable. Data-table authoring is tracked in GH-419.
+   * None when the formula is writable. The steering points at the GH-419 authoring surfaces.
    */
   def dataTableFormulaError(formula: String): Option[String] =
     val stripped = formula.trim.stripPrefix("=").trim
     Option.when(stripped.toUpperCase.startsWith("TABLE("))(
       s"'$formula' is a data-table record display text, not a writable formula " +
-        "(Excel would show #NAME?). Data-table authoring is tracked in GH-419."
+        "(Excel would show #NAME?). Author it with the data-table batch op " +
+        """({"op":"data-table","ref":"D5:F6","rowInput":"B1","colInput":"B2"}) or """ +
+        "sheet.dataTable(interior, rowInput, colInput) in scripts (GH-419)."
     )
 
   /**

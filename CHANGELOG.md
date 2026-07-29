@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Authoring wave (wave 21, burn-down finale): the house sensitivity engine
+becomes authorable, the last CLI surface gaps close, and the style model
+learns the house dialect.
+
+### Added
+
+- **Two-variable Data Table authoring** (#419): `sheet.dataTable(range,
+  rowInput, colInput)` authors native `<f t="dataTable">` interiors (the
+  design-panel-verified Excel record placement) with cached-value seeding
+  so `calcMode="autoNoTable"` books open clean; oversized interiors are
+  guarded; `putf` still rejects raw `TABLE(` and steers to the API. Built
+  on 0.16.0's `FormulaKind` preservation substrate — the field QC's
+  "single biggest gap for house-dialect fidelity" closes.
+- **AutoFilter CLI surface** (#432): `xl autofilter A1:M29` /
+  `--clear` + batch twins over the wave-19 `AutoFilterState` tri-state —
+  clear actively strips even a source-preserved filter; authored filters
+  shift under structural edits. Replaces the zip-injection field recipe.
+- **Row/column outline grouping** (#421): `group-rows 10:20 [--level N]
+  [--collapsed]` / `group-cols E:H` / `ungroup-*` + four batch twins over
+  the existing outline model, with Excel-faithful collapse semantics
+  (members hidden, summary marker carried; ungroup clears markers without
+  resurrecting preserved outlines). Batch operations: 27 → 32.
+- **`CELL()` — the house self-label idiom** (#424): volatile, with the
+  corpus arms `"filename"` (empty pre-save, path+sheet post-save),
+  `"address"`, `"row"`, `"col"`; unsupported arms yield clean per-cell
+  errors. 109 registry functions.
+- **Accounting underline variants** (#423, **breaking**):
+  `Font.underline: Boolean` → `Underline` enum (`None | Single | Double |
+  SingleAccounting | DoubleAccounting`) across parse/emit/DXF/renderers —
+  the period-role band idiom (`singleAccounting`) round-trips typed. A
+  `@deprecated withUnderline(Boolean)` bridge and the dsl `.underline`
+  keep 0.17.0 sources compiling.
+- **Configurable workbook Normal font** (#425):
+  `WorkbookMetadata.defaultFont` drives font 0 + the xfId-0 cellStyleXf on
+  both backends with a read path — generated house books default to Times
+  New Roman instead of Calibri; books with a non-default Normal keep it.
+- **Pie per-slice colors** (#418): `--series-colors` on pie charts maps
+  tokens to explicit `<c:dPt>` solid fills via the new typed
+  `Series.pointFills` (round-trips; fewer colors than slices fall back to
+  the accent cycle).
+
+### Fixed
+
+- **Name→name chains resolve in range slots** (#411): `=SUM(alias)` where
+  `alias` refers to another name now resolves (cycle-guarded) instead of
+  `#VALUE!`; the zero-consumer `given cellRange: ArgSpec[CellRange]` is
+  deprecated with the `rangeLocation` migration hint; `shiftChartRefs` no
+  longer drops series fills (latent, fixed in passing by #418's model
+  work).
+
 ## [0.17.0] "Parity" - 2026-07-29
 
 CLI & fidelity correctness wave (wave 20): display parity between every

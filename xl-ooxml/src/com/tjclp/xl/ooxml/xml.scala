@@ -406,12 +406,19 @@ object XmlUtil:
    *   Font with formatting properties (default Font if no properties)
    */
   def parseRunProperties(rPrElem: Elem): com.tjclp.xl.styles.font.Font =
-    import com.tjclp.xl.styles.font.Font
+    import com.tjclp.xl.styles.font.{Font, Underline}
     import com.tjclp.xl.styles.color.Color
 
     val bold = (rPrElem \ "b").nonEmpty
     val italic = (rPrElem \ "i").nonEmpty
-    val underline = (rPrElem \ "u").nonEmpty
+    // u@val per ST_UnderlineValues (GH-423): bare <u/> means single; unknown tokens read
+    // lenient as Single (the pre-typed truthy behavior for any present <u>)
+    val underline = (rPrElem \ "u").headOption match
+      case Some(u) =>
+        u.attribute("val")
+          .map(attr => Underline.fromToken(attr.text).getOrElse(Underline.Single))
+          .getOrElse(Underline.Single)
+      case None => Underline.None
 
     val color =
       (rPrElem \ "color").headOption.collect { case elem: Elem => elem }.flatMap { colorElem =>

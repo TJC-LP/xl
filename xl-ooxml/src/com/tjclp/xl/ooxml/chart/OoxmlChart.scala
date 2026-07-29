@@ -23,11 +23,12 @@ import com.tjclp.xl.workbooks.Workbook
  *
  * Every emitted shape is inside [[ChartReader]]'s whitelist — the self-coherence law
  * (`emit(parse(emit(chart))) == emit(chart)`, exact `parse(emit(chart)) == Some(chart)` on the
- * fully-explicit subspace where every series has a fill AND a name) verifies this mechanically: the
- * writer materializes defaults (accent-cycle fills, "Series N" names — GH-407) that the reader
- * captures back into the model, making re-emission a fixpoint. Axis ids are the FIXED 10/100 pair
- * (Excel's random 9-digit ids would break write-twice stability); we emit Excel-correct `axPos`
- * values (the fixture's l/l quirk is read-tolerated, never reproduced).
+ * fully-explicit subspace where every series has a fill AND a name, with pie pointFills canonical —
+ * GH-418) verifies this mechanically: the writer materializes defaults (accent-cycle fills, "Series
+ * N" names — GH-407) that the reader captures back into the model, making re-emission a fixpoint.
+ * Axis ids are the FIXED 10/100 pair (Excel's random 9-digit ids would break write-twice
+ * stability); we emit Excel-correct `axPos` values (the fixture's l/l quirk is read-tolerated,
+ * never reproduced).
  */
 private[ooxml] final case class OoxmlChart(chart: Chart, caches: ChartCacheData)
     extends XmlWritable,
@@ -224,7 +225,7 @@ private[ooxml] object OoxmlChart:
     // renders theme-default (spPr-less) series INVISIBLE, so bar/line always emit one.
     // Pie is the exception: a series-level default fill would paint the WHOLE pie one color
     // (one series = all slices), so unset pie fills emit nothing here and the per-slice
-    // dPt fills below carry the accent cycle instead.
+    // dPt fills below carry the colors instead (explicit pointFills, then the accent cycle).
     val explicitHex = series.fill.map(f => DefaultTheme.hex6(f.argb))
     val spPrEls: Vector[Elem] = chartType match
       case _: ChartType.Bar =>
@@ -232,12 +233,17 @@ private[ooxml] object OoxmlChart:
       case ChartType.Line =>
         Vector(strokeSpPr(explicitHex.getOrElse(DefaultTheme.accentHex(index))))
       case ChartType.Pie => explicitHex.map(fillSpPr).toList.toVector
-    // CT_PieSer order: dPt sits after spPr, before cat — one accent-cycled slice fill per
-    // value cell (varyColors semantics made explicit for LO)
+    // CT_PieSer order: dPt sits after spPr, before cat — one slice fill per value cell
+    // (varyColors semantics made explicit for LO): explicit pointFills positionally (GH-418),
+    // the deterministic accent cycle beyond them (GH-407).
     val dPtEls: Vector[Elem] = chartType match
       case ChartType.Pie =>
         (0 until series.values.cellCount).toVector.map { k =>
-          c("dPt")(valEl("idx", k.toString), fillSpPr(DefaultTheme.accentHex(k)))
+          val hex =
+            series.pointFills
+              .lift(k)
+              .fold(DefaultTheme.accentHex(k))(f => DefaultTheme.hex6(f.argb))
+          c("dPt")(valEl("idx", k.toString), fillSpPr(hex))
         }
       case _ => Vector.empty[Elem]
     // CT_LineSer order: marker sits BEFORE cat, smooth AFTER val

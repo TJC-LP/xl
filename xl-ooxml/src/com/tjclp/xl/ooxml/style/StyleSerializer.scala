@@ -11,7 +11,7 @@ import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.{Fill, PatternType}
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.units.StyleId
 
@@ -86,7 +86,10 @@ final case class OoxmlStyles(
     )
 
     // CellXfs (cell format styles)
-    // Pre-build lookup maps for O(1) access instead of O(n) indexOf
+    // Pre-build lookup maps for O(1) access instead of O(n) indexOf.
+    // The getOrElse(_, 0) fallback doubles as the GH-425 sentinel resolution: a workbook
+    // defaultFont keeps Font.default out of the table (see StyleIndex), so styles carrying
+    // the "unspecified" sentinel resolve to font slot 0 — the Normal font.
     val fontMap = index.fonts.zipWithIndex.toMap
     val fillMap = allFills.zipWithIndex.toMap
     val borderMap = index.borders.zipWithIndex.toMap
@@ -122,8 +125,9 @@ final case class OoxmlStyles(
       }*
     )
 
-    // cellStyleXfs: Master formatting records (required per ECMA-376 section 18.8.9)
-    // At minimum, need one default entry that cellXfs can reference via xfId
+    // cellStyleXfs: Master formatting records (required per ECMA-376 section 18.8.9).
+    // One Normal entry that cellXfs reference via xfId; fontId 0 makes font slot 0 the
+    // workbook default font (GH-425 — StyleIndex puts metadata.defaultFont there).
     val cellStyleXfsElem = elem("cellStyleXfs", "count" -> "1")(
       elem(
         "xf",
@@ -221,7 +225,8 @@ final case class OoxmlStyles(
       index.borders.foreach(writeBorderSax(writer, _))
       writer.endElement()
 
-      // cellStyleXfs: Master formatting records (required per ECMA-376 section 18.8.9)
+      // cellStyleXfs: Master formatting records (required per ECMA-376 section 18.8.9).
+      // fontId 0 = workbook default font, same contract as the DOM backend (GH-425)
       writer.startElement("cellStyleXfs")
       writer.writeAttribute("count", "1")
       writer.startElement("xf")
@@ -288,11 +293,17 @@ final case class OoxmlStyles(
       Some(elem("sz", "val" -> font.sizePt.toString)()),
       if font.bold then Some(elem("b")()) else None,
       if font.italic then Some(elem("i")()) else None,
-      if font.underline then Some(elem("u")()) else None,
+      underlineToXml(font.underline),
       font.color.map(colorToXml)
     ).flatten
 
     elem("font")(children*)
+
+  /** u@val per ST_UnderlineValues; bare `<u/>` for Single (the schema default), GH-423. */
+  private def underlineToXml(u: Underline): Option[Elem] = u match
+    case Underline.None => None
+    case Underline.Single => Some(elem("u")())
+    case other => Some(elem("u", "val" -> Underline.token(other))())
 
   private def fillToXml(fill: Fill): Elem =
     fill match
@@ -443,8 +454,10 @@ final case class OoxmlStyles(
     if font.italic then
       writer.startElement("i")
       writer.endElement()
-    if font.underline then
+    if font.underline != Underline.None then
       writer.startElement("u")
+      if font.underline != Underline.Single then
+        writer.writeAttribute("val", Underline.token(font.underline))
       writer.endElement()
 
     font.color.foreach { c =>

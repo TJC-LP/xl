@@ -4,6 +4,7 @@ import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.font.Underline
 import scala.xml.*
 import XmlUtil.*
 import SaxSupport.*
@@ -122,7 +123,10 @@ final case class SharedStrings(
 
                 if f.bold then fontProps += elem("b")()
                 if f.italic then fontProps += elem("i")()
-                if f.underline then fontProps += elem("u")()
+                f.underline match
+                  case Underline.None => ()
+                  case Underline.Single => fontProps += elem("u")()
+                  case other => fontProps += elem("u", "val" -> Underline.token(other))()
 
                 f.color.foreach {
                   case Color.Rgb(argb) =>
@@ -228,8 +232,10 @@ final case class SharedStrings(
     if font.italic then
       writer.startElement("i")
       writer.endElement()
-    if font.underline then
+    if font.underline != Underline.None then
       writer.startElement("u")
+      if font.underline != Underline.Single then
+        writer.writeAttribute("val", Underline.token(font.underline))
       writer.endElement()
 
     font.color.foreach {

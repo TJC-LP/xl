@@ -123,12 +123,20 @@ object StyleIndex:
     // Deduplicate components using LinkedHashSet for O(1) deduplication (60-80% faster than .distinct)
     // Optimization: Single-pass collection instead of three separate passes (was O(3n), now O(n))
     import scala.collection.mutable
+    // GH-425: font slot 0 is the Normal font — the xfId-0 cellStyleXf hardcodes fontId=0 in
+    // both serializer backends. Seed it, and resolve the Font.default sentinel on styles to
+    // it ("unspecified — inherit the workbook default"): the sentinel then never enters the
+    // table, so the emitters' fontMap.getOrElse(font, 0) resolves it to slot 0. With no
+    // authored defaultFont this is byte-identical to the previous layout (CellStyle.default
+    // is style 0, so Font.default already led the table).
+    val workbookDefaultFont = wb.metadata.defaultFont.getOrElse(Font.default)
     val (fontSet, fillSet, borderSet) = {
       val fonts = mutable.LinkedHashSet.empty[Font]
       val fills = mutable.LinkedHashSet.empty[Fill]
       val borders = mutable.LinkedHashSet.empty[Border]
+      fonts += workbookDefaultFont
       unifiedStyles.foreach { style =>
-        fonts += style.font
+        fonts += (if style.font == Font.default then workbookDefaultFont else style.font)
         fills += style.fill
         borders += style.border
       }
@@ -257,6 +265,19 @@ object StyleIndex:
     val fontSet = mutable.LinkedHashSet.from(originalWorkbookStyles.fonts)
     val fillSet = mutable.LinkedHashSet.from(originalWorkbookStyles.fills)
     val borderSet = mutable.LinkedHashSet.from(originalWorkbookStyles.borders)
+
+    // GH-425: an authored defaultFont overrides the Normal slot (font 0). A reader-populated
+    // defaultFont equals the parsed font 0 (it is only populated when Normal maps there), so
+    // unchanged round-trips are byte-identical no-ops; only a genuine withDefaultFont change
+    // rewrites the slot — which IS what changing the Normal font means for every xf that
+    // references fontId 0. New styles carrying the Font.default sentinel are NOT resolved
+    // here: parsed literal Calibri fonts are indistinguishable from the sentinel in source
+    // mode, and original font indices must stay stable.
+    wb.metadata.defaultFont.foreach { f =>
+      if fontsBuilder.nonEmpty && fontsBuilder(0) != f then
+        fontsBuilder(0) = f
+        fontSet += f
+    }
     val numFmtCodeSet = mutable.Set.from(originalWorkbookStyles.customNumFmts.map(_._2 match {
       case NumFmt.Custom(code) => code
       case _ => ""

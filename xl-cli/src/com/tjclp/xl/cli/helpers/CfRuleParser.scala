@@ -5,6 +5,7 @@ import com.tjclp.xl.cli.ColorParser
 import com.tjclp.xl.styles.{Dxf, DxfFont}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Underline
 
 /**
  * Parser for the `cf add` colon rule DSL (GH-324), mapping rule strings to the xl-core CfRule
@@ -79,7 +80,7 @@ object CfRuleParser:
               bold = if bold then Some(true) else None,
               italic = if italic then Some(true) else None,
               strike = if strike then Some(true) else None,
-              underline = if underline then Some(true) else None,
+              underline = if underline then Some(Underline.Single) else None,
               color = fgColor
             )
           )

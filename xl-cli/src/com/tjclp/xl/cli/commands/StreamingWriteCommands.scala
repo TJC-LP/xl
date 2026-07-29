@@ -807,8 +807,11 @@ object StreamingWriteCommands:
             _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
             _: BatchParser.BatchOp.CopyRange | _: BatchParser.BatchOp.Hyperlink |
             _: BatchParser.BatchOp.AddChart | _: BatchParser.BatchOp.SetSheetView |
-            _: BatchParser.BatchOp.SetTabColor | _: BatchParser.BatchOp.SetPageSetup |
-            _: BatchParser.BatchOp.SetHeaderFooter | _: BatchParser.BatchOp.AddConditionalFormat =>
+            _: BatchParser.BatchOp.SetTabColor | _: BatchParser.BatchOp.SetAutoFilter |
+            _: BatchParser.BatchOp.GroupRows | _: BatchParser.BatchOp.GroupCols |
+            _: BatchParser.BatchOp.UngroupRows | _: BatchParser.BatchOp.UngroupCols |
+            _: BatchParser.BatchOp.SetPageSetup | _: BatchParser.BatchOp.SetHeaderFooter |
+            _: BatchParser.BatchOp.AddConditionalFormat =>
           throw new Exception(
             "This batch operation is not supported in streaming mode. " +
               "Remove --stream to use full workbook mode."
@@ -973,7 +976,7 @@ object StreamingWriteCommands:
     import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
     import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
     import com.tjclp.xl.styles.fill.Fill
-    import com.tjclp.xl.styles.font.Font
+    import com.tjclp.xl.styles.font.{Font, Underline}
     import com.tjclp.xl.styles.numfmt.NumFmt
 
     // Parse colors
@@ -999,7 +1002,7 @@ object StreamingWriteCommands:
     val font = Font.default
       .withBold(props.bold)
       .withItalic(props.italic)
-      .withUnderline(props.underline)
+      .withUnderline(if props.underline then Underline.Single else Underline.None)
       .pipe(f => fgColor.fold(f)(c => f.withColor(c)))
       .pipe(f => props.fontSize.fold(f)(s => f.withSize(s)))
       .pipe(f => props.fontName.fold(f)(n => f.withName(n)))

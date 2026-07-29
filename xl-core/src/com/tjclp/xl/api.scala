@@ -113,7 +113,7 @@ object api:
   export styles.fill.{PatternType, Fill}
 
   // Style types - font
-  export styles.font.Font
+  export styles.font.{Font, Underline}
 
   // Style types - numfmt
   export styles.numfmt.NumFmt

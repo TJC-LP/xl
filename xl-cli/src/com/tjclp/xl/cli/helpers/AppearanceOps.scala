@@ -1,12 +1,14 @@
 package com.tjclp.xl.cli.helpers
 
 import com.tjclp.xl.{*, given}
+import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.cli.ColorParser
-import com.tjclp.xl.sheets.{HeaderFooter, PageSetup, SheetView}
+import com.tjclp.xl.sheets.{AutoFilterState, HeaderFooter, PageSetup, SheetView}
 
 /**
- * Pure sheet-appearance and print-setup appliers (GH-358), shared by the CLI command handlers
- * (WriteCommands) and the batch ops (BatchParser) so the two paths cannot drift.
+ * Pure sheet-appearance and print-setup appliers (GH-358) plus the sheet-level autoFilter applier
+ * (GH-432), shared by the CLI command handlers (WriteCommands) and the batch ops (BatchParser) so
+ * the two paths cannot drift.
  *
  * Every applier merges into the sheet's CURRENT settings: unspecified fields are preserved
  * (read-modify-write on the whole case class — the model has no granular withers). Validation
@@ -14,6 +16,23 @@ import com.tjclp.xl.sheets.{HeaderFooter, PageSetup, SheetView}
  * are never tripped from the CLI.
  */
 object AppearanceOps:
+
+  /**
+   * Set or clear the sheet-level autoFilter (GH-432) through the GH-429 lift-and-overlay tri-state.
+   * A range authors `<autoFilter ref="...">` (source filterColumn/sortState children ride
+   * verbatim); `--clear` sets the active-removal state, stripping even an autoFilter preserved from
+   * the source XML (unlike tab-color's passive clear, removal must not resurrect a stale filter).
+   */
+  def applyAutoFilter(
+    sheet: Sheet,
+    range: Option[CellRange],
+    clear: Boolean
+  ): Either[String, Sheet] =
+    (range, clear) match
+      case (Some(_), true) => Left("autofilter: <range> and --clear are mutually exclusive")
+      case (None, false) => Left("autofilter requires a <range> argument or --clear")
+      case (Some(r), false) => Right(sheet.copy(autoFilter = Some(AutoFilterState.Ranged(r))))
+      case (None, true) => Right(sheet.copy(autoFilter = Some(AutoFilterState.Remove)))
 
   /** Merge view options (gridlines, zoom, tab selection) into the sheet's view settings. */
   def applySheetView(

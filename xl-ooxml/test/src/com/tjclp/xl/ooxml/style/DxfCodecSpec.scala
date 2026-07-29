@@ -11,6 +11,7 @@ import com.tjclp.xl.styles.{Dxf, DxfFont}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Underline
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -39,7 +40,7 @@ class DxfCodecSpec extends ScalaCheckSuite:
           bold = Some(true),
           italic = Some(false),
           strike = Some(true),
-          underline = Some(false),
+          underline = Some(Underline.None),
           color = Some(Color.Rgb(0xff9c0006))
         )
       ),
@@ -83,12 +84,27 @@ class DxfCodecSpec extends ScalaCheckSuite:
     assertEquals(font("<strike/>"), Some(Dxf.font(DxfFont(strike = Some(true)))))
   }
 
-  test("underline: <u/>/single -> Some(true), none -> Some(false), double -> degrade to None") {
+  test("underline: <u/>/single -> Single, none -> force-off, variants typed (GH-423)") {
     def font(inner: String): Option[Dxf] = DxfCodec.parse(xml(s"<dxf><font>$inner</font></dxf>"))
-    assertEquals(font("<u/>"), Some(Dxf.font(DxfFont(underline = Some(true)))))
-    assertEquals(font("""<u val="single"/>"""), Some(Dxf.font(DxfFont(underline = Some(true)))))
-    assertEquals(font("""<u val="none"/>"""), Some(Dxf.font(DxfFont(underline = Some(false)))))
-    assertEquals(font("""<u val="double"/>"""), None)
+    def u(v: Underline): Option[Dxf] = Some(Dxf.font(DxfFont(underline = Some(v))))
+    assertEquals(font("<u/>"), u(Underline.Single))
+    assertEquals(font("""<u val="single"/>"""), u(Underline.Single))
+    assertEquals(font("""<u val="none"/>"""), u(Underline.None))
+    assertEquals(font("""<u val="double"/>"""), u(Underline.Double))
+    assertEquals(font("""<u val="singleAccounting"/>"""), u(Underline.SingleAccounting))
+    assertEquals(font("""<u val="doubleAccounting"/>"""), u(Underline.DoubleAccounting))
+    // Outside ST_UnderlineValues: still degrades the whole dxf (strict-or-None)
+    assertEquals(font("""<u val="wavy"/>"""), None)
+  }
+
+  test("underline variants survive toXml with the schema token, bare <u/> only for Single") {
+    val single = DxfCodec.toXml(Dxf.font(DxfFont(underline = Some(Underline.Single)))).toString
+    assert(single.contains("<u/>"), single)
+    val dbl = DxfCodec.toXml(Dxf.font(DxfFont(underline = Some(Underline.Double)))).toString
+    assert(dbl.contains("""<u val="double"/>"""), dbl)
+    val acct =
+      DxfCodec.toXml(Dxf.font(DxfFont(underline = Some(Underline.SingleAccounting)))).toString
+    assert(acct.contains("""<u val="singleAccounting"/>"""), acct)
   }
 
   test("font name/sz children degrade the whole dxf to None") {

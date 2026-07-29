@@ -58,7 +58,10 @@ private[xl] object FormulaKindCodec:
   /**
    * Render a record's `<f>` attributes in fixed CT_CellFormula schema order. `Normal` renders none.
    * False flags are omitted, except `dt2D`/`dtr` which are always explicit (`"1"`/`"0"`) on a data
-   * table record, matching Excel's own output.
+   * table record, matching Excel's own output. A 1x1 data-table interior renders a BARE single-cell
+   * `ref` (`ref="Q2"`, fixture-verified — Excel never writes `Q2:Q2`); the ArrayFormula arm keeps
+   * the range form deliberately (`E10:E10` is pinned by FormulaRecordPreservationSpec; revisit only
+   * if Excel's own single-cell CSE output is ever verified to differ).
    */
   def toAttrs(kind: FormulaKind): List[(String, String)] =
     kind match
@@ -71,7 +74,7 @@ private[xl] object FormulaKindCodec:
       case FormulaKind.DataTable(ref, dt2D, dtr, r1, r2, del1, del2, ca) =>
         List(
           "t" -> "dataTable",
-          "ref" -> ref.toA1,
+          "ref" -> (if ref.start == ref.end then ref.start.toA1 else ref.toA1),
           "dt2D" -> (if dt2D then "1" else "0"),
           "dtr" -> (if dtr then "1" else "0")
         )

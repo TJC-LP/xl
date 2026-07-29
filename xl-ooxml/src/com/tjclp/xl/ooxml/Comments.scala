@@ -6,6 +6,7 @@ import SaxSupport.*
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.font.Underline
 import com.tjclp.xl.error.XLError
 
 /**
@@ -306,7 +307,10 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
 
         if f.bold then props += elem("b")()
         if f.italic then props += elem("i")()
-        if f.underline then props += elem("u")()
+        f.underline match
+          case Underline.None => ()
+          case Underline.Single => props += elem("u")()
+          case other => props += elem("u", "val" -> Underline.token(other))()
 
         f.color.foreach {
           case Color.Rgb(argb) =>

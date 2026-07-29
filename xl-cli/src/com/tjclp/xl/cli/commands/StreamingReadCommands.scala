@@ -248,7 +248,7 @@ object StreamingReadCommands:
   private def formatStyleForStreaming(
     style: Option[com.tjclp.xl.styles.CellStyle]
   ): Option[String] =
-    import com.tjclp.xl.styles.font.Font
+    import com.tjclp.xl.styles.font.{Font, Underline}
     import com.tjclp.xl.styles.fill.Fill
     import com.tjclp.xl.styles.border.{Border, BorderStyle}
     import com.tjclp.xl.styles.alignment.Align
@@ -262,7 +262,10 @@ object StreamingReadCommands:
         var fontDesc = Vector(s.font.name, s"${s.font.sizePt}pt")
         if s.font.bold then fontDesc = fontDesc :+ "bold"
         if s.font.italic then fontDesc = fontDesc :+ "italic"
-        if s.font.underline then fontDesc = fontDesc :+ "underline"
+        s.font.underline match
+          case Underline.None => ()
+          case Underline.Single => fontDesc = fontDesc :+ "underline"
+          case other => fontDesc = fontDesc :+ s"underline=${Underline.token(other)}"
         s.font.color.foreach {
           case Color.Rgb(argb) =>
             fontDesc = fontDesc :+ f"${argb & 0xffffff}%06X"

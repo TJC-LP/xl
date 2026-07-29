@@ -269,6 +269,46 @@ class ChartWriteSpec extends FunSuite:
     assertEquals(readBack.sheets(0).charts(0).name, "Chart 1") // writer default
   }
 
+  test("GH-418: authored pie pointFills emit ordered explicit dPts; accent remainder; re-read") {
+    val data = SheetName.unsafe("Data")
+    val sheet = Sheet(data)
+      .put(Cell(ref"B2", CellValue.Number(BigDecimal(1))))
+      .put(Cell(ref"B3", CellValue.Number(BigDecimal(2))))
+      .put(Cell(ref"B4", CellValue.Number(BigDecimal(3))))
+    def pie(pointFills: Vector[Color.Rgb]): Chart =
+      Chart(
+        ChartType.Pie,
+        Vector(
+          Series(
+            DataRef(data, ref"B2:B4"),
+            None,
+            Some(SeriesName.Literal("Mix")),
+            None,
+            pointFills
+          )
+        ),
+        None,
+        Some(Legend())
+      )
+    def dPt(idx: Int, hex: String): String =
+      s"""<dPt><idx val="$idx"/><spPr><a:solidFill><a:srgbClr val="$hex"/></a:solidFill></spPr></dPt>"""
+
+    // three colors, three slices: all dPts explicit, idx 0..2 in document order
+    val full = pie(Vector(Color.Rgb(0xff307fe2), Color.Rgb(0xff005670), Color.Rgb(0xffff0000)))
+    val outFull = write(Workbook(Vector(sheet.addChart(full, ref"D2:K15"))), "pie-slices-full")
+    val fullXml = entryText(outFull, "xl/charts/chart1.xml")
+    assert(fullXml.contains(dPt(0, "307FE2") + dPt(1, "005670") + dPt(2, "FF0000")), fullXml)
+    assertEquals("<dPt>".r.findAllIn(fullXml).size, 3, fullXml)
+    assertEquals(reread(outFull).sheets(0).charts(0).chart, full)
+
+    // fewer colors than slices: the remainder continues the accent cycle (accent2, accent3)
+    val partial = pie(Vector(Color.Rgb(0xff307fe2)))
+    val outPart = write(Workbook(Vector(sheet.addChart(partial, ref"D2:K15"))), "pie-slices-part")
+    val partXml = entryText(outPart, "xl/charts/chart1.xml")
+    assert(partXml.contains(dPt(0, "307FE2") + dPt(1, "ED7D31") + dPt(2, "A5A5A5")), partXml)
+    assertEquals(reread(outPart).sheets(0).charts(0).chart, partial)
+  }
+
   test("mixed chart+picture part round-trips with unique cNvPr ids and separate ordinals") {
     val data = SheetName.unsafe("Mix")
     val sheet = Sheet(data)

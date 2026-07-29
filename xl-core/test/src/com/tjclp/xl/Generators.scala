@@ -15,7 +15,7 @@ import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 import com.tjclp.xl.styles.fill.{Fill, PatternType}
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 import org.scalacheck.{Arbitrary, Gen}
 
@@ -308,7 +308,7 @@ object Generators:
       size <- Gen.oneOf(8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 22.0)
       bold <- Gen.oneOf(true, false)
       italic <- Gen.oneOf(true, false)
-      underline <- Gen.oneOf(true, false)
+      underline <- Gen.oneOf(Underline.values.toIndexedSeq)
       color <- Gen.option(genColor)
     yield Font(name, size, bold, italic, underline, color)
 
@@ -512,6 +512,30 @@ object Generators:
       del2 <- Gen.oneOf(true, false)
       ca <- Gen.oneOf(true, false)
     yield FormulaKind.DataTable(range, dt2D, dtr, r1, r2, del1, del2, ca)
+
+  /**
+   * GH-419: a VALID-GEOMETRY authored data table — unlike [[genDataTableKind]] (wild shapes for
+   * read tolerance), this generates interiors the authoring API accepts: room for the corner and
+   * both axes, inputs outside the table block, distinct. Tuple: (interior, orientation, input1,
+   * input2) where orientation 0 = 2-D (input1=row, input2=col), 1 = 1-D row-oriented, 2 = 1-D
+   * column-oriented (1-D shapes use input1 only).
+   */
+  val genAuthoredDataTable: Gen[(CellRange, Int, ARef, ARef)] =
+    for
+      startCol <- Gen.choose(1, 40)
+      startRow <- Gen.choose(1, 400)
+      width <- Gen.choose(1, 6)
+      height <- Gen.choose(1, 8)
+      orientation <- Gen.choose(0, 2)
+    yield
+      val interior = CellRange(
+        ARef.from0(startCol, startRow),
+        ARef.from0(startCol + width - 1, startRow + height - 1)
+      )
+      // Below-right of the interior end on both axes: provably outside the block.
+      val input1 = ARef.from0(startCol + width + 1, startRow + height + 1)
+      val input2 = ARef.from0(startCol + width + 2, startRow + height + 2)
+      (interior, orientation, input1, input2)
 
   /** GH-430: CT_CellFormula record kind (Normal / CSE array anchor / data table). */
   val genFormulaKind: Gen[FormulaKind] =
@@ -815,7 +839,7 @@ object Generators:
       bold <- flag
       italic <- flag
       strike <- flag
-      underline <- flag
+      underline <- Gen.option(Gen.oneOf(Underline.values.toIndexedSeq))
       color <- Gen.option(genCfColor)
     yield DxfFont(bold, italic, strike, underline, color)
 

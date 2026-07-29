@@ -8,7 +8,7 @@ import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 import com.tjclp.xl.styles.fill.{Fill, PatternType}
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.units.{Emu, Pt, Px, given}
 
@@ -69,7 +69,7 @@ class StyleSpec extends ScalaCheckSuite:
     size <- Gen.choose(8.0, 24.0)
     bold <- Gen.oneOf(true, false)
     italic <- Gen.oneOf(true, false)
-    underline <- Gen.oneOf(true, false)
+    underline <- Gen.oneOf(Underline.values.toIndexedSeq)
     color <- Gen.option(genColor)
   yield Font(name, size, bold, italic, underline, color)
 
@@ -348,7 +348,7 @@ class StyleSpec extends ScalaCheckSuite:
     assertEquals(Font.default.sizePt, 11.0)
     assertEquals(Font.default.bold, false)
     assertEquals(Font.default.italic, false)
-    assertEquals(Font.default.underline, false)
+    assertEquals(Font.default.underline, Underline.None)
     assertEquals(Font.default.color, None)
   }
 
@@ -377,17 +377,35 @@ class StyleSpec extends ScalaCheckSuite:
         .withSize(validSize)
         .withBold(true)
         .withItalic(true)
-        .withUnderline(true)
+        .withUnderline(Underline.Single)
         .withColor(color)
 
       assertEquals(updated.name, validName)
       assertEquals(updated.sizePt, validSize)
       assertEquals(updated.bold, true)
       assertEquals(updated.italic, true)
-      assertEquals(updated.underline, true)
+      assertEquals(updated.underline, Underline.Single)
       assertEquals(updated.color, Some(color))
       true
     }
+  }
+
+  test("Font.withUnderline Boolean bridge maps true -> Single, false -> None (deprecated)") {
+    // 0.18.0 migration bridge (GH-423): external 0.x callers keep compiling
+    @annotation.nowarn("cat=deprecation")
+    def viaBridge(u: Boolean): Font = Font.default.withUnderline(u)
+    assertEquals(viaBridge(true).underline, Underline.Single)
+    assertEquals(viaBridge(false).underline, Underline.None)
+  }
+
+  test("Underline token/fromToken are inverse over all ST_UnderlineValues") {
+    Underline.values.foreach { u =>
+      assertEquals(Underline.fromToken(Underline.token(u)), Some(u))
+    }
+    assertEquals(Underline.fromToken("wavy"), None)
+    // Tokens are the ECMA-376 camelCase spellings
+    assertEquals(Underline.token(Underline.SingleAccounting), "singleAccounting")
+    assertEquals(Underline.token(Underline.DoubleAccounting), "doubleAccounting")
   }
 
   // ========== Border Tests ==========

@@ -9,7 +9,7 @@ import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
 import com.tjclp.xl.styles.border.{BorderStyle, BorderSide}
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.fill.Fill
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.CellStyle
 
@@ -342,7 +342,7 @@ $headerRow$tableRows
           html = s"""<span style="font-family: '${escapeCss(f.name)}'">$html</span>"""
 
         // Apply bold/italic/underline as outermost wrappers
-        if f.underline then html = s"<u>$html</u>"
+        if f.underline != Underline.None then html = s"<u>$html</u>"
         if f.italic then html = s"<i>$html</i>"
         if f.bold then html = s"<b>$html</b>"
 
@@ -369,7 +369,7 @@ $headerRow$tableRows
       // Font properties (apply only if not default)
       if style.font.bold then css += "font-weight: bold"
       if style.font.italic then css += "font-style: italic"
-      if style.font.underline then css += "text-decoration: underline"
+      if style.font.underline != Underline.None then css += "text-decoration: underline"
       style.font.color.foreach(c => css += s"color: ${colorToHex(c, theme)}")
       if style.font.sizePt != Font.default.sizePt then css += s"font-size: ${style.font.sizePt}pt"
       if style.font.name != Font.default.name then

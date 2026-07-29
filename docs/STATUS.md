@@ -170,7 +170,7 @@
 
 ### Test Coverage
 
-**4,908 tests** (verified via `./mill __.test`, 2026-07-29):
+**5,047 tests** (verified via `./mill __.test`, 2026-07-29):
 
 | Module | Tests | Covers |
 |--------|-------|--------|

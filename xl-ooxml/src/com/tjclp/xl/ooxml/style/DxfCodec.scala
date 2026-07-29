@@ -7,6 +7,7 @@ import com.tjclp.xl.styles.{Dxf, DxfFont}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Underline
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -71,14 +72,16 @@ object DxfCodec:
         case Some("0") | Some("false") => Some(false)
         case Some(_) => None
 
-  /** Underline delta: `<u/>`/single → true, none → false; other vals (double, ...) degrade. */
-  private def parseUnderline(e: Elem): Option[Boolean] =
+  /**
+   * Underline delta (GH-423): bare `<u/>` → Single, any ST_UnderlineValues token typed (`none` is
+   * force-off). Tokens outside the schema degrade (strict-or-None).
+   */
+  private def parseUnderline(e: Elem): Option[Underline] =
     if attrKeys(e).exists(_ != "val") then None
     else
       e.attribute("val").map(_.text) match
-        case None | Some("single") => Some(true)
-        case Some("none") => Some(false)
-        case Some(_) => None
+        case None => Some(Underline.Single)
+        case Some(token) => Underline.fromToken(token)
 
   private def parseFont(e: Elem): Option[DxfFont] =
     childElems(e).toOption.flatMap { children =>
@@ -229,7 +232,10 @@ object DxfCodec:
       f.bold.map(flagToXml("b", _)),
       f.italic.map(flagToXml("i", _)),
       f.strike.map(flagToXml("strike", _)),
-      f.underline.map(u => if u then elem("u")() else elem("u", "val" -> "none")()),
+      f.underline.map {
+        case Underline.Single => elem("u")()
+        case other => elem("u", "val" -> Underline.token(other))()
+      },
       f.color.map(colorToXml)
     ).flatten
     elem("font")(children*)

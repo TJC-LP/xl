@@ -8,7 +8,7 @@ import com.tjclp.xl.cli.ColorParser
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.fill.Fill
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
 
@@ -72,7 +72,7 @@ object StyleBuilder:
       val font = Font.default
         .withBold(bold)
         .withItalic(italic)
-        .withUnderline(underline)
+        .withUnderline(if underline then Underline.Single else Underline.None)
         .pipe(f => fgColor.fold(f)(c => f.withColor(c)))
         .pipe(f => fontSize.fold(f)(s => f.withSize(s)))
         .pipe(f => fontName.fold(f)(n => f.withName(n)))
