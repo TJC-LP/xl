@@ -23,6 +23,11 @@ trait FunctionSpecsBase:
   protected given cellValueExpr: ArgSpec[TExpr[CellValue]] = ArgSpec.expr[CellValue]
   protected given dateExpr: ArgSpec[TExpr[LocalDate]] = ArgSpec.expr[LocalDate]
   protected given rangeLocation: ArgSpec[TExpr.RangeLocation] = ArgSpec.rangeLocation
+  @deprecated(
+    "Use rangeLocation (ArgSpec[TExpr.RangeLocation]) instead — see ArgSpec.cellRange",
+    "0.18.0"
+  )
+  @annotation.nowarn("cat=deprecation") // forwarder must keep referencing the deprecated given
   protected given cellRange: ArgSpec[CellRange] = ArgSpec.cellRange
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))

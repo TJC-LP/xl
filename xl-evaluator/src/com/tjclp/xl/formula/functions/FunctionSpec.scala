@@ -241,6 +241,13 @@ object ArgSpec:
     ): TExpr.RangeLocation =
       mapRange(args)
 
+  @deprecated(
+    "Use ArgSpec.rangeLocation (TExpr.RangeLocation) instead: range-typed argument slots " +
+      "resolve through Evaluator.resolveRangeLocation since GH-394, admitting sheet-qualified " +
+      "ranges and defined names. This local-literal-only spec has no remaining in-repo " +
+      "consumers and will be removed in the next breaking cycle.",
+    "0.18.0"
+  )
   given cellRange: ArgSpec[CellRange] with
     def describeParts: List[String] = List("range")
 

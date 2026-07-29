@@ -151,14 +151,21 @@ object Evaluator:
    * unknown until here: the name resolves against the workbook's name table (sheet-scoped SHADOWS
    * workbook-scoped, case-insensitive — [[lookupDefinedName]]; a sheet-qualified name looks up as
    * seen from its qualifier), its refersTo text parses, and range/cell-shaped targets yield the
-   * resolved pair (a single-cell target acts as a 1×1 range, like Excel). Non-range targets
-   * (constants, formulas, name→name chains) are a clean per-cell #VALUE! error — never a
-   * MatchError.
+   * resolved pair (a single-cell target acts as a 1×1 range, like Excel). Name→name chains follow
+   * hop by hop like expression-position NameRef (GH-411), guarded by `resolvingNames` — a chain
+   * that revisits a member is a clean cycle error. Other non-range targets (constants, formulas)
+   * are a clean per-cell #VALUE! error — never a MatchError.
+   *
+   * @param resolvingNames
+   *   the GH-384 name-cycle guard (UPPERCASED names on the current resolution path); callers inside
+   *   the evaluator pass their ambient guard so a name's refersTo cannot re-enter itself through a
+   *   range slot.
    */
   private[formula] def resolveRangeLocation(
     location: TExpr.RangeLocation,
     currentSheet: Sheet,
-    workbook: Option[Workbook]
+    workbook: Option[Workbook],
+    resolvingNames: Set[String] = Set.empty
   ): Either[EvalError, (Sheet, CellRange)] =
     location match
       case TExpr.RangeLocation.Local(range) =>
@@ -180,23 +187,26 @@ object Evaluator:
         Left(externalRefUnsupported(loc.toA1))
       // GH-394: a defined name in a range slot resolves through the name table
       case TExpr.RangeLocation.Name(name, scope) =>
-        resolveNameToRange(name, scope, currentSheet, workbook)
+        resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames)
 
   /**
    * GH-394: resolve a defined name used in a RANGE-typed argument slot to its (sheet, range).
    *
    * Mirrors [[EvaluatorWithDepth.evalNameRef]]'s lookup (missing workbook, unknown name, and
    * unparseable refersTo produce the same message shapes) but restricts the TARGET to reference
-   * shapes: ranges, sheet-qualified ranges, and single cells (1×1 ranges). Anything else —
-   * constants, formulas, name→name chains — is Excel's #VALUE! as a clean error value. The
-   * defining-sheet convention matches evalNameRef: sheet-scoped names resolve their unqualified
+   * shapes: ranges, sheet-qualified ranges, single cells (1×1 ranges), and — GH-411, like
+   * expression position — further defined names, followed hop by hop under the `resolvingNames`
+   * cycle guard (each hop looks up as seen from its predecessor's defining sheet, the evalNameRef
+   * convention). Anything else — constants, formulas — is Excel's #VALUE! as a clean error value.
+   * The defining-sheet convention matches evalNameRef: sheet-scoped names resolve their unqualified
    * refersTo against their scope sheet.
    */
   private def resolveNameToRange(
     name: String,
     scope: Option[SheetName],
     currentSheet: Sheet,
-    workbook: Option[Workbook]
+    workbook: Option[Workbook],
+    resolvingNames: Set[String]
   ): Either[EvalError, (Sheet, CellRange)] =
     workbook match
       case None =>
@@ -206,7 +216,15 @@ object Evaluator:
             None
           )
         )
+      case Some(_) if resolvingNames.contains(name.toUpperCase) =>
+        Left(
+          EvalError.EvalFailed(
+            s"Defined name cycle detected while resolving '$name'.",
+            None
+          )
+        )
       case Some(wb) =>
+        val guard = resolvingNames + name.toUpperCase
         val lookupFrom = scope.getOrElse(currentSheet.name)
         lookupDefinedName(wb, lookupFrom, name) match
           case None =>
@@ -229,7 +247,8 @@ object Evaluator:
                     resolveRangeLocation(
                       TExpr.RangeLocation.CrossSheet(sheetName, range),
                       definingSheet,
-                      workbook
+                      workbook,
+                      guard
                     )
                   // Single-cell targets act as 1×1 ranges (names routinely point at one cell).
                   // A standalone ref at the top of a parsed formula surfaces as the TYPED
@@ -240,14 +259,22 @@ object Evaluator:
                     resolveRangeLocation(
                       TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
                       definingSheet,
-                      workbook
+                      workbook,
+                      guard
                     )
                   case TExpr.SheetPolyRef(sheetName, at, _) =>
                     resolveRangeLocation(
                       TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
                       definingSheet,
-                      workbook
+                      workbook,
+                      guard
                     )
+                  // GH-411: name→name chains follow like expression position, each hop as seen
+                  // from its predecessor's defining sheet, under the shared cycle guard
+                  case TExpr.NameRef(next) =>
+                    resolveNameToRange(next, None, definingSheet, workbook, guard)
+                  case TExpr.SheetNameRef(qualifier, next) =>
+                    resolveNameToRange(next, Some(qualifier), definingSheet, workbook, guard)
                   case _ =>
                     // Excel: a non-reference name in a range position is #VALUE!
                     Left(
@@ -734,7 +761,9 @@ private class EvaluatorImpl(
           case None =>
             Left(EvalError.EvalFailed(s"Unknown aggregator: $aggregatorId", None))
           case Some(agg) =>
-            Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap {
+            // GH-411: the ambient name-cycle guard rides along so a name's refersTo cannot
+            // re-enter itself through a range slot
+            Evaluator.resolveRangeLocation(location, sheet, workbook, resolvingNames).flatMap {
               case (targetSheet, range) => evalAggregateNode(agg, range, targetSheet)
             }
 
@@ -903,7 +932,12 @@ private class EvaluatorImpl(
           Right(ArrayArithmetic.rangeToArray(range, sheet))
         case TExpr.SheetRange(sheetName, range) if allowArrayResults =>
           Evaluator
-            .resolveRangeLocation(TExpr.RangeLocation.CrossSheet(sheetName, range), sheet, workbook)
+            .resolveRangeLocation(
+              TExpr.RangeLocation.CrossSheet(sheetName, range),
+              sheet,
+              workbook,
+              resolvingNames
+            )
             .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(range, targetSheet) }
         case other =>
           val resolvedBody = TExpr.asResolvedValueExpr(other)
@@ -995,7 +1029,8 @@ private class EvaluatorImpl(
                         .resolveRangeLocation(
                           TExpr.RangeLocation.CrossSheet(sheetName, range),
                           definingSheet,
-                          workbook
+                          workbook,
+                          resolvingNames + key
                         )
                         .map { case (targetSheet, _) =>
                           ArrayArithmetic.rangeToArray(range, targetSheet)
@@ -1205,7 +1240,8 @@ private class EvaluatorImpl(
           .resolveRangeLocation(
             TExpr.RangeLocation.CrossSheet(sheetName, range),
             sheet,
-            workbook
+            workbook,
+            resolvingNames
           )
           .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(range, targetSheet) }
       // GH-374: unary plus is transparent in operand positions — =+A1:A3*10 broadcasts
