@@ -4,7 +4,7 @@ import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.patch.StylePatch
 import com.tjclp.xl.styles.patch.StylePatch.* // For applyPatch extension
@@ -25,9 +25,20 @@ class StyleDslSpec extends ScalaCheckSuite:
     assert(style.font.italic)
   }
 
-  test("underline sets underline flag") {
+  test("underline sets single underline") {
     val style = CellStyle.default.underline
-    assert(style.font.underline)
+    assertEquals(style.font.underline, Underline.Single)
+  }
+
+  test("underline(u) sets accounting/double variants") {
+    assertEquals(
+      CellStyle.default.underline(Underline.SingleAccounting).font.underline,
+      Underline.SingleAccounting
+    )
+    assertEquals(
+      CellStyle.default.underline(Underline.Double).font.underline,
+      Underline.Double
+    )
   }
 
   test("size sets font size") {

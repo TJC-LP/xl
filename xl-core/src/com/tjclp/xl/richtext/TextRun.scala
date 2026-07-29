@@ -1,7 +1,7 @@
 package com.tjclp.xl.richtext
 
 import com.tjclp.xl.styles.color.Color
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 
 /**
  * Text run with optional font formatting.
@@ -45,7 +45,7 @@ final case class TextRun(
 
   /** Create a new run with underline formatting */
   def underline: TextRun =
-    copy(font = Some(font.getOrElse(Font.default).withUnderline(true)))
+    copy(font = Some(font.getOrElse(Font.default).withUnderline(Underline.Single)))
 
   /** Create a new run with the specified font size in points */
   def size(pt: Double): TextRun =

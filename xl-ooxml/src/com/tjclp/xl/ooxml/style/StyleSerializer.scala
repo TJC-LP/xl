@@ -11,7 +11,7 @@ import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.{Fill, PatternType}
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.units.StyleId
 
@@ -288,11 +288,17 @@ final case class OoxmlStyles(
       Some(elem("sz", "val" -> font.sizePt.toString)()),
       if font.bold then Some(elem("b")()) else None,
       if font.italic then Some(elem("i")()) else None,
-      if font.underline then Some(elem("u")()) else None,
+      underlineToXml(font.underline),
       font.color.map(colorToXml)
     ).flatten
 
     elem("font")(children*)
+
+  /** u@val per ST_UnderlineValues; bare `<u/>` for Single (the schema default), GH-423. */
+  private def underlineToXml(u: Underline): Option[Elem] = u match
+    case Underline.None => None
+    case Underline.Single => Some(elem("u")())
+    case other => Some(elem("u", "val" -> Underline.token(other))())
 
   private def fillToXml(fill: Fill): Elem =
     fill match
@@ -443,8 +449,10 @@ final case class OoxmlStyles(
     if font.italic then
       writer.startElement("i")
       writer.endElement()
-    if font.underline then
+    if font.underline != Underline.None then
       writer.startElement("u")
+      if font.underline != Underline.Single then
+        writer.writeAttribute("val", Underline.token(font.underline))
       writer.endElement()
 
     font.color.foreach { c =>

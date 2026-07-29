@@ -6,6 +6,7 @@ import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.RowProperties
 import com.tjclp.xl.styles.Color
+import com.tjclp.xl.styles.font.Underline
 import com.tjclp.xl.ooxml.SaxSupport.writeElem
 import com.tjclp.xl.ooxml.worksheet.{
   buildHyperlinksElem,
@@ -505,8 +506,10 @@ object DirectSaxEmitter:
       writer.startElement("i")
       writer.endElement()
 
-    if font.underline then
+    if font.underline != Underline.None then
       writer.startElement("u")
+      if font.underline != Underline.Single then
+        writer.writeAttribute("val", Underline.token(font.underline))
       writer.endElement()
 
     font.color.foreach {

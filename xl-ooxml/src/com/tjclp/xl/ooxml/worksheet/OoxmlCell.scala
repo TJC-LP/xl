@@ -8,6 +8,7 @@ import com.tjclp.xl.ooxml.SaxSupport.*
 import com.tjclp.xl.ooxml.XmlUtil.{elem, elemOrdered, needsXmlSpacePreserve}
 import com.tjclp.xl.ooxml.{FormulaKindCodec, SaxWriter, XmlSecurity, XmlUtil}
 import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.font.Underline
 
 /** Cell data for worksheet - maps domain Cell to XML representation */
 case class OoxmlCell(
@@ -151,8 +152,10 @@ case class OoxmlCell(
     if font.italic then
       writer.startElement("i")
       writer.endElement()
-    if font.underline then
+    if font.underline != Underline.None then
       writer.startElement("u")
+      if font.underline != Underline.Single then
+        writer.writeAttribute("val", Underline.token(font.underline))
       writer.endElement()
 
     font.color.foreach {
@@ -229,7 +232,10 @@ case class OoxmlCell(
                 // Font style properties (order matters for OOXML)
                 if f.bold then fontProps += elem("b")()
                 if f.italic then fontProps += elem("i")()
-                if f.underline then fontProps += elem("u")()
+                f.underline match
+                  case Underline.None => ()
+                  case Underline.Single => fontProps += elem("u")()
+                  case other => fontProps += elem("u", "val" -> Underline.token(other))()
 
                 // Font color
                 f.color.foreach {

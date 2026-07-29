@@ -4,7 +4,7 @@ import scala.xml.*
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.fill.{Fill, PatternType}
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.color.Color
@@ -105,7 +105,9 @@ object StylePatcher:
         else existing.font.sizePt,
       bold = overlay.font.bold || existing.font.bold,
       italic = overlay.font.italic || existing.font.italic,
-      underline = overlay.font.underline || existing.font.underline,
+      underline =
+        if overlay.font.underline != Underline.None then overlay.font.underline
+        else existing.font.underline,
       color = overlay.font.color.orElse(existing.font.color)
     )
 
@@ -387,7 +389,10 @@ object StylePatcher:
     val children = scala.collection.mutable.ListBuffer[Elem]()
     if font.bold then children += <b/>
     if font.italic then children += <i/>
-    if font.underline then children += <u/>
+    font.underline match
+      case Underline.None => ()
+      case Underline.Single => children += <u/>
+      case other => children += <u val={Underline.token(other)}/>
     children += <sz val={font.sizePt.toString}/>
     font.color.foreach {
       case Color.Rgb(argb) => children += <color rgb={f"$argb%08X"}/>
@@ -496,7 +501,14 @@ object StylePatcher:
       .map { f =>
         val bold = (f \ "b").nonEmpty
         val italic = (f \ "i").nonEmpty
-        val underline = (f \ "u").nonEmpty
+        // u@val per ST_UnderlineValues (GH-423): bare <u/> means single; unknown tokens
+        // read lenient as Single (mirrors the DOM StyleParser)
+        val underline = (f \ "u").headOption match
+          case Some(u) =>
+            u.attribute("val")
+              .map(attr => Underline.fromToken(attr.text).getOrElse(Underline.Single))
+              .getOrElse(Underline.Single)
+          case None => Underline.None
         // Font requires sizePt > 0; treat non-positive (or NaN) sizes from malformed files
         // as absent so the streaming path stays total
         val size = (f \ "sz" \ "@val").text.toDoubleOption.filter(_ > 0).getOrElse(11.0)

@@ -16,7 +16,7 @@ import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 import com.tjclp.xl.styles.fill.Fill
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -106,7 +106,8 @@ class OoxmlGenerativeRoundTripSpec extends ScalaCheckSuite:
         10.5,
         bold = true,
         italic = false,
-        underline = true,
+        // Accounting variant: the GH-423 house "Actual / Est. / Projections" band idiom
+        underline = Underline.SingleAccounting,
         Some(Color.Rgb(0xff4472c4))
       ),
       fill = Fill.Solid(Color.Theme(ThemeSlot.Accent2, 0.25)),

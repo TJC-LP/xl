@@ -8,7 +8,7 @@ import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.{Fill, PatternType}
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -102,7 +102,15 @@ object WorkbookStyles:
       .getOrElse(Font.default.sizePt)
     val bold = (fontElem \ "b").nonEmpty
     val italic = (fontElem \ "i").nonEmpty
-    val underline = (fontElem \ "u").nonEmpty
+    // u@val per ST_UnderlineValues (GH-423): bare <u/> means single (the schema default);
+    // unknown tokens from malformed files stay lenient and read as Single (the pre-typed
+    // truthy behavior for any present <u>)
+    val underline = (fontElem \ "u").headOption match
+      case Some(u) =>
+        u.attribute("val")
+          .map(attr => Underline.fromToken(attr.text).getOrElse(Underline.Single))
+          .getOrElse(Underline.Single)
+      case None => Underline.None
     val color = (fontElem \ "color").headOption.collect { case e: Elem => e }.flatMap(parseColor)
     Font(name, size, bold, italic, underline, color)
 
