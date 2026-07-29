@@ -23,6 +23,11 @@ trait FunctionSpecsBase:
   protected given cellValueExpr: ArgSpec[TExpr[CellValue]] = ArgSpec.expr[CellValue]
   protected given dateExpr: ArgSpec[TExpr[LocalDate]] = ArgSpec.expr[LocalDate]
   protected given rangeLocation: ArgSpec[TExpr.RangeLocation] = ArgSpec.rangeLocation
+  @deprecated(
+    "Use rangeLocation (ArgSpec[TExpr.RangeLocation]) instead — see ArgSpec.cellRange",
+    "0.18.0"
+  )
+  @annotation.nowarn("cat=deprecation") // forwarder must keep referencing the deprecated given
   protected given cellRange: ArgSpec[CellRange] = ArgSpec.cellRange
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -128,6 +133,9 @@ trait FunctionSpecsBase:
     Option[TExpr[Boolean]],
     Option[TExpr[String]]
   )
+  // GH-424 CELL: info_type + optional positional reference (never evaluated — its address is
+  // the datum)
+  type CellArgs = (TExpr[String], Option[AnyExpr])
   type XnpvArgs = (TExpr[BigDecimal], TExpr.RangeLocation, TExpr.RangeLocation)
   type XirrArgs = (TExpr.RangeLocation, TExpr.RangeLocation, Option[TExpr[BigDecimal]])
   type TvmArgs = (

@@ -63,7 +63,13 @@ final case class EvalContext(
    * read uncached cells (aggregates, array materialization) evaluate each precedent once per pass
    * instead of once per reference (see Evaluator.EvalMemo).
    */
-  memo: Option[Evaluator.EvalMemo] = None
+  memo: Option[Evaluator.EvalMemo] = None,
+  /**
+   * GH-424: the workbook's saved location, if the embedder knows one (thread it via
+   * `Evaluator.instance(workbookPath = ...)`). Read by CELL("filename"); None reproduces Excel's
+   * pre-save behavior (empty string).
+   */
+  workbookPath: Option[String] = None
 )
 
 sealed trait ArgValue
@@ -235,6 +241,13 @@ object ArgSpec:
     ): TExpr.RangeLocation =
       mapRange(args)
 
+  @deprecated(
+    "Use ArgSpec.rangeLocation (TExpr.RangeLocation) instead: range-typed argument slots " +
+      "resolve through Evaluator.resolveRangeLocation since GH-394, admitting sheet-qualified " +
+      "ranges and defined names. This local-literal-only spec has no remaining in-repo " +
+      "consumers and will be removed in the next breaking cycle.",
+    "0.18.0"
+  )
   given cellRange: ArgSpec[CellRange] with
     def describeParts: List[String] = List("range")
 

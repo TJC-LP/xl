@@ -2,12 +2,12 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.addressing.SheetName
 import munit.FunSuite
 
 /**
- * Comprehensive tests for reference functions: ROW, COLUMN, ROWS, COLUMNS, ADDRESS.
+ * Comprehensive tests for reference functions: ROW, COLUMN, ROWS, COLUMNS, ADDRESS, CELL.
  *
  * These functions provide information about cell references and ranges.
  */
@@ -407,4 +407,111 @@ class ReferenceFunctionsSpec extends FunSuite:
     // When evaluateFormula is called without cell context, ROW() should fail
     val result = emptySheet.evaluateFormula("=ROW()")
     assert(result.isLeft, "ROW() without cell context should fail")
+  }
+
+  // ===== CELL Tests (GH-424) =====
+
+  /** Parse a formula or fail the test — for evaluating with a non-default Evaluator instance. */
+  private def parseOrFail(formula: String): TExpr[?] =
+    FormulaParser.parse(formula) match
+      case Right(expr) => expr
+      case Left(err) => fail(s"parse failed for $formula: $err")
+
+  test("CELL: filename is empty string pre-save (no workbook path) — Excel-faithful") {
+    // The house self-label idiom: =CELL("Filename",$B$2) on every print tab
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"Filename\",$B$2)"),
+      Right(CellValue.Text(""))
+    )
+  }
+
+  test("CELL: filename is directory + [file] + sheet once a workbook path is known") {
+    val expr = parseOrFail("=CELL(\"Filename\",$B$2)")
+    Evaluator.instance(workbookPath = Some("/models/lbo.xlsx")).eval(expr, emptySheet) match
+      case Right(CellValue.Text(s)) => assertEquals(s, "/models/[lbo.xlsx]Test")
+      case other => fail(s"expected filename text, got $other")
+  }
+
+  test("CELL: filename splits on the last backslash for Windows-shaped paths") {
+    // No-reference form: the ambient sheet is the subject, no cell context required
+    val expr = parseOrFail("=CELL(\"filename\")")
+    Evaluator.instance(workbookPath = Some("C:\\models\\lbo.xlsx")).eval(expr, emptySheet) match
+      case Right(CellValue.Text(s)) => assertEquals(s, "C:\\models\\[lbo.xlsx]Test")
+      case other => fail(s"expected filename text, got $other")
+  }
+
+  test("CELL: filename reports the QUALIFIER sheet for a cross-sheet reference") {
+    val expr = parseOrFail("=CELL(\"filename\", Other!B2)")
+    Evaluator.instance(workbookPath = Some("/m/x.xlsx")).eval(expr, emptySheet) match
+      case Right(CellValue.Text(s)) => assertEquals(s, "/m/[x.xlsx]Other")
+      case other => fail(s"expected filename text, got $other")
+  }
+
+  test("CELL: address returns the absolute A1 form of the reference's top-left cell") {
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"address\", B5)"),
+      Right(CellValue.Text("$B$5"))
+    )
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"address\", C3:D9)"),
+      Right(CellValue.Text("$C$3"))
+    )
+  }
+
+  test("CELL: row and col arms return 1-based coordinates of the top-left cell") {
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"row\", B5)"),
+      Right(CellValue.Number(BigDecimal(5)))
+    )
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"col\", B5)"),
+      Right(CellValue.Number(BigDecimal(2)))
+    )
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"row\", C3:D9)"),
+      Right(CellValue.Number(BigDecimal(3)))
+    )
+    // info_type is case-insensitive like Excel
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"COL\", AA1)"),
+      Right(CellValue.Number(BigDecimal(27)))
+    )
+  }
+
+  test("CELL: no-reference form uses the current cell (ROW()/COLUMN() convention)") {
+    val sheet = emptySheet.put(ref"B5", CellValue.Formula("CELL(\"address\")", None))
+    assertEquals(sheet.evaluateCell(ref"B5"), Right(CellValue.Text("$B$5")))
+  }
+
+  test("CELL: address/row/col with no reference and no cell context is a clean error") {
+    assert(
+      emptySheet.evaluateFormula("=CELL(\"row\")").isLeft,
+      "CELL(\"row\") without a cell context should fail cleanly"
+    )
+  }
+
+  test("CELL: unsupported or unknown info_type is a clean #VALUE! error value, never a throw") {
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"format\", A1)"),
+      Right(CellValue.Error(CellError.Value))
+    )
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"no_such_arm\", A1)"),
+      Right(CellValue.Error(CellError.Value))
+    )
+  }
+
+  test("CELL: non-reference second argument is a clean error, never a throw") {
+    assert(
+      emptySheet.evaluateFormula("=CELL(\"row\", 1+1)").isLeft,
+      "CELL over a non-reference should fail cleanly"
+    )
+  }
+
+  test("CELL: parses and round-trips through print") {
+    List("=CELL(\"Filename\", $B$2)", "=CELL(\"row\", B5)", "=CELL(\"address\")").foreach { f =>
+      FormulaParser.parse(f) match
+        case Right(expr) => assertEquals(FormulaPrinter.print(expr), f)
+        case Left(err) => fail(s"parse failed for $f: $err")
+    }
   }

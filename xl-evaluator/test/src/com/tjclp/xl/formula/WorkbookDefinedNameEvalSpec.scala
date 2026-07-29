@@ -409,3 +409,88 @@ class WorkbookDefinedNameEvalSpec extends FunSuite:
     assert(result.isClean, s"expected clean recalc, got: ${result.errors.map(_.render)}")
     assertEquals(cached(result.workbook, "Calc", a1), Some(num(50))) // 20 + 30
   }
+
+  // ==========================================================================
+  // GH-411: name→name chains in RANGE-TYPED argument positions
+  // ==========================================================================
+
+  test("GH-411: name→name chain resolves in a RANGE slot (alias -> rev_range -> Model!A1:A3)") {
+    val wb = Workbook(model)
+      .withDefinedName("rev_range", "Model!$A$1:$A$3")
+      .withDefinedName("alias", "rev_range")
+    assertEquals(wb.evaluateFormula("=SUMIF(alias, \">15\")", "Model"), Right(num(50)))
+    assertEquals(wb.evaluateFormula("=INDEX(alias, 2)", "Model"), Right(num(20)))
+  }
+
+  test("GH-411: SUM over a name whose refersTo is another name") {
+    val wb = Workbook(model)
+      .withDefinedName("rev_range", "Model!$A$1:$A$3")
+      .withDefinedName("alias", "rev_range")
+    assertEquals(wb.evaluateFormula("=SUM(alias)", "Model"), Right(num(60)))
+  }
+
+  test("GH-411: chain through a SHEET-QUALIFIED name link resolves (alias -> Model!rev_range)") {
+    val other = Sheet(SheetName.unsafe("Other"))
+    val wb = Workbook(model, other)
+      .withDefinedName("rev_range", "Model!$A$1:$A$3")
+      .withDefinedName("alias", "Model!rev_range")
+    assertEquals(wb.evaluateFormula("=SUMIF(alias, \">15\")", "Other"), Right(num(50)))
+  }
+
+  test("GH-411: name cycle in a RANGE slot is a clean cycle error, never a throw or hang") {
+    val wb = Workbook(model)
+      .withDefinedName("aa", "bb")
+      .withDefinedName("bb", "aa")
+    wb.evaluateFormula("=SUMIF(aa, \">0\")", "Model") match
+      case Left(err) => assert(err.message.toLowerCase.contains("cycle"), s"got: ${err.message}")
+      case Right(v) => fail(s"range-slot name cycle must not evaluate, got $v")
+  }
+
+  test("GH-411: chain ending in a NON-RANGE stays a clean per-cell error naming the identifier") {
+    val wb = Workbook(model)
+      .withDefinedName("tax_rate", "0.25")
+      .withDefinedName("alias", "tax_rate")
+    wb.evaluateFormula("=SUMIF(alias, \">0\")", "Model") match
+      case Right(CellValue.Error(_)) => () // Excel-class error value
+      case Left(err) =>
+        assert(err.message.contains("tax_rate"), s"error should name the identifier: $err")
+      case Right(v) => fail(s"non-range chain must not evaluate to $v")
+  }
+
+  test("GH-411: backslash-led defined name (=\\name) parses and resolves — Sales.Total's twin") {
+    val wb = Workbook(model).withDefinedName("\\rng", "Model!$A$1:$A$3")
+    assertEquals(wb.evaluateFormula("=SUM(\\rng)", "Model"), Right(num(60)))
+    assertEquals(wb.evaluateFormula("=\\rng*0+1", "Model"), Right(num(1)))
+  }
+
+  test(
+    "GH-411: recalculate() orders computed precedents before a CHAINED-alias range-slot reader"
+  ) {
+    // Like the GH-394 ordering pin, but the range slot reads a name→name CHAIN — the graph's
+    // chain-following name edges and the evaluator's chain-following range resolution must agree.
+    val m = Sheet(SheetName.unsafe("Model"))
+      .put(ARef.from0(0, 0), formula("=1+9")) // 10
+      .put(ARef.from0(0, 1), formula("=A1*2")) // 20
+      .put(ARef.from0(0, 2), formula("=A2+10")) // 30
+    val calc = Sheet(SheetName.unsafe("Calc"))
+      .put(a1, formula("=SUMIF(alias, \">15\")"))
+    val wb = Workbook(m, calc)
+      .withDefinedName("rev_range", "Model!$A$1:$A$3")
+      .withDefinedName("alias", "rev_range")
+    val result = wb.recalculate()
+    assert(result.isClean, s"expected clean recalc, got: ${result.errors.map(_.render)}")
+    assertEquals(cached(result.workbook, "Calc", a1), Some(num(50))) // 20 + 30
+  }
+
+  test("GH-411: deprecated ArgSpec.cellRange remains usable (published API, removal deferred)") {
+    // Zero in-repo consumers after the GH-394 rangeLocation migration; kept for source
+    // compatibility — deprecated with the migration hint, removed next breaking cycle.
+    import com.tjclp.xl.formula.ast.TExpr
+    import com.tjclp.xl.formula.functions.ArgSpec
+    @annotation.nowarn("cat=deprecation")
+    def spec: ArgSpec[CellRange] = ArgSpec.cellRange
+    CellRange.parse("A1:B2") match
+      case Right(r) =>
+        assertEquals(spec.parse(List(TExpr.RangeRef(r)), 0, "TEST").map(_._1), Right(r))
+      case Left(err) => fail(s"CellRange.parse(A1:B2) must parse, got $err")
+  }
