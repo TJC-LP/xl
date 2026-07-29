@@ -2,11 +2,13 @@ package com.tjclp.xl.ooxml
 
 import java.nio.file.Files
 
+import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.unsafe.*
+import com.tjclp.xl.workbooks.DefinedName
 import munit.FunSuite
 
 /**
@@ -61,4 +63,70 @@ class DefinedNameRoundTripSpec extends FunSuite:
     val reread = XlsxReader.read(out).fold(e => fail(s"read failed: $e"), identity)
     assertEquals(reread.metadata.definedNames, Vector.empty)
     Files.deleteIfExists(out)
+  }
+
+  // ===== GH-434: sheet-scoped names must keep their sheet across order mutations =====
+
+  /** Cover (idx 0) + Data (idx 1), Data carrying a sheet-scoped name, written and read back. */
+  private def scopedFixture(label: String): (java.nio.file.Path, Workbook) =
+    val base = Workbook(Sheet("Cover").put(ref"A1" -> 1), Sheet("Data").put(ref"B2" -> 2))
+    val wb0 = base.copy(metadata =
+      base.metadata.copy(definedNames =
+        Vector(DefinedName("DataLocal", "Data!$B$2", localSheetId = Some(1)))
+      )
+    )
+    val src = Files.createTempFile(s"named-scope-$label", ".xlsx")
+    src.toFile.deleteOnExit()
+    XlsxWriter.write(wb0, src).fold(e => fail(s"seed write failed: $e"), identity)
+    val read = XlsxReader.read(src).fold(e => fail(s"seed read failed: $e"), identity)
+    assertEquals(
+      read.metadata.definedNames.map(dn => (dn.name, dn.localSheetId)),
+      Vector(("DataLocal", Some(1))),
+      "fixture sanity: the scoped name must survive the seed round-trip"
+    )
+    (src, read)
+
+  private def writeReread(wb: Workbook, label: String): Workbook =
+    val out = Files.createTempFile(s"named-scope-$label-out", ".xlsx")
+    out.toFile.deleteOnExit()
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+    XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
+
+  test("GH-434: sheet-scoped name still targets its sheet after removing the sheet above it") {
+    val (_, wb) = scopedFixture("remove")
+    val removed = wb.remove(SheetName.unsafe("Cover")).fold(e => fail(e.message), identity)
+    val reread = writeReread(removed, "remove")
+    assertEquals(reread.sheetNames.map(_.value), Vector("Data"))
+    assertEquals(
+      reread.metadata.definedNames.map(dn => (dn.name, dn.localSheetId, dn.formula)),
+      Vector(("DataLocal", Some(0), "Data!$B$2")),
+      "the name must follow Data from index 1 to index 0"
+    )
+  }
+
+  test("GH-434: sheet-scoped name still targets its sheet after insertAt-middle") {
+    val (_, wb) = scopedFixture("insert")
+    val inserted =
+      wb.insertAt(1, Sheet("Inserted")).fold(e => fail(e.message), identity)
+    val reread = writeReread(inserted, "insert")
+    assertEquals(reread.sheetNames.map(_.value), Vector("Cover", "Inserted", "Data"))
+    assertEquals(
+      reread.metadata.definedNames.map(dn => (dn.name, dn.localSheetId)),
+      Vector(("DataLocal", Some(2))),
+      "the name must follow Data from index 1 to index 2"
+    )
+  }
+
+  test("GH-434: sheet-scoped name still targets its sheet after reorder") {
+    val (_, wb) = scopedFixture("reorder")
+    val reordered = wb
+      .reorder(Vector(SheetName.unsafe("Data"), SheetName.unsafe("Cover")))
+      .fold(e => fail(e.message), identity)
+    val reread = writeReread(reordered, "reorder")
+    assertEquals(reread.sheetNames.map(_.value), Vector("Data", "Cover"))
+    assertEquals(
+      reread.metadata.definedNames.map(dn => (dn.name, dn.localSheetId)),
+      Vector(("DataLocal", Some(0))),
+      "the name must follow Data from index 1 to index 0 across the reorder"
+    )
   }
