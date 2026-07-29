@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-07-22
+**Last Updated**: 2026-07-29
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **108 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 4,085 tests passing.
+**Current Status**: Production-ready with **108 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 4,836 tests passing.
 
-**Current Version**: **0.14.0 "Candor"** (released 2026-07-16)
+**Current Version**: **0.16.0 "Bedrock"** (released 2026-07-29)
 
 ---
 
@@ -61,9 +61,9 @@ Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture cor
 
 Every remaining open issue closed in one wave. **Conditional formatting** ([#136](https://github.com/TJC-LP/xl/issues/136)) is the headline — typed cellIs/expression/colorScale/dataBar/top10/text rules + `dxf` differential formats, `sheet.conditionalFormat` authoring with auto-priority, structural-edit range shifting, unmodeled families preserved byte-faithfully — alongside twelve fidelity/writer fixes: openpyxl comment subdirectory dialect (#292), RichText SST keying (#303), exact surgical SST counts (#304), `[Content_Types]` preservation (#314), identity-keyed source mappings (#315), activeTab (#294), fitToPage tri-state (#284), `Cell.comment` deprecated→`Sheet.comments` (#295). Codec `put` paths 2.4x faster (#297).
 
-### v0.16.0 "Bedrock" — wave 19 (2026-07-22)
+### v0.16.0 "Bedrock" — wave 19 + #437/#438 (Released 2026-07-29)
 
-Burn-down wave 1 of 3 (25-issue tracker → zero; plan of record 2026-07-22). Structural integrity and preservation — the corruption/degradation class from the field-gotcha audit, five worktree-isolated TDD clusters, adversarially reviewed (one rework round on the structural cluster): **structural edits stop poisoning files** ([#427](https://github.com/TJC-LP/xl/issues/427) — equals-free re-print, stale caches invalidated rather than shipped (recalc re-bakes); openpyxl reads single-`=`), **shift clamping at the sheet edge** ([#428](https://github.com/TJC-LP/xl/issues/428) — full-height CF/DV/merges stay ≤ row 1,048,576/col XFD; Excel-refuses-file class closed), **Excel-authored DVs/print areas/tables/autoFilter shift** ([#429](https://github.com/TJC-LP/xl/issues/429) — design-panel-directed `SqrefShift` engine for preserved payloads; widened DV participation), **formula-record preservation** ([#430](https://github.com/TJC-LP/xl/issues/430), design-panel-directed — `FormulaKind` on `CellValue.Formula`: `t="array"` keeps its CSE marker, `t="dataTable"` interiors no longer bake to constants; the wave-21 #419 authoring substrate), **bytes-read preservation parity** ([#412](https://github.com/TJC-LP/xl/issues/412) — `SourceContent.OnDisk|InMemory`, path≡bytes write law), **lint extensions + `ref-out-of-bounds`** ([#413](https://github.com/TJC-LP/xl/issues/413) — flags the #428 class lint used to pass), and the **suite's only parallel-load flake structurally pinned** ([#414](https://github.com/TJC-LP/xl/issues/414)). Follow-ups filed: #435 (ca/aca attrs; delete-band data-table degradation fidelity). Next: wave 20 "CLI & fidelity correctness" (#408 #410 #416 #417 #420 #422 #426 #431 #433 #434) → 0.17.0; wave 21 "authoring" (#411 #418 #419 #421 #423 #424 #425 #432) → 0.18.0.
+Burn-down wave 1 of 3 (25-issue tracker → zero; plan of record 2026-07-22). Structural integrity and preservation — the corruption/degradation class from the field-gotcha audit, five worktree-isolated TDD clusters, adversarially reviewed (one rework round on the structural cluster): **structural edits stop poisoning files** ([#427](https://github.com/TJC-LP/xl/issues/427) — equals-free re-print, stale caches invalidated rather than shipped (recalc re-bakes); openpyxl reads single-`=`), **shift clamping at the sheet edge** ([#428](https://github.com/TJC-LP/xl/issues/428) — full-height CF/DV/merges stay ≤ row 1,048,576/col XFD; Excel-refuses-file class closed), **Excel-authored DVs/print areas/tables/autoFilter shift** ([#429](https://github.com/TJC-LP/xl/issues/429) — design-panel-directed `SqrefShift` engine for preserved payloads; widened DV participation), **formula-record preservation** ([#430](https://github.com/TJC-LP/xl/issues/430), design-panel-directed — `FormulaKind` on `CellValue.Formula`: `t="array"` keeps its CSE marker, `t="dataTable"` interiors no longer bake to constants; the wave-21 #419 authoring substrate), **bytes-read preservation parity** ([#412](https://github.com/TJC-LP/xl/issues/412) — `SourceContent.OnDisk|InMemory`, path≡bytes write law), **lint extensions + `ref-out-of-bounds`** ([#413](https://github.com/TJC-LP/xl/issues/413) — flags the #428 class lint used to pass), and the **suite's only parallel-load flake structurally pinned** ([#414](https://github.com/TJC-LP/xl/issues/414)). Post-wave follow-throughs in the same release: structural commands recalculate before writing (PR #437 — fresh-correct `<v>`, the #352 batch contract) and **positional `put` smart detection** ([#431](https://github.com/TJC-LP/xl/issues/431), PR #438 — batch-parity detection incl. `--stream`, `--no-detect` opt-out, explicit-date-format errors). Follow-ups filed: #435 (ca/aca attrs; delete-band data-table degradation fidelity). Next: wave 20 "CLI & fidelity correctness" (#408 #410 #416 #417 #420 #422 #426 #433 #434) → 0.17.0; wave 21 "authoring" (#411 #418 #419 #421 #423 #424 #425 #432) → 0.18.0.
 
 ### v0.15.0 "Fidelity" — wave 18 (2026-07-17)
 
