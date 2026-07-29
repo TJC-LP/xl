@@ -142,6 +142,8 @@ enum CliCommand:
   // Sheet appearance & print setup (GH-358, require -o)
   case SheetViewOp(gridlines: Option[Boolean], zoom: Option[Int], tabSelected: Option[Boolean])
   case TabColorOp(color: Option[String], clear: Boolean)
+  // Sheet-level autoFilter authoring (GH-432, requires -o)
+  case AutoFilterOp(range: Option[String], clear: Boolean)
   case PageSetupOp(
     orientation: Option[String],
     scale: Option[Int],

@@ -1239,6 +1239,39 @@ object WriteCommands:
     }
 
   /**
+   * Set or clear the sheet-level autoFilter (GH-432). A range authors `<autoFilter ref="...">`
+   * through the GH-429 tri-state overlay; `--clear` actively strips the element on write — even one
+   * preserved from the source XML (removal must not resurrect a stale filter).
+   */
+  def autoFilter(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    rangeStr: Option[String],
+    clear: Boolean,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      resolved <- rangeStr match
+        case Some(str) =>
+          SheetResolver.resolveRef(wb, sheetOpt, str, "autofilter").map {
+            case (sheet, Right(range)) => (sheet, Some(range))
+            case (sheet, Left(ref)) => (sheet, Some(CellRange(ref, ref)))
+          }
+        case None =>
+          SheetResolver.requireSheet(wb, sheetOpt, "autofilter").map(s => (s, None))
+      (sheet, rangeOpt) = resolved
+      updatedSheet <- IO.fromEither(
+        AppearanceOps.applyAutoFilter(sheet, rangeOpt, clear).left.map(new Exception(_))
+      )
+      _ <- writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
+      message = rangeOpt match
+        case Some(r) => s"Set autoFilter on '${sheet.name.value}' to ${r.toA1}"
+        case None => s"Removed autoFilter from sheet '${sheet.name.value}'"
+    yield s"$message\n${saveSuffix(outputPath, stream)}"
+
+  /**
    * Set print page setup: orientation, scale, fit-to-width/height, and the tri-state fitToPage
    * flag. Unspecified options preserve the sheet's current page setup.
    */

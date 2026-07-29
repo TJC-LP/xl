@@ -102,7 +102,7 @@ object Main
     // Sheet-level write: --file, --sheet, and --output (required)
     // --stream uses SAX/StAX workbook writes for modifying commands.
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd orElse sheetViewCmd orElse tabColorCmd orElse pageSetupCmd orElse headerFooterCmd orElse cfCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd orElse sheetViewCmd orElse tabColorCmd orElse autoFilterCmd orElse pageSetupCmd orElse headerFooterCmd orElse cfCmd
 
     val sheetWriteOpts =
       (
@@ -1012,6 +1012,8 @@ APPEARANCE & PRINT SETUP (GH-358):
   sheet-view    {"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
   tab-color     {"op": "tab-color", "color": "#1F4E79"}  (or {"clear": true};
                 colors: named, #hex, rgb(r,g,b), theme:accent1[:tint])
+  autofilter    {"op": "autofilter", "range": "A1:M29"}  (or {"clear": true} to strip
+                the sheet's autoFilter, even one preserved from the source file)
   page-setup    {"op": "page-setup", "orientation": "landscape", "scale": 90,
                 "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
   header-footer {"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N",
@@ -1270,6 +1272,18 @@ USAGE:
       val colorArg = Opts.argument[String]("color").orNone
       val clearFlag = Opts.flag("clear", "Clear the modeled tab color").orFalse
       (colorArg, clearFlag).mapN(CliCommand.TabColorOp.apply)
+    }
+
+  private val autoFilterCmd: Opts[CliCommand] =
+    Opts.subcommand(
+      "autofilter",
+      "Set the sheet-level autoFilter range (filter dropdowns on the header row) or remove it " +
+        "(requires -o). --clear strips the autoFilter even when it was preserved from the " +
+        "source file; existing filter criteria ride along when only the range changes."
+    ) {
+      val rangeArg = Opts.argument[String]("range").orNone
+      val clearFlag = Opts.flag("clear", "Remove the sheet's autoFilter").orFalse
+      (rangeArg, clearFlag).mapN(CliCommand.AutoFilterOp.apply)
     }
 
   private val pageSetupCmd: Opts[CliCommand] =
@@ -2324,6 +2338,12 @@ EXAMPLES:
     case CliCommand.TabColorOp(color, clear) =>
       requireOutput("tab-color", outputOpt, backendOpt, stream)(
         WriteCommands.tabColor(wb, sheetOpt, color, clear, _, _, _)
+      )
+
+    // Sheet-level autoFilter authoring (GH-432)
+    case CliCommand.AutoFilterOp(range, clear) =>
+      requireOutput("autofilter", outputOpt, backendOpt, stream)(
+        WriteCommands.autoFilter(wb, sheetOpt, range, clear, _, _, _)
       )
 
     case CliCommand.PageSetupOp(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>

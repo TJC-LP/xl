@@ -115,6 +115,8 @@ object BatchParser:
     // Sheet appearance & print setup (GH-358)
     case SetSheetView(gridlines: Option[Boolean], zoom: Option[Int], tabSelected: Option[Boolean])
     case SetTabColor(color: Option[String], clear: Boolean)
+    // Sheet-level autoFilter authoring (GH-432); range accepts qualified refs
+    case SetAutoFilter(range: Option[String], clear: Boolean)
     case SetPageSetup(
       orientation: Option[String],
       scale: Option[Int],
@@ -208,6 +210,8 @@ object BatchParser:
           s"  SHEET-VIEW $desc"
         case BatchOp.SetTabColor(color, clear) =>
           s"  TAB-COLOR ${color.getOrElse(if clear then "(clear)" else "")}"
+        case BatchOp.SetAutoFilter(range, clear) =>
+          s"  AUTOFILTER ${range.getOrElse(if clear then "(clear)" else "")}"
         case BatchOp.SetPageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
           val desc = AppearanceOps.describe(
             "orientation" -> orientation,
@@ -286,6 +290,8 @@ object BatchParser:
    *   - `rename-sheet`: {"op": "rename-sheet", "from": "Old", "to": "New"}
    *   - `freeze`: {"op": "freeze", "ref": "B2"}
    *   - `unfreeze`: {"op": "unfreeze"}
+   *   - `autofilter`: {"op": "autofilter", "range": "A1:M29"} (or {"op": "autofilter", "clear":
+   *     true} to strip the sheet's autoFilter — GH-432)
    *   - `copy`: {"op": "copy", "source": "A1:B2", "target": "D1", "valuesOnly": false}
    *   - `chart`: {"op": "chart", "type": "column", "data": "B2:C4", "categories": "A2:A4",
    *     "seriesNames": "N,S", "seriesColors": "#307FE2,#005670", "title": "T", "legend": "right",
@@ -501,6 +507,14 @@ object BatchParser:
               clear = objMap.get("clear").flatMap(_.boolOpt).getOrElse(false)
             )
 
+          case "autofilter" =>
+            collectUnknownPropsWarning(objMap, knownAutoFilterOpProps, "autofilter", idx)
+              .foreach(warnings += _)
+            BatchOp.SetAutoFilter(
+              range = objMap.get("range").flatMap(_.strOpt),
+              clear = objMap.get("clear").flatMap(_.boolOpt).getOrElse(false)
+            )
+
           case "page-setup" =>
             collectUnknownPropsWarning(objMap, knownPageSetupProps, "page-setup", idx)
               .foreach(warnings += _)
@@ -545,7 +559,7 @@ object BatchParser:
                 "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
                 "comment, remove-comment, hyperlink, clear, col-hide, col-show, " +
                 "row-hide, row-show, autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, " +
-                "chart, sheet-view, tab-color, page-setup, header-footer, cf"
+                "chart, sheet-view, tab-color, autofilter, page-setup, header-footer, cf"
             )
       }
 
@@ -626,6 +640,9 @@ object BatchParser:
 
   /** Known properties for 'tab-color' operation (GH-358) */
   private val knownTabColorProps = Set("op", "color", "clear")
+
+  /** Known properties for 'autofilter' operation (GH-432) */
+  private val knownAutoFilterOpProps = Set("op", "range", "clear")
 
   /** Known properties for 'page-setup' operation (GH-358) */
   private val knownPageSetupProps =
@@ -1096,6 +1113,9 @@ object BatchParser:
             updateSheetE(currentWb, defaultSheetName, "tab-color")(
               AppearanceOps.applyTabColor(_, color, clear)
             )
+
+          case BatchOp.SetAutoFilter(rangeStrOpt, clear) =>
+            applyAutoFilterOp(currentWb, defaultSheetName, rangeStrOpt, clear)
 
           case BatchOp.SetPageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
             updateSheetE(currentWb, defaultSheetName, "page-setup")(
@@ -1823,6 +1843,31 @@ object BatchParser:
       result <- updateSheet(wb, sheetName)(_.conditionalFormat(range, rule))
     yield result
 
+  /**
+   * Set or clear the sheet-level autoFilter (GH-432). The range accepts qualified refs
+   * (`Sheet2!A1:M29`); the clear form targets the default (--sheet) sheet. Validation lives in
+   * [[AppearanceOps.applyAutoFilter]], shared with the `xl autofilter` command.
+   */
+  private def applyAutoFilterOp(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    rangeStrOpt: Option[String],
+    clear: Boolean
+  ): IO[Workbook] =
+    rangeStrOpt match
+      case Some(rangeStr) =>
+        for
+          rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+          (sheetName, range) = rangeRef
+          result <- updateNamedSheetE(wb, sheetName)(
+            AppearanceOps.applyAutoFilter(_, Some(range), clear)
+          )
+        yield result
+      case None =>
+        updateSheetE(wb, defaultSheetName, "autofilter")(
+          AppearanceOps.applyAutoFilter(_, None, clear)
+        )
+
   // ========== Utilities ==========
 
   /** Parse a range reference (possibly qualified with sheet name). */
@@ -1879,14 +1924,20 @@ object BatchParser:
   )(f: Sheet => Either[String, Sheet]): IO[Workbook] =
     defaultSheetName match
       case None => IO.raiseError(new Exception(s"batch $opName requires --sheet"))
-      case Some(sheetName) =>
-        wb.sheets.find(_.name == sheetName) match
-          case None =>
-            IO.raiseError(
-              new Exception(
-                s"Sheet '${sheetName.value}' not found. " +
-                  s"Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
-              )
-            )
-          case Some(sheet) =>
-            IO.fromEither(f(sheet).left.map(msg => new Exception(msg))).map(wb.put)
+      case Some(sheetName) => updateNamedSheetE(wb, sheetName)(f)
+
+  /** Update a named sheet with a validated (Either-returning) transform. */
+  private def updateNamedSheetE(
+    wb: Workbook,
+    sheetName: SheetName
+  )(f: Sheet => Either[String, Sheet]): IO[Workbook] =
+    wb.sheets.find(_.name == sheetName) match
+      case None =>
+        IO.raiseError(
+          new Exception(
+            s"Sheet '${sheetName.value}' not found. " +
+              s"Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+          )
+        )
+      case Some(sheet) =>
+        IO.fromEither(f(sheet).left.map(msg => new Exception(msg))).map(wb.put)
