@@ -265,6 +265,78 @@ class PageSetupRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-434: verbatim print names follow their sheet across a removal (read-remove-write)") {
+    // Column-span Print_Titles and multi-range Print_Area never ride the PageSetup lift —
+    // they stay in metadata.definedNames verbatim, so the removeAt remap is their only
+    // protection against attaching to whatever sheet slides into their old index.
+    val base = Workbook(Sheet("Cover").put(ref"A1" -> 1), Sheet("Data").put(ref"B2" -> 2))
+    val wb0 = base.copy(metadata =
+      base.metadata.copy(definedNames =
+        Vector(
+          DefinedName("_xlnm.Print_Titles", "Data!$A:$B", localSheetId = Some(1)),
+          DefinedName(
+            "_xlnm.Print_Area",
+            "Data!$A$1:$B$2,Data!$D$1:$E$2",
+            localSheetId = Some(1)
+          )
+        )
+      )
+    )
+    val src = Files.createTempFile("verbatim-remove-src", ".xlsx")
+    XlsxWriter.write(wb0, src).fold(e => fail(s"seed write failed: $e"), identity)
+    val read = XlsxReader.read(src).fold(e => fail(s"seed read failed: $e"), identity)
+    assertEquals(
+      read.metadata.definedNames.map(_.localSheetId).toSet,
+      Set(Option(1)),
+      "fixture sanity: both unmodelable names stay in metadata, scoped to Data at index 1"
+    )
+
+    val removed = read.removeAt(0).fold(e => fail(s"removeAt failed: $e"), identity)
+    val out = Files.createTempFile("verbatim-remove-out", ".xlsx")
+    XlsxWriter.write(removed, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val reread = XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
+    assertEquals(reread.sheetNames.map(_.value), Vector("Data"))
+    assertEquals(
+      reread.metadata.definedNames.map(dn => (dn.name, dn.localSheetId, dn.formula)).sortBy(_._1),
+      Vector(
+        ("_xlnm.Print_Area", Some(0), "Data!$A$1:$B$2,Data!$D$1:$E$2"),
+        ("_xlnm.Print_Titles", Some(0), "Data!$A:$B")
+      ),
+      "verbatim print names must follow Data from index 1 to index 0"
+    )
+    Files.deleteIfExists(src)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-434: modeled print names stay correct across a removal (re-derivation undisturbed)") {
+    // The modeled path was already immune (PrintNames.fromSheets re-derives localSheetId from
+    // live sheet position on every write) — pin it so the GH-434 remap never double-shifts it.
+    val wb0 = Workbook(
+      Sheet("Cover").put(ref"A1" -> 1),
+      Sheet("Data").put(ref"B2" -> 2).withPageSetup(PageSetup(printArea = Some(ref"A1:B2")))
+    )
+    val src = Files.createTempFile("modeled-remove-src", ".xlsx")
+    XlsxWriter.write(wb0, src).fold(e => fail(s"seed write failed: $e"), identity)
+    val read = XlsxReader.read(src).fold(e => fail(s"seed read failed: $e"), identity)
+
+    val removed = read.removeAt(0).fold(e => fail(s"removeAt failed: $e"), identity)
+    val out = Files.createTempFile("modeled-remove-out", ".xlsx")
+    XlsxWriter.write(removed, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val workbookXml = zipEntryString(out, "xl/workbook.xml")
+    assert(
+      workbookXml.contains("localSheetId=\"0\""),
+      s"modeled Print_Area must re-derive to index 0: $workbookXml"
+    )
+    val reread = XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
+    val data = reread("Data").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(data.pageSetup.flatMap(_.printArea), Some(ref"A1:B2"))
+    assertEquals(reread.metadata.definedNames, Vector.empty)
+    Files.deleteIfExists(src)
+    Files.deleteIfExists(out)
+  }
+
   test("GH-266: even/first headers+footers round-trip with differentOddEven/differentFirst") {
     val hf = HeaderFooter(
       oddHeader = Some("&LOdd Head"),

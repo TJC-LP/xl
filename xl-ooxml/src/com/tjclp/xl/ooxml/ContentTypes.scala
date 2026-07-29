@@ -62,6 +62,19 @@ case class ContentTypes(
       (ct != ctComments && ct != ctVmlDrawing) || shippedNames.contains(partName)
     })
 
+  /**
+   * Remove the overrides naming any of `paths` (zip paths without the leading slash) — the GH-417
+   * removal-orphan prune. Unlike [[withoutOrphanCommentParts]] this is PATH-keyed, not class-keyed:
+   * a removed sheet's rel closure can include non-writer-owned classes (chart colors/style parts),
+   * whose registrations must fall with the pruned parts. Extension Defaults are untouched (they
+   * declare mappings, not parts).
+   */
+  def withoutParts(paths: Set[String]): ContentTypes =
+    if paths.isEmpty then this
+    else
+      val partNames = paths.map(p => s"/$p")
+      copy(overrides = overrides.filterNot((partName, _) => partNames.contains(partName)))
+
   def withTableOverrides(tableCount: Int): ContentTypes =
     if tableCount == 0 then this
     else
