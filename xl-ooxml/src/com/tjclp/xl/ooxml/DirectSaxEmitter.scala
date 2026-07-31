@@ -90,8 +90,18 @@ object DirectSaxEmitter:
       buildSheetViewsElem(None, sheet.freezePane, sheet.viewSettings).foreach(writer.writeElem)
 
       // GH-426: sheet-default row height / column width — the CT_Worksheet slot before <cols>
-      mergeSheetFormatPrElem(None, sheet.defaultColumnWidth, sheet.defaultRowHeight)
-        .foreach(writer.writeElem)
+      // GH-448: plus the outline summary attributes when any row/col carries an outlineLevel
+      locally {
+        val (maxRowOutline, maxColOutline) =
+          com.tjclp.xl.ooxml.worksheet.sheetOutlineMaxes(sheet)
+        mergeSheetFormatPrElem(
+          None,
+          sheet.defaultColumnWidth,
+          sheet.defaultRowHeight,
+          maxRowOutline,
+          maxColOutline
+        ).foreach(writer.writeElem)
+      }
 
       // Emit column definitions if any
       emitCols(writer, sheet, styleRemapping)
@@ -527,8 +537,15 @@ object DirectSaxEmitter:
         writer.endElement()
       case Color.Theme(slot, tint) =>
         writer.startElement("color")
-        writer.writeAttribute("theme", slot.ordinal.toString)
-        writer.writeAttribute("tint", tint.toString)
+        // GH-448: themeSlotToIndex, NOT slot.ordinal — the ThemeSlot enum order swaps the
+        // dark/light pairs relative to OOXML theme indices, so ordinal wrote Dark2 as Light2
+        writer.writeAttribute(
+          "theme",
+          com.tjclp.xl.ooxml.style.ColorHelpers.themeSlotToIndex(slot).toString
+        )
+        com.tjclp.xl.ooxml.style.OoxmlStyles
+          .tintToken(tint)
+          .foreach(writer.writeAttribute("tint", _))
         writer.endElement()
     }
 

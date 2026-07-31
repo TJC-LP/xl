@@ -62,22 +62,13 @@ class OoxmlStylesSpec extends FunSuite:
     val count = (fillsElem \ "@count").text.toInt
     assert(count >= 2, "Should have at least 2 fills (default fills)")
 
-    // Verify gray125 pattern has foreground and background colors
+    // GH-448: the mandatory gray125 placeholder is written BARE, exactly as Excel writes it
     val fills = xml \ "fills" \ "fill"
     val gray125Fill = fills(1)
     val patternFill = gray125Fill \ "patternFill"
-
-    // Check foreground color
-    val fgColor = patternFill \ "fgColor"
-    assert(fgColor.nonEmpty, "gray125 pattern should have fgColor")
-    val fgRgb = (fgColor \ "@rgb").text
-    assert(fgRgb.nonEmpty, "fgColor should have rgb attribute")
-
-    // Check background color
-    val bgColor = patternFill \ "bgColor"
-    assert(bgColor.nonEmpty, "gray125 pattern should have bgColor")
-    val bgRgb = (bgColor \ "@rgb").text
-    assert(bgRgb.nonEmpty, "bgColor should have rgb attribute")
+    assertEquals((patternFill \ "@patternType").text, "gray125")
+    assert((patternFill \ "fgColor").isEmpty, "bare gray125 must not carry fgColor (GH-448)")
+    assert((patternFill \ "bgColor").isEmpty, "bare gray125 must not carry bgColor (GH-448)")
 
     // Verify pattern type is gray125
     val patternType = (patternFill \ "@patternType").text
@@ -363,7 +354,7 @@ class OoxmlStylesSpec extends FunSuite:
     // Font slot 0 IS the house font (the xfId-0 cellStyleXf hardcodes fontId=0)
     val font0 = (parsed \ "fonts" \ "font").headOption.getOrElse(fail(s"no fonts: $stylesXml"))
     assertEquals((font0 \ "name" \ "@val").text, "Times New Roman", stylesXml)
-    assertEquals((font0 \ "sz" \ "@val").text, "10.0", stylesXml)
+    assertEquals((font0 \ "sz" \ "@val").text, "10", stylesXml) // GH-448: integral sz
     // Normal master record references it
     val styleXf0 = (parsed \ "cellStyleXfs" \ "xf").headOption
       .getOrElse(fail(s"no cellStyleXfs: $stylesXml"))

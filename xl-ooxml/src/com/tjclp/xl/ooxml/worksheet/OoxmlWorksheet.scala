@@ -581,11 +581,16 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           ), // Use calculated dimension, fallback to preserved
           buildSheetViewsElem(preserved.sheetViews, sheet.freezePane, sheet.viewSettings),
           // GH-426: modeled sheet defaults overlay the preserved element (unmodeled attrs ride)
-          mergeSheetFormatPrElem(
-            preserved.sheetFormatPr,
-            sheet.defaultColumnWidth,
-            sheet.defaultRowHeight
-          ),
+          {
+            val (maxRowOutline, maxColOutline) = sheetOutlineMaxes(sheet)
+            mergeSheetFormatPrElem(
+              preserved.sheetFormatPr,
+              sheet.defaultColumnWidth,
+              sheet.defaultRowHeight,
+              maxRowOutline,
+              maxColOutline
+            )
+          },
           generatedCols.orElse(preserved.cols), // Prefer domain props over preserved XML
           condFmt.getOrElse(preserved.conditionalFormatting), // GH-136: planned slot wins
           dataValidations.getOrElse(preserved.dataValidations), // GH-375: planned slot wins
@@ -624,8 +629,16 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           dimension = calculatedDimension,
           sheetViews = buildSheetViewsElem(None, sheet.freezePane, sheet.viewSettings),
           // GH-426: a modeled default row height / column width materializes without source XML
-          sheetFormatPr =
-            mergeSheetFormatPrElem(None, sheet.defaultColumnWidth, sheet.defaultRowHeight),
+          sheetFormatPr = {
+            val (maxRowOutline, maxColOutline) = sheetOutlineMaxes(sheet)
+            mergeSheetFormatPrElem(
+              None,
+              sheet.defaultColumnWidth,
+              sheet.defaultRowHeight,
+              maxRowOutline,
+              maxColOutline
+            )
+          },
           cols = generatedCols,
           conditionalFormatting = condFmt.getOrElse(Seq.empty), // GH-136: fresh workbooks get cf
           dataValidations = dataValidations.flatten, // GH-375: fresh workbooks get validations

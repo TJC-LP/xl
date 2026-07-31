@@ -136,8 +136,12 @@ class SheetFormatPrRoundTripSpec extends FunSuite:
       .fold(e => fail(s"write failed: $e"), identity)
     val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
     assert(xml.contains("baseColWidth=\"8\""), s"unmodeled attr lost on rewrite: $xml")
-    assert(xml.contains("outlineLevelRow=\"2\""), s"unmodeled attr lost on rewrite: $xml")
-    assert(xml.contains("outlineLevelCol=\"1\""), s"unmodeled attr lost on rewrite: $xml")
+    // GH-448: outlineLevelRow/Col graduated from preserved to MODELED — they now derive from
+    // row/col outline properties (the zoomScale graduation precedent). This fixture carries the
+    // summary attrs with NO outlined rows/cols behind them, so the recomputed (consistent) form
+    // drops them; books with real outlined rows keep them (CanonicalXmlSpec, GroupingCommandSpec).
+    assert(!xml.contains("outlineLevelRow="), s"inconsistent summary attr must not survive: $xml")
+    assert(!xml.contains("outlineLevelCol="), s"inconsistent summary attr must not survive: $xml")
     assert(xml.contains("defaultColWidth=\"9.140625\""), s"source width lost on rewrite: $xml")
     assert(xml.contains("defaultRowHeight=\"12.75\""), s"source height lost on rewrite: $xml")
     // Identity fast-path: values unchanged since read → no gratuitous customHeight flag

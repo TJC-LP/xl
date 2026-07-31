@@ -316,7 +316,11 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
           case Color.Rgb(argb) =>
             props += elem("color", "rgb" -> f"$argb%08X")()
           case Color.Theme(slot, tint) =>
-            props += elem("color", "theme" -> slot.ordinal.toString, "tint" -> tint.toString)()
+            // GH-448: themeSlotToIndex, NOT slot.ordinal (enum order swaps dark/light pairs)
+            val attrs =
+              Seq("theme" -> style.ColorHelpers.themeSlotToIndex(slot).toString) ++
+                style.OoxmlStyles.tintToken(tint).map("tint" -> _)
+            props += elem("color", attrs*)()
         }
 
         props += elem("sz", "val" -> f.sizePt.toString)()

@@ -672,9 +672,13 @@ private[ooxml] def parseAutoFilterRef(e: Elem): Option[CellRange] =
 private[ooxml] def mergeSheetFormatPrElem(
   existing: Option[Elem],
   defaultColumnWidth: Option[Double],
-  defaultRowHeight: Option[Double]
+  defaultRowHeight: Option[Double],
+  maxRowOutline: Int = 0,
+  maxColOutline: Int = 0
 ): Option[Elem] =
-  if defaultColumnWidth.isEmpty && defaultRowHeight.isEmpty then existing
+  if defaultColumnWidth.isEmpty && defaultRowHeight.isEmpty &&
+    maxRowOutline == 0 && maxColOutline == 0
+  then existing
   else
     def attrDouble(e: Elem, key: String): Option[Double] =
       Option(e \@ key).filter(_.nonEmpty).flatMap(_.toDoubleOption)
@@ -692,11 +696,30 @@ private[ooxml] def mergeSheetFormatPrElem(
             Some("1")
           )
         case None => withWidth
+    // GH-448: the outline summary attributes Excel stamps when any row/col carries an
+    // outlineLevel. Set-or-remove: the reader models outline levels on every row/col, so the
+    // recomputed max IS ground truth — after an ungroup the stale summary attr must go too.
+    val withRowOutline = setOrRemoveAttr(
+      withHeight,
+      "outlineLevelRow",
+      Option.when(maxRowOutline > 0)(maxRowOutline.toString)
+    )
+    val withColOutline = setOrRemoveAttr(
+      withRowOutline,
+      "outlineLevelCol",
+      Option.when(maxColOutline > 0)(maxColOutline.toString)
+    )
     val withRequiredHeight =
-      if existing.isEmpty && (withHeight \@ "defaultRowHeight").isEmpty then
-        setOrRemoveAttr(withHeight, "defaultRowHeight", Some("15"))
-      else withHeight
+      if existing.isEmpty && (withColOutline \@ "defaultRowHeight").isEmpty then
+        setOrRemoveAttr(withColOutline, "defaultRowHeight", Some("15"))
+      else withColOutline
     Some(withRequiredHeight)
+
+/** Max row/col outline levels of a sheet's domain properties (0 = no outlining) — GH-448. */
+private[ooxml] def sheetOutlineMaxes(sheet: Sheet): (Int, Int) =
+  val rowMax = sheet.rowProperties.values.flatMap(_.outlineLevel).maxOption.getOrElse(0)
+  val colMax = sheet.columnProperties.values.flatMap(_.outlineLevel).maxOption.getOrElse(0)
+  (rowMax, colMax)
 
 // ===== Print setup authoring (GH-259, GH-266) =====
 // PageSetup is the typed model for <pageMargins>, <pageSetup>, <headerFooter>, and the
