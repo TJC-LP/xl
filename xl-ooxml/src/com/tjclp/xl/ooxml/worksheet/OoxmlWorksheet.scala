@@ -485,9 +485,9 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           // New row - create with defaults
           OoxmlRow(rowIdx, ooxmlCells)
 
-      // Apply domain row properties (height, hidden, outlineLevel, collapsed)
+      // Apply domain row properties (height, hidden, style, outlineLevel, collapsed)
       val rowWithDomainProps = sheet.rowProperties.get(Row.from1(rowIdx)) match
-        case Some(domainProps) => applyDomainRowProps(baseRow, domainProps)
+        case Some(domainProps) => applyDomainRowProps(baseRow, domainProps, styleRemapping)
         case None => baseRow
 
       rowWithDomainProps
@@ -504,7 +504,9 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           val withoutSourceCells = original.copy(cells = Seq.empty)
           sheet.rowProperties
             .get(Row.from1(original.rowIndex))
-            .fold(withoutSourceCells)(props => applyDomainRowProps(withoutSourceCells, props))
+            .fold(withoutSourceCells)(props =>
+              applyDomainRowProps(withoutSourceCells, props, styleRemapping)
+            )
         }
     }
 
@@ -514,7 +516,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     val emptyRowsFromDomain = sheet.rowProperties
       .filterNot { case (row, _) => existingRowIndices.contains(row.index1) }
       .map { case (row, props) =>
-        applyDomainRowProps(OoxmlRow(row.index1, Seq.empty), props)
+        applyDomainRowProps(OoxmlRow(row.index1, Seq.empty), props, styleRemapping)
       }
       .toSeq
 
@@ -540,7 +542,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
       else preservedMetadata.flatMap(_.legacyDrawing)
 
     // Generate cols from domain properties if not preserved
-    val generatedCols = buildColsElement(sheet)
+    val generatedCols = buildColsElement(sheet, styleRemapping)
 
     // Calculate actual dimension from all rows (recalculate to reflect any new cells)
     val calculatedDimension: Option[Elem] =

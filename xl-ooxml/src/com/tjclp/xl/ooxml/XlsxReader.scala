@@ -1079,11 +1079,11 @@ object XlsxReader:
 
     // Parse column properties from <cols> element
     val columnProperties = ooxmlSheet.cols match
-      case Some(colsElem) => parseColumnProperties(colsElem)
+      case Some(colsElem) => parseColumnProperties(colsElem, styleMapping)
       case None => Map.empty[Column, ColumnProperties]
 
     // Extract row properties from OoxmlRow data
-    val rowProperties = extractRowProperties(ooxmlSheet.rows)
+    val rowProperties = extractRowProperties(ooxmlSheet.rows, styleMapping)
 
     // Parse print setup (scale/orientation/fit, margins, header/footer) — GH-259
     val pageSetup =
@@ -1162,7 +1162,10 @@ object XlsxReader:
    * Each <col> element has min/max (1-indexed) and optional width, hidden, outlineLevel, collapsed.
    * A single <col> can cover multiple columns (min="1" max="3" applies to columns A-C).
    */
-  private def parseColumnProperties(colsElem: Elem): Map[Column, ColumnProperties] =
+  private def parseColumnProperties(
+    colsElem: Elem,
+    styleMapping: Map[Int, StyleId]
+  ): Map[Column, ColumnProperties] =
     val builder = Map.newBuilder[Column, ColumnProperties]
     for colElem <- colsElem.child.collect { case e: Elem if e.label == "col" => e } do
       val attrs = colElem.attributes.asAttrMap
@@ -1175,6 +1178,9 @@ object XlsxReader:
         val props = ColumnProperties(
           width = attrs.get("width").flatMap(_.toDoubleOption),
           hidden = attrs.get("hidden").contains("1"),
+          // GH-445: column-default style — resolved through the same global→local mapping as
+          // cell styleIds so read→modify→write re-emits it instead of silently dropping it
+          styleId = attrs.get("style").flatMap(_.toIntOption).flatMap(styleMapping.get),
           outlineLevel = attrs.get("outlineLevel").flatMap(_.toIntOption),
           collapsed = attrs.get("collapsed").contains("1")
         )
@@ -1185,19 +1191,26 @@ object XlsxReader:
   /**
    * Extract row properties from parsed OoxmlRow data.
    *
-   * Only includes rows that have non-default properties (height, hidden, outlineLevel, collapsed).
+   * Only includes rows that have non-default properties (height, hidden, style, outlineLevel,
+   * collapsed).
    */
-  private def extractRowProperties(rows: Seq[OoxmlRow]): Map[Row, RowProperties] =
+  private def extractRowProperties(
+    rows: Seq[OoxmlRow],
+    styleMapping: Map[Int, StyleId]
+  ): Map[Row, RowProperties] =
     val builder = Map.newBuilder[Row, RowProperties]
     for row <- rows do
       val props = RowProperties(
         height = row.height,
         hidden = row.hidden,
+        // GH-445: row-default style (`<row s=>`), resolved like cell styleIds
+        styleId = row.style.flatMap(styleMapping.get),
         outlineLevel = row.outlineLevel,
         collapsed = row.collapsed
       )
       // Only include if not all defaults
-      if props.height.isDefined || props.hidden || props.outlineLevel.isDefined || props.collapsed
+      if props.height.isDefined || props.hidden || props.styleId.isDefined ||
+        props.outlineLevel.isDefined || props.collapsed
       then builder += (Row.from1(row.rowIndex) -> props)
     builder.result()
 
@@ -1274,26 +1287,43 @@ object XlsxReader:
     if parsed == HeaderFooter() then None else Some(parsed)
 
   /**
-   * Parse sheet view settings (GH-258/GH-372) from the first <sheetView>.
+   * Parse sheet view settings (GH-258/GH-372/GH-446) from the first <sheetView>.
    *
-   * Returns Some only when a modeled attribute (showGridLines, zoomScale, tabSelected) is present,
-   * so typical files keep viewSettings = None and the raw sheetViews XML rides through unchanged on
-   * rewrite (passive preserve). Out-of-range zoom values are dropped rather than violating the
-   * SheetView invariant.
+   * Returns Some only when a modeled attribute (showGridLines, zoomScale, tabSelected, view,
+   * zoomScaleNormal, zoomScaleSheetLayoutView, topLeftCell) is present, so typical files keep
+   * viewSettings = None and the raw sheetViews XML rides through unchanged on rewrite (passive
+   * preserve). Out-of-range zoom values and unknown view modes are dropped rather than violating
+   * the SheetView invariant.
    */
   private def parseSheetView(sheetViewsElem: Option[Elem]): Option[SheetView] =
     for
       views <- sheetViewsElem
-      view <- (views \ "sheetView").collectFirst { case e: Elem => e }
-      attrs = view.attributes.asAttrMap
+      viewElem <- (views \ "sheetView").collectFirst { case e: Elem => e }
+      attrs = viewElem.attributes.asAttrMap
       showGridLines = attrs.get("showGridLines").map(v => v != "0" && v != "false")
       zoomScale = attrs.get("zoomScale").flatMap(_.toIntOption).filter(z => z >= 10 && z <= 400)
       tabSelected = attrs.get("tabSelected").map(v => v == "1" || v == "true")
-      if showGridLines.isDefined || zoomScale.isDefined || tabSelected.isDefined
+      viewMode = attrs.get("view").filter(SheetView.validViews.contains)
+      zoomScaleNormal = attrs
+        .get("zoomScaleNormal")
+        .flatMap(_.toIntOption)
+        .filter(z => z >= 10 && z <= 400)
+      zoomScaleSheetLayoutView = attrs
+        .get("zoomScaleSheetLayoutView")
+        .flatMap(_.toIntOption)
+        .filter(z => z >= 10 && z <= 400)
+      topLeftCell = attrs.get("topLeftCell").flatMap(s => ARef.parse(s).toOption)
+      if showGridLines.isDefined || zoomScale.isDefined || tabSelected.isDefined ||
+        viewMode.isDefined || zoomScaleNormal.isDefined ||
+        zoomScaleSheetLayoutView.isDefined || topLeftCell.isDefined
     yield SheetView(
       showGridLines = showGridLines.getOrElse(true),
       zoomScale = zoomScale,
-      tabSelected = tabSelected
+      tabSelected = tabSelected,
+      view = viewMode,
+      zoomScaleNormal = zoomScaleNormal,
+      zoomScaleSheetLayoutView = zoomScaleSheetLayoutView,
+      topLeftCell = topLeftCell
     )
 
   /**
