@@ -67,6 +67,9 @@ object ArrayArithmetic:
    *   - Number -> value
    *   - Empty -> 0
    *   - Bool -> 1/0
+   *   - DateTime -> Excel serial number (GH-449: dates are numbers in arithmetic, the
+   *     [[normalizeForCompare]] convention extended to the broadcast operand path so `=A1:A3-B1`
+   *     over date cells agrees with the scalar `=A1-B1`)
    *   - Text containing number -> parsed value
    *   - Other -> error
    */
@@ -74,6 +77,7 @@ object ArrayArithmetic:
     case CellValue.Number(n) => Right(n)
     case CellValue.Empty => Right(BigDecimal(0))
     case CellValue.Bool(b) => Right(boolToNumeric(b))
+    case CellValue.DateTime(dt) => Right(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
     case CellValue.Formula(_, Some(cached), _) => cellValueToNumeric(cached)
     case CellValue.Text(s) =>
       scala.util.Try(BigDecimal(s.trim)).toOption match
