@@ -903,16 +903,32 @@ object WriteCommands:
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer
+   * @param seedTables
+   *   GH-442: also replay every data table's what-if substitution and refresh its interior caches.
+   *   Off by default — a data-table record's cache is its only truthful value and xl never
+   *   evaluates `TABLE(...)` implicitly (GH-353/GH-430). Seeding runs AFTER the recalculation so
+   *   each table substitutes into freshly computed precedents; formulas that READ a seeded interior
+   *   are not re-evaluated in the same pass.
    */
   def recalc(
     wb: Workbook,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    seedTables: Boolean = false
   ): IO[String] =
     val result = wb.recalculate()
-    writeWorkbook(result.workbook, outputPath, config, stream).map { _ =>
-      s"${formatRecalcSummary(result)}\n${saveSuffix(outputPath, stream)}"
+    val prepared =
+      if !seedTables then IO.pure(result.workbook)
+      else
+        IO.fromEither(
+          result.workbook.seedDataTables().left.map(err => new Exception(err.message))
+        )
+    prepared.flatMap { workbook =>
+      writeWorkbook(workbook, outputPath, config, stream).map { _ =>
+        val tableNote = if seedTables then "\nSeeded data table interior caches" else ""
+        s"${formatRecalcSummary(result)}$tableNote\n${saveSuffix(outputPath, stream)}"
+      }
     }
 
   /**

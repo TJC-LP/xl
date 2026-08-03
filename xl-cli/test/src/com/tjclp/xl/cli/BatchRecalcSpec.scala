@@ -6,12 +6,14 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import cats.effect.{IO, unsafe}
-import com.tjclp.xl.{Workbook, Sheet}
+import com.tjclp.xl.{CellRange, Workbook, Sheet, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.sheets.dataTableSyntax.*
 
 /**
  * GH-352: batch must end with one global recalculation so batch putf carries cached values (`<v>`)
@@ -426,6 +428,79 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(srcFile)
     Files.deleteIfExists(out)
     Files.deleteIfExists(ops)
+  }
+
+  // ===== GH-442: `recalc --tables` seeds data-table interiors =====
+
+  /**
+   * A 2-D what-if table over D5:F6 with NO seeds: corner formula C4 = B1*B2 over base-case inputs
+   * B1=5/B2=7, row axis D4:F4 substituting into B1, column axis C5:C6 substituting into B2. Seeded
+   * interiors come out as the axis product (D5 = 1*10 ... F6 = 3*20) and the base inputs are left
+   * alone; unseeded the record carries no cache and the plain interiors are never materialized.
+   */
+  private def unseededDataTableWorkbook(): Workbook =
+    val interior = CellRange.parse("D5:F6").fold(err => fail(err), identity)
+    val authored = Sheet("Data")
+      .put(ref"B1" -> 5, ref"B2" -> 7)
+      .put(ref"C4", CellValue.Formula("B1*B2"))
+      .put(ref"D4" -> 1, ref"E4" -> 2, ref"F4" -> 3)
+      .put(ref"C5" -> 10, ref"C6" -> 20)
+      .dataTable(interior, ref"B1", ref"B2")
+      .fold(err => fail(s"authoring failed: ${err.message}"), identity)
+    Workbook(authored)
+
+  /** Interior value as an Int, reading a record cell through its cache. */
+  private def interiorInt(wb: Workbook, a1: ARef): Option[Int] =
+    wb.sheets.head.cells.get(a1).map(_.value).flatMap {
+      case CellValue.Number(n) => Some(n.toInt)
+      case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n.toInt)
+      case _ => None
+    }
+
+  test("GH-442: recalc --tables refreshes every data-table interior cache") {
+    val out = tempXlsx()
+    val summary =
+      WriteCommands.recalc(unseededDataTableWorkbook(), out, config, false, true).unsafeRunSync()
+    val seeded = readBack(out)
+    assertEquals(
+      interiorInt(seeded, ref"D5"),
+      Some(10)
+    ) // record cell keeps its kind, gains a cache
+    assertEquals(interiorInt(seeded, ref"E5"), Some(20))
+    assertEquals(interiorInt(seeded, ref"F5"), Some(30))
+    assertEquals(interiorInt(seeded, ref"D6"), Some(20))
+    assertEquals(interiorInt(seeded, ref"E6"), Some(40))
+    assertEquals(interiorInt(seeded, ref"F6"), Some(60))
+    // The what-if substitution is scoped to the seed: the base-case inputs survive untouched.
+    assertEquals(interiorInt(seeded, ref"B1"), Some(5))
+    assertEquals(interiorInt(seeded, ref"C4"), Some(35))
+    assert(summary.contains("data table"), s"summary must report the seeding: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-442: default recalc leaves data-table caches pinned (GH-353/GH-430 semantics)") {
+    val out = tempXlsx()
+    val summary = WriteCommands.recalc(unseededDataTableWorkbook(), out, config).unsafeRunSync()
+    val pinned = readBack(out)
+    // The record's cache stays absent and the plain interiors are never materialized.
+    assertEquals(interiorInt(pinned, ref"D5"), None)
+    assertEquals(interiorInt(pinned, ref"E5"), None)
+    assertEquals(interiorInt(pinned, ref"F6"), None)
+    // The ordinary corner formula still recalculates on the default path.
+    assertEquals(interiorInt(pinned, ref"C4"), Some(35))
+    assert(!summary.contains("data table"), s"default recalc must not mention seeding: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-442: recalc --tables parses to Recalc(tables = true); bare recalc stays false") {
+    val cmd = com.monovore.decline.Command("xl", "test")(Main.recalcCmd)
+    cmd.parse(Seq("recalc", "--tables"), Map.empty) match
+      case Right(CliCommand.Recalc(tables)) => assert(tables, "--tables must set tables = true")
+      case other => fail(s"expected Recalc(true), got $other")
+    cmd.parse(Seq("recalc"), Map.empty) match
+      case Right(CliCommand.Recalc(tables)) =>
+        assert(!tables, "bare recalc must keep the pinned-cache default")
+      case other => fail(s"expected Recalc(false), got $other")
   }
 
   test("recalc command reports formula errors without failing (exit stays clean)") {

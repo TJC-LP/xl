@@ -1307,7 +1307,7 @@ class MainSpec extends CatsEffectSuite:
 
   test("recalc without -o reports a usage error naming the flag (GH-422)") {
     val wb = Workbook(Vector(Sheet("T")))
-    Main.executeCommand(wb, None, None, None, false, CliCommand.Recalc).attempt.map {
+    Main.executeCommand(wb, None, None, None, false, CliCommand.Recalc(false)).attempt.map {
       case Left(err) =>
         assert(
           err.getMessage.contains("recalc requires -o"),
