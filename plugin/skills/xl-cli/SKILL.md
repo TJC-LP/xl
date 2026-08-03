@@ -105,6 +105,8 @@ xl -f <file> -s <sheet> -o <out> freeze <ref>         # Freeze panes
 xl -f <file> -s <sheet> -o <out> unfreeze             # Remove freeze panes
 xl -f <file> -o <out> import <csv-file> --new-sheet "Data"
 xl -f <file> -o <out> import-md <table.md> --start A1   # GFM markdown table import (0.11.3+; '-' = stdin)
+xl -f <file> -o <out> recalc                          # Refresh every formula's cached value (0.12.6+)
+xl -f <file> -o <out> recalc --tables                 # Also seed data-table interior caches (0.19.0)
 ```
 
 ### Compare & Query (read-only, 0.11.3+)
@@ -112,6 +114,7 @@ xl -f <file> -o <out> import-md <table.md> --start A1   # GFM markdown table imp
 xl -f a.xlsx diff -g b.xlsx --format markdown          # Workbook diff (exit 0 identical, 1 differs)
 xl -f a.xlsx diff -g b.xlsx --format json              # Stable JSON schema for tooling
 xl -f out.xlsx lint                                    # Validate package structure before sending (exit 0 clean, 1 findings) (0.15.0+)
+                                                       # Rules: child-order, unresolved-rel-id, wrong-rel-type, missing-part, missing-content-type, ref-out-of-bounds, data-table-torn, data-table-unseeded (last two: 0.19.0)
 xl -f <file> -s <sheet> filter --where "B > 100 AND D = TRUE" --header --format csv
 xl -f <file> -s <sheet> filter --where "Name LIKE 'Acme%'" --columns A,C:E --limit 20
 ```

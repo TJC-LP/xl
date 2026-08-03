@@ -579,6 +579,10 @@ lenient reader accepts silently:
     legacyDrawing, hyperlink, tablePart, ...) that do not resolve in the
     paired .rels, resolve to a relationship of the wrong type, or target a
     part missing from the package
+  - ref/sqref/dimension tokens past row 1048576 or column XFD
+  - data-table records whose grid was torn by an unguarded edit, and
+    uncached table interiors in a calcMode="autoNoTable" book (they open
+    BLANK — refresh them with `xl recalc --tables`)
 
 USAGE:
   xl lint report.xlsx
@@ -586,7 +590,9 @@ USAGE:
   xl lint report.xlsx --format json          # Stable machine-readable schema
 
 FINDING CATEGORIES:
-  child-order | unresolved-rel-id | wrong-rel-type | missing-part
+  child-order | unresolved-rel-id | wrong-rel-type | missing-part |
+  missing-content-type | ref-out-of-bounds | data-table-torn |
+  data-table-unseeded
 
 EXIT CODES:
   0 = no findings (package structure is clean)
@@ -1116,13 +1122,24 @@ Formula errors (e.g. circular references) are data conditions, not tool
 failures: affected cells are left uncached, the file is still written, the
 errors are listed in the summary, and the exit code is 0.
 
+Data-table records (<f t="dataTable">) keep their PINNED caches by default —
+xl never evaluates TABLE(...) implicitly. Pass --tables to also replay each
+table's what-if substitution and refresh its interior caches; that is what an
+autoNoTable book needs, since Excel never recomputes tables on open.
+
 USAGE:
   xl -f in.xlsx -o out.xlsx recalc
-  xl -f in.xlsx -i recalc"""
+  xl -f in.xlsx -i recalc
+  xl -f in.xlsx -o out.xlsx recalc --tables   # Also seed data-table interiors"""
+
+  private val recalcTablesOpt: Opts[Boolean] =
+    Opts
+      .flag("tables", "Also seed data-table interior caches (default: pinned caches)")
+      .orFalse
 
   val recalcCmd: Opts[CliCommand] =
     Opts.subcommand("recalc", recalcHelp) {
-      Opts(CliCommand.Recalc)
+      recalcTablesOpt.map(CliCommand.Recalc.apply)
     }
 
   // --- Import command ---
@@ -2270,9 +2287,9 @@ EXAMPLES:
         WriteCommands.batch(wb, sheetOpt, source, _, _, _)
       )
 
-    case CliCommand.Recalc =>
+    case CliCommand.Recalc(tables) =>
       requireOutput("recalc", outputOpt, backendOpt, stream)(
-        WriteCommands.recalc(wb, _, _, _)
+        WriteCommands.recalc(wb, _, _, _, tables)
       )
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>

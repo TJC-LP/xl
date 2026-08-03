@@ -8,11 +8,13 @@ import java.util.zip.{ZipEntry, ZipOutputStream}
 import cats.effect.{ExitCode, IO}
 import munit.CatsEffectSuite
 
-import com.tjclp.xl.{Sheet, Workbook, given}
+import com.tjclp.xl.{CellRange, Sheet, Workbook, given}
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.LintCommands
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.lint.WorkbookLint
+import com.tjclp.xl.sheets.dataTableSyntax.*
 
 /**
  * Tests for the lint command (GH-397).
@@ -79,6 +81,29 @@ class LintCommandSpec extends CatsEffectSuite:
       _ <- ExcelIO.instance[IO].write(wb, path)
     yield path
 
+  /**
+   * GH-442: a seeded data table with a formula put into its interior. `put` carries no data-table
+   * awareness (the authoring guards only cover `sheet.dataTable` itself), so this is exactly the
+   * silent tear the lint exists to report.
+   */
+  private def tornDataTableXlsx(): IO[Path] =
+    for
+      path <- IO(Files.createTempFile("lint-cli-dt-torn", ".xlsx"))
+      interior <- IO.fromEither(CellRange.parse("D5:F6").left.map(new Exception(_)))
+      seeds = Seq.fill(2)(Seq.fill(3)(CellValue.Number(BigDecimal(1))))
+      authored <- IO.fromEither(
+        Sheet("Data")
+          .put(ref"C4", CellValue.Formula("B1*B2"))
+          .put(ref"D4" -> 1, ref"E4" -> 2, ref"F4" -> 3)
+          .put(ref"C5" -> 10, ref"C6" -> 20)
+          .dataTable(interior, ref"B1", ref"B2", seeds)
+          .left
+          .map(err => new Exception(err.message))
+      )
+      wb = Workbook(Vector(authored.put(ref"E5", CellValue.Formula("C4*2"))))
+      _ <- ExcelIO.instance[IO].write(wb, path)
+    yield path
+
   // ========== Exit codes (end-to-end through Main.runLint) ==========
 
   test("lint: clean file written by xl exits 0") {
@@ -95,6 +120,23 @@ class LintCommandSpec extends CatsEffectSuite:
       code <- Main.runLint(path, LintFormat.Text)
       _ <- IO(Files.deleteIfExists(path))
     yield assertEquals(code, ExitCode(1))
+  }
+
+  test("lint: torn data table exits 1 and renders the data-table-torn slug (GH-442)") {
+    for
+      path <- tornDataTableXlsx()
+      code <- Main.runLint(path, LintFormat.Text)
+      findings <- IO(
+        WorkbookLint.lint(path).fold(err => fail(s"lint errored: $err"), identity)
+      )
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(code, ExitCode(1))
+      val text = LintCommands.renderText(path.toString, findings)
+      assert(text.contains("[data-table-torn]"), text)
+      val parsed = ujson.read(LintCommands.renderJson(path.toString, findings))
+      assertEquals(parsed("clean").bool, false)
+      assertEquals(parsed("findings").arr.map(_("category").str).toSet, Set("data-table-torn"))
   }
 
   test("lint: unreadable file exits 2") {

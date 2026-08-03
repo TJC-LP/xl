@@ -108,8 +108,9 @@ enum CliCommand:
   case UngroupRows(rows: String)
   case UngroupCols(cols: String)
   case Batch(source: String, dryRun: Boolean = false) // "-" for stdin or file path
-  // Whole-workbook recalculation: cache every formula's value (GH-352)
-  case Recalc
+  // Whole-workbook recalculation: cache every formula's value (GH-352).
+  // `tables` additionally seeds data-table interior caches (GH-442); default stays pinned-cache.
+  case Recalc(tables: Boolean)
   case Import(
     csvPath: String,
     startRef: Option[String],
