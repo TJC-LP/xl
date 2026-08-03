@@ -103,7 +103,7 @@ class FormulaRecordCliSpec extends FunSuite:
     reread.sheets.head.cells.get(aref("F2")).map(_.value) match
       case Some(CellValue.Formula(expr, _, kind)) =>
         assertEquals(expr, "A1*3")
-        assertEquals(kind, FormulaKind.Normal)
+        assertEquals(kind, FormulaKind.Normal())
       case other => fail(s"expected Normal formula at F2, got $other")
   }
 
@@ -185,7 +185,7 @@ class FormulaRecordCliSpec extends FunSuite:
     s2(aref("C5")).value match
       case CellValue.Formula(expr, _, kind) =>
         assertEquals(expr, "SUM(A5:A6*10)")
-        assertEquals(kind, FormulaKind.Normal)
+        assertEquals(kind, FormulaKind.Normal())
       case other => fail(s"expected pasted Normal formula, got $other")
   }
 

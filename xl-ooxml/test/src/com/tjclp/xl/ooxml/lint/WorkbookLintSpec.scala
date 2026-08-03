@@ -6,10 +6,12 @@ import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import com.tjclp.xl.api.*
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter}
+import com.tjclp.xl.ooxml.{TestFixtures, XlsxReader, XlsxWriter}
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
+import com.tjclp.xl.sheets.dataTableSyntax.*
 import munit.FunSuite
 
 /**
@@ -751,6 +753,203 @@ class WorkbookLintSpec extends FunSuite:
     assertEquals(findings.head.part, "xl/tables/table1.xml")
   }
 
+  // ===== GH-442: data-table record integrity (torn / unseeded) =====
+
+  private val dtRecord =
+    """<f t="dataTable" ref="D5:F6" dt2D="1" dtr="1" r1="B1" r2="B2" ca="1"/>"""
+
+  /**
+   * Excel's own 2-D data table shape over interior D5:F6: corner formula C4, row axis D4:F4, column
+   * axis C5:C6, inputs B1/B2, the record on the interior top-left (corner-only) and every other
+   * interior cell a plain cached value. Fully seeded, so it must lint clean under any calcMode.
+   * Each fixture below varies exactly one thing off this base.
+   */
+  private val seededDataTableSheetXml = worksheetWith(
+    s"""<sheetData>
+    <row r="1"><c r="B1"><v>1</v></c></row>
+    <row r="2"><c r="B2"><v>10</v></c></row>
+    <row r="4"><c r="C4"><f>B1*B2</f><v>10</v></c><c r="D4"><v>1</v></c><c r="E4"><v>2</v></c><c r="F4"><v>3</v></c></row>
+    <row r="5"><c r="C5"><v>10</v></c><c r="D5">$dtRecord<v>10</v></c><c r="E5"><v>20</v></c><c r="F5"><v>30</v></c></row>
+    <row r="6"><c r="C6"><v>20</v></c><c r="D6"><v>20</v></c><c r="E6"><v>40</v></c><c r="F6"><v>60</v></c></row>
+  </sheetData>"""
+  )
+
+  /** The put/putf tear: a real formula landed on interior E5. */
+  private val tornInteriorSheetXml = seededDataTableSheetXml
+    .replace("""<c r="E5"><v>20</v></c>""", """<c r="E5"><f>C4*2</f><v>20</v></c>""")
+
+  /** The GH-435 delete-band shape: the row input was structurally removed, del1 records it. */
+  private val delInputSheetXml =
+    seededDataTableSheetXml.replace(""" r1="B1" r2="B2" ca="1"""", """ del1="1" r2="B2" ca="1"""")
+
+  /** A 2-D record with no r1 and no del1 — the input reference is simply gone. */
+  private val missingInputSheetXml =
+    seededDataTableSheetXml.replace(""" r1="B1" r2="B2"""", """ r2="B2"""")
+
+  /** Corner overwritten: the record survives at E5 but D5 (the ref's top-left) is a plain value. */
+  private val overwrittenCornerSheetXml = seededDataTableSheetXml
+    .replace(s"""<c r="D5">$dtRecord<v>10</v></c>""", """<c r="D5"><v>10</v></c>""")
+    .replace("""<c r="E5"><v>20</v></c>""", s"""<c r="E5">$dtRecord<v>20</v></c>""")
+
+  /** Every interior cache stripped — the state a builder ships before seeding. */
+  private val unseededDataTableSheetXml = seededDataTableSheetXml
+    .replace(s"""<c r="D5">$dtRecord<v>10</v></c>""", s"""<c r="D5">$dtRecord</c>""")
+    .replace("""<c r="E5"><v>20</v></c>""", "")
+    .replace("""<c r="F5"><v>30</v></c>""", "")
+    .replace("""<c r="D6"><v>20</v></c>""", "")
+    .replace("""<c r="E6"><v>40</v></c>""", "")
+    .replace("""<c r="F6"><v>60</v></c>""", "")
+
+  /** One interior cell absent: pins that the uncached count is arithmetic over the whole ref. */
+  private val partlySeededDataTableSheetXml =
+    seededDataTableSheetXml.replace("""<c r="F6"><v>60</v></c>""", "")
+
+  /** A record whose ref leaves no room for the corner formula or either axis. */
+  private val noRoomDataTableSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><f t="dataTable" ref="A1:B2" dt2D="1" dtr="1" r1="D1" r2="D2" ca="1"/><v>1</v></c><c r="B1"><v>2</v></c></row>
+    <row r="2"><c r="A2"><v>3</v></c><c r="B2"><v>4</v></c></row>
+  </sheetData>"""
+  )
+
+  private val autoNoTableWorkbookXml = workbookXml
+    .replace(
+      """<calcPr calcId="191029"/>""",
+      """<calcPr calcId="191029" calcMode="autoNoTable"/>"""
+    )
+
+  private def dtParts(sheetXml: String): Map[String, String] =
+    baseParts + ("xl/worksheets/sheet1.xml" -> sheetXml)
+
+  private def autoNoTableParts(sheetXml: String): Map[String, String] =
+    dtParts(sheetXml) + ("xl/workbook.xml" -> autoNoTableWorkbookXml)
+
+  test("GH-442: a fully seeded data table is clean, including under calcMode=autoNoTable") {
+    assertEquals(lintOf(dtParts(seededDataTableSheetXml)), Vector.empty[Finding])
+    assertEquals(lintOf(autoNoTableParts(seededDataTableSheetXml)), Vector.empty[Finding])
+  }
+
+  test("GH-442: a formula inside the record interior is flagged as DataTableTorn") {
+    val findings = lintOf(dtParts(tornInteriorSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DataTableTorn))
+    assertEquals(findings.head.part, "xl/worksheets/sheet1.xml")
+    assert(findings.head.locator.contains("""ref="D5:F6""""), findings.head.toString)
+    assert(findings.head.message.contains("E5"), findings.head.toString)
+    assert(findings.head.message.contains("formula"), findings.head.toString)
+  }
+
+  test("GH-442: del1 on the record is flagged as DataTableTorn (input removed)") {
+    val findings = lintOf(dtParts(delInputSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DataTableTorn))
+    assert(findings.head.message.contains("""del1="1""""), findings.head.toString)
+    assert(findings.head.message.contains("structural delete"), findings.head.toString)
+  }
+
+  test("GH-442: a record missing its required input reference is flagged as DataTableTorn") {
+    val findings = lintOf(dtParts(missingInputSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DataTableTorn))
+    assert(findings.head.message.contains("r1"), findings.head.toString)
+  }
+
+  test("GH-442: a record with no room for its corner and axes is flagged as DataTableTorn") {
+    val findings = lintOf(dtParts(noRoomDataTableSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DataTableTorn))
+    assert(findings.head.locator.contains("""ref="A1:B2""""), findings.head.toString)
+    assert(findings.head.message.contains("row 1 or column A"), findings.head.toString)
+  }
+
+  test("GH-442: a record ref whose top-left carries no record is flagged as DataTableTorn") {
+    val findings = lintOf(dtParts(overwrittenCornerSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DataTableTorn))
+    assert(findings.head.message.contains("D5"), findings.head.toString)
+  }
+
+  test("GH-442: an uncached interior in a calcMode=autoNoTable book is DataTableUnseeded") {
+    val findings = lintOf(autoNoTableParts(unseededDataTableSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DataTableUnseeded))
+    assertEquals(findings.head.part, "xl/worksheets/sheet1.xml")
+    assert(findings.head.locator.contains("""ref="D5:F6""""), findings.head.toString)
+    assert(findings.head.message.contains("6 of 6"), findings.head.toString)
+    assert(findings.head.message.contains("autoNoTable"), findings.head.toString)
+    assert(findings.head.message.contains("xl recalc --tables"), findings.head.toString)
+  }
+
+  test("GH-442: the uncached count is arithmetic over the whole ref (absent cells count)") {
+    val findings = lintOf(autoNoTableParts(partlySeededDataTableSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DataTableUnseeded))
+    assert(findings.head.message.contains("1 of 6"), findings.head.toString)
+  }
+
+  test("GH-442: the same uncached interior is clean when the book is not calcMode=autoNoTable") {
+    // GH-419 doctrine: plain calcMode="auto" books recompute their tables on open and self-heal.
+    assertEquals(lintOf(dtParts(unseededDataTableSheetXml)), Vector.empty[Finding])
+  }
+
+  test("GH-442: an unseedable record is reported torn, never unseeded") {
+    // Seeding cannot fix a del1 record, so pointing at `xl recalc --tables` would be wrong advice.
+    assertEquals(
+      lintOf(autoNoTableParts(delInputSheetXml)).map(_.category),
+      Vector(LintCategory.DataTableTorn)
+    )
+  }
+
+  test("GH-442: a torn-but-seedable record is reported torn AND unseeded") {
+    assertEquals(
+      lintOf(autoNoTableParts(tornInteriorSheetXml)).map(_.category),
+      Vector(LintCategory.DataTableTorn, LintCategory.DataTableUnseeded)
+    )
+  }
+
+  test("GH-442: Excel-authored data-table fixtures lint clean") {
+    // The design-panel oracles (see DataTableAuthoringSpec / PROVENANCE.md): every-interior
+    // records (formula-records.xlsx) and corner-only records must both pass untouched.
+    List("datatable-excel.xlsx", "datatable-excel-edge.xlsx", "formula-records.xlsx").foreach {
+      name =>
+        val findings = WorkbookLint
+          .lint(TestFixtures.copyToTemp(name))
+          .fold(err => fail(s"lint errored on $name: $err"), identity)
+        assertEquals(
+          findings.filter(f => dataTableCategories.contains(f.category)),
+          Vector.empty[Finding],
+          s"$name must produce no data-table findings"
+        )
+    }
+  }
+
+  private val dataTableCategories =
+    Set(LintCategory.DataTableTorn, LintCategory.DataTableUnseeded)
+
+  test("GH-442: sheet.dataTable output lints clean; a formula put into its interior does not") {
+    val output = Files.createTempFile("lint-dt-authored", ".xlsx")
+    try
+      val authored = Sheet("Data")
+        .put(ref"C4", CellValue.Formula("B1*B2"))
+        .put(ref"D4" -> 1, ref"E4" -> 2, ref"F4" -> 3)
+        .put(ref"C5" -> 10, ref"C6" -> 20)
+        .dataTable(
+          CellRange.parse("D5:F6").fold(fail(_), identity),
+          ref"B1",
+          ref"B2",
+          Seq.fill(2)(Seq.fill(3)(CellValue.Number(BigDecimal(1))))
+        )
+        .fold(err => fail(s"authoring failed: $err"), identity)
+      XlsxWriter
+        .write(Workbook(Vector(authored)), output)
+        .fold(err => fail(s"write failed: $err"), identity)
+      assertEquals(WorkbookLint.lint(output), Right(Vector.empty[Finding]))
+
+      // The unguarded tear GH-442 exists to catch: put lands a real formula in the interior.
+      val torn = authored.put(ref"E5", CellValue.Formula("C4*2"))
+      XlsxWriter
+        .write(Workbook(Vector(torn)), output)
+        .fold(err => fail(s"write failed: $err"), identity)
+      val findings =
+        WorkbookLint.lint(output).fold(err => fail(s"lint errored: $err"), identity)
+      assertEquals(findings.map(_.category), Vector(LintCategory.DataTableTorn))
+      assert(findings.head.message.contains("E5"), findings.head.toString)
+    finally Files.deleteIfExists(output)
+  }
+
   // ===== GH-413 (4): O(1) SAX scanning mode =====
 
   private def lintStreamOf(parts: Map[String, String]): Vector[Finding] =
@@ -789,7 +988,17 @@ class WorkbookLintSpec extends FunSuite:
 <worksheet xmlns="$nsMain" xmlns:r="$nsRel">
   <sheetData/>
   <hyperlinks><hyperlink ref="A1" r:id="rId9"/></hyperlinks>
-</worksheet>"""))
+</worksheet>""")),
+    // GH-442: the data-table checks read sheetData cells, so every record shape needs parity
+    "clean seeded data table" -> dtParts(seededDataTableSheetXml),
+    "torn data-table interior" -> dtParts(tornInteriorSheetXml),
+    "del1 data-table record" -> dtParts(delInputSheetXml),
+    "input-less data-table record" -> dtParts(missingInputSheetXml),
+    "no-room data-table record" -> dtParts(noRoomDataTableSheetXml),
+    "overwritten data-table corner" -> dtParts(overwrittenCornerSheetXml),
+    "unseeded autoNoTable data table" -> autoNoTableParts(unseededDataTableSheetXml),
+    "partly seeded autoNoTable data table" -> autoNoTableParts(partlySeededDataTableSheetXml),
+    "torn autoNoTable data table" -> autoNoTableParts(tornInteriorSheetXml)
   )
 
   test("GH-413: lintStreamBytes agrees with lintBytes on every fixture (SAX/DOM parity)") {

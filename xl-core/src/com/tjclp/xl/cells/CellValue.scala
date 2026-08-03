@@ -40,7 +40,7 @@ enum CellValue:
   case Formula(
     expression: String,
     cachedValue: Option[CellValue] = None,
-    kind: FormulaKind = FormulaKind.Normal
+    kind: FormulaKind = FormulaKind.Normal()
   )
 
   /** Empty cell */
@@ -79,7 +79,7 @@ object CellValue:
   def formula(
     expression: String,
     cachedValue: Option[CellValue] = None,
-    kind: FormulaKind = FormulaKind.Normal
+    kind: FormulaKind = FormulaKind.Normal()
   ): Formula =
     require(expression.nonEmpty, "Formula expression cannot be empty")
     require(

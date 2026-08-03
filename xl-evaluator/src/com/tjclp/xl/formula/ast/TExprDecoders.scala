@@ -17,13 +17,26 @@ trait TExprDecoders:
    * Handles Formula cells by extracting the cached numeric value when available. This enables
    * nested formula evaluation where a cell reference points to another formula cell with a cached
    * result.
+   *
+   * GH-449: DateTime decodes to its Excel serial number — Excel has no separate date type in
+   * arithmetic (`=C28-C27` over two date cells is a day count, `=C28+30` is a date offset), and
+   * this arm is what closed the last numeric-boundary parity gap: ScalarCoercion.coerceNumeric
+   * (literals, call results, LET bindings) and ArrayArithmetic.normalizeForCompare (comparisons)
+   * already converted dates to serials while the direct-cell decoder refused them.
    */
   def decodeNumeric(cell: Cell): Either[CodecError, BigDecimal] =
+    // The writer's conversion (OoxmlCell/DirectSaxEmitter serialize DateTime cells with it), so an
+    // evaluated serial and a written serial can never disagree. 1900 date system — the
+    // evaluator-wide assumption, see docs/LIMITATIONS.md.
+    def dateSerial(dt: java.time.LocalDateTime): Either[CodecError, BigDecimal] =
+      scala.util.Right(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
+
     cell.value match
       case CellValue.Number(value) => scala.util.Right(value)
       // GH-196: Coerce booleans to numeric (TRUE→1, FALSE→0)
       case CellValue.Bool(true) => scala.util.Right(BigDecimal(1))
       case CellValue.Bool(false) => scala.util.Right(BigDecimal(0))
+      case CellValue.DateTime(dt) => dateSerial(dt)
       case CellValue.Formula(_, Some(CellValue.Number(cached)), _) =>
         // Extract cached numeric value from formula cell
         scala.util.Right(cached)
@@ -32,6 +45,7 @@ trait TExprDecoders:
         scala.util.Right(BigDecimal(1))
       case CellValue.Formula(_, Some(CellValue.Bool(false)), _) =>
         scala.util.Right(BigDecimal(0))
+      case CellValue.Formula(_, Some(CellValue.DateTime(cached)), _) => dateSerial(cached)
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(

@@ -7,9 +7,17 @@ import java.util.zip.{ZipFile, ZipInputStream}
 
 import scala.xml.Elem
 
-import com.tjclp.xl.addressing.{Column, Row}
+import com.tjclp.xl.addressing.{ARef, Column, Row}
+import com.tjclp.xl.cells.FormulaKind
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.ooxml.{ContentTypes, OoxmlWorkbook, Relationships, XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{
+  ContentTypes,
+  FormulaKindCodec,
+  OoxmlWorkbook,
+  Relationships,
+  XmlSecurity,
+  XmlUtil
+}
 import com.tjclp.xl.ooxml.worksheet.worksheetCanonicalOrder
 
 /**
@@ -38,6 +46,12 @@ enum LintCategory derives CanEqual:
   /** A ref/sqref/dimension token lies past row 1048576 or column XFD (GH-428 corruption class). */
   case RefOutOfBounds
 
+  /** A `<f t="dataTable">` record whose grid no longer holds together (GH-442). */
+  case DataTableTorn
+
+  /** An uncached data-table interior in a `calcMode="autoNoTable"` book — opens BLANK (GH-442). */
+  case DataTableUnseeded
+
   /** Stable kebab-case identifier used in CLI text and JSON output. */
   def slug: String = this match
     case LintCategory.ChildOrder => "child-order"
@@ -46,6 +60,8 @@ enum LintCategory derives CanEqual:
     case LintCategory.MissingPart => "missing-part"
     case LintCategory.MissingContentType => "missing-content-type"
     case LintCategory.RefOutOfBounds => "ref-out-of-bounds"
+    case LintCategory.DataTableTorn => "data-table-torn"
+    case LintCategory.DataTableUnseeded => "data-table-unseeded"
 
 /**
  * A single structural lint finding.
@@ -79,6 +95,10 @@ final case class Finding(
  *     out of scope)
  *   - ref/sqref/dimension tokens past row 1048576 / column XFD (the GH-428 overflow class Excel
  *     refuses as corrupt)
+ *   - `<f t="dataTable">` records whose grid is torn or whose interior is uncached in a book that
+ *     never recomputes tables (GH-442) — the only checks here that are silently WRONG output rather
+ *     than an Excel repair: Excel refuses these edits in the UI, so a file carrying one was written
+ *     past its own guards
  *
  * Lint runs on the RAW ZIP PARTS, never on the parsed domain model — a full read would
  * repair/normalize the very structure lint inspects (the reader silently falls back on unresolved
@@ -215,7 +235,7 @@ object WorkbookLint:
       )
       wbRels <- readRelationships(parts, workbookRelsPart)
       rootRels <- readRelationships(parts, rootRelsPart)
-      sheetResult <- lintSheets(wbElem, wbRels, parts, streaming)
+      sheetResult <- lintSheets(wbElem, wbRels, parts, streaming, autoNoTableOf(wbElem))
       externalResult <- lintExternalLinks(wbElem, wbRels, parts)
       referenced =
         presentInternalTargets(rootRels, "", rootRelsPart, parts) ++
@@ -230,6 +250,14 @@ object WorkbookLint:
     ) ++
       checkRelRefs(workbookPart, workbookRelRefs(wbElem), wbRels, workbookRelsPart, parts, "xl") ++
       sheetResult._1 ++ externalResult._1 ++ ctFindings
+
+  /**
+   * True when the book declares `calcMode="autoNoTable"` — the house dialect in which Excel never
+   * recomputes data tables, so an uncached interior opens BLANK (the GH-419 calc-mode doctrine).
+   */
+  private def autoNoTableOf(wbElem: Elem): Boolean =
+    childElems(wbElem, "calcPr")
+      .exists(e => XmlUtil.getAttrOpt(e, "calcMode").exists(_.trim == "autoNoTable"))
 
   /** Parse a `.rels` part; absent part means no relationships (every r:id is then unresolved). */
   private def readRelationships(parts: PartSource, relsPath: String): XLResult[Relationships] =
@@ -349,16 +377,17 @@ object WorkbookLint:
 
   /**
    * Lint every sheet-class part reachable from a sheet rel: CT child order, the part-level r:id
-   * references against the part's own `.rels`, ref/sqref bounds, and the bounds of any referenced
-   * table parts. Sheets whose rel is unresolved / wrong-typed / missing are already reported at
-   * workbook level and skipped here. Also returns the internal rel targets seen (for the
-   * [Content_Types].xml registration check).
+   * references against the part's own `.rels`, ref/sqref bounds, data-table record integrity, and
+   * the bounds of any referenced table parts. Sheets whose rel is unresolved / wrong-typed /
+   * missing are already reported at workbook level and skipped here. Also returns the internal rel
+   * targets seen (for the [Content_Types].xml registration check).
    */
   private def lintSheets(
     wbElem: Elem,
     wbRels: Relationships,
     parts: PartSource,
-    streaming: Boolean
+    streaming: Boolean,
+    autoNoTable: Boolean
   ): XLResult[(Vector[Finding], Vector[(String, String)])] =
     val targets: Vector[(String, SheetKind)] = nestedElems(wbElem, "sheets", "sheet")
       .flatMap { e =>
@@ -407,7 +436,8 @@ object WorkbookLint:
                   parts,
                   parentDir(path)
                 ) ++
-                scan.boundsFindings ++ tableResult._1
+                scan.boundsFindings ++
+                dataTableFindings(path, scan.dataTables, autoNoTable) ++ tableResult._1
           (
             found._1 ++ findings,
             found._2 ++ presentInternalTargets(rels, parentDir(path), relsPath, parts),
@@ -632,13 +662,15 @@ object WorkbookLint:
   /**
    * Everything the per-part checks need, produced identically by the DOM and SAX scanners: root
    * label, ordered main-namespace top-level labels (with positions among all top-level elements),
-   * the captured r:id-bearing elements, and the ref/sqref bounds findings.
+   * the captured r:id-bearing elements, the ref/sqref bounds findings, and the data-table record
+   * state accumulated over sheetData (GH-442).
    */
   private final case class SheetScan(
     rootLabel: String,
     mainChildLabels: Vector[(String, Int)],
     captures: Vector[CapturedRef],
-    boundsFindings: Vector[Finding]
+    boundsFindings: Vector[Finding],
+    dataTables: Vector[RecordFacts]
   )
 
   private def scanPart(parts: PartSource, path: String, streaming: Boolean): XLResult[SheetScan] =
@@ -678,13 +710,28 @@ object WorkbookLint:
           XmlUtil.getAttrOpt(e, attr).toList.flatMap(refBoundsFindings(part, e.label, attr, _))
         }
       }
-    SheetScan(root.label, mainChildLabelsOf(root), captures, bounds)
+    val dataTables = nestedElems(root, "sheetData", "row")
+      .flatMap(childElems(_, "c"))
+      .foldLeft(Vector.empty[RecordFacts])((acc, cell) => observeCell(acc, domCellObs(cell)))
+    SheetScan(root.label, mainChildLabelsOf(root), captures, bounds, dataTables)
+
+  /** One `<c>` element's data-table facts (DOM side of the parity pair). */
+  private def domCellObs(cell: Elem): CellObs =
+    val formula = childElems(cell, "f").headOption
+    CellObs(
+      ref = XmlUtil.getAttrOpt(cell, "r").flatMap(ARef.parse(_).toOption),
+      record =
+        formula.flatMap(f => dataTableKindOf(XmlUtil.getAttrOpt(f, "t"), XmlUtil.getAttrOpt(f, _))),
+      hasFormula = formula.isDefined,
+      hasValue = childElems(cell, "v").nonEmpty || childElems(cell, "is").nonEmpty
+    )
 
   /**
    * SAX scanner: O(1) memory in the row count — state is the top-level label list, the captured
-   * r:id elements, and any bounds findings; sheetData rows/cells pass through untouched (they carry
-   * `r`, never `ref`/`sqref`). No early abort: the full parse also validates well-formedness,
-   * matching the DOM mode's Left on malformed parts.
+   * r:id elements, any bounds findings, and one [[RecordFacts]] per data-table record (counters
+   * only, never a materialized interior); sheetData rows/cells are otherwise folded and dropped. No
+   * early abort: the full parse also validates well-formedness, matching the DOM mode's Left on
+   * malformed parts.
    */
   private object SheetStreamScanner:
     import org.xml.sax.{Attributes, InputSource, SAXException}
@@ -712,9 +759,13 @@ object WorkbookLint:
       private val labels = Vector.newBuilder[(String, Int)]
       private val captures = Vector.newBuilder[CapturedRef]
       private val bounds = Vector.newBuilder[Finding]
+      private var dataTables: Vector[RecordFacts] = Vector.empty
+      private var cell: Option[CellObs] = None
 
       def result: Option[SheetScan] =
-        rootLabel.map(SheetScan(_, labels.result(), captures.result(), bounds.result()))
+        rootLabel.map(
+          SheetScan(_, labels.result(), captures.result(), bounds.result(), dataTables)
+        )
 
       override def startElement(
         uri: String,
@@ -733,6 +784,30 @@ object WorkbookLint:
           if (parent == "hyperlinks" && label == "hyperlink") ||
             (parent == "tableParts" && label == "tablePart")
           then captures += CapturedRef(label, relIdIn(atts))
+        // GH-442: sheetData cells — <c> sits at depth 3 under <row>, its <f>/<v> at depth 4.
+        // The grandparent check keeps the observed set identical to the DOM walk's sheetData/row/c.
+        if depth == 3 && label == "c" && parents.take(2) == List("row", "sheetData") then
+          cell = Some(
+            CellObs(
+              ref = Option(atts.getValue("", "r")).flatMap(ARef.parse(_).toOption),
+              record = None,
+              hasFormula = false,
+              hasValue = false
+            )
+          )
+        else if depth == 4 && parents.headOption.contains("c") then
+          cell = cell.map { open =>
+            if label == "f" && !open.hasFormula then
+              open.copy(
+                record = dataTableKindOf(
+                  Option(atts.getValue("", "t")),
+                  name => Option(atts.getValue("", name))
+                ),
+                hasFormula = true
+              )
+            else if label == "v" || label == "is" then open.copy(hasValue = true)
+            else open
+          }
         refAttrNames.foreach { attr =>
           Option(atts.getValue("", attr)).foreach { value =>
             bounds ++= refBoundsFindings(part, label, attr, value)
@@ -742,11 +817,162 @@ object WorkbookLint:
         depth += 1
 
       override def endElement(uri: String, localName: String, qName: String): Unit =
+        val label = if localName.nonEmpty then localName else qName
         parents = parents.drop(1)
         depth -= 1
+        if depth == 3 && label == "c" then
+          cell.foreach(obs => dataTables = observeCell(dataTables, obs))
+          cell = None
 
       private def relIdIn(atts: Attributes): Option[String] =
         Option(atts.getValue(XmlUtil.nsRelationships, "id"))
+
+  // ===== Data-table record integrity (GH-442) =====
+
+  /**
+   * One `<c>` element's data-table-relevant facts, produced identically by both scanners and folded
+   * in DOCUMENT ORDER so each mode sees the same record state at every cell.
+   */
+  private final case class CellObs(
+    ref: Option[ARef],
+    record: Option[FormulaKind.DataTable],
+    hasFormula: Boolean,
+    hasValue: Boolean
+  )
+
+  /**
+   * Accumulated facts for one data-table record, keyed by the record's own `ref`. Every field is a
+   * counter: the interior is never materialized, so a crafted `ref="B2:XFD1048576"` (~1.7e10 cells)
+   * costs the same as a 3x2 sensitivity grid.
+   */
+  private final case class RecordFacts(
+    kind: FormulaKind.DataTable,
+    cornerRecord: Boolean,
+    cachedCells: Long,
+    tornFirst: Option[ARef],
+    tornCells: Long
+  )
+
+  /** The `<f>` attributes as a data-table record, via the shared CT_CellFormula codec (GH-430). */
+  private def dataTableKindOf(
+    t: Option[String],
+    get: String => Option[String]
+  ): Option[FormulaKind.DataTable] =
+    FormulaKindCodec.fromAttrs(t, get).collect { case dt: FormulaKind.DataTable => dt }
+
+  /**
+   * Fold one cell into a sheet part's record state.
+   *
+   * A record is registered when its `<f>` is first seen, so interior accounting covers the cells at
+   * or after it. Both the corner-only dialect Excel writes and the every-interior dialect found in
+   * the field put a record on the ref's top-left, which is the first interior cell in document
+   * order; a ref whose top-left carries no record is reported torn, so no tear can hide in the
+   * cells that streamed before registration.
+   */
+  private def observeCell(facts: Vector[RecordFacts], obs: CellObs): Vector[RecordFacts] =
+    val registered = obs.record match
+      case Some(dt) if !facts.exists(_.kind.ref == dt.ref) =>
+        facts :+ RecordFacts(dt, obs.ref.contains(dt.ref.start), 0L, None, 0L)
+      case Some(dt) =>
+        facts.map(f =>
+          if f.kind.ref == dt.ref && obs.ref.contains(dt.ref.start) then f.copy(cornerRecord = true)
+          else f
+        )
+      case None => facts
+    // A `<c>` without `r` is positionally addressed; lint is not a syntax validator and skips it.
+    obs.ref match
+      case None => registered
+      case Some(cellRef) =>
+        registered.map { f =>
+          if !f.kind.ref.contains(cellRef) then f
+          else if obs.record.isEmpty && obs.hasFormula then
+            f.copy(tornFirst = f.tornFirst.orElse(Some(cellRef)), tornCells = f.tornCells + 1)
+          else if obs.hasValue then f.copy(cachedCells = f.cachedCells + 1)
+          else f
+        }
+
+  /**
+   * Findings for the records observed in one sheet part, in row-major record order.
+   *
+   * `data-table-torn` reports each way the grid stopped holding together. `data-table-unseeded`
+   * reports an interior that opens blank, and is suppressed for records seeding cannot fix — the
+   * skip conditions of `DataTableSeeder` (del flags, no room for the corner/axes, missing inputs) —
+   * so the finding never advises seeding a record that cannot be seeded.
+   */
+  private def dataTableFindings(
+    part: String,
+    facts: Vector[RecordFacts],
+    autoNoTable: Boolean
+  ): Vector[Finding] =
+    facts
+      .sortBy(f => (f.kind.ref.start.row.index0, f.kind.ref.start.col.index0))
+      .flatMap { f =>
+        val locator = recordLocator(f.kind)
+        tornMessages(f).map(Finding(part, LintCategory.DataTableTorn, locator, _)) ++
+          unseededMessage(f, autoNoTable)
+            .map(Finding(part, LintCategory.DataTableUnseeded, locator, _))
+      }
+
+  /**
+   * The record's `<f>` element as the file carries it (bare ref on a 1x1 interior, per the codec).
+   */
+  private def recordLocator(kind: FormulaKind.DataTable): String =
+    val refA1 = if kind.ref.start == kind.ref.end then kind.ref.start.toA1 else kind.ref.toA1
+    s"""<f t="dataTable" ref="$refA1">"""
+
+  /** Room for the corner formula one-up-one-left plus both axes (the GH-419 V1 geometry). */
+  private def hasRoom(kind: FormulaKind.DataTable): Boolean =
+    kind.ref.start.row.index0 >= 1 && kind.ref.start.col.index0 >= 1
+
+  /** Mirrors the skip conditions of `DataTableSeeder` — a record it skips cannot be seeded. */
+  private def seedable(kind: FormulaKind.DataTable): Boolean =
+    !kind.del1 && !kind.del2 && hasRoom(kind) &&
+      kind.r1.isDefined && (!kind.dt2D || kind.r2.isDefined)
+
+  private def tornMessages(f: RecordFacts): Vector[String] =
+    val ref = f.kind.ref.toA1
+    val deleted = Vector(
+      Option.when(f.kind.del1)("del1=\"1\""),
+      Option.when(f.kind.del2)("del2=\"1\"")
+    ).flatten
+    // A del flag legitimately omits its input cell, so only an un-flagged absence is a loss.
+    val missing = Vector(
+      Option.when(f.kind.r1.isEmpty && !f.kind.del1)("r1"),
+      Option.when(f.kind.dt2D && f.kind.r2.isEmpty && !f.kind.del2)("r2")
+    ).flatten
+    Vector(
+      Option.when(!hasRoom(f.kind))(
+        s"Data table record $ref leaves no room for its corner formula and axes (an interior " +
+          "cannot start in row 1 or column A) — its axis row/column was structurally removed and " +
+          "the grid can no longer recalculate"
+      ),
+      Option.when(deleted.nonEmpty)(
+        s"Data table record $ref lost an input cell to a structural delete " +
+          s"(${deleted.mkString(", ")}) — the grid can no longer recalculate"
+      ),
+      Option.when(missing.nonEmpty)(
+        s"Data table record $ref is missing its required input reference " +
+          s"(${missing.mkString(", ")}) — the grid can no longer recalculate"
+      ),
+      Option.when(!f.cornerRecord)(
+        s"Data table record $ref has no record cell at its top-left ${f.kind.ref.start.toA1} — " +
+          "the corner record was overwritten and the grid is torn"
+      ),
+      Option.when(f.tornCells > 0)(
+        s"Data table record $ref has ${f.tornCells} formula cell(s) inside its interior (first " +
+          s"${f.tornFirst.fold("unknown")(_.toA1)}) — a formula overwrite tore the record grid; " +
+          "Excel refuses this edit (cannot change part of a data table)"
+      )
+    ).flatten
+
+  private def unseededMessage(f: RecordFacts, autoNoTable: Boolean): Option[String] =
+    val area = f.kind.ref.width.toLong * f.kind.ref.height.toLong
+    val uncached = math.max(0L, area - f.cachedCells)
+    Option.when(autoNoTable && seedable(f.kind) && uncached > 0)(
+      s"Data table record ${f.kind.ref.toA1} has $uncached of $area interior cell(s) with no " +
+        "cached value and the book is calcMode=\"autoNoTable\", which never recomputes data " +
+        "tables — the table opens BLANK (seed it with: xl recalc --tables)"
+    )
 
   // ===== ref/sqref bounds check (GH-428 corruption class) =====
 

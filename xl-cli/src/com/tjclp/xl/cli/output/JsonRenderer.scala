@@ -310,7 +310,7 @@ object JsonRenderer:
     val formulaField = cell.value match
       case CellValue.Formula(expr, _, kind) =>
         val kindField = kind match
-          case FormulaKind.Normal => ""
+          case _: FormulaKind.Normal => ""
           case _: FormulaKind.ArrayFormula => """, "formulaKind": "array""""
           case _: FormulaKind.DataTable => """, "formulaKind": "dataTable""""
         s""", "formula": ${escapeJsonString(displayExpression(expr))}$kindField"""

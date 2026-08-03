@@ -234,14 +234,23 @@ trait FunctionSpecsBase:
     value match
       case CellValue.Number(n) => n
       case CellValue.Bool(b) => ArrayArithmetic.boolToNumeric(b)
+      case CellValue.DateTime(dt) => BigDecimal(CellValue.dateTimeToExcelSerial(dt))
       case CellValue.Formula(_, Some(cached), _) => coerceToNumeric(cached)
       case _ => BigDecimal(0)
 
-  /** Extract numeric value from CellValue, handling formulas with cached results. */
+  /**
+   * Extract numeric value from CellValue, handling formulas with cached results.
+   *
+   * GH-449: a DateTime cell yields its Excel serial — dates ARE numbers in Excel's aggregate
+   * positions (=MIN/MAX over a date column are the earliest/latest date, =COUNT counts them,
+   * =SUM sums the serials), mirroring TExprDecoders.decodeNumeric. Booleans stay skipped: Excel's
+   * range aggregates ignore logicals, which is why this is not simply coerceToNumeric.
+   */
   protected def extractNumericValue(value: CellValue): Option[BigDecimal] =
     value match
       case CellValue.Number(n) => Some(n)
-      case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
+      case CellValue.DateTime(dt) => Some(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
+      case CellValue.Formula(_, Some(cached), _) => extractNumericValue(cached)
       case _ => None
 
   /** Extract the anchor ARef from a reference expression (cell ref, or the start of a range). */
