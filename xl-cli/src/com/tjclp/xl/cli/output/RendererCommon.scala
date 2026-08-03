@@ -34,7 +34,7 @@ object RendererCommon:
   def formulaDisplay(expr: String, kind: FormulaKind): String =
     val withEquals = if expr.startsWith("=") then expr else s"=$expr"
     kind match
-      case FormulaKind.Normal => withEquals
+      case _: FormulaKind.Normal => withEquals
       case _ => s"{$withEquals}"
 
   /**

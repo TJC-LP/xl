@@ -44,6 +44,24 @@ class FormulaRecordPreservationSpec extends ScalaCheckSuite:
       |  </sheetData>
       |</worksheet>""".stripMargin
 
+  /**
+   * GH-435: plain formulas carrying the two calc flags CT_CellFormula allows anywhere — Excel's
+   * volatile `ca`, LibreOffice's explicit `aca="false"` noise (the `formulas-lo.xlsx` shape), both
+   * flags at once, and a formula carrying neither.
+   */
+  private val plainFlagsSheetXml =
+    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      |  <sheetData>
+      |    <row r="1">
+      |      <c r="A1" t="n"><f ca="1">NOW()</f><v>45000</v></c>
+      |      <c r="B1" t="n"><f aca="1" ca="1">RAND()</f><v>0.5</v></c>
+      |      <c r="C1" t="n"><f aca="false">A1+1</f><v>45001</v></c>
+      |      <c r="D1" t="n"><f>A1+2</f><v>45002</v></c>
+      |    </row>
+      |  </sheetData>
+      |</worksheet>""".stripMargin
+
   List(
     "ScalaXml" -> WriterConfig(backend = XmlBackend.ScalaXml),
     "SaxStax" -> WriterConfig(backend = XmlBackend.SaxStax)
@@ -227,6 +245,128 @@ class FormulaRecordPreservationSpec extends ScalaCheckSuite:
       valueAt(parsed, "F1"),
       CellValue.Formula("F9+1", Some(CellValue.Number(BigDecimal(6))))
     )
+  }
+
+  test("GH-435: the DOM reader models ca/aca on plain formulas") {
+    val worksheet = XML.loadString(
+      plainFlagsSheetXml.linesIterator.filterNot(_.startsWith("<?xml")).mkString("\n")
+    )
+    val parsed = OoxmlWorksheet.fromXml(worksheet).fold(error => fail(error), identity)
+
+    assertEquals(
+      valueAt(parsed, "A1"),
+      CellValue.Formula(
+        "NOW()",
+        Some(CellValue.Number(BigDecimal(45000))),
+        FormulaKind.Normal(ca = true)
+      )
+    )
+    assertEquals(
+      valueAt(parsed, "B1"),
+      CellValue.Formula(
+        "RAND()",
+        Some(CellValue.Number(BigDecimal("0.5"))),
+        FormulaKind.Normal(aca = true, ca = true)
+      )
+    )
+    // LibreOffice's explicit-false noise reads as the schema default, like every other record attr.
+    assertEquals(
+      valueAt(parsed, "C1"),
+      CellValue.Formula("A1+1", Some(CellValue.Number(BigDecimal(45001))))
+    )
+    assertEquals(
+      valueAt(parsed, "D1"),
+      CellValue.Formula("A1+2", Some(CellValue.Number(BigDecimal(45002))))
+    )
+  }
+
+  List(
+    "ScalaXml" -> WriterConfig(backend = XmlBackend.ScalaXml),
+    "SaxStax" -> WriterConfig(backend = XmlBackend.SaxStax)
+  ).foreach { case (backendName, config) =>
+    test(s"GH-435: dirty regeneration preserves plain-formula ca/aca ($backendName)") {
+      val workbook = XlsxReader
+        .readFromBytes(rawXlsx(plainFlagsSheetXml))
+        .fold(err => fail(err.message), identity)
+      val sheet = workbook.sheets.headOption.getOrElse(fail("missing Sheet1"))
+      val edited = workbook.put(sheet.put(ref"A5", CellValue.Text("dirty")))
+      val outputPath = Files.createTempFile("xl-plain-flags-", ".xlsx")
+      XlsxWriter.writeWith(edited, outputPath, config).fold(err => fail(err.message), identity)
+      val output = Files.readAllBytes(outputPath)
+      Files.deleteIfExists(outputPath)
+      val sheetXml = zipEntry(output, "xl/worksheets/sheet1.xml")
+
+      assert(sheetXml.contains("""<f ca="1">NOW()</f>"""), s"volatile ca dropped: $sheetXml")
+      assert(
+        sheetXml.contains("""<f aca="1" ca="1">RAND()</f>"""),
+        s"aca/ca dropped or out of schema order: $sheetXml"
+      )
+      // Flags normalize: an explicit false is the schema default and re-emits omitted, and a
+      // formula that carried neither flag gains nothing.
+      assert(sheetXml.contains("""<f>A1+1</f>"""), s"explicit-false formula degraded: $sheetXml")
+      assert(sheetXml.contains("""<f>A1+2</f>"""), s"unflagged formula gained attrs: $sheetXml")
+
+      // Semantic law: the flags survive the re-read too.
+      val reread = XlsxReader.readFromBytes(output).fold(err => fail(err.message), identity)
+      val rereadSheet = reread.sheets.headOption.getOrElse(fail("missing reread Sheet1"))
+      rereadSheet(ref"A1").value match
+        case CellValue.Formula(expr, _, kind) =>
+          assertEquals(expr, "NOW()")
+          assertEquals(kind, FormulaKind.Normal(ca = true))
+        case other => fail(s"A1 lost formula-hood on re-read: $other")
+    }
+  }
+
+  test("GH-435: formulas-lo.xlsx keeps every formula through dirty regeneration") {
+    val in = TestFixtures.copyToTemp("formulas-lo.xlsx")
+    val wb = XlsxReader.read(in).fold(err => fail(err.message), identity)
+    val calc = wb.sheets
+      .find(_.name == SheetName.unsafe("Calc"))
+      .getOrElse(fail("missing Calc sheet"))
+    val out = Files.createTempFile("xl-lo-aca-", ".xlsx")
+    try
+      XlsxWriter
+        .write(wb.put(calc.put(ref"C9", CellValue.Text("dirty"))), out)
+        .fold(err => fail(err.message), identity)
+      val sheetXml = zipEntry(Files.readAllBytes(out), "xl/worksheets/sheet2.xml")
+      assert(sheetXml.contains("<f>SUM(Data!A1:A5)</f>"), s"LO formula lost: $sheetXml")
+      assert(
+        !sheetXml.contains("aca="),
+        s"explicit-false noise must normalize away, not re-emit: $sheetXml"
+      )
+    finally Files.deleteIfExists(out)
+  }
+
+  List(
+    "ScalaXml" -> WriterConfig(backend = XmlBackend.ScalaXml),
+    "SaxStax" -> WriterConfig(backend = XmlBackend.SaxStax)
+  ).foreach { case (backendName, config) =>
+    test(s"GH-435: a del1-flagged data-table record round-trips write -> read ($backendName)") {
+      val kind: FormulaKind.DataTable = FormulaKind.DataTable(
+        CellRange.parse("F2:G2").fold(fail(_), identity),
+        dt2D = true,
+        dtr = false,
+        r1 = None,
+        r2 = Some(cellRef("A2")),
+        del1 = true
+      )
+      val value = CellValue.dataTable(kind, Some(CellValue.Number(BigDecimal(42))))
+      val wb = Workbook(Sheet(SheetName.unsafe("Torn")).put(ref"F2", value))
+      val out = Files.createTempFile("xl-record-del-", ".xlsx")
+      try
+        XlsxWriter.writeWith(wb, out, config).fold(err => fail(err.message), identity)
+        val sheetXml = zipEntry(Files.readAllBytes(out), "xl/worksheets/sheet1.xml")
+        assert(
+          sheetXml.contains(
+            """<f t="dataTable" ref="F2:G2" dt2D="1" dtr="0" del1="1" r2="A2"/>"""
+          ),
+          s"del-flagged record not emitted in schema order: $sheetXml"
+        )
+        val reread = XlsxReader.read(out).fold(err => fail(err.message), identity)
+        val sheet = reread.sheets.headOption.getOrElse(fail("missing Torn sheet"))
+        assertEquals(sheet(ref"F2").value, value)
+      finally Files.deleteIfExists(out)
+    }
   }
 
   // Exact-kind round-trip law: unlike WorkbookEquivalence (text-only formula compare), this

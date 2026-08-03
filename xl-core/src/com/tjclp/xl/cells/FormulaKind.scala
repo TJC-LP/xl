@@ -5,17 +5,23 @@ import com.tjclp.xl.addressing.{ARef, CellRange}
 /**
  * OOXML CT_CellFormula record kind for non-shared formula records (GH-430).
  *
- * `Normal` is a plain `<f>expr</f>`. The other kinds carry the record attributes that must survive
- * read -> model -> write on exactly the cells whose XML carried them (per-cell faithfulness, no
- * group inference). Shared formulas stay expanded per GH-370 and never appear here.
+ * `Normal` is a plain `<f>expr</f>` plus the calc flags any formula may carry; the other kinds add
+ * the attributes of a real record. All of them must survive read -> model -> write on exactly the
+ * cells whose XML carried them (per-cell faithfulness, no group inference). Shared formulas stay
+ * expanded per GH-370 and never appear here.
  *
  * Note: the CSE case is named `ArrayFormula`, never `Array` — this enum is exported through
  * `com.tjclp.xl.api` and a member named `Array` would shadow `scala.Array` at wildcard-import
  * sites.
  */
 enum FormulaKind derives CanEqual:
-  /** Plain `<f>expr</f>`. */
-  case Normal
+  /**
+   * Plain `<f>expr</f>`, carrying the two calc flags CT_CellFormula allows on any formula: `ca`
+   * ("calculate cell" — Excel's volatile marking) and `aca` ("always calculate array"). Flags
+   * normalize like every other record attr, so LibreOffice's explicit `aca="false"` reads as false
+   * and re-emits omitted — the schema default (GH-435).
+   */
+  case Normal(aca: Boolean = false, ca: Boolean = false)
 
   /** `<f t="array" ref="..">expr</f>` — legacy CSE anchor. */
   case ArrayFormula(ref: CellRange, aca: Boolean = false, ca: Boolean = false)
