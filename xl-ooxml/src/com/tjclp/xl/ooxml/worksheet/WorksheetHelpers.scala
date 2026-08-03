@@ -16,6 +16,7 @@ import com.tjclp.xl.sheets.{
   SheetView
 }
 import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.units.StyleId
 
 // Default namespaces for generated worksheets. Real files capture the original scope/attributes to
 // avoid redundant declarations and preserve mc/x14/xr bindings from the source sheet.
@@ -417,28 +418,46 @@ private[ooxml] def groupConsecutiveColumns(
  * @return
  *   Some(cols element) if there are column properties, None otherwise
  */
-private[ooxml] def buildColsElement(sheet: Sheet): Option[Elem] =
+private[ooxml] def buildColsElement(
+  sheet: Sheet,
+  styleRemapping: Map[Int, Int] = Map.empty
+): Option[Elem] =
   val props = sheet.columnProperties
   if props.isEmpty then None
   else
     val spans = groupConsecutiveColumns(props)
     val colElems = spans.map { case (minCol, maxCol, p) =>
-      // Build attribute sequence (only include non-default values)
+      // Build attribute sequence (only include non-default values).
+      // Attribute order matches Excel's own writer: min, max, width, style, customWidth, ...
       val attrs = Seq.newBuilder[(String, String)]
       attrs += ("min" -> (minCol.index0 + 1).toString) // OOXML is 1-based
       attrs += ("max" -> (maxCol.index0 + 1).toString)
-      p.width.foreach { w =>
-        attrs += ("width" -> w.toString)
-        attrs += ("customWidth" -> "1")
-      }
+      p.width.foreach(w => attrs += ("width" -> w.toString))
+      // GH-445: column-default style, remapped from the sheet-local id to the workbook xf index
+      // exactly like cell styleIds. Index 0 is the workbook default — omitted, same as cells.
+      remappedStyleAttr(p.styleId, styleRemapping).foreach(s => attrs += ("style" -> s))
+      if p.width.isDefined then attrs += ("customWidth" -> "1")
       if p.hidden then attrs += ("hidden" -> "1")
       p.outlineLevel.foreach(l => attrs += ("outlineLevel" -> l.toString))
       if p.collapsed then attrs += ("collapsed" -> "1")
-      // Note: styleId would need remapping to workbook-level index (deferred)
 
       XmlUtil.elemOrdered("col", attrs.result()*)( /* no children */ )
     }
     Some(XmlUtil.elem("cols")(colElems*))
+
+/**
+ * Remap a sheet-local [[StyleId]] to its workbook-level xf index for `<col style=>` / `<row s=>`
+ * emission (GH-445). Returns None for the workbook default (index 0) or an unmapped id — the
+ * attribute is omitted rather than written as a redundant "0", mirroring the cell path.
+ */
+private[ooxml] def remappedStyleAttr(
+  styleId: Option[StyleId],
+  styleRemapping: Map[Int, Int]
+): Option[String] =
+  styleId
+    .map(sid => styleRemapping.getOrElse(sid.value, 0))
+    .filter(_ > 0)
+    .map(_.toString)
 
 // ===== Sheet view authoring (GH-258) =====
 // Shared by the DOM writer (OoxmlWorksheet) and the streaming writer (DirectSaxEmitter, GH-265)
@@ -495,21 +514,36 @@ private def applyViewSettingsOverride(
 
 /** Set the modeled view attributes on a single `<sheetView>` element. */
 private def applyViewAttrs(sheetView: Elem, view: SheetView): Elem =
+  // set-or-remove: the reader always models an in-range/legal source value for these, so a
+  // None here means "not set" and any stale source attribute must go (the zoomScale precedent)
+  def setOrRemove(e: Elem, name: String, value: Option[String]): Elem =
+    value match
+      case Some(v) => e % new UnprefixedAttribute(name, v, Null)
+      case None => e.copy(attributes = e.attributes.remove(name))
+
   val withGrid = sheetView % new UnprefixedAttribute(
     "showGridLines",
     if view.showGridLines then "1" else "0",
     Null
   )
-  val withZoom = view.zoomScale match
-    case Some(zoom) => withGrid % new UnprefixedAttribute("zoomScale", zoom.toString, Null)
-    case None => withGrid.copy(attributes = withGrid.attributes.remove("zoomScale"))
+  val withZoom = setOrRemove(withGrid, "zoomScale", view.zoomScale.map(_.toString))
+  // GH-446: view mode, per-mode zoom memories, and scroll position
+  val withMode = setOrRemove(withZoom, "view", view.view)
+  val withZoomNormal =
+    setOrRemove(withMode, "zoomScaleNormal", view.zoomScaleNormal.map(_.toString))
+  val withZoomLayout = setOrRemove(
+    withZoomNormal,
+    "zoomScaleSheetLayoutView",
+    view.zoomScaleSheetLayoutView.map(_.toString)
+  )
+  val withTopLeft = setOrRemove(withZoomLayout, "topLeftCell", view.topLeftCell.map(_.toA1))
   view.tabSelected match
     case Some(selected) =>
-      withZoom % new UnprefixedAttribute("tabSelected", if selected then "1" else "0", Null)
+      withTopLeft % new UnprefixedAttribute("tabSelected", if selected then "1" else "0", Null)
     // Three-valued (GH-372): None means "not modeled" — a preserved tabSelected attribute
     // must ride through, so it is never removed here (unlike zoomScale, where the reader
     // always models an in-range source value)
-    case None => withZoom
+    case None => withTopLeft
 
 /**
  * Apply freeze pane override to sheetViews XML.
@@ -638,9 +672,13 @@ private[ooxml] def parseAutoFilterRef(e: Elem): Option[CellRange] =
 private[ooxml] def mergeSheetFormatPrElem(
   existing: Option[Elem],
   defaultColumnWidth: Option[Double],
-  defaultRowHeight: Option[Double]
+  defaultRowHeight: Option[Double],
+  maxRowOutline: Int = 0,
+  maxColOutline: Int = 0
 ): Option[Elem] =
-  if defaultColumnWidth.isEmpty && defaultRowHeight.isEmpty then existing
+  if defaultColumnWidth.isEmpty && defaultRowHeight.isEmpty &&
+    maxRowOutline == 0 && maxColOutline == 0
+  then existing
   else
     def attrDouble(e: Elem, key: String): Option[Double] =
       Option(e \@ key).filter(_.nonEmpty).flatMap(_.toDoubleOption)
@@ -658,11 +696,30 @@ private[ooxml] def mergeSheetFormatPrElem(
             Some("1")
           )
         case None => withWidth
+    // GH-448: the outline summary attributes Excel stamps when any row/col carries an
+    // outlineLevel. Set-or-remove: the reader models outline levels on every row/col, so the
+    // recomputed max IS ground truth — after an ungroup the stale summary attr must go too.
+    val withRowOutline = setOrRemoveAttr(
+      withHeight,
+      "outlineLevelRow",
+      Option.when(maxRowOutline > 0)(maxRowOutline.toString)
+    )
+    val withColOutline = setOrRemoveAttr(
+      withRowOutline,
+      "outlineLevelCol",
+      Option.when(maxColOutline > 0)(maxColOutline.toString)
+    )
     val withRequiredHeight =
-      if existing.isEmpty && (withHeight \@ "defaultRowHeight").isEmpty then
-        setOrRemoveAttr(withHeight, "defaultRowHeight", Some("15"))
-      else withHeight
+      if existing.isEmpty && (withColOutline \@ "defaultRowHeight").isEmpty then
+        setOrRemoveAttr(withColOutline, "defaultRowHeight", Some("15"))
+      else withColOutline
     Some(withRequiredHeight)
+
+/** Max row/col outline levels of a sheet's domain properties (0 = no outlining) — GH-448. */
+private[ooxml] def sheetOutlineMaxes(sheet: Sheet): (Int, Int) =
+  val rowMax = sheet.rowProperties.values.flatMap(_.outlineLevel).maxOption.getOrElse(0)
+  val colMax = sheet.columnProperties.values.flatMap(_.outlineLevel).maxOption.getOrElse(0)
+  (rowMax, colMax)
 
 // ===== Print setup authoring (GH-259, GH-266) =====
 // PageSetup is the typed model for <pageMargins>, <pageSetup>, <headerFooter>, and the
@@ -860,7 +917,16 @@ private def stripFitToPage(existing: Option[Elem]): Option[Elem] =
  * Domain properties override existing row attributes (if any). This allows setting row height,
  * hidden state, and outline level from the domain model.
  */
-private[ooxml] def applyDomainRowProps(row: OoxmlRow, props: RowProperties): OoxmlRow =
+private[ooxml] def applyDomainRowProps(
+  row: OoxmlRow,
+  props: RowProperties,
+  styleRemapping: Map[Int, Int] = Map.empty
+): OoxmlRow =
+  // GH-445: row-default style, remapped like cell styleIds. Overlay-when-defined (the
+  // tabSelected/GH-372 precedent): a None styleId leaves any preserved `s=` attribute
+  // untouched, so source-backed rows keep their row-level style unless the domain sets one.
+  val remappedStyle =
+    props.styleId.map(sid => styleRemapping.getOrElse(sid.value, 0)).filter(_ > 0)
   row.copy(
     // A RowProperties entry is authoritative for the fields emitted here. None actively clears
     // optional source attributes; other preserved row metadata remains intact via case-class copy.
@@ -868,6 +934,7 @@ private[ooxml] def applyDomainRowProps(row: OoxmlRow, props: RowProperties): Oox
     customHeight = props.height.isDefined,
     hidden = props.hidden, // Domain always wins (allows unhide)
     outlineLevel = props.outlineLevel,
-    collapsed = props.collapsed // Domain always wins (allows uncollapse)
-    // Note: styleId would need remapping to workbook-level index (deferred)
+    collapsed = props.collapsed, // Domain always wins (allows uncollapse)
+    style = remappedStyle.orElse(row.style),
+    customFormat = row.customFormat || remappedStyle.isDefined
   )

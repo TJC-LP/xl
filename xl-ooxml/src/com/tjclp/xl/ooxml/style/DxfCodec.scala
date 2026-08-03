@@ -243,11 +243,9 @@ object DxfCodec:
   private[ooxml] def colorToXml(color: Color): Elem = color match
     case Color.Rgb(argb) => elem("color", "rgb" -> f"$argb%08X")()
     case Color.Theme(slot, tint) =>
-      elem(
-        "color",
-        "theme" -> ColorHelpers.themeSlotToIndex(slot).toString,
-        "tint" -> tint.toString
-      )()
+      val attrs = Seq("theme" -> ColorHelpers.themeSlotToIndex(slot).toString) ++
+        OoxmlStyles.tintToken(tint).map("tint" -> _)
+      elem("color", attrs*)()
 
   /**
    * Excel-native dxf fill: solid via bare patternFill + bgColor (matches Excel's own cf writer).

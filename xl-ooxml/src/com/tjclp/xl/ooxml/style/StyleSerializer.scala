@@ -56,14 +56,7 @@ final case class OoxmlStyles(
      *   - Gray125 uses black foreground (0xFF000000) and silver background (0xFFC0C0C0)
      * DETERMINISTIC: Yes (immutable constant) ERROR CASES: None (compile-time constant)
      */
-    val defaultFills = Vector(
-      Fill.None,
-      Fill.Pattern(
-        foreground = Color.Rgb(0xff000000), // Black foreground
-        background = Color.Rgb(0xffc0c0c0), // Silver background
-        pattern = PatternType.Gray125
-      )
-    )
+    val defaultFills = Vector(Fill.None, OoxmlStyles.defaultGray125)
     // Deterministic deduplication preserving first occurrence order
     // Manual tracking ensures determinism while avoiding duplicate defaults
     val allFills = {
@@ -196,14 +189,7 @@ final case class OoxmlStyles(
       writer.endElement()
 
       // Fills (include defaults)
-      val defaultFills = Vector(
-        Fill.None,
-        Fill.Pattern(
-          foreground = Color.Rgb(0xff000000),
-          background = Color.Rgb(0xffc0c0c0),
-          pattern = PatternType.Gray125
-        )
-      )
+      val defaultFills = Vector(Fill.None, OoxmlStyles.defaultGray125)
       val allFills = {
         val builder = Vector.newBuilder[Fill]
         val seen = scala.collection.mutable.Set.empty[Fill]
@@ -290,7 +276,7 @@ final case class OoxmlStyles(
   private def fontToXml(font: Font): Elem =
     val children = Vector(
       Some(elem("name", "val" -> font.name)()),
-      Some(elem("sz", "val" -> font.sizePt.toString)()),
+      Some(elem("sz", "val" -> OoxmlStyles.fontSizeToken(font.sizePt))()),
       if font.bold then Some(elem("b")()) else None,
       if font.italic then Some(elem("i")()) else None,
       underlineToXml(font.underline),
@@ -317,13 +303,17 @@ final case class OoxmlStyles(
           )
         )
 
-      case Fill.Pattern(fg, bg, patternType) =>
-        elem("fill")(
-          elem("patternFill", "patternType" -> OoxmlStyles.patternTypeToken(patternType))(
-            colorToXml(fg).copy(label = "fgColor"), // Use colorToXml to preserve theme colors
-            colorToXml(bg).copy(label = "bgColor") // Use colorToXml to preserve theme colors
+      case fill @ Fill.Pattern(fg, bg, patternType) =>
+        // GH-448: the mandatory gray125 placeholder serializes bare, exactly as Excel writes it
+        if fill == OoxmlStyles.defaultGray125 then
+          elem("fill")(elem("patternFill", "patternType" -> "gray125")())
+        else
+          elem("fill")(
+            elem("patternFill", "patternType" -> OoxmlStyles.patternTypeToken(patternType))(
+              colorToXml(fg).copy(label = "fgColor"), // Use colorToXml to preserve theme colors
+              colorToXml(bg).copy(label = "bgColor") // Use colorToXml to preserve theme colors
+            )
           )
-        )
 
   private def borderToXml(border: Border): Elem =
     elem("border")(
@@ -347,7 +337,9 @@ final case class OoxmlStyles(
         elem("color", "rgb" -> f"$argb%08X")()
       case Color.Theme(slot, tint) =>
         val slotIdx = ColorHelpers.themeSlotToIndex(slot)
-        elem("color", "theme" -> slotIdx.toString, "tint" -> tint.toString)()
+        val attrs = Seq("theme" -> slotIdx.toString) ++
+          OoxmlStyles.tintToken(tint).map("tint" -> _)
+        elem("color", attrs*)()
 
   /**
    * Serialize alignment to XML element if non-default (ECMA-376 Part 1, section 18.8.1)
@@ -445,7 +437,7 @@ final case class OoxmlStyles(
     writer.endElement()
 
     writer.startElement("sz")
-    writer.writeAttribute("val", font.sizePt.toString)
+    writer.writeAttribute("val", OoxmlStyles.fontSizeToken(font.sizePt))
     writer.endElement()
 
     if font.bold then
@@ -482,15 +474,18 @@ final case class OoxmlStyles(
         writeColorAttributes(writer, color)
         writer.endElement()
         writer.endElement()
-      case Fill.Pattern(fg, bg, patternType) =>
+      case fill @ Fill.Pattern(fg, bg, patternType) =>
         writer.startElement("patternFill")
-        writer.writeAttribute("patternType", OoxmlStyles.patternTypeToken(patternType))
-        writer.startElement("fgColor")
-        writeColorAttributes(writer, fg)
-        writer.endElement()
-        writer.startElement("bgColor")
-        writeColorAttributes(writer, bg)
-        writer.endElement()
+        // GH-448: the mandatory gray125 placeholder serializes bare, exactly as Excel writes it
+        if fill == OoxmlStyles.defaultGray125 then writer.writeAttribute("patternType", "gray125")
+        else
+          writer.writeAttribute("patternType", OoxmlStyles.patternTypeToken(patternType))
+          writer.startElement("fgColor")
+          writeColorAttributes(writer, fg)
+          writer.endElement()
+          writer.startElement("bgColor")
+          writeColorAttributes(writer, bg)
+          writer.endElement()
         writer.endElement()
     writer.endElement()
 
@@ -522,9 +517,40 @@ final case class OoxmlStyles(
         writer.writeAttribute("rgb", f"$argb%08X")
       case Color.Theme(slot, tint) =>
         writer.writeAttribute("theme", ColorHelpers.themeSlotToIndex(slot).toString)
-        writer.writeAttribute("tint", tint.toString)
+        OoxmlStyles.tintToken(tint).foreach(writer.writeAttribute("tint", _))
 
 object OoxmlStyles:
+
+  /** Excel writes integral font sizes without a decimal point ("10", not "10.0") — GH-448. */
+  private[ooxml] def fontSizeToken(sizePt: Double): String =
+    if sizePt.isWhole then sizePt.toLong.toString else sizePt.toString
+
+  /**
+   * Excel's textual form for a theme tint (GH-448): omitted entirely when 0, otherwise up to 17
+   * significant digits of the exact binary value in plain notation (`0.79998168889431442`), never
+   * Java's shortest-round-trip form (`0.7999816888943144`). Both parse to the same Double; only the
+   * Excel form is byte-identical to Excel-authored files.
+   */
+  private[ooxml] def tintToken(tint: Double): Option[String] =
+    if tint == 0.0 then None
+    else
+      Some(
+        new java.math.BigDecimal(tint)
+          .round(new java.math.MathContext(17))
+          .stripTrailingZeros
+          .toPlainString
+      )
+
+  /**
+   * The mandatory fills[1] placeholder (ECMA-376 §18.8.21). Excel writes it BARE (`<patternFill
+   * patternType="gray125"/>`); the explicit black/silver colors here are the model-side identity
+   * only and are not serialized for this exact instance (GH-448).
+   */
+  private[ooxml] val defaultGray125: Fill = Fill.Pattern(
+    foreground = Color.Rgb(0xff000000),
+    background = Color.Rgb(0xffc0c0c0),
+    pattern = PatternType.Gray125
+  )
 
   /**
    * Canonical ST_BorderStyle token (ECMA-376 Part 1, §18.18.3) for each border style. Explicit

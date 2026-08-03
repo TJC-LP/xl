@@ -331,6 +331,84 @@ class SheetViewRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  // ===== GH-446: view mode, per-mode zooms, scroll position =====
+
+  test("GH-446: view mode + zoom variants + topLeftCell round-trip (write → read → equality)") {
+    val view = SheetView(
+      showGridLines = false,
+      zoomScale = Some(60),
+      view = Some("pageBreakPreview"),
+      zoomScaleNormal = Some(70),
+      zoomScaleSheetLayoutView = Some(85),
+      topLeftCell = Some(ref"A14")
+    )
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withViewSettings(view))
+    val (reread, out) = writeRead(wb)
+
+    val sheet = reread("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet.viewSettings, Some(view))
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("view=\"pageBreakPreview\""), s"view attr missing: $xml")
+    assert(xml.contains("zoomScale=\"60\""), s"zoomScale attr missing: $xml")
+    assert(xml.contains("zoomScaleNormal=\"70\""), s"zoomScaleNormal attr missing: $xml")
+    assert(
+      xml.contains("zoomScaleSheetLayoutView=\"85\""),
+      s"zoomScaleSheetLayoutView attr missing: $xml"
+    )
+    assert(xml.contains("topLeftCell=\"A14\""), s"topLeftCell attr missing: $xml")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-446: parseSheetView fires when ONLY view= is present") {
+    val src = rawWorksheetFixture(
+      """<sheetViews><sheetView view="pageBreakPreview" workbookViewId="0"/></sheetViews>"""
+    )
+    val wb = XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity)
+    val sheet = wb("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet.viewSettings, Some(SheetView(view = Some("pageBreakPreview"))))
+    Files.deleteIfExists(src)
+  }
+
+  test("GH-446: an unknown foreign view value stays unmodeled (rides preservation)") {
+    val src = rawWorksheetFixture(
+      """<sheetViews><sheetView view="weirdMode" workbookViewId="0"/></sheetViews>"""
+    )
+    val wb = XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity)
+    val sheet = wb("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet.viewSettings, None, "unknown view modes are outside the modeled subset")
+    Files.deleteIfExists(src)
+  }
+
+  test("GH-446: illegal view mode is rejected at construction") {
+    intercept[IllegalArgumentException](SheetView(view = Some("bogus")))
+    intercept[IllegalArgumentException](SheetView(zoomScaleNormal = Some(5)))
+    intercept[IllegalArgumentException](SheetView(zoomScaleSheetLayoutView = Some(500)))
+  }
+
+  test("GH-446: view mode + freeze pane share ONE sheetView (pane keeps its own topLeftCell)") {
+    val view = SheetView(
+      showGridLines = false,
+      view = Some("pageBreakPreview"),
+      zoomScaleSheetLayoutView = Some(60)
+    )
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1" -> "H", ref"A2" -> 1).freezeAt(ref"G13").withViewSettings(view)
+    )
+    val (reread, out) = writeRead(wb)
+    val sheet = reread("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet.viewSettings, Some(view))
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    val sheetViewCount = xml.sliding("<sheetView ".length).count(_ == "<sheetView ")
+    assertEquals(sheetViewCount, 1, s"expected one sheetView element: $xml")
+    assert(xml.contains("view=\"pageBreakPreview\""), s"view attr missing: $xml")
+    assert(xml.contains("xSplit=\"6\""), s"freeze xSplit missing: $xml")
+    assert(xml.contains("ySplit=\"12\""), s"freeze ySplit missing: $xml")
+    assert(xml.contains("topLeftCell=\"G13\""), s"pane topLeftCell missing: $xml")
+    Files.deleteIfExists(out)
+  }
+
   // ========== helpers ==========
 
   private def writeEntry(out: ZipOutputStream, name: String, content: String): Unit =

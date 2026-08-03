@@ -17,7 +17,8 @@ import com.tjclp.xl.ooxml.worksheet.{
   mergeAutoFilterElem,
   mergePageSetupElem,
   mergeSheetFormatPrElem,
-  mergeSheetPrElem
+  mergeSheetPrElem,
+  remappedStyleAttr
 }
 import java.util.Arrays
 
@@ -89,11 +90,21 @@ object DirectSaxEmitter:
       buildSheetViewsElem(None, sheet.freezePane, sheet.viewSettings).foreach(writer.writeElem)
 
       // GH-426: sheet-default row height / column width — the CT_Worksheet slot before <cols>
-      mergeSheetFormatPrElem(None, sheet.defaultColumnWidth, sheet.defaultRowHeight)
-        .foreach(writer.writeElem)
+      // GH-448: plus the outline summary attributes when any row/col carries an outlineLevel
+      locally {
+        val (maxRowOutline, maxColOutline) =
+          com.tjclp.xl.ooxml.worksheet.sheetOutlineMaxes(sheet)
+        mergeSheetFormatPrElem(
+          None,
+          sheet.defaultColumnWidth,
+          sheet.defaultRowHeight,
+          maxRowOutline,
+          maxColOutline
+        ).foreach(writer.writeElem)
+      }
 
       // Emit column definitions if any
-      emitCols(writer, sheet)
+      emitCols(writer, sheet, styleRemapping)
 
       // Emit sheetData directly from domain cells
       emitSheetData(writer, sheet, sst, styleRemapping, escapeFormulas)
@@ -154,7 +165,7 @@ object DirectSaxEmitter:
       "org.wartremover.warts.Var"
     )
   )
-  private def emitCols(writer: SaxWriter, sheet: Sheet): Unit =
+  private def emitCols(writer: SaxWriter, sheet: Sheet, styleRemapping: Map[Int, Int]): Unit =
     val colProps = sheet.columnProperties
     if colProps.nonEmpty then
       writer.startElement("cols")
@@ -168,10 +179,11 @@ object DirectSaxEmitter:
         writer.startElement("col")
         writer.writeAttribute("min", spanStart.index1.toString)
         writer.writeAttribute("max", spanEnd.index1.toString)
-        spanProps.width.foreach { w =>
-          writer.writeAttribute("width", w.toString)
-          writer.writeAttribute("customWidth", "1")
-        }
+        // Attribute order matches Excel's own writer: width, style, customWidth (GH-445)
+        spanProps.width.foreach(w => writer.writeAttribute("width", w.toString))
+        remappedStyleAttr(spanProps.styleId, styleRemapping)
+          .foreach(s => writer.writeAttribute("style", s))
+        if spanProps.width.isDefined then writer.writeAttribute("customWidth", "1")
         if spanProps.hidden then writer.writeAttribute("hidden", "1")
         spanProps.outlineLevel.foreach(l => writer.writeAttribute("outlineLevel", l.toString))
         if spanProps.collapsed then writer.writeAttribute("collapsed", "1")
@@ -269,8 +281,14 @@ object DirectSaxEmitter:
     writer.startElement("row")
     writer.writeAttribute("r", rowIdx.toString)
 
-    // Row properties
+    // Row properties (attribute order per ECMA/Excel: r, s, customFormat, ht, customHeight, ...)
     rowProps.foreach { props =>
+      // GH-445: row-default style, remapped like cell styleIds (the SAX path is source-free,
+      // so there is no preserved attribute to overlay — emit iff the domain sets one)
+      remappedStyleAttr(props.styleId, styleRemapping).foreach { s =>
+        writer.writeAttribute("s", s)
+        writer.writeAttribute("customFormat", "1")
+      }
       props.height.foreach(h => writer.writeAttribute("ht", h.toString))
       if props.height.isDefined then writer.writeAttribute("customHeight", "1")
       if props.hidden then writer.writeAttribute("hidden", "1")
@@ -519,8 +537,15 @@ object DirectSaxEmitter:
         writer.endElement()
       case Color.Theme(slot, tint) =>
         writer.startElement("color")
-        writer.writeAttribute("theme", slot.ordinal.toString)
-        writer.writeAttribute("tint", tint.toString)
+        // GH-448: themeSlotToIndex, NOT slot.ordinal — the ThemeSlot enum order swaps the
+        // dark/light pairs relative to OOXML theme indices, so ordinal wrote Dark2 as Light2
+        writer.writeAttribute(
+          "theme",
+          com.tjclp.xl.ooxml.style.ColorHelpers.themeSlotToIndex(slot).toString
+        )
+        com.tjclp.xl.ooxml.style.OoxmlStyles
+          .tintToken(tint)
+          .foreach(writer.writeAttribute("tint", _))
         writer.endElement()
     }
 

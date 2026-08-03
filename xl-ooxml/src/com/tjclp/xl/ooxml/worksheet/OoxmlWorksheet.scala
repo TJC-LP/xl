@@ -485,9 +485,9 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           // New row - create with defaults
           OoxmlRow(rowIdx, ooxmlCells)
 
-      // Apply domain row properties (height, hidden, outlineLevel, collapsed)
+      // Apply domain row properties (height, hidden, style, outlineLevel, collapsed)
       val rowWithDomainProps = sheet.rowProperties.get(Row.from1(rowIdx)) match
-        case Some(domainProps) => applyDomainRowProps(baseRow, domainProps)
+        case Some(domainProps) => applyDomainRowProps(baseRow, domainProps, styleRemapping)
         case None => baseRow
 
       rowWithDomainProps
@@ -504,7 +504,9 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           val withoutSourceCells = original.copy(cells = Seq.empty)
           sheet.rowProperties
             .get(Row.from1(original.rowIndex))
-            .fold(withoutSourceCells)(props => applyDomainRowProps(withoutSourceCells, props))
+            .fold(withoutSourceCells)(props =>
+              applyDomainRowProps(withoutSourceCells, props, styleRemapping)
+            )
         }
     }
 
@@ -514,7 +516,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     val emptyRowsFromDomain = sheet.rowProperties
       .filterNot { case (row, _) => existingRowIndices.contains(row.index1) }
       .map { case (row, props) =>
-        applyDomainRowProps(OoxmlRow(row.index1, Seq.empty), props)
+        applyDomainRowProps(OoxmlRow(row.index1, Seq.empty), props, styleRemapping)
       }
       .toSeq
 
@@ -540,7 +542,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
       else preservedMetadata.flatMap(_.legacyDrawing)
 
     // Generate cols from domain properties if not preserved
-    val generatedCols = buildColsElement(sheet)
+    val generatedCols = buildColsElement(sheet, styleRemapping)
 
     // Calculate actual dimension from all rows (recalculate to reflect any new cells)
     val calculatedDimension: Option[Elem] =
@@ -579,11 +581,16 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           ), // Use calculated dimension, fallback to preserved
           buildSheetViewsElem(preserved.sheetViews, sheet.freezePane, sheet.viewSettings),
           // GH-426: modeled sheet defaults overlay the preserved element (unmodeled attrs ride)
-          mergeSheetFormatPrElem(
-            preserved.sheetFormatPr,
-            sheet.defaultColumnWidth,
-            sheet.defaultRowHeight
-          ),
+          {
+            val (maxRowOutline, maxColOutline) = sheetOutlineMaxes(sheet)
+            mergeSheetFormatPrElem(
+              preserved.sheetFormatPr,
+              sheet.defaultColumnWidth,
+              sheet.defaultRowHeight,
+              maxRowOutline,
+              maxColOutline
+            )
+          },
           generatedCols.orElse(preserved.cols), // Prefer domain props over preserved XML
           condFmt.getOrElse(preserved.conditionalFormatting), // GH-136: planned slot wins
           dataValidations.getOrElse(preserved.dataValidations), // GH-375: planned slot wins
@@ -622,8 +629,16 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           dimension = calculatedDimension,
           sheetViews = buildSheetViewsElem(None, sheet.freezePane, sheet.viewSettings),
           // GH-426: a modeled default row height / column width materializes without source XML
-          sheetFormatPr =
-            mergeSheetFormatPrElem(None, sheet.defaultColumnWidth, sheet.defaultRowHeight),
+          sheetFormatPr = {
+            val (maxRowOutline, maxColOutline) = sheetOutlineMaxes(sheet)
+            mergeSheetFormatPrElem(
+              None,
+              sheet.defaultColumnWidth,
+              sheet.defaultRowHeight,
+              maxRowOutline,
+              maxColOutline
+            )
+          },
           cols = generatedCols,
           conditionalFormatting = condFmt.getOrElse(Seq.empty), // GH-136: fresh workbooks get cf
           dataValidations = dataValidations.flatten, // GH-375: fresh workbooks get validations

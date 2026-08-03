@@ -886,6 +886,38 @@ final case class Sheet(
   def getRowProperties(row: Row): RowProperties =
     rowProperties.getOrElse(row, RowProperties())
 
+  /**
+   * Set a column-default style (GH-445): cells in this column with no explicit style render with
+   * `style`, and cells typed into the column later inherit it — the `<col style=>` mechanism
+   * professional workbooks use for a sheet-wide body font without touching the Normal style.
+   *
+   * The style is interned into the sheet's [[StyleRegistry]]; other column properties (width,
+   * hidden, outline) already set on the column are preserved.
+   */
+  def withColumnStyle(col: Column, style: CellStyle): Sheet =
+    val (newRegistry, styleId) = styleRegistry.register(style)
+    copy(
+      styleRegistry = newRegistry,
+      columnProperties = columnProperties.updated(
+        col,
+        getColumnProperties(col).copy(styleId = Some(styleId))
+      )
+    )
+
+  /**
+   * Set a row-default style (GH-445): the `<row s= customFormat="1">` mechanism, used for
+   * full-width spacer and rule rows. Interns the style; other row properties are preserved.
+   */
+  def withRowStyle(row: Row, style: CellStyle): Sheet =
+    val (newRegistry, styleId) = styleRegistry.register(style)
+    copy(
+      styleRegistry = newRegistry,
+      rowProperties = rowProperties.updated(
+        row,
+        getRowProperties(row).copy(styleId = Some(styleId))
+      )
+    )
+
   /** Get all non-empty cells */
   def nonEmptyCells: Iterable[Cell] =
     cells.values.filter(_.nonEmpty)
