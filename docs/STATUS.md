@@ -1,12 +1,20 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-29 (0.18.0)
+**Last Updated**: 2026-08-03 (0.19.0)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.19.0** (2026-08-03):
+- ✅ **Column/row default styles** (#445) — `<col style=>` / `<row s= customFormat="1">` emit on both writer backends (StyleIndex-remapped like cell styleIds) AND parse back, so read→modify→write keeps source column styles; `Sheet.withColumnStyle`/`withRowStyle` author the sheet-wide-body-font-without-Normal mechanism
+- ✅ **Sheet view modes** (#446) — `SheetView.view` (normal/pageBreakPreview/pageLayout) + `zoomScaleNormal`/`zoomScaleSheetLayoutView`/`topLeftCell`, set-or-remove with foreign values riding preservation
+- ✅ **Excel-canonical XML forms** (#448) — integral `sz`, 17-sig-digit plain tints (`tint="0"` omitted), bare gray125, derived `outlineLevelRow/Col` summary attrs; **theme-index swap fixed** — SAX path + comments wrote Dark2 as Light2 via `slot.ordinal`
+- ✅ **DateTime arithmetic** (#449) — `=end-start` day counts, `=date+30` offsets, and MIN/MAX/COUNT/SUM over date columns evaluate via `dateTimeToExcelSerial` (the writer's conversion); result is a serial Number, booleans stay skipped in aggregates
+- ✅ **Data-table lints + `xl recalc --tables`** (#442) — `data-table-torn` (5 tear classes incl. del-flagged records) + `data-table-unseeded` (autoNoTable doctrine), DOM/SAX finding-identical, O(1) streaming; `recalc --tables` seeds after recalculation, default pinned-cache path byte-identical
+- ✅ **ca/aca + del1/del2 fidelity** (#435) — plain-formula calc flags on `FormulaKind.Normal(aca, ca)` survive every path (source-breaking: `FormulaKind.Normal()`); input-deleting structural edits keep the record del-flagged with caches intact
 
 **New in 0.18.0** (2026-07-29):
 - ✅ **Two-variable Data Table authoring** (#419) — `sheet.dataTable(range, rowInput, colInput)` authors native `<f t="dataTable">` records with autoNoTable-safe cache seeding (design-panel-verified against Excel fixtures); the house sensitivity engine is authorable

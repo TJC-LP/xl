@@ -7,8 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] "Canon" - 2026-08-03
+
+Tracker-zero release: the wave-21 epilogue (col/row default styles, sheet
+view modes, byte-canonical XML) plus a full sweep of everything that
+remained on the board — DateTime arithmetic, data-table tear/seed lints +
+`xl recalc --tables`, and the two deferred #430 fidelity halves.
+
+### Added
+
+- **Column/row default styles** (#445): `ColumnProperties.styleId` /
+  `RowProperties.styleId` now emit on BOTH writer backends
+  (`<col style=>`, `<row s= customFormat="1">`), remapped through
+  StyleIndex exactly like cell styleIds — and the reader parses them
+  back, so read→modify→write no longer silently drops a source's
+  column styles. New `Sheet.withColumnStyle` / `Sheet.withRowStyle`
+  intern into the StyleRegistry and merge with existing col/row
+  properties. This is the mechanism professional workbooks use for a
+  sheet-wide body font without touching the Normal style.
+- **Sheet view modes + zoom variants** (#446): `SheetView.view`
+  (`normal | pageBreakPreview | pageLayout`, validated),
+  `zoomScaleNormal`, `zoomScaleSheetLayoutView`, and `topLeftCell` are
+  authorable (set-or-remove on write, the zoomScale precedent), parsed
+  back, and unknown foreign view values ride preservation. Finance
+  books conventionally ship in page-break preview so the print extent
+  is visible while editing.
+- **Data-table lints + `xl recalc --tables`** (#442): `data-table-torn`
+  flags a `<f t="dataTable">` record whose grid stopped holding together
+  (a non-record formula inside the interior, `del1`/`del2` set by a
+  structural delete, a ref with no room for its corner formula and axes,
+  a required input gone without a del flag, a top-left that lost the
+  record); `data-table-unseeded` flags an uncached interior in a
+  `calcMode="autoNoTable"` book (opens BLANK — the #419 calc-mode
+  doctrine), suppressed for records the seeder would skip. Both run in
+  lint's raw-zip plane through the shared `FormulaKindCodec`, DOM/SAX
+  finding-identical, O(1) in streaming mode. `xl recalc --tables` wires
+  `DataTableSeeder` into the CLI recalc path — seeding runs after
+  recalculation so tables substitute freshly computed precedents; the
+  default pinned-cache path (#353/#430) is untouched.
+
+### Changed
+
+- **Excel-canonical XML forms** (#448): integral `sz` without a
+  decimal point (`sz="10"`), theme tints in Excel's
+  ≤17-significant-digit plain form with `tint="0"` omitted entirely,
+  the mandatory gray125 placeholder fill written bare, and
+  `sheetFormatPr` outline summary attributes (`outlineLevelRow/Col`)
+  derived from actual row/col outline levels (graduated from preserved
+  to modeled, the zoomScale precedent).
+
 ### Fixed
 
+- **DateTime arithmetic over date cells** (#449): `=C28-C27` over two
+  date cells failed with "Expected Numeric, got DateTime" — three
+  numeric boundaries refused DateTime while two others already coerced.
+  `TExprDecoders.decodeNumeric` (scalar operands, unary minus, percent,
+  the Aggregate fold), `ArrayArithmetic.cellValueToNumeric` (broadcast
+  operands), and `FunctionSpecsBase.extractNumericValue`/`coerceToNumeric`
+  (SUM/MIN/MAX/COUNT/AVERAGE folds, SUMPRODUCT) now all reuse
+  `CellValue.dateTimeToExcelSerial` — the writer's own conversion — so
+  day counts, `=date+30` offsets, and aggregates over date columns
+  evaluate. Arithmetic over dates yields a serial `Number` (Excel's
+  model: date-ness is a number format, not a value type); booleans stay
+  skipped in range aggregates, also Excel's behavior. Date constructors
+  (DATE/EDATE/EOMONTH/DATEDIF) are untouched.
+- **Theme-index swap on the SAX path** (#448): `DirectSaxEmitter` and
+  `Comments` serialized theme colors via `slot.ordinal`, which swaps
+  the dark/light pairs relative to OOXML theme indices — a Dark2 tab
+  written through the streaming path came out Light2. Both paths now
+  go through `themeSlotToIndex`.
 - **`ca`/`aca` and `del1`/`del2` formula-record fidelity** (#435): the two
   deferred halves of #430 close. Plain formulas now carry their own
   CT_CellFormula calc flags (`FormulaKind.Normal(aca, ca)`), so a volatile
