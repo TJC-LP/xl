@@ -16,7 +16,8 @@ import com.tjclp.xl.workbooks.Workbook
  *     recalculation never parse `TABLE(...)` and never clobber the cached `<v>` seeds;
  *   - an ArrayFormula kind evaluates scalar-wise and keeps its kind through cache refresh;
  *   - DependencyGraph excludes DataTable cells (pure value sources, not computation nodes);
- *   - StructuralEditor shifts record payloads (ref/r1/r2) and degrades on tearing edits.
+ *   - StructuralEditor shifts record payloads (ref/r1/r2), degrades on edits tearing the interior,
+ *     and sets del1/del2 when an edit removes an input cell (GH-435).
  */
 class FormulaRecordEvalSpec extends FunSuite:
 
@@ -180,7 +181,7 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(sheetNamed(out, "S")(ref"F2").value, num(11))
   }
 
-  test("deleteRows removing an input cell degrades the record to its cached constant") {
+  test("GH-435: deleteRows removing the row input sets del1, omits r1, keeps the cache") {
     val kind: FormulaKind.DataTable = FormulaKind.DataTable(
       range("F5:F6"),
       dt2D = true,
@@ -189,9 +190,88 @@ class FormulaRecordEvalSpec extends FunSuite:
       r2 = Some(aref("A2"))
     )
     val sheet = Sheet(S).put(ref"F5", CellValue.dataTable(kind, Some(num(7))))
-    // Delete row 1 (index0 0): r1=A1 is deleted; the interior itself just shifts.
+    // Delete row 1 (index0 0): r1=A1 goes with it; the interior itself just shifts up.
     val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 0, count = 1)
-    assertEquals(sheetNamed(out, "S")(ref"F4").value, num(7))
+    val torn: FormulaKind.DataTable = FormulaKind.DataTable(
+      range("F4:F5"),
+      dt2D = true,
+      dtr = false,
+      r1 = None,
+      r2 = Some(aref("A1")),
+      del1 = true
+    )
+    assertEquals(sheetNamed(out, "S")(ref"F4").value, CellValue.dataTable(torn, Some(num(7))))
+  }
+
+  test("GH-435: deleteColumns removing the column input sets del2, omits r2") {
+    val kind: FormulaKind.DataTable = FormulaKind.DataTable(
+      range("F5:F6"),
+      dt2D = true,
+      dtr = false,
+      r1 = Some(aref("A1")),
+      r2 = Some(aref("B1"))
+    )
+    val sheet = Sheet(S).put(ref"F5", CellValue.dataTable(kind, Some(num(9))))
+    // Delete column B (index0 1): r2=B1 goes with it; r1=A1 sits left of the band and stands.
+    val out = StructuralEditor.deleteColumns(Workbook(Vector(sheet)), S, at = 1, count = 1)
+    val torn: FormulaKind.DataTable = FormulaKind.DataTable(
+      range("E5:E6"),
+      dt2D = true,
+      dtr = false,
+      r1 = Some(aref("A1")),
+      r2 = None,
+      del2 = true
+    )
+    assertEquals(sheetNamed(out, "S")(ref"E5").value, CellValue.dataTable(torn, Some(num(9))))
+  }
+
+  test("GH-435: deleting both input cells sets del1 and del2, leaving empty display slots") {
+    val kind: FormulaKind.DataTable = FormulaKind.DataTable(
+      range("F5:F6"),
+      dt2D = true,
+      dtr = false,
+      r1 = Some(aref("A1")),
+      r2 = Some(aref("B1"))
+    )
+    val sheet = Sheet(S).put(ref"F5", CellValue.dataTable(kind, Some(num(5))))
+    val out = StructuralEditor.deleteColumns(Workbook(Vector(sheet)), S, at = 0, count = 2)
+    val torn: FormulaKind.DataTable = FormulaKind.DataTable(
+      range("D5:D6"),
+      dt2D = true,
+      dtr = false,
+      r1 = None,
+      r2 = None,
+      del1 = true,
+      del2 = true
+    )
+    val moved = sheetNamed(out, "S")(ref"D5").value
+    assertEquals(moved, CellValue.dataTable(torn, Some(num(5))))
+    moved match
+      case CellValue.Formula(expr, _, _) => assertEquals(expr, "TABLE(,)")
+      case other => fail(s"record degraded to a constant: $other")
+  }
+
+  test("GH-435: a delete missing the interior and both inputs leaves del1/del2 clear") {
+    val tableCell = CellValue.dataTable(dtKind("F5:G5", "A1", "A2"), Some(num(42)))
+    val sheet = Sheet(S).put(ref"F5", tableCell)
+    // Row 20 (index0 19) is below everything the record references.
+    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 19, count = 1)
+    assertEquals(sheetNamed(out, "S")(ref"F5").value, tableCell)
+  }
+
+  test("GH-435: del flags are sticky — a later unrelated delete keeps them set") {
+    val torn: FormulaKind.DataTable = FormulaKind.DataTable(
+      range("F5:F6"),
+      dt2D = true,
+      dtr = false,
+      r1 = None,
+      r2 = Some(aref("B1")),
+      del1 = true
+    )
+    val tableCell = CellValue.dataTable(torn, Some(num(3)))
+    val sheet = Sheet(S).put(ref"F5", tableCell)
+    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 19, count = 1)
+    assertEquals(sheetNamed(out, "S")(ref"F5").value, tableCell)
   }
 
   test("insertRows above an array anchor shifts its record ref and keeps the kind") {

@@ -92,16 +92,25 @@ object StructuralEditor:
               .flatMap(_ => shiftedRange(dt.ref, isRow, at, delta))
             val newR1 = dt.r1.map(r => shiftedRef(r, isRow, at, delta))
             val newR2 = dt.r2.map(r => shiftedRef(r, isRow, at, delta))
-            (newRange, newR1, newR2) match
-              case (Some(range), r1, r2) if r1.forall(_.isDefined) && r2.forall(_.isDefined) =>
-                val newKind = dt.copy(ref = range, r1 = r1.flatten, r2 = r2.flatten)
+            newRange match
+              case Some(range) =>
+                // GH-435: an edit that removes an input cell is Excel's own del1/del2 case — the
+                // record survives with that input omitted and its flag set, interior caches
+                // intact. Flags are sticky: a record that arrived del-flagged stays so.
+                val newKind = dt.copy(
+                  ref = range,
+                  r1 = newR1.flatten,
+                  r2 = newR2.flatten,
+                  del1 = dt.del1 || newR1.exists(_.isEmpty),
+                  del2 = dt.del2 || newR2.exists(_.isEmpty)
+                )
                 val newValue =
                   CellValue.Formula(FormulaKind.displayExpression(newKind), cachedOpt, newKind)
                 (ref, cell.copy(value = newValue))
-              case _ =>
-                // The band tears the table interior or deletes an input cell. Excel refuses to
-                // "change part of a data table"; the total-function analog degrades the cell to
-                // its cached constant (visible, deterministic). del1/del2 fidelity: follow-up.
+              case None =>
+                // The band tears the table interior itself. Excel refuses to "change part of a
+                // data table"; the total-function analog degrades the cell to its cached constant
+                // (visible, deterministic).
                 (ref, cell.copy(value = cachedOpt.getOrElse(CellValue.Empty)))
         case f @ CellValue.Formula(formulaStr, _, kind) =>
           FormulaParser.parse(formulaStr) match
@@ -181,7 +190,9 @@ object StructuralEditor:
   /**
    * GH-430: shift an ArrayFormula record's anchor range with the edit; a band tearing the range
    * degrades the kind to Normal (the shifted TEXT is kept — Excel's visible-degradation analog).
-   * DataTable kinds never reach here (dedicated branch above); Normal is identity.
+   * The degraded cell keeps `ca` (GH-435: volatile marking is legal on a plain formula) and drops
+   * the array-only `aca`. DataTable kinds never reach here (dedicated branch above); Normal is
+   * identity.
    */
   private def shiftedArrayKind(
     kind: FormulaKind,
@@ -192,11 +203,12 @@ object StructuralEditor:
   ): FormulaKind =
     kind match
       case arr: FormulaKind.ArrayFormula if shiftLocal =>
-        if editIntersects(arr.ref, isRow, at, delta) then FormulaKind.Normal
+        val degraded = FormulaKind.Normal(ca = arr.ca)
+        if editIntersects(arr.ref, isRow, at, delta) then degraded
         else
           shiftedRange(arr.ref, isRow, at, delta)
             .map(r => arr.copy(ref = r))
-            .getOrElse(FormulaKind.Normal)
+            .getOrElse(degraded)
       case other => other
 
   /**

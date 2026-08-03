@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ca`/`aca` and `del1`/`del2` formula-record fidelity** (#435): the two
+  deferred halves of #430 close. Plain formulas now carry their own
+  CT_CellFormula calc flags (`FormulaKind.Normal(aca, ca)`), so a volatile
+  `<f ca="1">NOW()</f>` survives dirty sheet regeneration on every reader and
+  writer instead of losing the marking; boolean attrs still normalize, so
+  LibreOffice's explicit `aca="false"` noise re-emits omitted (the schema
+  default). A structural delete that removes a data-table input cell now keeps
+  the record and sets `del1`/`del2` with that input omitted and the interior
+  caches intact — Excel's own behavior — rather than degrading the cell to its
+  cached constant; only an edit tearing the interior still degrades.
+  **Source-breaking**: `FormulaKind.Normal` takes parameters now, so a bare
+  `FormulaKind.Normal` value becomes `FormulaKind.Normal()` and
+  `case FormulaKind.Normal =>` becomes `case _: FormulaKind.Normal =>`.
+
 ## [0.18.0] "Quill" - 2026-07-29
 
 Authoring wave (wave 21, burn-down finale): the house sensitivity engine
@@ -184,7 +200,7 @@ what Excel refuses.
   writer backends, with structural edits shifting record payload geometry.
   Display renders a derived `TABLE(r1, r2)` text; evaluator treats
   uncached data-table cells as totals-safe. Follow-ups filed as #435.
-- **Bytes-based reads preserve like path reads** (#412): 
+- **Bytes-based reads preserve like path reads** (#412):
   `XlsxReader.readFromBytes` constructed no `SourceContext`, so
   read-bytes→write dropped every preserved-but-unmodeled workbook child
   (`externalReferences`, `workbookProtection`, `pivotCaches`, …) and

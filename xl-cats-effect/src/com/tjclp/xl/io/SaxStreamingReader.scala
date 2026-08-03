@@ -370,9 +370,11 @@ object SaxStreamingReader:
 
               // GH-430: array kind attaches only when the record carried text (DOM parity);
               // a dataTable record IS the formula — no text, display expression derived.
-              val arrayKind = formulaRecordKind match
+              // GH-435: a plain formula keeps its own ca/aca flags.
+              val textKind = formulaRecordKind match
                 case Some(arr: FormulaKind.ArrayFormula) if formulaText.nonEmpty => arr
-                case _ => FormulaKind.Normal
+                case Some(plain: FormulaKind.Normal) => plain
+                case _ => FormulaKind.Normal()
               val cellValue = formulaRecordKind match
                 case Some(dt: FormulaKind.DataTable) =>
                   val cachedOpt = cachedValue
@@ -385,9 +387,9 @@ object SaxStreamingReader:
                       val parsedCached = interpretCellValue(cached, currentCellType, sst)
                       val cachedOpt =
                         if parsedCached == CellValue.Empty then None else Some(parsedCached)
-                      CellValue.Formula(formula, cachedOpt, arrayKind)
+                      CellValue.Formula(formula, cachedOpt, textKind)
                     case (Some(formula), _, None) =>
-                      CellValue.Formula(formula, None, arrayKind)
+                      CellValue.Formula(formula, None, textKind)
                     case (None, Some(text), _) =>
                       CellValue.Text(text)
                     case (None, None, Some(value)) =>

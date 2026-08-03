@@ -282,6 +282,17 @@ object SaxSingleCellReader:
                     arr
                   )
                 )
+              case Some(plain: FormulaKind.Normal) =>
+                // GH-435: a plain formula's own ca/aca flags.
+                throw new CellFound(
+                  buildResult(
+                    expandedFormula,
+                    cachedValue,
+                    currentCellType,
+                    currentCellStyleId,
+                    plain
+                  )
+                )
               case _ =>
                 throw new CellFound(
                   buildResult(expandedFormula, cachedValue, currentCellType, currentCellStyleId)
@@ -310,7 +321,7 @@ object SaxSingleCellReader:
       cached: Option[String],
       cellType: Option[String],
       styleId: Option[Int],
-      kind: FormulaKind = FormulaKind.Normal
+      kind: FormulaKind = FormulaKind.Normal()
     ): CellResult =
       val cellValue = (expandedFormula, cached) match
         case (Some(formula), Some(cachedText)) =>

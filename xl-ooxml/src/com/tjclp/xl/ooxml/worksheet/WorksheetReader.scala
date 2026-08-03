@@ -279,6 +279,9 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
             )
           case Some(arr: FormulaKind.ArrayFormula) if text.nonEmpty =>
             Right(CellValue.Formula(text, parseFormulaCache(elem, cellType), arr))
+          case Some(plain: FormulaKind.Normal) if text.nonEmpty =>
+            // GH-435: a plain formula's own ca/aca flags.
+            Right(CellValue.Formula(text, parseFormulaCache(elem, cellType), plain))
           case _ if text.nonEmpty =>
             Right(CellValue.Formula(text, parseFormulaCache(elem, cellType)))
           case _ =>

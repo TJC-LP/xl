@@ -537,10 +537,16 @@ object Generators:
       val input2 = ARef.from0(startCol + width + 2, startRow + height + 2)
       (interior, orientation, input1, input2)
 
-  /** GH-430: CT_CellFormula record kind (Normal / CSE array anchor / data table). */
+  /**
+   * GH-430: CT_CellFormula record kind (Normal / CSE array anchor / data table). The Normal arm
+   * draws the plain-formula calc flags too (GH-435).
+   */
   val genFormulaKind: Gen[FormulaKind] =
     Gen.frequency(
-      4 -> Gen.const(FormulaKind.Normal),
+      4 -> (for
+        aca <- Gen.oneOf(true, false)
+        ca <- Gen.oneOf(true, false)
+      yield FormulaKind.Normal(aca, ca): FormulaKind),
       3 -> (for
         range <- genCellRange
         aca <- Gen.oneOf(true, false)
