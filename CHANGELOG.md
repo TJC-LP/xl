@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] "Canon" - 2026-08-03
+
+Authoring epilogue (wave 21 patch): the col/row default-style house
+mechanism becomes authorable and readable, sheet view modes land, and
+the writer's XML forms become byte-canonical with Excel's own.
+
+### Added
+
+- **Column/row default styles** (#445): `ColumnProperties.styleId` /
+  `RowProperties.styleId` now emit on BOTH writer backends
+  (`<col style=>`, `<row s= customFormat="1">`), remapped through
+  StyleIndex exactly like cell styleIds — and the reader parses them
+  back, so read→modify→write no longer silently drops a source's
+  column styles. New `Sheet.withColumnStyle` / `Sheet.withRowStyle`
+  intern into the StyleRegistry and merge with existing col/row
+  properties. This is the mechanism professional workbooks use for a
+  sheet-wide body font without touching the Normal style.
+- **Sheet view modes + zoom variants** (#446): `SheetView.view`
+  (`normal | pageBreakPreview | pageLayout`, validated),
+  `zoomScaleNormal`, `zoomScaleSheetLayoutView`, and `topLeftCell` are
+  authorable (set-or-remove on write, the zoomScale precedent), parsed
+  back, and unknown foreign view values ride preservation. Finance
+  books conventionally ship in page-break preview so the print extent
+  is visible while editing.
+
+### Changed
+
+- **Excel-canonical XML forms** (#448): integral `sz` without a
+  decimal point (`sz="10"`), theme tints in Excel's
+  ≤17-significant-digit plain form with `tint="0"` omitted entirely,
+  the mandatory gray125 placeholder fill written bare, and
+  `sheetFormatPr` outline summary attributes (`outlineLevelRow/Col`)
+  derived from actual row/col outline levels (graduated from preserved
+  to modeled, the zoomScale precedent).
+
+### Fixed
+
+- **Theme-index swap on the SAX path** (#448): `DirectSaxEmitter` and
+  `Comments` serialized theme colors via `slot.ordinal`, which swaps
+  the dark/light pairs relative to OOXML theme indices — a Dark2 tab
+  written through the streaming path came out Light2. Both paths now
+  go through `themeSlotToIndex`.
+
 ## [0.18.0] "Quill" - 2026-07-29
 
 Authoring wave (wave 21, burn-down finale): the house sensitivity engine
@@ -184,7 +227,7 @@ what Excel refuses.
   writer backends, with structural edits shifting record payload geometry.
   Display renders a derived `TABLE(r1, r2)` text; evaluator treats
   uncached data-table cells as totals-safe. Follow-ups filed as #435.
-- **Bytes-based reads preserve like path reads** (#412): 
+- **Bytes-based reads preserve like path reads** (#412):
   `XlsxReader.readFromBytes` constructed no `SourceContext`, so
   read-bytes→write dropped every preserved-but-unmodeled workbook child
   (`externalReferences`, `workbookProtection`, `pivotCaches`, …) and

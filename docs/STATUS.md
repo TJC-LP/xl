@@ -1,12 +1,17 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-29 (0.18.0)
+**Last Updated**: 2026-08-03 (0.18.1)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.18.1** (2026-08-03):
+- ✅ **Column/row default styles** (#445) — `<col style=>` / `<row s= customFormat="1">` emit on both writer backends (StyleIndex-remapped like cell styleIds) AND parse back, so read→modify→write keeps source column styles; `Sheet.withColumnStyle`/`withRowStyle` author the sheet-wide-body-font-without-Normal mechanism
+- ✅ **Sheet view modes** (#446) — `SheetView.view` (normal/pageBreakPreview/pageLayout) + `zoomScaleNormal`/`zoomScaleSheetLayoutView`/`topLeftCell`, set-or-remove with foreign values riding preservation
+- ✅ **Excel-canonical XML forms** (#448) — integral `sz`, 17-sig-digit plain tints (`tint="0"` omitted), bare gray125, derived `outlineLevelRow/Col` summary attrs; **theme-index swap fixed** — SAX path + comments wrote Dark2 as Light2 via `slot.ordinal`
 
 **New in 0.18.0** (2026-07-29):
 - ✅ **Two-variable Data Table authoring** (#419) — `sheet.dataTable(range, rowInput, colInput)` authors native `<f t="dataTable">` records with autoNoTable-safe cache seeding (design-panel-verified against Excel fixtures); the house sensitivity engine is authorable
