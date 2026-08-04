@@ -167,6 +167,37 @@ final case class Sheet(
     if count <= 0 then this else shiftAxis(rowAxis = false, at, count, deleting = true)
 
   /**
+   * Highest populated 0-based index on one axis — the farthest position a structural insert would
+   * shift (GH-472). "Populated" covers every carrier of absolute positions that [[shiftAxis]]
+   * rebuilds WITHOUT clamping: cells, comments, row/column properties, drawing cell anchors, and
+   * the freeze-pane anchor/scroll target. Range-shaped structures (merges, cf/dv envelopes, print
+   * areas, tables, autoFilter) clamp at the sheet edge instead (GH-428) and can never overflow.
+   * `None` = nothing populated on the axis. Callers use this to REFUSE an insert that would push
+   * any of these past the sheet edge — Excel refuses such files outright, so writing one is never
+   * acceptable.
+   */
+  private[xl] def maxPopulatedIndex(rowAxis: Boolean): Option[Int] =
+    def axisOf(ref: ARef): Int = if rowAxis then ref.row.index0 else ref.col.index0
+    def anchorCells(anchor: DrawingAnchor): List[ARef] = anchor match
+      case DrawingAnchor.OneCell(from, _) => List(from.cell)
+      case DrawingAnchor.TwoCell(from, to, _) => List(from.cell, to.cell)
+      case _: DrawingAnchor.Absolute => Nil
+    val drawingRefs = drawings.iterator.flatMap {
+      case Drawing.Picture(anchor, _, _, _) => anchorCells(anchor)
+      case Drawing.ChartFrame(anchor, _, _) => anchorCells(anchor)
+      case _: Drawing.Preserved => Nil
+    }
+    val freezeRefs = freezePane.iterator.flatMap {
+      case FreezePane.At(topLeftCell, scrolledTo) => topLeftCell :: scrolledTo.toList
+      case FreezePane.Remove => Nil
+    }
+    val propIndices =
+      if rowAxis then rowProperties.keysIterator.map(_.index0)
+      else columnProperties.keysIterator.map(_.index0)
+    ((cells.keysIterator ++ comments.keysIterator ++ drawingRefs ++ freezeRefs).map(axisOf)
+      ++ propIndices).maxOption
+
+  /**
    * Shared structural-shift engine for one axis (row or column).
    *
    * Maps a 0-based index on the active axis: insert shifts indices `>= at` by `+count`; delete

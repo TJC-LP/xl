@@ -7,6 +7,7 @@ import com.tjclp.xl.sheets.{DataValidation, DvKind, Sheet}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.cf.{CfRule, Cfvo, ConditionalFormat}
+import com.tjclp.xl.error.{XLError, XLException}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.parser.FormulaParser
@@ -27,7 +28,11 @@ import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
  */
 object StructuralEditor:
 
-  /** Insert `count` rows at 0-based row index `at` on `sheet`. */
+  /**
+   * Insert `count` rows at 0-based row index `at` on `sheet`. Throws a typed
+   * `XLException(XLError.OutOfBounds)` when the insert would shift any populated position past row
+   * 1048576 (GH-472) — the workbook is left untouched.
+   */
   def insertRows(wb: Workbook, sheet: SheetName, at: Int, count: Int): Workbook =
     edit(wb, sheet, isRow = true, at = at, delta = count)
 
@@ -35,7 +40,11 @@ object StructuralEditor:
   def deleteRows(wb: Workbook, sheet: SheetName, at: Int, count: Int): Workbook =
     edit(wb, sheet, isRow = true, at = at, delta = -count)
 
-  /** Insert `count` columns at 0-based column index `at` on `sheet`. */
+  /**
+   * Insert `count` columns at 0-based column index `at` on `sheet`. Throws a typed
+   * `XLException(XLError.OutOfBounds)` when the insert would shift any populated position past
+   * column XFD (GH-472) — the workbook is left untouched.
+   */
   def insertColumns(wb: Workbook, sheet: SheetName, at: Int, count: Int): Workbook =
     edit(wb, sheet, isRow = false, at = at, delta = count)
 
@@ -50,6 +59,32 @@ object StructuralEditor:
     at: Int,
     delta: Int
   ): Workbook =
+    // GH-472: REFUSE an insert that would shift any populated position (cell, comment, row/column
+    // property, drawing anchor, freeze pane) past the sheet edge. Ranges clamp (GH-428), but a
+    // data cell cannot clamp without destroying data — and 0.19.0's silent success wrote cells and
+    // a <dimension> past row 1048576, a file desktop Excel refuses outright. Throws a typed
+    // XLException(XLError.OutOfBounds); the workbook is untouched.
+    if delta > 0 then
+      wb.sheets.find(_.name == target).foreach { s =>
+        val axisMax = if isRow then Row.MaxIndex0 else Column.MaxIndex0
+        s.maxPopulatedIndex(isRow)
+          .filter(i => i >= at && i.toLong + delta > axisMax)
+          .foreach { i =>
+            def rowName(idx: Int) = s"row ${idx + 1}"
+            def colName(idx: Int) = s"column ${Column.from0(idx).toLetter}"
+            val (offending, edge) =
+              if isRow then (rowName(i), s"last ${rowName(axisMax)}")
+              else (colName(i), s"last ${colName(axisMax)}")
+            val unit = if isRow then "row(s)" else "column(s)"
+            val atName = if isRow then rowName(at) else colName(at)
+            throw XLException(
+              XLError.OutOfBounds(
+                offending,
+                s"inserting $delta $unit at $atName would shift it past the sheet's $edge"
+              )
+            )
+          }
+      }
     val editedName = target.value
     // GH-455 follow-up: the non-participation fast path below keeps formula TEXT byte-identical,
     // but a cached VALUE can be stale even when the text never names the edited sheet —
