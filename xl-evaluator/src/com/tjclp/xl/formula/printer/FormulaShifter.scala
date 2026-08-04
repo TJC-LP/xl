@@ -268,6 +268,61 @@ object FormulaShifter:
   // ============================================================================
 
   /**
+   * GH-455: true when `expr` contains a sheet-qualified reference to `editedSheet`
+   * (case-insensitive, matching [[shiftStructural]]'s convention). Nodes the structural shift
+   * treats as identity — local refs on a non-edited sheet, external refs, defined names (including
+   * sheet-qualified ones) — do not count: a formula for which this is false is provably untouched
+   * by a structural edit of `editedSheet` from another sheet, so callers can skip the
+   * parse→shift→reprint cycle and keep its text and cached value byte-identical.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def referencesSheet(expr: TExpr[?], editedSheet: String): Boolean =
+    import TExpr.*
+    def matches(sheet: com.tjclp.xl.SheetName): Boolean =
+      sheet.value.equalsIgnoreCase(editedSheet)
+    def goLoc(location: RangeLocation): Boolean = location match
+      case RangeLocation.CrossSheet(sheet, _) => matches(sheet)
+      case RangeLocation.Local(_) | RangeLocation.External(_, _, _) | RangeLocation.Name(_, _) =>
+        false
+    def go(e: TExpr[?]): Boolean = e match
+      case SheetRef(sheet, _, _, _) => matches(sheet)
+      case SheetPolyRef(sheet, _, _) => matches(sheet)
+      case SheetRange(sheet, _) => matches(sheet)
+      case Aggregate(_, location) => goLoc(location)
+      case call: Call[?] =>
+        var found = false
+        call.spec.argSpec.map(call.args)(
+          arg => { if go(arg) then found = true; arg },
+          loc => { if goLoc(loc) then found = true; loc },
+          range => range
+        )
+        found
+      case Add(x, y) => go(x) || go(y)
+      case Sub(x, y) => go(x) || go(y)
+      case Mul(x, y) => go(x) || go(y)
+      case Div(x, y) => go(x) || go(y)
+      case Pow(x, y) => go(x) || go(y)
+      case Concat(x, y) => go(x) || go(y)
+      case Eq(x, y) => go(x) || go(y)
+      case Neq(x, y) => go(x) || go(y)
+      case Lt(x, y) => go(x) || go(y)
+      case Lte(x, y) => go(x) || go(y)
+      case Gt(x, y) => go(x) || go(y)
+      case Gte(x, y) => go(x) || go(y)
+      case ToInt(inner) => go(inner)
+      case UnaryPlus(inner) => go(inner)
+      case Percent(inner) => go(inner)
+      case DateToSerial(inner) => go(inner)
+      case DateTimeToSerial(inner) => go(inner)
+      case Coerced(inner, _) => go(inner)
+      case Let(bindings, body) => bindings.exists((_, value) => go(value)) || go(body)
+      case Lit(_) | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_) | ExternalRef(_, _, _, _) |
+          ExternalRange(_, _, _) | BindingRef(_) | NameRef(_) | SheetNameRef(_, _) |
+          CoercedBindingRef(_, _) =>
+        false
+    go(expr)
+
+  /**
    * Structurally shift references in `expr` for a row/column insert (delta > 0) or delete (delta <
    * 0). Returns None when the formula references a fully-deleted cell or range.
    */

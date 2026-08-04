@@ -184,3 +184,109 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(s2(ref"B1").value, formulaCell("INDIRECT(\"A5\")"))
     assertEquals(s2(ref"C1").value, formulaCell("INDIRECT(A6)"))
   }
+
+  // ===== GH-455: grouping parens survive the rewrite; untouched sheets ride byte-identical =====
+
+  private def num(i: Int): CellValue = CellValue.Number(BigDecimal(i))
+
+  test("GH-455: insert rows keeps grouping parens and the evaluated value (=E13/(E12*E14))") {
+    val s = new Sheet(name = S)
+      .put(ref"E12", num(2))
+      .put(ref"E13", num(4))
+      .put(ref"E14", num(2))
+      .put(ref"G1", formulaCell("=E13/(E12*E14)"))
+    val before = Workbook(Vector(s)).evaluateFormula("=E13/(E12*E14)", "S")
+    assertEquals(before, Right(num(1)))
+    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 2)
+    val s2 = sheetNamed(r, "S")
+    assertEquals(s2(ref"G1").value, formulaCell("E15/(E14*E16)"))
+    assertEquals(r.evaluateFormula("=E15/(E14*E16)", "S"), before)
+  }
+
+  test("GH-455: insert rows keeps the nested grouped divisor (=E12/((E13+E14)/2))") {
+    val s = new Sheet(name = S)
+      .put(ref"E12", num(6))
+      .put(ref"E13", num(2))
+      .put(ref"E14", num(4))
+      .put(ref"G1", formulaCell("=E12/((E13+E14)/2)"))
+    val before = Workbook(Vector(s)).evaluateFormula("=E12/((E13+E14)/2)", "S")
+    assertEquals(before, Right(num(2)))
+    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 2)
+    val s2 = sheetNamed(r, "S")
+    assertEquals(s2(ref"G1").value, formulaCell("E14/((E15+E16)/2)"))
+    assertEquals(r.evaluateFormula("=E14/((E15+E16)/2)", "S"), before)
+  }
+
+  test("GH-455: insert rows keeps the grouped sum inside IF/ROUND (tie-out stays 'Yes')") {
+    val s = new Sheet(name = S)
+      .put(ref"E12", num(6))
+      .put(ref"E13", num(2))
+      .put(ref"E14", num(4))
+      .put(ref"G1", formulaCell("=IF(ROUND(E12-(E13+E14),0)=0,\"Yes\",\"No\")"))
+    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 2)
+    val s2 = sheetNamed(r, "S")
+    assertEquals(
+      s2(ref"G1").value,
+      formulaCell("IF(ROUND(E14-(E15+E16), 0)=0, \"Yes\", \"No\")")
+    )
+    assertEquals(
+      r.evaluateFormula("=IF(ROUND(E14-(E15+E16), 0)=0, \"Yes\", \"No\")", "S"),
+      Right(CellValue.Text("Yes"))
+    )
+  }
+
+  test("GH-455: cross-sheet grouped divisor on a non-edited sheet keeps its parens") {
+    val a = new Sheet(name = SheetName.unsafe("A"))
+      .put(ref"E12", num(2))
+      .put(ref"E13", num(4))
+      .put(ref"E14", num(2))
+    val b = new Sheet(name = SheetName.unsafe("B"))
+      .put(ref"B1", formulaCell("=A!E13/(A!E12*A!E14)"))
+    val r = StructuralEditor.insertRows(Workbook(Vector(a, b)), SheetName.unsafe("A"), 2, 2)
+    assertEquals(sheetNamed(r, "B")(ref"B1").value, formulaCell("A!E15/(A!E14*A!E16)"))
+    assertEquals(r.evaluateFormula("=A!E15/(A!E14*A!E16)", "B"), Right(num(1)))
+  }
+
+  test("GH-455: formulas on a non-participating sheet are byte-identical after insert-rows") {
+    val cached = Some(num(7))
+    val data = new Sheet(name = SheetName.unsafe("Data")).put(ref"A1", num(1))
+    val other = new Sheet(name = SheetName.unsafe("Other")).put(ref"A1", num(7))
+    val report = new Sheet(name = SheetName.unsafe("Report"))
+      .put(ref"B1", CellValue.Formula("C1/(A1*D1)", cached)) // local refs only
+      .put(ref"B2", CellValue.Formula("SUM(Other!A1:A5)", cached)) // refs a DIFFERENT sheet
+      .put(
+        ref"B3",
+        CellValue.Formula("IF(A1,1,0)", cached)
+      ) // would canonicalize to ", " if reprinted
+    val r = StructuralEditor.insertRows(
+      Workbook(Vector(data, other, report)),
+      SheetName.unsafe("Data"),
+      at = 0,
+      count = 3
+    )
+    val rep = sheetNamed(r, "Report")
+    // Text AND cached values ride untouched: the sheet does not participate in the edit.
+    assertEquals(rep(ref"B1").value, CellValue.Formula("C1/(A1*D1)", cached))
+    assertEquals(rep(ref"B2").value, CellValue.Formula("SUM(Other!A1:A5)", cached))
+    assertEquals(rep(ref"B3").value, CellValue.Formula("IF(A1,1,0)", cached))
+  }
+
+  test("GH-455: a non-edited sheet MENTIONING the edited sheet still rewrites (and only then)") {
+    val data = new Sheet(name = SheetName.unsafe("Data"))
+    val report = new Sheet(name = SheetName.unsafe("Report"))
+      .put(ref"B1", CellValue.Formula("Data!A5*2", Some(num(7)))) // participates: rewritten
+      .put(ref"B2", CellValue.Formula("\"Data\"&C1", Some(CellValue.Text("Datax")))) // text only
+    val r = StructuralEditor.insertRows(
+      Workbook(Vector(data, report)),
+      SheetName.unsafe("Data"),
+      at = 2,
+      count = 1
+    )
+    val rep = sheetNamed(r, "Report")
+    assertEquals(rep(ref"B1").value, CellValue.Formula("Data!A6*2", None))
+    // Mentions "Data" only inside a string literal: the AST gate proves non-participation.
+    assertEquals(
+      rep(ref"B2").value,
+      CellValue.Formula("\"Data\"&C1", Some(CellValue.Text("Datax")))
+    )
+  }
