@@ -1,7 +1,7 @@
 package com.tjclp.xl
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.addressing.{CellRange, Row}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.FreezePane
 import munit.ScalaCheckSuite
@@ -244,4 +244,30 @@ class StructuralEditSpec extends ScalaCheckSuite:
           ps.repeatRows.contains((ns + 1, ne + 1))
         }
     }
+  }
+
+  // ===== GH-472: maxPopulatedIndex — the insert-refusal query =====
+
+  test("GH-472: maxPopulatedIndex sees cells on both axes") {
+    val s = Sheet("S").put("B3" -> 1, "D2" -> 2)
+    assertEquals(s.maxPopulatedIndex(rowAxis = true), Some(2)) // row 3 (0-based 2)
+    assertEquals(s.maxPopulatedIndex(rowAxis = false), Some(3)) // col D (0-based 3)
+    assertEquals(Sheet("Empty").maxPopulatedIndex(rowAxis = true), None)
+  }
+
+  test("GH-472: maxPopulatedIndex sees comments, row properties, and the freeze anchor") {
+    import com.tjclp.xl.cells.Comment
+    import com.tjclp.xl.sheets.RowProperties
+    val withComment = Sheet("S").comment(ref"A9", Comment.plainText("note"))
+    assertEquals(withComment.maxPopulatedIndex(rowAxis = true), Some(8))
+    val withProps =
+      Sheet("S").copy(rowProperties = Map(Row.from0(41) -> RowProperties(height = Some(30.0))))
+    assertEquals(withProps.maxPopulatedIndex(rowAxis = true), Some(41))
+    val withFreeze = Sheet("S").copy(freezePane = Some(FreezePane.At(ref"B3")))
+    assertEquals(withFreeze.maxPopulatedIndex(rowAxis = true), Some(2))
+  }
+
+  test("GH-472: maxPopulatedIndex ignores merged ranges (those clamp per GH-428)") {
+    val s = Sheet("S").copy(mergedRanges = Set(CellRange(ref"A1", ref"A1048576")))
+    assertEquals(s.maxPopulatedIndex(rowAxis = true), None)
   }

@@ -275,3 +275,79 @@ class StructuralCommandSpec extends CatsEffectSuite:
       assert(r1.isLeft) // three-part range
       assert(r2.isLeft) // trailing colon (empty endpoint)
   }
+
+  // ===== GH-472: refuse inserts that would shift populated cells past the sheet edge =====
+
+  test("GH-472: insert-rows refusing an over-the-edge shift leaves the file byte-unchanged") {
+    // The exact field repro: data at rows 1048570-1048572, insert 20 rows at 5. 0.19.0 exited 0
+    // and wrote cells past row 1048576 (plus a <dimension> past the cap) — Excel refuses the file.
+    val wb = Workbook(
+      Vector(
+        Sheet("S")
+          .put(ref"A1048570", CellValue.Number(1))
+          .put(ref"B1048570", CellValue.Number(2))
+          .put(ref"A1048572", CellValue.Number(3))
+          .put(ref"B1048572", CellValue.Number(4))
+      )
+    )
+    val in = tmp("in-gh472")
+    for
+      _ <- excel.write(wb, in)
+      before <- IO(Files.readAllBytes(in).toVector)
+      read <- excel.read(in)
+      // in-place edit (out == in): a refusal must not touch the file
+      r <- WriteCommands.insertRows(read, read.sheets.headOption, 5, 20, in, config).attempt
+      after <- IO(Files.readAllBytes(in).toVector)
+    yield
+      r match
+        case Left(e) =>
+          assert(e.getMessage.contains("1048572"), e.getMessage) // offending populated row
+          assert(e.getMessage.contains("1048576"), e.getMessage) // the cap
+        case Right(msg) => fail(s"expected refusal, got success: $msg")
+      assertEquals(after, before) // file byte-identical
+  }
+
+  test("GH-472: insert-rows just under the cap still succeeds (lands exactly on 1048576)") {
+    val wb = Workbook(Vector(Sheet("S").put(ref"A1048556", CellValue.Number(42))))
+    val in = tmp("in-gh472b")
+    val out = tmp("out-gh472b")
+    for
+      _ <- excel.write(wb, in)
+      read <- excel.read(in)
+      _ <- WriteCommands.insertRows(read, read.sheets.headOption, 5, 20, out, config)
+      result <- excel.read(out)
+    yield
+      val s = result.sheets.head
+      assertEquals(s(ref"A1048576").value, CellValue.Number(42))
+      assert(!s.contains(ref"A1048556"))
+  }
+
+  test("GH-472: insert-cols refuses a shift past column XFD and leaves the file unchanged") {
+    val wb = Workbook(Vector(Sheet("S").put(ref"XFC1", CellValue.Number(1))))
+    val in = tmp("in-gh472c")
+    for
+      _ <- excel.write(wb, in)
+      before <- IO(Files.readAllBytes(in).toVector)
+      read <- excel.read(in)
+      r <- WriteCommands.insertColumns(read, read.sheets.headOption, "C", 20, in, config).attempt
+      after <- IO(Files.readAllBytes(in).toVector)
+    yield
+      r match
+        case Left(e) =>
+          assert(e.getMessage.contains("XFC"), e.getMessage)
+          assert(e.getMessage.contains("XFD"), e.getMessage)
+        case Right(msg) => fail(s"expected refusal, got success: $msg")
+      assertEquals(after, before)
+  }
+
+  test("GH-472: insert-cols just under the cap still succeeds (lands exactly on XFD)") {
+    val wb = Workbook(Vector(Sheet("S").put(ref"XFC1", CellValue.Number(7))))
+    val in = tmp("in-gh472d")
+    val out = tmp("out-gh472d")
+    for
+      _ <- excel.write(wb, in)
+      read <- excel.read(in)
+      _ <- WriteCommands.insertColumns(read, read.sheets.headOption, "C", 1, out, config)
+      result <- excel.read(out)
+    yield assertEquals(result.sheets.head(ref"XFD1").value, CellValue.Number(7))
+  }
