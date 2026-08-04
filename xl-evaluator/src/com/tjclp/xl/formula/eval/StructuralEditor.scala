@@ -93,12 +93,27 @@ object StructuralEditor:
         stale = r => staleCaches.contains(QualifiedRef(s.name, r))
       )
     }
+    // GH-473: general defined names (workbook- AND sheet-scoped) are the same rewrite plane as
+    // print areas / DV / tables (GH-429): a refersTo reference targeting the edited sheet shifts
+    // with it, a fully-deleted target degrades to "#REF!", and constants / other-sheet references
+    // ride byte-identical. (Lifted print names live in typed PageSetup, not here — no double
+    // shift.)
+    val updatedNames = wb.metadata.definedNames.map { dn =>
+      dn.copy(formula = shiftDefinedNameText(dn.formula, editedName, isRow, at, delta))
+    }
+    val namesChanged = updatedNames != wb.metadata.definedNames
     // A structural edit can touch any sheet's formulas (cross-sheet refs), so mark every sheet
     // modified — otherwise the writer's clean/verbatim fast-path would copy stale bytes from the
-    // source file and silently drop the edit.
+    // source file and silently drop the edit. A defined-name rewrite lives in workbook.xml, so
+    // mark metadata modified too when one changed.
     val updatedContext =
-      wb.sourceContext.map(ctx => wb.sheets.indices.foldLeft(ctx)((c, i) => c.markSheetModified(i)))
-    wb.copy(sheets = updatedSheets, sourceContext = updatedContext)
+      wb.sourceContext.map { ctx =>
+        val marked = wb.sheets.indices.foldLeft(ctx)((c, i) => c.markSheetModified(i))
+        if namesChanged then marked.markMetadataModified else marked
+      }
+    val updatedMetadata =
+      if namesChanged then wb.metadata.copy(definedNames = updatedNames) else wb.metadata
+    wb.copy(sheets = updatedSheets, metadata = updatedMetadata, sourceContext = updatedContext)
 
   private def rewriteFormulas(
     sheet: Sheet,
@@ -325,6 +340,58 @@ object StructuralEditor:
             case Some(shifted) => FormulaPrinter.print(shifted, includeEquals = false)
             case None => "#REF!"
         case Left(_) => formula
+
+  /**
+   * GH-473: rewrite a defined name's refersTo text through the structural shift. A refersTo is bare
+   * formula text, but unlike CF/DV formulas it may be a TOP-LEVEL comma union (a multi-range name
+   * such as `Two!$A$1:$B$2,Two!$D$10`) that the formula parser rejects — split on top-level commas
+   * and shift each segment through the shared [[shiftFormulaText]]. `shiftLocal = false`: a
+   * refersTo names its sheet explicitly, so only references to the edited sheet move; constants,
+   * externals, unqualified and other-sheet references ride byte-identical (per-segment, the same
+   * non-participation gates as CF/DV).
+   */
+  private def shiftDefinedNameText(
+    formula: String,
+    editedSheet: String,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): String =
+    if !mentionsSheet(formula, editedSheet) then formula
+    else
+      splitTopLevelCommas(formula)
+        .map(seg => shiftFormulaText(seg, shiftLocal = false, editedSheet, isRow, at, delta))
+        .mkString(",")
+
+  /**
+   * Split refersTo text on TOP-LEVEL commas (the multi-range union). Commas inside quoted sheet
+   * names (`'It''s, ok'!A1`), string literals (`"a,b"`) or any `()`/`{}` nesting (function
+   * arguments, array literals) do not split. Doubled quotes toggle twice — net unchanged, and no
+   * comma is consumed between the pair.
+   */
+  private def splitTopLevelCommas(s: String): Vector[String] =
+    @tailrec
+    def loop(
+      i: Int,
+      segStart: Int,
+      depth: Int,
+      inSingle: Boolean,
+      inDouble: Boolean,
+      acc: Vector[String]
+    ): Vector[String] =
+      if i >= s.length then acc :+ s.substring(segStart)
+      else
+        s.charAt(i) match
+          case '\'' if !inDouble => loop(i + 1, segStart, depth, !inSingle, inDouble, acc)
+          case '"' if !inSingle => loop(i + 1, segStart, depth, inSingle, !inDouble, acc)
+          case '(' | '{' if !inSingle && !inDouble =>
+            loop(i + 1, segStart, depth + 1, inSingle, inDouble, acc)
+          case ')' | '}' if !inSingle && !inDouble =>
+            loop(i + 1, segStart, depth - 1, inSingle, inDouble, acc)
+          case ',' if !inSingle && !inDouble && depth == 0 =>
+            loop(i + 1, i + 1, depth, inSingle, inDouble, acc :+ s.substring(segStart, i))
+          case _ => loop(i + 1, segStart, depth, inSingle, inDouble, acc)
+    loop(0, 0, 0, inSingle = false, inDouble = false, Vector.empty)
 
   /**
    * GH-136: rewrite TYPED conditional-format formula text (CellIs.formula1/formula2,
