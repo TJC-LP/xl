@@ -369,7 +369,13 @@ class SecuritySpec extends FunSuite:
   /**
    * Run `body` with the jdk.xml entity-size system properties pinned to the 100k default the native
    * image bakes in — parsers created while these are set inherit the limits unless the factory
-   * explicitly lifts them (the GH-457 fix).
+   * explicitly raises them (the GH-457 fix).
+   *
+   * This mutates GLOBAL System properties, which is safe here because no other suite can observe
+   * the restricted window: Mill 1.1's `testParallelism` work-stealing scheduler forks runner JVMs
+   * that each execute test CLASSES sequentially (suites never share a JVM concurrently), and munit
+   * runs a suite's tests sequentially within the suite. If either of those ever changes, this
+   * helper must gain cross-suite isolation (a shared lock or suite-level serialization).
    */
   private def withRestrictedJaxpLimits[A](body: => A): A =
     val keys = List("jdk.xml.maxGeneralEntitySizeLimit", "jdk.xml.totalEntitySizeLimit")
@@ -402,23 +408,38 @@ class SecuritySpec extends FunSuite:
       case Some(Left(e)) => throw e
       case None => fail("worker thread did not complete")
 
-  test("GH-457: secure parser lifts JAXP entity-size limits (property pin + bloated parse)") {
+  /**
+   * Read a JAXP limit property under each of its aliases (legacy Oracle URI, modern jdk.xml name),
+   * tolerating parsers that recognize only one — mirroring the production code's alias tolerance.
+   */
+  private def readLimitAliases(
+    parser: javax.xml.parsers.SAXParser,
+    localName: String
+  ): List[String] =
+    List(s"http://www.oracle.com/xml/jaxp/properties/$localName", s"jdk.xml.$localName").flatMap {
+      name =>
+        try Option(parser.getProperty(name)).map(String.valueOf(_))
+        catch
+          case _: org.xml.sax.SAXNotRecognizedException => None
+          case _: org.xml.sax.SAXNotSupportedException => None
+    }
+
+  test("GH-457: secure parser raises JAXP entity-size limits (property pin + bloated parse)") {
     val xml = nameBloatedWorkbookXml(150_000)
+    val ceiling = XmlSecurity.EntitySizeLimitCeiling.toString
     withRestrictedJaxpLimits {
       val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
-      // The parser must carry limit=0 (unlimited) even when the environment restricts it — this
-      // is the exact mechanism that fixes the native image, where the baked-in parser default is
-      // 100000 and -Djdk.xml.* cannot reach the binary (GH-457).
-      val prefix = "http://www.oracle.com/xml/jaxp/properties/"
-      assertEquals(
-        String.valueOf(parser.getProperty(s"${prefix}maxGeneralEntitySizeLimit")),
-        "0",
-        "maxGeneralEntitySizeLimit must be lifted on parsers from secureSaxParserFactory"
+      // The parser must carry the finite fail-closed ceiling even when the environment restricts
+      // it — this is the exact mechanism that fixes the native image, where the baked-in parser
+      // default is 100000 and -Djdk.xml.* cannot reach the binary (GH-457). At least one alias
+      // must read the ceiling back: a JDK knowing only the jdk.xml name is still conformant.
+      assert(
+        readLimitAliases(parser, "maxGeneralEntitySizeLimit").contains(ceiling),
+        "maxGeneralEntitySizeLimit must be raised to the ceiling on parsers from secureSaxParserFactory"
       )
-      assertEquals(
-        String.valueOf(parser.getProperty(s"${prefix}totalEntitySizeLimit")),
-        "0",
-        "totalEntitySizeLimit must be lifted on parsers from secureSaxParserFactory"
+      assert(
+        readLimitAliases(parser, "totalEntitySizeLimit").contains(ceiling),
+        "totalEntitySizeLimit must be raised to the ceiling on parsers from secureSaxParserFactory"
       )
       // On JAXP builds that count the document entity against the limit (JDK 24-era Xerces, the
       // GraalVM the native image is built from) this parse throws JAXP00010003 without the fix.
