@@ -69,7 +69,7 @@ object Main
     // Note: --stream not supported for workbook-level commands (need full metadata)
     val workbookSubcmds = namesCmd
     val workbookOpts = (fileOpt, maxSizeOpt, workbookSubcmds).mapN { (file, maxSize, cmd) =>
-      run(file, None, None, None, maxSize, false, cmd)
+      run(file, None, None, None, None, maxSize, false, cmd)
     }
 
     // Sheets command: --file required, --output optional (required for hide/show, not for list)
@@ -77,8 +77,8 @@ object Main
     val sheetsOpts =
       (fileOpt, outputOpt.orNone, inPlaceOpt, backendOpt, maxSizeOpt, streamOpt, sheetsCmd).mapN {
         (file, outOpt, inPlace, backend, maxSize, stream, cmd) =>
-          runWithOutput(outOpt, inPlace, file) { out =>
-            run(file, None, out, backend, maxSize, stream, cmd)
+          runWithOutput(outOpt, inPlace, file) { (out, display) =>
+            run(file, None, out, display, backend, maxSize, stream, cmd)
           }
       }
 
@@ -96,7 +96,7 @@ object Main
 
     val sheetReadOnlyOpts = (fileOpt, sheetOpt, maxSizeOpt, streamOpt, sheetReadOnlySubcmds).mapN {
       (file, sheet, maxSize, stream, cmd) =>
-        run(file, sheet, None, None, maxSize, stream, cmd)
+        run(file, sheet, None, None, None, maxSize, stream, cmd)
     }
 
     // Sheet-level write: --file, --sheet, and --output (required)
@@ -115,8 +115,8 @@ object Main
         streamOpt,
         sheetWriteSubcmds
       ).mapN { (file, sheet, outOpt, inPlace, backend, maxSize, stream, cmd) =>
-        runWithOutput(outOpt, inPlace, file) { out =>
-          run(file, sheet, out, backend, maxSize, stream, cmd)
+        runWithOutput(outOpt, inPlace, file) { (out, display) =>
+          run(file, sheet, out, display, backend, maxSize, stream, cmd)
         }
       }
 
@@ -1573,6 +1573,7 @@ EXAMPLES:
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
+    displayOpt: Option[Path],
     backendOpt: Option[XmlBackend],
     maxSizeOpt: Option[Long],
     stream: Boolean,
@@ -1581,7 +1582,14 @@ EXAMPLES:
     execute(filePath, sheetNameOpt, outputOpt, backendOpt, maxSizeOpt, stream, cmd).attempt
       .flatMap {
         case Right(output) =>
-          IO.println(output).as(ExitCode.Success)
+          // In-place writes (-i) target a temp file that is atomically moved onto the
+          // input after the command succeeds; success messages must name the user-visible
+          // path, not the temp file that no longer exists by the time it is read (GH-464).
+          val rendered = (outputOpt, displayOpt) match
+            case (Some(write), Some(display)) if write != display =>
+              output.replace(write.toString, display.toString)
+            case _ => output
+          IO.println(rendered).as(ExitCode.Success)
         case Left(err) =>
           IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
       }
@@ -2590,6 +2598,10 @@ EXAMPLES:
   /**
    * Dispatch `run` with effective output path from --output / --in-place flags.
    *
+   * The callback receives (writePath, displayPath): the path the command must write to and the path
+   * user-facing messages must name. They differ only for `-i`, where writes go to a temp file that
+   * is moved onto the input after success (GH-464).
+   *
    * Cases:
    *   - `-o` only: writes directly to the output path
    *   - `-i` only: writes to a sibling temp file then atomically moves onto input. If the command
@@ -2601,14 +2613,14 @@ EXAMPLES:
     outOpt: Option[Path],
     inPlace: Boolean,
     file: Path
-  )(execute: Option[Path] => IO[ExitCode]): IO[ExitCode] =
+  )(execute: (Option[Path], Option[Path]) => IO[ExitCode]): IO[ExitCode] =
     (outOpt, inPlace) match
       case (Some(_), true) =>
         IO.println(
           Format.errorSimple("--in-place (-i) and --output (-o) are mutually exclusive")
         ).as(ExitCode.Error)
-      case (Some(out), false) => execute(Some(out))
-      case (None, false) => execute(None)
+      case (Some(out), false) => execute(Some(out), Some(out))
+      case (None, false) => execute(None, None)
       case (None, true) =>
         val tmpDir = Option(file.getParent).getOrElse(java.nio.file.Paths.get("."))
         val tmpResource = cats.effect.Resource.make(
@@ -2616,7 +2628,7 @@ EXAMPLES:
         )(tmp => IO.blocking(java.nio.file.Files.deleteIfExists(tmp)).void)
 
         tmpResource.use { tmp =>
-          execute(Some(tmp)).flatMap {
+          execute(Some(tmp), Some(file)).flatMap {
             case ExitCode.Success =>
               // Atomic move: same directory guarantees same filesystem on POSIX/NTFS
               IO.blocking(

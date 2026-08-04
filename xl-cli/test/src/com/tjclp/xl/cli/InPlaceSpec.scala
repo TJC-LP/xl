@@ -1,5 +1,7 @@
 package com.tjclp.xl.cli
 
+import java.io.{ByteArrayOutputStream, PrintStream}
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import cats.effect.{ExitCode, IO}
@@ -18,6 +20,7 @@ import com.tjclp.xl.macros.ref
  *   - `-i` + `-o` together is an error (mutually exclusive)
  *   - A failed execution leaves the original file untouched and cleans up the temp
  *   - A successful execution produces the expected output in place
+ *   - Success messages name the user-visible target, never the temp file (GH-464)
  */
 @SuppressWarnings(
   Array(
@@ -44,32 +47,38 @@ class InPlaceSpec extends CatsEffectSuite:
       excel.write(wb, tempFile) *> test(tempFile)
     }
 
-  test("runWithOutput: -o alone passes the output path through") {
+  test("runWithOutput: -o alone passes the output path through as write and display") {
     val file = Path.of("/tmp/input.xlsx")
     val out = Path.of("/tmp/output.xlsx")
     var captured: Option[Path] = None
+    var capturedDisplay: Option[Path] = None
     Main
-      .runWithOutput(Some(out), inPlace = false, file) { received =>
+      .runWithOutput(Some(out), inPlace = false, file) { (received, display) =>
         captured = received
+        capturedDisplay = display
         IO.pure(ExitCode.Success)
       }
       .map { code =>
         assertEquals(code, ExitCode.Success)
         assertEquals(captured, Some(out))
+        assertEquals(capturedDisplay, Some(out))
       }
   }
 
   test("runWithOutput: neither flag passes None through") {
     val file = Path.of("/tmp/input.xlsx")
     var captured: Option[Path] = Some(Path.of("/sentinel"))
+    var capturedDisplay: Option[Path] = Some(Path.of("/sentinel"))
     Main
-      .runWithOutput(None, inPlace = false, file) { received =>
+      .runWithOutput(None, inPlace = false, file) { (received, display) =>
         captured = received
+        capturedDisplay = display
         IO.pure(ExitCode.Success)
       }
       .map { code =>
         assertEquals(code, ExitCode.Success)
         assertEquals(captured, None)
+        assertEquals(capturedDisplay, None)
       }
   }
 
@@ -77,7 +86,7 @@ class InPlaceSpec extends CatsEffectSuite:
     val file = Path.of("/tmp/input.xlsx")
     val out = Path.of("/tmp/output.xlsx")
     Main
-      .runWithOutput(Some(out), inPlace = true, file)(_ => IO.pure(ExitCode.Success))
+      .runWithOutput(Some(out), inPlace = true, file)((_, _) => IO.pure(ExitCode.Success))
       .map { code => assertEquals(code, ExitCode.Error) }
   }
 
@@ -85,9 +94,11 @@ class InPlaceSpec extends CatsEffectSuite:
     withTempExcelFile { tempFile =>
       // Capture the actual path we were asked to write to (should NOT be tempFile)
       var writePath: Option[Path] = None
-      val result = Main.runWithOutput(None, inPlace = true, tempFile) { outOpt =>
+      val result = Main.runWithOutput(None, inPlace = true, tempFile) { (outOpt, displayOpt) =>
         val out = outOpt.get
         writePath = Some(out)
+        // Messages must be rendered against the original file, not the temp (GH-464)
+        assertEquals(displayOpt, Some(tempFile))
         // Verify we're writing to a temp file, not the original
         assert(out != tempFile, s"In-place should write to temp, got: $out")
         assert(
@@ -118,7 +129,7 @@ class InPlaceSpec extends CatsEffectSuite:
   test("runWithOutput: -i leaves original untouched on error exit") {
     withTempExcelFile { tempFile =>
       var writePath: Option[Path] = None
-      val result = Main.runWithOutput(None, inPlace = true, tempFile) { outOpt =>
+      val result = Main.runWithOutput(None, inPlace = true, tempFile) { (outOpt, _) =>
         writePath = outOpt
         // Simulate a failure: return Error exit code without writing anything useful
         IO.pure(ExitCode.Error)
@@ -141,7 +152,7 @@ class InPlaceSpec extends CatsEffectSuite:
   test("runWithOutput: -i leaves original untouched when execute throws") {
     withTempExcelFile { tempFile =>
       var writePath: Option[Path] = None
-      val result = Main.runWithOutput(None, inPlace = true, tempFile) { outOpt =>
+      val result = Main.runWithOutput(None, inPlace = true, tempFile) { (outOpt, _) =>
         writePath = outOpt
         IO.raiseError(new RuntimeException("simulated crash"))
       }
@@ -155,5 +166,71 @@ class InPlaceSpec extends CatsEffectSuite:
         assert(outcome.isLeft, "Expected error to propagate")
         assertEquals(a1, Some(CellValue.Text("Hello")))
         assert(!tempExists, "Temp file should be cleaned up on exception")
+    }
+  }
+
+  // ========== Success message names the target, not the temp (GH-464) ==========
+
+  private def xlCommand = com.monovore.decline.Command("xl", "test")(Main.main)
+
+  /** Parse a full CLI invocation and run it, capturing everything printed to stdout. */
+  private def runCliCaptured(args: String*): IO[(ExitCode, String)] =
+    IO.fromEither(
+      xlCommand.parse(args, Map.empty).left.map(help => new Exception(help.toString))
+    ).flatMap { io =>
+      IO.blocking(new ByteArrayOutputStream()).flatMap { baos =>
+        IO.blocking {
+          val prev = System.out
+          System.setOut(new PrintStream(baos, true, StandardCharsets.UTF_8))
+          prev
+        }.bracket(_ => io)(prev => IO.blocking(System.setOut(prev)))
+          .map(code => (code, baos.toString(StandardCharsets.UTF_8)))
+      }
+    }
+
+  test("-i recalc: success message names the original file, not the temp (GH-464)") {
+    withTempExcelFile { tempFile =>
+      runCliCaptured("-f", tempFile.toString, "-i", "recalc").map { case (code, out) =>
+        assertEquals(code, ExitCode.Success)
+        assert(out.contains(s"Saved: $tempFile"), s"expected 'Saved: $tempFile' in:\n$out")
+        assert(!out.contains(".xl-inplace-"), s"message leaks the temp path:\n$out")
+      }
+    }
+  }
+
+  test("-i put: success message names the original file, not the temp (GH-464)") {
+    withTempExcelFile { tempFile =>
+      runCliCaptured("-f", tempFile.toString, "-s", "Test", "-i", "put", "A2", "99").map {
+        case (code, out) =>
+          assertEquals(code, ExitCode.Success)
+          assert(out.contains(s"Saved: $tempFile"), s"expected 'Saved: $tempFile' in:\n$out")
+          assert(!out.contains(".xl-inplace-"), s"message leaks the temp path:\n$out")
+      }
+    }
+  }
+
+  test("-o put: success message still names the -o target (GH-464 regression guard)") {
+    withTempExcelFile { tempFile =>
+      IO.blocking {
+        val out = Files.createTempFile("xl-inplace-test-out-", ".xlsx")
+        Files.deleteIfExists(out)
+        out.toFile.deleteOnExit()
+        out
+      }.flatMap { outFile =>
+        runCliCaptured(
+          "-f",
+          tempFile.toString,
+          "-s",
+          "Test",
+          "-o",
+          outFile.toString,
+          "put",
+          "A2",
+          "99"
+        ).map { case (code, out) =>
+          assertEquals(code, ExitCode.Success)
+          assert(out.contains(s"Saved: $outFile"), s"expected 'Saved: $outFile' in:\n$out")
+        }
+      }
     }
   }
