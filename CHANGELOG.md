@@ -16,7 +16,10 @@ and corruption bug the TJC field QC surfaced on real banker books.
   recalculation finally distinguishes convergence from `maxIter`
   exhaustion — `iterateCycles` computed both and threw them away.
   Defaults (`converged = true`, `iterationsUsed = 0`) keep every
-  existing construction site and consumer source-compatible. The CLI
+  existing construction site and consumer source-compatible (note:
+  adding case-class fields changes `apply`/`unapply`/`copy` signatures,
+  so this is binary-incompatible for `xl-evaluator` consumers compiled
+  against 0.19.0). The CLI
   recalc summary renders them: `; converged in N iterative round(s)`
   or `; WARNING: iterative calculation exhausted N round(s) without
   converging (last values kept)`.
@@ -38,10 +41,15 @@ and corruption bug the TJC field QC surfaced on real banker books.
   bit-identical fast path. `xl recalc` now auto-derives iteration from
   the file's declared calcPr (the CLI honors the file like Excel; the
   library `recalculate()` default stays opt-in), and `--tables` prints
-  the seed warnings.
+  the seed warnings. A `Skipped` warning surfaces interiors left
+  unseeded (axis/member evaluation failure, or the per-table iteration
+  budget that guards against hostile `iterateCount` declarations), and
+  one seeding run pins a single volatile generation — `NOW()`/`TODAY()`
+  cannot straddle values mid-table.
 - **`formula-leading-equals` lint** (#456): flags `<f>` text stored
   with a leading `=` (non-spec; openpyxl reads it back as `==…`) —
-  re-writing the file with xl heals it.
+  re-writing the file with xl heals it. One bounded finding per sheet
+  part (first 5 refs + total count), DOM/SAX finding-identical.
 
 ### Fixed
 
@@ -59,15 +67,19 @@ and corruption bug the TJC field QC surfaced on real banker books.
   comparisons now parse left-associatively (`(a=b)=c`, Excel parity).
   Belt-and-braces: structural edits no longer reprint formulas on
   sheets that neither are the edit target nor reference it — untouched
-  sheets ride byte-identical at the model level.
+  formula text rides byte-identical at the model level, while cached
+  values of formulas transitively dependent (cross-sheet, through any
+  chain) on the edited sheet are invalidated so no stale `<v>` can
+  ship.
 - **Native image could not open name-bloated real workbooks** (#457):
   legacy banker books carrying 37k–110k `definedName` entries (multi-MB
   single-line workbook.xml) tripped JAXP's 100KB
   `maxGeneralEntitySizeLimit` on every verb, and `-Djdk.xml.*` has no
   effect on the native binary. The shared `XmlSecurity` parser factory
-  now lifts the size limits on the parser itself (safe: doctype is
-  already disallowed, so entity-expansion attacks remain structurally
-  impossible), covering all SAX sites and `parseSafe`; the one drifted
+  now raises the size limits on the parser itself to a finite 2GB
+  fail-closed ceiling (safe: doctype is already disallowed, so
+  entity-expansion attacks remain structurally impossible), covering
+  all SAX sites and `parseSafe`; the one drifted
   inline factory in the CLI streaming path was collapsed onto it. The
   release workflow gained a native smoke gate that reads a
   120k-definedNames book.
