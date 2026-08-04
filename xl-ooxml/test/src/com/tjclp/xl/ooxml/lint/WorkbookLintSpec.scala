@@ -997,12 +997,41 @@ class WorkbookLintSpec extends FunSuite:
   </sheetData>"""
   )
 
+  /** Seven offending formulas in document order A1, B1, C1, A2, B2, C2, A3. */
+  private val manyLeadingEqualsSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><f>=1</f></c><c r="B1"><f>=2</f></c><c r="C1"><f>=3</f></c></row>
+    <row r="2"><c r="A2"><f>=4</f></c><c r="B2"><f>=5</f></c><c r="C2"><f>=6</f></c></row>
+    <row r="3"><c r="A3"><f>=7</f></c></row>
+  </sheetData>"""
+  )
+
   test("GH-456: <f> text starting with '=' is flagged as FormulaLeadingEquals") {
     val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> leadingEqualsSheetXml))
     assertEquals(findings.map(_.category), Vector(LintCategory.FormulaLeadingEquals))
     val f = findings.head
     assertEquals(f.part, "xl/worksheets/sheet1.xml")
-    assert(f.locator.contains("B1"), s"locator should carry the cell ref: $f")
+    assert(f.locator.contains("B1"), s"locator should carry the first offending cell: $f")
+    assert(f.message.contains("1 formula(s)"), s"message should carry the total count: $f")
+    assert(f.message.contains("B1"), s"message should name the offending cell: $f")
+    assert(f.message.contains("re-writing"), s"message should say a re-write heals it: $f")
+  }
+
+  test("GH-456: leading-'=' findings aggregate to ONE finding per part (first 5 + total count)") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> manyLeadingEqualsSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.FormulaLeadingEquals))
+    val f = findings.head
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    // Locator names the FIRST offending cell so the finding is actionable without re-deriving it.
+    assert(f.locator.contains("A1"), s"locator should carry the first offending cell: $f")
+    assert(f.message.contains("7 formula(s)"), s"message should carry the total count: $f")
+    assert(
+      f.message.contains("first 5: A1, B1, C1, A2, B2"),
+      s"message should sample the first 5 offending cells in document order: $f"
+    )
+    // The sample is bounded: cells past the first 5 never appear (no unbounded finding growth).
+    assert(!f.message.contains("C2"), s"message must not carry cells past the sample: $f")
+    assert(!f.message.contains("A3"), s"message must not carry cells past the sample: $f")
     assert(f.message.contains("re-writing"), s"message should say a re-write heals it: $f")
   }
 
@@ -1074,9 +1103,12 @@ class WorkbookLintSpec extends FunSuite:
     "unseeded autoNoTable data table" -> autoNoTableParts(unseededDataTableSheetXml),
     "partly seeded autoNoTable data table" -> autoNoTableParts(partlySeededDataTableSheetXml),
     "torn autoNoTable data table" -> autoNoTableParts(tornInteriorSheetXml),
-    // GH-456: <f> text observation must agree between the DOM and SAX scanners
+    // GH-456: <f> text observation must agree between the DOM and SAX scanners, including the
+    // aggregated per-part shape (sample order + total count)
     "leading-equals formula" ->
       (baseParts + ("xl/worksheets/sheet1.xml" -> leadingEqualsSheetXml)),
+    "many leading-equals formulas" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> manyLeadingEqualsSheetXml)),
     "clean formula text" -> (baseParts + ("xl/worksheets/sheet1.xml" -> cleanFormulaSheetXml)),
     // GH-458: Microsoft xlExternalLinkPath variants resolve clean in both modes
     "ms xlPathMissing external" ->

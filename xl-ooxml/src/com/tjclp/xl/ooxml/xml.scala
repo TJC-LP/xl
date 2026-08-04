@@ -510,17 +510,27 @@ object XmlUtil:
 
 object XmlSecurity:
   /**
-   * JAXP entity-SIZE limit properties lifted (set to 0 = unlimited) on every parser built by
+   * Finite ceiling the JAXP entity-SIZE limits are raised to (GH-457): 2,000,000,000 bytes —
+   * comfortably above any real workbook.xml (field books with 100k+ definedNames are single-digit
+   * MB) and far above the 100KB JAXP default, yet FINITE so the parser still fails closed on a
+   * truly pathological document entity. `"0"` would mean unlimited — no backstop at all — so a
+   * crafted input could drive unbounded parse work; a large finite ceiling keeps the GH-457 fix
+   * while preserving a hard upper bound.
+   */
+  private[ooxml] val EntitySizeLimitCeiling: Int = 2_000_000_000
+
+  /**
+   * JAXP entity-SIZE limit properties raised to [[EntitySizeLimitCeiling]] on every parser built by
    * [[secureSaxParserFactory]] (GH-457): real workbooks accumulate tens of thousands of
    * definedNames (multi-MB single-line workbook.xml), and JAXP builds that default these limits to
    * 100KB — the GraalVM the native image is built from, where `-Djdk.xml.*` cannot reach the binary
-   * — reject the document entity with JAXP00010003 on every verb. Lifting SIZE limits is safe
+   * — reject the document entity with JAXP00010003 on every verb. Raising SIZE limits is safe
    * because doctype declarations are rejected outright (`disallow-doctype-decl`), so no general
    * entity can ever be defined and entity-expansion attacks remain structurally impossible;
    * `entityExpansionLimit` is deliberately left at its default. Each limit lists its legacy Oracle
    * URI first (recognized on every mainstream JDK), then the modern `jdk.xml.` name.
    */
-  private val liftedEntitySizeLimits: List[List[String]] = List(
+  private val raisedEntitySizeLimits: List[List[String]] = List(
     List(
       "http://www.oracle.com/xml/jaxp/properties/maxGeneralEntitySizeLimit",
       "jdk.xml.maxGeneralEntitySizeLimit"
@@ -531,16 +541,16 @@ object XmlSecurity:
     )
   )
 
-  /** Set each lifted limit under the first property name the parser recognizes (GH-457). */
-  private def liftEntitySizeLimits(parser: javax.xml.parsers.SAXParser): Unit =
-    liftedEntitySizeLimits.foreach { aliases =>
+  /** Set each raised limit under the first property name the parser recognizes (GH-457). */
+  private def raiseEntitySizeLimits(parser: javax.xml.parsers.SAXParser): Unit =
+    raisedEntitySizeLimits.foreach { aliases =>
       val _ = aliases.exists { name =>
         try
-          parser.setProperty(name, "0")
+          parser.setProperty(name, EntitySizeLimitCeiling.toString)
           true
         catch
           // Tolerate exotic parsers that don't know the JAXP limit properties: hardening
-          // features above still apply; only the limit-lifting is best-effort.
+          // features above still apply; only the limit-raising is best-effort.
           case _: org.xml.sax.SAXNotRecognizedException => false
           case _: org.xml.sax.SAXNotSupportedException => false
       }
@@ -548,7 +558,7 @@ object XmlSecurity:
 
   /**
    * Delegating factory so every call site building parsers via
-   * `secureSaxParserFactory().newSAXParser()` inherits the GH-457 limit-lifting automatically — the
+   * `secureSaxParserFactory().newSAXParser()` inherits the GH-457 limit-raising automatically — the
    * JAXP limits are parser properties, not factory features, so they cannot be carried by the
    * underlying factory itself.
    */
@@ -556,7 +566,7 @@ object XmlSecurity:
       extends javax.xml.parsers.SAXParserFactory:
     override def newSAXParser(): javax.xml.parsers.SAXParser =
       val parser = underlying.newSAXParser()
-      liftEntitySizeLimits(parser)
+      raiseEntitySizeLimits(parser)
       parser
     override def setFeature(name: String, value: Boolean): Unit = underlying.setFeature(name, value)
     override def getFeature(name: String): Boolean = underlying.getFeature(name)
@@ -577,8 +587,9 @@ object XmlSecurity:
    * XInclude off, namespaces on. Streaming SAX sites (worksheet/SST/dimension readers, streaming
    * transforms) must build their parsers from this factory so the hardening cannot drift per-site
    * (GH-350) — pair it with [[stripLeadingDoctypeStream]] on the input so benign doctypes still
-   * read. Parsers it creates additionally have the JAXP entity-SIZE limits lifted so name-bloated
-   * multi-MB core parts read on the native image (GH-457, see [[liftedEntitySizeLimits]]).
+   * read. Parsers it creates additionally have the JAXP entity-SIZE limits raised to a large finite
+   * ceiling so name-bloated multi-MB core parts read on the native image (GH-457, see
+   * [[raisedEntitySizeLimits]]).
    */
   def secureSaxParserFactory(): javax.xml.parsers.SAXParserFactory =
     val factory = javax.xml.parsers.SAXParserFactory.newInstance()

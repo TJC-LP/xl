@@ -156,11 +156,13 @@ jobs:
           STATUS=$?
           set -e
           echo "$OUTPUT"
+          # Clean up BEFORE gating: the multi-MB fixture must never linger in the workspace for
+          # the later rename/upload steps, whichever way the gate goes.
+          rm -f name-bloated.xlsx
           if [ "$STATUS" -ne 0 ] || echo "$OUTPUT" | grep -q "JAXP000"; then
             echo "::error::native binary cannot read a name-bloated workbook (GH-457)"
             exit 1
           fi
-          rm -f name-bloated.xlsx
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
