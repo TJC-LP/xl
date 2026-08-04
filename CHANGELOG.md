@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Wave 23: the post-0.19.0 field-QC burn-down — every silent-wrong-number
+and corruption bug the TJC field QC surfaced on real banker books.
+
+### Added
+
+- **`RecalcResult.converged` + `iterationsUsed`** (#454): iterative
+  recalculation finally distinguishes convergence from `maxIter`
+  exhaustion — `iterateCycles` computed both and threw them away.
+  Defaults (`converged = true`, `iterationsUsed = 0`) keep every
+  existing construction site and consumer source-compatible. The CLI
+  recalc summary renders them: `; converged in N iterative round(s)`
+  or `; WARNING: iterative calculation exhausted N round(s) without
+  converging (last values kept)`.
+- **Data-table seeding honors CalcPr on circular books** (#453): the
+  seeder's per-axis what-if substitution previously pinned circular
+  precedents at their loaded caches, so every interior seeded the base
+  value — silently FLAT sensitivity grids. Now, when a table's corner
+  depends on the workbook's cyclic core: with `<calcPr iterate="1"/>`
+  declared (or an explicit `IterativeCalc`), each axis combination runs
+  a narrowed Jacobi fixpoint over just the relevant cycle members
+  (what-if input cells stay pinned to their axis values, breaking the
+  cycle through them exactly as Excel's substitution does); without
+  iterate declared, the table is skipped untouched — the interior stays
+  uncached so `data-table-unseeded` lints dirty instead of shipping
+  flat. New `seedDataTablesReport()` returns
+  `DataTableSeedReport(workbook, warnings)` with `CircularNotIterated`
+  (naming the cycle) and `NotConverged` warnings; explicit
+  `seedDataTables(IterativeCalc)` overloads added. Acyclic books take a
+  bit-identical fast path. `xl recalc` now auto-derives iteration from
+  the file's declared calcPr (the CLI honors the file like Excel; the
+  library `recalculate()` default stays opt-in), and `--tables` prints
+  the seed warnings.
+- **`formula-leading-equals` lint** (#456): flags `<f>` text stored
+  with a leading `=` (non-spec; openpyxl reads it back as `==…`) —
+  re-writing the file with xl heals it.
+
+### Fixed
+
+- **insert-rows dropped grouping parentheses — workbook-wide, silent,
+  semantic** (#455): `FormulaPrinter` printed the right operand of
+  every left-associative binary operator at the operator's own
+  precedence with a strict `>` paren guard, so right-nested
+  same-precedence children lost their parens on reprint:
+  `=E13/(E12*E14)` → `=E15/E14*E16` (1.0 → 4.0) after a structural
+  edit. Right operands now print one level tighter, fixing
+  insert/delete-rows/cols, `putf --from` dragging, `copy`, `batch`,
+  and the streaming writer in one pass. The `parse ∘ print = id`
+  round-trip law is now pinned by a recursive expression generator
+  (the old property only used flat literal operands). Chained
+  comparisons now parse left-associatively (`(a=b)=c`, Excel parity).
+  Belt-and-braces: structural edits no longer reprint formulas on
+  sheets that neither are the edit target nor reference it — untouched
+  sheets ride byte-identical at the model level.
+- **Native image could not open name-bloated real workbooks** (#457):
+  legacy banker books carrying 37k–110k `definedName` entries (multi-MB
+  single-line workbook.xml) tripped JAXP's 100KB
+  `maxGeneralEntitySizeLimit` on every verb, and `-Djdk.xml.*` has no
+  effect on the native binary. The shared `XmlSecurity` parser factory
+  now lifts the size limits on the parser itself (safe: doctype is
+  already disallowed, so entity-expansion attacks remain structurally
+  impossible), covering all SAX sites and `parseSafe`; the one drifted
+  inline factory in the CLI streaming path was collapsed onto it. The
+  release workflow gained a native smoke gate that reads a
+  120k-definedNames book.
+- **Scripting formula writer emitted a leading `=` inside `<f>`**
+  (#456): `fx"=B4*2"` serialized as `<f>=B4*2</f>` while the CLI path
+  wrote clean; all `<f>` emission sites (DOM, SAX, streaming) now strip
+  the leading `=` — one canonical serialization for both authoring
+  paths, and re-writing legacy files heals them.
+- **lint false-positived Excel's xlPathMissing external links**
+  (#458): the Microsoft external-link-path variants (`xlPathMissing`,
+  `xlLibraryPath`, `xlStartupPath`, `xlAltStartupPath`) — which Excel
+  itself writes for broken/special external-book paths — now resolve as
+  valid `externalBook` targets instead of `wrong-rel-type` findings,
+  so "lint must exit 0" ship gates stop false-alarming on pass-through
+  edits of real books.
+- **`-i` success messages printed the temp file** (#464): every
+  in-place verb (`recalc`, `put`, `putf`, … ~40 commands) reported
+  `Saved: ./.xl-inplace-….xlsx` — a path that no longer exists after
+  the atomic move — instead of the target. `runWithOutput` now threads
+  the display path, fixing the whole family at one seam.
+
 ## [0.19.0] "Canon" - 2026-08-03
 
 Tracker-zero release: the wave-21 epilogue (col/row default styles, sheet
