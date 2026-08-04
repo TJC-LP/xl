@@ -9,16 +9,6 @@ import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
 
 trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
-  private def compareCellValues(cv: CellValue, value: ExprValue): Int =
-    (cv, value) match
-      case (CellValue.Number(n1), ExprValue.Number(n2)) => n1.compare(n2)
-      case (CellValue.Text(s1), ExprValue.Text(s2)) => s1.compareToIgnoreCase(s2)
-      case (CellValue.Bool(b1), ExprValue.Bool(b2)) => b1.compare(b2)
-      case (CellValue.Error(e1), ExprValue.Cell(CellValue.Error(e2))) =>
-        e1.ordinal.compareTo(e2.ordinal)
-      case (CellValue.Formula(_, Some(cached), _), other) => compareCellValues(cached, other)
-      case _ => 0
-
   private def coerceToBigDecimal(value: ExprValue): BigDecimal =
     value match
       case ExprValue.Number(n) => n
@@ -104,6 +94,9 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         (targetSheet, lookupRange) = resolved
         result <- {
           val matchTypeInt = matchType.toInt
+          // GH-467: dereference cell-ref lookup values and coerce dates to serials up front —
+          // positions below are RANGE positions (idx + 1), blanks included, never compacted.
+          val lookup = normalizeLookupValue(lookupValueEval)
           val cells: List[(Int, CellValue)] =
             lookupRange.cells.toList.zipWithIndex.map { case (ref, idx) =>
               (idx + 1, targetSheet(ref).value)
@@ -113,23 +106,21 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
             case 0 =>
               cells
                 .find { case (_, cv) =>
-                  compareCellValues(cv, lookupValueEval) == 0
+                  matchesLookupExact(cv, lookup)
                 }
                 .map(_._1)
             case 1 =>
-              val numericLookup = coerceToBigDecimal(lookupValueEval)
+              val numericLookup = coerceToBigDecimal(lookup)
+              // GH-467: extractNumericValue skips blanks/text/bools (they are NOT zero) and
+              // yields serials for DateTime cells, so date columns work in approximate mode.
               val candidates = cells.flatMap { case (pos, cv) =>
-                val numericCv = coerceToNumeric(cv)
-                if numericCv <= numericLookup then Some((pos, numericCv))
-                else None
+                extractNumericValue(cv).filter(_ <= numericLookup).map(n => (pos, n))
               }
               candidates.maxByOption(_._2).map(_._1)
             case -1 =>
-              val numericLookup = coerceToBigDecimal(lookupValueEval)
+              val numericLookup = coerceToBigDecimal(lookup)
               val candidates = cells.flatMap { case (pos, cv) =>
-                val numericCv = coerceToNumeric(cv)
-                if numericCv >= numericLookup then Some((pos, numericCv))
-                else None
+                extractNumericValue(cv).filter(_ >= numericLookup).map(n => (pos, n))
               }
               candidates.minByOption(_._2).map(_._1)
             case _ =>

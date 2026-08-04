@@ -24,18 +24,18 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     val lookupCells = lookupArray.cells.toVector
     val returnCells = returnArray.cells.toVector
 
+    // GH-467: dereference cell-ref lookup values and coerce dates to serials before comparing —
+    // a ref to a cell holding "k2" must match exactly like the literal "k2".
+    val lookup = normalizeLookupValue(lookupValue)
+
     // GH-55: accept binary-search modes 2 (ascending) and -2 (descending). Linear iteration in the
     // correct direction yields correct results; -2 iterates reversed like -1 (descending order).
     val indices =
       if searchMode == -1 || searchMode == -2 then lookupCells.indices.reverse
       else lookupCells.indices
 
-    val wildcardCriterionOpt = lookupValue match
+    val wildcardCriterionOpt = lookup match
       case ExprValue.Text(text) =>
-        CriteriaMatcher.parse(ExprValue.Text(text)) match
-          case c: CriteriaMatcher.Wildcard => Some(c)
-          case _ => None
-      case ExprValue.Cell(CellValue.Text(text)) =>
         CriteriaMatcher.parse(ExprValue.Text(text)) match
           case c: CriteriaMatcher.Wildcard => Some(c)
           case _ => None
@@ -45,16 +45,16 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       case 0 =>
         indices.find { idx =>
           val cellValue = lookupSheet(lookupCells(idx)).value
-          matchesExactForXLookup(cellValue, lookupValue)
+          matchesLookupExact(cellValue, lookup)
         }
       case -1 =>
-        findNextSmaller(lookupValue, lookupCells, lookupSheet, indices)
+        findNextSmaller(lookup, lookupCells, lookupSheet, indices)
       case 1 =>
-        findNextLarger(lookupValue, lookupCells, lookupSheet, indices)
+        findNextLarger(lookup, lookupCells, lookupSheet, indices)
       case 2 =>
         indices.find { idx =>
           val cellValue = lookupSheet(lookupCells(idx)).value
-          matchesExactForXLookup(cellValue, lookupValue) ||
+          matchesLookupExact(cellValue, lookup) ||
           wildcardCriterionOpt.exists(CriteriaMatcher.matches(cellValue, _))
         }
       case _ => None
@@ -65,14 +65,6 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         ifNotFoundOpt match
           case Some(expr) => evalValue(ctx, expr).map(toCellValue)
           case None => Right(CellValue.Error(CellError.NA))
-
-  private def matchesExactForXLookup(cellValue: CellValue, lookupValue: ExprValue): Boolean =
-    (cellValue, lookupValue) match
-      case (CellValue.Number(n), ExprValue.Number(v)) => n == v
-      case (CellValue.Text(s), ExprValue.Text(v)) => s.equalsIgnoreCase(v)
-      case (CellValue.Bool(b), ExprValue.Bool(v)) => b == v
-      case (CellValue.Formula(_, Some(cached), _), v) => matchesExactForXLookup(cached, v)
-      case _ => false
 
   private def findNextSmaller(
     lookupValue: ExprValue,
