@@ -1889,3 +1889,97 @@ class FormulaParserSpec extends ScalaCheckSuite:
       case Left(_) => ()
       case Right(expr) => fail(s"'=A$$B' should not parse, got $expr")
   }
+
+  // ==================== GH-455: right-nested same-precedence grouping ====================
+  // The parser has no Paren node — grouping survives ONLY through the AST shape, so the
+  // printer must parenthesize a RIGHT operand at the same precedence level as its
+  // left-associative parent: Div(a, Mul(b,c)) is a/(b*c), never a/b*c (which re-parses as
+  // (a/b)*c — a different value). Every reference rewrite (insert-rows, putf --from, copy)
+  // reprints through FormulaPrinter, so this is the semantic-damage site of GH-455.
+
+  test("GH-455: division with a product divisor keeps its parens (=E13/(E12*E14))") {
+    assertPreserved("=E13/(E12*E14)")
+  }
+
+  test("GH-455: nested grouped divisor keeps both paren layers (=E12/((E13+E14)/2))") {
+    assertPreserved("=E12/((E13+E14)/2)")
+  }
+
+  test("GH-455: subtraction of a grouped sum keeps its parens (=E12-(E13+E14))") {
+    assertPreserved("=E12-(E13+E14)")
+  }
+
+  test("GH-455: right-nested same-op groups keep parens (associativity is not reshaped)") {
+    assertPreserved("=A1+(B1+C1)")
+    assertPreserved("=A1*(B1*C1)")
+    assertPreserved("=A1/(B1/C1)")
+    assertPreserved("=A1-(B1-C1)")
+    assertPreserved("=A1&(B1&C1)")
+  }
+
+  test("GH-455: cross-sheet refs inside a grouped divisor keep parens") {
+    assertPreserved("=A!E13/(A!E12*A!E14)")
+  }
+
+  test("GH-455: grouped sum under ROUND inside IF keeps its parens") {
+    FormulaParser.parse("=IF(ROUND(E12-(E13+E14),0)=0,\"Yes\",\"No\")") match
+      case Right(expr) =>
+        // Call args print with the canonical ", " separator; the inner grouping must survive.
+        assertEquals(FormulaPrinter.print(expr), "=IF(ROUND(E12-(E13+E14), 0)=0, \"Yes\", \"No\")")
+      case Left(err) => fail(s"issue formula should parse: $err")
+  }
+
+  test("GH-455: right operand of looser precedence still needs no parens") {
+    assertPreserved("=A1+B1*C1") // Mul right of Add: tighter, bare
+    assertPreserved("=A1*B1^C1") // Pow right of Mul: tighter, bare
+    assertPreserved("=A1&B1+C1") // Add right of Concat: tighter, bare
+    assertPreserved("=A1>B1+C1") // Add right of comparison: tighter, bare
+  }
+
+  test("GH-455: right-nested comparisons keep parens for all six operators") {
+    for op <- List("=", "<>", "<", "<=", ">", ">=") do
+      val source = s"=A1${op}(B1${op}C1)"
+      FormulaParser.parse(source) match
+        case Right(expr) =>
+          assertEquals(FormulaPrinter.print(expr), source, s"grouping lost for '$op'")
+        case Left(err) => fail(s"$source should parse: $err")
+  }
+
+  /**
+   * GH-455: fully parenthesized random arithmetic over literals and refs. Parsing discards the
+   * (redundant-after-shape) parens; printing minimal parens must preserve the SHAPE, so a second
+   * parse yields the identical AST. Comparing two parser-produced ASTs keeps Ref.decode equality
+   * meaningful (the parser resolves refs through shared per-call-site decoders).
+   */
+  private def genGroupedSource(depth: Int): Gen[String] =
+    val leaf: Gen[String] = Gen.oneOf(
+      Gen.choose(1, 99).map(_.toString),
+      for
+        col <- Gen.alphaUpperChar
+        row <- Gen.choose(1, 99)
+      yield s"$col$row"
+    )
+    if depth <= 0 then leaf
+    else
+      Gen.frequency(
+        1 -> leaf,
+        4 -> (for
+          l <- genGroupedSource(depth - 1)
+          r <- genGroupedSource(depth - 1)
+          op <- Gen.oneOf("+", "-", "*", "/", "^", "&")
+        yield s"($l$op$r)")
+      )
+
+  property("GH-455: parse ∘ print = id for recursive mixed-operator expressions") {
+    forAll(genGroupedSource(4)) { source =>
+      FormulaParser.parse(s"=$source") match
+        case Right(e1) =>
+          val printed = FormulaPrinter.print(e1)
+          val reparsed = FormulaParser.parse(printed)
+          assertEquals(reparsed, Right(e1), s"source '=$source' printed as '$printed'")
+          // Structure-level check too, independent of decoder identity
+          reparsed.map(FormulaPrinter.printWithTypes) ==
+            Right(FormulaPrinter.printWithTypes(e1))
+        case Left(err) => fail(s"fully parenthesized '=$source' should parse: $err")
+    }
+  }

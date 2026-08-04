@@ -101,3 +101,13 @@ class StructuralDvSpec extends FunSuite:
       )
     )
   }
+
+  test("GH-455: a DV formula on a non-participating sheet rides byte-identical") {
+    val data = new Sheet(name = SheetName.unsafe("Data"))
+    val report = new Sheet(name = SheetName.unsafe("Report"))
+      // Non-canonical spelling (lowercase call, extra spaces): a reprint would rewrite it.
+      .withDataValidation(ref"C2:C9", DataValidation.custom("C2 < sum($F$5:$F$9)"))
+    val r = StructuralEditor
+      .insertRows(Workbook(Vector(data, report)), SheetName.unsafe("Data"), at = 0, count = 3)
+    assertEquals(dvKinds(sheetNamed(r, "Report")), Vector(DvKind.Custom("C2 < sum($F$5:$F$9)")))
+  }

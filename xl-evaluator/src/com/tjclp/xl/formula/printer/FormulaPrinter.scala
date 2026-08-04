@@ -99,9 +99,14 @@ object FormulaPrinter:
       case TExpr.ExternalRange(index, name, range) =>
         s"${formatExternalSheet(index, name)}!${formatRange(range)}"
 
-      // Arithmetic operators
+      // Arithmetic operators.
+      //
+      // GH-455: left-associative operators print their RIGHT operand one level tighter, so a
+      // right-nested child at the SAME precedence keeps its grouping parens: Div(a, Mul(b, c))
+      // prints a/(b*c), never a/b*c (which re-parses as (a/b)*c — a different value). The parser
+      // has no Paren node, so the grouping the printer emits is the only grouping there is.
       case TExpr.Add(x, y) =>
-        val result = s"${printExpr(x, Precedence.AddSub)}+${printExpr(y, Precedence.AddSub)}"
+        val result = s"${printExpr(x, Precedence.AddSub)}+${printExpr(y, Precedence.AddSub + 1)}"
         parenthesizeIf(result, precedence > Precedence.AddSub)
 
       case TExpr.Sub(TExpr.Lit(n: BigDecimal), y) if n == BigDecimal(0) =>
@@ -110,15 +115,15 @@ object FormulaPrinter:
         parenthesizeIf(result, precedence > Precedence.Unary)
 
       case TExpr.Sub(x, y) =>
-        val result = s"${printExpr(x, Precedence.AddSub)}-${printExpr(y, Precedence.AddSub)}"
+        val result = s"${printExpr(x, Precedence.AddSub)}-${printExpr(y, Precedence.AddSub + 1)}"
         parenthesizeIf(result, precedence > Precedence.AddSub)
 
       case TExpr.Mul(x, y) =>
-        val result = s"${printExpr(x, Precedence.MulDiv)}*${printExpr(y, Precedence.MulDiv)}"
+        val result = s"${printExpr(x, Precedence.MulDiv)}*${printExpr(y, Precedence.MulDiv + 1)}"
         parenthesizeIf(result, precedence > Precedence.MulDiv)
 
       case TExpr.Div(x, y) =>
-        val result = s"${printExpr(x, Precedence.MulDiv)}/${printExpr(y, Precedence.MulDiv)}"
+        val result = s"${printExpr(x, Precedence.MulDiv)}/${printExpr(y, Precedence.MulDiv + 1)}"
         parenthesizeIf(result, precedence > Precedence.MulDiv)
 
       case TExpr.Pow(x, y) =>
@@ -144,40 +149,40 @@ object FormulaPrinter:
         val result = s"${printExpr(e, Precedence.Percent)}%"
         parenthesizeIf(result, precedence > Precedence.Percent)
 
-      // String operators
+      // String operators (GH-455: right operand one level tighter, see arithmetic note)
       case TExpr.Concat(x, y) =>
-        val result = s"${printExpr(x, Precedence.Concat)}&${printExpr(y, Precedence.Concat)}"
+        val result = s"${printExpr(x, Precedence.Concat)}&${printExpr(y, Precedence.Concat + 1)}"
         parenthesizeIf(result, precedence > Precedence.Concat)
 
-      // Comparison operators
+      // Comparison operators (GH-455: right operand one level tighter, see arithmetic note)
       case TExpr.Eq(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}=${printExpr(y, Precedence.Comparison)}"
+          s"${printExpr(x, Precedence.Comparison)}=${printExpr(y, Precedence.Comparison + 1)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       case TExpr.Neq(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}<>${printExpr(y, Precedence.Comparison)}"
+          s"${printExpr(x, Precedence.Comparison)}<>${printExpr(y, Precedence.Comparison + 1)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       case TExpr.Lt(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}<${printExpr(y, Precedence.Comparison)}"
+          s"${printExpr(x, Precedence.Comparison)}<${printExpr(y, Precedence.Comparison + 1)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       case TExpr.Lte(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}<=${printExpr(y, Precedence.Comparison)}"
+          s"${printExpr(x, Precedence.Comparison)}<=${printExpr(y, Precedence.Comparison + 1)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       case TExpr.Gt(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}>${printExpr(y, Precedence.Comparison)}"
+          s"${printExpr(x, Precedence.Comparison)}>${printExpr(y, Precedence.Comparison + 1)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       case TExpr.Gte(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}>=${printExpr(y, Precedence.Comparison)}"
+          s"${printExpr(x, Precedence.Comparison)}>=${printExpr(y, Precedence.Comparison + 1)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       // Type conversions (print transparently - ToInt is internal)
