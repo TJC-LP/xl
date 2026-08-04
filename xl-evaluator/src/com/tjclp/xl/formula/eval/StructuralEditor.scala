@@ -1,10 +1,14 @@
 package com.tjclp.xl.formula.eval
 
+import scala.annotation.tailrec
+
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.sheets.{DataValidation, DvKind, Sheet}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.cf.{CfRule, Cfvo, ConditionalFormat}
+import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
 
@@ -47,6 +51,16 @@ object StructuralEditor:
     delta: Int
   ): Workbook =
     val editedName = target.value
+    // GH-455 follow-up: the non-participation fast path below keeps formula TEXT byte-identical,
+    // but a cached VALUE can be stale even when the text never names the edited sheet —
+    // Sheet2!Y ==X*2 over Sheet2!X =='Sheet1'!A1 reads Sheet1 two hops away. Invalidate the cache
+    // of every formula transitively dependent (cross-sheet, through any chain) on any cell of the
+    // edited sheet. One PRE-edit graph build per edit, forced lazily and only when a
+    // non-participating formula actually rides the fast path (the CLI path recalculates after).
+    lazy val staleCaches: Set[QualifiedRef] =
+      val (_, dependents) = DependencyGraph.fromWorkbookBounded(wb)
+      val seeds = dependents.keySet.filter(_.sheet == target)
+      DependencyGraph.qualifiedTransitiveDependents(dependents, seeds)
     val updatedSheets = wb.sheets.map { s =>
       // 1. Pure cell/merge/property shift — only on the edited sheet. Its own typed charts
       //    (anchors + same-sheet data refs) are handled INSIDE the shift (GH-222).
@@ -63,7 +77,15 @@ object StructuralEditor:
           s.shiftChartRefs(editedName, isRow, at, delta)
       // 2. Rewrite formula references on every sheet (local refs only on the edited sheet;
       //    sheet-qualified refs to the edited sheet on all sheets).
-      rewriteFormulas(shifted, shiftLocal = s.name == target, editedName, isRow, at, delta)
+      rewriteFormulas(
+        shifted,
+        shiftLocal = s.name == target,
+        editedName,
+        isRow,
+        at,
+        delta,
+        stale = r => staleCaches.contains(QualifiedRef(s.name, r))
+      )
     }
     // A structural edit can touch any sheet's formulas (cross-sheet refs), so mark every sheet
     // modified — otherwise the writer's clean/verbatim fast-path would copy stale bytes from the
@@ -78,8 +100,15 @@ object StructuralEditor:
     editedSheet: String,
     isRow: Boolean,
     at: Int,
-    delta: Int
+    delta: Int,
+    stale: ARef => Boolean
   ): Sheet =
+    // GH-455 follow-up: a non-participating formula keeps its TEXT byte-identical, but a cached
+    // value that transitively reads the edited sheet is stale and must drop (the writer would
+    // otherwise emit it into <v>). Independent formulas keep text AND cache untouched.
+    def keepNonParticipant(ref: ARef, cell: Cell, f: CellValue.Formula): Cell =
+      if f.cachedValue.isDefined && stale(ref) then cell.copy(value = f.copy(cachedValue = None))
+      else cell
     val updatedCells = sheet.cells.map { case (ref, cell) =>
       cell.value match
         // GH-430: a data-table record's payload (ref/r1/r2) is LOCAL sheet geometry — it moves
@@ -114,16 +143,18 @@ object StructuralEditor:
                 (ref, cell.copy(value = cachedOpt.getOrElse(CellValue.Empty)))
         case f @ CellValue.Formula(formulaStr, _, kind) =>
           // GH-455: a formula on a NON-edited sheet participates only through sheet-qualified
-          // references to the edited sheet. Everything else must ride byte-identical — text AND
-          // cached value: reprinting canonicalizes text it has no business touching. The text
+          // references to the edited sheet. Everything else rides byte-identical in TEXT
+          // (reprinting canonicalizes text it has no business touching), and keeps its cached
+          // value too unless it transitively depends on the edited sheet (`stale`). The text
           // gate skips the parse entirely (any real reference spells the sheet name in the
           // formula text); the AST gate settles the false positives exactly.
-          if !shiftLocal && !mentionsSheet(formulaStr, editedSheet) then (ref, cell)
+          if !shiftLocal && !mentionsSheet(formulaStr, editedSheet) then
+            (ref, keepNonParticipant(ref, cell, f))
           else
             FormulaParser.parse(formulaStr) match
               case Right(expr)
                   if !shiftLocal && !FormulaShifter.referencesSheet(expr, editedSheet) =>
-                (ref, cell)
+                (ref, keepNonParticipant(ref, cell, f))
               case Right(expr) =>
                 FormulaShifter.shiftStructural(
                   expr,
@@ -163,14 +194,36 @@ object StructuralEditor:
   /**
    * GH-455: conservative text pre-filter for the non-edited-sheet fast path — false means the
    * formula text cannot contain a reference to `editedSheet`, so parsing is pointless. Quoted sheet
-   * names double their apostrophes in formula text (`'It''s'!A1`), so undouble before the
-   * case-insensitive scan (matching the shifter's `equalsIgnoreCase` convention). False positives
-   * (the name inside a string literal, say) are settled exactly by the AST gate.
+   * names double their apostrophes in formula text (`'It''s'!A1`), so a doubled apostrophe in the
+   * formula matches a single apostrophe in the name — collapsed inline during the case-insensitive
+   * scan (matching the shifter's `equalsIgnoreCase` convention) instead of allocating an undoubled
+   * copy per formula per sheet per edit. False positives (the name inside a string literal, say)
+   * are settled exactly by the AST gate.
    */
   private def mentionsSheet(formula: String, editedSheet: String): Boolean =
-    val text = formula.replace("''", "'")
     val n = editedSheet.length
-    (0 to text.length - n).exists(i => text.regionMatches(true, i, editedSheet, 0, n))
+    val len = formula.length
+    // String.regionMatches(ignoreCase = true) equality: exact, or upper, or lower match.
+    def charsMatch(a: Char, b: Char): Boolean =
+      a == b || Character.toUpperCase(a) == Character.toUpperCase(b) ||
+        Character.toLowerCase(a) == Character.toLowerCase(b)
+    @tailrec
+    def matchesAt(fi: Int, pi: Int): Boolean =
+      if pi >= n then true
+      else if fi >= len then false
+      else
+        val fc = formula.charAt(fi)
+        if !charsMatch(fc, editedSheet.charAt(pi)) then false
+        else
+          // A matched apostrophe consumes its doubled partner ('' in text is ' in the name).
+          val step = if fc == '\'' && fi + 1 < len && formula.charAt(fi + 1) == '\'' then 2 else 1
+          matchesAt(fi + step, pi + 1)
+    @tailrec
+    def scan(i: Int): Boolean =
+      if i >= len then false
+      else if matchesAt(i, 0) then true
+      else scan(i + 1)
+    n == 0 || scan(0)
 
   // ========== GH-430: record-payload geometry (FormulaKind ref/r1/r2 shifting) ==========
 

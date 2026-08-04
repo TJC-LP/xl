@@ -271,6 +271,50 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(rep(ref"B3").value, CellValue.Formula("IF(A1,1,0)", cached))
   }
 
+  test("GH-455: a two-hop cross-sheet dependent keeps its text but drops its stale cache") {
+    val alpha = new Sheet(name = SheetName.unsafe("Alpha")).put(ref"A1", num(10))
+    val beta = new Sheet(name = SheetName.unsafe("Beta"))
+      .put(ref"A1", num(3))
+      .put(ref"X1", CellValue.Formula("Alpha!A1", Some(num(10)))) // hop 1: names Alpha
+      .put(ref"Y1", CellValue.Formula("X1*2", Some(num(20)))) // hop 2: never names Alpha
+      .put(ref"Z1", CellValue.Formula("A1*3", Some(num(9)))) // independent control
+    val r = StructuralEditor.insertRows(
+      Workbook(Vector(alpha, beta)),
+      SheetName.unsafe("Alpha"),
+      at = 0,
+      count = 1
+    )
+    val out = sheetNamed(r, "Beta")
+    // Hop 1 participates: rewritten and uncached (existing behavior).
+    assertEquals(out(ref"X1").value, CellValue.Formula("Alpha!A2", None))
+    // Hop 2 rides byte-identical in TEXT, but its cache transitively read Alpha: stale, dropped.
+    assertEquals(out(ref"Y1").value, CellValue.Formula("X1*2", None))
+    // Genuinely independent formula keeps text AND cache untouched.
+    assertEquals(out(ref"Z1").value, CellValue.Formula("A1*3", Some(num(9))))
+  }
+
+  test("GH-455: a three-hop chain across three sheets is cache-invalidated end to end") {
+    val alpha = new Sheet(name = SheetName.unsafe("Alpha")).put(ref"A1", num(10))
+    val beta = new Sheet(name = SheetName.unsafe("Beta"))
+      .put(ref"B1", CellValue.Formula("Alpha!A1", Some(num(10))))
+    val gamma = new Sheet(name = SheetName.unsafe("Gamma"))
+      .put(ref"C1", CellValue.Formula("Beta!B1*2", Some(num(20)))) // hop 2: never names Alpha
+      .put(ref"D1", CellValue.Formula("C1+1", Some(num(21)))) // hop 3: local ref only
+      .put(ref"C2", num(5))
+      .put(ref"E1", CellValue.Formula("C2*2", Some(num(10)))) // independent control
+    val r = StructuralEditor.insertRows(
+      Workbook(Vector(alpha, beta, gamma)),
+      SheetName.unsafe("Alpha"),
+      at = 0,
+      count = 2
+    )
+    val out = sheetNamed(r, "Gamma")
+    assertEquals(sheetNamed(r, "Beta")(ref"B1").value, CellValue.Formula("Alpha!A3", None))
+    assertEquals(out(ref"C1").value, CellValue.Formula("Beta!B1*2", None))
+    assertEquals(out(ref"D1").value, CellValue.Formula("C1+1", None))
+    assertEquals(out(ref"E1").value, CellValue.Formula("C2*2", Some(num(10))))
+  }
+
   test("GH-455: a non-edited sheet MENTIONING the edited sheet still rewrites (and only then)") {
     val data = new Sheet(name = SheetName.unsafe("Data"))
     val report = new Sheet(name = SheetName.unsafe("Report"))
