@@ -264,6 +264,46 @@ trait FunctionSpecsBase:
       case TExpr.SheetRange(_, range) => Some(range.start)
       case _ => None
 
+  /**
+   * GH-467: normalize a lookup value for MATCH/XLOOKUP comparison. Cell-ref lookup values arrive as
+   * ExprValue.Cell and must be dereferenced to their underlying scalar before comparing (the
+   * literal `"k2"` and a ref to a cell holding `"k2"` must behave identically); date/datetime
+   * lookup values coerce to their Excel serial — dates ARE numbers in Excel's comparison plane
+   * (mirroring GH-449's dateTimeToExcelSerial coercion at numeric boundaries).
+   */
+  protected def normalizeLookupValue(value: ExprValue): ExprValue =
+    value match
+      case ExprValue.Cell(CellValue.Number(n)) => ExprValue.Number(n)
+      case ExprValue.Cell(CellValue.Text(s)) => ExprValue.Text(s)
+      case ExprValue.Cell(CellValue.Bool(b)) => ExprValue.Bool(b)
+      case ExprValue.Cell(CellValue.DateTime(dt)) =>
+        ExprValue.Number(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
+      case ExprValue.Cell(CellValue.Formula(_, Some(cached), _)) =>
+        normalizeLookupValue(ExprValue.Cell(cached))
+      case ExprValue.Date(d) =>
+        ExprValue.Number(BigDecimal(CellValue.dateTimeToExcelSerial(d.atStartOfDay())))
+      case ExprValue.DateTime(dt) =>
+        ExprValue.Number(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
+      case other => other
+
+  /**
+   * GH-467: exact equality for the MATCH/XLOOKUP lookup plane, over a lookup value already passed
+   * through [[normalizeLookupValue]]. Total and blank-safe: a blank cell matches nothing (a
+   * default-equal fallback here made blanks "match" every lookup value, shifting MATCH positions
+   * over ranges with holes), mismatched types match nothing, and DateTime cells compare by their
+   * Excel serial so date lookups find date columns.
+   */
+  protected def matchesLookupExact(cv: CellValue, lookup: ExprValue): Boolean =
+    (cv, lookup) match
+      case (CellValue.Number(n), ExprValue.Number(v)) => n == v
+      case (CellValue.DateTime(dt), ExprValue.Number(v)) =>
+        BigDecimal(CellValue.dateTimeToExcelSerial(dt)) == v
+      case (CellValue.Text(s), ExprValue.Text(v)) => s.equalsIgnoreCase(v)
+      case (CellValue.Bool(b), ExprValue.Bool(v)) => b == v
+      case (CellValue.Error(e1), ExprValue.Cell(CellValue.Error(e2))) => e1 == e2
+      case (CellValue.Formula(_, Some(cached), _), v) => matchesLookupExact(cached, v)
+      case _ => false
+
   /** Extract text for matching, coercing numbers and booleans to strings. */
   protected def extractTextForMatch(cv: CellValue): Option[String] =
     cv match
