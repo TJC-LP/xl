@@ -849,13 +849,21 @@ object WriteCommands:
     val errorValues =
       if errorValueCount == 0 then ""
       else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
-    if result.isClean then s"Recalculated $formulaCount $formulasLabel$errorValues"
+    // GH-454: surface the iterative-calculation verdict — maxIter exhaustion keeps the last
+    // values (Excel semantics, no error) so the summary is the only place it becomes visible.
+    val convergence =
+      if !result.converged then
+        s"; WARNING: iterative calculation exhausted ${result.iterationsUsed} round(s) without converging (last values kept)"
+      else if result.iterationsUsed > 0 then
+        s"; converged in ${result.iterationsUsed} iterative round(s)"
+      else ""
+    if result.isClean then s"Recalculated $formulaCount $formulasLabel$errorValues$convergence"
     else
       val maxShown = 3
       val shown = result.errors.take(maxShown).map(_.render).mkString("; ")
       val ellipsis = if result.errors.size > maxShown then "; ..." else ""
       val errorsLabel = if result.errors.size == 1 then "error" else "errors"
-      s"Recalculated $formulaCount $formulasLabel$errorValues; ${result.errors.size} $errorsLabel ($shown$ellipsis)"
+      s"Recalculated $formulaCount $formulasLabel$errorValues; ${result.errors.size} $errorsLabel ($shown$ellipsis)$convergence"
 
   /**
    * Apply multiple operations atomically (JSON from stdin or file).

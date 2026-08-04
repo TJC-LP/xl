@@ -81,11 +81,21 @@ object IterativeCalc:
  * @param errors
  *   Per-cell COULD-NOT-EVALUATE host failures only: parse errors, unknown functions, missing
  *   sheets, cycle participants, and cells blocked by a cycle
+ * @param converged
+ *   GH-454: false iff an iterative run exhausted `maxIter` rounds without every cycle member's
+ *   |Δ| dropping below `maxChange` — the last-round values are still kept (Excel semantics) but
+ *   callers can now gate instead of mistaking exhaustion for stationarity. Non-iterative runs
+ *   (default `recalculate()`, or iterative settings on an acyclic workbook) report true.
+ * @param iterationsUsed
+ *   GH-454: iterative rounds actually run (0 when no iteration happened). Equals `maxIter` on
+ *   exhaustion; on convergence it is the round that converged, in (0, maxIter]
  */
 final case class RecalcResult(
   workbook: Workbook,
   evaluated: Map[SheetName, Map[ARef, CellValue]],
-  errors: Vector[CellEvalError]
+  errors: Vector[CellEvalError],
+  converged: Boolean = true,
+  iterationsUsed: Int = 0
 ) derives CanEqual:
 
   /**
