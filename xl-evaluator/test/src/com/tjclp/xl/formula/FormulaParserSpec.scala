@@ -1936,6 +1936,30 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertPreserved("=A1>B1+C1") // Add right of comparison: tighter, bare
   }
 
+  test("GH-455: chained comparison folds LEFT — =1=1=TRUE parses as Eq(Eq(1,1),TRUE)") {
+    FormulaParser.parse("=1=1=TRUE") match
+      case Right(TExpr.Eq(TExpr.Eq(TExpr.Lit(a), TExpr.Lit(b)), TExpr.Lit(c))) =>
+        assertEquals[Any, Any](a, BigDecimal(1))
+        assertEquals[Any, Any](b, BigDecimal(1))
+        assertEquals[Any, Any](c, true)
+      case Right(other) => fail(s"expected the left-folded shape Eq(Eq(1,1),TRUE), got $other")
+      case Left(err) => fail(s"'=1=1=TRUE' should parse: $err")
+    // The left fold is paren-free on reprint; a right fold would print '=1=(1=TRUE)'.
+    assertPreserved("=1=1=TRUE")
+  }
+
+  test("GH-455: chained comparison evaluates its Boolean left slot (=1=1=TRUE is TRUE)") {
+    val result = for
+      expr <- FormulaParser.parse("=1=1=TRUE")
+      value <- Evaluator.eval(expr, Sheet("Test"))
+    yield value
+    assertEquals(result, Right(true))
+  }
+
+  test("GH-455: chained concat stays a paren-free left fold on round-trip (=A1&B1&C1)") {
+    assertPreserved("=A1&B1&C1")
+  }
+
   test("GH-455: right-nested comparisons keep parens for all six operators") {
     for op <- List("=", "<>", "<", "<=", ">", ">=") do
       val source = s"=A1${op}(B1${op}C1)"
@@ -1978,8 +2002,11 @@ class FormulaParserSpec extends ScalaCheckSuite:
           val reparsed = FormulaParser.parse(printed)
           assertEquals(reparsed, Right(e1), s"source '=$source' printed as '$printed'")
           // Structure-level check too, independent of decoder identity
-          reparsed.map(FormulaPrinter.printWithTypes) ==
-            Right(FormulaPrinter.printWithTypes(e1))
+          assertEquals(
+            reparsed.map(FormulaPrinter.printWithTypes),
+            Right(FormulaPrinter.printWithTypes(e1)),
+            s"typed shape must survive the round-trip of '=$source'"
+          )
         case Left(err) => fail(s"fully parenthesized '=$source' should parse: $err")
     }
   }
