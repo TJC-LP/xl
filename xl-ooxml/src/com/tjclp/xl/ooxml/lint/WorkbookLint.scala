@@ -52,6 +52,12 @@ enum LintCategory derives CanEqual:
   /** An uncached data-table interior in a `calcMode="autoNoTable"` book — opens BLANK (GH-442). */
   case DataTableUnseeded
 
+  /**
+   * `<f>` text stored with the display form's leading '=' — non-spec, misreads in strict tools
+   * (GH-456).
+   */
+  case FormulaLeadingEquals
+
   /** Stable kebab-case identifier used in CLI text and JSON output. */
   def slug: String = this match
     case LintCategory.ChildOrder => "child-order"
@@ -62,6 +68,7 @@ enum LintCategory derives CanEqual:
     case LintCategory.RefOutOfBounds => "ref-out-of-bounds"
     case LintCategory.DataTableTorn => "data-table-torn"
     case LintCategory.DataTableUnseeded => "data-table-unseeded"
+    case LintCategory.FormulaLeadingEquals => "formula-leading-equals"
 
 /**
  * A single structural lint finding.
@@ -99,6 +106,8 @@ final case class Finding(
  *     never recomputes tables (GH-442) — the only checks here that are silently WRONG output rather
  *     than an Excel repair: Excel refuses these edits in the UI, so a file carrying one was written
  *     past its own guards
+ *   - `<f>` text stored with the display form's leading '=' (GH-456) — non-spec; Excel tolerates it
+ *     but strict readers (openpyxl) misread it, and re-writing the file with xl heals it
  *
  * Lint runs on the RAW ZIP PARTS, never on the parsed domain model — a full read would
  * repair/normalize the very structure lint inspects (the reader silently falls back on unresolved
@@ -436,7 +445,7 @@ object WorkbookLint:
                   parts,
                   parentDir(path)
                 ) ++
-                scan.boundsFindings ++
+                scan.boundsFindings ++ scan.formulaFindings ++
                 dataTableFindings(path, scan.dataTables, autoNoTable) ++ tableResult._1
           (
             found._1 ++ findings,
@@ -474,6 +483,20 @@ object WorkbookLint:
     }
 
   // ===== externalLink parts (GH-413 item 2) =====
+
+  /**
+   * Valid `<externalBook r:id>` target types: the ECMA externalLinkPath plus the Microsoft
+   * xlExternalLinkPath variants Excel itself writes for broken/special external-book paths (GH-458)
+   * — a real in-the-wild state, not a corruption class. The expectedTypes membership test fires
+   * before the TargetMode=External bail-out, so the set must carry all of them.
+   */
+  private val externalLinkPathTypes: Set[String] = Set(
+    XmlUtil.relTypeExternalLinkPath,
+    XmlUtil.relTypeXlPathMissing,
+    XmlUtil.relTypeXlLibraryPath,
+    XmlUtil.relTypeXlStartupPath,
+    XmlUtil.relTypeXlAltStartupPath
+  )
 
   /**
    * Lint each externalLink part reachable from a resolved workbook `externalReference`: the part's
@@ -523,8 +546,8 @@ object WorkbookLint:
                 relIdOf(book),
                 None,
                 relIdRequired = true,
-                Set(XmlUtil.relTypeExternalLinkPath),
-                "externalLinkPath"
+                externalLinkPathTypes,
+                "externalLinkPath (or a Microsoft xlExternalLinkPath variant)"
               )
             }
             checkRelRefs(path, refs, rels, relsPath, parts, parentDir(path))
@@ -662,14 +685,15 @@ object WorkbookLint:
   /**
    * Everything the per-part checks need, produced identically by the DOM and SAX scanners: root
    * label, ordered main-namespace top-level labels (with positions among all top-level elements),
-   * the captured r:id-bearing elements, the ref/sqref bounds findings, and the data-table record
-   * state accumulated over sheetData (GH-442).
+   * the captured r:id-bearing elements, the ref/sqref bounds findings, the leading-'=' formula
+   * findings (GH-456), and the data-table record state accumulated over sheetData (GH-442).
    */
   private final case class SheetScan(
     rootLabel: String,
     mainChildLabels: Vector[(String, Int)],
     captures: Vector[CapturedRef],
     boundsFindings: Vector[Finding],
+    formulaFindings: Vector[Finding],
     dataTables: Vector[RecordFacts]
   )
 
@@ -710,10 +734,12 @@ object WorkbookLint:
           XmlUtil.getAttrOpt(e, attr).toList.flatMap(refBoundsFindings(part, e.label, attr, _))
         }
       }
-    val dataTables = nestedElems(root, "sheetData", "row")
+    val cellObs = nestedElems(root, "sheetData", "row")
       .flatMap(childElems(_, "c"))
-      .foldLeft(Vector.empty[RecordFacts])((acc, cell) => observeCell(acc, domCellObs(cell)))
-    SheetScan(root.label, mainChildLabelsOf(root), captures, bounds, dataTables)
+      .map(domCellObs)
+    val dataTables = cellObs.foldLeft(Vector.empty[RecordFacts])(observeCell)
+    val formulaEq = cellObs.flatMap(formulaEqualsFindings(part, _))
+    SheetScan(root.label, mainChildLabelsOf(root), captures, bounds, formulaEq, dataTables)
 
   /** One `<c>` element's data-table facts (DOM side of the parity pair). */
   private def domCellObs(cell: Elem): CellObs =
@@ -723,7 +749,8 @@ object WorkbookLint:
       record =
         formula.flatMap(f => dataTableKindOf(XmlUtil.getAttrOpt(f, "t"), XmlUtil.getAttrOpt(f, _))),
       hasFormula = formula.isDefined,
-      hasValue = childElems(cell, "v").nonEmpty || childElems(cell, "is").nonEmpty
+      hasValue = childElems(cell, "v").nonEmpty || childElems(cell, "is").nonEmpty,
+      leadingEquals = formula.exists(_.text.startsWith("="))
     )
 
   /**
@@ -759,12 +786,23 @@ object WorkbookLint:
       private val labels = Vector.newBuilder[(String, Int)]
       private val captures = Vector.newBuilder[CapturedRef]
       private val bounds = Vector.newBuilder[Finding]
+      private val formulaEq = Vector.newBuilder[Finding]
       private var dataTables: Vector[RecordFacts] = Vector.empty
       private var cell: Option[CellObs] = None
+      // True while inside the current cell's FIRST <f> and no text chunk has arrived yet, so
+      // characters() inspects exactly the first character of the formula text (GH-456).
+      private var awaitingFormulaText = false
 
       def result: Option[SheetScan] =
         rootLabel.map(
-          SheetScan(_, labels.result(), captures.result(), bounds.result(), dataTables)
+          SheetScan(
+            _,
+            labels.result(),
+            captures.result(),
+            bounds.result(),
+            formulaEq.result(),
+            dataTables
+          )
         )
 
       override def startElement(
@@ -792,10 +830,13 @@ object WorkbookLint:
               ref = Option(atts.getValue("", "r")).flatMap(ARef.parse(_).toOption),
               record = None,
               hasFormula = false,
-              hasValue = false
+              hasValue = false,
+              leadingEquals = false
             )
           )
         else if depth == 4 && parents.headOption.contains("c") then
+          // GH-456: only the cell's first <f> is observed, matching domCellObs's headOption
+          if label == "f" && cell.exists(!_.hasFormula) then awaitingFormulaText = true
           cell = cell.map { open =>
             if label == "f" && !open.hasFormula then
               open.copy(
@@ -816,12 +857,21 @@ object WorkbookLint:
         parents = label :: parents
         depth += 1
 
+      override def characters(ch: Array[Char], start: Int, length: Int): Unit =
+        if awaitingFormulaText && length > 0 then
+          awaitingFormulaText = false
+          if ch(start) == '=' then cell = cell.map(_.copy(leadingEquals = true))
+
       override def endElement(uri: String, localName: String, qName: String): Unit =
         val label = if localName.nonEmpty then localName else qName
         parents = parents.drop(1)
         depth -= 1
+        if label == "f" then awaitingFormulaText = false
         if depth == 3 && label == "c" then
-          cell.foreach(obs => dataTables = observeCell(dataTables, obs))
+          cell.foreach { obs =>
+            dataTables = observeCell(dataTables, obs)
+            formulaEq ++= formulaEqualsFindings(part, obs)
+          }
           cell = None
 
       private def relIdIn(atts: Attributes): Option[String] =
@@ -837,8 +887,28 @@ object WorkbookLint:
     ref: Option[ARef],
     record: Option[FormulaKind.DataTable],
     hasFormula: Boolean,
-    hasValue: Boolean
+    hasValue: Boolean,
+    leadingEquals: Boolean
   )
+
+  /**
+   * GH-456: `<f>` text beginning with '=' — the display form leaked into the store. Excel/LO
+   * tolerate it, but strict readers (openpyxl) read the formula back doubled ("==B4*2") and
+   * formula-text diff tooling sees phantom differences. Shared by both scanners for parity.
+   */
+  private def formulaEqualsFindings(part: String, obs: CellObs): Vector[Finding] =
+    if !obs.leadingEquals then Vector.empty
+    else
+      Vector(
+        Finding(
+          part,
+          LintCategory.FormulaLeadingEquals,
+          obs.ref.fold("<f>")(r => s"""<c r="${r.toA1}"><f>"""),
+          "Formula text is stored with a leading '=' — OOXML carries the expression without it, " +
+            "and strict readers (openpyxl) see a doubled '=' formula; re-writing the file with " +
+            "xl heals it"
+        )
+      )
 
   /**
    * Accumulated facts for one data-table record, keyed by the record's own `ref`. Every field is a

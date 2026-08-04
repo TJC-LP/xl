@@ -415,7 +415,8 @@ class OoxmlRoundTripSpec extends FunSuite:
 
     readWb.sheets(0)(ref"B1").value match
       case CellValue.Formula(expr, Some(CellValue.Number(n)), _) =>
-        assertEquals(expr, "=A1*2")
+        // GH-456: the writer strips the display form's leading '=' — the store is canonical
+        assertEquals(expr, "A1*2")
         assertEquals(n, BigDecimal(42))
       case other => fail(s"Unexpected: $other")
   }

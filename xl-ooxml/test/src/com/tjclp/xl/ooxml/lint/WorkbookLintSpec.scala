@@ -603,6 +603,39 @@ class WorkbookLintSpec extends FunSuite:
     assert(findings.head.message.contains("externalLinkPath"), findings.head.toString)
   }
 
+  // ===== GH-458: Microsoft xlExternalLinkPath variants are valid externalBook targets =====
+
+  /** Excel writes these for broken/special external-book paths — a real in-the-wild state. */
+  private def msVariantRelsXml(variant: String): String = externalLinkRelsXml.replace(
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath",
+    s"http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/$variant"
+  )
+
+  test("GH-458: externalBook rel typed xlPathMissing (Microsoft variant) is not flagged") {
+    val findings = lintOf(
+      externalParts +
+        ("xl/externalLinks/_rels/externalLink1.xml.rels" -> msVariantRelsXml("xlPathMissing"))
+    )
+    assertEquals(findings, Vector.empty[Finding])
+  }
+
+  test("GH-458: externalBook rel typed xlLibraryPath (Microsoft variant) is not flagged") {
+    val findings = lintOf(
+      externalParts +
+        ("xl/externalLinks/_rels/externalLink1.xml.rels" -> msVariantRelsXml("xlLibraryPath"))
+    )
+    assertEquals(findings, Vector.empty[Finding])
+  }
+
+  test("GH-458: a genuinely wrong externalBook rel type (image) still flags WrongRelType") {
+    val findings = lintOf(
+      externalParts +
+        ("xl/externalLinks/_rels/externalLink1.xml.rels" -> wrongTypeExternalBookRelsXml)
+    )
+    assertEquals(findings.map(_.category), Vector(LintCategory.WrongRelType))
+    assert(findings.head.message.contains("image"), findings.head.toString)
+  }
+
   // ===== GH-413 (3): [Content_Types].xml registration =====
 
   private val stylesOverrideLine =
@@ -950,6 +983,48 @@ class WorkbookLintSpec extends FunSuite:
     finally Files.deleteIfExists(output)
   }
 
+  // ===== GH-456: <f> text carrying the display form's leading '=' =====
+
+  private val leadingEqualsSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><v>2</v></c><c r="B1"><f>=A1*2</f><v>4</v></c></row>
+  </sheetData>"""
+  )
+
+  private val cleanFormulaSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><v>2</v></c><c r="B1"><f>A1*2</f><v>4</v></c></row>
+  </sheetData>"""
+  )
+
+  test("GH-456: <f> text starting with '=' is flagged as FormulaLeadingEquals") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> leadingEqualsSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.FormulaLeadingEquals))
+    val f = findings.head
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    assert(f.locator.contains("B1"), s"locator should carry the cell ref: $f")
+    assert(f.message.contains("re-writing"), s"message should say a re-write heals it: $f")
+  }
+
+  test("GH-456: clean <f> text produces no findings") {
+    assertEquals(
+      lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> cleanFormulaSheetXml)),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("GH-456: streaming mode flags the leading '=' identically") {
+    assertEquals(
+      lintStreamOf(baseParts + ("xl/worksheets/sheet1.xml" -> leadingEqualsSheetXml)),
+      lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> leadingEqualsSheetXml))
+    )
+    assertEquals(
+      lintStreamOf(baseParts + ("xl/worksheets/sheet1.xml" -> leadingEqualsSheetXml))
+        .map(_.category),
+      Vector(LintCategory.FormulaLeadingEquals)
+    )
+  }
+
   // ===== GH-413 (4): O(1) SAX scanning mode =====
 
   private def lintStreamOf(parts: Map[String, String]): Vector[Finding] =
@@ -998,7 +1073,15 @@ class WorkbookLintSpec extends FunSuite:
     "overwritten data-table corner" -> dtParts(overwrittenCornerSheetXml),
     "unseeded autoNoTable data table" -> autoNoTableParts(unseededDataTableSheetXml),
     "partly seeded autoNoTable data table" -> autoNoTableParts(partlySeededDataTableSheetXml),
-    "torn autoNoTable data table" -> autoNoTableParts(tornInteriorSheetXml)
+    "torn autoNoTable data table" -> autoNoTableParts(tornInteriorSheetXml),
+    // GH-456: <f> text observation must agree between the DOM and SAX scanners
+    "leading-equals formula" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> leadingEqualsSheetXml)),
+    "clean formula text" -> (baseParts + ("xl/worksheets/sheet1.xml" -> cleanFormulaSheetXml)),
+    // GH-458: Microsoft xlExternalLinkPath variants resolve clean in both modes
+    "ms xlPathMissing external" ->
+      (externalParts +
+        ("xl/externalLinks/_rels/externalLink1.xml.rels" -> msVariantRelsXml("xlPathMissing")))
   )
 
   test("GH-413: lintStreamBytes agrees with lintBytes on every fixture (SAX/DOM parity)") {
