@@ -20,15 +20,17 @@ import scala.util.matching.Regex
  *   - **Exact**: `"Apple"` or `42` → Cells equal to value
  *   - **Wildcard**: `"A*"`, `"*pple"`, `"A?ple"` → Pattern matching (* = any chars, ? = single
  *     char)
- *   - **Greater**: `">100"`, `">=50"` → Numeric comparison
- *   - **Less**: `"<10"`, `"<=5"` → Numeric comparison
- *   - **Not Equal**: `"<>0"` → Numeric inequality
+ *   - **Greater**: `">100"`, `">=50"` → Numeric comparison; `">m"` → Text comparison
+ *   - **Less**: `"<10"`, `"<=5"` → Numeric comparison; `"<m"` → Text comparison
+ *   - **Not Equal**: `"<>0"` → Numeric inequality; `"<>x"` → Text inequality; bare `"<>"` →
+ *     non-blank; `"<>A*"` → negated wildcard
  *
  * Laws:
  *   1. Exact match: `matches(Text("Apple"), Exact(ExprValue.Text("Apple"))) == true`
  *   2. Wildcard: `matches(Text("Apple"), Wildcard("A*")) == true`
  *   3. Case-insensitive text: `matches(Text("APPLE"), Exact(ExprValue.Text("apple"))) == true`
  *   4. Numeric comparison: `matches(Number(150), Compare(Gt, 100)) == true`
+ *   5. Text comparison: `matches(Text("x"), CompareText(Gt, "m")) == true`
  */
 object CriteriaMatcher:
 
@@ -41,8 +43,19 @@ object CriteriaMatcher:
   /** Numeric comparison */
   case class Compare(op: CompareOp, value: BigDecimal) extends Criterion
 
+  /**
+   * Case-insensitive text comparison (GH-466).
+   *
+   * Produced when the operand after `<>`/`>=`/`<=`/`>`/`<` is not numeric, e.g. `"<>x"` or `">m"`.
+   * Bare `"<>"` parses to `CompareText(Neq, "")` — Excel's non-blank idiom.
+   */
+  case class CompareText(op: CompareOp, value: String) extends Criterion
+
   /** Wildcard pattern (* = any chars, ? = single char) */
   case class Wildcard(pattern: String) extends Criterion
+
+  /** Negated wildcard pattern, from `<>` followed by a pattern with unescaped wildcards */
+  case class NotWildcard(pattern: String) extends Criterion
 
   /** Comparison operators for numeric criteria */
   enum CompareOp derives CanEqual:
@@ -93,30 +106,36 @@ object CriteriaMatcher:
   private def parseString(s: String): Criterion =
     s match
       // Not equal: <>
+      // GH-466: non-numeric operands are text inequality (bare "<>" = non-blank);
+      // wildcard operands negate the pattern (Excel "<>A*" = not-like "A*").
       case _ if s.startsWith("<>") =>
-        parseNumeric(s.drop(2)) match
+        val operand = s.drop(2)
+        parseNumeric(operand) match
           case Some(n) => Compare(CompareOp.Neq, n)
-          case None => Exact(ExprValue.Text(s)) // Couldn't parse number, treat as literal
+          case None if hasUnescapedWildcard(operand) => NotWildcard(operand)
+          case None if hasEscapeSequence(operand) =>
+            CompareText(CompareOp.Neq, unescapePattern(operand))
+          case None => CompareText(CompareOp.Neq, operand)
       // Greater than or equal: >=
       case _ if s.startsWith(">=") =>
         parseNumeric(s.drop(2)) match
           case Some(n) => Compare(CompareOp.Gte, n)
-          case None => Exact(ExprValue.Text(s))
+          case None => CompareText(CompareOp.Gte, s.drop(2)) // GH-466: text ordering
       // Less than or equal: <=
       case _ if s.startsWith("<=") =>
         parseNumeric(s.drop(2)) match
           case Some(n) => Compare(CompareOp.Lte, n)
-          case None => Exact(ExprValue.Text(s))
+          case None => CompareText(CompareOp.Lte, s.drop(2)) // GH-466: text ordering
       // Greater than: >
       case _ if s.startsWith(">") =>
         parseNumeric(s.drop(1)) match
           case Some(n) => Compare(CompareOp.Gt, n)
-          case None => Exact(ExprValue.Text(s))
+          case None => CompareText(CompareOp.Gt, s.drop(1)) // GH-466: text ordering
       // Less than: <
       case _ if s.startsWith("<") =>
         parseNumeric(s.drop(1)) match
           case Some(n) => Compare(CompareOp.Lt, n)
-          case None => Exact(ExprValue.Text(s))
+          case None => CompareText(CompareOp.Lt, s.drop(1)) // GH-466: text ordering
       // Equal: =
       case _ if s.startsWith("=") =>
         parseNumeric(s.drop(1)) match
@@ -219,7 +238,9 @@ object CriteriaMatcher:
     criterion match
       case Exact(expected) => matchesExact(cellValue, expected)
       case Compare(op, threshold) => matchesCompare(cellValue, op, threshold)
+      case CompareText(op, operand) => matchesCompareText(cellValue, op, operand)
       case Wildcard(pattern) => matchesWildcard(cellValue, pattern)
+      case NotWildcard(pattern) => matchesNotWildcard(cellValue, pattern)
 
   /**
    * Exact matching with type coercion.
@@ -308,6 +329,68 @@ object CriteriaMatcher:
           case CompareOp.Lte => value <= threshold
           case CompareOp.Neq => value != threshold
       case None => false
+
+  /**
+   * Text comparison matching (GH-466), for criteria like "<>x" and ">m".
+   *
+   * Excel semantics:
+   *   - `<>text` is a negated exact match with the same coercion rules as [[Exact]], so numbers,
+   *     booleans and blank cells all match `"<>x"` (they are not equal to "x"). Bare `"<>"`
+   *     (operand "") therefore matches exactly the non-blank cells.
+   *   - Ordering operators (`>`, `>=`, `<`, `<=`) compare text case-insensitively and only apply to
+   *     text values: numbers, booleans and blanks never satisfy a text ordering criterion (Excel
+   *     criteria comparisons are type-segregated).
+   *   - Error cells and uncached formulas never match.
+   */
+  private def matchesCompareText(
+    cellValue: CellValue,
+    op: CompareOp,
+    operand: String
+  ): Boolean =
+    cellValue match
+      case CellValue.Error(_) => false
+      case CellValue.Formula(_, Some(cached), _) => matchesCompareText(cached, op, operand)
+      case CellValue.Formula(_, None, _) => false
+      case other =>
+        op match
+          case CompareOp.Neq => !matchesExact(other, ExprValue.Text(operand))
+          case CompareOp.Gt | CompareOp.Gte | CompareOp.Lt | CompareOp.Lte =>
+            extractOrderableText(other) match
+              case Some(text) =>
+                val cmp = text.compareToIgnoreCase(operand)
+                op match
+                  case CompareOp.Gt => cmp > 0
+                  case CompareOp.Gte => cmp >= 0
+                  case CompareOp.Lt => cmp < 0
+                  case CompareOp.Lte => cmp <= 0
+                  case CompareOp.Neq => cmp != 0 // Unreachable: Neq handled above
+              case None => false
+
+  /**
+   * Extract text for ordering comparisons (GH-466).
+   *
+   * Deliberately narrower than [[extractText]]: only genuine text participates in text ordering,
+   * matching Excel (a number never satisfies `">m"`).
+   */
+  private def extractOrderableText(cellValue: CellValue): Option[String] =
+    cellValue match
+      case CellValue.Text(s) => Some(s)
+      case CellValue.RichText(rt) => Some(rt.toPlainText)
+      case CellValue.Formula(_, Some(cached), _) => extractOrderableText(cached)
+      case _ => None
+
+  /**
+   * Negated wildcard matching (GH-466), for criteria like "<>A*".
+   *
+   * Matches cells that do NOT match the pattern (blanks included, consistent with `<>text`); error
+   * cells and uncached formulas never match.
+   */
+  private def matchesNotWildcard(cellValue: CellValue, pattern: String): Boolean =
+    cellValue match
+      case CellValue.Error(_) => false
+      case CellValue.Formula(_, Some(cached), _) => matchesNotWildcard(cached, pattern)
+      case CellValue.Formula(_, None, _) => false
+      case other => !matchesWildcard(other, pattern)
 
   /**
    * Extract numeric value from cell, with type coercion.
