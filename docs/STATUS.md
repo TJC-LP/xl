@@ -1,12 +1,20 @@
 # XL Project Status
 
-**Last Updated**: 2026-08-03 (0.19.0)
+**Last Updated**: 2026-08-04 (0.19.1)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.19.1** (2026-08-04) — field hardening, waves 23 + 23b (#478/#487):
+- ✅ **Circular-book data-table seeding** (#453) — the seeder fixpoints cycle members per axis combination under the book's CalcPr instead of pinning them at loaded caches (grids no longer seed silently FLAT); `seedDataTablesReport()` + IterativeCalc overloads
+- ✅ **`RecalcResult.converged` / `iterationsUsed`** (#454) — maxIter exhaustion distinguishable from convergence; CLI recalc honors declared `calcPr iterate="1"` (#461)
+- ✅ **Reprint integrity** (#455, #484) — structural edits preserve associativity parentheses and serialize Excel's file form; scripting `<f>` leading-`=` canonicalized + `formula-leading-equals` lint (#456)
+- ✅ **Evaluator wrong-value classes dead** (#466, #467) — text-operand criteria (`"<>x"`, `">m"`, non-blank `"<>"`) evaluate with Excel semantics; MATCH/XLOOKUP comparator is total (blanks match nothing, DateTime-by-serial, cell-ref lookup values dereference)
+- ✅ **Write-integrity guards** (#470, #471, #472, #473) — `copy(sheets=…)` reductions honored under preservation; fresh-write style plane re-registered (numFmt by code, dxfs carried); structural edits refuse past-bounds shifts and rewrite general defined names
+- ✅ **Native image opens name-bloated books** (#457) — JAXP limits lifted (62k–110k definedName banker files); lint accepts `xlPathMissing` external links (#458)
 
 **New in 0.19.0** (2026-08-03):
 - ✅ **Column/row default styles** (#445) — `<col style=>` / `<row s= customFormat="1">` emit on both writer backends (StyleIndex-remapped like cell styleIds) AND parse back, so read→modify→write keeps source column styles; `Sheet.withColumnStyle`/`withRowStyle` author the sheet-wide-body-font-without-Normal mechanism

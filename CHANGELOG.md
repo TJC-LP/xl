@@ -5,10 +5,12 @@ All notable changes to the XL project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.19.1] - 2026-08-04
 
-Wave 23: the post-0.19.0 field-QC burn-down — every silent-wrong-number
-and corruption bug the TJC field QC surfaced on real banker books.
+Field hardening (waves 23 + 23b): the post-0.19.0 field-QC burn-down —
+every silent-wrong-number and corruption bug the TJC field QC surfaced
+on real banker books in one day of production forensics. No features;
+additive API only where a fix demanded a signal.
 
 ### Added
 
@@ -95,6 +97,57 @@ and corruption bug the TJC field QC surfaced on real banker books.
   valid `externalBook` targets instead of `wrong-rel-type` findings,
   so "lint must exit 0" ship gates stop false-alarming on pass-through
   edits of real books.
+- **Comparison criteria with text operands silently matched nothing**
+  (#466): `CriteriaMatcher` degraded `"<>x"` / `">m"` to an exact match
+  of the whole criteria string (operator included), so
+  SUMIFS/COUNTIFS/COUNTIF cached 0 with no error. Text operands now
+  compare with Excel semantics: case-insensitive not-equal (blanks
+  match `"<>text"`, and the bare `"<>"` non-blank idiom falls out
+  naturally), case-insensitive text ordering (type-segregated — numbers
+  and booleans never satisfy `">m"`), and `"<>pattern"` negated
+  wildcards. Numeric and equality criteria unchanged.
+- **MATCH/XLOOKUP comparator fall-through matched blanks to everything**
+  (#467): the lookup comparator returned "equal" for any unhandled type
+  pair, so exact MATCH stopped at the first blank (positions looked
+  compacted), date-typed lookups matched position 1, and cell-ref
+  lookup values mis-resolved. MATCH and XLOOKUP now share total
+  `normalizeLookupValue`/`matchesLookupExact` helpers (cell-ref
+  dereference incl. cached formulas; DateTime→serial per #449;
+  case-insensitive text); approximate modes stop coercing blanks/text
+  to zero-valued candidates.
+- **`copy(sheets = …)` reductions were silently ignored under
+  preservation** (#470): the writer re-emitted the source's sheet set,
+  shipping "removed" sheets — a redaction hazard. `SourceContext` now
+  reconciles the model's sheet set (and defined names) before strategy
+  dispatch: sheets dropped via `copy` are marked deleted exactly like
+  `wb.remove()` and their parts pruned.
+- **Fresh writes desynced the style plane after a read** (#471):
+  cellXfs kept SOURCE numFmt ids while the rebuilt `<numFmts>`
+  renumbered to 164+ (cells fell back to General — or worse, collided
+  into date builtins), and preserved CF rules re-emitted dxfIds the
+  rebuilt `<dxfs>` no longer contained. Fresh writes now re-map every
+  cellXf numFmtId through the rebuilt registry keyed by format CODE and
+  carry+renumber the dxfs preserved CF rules reference.
+- **Structural edits could shift data past sheet bounds** (#472):
+  ranges were clamped at the caps in 0.16 (#428) but data cells and
+  `<dimension>` still shifted past row 1,048,576 / col XFD with exit 0
+  — desktop Excel refuses such files. `StructuralEditor.edit` now
+  refuses the edit with a typed `OutOfBounds` error and leaves the file
+  untouched.
+- **Structural edits did not rewrite general defined names** (#473):
+  print areas/DV/tables/autoFilter shifted since 0.16 (#429) but plain
+  `definedName` refs stayed put, pointing at stale cells after a row
+  insert. All defined names now ride the same rewrite plane (only refs
+  sheet-qualified to the edited sheet move; constants and external refs
+  untouched; deleted targets become `#REF!`).
+- **`-i` error paths could name the deleted temp file** (#483): every
+  user-facing message across the five `saveSuffix` sites now names the
+  target path.
+- **Structural reprints emitted `", "` argument separators** (#484):
+  rewritten formulas now serialize in Excel's file form (bare `,` at
+  join points, string literals untouched) via
+  `FormulaPrinter.printFileForm`; human-facing pretty-printers keep
+  their spacing.
 - **`-i` success messages printed the temp file** (#464): every
   in-place verb (`recalc`, `put`, `putf`, … ~40 commands) reported
   `Saved: ./.xl-inplace-….xlsx` — a path that no longer exists after
