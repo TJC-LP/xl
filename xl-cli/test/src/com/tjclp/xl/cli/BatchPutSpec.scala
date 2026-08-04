@@ -234,6 +234,32 @@ class BatchPutSpec extends FunSuite:
       case other => fail(s"Expected Formula with $$A$$1, got $other")
   }
 
+  test("GH-455: putf dragging keeps grouping parens around a product divisor") {
+    val wb = Workbook(
+      Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("4")))
+        .put(ARef.from0(1, 0), CellValue.Number(BigDecimal("2")))
+        .put(ARef.from0(2, 0), CellValue.Number(BigDecimal("2")))
+    )
+
+    val result = WriteCommands
+      .putFormula(wb, Some(wb.sheets.head), "D1:D3", List("=A1/(B1*C1)"), outputPath, config)
+      .unsafeRunSync()
+
+    assert(result.contains("with anchor-aware dragging"))
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val sheet = imported.sheets.head
+    // Dragging reprints through FormulaPrinter: the divisor group must survive, or the
+    // formula silently changes value (A2/B2*C2 is (A2/B2)*C2, not A2/(B2*C2)).
+    sheet.cells.get(ARef.from0(3, 0)).map(_.value) match
+      case Some(CellValue.Formula(formula, _, _)) => assertEquals(formula, "A1/(B1*C1)")
+      case other => fail(s"Expected Formula, got $other")
+    sheet.cells.get(ARef.from0(3, 1)).map(_.value) match
+      case Some(CellValue.Formula(formula, _, _)) => assertEquals(formula, "A2/(B2*C2)")
+      case other => fail(s"Expected Formula, got $other")
+  }
+
   test("putf: batch formulas mode (no dragging)") {
     val wb = Workbook(
       Sheet("Test")

@@ -349,7 +349,10 @@ object WorkbookEvaluator:
           preOrder,
           (initialSheets, Map.empty[SheetName, Map[ARef, CellValue]], Vector.empty[CellEvalError])
         )
-        val iterated = iterativeOpt match
+        // GH-454: the fixpoint's convergence verdict and round count surface on RecalcResult —
+        // exhaustion of maxIter must be distinguishable from stationarity. Non-iterative runs
+        // report (converged = true, iterationsUsed = 0): no iteration happened.
+        val (iterated, converged, iterationsUsed) = iterativeOpt match
           case Some(iterative) if cyclicCore.nonEmpty =>
             iterateCycles(
               wb,
@@ -361,7 +364,7 @@ object WorkbookEvaluator:
               formulaText,
               preState
             )
-          case _ => preState
+          case _ => (preState, true, 0)
         val (_, evaluated, evalErrors) = evalPass(postOrder, iterated)
 
         // Cache computed values into formula cells on the original sheets; failed cells stay
@@ -398,7 +401,9 @@ object WorkbookEvaluator:
         RecalcResult(
           workbook = workbookWithCaches,
           evaluated = wb.sheets.map(s => s.name -> evaluated.getOrElse(s.name, Map.empty)).toMap,
-          errors = cycleErrors ++ blockedErrors ++ evalErrors
+          errors = cycleErrors ++ blockedErrors ++ evalErrors,
+          converged = converged,
+          iterationsUsed = iterationsUsed
         )
 
   /**
@@ -427,7 +432,7 @@ object WorkbookEvaluator:
     sheetIndex: Map[SheetName, Int],
     formulaText: QualifiedRef => String,
     state: (Vector[Sheet], Map[SheetName, Map[ARef, CellValue]], Vector[CellEvalError])
-  ): (Vector[Sheet], Map[SheetName, Map[ARef, CellValue]], Vector[CellEvalError]) =
+  ): ((Vector[Sheet], Map[SheetName, Map[ARef, CellValue]], Vector[CellEvalError]), Boolean, Int) =
     val (baseSheets, acc0, errs0) = state
     // Deterministic member order: Jacobi values are order-independent (all reads see the
     // previous round), but error vectors and sheet folds must be stable run to run.
@@ -437,6 +442,49 @@ object WorkbookEvaluator:
         .sortBy((q, _, _) => (q.sheet.value, q.ref.toA1))
 
     val pinnedClock = Clock.fixed(clock.today(), clock.now())
+    val (finalResults, converged, rounds) =
+      jacobiFixpoint(wb, baseSheets, members, iterative, pinnedClock, rngOpt)
+    // Fold the fixpoint into the pass state: successful members write their value into the temp
+    // sheets (post-pass dependents read them) and the evaluated map (they cache at the end);
+    // failed members keep their original uncached formula cell, so dependents recursively
+    // evaluate and surface the underlying error — the same posture as a failed acyclic cell.
+    val folded = members.foldLeft((baseSheets, acc0, errs0)) {
+      case ((sheets, acc, errs), (q, idx, _)) =>
+        finalResults.get(q) match
+          case Some(Right(value)) =>
+            (
+              sheets.updated(idx, sheets(idx).put(q.ref, value)),
+              acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
+              errs
+            )
+          case Some(Left(error)) => (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
+          case None => (sheets, acc, errs) // unreachable: every member evaluates every round
+    }
+    (folded, converged, rounds)
+
+  /**
+   * The shared Jacobi fixpoint engine (GH-373/GH-453/GH-454): iterate `members` against
+   * `baseSheets` until every member's |Δ| < `maxChange` (strict) or `maxIter` rounds.
+   *
+   * Each member is `(qualified ref, index of its sheet in baseSheets, formula text)`. Members seed
+   * to 0; each round overlays every member's cell with `Formula(expr, Some(previousValue))` so
+   * every reference to a member — including self-references — reads the previous round's value
+   * while `evaluateCell` re-evaluates the formula text. Callers pin the clock BEFORE calling (one
+   * fixpoint is one volatile generation). A member that throws holds its previous value for later
+   * rounds (GH-388 degradation) and reports its Left only from the final round.
+   *
+   * Returns (final per-member results, converged verdict, rounds actually run — `maxIter` on
+   * exhaustion). Used by both `recalculate(IterativeCalc)` and the data-table seeder's circular
+   * what-if substitution.
+   */
+  private[eval] def jacobiFixpoint(
+    wb: Workbook,
+    baseSheets: Vector[Sheet],
+    members: List[(QualifiedRef, Int, String)],
+    iterative: IterativeCalc,
+    pinnedClock: Clock,
+    rngOpt: Option[Rng]
+  ): (Map[QualifiedRef, Either[XLError, CellValue]], Boolean, Int) =
     val zero: CellValue = CellValue.Number(BigDecimal(0))
     val seed: Map[QualifiedRef, CellValue] = members.map((q, _, _) => q -> zero).toMap
     val maxRounds = math.max(1, iterative.maxIter)
@@ -454,13 +502,13 @@ object WorkbookEvaluator:
     def loop(
       round: Int,
       prev: Map[QualifiedRef, CellValue]
-    ): Map[QualifiedRef, Either[XLError, CellValue]] =
+    ): (Map[QualifiedRef, Either[XLError, CellValue]], Boolean, Int) =
       val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, expr)) =>
         sheets.updated(idx, sheets(idx).put(q.ref, CellValue.Formula(expr, prev.get(q))))
       }
       val tempWb = wb.copy(sheets = overlaid)
       val results: Map[QualifiedRef, Either[XLError, CellValue]] =
-        members.map { (q, idx, _) =>
+        members.map { (q, idx, expr) =>
           val tempSheet = overlaid(idx)
           val evaluatedCell =
             try
@@ -469,9 +517,7 @@ object WorkbookEvaluator:
                 case None => tempSheet.evaluateCell(q.ref, pinnedClock, Some(tempWb))
             catch
               case NonFatal(e) =>
-                Left(
-                  XLError.FormulaError(formulaText(q), s"Evaluation threw ${e.getClass.getName}")
-                )
+                Left(XLError.FormulaError(expr, s"Evaluation threw ${e.getClass.getName}"))
           q -> evaluatedCell
         }.toMap
       val converged = members.forall { (q, _, _) =>
@@ -479,7 +525,7 @@ object WorkbookEvaluator:
           case Right(next) => changeBelowThreshold(prev.getOrElse(q, zero), next)
           case Left(_) => false
       }
-      if converged || round >= maxRounds then results
+      if converged || round >= maxRounds then (results, converged, round)
       else
         // A throwing/failing member holds its previous value for the next round so the rest of
         // the core keeps converging (GH-388 degradation, not unwinding).
@@ -488,19 +534,4 @@ object WorkbookEvaluator:
         }.toMap
         loop(round + 1, next)
 
-    val finalResults = loop(1, seed)
-    // Fold the fixpoint into the pass state: successful members write their value into the temp
-    // sheets (post-pass dependents read them) and the evaluated map (they cache at the end);
-    // failed members keep their original uncached formula cell, so dependents recursively
-    // evaluate and surface the underlying error — the same posture as a failed acyclic cell.
-    members.foldLeft((baseSheets, acc0, errs0)) { case ((sheets, acc, errs), (q, idx, _)) =>
-      finalResults.get(q) match
-        case Some(Right(value)) =>
-          (
-            sheets.updated(idx, sheets(idx).put(q.ref, value)),
-            acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
-            errs
-          )
-        case Some(Left(error)) => (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
-        case None => (sheets, acc, errs) // unreachable: every member evaluates every round
-    }
+    loop(1, seed)

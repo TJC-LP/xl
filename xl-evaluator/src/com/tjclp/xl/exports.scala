@@ -54,6 +54,8 @@ object formulaExports:
   // GH-419: explicit data-table cache seeding (autoNoTable books never recompute tables on open)
   export formula.eval.DataTableSeeder
   export formula.eval.DataTableSeeder.*
+  // GH-453: seeding report + per-table warnings for circular books
+  export formula.eval.{DataTableSeedReport, SeedTableWarning}
 
   // DependentRecalculation extension methods (GH-163)
   // Note: Extension methods with default parameters must be imported directly,

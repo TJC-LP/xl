@@ -849,13 +849,21 @@ object WriteCommands:
     val errorValues =
       if errorValueCount == 0 then ""
       else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
-    if result.isClean then s"Recalculated $formulaCount $formulasLabel$errorValues"
+    // GH-454: surface the iterative-calculation verdict — maxIter exhaustion keeps the last
+    // values (Excel semantics, no error) so the summary is the only place it becomes visible.
+    val convergence =
+      if !result.converged then
+        s"; WARNING: iterative calculation exhausted ${result.iterationsUsed} round(s) without converging (last values kept)"
+      else if result.iterationsUsed > 0 then
+        s"; converged in ${result.iterationsUsed} iterative round(s)"
+      else ""
+    if result.isClean then s"Recalculated $formulaCount $formulasLabel$errorValues$convergence"
     else
       val maxShown = 3
       val shown = result.errors.take(maxShown).map(_.render).mkString("; ")
       val ellipsis = if result.errors.size > maxShown then "; ..." else ""
       val errorsLabel = if result.errors.size == 1 then "error" else "errors"
-      s"Recalculated $formulaCount $formulasLabel$errorValues; ${result.errors.size} $errorsLabel ($shown$ellipsis)"
+      s"Recalculated $formulaCount $formulasLabel$errorValues; ${result.errors.size} $errorsLabel ($shown$ellipsis)$convergence"
 
   /**
    * Apply multiple operations atomically (JSON from stdin or file).
@@ -909,6 +917,12 @@ object WriteCommands:
    *   evaluates `TABLE(...)` implicitly (GH-353/GH-430). Seeding runs AFTER the recalculation so
    *   each table substitutes into freshly computed precedents; formulas that READ a seeded interior
    *   are not re-evaluated in the same pass.
+   *
+   * GH-453: the CLI honors the FILE's declared calculation settings, like Excel opening the book —
+   * `<calcPr iterate="1"/>` turns on bounded iterative evaluation of declared cycles (the
+   * library-level `recalculate()` default stays opt-in). Tables that depend on a cycle seed
+   * per-axis fixpoints; without the declaration they are left unseeded with a WARNING line in the
+   * summary (exit stays 0 — warnings are data conditions, not tool failures).
    */
   def recalc(
     wb: Workbook,
@@ -917,19 +931,37 @@ object WriteCommands:
     stream: Boolean = false,
     seedTables: Boolean = false
   ): IO[String] =
-    val result = wb.recalculate()
-    val prepared =
-      if !seedTables then IO.pure(result.workbook)
+    val iterOpt = wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)
+    val result = iterOpt.fold(wb.recalculate())(it => wb.recalculate(Clock.system, it))
+    val prepared: IO[(Workbook, Vector[SeedTableWarning])] =
+      if !seedTables then IO.pure((result.workbook, Vector.empty))
       else
         IO.fromEither(
-          result.workbook.seedDataTables().left.map(err => new Exception(err.message))
-        )
-    prepared.flatMap { workbook =>
+          result.workbook
+            .seedDataTablesReport()
+            .left
+            .map(err => new Exception(err.message))
+        ).map(report => (report.workbook, report.warnings))
+    prepared.flatMap { case (workbook, warnings) =>
       writeWorkbook(workbook, outputPath, config, stream).map { _ =>
         val tableNote = if seedTables then "\nSeeded data table interior caches" else ""
-        s"${formatRecalcSummary(result)}$tableNote\n${saveSuffix(outputPath, stream)}"
+        val warningLines = warnings.map(w => s"\n${renderSeedWarning(w)}").mkString
+        s"${formatRecalcSummary(result)}$tableNote$warningLines\n${saveSuffix(outputPath, stream)}"
       }
     }
+
+  /** GH-453: one summary line per seeding warning (reported, never thrown — exit stays 0). */
+  private def renderSeedWarning(warning: SeedTableWarning): String = warning match
+    case SeedTableWarning.CircularNotIterated(sheet, ref, cycle) =>
+      s"WARNING: data table ${ref.toA1} on '${sheet.value}' depends on a circular reference " +
+        s"(${cycle.mkString(", ")}) but iterative calculation is not declared " +
+        "(<calcPr iterate=\"1\"/>) — left unseeded"
+    case SeedTableWarning.NotConverged(sheet, ref, combinations, maxIter) =>
+      s"WARNING: data table ${ref.toA1} on '${sheet.value}': $combinations axis combination(s) " +
+        s"did not converge within $maxIter round(s); last-round values seeded"
+    case SeedTableWarning.Skipped(sheet, ref, cells, reason) =>
+      s"WARNING: data table ${ref.toA1} on '${sheet.value}': $cells interior cell(s) left " +
+        s"unseeded — $reason"
 
   /**
    * Fill cells with source value/formula (Excel Ctrl+D/Ctrl+R).

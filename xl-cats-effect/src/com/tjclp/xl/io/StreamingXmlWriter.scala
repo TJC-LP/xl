@@ -270,9 +270,10 @@ object StreamingXmlWriter:
               XmlEvent.EndTag(QName("f"))
             )
           case _ =>
+            // GH-456: <f> carries the expression, never the display form's leading '='
             List(
               XmlEvent.StartTag(QName("f"), recordAttrs, false),
-              XmlEvent.XmlString(expr, false),
+              XmlEvent.XmlString(expr.stripPrefix("="), false),
               XmlEvent.EndTag(QName("f"))
             )
         val cachedEvents = cachedValue.toList.flatMap {

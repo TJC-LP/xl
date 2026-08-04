@@ -69,7 +69,7 @@ object Main
     // Note: --stream not supported for workbook-level commands (need full metadata)
     val workbookSubcmds = namesCmd
     val workbookOpts = (fileOpt, maxSizeOpt, workbookSubcmds).mapN { (file, maxSize, cmd) =>
-      run(file, None, None, None, maxSize, false, cmd)
+      run(file, None, None, None, None, maxSize, false, cmd)
     }
 
     // Sheets command: --file required, --output optional (required for hide/show, not for list)
@@ -77,8 +77,8 @@ object Main
     val sheetsOpts =
       (fileOpt, outputOpt.orNone, inPlaceOpt, backendOpt, maxSizeOpt, streamOpt, sheetsCmd).mapN {
         (file, outOpt, inPlace, backend, maxSize, stream, cmd) =>
-          runWithOutput(outOpt, inPlace, file) { out =>
-            run(file, None, out, backend, maxSize, stream, cmd)
+          runWithOutput(outOpt, inPlace, file) { (out, display) =>
+            runResult(file, None, out, display, backend, maxSize, stream, cmd)
           }
       }
 
@@ -96,7 +96,7 @@ object Main
 
     val sheetReadOnlyOpts = (fileOpt, sheetOpt, maxSizeOpt, streamOpt, sheetReadOnlySubcmds).mapN {
       (file, sheet, maxSize, stream, cmd) =>
-        run(file, sheet, None, None, maxSize, stream, cmd)
+        run(file, sheet, None, None, None, maxSize, stream, cmd)
     }
 
     // Sheet-level write: --file, --sheet, and --output (required)
@@ -115,8 +115,8 @@ object Main
         streamOpt,
         sheetWriteSubcmds
       ).mapN { (file, sheet, outOpt, inPlace, backend, maxSize, stream, cmd) =>
-        runWithOutput(outOpt, inPlace, file) { out =>
-          run(file, sheet, out, backend, maxSize, stream, cmd)
+        runWithOutput(outOpt, inPlace, file) { (out, display) =>
+          runResult(file, sheet, out, display, backend, maxSize, stream, cmd)
         }
       }
 
@@ -583,6 +583,8 @@ lenient reader accepts silently:
   - data-table records whose grid was torn by an unguarded edit, and
     uncached table interiors in a calcMode="autoNoTable" book (they open
     BLANK — refresh them with `xl recalc --tables`)
+  - formula text stored with a leading '=' inside <f> (non-spec; strict
+    readers misread it — re-writing the file with xl heals it)
 
 USAGE:
   xl lint report.xlsx
@@ -592,7 +594,7 @@ USAGE:
 FINDING CATEGORIES:
   child-order | unresolved-rel-id | wrong-rel-type | missing-part |
   missing-content-type | ref-out-of-bounds | data-table-torn |
-  data-table-unseeded
+  data-table-unseeded | formula-leading-equals
 
 EXIT CODES:
   0 = no findings (package structure is clean)
@@ -1573,18 +1575,51 @@ EXAMPLES:
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
+    displayOpt: Option[Path],
     backendOpt: Option[XmlBackend],
     maxSizeOpt: Option[Long],
     stream: Boolean,
     cmd: CliCommand
   ): IO[ExitCode] =
+    runResult(
+      filePath,
+      sheetNameOpt,
+      outputOpt,
+      displayOpt,
+      backendOpt,
+      maxSizeOpt,
+      stream,
+      cmd
+    ).flatMap(printRunResult)
+
+  /** Execute and render a command without printing, so in-place writes can commit first. */
+  private def runResult(
+    filePath: Path,
+    sheetNameOpt: Option[String],
+    outputOpt: Option[Path],
+    displayOpt: Option[Path],
+    backendOpt: Option[XmlBackend],
+    maxSizeOpt: Option[Long],
+    stream: Boolean,
+    cmd: CliCommand
+  ): IO[(ExitCode, String)] =
     execute(filePath, sheetNameOpt, outputOpt, backendOpt, maxSizeOpt, stream, cmd).attempt
-      .flatMap {
+      .map {
         case Right(output) =>
-          IO.println(output).as(ExitCode.Success)
+          // In-place writes (-i) target a temp file that is atomically moved onto the
+          // input after the command succeeds; success messages must name the user-visible
+          // path, not the temp file that no longer exists by the time it is read (GH-464).
+          val rendered = (outputOpt, displayOpt) match
+            case (Some(write), Some(display)) if write != display =>
+              output.replace(write.toString, display.toString)
+            case _ => output
+          (ExitCode.Success, rendered)
         case Left(err) =>
-          IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
+          (ExitCode.Error, Format.errorSimple(err.getMessage))
       }
+
+  private def printRunResult(result: (ExitCode, String)): IO[ExitCode] =
+    IO.println(result._2).as(result._1)
 
   private def runInfo(): IO[ExitCode] =
     IO.println(formatFunctionList()).as(ExitCode.Success)
@@ -2590,6 +2625,10 @@ EXAMPLES:
   /**
    * Dispatch `run` with effective output path from --output / --in-place flags.
    *
+   * The callback receives (writePath, displayPath) and returns the exit code plus rendered output
+   * without printing it. The paths differ only for `-i`, where writes go to a temp file that is
+   * moved onto the input before the successful output is printed (GH-464).
+   *
    * Cases:
    *   - `-o` only: writes directly to the output path
    *   - `-i` only: writes to a sibling temp file then atomically moves onto input. If the command
@@ -2601,14 +2640,14 @@ EXAMPLES:
     outOpt: Option[Path],
     inPlace: Boolean,
     file: Path
-  )(execute: Option[Path] => IO[ExitCode]): IO[ExitCode] =
+  )(execute: (Option[Path], Option[Path]) => IO[(ExitCode, String)]): IO[ExitCode] =
     (outOpt, inPlace) match
       case (Some(_), true) =>
         IO.println(
           Format.errorSimple("--in-place (-i) and --output (-o) are mutually exclusive")
         ).as(ExitCode.Error)
-      case (Some(out), false) => execute(Some(out))
-      case (None, false) => execute(None)
+      case (Some(out), false) => execute(Some(out), Some(out)).flatMap(printRunResult)
+      case (None, false) => execute(None, None).flatMap(printRunResult)
       case (None, true) =>
         val tmpDir = Option(file.getParent).getOrElse(java.nio.file.Paths.get("."))
         val tmpResource = cats.effect.Resource.make(
@@ -2616,8 +2655,8 @@ EXAMPLES:
         )(tmp => IO.blocking(java.nio.file.Files.deleteIfExists(tmp)).void)
 
         tmpResource.use { tmp =>
-          execute(Some(tmp)).flatMap {
-            case ExitCode.Success =>
+          execute(Some(tmp), Some(file)).flatMap {
+            case result @ (ExitCode.Success, _) =>
               // Atomic move: same directory guarantees same filesystem on POSIX/NTFS
               IO.blocking(
                 java.nio.file.Files.move(
@@ -2625,10 +2664,10 @@ EXAMPLES:
                   file,
                   java.nio.file.StandardCopyOption.REPLACE_EXISTING
                 )
-              ).as(ExitCode.Success)
-            case other =>
+              ) *> printRunResult(result)
+            case result =>
               // Non-success exit: leave original file alone; Resource cleans up temp
-              IO.pure(other)
+              printRunResult(result)
           }
         }
 

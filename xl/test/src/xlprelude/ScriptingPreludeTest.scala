@@ -176,6 +176,24 @@ class ScriptingPreludeTest extends FunSuite:
       Some(3)
     )
 
+  test("fx formulas serialize without the display form's leading '=' in <f> (GH-456)"):
+    val wb = Workbook(Sheet("S").put(ref"A1", 2).put(ref"B1", fx"=A1*2"))
+    val dir = java.nio.file.Files.createTempDirectory("xl-prelude-fx")
+    val path = dir.resolve("fx.xlsx")
+    try
+      Excel.write(wb, path.toString)
+      val zip = new java.util.zip.ZipFile(path.toFile)
+      try
+        val entry = Option(zip.getEntry("xl/worksheets/sheet1.xml"))
+          .getOrElse(fail("sheet part missing"))
+        val xml = new String(zip.getInputStream(entry).readAllBytes(), "UTF-8")
+        assert(xml.contains("<f>A1*2</f>"), xml)
+        assert(!xml.contains("<f>="), xml)
+      finally zip.close()
+    finally
+      val _ = java.nio.file.Files.deleteIfExists(path)
+      val _ = java.nio.file.Files.deleteIfExists(dir)
+
   test("writeRecalculated caches uncached formulas on disk and returns the RecalcResult (GH-360)"):
     val sheet = Sheet("Calc3")
       .put(ref"A1", 10)

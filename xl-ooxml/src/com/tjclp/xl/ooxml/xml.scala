@@ -71,6 +71,15 @@ object XmlUtil:
   // The externalLink part's own <externalBook r:id> target (GH-413)
   val relTypeExternalLinkPath =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath"
+  // Microsoft externalLinkPath variants Excel writes for broken/special external-book paths (GH-458)
+  val relTypeXlPathMissing =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlPathMissing"
+  val relTypeXlLibraryPath =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlLibraryPath"
+  val relTypeXlStartupPath =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlStartupPath"
+  val relTypeXlAltStartupPath =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlAltStartupPath"
   val relTypeChartsheet =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet"
   val relTypeDialogsheet =
@@ -501,12 +510,86 @@ object XmlUtil:
 
 object XmlSecurity:
   /**
+   * Finite ceiling the JAXP entity-SIZE limits are raised to (GH-457): 2,000,000,000 bytes —
+   * comfortably above any real workbook.xml (field books with 100k+ definedNames are single-digit
+   * MB) and far above the 100KB JAXP default, yet FINITE so the parser still fails closed on a
+   * truly pathological document entity. `"0"` would mean unlimited — no backstop at all — so a
+   * crafted input could drive unbounded parse work; a large finite ceiling keeps the GH-457 fix
+   * while preserving a hard upper bound.
+   */
+  private[ooxml] val EntitySizeLimitCeiling: Int = 2_000_000_000
+
+  /**
+   * JAXP entity-SIZE limit properties raised to [[EntitySizeLimitCeiling]] on every parser built by
+   * [[secureSaxParserFactory]] (GH-457): real workbooks accumulate tens of thousands of
+   * definedNames (multi-MB single-line workbook.xml), and JAXP builds that default these limits to
+   * 100KB — the GraalVM the native image is built from, where `-Djdk.xml.*` cannot reach the binary
+   * — reject the document entity with JAXP00010003 on every verb. Raising SIZE limits is safe
+   * because doctype declarations are rejected outright (`disallow-doctype-decl`), so no general
+   * entity can ever be defined and entity-expansion attacks remain structurally impossible;
+   * `entityExpansionLimit` is deliberately left at its default. Each limit lists its legacy Oracle
+   * URI first (recognized on every mainstream JDK), then the modern `jdk.xml.` name.
+   */
+  private val raisedEntitySizeLimits: List[List[String]] = List(
+    List(
+      "http://www.oracle.com/xml/jaxp/properties/maxGeneralEntitySizeLimit",
+      "jdk.xml.maxGeneralEntitySizeLimit"
+    ),
+    List(
+      "http://www.oracle.com/xml/jaxp/properties/totalEntitySizeLimit",
+      "jdk.xml.totalEntitySizeLimit"
+    )
+  )
+
+  /** Set each raised limit under the first property name the parser recognizes (GH-457). */
+  private def raiseEntitySizeLimits(parser: javax.xml.parsers.SAXParser): Unit =
+    raisedEntitySizeLimits.foreach { aliases =>
+      val _ = aliases.exists { name =>
+        try
+          parser.setProperty(name, EntitySizeLimitCeiling.toString)
+          true
+        catch
+          // Tolerate exotic parsers that don't know the JAXP limit properties: hardening
+          // features above still apply; only the limit-raising is best-effort.
+          case _: org.xml.sax.SAXNotRecognizedException => false
+          case _: org.xml.sax.SAXNotSupportedException => false
+      }
+    }
+
+  /**
+   * Delegating factory so every call site building parsers via
+   * `secureSaxParserFactory().newSAXParser()` inherits the GH-457 limit-raising automatically — the
+   * JAXP limits are parser properties, not factory features, so they cannot be carried by the
+   * underlying factory itself.
+   */
+  private final class SecureFactory(underlying: javax.xml.parsers.SAXParserFactory)
+      extends javax.xml.parsers.SAXParserFactory:
+    override def newSAXParser(): javax.xml.parsers.SAXParser =
+      val parser = underlying.newSAXParser()
+      raiseEntitySizeLimits(parser)
+      parser
+    override def setFeature(name: String, value: Boolean): Unit = underlying.setFeature(name, value)
+    override def getFeature(name: String): Boolean = underlying.getFeature(name)
+    override def setNamespaceAware(awareness: Boolean): Unit =
+      underlying.setNamespaceAware(awareness)
+    override def isNamespaceAware(): Boolean = underlying.isNamespaceAware()
+    override def setValidating(validating: Boolean): Unit = underlying.setValidating(validating)
+    override def isValidating(): Boolean = underlying.isValidating()
+    override def setXIncludeAware(state: Boolean): Unit = underlying.setXIncludeAware(state)
+    override def isXIncludeAware(): Boolean = underlying.isXIncludeAware()
+    override def setSchema(schema: javax.xml.validation.Schema): Unit =
+      underlying.setSchema(schema)
+    override def getSchema(): javax.xml.validation.Schema = underlying.getSchema()
+
+  /**
    * SAXParserFactory carrying the XXE hardening posture shared by EVERY parse surface: doctype
    * declarations rejected, external general/parameter entities and external DTD loading disabled,
    * XInclude off, namespaces on. Streaming SAX sites (worksheet/SST/dimension readers, streaming
    * transforms) must build their parsers from this factory so the hardening cannot drift per-site
    * (GH-350) — pair it with [[stripLeadingDoctypeStream]] on the input so benign doctypes still
-   * read.
+   * read. Parsers it creates additionally have the JAXP entity-SIZE limits raised to a large finite
+   * ceiling so name-bloated multi-MB core parts read on the native image (GH-457, see
+   * [[raisedEntitySizeLimits]]).
    */
   def secureSaxParserFactory(): javax.xml.parsers.SAXParserFactory =
     val factory = javax.xml.parsers.SAXParserFactory.newInstance()
@@ -516,7 +599,7 @@ object XmlSecurity:
     factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
     factory.setXIncludeAware(false)
     factory.setNamespaceAware(true)
-    factory
+    new SecureFactory(factory)
 
   /**
    * Thread-local pool of XXE-safe SAX parsers for performance.

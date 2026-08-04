@@ -6,7 +6,7 @@ import com.tjclp.xl.formula.{Arity}
 
 import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.RefParser
-import com.tjclp.xl.cells.Cell
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec
 
 import scala.annotation.tailrec
@@ -269,121 +269,80 @@ object FormulaParser:
     }
 
   /**
-   * Parse comparison operators: =, <>, <, <=, >, >=
+   * Parse comparison operators: =, <>, <, <=, >, >= (left-associative).
+   *
+   * GH-455: chained comparisons fold LEFT like Excel's equal-precedence rule (`=1=1=TRUE` is
+   * `(1=1)=TRUE`); right-recursion here would build right-nested ASTs that the printer must then
+   * parenthesize, destroying byte-fidelity of untouched chained formulas on every rewrite.
+   *
+   * GH-233: PolyRef operands resolve polymorphically so =A1=B1 / =IF(A1=B1,…) evaluate instead of
+   * erroring with "Unresolved PolyRef". GH-335: the comparable decoder preserves emptiness so empty
+   * cells equal 0 / "" / FALSE like Excel, compares text lexicographically, and ranks number < text
+   * < logical (numeric-only coercion would reject text operands).
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseComparison(state: ParserState): ParseResult[TExpr[?]] =
+    def mk(op: (TExpr[CellValue], TExpr[CellValue]) => TExpr[Boolean])(
+      l: TExpr[?],
+      r: TExpr[?]
+    ): TExpr[?] =
+      op(TExpr.asComparableValueExpr(l), TExpr.asComparableValueExpr(r))
     parseConcatenation(state).flatMap { case (left, s1) =>
-      val s2 = skipWhitespace(s1)
-      s2.currentChar match
-        case Some('=') =>
-          val s3 = skipWhitespace(s2.advance())
-          descend(s3).flatMap { sd =>
-            parseComparison(sd).map { case (right, s4) =>
-              // GH-233: resolve PolyRef operands polymorphically so =A1=B1 / =IF(A1=B1,…)
-              // evaluate instead of erroring with "Unresolved PolyRef". GH-335: the comparable
-              // decoder preserves emptiness so empty cells equal 0 / "" / FALSE like Excel.
-              (
-                TExpr.Eq(TExpr.asComparableValueExpr(left), TExpr.asComparableValueExpr(right)),
-                s4.copy(depth = s3.depth)
-              )
-            }
-          }
-        case Some('<') =>
-          s2.advance().currentChar match
-            case Some('>') => // <>
-              val s3 = skipWhitespace(s2.advance(2))
-              descend(s3).flatMap { sd =>
-                parseComparison(sd).map { case (right, s4) =>
-                  // GH-233/GH-335: resolve PolyRef operands so =A1<>B1 evaluates (see Eq above).
-                  (
-                    TExpr
-                      .Neq(TExpr.asComparableValueExpr(left), TExpr.asComparableValueExpr(right)),
-                    s4.copy(depth = s3.depth)
-                  )
-                }
-              }
-            case Some('=') => // <=
-              val s3 = skipWhitespace(s2.advance(2))
-              descend(s3).flatMap { sd =>
-                parseComparison(sd).map { case (right, s4) =>
-                  // GH-335: resolve operands polymorphically (like Eq) — Excel compares text
-                  // lexicographically and ranks number < text < logical, so numeric-only
-                  // coercion would reject text operands.
-                  (
-                    TExpr.Lte(
-                      TExpr.asComparableValueExpr(left),
-                      TExpr.asComparableValueExpr(right)
-                    ),
-                    s4.copy(depth = s3.depth)
-                  )
-                }
-              }
-            case _ => // <
-              val s3 = skipWhitespace(s2.advance())
-              descend(s3).flatMap { sd =>
-                parseComparison(sd).map { case (right, s4) =>
-                  // GH-335: polymorphic operands (see Lte above)
-                  (
-                    TExpr.Lt(TExpr.asComparableValueExpr(left), TExpr.asComparableValueExpr(right)),
-                    s4.copy(depth = s3.depth)
-                  )
-                }
-              }
-        case Some('>') =>
-          s2.advance().currentChar match
-            case Some('=') => // >=
-              val s3 = skipWhitespace(s2.advance(2))
-              descend(s3).flatMap { sd =>
-                parseComparison(sd).map { case (right, s4) =>
-                  // GH-335: polymorphic operands (see Lte above)
-                  (
-                    TExpr.Gte(
-                      TExpr.asComparableValueExpr(left),
-                      TExpr.asComparableValueExpr(right)
-                    ),
-                    s4.copy(depth = s3.depth)
-                  )
-                }
-              }
-            case _ => // >
-              val s3 = skipWhitespace(s2.advance())
-              descend(s3).flatMap { sd =>
-                parseComparison(sd).map { case (right, s4) =>
-                  // GH-335: polymorphic operands (see Lte above)
-                  (
-                    TExpr.Gt(TExpr.asComparableValueExpr(left), TExpr.asComparableValueExpr(right)),
-                    s4.copy(depth = s3.depth)
-                  )
-                }
-              }
-        case _ => Right((left, s2))
+      @tailrec
+      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
+        val s2 = skipWhitespace(s)
+        // (chars consumed, node constructor); None = no comparison operator here
+        val operator: Option[(Int, (TExpr[?], TExpr[?]) => TExpr[?])] = s2.currentChar match
+          case Some('=') => Some((1, mk(TExpr.Eq.apply)))
+          case Some('<') =>
+            s2.advance().currentChar match
+              case Some('>') => Some((2, mk(TExpr.Neq.apply)))
+              case Some('=') => Some((2, mk(TExpr.Lte.apply)))
+              case _ => Some((1, mk(TExpr.Lt.apply)))
+          case Some('>') =>
+            s2.advance().currentChar match
+              case Some('=') => Some((2, mk(TExpr.Gte.apply)))
+              case _ => Some((1, mk(TExpr.Gt.apply)))
+          case _ => None
+        operator match
+          case None => Right((acc, s2))
+          case Some((consumed, build)) =>
+            // GH-56: each chained comparison deepens the AST spine — count it (see parseAddSub).
+            descend(s2) match
+              case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance(consumed))
+                parseConcatenation(s3) match
+                  case Right((right, s4)) => loop(build(acc, right), s4)
+                  case Left(err) => Left(err)
+      loop(left, s1)
     }
 
   /**
-   * Parse concatenation operator: & (left-associative)
+   * Parse concatenation operator: & (left-associative).
    *
    * Excel's & operator joins strings: "Hello" & "World" → "HelloWorld" Operands are coerced to
-   * strings via asStringExpr.
+   * strings via asStringExpr. GH-455: chained & folds LEFT (Excel's equal-precedence rule), so
+   * `=A1&B1&C1` round-trips without the printer inventing grouping parens.
    */
   private def parseConcatenation(state: ParserState): ParseResult[TExpr[?]] =
     parseAddSub(state).flatMap { case (left, s1) =>
-      val s2 = skipWhitespace(s1)
-      s2.currentChar match
-        case Some('&') =>
-          val s3 = skipWhitespace(s2.advance())
-          descend(s3).flatMap { sd =>
-            parseConcatenation(sd).map { case (right, s4) =>
-              (
-                TExpr.Concat(
-                  TExpr.asStringExpr(left),
-                  TExpr.asStringExpr(right)
-                ),
-                s4.copy(depth = s3.depth)
-              )
-            }
-          }
-        case _ => Right((left, s2))
+      @tailrec
+      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
+        val s2 = skipWhitespace(s)
+        s2.currentChar match
+          case Some('&') =>
+            // GH-56: each chained segment deepens the AST spine — count it (see parseAddSub).
+            descend(s2) match
+              case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance())
+                parseAddSub(s3) match
+                  case Right((right, s4)) =>
+                    loop(TExpr.Concat(TExpr.asStringExpr(acc), TExpr.asStringExpr(right)), s4)
+                  case Left(err) => Left(err)
+          case _ => Right((acc, s2))
+      loop(left, s1)
     }
 
   /**
