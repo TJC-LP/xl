@@ -1543,7 +1543,8 @@ object XlsxWriter:
     preservedWorksheets: Map[Int, XLResult[Option[OoxmlWorksheet]]],
     preservedDxfs: Option[Elem]
   ): CfWritePlan =
-    import com.tjclp.xl.ooxml.style.DxfTable
+    import com.tjclp.xl.cf.{CfRule, ConditionalFormat}
+    import com.tjclp.xl.ooxml.style.{DxfCodec, DxfTable}
     import com.tjclp.xl.ooxml.worksheet.CfCodec
     val sourceDxfChildren: Vector[Elem] =
       preservedDxfs.map(e => XmlUtil.getChildren(e, "dxf").toVector).getOrElse(Vector.empty)
@@ -1568,11 +1569,50 @@ object XlsxWriter:
         CfCodec.collectDxfs(sheet.conditionalFormats)
       }.flatten
     val dxfPlan = DxfTable.plan(preservedDxfs, neededDxfs)
+    // GH-471: on a FRESH write (no source styles part) the dxfs table preserved rules' dxfId
+    // refs were baked against is gone — the rebuilt table would hold only the modeled dxfs and
+    // the verbatim refs (7, 9, ...) would dangle out of range. Re-register each carried <dxf>
+    // payload (dedup by payload; reuse a typed-equal planned entry) and renumber the refs at
+    // emission. With a source present the table is append-only and original ids stay valid.
+    val preservedDxfPayloads: Vector[String] =
+      if preservedDxfs.isDefined then Vector.empty
+      else
+        decisions
+          .collect { case (_, Right(sheet)) => sheet.conditionalFormats }
+          .flatten
+          .flatMap {
+            case ConditionalFormat.Rules(_, rules, _) =>
+              rules.collect { case CfRule.Preserved(_, _, Some(payload)) => payload }
+            case _: ConditionalFormat.Preserved => Vector.empty
+          }
+          .distinct
+    val (mergedDxfs, preservedDxfIds) =
+      if preservedDxfPayloads.isEmpty then (dxfPlan.merged, Map.empty[String, Int])
+      else
+        val baseChildren: Vector[Elem] =
+          dxfPlan.merged.map(e => XmlUtil.getChildren(e, "dxf").toVector).getOrElse(Vector.empty)
+        val (ids, appended) =
+          preservedDxfPayloads.foldLeft((Map.empty[String, Int], Vector.empty[Elem])) {
+            case ((acc, app), payload) =>
+              XmlSecurity.parseSafe(payload, "preserved dxf").toOption match
+                case None => (acc, app) // non-canonical payload: leave the ref untouched
+                case Some(el) =>
+                  DxfCodec.parse(el).flatMap(dxfPlan.dxfIds.get) match
+                    case Some(idx) => (acc + (payload -> idx), app)
+                    case None => (acc + (payload -> (baseChildren.size + app.size)), app :+ el)
+          }
+        val merged =
+          if appended.isEmpty then dxfPlan.merged
+          else
+            val children = baseChildren ++ appended
+            Some(XmlUtil.elem("dxfs", "count" -> children.size.toString)(children*))
+        (merged, ids)
     val condFmt: Map[Int, Seq[Elem]] = decisions.map {
       case (idx, Left(verbatim)) => idx -> verbatim
-      case (idx, Right(sheet)) => idx -> CfCodec.toElems(sheet.conditionalFormats, dxfPlan.dxfIds)
+      case (idx, Right(sheet)) =>
+        idx -> CfCodec.toElems(sheet.conditionalFormats, dxfPlan.dxfIds, preservedDxfIds)
     }.toMap
-    CfWritePlan(condFmt, dxfPlan.merged)
+    CfWritePlan(condFmt, mergedDxfs)
 
   /**
    * Pre-pass for the data-validation slot (GH-375, the planCfWrites contract): per regenerated
