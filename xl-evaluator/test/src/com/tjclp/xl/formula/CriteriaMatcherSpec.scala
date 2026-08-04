@@ -64,9 +64,25 @@ class CriteriaMatcherSpec extends FunSuite:
     assertEquals(parseValue("<= 50"), Compare(CompareOp.Lte, BigDecimal(50)))
   }
 
-  test("parse: invalid comparison falls back to exact") {
-    assertEquals(parseValue(">abc"), exactValue(">abc"))
-    assertEquals(parseValue("<>xyz"), exactValue("<>xyz"))
+  test("parse: text operand after comparison operator (GH-466)") {
+    assertEquals(parseValue(">abc"), CompareText(CompareOp.Gt, "abc"))
+    assertEquals(parseValue(">=abc"), CompareText(CompareOp.Gte, "abc"))
+    assertEquals(parseValue("<abc"), CompareText(CompareOp.Lt, "abc"))
+    assertEquals(parseValue("<=abc"), CompareText(CompareOp.Lte, "abc"))
+    assertEquals(parseValue("<>xyz"), CompareText(CompareOp.Neq, "xyz"))
+  }
+
+  test("parse: bare <> is not-equal-to-empty, i.e. non-blank (GH-466)") {
+    assertEquals(parseValue("<>"), CompareText(CompareOp.Neq, ""))
+  }
+
+  test("parse: <> with wildcard operand negates the pattern (GH-466)") {
+    assertEquals(parseValue("<>a*"), NotWildcard("a*"))
+    assertEquals(parseValue("<>?pple"), NotWildcard("?pple"))
+  }
+
+  test("parse: <> with escaped wildcard operand is literal text (GH-466)") {
+    assertEquals(parseValue("<>test~*"), CompareText(CompareOp.Neq, "test*"))
   }
 
   test("parse: wildcard with asterisk") {
@@ -226,6 +242,61 @@ class CriteriaMatcherSpec extends FunSuite:
 
   test("matches: comparison with empty cell fails") {
     assert(!matches(CellValue.Empty, Compare(CompareOp.Gt, BigDecimal(0))))
+  }
+
+  // ===== Text Comparison Matching Tests (GH-466) =====
+
+  test("matches: <>text is case-insensitive not-equal (GH-466)") {
+    val crit = parseValue("<>x")
+    assert(!matches(CellValue.Text("x"), crit))
+    assert(!matches(CellValue.Text("X"), crit))
+    assert(matches(CellValue.Text("y"), crit))
+    // Numbers are never equal to text, so they match "<>x"
+    assert(matches(CellValue.Number(BigDecimal(5)), crit))
+    // Excel counts blank cells under "<>text" (blank is not equal to "x")
+    assert(matches(CellValue.Empty, crit))
+  }
+
+  test("matches: bare <> matches non-blank only (GH-466)") {
+    val crit = parseValue("<>")
+    assert(matches(CellValue.Text("x"), crit))
+    assert(matches(CellValue.Number(BigDecimal(0)), crit))
+    assert(matches(CellValue.Bool(false), crit))
+    assert(!matches(CellValue.Empty, crit))
+  }
+
+  test("matches: ordering operators compare text case-insensitively (GH-466)") {
+    assert(matches(CellValue.Text("x"), parseValue(">m")))
+    assert(matches(CellValue.Text("X"), parseValue(">m")))
+    assert(!matches(CellValue.Text("a"), parseValue(">m")))
+    assert(!matches(CellValue.Text("m"), parseValue(">m")))
+    assert(matches(CellValue.Text("m"), parseValue(">=m")))
+    assert(matches(CellValue.Text("M"), parseValue(">=m")))
+    assert(matches(CellValue.Text("a"), parseValue("<m")))
+    assert(!matches(CellValue.Text("x"), parseValue("<=m")))
+    assert(matches(CellValue.Text("m"), parseValue("<=m")))
+  }
+
+  test("matches: non-text values never satisfy text ordering criteria (GH-466)") {
+    val crit = parseValue(">m")
+    assert(!matches(CellValue.Number(BigDecimal(999)), crit))
+    assert(!matches(CellValue.Bool(true), crit))
+    assert(!matches(CellValue.Empty, crit))
+  }
+
+  test("matches: <> with wildcard operand is negated pattern match (GH-466)") {
+    val crit = parseValue("<>a*")
+    assert(!matches(CellValue.Text("apple"), crit))
+    assert(!matches(CellValue.Text("Apple"), crit))
+    assert(matches(CellValue.Text("banana"), crit))
+  }
+
+  test("matches: errors and uncached formulas never match text comparison (GH-466)") {
+    val crit = parseValue("<>x")
+    assert(!matches(CellValue.Error(com.tjclp.xl.cells.CellError.Value), crit))
+    assert(!matches(CellValue.Formula("=A1", None), crit))
+    assert(matches(CellValue.Formula("=A1", Some(CellValue.Text("y"))), crit))
+    assert(!matches(CellValue.Formula("=A1", Some(CellValue.Text("x"))), crit))
   }
 
   // ===== Wildcard Matching Tests =====
