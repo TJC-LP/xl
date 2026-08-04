@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **109 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,047 tests passing.
 
-**Current Version**: **0.19.0 "Canon"** (released 2026-08-03)
+**Current Version**: **0.19.1** (field hardening, released 2026-08-04)
 
 ---
 
