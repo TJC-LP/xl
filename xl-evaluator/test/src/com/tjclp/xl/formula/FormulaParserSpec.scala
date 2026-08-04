@@ -2010,3 +2010,34 @@ class FormulaParserSpec extends ScalaCheckSuite:
         case Left(err) => fail(s"fully parenthesized '=$source' should parse: $err")
     }
   }
+
+  test("GH-484: printFileForm emits Excel's bare-comma argument separators") {
+    FormulaParser.parse("=IF(A1,1,0)") match
+      case Right(expr) => assertEquals(FormulaPrinter.printFileForm(expr), "IF(A1,1,0)")
+      case Left(err) => fail(s"=IF(A1,1,0) should parse: $err")
+  }
+
+  test("GH-484: printFileForm joins LET bindings and nested calls with bare commas") {
+    FormulaParser.parse("=LET(x, A1, IF(x=2, 1, 0))") match
+      case Right(expr) =>
+        assertEquals(FormulaPrinter.printFileForm(expr), "LET(x,A1,IF(x=2,1,0))")
+      case Left(err) => fail(s"LET formula should parse: $err")
+  }
+
+  test("GH-484: printFileForm keeps bare commas in custom-rendered YEARFRAC") {
+    FormulaParser.parse("=YEARFRAC(A1,B1,1)") match
+      case Right(expr) => assertEquals(FormulaPrinter.printFileForm(expr), "YEARFRAC(A1,B1,1)")
+      case Left(err) => fail(s"YEARFRAC should parse: $err")
+  }
+
+  test("GH-484: printFileForm never touches commas inside string literals") {
+    FormulaParser.parse("=IF(A1,\"a, b\",0)") match
+      case Right(expr) => assertEquals(FormulaPrinter.printFileForm(expr), "IF(A1,\"a, b\",0)")
+      case Left(err) => fail(s"string-literal formula should parse: $err")
+  }
+
+  test("GH-484: default print keeps the pre-existing canonical ', ' separator") {
+    FormulaParser.parse("=IF(A1,1,0)") match
+      case Right(expr) => assertEquals(FormulaPrinter.print(expr), "=IF(A1, 1, 0)")
+      case Left(err) => fail(s"=IF(A1,1,0) should parse: $err")
+  }

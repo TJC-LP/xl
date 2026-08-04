@@ -281,7 +281,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
               printer.expr(endDateExpr),
               printer.expr(basisExpr)
             )
-        s"YEARFRAC(${rendered.mkString(", ")})"
+        s"YEARFRAC(${rendered.mkString(printer.separator)})"
       },
       flags = FunctionFlags(returnsNumeric = true)
     ) { (args, ctx) =>

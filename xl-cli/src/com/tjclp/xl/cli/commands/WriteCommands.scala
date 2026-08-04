@@ -462,7 +462,7 @@ object WriteCommands:
       val colDelta = Column.index0(targetRef.col) - startCol
       val rowDelta = Row.index0(targetRef.row) - startRow
       val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
-      val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+      val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
       val fullShiftedFormula = s"=$shiftedFormula"
       val cachedValue =
         SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
@@ -1166,7 +1166,7 @@ object WriteCommands:
                 sheet.put(targetRef, CellValue.Formula(formula, cachedValue))
               case Right(parsedExpr) =>
                 val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
-                val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+                val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
                 val fullShiftedFormula = s"=$shiftedFormula"
                 val cachedValue =
                   SheetEvaluator
@@ -1912,7 +1912,7 @@ object WriteCommands:
           case Right(parsedExpr) =>
             // Shift only row references, not columns (colDelta = 0)
             val shiftedExpr = FormulaShifter.shift(parsedExpr, 0, rowDelta)
-            val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+            val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
             // Clear cached value since it will need re-evaluation
             CellValue.Formula(shiftedFormula, None)
       case other => other

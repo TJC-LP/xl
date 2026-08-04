@@ -1353,7 +1353,7 @@ object BatchParser:
           val colDelta = Column.index0(targetRef.col) - startCol
           val rowDelta = Row.index0(targetRef.row) - startRow
           val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
-          val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+          val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
           val cachedValue =
             SheetEvaluator.evaluateFormula(s)(s"=$shiftedFormula", workbook = Some(wb)).toOption
           applyNumFmt(
