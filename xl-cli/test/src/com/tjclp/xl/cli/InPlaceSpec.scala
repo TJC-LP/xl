@@ -56,7 +56,7 @@ class InPlaceSpec extends CatsEffectSuite:
       .runWithOutput(Some(out), inPlace = false, file) { (received, display) =>
         captured = received
         capturedDisplay = display
-        IO.pure(ExitCode.Success)
+        IO.pure((ExitCode.Success, "ok"))
       }
       .map { code =>
         assertEquals(code, ExitCode.Success)
@@ -73,7 +73,7 @@ class InPlaceSpec extends CatsEffectSuite:
       .runWithOutput(None, inPlace = false, file) { (received, display) =>
         captured = received
         capturedDisplay = display
-        IO.pure(ExitCode.Success)
+        IO.pure((ExitCode.Success, "ok"))
       }
       .map { code =>
         assertEquals(code, ExitCode.Success)
@@ -86,7 +86,7 @@ class InPlaceSpec extends CatsEffectSuite:
     val file = Path.of("/tmp/input.xlsx")
     val out = Path.of("/tmp/output.xlsx")
     Main
-      .runWithOutput(Some(out), inPlace = true, file)((_, _) => IO.pure(ExitCode.Success))
+      .runWithOutput(Some(out), inPlace = true, file)((_, _) => IO.pure((ExitCode.Success, "ok")))
       .map { code => assertEquals(code, ExitCode.Error) }
   }
 
@@ -109,7 +109,7 @@ class InPlaceSpec extends CatsEffectSuite:
         val wb = Workbook(
           Vector(Sheet("Test").put(ref"A1", CellValue.Text("Updated")))
         )
-        excel.write(wb, out).as(ExitCode.Success)
+        excel.write(wb, out).as((ExitCode.Success, "saved"))
       }
 
       for
@@ -132,7 +132,7 @@ class InPlaceSpec extends CatsEffectSuite:
       val result = Main.runWithOutput(None, inPlace = true, tempFile) { (outOpt, _) =>
         writePath = outOpt
         // Simulate a failure: return Error exit code without writing anything useful
-        IO.pure(ExitCode.Error)
+        IO.pure((ExitCode.Error, "failed"))
       }
 
       for
@@ -173,20 +173,47 @@ class InPlaceSpec extends CatsEffectSuite:
 
   private def xlCommand = com.monovore.decline.Command("xl", "test")(Main.main)
 
+  private def captureStdout[A](io: IO[A]): IO[(A, String)] =
+    IO.blocking(new ByteArrayOutputStream()).flatMap { baos =>
+      IO.blocking {
+        val prev = System.out
+        System.setOut(new PrintStream(baos, true, StandardCharsets.UTF_8))
+        prev
+      }.bracket(_ => io)(prev => IO.blocking(System.setOut(prev)))
+        .map(result => (result, baos.toString(StandardCharsets.UTF_8)))
+    }
+
   /** Parse a full CLI invocation and run it, capturing everything printed to stdout. */
   private def runCliCaptured(args: String*): IO[(ExitCode, String)] =
     IO.fromEither(
       xlCommand.parse(args, Map.empty).left.map(help => new Exception(help.toString))
-    ).flatMap { io =>
-      IO.blocking(new ByteArrayOutputStream()).flatMap { baos =>
-        IO.blocking {
-          val prev = System.out
-          System.setOut(new PrintStream(baos, true, StandardCharsets.UTF_8))
-          prev
-        }.bracket(_ => io)(prev => IO.blocking(System.setOut(prev)))
-          .map(code => (code, baos.toString(StandardCharsets.UTF_8)))
+    ).flatMap(captureStdout)
+
+  test("runWithOutput: failed final replacement prints no success message") {
+    IO.blocking {
+      val destination = Files.createTempDirectory("xl-inplace-move-failure-")
+      Files.writeString(destination.resolve("keep"), "keep")
+      destination
+    }.bracket { destination =>
+      val attempted = Main
+        .runWithOutput(None, inPlace = true, destination) { (outOpt, _) =>
+          val out = outOpt.get
+          IO.blocking(Files.writeString(out, "replacement"))
+            .as((ExitCode.Success, s"Saved: $destination"))
+        }
+        .attempt
+      captureStdout(attempted).map { case (outcome, stdout) =>
+        assert(outcome.isLeft, "replacing a non-empty directory must fail")
+        assert(!stdout.contains("Saved:"), s"success was printed before replacement:\n$stdout")
+        assert(Files.isDirectory(destination), "failed replacement must preserve the destination")
       }
+    } { destination =>
+      IO.blocking {
+        Files.deleteIfExists(destination.resolve("keep"))
+        Files.deleteIfExists(destination)
+      }.void
     }
+  }
 
   test("-i recalc: success message names the original file, not the temp (GH-464)") {
     withTempExcelFile { tempFile =>

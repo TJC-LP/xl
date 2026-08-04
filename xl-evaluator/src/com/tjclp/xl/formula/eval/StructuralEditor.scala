@@ -60,7 +60,13 @@ object StructuralEditor:
     lazy val staleCaches: Set[QualifiedRef] =
       val (_, dependents) = DependencyGraph.fromWorkbookBounded(wb)
       val seeds = dependents.keySet.filter(_.sheet == target)
-      DependencyGraph.qualifiedTransitiveDependents(dependents, seeds)
+      // A dynamic reference can reach the edited sheet without contributing a static graph edge.
+      // Conservatively invalidate every dynamic cell and its static dependent closure: the edit
+      // may have changed what its unchanged reference text resolves to.
+      val dynamic = wb.sheets.iterator.flatMap { s =>
+        DependencyGraph.dynamicCells(s).iterator.map(r => QualifiedRef(s.name, r))
+      }.toSet
+      dynamic ++ DependencyGraph.qualifiedTransitiveDependents(dependents, seeds ++ dynamic)
     val updatedSheets = wb.sheets.map { s =>
       // 1. Pure cell/merge/property shift — only on the edited sheet. Its own typed charts
       //    (anchors + same-sheet data refs) are handled INSIDE the shift (GH-222).

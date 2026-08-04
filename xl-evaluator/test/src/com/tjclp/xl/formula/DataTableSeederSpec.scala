@@ -423,6 +423,39 @@ class DataTableSeederSpec extends FunSuite:
     )
   }
 
+  test("GH-453: a cyclic source seeds its last Jacobi round without one extra evaluation") {
+    // F9 is both the table source and a self-cycle member. From the zero seed with A1 pinned to 1,
+    // its two Jacobi rounds are 2 then 3; evaluating F9 once more would incorrectly seed 3.5.
+    val sheet = Sheet("S")
+      .put(ref"A1", num(0))
+      .put(ref"F9", CellValue.Formula("F9/2+A1+1"))
+      .put(ref"E10", num(1))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F10", "A1"), None))
+    val wb = Workbook(sheet).withCalcPr(CalcPr(iterativeCalculation = true, Some(2), None))
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    assertEquals(interiorNum(out, ref"F10"), Some(BigDecimal(3)))
+    assertEquals(
+      report.warnings,
+      Vector(SeedTableWarning.NotConverged(SheetName.unsafe("S"), range("F10:F10"), 1, 2))
+    )
+  }
+
+  test("GH-453: NotConverged reports the normalized one-round minimum") {
+    val sheet = Sheet("S")
+      .put(ref"A1", num(0))
+      .put(ref"F9", CellValue.Formula("F9+1"))
+      .put(ref"E10", num(1))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F10", "A1"), None))
+    val wb = Workbook(sheet).withCalcPr(CalcPr(iterativeCalculation = true, Some(0), None))
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    assertEquals(interiorNum(sheetNamed(report.workbook, "S"), ref"F10"), Some(BigDecimal(1)))
+    assertEquals(
+      report.warnings,
+      Vector(SeedTableWarning.NotConverged(SheetName.unsafe("S"), range("F10:F10"), 1, 1))
+    )
+  }
+
   test("GH-453: re-seeding is a no-op and source cycle-member cells are never mutated") {
     val wb = Workbook(circularTableSheet).withCalcPr(tightCalcPr)
     val first = wb.seedDataTables().fold(err => fail(s"seeding failed: $err"), identity)

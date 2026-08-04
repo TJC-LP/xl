@@ -315,6 +315,25 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(out(ref"E1").value, CellValue.Formula("C2*2", Some(num(10))))
   }
 
+  test("GH-455: cross-sheet dynamic refs and their dependents drop stale caches") {
+    val alpha = new Sheet(name = SheetName.unsafe("Alpha")).put(ref"A1", num(10))
+    val beta = new Sheet(name = SheetName.unsafe("Beta"))
+      .put(ref"X1", CellValue.Formula("INDIRECT(\"Alpha!A1\")", Some(num(10))))
+      .put(ref"Y1", CellValue.Formula("X1*2", Some(num(20))))
+      .put(ref"Z1", CellValue.Formula("1+2", Some(num(3))))
+    val r = StructuralEditor.insertRows(
+      Workbook(Vector(alpha, beta)),
+      SheetName.unsafe("Alpha"),
+      at = 0,
+      count = 1
+    )
+    val out = sheetNamed(r, "Beta")
+    // INDIRECT text is data and stays byte-identical, but now resolves to the newly empty A1.
+    assertEquals(out(ref"X1").value, CellValue.Formula("INDIRECT(\"Alpha!A1\")", None))
+    assertEquals(out(ref"Y1").value, CellValue.Formula("X1*2", None))
+    assertEquals(out(ref"Z1").value, CellValue.Formula("1+2", Some(num(3))))
+  }
+
   test("GH-455: a non-edited sheet MENTIONING the edited sheet still rewrites (and only then)") {
     val data = new Sheet(name = SheetName.unsafe("Data"))
     val report = new Sheet(name = SheetName.unsafe("Report"))

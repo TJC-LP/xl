@@ -410,7 +410,12 @@ object DataTableSeeder:
         val notConverged =
           if unconverged > 0 then
             Vector(
-              SeedTableWarning.NotConverged(sheet.name, kind.ref, unconverged, iterative.maxIter)
+              SeedTableWarning.NotConverged(
+                sheet.name,
+                kind.ref,
+                unconverged,
+                math.max(1, iterative.maxIter)
+              )
             )
           else Vector.empty
         // GH-453 (review follow-up): unseeded cells must be VISIBLE in the report — one Skipped
@@ -466,25 +471,31 @@ object DataTableSeeder:
           // (3) fixpoint the relevant cycle members under this axis combination
           val (results, converged, _) =
             WorkbookEvaluator.jacobiFixpoint(wb, overlaid, members, iterative, clock, None)
-          // (4) fold member values in as plain values, then evaluate the source formula
-          val folded = members.foldLeft(Option(overlaid)) { case (accOpt, (q, idx, _)) =>
-            accOpt.flatMap { sheets =>
-              results.get(q) match
-                case Some(Right(v)) => Some(sheets.updated(idx, sheets(idx).put(q.ref, v)))
-                case _ => None // tolerant: a failing member leaves this cell untouched
+          val sourceQ = QualifiedRef(sheet.name, sourceRef)
+          if members.exists((q, _, _) => q == sourceQ) then
+            // The source formula itself was fixpointed. Re-evaluating it after folding the final
+            // member values would advance it by one extra Jacobi round.
+            results.get(sourceQ).flatMap(_.toOption).map(value => (value, converged))
+          else
+            // (4) fold member values in as plain values, then evaluate the source formula
+            val folded = members.foldLeft(Option(overlaid)) { case (accOpt, (q, idx, _)) =>
+              accOpt.flatMap { sheets =>
+                results.get(q) match
+                  case Some(Right(v)) => Some(sheets.updated(idx, sheets(idx).put(q.ref, v)))
+                  case _ => None // tolerant: a failing member leaves this cell untouched
+              }
             }
-          }
-          folded.flatMap { sheets =>
-            SheetEvaluator
-              .evaluateFormula(sheets(tableIdx))(
-                expression,
-                clock,
-                Some(wb.copy(sheets = sheets)),
-                None
-              )
-              .toOption
-              .map(value => (value, converged))
-          }
+            folded.flatMap { sheets =>
+              SheetEvaluator
+                .evaluateFormula(sheets(tableIdx))(
+                  expression,
+                  clock,
+                  Some(wb.copy(sheets = sheets)),
+                  None
+                )
+                .toOption
+                .map(value => (value, converged))
+            }
         }
       case _ =>
         // Empty or non-formula source cell: Excel caches 0 (fixture-verified bytes).
