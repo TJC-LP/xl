@@ -6,6 +6,7 @@ import cats.effect.IO
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.cli.helpers.SheetResolver
+import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
 
@@ -27,11 +28,6 @@ object CellCommands:
     val excel = ExcelIO.instance[IO]
     if stream then excel.writeWorkbookStream(wb, outputPath, config)
     else excel.writeWith(wb, outputPath, config)
-
-  /** Build save message suffix based on write mode */
-  private def saveSuffix(outputPath: Path, stream: Boolean): String =
-    if stream then s"Saved (streaming): $outputPath"
-    else s"Saved: $outputPath"
 
   /**
    * Merge cells in range.
@@ -59,7 +55,7 @@ object CellCommands:
       updatedSheet = targetSheet.merge(range)
       updatedWb = wb.put(updatedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Merged: ${range.toA1}\n${saveSuffix(outputPath, stream)}"
+    yield s"Merged: ${range.toA1}\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Unmerge cells in range.
@@ -87,7 +83,7 @@ object CellCommands:
       updatedSheet = targetSheet.unmerge(range)
       updatedWb = wb.put(updatedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Unmerged: ${range.toA1}\n${saveSuffix(outputPath, stream)}"
+    yield s"Unmerged: ${range.toA1}\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Clear cell contents, styles, or comments from range.
@@ -152,4 +148,4 @@ object CellCommands:
         if clearComments then Some("comments") else None
       ).flatten
       clearedDesc = clearedItems.mkString(", ")
-    yield s"Cleared $clearedDesc from ${range.toA1}\n${saveSuffix(outputPath, stream)}"
+    yield s"Cleared $clearedDesc from ${range.toA1}\n${Format.saveSuffix(outputPath, stream)}"

@@ -64,11 +64,6 @@ object WriteCommands:
     if stream then excel.writeWorkbookStream(wb, outputPath, config)
     else excel.writeWith(wb, outputPath, config)
 
-  /** Build save message suffix based on write mode */
-  private def saveSuffix(outputPath: Path, stream: Boolean): String =
-    if stream then s"Saved (streaming): $outputPath"
-    else s"Saved: $outputPath"
-
   /**
    * Validate that the count of values/formulas matches the cell count in a range.
    *
@@ -217,7 +212,7 @@ object WriteCommands:
     val updatedSheet = putFormatted(sheet, ref, formatted)
     val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, Set(ref))
     writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-      s"${Format.putSuccess(ref, formatted.value)}\n${saveSuffix(outputPath, stream)}"
+      s"${Format.putSuccess(ref, formatted.value)}\n${Format.saveSuffix(outputPath, stream)}"
     }
 
   /** Apply a detected number format without creating a redundant General style. */
@@ -264,7 +259,7 @@ object WriteCommands:
     val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => putFormatted(s, ref, formatted))
     val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
     writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-      s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}\n${saveSuffix(outputPath, stream)}"
+      s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}\n${Format.saveSuffix(outputPath, stream)}"
     }
 
   /** Mode 3: Put different values to each cell (row-major order) */
@@ -292,7 +287,7 @@ object WriteCommands:
         val updatedSheet = sheet.put(updates*)
         val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
         writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-          s"Put ${values.length} values to ${range.toA1} (row-major)\n${saveSuffix(outputPath, stream)}"
+          s"Put ${values.length} values to ${range.toA1} (row-major)\n${Format.saveSuffix(outputPath, stream)}"
         }
 
   /**
@@ -379,7 +374,7 @@ object WriteCommands:
         else sheetWithFormula
       updatedWb = wb.put(finalSheet).recalculateDependents(sheet.name, Set(ref))
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"${Format.putSuccess(ref, CellValue.Formula(formula))}\n${saveSuffix(outputPath, stream)}"
+    yield s"${Format.putSuccess(ref, CellValue.Formula(formula))}\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Mode 2: Formula dragging with anchor-aware shifting (existing behavior) */
   private def putfFormulaDragging(
@@ -405,7 +400,7 @@ object WriteCommands:
       updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       cellCount = range.cellCount
-    yield s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)\n${saveSuffix(outputPath, stream)}"
+    yield s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Mode 3: Batch formulas (no dragging, apply as-is) */
   private def putfBatchFormulas(
@@ -443,7 +438,7 @@ object WriteCommands:
           updatedSheet = sheet.put(updates*)
           updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
           _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-        yield s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)\n${saveSuffix(outputPath, stream)}"
+        yield s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Helper: Apply formula dragging logic (extracted from original putFormula) */
   private def putfDraggingLogic(
@@ -575,7 +570,7 @@ object WriteCommands:
         border
       )
       modeLabel = if replace then " (replace)" else " (additive)"
-    yield s"Styled: ${range.toA1}$modeLabel\nApplied: ${appliedList.mkString(", ")}\n${saveSuffix(outputPath, stream)}"
+    yield s"Styled: ${range.toA1}$modeLabel\nApplied: ${appliedList.mkString(", ")}\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Set row properties (height, hide/show).
@@ -609,7 +604,7 @@ object WriteCommands:
           if hide then Some("hidden=true") else None,
           if show then Some("hidden=false") else None
         ).flatten
-        s"Row $rowNum: ${changes.mkString(", ")}\n${saveSuffix(outputPath, stream)}"
+        s"Row $rowNum: ${changes.mkString(", ")}\n${Format.saveSuffix(outputPath, stream)}"
       }
     }
 
@@ -659,9 +654,9 @@ object WriteCommands:
           val updatedWb = wb.put(updatedSheet)
           writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
             results match
-              case single :: Nil => s"Column $single\n${saveSuffix(outputPath, stream)}"
+              case single :: Nil => s"Column $single\n${Format.saveSuffix(outputPath, stream)}"
               case multiple =>
-                s"Columns:\n${multiple.map("  " + _).mkString("\n")}\n${saveSuffix(outputPath, stream)}"
+                s"Columns:\n${multiple.map("  " + _).mkString("\n")}\n${Format.saveSuffix(outputPath, stream)}"
           }
     }
 
@@ -756,7 +751,7 @@ object WriteCommands:
       columnsResult match
         case Left(err) => IO.raiseError(new Exception(err))
         case Right(columns) if columns.isEmpty =>
-          IO.pure(s"No columns to auto-fit (empty sheet)\n${saveSuffix(outputPath, stream)}")
+          IO.pure(s"No columns to auto-fit (empty sheet)\n${Format.saveSuffix(outputPath, stream)}")
         case Right(columns) =>
           val (updatedSheet, widths) = columns.foldLeft((sheet, List.empty[(Column, Double)])) {
             case ((s, ws), colRef) =>
@@ -768,7 +763,7 @@ object WriteCommands:
           val updatedWb = wb.put(updatedSheet)
           writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
             val summary = widths.map { case (c, w) => f"${c.toLetter}: $w%.2f" }.mkString(", ")
-            s"Auto-fit ${columns.size} column(s): $summary\n${saveSuffix(outputPath, stream)}"
+            s"Auto-fit ${columns.size} column(s): $summary\n${Format.saveSuffix(outputPath, stream)}"
           }
     }
 
@@ -896,7 +891,7 @@ object WriteCommands:
               val ops = result.ops
               val summary = BatchParser.formatSummary(ops)
               val recalcLine = recalcOpt.fold("")(r => s"${formatRecalcSummary(r)}\n")
-              s"Applied ${ops.size} operations:\n$summary\n$recalcLine${saveSuffix(outputPath, stream)}"
+              s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
             }
           }
       }
@@ -946,7 +941,7 @@ object WriteCommands:
       writeWorkbook(workbook, outputPath, config, stream).map { _ =>
         val tableNote = if seedTables then "\nSeeded data table interior caches" else ""
         val warningLines = warnings.map(w => s"\n${renderSeedWarning(w)}").mkString
-        s"${formatRecalcSummary(result)}$tableNote$warningLines\n${saveSuffix(outputPath, stream)}"
+        s"${formatRecalcSummary(result)}$tableNote$warningLines\n${Format.saveSuffix(outputPath, stream)}"
       }
     }
 
@@ -1013,7 +1008,7 @@ object WriteCommands:
       updatedWb = wb.put(updatedSheet).recalculateDependents(targetSheet.name, modifiedRefs)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       dirLabel = if direction == FillDirection.Right then "right" else "down"
-    yield s"Filled ${targetRange.toA1} from ${sourceRange.toA1} ($dirLabel)\n${saveSuffix(outputPath, stream)}"
+    yield s"Filled ${targetRange.toA1} from ${sourceRange.toA1} ($dirLabel)\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Validate that source and target ranges are compatible for fill direction */
   private def validateFillRanges(
@@ -1234,7 +1229,7 @@ object WriteCommands:
         )
         .mkString(", ")
       headerNote = if hasHeader then " (header row preserved)" else ""
-    yield s"Sorted ${range.toA1} by $keyDesc$headerNote\n${saveSuffix(outputPath, stream)}"
+    yield s"Sorted ${range.toA1} by $keyDesc$headerNote\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Freeze panes at the given cell reference.
@@ -1266,7 +1261,7 @@ object WriteCommands:
       updatedSheet = sheet.freezeAt(ref)
       updatedWb = wb.put(updatedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Froze panes at ${ref.toA1} on sheet '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+    yield s"Froze panes at ${ref.toA1} on sheet '${sheet.name.value}'\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Remove freeze panes from the sheet.
@@ -1286,7 +1281,7 @@ object WriteCommands:
       updatedSheet = sheet.unfreeze
       updatedWb = wb.put(updatedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Removed freeze panes from sheet '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+    yield s"Removed freeze panes from sheet '${sheet.name.value}'\n${Format.saveSuffix(outputPath, stream)}"
 
   // ===== Sheet appearance & print setup (GH-358) =====
 
@@ -1306,7 +1301,7 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, context)
       updatedSheet <- IO.fromEither(f(sheet).left.map(new Exception(_)))
       _ <- writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
-    yield s"${message(sheet)}\n${saveSuffix(outputPath, stream)}"
+    yield s"${message(sheet)}\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Set sheet view options: gridline visibility, zoom scale (10-400), tab selection. Unspecified
@@ -1387,7 +1382,7 @@ object WriteCommands:
       message = rangeOpt match
         case Some(r) => s"Set autoFilter on '${sheet.name.value}' to ${r.toA1}"
         case None => s"Removed autoFilter from sheet '${sheet.name.value}'"
-    yield s"$message\n${saveSuffix(outputPath, stream)}"
+    yield s"$message\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Set print page setup: orientation, scale, fit-to-width/height, and the tri-state fitToPage
@@ -1501,7 +1496,7 @@ object WriteCommands:
     yield
       val priorityNote = priority.fold("")(p => s" (priority $p)")
       s"Added conditional format on '${sheet.name.value}': ${CfRuleParser.describe(rule)} " +
-        s"over ${range.toA1}$priorityNote\n${saveSuffix(outputPath, stream)}"
+        s"over ${range.toA1}$priorityNote\n${Format.saveSuffix(outputPath, stream)}"
 
   /** List conditional-formatting rules on the sheet (read-only — no output file needed). */
   def cfList(wb: Workbook, sheetOpt: Option[Sheet]): IO[String] =
@@ -1573,7 +1568,7 @@ object WriteCommands:
       _ <- requirePositive(count, "count")
       recalced = StructuralEditor.insertRows(wb, sheet.name, at - 1, count).recalculate()
       _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
-    yield s"Inserted $count row(s) before row $at on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${saveSuffix(outputPath, stream)}"
+    yield s"Inserted $count row(s) before row $at on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${Format.saveSuffix(outputPath, stream)}"
 
   def deleteRows(
     wb: Workbook,
@@ -1590,7 +1585,7 @@ object WriteCommands:
       _ <- requirePositive(count, "count")
       recalced = StructuralEditor.deleteRows(wb, sheet.name, at - 1, count).recalculate()
       _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
-    yield s"Deleted $count row(s) from row $at on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${saveSuffix(outputPath, stream)}"
+    yield s"Deleted $count row(s) from row $at on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${Format.saveSuffix(outputPath, stream)}"
 
   def insertColumns(
     wb: Workbook,
@@ -1608,7 +1603,7 @@ object WriteCommands:
       _ <- requirePositive(n, "count")
       recalced = StructuralEditor.insertColumns(wb, sheet.name, at0, n).recalculate()
       _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
-    yield s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${saveSuffix(outputPath, stream)}"
+    yield s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${Format.saveSuffix(outputPath, stream)}"
 
   def deleteColumns(
     wb: Workbook,
@@ -1626,7 +1621,7 @@ object WriteCommands:
       _ <- requirePositive(n, "count")
       recalced = StructuralEditor.deleteColumns(wb, sheet.name, at0, n).recalculate()
       _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
-    yield s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${saveSuffix(outputPath, stream)}"
+    yield s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Copy a range of cells to another location with optional formula adjustment.
@@ -1693,7 +1688,7 @@ object WriteCommands:
           s" (${sourceSheet.name.value} → ${targetSheet.name.value})"
         else ""
       modeLabel = if valuesOnly then " (values only)" else " (with formula adjustment)"
-    yield s"Copied ${sourceRange.toA1} to ${targetRange.toA1}$crossSheetLabel$modeLabel\n${saveSuffix(outputPath, stream)}"
+    yield s"Copied ${sourceRange.toA1} to ${targetRange.toA1}$crossSheetLabel$modeLabel\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Validate that all sort columns are within the range */
   private def validateSortColumns(range: CellRange, keys: List[SortKey]): IO[Unit] =

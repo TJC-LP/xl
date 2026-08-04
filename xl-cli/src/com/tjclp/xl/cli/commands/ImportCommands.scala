@@ -8,6 +8,7 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.helpers.{CsvParser, MarkdownTableParser, StreamingCsvParser}
 import com.tjclp.xl.cli.helpers.MarkdownTableParser.ColumnAlignment
+import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -37,11 +38,6 @@ object ImportCommands:
     val excel = ExcelIO.instance[IO]
     if stream then excel.writeWorkbookStream(wb, outputPath, config)
     else excel.writeWith(wb, outputPath, config)
-
-  /** Build save message suffix based on write mode */
-  private def saveSuffix(outputPath: Path, stream: Boolean): String =
-    if stream then s"Saved (streaming): $outputPath"
-    else s"Saved: $outputPath"
 
   /**
    * Import CSV data into a workbook.
@@ -162,7 +158,7 @@ object ImportCommands:
       colCount = updates.map(_._1.col).distinct.size
       cellCount = updates.size
     yield s"""Imported: ${csvPath.getFileName} → ${sheet.name} (${rowCount} rows, ${colCount} cols, ${cellCount} cells)
-${saveSuffix(outputPath, stream)}"""
+${Format.saveSuffix(outputPath, stream)}"""
 
   /**
    * Import CSV to a new sheet (created as part of the import).
@@ -213,7 +209,7 @@ ${saveSuffix(outputPath, stream)}"""
         colCount = updates.map(_._1.col).distinct.size
         cellCount = updates.size
       yield s"""Imported: ${csvPath.getFileName} → new sheet '$sheetName' (${rowCount} rows, ${colCount} cols, ${cellCount} cells)
-${saveSuffix(outputPath, stream)}"""
+${Format.saveSuffix(outputPath, stream)}"""
 
   /**
    * True streaming CSV import - O(1) memory for entire operation.
@@ -353,7 +349,7 @@ ${saveSuffix(outputPath, stream)}"""
               )
               _ <- writeWorkbook(wb.put(filled), outputPath, config, stream)
             yield importMessage(sourceName, s"new sheet '$name'", rows, table.columnCount) +
-              "\n" + saveSuffix(outputPath, stream)
+              "\n" + Format.saveSuffix(outputPath, stream)
         case None =>
           sheetOpt match
             case None =>
@@ -373,7 +369,7 @@ ${saveSuffix(outputPath, stream)}"""
                 )
                 _ <- writeWorkbook(wb.put(filled), outputPath, config, stream)
               yield importMessage(sourceName, sheet.name.value, rows, table.columnCount) +
-                "\n" + saveSuffix(outputPath, stream)
+                "\n" + Format.saveSuffix(outputPath, stream)
     yield result
 
   private def importMessage(
