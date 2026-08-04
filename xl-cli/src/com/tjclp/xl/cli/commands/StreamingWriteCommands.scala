@@ -3,7 +3,6 @@ package com.tjclp.xl.cli.commands
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.zip.ZipFile
-import javax.xml.parsers.SAXParserFactory
 
 import cats.effect.IO
 import com.tjclp.xl.api.Workbook
@@ -873,19 +872,12 @@ object StreamingWriteCommands:
         if worksheetEntry == null then
           throw new Exception(s"Worksheet not found while loading metadata: $worksheetPath")
 
-        val parserFactory = SAXParserFactory.newInstance()
-        parserFactory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-        parserFactory.setFeature("http://xml.org/sax/features/external-general-entities", false)
-        parserFactory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-        parserFactory.setFeature(
-          "http://apache.org/xml/features/nonvalidating/load-external-dtd",
-          false
-        )
-        parserFactory.setXIncludeAware(false)
-        parserFactory.setNamespaceAware(true)
-        val parser = parserFactory.newSAXParser()
+        // GH-350/GH-457: build from the shared hardened factory (doctype-strip + lifted JAXP
+        // entity-size limits) instead of re-inlining the XXE posture per-site.
+        val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
 
-        val inputStream = zipFile.getInputStream(worksheetEntry)
+        val inputStream =
+          XmlSecurity.stripLeadingDoctypeStream(zipFile.getInputStream(worksheetEntry))
         try
           val handler = new DefaultHandler:
             override def startElement(

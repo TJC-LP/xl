@@ -345,6 +345,164 @@ class SecuritySpec extends FunSuite:
     assertEquals(XmlSecurity.stripLeadingDoctype(in), "<?xml version=\"1.0\"?>\n\n\n\n<x/>")
   }
 
+  // --- GH-457: JAXP entity-size limits must not reject name-bloated (multi-MB) workbook.xml ---
+
+  /**
+   * Single-line workbook.xml whose <definedNames> block is inflated past `minBytes` — the shape of
+   * legacy banker books (37k-110k names) that trips jdk.xml.maxGeneralEntitySizeLimit=100000 on the
+   * native image (GH-457).
+   */
+  private def nameBloatedWorkbookXml(minBytes: Int): String =
+    val sb = new StringBuilder
+    sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+    sb.append("<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"")
+    sb.append(" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">")
+    sb.append("<sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets>")
+    sb.append("<definedNames>")
+    var i = 0
+    while sb.length < minBytes do
+      sb.append(s"<definedName name=\"n$i\">Sheet1!$$A$$${(i % 100) + 1}</definedName>")
+      i += 1
+    sb.append("</definedNames></workbook>")
+    sb.toString
+
+  /**
+   * Run `body` with the jdk.xml entity-size system properties pinned to the 100k default the native
+   * image bakes in — parsers created while these are set inherit the limits unless the factory
+   * explicitly lifts them (the GH-457 fix).
+   */
+  private def withRestrictedJaxpLimits[A](body: => A): A =
+    val keys = List("jdk.xml.maxGeneralEntitySizeLimit", "jdk.xml.totalEntitySizeLimit")
+    val saved = keys.map(k => k -> Option(System.getProperty(k)))
+    keys.foreach(k => System.setProperty(k, "100000"))
+    try body
+    finally
+      saved.foreach {
+        case (k, Some(v)) => System.setProperty(k, v)
+        case (k, None) => System.clearProperty(k)
+      }
+
+  /**
+   * Run `body` on a fresh thread: XmlSecurity's parser pool is a ThreadLocal, so this forces the
+   * pooled parser to be created while [[withRestrictedJaxpLimits]]'s properties are in effect
+   * (parsers already pooled on the test thread would predate them).
+   */
+  private def onFreshThread[A](body: => A): A =
+    @volatile var out: Option[Either[Throwable, A]] = None
+    val t = new Thread(() =>
+      out = Some(
+        try Right(body)
+        catch case e: Throwable => Left(e)
+      )
+    )
+    t.start()
+    t.join()
+    out match
+      case Some(Right(a)) => a
+      case Some(Left(e)) => throw e
+      case None => fail("worker thread did not complete")
+
+  test("GH-457: secure parser lifts JAXP entity-size limits (property pin + bloated parse)") {
+    val xml = nameBloatedWorkbookXml(150_000)
+    withRestrictedJaxpLimits {
+      val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
+      // The parser must carry limit=0 (unlimited) even when the environment restricts it — this
+      // is the exact mechanism that fixes the native image, where the baked-in parser default is
+      // 100000 and -Djdk.xml.* cannot reach the binary (GH-457).
+      val prefix = "http://www.oracle.com/xml/jaxp/properties/"
+      assertEquals(
+        String.valueOf(parser.getProperty(s"${prefix}maxGeneralEntitySizeLimit")),
+        "0",
+        "maxGeneralEntitySizeLimit must be lifted on parsers from secureSaxParserFactory"
+      )
+      assertEquals(
+        String.valueOf(parser.getProperty(s"${prefix}totalEntitySizeLimit")),
+        "0",
+        "totalEntitySizeLimit must be lifted on parsers from secureSaxParserFactory"
+      )
+      // On JAXP builds that count the document entity against the limit (JDK 24-era Xerces, the
+      // GraalVM the native image is built from) this parse throws JAXP00010003 without the fix.
+      parser.parse(
+        new org.xml.sax.InputSource(new java.io.StringReader(xml)),
+        new org.xml.sax.helpers.DefaultHandler
+      )
+    }
+  }
+
+  test("GH-457: parseSafe reads >100KB workbook.xml under native-image JAXP limits") {
+    val xml = nameBloatedWorkbookXml(150_000)
+    withRestrictedJaxpLimits {
+      onFreshThread {
+        XmlSecurity.parseSafe(xml, "xl/workbook.xml") match
+          case Right(elem) => assertEquals(elem.label, "workbook")
+          case Left(err) => fail(s"name-bloated workbook.xml must parse: ${err.message}")
+      }
+    }
+  }
+
+  test("GH-457: full read + metadata read of a name-bloated xlsx under native-image JAXP limits") {
+    val workbookXml = nameBloatedWorkbookXml(150_000)
+
+    val contentTypes = """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"""
+
+    val rels = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+
+    val workbookRels = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"""
+
+    val sheet1 = """<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1"/>
+  <sheetData/>
+</worksheet>"""
+
+    val baos = ByteArrayOutputStream()
+    val zos = ZipOutputStream(baos)
+
+    def addEntry(name: String, content: String): Unit =
+      zos.putNextEntry(ZipEntry(name))
+      zos.write(content.getBytes(StandardCharsets.UTF_8))
+      zos.closeEntry()
+
+    addEntry("[Content_Types].xml", contentTypes)
+    addEntry("_rels/.rels", rels)
+    addEntry("xl/workbook.xml", workbookXml)
+    addEntry("xl/_rels/workbook.xml.rels", workbookRels)
+    addEntry("xl/worksheets/sheet1.xml", sheet1)
+    zos.close()
+
+    val tempFile = tempDir.resolve("name-bloated.xlsx")
+    Files.write(tempFile, baos.toByteArray)
+
+    withRestrictedJaxpLimits {
+      onFreshThread {
+        XlsxReader.read(tempFile) match
+          case Right(workbook) => assertEquals(workbook.sheets.size, 1)
+          case Left(err) => fail(s"name-bloated xlsx must load fully: $err")
+
+        com.tjclp.xl.ooxml.metadata.WorkbookMetadataReader.read(tempFile) match
+          case Right(meta) =>
+            assertEquals(meta.sheets.size, 1)
+            assert(
+              meta.definedNames.size > 1000,
+              s"expected the bloated name block, got ${meta.definedNames.size} names"
+            )
+          case Left(err) => fail(s"metadata read of name-bloated xlsx must succeed: $err")
+      }
+    }
+  }
+
   test("XlsxReader rejects comment relationship path traversal") {
     val workbookXml = """<?xml version="1.0" encoding="UTF-8"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
