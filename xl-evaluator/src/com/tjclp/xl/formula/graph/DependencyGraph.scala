@@ -1060,6 +1060,17 @@ object DependencyGraph:
     transitiveDependentsOf(dependents, refs)
 
   /**
+   * GH-453: transitive PRECEDENTS over the workbook-level graph (excludes the starting refs) — the
+   * same generic reachability BFS run over the FORWARD edge map instead of the reverse one. Used by
+   * the data-table seeder to gate a table's source formula on the cyclic core.
+   */
+  def qualifiedTransitivePrecedents(
+    dependencies: Map[QualifiedRef, Set[QualifiedRef]],
+    refs: Set[QualifiedRef]
+  ): Set[QualifiedRef] =
+    transitiveDependentsOf(dependencies, refs)
+
+  /**
    * GH-346: Kahn order over the workbook-level graph. Left carries the nodes that could not be
    * ordered (cycle participants and their downstream); callers that prune cycles first only reach
    * Left as a defensive-totality path.

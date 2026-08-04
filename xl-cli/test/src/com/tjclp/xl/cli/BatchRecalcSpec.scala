@@ -503,6 +503,111 @@ class BatchRecalcSpec extends FunSuite:
       case other => fail(s"expected Recalc(false), got $other")
   }
 
+  // ===== GH-453/GH-454: recalc honors the file's declared calcPr; --tables on circular books =====
+
+  /**
+   * Canonical circular fixture (GH-453): C1=100, B1=C1+B2, B2=$A$1*(C1+B1)/2 over rate input A1,
+   * corner F9=IFERROR(B1/2,0), 1-var column table F10:F12 with left axis E10:E12 =
+   * 0.002/0.004/0.006. Analytic per-axis interiors 50.1001/50.2004/50.3009 (strictly increasing);
+   * flat interiors are the GH-453 bug.
+   */
+  private def circularTableWorkbook(calcPr: Option[com.tjclp.xl.workbooks.CalcPr]): Workbook =
+    val kind: com.tjclp.xl.cells.FormulaKind.DataTable = com.tjclp.xl.cells.FormulaKind.DataTable(
+      ref = CellRange.parse("F10:F12").fold(err => fail(err), identity),
+      dt2D = false,
+      dtr = false,
+      r1 = Some(ref"A1"),
+      r2 = None
+    )
+    val sheet = Sheet("Data")
+      .put(ref"A1" -> 0, ref"C1" -> 100)
+      .put(ref"B1", CellValue.Formula("C1+B2"))
+      .put(ref"B2", CellValue.Formula("$A$1*(C1+B1)/2"))
+      .put(ref"F9", CellValue.Formula("IFERROR(B1/2,0)"))
+      .put(ref"E10" -> 0.002, ref"E11" -> 0.004, ref"E12" -> 0.006)
+      .put(ref"F10", CellValue.dataTable(kind, None))
+    calcPr.fold(Workbook(sheet))(cp => Workbook(sheet).withCalcPr(cp))
+
+  private val iterateTight = com.tjclp.xl.workbooks.CalcPr(
+    iterativeCalculation = true,
+    Some(200),
+    Some(BigDecimal("0.0000001"))
+  )
+
+  /** Interior value as BigDecimal, reading plain values or record caches. */
+  private def interiorDec(wb: Workbook, a1: ARef): Option[BigDecimal] =
+    wb.sheets.head.cells.get(a1).map(_.value).flatMap {
+      case CellValue.Number(n) => Some(n)
+      case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
+      case _ => None
+    }
+
+  test("GH-453: recalc --tables on an iterate-declared circular book seeds varied interiors") {
+    val out = tempXlsx()
+    val summary = WriteCommands
+      .recalc(circularTableWorkbook(Some(iterateTight)), out, config, false, true)
+      .unsafeRunSync()
+    // GH-454 verification instrument: the declared settings were honored and converged.
+    assert(summary.contains("converged in"), s"summary: $summary")
+    assert(!summary.contains("Circular reference"), s"summary: $summary")
+    assert(!summary.contains("WARNING"), s"summary: $summary")
+    val seeded = readBack(out)
+    val values =
+      Vector(ref"F10", ref"F11", ref"F12").map(r =>
+        interiorDec(seeded, r).getOrElse(fail(s"${r.toA1} must seed"))
+      )
+    assertEquals(
+      values.distinct.size,
+      3,
+      s"interiors must vary per axis — flat interiors are the GH-453 bug: $values"
+    )
+    values.zip(Vector(50.1001001, 50.2004008, 50.3009027)).foreach { (v, expected) =>
+      assert((v.toDouble - expected).abs < 1e-4, s"interior $v, expected ~$expected")
+    }
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-453: recalc without iterate declared keeps the circular-error posture") {
+    val out = tempXlsx()
+    val summary =
+      WriteCommands.recalc(circularTableWorkbook(None), out, config).unsafeRunSync()
+    assert(summary.contains("Circular reference"), s"summary: $summary")
+    assert(!summary.contains("converged in"), s"summary: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-453: recalc --tables without iterate warns and leaves the circular table unseeded") {
+    val out = tempXlsx()
+    val summary = WriteCommands
+      .recalc(circularTableWorkbook(None), out, config, false, true)
+      .unsafeRunSync()
+    assert(summary.contains("depends on a circular reference"), s"summary: $summary")
+    assert(summary.contains("left unseeded"), s"summary: $summary")
+    assert(summary.contains("Saved:"), s"exit must stay clean: $summary")
+    val written = readBack(out)
+    assertEquals(interiorDec(written, ref"F10"), None, "record cache must stay absent")
+    assertEquals(interiorDec(written, ref"F11"), None)
+    assertEquals(interiorDec(written, ref"F12"), None)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-454: exhausted iterative declaration renders the non-convergence WARNING") {
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"B1", CellValue.Formula("1-B2"))
+        .put(ref"B2", CellValue.Formula("1-B1"))
+    ).withCalcPr(com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(5), None))
+    val out = tempXlsx()
+    val summary = WriteCommands.recalc(wb, out, config).unsafeRunSync()
+    assert(
+      summary.contains(
+        "WARNING: iterative calculation exhausted 5 round(s) without converging"
+      ),
+      s"summary: $summary"
+    )
+    Files.deleteIfExists(out)
+  }
+
   test("recalc command reports formula errors without failing (exit stays clean)") {
     val wb = Workbook(
       Sheet("Data")
