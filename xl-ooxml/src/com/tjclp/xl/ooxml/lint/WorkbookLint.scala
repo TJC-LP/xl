@@ -107,7 +107,9 @@ final case class Finding(
  *     than an Excel repair: Excel refuses these edits in the UI, so a file carrying one was written
  *     past its own guards
  *   - `<f>` text stored with the display form's leading '=' (GH-456) — non-spec; Excel tolerates it
- *     but strict readers (openpyxl) misread it, and re-writing the file with xl heals it
+ *     but strict readers (openpyxl) misread it, and re-writing the file with xl heals it.
+ *     Aggregated to ONE finding per sheet part (first-5 cell sample + total count) so a legacy book
+ *     where every formula offends stays bounded
  *
  * Lint runs on the RAW ZIP PARTS, never on the parsed domain model — a full read would
  * repair/normalize the very structure lint inspects (the reader silently falls back on unresolved
@@ -685,8 +687,8 @@ object WorkbookLint:
   /**
    * Everything the per-part checks need, produced identically by the DOM and SAX scanners: root
    * label, ordered main-namespace top-level labels (with positions among all top-level elements),
-   * the captured r:id-bearing elements, the ref/sqref bounds findings, the leading-'=' formula
-   * findings (GH-456), and the data-table record state accumulated over sheetData (GH-442).
+   * the captured r:id-bearing elements, the ref/sqref bounds findings, the aggregated leading-'='
+   * formula finding (GH-456), and the data-table record state accumulated over sheetData (GH-442).
    */
   private final case class SheetScan(
     rootLabel: String,
@@ -738,7 +740,10 @@ object WorkbookLint:
       .flatMap(childElems(_, "c"))
       .map(domCellObs)
     val dataTables = cellObs.foldLeft(Vector.empty[RecordFacts])(observeCell)
-    val formulaEq = cellObs.flatMap(formulaEqualsFindings(part, _))
+    val formulaEq = formulaEqualsFindings(
+      part,
+      cellObs.foldLeft(LeadingEqualsFacts.empty)(_.add(_))
+    )
     SheetScan(root.label, mainChildLabelsOf(root), captures, bounds, formulaEq, dataTables)
 
   /** One `<c>` element's data-table facts (DOM side of the parity pair). */
@@ -786,7 +791,7 @@ object WorkbookLint:
       private val labels = Vector.newBuilder[(String, Int)]
       private val captures = Vector.newBuilder[CapturedRef]
       private val bounds = Vector.newBuilder[Finding]
-      private val formulaEq = Vector.newBuilder[Finding]
+      private var leadingEq: LeadingEqualsFacts = LeadingEqualsFacts.empty
       private var dataTables: Vector[RecordFacts] = Vector.empty
       private var cell: Option[CellObs] = None
       // True while inside the current cell's FIRST <f> and no text chunk has arrived yet, so
@@ -800,7 +805,7 @@ object WorkbookLint:
             labels.result(),
             captures.result(),
             bounds.result(),
-            formulaEq.result(),
+            formulaEqualsFindings(part, leadingEq),
             dataTables
           )
         )
@@ -870,7 +875,7 @@ object WorkbookLint:
         if depth == 3 && label == "c" then
           cell.foreach { obs =>
             dataTables = observeCell(dataTables, obs)
-            formulaEq ++= formulaEqualsFindings(part, obs)
+            leadingEq = leadingEq.add(obs)
           }
           cell = None
 
@@ -891,22 +896,50 @@ object WorkbookLint:
     leadingEquals: Boolean
   )
 
+  /** Sample size for the aggregated leading-'=' finding: the first N offending cells (GH-456). */
+  private val leadingEqualsSampleSize = 5
+
+  /**
+   * Accumulated leading-'=' facts for ONE sheet part (GH-456): the total offender count plus the
+   * first [[leadingEqualsSampleSize]] offending cells in document order. Aggregation is bounded by
+   * construction — a legacy book where EVERY formula carries '=' (the exact population the rule
+   * targets) yields one finding per part, never one per cell. Folded identically by both scanners
+   * for parity. A `<c>` without `r` still counts; its sample slot renders as a bare `<f>`.
+   */
+  private final case class LeadingEqualsFacts(sample: Vector[Option[ARef]], count: Long):
+    def add(obs: CellObs): LeadingEqualsFacts =
+      if !obs.leadingEquals then this
+      else
+        LeadingEqualsFacts(
+          if sample.sizeIs < leadingEqualsSampleSize then sample :+ obs.ref else sample,
+          count + 1
+        )
+
+  private object LeadingEqualsFacts:
+    val empty: LeadingEqualsFacts = LeadingEqualsFacts(Vector.empty, 0L)
+
   /**
    * GH-456: `<f>` text beginning with '=' — the display form leaked into the store. Excel/LO
    * tolerate it, but strict readers (openpyxl) read the formula back doubled ("==B4*2") and
-   * formula-text diff tooling sees phantom differences. Shared by both scanners for parity.
+   * formula-text diff tooling sees phantom differences. ONE finding per part carrying the first
+   * [[leadingEqualsSampleSize]] cell refs and the total count; the locator names the first
+   * offending cell so the finding stays actionable without re-deriving it.
    */
-  private def formulaEqualsFindings(part: String, obs: CellObs): Vector[Finding] =
-    if !obs.leadingEquals then Vector.empty
+  private def formulaEqualsFindings(part: String, facts: LeadingEqualsFacts): Vector[Finding] =
+    if facts.count == 0L then Vector.empty
     else
+      val shown = facts.sample.map(_.fold("<f>")(_.toA1))
+      val cells =
+        if facts.count > shown.size then s"first ${shown.size}: ${shown.mkString(", ")}, …"
+        else shown.mkString(", ")
       Vector(
         Finding(
           part,
           LintCategory.FormulaLeadingEquals,
-          obs.ref.fold("<f>")(r => s"""<c r="${r.toA1}"><f>"""),
-          "Formula text is stored with a leading '=' — OOXML carries the expression without it, " +
-            "and strict readers (openpyxl) see a doubled '=' formula; re-writing the file with " +
-            "xl heals it"
+          facts.sample.headOption.flatten.fold("<f>")(r => s"""<c r="${r.toA1}"><f>"""),
+          s"${facts.count} formula(s) stored with a leading '=' ($cells) — OOXML carries the " +
+            "expression without it, and strict readers (openpyxl) see a doubled '=' formula; " +
+            "re-writing the file with xl heals it"
         )
       )
 
