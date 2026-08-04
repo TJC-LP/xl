@@ -435,6 +435,31 @@ class DataTableSeederSpec extends FunSuite:
     assertEquals(out(ref"A1").value, num(0))
   }
 
+  test("GH-453: input cell inside the cycle stays pinned to the axis value (no silent flat)") {
+    // The cycle runs THROUGH the what-if input: A1=B1/2, B1=A1+10. Excel semantics: the axis
+    // substitution pins the input cell, breaking the cycle through it — interiors are 11/12/13,
+    // NOT the unperturbed fixpoint B1=20 repeated (the silent-FLAT failure class of GH-453).
+    val sheet = Sheet("S")
+      .put(ref"A1", CellValue.Formula("B1/2"))
+      .put(ref"B1", CellValue.Formula("A1+10"))
+      .put(ref"F9", CellValue.Formula("B1"))
+      .put(ref"E10", num(1))
+      .put(ref"E11", num(2))
+      .put(ref"E12", num(3))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    val wb = Workbook(sheet).withCalcPr(tightCalcPr)
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    assertEquals(report.warnings, Vector.empty)
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.zip(Vector(11, 12, 13)).foreach { (r, expected) =>
+      assertEquals(
+        interiorNum(out, r),
+        Some(BigDecimal(expected)),
+        s"${r.toA1} must reflect the pinned axis value, not the unperturbed cycle fixpoint"
+      )
+    }
+  }
+
   test("GH-453: 20x20 two-var battery over a small cycle stays within budget") {
     // 400 axis combinations x a 2-member fixpoint: guards the narrowed-iteration design —
     // a full-book recalculation per combination would blow this budget.

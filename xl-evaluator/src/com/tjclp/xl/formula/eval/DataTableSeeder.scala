@@ -327,8 +327,13 @@ object DataTableSeeder:
           val toStrip = stripBySheet.getOrElse(s.name, Set.empty)
           if toStrip.isEmpty then s else SheetEvaluator.stripFormulaCaches(s, toStrip)
         }
+        // The what-if substitution PINS the input cells (Excel semantics): a cycle running
+        // through an input is broken there, so the inputs are never Jacobi members — they stay
+        // the plain axis values overlaid in step (2). (stripSet already excludes relevantCore,
+        // hence the pinned inputs.) The reduced set may even be acyclic after pinning;
+        // jacobiFixpoint still converges (prev-round reads settle in <= |members|+1 rounds).
         val members: List[(QualifiedRef, Int, String)] =
-          relevantCore.toList
+          (relevantCore -- inputQ).toList
             .flatMap { q =>
               sheetIndex.get(q.sheet).map { idx =>
                 val expr = wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
