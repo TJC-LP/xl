@@ -119,6 +119,49 @@ jobs:
             exit 1
           fi
 
+      # GH-457: name-bloated workbooks (tens of thousands of definedNames, multi-MB single-line
+      # workbook.xml) must read on the native image. Its baked-in JAXP defaults
+      # (jdk.xml.maxGeneralEntitySizeLimit=100000) rejected the workbook.xml document entity with
+      # JAXP00010003 on every verb, and -Djdk.xml.* flags cannot reach the binary — the factory
+      # now lifts the entity-size limits per parser, which this gate proves end-to-end.
+      - name: Smoke test native binary on name-bloated workbook (GH-457)
+        shell: bash
+        run: |
+          BIN="out/xl-cli/nativeImage.dest/native-executable${{ matrix.extension }}"
+          PY=$(command -v python3 || command -v python)
+          "$PY" - <<'EOF'
+          import zipfile
+
+          src = 'xl-ooxml/test/resources/fixtures/small-values.xlsx'
+          dst = 'name-bloated.xlsx'
+          names = ''.join(
+              f'<definedName name="n{i}">Sheet1!$A${(i % 100) + 1}</definedName>'
+              for i in range(120000)
+          )
+          with zipfile.ZipFile(src) as zin, \
+                  zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zout:
+              for item in zin.infolist():
+                  data = zin.read(item.filename)
+                  if item.filename == 'xl/workbook.xml':
+                      text = data.decode('utf-8')
+                      data = text.replace(
+                          '</workbook>',
+                          f'<definedNames>{names}</definedNames></workbook>'
+                      ).encode('utf-8')
+                  zout.writestr(item, data)
+          EOF
+
+          set +e
+          OUTPUT=$("$BIN" -f name-bloated.xlsx sheets 2>&1)
+          STATUS=$?
+          set -e
+          echo "$OUTPUT"
+          if [ "$STATUS" -ne 0 ] || echo "$OUTPUT" | grep -q "JAXP000"; then
+            echo "::error::native binary cannot read a name-bloated workbook (GH-457)"
+            exit 1
+          fi
+          rm -f name-bloated.xlsx
+
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
         run: mv out/xl-cli/nativeImage.dest/native-executable xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}
