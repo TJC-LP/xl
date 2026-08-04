@@ -583,6 +583,8 @@ lenient reader accepts silently:
   - data-table records whose grid was torn by an unguarded edit, and
     uncached table interiors in a calcMode="autoNoTable" book (they open
     BLANK — refresh them with `xl recalc --tables`)
+  - formula text stored with a leading '=' inside <f> (non-spec; strict
+    readers misread it — re-writing the file with xl heals it)
 
 USAGE:
   xl lint report.xlsx
@@ -592,7 +594,7 @@ USAGE:
 FINDING CATEGORIES:
   child-order | unresolved-rel-id | wrong-rel-type | missing-part |
   missing-content-type | ref-out-of-bounds | data-table-torn |
-  data-table-unseeded
+  data-table-unseeded | formula-leading-equals
 
 EXIT CODES:
   0 = no findings (package structure is clean)

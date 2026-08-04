@@ -71,6 +71,15 @@ object XmlUtil:
   // The externalLink part's own <externalBook r:id> target (GH-413)
   val relTypeExternalLinkPath =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath"
+  // Microsoft externalLinkPath variants Excel writes for broken/special external-book paths (GH-458)
+  val relTypeXlPathMissing =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlPathMissing"
+  val relTypeXlLibraryPath =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlLibraryPath"
+  val relTypeXlStartupPath =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlStartupPath"
+  val relTypeXlAltStartupPath =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlAltStartupPath"
   val relTypeChartsheet =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet"
   val relTypeDialogsheet =

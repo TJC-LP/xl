@@ -174,7 +174,8 @@ object StreamingTransform:
             FormulaKindCodec.toAttrs(kind).foreach { case (name, v) =>
               writer.writeAttribute(name, v)
             }
-            writer.writeCharacters(expr)
+            // GH-456: <f> carries the expression, never the display form's leading '='
+            writer.writeCharacters(expr.stripPrefix("="))
             writer.endElement()
         cachedValue.foreach(cv => writeCachedValue(writer, cv))
 

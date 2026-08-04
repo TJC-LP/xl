@@ -1224,6 +1224,8 @@ xl -f deliverable.xlsx lint && echo "safe to send"
   legacyDrawing, hyperlink, tablePart, …) with no entry in the paired `.rels`
 - **`wrong-rel-type`** — the `r:id` resolves, but to a relationship of the wrong type
 - **`missing-part`** — the relationship target part is absent from the package
+- **`formula-leading-equals`** — `<f>` text stored with the display form's leading `=`
+  (non-spec; strict readers like openpyxl misread it — re-writing the file with xl heals it)
 
 **Exit codes** (diff-tool convention): `0` no findings · `1` findings reported · `2` error
 (unreadable file, malformed core part).

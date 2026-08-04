@@ -69,7 +69,8 @@ case class OoxmlCell(
               FormulaKindCodec.toAttrs(kind).foreach { case (name, v) =>
                 writer.writeAttribute(name, v)
               }
-              writer.writeCharacters(expr)
+              // GH-456: <f> carries the expression, never the display form's leading '='
+              writer.writeCharacters(expr.stripPrefix("="))
               writer.endElement() // f
           // Write cached value if present
           cachedValue.foreach {
@@ -286,9 +287,10 @@ case class OoxmlCell(
         // Write formula element. GH-430: record attrs via the shared codec in schema order
         // (elemOrdered keeps the given order); dataTable records carry no text.
         val recordAttrs = FormulaKindCodec.toAttrs(kind)
+        // GH-456: <f> carries the expression, never the display form's leading '='
         val formulaElem = kind match
           case _: FormulaKind.DataTable => elemOrdered("f", recordAttrs*)()
-          case _ => elemOrdered("f", recordAttrs*)(Text(expr))
+          case _ => elemOrdered("f", recordAttrs*)(Text(expr.stripPrefix("=")))
         // Write cached value if present
         val cachedElem = cachedValue.flatMap {
           case CellValue.Number(num) => Some(elem("v")(Text(XmlUtil.plainNumber(num))))
