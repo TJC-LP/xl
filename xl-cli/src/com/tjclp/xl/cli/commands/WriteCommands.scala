@@ -959,6 +959,9 @@ object WriteCommands:
     case SeedTableWarning.NotConverged(sheet, ref, combinations, maxIter) =>
       s"WARNING: data table ${ref.toA1} on '${sheet.value}': $combinations axis combination(s) " +
         s"did not converge within $maxIter round(s); last-round values seeded"
+    case SeedTableWarning.Skipped(sheet, ref, cells, reason) =>
+      s"WARNING: data table ${ref.toA1} on '${sheet.value}': $cells interior cell(s) left " +
+        s"unseeded — $reason"
 
   /**
    * Fill cells with source value/formula (Excel Ctrl+D/Ctrl+R).

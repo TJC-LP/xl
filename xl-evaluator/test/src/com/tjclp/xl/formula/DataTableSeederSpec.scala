@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.time.{LocalDate, LocalDateTime}
 import java.util.zip.ZipInputStream
 
 import munit.FunSuite
@@ -458,6 +459,80 @@ class DataTableSeederSpec extends FunSuite:
         s"${r.toA1} must reflect the pinned axis value, not the unperturbed cycle fixpoint"
       )
     }
+  }
+
+  // ===== GH-453 review follow-ups: one volatile generation, Skipped visibility, budget guard =====
+
+  /** Every now() read ticks one second — exposes a second volatile generation mid-seed. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private final class TickingClock extends Clock:
+    private var ticks = 0
+    def today(): LocalDate = LocalDate.of(2026, 1, 1)
+    def now(): LocalDateTime =
+      ticks += 1
+      LocalDateTime.of(2026, 1, 1, 0, 0, 0).plusSeconds(ticks.toLong)
+
+  test("GH-453: NOW() corner seeds ONE volatile generation across the interior (acyclic path)") {
+    val sheet = Sheet("S")
+      .put(ref"A1", num(0))
+      .put(ref"F9", CellValue.Formula("NOW()"))
+      .put(ref"E10", num(1))
+      .put(ref"E11", num(2))
+      .put(ref"E12", num(3))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    val seeded = Workbook(sheet)
+      .seedDataTables(SheetName.unsafe("S"), None, new TickingClock)
+      .fold(err => fail(s"seeding failed: $err"), identity)
+    val out = sheetNamed(seeded, "S")
+    val values = interiorRefs.map { r =>
+      out.cells.get(r).map(_.value) match
+        case Some(CellValue.Formula(_, Some(v), _)) => v
+        case Some(v) => v
+        case None => fail(s"${r.toA1} must seed")
+    }
+    assertEquals(
+      values.distinct.size,
+      1,
+      s"one seeding run is one volatile generation — interiors must agree: $values"
+    )
+  }
+
+  test("GH-453: iterated-path axis failure leaves cells untouched and reports one Skipped") {
+    // E10 (the axis value feeding F10) references a missing sheet: its evaluation is a host
+    // failure, so F10 stays unseeded — the report must SAY so instead of reading clean.
+    val sheet = circularTableSheet.put(ref"E10", CellValue.Formula("Missing!A1"))
+    val wb = Workbook(sheet).withCalcPr(tightCalcPr)
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    assertEquals(out(ref"F10").value, CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    assert(interiorNum(out, ref"F11").isDefined, "F11 must still seed")
+    assert(interiorNum(out, ref"F12").isDefined, "F12 must still seed")
+    report.warnings match
+      case Vector(SeedTableWarning.Skipped(sheet, tableRef, cells, reason)) =>
+        assertEquals(sheet, SheetName.unsafe("S"))
+        assertEquals(tableRef, range("F10:F12"))
+        assertEquals(cells, 1)
+        assert(reason.nonEmpty, "the Skipped warning must carry a reason")
+      case other => fail(s"expected exactly one Skipped, got $other")
+  }
+
+  test("GH-453: iterated table whose worst-case cost blows the budget skips with a Skipped") {
+    // 3 interiors x 50,000,000 declared rounds x 2 cycle members = 3e8 member-evaluations —
+    // far past the budget; the table must skip untouched instead of honoring a hostile calcPr.
+    val wb = Workbook(circularTableSheet)
+      .withCalcPr(CalcPr(iterativeCalculation = true, Some(50000000), None))
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    assertEquals(out(ref"F10").value, CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    assertEquals(out.cells.get(ref"F11"), None)
+    assertEquals(out.cells.get(ref"F12"), None)
+    report.warnings match
+      case Vector(SeedTableWarning.Skipped(sheet, tableRef, cells, reason)) =>
+        assertEquals(sheet, SheetName.unsafe("S"))
+        assertEquals(tableRef, range("F10:F12"))
+        assertEquals(cells, 3)
+        assert(reason.contains("budget"), s"the reason must name the budget: $reason")
+      case other => fail(s"expected exactly one Skipped, got $other")
   }
 
   test("GH-453: 20x20 two-var battery over a small cycle stays within budget") {

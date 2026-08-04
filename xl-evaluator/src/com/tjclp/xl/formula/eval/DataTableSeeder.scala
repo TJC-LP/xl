@@ -28,6 +28,14 @@ enum SeedTableWarning derives CanEqual:
    */
   case NotConverged(sheet: SheetName, ref: CellRange, combinations: Int, maxIter: Int)
 
+  /**
+   * GH-453 (review follow-up): `cells` interior cells were left UNSEEDED on the iterated path — an
+   * axis value or cycle member failed to evaluate for those cells, or the whole table was skipped
+   * by the iterative-seeding budget guard (see `DataTableSeeder.MaxIterativeSeedBudget`). `reason`
+   * is a short human-readable cause. Without this case a fully-skipped table reads as a clean run.
+   */
+  case Skipped(sheet: SheetName, ref: CellRange, cells: Int, reason: String)
+
 /** GH-453: the seeded workbook plus every per-table warning the run produced. */
 final case class DataTableSeedReport(
   workbook: Workbook,
@@ -88,6 +96,17 @@ object DataTableSeeder:
    */
   private val MaxInteriorArea: Long = 1000000L
 
+  /**
+   * GH-453 (review follow-up): per-table cost cap for the ITERATED path, in cycle-member
+   * evaluations (`interior cells × maxIter × relevant cycle members`). `maxIter` is file-controlled
+   * (`<calcPr iterateCount=…/>`), so a hostile or misconfigured book can declare effectively
+   * unbounded work per table. A table whose worst-case cost exceeds this generous bound skips
+   * untouched and reports [[SeedTableWarning.Skipped]] naming the budget. 20,000,000 member
+   * evaluations is orders beyond any real circular sensitivity table (the 20x20 battery in the spec
+   * costs 400 × 100 × 2 = 80,000).
+   */
+  private val MaxIterativeSeedBudget: Long = 20000000L
+
   extension (wb: Workbook)
 
     /**
@@ -104,8 +123,8 @@ object DataTableSeeder:
 
     /**
      * Seed the data tables on one sheet whose record ref intersects `only` (`None` = all), with an
-     * explicit clock for volatile source formulas. Iterative settings auto-derive from the book's
-     * `<calcPr>`.
+     * explicit clock for volatile source formulas (read ONCE — one seeding run is one volatile
+     * generation). Iterative settings auto-derive from the book's `<calcPr>`.
      */
     @annotation.targetName("seedDataTablesScoped")
     def seedDataTables(
@@ -184,6 +203,10 @@ object DataTableSeeder:
       case Some((name, _)) => Vector(name)
       case None => wb.sheets.map(_.name)
     val only = scope.flatMap(_._2)
+    // GH-453 (review follow-up): ONE seeding run is ONE volatile generation — the clock is pinned
+    // once per run and used for axis values, member fixpoints AND source formulas, on both the
+    // iterated and the acyclic paths. Lazy: a run that seeds nothing never reads the clock.
+    lazy val pinnedClock: Clock = Clock.fixed(clock.today(), clock.now())
     lazy val cycles: CycleContext =
       val (deps, dependents) = DependencyGraph.fromWorkbookBounded(wb)
       CycleContext(deps, dependents, DependencyGraph.qualifiedCyclicNodes(deps))
@@ -198,7 +221,8 @@ object DataTableSeeder:
             val (seeded, groupWarns) =
               groups.foldLeft((sheet, Vector.empty[SeedTableWarning])) {
                 case ((acc, ws), (_, kind)) =>
-                  val (next, w) = seedGroup(accWb.put(acc), acc, kind, clock, iterative, cycles)
+                  val (next, w) =
+                    seedGroup(accWb.put(acc), acc, kind, pinnedClock, iterative, cycles)
                   (next, ws ++ w)
               }
             // Only a real change may mark the sheet modified — a no-op seed (already-correct
@@ -273,18 +297,33 @@ object DataTableSeeder:
                 )
               (sheet, Vector(warning))
             case Some(it) =>
-              seedGroupIterative(
-                wb,
-                sheet,
-                kind,
-                input1,
-                input2,
-                clock,
-                it,
-                ctx,
-                relevantCore,
-                closure
-              )
+              // GH-453 (review follow-up): the iterated path's worst case costs
+              // interiorCells × maxIter × |members| member-evaluations, and maxIter comes from
+              // the FILE. A table past the budget skips untouched — loudly, via Skipped.
+              val interiorCells = interior.width.toLong * interior.height.toLong
+              val rounds = math.max(1, it.maxIter)
+              val cost = BigInt(interiorCells) * BigInt(rounds) * BigInt(relevantCore.size)
+              if cost > BigInt(MaxIterativeSeedBudget) then
+                val reason =
+                  s"iterative seeding budget exceeded: $interiorCells interior cells x " +
+                    s"$rounds max rounds x ${relevantCore.size} cycle members > " +
+                    s"$MaxIterativeSeedBudget member-evaluations"
+                val warning =
+                  SeedTableWarning.Skipped(sheet.name, interior, interiorCells.toInt, reason)
+                (sheet, Vector(warning))
+              else
+                seedGroupIterative(
+                  wb,
+                  sheet,
+                  kind,
+                  input1,
+                  input2,
+                  clock,
+                  it,
+                  ctx,
+                  relevantCore,
+                  closure
+                )
 
   /**
    * GH-453: per-axis-combination Jacobi fixpoint for a table whose source formula depends on the
@@ -297,9 +336,11 @@ object DataTableSeeder:
    *   2. per interior cell: axis values evaluate against the group's base sheet exactly like the
    *      acyclic path, overlay into the input cells on the temp sheets, the relevant cycle members
    *      fixpoint via [[WorkbookEvaluator.jacobiFixpoint]] (previous-round reads, 0-seeded, strict
-   *      |Δ| < maxChange, pinned clock), converged values fold in as plain values, and the source
-   *      formula evaluates off them;
-   *   3. a Left anywhere stays tolerant — that cell is left untouched, seeding continues.
+   *      |Δ| < maxChange, the run's pinned clock), converged values fold in as plain values, and
+   *      the source formula evaluates off them;
+   *   3. a Left anywhere stays tolerant — that cell is left untouched and seeding continues, but
+   *      the table reports ONE [[SeedTableWarning.Skipped]] counting the unseeded cells (a
+   *      fully-skipped table must never read as a clean run).
    */
   private def seedGroupIterative(
     wb: Workbook,
@@ -343,11 +384,11 @@ object DataTableSeeder:
               }
             }
             .sortBy((q, _, _) => (q.sheet.value, q.ref.toA1))
-        // One seeding run is one volatile generation, like one recalculation (GH-373).
-        val pinnedClock = Clock.fixed(clock.today(), clock.now())
-
-        val (seeded, unconverged) =
-          kind.ref.cellsRowMajor.foldLeft((sheet, 0)) { case ((acc, fails), cellRef) =>
+        // The clock arrives pinned from seedWorkbook: one seeding run is one volatile
+        // generation, like one recalculation (GH-373) — axis values, member fixpoints and
+        // source formulas all read the same instant.
+        val (seeded, unconverged, skipped) =
+          kind.ref.cellsRowMajor.foldLeft((sheet, 0, 0)) { case ((acc, fails, skips), cellRef) =>
             val computed = computeCellIterative(
               wb,
               sheet,
@@ -359,23 +400,38 @@ object DataTableSeeder:
               iterative,
               prepared,
               tableIdx,
-              members,
-              pinnedClock
+              members
             )
             computed match
-              case None => (acc, fails) // tolerant: leave the cell untouched
+              case None => (acc, fails, skips + 1) // tolerant: leave the cell untouched
               case Some((value, converged)) =>
-                (writeInterior(acc, cellRef, value), if converged then fails else fails + 1)
+                (writeInterior(acc, cellRef, value), if converged then fails else fails + 1, skips)
           }
-        val warnings =
+        val notConverged =
           if unconverged > 0 then
             Vector(
               SeedTableWarning.NotConverged(sheet.name, kind.ref, unconverged, iterative.maxIter)
             )
           else Vector.empty
-        (seeded, warnings)
+        // GH-453 (review follow-up): unseeded cells must be VISIBLE in the report — one Skipped
+        // per table counting them (axis-value or cycle-member evaluation failures).
+        val skippedWarning =
+          if skipped > 0 then
+            Vector(
+              SeedTableWarning.Skipped(
+                sheet.name,
+                kind.ref,
+                skipped,
+                "axis value or cycle-member evaluation failed"
+              )
+            )
+          else Vector.empty
+        (seeded, notConverged ++ skippedWarning)
 
-  /** One interior cell's circular what-if value plus its convergence verdict (GH-453). */
+  /**
+   * One interior cell's circular what-if value plus its convergence verdict (GH-453). `clock` is
+   * the run's pinned clock — axis, fixpoint and source evaluations share one volatile generation.
+   */
   private def computeCellIterative(
     wb: Workbook,
     sheet: Sheet,
@@ -387,8 +443,7 @@ object DataTableSeeder:
     iterative: IterativeCalc,
     prepared: Vector[Sheet],
     tableIdx: Int,
-    members: List[(QualifiedRef, Int, String)],
-    pinnedClock: Clock
+    members: List[(QualifiedRef, Int, String)]
   ): Option[(CellValue, Boolean)] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
     sheet.cells.get(sourceRef).map(_.value) match
@@ -410,7 +465,7 @@ object DataTableSeeder:
           }
           // (3) fixpoint the relevant cycle members under this axis combination
           val (results, converged, _) =
-            WorkbookEvaluator.jacobiFixpoint(wb, overlaid, members, iterative, pinnedClock, None)
+            WorkbookEvaluator.jacobiFixpoint(wb, overlaid, members, iterative, clock, None)
           // (4) fold member values in as plain values, then evaluate the source formula
           val folded = members.foldLeft(Option(overlaid)) { case (accOpt, (q, idx, _)) =>
             accOpt.flatMap { sheets =>

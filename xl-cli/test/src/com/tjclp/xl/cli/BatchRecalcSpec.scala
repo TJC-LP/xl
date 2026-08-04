@@ -591,6 +591,19 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-453: recalc --tables renders the Skipped warning for unseedable interiors") {
+    // The axis value feeding F10 references a missing sheet: the seeder leaves that interior
+    // unseeded and reports one Skipped — the summary must surface it instead of reading clean.
+    val base = circularTableWorkbook(Some(iterateTight))
+    val broken = base.sheets.headOption.getOrElse(fail("missing sheet"))
+    val wb = base.put(broken.put(ref"E10", CellValue.Formula("Missing!A1")))
+    val out = tempXlsx()
+    val summary = WriteCommands.recalc(wb, out, config, false, true).unsafeRunSync()
+    assert(summary.contains("1 interior cell(s) left unseeded"), s"summary: $summary")
+    assert(summary.contains("Saved:"), s"exit must stay clean: $summary")
+    Files.deleteIfExists(out)
+  }
+
   test("GH-454: exhausted iterative declaration renders the non-convergence WARNING") {
     val wb = Workbook(
       Sheet("Data")
