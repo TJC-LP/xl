@@ -1492,7 +1492,9 @@ object XlsxReader:
           sheets = sheetsWithPrint,
           metadata = metadata,
           activeSheetIndex = activeSheetIndex,
-          sourceContext = ctx
+          // GH-470: snapshot the defined names exactly as assembled so the writer can detect
+          // untracked copy(metadata = ...) edits and regenerate instead of verbatim-copying.
+          sourceContext = ctx.map(_.copy(definedNamesAsRead = Some(remainingNames)))
         )
       )
 

@@ -4,7 +4,7 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.charts.Chart
 import com.tjclp.xl.drawings.Drawing
 import com.tjclp.xl.ooxml.PartManifest
-import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
@@ -79,6 +79,11 @@ object SourceContent:
  *   through this mapping, so structural edits never alias a sheet to another sheet's part (GH-315).
  *   Empty for contexts built before the mapping existed — consumers fall back to index-based naming
  *   in that case.
+ * @param definedNamesAsRead
+ *   The `metadata.definedNames` vector exactly as the reader assembled it (GH-470, post print-name
+ *   extraction) — the baseline [[reconciledWith]] compares against to detect defined-name edits
+ *   made through a raw `Workbook.copy(metadata = ...)` instead of the tracked API. None means "no
+ *   snapshot" (contexts built outside the reader): the divergence check is skipped.
  */
 final case class SourceContext(
   content: SourceContent,
@@ -89,7 +94,8 @@ final case class SourceContext(
   drawingPathMapping: Map[SheetName, String] = Map.empty,
   drawingSnapshots: Map[SheetName, Vector[Drawing]] = Map.empty,
   chartSnapshots: Map[SheetName, Vector[ChartSnapshot]] = Map.empty,
-  sheetPathMapping: Map[SheetName, String] = Map.empty
+  sheetPathMapping: Map[SheetName, String] = Map.empty,
+  definedNamesAsRead: Option[Vector[DefinedName]] = None
 ) derives CanEqual:
 
   /** True when no workbook modifications have been recorded. */
@@ -112,6 +118,61 @@ final case class SourceContext(
       chartSnapshots = chartSnapshots - name,
       sheetPathMapping = sheetPathMapping - name
     )
+
+  /**
+   * Mark a sheet removal that was applied OUTSIDE the tracked edit API (GH-470): the sheet is
+   * already gone from `Workbook.sheets`, so unlike [[markSheetDeleted]] no live-index shifting may
+   * touch the modified-sheet marks — they are in the already-reduced index space. `sourceIndex` is
+   * the sheet's best-effort position in the SOURCE package. The identity-keyed mappings drop
+   * exactly like a tracked delete, so the writer's surviving-sheet resolution and orphan pruning
+   * (GH-417) treat the sheet as removed.
+   */
+  def markUntrackedSheetRemoval(sourceIndex: Int, name: SheetName): SourceContext =
+    copy(
+      modificationTracker = modificationTracker.deleteUntracked(sourceIndex),
+      commentPathMapping = commentPathMapping - name,
+      drawingPathMapping = drawingPathMapping - name,
+      drawingSnapshots = drawingSnapshots - name,
+      chartSnapshots = chartSnapshots - name,
+      sheetPathMapping = sheetPathMapping - name
+    )
+
+  /**
+   * Reconcile untracked structural divergence between the workbook MODEL and this context (GH-470).
+   * Raw `Workbook.copy(sheets = ...)` / `copy(metadata = ...)` edits bypass the tracked API,
+   * leaving a clean-looking tracker over a structurally different workbook — a preservation write
+   * would then re-emit the SOURCE structure, silently shipping sheets or defined names the caller
+   * believes were removed (a confidentiality hazard) and dropping sheets the caller appended. The
+   * writer calls this before choosing a write strategy:
+   *
+   *   - a source sheet (identity-keyed `sheetPathMapping` entry) with no surviving model sheet is
+   *     marked deleted exactly like `Workbook.remove` marks it — tracker deletion plus mapping
+   *     drops — so surviving sheets regenerate against their own source parts and the removed
+   *     sheet's part/rel/media closure is pruned (GH-417);
+   *   - a model sheet with no source identity (untracked addition) marks metadata modified, so the
+   *     workbook skeleton regenerates from the model instead of a verbatim copy dropping the sheet;
+   *   - a defined-name set diverging from [[definedNamesAsRead]] marks metadata modified, so
+   *     workbook.xml re-derives from the model.
+   *
+   * Returns `this` unchanged when nothing diverges — a genuinely clean workbook keeps the verbatim
+   * fast path. Contexts without an identity mapping (pre-GH-315) skip the sheet-set checks.
+   */
+  def reconciledWith(workbook: Workbook): SourceContext =
+    val liveNames = workbook.sheets.map(_.name).toSet
+    val ghosts = sheetPathMapping.keySet.diff(liveNames).toVector.sortBy(_.value)
+    val withRemovals = ghosts.zipWithIndex.foldLeft(this) { case (ctx, (ghost, ordinal)) =>
+      val sourceIndex = ctx.sheetPathMapping
+        .get(ghost)
+        .flatMap(SourceContext.worksheetPartNumber)
+        .getOrElse(workbook.sheets.size + ordinal)
+      ctx.markUntrackedSheetRemoval(sourceIndex, ghost)
+    }
+    val untrackedAddition =
+      sheetPathMapping.nonEmpty && workbook.sheets.exists(s => !sheetPathMapping.contains(s.name))
+    val definedNamesDiverged =
+      definedNamesAsRead.exists(_ != workbook.metadata.definedNames)
+    if untrackedAddition || definedNamesDiverged then withRemovals.markMetadataModified
+    else withRemovals
 
   /**
    * Re-key the identity-keyed source mappings after a tracked rename (GH-315): identity follows the
@@ -140,6 +201,18 @@ final case class SourceContext(
     copy(modificationTracker = modificationTracker.markMetadata)
 
 object SourceContext:
+
+  private val WorksheetPartNumber = raw"xl/worksheets/sheet(\d+)\.xml".r
+
+  /**
+   * Zero-based source sheet index implied by the conventional worksheet part name (GH-470:
+   * `xl/worksheets/sheet3.xml` → 2). None for foreign packages with unconventional part names — the
+   * caller falls back to a synthetic non-colliding index.
+   */
+  private[context] def worksheetPartNumber(path: String): Option[Int] = path match
+    case WorksheetPartNumber(n) => n.toIntOption.map(_ - 1).filter(_ >= 0)
+    case _ => None
+
   /**
    * Construct a context for a workbook that originated from a file.
    *

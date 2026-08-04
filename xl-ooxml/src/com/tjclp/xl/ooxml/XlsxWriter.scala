@@ -107,7 +107,14 @@ object XlsxWriter:
     try
       val escapeFormulas = formulaEscapingRequested(config)
       // GH-243: serialize DateTime cells with the workbook's date system before any write path.
-      val normalized = withDates1904Normalized(workbook)
+      val dated = withDates1904Normalized(workbook)
+      // GH-470: reconcile untracked structural edits (copy(sheets = ...) reductions/additions,
+      // copy(metadata = ...) defined-name drift) into the context BEFORE strategy dispatch — a
+      // clean-looking context would otherwise verbatim-copy the SOURCE structure, shipping
+      // sheets the caller removed and dropping sheets the caller appended.
+      val normalized = dated.sourceContext match
+        case Some(ctx) => dated.copy(sourceContext = Some(ctx.reconciledWith(dated)))
+        case None => dated
 
       normalized.sourceContext match
         case Some(ctx) if ctx.isClean && !escapeFormulas =>
