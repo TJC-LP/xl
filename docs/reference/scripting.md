@@ -250,6 +250,8 @@ For Excel-style format inheritance on formula entry, use the opt-in
 | `excelErrors` | (0.14.0) `Vector[(SheetName, ARef, CellError)]` — cells whose cached result is an Excel error value, sorted; inspect when you want to surface `#DIV/0!`s without treating them as host failures |
 | `isClean` | `true` when `errors.isEmpty` — a workbook full of cached `#DIV/0!`s is "clean" (the recalculation succeeded; the errors are data) |
 | `toEither` | `Right(workbook)` when clean, `Left(errors)` otherwise — for fail-hard pipelines |
+| `converged` | (0.20.0) `false` iff an iterative run exhausted `maxIter` without every cycle member's \|Δ\| dropping below `maxChange` — the last-round values are kept (Excel semantics, `errors` stays empty), so gate on this after any large circular perturbation. Non-iterative runs report `true` |
+| `iterationsUsed` | (0.20.0) iterative rounds actually run: `0` when no iteration happened, `maxIter` on exhaustion, otherwise the round that converged |
 
 Reference cycles are **isolated**: the participants and their downstream dependents are reported
 (e.g. `Model!A7: Formula error in '=B7': Circular reference` via `CellEvalError.render`) while

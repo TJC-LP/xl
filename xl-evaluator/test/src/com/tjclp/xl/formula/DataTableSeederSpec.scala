@@ -13,7 +13,7 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.ooxml.{TestFixtures, XlsxReader, XlsxWriter}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.workbooks.{CalcPr, Workbook}
 
 /**
  * GH-419 DataTableSeeder: explicit, tolerant cache seeding for data-table interiors. The
@@ -292,6 +292,208 @@ class DataTableSeederSpec extends FunSuite:
       .seedDataTables()
       .fold(err => fail(s"oversized records must skip tolerantly, not fail the op: $err"), identity)
     assertEquals(sheetNamed(seeded, "S")(ref"B2").value, sheet(ref"B2").value)
+  }
+
+  // ===== GH-453: circular books — seeding honors the book's CalcPr / an explicit IterativeCalc =====
+
+  /**
+   * Canonical circular fixture: C1=100 (plain), B1=C1+B2, B2=$A$1*(C1+B1)/2 (declared-cycle
+   * average-balance idiom over rate input A1), corner F9=IFERROR(B1/2,0), 1-var column table
+   * F10:F12 over input A1 with left axis E10:E12 = 0.002/0.004/0.006. Analytic per-axis fixpoint:
+   * B1 = (100+50r)/(1-r/2), interior = B1/2 — 50.1001/50.2004/50.3009, strictly increasing.
+   * Pre-GH-453 every interior silently seeded the base value (FLAT).
+   */
+  private def circularTableSheet: Sheet =
+    Sheet("S")
+      .put(ref"A1", num(0))
+      .put(ref"C1", num(100))
+      .put(ref"B1", CellValue.Formula("C1+B2"))
+      .put(ref"B2", CellValue.Formula("$A$1*(C1+B1)/2"))
+      .put(ref"F9", CellValue.Formula("IFERROR(B1/2,0)"))
+      .put(ref"E10", CellValue.Number(BigDecimal("0.002")))
+      .put(ref"E11", CellValue.Number(BigDecimal("0.004")))
+      .put(ref"E12", CellValue.Number(BigDecimal("0.006")))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+
+  private val tightCalcPr =
+    CalcPr(iterativeCalculation = true, Some(200), Some(BigDecimal("0.0000001")))
+
+  private val analyticInteriors = Vector(50.1001001, 50.2004008, 50.3009027)
+  private val interiorRefs = Vector(ref"F10", ref"F11", ref"F12")
+
+  private def interiorNum(sheet: Sheet, r: ARef): Option[BigDecimal] =
+    sheet.cells.get(r).map(_.value).flatMap {
+      case CellValue.Number(n) => Some(n)
+      case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
+      case _ => None
+    }
+
+  test("GH-453: declared-cycle table seeds per-axis fixpoints under the book's calcPr") {
+    val wb = Workbook(circularTableSheet).withCalcPr(tightCalcPr)
+    val seeded = wb.seedDataTables().fold(err => fail(s"seeding failed: $err"), identity)
+    val out = sheetNamed(seeded, "S")
+    val values = interiorRefs.map(r => interiorNum(out, r).getOrElse(fail(s"${r.toA1} must seed")))
+    values.zip(analyticInteriors).foreach { (v, expected) =>
+      assert(
+        (v.toDouble - expected).abs < 1e-4,
+        s"interior $v must be within 1e-4 of the analytic fixpoint $expected"
+      )
+    }
+    assertEquals(
+      values.distinct.size,
+      3,
+      s"interiors must be pairwise distinct — flat interiors are the GH-453 bug: $values"
+    )
+  }
+
+  test("GH-453: no calcPr -> table skipped untouched, one CircularNotIterated names the cycle") {
+    val wb = Workbook(circularTableSheet)
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    // Skip keeps interiors uncached, so the data-table-unseeded lint still fires downstream.
+    assertEquals(out(ref"F10").value, CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    assertEquals(out.cells.get(ref"F11"), None)
+    assertEquals(out.cells.get(ref"F12"), None)
+    assertEquals(
+      report.warnings,
+      Vector(
+        SeedTableWarning.CircularNotIterated(
+          SheetName.unsafe("S"),
+          range("F10:F12"),
+          Vector("S!B1", "S!B2")
+        )
+      )
+    )
+    // The tolerant-Right doctrine holds on the plain overload too: Right, untouched.
+    val plain = wb.seedDataTables().fold(err => fail(s"must stay Right: $err"), identity)
+    assertEquals(sheetNamed(plain, "S").cells.get(ref"F11"), None)
+  }
+
+  test("GH-453: explicit IterativeCalc overload overrides an absent calcPr") {
+    val wb = Workbook(circularTableSheet) // no calcPr declared
+    val seeded = wb
+      .seedDataTables(IterativeCalc(200, BigDecimal("0.0000001")))
+      .fold(err => fail(s"seeding failed: $err"), identity)
+    val out = sheetNamed(seeded, "S")
+    val mid = interiorNum(out, ref"F11").getOrElse(fail("F11 must seed"))
+    assert((mid.toDouble - 50.2004008).abs < 1e-4, s"F11=$mid, expected ~50.2004008")
+  }
+
+  test("GH-453: acyclic table on a cyclic book still seeds while the cyclic one skips") {
+    val sheet = circularTableSheet
+      .put(ref"H9", CellValue.Formula("$A$1*10"))
+      .put(ref"G10", num(5))
+      .put(ref"H10", CellValue.dataTable(colKind("H10:H10", "A1"), None))
+    val report =
+      Workbook(sheet).seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    assertEquals(
+      out(ref"H10").value,
+      CellValue.dataTable(colKind("H10:H10", "A1"), Some(CellValue.Number(BigDecimal(50))))
+    )
+    assertEquals(out.cells.get(ref"F11"), None, "the cyclic table must stay unseeded")
+    report.warnings match
+      case Vector(SeedTableWarning.CircularNotIterated(_, tableRef, _)) =>
+        assertEquals(tableRef, range("F10:F12"))
+      case other => fail(s"expected exactly one CircularNotIterated, got $other")
+  }
+
+  test("GH-453: non-convergent cycle seeds last-round values and reports NotConverged") {
+    // B1/B2 oscillate with period 2 from the (0,0) seed: rounds alternate (1,1)/(0,0);
+    // round 5 lands on (1,1) — deterministic last-round values, per Excel.
+    val sheet = Sheet("S")
+      .put(ref"A1", num(0))
+      .put(ref"B1", CellValue.Formula("1-B2"))
+      .put(ref"B2", CellValue.Formula("1-B1"))
+      .put(ref"F9", CellValue.Formula("B1"))
+      .put(ref"E10", num(1))
+      .put(ref"E11", num(2))
+      .put(ref"E12", num(3))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    val wb = Workbook(sheet).withCalcPr(CalcPr(iterativeCalculation = true, Some(5), None))
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.foreach { r =>
+      assertEquals(interiorNum(out, r), Some(BigDecimal(1)), s"${r.toA1} must seed the last round")
+    }
+    assertEquals(
+      report.warnings,
+      Vector(SeedTableWarning.NotConverged(SheetName.unsafe("S"), range("F10:F12"), 3, 5))
+    )
+  }
+
+  test("GH-453: re-seeding is a no-op and source cycle-member cells are never mutated") {
+    val wb = Workbook(circularTableSheet).withCalcPr(tightCalcPr)
+    val first = wb.seedDataTables().fold(err => fail(s"seeding failed: $err"), identity)
+    val second = first.seedDataTables().fold(err => fail(s"re-seeding failed: $err"), identity)
+    assertEquals(second, first, "a re-seed must be a no-op (deterministic fixpoints)")
+    val out = sheetNamed(first, "S")
+    // The what-if lives entirely on temp sheets: cycle members and the input keep their
+    // original uncached formulas / value.
+    assertEquals(out(ref"B1").value, CellValue.Formula("C1+B2"))
+    assertEquals(out(ref"B2").value, CellValue.Formula("$A$1*(C1+B1)/2"))
+    assertEquals(out(ref"A1").value, num(0))
+  }
+
+  test("GH-453: input cell inside the cycle stays pinned to the axis value (no silent flat)") {
+    // The cycle runs THROUGH the what-if input: A1=B1/2, B1=A1+10. Excel semantics: the axis
+    // substitution pins the input cell, breaking the cycle through it — interiors are 11/12/13,
+    // NOT the unperturbed fixpoint B1=20 repeated (the silent-FLAT failure class of GH-453).
+    val sheet = Sheet("S")
+      .put(ref"A1", CellValue.Formula("B1/2"))
+      .put(ref"B1", CellValue.Formula("A1+10"))
+      .put(ref"F9", CellValue.Formula("B1"))
+      .put(ref"E10", num(1))
+      .put(ref"E11", num(2))
+      .put(ref"E12", num(3))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    val wb = Workbook(sheet).withCalcPr(tightCalcPr)
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    assertEquals(report.warnings, Vector.empty)
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.zip(Vector(11, 12, 13)).foreach { (r, expected) =>
+      assertEquals(
+        interiorNum(out, r),
+        Some(BigDecimal(expected)),
+        s"${r.toA1} must reflect the pinned axis value, not the unperturbed cycle fixpoint"
+      )
+    }
+  }
+
+  test("GH-453: 20x20 two-var battery over a small cycle stays within budget") {
+    // 400 axis combinations x a 2-member fixpoint: guards the narrowed-iteration design —
+    // a full-book recalculation per combination would blow this budget.
+    val interior = range("D5:W24")
+    val rowAxis = (0 until 20).foldLeft(Sheet("S")) { (s, i) =>
+      s.put(ARef.from0(3 + i, 3), num(i + 1)) // D4..W4 -> input A1
+    }
+    val bothAxes = (0 until 20).foldLeft(rowAxis) { (s, j) =>
+      s.put(ARef.from0(2, 4 + j), num(j + 1)) // C5..C24 -> input A2
+    }
+    val twoVar: FormulaKind.DataTable = FormulaKind.DataTable(
+      ref = interior,
+      dt2D = true,
+      dtr = false,
+      r1 = Some(aref("A1")),
+      r2 = Some(aref("A2"))
+    )
+    val sheet = bothAxes
+      .put(ref"A1", num(0))
+      .put(ref"A2", num(0))
+      .put(ref"Y1", CellValue.Formula("(Y2+$A$1)/2"))
+      .put(ref"Y2", CellValue.Formula("Y1/2"))
+      .put(ref"C4", CellValue.Formula("Y1+$A$2")) // corner: cycle fixpoint Y1 = (2/3)*A1
+      .put(ref"D5", CellValue.dataTable(twoVar, None))
+    val wb = Workbook(sheet).withCalcPr(CalcPr(iterativeCalculation = true, Some(100), None))
+    val startNanos = System.nanoTime()
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val elapsedSeconds = (System.nanoTime() - startNanos) / 1e9
+    assert(elapsedSeconds < 30.0, s"seeding took ${elapsedSeconds}s, budget is 30s")
+    assertEquals(report.warnings, Vector.empty)
+    val out = sheetNamed(report.workbook, "S")
+    // Spot-check E6 (row axis 2 -> A1, col axis 2 -> A2): (2/3)*2 + 2 = 10/3
+    val e6 = interiorNum(out, ref"E6").getOrElse(fail("E6 must seed"))
+    assert((e6.toDouble - 10.0 / 3.0).abs < 1e-2, s"E6=$e6, expected ~${10.0 / 3.0}")
   }
 
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))

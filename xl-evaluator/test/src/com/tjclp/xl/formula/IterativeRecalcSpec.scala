@@ -162,6 +162,41 @@ class IterativeRecalcSpec extends FunSuite:
     )
   }
 
+  test("GH-454: convergent cycle reports converged=true with iterationsUsed in (0, maxIter]") {
+    val result = convergentPair.recalculate(IterativeCalc(100, BigDecimal("0.001")))
+    assert(result.converged, "a fixpointed cycle must report converged")
+    assert(
+      result.iterationsUsed > 0 && result.iterationsUsed <= 100,
+      s"iterationsUsed must count the rounds actually run, got ${result.iterationsUsed}"
+    )
+  }
+
+  test("GH-454: exhausted maxIter reports converged=false and iterationsUsed == maxIter") {
+    // Same oscillator as the non-convergence test above: values are kept (Excel semantics)
+    // but the result must now SAY it under-converged — exhaustion was previously
+    // indistinguishable from convergence (the field bug: a stale debt schedule with r.errors
+    // empty).
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(a1, formula("=1-B1"))
+      .put(b1, formula("=A1"))
+    val result = Workbook(sheet).recalculate(IterativeCalc(10, BigDecimal("0.001")))
+    assert(result.errors.isEmpty, "non-convergence still must NOT error")
+    assert(!result.converged, "maxIter exhaustion must report converged=false")
+    assertEquals(result.iterationsUsed, 10)
+  }
+
+  test("GH-454: non-iterative runs report converged=true, iterationsUsed=0") {
+    // Default path (cycle errors instead of iterating): no iteration happened.
+    val defaultRun = convergentPair.recalculate()
+    assert(defaultRun.converged)
+    assertEquals(defaultRun.iterationsUsed, 0)
+    // Acyclic workbook under iterative settings: nothing to iterate.
+    val acyclic = Workbook(Sheet(SheetName.unsafe("S")).put(a1, num(1)).put(b1, formula("=A1*2")))
+    val acyclicRun = acyclic.recalculate(IterativeCalc(100, BigDecimal("0.001")))
+    assert(acyclicRun.converged)
+    assertEquals(acyclicRun.iterationsUsed, 0)
+  }
+
   test("GH-373: IterativeCalc.fromCalcPr uses Excel defaults when attributes are absent") {
     assertEquals(
       IterativeCalc.fromCalcPr(CalcPr(iterativeCalculation = true)),
