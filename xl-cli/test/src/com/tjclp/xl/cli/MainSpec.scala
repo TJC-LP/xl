@@ -1367,3 +1367,12 @@ class MainSpec extends CatsEffectSuite:
       else assert(result.isLeft, s"Format '$code' should fail")
     }
   }
+
+  test("GH-483: shared saveSuffix names the target path (plain and streaming)") {
+    val p = java.nio.file.Path.of("out.xlsx")
+    assertEquals(com.tjclp.xl.cli.output.Format.saveSuffix(p, stream = false), "Saved: out.xlsx")
+    assertEquals(
+      com.tjclp.xl.cli.output.Format.saveSuffix(p, stream = true),
+      "Saved (streaming): out.xlsx"
+    )
+  }

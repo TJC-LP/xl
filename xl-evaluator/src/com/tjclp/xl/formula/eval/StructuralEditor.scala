@@ -229,7 +229,7 @@ object StructuralEditor:
                     // survives: a shortened range can produce a different aggregate, and moving a
                     // cell changes position-sensitive formulas such as ROW(). Leave the expression
                     // evaluatable and uncached so the next recalculation cannot expose stale data.
-                    val newStr = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+                    val newStr = FormulaPrinter.printFileForm(shiftedExpr)
                     val newKind = shiftedArrayKind(kind, shiftLocal, isRow, at, delta)
                     (ref, cell.copy(value = CellValue.Formula(newStr, None, newKind)))
                   case None =>
@@ -372,7 +372,7 @@ object StructuralEditor:
           formula
         case Right(expr) =>
           FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
-            case Some(shifted) => FormulaPrinter.print(shifted, includeEquals = false)
+            case Some(shifted) => FormulaPrinter.printFileForm(shifted)
             case None => "#REF!"
         case Left(_) => formula
 

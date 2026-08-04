@@ -642,7 +642,7 @@ object StreamingWriteCommands:
             val colDelta = Column.index0(targetRef.col) - startCol
             val rowDelta = Row.index0(targetRef.row) - startRow
             val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
-            val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+            val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
             val formulaValue = CellValue.Formula(shiftedFormula, None)
             cellPatches(targetRef) = styleIdOpt match
               case Some(styleId) =>

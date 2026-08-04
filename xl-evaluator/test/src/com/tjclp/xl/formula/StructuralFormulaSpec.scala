@@ -225,9 +225,10 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"G1", formulaCell("=IF(ROUND(E12-(E13+E14),0)=0,\"Yes\",\"No\")"))
     val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 2)
     val s2 = sheetNamed(r, "S")
+    // GH-484: the rewrite reprints in Excel's bare-comma file form
     assertEquals(
       s2(ref"G1").value,
-      formulaCell("IF(ROUND(E14-(E15+E16), 0)=0, \"Yes\", \"No\")")
+      formulaCell("IF(ROUND(E14-(E15+E16),0)=0,\"Yes\",\"No\")")
     )
     assertEquals(
       r.evaluateFormula("=IF(ROUND(E14-(E15+E16), 0)=0, \"Yes\", \"No\")", "S"),
@@ -352,4 +353,14 @@ class StructuralFormulaSpec extends FunSuite:
       rep(ref"B2").value,
       CellValue.Formula("\"Data\"&C1", Some(CellValue.Text("Datax")))
     )
+  }
+
+  test("GH-484: structural rewrites keep Excel's bare-comma file form") {
+    val s = new Sheet(name = S)
+      .put(ref"B1", formulaCell("IF(A5=1,1,0)"))
+      .put(ref"B2", formulaCell("SUMIF(A1:A10,\">2\",C1:C10)"))
+    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val s2 = sheetNamed(r, "S")
+    assertEquals(s2(ref"B1").value, formulaCell("IF(A6=1,1,0)"))
+    assertEquals(s2(ref"B2").value, formulaCell("SUMIF(A1:A11,\">2\",C1:C11)"))
   }
