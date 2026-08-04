@@ -72,6 +72,18 @@ final case class ModificationTracker(
       modifiedMetadata = true
     )
 
+  /**
+   * Record a sheet deletion that was already applied to the sheets vector by an UNTRACKED edit
+   * (GH-470: `Workbook.copy(sheets = ...)` reductions, reconciled at write time). Unlike [[delete]]
+   * nothing shifts: the indices in [[modifiedSheets]] already describe the reduced workbook, so
+   * shifting them here would detach live modification marks from their sheets. `sourceIndex` names
+   * the deleted sheet's position in the SOURCE package — it feeds the writer's source-indexed
+   * dependency checks and its deletion gates. Marks metadata modified for the same reason
+   * [[delete]] does (the workbook skeleton restructures).
+   */
+  def deleteUntracked(sourceIndex: Int): ModificationTracker =
+    copy(deletedSheets = deletedSheets + sourceIndex, modifiedMetadata = true)
+
   /** Indicate that sheet order changed. */
   def markReordered: ModificationTracker =
     if reorderedSheets then this else copy(reorderedSheets = true)
