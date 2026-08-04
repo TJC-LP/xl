@@ -63,6 +63,14 @@ object Format:
     s"Saved: $path ($sheetCount sheets, $cellCount cells)"
 
   /**
+   * Save-confirmation suffix appended to write-command output (GH-483: the one shared definition —
+   * was five identical private clones across the command objects).
+   */
+  def saveSuffix(outputPath: java.nio.file.Path, stream: Boolean): String =
+    if stream then s"Saved (streaming): $outputPath"
+    else s"Saved: $outputPath"
+
+  /**
    * Format an eval success message.
    */
   def evalSuccess(formula: String, result: CellValue, overrides: List[String]): String =

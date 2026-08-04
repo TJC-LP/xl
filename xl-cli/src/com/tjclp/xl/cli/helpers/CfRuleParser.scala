@@ -246,7 +246,7 @@ object CfRuleParser:
         case CfTextOp.BeginsWith => "beginsWith"
         case CfTextOp.EndsWith => "endsWith"
       s"text $name '$text'"
-    case CfRule.Preserved(_, _) => "(preserved rule)"
+    case CfRule.Preserved(_, _, _) => "(preserved rule)"
 
   private def opName(op: CfOperator): String = op match
     case CfOperator.LessThan => "lessThan"

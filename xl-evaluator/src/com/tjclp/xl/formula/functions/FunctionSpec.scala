@@ -36,7 +36,12 @@ final case class FunctionFlags(
 final case class ArgPrinter(
   expr: TExpr[?] => String,
   location: TExpr.RangeLocation => String,
-  cellRange: CellRange => String
+  cellRange: CellRange => String,
+  /**
+   * GH-484: the argument separator to join rendered args with — the canonical human-facing ", " by
+   * default; Excel's bare "," when printing the file form (FormulaPrinter.printFileForm).
+   */
+  separator: String = ", "
 )
 
 final case class EvalContext(
@@ -118,7 +123,7 @@ trait FunctionSpec[A]:
 
   def render(args: Args, printer: ArgPrinter): String =
     val rendered = argSpec.render(args, printer)
-    s"${name}(${rendered.mkString(", ")})"
+    s"${name}(${rendered.mkString(printer.separator)})"
 
 object FunctionSpec:
   final case class Simple[A, A0](

@@ -261,3 +261,24 @@ class InPlaceSpec extends CatsEffectSuite:
       }
     }
   }
+
+  test("GH-483: error message names the target, never the deleted temp") {
+    val temp = Path.of("/data/.xl-inplace-482910.xlsx")
+    val target = Path.of("/data/book.xlsx")
+    val rendered = Main.renderErrorMessage(
+      new Exception(s"No space left on device writing $temp"),
+      Some(temp),
+      Some(target)
+    )
+    assert(rendered.contains(target.toString), s"error must name the target:\n$rendered")
+    assert(!rendered.contains(".xl-inplace-"), s"error leaks the temp path:\n$rendered")
+  }
+
+  test("GH-483: null exception message renders the exception class, not 'null'") {
+    val temp = Path.of("/data/.xl-inplace-482910.xlsx")
+    val target = Path.of("/data/book.xlsx")
+    val rendered =
+      Main.renderErrorMessage(new IllegalStateException(), Some(temp), Some(target))
+    assert(rendered.contains("IllegalStateException"), s"expected exception class in:\n$rendered")
+    assert(!rendered.contains("null"), s"error prints literal 'null':\n$rendered")
+  }

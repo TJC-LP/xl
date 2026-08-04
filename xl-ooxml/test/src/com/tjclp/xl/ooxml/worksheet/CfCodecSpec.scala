@@ -231,7 +231,7 @@ class CfCodecSpec extends ScalaCheckSuite:
       """<conditionalFormatting sqref="A1:A5"><cfRule type="iconSet" priority="4"><iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule></conditionalFormatting>"""
     )
     rulesOf(cf) match
-      case Vector(CfRule.Preserved(xmlStr, priority)) =>
+      case Vector(CfRule.Preserved(xmlStr, priority, _)) =>
         assertEquals(priority, Some(4))
         assert(xmlStr.contains("3Arrows"), xmlStr)
       case other => fail(s"expected Preserved iconSet, got $other")
@@ -353,7 +353,7 @@ class CfCodecSpec extends ScalaCheckSuite:
     // what WorksheetReader does before CfCodec ever sees the block
     val block = rebindUsedNamespaces(xml(raw))
     CfCodec.parseAll(Seq(block), Vector.empty) match
-      case Vector(ConditionalFormat.Rules(_, Vector(CfRule.Preserved(payload, Some(5))), _)) =>
+      case Vector(ConditionalFormat.Rules(_, Vector(CfRule.Preserved(payload, Some(5), _)), _)) =>
         assert(
           payload.contains("xmlns:x14="),
           s"x14 binding must travel with the fragment:\n$payload"

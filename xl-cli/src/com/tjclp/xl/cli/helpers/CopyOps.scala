@@ -150,7 +150,7 @@ object CopyOps:
         FormulaParser.parse(s"=$expr") match
           case Right(parsed) =>
             val shifted = FormulaShifter.shift(parsed, colDelta, rowDelta)
-            val shiftedExpr = FormulaPrinter.print(shifted, includeEquals = false)
+            val shiftedExpr = FormulaPrinter.printFileForm(shifted)
             (CellValue.Formula(shiftedExpr, None), Some(shiftedExpr))
           case Left(_) =>
             // Unparseable formula: preserve as-is and try to cache in phase 2.

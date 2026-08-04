@@ -122,8 +122,13 @@ enum CfRule derives CanEqual:
    * containsBlanks/Errors, any rule with a child extLst, any rule whose dxf is outside the modeled
    * subset, any unknown attr/child). Reader-constructed only; canonical XML re-emitted verbatim.
    * `priority` is parsed read-only and feeds the allocator's max — never re-stamped.
+   *
+   * `dxf` carries the raw `<dxf>` payload the rule's dxfId referenced in the SOURCE styles.xml
+   * (canonical XML, None when the rule has no in-range ref). Surgical writes never consult it (the
+   * dxfs table is append-only, so the baked id stays valid); a FRESH write (source dropped)
+   * re-registers the payload into the rebuilt dxfs table and renumbers the emitted ref (GH-471).
    */
-  case Preserved(xml: String, priority: Option[Int])
+  case Preserved(xml: String, priority: Option[Int], dxf: Option[String] = None)
 
 object CfRule:
   /** Documented sentinel: "assign at append" (see `Sheet.conditionalFormat`). */
@@ -192,7 +197,7 @@ object CfRule:
     case r: DataBar => Some(r.priority)
     case r: Top10 => Some(r.priority)
     case r: Text => Some(r.priority)
-    case Preserved(_, p) => p
+    case Preserved(_, p, _) => p
 
   /** Restamp a typed rule's priority; Preserved rules are NEVER renumbered (identity). */
   def withPriority(rule: CfRule, priority: Int): CfRule = rule match

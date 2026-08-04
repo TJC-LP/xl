@@ -396,6 +396,67 @@ class ConditionalFunctionsSpec extends FunSuite:
     assertEval("=COUNTIFS(A1:A3, \"Yes\", B1:B3, \"Yes\")", sheet, 1)
   }
 
+  // ===== Text Comparison Criteria Tests (GH-466) =====
+
+  // Fixture from the GH-466 field-QC repro: G1:G4 = x, y, x, z; H1:H4 = 10, 20, 30, 40
+  private def gh466Sheet: Sheet =
+    sheetWith(
+      ref"G1" -> "x",
+      ref"H1" -> 10,
+      ref"G2" -> "y",
+      ref"H2" -> 20,
+      ref"G3" -> "x",
+      ref"H3" -> 30,
+      ref"G4" -> "z",
+      ref"H4" -> 40
+    )
+
+  test("SUMIFS: <>text criteria sums non-matching rows (GH-466)") {
+    assertEval("=SUMIFS(H1:H4, G1:G4, \"<>x\")", gh466Sheet, 60)
+  }
+
+  test("COUNTIFS: <>text criteria counts non-matching cells (GH-466)") {
+    assertEval("=COUNTIFS(G1:G4, \"<>x\")", gh466Sheet, 2)
+  }
+
+  test("COUNTIF: <>text with no equal values counts all (GH-466)") {
+    assertEval("=COUNTIF(G1:G4, \"<>xx\")", gh466Sheet, 4)
+  }
+
+  test("COUNTIF: <>text is case-insensitive (GH-466)") {
+    assertEval("=COUNTIF(G1:G4, \"<>X\")", gh466Sheet, 2)
+  }
+
+  test("COUNTIF: ordering operator with text operand (GH-466)") {
+    assertEval("=COUNTIF(G1:G4, \">m\")", gh466Sheet, 4)
+    assertEval("=COUNTIF(G1:G4, \"<m\")", gh466Sheet, 0)
+    assertEval("=COUNTIF(G1:G4, \">=x\")", gh466Sheet, 4)
+    assertEval("=COUNTIF(G1:G4, \">x\")", gh466Sheet, 2)
+  }
+
+  test("COUNTIF: bare <> counts non-blank cells (GH-466)") {
+    // G5 is not populated: the non-blank idiom must skip it
+    assertEval("=COUNTIF(G1:G5, \"<>\")", gh466Sheet, 4)
+  }
+
+  test("SUMIF: <>text criteria (GH-466)") {
+    assertEval("=SUMIF(G1:G4, \"<>x\", H1:H4)", gh466Sheet, 60)
+  }
+
+  test("COUNTIF: numeric <> operand unchanged by GH-466") {
+    assertEval("=COUNTIF(H1:H4, \"<>10\")", gh466Sheet, 3)
+  }
+
+  test("COUNTIF: bare equality on text unchanged by GH-466") {
+    assertEval("=COUNTIF(G1:G4, \"x\")", gh466Sheet, 2)
+    assertEval("=COUNTIF(G1:G4, \"=x\")", gh466Sheet, 2)
+  }
+
+  test("COUNTIF: <> with wildcard operand negates the pattern (GH-466)") {
+    // "<>x*" = not-like "x*": y and z match; x, x do not
+    assertEval("=COUNTIF(G1:G4, \"<>x*\")", gh466Sheet, 2)
+  }
+
   // ===== Round-trip Tests =====
 
   test("SUMIF: parse -> print -> parse roundtrip") {

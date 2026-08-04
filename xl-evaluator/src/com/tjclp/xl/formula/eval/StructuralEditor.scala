@@ -7,6 +7,7 @@ import com.tjclp.xl.sheets.{DataValidation, DvKind, Sheet}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.cf.{CfRule, Cfvo, ConditionalFormat}
+import com.tjclp.xl.error.{XLError, XLException}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.parser.FormulaParser
@@ -27,7 +28,11 @@ import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
  */
 object StructuralEditor:
 
-  /** Insert `count` rows at 0-based row index `at` on `sheet`. */
+  /**
+   * Insert `count` rows at 0-based row index `at` on `sheet`. Throws a typed
+   * `XLException(XLError.OutOfBounds)` when the insert would shift any populated position past row
+   * 1048576 (GH-472) — the workbook is left untouched.
+   */
   def insertRows(wb: Workbook, sheet: SheetName, at: Int, count: Int): Workbook =
     edit(wb, sheet, isRow = true, at = at, delta = count)
 
@@ -35,7 +40,11 @@ object StructuralEditor:
   def deleteRows(wb: Workbook, sheet: SheetName, at: Int, count: Int): Workbook =
     edit(wb, sheet, isRow = true, at = at, delta = -count)
 
-  /** Insert `count` columns at 0-based column index `at` on `sheet`. */
+  /**
+   * Insert `count` columns at 0-based column index `at` on `sheet`. Throws a typed
+   * `XLException(XLError.OutOfBounds)` when the insert would shift any populated position past
+   * column XFD (GH-472) — the workbook is left untouched.
+   */
   def insertColumns(wb: Workbook, sheet: SheetName, at: Int, count: Int): Workbook =
     edit(wb, sheet, isRow = false, at = at, delta = count)
 
@@ -50,6 +59,32 @@ object StructuralEditor:
     at: Int,
     delta: Int
   ): Workbook =
+    // GH-472: REFUSE an insert that would shift any populated position (cell, comment, row/column
+    // property, drawing anchor, freeze pane) past the sheet edge. Ranges clamp (GH-428), but a
+    // data cell cannot clamp without destroying data — and 0.19.0's silent success wrote cells and
+    // a <dimension> past row 1048576, a file desktop Excel refuses outright. Throws a typed
+    // XLException(XLError.OutOfBounds); the workbook is untouched.
+    if delta > 0 then
+      wb.sheets.find(_.name == target).foreach { s =>
+        val axisMax = if isRow then Row.MaxIndex0 else Column.MaxIndex0
+        s.maxPopulatedIndex(isRow)
+          .filter(i => i >= at && i.toLong + delta > axisMax)
+          .foreach { i =>
+            def rowName(idx: Int) = s"row ${idx + 1}"
+            def colName(idx: Int) = s"column ${Column.from0(idx).toLetter}"
+            val (offending, edge) =
+              if isRow then (rowName(i), s"last ${rowName(axisMax)}")
+              else (colName(i), s"last ${colName(axisMax)}")
+            val unit = if isRow then "row(s)" else "column(s)"
+            val atName = if isRow then rowName(at) else colName(at)
+            throw XLException(
+              XLError.OutOfBounds(
+                offending,
+                s"inserting $delta $unit at $atName would shift it past the sheet's $edge"
+              )
+            )
+          }
+      }
     val editedName = target.value
     // GH-455 follow-up: the non-participation fast path below keeps formula TEXT byte-identical,
     // but a cached VALUE can be stale even when the text never names the edited sheet —
@@ -93,12 +128,27 @@ object StructuralEditor:
         stale = r => staleCaches.contains(QualifiedRef(s.name, r))
       )
     }
+    // GH-473: general defined names (workbook- AND sheet-scoped) are the same rewrite plane as
+    // print areas / DV / tables (GH-429): a refersTo reference targeting the edited sheet shifts
+    // with it, a fully-deleted target degrades to "#REF!", and constants / other-sheet references
+    // ride byte-identical. (Lifted print names live in typed PageSetup, not here — no double
+    // shift.)
+    val updatedNames = wb.metadata.definedNames.map { dn =>
+      dn.copy(formula = shiftDefinedNameText(dn.formula, editedName, isRow, at, delta))
+    }
+    val namesChanged = updatedNames != wb.metadata.definedNames
     // A structural edit can touch any sheet's formulas (cross-sheet refs), so mark every sheet
     // modified — otherwise the writer's clean/verbatim fast-path would copy stale bytes from the
-    // source file and silently drop the edit.
+    // source file and silently drop the edit. A defined-name rewrite lives in workbook.xml, so
+    // mark metadata modified too when one changed.
     val updatedContext =
-      wb.sourceContext.map(ctx => wb.sheets.indices.foldLeft(ctx)((c, i) => c.markSheetModified(i)))
-    wb.copy(sheets = updatedSheets, sourceContext = updatedContext)
+      wb.sourceContext.map { ctx =>
+        val marked = wb.sheets.indices.foldLeft(ctx)((c, i) => c.markSheetModified(i))
+        if namesChanged then marked.markMetadataModified else marked
+      }
+    val updatedMetadata =
+      if namesChanged then wb.metadata.copy(definedNames = updatedNames) else wb.metadata
+    wb.copy(sheets = updatedSheets, metadata = updatedMetadata, sourceContext = updatedContext)
 
   private def rewriteFormulas(
     sheet: Sheet,
@@ -179,7 +229,7 @@ object StructuralEditor:
                     // survives: a shortened range can produce a different aggregate, and moving a
                     // cell changes position-sensitive formulas such as ROW(). Leave the expression
                     // evaluatable and uncached so the next recalculation cannot expose stale data.
-                    val newStr = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+                    val newStr = FormulaPrinter.printFileForm(shiftedExpr)
                     val newKind = shiftedArrayKind(kind, shiftLocal, isRow, at, delta)
                     (ref, cell.copy(value = CellValue.Formula(newStr, None, newKind)))
                   case None =>
@@ -322,9 +372,61 @@ object StructuralEditor:
           formula
         case Right(expr) =>
           FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
-            case Some(shifted) => FormulaPrinter.print(shifted, includeEquals = false)
+            case Some(shifted) => FormulaPrinter.printFileForm(shifted)
             case None => "#REF!"
         case Left(_) => formula
+
+  /**
+   * GH-473: rewrite a defined name's refersTo text through the structural shift. A refersTo is bare
+   * formula text, but unlike CF/DV formulas it may be a TOP-LEVEL comma union (a multi-range name
+   * such as `Two!$A$1:$B$2,Two!$D$10`) that the formula parser rejects — split on top-level commas
+   * and shift each segment through the shared [[shiftFormulaText]]. `shiftLocal = false`: a
+   * refersTo names its sheet explicitly, so only references to the edited sheet move; constants,
+   * externals, unqualified and other-sheet references ride byte-identical (per-segment, the same
+   * non-participation gates as CF/DV).
+   */
+  private def shiftDefinedNameText(
+    formula: String,
+    editedSheet: String,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): String =
+    if !mentionsSheet(formula, editedSheet) then formula
+    else
+      splitTopLevelCommas(formula)
+        .map(seg => shiftFormulaText(seg, shiftLocal = false, editedSheet, isRow, at, delta))
+        .mkString(",")
+
+  /**
+   * Split refersTo text on TOP-LEVEL commas (the multi-range union). Commas inside quoted sheet
+   * names (`'It''s, ok'!A1`), string literals (`"a,b"`) or any `()`/`{}` nesting (function
+   * arguments, array literals) do not split. Doubled quotes toggle twice — net unchanged, and no
+   * comma is consumed between the pair.
+   */
+  private def splitTopLevelCommas(s: String): Vector[String] =
+    @tailrec
+    def loop(
+      i: Int,
+      segStart: Int,
+      depth: Int,
+      inSingle: Boolean,
+      inDouble: Boolean,
+      acc: Vector[String]
+    ): Vector[String] =
+      if i >= s.length then acc :+ s.substring(segStart)
+      else
+        s.charAt(i) match
+          case '\'' if !inDouble => loop(i + 1, segStart, depth, !inSingle, inDouble, acc)
+          case '"' if !inSingle => loop(i + 1, segStart, depth, inSingle, !inDouble, acc)
+          case '(' | '{' if !inSingle && !inDouble =>
+            loop(i + 1, segStart, depth + 1, inSingle, inDouble, acc)
+          case ')' | '}' if !inSingle && !inDouble =>
+            loop(i + 1, segStart, depth - 1, inSingle, inDouble, acc)
+          case ',' if !inSingle && !inDouble && depth == 0 =>
+            loop(i + 1, i + 1, depth, inSingle, inDouble, acc :+ s.substring(segStart, i))
+          case _ => loop(i + 1, segStart, depth, inSingle, inDouble, acc)
+    loop(0, 0, 0, inSingle = false, inDouble = false, Vector.empty)
 
   /**
    * GH-136: rewrite TYPED conditional-format formula text (CellIs.formula1/formula2,

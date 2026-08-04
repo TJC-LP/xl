@@ -1606,17 +1606,38 @@ EXAMPLES:
     execute(filePath, sheetNameOpt, outputOpt, backendOpt, maxSizeOpt, stream, cmd).attempt
       .map {
         case Right(output) =>
-          // In-place writes (-i) target a temp file that is atomically moved onto the
-          // input after the command succeeds; success messages must name the user-visible
-          // path, not the temp file that no longer exists by the time it is read (GH-464).
-          val rendered = (outputOpt, displayOpt) match
-            case (Some(write), Some(display)) if write != display =>
-              output.replace(write.toString, display.toString)
-            case _ => output
-          (ExitCode.Success, rendered)
+          (ExitCode.Success, renderWithTarget(output, outputOpt, displayOpt))
         case Left(err) =>
-          (ExitCode.Error, Format.errorSimple(err.getMessage))
+          (ExitCode.Error, renderErrorMessage(err, outputOpt, displayOpt))
       }
+
+  /**
+   * In-place writes (-i) target a temp file that is atomically moved onto the input after the
+   * command succeeds; user-facing messages must name the user-visible path, not the temp file that
+   * no longer exists by the time it is read (GH-464).
+   */
+  private def renderWithTarget(
+    text: String,
+    outputOpt: Option[Path],
+    displayOpt: Option[Path]
+  ): String =
+    (outputOpt, displayOpt) match
+      case (Some(write), Some(display)) if write != display =>
+        text.replace(write.toString, display.toString)
+      case _ => text
+
+  /**
+   * GH-483: failure messages get the same temp→target rewrite as successes — an exception raised
+   * mid-write (e.g. disk full) embeds the already-deleted .xl-inplace- temp path otherwise. Guards
+   * `getMessage` being null (falls back to the exception's toString).
+   */
+  private[cli] def renderErrorMessage(
+    err: Throwable,
+    outputOpt: Option[Path],
+    displayOpt: Option[Path]
+  ): String =
+    val message = Option(err.getMessage).getOrElse(err.toString)
+    Format.errorSimple(renderWithTarget(message, outputOpt, displayOpt))
 
   private def printRunResult(result: (ExitCode, String)): IO[ExitCode] =
     IO.println(result._2).as(result._1)

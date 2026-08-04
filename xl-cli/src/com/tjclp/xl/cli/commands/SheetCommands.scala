@@ -7,6 +7,7 @@ import cats.implicits.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.XLError
+import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
 
@@ -28,11 +29,6 @@ object SheetCommands:
     val excel = ExcelIO.instance[IO]
     if stream then excel.writeWorkbookStream(wb, outputPath, config)
     else excel.writeWith(wb, outputPath, config)
-
-  /** Build save message suffix based on write mode */
-  private def saveSuffix(outputPath: Path, stream: Boolean): String =
-    if stream then s"Saved (streaming): $outputPath"
-    else s"Saved: $outputPath"
 
   /**
    * Add a new empty sheet to workbook.
@@ -100,7 +96,7 @@ object SheetCommands:
         case (Some(after), _) => s" (after '$after')"
         case (_, Some(before)) => s" (before '$before')"
         case _ => " (at end)"
-    yield s"Added sheet: $name$position\n${saveSuffix(outputPath, stream)}"
+    yield s"Added sheet: $name$position\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Remove sheet from workbook.
@@ -126,7 +122,7 @@ object SheetCommands:
         case e => new Exception(e.message)
       })
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Removed sheet: $name\n${saveSuffix(outputPath, stream)}"
+    yield s"Removed sheet: $name\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Rename a sheet.
@@ -155,7 +151,7 @@ object SheetCommands:
         case e => new Exception(e.message)
       })
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Renamed: $oldName → $newName\n${saveSuffix(outputPath, stream)}"
+    yield s"Renamed: $oldName → $newName\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Move sheet to new position.
@@ -223,7 +219,7 @@ object SheetCommands:
       updatedWb <- IO.fromEither(wb.reorder(newOrder).left.map(e => new Exception(e.message)))
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       position = s"to position $clampedIdx"
-    yield s"Moved: $name $position\n${saveSuffix(outputPath, stream)}"
+    yield s"Moved: $name $position\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Copy sheet to new name.
@@ -253,7 +249,7 @@ object SheetCommands:
       copiedSheet = sourceSheet.copy(name = targetSheetName)
       updatedWb = wb.put(copiedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Copied: $sourceName → $targetName\n${saveSuffix(outputPath, stream)}"
+    yield s"Copied: $sourceName → $targetName\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
    * Hide a sheet from the sheet tabs.
@@ -284,7 +280,7 @@ object SheetCommands:
       })
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       stateDesc = if veryHide then "very hidden" else "hidden"
-    yield s"Sheet '$name' is now $stateDesc\n${saveSuffix(outputPath, stream)}"
+    yield s"Sheet '$name' is now $stateDesc\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Add or replace a workbook-scoped named range, then write (GH-236). */
   def nameAdd(
@@ -297,7 +293,7 @@ object SheetCommands:
   ): IO[String] =
     val updated = wb.withDefinedName(name, refersTo)
     writeWorkbook(updated, outputPath, config, stream)
-      .as(s"Added named range '$name' -> $refersTo\n${saveSuffix(outputPath, stream)}")
+      .as(s"Added named range '$name' -> $refersTo\n${Format.saveSuffix(outputPath, stream)}")
 
   /** Remove a workbook-scoped named range, then write (GH-236). */
   def nameRemove(
@@ -312,7 +308,7 @@ object SheetCommands:
     else
       val updated = wb.removeDefinedName(name)
       writeWorkbook(updated, outputPath, config, stream)
-        .as(s"Removed named range '$name'\n${saveSuffix(outputPath, stream)}")
+        .as(s"Removed named range '$name'\n${Format.saveSuffix(outputPath, stream)}")
 
   /**
    * Show a hidden sheet (make it visible).
@@ -337,4 +333,4 @@ object SheetCommands:
         case e => new Exception(e.message)
       })
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Sheet '$name' is now visible\n${saveSuffix(outputPath, stream)}"
+    yield s"Sheet '$name' is now visible\n${Format.saveSuffix(outputPath, stream)}"

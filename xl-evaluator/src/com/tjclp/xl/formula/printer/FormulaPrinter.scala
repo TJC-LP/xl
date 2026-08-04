@@ -39,7 +39,24 @@ object FormulaPrinter:
    * }}}
    */
   def print(expr: TExpr[?], includeEquals: Boolean = true): String =
-    val formula = printExpr(expr, precedence = 0)
+    printWith(expr, includeEquals, CanonicalSeparator)
+
+  /**
+   * GH-484: print in Excel's FILE form — bare ',' argument separators, no leading '='.
+   *
+   * Every path that writes a rewritten formula back into cell text (structural edits, `putf
+   * --from`, `copy`, `batch`) must use this so reprints don't introduce ", " noise in xlsx diffs;
+   * Excel's on-disk form never spaces its separators. Human-facing output keeps the canonical
+   * spaced [[print]].
+   */
+  def printFileForm(expr: TExpr[?]): String =
+    printWith(expr, includeEquals = false, separator = ",")
+
+  /** The pre-existing canonical human-facing argument separator. */
+  private val CanonicalSeparator = ", "
+
+  private def printWith(expr: TExpr[?], includeEquals: Boolean, separator: String): String =
+    val formula = printExpr(expr, precedence = 0, separator)
     if includeEquals then s"=$formula" else formula
 
   /**
@@ -70,7 +87,7 @@ object FormulaPrinter:
    * @return
    *   Formula string (without leading '=')
    */
-  private def printExpr(expr: TExpr[?], precedence: Int): String =
+  private def printExpr(expr: TExpr[?], precedence: Int, sep: String): String =
     expr match
       // Literals
       case TExpr.Lit(value: BigDecimal) => value.toString
@@ -106,30 +123,34 @@ object FormulaPrinter:
       // prints a/(b*c), never a/b*c (which re-parses as (a/b)*c — a different value). The parser
       // has no Paren node, so the grouping the printer emits is the only grouping there is.
       case TExpr.Add(x, y) =>
-        val result = s"${printExpr(x, Precedence.AddSub)}+${printExpr(y, Precedence.AddSub + 1)}"
+        val result =
+          s"${printExpr(x, Precedence.AddSub, sep)}+${printExpr(y, Precedence.AddSub + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.AddSub)
 
       case TExpr.Sub(TExpr.Lit(n: BigDecimal), y) if n == BigDecimal(0) =>
         // Unary minus: 0-x prints as -x
-        val result = s"-${printExpr(y, Precedence.Unary)}"
+        val result = s"-${printExpr(y, Precedence.Unary, sep)}"
         parenthesizeIf(result, precedence > Precedence.Unary)
 
       case TExpr.Sub(x, y) =>
-        val result = s"${printExpr(x, Precedence.AddSub)}-${printExpr(y, Precedence.AddSub + 1)}"
+        val result =
+          s"${printExpr(x, Precedence.AddSub, sep)}-${printExpr(y, Precedence.AddSub + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.AddSub)
 
       case TExpr.Mul(x, y) =>
-        val result = s"${printExpr(x, Precedence.MulDiv)}*${printExpr(y, Precedence.MulDiv + 1)}"
+        val result =
+          s"${printExpr(x, Precedence.MulDiv, sep)}*${printExpr(y, Precedence.MulDiv + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.MulDiv)
 
       case TExpr.Div(x, y) =>
-        val result = s"${printExpr(x, Precedence.MulDiv)}/${printExpr(y, Precedence.MulDiv + 1)}"
+        val result =
+          s"${printExpr(x, Precedence.MulDiv, sep)}/${printExpr(y, Precedence.MulDiv + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.MulDiv)
 
       case TExpr.Pow(x, y) =>
         // Right-associative: allow nested powers on the right, but parenthesize ambiguous bases.
-        val base = printPowBase(x)
-        val exponent = printPowExponent(y)
+        val base = printPowBase(x, sep)
+        val exponent = printPowExponent(y, sep)
         val result = s"$base^$exponent"
         parenthesizeIf(result, precedence > Precedence.Pow)
 
@@ -138,7 +159,7 @@ object FormulaPrinter:
       // and `=+-2` replicate their source exactly (parseUnary recurses through unary chains into
       // parsePow).
       case TExpr.UnaryPlus(e) =>
-        val result = s"+${printExpr(e, Precedence.Pow)}"
+        val result = s"+${printExpr(e, Precedence.Pow, sep)}"
         parenthesizeIf(result, precedence > Precedence.Unary)
 
       // GH-355: postfix percent is preserved (never rewritten to /100). The operand prints at
@@ -146,55 +167,56 @@ object FormulaPrinter:
       // Percent(Sub(0,2)) prints (-2)%, Percent(Pow(2,3)) prints (2^3)%, while chained percents
       // stay flat (10%%). Percent itself never needs outer parens (tightest operator).
       case TExpr.Percent(e) =>
-        val result = s"${printExpr(e, Precedence.Percent)}%"
+        val result = s"${printExpr(e, Precedence.Percent, sep)}%"
         parenthesizeIf(result, precedence > Precedence.Percent)
 
       // String operators (GH-455: right operand one level tighter, see arithmetic note)
       case TExpr.Concat(x, y) =>
-        val result = s"${printExpr(x, Precedence.Concat)}&${printExpr(y, Precedence.Concat + 1)}"
+        val result =
+          s"${printExpr(x, Precedence.Concat, sep)}&${printExpr(y, Precedence.Concat + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.Concat)
 
       // Comparison operators (GH-455: right operand one level tighter, see arithmetic note)
       case TExpr.Eq(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}=${printExpr(y, Precedence.Comparison + 1)}"
+          s"${printExpr(x, Precedence.Comparison, sep)}=${printExpr(y, Precedence.Comparison + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       case TExpr.Neq(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}<>${printExpr(y, Precedence.Comparison + 1)}"
+          s"${printExpr(x, Precedence.Comparison, sep)}<>${printExpr(y, Precedence.Comparison + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       case TExpr.Lt(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}<${printExpr(y, Precedence.Comparison + 1)}"
+          s"${printExpr(x, Precedence.Comparison, sep)}<${printExpr(y, Precedence.Comparison + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       case TExpr.Lte(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}<=${printExpr(y, Precedence.Comparison + 1)}"
+          s"${printExpr(x, Precedence.Comparison, sep)}<=${printExpr(y, Precedence.Comparison + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       case TExpr.Gt(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}>${printExpr(y, Precedence.Comparison + 1)}"
+          s"${printExpr(x, Precedence.Comparison, sep)}>${printExpr(y, Precedence.Comparison + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       case TExpr.Gte(x, y) =>
         val result =
-          s"${printExpr(x, Precedence.Comparison)}>=${printExpr(y, Precedence.Comparison + 1)}"
+          s"${printExpr(x, Precedence.Comparison, sep)}>=${printExpr(y, Precedence.Comparison + 1, sep)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
 
       // Type conversions (print transparently - ToInt is internal)
       case TExpr.ToInt(expr) =>
-        printExpr(expr, precedence) // Print wrapped expression without conversion syntax
+        printExpr(expr, precedence, sep) // Print wrapped expression without conversion syntax
 
       // Date/Time conversions
       case TExpr.DateToSerial(expr) =>
-        printExpr(expr, precedence)
+        printExpr(expr, precedence, sep)
 
       case TExpr.DateTimeToSerial(expr) =>
-        printExpr(expr, precedence)
+        printExpr(expr, precedence, sep)
 
       // Aggregate functions
       case TExpr.Aggregate(aggregatorId, location) =>
@@ -202,18 +224,19 @@ object FormulaPrinter:
 
       case call: TExpr.Call[?] =>
         val printer = ArgPrinter(
-          expr = expr => printExpr(expr, precedence = 0),
+          expr = expr => printExpr(expr, precedence = 0, sep),
           location = formatLocation,
-          cellRange = formatRange
+          cellRange = formatRange,
+          separator = sep
         )
         call.spec.render(call.args, printer)
 
       // GH-193: LET special form — canonical LET(name, value, ..., calculation)
       case TExpr.Let(bindings, body) =>
         val parts =
-          bindings.flatMap((name, value) => List(name, printExpr(value, precedence = 0))) :+
-            printExpr(body, precedence = 0)
-        s"LET(${parts.mkString(", ")})"
+          bindings.flatMap((name, value) => List(name, printExpr(value, precedence = 0, sep))) :+
+            printExpr(body, precedence = 0, sep)
+        s"LET(${parts.mkString(sep)})"
 
       case TExpr.BindingRef(name) => name
 
@@ -231,7 +254,7 @@ object FormulaPrinter:
       // GH-306: a runtime coercion wrapper prints transparently as the wrapped expression —
       // the coercion is an evaluation concern, invisible in formula text (round-trip safe:
       // re-parsing re-derives the same wrapper from the argument position)
-      case TExpr.Coerced(inner, _) => printExpr(inner, precedence)
+      case TExpr.Coerced(inner, _) => printExpr(inner, precedence, sep)
 
   /**
    * Format ARef to A1 notation with default Relative anchor.
@@ -300,12 +323,12 @@ object FormulaPrinter:
   private def parenthesizeIf(s: String, condition: Boolean): String =
     if condition then s"($s)" else s
 
-  private def printPowBase(expr: TExpr[?]): String =
-    val rendered = printExpr(expr, Precedence.Pow)
+  private def printPowBase(expr: TExpr[?], sep: String): String =
+    val rendered = printExpr(expr, Precedence.Pow, sep)
     if needsPowBaseParens(expr) then s"($rendered)" else rendered
 
-  private def printPowExponent(expr: TExpr[?]): String =
-    printExpr(expr, Precedence.Pow)
+  private def printPowExponent(expr: TExpr[?], sep: String): String =
+    printExpr(expr, Precedence.Pow, sep)
 
   private def needsPowBaseParens(expr: TExpr[?]): Boolean =
     unwrapTransparent(expr) match
