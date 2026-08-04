@@ -146,7 +146,21 @@ object CfCodec:
           parsed <- parseFamily(rule, typeToken, attrs, children, priority, ranges, dxfs)
         yield parsed
     }
-    typed.getOrElse(CfRule.Preserved(preservedXml(rule, blockScope), parsedPriority))
+    typed.getOrElse(
+      CfRule.Preserved(preservedXml(rule, blockScope), parsedPriority, preservedDxf(rule, dxfs))
+    )
+
+  /**
+   * The raw `<dxf>` an unmodeled rule's dxfId references, captured scope-self-contained (GH-471) so
+   * a fresh write can re-register it after the source dxfs table is gone. None when the rule has no
+   * dxfId or the ref is out of range (a dangling source ref cannot be resurrected).
+   */
+  private def preservedDxf(rule: Elem, dxfs: Vector[Elem]): Option[String] =
+    rule
+      .attribute("dxfId")
+      .flatMap(_.text.toIntOption)
+      .flatMap(dxfs.lift)
+      .map(d => XmlUtil.compact(rebindUsedNamespaces(d, includeDefault = true)))
 
   private def parseStopIfTrue(attrs: Map[String, String]): Option[Boolean] =
     attrs.get("stopIfTrue") match
@@ -344,8 +358,16 @@ object CfCodec:
    * `priority <= 0` (direct construction bypassing `Sheet.conditionalFormat`) is assigned
    * `max+1, +2, ...` in document order, saturating at `Int.MaxValue` (never a schema-invalid
    * negative); explicit and Preserved priorities are NEVER renumbered.
+   *
+   * `preservedDxfIds` (GH-471, fresh writes only) maps a Preserved rule's carried `<dxf>` payload
+   * to its index in the REBUILT dxfs table; a hit renumbers the re-emitted rule's dxfId attribute.
+   * Surgical writes pass the default empty map — preserved payloads stay verbatim.
    */
-  def toElems(cfs: Vector[ConditionalFormat], dxfIds: Map[Dxf, Int]): Seq[Elem] =
+  def toElems(
+    cfs: Vector[ConditionalFormat],
+    dxfIds: Map[Dxf, Int],
+    preservedDxfIds: Map[String, Int] = Map.empty
+  ): Seq[Elem] =
     val maxExisting = Sheet.maxCfPriority(cfs)
     val (stamped, _) = cfs.foldLeft((Vector.empty[ConditionalFormat], maxExisting)) {
       case ((acc, cur), ConditionalFormat.Rules(ranges, rules, pivot)) =>
@@ -361,7 +383,7 @@ object CfCodec:
     }
     stamped.flatMap {
       case ConditionalFormat.Rules(ranges, rules, pivot) if ranges.nonEmpty && rules.nonEmpty =>
-        val ruleElems = rules.flatMap(ruleToElem(_, ranges, dxfIds))
+        val ruleElems = rules.flatMap(ruleToElem(_, ranges, dxfIds, preservedDxfIds))
         Option.when(ruleElems.nonEmpty) {
           val attrs =
             (if pivot then Seq("pivot" -> "1") else Seq.empty) :+
@@ -384,7 +406,8 @@ object CfCodec:
   private def ruleToElem(
     rule: CfRule,
     ranges: Vector[CellRange],
-    dxfIds: Map[Dxf, Int]
+    dxfIds: Map[Dxf, Int],
+    preservedDxfIds: Map[String, Int]
   ): Option[Elem] =
     def dxfAttr(dxf: Option[Dxf]): Seq[(String, String)] =
       dxf.flatMap(dxfIds.get).map(id => "dxfId" -> id.toString).toList
@@ -435,7 +458,15 @@ object CfCodec:
           elemOrdered("cfRule", attrs*)(formulaElem(formula))
         }
 
-      case CfRule.Preserved(xml, _) => parsePreserved(xml)
+      // GH-471: on a fresh write the carried dxf payload has been re-registered into the
+      // rebuilt table — renumber the verbatim payload's dxfId to the new index. Surgical
+      // writes pass an empty map, so the payload rides through untouched.
+      case CfRule.Preserved(xml, _, dxfPayload) =>
+        parsePreserved(xml).map { e =>
+          dxfPayload.flatMap(preservedDxfIds.get) match
+            case Some(id) => e % new UnprefixedAttribute("dxfId", id.toString, Null)
+            case None => e
+        }
 
   private def cfvoToXml(cfvo: Cfvo): Elem = cfvo match
     case Cfvo.Min => elemOrdered("cfvo", "type" -> "min")()

@@ -159,12 +159,35 @@ object StyleIndex:
       }
     }
 
+    // GH-471: a fresh write rebuilds the numFmt registry at 164+, but styles read from a source
+    // carry the SOURCE ids in CellStyle.numFmtId — and the serializers prefer the raw id over a
+    // code lookup. Re-map every cellXf numFmt reference through the rebuilt registry (keyed by
+    // format CODE): custom codes point at the rebuilt declaration; a raw id survives only when
+    // it is a genuine built-in (< NumFmt.FirstCustomId, undeclared by definition). Without this,
+    // non-contiguous source ids (194, 300, 407) ship undeclared and cells silently change
+    // display format. canonicalKey excludes numFmtId, so unifiedIndex stays valid as-is.
+    val customIdByCode: Map[String, Int] = customNumFmts.collect { case (id, NumFmt.Custom(code)) =>
+      code -> id
+    }.toMap
+    val remappedStyles = unifiedStyles.map { style =>
+      style.numFmt match
+        case NumFmt.Custom(code) =>
+          val rebuiltId = customIdByCode.get(code)
+          if style.numFmtId == rebuiltId then style else style.copy(numFmtId = rebuiltId)
+        case fmt =>
+          // A raw id in the custom range with a built-in semantic type (only constructible via
+          // withNumFmtId) would dangle in the rebuilt table — fall back to the built-in id.
+          if style.numFmtId.exists(_ >= NumFmt.FirstCustomId) then
+            style.copy(numFmtId = NumFmt.builtInId(fmt))
+          else style
+    }
+
     val styleIndex = StyleIndex(
       uniqueFonts,
       uniqueFills,
       uniqueBorders,
       customNumFmts,
-      unifiedStyles,
+      remappedStyles,
       unifiedIndex
     )
 

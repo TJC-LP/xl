@@ -151,7 +151,7 @@ class CfPreservationSpec extends FunSuite:
             )
           case ConditionalFormat.Rules(_, rules, _) =>
             rules.foreach {
-              case CfRule.Preserved(xml, _) =>
+              case CfRule.Preserved(xml, _, _) =>
                 assert(
                   XmlSecurity.parseSafe(xml, s"$name rule Preserved").isRight,
                   s"$name: rule-level Preserved payload is not self-contained XML:\n$xml"
