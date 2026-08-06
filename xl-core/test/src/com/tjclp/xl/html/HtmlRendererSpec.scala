@@ -881,3 +881,22 @@ class HtmlRendererSpec extends FunSuite:
       s"Very narrow column should emit exactly one #, got: $html"
     )
   }
+
+  test("toHtml: General-aligned number with empty neighbours hashes in its own column (GH-459)") {
+    // Excel confines a too-wide number to its own column and hashes it. Bleeding the digits
+    // across empty neighbours (via a colspan) misattributes them to the wrong column.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 123456789012345.0)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val html = sheet.toHtml(ref"A1:D1")
+    assert(htmlHashRuns(html).nonEmpty, s"General-aligned overflow must hash, got: $html")
+    assert(
+      !html.contains("123456789012345"),
+      s"No digits of the overflowing number may be rendered, got: $html"
+    )
+    assert(
+      !html.contains("colspan=\"3\""),
+      s"A hashed number must not span into empty neighbours, got: $html"
+    )
+  }

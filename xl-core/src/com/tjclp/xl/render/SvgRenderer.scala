@@ -336,9 +336,20 @@ object SvgRenderer:
                         }
                         textBuffer.append("</text>\n")
                       else
+                        // The right anchor sits CellPaddingX inside the clip box, so text
+                        // measuring in (effectiveWidth - CellPaddingX, effectiveWidth] would
+                        // start left of the clip and lose its leading glyph — a sheared digit
+                        // or, worse, a dropped minus sign (GH-459). Clamp the anchor to the
+                        // clip's left edge. Anything wider than effectiveWidth was already
+                        // replaced by hashes above, so this never pushes text past the right
+                        // edge.
+                        val anchorX =
+                          if anchor == "end" then
+                            math.max(textX, xPos + measureTextWidth(text, style.map(_.font)))
+                          else textX
                         val escapedText = escapeXml(text)
                         textBuffer.append(
-                          s"""    <text x="$textX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
+                          s"""    <text x="$anchorX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
                         )
                         textBuffer.append(s"""$escapedText</text>\n""")
               }

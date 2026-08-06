@@ -1451,3 +1451,89 @@ class SvgRendererSpec extends FunSuite:
       s"Very narrow column should emit exactly one #, got: $svg"
     )
   }
+
+  import com.tjclp.xl.render.RenderUtils
+  import com.tjclp.xl.styles.numfmt.NumFmt
+
+  /** The `<text>` x, anchor and content emitted under a given cell's clip-path. */
+  private def svgTextUnderClip(svg: String, a1: String): Option[(Int, String, String)] =
+    val re =
+      s"""<text x="(-?\\d+)"[^>]*text-anchor="([a-z]+)"[^>]*clip-path="url\\(#clip-$a1\\)"[^>]*>([^<]*)</text>""".r
+    re.findFirstMatchIn(svg).map(m => (m.group(1).toInt, m.group(2), m.group(3)))
+
+  /** The clip rect x and width for a given cell. */
+  private def svgClipRect(svg: String, a1: String): Option[(Int, Int)] =
+    val re =
+      s"""<clipPath id="clip-$a1"><rect x="(-?\\d+)" y="-?\\d+" width="(\\d+)"""".r
+    re.findFirstMatchIn(svg).map(m => (m.group(1).toInt, m.group(2).toInt))
+
+  test("toSvg: right-anchored number never crosses the left edge of its clip (GH-459)") {
+    // Fractional widths are the norm in real xlsx files (8.7109375, 9.140625). At 9.25 the
+    // formatted number measures inside the (clipWidth - CellPaddingX, clipWidth] band: it
+    // legitimately escapes the #### marker, but a naive right-anchor at
+    // `cellX + cellWidth - CellPaddingX` would push its LEFT edge outside the clip and shear
+    // the leading digit — the same wrong-number defect the marker exists to prevent.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(9.25)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (textX, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    val (clipX, _) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+
+    assertEquals(text, "1234567.9", "This width is inside the band: the digits must be shown")
+    assertEquals(anchor, "end", "A number is right-aligned by content-based alignment")
+    val leftEdge = textX - RenderUtils.measureTextWidth(text, None)
+    assert(
+      leftEdge >= clipX,
+      s"Text left edge $leftEdge is left of clip edge $clipX — leading digits are sheared: $svg"
+    )
+  }
+
+  test("toSvg: negative currency in the shear band keeps its minus sign (GH-459)") {
+    // Sign inversion is the worst instance of the plausible-wrong-number class: clipping the
+    // leading `-` off `-$1,234.56` renders it as a positive amount.
+    val style = CellStyle.default.withNumFmt(NumFmt.Currency)
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> -1234.56)
+      .unsafe
+      .withCellStyle(ref"A1", style)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(9.25)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (textX, _, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    val (clipX, _) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+
+    assert(text.startsWith("-"), s"Expected a negative currency rendering, got: $text")
+    val leftEdge = textX - RenderUtils.measureTextWidth(text, None)
+    assert(
+      leftEdge >= clipX,
+      s"Minus sign at $leftEdge is clipped by the box at $clipX — reads as positive: $svg"
+    )
+  }
+
+  test("toSvg: General-aligned number with empty neighbours hashes in its own column (GH-459)") {
+    // Excel confines a too-wide number to its own column and hashes it; it never bleeds the
+    // digits across empty neighbours the way text does.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 123456789012345.0)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val svg = sheet.toSvg(ref"A1:D1")
+    assert(
+      svgHashRuns(svg).nonEmpty,
+      s"General-aligned overflow must hash, not bleed right, got: $svg"
+    )
+    assert(
+      !svg.contains("123456789012345"),
+      s"No digits of the overflowing number may be rendered, got: $svg"
+    )
+    val (_, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+    assert(clipWidth < 60, s"A1's clip must stay in column A (~37px), got $clipWidth: $svg")
+  }

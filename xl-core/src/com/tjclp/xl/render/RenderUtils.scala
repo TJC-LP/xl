@@ -216,9 +216,13 @@ object RenderUtils:
       // If text fits within cell, no overflow needed
       if textWidth <= cellWidth then break(1)
 
-      // Determine overflow direction based on alignment
-      // General alignment behaves like Left for text overflow in Excel
-      val align = style.map(_.align.horizontal).getOrElse(HAlign.General)
+      // Determine overflow direction based on alignment. General resolves through
+      // contentBasedAlignment — the same resolution the renderers use when they anchor the
+      // text — so a General-aligned number takes the right-aligned (clip, then hash) path
+      // instead of bleeding its digits across empty neighbours (GH-459).
+      val align = style.map(_.align.horizontal).getOrElse(HAlign.General) match
+        case HAlign.General => contentBasedAlignment(cell.value)
+        case other => other
       align match
         case HAlign.Left | HAlign.General =>
           // Overflow to the right (General alignment for text behaves like Left)
