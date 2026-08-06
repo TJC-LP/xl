@@ -604,6 +604,201 @@ class DataTableSeederSpec extends FunSuite:
     assert((e6.toDouble - 10.0 / 3.0).abs < 1e-2, s"E6=$e6, expected ~${10.0 / 3.0}")
   }
 
+  // ===== GH-493 / GH-494: the what-if lane must evaluate the precedent cone =====
+
+  /**
+   * GH-494 gate lesson: a seeded-value assertion MUST reject text / error / non-finite reads
+   * explicitly. `math.abs(NaN - x) > tol` is false, so a NaN (or a "NM " text arm coerced by a
+   * lenient reader) silently satisfies a bare tolerance gate — that is exactly how the field
+   * dt-twin gate passed over 100%-text grids.
+   */
+  private def assertSeededNumber(sheet: Sheet, r: ARef, expected: Double, tol: Double): Unit =
+    val seeded = sheet.cells.get(r).map(_.value) match
+      case Some(CellValue.Formula(_, Some(inner), _)) => inner
+      case Some(CellValue.Formula(_, None, _)) => fail(s"${r.toA1} must seed a cached value")
+      case Some(other) => other
+      case None => fail(s"${r.toA1} must seed")
+    val actual = seeded match
+      case CellValue.Number(n) => n.toDouble
+      case other => fail(s"${r.toA1} must seed a NUMBER, got $other")
+    assert(actual.isFinite, s"${r.toA1} seeded a non-finite value: $actual")
+    assert((actual - expected).abs <= tol, s"${r.toA1}=$actual, expected ~$expected (tol $tol)")
+
+  test("GH-493: acyclic table with a CACHED intermediate precedent seeds a live grid, not FLAT") {
+    // B1 carries the cache a prior recalculation wrote (the CLI `recalc --tables` lane ALWAYS
+    // does this before seeding). Pre-GH-493 the what-if never propagated through B1's cache:
+    // every interior seeded 0*10+1 = 1 — a FLAT grid with zero warnings.
+    val sheet = Sheet("S")
+      .put(ref"A1", num(0)) // what-if input
+      .put(ref"B1", CellValue.Formula("A1*10", Some(num(0)))) // cached intermediate
+      .put(ref"F9", CellValue.Formula("B1+1")) // corner
+      .put(ref"E10", num(1))
+      .put(ref"E11", num(2))
+      .put(ref"E12", num(3))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    val report =
+      Workbook(sheet).seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    assertEquals(report.warnings, Vector.empty)
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.zip(Vector(11.0, 21.0, 31.0)).foreach { (r, expected) =>
+      assertSeededNumber(out, r, expected, 1e-9)
+    }
+    // The cone is re-derived on TEMP sheets only: B1 keeps its authored formula AND its cache.
+    assertEquals(out(ref"B1").value, CellValue.Formula("A1*10", Some(num(0))))
+    assertEquals(out(ref"A1").value, num(0))
+  }
+
+  test("GH-493: a cross-sheet cached intermediate is re-derived too") {
+    val other = Sheet("Calc").put(ref"A1", CellValue.Formula("S!A1*10", Some(num(0))))
+    val table = Sheet("S")
+      .put(ref"A1", num(0))
+      .put(ref"F9", CellValue.Formula("Calc!A1+1"))
+      .put(ref"E10", num(1))
+      .put(ref"E11", num(2))
+      .put(ref"E12", num(3))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    val seeded = Workbook(table, other)
+      .seedDataTables()
+      .fold(err => fail(s"seeding failed: $err"), identity)
+    val out = sheetNamed(seeded, "S")
+    interiorRefs.zip(Vector(11.0, 21.0, 31.0)).foreach { (r, expected) =>
+      assertSeededNumber(out, r, expected, 1e-9)
+    }
+    // The other sheet is never mutated by the what-if.
+    assertEquals(sheetNamed(seeded, "Calc")(ref"A1").value, other(ref"A1").value)
+  }
+
+  /**
+   * GH-494: the house-standard guarded headline over a cash-flow strip whose flows are UNCACHED
+   * formulas. `numericValues`/`dateValues` drop undecodable cells and SHRINK the array, so XIRR's
+   * length guard fires, ISERROR sees TRUE and the seeder banks `"NM "` into every interior.
+   */
+  private def xirrSeedSheet: Sheet =
+    Sheet("S")
+      .put(ref"A1", num(1)) // what-if input: exit multiple
+      .put(ref"D1", num(1000))
+      .put(ref"B1", CellValue.Formula("-D1")) // uncached entry flow
+      .put(ref"B2", CellValue.Formula("D1*A1")) // uncached, input-dependent exit flow
+      .put(ref"C1", CellValue.DateTime(LocalDate.of(2020, 1, 1).atStartOfDay))
+      .put(ref"C2", CellValue.DateTime(LocalDate.of(2022, 1, 1).atStartOfDay))
+      .put(ref"F9", CellValue.Formula("IF(ISERROR(XIRR(B1:B2,C1:C2)),\"NM \",XIRR(B1:B2,C1:C2))"))
+      .put(ref"E10", CellValue.Number(BigDecimal("1.5")))
+      .put(ref"E11", CellValue.Number(BigDecimal("2.0")))
+      .put(ref"E12", CellValue.Number(BigDecimal("2.5")))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+
+  test("GH-494: guarded XIRR corner seeds real rates, not its ISERROR text arm") {
+    val report = Workbook(xirrSeedSheet)
+      .seedDataTablesReport()
+      .fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    // 2020-01-01 -> 2022-01-01 is 731 days (2020 is a leap year): rate = m^(365/731) - 1.
+    Vector(1.5, 2.0, 2.5).zip(interiorRefs).foreach { (m, r) =>
+      assertSeededNumber(out, r, math.pow(m, 365.0 / 731.0) - 1.0, 1e-6)
+    }
+    assertEquals(report.warnings, Vector.empty, "a fully-evaluated guard must not warn")
+  }
+
+  test("GH-494: a guard that really resolves to its error arm reports ErrorGuardFired") {
+    // All-positive flows: XIRR has no sign change, so the guard legitimately fires for every
+    // axis combination. The seeded "NM " text is correct — but it must NEVER read as clean.
+    val sheet = xirrSeedSheet.put(ref"B1", CellValue.Formula("D1"))
+    val report =
+      Workbook(sheet).seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.foreach { r =>
+      assertEquals(
+        out.cells.get(r).map(_.value).collect {
+          case CellValue.Formula(_, Some(v), _) => v
+          case v => v
+        },
+        Some(CellValue.Text("NM ")),
+        s"${r.toA1} must bank the guard's text arm"
+      )
+    }
+    report.warnings match
+      case Vector(SeedTableWarning.ErrorGuardFired(s, tableRef, cells, guard)) =>
+        assertEquals(s, SheetName.unsafe("S"))
+        assertEquals(tableRef, range("F10:F12"))
+        assertEquals(cells, 3)
+        assert(guard.contains("XIRR"), s"the warning must name the guarded expression: $guard")
+      case other => fail(s"expected exactly one ErrorGuardFired, got $other")
+  }
+
+  test("GH-494: the circular lane evaluates the cone too (guarded XIRR over a cycle)") {
+    // The exit flow reads a declared cycle (average-balance idiom); the iterated lane strips the
+    // downstream caches, so without cone evaluation the stripped flow VANISHES from the array.
+    val sheet = xirrSeedSheet
+      .put(ref"B2", CellValue.Formula("G1*A1"))
+      .put(ref"G1", CellValue.Formula("1000+G2/1000", Some(num(1000))))
+      .put(ref"G2", CellValue.Formula("G1-1000", Some(num(0))))
+    val wb = Workbook(sheet).withCalcPr(tightCalcPr)
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    Vector(1.5, 2.0, 2.5).zip(interiorRefs).foreach { (m, r) =>
+      assertSeededNumber(out, r, math.pow(m * 1000.0 / 1000.0, 365.0 / 731.0) - 1.0, 1e-3)
+    }
+    assert(
+      !report.warnings.exists {
+        case _: SeedTableWarning.ErrorGuardFired => true
+        case _ => false
+      },
+      s"the guard must not fire once the cone is evaluated: ${report.warnings}"
+    )
+  }
+
+  test("GH-494: an IFERROR guard fires per COMBINATION, not per table") {
+    // Axis 0 divides by zero (guard fires, "n/a" seeded); axes 1 and 2 are ordinary numbers.
+    val sheet = Sheet("S")
+      .put(ref"A1", num(1))
+      .put(ref"F9", CellValue.Formula("IFERROR(1/A1,\"n/a\")"))
+      .put(ref"E10", num(0))
+      .put(ref"E11", num(1))
+      .put(ref"E12", num(2))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    val report =
+      Workbook(sheet).seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    assertSeededNumber(out, ref"F11", 1.0, 1e-9)
+    assertSeededNumber(out, ref"F12", 0.5, 1e-9)
+    report.warnings match
+      case Vector(SeedTableWarning.ErrorGuardFired(_, tableRef, cells, guard)) =>
+        assertEquals(tableRef, range("F10:F12"))
+        assertEquals(cells, 1, "only the divide-by-zero combination took the fallback")
+        assert(guard.contains("A1"), s"the warning must name the guarded expression: $guard")
+      case other => fail(s"expected exactly one ErrorGuardFired, got $other")
+  }
+
+  test("GH-493: a cone the interior cannot afford skips the table with a budget Skipped") {
+    // 1,000,000 interior cells x a 21-cell axis-dependent cone = 2.1e7 cell evaluations, past the
+    // cone budget: the table must skip untouched rather than grind (or seed a stale FLAT grid).
+    val base = Sheet("S").put(ref"A1", num(1)).put(ref"A2", num(1)) // the two what-if inputs
+    val chain = (0 until 21).foldLeft(base) { (s, i) =>
+      val from = if i == 0 then "A1" else ARef.from0(1, i - 1).toA1
+      s.put(ARef.from0(1, i), CellValue.Formula(s"$from+1")) // B1..B21
+    }
+    val interior = CellRange(ARef.from0(3, 4), ARef.from0(1002, 1003)) // 1000 x 1000
+    val huge: FormulaKind.DataTable = FormulaKind.DataTable(
+      ref = interior,
+      dt2D = true,
+      dtr = false,
+      r1 = Some(aref("A1")),
+      r2 = Some(aref("A2"))
+    )
+    val sheet = chain
+      .put(ref"C4", CellValue.Formula("B21")) // corner: 21 axis-dependent precedents
+      .put(ARef.from0(3, 4), CellValue.dataTable(huge, None))
+    val report =
+      Workbook(sheet).seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    assertEquals(out(ARef.from0(3, 4)).value, CellValue.dataTable(huge, None), "untouched")
+    report.warnings match
+      case Vector(SeedTableWarning.Skipped(_, tableRef, _, reason)) =>
+        assertEquals(tableRef, interior)
+        assert(reason.contains("cone budget"), s"the reason must name the budget: $reason")
+      case other => fail(s"expected exactly one Skipped, got $other")
+  }
+
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def zipEntry(bytes: Array[Byte], name: String): String =
     val zip = new ZipInputStream(new ByteArrayInputStream(bytes))

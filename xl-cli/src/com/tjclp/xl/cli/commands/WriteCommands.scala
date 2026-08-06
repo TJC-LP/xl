@@ -957,6 +957,9 @@ object WriteCommands:
     case SeedTableWarning.Skipped(sheet, ref, cells, reason) =>
       s"WARNING: data table ${ref.toA1} on '${sheet.value}': $cells interior cell(s) left " +
         s"unseeded — $reason"
+    case SeedTableWarning.ErrorGuardFired(sheet, ref, cells, guard) =>
+      s"WARNING: data table ${ref.toA1} on '${sheet.value}': $cells interior cell(s) seeded the " +
+        s"ERROR ARM of the source formula's guard ($guard) — verify the grid is not a fallback"
 
   /**
    * Fill cells with source value/formula (Excel Ctrl+D/Ctrl+R).
