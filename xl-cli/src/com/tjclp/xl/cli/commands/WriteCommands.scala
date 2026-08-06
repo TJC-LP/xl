@@ -1038,6 +1038,14 @@ object WriteCommands:
    * refuses. So `--no-recalc` leaves the edit's invalidated formulas uncached and says how many: a
    * missing `<v>` is recoverable by any recalculation, a wrong one is not, and a `data_only=True`
    * reader cannot tell a stale number from a fresh one.
+   *
+   * WHAT `preserved` DOES AND DOES NOT CERTIFY. It counts caches `StructuralEditor` did not
+   * invalidate, i.e. ones the PRE-EDIT dependency graph showed no path from to the edited sheet. It
+   * is not a proof of correctness: that graph misses any reference it cannot parse (GH-507).
+   * [[dropCachesBehindBlindNames]] withdraws the half of that class this layer can name; the rest,
+   * the same hole on the DEFAULT recalc path, and the diagnostics cone-scoping now swallows
+   * (GH-508) are tracked upstream. GH-509 is the design that would let a `--no-recalc` structural
+   * write keep its caches honestly, by marking the book `fullCalcOnLoad`.
    */
   private def countCachePreservation(edited: Workbook): CachePreservation =
     edited.sheets.foldLeft(CachePreservation.empty) { (tally, sheet) =>
@@ -1048,6 +1056,67 @@ object WriteCommands:
           case _ => seen
       }
     }
+
+  /** Whole-token match for a defined name: the Excel name charset, no cell-ref punctuation. */
+  private val nameToken = """[A-Za-z_\\][A-Za-z0-9_.\\]*""".r
+
+  /**
+   * Formula text with every string literal blanked, so `SUM(Multi)` counts as a reference to
+   * `Multi` but `="Multi"` does not. `""` inside a literal toggles twice and stays inside — the
+   * same net state as an escaped quote, which is all this scan needs.
+   */
+  private def outsideLiterals(text: String): String =
+    text
+      .foldLeft(("", false)) { case ((acc, inQuote), ch) =>
+        if ch == '"' then (acc + " ", !inQuote)
+        else if inQuote then (acc + " ", inQuote)
+        else (acc + ch, inQuote)
+      }
+      ._1
+
+  /** Case-insensitive, whole-token: does this formula text name any of `names`? */
+  private def mentionsAnyName(text: String, names: Set[String]): Boolean =
+    nameToken.findAllIn(outsideLiterals(text)).exists(t => names.contains(t.toLowerCase))
+
+  /**
+   * GH-507: drop the caches the dependency graph was structurally unable to judge.
+   *
+   * `StructuralEditor.staleCaches` closes over the STATIC graph. A defined name whose `refersTo`
+   * `FormulaParser` REJECTS — a multi-area name (`Data!$A$1:$A$3,Data!$A$8:$A$10`), an intersection
+   * name (`Data!$A$1:$A$8 Data!$A$5:$A$10`), a `#REF!`-ed name — contributes no `TExpr.NameRef`
+   * edge, so a formula reading the edited sheet only through that name has NO precedents at all.
+   * `staleCaches` provably never considered it: the graph's silence about such a reader is not
+   * evidence of independence, it is evidence the graph could not look.
+   *
+   * So where the graph is KNOWN BLIND, `--no-recalc` refuses to trust it and strips the cache. Note
+   * what this is not: it is not another local "the text didn't change, so the value didn't" guard
+   * of the kind round 3 correctly rejected — it is that argument's complement, and it makes the
+   * output strictly weaker (a claim withdrawn), never stronger. Both directions of the escape are
+   * covered, including the intersection name whose text the shift leaves VERBATIM (GH-507 again),
+   * so a before/after name-text diff would miss it; the union of PRE- and POST-edit names is
+   * scanned because either revision of a name can be the unparseable one.
+   *
+   * Reachable half only. A structured reference or an external link breaks the same closure without
+   * being a defined name, and the DEFAULT recalc path has the identical hole (GH-507); neither is
+   * in reach of ~15 lines in the CLI.
+   */
+  private def dropCachesBehindBlindNames(before: Workbook, edited: Workbook): Workbook =
+    val blind = (before.metadata.definedNames ++ edited.metadata.definedNames).iterator
+      .filter(dn => FormulaParser.parse(dn.formula).isLeft)
+      .map(_.name.toLowerCase)
+      .toSet
+    if blind.isEmpty then edited
+    else
+      edited.sheets.foldLeft(edited) { (book, sheet) =>
+        val (stripped, changed) = sheet.cells.foldLeft((sheet, false)) {
+          case ((s, dirty), (r, cell)) =>
+            cell.value match
+              case CellValue.Formula(text, Some(_), kind) if mentionsAnyName(text, blind) =>
+                (s.put(r, CellValue.Formula(text, None, kind)), true)
+              case _ => (s, dirty)
+        }
+        if changed then book.put(stripped) else book
+      }
 
   /** Restrict a whole-book result to the cone, so the summary counts what actually changed. */
   private def scopeToCone(
@@ -1871,6 +1940,10 @@ object WriteCommands:
    * rewrites formula text, moves cells and rewrites defined names, so the caches it invalidated are
    * reported as dropped rather than quietly re-asserted (see [[countCachePreservation]] for why no
    * local predicate can soundly re-assert them).
+   *
+   * What rides through is whatever `StructuralEditor` left cached — which trusts the static
+   * dependency graph. [[dropCachesBehindBlindNames]] runs first, before the count, and withdraws
+   * the caches that graph was structurally unable to judge (GH-507).
    */
   private def writeStructural(
     before: Workbook,
@@ -1884,7 +1957,9 @@ object WriteCommands:
     val recalcOpt = if policy.noRecalc then None else Some(scopedRecalc(before, edited))
     val (finalWb, recalcLine) = recalcOpt match
       case Some((wb, result)) => (wb, formatRecalcSummary(result))
-      case None => (edited, countCachePreservation(edited).note)
+      case None =>
+        val judged = dropCachesBehindBlindNames(before, edited)
+        (judged, countCachePreservation(judged).note)
     writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
       strictGate(
         policy,

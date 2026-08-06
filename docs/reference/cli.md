@@ -106,8 +106,14 @@ How completely caches survive depends on the verb:
   ```
 
   Reopening the file in Excel, or a later `xl recalc`, fills those back in. A missing `<v>` is a
-  visible gap that any recalculation repairs; a wrong one is silent and permanent, so xl never
-  writes the wrong one. **If you need every formula cached after a structural edit, do not pass
+  visible gap that any recalculation repairs; a wrong one is silent and permanent, which is why xl
+  never **re-asserts** a cache the edit invalidated. What it does not claim: a cache rides through
+  only when the pre-edit dependency graph shows no path from it to the edited sheet, and a
+  reference that graph cannot resolve — a multi-area or intersection defined name, a structured
+  reference, an external link — can hide such a path. xl withdraws the caches of formulas that
+  name a defined name it cannot parse, precisely because the graph is blind there; the remaining
+  cases are tracked in [#507](https://github.com/TJC-LP/xl/issues/507) and affect a normal
+  recalculating write too. **If you need every formula cached after a structural edit, do not pass
   `--no-recalc`.**
 
 ```bash

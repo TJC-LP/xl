@@ -10,6 +10,7 @@ import com.tjclp.xl.{CellRange, Workbook, Sheet, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
+import com.tjclp.xl.formula.FormulaParser
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -1201,6 +1202,140 @@ class BatchRecalcSpec extends FunSuite:
       broken.cachedValue,
       None,
       s"a cache reached through a #REF!-ed name must be dropped: $broken"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  /** Data!A1:A10 = 1..10 plus a workbook-scoped name the parser cannot read, summed elsewhere. */
+  private def blindNameWorkbook(refersTo: String, cached: Int): Workbook =
+    val data = (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+    }
+    Workbook(
+      data,
+      Sheet("Other")
+        .put(ref"B2", CellValue.Formula("SUM(Blind)", Some(CellValue.Number(BigDecimal(cached)))))
+    ).withDefinedName("Blind", refersTo)
+
+  test("GH-507: --no-recalc drops a cache reached through a MULTI-AREA (union) defined name") {
+    // Round-4 escape. `Data!$A$1:$A$3,Data!$A$8:$A$10` is an ordinary Excel construct (Ctrl-click
+    // two areas) that FormulaParser rejects, so it contributes no NameRef edge and B2 has no
+    // precedents at all — StructuralEditor.staleCaches provably never considered it. Deleting
+    // Data row 2 makes the truth 1+3 + 8+9+10 = 31, but the file certified 33.
+    val wb = blindNameWorkbook("Data!$A$1:$A$3,Data!$A$8:$A$10", 33)
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .deleteRows(
+        wb,
+        wb.sheets.find(_.name.value == "Data"),
+        2,
+        1,
+        out,
+        config,
+        false,
+        preserveCaches
+      )
+      .unsafeRunSync()
+
+    assert(
+      FormulaParser.parse("Data!$A$1:$A$3,Data!$A$8:$A$10").isLeft,
+      "premise: the parser must still reject the union form (else the graph is not blind here)"
+    )
+    val summed = formulaOn(readBack(out), "Other", ref"B2")
+    assertEquals(summed.expression, "SUM(Blind)", "the formula text itself must ride verbatim")
+    assertEquals(
+      summed.cachedValue,
+      None,
+      s"a cache behind a name the graph cannot parse must not ride through: $summed"
+    )
+    assert(!summary.contains("none dropped"), s"it must be counted, not certified: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-507: --no-recalc drops a cache behind an INTERSECTION name whose text never changes") {
+    // Same class, and the reason a before/after name-text diff is NOT a sufficient detector:
+    // shiftDefinedNameText leaves the space-separated intersection form verbatim, so the name is
+    // byte-identical before and after. Pre-edit A1:A8 ∩ A5:A10 = A5:A8 = 5+6+7+8 = 26; after
+    // deleting Data row 2 the same intersection is 6+7+8+9 = 30.
+    val wb = blindNameWorkbook("Data!$A$1:$A$8 Data!$A$5:$A$10", 26)
+    val out = tempXlsx()
+
+    WriteCommands
+      .deleteRows(
+        wb,
+        wb.sheets.find(_.name.value == "Data"),
+        2,
+        1,
+        out,
+        config,
+        false,
+        preserveCaches
+      )
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    assertEquals(
+      written.metadata.definedNames.find(_.name == "Blind").map(_.formula),
+      Some("Data!$A$1:$A$8 Data!$A$5:$A$10"),
+      "premise: the name text is unchanged, so no name-diff guard could fire (GH-507)"
+    )
+    val summed = formulaOn(written, "Other", ref"B2")
+    assertEquals(
+      summed.cachedValue,
+      None,
+      s"an unchanged blind name is still blind — the cache must be withdrawn: $summed"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-507: a blind name withdraws only the caches that actually mention it") {
+    // The strip is whole-token and case-insensitive, and it must not become a book-wide nuke:
+    // `SUM(BLIND)` matches, the text "Blind" inside a string literal does not, `Blindfold` does
+    // not, and a formula naming no blind name at all keeps its cache.
+    val data = (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+    }
+    val wb = Workbook(
+      data,
+      Sheet("Other")
+        .put(ref"B2", CellValue.Formula("SUM(BLIND)", Some(CellValue.Number(33))))
+        .put(ref"B3", CellValue.Formula("Blindfold*2", Some(CellValue.Number(BigDecimal("0.16")))))
+        .put(ref"B4", CellValue.Formula("\"Blind\"&\"x\"", Some(CellValue.Text("Blindx"))))
+        .put(ref"B5", CellValue.Formula("1+1", Some(CellValue.Number(2))))
+    ).withDefinedName("Blind", "Data!$A$1:$A$3,Data!$A$8:$A$10")
+      .withDefinedName("Blindfold", "0.08")
+    val out = tempXlsx()
+
+    WriteCommands
+      .deleteRows(
+        wb,
+        wb.sheets.find(_.name.value == "Data"),
+        2,
+        1,
+        out,
+        config,
+        false,
+        preserveCaches
+      )
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    assertEquals(formulaOn(written, "Other", ref"B2").cachedValue, None, "case-insensitive match")
+    assertEquals(
+      formulaOn(written, "Other", ref"B3").cachedValue,
+      Some(CellValue.Number(BigDecimal("0.16"))),
+      "Blindfold is a different whole token and its own definition (a constant) parses"
+    )
+    assertEquals(
+      formulaOn(written, "Other", ref"B4").cachedValue,
+      Some(CellValue.Text("Blindx")),
+      "a name inside a string literal is not a reference"
+    )
+    assertEquals(
+      formulaOn(written, "Other", ref"B5").cachedValue,
+      Some(CellValue.Number(2)),
+      "an unrelated independent formula keeps its cache"
     )
     Files.deleteIfExists(out)
   }

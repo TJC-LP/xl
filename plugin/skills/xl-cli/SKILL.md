@@ -675,8 +675,13 @@ Recalculation skipped (--no-recalc): 0 cached value(s) preserved, 11 formula(s) 
 edit left uncached (recalculate externally)
 ```
 
-Excel (or a later `xl recalc`) fills those in. If you need every formula cached after a structural
-edit, do not pass `--no-recalc`.
+Excel (or a later `xl recalc`) fills those in. xl never **re-asserts** a cache the edit invalidated,
+but it does not certify the ones that ride through: a cache survives only when the pre-edit
+dependency graph shows no path from it to the edited sheet, and a reference that graph cannot
+resolve (a multi-area or intersection defined name, a structured reference, an external link) can
+hide such a path — caches behind an unparseable defined name are withdrawn for that reason, the rest
+is [#507](https://github.com/TJC-LP/xl/issues/507). If you need every formula cached after a
+structural edit, do not pass `--no-recalc`.
 
 #### Strict exit codes for pipelines
 
