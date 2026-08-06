@@ -1096,15 +1096,28 @@ object WriteCommands:
    * so a before/after name-text diff would miss it; the union of PRE- and POST-edit names is
    * scanned because either revision of a name can be the unparseable one.
    *
+   * The blind set is closed TRANSITIVELY over the name table: a name that merely ALIASES a blind
+   * one (`Outer -> Blind`, `Alias -> SUM(Blind)`, `L2 -> L1 -> Blind`) parses perfectly well, so it
+   * is not directly blind — but resolving it still requires the unparseable definition, and the
+   * reading formula never mentions the blind name textually. A single non-transitive pass therefore
+   * misses every aliased reader. The fixpoint costs nothing on the common book: with no unparseable
+   * name the seed set is empty, `mentionsAnyName` against an empty set is always false, and the
+   * closure terminates after one trivial iteration.
+   *
    * Reachable half only. A structured reference or an external link breaks the same closure without
-   * being a defined name, and the DEFAULT recalc path has the identical hole (GH-507); neither is
-   * in reach of ~15 lines in the CLI.
+   * being a defined name, and the DEFAULT recalc path has the identical hole; both stay GH-507.
    */
   private def dropCachesBehindBlindNames(before: Workbook, edited: Workbook): Workbook =
-    val blind = (before.metadata.definedNames ++ edited.metadata.definedNames).iterator
-      .filter(dn => FormulaParser.parse(dn.formula).isLeft)
-      .map(_.name.toLowerCase)
-      .toSet
+    val allNames = (before.metadata.definedNames ++ edited.metadata.definedNames).toList
+    @annotation.tailrec
+    def closure(acc: Set[String]): Set[String] =
+      val next = acc ++ allNames.collect {
+        case dn if mentionsAnyName(dn.formula, acc) => dn.name.toLowerCase
+      }
+      if next.size == acc.size then acc else closure(next)
+    val blind = closure(
+      allNames.filter(dn => FormulaParser.parse(dn.formula).isLeft).map(_.name.toLowerCase).toSet
+    )
     if blind.isEmpty then edited
     else
       edited.sheets.foldLeft(edited) { (book, sheet) =>

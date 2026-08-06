@@ -1217,6 +1217,54 @@ class BatchRecalcSpec extends FunSuite:
         .put(ref"B2", CellValue.Formula("SUM(Blind)", Some(CellValue.Number(BigDecimal(cached)))))
     ).withDefinedName("Blind", refersTo)
 
+  test("GH-507: --no-recalc drops a cache reached through an ALIAS of a blind defined name") {
+    // Round-5 escape: the blind set must be TRANSITIVE. `Outer -> Blind` parses fine, so `Outer`
+    // is not itself blind, and `SUM(Outer)` never mentions `Blind` textually — a single
+    // non-transitive pass misses it entirely. Resolving Outer still requires Blind's unparseable
+    // definition, so the graph is just as blind here. Truth after deleting Data row 2 is 31.
+    val data = (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+    }
+    val wb = Workbook(
+      data,
+      Sheet("Other")
+        .put(ref"B2", CellValue.Formula("SUM(Outer)", Some(CellValue.Number(BigDecimal(33)))))
+    ).withDefinedName("Blind", "Data!$A$1:$A$3,Data!$A$8:$A$10")
+      .withDefinedName("Outer", "Blind")
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .deleteRows(
+        wb,
+        wb.sheets.find(_.name.value == "Data"),
+        2,
+        1,
+        out,
+        config,
+        false,
+        preserveCaches
+      )
+      .unsafeRunSync()
+
+    assert(
+      FormulaParser.parse("Blind").isRight,
+      "premise: the ALIAS itself must parse (else it would be caught without the closure)"
+    )
+    assert(
+      FormulaParser.parse("Data!$A$1:$A$3,Data!$A$8:$A$10").isLeft,
+      "premise: the aliased name must still be unparseable (else the graph is not blind here)"
+    )
+    val summed = formulaOn(readBack(out), "Other", ref"B2")
+    assertEquals(summed.expression, "SUM(Outer)", "the formula text itself must ride verbatim")
+    assertEquals(
+      summed.cachedValue,
+      None,
+      s"a cache behind an ALIAS of an unparseable name must not ride through: $summed"
+    )
+    assert(!summary.contains("none dropped"), s"it must be counted, not certified: $summary")
+    Files.deleteIfExists(out)
+  }
+
   test("GH-507: --no-recalc drops a cache reached through a MULTI-AREA (union) defined name") {
     // Round-4 escape. `Data!$A$1:$A$3,Data!$A$8:$A$10` is an ordinary Excel construct (Ctrl-click
     // two areas) that FormulaParser rejects, so it contributes no NameRef edge and B2 has no
