@@ -141,7 +141,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `delete-cols` | `<at-col> [count]` | Delete columns; `#REF!` on lost references (requires `-o`) |
 | `batch` | `<file\|-> [--dry-run]` | Apply multiple operations from JSON (requires `-o`; `--dry-run` validates without a file) |
 | `diff` | `-g <file2> [--format markdown\|json]` | Compare two workbooks; exit 0 identical, 1 differs, 2 error |
-| `lint` | `[<file>] [--format text\|json]` | Validate package structure (child order, r:id resolution, over-max refs); positional file or `-f`; exit 0 clean, 1 findings, 2 error |
+| `lint` | `[<file>] [--format text\|json]` | Validate package structure (child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, `<f>` canon); positional file or `-f`; exit 0 clean, 1 findings, 2 error |
 
 ---
 
@@ -210,6 +210,7 @@ View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG
 | `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
 | `--limit` | int | No | 50 | Max rows to display (0 = no limit). When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (with `--stream` the notice goes to stderr instead); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
 | `--skip-empty` | flag | No | false | Skip empty cells (JSON) or empty rows/columns (tabular) |
+| `--skip-hidden` | flag | No | false | Omit hidden rows/columns. **Default renders them** — a range you named never silently loses cells (GH-474) |
 | `--show-labels` | flag | No | false | Include column letters and row numbers |
 | `--header-row` | int | No | — | Use values from this row as keys in JSON output (1-based) |
 | `--raster-output` | path | For raster | — | Output file (required for png/jpeg/webp/pdf) |
@@ -227,6 +228,23 @@ View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG
 | 2 | COGS        |         | $400,000   |         |
 | 4 | Gross Profit|         | =C1-C2     |         |
 ```
+
+**Hidden rows and columns** (GH-474): a range you addressed explicitly renders in full — hidden
+lines included — and every data format carries a marker:
+
+| Format | Marker |
+|--------|--------|
+| markdown | trailing `note: range includes hidden row(s) … and column(s) …` line |
+| csv | the same note on **stderr** (stdout stays machine-parseable) |
+| json | top-level `"hiddenRows": [5]` / `"hiddenCols": ["C"]` fields (emitted only when the range holds hidden lines) |
+
+`--skip-hidden` restores the visible-only view, and the same marker then names what was dropped
+(`note: omitted hidden …`). `html`/`svg`/`png`/`jpeg`/`webp`/`pdf` are pictures of the sheet: they
+mirror Excel's display and always omit hidden lines. Streaming (`--stream`) never read row/column
+properties, so it has always rendered every addressed cell.
+
+Why the default: `xl search` finds a value in a hidden row and `xl cell C5` reads it, so a `view`
+that silently elided the same cell read as file corruption.
 
 ---
 
@@ -1043,7 +1061,20 @@ Apply multiple operations atomically from JSON input.
 
 // Custom date format
 {"op": "put", "ref": "A4", "value": "2025-11-10", "format": "yyyy-mm-dd"}
+
+// Quoted-literal / semicolon-only codes are codes too (the 1/0 toggle-flag idiom)
+{"op": "put", "ref": "A5", "value": 1, "format": "\"Yes \";;\"No \""}
 ```
+
+**Unrecognized format strings** (GH-475): a string that is neither a known name nor Excel
+format-code-shaped is a typo far more often than a code.
+- On the put/putf `format` hint it is **ignored, with a warning on stderr** naming the string and
+  listing the known names (`format: "curency"` → warning, cell stays General).
+- On the `style` op's `numFormat` it is still **applied as a custom code** (Excel, not xl, is the
+  authority on codes) but warns the same way.
+
+The `--stream` batch path applies exactly the same table, including custom codes — it used to know
+only six names and dropped everything else in silence.
 
 **Smart String Detection** (enabled by default):
 
@@ -1216,7 +1247,8 @@ xl -f deliverable.xlsx lint --format json        # Stable schema for pipelines
 xl -f deliverable.xlsx lint && echo "safe to send"
 ```
 
-**What it flags**:
+**What it flags** (the complete `LintCategory` roster — a test pins this list against
+`LintCategory.slug`, so it cannot drift):
 - **`child-order`** — child elements of `xl/workbook.xml` (CT_Workbook) or a worksheet
   (CT_Worksheet) out of ECMA-376 schema sequence (e.g. `<externalReferences>` after
   `<extLst>`)
@@ -1224,6 +1256,13 @@ xl -f deliverable.xlsx lint && echo "safe to send"
   legacyDrawing, hyperlink, tablePart, …) with no entry in the paired `.rels`
 - **`wrong-rel-type`** — the `r:id` resolves, but to a relationship of the wrong type
 - **`missing-part`** — the relationship target part is absent from the package
+- **`missing-content-type`** — a present-and-referenced part has neither an `<Override>` nor a
+  matching extension `<Default>` in `[Content_Types].xml`
+- **`ref-out-of-bounds`** — a `ref`/`sqref`/`dimension` token past row 1048576 or column XFD
+- **`data-table-torn`** — a `<f t="dataTable">` record whose grid no longer holds together
+  (missing record cell, inconsistent inputs, interior no longer matching the record)
+- **`data-table-unseeded`** — an uncached data-table interior in a `calcMode="autoNoTable"`
+  book: Excel does not recompute data tables on open, so the grid opens BLANK
 - **`formula-leading-equals`** — `<f>` text stored with the display form's leading `=`
   (non-spec; strict readers like openpyxl misread it — re-writing the file with xl heals it)
 

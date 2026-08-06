@@ -111,6 +111,69 @@ object RendererCommon:
     }
 
   /**
+   * GH-474: column indices to render for a span — every column unless `skipHidden` asked for the
+   * visible-only view.
+   */
+  def renderedColumns(
+    sheet: Sheet,
+    startCol: Int,
+    endCol: Int,
+    skipHidden: Boolean
+  ): IndexedSeq[Int] =
+    if skipHidden then visibleColumns(sheet, startCol, endCol) else startCol to endCol
+
+  /** GH-474: row indices to render for a span (see [[renderedColumns]]). */
+  def renderedRows(sheet: Sheet, startRow: Int, endRow: Int, skipHidden: Boolean): IndexedSeq[Int] =
+    if skipHidden then visibleRows(sheet, startRow, endRow) else startRow to endRow
+
+  /** 0-based indices of hidden columns inside a span. */
+  def hiddenColumns(sheet: Sheet, startCol: Int, endCol: Int): IndexedSeq[Int] =
+    (startCol to endCol).filter(col => sheet.getColumnProperties(Column.from0(col)).hidden)
+
+  /** 0-based indices of hidden rows inside a span. */
+  def hiddenRows(sheet: Sheet, startRow: Int, endRow: Int): IndexedSeq[Int] =
+    (startRow to endRow).filter(row => sheet.getRowProperties(Row.from0(row)).hidden)
+
+  /** Cap long index listings so the notice stays one readable line. */
+  private def summarizeIndices(label: String, items: IndexedSeq[String]): String =
+    val shown = items.take(10).mkString(", ")
+    if items.size > 10 then s"$label $shown, … (${items.size} total)" else s"$label $shown"
+
+  /**
+   * GH-474: the hidden-line marker for a rendered range, or None when the range holds no hidden
+   * rows/columns.
+   *
+   * A viewer that drops data from a range the caller named reads as corruption (`search` finds the
+   * cell, `cell` reads it, `view` showed nothing). Hidden lines are therefore rendered by default
+   * and MARKED; `--skip-hidden` opts back into elision and the marker then names what was dropped.
+   *
+   * Rendered as a trailer line after markdown tables, on stderr for machine-parseable formats
+   * (CSV), and as structured fields in JSON.
+   */
+  def hiddenNotice(
+    sheet: Sheet,
+    startCol: Int,
+    endCol: Int,
+    startRow: Int,
+    endRow: Int,
+    skipHidden: Boolean
+  ): Option[String] =
+    val rows = hiddenRows(sheet, startRow, endRow).map(r => (r + 1).toString)
+    val cols = hiddenColumns(sheet, startCol, endCol).map(c => Column.from0(c).toLetter)
+    if rows.isEmpty && cols.isEmpty then None
+    else
+      val parts = List(
+        Option.when(rows.nonEmpty)(summarizeIndices("row(s)", rows)),
+        Option.when(cols.nonEmpty)(summarizeIndices("column(s)", cols))
+      ).flatten.mkString(" and ")
+      Some(
+        if skipHidden then
+          s"note: omitted hidden $parts from the requested range (drop --skip-hidden to include them)"
+        else
+          s"note: range includes hidden $parts — shown because the range was explicitly requested (use --skip-hidden to omit)"
+      )
+
+  /**
    * Filter columns to only include non-empty ones.
    *
    * @param sheet

@@ -29,13 +29,17 @@ object Markdown:
    * @param skipEmpty
    *   If true, skip entirely empty rows and columns from output (reduces table size for sparse
    *   ranges)
+   * @param skipHidden
+   *   GH-474: if true, omit hidden rows/columns; default false renders them (an explicitly
+   *   requested range never silently loses cells)
    */
   def renderRange(
     sheet: Sheet,
     range: CellRange,
     showFormulas: Boolean = false,
     skipEmpty: Boolean = false,
-    evalFormulas: Boolean = false
+    evalFormulas: Boolean = false,
+    skipHidden: Boolean = false
   ): String =
     val sb = new StringBuilder
     val startCol = range.start.col.index0
@@ -43,9 +47,9 @@ object Markdown:
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
 
-    // Filter out hidden columns and rows
-    val visibleCols = RendererCommon.visibleColumns(sheet, startCol, endCol)
-    val visibleRows = RendererCommon.visibleRows(sheet, startRow, endRow)
+    // GH-474: hidden rows/columns render unless --skip-hidden asked for the visible-only view
+    val visibleCols = RendererCommon.renderedColumns(sheet, startCol, endCol, skipHidden)
+    val visibleRows = RendererCommon.renderedRows(sheet, startRow, endRow, skipHidden)
 
     // Filter empty columns/rows if skipEmpty is true
     val nonEmptyCols =

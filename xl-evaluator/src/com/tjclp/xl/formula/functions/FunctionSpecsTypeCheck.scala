@@ -71,3 +71,38 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
         case Right(ExprValue.Cell(CellValue.Empty)) => Right(true)
         case Right(_) => Right(false)
     }
+
+  /**
+   * GH-476: N(value) — Excel's information-family coercion, absent from the roster and therefore an
+   * UnknownFunction host error on ordinary banker files.
+   *
+   * Excel's table: numbers pass through, dates become their serial, TRUE/FALSE become 1/0, text and
+   * blanks become 0, and an error value propagates (the Left channel carries it here).
+   */
+  val n: FunctionSpec[BigDecimal] { type Args = UnaryCellValue } =
+    FunctionSpec.simple[BigDecimal, UnaryCellValue](
+      "N",
+      Arity.one,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (expr, ctx) =>
+      evalValue(ctx, expr).map(numericCoercionN)
+    }
+
+  private def numericCoercionN(value: ExprValue): BigDecimal =
+    value match
+      case ExprValue.Number(x) => x
+      case ExprValue.Bool(b) => if b then BigDecimal(1) else BigDecimal(0)
+      case ExprValue.Date(d) =>
+        BigDecimal(CellValue.dateTimeToExcelSerial(d.atStartOfDay()))
+      case ExprValue.DateTime(dt) => BigDecimal(CellValue.dateTimeToExcelSerial(dt))
+      case ExprValue.Text(_) => BigDecimal(0)
+      case ExprValue.Opaque(_) => BigDecimal(0)
+      case ExprValue.Cell(cv) => numericCoercionNCell(cv)
+
+  private def numericCoercionNCell(cv: CellValue): BigDecimal =
+    cv match
+      case CellValue.Number(x) => x
+      case CellValue.Bool(b) => if b then BigDecimal(1) else BigDecimal(0)
+      case CellValue.DateTime(dt) => BigDecimal(CellValue.dateTimeToExcelSerial(dt))
+      case CellValue.Formula(_, Some(cached), _) => numericCoercionNCell(cached)
+      case _ => BigDecimal(0)

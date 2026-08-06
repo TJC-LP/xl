@@ -136,6 +136,8 @@ trait FunctionSpecsBase:
   // GH-424 CELL: info_type + optional positional reference (never evaluated — its address is
   // the datum)
   type CellArgs = (TExpr[String], Option[AnyExpr])
+  // GH-476 HYPERLINK: link_location + optional friendly_name (the displayed text)
+  type HyperlinkArgs = (TExpr[String], Option[TExpr[String]])
   type XnpvArgs = (TExpr[BigDecimal], TExpr.RangeLocation, TExpr.RangeLocation)
   type XirrArgs = (TExpr.RangeLocation, TExpr.RangeLocation, Option[TExpr[BigDecimal]])
   type TvmArgs = (
@@ -158,8 +160,11 @@ trait FunctionSpecsBase:
   protected def evalAny(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
     // Resolve PolyRef/SheetPolyRef to typed Ref before evaluation.
     // This fixes cell references used as criteria in SUMIFS, COUNTIF, etc.
+    // GH-476: asResolvedValueExpr pushes through the transparent UnaryPlus wrapper too, so the
+    // house `=+Sheet!Ref` style resolves in Any-typed argument positions (=IF(1=1,+S2!G1,0)).
     val resolved = expr match
-      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef => TExpr.asResolvedValueExpr(expr)
+      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef | _: TExpr.UnaryPlus[?] =>
+        TExpr.asResolvedValueExpr(expr)
       case other => other
     ctx.evalExpr[Any](resolved.asInstanceOf[TExpr[Any]])
 
@@ -313,12 +318,19 @@ trait FunctionSpecsBase:
       case CellValue.Formula(_, Some(cached), _) => extractTextForMatch(cached)
       case _ => None
 
-  /** Extract numeric for matching, parsing text as numbers. */
+  /**
+   * Extract numeric for matching, parsing text as numbers.
+   *
+   * GH-488: a DateTime cell yields its Excel serial, so a date-typed VLOOKUP/HLOOKUP key finds a
+   * date key column (dates ARE numbers in Excel's comparison plane — same judgment as
+   * [[normalizeLookupValue]] and GH-449's numeric-boundary coercion).
+   */
   protected def extractNumericForMatch(cv: CellValue): Option[BigDecimal] =
     cv match
       case CellValue.Number(n) => Some(n)
       case CellValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).toOption
       case CellValue.Bool(b) => Some(ArrayArithmetic.boolToNumeric(b))
+      case CellValue.DateTime(dt) => Some(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
       case CellValue.Formula(_, Some(cached), _) => extractNumericForMatch(cached)
       case _ => None
 

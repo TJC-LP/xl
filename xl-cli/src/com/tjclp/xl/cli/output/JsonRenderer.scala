@@ -67,6 +67,11 @@ object JsonRenderer:
    *   rendered without the limit. Emits top-level `"truncated": true` and `"totalRows": N` fields.
    *   Fields are omitted entirely when output is not clipped, keeping the payload byte-identical to
    *   previous releases for unclipped output.
+   * @param skipHidden
+   *   GH-474: if true, omit hidden rows/columns from the payload; default false renders them.
+   *   Either way the hidden lines inside the range are reported in the top-level
+   *   `hiddenRows`/`hiddenCols` fields (omitted when the range holds none), so JSON never drops an
+   *   addressed cell in silence.
    */
   def renderRange(
     sheet: Sheet,
@@ -75,7 +80,8 @@ object JsonRenderer:
     skipEmpty: Boolean = false,
     headerRow: Option[Int] = None,
     evalFormulas: Boolean = false,
-    truncatedTotalRows: Option[Int] = None
+    truncatedTotalRows: Option[Int] = None,
+    skipHidden: Boolean = false
   ): String =
     headerRow match
       case Some(headerRowNum) =>
@@ -85,10 +91,11 @@ object JsonRenderer:
           skipEmpty,
           headerRowNum,
           evalFormulas,
-          truncatedTotalRows
+          truncatedTotalRows,
+          skipHidden
         )
       case None =>
-        renderAsRows(sheet, range, skipEmpty, evalFormulas, truncatedTotalRows)
+        renderAsRows(sheet, range, skipEmpty, evalFormulas, truncatedTotalRows, skipHidden)
 
   /**
    * Render range as array of records with header row values as keys.
@@ -99,7 +106,8 @@ object JsonRenderer:
     skipEmpty: Boolean,
     headerRowNum: Int,
     evalFormulas: Boolean,
-    truncatedTotalRows: Option[Int]
+    truncatedTotalRows: Option[Int],
+    skipHidden: Boolean
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -107,8 +115,8 @@ object JsonRenderer:
     val endRow = range.end.row.index0
     val headerRowIdx = headerRowNum - 1 // Convert to 0-based
 
-    // Filter hidden columns
-    val visibleCols = RendererCommon.visibleColumns(sheet, startCol, endCol)
+    // GH-474: hidden columns render unless --skip-hidden asked for the visible-only view
+    val visibleCols = RendererCommon.renderedColumns(sheet, startCol, endCol, skipHidden)
 
     // Get header values
     val headers: Map[Int, String] = visibleCols.flatMap { colIdx =>
@@ -121,14 +129,16 @@ object JsonRenderer:
       }
     }.toMap
 
-    // Filter out hidden rows and header row itself
-    val dataRows = RendererCommon.visibleRows(sheet, startRow, endRow).filterNot(_ == headerRowIdx)
+    // GH-474: hidden rows render unless --skip-hidden; the header row itself is never a record
+    val dataRows =
+      RendererCommon.renderedRows(sheet, startRow, endRow, skipHidden).filterNot(_ == headerRowIdx)
 
     val sb = new StringBuilder
     sb.append("{\n")
     sb.append(s"""  "sheet": ${escapeJsonString(sheet.name.value)},\n""")
     sb.append(s"""  "range": "${range.toA1}",\n""")
     appendTruncationFields(sb, truncatedTotalRows)
+    appendHiddenFields(sb, sheet, startCol, endCol, startRow, endRow)
     sb.append("""  "records": [""")
 
     val recordJsons = dataRows.flatMap { rowIdx =>
@@ -170,22 +180,24 @@ object JsonRenderer:
     range: CellRange,
     skipEmpty: Boolean,
     evalFormulas: Boolean,
-    truncatedTotalRows: Option[Int]
+    truncatedTotalRows: Option[Int],
+    skipHidden: Boolean
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
 
-    // Filter hidden rows/cols (same as Markdown renderer)
-    val visibleCols = RendererCommon.visibleColumns(sheet, startCol, endCol)
-    val visibleRows = RendererCommon.visibleRows(sheet, startRow, endRow)
+    // GH-474: hidden rows/cols render unless --skip-hidden (same as Markdown renderer)
+    val visibleCols = RendererCommon.renderedColumns(sheet, startCol, endCol, skipHidden)
+    val visibleRows = RendererCommon.renderedRows(sheet, startRow, endRow, skipHidden)
 
     val sb = new StringBuilder
     sb.append("{\n")
     sb.append(s"""  "sheet": ${escapeJsonString(sheet.name.value)},\n""")
     sb.append(s"""  "range": "${range.toA1}",\n""")
     appendTruncationFields(sb, truncatedTotalRows)
+    appendHiddenFields(sb, sheet, startCol, endCol, startRow, endRow)
     sb.append("""  "rows": [""")
 
     val rowJsons = visibleRows.flatMap { rowIdx =>
@@ -246,6 +258,27 @@ object JsonRenderer:
       sb.append("  \"truncated\": true,\n")
       sb.append(s"""  "totalRows": $total,\n""")
     }
+
+  /**
+   * GH-474: report the hidden rows/columns inside the requested range so a consumer can never
+   * mistake an elided (or merely hidden) line for missing data. Emitted whether or not the lines
+   * were rendered; omitted entirely when the range holds no hidden lines, keeping the payload
+   * byte-identical to previous releases for ordinary ranges.
+   */
+  private def appendHiddenFields(
+    sb: StringBuilder,
+    sheet: Sheet,
+    startCol: Int,
+    endCol: Int,
+    startRow: Int,
+    endRow: Int
+  ): Unit =
+    val rows = RendererCommon.hiddenRows(sheet, startRow, endRow).map(_ + 1)
+    val cols =
+      RendererCommon.hiddenColumns(sheet, startCol, endCol).map(c => Column.from0(c).toLetter)
+    if rows.nonEmpty then sb.append(s"""  "hiddenRows": [${rows.mkString(", ")}],\n""")
+    if cols.nonEmpty then
+      sb.append(s"""  "hiddenCols": [${cols.map(c => s"\"$c\"").mkString(", ")}],\n""")
 
   private def renderCell(
     ref: ARef,

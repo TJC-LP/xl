@@ -1127,3 +1127,48 @@ class StreamingWriteSpec extends FunSuite:
       Files.deleteIfExists(outputPath)
       Files.deleteIfExists(jsonPath)
   }
+
+  // ========== GH-475: streaming style op must apply custom numFmt codes ==========
+
+  test("GH-475: streaming batch style op applies a custom numFmt code (in-memory parity)") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val code = "\"$\"#,##0_);(\"$\"#,##0)"
+    val escaped = code.replace("\"", "\\\"")
+    val jsonPath = tempJson(s"""[{"op":"style","range":"A1","numFormat":"$escaped"}]""")
+    try
+      val wb = Workbook(Sheet("Test").put(ARef.from0(0, 0), CellValue.Number(BigDecimal("1234"))))
+      ExcelIO.instance[IO].write(wb, sourcePath).unsafeRunSync()
+
+      val result = StreamingWriteCommands
+        .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+        .unsafeRunSync()
+      assert(result.contains("Saved (streaming)"), result)
+
+      val sheet = ExcelIO.instance[IO].read(outputPath).unsafeRunSync().sheets.head
+      assertEquals(sheet.getCellStyle(ARef.from0(0, 0)).map(_.numFmt), Some(NumFmt.Custom(code)))
+      assert(numFmtIdOfCell(outputPath, "A1") >= 164, "custom code must land a custom numFmtId")
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }
+
+  test("GH-475: streaming batch style op honours the full named-format table") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val jsonPath = tempJson("""[{"op":"style","range":"A1","numFormat":"datetime"}]""")
+    try
+      ExcelIO.instance[IO].write(Workbook(Sheet("Test")), sourcePath).unsafeRunSync()
+
+      StreamingWriteCommands
+        .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+        .unsafeRunSync()
+
+      val sheet = ExcelIO.instance[IO].read(outputPath).unsafeRunSync().sheets.head
+      assertEquals(sheet.getCellStyle(ARef.from0(0, 0)).map(_.numFmt), Some(NumFmt.DateTime))
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }

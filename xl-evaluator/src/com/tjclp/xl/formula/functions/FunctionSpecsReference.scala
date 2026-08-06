@@ -34,6 +34,25 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
       if quotient < 0 then letter.toString + acc
       else columnToLetter(quotient, letter.toString + acc)
 
+  /**
+   * GH-476: HYPERLINK(link_location, [friendly_name]) — absent from the roster, so an ordinary
+   * "click through to the source" cell aborted recalc with an UnknownFunction host error.
+   *
+   * The evaluated VALUE of a HYPERLINK cell is its display text: friendly_name when supplied, the
+   * link itself otherwise. The jump target is display-layer metadata, not part of the value plane
+   * (xl models real hyperlinks on `Sheet.hyperlinks`).
+   */
+  val hyperlink: FunctionSpec[String] { type Args = HyperlinkArgs } =
+    FunctionSpec.simple[String, HyperlinkArgs]("HYPERLINK", Arity.Range(1, 2)) { (args, ctx) =>
+      val (linkExpr, friendlyOpt) = args
+      for
+        link <- ctx.evalExpr(linkExpr)
+        friendly <- friendlyOpt.fold[Either[EvalError, Option[String]]](Right(None))(expr =>
+          ctx.evalExpr(expr).map(Some(_))
+        )
+      yield friendly.getOrElse(link)
+    }
+
   val row: FunctionSpec[BigDecimal] { type Args = Option[AnyExpr] } =
     FunctionSpec.simple[BigDecimal, Option[AnyExpr]](
       "ROW",
