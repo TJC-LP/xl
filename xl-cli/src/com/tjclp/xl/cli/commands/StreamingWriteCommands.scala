@@ -355,6 +355,9 @@ object StreamingWriteCommands:
         CellRange.parse(rangeStr).left.map(e => new Exception(s"Invalid range: $rangeStr"))
       )
 
+      // GH-475: same typo signal as the in-memory style command
+      _ <- StyleBuilder.warnNumFmt(numFormat)
+
       // Build style
       cellStyle <- StyleBuilder.buildCellStyle(
         bold,

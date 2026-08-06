@@ -518,6 +518,9 @@ object WriteCommands:
       range = refOrRange match
         case Right(r) => r
         case Left(ref) => CellRange(ref, ref)
+      // GH-475: a fat-fingered semantic name (`--format curency`) still ships as a custom code,
+      // but never in silence.
+      _ <- StyleBuilder.warnNumFmt(numFormat)
       newStyle <- StyleBuilder.buildCellStyle(
         bold,
         italic,

@@ -1,8 +1,18 @@
 package com.tjclp.xl.cli
 
+import java.io.{ByteArrayOutputStream, PrintStream}
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+
+import cats.effect.IO
 import munit.CatsEffectSuite
 
+import com.tjclp.xl.{Sheet, Workbook, given}
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.cli.helpers.{BatchParser, StyleBuilder}
+import com.tjclp.xl.macros.ref
+import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -88,5 +98,82 @@ class NumFmtParsingSpec extends CatsEffectSuite:
     val json = """[{"op":"style","range":"A1","numFormat":"#,##0.0"}]"""
     BatchParser.parseBatchOperations(json).map { result =>
       assertEquals(result.warnings.filter(_.contains("numFmt")), Vector.empty)
+    }
+  }
+
+  // ========== the direct CLI `style --format` surface (NOT batch) ==========
+  //
+  // This is where a human actually fat-fingers a semantic name; the batch-JSON warning does not
+  // cover it.
+
+  private def captureStderr[A](io: IO[A]): IO[(A, String)] =
+    IO.blocking {
+      val baos = new ByteArrayOutputStream()
+      val prevErr = System.err
+      System.setErr(new PrintStream(baos, true, "UTF-8"))
+      try
+        import cats.effect.unsafe.implicits.global
+        val result = io.unsafeRunSync()
+        (result, new String(baos.toByteArray, StandardCharsets.UTF_8))
+      finally System.setErr(prevErr)
+    }
+
+  /** Run the `style` command with a `--format` string; return (stdout message, stderr). */
+  private def runStyleCommand(numFormat: String): IO[(String, String)] =
+    IO.blocking {
+      val out = Files.createTempFile("xl-numfmt-style-", ".xlsx")
+      out.toFile.deleteOnExit()
+      out
+    }.flatMap { out =>
+      val sheet = Sheet("S").put(ref"A1", CellValue.Number(BigDecimal(1)))
+      val book = Workbook(Vector(sheet))
+      captureStderr(
+        WriteCommands.style(
+          book,
+          book.sheets.headOption,
+          "A1",
+          bold = false,
+          italic = false,
+          underline = false,
+          bg = None,
+          fg = None,
+          fontSize = None,
+          fontName = None,
+          align = None,
+          valign = None,
+          wrap = false,
+          numFormat = Some(numFormat),
+          border = None,
+          borderTop = None,
+          borderRight = None,
+          borderBottom = None,
+          borderLeft = None,
+          borderColor = None,
+          replace = false,
+          outputPath = out,
+          config = WriterConfig.default
+        )
+      )
+    }
+
+  test("GH-475: `style --format curency` warns on stderr instead of shipping the typo silently") {
+    runStyleCommand("curency").map { case (stdout, stderr) =>
+      assert(stdout.contains("Styled: A1"), s"style command must still succeed: $stdout")
+      assert(
+        stderr.contains("curency"),
+        s"expected a stderr warning naming the typo, got: '$stderr'"
+      )
+      assert(
+        stderr.contains("currency"),
+        s"warning should list the known names, got: '$stderr'"
+      )
+    }
+  }
+
+  test("GH-475: `style --format` with a known name or a real code stays silent") {
+    List("currency", "percent", "#,##0.00", "\"Yes \";;\"No \"").foldLeft(IO.unit) { (acc, fmt) =>
+      acc *> runStyleCommand(fmt).map { case (_, stderr) =>
+        assertEquals(stderr, "", s"'$fmt' must not warn")
+      }
     }
   }

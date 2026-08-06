@@ -2,6 +2,7 @@ package com.tjclp.xl.cli
 
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 
 import cats.effect.IO
 import munit.CatsEffectSuite
@@ -9,7 +10,8 @@ import munit.CatsEffectSuite
 import com.tjclp.xl.{Sheet, Workbook, given}
 import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.commands.ReadCommands
+import com.tjclp.xl.cli.commands.{ReadCommands, StreamingReadCommands}
+import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 
 /**
@@ -160,5 +162,48 @@ class ViewHiddenSpec extends CatsEffectSuite:
         out.contains("\"hiddenCols\": [\"C\"]"),
         s"JSON must still flag hidden column C:\n$out"
       )
+    }
+  }
+
+  // ========== streaming (--stream) ==========
+
+  /** Write the hidden-line fixture to a temp .xlsx and run the streaming view over it. */
+  private def runStreamingView(skipHidden: Boolean): IO[(String, String)] =
+    IO.blocking {
+      val tmp = Files.createTempFile("xl-view-hidden-stream-", ".xlsx")
+      tmp.toFile.deleteOnExit()
+      tmp
+    }.flatMap { tmp =>
+      ExcelIO.instance[IO].write(wb, tmp) *>
+        captureStderr(
+          StreamingReadCommands.view(
+            tmp,
+            Some("H"),
+            "A1:E5",
+            showFormulas = false,
+            limit = 100,
+            format = ViewFormat.Csv,
+            showLabels = false,
+            skipEmpty = false,
+            headerRow = None,
+            skipHidden = skipHidden
+          )
+        )
+    }
+
+  test("GH-474: --stream view with --skip-hidden is not a silent no-op") {
+    runStreamingView(skipHidden = true).map { case (out, err) =>
+      // Streaming does not read row/column properties, so it renders everything...
+      assert(out.contains("C5"), s"streaming renders every addressed cell:\n$out")
+      // ...but it must SAY so rather than accept the flag and ignore it.
+      assert(err.nonEmpty, "streaming --skip-hidden must not be silent")
+      assert(err.contains("--skip-hidden"), s"note must name the flag: '$err'")
+      assert(err.contains("--stream"), s"note must name the mode: '$err'")
+    }
+  }
+
+  test("GH-474: --stream view without --skip-hidden stays quiet") {
+    runStreamingView(skipHidden = false).map { case (_, err) =>
+      assertEquals(err, "", s"unexpected stderr: '$err'")
     }
   }

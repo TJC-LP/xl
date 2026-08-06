@@ -174,6 +174,18 @@ object RendererCommon:
       )
 
   /**
+   * GH-474: `--skip-hidden` cannot be honored under `--stream`.
+   *
+   * The streaming reader yields cell values only — it never parses row/column properties — so it
+   * has no way to know which lines are hidden and renders all of them. Accepting the flag and doing
+   * nothing is the silent no-op this issue is about, so the streaming view says so on stderr
+   * instead.
+   */
+  val streamingSkipHiddenNotice: String =
+    "note: --skip-hidden is ignored with --stream — the streaming reader does not read row/column " +
+      "properties, so hidden rows/columns were rendered. Re-run without --stream to omit them."
+
+  /**
    * Filter columns to only include non-empty ones.
    *
    * @param sheet

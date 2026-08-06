@@ -2030,9 +2030,7 @@ EXAMPLES:
           skipEmpty,
           headerRow,
           _,
-          // GH-474: streaming never read row/column properties, so it already renders every
-          // addressed cell — the flag has nothing to elide here
-          _
+          skipHidden
         ) =>
       if evalFormulas then
         IO.raiseError(
@@ -2050,7 +2048,9 @@ EXAMPLES:
           format,
           showLabels,
           skipEmpty,
-          headerRow
+          headerRow,
+          // GH-474: unsupported under --stream, but reported rather than silently dropped
+          skipHidden
         )
 
     case CliCommand.Cell(refStr, noStyle) =>

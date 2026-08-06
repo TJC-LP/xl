@@ -241,7 +241,10 @@ lines included — and every data format carries a marker:
 `--skip-hidden` restores the visible-only view, and the same marker then names what was dropped
 (`note: omitted hidden …`). `html`/`svg`/`png`/`jpeg`/`webp`/`pdf` are pictures of the sheet: they
 mirror Excel's display and always omit hidden lines. Streaming (`--stream`) never read row/column
-properties, so it has always rendered every addressed cell.
+properties, so it has always rendered every addressed cell — and for the same reason it cannot
+honour `--skip-hidden` or emit the hidden-line marker: passing `--skip-hidden` with `--stream`
+prints `note: --skip-hidden is ignored with --stream …` on stderr and renders everything. Drop
+`--stream` when you need hidden lines elided or flagged.
 
 Why the default: `xl search` finds a value in a hidden row and `xl cell C5` reads it, so a `view`
 that silently elided the same cell read as file corruption.

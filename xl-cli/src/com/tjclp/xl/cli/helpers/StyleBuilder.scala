@@ -249,6 +249,17 @@ object StyleBuilder:
     )
 
   /**
+   * GH-475: print [[numFmtWarning]] to stderr for a direct CLI `--format` argument.
+   *
+   * The `style` command is where a semantic name actually gets fat-fingered by a human, and it has
+   * no warning channel of its own (stdout is the command's result). The batch path warns through
+   * `BatchParser.ParseResult.warnings`, which Main already drains to stderr, so this is called only
+   * from the two `style` command handlers — calling it from `buildCellStyle` would double-warn.
+   */
+  def warnNumFmt(numFormat: Option[String]): IO[Unit] =
+    IO(numFormat.flatMap(numFmtWarning).foreach(System.err.println))
+
+  /**
    * Parse number format string.
    *
    * Accepts named formats (general, number, currency, percent, date, text) and custom Excel format
