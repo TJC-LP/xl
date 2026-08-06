@@ -1,12 +1,17 @@
 package com.tjclp.xl.formula
 
+import java.nio.file.Files
+
 import munit.FunSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.error.XLException
 import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.ooxml.XlsxWriter
+import com.tjclp.xl.ooxml.lint.WorkbookLint
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
@@ -39,6 +44,10 @@ class FormulaRecordEvalSpec extends FunSuite:
     )
 
   private def num(n: Int): CellValue = CellValue.Number(BigDecimal(n))
+
+  private def isRecord(value: CellValue): Boolean = value match
+    case CellValue.Formula(_, _, _: FormulaKind.DataTable) => true
+    case _ => false
 
   test("evaluateCell on a dataTable cell returns the pinned cache, never a parse error") {
     val kind = dtKind("F2:G2", "A1", "A2")
@@ -153,32 +162,109 @@ class FormulaRecordEvalSpec extends FunSuite:
     )
   }
 
-  test("insertRows strictly inside the interior degrades the record to its cached constant") {
-    val kind: FormulaKind.DataTable = FormulaKind.DataTable(
-      range("F2:F3"),
-      dt2D = true,
-      dtr = false,
-      r1 = Some(aref("A1")),
-      r2 = Some(aref("A2"))
-    )
-    val sheet = Sheet(S).put(ref"F2", CellValue.dataTable(kind, Some(num(11))))
-    val out = StructuralEditor.insertRows(Workbook(Vector(sheet)), S, at = 2, count = 1)
-    // F2 (row index0 1 < at) does not move; the insert tears its interior F2:F3.
-    assertEquals(sheetNamed(out, "S")(ref"F2").value, num(11))
+  /** A 2-D record over F2:F3 driven by A1/A2 — the tear geometry GH-495 is about. */
+  private def tearKind: FormulaKind.DataTable = FormulaKind.DataTable(
+    range("F2:F3"),
+    dt2D = true,
+    dtr = false,
+    r1 = Some(aref("A1")),
+    r2 = Some(aref("A2"))
+  )
+
+  test("GH-495: insertRows strictly inside the interior is REFUSED, not silently degraded") {
+    val recorded = CellValue.dataTable(tearKind, Some(num(11)))
+    val wb = Workbook(Vector(Sheet(S).put(ref"F2", recorded)))
+    // F2 (row index0 1 < at) would not move while F3 would — the insert tears the interior.
+    val err = StructuralEditor
+      .insertRowsChecked(wb, S, at = 2, count = 1)
+      .swap
+      .getOrElse(fail("an insert through a data-table interior must be refused"))
+    assert(err.message.contains("F2:F3"), err.message)
+    assert(err.message.contains("cannot change part of a data table"), err.message)
+    // The unsafe facade refuses the same way the GH-472 bounds guard does.
+    val thrown = intercept[XLException](StructuralEditor.insertRows(wb, S, at = 2, count = 1))
+    assertEquals(thrown.error, err)
+    // The workbook is untouched: the record still stands, no degrade-to-constant.
+    assertEquals(sheetNamed(wb, "S")(ref"F2").value, recorded)
   }
 
-  test("deleteRows overlapping the interior degrades the record to its cached constant") {
-    val kind: FormulaKind.DataTable = FormulaKind.DataTable(
-      range("F2:F3"),
+  test("GH-495: deleteRows overlapping the interior is REFUSED, not silently degraded") {
+    val recorded = CellValue.dataTable(tearKind, Some(num(11)))
+    val wb = Workbook(Vector(Sheet(S).put(ref"F2", recorded)))
+    // Delete row 3 (index0 2): the band overlaps interior rows [1,2] but not F2 itself.
+    val err = StructuralEditor
+      .deleteRowsChecked(wb, S, at = 2, count = 1)
+      .swap
+      .getOrElse(fail("a delete through a data-table interior must be refused"))
+    assert(err.message.contains("F2:F3"), err.message)
+    assert(err.message.contains("cannot change part of a data table"), err.message)
+    val thrown = intercept[XLException](StructuralEditor.deleteRows(wb, S, at = 2, count = 1))
+    assertEquals(thrown.error, err)
+    assertEquals(sheetNamed(wb, "S")(ref"F2").value, recorded)
+  }
+
+  test("GH-495: deleteColumns through the interior is REFUSED (column axis symmetry)") {
+    val twoWide: FormulaKind.DataTable = FormulaKind.DataTable(
+      range("F2:G2"),
       dt2D = true,
       dtr = false,
       r1 = Some(aref("A1")),
       r2 = Some(aref("A2"))
     )
-    val sheet = Sheet(S).put(ref"F2", CellValue.dataTable(kind, Some(num(11))))
-    // Delete row 3 (index0 2): band intersects the interior rows [1,2] but not F2 itself.
-    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 2, count = 1)
-    assertEquals(sheetNamed(out, "S")(ref"F2").value, num(11))
+    val wb = Workbook(Vector(Sheet(S).put(ref"F2", CellValue.dataTable(twoWide, Some(num(4))))))
+    // Delete column G (index0 6): the band overlaps interior columns [5,6] but not F.
+    val err = StructuralEditor
+      .deleteColumnsChecked(wb, S, at = 6, count = 1)
+      .swap
+      .getOrElse(fail("a column delete through a data-table interior must be refused"))
+    assert(err.message.contains("F2:G2"), err.message)
+    assert(err.message.contains("cannot change part of a data table"), err.message)
+  }
+
+  test("GH-495: a delete swallowing the WHOLE interior removes the table (Excel allows it)") {
+    val sheet = Sheet(S).put(ref"F2", CellValue.dataTable(tearKind, Some(num(11))))
+    // Rows 2-3 (index0 1..2) cover F2:F3 entirely — deleting a whole data table is legal.
+    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 1, count = 2)
+    val s2 = sheetNamed(out, "S")
+    assert(!s2.contains(ref"F2"), "the record cell rode the deleted band out")
+    val survivors = s2.cells.values.toVector.collect {
+      case c if isRecord(c.value) => c.ref.toA1
+    }
+    assertEquals(survivors, Vector.empty[String])
+  }
+
+  test("GH-495: a stray record cell outside a wholly-deleted interior keeps its cached value") {
+    // Malformed-input path: the record lives at H1, its interior F2:F3 is deleted outright. The
+    // table is gone by construction (not torn), so the orphan cell degrades to its constant.
+    val sheet = Sheet(S).put(ref"H1", CellValue.dataTable(tearKind, Some(num(11))))
+    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 1, count = 2)
+    assertEquals(sheetNamed(out, "S")(ref"H1").value, num(11))
+  }
+
+  test("GH-495: a zero-count insert is a no-op, never a record-destroying tear") {
+    val recorded = CellValue.dataTable(tearKind, Some(num(11)))
+    val sheet = Sheet(S).put(ref"F2", recorded)
+    val out = StructuralEditor.insertRows(Workbook(Vector(sheet)), S, at = 2, count = 0)
+    assertEquals(sheetNamed(out, "S")(ref"F2").value, recorded)
+  }
+
+  test("GH-495: an insert pushing a record ref past the sheet edge is refused, not degraded") {
+    // The GH-472 populated-cell guard does not see the record's ref END (no cell lives there),
+    // so the record's own geometry has to be bounds-checked.
+    val edgeKind: FormulaKind.DataTable = FormulaKind.DataTable(
+      range("F1048570:F1048576"),
+      dt2D = true,
+      dtr = false,
+      r1 = Some(aref("A1")),
+      r2 = Some(aref("A2"))
+    )
+    val sheet = Sheet(S).put(ref"F1048570", CellValue.dataTable(edgeKind, Some(num(2))))
+    val err = StructuralEditor
+      .insertRowsChecked(Workbook(Vector(sheet)), S, at = 0, count = 1)
+      .swap
+      .getOrElse(fail("an insert pushing a record past the sheet edge must be refused"))
+    assert(err.message.contains("F1048570:F1048576"), err.message)
+    assert(err.message.contains("1048576"), err.message)
   }
 
   test("GH-435: deleteRows removing the row input sets del1, omits r1, keeps the cache") {
@@ -294,6 +380,40 @@ class FormulaRecordEvalSpec extends FunSuite:
     val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 8, count = 1)
     assertEquals(sheetNamed(out, "S")(ref"C8").value, CellValue.Formula("A1*2", None))
   }
+
+  test("GH-495 round-trip gate: a refused tear leaves the record in the written XML, lint clean") {
+    import com.tjclp.xl.sheets.dataTableSyntax.*
+    val authored = Sheet("Data")
+      .put(ref"C4", CellValue.Formula("B1*B2"))
+      .put(ref"D4" -> 1, ref"E4" -> 2, ref"F4" -> 3)
+      .put(ref"C5" -> 10, ref"C6" -> 20)
+      .dataTable(range("D5:F6"), ref"B1", ref"B2", Seq.fill(2)(Seq.fill(3)(num(1))))
+      .fold(err => fail(s"authoring failed: $err"), identity)
+    val wb = Workbook(Vector(authored))
+    // Row 6 (index0 5) lies strictly inside the interior rows [4,5] — Excel refuses this insert.
+    val err = StructuralEditor
+      .insertRowsChecked(wb, authored.name, at = 5, count = 1)
+      .swap
+      .getOrElse(fail("an insert through the authored interior must be refused"))
+    assert(err.message.contains("D5:F6"), err.message)
+    val out = Files.createTempFile("gh495-refused-tear", ".xlsx")
+    try
+      XlsxWriter.write(wb, out).fold(e => fail(s"write failed: ${e.message}"), identity)
+      val xml = zipEntryText(out, "xl/worksheets/sheet1.xml")
+      assert(xml.contains("""t="dataTable""""), "the written XML lost its data-table record")
+      assert(xml.contains("""ref="D5:F6""""), xml)
+      // The record survives intact, so lint has something to see AND nothing to complain about.
+      val findings = WorkbookLint.lint(out).fold(e => fail(s"lint errored: $e"), identity)
+      assert(findings.isEmpty, findings.mkString("\n"))
+    finally Files.deleteIfExists(out)
+  }
+
+  private def zipEntryText(path: java.nio.file.Path, name: String): String =
+    val zip = new java.util.zip.ZipFile(path.toFile)
+    try
+      val entry = Option(zip.getEntry(name)).getOrElse(fail(s"missing ZIP entry $name"))
+      new String(zip.getInputStream(entry).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+    finally zip.close()
 
   test("a structural edit on ANOTHER sheet leaves dataTable records untouched") {
     val other = SheetName.unsafe("Other")
