@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **109 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,047 tests passing.
+**Current Status**: Production-ready with **112 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,424 tests passing.
 
-**Current Version**: **0.19.1** (field hardening, released 2026-08-04)
+**Current Version**: **0.19.2** "Fixpoint" (recalculation & seeding integrity, released 2026-08-06)
 
 ---
 
@@ -60,6 +60,33 @@ Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture cor
 ### v0.12.1 "Clean Sweep" — wave 7 (Released 2026-06-11)
 
 Every remaining open issue closed in one wave. **Conditional formatting** ([#136](https://github.com/TJC-LP/xl/issues/136)) is the headline — typed cellIs/expression/colorScale/dataBar/top10/text rules + `dxf` differential formats, `sheet.conditionalFormat` authoring with auto-priority, structural-edit range shifting, unmodeled families preserved byte-faithfully — alongside twelve fidelity/writer fixes: openpyxl comment subdirectory dialect (#292), RichText SST keying (#303), exact surgical SST counts (#304), `[Content_Types]` preservation (#314), identity-keyed source mappings (#315), activeTab (#294), fitToPage tri-state (#284), `Cell.comment` deprecated→`Sheet.comments` (#295). Codec `put` paths 2.4x faster (#297).
+
+### v0.19.2 "Fixpoint" — wave 24 (Released 2026-08-06)
+
+The 0.19.1 blind-regression round. Four new silent-wrong-number bugs, **three of them one root
+cause**: evaluation reading a stale or unevaluated cache instead of the value. Six worktree-isolated
+TDD clusters, one design panel, and an unusually hard adversarial review — three clusters needed a
+second round and `cli-cache-safety` needed four, each round refuting the last with an empirical
+counter-example.
+
+| Issue | Fix |
+|-------|-----|
+| [#492](https://github.com/TJC-LP/xl/issues/492) [#491](https://github.com/TJC-LP/xl/issues/491) | **One pass = the global fixpoint** — SCC condensation walk replaces preOrder / flat-Jacobi / postOrder; per-component budgets and verdicts; `RecalcResult.cycles`/`.unconverged`/`.certified` |
+| [#469](https://github.com/TJC-LP/xl/issues/469) | Cycles warm-start from numeric caches, zero as fallback |
+| [#493](https://github.com/TJC-LP/xl/issues/493) [#494](https://github.com/TJC-LP/xl/issues/494) | Data-table what-if lanes evaluate their precedent cone; `ErrorGuardFired` / `ConeUnresolved` warnings |
+| [#495](https://github.com/TJC-LP/xl/issues/495) | Structural edits refuse to tear a data-table interior (was a silent degrade to constants) |
+| [#468](https://github.com/TJC-LP/xl/issues/468) [#481](https://github.com/TJC-LP/xl/issues/481) [#496](https://github.com/TJC-LP/xl/issues/496) | Dirty-cone-scoped recalc, `--no-recalc`, `--strict` on write verbs, `batch` honors `calcPr` |
+| [#459](https://github.com/TJC-LP/xl/issues/459) | `####` for numbers too wide for their column (was a leading-digit clip) |
+| [#474](https://github.com/TJC-LP/xl/issues/474) [#475](https://github.com/TJC-LP/xl/issues/475) [#476](https://github.com/TJC-LP/xl/issues/476) [#488](https://github.com/TJC-LP/xl/issues/488) [#486](https://github.com/TJC-LP/xl/issues/486) [#490](https://github.com/TJC-LP/xl/issues/490) | Field asks: hidden lines in `view`, streaming numFmt parity, 112 functions, lookup date plane, lint docs, skill fix |
+
+**Deferred to 0.20.0**, in priority order: [#499](https://github.com/TJC-LP/xl/issues/499) (range-argument
+reads never re-derive uncached formula cells and silently shorten arrays — the general form of #494),
+[#507](https://github.com/TJC-LP/xl/issues/507) (`staleCaches` under-approximates through unparseable
+defined names, DEFAULT path included), [#503](https://github.com/TJC-LP/xl/issues/503) +
+[#509](https://github.com/TJC-LP/xl/issues/509) (`--no-recalc` over-invalidation and the
+`fullCalcOnLoad` design that fixes it), [#497](https://github.com/TJC-LP/xl/issues/497) (CF evaluation
+in the render path), [#498](https://github.com/TJC-LP/xl/issues/498), #500–#502, #504–#506, #508, plus
+the standing tail #460 #462 #463 #465 #477 #479 #480 #482 #485.
 
 ### v0.19.0 "Canon" — wave 21 epilogue + wave 22 (Released 2026-08-03)
 

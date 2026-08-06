@@ -1,12 +1,21 @@
 # XL Project Status
 
-**Last Updated**: 2026-08-04 (0.19.1)
+**Last Updated**: 2026-08-06 (0.19.2)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.19.2 "Fixpoint"** (2026-08-06) — recalculation & seeding integrity, wave 24:
+- ✅ **One pass = the global fixpoint** (#492, #491) — iterative recalculation walks the SCC condensation in dependency-first order instead of splitting into preOrder / one flat Jacobi / postOrder, so no read can fall back to a stale cache and re-recalculating a correct multi-SCC circular book no longer corrupts it. `RecalcResult.cycles` / `.unconverged` / `.certified` report per-component verdicts
+- ✅ **Cycles warm-start from numeric caches** (#469) — zero-seeding no longer wipes valid caches of mutually-ISERROR-guarded pairs
+- ✅ **Data-table what-if lanes evaluate their precedent cone** (#493, #494) — acyclic grids no longer seed silently FLAT, guarded XIRR corners seed real rates, and a guard resolving to its error arm surfaces as `ErrorGuardFired` instead of banking its text arm
+- ✅ **Structural edits refuse to tear a data-table interior** (#495) — was a silent degrade to constants that `data-table-torn` could not see
+- ✅ **Cache-safe CLI writes** (#468, #481, #496) — dirty-cone-scoped recalc, `--no-recalc`/`--preserve-caches`, `--strict` exit codes on write verbs, `batch` honoring declared `calcPr`
+- ✅ **`####` for overflowing numbers in the raster** (#459) — was a leading-digit clip that rendered a plausible wrong number
+- ✅ **112 functions** (#476 — SEARCH, N, HYPERLINK); hidden rows/cols in `view` (#474); streaming numFmt parity (#475); VLOOKUP/HLOOKUP date keys (#488)
 
 **New in 0.19.1** (2026-08-04) — field hardening, waves 23 + 23b (#478/#487):
 - ✅ **Circular-book data-table seeding** (#453) — the seeder fixpoints cycle members per axis combination under the book's CalcPr instead of pinning them at loaded caches (grids no longer seed silently FLAT); `seedDataTablesReport()` + IterativeCalc overloads
@@ -193,7 +202,7 @@
 
 ### Test Coverage
 
-**5,047 tests** (verified via `./mill __.test`, 2026-07-29):
+**5,424 tests** (verified via `./mill __.test`, 2026-08-06):
 
 | Module | Tests | Covers |
 |--------|-------|--------|
