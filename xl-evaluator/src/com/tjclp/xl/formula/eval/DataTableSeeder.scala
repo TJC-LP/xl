@@ -4,7 +4,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.Clock
-import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.ArgValue
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -33,15 +33,23 @@ enum SeedTableWarning derives CanEqual:
   case NotConverged(sheet: SheetName, ref: CellRange, combinations: Int, maxIter: Int)
 
   /**
-   * GH-453 (review follow-up): part of the table did not get the treatment it needed, and `reason`
-   * says which. Three causes, all of which would otherwise read as a clean run: `cells` interior
-   * cells were left UNSEEDED on the iterated path (an axis value or cycle member failed to
-   * evaluate); the whole table was skipped by a budget guard (`MaxIterativeSeedBudget`,
-   * `MaxConeSeedBudget`) and `cells` counts the interior; or `cells` distinct precedent cells in
-   * the what-if cone could not be re-derived (GH-493 review rework), leaving them on stale caches
-   * so the seeded grid may not reflect the substitution at all.
+   * GH-453 (review follow-up): `cells` interior cells were left UNSEEDED, and `reason` says why —
+   * either an axis value or cycle member failed to evaluate on the iterated path, or the whole
+   * table was skipped by a budget guard (`MaxIterativeSeedBudget`, `MaxConeSeedBudget`) and `cells`
+   * counts the interior. Both would otherwise read as a clean run. A table whose interiors WERE
+   * seeded off a stale precedent reports [[ConeUnresolved]] instead — this case always means
+   * unseeded cells.
    */
   case Skipped(sheet: SheetName, ref: CellRange, cells: Int, reason: String)
+
+  /**
+   * GH-493 (round-2 review): `cells` DISTINCT precedent cells in the what-if cone could not be
+   * re-derived under the substitution, so they stayed on their loaded caches — the interiors were
+   * still seeded (tolerant doctrine) but the grid may not reflect the substitution at all, which is
+   * the very FLAT-grid mechanism GH-493 filed. Distinct from [[Skipped]]: nothing was left unseeded
+   * here. `refs` renders the cells as `'Sheet'!A1`, sorted, capped at 8.
+   */
+  case ConeUnresolved(sheet: SheetName, ref: CellRange, cells: Int, refs: Vector[String])
 
   /**
    * GH-494: the source formula's own error guard (`IFERROR`/`IFNA`, or `IF(ISERROR(x),…)` and its
@@ -337,7 +345,7 @@ object DataTableSeeder:
                 SeedTableWarning.CircularNotIterated(
                   sheet.name,
                   interior,
-                  renderCycle(relevantCore)
+                  renderRefs(relevantCore)
                 )
               (sheet, Vector(warning))
             case Some(it) =>
@@ -471,9 +479,10 @@ object DataTableSeeder:
     }
 
   /**
-   * GH-493 (review rework): one [[SeedTableWarning.Skipped]] per table naming the DISTINCT cone
-   * refs that could not be re-derived — de-duplicated across axis combinations, so a 400-cell grid
-   * over one broken precedent warns once.
+   * GH-493 (review rework): one [[SeedTableWarning.ConeUnresolved]] per table naming the DISTINCT
+   * cone refs that could not be re-derived — de-duplicated across axis combinations, so a 400-cell
+   * grid over one broken precedent warns once. Never [[SeedTableWarning.Skipped]]: the interiors
+   * here were seeded, they may just not reflect the substitution.
    */
   private def coneWarning(
     name: SheetName,
@@ -482,10 +491,14 @@ object DataTableSeeder:
   ): Vector[SeedTableWarning] =
     if unresolved.isEmpty then Vector.empty
     else
-      val reason =
-        s"${unresolved.size} precedent cell(s) in the what-if cone could not be re-derived — " +
-          "the seeded grid may not reflect the substitution"
-      Vector(SeedTableWarning.Skipped(name, interior, unresolved.size, reason))
+      Vector(
+        SeedTableWarning.ConeUnresolved(
+          name,
+          interior,
+          unresolved.size,
+          renderRefs(unresolved)
+        )
+      )
 
   /**
    * GH-493/GH-494: the acyclic what-if lane — axis overlay, cone re-derivation, source evaluation,
@@ -763,7 +776,7 @@ object DataTableSeeder:
     tableIdx: Int,
     members: List[(QualifiedRef, Int, String)],
     cone: WhatIfCone,
-    probes: Map[ARef, List[(TExpr[?], TExpr[?])]]
+    probes: Map[ARef, TExpr[?]]
   ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
     sheet.cells.get(sourceRef).map(_.value) match
@@ -815,8 +828,7 @@ object DataTableSeeder:
                 .evaluateFormula(tempSheet)(expression, clock, Some(tempWb), None)
                 .toOption
                 .map { value =>
-                  val guard =
-                    firedGuard(probes.getOrElse(sourceRef, Nil), value, tempSheet, tempWb, clock)
+                  val guard = firedGuard(probes.get(sourceRef), tempSheet, tempWb, clock)
                   CellOutcome(
                     value,
                     converged,
@@ -858,7 +870,7 @@ object DataTableSeeder:
     prepared: Vector[Sheet],
     tableIdx: Int,
     cone: WhatIfCone,
-    probes: Map[ARef, List[(TExpr[?], TExpr[?])]]
+    probes: Map[ARef, TExpr[?]]
   ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
     sheet.cells.get(sourceRef).map(_.value) match
@@ -886,7 +898,7 @@ object DataTableSeeder:
               CellOutcome(
                 value,
                 converged = true,
-                firedGuard(probes.getOrElse(sourceRef, Nil), value, tempSheet, tempWb, clock),
+                firedGuard(probes.get(sourceRef), tempSheet, tempWb, clock),
                 resolved.unresolved
               )
             )
@@ -896,22 +908,19 @@ object DataTableSeeder:
         Some(CellOutcome(CellValue.Number(BigDecimal(0)), converged = true, None, Set.empty))
 
   /**
-   * GH-494: every error guard in each of the group's source formulas as a `(protected, fallback)`
-   * pair, parsed once per table. An unparseable source formula simply carries no probes —
-   * evaluation would fail on it too, and the interior stays untouched.
+   * GH-494: each of the group's source formulas parsed ONCE per table, kept only when it carries an
+   * error guard at all (a guard-free formula never needs the path walk). An unparseable source
+   * formula simply carries no probe — evaluation would fail on it too, and the interior stays
+   * untouched.
    */
   private def guardProbes(
     sheet: Sheet,
     kind: FormulaKind.DataTable
-  ): Map[ARef, List[(TExpr[?], TExpr[?])]] =
+  ): Map[ARef, TExpr[?]] =
     sourceRefs(kind).iterator.flatMap { r =>
       sheet.cells.get(r).map(_.value) match
         case Some(CellValue.Formula(expression, _, _)) =>
-          FormulaParser
-            .parse(expression)
-            .toOption
-            .map(expr => r -> errorGuards(expr))
-            .filter((_, guards) => guards.nonEmpty)
+          FormulaParser.parse(expression).toOption.filter(containsErrorGuard).map(expr => r -> expr)
         case _ => None
     }.toMap
 
@@ -919,40 +928,113 @@ object DataTableSeeder:
    * GH-494: the first guard that ACTUALLY fired for this interior cell, rendered for the warning
    * (capped at 120 chars). `None` means no fallback was banked.
    *
-   * A guard counts as fired only when both halves agree: its protected expression resolves to an
-   * error under this substitution AND its fallback reproduces `seeded`, the value the seeder is
-   * about to bank. The second half is what keeps guards on UNEVALUATED paths quiet — a chained
-   * `IFERROR(x, IFERROR(1/(A1-A1), 0))` ladder and a guard parked in an untaken `IF` branch both
-   * probe as errors while contributing nothing to the result, and branding those live grids as
-   * fallback grids destroys the same signal a silently-banked fallback does.
+   * "Actually fired" is decided STRUCTURALLY, top-down from the root of the source formula, by
+   * walking only the path Excel itself evaluated (see [[firstFiredGuard]]) — never by comparing a
+   * fallback's standalone value to the value being banked. Value equality is wrong in both
+   * directions: it misses every guard that is not the root of the formula (`IFERROR(1/A1,0)+5`
+   * banks 5, which no arm equals alone) and every `IF(ISERROR(x), <cell ref>, x)` (the ref does not
+   * reproduce the banked value when evaluated on its own), while false-positiving whenever an
+   * untaken fallback coincidentally equals what the taken path produced.
    */
   private def firedGuard(
-    probes: List[(TExpr[?], TExpr[?])],
-    seeded: CellValue,
+    probe: Option[TExpr[?]],
     sheet: Sheet,
     wb: Workbook,
     clock: Clock
   ): Option[String] =
-    probes
-      .collectFirst {
-        case (guarded, fallback)
-            if guardResolvesToError(guarded, sheet, wb, clock)
-              && banksFallback(fallback, seeded, sheet, wb, clock) =>
-          guarded
-      }
-      .map(probe => FormulaPrinter.print(probe, includeEquals = false).take(120))
+    probe
+      .flatMap(expr => firstFiredGuard(expr, sheet, wb, clock))
+      .map(guarded => FormulaPrinter.print(guarded, includeEquals = false).take(120))
 
-  /** GH-494: did this guard's fallback arm produce exactly the value being banked? */
-  private def banksFallback(
-    fallback: TExpr[?],
-    seeded: CellValue,
+  /**
+   * GH-494: the first error guard on the EVALUATED path, as the protected expression it guards.
+   *
+   *   - `IFERROR(a, b)` / `IFNA(a, b)`: `a` erroring under this substitution IS the guard firing —
+   *     `b` is never entered, since a fallback that was never selected contributed nothing;
+   *   - `IF(cond, t, e)` where `cond` is `ISERROR`/`ISERR`/`ISNA` over `x`: `x` erroring IS the
+   *     guard firing. Otherwise the condition evaluates (Excel truthiness, the same evaluator and
+   *     pinned clock as the seeding run) and only the SELECTED branch is walked — a condition that
+   *     fails to evaluate selects neither;
+   *   - every other node: all children are on the evaluated path and are walked left to right.
+   *
+   * The walk is per interior cell because the verdict depends on the substituted temp sheet; the
+   * AST it walks is parsed once per table ([[guardProbes]]).
+   */
+  private def firstFiredGuard(
+    expr: TExpr[?],
     sheet: Sheet,
     wb: Workbook,
     clock: Clock
-  ): Boolean =
-    Evaluator.instance.eval(fallback, sheet, clock, Some(wb), None) match
-      case Left(_) => false
-      case Right(value) => EvalResult.toCellValue(value) == seeded
+  ): Option[TExpr[?]] =
+    expr match
+      case call: TExpr.Call[?] =>
+        val args = callArgExprs(call)
+        call.spec.name.toUpperCase match
+          case "IFERROR" | "IFNA" =>
+            args match
+              case guarded :: _ =>
+                if guardResolvesToError(guarded, sheet, wb, clock) then Some(guarded)
+                else firstFiredGuard(guarded, sheet, wb, clock)
+              case Nil => None
+          case "IF" =>
+            args match
+              case cond :: branches =>
+                firedPredicate(cond, sheet, wb, clock)
+                  .orElse(firstFiredGuard(cond, sheet, wb, clock))
+                  .orElse(
+                    branchTaken(cond, sheet, wb, clock)
+                      .flatMap(taken => branches.drop(if taken then 0 else 1).headOption)
+                      .flatMap(branch => firstFiredGuard(branch, sheet, wb, clock))
+                  )
+              case Nil => None
+          case _ => firstFiredIn(args, sheet, wb, clock)
+      case other => firstFiredIn(children(other), sheet, wb, clock)
+
+  /** The first fired guard among a node's on-path children, left to right. */
+  private def firstFiredIn(
+    nodes: List[TExpr[?]],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Option[TExpr[?]] =
+    nodes.iterator.flatMap(node => firstFiredGuard(node, sheet, wb, clock)).nextOption()
+
+  /**
+   * GH-494: an `IF` condition of the form `ISERROR(x)` (or `ISERR`/`ISNA`) whose `x` resolves to an
+   * error — the house-standard guarded headline, firing into the TRUE arm. The parser wraps a
+   * function-shaped condition in a Boolean coercion, hence [[unwrapTransparent]].
+   */
+  private def firedPredicate(
+    cond: TExpr[?],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Option[TExpr[?]] =
+    unwrapTransparent(cond) match
+      case c: TExpr.Call[?] if ErrorPredicates.contains(c.spec.name.toUpperCase) =>
+        callArgExprs(c).find(guarded => guardResolvesToError(guarded, sheet, wb, clock))
+      case _ => None
+
+  /**
+   * Excel truthiness of an `IF` condition under this substitution — the same scalar coercion the
+   * `IF` implementation itself applies. `None` when the condition cannot be evaluated or coerced:
+   * neither branch is then on the evaluated path.
+   */
+  private def branchTaken(
+    cond: TExpr[?],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Option[Boolean] =
+    Evaluator.instance.eval(cond, sheet, clock, Some(wb), None) match
+      case Left(_) => None
+      case Right(result) =>
+        val scalar = result match
+          case array: ArrayResult => ScalarCoercion.collapseArray(array)
+          case other => other
+        ScalarCoercion.coerce("IF condition", scalar, BindingCoercion.Bool) match
+          case Right(taken: Boolean) => Some(taken)
+          case _ => None
 
   /** ISERROR's own verdict on a guarded expression: a Left OR an error VALUE (see `iserror`). */
   private def guardResolvesToError(
@@ -969,52 +1051,52 @@ object DataTableSeeder:
           case _ => false
 
   /**
-   * GH-494: every error guard as a `(protected, fallback)` pair — `IFERROR(x, fb)`, `IFNA(x, fb)`
-   * and `IF(ISERROR(x), fb, …)` (with its `ISERR`/`ISNA` siblings). The fallback travels with the
-   * guard because a guard only counts as fired when its fallback is the value actually banked (see
-   * [[firedGuard]]). Structural cases recurse; everything else (literals, refs, ranges, bindings)
-   * carries no guard.
+   * GH-494: does this formula carry an error guard ANYWHERE — `IFERROR`, `IFNA`, or `IF` over an
+   * `ISERROR`/`ISERR`/`ISNA` condition? Purely structural: the per-cell path walk only runs for
+   * source formulas that could fire at all, so a guard-free corner costs nothing extra.
    */
-  private def errorGuards(expr: TExpr[?]): List[(TExpr[?], TExpr[?])] =
+  private def containsErrorGuard(expr: TExpr[?]): Boolean =
+    isGuardNode(expr) || children(expr).exists(containsErrorGuard)
+
+  /** Is this node itself an error guard (see [[containsErrorGuard]])? */
+  private def isGuardNode(expr: TExpr[?]): Boolean =
     expr match
       case call: TExpr.Call[?] =>
-        val args = callArgExprs(call)
-        val here: List[(TExpr[?], TExpr[?])] = call.spec.name.toUpperCase match
-          case "IFERROR" | "IFNA" =>
-            args match
-              case guarded :: fallback :: _ => List((guarded, fallback))
-              case _ => Nil
+        call.spec.name.toUpperCase match
+          case "IFERROR" | "IFNA" => true
           case "IF" =>
-            args match
-              // The parser wraps a function-shaped condition in a Boolean coercion.
-              case cond :: fallback :: _ =>
-                unwrapTransparent(cond) match
-                  case c: TExpr.Call[?] if ErrorPredicates.contains(c.spec.name.toUpperCase) =>
-                    callArgExprs(c).map(guarded => (guarded, fallback))
-                  case _ => Nil
-              case _ => Nil
-          case _ => Nil
-        here ++ args.flatMap(errorGuards)
-      case TExpr.Add(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Sub(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Mul(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Div(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Pow(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Concat(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Eq(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Neq(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Lt(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Lte(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Gt(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.Gte(l, r) => errorGuards(l) ++ errorGuards(r)
-      case TExpr.ToInt(e) => errorGuards(e)
-      case TExpr.UnaryPlus(e) => errorGuards(e)
-      case TExpr.Percent(e) => errorGuards(e)
-      case TExpr.DateToSerial(e) => errorGuards(e)
-      case TExpr.DateTimeToSerial(e) => errorGuards(e)
-      case TExpr.Coerced(inner, _) => errorGuards(inner)
-      case TExpr.Let(bindings, body) =>
-        bindings.flatMap((_, value) => errorGuards(value)) ++ errorGuards(body)
+            callArgExprs(call).headOption.map(unwrapTransparent) match
+              case Some(c: TExpr.Call[?]) => ErrorPredicates.contains(c.spec.name.toUpperCase)
+              case _ => false
+          case _ => false
+      case _ => false
+
+  /**
+   * The sub-expressions of a node. Structural cases recurse; everything else (literals, refs,
+   * ranges, bindings) is a leaf for guard purposes.
+   */
+  private def children(expr: TExpr[?]): List[TExpr[?]] =
+    expr match
+      case call: TExpr.Call[?] => callArgExprs(call)
+      case TExpr.Add(l, r) => List(l, r)
+      case TExpr.Sub(l, r) => List(l, r)
+      case TExpr.Mul(l, r) => List(l, r)
+      case TExpr.Div(l, r) => List(l, r)
+      case TExpr.Pow(l, r) => List(l, r)
+      case TExpr.Concat(l, r) => List(l, r)
+      case TExpr.Eq(l, r) => List(l, r)
+      case TExpr.Neq(l, r) => List(l, r)
+      case TExpr.Lt(l, r) => List(l, r)
+      case TExpr.Lte(l, r) => List(l, r)
+      case TExpr.Gt(l, r) => List(l, r)
+      case TExpr.Gte(l, r) => List(l, r)
+      case TExpr.ToInt(e) => List(e)
+      case TExpr.UnaryPlus(e) => List(e)
+      case TExpr.Percent(e) => List(e)
+      case TExpr.DateToSerial(e) => List(e)
+      case TExpr.DateTimeToSerial(e) => List(e)
+      case TExpr.Coerced(inner, _) => List(inner)
+      case TExpr.Let(bindings, body) => bindings.map((_, value) => value) :+ body
       case _ => Nil
 
   /** The expression-shaped arguments of a call (range/cells positions cannot hold a guard). */
@@ -1075,8 +1157,12 @@ object DataTableSeeder:
       case Some(_: CellValue.Formula) => acc // never overwrite a real formula
       case _ => acc.put(cellRef, value)
 
-  /** Cycle members rendered `'Sheet'!A1`, sorted, capped at 8 (GH-453 warning payload). */
-  private def renderCycle(core: Set[QualifiedRef]): Vector[String] =
+  /**
+   * Qualified refs rendered `'Sheet'!A1`, sorted, capped at 8 — the payload shape shared by the
+   * cycle members of [[SeedTableWarning.CircularNotIterated]] and the unresolved cone cells of
+   * [[SeedTableWarning.ConeUnresolved]].
+   */
+  private def renderRefs(core: Set[QualifiedRef]): Vector[String] =
     core.toVector
       .sortBy(q => (q.sheet.value, q.ref.toA1))
       .take(8)

@@ -835,11 +835,116 @@ class DataTableSeederSpec extends FunSuite:
     assertEquals(report.warnings, Vector.empty, "the guarded branch was never evaluated")
   }
 
+  /**
+   * GH-494 (round-2 review): a guarded column table over `A1`, axis values 0/1/2 — axis 0 is the
+   * combination whose protected expression errors, so exactly one interior banks the fallback.
+   */
+  private def guardedColumnTable(formula: String, extra: Sheet => Sheet = identity): Sheet =
+    extra(
+      Sheet("S")
+        .put(ref"A1", num(1))
+        .put(ref"F9", CellValue.Formula(formula))
+        .put(ref"E10", num(0))
+        .put(ref"E11", num(1))
+        .put(ref"E12", num(2))
+        .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    )
+
+  /** The banked value of an interior cell, reading plain values and record caches alike. */
+  private def bankedValue(sheet: Sheet, r: ARef): CellValue =
+    sheet.cells.get(r).map(_.value) match
+      case Some(CellValue.Formula(_, Some(inner), _)) => inner
+      case Some(CellValue.Formula(_, None, _)) => fail(s"${r.toA1} must seed a cached value")
+      case Some(other) => other
+      case None => fail(s"${r.toA1} must seed")
+
+  private def assertOneGuardFired(warnings: Vector[SeedTableWarning], cells: Int): String =
+    warnings match
+      case Vector(SeedTableWarning.ErrorGuardFired(_, tableRef, fired, guard)) =>
+        assertEquals(tableRef, range("F10:F12"))
+        assertEquals(fired, cells)
+        guard
+      case other => fail(s"expected exactly one ErrorGuardFired, got $other")
+
+  private def seedReport(sheet: Sheet): DataTableSeedReport =
+    Workbook(sheet).seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+
+  test("GH-494: IF(ISERROR(x), <cell ref>, x) reports the guard it banked") {
+    // Round-2 review: the numeric-fallback house shape. The fallback is a bare cell ref, which
+    // parses as a PolyRef inside IF's Any-typed arg slots — a value-equality probe of it goes
+    // SILENT even though the guard is exactly what banked -5.
+    val report = seedReport(
+      guardedColumnTable("IF(ISERROR(1/A1),D1,1/A1)", _.put(ref"D1", num(-5)))
+    )
+    val out = sheetNamed(report.workbook, "S")
+    assertEquals(bankedValue(out, ref"F10"), CellValue.Number(BigDecimal(-5)))
+    assertSeededNumber(out, ref"F11", 1.0, 1e-9)
+    assertSeededNumber(out, ref"F12", 0.5, 1e-9)
+    val guard = assertOneGuardFired(report.warnings, 1)
+    assert(guard.contains("A1"), s"the warning must name the guarded expression: $guard")
+  }
+
+  test("GH-494: an absolute-ref fallback arm reports the guard too") {
+    val report = seedReport(
+      guardedColumnTable("IF(ISERROR(1/A1),$D$1,1/A1)", _.put(ref"D1", num(-5)))
+    )
+    val out = sheetNamed(report.workbook, "S")
+    assertEquals(bankedValue(out, ref"F10"), CellValue.Number(BigDecimal(-5)))
+    assertOneGuardFired(report.warnings, 1)
+  }
+
+  test("GH-494: the guard reports whatever shape its arms take") {
+    // Round-2 review: the fallback arm is irrelevant to the verdict — the walk asks only whether
+    // ISERROR's own argument errored on the path Excel took.
+    Vector(
+      ("IF(ISERROR(1/A1),D1,7)", BigDecimal(-5)),
+      ("IF(ISERROR(1/A1),D1,D2)", BigDecimal(-5)),
+      ("IF(ISERROR(1/A1),7,D1)", BigDecimal(7))
+    ).foreach { (formula, banked) =>
+      val report = seedReport(
+        guardedColumnTable(formula, s => s.put(ref"D1", num(-5)).put(ref"D2", num(3)))
+      )
+      val out = sheetNamed(report.workbook, "S")
+      assertEquals(bankedValue(out, ref"F10"), CellValue.Number(banked), s"$formula at axis 0")
+      assertOneGuardFired(report.warnings, 1)
+    }
+  }
+
+  test("GH-494: a guard that is not the ROOT of the source formula still reports") {
+    // `IFERROR(...)+5` banks 5, which no fallback arm equals on its own — the value-equality
+    // probe missed every non-root guard, the straight loss of true positives the review found.
+    val report = seedReport(guardedColumnTable("IFERROR(1/A1,0)+5"))
+    val out = sheetNamed(report.workbook, "S")
+    assertSeededNumber(out, ref"F10", 5.0, 1e-9)
+    assertSeededNumber(out, ref"F11", 6.0, 1e-9)
+    assertOneGuardFired(report.warnings, 1)
+  }
+
+  test("GH-494: a guard inside a function argument still reports") {
+    val report = seedReport(guardedColumnTable("SUM(IFERROR(1/A1,0),5)"))
+    val out = sheetNamed(report.workbook, "S")
+    assertSeededNumber(out, ref"F10", 5.0, 1e-9)
+    assertSeededNumber(out, ref"F11", 6.0, 1e-9)
+    assertOneGuardFired(report.warnings, 1)
+  }
+
+  test("GH-494: an untaken inner rung whose fallback COINCIDES with the banked value stays clean") {
+    // Round-2 review: at axis 0 the outer rung succeeds with 0, and the untaken inner fallback
+    // also evaluates to 0 — value equality false-positives on the coincidence.
+    val report = seedReport(guardedColumnTable("IFERROR(A1*2,IFERROR(1/(A1-A1),0))"))
+    val out = sheetNamed(report.workbook, "S")
+    assertSeededNumber(out, ref"F10", 0.0, 1e-9)
+    assertSeededNumber(out, ref"F11", 2.0, 1e-9)
+    assertSeededNumber(out, ref"F12", 4.0, 1e-9)
+    assertEquals(report.warnings, Vector.empty, "the outer rung held for every combination")
+  }
+
   test("GH-493: a cone cell that cannot be re-derived is reported, never silently FLAT") {
     // Review rework: B1 is axis-DEPENDENT (it reads the what-if input) so it enters the cone, but
     // its cross-sheet leg is unresolvable — the same Left any unsupported function produces. The
     // cone resolution leaves it on its stale cache, so the grid goes FLAT (8 for every axis). The
-    // tolerant seed stands, but it must be VISIBLE: one Skipped naming the distinct cone refs.
+    // tolerant seed stands, but it must be VISIBLE: one ConeUnresolved naming the distinct cone
+    // refs. Round-2 review: NOT a Skipped — every interior here WAS seeded.
     val sheet = Sheet("S")
       .put(ref"A1", num(0))
       .put(ref"B1", CellValue.Formula("A1*10+Missing!A1", Some(num(7))))
@@ -853,15 +958,12 @@ class DataTableSeederSpec extends FunSuite:
     assertSeededNumber(out, ref"F10", 8.0, 1e-9)
     assertSeededNumber(out, ref"F11", 8.0, 1e-9)
     report.warnings match
-      case Vector(SeedTableWarning.Skipped(s, tableRef, cells, reason)) =>
+      case Vector(SeedTableWarning.ConeUnresolved(s, tableRef, cells, refs)) =>
         assertEquals(s, SheetName.unsafe("S"))
         assertEquals(tableRef, range("F10:F11"))
         assertEquals(cells, 1, "one DISTINCT cone ref, reported once per table not per combination")
-        assert(
-          reason.contains("could not be re-derived"),
-          s"the reason must name the unresolved cone: $reason"
-        )
-      case other => fail(s"expected exactly one Skipped, got $other")
+        assertEquals(refs, Vector("S!B1"), "the warning must name the stale cone cell")
+      case other => fail(s"expected exactly one ConeUnresolved, got $other")
   }
 
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
