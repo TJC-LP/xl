@@ -43,6 +43,9 @@ export PATH="$HOME/.local/bin:$PATH"
 --stream              # O(1) memory streaming for large files (search/stats/bounds/view + writes)
 --max-size <MB>       # Max uncompressed size for in-memory load (default 100, 0 = unlimited)
 --backend <name>      # XML backend: scalaxml (default) or saxstax (faster)
+--no-recalc           # Write verbs: apply the edit, recalculate nothing (alias --preserve-caches)
+--preserve-caches     # Same flag, spelled for the intent
+--strict              # Write verbs: exit 1 when the write's recalculation reports problems
 
 # Read-only operations
 xl -f model.xlsx sheets                    # List all sheets
@@ -67,6 +70,74 @@ xl new report.xlsx --sheet Data --sheet Summary   # Create a blank workbook
 xl functions                                       # List all 108 supported functions
 xl rasterizers                                     # List available PNG/PDF backends
 ```
+
+> Global flags must come **before** the verb: `xl -f x.xlsx --strict recalc`, never
+> `xl -f x.xlsx recalc --strict` (decline reports `Unexpected argument: recalc`).
+
+### Cache posture on writes (`--no-recalc` / `--preserve-caches`)
+
+Every write verb that changes cell content ends with a recalculation scoped to the edit's **dirty
+dependency cone** — the changed cells plus their transitive dependents (cross-sheet included) plus
+the always-dirty `INDIRECT`/`OFFSET` cells. Cached values outside that cone are never rewritten, so
+a book whose caches come from another engine keeps them.
+
+`--no-recalc` (alias `--preserve-caches`) drops the recalculation entirely: the edit lands and no
+cached value is recomputed. Use it when an external calculator owns the numbers. Honored by `put`,
+`putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`;
+`recalc` rejects it as a contradiction.
+
+How completely caches survive depends on the verb:
+
+- **Non-structural** (`put`, `putf`, `fill`, `copy`, `batch`): every existing cached value survives
+  byte-identical, cone included. The summary says so.
+- **Structural** (`insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`): a structural edit
+  moves cells, rewrites formula text and rewrites defined names, so xl invalidates the cache of
+  every formula that transitively reads the edited sheet and writes those cells **without a `<v>`**.
+  It never re-asserts a pre-edit cache: whether an unchanged formula still has its old answer cannot
+  be decided without recalculating, which is precisely what the flag refuses. (A formula reached
+  through a shrunk defined name, or a static dependent of an `INDIRECT` cell, keeps its text
+  byte-identical while its answer changes underneath it.) Formulas the edit did not reach — a
+  self-contained sheet that never reads the edited one — ride through byte-identical. The summary
+  counts both halves:
+
+  ```
+  Recalculation skipped (--no-recalc): 0 cached value(s) preserved, 11 formula(s) invalidated by
+  the edit left uncached (recalculate externally)
+  ```
+
+  Reopening the file in Excel, or a later `xl recalc`, fills those back in. A missing `<v>` is a
+  visible gap that any recalculation repairs; a wrong one is silent and permanent, which is why xl
+  never **re-asserts** a cache the edit invalidated. What it does not claim: a cache rides through
+  only when the pre-edit dependency graph shows no path from it to the edited sheet, and a
+  reference that graph cannot resolve — a multi-area or intersection defined name, a structured
+  reference, an external link — can hide such a path. xl withdraws the caches of formulas that
+  name a defined name it cannot parse, precisely because the graph is blind there; the remaining
+  cases are tracked in [#507](https://github.com/TJC-LP/xl/issues/507) and affect a normal
+  recalculating write too. **If you need every formula cached after a structural edit, do not pass
+  `--no-recalc`.**
+
+```bash
+xl -f external-model.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
+xl -f external-model.xlsx -s Data -o out.xlsx --preserve-caches batch ops.json
+```
+
+### Strict exit codes (`--strict`)
+
+By default a write reports formula-evaluation errors, iterative non-convergence and data-table seed
+warnings in its summary and still exits 0. `--strict` promotes those to **exit 1** while printing
+the same summary — for CI and scripted pipelines. Excel error *values* (`#DIV/0!`, `#N/A`) are data
+conditions, not failures, and never gate.
+
+```bash
+xl -f model.xlsx -o out.xlsx --strict recalc    # exit 1 if any formula failed to evaluate
+```
+
+With `-o` the output file is written even on a strict failure (the gate only sets the exit code).
+With `-i` the temp file is discarded and the input is left byte-identical; the summary then says
+`NOT saved (--strict failure): <file> left untouched` instead of `Saved:`. `--strict` is refused
+together with `--stream` (streaming writes never recalculate, so the gate could never fire). Verbs
+that produce no recalculation result — `put`/`putf`/`fill`/`copy` for the cell they authored, and
+every presentation-only verb — cannot gate today (issue #504).
 
 ---
 

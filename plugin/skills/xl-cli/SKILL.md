@@ -638,7 +638,61 @@ Hard-won rules from fleet use on real deal workbooks. Items marked **fixed in 0.
 | `--backend <type>` | | Write backend: scalaxml (default) or saxstax (36-39% faster). Reads always use StAX. |
 | `--max-size <MB>` | | Override 100MB security limit (0 = unlimited) |
 | `--stream` | | O(1) memory mode for reads + writes (search/stats/bounds/view/put/putf/style) |
+| `--no-recalc` | `--preserve-caches` | Apply the edit, recalculate nothing (see cache safety below) |
+| `--strict` | | Exit 1 when the write's recalculation reports errors/non-convergence/seed warnings |
 | `--dry-run` | | Validate batch JSON and show summary without writing (batch only) |
+
+**Global flags go BEFORE the verb.** `xl -f x.xlsx --strict recalc` works;
+`xl -f x.xlsx recalc --strict` fails with `Unexpected argument: recalc`.
+
+#### Cache safety on writes
+
+Writes recalculate only the edit's **dirty dependency cone** (the changed cells, their transitive
+dependents across sheets, plus `INDIRECT`/`OFFSET` cells). Cached values outside the cone are left
+exactly as the file had them, so a workbook calculated by another engine is not re-poisoned.
+
+Use `--no-recalc` / `--preserve-caches` when an external calculator owns the numbers and xl should
+touch nothing:
+
+```bash
+xl -f external.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
+xl -f external.xlsx -s Data -o out.xlsx --preserve-caches insert-rows 20 1
+```
+
+Honored by `put`, `putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`,
+`delete-cols`. `recalc` rejects it (it is the whole-book recalculation verb).
+
+On the non-structural verbs (`put`, `putf`, `fill`, `copy`, `batch`) every cached value in the file
+survives byte-identical. On the four **structural** verbs the edit moves cells, rewrites formulas
+and rewrites defined names, so xl invalidates every formula that transitively reads the edited sheet
+and writes those cells **uncached** rather than re-stamping a stale number — it never carries a
+pre-edit cache forward, because deciding that an unchanged formula still has its old answer requires
+the recalculation the flag refuses. Formulas the edit did not reach ride through byte-identical. The
+summary counts both halves:
+
+```
+Recalculation skipped (--no-recalc): 0 cached value(s) preserved, 11 formula(s) invalidated by the
+edit left uncached (recalculate externally)
+```
+
+Excel (or a later `xl recalc`) fills those in. xl never **re-asserts** a cache the edit invalidated,
+but it does not certify the ones that ride through: a cache survives only when the pre-edit
+dependency graph shows no path from it to the edited sheet, and a reference that graph cannot
+resolve (a multi-area or intersection defined name, a structured reference, an external link) can
+hide such a path — caches behind an unparseable defined name are withdrawn for that reason, the rest
+is [#507](https://github.com/TJC-LP/xl/issues/507). If you need every formula cached after a
+structural edit, do not pass `--no-recalc`.
+
+#### Strict exit codes for pipelines
+
+```bash
+xl -f model.xlsx -o out.xlsx --strict recalc   # exit 1 if a formula could not be evaluated
+```
+
+`--strict` keeps the same printed summary and only changes the exit code. Excel error *values*
+(`#DIV/0!`, `#N/A`) never gate — they are data. With `-o` the file is still written on failure;
+with `-i` the input is left untouched and the summary says `NOT saved (--strict failure)`.
+`--strict` cannot be combined with `--stream`.
 
 ### Info Commands
 
