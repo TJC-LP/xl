@@ -210,6 +210,89 @@ class IterativeRecalcSpec extends FunSuite:
     )
   }
 
+  // ===== GH-469: warm start — seed cycle members from their loaded caches (Excel semantics) =====
+
+  private val a3 = ARef.from0(0, 2)
+  private val b3 = ARef.from0(1, 2)
+
+  /**
+   * The reported fixture: a mutually `IF(ISERROR(...))`-guarded pair sitting at a VALID numeric
+   * fixpoint (A3 = B3*0.5+10 = 20, B3 = A3*0.5+10 = 20). Cold-seeded at 0 the guards see 0/0 =
+   * #DIV/0! in round 1, both members flip to the text branch, and `"NA "` is itself a fixpoint — so
+   * the run "converges" having destroyed two valid caches with `errors` and `excelErrors` both
+   * empty.
+   */
+  private val guardedPairAtFixpoint: Workbook =
+    Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a3, CellValue.Formula("=IF(ISERROR(B3/A3-1),\"NA \",B3*0.5+10)", Some(num(20))))
+        .put(b3, CellValue.Formula("=IF(ISERROR(A3/B3-1),\"NA \",A3*0.5+10)", Some(num(20))))
+        .put(c1, CellValue.Formula("=A3*2+1", Some(num(41))))
+    )
+
+  test("GH-469: a guarded pair at a valid numeric fixpoint keeps its caches (warm start)") {
+    val result = guardedPairAtFixpoint.recalculate(IterativeCalc(200, BigDecimal("1E-10")))
+    assertEquals(cachedNum(result.workbook, "S", a3), Some(BigDecimal(20)), "A3 must stay 20")
+    assertEquals(cachedNum(result.workbook, "S", b3), Some(BigDecimal(20)), "B3 must stay 20")
+    assert(result.converged, "a book already at its fixpoint must converge")
+    assertEquals(result.errors, Vector.empty[com.tjclp.xl.formula.eval.CellEvalError])
+    assertEquals(result.excelErrors, Vector.empty)
+    assertEquals(result.iterationsUsed, 1, "seeding at the fixpoint converges in one round")
+    assertEquals(result.cycles.map(_.rounds), Vector(1))
+    // the naked dependent recomputes off the (unchanged) member values
+    assertEquals(cachedNum(result.workbook, "S", c1), Some(BigDecimal(41)))
+  }
+
+  test("GH-469: seedFromCaches = false reproduces the cold-start text flip") {
+    val cold = guardedPairAtFixpoint
+      .recalculate(IterativeCalc(200, BigDecimal("1E-10"), seedFromCaches = false))
+    assertEquals(cached(cold.workbook, "S", a3), Some(CellValue.Text("NA ")))
+    assertEquals(cached(cold.workbook, "S", b3), Some(CellValue.Text("NA ")))
+    assert(cold.converged, "the text branch is itself a fixpoint — that is why it was silent")
+  }
+
+  test("GH-469: warm start still lands on the fixpoint when the caches are WRONG (contraction)") {
+    // Same convergent pair, but poisoned with caches far from the fixpoint.
+    val poisoned = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, CellValue.Formula("=B1*0.1", Some(num(-5000))))
+        .put(b1, CellValue.Formula("=100+A1/2", Some(num(9999))))
+    )
+    val warm = poisoned.recalculate(IterativeCalc(200, BigDecimal("1E-12")))
+    val cold = convergentPair.recalculate(IterativeCalc(200, BigDecimal("1E-12")))
+    val warmB = cachedNum(warm.workbook, "S", b1).getOrElse(fail("warm B1"))
+    val coldB = cachedNum(cold.workbook, "S", b1).getOrElse(fail("cold B1"))
+    assert(warm.converged && cold.converged)
+    assert(
+      (warmB - coldB).abs < BigDecimal("1E-9"),
+      s"warm start reached a different fixpoint: $warmB vs $coldB"
+    )
+    assert((warmB - fixpointB).abs < BigDecimal("1E-9"), s"B1=$warmB, expected ~$fixpointB")
+  }
+
+  test("GH-469: a member inside the stripped dynamic bucket seeds 0 despite carrying a cache") {
+    // P1 is dynamic (INDIRECT), so the whole component defers with the bucket and its caches are
+    // declared stale and stripped — warm start must NOT resurrect them.
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(a1, num(0))
+      .put(
+        a3,
+        CellValue.Formula(
+          "=IF(ISERROR(B3/A3-1),\"NA \",B3*0.5+10+INDIRECT(\"A1\"))",
+          Some(num(20))
+        )
+      )
+      .put(b3, CellValue.Formula("=IF(ISERROR(A3/B3-1),\"NA \",A3*0.5+10)", Some(num(20))))
+    val result = Workbook(sheet).recalculate(IterativeCalc(200, BigDecimal("1E-10")))
+    assertEquals(cached(result.workbook, "S", a3), Some(CellValue.Text("NA ")))
+    assertEquals(cached(result.workbook, "S", b3), Some(CellValue.Text("NA ")))
+  }
+
+  test("GH-469: fromCalcPr inherits the Excel-parity warm-start default") {
+    assert(IterativeCalc.fromCalcPr(CalcPr(iterativeCalculation = true)).seedFromCaches)
+    assert(IterativeCalc(100, BigDecimal("0.001")).seedFromCaches)
+  }
+
   test("GH-373: acyclic workbook under iterative settings behaves exactly like the default") {
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(a1, num(10))

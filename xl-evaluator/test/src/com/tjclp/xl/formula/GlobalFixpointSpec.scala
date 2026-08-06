@@ -138,12 +138,35 @@ class GlobalFixpointSpec extends FunSuite:
     }
   }
 
-  test("GH-492 twin exactness: re-recalculating the fresh result reproduces it bit-for-bit") {
-    val fresh = interleaved(BigDecimal(1000)).recalculate(Tight)
-    val again = fresh.workbook.recalculate(Tight)
+  test("GH-492 twin exactness: a COLD re-solve of the fresh result reproduces it bit-for-bit") {
+    // With cold (0) seeding both runs take the identical trajectory, so identical output is the
+    // sharpest possible statement that the pass no longer depends on the input's loaded caches.
+    // Pre-fix this failed: the second run's SCCs iterated against the first run's cached bridges.
+    val cold = Tight.copy(seedFromCaches = false)
+    val fresh = interleaved(BigDecimal(1000)).recalculate(cold)
+    val again = fresh.workbook.recalculate(cold)
     assertEquals(again.workbook, fresh.workbook)
     assertEquals(again.evaluated, fresh.evaluated)
     assertEquals(again.errors.map(_.render), fresh.errors.map(_.render))
+    assertEquals(again.cycles, fresh.cycles)
+  }
+
+  test("GH-492/GH-469: a WARM re-solve converges at round 1 and stays inside maxChange") {
+    // Warm-started from its own output every component recognises the input as a fixpoint in one
+    // round. It still writes that round's values, so the book creeps by strictly less than
+    // maxChange — toward the true fixpoint, not away from it. That is the honest idempotence
+    // claim: bit-exact for the cold path, |Δ| < maxChange for the warm one.
+    val fresh = interleaved(BigDecimal(1000)).recalculate(Tight)
+    val again = fresh.workbook.recalculate(Tight)
+    assert(again.converged && again.certified)
+    assertEquals(again.cycles.map(_.rounds), Vector(1, 1, 1), again.cycles.map(_.render).toString)
+    assert(
+      again.cycles.forall(_.maxDelta.exists(_ < Tight.maxChange)),
+      again.cycles.map(_.render).toString
+    )
+    snapshot(again.workbook).zip(snapshot(fresh.workbook)).foreach { case ((a1, got), (_, want)) =>
+      assert((got - want).abs < Tight.maxChange, s"$a1 moved by more than maxChange: $got vs $want")
+    }
   }
 
   test("GH-492 bridge freshness: the bridge caches equal f(the SCC fixpoint) exactly") {

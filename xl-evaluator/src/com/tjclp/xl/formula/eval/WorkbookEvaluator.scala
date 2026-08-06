@@ -367,7 +367,13 @@ object WorkbookEvaluator:
             component.toList.flatMap(q =>
               sheetIndex.get(q.sheet).map(idx => (q, idx, formulaText(q)))
             )
-          val seed = Map.empty[QualifiedRef, CellValue]
+          // GH-469: Excel seeds iterative calculation from the CURRENT cell values. Read them off
+          // the THREADED sheets, not the original workbook: a member whose cache the dynamic
+          // bucket stripped correctly seeds 0, and no member can be read after being written
+          // (each component is visited exactly once, and components are disjoint).
+          val seed =
+            if iterative.seedFromCaches then warmSeed(baseSheets, members)
+            else Map.empty[QualifiedRef, CellValue]
           val outcome =
             jacobiFixpoint(wb, baseSheets, members, iterative, pinnedClock, rngOpt, seed)
           val folded = members.foldLeft((baseSheets, acc0, errs0)) {
@@ -502,6 +508,24 @@ object WorkbookEvaluator:
           else (acc, run ++ c.members)
       }
     if trailing.isEmpty then steps else steps :+ CalcStep.Straight(trailing.toList)
+
+  /**
+   * GH-469: the members' currently cached values — Excel's iterative-calculation seed. Members with
+   * no cache are omitted and fall back to 0 inside [[jacobiFixpoint]].
+   *
+   * Any cached VALUE seeds, not just numbers: convergence still requires re-evaluating the formula
+   * and reproducing that value, which is a genuine fixpoint (GH-344 already blesses exactly this
+   * for error values).
+   */
+  private[eval] def warmSeed(
+    baseSheets: Vector[Sheet],
+    members: List[(QualifiedRef, Int, String)]
+  ): Map[QualifiedRef, CellValue] =
+    members.flatMap { (q, idx, _) =>
+      baseSheets.lift(idx).flatMap(_.cells.get(q.ref)).map(_.value) match
+        case Some(CellValue.Formula(_, Some(cachedValue), _)) => Some(q -> cachedValue)
+        case _ => None
+    }.toMap
 
   /**
    * GH-492: the outcome of one component's Jacobi fixpoint.

@@ -55,8 +55,23 @@ final case class CellEvalError(
  * @param maxChange
  *   Convergence threshold: iteration stops when every cycle member changes by LESS than this
  *   between rounds (Excel UI default 0.001)
+ * @param seedFromCaches
+ *   GH-469: seed each cycle member from its LOADED cached value when it has one, falling back to 0
+ *   otherwise — Excel's semantics (iterative calculation starts from the current cell values). A
+ *   book already at a valid fixpoint therefore re-solves to itself in one round instead of being
+ *   driven back through the 0-seed transient, which on guarded topologies (mutually
+ *   `IF(ISERROR(…))`-guarded pairs) silently replaced valid numeric caches with the guard's text
+ *   branch — itself a fixpoint, so the run reported convergence with no error at all. Set false for
+ *   a cold start: the supported escape hatch for a book whose caches are known to be poisoned.
+ *   Members whose cache the dynamic (INDIRECT/OFFSET) bucket strips seed 0 regardless — their
+ *   caches are declared stale. Any cached VALUE seeds, not just numbers; convergence still requires
+ *   re-evaluating the formula and reproducing it.
  */
-final case class IterativeCalc(maxIter: Int, maxChange: BigDecimal) derives CanEqual
+final case class IterativeCalc(
+  maxIter: Int,
+  maxChange: BigDecimal,
+  seedFromCaches: Boolean = true
+) derives CanEqual
 
 object IterativeCalc:
   /**
@@ -134,7 +149,9 @@ final case class SccReport(
  * evaluates normally, each cyclic component fixpoints against the freshly computed values of its
  * precedents. By induction over that order, after the last component every cell holds its
  * GLOBAL-fixpoint value (within each component's `maxChange`), so `converged = true` means one more
- * whole-workbook pass would change nothing. Before GH-492 the pass was split pre-order / one flat
+ * whole-workbook pass would change nothing beyond that tolerance — every component would recognise
+ * its input as a fixpoint in round 1 (exactly, and bit-for-bit, with
+ * `IterativeCalc.seedFromCaches = false`). Before GH-492 the pass was split pre-order / one flat
  * Jacobi / post-order and `converged` certified only that the Jacobi loop had stopped moving —
  * mid-wavefront, against whatever caches the acyclic precedents happened to hold. Two honest
  * caveats survive: per-component tolerances compose across the condensation only up to error
