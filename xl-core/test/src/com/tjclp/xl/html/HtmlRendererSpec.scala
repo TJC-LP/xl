@@ -230,6 +230,8 @@ class HtmlRendererSpec extends FunSuite:
   // ========== Integration with putMixed ==========
 
   test("toHtml: financial model example") {
+    // Column B must be wide enough for "1000000.00" (85px): at the 72px default the value
+    // does not fit and renders as Excel's #### marker instead of a sheared numeral (GH-459).
     val sheet = Sheet("Q1 Report")
       .put(
         ref"A1" -> "Revenue",
@@ -238,6 +240,7 @@ class HtmlRendererSpec extends FunSuite:
         ref"B2" -> BigDecimal("750000")
       )
       .unsafe
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(12.0))) // 101px
 
     val html = sheet.toHtml(ref"A1:B2")
     assert(html.contains("Revenue"))
@@ -779,4 +782,182 @@ class HtmlRendererSpec extends FunSuite:
     assertEquals("<tr".r.findAllIn(html).length, 0, s"Hidden rows should be excluded, got: $html")
     assertEquals("width: 0px".r.findAllIn(html).length, 2, s"Both cols should be 0px, got: $html")
     assert(html.endsWith("</table>"), "Table should be closed")
+  }
+
+  // ========== Numeric Overflow Hashing (GH-459) ==========
+
+  /** Cell bodies that are entirely `#` (color literals like #FFFFFF live in attributes). */
+  private def htmlHashRuns(html: String): List[String] =
+    """<td[^>]*>(#+)</td>""".r.findAllMatchIn(html).map(_.group(1)).toList
+
+  test("toHtml: number too wide for its column renders #### (GH-459)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // ~37px
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assert("""<td[^>]*>#+</td>""".r.findFirstIn(html).isDefined, s"Should hash overflow: $html")
+    assert(
+      !html.contains("1234567.9") && !html.contains("234567.9"),
+      s"No digits of the overflowing number may be rendered, got: $html"
+    )
+  }
+
+  test("toHtml: right-aligned number that does not fit hashes even with empty neighbours") {
+    val rightStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Right))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 987654321.0)
+      .unsafe
+      .withCellStyle(ref"A1", rightStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val html = sheet.toHtml(ref"A1:C1")
+    assert(
+      """<td[^>]*>#+</td>""".r.findFirstIn(html).isDefined,
+      s"Right-aligned overflow must hash, got: $html"
+    )
+  }
+
+  test("toHtml: number that fits its column is never hashed") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 42.0)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assertEquals(htmlHashRuns(html), Nil, s"Fitting number must not hash, got: $html")
+    assert(html.contains(">42"), s"Fitting number should render its digits, got: $html")
+  }
+
+  test("toHtml: wrapped number wraps instead of hashing") {
+    val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", wrapStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assertEquals(htmlHashRuns(html), Nil, s"wrapText must suppress hashing, got: $html")
+    assert(html.contains("1234567.9"), s"Wrapped number keeps its digits, got: $html")
+  }
+
+  test("toHtml: overflowing text is not hashed (only numbers and dates hash)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Sales Report Total")
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assertEquals(htmlHashRuns(html), Nil, s"Text must clip, not hash, got: $html")
+    assert(html.contains("Sales Report Total"), s"Text should still be emitted, got: $html")
+  }
+
+  test("toHtml: number wide for one column but fitting the merge is not hashed") {
+    val range = CellRange.parse("A1:C1").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .merge(range)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(12.0)))
+      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(12.0)))
+
+    val html = sheet.toHtml(ref"A1:C1")
+    assertEquals(htmlHashRuns(html), Nil, s"Merged width should accommodate the number, got: $html")
+    assert(html.contains("1234567.9"), s"Merged number should render in full, got: $html")
+  }
+
+  test("toHtml: column too narrow for two hashes still emits at least one") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(2.0))) // 21px
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assertEquals(
+      htmlHashRuns(html),
+      List("#"),
+      s"Very narrow column should emit exactly one #, got: $html"
+    )
+  }
+
+  test("toHtml: General-aligned number with empty neighbours hashes in its own column (GH-459)") {
+    // Excel confines a too-wide number to its own column and hashes it. Bleeding the digits
+    // across empty neighbours (via a colspan) misattributes them to the wrong column.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 123456789012345.0)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val html = sheet.toHtml(ref"A1:D1")
+    assert(htmlHashRuns(html).nonEmpty, s"General-aligned overflow must hash, got: $html")
+    assert(
+      !html.contains("123456789012345"),
+      s"No digits of the overflowing number may be rendered, got: $html"
+    )
+    assert(
+      !html.contains("colspan=\"3\""),
+      s"A hashed number must not span into empty neighbours, got: $html"
+    )
+  }
+
+  test("toHtml: left-aligned number that would cross its cell box hashes (GH-459)") {
+    val leftStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", leftStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(9.0))) // 77px
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assert(htmlHashRuns(html).nonEmpty, s"Left-aligned overflow must hash, got: $html")
+    assert(!html.contains("1234567"), s"No digits of the overflowing number may render: $html")
+  }
+
+  test("toHtml: indented number that would cross its cell box hashes (GH-459)") {
+    val indentStyle =
+      CellStyle.default.withAlign(Align(horizontal = HAlign.Left, indent = 2))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", indentStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0))) // 101px
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assert(htmlHashRuns(html).nonEmpty, s"Indent shrinks the text box, so this must hash: $html")
+    assert(!html.contains("1234567"), s"No digits of the indented number may render: $html")
+  }
+
+  test("toHtml: left-aligned number that fits its text box is not hashed (GH-459)") {
+    val leftStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 42.0)
+      .unsafe
+      .withCellStyle(ref"A1", leftStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assertEquals(htmlHashRuns(html), Nil, s"A number with room to spare must not hash: $html")
+  }
+
+  test("toHtml/toSvg: left-aligned and indented numbers hash in both renderers (GH-459)") {
+    val indentStyle =
+      CellStyle.default.withAlign(Align(horizontal = HAlign.Left, indent = 2))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", indentStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
+
+    val htmlRuns = htmlHashRuns(sheet.toHtml(ref"A1:B1"))
+    val svgRuns = """<text[^>]*>(#+)</text>""".r
+      .findAllMatchIn(sheet.toSvg(ref"A1:B1"))
+      .map(_.group(1))
+      .toList
+    assert(htmlRuns.nonEmpty, "HTML should hash the indented number")
+    assertEquals(svgRuns, htmlRuns, "SVG and HTML must agree on the marker")
   }

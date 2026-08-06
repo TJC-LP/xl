@@ -604,6 +604,42 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-493: an unresolvable cone reports the CONE, never 'interior cell(s) left unseeded'") {
+    // Round-2 review: B1 is axis-dependent but its cross-sheet leg is unresolvable, so the cone
+    // stays on its stale cache and the grid seeds FLAT (11 everywhere). Every interior IS seeded —
+    // rendering that as "1 interior cell(s) left unseeded" is a false statement about the run.
+    val kind: com.tjclp.xl.cells.FormulaKind.DataTable = com.tjclp.xl.cells.FormulaKind.DataTable(
+      ref = CellRange.parse("D5:D7").fold(err => fail(err), identity),
+      dt2D = false,
+      dtr = false,
+      r1 = Some(ref"A1"),
+      r2 = None
+    )
+    val sheet = Sheet("Data")
+      .put(ref"A1" -> 0)
+      .put(ref"B1", CellValue.Formula("A1*10+Missing!A1", Some(CellValue.Number(BigDecimal(10)))))
+      .put(ref"D4", CellValue.Formula("B1+1"))
+      .put(ref"C5" -> 1, ref"C6" -> 2, ref"C7" -> 3)
+      .put(ref"D5", CellValue.dataTable(kind, None))
+    val out = tempXlsx()
+    val summary =
+      WriteCommands.recalc(Workbook(sheet), out, config, false, true).unsafeRunSync()
+    assert(
+      summary.contains("precedent cell(s) in the what-if cone could not be re-derived"),
+      s"summary: $summary"
+    )
+    assert(
+      !summary.contains("left unseeded"),
+      s"the interiors WERE seeded — the warning must not claim otherwise: $summary"
+    )
+    assert(summary.contains("Data!B1"), s"the warning must name the cone cell: $summary")
+    val written = readBack(out)
+    Vector(ref"D5", ref"D6", ref"D7").foreach { r =>
+      assert(interiorDec(written, r).isDefined, s"${r.toA1} was seeded: $summary")
+    }
+    Files.deleteIfExists(out)
+  }
+
   test("GH-454: exhausted iterative declaration renders the non-convergence WARNING") {
     val wb = Workbook(
       Sheet("Data")

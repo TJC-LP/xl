@@ -355,6 +355,9 @@ object StreamingWriteCommands:
         CellRange.parse(rangeStr).left.map(e => new Exception(s"Invalid range: $rangeStr"))
       )
 
+      // GH-475: same typo signal as the in-memory style command
+      _ <- StyleBuilder.warnNumFmt(numFormat)
+
       // Build style
       cellStyle <- StyleBuilder.buildCellStyle(
         bold,
@@ -1069,16 +1072,14 @@ object StreamingWriteCommands:
       case "double" => Some(BorderStyle.Double)
       case _ => None
 
+  /**
+   * GH-475: streaming numFmt resolution is the SAME function as the in-memory path.
+   *
+   * This used to be a hand-copied subset ending in `case _ => None`, so a style op carrying a
+   * custom code (or any name outside the six it knew) reported success and left the cell General.
+   */
   private def parseNumFmtSync(s: String): Option[com.tjclp.xl.styles.numfmt.NumFmt] =
-    import com.tjclp.xl.styles.numfmt.NumFmt
-    s.toLowerCase match
-      case "general" => Some(NumFmt.General)
-      case "number" => Some(NumFmt.Decimal)
-      case "currency" => Some(NumFmt.Currency)
-      case "percent" => Some(NumFmt.Percent)
-      case "date" => Some(NumFmt.Date)
-      case "text" => Some(NumFmt.Text)
-      case _ => None
+    StyleBuilder.parseNumFmt(s).toOption
 
   /** Minimal styles.xml for files that don't have one. */
   private val minimalStylesXml: String =

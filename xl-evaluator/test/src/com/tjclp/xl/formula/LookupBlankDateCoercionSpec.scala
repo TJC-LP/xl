@@ -150,3 +150,78 @@ class LookupBlankDateCoercionSpec extends FunSuite:
       Right(CellValue.Error(CellError.NA))
     )
   }
+
+  // ==========================================================================
+  // GH-488: VLOOKUP/HLOOKUP kept their own inline key normalization, which lacked the
+  // DateTime→serial case — a date-typed key over a date column mis-resolved exactly the way
+  // GH-467's MATCH repros did. Both now route through normalizeLookupValue/the shared extractors.
+  // ==========================================================================
+
+  // B1:B3 = 2026-02-10 / 2026-03-15 / 2026-04-20 (keys), C1:C3 = 100/200/300 (returns),
+  // E1 = 2026-03-15 (a date-typed key CELL)
+  private val vdates = sheetWith(
+    ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2026, 2, 10, 0, 0)), // B1
+    ARef.from0(1, 1) -> CellValue.DateTime(LocalDateTime.of(2026, 3, 15, 0, 0)), // B2
+    ARef.from0(1, 2) -> CellValue.DateTime(LocalDateTime.of(2026, 4, 20, 0, 0)), // B3
+    ARef.from0(2, 0) -> num(100), // C1
+    ARef.from0(2, 1) -> num(200), // C2
+    ARef.from0(2, 2) -> num(300), // C3
+    ARef.from0(4, 0) -> CellValue.DateTime(LocalDateTime.of(2026, 3, 15, 0, 0)) // E1
+  )
+
+  test("GH-488: VLOOKUP exact with a date CELL-REF key finds the date row") {
+    assertEquals(
+      vdates.evaluateFormula("=VLOOKUP(E1, B1:C3, 2, FALSE)"),
+      Right(CellValue.Number(BigDecimal(200)))
+    )
+  }
+
+  test("GH-488: VLOOKUP exact with a DATE(...) key finds the date row") {
+    assertEquals(
+      vdates.evaluateFormula("=VLOOKUP(DATE(2026,4,20), B1:C3, 2, FALSE)"),
+      Right(CellValue.Number(BigDecimal(300)))
+    )
+  }
+
+  test("GH-488: VLOOKUP approximate over a date column takes the next-smaller date") {
+    assertEquals(
+      vdates.evaluateFormula("=VLOOKUP(DATE(2026,3,20), B1:C3, 2, TRUE)"),
+      Right(CellValue.Number(BigDecimal(200)))
+    )
+  }
+
+  // B5:D5 = the same three dates (keys), B6:D6 = 100/200/300 (returns), E5 = 2026-03-15
+  private val hdates = sheetWith(
+    ARef.from0(1, 4) -> CellValue.DateTime(LocalDateTime.of(2026, 2, 10, 0, 0)), // B5
+    ARef.from0(2, 4) -> CellValue.DateTime(LocalDateTime.of(2026, 3, 15, 0, 0)), // C5
+    ARef.from0(3, 4) -> CellValue.DateTime(LocalDateTime.of(2026, 4, 20, 0, 0)), // D5
+    ARef.from0(1, 5) -> num(100), // B6
+    ARef.from0(2, 5) -> num(200), // C6
+    ARef.from0(3, 5) -> num(300), // D6
+    ARef.from0(4, 4) -> CellValue.DateTime(LocalDateTime.of(2026, 4, 20, 0, 0)) // E5
+  )
+
+  test("GH-488: HLOOKUP exact with a date CELL-REF key finds the date column") {
+    assertEquals(
+      hdates.evaluateFormula("=HLOOKUP(E5, B5:D6, 2, FALSE)"),
+      Right(CellValue.Number(BigDecimal(300)))
+    )
+  }
+
+  test("GH-488: HLOOKUP exact with a DATE(...) key finds the date column") {
+    assertEquals(
+      hdates.evaluateFormula("=HLOOKUP(DATE(2026,2,10), B5:D6, 2, FALSE)"),
+      Right(CellValue.Number(BigDecimal(100)))
+    )
+  }
+
+  test("GH-488: VLOOKUP/HLOOKUP text and numeric keys keep working (sanity)") {
+    assertEquals(
+      keyed.evaluateFormula("=VLOOKUP(E1, F1:G3, 2, FALSE)"),
+      Right(CellValue.Number(BigDecimal(200)))
+    )
+    assertEquals(
+      keyed.evaluateFormula("=VLOOKUP(\"k3\", F1:G3, 2, FALSE)"),
+      Right(CellValue.Number(BigDecimal(300)))
+    )
+  }

@@ -573,6 +573,9 @@ object WriteCommands:
       range = refOrRange match
         case Right(r) => r
         case Left(ref) => CellRange(ref, ref)
+      // GH-475: a fat-fingered semantic name (`--format curency`) still ships as a custom code,
+      // but never in silence.
+      _ <- StyleBuilder.warnNumFmt(numFormat)
       newStyle <- StyleBuilder.buildCellStyle(
         bold,
         italic,
@@ -1301,6 +1304,13 @@ object WriteCommands:
     case SeedTableWarning.Skipped(sheet, ref, cells, reason) =>
       s"WARNING: data table ${ref.toA1} on '${sheet.value}': $cells interior cell(s) left " +
         s"unseeded — $reason"
+    case SeedTableWarning.ConeUnresolved(sheet, ref, cells, refs) =>
+      s"WARNING: data table ${ref.toA1} on '${sheet.value}': seeded, but $cells precedent cell(s) " +
+        s"in the what-if cone could not be re-derived (${refs.mkString(", ")}) — the grid may not " +
+        "reflect the substitution"
+    case SeedTableWarning.ErrorGuardFired(sheet, ref, cells, guard) =>
+      s"WARNING: data table ${ref.toA1} on '${sheet.value}': $cells interior cell(s) seeded the " +
+        s"ERROR ARM of the source formula's guard ($guard) — verify the grid is not a fallback"
 
   /**
    * Fill cells with source value/formula (Excel Ctrl+D/Ctrl+R).

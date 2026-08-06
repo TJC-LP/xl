@@ -27,6 +27,8 @@ object CsvRenderer:
    *   If true, include column letters as header row and row numbers as first column
    * @param skipEmpty
    *   If true, skip entirely empty rows and columns from output
+   * @param skipHidden
+   *   GH-474: if true, omit hidden rows/columns; default false renders them
    * @return
    *   CSV string
    */
@@ -36,16 +38,17 @@ object CsvRenderer:
     showFormulas: Boolean = false,
     showLabels: Boolean = false,
     skipEmpty: Boolean = false,
-    evalFormulas: Boolean = false
+    evalFormulas: Boolean = false,
+    skipHidden: Boolean = false
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
 
-    // Filter out hidden columns and rows
-    val visibleCols = RendererCommon.visibleColumns(sheet, startCol, endCol)
-    val visibleRows = RendererCommon.visibleRows(sheet, startRow, endRow)
+    // GH-474: hidden rows/columns render unless --skip-hidden asked for the visible-only view
+    val visibleCols = RendererCommon.renderedColumns(sheet, startCol, endCol, skipHidden)
+    val visibleRows = RendererCommon.renderedRows(sheet, startRow, endRow, skipHidden)
 
     // Filter empty columns/rows if skipEmpty is true
     val nonEmptyCols =

@@ -316,6 +316,13 @@ object Main
         "Force specific rasterizer: batik, cairosvg, rsvg-convert, resvg, imagemagick"
       )
       .orNone
+  private val skipHiddenOpt =
+    Opts
+      .flag(
+        "skip-hidden",
+        "Omit hidden rows/columns (default: render them, marked) — markdown/json/csv only"
+      )
+      .orFalse
   private val sheetsFilterOpt =
     Opts
       .option[String]("sheets", "Comma-separated list of sheets to search (default: all)")
@@ -346,6 +353,12 @@ OUTPUT FLAGS:
   --eval              Evaluate formulas (compute live values)
   --strict            Fail on formula evaluation errors (use with --eval)
   --skip-empty        Skip empty cells/rows
+  --skip-hidden       Omit hidden rows/columns. Default renders them (an explicitly
+                      requested range never silently loses cells) with a marker:
+                      markdown appends a "note: …" trailer, csv notes on stderr, json
+                      carries "hiddenRows"/"hiddenCols". With --skip-hidden the same
+                      marker names what was dropped. Data formats only — html/svg/raster
+                      mirror Excel's display and always omit hidden lines.
   --show-labels       Include row/column headers (A, B, C / 1, 2, 3)
   --header-row <n>    Use row N as JSON keys (1-based)
 
@@ -787,7 +800,8 @@ EXAMPLES:
         rasterOutputOpt,
         skipEmptyOpt,
         headerRowOpt,
-        rasterizerOpt
+        rasterizerOpt,
+        skipHiddenOpt
       )
         .mapN(CliCommand.View.apply)
     }
@@ -2104,7 +2118,8 @@ EXAMPLES:
           _,
           skipEmpty,
           headerRow,
-          _
+          _,
+          skipHidden
         ) =>
       if evalFormulas then
         IO.raiseError(
@@ -2122,7 +2137,9 @@ EXAMPLES:
           format,
           showLabels,
           skipEmpty,
-          headerRow
+          headerRow,
+          // GH-474: unsupported under --stream, but reported rather than silently dropped
+          skipHidden
         )
 
     case CliCommand.Cell(refStr, noStyle) =>
@@ -2293,7 +2310,8 @@ EXAMPLES:
           rasterOutput,
           skipEmpty,
           headerRow,
-          rasterizer
+          rasterizer,
+          skipHidden
         ) =>
       ReadCommands.view(
         wb,
@@ -2312,7 +2330,8 @@ EXAMPLES:
         rasterOutput,
         skipEmpty,
         headerRow,
-        rasterizer
+        rasterizer,
+        skipHidden
       )
 
     case CliCommand.Cell(refStr, noStyle) =>

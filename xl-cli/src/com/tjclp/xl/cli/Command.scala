@@ -55,7 +55,10 @@ enum CliCommand:
     rasterOutput: Option[Path],
     skipEmpty: Boolean,
     headerRow: Option[Int],
-    rasterizer: Option[String]
+    rasterizer: Option[String],
+    // GH-474: omit hidden rows/columns (default false — an explicitly requested range renders
+    // them, marked, so `view` can never look empty where `search`/`cell` find a value)
+    skipHidden: Boolean
   )
   case Cell(ref: String, noStyle: Boolean)
   case Search(pattern: String, limit: Int, sheetsFilter: Option[String])

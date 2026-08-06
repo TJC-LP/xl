@@ -13,7 +13,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.LintCommands
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.ooxml.lint.WorkbookLint
+import com.tjclp.xl.ooxml.lint.{LintCategory, WorkbookLint}
 import com.tjclp.xl.sheets.dataTableSyntax.*
 
 /**
@@ -249,6 +249,51 @@ class LintCommandSpec extends CatsEffectSuite:
       io <- parsedIO(Seq("lint"))
       code <- io
     yield assertEquals(code, ExitCode(2))
+  }
+
+  /**
+   * GH-486: docs/reference/cli.md's `xl lint` "What it flags" list must enumerate EVERY
+   * LintCategory. It listed 5 of 9 for two releases — an agent reading the docs concluded xl could
+   * not detect data-table tearing when it could. This test is the anti-drift gate: adding a
+   * LintCategory without documenting its slug fails here.
+   */
+  private def repoRoot: Path =
+    val start = Paths.get(sys.props.getOrElse("user.dir", ".")).toAbsolutePath
+    Iterator
+      .iterate(start)(_.getParent)
+      .takeWhile(_ != null)
+      .find(p => Files.isRegularFile(p.resolve("build.mill")))
+      .getOrElse(fail(s"could not locate the repo root (no build.mill at or above $start)"))
+
+  test("GH-486: cli.md documents every LintCategory slug in 'What it flags'") {
+    val cliDoc = repoRoot.resolve("docs/reference/cli.md")
+    assert(Files.isRegularFile(cliDoc), s"missing $cliDoc")
+    val body = Files.readString(cliDoc, StandardCharsets.UTF_8)
+    val section = body.split("\\*\\*What it flags\\*\\*", -1).lift(1).getOrElse {
+      fail("cli.md has no '**What it flags**' section in the xl lint docs")
+    }
+    // The bullet list runs until the next '**' heading line ("**Exit codes**").
+    val bullets = section.split("\n\\*\\*", -1).headOption.getOrElse("")
+    val undocumented = LintCategory.values.toList
+      .map(_.slug)
+      .filterNot(slug => bullets.contains(s"`$slug`"))
+    assertEquals(
+      undocumented,
+      List.empty[String],
+      s"lint categories missing from cli.md 'What it flags': ${undocumented.mkString(", ")}"
+    )
+  }
+
+  test("GH-486: cli.md's lint one-liner names the same category families") {
+    val body = Files.readString(repoRoot.resolve("docs/reference/cli.md"), StandardCharsets.UTF_8)
+    val summaryLine = body.linesIterator
+      .find(l => l.startsWith("| `lint`"))
+      .getOrElse(fail("cli.md has no `lint` row in the command table"))
+    // The summary is prose, not a slug list, but it must not claim a narrower scope than reality.
+    assert(
+      summaryLine.contains("data-table") && summaryLine.contains("content-type"),
+      s"lint command-table summary is stale: $summaryLine"
+    )
   }
 
   test("resolveLintFile: exactly-one-file resolution and hint messages (GH-422)") {

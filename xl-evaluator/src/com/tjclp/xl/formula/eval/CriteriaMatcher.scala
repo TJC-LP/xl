@@ -455,9 +455,18 @@ object CriteriaMatcher:
    *   - Other regex metacharacters are escaped
    *   - Matching is case-insensitive
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def wildcardToRegex(pattern: String): Regex =
-    val sb = new StringBuilder("(?i)^") // (?i) for case-insensitive
+    s"(?i)^${wildcardRegexBody(pattern)}$$".r // (?i) for case-insensitive
+
+  /**
+   * GH-476: the UNANCHORED regex body for an Excel wildcard pattern.
+   *
+   * Shared with SEARCH, which needs a substring search rather than the whole-value match criteria
+   * use — one wildcard grammar (`*`, `?`, `~`-escapes) for both.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def wildcardRegexBody(pattern: String): String =
+    val sb = new StringBuilder
     var i = 0
     while i < pattern.length do
       val c = pattern.charAt(i)
@@ -479,8 +488,7 @@ object CriteriaMatcher:
       else
         sb.append(escapeRegexChar(c))
         i += 1
-    sb.append("$")
-    sb.toString.r
+    sb.toString
 
   /**
    * Escape a single character for use in a regex pattern.

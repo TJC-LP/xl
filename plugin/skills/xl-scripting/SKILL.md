@@ -228,7 +228,7 @@ Excel.write(result.workbook, "model.xlsx")       // computed values cached for E
 
 **Circular models are opt-in** (0.13.0): professional schedules (interest on average debt) ship circular by design. `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` Jacobi-fixpoints declared cycles instead of erroring; plain `recalculate()` still isolates cycles as errors. Honor a file's own `<calcPr>` with `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr).fold(wb.recalculate())(wb.recalculate)`, and author it on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))`.
 
-108 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/MROUND/RAND/NPV/IRR/... plus LET) — full list in `reference/API.md`.
+112 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/MROUND/RAND/NPV/IRR/SEARCH/N/HYPERLINK/CELL/... plus LET) — full list in `reference/API.md`.
 
 ### Data tables (what-if sensitivity)
 
@@ -252,7 +252,10 @@ val authored = model.dataTable(ref"D5:F6", rowInput = ref"B1", colInput = ref"B2
 // recompute data tables on open — even with fullCalcOnLoad — so an unseeded grid opens BLANK.
 // Plain calcMode="auto" books self-heal on open; calc levers stay on Workbook.withCalcPr.
 val seeded = Workbook(authored).seedDataTables().unsafe
-Excel.write(seeded, "sensitivity.xlsx")
+
+// writeRecalculated, NOT write: seedDataTables caches the record cell and the interior, never the
+// CORNER formula (C4) — Excel.write would ship an uncached corner that previews as blank.
+Excel.writeRecalculated(seeded, "sensitivity.xlsx")
 ```
 
 1-D shapes: `sheet.dataTableRow(interior, rowInput)` (axis above, source formulas in the column left — one per interior row) and `sheet.dataTableCol(interior, colInput)` (axis left, source formulas in the row above — one per interior column; multi-result-column tables are legal). All three take optional row-major `seeds` to ship byte-exact caches without evaluating; the corner absorbs a pre-existing plain scalar as its cache, so `fillBy`-then-`dataTable` composes. Authoring refuses to tear existing tables, overwrite real formulas, or accept inputs inside the table block — each with a structured `XLError`.
