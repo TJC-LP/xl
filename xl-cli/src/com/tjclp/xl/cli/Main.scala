@@ -227,7 +227,7 @@ object Main
       Opts
         .flag(
           "no-recalc",
-          "Apply the edit without recalculating: every cached formula value already in the file is preserved. Use when the caches come from another engine."
+          "Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) keep the ones the edit provably did not invalidate and leave the rest uncached, reporting both counts. Use when the caches come from another engine."
         )
         .orFalse,
       Opts.flag("preserve-caches", "Alias for --no-recalc").orFalse

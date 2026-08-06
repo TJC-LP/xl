@@ -888,7 +888,14 @@ object WriteCommands:
 
   // ===== Cache-preserving recalculation (GH-468) + strict exit codes (GH-496) =====
 
-  /** Summary line for a write whose trailing recalculation was suppressed with `--no-recalc`. */
+  /**
+   * Summary line for a NON-structural write whose trailing recalculation `--no-recalc` suppressed.
+   *
+   * Unconditional on this path because it is unconditionally true: put/putf/fill/copy/batch change
+   * cell contents without moving or rewriting any formula, so skipping the recalculation leaves
+   * every cached value in the file byte-identical. The structural verbs cannot claim that — see
+   * `CachePreservation.note`, which counts instead.
+   */
   private val noRecalcNote: String =
     "Recalculation skipped (--no-recalc): every existing cached value preserved"
 
@@ -1003,42 +1010,89 @@ object WriteCommands:
     else preEditIndex(ref.col.index0, shift.at, shift.delta).map(ARef.from0(_, ref.row.index0))
 
   /**
+   * What `--no-recalc` managed to carry across a structural edit: caches restored, and formulas the
+   * edit invalidated that are therefore left without a `<v>`.
+   */
+  private final case class CachePreservation(preserved: Int, uncached: Int):
+    def combine(other: CachePreservation): CachePreservation =
+      CachePreservation(preserved + other.preserved, uncached + other.uncached)
+
+    /** The `--no-recalc` summary line for the structural verbs: counted, never a blanket claim. */
+    def note: String =
+      val head = s"Recalculation skipped (--no-recalc): $preserved cached value(s) preserved"
+      if uncached == 0 then s"$head, none dropped"
+      else
+        s"$head, $uncached formula(s) invalidated by the edit left uncached (recalculate " +
+          "externally)"
+
+  private object CachePreservation:
+    val empty: CachePreservation = CachePreservation(0, 0)
+
+  /**
    * GH-468: carry the pre-edit caches of a structural edit forward, for `--no-recalc`.
    *
    * `StructuralEditor` strips `cachedValue` from every formula that transitively reads the edited
    * sheet (its GH-455 `stale` predicate, wider than the shift itself — GH-503), on the assumption
    * that a recalculation follows. Under `--no-recalc` none does, so without this the written file
    * would carry formula cells with no `<v>` at all: a downstream `data_only=True` reader sees
-   * blanks where the file used to have numbers. That is strictly worse than the recalculation the
-   * flag replaces, and it would make the printed "every existing cached value preserved" a lie.
+   * blanks where the file used to have numbers.
    *
-   * Restores a cache only when the formula TEXT is byte-identical to the pre-edit cell's — a
-   * rewritten (shifted) reference means the old value answered a different question, so that cell
-   * stays uncached (Excel's own dirty state). Refs are unchanged on every sheet but the edited one;
-   * there the shift is inverted, and a cell with no pre-image keeps whatever it has.
+   * A cache is restored only when the old value is provably still the answer, which takes THREE
+   * conditions, not one:
+   *   - the formula TEXT is byte-identical to the pre-edit cell's — a rewritten (shifted) reference
+   *     means the old value answered a different question;
+   *   - the cell did not MOVE (`preEditRef(r) == r`; every sheet but the edited one is unshifted by
+   *     construction) — a position-dependent formula such as `=ROW()` keeps its text while its
+   *     answer changes underneath it;
+   *   - the formula bears no DYNAMIC reference (`INDIRECT`/`OFFSET`), before or after: its target
+   *     is decided by evaluated text, so `=INDIRECT("A30")*2` silently reads different content once
+   *     the edit moves what sits at A30.
+   *
+   * Anything failing a condition is left uncached — Excel's own dirty state, and the only honest
+   * outcome: a wrong `<v>` is worse than a missing one, since `data_only=True` readers cannot tell.
+   * The counts come back with the workbook so the summary can state what actually happened.
    */
   private def restorePriorCaches(
     before: Workbook,
     edited: Workbook,
     shift: StructuralShift
-  ): Workbook =
+  ): (Workbook, CachePreservation) =
     val previous = before.sheets.map(s => s.name -> s).toMap
-    edited.sheets.foldLeft(edited) { (acc, sheet) =>
+    edited.sheets.foldLeft((edited, CachePreservation.empty)) { case ((acc, tally), sheet) =>
       previous.get(sheet.name) match
-        case None => acc
+        case None => (acc, tally)
         case Some(old) =>
-          val (updated, restoredAny) = sheet.cells.foldLeft((sheet, false)) {
-            case ((s, restored), (r, cell)) =>
+          val dynamicNow = DependencyGraph.dynamicCells(sheet)
+          val dynamicBefore = DependencyGraph.dynamicCells(old)
+          val (updated, counts) = sheet.cells.foldLeft((sheet, CachePreservation.empty)) {
+            case ((s, seen), (r, cell)) =>
               cell.value match
                 case f @ CellValue.Formula(text, None, _) =>
-                  val source = if sheet.name == shift.sheet then preEditRef(r, shift) else Some(r)
-                  source.flatMap(old.cells.get).map(_.value) match
-                    case Some(CellValue.Formula(`text`, cached @ Some(_), _)) =>
-                      (s.put(r, f.copy(cachedValue = cached)), true)
-                    case _ => (s, restored)
-                case _ => (s, restored)
+                  val preImage = if sheet.name == shift.sheet then preEditRef(r, shift) else Some(r)
+                  val priorValue = preImage.flatMap(old.cells.get).map(_.value)
+                  val priorCache = priorValue.collect {
+                    case CellValue.Formula(_, Some(cached), _) => cached
+                  }
+                  val textUnchanged = priorValue.exists {
+                    case CellValue.Formula(`text`, _, _) => true
+                    case _ => false
+                  }
+                  val safe =
+                    priorCache.isDefined && textUnchanged &&
+                      preImage.contains(r) &&
+                      !dynamicNow.contains(r) &&
+                      !preImage.exists(dynamicBefore.contains)
+                  if safe then
+                    (
+                      s.put(r, f.copy(cachedValue = priorCache)),
+                      seen.combine(CachePreservation(1, 0))
+                    )
+                  else if priorCache.isDefined then (s, seen.combine(CachePreservation(0, 1)))
+                  else (s, seen)
+                case _ => (s, seen)
           }
-          if restoredAny then acc.put(updated) else acc
+          val next = if counts.preserved > 0 then acc.put(updated) else acc
+          (next, tally.combine(counts))
     }
 
   /** Restrict a whole-book result to the cone, so the summary counts what actually changed. */
@@ -1849,8 +1903,12 @@ object WriteCommands:
 
   /**
    * Shared tail of the four structural verbs: cone-scoped recalculation — or, under `--no-recalc`,
-   * the pre-edit caches carried forward over the ones the edit itself dropped — then the write and
+   * the pre-edit caches the edit provably did not invalidate carried forward — then the write and
    * the `--strict` gate over what the recalculation reported.
+   *
+   * The `--no-recalc` line here is COUNTED, not the blanket non-structural note: a structural edit
+   * rewrites formula text and moves cells, and every cache it invalidated is reported as dropped
+   * rather than quietly re-asserted.
    */
   private def writeStructural(
     before: Workbook,
@@ -1863,9 +1921,12 @@ object WriteCommands:
     policy: WritePolicy
   ): IO[String] =
     val recalcOpt = if policy.noRecalc then None else Some(scopedRecalc(before, edited))
-    val finalWb = recalcOpt.fold(restorePriorCaches(before, edited, shift))(_._1)
+    val (finalWb, recalcLine) = recalcOpt match
+      case Some((wb, result)) => (wb, formatRecalcSummary(result))
+      case None =>
+        val (restored, preservation) = restorePriorCaches(before, edited, shift)
+        (restored, preservation.note)
     writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
-      val recalcLine = recalcOpt.map(_._2).fold(noRecalcNote)(formatRecalcSummary)
       strictGate(
         policy,
         s"$message\n$recalcLine\n${Format.saveSuffix(outputPath, stream)}",

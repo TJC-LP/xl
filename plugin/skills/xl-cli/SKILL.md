@@ -638,7 +638,7 @@ Hard-won rules from fleet use on real deal workbooks. Items marked **fixed in 0.
 | `--backend <type>` | | Write backend: scalaxml (default) or saxstax (36-39% faster). Reads always use StAX. |
 | `--max-size <MB>` | | Override 100MB security limit (0 = unlimited) |
 | `--stream` | | O(1) memory mode for reads + writes (search/stats/bounds/view/put/putf/style) |
-| `--no-recalc` | `--preserve-caches` | Apply the edit, recalculate nothing — every cached value in the file survives |
+| `--no-recalc` | `--preserve-caches` | Apply the edit, recalculate nothing (see cache safety below) |
 | `--strict` | | Exit 1 when the write's recalculation reports errors/non-convergence/seed warnings |
 | `--dry-run` | | Validate batch JSON and show summary without writing (batch only) |
 
@@ -661,6 +661,20 @@ xl -f external.xlsx -s Data -o out.xlsx --preserve-caches insert-rows 20 1
 
 Honored by `put`, `putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`,
 `delete-cols`. `recalc` rejects it (it is the whole-book recalculation verb).
+
+On the non-structural verbs (`put`, `putf`, `fill`, `copy`, `batch`) every cached value in the file
+survives byte-identical. On the four **structural** verbs the edit itself rewrites formulas and
+moves cells, so xl carries a pre-edit cache forward only when it is provably still correct (text
+unchanged, cell did not move, no `INDIRECT`/`OFFSET`); every other formula is left **uncached**
+instead of being re-stamped with a stale number, and the summary counts them:
+
+```
+Recalculation skipped (--no-recalc): 4 cached value(s) preserved, 7 formula(s) invalidated by the
+edit left uncached (recalculate externally)
+```
+
+Excel (or a later `xl recalc`) fills those in. If you need every formula cached after a structural
+edit, do not pass `--no-recalc`.
 
 #### Strict exit codes for pipelines
 

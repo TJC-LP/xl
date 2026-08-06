@@ -870,8 +870,12 @@ class BatchRecalcSpec extends FunSuite:
     assertCachedOn(written, "Data", ref"C1", 777.0)
     assertCachedOn(written, "Data", ref"S1", 777.0)
     assertCachedOn(written, "Other", ref"B1", 777.0)
-    // C30 sits below the insert point: it moves to C31 and its cache must ride along.
-    assertCachedOn(written, "Data", ref"C31", 777.0)
+    // C30 MOVED to C31. Text identity is not enough to re-assert a cache on a cell that relocated
+    // (the very next tests show =ROW()/=COLUMN() lying under exactly this shape), so the moved
+    // cell is left uncached and the summary counts it.
+    assertEquals(formulaOn(written, "Data", ref"C31").cachedValue, None)
+    assert(summary.contains("3 cached value(s) preserved"), s"summary: $summary")
+    assert(summary.contains("1 formula(s)"), s"summary: $summary")
     Files.deleteIfExists(out)
   }
 
@@ -890,7 +894,8 @@ class BatchRecalcSpec extends FunSuite:
     val rows = readBack(rowsOut)
     assertCachedOn(rows, "Data", ref"C1", 777.0)
     assertCachedOn(rows, "Other", ref"B1", 777.0)
-    assertCachedOn(rows, "Data", ref"C29", 777.0) // C30 shifted up by the delete
+    // C30 shifted up to C29 by the delete: a relocated cell never keeps its pre-edit cache.
+    assertEquals(formulaOn(rows, "Data", ref"C29").cachedValue, None)
     val cols = readBack(colsOut)
     assertCachedOn(cols, "Data", ref"C1", 777.0)
     assertCachedOn(cols, "Other", ref"B1", 777.0)
@@ -917,6 +922,130 @@ class BatchRecalcSpec extends FunSuite:
     written.sheets.head.cells.get(ref"F11").map(_.value) match
       case Some(CellValue.Formula("D11*2", None, _)) => ()
       case other => fail(s"a rewritten formula must stay uncached, got $other")
+    Files.deleteIfExists(out)
+  }
+
+  /** The formula cell at `at` on `sheet`, failing when the cell is absent or not a formula. */
+  private def formulaOn(wb: Workbook, sheet: String, at: ARef): CellValue.Formula =
+    wb.sheets.find(_.name.value == sheet).flatMap(_.cells.get(at)).map(_.value) match
+      case Some(f: CellValue.Formula) => f
+      case other => fail(s"expected a formula at $sheet!${at.toA1}, got $other")
+
+  test("GH-468: --no-recalc never carries a POSITION-DEPENDENT cache across a row shift") {
+    // `=ROW()` at C30 caches 30. An insert above it moves the cell to C31 without touching its
+    // text, so the byte-identity check alone would happily re-cache 30 where the truth is 31.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"C30", CellValue.Formula("ROW()", Some(CellValue.Number(BigDecimal(30)))))
+    )
+    val out = tempXlsx()
+
+    WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 20, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val moved = formulaOn(readBack(out), "Data", ref"C31")
+    assertEquals(moved.expression, "ROW()")
+    assertEquals(moved.cachedValue, None, s"a relocated =ROW() must not keep its old cache: $moved")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: --no-recalc never carries a POSITION-DEPENDENT cache across a column shift") {
+    // `=COLUMN()` at D30 caches 4; two inserted columns land it at F30, where the truth is 6.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"D30", CellValue.Formula("COLUMN()", Some(CellValue.Number(BigDecimal(4)))))
+    )
+    val out = tempXlsx()
+
+    WriteCommands
+      .insertColumns(wb, wb.sheets.headOption, "A", 2, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val moved = formulaOn(readBack(out), "Data", ref"F30")
+    assertEquals(moved.expression, "COLUMN()")
+    assertEquals(moved.cachedValue, None, s"a relocated =COLUMN() must not keep its cache: $moved")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: --no-recalc never restores a DYNAMIC-reference cache (its target may have moved)") {
+    // F1 = INDIRECT("A30")*2 caches 10 off A30 = 5. The insert moves that content to A31 without
+    // rewriting the string literal, so the formula now reads a blank: 10 is provably wrong.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A30" -> 5)
+        .put(
+          ref"F1",
+          CellValue.Formula("INDIRECT(\"A30\")*2", Some(CellValue.Number(BigDecimal(10))))
+        )
+    )
+    val out = tempXlsx()
+
+    WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 20, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val dynamic = formulaOn(readBack(out), "Data", ref"F1")
+    assertEquals(
+      dynamic.cachedValue,
+      None,
+      s"a dynamic reference must never keep a pre-edit cache: $dynamic"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  /**
+   * The dominant real shape: a contiguous block the edit cuts through. A1:A10 data, B1:B10 = An*2,
+   * D1 = SUM(A1:A10) — every cache poisoned to 777 so any recalculation is visible.
+   */
+  private def contiguousBlockWorkbook(): Workbook =
+    val poisoned = CellValue.Number(BigDecimal(777))
+    val block = (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+        .put(ARef.from0(1, i - 1), CellValue.Formula(s"A$i*2", Some(poisoned)))
+    }
+    Workbook(block.put(ref"D1", CellValue.Formula("SUM(A1:A10)", Some(poisoned))))
+
+  test("GH-468: --no-recalc through a contiguous block reports what it could NOT preserve") {
+    // The row-20 fixture rewrites nothing; this one rewrites plenty. Every formula whose text the
+    // edit changed is left uncached, and the summary must SAY SO rather than claim total
+    // preservation.
+    val wb = contiguousBlockWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 5, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    // B1:B4 sit above the insert and still read A1:A4 — text unchanged, caches carried forward.
+    (1 to 4).foreach(i => assertCachedOn(written, "Data", ARef.from0(1, i - 1), 777.0))
+    // B5:B10 shifted to B6:B11 and their references were rewritten: no cache may be invented.
+    (6 to 11).foreach { i =>
+      val cell = formulaOn(written, "Data", ARef.from0(1, i - 1))
+      assertEquals(cell.cachedValue, None, s"B$i must stay uncached, got $cell")
+    }
+    // D1 = SUM(A1:A10) became SUM(A1:A11): the old total answered a different question.
+    assertEquals(formulaOn(written, "Data", ref"D1").cachedValue, None)
+    assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
+    assert(summary.contains("4 cached value(s) preserved"), s"summary: $summary")
+    assert(summary.contains("7 formula(s)"), s"summary: $summary")
+    assert(
+      !summary.contains("every existing cached value preserved"),
+      s"the structural arm must not claim total preservation: $summary"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: the unconditional preservation claim still holds for the NON-structural verbs") {
+    val wb = splicedCacheWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .put(wb, wb.sheets.headOption, "A1", List("6"), out, config, policy = preserveCaches)
+      .unsafeRunSync()
+
+    assert(summary.contains("every existing cached value preserved"), s"summary: $summary")
     Files.deleteIfExists(out)
   }
 

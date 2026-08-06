@@ -81,11 +81,29 @@ dependency cone** — the changed cells plus their transitive dependents (cross-
 the always-dirty `INDIRECT`/`OFFSET` cells. Cached values outside that cone are never rewritten, so
 a book whose caches come from another engine keeps them.
 
-`--no-recalc` (alias `--preserve-caches`) drops the recalculation entirely: the edit lands and
-**every** existing cached value survives, cone included. Use it when an external calculator owns
-the numbers. Honored by `put`, `putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`,
-`delete-rows`, `delete-cols`; the structural verbs carry their pre-edit caches forward, so the flag
-never leaves a formula cell without a value. `recalc` rejects it as a contradiction.
+`--no-recalc` (alias `--preserve-caches`) drops the recalculation entirely: the edit lands and no
+cached value is recomputed. Use it when an external calculator owns the numbers. Honored by `put`,
+`putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`;
+`recalc` rejects it as a contradiction.
+
+How completely caches survive depends on the verb:
+
+- **Non-structural** (`put`, `putf`, `fill`, `copy`, `batch`): every existing cached value survives
+  byte-identical, cone included. The summary says so.
+- **Structural** (`insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`): a structural edit
+  rewrites formula text and moves cells, so a pre-edit cache is carried forward only when it is
+  provably still the answer — the formula text is unchanged, the cell did not move, and it holds no
+  `INDIRECT`/`OFFSET`. Everything else (a rewritten formula, a relocated `=ROW()`, a dynamic
+  reference whose target moved) is **left uncached** rather than re-asserted with a stale number,
+  and the summary counts both halves:
+
+  ```
+  Recalculation skipped (--no-recalc): 4 cached value(s) preserved, 7 formula(s) invalidated by
+  the edit left uncached (recalculate externally)
+  ```
+
+  Reopening the file in Excel, or a later `xl recalc`, fills those back in. A missing `<v>` is a
+  visible gap; a wrong one is silent, so xl never writes the wrong one.
 
 ```bash
 xl -f external-model.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
