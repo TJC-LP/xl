@@ -99,17 +99,32 @@ class GlobalFixpointSpec extends FunSuite:
     assert(fresh.converged, "the fresh solve must converge")
     assert(fresh.isClean, s"fresh solve errors: ${fresh.errors.map(_.render)}")
     assertSchedule(fresh.workbook, "fresh")
-    val baseline = snapshot(fresh.workbook)
 
-    // Five successive re-solves of the book's OWN output. Pre-fix this walked (and, on this
-    // topology, degraded) because the bridges C1/E1 were read off the previous generation's cache.
-    val passes = (1 to 5).scanLeft(fresh)((r, _) => r.workbook.recalculate(Tight)).drop(1)
+    // PERTURB THE DRIVER ON THE SOLVED BOOK. Re-solving a book that is ALREADY at its fixpoint
+    // does not discriminate — the buggy pass operator is stationary there too, so the same five
+    // passes below pass against the pre-GH-492 engine. Moving the opening balance on a fully
+    // CACHED book is what exposes the split pass: the bridges C1/E1 (acyclic cells BETWEEN two
+    // SCCs) landed in post-order, so the downstream SCCs iterated against the 1000-generation
+    // caches and pass 1 parked one SCC of wavefront behind the answer.
+    val perturbed = fresh.workbook.sheets
+      .find(_.name.value == "M")
+      .map(s => fresh.workbook.put(s.put(aref("A1"), num(BigDecimal(1200)))))
+      .getOrElse(fail("sheet M"))
+    val baseline = snapshot(interleaved(BigDecimal(1200)).recalculate(Tight).workbook)
+
+    // Five successive re-solves starting from the perturbed cached book. EVERY one of them — the
+    // first included — must already be at the 1200 global fixpoint, and stay there.
+    val passes =
+      (1 to 5).scanLeft(perturbed.recalculate(Tight))((r, _) => r.workbook.recalculate(Tight))
     passes.zipWithIndex.foreach { (r, i) =>
-      assert(r.converged, s"pass ${i + 2} must report converged=true")
-      assert(r.isClean, s"pass ${i + 2} errors: ${r.errors.map(_.render)}")
-      assertSchedule(r.workbook, s"pass ${i + 2}")
+      assert(r.converged, s"pass ${i + 1} must report converged=true")
+      assert(r.isClean, s"pass ${i + 1} errors: ${r.errors.map(_.render)}")
+      assertSchedule(r.workbook, s"pass ${i + 1}")
       snapshot(r.workbook).zip(baseline).foreach { case ((a1, got), (_, want)) =>
-        assert((got - want).abs < Eps, s"pass ${i + 2} drifted at $a1: $got vs $want")
+        assert(
+          (got - want).abs < Eps,
+          s"pass ${i + 1} is not at the global fixpoint at $a1: $got vs $want"
+        )
       }
     }
   }
