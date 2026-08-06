@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-07-29
+**Last Updated**: 2026-08-06
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -10,7 +10,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **112 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,424 tests passing.
+**Current Status**: Production-ready with **112 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,430 tests passing.
 
 **Current Version**: **0.19.2** "Fixpoint" (recalculation & seeding integrity, released 2026-08-06)
 
@@ -76,15 +76,14 @@ counter-example.
 | [#493](https://github.com/TJC-LP/xl/issues/493) [#494](https://github.com/TJC-LP/xl/issues/494) | Data-table what-if lanes evaluate their precedent cone; `ErrorGuardFired` / `ConeUnresolved` warnings |
 | [#495](https://github.com/TJC-LP/xl/issues/495) | Structural edits refuse to tear a data-table interior (was a silent degrade to constants) |
 | [#468](https://github.com/TJC-LP/xl/issues/468) [#481](https://github.com/TJC-LP/xl/issues/481) [#496](https://github.com/TJC-LP/xl/issues/496) | Dirty-cone-scoped recalc, `--no-recalc`, `--strict` on write verbs, `batch` honors `calcPr` |
+| [#503](https://github.com/TJC-LP/xl/issues/503) | Structural cache invalidation narrowed to the cells the edit moved or removed — `--no-recalc` preserves 14/14 on an edit below the data (was 0/14) |
 | [#459](https://github.com/TJC-LP/xl/issues/459) | `####` for numbers too wide for their column (was a leading-digit clip) |
 | [#474](https://github.com/TJC-LP/xl/issues/474) [#475](https://github.com/TJC-LP/xl/issues/475) [#476](https://github.com/TJC-LP/xl/issues/476) [#488](https://github.com/TJC-LP/xl/issues/488) [#486](https://github.com/TJC-LP/xl/issues/486) [#490](https://github.com/TJC-LP/xl/issues/490) | Field asks: hidden lines in `view`, streaming numFmt parity, 112 functions, lookup date plane, lint docs, skill fix |
 
 **Deferred to 0.20.0**, in priority order: [#499](https://github.com/TJC-LP/xl/issues/499) (range-argument
 reads never re-derive uncached formula cells and silently shorten arrays — the general form of #494),
 [#507](https://github.com/TJC-LP/xl/issues/507) (`staleCaches` under-approximates through unparseable
-defined names, DEFAULT path included), [#503](https://github.com/TJC-LP/xl/issues/503) +
-[#509](https://github.com/TJC-LP/xl/issues/509) (`--no-recalc` over-invalidation and the
-`fullCalcOnLoad` design that fixes it), [#497](https://github.com/TJC-LP/xl/issues/497) (CF evaluation
+defined names, DEFAULT path included), [#509](https://github.com/TJC-LP/xl/issues/509) (`fullCalcOnLoad` on --no-recalc structural writes), [#497](https://github.com/TJC-LP/xl/issues/497) (CF evaluation
 in the render path), [#498](https://github.com/TJC-LP/xl/issues/498), #500–#502, #504–#506, #508, plus
 the standing tail #460 #462 #463 #465 #477 #479 #480 #482 #485.
 

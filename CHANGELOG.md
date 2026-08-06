@@ -109,17 +109,24 @@ always acceptable, a wrong one never is.**
 
 ### Notes
 
-- **`--no-recalc` on structural verbs preserves fewer caches than you
-  might expect.** Three adversarial review rounds proved that deciding
-  "is this pre-edit cache still valid" from local facts cannot be made
-  sound — a relocated `=ROW()`, a static dependent of a dynamic cell, a
-  rewritten defined name, and a multi-area name the parser cannot read
-  each defeat a different guard. Cache restoration was therefore removed
-  entirely: the edit is written exactly as `StructuralEditor` produced
-  it. Caches on sheets the edit cannot reach still ride through
-  verbatim. See #509 for the `fullCalcOnLoad` design that would recover
-  the rest honestly, and #503 for the over-invalidation that makes it
-  matter.
+- **`--no-recalc` on structural verbs, and why it works** (#503). Four
+  adversarial rounds proved that deciding "is this pre-edit cache still
+  valid" by RE-ASSERTING it from local facts cannot be made sound — a
+  relocated `=ROW()`, a static dependent of a dynamic cell, a rewritten
+  defined name, and a multi-area name the parser cannot read each defeat
+  a different guard. Restoration was removed. The sound move is the
+  complement: **stop over-invalidating**. `StructuralEditor` seeded on
+  every cell of the edited sheet, so an insert at row 20 invalidated a
+  reader of A1. Seeds are now the cells the edit moved or removed, and a
+  formula keeps its cache when its text is byte-identical, it did not
+  relocate, and it sits outside that cone. Narrowing withdraws fewer
+  claims and asserts nothing new, so it is sound by construction. On a
+  14-formula model an edit below the data now preserves 14/14 (was 0/14)
+  and an edit inside a contiguous block preserves the rows above the cut.
+  Opt-in (`preserveUntouchedCaches`, default `false`) and threaded only
+  from `--no-recalc`, so the default recalculating path is byte-identical.
+  Volatiles above the cut keep their caches under the flag — the flag
+  means do not recalculate, and Excel refreshes them on open anyway.
 - Structural edits that tear a data-table interior now return a `Left`
   where they previously succeeded silently. This is a behavioural change
   by design; two tests that pinned the old silent degradation were
