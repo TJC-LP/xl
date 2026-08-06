@@ -250,8 +250,11 @@ For Excel-style format inheritance on formula entry, use the opt-in
 | `excelErrors` | (0.14.0) `Vector[(SheetName, ARef, CellError)]` — cells whose cached result is an Excel error value, sorted; inspect when you want to surface `#DIV/0!`s without treating them as host failures |
 | `isClean` | `true` when `errors.isEmpty` — a workbook full of cached `#DIV/0!`s is "clean" (the recalculation succeeded; the errors are data) |
 | `toEither` | `Right(workbook)` when clean, `Left(errors)` otherwise — for fail-hard pipelines |
-| `converged` | (0.20.0) `false` iff an iterative run exhausted `maxIter` without every cycle member's \|Δ\| dropping below `maxChange` — the last-round values are kept (Excel semantics, `errors` stays empty), so gate on this after any large circular perturbation. Non-iterative runs report `true` |
-| `iterationsUsed` | (0.20.0) iterative rounds actually run: `0` when no iteration happened, `maxIter` on exhaustion, otherwise the round that converged |
+| `converged` | (0.20.0) `cycles.forall(_.converged)` — `false` iff some cyclic component exhausted `maxIter` without every member's \|Δ\| dropping below `maxChange`. The last-round values are kept (Excel semantics, `errors` stays empty), so gate on this after any large circular perturbation. Non-iterative runs report `true` |
+| `iterationsUsed` | (0.20.0) rounds run by the WORST component: `0` when no iteration happened, `maxIter` when any component exhausted, otherwise the round it converged on |
+| `cycles` | (0.20.0) `Vector[SccReport]` — one verdict per cyclic strongly-connected component actually iterated (`members`, `converged`, `rounds`, `maxDelta`, plus `render`), sorted by the component's minimum member. Empty on non-iterative and acyclic runs |
+| `unconverged` | (0.20.0) `cycles.filterNot(_.converged)` — the offenders to name in a report |
+| `certified` | (0.20.0) `errors.isEmpty && converged` — the single gate meaning "this workbook is at its global fixpoint" |
 
 Reference cycles are **isolated**: the participants and their downstream dependents are reported
 (e.g. `Model!A7: Formula error in '=B7': Circular reference` via `CellEvalError.render`) while
@@ -260,12 +263,22 @@ the acyclic remainder still evaluates and caches.
 Since 0.13.0, **circular models are opt-in** rather than always errors: pass an `IterativeCalc` to
 fixpoint declared cycles instead —
 `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` runs Jacobi
-iteration (each member reads previous-iteration values, seeded at 0, until every |Δ| < `maxChange`
+iteration (each member reads previous-iteration values until every |Δ| < `maxChange`
 or `maxIter` rounds; non-convergence keeps the last values with no error, per Excel). Plain
 `recalculate()` still isolates cycles. Honor a file's own settings with
 `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)`, and author them
 on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100),
 maxChange = Some(BigDecimal("0.001"))))` (emits `<calcPr iterate iterateCount iterateDelta/>`).
+
+Since 0.20.0 an iterative recalculation walks the **SCC condensation** of the workbook graph once
+in dependency-first order — a run of acyclic cells evaluates, then each cyclic component fixpoints
+against those freshly computed values, and so on. Consequences worth knowing: `maxIter`/`maxChange`
+are **per component** (one permanently-oscillating cycle no longer burns an unrelated cycle's
+budget, and `cycles` names the offender); one pass reaches the workbook's **global** fixpoint, so
+`recalculate(IterativeCalc)` is idempotent on a converged book and re-solving a cached circular
+book is safe (it was not before 0.20.0); and one iterative recalculation is one volatile
+generation — `TODAY()`/`NOW()` agree inside the fixpoints and in the acyclic cells between them.
+Dynamic (INDIRECT/OFFSET) cycles are still invisible to Tarjan and are not covered by `converged`.
 
 Also since 0.13.0, **defined names resolve** in formulas: `=IF(case=2,…)`,
 `=entry_mult*ltm_ebitda`, and `=SUM(rev_range)` evaluate against workbook- and sheet-scoped names

@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formula.eval.IterativeCalc
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
@@ -121,3 +122,49 @@ class RecalcPerfSpec extends FunSuite:
     val result = Workbook(summary, data).recalculate()
     assert(result.isClean, s"expected clean, got: ${result.errors.map(_.render)}")
     assertEquals(cached(result.workbook, "Summary", b1), Some(num(BigDecimal(55))))
+
+  /**
+   * GH-492 tripwire: a long chain of cyclic components (each with its OWN `maxIter` budget under
+   * the condensation walk) plus a long acyclic tail. The worst case is `Σ maxIter × |SCCᵢ|`
+   * member-evaluations, identical to the pre-GH-492 joint `rounds × |core|`; this catches both a
+   * regression to that worst case being hit in practice and any per-component overlay overhead that
+   * scales badly with the component count. If it ever bites, the fix is a shared remaining-budget
+   * counter threaded through the walk, NOT a new configuration parameter.
+   */
+  private val Years = 20
+  private val TailLength = 300
+
+  private def chainedCycles: Workbook =
+    // Columns A..E per year row: A beg (acyclic), {B interest, C pay, E end} cyclic, D fee
+    // (acyclic dependent). Year i+1's beg reads year i's end, so the condensation is a 20-link
+    // chain of 3-member SCCs separated by acyclic bridge cells.
+    val model = (1 to Years).foldLeft(Sheet(SheetName.unsafe("Model"))) { (s, i) =>
+      val beg = if i == 1 then num(BigDecimal(1000)) else formula(s"=E${i - 1}")
+      s.put(ARef.from0(0, i - 1), beg)
+        .put(ARef.from0(1, i - 1), formula(s"=(A$i+E$i)/2*0.08"))
+        .put(ARef.from0(2, i - 1), formula(s"=20-B$i"))
+        .put(ARef.from0(4, i - 1), formula(s"=A$i-C$i"))
+        .put(ARef.from0(3, i - 1), formula(s"=B$i*0.05"))
+    }
+    val tail = (2 to TailLength).foldLeft(
+      Sheet(SheetName.unsafe("Tail")).put(ARef.from0(0, 0), formula(s"=Model!E$Years"))
+    )((s, k) => s.put(ARef.from0(0, k - 1), formula(s"=A${k - 1}+1")))
+    Workbook(model, tail)
+
+  test("GH-492: a 20-component SCC chain with a long acyclic tail stays inside the budget"):
+    val wb = chainedCycles
+    val t0 = System.nanoTime()
+    val result = wb.recalculate(IterativeCalc(100, BigDecimal("1E-9")))
+    val elapsedMs = (System.nanoTime() - t0) / 1000000L
+    assert(result.isClean, s"expected clean, got: ${result.errors.take(5).map(_.render)}")
+    assert(result.converged, s"expected convergence, got ${result.unconverged.map(_.render)}")
+    assertEquals(result.cycles.size, Years)
+    // Every component solved on its own budget, so none of them ran anywhere near maxIter.
+    assert(
+      result.cycles.forall(_.rounds < 30),
+      s"a component burned its budget: ${result.cycles.map(_.rounds)}"
+    )
+    assert(
+      elapsedMs < BudgetMs,
+      s"iterative recalculate took ${elapsedMs}ms (budget ${BudgetMs}ms)"
+    )

@@ -814,3 +814,103 @@ class DependencyGraphSpec extends ScalaCheckSuite:
           (closureIsTail :| "closure occupies the tail")
     }
   }
+
+  // ===== GH-492: SCC condensation order (qualifiedSccOrder) =====
+
+  private val sccUniverse: Vector[DependencyGraph.QualifiedRef] =
+    (0 until 6).toVector.map { i =>
+      val sheet = if i < 3 then SheetName.unsafe("S1") else SheetName.unsafe("S2")
+      DependencyGraph.QualifiedRef(sheet, ARef.from0(0, i % 3))
+    }
+
+  private val sccGraphGen
+    : Gen[Map[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]]] =
+    Gen
+      .listOf(
+        for
+          k <- Gen.oneOf(sccUniverse)
+          vs <- Gen.someOf(sccUniverse).map(_.toSet)
+        yield k -> vs
+      )
+      .map(_.toMap)
+
+  property("GH-492 partition: qualifiedSccOrder covers exactly dependencies.keySet, no dupes") {
+    forAll(sccGraphGen) { deps =>
+      val comps = DependencyGraph.qualifiedSccOrder(deps)
+      val flat = comps.flatMap(_.members)
+      ((flat.toSet == deps.keySet) :| s"cover: ${flat.toSet} vs ${deps.keySet}") &&
+      ((flat.size == flat.distinct.size) :| "no duplicate members") &&
+      ((comps.map(_.members.size).sum == deps.keySet.size) :| "sizes sum")
+    }
+  }
+
+  property("GH-492 order: every cross-component edge points strictly backwards") {
+    forAll(sccGraphGen) { deps =>
+      val comps = DependencyGraph.qualifiedSccOrder(deps)
+      val idx = comps.zipWithIndex.flatMap((c, i) => c.members.map(_ -> i)).toMap
+      val ok = deps.forall { case (u, vs) =>
+        vs.filter(idx.contains).forall(v => idx(v) == idx(u) || idx(v) < idx(u))
+      }
+      ok :| s"condensation order violated for $deps"
+    }
+  }
+
+  property("GH-492 cyclic-view: the cyclic components flatten to exactly qualifiedCyclicNodes") {
+    forAll(sccGraphGen) { deps =>
+      val comps = DependencyGraph.qualifiedSccOrder(deps)
+      val fromComps = comps.filter(_.cyclic).flatMap(_.members).toSet
+      (fromComps == DependencyGraph.qualifiedCyclicNodes(deps)) :|
+        s"cyclic view mismatch: $fromComps vs ${DependencyGraph.qualifiedCyclicNodes(deps)}"
+    }
+  }
+
+  property("GH-492 determinism: the order depends on the graph VALUE, not on build order") {
+    forAll(sccGraphGen, Gen.choose(0L, 1000000L)) { (deps, seed) =>
+      val rnd = new scala.util.Random(seed)
+      val rebuilt =
+        rnd
+          .shuffle(deps.toVector)
+          .map((k, vs) => k -> rnd.shuffle(vs.toVector).toSet)
+          .toMap
+      val a = DependencyGraph.qualifiedSccOrder(deps)
+      val b = DependencyGraph.qualifiedSccOrder(rebuilt)
+      (a.map(c => (c.members, c.cyclic)) == b.map(c => (c.members, c.cyclic))) :|
+        s"nondeterministic order:\n  $a\n  $b"
+    }
+  }
+
+  test("GH-492: members inside a component are sorted by (sheet name, A1)") {
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    // B2 -> A1 -> C3 -> B2: one three-member cycle
+    val deps = Map(
+      q("B2") -> Set(q("A1")),
+      q("A1") -> Set(q("C3")),
+      q("C3") -> Set(q("B2"))
+    )
+    val comps = DependencyGraph.qualifiedSccOrder(deps)
+    assertEquals(comps.size, 1)
+    assertEquals(comps.map(_.members.map(_.ref.toA1)), Vector(Vector("A1", "B2", "C3")))
+    assert(comps.forall(_.cyclic))
+  }
+
+  test("GH-492: a self-loop singleton is cyclic; a plain singleton is not") {
+    val s = SheetName.unsafe("S")
+    val a1 = DependencyGraph.QualifiedRef(s, parseRef("A1"))
+    val b1 = DependencyGraph.QualifiedRef(s, parseRef("B1"))
+    val deps = Map(a1 -> Set(a1), b1 -> Set(a1))
+    val comps = DependencyGraph.qualifiedSccOrder(deps)
+    assertEquals(
+      comps.map(c => (c.members.map(_.ref.toA1), c.cyclic)),
+      Vector((Vector("A1"), true), (Vector("B1"), false))
+    )
+  }
+
+  test("GH-492: constants (non-key successors) never leak in as components") {
+    val s = SheetName.unsafe("S")
+    val a1 = DependencyGraph.QualifiedRef(s, parseRef("A1"))
+    val z9 = DependencyGraph.QualifiedRef(s, parseRef("Z9")) // constant: not a key
+    val deps = Map(a1 -> Set(z9))
+    val comps = DependencyGraph.qualifiedSccOrder(deps)
+    assertEquals(comps.flatMap(_.members), Vector(a1))
+  }

@@ -273,10 +273,11 @@ object WorkbookEvaluator:
         // trusting a previous generation's cache. The closure is workbook-level (GH-346): a
         // cross-sheet static dependent of a dynamic cell defers with it. Dynamic-free workbooks
         // take the identity path.
-        val dynamic: Set[QualifiedRef] =
+        val dynamicAll: Set[QualifiedRef] =
           wb.sheets.iterator.flatMap { s =>
             DependencyGraph.dynamicCells(s).iterator.map(r => QualifiedRef(s.name, r))
-          }.toSet -- removed
+          }.toSet
+        val dynamic: Set[QualifiedRef] = dynamicAll -- removed
         val bucket =
           if dynamic.isEmpty then Set.empty[QualifiedRef]
           else dynamic ++ DependencyGraph.qualifiedTransitiveDependents(prunedDependents, dynamic)
@@ -284,7 +285,17 @@ object WorkbookEvaluator:
           if bucket.isEmpty then evalOrder
           else evalOrder.filterNot(bucket.contains) ++ evalOrder.filter(bucket.contains)
 
-        val stripBySheet: Map[SheetName, Set[ARef]] = bucket.groupMap(_.sheet)(_.ref)
+        // GH-492: the condensation walk evaluates the cyclic core too, so the deferral bucket must
+        // be closed over the FULL graph — `prunedDependents` has the core deleted, and a cyclic
+        // component downstream of a dynamic cell would otherwise be scheduled ahead of it,
+        // inverting a real edge. Dependent-closure lifts to whole components (mutual reachability
+        // inside an SCC), so the stable partition of the condensation stays a valid order.
+        val bucketIter =
+          if !iterating then bucket
+          else if dynamicAll.isEmpty then Set.empty[QualifiedRef]
+          else dynamicAll ++ DependencyGraph.qualifiedTransitiveDependents(dependents, dynamicAll)
+
+        val stripBySheet: Map[SheetName, Set[ARef]] = bucketIter.groupMap(_.sheet)(_.ref)
         val initialSheets: Vector[Sheet] =
           wb.sheets.map { s =>
             val toStrip = stripBySheet.getOrElse(s.name, Set.empty)
@@ -300,8 +311,9 @@ object WorkbookEvaluator:
         // Workbook shell copy + one Vector update rather than re-mapping every sheet.
         def evalPass(
           order: List[QualifiedRef],
-          init: (Vector[Sheet], Map[SheetName, Map[ARef, CellValue]], Vector[CellEvalError])
-        ): (Vector[Sheet], Map[SheetName, Map[ARef, CellValue]], Vector[CellEvalError]) =
+          init: PassState,
+          clk: Clock
+        ): PassState =
           order.foldLeft(init) { case ((sheets, acc, errs), q) =>
             sheetIndex.get(q.sheet) match
               case None => (sheets, acc, errs) // node names a sheet absent from the workbook
@@ -315,8 +327,8 @@ object WorkbookEvaluator:
                 val evaluatedCell =
                   try
                     rngOpt match
-                      case Some(rng) => tempSheet.evaluateCell(q.ref, clock, rng, Some(tempWb))
-                      case None => tempSheet.evaluateCell(q.ref, clock, Some(tempWb))
+                      case Some(rng) => tempSheet.evaluateCell(q.ref, clk, rng, Some(tempWb))
+                      case None => tempSheet.evaluateCell(q.ref, clk, Some(tempWb))
                   catch
                     case NonFatal(e) =>
                       Left(
@@ -335,37 +347,94 @@ object WorkbookEvaluator:
                   case Left(error) => (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
           }
 
-        // GH-373: iterative mode splits the order around the fixpoint — cells NOT downstream of
-        // the cyclic core evaluate first, then the core iterates to convergence, then the core's
-        // dependents evaluate off the converged values. `coreDependents` is dependent-closed, so
-        // the stable partition preserves topological validity within each part (the deferDynamic
-        // lemma). The default path is the identity split: everything in one pass, byte-identical
-        // to pre-GH-373 behavior.
-        val (preOrder, postOrder) =
-          if iterating then ordered.partition(q => !coreDependents.contains(q))
-          else (ordered, List.empty[QualifiedRef])
-
-        val preState = evalPass(
-          preOrder,
-          (initialSheets, Map.empty[SheetName, Map[ARef, CellValue]], Vector.empty[CellEvalError])
-        )
-        // GH-454: the fixpoint's convergence verdict and round count surface on RecalcResult —
-        // exhaustion of maxIter must be distinguishable from stationarity. Non-iterative runs
-        // report (converged = true, iterationsUsed = 0): no iteration happened.
-        val (iterated, converged, iterationsUsed) = iterativeOpt match
-          case Some(iterative) if cyclicCore.nonEmpty =>
-            iterateCycles(
-              wb,
-              cyclicCore,
-              iterative,
-              clock,
-              rngOpt,
-              sheetIndex,
-              formulaText,
-              preState
+        /**
+         * GH-492: fixpoint ONE cyclic condensation node against the threaded temp sheets, then fold
+         * the result into the pass state. Successful members write their value into the temp sheets
+         * (later components and acyclic cells read them) and into the evaluated map (they cache at
+         * the end); failed members keep their original uncached formula cell, so dependents
+         * recursively evaluate and surface the underlying error — the same posture as a failed
+         * acyclic cell. Exhaustion is NOT an error (Excel keeps the last values); it is reported
+         * through the returned [[SccReport]].
+         */
+        def fixpointStep(
+          component: Vector[QualifiedRef],
+          iterative: IterativeCalc,
+          pinnedClock: Clock,
+          state: PassState
+        ): (PassState, SccReport) =
+          val (baseSheets, acc0, errs0) = state
+          val members: List[(QualifiedRef, Int, String)] =
+            component.toList.flatMap(q =>
+              sheetIndex.get(q.sheet).map(idx => (q, idx, formulaText(q)))
             )
-          case _ => (preState, true, 0)
-        val (_, evaluated, evalErrors) = evalPass(postOrder, iterated)
+          val seed = Map.empty[QualifiedRef, CellValue]
+          val outcome =
+            jacobiFixpoint(wb, baseSheets, members, iterative, pinnedClock, rngOpt, seed)
+          val folded = members.foldLeft((baseSheets, acc0, errs0)) {
+            case ((sheets, acc, errs), (q, idx, _)) =>
+              outcome.results.get(q) match
+                case Some(Right(value)) =>
+                  (
+                    sheets.updated(idx, sheets(idx).put(q.ref, value)),
+                    acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
+                    errs
+                  )
+                case Some(Left(error)) =>
+                  (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
+                case None => (sheets, acc, errs) // unreachable: every member evaluates every round
+          }
+          val report = SccReport(
+            members = members.map((q, _, _) => (q.sheet, q.ref)).toVector,
+            converged = outcome.converged,
+            rounds = outcome.rounds,
+            maxDelta = outcome.maxDelta
+          )
+          (folded, report)
+
+        def runPlan(
+          plan: Vector[CalcStep],
+          iterative: IterativeCalc,
+          pinnedClock: Clock,
+          init: PassState
+        ): (PassState, Vector[SccReport]) =
+          plan.foldLeft((init, Vector.empty[SccReport])) {
+            case ((state, reports), CalcStep.Straight(order)) =>
+              (evalPass(order, state, pinnedClock), reports)
+            case ((state, reports), CalcStep.Fixpoint(component)) =>
+              val (next, report) = fixpointStep(component, iterative, pinnedClock, state)
+              (next, reports :+ report)
+          }
+
+        val initState: PassState =
+          (initialSheets, Map.empty[SheetName, Map[ARef, CellValue]], Vector.empty[CellEvalError])
+
+        // GH-492: iterative mode walks the SCC condensation ONCE in dependency-first order — a run
+        // of acyclic components is one `evalPass`, each cyclic component is one `jacobiFixpoint`
+        // against the threaded temp sheets. Every precedent is therefore a freshly computed value
+        // before anything reads it, so no read can fall back to a loaded cache and `converged`
+        // certifies the workbook's GLOBAL fixpoint (see RecalcResult). The clock is pinned ONCE
+        // for the whole walk: one iterative recalculation is one volatile generation, in the
+        // fixpoints AND in the acyclic bridges between them. The default path is untouched —
+        // literally the same single `evalPass(ordered, ...)` with the caller's clock.
+        val (finalState, cycleReports) = iterativeOpt match
+          case Some(iterative) if cyclicCore.nonEmpty =>
+            val pinnedClock = Clock.fixed(clock.today(), clock.now())
+            val components = DependencyGraph.qualifiedSccOrder(deps)
+            val walk =
+              if bucketIter.isEmpty then components
+              else
+                val (eager, deferred) =
+                  components.partition(c => !c.members.exists(bucketIter.contains))
+                eager ++ deferred
+            runPlan(buildPlan(walk), iterative, pinnedClock, initState)
+          case _ => (evalPass(ordered, initState, clock), Vector.empty[SccReport])
+
+        val (_, evaluated, evalErrors) = finalState
+        val cycles = cycleReports.sortBy(r =>
+          r.members.headOption.fold(("", ""))((s, ref) => (s.value, ref.toA1))
+        )
+        val converged = cycles.forall(_.converged)
+        val iterationsUsed = cycles.map(_.rounds).maxOption.getOrElse(0)
 
         // Cache computed values into formula cells on the original sheets; failed cells stay
         // uncached (Excel recalculates them on open). Track per sheet whether any recomputed
@@ -403,79 +472,68 @@ object WorkbookEvaluator:
           evaluated = wb.sheets.map(s => s.name -> evaluated.getOrElse(s.name, Map.empty)).toMap,
           errors = cycleErrors ++ blockedErrors ++ evalErrors,
           converged = converged,
-          iterationsUsed = iterationsUsed
+          iterationsUsed = iterationsUsed,
+          cycles = cycles
         )
 
+  /** GH-492: the threaded state of one recalculation pass (temp sheets, values, errors). */
+  private[eval] type PassState =
+    (Vector[Sheet], Map[SheetName, Map[ARef, CellValue]], Vector[CellEvalError])
+
   /**
-   * GH-373: bounded Jacobi fixpoint over the cyclic core.
+   * GH-492: one step of the condensation walk.
    *
-   * Excel's iterative-calculation semantics: every member seeds to 0 (uninitialized cells), each
-   * round evaluates every member against the PREVIOUS round's values (Jacobi — implemented by
-   * overlaying each member's cell with `Formula(expr, Some(previousValue))`, so every reference to
-   * a member, including self-references, reads the cache while `evaluateCell` re-evaluates the
-   * formula text), and iteration stops when every member changes by less than `maxChange` or after
-   * `maxIter` rounds — non-convergence KEEPS the last values with no error.
-   *
-   * The clock is pinned ONCE before the loop (`Clock.fixed`) so TODAY()/NOW() cannot re-tick
-   * between rounds — one recalculation is one volatile generation, like Excel. Each member's
-   * evaluation sits under the same NonFatal guard as the main pass (GH-388): a member that throws
-   * holds its previous value for later rounds and, if still failing in the final round, degrades to
-   * a per-cell error with its cell left uncached (dependents then surface the failure exactly like
-   * any failed precedent).
+   * `Straight` batches a maximal run of CONSECUTIVE acyclic condensation nodes into a single
+   * `evalPass` — which is why the non-iterative plan degenerates to one `Straight` holding the
+   * whole topological order, i.e. to exactly the pre-GH-492 single pass.
    */
-  private def iterateCycles(
-    wb: Workbook,
-    core: Set[QualifiedRef],
-    iterative: IterativeCalc,
-    clock: Clock,
-    rngOpt: Option[Rng],
-    sheetIndex: Map[SheetName, Int],
-    formulaText: QualifiedRef => String,
-    state: (Vector[Sheet], Map[SheetName, Map[ARef, CellValue]], Vector[CellEvalError])
-  ): ((Vector[Sheet], Map[SheetName, Map[ARef, CellValue]], Vector[CellEvalError]), Boolean, Int) =
-    val (baseSheets, acc0, errs0) = state
-    // Deterministic member order: Jacobi values are order-independent (all reads see the
-    // previous round), but error vectors and sheet folds must be stable run to run.
-    val members: List[(QualifiedRef, Int, String)] =
-      core.toList
-        .flatMap(q => sheetIndex.get(q.sheet).map(idx => (q, idx, formulaText(q))))
-        .sortBy((q, _, _) => (q.sheet.value, q.ref.toA1))
+  private[eval] enum CalcStep derives CanEqual:
+    case Straight(order: List[QualifiedRef])
+    case Fixpoint(members: Vector[QualifiedRef])
 
-    val pinnedClock = Clock.fixed(clock.today(), clock.now())
-    val (finalResults, converged, rounds) =
-      jacobiFixpoint(wb, baseSheets, members, iterative, pinnedClock, rngOpt)
-    // Fold the fixpoint into the pass state: successful members write their value into the temp
-    // sheets (post-pass dependents read them) and the evaluated map (they cache at the end);
-    // failed members keep their original uncached formula cell, so dependents recursively
-    // evaluate and surface the underlying error — the same posture as a failed acyclic cell.
-    val folded = members.foldLeft((baseSheets, acc0, errs0)) {
-      case ((sheets, acc, errs), (q, idx, _)) =>
-        finalResults.get(q) match
-          case Some(Right(value)) =>
-            (
-              sheets.updated(idx, sheets(idx).put(q.ref, value)),
-              acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
-              errs
-            )
-          case Some(Left(error)) => (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
-          case None => (sheets, acc, errs) // unreachable: every member evaluates every round
-    }
-    (folded, converged, rounds)
+  /** Collapse consecutive acyclic components into one `Straight`; each cyclic node is a step. */
+  private[eval] def buildPlan(components: Vector[DependencyGraph.Scc]): Vector[CalcStep] =
+    val (steps, trailing) =
+      components.foldLeft((Vector.empty[CalcStep], Vector.empty[QualifiedRef])) {
+        case ((acc, run), c) =>
+          if c.cyclic then
+            val flushed = if run.isEmpty then acc else acc :+ CalcStep.Straight(run.toList)
+            (flushed :+ CalcStep.Fixpoint(c.members), Vector.empty[QualifiedRef])
+          else (acc, run ++ c.members)
+      }
+    if trailing.isEmpty then steps else steps :+ CalcStep.Straight(trailing.toList)
 
   /**
-   * The shared Jacobi fixpoint engine (GH-373/GH-453/GH-454): iterate `members` against
+   * GH-492: the outcome of one component's Jacobi fixpoint.
+   *
+   * @param maxDelta
+   *   the largest |Δ| among NUMERIC members in the final round (None when no member was numeric)
+   */
+  private[eval] final case class FixpointOutcome(
+    results: Map[QualifiedRef, Either[XLError, CellValue]],
+    converged: Boolean,
+    rounds: Int,
+    maxDelta: Option[BigDecimal]
+  )
+
+  /**
+   * The shared Jacobi fixpoint engine (GH-373/GH-453/GH-454/GH-492): iterate `members` against
    * `baseSheets` until every member's |Δ| < `maxChange` (strict) or `maxIter` rounds.
    *
    * Each member is `(qualified ref, index of its sheet in baseSheets, formula text)`. Members seed
-   * to 0; each round overlays every member's cell with `Formula(expr, Some(previousValue))` so
-   * every reference to a member — including self-references — reads the previous round's value
-   * while `evaluateCell` re-evaluates the formula text. Callers pin the clock BEFORE calling (one
-   * fixpoint is one volatile generation). A member that throws holds its previous value for later
-   * rounds (GH-388 degradation) and reports its Left only from the final round.
+   * from `seed`, falling back to 0 for anything absent (`Map.empty` therefore reproduces the
+   * original all-zero seeding exactly); each round overlays every member's cell with
+   * `Formula(expr, Some(previousValue))` so every reference to a member — including self-references
+   * — reads the previous round's value while `evaluateCell` re-evaluates the formula text. Callers
+   * pin the clock BEFORE calling (one fixpoint is one volatile generation). A member that throws
+   * holds its previous value for later rounds (GH-388 degradation) and reports its Left only from
+   * the final round.
    *
-   * Returns (final per-member results, converged verdict, rounds actually run — `maxIter` on
-   * exhaustion). Used by both `recalculate(IterativeCalc)` and the data-table seeder's circular
-   * what-if substitution.
+   * Non-convergence KEEPS the last values with no error — Excel's semantics, and the reason
+   * exhaustion surfaces through [[FixpointOutcome]] rather than as a [[CellEvalError]].
+   *
+   * Used by both `recalculate(IterativeCalc)` (one call per cyclic condensation node) and the
+   * data-table seeder's circular what-if substitution.
    */
   private[eval] def jacobiFixpoint(
     wb: Workbook,
@@ -483,10 +541,12 @@ object WorkbookEvaluator:
     members: List[(QualifiedRef, Int, String)],
     iterative: IterativeCalc,
     pinnedClock: Clock,
-    rngOpt: Option[Rng]
-  ): (Map[QualifiedRef, Either[XLError, CellValue]], Boolean, Int) =
+    rngOpt: Option[Rng],
+    seedValues: Map[QualifiedRef, CellValue]
+  ): FixpointOutcome =
     val zero: CellValue = CellValue.Number(BigDecimal(0))
-    val seed: Map[QualifiedRef, CellValue] = members.map((q, _, _) => q -> zero).toMap
+    val seed: Map[QualifiedRef, CellValue] =
+      members.map((q, _, _) => q -> seedValues.getOrElse(q, zero)).toMap
     val maxRounds = math.max(1, iterative.maxIter)
 
     // Convergence: numeric values compare by |Δ| < maxChange (strict, per Excel); non-numeric
@@ -498,11 +558,14 @@ object WorkbookEvaluator:
         case (CellValue.Number(a), CellValue.Number(b)) => (a - b).abs < iterative.maxChange
         case (a, b) => a == b
 
+    /** |Δ| for a numeric member that stayed numeric; None otherwise. */
+    def numericDelta(prev: CellValue, next: CellValue): Option[BigDecimal] =
+      (prev, next) match
+        case (CellValue.Number(a), CellValue.Number(b)) => Some((a - b).abs)
+        case _ => None
+
     @annotation.tailrec
-    def loop(
-      round: Int,
-      prev: Map[QualifiedRef, CellValue]
-    ): (Map[QualifiedRef, Either[XLError, CellValue]], Boolean, Int) =
+    def loop(round: Int, prev: Map[QualifiedRef, CellValue]): FixpointOutcome =
       val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, expr)) =>
         sheets.updated(idx, sheets(idx).put(q.ref, CellValue.Formula(expr, prev.get(q))))
       }
@@ -525,7 +588,11 @@ object WorkbookEvaluator:
           case Right(next) => changeBelowThreshold(prev.getOrElse(q, zero), next)
           case Left(_) => false
       }
-      if converged || round >= maxRounds then (results, converged, round)
+      if converged || round >= maxRounds then
+        val maxDelta = members.flatMap { (q, _, _) =>
+          results(q).toOption.flatMap(next => numericDelta(prev.getOrElse(q, zero), next))
+        }.maxOption
+        FixpointOutcome(results, converged, round, maxDelta)
       else
         // A throwing/failing member holds its previous value for the next round so the rest of
         // the core keeps converging (GH-388 degradation, not unwinding).
