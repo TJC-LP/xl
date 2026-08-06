@@ -468,9 +468,15 @@ object DataTableSeeder:
           val overlaid = axisValues.foldLeft(prepared) { case (sheets, (inputRef, v)) =>
             sheets.updated(tableIdx, sheets(tableIdx).put(inputRef, v))
           }
-          // (3) fixpoint the relevant cycle members under this axis combination
-          val (results, converged, _) =
-            WorkbookEvaluator.jacobiFixpoint(wb, overlaid, members, iterative, clock, None)
+          // (3) fixpoint the relevant cycle members under this axis combination.
+          // GH-469/GH-492: the seeder stays COLD-seeded (Map.empty) on purpose — under what-if
+          // substitution the loaded caches are stale by construction, the same argument `stripSet`
+          // already makes above. `recalculate`'s warm start is deliberately not inherited here.
+          val outcome =
+            WorkbookEvaluator
+              .jacobiFixpoint(wb, overlaid, members, iterative, clock, None, Map.empty)
+          val results = outcome.results
+          val converged = outcome.converged
           val sourceQ = QualifiedRef(sheet.name, sourceRef)
           if members.exists((q, _, _) => q == sourceQ) then
             // The source formula itself was fixpointed. Re-evaluating it after folding the final

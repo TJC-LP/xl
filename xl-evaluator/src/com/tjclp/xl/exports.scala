@@ -50,6 +50,8 @@ object formulaExports:
 
   // Recalc result types (workbook-level total recalculation with per-cell errors)
   export formula.eval.{CellEvalError, IterativeCalc, RecalcResult}
+  // GH-492: per-strongly-connected-component fixpoint verdicts on RecalcResult.cycles
+  export formula.eval.SccReport
 
   // GH-419: explicit data-table cache seeding (autoNoTable books never recompute tables on open)
   export formula.eval.DataTableSeeder
