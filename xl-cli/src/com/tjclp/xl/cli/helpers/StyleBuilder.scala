@@ -186,29 +186,90 @@ object StyleBuilder:
       case "double" => Right(BorderStyle.Double)
       case other => Left(s"Unknown border style: $other. Use none, thin, medium, thick")
 
+  /** The semantic format names every CLI surface accepts, in help-text order. */
+  val numFmtNames: List[String] =
+    List(
+      "general",
+      "integer",
+      "number",
+      "decimal",
+      "currency",
+      "percent",
+      "percent_decimal",
+      "date",
+      "datetime",
+      "time",
+      "text"
+    )
+
+  /**
+   * Resolve a semantic format name, or None when the string is not one.
+   *
+   * Single source of truth for the named table — the streaming batch path (GH-475) had its own
+   * copy, which silently shipped a smaller table.
+   */
+  def parseNumFmtName(s: String): Option[NumFmt] =
+    s.toLowerCase match
+      case "general" => Some(NumFmt.General)
+      case "integer" => Some(NumFmt.Integer)
+      case "number" | "decimal" => Some(NumFmt.Decimal)
+      case "currency" => Some(NumFmt.Currency)
+      case "percent" => Some(NumFmt.Percent)
+      case "percent_decimal" => Some(NumFmt.PercentDecimal)
+      case "date" => Some(NumFmt.Date)
+      case "datetime" => Some(NumFmt.DateTime)
+      case "time" => Some(NumFmt.Time)
+      case "text" => Some(NumFmt.Text)
+      case _ => None
+
+  /**
+   * GH-475: does the string look like an Excel format code rather than a fat-fingered name?
+   *
+   * Section separators (`;`) and quoted literals count on their own — `"Yes ";;"No "` (the 1/0
+   * toggle-flag idiom) is a legal code with no digit-placeholder in it at all, and the older
+   * "contains # 0 @ yy mm dd hh" heuristic dropped it. Date/time letters must be DOUBLED (`yy`,
+   * `mm`, `dd`, `hh`, `ss`) so ordinary words ("medium", "decimal") are not mistaken for codes.
+   */
+  def looksLikeFormatCode(s: String): Boolean =
+    val lower = s.toLowerCase
+    val structural = "#0@?;\"*_\\[%".exists(s.contains(_))
+    val dateLike = List("yy", "mm", "dd", "hh", "ss", "am/pm").exists(lower.contains)
+    structural || dateLike
+
+  /**
+   * GH-475: warning for a numFmt string that is neither a known name nor code-shaped.
+   *
+   * The string is still accepted as a custom code (Excel, not xl, is the authority on what a code
+   * means), but a typo like `curency` used to ship as numFmt 165 in total silence.
+   */
+  def numFmtWarning(s: String): Option[String] =
+    Option.when(parseNumFmtName(s).isEmpty && !looksLikeFormatCode(s))(
+      s"Warning: numFmt '$s' is neither a known format name nor an Excel format code — " +
+        s"applying it verbatim as a custom code. Known names: ${numFmtNames.mkString(", ")}."
+    )
+
+  /**
+   * GH-475: print [[numFmtWarning]] to stderr for a direct CLI `--format` argument.
+   *
+   * The `style` command is where a semantic name actually gets fat-fingered by a human, and it has
+   * no warning channel of its own (stdout is the command's result). The batch path warns through
+   * `BatchParser.ParseResult.warnings`, which Main already drains to stderr, so this is called only
+   * from the two `style` command handlers — calling it from `buildCellStyle` would double-warn.
+   */
+  def warnNumFmt(numFormat: Option[String]): IO[Unit] =
+    IO(numFormat.flatMap(numFmtWarning).foreach(System.err.println))
+
   /**
    * Parse number format string.
    *
    * Accepts named formats (general, number, currency, percent, date, text) and custom Excel format
-   * codes. Any string containing format characters (#, 0, @, yy, mm, dd, hh, ss) is accepted as a
-   * custom format.
+   * codes. Any other string is accepted as a custom format code (see [[numFmtWarning]] for the typo
+   * signal).
    */
   def parseNumFmt(s: String): Either[String, NumFmt] =
-    s.toLowerCase match
-      case "general" => Right(NumFmt.General)
-      case "integer" => Right(NumFmt.Integer)
-      case "number" | "decimal" => Right(NumFmt.Decimal)
-      case "currency" => Right(NumFmt.Currency)
-      case "percent" => Right(NumFmt.Percent)
-      case "percent_decimal" => Right(NumFmt.PercentDecimal)
-      case "date" => Right(NumFmt.Date)
-      case "datetime" => Right(NumFmt.DateTime)
-      case "time" => Right(NumFmt.Time)
-      case "text" => Right(NumFmt.Text)
-      case _ =>
-        // Accept any string as a custom format - Excel will interpret it
-        // This allows custom formats like "0.0x", "$#,##0;($#,##0)", "0 \"bps\"", etc.
-        Right(NumFmt.Custom(s))
+    // Accept any non-name string as a custom format - Excel will interpret it.
+    // This allows custom formats like "0.0x", "$#,##0;($#,##0)", "0 \"bps\"", etc.
+    Right(parseNumFmtName(s).getOrElse(NumFmt.Custom(s)))
 
   /**
    * Merge two CellStyles, applying non-default values from newStyle to existingStyle.

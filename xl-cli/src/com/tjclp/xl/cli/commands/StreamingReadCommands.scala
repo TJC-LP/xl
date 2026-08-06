@@ -434,6 +434,11 @@ object StreamingReadCommands:
    * View range using streaming (markdown/csv/json only).
    *
    * HTML/SVG/PDF require styles which aren't available in streaming mode.
+   *
+   * @param skipHidden
+   *   GH-474: cannot be honored here (the streaming reader never parses row/column properties).
+   *   Passing it emits [[RendererCommon.streamingSkipHiddenNotice]] on stderr rather than being
+   *   silently ignored.
    */
   def view(
     filePath: Path,
@@ -444,7 +449,8 @@ object StreamingReadCommands:
     format: ViewFormat,
     showLabels: Boolean,
     skipEmpty: Boolean,
-    headerRow: Option[Int]
+    headerRow: Option[Int],
+    skipHidden: Boolean = false
   ): IO[String] =
     // Reject non-streamable formats
     format match
@@ -457,45 +463,58 @@ object StreamingReadCommands:
           )
         )
       case _ =>
-        parseRangeFromRef(rangeStr).flatMap { case (refSheetOpt, range) =>
-          resolveSheetName(sheetNameOpt, refSheetOpt, "view", rangeStr).flatMap {
-            resolvedSheetOpt =>
-              // Limit rows and filter to range
-              val limitedRange = limitRange(range, limit)
-              // GH-351: report truncation when --limit clips the requested range
-              val totalRows = range.end.row.index0 - range.start.row.index0 + 1
-              val shownRows = limitedRange.end.row.index0 - limitedRange.start.row.index0 + 1
-              val isTruncated = shownRows < totalRows
-              val notice = RendererCommon.truncationNotice(shownRows, totalRows)
-              val rowStream = resolvedSheetOpt match
-                case Some(name) => excel.readSheetStreamRange(filePath, name, limitedRange)
-                case None => excel.readStreamRange(filePath, limitedRange)
+        // GH-474: the flag is unsupported here — announce it instead of no-oping in silence.
+        IO(System.err.println(RendererCommon.streamingSkipHiddenNotice)).whenA(skipHidden) *>
+          parseRangeFromRef(rangeStr).flatMap { case (refSheetOpt, range) =>
+            resolveSheetName(sheetNameOpt, refSheetOpt, "view", rangeStr).flatMap {
+              resolvedSheetOpt =>
+                // Limit rows and filter to range
+                val limitedRange = limitRange(range, limit)
+                // GH-351: report truncation when --limit clips the requested range
+                val totalRows = range.end.row.index0 - range.start.row.index0 + 1
+                val shownRows = limitedRange.end.row.index0 - limitedRange.start.row.index0 + 1
+                val isTruncated = shownRows < totalRows
+                val notice = RendererCommon.truncationNotice(shownRows, totalRows)
+                val rowStream = resolvedSheetOpt match
+                  case Some(name) => excel.readSheetStreamRange(filePath, name, limitedRange)
+                  case None => excel.readStreamRange(filePath, limitedRange)
 
-              excel.loadStyles(filePath).flatMap { styles =>
-                rowStream.compile.toVector
-                  .flatMap { rows =>
-                    val s = Some(styles)
-                    format match
-                      case ViewFormat.Markdown =>
-                        val table =
-                          formatMarkdown(rows, limitedRange, showFormulas, skipEmpty, showLabels, s)
-                        IO.pure(if isTruncated then s"$table\n$notice" else table)
-                      case ViewFormat.Csv =>
-                        // stdout must stay machine-parseable: notice goes to stderr only
-                        IO(System.err.println(notice))
-                          .whenA(isTruncated)
-                          .as(formatCsv(rows, limitedRange, showFormulas, skipEmpty, showLabels, s))
-                      case ViewFormat.Json =>
-                        // Streaming JSON is a bare array (no top-level object to extend):
-                        // notice goes to stderr only
-                        IO(System.err.println(notice))
-                          .whenA(isTruncated)
-                          .as(formatJson(rows, limitedRange, showFormulas, skipEmpty, headerRow, s))
-                      case _ => IO.pure("") // unreachable due to earlier check
-                  }
-              }
+                excel.loadStyles(filePath).flatMap { styles =>
+                  rowStream.compile.toVector
+                    .flatMap { rows =>
+                      val s = Some(styles)
+                      format match
+                        case ViewFormat.Markdown =>
+                          val table =
+                            formatMarkdown(
+                              rows,
+                              limitedRange,
+                              showFormulas,
+                              skipEmpty,
+                              showLabels,
+                              s
+                            )
+                          IO.pure(if isTruncated then s"$table\n$notice" else table)
+                        case ViewFormat.Csv =>
+                          // stdout must stay machine-parseable: notice goes to stderr only
+                          IO(System.err.println(notice))
+                            .whenA(isTruncated)
+                            .as(
+                              formatCsv(rows, limitedRange, showFormulas, skipEmpty, showLabels, s)
+                            )
+                        case ViewFormat.Json =>
+                          // Streaming JSON is a bare array (no top-level object to extend):
+                          // notice goes to stderr only
+                          IO(System.err.println(notice))
+                            .whenA(isTruncated)
+                            .as(
+                              formatJson(rows, limitedRange, showFormulas, skipEmpty, headerRow, s)
+                            )
+                        case _ => IO.pure("") // unreachable due to earlier check
+                    }
+                }
+            }
           }
-        }
 
   // ==========================================================================
   // Helper types and functions

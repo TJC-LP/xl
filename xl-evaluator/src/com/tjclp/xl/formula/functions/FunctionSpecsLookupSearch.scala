@@ -131,20 +131,9 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
               case ExprValue.Cell(cv) => cv.toString
               case ExprValue.Opaque(other) => other.toString
 
-            val normalizedLookup: ExprValue = lookupValue match
-              case ExprValue.Cell(cv) =>
-                cv match
-                  case CellValue.Number(n) => ExprValue.Number(n)
-                  case CellValue.Text(s) => ExprValue.Text(s)
-                  case CellValue.Bool(b) => ExprValue.Bool(b)
-                  case CellValue.Formula(_, Some(cached), _) =>
-                    cached match
-                      case CellValue.Number(n) => ExprValue.Number(n)
-                      case CellValue.Text(s) => ExprValue.Text(s)
-                      case CellValue.Bool(b) => ExprValue.Bool(b)
-                      case other => ExprValue.Cell(other)
-                  case other => ExprValue.Cell(other)
-              case other => other
+            // GH-488: one lookup plane for MATCH/XLOOKUP/VLOOKUP/HLOOKUP — the inline copy this
+            // replaces lacked the DateTime→serial case, so a date key over a date column missed.
+            val normalizedLookup: ExprValue = normalizeLookupValue(lookupValue)
 
             val isTextLookup = normalizedLookup match
               case ExprValue.Text(_) => true
@@ -247,20 +236,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             val colStart0 = tableRange.colStart.index0
             val resultRow0 = keyRow0 + (rowIndex - 1)
 
-            val normalizedLookup: ExprValue = lookupValue match
-              case ExprValue.Cell(cv) =>
-                cv match
-                  case CellValue.Number(n) => ExprValue.Number(n)
-                  case CellValue.Text(s) => ExprValue.Text(s)
-                  case CellValue.Bool(b) => ExprValue.Bool(b)
-                  case CellValue.Formula(_, Some(cached), _) =>
-                    cached match
-                      case CellValue.Number(n) => ExprValue.Number(n)
-                      case CellValue.Text(s) => ExprValue.Text(s)
-                      case CellValue.Bool(b) => ExprValue.Bool(b)
-                      case other => ExprValue.Cell(other)
-                  case other => ExprValue.Cell(other)
-              case other => other
+            // GH-488: shared lookup plane (see VLOOKUP above)
+            val normalizedLookup: ExprValue = normalizeLookupValue(lookupValue)
 
             val isTextLookup = normalizedLookup match
               case ExprValue.Text(_) => true
