@@ -289,7 +289,16 @@ object StructuralEditor:
     lazy val staleCaches: Set[QualifiedRef] =
       val (_, dependents) = DependencyGraph.fromWorkbookBounded(wb)
       val axisIndex0: ARef => Int = r => if isRow then r.row.index0 else r.col.index0
-      val seeds = dependents.keySet.filter(q => q.sheet == target && axisIndex0(q.ref) >= at)
+      // The narrowing is gated too, not just the cache-carrying decision below: `staleCaches` also
+      // feeds `keepNonParticipant`, which runs on EVERY path. A cross-sheet reader that reaches the
+      // edited sheet only through a defined name never spells that sheet in its text, so it rides
+      // the non-participant branch — narrowing unconditionally would let it keep a cache the
+      // DEFAULT recalculating path then never refreshes (it drops out of `changedRefs`, so the
+      // dirty cone misses it), silently resurfacing a poisoned <v> from a verb that promises to
+      // recalculate. Off the flag, seeds stay the whole edited sheet, byte-for-byte as before.
+      val seeds = dependents.keySet.filter(q =>
+        q.sheet == target && (!preserveUntouchedCaches || axisIndex0(q.ref) >= at)
+      )
       // A dynamic reference can reach the edited sheet without contributing a static graph edge.
       // Conservatively invalidate every dynamic cell and its static dependent closure: the edit
       // may have changed what its unchanged reference text resolves to.

@@ -140,7 +140,55 @@ class StructuralFormulaSpec extends FunSuite:
     val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 1)
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"B1").value, CellValue.Formula("A6*2", None))
+    // Default (unflagged) behaviour is unchanged: B2's cache drops even though nothing it reads
+    // moved. `preserveUntouchedCaches` is what opts into the GH-503 narrowing.
     assertEquals(s2(ref"B2").value, CellValue.Formula("A1*3", None))
+  }
+
+  // ===== GH-503: opt-in cache preservation for edits the formula cannot have noticed =====
+
+  test("GH-503: preserveUntouchedCaches keeps a cache nothing the edit touched can change") {
+    val cached = Some(CellValue.Number(BigDecimal(4)))
+    val s = new Sheet(name = S)
+      .put(ref"A1", CellValue.Number(BigDecimal(2)))
+      .put(ref"B2", CellValue.Formula("A1*3", cached)) // reads A1, above the cut
+    val r = StructuralEditor
+      .insertRows(Workbook(Vector(s)), S, at = 20, count = 1, preserveUntouchedCaches = true)
+    assertEquals(sheetNamed(r, "S")(ref"B2").value, CellValue.Formula("A1*3", cached))
+  }
+
+  test("GH-503: a RELOCATED formula drops its cache even when its text is identical") {
+    // The position-sensitive case: =ROW() keeps its text and changes its answer. `ref` is a
+    // POST-shift address while the cone is keyed on PRE-edit ones, so relocation is tested
+    // against the post-edit cut rather than by cone membership.
+    val cached = Some(CellValue.Number(BigDecimal(30)))
+    val s = new Sheet(name = S).put(ref"C30", CellValue.Formula("ROW()", cached))
+    val r = StructuralEditor
+      .insertRows(Workbook(Vector(s)), S, at = 19, count = 1, preserveUntouchedCaches = true)
+    assertEquals(sheetNamed(r, "S")(ref"C31").value, CellValue.Formula("ROW()", None))
+  }
+
+  test("GH-503: a formula IN the edit's cone drops its cache under the flag too") {
+    val cached = Some(CellValue.Number(BigDecimal(777)))
+    val s = new Sheet(name = S)
+      .put(ref"A25", CellValue.Number(BigDecimal(5)))
+      .put(ref"C1", CellValue.Formula("A25*2", cached)) // reads a cell the insert MOVES
+    val r = StructuralEditor
+      .insertRows(Workbook(Vector(s)), S, at = 20, count = 1, preserveUntouchedCaches = true)
+    // A25 moved to A26, so the reference is rewritten — a changed question, no cache carried.
+    assertEquals(sheetNamed(r, "S")(ref"C1").value, CellValue.Formula("A26*2", None))
+  }
+
+  test("GH-503: a shrinking SUM drops its cache under the flag (text changed)") {
+    val cached = Some(CellValue.Number(BigDecimal(6)))
+    val s = new Sheet(name = S)
+      .put(ref"A1", CellValue.Number(BigDecimal(1)))
+      .put(ref"A2", CellValue.Number(BigDecimal(2)))
+      .put(ref"A3", CellValue.Number(BigDecimal(3)))
+      .put(ref"C1", CellValue.Formula("SUM(A1:A3)", cached))
+    val r = StructuralEditor
+      .deleteRows(Workbook(Vector(s)), S, at = 1, count = 1, preserveUntouchedCaches = true)
+    assertEquals(sheetNamed(r, "S")(ref"C1").value, CellValue.Formula("SUM(A1:A2)", None))
   }
 
   test("deleting a row invalidates the old cached result of a shrinking SUM range") {

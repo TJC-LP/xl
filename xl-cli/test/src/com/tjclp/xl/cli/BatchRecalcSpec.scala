@@ -808,6 +808,29 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-503: the DEFAULT path still re-bakes a reader that reaches the edit by NAME") {
+    // The seed narrowing is gated on --no-recalc for exactly this shape. `SUM(TotalRange)` never
+    // spells "Data" in its text, so it rides `keepNonParticipant` — the branch `staleCaches` feeds
+    // on EVERY path. Narrowing unconditionally would let it keep its poisoned cache here, drop out
+    // of `changedRefs`, and escape the dirty cone entirely: a verb that promises to recalculate
+    // would silently resurface 777. Off the flag the seeds stay the whole edited sheet.
+    val wb = Workbook(
+      (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+        s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+      },
+      Sheet("Other").put(
+        ref"B1",
+        CellValue.Formula("SUM(TotalRange)", Some(CellValue.Number(BigDecimal(777))))
+      )
+    ).withDefinedName("TotalRange", "Data!$A$1:$A$10")
+    val out = tempXlsx()
+
+    WriteCommands.insertRows(wb, wb.sheets.headOption, 20, 1, out, config).unsafeRunSync()
+
+    assertCachedOn(readBack(out), "Other", ref"B1", 55.0)
+    Files.deleteIfExists(out)
+  }
+
   // ===== GH-481: batch honors the file's declared calcPr like recalc does =====
 
   /** C1=100, B1=C1+B2, B2=$A$1*(C1+B1)/2 over rate input A1 — a declared circular book. */

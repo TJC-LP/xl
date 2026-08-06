@@ -92,18 +92,25 @@ How completely caches survive depends on the verb:
   byte-identical, cone included. The summary says so.
 - **Structural** (`insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`): a structural edit
   moves cells, rewrites formula text and rewrites defined names, so xl invalidates the cache of
-  every formula that transitively reads the edited sheet and writes those cells **without a `<v>`**.
-  It never re-asserts a pre-edit cache: whether an unchanged formula still has its old answer cannot
-  be decided without recalculating, which is precisely what the flag refuses. (A formula reached
-  through a shrunk defined name, or a static dependent of an `INDIRECT` cell, keeps its text
-  byte-identical while its answer changes underneath it.) Formulas the edit did not reach — a
-  self-contained sheet that never reads the edited one — ride through byte-identical. The summary
-  counts both halves:
+  every formula the edit could have changed and writes those cells **without a `<v>`**. It never
+  re-asserts a pre-edit cache: whether a formula the edit *did* reach still has its old answer
+  cannot be decided without recalculating, which is precisely what the flag refuses. (A formula
+  reached through a shrunk defined name, or a static dependent of an `INDIRECT` cell, keeps its text
+  byte-identical while its answer changes underneath it.)
+
+  A cache survives only when the edit provably could not have changed it: the formula's text is
+  byte-identical after the rewrite, it did not relocate, and nothing it transitively reads was moved
+  or removed. So an edit *below* or *beside* your data preserves everything, while an edit *inside*
+  a block preserves the rows above the cut and drops the rest. The summary counts both halves:
 
   ```
-  Recalculation skipped (--no-recalc): 0 cached value(s) preserved, 11 formula(s) invalidated by
+  Recalculation skipped (--no-recalc): 4 cached value(s) preserved, 7 formula(s) invalidated by
   the edit left uncached (recalculate externally)
   ```
+
+  One consequence worth knowing: **volatile formulas** (`TODAY()`, `NOW()`, `RAND()`) above the cut
+  keep their cached values too. The flag means "do not recalculate", and a volatile is no exception
+  — Excel refreshes them on open regardless.
 
   Reopening the file in Excel, or a later `xl recalc`, fills those back in. A missing `<v>` is a
   visible gap that any recalculation repairs; a wrong one is silent and permanent, which is why xl
