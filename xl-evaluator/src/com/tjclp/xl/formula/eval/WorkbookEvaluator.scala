@@ -510,12 +510,15 @@ object WorkbookEvaluator:
     if trailing.isEmpty then steps else steps :+ CalcStep.Straight(trailing.toList)
 
   /**
-   * GH-469: the members' currently cached values — Excel's iterative-calculation seed. Members with
-   * no cache are omitted and fall back to 0 inside [[jacobiFixpoint]].
+   * GH-469: the members' currently cached NUMERIC values — Excel's iterative-calculation seed.
+   * Members with no cache are omitted and fall back to 0 inside [[jacobiFixpoint]].
    *
-   * Any cached VALUE seeds, not just numbers: convergence still requires re-evaluating the formula
-   * and reproducing that value, which is a genuine fixpoint (GH-344 already blesses exactly this
-   * for error values).
+   * Only `Number` caches seed. A stale error or text cache is deliberately NOT trusted: arithmetic
+   * propagates both (`#DIV/0! * 0.5 + 10` is `#DIV/0!`; `"junk" * 0.5` is `#VALUE!`), so seeding
+   * one into a perfectly healthy cycle makes the poison its own fixpoint — the run would wedge at
+   * the seed, report `converged = true` with no error, and never heal. Falling back to 0 for every
+   * non-numeric shape keeps the pre-GH-469 healing behavior for poisoned books while still fixing
+   * GH-469's reported failure, whose caches are numeric.
    */
   private[eval] def warmSeed(
     baseSheets: Vector[Sheet],
@@ -523,7 +526,7 @@ object WorkbookEvaluator:
   ): Map[QualifiedRef, CellValue] =
     members.flatMap { (q, idx, _) =>
       baseSheets.lift(idx).flatMap(_.cells.get(q.ref)).map(_.value) match
-        case Some(CellValue.Formula(_, Some(cachedValue), _)) => Some(q -> cachedValue)
+        case Some(CellValue.Formula(_, Some(cached @ CellValue.Number(_)), _)) => Some(q -> cached)
         case _ => None
     }.toMap
 

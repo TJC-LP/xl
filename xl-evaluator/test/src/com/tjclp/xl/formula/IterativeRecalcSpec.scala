@@ -2,7 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.IterativeCalc
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{CalcPr, Workbook}
@@ -286,6 +286,50 @@ class IterativeRecalcSpec extends FunSuite:
     val result = Workbook(sheet).recalculate(IterativeCalc(200, BigDecimal("1E-10")))
     assertEquals(cached(result.workbook, "S", a3), Some(CellValue.Text("NA ")))
     assertEquals(cached(result.workbook, "S", b3), Some(CellValue.Text("NA ")))
+  }
+
+  /**
+   * A perfectly healthy linear cycle (fixpoint A1 = 80/3, B1 = 100/3) whose LOADED caches are junk.
+   * Warm seeding must not let the junk decide the answer: a non-numeric seed makes the arithmetic
+   * propagate the junk forever (`#DIV/0! * 0.5 + 10` is `#DIV/0!` — a fixpoint), so seeding it
+   * would wedge the cycle at its poison AND report success.
+   */
+  private def poisonedHealthyCycle(cache: CellValue): Workbook =
+    Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, CellValue.Formula("=B1*0.5+10", Some(cache)))
+        .put(b1, CellValue.Formula("=A1*0.5+20", Some(cache)))
+    )
+
+  private val healedA = BigDecimal(80) / BigDecimal(3)
+  private val healedB = BigDecimal(100) / BigDecimal(3)
+
+  test(
+    "GH-469: a healthy cycle carrying stale #DIV/0! caches HEALS (non-numeric seeds fall to 0)"
+  ) {
+    val result = poisonedHealthyCycle(CellValue.Error(CellError.Div0))
+      .recalculate(IterativeCalc(200, BigDecimal("1E-12")))
+    val a = cachedNum(result.workbook, "S", a1).getOrElse(
+      fail(s"A1 must heal to a number, got ${cached(result.workbook, "S", a1)}")
+    )
+    val b = cachedNum(result.workbook, "S", b1).getOrElse(
+      fail(s"B1 must heal to a number, got ${cached(result.workbook, "S", b1)}")
+    )
+    assert((a - healedA).abs < BigDecimal("1E-9"), s"A1=$a, expected ~$healedA")
+    assert((b - healedB).abs < BigDecimal("1E-9"), s"B1=$b, expected ~$healedB")
+    assert(result.converged, "the cycle is a contraction — it must converge")
+    assertEquals(result.excelErrors, Vector.empty, "no error value may survive the recalculation")
+    assert(result.certified, "a healed, error-free contraction is at its global fixpoint")
+  }
+
+  test("GH-469: a healthy cycle carrying stale text caches HEALS (non-numeric seeds fall to 0)") {
+    val result = poisonedHealthyCycle(CellValue.Text("junk"))
+      .recalculate(IterativeCalc(200, BigDecimal("1E-12")))
+    val a = cachedNum(result.workbook, "S", a1).getOrElse(
+      fail(s"A1 must heal to a number, got ${cached(result.workbook, "S", a1)}")
+    )
+    assert((a - healedA).abs < BigDecimal("1E-9"), s"A1=$a, expected ~$healedA")
+    assert(result.converged && result.isClean, s"errors: ${result.errors.map(_.render)}")
   }
 
   test("GH-469: fromCalcPr inherits the Excel-parity warm-start default") {

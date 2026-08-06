@@ -56,16 +56,18 @@ final case class CellEvalError(
  *   Convergence threshold: iteration stops when every cycle member changes by LESS than this
  *   between rounds (Excel UI default 0.001)
  * @param seedFromCaches
- *   GH-469: seed each cycle member from its LOADED cached value when it has one, falling back to 0
+ *   GH-469: seed each cycle member from its LOADED cached NUMBER when it has one, falling back to 0
  *   otherwise — Excel's semantics (iterative calculation starts from the current cell values). A
  *   book already at a valid fixpoint therefore re-solves to itself in one round instead of being
  *   driven back through the 0-seed transient, which on guarded topologies (mutually
  *   `IF(ISERROR(…))`-guarded pairs) silently replaced valid numeric caches with the guard's text
  *   branch — itself a fixpoint, so the run reported convergence with no error at all. Set false for
- *   a cold start: the supported escape hatch for a book whose caches are known to be poisoned.
- *   Members whose cache the dynamic (INDIRECT/OFFSET) bucket strips seed 0 regardless — their
- *   caches are declared stale. Any cached VALUE seeds, not just numbers; convergence still requires
- *   re-evaluating the formula and reproducing it.
+ *   a cold start: the supported escape hatch for a book whose numeric caches are known to be
+ *   poisoned. Members whose cache the dynamic (INDIRECT/OFFSET) bucket strips seed 0 regardless —
+ *   their caches are declared stale. Only `Number` caches seed: arithmetic propagates a stale error
+ *   or text cache unchanged (`#DIV/0! * 0.5 + 10` is `#DIV/0!`), so seeding one would wedge an
+ *   otherwise healthy cycle at its poison and report `converged = true`; every non-numeric shape
+ *   therefore falls back to 0 and heals exactly as it did before GH-469.
  */
 final case class IterativeCalc(
   maxIter: Int,
@@ -163,7 +165,8 @@ final case class SccReport(
  * fixpoint reached depends on the input workbook's cached values. For a contraction that is
  * immaterial; for a genuinely multi-fixpoint nonlinear cycle it is not, and
  * `recalculate(wb) != recalculate(stripCaches(wb))` is then a real, documented property — the same
- * exposure Excel has.
+ * exposure Excel has. Only NUMERIC caches seed, so a member carrying a stale error or text cache
+ * still heals from 0 rather than certifying its own poison.
  *
  * @param iterationsUsed
  *   GH-454/GH-492: `cycles.map(_.rounds).max` — the rounds run by the WORST component (0 when no

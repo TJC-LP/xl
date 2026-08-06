@@ -280,13 +280,15 @@ book is safe (it was not before 0.20.0); and one iterative recalculation is one 
 generation — `TODAY()`/`NOW()` agree inside the fixpoints and in the acyclic cells between them.
 Dynamic (INDIRECT/OFFSET) cycles are still invisible to Tarjan and are not covered by `converged`.
 
-Also since 0.20.0, cycle members **warm-start from their loaded cached values** (0 only as
-fallback), matching Excel — a book already at its fixpoint re-solves to itself in one round instead
-of being driven back through the 0-seed transient. Pass
-`IterativeCalc(maxIter, maxChange, seedFromCaches = false)` for a cold start when a book's caches
-are known to be poisoned. One consequence to keep in mind: for a circular book,
+Also since 0.20.0, cycle members **warm-start from their loaded cached number** (0 for every other
+shape, and as the fallback), matching Excel — a book already at its fixpoint re-solves to itself in
+one round instead of being driven back through the 0-seed transient. Pass
+`IterativeCalc(maxIter, maxChange, seedFromCaches = false)` for a cold start when a book's numeric
+caches are known to be poisoned. Two consequences to keep in mind: for a circular book,
 `recalculate(wb)` and `recalculate(wb with caches stripped)` are no longer guaranteed to agree on
-a nonlinear cycle with several fixpoints.
+a nonlinear cycle with several fixpoints; and a member whose cache is a stale **error or text**
+value seeds 0 rather than itself, so such a cycle still heals (seeding it would wedge the cycle at
+its own poison, since arithmetic propagates both shapes unchanged).
 
 Also since 0.13.0, **defined names resolve** in formulas: `=IF(case=2,…)`,
 `=entry_mult*ltm_ebitda`, and `=SUM(rev_range)` evaluate against workbook- and sheet-scoped names
