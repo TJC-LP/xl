@@ -57,7 +57,8 @@ private object BuildInfo:
  *   - `-s, --sheet` — Sheet name (optional, defaults to first)
  *   - `-o, --output` — Output file for mutations (required for put/putf)
  *   - `--no-recalc` / `--preserve-caches` — write verbs only (GH-468): apply the edit and
- *     recalculate nothing, so every cached formula value in the file survives
+ *     recalculate nothing. Non-structural verbs keep every cached formula value in the file; the
+ *     structural verbs leave the caches their edit invalidated uncached (see [[WritePolicy]])
  *   - `--strict` — write verbs only (GH-496): exit 1 when the write's recalculation reports formula
  *     errors, non-convergence, or data-table seed warnings
  *
@@ -227,7 +228,7 @@ object Main
       Opts
         .flag(
           "no-recalc",
-          "Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) keep the ones the edit provably did not invalidate and leave the rest uncached, reporting both counts. Use when the caches come from another engine."
+          "Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) leave every formula the edit invalidated UNCACHED rather than re-stamp a stale number, and report both counts. Use when the caches come from another engine."
         )
         .orFalse,
       Opts.flag("preserve-caches", "Alias for --no-recalc").orFalse

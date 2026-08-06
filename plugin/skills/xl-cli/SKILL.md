@@ -663,13 +663,15 @@ Honored by `put`, `putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`,
 `delete-cols`. `recalc` rejects it (it is the whole-book recalculation verb).
 
 On the non-structural verbs (`put`, `putf`, `fill`, `copy`, `batch`) every cached value in the file
-survives byte-identical. On the four **structural** verbs the edit itself rewrites formulas and
-moves cells, so xl carries a pre-edit cache forward only when it is provably still correct (text
-unchanged, cell did not move, no `INDIRECT`/`OFFSET`); every other formula is left **uncached**
-instead of being re-stamped with a stale number, and the summary counts them:
+survives byte-identical. On the four **structural** verbs the edit moves cells, rewrites formulas
+and rewrites defined names, so xl invalidates every formula that transitively reads the edited sheet
+and writes those cells **uncached** rather than re-stamping a stale number — it never carries a
+pre-edit cache forward, because deciding that an unchanged formula still has its old answer requires
+the recalculation the flag refuses. Formulas the edit did not reach ride through byte-identical. The
+summary counts both halves:
 
 ```
-Recalculation skipped (--no-recalc): 4 cached value(s) preserved, 7 formula(s) invalidated by the
+Recalculation skipped (--no-recalc): 0 cached value(s) preserved, 11 formula(s) invalidated by the
 edit left uncached (recalculate externally)
 ```
 

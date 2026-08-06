@@ -987,34 +987,9 @@ object WriteCommands:
     }
 
   /**
-   * The axis edit a structural verb performed, in `StructuralEditor`'s own coordinates: 0-based
-   * index `at` on the row (or column) axis of `sheet`, `delta` positive for an insert and negative
-   * for a delete. Enough to invert the shift a surviving cell underwent.
-   */
-  private final case class StructuralShift(
-    sheet: SheetName,
-    isRow: Boolean,
-    at: Int,
-    delta: Int
-  )
-
-  /**
-   * Where the cell now at 0-based `index` sat before the edit, or `None` when it has no pre-image
-   * (the freshly inserted band `[at, at + delta)`).
-   */
-  private def preEditIndex(index: Int, at: Int, delta: Int): Option[Int] =
-    if index < at then Some(index)
-    else if delta > 0 then Option.when(index >= at + delta)(index - delta)
-    else Some(index - delta)
-
-  private def preEditRef(ref: ARef, shift: StructuralShift): Option[ARef] =
-    if shift.isRow then
-      preEditIndex(ref.row.index0, shift.at, shift.delta).map(ARef.from0(ref.col.index0, _))
-    else preEditIndex(ref.col.index0, shift.at, shift.delta).map(ARef.from0(_, ref.row.index0))
-
-  /**
-   * What `--no-recalc` managed to carry across a structural edit: caches restored, and formulas the
-   * edit invalidated that are therefore left without a `<v>`.
+   * What a `--no-recalc` structural write actually leaves in the file: formula cells that still
+   * carry a `<v>`, and formula cells the edit left without one. Every formula cell in the written
+   * workbook falls in exactly one bucket, so the summary describes the output completely.
    */
   private final case class CachePreservation(preserved: Int, uncached: Int):
     def combine(other: CachePreservation): CachePreservation =
@@ -1032,70 +1007,46 @@ object WriteCommands:
     val empty: CachePreservation = CachePreservation(0, 0)
 
   /**
-   * GH-468: carry the pre-edit caches of a structural edit forward, for `--no-recalc`.
+   * GH-468: what a structural edit did to the book's cached values, for the `--no-recalc` summary.
    *
-   * `StructuralEditor` strips `cachedValue` from every formula that transitively reads the edited
-   * sheet (its GH-455 `stale` predicate, wider than the shift itself — GH-503), on the assumption
-   * that a recalculation follows. Under `--no-recalc` none does, so without this the written file
-   * would carry formula cells with no `<v>` at all: a downstream `data_only=True` reader sees
-   * blanks where the file used to have numbers.
+   * A pure count over the WRITTEN workbook — nothing is put back. `StructuralEditor` invalidates
+   * `cachedValue` on every formula that transitively reads the edited sheet (its GH-455 `stale`
+   * predicate, wider than the shift itself — GH-503); those cells are written without a `<v>` and
+   * counted as `uncached`. Formulas it left alone — the independent ones, typically on sheets that
+   * never read the edited one — ride verbatim and are counted as `preserved`.
    *
-   * A cache is restored only when the old value is provably still the answer, which takes THREE
-   * conditions, not one:
-   *   - the formula TEXT is byte-identical to the pre-edit cell's — a rewritten (shifted) reference
-   *     means the old value answered a different question;
-   *   - the cell did not MOVE (`preEditRef(r) == r`; every sheet but the edited one is unshifted by
-   *     construction) — a position-dependent formula such as `=ROW()` keeps its text while its
-   *     answer changes underneath it;
-   *   - the formula bears no DYNAMIC reference (`INDIRECT`/`OFFSET`), before or after: its target
-   *     is decided by evaluated text, so `=INDIRECT("A30")*2` silently reads different content once
-   *     the edit moves what sits at A30.
+   * WHY NOTHING IS RESTORED (round 3 of #468). Earlier revisions tried to carry the pre-edit caches
+   * of invalidated formulas forward under a local safety predicate (text unchanged / cell did not
+   * move / no `INDIRECT`-`OFFSET`). Three review rounds each found another dependency path where
+   * the formula TEXT is unchanged but what it resolves to is not, and each added guard was still
+   * local. The dirty-cone test that `scopedRecalc` uses does not rescue it either, in either form:
    *
-   * Anything failing a condition is left uncached — Excel's own dirty state, and the only honest
-   * outcome: a wrong `<v>` is worse than a missing one, since `data_only=True` readers cannot tell.
-   * The counts come back with the workbook so the summary can state what actually happened.
+   *   - Seeded with `changedRefs`, the cone is sound but VACUOUS. `changedRefs` compares whole cell
+   *     values, and dropping a `cachedValue` IS a difference, so every candidate for restoration is
+   *     by construction one of the cone's own seeds. The predicate can never fire.
+   *   - Seeded on semantic change only (ignoring the cache strip) the cone preserves again but is
+   *     UNSOUND, and the counter-example is small: `MyName -> Data!$A$30` with
+   *     `Other!B2 = MyName*3` cached 15, then `delete-rows 30 1`. The name degrades to `#REF!`,
+   *     which `FormulaParser` cannot parse, so `TExpr.NameRef` contributes no graph edge and B2 has
+   *     no precedents at all — no seed can reach it, while its own text and position are untouched.
+   *     The cone hands back 15 for a formula that now has no answer.
+   *
+   * That failure mode is not specific to defined names: any reference the static graph cannot
+   * resolve (a `#REF!`-ed name, an unparseable structured reference, an external link) breaks the
+   * closure the same way, and a dynamic reference is invisible to it by definition. There is no
+   * sound local test, and the only complete one is a recalculation — which is exactly what the flag
+   * refuses. So `--no-recalc` leaves the edit's invalidated formulas uncached and says how many: a
+   * missing `<v>` is recoverable by any recalculation, a wrong one is not, and a `data_only=True`
+   * reader cannot tell a stale number from a fresh one.
    */
-  private def restorePriorCaches(
-    before: Workbook,
-    edited: Workbook,
-    shift: StructuralShift
-  ): (Workbook, CachePreservation) =
-    val previous = before.sheets.map(s => s.name -> s).toMap
-    edited.sheets.foldLeft((edited, CachePreservation.empty)) { case ((acc, tally), sheet) =>
-      previous.get(sheet.name) match
-        case None => (acc, tally)
-        case Some(old) =>
-          val dynamicNow = DependencyGraph.dynamicCells(sheet)
-          val dynamicBefore = DependencyGraph.dynamicCells(old)
-          val (updated, counts) = sheet.cells.foldLeft((sheet, CachePreservation.empty)) {
-            case ((s, seen), (r, cell)) =>
-              cell.value match
-                case f @ CellValue.Formula(text, None, _) =>
-                  val preImage = if sheet.name == shift.sheet then preEditRef(r, shift) else Some(r)
-                  val priorValue = preImage.flatMap(old.cells.get).map(_.value)
-                  val priorCache = priorValue.collect {
-                    case CellValue.Formula(_, Some(cached), _) => cached
-                  }
-                  val textUnchanged = priorValue.exists {
-                    case CellValue.Formula(`text`, _, _) => true
-                    case _ => false
-                  }
-                  val safe =
-                    priorCache.isDefined && textUnchanged &&
-                      preImage.contains(r) &&
-                      !dynamicNow.contains(r) &&
-                      !preImage.exists(dynamicBefore.contains)
-                  if safe then
-                    (
-                      s.put(r, f.copy(cachedValue = priorCache)),
-                      seen.combine(CachePreservation(1, 0))
-                    )
-                  else if priorCache.isDefined then (s, seen.combine(CachePreservation(0, 1)))
-                  else (s, seen)
-                case _ => (s, seen)
-          }
-          val next = if counts.preserved > 0 then acc.put(updated) else acc
-          (next, tally.combine(counts))
+  private def countCachePreservation(edited: Workbook): CachePreservation =
+    edited.sheets.foldLeft(CachePreservation.empty) { (tally, sheet) =>
+      sheet.cells.foldLeft(tally) { case (seen, (_, cell)) =>
+        cell.value match
+          case CellValue.Formula(_, Some(_), _) => seen.combine(CachePreservation(1, 0))
+          case CellValue.Formula(_, None, _) => seen.combine(CachePreservation(0, 1))
+          case _ => seen
+      }
     }
 
   /** Restrict a whole-book result to the cone, so the summary counts what actually changed. */
@@ -1913,17 +1864,17 @@ object WriteCommands:
 
   /**
    * Shared tail of the four structural verbs: cone-scoped recalculation — or, under `--no-recalc`,
-   * the pre-edit caches the edit provably did not invalidate carried forward — then the write and
-   * the `--strict` gate over what the recalculation reported.
+   * the edit written exactly as `StructuralEditor` produced it — then the write and the `--strict`
+   * gate over what the recalculation reported.
    *
    * The `--no-recalc` line here is COUNTED, not the blanket non-structural note: a structural edit
-   * rewrites formula text and moves cells, and every cache it invalidated is reported as dropped
-   * rather than quietly re-asserted.
+   * rewrites formula text, moves cells and rewrites defined names, so the caches it invalidated are
+   * reported as dropped rather than quietly re-asserted (see [[countCachePreservation]] for why no
+   * local predicate can soundly re-assert them).
    */
   private def writeStructural(
     before: Workbook,
     edited: Workbook,
-    shift: StructuralShift,
     message: String,
     outputPath: Path,
     config: WriterConfig,
@@ -1933,9 +1884,7 @@ object WriteCommands:
     val recalcOpt = if policy.noRecalc then None else Some(scopedRecalc(before, edited))
     val (finalWb, recalcLine) = recalcOpt match
       case Some((wb, result)) => (wb, formatRecalcSummary(result))
-      case None =>
-        val (restored, preservation) = restorePriorCaches(before, edited, shift)
-        (restored, preservation.note)
+      case None => (edited, countCachePreservation(edited).note)
     writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
       strictGate(
         policy,
@@ -1963,7 +1912,6 @@ object WriteCommands:
       result <- writeStructural(
         wb,
         edited,
-        StructuralShift(sheet.name, isRow = true, at = at - 1, delta = count),
         s"Inserted $count row(s) before row $at on '${sheet.name.value}'",
         outputPath,
         config,
@@ -1990,7 +1938,6 @@ object WriteCommands:
       result <- writeStructural(
         wb,
         edited,
-        StructuralShift(sheet.name, isRow = true, at = at - 1, delta = -count),
         s"Deleted $count row(s) from row $at on '${sheet.name.value}'",
         outputPath,
         config,
@@ -2018,7 +1965,6 @@ object WriteCommands:
       result <- writeStructural(
         wb,
         edited,
-        StructuralShift(sheet.name, isRow = false, at = at0, delta = n),
         s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'",
         outputPath,
         config,
@@ -2046,7 +1992,6 @@ object WriteCommands:
       result <- writeStructural(
         wb,
         edited,
-        StructuralShift(sheet.name, isRow = false, at = at0, delta = -n),
         s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'",
         outputPath,
         config,

@@ -91,19 +91,24 @@ How completely caches survive depends on the verb:
 - **Non-structural** (`put`, `putf`, `fill`, `copy`, `batch`): every existing cached value survives
   byte-identical, cone included. The summary says so.
 - **Structural** (`insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`): a structural edit
-  rewrites formula text and moves cells, so a pre-edit cache is carried forward only when it is
-  provably still the answer — the formula text is unchanged, the cell did not move, and it holds no
-  `INDIRECT`/`OFFSET`. Everything else (a rewritten formula, a relocated `=ROW()`, a dynamic
-  reference whose target moved) is **left uncached** rather than re-asserted with a stale number,
-  and the summary counts both halves:
+  moves cells, rewrites formula text and rewrites defined names, so xl invalidates the cache of
+  every formula that transitively reads the edited sheet and writes those cells **without a `<v>`**.
+  It never re-asserts a pre-edit cache: whether an unchanged formula still has its old answer cannot
+  be decided without recalculating, which is precisely what the flag refuses. (A formula reached
+  through a shrunk defined name, or a static dependent of an `INDIRECT` cell, keeps its text
+  byte-identical while its answer changes underneath it.) Formulas the edit did not reach — a
+  self-contained sheet that never reads the edited one — ride through byte-identical. The summary
+  counts both halves:
 
   ```
-  Recalculation skipped (--no-recalc): 4 cached value(s) preserved, 7 formula(s) invalidated by
+  Recalculation skipped (--no-recalc): 0 cached value(s) preserved, 11 formula(s) invalidated by
   the edit left uncached (recalculate externally)
   ```
 
   Reopening the file in Excel, or a later `xl recalc`, fills those back in. A missing `<v>` is a
-  visible gap; a wrong one is silent, so xl never writes the wrong one.
+  visible gap that any recalculation repairs; a wrong one is silent and permanent, so xl never
+  writes the wrong one. **If you need every formula cached after a structural edit, do not pass
+  `--no-recalc`.**
 
 ```bash
 xl -f external-model.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
