@@ -204,18 +204,24 @@ object HtmlRenderer:
 
                     val style =
                       if includeStyles then cellStyleToInlineCss(cell, sheet, theme) else ""
+                    val cellStyle = cell.styleId.flatMap(sheet.styleRegistry.get)
                     // Extract NumFmt from cell's style for proper value formatting
-                    val numFmt = cell.styleId
-                      .flatMap(sheet.styleRegistry.get)
-                      .map(_.numFmt)
-                      .getOrElse(NumFmt.General)
-                    val content = cellValueToHtml(cell.value, numFmt, theme)
+                    val numFmt = cellStyle.map(_.numFmt).getOrElse(NumFmt.General)
                     // Calculate cell width (sum of column widths for colspan)
                     val cellWidthPx = (0 until effectiveColspan).map { i =>
                       val widthIdx = colIdx - startCol + i
                       if widthIdx >= 0 && widthIdx < colWidths.length then colWidths(widthIdx)
                       else DefaultColumnWidthPx
                     }.sum
+                    // Excel's #### marker: a clipped numeral reads as a different, plausible
+                    // number (GH-459). Must agree with SvgRenderer.
+                    val content = hashOverflowText(
+                      cell.value,
+                      numFmt,
+                      cellStyle.map(_.font),
+                      cellWidthPx,
+                      cellStyle.exists(_.align.wrapText)
+                    ).getOrElse(cellValueToHtml(cell.value, numFmt, theme))
                     // Add default white background if no fill is specified (only when includeStyles)
                     // Add overflow: hidden only when not spanning (colspan=1)
                     // And white-space: nowrap if not explicitly wrapping (Excel default)

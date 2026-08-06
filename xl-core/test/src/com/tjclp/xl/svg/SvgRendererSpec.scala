@@ -1325,3 +1325,129 @@ class SvgRendererSpec extends FunSuite:
     assertEquals(ids.distinct, ids, s"Duplicate clipPath ids in: $svg")
     assert(ids.forall(_.matches("clip-[A-Z]+\\d+")), s"Clip ids must be ref-keyed, got: $ids")
   }
+
+  // ========== Numeric Overflow Hashing (GH-459) ==========
+
+  private val svgTextRuns = """<text[^>]*>([^<]*)</text>""".r
+
+  private def svgTexts(svg: String): List[String] =
+    svgTextRuns.findAllMatchIn(svg).map(_.group(1)).toList
+
+  /** Rendered text runs that are entirely `#` (color literals like #FFFFFF are not text). */
+  private def svgHashRuns(svg: String): List[String] =
+    svgTexts(svg).filter(t => t.nonEmpty && t.forall(_ == '#'))
+
+  test("toSvg: number too wide for its column renders #### (GH-459)") {
+    // A1 holds a 9-character number in a ~37px column; B1 blocks any overflow, so the
+    // clip-path used to shear off the LEADING digits and show a plausible wrong number.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // ~37px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val texts = svgTexts(svg)
+
+    assert(
+      texts.exists(t => t.nonEmpty && t.forall(_ == '#')),
+      s"Overflowing number should render as a run of #, got texts: $texts"
+    )
+    assert(
+      !svg.contains("1234567.9") && !svg.contains("234567.9"),
+      s"No digits of the overflowing number may be rendered, got: $svg"
+    )
+  }
+
+  test("toSvg: right-aligned number that does not fit hashes even with empty neighbours") {
+    val rightStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Right))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 987654321.0)
+      .unsafe
+      .withCellStyle(ref"A1", rightStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val svg = sheet.toSvg(ref"A1:C1")
+    assert(
+      svgTexts(svg).exists(t => t.nonEmpty && t.forall(_ == '#')),
+      s"Right-aligned overflow must hash (Excel does not bleed right-aligned numbers), got: $svg"
+    )
+  }
+
+  test("toSvg: number that fits its column is never hashed") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 42.0)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    assertEquals(svgHashRuns(svg), Nil, s"Fitting number must not hash, got: $svg")
+    assert(svg.contains("42"), s"Fitting number should render its digits, got: $svg")
+  }
+
+  test("toSvg: wrapped number wraps instead of hashing (Excel grows the row)") {
+    val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", wrapStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    assertEquals(svgHashRuns(svg), Nil, s"wrapText must suppress hashing, got: $svg")
+    assert(svg.contains("1234567.9"), s"Wrapped number keeps its digits, got: $svg")
+  }
+
+  test("toSvg: overflowing text is not hashed (only numbers and dates hash)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Sales Report Total")
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    assertEquals(svgHashRuns(svg), Nil, s"Text must clip, not hash, got: $svg")
+    assert(svg.contains("Sales Report Total"), s"Text should still be emitted, got: $svg")
+  }
+
+  test("toSvg: number wide for one column but fitting the merge is not hashed") {
+    val range = CellRange.parse("A1:C1").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .merge(range)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(12.0)))
+      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(12.0)))
+
+    val svg = sheet.toSvg(ref"A1:C1")
+    assertEquals(svgHashRuns(svg), Nil, s"Merged width should accommodate the number, got: $svg")
+    assert(svg.contains("1234567.9"), s"Merged number should render in full, got: $svg")
+  }
+
+  test("toSvg/toHtml: #### marker is identical in both renderers (GH-459)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val svgRuns = svgHashRuns(sheet.toSvg(ref"A1:B1"))
+    val htmlRuns = """<td[^>]*>(#+)</td>""".r
+      .findAllMatchIn(sheet.toHtml(ref"A1:B1"))
+      .map(_.group(1))
+      .toList
+
+    assert(svgRuns.nonEmpty, "SVG should hash the overflowing number")
+    assertEquals(svgRuns, htmlRuns, "SVG and HTML must agree on the marker")
+  }
+
+  test("toSvg: column too narrow for two hashes still emits at least one") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(2.0))) // 21px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    assertEquals(
+      svgHashRuns(svg),
+      List("#"),
+      s"Very narrow column should emit exactly one #, got: $svg"
+    )
+  }

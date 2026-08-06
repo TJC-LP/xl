@@ -296,8 +296,8 @@ object SvgRenderer:
                     textBuffer.append("</text>\n")
 
                   case other =>
-                    val text = cellValueToText(other, numFmt)
-                    if text.nonEmpty then
+                    val formatted = cellValueToText(other, numFmt)
+                    if formatted.nonEmpty then
                       // includeStyles=false still needs explicit font attrs now that the
                       // .cell-text CSS rule no longer declares them (GH-255 cascade fix)
                       val textStyle =
@@ -305,6 +305,16 @@ object SvgRenderer:
                         else """ fill="#000000" font-size="15px" font-family="Calibri""""
                       val style = cell.styleId.flatMap(sheet.styleRegistry.get)
                       val shouldWrap = style.exists(_.align.wrapText)
+
+                      // Excel's #### marker: a clipped numeral reads as a different, plausible
+                      // number (GH-459)
+                      val text = hashOverflowText(
+                        other,
+                        numFmt,
+                        style.map(_.font),
+                        effectiveWidth,
+                        shouldWrap
+                      ).getOrElse(formatted)
 
                       if shouldWrap then
                         val availableWidth = effectiveWidth - CellPaddingX * 2

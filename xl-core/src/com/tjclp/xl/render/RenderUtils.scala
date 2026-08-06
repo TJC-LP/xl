@@ -273,6 +273,59 @@ object RenderUtils:
 
     loop(colIdx + 1, 1, cellWidth)
 
+  // ========== Numeric Overflow Marker (####) ==========
+
+  /**
+   * Values Excel replaces with `#` when they do not fit: numbers and dates. Text is never hashed —
+   * it bleeds into empty neighbours or clips, which loses no information the reader can misread.
+   */
+  private def hashesOnOverflow(value: CellValue): Boolean = value match
+    case CellValue.Number(_) | CellValue.DateTime(_) => true
+    case CellValue.Formula(_, Some(cached), _) => hashesOnOverflow(cached)
+    case _ => false
+
+  /**
+   * Excel's `####` overflow marker for a numeric or date cell whose formatted text is wider than
+   * the space it renders in.
+   *
+   * Clipping a numeral is not a cosmetic defect: shearing the leading digits off `1,234,567.9`
+   * leaves `4,567.9`, a different number that still looks like a real one (GH-459). Excel refuses
+   * to show a partial numeral and fills the column with `#` instead.
+   *
+   * The decision is taken from the value and its number format rather than from renderer-local
+   * text, so SVG and HTML hash the same cells with the same marker.
+   *
+   * @param value
+   *   the cell's value — only numbers, dates, and formulas cached to one hash
+   * @param numFmt
+   *   the cell's number format, applied before measuring
+   * @param font
+   *   the cell's font, for measurement
+   * @param availableWidth
+   *   the pixel width the text renders in, after merge/overflow expansion
+   * @param wrapText
+   *   whether the cell wraps — Excel grows the row instead of hashing
+   * @return
+   *   the `#` run to render in place of the text, or None to render the text unchanged
+   */
+  def hashOverflowText(
+    value: CellValue,
+    numFmt: NumFmt,
+    font: Option[Font],
+    availableWidth: Int,
+    wrapText: Boolean
+  ): Option[String] =
+    if wrapText || availableWidth <= 0 || !hashesOnOverflow(value) then None
+    else
+      val text = cellValueToText(value, numFmt)
+      if text.isEmpty || measureTextWidth(text, font) <= availableWidth then None
+      else
+        val innerWidth = math.max(0, availableWidth - CellPaddingX * 2)
+        val hashWidth = math.max(1, measureTextWidth("#", font))
+        // At least one '#': a column too narrow for even one marker must still refuse to
+        // show digits.
+        Some("#" * math.max(1, innerWidth / hashWidth))
+
   // ========== Escaping ==========
 
   /** Escape HTML special characters. */
