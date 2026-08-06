@@ -641,3 +641,259 @@ class BatchRecalcSpec extends FunSuite:
     assertEquals(cachedFormulaValue(imported, 0, 0), None)
     Files.deleteIfExists(out)
   }
+
+  // ===== GH-468: a write must not stomp caches outside its dirty dependency cone =====
+
+  /**
+   * Stand-in for the GH-468 field repro: caches authored out-of-band (an external engine, a
+   * LibreOffice arbiter) that xl's own evaluator disagrees with. C1 caches 999 for `=A1*2` and F1
+   * caches 888 for `=D1*2`; any whole-book recalculation rewrites both to 10/14 — the re-poisoning
+   * signature. Two independent chains so a dirty-cone scope is observable: an edit to A1 may
+   * refresh C1 and must still leave F1 alone.
+   */
+  private def splicedCacheWorkbook(): Workbook =
+    Workbook(
+      Sheet("Data")
+        .put(ref"A1" -> 5, ref"D1" -> 7)
+        .put(ref"C1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(999)))))
+        .put(ref"F1", CellValue.Formula("D1*2", Some(CellValue.Number(BigDecimal(888)))))
+    )
+
+  private def assertCached(wb: Workbook, at: ARef, expected: Double): Unit =
+    wb.sheets.head.cells.get(at).map(_.value) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assertEquals(n.toDouble, expected, s"${at.toA1} cache")
+      case other => fail(s"expected cached number at ${at.toA1}, got $other")
+
+  test("GH-468: an unrelated batch put leaves externally-authored caches untouched") {
+    val wb = splicedCacheWorkbook()
+    val ops = writeOps("""[{"op":"put","ref":"Z99","value":1}]""")
+    val out = tempXlsx()
+
+    WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config).unsafeRunSync()
+
+    val written = readBack(out)
+    assertCached(written, ref"C1", 999.0) // NOT the evaluator's 10
+    assertCached(written, ref"F1", 888.0) // NOT the evaluator's 14
+    assertEquals(
+      written.sheets.head.cells.get(ref"Z99").map(_.value),
+      Some(CellValue.Number(BigDecimal(1))),
+      "the edit itself must still land"
+    )
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("GH-468: a batch edit refreshes its dirty cone and nothing else") {
+    val wb = splicedCacheWorkbook()
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":6}]""")
+    val out = tempXlsx()
+
+    val summary =
+      WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config).unsafeRunSync()
+
+    val written = readBack(out)
+    assertCached(written, ref"C1", 12.0) // A1's dependent: inside the cone, refreshed
+    assertCached(written, ref"F1", 888.0) // untouched chain: outside the cone, preserved
+    assert(summary.contains("Recalculated 1 formula"), s"summary: $summary")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("GH-468: insert-rows recalculates the shifted sheet and leaves other sheets' caches") {
+    // StructuralEditor already drops the cache of any formula that READS the edited sheet
+    // (GH-455), so the preservation claim here is about the sheets a shift cannot reach: Other
+    // is self-contained, and before GH-468 the trailing global recalculate() rewrote its 888
+    // cache to the evaluator's 14 anyway.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"D10" -> 7)
+        .put(ref"F10", CellValue.Formula("D10*2", None)),
+      Sheet("Other")
+        .put(ref"A1" -> 7)
+        .put(ref"B1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(888)))))
+    )
+    val out = tempXlsx()
+
+    WriteCommands.insertRows(wb, wb.sheets.headOption, 5, 1, out, config).unsafeRunSync()
+
+    val written = readBack(out)
+    assertCached(written, ref"F11", 14.0) // shifted by the edit: recalculated
+    val other = written.sheets.find(_.name.value == "Other").getOrElse(fail("no Other"))
+    other.cells.get(ref"B1").map(_.value) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assertEquals(n.toDouble, 888.0, "an untouched sheet's cache must survive a structural edit")
+      case other => fail(s"expected a cached formula at Other!B1, got $other")
+    Files.deleteIfExists(out)
+  }
+
+  // ===== GH-481: batch honors the file's declared calcPr like recalc does =====
+
+  /** C1=100, B1=C1+B2, B2=$A$1*(C1+B1)/2 over rate input A1 — a declared circular book. */
+  private def circularRateWorkbook(calcPr: Option[com.tjclp.xl.workbooks.CalcPr]): Workbook =
+    val sheet = Sheet("Data")
+      .put(ref"A1" -> 0, ref"C1" -> 100)
+      .put(ref"B1", CellValue.Formula("C1+B2"))
+      .put(ref"B2", CellValue.Formula("$A$1*(C1+B1)/2"))
+    calcPr.fold(Workbook(sheet))(cp => Workbook(sheet).withCalcPr(cp))
+
+  test("GH-481: a batch edit to an iterate-declared circular book fixpoints instead of erroring") {
+    val wb = circularRateWorkbook(Some(iterateTight))
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":0.01}]""")
+    val out = tempXlsx()
+
+    val summary =
+      WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config).unsafeRunSync()
+
+    assert(summary.contains("converged in"), s"summary: $summary")
+    assert(!summary.contains("Circular reference"), s"summary: $summary")
+    // B1 = 100 + 0.005*(100 + B1)  =>  B1 = 100.5 / 0.995 = 101.00502...
+    readBack(out).sheets.head.cells.get(ref"B1").map(_.value) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assert((n.toDouble - 101.005).abs < 1e-3, s"B1 fixpoint was $n")
+      case other => fail(s"expected a cached fixpoint at B1, got $other")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  // ===== GH-468: --no-recalc / --preserve-caches =====
+
+  private val preserveCaches: WritePolicy = WritePolicy(noRecalc = true)
+  private val strictPolicy: WritePolicy = WritePolicy(strict = true)
+
+  test("GH-468: batch --no-recalc applies the edit and recalculates nothing") {
+    val wb = splicedCacheWorkbook()
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":6}]""")
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .batch(wb, wb.sheets.headOption, ops.toString, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
+    assert(!summary.contains("Recalculated"), s"summary: $summary")
+    val written = readBack(out)
+    assertCached(written, ref"C1", 999.0) // even the dirty cone is left alone
+    assertCached(written, ref"F1", 888.0)
+    assertEquals(
+      written.sheets.head.cells.get(ref"A1").map(_.value),
+      Some(CellValue.Number(BigDecimal(6))),
+      "the edit itself must still land"
+    )
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("GH-468: put --no-recalc leaves the dependent's cache alone") {
+    val wb = splicedCacheWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .put(wb, wb.sheets.headOption, "A1", List("6"), out, config, policy = preserveCaches)
+      .unsafeRunSync()
+
+    assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
+    assertCached(readBack(out), ref"C1", 999.0)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: put without the flag still refreshes its dependents (default unchanged)") {
+    val wb = splicedCacheWorkbook()
+    val out = tempXlsx()
+
+    val summary =
+      WriteCommands.put(wb, wb.sheets.headOption, "A1", List("6"), out, config).unsafeRunSync()
+
+    assert(!summary.contains("--no-recalc"), s"summary: $summary")
+    assertCached(readBack(out), ref"C1", 12.0)
+    Files.deleteIfExists(out)
+  }
+
+  // ===== GH-496: --strict =====
+
+  private def strictFailure(io: cats.effect.IO[String]): String =
+    io.attempt.unsafeRunSync() match
+      case Left(f: StrictFailure) => f.summary
+      case Left(other) => fail(s"expected StrictFailure, got $other")
+      case Right(summary) => fail(s"expected StrictFailure, got a clean summary: $summary")
+
+  test("GH-496: --strict promotes recalc's formula errors to a failure (file still written)") {
+    val wb = Workbook(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None)))
+    val lenientOut = tempXlsx()
+    val strictOut = tempXlsx()
+
+    // Default posture is unchanged: reported, never raised.
+    val advisory = WriteCommands.recalc(wb, lenientOut, config).unsafeRunSync()
+    assert(advisory.contains("Circular reference"), s"summary: $advisory")
+
+    val failed = strictFailure(WriteCommands.recalc(wb, strictOut, config, policy = strictPolicy))
+    assert(failed.contains("Circular reference"), s"the summary must survive verbatim: $failed")
+    assert(failed.contains("STRICT FAILURE (--strict)"), s"summary: $failed")
+    assert(failed.contains("1 formula evaluation error(s)"), s"summary: $failed")
+    assert(java.nio.file.Files.size(strictOut) > 0L, "the output file is written either way")
+    Files.deleteIfExists(lenientOut)
+    Files.deleteIfExists(strictOut)
+  }
+
+  test("GH-496: --strict promotes the GH-454 non-convergence WARNING") {
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"B1", CellValue.Formula("1-B2"))
+        .put(ref"B2", CellValue.Formula("1-B1"))
+    ).withCalcPr(com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(5), None))
+    val out = tempXlsx()
+
+    val failed = strictFailure(WriteCommands.recalc(wb, out, config, policy = strictPolicy))
+    assert(failed.contains("exhausted 5 round(s) without converging"), s"summary: $failed")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-496: --strict promotes the GH-453 seed warnings of recalc --tables") {
+    val out = tempXlsx()
+    val failed = strictFailure(
+      WriteCommands.recalc(circularTableWorkbook(None), out, config, false, true, strictPolicy)
+    )
+    assert(failed.contains("data table"), s"summary: $failed")
+    assert(failed.contains("1 data-table seeding warning(s)"), s"summary: $failed")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-496: --strict on a clean write is a no-op") {
+    val wb = Workbook(
+      Sheet("Data").put(ref"A1" -> 5).put(ref"C1", CellValue.Formula("A1*2", None))
+    )
+    val out = tempXlsx()
+    val summary = WriteCommands.recalc(wb, out, config, policy = strictPolicy).unsafeRunSync()
+    assert(summary.contains("Recalculated 1 formula"), s"summary: $summary")
+    assert(!summary.contains("STRICT"), s"summary: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-496: --strict fails a batch whose dirty cone contains a formula error") {
+    val wb = Workbook(Sheet("Data"))
+    val ops = writeOps("""[{"op":"putf","ref":"B1","value":"=B1+1"}]""")
+    val out = tempXlsx()
+
+    val failed = strictFailure(
+      WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config, false, strictPolicy)
+    )
+    assert(failed.contains("Circular reference"), s"summary: $failed")
+    assert(failed.contains("STRICT FAILURE (--strict)"), s"summary: $failed")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("GH-481: without the declaration the same batch keeps the circular-error posture") {
+    val wb = circularRateWorkbook(None)
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":0.01}]""")
+    val out = tempXlsx()
+
+    val summary =
+      WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config).unsafeRunSync()
+
+    assert(summary.contains("Circular reference"), s"summary: $summary")
+    assert(!summary.contains("converged in"), s"summary: $summary")
+    assert(summary.contains("Saved:"), s"exit must stay clean: $summary")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }

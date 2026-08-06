@@ -56,6 +56,13 @@ private object BuildInfo:
  *   - `-f, --file` — Input file (required)
  *   - `-s, --sheet` — Sheet name (optional, defaults to first)
  *   - `-o, --output` — Output file for mutations (required for put/putf)
+ *   - `--no-recalc` / `--preserve-caches` — write verbs only (GH-468): apply the edit and
+ *     recalculate nothing, so every cached formula value in the file survives
+ *   - `--strict` — write verbs only (GH-496): exit 1 when the write's recalculation reports formula
+ *     errors, non-convergence, or data-table seed warnings
+ *
+ * Global flags precede the verb: `xl -f in.xlsx -o out.xlsx --strict batch -`. (`view --eval
+ * --strict` is a separate, subcommand-scoped flag of the same name.)
  */
 object Main
     extends CommandIOApp(
@@ -113,10 +120,11 @@ object Main
         backendOpt,
         maxSizeOpt,
         streamOpt,
+        writePolicyOpt,
         sheetWriteSubcmds
-      ).mapN { (file, sheet, outOpt, inPlace, backend, maxSize, stream, cmd) =>
+      ).mapN { (file, sheet, outOpt, inPlace, backend, maxSize, stream, policy, cmd) =>
         runWithOutput(outOpt, inPlace, file) { (out, display) =>
-          runResult(file, sheet, out, display, backend, maxSize, stream, cmd)
+          runResult(file, sheet, out, display, backend, maxSize, stream, cmd, policy)
         }
       }
 
@@ -209,6 +217,34 @@ object Main
 
   private val inPlaceOpt: Opts[Boolean] =
     Opts.flag("in-place", "Edit file in-place (same as -o matching -f)", "i").orFalse
+
+  /**
+   * GH-468: skip the trailing recalculation of a write. Two spellings because the field asked for
+   * both — `--no-recalc` says what it does, `--preserve-caches` says why you want it.
+   */
+  private val noRecalcOpt: Opts[Boolean] =
+    (
+      Opts
+        .flag(
+          "no-recalc",
+          "Apply the edit without recalculating: every cached formula value already in the file is preserved. Use when the caches come from another engine."
+        )
+        .orFalse,
+      Opts.flag("preserve-caches", "Alias for --no-recalc").orFalse
+    ).mapN(_ || _)
+
+  /** GH-496: promote a write's advisory recalculation warnings to exit 1 (CI gate). */
+  private val strictWriteOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "strict",
+        "Exit 1 when a write's recalculation reports formula errors, non-convergence, or data-table seed warnings (default: advisory, exit 0). The output file is written either way."
+      )
+      .orFalse
+
+  /** Cross-cutting write posture (GH-468/GH-496), parsed before the verb like -f/-o/--stream. */
+  private val writePolicyOpt: Opts[WritePolicy] =
+    (noRecalcOpt, strictWriteOpt).mapN(WritePolicy.apply)
 
   // ==========================================================================
   // Command definitions
@@ -1122,7 +1158,9 @@ openpyxl data_only=True, previewers, Excel before a manual recalc).
 
 Formula errors (e.g. circular references) are data conditions, not tool
 failures: affected cells are left uncached, the file is still written, the
-errors are listed in the summary, and the exit code is 0.
+errors are listed in the summary, and the exit code is 0. Pass the global
+--strict flag (before the verb) to exit 1 instead when the summary carries
+formula errors, iterative non-convergence, or --tables seed warnings.
 
 Data-table records (<f t="dataTable">) keep their PINNED caches by default —
 xl never evaluates TABLE(...) implicitly. Pass --tables to also replay each
@@ -1592,7 +1630,14 @@ EXAMPLES:
       cmd
     ).flatMap(printRunResult)
 
-  /** Execute and render a command without printing, so in-place writes can commit first. */
+  /**
+   * Execute and render a command without printing, so in-place writes can commit first.
+   *
+   * GH-496: a [[StrictFailure]] is not a crash — the write completed and its summary is printed
+   * verbatim (counts, failing refs, convergence verdict, plus the strict reason) — only the exit
+   * code becomes 1. With `-i` that non-success code means the temp file is discarded and the input
+   * is left untouched, which is the atomic reading of "this book did not pass the gate".
+   */
   private def runResult(
     filePath: Path,
     sheetNameOpt: Option[String],
@@ -1601,12 +1646,15 @@ EXAMPLES:
     backendOpt: Option[XmlBackend],
     maxSizeOpt: Option[Long],
     stream: Boolean,
-    cmd: CliCommand
+    cmd: CliCommand,
+    policy: WritePolicy = WritePolicy.default
   ): IO[(ExitCode, String)] =
-    execute(filePath, sheetNameOpt, outputOpt, backendOpt, maxSizeOpt, stream, cmd).attempt
+    execute(filePath, sheetNameOpt, outputOpt, backendOpt, maxSizeOpt, stream, cmd, policy).attempt
       .map {
         case Right(output) =>
           (ExitCode.Success, renderWithTarget(output, outputOpt, displayOpt))
+        case Left(strict: StrictFailure) =>
+          (ExitCode(1), renderWithTarget(strict.summary, outputOpt, displayOpt))
         case Left(err) =>
           (ExitCode.Error, renderErrorMessage(err, outputOpt, displayOpt))
       }
@@ -1904,7 +1952,8 @@ EXAMPLES:
     backendOpt: Option[XmlBackend],
     maxSizeOpt: Option[Long],
     stream: Boolean,
-    cmd: CliCommand
+    cmd: CliCommand,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     // Handle metadata-only commands (instant for any file size)
     cmd match
@@ -1974,14 +2023,23 @@ EXAMPLES:
 
         if stream && isReadCmd then executeStreaming(filePath, sheetNameOpt, cmd)
         else if stream && isStreamingWriteCmd then
-          executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd)
+          // GH-496: a streaming write never recalculates, so --strict could only ever report
+          // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
+          // needs no guard: it is what the streaming path already does.
+          if policy.strict then
+            IO.raiseError(
+              new Exception(
+                "--strict is not supported with --stream (streaming writes never recalculate). Re-run without --stream."
+              )
+            )
+          else executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd)
         else
           val excel = ExcelIO.instance[IO]
           val readerConfig = buildReaderConfig(maxSizeOpt)
           for
             wb <- excel.readWith(filePath, readerConfig)
             sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
-            result <- executeCommand(wb, sheet, outputOpt, backendOpt, stream, cmd)
+            result <- executeCommand(wb, sheet, outputOpt, backendOpt, stream, cmd, policy)
           yield result
 
   /** Execute command using streaming mode (O(1) memory). */
@@ -2166,7 +2224,8 @@ EXAMPLES:
     outputOpt: Option[Path],
     backendOpt: Option[XmlBackend],
     stream: Boolean,
-    cmd: CliCommand
+    cmd: CliCommand,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] = cmd match
     // Workbook commands (these are now handled in execute() before reaching here)
     case CliCommand.Sheets(action) =>
@@ -2246,12 +2305,12 @@ EXAMPLES:
     // Write commands (require output)
     case CliCommand.Put(refStr, values, csvSplit, detect) =>
       requireOutput("put", outputOpt, backendOpt, stream)(
-        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect)
+        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect, policy)
       )
 
     case CliCommand.PutFormula(refStr, formulas) =>
       requireOutput("putf", outputOpt, backendOpt, stream)(
-        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _)
+        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _, policy)
       )
 
     case CliCommand.Style(
@@ -2340,13 +2399,22 @@ EXAMPLES:
 
     case CliCommand.Batch(source, _) =>
       requireOutput("batch", outputOpt, backendOpt, stream)(
-        WriteCommands.batch(wb, sheetOpt, source, _, _, _)
+        WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy)
       )
 
     case CliCommand.Recalc(tables) =>
-      requireOutput("recalc", outputOpt, backendOpt, stream)(
-        WriteCommands.recalc(wb, _, _, _, tables)
-      )
+      // A recalculation asked not to recalculate is a contradiction, not a no-op: say so rather
+      // than writing a file the caller will read as freshened (GH-468).
+      if policy.noRecalc then
+        IO.raiseError(
+          new Exception(
+            "recalc cannot be combined with --no-recalc/--preserve-caches (it exists to rewrite caches). Drop the flag, or drop the recalc."
+          )
+        )
+      else
+        requireOutput("recalc", outputOpt, backendOpt, stream)(
+          WriteCommands.recalc(wb, _, _, _, tables, policy)
+        )
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
       requireOutput("import", outputOpt, backendOpt, stream) {
@@ -2449,7 +2517,7 @@ EXAMPLES:
 
     case CliCommand.Fill(source, target, direction) =>
       requireOutput("fill", outputOpt, backendOpt, stream)(
-        WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _, _)
+        WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _, _, policy)
       )
 
     case CliCommand.AutoFit(columnsOpt) =>
@@ -2558,7 +2626,7 @@ EXAMPLES:
 
     case CliCommand.Copy(source, target, valuesOnly) =>
       requireOutput("copy", outputOpt, backendOpt, stream)(
-        WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _)
+        WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _, policy)
       )
 
     case CliCommand.ChartAdd(
@@ -2598,22 +2666,22 @@ EXAMPLES:
 
     case CliCommand.InsertRows(at, count) =>
       requireOutput("insert-rows", outputOpt, backendOpt, stream)(
-        WriteCommands.insertRows(wb, sheetOpt, at, count, _, _, _)
+        WriteCommands.insertRows(wb, sheetOpt, at, count, _, _, _, policy)
       )
 
     case CliCommand.DeleteRows(at, count) =>
       requireOutput("delete-rows", outputOpt, backendOpt, stream)(
-        WriteCommands.deleteRows(wb, sheetOpt, at, count, _, _, _)
+        WriteCommands.deleteRows(wb, sheetOpt, at, count, _, _, _, policy)
       )
 
     case CliCommand.InsertColumns(col, count) =>
       requireOutput("insert-cols", outputOpt, backendOpt, stream)(
-        WriteCommands.insertColumns(wb, sheetOpt, col, count, _, _, _)
+        WriteCommands.insertColumns(wb, sheetOpt, col, count, _, _, _, policy)
       )
 
     case CliCommand.DeleteColumns(col, count) =>
       requireOutput("delete-cols", outputOpt, backendOpt, stream)(
-        WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _)
+        WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _, policy)
       )
 
     // Diff has its own runner (two input files, custom exit codes) — never reaches here

@@ -5,7 +5,7 @@ import java.nio.file.Path
 import cats.effect.IO
 import cats.implicits.*
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.helpers.{
   AppearanceOps,
@@ -20,6 +20,7 @@ import com.tjclp.xl.cli.helpers.{
 }
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formula.{
+  DependencyGraph,
   FormulaParser,
   FormulaPrinter,
   FormulaShifter,
@@ -35,7 +36,14 @@ import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.sheets.styleSyntax
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.ooxml.writer.WriterConfig
-import com.tjclp.xl.cli.{FillDirection, SortDirection, SortKey, SortMode}
+import com.tjclp.xl.cli.{
+  FillDirection,
+  SortDirection,
+  SortKey,
+  SortMode,
+  StrictFailure,
+  WritePolicy
+}
 
 /**
  * Write command handlers.
@@ -63,6 +71,22 @@ object WriteCommands:
     val excel = ExcelIO.instance[IO]
     if stream then excel.writeWorkbookStream(wb, outputPath, config)
     else excel.writeWith(wb, outputPath, config)
+
+  /**
+   * GH-468: the targeted dependent refresh every single-target write ends with — suppressed
+   * entirely by `--no-recalc`, which leaves every cached value in the file exactly as it was.
+   */
+  private def refreshDependents(
+    wb: Workbook,
+    sheetName: SheetName,
+    modifiedRefs: Set[ARef],
+    policy: WritePolicy
+  ): Workbook =
+    if policy.noRecalc then wb else wb.recalculateDependents(sheetName, modifiedRefs)
+
+  /** Note appended to a write's message when `--no-recalc` suppressed its dependent refresh. */
+  private def noRecalcSuffix(policy: WritePolicy): String =
+    if policy.noRecalc then s"\n$noRecalcNote" else ""
 
   /**
    * Validate that the count of values/formulas matches the cell count in a range.
@@ -119,7 +143,8 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean = false,
     csvSplit: Boolean = false,
-    detect: Boolean = true
+    detect: Boolean = true,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "put")
@@ -144,7 +169,8 @@ object WriteCommands:
               outputPath,
               config,
               stream,
-              detect
+              detect,
+              policy
             )
 
         case (Right(range), List(singleValue)) =>
@@ -158,7 +184,8 @@ object WriteCommands:
               outputPath,
               config,
               stream,
-              detect
+              detect,
+              policy
             )
           else
             putFillPatternLiteral(
@@ -169,7 +196,8 @@ object WriteCommands:
               outputPath,
               config,
               stream,
-              detect
+              detect,
+              policy
             )
 
         case (Right(range), multipleValues @ (_ :: _ :: _)) =>
@@ -182,7 +210,8 @@ object WriteCommands:
             outputPath,
             config,
             stream,
-            detect
+            detect,
+            policy
           )
 
         case (Left(ref), multipleValues @ (_ :: _)) =>
@@ -206,13 +235,14 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean,
-    detect: Boolean
+    detect: Boolean,
+    policy: WritePolicy
   ): IO[String] =
     val formatted = ValueParser.parsePutValue(valueStr, detect)
     val updatedSheet = putFormatted(sheet, ref, formatted)
-    val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, Set(ref))
+    val updatedWb = refreshDependents(wb.put(updatedSheet), sheet.name, Set(ref), policy)
     writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-      s"${Format.putSuccess(ref, formatted.value)}\n${Format.saveSuffix(outputPath, stream)}"
+      s"${Format.putSuccess(ref, formatted.value)}${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
     }
 
   /** Apply a detected number format without creating a redundant General style. */
@@ -229,7 +259,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean,
-    detect: Boolean
+    detect: Boolean,
+    policy: WritePolicy
   ): IO[String] =
     val parts = valueStr.split(",", -1).map(_.trim).toList
     val cellCount = range.cellCount.toInt
@@ -240,7 +271,7 @@ object WriteCommands:
             "Adjust the range size or value count to match."
         )
       )
-    else putBatchValues(wb, sheet, range, parts, outputPath, config, stream, detect)
+    else putBatchValues(wb, sheet, range, parts, outputPath, config, stream, detect, policy)
 
   /** Fill all cells in range with the same literal value (no CSV splitting) */
   private def putFillPatternLiteral(
@@ -251,15 +282,16 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean,
-    detect: Boolean
+    detect: Boolean,
+    policy: WritePolicy
   ): IO[String] =
     val formatted = ValueParser.parsePutValue(valueStr, detect)
     val cellCount = range.cellCount
     val modifiedRefs = range.cells.toSet
     val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => putFormatted(s, ref, formatted))
-    val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
+    val updatedWb = refreshDependents(wb.put(updatedSheet), sheet.name, modifiedRefs, policy)
     writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-      s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}\n${Format.saveSuffix(outputPath, stream)}"
+      s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
     }
 
   /** Mode 3: Put different values to each cell (row-major order) */
@@ -271,7 +303,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean,
-    detect: Boolean
+    detect: Boolean,
+    policy: WritePolicy
   ): IO[String] =
     val cellCount = range.cellCount.toInt
     validateCountMatch("put", range, cellCount, values.length, "value") match
@@ -285,9 +318,9 @@ object WriteCommands:
           .toVector
         val modifiedRefs = updates.map(_._1).toSet
         val updatedSheet = sheet.put(updates*)
-        val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
+        val updatedWb = refreshDependents(wb.put(updatedSheet), sheet.name, modifiedRefs, policy)
         writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-          s"Put ${values.length} values to ${range.toA1} (row-major)\n${Format.saveSuffix(outputPath, stream)}"
+          s"Put ${values.length} values to ${range.toA1} (row-major)${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
         }
 
   /**
@@ -303,7 +336,8 @@ object WriteCommands:
     formulas: List[String],
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     for
       // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
@@ -317,15 +351,33 @@ object WriteCommands:
       result <- (refOrRange, formulas) match
         case (Left(ref), List(singleFormula)) =>
           // Mode 1: Single cell
-          putfSingleCell(wb, targetSheet, ref, singleFormula, outputPath, config, stream)
+          putfSingleCell(wb, targetSheet, ref, singleFormula, outputPath, config, stream, policy)
 
         case (Right(range), List(singleFormula)) =>
           // Mode 2: Formula dragging (existing behavior with $ anchors)
-          putfFormulaDragging(wb, targetSheet, range, singleFormula, outputPath, config, stream)
+          putfFormulaDragging(
+            wb,
+            targetSheet,
+            range,
+            singleFormula,
+            outputPath,
+            config,
+            stream,
+            policy
+          )
 
         case (Right(range), multipleFormulas @ (_ :: _ :: _)) =>
           // Mode 3: Batch formulas (no dragging, apply as-is) - 2+ formulas
-          putfBatchFormulas(wb, targetSheet, range, multipleFormulas, outputPath, config, stream)
+          putfBatchFormulas(
+            wb,
+            targetSheet,
+            range,
+            multipleFormulas,
+            outputPath,
+            config,
+            stream,
+            policy
+          )
 
         case (Left(ref), multipleFormulas @ (_ :: _)) =>
           IO.raiseError(
@@ -347,7 +399,8 @@ object WriteCommands:
     formulaStr: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean
+    stream: Boolean,
+    policy: WritePolicy
   ): IO[String] =
     val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
     val fullFormula = s"=$formula"
@@ -372,9 +425,9 @@ object WriteCommands:
           val mergedStyle = existingStyle.withNumFmt(numFmt)
           styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
         else sheetWithFormula
-      updatedWb = wb.put(finalSheet).recalculateDependents(sheet.name, Set(ref))
+      updatedWb = refreshDependents(wb.put(finalSheet), sheet.name, Set(ref), policy)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"${Format.putSuccess(ref, CellValue.Formula(formula))}\n${Format.saveSuffix(outputPath, stream)}"
+    yield s"${Format.putSuccess(ref, CellValue.Formula(formula))}${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Mode 2: Formula dragging with anchor-aware shifting (existing behavior) */
   private def putfFormulaDragging(
@@ -384,7 +437,8 @@ object WriteCommands:
     formulaStr: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean
+    stream: Boolean,
+    policy: WritePolicy
   ): IO[String] =
     val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
     val fullFormula = s"=$formula"
@@ -397,10 +451,10 @@ object WriteCommands:
       // Apply formula with Excel-style dragging (existing logic)
       updatedSheet = putfDraggingLogic(sheet, wb, range, formula, parsedExpr)
       modifiedRefs = range.cells.toSet
-      updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
+      updatedWb = refreshDependents(wb.put(updatedSheet), sheet.name, modifiedRefs, policy)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       cellCount = range.cellCount
-    yield s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)\n${Format.saveSuffix(outputPath, stream)}"
+    yield s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Mode 3: Batch formulas (no dragging, apply as-is) */
   private def putfBatchFormulas(
@@ -410,7 +464,8 @@ object WriteCommands:
     formulas: List[String],
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean
+    stream: Boolean,
+    policy: WritePolicy
   ): IO[String] =
     val cellCount = range.cellCount.toInt
     validateCountMatch("putf", range, cellCount, formulas.length, "formula") match
@@ -436,9 +491,9 @@ object WriteCommands:
           }
           modifiedRefs = updates.map(_._1).toSet
           updatedSheet = sheet.put(updates*)
-          updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
+          updatedWb = refreshDependents(wb.put(updatedSheet), sheet.name, modifiedRefs, policy)
           _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-        yield s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)\n${Format.saveSuffix(outputPath, stream)}"
+        yield s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Helper: Apply formula dragging logic (extracted from original putFormula) */
   private def putfDraggingLogic(
@@ -831,6 +886,159 @@ object WriteCommands:
           _: BatchParser.BatchOp.SetHeaderFooter | _: BatchParser.BatchOp.AddConditionalFormat =>
         false
 
+  // ===== Cache-preserving recalculation (GH-468) + strict exit codes (GH-496) =====
+
+  /** Summary line for a write whose trailing recalculation was suppressed with `--no-recalc`. */
+  private val noRecalcNote: String =
+    "Recalculation skipped (--no-recalc): every existing cached value preserved"
+
+  /**
+   * GH-453/GH-481: recalculate honoring the FILE's declared calculation settings, like Excel
+   * opening the book — `<calcPr iterate="1"/>` turns on bounded iterative evaluation of declared
+   * cycles. Every CLI verb that recalculates goes through here, so an iterate-declared circular
+   * book fixpoints under `batch` and the structural verbs exactly as it does under `recalc`.
+   */
+  private def recalcHonoringCalcPr(wb: Workbook): RecalcResult =
+    wb.metadata.calcPr
+      .filter(_.iterativeCalculation)
+      .map(IterativeCalc.fromCalcPr)
+      .fold(wb.recalculate())(it => wb.recalculate(Clock.system, it))
+
+  /**
+   * Cells whose value (or formula TEXT — a structural edit rewrites references) differs between two
+   * states of the same workbook. Sheets that did not exist before are dirty in full.
+   */
+  private def changedRefs(before: Workbook, after: Workbook): Map[SheetName, Set[ARef]] =
+    val previous = before.sheets.map(s => s.name -> s).toMap
+    after.sheets.iterator
+      .map { sheet =>
+        previous.get(sheet.name) match
+          case None => sheet.name -> sheet.cells.keySet
+          case Some(old) =>
+            val refs = (old.cells.keySet ++ sheet.cells.keySet).filter { r =>
+              old.cells.get(r).map(_.value) != sheet.cells.get(r).map(_.value)
+            }
+            sheet.name -> refs
+      }
+      .filter(_._2.nonEmpty)
+      .toMap
+
+  /**
+   * The dirty dependency cone of an edit: the changed cells themselves plus every transitive
+   * dependent, workbook-wide (cross-sheet dependents included). Dynamic-reference cells (INDIRECT /
+   * OFFSET) on every sheet join unconditionally and drag their own dependents in — the static graph
+   * cannot see what text they resolve to, so any edit may affect them (the same always-dirty
+   * posture `DependentRecalculation` takes).
+   */
+  private def dirtyCone(
+    wb: Workbook,
+    seeds: Map[SheetName, Set[ARef]]
+  ): Map[SheetName, Set[ARef]] =
+    import DependencyGraph.QualifiedRef
+    val seeded: Set[QualifiedRef] =
+      seeds.iterator.flatMap((name, refs) => refs.iterator.map(QualifiedRef(name, _))).toSet
+    val dynamic: Set[QualifiedRef] =
+      wb.sheets.iterator.flatMap { s =>
+        DependencyGraph.dynamicCells(s).iterator.map(QualifiedRef(s.name, _))
+      }.toSet
+    val roots = seeded ++ dynamic
+    if roots.isEmpty then Map.empty
+    else
+      val (_, dependents) = DependencyGraph.fromWorkbookBounded(wb)
+      (roots ++ DependencyGraph.qualifiedTransitiveDependents(dependents, roots))
+        .groupMap(_.sheet)(_.ref)
+
+  /**
+   * Carry the recalculated caches of the cone — and only those — back onto the edited workbook.
+   *
+   * A cell outside the cone keeps the value it had, byte for byte: whatever engine authored its
+   * cache stays the author (GH-468). A sheet with no cone change is not `put` back at all, so the
+   * surgical writer's ModificationTracker still sees it as untouched and preserves its worksheet
+   * XML verbatim (pivot tables, slicers and other unparsed parts ride along).
+   */
+  private def applyConeCaches(
+    edited: Workbook,
+    recalculated: Workbook,
+    cone: Map[SheetName, Set[ARef]]
+  ): Workbook =
+    val fresh = recalculated.sheets.map(s => s.name -> s).toMap
+    edited.sheets.foldLeft(edited) { (acc, sheet) =>
+      fresh.get(sheet.name) match
+        case None => acc
+        case Some(freshSheet) =>
+          val (updated, changed) =
+            cone.getOrElse(sheet.name, Set.empty[ARef]).foldLeft((sheet, false)) {
+              case ((s, dirty), r) =>
+                freshSheet.cells.get(r).map(_.value) match
+                  case Some(v) if !s.cells.get(r).map(_.value).contains(v) => (s.put(r, v), true)
+                  case _ => (s, dirty)
+            }
+          if changed then acc.put(updated) else acc
+    }
+
+  /** Restrict a whole-book result to the cone, so the summary counts what actually changed. */
+  private def scopeToCone(
+    result: RecalcResult,
+    cone: Map[SheetName, Set[ARef]]
+  ): RecalcResult =
+    result.copy(
+      evaluated = result.evaluated.map { (name, cells) =>
+        val scope = cone.getOrElse(name, Set.empty[ARef])
+        name -> cells.filter((r, _) => scope.contains(r))
+      },
+      errors = result.errors.filter(e => cone.getOrElse(e.sheet, Set.empty[ARef]).contains(e.ref))
+    )
+
+  /**
+   * GH-468: the trailing recalculation of an edit, scoped to its dirty cone.
+   *
+   * Ordering and cycle isolation stay whole-book (one topological order over the qualified graph,
+   * Excel's own model — a cone cell's precedents are recomputed before it), but only the cone's
+   * caches are written back and only the cone's outcomes are reported. Returns the workbook to
+   * write and the cone-scoped result for the summary.
+   *
+   * Known limitations: the evaluation itself is still whole-book, so the SAVING is fidelity, not
+   * time; a cone cell recomputes off freshly evaluated precedents rather than off any preserved
+   * cache of theirs (scoping the evaluation itself needs a cone-aware entry point in xl-evaluator);
+   * and volatile functions (TODAY/NOW/RAND) are not always-dirty the way dynamic references are —
+   * outside the cone they keep the generation the file already carried. `xl recalc` remains the
+   * verb that refreshes an entire book on purpose.
+   */
+  private def scopedRecalc(before: Workbook, edited: Workbook): (Workbook, RecalcResult) =
+    val result = recalcHonoringCalcPr(edited)
+    val cone = dirtyCone(edited, changedRefs(before, edited))
+    (applyConeCaches(edited, result.workbook, cone), scopeToCone(result, cone))
+
+  /**
+   * GH-496: the `--strict` gate. The write has already happened; this only decides the exit code.
+   *
+   * Advisory by default (the summary is returned as-is, exit 0). Under `--strict` a recalculation
+   * that reported formula errors, exhausted its iteration budget, or produced data-table seed
+   * warnings raises [[StrictFailure]] — the runner prints the same summary plus the reason and
+   * exits 1. Excel error VALUES (#DIV/0!, #N/A) are data conditions, not failures, and never gate.
+   */
+  private def strictGate(
+    policy: WritePolicy,
+    summary: String,
+    recalc: Option[RecalcResult],
+    warnings: Vector[SeedTableWarning]
+  ): IO[String] =
+    val recalcReasons = recalc.toList.flatMap { r =>
+      List(
+        Option.when(r.errors.nonEmpty)(s"${r.errors.size} formula evaluation error(s)"),
+        Option.when(!r.converged)(
+          s"iterative calculation exhausted ${r.iterationsUsed} round(s) without converging"
+        )
+      ).flatten
+    }
+    val reasons = recalcReasons ++
+      Option.when(warnings.nonEmpty)(s"${warnings.size} data-table seeding warning(s)").toList
+    if policy.strict && reasons.nonEmpty then
+      IO.raiseError(
+        new StrictFailure(s"$summary\nSTRICT FAILURE (--strict): ${reasons.mkString("; ")}")
+      )
+    else IO.pure(summary)
+
   /**
    * One-line recalculation summary: formula count plus the first few failing refs (GH-352). Formula
    * errors are data conditions — they are reported, never thrown. GH-344: formulas that COMPUTE an
@@ -863,9 +1071,15 @@ object WriteCommands:
   /**
    * Apply multiple operations atomically (JSON from stdin or file).
    *
-   * Ends with one global `recalculate()` when any op mutates cell content (GH-352), so batch putf
-   * carries cached values (`<v>`) exactly like single-op putf. Formula errors do not abort the
-   * write: the workbook is written regardless and errors surface in the summary.
+   * Ends with one recalculation when any op mutates cell content (GH-352), so batch putf carries
+   * cached values (`<v>`) exactly like single-op putf. Formula errors do not abort the write: the
+   * workbook is written regardless and errors surface in the summary.
+   *
+   * GH-468: that recalculation is scoped to the edit's dirty dependency cone — a cached value no op
+   * can have invalidated is never rewritten, so a book whose caches come from another engine
+   * survives an unrelated batch edit intact. `--no-recalc` skips it entirely. GH-481: it honors the
+   * file's declared `calcPr`, so an iterate-declared circular book fixpoints instead of reporting
+   * circular errors (and the convergence line appears in the batch summary).
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer
@@ -876,24 +1090,32 @@ object WriteCommands:
     source: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     BatchParser.readBatchInput(source).flatMap { input =>
       BatchParser.parseBatchOperations(input).flatMap { result =>
         // Print warnings to stderr within IO monad
         IO(result.warnings.foreach(System.err.println)) *>
-          BatchParser.applyBatchOperations(wb, sheetOpt, result.ops).flatMap { updatedWb =>
-            val recalcOpt =
-              if result.ops.exists(isCellMutating) then Some(updatedWb.recalculate())
-              else None
-            val finalWb = recalcOpt.fold(updatedWb)(_.workbook)
-            writeWorkbook(finalWb, outputPath, config, stream).map { _ =>
-              val ops = result.ops
-              val summary = BatchParser.formatSummary(ops)
-              val recalcLine = recalcOpt.fold("")(r => s"${formatRecalcSummary(r)}\n")
-              s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
+          BatchParser
+            .applyBatchOperations(wb, sheetOpt, result.ops, !policy.noRecalc)
+            .flatMap { updatedWb =>
+              val mutating = result.ops.exists(isCellMutating)
+              val recalcOpt =
+                if mutating && !policy.noRecalc then Some(scopedRecalc(wb, updatedWb)) else None
+              val finalWb = recalcOpt.fold(updatedWb)(_._1)
+              writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+                val ops = result.ops
+                val summary = BatchParser.formatSummary(ops)
+                val recalcLine = recalcOpt match
+                  case Some((_, r)) => s"${formatRecalcSummary(r)}\n"
+                  case None if mutating => s"$noRecalcNote\n"
+                  case None => ""
+                val rendered =
+                  s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
+                strictGate(policy, rendered, recalcOpt.map(_._2), Vector.empty)
+              }
             }
-          }
       }
     }
 
@@ -902,7 +1124,8 @@ object WriteCommands:
    *
    * Formula errors (circular references, bad refs) are data conditions, not tool failures: failing
    * cells are left uncached — exactly as Excel leaves them — the workbook is still written, and the
-   * errors are reported in the summary. Callers exit 0 either way.
+   * errors are reported in the summary. Callers exit 0 unless `--strict` is set (GH-496), which
+   * promotes errors, non-convergence and seed warnings to exit 1 — the file is written either way.
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer
@@ -924,10 +1147,10 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    seedTables: Boolean = false
+    seedTables: Boolean = false,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
-    val iterOpt = wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)
-    val result = iterOpt.fold(wb.recalculate())(it => wb.recalculate(Clock.system, it))
+    val result = recalcHonoringCalcPr(wb)
     val prepared: IO[(Workbook, Vector[SeedTableWarning])] =
       if !seedTables then IO.pure((result.workbook, Vector.empty))
       else
@@ -938,10 +1161,12 @@ object WriteCommands:
             .map(err => new Exception(err.message))
         ).map(report => (report.workbook, report.warnings))
     prepared.flatMap { case (workbook, warnings) =>
-      writeWorkbook(workbook, outputPath, config, stream).map { _ =>
+      writeWorkbook(workbook, outputPath, config, stream).flatMap { _ =>
         val tableNote = if seedTables then "\nSeeded data table interior caches" else ""
         val warningLines = warnings.map(w => s"\n${renderSeedWarning(w)}").mkString
-        s"${formatRecalcSummary(result)}$tableNote$warningLines\n${Format.saveSuffix(outputPath, stream)}"
+        val rendered =
+          s"${formatRecalcSummary(result)}$tableNote$warningLines\n${Format.saveSuffix(outputPath, stream)}"
+        strictGate(policy, rendered, Some(result), warnings)
       }
     }
 
@@ -978,7 +1203,8 @@ object WriteCommands:
     direction: FillDirection,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     for
       // Resolve source and target
@@ -1005,10 +1231,10 @@ object WriteCommands:
       // Apply fill operation
       updatedSheet = applyFill(targetSheet, wb, sourceRange, targetRange, direction)
       modifiedRefs = targetRange.cells.toSet
-      updatedWb = wb.put(updatedSheet).recalculateDependents(targetSheet.name, modifiedRefs)
+      updatedWb = refreshDependents(wb.put(updatedSheet), targetSheet.name, modifiedRefs, policy)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       dirLabel = if direction == FillDirection.Right then "right" else "down"
-    yield s"Filled ${targetRange.toA1} from ${sourceRange.toA1} ($dirLabel)\n${Format.saveSuffix(outputPath, stream)}"
+    yield s"Filled ${targetRange.toA1} from ${sourceRange.toA1} ($dirLabel)${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Validate that source and target ranges are compatible for fill direction */
   private def validateFillRanges(
@@ -1523,8 +1749,11 @@ object WriteCommands:
   // ===== Structural editing: insert/delete rows & columns (GH-128, GH-129) =====
   // Cell shift (xl-core) + formula rewriting across all sheets (StructuralEditor). #REF! on loss.
   // A structural edit invalidates every shifted formula's cache (stale aggregates/ROW() would be
-  // silently wrong), so each command ends with one global recalculate() before writing — the
-  // GH-352 batch contract: failing cells stay uncached, the workbook is written regardless.
+  // silently wrong), so each command ends with a recalculation before writing — the GH-352 batch
+  // contract: failing cells stay uncached, the workbook is written regardless. GH-468: that
+  // recalculation is scoped to the cone of what the shift actually changed (moved cells and
+  // rewritten formula text alike), so caches in untouched regions and on untouched sheets survive;
+  // --no-recalc skips it outright.
 
   private def requirePositive(n: Int, label: String): IO[Unit] =
     if n >= 1 then IO.unit
@@ -1553,6 +1782,31 @@ object WriteCommands:
           IO.raiseError(new Exception(s"Invalid column range '$col' (expected e.g. C:E)"))
     else singleColIndex(trimmed).map(idx => (idx, fallbackCount))
 
+  /**
+   * Shared tail of the four structural verbs: cone-scoped recalculation (or none under
+   * `--no-recalc`), write, then the `--strict` gate over what the recalculation reported.
+   */
+  private def writeStructural(
+    before: Workbook,
+    edited: Workbook,
+    message: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
+    policy: WritePolicy
+  ): IO[String] =
+    val recalcOpt = if policy.noRecalc then None else Some(scopedRecalc(before, edited))
+    val finalWb = recalcOpt.fold(edited)(_._1)
+    writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+      val recalcLine = recalcOpt.map(_._2).fold(noRecalcNote)(formatRecalcSummary)
+      strictGate(
+        policy,
+        s"$message\n$recalcLine\n${Format.saveSuffix(outputPath, stream)}",
+        recalcOpt.map(_._2),
+        Vector.empty
+      )
+    }
+
   def insertRows(
     wb: Workbook,
     sheetOpt: Option[Sheet],
@@ -1560,15 +1814,24 @@ object WriteCommands:
     count: Int,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      recalced = StructuralEditor.insertRows(wb, sheet.name, at - 1, count).recalculate()
-      _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
-    yield s"Inserted $count row(s) before row $at on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${Format.saveSuffix(outputPath, stream)}"
+      edited = StructuralEditor.insertRows(wb, sheet.name, at - 1, count)
+      result <- writeStructural(
+        wb,
+        edited,
+        s"Inserted $count row(s) before row $at on '${sheet.name.value}'",
+        outputPath,
+        config,
+        stream,
+        policy
+      )
+    yield result
 
   def deleteRows(
     wb: Workbook,
@@ -1577,15 +1840,24 @@ object WriteCommands:
     count: Int,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      recalced = StructuralEditor.deleteRows(wb, sheet.name, at - 1, count).recalculate()
-      _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
-    yield s"Deleted $count row(s) from row $at on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${Format.saveSuffix(outputPath, stream)}"
+      edited = StructuralEditor.deleteRows(wb, sheet.name, at - 1, count)
+      result <- writeStructural(
+        wb,
+        edited,
+        s"Deleted $count row(s) from row $at on '${sheet.name.value}'",
+        outputPath,
+        config,
+        stream,
+        policy
+      )
+    yield result
 
   def insertColumns(
     wb: Workbook,
@@ -1594,16 +1866,25 @@ object WriteCommands:
     count: Int,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-cols")
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      recalced = StructuralEditor.insertColumns(wb, sheet.name, at0, n).recalculate()
-      _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
-    yield s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${Format.saveSuffix(outputPath, stream)}"
+      edited = StructuralEditor.insertColumns(wb, sheet.name, at0, n)
+      result <- writeStructural(
+        wb,
+        edited,
+        s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'",
+        outputPath,
+        config,
+        stream,
+        policy
+      )
+    yield result
 
   def deleteColumns(
     wb: Workbook,
@@ -1612,16 +1893,25 @@ object WriteCommands:
     count: Int,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-cols")
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      recalced = StructuralEditor.deleteColumns(wb, sheet.name, at0, n).recalculate()
-      _ <- writeWorkbook(recalced.workbook, outputPath, config, stream)
-    yield s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${formatRecalcSummary(recalced)}\n${Format.saveSuffix(outputPath, stream)}"
+      edited = StructuralEditor.deleteColumns(wb, sheet.name, at0, n)
+      result <- writeStructural(
+        wb,
+        edited,
+        s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'",
+        outputPath,
+        config,
+        stream,
+        policy
+      )
+    yield result
 
   /**
    * Copy a range of cells to another location with optional formula adjustment.
@@ -1647,7 +1937,8 @@ object WriteCommands:
     valuesOnly: Boolean,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     for
       // Resolve source sheet + ref/range
@@ -1679,8 +1970,15 @@ object WriteCommands:
       )
 
       // Delegate to shared helper (handles overlap, cross-sheet, style preservation, recalc)
-      finalWb =
-        CopyOps.copyRange(wb, sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
+      finalWb = CopyOps.copyRange(
+        wb,
+        sourceSheet,
+        sourceRange,
+        targetSheet,
+        targetRange,
+        valuesOnly,
+        !policy.noRecalc
+      )
       _ <- writeWorkbook(finalWb, outputPath, config, stream)
 
       crossSheetLabel =
@@ -1688,7 +1986,7 @@ object WriteCommands:
           s" (${sourceSheet.name.value} → ${targetSheet.name.value})"
         else ""
       modeLabel = if valuesOnly then " (values only)" else " (with formula adjustment)"
-    yield s"Copied ${sourceRange.toA1} to ${targetRange.toA1}$crossSheetLabel$modeLabel\n${Format.saveSuffix(outputPath, stream)}"
+    yield s"Copied ${sourceRange.toA1} to ${targetRange.toA1}$crossSheetLabel$modeLabel${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
 
   /** Validate that all sort columns are within the range */
   private def validateSortColumns(range: CellRange, keys: List[SortKey]): IO[Unit] =

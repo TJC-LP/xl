@@ -1021,13 +1021,17 @@ object BatchParser:
    *   Default sheet for unqualified refs
    * @param ops
    *   Operations to apply
+   * @param recalcDependents
+   *   GH-468: false under `--no-recalc` — the only op that recalculates while applying is `copy`
+   *   (its target-sheet dependents), and it must leave every cache alone too.
    * @return
    *   IO containing updated workbook
    */
   def applyBatchOperations(
     wb: Workbook,
     defaultSheetOpt: Option[Sheet],
-    ops: Vector[BatchOp]
+    ops: Vector[BatchOp],
+    recalcDependents: Boolean = true
   ): IO[Workbook] =
     val defaultSheetName = defaultSheetOpt.map(_.name)
 
@@ -1172,7 +1176,14 @@ object BatchParser:
                 )
 
           case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
-            applyCopyRange(currentWb, defaultSheetName, sourceStr, targetStr, valuesOnly)
+            applyCopyRange(
+              currentWb,
+              defaultSheetName,
+              sourceStr,
+              targetStr,
+              valuesOnly,
+              recalcDependents
+            )
 
           case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
             updateSheetE(currentWb, defaultSheetName, "sheet-view")(
@@ -1835,7 +1846,8 @@ object BatchParser:
     defaultSheetName: Option[SheetName],
     sourceStr: String,
     targetStr: String,
-    valuesOnly: Boolean
+    valuesOnly: Boolean,
+    recalcDependents: Boolean
   ): IO[Workbook] =
 
     def parseSide(label: String, s: String): IO[(Option[SheetName], Either[ARef, CellRange])] =
@@ -1885,7 +1897,15 @@ object BatchParser:
       _ <- IO.fromEither(
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
       )
-    yield CopyOps.copyRange(wb, sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
+    yield CopyOps.copyRange(
+      wb,
+      sourceSheet,
+      sourceRange,
+      targetSheet,
+      targetRange,
+      valuesOnly,
+      recalcDependents
+    )
 
   /**
    * Add one conditional-formatting rule to a range (GH-324). Rule DSL + dxf flags are parsed by

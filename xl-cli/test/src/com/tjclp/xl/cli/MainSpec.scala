@@ -1368,6 +1368,119 @@ class MainSpec extends CatsEffectSuite:
     }
   }
 
+  // ========== GH-468/GH-496: global write flags, end to end through the real parser ==========
+
+  /** Parse a full command line exactly as the binary does, then run the resulting program. */
+  private def runCli(args: String*): IO[cats.effect.ExitCode] =
+    com.monovore.decline.Command("xl", "test")(Main.main).parse(args) match
+      case Right(program) => program
+      case Left(help) => IO.raiseError(new Exception(s"parse failed: $help"))
+
+  /** A1=5 with C1 = A1*2 caching an out-of-band 999 the xl evaluator would recompute to 10. */
+  private def splicedCacheFile(): IO[Path] =
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1" -> 5)
+        .put(ref"C1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(999)))))
+    )
+    IO.blocking(Files.createTempFile("policy-in", ".xlsx"))
+      .flatTap(p => ExcelIO.instance[IO].write(wb, p))
+
+  private def cachedAt(path: Path, at: com.tjclp.xl.addressing.ARef): IO[Option[BigDecimal]] =
+    ExcelIO.instance[IO].read(path).map { wb =>
+      wb.sheets.head.cells.get(at).map(_.value).collect {
+        case CellValue.Formula(_, Some(CellValue.Number(n)), _) => n
+      }
+    }
+
+  test("GH-468: --no-recalc and --preserve-caches both reach the write policy") {
+    for
+      in <- splicedCacheFile()
+      out <- IO.blocking(Files.createTempFile("policy-out", ".xlsx"))
+      noRecalc <- runCli(
+        "-f",
+        in.toString,
+        "-s",
+        "Data",
+        "-o",
+        out.toString,
+        "--no-recalc",
+        "put",
+        "A1",
+        "6"
+      )
+      preserved <- cachedAt(out, ref"C1")
+      alias <- runCli(
+        "-f",
+        in.toString,
+        "-s",
+        "Data",
+        "-o",
+        out.toString,
+        "--preserve-caches",
+        "put",
+        "A1",
+        "6"
+      )
+      aliasPreserved <- cachedAt(out, ref"C1")
+      _ <- runCli("-f", in.toString, "-s", "Data", "-o", out.toString, "put", "A1", "6")
+      recalculated <- cachedAt(out, ref"C1")
+    yield
+      assertEquals(noRecalc, cats.effect.ExitCode.Success)
+      assertEquals(alias, cats.effect.ExitCode.Success)
+      assertEquals(preserved, Some(BigDecimal(999)), "--no-recalc must preserve C1's cache")
+      assertEquals(aliasPreserved, Some(BigDecimal(999)), "--preserve-caches is the same flag")
+      assertEquals(recalculated, Some(BigDecimal(12)), "the default still refreshes the cone")
+  }
+
+  test("GH-496: --strict exits 1 on a failing recalc; the same run without it exits 0") {
+    val wb = Workbook(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None)))
+    for
+      in <- IO.blocking(Files.createTempFile("strict-in", ".xlsx"))
+      _ <- ExcelIO.instance[IO].write(wb, in)
+      out <- IO.blocking(Files.createTempFile("strict-out", ".xlsx"))
+      advisory <- runCli("-f", in.toString, "-o", out.toString, "recalc")
+      strict <- runCli("-f", in.toString, "-o", out.toString, "--strict", "recalc")
+      written <- IO.blocking(Files.size(out))
+    yield
+      assertEquals(advisory, cats.effect.ExitCode.Success)
+      assertEquals(strict, cats.effect.ExitCode(1))
+      assert(written > 0L, "--strict still writes the output file")
+  }
+
+  test("GH-496: --strict exits 0 when the recalculation is clean") {
+    val wb = Workbook(Sheet("Data").put(ref"A1" -> 5).put(ref"C1", CellValue.Formula("A1*2", None)))
+    for
+      in <- IO.blocking(Files.createTempFile("strict-clean-in", ".xlsx"))
+      _ <- ExcelIO.instance[IO].write(wb, in)
+      out <- IO.blocking(Files.createTempFile("strict-clean-out", ".xlsx"))
+      code <- runCli("-f", in.toString, "-o", out.toString, "--strict", "recalc")
+    yield assertEquals(code, cats.effect.ExitCode.Success)
+  }
+
+  test("GH-468: recalc rejects --no-recalc as a contradiction") {
+    val wb = Workbook(Vector(Sheet("T")))
+    Main
+      .executeCommand(
+        wb,
+        None,
+        Some(java.nio.file.Paths.get("out.xlsx")),
+        None,
+        false,
+        CliCommand.Recalc(false),
+        WritePolicy(noRecalc = true)
+      )
+      .attempt
+      .map {
+        case Left(err) =>
+          assert(
+            err.getMessage.contains("recalc cannot be combined with --no-recalc"),
+            s"message must explain the contradiction, got: ${err.getMessage}"
+          )
+        case Right(out) => fail(s"expected a usage error, got: $out")
+      }
+  }
+
   test("GH-483: shared saveSuffix names the target path (plain and streaming)") {
     val p = java.nio.file.Path.of("out.xlsx")
     assertEquals(com.tjclp.xl.cli.output.Format.saveSuffix(p, stream = false), "Saved: out.xlsx")
