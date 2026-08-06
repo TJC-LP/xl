@@ -1996,7 +1996,7 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      edited = StructuralEditor.insertRows(wb, sheet.name, at - 1, count)
+      edited = StructuralEditor.insertRows(wb, sheet.name, at - 1, count, policy.noRecalc)
       result <- writeStructural(
         wb,
         edited,
@@ -2022,7 +2022,7 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      edited = StructuralEditor.deleteRows(wb, sheet.name, at - 1, count)
+      edited = StructuralEditor.deleteRows(wb, sheet.name, at - 1, count, policy.noRecalc)
       result <- writeStructural(
         wb,
         edited,
@@ -2049,7 +2049,7 @@ object WriteCommands:
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      edited = StructuralEditor.insertColumns(wb, sheet.name, at0, n)
+      edited = StructuralEditor.insertColumns(wb, sheet.name, at0, n, policy.noRecalc)
       result <- writeStructural(
         wb,
         edited,
@@ -2076,7 +2076,7 @@ object WriteCommands:
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      edited = StructuralEditor.deleteColumns(wb, sheet.name, at0, n)
+      edited = StructuralEditor.deleteColumns(wb, sheet.name, at0, n, policy.noRecalc)
       result <- writeStructural(
         wb,
         edited,

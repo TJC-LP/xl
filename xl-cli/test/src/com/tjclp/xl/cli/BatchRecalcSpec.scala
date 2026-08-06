@@ -890,11 +890,13 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
-  test("GH-468: --no-recalc on insert-rows leaves the edit's invalidated caches uncached") {
-    // Round 3: the CLI no longer re-asserts a pre-edit cache under ANY local predicate. Every
-    // formula on this fixture transitively reads the edited sheet, so StructuralEditor invalidates
-    // all four before the CLI sees the workbook and all four are written without a <v>. A missing
-    // cached value any recalculation restores; a wrong one nothing detects.
+  test("GH-503: --no-recalc keeps the caches an insert below them cannot have changed") {
+    // The CLI still never RE-ASSERTS a cache (round 3): it only declines to invalidate one the
+    // edit provably did not touch. Inserting at row 20 on a sheet whose data stops at row 6 moves
+    // nothing C1/S1/Other!B1 read, and rewrites none of their text — their values are unchanged,
+    // so their (externally authored, deliberately poisoned) 777s ride through, which is exactly
+    // what --no-recalc is for. C30 MOVED to C31, so it drops: a relocated cell is in the cone
+    // whether or not its formula is position-sensitive.
     val wb = structuralPoisonWorkbook()
     val out = tempXlsx()
 
@@ -904,34 +906,40 @@ class BatchRecalcSpec extends FunSuite:
 
     assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
     val written = readBack(out)
-    assertEquals(formulaOn(written, "Data", ref"C1").cachedValue, None)
-    assertEquals(formulaOn(written, "Data", ref"S1").cachedValue, None)
-    assertEquals(formulaOn(written, "Other", ref"B1").cachedValue, None)
+    val poisoned = Some(CellValue.Number(BigDecimal(777)))
+    assertEquals(formulaOn(written, "Data", ref"C1").cachedValue, poisoned)
+    assertEquals(formulaOn(written, "Data", ref"S1").cachedValue, poisoned)
+    assertEquals(formulaOn(written, "Other", ref"B1").cachedValue, poisoned)
     assertEquals(formulaOn(written, "Data", ref"C31").cachedValue, None)
-    assert(summary.contains("0 cached value(s) preserved"), s"summary: $summary")
-    assert(summary.contains("4 formula(s)"), s"summary: $summary")
+    assert(summary.contains("3 cached value(s) preserved"), s"summary: $summary")
+    assert(summary.contains("1 formula(s)"), s"summary: $summary")
     Files.deleteIfExists(out)
   }
 
-  test("GH-468: --no-recalc on delete-cols and delete-rows drops the same caches") {
+  test("GH-503: --no-recalc keeps the same caches across a delete below or beside them") {
+    // The delete twins of the insert case. Deleting row 20 relocates C30 (-> C29, dropped) and
+    // touches nothing else; deleting column AA touches nothing at all, so every cache survives.
     val wb = structuralPoisonWorkbook()
     val rowsOut = tempXlsx()
     val colsOut = tempXlsx()
+    val poisoned = Some(CellValue.Number(BigDecimal(777)))
 
     WriteCommands
       .deleteRows(wb, wb.sheets.headOption, 20, 1, rowsOut, config, false, preserveCaches)
       .unsafeRunSync()
-    WriteCommands
+    val colsSummary = WriteCommands
       .deleteColumns(wb, wb.sheets.headOption, "AA", 1, colsOut, config, false, preserveCaches)
       .unsafeRunSync()
 
     val rows = readBack(rowsOut)
-    assertEquals(formulaOn(rows, "Data", ref"C1").cachedValue, None)
-    assertEquals(formulaOn(rows, "Other", ref"B1").cachedValue, None)
-    assertEquals(formulaOn(rows, "Data", ref"C29").cachedValue, None)
+    assertEquals(formulaOn(rows, "Data", ref"C1").cachedValue, poisoned)
+    assertEquals(formulaOn(rows, "Other", ref"B1").cachedValue, poisoned)
+    assertEquals(formulaOn(rows, "Data", ref"C29").cachedValue, None, "C30 relocated, so it drops")
     val cols = readBack(colsOut)
-    assertEquals(formulaOn(cols, "Data", ref"C1").cachedValue, None)
-    assertEquals(formulaOn(cols, "Other", ref"B1").cachedValue, None)
+    assertEquals(formulaOn(cols, "Data", ref"C1").cachedValue, poisoned)
+    assertEquals(formulaOn(cols, "Other", ref"B1").cachedValue, poisoned)
+    assertEquals(formulaOn(cols, "Data", ref"C30").cachedValue, poisoned)
+    assert(colsSummary.contains("none dropped"), s"a column edit beside the data: $colsSummary")
     Files.deleteIfExists(rowsOut)
     Files.deleteIfExists(colsOut)
   }
@@ -1061,9 +1069,11 @@ class BatchRecalcSpec extends FunSuite:
     Workbook(block.put(ref"D1", CellValue.Formula("SUM(A1:A10)", Some(poisoned))))
 
   test("GH-468: --no-recalc through a contiguous block reports what it could NOT preserve") {
-    // The dominant real shape, and the one that shows why no local predicate survives: every one
-    // of the 11 formulas (B1:B10 plus D1) reads the edited sheet, so all 11 are written uncached
-    // and the summary must SAY SO rather than claim total preservation.
+    // The dominant real shape: an edit INSIDE a contiguous block. GH-503 splits it exactly where
+    // the dependency graph does — B1:B4 read A1:A4, all above the cut, so nothing they read moved
+    // and their caches ride through; B5:B10 relocate to B6:B11 with their references rewritten;
+    // D1's SUM(A1:A10) becomes SUM(A1:A11), a different question. The summary must count both
+    // halves rather than claim total preservation.
     val wb = contiguousBlockWorkbook()
     val out = tempXlsx()
 
@@ -1072,9 +1082,10 @@ class BatchRecalcSpec extends FunSuite:
       .unsafeRunSync()
 
     val written = readBack(out)
+    val poisoned = Some(CellValue.Number(BigDecimal(777)))
     (1 to 4).foreach { i =>
       val cell = formulaOn(written, "Data", ARef.from0(1, i - 1))
-      assertEquals(cell.cachedValue, None, s"B$i must stay uncached, got $cell")
+      assertEquals(cell.cachedValue, poisoned, s"B$i reads A$i, above the cut: $cell")
     }
     // B5:B10 shifted to B6:B11 and their references were rewritten: no cache may be invented.
     (6 to 11).foreach { i =>
@@ -1084,8 +1095,8 @@ class BatchRecalcSpec extends FunSuite:
     // D1 = SUM(A1:A10) became SUM(A1:A11): the old total answered a different question.
     assertEquals(formulaOn(written, "Data", ref"D1").cachedValue, None)
     assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
-    assert(summary.contains("0 cached value(s) preserved"), s"summary: $summary")
-    assert(summary.contains("11 formula(s)"), s"summary: $summary")
+    assert(summary.contains("4 cached value(s) preserved"), s"summary: $summary")
+    assert(summary.contains("7 formula(s)"), s"summary: $summary")
     assert(
       !summary.contains("every existing cached value preserved"),
       s"the structural arm must not claim total preservation: $summary"
