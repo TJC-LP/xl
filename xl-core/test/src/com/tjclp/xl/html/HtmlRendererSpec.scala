@@ -900,3 +900,64 @@ class HtmlRendererSpec extends FunSuite:
       s"A hashed number must not span into empty neighbours, got: $html"
     )
   }
+
+  test("toHtml: left-aligned number that would cross its cell box hashes (GH-459)") {
+    val leftStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", leftStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(9.0))) // 77px
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assert(htmlHashRuns(html).nonEmpty, s"Left-aligned overflow must hash, got: $html")
+    assert(!html.contains("1234567"), s"No digits of the overflowing number may render: $html")
+  }
+
+  test("toHtml: indented number that would cross its cell box hashes (GH-459)") {
+    val indentStyle =
+      CellStyle.default.withAlign(Align(horizontal = HAlign.Left, indent = 2))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", indentStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0))) // 101px
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assert(htmlHashRuns(html).nonEmpty, s"Indent shrinks the text box, so this must hash: $html")
+    assert(!html.contains("1234567"), s"No digits of the indented number may render: $html")
+  }
+
+  test("toHtml: left-aligned number that fits its text box is not hashed (GH-459)") {
+    val leftStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 42.0)
+      .unsafe
+      .withCellStyle(ref"A1", leftStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assertEquals(htmlHashRuns(html), Nil, s"A number with room to spare must not hash: $html")
+  }
+
+  test("toHtml/toSvg: left-aligned and indented numbers hash in both renderers (GH-459)") {
+    val indentStyle =
+      CellStyle.default.withAlign(Align(horizontal = HAlign.Left, indent = 2))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", indentStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
+
+    val htmlRuns = htmlHashRuns(sheet.toHtml(ref"A1:B1"))
+    val svgRuns = """<text[^>]*>(#+)</text>""".r
+      .findAllMatchIn(sheet.toSvg(ref"A1:B1"))
+      .map(_.group(1))
+      .toList
+    assert(htmlRuns.nonEmpty, "HTML should hash the indented number")
+    assertEquals(svgRuns, htmlRuns, "SVG and HTML must agree on the marker")
+  }

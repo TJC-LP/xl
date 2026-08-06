@@ -215,13 +215,8 @@ object HtmlRenderer:
                     }.sum
                     // Excel's #### marker: a clipped numeral reads as a different, plausible
                     // number (GH-459). Must agree with SvgRenderer.
-                    val content = hashOverflowText(
-                      cell.value,
-                      numFmt,
-                      cellStyle.map(_.font),
-                      cellWidthPx,
-                      cellStyle.exists(_.align.wrapText)
-                    ).getOrElse(cellValueToHtml(cell.value, numFmt, theme))
+                    val content = hashOverflowText(cell.value, cellStyle, cellWidthPx)
+                      .getOrElse(cellValueToHtml(cell.value, numFmt, theme))
                     // Add default white background if no fill is specified (only when includeStyles)
                     // Add overflow: hidden only when not spanning (colspan=1)
                     // And white-space: nowrap if not explicitly wrapping (Excel default)
