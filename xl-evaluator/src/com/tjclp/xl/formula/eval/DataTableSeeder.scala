@@ -33,20 +33,26 @@ enum SeedTableWarning derives CanEqual:
   case NotConverged(sheet: SheetName, ref: CellRange, combinations: Int, maxIter: Int)
 
   /**
-   * GH-453 (review follow-up): `cells` interior cells were left UNSEEDED on the iterated path — an
-   * axis value or cycle member failed to evaluate for those cells, or the whole table was skipped
-   * by the iterative-seeding budget guard (see `DataTableSeeder.MaxIterativeSeedBudget`). `reason`
-   * is a short human-readable cause. Without this case a fully-skipped table reads as a clean run.
+   * GH-453 (review follow-up): part of the table did not get the treatment it needed, and `reason`
+   * says which. Three causes, all of which would otherwise read as a clean run: `cells` interior
+   * cells were left UNSEEDED on the iterated path (an axis value or cycle member failed to
+   * evaluate); the whole table was skipped by a budget guard (`MaxIterativeSeedBudget`,
+   * `MaxConeSeedBudget`) and `cells` counts the interior; or `cells` distinct precedent cells in
+   * the what-if cone could not be re-derived (GH-493 review rework), leaving them on stale caches
+   * so the seeded grid may not reflect the substitution at all.
    */
   case Skipped(sheet: SheetName, ref: CellRange, cells: Int, reason: String)
 
   /**
    * GH-494: the source formula's own error guard (`IFERROR`/`IFNA`, or `IF(ISERROR(x),…)` and its
-   * `ISERR`/`ISNA` siblings) resolved to its ERROR ARM for `cells` axis combinations — the seeded
-   * value is the fallback, not the modelled quantity. A guarded corner turns an evaluation failure
-   * into a plausible-looking grid ("NM" text, or worse, a numeric fallback), so a run that seeds
-   * fallbacks must never read as clean. `guard` renders the guarded expression (capped at 120
-   * chars). Legitimate too — a genuinely undefined combination — hence a warning, never a Left.
+   * `ISERR`/`ISNA` siblings) BANKED ITS FALLBACK for `cells` axis combinations — the seeded value
+   * is the fallback, not the modelled quantity. A guarded corner turns an evaluation failure into a
+   * plausible-looking grid ("NM" text, or worse, a numeric fallback), so a run that seeds fallbacks
+   * must never read as clean. `guard` renders the guarded expression (capped at 120 chars).
+   * Legitimate too — a genuinely undefined combination — hence a warning, never a Left. Only guards
+   * on the EVALUATED path count: a guard whose fallback never became the cell's value (a chained
+   * ladder's inner rung, an untaken `IF` branch) is silent, since a clean run that reads as dirty
+   * destroys the same signal as a dirty run that reads as clean.
    */
   case ErrorGuardFired(sheet: SheetName, ref: CellRange, cells: Int, guard: String)
 
@@ -95,8 +101,10 @@ final case class DataTableSeedReport(
  * formula's transitive precedents split into input-INDEPENDENT uncached cells (evaluated once per
  * table) and axis-DEPENDENT cells (re-evaluated per combination), each in topological order with
  * every value written back before its dependents run — exactly `recalculate`'s `evalPass`. A cone
- * cell that fails to evaluate is left as it was and seeding continues (evalPass parity). Precedents
- * outside the cone keep the landed pinned-cache doctrine: a cached precedent reads via its cache.
+ * cell that fails to evaluate is left as it was and seeding continues (evalPass parity), but it is
+ * COUNTED and reported: a stale cone cell is the very mechanism GH-493 filed, so it must never pass
+ * silently. Precedents outside the cone keep the landed pinned-cache doctrine: a cached precedent
+ * reads via its cache.
  *
  * GH-453 — circular books: a table whose source formula transitively depends on a reference cycle
  * cannot use the pinned-cache substitution (the what-if never propagates through the cycle and
@@ -436,21 +444,48 @@ object DataTableSeeder:
       case _ => false
 
   /**
+   * The temp sheets a cone resolution produced, plus every cone cell it could NOT re-derive (GH-493
+   * review rework): such a cell stays on its stale cache, which is precisely the FLAT-grid
+   * mechanism GH-493 filed, so the table must report it rather than seed silently.
+   */
+  private final case class ConeResolution(sheets: Vector[Sheet], unresolved: Set[QualifiedRef])
+
+  /**
    * Evaluate `cone` in topological order on the temp sheets, writing each value back before its
    * dependents run — the seeder's copy of `recalculateImpl`'s `evalPass`, including its tolerance:
-   * a cell that fails to evaluate keeps whatever it had and the pass continues.
+   * a cell that fails to evaluate keeps whatever it had and the pass continues. Unlike `evalPass`
+   * the failures are COUNTED, not merely tolerated (see [[ConeResolution]]).
    */
   private def resolveCone(
     wb: Workbook,
     sheets: Vector[Sheet],
     cone: List[(QualifiedRef, Int)],
     clock: Clock
-  ): Vector[Sheet] =
-    cone.foldLeft(sheets) { case (acc, (q, idx)) =>
-      SheetEvaluator.evaluateCell(acc(idx))(q.ref, clock, Some(wb.copy(sheets = acc))) match
-        case Right(value) => acc.updated(idx, acc(idx).put(q.ref, value))
-        case Left(_) => acc
+  ): ConeResolution =
+    cone.foldLeft(ConeResolution(sheets, Set.empty)) { case (acc, (q, idx)) =>
+      val temp = wb.copy(sheets = acc.sheets)
+      SheetEvaluator.evaluateCell(acc.sheets(idx))(q.ref, clock, Some(temp)) match
+        case Right(value) =>
+          acc.copy(sheets = acc.sheets.updated(idx, acc.sheets(idx).put(q.ref, value)))
+        case Left(_) => acc.copy(unresolved = acc.unresolved + q)
     }
+
+  /**
+   * GH-493 (review rework): one [[SeedTableWarning.Skipped]] per table naming the DISTINCT cone
+   * refs that could not be re-derived — de-duplicated across axis combinations, so a 400-cell grid
+   * over one broken precedent warns once.
+   */
+  private def coneWarning(
+    name: SheetName,
+    interior: CellRange,
+    unresolved: Set[QualifiedRef]
+  ): Vector[SeedTableWarning] =
+    if unresolved.isEmpty then Vector.empty
+    else
+      val reason =
+        s"${unresolved.size} precedent cell(s) in the what-if cone could not be re-derived — " +
+          "the seeded grid may not reflect the substitution"
+      Vector(SeedTableWarning.Skipped(name, interior, unresolved.size, reason))
 
   /**
    * GH-493/GH-494: the acyclic what-if lane — axis overlay, cone re-derivation, source evaluation,
@@ -480,9 +515,9 @@ object DataTableSeeder:
           val probes = guardProbes(sheet, kind)
           // Input-independent uncached precedents are the same for every combination.
           val prepared = resolveCone(wb, wb.sheets, cone.base, clock)
-          val (seeded, guarded, guardName) =
-            interior.cellsRowMajor.foldLeft((sheet, 0, Option.empty[String])) {
-              case ((acc, fired, named), cellRef) =>
+          val (seeded, guarded, guardName, unresolved) =
+            interior.cellsRowMajor.foldLeft((sheet, 0, Option.empty[String], prepared.unresolved)) {
+              case ((acc, fired, named, unres), cellRef) =>
                 computeCell(
                   wb,
                   sheet,
@@ -491,20 +526,25 @@ object DataTableSeeder:
                   input1,
                   input2,
                   clock,
-                  prepared,
+                  prepared.sheets,
                   tableIdx,
                   cone,
                   probes
                 ) match
-                  case None => (acc, fired, named) // tolerant: leave the cell untouched
-                  case Some((value, guard)) =>
+                  case None => (acc, fired, named, unres) // tolerant: leave the cell untouched
+                  case Some(outcome) =>
                     (
-                      writeInterior(acc, cellRef, value),
-                      if guard.isDefined then fired + 1 else fired,
-                      named.orElse(guard)
+                      writeInterior(acc, cellRef, outcome.value),
+                      if outcome.guard.isDefined then fired + 1 else fired,
+                      named.orElse(outcome.guard),
+                      unres ++ outcome.unresolved
                     )
             }
-          (seeded, guardWarning(sheet.name, interior, guarded, guardName))
+          (
+            seeded,
+            coneWarning(sheet.name, interior, unresolved) ++
+              guardWarning(sheet.name, interior, guarded, guardName)
+          )
 
   /**
    * GH-493/GH-494: the cone's per-combination cost against [[MaxConeSeedBudget]] — a non-empty
@@ -621,7 +661,7 @@ object DataTableSeeder:
     inputQ: Set[QualifiedRef],
     sheetIndex: Map[SheetName, Int],
     tableIdx: Int,
-    prepared: Vector[Sheet],
+    prepared: ConeResolution,
     cone: WhatIfCone
   ): (Sheet, Vector[SeedTableWarning]) =
     // The what-if substitution PINS the input cells (Excel semantics): a cycle running
@@ -644,34 +684,36 @@ object DataTableSeeder:
     // The clock arrives pinned from seedWorkbook: one seeding run is one volatile
     // generation, like one recalculation (GH-373) — axis values, member fixpoints, cone
     // cells and source formulas all read the same instant.
-    val (seeded, unconverged, skipped, guarded, guardName) =
-      kind.ref.cellsRowMajor.foldLeft((sheet, 0, 0, 0, Option.empty[String])) {
-        case ((acc, fails, skips, fired, named), cellRef) =>
-          val computed = computeCellIterative(
-            wb,
-            sheet,
-            kind,
-            cellRef,
-            input1,
-            input2,
-            clock,
-            iterative,
-            prepared,
-            tableIdx,
-            members,
-            cone,
-            probes
-          )
-          computed match
-            case None => (acc, fails, skips + 1, fired, named) // tolerant: leave it untouched
-            case Some((value, converged, guard)) =>
-              (
-                writeInterior(acc, cellRef, value),
-                if converged then fails else fails + 1,
-                skips,
-                if guard.isDefined then fired + 1 else fired,
-                named.orElse(guard)
-              )
+    val (seeded, unconverged, skipped, guarded, guardName, unresolved) =
+      kind.ref.cellsRowMajor.foldLeft(
+        (sheet, 0, 0, 0, Option.empty[String], prepared.unresolved)
+      ) { case ((acc, fails, skips, fired, named, unres), cellRef) =>
+        val computed = computeCellIterative(
+          wb,
+          sheet,
+          kind,
+          cellRef,
+          input1,
+          input2,
+          clock,
+          iterative,
+          prepared.sheets,
+          tableIdx,
+          members,
+          cone,
+          probes
+        )
+        computed match
+          case None => (acc, fails, skips + 1, fired, named, unres) // tolerant: leave it untouched
+          case Some(outcome) =>
+            (
+              writeInterior(acc, cellRef, outcome.value),
+              if outcome.converged then fails else fails + 1,
+              skips,
+              if outcome.guard.isDefined then fired + 1 else fired,
+              named.orElse(outcome.guard),
+              unres ++ outcome.unresolved
+            )
       }
     val notConverged =
       if unconverged > 0 then
@@ -699,7 +741,8 @@ object DataTableSeeder:
       else Vector.empty
     (
       seeded,
-      notConverged ++ skippedWarning ++ guardWarning(sheet.name, kind.ref, guarded, guardName)
+      notConverged ++ skippedWarning ++ coneWarning(sheet.name, kind.ref, unresolved) ++
+        guardWarning(sheet.name, kind.ref, guarded, guardName)
     )
 
   /**
@@ -720,8 +763,8 @@ object DataTableSeeder:
     tableIdx: Int,
     members: List[(QualifiedRef, Int, String)],
     cone: WhatIfCone,
-    probes: Map[ARef, List[TExpr[?]]]
-  ): Option[(CellValue, Boolean, Option[String])] =
+    probes: Map[ARef, List[(TExpr[?], TExpr[?])]]
+  ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
     sheet.cells.get(sourceRef).map(_.value) match
       case Some(CellValue.Formula(expression, _, _)) =>
@@ -745,16 +788,19 @@ object DataTableSeeder:
           val upstream = resolveCone(wb, overlaid, cone.beforeCycle, clock)
           // (3) fixpoint the relevant cycle members under this axis combination
           val (results, converged, _) =
-            WorkbookEvaluator.jacobiFixpoint(wb, upstream, members, iterative, clock, None)
+            WorkbookEvaluator.jacobiFixpoint(wb, upstream.sheets, members, iterative, clock, None)
           val sourceQ = QualifiedRef(sheet.name, sourceRef)
           if members.exists((q, _, _) => q == sourceQ) then
             // The source formula itself was fixpointed. Re-evaluating it after folding the final
             // member values would advance it by one extra Jacobi round.
-            results.get(sourceQ).flatMap(_.toOption).map(value => (value, converged, None))
+            results
+              .get(sourceQ)
+              .flatMap(_.toOption)
+              .map(value => CellOutcome(value, converged, None, upstream.unresolved))
           else
             // (4) fold member values in as plain values, resolve the cone downstream of the cycle,
             // then evaluate the source formula
-            val folded = members.foldLeft(Option(upstream)) { case (accOpt, (q, idx, _)) =>
+            val folded = members.foldLeft(Option(upstream.sheets)) { case (accOpt, (q, idx, _)) =>
               accOpt.flatMap { sheets =>
                 results.get(q) match
                   case Some(Right(v)) => Some(sheets.updated(idx, sheets(idx).put(q.ref, v)))
@@ -763,24 +809,43 @@ object DataTableSeeder:
             }
             folded.flatMap { sheets =>
               val resolved = resolveCone(wb, sheets, cone.afterCycle, clock)
-              val tempWb = wb.copy(sheets = resolved)
+              val tempWb = wb.copy(sheets = resolved.sheets)
+              val tempSheet = resolved.sheets(tableIdx)
               SheetEvaluator
-                .evaluateFormula(resolved(tableIdx))(expression, clock, Some(tempWb), None)
+                .evaluateFormula(tempSheet)(expression, clock, Some(tempWb), None)
                 .toOption
                 .map { value =>
                   val guard =
-                    firedGuard(probes.getOrElse(sourceRef, Nil), resolved(tableIdx), tempWb, clock)
-                  (value, converged, guard)
+                    firedGuard(probes.getOrElse(sourceRef, Nil), value, tempSheet, tempWb, clock)
+                  CellOutcome(
+                    value,
+                    converged,
+                    guard,
+                    upstream.unresolved ++ resolved.unresolved
+                  )
                 }
             }
         }
       case _ =>
         // Empty or non-formula source cell: Excel caches 0 (fixture-verified bytes).
-        Some((CellValue.Number(BigDecimal(0)), true, None))
+        Some(CellOutcome(CellValue.Number(BigDecimal(0)), converged = true, None, Set.empty))
 
   /**
-   * One interior cell's what-if value plus the error guard that fired for it, if any (GH-494);
-   * `None` leaves the cell untouched (tolerant).
+   * One interior cell's what-if outcome: the value to bank, whether the cycle converged (always
+   * `true` off the iterated lane), the error guard that banked its fallback for this cell if any
+   * (GH-494), and the cone cells that could not be re-derived under this substitution (GH-493
+   * review rework).
+   */
+  private final case class CellOutcome(
+    value: CellValue,
+    converged: Boolean,
+    guard: Option[String],
+    unresolved: Set[QualifiedRef]
+  )
+
+  /**
+   * One interior cell's what-if outcome on the acyclic lane; `None` leaves the cell untouched
+   * (tolerant).
    */
   private def computeCell(
     wb: Workbook,
@@ -793,8 +858,8 @@ object DataTableSeeder:
     prepared: Vector[Sheet],
     tableIdx: Int,
     cone: WhatIfCone,
-    probes: Map[ARef, List[TExpr[?]]]
-  ): Option[(CellValue, Option[String])] =
+    probes: Map[ARef, List[(TExpr[?], TExpr[?])]]
+  ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
     sheet.cells.get(sourceRef).map(_.value) match
       case Some(CellValue.Formula(expression, _, _)) =>
@@ -812,30 +877,33 @@ object DataTableSeeder:
           // reads it — a cached intermediate would otherwise answer with its base value and an
           // uncached one would vanish from any range argument.
           val resolved = resolveCone(wb, overlaid, cone.beforeCycle ++ cone.afterCycle, clock)
-          val tempWb = wb.copy(sheets = resolved)
+          val tempWb = wb.copy(sheets = resolved.sheets)
+          val tempSheet = resolved.sheets(tableIdx)
           SheetEvaluator
-            .evaluateFormula(resolved(tableIdx))(expression, clock, Some(tempWb), None)
+            .evaluateFormula(tempSheet)(expression, clock, Some(tempWb), None)
             .toOption
             .map(value =>
-              (
+              CellOutcome(
                 value,
-                firedGuard(probes.getOrElse(sourceRef, Nil), resolved(tableIdx), tempWb, clock)
+                converged = true,
+                firedGuard(probes.getOrElse(sourceRef, Nil), value, tempSheet, tempWb, clock),
+                resolved.unresolved
               )
             )
         }
       case _ =>
         // Empty or non-formula source cell: Excel caches 0 (fixture-verified bytes).
-        Some((CellValue.Number(BigDecimal(0)), None))
+        Some(CellOutcome(CellValue.Number(BigDecimal(0)), converged = true, None, Set.empty))
 
   /**
-   * GH-494: the guarded expressions of every error guard in each of the group's source formulas,
-   * parsed once per table. An unparseable source formula simply carries no probes — evaluation
-   * would fail on it too, and the interior stays untouched.
+   * GH-494: every error guard in each of the group's source formulas as a `(protected, fallback)`
+   * pair, parsed once per table. An unparseable source formula simply carries no probes —
+   * evaluation would fail on it too, and the interior stays untouched.
    */
   private def guardProbes(
     sheet: Sheet,
     kind: FormulaKind.DataTable
-  ): Map[ARef, List[TExpr[?]]] =
+  ): Map[ARef, List[(TExpr[?], TExpr[?])]] =
     sourceRefs(kind).iterator.flatMap { r =>
       sheet.cells.get(r).map(_.value) match
         case Some(CellValue.Formula(expression, _, _)) =>
@@ -848,18 +916,43 @@ object DataTableSeeder:
     }.toMap
 
   /**
-   * GH-494: the first guarded expression that resolves to an ERROR under this substitution,
-   * rendered for the warning (capped at 120 chars). `None` means every guard held.
+   * GH-494: the first guard that ACTUALLY fired for this interior cell, rendered for the warning
+   * (capped at 120 chars). `None` means no fallback was banked.
+   *
+   * A guard counts as fired only when both halves agree: its protected expression resolves to an
+   * error under this substitution AND its fallback reproduces `seeded`, the value the seeder is
+   * about to bank. The second half is what keeps guards on UNEVALUATED paths quiet — a chained
+   * `IFERROR(x, IFERROR(1/(A1-A1), 0))` ladder and a guard parked in an untaken `IF` branch both
+   * probe as errors while contributing nothing to the result, and branding those live grids as
+   * fallback grids destroys the same signal a silently-banked fallback does.
    */
   private def firedGuard(
-    probes: List[TExpr[?]],
+    probes: List[(TExpr[?], TExpr[?])],
+    seeded: CellValue,
     sheet: Sheet,
     wb: Workbook,
     clock: Clock
   ): Option[String] =
     probes
-      .collectFirst { case probe if guardResolvesToError(probe, sheet, wb, clock) => probe }
+      .collectFirst {
+        case (guarded, fallback)
+            if guardResolvesToError(guarded, sheet, wb, clock)
+              && banksFallback(fallback, seeded, sheet, wb, clock) =>
+          guarded
+      }
       .map(probe => FormulaPrinter.print(probe, includeEquals = false).take(120))
+
+  /** GH-494: did this guard's fallback arm produce exactly the value being banked? */
+  private def banksFallback(
+    fallback: TExpr[?],
+    seeded: CellValue,
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Boolean =
+    Evaluator.instance.eval(fallback, sheet, clock, Some(wb), None) match
+      case Left(_) => false
+      case Right(value) => EvalResult.toCellValue(value) == seeded
 
   /** ISERROR's own verdict on a guarded expression: a Left OR an error VALUE (see `iserror`). */
   private def guardResolvesToError(
@@ -876,23 +969,30 @@ object DataTableSeeder:
           case _ => false
 
   /**
-   * GH-494: every expression an error guard protects — `IFERROR(x, …)`, `IFNA(x, …)` and
-   * `IF(ISERROR(x), …)` (with its `ISERR`/`ISNA` siblings). Structural cases recurse; everything
-   * else (literals, refs, ranges, bindings) carries no guard.
+   * GH-494: every error guard as a `(protected, fallback)` pair — `IFERROR(x, fb)`, `IFNA(x, fb)`
+   * and `IF(ISERROR(x), fb, …)` (with its `ISERR`/`ISNA` siblings). The fallback travels with the
+   * guard because a guard only counts as fired when its fallback is the value actually banked (see
+   * [[firedGuard]]). Structural cases recurse; everything else (literals, refs, ranges, bindings)
+   * carries no guard.
    */
-  private def errorGuards(expr: TExpr[?]): List[TExpr[?]] =
+  private def errorGuards(expr: TExpr[?]): List[(TExpr[?], TExpr[?])] =
     expr match
       case call: TExpr.Call[?] =>
         val args = callArgExprs(call)
-        val here: List[TExpr[?]] = call.spec.name.toUpperCase match
-          case "IFERROR" | "IFNA" => args.take(1)
-          case "IF" =>
-            // The parser wraps a function-shaped condition in a Boolean coercion.
-            args.headOption.map(unwrapTransparent).toList.flatMap {
-              case cond: TExpr.Call[?] if ErrorPredicates.contains(cond.spec.name.toUpperCase) =>
-                callArgExprs(cond)
+        val here: List[(TExpr[?], TExpr[?])] = call.spec.name.toUpperCase match
+          case "IFERROR" | "IFNA" =>
+            args match
+              case guarded :: fallback :: _ => List((guarded, fallback))
               case _ => Nil
-            }
+          case "IF" =>
+            args match
+              // The parser wraps a function-shaped condition in a Boolean coercion.
+              case cond :: fallback :: _ =>
+                unwrapTransparent(cond) match
+                  case c: TExpr.Call[?] if ErrorPredicates.contains(c.spec.name.toUpperCase) =>
+                    callArgExprs(c).map(guarded => (guarded, fallback))
+                  case _ => Nil
+              case _ => Nil
           case _ => Nil
         here ++ args.flatMap(errorGuards)
       case TExpr.Add(l, r) => errorGuards(l) ++ errorGuards(r)

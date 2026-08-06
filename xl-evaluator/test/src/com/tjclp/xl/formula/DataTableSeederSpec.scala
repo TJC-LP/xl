@@ -799,6 +799,71 @@ class DataTableSeederSpec extends FunSuite:
       case other => fail(s"expected exactly one Skipped, got $other")
   }
 
+  test("GH-494: a chained IFERROR ladder whose inner rung is never taken stays clean") {
+    // Review rework: the inner `1/(A1-A1)` ALWAYS resolves to #DIV/0! when probed standalone, but
+    // the outer rung holds for every axis value, so no fallback is ever banked. Firing here would
+    // brand a perfectly live grid as a fallback grid — the same signal loss #494 filed, inverted.
+    val sheet = Sheet("S")
+      .put(ref"A1", num(1))
+      .put(ref"F9", CellValue.Formula("IFERROR(A1*2,IFERROR(1/(A1-A1),0))"))
+      .put(ref"E10", num(1))
+      .put(ref"E11", num(2))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F11", "A1"), None))
+    val report =
+      Workbook(sheet).seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    assertSeededNumber(out, ref"F10", 2.0, 1e-9)
+    assertSeededNumber(out, ref"F11", 4.0, 1e-9)
+    assertEquals(report.warnings, Vector.empty, "no rung's fallback was ever banked")
+  }
+
+  test("GH-494: a guard inside an UNTAKEN IF branch stays clean") {
+    // Review rework: the guard lives in the false branch, which no axis value reaches.
+    val sheet = Sheet("S")
+      .put(ref"A1", num(1))
+      .put(ref"F9", CellValue.Formula("IF(A1>0,A1*2,IFERROR(1/(A1-A1),\"x\"))"))
+      .put(ref"E10", num(1))
+      .put(ref"E11", num(2))
+      .put(ref"E12", num(3))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    val report =
+      Workbook(sheet).seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.zip(Vector(2.0, 4.0, 6.0)).foreach { (r, expected) =>
+      assertSeededNumber(out, r, expected, 1e-9)
+    }
+    assertEquals(report.warnings, Vector.empty, "the guarded branch was never evaluated")
+  }
+
+  test("GH-493: a cone cell that cannot be re-derived is reported, never silently FLAT") {
+    // Review rework: B1 is axis-DEPENDENT (it reads the what-if input) so it enters the cone, but
+    // its cross-sheet leg is unresolvable — the same Left any unsupported function produces. The
+    // cone resolution leaves it on its stale cache, so the grid goes FLAT (8 for every axis). The
+    // tolerant seed stands, but it must be VISIBLE: one Skipped naming the distinct cone refs.
+    val sheet = Sheet("S")
+      .put(ref"A1", num(0))
+      .put(ref"B1", CellValue.Formula("A1*10+Missing!A1", Some(num(7))))
+      .put(ref"F9", CellValue.Formula("B1+1"))
+      .put(ref"E10", num(1))
+      .put(ref"E11", num(2))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F11", "A1"), None))
+    val report =
+      Workbook(sheet).seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    val out = sheetNamed(report.workbook, "S")
+    assertSeededNumber(out, ref"F10", 8.0, 1e-9)
+    assertSeededNumber(out, ref"F11", 8.0, 1e-9)
+    report.warnings match
+      case Vector(SeedTableWarning.Skipped(s, tableRef, cells, reason)) =>
+        assertEquals(s, SheetName.unsafe("S"))
+        assertEquals(tableRef, range("F10:F11"))
+        assertEquals(cells, 1, "one DISTINCT cone ref, reported once per table not per combination")
+        assert(
+          reason.contains("could not be re-derived"),
+          s"the reason must name the unresolved cone: $reason"
+        )
+      case other => fail(s"expected exactly one Skipped, got $other")
+  }
+
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def zipEntry(bytes: Array[Byte], name: String): String =
     val zip = new ZipInputStream(new ByteArrayInputStream(bytes))
