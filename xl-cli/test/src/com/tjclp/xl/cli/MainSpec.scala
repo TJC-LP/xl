@@ -1448,6 +1448,47 @@ class MainSpec extends CatsEffectSuite:
       assert(written > 0L, "--strict still writes the output file")
   }
 
+  /** Run a parsed command line with stdout redirected, so printed lines can be asserted on. */
+  private def runCliCaptured(args: String*): IO[(cats.effect.ExitCode, String)] =
+    IO.blocking(new java.io.ByteArrayOutputStream()).flatMap { buffer =>
+      IO.blocking {
+        val previous = System.out
+        System.setOut(
+          new java.io.PrintStream(buffer, true, java.nio.charset.StandardCharsets.UTF_8)
+        )
+        previous
+      }.bracket(_ => runCli(args*))(previous => IO.blocking(System.setOut(previous)))
+        .map(code => (code, buffer.toString(java.nio.charset.StandardCharsets.UTF_8)))
+    }
+
+  test("GH-496: a strict failure says Saved with -o and NOT saved with -i") {
+    val wb = Workbook(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None)))
+    for
+      in <- IO.blocking(Files.createTempFile("strict-msg-in", ".xlsx"))
+      _ <- ExcelIO.instance[IO].write(wb, in)
+      out <- IO.blocking(Files.createTempFile("strict-msg-out", ".xlsx"))
+      viaOutput <- runCliCaptured("-f", in.toString, "-o", out.toString, "--strict", "recalc")
+      before <- IO.blocking(Files.readAllBytes(in))
+      viaInPlace <- runCliCaptured("-f", in.toString, "-i", "--strict", "recalc")
+      after <- IO.blocking(Files.readAllBytes(in))
+    yield
+      assertEquals(viaOutput._1, cats.effect.ExitCode(1))
+      assert(viaOutput._2.contains(s"Saved: $out"), s"-o really writes:\n${viaOutput._2}")
+      assertEquals(viaInPlace._1, cats.effect.ExitCode(1))
+      assert(
+        !viaInPlace._2.contains("Saved:"),
+        s"-i discards the temp, so it must not claim a save:\n${viaInPlace._2}"
+      )
+      assert(
+        viaInPlace._2.contains(s"NOT saved (--strict failure): $in left untouched"),
+        s"-i must say what actually happened:\n${viaInPlace._2}"
+      )
+      assert(
+        java.util.Arrays.equals(before, after),
+        "a strict failure under -i must leave the input byte-identical"
+      )
+  }
+
   test("GH-496: --strict exits 0 when the recalculation is clean") {
     val wb = Workbook(Sheet("Data").put(ref"A1" -> 5).put(ref"C1", CellValue.Formula("A1*2", None)))
     for

@@ -1636,7 +1636,9 @@ EXAMPLES:
    * GH-496: a [[StrictFailure]] is not a crash — the write completed and its summary is printed
    * verbatim (counts, failing refs, convergence verdict, plus the strict reason) — only the exit
    * code becomes 1. With `-i` that non-success code means the temp file is discarded and the input
-   * is left untouched, which is the atomic reading of "this book did not pass the gate".
+   * is left untouched, which is the atomic reading of "this book did not pass the gate" — so the
+   * summary's `Saved:` line is rewritten to say exactly that. With `-o` the output file genuinely
+   * is written and `Saved:` stands.
    */
   private def runResult(
     filePath: Path,
@@ -1654,10 +1656,39 @@ EXAMPLES:
         case Right(output) =>
           (ExitCode.Success, renderWithTarget(output, outputOpt, displayOpt))
         case Left(strict: StrictFailure) =>
-          (ExitCode(1), renderWithTarget(strict.summary, outputOpt, displayOpt))
+          (
+            ExitCode(1),
+            unsayTheSave(
+              renderWithTarget(strict.summary, outputOpt, displayOpt),
+              outputOpt,
+              displayOpt
+            )
+          )
         case Left(err) =>
           (ExitCode.Error, renderErrorMessage(err, outputOpt, displayOpt))
       }
+
+  /**
+   * GH-496: an in-place run whose exit code is non-success never commits its temp file, so the
+   * summary a write command already built ("...\nSaved: <path>") describes a save that did not
+   * happen. Replace that line with what is true. Only `-i` is affected: with `-o` the output file
+   * IS written before the gate runs, so its `Saved:` line stays.
+   */
+  private def unsayTheSave(
+    text: String,
+    outputOpt: Option[Path],
+    displayOpt: Option[Path]
+  ): String =
+    (outputOpt, displayOpt) match
+      case (Some(write), Some(display)) if write != display =>
+        text.linesIterator
+          .map { line =>
+            if line.startsWith("Saved: ") || line.startsWith("Saved (streaming): ") then
+              s"NOT saved (--strict failure): $display left untouched"
+            else line
+          }
+          .mkString("\n")
+      case _ => text
 
   /**
    * In-place writes (-i) target a temp file that is atomically moved onto the input after the

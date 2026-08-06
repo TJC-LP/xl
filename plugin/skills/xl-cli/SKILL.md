@@ -638,7 +638,40 @@ Hard-won rules from fleet use on real deal workbooks. Items marked **fixed in 0.
 | `--backend <type>` | | Write backend: scalaxml (default) or saxstax (36-39% faster). Reads always use StAX. |
 | `--max-size <MB>` | | Override 100MB security limit (0 = unlimited) |
 | `--stream` | | O(1) memory mode for reads + writes (search/stats/bounds/view/put/putf/style) |
+| `--no-recalc` | `--preserve-caches` | Apply the edit, recalculate nothing — every cached value in the file survives |
+| `--strict` | | Exit 1 when the write's recalculation reports errors/non-convergence/seed warnings |
 | `--dry-run` | | Validate batch JSON and show summary without writing (batch only) |
+
+**Global flags go BEFORE the verb.** `xl -f x.xlsx --strict recalc` works;
+`xl -f x.xlsx recalc --strict` fails with `Unexpected argument: recalc`.
+
+#### Cache safety on writes
+
+Writes recalculate only the edit's **dirty dependency cone** (the changed cells, their transitive
+dependents across sheets, plus `INDIRECT`/`OFFSET` cells). Cached values outside the cone are left
+exactly as the file had them, so a workbook calculated by another engine is not re-poisoned.
+
+Use `--no-recalc` / `--preserve-caches` when an external calculator owns the numbers and xl should
+touch nothing:
+
+```bash
+xl -f external.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
+xl -f external.xlsx -s Data -o out.xlsx --preserve-caches insert-rows 20 1
+```
+
+Honored by `put`, `putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`,
+`delete-cols`. `recalc` rejects it (it is the whole-book recalculation verb).
+
+#### Strict exit codes for pipelines
+
+```bash
+xl -f model.xlsx -o out.xlsx --strict recalc   # exit 1 if a formula could not be evaluated
+```
+
+`--strict` keeps the same printed summary and only changes the exit code. Excel error *values*
+(`#DIV/0!`, `#N/A`) never gate — they are data. With `-o` the file is still written on failure;
+with `-i` the input is left untouched and the summary says `NOT saved (--strict failure)`.
+`--strict` cannot be combined with `--stream`.
 
 ### Info Commands
 

@@ -665,6 +665,12 @@ class BatchRecalcSpec extends FunSuite:
         assertEquals(n.toDouble, expected, s"${at.toA1} cache")
       case other => fail(s"expected cached number at ${at.toA1}, got $other")
 
+  private def assertCachedOn(wb: Workbook, sheet: String, at: ARef, expected: Double): Unit =
+    wb.sheets.find(_.name.value == sheet).flatMap(_.cells.get(at)).map(_.value) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assertEquals(n.toDouble, expected, s"$sheet!${at.toA1} cache")
+      case other => fail(s"expected cached number at $sheet!${at.toA1}, got $other")
+
   test("GH-468: an unrelated batch put leaves externally-authored caches untouched") {
     val wb = splicedCacheWorkbook()
     val ops = writeOps("""[{"op":"put","ref":"Z99","value":1}]""")
@@ -700,11 +706,12 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(ops)
   }
 
-  test("GH-468: insert-rows recalculates the shifted sheet and leaves other sheets' caches") {
-    // StructuralEditor already drops the cache of any formula that READS the edited sheet
-    // (GH-455), so the preservation claim here is about the sheets a shift cannot reach: Other
-    // is self-contained, and before GH-468 the trailing global recalculate() rewrote its 888
-    // cache to the evaluator's 14 anyway.
+  test("GH-468: insert-rows keeps the caches of a sheet that does not reference the edited one") {
+    // Narrow claim, deliberately: `Other` is SELF-CONTAINED (Other!B1 = Other!A1*2), the only
+    // shape whose caches survive a structural edit today. StructuralEditor drops the cache of
+    // every formula that transitively READS the edited sheet (GH-455's `stale` predicate),
+    // cross-sheet readers included — pinned by the next test, tracked as GH-503. What GH-468
+    // fixes here is the trailing global recalculate(), which rewrote even THIS 888 cache to 14.
     val wb = Workbook(
       Sheet("Data")
         .put(ref"D10" -> 7)
@@ -724,6 +731,43 @@ class BatchRecalcSpec extends FunSuite:
       case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
         assertEquals(n.toDouble, 888.0, "an untouched sheet's cache must survive a structural edit")
       case other => fail(s"expected a cached formula at Other!B1, got $other")
+    Files.deleteIfExists(out)
+  }
+
+  /**
+   * Data lives in rows 1 and 6 only, and every formula caches an out-of-band 777. A structural edit
+   * at row 20 / column AA therefore shifts NOTHING — no cell moves, no formula text is rewritten —
+   * so every one of these caches is still the truth about the file afterwards. `Other!B1` reads the
+   * edited sheet across the sheet boundary; `Data!C30` is the one cell that genuinely moves under
+   * an insert at row 20 while keeping its text byte-identical (its reference is absolute and above
+   * the band).
+   */
+  private def structuralPoisonWorkbook(): Workbook =
+    Workbook(
+      Sheet("Data")
+        .put(ref"A1" -> 5)
+        .put(ref"C1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(777)))))
+        .put(ref"S1", CellValue.Formula("SUM(A1:A10)", Some(CellValue.Number(BigDecimal(777)))))
+        .put(ref"C30", CellValue.Formula("$A$1*3", Some(CellValue.Number(BigDecimal(777))))),
+      Sheet("Other")
+        .put(ref"B1", CellValue.Formula("Data!A1*2", Some(CellValue.Number(BigDecimal(777)))))
+    )
+
+  test("insert-rows over-invalidates a cross-sheet reader's cache (pins current behavior)") {
+    // GH-503: StructuralEditor.rewriteFormulas' `stale` predicate is "transitively reads the
+    // edited sheet", not "reads something the edit moved", so an insert at row 20 of a sheet
+    // whose data stops at row 6 still drops these caches and the cone re-derives them. The
+    // expected values below are WRONG on purpose — flip every one of them back to 777.0 when
+    // GH-503 tightens the predicate.
+    val wb = structuralPoisonWorkbook()
+    val out = tempXlsx()
+
+    WriteCommands.insertRows(wb, wb.sheets.headOption, 20, 1, out, config).unsafeRunSync()
+
+    val written = readBack(out)
+    assertCachedOn(written, "Data", ref"C1", 10.0) // GH-503: should be 777.0
+    assertCachedOn(written, "Data", ref"S1", 5.0) // GH-503: should be 777.0
+    assertCachedOn(written, "Other", ref"B1", 10.0) // GH-503: should be 777.0 (CROSS-SHEET)
     Files.deleteIfExists(out)
   }
 
@@ -806,6 +850,73 @@ class BatchRecalcSpec extends FunSuite:
 
     assert(!summary.contains("--no-recalc"), s"summary: $summary")
     assertCached(readBack(out), ref"C1", 12.0)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: --no-recalc on insert-rows preserves the caches the structural edit dropped") {
+    // The escape hatch prints "every existing cached value preserved". StructuralEditor strips
+    // the cache of every formula reading the edited sheet BEFORE the CLI sees the workbook, so
+    // without carrying the pre-edit caches forward the flag would write formula cells with no
+    // <v> at all — worse than the recalculation it replaces. Row 20 shifts nothing here.
+    val wb = structuralPoisonWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 20, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
+    val written = readBack(out)
+    assertCachedOn(written, "Data", ref"C1", 777.0)
+    assertCachedOn(written, "Data", ref"S1", 777.0)
+    assertCachedOn(written, "Other", ref"B1", 777.0)
+    // C30 sits below the insert point: it moves to C31 and its cache must ride along.
+    assertCachedOn(written, "Data", ref"C31", 777.0)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: --no-recalc on delete-cols and delete-rows preserves caches too") {
+    val wb = structuralPoisonWorkbook()
+    val rowsOut = tempXlsx()
+    val colsOut = tempXlsx()
+
+    WriteCommands
+      .deleteRows(wb, wb.sheets.headOption, 20, 1, rowsOut, config, false, preserveCaches)
+      .unsafeRunSync()
+    WriteCommands
+      .deleteColumns(wb, wb.sheets.headOption, "AA", 1, colsOut, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val rows = readBack(rowsOut)
+    assertCachedOn(rows, "Data", ref"C1", 777.0)
+    assertCachedOn(rows, "Other", ref"B1", 777.0)
+    assertCachedOn(rows, "Data", ref"C29", 777.0) // C30 shifted up by the delete
+    val cols = readBack(colsOut)
+    assertCachedOn(cols, "Data", ref"C1", 777.0)
+    assertCachedOn(cols, "Other", ref"B1", 777.0)
+    Files.deleteIfExists(rowsOut)
+    Files.deleteIfExists(colsOut)
+  }
+
+  test("GH-468: --no-recalc never restores a cache onto a formula the edit REWROTE") {
+    // The safety condition: a shifted formula's cached value belongs to the old text. F10's
+    // `D10*2` becomes `D11*2` at F11 — restoring 999 there would invent a value no engine ever
+    // computed, so the cell must stay uncached (Excel's own "dirty" state).
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"D10" -> 7)
+        .put(ref"F10", CellValue.Formula("D10*2", Some(CellValue.Number(BigDecimal(999)))))
+    )
+    val out = tempXlsx()
+
+    WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 5, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    written.sheets.head.cells.get(ref"F11").map(_.value) match
+      case Some(CellValue.Formula("D11*2", None, _)) => ()
+      case other => fail(s"a rewritten formula must stay uncached, got $other")
     Files.deleteIfExists(out)
   }
 

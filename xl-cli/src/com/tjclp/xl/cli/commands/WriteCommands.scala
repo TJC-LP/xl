@@ -976,6 +976,71 @@ object WriteCommands:
           if changed then acc.put(updated) else acc
     }
 
+  /**
+   * The axis edit a structural verb performed, in `StructuralEditor`'s own coordinates: 0-based
+   * index `at` on the row (or column) axis of `sheet`, `delta` positive for an insert and negative
+   * for a delete. Enough to invert the shift a surviving cell underwent.
+   */
+  private final case class StructuralShift(
+    sheet: SheetName,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  )
+
+  /**
+   * Where the cell now at 0-based `index` sat before the edit, or `None` when it has no pre-image
+   * (the freshly inserted band `[at, at + delta)`).
+   */
+  private def preEditIndex(index: Int, at: Int, delta: Int): Option[Int] =
+    if index < at then Some(index)
+    else if delta > 0 then Option.when(index >= at + delta)(index - delta)
+    else Some(index - delta)
+
+  private def preEditRef(ref: ARef, shift: StructuralShift): Option[ARef] =
+    if shift.isRow then
+      preEditIndex(ref.row.index0, shift.at, shift.delta).map(ARef.from0(ref.col.index0, _))
+    else preEditIndex(ref.col.index0, shift.at, shift.delta).map(ARef.from0(_, ref.row.index0))
+
+  /**
+   * GH-468: carry the pre-edit caches of a structural edit forward, for `--no-recalc`.
+   *
+   * `StructuralEditor` strips `cachedValue` from every formula that transitively reads the edited
+   * sheet (its GH-455 `stale` predicate, wider than the shift itself — GH-503), on the assumption
+   * that a recalculation follows. Under `--no-recalc` none does, so without this the written file
+   * would carry formula cells with no `<v>` at all: a downstream `data_only=True` reader sees
+   * blanks where the file used to have numbers. That is strictly worse than the recalculation the
+   * flag replaces, and it would make the printed "every existing cached value preserved" a lie.
+   *
+   * Restores a cache only when the formula TEXT is byte-identical to the pre-edit cell's — a
+   * rewritten (shifted) reference means the old value answered a different question, so that cell
+   * stays uncached (Excel's own dirty state). Refs are unchanged on every sheet but the edited one;
+   * there the shift is inverted, and a cell with no pre-image keeps whatever it has.
+   */
+  private def restorePriorCaches(
+    before: Workbook,
+    edited: Workbook,
+    shift: StructuralShift
+  ): Workbook =
+    val previous = before.sheets.map(s => s.name -> s).toMap
+    edited.sheets.foldLeft(edited) { (acc, sheet) =>
+      previous.get(sheet.name) match
+        case None => acc
+        case Some(old) =>
+          val (updated, restoredAny) = sheet.cells.foldLeft((sheet, false)) {
+            case ((s, restored), (r, cell)) =>
+              cell.value match
+                case f @ CellValue.Formula(text, None, _) =>
+                  val source = if sheet.name == shift.sheet then preEditRef(r, shift) else Some(r)
+                  source.flatMap(old.cells.get).map(_.value) match
+                    case Some(CellValue.Formula(`text`, cached @ Some(_), _)) =>
+                      (s.put(r, f.copy(cachedValue = cached)), true)
+                    case _ => (s, restored)
+                case _ => (s, restored)
+          }
+          if restoredAny then acc.put(updated) else acc
+    }
+
   /** Restrict a whole-book result to the cone, so the summary counts what actually changed. */
   private def scopeToCone(
     result: RecalcResult,
@@ -1783,12 +1848,14 @@ object WriteCommands:
     else singleColIndex(trimmed).map(idx => (idx, fallbackCount))
 
   /**
-   * Shared tail of the four structural verbs: cone-scoped recalculation (or none under
-   * `--no-recalc`), write, then the `--strict` gate over what the recalculation reported.
+   * Shared tail of the four structural verbs: cone-scoped recalculation — or, under `--no-recalc`,
+   * the pre-edit caches carried forward over the ones the edit itself dropped — then the write and
+   * the `--strict` gate over what the recalculation reported.
    */
   private def writeStructural(
     before: Workbook,
     edited: Workbook,
+    shift: StructuralShift,
     message: String,
     outputPath: Path,
     config: WriterConfig,
@@ -1796,7 +1863,7 @@ object WriteCommands:
     policy: WritePolicy
   ): IO[String] =
     val recalcOpt = if policy.noRecalc then None else Some(scopedRecalc(before, edited))
-    val finalWb = recalcOpt.fold(edited)(_._1)
+    val finalWb = recalcOpt.fold(restorePriorCaches(before, edited, shift))(_._1)
     writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
       val recalcLine = recalcOpt.map(_._2).fold(noRecalcNote)(formatRecalcSummary)
       strictGate(
@@ -1825,6 +1892,7 @@ object WriteCommands:
       result <- writeStructural(
         wb,
         edited,
+        StructuralShift(sheet.name, isRow = true, at = at - 1, delta = count),
         s"Inserted $count row(s) before row $at on '${sheet.name.value}'",
         outputPath,
         config,
@@ -1851,6 +1919,7 @@ object WriteCommands:
       result <- writeStructural(
         wb,
         edited,
+        StructuralShift(sheet.name, isRow = true, at = at - 1, delta = -count),
         s"Deleted $count row(s) from row $at on '${sheet.name.value}'",
         outputPath,
         config,
@@ -1878,6 +1947,7 @@ object WriteCommands:
       result <- writeStructural(
         wb,
         edited,
+        StructuralShift(sheet.name, isRow = false, at = at0, delta = n),
         s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'",
         outputPath,
         config,
@@ -1905,6 +1975,7 @@ object WriteCommands:
       result <- writeStructural(
         wb,
         edited,
+        StructuralShift(sheet.name, isRow = false, at = at0, delta = -n),
         s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'",
         outputPath,
         config,
