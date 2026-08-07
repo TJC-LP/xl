@@ -1,6 +1,6 @@
 package com.tjclp.xl.io
 
-import cats.effect.IO
+import cats.effect.{IO, Ref}
 import munit.CatsEffectSuite
 
 import java.io.{ByteArrayOutputStream, FileInputStream, FileOutputStream}
@@ -1505,8 +1505,9 @@ class ExcelIOSpec extends CatsEffectSuite:
    * worker JVM shares, so a raw before/after count of `xl-stream-*` entries also counts sibling
    * suites' fixtures. The `.xml` suffix narrows that to the spill pattern — sibling *fixtures* are
    * `.xlsx` — but does not isolate it: any suite calling this same writer (StreamingSstSpec, and
-   * the xl-cli streaming/import commands in their own module JVM) spills under the same name.
-   * Settling the diff in [[assertNoSpillLeak]] is what makes the observation trustworthy.
+   * the xl-cli streaming/import commands in their own module JVM) spills under the same name. So
+   * this is a discovery scan only: [[sampleSpills]] narrows it to what appeared during our own
+   * write, and [[assertSpillsCleared]] watches those exact paths rather than the directory.
    */
   private def spillFiles: IO[Set[Path]] = IO.blocking {
     import scala.jdk.CollectionConverters.*
@@ -1523,57 +1524,67 @@ class ExcelIOSpec extends CatsEffectSuite:
   }
 
   /**
-   * Assert the writer left no spill file behind. A neighbouring worker's in-flight spill also lands
-   * in the diff, so re-observe until it clears: a foreign file is released when that write ends,
-   * whereas a leak persists for the whole budget and still fails. The bracket release is
-   * synchronous with stream termination, so this only trades away detection of cleanup drifting
-   * into a late async fiber — not detection of a leak.
+   * Record the spills that appeared since `before` — i.e. this write's own, since the writer
+   * creates its temp file at bracket-acquire, ahead of the first row. Sampling repeatedly keeps the
+   * record honest if the writer ever spills more than once per write.
    *
-   * The budget is wall-clock against a monotonic deadline, not a sleep count: each scan reads a
-   * directory that parallel workers are actively churning, so counting only the sleeps would let a
-   * slow `/tmp` push the real elapsed time toward munit's timeout and degrade the failure into a
-   * bare timeout — losing the leaked path this reports. A scan that loses a race with a concurrent
-   * delete is indistinguishable from "not settled yet", so it retries rather than erroring.
+   * A scan racing a concurrent delete must never take the write down with it: recovering to "saw
+   * nothing this time" leaves the positive control to fail loudly on the empty record instead of
+   * the test dying on a `DirectoryIteratorException` that has nothing to do with cleanup.
    */
-  private def assertNoSpillLeak(
-    before: Set[Path],
+  private def sampleSpills(before: Set[Path], into: Ref[IO, Set[Path]]): IO[Unit] =
+    spillFiles.attempt.flatMap {
+      case Right(now) => into.update(_ ++ (now -- before))
+      case Left(_) => IO.unit
+    }
+
+  /**
+   * Assert the writer deleted the spills it created. Watching those exact paths — not the diff of a
+   * directory several worker JVMs are churning — is what keeps this honest: a foreign spill has to
+   * be in flight at one sampling instant AND outlive the budget to interfere, rather than merely
+   * overlapping the window.
+   *
+   * The bracket release is synchronous with stream termination, so the happy path settles on the
+   * first look and the budget only covers that residual case; a leak burns the whole budget and
+   * still fails. What this trades away is detection of cleanup drifting into a late async fiber —
+   * not detection of a leak. The budget is wall-clock against a monotonic deadline rather than a
+   * sleep count, so a slow filesystem cannot stretch it toward munit's timeout and degrade the
+   * failure into a bare timeout, losing the paths reported here.
+   */
+  private def assertSpillsCleared(
+    watched: Set[Path],
     clue: String,
-    budget: FiniteDuration = 10.seconds
+    budget: FiniteDuration = 2.seconds
   ): IO[Unit] =
     IO.monotonic.flatMap { start =>
-      lazy val loop: IO[Unit] = spillFiles.attempt.flatMap { observed =>
-        val unsettled = observed match
-          case Right(after) =>
-            val leaked = after -- before
-            Option.when(leaked.nonEmpty)(
-              s"$clue — still present after $budget (a concurrent foreign spill can also land " +
-                s"here): ${leaked.map(_.getFileName.toString).toSeq.sorted.mkString(", ")}"
-            )
-          case Left(err) =>
-            Some(s"$clue — spill directory could not be scanned for $budget: $err")
-
-        unsettled.fold(IO.unit) { detail =>
+      lazy val loop: IO[Unit] = IO.blocking(watched.filter(Files.exists(_))).flatMap { present =>
+        if present.isEmpty then IO.unit
+        else
           IO.monotonic.flatMap { now =>
-            if now - start >= budget then IO(fail(detail))
+            if now - start >= budget then
+              IO(
+                fail(
+                  s"$clue — still present after $budget: " +
+                    present.map(_.getFileName.toString).toSeq.sorted.mkString(", ")
+                )
+              )
             else IO.sleep(spillPoll) *> loop
           }
-        }
       }
       loop
     }
 
-  test("assertNoSpillLeak names a spill that outlives its budget") {
-    // Half of the standing guard: the helper must still FAIL, and name the file, when something
-    // matching the pattern never clears — otherwise it could regress into a no-op that reports
-    // nothing while the writer leaks. (That the pattern still matches the WRITER is the other
-    // half, pinned by the positive control in the cleanup test below.)
+  test("assertSpillsCleared names a spill that outlives its budget") {
+    // Half of the standing guard: the helper must still FAIL, and name the file, when a watched
+    // spill never clears — otherwise it could regress into a no-op that reports nothing while the
+    // writer leaks. (That the filter still finds the WRITER's spill is the other half, pinned by
+    // the positive control in both cleanup tests below.)
     IO.blocking {
       val p = Files.createTempFile("xl-stream-", ".xml")
       p.toFile.deleteOnExit()
       p
     }.flatMap { planted =>
-      spillFiles
-        .flatMap(before => assertNoSpillLeak(before - planted, "planted spill", 200.millis).attempt)
+      assertSpillsCleared(Set(planted), "planted spill", 200.millis).attempt
         .map { result =>
           assert(
             result.left.exists(_.getMessage.contains(planted.getFileName.toString)),
@@ -1590,21 +1601,21 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     for
       before <- spillFiles
-      // Positive control: pin the filter to the WRITER, not to itself. The spill is created at
-      // bracket-acquire, before the first row is pulled, so it is on disk mid-stream. Without this,
-      // moving the writer's spill name or location (a plausible outcome of #514) would leave the
-      // cleanup assertion observing nothing and passing vacuously.
+      // Positive control: tie the filter to the writer rather than to itself, so moving the spill's
+      // name or location (a plausible outcome of #514) fails here instead of quietly leaving the
+      // cleanup assertion watching an empty set. Strictly it says "a spill matching the filter
+      // appeared mid-write" — a sibling JVM's in-flight spill would satisfy it too — but every
+      // producer of this pattern is this same writer, so a rename moves them all and this still
+      // bites.
       spilled <- IO.ref(Set.empty[Path])
       rows = fs2.Stream
         .range(1, 101)
-        .evalTap(i =>
-          IO.whenA(i == 50)(spillFiles.flatMap(s => spilled.update(_ ++ (s -- before))))
-        )
+        .evalTap(i => IO.whenA(i % 25 == 0)(sampleSpills(before, spilled)))
         .map(i => RowData(i, Map(0 -> CellValue.Number(i))))
       _ <- rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain
       seen <- spilled.get
       _ <- IO(assert(seen.nonEmpty, "writer should spill a file matching the filter mid-write"))
-      _ <- assertNoSpillLeak(before, "Temp files should be cleaned up after write")
+      _ <- assertSpillsCleared(seen, "Temp files should be cleaned up after write")
     yield ()
   }
 
@@ -1612,17 +1623,22 @@ class ExcelIOSpec extends CatsEffectSuite:
     val excel = ExcelIO.instance[IO]
     val path = dir.resolve("error-cleanup-test.xlsx")
 
-    // Create a stream that fails mid-way
-    val rows = fs2.Stream.range(1, 51).map { i =>
-      if i == 25 then throw new RuntimeException("Simulated failure")
-      RowData(i, Map(0 -> CellValue.Number(i)))
-    }
-
     for
       before <- spillFiles
+      spilled <- IO.ref(Set.empty[Path])
+      // Same positive control, sampled before the row-25 failure.
+      rows = fs2.Stream
+        .range(1, 51)
+        .evalTap(i => IO.whenA(i % 5 == 0)(sampleSpills(before, spilled)))
+        .map { i =>
+          if i == 25 then throw new RuntimeException("Simulated failure")
+          RowData(i, Map(0 -> CellValue.Number(i)))
+        }
       result <- rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.attempt
       _ <- IO(assert(result.isLeft, "Should have failed"))
-      _ <- assertNoSpillLeak(before, "Temp files should be cleaned up even on error")
+      seen <- spilled.get
+      _ <- IO(assert(seen.nonEmpty, "writer should spill a file matching the filter mid-write"))
+      _ <- assertSpillsCleared(seen, "Temp files should be cleaned up even on error")
     yield ()
   }
 

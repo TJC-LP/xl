@@ -202,17 +202,17 @@
 
 ### Test Coverage
 
-**5,448 tests** (verified via `./mill __.test`, 2026-08-07):
+**5,450 tests** (verified via `./mill __.test`, 2026-08-07):
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 1571 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1104 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 684 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 406 | command parsing, batch ops, view/eval/export, streaming mode |
-| xl-cats-effect | 110 | streaming I/O, O(1) memory verification, SAX/StAX write |
-| xl-agent | 102 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 19 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl-evaluator | 2100 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1283 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1047 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 727 | command parsing, batch ops, view/eval/export, streaming mode |
+| xl-cats-effect | 144 | streaming I/O, O(1) memory verification, SAX/StAX write |
+| xl-agent | 122 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
+| xl (prelude) | 27 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
