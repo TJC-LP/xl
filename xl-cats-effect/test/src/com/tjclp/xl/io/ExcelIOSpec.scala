@@ -7,6 +7,7 @@ import java.io.{ByteArrayOutputStream, FileInputStream, FileOutputStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
+import scala.concurrent.duration.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
@@ -1492,49 +1493,58 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
+  /**
+   * The auto-detect writer spills its phase-1 body to `java.io.tmpdir`, which every parallel test
+   * worker JVM shares, so a raw before/after count of `xl-stream-*` entries also counts sibling
+   * suites' fixtures. Narrow the observation to what this writer alone creates: the `.xml` spill
+   * pattern (sibling fixtures are `.xlsx`).
+   */
+  private def spillFiles: IO[Set[Path]] = IO {
+    import scala.jdk.CollectionConverters.*
+    val entries = Files.list(Path.of(System.getProperty("java.io.tmpdir")))
+    try
+      entries
+        .iterator()
+        .asScala
+        .filter { p =>
+          val name = p.getFileName.toString
+          name.startsWith("xl-stream-") && name.endsWith(".xml")
+        }
+        .toSet
+    finally entries.close()
+  }
+
+  /**
+   * Assert the writer left no spill file behind. A neighbouring worker's in-flight spill can also
+   * land in the diff, so re-observe until it clears: a foreign file is released when that write
+   * ends, whereas a genuine leak persists and still fails the assertion.
+   */
+  private def assertNoSpillLeak(before: Set[Path], clue: String, retries: Int = 40): IO[Unit] =
+    spillFiles.flatMap { after =>
+      val leaked = after -- before
+      if leaked.isEmpty then IO.unit
+      else if retries <= 0 then
+        IO(fail(s"$clue: ${leaked.map(_.getFileName.toString).toSeq.sorted.mkString(", ")}"))
+      else IO.sleep(50.millis) *> assertNoSpillLeak(before, clue, retries - 1)
+    }
+
   tempDir.test("writeStreamWithAutoDetect: temp files cleaned up after write") { dir =>
     val excel = ExcelIO.instance[IO]
     val path = dir.resolve("cleanup-test.xlsx")
-
-    // Get temp dir before write
-    val tempDir = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"))
-
-    // Count xl-stream temp files before
-    val countTempFilesBefore = IO {
-      import scala.jdk.CollectionConverters.*
-      java.nio.file.Files
-        .list(tempDir)
-        .iterator()
-        .asScala
-        .count(p => p.getFileName.toString.startsWith("xl-stream-"))
-    }
 
     // Write some data using auto-detect (which creates temp files)
     val rows = fs2.Stream.range(1, 101).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
 
     for
-      before <- countTempFilesBefore
+      before <- spillFiles
       _ <- rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain
-      after <- countTempFilesBefore
-    yield
-      // Should have same number of temp files (all cleaned up)
-      assertEquals(after, before, "Temp files should be cleaned up after write")
+      _ <- assertNoSpillLeak(before, "Temp files should be cleaned up after write")
+    yield ()
   }
 
   tempDir.test("writeStreamWithAutoDetect: temp files cleaned up on error") { dir =>
     val excel = ExcelIO.instance[IO]
     val path = dir.resolve("error-cleanup-test.xlsx")
-
-    val tempDir = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"))
-
-    val countTempFilesBefore = IO {
-      import scala.jdk.CollectionConverters.*
-      java.nio.file.Files
-        .list(tempDir)
-        .iterator()
-        .asScala
-        .count(p => p.getFileName.toString.startsWith("xl-stream-"))
-    }
 
     // Create a stream that fails mid-way
     val rows = fs2.Stream.range(1, 51).map { i =>
@@ -1543,14 +1553,11 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
 
     for
-      before <- countTempFilesBefore
+      before <- spillFiles
       result <- rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.attempt
-      after <- countTempFilesBefore
-    yield
-      // Should have failed
-      assert(result.isLeft, "Should have failed")
-      // But temp files should still be cleaned up
-      assertEquals(after, before, "Temp files should be cleaned up even on error")
+      _ <- IO(assert(result.isLeft, "Should have failed"))
+      _ <- assertNoSpillLeak(before, "Temp files should be cleaned up even on error")
+    yield ()
   }
 
   // ========== Explicit Dimension Hint Tests ==========
