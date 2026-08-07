@@ -7,7 +7,6 @@ import java.io.{ByteArrayOutputStream, FileInputStream, FileOutputStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
-import scala.concurrent.duration.*
 import scala.util.Using
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
@@ -37,13 +36,17 @@ class ExcelIOSpec extends CatsEffectSuite:
         .forEach(Files.delete)
   )
 
+  /** Directory to drop a fixture-adjacent copy in, falling back to the working directory. */
+  private def fixtureDirOf(source: Path): Path =
+    Option(source.getParent).getOrElse(Path.of("."))
+
   /**
    * Copy `source` with one worksheet entry renamed. The copy lands beside its source — inside the
    * fixture directory, which the fixture deletes — rather than in the shared temp directory, where
    * `deleteOnExit` would strand it whenever a run ends abruptly.
    */
   private def remapWorksheetEntry(source: Path, from: String, to: String): Path =
-    val output = Files.createTempFile(source.getParent, "remap-", ".xlsx")
+    val output = Files.createTempFile(fixtureDirOf(source), "remap-", ".xlsx")
     val zipIn = new ZipInputStream(new FileInputStream(source.toFile))
     val zipOut = new ZipOutputStream(new FileOutputStream(output.toFile))
     zipOut.setLevel(1)
@@ -68,6 +71,30 @@ class ExcelIOSpec extends CatsEffectSuite:
         zipOut.putNextEntry(outEntry)
         zipOut.write(updatedData)
         zipOut.closeEntry()
+        zipIn.closeEntry()
+        entry = zipIn.getNextEntry
+    finally
+      zipIn.close()
+      zipOut.close()
+    output
+
+  /** Copy `source` beside itself without one zip entry, to provoke a reader warning. */
+  private def withoutZipEntry(source: Path, drop: String): Path =
+    val output = Files.createTempFile(fixtureDirOf(source), "stripped-", ".xlsx")
+    val zipIn = new ZipInputStream(new FileInputStream(source.toFile))
+    val zipOut = new ZipOutputStream(new FileOutputStream(output.toFile))
+    zipOut.setLevel(1)
+    try
+      var entry = zipIn.getNextEntry
+      while entry != null do
+        val data = readEntryBytes(zipIn)
+        if entry.getName != drop then
+          val outEntry = new ZipEntry(entry.getName)
+          outEntry.setTime(0L)
+          outEntry.setMethod(ZipEntry.DEFLATED)
+          zipOut.putNextEntry(outEntry)
+          zipOut.write(data)
+          zipOut.closeEntry()
         zipIn.closeEntry()
         entry = zipIn.getNextEntry
     finally
@@ -1624,13 +1651,59 @@ class ExcelIOSpec extends CatsEffectSuite:
         .drain
         .attempt
         .map { result =>
-          val message = result.left.toOption.fold("")(e => s"${e.getMessage}")
           assert(result.isLeft, "a missing spill directory should fail the write")
+          val message = result.left.toOption.flatMap(e => Option(e.getMessage)).getOrElse("")
           assert(
             message.contains("spill directory") && message.contains(missing.toString),
             s"failure should name the spill directory setting, got: $message"
           )
         }
+  }
+
+  tempDir.test("withSpillDir: unwinds the spills it already took when acquire fails partway") {
+    dir =>
+      // Acquire is all-or-nothing and bracket's release never runs for a failed acquire, so the
+      // sheets already spilled have to be unwound by hand. Overriding spillDir per call is the
+      // seam: the first two sheets get a real directory, the third a missing one, which is what a
+      // volume filling up mid-acquire looks like from here.
+      val good = Files.createDirectory(dir.resolve("spill"))
+      val missing = dir.resolve("gone")
+      var calls = 0
+      val excel = new ExcelIO[IO](_ => IO.unit):
+        override def spillDir: Option[Path] =
+          calls += 1
+          if calls <= 2 then Some(good) else Some(missing)
+
+      def rows = fs2.Stream.range(1, 6).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+      val sheets = Seq("A" -> rows, "B" -> rows, "C" -> rows)
+
+      for
+        result <- excel.writeStreamsSeqWithAutoDetect(dir.resolve("partial.xlsx"), sheets).attempt
+        _ <- IO(assert(result.isLeft, "a spill that cannot be created should fail the write"))
+        _ <- assertEmpty(good, "spills taken before the failure should be unwound")
+      yield ()
+  }
+
+  tempDir.test("withSpillDir: keeps the warning handler and takes the last directory set") { dir =>
+    // The reason withSpillDir rebuilds from `warningHandler` rather than from a fresh instance;
+    // nothing else would notice if that were simplified away.
+    val spill = Files.createDirectory(dir.resolve("spill"))
+    val source = dir.resolve("warns.xlsx")
+
+    for
+      seen <- IO.ref(Vector.empty[XlsxReader.Warning])
+      plain = ExcelIO.instance[IO]
+      _ <- plain.write(Workbook(Sheet("Data").put(ref"A1", CellValue.Text("x"))), source)
+      stripped <- IO.blocking(withoutZipEntry(source, "xl/styles.xml"))
+      excel = ExcelIO.withWarnings[IO](w => seen.update(_ :+ w)).withSpillDir(spill)
+      _ <- excel.read(stripped)
+      warnings <- seen.get
+      _ <- IO(assert(warnings.nonEmpty, "withSpillDir should carry the warning handler over"))
+      // Chaining replaces rather than accumulates, and the companion shorthand agrees.
+      _ <- IO(assertEquals(plain.withSpillDir(dir).withSpillDir(spill).spillDir, Some(spill)))
+      _ <- IO(assertEquals(ExcelIO.withSpillDir[IO](spill).spillDir, Some(spill)))
+      _ <- IO(assertEquals(plain.spillDir, None))
+    yield ()
   }
 
   tempDir.test("default spill directory is java.io.tmpdir") { dir =>

@@ -61,8 +61,13 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    *
    * Instances are cheap, so this doubles as the per-call form: build one at the call site that
    * needs a different directory and leave the rest of the program on the default.
+   *
+   * Carries the warning handler over, but nothing else: the result is a plain `ExcelIO`, so a
+   * subclass calling this would silently lose its own overrides. Subclasses should override
+   * [[spillDir]] directly instead — hence `final`, so that trap cannot be widened by overriding
+   * this method too.
    */
-  def withSpillDir(dir: Path): ExcelIO[F] =
+  final def withSpillDir(dir: Path): ExcelIO[F] =
     new ExcelIO[F](warningHandler):
       override def spillDir: Option[Path] = Some(dir)
 
@@ -1115,14 +1120,29 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         (name, idx + 1, rows)
       }
 
-      // Create temp file + bounds tracker for each sheet
+      // Create temp file + bounds tracker for each sheet.
+      //
+      // Acquire is all-or-nothing: bracket's release never runs for a failed acquire, so a spill
+      // that cannot be created partway through — a full or quota-bound volume, a directory the
+      // process may traverse but not write — would strand the sheets already spilled. Unwind them
+      // here before rethrowing. Only reachable once the directory is the caller's choice; a broken
+      // java.io.tmpdir fails on the first sheet, with nothing yet to clean up.
       Stream
         .bracket(
           Sync[F].delay {
-            sheetsWithIndices.map { case (name, sheetIndex, _) =>
-              val tempFile = createSpillFile(s"xl-stream-$sheetIndex-")
-              val bounds = new BoundsAccumulator()
-              (name, sheetIndex, tempFile, bounds)
+            sheetsWithIndices.foldLeft(Seq.empty[(String, Int, Path, BoundsAccumulator)]) {
+              case (acquired, (name, sheetIndex, _)) =>
+                try
+                  acquired :+ ((
+                    name,
+                    sheetIndex,
+                    createSpillFile(s"xl-stream-$sheetIndex-"),
+                    new BoundsAccumulator()
+                  ))
+                catch
+                  case e: Throwable =>
+                    acquired.foreach { case (_, _, tempFile, _) => JFiles.deleteIfExists(tempFile) }
+                    throw e
             }
           }
         ) { resources =>

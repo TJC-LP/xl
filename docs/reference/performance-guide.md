@@ -119,6 +119,11 @@ bytes through it, so on a container with a tiny `/tmp` this is the difference be
 `No space left on device`. Single-pass `writeStream`/`writeStreamsSeq` never spill; give them an
 explicit `dimension` when you know the bounds.
 
+The scratch file holds the worksheet body in cleartext until the write ends. It is created
+`rw-------` on POSIX either way, but redirecting it makes the *directory's* permissions your
+call — and the natural targets for this setting (a shared scratch mount, a big fast volume) are
+often group- or world-traversable. Prefer a directory the process owns.
+
 ---
 
 ### Streaming Read Mode
