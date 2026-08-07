@@ -119,10 +119,13 @@ bytes through it, so on a container with a tiny `/tmp` this is the difference be
 `No space left on device`. Single-pass `writeStream`/`writeStreamsSeq` never spill; give them an
 explicit `dimension` when you know the bounds.
 
-The scratch file holds the worksheet body in cleartext until the write ends. It is created
-`rw-------` on POSIX either way, but redirecting it makes the *directory's* permissions your
-call — and the natural targets for this setting (a shared scratch mount, a big fast volume) are
-often group- or world-traversable. Prefer a directory the process owns.
+Two things you inherit by redirecting it. The scratch file holds the worksheet body in cleartext
+until the write ends; it is created `rw-------` on POSIX either way, but the *directory's*
+permissions become your call, and the natural targets for this setting (a shared scratch mount, a
+big fast volume) are often group- or world-traversable — prefer a directory the process owns. And
+the spill is deleted by the write's own bracket, not registered with `deleteOnExit` (which leaks in
+long-lived JVMs), so a `SIGKILL` or OOM-kill mid-write strands it: in `java.io.tmpdir` the OS
+eventually sweeps it, on a persistent volume it stays until you do.
 
 ---
 

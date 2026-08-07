@@ -215,14 +215,14 @@ As of 0.12.6 (per-module `./mill <module>.test`; macros are part of xl-core — 
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 1599 |
-| xl-core | 1104 |
-| xl-ooxml | 702 |
-| xl-cli | 448 |
-| xl-cats-effect | 111 |
-| xl-agent | 102 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 19 |
-| **Total** | **4,085** |
+| xl-evaluator | 2100 |
+| xl-core | 1283 |
+| xl-ooxml | 1047 |
+| xl-cli | 727 |
+| xl-cats-effect | 149 |
+| xl-agent | 122 |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 27 |
+| **Total** | **5,455** |
 
 ## Test Quality Metrics
 
