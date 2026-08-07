@@ -22,7 +22,7 @@ class StreamingFormulaLeadingEqualsSpec extends CatsEffectSuite:
   private val excel = ExcelIO.instance[IO]
 
   private def tempXlsx(label: String): Path =
-    val p = Files.createTempFile(s"xl-stream-leading-eq-$label-", ".xlsx")
+    val p = Files.createTempFile(s"xl-fixture-leading-eq-$label-", ".xlsx")
     p.toFile.deleteOnExit()
     p
 

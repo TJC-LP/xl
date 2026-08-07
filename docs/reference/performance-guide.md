@@ -104,6 +104,21 @@ Stream.range(1, 1_000_001)
 - ❌ No SST (larger files if many duplicate strings).
 - ❌ Minimal styles only (no rich formatting at scale).
 
+**Where the scratch file goes**: the auto-detect variants (`writeStreamWithAutoDetect`,
+`writeStreamsSeqWithAutoDetect`) buy their up-front `<dimension>` with a two-pass write, spilling
+the worksheet body to a scratch file — one per sheet — and deleting it when the write ends, success
+or failure. It lands in `java.io.tmpdir` by default. Redirect it when that directory is small,
+read-only, or slower than the output volume:
+
+```scala
+val excel = ExcelIO.instance[IO].withSpillDir(fastVolume)  // must already exist
+```
+
+Constant-memory holds either way — the spill is disk, not heap — but a 1M-row write moves real
+bytes through it, so on a container with a tiny `/tmp` this is the difference between working and
+`No space left on device`. Single-pass `writeStream`/`writeStreamsSeq` never spill; give them an
+explicit `dimension` when you know the bounds.
+
 ---
 
 ### Streaming Read Mode
