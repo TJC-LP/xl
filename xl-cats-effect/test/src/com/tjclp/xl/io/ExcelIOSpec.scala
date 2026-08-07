@@ -1497,6 +1497,9 @@ class ExcelIOSpec extends CatsEffectSuite:
 
   private val spillPoll: FiniteDuration = 50.millis
 
+  /** Resolved once, like the JDK's own `TempFileHelper.tmpdir` static that the writer spills to. */
+  private val spillDir: Path = Path.of(System.getProperty("java.io.tmpdir"))
+
   /**
    * The auto-detect writer spills its phase-1 body to `java.io.tmpdir`, which every parallel test
    * worker JVM shares, so a raw before/after count of `xl-stream-*` entries also counts sibling
@@ -1507,7 +1510,7 @@ class ExcelIOSpec extends CatsEffectSuite:
    */
   private def spillFiles: IO[Set[Path]] = IO.blocking {
     import scala.jdk.CollectionConverters.*
-    Using.resource(Files.list(Path.of(System.getProperty("java.io.tmpdir")))) { entries =>
+    Using.resource(Files.list(spillDir)) { entries =>
       entries
         .iterator()
         .asScala
@@ -1525,19 +1528,55 @@ class ExcelIOSpec extends CatsEffectSuite:
    * whereas a leak persists for the whole budget and still fails. The bracket release is
    * synchronous with stream termination, so this only trades away detection of cleanup drifting
    * into a late async fiber — not detection of a leak.
+   *
+   * The budget is wall-clock against a monotonic deadline, not a sleep count: each scan reads a
+   * directory that parallel workers are actively churning, so counting only the sleeps would let a
+   * slow `/tmp` push the real elapsed time toward munit's timeout and degrade the failure into a
+   * bare timeout — losing the leaked path this reports. A scan that loses a race with a concurrent
+   * delete is indistinguishable from "not settled yet", so it retries rather than erroring.
    */
   private def assertNoSpillLeak(
     before: Set[Path],
     clue: String,
     budget: FiniteDuration = 10.seconds
   ): IO[Unit] =
-    spillFiles.flatMap { after =>
-      val leaked = after -- before
-      if leaked.isEmpty then IO.unit
-      else if budget <= Duration.Zero then
-        IO(fail(s"$clue: ${leaked.map(_.getFileName.toString).toSeq.sorted.mkString(", ")}"))
-      else IO.sleep(spillPoll) *> assertNoSpillLeak(before, clue, budget - spillPoll)
+    IO.monotonic.flatMap { start =>
+      lazy val loop: IO[Unit] = spillFiles.attempt.flatMap { observed =>
+        val unsettled = observed match
+          case Right(after) =>
+            val leaked = after -- before
+            Option.when(leaked.nonEmpty)(
+              leaked.map(_.getFileName.toString).toSeq.sorted.mkString(", ")
+            )
+          case Left(err) => Some(s"spill directory could not be scanned: $err")
+
+        unsettled.fold(IO.unit) { detail =>
+          IO.monotonic.flatMap { now =>
+            if now - start >= budget then
+              IO(
+                fail(
+                  s"$clue — still present after $budget " +
+                    s"(a concurrent foreign spill can also land here): $detail"
+                )
+              )
+            else IO.sleep(spillPoll) *> loop
+          }
+        }
+      }
+      loop
     }
+
+  test("assertNoSpillLeak reports a spill that outlives its budget") {
+    // Standing guard on the helper itself: if its filter ever drifts off the writer's spill name,
+    // both cleanup tests below would pass vacuously while the writer leaks. Plant a file matching
+    // the pattern, hide it from `before`, and require the helper to report it.
+    IO.blocking(Files.createTempFile("xl-stream-", ".xml")).flatMap { planted =>
+      spillFiles
+        .flatMap(before => assertNoSpillLeak(before - planted, "planted spill", 200.millis).attempt)
+        .map(result => assert(result.isLeft, "helper should report a spill that never clears"))
+        .guarantee(IO.blocking(Files.deleteIfExists(planted)).void)
+    }
+  }
 
   tempDir.test("writeStreamWithAutoDetect: temp files cleaned up after write") { dir =>
     val excel = ExcelIO.instance[IO]
