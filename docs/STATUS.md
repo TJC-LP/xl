@@ -202,7 +202,7 @@
 
 ### Test Coverage
 
-**5,454 tests** (verified via `./mill __.test`, 2026-08-07):
+**5,455 tests** (verified via `./mill __.test`, 2026-08-07):
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -210,7 +210,7 @@
 | xl-core | 1283 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1047 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 727 | command parsing, batch ops, view/eval/export, streaming mode |
-| xl-cats-effect | 148 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-cats-effect | 149 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 122 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 27 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |

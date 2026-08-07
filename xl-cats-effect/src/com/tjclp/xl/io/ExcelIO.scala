@@ -48,6 +48,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    *
    * A member rather than a constructor parameter so that adding the setting did not change this
    * class's constructor signature, which consumers compiled against an earlier release link to.
+   * Consulted exactly once per spilled sheet, so an override that varies between reads decides one
+   * sheet at a time rather than being sampled twice for the same file.
    */
   def spillDir: Option[Path] = None
 
@@ -78,13 +80,16 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * the cause is not mistaken for a problem with the workbook being written.
    */
   private def createSpillFile(prefix: String): Path =
+    // Read the setting once: it is overridable, so a second read could report a directory other
+    // than the one that actually failed — exactly the confusion this message exists to prevent.
+    val target = spillDir
     try
-      spillDir match
+      target match
         case Some(dir) => JFiles.createTempFile(dir, prefix, ".xml")
         case None => JFiles.createTempFile(prefix, ".xml")
     catch
       case e: java.io.IOException =>
-        val where = spillDir.fold("the default temp directory (java.io.tmpdir)")(d =>
+        val where = target.fold("the default temp directory (java.io.tmpdir)")(d =>
           s"the configured spill directory ($d)"
         )
         throw new java.io.IOException(
@@ -1141,7 +1146,12 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
                   ))
                 catch
                   case e: Throwable =>
-                    acquired.foreach { case (_, _, tempFile, _) => JFiles.deleteIfExists(tempFile) }
+                    // Best-effort: the pathological filesystem that failed the acquire is the one
+                    // most likely to fail these deletes too, and the cause must survive that.
+                    acquired.foreach { case (_, _, tempFile, _) =>
+                      try JFiles.deleteIfExists(tempFile)
+                      catch case d: Throwable => e.addSuppressed(d)
+                    }
                     throw e
             }
           }

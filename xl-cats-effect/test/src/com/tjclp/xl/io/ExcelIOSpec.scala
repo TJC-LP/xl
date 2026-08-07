@@ -5,7 +5,8 @@ import munit.CatsEffectSuite
 
 import java.io.{ByteArrayOutputStream, FileInputStream, FileOutputStream}
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.{FileSystems, Files, Path}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
 import scala.util.Using
 import com.tjclp.xl.{*, given}
@@ -36,9 +37,11 @@ class ExcelIOSpec extends CatsEffectSuite:
         .forEach(Files.delete)
   )
 
-  /** Directory to drop a fixture-adjacent copy in, falling back to the working directory. */
+  /** Directory to drop a fixture-adjacent copy in. */
   private def fixtureDirOf(source: Path): Path =
-    Option(source.getParent).getOrElse(Path.of("."))
+    Option(source.getParent).getOrElse(
+      fail(s"expected a fixture-local source so the copy is torn down with it, got: $source")
+    )
 
   /**
    * Copy `source` with one worksheet entry renamed. The copy lands beside its source — inside the
@@ -1646,7 +1649,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       val rows = fs2.Stream.range(1, 11).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
 
       rows
-        .through(excel.writeStreamWithAutoDetect(dir.resolve("unwritable.xlsx"), "Data"))
+        .through(excel.writeStreamWithAutoDetect(dir.resolve("missing-spill-dir.xlsx"), "Data"))
         .compile
         .drain
         .attempt
@@ -1655,6 +1658,54 @@ class ExcelIOSpec extends CatsEffectSuite:
           val message = result.left.toOption.flatMap(e => Option(e.getMessage)).getOrElse("")
           assert(
             message.contains("spill directory") && message.contains(missing.toString),
+            s"failure should name the spill directory setting, got: $message"
+          )
+        }
+  }
+
+  tempDir.test("withSpillDir: an unwritable directory fails the same way a missing one does") {
+    dir =>
+      // The read-only case the feature exists for — a container mounting its scratch volume ro —
+      // reaches createSpillFile as an AccessDeniedException rather than NoSuchFileException, so it
+      // needs its own coverage. Teardown restores write permission or the fixture cannot delete it.
+      val locked = Files.createDirectory(dir.resolve("locked"))
+      val rows = fs2.Stream.range(1, 11).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+
+      val readOnly = IO.blocking {
+        assume(
+          FileSystems.getDefault.supportedFileAttributeViews().contains("posix"),
+          "needs POSIX permissions to make a directory unwritable"
+        )
+        Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("r-x------"))
+        // root ignores the mode bits, so there would be nothing to observe.
+        assume(!Files.isWritable(locked), "running as a user that can write anyway (root?)")
+      }
+      val restore = IO
+        .blocking(
+          Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("rwx------"))
+        )
+        .void
+
+      readOnly
+        .flatMap { _ =>
+          fs2.Stream
+            .emits(rows.compile.toVector)
+            .through(
+              ExcelIO
+                .instance[IO]
+                .withSpillDir(locked)
+                .writeStreamWithAutoDetect(dir.resolve("locked-spill.xlsx"), "Data")
+            )
+            .compile
+            .drain
+            .attempt
+        }
+        .guarantee(restore)
+        .map { result =>
+          assert(result.isLeft, "an unwritable spill directory should fail the write")
+          val message = result.left.toOption.flatMap(e => Option(e.getMessage)).getOrElse("")
+          assert(
+            message.contains("spill directory") && message.contains(locked.toString),
             s"failure should name the spill directory setting, got: $message"
           )
         }
