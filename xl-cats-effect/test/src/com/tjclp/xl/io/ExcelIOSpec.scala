@@ -1642,6 +1642,37 @@ class ExcelIOSpec extends CatsEffectSuite:
     yield ()
   }
 
+  tempDir.test("writeStreamsSeqWithAutoDetect: per-sheet temp files cleaned up on error") { dir =>
+    val excel = ExcelIO.instance[IO]
+    val path = dir.resolve("multi-error-cleanup.xlsx")
+
+    // The multi-sheet bracket acquires one spill per sheet up front and releases them together —
+    // the shape where partial deletion hides. Failing inside the second sheet leaves the first
+    // sheet's spill fully written and the second's half-written, so both must still go.
+    for
+      before <- spillFiles
+      spilled <- IO.ref(Set.empty[Path])
+      sheet1 = fs2.Stream
+        .range(1, 21)
+        .evalTap(i => IO.whenA(i % 5 == 0)(sampleSpills(before, spilled)))
+        .map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+      sheet2 = fs2.Stream
+        .range(1, 21)
+        .evalTap(i => IO.whenA(i % 5 == 0)(sampleSpills(before, spilled)))
+        .map { i =>
+          if i == 10 then throw new RuntimeException("Simulated failure")
+          RowData(i, Map(0 -> CellValue.Number(i)))
+        }
+      result <- excel
+        .writeStreamsSeqWithAutoDetect(path, Seq("First" -> sheet1, "Second" -> sheet2))
+        .attempt
+      _ <- IO(assert(result.isLeft, "Should have failed"))
+      seen <- spilled.get
+      _ <- IO(assert(seen.size >= 2, s"writer should spill one file per sheet, saw: $seen"))
+      _ <- assertSpillsCleared(seen, "Per-sheet temp files should be cleaned up even on error")
+    yield ()
+  }
+
   // ========== Explicit Dimension Hint Tests ==========
 
   tempDir.test("writeStream: explicit dimension hint produces dimension element") { dir =>
