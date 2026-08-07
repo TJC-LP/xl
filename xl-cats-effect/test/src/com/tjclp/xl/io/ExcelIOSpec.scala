@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
 import scala.concurrent.duration.*
+import scala.util.Using
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
@@ -38,6 +39,7 @@ class ExcelIOSpec extends CatsEffectSuite:
 
   private def remapWorksheetEntry(source: Path, from: String, to: String): Path =
     val output = Files.createTempFile("xl-stream-remap", ".xlsx")
+    output.toFile.deleteOnExit()
     val zipIn = new ZipInputStream(new FileInputStream(source.toFile))
     val zipOut = new ZipOutputStream(new FileOutputStream(output.toFile))
     zipOut.setLevel(1)
@@ -1493,16 +1495,19 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
+  private val spillPoll: FiniteDuration = 50.millis
+
   /**
    * The auto-detect writer spills its phase-1 body to `java.io.tmpdir`, which every parallel test
    * worker JVM shares, so a raw before/after count of `xl-stream-*` entries also counts sibling
-   * suites' fixtures. Narrow the observation to what this writer alone creates: the `.xml` spill
-   * pattern (sibling fixtures are `.xlsx`).
+   * suites' fixtures. The `.xml` suffix narrows that to the spill pattern — sibling *fixtures* are
+   * `.xlsx` — but does not isolate it: any suite calling this same writer (StreamingSstSpec, and
+   * the xl-cli streaming/import commands in their own module JVM) spills under the same name.
+   * Settling the diff in [[assertNoSpillLeak]] is what makes the observation trustworthy.
    */
-  private def spillFiles: IO[Set[Path]] = IO {
+  private def spillFiles: IO[Set[Path]] = IO.blocking {
     import scala.jdk.CollectionConverters.*
-    val entries = Files.list(Path.of(System.getProperty("java.io.tmpdir")))
-    try
+    Using.resource(Files.list(Path.of(System.getProperty("java.io.tmpdir")))) { entries =>
       entries
         .iterator()
         .asScala
@@ -1511,21 +1516,27 @@ class ExcelIOSpec extends CatsEffectSuite:
           name.startsWith("xl-stream-") && name.endsWith(".xml")
         }
         .toSet
-    finally entries.close()
+    }
   }
 
   /**
-   * Assert the writer left no spill file behind. A neighbouring worker's in-flight spill can also
-   * land in the diff, so re-observe until it clears: a foreign file is released when that write
-   * ends, whereas a genuine leak persists and still fails the assertion.
+   * Assert the writer left no spill file behind. A neighbouring worker's in-flight spill also lands
+   * in the diff, so re-observe until it clears: a foreign file is released when that write ends,
+   * whereas a leak persists for the whole budget and still fails. The bracket release is
+   * synchronous with stream termination, so this only trades away detection of cleanup drifting
+   * into a late async fiber — not detection of a leak.
    */
-  private def assertNoSpillLeak(before: Set[Path], clue: String, retries: Int = 40): IO[Unit] =
+  private def assertNoSpillLeak(
+    before: Set[Path],
+    clue: String,
+    budget: FiniteDuration = 10.seconds
+  ): IO[Unit] =
     spillFiles.flatMap { after =>
       val leaked = after -- before
       if leaked.isEmpty then IO.unit
-      else if retries <= 0 then
+      else if budget <= Duration.Zero then
         IO(fail(s"$clue: ${leaked.map(_.getFileName.toString).toSeq.sorted.mkString(", ")}"))
-      else IO.sleep(50.millis) *> assertNoSpillLeak(before, clue, retries - 1)
+      else IO.sleep(spillPoll) *> assertNoSpillLeak(before, clue, budget - spillPoll)
     }
 
   tempDir.test("writeStreamWithAutoDetect: temp files cleaned up after write") { dir =>
