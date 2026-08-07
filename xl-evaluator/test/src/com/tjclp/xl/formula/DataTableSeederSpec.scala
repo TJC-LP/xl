@@ -939,6 +939,121 @@ class DataTableSeederSpec extends FunSuite:
     assertEquals(report.warnings, Vector.empty, "the outer rung held for every combination")
   }
 
+  test("GH-494: CHOOSE does not probe an unselected guarded value") {
+    // Review regression: axis 0 makes the third argument's standalone probe divide by zero, but
+    // CHOOSE selects 42 without evaluating that argument.
+    val report = seedReport(guardedColumnTable("CHOOSE(1,42,IFERROR(1/A1,0))"))
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.foreach(r => assertSeededNumber(out, r, 42.0, 1e-9))
+    assertEquals(report.warnings, Vector.empty, "the guarded CHOOSE value was never selected")
+  }
+
+  test("GH-494: IFS and SWITCH do not probe unselected guarded values") {
+    Vector(
+      "IFS(TRUE,42,FALSE,IFERROR(1/A1,0))",
+      "SWITCH(1,1,42,2,IFERROR(1/A1,0))"
+    ).foreach { formula =>
+      val report = seedReport(guardedColumnTable(formula))
+      val out = sheetNamed(report.workbook, "S")
+      interiorRefs.foreach(r => assertSeededNumber(out, r, 42.0, 1e-9))
+      assertEquals(report.warnings, Vector.empty, s"$formula must follow only its selected path")
+    }
+  }
+
+  test("GH-494: SWITCH scalar-collapses dynamic-array targets and cases") {
+    Vector(
+      "SWITCH(SEQUENCE(1),1,42,IFERROR(1/A1,0))",
+      "SWITCH(1,SEQUENCE(1),42,IFERROR(1/A1,0))"
+    ).foreach { formula =>
+      val report = seedReport(guardedColumnTable(formula))
+      val out = sheetNamed(report.workbook, "S")
+      interiorRefs.foreach(r => assertSeededNumber(out, r, 42.0, 1e-9))
+      assertEquals(report.warnings, Vector.empty, s"$formula must select 42, not its default")
+    }
+  }
+
+  test("GH-494: selected CHOOSE, IFS, and SWITCH guards still report") {
+    Vector(
+      "CHOOSE(1,IFERROR(1/A1,0),42)",
+      "IFS(TRUE,IFERROR(1/A1,0),FALSE,42)",
+      "SWITCH(1,1,IFERROR(1/A1,0),2,42)"
+    ).foreach { formula =>
+      val report = seedReport(guardedColumnTable(formula))
+      val out = sheetNamed(report.workbook, "S")
+      assertSeededNumber(out, ref"F10", 0.0, 1e-9)
+      assertSeededNumber(out, ref"F11", 1.0, 1e-9)
+      assertOneGuardFired(report.warnings, 1)
+    }
+  }
+
+  test("GH-494: IFS materializes a range condition before choosing its banked branch") {
+    val selected = seedReport(
+      guardedColumnTable(
+        "IFS(B1:B2,IFERROR(1/A1,0),TRUE,42)",
+        s => s.put(ref"B1", num(1)).put(ref"B2", num(0))
+      )
+    )
+    val selectedOut = sheetNamed(selected.workbook, "S")
+    assertSeededNumber(selectedOut, ref"F10", 0.0, 1e-9)
+    assertOneGuardFired(selected.warnings, 1)
+
+    val selectedAway = seedReport(
+      guardedColumnTable(
+        "IFS(B1:B2,IFERROR(1/A1,0),TRUE,42)",
+        s => s.put(ref"B1", num(0)).put(ref"B2", num(1))
+      )
+    )
+    val selectedAwayOut = sheetNamed(selectedAway.workbook, "S")
+    interiorRefs.foreach(r => assertSeededNumber(selectedAwayOut, r, 42.0, 1e-9))
+    assertEquals(
+      selectedAway.warnings,
+      Vector.empty,
+      "the guarded top-left branch was not selected"
+    )
+  }
+
+  test("GH-494: ISERR over #N/A is false and does not report a fired guard") {
+    val report = seedReport(
+      guardedColumnTable(
+        "IF(ISERR(D1),99,42)",
+        _.put(ref"D1", CellValue.Error(CellError.NA))
+      )
+    )
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.foreach(r => assertSeededNumber(out, r, 42.0, 1e-9))
+    assertEquals(report.warnings, Vector.empty, "ISERR excludes #N/A, so its TRUE arm was not used")
+  }
+
+  test("GH-494: ISERR still reports a non-#N/A error selected into its TRUE arm") {
+    val report = seedReport(guardedColumnTable("IF(ISERR(1/A1),99,42)"))
+    val out = sheetNamed(report.workbook, "S")
+    assertSeededNumber(out, ref"F10", 99.0, 1e-9)
+    assertSeededNumber(out, ref"F11", 42.0, 1e-9)
+    assertOneGuardFired(report.warnings, 1)
+  }
+
+  test("GH-494: an IFNA corner seeds NOTHING today — IFNA is absent from the roster") {
+    // Pins reality, not the desired behaviour. `IFNA` has no FunctionSpec (grep the registry: zero
+    // hits), so the corner fails to parse into a Call, every interior evaluation returns Left, and
+    // the tolerant acyclic lane leaves the whole grid uncached — with NO warning, because that lane
+    // emits no Skipped (#506). An ordinary Excel guard therefore produces an empty sensitivity grid
+    // in silence. Flip this to a fired-guard assertion when IFNA lands; the walk in
+    // `errorGuardFires` already handles it (IFNA accepts only #N/A) but is unreachable until then.
+    val report = seedReport(guardedColumnTable("IFNA(D1,42)", _.put(ref"D1", num(7))))
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.foreach { r =>
+      assertEquals(
+        out.cells.get(r).flatMap {
+          case Cell(_, CellValue.Formula(_, cached, _), _, _, _) => cached
+          case _ => None
+        },
+        None,
+        s"${r.toA1}: IFNA cannot evaluate, so nothing may be banked"
+      )
+    }
+    assertEquals(report.warnings, Vector.empty, "and today it is silent — see #506")
+  }
+
   test("GH-493: a cone cell that cannot be re-derived is reported, never silently FLAT") {
     // Review rework: B1 is axis-DEPENDENT (it reads the what-if input) so it enters the cone, but
     // its cross-sheet leg is unresolvable — the same Left any unsupported function produces. The

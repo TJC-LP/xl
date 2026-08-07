@@ -1136,12 +1136,18 @@ object WriteCommands:
     result: RecalcResult,
     cone: Map[SheetName, Set[ARef]]
   ): RecalcResult =
+    val cycles = result.cycles.filter { report =>
+      report.members.exists((sheet, ref) => cone.getOrElse(sheet, Set.empty[ARef]).contains(ref))
+    }
     result.copy(
       evaluated = result.evaluated.map { (name, cells) =>
         val scope = cone.getOrElse(name, Set.empty[ARef])
         name -> cells.filter((r, _) => scope.contains(r))
       },
-      errors = result.errors.filter(e => cone.getOrElse(e.sheet, Set.empty[ARef]).contains(e.ref))
+      errors = result.errors.filter(e => cone.getOrElse(e.sheet, Set.empty[ARef]).contains(e.ref)),
+      converged = cycles.forall(_.converged),
+      iterationsUsed = cycles.map(_.rounds).maxOption.getOrElse(0),
+      cycles = cycles
     )
 
   /**

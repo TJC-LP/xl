@@ -92,6 +92,26 @@ class LoudParityGapsSpec extends FunSuite:
     assertEquals(text.evaluateFormula("=N(DATE(2026,1,1))"), Right(num(46023)))
   }
 
+  test("GH-476: N() propagates direct and referenced Excel errors") {
+    val errors = Sheet("Errors")
+      .put(ref"A1", CellValue.Error(CellError.Div0))
+      .put(ref"A2", CellValue.Error(CellError.NA))
+
+    assertEquals(errors.evaluateFormula("=N(1/0)"), Right(CellValue.Error(CellError.Div0)))
+    assertEquals(errors.evaluateFormula("=N(A1)"), Right(CellValue.Error(CellError.Div0)))
+    assertEquals(errors.evaluateFormula("=N(A2)"), Right(CellValue.Error(CellError.NA)))
+  }
+
+  test("GH-476: N() propagates an error cached by a referenced formula") {
+    val errors = Sheet("Errors")
+      .put(
+        ref"A1",
+        CellValue.Formula("=1/0", Some(CellValue.Error(CellError.Div0)))
+      )
+
+    assertEquals(errors.evaluateFormula("=N(A1)"), Right(CellValue.Error(CellError.Div0)))
+  }
+
   // ========== HYPERLINK ==========
 
   test("GH-476: HYPERLINK displays the friendly name when given") {

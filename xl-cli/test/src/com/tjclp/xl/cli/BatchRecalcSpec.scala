@@ -1508,6 +1508,61 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(ops)
   }
 
+  test("--strict scopes iterative convergence metadata to a batch edit's dirty cone") {
+    val wb = Workbook(
+      Sheet("Data")
+        // This cycle converges in six rounds after the A1 edit and belongs to the dirty cone.
+        .put(ref"A1" -> 0, ref"C1" -> 100)
+        .put(ref"B1", CellValue.Formula("C1+B2"))
+        .put(ref"B2", CellValue.Formula("$A$1*(C1+B1)/2"))
+        // This independent cycle oscillates until the 20-round budget is exhausted.
+        .put(ref"D1", CellValue.Formula("1-D2"))
+        .put(ref"D2", CellValue.Formula("1-D1"))
+    ).withCalcPr(
+      com.tjclp.xl.workbooks.CalcPr(
+        iterativeCalculation = true,
+        Some(20),
+        Some(BigDecimal("0.001"))
+      )
+    )
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":0.01}]""")
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .batch(wb, wb.sheets.headOption, ops.toString, out, config, false, strictPolicy)
+      .unsafeRunSync()
+
+    assert(summary.contains("Recalculated 2 formulas"), s"summary: $summary")
+    assert(summary.contains("converged in 6 iterative round(s)"), s"summary: $summary")
+    assert(!summary.contains("exhausted 20 round(s)"), s"summary: $summary")
+    assert(!summary.contains("STRICT FAILURE"), s"summary: $summary")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("--strict retains non-convergence from an SCC inside the batch dirty cone") {
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1" -> 0)
+        .put(ref"B1", CellValue.Formula("$A$1-B2"))
+        .put(ref"B2", CellValue.Formula("$A$1-B1"))
+    ).withCalcPr(
+      com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(5), None)
+    )
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":1}]""")
+    val out = tempXlsx()
+
+    val failed = strictFailure(
+      WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config, false, strictPolicy)
+    )
+
+    assert(failed.contains("Recalculated 2 formulas"), s"summary: $failed")
+    assert(failed.contains("exhausted 5 round(s) without converging"), s"summary: $failed")
+    assert(failed.contains("STRICT FAILURE (--strict)"), s"summary: $failed")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
   test("GH-481: without the declaration the same batch keeps the circular-error posture") {
     val wb = circularRateWorkbook(None)
     val ops = writeOps("""[{"op":"put","ref":"A1","value":0.01}]""")

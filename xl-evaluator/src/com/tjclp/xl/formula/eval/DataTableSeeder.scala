@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
@@ -955,12 +955,17 @@ object DataTableSeeder:
   /**
    * GH-494: the first error guard on the EVALUATED path, as the protected expression it guards.
    *
-   *   - `IFERROR(a, b)` / `IFNA(a, b)`: `a` erroring under this substitution IS the guard firing —
-   *     `b` is never entered, since a fallback that was never selected contributed nothing;
-   *   - `IF(cond, t, e)` where `cond` is `ISERROR`/`ISERR`/`ISNA` over `x`: `x` erroring IS the
-   *     guard firing. Otherwise the condition evaluates (Excel truthiness, the same evaluator and
-   *     pinned clock as the seeding run) and only the SELECTED branch is walked — a condition that
-   *     fails to evaluate selects neither;
+   *   - `IFERROR(a, b)` / `IFNA(a, b)`: a matching error from `a` under this substitution IS the
+   *     guard firing — `IFERROR` accepts every error while `IFNA` accepts only `#N/A`; `b` is never
+   *     entered, since a fallback that was never selected contributed nothing;
+   *   - `IF(cond, t, e)` where `cond` is `ISERROR`/`ISERR`/`ISNA` over `x`: the predicate
+   *     evaluating TRUE IS the guard firing. Otherwise the condition evaluates (Excel truthiness,
+   *     the same evaluator and pinned clock as the seeding run) and only the SELECTED branch is
+   *     walked — a condition that fails to evaluate selects neither;
+   *   - `CHOOSE`, scalar/top-left `IFS`, and `SWITCH`: selector/condition/case expressions are
+   *     walked in evaluation order, followed only by the selected value (or `SWITCH` default).
+   *     Selected-away guards stay silent; full array provenance needs consumer-aware tracking and
+   *     is deliberately outside this structural diagnostic;
    *   - every other node: all children are on the evaluated path and are walked left to right.
    *
    * The walk is per interior cell because the verdict depends on the substituted temp sheet; the
@@ -976,10 +981,10 @@ object DataTableSeeder:
       case call: TExpr.Call[?] =>
         val args = callArgExprs(call)
         call.spec.name.toUpperCase match
-          case "IFERROR" | "IFNA" =>
+          case name @ ("IFERROR" | "IFNA") =>
             args match
               case guarded :: _ =>
-                if guardResolvesToError(guarded, sheet, wb, clock) then Some(guarded)
+                if errorGuardFires(name, guarded, sheet, wb, clock) then Some(guarded)
                 else firstFiredGuard(guarded, sheet, wb, clock)
               case Nil => None
           case "IF" =>
@@ -993,8 +998,142 @@ object DataTableSeeder:
                       .flatMap(branch => firstFiredGuard(branch, sheet, wb, clock))
                   )
               case Nil => None
+          case "CHOOSE" => firstFiredChoose(args, sheet, wb, clock)
+          case "IFS" => firstFiredIfs(args, sheet, wb, clock)
+          case "SWITCH" => firstFiredSwitch(args, sheet, wb, clock)
           case _ => firstFiredIn(args, sheet, wb, clock)
       case other => firstFiredIn(children(other), sheet, wb, clock)
+
+  /** `CHOOSE` evaluates its index and exactly one 1-based value expression. */
+  private def firstFiredChoose(
+    args: List[TExpr[?]],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Option[TExpr[?]] =
+    args match
+      case index :: values =>
+        firstFiredGuard(index, sheet, wb, clock).orElse {
+          Evaluator.instance
+            .eval(TExpr.asNumericExpr(index), sheet, clock, Some(wb), None)
+            .toOption
+            .flatMap(n => values.lift(n.toInt - 1))
+            .flatMap(value => firstFiredGuard(value, sheet, wb, clock))
+        }
+      case Nil => None
+
+  /** `IFS` follows the scalar/top-left condition branch contributing to the banked result. */
+  private def firstFiredIfs(
+    args: List[TExpr[?]],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Option[TExpr[?]] =
+    args match
+      case cond :: value :: rest =>
+        firstFiredGuard(cond, sheet, wb, clock).orElse {
+          ifsBranchTaken(cond, sheet, wb, clock).flatMap { taken =>
+            if taken then firstFiredGuard(value, sheet, wb, clock)
+            else firstFiredIfs(rest, sheet, wb, clock)
+          }
+        }
+      case _ => None
+
+  /** Excel truthiness for the scalar/top-left `IFS` condition used by the banked result. */
+  private def ifsBranchTaken(
+    cond: TExpr[?],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Option[Boolean] =
+    evalIfsCondition(cond, sheet, wb, clock).toOption.flatMap { result =>
+      val scalar = result match
+        case array: ArrayResult => ScalarCoercion.collapseArray(array)
+        case other => other
+      ScalarCoercion.coerce("IFS condition", scalar, BindingCoercion.Bool) match
+        case Right(taken: Boolean) => Some(taken)
+        case _ => None
+    }
+
+  /** Evaluate an `IFS` condition with the same range materialization and array mode as `IFS`. */
+  private def evalIfsCondition(
+    expr: TExpr[?],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Either[EvalError, Any] =
+    expr match
+      case TExpr.RangeRef(cellRange) => Right(ArrayArithmetic.rangeToArray(cellRange, sheet))
+      case TExpr.SheetRange(sheetName, cellRange) =>
+        Evaluator
+          .resolveRangeLocation(
+            TExpr.RangeLocation.CrossSheet(sheetName, cellRange),
+            sheet,
+            Some(wb)
+          )
+          .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(cellRange, targetSheet) }
+      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef =>
+        Evaluator.arrayInstance
+          .eval(TExpr.asResolvedValueExpr(expr), sheet, clock, Some(wb), None)
+          .map(value => value: Any)
+      case other =>
+        Evaluator.arrayInstance.eval(other, sheet, clock, Some(wb), None).map(value => value: Any)
+
+  /** `SWITCH` evaluates its target, cases in order, and only the selected value/default. */
+  private def firstFiredSwitch(
+    args: List[TExpr[?]],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Option[TExpr[?]] =
+    args match
+      case target :: cases =>
+        firstFiredGuard(target, sheet, wb, clock).orElse {
+          evalAnySelector(target, sheet, wb, clock).toOption.flatMap { targetValue =>
+            val targetCell = ArrayArithmetic.anyToCellValue(targetValue)
+            if ArrayArithmetic.carriedError(targetCell).nonEmpty then None
+            else firstFiredSwitchCase(targetCell, cases, sheet, wb, clock)
+          }
+        }
+      case Nil => None
+
+  /** The evaluated `SWITCH` case path after its target has resolved without an error value. */
+  private def firstFiredSwitchCase(
+    target: CellValue,
+    cases: List[TExpr[?]],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Option[TExpr[?]] =
+    cases match
+      case caseExpr :: value :: rest =>
+        firstFiredGuard(caseExpr, sheet, wb, clock).orElse {
+          evalAnySelector(caseExpr, sheet, wb, clock).toOption.flatMap { caseValue =>
+            val caseCell = ArrayArithmetic.anyToCellValue(caseValue)
+            if ArrayArithmetic.carriedError(caseCell).nonEmpty then None
+            else if ArrayArithmetic.cellValueEquals(target, caseCell) then
+              firstFiredGuard(value, sheet, wb, clock)
+            else firstFiredSwitchCase(target, rest, sheet, wb, clock)
+          }
+        }
+      case default :: Nil => firstFiredGuard(default, sheet, wb, clock)
+      case _ => None
+
+  /** Evaluate an Any-typed selector with the conditional functions' scalar argument boundary. */
+  private def evalAnySelector(
+    expr: TExpr[?],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Either[EvalError, Any] =
+    val resolved = expr match
+      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef | _: TExpr.UnaryPlus[?] =>
+        TExpr.asResolvedValueExpr(expr)
+      case other => other
+    Evaluator.instance.eval(resolved, sheet, clock, Some(wb), None).map {
+      case array: ArrayResult => ScalarCoercion.collapseArray(array)
+      case value => value: Any
+    }
 
   /** The first fired guard among a node's on-path children, left to right. */
   private def firstFiredIn(
@@ -1006,9 +1145,11 @@ object DataTableSeeder:
     nodes.iterator.flatMap(node => firstFiredGuard(node, sheet, wb, clock)).nextOption()
 
   /**
-   * GH-494: an `IF` condition of the form `ISERROR(x)` (or `ISERR`/`ISNA`) whose `x` resolves to an
-   * error — the house-standard guarded headline, firing into the TRUE arm. The parser wraps a
-   * function-shaped condition in a Boolean coercion, hence [[unwrapTransparent]].
+   * GH-494: an `IF` condition of the form `ISERROR(x)` (or `ISERR`/`ISNA`) whose predicate itself
+   * evaluates TRUE — the house-standard guarded headline, firing into the TRUE arm. Evaluating the
+   * predicate preserves its precise accepted-error set: `ISERROR` accepts every error, `ISERR`
+   * excludes `#N/A`, and `ISNA` accepts only `#N/A`. The parser wraps a function-shaped condition
+   * in a Boolean coercion, hence [[unwrapTransparent]].
    */
   private def firedPredicate(
     cond: TExpr[?],
@@ -1018,8 +1159,38 @@ object DataTableSeeder:
   ): Option[TExpr[?]] =
     unwrapTransparent(cond) match
       case c: TExpr.Call[?] if ErrorPredicates.contains(c.spec.name.toUpperCase) =>
-        callArgExprs(c).find(guarded => guardResolvesToError(guarded, sheet, wb, clock))
+        callArgExprs(c).headOption.filter(_ => branchTaken(c, sheet, wb, clock).contains(true))
       case _ => None
+
+  /**
+   * Whether an `IFERROR`/`IFNA` protected expression selects that guard's fallback.
+   *
+   * The `IFNA` arm is LATENT: no `FunctionSpec` named IFNA exists yet, so `IFNA(...)` never parses
+   * into a `TExpr.Call` and this branch is currently unreachable (GH-511 — a corner using it seeds
+   * nothing at all, silently). It is kept because it is the correct rule the day IFNA lands: IFNA
+   * accepts only `#N/A`, where IFERROR accepts every error, so treating them alike would invent a
+   * fired-guard warning for a grid whose error merely propagated.
+   */
+  private def errorGuardFires(
+    name: String,
+    guarded: TExpr[?],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Boolean =
+    if name == "IFNA" then guardedError(guarded, sheet, wb, clock).contains(CellError.NA)
+    else guardResolvesToError(guarded, sheet, wb, clock)
+
+  /** The Excel error code carried by an expression, when one can be classified. */
+  private def guardedError(
+    probe: TExpr[?],
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock
+  ): Option[CellError] =
+    Evaluator.instance.eval(probe, sheet, clock, Some(wb), None) match
+      case Left(error) => EvalError.toCellError(error)
+      case Right(value) => ArrayArithmetic.carriedError(EvalResult.toCellValue(value))
 
   /**
    * Excel truthiness of an `IF` condition under this substitution — the same scalar coercion the
@@ -1052,9 +1223,7 @@ object DataTableSeeder:
     Evaluator.instance.eval(probe, sheet, clock, Some(wb), None) match
       case Left(_) => true
       case Right(value) =>
-        EvalResult.toCellValue(value) match
-          case CellValue.Error(_) => true
-          case _ => false
+        ArrayArithmetic.carriedError(EvalResult.toCellValue(value)).nonEmpty
 
   /**
    * GH-494: does this formula carry an error guard ANYWHERE — `IFERROR`, `IFNA`, or `IF` over an

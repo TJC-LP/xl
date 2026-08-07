@@ -77,7 +77,8 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
    * UnknownFunction host error on ordinary banker files.
    *
    * Excel's table: numbers pass through, dates become their serial, TRUE/FALSE become 1/0, text and
-   * blanks become 0, and an error value propagates (the Left channel carries it here).
+   * blanks become 0, and an error value propagates. References and formula caches carry errors on
+   * the value channel, so N lifts them onto the absorbing Left channel here.
    */
   val n: FunctionSpec[BigDecimal] { type Args = UnaryCellValue } =
     FunctionSpec.simple[BigDecimal, UnaryCellValue](
@@ -85,24 +86,25 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
       Arity.one,
       flags = FunctionFlags(returnsNumeric = true)
     ) { (expr, ctx) =>
-      evalValue(ctx, expr).map(numericCoercionN)
+      evalValue(ctx, expr).flatMap(numericCoercionN)
     }
 
-  private def numericCoercionN(value: ExprValue): BigDecimal =
+  private def numericCoercionN(value: ExprValue): Either[EvalError, BigDecimal] =
     value match
-      case ExprValue.Number(x) => x
-      case ExprValue.Bool(b) => if b then BigDecimal(1) else BigDecimal(0)
+      case ExprValue.Number(x) => Right(x)
+      case ExprValue.Bool(b) => Right(if b then BigDecimal(1) else BigDecimal(0))
       case ExprValue.Date(d) =>
-        BigDecimal(CellValue.dateTimeToExcelSerial(d.atStartOfDay()))
-      case ExprValue.DateTime(dt) => BigDecimal(CellValue.dateTimeToExcelSerial(dt))
-      case ExprValue.Text(_) => BigDecimal(0)
-      case ExprValue.Opaque(_) => BigDecimal(0)
+        Right(BigDecimal(CellValue.dateTimeToExcelSerial(d.atStartOfDay())))
+      case ExprValue.DateTime(dt) => Right(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
+      case ExprValue.Text(_) => Right(BigDecimal(0))
+      case ExprValue.Opaque(_) => Right(BigDecimal(0))
       case ExprValue.Cell(cv) => numericCoercionNCell(cv)
 
-  private def numericCoercionNCell(cv: CellValue): BigDecimal =
+  private def numericCoercionNCell(cv: CellValue): Either[EvalError, BigDecimal] =
     cv match
-      case CellValue.Number(x) => x
-      case CellValue.Bool(b) => if b then BigDecimal(1) else BigDecimal(0)
-      case CellValue.DateTime(dt) => BigDecimal(CellValue.dateTimeToExcelSerial(dt))
+      case CellValue.Number(x) => Right(x)
+      case CellValue.Bool(b) => Right(if b then BigDecimal(1) else BigDecimal(0))
+      case CellValue.DateTime(dt) => Right(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
       case CellValue.Formula(_, Some(cached), _) => numericCoercionNCell(cached)
-      case _ => BigDecimal(0)
+      case CellValue.Error(err) => Left(EvalError.ErrorValue(err, Some("N")))
+      case _ => Right(BigDecimal(0))
