@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all
-./mill __.test             # Run all tests (5,448)
+./mill __.test             # Run all tests (5,451)
 ./mill xl-core.test        # Test specific module
 ./mill __.reformat         # Format (Scalafmt 3.10.1)
 ./mill __.checkFormat      # CI check
@@ -396,12 +396,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**5,448 tests** by module: xl-evaluator (1886), xl-core (1248), xl-ooxml (983), xl-cli (641), xl-cats-effect (141), xl-agent (122), xl prelude probes (26). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**5,451 tests** by module: xl-evaluator (2100), xl-core (1283), xl-ooxml (1047), xl-cli (727), xl-cats-effect (145), xl-agent (122), xl prelude probes (27). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 5,448 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 5,451 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 

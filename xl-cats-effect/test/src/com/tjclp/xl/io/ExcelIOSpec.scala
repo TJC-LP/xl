@@ -1,12 +1,14 @@
 package com.tjclp.xl.io
 
-import cats.effect.IO
+import cats.effect.{IO, Ref}
 import munit.CatsEffectSuite
 
 import java.io.{ByteArrayOutputStream, FileInputStream, FileOutputStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
+import scala.concurrent.duration.*
+import scala.util.Using
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
@@ -37,6 +39,7 @@ class ExcelIOSpec extends CatsEffectSuite:
 
   private def remapWorksheetEntry(source: Path, from: String, to: String): Path =
     val output = Files.createTempFile("xl-stream-remap", ".xlsx")
+    output.toFile.deleteOnExit()
     val zipIn = new ZipInputStream(new FileInputStream(source.toFile))
     val zipOut = new ZipOutputStream(new FileOutputStream(output.toFile))
     zipOut.setLevel(1)
@@ -1492,65 +1495,182 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
+  private val spillPoll: FiniteDuration = 50.millis
+
+  /** Resolved once, like the JDK's own `TempFileHelper.tmpdir` static that the writer spills to. */
+  private val spillDir: Path = Path.of(System.getProperty("java.io.tmpdir"))
+
+  /**
+   * The auto-detect writer spills its phase-1 body to `java.io.tmpdir`, which every parallel test
+   * worker JVM shares, so a raw before/after count of `xl-stream-*` entries also counts sibling
+   * suites' fixtures. The `.xml` suffix narrows that to the spill pattern — sibling *fixtures* are
+   * `.xlsx` — but does not isolate it: any suite calling this same writer (StreamingSstSpec, and
+   * the xl-cli streaming/import commands in their own module JVM) spills under the same name. So
+   * this is a discovery scan only: [[sampleSpills]] narrows it to what appeared during our own
+   * write, and [[assertSpillsCleared]] watches those exact paths rather than the directory.
+   */
+  private def spillFiles: IO[Set[Path]] = IO.blocking {
+    import scala.jdk.CollectionConverters.*
+    Using.resource(Files.list(spillDir)) { entries =>
+      entries
+        .iterator()
+        .asScala
+        .filter { p =>
+          val name = p.getFileName.toString
+          name.startsWith("xl-stream-") && name.endsWith(".xml")
+        }
+        .toSet
+    }
+  }
+
+  /**
+   * Record the spills that appeared since `before` — i.e. this write's own, since the writer
+   * creates its temp file at bracket-acquire, ahead of the first row. Sampling repeatedly keeps the
+   * record honest if the writer ever spills more than once per write.
+   *
+   * A scan racing a concurrent delete must never take the write down with it: recovering to "saw
+   * nothing this time" leaves the positive control to fail loudly on the empty record instead of
+   * the test dying on a `DirectoryIteratorException` that has nothing to do with cleanup.
+   */
+  private def sampleSpills(before: Set[Path], into: Ref[IO, Set[Path]]): IO[Unit] =
+    spillFiles.attempt.flatMap {
+      case Right(now) => into.update(_ ++ (now -- before))
+      case Left(_) => IO.unit
+    }
+
+  /**
+   * Assert the writer deleted the spills it created. Watching those exact paths — not the diff of a
+   * directory several worker JVMs are churning — is what keeps this honest: a foreign spill has to
+   * be in flight at one sampling instant AND outlive the budget to interfere, rather than merely
+   * overlapping the window.
+   *
+   * The bracket release is synchronous with stream termination, so the happy path settles on the
+   * first look and the budget only covers that residual case; a leak burns the whole budget and
+   * still fails. What this trades away is detection of cleanup drifting into a late async fiber —
+   * not detection of a leak. The budget is wall-clock against a monotonic deadline rather than a
+   * sleep count, so a slow filesystem cannot stretch it toward munit's timeout and degrade the
+   * failure into a bare timeout, losing the paths reported here.
+   */
+  private def assertSpillsCleared(
+    watched: Set[Path],
+    clue: String,
+    budget: FiniteDuration = 2.seconds
+  ): IO[Unit] =
+    IO.monotonic.flatMap { start =>
+      lazy val loop: IO[Unit] = IO.blocking(watched.filter(Files.exists(_))).flatMap { present =>
+        if present.isEmpty then IO.unit
+        else
+          IO.monotonic.flatMap { now =>
+            if now - start >= budget then
+              IO(
+                fail(
+                  s"$clue — still present after $budget: " +
+                    present.map(_.getFileName.toString).toSeq.sorted.mkString(", ")
+                )
+              )
+            else IO.sleep(spillPoll) *> loop
+          }
+      }
+      loop
+    }
+
+  test("assertSpillsCleared names a spill that outlives its budget") {
+    // Half of the standing guard: the helper must still FAIL, and name the file, when a watched
+    // spill never clears — otherwise it could regress into a no-op that reports nothing while the
+    // writer leaks. (That the filter still finds the WRITER's spill is the other half, pinned by
+    // the positive control in both cleanup tests below.)
+    IO.blocking {
+      val p = Files.createTempFile("xl-stream-", ".xml")
+      p.toFile.deleteOnExit()
+      p
+    }.flatMap { planted =>
+      assertSpillsCleared(Set(planted), "planted spill", 200.millis).attempt
+        .map { result =>
+          assert(
+            result.left.exists(_.getMessage.contains(planted.getFileName.toString)),
+            s"helper should name the planted spill, got: $result"
+          )
+        }
+        .guarantee(IO.blocking(Files.deleteIfExists(planted)).void)
+    }
+  }
+
   tempDir.test("writeStreamWithAutoDetect: temp files cleaned up after write") { dir =>
     val excel = ExcelIO.instance[IO]
     val path = dir.resolve("cleanup-test.xlsx")
 
-    // Get temp dir before write
-    val tempDir = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"))
-
-    // Count xl-stream temp files before
-    val countTempFilesBefore = IO {
-      import scala.jdk.CollectionConverters.*
-      java.nio.file.Files
-        .list(tempDir)
-        .iterator()
-        .asScala
-        .count(p => p.getFileName.toString.startsWith("xl-stream-"))
-    }
-
-    // Write some data using auto-detect (which creates temp files)
-    val rows = fs2.Stream.range(1, 101).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
-
     for
-      before <- countTempFilesBefore
+      before <- spillFiles
+      // Positive control: tie the filter to the writer rather than to itself, so moving the spill's
+      // name or location (a plausible outcome of #514) fails here instead of quietly leaving the
+      // cleanup assertion watching an empty set. Strictly it says "a spill matching the filter
+      // appeared mid-write" — a sibling JVM's in-flight spill would satisfy it too — but every
+      // producer of this pattern is this same writer, so a rename moves them all and this still
+      // bites.
+      spilled <- IO.ref(Set.empty[Path])
+      rows = fs2.Stream
+        .range(1, 101)
+        .evalTap(i => IO.whenA(i % 25 == 0)(sampleSpills(before, spilled)))
+        .map(i => RowData(i, Map(0 -> CellValue.Number(i))))
       _ <- rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain
-      after <- countTempFilesBefore
-    yield
-      // Should have same number of temp files (all cleaned up)
-      assertEquals(after, before, "Temp files should be cleaned up after write")
+      seen <- spilled.get
+      _ <- IO(assert(seen.nonEmpty, "writer should spill a file matching the filter mid-write"))
+      _ <- assertSpillsCleared(seen, "Temp files should be cleaned up after write")
+    yield ()
   }
 
   tempDir.test("writeStreamWithAutoDetect: temp files cleaned up on error") { dir =>
     val excel = ExcelIO.instance[IO]
     val path = dir.resolve("error-cleanup-test.xlsx")
 
-    val tempDir = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"))
-
-    val countTempFilesBefore = IO {
-      import scala.jdk.CollectionConverters.*
-      java.nio.file.Files
-        .list(tempDir)
-        .iterator()
-        .asScala
-        .count(p => p.getFileName.toString.startsWith("xl-stream-"))
-    }
-
-    // Create a stream that fails mid-way
-    val rows = fs2.Stream.range(1, 51).map { i =>
-      if i == 25 then throw new RuntimeException("Simulated failure")
-      RowData(i, Map(0 -> CellValue.Number(i)))
-    }
-
     for
-      before <- countTempFilesBefore
+      before <- spillFiles
+      spilled <- IO.ref(Set.empty[Path])
+      // Same positive control, sampled before the row-25 failure.
+      rows = fs2.Stream
+        .range(1, 51)
+        .evalTap(i => IO.whenA(i % 5 == 0)(sampleSpills(before, spilled)))
+        .map { i =>
+          if i == 25 then throw new RuntimeException("Simulated failure")
+          RowData(i, Map(0 -> CellValue.Number(i)))
+        }
       result <- rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.attempt
-      after <- countTempFilesBefore
-    yield
-      // Should have failed
-      assert(result.isLeft, "Should have failed")
-      // But temp files should still be cleaned up
-      assertEquals(after, before, "Temp files should be cleaned up even on error")
+      _ <- IO(assert(result.isLeft, "Should have failed"))
+      seen <- spilled.get
+      _ <- IO(assert(seen.nonEmpty, "writer should spill a file matching the filter mid-write"))
+      _ <- assertSpillsCleared(seen, "Temp files should be cleaned up even on error")
+    yield ()
+  }
+
+  tempDir.test("writeStreamsSeqWithAutoDetect: per-sheet temp files cleaned up on error") { dir =>
+    val excel = ExcelIO.instance[IO]
+    val path = dir.resolve("multi-error-cleanup.xlsx")
+
+    // The multi-sheet bracket acquires one spill per sheet up front and releases them together —
+    // the shape where partial deletion hides. Failing inside the second sheet leaves the first
+    // sheet's spill fully written and the second's half-written, so both must still go.
+    for
+      before <- spillFiles
+      spilled <- IO.ref(Set.empty[Path])
+      sheet1 = fs2.Stream
+        .range(1, 21)
+        .evalTap(i => IO.whenA(i % 5 == 0)(sampleSpills(before, spilled)))
+        .map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+      sheet2 = fs2.Stream
+        .range(1, 21)
+        .evalTap(i => IO.whenA(i % 5 == 0)(sampleSpills(before, spilled)))
+        .map { i =>
+          if i == 10 then throw new RuntimeException("Simulated failure")
+          RowData(i, Map(0 -> CellValue.Number(i)))
+        }
+      result <- excel
+        .writeStreamsSeqWithAutoDetect(path, Seq("First" -> sheet1, "Second" -> sheet2))
+        .attempt
+      _ <- IO(assert(result.isLeft, "Should have failed"))
+      seen <- spilled.get
+      _ <- IO(assert(seen.size >= 2, s"writer should spill one file per sheet, saw: $seen"))
+      _ <- assertSpillsCleared(seen, "Per-sheet temp files should be cleaned up even on error")
+    yield ()
   }
 
   // ========== Explicit Dimension Hint Tests ==========
