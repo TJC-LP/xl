@@ -10,7 +10,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **112 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,430 tests passing.
+**Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,448 tests passing.
 
 **Current Version**: **0.19.2** "Fixpoint" (recalculation & seeding integrity, released 2026-08-06)
 
@@ -78,6 +78,7 @@ counter-example.
 | [#468](https://github.com/TJC-LP/xl/issues/468) [#481](https://github.com/TJC-LP/xl/issues/481) [#496](https://github.com/TJC-LP/xl/issues/496) | Dirty-cone-scoped recalc, `--no-recalc`, `--strict` on write verbs, `batch` honors `calcPr` |
 | [#503](https://github.com/TJC-LP/xl/issues/503) | Structural cache invalidation narrowed to the cells the edit moved or removed — `--no-recalc` preserves 14/14 on an edit below the data (was 0/14) |
 | [#459](https://github.com/TJC-LP/xl/issues/459) | `####` for numbers too wide for their column (was a leading-digit clip) |
+| [#511](https://github.com/TJC-LP/xl/issues/511) [#512](https://github.com/TJC-LP/xl/issues/512) | IFNA / NA / ISNA complete the error-guard family (115 functions); the guards see an error cached inside a formula cell — `ISERROR` over a recalculated formula answered FALSE |
 | [#474](https://github.com/TJC-LP/xl/issues/474) [#475](https://github.com/TJC-LP/xl/issues/475) [#476](https://github.com/TJC-LP/xl/issues/476) [#488](https://github.com/TJC-LP/xl/issues/488) [#486](https://github.com/TJC-LP/xl/issues/486) [#490](https://github.com/TJC-LP/xl/issues/490) | Field asks: hidden lines in `view`, streaming numFmt parity, 112 functions, lookup date plane, lint docs, skill fix |
 
 **Deferred to 0.20.0**, in priority order: [#499](https://github.com/TJC-LP/xl/issues/499) (range-argument

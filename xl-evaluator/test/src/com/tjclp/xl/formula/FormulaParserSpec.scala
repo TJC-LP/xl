@@ -1649,7 +1649,11 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("SEARCH"))
     assert(functions.contains("N"))
     assert(functions.contains("HYPERLINK"))
-    assertEquals(functions.length, 112)
+    // GH-511 the error-guard family completed
+    assert(functions.contains("IFNA"))
+    assert(functions.contains("NA"))
+    assert(functions.contains("ISNA"))
+    assertEquals(functions.length, 115)
   }
 
   // ==================== INDIRECT Parsing Tests (GH-274) ====================

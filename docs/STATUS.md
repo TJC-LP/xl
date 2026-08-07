@@ -15,7 +15,7 @@
 - ✅ **Structural edits refuse to tear a data-table interior** (#495) — was a silent degrade to constants that `data-table-torn` could not see
 - ✅ **Cache-safe CLI writes** (#468, #481, #496) — dirty-cone-scoped recalc, `--no-recalc`/`--preserve-caches`, `--strict` exit codes on write verbs, `batch` honoring declared `calcPr`
 - ✅ **`####` for overflowing numbers in the raster** (#459) — was a leading-digit clip that rendered a plausible wrong number
-- ✅ **112 functions** (#476 — SEARCH, N, HYPERLINK); hidden rows/cols in `view` (#474); streaming numFmt parity (#475); VLOOKUP/HLOOKUP date keys (#488)
+- ✅ **115 functions** (#476 — SEARCH, N, HYPERLINK; #511 — IFNA, NA, ISNA, completing the error-guard family); **the error guards now see an error cached inside a formula cell** (#512 — `ISERROR` over a recalculated formula cell answered FALSE); hidden rows/cols in `view` (#474); streaming numFmt parity (#475); VLOOKUP/HLOOKUP date keys (#488)
 
 **New in 0.19.1** (2026-08-04) — field hardening, waves 23 + 23b (#478/#487):
 - ✅ **Circular-book data-table seeding** (#453) — the seeder fixpoints cycle members per axis combination under the book's CalcPr instead of pinning them at loaded caches (grids no longer seed silently FLAT); `seedDataTablesReport()` + IterativeCalc overloads
@@ -202,7 +202,7 @@
 
 ### Test Coverage
 
-**5,430 tests** (verified via `./mill __.test`, 2026-08-06):
+**5,448 tests** (verified via `./mill __.test`, 2026-08-07):
 
 | Module | Tests | Covers |
 |--------|-------|--------|

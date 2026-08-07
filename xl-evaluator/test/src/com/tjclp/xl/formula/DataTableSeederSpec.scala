@@ -1032,26 +1032,30 @@ class DataTableSeederSpec extends FunSuite:
     assertOneGuardFired(report.warnings, 1)
   }
 
-  test("GH-494: an IFNA corner seeds NOTHING today — IFNA is absent from the roster") {
-    // Pins reality, not the desired behaviour. `IFNA` has no FunctionSpec (grep the registry: zero
-    // hits), so the corner fails to parse into a Call, every interior evaluation returns Left, and
-    // the tolerant acyclic lane leaves the whole grid uncached — with NO warning, because that lane
-    // emits no Skipped (#506). An ordinary Excel guard therefore produces an empty sensitivity grid
-    // in silence. Flip this to a fired-guard assertion when IFNA lands; the walk in
-    // `errorGuardFires` already handles it (IFNA accepts only #N/A) but is unreachable until then.
-    val report = seedReport(guardedColumnTable("IFNA(D1,42)", _.put(ref"D1", num(7))))
+  test("GH-511: an IFNA corner seeds and reports its fired guard") {
+    // Was pinned as "seeds NOTHING today" while IFNA had no FunctionSpec: the corner failed to
+    // parse, every combination returned Left, and the tolerant acyclic lane left the whole grid
+    // uncached with no warning (#506). With IFNA on the roster the walk in `errorGuardFires`
+    // becomes reachable and does the discriminating thing — it fires on #N/A only.
+    val report = seedReport(
+      guardedColumnTable("IFNA(D1,42)", _.put(ref"D1", CellValue.Error(CellError.NA)))
+    )
     val out = sheetNamed(report.workbook, "S")
-    interiorRefs.foreach { r =>
-      assertEquals(
-        out.cells.get(r).flatMap {
-          case Cell(_, CellValue.Formula(_, cached, _), _, _, _) => cached
-          case _ => None
-        },
-        None,
-        s"${r.toA1}: IFNA cannot evaluate, so nothing may be banked"
-      )
-    }
-    assertEquals(report.warnings, Vector.empty, "and today it is silent — see #506")
+    interiorRefs.foreach(r => assertSeededNumber(out, r, 42.0, 1e-9))
+    assertOneGuardFired(report.warnings, interiorRefs.size)
+  }
+
+  test("GH-511: an IFNA corner over a NON-#N/A error propagates and reports no guard") {
+    val report = seedReport(
+      guardedColumnTable("IFNA(D1,42)", _.put(ref"D1", CellValue.Error(CellError.Div0)))
+    )
+    val out = sheetNamed(report.workbook, "S")
+    assertEquals(
+      bankedValue(out, ref"F10"),
+      CellValue.Error(CellError.Div0),
+      "IFNA must propagate #DIV/0! rather than swallow it"
+    )
+    assertEquals(report.warnings, Vector.empty, s"no fallback was taken: ${report.warnings}")
   }
 
   test("GH-493: a cone cell that cannot be re-derived is reported, never silently FLAT") {

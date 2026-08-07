@@ -112,6 +112,67 @@ class LoudParityGapsSpec extends FunSuite:
     assertEquals(errors.evaluateFormula("=N(A1)"), Right(CellValue.Error(CellError.Div0)))
   }
 
+  // ========== IFNA / NA ==========
+
+  test("GH-511: IFNA catches #N/A on the value channel and the Left channel alike") {
+    val errors = Sheet("Errors")
+      .put(ref"A1", CellValue.Error(CellError.NA))
+      .put(ref"A2", CellValue.Formula("=NA()", Some(CellValue.Error(CellError.NA))))
+
+    assertEquals(errors.evaluateFormula("=IFNA(A1,42)"), Right(num(42)))
+    assertEquals(errors.evaluateFormula("=IFNA(A2,42)"), Right(num(42)))
+    assertEquals(errors.evaluateFormula("=IFNA(NA(),42)"), Right(num(42)))
+  }
+
+  test("GH-511: IFNA does NOT swallow other errors — that is the point of it") {
+    // The whole reason a banker book guards a lookup with IFNA rather than IFERROR: a missing key
+    // is expected, a division by zero is a bug, and one guard must not hide both.
+    val errors = Sheet("Errors").put(ref"A1", CellValue.Error(CellError.Div0))
+
+    assertEquals(errors.evaluateFormula("=IFNA(A1,42)"), Right(CellValue.Error(CellError.Div0)))
+    assertEquals(errors.evaluateFormula("=IFNA(1/0,42)"), Right(CellValue.Error(CellError.Div0)))
+    assertEquals(errors.evaluateFormula("=IFERROR(A1,42)"), Right(num(42)), "IFERROR still catches")
+  }
+
+  test("GH-511: IFNA passes a healthy value straight through") {
+    val healthy = Sheet("H").put(ref"A1", num(7))
+    assertEquals(healthy.evaluateFormula("=IFNA(A1,42)"), Right(num(7)))
+    assertEquals(healthy.evaluateFormula("=IFNA(A1*2,42)"), Right(num(14)))
+  }
+
+  test("GH-512: the error guards see an error CACHED inside a formula cell") {
+    // The shape every recalculated book is made of: B1 is a formula whose cached value is the
+    // error. Matching only a bare CellValue.Error made ISERROR answer FALSE and IFERROR hand back
+    // the formula cell instead of the fallback — a silently wrong guard on the most ordinary input
+    // there is. All five now share `ArrayArithmetic.carriedError`, the matcher the aggregate
+    // guards already used.
+    val cached = Sheet("C")
+      .put(ref"A1", CellValue.Formula("=1/0", Some(CellValue.Error(CellError.Div0))))
+      .put(ref"A2", CellValue.Formula("=NA()", Some(CellValue.Error(CellError.NA))))
+      .put(ref"A3", CellValue.Formula("=1+1", Some(num(2))))
+
+    assertEquals(cached.evaluateFormula("=ISERROR(A1)"), Right(CellValue.Bool(true)))
+    assertEquals(cached.evaluateFormula("=IFERROR(A1,42)"), Right(num(42)))
+    assertEquals(cached.evaluateFormula("=ISERR(A1)"), Right(CellValue.Bool(true)))
+    assertEquals(
+      cached.evaluateFormula("=ISERR(A2)"),
+      Right(CellValue.Bool(false)),
+      "#N/A excluded"
+    )
+    assertEquals(cached.evaluateFormula("=ISNA(A2)"), Right(CellValue.Bool(true)))
+    assertEquals(cached.evaluateFormula("=IFNA(A2,42)"), Right(num(42)))
+    // A healthy cached formula is not an error under any of them.
+    assertEquals(cached.evaluateFormula("=ISERROR(A3)"), Right(CellValue.Bool(false)))
+    assertEquals(cached.evaluateFormula("=ISNA(A3)"), Right(CellValue.Bool(false)))
+  }
+
+  test("GH-511: NA() authors the #N/A literal") {
+    assertEquals(text.evaluateFormula("=NA()"), Right(CellValue.Error(CellError.NA)))
+    assertEquals(text.evaluateFormula("=ISNA(NA())"), Right(CellValue.Bool(true)))
+    assertEquals(text.evaluateFormula("=ISERR(NA())"), Right(CellValue.Bool(false)))
+    assertEquals(text.evaluateFormula("=ISERROR(NA())"), Right(CellValue.Bool(true)))
+  }
+
   // ========== HYPERLINK ==========
 
   test("GH-476: HYPERLINK displays the friendly name when given") {

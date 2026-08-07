@@ -38,7 +38,13 @@ always acceptable, a wrong one never is.**
   a guard that resolves to its error arm during seeding, and a
   precedent the what-if cone could not re-derive, are now reported
   instead of seeded silently.
-- **SEARCH, N and HYPERLINK** (#476) — 112 functions.
+- **SEARCH, N and HYPERLINK** (#476), plus **IFNA, NA and ISNA** (#511) —
+  **115 functions**. IFNA is IFERROR's discriminating sibling: it swallows
+  only `#N/A`, so a `#DIV/0!` propagates instead of being masked, which is
+  why lookups are guarded with it rather than IFERROR. Its absence was not
+  merely a missing function — a data-table corner using IFNA seeded
+  *nothing*, silently, and `DataTableSeeder`'s guard walk carried two
+  unreachable branches (IFNA and ISNA) for functions that did not exist.
 
 ### Fixed
 
@@ -104,6 +110,14 @@ always acceptable, a wrong one never is.**
   through the shared `normalizeLookupValue` helpers #467 introduced.
 - **`batch` ignored declared `calcPr`** (#481): it now bridges to
   iterative calculation exactly as `recalc` does.
+- **The error guards missed an error cached inside a formula cell**
+  (#512). `IFERROR`/`ISERROR`/`ISERR` matched only a bare
+  `CellValue.Error`, but on any recalculated book a formula cell carries
+  its value in `cachedValue` — so `=ISERROR(B5)` over a formula that
+  evaluated to `#DIV/0!` answered **FALSE**, and `=IFERROR(B5,0)` handed
+  back the error instead of the fallback. All five guards now share
+  `ArrayArithmetic.carriedError`, the matcher whose scaladoc already said
+  it existed so the error guards would agree.
 - Docs: `xl lint`'s flagged-category list was 5 of 9 (#486); the
   xl-scripting data-table example shipped an uncached corner (#490).
 
