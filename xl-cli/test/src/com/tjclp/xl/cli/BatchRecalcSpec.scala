@@ -10,6 +10,7 @@ import com.tjclp.xl.{CellRange, Workbook, Sheet, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
+import com.tjclp.xl.formula.FormulaParser
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -604,6 +605,42 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-493: an unresolvable cone reports the CONE, never 'interior cell(s) left unseeded'") {
+    // Round-2 review: B1 is axis-dependent but its cross-sheet leg is unresolvable, so the cone
+    // stays on its stale cache and the grid seeds FLAT (11 everywhere). Every interior IS seeded —
+    // rendering that as "1 interior cell(s) left unseeded" is a false statement about the run.
+    val kind: com.tjclp.xl.cells.FormulaKind.DataTable = com.tjclp.xl.cells.FormulaKind.DataTable(
+      ref = CellRange.parse("D5:D7").fold(err => fail(err), identity),
+      dt2D = false,
+      dtr = false,
+      r1 = Some(ref"A1"),
+      r2 = None
+    )
+    val sheet = Sheet("Data")
+      .put(ref"A1" -> 0)
+      .put(ref"B1", CellValue.Formula("A1*10+Missing!A1", Some(CellValue.Number(BigDecimal(10)))))
+      .put(ref"D4", CellValue.Formula("B1+1"))
+      .put(ref"C5" -> 1, ref"C6" -> 2, ref"C7" -> 3)
+      .put(ref"D5", CellValue.dataTable(kind, None))
+    val out = tempXlsx()
+    val summary =
+      WriteCommands.recalc(Workbook(sheet), out, config, false, true).unsafeRunSync()
+    assert(
+      summary.contains("precedent cell(s) in the what-if cone could not be re-derived"),
+      s"summary: $summary"
+    )
+    assert(
+      !summary.contains("left unseeded"),
+      s"the interiors WERE seeded — the warning must not claim otherwise: $summary"
+    )
+    assert(summary.contains("Data!B1"), s"the warning must name the cone cell: $summary")
+    val written = readBack(out)
+    Vector(ref"D5", ref"D6", ref"D7").foreach { r =>
+      assert(interiorDec(written, r).isDefined, s"${r.toA1} was seeded: $summary")
+    }
+    Files.deleteIfExists(out)
+  }
+
   test("GH-454: exhausted iterative declaration renders the non-convergence WARNING") {
     val wb = Workbook(
       Sheet("Data")
@@ -640,4 +677,903 @@ class BatchRecalcSpec extends FunSuite:
     assertCachedNumber(cachedFormulaValue(imported, 2, 0), 42.0)
     assertEquals(cachedFormulaValue(imported, 0, 0), None)
     Files.deleteIfExists(out)
+  }
+
+  // ===== GH-468: a write must not stomp caches outside its dirty dependency cone =====
+
+  /**
+   * Stand-in for the GH-468 field repro: caches authored out-of-band (an external engine, a
+   * LibreOffice arbiter) that xl's own evaluator disagrees with. C1 caches 999 for `=A1*2` and F1
+   * caches 888 for `=D1*2`; any whole-book recalculation rewrites both to 10/14 — the re-poisoning
+   * signature. Two independent chains so a dirty-cone scope is observable: an edit to A1 may
+   * refresh C1 and must still leave F1 alone.
+   */
+  private def splicedCacheWorkbook(): Workbook =
+    Workbook(
+      Sheet("Data")
+        .put(ref"A1" -> 5, ref"D1" -> 7)
+        .put(ref"C1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(999)))))
+        .put(ref"F1", CellValue.Formula("D1*2", Some(CellValue.Number(BigDecimal(888)))))
+    )
+
+  private def assertCached(wb: Workbook, at: ARef, expected: Double): Unit =
+    wb.sheets.head.cells.get(at).map(_.value) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assertEquals(n.toDouble, expected, s"${at.toA1} cache")
+      case other => fail(s"expected cached number at ${at.toA1}, got $other")
+
+  private def assertCachedOn(wb: Workbook, sheet: String, at: ARef, expected: Double): Unit =
+    wb.sheets.find(_.name.value == sheet).flatMap(_.cells.get(at)).map(_.value) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assertEquals(n.toDouble, expected, s"$sheet!${at.toA1} cache")
+      case other => fail(s"expected cached number at $sheet!${at.toA1}, got $other")
+
+  test("GH-468: an unrelated batch put leaves externally-authored caches untouched") {
+    val wb = splicedCacheWorkbook()
+    val ops = writeOps("""[{"op":"put","ref":"Z99","value":1}]""")
+    val out = tempXlsx()
+
+    WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config).unsafeRunSync()
+
+    val written = readBack(out)
+    assertCached(written, ref"C1", 999.0) // NOT the evaluator's 10
+    assertCached(written, ref"F1", 888.0) // NOT the evaluator's 14
+    assertEquals(
+      written.sheets.head.cells.get(ref"Z99").map(_.value),
+      Some(CellValue.Number(BigDecimal(1))),
+      "the edit itself must still land"
+    )
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("GH-468: a batch edit refreshes its dirty cone and nothing else") {
+    val wb = splicedCacheWorkbook()
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":6}]""")
+    val out = tempXlsx()
+
+    val summary =
+      WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config).unsafeRunSync()
+
+    val written = readBack(out)
+    assertCached(written, ref"C1", 12.0) // A1's dependent: inside the cone, refreshed
+    assertCached(written, ref"F1", 888.0) // untouched chain: outside the cone, preserved
+    assert(summary.contains("Recalculated 1 formula"), s"summary: $summary")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("GH-468: insert-rows keeps the caches of a sheet that does not reference the edited one") {
+    // Narrow claim, deliberately: `Other` is SELF-CONTAINED (Other!B1 = Other!A1*2), the only
+    // shape whose caches survive a structural edit today. StructuralEditor drops the cache of
+    // every formula that transitively READS the edited sheet (GH-455's `stale` predicate),
+    // cross-sheet readers included — pinned by the next test, tracked as GH-503. What GH-468
+    // fixes here is the trailing global recalculate(), which rewrote even THIS 888 cache to 14.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"D10" -> 7)
+        .put(ref"F10", CellValue.Formula("D10*2", None)),
+      Sheet("Other")
+        .put(ref"A1" -> 7)
+        .put(ref"B1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(888)))))
+    )
+    val out = tempXlsx()
+
+    WriteCommands.insertRows(wb, wb.sheets.headOption, 5, 1, out, config).unsafeRunSync()
+
+    val written = readBack(out)
+    assertCached(written, ref"F11", 14.0) // shifted by the edit: recalculated
+    val other = written.sheets.find(_.name.value == "Other").getOrElse(fail("no Other"))
+    other.cells.get(ref"B1").map(_.value) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assertEquals(n.toDouble, 888.0, "an untouched sheet's cache must survive a structural edit")
+      case other => fail(s"expected a cached formula at Other!B1, got $other")
+    Files.deleteIfExists(out)
+  }
+
+  /**
+   * Data lives in rows 1 and 6 only, and every formula caches an out-of-band 777. A structural edit
+   * at row 20 / column AA therefore shifts NOTHING — no cell moves, no formula text is rewritten —
+   * so every one of these caches is still the truth about the file afterwards. `Other!B1` reads the
+   * edited sheet across the sheet boundary; `Data!C30` is the one cell that genuinely moves under
+   * an insert at row 20 while keeping its text byte-identical (its reference is absolute and above
+   * the band).
+   */
+  private def structuralPoisonWorkbook(): Workbook =
+    Workbook(
+      Sheet("Data")
+        .put(ref"A1" -> 5)
+        .put(ref"C1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(777)))))
+        .put(ref"S1", CellValue.Formula("SUM(A1:A10)", Some(CellValue.Number(BigDecimal(777)))))
+        .put(ref"C30", CellValue.Formula("$A$1*3", Some(CellValue.Number(BigDecimal(777))))),
+      Sheet("Other")
+        .put(ref"B1", CellValue.Formula("Data!A1*2", Some(CellValue.Number(BigDecimal(777)))))
+    )
+
+  test("insert-rows over-invalidates a cross-sheet reader's cache (pins current behavior)") {
+    // GH-503: StructuralEditor.rewriteFormulas' `stale` predicate is "transitively reads the
+    // edited sheet", not "reads something the edit moved", so an insert at row 20 of a sheet
+    // whose data stops at row 6 still drops these caches and the cone re-derives them. The
+    // expected values below are WRONG on purpose — flip every one of them back to 777.0 when
+    // GH-503 tightens the predicate.
+    val wb = structuralPoisonWorkbook()
+    val out = tempXlsx()
+
+    WriteCommands.insertRows(wb, wb.sheets.headOption, 20, 1, out, config).unsafeRunSync()
+
+    val written = readBack(out)
+    assertCachedOn(written, "Data", ref"C1", 10.0) // GH-503: should be 777.0
+    assertCachedOn(written, "Data", ref"S1", 5.0) // GH-503: should be 777.0
+    assertCachedOn(written, "Other", ref"B1", 10.0) // GH-503: should be 777.0 (CROSS-SHEET)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-503: the DEFAULT path still re-bakes a reader that reaches the edit by NAME") {
+    // The seed narrowing is gated on --no-recalc for exactly this shape. `SUM(TotalRange)` never
+    // spells "Data" in its text, so it rides `keepNonParticipant` — the branch `staleCaches` feeds
+    // on EVERY path. Narrowing unconditionally would let it keep its poisoned cache here, drop out
+    // of `changedRefs`, and escape the dirty cone entirely: a verb that promises to recalculate
+    // would silently resurface 777. Off the flag the seeds stay the whole edited sheet.
+    val wb = Workbook(
+      (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+        s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+      },
+      Sheet("Other").put(
+        ref"B1",
+        CellValue.Formula("SUM(TotalRange)", Some(CellValue.Number(BigDecimal(777))))
+      )
+    ).withDefinedName("TotalRange", "Data!$A$1:$A$10")
+    val out = tempXlsx()
+
+    WriteCommands.insertRows(wb, wb.sheets.headOption, 20, 1, out, config).unsafeRunSync()
+
+    assertCachedOn(readBack(out), "Other", ref"B1", 55.0)
+    Files.deleteIfExists(out)
+  }
+
+  // ===== GH-481: batch honors the file's declared calcPr like recalc does =====
+
+  /** C1=100, B1=C1+B2, B2=$A$1*(C1+B1)/2 over rate input A1 — a declared circular book. */
+  private def circularRateWorkbook(calcPr: Option[com.tjclp.xl.workbooks.CalcPr]): Workbook =
+    val sheet = Sheet("Data")
+      .put(ref"A1" -> 0, ref"C1" -> 100)
+      .put(ref"B1", CellValue.Formula("C1+B2"))
+      .put(ref"B2", CellValue.Formula("$A$1*(C1+B1)/2"))
+    calcPr.fold(Workbook(sheet))(cp => Workbook(sheet).withCalcPr(cp))
+
+  test("GH-481: a batch edit to an iterate-declared circular book fixpoints instead of erroring") {
+    val wb = circularRateWorkbook(Some(iterateTight))
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":0.01}]""")
+    val out = tempXlsx()
+
+    val summary =
+      WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config).unsafeRunSync()
+
+    assert(summary.contains("converged in"), s"summary: $summary")
+    assert(!summary.contains("Circular reference"), s"summary: $summary")
+    // B1 = 100 + 0.005*(100 + B1)  =>  B1 = 100.5 / 0.995 = 101.00502...
+    readBack(out).sheets.head.cells.get(ref"B1").map(_.value) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+        assert((n.toDouble - 101.005).abs < 1e-3, s"B1 fixpoint was $n")
+      case other => fail(s"expected a cached fixpoint at B1, got $other")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  // ===== GH-468: --no-recalc / --preserve-caches =====
+
+  private val preserveCaches: WritePolicy = WritePolicy(noRecalc = true)
+  private val strictPolicy: WritePolicy = WritePolicy(strict = true)
+
+  test("GH-468: batch --no-recalc applies the edit and recalculates nothing") {
+    val wb = splicedCacheWorkbook()
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":6}]""")
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .batch(wb, wb.sheets.headOption, ops.toString, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
+    assert(!summary.contains("Recalculated"), s"summary: $summary")
+    val written = readBack(out)
+    assertCached(written, ref"C1", 999.0) // even the dirty cone is left alone
+    assertCached(written, ref"F1", 888.0)
+    assertEquals(
+      written.sheets.head.cells.get(ref"A1").map(_.value),
+      Some(CellValue.Number(BigDecimal(6))),
+      "the edit itself must still land"
+    )
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("GH-468: put --no-recalc leaves the dependent's cache alone") {
+    val wb = splicedCacheWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .put(wb, wb.sheets.headOption, "A1", List("6"), out, config, policy = preserveCaches)
+      .unsafeRunSync()
+
+    assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
+    assertCached(readBack(out), ref"C1", 999.0)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: put without the flag still refreshes its dependents (default unchanged)") {
+    val wb = splicedCacheWorkbook()
+    val out = tempXlsx()
+
+    val summary =
+      WriteCommands.put(wb, wb.sheets.headOption, "A1", List("6"), out, config).unsafeRunSync()
+
+    assert(!summary.contains("--no-recalc"), s"summary: $summary")
+    assertCached(readBack(out), ref"C1", 12.0)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-503: --no-recalc keeps the caches an insert below them cannot have changed") {
+    // The CLI still never RE-ASSERTS a cache (round 3): it only declines to invalidate one the
+    // edit provably did not touch. Inserting at row 20 on a sheet whose data stops at row 6 moves
+    // nothing C1/S1/Other!B1 read, and rewrites none of their text — their values are unchanged,
+    // so their (externally authored, deliberately poisoned) 777s ride through, which is exactly
+    // what --no-recalc is for. C30 MOVED to C31, so it drops: a relocated cell is in the cone
+    // whether or not its formula is position-sensitive.
+    val wb = structuralPoisonWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 20, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
+    val written = readBack(out)
+    val poisoned = Some(CellValue.Number(BigDecimal(777)))
+    assertEquals(formulaOn(written, "Data", ref"C1").cachedValue, poisoned)
+    assertEquals(formulaOn(written, "Data", ref"S1").cachedValue, poisoned)
+    assertEquals(formulaOn(written, "Other", ref"B1").cachedValue, poisoned)
+    assertEquals(formulaOn(written, "Data", ref"C31").cachedValue, None)
+    assert(summary.contains("3 cached value(s) preserved"), s"summary: $summary")
+    assert(summary.contains("1 formula(s)"), s"summary: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-503: --no-recalc keeps the same caches across a delete below or beside them") {
+    // The delete twins of the insert case. Deleting row 20 relocates C30 (-> C29, dropped) and
+    // touches nothing else; deleting column AA touches nothing at all, so every cache survives.
+    val wb = structuralPoisonWorkbook()
+    val rowsOut = tempXlsx()
+    val colsOut = tempXlsx()
+    val poisoned = Some(CellValue.Number(BigDecimal(777)))
+
+    WriteCommands
+      .deleteRows(wb, wb.sheets.headOption, 20, 1, rowsOut, config, false, preserveCaches)
+      .unsafeRunSync()
+    val colsSummary = WriteCommands
+      .deleteColumns(wb, wb.sheets.headOption, "AA", 1, colsOut, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val rows = readBack(rowsOut)
+    assertEquals(formulaOn(rows, "Data", ref"C1").cachedValue, poisoned)
+    assertEquals(formulaOn(rows, "Other", ref"B1").cachedValue, poisoned)
+    assertEquals(formulaOn(rows, "Data", ref"C29").cachedValue, None, "C30 relocated, so it drops")
+    val cols = readBack(colsOut)
+    assertEquals(formulaOn(cols, "Data", ref"C1").cachedValue, poisoned)
+    assertEquals(formulaOn(cols, "Other", ref"B1").cachedValue, poisoned)
+    assertEquals(formulaOn(cols, "Data", ref"C30").cachedValue, poisoned)
+    assert(colsSummary.contains("none dropped"), s"a column edit beside the data: $colsSummary")
+    Files.deleteIfExists(rowsOut)
+    Files.deleteIfExists(colsOut)
+  }
+
+  test("GH-468: --no-recalc still rides an INDEPENDENT sheet's caches through verbatim") {
+    // The preserved count is not vacuous: StructuralEditor only invalidates formulas that
+    // transitively READ the edited sheet, so a self-contained sheet keeps its externally-authored
+    // caches byte for byte — the actual #468 guarantee, now the only one claimed.
+    val wb = Workbook(
+      Sheet("Data").put(ref"D10" -> 7).put(ref"F10", CellValue.Formula("D10*2", None)),
+      Sheet("Other")
+        .put(ref"A1" -> 7)
+        .put(ref"B1", CellValue.Formula("A1*2", Some(CellValue.Number(888))))
+    )
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 5, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    assertCachedOn(readBack(out), "Other", ref"B1", 888.0)
+    assert(summary.contains("1 cached value(s) preserved"), s"summary: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: --no-recalc never restores a cache onto a formula the edit REWROTE") {
+    // The safety condition: a shifted formula's cached value belongs to the old text. F10's
+    // `D10*2` becomes `D11*2` at F11 — restoring 999 there would invent a value no engine ever
+    // computed, so the cell must stay uncached (Excel's own "dirty" state).
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"D10" -> 7)
+        .put(ref"F10", CellValue.Formula("D10*2", Some(CellValue.Number(BigDecimal(999)))))
+    )
+    val out = tempXlsx()
+
+    WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 5, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    written.sheets.head.cells.get(ref"F11").map(_.value) match
+      case Some(CellValue.Formula("D11*2", None, _)) => ()
+      case other => fail(s"a rewritten formula must stay uncached, got $other")
+    Files.deleteIfExists(out)
+  }
+
+  /** The formula cell at `at` on `sheet`, failing when the cell is absent or not a formula. */
+  private def formulaOn(wb: Workbook, sheet: String, at: ARef): CellValue.Formula =
+    wb.sheets.find(_.name.value == sheet).flatMap(_.cells.get(at)).map(_.value) match
+      case Some(f: CellValue.Formula) => f
+      case other => fail(s"expected a formula at $sheet!${at.toA1}, got $other")
+
+  test("GH-468: --no-recalc never carries a POSITION-DEPENDENT cache across a row shift") {
+    // `=ROW()` at C30 caches 30. An insert above it moves the cell to C31 without touching its
+    // text, so the byte-identity check alone would happily re-cache 30 where the truth is 31.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"C30", CellValue.Formula("ROW()", Some(CellValue.Number(BigDecimal(30)))))
+    )
+    val out = tempXlsx()
+
+    WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 20, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val moved = formulaOn(readBack(out), "Data", ref"C31")
+    assertEquals(moved.expression, "ROW()")
+    assertEquals(moved.cachedValue, None, s"a relocated =ROW() must not keep its old cache: $moved")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: --no-recalc never carries a POSITION-DEPENDENT cache across a column shift") {
+    // `=COLUMN()` at D30 caches 4; two inserted columns land it at F30, where the truth is 6.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"D30", CellValue.Formula("COLUMN()", Some(CellValue.Number(BigDecimal(4)))))
+    )
+    val out = tempXlsx()
+
+    WriteCommands
+      .insertColumns(wb, wb.sheets.headOption, "A", 2, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val moved = formulaOn(readBack(out), "Data", ref"F30")
+    assertEquals(moved.expression, "COLUMN()")
+    assertEquals(moved.cachedValue, None, s"a relocated =COLUMN() must not keep its cache: $moved")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: --no-recalc never restores a DYNAMIC-reference cache (its target may have moved)") {
+    // F1 = INDIRECT("A30")*2 caches 10 off A30 = 5. The insert moves that content to A31 without
+    // rewriting the string literal, so the formula now reads a blank: 10 is provably wrong.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A30" -> 5)
+        .put(
+          ref"F1",
+          CellValue.Formula("INDIRECT(\"A30\")*2", Some(CellValue.Number(BigDecimal(10))))
+        )
+    )
+    val out = tempXlsx()
+
+    WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 20, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val dynamic = formulaOn(readBack(out), "Data", ref"F1")
+    assertEquals(
+      dynamic.cachedValue,
+      None,
+      s"a dynamic reference must never keep a pre-edit cache: $dynamic"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  /**
+   * The dominant real shape: a contiguous block the edit cuts through. A1:A10 data, B1:B10 = An*2,
+   * D1 = SUM(A1:A10) — every cache poisoned to 777 so any recalculation is visible.
+   */
+  private def contiguousBlockWorkbook(): Workbook =
+    val poisoned = CellValue.Number(BigDecimal(777))
+    val block = (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+        .put(ARef.from0(1, i - 1), CellValue.Formula(s"A$i*2", Some(poisoned)))
+    }
+    Workbook(block.put(ref"D1", CellValue.Formula("SUM(A1:A10)", Some(poisoned))))
+
+  test("GH-468: --no-recalc through a contiguous block reports what it could NOT preserve") {
+    // The dominant real shape: an edit INSIDE a contiguous block. GH-503 splits it exactly where
+    // the dependency graph does — B1:B4 read A1:A4, all above the cut, so nothing they read moved
+    // and their caches ride through; B5:B10 relocate to B6:B11 with their references rewritten;
+    // D1's SUM(A1:A10) becomes SUM(A1:A11), a different question. The summary must count both
+    // halves rather than claim total preservation.
+    val wb = contiguousBlockWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 5, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    val poisoned = Some(CellValue.Number(BigDecimal(777)))
+    (1 to 4).foreach { i =>
+      val cell = formulaOn(written, "Data", ARef.from0(1, i - 1))
+      assertEquals(cell.cachedValue, poisoned, s"B$i reads A$i, above the cut: $cell")
+    }
+    // B5:B10 shifted to B6:B11 and their references were rewritten: no cache may be invented.
+    (6 to 11).foreach { i =>
+      val cell = formulaOn(written, "Data", ARef.from0(1, i - 1))
+      assertEquals(cell.cachedValue, None, s"B$i must stay uncached, got $cell")
+    }
+    // D1 = SUM(A1:A10) became SUM(A1:A11): the old total answered a different question.
+    assertEquals(formulaOn(written, "Data", ref"D1").cachedValue, None)
+    assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
+    assert(summary.contains("4 cached value(s) preserved"), s"summary: $summary")
+    assert(summary.contains("7 formula(s)"), s"summary: $summary")
+    assert(
+      !summary.contains("every existing cached value preserved"),
+      s"the structural arm must not claim total preservation: $summary"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: --no-recalc never restores a STATIC DEPENDENT of a dynamic cell") {
+    // Round-3 escape class (1). F1 = INDIRECT("A30")*2 is correctly refused a cache (its target
+    // moved), but G1 = F1+1 keeps text `F1+1`, does not move, and holds no dynamic reference — so
+    // every local guard passes while the value it caches was derived from the very cache xl just
+    // threw away as untrustworthy. The file would be internally inconsistent AND wrong: the
+    // default path writes F1 = 0, G1 = 1.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A30" -> 5)
+        .put(ref"F1", CellValue.Formula("INDIRECT(\"A30\")*2", Some(CellValue.Number(10))))
+        .put(ref"G1", CellValue.Formula("F1+1", Some(CellValue.Number(11))))
+    )
+    val out = tempXlsx()
+
+    WriteCommands
+      .insertRows(wb, wb.sheets.headOption, 20, 1, out, config, false, preserveCaches)
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    assertEquals(formulaOn(written, "Data", ref"F1").cachedValue, None)
+    val dependent = formulaOn(written, "Data", ref"G1")
+    assertEquals(dependent.expression, "F1+1")
+    assertEquals(
+      dependent.cachedValue,
+      None,
+      s"a static dependent of a dynamic cell must not keep its cache: $dependent"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  /** Data!A1:A10 = 1..10 under the workbook-scoped name `MyRange`, summed from another sheet. */
+  private def definedRangeWorkbook(): Workbook =
+    val data = (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+    }
+    Workbook(
+      data,
+      Sheet("Other").put(ref"B2", CellValue.Formula("SUM(MyRange)", Some(CellValue.Number(55))))
+    ).withDefinedName("MyRange", "Data!$A$1:$A$10")
+
+  test("GH-468: --no-recalc never restores a cache reached through a REWRITTEN defined name") {
+    // Round-3 escape class (2), a mainstream deal-model shape. Deleting Data row 3 shrinks the
+    // name to Data!$A$1:$A$9, so SUM(MyRange) is 52, not 55 — yet the formula text is unchanged,
+    // the cell did not move and it holds no INDIRECT/OFFSET, so every local guard passes.
+    val wb = definedRangeWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .deleteRows(
+        wb,
+        wb.sheets.find(_.name.value == "Data"),
+        3,
+        1,
+        out,
+        config,
+        false,
+        preserveCaches
+      )
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    assertEquals(
+      written.metadata.definedNames.find(_.name == "MyRange").map(_.formula),
+      Some("Data!$A$1:$A$9"),
+      "the name itself must still shrink with the edit"
+    )
+    val summed = formulaOn(written, "Other", ref"B2")
+    assertEquals(summed.expression, "SUM(MyRange)")
+    assertEquals(
+      summed.cachedValue,
+      None,
+      s"a cache reached through a rewritten name must be dropped: $summed"
+    )
+    assert(
+      !summary.contains("none dropped"),
+      s"the invalidated cache must be counted, not certified: $summary"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: --no-recalc never restores a cache reached through a #REF!-ed defined name") {
+    // Round-3 escape class (2), worse variant: the name's whole target is deleted, so MyName
+    // degrades to #REF! and `=MyName*3` cannot have an answer at all. The default path leaves B2
+    // uncached and reports the error; --no-recalc must not certify the stale 15.
+    val wb = Workbook(
+      Sheet("Data").put(ref"A30" -> 5),
+      Sheet("Other").put(ref"B2", CellValue.Formula("MyName*3", Some(CellValue.Number(15))))
+    ).withDefinedName("MyName", "Data!$A$30")
+    val out = tempXlsx()
+
+    WriteCommands
+      .deleteRows(
+        wb,
+        wb.sheets.find(_.name.value == "Data"),
+        30,
+        1,
+        out,
+        config,
+        false,
+        preserveCaches
+      )
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    val broken = formulaOn(written, "Other", ref"B2")
+    assertEquals(
+      broken.cachedValue,
+      None,
+      s"a cache reached through a #REF!-ed name must be dropped: $broken"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  /** Data!A1:A10 = 1..10 plus a workbook-scoped name the parser cannot read, summed elsewhere. */
+  private def blindNameWorkbook(refersTo: String, cached: Int): Workbook =
+    val data = (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+    }
+    Workbook(
+      data,
+      Sheet("Other")
+        .put(ref"B2", CellValue.Formula("SUM(Blind)", Some(CellValue.Number(BigDecimal(cached)))))
+    ).withDefinedName("Blind", refersTo)
+
+  test("GH-507: --no-recalc drops a cache reached through an ALIAS of a blind defined name") {
+    // Round-5 escape: the blind set must be TRANSITIVE. `Outer -> Blind` parses fine, so `Outer`
+    // is not itself blind, and `SUM(Outer)` never mentions `Blind` textually — a single
+    // non-transitive pass misses it entirely. Resolving Outer still requires Blind's unparseable
+    // definition, so the graph is just as blind here. Truth after deleting Data row 2 is 31.
+    val data = (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+    }
+    val wb = Workbook(
+      data,
+      Sheet("Other")
+        .put(ref"B2", CellValue.Formula("SUM(Outer)", Some(CellValue.Number(BigDecimal(33)))))
+    ).withDefinedName("Blind", "Data!$A$1:$A$3,Data!$A$8:$A$10")
+      .withDefinedName("Outer", "Blind")
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .deleteRows(
+        wb,
+        wb.sheets.find(_.name.value == "Data"),
+        2,
+        1,
+        out,
+        config,
+        false,
+        preserveCaches
+      )
+      .unsafeRunSync()
+
+    assert(
+      FormulaParser.parse("Blind").isRight,
+      "premise: the ALIAS itself must parse (else it would be caught without the closure)"
+    )
+    assert(
+      FormulaParser.parse("Data!$A$1:$A$3,Data!$A$8:$A$10").isLeft,
+      "premise: the aliased name must still be unparseable (else the graph is not blind here)"
+    )
+    val summed = formulaOn(readBack(out), "Other", ref"B2")
+    assertEquals(summed.expression, "SUM(Outer)", "the formula text itself must ride verbatim")
+    assertEquals(
+      summed.cachedValue,
+      None,
+      s"a cache behind an ALIAS of an unparseable name must not ride through: $summed"
+    )
+    assert(!summary.contains("none dropped"), s"it must be counted, not certified: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-507: --no-recalc drops a cache reached through a MULTI-AREA (union) defined name") {
+    // Round-4 escape. `Data!$A$1:$A$3,Data!$A$8:$A$10` is an ordinary Excel construct (Ctrl-click
+    // two areas) that FormulaParser rejects, so it contributes no NameRef edge and B2 has no
+    // precedents at all — StructuralEditor.staleCaches provably never considered it. Deleting
+    // Data row 2 makes the truth 1+3 + 8+9+10 = 31, but the file certified 33.
+    val wb = blindNameWorkbook("Data!$A$1:$A$3,Data!$A$8:$A$10", 33)
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .deleteRows(
+        wb,
+        wb.sheets.find(_.name.value == "Data"),
+        2,
+        1,
+        out,
+        config,
+        false,
+        preserveCaches
+      )
+      .unsafeRunSync()
+
+    assert(
+      FormulaParser.parse("Data!$A$1:$A$3,Data!$A$8:$A$10").isLeft,
+      "premise: the parser must still reject the union form (else the graph is not blind here)"
+    )
+    val summed = formulaOn(readBack(out), "Other", ref"B2")
+    assertEquals(summed.expression, "SUM(Blind)", "the formula text itself must ride verbatim")
+    assertEquals(
+      summed.cachedValue,
+      None,
+      s"a cache behind a name the graph cannot parse must not ride through: $summed"
+    )
+    assert(!summary.contains("none dropped"), s"it must be counted, not certified: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-507: --no-recalc drops a cache behind an INTERSECTION name whose text never changes") {
+    // Same class, and the reason a before/after name-text diff is NOT a sufficient detector:
+    // shiftDefinedNameText leaves the space-separated intersection form verbatim, so the name is
+    // byte-identical before and after. Pre-edit A1:A8 ∩ A5:A10 = A5:A8 = 5+6+7+8 = 26; after
+    // deleting Data row 2 the same intersection is 6+7+8+9 = 30.
+    val wb = blindNameWorkbook("Data!$A$1:$A$8 Data!$A$5:$A$10", 26)
+    val out = tempXlsx()
+
+    WriteCommands
+      .deleteRows(
+        wb,
+        wb.sheets.find(_.name.value == "Data"),
+        2,
+        1,
+        out,
+        config,
+        false,
+        preserveCaches
+      )
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    assertEquals(
+      written.metadata.definedNames.find(_.name == "Blind").map(_.formula),
+      Some("Data!$A$1:$A$8 Data!$A$5:$A$10"),
+      "premise: the name text is unchanged, so no name-diff guard could fire (GH-507)"
+    )
+    val summed = formulaOn(written, "Other", ref"B2")
+    assertEquals(
+      summed.cachedValue,
+      None,
+      s"an unchanged blind name is still blind — the cache must be withdrawn: $summed"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-507: a blind name withdraws only the caches that actually mention it") {
+    // The strip is whole-token and case-insensitive, and it must not become a book-wide nuke:
+    // `SUM(BLIND)` matches, the text "Blind" inside a string literal does not, `Blindfold` does
+    // not, and a formula naming no blind name at all keeps its cache.
+    val data = (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+    }
+    val wb = Workbook(
+      data,
+      Sheet("Other")
+        .put(ref"B2", CellValue.Formula("SUM(BLIND)", Some(CellValue.Number(33))))
+        .put(ref"B3", CellValue.Formula("Blindfold*2", Some(CellValue.Number(BigDecimal("0.16")))))
+        .put(ref"B4", CellValue.Formula("\"Blind\"&\"x\"", Some(CellValue.Text("Blindx"))))
+        .put(ref"B5", CellValue.Formula("1+1", Some(CellValue.Number(2))))
+    ).withDefinedName("Blind", "Data!$A$1:$A$3,Data!$A$8:$A$10")
+      .withDefinedName("Blindfold", "0.08")
+    val out = tempXlsx()
+
+    WriteCommands
+      .deleteRows(
+        wb,
+        wb.sheets.find(_.name.value == "Data"),
+        2,
+        1,
+        out,
+        config,
+        false,
+        preserveCaches
+      )
+      .unsafeRunSync()
+
+    val written = readBack(out)
+    assertEquals(formulaOn(written, "Other", ref"B2").cachedValue, None, "case-insensitive match")
+    assertEquals(
+      formulaOn(written, "Other", ref"B3").cachedValue,
+      Some(CellValue.Number(BigDecimal("0.16"))),
+      "Blindfold is a different whole token and its own definition (a constant) parses"
+    )
+    assertEquals(
+      formulaOn(written, "Other", ref"B4").cachedValue,
+      Some(CellValue.Text("Blindx")),
+      "a name inside a string literal is not a reference"
+    )
+    assertEquals(
+      formulaOn(written, "Other", ref"B5").cachedValue,
+      Some(CellValue.Number(2)),
+      "an unrelated independent formula keeps its cache"
+    )
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-468: the unconditional preservation claim still holds for the NON-structural verbs") {
+    val wb = splicedCacheWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .put(wb, wb.sheets.headOption, "A1", List("6"), out, config, policy = preserveCaches)
+      .unsafeRunSync()
+
+    assert(summary.contains("every existing cached value preserved"), s"summary: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  // ===== GH-496: --strict =====
+
+  private def strictFailure(io: cats.effect.IO[String]): String =
+    io.attempt.unsafeRunSync() match
+      case Left(f: StrictFailure) => f.summary
+      case Left(other) => fail(s"expected StrictFailure, got $other")
+      case Right(summary) => fail(s"expected StrictFailure, got a clean summary: $summary")
+
+  test("GH-496: --strict promotes recalc's formula errors to a failure (file still written)") {
+    val wb = Workbook(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None)))
+    val lenientOut = tempXlsx()
+    val strictOut = tempXlsx()
+
+    // Default posture is unchanged: reported, never raised.
+    val advisory = WriteCommands.recalc(wb, lenientOut, config).unsafeRunSync()
+    assert(advisory.contains("Circular reference"), s"summary: $advisory")
+
+    val failed = strictFailure(WriteCommands.recalc(wb, strictOut, config, policy = strictPolicy))
+    assert(failed.contains("Circular reference"), s"the summary must survive verbatim: $failed")
+    assert(failed.contains("STRICT FAILURE (--strict)"), s"summary: $failed")
+    assert(failed.contains("1 formula evaluation error(s)"), s"summary: $failed")
+    assert(java.nio.file.Files.size(strictOut) > 0L, "the output file is written either way")
+    Files.deleteIfExists(lenientOut)
+    Files.deleteIfExists(strictOut)
+  }
+
+  test("GH-496: --strict promotes the GH-454 non-convergence WARNING") {
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"B1", CellValue.Formula("1-B2"))
+        .put(ref"B2", CellValue.Formula("1-B1"))
+    ).withCalcPr(com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(5), None))
+    val out = tempXlsx()
+
+    val failed = strictFailure(WriteCommands.recalc(wb, out, config, policy = strictPolicy))
+    assert(failed.contains("exhausted 5 round(s) without converging"), s"summary: $failed")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-496: --strict promotes the GH-453 seed warnings of recalc --tables") {
+    val out = tempXlsx()
+    val failed = strictFailure(
+      WriteCommands.recalc(circularTableWorkbook(None), out, config, false, true, strictPolicy)
+    )
+    assert(failed.contains("data table"), s"summary: $failed")
+    assert(failed.contains("1 data-table seeding warning(s)"), s"summary: $failed")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-496: --strict on a clean write is a no-op") {
+    val wb = Workbook(
+      Sheet("Data").put(ref"A1" -> 5).put(ref"C1", CellValue.Formula("A1*2", None))
+    )
+    val out = tempXlsx()
+    val summary = WriteCommands.recalc(wb, out, config, policy = strictPolicy).unsafeRunSync()
+    assert(summary.contains("Recalculated 1 formula"), s"summary: $summary")
+    assert(!summary.contains("STRICT"), s"summary: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-496: --strict fails a batch whose dirty cone contains a formula error") {
+    val wb = Workbook(Sheet("Data"))
+    val ops = writeOps("""[{"op":"putf","ref":"B1","value":"=B1+1"}]""")
+    val out = tempXlsx()
+
+    val failed = strictFailure(
+      WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config, false, strictPolicy)
+    )
+    assert(failed.contains("Circular reference"), s"summary: $failed")
+    assert(failed.contains("STRICT FAILURE (--strict)"), s"summary: $failed")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("--strict scopes iterative convergence metadata to a batch edit's dirty cone") {
+    val wb = Workbook(
+      Sheet("Data")
+        // This cycle converges in six rounds after the A1 edit and belongs to the dirty cone.
+        .put(ref"A1" -> 0, ref"C1" -> 100)
+        .put(ref"B1", CellValue.Formula("C1+B2"))
+        .put(ref"B2", CellValue.Formula("$A$1*(C1+B1)/2"))
+        // This independent cycle oscillates until the 20-round budget is exhausted.
+        .put(ref"D1", CellValue.Formula("1-D2"))
+        .put(ref"D2", CellValue.Formula("1-D1"))
+    ).withCalcPr(
+      com.tjclp.xl.workbooks.CalcPr(
+        iterativeCalculation = true,
+        Some(20),
+        Some(BigDecimal("0.001"))
+      )
+    )
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":0.01}]""")
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .batch(wb, wb.sheets.headOption, ops.toString, out, config, false, strictPolicy)
+      .unsafeRunSync()
+
+    assert(summary.contains("Recalculated 2 formulas"), s"summary: $summary")
+    assert(summary.contains("converged in 6 iterative round(s)"), s"summary: $summary")
+    assert(!summary.contains("exhausted 20 round(s)"), s"summary: $summary")
+    assert(!summary.contains("STRICT FAILURE"), s"summary: $summary")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("--strict retains non-convergence from an SCC inside the batch dirty cone") {
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1" -> 0)
+        .put(ref"B1", CellValue.Formula("$A$1-B2"))
+        .put(ref"B2", CellValue.Formula("$A$1-B1"))
+    ).withCalcPr(
+      com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(5), None)
+    )
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":1}]""")
+    val out = tempXlsx()
+
+    val failed = strictFailure(
+      WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config, false, strictPolicy)
+    )
+
+    assert(failed.contains("Recalculated 2 formulas"), s"summary: $failed")
+    assert(failed.contains("exhausted 5 round(s) without converging"), s"summary: $failed")
+    assert(failed.contains("STRICT FAILURE (--strict)"), s"summary: $failed")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("GH-481: without the declaration the same batch keeps the circular-error posture") {
+    val wb = circularRateWorkbook(None)
+    val ops = writeOps("""[{"op":"put","ref":"A1","value":0.01}]""")
+    val out = tempXlsx()
+
+    val summary =
+      WriteCommands.batch(wb, wb.sheets.headOption, ops.toString, out, config).unsafeRunSync()
+
+    assert(summary.contains("Circular reference"), s"summary: $summary")
+    assert(!summary.contains("converged in"), s"summary: $summary")
+    assert(summary.contains("Saved:"), s"exit must stay clean: $summary")
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
   }

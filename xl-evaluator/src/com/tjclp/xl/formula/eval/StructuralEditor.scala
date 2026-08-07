@@ -7,7 +7,7 @@ import com.tjclp.xl.sheets.{DataValidation, DvKind, Sheet}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.cf.{CfRule, Cfvo, ConditionalFormat}
-import com.tjclp.xl.error.{XLError, XLException}
+import com.tjclp.xl.error.{XLError, XLException, XLResult}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.parser.FormulaParser
@@ -29,79 +29,284 @@ import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
 object StructuralEditor:
 
   /**
-   * Insert `count` rows at 0-based row index `at` on `sheet`. Throws a typed
-   * `XLException(XLError.OutOfBounds)` when the insert would shift any populated position past row
-   * 1048576 (GH-472) — the workbook is left untouched.
+   * Insert `count` rows at 0-based row index `at` on `sheet`. Throws a typed `XLException` when the
+   * edit is refused ([[insertRowsChecked]] is the total form) — the workbook is left untouched.
    */
-  def insertRows(wb: Workbook, sheet: SheetName, at: Int, count: Int): Workbook =
-    edit(wb, sheet, isRow = true, at = at, delta = count)
+  def insertRows(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    preserveUntouchedCaches: Boolean = false
+  ): Workbook =
+    orThrow(insertRowsChecked(wb, sheet, at, count, preserveUntouchedCaches))
 
-  /** Delete `count` rows starting at 0-based row index `at` on `sheet`. */
-  def deleteRows(wb: Workbook, sheet: SheetName, at: Int, count: Int): Workbook =
-    edit(wb, sheet, isRow = true, at = at, delta = -count)
+  /** Delete `count` rows starting at 0-based row index `at` on `sheet`. Throws when refused. */
+  def deleteRows(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    preserveUntouchedCaches: Boolean = false
+  ): Workbook =
+    orThrow(deleteRowsChecked(wb, sheet, at, count, preserveUntouchedCaches))
 
   /**
-   * Insert `count` columns at 0-based column index `at` on `sheet`. Throws a typed
-   * `XLException(XLError.OutOfBounds)` when the insert would shift any populated position past
-   * column XFD (GH-472) — the workbook is left untouched.
+   * Insert `count` columns at 0-based column index `at` on `sheet`. Throws a typed `XLException`
+   * when the edit is refused ([[insertColumnsChecked]] is the total form).
    */
-  def insertColumns(wb: Workbook, sheet: SheetName, at: Int, count: Int): Workbook =
-    edit(wb, sheet, isRow = false, at = at, delta = count)
+  def insertColumns(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    preserveUntouchedCaches: Boolean = false
+  ): Workbook =
+    orThrow(insertColumnsChecked(wb, sheet, at, count, preserveUntouchedCaches))
 
-  /** Delete `count` columns starting at 0-based column index `at` on `sheet`. */
-  def deleteColumns(wb: Workbook, sheet: SheetName, at: Int, count: Int): Workbook =
-    edit(wb, sheet, isRow = false, at = at, delta = -count)
+  /** Delete `count` columns starting at 0-based column index `at`. Throws when refused. */
+  def deleteColumns(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    preserveUntouchedCaches: Boolean = false
+  ): Workbook =
+    orThrow(deleteColumnsChecked(wb, sheet, at, count, preserveUntouchedCaches))
+
+  /**
+   * Total form of [[insertRows]]: `Left` when the edit is refused (GH-472 out-of-bounds shift,
+   * GH-495 data-table tear), `Right` with the edited workbook otherwise. The `*Checked` family is
+   * the pure surface; the four throwing methods above are the `.unsafe` façade kept for callers
+   * that predate it.
+   */
+  def insertRowsChecked(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    preserveUntouchedCaches: Boolean = false
+  ): XLResult[Workbook] =
+    edit(wb, sheet, isRow = true, at = at, delta = count, preserveUntouchedCaches)
+
+  /** Total form of [[deleteRows]]. */
+  def deleteRowsChecked(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    preserveUntouchedCaches: Boolean = false
+  ): XLResult[Workbook] =
+    edit(wb, sheet, isRow = true, at = at, delta = -count, preserveUntouchedCaches)
+
+  /** Total form of [[insertColumns]]. */
+  def insertColumnsChecked(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    preserveUntouchedCaches: Boolean = false
+  ): XLResult[Workbook] =
+    edit(wb, sheet, isRow = false, at = at, delta = count, preserveUntouchedCaches)
+
+  /** Total form of [[deleteColumns]]. */
+  def deleteColumnsChecked(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    preserveUntouchedCaches: Boolean = false
+  ): XLResult[Workbook] =
+    edit(wb, sheet, isRow = false, at = at, delta = -count, preserveUntouchedCaches)
+
+  private def orThrow(result: XLResult[Workbook]): Workbook =
+    result.fold(err => throw XLException(err), identity)
 
   private def edit(
     wb: Workbook,
     target: SheetName,
     isRow: Boolean,
     at: Int,
+    delta: Int,
+    preserveUntouchedCaches: Boolean
+  ): XLResult[Workbook] =
+    for
+      _ <- boundsRefusal(wb, target, isRow, at, delta)
+      _ <- dataTableRefusal(wb, target, isRow, at, delta)
+    yield applyEdit(wb, target, isRow, at, delta, preserveUntouchedCaches)
+
+  /**
+   * GH-472: REFUSE an insert that would shift any populated position (cell, comment, row/column
+   * property, drawing anchor, freeze pane) past the sheet edge. Ranges clamp (GH-428), but a data
+   * cell cannot clamp without destroying data — and 0.19.0's silent success wrote cells and a
+   * <dimension> past row 1048576, a file desktop Excel refuses outright.
+   */
+  private def boundsRefusal(
+    wb: Workbook,
+    target: SheetName,
+    isRow: Boolean,
+    at: Int,
     delta: Int
-  ): Workbook =
-    // GH-472: REFUSE an insert that would shift any populated position (cell, comment, row/column
-    // property, drawing anchor, freeze pane) past the sheet edge. Ranges clamp (GH-428), but a
-    // data cell cannot clamp without destroying data — and 0.19.0's silent success wrote cells and
-    // a <dimension> past row 1048576, a file desktop Excel refuses outright. Throws a typed
-    // XLException(XLError.OutOfBounds); the workbook is untouched.
-    if delta > 0 then
-      wb.sheets.find(_.name == target).foreach { s =>
-        val axisMax = if isRow then Row.MaxIndex0 else Column.MaxIndex0
-        s.maxPopulatedIndex(isRow)
+  ): XLResult[Unit] =
+    val axisMax = if isRow then Row.MaxIndex0 else Column.MaxIndex0
+    val offender =
+      if delta <= 0 then None
+      else
+        wb.sheets
+          .find(_.name == target)
+          .flatMap(_.maxPopulatedIndex(isRow))
           .filter(i => i >= at && i.toLong + delta > axisMax)
-          .foreach { i =>
-            def rowName(idx: Int) = s"row ${idx + 1}"
-            def colName(idx: Int) = s"column ${Column.from0(idx).toLetter}"
-            val (offending, edge) =
-              if isRow then (rowName(i), s"last ${rowName(axisMax)}")
-              else (colName(i), s"last ${colName(axisMax)}")
-            val unit = if isRow then "row(s)" else "column(s)"
-            val atName = if isRow then rowName(at) else colName(at)
-            throw XLException(
-              XLError.OutOfBounds(
-                offending,
-                s"inserting $delta $unit at $atName would shift it past the sheet's $edge"
-              )
-            )
-          }
+    offender
+      .map { i =>
+        val (offending, edge) =
+          if isRow then (rowName(i), s"last ${rowName(axisMax)}")
+          else (colName(i), s"last ${colName(axisMax)}")
+        XLError.OutOfBounds(
+          offending,
+          s"${editDescription(isRow, at, delta)} would shift it past the sheet's $edge"
+        )
       }
+      .toLeft(())
+
+  private def rowName(index0: Int): String = s"row ${index0 + 1}"
+  private def colName(index0: Int): String = s"column ${Column.from0(index0).toLetter}"
+
+  /** "inserting 2 row(s) at row 5" / "deleting 1 column(s) at column C". */
+  private def editDescription(isRow: Boolean, at: Int, delta: Int): String =
+    val unit = if isRow then "row(s)" else "column(s)"
+    val atName = if isRow then rowName(at) else colName(at)
+    val verb = if delta >= 0 then s"inserting $delta" else s"deleting ${-delta}"
+    s"$verb $unit at $atName"
+
+  /**
+   * GH-495: REFUSE a structural edit that would TEAR a data-table interior on the edited sheet.
+   *
+   * Excel itself refuses ("you cannot change part of a data table") and so does the authoring API
+   * (`sheet.dataTable`, validation V5). Until this guard, the structural path silently replaced the
+   * torn record with its cached constant: the `<f t="dataTable">` element vanished from the written
+   * XML, so `data-table-torn` lint could not fire — the loss was invisible by construction. The
+   * sibling GH-435 path (an edit deleting an INPUT cell) already keeps the record and flags
+   * del1/del2; this makes the interior case symmetric by refusing instead.
+   *
+   * Deleting a band that swallows the whole interior is NOT a tear — that deletes the entire table,
+   * which Excel allows — and a zero-width edit changes nothing.
+   */
+  private def dataTableRefusal(
+    wb: Workbook,
+    target: SheetName,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): XLResult[Unit] =
+    if delta == 0 then Right(())
+    else
+      wb.sheets
+        .find(_.name == target)
+        .flatMap(s => firstUnsurvivableRecord(s, isRow, at, delta))
+        .toLeft(())
+
+  /** Every data-table record on the sheet, deduplicated by ref, in row-major ref order. */
+  private def recordKinds(sheet: Sheet): Vector[FormulaKind.DataTable] =
+    sheet.cells.values.toVector
+      .flatMap { cell =>
+        cell.value match
+          case CellValue.Formula(_, _, dt: FormulaKind.DataTable) => Vector(dt)
+          case _ => Vector.empty
+      }
+      .distinctBy(_.ref)
+      .sortBy(dt => (dt.ref.start.row.index0, dt.ref.start.col.index0))
+
+  /** The first record (row-major) the edit cannot carry through intact, as its refusal. */
+  private def firstUnsurvivableRecord(
+    sheet: Sheet,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Option[XLError] =
+    recordKinds(sheet).iterator
+      .map(dt => refusalFor(dt, isRow, at, delta))
+      .collectFirst { case Some(err) => err }
+
+  private def refusalFor(
+    dt: FormulaKind.DataTable,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Option[XLError] =
+    val refA1 = dt.ref.toA1
+    if coversEntirely(dt.ref, isRow, at, delta) then None
+    else if editIntersects(dt.ref, isRow, at, delta) then
+      Some(
+        XLError.InvalidRange(
+          refA1,
+          s"${editDescription(isRow, at, delta)} would tear data table $refA1; Excel: cannot " +
+            "change part of a data table — delete or re-author the whole table instead"
+        )
+      )
+    else if shiftedRange(dt.ref, isRow, at, delta).isEmpty then
+      val edge =
+        if isRow then s"last ${rowName(Row.MaxIndex0)}" else s"last ${colName(Column.MaxIndex0)}"
+      Some(
+        XLError.OutOfBounds(
+          refA1,
+          s"${editDescription(isRow, at, delta)} would shift data table $refA1 past the " +
+            s"sheet's $edge"
+        )
+      )
+    else None
+
+  /**
+   * True when a DELETE band swallows the whole range on the edited axis — the entire data table
+   * goes with the band (Excel allows deleting a whole table; only a PARTIAL edit is refused).
+   */
+  private def coversEntirely(range: CellRange, isRow: Boolean, at: Int, delta: Int): Boolean =
+    val (s, e) = axisBounds(range, isRow)
+    delta < 0 && at <= s && (at - delta - 1) >= e
+
+  private def applyEdit(
+    wb: Workbook,
+    target: SheetName,
+    isRow: Boolean,
+    at: Int,
+    delta: Int,
+    preserveUntouchedCaches: Boolean
+  ): Workbook =
     val editedName = target.value
     // GH-455 follow-up: the non-participation fast path below keeps formula TEXT byte-identical,
     // but a cached VALUE can be stale even when the text never names the edited sheet —
     // Sheet2!Y ==X*2 over Sheet2!X =='Sheet1'!A1 reads Sheet1 two hops away. Invalidate the cache
-    // of every formula transitively dependent (cross-sheet, through any chain) on any cell of the
-    // edited sheet. One PRE-edit graph build per edit, forced lazily and only when a
-    // non-participating formula actually rides the fast path (the CLI path recalculates after).
+    // of every formula transitively dependent (cross-sheet, through any chain) on a cell the edit
+    // actually TOUCHED. One PRE-edit graph build per edit, forced lazily and only when a formula
+    // would otherwise keep its cache (the CLI path recalculates after).
+    //
+    // GH-503: the seed set is the cells the edit MOVED OR REMOVED — those at or past `at` on the
+    // edited axis — not every cell of the edited sheet. Seeding on the whole sheet made an insert
+    // at row 20 invalidate a reader of A1, which is why `--no-recalc` preserved almost nothing.
+    // Narrowing an invalidation set is sound by construction: it only ever withdraws fewer claims,
+    // and a cell at an index BELOW the cut keeps both its address and its content, so nothing that
+    // reads it can have changed. Cells whose own text the shift rewrote are handled separately (a
+    // rewritten reference always drops its cache below); this set is about the ones that do not.
     lazy val staleCaches: Set[QualifiedRef] =
       val (_, dependents) = DependencyGraph.fromWorkbookBounded(wb)
-      val seeds = dependents.keySet.filter(_.sheet == target)
+      val axisIndex0: ARef => Int = r => if isRow then r.row.index0 else r.col.index0
+      // The narrowing is gated too, not just the cache-carrying decision below: `staleCaches` also
+      // feeds `keepNonParticipant`, which runs on EVERY path. A cross-sheet reader that reaches the
+      // edited sheet only through a defined name never spells that sheet in its text, so it rides
+      // the non-participant branch — narrowing unconditionally would let it keep a cache the
+      // DEFAULT recalculating path then never refreshes (it drops out of `changedRefs`, so the
+      // dirty cone misses it), silently resurfacing a poisoned <v> from a verb that promises to
+      // recalculate. Off the flag, seeds stay the whole edited sheet, byte-for-byte as before.
+      val seeds = dependents.keySet.filter(q =>
+        q.sheet == target && (!preserveUntouchedCaches || axisIndex0(q.ref) >= at)
+      )
       // A dynamic reference can reach the edited sheet without contributing a static graph edge.
       // Conservatively invalidate every dynamic cell and its static dependent closure: the edit
       // may have changed what its unchanged reference text resolves to.
       val dynamic = wb.sheets.iterator.flatMap { s =>
         DependencyGraph.dynamicCells(s).iterator.map(r => QualifiedRef(s.name, r))
       }.toSet
-      dynamic ++ DependencyGraph.qualifiedTransitiveDependents(dependents, seeds ++ dynamic)
+      seeds ++ dynamic ++
+        DependencyGraph.qualifiedTransitiveDependents(dependents, seeds ++ dynamic)
     val updatedSheets = wb.sheets.map { s =>
       // 1. Pure cell/merge/property shift — only on the edited sheet. Its own typed charts
       //    (anchors + same-sheet data refs) are handled INSIDE the shift (GH-222).
@@ -125,7 +330,8 @@ object StructuralEditor:
         isRow,
         at,
         delta,
-        stale = r => staleCaches.contains(QualifiedRef(s.name, r))
+        stale = r => staleCaches.contains(QualifiedRef(s.name, r)),
+        preserveUntouchedCaches = preserveUntouchedCaches
       )
     }
     // GH-473: general defined names (workbook- AND sheet-scoped) are the same rewrite plane as
@@ -157,7 +363,8 @@ object StructuralEditor:
     isRow: Boolean,
     at: Int,
     delta: Int,
-    stale: ARef => Boolean
+    stale: ARef => Boolean,
+    preserveUntouchedCaches: Boolean
   ): Sheet =
     // GH-455 follow-up: a non-participating formula keeps its TEXT byte-identical, but a cached
     // value that transitively reads the edited sheet is stale and must drop (the writer would
@@ -193,9 +400,12 @@ object StructuralEditor:
                   CellValue.Formula(FormulaKind.displayExpression(newKind), cachedOpt, newKind)
                 (ref, cell.copy(value = newValue))
               case None =>
-                // The band tears the table interior itself. Excel refuses to "change part of a
-                // data table"; the total-function analog degrades the cell to its cached constant
-                // (visible, deterministic).
+                // GH-495: a band TEARING the interior never reaches here — `dataTableRefusal`
+                // rejects the whole edit up front, so no record can be silently degraded away.
+                // What remains is a record whose interior the band removed ENTIRELY (a legal
+                // whole-table delete) while this record cell sits OUTSIDE that interior — the
+                // malformed-file case. Its table is gone by construction, so the orphan cell keeps
+                // its cached constant (visible, deterministic).
                 (ref, cell.copy(value = cachedOpt.getOrElse(CellValue.Empty)))
         case f @ CellValue.Formula(formulaStr, _, kind) =>
           // GH-455: a formula on a NON-edited sheet participates only through sheet-qualified
@@ -225,13 +435,35 @@ object StructuralEditor:
                     // the '='; the writer serializes the string VERBATIM into <f>, where a leading
                     // '=' is a spec deviation openpyxl reads back as '==...').
                     //
-                    // A structural edit invalidates formula caches even when every parsed reference
-                    // survives: a shortened range can produce a different aggregate, and moving a
-                    // cell changes position-sensitive formulas such as ROW(). Leave the expression
-                    // evaluatable and uncached so the next recalculation cannot expose stale data.
+                    // A structural edit invalidates a formula cache whenever the edit can have
+                    // changed the answer: a shortened range produces a different aggregate, a
+                    // rewritten reference asks a different question, and moving a cell changes
+                    // position-sensitive formulas such as ROW(). Leave those evaluatable and
+                    // uncached so the next recalculation cannot expose stale data.
+                    //
+                    // GH-503: the edit CANNOT have changed the answer when the printed text is
+                    // byte-identical, the record kind is unchanged, and the cell lies outside the
+                    // dirty cone (`stale` carries every cell the edit moved or removed, plus their
+                    // transitive dependents and every dynamic reference). An insert far below a
+                    // formula leaves its text, its address and every value it reads exactly as they
+                    // were; dropping that cache is what left `--no-recalc` preserving almost
+                    // nothing. Keeping it asserts nothing new — the value is the one already in the
+                    // file, and any doubt puts the cell in the cone.
                     val newStr = FormulaPrinter.printFileForm(shiftedExpr)
                     val newKind = shiftedArrayKind(kind, shiftLocal, isRow, at, delta)
-                    (ref, cell.copy(value = CellValue.Formula(newStr, None, newKind)))
+                    // `ref` is the POST-shift address while `stale` is keyed on PRE-edit ones, so
+                    // on the edited sheet a cell that MOVED would miss its own seed. Anything at
+                    // or past the post-edit cut moved (an insert's [at, at+delta) band is newly
+                    // blank), which is exactly the position-sensitive case — `=ROW()` keeps its
+                    // text and changes its answer.
+                    val movedCut = if delta >= 0 then at + delta else at
+                    val moved =
+                      shiftLocal && (if isRow then ref.row.index0 else ref.col.index0) >= movedCut
+                    val untouched =
+                      preserveUntouchedCaches &&
+                        newStr == formulaStr && newKind == kind && !moved && !stale(ref)
+                    val carried = if untouched then f.cachedValue else None
+                    (ref, cell.copy(value = CellValue.Formula(newStr, carried, newKind)))
                   case None =>
                     (ref, cell.copy(value = CellValue.Error(CellError.Ref)))
               // Preserve unparseable text rather than guessing at a rewrite, but invalidate its
@@ -316,14 +548,19 @@ object StructuralEditor:
 
   /**
    * True when the edit band TEARS the range on the edited axis: a delete band overlapping any of
-   * it, or an insert strictly inside it (insert at the range start moves the whole range intact).
+   * it, or an insert strictly inside it (insert at the range start moves the whole range intact). A
+   * zero-width edit (`delta == 0`) moves nothing and therefore tears nothing.
    */
   private def editIntersects(range: CellRange, isRow: Boolean, at: Int, delta: Int): Boolean =
-    val (s, e) =
-      if isRow then (range.start.row.index0, range.end.row.index0)
-      else (range.start.col.index0, range.end.col.index0)
-    if delta < 0 then at <= e && (at - delta - 1) >= s
+    val (s, e) = axisBounds(range, isRow)
+    if delta == 0 then false
+    else if delta < 0 then at <= e && (at - delta - 1) >= s
     else at > s && at <= e
+
+  /** The range's inclusive 0-based bounds on the edited axis. */
+  private def axisBounds(range: CellRange, isRow: Boolean): (Int, Int) =
+    if isRow then (range.start.row.index0, range.end.row.index0)
+    else (range.start.col.index0, range.end.col.index0)
 
   /**
    * GH-430: shift an ArrayFormula record's anchor range with the edit; a band tearing the range
@@ -498,7 +735,10 @@ object StructuralEditor:
       case preserved: DataValidation.Preserved => preserved
     }
 
-  /** Ergonomic workbook extensions. */
+  /**
+   * Ergonomic workbook extensions. These are the throwing façade (a refused edit raises
+   * `XLException`); the `*Checked` methods on the object are the total form.
+   */
   extension (wb: Workbook)
     def insertRowsShifted(sheet: SheetName, at: Int, count: Int): Workbook =
       StructuralEditor.insertRows(wb, sheet, at, count)

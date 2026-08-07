@@ -1248,6 +1248,19 @@ private class EvaluatorImpl(
       // exactly like =A1:A3*10
       case TExpr.UnaryPlus(inner) =>
         evalMaybeArray(inner, sheet, clock, workbook, currentCell)
+      // GH-476: an untyped ref reaching an OPERAND position resolves here rather than falling to
+      // eval's "programming error" arm. Only the top level of a formula and typed argument
+      // positions coerce PolyRefs during parsing, so `=IF(1=1,+S2!G1,0)` (unary plus around a
+      // cross-sheet ref inside a function argument — the house `=+` style) arrived raw and died
+      // with "Unresolved SheetPolyRef".
+      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef =>
+        eval(
+          TExpr.asResolvedValueExpr(expr).asInstanceOf[TExpr[Any]],
+          sheet,
+          clock,
+          workbook,
+          currentCell
+        )
       // GH-302: coerced nodes in OPERAND positions pass ArrayResults through (so
       // =INDIRECT("A1:A3")*10 broadcasts exactly like =A1:A3*10) and coerce scalars totally
       // (so ="16"&"" or a text call result still enters arithmetic per the Numeric table).

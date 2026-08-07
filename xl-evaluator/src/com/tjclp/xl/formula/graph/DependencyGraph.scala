@@ -1050,6 +1050,105 @@ object DependencyGraph:
     cyclic
 
   /**
+   * GH-492: one node of the SCC condensation of the workbook-level graph.
+   *
+   * `members` is sorted by (sheet.value, ref.toA1) — the deterministic member order the Jacobi
+   * fixpoint needs (values are order-independent under Jacobi, but error vectors, report members
+   * and seeded-RNG draw order are not). `cyclic` is true for a multi-node component or a
+   * self-looping singleton, matching [[qualifiedCyclicNodes]] exactly.
+   *
+   * No `derives CanEqual`: [[QualifiedRef]] does not derive it.
+   */
+  final case class Scc(members: Vector[QualifiedRef], cyclic: Boolean):
+    /** Canonical key: the minimum member under (sheet.value, ref.toA1). Unique across nodes. */
+    private[xl] def key: (String, String) =
+      members.headOption.fold(("", ""))(q => (q.sheet.value, q.ref.toA1))
+
+  /**
+   * GH-492: the SCC condensation of the workbook-level graph, in the LEXICOGRAPHICALLY-MINIMUM
+   * dependency-first topological order — every precedent component strictly precedes the components
+   * that read it, ties broken by [[Scc.key]].
+   *
+   * This is what lets one iterative recalculation reach the workbook's GLOBAL fixpoint: walking the
+   * condensation once (acyclic components evaluate, cyclic components fixpoint) guarantees every
+   * precedent is a freshly computed value before anything reads it, so no read can fall back to a
+   * loaded cache. `qualifiedCyclicNodes` flattens the same Tarjan run into an undifferentiated
+   * `Set` and is kept for the callers that only need the membership test.
+   *
+   * Laws (property-tested in DependencyGraphSpec):
+   *   - partition — `flatMap(_.members).toSet == dependencies.keySet`, no duplicates
+   *   - order — for every edge u → v with different components, index(scc(v)) < index(scc(u))
+   *   - cyclic-view — `filter(_.cyclic).flatMap(_.members).toSet == qualifiedCyclicNodes(deps)`
+   *   - determinism — depends only on the graph's VALUE, never on Map/Set iteration order
+   *
+   * Runs in O(V + E + C log C). Only nodes present in `dependencies` (formula cells) are ordered:
+   * Tarjan also visits constants reached as successors, and those are always singletons with no
+   * outgoing edges, so filtering them out can never split a real component.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def qualifiedSccOrder(
+    dependencies: Map[QualifiedRef, Set[QualifiedRef]]
+  ): Vector[Scc] =
+    var collected = Vector.empty[Scc]
+    foreachSccOf(dependencies) { scc =>
+      val cyclic = scc match
+        case single :: Nil => dependencies.get(single).exists(_.contains(single))
+        case _ => true
+      val kept = scc.filter(dependencies.contains)
+      if kept.nonEmpty then
+        collected = collected :+ Scc(kept.toVector.sortBy(q => (q.sheet.value, q.ref.toA1)), cyclic)
+    }
+    val comps = collected
+    if comps.isEmpty then Vector.empty
+    else
+      val compOf: Map[QualifiedRef, Int] =
+        comps.zipWithIndex.flatMap((c, i) => c.members.map(_ -> i)).toMap
+      // Condensation edges, deduplicated, self-edges dropped: `precedentsOf(i)` are the components
+      // i reads, `dependentsOf(i)` the components that read i.
+      val (precedentsOf, dependentsOf) =
+        comps.zipWithIndex.foldLeft((Map.empty[Int, Set[Int]], Map.empty[Int, Set[Int]])) {
+          case (acc, (c, i)) =>
+            c.members.foldLeft(acc) { case (acc2, u) =>
+              dependencies.getOrElse(u, Set.empty).foldLeft(acc2) { case ((pre, dep), v) =>
+                compOf.get(v) match
+                  case Some(j) if j != i =>
+                    (
+                      pre.updated(i, pre.getOrElse(i, Set.empty) + j),
+                      dep.updated(j, dep.getOrElse(j, Set.empty) + i)
+                    )
+                  case _ => (pre, dep)
+              }
+            }
+        }
+      // Kahn over the condensation with a key-ordered frontier: the topological order is then a
+      // pure function of the graph's value, not of Map/Set iteration order (small Scala Maps and
+      // Sets are insertion-ordered, which is exactly where test fixtures live).
+      val byKey: Ordering[Int] = Ordering.by(i => (comps(i).key, i))
+      val emptyFrontier = scala.collection.immutable.TreeSet.empty[Int](using byKey)
+      val degree0 = comps.indices.map(i => i -> precedentsOf.getOrElse(i, Set.empty).size).toMap
+      val initial =
+        emptyFrontier ++ comps.indices.filter(i => precedentsOf.getOrElse(i, Set.empty).isEmpty)
+
+      @tailrec
+      def drain(
+        frontier: scala.collection.immutable.TreeSet[Int],
+        degree: Map[Int, Int],
+        acc: Vector[Int]
+      ): Vector[Int] =
+        frontier.headOption match
+          case None => acc
+          case Some(i) =>
+            val (nextDegree, newlyReady) =
+              dependentsOf.getOrElse(i, Set.empty).foldLeft((degree, emptyFrontier)) {
+                case ((d, ready), j) =>
+                  val remaining = d.getOrElse(j, 0) - 1
+                  (d.updated(j, remaining), if remaining == 0 then ready + j else ready)
+              }
+            drain((frontier - i) ++ newlyReady, nextDegree, acc :+ i)
+
+      drain(initial, degree0, Vector.empty).map(comps)
+
+  /**
    * GH-346: transitive dependents over the workbook-level reverse edges (excludes the starting
    * refs) — the qualified analog of `transitiveDependents`.
    */

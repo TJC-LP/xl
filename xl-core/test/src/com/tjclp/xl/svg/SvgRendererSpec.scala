@@ -1325,3 +1325,355 @@ class SvgRendererSpec extends FunSuite:
     assertEquals(ids.distinct, ids, s"Duplicate clipPath ids in: $svg")
     assert(ids.forall(_.matches("clip-[A-Z]+\\d+")), s"Clip ids must be ref-keyed, got: $ids")
   }
+
+  // ========== Numeric Overflow Hashing (GH-459) ==========
+
+  private val svgTextRuns = """<text[^>]*>([^<]*)</text>""".r
+
+  private def svgTexts(svg: String): List[String] =
+    svgTextRuns.findAllMatchIn(svg).map(_.group(1)).toList
+
+  /** Rendered text runs that are entirely `#` (color literals like #FFFFFF are not text). */
+  private def svgHashRuns(svg: String): List[String] =
+    svgTexts(svg).filter(t => t.nonEmpty && t.forall(_ == '#'))
+
+  test("toSvg: number too wide for its column renders #### (GH-459)") {
+    // A1 holds a 9-character number in a ~37px column; B1 blocks any overflow, so the
+    // clip-path used to shear off the LEADING digits and show a plausible wrong number.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // ~37px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val texts = svgTexts(svg)
+
+    assert(
+      texts.exists(t => t.nonEmpty && t.forall(_ == '#')),
+      s"Overflowing number should render as a run of #, got texts: $texts"
+    )
+    assert(
+      !svg.contains("1234567.9") && !svg.contains("234567.9"),
+      s"No digits of the overflowing number may be rendered, got: $svg"
+    )
+  }
+
+  test("toSvg: right-aligned number that does not fit hashes even with empty neighbours") {
+    val rightStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Right))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 987654321.0)
+      .unsafe
+      .withCellStyle(ref"A1", rightStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val svg = sheet.toSvg(ref"A1:C1")
+    assert(
+      svgTexts(svg).exists(t => t.nonEmpty && t.forall(_ == '#')),
+      s"Right-aligned overflow must hash (Excel does not bleed right-aligned numbers), got: $svg"
+    )
+  }
+
+  test("toSvg: number that fits its column is never hashed") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 42.0)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    assertEquals(svgHashRuns(svg), Nil, s"Fitting number must not hash, got: $svg")
+    assert(svg.contains("42"), s"Fitting number should render its digits, got: $svg")
+  }
+
+  test("toSvg: wrapped number wraps instead of hashing (Excel grows the row)") {
+    val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", wrapStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    assertEquals(svgHashRuns(svg), Nil, s"wrapText must suppress hashing, got: $svg")
+    assert(svg.contains("1234567.9"), s"Wrapped number keeps its digits, got: $svg")
+  }
+
+  test("toSvg: overflowing text is not hashed (only numbers and dates hash)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Sales Report Total")
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    assertEquals(svgHashRuns(svg), Nil, s"Text must clip, not hash, got: $svg")
+    assert(svg.contains("Sales Report Total"), s"Text should still be emitted, got: $svg")
+  }
+
+  test("toSvg: number wide for one column but fitting the merge is not hashed") {
+    val range = CellRange.parse("A1:C1").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .merge(range)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(12.0)))
+      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(12.0)))
+
+    val svg = sheet.toSvg(ref"A1:C1")
+    assertEquals(svgHashRuns(svg), Nil, s"Merged width should accommodate the number, got: $svg")
+    assert(svg.contains("1234567.9"), s"Merged number should render in full, got: $svg")
+  }
+
+  test("toSvg/toHtml: #### marker is identical in both renderers (GH-459)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val svgRuns = svgHashRuns(sheet.toSvg(ref"A1:B1"))
+    val htmlRuns = """<td[^>]*>(#+)</td>""".r
+      .findAllMatchIn(sheet.toHtml(ref"A1:B1"))
+      .map(_.group(1))
+      .toList
+
+    assert(svgRuns.nonEmpty, "SVG should hash the overflowing number")
+    assertEquals(svgRuns, htmlRuns, "SVG and HTML must agree on the marker")
+  }
+
+  test("toSvg: column too narrow for two hashes still emits at least one") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(2.0))) // 21px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    assertEquals(
+      svgHashRuns(svg),
+      List("#"),
+      s"Very narrow column should emit exactly one #, got: $svg"
+    )
+  }
+
+  import com.tjclp.xl.render.RenderUtils
+  import com.tjclp.xl.styles.numfmt.NumFmt
+
+  /** The `<text>` x, anchor and content emitted under a given cell's clip-path. */
+  private def svgTextUnderClip(svg: String, a1: String): Option[(Int, String, String)] =
+    val re =
+      s"""<text x="(-?\\d+)"[^>]*text-anchor="([a-z]+)"[^>]*clip-path="url\\(#clip-$a1\\)"[^>]*>([^<]*)</text>""".r
+    re.findFirstMatchIn(svg).map(m => (m.group(1).toInt, m.group(2), m.group(3)))
+
+  /** The clip rect x and width for a given cell. */
+  private def svgClipRect(svg: String, a1: String): Option[(Int, Int)] =
+    val re =
+      s"""<clipPath id="clip-$a1"><rect x="(-?\\d+)" y="-?\\d+" width="(\\d+)"""".r
+    re.findFirstMatchIn(svg).map(m => (m.group(1).toInt, m.group(2).toInt))
+
+  test("toSvg: right-anchored number never crosses the left edge of its clip (GH-459)") {
+    // Fractional widths are the norm in real xlsx files (8.7109375, 9.140625). At 9.25 the
+    // formatted number measures inside the (clipWidth - CellPaddingX, clipWidth] band: it
+    // legitimately escapes the #### marker, but a naive right-anchor at
+    // `cellX + cellWidth - CellPaddingX` would push its LEFT edge outside the clip and shear
+    // the leading digit — the same wrong-number defect the marker exists to prevent.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(9.25)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (textX, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    val (clipX, _) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+
+    assertEquals(text, "1234567.9", "This width is inside the band: the digits must be shown")
+    assertEquals(anchor, "end", "A number is right-aligned by content-based alignment")
+    val leftEdge = textX - RenderUtils.measureTextWidth(text, None)
+    assert(
+      leftEdge >= clipX,
+      s"Text left edge $leftEdge is left of clip edge $clipX — leading digits are sheared: $svg"
+    )
+  }
+
+  test("toSvg: negative currency in the shear band keeps its minus sign (GH-459)") {
+    // Sign inversion is the worst instance of the plausible-wrong-number class: clipping the
+    // leading `-` off `-$1,234.56` renders it as a positive amount.
+    val style = CellStyle.default.withNumFmt(NumFmt.Currency)
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> -1234.56)
+      .unsafe
+      .withCellStyle(ref"A1", style)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(9.25)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (textX, _, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    val (clipX, _) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+
+    assert(text.startsWith("-"), s"Expected a negative currency rendering, got: $text")
+    val leftEdge = textX - RenderUtils.measureTextWidth(text, None)
+    assert(
+      leftEdge >= clipX,
+      s"Minus sign at $leftEdge is clipped by the box at $clipX — reads as positive: $svg"
+    )
+  }
+
+  test("toSvg: General-aligned number with empty neighbours hashes in its own column (GH-459)") {
+    // Excel confines a too-wide number to its own column and hashes it; it never bleeds the
+    // digits across empty neighbours the way text does.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 123456789012345.0)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val svg = sheet.toSvg(ref"A1:D1")
+    assert(
+      svgHashRuns(svg).nonEmpty,
+      s"General-aligned overflow must hash, not bleed right, got: $svg"
+    )
+    assert(
+      !svg.contains("123456789012345"),
+      s"No digits of the overflowing number may be rendered, got: $svg"
+    )
+    val (_, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+    assert(clipWidth < 60, s"A1's clip must stay in column A (~37px), got $clipWidth: $svg")
+  }
+
+  /** The `<tspan>` x positions emitted under a given cell's clip-path (rich text branch). */
+  private def svgTspanXsUnderClip(svg: String, a1: String): List[Int] =
+    val textRe = s"""<text [^>]*clip-path="url\\(#clip-$a1\\)"[^>]*>(.*?)</text>""".r
+    textRe
+      .findFirstMatchIn(svg)
+      .map { m =>
+        """<tspan x="(-?\d+)"""".r.findAllMatchIn(m.group(1)).map(_.group(1).toInt).toList
+      }
+      .getOrElse(Nil)
+
+  test("toSvg: right-aligned text wider than its column keeps its right anchor (GH-459)") {
+    // Excel right-anchors an overflowing right-aligned value and cuts it on the LEFT. The
+    // anchor clamp added for the numeric shear band must not fire here: pulling the anchor
+    // right to `xPos + textWidth` would left-anchor the string and show its HEAD instead,
+    // pushing the tail past the right edge of the cell.
+    val long = "Q1 2025 Actuals!" // 16 chars, ~110px, far wider than the 45px column
+    val rightStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Right))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> long)
+      .unsafe
+      .withCellStyle(ref"A1", rightStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(5.0))) // 45px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (textX, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    val (clipX, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+
+    assertEquals(text, long, "Text is never hashed — only numbers and dates are")
+    assertEquals(anchor, "end")
+    assertEquals(
+      textX,
+      clipX + clipWidth - RenderUtils.CellPaddingX,
+      s"Overflowing right-aligned text must keep its right anchor, got x=$textX: $svg"
+    )
+    val leftEdge = textX - RenderUtils.measureTextWidth(text, Some(rightStyle.font))
+    assert(
+      leftEdge < clipX,
+      s"Its left edge should fall outside the clip (Excel cuts the head), got $leftEdge: $svg"
+    )
+  }
+
+  test("toSvg: plain text and rich text right-align to the same left edge (GH-459)") {
+    import com.tjclp.xl.richtext.RichText
+    val long = "Q1 2025 Actuals!"
+    val rightStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Right))
+    def sheetWith(v: CellValue) =
+      Sheet("Test")
+        .put(ref"A1", v)
+        .withCellStyle(ref"A1", rightStyle)
+        .put(ref"B1" -> "x")
+        .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(5.0)))
+
+    val plainSvg = sheetWith(CellValue.Text(long)).toSvg(ref"A1:B1")
+    val richSvg = sheetWith(CellValue.RichText(RichText.plain(long))).toSvg(ref"A1:B1")
+
+    val (plainX, _, plainText) = svgTextUnderClip(plainSvg, "A1").getOrElse(
+      fail(s"No <text> for A1: $plainSvg")
+    )
+    val plainLeft = plainX - RenderUtils.measureTextWidth(plainText, Some(rightStyle.font))
+    val richLeft = svgTspanXsUnderClip(richSvg, "A1").headOption.getOrElse(
+      fail(s"No <tspan> for A1: $richSvg")
+    )
+    assertEquals(
+      plainLeft,
+      richLeft,
+      "The same string in the same cell must land in the same place in both branches"
+    )
+  }
+
+  test("toSvg: left-aligned number that would cross its clip hashes (GH-459)") {
+    // The text box for a left-aligned value starts CellPaddingX inside the clip, so a number
+    // measuring in (clipWidth - CellPaddingX, clipWidth] runs off the RIGHT edge and loses its
+    // trailing digits — the same plausible-wrong-number defect as the leading-digit shear.
+    val leftStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", leftStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(9.0))) // 77px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (textX, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    val (clipX, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+
+    assertEquals(anchor, "start")
+    assert(text.nonEmpty && text.forall(_ == '#'), s"Expected a # run, got '$text': $svg")
+    assert(!svg.contains("1234567"), s"No digits of the overflowing number may render: $svg")
+    assert(
+      textX + RenderUtils.measureTextWidth(text, Some(leftStyle.font)) <= clipX + clipWidth,
+      s"The marker itself must fit inside the clip, got x=$textX: $svg"
+    )
+  }
+
+  test("toSvg: indented number that would cross its clip hashes (GH-459)") {
+    // Indent eats the text box from the left: at indent 2 (42px) a 76px number has only 53px
+    // of a 101px column left, and used to render with ~2.5 digits cut off the right.
+    val indentStyle =
+      CellStyle.default.withAlign(Align(horizontal = HAlign.Left, indent = 2))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", indentStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0))) // 101px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (textX, _, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    val (clipX, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+
+    assert(text.nonEmpty && text.forall(_ == '#'), s"Expected a # run, got '$text': $svg")
+    assert(!svg.contains("1234567"), s"No digits of the indented number may render: $svg")
+    assert(
+      textX + RenderUtils.measureTextWidth(text, Some(indentStyle.font)) <= clipX + clipWidth,
+      s"The marker must fit inside the clip, got x=$textX: $svg"
+    )
+  }
+
+  test("toSvg: left-aligned number that fits its text box is not hashed (GH-459)") {
+    // The tighter fit test must not over-hash: 42 is 17px in a 101px column.
+    val leftStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 42.0)
+      .unsafe
+      .withCellStyle(ref"A1", leftStyle)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    assertEquals(svgHashRuns(svg), Nil, s"A number with room to spare must not hash: $svg")
+    assert(svg.contains(">42</text>"), s"Fitting number should render its digits: $svg")
+  }

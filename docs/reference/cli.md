@@ -43,6 +43,9 @@ export PATH="$HOME/.local/bin:$PATH"
 --stream              # O(1) memory streaming for large files (search/stats/bounds/view + writes)
 --max-size <MB>       # Max uncompressed size for in-memory load (default 100, 0 = unlimited)
 --backend <name>      # XML backend: scalaxml (default) or saxstax (faster)
+--no-recalc           # Write verbs: apply the edit, recalculate nothing (alias --preserve-caches)
+--preserve-caches     # Same flag, spelled for the intent
+--strict              # Write verbs: exit 1 when the write's recalculation reports problems
 
 # Read-only operations
 xl -f model.xlsx sheets                    # List all sheets
@@ -67,6 +70,81 @@ xl new report.xlsx --sheet Data --sheet Summary   # Create a blank workbook
 xl functions                                       # List all 108 supported functions
 xl rasterizers                                     # List available PNG/PDF backends
 ```
+
+> Global flags must come **before** the verb: `xl -f x.xlsx --strict recalc`, never
+> `xl -f x.xlsx recalc --strict` (decline reports `Unexpected argument: recalc`).
+
+### Cache posture on writes (`--no-recalc` / `--preserve-caches`)
+
+Every write verb that changes cell content ends with a recalculation scoped to the edit's **dirty
+dependency cone** — the changed cells plus their transitive dependents (cross-sheet included) plus
+the always-dirty `INDIRECT`/`OFFSET` cells. Cached values outside that cone are never rewritten, so
+a book whose caches come from another engine keeps them.
+
+`--no-recalc` (alias `--preserve-caches`) drops the recalculation entirely: the edit lands and no
+cached value is recomputed. Use it when an external calculator owns the numbers. Honored by `put`,
+`putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`;
+`recalc` rejects it as a contradiction.
+
+How completely caches survive depends on the verb:
+
+- **Non-structural** (`put`, `putf`, `fill`, `copy`, `batch`): every existing cached value survives
+  byte-identical, cone included. The summary says so.
+- **Structural** (`insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`): a structural edit
+  moves cells, rewrites formula text and rewrites defined names, so xl invalidates the cache of
+  every formula the edit could have changed and writes those cells **without a `<v>`**. It never
+  re-asserts a pre-edit cache: whether a formula the edit *did* reach still has its old answer
+  cannot be decided without recalculating, which is precisely what the flag refuses. (A formula
+  reached through a shrunk defined name, or a static dependent of an `INDIRECT` cell, keeps its text
+  byte-identical while its answer changes underneath it.)
+
+  A cache survives only when the edit provably could not have changed it: the formula's text is
+  byte-identical after the rewrite, it did not relocate, and nothing it transitively reads was moved
+  or removed. So an edit *below* or *beside* your data preserves everything, while an edit *inside*
+  a block preserves the rows above the cut and drops the rest. The summary counts both halves:
+
+  ```
+  Recalculation skipped (--no-recalc): 4 cached value(s) preserved, 7 formula(s) invalidated by
+  the edit left uncached (recalculate externally)
+  ```
+
+  One consequence worth knowing: **volatile formulas** (`TODAY()`, `NOW()`, `RAND()`) above the cut
+  keep their cached values too. The flag means "do not recalculate", and a volatile is no exception
+  — Excel refreshes them on open regardless.
+
+  Reopening the file in Excel, or a later `xl recalc`, fills those back in. A missing `<v>` is a
+  visible gap that any recalculation repairs; a wrong one is silent and permanent, which is why xl
+  never **re-asserts** a cache the edit invalidated. What it does not claim: a cache rides through
+  only when the pre-edit dependency graph shows no path from it to the edited sheet, and a
+  reference that graph cannot resolve — a multi-area or intersection defined name, a structured
+  reference, an external link — can hide such a path. xl withdraws the caches of formulas that
+  name a defined name it cannot parse, precisely because the graph is blind there; the remaining
+  cases are tracked in [#507](https://github.com/TJC-LP/xl/issues/507) and affect a normal
+  recalculating write too. **If you need every formula cached after a structural edit, do not pass
+  `--no-recalc`.**
+
+```bash
+xl -f external-model.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
+xl -f external-model.xlsx -s Data -o out.xlsx --preserve-caches batch ops.json
+```
+
+### Strict exit codes (`--strict`)
+
+By default a write reports formula-evaluation errors, iterative non-convergence and data-table seed
+warnings in its summary and still exits 0. `--strict` promotes those to **exit 1** while printing
+the same summary — for CI and scripted pipelines. Excel error *values* (`#DIV/0!`, `#N/A`) are data
+conditions, not failures, and never gate.
+
+```bash
+xl -f model.xlsx -o out.xlsx --strict recalc    # exit 1 if any formula failed to evaluate
+```
+
+With `-o` the output file is written even on a strict failure (the gate only sets the exit code).
+With `-i` the temp file is discarded and the input is left byte-identical; the summary then says
+`NOT saved (--strict failure): <file> left untouched` instead of `Saved:`. `--strict` is refused
+together with `--stream` (streaming writes never recalculate, so the gate could never fire). Verbs
+that produce no recalculation result — `put`/`putf`/`fill`/`copy` for the cell they authored, and
+every presentation-only verb — cannot gate today (issue #504).
 
 ---
 
@@ -141,7 +219,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `delete-cols` | `<at-col> [count]` | Delete columns; `#REF!` on lost references (requires `-o`) |
 | `batch` | `<file\|-> [--dry-run]` | Apply multiple operations from JSON (requires `-o`; `--dry-run` validates without a file) |
 | `diff` | `-g <file2> [--format markdown\|json]` | Compare two workbooks; exit 0 identical, 1 differs, 2 error |
-| `lint` | `[<file>] [--format text\|json]` | Validate package structure (child order, r:id resolution, over-max refs); positional file or `-f`; exit 0 clean, 1 findings, 2 error |
+| `lint` | `[<file>] [--format text\|json]` | Validate package structure (child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, `<f>` canon); positional file or `-f`; exit 0 clean, 1 findings, 2 error |
 
 ---
 
@@ -210,6 +288,7 @@ View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG
 | `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
 | `--limit` | int | No | 50 | Max rows to display (0 = no limit). When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (with `--stream` the notice goes to stderr instead); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
 | `--skip-empty` | flag | No | false | Skip empty cells (JSON) or empty rows/columns (tabular) |
+| `--skip-hidden` | flag | No | false | Omit hidden rows/columns. **Default renders them** — a range you named never silently loses cells (GH-474) |
 | `--show-labels` | flag | No | false | Include column letters and row numbers |
 | `--header-row` | int | No | — | Use values from this row as keys in JSON output (1-based) |
 | `--raster-output` | path | For raster | — | Output file (required for png/jpeg/webp/pdf) |
@@ -227,6 +306,26 @@ View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG
 | 2 | COGS        |         | $400,000   |         |
 | 4 | Gross Profit|         | =C1-C2     |         |
 ```
+
+**Hidden rows and columns** (GH-474): a range you addressed explicitly renders in full — hidden
+lines included — and every data format carries a marker:
+
+| Format | Marker |
+|--------|--------|
+| markdown | trailing `note: range includes hidden row(s) … and column(s) …` line |
+| csv | the same note on **stderr** (stdout stays machine-parseable) |
+| json | top-level `"hiddenRows": [5]` / `"hiddenCols": ["C"]` fields (emitted only when the range holds hidden lines) |
+
+`--skip-hidden` restores the visible-only view, and the same marker then names what was dropped
+(`note: omitted hidden …`). `html`/`svg`/`png`/`jpeg`/`webp`/`pdf` are pictures of the sheet: they
+mirror Excel's display and always omit hidden lines. Streaming (`--stream`) never read row/column
+properties, so it has always rendered every addressed cell — and for the same reason it cannot
+honour `--skip-hidden` or emit the hidden-line marker: passing `--skip-hidden` with `--stream`
+prints `note: --skip-hidden is ignored with --stream …` on stderr and renders everything. Drop
+`--stream` when you need hidden lines elided or flagged.
+
+Why the default: `xl search` finds a value in a hidden row and `xl cell C5` reads it, so a `view`
+that silently elided the same cell read as file corruption.
 
 ---
 
@@ -1043,7 +1142,20 @@ Apply multiple operations atomically from JSON input.
 
 // Custom date format
 {"op": "put", "ref": "A4", "value": "2025-11-10", "format": "yyyy-mm-dd"}
+
+// Quoted-literal / semicolon-only codes are codes too (the 1/0 toggle-flag idiom)
+{"op": "put", "ref": "A5", "value": 1, "format": "\"Yes \";;\"No \""}
 ```
+
+**Unrecognized format strings** (GH-475): a string that is neither a known name nor Excel
+format-code-shaped is a typo far more often than a code.
+- On the put/putf `format` hint it is **ignored, with a warning on stderr** naming the string and
+  listing the known names (`format: "curency"` → warning, cell stays General).
+- On the `style` op's `numFormat` it is still **applied as a custom code** (Excel, not xl, is the
+  authority on codes) but warns the same way.
+
+The `--stream` batch path applies exactly the same table, including custom codes — it used to know
+only six names and dropped everything else in silence.
 
 **Smart String Detection** (enabled by default):
 
@@ -1216,7 +1328,8 @@ xl -f deliverable.xlsx lint --format json        # Stable schema for pipelines
 xl -f deliverable.xlsx lint && echo "safe to send"
 ```
 
-**What it flags**:
+**What it flags** (the complete `LintCategory` roster — a test pins this list against
+`LintCategory.slug`, so it cannot drift):
 - **`child-order`** — child elements of `xl/workbook.xml` (CT_Workbook) or a worksheet
   (CT_Worksheet) out of ECMA-376 schema sequence (e.g. `<externalReferences>` after
   `<extLst>`)
@@ -1224,6 +1337,13 @@ xl -f deliverable.xlsx lint && echo "safe to send"
   legacyDrawing, hyperlink, tablePart, …) with no entry in the paired `.rels`
 - **`wrong-rel-type`** — the `r:id` resolves, but to a relationship of the wrong type
 - **`missing-part`** — the relationship target part is absent from the package
+- **`missing-content-type`** — a present-and-referenced part has neither an `<Override>` nor a
+  matching extension `<Default>` in `[Content_Types].xml`
+- **`ref-out-of-bounds`** — a `ref`/`sqref`/`dimension` token past row 1048576 or column XFD
+- **`data-table-torn`** — a `<f t="dataTable">` record whose grid no longer holds together
+  (missing record cell, inconsistent inputs, interior no longer matching the record)
+- **`data-table-unseeded`** — an uncached data-table interior in a `calcMode="autoNoTable"`
+  book: Excel does not recompute data tables on open, so the grid opens BLANK
 - **`formula-leading-equals`** — `<f>` text stored with the display form's leading `=`
   (non-spec; strict readers like openpyxl misread it — re-writing the file with xl heals it)
 

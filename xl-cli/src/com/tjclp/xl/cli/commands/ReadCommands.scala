@@ -65,7 +65,8 @@ object ReadCommands:
     rasterOutput: Option[Path],
     skipEmpty: Boolean,
     headerRow: Option[Int],
-    rasterizer: Option[String] = None
+    rasterizer: Option[String] = None,
+    skipHidden: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "view")
@@ -81,6 +82,16 @@ object ReadCommands:
       shownRows = limitedRange.end.row.index0 - limitedRange.start.row.index0 + 1
       isTruncated = shownRows < totalRows
       notice = RendererCommon.truncationNotice(shownRows, totalRows)
+      // GH-474: hidden rows/columns inside an explicitly requested range are rendered by default
+      // and marked; --skip-hidden re-elides them and the marker then names what was dropped.
+      hiddenNote = RendererCommon.hiddenNotice(
+        targetSheet,
+        limitedRange.start.col.index0,
+        limitedRange.end.col.index0,
+        limitedRange.start.row.index0,
+        limitedRange.end.row.index0,
+        skipHidden
+      )
       theme = wb.metadata.theme // Use workbook's parsed theme
       result <- format match
         case ViewFormat.Markdown =>
@@ -94,9 +105,11 @@ object ReadCommands:
             limitedRange,
             showFormulas,
             skipEmpty,
-            evalFormulas = false
+            evalFormulas = false,
+            skipHidden = skipHidden
           )
-          IO.pure(if isTruncated then s"$table\n$notice" else table)
+          val withTruncation = if isTruncated then s"$table\n$notice" else table
+          IO.pure(hiddenNote.fold(withTruncation)(n => s"$withTruncation\n$n"))
         case ViewFormat.Html =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
@@ -142,7 +155,8 @@ object ReadCommands:
               skipEmpty,
               headerRow,
               evalFormulas = false,
-              truncatedTotalRows = Option.when(isTruncated)(totalRows)
+              truncatedTotalRows = Option.when(isTruncated)(totalRows),
+              skipHidden = skipHidden
             )
           )
         case ViewFormat.Csv =>
@@ -157,10 +171,14 @@ object ReadCommands:
             showFormulas,
             showLabels,
             skipEmpty,
-            evalFormulas = false
+            evalFormulas = false,
+            skipHidden = skipHidden
           )
-          // CSV stdout must stay machine-parseable: truncation notice goes to stderr only.
-          IO(System.err.println(notice)).whenA(isTruncated).as(csv)
+          // CSV stdout must stay machine-parseable: notices go to stderr only.
+          IO(System.err.println(notice))
+            .whenA(isTruncated)
+            .productR(hiddenNote.traverse_(n => IO(System.err.println(n))))
+            .as(csv)
         case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
           rasterOutput match
             case None =>

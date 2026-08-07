@@ -296,8 +296,8 @@ object SvgRenderer:
                     textBuffer.append("</text>\n")
 
                   case other =>
-                    val text = cellValueToText(other, numFmt)
-                    if text.nonEmpty then
+                    val formatted = cellValueToText(other, numFmt)
+                    if formatted.nonEmpty then
                       // includeStyles=false still needs explicit font attrs now that the
                       // .cell-text CSS rule no longer declares them (GH-255 cascade fix)
                       val textStyle =
@@ -305,6 +305,11 @@ object SvgRenderer:
                         else """ fill="#000000" font-size="15px" font-family="Calibri""""
                       val style = cell.styleId.flatMap(sheet.styleRegistry.get)
                       val shouldWrap = style.exists(_.align.wrapText)
+
+                      // Excel's #### marker: a clipped numeral reads as a different, plausible
+                      // number (GH-459)
+                      val text = hashOverflowText(other, style, effectiveWidth)
+                        .getOrElse(formatted)
 
                       if shouldWrap then
                         val availableWidth = effectiveWidth - CellPaddingX * 2
@@ -326,9 +331,34 @@ object SvgRenderer:
                         }
                         textBuffer.append("</text>\n")
                       else
+                        // The right anchor sits CellPaddingX inside the clip box, so text
+                        // measuring in (effectiveWidth - CellPaddingX, effectiveWidth] would
+                        // start left of the clip and lose its leading glyph — a sheared digit
+                        // or, worse, a dropped minus sign (GH-459). Clamp the anchor to the
+                        // clip's left edge for exactly that band.
+                        //
+                        // The clamp must NOT fire once the text is wider than the cell: Excel
+                        // right-anchors an overflowing right-aligned value and cuts its head,
+                        // and only numbers and dates are hashed above — Text, Bool and Error
+                        // reach here at full width, and pulling their anchor right would show
+                        // the head and push the tail out of the cell (it would also contradict
+                        // the RichText branch, which left-shifts by the run width).
+                        //
+                        // Precision note: the clamp lands the left edge exactly on the clip
+                        // edge, so it relies on the rasterizer laying the string out no wider
+                        // than AWT measured it. Batik can run ~2px wider than AWT's
+                        // stringWidth, which can still shave the flag off a leading '1' when
+                        // the slack is under ~2px (rsvg-convert and resvg do not). A blind
+                        // safety margin is not the fix — it would only move the shave to the
+                        // trailing digit. Tracked as GH-505.
+                        val textW = measureTextWidth(text, style.map(_.font))
+                        val anchorX =
+                          if anchor == "end" && textW <= effectiveWidth then
+                            math.max(textX, xPos + textW)
+                          else textX
                         val escapedText = escapeXml(text)
                         textBuffer.append(
-                          s"""    <text x="$textX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
+                          s"""    <text x="$anchorX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
                         )
                         textBuffer.append(s"""$escapedText</text>\n""")
               }

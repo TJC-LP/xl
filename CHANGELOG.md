@@ -5,6 +5,150 @@ All notable changes to the XL project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2] "Fixpoint" - 2026-08-06
+
+Wave 24: the 0.19.1 blind-regression round. Four new silent-wrong-number
+bugs were found in the field, and **three of them turned out to be one
+root cause** — evaluation reading a stale or unevaluated cache instead of
+the value. This release fixes that root cause and the two independent
+bugs beside it. The governing principle throughout: **a missing value is
+always acceptable, a wrong one never is.**
+
+### Added
+
+- **`RecalcResult.cycles` / `.unconverged` / `.certified`** (#492):
+  per-cyclic-component convergence reporting. `SccReport(members,
+  converged, rounds, maxDelta)` names the offenders instead of a single
+  anonymous boolean, and `certified` — no cell failed to evaluate AND
+  every component reached its fixpoint — is the one gate a caller can
+  trust to mean "this workbook is at its global fixpoint". Source-
+  compatible via defaults; binary-incompatible for `xl-evaluator`
+  consumers compiled against 0.19.1, as that release was against 0.19.0.
+- **`--no-recalc` / `--preserve-caches` on CLI write verbs** (#468):
+  apply the edit and recalculate nothing, so externally-authored caches
+  survive. The trailing recalculation of every other write verb is now
+  scoped to the edit's **dirty dependency cone** rather than the whole
+  book, which is what stopped unrelated writes re-poisoning correct
+  caches in the first place.
+- **`--strict` on write verbs** (#496): promotes recalculation errors,
+  iterative exhaustion and data-table seed warnings to exit 1. Default
+  stays advisory. Previously every write verb exited 0 even when
+  formulas failed outright, so CI could not gate on any of it.
+- **`SeedTableWarning.ErrorGuardFired` and `.ConeUnresolved`** (#494):
+  a guard that resolves to its error arm during seeding, and a
+  precedent the what-if cone could not re-derive, are now reported
+  instead of seeded silently.
+- **SEARCH, N and HYPERLINK** (#476), plus **IFNA, NA and ISNA** (#511) —
+  **115 functions**. IFNA is IFERROR's discriminating sibling: it swallows
+  only `#N/A`, so a `#DIV/0!` propagates instead of being masked, which is
+  why lookups are guarded with it rather than IFERROR. Its absence was not
+  merely a missing function — a data-table corner using IFNA seeded
+  *nothing*, silently, and `DataTableSeeder`'s guard walk carried two
+  unreachable branches (IFNA and ISNA) for functions that did not exist.
+
+### Fixed
+
+- **Re-recalculating a correct multi-SCC circular book corrupted it**
+  (#491, #492, critical). Iterative recalculation split the pass three
+  ways: `preOrder` / one flat Jacobi over the *entire* cyclic core /
+  `postOrder`. An acyclic cell sitting **between two SCCs** is a
+  transitive dependent of the first, so it landed in `postOrder` and was
+  never evaluated before the fixpoint — yet the second SCC read it
+  during iteration. On a fresh book that read recursively evaluated live
+  and the answer was right; on a **cached** book it returned the previous
+  generation's value, the pass wrote new caches, and the next pass read
+  those. The result was a fixed point of the buggy pass operator:
+  value-idempotent, `converged=false` forever, headline 1.3pt of MOIC
+  off truth. `DependencyGraph.qualifiedCyclicNodes` compounded it by
+  flattening every Tarjan component into one undifferentiated set solved
+  under a single shared budget. Replaced with a **single walk of the SCC
+  condensation in dependency-first order** — runs of acyclic components
+  evaluate via `evalPass`, each cyclic component fixpoints via
+  `jacobiFixpoint` against the threaded temp sheets. One pass now
+  reaches the global fixpoint, each component gets its own budget and
+  verdict, and re-recalculation is idempotent. Cross-SCC ordering is
+  Gauss–Seidel by construction (most of #482); within-SCC stays Jacobi.
+- **Iterative cycles cold-seeded from zero, wiping valid caches** (#469,
+  critical): members now warm-start from their loaded **numeric** caches,
+  zero as fallback. A deliberate, documented departure from Excel, which
+  seeds from whatever the cell holds including an error — numbers are the
+  only shape where warm seeding is both safe and useful.
+- **Acyclic data-table seeding was silently FLAT** (#493): the acyclic
+  what-if lane overlaid the input cells and evaluated the corner without
+  re-deriving the intermediate cone, so any cached transitive precedent
+  returned its base-case value and every interior seeded identical. Both
+  lanes now evaluate their precedent cone topologically. The CLI
+  `recalc --tables` lane hit this *always*, because its recalc phase
+  caches everything immediately before seeding.
+- **The seeder could not evaluate XIRR, seeding "NM " into every
+  interior** (#494): cashflow range readers drop undecodable cells
+  *silently and shorten the array*, so uncached flow/date precedents made
+  XIRR's own length guard fire, `ISERROR` saw `TRUE`, and the guard's
+  text arm was banked as a perfectly successful result. Guards are now
+  decided by walking the **evaluated path** top-down rather than by
+  comparing values, which reports non-root guards (`=IFERROR(1/A1,0)+5`)
+  without false-positiving on untaken rungs that coincide numerically.
+- **Structural edits through a data-table interior silently deleted the
+  TABLE record** (#495): the grid degraded to constants and
+  `data-table-torn` could not fire, because the lint scans for a record
+  that no longer existed. Such edits are now **refused** — matching the
+  authoring API, and symmetric with the input-cell guard that already set
+  `del1`/`del2`. Also fixes a zero-delta bug where `insertRows(count=0)`
+  reported a tear.
+- **PNG raster clipped leading digits** (#459): a value wider than its
+  column rendered with its *leading* digits cut — `1,234,567.9` as a
+  clean-looking `4,567.9`. Numbers and dates too wide for their column
+  now render `####` like Excel, in SVG and HTML alike, with the right
+  anchor gated on actually fitting so genuinely overflowing text keeps
+  Excel's tail-clipping.
+- **`view` silently omitted hidden rows and columns** (#474) from csv,
+  markdown and json, even inside an explicitly requested range.
+- **`--stream batch` dropped custom numFmt codes** (#475) while
+  reporting success; `StyleBuilder` now warns on suspect numFmt strings
+  instead of shipping `"curency"` as a custom code.
+- **VLOOKUP/HLOOKUP mis-resolved date-typed keys** (#488): routed
+  through the shared `normalizeLookupValue` helpers #467 introduced.
+- **`batch` ignored declared `calcPr`** (#481): it now bridges to
+  iterative calculation exactly as `recalc` does.
+- **The error guards missed an error cached inside a formula cell**
+  (#512). `IFERROR`/`ISERROR`/`ISERR` matched only a bare
+  `CellValue.Error`, but on any recalculated book a formula cell carries
+  its value in `cachedValue` — so `=ISERROR(B5)` over a formula that
+  evaluated to `#DIV/0!` answered **FALSE**, and `=IFERROR(B5,0)` handed
+  back the error instead of the fallback. All five guards now share
+  `ArrayArithmetic.carriedError`, the matcher whose scaladoc already said
+  it existed so the error guards would agree.
+- Docs: `xl lint`'s flagged-category list was 5 of 9 (#486); the
+  xl-scripting data-table example shipped an uncached corner (#490).
+
+### Notes
+
+- **`--no-recalc` on structural verbs, and why it works** (#503). Four
+  adversarial rounds proved that deciding "is this pre-edit cache still
+  valid" by RE-ASSERTING it from local facts cannot be made sound — a
+  relocated `=ROW()`, a static dependent of a dynamic cell, a rewritten
+  defined name, and a multi-area name the parser cannot read each defeat
+  a different guard. Restoration was removed. The sound move is the
+  complement: **stop over-invalidating**. `StructuralEditor` seeded on
+  every cell of the edited sheet, so an insert at row 20 invalidated a
+  reader of A1. Seeds are now the cells the edit moved or removed, and a
+  formula keeps its cache when its text is byte-identical, it did not
+  relocate, and it sits outside that cone. Narrowing withdraws fewer
+  claims and asserts nothing new, so it is sound by construction. On a
+  14-formula model an edit below the data now preserves 14/14 (was 0/14)
+  and an edit inside a contiguous block preserves the rows above the cut.
+  Opt-in (`preserveUntouchedCaches`, default `false`) and threaded only
+  from `--no-recalc`, so the default recalculating path is byte-identical.
+  Volatiles above the cut keep their caches under the flag — the flag
+  means do not recalculate, and Excel refreshes them on open anyway.
+- Structural edits that tear a data-table interior now return a `Left`
+  where they previously succeeded silently. This is a behavioural change
+  by design; two tests that pinned the old silent degradation were
+  rewritten.
+- Follow-ups filed during the wave: #497–#509. **#499** is the general
+  form of the XIRR bug — any function taking a range can still receive a
+  silently-shortened array — and is the first thing to pick up next.
+
 ## [0.19.1] - 2026-08-04
 
 Field hardening (waves 23 + 23b): the post-0.19.0 field-QC burn-down —

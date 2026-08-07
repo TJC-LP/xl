@@ -1,9 +1,9 @@
 package com.tjclp.xl.formula.functions
 
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{CriteriaMatcher, EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -123,6 +123,58 @@ trait FunctionSpecsText extends FunctionSpecsBase:
       yield result
     }
 
+  /**
+   * GH-476: SEARCH(find_text, within_text, [start_num]) — FIND's case-INSENSITIVE, wildcard-aware
+   * sibling and the more common banker idiom. Absent from the roster, it aborted whole-book recalc
+   * with an UnknownFunction host error.
+   *
+   * Excel semantics: 1-based result, `*`/`?` wildcards (`~` escapes), an out-of-range start_num or
+   * a miss is a cached `#VALUE!` (catchable by IFERROR), never a host failure.
+   */
+  val search: FunctionSpec[BigDecimal] { type Args = FindArgs } =
+    FunctionSpec.simple[BigDecimal, FindArgs](
+      "SEARCH",
+      Arity.Range(2, 3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (findExpr, withinExpr, startOpt) = args
+      for
+        needle <- ctx.evalExpr(findExpr)
+        haystack <- ctx.evalExpr(withinExpr)
+        start <- startOpt.fold[Either[EvalError, Int]](Right(1))(e => ctx.evalExpr(e))
+        result <-
+          if start < 1 || start > haystack.length then
+            Left(
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"SEARCH: start_num $start is outside 1..${haystack.length}")
+              )
+            )
+          else
+            searchIndex(needle, haystack, start).toRight(
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"SEARCH: '$needle' not found in '$haystack'")
+              )
+            )
+      yield BigDecimal(result)
+    }
+
+  /** 1-based index of the first case-insensitive (wildcard-aware) hit at or after `start`. */
+  private def searchIndex(needle: String, haystack: String, start: Int): Option[Int] =
+    if needle.isEmpty then Some(start)
+    else if needle.exists(c => c == '*' || c == '?' || c == '~') then
+      val matcher = java.util.regex.Pattern
+        .compile(
+          CriteriaMatcher.wildcardRegexBody(needle),
+          java.util.regex.Pattern.CASE_INSENSITIVE
+        )
+        .matcher(haystack)
+      Option.when(matcher.find(start - 1))(matcher.start + 1)
+    else
+      val idx = haystack.toLowerCase.indexOf(needle.toLowerCase, start - 1)
+      Option.when(idx >= 0)(idx + 1)
+
   val substitute: FunctionSpec[String] { type Args = SubstituteArgs } =
     FunctionSpec.simple[String, SubstituteArgs]("SUBSTITUTE", Arity.Range(3, 4)) { (args, ctx) =>
       val (textExpr, oldExpr, newExpr, instExpr) = args
@@ -173,6 +225,16 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     }
 
   /**
+   * GH-476: unparseable VALUE input is an Excel error VALUE, not a host failure.
+   *
+   * `=VALUE("None")` is ordinary in banker books (a text sentinel in a numeric column); Excel
+   * caches `#VALUE!` there and recalc carries on. Raising EvalFailed instead aborted cache refresh
+   * for the whole cell — and IFERROR could not see a code to swallow.
+   */
+  private def unparseableValue(input: String): EvalError =
+    EvalError.ErrorValue(CellError.Value, Some(s"VALUE: cannot parse '$input'"))
+
+  /**
    * Parse an Excel-style numeric string. Handles currency ($), thousands commas, percent suffix
    * (×1/100), accounting parentheses (negative), scientific notation, sign, and whitespace.
    *
@@ -195,8 +257,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         val currencyStrippedHasLeadingSign =
           afterCurrency.startsWith("-") || afterCurrency.startsWith("+")
         innerHasLeadingSign || currencyStrippedHasLeadingSign
-      if negFromParens && innerStartsWithSign then
-        Left(EvalError.EvalFailed(s"VALUE: cannot parse '$input'"))
+      if negFromParens && innerStartsWithSign then Left(unparseableValue(input))
       else
         val (isPercent, afterPercent) =
           if afterParens.endsWith("%") then (true, afterParens.substring(0, afterParens.length - 1))
@@ -207,7 +268,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
             val signed = if negFromParens then -n else n
             Right(if isPercent then signed / 100 else signed)
           case Left(_) =>
-            Left(EvalError.EvalFailed(s"VALUE: cannot parse '$input'"))
+            Left(unparseableValue(input))
 
   val text: FunctionSpec[String] { type Args = TextArgs } =
     FunctionSpec.simple[String, TextArgs]("TEXT", Arity.two) { (args, ctx) =>

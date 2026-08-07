@@ -44,13 +44,36 @@ final case class CellEvalError(
  *   .fold(wb.recalculate())(it => wb.recalculate(it))
  * }}}
  *
+ * GH-492: `maxIter`/`maxChange` are PER strongly-connected component, not per workbook. Each cyclic
+ * component fixpoints against its own budget while the condensation is walked in dependency-first
+ * order, so one permanently-oscillating cycle can no longer burn the budget of (or block the
+ * convergence verdict of) an unrelated one. Worst-case total work is unchanged (`maxIter × |cyclic
+ * core|` member evaluations) and matches Excel's per-cell budget.
+ *
  * @param maxIter
  *   Iteration cap (Excel UI default 100; values < 1 are treated as 1)
  * @param maxChange
  *   Convergence threshold: iteration stops when every cycle member changes by LESS than this
  *   between rounds (Excel UI default 0.001)
+ * @param seedFromCaches
+ *   GH-469: seed each cycle member from its LOADED cached NUMBER when it has one, falling back to 0
+ *   otherwise — Excel's semantics (iterative calculation starts from the current cell values). A
+ *   book already at a valid fixpoint therefore re-solves to itself in one round instead of being
+ *   driven back through the 0-seed transient, which on guarded topologies (mutually
+ *   `IF(ISERROR(…))`-guarded pairs) silently replaced valid numeric caches with the guard's text
+ *   branch — itself a fixpoint, so the run reported convergence with no error at all. Set false for
+ *   a cold start: the supported escape hatch for a book whose numeric caches are known to be
+ *   poisoned. Members whose cache the dynamic (INDIRECT/OFFSET) bucket strips seed 0 regardless —
+ *   their caches are declared stale. Only `Number` caches seed: arithmetic propagates a stale error
+ *   or text cache unchanged (`#DIV/0! * 0.5 + 10` is `#DIV/0!`), so seeding one would wedge an
+ *   otherwise healthy cycle at its poison and report `converged = true`; every non-numeric shape
+ *   therefore falls back to 0 and heals exactly as it did before GH-469.
  */
-final case class IterativeCalc(maxIter: Int, maxChange: BigDecimal) derives CanEqual
+final case class IterativeCalc(
+  maxIter: Int,
+  maxChange: BigDecimal,
+  seedFromCaches: Boolean = true
+) derives CanEqual
 
 object IterativeCalc:
   /**
@@ -60,6 +83,41 @@ object IterativeCalc:
    */
   def fromCalcPr(cp: CalcPr): IterativeCalc =
     IterativeCalc(cp.maxIterations.getOrElse(100), cp.maxChange.getOrElse(BigDecimal("0.001")))
+
+/**
+ * GH-492: one cyclic strongly-connected component's fixpoint verdict.
+ *
+ * Members are the component's cells sorted by (sheet name, A1) — the same order the Jacobi loop
+ * iterates them in. Uses `(SheetName, ARef)` rather than the graph package's `QualifiedRef`: the
+ * latter does not derive `CanEqual`, and the public result type stays free of a graph dependency
+ * (the same shape [[CellEvalError]] already uses).
+ *
+ * @param converged
+ *   true iff every member's |Δ| dropped below `maxChange` within `maxIter` rounds
+ * @param rounds
+ *   rounds actually run for THIS component — `maxIter` on exhaustion, else the converging round
+ * @param maxDelta
+ *   the largest |Δ| among numeric members in the final round (None when no member was numeric) —
+ *   the residual a caller can size an exhaustion against
+ */
+final case class SccReport(
+  members: Vector[(SheetName, ARef)],
+  converged: Boolean,
+  rounds: Int,
+  maxDelta: Option[BigDecimal]
+) derives CanEqual:
+
+  /** e.g. `'Debt'!B7, 'Debt'!B8 (+3 more): exhausted 400 round(s), max |Δ| = 3.9` */
+  def render: String =
+    val shown = members
+      .take(2)
+      .map((s, r) => s"${SheetName.quoteForFormula(s.value)}!${r.toA1}")
+      .mkString(", ")
+    val more = if members.sizeIs > 2 then s" (+${members.size - 2} more)" else ""
+    val verdict =
+      if converged then s"converged in $rounds round(s)" else s"exhausted $rounds round(s)"
+    val delta = maxDelta.fold("")(d => s", max |Δ| = $d")
+    s"$shown$more: $verdict$delta"
 
 /**
  * Result of a total, whole-workbook recalculation (`wb.recalculate()`).
@@ -82,21 +140,59 @@ object IterativeCalc:
  *   Per-cell COULD-NOT-EVALUATE host failures only: parse errors, unknown functions, missing
  *   sheets, cycle participants, and cells blocked by a cycle
  * @param converged
- *   GH-454: false iff an iterative run exhausted `maxIter` rounds without every cycle member's
- *   |Δ| dropping below `maxChange` — the last-round values are still kept (Excel semantics) but
- *   callers can now gate instead of mistaking exhaustion for stationarity. Non-iterative runs
- *   (default `recalculate()`, or iterative settings on an acyclic workbook) report true.
+ *   GH-454/GH-492: `cycles.forall(_.converged)` — false iff some cyclic component exhausted
+ *   `maxIter` rounds without every member's |Δ| dropping below `maxChange`. The last-round values
+ *   are still kept (Excel semantics) but callers can gate instead of mistaking exhaustion for
+ *   stationarity. Non-iterative runs (default `recalculate()`, or iterative settings on an acyclic
+ *   workbook) report true vacuously.
+ *
+ * '''GH-492 — what `converged = true` now certifies.''' An iterative recalculation walks the SCC
+ * condensation of the workbook graph ONCE in dependency-first order: a run of acyclic components
+ * evaluates normally, each cyclic component fixpoints against the freshly computed values of its
+ * precedents. By induction over that order, after the last component every cell holds its
+ * GLOBAL-fixpoint value (within each component's `maxChange`), so `converged = true` means one more
+ * whole-workbook pass would change nothing beyond that tolerance — every component would recognise
+ * its input as a fixpoint in round 1 (exactly, and bit-for-bit, with
+ * `IterativeCalc.seedFromCaches = false`). Before GH-492 the pass was split pre-order / one flat
+ * Jacobi / post-order and `converged` certified only that the Jacobi loop had stopped moving —
+ * mid-wavefront, against whatever caches the acyclic precedents happened to hold. Two honest
+ * caveats survive: per-component tolerances compose across the condensation only up to error
+ * amplification through the DAG, and dynamic (INDIRECT/OFFSET) edges are invisible to Tarjan, so a
+ * dynamic cycle is neither iterated nor covered by this flag (see the GH-274 note on
+ * `recalculate`).
+ *
+ * '''Seed dependence.''' With `IterativeCalc.seedFromCaches` (the default, Excel's behavior) the
+ * fixpoint reached depends on the input workbook's cached values. For a contraction that is
+ * immaterial; for a genuinely multi-fixpoint nonlinear cycle it is not, and
+ * `recalculate(wb) != recalculate(stripCaches(wb))` is then a real, documented property — the same
+ * exposure Excel has. Only NUMERIC caches seed, so a member carrying a stale error or text cache
+ * still heals from 0 rather than certifying its own poison.
+ *
  * @param iterationsUsed
- *   GH-454: iterative rounds actually run (0 when no iteration happened). Equals `maxIter` on
- *   exhaustion; on convergence it is the round that converged, in (0, maxIter]
+ *   GH-454/GH-492: `cycles.map(_.rounds).max` — the rounds run by the WORST component (0 when no
+ *   iteration happened). Equals `maxIter` when any component exhausted; otherwise in (0, maxIter].
+ * @param cycles
+ *   GH-492: one [[SccReport]] per cyclic component actually iterated, sorted by the component's
+ *   canonical key (its minimum member under (sheet name, A1)). Empty on non-iterative and acyclic
+ *   runs. Future diagnostics extend [[SccReport]], not this class.
  */
 final case class RecalcResult(
   workbook: Workbook,
   evaluated: Map[SheetName, Map[ARef, CellValue]],
   errors: Vector[CellEvalError],
   converged: Boolean = true,
-  iterationsUsed: Int = 0
+  iterationsUsed: Int = 0,
+  cycles: Vector[SccReport] = Vector.empty
 ) derives CanEqual:
+
+  /** GH-492: the cyclic components that exhausted their budget — the offenders to name. */
+  def unconverged: Vector[SccReport] = cycles.filterNot(_.converged)
+
+  /**
+   * GH-492: no cell failed to evaluate AND every cyclic component reached its fixpoint — the single
+   * gate a caller can trust to mean "this workbook is at its global fixpoint".
+   */
+  def certified: Boolean = errors.isEmpty && converged
 
   /**
    * True when every formula in the workbook COMPUTED a value — possibly an Excel error value

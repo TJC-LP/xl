@@ -341,6 +341,7 @@ object BatchParser:
         op match
           case "put" =>
             collectUnknownPropsWarning(objMap, knownPutProps, "put", idx).foreach(warnings += _)
+            collectFormatHintWarning(objMap, "put", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
             // detect defaults to true; set to false to disable smart detection
             val detect = objMap.get("detect").flatMap(_.boolOpt).getOrElse(true)
@@ -360,6 +361,7 @@ object BatchParser:
 
           case "putf" =>
             collectUnknownPropsWarning(objMap, knownPutfProps, "putf", idx).foreach(warnings += _)
+            collectFormatHintWarning(objMap, "putf", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
             // Optional number format applied to the formula cell(s) — parity with put (GH-356)
             val format = objMap.get("format").flatMap(_.strOpt).flatMap(parseFormatName)
@@ -390,6 +392,7 @@ object BatchParser:
 
           case "style" =>
             collectUnknownPropsWarning(objMap, knownStyleProps, "style", idx).foreach(warnings += _)
+            collectStyleNumFmtWarning(objMap, idx).foreach(warnings += _)
             val range = requireString(objMap, "range", idx)
             val props = parseStyleProps(objMap)
             BatchOp.Style(range, props)
@@ -714,6 +717,39 @@ object BatchParser:
   private val knownCfProps =
     Set("op", "range", "rule", "bold", "italic", "underline", "strike", "bg", "fg")
 
+  /**
+   * GH-475: warn when a put/putf `format` hint is neither a known name nor an Excel format code —
+   * such a string is DROPPED (a value hint must not become a garbage code), and dropping it in
+   * silence is how `"curency"` shipped as General with exit 0.
+   */
+  private def collectFormatHintWarning(
+    objMap: ObjMap,
+    opType: String,
+    idx: Int
+  ): Option[String] =
+    objMap
+      .get("format")
+      .flatMap(_.strOpt)
+      .filter(s => parseFormatName(s).isEmpty)
+      .map(s =>
+        s"Warning: Object ${idx + 1} ($opType): format '$s' is neither a known format name nor " +
+          s"an Excel format code — ignored. Known names: ${StyleBuilder.numFmtNames.mkString(", ")}."
+      )
+
+  /**
+   * GH-475: warn when a style op's `numFormat` is neither a known name nor code-shaped. Unlike the
+   * put/putf hint this one IS applied (as a custom code), so the message says so.
+   */
+  private def collectStyleNumFmtWarning(
+    objMap: ObjMap,
+    idx: Int
+  ): Option[String] =
+    objMap
+      .get("numFormat")
+      .flatMap(_.strOpt)
+      .flatMap(StyleBuilder.numFmtWarning)
+      .map(w => s"Warning: Object ${idx + 1} (style): ${w.stripPrefix("Warning: ")}")
+
   /** Collect warning about unknown properties in a batch operation (if any) */
   private def collectUnknownPropsWarning(
     objMap: ObjMap,
@@ -735,26 +771,17 @@ object BatchParser:
    * Parse format name string to NumFmt.
    *
    * Supports named formats (currency, percent, date, etc.) and custom Excel format codes.
+   *
+   * GH-475: the code test lives in [[StyleBuilder.looksLikeFormatCode]] so the put/putf `format`
+   * field, the batch style op and the CLI `style` command agree on what a code is — the old inline
+   * "contains # 0 @ yy mm dd hh" test silently dropped quoted-literal/semicolon codes like
+   * `"Yes ";;"No "`. Strings that are neither a name nor code-shaped are still dropped here (a
+   * value's format hint must not become a garbage code), but the caller warns.
    */
   private def parseFormatName(name: String): Option[NumFmt] =
-    name.toLowerCase match
-      case "general" => Some(NumFmt.General)
-      case "integer" => Some(NumFmt.Integer)
-      case "decimal" | "number" => Some(NumFmt.Decimal)
-      case "currency" => Some(NumFmt.Currency)
-      case "percent" => Some(NumFmt.Percent)
-      case "percent_decimal" => Some(NumFmt.PercentDecimal)
-      case "date" => Some(NumFmt.Date)
-      case "datetime" => Some(NumFmt.DateTime)
-      case "time" => Some(NumFmt.Time)
-      case "text" => Some(NumFmt.Text)
-      case custom =>
-        // Accept custom format codes that contain format characters
-        if custom.contains("#") || custom.contains("0") || custom.contains("@") ||
-          custom.toLowerCase.contains("yy") || custom.toLowerCase.contains("mm") ||
-          custom.toLowerCase.contains("dd") || custom.toLowerCase.contains("hh")
-        then Some(NumFmt.Custom(name)) // Preserve original case
-        else None
+    StyleBuilder
+      .parseNumFmtName(name)
+      .orElse(Option.when(StyleBuilder.looksLikeFormatCode(name))(NumFmt.Custom(name)))
 
   // ========== Typed Value Parsing ==========
 
@@ -1021,13 +1048,17 @@ object BatchParser:
    *   Default sheet for unqualified refs
    * @param ops
    *   Operations to apply
+   * @param recalcDependents
+   *   GH-468: false under `--no-recalc` — the only op that recalculates while applying is `copy`
+   *   (its target-sheet dependents), and it must leave every cache alone too.
    * @return
    *   IO containing updated workbook
    */
   def applyBatchOperations(
     wb: Workbook,
     defaultSheetOpt: Option[Sheet],
-    ops: Vector[BatchOp]
+    ops: Vector[BatchOp],
+    recalcDependents: Boolean = true
   ): IO[Workbook] =
     val defaultSheetName = defaultSheetOpt.map(_.name)
 
@@ -1172,7 +1203,14 @@ object BatchParser:
                 )
 
           case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
-            applyCopyRange(currentWb, defaultSheetName, sourceStr, targetStr, valuesOnly)
+            applyCopyRange(
+              currentWb,
+              defaultSheetName,
+              sourceStr,
+              targetStr,
+              valuesOnly,
+              recalcDependents
+            )
 
           case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
             updateSheetE(currentWb, defaultSheetName, "sheet-view")(
@@ -1835,7 +1873,8 @@ object BatchParser:
     defaultSheetName: Option[SheetName],
     sourceStr: String,
     targetStr: String,
-    valuesOnly: Boolean
+    valuesOnly: Boolean,
+    recalcDependents: Boolean
   ): IO[Workbook] =
 
     def parseSide(label: String, s: String): IO[(Option[SheetName], Either[ARef, CellRange])] =
@@ -1885,7 +1924,15 @@ object BatchParser:
       _ <- IO.fromEither(
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
       )
-    yield CopyOps.copyRange(wb, sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
+    yield CopyOps.copyRange(
+      wb,
+      sourceSheet,
+      sourceRange,
+      targetSheet,
+      targetRange,
+      valuesOnly,
+      recalcDependents
+    )
 
   /**
    * Add one conditional-formatting rule to a range (GH-324). Rule DSL + dxf flags are parsed by

@@ -4,6 +4,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.font.Font
@@ -216,9 +217,13 @@ object RenderUtils:
       // If text fits within cell, no overflow needed
       if textWidth <= cellWidth then break(1)
 
-      // Determine overflow direction based on alignment
-      // General alignment behaves like Left for text overflow in Excel
-      val align = style.map(_.align.horizontal).getOrElse(HAlign.General)
+      // Determine overflow direction based on alignment. General resolves through
+      // contentBasedAlignment — the same resolution the renderers use when they anchor the
+      // text — so a General-aligned number takes the right-aligned (clip, then hash) path
+      // instead of bleeding its digits across empty neighbours (GH-459).
+      val align = style.map(_.align.horizontal).getOrElse(HAlign.General) match
+        case HAlign.General => contentBasedAlignment(cell.value)
+        case other => other
       align match
         case HAlign.Left | HAlign.General =>
           // Overflow to the right (General alignment for text behaves like Left)
@@ -272,6 +277,88 @@ object RenderUtils:
           loop(nextCol + 1, colspan + 1, newWidth)
 
     loop(colIdx + 1, 1, cellWidth)
+
+  // ========== Numeric Overflow Marker (####) ==========
+
+  /**
+   * Values Excel replaces with `#` when they do not fit: numbers and dates. Text is never hashed —
+   * it bleeds into empty neighbours or clips, which loses no information the reader can misread.
+   */
+  private def hashesOnOverflow(value: CellValue): Boolean = value match
+    case CellValue.Number(_) | CellValue.DateTime(_) => true
+    case CellValue.Formula(_, Some(cached), _) => hashesOnOverflow(cached)
+    case _ => false
+
+  /**
+   * The pixel box a cell's text actually occupies inside its clip, given the alignment the
+   * renderers resolve for it and its indent.
+   *
+   *   - right-anchored text ends `CellPaddingX` inside the box, but the anchor is clamped back to
+   *     the box's left edge when the text is wider than that (SvgRenderer), so the whole width is
+   *     usable;
+   *   - left-anchored text starts at `CellPaddingX + indent` and runs to the clip's right edge, so
+   *     the indent and the leading pad are gone from its box;
+   *   - centred text is pushed right by half the indent, so it loses the indent overall.
+   *
+   * Deriving the box here rather than in each renderer is what keeps HTML and SVG hashing the same
+   * cells: HTML's geometry differs (no horizontal padding on data cells, `padding-left` for indent)
+   * but the decision must not.
+   */
+  private def textBoxWidth(value: CellValue, style: Option[CellStyle], cellWidth: Int): Int =
+    val indentPx = style.map(_.align.indent).getOrElse(0) * IndentPxPerLevel
+    val align = style.map(_.align.horizontal).getOrElse(HAlign.General) match
+      case HAlign.General => contentBasedAlignment(value)
+      case other => other
+    val box = align match
+      case HAlign.Right => cellWidth
+      case HAlign.Center | HAlign.CenterContinuous => cellWidth - indentPx
+      case _ => cellWidth - CellPaddingX - indentPx
+    math.max(0, box)
+
+  /**
+   * Excel's `####` overflow marker for a numeric or date cell whose formatted text is wider than
+   * the space it renders in.
+   *
+   * Clipping a numeral is not a cosmetic defect: shearing the leading digits off `1,234,567.9`
+   * leaves `4,567.9`, a different number that still looks like a real one (GH-459). Excel refuses
+   * to show a partial numeral and fills the column with `#` instead. The cut is just as misleading
+   * from the other end: a left-aligned or indented number whose tail runs past the clip renders
+   * `1234567.9` as `1234`, so the fit is tested against the cell's real text box (`textBoxWidth`),
+   * not against the whole column.
+   *
+   * The decision is taken from the value and its style rather than from renderer-local text, so SVG
+   * and HTML hash the same cells with the same marker.
+   *
+   * @param value
+   *   the cell's value — only numbers, dates, and formulas cached to one hash
+   * @param style
+   *   the cell's resolved style: number format, font, alignment, indent and wrapText
+   * @param availableWidth
+   *   the pixel width of the cell, after merge/overflow expansion
+   * @return
+   *   the `#` run to render in place of the text, or None to render the text unchanged
+   */
+  def hashOverflowText(
+    value: CellValue,
+    style: Option[CellStyle],
+    availableWidth: Int
+  ): Option[String] =
+    val wrapText = style.exists(_.align.wrapText)
+    if wrapText || availableWidth <= 0 || !hashesOnOverflow(value) then None
+    else
+      val font = style.map(_.font)
+      val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
+      val text = cellValueToText(value, numFmt)
+      val box = textBoxWidth(value, style, availableWidth)
+      if text.isEmpty || measureTextWidth(text, font) <= box then None
+      else
+        // The marker must itself fit where the text would have gone: bounded by the cell's
+        // inner width (both pads) and by the text box (indent, single pad).
+        val innerWidth = math.max(0, math.min(box, availableWidth - CellPaddingX * 2))
+        val hashWidth = math.max(1, measureTextWidth("#", font))
+        // At least one '#': a column too narrow for even one marker must still refuse to
+        // show digits.
+        Some("#" * math.max(1, innerWidth / hashWidth))
 
   // ========== Escaping ==========
 
