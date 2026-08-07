@@ -1546,19 +1546,15 @@ class ExcelIOSpec extends CatsEffectSuite:
           case Right(after) =>
             val leaked = after -- before
             Option.when(leaked.nonEmpty)(
-              leaked.map(_.getFileName.toString).toSeq.sorted.mkString(", ")
+              s"$clue — still present after $budget (a concurrent foreign spill can also land " +
+                s"here): ${leaked.map(_.getFileName.toString).toSeq.sorted.mkString(", ")}"
             )
-          case Left(err) => Some(s"spill directory could not be scanned: $err")
+          case Left(err) =>
+            Some(s"$clue — spill directory could not be scanned for $budget: $err")
 
         unsettled.fold(IO.unit) { detail =>
           IO.monotonic.flatMap { now =>
-            if now - start >= budget then
-              IO(
-                fail(
-                  s"$clue — still present after $budget " +
-                    s"(a concurrent foreign spill can also land here): $detail"
-                )
-              )
+            if now - start >= budget then IO(fail(detail))
             else IO.sleep(spillPoll) *> loop
           }
         }
@@ -1566,14 +1562,24 @@ class ExcelIOSpec extends CatsEffectSuite:
       loop
     }
 
-  test("assertNoSpillLeak reports a spill that outlives its budget") {
-    // Standing guard on the helper itself: if its filter ever drifts off the writer's spill name,
-    // both cleanup tests below would pass vacuously while the writer leaks. Plant a file matching
-    // the pattern, hide it from `before`, and require the helper to report it.
-    IO.blocking(Files.createTempFile("xl-stream-", ".xml")).flatMap { planted =>
+  test("assertNoSpillLeak names a spill that outlives its budget") {
+    // Half of the standing guard: the helper must still FAIL, and name the file, when something
+    // matching the pattern never clears — otherwise it could regress into a no-op that reports
+    // nothing while the writer leaks. (That the pattern still matches the WRITER is the other
+    // half, pinned by the positive control in the cleanup test below.)
+    IO.blocking {
+      val p = Files.createTempFile("xl-stream-", ".xml")
+      p.toFile.deleteOnExit()
+      p
+    }.flatMap { planted =>
       spillFiles
         .flatMap(before => assertNoSpillLeak(before - planted, "planted spill", 200.millis).attempt)
-        .map(result => assert(result.isLeft, "helper should report a spill that never clears"))
+        .map { result =>
+          assert(
+            result.left.exists(_.getMessage.contains(planted.getFileName.toString)),
+            s"helper should name the planted spill, got: $result"
+          )
+        }
         .guarantee(IO.blocking(Files.deleteIfExists(planted)).void)
     }
   }
@@ -1582,12 +1588,22 @@ class ExcelIOSpec extends CatsEffectSuite:
     val excel = ExcelIO.instance[IO]
     val path = dir.resolve("cleanup-test.xlsx")
 
-    // Write some data using auto-detect (which creates temp files)
-    val rows = fs2.Stream.range(1, 101).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
-
     for
       before <- spillFiles
+      // Positive control: pin the filter to the WRITER, not to itself. The spill is created at
+      // bracket-acquire, before the first row is pulled, so it is on disk mid-stream. Without this,
+      // moving the writer's spill name or location (a plausible outcome of #514) would leave the
+      // cleanup assertion observing nothing and passing vacuously.
+      spilled <- IO.ref(Set.empty[Path])
+      rows = fs2.Stream
+        .range(1, 101)
+        .evalTap(i =>
+          IO.whenA(i == 50)(spillFiles.flatMap(s => spilled.update(_ ++ (s -- before))))
+        )
+        .map(i => RowData(i, Map(0 -> CellValue.Number(i))))
       _ <- rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain
+      seen <- spilled.get
+      _ <- IO(assert(seen.nonEmpty, "writer should spill a file matching the filter mid-write"))
       _ <- assertNoSpillLeak(before, "Temp files should be cleaned up after write")
     yield ()
   }
