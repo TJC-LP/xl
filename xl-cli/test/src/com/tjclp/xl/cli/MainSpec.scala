@@ -1530,3 +1530,17 @@ class MainSpec extends CatsEffectSuite:
       "Saved (streaming): out.xlsx"
     )
   }
+
+  test("GH-519: shutdown-hook timeout is finite so SIGTERM terminates a mid-compute process") {
+    // The evaluator is a single non-yielding compute step; fiber cancellation is only observed
+    // when it completes. With the cats-effect default (Duration.Inf) a TERM'd xl computed the
+    // entire remaining recalc at full CPU and then discarded the result — timeout(1) could not
+    // bound an invocation at all. This pins the finite deadline that lets the process halt.
+    assert(
+      Main.runtimeConfig.shutdownHookTimeout.isFinite,
+      s"shutdownHookTimeout must be finite, got ${Main.runtimeConfig.shutdownHookTimeout}"
+    )
+    // Batch tool, not a server: the CPU-starvation checker is pure noise on small containers
+    // (it drowned real diagnostics in the deployed-agent sandboxes) and stays disabled.
+    assert(!Main.runtimeConfig.cpuStarvationCheckInitialDelay.isFinite)
+  }

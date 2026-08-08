@@ -834,7 +834,16 @@ object DependencyGraph:
    * in the node type (GH-346). Only nodes present in `dependencies` (formula cells) are ordered;
    * edges to non-nodes (constants, empty cells) are ignored. Left carries the nodes that could not
    * be ordered (cycle participants and everything downstream of them).
+   *
+   * GH-518: implemented with LOCAL mutable state behind the pure signature (the same posture as
+   * [[foreachSccOf]]). The immutable-List formulation allocated O(V²) cons cells — `acc :+ node`
+   * copies the accumulator once per node and `rest ++ newlyZero` copies the pending queue — which
+   * on a 50k-formula workbook was 81% of an entire recalculation's allocation. Iteration stays over
+   * the same collections in the same order, so the emitted order is unchanged: FIFO queue seeded in
+   * `allNodes` iteration order, newly-ready nodes appended in the iteration order of the filtered
+   * dependents set.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def kahnOrder[K](
     dependencies: Map[K, Set[K]],
     dependents: Map[K, Set[K]]
@@ -845,41 +854,34 @@ object DependencyGraph:
     // If no formula cells, early exit
     if allNodes.isEmpty then scala.util.Right(List.empty[K])
     else
-      // Calculate in-degree for each node (number of formula cells it depends on)
-      // Only count dependencies on other formula cells, not constants
-      val inDegree = allNodes.map { node =>
-        val deps = dependencies.getOrElse(node, Set.empty)
-        val formulaDeps = deps.filter(allNodes.contains)
-        node -> formulaDeps.size
-      }.toMap
+      // In-degree = dependencies on other formula cells only, not constants
+      val inDegree = scala.collection.mutable.HashMap.empty[K, Int]
+      allNodes.foreach { node =>
+        inDegree(node) = dependencies.getOrElse(node, Set.empty).count(allNodes.contains)
+      }
 
       // Start with nodes that have in-degree 0 (no dependencies)
-      val initialQueue = allNodes.filter(node => inDegree(node) == 0).toList
+      val queue = scala.collection.mutable.ArrayDeque.empty[K]
+      allNodes.foreach { node =>
+        if inDegree(node) == 0 then queue.append(node)
+      }
 
-      @tailrec
-      def process(
-        queue: List[K],
-        processedInDegree: Map[K, Int],
-        acc: List[K]
-      ): (List[K], Map[K, Int]) =
-        queue match
-          case Nil => (acc, processedInDegree)
-          case node :: rest =>
-            val deps = dependents.getOrElse(node, Set.empty).filter(allNodes.contains)
-            val (nextInDegree, newlyZero) = deps.foldLeft((processedInDegree, List.empty[K])) {
-              case ((degreeAcc, zeros), dep) =>
-                val newInDegree = degreeAcc(dep) - 1
-                val updatedDegree = degreeAcc.updated(dep, newInDegree)
-                val nextZeros = if newInDegree == 0 then zeros :+ dep else zeros
-                (updatedDegree, nextZeros)
-            }
-            process(rest ++ newlyZero, nextInDegree, acc :+ node)
-
-      val (result, _) = process(initialQueue, inDegree, List.empty)
+      val ordered = scala.collection.mutable.ListBuffer.empty[K]
+      while queue.nonEmpty do
+        val node = queue.removeHead()
+        ordered += node
+        // Filtering into a Set first (rather than testing membership inline) preserves the exact
+        // emitted order of the previous formulation, which folded over this same filtered set.
+        val deps = dependents.getOrElse(node, Set.empty).filter(allNodes.contains)
+        deps.foreach { dep =>
+          val remaining = inDegree(dep) - 1
+          inDegree(dep) = remaining
+          if remaining == 0 then queue.append(dep)
+        }
 
       // If all nodes are processed, graph is acyclic
-      if result.size == allNodes.size then scala.util.Right(result)
-      else scala.util.Left(allNodes -- result.toSet)
+      if ordered.size == allNodes.size then scala.util.Right(ordered.toList)
+      else scala.util.Left(allNodes -- ordered)
 
   /**
    * Topological sort using Kahn's algorithm.
