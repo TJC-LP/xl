@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2026-08-06 (0.19.2)
+**Last Updated**: 2026-08-08 (0.19.2)
 
 ## Current State
 
@@ -8,7 +8,10 @@
 
 ### What Works (Production-Ready)
 
-**New in 0.19.2 "Fixpoint"** (2026-08-06) — recalculation & seeding integrity, wave 24:
+**New in 0.19.2 "Fixpoint"** (2026-08-08) — recalculation & seeding integrity (wave 24) + the perf stack + two lint corruption classes:
+- ✅ **Recalculation 7–37× faster** (#521, #523, #524) — linear Kahn core, memoized range-edge expansion, aggregate-fold memoization w/ single-flight, stack-safe Tarjan; 9,900×SUM(5000): 47.9s→1.30s, 200k book: 95s→13.8s; SIGTERM now kills a mid-recalc process in ~2s (#519) and `recalc --parallel N` ships equivalence-gated (#520)
+- ✅ **`external-ref-dangling` lint** (#525/#527) — dangling external-workbook ordinals (the cross-workbook sheet-transplant class; a field incident lost 935 formulas to Excel repair while lint read clean); #526 tracks the adoption/remap API
+- ✅ **`defined-name-invalid` lint** (#528/#530) — same-scope defined names colliding under Excel's case/width/kana-insensitive comparison (g/ｇ, html/ＨＴＭＬ — legacy fossils Excel removes, sometimes silently), 255-char limit, whitespace/control chars; suffix-less MS externalLinkPath rel types whitelisted (#529)
 - ✅ **Opt-in wave-parallel recalculation** (#520) — `Workbook.recalculateParallel(N)` / `xl recalc --parallel N` evaluates independent static waves concurrently, pins one clock generation, and folds results deterministically; dynamic references remain in the sequential evaluate-last bucket and iterative books retain their sequential SCC fixpoint
 - ✅ **One pass = the global fixpoint** (#492, #491) — iterative recalculation walks the SCC condensation in dependency-first order instead of splitting into preOrder / one flat Jacobi / postOrder, so no read can fall back to a stale cache and re-recalculating a correct multi-SCC circular book no longer corrupts it. `RecalcResult.cycles` / `.unconverged` / `.certified` report per-component verdicts
 - ✅ **Cycles warm-start from numeric caches** (#469) — zero-seeding no longer wipes valid caches of mutually-ISERROR-guarded pairs
