@@ -519,6 +519,42 @@ class BatchRecalcSpec extends FunSuite:
     )
   }
 
+  test("GH-520: recalc --parallel evaluates a wide wave and writes its caches") {
+    val sheet = (1 to 32).foldLeft(Sheet("Data").put(ref"A1" -> 10)) { (s, col0) =>
+      s.put(ARef.from0(col0, 0), CellValue.Formula("=A1+1"))
+    }
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .recalc(Workbook(sheet), out, config, parallel = Some(4))
+      .unsafeRunSync()
+
+    assert(summary.contains("Recalculated 32 formulas"), s"summary was: $summary")
+    assertCachedNumber(cachedFormulaValue(readBack(out), 1, 0), 11.0)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-520: an iterative book reports the --parallel sequential fallback in-band") {
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1" -> 10)
+        .put(ref"B1", CellValue.Formula("=A1+1"))
+    ).withCalcPr(
+      com.tjclp.xl.workbooks.CalcPr(
+        iterativeCalculation = true,
+        maxIterations = Some(10),
+        maxChange = Some(BigDecimal("0.001"))
+      )
+    )
+    val out = tempXlsx()
+
+    val summary = WriteCommands.recalc(wb, out, config, parallel = Some(4)).unsafeRunSync()
+
+    assert(summary.contains("NOTE: --parallel ignored"), s"summary was: $summary")
+    assertCachedNumber(cachedFormulaValue(readBack(out), 1, 0), 11.0)
+    Files.deleteIfExists(out)
+  }
+
   // ===== GH-453/GH-454: recalc honors the file's declared calcPr; --tables on circular books =====
 
   /**

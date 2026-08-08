@@ -1,12 +1,23 @@
 package com.tjclp.xl.formula
 
+import java.time.{LocalDate, LocalDateTime}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
+import java.util.concurrent.locks.LockSupport
+import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, TimeUnit}
+
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.eval.RecalcResult
+import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.workbooks.Workbook
-import munit.FunSuite
+import com.tjclp.xl.workbooks.{DefinedName, Workbook}
+import munit.ScalaCheckSuite
+import org.scalacheck.Gen
+import org.scalacheck.Prop.*
+
+import scala.jdk.CollectionConverters.*
 
 /**
  * GH-520: `recalculateParallel(n)` must be observationally IDENTICAL to `recalculate()` — same
@@ -18,7 +29,7 @@ import munit.FunSuite
  * (error ORDER is part of the contract), cycles (circular + blocked reporting precedes the pass),
  * and dynamic INDIRECT cells (excluded from waves, sequential evaluate-last).
  */
-class ParallelRecalcSpec extends FunSuite:
+class ParallelRecalcSpec extends ScalaCheckSuite:
 
   private def num(d: Double): CellValue = CellValue.Number(BigDecimal(d))
   private def formula(expr: String): CellValue = CellValue.Formula(expr, None)
@@ -28,6 +39,7 @@ class ParallelRecalcSpec extends FunSuite:
     assertEquals(parallel.evaluated, sequential.evaluated)
     assertEquals(parallel.workbook, sequential.workbook)
     assertEquals(parallel.converged, sequential.converged)
+    assertEquals(parallel.iterationsUsed, sequential.iterationsUsed)
     assertEquals(parallel.cycles, sequential.cycles)
 
   /**
@@ -118,7 +130,211 @@ class ParallelRecalcSpec extends FunSuite:
       assertSameResult(first, wb.recalculateParallel(8))
     }
 
+  property("GH-520: random wide acyclic books preserve the full RecalcResult law"):
+    val width = 20
+    val cases = for
+      constants <- Gen.listOfN(width, Gen.choose(-100, 100))
+      factors <- Gen.listOfN(width, Gen.choose(-5, 5))
+      offsets <- Gen.listOfN(width, Gen.choose(-20, 20))
+      leftLinks <- Gen.listOfN(width, Gen.choose(0, width - 1))
+      rightLinks <- Gen.listOfN(width, Gen.choose(0, width - 1))
+    yield (constants, factors, offsets, leftLinks, rightLinks)
+
+    forAll(cases) { case (constants, factors, offsets, leftLinks, rightLinks) =>
+      val base = constants.zipWithIndex.foldLeft(Sheet(SheetName.unsafe("Generated"))) {
+        case (sheet, (value, col)) => sheet.put(ARef.from0(col, 0), num(value.toDouble))
+      }
+      val firstLayer = (0 until width).foldLeft(base) { (sheet, col) =>
+        val input = ARef.from0(col, 0).toA1
+        sheet.put(
+          ARef.from0(col, 1),
+          formula(s"=$input*${factors(col)}+${offsets(col)}")
+        )
+      }
+      val secondLayer = (0 until width).foldLeft(firstLayer) { (sheet, col) =>
+        val left = ARef.from0(leftLinks(col), 1).toA1
+        val right = ARef.from0(rightLinks(col), 1).toA1
+        sheet.put(ARef.from0(col, 2), formula(s"=$left+$right"))
+      }
+      val wb = Workbook(secondLayer)
+
+      assertSameResult(wb.recalculate(), wb.recalculateParallel(8))
+    }
+
   test("GH-520: parallelism 1 and an absurd width both degrade safely"):
     val wb = wideGrid
     assertSameResult(wb.recalculate(), wb.recalculateParallel(1))
     assertSameResult(wb.recalculate(), wb.recalculateParallel(10000))
+
+  test("GH-520: multi-hop defined name hiding INDIRECT stays out of parallel waves"):
+    val sheetName = SheetName.unsafe("Dyn")
+    val target = ARef.from0(0, 0)
+    val reader = ARef.from0(19, 0)
+    val staticNameReader = ARef.from0(20, 0)
+    val staleTarget = CellValue.Formula("=1+1", Some(num(999)))
+    val base = Sheet(sheetName).put(target, staleTarget)
+    val sheet = (1 until 19)
+      .foldLeft(base) { (s, col) =>
+        s.put(ARef.from0(col, 0), formula(s"=${col + 1}+1"))
+      }
+      .put(reader, formula("=OuterDyn"))
+      .put(staticNameReader, formula("=Case"))
+    val wb = Workbook(sheet)
+      .withDefinedName("InnerDyn", "INDIRECT(\"A1\")")
+      .withDefinedName("OuterDyn", "InnerDyn")
+      .withDefinedName("Case", "42")
+
+    assertEquals(
+      DependencyGraph.dynamicCells(wb),
+      Set(QualifiedRef(sheetName, reader)),
+      "only the name chain that reaches INDIRECT is dynamic; ordinary Case stays parallel-safe"
+    )
+
+    val sequential = wb.recalculate()
+    val parallel = wb.recalculateParallel(8)
+    assertSameResult(sequential, parallel)
+    assertEquals(parallel.evaluated(sheetName)(reader), num(2))
+
+  test("GH-520: dynamic-name analysis honors multi-hop sheet-scoped shadowing"):
+    val calcName = SheetName.unsafe("Calc")
+    val otherName = SheetName.unsafe("Other")
+    val reader = ARef.from0(19, 0)
+    val calc = Sheet(calcName)
+      .put(ARef.from0(0, 0), num(7))
+      .put(reader, formula("=Outer"))
+    val other = Sheet(otherName)
+      .put(ARef.from0(0, 0), num(9))
+      .put(reader, formula("=Outer"))
+    val base = Workbook(calc, other)
+      .withDefinedName("Driver", "41")
+      .withDefinedName("Outer", "Driver")
+    val wb = base.copy(
+      metadata = base.metadata.copy(
+        definedNames = base.metadata.definedNames :+
+          DefinedName("Driver", "OFFSET(A1, 0, 0)", localSheetId = Some(0))
+      )
+    )
+
+    assertEquals(
+      DependencyGraph.dynamicCells(wb),
+      Set(QualifiedRef(calcName, reader)),
+      "Calc's local Driver shadows the static workbook Driver only on Calc"
+    )
+
+    val result = wb.recalculateParallel(8)
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(result.evaluated(calcName)(reader), num(7))
+    assertEquals(result.evaluated(otherName)(reader), num(41))
+
+  test("GH-520: one pinned Clock generation is shared safely by every wave worker"):
+    final class GuardClock extends Clock:
+      val todayCalls = AtomicInteger(0)
+      val nowCalls = AtomicInteger(0)
+      val overlap = AtomicBoolean(false)
+      private val active = AtomicBoolean(false)
+
+      private def guarded[A](value: A): A =
+        if !active.compareAndSet(false, true) then overlap.set(true)
+        try
+          LockSupport.parkNanos(2_000_000L)
+          value
+        finally active.set(false)
+
+      def today(): LocalDate =
+        todayCalls.incrementAndGet()
+        guarded(LocalDate.of(2026, 8, 7))
+
+      def now(): LocalDateTime =
+        nowCalls.incrementAndGet()
+        guarded(LocalDateTime.of(2026, 8, 7, 12, 30))
+
+    val sheet = (0 until 20).foldLeft(Sheet(SheetName.unsafe("Clock"))) { (s, col) =>
+      val expr = if col % 2 == 0 then "=TODAY()" else "=NOW()"
+      s.put(ARef.from0(col, 0), formula(expr))
+    }
+    val wb = Workbook(sheet)
+    val sequentialClock = new GuardClock
+    val parallelClock = new GuardClock
+    val sequential = wb.recalculate(sequentialClock)
+    val parallel = wb.recalculateParallel(parallelClock, 8)
+
+    assertSameResult(sequential, parallel)
+    assertEquals(sequentialClock.todayCalls.get(), 1)
+    assertEquals(sequentialClock.nowCalls.get(), 1)
+    assertEquals(parallelClock.todayCalls.get(), 1)
+    assertEquals(parallelClock.nowCalls.get(), 1)
+    assert(!parallelClock.overlap.get(), "the caller's Clock must never be invoked concurrently")
+
+  test("GH-520: pinned Clock forces only the volatile capability formulas request"):
+    val clock = new Clock:
+      def today(): LocalDate = throw new IllegalStateException("TODAY was not requested")
+      def now(): LocalDateTime = LocalDateTime.of(2026, 8, 8, 12, 30)
+    val sheet = (0 until 20).foldLeft(Sheet(SheetName.unsafe("NowOnly"))) { (s, col) =>
+      s.put(ARef.from0(col, 0), formula("=NOW()"))
+    }
+
+    val result = Workbook(sheet).recalculateParallel(clock, 8)
+
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+
+  test("GH-520: caller interruption cancels workers, restores interrupt, and stays total"):
+    val started = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val finished = CountDownLatch(1)
+    val interruptedAtReturn = AtomicBoolean(false)
+    val results = new ConcurrentLinkedQueue[RecalcResult]()
+    val clock = new Clock:
+      def today(): LocalDate = LocalDate.of(2026, 8, 7)
+
+      def now(): LocalDateTime =
+        started.countDown()
+        try
+          release.await()
+          LocalDateTime.of(2026, 8, 7, 12, 30)
+        finally finished.countDown()
+
+    val sheet = (0 until 20).foldLeft(Sheet(SheetName.unsafe("Interrupt"))) { (s, col) =>
+      s.put(ARef.from0(col, 0), formula("=NOW()"))
+    }
+    val wb = Workbook(sheet)
+    val caller = new Thread(
+      () =>
+        val result = wb.recalculateParallel(clock, 8)
+        results.add(result)
+        interruptedAtReturn.set(Thread.currentThread().isInterrupted())
+      ,
+      "parallel-recalc-interruption-test"
+    )
+
+    caller.start()
+    assert(started.await(5, TimeUnit.SECONDS), "worker never entered the blocking Clock")
+    caller.interrupt()
+    caller.join(10_000L)
+    release.countDown() // failure-path cleanup if an implementation regresses
+
+    assert(!caller.isAlive, "interrupted recalculateParallel caller must return")
+    assert(finished.await(5, TimeUnit.SECONDS), "the canceled Clock worker must terminate")
+    assert(interruptedAtReturn.get(), "recalculateParallel must restore the caller interrupt")
+    val result = Option(results.poll()).getOrElse(fail("interrupted recalc returned no result"))
+    assertEquals(result.errors.size, 20)
+    assert(result.errors.forall(_.error.message.contains("interrupted")))
+    val liveWorkers = Thread.getAllStackTraces.keySet().asScala.filter { thread =>
+      thread.isAlive && thread.getName.startsWith("xl-recalc-worker-")
+    }
+    assertEquals(liveWorkers.toVector, Vector.empty)
+
+  test("GH-520: worker interruption is reported per cell and shuts down the pool"):
+    val clock = new Clock:
+      def today(): LocalDate = LocalDate.of(2026, 8, 7)
+      def now(): LocalDateTime = throw new InterruptedException("injected worker failure")
+    val sheet = (0 until 20).foldLeft(Sheet(SheetName.unsafe("WorkerFailure"))) { (s, col) =>
+      s.put(ARef.from0(col, 0), formula("=NOW()"))
+    }
+
+    val result = Workbook(sheet).recalculateParallel(clock, 8)
+    assertEquals(result.errors.size, 20)
+    assert(result.errors.forall(_.error.message.contains("worker failed")))
+    val liveWorkers = Thread.getAllStackTraces.keySet().asScala.filter { thread =>
+      thread.isAlive && thread.getName.startsWith("xl-recalc-worker-")
+    }
+    assertEquals(liveWorkers.toVector, Vector.empty)

@@ -954,22 +954,38 @@ final case class Sheet(
     cells.values.filter(_.nonEmpty)
 
   /** Get used range (bounding box of all non-empty cells) */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def usedRange: Option[CellRange] =
-    val nonEmpty = nonEmptyCells
-    if nonEmpty.isEmpty then None
+    // This is a hot derived query during formula evaluation. A tuple fold allocates one tuple per
+    // cell (gigabytes across repeated range formulas); invocation-local primitives keep the
+    // immutable Sheet API while making the scan allocation-free. Keep the non-empty predicate
+    // inline too: an Iterator.filter adapter adds measurable virtual-call overhead on large sheets.
+    val cellsIterator = cells.valuesIterator
+    var found = false
+    var minCol = 0
+    var minRow = 0
+    var maxCol = 0
+    var maxRow = 0
+    while cellsIterator.hasNext do
+      val cell = cellsIterator.next()
+      if cell.nonEmpty then
+        val ref = cell.ref
+        val col = ref.col.index0
+        val row = ref.row.index0
+        if found then
+          if col < minCol then minCol = col
+          if row < minRow then minRow = row
+          if col > maxCol then maxCol = col
+          if row > maxRow then maxRow = row
+        else
+          found = true
+          minCol = col
+          minRow = row
+          maxCol = col
+          maxRow = row
+
+    if !found then None
     else
-      // Single-pass fold to compute min/max for both col and row (75% faster than 4 passes)
-      val (minCol, minRow, maxCol, maxRow) = nonEmpty
-        .map(_.ref)
-        .foldLeft((Int.MaxValue, Int.MaxValue, Int.MinValue, Int.MinValue)) {
-          case ((minC, minR, maxC, maxR), ref) =>
-            (
-              math.min(minC, ref.col.index0),
-              math.min(minR, ref.row.index0),
-              math.max(maxC, ref.col.index0),
-              math.max(maxR, ref.row.index0)
-            )
-        }
       Some(
         CellRange(
           ARef.from0(minCol, minRow),

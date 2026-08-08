@@ -74,7 +74,12 @@ final case class EvalContext(
    * `Evaluator.instance(workbookPath = ...)`). Read by CELL("filename"); None reproduces Excel's
    * pre-save behavior (empty string).
    */
-  workbookPath: Option[String] = None
+  workbookPath: Option[String] = None,
+  /**
+   * One WorkbookEvaluator recalculation generation's single-range aggregate memo. Public/direct
+   * evaluation leaves this absent, preserving its one-shot semantics and allocation profile.
+   */
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None
 )
 
 sealed trait ArgValue

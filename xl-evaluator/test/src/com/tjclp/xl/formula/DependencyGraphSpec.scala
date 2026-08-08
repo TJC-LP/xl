@@ -28,6 +28,28 @@ class DependencyGraphSpec extends ScalaCheckSuite:
   private def parseRef(ref: String): ARef =
     ARef.parse(ref).fold(err => fail(err), identity)
 
+  private def assertActualCycle(
+    dependencies: Map[ARef, Set[ARef]],
+    cycle: List[ARef]
+  ): Unit =
+    val first = cycle.headOption.getOrElse(fail("expected a non-empty cycle"))
+    val last = cycle.lastOption.getOrElse(fail("expected a non-empty cycle"))
+    assertEquals(last, first, "cycle must close at its first node")
+    val interior = cycle.dropRight(1)
+    assertEquals(
+      interior.distinct.size,
+      interior.size,
+      s"cycle of size ${cycle.size} must not repeat an interior node"
+    )
+    cycle.sliding(2).foreach {
+      case from :: to :: Nil =>
+        assert(
+          dependencies.getOrElse(from, Set.empty).contains(to),
+          s"reported non-edge ${from.toA1} -> ${to.toA1} in cycle of size ${cycle.size}"
+        )
+      case _ => ()
+    }
+
   // ===== Dependency Extraction Tests (10 tests) =====
 
   test("extractDependencies: Lit has no dependencies") {
@@ -363,6 +385,41 @@ class DependencyGraphSpec extends ScalaCheckSuite:
       case _ => fail("Expected CircularRef error")
   }
 
+  test("detectCycles: a branching SCC reports an actual directed cycle, not Tarjan pop order") {
+    // All three nodes share one SCC, but B1 -> C1 and C1 -> B1 do not exist. Treating the SCC's
+    // pop order as a path can therefore report A1 -> B1 -> C1 -> A1 with an invented middle edge.
+    val dependencies = Map(
+      ref"A1" -> Set(ref"B1", ref"C1"),
+      ref"B1" -> Set(ref"A1"),
+      ref"C1" -> Set(ref"A1")
+    )
+    val graph = DependencyGraph(
+      dependencies,
+      Map(
+        ref"A1" -> Set(ref"B1", ref"C1"),
+        ref"B1" -> Set(ref"A1"),
+        ref"C1" -> Set(ref"A1")
+      )
+    )
+
+    val cycle = DependencyGraph.detectCycles(graph) match
+      case Left(EvalError.CircularRef(path)) => path
+      case other => fail(s"expected a circular reference, got $other")
+    assertActualCycle(dependencies, cycle)
+
+    // Small immutable maps/sets retain construction order. Rebuilding the same graph in reverse
+    // must not change a user-visible diagnostic.
+    val rebuilt = List(
+      ref"C1" -> Set(ref"A1"),
+      ref"B1" -> Set(ref"A1"),
+      ref"A1" -> List(ref"C1", ref"B1").toSet
+    ).toMap
+    val rebuiltCycle = DependencyGraph.detectCycles(DependencyGraph(rebuilt, Map.empty)) match
+      case Left(EvalError.CircularRef(path)) => path
+      case other => fail(s"expected a circular reference, got $other")
+    assertEquals(rebuiltCycle, cycle)
+  }
+
   test("detectCycles: cycle through range (A1 -> SUM(B1:B3) where B2 -> A1)") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Formula("=SUM(B1:B3)"),
@@ -464,6 +521,26 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     assert(result.isLeft)
   }
 
+  test("topologicalSort: excludes a downstream Kahn remainder tail from the reported cycle") {
+    // A1 is blocked by B1 <-> C1 but is not itself cyclic. The former single-successor walk could
+    // start at A1, revisit B1, then append A1 and invent the closing edge B1 -> A1.
+    val dependencies = Map(
+      ref"A1" -> Set(ref"B1"),
+      ref"B1" -> Set(ref"C1"),
+      ref"C1" -> Set(ref"B1")
+    )
+    val graph = DependencyGraph(
+      dependencies,
+      Map(ref"B1" -> Set(ref"A1", ref"C1"), ref"C1" -> Set(ref"B1"))
+    )
+
+    DependencyGraph.topologicalSort(graph) match
+      case Left(EvalError.CircularRef(cycle)) =>
+        assertActualCycle(dependencies, cycle)
+        assert(!cycle.contains(ref"A1"), s"downstream tail leaked into cycle: $cycle")
+      case other => fail(s"expected a circular reference, got $other")
+  }
+
   test("topologicalSort: self-loop produces Left(CircularRef)") {
     val sheet = sheetWith(ref"A1" -> CellValue.Formula("=A1"))
     val graph = DependencyGraph.fromSheet(sheet)
@@ -528,6 +605,38 @@ class DependencyGraphSpec extends ScalaCheckSuite:
       case _ => fail("Expected successful topological sort")
   }
 
+  test("topologicalSort: 100k-node cycle reporting is stack-safe and returns one closed ring") {
+    val n = 100000
+    val dependencies = (0 until n).iterator.map { i =>
+      ARef.from0(0, i) -> Set(ARef.from0(0, (i + 1) % n))
+    }.toMap
+    // Every node has in-degree one, so Kahn needs no reverse edges to establish the cyclic
+    // remainder. Keeping this fixture direct isolates path reconstruction from graph construction.
+    val graph = DependencyGraph(dependencies, Map.empty)
+
+    DependencyGraph.topologicalSort(graph) match
+      case Left(EvalError.CircularRef(cycle)) =>
+        assertEquals(cycle.size, n + 1)
+        assertActualCycle(dependencies, cycle)
+      case other => fail(s"expected a circular reference, got $other")
+  }
+
+  test("detectCrossSheetCycles: a 20k-node cycle is stack-safe") {
+    val n = 20000
+    val sheet = SheetName.unsafe("Deep")
+    val graph = (0 until n).iterator.map { i =>
+      val node = DependencyGraph.QualifiedRef(sheet, ARef.from0(0, i))
+      val next = DependencyGraph.QualifiedRef(sheet, ARef.from0(0, (i + 1) % n))
+      node -> Set(next)
+    }.toMap
+
+    DependencyGraph.detectCrossSheetCycles(graph) match
+      case Left(EvalError.CircularRef(cycle)) =>
+        assertEquals(cycle.size, n + 1)
+        assertEquals(cycle.headOption, cycle.lastOption)
+      case other => fail(s"expected a circular reference, got $other")
+  }
+
   test("topologicalSort: range dependencies maintain order") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(1)),
@@ -546,6 +655,95 @@ class DependencyGraphSpec extends ScalaCheckSuite:
         // B1 must come before C1
         assert(b1Idx < c1Idx)
       case _ => fail("Expected successful topological sort")
+  }
+
+  property("GH-518: optimized Kahn preserves the immutable FIFO order exactly") {
+    val dagGen = for
+      size <- Gen.choose(0, 30)
+      rawEdges <- Gen.listOf(Gen.zip(Gen.choose(0, 29), Gen.choose(0, 29)))
+      outsiderFlags <- Gen.listOfN(size, Gen.oneOf(true, false))
+    yield
+      val nodes = Vector.tabulate(size)(row0 => ARef.from0(0, row0))
+      val dependencies = nodes.zipWithIndex.map { case (node, index) =>
+        val deps = rawEdges.iterator.collect {
+          case (from, to) if from == index && to < index => nodes(to)
+        }.toSet
+        node -> deps
+      }.toMap
+      val reverse = dependencies.foldLeft(Map.empty[ARef, Set[ARef]]) {
+        case (acc, (dependent, precedents)) =>
+          precedents.foldLeft(acc) { (seen, precedent) =>
+            seen.updated(precedent, seen.getOrElse(precedent, Set.empty) + dependent)
+          }
+      }
+      val outsiders = outsiderFlags.zip(nodes).collect { case (true, node) => node }.toSet
+      val outsider = ARef.from0(1, 100)
+      val dependents = outsiders.foldLeft(reverse) { (acc, node) =>
+        acc.updated(node, acc.getOrElse(node, Set.empty) + outsider)
+      }
+      DependencyGraph(dependencies, dependents)
+
+    forAll(dagGen) { graph =>
+      val allNodes = graph.dependencies.keySet
+      val initialDegree = allNodes.iterator.map { node =>
+        node -> graph.dependencies.getOrElse(node, Set.empty).count(allNodes.contains)
+      }.toMap
+      val initialQueue = allNodes.iterator.filter(initialDegree(_) == 0).toList
+
+      @annotation.tailrec
+      def reference(
+        queue: List[ARef],
+        degree: Map[ARef, Int],
+        ordered: List[ARef]
+      ): List[ARef] =
+        queue match
+          case Nil => ordered
+          case node :: rest =>
+            val successors = graph.dependents.getOrElse(node, Set.empty).filter(allNodes.contains)
+            val (nextDegree, newlyReady) =
+              successors.foldLeft((degree, List.empty[ARef])) {
+                case ((current, ready), successor) =>
+                  val remaining = current(successor) - 1
+                  (
+                    current.updated(successor, remaining),
+                    if remaining == 0 then ready :+ successor else ready
+                  )
+              }
+            reference(rest ++ newlyReady, nextDegree, ordered :+ node)
+
+      assertEquals(
+        DependencyGraph.topologicalSort(graph),
+        Right(reference(initialQueue, initialDegree, List.empty))
+      )
+    }
+  }
+
+  property("GH-522: mutable reverse-edge construction equals the immutable reference") {
+    val graphGen = for
+      size <- Gen.choose(0, 30)
+      rawEdges <- Gen.listOf(Gen.zip(Gen.choose(0, 29), Gen.choose(0, 29)))
+    yield
+      val sheet = SheetName.unsafe("S")
+      val nodes =
+        Vector.tabulate(size)(row0 => DependencyGraph.QualifiedRef(sheet, ARef.from0(0, row0)))
+      nodes.zipWithIndex.map { case (node, index) =>
+        val deps = rawEdges.iterator.collect {
+          case (from, to) if from == index && to < size => nodes(to)
+        }.toSet
+        node -> deps
+      }.toMap
+
+    forAll(graphGen) { dependencies =>
+      val expected = dependencies.foldLeft(
+        Map.empty[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]]
+      ) { case (acc, (dependent, precedents)) =>
+        precedents.foldLeft(acc) { (seen, precedent) =>
+          seen.updated(precedent, seen.getOrElse(precedent, Set.empty) + dependent)
+        }
+      }
+
+      assertEquals(DependencyGraph.reverseEdges(dependencies), expected)
+    }
   }
 
   // ===== Query Tests (4 tests) =====

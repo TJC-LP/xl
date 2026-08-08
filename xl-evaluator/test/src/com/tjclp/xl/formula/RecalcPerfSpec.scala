@@ -200,3 +200,23 @@ class RecalcPerfSpec extends FunSuite:
         assertEquals(order.lastOption, Some(refs(ChainCells - 1)))
       case Left(circular) => fail(s"expected acyclic order, got: $circular")
     assert(elapsedMs < BudgetMs, s"topologicalSort took ${elapsedMs}ms (budget ${BudgetMs}ms)")
+
+  test("transitive dependent discovery is linear on a 100k-cell chain"):
+    val refs = (0 until ChainCells).map(i => ARef.from0(0, i)).toVector
+    val first = refs(0)
+    val last = refs(ChainCells - 1)
+    val dependents: Map[ARef, Set[ARef]] =
+      (1 until ChainCells).map(i => refs(i - 1) -> Set(refs(i))).toMap
+    val graph = DependencyGraph(Map.empty, dependents)
+
+    val started = System.nanoTime()
+    val reached = DependencyGraph.transitiveDependents(graph, Set(first))
+    val elapsedMs = (System.nanoTime() - started) / 1000000L
+
+    assertEquals(reached.size, ChainCells - 1)
+    assert(!reached.contains(first))
+    assert(reached.contains(last))
+    assert(
+      elapsedMs < BudgetMs,
+      s"transitiveDependents took ${elapsedMs}ms (budget ${BudgetMs}ms)"
+    )

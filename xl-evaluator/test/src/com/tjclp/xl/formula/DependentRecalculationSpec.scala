@@ -1,5 +1,8 @@
 package com.tjclp.xl.formula
 
+import java.time.{LocalDate, LocalDateTime}
+import java.util.concurrent.atomic.AtomicInteger
+
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
@@ -195,6 +198,24 @@ class DependentRecalculationSpec extends FunSuite:
     assertEquals(result.cells, sheet.cells)
   }
 
+  test(
+    "recalculateDependents: a cleared used-range boundary still invalidates full-column readers"
+  ) {
+    val sheet = sheetWith(
+      ref"A100" -> CellValue.Number(BigDecimal(5)),
+      ref"B1" -> CellValue.Formula("=SUM(A:A)", Some(CellValue.Number(BigDecimal(5))))
+    )
+
+    val recalculated = sheet
+      .put(ref"A100", CellValue.Empty)
+      .recalculateDependents(Set(ref"A100"))
+
+    assertEquals(
+      recalculated(ref"B1").value,
+      CellValue.Formula("=SUM(A:A)", Some(CellValue.Number(BigDecimal(0))))
+    )
+  }
+
   // ===== Workbook Cross-Sheet Tests (3 tests) =====
 
   test("workbook recalculateDependents: updates dependent on same sheet") {
@@ -237,6 +258,57 @@ class DependentRecalculationSpec extends FunSuite:
         case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
         case _ => None)
     assertEquals(a1Value, Some(BigDecimal(100)))
+  }
+
+  test("workbook recalculateDependents: follows a global cross-sheet topological order") {
+    // Deliberately stale caches on a three-sheet chain. Evaluating by grouped sheet hash order
+    // can refresh E before A, leaving E at 3 even after A becomes 11.
+    val input = new Sheet(name = SheetName.unsafe("I"))
+      .put(ref"A1", CellValue.Number(BigDecimal(1)))
+    val middle = new Sheet(name = SheetName.unsafe("A"))
+      .put(ref"A1", CellValue.Formula("=I!A1+1", Some(CellValue.Number(BigDecimal(2)))))
+    val output = new Sheet(name = SheetName.unsafe("E"))
+      .put(ref"A1", CellValue.Formula("=A!A1+1", Some(CellValue.Number(BigDecimal(3)))))
+    val wb = Workbook(input, middle, output)
+
+    val updated = wb
+      .put(input.put(ref"A1", CellValue.Number(BigDecimal(10))))
+      .recalculateDependents(input.name, Set(ref"A1"))
+
+    assertEquals(
+      updated(middle.name).toOption.map(_(ref"A1").value),
+      Some(CellValue.Formula("=I!A1+1", Some(CellValue.Number(BigDecimal(11)))))
+    )
+    assertEquals(
+      updated(output.name).toOption.map(_(ref"A1").value),
+      Some(CellValue.Formula("=A!A1+1", Some(CellValue.Number(BigDecimal(12)))))
+    )
+  }
+
+  test("workbook recalculateDependents isolates an affected cycle and refreshes healthy branches") {
+    val input = Sheet(SheetName.unsafe("I"))
+      .put(ref"A1", CellValue.Number(BigDecimal(1)))
+    val healthy = Sheet(SheetName.unsafe("H")).put(
+      ref"A1",
+      CellValue.Formula("=I!A1+1", Some(CellValue.Number(BigDecimal(2))))
+    )
+    val cyclic = Sheet(SheetName.unsafe("C"))
+      .put(
+        ref"A1",
+        CellValue.Formula("=B1+I!A1", Some(CellValue.Number(BigDecimal(100))))
+      )
+      .put(ref"B1", CellValue.Formula("=A1+1", Some(CellValue.Number(BigDecimal(101)))))
+    val wb = Workbook(input, healthy, cyclic)
+
+    val updated = wb
+      .put(input.put(ref"A1", CellValue.Number(BigDecimal(10))))
+      .recalculateDependents(input.name, Set(ref"A1"))
+
+    assertEquals(
+      updated(healthy.name).toOption.map(_(ref"A1").value),
+      Some(CellValue.Formula("=I!A1+1", Some(CellValue.Number(BigDecimal(11)))))
+    )
+    assertEquals(updated(cyclic.name).toOption, Some(cyclic))
   }
 
   test("workbook recalculateDependents: empty refs returns unchanged") {
@@ -313,6 +385,97 @@ class DependentRecalculationSpec extends FunSuite:
       out,
       Some(CellValue.Formula("=INDIRECT(\"S1!A1\")", Some(CellValue.Number(BigDecimal(9)))))
     )
+  }
+
+  test("GH-274: workbook dynamic closure remains ordered across sheets") {
+    val input = (new Sheet(name = SheetName.unsafe("I")))
+      .put(ref"A1", CellValue.Number(BigDecimal(5)))
+    val dynamic = (new Sheet(name = SheetName.unsafe("A"))).put(
+      ref"A1",
+      CellValue.Formula("=INDIRECT(\"I!A1\")", Some(CellValue.Number(BigDecimal(5))))
+    )
+    val downstream = (new Sheet(name = SheetName.unsafe("E"))).put(
+      ref"A1",
+      CellValue.Formula("=A!A1+1", Some(CellValue.Number(BigDecimal(6))))
+    )
+
+    val updated = Workbook(input, dynamic, downstream)
+      .put(input.put(ref"A1", CellValue.Number(BigDecimal(9))))
+      .recalculateDependents(input.name, Set(ref"A1"))
+
+    assertEquals(
+      updated(dynamic.name).toOption.map(_(ref"A1").value),
+      Some(CellValue.Formula("=INDIRECT(\"I!A1\")", Some(CellValue.Number(BigDecimal(9)))))
+    )
+    assertEquals(
+      updated(downstream.name).toOption.map(_(ref"A1").value),
+      Some(CellValue.Formula("=A!A1+1", Some(CellValue.Number(BigDecimal(10)))))
+    )
+  }
+
+  test("GH-274: targeted recalc does not expose stale caches between dynamic readers") {
+    val candidates = Vector(ref"A1", ref"B1")
+    val probe = candidates.foldLeft(emptySheet) { (sheet, at) =>
+      sheet.put(at, CellValue.Formula("=INDIRECT(\"D1\")"))
+    }
+    val order = DependencyGraph.topologicalSort(DependencyGraph.fromSheet(probe)).toOption.get
+    val first = order.head
+    val second = order(1)
+    val firstExpr = s"=INDIRECT(\"${second.toA1}\")"
+    val secondExpr = "=INDIRECT(\"D1\")"
+    val stale = CellValue.Number(BigDecimal(999))
+    val sheet = sheetWith(
+      ref"D1" -> CellValue.Number(BigDecimal(5)),
+      first -> CellValue.Formula(firstExpr, Some(stale)),
+      second -> CellValue.Formula(secondExpr, Some(stale))
+    )
+
+    val recalculated = sheet
+      .put(ref"D1", CellValue.Number(BigDecimal(9)))
+      .recalculateDependents(Set(ref"D1"))
+
+    assertEquals(
+      recalculated(first).value,
+      CellValue.Formula(firstExpr, Some(CellValue.Number(BigDecimal(9))))
+    )
+    assertEquals(
+      recalculated(second).value,
+      CellValue.Formula(secondExpr, Some(CellValue.Number(BigDecimal(9))))
+    )
+  }
+
+  test("targeted recalc pins one volatile clock generation across every dependent") {
+    final class CountingClock extends Clock:
+      val todayCalls = AtomicInteger(0)
+      val nowCalls = AtomicInteger(0)
+
+      def today(): LocalDate =
+        todayCalls.incrementAndGet()
+        LocalDate.of(2026, 8, 8)
+
+      def now(): LocalDateTime =
+        nowCalls.incrementAndGet()
+        LocalDateTime.of(2026, 8, 8, 12, 30)
+
+    val clock = new CountingClock
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(1)),
+      ref"B1" -> CellValue.Formula("=IF(A1>0,NOW(),NOW())"),
+      ref"C1" -> CellValue.Formula("=IF(A1>0,NOW(),NOW())")
+    )
+
+    val recalculated = sheet
+      .put(ref"A1", CellValue.Number(BigDecimal(2)))
+      .recalculateDependents(Set(ref"A1"), clock = clock)
+
+    assert(recalculated(ref"B1").value match
+      case CellValue.Formula(_, Some(_), _) => true
+      case _ => false)
+    assert(recalculated(ref"C1").value match
+      case CellValue.Formula(_, Some(_), _) => true
+      case _ => false)
+    assertEquals(clock.todayCalls.get(), 0)
+    assertEquals(clock.nowCalls.get(), 1)
   }
 
   // ===== GH-301: OFFSET cells are always-dirty in targeted recalculation (INDIRECT parity) =====
