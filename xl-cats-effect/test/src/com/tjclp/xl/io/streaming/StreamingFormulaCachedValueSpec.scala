@@ -24,7 +24,7 @@ class StreamingFormulaCachedValueSpec extends CatsEffectSuite:
   private val excel = ExcelIO.instance[IO]
 
   private def tempXlsx(label: String): Path =
-    val p = Files.createTempFile(s"xl-stream-cached-$label-", ".xlsx")
+    val p = Files.createTempFile(s"xl-fixture-cached-$label-", ".xlsx")
     p.toFile.deleteOnExit()
     p
 

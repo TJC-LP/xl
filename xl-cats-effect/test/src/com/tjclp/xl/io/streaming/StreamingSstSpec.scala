@@ -30,7 +30,7 @@ class StreamingSstSpec extends CatsEffectSuite:
   private val excel = ExcelIO.instance[IO]
 
   private def tempXlsx(label: String): Path =
-    val p = Files.createTempFile(s"xl-stream-sst-$label-", ".xlsx")
+    val p = Files.createTempFile(s"xl-fixture-sst-$label-", ".xlsx")
     p.toFile.deleteOnExit()
     p
 

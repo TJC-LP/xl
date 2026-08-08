@@ -39,6 +39,64 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     extends Excel[F]
     with ExcelR[F]:
 
+  /**
+   * Where the auto-detect streaming writers put their phase-1 scratch file.
+   *
+   * `None` uses the JVM's `java.io.tmpdir`. Point it elsewhere when that directory is small,
+   * read-only, or slower than the output volume — a container's tmpfs, say. Only the two-pass
+   * writers spill; the single-pass ones never touch it.
+   *
+   * A member rather than a constructor parameter so that adding the setting did not change this
+   * class's constructor signature, which consumers compiled against an earlier release link to.
+   * Consulted exactly once per spilled sheet, so an override that varies between reads decides one
+   * sheet at a time rather than being sampled twice for the same file.
+   */
+  def spillDir: Option[Path] = None
+
+  /**
+   * An interpreter identical to this one but spilling into `dir`, which must already exist.
+   *
+   * {{{
+   * val excel = ExcelIO.instance[IO].withSpillDir(fastVolume)
+   * rows.through(excel.writeStreamWithAutoDetect(out, "Data")).compile.drain
+   * }}}
+   *
+   * Instances are cheap, so this doubles as the per-call form: build one at the call site that
+   * needs a different directory and leave the rest of the program on the default.
+   *
+   * Carries the warning handler over, but nothing else: the result is a plain `ExcelIO`, so a
+   * subclass calling this would silently lose its own overrides. Subclasses should override
+   * [[spillDir]] directly instead — hence `final`, so that trap cannot be widened by overriding
+   * this method too.
+   */
+  final def withSpillDir(dir: Path): ExcelIO[F] =
+    new ExcelIO[F](warningHandler):
+      override def spillDir: Option[Path] = Some(dir)
+
+  /**
+   * Create a scratch file for a two-pass write, honoring [[spillDir]].
+   *
+   * A missing or unwritable directory fails here rather than mid-stream, and names the setting so
+   * the cause is not mistaken for a problem with the workbook being written.
+   */
+  private def createSpillFile(prefix: String): Path =
+    // Read the setting once: it is overridable, so a second read could report a directory other
+    // than the one that actually failed — exactly the confusion this message exists to prevent.
+    val target = spillDir
+    try
+      target match
+        case Some(dir) => JFiles.createTempFile(dir, prefix, ".xml")
+        case None => JFiles.createTempFile(prefix, ".xml")
+    catch
+      case e: java.io.IOException =>
+        val where = target.fold("the default temp directory (java.io.tmpdir)")(d =>
+          s"the configured spill directory ($d)"
+        )
+        throw new java.io.IOException(
+          s"Could not create a streaming scratch file in $where: ${e.getMessage}",
+          e
+        )
+
   /** Read workbook from XLSX file */
   def read(path: Path): F[Workbook] =
     readWith(path, XlsxReader.ReaderConfig.default)
@@ -749,7 +807,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         Stream
           .bracket(
             Sync[F].delay {
-              val tempFile = JFiles.createTempFile("xl-stream-", ".xml")
+              val tempFile = createSpillFile("xl-stream-")
               val bounds = new BoundsAccumulator()
               (tempFile, bounds)
             }
@@ -1067,14 +1125,34 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         (name, idx + 1, rows)
       }
 
-      // Create temp file + bounds tracker for each sheet
+      // Create temp file + bounds tracker for each sheet.
+      //
+      // Acquire is all-or-nothing: bracket's release never runs for a failed acquire, so a spill
+      // that cannot be created partway through — a full or quota-bound volume, a directory the
+      // process may traverse but not write — would strand the sheets already spilled. Unwind them
+      // here before rethrowing. Only reachable once the directory is the caller's choice; a broken
+      // java.io.tmpdir fails on the first sheet, with nothing yet to clean up.
       Stream
         .bracket(
           Sync[F].delay {
-            sheetsWithIndices.map { case (name, sheetIndex, _) =>
-              val tempFile = JFiles.createTempFile(s"xl-stream-$sheetIndex-", ".xml")
-              val bounds = new BoundsAccumulator()
-              (name, sheetIndex, tempFile, bounds)
+            sheetsWithIndices.foldLeft(Seq.empty[(String, Int, Path, BoundsAccumulator)]) {
+              case (acquired, (name, sheetIndex, _)) =>
+                try
+                  acquired :+ ((
+                    name,
+                    sheetIndex,
+                    createSpillFile(s"xl-stream-$sheetIndex-"),
+                    new BoundsAccumulator()
+                  ))
+                catch
+                  case e: Throwable =>
+                    // Best-effort: the pathological filesystem that failed the acquire is the one
+                    // most likely to fail these deletes too, and the cause must survive that.
+                    acquired.foreach { case (_, _, tempFile, _) =>
+                      try JFiles.deleteIfExists(tempFile)
+                      catch case d: Throwable => e.addSuppressed(d)
+                    }
+                    throw e
             }
           }
         ) { resources =>
@@ -1317,3 +1395,12 @@ object ExcelIO:
   /** Create ExcelIO with custom warning handler */
   def withWarnings[F[_]: Async](handler: XlsxReader.Warning => F[Unit]): ExcelIO[F] =
     new ExcelIO[F](handler)
+
+  /**
+   * Create ExcelIO whose streaming writers spill into `dir` instead of `java.io.tmpdir`.
+   *
+   * Shorthand for `instance[F].withSpillDir(dir)`; chain [[ExcelIO.withSpillDir]] off
+   * [[withWarnings]] to combine it with a warning handler.
+   */
+  def withSpillDir[F[_]: Async](dir: Path): ExcelIO[F] =
+    instance[F].withSpillDir(dir)
