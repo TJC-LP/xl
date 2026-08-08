@@ -180,15 +180,11 @@ object DependentRecalculation:
         .getOrElse(s)
     }
 
-  /** Build reverse lookup from forward dependency graph */
+  /** Build reverse lookup from forward dependency graph (GH-522: shared mutable-builder core). */
   private def buildDependentsMap(
     graph: Map[QualifiedRef, Set[QualifiedRef]]
   ): Map[QualifiedRef, Set[QualifiedRef]] =
-    graph.foldLeft(Map.empty[QualifiedRef, Set[QualifiedRef]]) { case (acc, (ref, deps)) =>
-      deps.foldLeft(acc) { (acc2, dep) =>
-        acc2.updated(dep, acc2.getOrElse(dep, Set.empty) + ref)
-      }
-    }
+    DependencyGraph.reverseEdges(graph)
 
   @scala.annotation.tailrec
   private def transitiveDependentsQualified(
