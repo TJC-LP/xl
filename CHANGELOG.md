@@ -16,6 +16,17 @@ always acceptable, a wrong one never is.**
 
 ### Added
 
+- **`defined-name-invalid` lint** (#528): flags defined names Excel
+  repairs the file over — same-scope names colliding under Excel's
+  case/width/kana-insensitive comparison (`g`/`ｇ`, `html`/`ＨＴＭＬ`,
+  `ぁ`/`あ`), names past the 255-char limit, whitespace/control chars.
+  Both 2026-08-08 field incidents carried collision fossils; Excel
+  removed the Camco ones without even logging them. Excel's full legacy
+  name-character table is deliberately not emulated (corpus shows `¤`,
+  `・`, `–` accepted while `†`, `€` are rejected — category rules would
+  false-positive). Also whitelists the suffix-less Microsoft
+  externalLinkPath rel-type variants xlStartup/xlLibrary/xlAltStartup
+  (#529) that were flagged wrong-rel-type on files Excel opens fine.
 - **`external-ref-dangling` lint** (#525): flags formulas and defined
   names referencing external workbook `[N]` with no N-th
   `<externalReference>` entry — the cross-workbook sheet-transplant
