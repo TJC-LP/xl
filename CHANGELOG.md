@@ -5,7 +5,7 @@ All notable changes to the XL project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.19.2] "Fixpoint" - 2026-08-06
+## [0.19.2] "Fixpoint" - 2026-08-08
 
 Wave 24: the 0.19.1 blind-regression round. Four new silent-wrong-number
 bugs were found in the field, and **three of them turned out to be one
@@ -13,6 +13,35 @@ root cause** — evaluation reading a stale or unevaluated cache instead of
 the value. This release fixes that root cause and the two independent
 bugs beside it. The governing principle throughout: **a missing value is
 always acceptable, a wrong one never is.**
+
+Late additions (2026-08-08, from two production Excel-repair incidents
+and a recalculation-latency incident): the evaluator performance stack
+(#521, #523, #524) and two new lint corruption classes (#527, #530).
+
+### Performance
+
+- **Recalculation is 7-37x faster than 0.19.1** across the stack
+  (#518/#521, #522/#523, #520/#524). Measured on JVM assembly:
+  9,900 x SUM($A$1:$A$5000): 47.9s -> **1.30s** (RSS 6.0GB -> 0.71GB);
+  200k-formula book: 95s -> **13.8s** (137.9s -> 10.8s at -Xmx512m);
+  50k book: 8.9s -> 3.1s. The pieces: linear-allocation Kahn core
+  (topological sort was 81% of recalc allocation), memoized range-edge
+  expansion (range deps no longer re-materialize per formula),
+  aggregate-fold memoization with single-flight (repeated SUM/AVERAGE
+  over one range fold it once per calculation generation), stack-safe
+  iterative Tarjan SCC engine, bounded-dependency extraction caching.
+- **SIGTERM terminates a mid-recalculation process** (#519/#521): a
+  finite `shutdownHookTimeout` (2s) replaces cats-effect's infinite
+  default — a TERM'd xl previously computed the entire remaining recalc
+  at full CPU and then discarded the result. The CPU-starvation warning
+  spam is disabled with it. Staged `-o`/`-i` output commits mean a
+  killed process cannot leave a torn destination (#524).
+- **`recalc --parallel N` / `recalculateParallel(n)`** (#520/#524):
+  wave-partitioned evaluation, equivalence-gated (bit-for-bit parity
+  with sequential, 7 pinned gates). Honest assessment: ~1.0x on
+  measured shapes today — the memoization above removed the redundant
+  work parallelism used to attack; ships as the correctness-proven
+  foundation that inherits every future serial-cost reduction.
 
 ### Added
 
