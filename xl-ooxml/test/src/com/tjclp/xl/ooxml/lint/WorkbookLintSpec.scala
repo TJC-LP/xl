@@ -1054,6 +1054,135 @@ class WorkbookLintSpec extends FunSuite:
     )
   }
 
+  // ===== GH-525: dangling external-workbook ordinals =====
+
+  /** `[1]` resolves (externalParts declares one entry); `[2]` (twice) and `[5]` dangle. */
+  private val danglingExternalRefSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1">
+      <c r="A1"><f>'[1]Extern'!A1</f><v>1</v></c>
+      <c r="B1"><f>'[2]Model Guidance (Big 3)'!AQ5</f><v>2</v></c>
+      <c r="C1"><f>[2]Extern!B1*2</f><v>4</v></c>
+    </row>
+    <row r="2"><c r="A2"><f>SUM('[5]Q1:Q4'!A1)</f><v>5</v></c></row>
+  </sheetData>"""
+  )
+
+  private val externalOkSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><f>'[1]Extern'!A1+[1]Extern!B1</f><v>2</v></c></row>
+  </sheetData>"""
+  )
+
+  /** Bracket forms that must NEVER count: structured refs and string literals. */
+  private val bracketNoiseSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1">
+      <c r="A1"><f>SUM(Table1[3])</f><v>1</v></c>
+      <c r="B1"><f>SUM(Table1[[#This Row],[3]])</f><v>2</v></c>
+      <c r="C1" t="str"><f>"see [9] note"</f><v>see [9] note</v></c>
+    </row>
+  </sheetData>"""
+  )
+
+  private val danglingNameWorkbookXml = workbookWithExternalXml.replace(
+    "<definedName name=\"MyName\">Sheet1!$A$1</definedName>",
+    "<definedName name=\"MyName\">Sheet1!$A$1</definedName>" +
+      "<definedName name=\"ExtRate\">'[4]Src'!$A$1</definedName>"
+  )
+
+  test("GH-525: externalOrdinals reads every external-ref form and nothing else") {
+    assertEquals(WorkbookLint.externalOrdinals("'[3]GP - Customer'!$J$43"), Set(3))
+    assertEquals(WorkbookLint.externalOrdinals("[5]Data!B2+[5]Data!C2"), Set(5))
+    assertEquals(
+      WorkbookLint.externalOrdinals(
+        "INDEX('[5]Model Guidance (Big 3)'!AQ$5:AQ$15,MATCH($C78,'[5]Model Guidance (Big 3)'!$G$5:$G$15,0))"
+      ),
+      Set(5)
+    )
+    assertEquals(WorkbookLint.externalOrdinals("SUM('[2]Q1:Q4'!A1)"), Set(2))
+    assertEquals(WorkbookLint.externalOrdinals("[2]!ExtName"), Set(2))
+    assertEquals(WorkbookLint.externalOrdinals("=[1]Sheet1!A1"), Set(1))
+    assertEquals(WorkbookLint.externalOrdinals("'[12]Ext'!A1*[3]Ext!B1"), Set(12, 3))
+    // ordinal 0 is the self-workbook
+    assertEquals(WorkbookLint.externalOrdinals("[0]!ThisBookName"), Set.empty[Int])
+    // structured references — including a column literally named "3" — never count
+    assertEquals(WorkbookLint.externalOrdinals("SUM(Table1[3])"), Set.empty[Int])
+    assertEquals(
+      WorkbookLint.externalOrdinals("SUM(Table1[[#This Row],[3]])"),
+      Set.empty[Int]
+    )
+    // string literals are opaque, including escaped quotes and R1C1 text
+    assertEquals(WorkbookLint.externalOrdinals("\"see [3] note\"&A1"), Set.empty[Int])
+    assertEquals(WorkbookLint.externalOrdinals("INDIRECT(\"R[1]C[2]\",FALSE)"), Set.empty[Int])
+    assertEquals(WorkbookLint.externalOrdinals("\"a\"\"[7]\"\"b\""), Set.empty[Int])
+    // brackets inside a quoted name past position 0 cannot be an ordinal (sheet names forbid [])
+    assertEquals(WorkbookLint.externalOrdinals("'It''s [2]'!A1"), Set.empty[Int])
+    // file-name form and degenerate brackets are skipped, not findings
+    assertEquals(WorkbookLint.externalOrdinals("[Book1.xlsx]Sheet1!A1"), Set.empty[Int])
+    assertEquals(WorkbookLint.externalOrdinals("A1*[unclosed"), Set.empty[Int])
+    assertEquals(WorkbookLint.externalOrdinals("A1*[]B2"), Set.empty[Int])
+  }
+
+  test("GH-525: formulas referencing external ordinals past the declared count are flagged") {
+    val findings =
+      lintOf(externalParts + ("xl/worksheets/sheet1.xml" -> danglingExternalRefSheetXml))
+    assertEquals(
+      findings.map(_.category),
+      Vector(LintCategory.ExternalRefDangling, LintCategory.ExternalRefDangling)
+    )
+    val ord2 = findings(0)
+    val ord5 = findings(1)
+    assertEquals(ord2.part, "xl/worksheets/sheet1.xml")
+    assert(ord2.message.contains("2 formula(s) reference external workbook [2]"), ord2.toString)
+    assert(ord2.message.contains("only 1 <externalReference> entry"), ord2.toString)
+    assert(ord2.locator.contains("B1"), s"locator carries the first offending cell: $ord2")
+    assert(ord5.message.contains("1 formula(s) reference external workbook [5]"), ord5.toString)
+    assert(ord5.message.contains("first at A2"), ord5.toString)
+  }
+
+  test("GH-525: with no externalReferences block, any external ordinal dangles") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> externalOkSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.ExternalRefDangling))
+    assert(
+      findings.head.message.contains("no <externalReference> entries"),
+      findings.head.toString
+    )
+    assert(findings.head.message.contains("[1]"), findings.head.toString)
+  }
+
+  test("GH-525: ordinals within the declared count are clean") {
+    assertEquals(
+      lintOf(externalParts + ("xl/worksheets/sheet1.xml" -> externalOkSheetXml)),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("GH-525: structured references and string literals never count") {
+    assertEquals(
+      lintOf(externalParts + ("xl/worksheets/sheet1.xml" -> bracketNoiseSheetXml)),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("GH-525: a defined name with a dangling external ordinal is flagged on workbook.xml") {
+    val findings = lintOf(externalParts + ("xl/workbook.xml" -> danglingNameWorkbookXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.ExternalRefDangling))
+    val f = findings.head
+    assertEquals(f.part, "xl/workbook.xml")
+    assert(f.locator.contains("ExtRate"), f.toString)
+    assert(f.message.contains("[4]"), f.toString)
+  }
+
+  test("GH-525: streaming mode flags dangling ordinals identically") {
+    val parts = externalParts + ("xl/worksheets/sheet1.xml" -> danglingExternalRefSheetXml)
+    assertEquals(lintStreamOf(parts), lintOf(parts))
+    assertEquals(
+      lintStreamOf(parts).map(_.category),
+      Vector(LintCategory.ExternalRefDangling, LintCategory.ExternalRefDangling)
+    )
+  }
+
   // ===== GH-413 (4): O(1) SAX scanning mode =====
 
   private def lintStreamOf(parts: Map[String, String]): Vector[Finding] =
@@ -1110,6 +1239,16 @@ class WorkbookLintSpec extends FunSuite:
     "many leading-equals formulas" ->
       (baseParts + ("xl/worksheets/sheet1.xml" -> manyLeadingEqualsSheetXml)),
     "clean formula text" -> (baseParts + ("xl/worksheets/sheet1.xml" -> cleanFormulaSheetXml)),
+    // GH-525: external-ordinal observation must agree between the DOM and SAX scanners,
+    // including the per-ordinal aggregation (counts + first-cell locators)
+    "dangling external ordinals" ->
+      (externalParts + ("xl/worksheets/sheet1.xml" -> danglingExternalRefSheetXml)),
+    "clean external ordinals" ->
+      (externalParts + ("xl/worksheets/sheet1.xml" -> externalOkSheetXml)),
+    "bracket noise formulas" ->
+      (externalParts + ("xl/worksheets/sheet1.xml" -> bracketNoiseSheetXml)),
+    "dangling defined-name ordinal" ->
+      (externalParts + ("xl/workbook.xml" -> danglingNameWorkbookXml)),
     // GH-458: Microsoft xlExternalLinkPath variants resolve clean in both modes
     "ms xlPathMissing external" ->
       (externalParts +
