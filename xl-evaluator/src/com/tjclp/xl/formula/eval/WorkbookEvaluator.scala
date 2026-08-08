@@ -202,13 +202,47 @@ object WorkbookEvaluator:
     def recalculate(clock: Clock, rng: Rng, iterative: IterativeCalc): RecalcResult =
       recalculateImpl(wb, clock, Some(rng), Some(iterative))
 
+    /**
+     * GH-520: non-iterative recalculation with independent formula regions evaluated on
+     * `parallelism` threads.
+     *
+     * The single topological order is partitioned into longest-path depth classes ("waves") of the
+     * workbook graph: two cells in the same wave can have no path between them, so evaluating a
+     * wave's members concurrently against the pre-wave snapshot computes exactly the values the
+     * sequential pass computes, and results fold into the pass state in the sequential order — the
+     * workbook, evaluated map, and error vector are identical to `recalculate()`, element for
+     * element. Dynamic-reference cells (INDIRECT/OFFSET) and their static dependents keep their
+     * sequential evaluate-last pass (their reads resolve at evaluation time, outside the static
+     * graph), and `parallelism <= 1` is exactly `recalculate()`.
+     *
+     * Determinism caveats, by construction rather than by luck:
+     *   - No seeded-[[Rng]] variant is offered: a seeded generator draws in evaluation-order
+     *     sequence, which parallelism would reorder. RAND under this entry point uses the
+     *     thread-safe system generator ([[Rng.system]] semantics), as `recalculate()` does.
+     *   - No iterative variant is offered: cyclic components fixpoint sequentially (GH-492) and
+     *     books that need `IterativeCalc` should use the sequential overloads.
+     *   - A dependence the static graph cannot see (a defined name whose refersTo the parser
+     *     rejects — multi-area or intersection names, GH-468's blind-name class) is invisible to
+     *     wave placement exactly as it is invisible to the sequential Kahn order; both paths
+     *     evaluate such readers at an arbitrary point. Parity is guaranteed for every dependence
+     *     the graph can express.
+     */
+    def recalculateParallel(parallelism: Int): RecalcResult =
+      recalculateImpl(wb, Clock.system, None, None, parallelism)
+
+    /** GH-520: parallel non-iterative recalculation with an explicit clock. */
+    @annotation.targetName("recalculateParallelWithClock")
+    def recalculateParallel(clock: Clock, parallelism: Int): RecalcResult =
+      recalculateImpl(wb, clock, None, None, parallelism)
+
   // ========== recalculate internals ==========
 
   private def recalculateImpl(
     wb: Workbook,
     clock: Clock,
     rngOpt: Option[Rng],
-    iterativeOpt: Option[IterativeCalc]
+    iterativeOpt: Option[IterativeCalc],
+    parallelism: Int = 1
   ): RecalcResult =
     val (deps, dependents) = DependencyGraph.fromWorkbookBounded(wb)
 
@@ -281,9 +315,11 @@ object WorkbookEvaluator:
         val bucket =
           if dynamic.isEmpty then Set.empty[QualifiedRef]
           else dynamic ++ DependencyGraph.qualifiedTransitiveDependents(prunedDependents, dynamic)
-        val ordered =
-          if bucket.isEmpty then evalOrder
-          else evalOrder.filterNot(bucket.contains) ++ evalOrder.filter(bucket.contains)
+        val orderedMain =
+          if bucket.isEmpty then evalOrder else evalOrder.filterNot(bucket.contains)
+        val orderedBucket =
+          if bucket.isEmpty then List.empty[QualifiedRef] else evalOrder.filter(bucket.contains)
+        val ordered = orderedMain ++ orderedBucket
 
         // GH-492: the condensation walk evaluates the cyclic core too, so the deferral bucket must
         // be closed over the FULL graph — `prunedDependents` has the core deleted, and a cyclic
@@ -309,43 +345,133 @@ object WorkbookEvaluator:
         // values, so recursive re-derivation only arises on dynamic reads. The temp sheets live
         // in a Vector parallel to wb.sheets, updated incrementally, so per-cell cost is one
         // Workbook shell copy + one Vector update rather than re-mapping every sheet.
+        // One cell against a snapshot of the threaded sheets; None when the node names a sheet
+        // absent from the workbook. Shared verbatim by the sequential fold and the parallel waves
+        // so the two paths cannot diverge per cell.
+        def evalOne(
+          sheets: Vector[Sheet],
+          tempWb: Workbook,
+          q: QualifiedRef,
+          clk: Clock
+        ): Option[Either[XLError, CellValue]] =
+          sheetIndex.get(q.sheet).map { idx =>
+            val tempSheet = sheets(idx)
+            // GH-388 defense in depth: recalculate is documented total — a numeric blowup
+            // escaping a function implementation (e.g. BigDecimal scale overflow in a
+            // diverging Newton loop) must degrade to this cell's per-cell error, never
+            // unwind the whole recalculation.
+            try
+              rngOpt match
+                case Some(rng) => tempSheet.evaluateCell(q.ref, clk, rng, Some(tempWb))
+                case None => tempSheet.evaluateCell(q.ref, clk, Some(tempWb))
+            catch
+              case NonFatal(e) =>
+                Left(
+                  XLError.FormulaError(
+                    formulaText(q),
+                    s"Evaluation threw ${e.getClass.getName}"
+                  )
+                )
+          }
+
+        def foldResult(
+          state: PassState,
+          q: QualifiedRef,
+          result: Either[XLError, CellValue]
+        ): PassState =
+          val (sheets, acc, errs) = state
+          sheetIndex.get(q.sheet) match
+            case None => state
+            case Some(idx) =>
+              result match
+                case Right(value) =>
+                  (
+                    sheets.updated(idx, sheets(idx).put(q.ref, value)),
+                    acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
+                    errs
+                  )
+                case Left(error) => (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
+
         def evalPass(
           order: List[QualifiedRef],
           init: PassState,
           clk: Clock
         ): PassState =
-          order.foldLeft(init) { case ((sheets, acc, errs), q) =>
-            sheetIndex.get(q.sheet) match
-              case None => (sheets, acc, errs) // node names a sheet absent from the workbook
-              case Some(idx) =>
-                val tempSheet = sheets(idx)
-                val tempWb = wb.copy(sheets = sheets)
-                // GH-388 defense in depth: recalculate is documented total — a numeric blowup
-                // escaping a function implementation (e.g. BigDecimal scale overflow in a
-                // diverging Newton loop) must degrade to this cell's per-cell error, never
-                // unwind the whole recalculation.
-                val evaluatedCell =
-                  try
-                    rngOpt match
-                      case Some(rng) => tempSheet.evaluateCell(q.ref, clk, rng, Some(tempWb))
-                      case None => tempSheet.evaluateCell(q.ref, clk, Some(tempWb))
-                  catch
-                    case NonFatal(e) =>
-                      Left(
-                        XLError.FormulaError(
-                          formulaText(q),
-                          s"Evaluation threw ${e.getClass.getName}"
-                        )
-                      )
-                evaluatedCell match
-                  case Right(value) =>
-                    (
-                      sheets.updated(idx, tempSheet.put(q.ref, value)),
-                      acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
-                      errs
-                    )
-                  case Left(error) => (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
+          order.foldLeft(init) { case (state @ (sheets, _, _), q) =>
+            evalOne(sheets, wb.copy(sheets = sheets), q, clk) match
+              case None => state // node names a sheet absent from the workbook
+              case Some(result) => foldResult(state, q, result)
           }
+
+        /**
+         * GH-520: the wave-parallel equivalent of one `evalPass` over `order`.
+         *
+         * `order` is partitioned into longest-path depth classes over the pruned graph: if u
+         * depends on v then depth(u) > depth(v), so two cells of one wave can have no path between
+         * them and each wave member's evaluation reads only earlier-wave state. Every member of a
+         * wave therefore evaluates against the SAME pre-wave snapshot — concurrently — and computes
+         * exactly the value the sequential fold computes (an intra-wave write could only be
+         * observed through an edge the graph does not have; dynamic reads are excluded from `order`
+         * by the caller). Results fold into the pass state in the wave's sequential order, so
+         * sheets, evaluated map and error vector come out element-for-element equal to
+         * `evalPass(order, init, clk)`.
+         *
+         * Waves below [[ParallelWaveCutoff]] run through the sequential fold — chain-shaped regions
+         * would otherwise pay thread-handoff latency per cell. Worker results are published by
+         * `Future.get`'s happens-before edge; each chunk owns disjoint slots of the results array.
+         */
+        @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+        def evalWaves(
+          order: List[QualifiedRef],
+          init: PassState,
+          clk: Clock,
+          threads: Int
+        ): PassState =
+          val orderVec = order.toVector
+          if orderVec.isEmpty then init
+          else
+            val inOrder = orderVec.toSet
+            val depthOf = scala.collection.mutable.HashMap.empty[QualifiedRef, Int]
+            orderVec.foreach { q =>
+              var d = 0
+              prunedDeps.getOrElse(q, Set.empty).foreach { p =>
+                if inOrder.contains(p) then d = math.max(d, depthOf.getOrElse(p, 0))
+              }
+              depthOf(q) = d + 1
+            }
+            val waves: Vector[Vector[QualifiedRef]] =
+              orderVec.groupBy(depthOf).toVector.sortBy(_._1).map(_._2)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(threads)
+            try
+              waves.foldLeft(init) { case (state @ (sheets, _, _), wave) =>
+                if wave.length < ParallelWaveCutoff then evalPass(wave.toList, state, clk)
+                else
+                  val snapshotWb = wb.copy(sheets = sheets)
+                  val results: Array[Option[Either[XLError, CellValue]]] =
+                    Array.fill(wave.length)(None)
+                  val chunk = math.max(1, (wave.length + threads - 1) / threads)
+                  val futures = new java.util.ArrayList[java.util.concurrent.Future[?]]()
+                  var start = 0
+                  while start < wave.length do
+                    val from = start
+                    val until = math.min(wave.length, from + chunk)
+                    val task: Runnable = () =>
+                      var i = from
+                      while i < until do
+                        results(i) = evalOne(sheets, snapshotWb, wave(i), clk)
+                        i += 1
+                    futures.add(pool.submit(task))
+                    start = until
+                  futures.forEach { f =>
+                    f.get()
+                    ()
+                  }
+                  wave.indices.foldLeft(state) { (st, i) =>
+                    results(i).fold(st)(foldResult(st, wave(i), _))
+                  }
+              }
+            finally
+              pool.shutdown()
 
         /**
          * GH-492: fixpoint ONE cyclic condensation node against the threaded temp sheets, then fold
@@ -433,7 +559,16 @@ object WorkbookEvaluator:
                   components.partition(c => !c.members.exists(bucketIter.contains))
                 eager ++ deferred
             runPlan(buildPlan(walk), iterative, pinnedClock, initState)
-          case _ => (evalPass(ordered, initState, clock), Vector.empty[SccReport])
+          case _ =>
+            // GH-520: waves parallelize only the statically ordered region; the dynamic bucket
+            // keeps its sequential evaluate-last pass (its reads resolve at evaluation time).
+            // A seeded Rng forces the sequential fold — its draw sequence is evaluation-order.
+            val threads =
+              if rngOpt.isDefined then 1 else math.min(math.max(1, parallelism), MaxParallelism)
+            val mainState =
+              if threads <= 1 then evalPass(orderedMain, initState, clock)
+              else evalWaves(orderedMain, initState, clock, threads)
+            (evalPass(orderedBucket, mainState, clock), Vector.empty[SccReport])
 
         val (_, evaluated, evalErrors) = finalState
         val cycles = cycleReports.sortBy(r =>
@@ -485,6 +620,16 @@ object WorkbookEvaluator:
   /** GH-492: the threaded state of one recalculation pass (temp sheets, values, errors). */
   private[eval] type PassState =
     (Vector[Sheet], Map[SheetName, Map[ARef, CellValue]], Vector[CellEvalError])
+
+  /** GH-520: hard cap on requested parallelism — a pool wider than this only adds contention. */
+  private val MaxParallelism = 64
+
+  /**
+   * GH-520: waves narrower than this evaluate through the sequential fold. A chain-shaped region
+   * produces thousands of single-cell waves; per-cell thread handoff would cost more than the
+   * evaluation itself.
+   */
+  private val ParallelWaveCutoff = 16
 
   /**
    * GH-492: one step of the condensation walk.

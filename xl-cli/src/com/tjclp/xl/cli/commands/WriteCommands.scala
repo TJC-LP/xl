@@ -1309,9 +1309,21 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean = false,
     seedTables: Boolean = false,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    parallel: Option[Int] = None
   ): IO[String] =
-    val result = recalcHonoringCalcPr(wb)
+    // GH-520: --parallel applies to the non-iterative pass only — an iterate-declared book keeps
+    // the calcPr-honoring sequential path (cyclic fixpoints are inherently ordered), with a
+    // stderr note so the divergence from the request is never silent.
+    val iterOpt = wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)
+    val result = (parallel, iterOpt) match
+      case (Some(n), None) => wb.recalculateParallel(n)
+      case (Some(_), Some(it)) =>
+        System.err.println(
+          "NOTE: --parallel ignored — the book declares iterative calculation (<calcPr iterate=\"1\"/>), which fixpoints sequentially"
+        )
+        wb.recalculate(Clock.system, it)
+      case (None, _) => recalcHonoringCalcPr(wb)
     val prepared: IO[(Workbook, Vector[SeedTableWarning])] =
       if !seedTables then IO.pure((result.workbook, Vector.empty))
       else

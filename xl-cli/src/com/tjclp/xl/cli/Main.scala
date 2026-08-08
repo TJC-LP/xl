@@ -1208,16 +1208,25 @@ autoNoTable book needs, since Excel never recomputes tables on open.
 USAGE:
   xl -f in.xlsx -o out.xlsx recalc
   xl -f in.xlsx -i recalc
-  xl -f in.xlsx -o out.xlsx recalc --tables   # Also seed data-table interiors"""
+  xl -f in.xlsx -o out.xlsx recalc --tables       # Also seed data-table interiors
+  xl -f in.xlsx -o out.xlsx recalc --parallel 4   # Independent regions on 4 threads"""
 
   private val recalcTablesOpt: Opts[Boolean] =
     Opts
       .flag("tables", "Also seed data-table interior caches (default: pinned caches)")
       .orFalse
 
+  // GH-520: results are element-for-element identical to the sequential pass; books declaring
+  // iterative calculation ignore the flag (cyclic fixpoints are sequential) with a stderr note.
+  private val recalcParallelOpt: Opts[Option[Int]] =
+    Opts
+      .option[Int]("parallel", "Evaluate independent formula regions on N threads (GH-520)")
+      .validate("--parallel must be at least 1")(_ >= 1)
+      .orNone
+
   val recalcCmd: Opts[CliCommand] =
     Opts.subcommand("recalc", recalcHelp) {
-      recalcTablesOpt.map(CliCommand.Recalc.apply)
+      (recalcTablesOpt, recalcParallelOpt).mapN(CliCommand.Recalc.apply)
     }
 
   // --- Import command ---
@@ -2476,7 +2485,7 @@ EXAMPLES:
         WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy)
       )
 
-    case CliCommand.Recalc(tables) =>
+    case CliCommand.Recalc(tables, parallel) =>
       // A recalculation asked not to recalculate is a contradiction, not a no-op: say so rather
       // than writing a file the caller will read as freshened (GH-468).
       if policy.noRecalc then
@@ -2487,7 +2496,7 @@ EXAMPLES:
         )
       else
         requireOutput("recalc", outputOpt, backendOpt, stream)(
-          WriteCommands.recalc(wb, _, _, _, tables, policy)
+          WriteCommands.recalc(wb, _, _, _, tables, policy, parallel)
         )
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
