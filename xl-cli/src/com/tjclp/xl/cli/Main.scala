@@ -2,7 +2,10 @@ package com.tjclp.xl.cli
 
 import java.nio.file.Path
 
+import scala.concurrent.duration.*
+
 import cats.effect.{ExitCode, IO}
+import cats.effect.unsafe.IORuntimeConfig
 import cats.implicits.*
 import cats.syntax.parallel.*
 import com.monovore.decline.*
@@ -71,6 +74,26 @@ object Main
       header = "LLM-friendly Excel operations (stateless)",
       version = BuildInfo.version
     ):
+
+  /**
+   * GH-519: SIGTERM/SIGINT must terminate the process even mid-recalculation. The evaluator is a
+   * single non-yielding compute step, so fiber cancellation is only observed once the whole
+   * computation finishes — under the default `shutdownHookTimeout = Duration.Inf` a TERM'd `xl`
+   * kept computing at full CPU for the entire remaining recalc and then discarded the result. A
+   * finite timeout lets the JVM (and the native image, which installs exit handlers by default on
+   * GraalVM 25+) halt promptly after the cancellation attempt; the torn-`-o`-output window this
+   * leaves is identical to the pre-existing SIGKILL reality, and `-i` writes stay atomic (temp +
+   * ATOMIC_MOVE).
+   *
+   * The CPU-starvation checker is disabled outright: xl is a batch compute process, so "your
+   * compute pool is busy" is the expected steady state, and on small containers the checker drowned
+   * real diagnostics in warnings. Public (not protected) so tests can pin the config.
+   */
+  override def runtimeConfig: IORuntimeConfig =
+    super.runtimeConfig.copy(
+      shutdownHookTimeout = 2.seconds,
+      cpuStarvationCheckInitialDelay = Duration.Inf
+    )
 
   override def main: Opts[IO[ExitCode]] =
     // Workbook-level: only --file (no --sheet)
