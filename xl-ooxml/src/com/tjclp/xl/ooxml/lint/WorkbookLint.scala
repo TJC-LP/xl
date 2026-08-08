@@ -64,6 +64,13 @@ enum LintCategory derives CanEqual:
    */
   case ExternalRefDangling
 
+  /**
+   * A defined name Excel refuses: two names in the same scope colliding under Excel's case-, width-
+   * and kana-size-insensitive comparison, or a name that is over-long or carries whitespace /
+   * control characters — Excel repairs the file by removing the named range (GH-528).
+   */
+  case DefinedNameInvalid
+
   /** Stable kebab-case identifier used in CLI text and JSON output. */
   def slug: String = this match
     case LintCategory.ChildOrder => "child-order"
@@ -76,6 +83,7 @@ enum LintCategory derives CanEqual:
     case LintCategory.DataTableUnseeded => "data-table-unseeded"
     case LintCategory.FormulaLeadingEquals => "formula-leading-equals"
     case LintCategory.ExternalRefDangling => "external-ref-dangling"
+    case LintCategory.DefinedNameInvalid => "defined-name-invalid"
 
 /**
  * A single structural lint finding.
@@ -273,6 +281,7 @@ object WorkbookLint:
     ) ++
       checkRelRefs(workbookPart, workbookRelRefs(wbElem), wbRels, workbookRelsPart, parts, "xl") ++
       definedNameExternalRefFindings(wbElem) ++
+      definedNameValidityFindings(wbElem) ++
       sheetResult._1 ++ externalResult._1 ++ ctFindings
 
   /**
@@ -512,7 +521,10 @@ object WorkbookLint:
     XmlUtil.relTypeXlPathMissing,
     XmlUtil.relTypeXlLibraryPath,
     XmlUtil.relTypeXlStartupPath,
-    XmlUtil.relTypeXlAltStartupPath
+    XmlUtil.relTypeXlAltStartupPath,
+    XmlUtil.relTypeXlStartup,
+    XmlUtil.relTypeXlLibrary,
+    XmlUtil.relTypeXlAltStartup
   )
 
   /**
@@ -1049,6 +1061,80 @@ object WorkbookLint:
         )
       }
     }
+
+  // ===== Defined-name validity (GH-528) =====
+
+  /** Small-kana -> base-kana pairs for Excel's kana-size-insensitive name comparison (GH-528). */
+  private val kanaBaseFold: Map[Char, Char] =
+    "ぁあぃいぅうぇえぉおっつゃやゅゆょよゎわゕかゖけァアィイゥウェエォオッツャヤュユョヨヮワヵカヶケ".grouped(2).map(p => p(0) -> p(1)).toMap
+
+  /**
+   * Excel's defined-name equality: case-insensitive, width-insensitive (fullwidth `ＨＴＭＬ` == `html`)
+   * and kana-size-insensitive (`ぁ` == `あ`). NFKC supplies the width folding, ROOT lowercase the
+   * case folding, and the explicit table the kana-size folding. Names equal under this fold are
+   * duplicates to Excel — the incident file's Excel-repaired copy holds exactly zero such groups
+   * (GH-528).
+   */
+  private def definedNameFold(name: String): String =
+    java.text.Normalizer
+      .normalize(name, java.text.Normalizer.Form.NFKC)
+      .toLowerCase(java.util.Locale.ROOT)
+      .map(c => kanaBaseFold.getOrElse(c, c))
+
+  /** Excel's hard cap on a defined name's length. */
+  private val maxDefinedNameLength = 255
+
+  /**
+   * GH-528: defined names Excel repairs the file over. Two checks, both false-positive-averse:
+   *
+   *   - names in the SAME scope that collide under [[definedNameFold]] — Excel removes one of each
+   *     group (the incident: `g`/`ｇ`, `html`/`ＨＴＭＬ`, `ぁ`/`あ`)
+   *   - definitely-illegal names: longer than 255 characters, or carrying whitespace / control
+   *     characters
+   *
+   * Excel's full name-character table is deliberately NOT emulated: it is legacy Windows NLS
+   * classification, not Unicode categories — the incident corpus has SURVIVING names carrying `¤`,
+   * `・` and `–` while Excel rejects `†` and `€`. A category-based rule would flag real books; the
+   * fold-duplicate rule already fails any file carrying the removal class.
+   */
+  private def definedNameValidityFindings(wbElem: Elem): Vector[Finding] =
+    val entries = nestedElems(wbElem, "definedNames", "definedName").map { dn =>
+      (XmlUtil.getAttrOpt(dn, "name").getOrElse(""), XmlUtil.getAttrOpt(dn, "localSheetId"))
+    }
+    val collisions = entries
+      .groupBy((name, scope) => (definedNameFold(name), scope))
+      .toVector
+      .collect { case ((_, scope), group) if group.sizeIs > 1 => (group.map(_._1), scope) }
+      .sortBy((names, _) => names.headOption.getOrElse(""))
+      .map { (names, scope) =>
+        val shown = names.map(n => s""""$n"""").mkString(", ")
+        val where = scope.fold("workbook scope")(id => s"sheet scope localSheetId=$id")
+        Finding(
+          workbookPart,
+          LintCategory.DefinedNameInvalid,
+          s"""<definedName name="${names.headOption.getOrElse("")}">""",
+          s"${names.size} defined names collide under Excel's case/width/kana-insensitive " +
+            s"name comparison ($shown, $where) — Excel repairs the file by removing the named range"
+        )
+      }
+    val illegal = entries.flatMap { (name, _) =>
+      val problems = Vector(
+        Option.when(name.length > maxDefinedNameLength)(
+          s"is ${name.length} characters long (Excel's limit is $maxDefinedNameLength)"
+        ),
+        Option.when(name.exists(_.isWhitespace))("contains whitespace"),
+        Option.when(name.exists(_.isControl))("contains control characters")
+      ).flatten
+      problems.map { problem =>
+        Finding(
+          workbookPart,
+          LintCategory.DefinedNameInvalid,
+          s"""<definedName name="${name.take(40)}">""",
+          s"""Defined name "${name.take(40)}" $problem — Excel repairs the file by removing it"""
+        )
+      }
+    }
+    collisions ++ illegal
 
   /**
    * External-workbook ordinals (>= 1) referenced by a formula's stored text (GH-525): the `[N]` of

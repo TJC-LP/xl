@@ -627,6 +627,15 @@ class WorkbookLintSpec extends FunSuite:
     assertEquals(findings, Vector.empty[Finding])
   }
 
+  test("GH-529: suffix-less Microsoft variants (xlStartup, xlLibrary, xlAltStartup) are valid") {
+    for variant <- List("xlStartup", "xlLibrary", "xlAltStartup") do
+      val findings = lintOf(
+        externalParts +
+          ("xl/externalLinks/_rels/externalLink1.xml.rels" -> msVariantRelsXml(variant))
+      )
+      assertEquals(findings, Vector.empty[Finding], s"variant $variant must be accepted")
+  }
+
   test("GH-458: a genuinely wrong externalBook rel type (image) still flags WrongRelType") {
     val findings = lintOf(
       externalParts +
@@ -1183,6 +1192,70 @@ class WorkbookLintSpec extends FunSuite:
     )
   }
 
+  // ===== GH-528: defined-name validity (fold-duplicates + definitely-illegal names) =====
+
+  private def workbookWithNames(namesXml: String): String = workbookXml.replace(
+    "<definedNames><definedName name=\"MyName\">Sheet1!$A$1</definedName></definedNames>",
+    s"<definedNames>$namesXml</definedNames>"
+  )
+
+  private val foldDupWorkbookXml = workbookWithNames(
+    """<definedName name="g" hidden="1">Sheet1!$A$1</definedName>""" +
+      """<definedName name="ｇ" hidden="1">Sheet1!$A$2</definedName>"""
+  )
+
+  test("GH-528: names colliding under case/width folding in the same scope are flagged") {
+    val findings = lintOf(baseParts + ("xl/workbook.xml" -> foldDupWorkbookXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DefinedNameInvalid))
+    val f = findings.head
+    assertEquals(f.part, "xl/workbook.xml")
+    assert(f.message.contains("\"g\""), f.toString)
+    assert(f.message.contains("\"ｇ\""), f.toString)
+    assert(f.message.contains("workbook scope"), f.toString)
+  }
+
+  test("GH-528: small vs base kana names collide (Excel's kana-size-insensitive comparison)") {
+    val wb = workbookWithNames(
+      """<definedName name="ぁ" hidden="1">Sheet1!$A$1</definedName>""" +
+        """<definedName name="あ" hidden="1">Sheet1!$A$2</definedName>"""
+    )
+    val findings = lintOf(baseParts + ("xl/workbook.xml" -> wb))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DefinedNameInvalid))
+  }
+
+  test("GH-528: the same folded name on different scopes is legal shadowing, not a collision") {
+    val wb = workbookWithNames(
+      """<definedName name="Rate">Sheet1!$A$1</definedName>""" +
+        """<definedName name="RATE" localSheetId="0">Sheet1!$A$2</definedName>"""
+    )
+    assertEquals(lintOf(baseParts + ("xl/workbook.xml" -> wb)), Vector.empty[Finding])
+  }
+
+  test("GH-528: a name past Excel's 255-character limit is flagged") {
+    val long = "N" * 256
+    val wb = workbookWithNames(s"""<definedName name="$long">Sheet1!$$A$$1</definedName>""")
+    val findings = lintOf(baseParts + ("xl/workbook.xml" -> wb))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DefinedNameInvalid))
+    assert(findings.head.message.contains("256"), findings.head.toString)
+  }
+
+  test("GH-528: a name carrying whitespace is flagged") {
+    val wb = workbookWithNames("""<definedName name="My Name">Sheet1!$A$1</definedName>""")
+    val findings = lintOf(baseParts + ("xl/workbook.xml" -> wb))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DefinedNameInvalid))
+    assert(findings.head.message.contains("whitespace"), findings.head.toString)
+  }
+
+  test("GH-528: exact duplicates in the same scope are the degenerate fold collision") {
+    val wb = workbookWithNames(
+      """<definedName name="Twice">Sheet1!$A$1</definedName>""" +
+        """<definedName name="Twice">Sheet1!$A$2</definedName>"""
+    )
+    val findings = lintOf(baseParts + ("xl/workbook.xml" -> wb))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DefinedNameInvalid))
+    assert(findings.head.message.contains("2 defined names"), findings.head.toString)
+  }
+
   // ===== GH-413 (4): O(1) SAX scanning mode =====
 
   private def lintStreamOf(parts: Map[String, String]): Vector[Finding] =
@@ -1249,6 +1322,13 @@ class WorkbookLintSpec extends FunSuite:
       (externalParts + ("xl/worksheets/sheet1.xml" -> bracketNoiseSheetXml)),
     "dangling defined-name ordinal" ->
       (externalParts + ("xl/workbook.xml" -> danglingNameWorkbookXml)),
+    // GH-528: defined-name validity is workbook-level (always DOM) but must agree in both modes
+    "fold-duplicate defined names" ->
+      (baseParts + ("xl/workbook.xml" -> foldDupWorkbookXml)),
+    // GH-529: suffix-less Microsoft externalLinkPath variants resolve clean in both modes
+    "ms xlStartup external" ->
+      (externalParts +
+        ("xl/externalLinks/_rels/externalLink1.xml.rels" -> msVariantRelsXml("xlStartup"))),
     // GH-458: Microsoft xlExternalLinkPath variants resolve clean in both modes
     "ms xlPathMissing external" ->
       (externalParts +

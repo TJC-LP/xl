@@ -80,6 +80,13 @@ object XmlUtil:
     "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlStartupPath"
   val relTypeXlAltStartupPath =
     "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlAltStartupPath"
+  // Suffix-less variants of the same family, also found in the wild (GH-529)
+  val relTypeXlStartup =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlStartup"
+  val relTypeXlLibrary =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlLibrary"
+  val relTypeXlAltStartup =
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlAltStartup"
   val relTypeChartsheet =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet"
   val relTypeDialogsheet =
