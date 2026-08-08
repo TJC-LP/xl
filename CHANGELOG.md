@@ -16,6 +16,15 @@ always acceptable, a wrong one never is.**
 
 ### Added
 
+- **`external-ref-dangling` lint** (#525): flags formulas and defined
+  names referencing external workbook `[N]` with no N-th
+  `<externalReference>` entry — the cross-workbook sheet-transplant
+  class (ordinals index the SOURCE book's table, so an adopted sheet
+  carries danglers verbatim). Excel repairs such a file by removing
+  every offending formula plus calcChain; a field incident lost 935
+  formulas across four transplanted sheets while `xl lint` reported
+  clean. DOM/SAX finding-identical. Detection half of #526 (adoption
+  remap API).
 - **`RecalcResult.cycles` / `.unconverged` / `.certified`** (#492):
   per-cyclic-component convergence reporting. `SccReport(members,
   converged, rounds, maxDelta)` names the offenders instead of a single

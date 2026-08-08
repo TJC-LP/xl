@@ -635,6 +635,9 @@ lenient reader accepts silently:
     BLANK — refresh them with `xl recalc --tables`)
   - formula text stored with a leading '=' inside <f> (non-spec; strict
     readers misread it — re-writing the file with xl heals it)
+  - formulas / defined names referencing external workbook [N] with no
+    N-th <externalReference> entry (the cross-workbook sheet-transplant
+    class — Excel repairs the file by removing every such formula)
 
 USAGE:
   xl lint report.xlsx
@@ -644,7 +647,7 @@ USAGE:
 FINDING CATEGORIES:
   child-order | unresolved-rel-id | wrong-rel-type | missing-part |
   missing-content-type | ref-out-of-bounds | data-table-torn |
-  data-table-unseeded | formula-leading-equals
+  data-table-unseeded | formula-leading-equals | external-ref-dangling
 
 EXIT CODES:
   0 = no findings (package structure is clean)
