@@ -58,6 +58,19 @@ enum LintCategory derives CanEqual:
    */
   case FormulaLeadingEquals
 
+  /**
+   * A formula or defined name references external workbook `[N]` with no N-th `<externalReference>`
+   * entry in workbook.xml — Excel repairs the file by removing every such formula (GH-525).
+   */
+  case ExternalRefDangling
+
+  /**
+   * A defined name Excel refuses: two names in the same scope colliding under Excel's case-, width-
+   * and kana-size-insensitive comparison, or a name that is over-long or carries whitespace /
+   * control characters — Excel repairs the file by removing the named range (GH-528).
+   */
+  case DefinedNameInvalid
+
   /** Stable kebab-case identifier used in CLI text and JSON output. */
   def slug: String = this match
     case LintCategory.ChildOrder => "child-order"
@@ -69,6 +82,8 @@ enum LintCategory derives CanEqual:
     case LintCategory.DataTableTorn => "data-table-torn"
     case LintCategory.DataTableUnseeded => "data-table-unseeded"
     case LintCategory.FormulaLeadingEquals => "formula-leading-equals"
+    case LintCategory.ExternalRefDangling => "external-ref-dangling"
+    case LintCategory.DefinedNameInvalid => "defined-name-invalid"
 
 /**
  * A single structural lint finding.
@@ -110,6 +125,11 @@ final case class Finding(
  *     but strict readers (openpyxl) misread it, and re-writing the file with xl heals it.
  *     Aggregated to ONE finding per sheet part (first-5 cell sample + total count) so a legacy book
  *     where every formula offends stays bounded
+ *   - formulas and defined names referencing external workbook `[N]` beyond the workbook's
+ *     `<externalReference>` count (GH-525) — the cross-workbook sheet-transplant class: ordinals
+ *     index the SOURCE book's table, so a sheet adopted verbatim carries danglers and Excel repairs
+ *     the file by removing every such formula (plus calcChain). One finding per part per dangling
+ *     ordinal
  *
  * Lint runs on the RAW ZIP PARTS, never on the parsed domain model — a full read would
  * repair/normalize the very structure lint inspects (the reader silently falls back on unresolved
@@ -260,6 +280,8 @@ object WorkbookLint:
       "CT_Workbook"
     ) ++
       checkRelRefs(workbookPart, workbookRelRefs(wbElem), wbRels, workbookRelsPart, parts, "xl") ++
+      definedNameExternalRefFindings(wbElem) ++
+      definedNameValidityFindings(wbElem) ++
       sheetResult._1 ++ externalResult._1 ++ ctFindings
 
   /**
@@ -400,6 +422,7 @@ object WorkbookLint:
     streaming: Boolean,
     autoNoTable: Boolean
   ): XLResult[(Vector[Finding], Vector[(String, String)])] =
+    val declaredExternalRefs = externalReferenceCount(wbElem)
     val targets: Vector[(String, SheetKind)] = nestedElems(wbElem, "sheets", "sheet")
       .flatMap { e =>
         for
@@ -448,6 +471,7 @@ object WorkbookLint:
                   parentDir(path)
                 ) ++
                 scan.boundsFindings ++ scan.formulaFindings ++
+                externalRefFindings(path, scan.externalRefs, declaredExternalRefs) ++
                 dataTableFindings(path, scan.dataTables, autoNoTable) ++ tableResult._1
           (
             found._1 ++ findings,
@@ -497,7 +521,10 @@ object WorkbookLint:
     XmlUtil.relTypeXlPathMissing,
     XmlUtil.relTypeXlLibraryPath,
     XmlUtil.relTypeXlStartupPath,
-    XmlUtil.relTypeXlAltStartupPath
+    XmlUtil.relTypeXlAltStartupPath,
+    XmlUtil.relTypeXlStartup,
+    XmlUtil.relTypeXlLibrary,
+    XmlUtil.relTypeXlAltStartup
   )
 
   /**
@@ -688,7 +715,9 @@ object WorkbookLint:
    * Everything the per-part checks need, produced identically by the DOM and SAX scanners: root
    * label, ordered main-namespace top-level labels (with positions among all top-level elements),
    * the captured r:id-bearing elements, the ref/sqref bounds findings, the aggregated leading-'='
-   * formula finding (GH-456), and the data-table record state accumulated over sheetData (GH-442).
+   * formula finding (GH-456), the external-workbook ordinal usage (GH-525 — findings need the
+   * workbook-level `<externalReference>` count, so the scan carries facts, not findings), and the
+   * data-table record state accumulated over sheetData (GH-442).
    */
   private final case class SheetScan(
     rootLabel: String,
@@ -696,6 +725,7 @@ object WorkbookLint:
     captures: Vector[CapturedRef],
     boundsFindings: Vector[Finding],
     formulaFindings: Vector[Finding],
+    externalRefs: ExternalRefFacts,
     dataTables: Vector[RecordFacts]
   )
 
@@ -744,18 +774,21 @@ object WorkbookLint:
       part,
       cellObs.foldLeft(LeadingEqualsFacts.empty)(_.add(_))
     )
-    SheetScan(root.label, mainChildLabelsOf(root), captures, bounds, formulaEq, dataTables)
+    val extRefs = cellObs.foldLeft(ExternalRefFacts.empty)(_.add(_))
+    SheetScan(root.label, mainChildLabelsOf(root), captures, bounds, formulaEq, extRefs, dataTables)
 
   /** One `<c>` element's data-table facts (DOM side of the parity pair). */
   private def domCellObs(cell: Elem): CellObs =
     val formula = childElems(cell, "f").headOption
+    val formulaText = formula.map(_.text)
     CellObs(
       ref = XmlUtil.getAttrOpt(cell, "r").flatMap(ARef.parse(_).toOption),
       record =
         formula.flatMap(f => dataTableKindOf(XmlUtil.getAttrOpt(f, "t"), XmlUtil.getAttrOpt(f, _))),
       hasFormula = formula.isDefined,
       hasValue = childElems(cell, "v").nonEmpty || childElems(cell, "is").nonEmpty,
-      leadingEquals = formula.exists(_.text.startsWith("="))
+      leadingEquals = formulaText.exists(_.startsWith("=")),
+      extOrdinals = formulaText.fold(Set.empty[Int])(externalOrdinals)
     )
 
   /**
@@ -792,11 +825,14 @@ object WorkbookLint:
       private val captures = Vector.newBuilder[CapturedRef]
       private val bounds = Vector.newBuilder[Finding]
       private var leadingEq: LeadingEqualsFacts = LeadingEqualsFacts.empty
+      private var extRefs: ExternalRefFacts = ExternalRefFacts.empty
       private var dataTables: Vector[RecordFacts] = Vector.empty
       private var cell: Option[CellObs] = None
-      // True while inside the current cell's FIRST <f> and no text chunk has arrived yet, so
-      // characters() inspects exactly the first character of the formula text (GH-456).
-      private var awaitingFormulaText = false
+      // Accumulates the current cell's FIRST <f> text across characters() chunks; the formula's
+      // end-element finalizes leadingEquals (GH-456) and extOrdinals (GH-525) from the full text,
+      // matching the DOM scanner's Elem.text. Bounded by Excel's formula-length limit, so the
+      // streaming mode stays O(1) in the row count.
+      private var formulaText: Option[java.lang.StringBuilder] = None
 
       def result: Option[SheetScan] =
         rootLabel.map(
@@ -806,6 +842,7 @@ object WorkbookLint:
             captures.result(),
             bounds.result(),
             formulaEqualsFindings(part, leadingEq),
+            extRefs,
             dataTables
           )
         )
@@ -836,12 +873,14 @@ object WorkbookLint:
               record = None,
               hasFormula = false,
               hasValue = false,
-              leadingEquals = false
+              leadingEquals = false,
+              extOrdinals = Set.empty
             )
           )
         else if depth == 4 && parents.headOption.contains("c") then
           // GH-456: only the cell's first <f> is observed, matching domCellObs's headOption
-          if label == "f" && cell.exists(!_.hasFormula) then awaitingFormulaText = true
+          if label == "f" && cell.exists(!_.hasFormula) then
+            formulaText = Some(new java.lang.StringBuilder)
           cell = cell.map { open =>
             if label == "f" && !open.hasFormula then
               open.copy(
@@ -863,19 +902,25 @@ object WorkbookLint:
         depth += 1
 
       override def characters(ch: Array[Char], start: Int, length: Int): Unit =
-        if awaitingFormulaText && length > 0 then
-          awaitingFormulaText = false
-          if ch(start) == '=' then cell = cell.map(_.copy(leadingEquals = true))
+        formulaText.foreach(_.append(ch, start, length))
 
       override def endElement(uri: String, localName: String, qName: String): Unit =
         val label = if localName.nonEmpty then localName else qName
         parents = parents.drop(1)
         depth -= 1
-        if label == "f" then awaitingFormulaText = false
+        if label == "f" then
+          formulaText.foreach { sb =>
+            val text = sb.toString
+            cell = cell.map(
+              _.copy(leadingEquals = text.startsWith("="), extOrdinals = externalOrdinals(text))
+            )
+          }
+          formulaText = None
         if depth == 3 && label == "c" then
           cell.foreach { obs =>
             dataTables = observeCell(dataTables, obs)
             leadingEq = leadingEq.add(obs)
+            extRefs = extRefs.add(obs)
           }
           cell = None
 
@@ -893,7 +938,8 @@ object WorkbookLint:
     record: Option[FormulaKind.DataTable],
     hasFormula: Boolean,
     hasValue: Boolean,
-    leadingEquals: Boolean
+    leadingEquals: Boolean,
+    extOrdinals: Set[Int]
   )
 
   /** Sample size for the aggregated leading-'=' finding: the first N offending cells (GH-456). */
@@ -942,6 +988,237 @@ object WorkbookLint:
             "re-writing the file with xl heals it"
         )
       )
+
+  // ===== Dangling external-workbook ordinals (GH-525) =====
+
+  /**
+   * Per-ordinal usage of external-workbook references `[N]` accumulated over ONE sheet part in
+   * document order (GH-525): for each ordinal, how many formula cells reference it and the first
+   * offending cell. Bounded by the number of DISTINCT ordinals, never the cell count, and folded
+   * identically by both scanners for parity. Findings are produced at workbook level where the
+   * `<externalReference>` count is known.
+   */
+  private final case class ExternalRefFacts(uses: Map[Int, (Long, Option[ARef])]):
+    def add(obs: CellObs): ExternalRefFacts =
+      if obs.extOrdinals.isEmpty then this
+      else
+        ExternalRefFacts(obs.extOrdinals.foldLeft(uses) { (acc, ordinal) =>
+          val (count, first) = acc.getOrElse(ordinal, (0L, None))
+          acc.updated(ordinal, (count + 1, first.orElse(obs.ref)))
+        })
+
+  private object ExternalRefFacts:
+    val empty: ExternalRefFacts = ExternalRefFacts(Map.empty)
+
+  /** The number of `<externalReference>` entries — the range formula ordinals may index. */
+  private def externalReferenceCount(wbElem: Elem): Int =
+    nestedElems(wbElem, "externalReferences", "externalReference").size
+
+  private def declaredPhrase(declared: Int): String =
+    if declared == 0 then "no <externalReference> entries"
+    else if declared == 1 then "only 1 <externalReference> entry"
+    else s"only $declared <externalReference> entries"
+
+  /**
+   * GH-525: formulas referencing external workbook `[N]` with no N-th `<externalReference>` entry —
+   * the cross-workbook sheet-transplant class (the ordinals index the SOURCE book's table). Excel
+   * repairs the file by removing every such formula plus calcChain. One finding per dangling
+   * ordinal, ordinal-ascending, carrying the formula count and first offending cell.
+   */
+  private def externalRefFindings(
+    part: String,
+    facts: ExternalRefFacts,
+    declared: Int
+  ): Vector[Finding] =
+    facts.uses.toVector
+      .filter((ordinal, _) => ordinal > declared)
+      .sortBy(_._1)
+      .map { case (ordinal, (count, first)) =>
+        Finding(
+          part,
+          LintCategory.ExternalRefDangling,
+          first.fold("<f>")(r => s"""<c r="${r.toA1}"><f>"""),
+          s"$count formula(s) reference external workbook [$ordinal] " +
+            s"(first at ${first.fold("<f>")(_.toA1)}) but workbook.xml declares " +
+            s"${declaredPhrase(declared)} — Excel repairs the file by removing every such formula"
+        )
+      }
+
+  /**
+   * GH-525 at workbook level: `<definedName>` bodies carry formula text and dangle the same way.
+   */
+  private def definedNameExternalRefFindings(wbElem: Elem): Vector[Finding] =
+    val declared = externalReferenceCount(wbElem)
+    nestedElems(wbElem, "definedNames", "definedName").flatMap { dn =>
+      val name = XmlUtil.getAttrOpt(dn, "name").getOrElse("")
+      externalOrdinals(dn.text).toVector.filter(_ > declared).sorted.map { ordinal =>
+        Finding(
+          workbookPart,
+          LintCategory.ExternalRefDangling,
+          s"""<definedName name="$name">""",
+          s"""Defined name "$name" references external workbook [$ordinal] but workbook.xml """ +
+            s"declares ${declaredPhrase(declared)} — Excel repairs the file by removing it"
+        )
+      }
+    }
+
+  // ===== Defined-name validity (GH-528) =====
+
+  /** Small-kana -> base-kana pairs for Excel's kana-size-insensitive name comparison (GH-528). */
+  private val kanaBaseFold: Map[Char, Char] =
+    "ぁあぃいぅうぇえぉおっつゃやゅゆょよゎわゕかゖけァアィイゥウェエォオッツャヤュユョヨヮワヵカヶケ".grouped(2).map(p => p(0) -> p(1)).toMap
+
+  /**
+   * Excel's defined-name equality: case-insensitive, width-insensitive (fullwidth `ＨＴＭＬ` == `html`)
+   * and kana-size-insensitive (`ぁ` == `あ`). NFKC supplies the width folding, ROOT lowercase the
+   * case folding, and the explicit table the kana-size folding. Names equal under this fold are
+   * duplicates to Excel — the incident file's Excel-repaired copy holds exactly zero such groups
+   * (GH-528).
+   */
+  private def definedNameFold(name: String): String =
+    java.text.Normalizer
+      .normalize(name, java.text.Normalizer.Form.NFKC)
+      .toLowerCase(java.util.Locale.ROOT)
+      .map(c => kanaBaseFold.getOrElse(c, c))
+
+  /** Excel's hard cap on a defined name's length. */
+  private val maxDefinedNameLength = 255
+
+  /**
+   * GH-528: defined names Excel repairs the file over. Two checks, both false-positive-averse:
+   *
+   *   - names in the SAME scope that collide under [[definedNameFold]] — Excel removes one of each
+   *     group (the incident: `g`/`ｇ`, `html`/`ＨＴＭＬ`, `ぁ`/`あ`)
+   *   - definitely-illegal names: longer than 255 characters, or carrying whitespace / control
+   *     characters
+   *
+   * Excel's full name-character table is deliberately NOT emulated: it is legacy Windows NLS
+   * classification, not Unicode categories — the incident corpus has SURVIVING names carrying `¤`,
+   * `・` and `–` while Excel rejects `†` and `€`. A category-based rule would flag real books; the
+   * fold-duplicate rule already fails any file carrying the removal class.
+   */
+  private def definedNameValidityFindings(wbElem: Elem): Vector[Finding] =
+    val entries = nestedElems(wbElem, "definedNames", "definedName").map { dn =>
+      (XmlUtil.getAttrOpt(dn, "name").getOrElse(""), XmlUtil.getAttrOpt(dn, "localSheetId"))
+    }
+    val collisions = entries
+      .groupBy((name, scope) => (definedNameFold(name), scope))
+      .toVector
+      .collect { case ((_, scope), group) if group.sizeIs > 1 => (group.map(_._1), scope) }
+      .sortBy((names, _) => names.headOption.getOrElse(""))
+      .map { (names, scope) =>
+        val shown = names.map(n => s""""$n"""").mkString(", ")
+        val where = scope.fold("workbook scope")(id => s"sheet scope localSheetId=$id")
+        Finding(
+          workbookPart,
+          LintCategory.DefinedNameInvalid,
+          s"""<definedName name="${names.headOption.getOrElse("")}">""",
+          s"${names.size} defined names collide under Excel's case/width/kana-insensitive " +
+            s"name comparison ($shown, $where) — Excel repairs the file by removing the named range"
+        )
+      }
+    val illegal = entries.flatMap { (name, _) =>
+      val problems = Vector(
+        Option.when(name.length > maxDefinedNameLength)(
+          s"is ${name.length} characters long (Excel's limit is $maxDefinedNameLength)"
+        ),
+        Option.when(name.exists(_.isWhitespace))("contains whitespace"),
+        Option.when(name.exists(_.isControl))("contains control characters")
+      ).flatten
+      problems.map { problem =>
+        Finding(
+          workbookPart,
+          LintCategory.DefinedNameInvalid,
+          s"""<definedName name="${name.take(40)}">""",
+          s"""Defined name "${name.take(40)}" $problem — Excel repairs the file by removing it"""
+        )
+      }
+    }
+    collisions ++ illegal
+
+  /**
+   * External-workbook ordinals (>= 1) referenced by a formula's stored text (GH-525): the `[N]` of
+   * `'[3]Sheet Name'!A1`, `[5]Data!B2`, `'[5]Q1:Q4'!C3` and `[2]!ExtName`. Ordinal 0 is the
+   * self-workbook and is never returned; ordinals past Int range clamp to Int.MaxValue (still
+   * dangling). Precision rules, false-positive-averse by construction:
+   *
+   *   - double-quoted string literals are skipped (`""` escape), so `"see [3]"` never counts
+   *   - a quoted sheet name only yields an ordinal immediately after the opening apostrophe (`''`
+   *     escape) — Excel forbids `[`/`]` in sheet names, so no other bracket occurs inside
+   *   - a bracket preceded directly by an identifier character or `]` is a structured reference
+   *     (`Table1[Col]`, `Table1[[#This Row],[Col]]`, R1C1-style `R[1]C[2]`) and is skipped to its
+   *     matching close, nesting-aware — a table column literally named "3" never counts
+   *   - a non-numeric bracket in reference position (`[Book1.xlsx]Sheet1!A1` file-name form) is
+   *     skipped: lint is not a syntax validator
+   */
+  private[lint] def externalOrdinals(formula: String): Set[Int] =
+    val n = formula.length
+
+    def isIdentChar(c: Char): Boolean =
+      c.isLetterOrDigit || c == '_' || c == '.' || c == ']'
+
+    @annotation.tailrec
+    def skipString(i: Int): Int = // i is the first index after the opening '"'
+      if i >= n then n
+      else if formula(i) == '"' then
+        if i + 1 < n && formula(i + 1) == '"' then skipString(i + 2) else i + 1
+      else skipString(i + 1)
+
+    @annotation.tailrec
+    def skipQuotedName(i: Int): Int = // i is the first index after the opening '\''
+      if i >= n then n
+      else if formula(i) == '\'' then
+        if i + 1 < n && formula(i + 1) == '\'' then skipQuotedName(i + 2) else i + 1
+      else skipQuotedName(i + 1)
+
+    @annotation.tailrec
+    def skipStructured(i: Int, open: Int): Int = // i is the first index after an opening '['
+      if i >= n then n
+      else
+        formula(i) match
+          case '[' => skipStructured(i + 1, open + 1)
+          case ']' => if open == 1 then i + 1 else skipStructured(i + 1, open - 1)
+          case _ => skipStructured(i + 1, open)
+
+    // i points at '['; Some((ordinal, index after ']')) when the bracket holds only digits
+    def ordinalAt(i: Int): Option[(Int, Int)] =
+      val close = formula.indexOf(']', i + 1)
+      if close <= i + 1 then None
+      else
+        val digits = formula.substring(i + 1, close)
+        if digits.forall(c => c >= '0' && c <= '9') then
+          val ordinal =
+            digits.toLongOption.fold(Int.MaxValue)(l => math.min(l, Int.MaxValue.toLong).toInt)
+          Some((ordinal, close + 1))
+        else None
+
+    @annotation.tailrec
+    def loop(i: Int, prev: Option[Char], acc: Set[Int]): Set[Int] =
+      if i >= n then acc
+      else
+        formula(i) match
+          case '"' => loop(skipString(i + 1), Some('"'), acc)
+          case '\'' =>
+            if i + 1 < n && formula(i + 1) == '[' then
+              ordinalAt(i + 1) match
+                case Some((ordinal, after)) =>
+                  loop(
+                    skipQuotedName(after),
+                    Some('\''),
+                    if ordinal >= 1 then acc + ordinal else acc
+                  )
+                case None => loop(skipQuotedName(i + 1), Some('\''), acc)
+            else loop(skipQuotedName(i + 1), Some('\''), acc)
+          case '[' =>
+            if prev.exists(isIdentChar) then loop(skipStructured(i + 1, 1), Some(']'), acc)
+            else
+              ordinalAt(i) match
+                case Some((ordinal, after)) =>
+                  loop(after, Some(']'), if ordinal >= 1 then acc + ordinal else acc)
+                case None => loop(skipStructured(i + 1, 1), Some(']'), acc)
+          case c => loop(i + 1, Some(c), acc)
+
+    loop(0, None, Set.empty)
 
   /**
    * Accumulated facts for one data-table record, keyed by the record's own `ref`. Every field is a

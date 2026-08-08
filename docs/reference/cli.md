@@ -1353,6 +1353,15 @@ xl -f deliverable.xlsx lint && echo "safe to send"
   book: Excel does not recompute data tables on open, so the grid opens BLANK
 - **`formula-leading-equals`** — `<f>` text stored with the display form's leading `=`
   (non-spec; strict readers like openpyxl misread it — re-writing the file with xl heals it)
+- **`external-ref-dangling`** — a formula or defined name references external workbook `[N]`
+  with no N-th `<externalReference>` entry in workbook.xml (the cross-workbook sheet-transplant
+  class: ordinals index the SOURCE book's table) — Excel repairs the file by removing every
+  such formula plus calcChain
+- **`defined-name-invalid`** — a defined name Excel refuses: two same-scope names colliding
+  under Excel's case/width/kana-insensitive comparison (`g` vs `ｇ`, `html` vs `ＨＴＭＬ`,
+  `ぁ` vs `あ` — legacy fossil corpora carry these), a name past the 255-character limit, or
+  whitespace / control characters — Excel repairs the file by removing the named range,
+  sometimes without even logging it
 
 **Exit codes** (diff-tool convention): `0` no findings · `1` findings reported · `2` error
 (unreadable file, malformed core part).
