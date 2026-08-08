@@ -16,6 +16,7 @@ import com.tjclp.xl.macros.ref
  * Tests for the `--in-place` (`-i`) flag and its atomic-write semantics.
  *
  * Verifies:
+ *   - `-o` writes are staged beside their destination before replacement
  *   - `-i` alone writes to a sibling temp file, then atomically moves onto the input
  *   - `-i` + `-o` together is an error (mutually exclusive)
  *   - A failed execution leaves the original file untouched and cleans up the temp
@@ -33,6 +34,13 @@ class InPlaceSpec extends CatsEffectSuite:
 
   private val excel = ExcelIO.instance[IO]
 
+  private def outcome(
+    code: ExitCode = ExitCode.Success,
+    output: String = "ok",
+    outputComplete: Boolean = true
+  ): Main.CommandOutcome =
+    Main.CommandOutcome(code, output, outputComplete)
+
   /** Create a temp xlsx with a single sheet containing A1="Hello", A2=42. */
   private def withTempExcelFile[A](test: Path => IO[A]): IO[A] =
     IO.blocking {
@@ -47,22 +55,144 @@ class InPlaceSpec extends CatsEffectSuite:
       excel.write(wb, tempFile) *> test(tempFile)
     }
 
-  test("runWithOutput: -o alone passes the output path through as write and display") {
-    val file = Path.of("/tmp/input.xlsx")
-    val out = Path.of("/tmp/output.xlsx")
-    var captured: Option[Path] = None
-    var capturedDisplay: Option[Path] = None
-    Main
-      .runWithOutput(Some(out), inPlace = false, file) { (received, display) =>
-        captured = received
-        capturedDisplay = display
-        IO.pure((ExitCode.Success, "ok"))
-      }
-      .map { code =>
-        assertEquals(code, ExitCode.Success)
-        assertEquals(captured, Some(out))
-        assertEquals(capturedDisplay, Some(out))
-      }
+  test("runWithOutput: -o stages beside output, then atomically replaces it") {
+    IO.blocking {
+      val directory = Files.createTempDirectory("xl-output-stage-")
+      val out = directory.resolve("output.xlsx")
+      Files.writeString(out, "original")
+      (directory, out)
+    }.bracket { case (_, out) =>
+      var captured: Option[Path] = None
+      var capturedDisplay: Option[Path] = None
+      Main
+        .runWithOutput(Some(out), inPlace = false, Path.of("/tmp/input.xlsx")) {
+          (received, display) =>
+            captured = received
+            capturedDisplay = display
+            IO.blocking(Files.writeString(received.get, "replacement")).as(outcome())
+        }
+        .flatMap { code =>
+          IO.blocking {
+            assertEquals(code, ExitCode.Success)
+            assertEquals(capturedDisplay, Some(out))
+            assert(captured.exists(_.getParent == out.getParent), s"staging path: $captured")
+            assert(captured.exists(_ != out), "-o must not write directly to the destination")
+            assert(captured.exists(p => p.getFileName.toString.startsWith(".xl-output-")))
+            assertEquals(Files.readString(out), "replacement")
+            assert(!captured.exists(Files.exists(_)), "staging file must be gone after commit")
+          }
+        }
+    } { case (directory, out) =>
+      IO.blocking {
+        Files.deleteIfExists(out)
+        Files.deleteIfExists(directory)
+      }.void
+    }
+  }
+
+  test("runWithOutput: -o preserves destination and removes partial staging output on failure") {
+    IO.blocking {
+      val directory = Files.createTempDirectory("xl-output-failure-")
+      val out = directory.resolve("output.xlsx")
+      Files.writeString(out, "original")
+      (directory, out)
+    }.bracket { case (_, out) =>
+      var staged: Option[Path] = None
+      Main
+        .runWithOutput(Some(out), inPlace = false, Path.of("input.xlsx")) { (outOpt, _) =>
+          staged = outOpt
+          IO.blocking(Files.writeString(outOpt.get, "partial")) *>
+            IO.pure(outcome(ExitCode.Error, "failed", outputComplete = false))
+        }
+        .flatMap { code =>
+          IO.blocking {
+            assertEquals(code, ExitCode.Error)
+            assertEquals(Files.readString(out), "original")
+            assert(!staged.exists(Files.exists(_)), "partial staging file must be removed")
+          }
+        }
+    } { case (directory, out) =>
+      IO.blocking {
+        Files.deleteIfExists(out)
+        Files.deleteIfExists(directory)
+      }.void
+    }
+  }
+
+  test("runWithOutput: -o commits a complete strict-failure output") {
+    IO.blocking {
+      val directory = Files.createTempDirectory("xl-output-strict-")
+      val out = directory.resolve("output.xlsx")
+      Files.writeString(out, "original")
+      (directory, out)
+    }.bracket { case (_, out) =>
+      Main
+        .runWithOutput(Some(out), inPlace = false, Path.of("input.xlsx")) { (outOpt, _) =>
+          IO.blocking(Files.writeString(outOpt.get, "complete")) *>
+            IO.pure(outcome(ExitCode(1), "strict failure", outputComplete = true))
+        }
+        .flatMap { code =>
+          IO.blocking {
+            assertEquals(code, ExitCode(1))
+            assertEquals(Files.readString(out), "complete")
+          }
+        }
+    } { case (directory, out) =>
+      IO.blocking {
+        Files.deleteIfExists(out)
+        Files.deleteIfExists(directory)
+      }.void
+    }
+  }
+
+  test("runWithOutput: a successful read-only callback does not publish an empty temp") {
+    IO.blocking {
+      val directory = Files.createTempDirectory("xl-output-read-only-")
+      val out = directory.resolve("output.xlsx")
+      Files.writeString(out, "original")
+      (directory, out)
+    }.bracket { case (_, out) =>
+      Main
+        .runWithOutput(Some(out), inPlace = false, Path.of("input.xlsx")) { (_, _) =>
+          IO.pure(outcome(output = "listed sheets"))
+        }
+        .flatMap { code =>
+          IO.blocking {
+            assertEquals(code, ExitCode.Success)
+            assertEquals(Files.readString(out), "original")
+          }
+        }
+    } { case (directory, out) =>
+      IO.blocking {
+        Files.deleteIfExists(out)
+        Files.deleteIfExists(directory)
+      }.void
+    }
+  }
+
+  test("atomic move falls back only for unsupported or provider-specific replacement") {
+    var fallbackRuns = 0
+    val unsupported = new java.nio.file.AtomicMoveNotSupportedException("from", "to", "test")
+    val existing = new java.nio.file.FileAlreadyExistsException("to")
+    val expected = new java.io.IOException("different failure")
+    for
+      _ <- Main.atomicMoveOrFallback(
+        IO.raiseError(unsupported),
+        IO(fallbackRuns += 1)
+      )
+      _ <- Main.atomicMoveOrFallback(
+        IO.raiseError(existing),
+        IO(fallbackRuns += 1)
+      )
+      other <- Main
+        .atomicMoveOrFallback(
+          IO.raiseError(expected),
+          IO(fallbackRuns += 1)
+        )
+        .attempt
+    yield
+      assertEquals(fallbackRuns, 2)
+      assertEquals(other, Left(expected))
   }
 
   test("runWithOutput: neither flag passes None through") {
@@ -73,7 +203,7 @@ class InPlaceSpec extends CatsEffectSuite:
       .runWithOutput(None, inPlace = false, file) { (received, display) =>
         captured = received
         capturedDisplay = display
-        IO.pure((ExitCode.Success, "ok"))
+        IO.pure(outcome())
       }
       .map { code =>
         assertEquals(code, ExitCode.Success)
@@ -86,7 +216,7 @@ class InPlaceSpec extends CatsEffectSuite:
     val file = Path.of("/tmp/input.xlsx")
     val out = Path.of("/tmp/output.xlsx")
     Main
-      .runWithOutput(Some(out), inPlace = true, file)((_, _) => IO.pure((ExitCode.Success, "ok")))
+      .runWithOutput(Some(out), inPlace = true, file)((_, _) => IO.pure(outcome()))
       .map { code => assertEquals(code, ExitCode.Error) }
   }
 
@@ -109,7 +239,7 @@ class InPlaceSpec extends CatsEffectSuite:
         val wb = Workbook(
           Vector(Sheet("Test").put(ref"A1", CellValue.Text("Updated")))
         )
-        excel.write(wb, out).as((ExitCode.Success, "saved"))
+        excel.write(wb, out).as(outcome(output = "saved"))
       }
 
       for
@@ -132,7 +262,7 @@ class InPlaceSpec extends CatsEffectSuite:
       val result = Main.runWithOutput(None, inPlace = true, tempFile) { (outOpt, _) =>
         writePath = outOpt
         // Simulate a failure: return Error exit code without writing anything useful
-        IO.pure((ExitCode.Error, "failed"))
+        IO.pure(outcome(ExitCode.Error, "failed", outputComplete = false))
       }
 
       for
@@ -154,7 +284,7 @@ class InPlaceSpec extends CatsEffectSuite:
       var writePath: Option[Path] = None
       val result = Main.runWithOutput(None, inPlace = true, tempFile) { (outOpt, _) =>
         writePath = outOpt
-        IO.raiseError(new RuntimeException("simulated crash"))
+        IO.raiseError[Main.CommandOutcome](new RuntimeException("simulated crash"))
       }
 
       for
@@ -199,7 +329,7 @@ class InPlaceSpec extends CatsEffectSuite:
         .runWithOutput(None, inPlace = true, destination) { (outOpt, _) =>
           val out = outOpt.get
           IO.blocking(Files.writeString(out, "replacement"))
-            .as((ExitCode.Success, s"Saved: $destination"))
+            .as(outcome(output = s"Saved: $destination"))
         }
         .attempt
       captureStdout(attempted).map { case (outcome, stdout) =>

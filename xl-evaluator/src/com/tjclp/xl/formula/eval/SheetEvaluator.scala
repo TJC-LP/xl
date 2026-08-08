@@ -131,17 +131,7 @@ object SheetEvaluator:
       clock: Clock = Clock.system,
       workbook: Option[Workbook] = None
     ): XLResult[CellValue] =
-      val cell = sheet(ref)
-      cell.value match
-        case value @ CellValue.Formula(expr, _, _) =>
-          pinnedCache(value) match
-            // GH-353/GH-430: pinned-cache semantics — the Excel-written cache IS the value
-            case Some(cached) => scala.util.Right(cached)
-            case None =>
-              // Pass the current cell ref for ROW()/COLUMN() without arguments
-              evaluateFormula(expr, clock, workbook, Some(ref))
-        case other =>
-          scala.util.Right(other)
+      evaluateCellWithEvaluator(sheet, ref, Evaluator.instance, clock, workbook)
 
     /** Evaluate a formula cell with an explicit randomness source (GH-115). */
     @annotation.targetName("evaluateCellWithRng")
@@ -156,15 +146,7 @@ object SheetEvaluator:
       rng: Rng,
       workbook: Option[Workbook]
     ): XLResult[CellValue] =
-      sheet(ref).value match
-        case value @ CellValue.Formula(expr, _, _) =>
-          pinnedCache(value) match
-            // GH-353/GH-430: pinned-cache semantics — the Excel-written cache IS the value
-            case Some(cached) => scala.util.Right(cached)
-            case None =>
-              evaluateFormulaWith(sheet, expr, Evaluator.instance(rng), clock, workbook, Some(ref))
-        case other =>
-          scala.util.Right(other)
+      evaluateCellWithEvaluator(sheet, ref, Evaluator.instance(rng), clock, workbook)
 
     /**
      * Evaluate all formula cells in sheet with dependency checking.
@@ -289,7 +271,7 @@ object SheetEvaluator:
         // cell — dynamic targets are invisible to the static walk, so correctness requires
         // the whole sheet computed in order (correctness over narrowness; results still
         // report only the requested range).
-        val dynamic = DependencyGraph.dynamicCells(sheet)
+        val dynamic = dynamicCellsFor(sheet, workbook)
         val allFormulaCells = graph.dependencies.keySet
         val targetCells =
           if dynamic.isEmpty then rangeFormulaCells ++ (transitiveDeps & allFormulaCells)
@@ -321,7 +303,8 @@ object SheetEvaluator:
                   scala.util.Right((initial, Map.empty))
                 ) {
                   case (scala.util.Right((tempSheet, results)), ref) =>
-                    tempSheet.evaluateCell(ref, clock, workbook) match
+                    val currentWorkbook = workbook.map(_.put(tempSheet))
+                    tempSheet.evaluateCell(ref, clock, currentWorkbook) match
                       case scala.util.Right(value) =>
                         val nextResults =
                           if rangeFormulaCells.contains(ref) then results + (ref -> value)
@@ -414,6 +397,30 @@ object SheetEvaluator:
       putFormulaInheritingImpl(sheet, ref, formula, Some(workbook))
 
   // ========== Implementation shared by the public overloads ==========
+
+  /**
+   * Internal cell-evaluation boundary for WorkbookEvaluator.
+   *
+   * Supplying an evaluator lets one recalculation generation carry a narrowly scoped aggregate memo
+   * through every cell and parallel worker. Public overloads call the same boundary with a normal
+   * uncached evaluator, so their semantics remain unchanged.
+   */
+  private[formula] def evaluateCellWithEvaluator(
+    sheet: Sheet,
+    ref: ARef,
+    evaluator: => Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): XLResult[CellValue] =
+    sheet(ref).value match
+      case value @ CellValue.Formula(expr, _, _) =>
+        pinnedCache(value) match
+          // GH-353/GH-430: pinned-cache semantics — the Excel-written cache IS the value
+          case Some(cached) => scala.util.Right(cached)
+          case None =>
+            // Pass the current cell ref for ROW()/COLUMN() without arguments
+            evaluateFormulaWith(sheet, expr, evaluator, clock, workbook, Some(ref))
+      case other => scala.util.Right(other)
 
   private def evaluateArrayFormulaImpl(
     sheet: Sheet,
@@ -547,16 +554,17 @@ object SheetEvaluator:
             // computed values. A dynamic depth-cap error fails the call, consistent with
             // this method's fail-fast cycle behavior.
             val (ordered, initial) =
-              deferDynamicWithStrip(sheet, graph, evalOrder, DependencyGraph.dynamicCells(sheet))
+              deferDynamicWithStrip(sheet, graph, evalOrder, dynamicCellsFor(sheet, workbook))
             // Evaluate in dependency order, threading the partially evaluated sheet so
             // dependent formulas see previously computed values. Fail-fast on first error.
             val evalResult = ordered.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
               scala.util.Right((initial, Map.empty))
             ) {
               case (scala.util.Right((tempSheet, results)), ref) =>
+                val currentWorkbook = workbook.map(_.put(tempSheet))
                 val evaluated = rngOpt match
-                  case Some(rng) => tempSheet.evaluateCell(ref, clock, rng, workbook)
-                  case None => tempSheet.evaluateCell(ref, clock, workbook)
+                  case Some(rng) => tempSheet.evaluateCell(ref, clock, rng, currentWorkbook)
+                  case None => tempSheet.evaluateCell(ref, clock, currentWorkbook)
                 evaluated match
                   case scala.util.Right(value) =>
                     scala.util.Right((tempSheet.put(ref, value), results + (ref -> value)))
@@ -634,6 +642,18 @@ object SheetEvaluator:
           s.put(r, f.copy(cachedValue = None))
         case _ => s
     }
+
+  /** Resolve name-hidden dynamic references when the caller supplied workbook metadata. */
+  private def dynamicCellsFor(sheet: Sheet, workbook: Option[Workbook]): Set[ARef] =
+    workbook match
+      case None => DependencyGraph.dynamicCells(sheet)
+      case Some(wb) =>
+        DependencyGraph
+          .dynamicCells(wb.put(sheet))
+          .iterator
+          .filter(_.sheet == sheet.name)
+          .map(_.ref)
+          .toSet
 
   /**
    * GH-274: defer dynamic (INDIRECT-bearing) cells and their static dependents to the end of a

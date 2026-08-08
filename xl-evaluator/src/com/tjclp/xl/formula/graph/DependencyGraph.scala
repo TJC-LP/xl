@@ -59,10 +59,13 @@ object DependencyGraph:
     cellRangeDeps: CellRange => Set[ARef]
   ): Set[ARef] =
     values.foldLeft(Set.empty[ARef]) { (acc, value) =>
-      value match
-        case ArgValue.Expr(expr) => acc ++ exprDeps(expr)
-        case ArgValue.Range(range) => acc ++ rangeDeps(range)
-        case ArgValue.Cells(range) => acc ++ cellRangeDeps(range)
+      val next = value match
+        case ArgValue.Expr(expr) => exprDeps(expr)
+        case ArgValue.Range(range) => rangeDeps(range)
+        case ArgValue.Cells(range) => cellRangeDeps(range)
+      // Preserve a memoized range Set when it is the first argument. Besides avoiding a needless
+      // rebuild, this lets every one-range aggregate in a graph share the exact cached expansion.
+      if acc.isEmpty then next else if next.isEmpty then acc else acc ++ next
     }
 
   private def boundedCells(range: CellRange, bounds: Option[CellRange]): Set[ARef] =
@@ -96,6 +99,10 @@ object DependencyGraph:
   def fromSheet(sheet: Sheet): DependencyGraph =
     // Get bounds once for all extractions - constrains full column/row ranges
     val bounds = sheet.usedRange
+    // GH-522: formulas commonly reuse the same driver range. Expand each geometric range once for
+    // the whole sheet build (anchors affect dragging, not dependency membership).
+    val rangeCache =
+      scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
 
     val formulaCells = sheet.cells.flatMap { case (ref, cell) =>
       cell.value match
@@ -110,17 +117,24 @@ object DependencyGraph:
     // Build forward edges (dependencies) - use bounded extraction to avoid 1M+ cells
     val dependencies = formulaCells.map { case (ref, formulaStr) =>
       val deps = FormulaParser.parse(formulaStr) match
-        case scala.util.Right(expr) => extractDependenciesBounded(expr, bounds)
+        case scala.util.Right(expr) =>
+          extractDependenciesBoundedCached(expr, bounds, rangeCache)
         case scala.util.Left(_) => Set.empty[ARef] // Parse error: no dependencies
       ref -> deps
     }.toMap
 
-    // Build reverse edges (dependents)
-    val dependents = dependencies.foldLeft(Map.empty[ARef, Set[ARef]]) { case (acc, (ref, deps)) =>
-      deps.foldLeft(acc) { (acc2, dep) =>
-        acc2.updated(dep, acc2.getOrElse(dep, Set.empty) + ref)
+    // Build reverse edges with one mutable set per precedent, then freeze once. Growing an
+    // immutable Set for every edge recreates the N×range-size allocation this build avoids above.
+    val reverse = scala.collection.mutable.HashMap.empty[
+      ARef,
+      scala.collection.mutable.LinkedHashSet[ARef]
+    ]
+    dependencies.foreach { case (ref, deps) =>
+      deps.foreach { dep =>
+        reverse.getOrElseUpdate(dep, scala.collection.mutable.LinkedHashSet.empty) += ref
       }
     }
+    val dependents = reverse.iterator.map((ref, refs) => ref -> refs.toSet).toMap
 
     DependencyGraph(dependencies, dependents)
 
@@ -209,40 +223,76 @@ object DependencyGraph:
    * them. The walk recurses into Call arguments; `ArgValue.Range`/`Cells` arguments cannot contain
    * calls, and reference/literal leaves are never dynamic.
    */
-  def containsDynamicReference[A](expr: TExpr[A]): Boolean =
+  @nowarn("msg=Unreachable case")
+  private def containsDynamicReferenceResolved[A](
+    expr: TExpr[A],
+    resolveName: (String, Option[SheetName]) => Boolean
+  ): Boolean =
     expr match
       case call: TExpr.Call[?] =>
         call.spec.flags.dynamicDeps || call.spec.argSpec
           .toValues(call.args)
           .exists {
-            case ArgValue.Expr(e) => containsDynamicReference(e)
+            case ArgValue.Expr(e) => containsDynamicReferenceResolved(e, resolveName)
+            case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) =>
+              resolveName(name, scope)
             case ArgValue.Range(_) => false
             case ArgValue.Cells(_) => false
           }
-      case TExpr.Add(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Sub(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Mul(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Div(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Pow(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Concat(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Eq(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Neq(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Lt(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Lte(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Gt(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.Gte(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
-      case TExpr.ToInt(e) => containsDynamicReference(e)
-      case TExpr.UnaryPlus(e) => containsDynamicReference(e)
-      case TExpr.Percent(e) => containsDynamicReference(e)
-      case TExpr.DateToSerial(e) => containsDynamicReference(e)
-      case TExpr.DateTimeToSerial(e) => containsDynamicReference(e)
+      case TExpr.Add(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Sub(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Mul(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Div(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Pow(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Concat(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Eq(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Neq(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Lt(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Lte(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Gt(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.Gte(l, r) =>
+        containsDynamicReferenceResolved(l, resolveName) ||
+        containsDynamicReferenceResolved(r, resolveName)
+      case TExpr.ToInt(e) => containsDynamicReferenceResolved(e, resolveName)
+      case TExpr.UnaryPlus(e) => containsDynamicReferenceResolved(e, resolveName)
+      case TExpr.Percent(e) => containsDynamicReferenceResolved(e, resolveName)
+      case TExpr.DateToSerial(e) => containsDynamicReferenceResolved(e, resolveName)
+      case TExpr.DateTimeToSerial(e) => containsDynamicReferenceResolved(e, resolveName)
       // GH-306: runtime coercion wrapper — a coerced INDIRECT/OFFSET is still dynamic
-      case TExpr.Coerced(inner, _) => containsDynamicReference(inner)
+      case TExpr.Coerced(inner, _) => containsDynamicReferenceResolved(inner, resolveName)
       // GH-193: LET — binding values and the body may carry dynamic calls
       case TExpr.Let(bindings, body) =>
-        bindings.exists((_, value) => containsDynamicReference(value)) ||
-        containsDynamicReference(body)
+        bindings.exists((_, value) => containsDynamicReferenceResolved(value, resolveName)) ||
+        containsDynamicReferenceResolved(body, resolveName)
+      case TExpr.NameRef(name) => resolveName(name, None)
+      case TExpr.SheetNameRef(sheet, name) => resolveName(name, Some(sheet))
+      case TExpr.Aggregate(_, TExpr.RangeLocation.Name(name, scope)) => resolveName(name, scope)
       case _ => false
+
+  def containsDynamicReference[A](expr: TExpr[A]): Boolean =
+    containsDynamicReferenceResolved(expr, (_, _) => false)
 
   /**
    * GH-274: Find all formula cells in the sheet bearing dynamic references (INDIRECT et al).
@@ -258,11 +308,100 @@ object DependencyGraph:
       sheet.cells.iterator.flatMap { case (ref, cell) =>
         cell.value match
           case CellValue.Formula(expression, _, _)
-              if names.exists(n => expression.toUpperCase.contains(n)) =>
+              if names.exists(n => expression.toUpperCase(java.util.Locale.ROOT).contains(n)) =>
             FormulaParser.parse(expression) match
               case scala.util.Right(expr) if containsDynamicReference(expr) => Some(ref)
               case _ => None
           case _ => None
+      }.toSet
+
+  /**
+   * GH-520: workbook-aware dynamic classification, including parseable defined-name chains.
+   *
+   * A name is resolved with the same case-insensitive, sheet-scoped-shadowing rules as evaluation.
+   * The lookup sheet and the formula's ambient sheet both belong to the memo key: for
+   * `Other!GlobalName`, lookup occurs as seen from `Other`, while an unqualified name inside a
+   * workbook-scoped definition still resolves from the original formula's sheet. Name cycles stop
+   * cleanly, matching dependency extraction's total posture.
+   *
+   * Ordinary names do not make their users dynamic. Definitions are parsed and memoized first; only
+   * names whose parseable chains actually reach a dynamic function join the cheap substring
+   * pre-filter used for cell formulas. This matters for financial models with tens of thousands of
+   * formulas referring to a static scenario name such as `Case`.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def dynamicCells(workbook: Workbook): Set[QualifiedRef] =
+    type NameKey = (SheetName, SheetName, String)
+
+    val dynamicFunctions = FunctionRegistry.dynamicFunctionNames
+    val memo = scala.collection.mutable.HashMap.empty[NameKey, Boolean]
+
+    def expressionIsDynamic(
+      expr: TExpr[?],
+      currentSheet: SheetName,
+      visiting: Set[NameKey]
+    ): Boolean =
+      containsDynamicReferenceResolved(
+        expr,
+        (name, scope) =>
+          nameIsDynamic(
+            name,
+            lookupFrom = scope.getOrElse(currentSheet),
+            fallbackSheet = currentSheet,
+            visiting = visiting
+          )
+      )
+
+    def nameIsDynamic(
+      name: String,
+      lookupFrom: SheetName,
+      fallbackSheet: SheetName,
+      visiting: Set[NameKey]
+    ): Boolean =
+      val key = (lookupFrom, fallbackSheet, name.toUpperCase(java.util.Locale.ROOT))
+      memo.get(key) match
+        case Some(dynamic) => dynamic
+        case None if visiting.contains(key) => false
+        case None =>
+          val dynamic =
+            (for
+              definedName <- Evaluator.lookupDefinedName(workbook, lookupFrom, name)
+              target <- FormulaParser.parse(definedName.formula).toOption
+            yield
+              val definingSheet =
+                Evaluator
+                  .definedNameScope(workbook, definedName)
+                  .map(_.name)
+                  .getOrElse(fallbackSheet)
+              expressionIsDynamic(target, definingSheet, visiting + key)
+            ).getOrElse(false)
+          memo(key) = dynamic
+          dynamic
+
+    val definedNameIds = workbook.metadata.definedNames.iterator.map(_.name).toSet
+    val dynamicNameTokens = workbook.sheets.iterator.flatMap { sheet =>
+      definedNameIds.iterator.collect {
+        case name if nameIsDynamic(name, sheet.name, sheet.name, Set.empty) =>
+          name.toUpperCase(java.util.Locale.ROOT)
+      }
+    }.toSet
+    val candidateTokens = dynamicFunctions ++ dynamicNameTokens
+
+    if candidateTokens.isEmpty then Set.empty
+    else
+      workbook.sheets.iterator.flatMap { sheet =>
+        sheet.cells.iterator.flatMap { case (ref, cell) =>
+          cell.value match
+            case CellValue.Formula(expression, _, _)
+                if candidateTokens.exists(
+                  expression.toUpperCase(java.util.Locale.ROOT).contains
+                ) =>
+              FormulaParser.parse(expression) match
+                case scala.util.Right(expr) if expressionIsDynamic(expr, sheet.name, Set.empty) =>
+                  Some(QualifiedRef(sheet.name, ref))
+                case _ => None
+            case _ => None
+        }
       }.toSet
 
   /**
@@ -501,13 +640,34 @@ object DependencyGraph:
    * @return
    *   Set of all cell references used in the expression, bounded by the given range
    */
-  @nowarn("msg=Unreachable case")
   def extractDependenciesBounded[A](expr: TExpr[A], bounds: Option[CellRange]): Set[ARef] =
+    extractDependenciesBoundedCached(
+      expr,
+      bounds,
+      scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
+    )
+
+  @nowarn("msg=Unreachable case")
+  private def extractDependenciesBoundedCached[A](
+    expr: TExpr[A],
+    bounds: Option[CellRange],
+    rangeCache: scala.collection.mutable.HashMap[(ARef, ARef), Set[ARef]]
+  ): Set[ARef] =
     // Helper to bound a CellRange
     def boundRange(range: CellRange): Set[ARef] =
-      bounds match
-        case Some(b) => range.intersect(b).map(_.cells.toSet).getOrElse(Set.empty)
-        case None => range.cells.toSet
+      rangeCache.getOrElseUpdate(
+        (range.start, range.end),
+        bounds match
+          case Some(b) => range.intersect(b).map(_.cells.toSet).getOrElse(Set.empty)
+          case None => range.cells.toSet
+      )
+
+    def recurse[B](child: TExpr[B]): Set[ARef] =
+      extractDependenciesBoundedCached(child, bounds, rangeCache)
+
+    def localCells(location: TExpr.RangeLocation): Set[ARef] = location match
+      case TExpr.RangeLocation.Local(range) => boundRange(range)
+      case _ => Set.empty
 
     expr match
       // Single cell reference
@@ -527,46 +687,46 @@ object DependencyGraph:
 
       // Recursive cases (binary operators)
       case TExpr.Add(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Sub(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Mul(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Div(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Pow(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Concat(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Eq(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Neq(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Lt(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Lte(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Gt(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+        recurse(l) ++ recurse(r)
       case TExpr.Gte(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
-      case TExpr.ToInt(expr) => extractDependenciesBounded(expr, bounds)
-      case TExpr.UnaryPlus(expr) => extractDependenciesBounded(expr, bounds)
-      case TExpr.Percent(expr) => extractDependenciesBounded(expr, bounds)
-      case TExpr.Aggregate(_, location) => location.localCellsBounded(bounds)
+        recurse(l) ++ recurse(r)
+      case TExpr.ToInt(expr) => recurse(expr)
+      case TExpr.UnaryPlus(expr) => recurse(expr)
+      case TExpr.Percent(expr) => recurse(expr)
+      case TExpr.Aggregate(_, location) => localCells(location)
 
       case call: TExpr.Call[?] =>
         depsFromArgValues(
           call.spec.argSpec.toValues(call.args),
-          expr => extractDependenciesBounded(expr, bounds),
-          loc => loc.localCellsBounded(bounds),
-          range => boundedCells(range, bounds)
+          recurse,
+          localCells,
+          boundRange
         )
 
       // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
       case TExpr.Let(bindings, body) =>
-        bindings.foldLeft(extractDependenciesBounded(body, bounds)) { case (acc, (_, value)) =>
-          acc ++ extractDependenciesBounded(value, bounds)
+        bindings.foldLeft(recurse(body)) { case (acc, (_, value)) =>
+          acc ++ recurse(value)
         }
       case TExpr.BindingRef(_) => Set.empty
       case TExpr.CoercedBindingRef(_, _) => Set.empty
@@ -579,12 +739,12 @@ object DependencyGraph:
       case TExpr.SheetNameRef(_, _) => Set.empty
 
       // GH-306: runtime coercion wrapper — transparent for analysis
-      case TExpr.Coerced(inner, _) => extractDependenciesBounded(inner, bounds)
+      case TExpr.Coerced(inner, _) => recurse(inner)
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
-      case TExpr.DateToSerial(dateExpr) => extractDependenciesBounded(dateExpr, bounds)
-      case TExpr.DateTimeToSerial(dtExpr) => extractDependenciesBounded(dtExpr, bounds)
+      case TExpr.DateToSerial(dateExpr) => recurse(dateExpr)
+      case TExpr.DateTimeToSerial(dtExpr) => recurse(dtExpr)
 
   /**
    * Get cells this cell depends on (precedents).
@@ -698,81 +858,169 @@ object DependencyGraph:
    * Reverse-reachability core shared by the sheet-level and workbook-level (qualified) variants —
    * generic in the node type (GH-346). Excludes the starting refs from the result.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.While"))
   private def transitiveDependentsOf[K](
     dependents: Map[K, Set[K]],
     originalRefs: Set[K]
   ): Set[K] =
-    @scala.annotation.tailrec
-    def impl(frontier: Set[K], visited: Set[K]): Set[K] =
-      val toVisit = frontier -- visited
-      if toVisit.isEmpty then visited -- originalRefs // Exclude starting refs
-      else
-        val directDeps = toVisit.flatMap(ref => dependents.getOrElse(ref, Set.empty))
-        impl(directDeps, visited ++ toVisit)
-    impl(originalRefs, Set.empty)
+    // A persistent-Set frontier looks elegant but is catastrophically expensive on deep graphs:
+    // every round rebuilds `frontier -- visited` and `visited ++ frontier`. A 100k linear cone can
+    // therefore perform billions of hash probes. Keep mutation invocation-local and freeze once.
+    val visited = scala.collection.mutable.HashSet.empty[K]
+    val pending = scala.collection.mutable.ArrayDeque.empty[K]
+    originalRefs.foreach { ref =>
+      visited += ref
+      pending.append(ref)
+    }
+    while pending.nonEmpty do
+      val ref = pending.removeHead()
+      dependents.getOrElse(ref, Set.empty).foreach { dependent =>
+        if visited.add(dependent) then pending.append(dependent)
+      }
+    visited --= originalRefs
+    visited.toSet
 
   /**
-   * Iterative Tarjan SCC engine shared by `detectCycles`, `cyclicNodes`, and their qualified
-   * (workbook-level) counterparts — generic in the node type (GH-346).
+   * Iterative Tarjan SCC engine shared by `cyclicNodes` and its qualified (workbook-level)
+   * counterparts — generic in the node type (GH-346).
    *
    * Uses an explicit work stack instead of recursion: `recalculate` promises totality, and a deep
    * linear dependency chain (e.g. 100k sequential formulas) must not throw StackOverflowError.
    * Invokes `onScc` for every completed component in Tarjan pop order (deepest member first,
    * component root last).
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def foreachSccOf[K](dependencies: Map[K, Set[K]])(onScc: List[K] => Unit): Unit =
-    var index = 0
-    var indices = Map.empty[K, Int]
-    var lowLinks = Map.empty[K, Int]
-    var stack = List.empty[K]
-    var onStack = Set.empty[K]
-    // DFS frames: (node, successors not yet examined)
-    var frames = List.empty[(K, List[K])]
+    final class Frame(val node: K, val successors: Iterator[K])
+
+    var nextIndex = 0
+    val indices = scala.collection.mutable.HashMap.empty[K, Int]
+    val lowLinks = scala.collection.mutable.HashMap.empty[K, Int]
+    val stack = scala.collection.mutable.ArrayBuffer.empty[K]
+    val onStack = scala.collection.mutable.HashSet.empty[K]
+    val frames = scala.collection.mutable.ArrayBuffer.empty[Frame]
+    indices.sizeHint(dependencies.size)
+    lowLinks.sizeHint(dependencies.size)
+    stack.sizeHint(dependencies.size)
+    onStack.sizeHint(dependencies.size)
+    frames.sizeHint(dependencies.size)
 
     def push(v: K): Unit =
-      indices = indices.updated(v, index)
-      lowLinks = lowLinks.updated(v, index)
-      index += 1
-      stack = v :: stack
-      onStack = onStack + v
-      frames = (v, dependencies.getOrElse(v, Set.empty).toList) :: frames
+      indices(v) = nextIndex
+      lowLinks(v) = nextIndex
+      nextIndex += 1
+      stack += v
+      onStack += v
+      frames += new Frame(v, dependencies.getOrElse(v, Set.empty).iterator)
 
     dependencies.keySet.foreach { root =>
       if !indices.contains(root) then
         push(root)
         while frames.nonEmpty do
-          frames match
-            case (v, w :: rest) :: tail =>
-              frames = (v, rest) :: tail
-              if !indices.contains(w) then push(w)
-              else if onStack.contains(w) then
-                lowLinks = lowLinks.updated(v, math.min(lowLinks(v), indices(w)))
-            case (v, Nil) :: tail =>
-              frames = tail
-              if lowLinks(v) == indices(v) then
-                val (sccTail, remaining) = stack.span(_ != v)
-                stack = remaining.drop(1)
-                val scc = sccTail :+ v
-                onStack = onStack -- scc
-                onScc(scc)
-              frames match
-                case (p, _) :: _ =>
-                  lowLinks = lowLinks.updated(p, math.min(lowLinks(p), lowLinks(v)))
-                case Nil => ()
-            case Nil => () // unreachable: guarded by frames.nonEmpty
+          val frame = frames(frames.length - 1)
+          if frame.successors.hasNext then
+            val successor = frame.successors.next()
+            if !indices.contains(successor) then push(successor)
+            else if onStack.contains(successor) then
+              lowLinks(frame.node) = math.min(lowLinks(frame.node), indices(successor))
+          else
+            frames.remove(frames.length - 1)
+            val node = frame.node
+            if lowLinks(node) == indices(node) then
+              val members = List.newBuilder[K]
+              var complete = false
+              while !complete do
+                val member = stack.remove(stack.length - 1)
+                onStack -= member
+                members += member
+                complete = member == node
+              onScc(members.result())
+            if frames.nonEmpty then
+              val parent = frames(frames.length - 1).node
+              lowLinks(parent) = math.min(lowLinks(parent), lowLinks(node))
     }
 
   private def foreachScc(graph: DependencyGraph)(onScc: List[ARef] => Unit): Unit =
     foreachSccOf(graph.dependencies)(onScc)
 
   /**
-   * Detect circular references using Tarjan's strongly connected components algorithm.
+   * Return the first actual directed cycle encountered inside `nodes`.
+   *
+   * SCC membership alone is insufficient for diagnostics: Tarjan pop order is not necessarily an
+   * edge path when a component branches. Likewise, following one successor from a Kahn remainder
+   * can begin downstream of a cycle, so blindly appending the first visited node may invent a
+   * closing edge. This explicit-stack DFS records the active path and closes a cycle only on a back
+   * edge to an active ancestor. Every adjacent pair in the result is therefore an edge in
+   * `dependencies`, the first and last nodes are equal, and no interior node is repeated.
+   *
+   * Roots and successors are ordered by `key`, making the diagnostic a function of the graph's
+   * value rather than Map/Set construction order. All mutation is invocation-local and the returned
+   * path is immutable.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def firstCycleOf[K, O: Ordering](
+    dependencies: Map[K, Set[K]],
+    nodes: Set[K],
+    key: K => O
+  ): Option[List[K]] =
+    // State: absent = unseen, 1 = active (gray), 2 = complete (black).
+    val states = scala.collection.mutable.HashMap.empty[K, Int]
+    val activePath = scala.collection.mutable.ArrayBuffer.empty[K]
+    val activeIndices = scala.collection.mutable.HashMap.empty[K, Int]
+    states.sizeHint(nodes.size)
+    activePath.sizeHint(nodes.size)
+    activeIndices.sizeHint(nodes.size)
+    var frames = List.empty[(K, List[K])]
+    var found = Option.empty[List[K]]
+
+    def push(node: K): Unit =
+      states(node) = 1
+      activeIndices(node) = activePath.size
+      activePath += node
+      val successors =
+        dependencies
+          .getOrElse(node, Set.empty)
+          .iterator
+          .filter(nodes.contains)
+          .toList
+          .sortBy(key)
+      frames = (node, successors) :: frames
+
+    val roots = nodes.toList.sortBy(key).iterator
+    while roots.hasNext && found.isEmpty do
+      val root = roots.next()
+      if !states.contains(root) then
+        push(root)
+        while frames.nonEmpty && found.isEmpty do
+          frames match
+            case (node, successor :: rest) :: tail =>
+              frames = (node, rest) :: tail
+              states.get(successor) match
+                case None => push(successor)
+                case Some(1) =>
+                  activeIndices.get(successor) match
+                    case Some(start) =>
+                      found = Some(activePath.iterator.drop(start).toList :+ successor)
+                    case None => () // impossible for an active node; remain total if state corrupts
+                case Some(_) => ()
+            case (node, Nil) :: tail =>
+              frames = tail
+              states(node) = 2
+              activeIndices -= node
+              if activePath.nonEmpty then activePath.remove(activePath.size - 1)
+            case Nil => () // unreachable: guarded by frames.nonEmpty
+
+    found
+
+  /**
+   * Detect circular references using an explicit-stack depth-first search.
    *
    * A circular reference occurs when a cell's formula depends (directly or transitively) on its own
    * value. For example: A1="=B1", B1="=C1", C1="=A1" forms a cycle.
    *
-   * Runs in O(V + E) with an explicit work stack (stack-safe on deep dependency chains).
+   * The explicit DFS is O(V + E), stops at the first back edge, and is stack-safe on deep
+   * dependency chains. Canonical diagnostic ordering adds sorting proportional to the visited roots
+   * and successor sets.
    *
    * @param graph
    *   The dependency graph to analyze
@@ -788,21 +1036,12 @@ object DependencyGraph:
    * detectCycles(graph) // Left(EvalError.CircularRef(List(A1, B1, A1)))
    * }}}
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def detectCycles(graph: DependencyGraph): Either[EvalError.CircularRef, Unit] =
-    var found = Option.empty[List[ARef]]
-    foreachScc(graph) { scc =>
-      if found.isEmpty then
-        scc match
-          case single :: Nil =>
-            if graph.dependencies.get(single).exists(_.contains(single)) then
-              found = Some(List(single, single)) // Self-loop: v -> v
-          case multi =>
-            val cycleNodes = multi.reverse
-            found =
-              Some(cycleNodes :+ cycleNodes.headOption.getOrElse(multi.last)) // close the cycle
-    }
-    found match
+    firstCycleOf(
+      graph.dependencies,
+      graph.dependencies.keySet,
+      (ref: ARef) => (ref.row.index0, ref.col.index0)
+    ) match
       case Some(cycle) => scala.util.Left(EvalError.CircularRef(cycle))
       case None => scala.util.Right(())
 
@@ -813,7 +1052,7 @@ object DependencyGraph:
    * of cells inside strongly connected components of size > 1, plus self-loops. Used by
    * `Workbook.recalculate` to isolate cyclic cells while still evaluating the acyclic remainder.
    *
-   * Stack-safe: shares the iterative Tarjan engine with `detectCycles`.
+   * Stack-safe: uses the iterative Tarjan engine shared with the qualified workbook-level path.
    *
    * @return
    *   The set of cycle participants (empty when the graph is acyclic)
@@ -841,9 +1080,11 @@ object DependencyGraph:
    * on a 50k-formula workbook was 81% of an entire recalculation's allocation. Iteration stays over
    * the same collections in the same order, so the emitted order is unchanged: FIFO queue seeded in
    * `allNodes` iteration order, newly-ready nodes appended in the iteration order of the filtered
-   * dependents set.
+   * dependents set. The FIFO discipline is additionally load-bearing for parallel recalculation: it
+   * keeps longest-path depth classes contiguous, so folding completed waves preserves the exact
+   * sequential error order. A replacement queue must retain that level-monotone property.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  @SuppressWarnings(Array("org.wartremover.warts.While"))
   private def kahnOrder[K](
     dependencies: Map[K, Set[K]],
     dependents: Map[K, Set[K]]
@@ -855,13 +1096,16 @@ object DependencyGraph:
     if allNodes.isEmpty then scala.util.Right(List.empty[K])
     else
       // In-degree = dependencies on other formula cells only, not constants
-      val inDegree = scala.collection.mutable.HashMap.empty[K, Int]
+      val inDegree = new scala.collection.mutable.HashMap[K, Int](
+        allNodes.size * 2,
+        scala.collection.mutable.HashMap.defaultLoadFactor
+      )
       allNodes.foreach { node =>
         inDegree(node) = dependencies.getOrElse(node, Set.empty).count(allNodes.contains)
       }
 
       // Start with nodes that have in-degree 0 (no dependencies)
-      val queue = scala.collection.mutable.ArrayDeque.empty[K]
+      val queue = new scala.collection.mutable.ArrayDeque[K](allNodes.size)
       allNodes.foreach { node =>
         if inDegree(node) == 0 then queue.append(node)
       }
@@ -870,13 +1114,14 @@ object DependencyGraph:
       while queue.nonEmpty do
         val node = queue.removeHead()
         ordered += node
-        // Filtering into a Set first (rather than testing membership inline) preserves the exact
-        // emitted order of the previous formulation, which folded over this same filtered set.
-        val deps = dependents.getOrElse(node, Set.empty).filter(allNodes.contains)
-        deps.foreach { dep =>
-          val remaining = inDegree(dep) - 1
-          inDegree(dep) = remaining
-          if remaining == 0 then queue.append(dep)
+        // Test membership inline: materializing `filter(allNodes.contains)` allocated one throwaway
+        // Set per processed formula. Iteration stays over the original Set in the same order; only
+        // successors absent from the node set are skipped.
+        dependents.getOrElse(node, Set.empty).foreach { dep =>
+          if allNodes.contains(dep) then
+            val remaining = inDegree(dep) - 1
+            inDegree(dep) = remaining
+            if remaining == 0 then queue.append(dep)
         }
 
       // If all nodes are processed, graph is acyclic
@@ -911,24 +1156,15 @@ object DependencyGraph:
     kahnOrder(graph.dependencies, graph.dependents) match
       case scala.util.Right(order) => scala.util.Right(order)
       case scala.util.Left(remainingNodes) =>
-        // Cycle detected: find one cycle for error reporting
-        val cycle = remainingNodes.headOption match
-          case Some(start) =>
-            // Follow dependencies to reconstruct cycle
-            def findCycle(current: ARef, visited: Set[ARef]): List[ARef] =
-              if visited.contains(current) then
-                // Found cycle
-                List(current)
-              else
-                graph.dependencies.getOrElse(current, Set.empty).headOption match
-                  case Some(next) if remainingNodes.contains(next) =>
-                    current :: findCycle(next, visited + current)
-                  case _ => List(current)
-
-            val cyclePath = findCycle(start, Set.empty)
-            cyclePath.headOption.map(first => cyclePath :+ first).getOrElse(List.empty)
-          case None => List.empty
-
+        // Kahn's remainder can include nodes merely downstream of a cycle. Reconstruct only from a
+        // real back edge, so the diagnostic never invents an edge from the cycle to that tail.
+        val cycle =
+          firstCycleOf(
+            graph.dependencies,
+            remainingNodes,
+            (ref: ARef) => (ref.row.index0, ref.col.index0)
+          )
+            .getOrElse(List.empty)
         scala.util.Left(EvalError.CircularRef(cycle))
 
   // ===== Cross-Sheet Dependency Tracking =====
@@ -1030,6 +1266,170 @@ object DependencyGraph:
     }.toMap
 
     (dependencies, reverseEdges(dependencies))
+
+  /**
+   * Build the formula-to-formula graph needed by whole-workbook recalculation.
+   *
+   * The public dependency graph records every referenced cell because impact analysis must answer
+   * "which formulas read this edited constant?" Whole-book topological evaluation asks a much
+   * narrower question: "which FORMULAS must run before this formula?" Materializing constant cells
+   * in that graph is pure waste. On a common financial-model shape — 9,900 formulas sharing
+   * `SUM($A$1:$A$5000)` over a constant driver column — the value-preserving graph has no range
+   * edges at all, while [[fromWorkbookBounded]] retains and repeatedly traverses 49.5 million.
+   *
+   * Range lookup scans only the target sheet's formula refs and is memoized by range. Single-cell
+   * references are filtered against the same formula-node set after name resolution. Consequently
+   * this graph is exactly `fromWorkbookBounded` with every non-formula successor removed, without
+   * first allocating those successors. Formula evaluation itself is unchanged and still reads the
+   * complete ranges from the workbook snapshot.
+   *
+   * This representation is intentionally internal: dirty-cone callers still need the public graph
+   * (or, ultimately, a symbolic point/range index) to discover formulas affected by edited values.
+   */
+  private[formula] def fromWorkbookFormulaGraph(
+    workbook: com.tjclp.xl.workbooks.Workbook
+  ): (Map[QualifiedRef, Set[QualifiedRef]], Map[QualifiedRef, Set[QualifiedRef]]) =
+    val formulas: Vector[(QualifiedRef, String)] = workbook.sheets.flatMap { sheet =>
+      sheet.cells.flatMap { case (cellRef, cell) =>
+        cell.value match
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
+          case CellValue.Formula(expression, _, _) =>
+            Some(QualifiedRef(sheet.name, cellRef) -> expression)
+          case _ => None
+      }
+    }
+    val formulaNodes = formulas.iterator.map(_._1).toSet
+    val refsBySheet: Map[SheetName, Vector[ARef]] =
+      formulas.groupMap(_._1.sheet)(_._1.ref)
+    val cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = memoizedCells { (sheet, range) =>
+      refsBySheet
+        .getOrElse(sheet, Vector.empty)
+        .iterator
+        .filter(range.contains)
+        .map(ref => QualifiedRef(sheet, ref))
+        .toSet
+    }
+
+    val dependencies = formulas.iterator.map { case (ref, expression) =>
+      val deps = FormulaParser.parse(expression) match
+        case scala.util.Right(expr) =>
+          extractQualifiedDependencies(expr, ref.sheet, cellsFor, Some(workbook))
+            .filter(formulaNodes.contains)
+        case scala.util.Left(_) => Set.empty[QualifiedRef]
+      ref -> deps
+    }.toMap
+
+    (dependencies, reverseEdges(dependencies))
+
+  /** One declared range and the formulas that read it. */
+  private[xl] final case class QualifiedRangeDependents(
+    range: CellRange,
+    dependents: Set[QualifiedRef]
+  )
+
+  /**
+   * Symbolic reverse-dependency index for targeted recalculation.
+   *
+   * Point references retain the usual `cell -> formulas` map. Range references remain canonical
+   * rectangles rather than expanding to one map entry per covered cell. This changes the common
+   * N-formulas-by-M-range shape from O(N × M) retained memberships to O(N + unique ranges), and a
+   * full-column reference never allocates one million `QualifiedRef`s merely to discover whether an
+   * edited point lies inside it.
+   */
+  private[xl] final case class QualifiedDependencyIndex(
+    pointDependents: Map[QualifiedRef, Set[QualifiedRef]],
+    rangeDependents: Map[SheetName, Vector[QualifiedRangeDependents]]
+  ):
+    /**
+     * Every formula directly or transitively affected by `originalRefs`, excluding the seeds.
+     *
+     * Local mutation makes a deep chain linear. Range containment is checked against declared
+     * coordinates, not `usedRange`, so clearing the last occupied cell in a range cannot erase the
+     * dependency before invalidation runs.
+     */
+    @SuppressWarnings(Array("org.wartremover.warts.While"))
+    def transitiveDependents(originalRefs: Set[QualifiedRef]): Set[QualifiedRef] =
+      val visited = scala.collection.mutable.HashSet.empty[QualifiedRef]
+      val pending = scala.collection.mutable.ArrayDeque.empty[QualifiedRef]
+
+      def enqueue(ref: QualifiedRef): Unit =
+        if visited.add(ref) then pending.append(ref)
+
+      originalRefs.foreach(enqueue)
+      while pending.nonEmpty do
+        val ref = pending.removeHead()
+        pointDependents.getOrElse(ref, Set.empty).foreach(enqueue)
+        rangeDependents.getOrElse(ref.sheet, Vector.empty).foreach { entry =>
+          if entry.range.contains(ref.ref) then entry.dependents.foreach(enqueue)
+        }
+
+      visited --= originalRefs
+      visited.toSet
+
+  /**
+   * Build a symbolic reverse-dependency index without materializing range cells.
+   *
+   * The existing qualified extractor already centralizes every AST shape and defined-name rule.
+   * Supplying a range callback that records canonical rectangles and returns an empty set separates
+   * point dependencies from range dependencies without duplicating that traversal. All mutation is
+   * build-local; only immutable maps, vectors, ranges, and sets escape.
+   */
+  private[xl] def fromWorkbookDependencyIndex(
+    workbook: com.tjclp.xl.workbooks.Workbook
+  ): QualifiedDependencyIndex =
+    val pointBuilders = scala.collection.mutable.HashMap.empty[
+      QualifiedRef,
+      scala.collection.mutable.HashSet[QualifiedRef]
+    ]
+    val rangeBuilders = scala.collection.mutable.HashMap.empty[
+      (SheetName, ARef, ARef),
+      scala.collection.mutable.HashSet[QualifiedRef]
+    ]
+
+    workbook.sheets.foreach { sheet =>
+      sheet.cells.foreach { case (cellRef, cell) =>
+        cell.value match
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+          case CellValue.Formula(expression, _, _) =>
+            FormulaParser.parse(expression) match
+              case scala.util.Left(_) => ()
+              case scala.util.Right(expr) =>
+                val dependent = QualifiedRef(sheet.name, cellRef)
+                val ranges = scala.collection.mutable.HashSet.empty[(SheetName, ARef, ARef)]
+                val recordRange: (SheetName, CellRange) => Set[QualifiedRef] =
+                  (targetSheet, range) =>
+                    ranges += ((targetSheet, range.start, range.end))
+                    Set.empty
+                val points = extractQualifiedDependencies(
+                  expr,
+                  sheet.name,
+                  recordRange,
+                  Some(workbook)
+                )
+                points.foreach { point =>
+                  pointBuilders.getOrElseUpdate(
+                    point,
+                    scala.collection.mutable.HashSet.empty
+                  ) += dependent
+                }
+                ranges.foreach { key =>
+                  rangeBuilders.getOrElseUpdate(
+                    key,
+                    scala.collection.mutable.HashSet.empty
+                  ) += dependent
+                }
+          case _ => ()
+      }
+    }
+
+    val points = pointBuilders.iterator.map((ref, refs) => ref -> refs.toSet).toMap
+    val ranges = rangeBuilders.iterator
+      .map { case ((sheet, start, end), refs) =>
+        sheet -> QualifiedRangeDependents(CellRange(start, end), refs.toSet)
+      }
+      .toVector
+      .groupMap(_._1)(_._2)
+    QualifiedDependencyIndex(points, ranges)
 
   /**
    * GH-346: every node participating in a reference cycle of the workbook-level graph — the
@@ -1191,43 +1591,53 @@ object DependencyGraph:
    * (54 GB of a 135 GB recalc's allocation) where 5,000 suffice. The memo makes every referencing
    * formula share one immutable Set instance; correctness is untouched because expansion is a pure
    * function of (sheet, range) within one build (bounds are computed once up front and never change
-   * mid-build).
+   * mid-build). The captured mutable map is intentionally build-local and unsynchronized: callers
+   * must invoke the returned closure only from the single graph-building thread.
    */
   private def memoizedCells(
     expand: (SheetName, CellRange) => Set[QualifiedRef]
   ): (SheetName, CellRange) => Set[QualifiedRef] =
-    val cache = scala.collection.mutable.HashMap.empty[(SheetName, CellRange), Set[QualifiedRef]]
-    (sheet, range) => cache.getOrElseUpdate((sheet, range), expand(sheet, range))
+    // Anchors affect formula dragging, never the cells a dependency range denotes. Keying by the
+    // normalized endpoints lets `$A$1:$A$5000`, `A1:A5000`, and mixed-anchor spellings share the
+    // same expansion within one graph build.
+    val cache =
+      scala.collection.mutable.HashMap.empty[(SheetName, ARef, ARef), Set[QualifiedRef]]
+    (sheet, range) => cache.getOrElseUpdate((sheet, range.start, range.end), expand(sheet, range))
 
   /**
    * GH-522: set union that iterates the smaller side into the larger — `Set(oneRef) ++ rangeSet`
    * walks all 5,000 range elements today, once per operator node above a range reference. Union is
    * commutative, and any result with more than 4 elements is a CHAMP HashSet whose iteration order
-   * is a function of its CONTENTS alone, so redirecting the merge cannot move any downstream order.
-   * When the larger side has 4 or fewer elements the left-to-right build is kept: small sets are
-   * insertion-ordered and Kahn's emitted order feeds off their iteration.
+   * is a function of its contents (apart from full hash-collision nodes, whose insertion sequence
+   * is unchanged here), so redirecting the merge cannot move downstream order. When the larger side
+   * has 4 or fewer elements the left-to-right build is kept: small sets are insertion-ordered and
+   * Kahn's emitted order feeds off their iteration.
    */
   private def union(a: Set[QualifiedRef], b: Set[QualifiedRef]): Set[QualifiedRef] =
     if a.size < b.size && b.size > 4 then b ++ a else a ++ b
 
   /**
    * GH-522: reverse-edge map built with a local mutable accumulator. The immutable foldLeft
-   * allocated a fresh outer-Map node chain per edge — 50M times on the shape above (8.5 GB). The
-   * insertion sequence is identical to the fold it replaces (same outer Map iterated in the same
-   * order, same per-key Set growth), so every per-key set — small insertion-ordered ones included —
-   * iterates exactly as before.
+   * allocated a fresh outer-Map node chain per edge — 50M times on the shape above (8.5 GB). The A
+   * mutable insertion-ordered set per precedent also avoids building one intermediate immutable Set
+   * per edge. Each set receives refs in the identical sequence as the fold it replaces, then
+   * freezes through the ordinary immutable Set builder, so its observable iteration order is
+   * unchanged. The outer map's iteration order is deliberately not a contract; every consumer
+   * performs keyed lookup or set membership.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private[formula] def reverseEdges(
     dependencies: Map[QualifiedRef, Set[QualifiedRef]]
   ): Map[QualifiedRef, Set[QualifiedRef]] =
-    val acc = scala.collection.mutable.HashMap.empty[QualifiedRef, Set[QualifiedRef]]
+    val acc = scala.collection.mutable.HashMap.empty[
+      QualifiedRef,
+      scala.collection.mutable.LinkedHashSet[QualifiedRef]
+    ]
     dependencies.foreach { case (ref, deps) =>
       deps.foreach { dep =>
-        acc(dep) = acc.getOrElse(dep, Set.empty) + ref
+        acc.getOrElseUpdate(dep, scala.collection.mutable.LinkedHashSet.empty) += ref
       }
     }
-    acc.toMap
+    acc.iterator.map((ref, refs) => ref -> refs.toSet).toMap
 
   /**
    * Extract all qualified cell references from TExpr.
@@ -1381,7 +1791,7 @@ object DependencyGraph:
     go(expr)
 
   /**
-   * Detect circular references across sheets using Tarjan's SCC algorithm.
+   * Detect circular references across sheets using an explicit-stack depth-first search.
    *
    * Similar to detectCycles but works with QualifiedRef to detect cycles that span multiple sheets.
    * A cross-sheet cycle occurs when cells across different sheets form a circular dependency (e.g.,
@@ -1400,77 +1810,14 @@ object DependencyGraph:
    *   case Right(_) => println("No cycles")
    * }}}
    */
-  @SuppressWarnings(
-    Array(
-      "org.wartremover.warts.Var",
-      "org.wartremover.warts.IterableOps",
-      "org.wartremover.warts.Return",
-      "org.wartremover.warts.IsInstanceOf",
-      "org.wartremover.warts.AsInstanceOf"
-    )
-  )
   def detectCrossSheetCycles(
     graph: Map[QualifiedRef, Set[QualifiedRef]]
   ): Either[EvalError.CircularRef, Unit] =
-    // Tarjan's SCC algorithm adapted for QualifiedRef
-    var index = 0
-    var stack = List.empty[QualifiedRef]
-    var indices = Map.empty[QualifiedRef, Int]
-    var lowLinks = Map.empty[QualifiedRef, Int]
-    var onStack = Set.empty[QualifiedRef]
-
-    def strongConnect(v: QualifiedRef): Option[List[ARef]] =
-      indices = indices.updated(v, index)
-      lowLinks = lowLinks.updated(v, index)
-      index += 1
-      stack = v :: stack
-      onStack = onStack + v
-
-      val successors = graph.getOrElse(v, Set.empty)
-      val cycleFound = successors.foldLeft(Option.empty[List[ARef]]) { (acc, w) =>
-        acc match
-          case Some(cycle) => Some(cycle)
-          case None =>
-            if !indices.contains(w) then
-              strongConnect(w) match
-                case Some(cycle) => Some(cycle)
-                case None =>
-                  lowLinks = lowLinks.updated(v, math.min(lowLinks(v), lowLinks(w)))
-                  None
-            else if onStack.contains(w) then
-              lowLinks = lowLinks.updated(v, math.min(lowLinks(v), indices(w)))
-              // Found cycle - reconstruct from stack
-              val cycleNodes = (stack.takeWhile(_ != w) :+ w).reverse
-              // Convert to List[ARef] with sheet prefix for error message
-              Some(cycleNodes.map(_.ref) :+ cycleNodes.head.ref)
-            else None
-      }
-
-      cycleFound match
-        case Some(cycle) => Some(cycle)
-        case None =>
-          if lowLinks(v) == indices(v) then
-            val (scc, remaining) = stack.span(_ != v)
-            stack = remaining.tail
-            onStack = onStack -- (scc :+ v)
-
-            if scc.nonEmpty then
-              // Multiple nodes in SCC = cycle
-              val cycleNodes = (scc :+ v).reverse
-              Some(cycleNodes.map(_.ref) :+ cycleNodes.head.ref)
-            else if graph.get(v).exists(_.contains(v)) then Some(List(v.ref, v.ref)) // Self-loop
-            else None
-          else None
-
-    val allNodes = graph.keySet
-    val cycleFound = allNodes.foldLeft(Option.empty[List[ARef]]) { (acc, node) =>
-      acc match
-        case Some(cycle) => Some(cycle)
-        case None =>
-          if !indices.contains(node) then strongConnect(node)
-          else None
-    }
-
-    cycleFound match
-      case Some(cycle) => scala.util.Left(EvalError.CircularRef(cycle))
+    firstCycleOf(
+      graph,
+      graph.keySet,
+      (q: QualifiedRef) => (q.sheet.value, q.ref.row.index0, q.ref.col.index0)
+    ) match
+      // CircularRef predates QualifiedRef and therefore retains its sheetless public payload.
+      case Some(cycle) => scala.util.Left(EvalError.CircularRef(cycle.map(_.ref)))
       case None => scala.util.Right(())

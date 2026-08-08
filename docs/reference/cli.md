@@ -139,6 +139,13 @@ conditions, not failures, and never gate.
 xl -f model.xlsx -o out.xlsx --strict recalc    # exit 1 if any formula failed to evaluate
 ```
 
+`recalc --parallel N` evaluates statically independent formula waves on up to `N` workers, then
+folds results in the same deterministic order as ordinary `recalc`. It is an opt-in throughput
+lever, not an `N`-times-speed promise: narrow dependency chains remain sequential, and range-heavy
+books can be limited by allocation and memory bandwidth. If the workbook declares iterative
+calculation (`<calcPr iterate="1"/>`), xl keeps the sequential fixpoint path and reports that
+`--parallel` was ignored in the command summary.
+
 With `-o` the output file is written even on a strict failure (the gate only sets the exit code).
 With `-i` the temp file is discarded and the input is left byte-identical; the summary then says
 `NOT saved (--strict failure): <file> left untouched` instead of `Saved:`. `--strict` is refused

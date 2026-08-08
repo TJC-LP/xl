@@ -496,12 +496,63 @@ class BatchRecalcSpec extends FunSuite:
   test("GH-442: recalc --tables parses to Recalc(tables = true); bare recalc stays false") {
     val cmd = com.monovore.decline.Command("xl", "test")(Main.recalcCmd)
     cmd.parse(Seq("recalc", "--tables"), Map.empty) match
-      case Right(CliCommand.Recalc(tables)) => assert(tables, "--tables must set tables = true")
+      case Right(CliCommand.Recalc(tables, _)) => assert(tables, "--tables must set tables = true")
       case other => fail(s"expected Recalc(true), got $other")
     cmd.parse(Seq("recalc"), Map.empty) match
-      case Right(CliCommand.Recalc(tables)) =>
+      case Right(CliCommand.Recalc(tables, _)) =>
         assert(!tables, "bare recalc must keep the pinned-cache default")
       case other => fail(s"expected Recalc(false), got $other")
+  }
+
+  test("GH-520: recalc --parallel N parses; bare recalc stays sequential; 0 is refused") {
+    val cmd = com.monovore.decline.Command("xl", "test")(Main.recalcCmd)
+    cmd.parse(Seq("recalc", "--parallel", "4"), Map.empty) match
+      case Right(CliCommand.Recalc(_, parallel)) => assertEquals(parallel, Some(4))
+      case other => fail(s"expected Recalc(_, Some(4)), got $other")
+    cmd.parse(Seq("recalc"), Map.empty) match
+      case Right(CliCommand.Recalc(_, parallel)) =>
+        assertEquals(parallel, None)
+      case other => fail(s"expected Recalc(_, None), got $other")
+    assert(
+      cmd.parse(Seq("recalc", "--parallel", "0"), Map.empty).isLeft,
+      "--parallel 0 must be refused by validation"
+    )
+  }
+
+  test("GH-520: recalc --parallel evaluates a wide wave and writes its caches") {
+    val sheet = (1 to 32).foldLeft(Sheet("Data").put(ref"A1" -> 10)) { (s, col0) =>
+      s.put(ARef.from0(col0, 0), CellValue.Formula("=A1+1"))
+    }
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .recalc(Workbook(sheet), out, config, parallel = Some(4))
+      .unsafeRunSync()
+
+    assert(summary.contains("Recalculated 32 formulas"), s"summary was: $summary")
+    assertCachedNumber(cachedFormulaValue(readBack(out), 1, 0), 11.0)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-520: an iterative book reports the --parallel sequential fallback in-band") {
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1" -> 10)
+        .put(ref"B1", CellValue.Formula("=A1+1"))
+    ).withCalcPr(
+      com.tjclp.xl.workbooks.CalcPr(
+        iterativeCalculation = true,
+        maxIterations = Some(10),
+        maxChange = Some(BigDecimal("0.001"))
+      )
+    )
+    val out = tempXlsx()
+
+    val summary = WriteCommands.recalc(wb, out, config, parallel = Some(4)).unsafeRunSync()
+
+    assert(summary.contains("NOTE: --parallel ignored"), s"summary was: $summary")
+    assertCachedNumber(cachedFormulaValue(readBack(out), 1, 0), 11.0)
+    Files.deleteIfExists(out)
   }
 
   // ===== GH-453/GH-454: recalc honors the file's declared calcPr; --tables on circular books =====

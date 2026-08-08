@@ -384,7 +384,8 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
                         ctx.clock,
                         ctx.workbook,
                         ctx.depth + 1,
-                        memo = ctx.memo.getOrElse(new Evaluator.EvalMemo)
+                        memo = ctx.memo.getOrElse(new Evaluator.EvalMemo),
+                        aggregateMemo = ctx.aggregateMemo
                       )
                       .map(cols :+ _)
                   case other => Right(cols :+ other)

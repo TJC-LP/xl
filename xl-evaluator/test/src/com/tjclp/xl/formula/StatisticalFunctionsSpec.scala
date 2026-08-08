@@ -431,3 +431,26 @@ class StatisticalFunctionsSpec extends FunSuite:
     // Median of 1..10 = (5 + 6) / 2 = 5.5
     assertEquals(result, Right(BigDecimal(5.5)))
   }
+
+  test("variadic aggregates preserve mixed-input traversal across accumulator types") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(1),
+      ref"A2" -> CellValue.Number(2),
+      ref"B1" -> CellValue.Number(3),
+      ref"C1" -> CellValue.Number(4),
+      ref"C2" -> CellValue.Number(5)
+    )
+
+    // Exercises a raw range, direct cell, evaluated array, and scalar in one traversal.
+    val args = "A1:A2,B1,(C1:C2)*1,6"
+    assertEquals(sheet.evaluateFormula(s"=SUM($args)"), Right(CellValue.Number(BigDecimal(21))))
+    assertEquals(
+      sheet.evaluateFormula(s"=AVERAGE($args)"),
+      Right(CellValue.Number(BigDecimal("3.5")))
+    )
+    assertEquals(
+      sheet.evaluateFormula(s"=MEDIAN($args)"),
+      Right(CellValue.Number(BigDecimal("3.5")))
+    )
+    assertEquals(sheet.evaluateFormula(s"=VAR($args)"), Right(CellValue.Number(BigDecimal("3.5"))))
+  }

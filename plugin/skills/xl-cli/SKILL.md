@@ -107,6 +107,7 @@ xl -f <file> -o <out> import <csv-file> --new-sheet "Data"
 xl -f <file> -o <out> import-md <table.md> --start A1   # GFM markdown table import (0.11.3+; '-' = stdin)
 xl -f <file> -o <out> recalc                          # Refresh every formula's cached value (0.12.6+)
 xl -f <file> -o <out> recalc --tables                 # Also seed data-table interior caches (0.19.0)
+xl -f <file> -o <out> recalc --parallel 4             # Opt-in independent-wave evaluation
 ```
 
 ### Compare & Query (read-only, 0.11.3+)

@@ -1,5 +1,7 @@
 package com.tjclp.xl.formula.eval
 
+import java.util.concurrent.atomic.AtomicLong
+
 import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, EvalContext}
 import com.tjclp.xl.formula.graph.DependencyGraph
@@ -13,6 +15,8 @@ import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 import com.tjclp.xl.SheetName
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
+
+import scala.collection.concurrent.TrieMap
 import scala.math.BigDecimal
 import scala.util.boundary
 import scala.util.boundary.break
@@ -87,6 +91,19 @@ object Evaluator:
    */
   def instance(workbookPath: Option[String]): Evaluator =
     new EvaluatorImpl(workbookPath = workbookPath)
+
+  /**
+   * Internal evaluator for one workbook-recalculation generation.
+   *
+   * Public/direct evaluation deliberately has no aggregate memo: its one-shot semantics and
+   * allocation profile stay unchanged. WorkbookEvaluator alone creates this capability and shares
+   * it across the generation's sequential or parallel cell evaluations.
+   */
+  private[formula] def recalculationInstance(
+    rng: Rng,
+    aggregateMemo: AggregateMemo
+  ): Evaluator =
+    new EvaluatorImpl(rng = rng, aggregateMemo = Some(aggregateMemo))
 
   /**
    * Evaluator instance that allows array results to propagate.
@@ -345,7 +362,8 @@ object Evaluator:
     depth: Int = 0,
     rng: Rng = Rng.system,
     memo: EvalMemo = new EvalMemo,
-    workbookPath: Option[String] = None
+    workbookPath: Option[String] = None,
+    aggregateMemo: Option[AggregateMemo] = None
   ): Either[EvalError, CellValue] =
     boundary:
       // GH-161 review: Add recursion depth limit to prevent stack overflow on circular refs
@@ -377,7 +395,8 @@ object Evaluator:
             depth + 1,
             rng = rng,
             memo = Some(memo),
-            workbookPath = workbookPath
+            workbookPath = workbookPath,
+            aggregateMemo = aggregateMemo
           )
             .eval(expr, targetSheet, clock, workbook) match
             case Right(result) => Right(EvalResult.toCellValue(result))
@@ -438,6 +457,130 @@ object Evaluator:
           forSheet.update(at, computed)
           computed
 
+  /** Observable counters for focused aggregate-memo tests and profiling. */
+  private[formula] final case class AggregateMemoStats(
+    hits: Long,
+    fills: Long,
+    bypasses: Long,
+    entries: Int
+  )
+
+  /**
+   * Distinguishes the two aggregate evaluators, whose coercion contracts are not interchangeable.
+   */
+  private[formula] enum AggregateMemoMode:
+    case FunctionCall
+    case TypedNode
+
+  /**
+   * One calculation generation's memo for a single raw-range aggregate.
+   *
+   * A memo instance belongs to exactly one non-iterative workbook recalculation generation. Keys
+   * therefore use the logical sheet name rather than retaining every immutable `Sheet` snapshot:
+   * the formula graph guarantees that every formula cell in an explicit range is evaluated before
+   * its aggregate consumer, after which that range cannot change again in the one-pass generation.
+   * This is what lets same-sheet sequential consumers reuse a result even though each cache write
+   * creates a new `Sheet` object. Iterative recalculation never receives this capability. Range
+   * anchors are intentionally absent because they affect formula dragging, never values read.
+   *
+   * A per-key entry synchronizes the first eligible fold. This gives parallel waves single-flight
+   * behavior instead of allowing every cold reader to scan the same range before a TrieMap
+   * `putIfAbsent` wins. Ineligible ranges are marked once, then every reader computes outside the
+   * monitor. Results are immutable `Either[EvalError, BigDecimal]` values; errors memoize exactly
+   * like successes.
+   */
+  private[formula] final class AggregateMemo:
+    private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
+    private val hitCount = new AtomicLong(0L)
+    private val fillCount = new AtomicLong(0L)
+    private val bypassCount = new AtomicLong(0L)
+
+    def getOrCompute(
+      targetSheet: Sheet,
+      range: CellRange,
+      aggregatorId: String,
+      mode: AggregateMemoMode
+    )(
+      compute: => Either[EvalError, BigDecimal]
+    ): Either[EvalError, BigDecimal] =
+      val key = AggregateMemoKey(targetSheet.name, range.start, range.end, aggregatorId, mode)
+      val entry = entries.getOrElseUpdate(key, new AggregateMemoEntry)
+      entry.lookupOrCompute(cacheable(targetSheet, range))(compute) match
+        case AggregateMemoLookup.Hit(value) =>
+          hitCount.incrementAndGet()
+          value
+        case AggregateMemoLookup.Filled(value) =>
+          fillCount.incrementAndGet()
+          value
+        case AggregateMemoLookup.Bypass =>
+          bypassCount.incrementAndGet()
+          compute
+
+    def stats: AggregateMemoStats =
+      AggregateMemoStats(
+        hits = hitCount.get(),
+        fills = fillCount.get(),
+        bypasses = bypassCount.get(),
+        entries = entries.size
+      )
+
+    private def cacheable(targetSheet: Sheet, range: CellRange): Boolean =
+      def isUncachedFormula(value: CellValue): Boolean = value match
+        case CellValue.Formula(_, None, _) => true
+        case _ => false
+
+      val containsUncachedFormula =
+        if range.cellCount <= targetSheet.cells.size.toLong then
+          range.cells.exists(ref =>
+            targetSheet.cells.get(ref).exists(c => isUncachedFormula(c.value))
+          )
+        else
+          targetSheet.cells.iterator.exists { case (ref, cell) =>
+            range.contains(ref) && isUncachedFormula(cell.value)
+          }
+      !containsUncachedFormula
+
+  /** Generation-local logical key; anchors and transient immutable Sheet identities are absent. */
+  private final case class AggregateMemoKey(
+    targetSheet: SheetName,
+    start: ARef,
+    end: ARef,
+    aggregatorId: String,
+    mode: AggregateMemoMode
+  )
+
+  private enum AggregateMemoState:
+    case Unchecked
+    case Uncacheable
+    case Cached(value: Either[EvalError, BigDecimal])
+
+  private enum AggregateMemoLookup:
+    case Hit(value: Either[EvalError, BigDecimal])
+    case Filled(value: Either[EvalError, BigDecimal])
+    case Bypass
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private final class AggregateMemoEntry:
+    private var state: AggregateMemoState = AggregateMemoState.Unchecked
+
+    def lookupOrCompute(
+      cacheable: => Boolean
+    )(
+      compute: => Either[EvalError, BigDecimal]
+    ): AggregateMemoLookup = synchronized {
+      state match
+        case AggregateMemoState.Cached(value) => AggregateMemoLookup.Hit(value)
+        case AggregateMemoState.Uncacheable => AggregateMemoLookup.Bypass
+        case AggregateMemoState.Unchecked =>
+          if cacheable then
+            val value = compute
+            state = AggregateMemoState.Cached(value)
+            AggregateMemoLookup.Filled(value)
+          else
+            state = AggregateMemoState.Uncacheable
+            AggregateMemoLookup.Bypass
+    }
+
 /**
  * GH-344: the single typed-result → CellValue table, shared by the cross-sheet recursion
  * (Evaluator.evalCrossSheetFormula) and the public evaluation boundary (SheetEvaluator) so a value
@@ -485,7 +628,8 @@ private class EvaluatorImpl(
   bindings: Map[String, Any] = Map.empty,
   rng: Rng = Rng.system,
   resolvingNames: Set[String] = Set.empty,
-  workbookPath: Option[String] = None
+  workbookPath: Option[String] = None,
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
@@ -496,6 +640,9 @@ private class EvaluatorImpl(
    * derived evaluator of the pass via EvaluatorWithDepth).
    */
   protected def memoOpt: Option[Evaluator.EvalMemo] = None
+
+  /** One workbook recalculation generation's raw-range aggregate memo, absent for public eval. */
+  protected def aggregateMemoOpt: Option[Evaluator.AggregateMemo] = aggregateMemo
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def eval[A](
@@ -571,7 +718,8 @@ private class EvaluatorImpl(
                           currentDepth,
                           rng,
                           memo,
-                          workbookPath
+                          workbookPath,
+                          aggregateMemoOpt
                         )
                       }
                       .flatMap(evaluatedValue =>
@@ -639,7 +787,8 @@ private class EvaluatorImpl(
                     currentDepth,
                     rng,
                     memo,
-                    workbookPath
+                    workbookPath,
+                    aggregateMemoOpt
                   )
               }
               .flatMap(evaluatedValue => decodeOrCarried(at, Cell(at, evaluatedValue), decode))
@@ -764,7 +913,18 @@ private class EvaluatorImpl(
             // GH-411: the ambient name-cycle guard rides along so a name's refersTo cannot
             // re-enter itself through a range slot
             Evaluator.resolveRangeLocation(location, sheet, workbook, resolvingNames).flatMap {
-              case (targetSheet, range) => evalAggregateNode(agg, range, targetSheet)
+              case (targetSheet, range) =>
+                aggregateMemoOpt match
+                  case Some(memo) =>
+                    memo.getOrCompute(
+                      targetSheet,
+                      range,
+                      agg.name,
+                      Evaluator.AggregateMemoMode.TypedNode
+                    ) {
+                      evalAggregateNode(agg, range, targetSheet)
+                    }
+                  case None => evalAggregateNode(agg, range, targetSheet)
             }
 
       case call: TExpr.Call[?] =>
@@ -800,7 +960,8 @@ private class EvaluatorImpl(
             rng,
             Some(callMemo),
             resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
-            workbookPath
+            workbookPath,
+            aggregateMemoOpt
           )
             .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -815,7 +976,8 @@ private class EvaluatorImpl(
           bindings,
           rng,
           Some(callMemo),
-          workbookPath
+          workbookPath,
+          aggregateMemoOpt
         )
         call.spec.eval(call.args, ctx)
 
@@ -905,7 +1067,8 @@ private class EvaluatorImpl(
               rng,
               memoOpt,
               resolvingNames,
-              workbookPath
+              workbookPath,
+              aggregateMemoOpt
             )
               .eval(resolved.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell) match
               case Right(value) => Right(env + (name -> unwrapBindingValue(value)))
@@ -948,7 +1111,8 @@ private class EvaluatorImpl(
             rng,
             memoOpt,
             resolvingNames,
-            workbookPath
+            workbookPath,
+            aggregateMemoOpt
           )
             .eval(resolvedBody.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
     }
@@ -1048,7 +1212,8 @@ private class EvaluatorImpl(
                         rng,
                         memoOpt,
                         resolvingNames + key,
-                        workbookPath
+                        workbookPath,
+                        aggregateMemoOpt
                       )
                         .eval(
                           resolved.asInstanceOf[TExpr[Any]],
@@ -1459,7 +1624,15 @@ private class EvaluatorWithDepth(
   rng: Rng = Rng.system,
   memo: Option[Evaluator.EvalMemo] = None,
   resolvingNames: Set[String] = Set.empty,
-  workbookPath: Option[String] = None
-) extends EvaluatorImpl(allowArrayResults, bindings, rng, resolvingNames, workbookPath):
+  workbookPath: Option[String] = None,
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None
+) extends EvaluatorImpl(
+      allowArrayResults,
+      bindings,
+      rng,
+      resolvingNames,
+      workbookPath,
+      aggregateMemo
+    ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo

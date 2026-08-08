@@ -908,11 +908,26 @@ object WriteCommands:
    * cycles. Every CLI verb that recalculates goes through here, so an iterate-declared circular
    * book fixpoints under `batch` and the structural verbs exactly as it does under `recalc`.
    */
-  private def recalcHonoringCalcPr(wb: Workbook): RecalcResult =
-    wb.metadata.calcPr
-      .filter(_.iterativeCalculation)
-      .map(IterativeCalc.fromCalcPr)
-      .fold(wb.recalculate())(it => wb.recalculate(Clock.system, it))
+  private final case class RecalcRun(result: RecalcResult, advisory: Option[String])
+
+  private def recalcHonoringCalcPr(
+    wb: Workbook,
+    parallel: Option[Int] = None
+  ): RecalcRun =
+    wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr) match
+      case Some(iterative) =>
+        RecalcRun(
+          wb.recalculate(Clock.system, iterative),
+          parallel.map(_ =>
+            "NOTE: --parallel ignored — the book declares iterative calculation " +
+              "(<calcPr iterate=\"1\"/>), which fixpoints sequentially"
+          )
+        )
+      case None =>
+        RecalcRun(
+          parallel.fold(wb.recalculate())(wb.recalculateParallel),
+          None
+        )
 
   /**
    * Cells whose value (or formula TEXT — a structural edit rewrites references) differs between two
@@ -947,15 +962,12 @@ object WriteCommands:
     import DependencyGraph.QualifiedRef
     val seeded: Set[QualifiedRef] =
       seeds.iterator.flatMap((name, refs) => refs.iterator.map(QualifiedRef(name, _))).toSet
-    val dynamic: Set[QualifiedRef] =
-      wb.sheets.iterator.flatMap { s =>
-        DependencyGraph.dynamicCells(s).iterator.map(QualifiedRef(s.name, _))
-      }.toSet
+    val dynamic: Set[QualifiedRef] = DependencyGraph.dynamicCells(wb)
     val roots = seeded ++ dynamic
     if roots.isEmpty then Map.empty
     else
-      val (_, dependents) = DependencyGraph.fromWorkbookBounded(wb)
-      (roots ++ DependencyGraph.qualifiedTransitiveDependents(dependents, roots))
+      val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(wb)
+      (roots ++ dependencyIndex.transitiveDependents(roots))
         .groupMap(_.sheet)(_.ref)
 
   /**
@@ -1166,7 +1178,7 @@ object WriteCommands:
    * verb that refreshes an entire book on purpose.
    */
   private def scopedRecalc(before: Workbook, edited: Workbook): (Workbook, RecalcResult) =
-    val result = recalcHonoringCalcPr(edited)
+    val result = recalcHonoringCalcPr(edited).result
     val cone = dirtyCone(edited, changedRefs(before, edited))
     (applyConeCaches(edited, result.workbook, cone), scopeToCone(result, cone))
 
@@ -1309,25 +1321,31 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean = false,
     seedTables: Boolean = false,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    parallel: Option[Int] = None
   ): IO[String] =
-    val result = recalcHonoringCalcPr(wb)
-    val prepared: IO[(Workbook, Vector[SeedTableWarning])] =
-      if !seedTables then IO.pure((result.workbook, Vector.empty))
-      else
-        IO.fromEither(
-          result.workbook
-            .seedDataTablesReport()
-            .left
-            .map(err => new Exception(err.message))
-        ).map(report => (report.workbook, report.warnings))
-    prepared.flatMap { case (workbook, warnings) =>
-      writeWorkbook(workbook, outputPath, config, stream).flatMap { _ =>
-        val tableNote = if seedTables then "\nSeeded data table interior caches" else ""
-        val warningLines = warnings.map(w => s"\n${renderSeedWarning(w)}").mkString
-        val rendered =
-          s"${formatRecalcSummary(result)}$tableNote$warningLines\n${Format.saveSuffix(outputPath, stream)}"
-        strictGate(policy, rendered, Some(result), warnings)
+    // Keep the expensive pure recalculation inside the returned IO. In particular, constructing an
+    // IO value must not print the iterative fallback advisory or start consuming CPU.
+    IO.delay(recalcHonoringCalcPr(wb, parallel)).flatMap { run =>
+      val result = run.result
+      val prepared: IO[(Workbook, Vector[SeedTableWarning])] =
+        if !seedTables then IO.pure((result.workbook, Vector.empty))
+        else
+          IO.fromEither(
+            result.workbook
+              .seedDataTablesReport()
+              .left
+              .map(err => new Exception(err.message))
+          ).map(report => (report.workbook, report.warnings))
+      prepared.flatMap { case (workbook, warnings) =>
+        writeWorkbook(workbook, outputPath, config, stream).flatMap { _ =>
+          val tableNote = if seedTables then "\nSeeded data table interior caches" else ""
+          val advisory = run.advisory.fold("")(note => s"\n$note")
+          val warningLines = warnings.map(w => s"\n${renderSeedWarning(w)}").mkString
+          val rendered =
+            s"${formatRecalcSummary(result)}$tableNote$advisory$warningLines\n${Format.saveSuffix(outputPath, stream)}"
+          strictGate(policy, rendered, Some(result), warnings)
+        }
       }
     }
 

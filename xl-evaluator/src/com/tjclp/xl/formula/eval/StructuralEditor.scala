@@ -287,7 +287,7 @@ object StructuralEditor:
     // reads it can have changed. Cells whose own text the shift rewrote are handled separately (a
     // rewritten reference always drops its cache below); this set is about the ones that do not.
     lazy val staleCaches: Set[QualifiedRef] =
-      val (_, dependents) = DependencyGraph.fromWorkbookBounded(wb)
+      val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(wb)
       val axisIndex0: ARef => Int = r => if isRow then r.row.index0 else r.col.index0
       // The narrowing is gated too, not just the cache-carrying decision below: `staleCaches` also
       // feeds `keepNonParticipant`, which runs on EVERY path. A cross-sheet reader that reaches the
@@ -296,17 +296,26 @@ object StructuralEditor:
       // DEFAULT recalculating path then never refreshes (it drops out of `changedRefs`, so the
       // dirty cone misses it), silently resurfacing a poisoned <v> from a verb that promises to
       // recalculate. Off the flag, seeds stay the whole edited sheet, byte-for-byte as before.
-      val seeds = dependents.keySet.filter(q =>
+      val pointSeeds = dependencyIndex.pointDependents.keySet.filter(q =>
         q.sheet == target && (!preserveUntouchedCaches || axisIndex0(q.ref) >= at)
       )
+      // Symbolic ranges have no materialized cell keys. A structural edit affects a declared range
+      // when its edited axis reaches the cut; add its readers directly, then close transitively.
+      val rangeReaders = dependencyIndex.rangeDependents
+        .getOrElse(target, Vector.empty)
+        .iterator
+        .filter { entry =>
+          !preserveUntouchedCaches ||
+          (if isRow then entry.range.rowEnd.index0 >= at else entry.range.colEnd.index0 >= at)
+        }
+        .flatMap(_.dependents)
+        .toSet
       // A dynamic reference can reach the edited sheet without contributing a static graph edge.
       // Conservatively invalidate every dynamic cell and its static dependent closure: the edit
       // may have changed what its unchanged reference text resolves to.
-      val dynamic = wb.sheets.iterator.flatMap { s =>
-        DependencyGraph.dynamicCells(s).iterator.map(r => QualifiedRef(s.name, r))
-      }.toSet
-      seeds ++ dynamic ++
-        DependencyGraph.qualifiedTransitiveDependents(dependents, seeds ++ dynamic)
+      val dynamic = DependencyGraph.dynamicCells(wb)
+      val roots = pointSeeds ++ rangeReaders ++ dynamic
+      roots ++ dependencyIndex.transitiveDependents(roots)
     val updatedSheets = wb.sheets.map { s =>
       // 1. Pure cell/merge/property shift — only on the edited sheet. Its own typed charts
       //    (anchors + same-sheet data refs) are handled INSIDE the shift (GH-222).

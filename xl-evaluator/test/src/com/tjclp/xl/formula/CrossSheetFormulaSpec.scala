@@ -508,6 +508,42 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     }
   }
 
+  test("evaluateWithDependencyCheck threads the refreshed sheet through self-qualified reads") {
+    val stale = CellValue.Number(BigDecimal(999))
+    val sheet = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Formula("=1+1", Some(stale)),
+      // The local A1 edge fixes the evaluation order; the qualified read must then see that same
+      // refreshed snapshot rather than Main from the caller's original workbook.
+      ref"B1" -> CellValue.Formula("=A1+Main!A1")
+    )
+    val result = sheet.evaluateWithDependencyCheck(workbook = Some(workbookWith(sheet)))
+
+    assertEquals(result.map(_(ref"B1")), Right(CellValue.Number(BigDecimal(4))))
+  }
+
+  test("evaluateWithDependencyCheck defers INDIRECT hidden behind a defined name") {
+    val candidates = Vector(ref"A1", ref"B1")
+    val probe = candidates.foldLeft(sheetWith("Main")) { (sheet, at) =>
+      sheet.put(at, CellValue.Formula("=1+1"))
+    }
+    val (reader, target) =
+      DependencyGraph.topologicalSort(DependencyGraph.fromSheet(probe)) match
+        case Right(first :: second :: _) => (first, second)
+        case other => fail(s"expected two acyclic formula nodes, got $other")
+    val stale = CellValue.Number(BigDecimal(999))
+    val sheet = sheetWith(
+      "Main",
+      reader -> CellValue.Formula("=DynamicName", Some(stale)),
+      target -> CellValue.Formula("=1+1", Some(stale))
+    )
+    val wb = workbookWith(sheet).withDefinedName("DynamicName", s"INDIRECT(\"${target.toA1}\")")
+
+    val result = sheet.evaluateWithDependencyCheck(workbook = Some(wb))
+
+    assertEquals(result.map(_(reader)), Right(CellValue.Number(BigDecimal(2))))
+  }
+
   // ===== Cross-Sheet Cycle Detection Tests =====
 
   test("DependencyGraph.fromWorkbook: extracts cross-sheet dependencies") {

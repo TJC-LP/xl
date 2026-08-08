@@ -9,6 +9,7 @@
 ### What Works (Production-Ready)
 
 **New in 0.19.2 "Fixpoint"** (2026-08-06) — recalculation & seeding integrity, wave 24:
+- ✅ **Opt-in wave-parallel recalculation** (#520) — `Workbook.recalculateParallel(N)` / `xl recalc --parallel N` evaluates independent static waves concurrently, pins one clock generation, and folds results deterministically; dynamic references remain in the sequential evaluate-last bucket and iterative books retain their sequential SCC fixpoint
 - ✅ **One pass = the global fixpoint** (#492, #491) — iterative recalculation walks the SCC condensation in dependency-first order instead of splitting into preOrder / one flat Jacobi / postOrder, so no read can fall back to a stale cache and re-recalculating a correct multi-SCC circular book no longer corrupts it. `RecalcResult.cycles` / `.unconverged` / `.certified` report per-component verdicts
 - ✅ **Cycles warm-start from numeric caches** (#469) — zero-seeding no longer wipes valid caches of mutually-ISERROR-guarded pairs
 - ✅ **Data-table what-if lanes evaluate their precedent cone** (#493, #494) — acyclic grids no longer seed silently FLAT, guarded XIRR corners seed real rates, and a guard resolving to its error arm surfaces as `ErrorGuardFired` instead of banking its text arm

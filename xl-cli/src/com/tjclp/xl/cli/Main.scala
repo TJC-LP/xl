@@ -1,10 +1,16 @@
 package com.tjclp.xl.cli
 
-import java.nio.file.Path
+import java.nio.file.{
+  AtomicMoveNotSupportedException,
+  FileAlreadyExistsException,
+  Files,
+  Path,
+  StandardCopyOption
+}
 
 import scala.concurrent.duration.*
 
-import cats.effect.{ExitCode, IO}
+import cats.effect.{ExitCode, IO, Resource}
 import cats.effect.unsafe.IORuntimeConfig
 import cats.implicits.*
 import cats.syntax.parallel.*
@@ -75,6 +81,13 @@ object Main
       version = BuildInfo.version
     ):
 
+  /** Rendered command result plus whether a staged output is complete and eligible to commit. */
+  private[cli] final case class CommandOutcome(
+    exitCode: ExitCode,
+    output: String,
+    outputComplete: Boolean
+  )
+
   /**
    * GH-519: SIGTERM/SIGINT must terminate the process even mid-recalculation. The evaluator is a
    * single non-yielding compute step, so fiber cancellation is only observed once the whole
@@ -82,8 +95,8 @@ object Main
    * kept computing at full CPU for the entire remaining recalc and then discarded the result. A
    * finite timeout lets the JVM (and the native image, which installs exit handlers by default on
    * GraalVM 25+) halt promptly after the cancellation attempt; the torn-`-o`-output window this
-   * leaves is identical to the pre-existing SIGKILL reality, and `-i` writes stay atomic (temp +
-   * ATOMIC_MOVE).
+   * leaves is bounded by staging every `-o`/`-i` mutation beside its destination and replacing the
+   * destination only after a complete write.
    *
    * The CPU-starvation checker is disabled outright: xl is a batch compute process, so "your
    * compute pool is busy" is the expected steady state, and on small containers the checker drowned
@@ -109,7 +122,17 @@ object Main
       (fileOpt, outputOpt.orNone, inPlaceOpt, backendOpt, maxSizeOpt, streamOpt, sheetsCmd).mapN {
         (file, outOpt, inPlace, backend, maxSize, stream, cmd) =>
           runWithOutput(outOpt, inPlace, file) { (out, display) =>
-            runResult(file, None, out, display, backend, maxSize, stream, cmd)
+            runResult(
+              file,
+              None,
+              out,
+              display,
+              backend,
+              maxSize,
+              stream,
+              cmd,
+              strictFailureDiscardsOutput = inPlace
+            )
           }
       }
 
@@ -148,7 +171,18 @@ object Main
         sheetWriteSubcmds
       ).mapN { (file, sheet, outOpt, inPlace, backend, maxSize, stream, policy, cmd) =>
         runWithOutput(outOpt, inPlace, file) { (out, display) =>
-          runResult(file, sheet, out, display, backend, maxSize, stream, cmd, policy)
+          runResult(
+            file,
+            sheet,
+            out,
+            display,
+            backend,
+            maxSize,
+            stream,
+            cmd,
+            policy,
+            strictFailureDiscardsOutput = inPlace
+          )
         }
       }
 
@@ -1215,16 +1249,25 @@ autoNoTable book needs, since Excel never recomputes tables on open.
 USAGE:
   xl -f in.xlsx -o out.xlsx recalc
   xl -f in.xlsx -i recalc
-  xl -f in.xlsx -o out.xlsx recalc --tables   # Also seed data-table interiors"""
+  xl -f in.xlsx -o out.xlsx recalc --tables       # Also seed data-table interiors
+  xl -f in.xlsx -o out.xlsx recalc --parallel 4   # Independent regions on 4 threads"""
 
   private val recalcTablesOpt: Opts[Boolean] =
     Opts
       .flag("tables", "Also seed data-table interior caches (default: pinned caches)")
       .orFalse
 
+  // GH-520: results are element-for-element identical to the sequential pass; books declaring
+  // iterative calculation ignore the flag (cyclic fixpoints are sequential) with a stderr note.
+  private val recalcParallelOpt: Opts[Option[Int]] =
+    Opts
+      .option[Int]("parallel", "Evaluate independent formula regions on N threads (GH-520)")
+      .validate("--parallel must be at least 1")(_ >= 1)
+      .orNone
+
   val recalcCmd: Opts[CliCommand] =
     Opts.subcommand("recalc", recalcHelp) {
-      recalcTablesOpt.map(CliCommand.Recalc.apply)
+      (recalcTablesOpt, recalcParallelOpt).mapN(CliCommand.Recalc.apply)
     }
 
   // --- Import command ---
@@ -1682,8 +1725,8 @@ EXAMPLES:
    * verbatim (counts, failing refs, convergence verdict, plus the strict reason) — only the exit
    * code becomes 1. With `-i` that non-success code means the temp file is discarded and the input
    * is left untouched, which is the atomic reading of "this book did not pass the gate" — so the
-   * summary's `Saved:` line is rewritten to say exactly that. With `-o` the output file genuinely
-   * is written and `Saved:` stands.
+   * summary's `Saved:` line is rewritten to say exactly that. With `-o` the completed temp is still
+   * committed and `Saved:` stands.
    */
   private def runResult(
     filePath: Path,
@@ -1694,30 +1737,38 @@ EXAMPLES:
     maxSizeOpt: Option[Long],
     stream: Boolean,
     cmd: CliCommand,
-    policy: WritePolicy = WritePolicy.default
-  ): IO[(ExitCode, String)] =
+    policy: WritePolicy = WritePolicy.default,
+    strictFailureDiscardsOutput: Boolean = false
+  ): IO[CommandOutcome] =
     execute(filePath, sheetNameOpt, outputOpt, backendOpt, maxSizeOpt, stream, cmd, policy).attempt
       .map {
         case Right(output) =>
-          (ExitCode.Success, renderWithTarget(output, outputOpt, displayOpt))
+          CommandOutcome(
+            ExitCode.Success,
+            renderWithTarget(output, outputOpt, displayOpt),
+            outputComplete = true
+          )
         case Left(strict: StrictFailure) =>
-          (
+          val rendered = renderWithTarget(strict.summary, outputOpt, displayOpt)
+          CommandOutcome(
             ExitCode(1),
-            unsayTheSave(
-              renderWithTarget(strict.summary, outputOpt, displayOpt),
-              outputOpt,
-              displayOpt
-            )
+            if strictFailureDiscardsOutput then unsayTheSave(rendered, outputOpt, displayOpt)
+            else rendered,
+            outputComplete = true
           )
         case Left(err) =>
-          (ExitCode.Error, renderErrorMessage(err, outputOpt, displayOpt))
+          CommandOutcome(
+            ExitCode.Error,
+            renderErrorMessage(err, outputOpt, displayOpt),
+            outputComplete = false
+          )
       }
 
   /**
    * GH-496: an in-place run whose exit code is non-success never commits its temp file, so the
    * summary a write command already built ("...\nSaved: <path>") describes a save that did not
-   * happen. Replace that line with what is true. Only `-i` is affected: with `-o` the output file
-   * IS written before the gate runs, so its `Saved:` line stays.
+   * happen. Replace that line with what is true. Only `-i` is affected: with `-o` the completed
+   * output is committed even though the gate selects exit code 1, so its `Saved:` line stays.
    */
   private def unsayTheSave(
     text: String,
@@ -1763,8 +1814,8 @@ EXAMPLES:
     val message = Option(err.getMessage).getOrElse(err.toString)
     Format.errorSimple(renderWithTarget(message, outputOpt, displayOpt))
 
-  private def printRunResult(result: (ExitCode, String)): IO[ExitCode] =
-    IO.println(result._2).as(result._1)
+  private def printRunResult(result: CommandOutcome): IO[ExitCode] =
+    IO.println(result.output).as(result.exitCode)
 
   private def runInfo(): IO[ExitCode] =
     IO.println(formatFunctionList()).as(ExitCode.Success)
@@ -2483,7 +2534,7 @@ EXAMPLES:
         WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy)
       )
 
-    case CliCommand.Recalc(tables) =>
+    case CliCommand.Recalc(tables, parallel) =>
       // A recalculation asked not to recalculate is a contradiction, not a no-op: say so rather
       // than writing a file the caller will read as freshened (GH-468).
       if policy.noRecalc then
@@ -2494,7 +2545,7 @@ EXAMPLES:
         )
       else
         requireOutput("recalc", outputOpt, backendOpt, stream)(
-          WriteCommands.recalc(wb, _, _, _, tables, policy)
+          WriteCommands.recalc(wb, _, _, _, tables, policy, parallel)
         )
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
@@ -2796,11 +2847,13 @@ EXAMPLES:
    * Dispatch `run` with effective output path from --output / --in-place flags.
    *
    * The callback receives (writePath, displayPath) and returns the exit code plus rendered output
-   * without printing it. The paths differ only for `-i`, where writes go to a temp file that is
-   * moved onto the input before the successful output is printed (GH-464).
+   * without printing it. For either write mode, writes go to a sibling temp file that is moved onto
+   * the destination before successful output is printed (GH-464, GH-521). Keeping the temp on the
+   * same filesystem permits an atomic replacement on supporting providers.
    *
    * Cases:
-   *   - `-o` only: writes directly to the output path
+   *   - `-o` only: writes to a sibling temp and commits every complete output, including the file
+   *     intentionally produced by a strict-validation exit
    *   - `-i` only: writes to a sibling temp file then atomically moves onto input. If the command
    *     exits with a non-success code OR throws, the temp is deleted and the original is untouched
    *   - Neither: passes `None` through (for read-only subcommands that don't need output)
@@ -2810,36 +2863,85 @@ EXAMPLES:
     outOpt: Option[Path],
     inPlace: Boolean,
     file: Path
-  )(execute: (Option[Path], Option[Path]) => IO[(ExitCode, String)]): IO[ExitCode] =
+  )(execute: (Option[Path], Option[Path]) => IO[CommandOutcome]): IO[ExitCode] =
     (outOpt, inPlace) match
       case (Some(_), true) =>
         IO.println(
           Format.errorSimple("--in-place (-i) and --output (-o) are mutually exclusive")
         ).as(ExitCode.Error)
-      case (Some(out), false) => execute(Some(out), Some(out)).flatMap(printRunResult)
+      case (Some(out), false) =>
+        runStagedOutput(out, ".xl-output-")(outcome => outcome.outputComplete)(execute)
       case (None, false) => execute(None, None).flatMap(printRunResult)
       case (None, true) =>
-        val tmpDir = Option(file.getParent).getOrElse(java.nio.file.Paths.get("."))
-        val tmpResource = cats.effect.Resource.make(
-          IO.blocking(java.nio.file.Files.createTempFile(tmpDir, ".xl-inplace-", ".xlsx"))
-        )(tmp => IO.blocking(java.nio.file.Files.deleteIfExists(tmp)).void)
+        runStagedOutput(file, ".xl-inplace-")(outcome =>
+          outcome.outputComplete && outcome.exitCode == ExitCode.Success
+        )(execute)
 
-        tmpResource.use { tmp =>
-          execute(Some(tmp), Some(file)).flatMap {
-            case result @ (ExitCode.Success, _) =>
-              // Atomic move: same directory guarantees same filesystem on POSIX/NTFS
-              IO.blocking(
-                java.nio.file.Files.move(
-                  tmp,
-                  file,
-                  java.nio.file.StandardCopyOption.REPLACE_EXISTING
-                )
-              ) *> printRunResult(result)
-            case result =>
-              // Non-success exit: leave original file alone; Resource cleans up temp
-              printRunResult(result)
-          }
+  /**
+   * Allocate a sibling staging path and register it with the JVM before handing it to a writer.
+   *
+   * The Resource finalizer is the normal cleanup path. `deleteOnExit` is the hard-shutdown
+   * backstop: the CLI runtime deliberately stops waiting after two seconds, so a canceled writer
+   * may not get enough time to run its finalizer before the JVM exits.
+   */
+  private def stagedOutput(target: Path, prefix: String): Resource[IO, Path] =
+    val directory = Option(target.getParent).getOrElse(Path.of("."))
+    val filename = Option(target.getFileName).fold("output.tmp")(_.toString)
+    val dot = filename.lastIndexOf('.')
+    val suffix = if dot >= 0 then filename.substring(dot) else ".tmp"
+    val acquire =
+      IO.blocking(Files.createTempFile(directory, prefix, suffix)).flatMap { tmp =>
+        IO.blocking(tmp.toFile.deleteOnExit()).attempt.flatMap {
+          case Right(_) => IO.pure(tmp)
+          case Left(error) =>
+            IO.blocking(Files.deleteIfExists(tmp)).attempt *> IO.raiseError[Path](error)
         }
+      }
+    Resource.make(acquire)(tmp => IO.blocking(Files.deleteIfExists(tmp)).void)
+
+  /** Run one command against a staging path and publish only an explicitly complete output. */
+  private def runStagedOutput(
+    target: Path,
+    prefix: String
+  )(
+    shouldCommit: CommandOutcome => Boolean
+  )(
+    execute: (Option[Path], Option[Path]) => IO[CommandOutcome]
+  ): IO[ExitCode] =
+    stagedOutput(target, prefix).use { tmp =>
+      execute(Some(tmp), Some(target)).flatMap { outcome =>
+        val commit =
+          if shouldCommit(outcome) then
+            // A read-only command may accept the global -o flag but never touch its staging file.
+            // An XLSX is necessarily non-empty, so do not replace a target with the untouched file.
+            IO.blocking(Files.size(tmp) > 0L).ifM(replaceAtomically(tmp, target), IO.unit)
+          else IO.unit
+        commit *> printRunResult(outcome)
+      }
+    }
+
+  /** Replace `target` atomically when supported, with the JDK-prescribed total fallback. */
+  private[cli] def replaceAtomically(source: Path, target: Path): IO[Unit] =
+    val atomic =
+      IO.blocking(
+        Files.move(
+          source,
+          target,
+          StandardCopyOption.ATOMIC_MOVE,
+          StandardCopyOption.REPLACE_EXISTING
+        )
+      ).void
+    val fallback =
+      IO.blocking(Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)).void
+    atomicMoveOrFallback(atomic, fallback)
+
+  /** Isolated for deterministic coverage of providers that reject `ATOMIC_MOVE`. */
+  private[cli] def atomicMoveOrFallback(atomic: IO[Unit], fallback: IO[Unit]): IO[Unit] =
+    atomic.handleErrorWith {
+      case _: AtomicMoveNotSupportedException => fallback
+      case _: FileAlreadyExistsException => fallback
+      case error => IO.raiseError(error)
+    }
 
   /** Require output path or raise user-friendly error, providing path to action */
   private def requireOutputAction(outputOpt: Option[Path], commandName: String)(
