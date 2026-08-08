@@ -972,6 +972,8 @@ object DependencyGraph:
   def fromWorkbook(
     workbook: com.tjclp.xl.workbooks.Workbook
   ): Map[QualifiedRef, Set[QualifiedRef]] =
+    // GH-522: expand any (sheet, range) once per build — see memoizedCells
+    val cellsFor = memoizedCells(unboundedQualifiedCells)
     workbook.sheets.flatMap { sheet =>
       sheet.cells.flatMap { case (cellRef, cell) =>
         cell.value match
@@ -980,7 +982,7 @@ object DependencyGraph:
           case CellValue.Formula(expression, _, _) =>
             val deps = FormulaParser.parse(expression) match
               case scala.util.Right(expr) =>
-                extractQualifiedDependencies(expr, sheet.name, workbook = Some(workbook))
+                extractQualifiedDependencies(expr, sheet.name, cellsFor, Some(workbook))
               case scala.util.Left(_) => Set.empty[QualifiedRef]
             Some(QualifiedRef(sheet.name, cellRef) -> deps)
           case _ => None
@@ -1002,13 +1004,15 @@ object DependencyGraph:
   ): (Map[QualifiedRef, Set[QualifiedRef]], Map[QualifiedRef, Set[QualifiedRef]]) =
     val bounds: Map[SheetName, Option[CellRange]] =
       workbook.sheets.map(s => s.name -> s.usedRange).toMap
-    val cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = (sheet, range) =>
+    // GH-522: expand any (sheet, range) once per build — see memoizedCells
+    val cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = memoizedCells { (sheet, range) =>
       bounds.get(sheet) match
         case Some(Some(b)) =>
           range.intersect(b) match
             case Some(clipped) => clipped.cells.map(ref => QualifiedRef(sheet, ref)).toSet
             case None => Set.empty
         case _ => Set.empty // empty or missing sheet: nothing to depend on
+    }
 
     val dependencies = workbook.sheets.flatMap { sheet =>
       sheet.cells.flatMap { case (cellRef, cell) =>
@@ -1025,14 +1029,7 @@ object DependencyGraph:
       }
     }.toMap
 
-    val dependents =
-      dependencies.foldLeft(Map.empty[QualifiedRef, Set[QualifiedRef]]) { case (acc, (ref, deps)) =>
-        deps.foldLeft(acc) { (acc2, dep) =>
-          acc2.updated(dep, acc2.getOrElse(dep, Set.empty) + ref)
-        }
-      }
-
-    (dependencies, dependents)
+    (dependencies, reverseEdges(dependencies))
 
   /**
    * GH-346: every node participating in a reference cycle of the workbook-level graph — the
@@ -1187,6 +1184,52 @@ object DependencyGraph:
     (sheet, range) => range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
 
   /**
+   * GH-522: expand any given (sheet, range) exactly once per graph build.
+   *
+   * A financial-model shape — many formulas each aggregating the same driver column — expanded the
+   * SAME range once per referencing formula: 9,900 × `SUM($A$1:$A$5000)` built ~50M QualifiedRefs
+   * (54 GB of a 135 GB recalc's allocation) where 5,000 suffice. The memo makes every referencing
+   * formula share one immutable Set instance; correctness is untouched because expansion is a pure
+   * function of (sheet, range) within one build (bounds are computed once up front and never change
+   * mid-build).
+   */
+  private def memoizedCells(
+    expand: (SheetName, CellRange) => Set[QualifiedRef]
+  ): (SheetName, CellRange) => Set[QualifiedRef] =
+    val cache = scala.collection.mutable.HashMap.empty[(SheetName, CellRange), Set[QualifiedRef]]
+    (sheet, range) => cache.getOrElseUpdate((sheet, range), expand(sheet, range))
+
+  /**
+   * GH-522: set union that iterates the smaller side into the larger — `Set(oneRef) ++ rangeSet`
+   * walks all 5,000 range elements today, once per operator node above a range reference. Union is
+   * commutative, and any result with more than 4 elements is a CHAMP HashSet whose iteration order
+   * is a function of its CONTENTS alone, so redirecting the merge cannot move any downstream order.
+   * When the larger side has 4 or fewer elements the left-to-right build is kept: small sets are
+   * insertion-ordered and Kahn's emitted order feeds off their iteration.
+   */
+  private def union(a: Set[QualifiedRef], b: Set[QualifiedRef]): Set[QualifiedRef] =
+    if a.size < b.size && b.size > 4 then b ++ a else a ++ b
+
+  /**
+   * GH-522: reverse-edge map built with a local mutable accumulator. The immutable foldLeft
+   * allocated a fresh outer-Map node chain per edge — 50M times on the shape above (8.5 GB). The
+   * insertion sequence is identical to the fold it replaces (same outer Map iterated in the same
+   * order, same per-key Set growth), so every per-key set — small insertion-ordered ones included —
+   * iterates exactly as before.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private[formula] def reverseEdges(
+    dependencies: Map[QualifiedRef, Set[QualifiedRef]]
+  ): Map[QualifiedRef, Set[QualifiedRef]] =
+    val acc = scala.collection.mutable.HashMap.empty[QualifiedRef, Set[QualifiedRef]]
+    dependencies.foreach { case (ref, deps) =>
+      deps.foreach { dep =>
+        acc(dep) = acc.getOrElse(dep, Set.empty) + ref
+      }
+    }
+    acc.toMap
+
+  /**
    * Extract all qualified cell references from TExpr.
    *
    * Similar to extractDependencies but returns QualifiedRef to track cross-sheet references.
@@ -1244,18 +1287,18 @@ object DependencyGraph:
         // GH-353: external-workbook refs target cells OUTSIDE the workbook — no edges ever
         case TExpr.ExternalRef(_, _, _, _) => Set.empty
         case TExpr.ExternalRange(_, _, _) => Set.empty
-        case TExpr.Add(l, r) => go(l) ++ go(r)
-        case TExpr.Sub(l, r) => go(l) ++ go(r)
-        case TExpr.Mul(l, r) => go(l) ++ go(r)
-        case TExpr.Div(l, r) => go(l) ++ go(r)
-        case TExpr.Pow(l, r) => go(l) ++ go(r)
-        case TExpr.Concat(l, r) => go(l) ++ go(r)
-        case TExpr.Eq(l, r) => go(l) ++ go(r)
-        case TExpr.Neq(l, r) => go(l) ++ go(r)
-        case TExpr.Lt(l, r) => go(l) ++ go(r)
-        case TExpr.Lte(l, r) => go(l) ++ go(r)
-        case TExpr.Gt(l, r) => go(l) ++ go(r)
-        case TExpr.Gte(l, r) => go(l) ++ go(r)
+        case TExpr.Add(l, r) => union(go(l), go(r))
+        case TExpr.Sub(l, r) => union(go(l), go(r))
+        case TExpr.Mul(l, r) => union(go(l), go(r))
+        case TExpr.Div(l, r) => union(go(l), go(r))
+        case TExpr.Pow(l, r) => union(go(l), go(r))
+        case TExpr.Concat(l, r) => union(go(l), go(r))
+        case TExpr.Eq(l, r) => union(go(l), go(r))
+        case TExpr.Neq(l, r) => union(go(l), go(r))
+        case TExpr.Lt(l, r) => union(go(l), go(r))
+        case TExpr.Lte(l, r) => union(go(l), go(r))
+        case TExpr.Gt(l, r) => union(go(l), go(r))
+        case TExpr.Gte(l, r) => union(go(l), go(r))
         // Unary operators
         case TExpr.ToInt(x) => go(x)
         case TExpr.UnaryPlus(x) => go(x)
@@ -1268,14 +1311,14 @@ object DependencyGraph:
           val values = call.spec.argSpec.toValues(call.args)
           values.foldLeft(Set.empty[QualifiedRef]) { (acc, value) =>
             value match
-              case ArgValue.Expr(expr) => acc ++ go(expr)
-              case ArgValue.Range(range) => acc ++ locCells(range)
-              case ArgValue.Cells(range) => acc ++ cellsFor(currentSheet, range)
+              case ArgValue.Expr(expr) => union(acc, go(expr))
+              case ArgValue.Range(range) => union(acc, locCells(range))
+              case ArgValue.Cells(range) => union(acc, cellsFor(currentSheet, range))
           }
 
         // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
         case TExpr.Let(bindings, body) =>
-          bindings.foldLeft(go(body)) { case (acc, (_, value)) => acc ++ go(value) }
+          bindings.foldLeft(go(body)) { case (acc, (_, value)) => union(acc, go(value)) }
         case TExpr.BindingRef(_) => Set.empty
         case TExpr.CoercedBindingRef(_, _) => Set.empty
 
