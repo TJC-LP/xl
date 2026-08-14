@@ -1,12 +1,15 @@
 # XL Project Status
 
-**Last Updated**: 2026-08-08 (0.19.2)
+**Last Updated**: 2026-08-14 (0.19.3)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.19.3 "Namesake"** (2026-08-14) — defined-name resolution indexed:
+- ✅ **Defined-name lookup is O(1)** (#535/GH-536) — name resolution was a linear scan of the name table and dynamic-name classification ran it per sheet × name (O(sheets × names²) per recalc); a production 96,384-name model went from >33 min (unfinished) to 8.2s, its `iterate="1"` original converges in 2/300 rounds in 8.4s, a 126,510-name sibling exhausting 400 rounds completes in 27s. Lazy per-metadata `DefinedNameIndex`, first-declared-wins, per-code-point case folding ≡ `equalsIgnoreCase`, property-tested against the scan it replaced. Follow-ups: #537 (iterative-path costs), #538 (mutation-API case sensitivity)
 
 **New in 0.19.2 "Fixpoint"** (2026-08-08) — recalculation & seeding integrity (wave 24) + the perf stack + two lint corruption classes:
 - ✅ **Recalculation 7–37× faster** (#521, #523, #524) — linear Kahn core, memoized range-edge expansion, aggregate-fold memoization w/ single-flight, stack-safe Tarjan; 9,900×SUM(5000): 47.9s→1.30s, 200k book: 95s→13.8s; SIGTERM now kills a mid-recalc process in ~2s (#519) and `recalc --parallel N` ships equivalence-gated (#520)

@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,455 tests passing.
 
-**Current Version**: **0.19.2** "Fixpoint" (recalculation & seeding integrity + perf stack + lint corruption classes, released 2026-08-08)
+**Current Version**: **0.19.3** "Namesake" (defined-name resolution indexed — O(sheets × names²) recalc scans removed, released 2026-08-14)
 
 ---
 
@@ -60,6 +60,10 @@ Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture cor
 ### v0.12.1 "Clean Sweep" — wave 7 (Released 2026-06-11)
 
 Every remaining open issue closed in one wave. **Conditional formatting** ([#136](https://github.com/TJC-LP/xl/issues/136)) is the headline — typed cellIs/expression/colorScale/dataBar/top10/text rules + `dxf` differential formats, `sheet.conditionalFormat` authoring with auto-priority, structural-edit range shifting, unmodeled families preserved byte-faithfully — alongside twelve fidelity/writer fixes: openpyxl comment subdirectory dialect (#292), RichText SST keying (#303), exact surgical SST counts (#304), `[Content_Types]` preservation (#314), identity-keyed source mappings (#315), activeTab (#294), fitToPage tri-state (#284), `Cell.comment` deprecated→`Sheet.comments` (#295). Codec `put` paths 2.4x faster (#297).
+
+### v0.19.3 "Namesake" — defined-name index (Released 2026-08-14)
+
+One-fix patch ([#535](https://github.com/TJC-LP/xl/pull/535), [GH-536](https://github.com/TJC-LP/xl/issues/536)): defined-name resolution was a linear scan of the name table, and dynamic-name classification ran it for every sheet × name — O(sheets × names²) per recalculation. Found live on a bank-authored model with 96,384 defined names that could not finish a recalc (>33 min, killed; 98.5% of JFR samples in the scan); with the per-metadata lazy `DefinedNameIndex` it completes in 8.2s. Case folding is per code point, exactly the `equalsIgnoreCase` relation, property-tested against the scan it replaced. Follow-ups: [#537](https://github.com/TJC-LP/xl/issues/537) (iterative-calculation path costs), [#538](https://github.com/TJC-LP/xl/issues/538) (mutation-API case sensitivity).
 
 ### v0.19.2 "Fixpoint" — wave 24 (Released 2026-08-06)
 
