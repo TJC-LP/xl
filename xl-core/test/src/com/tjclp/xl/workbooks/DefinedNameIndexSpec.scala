@@ -54,6 +54,15 @@ class DefinedNameIndexSpec extends ScalaCheckSuite:
     }
   }
 
+  test("resolve folds supplementary-plane case pairs by code point") {
+    val capitalLongI = new String(Character.toChars(0x10400))
+    val smallLongI = new String(Character.toChars(0x10428))
+    val definedName = DefinedName(capitalLongI, "0.08")
+
+    assert(capitalLongI.equalsIgnoreCase(smallLongI))
+    assertEquals(DefinedNameIndex(Vector(definedName)).resolve(smallLongI, None), Some(definedName))
+  }
+
   property("resolve ≡ declaration-order linear scan for every (table, query, scope)") {
     forAll(genTable, genName, Gen.option(Gen.choose(0, 4))) { (table, query, sheetIdx) =>
       val index = DefinedNameIndex(table)

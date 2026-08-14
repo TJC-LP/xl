@@ -9,12 +9,12 @@ package com.tjclp.xl.workbooks
  * per-reference hot path and real bank-authored workbooks carry name tables of 10^5 entries, which
  * made recalculation O(sheets × names²) through linear scans (GH-536).
  *
- * Keys are the per-character `Character.toLowerCase(Character.toUpperCase(c))` form of the name.
- * `String.equalsIgnoreCase` specifies per character: the characters are equal, or applying
- * `toUpperCase` then `toLowerCase` to each yields the same character — so two names compare equal
- * under `equalsIgnoreCase` iff they have equal length and equal keys. Key equality is therefore the
- * whole matching rule; lookup performs no further string comparison. First-declared-wins is baked
- * in at build time, so lookup is one map probe per scope.
+ * Keys are the per-code-point `Character.toLowerCase(Character.toUpperCase(c))` form of the name.
+ * Walking Unicode code points rather than UTF-16 code units is required for supplementary-plane
+ * case pairs that `String.equalsIgnoreCase` treats as equal. Two names compare equal under
+ * `equalsIgnoreCase` iff they have equal length and equal keys. Key equality is therefore the whole
+ * matching rule; lookup performs no further string comparison. First-declared-wins is baked in at
+ * build time, so lookup is one map probe per scope.
  *
  * Memory: one key string per name plus two maps — tens of MB at 10^5 names. The index is reached
  * only through the lazy [[WorkbookMetadata.definedNameIndex]], so paths that never resolve a name
@@ -61,11 +61,16 @@ private[xl] object DefinedNameIndex:
     )
 
   /**
-   * The per-character `toLowerCase(toUpperCase(c))` mapping from the `equalsIgnoreCase` spec.
-   * Already-canonical names (lower-case, digits, underscores) return unchanged without allocating;
-   * for conventionally capitalized names the `forall` short-circuits at the first upper-case
-   * character and only the `map` pass runs.
+   * The per-code-point `toLowerCase(toUpperCase(c))` mapping used by `equalsIgnoreCase`.
+   * Already-canonical names (lower-case, digits, underscores) return unchanged without allocating a
+   * replacement string; for conventionally capitalized names `allMatch` short-circuits at the first
+   * upper-case code point and only the `map` pass runs.
    */
   private def caseKey(name: String): String =
-    if name.forall(c => Character.toLowerCase(Character.toUpperCase(c)) == c) then name
-    else name.map(c => Character.toLowerCase(Character.toUpperCase(c)))
+    if name.codePoints().allMatch(c => caseFold(c) == c) then name
+    else
+      val folded = name.codePoints().map(c => caseFold(c)).toArray
+      new String(folded, 0, folded.length)
+
+  private def caseFold(codePoint: Int): Int =
+    Character.toLowerCase(Character.toUpperCase(codePoint))
