@@ -337,8 +337,9 @@ object DependencyGraph:
     val memo = scala.collection.mutable.HashMap.empty[NameKey, Boolean]
     // Positions computed once: this function makes sheets × names lookups, so the per-lookup
     // O(sheets) indexWhere inside lookupDefinedName would add an O(sheets² × names) term.
+    // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
     val sheetPosition: Map[SheetName, Int] =
-      workbook.sheets.iterator.zipWithIndex.map((s, i) => s.name -> i).toMap
+      workbook.sheets.zipWithIndex.reverseIterator.map((s, i) => s.name -> i).toMap
 
     def expressionIsDynamic(
       expr: TExpr[?],

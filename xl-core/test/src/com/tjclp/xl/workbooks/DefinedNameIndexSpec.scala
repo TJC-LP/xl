@@ -1,8 +1,11 @@
 package com.tjclp.xl.workbooks
 
 import munit.ScalaCheckSuite
-import org.scalacheck.{Gen, Prop}
+import org.scalacheck.Gen
 import org.scalacheck.Prop.*
+
+import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.sheets.Sheet
 
 /**
  * The index must return exactly what the declaration-order linear scan it replaced returned, for
@@ -66,4 +69,22 @@ class DefinedNameIndexSpec extends ScalaCheckSuite:
 
   test("empty table resolves nothing") {
     assertEquals(DefinedNameIndex(Vector.empty).resolve("Case", Some(0)), None)
+  }
+
+  // The recalculation win rests on this: Workbook.put's replace branch copies only `sheets`,
+  // so every per-cell workbook copy of a recalc reads the SAME metadata instance and the index
+  // is built once. If put ever starts producing fresh metadata, the index rebuilds per cell.
+  test("Workbook.put(sheet) shares the metadata instance, and with it the built index") {
+    val md = WorkbookMetadata(definedNames = Vector(DefinedName("Case", "0.08")))
+    val wb = Workbook(Vector(Sheet(SheetName.unsafe("A"))), metadata = md)
+    val before = wb.metadata.definedNameIndex
+    val after = wb.put(Sheet(SheetName.unsafe("A")))
+    assert(after.metadata.definedNameIndex eq before)
+  }
+
+  test("metadata.copy(definedNames = …) resolves against the new table") {
+    val md = WorkbookMetadata(definedNames = Vector(DefinedName("Case", "0.08")))
+    assertEquals(md.definedNameIndex.resolve("case", None).map(_.formula), Some("0.08"))
+    val replaced = md.copy(definedNames = Vector(DefinedName("Case", "0.10")))
+    assertEquals(replaced.definedNameIndex.resolve("case", None).map(_.formula), Some("0.10"))
   }

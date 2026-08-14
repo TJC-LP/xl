@@ -16,6 +16,10 @@ package com.tjclp.xl.workbooks
  * whole matching rule; lookup performs no further string comparison. First-declared-wins is baked
  * in at build time, so lookup is one map probe per scope.
  *
+ * Memory: one key string per name plus two maps — tens of MB at 10^5 names. The index is reached
+ * only through the lazy [[WorkbookMetadata.definedNameIndex]], so paths that never resolve a name
+ * (streaming reads in particular) do not pay it.
+ *
  * see:
  * https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/String.html#equalsIgnoreCase(java.lang.String)
  */
@@ -23,20 +27,6 @@ private[xl] final class DefinedNameIndex private (
   globalByKey: Map[String, DefinedName],
   sheetScopedByKey: Map[(String, Int), DefinedName]
 ) extends Serializable:
-
-  /**
-   * The first declared name matching `name` case-insensitively with scope
-   * `localSheetId == Some(sheetIdx)`.
-   */
-  def sheetScoped(name: String, sheetIdx: Int): Option[DefinedName] =
-    sheetScopedByKey.get((DefinedNameIndex.caseKey(name), sheetIdx))
-
-  /**
-   * The first declared workbook-scoped (`localSheetId.isEmpty`) name matching `name`
-   * case-insensitively.
-   */
-  def workbookScoped(name: String): Option[DefinedName] =
-    globalByKey.get(DefinedNameIndex.caseKey(name))
 
   /**
    * Excel/OOXML visibility from a sheet position: the sheet-scoped entry shadows a workbook-scoped
@@ -51,22 +41,24 @@ private[xl] final class DefinedNameIndex private (
 
 private[xl] object DefinedNameIndex:
 
-  /** Build from a name table, keeping the first declared entry per (key, scope). */
+  /**
+   * Build from a name table. `toMap` keeps the last entry per key, so inserting in reverse
+   * declaration order makes the first declared entry win — the same answer `Vector.find` gave.
+   */
   def apply(names: Vector[DefinedName]): DefinedNameIndex =
-    val global = Map.newBuilder[String, DefinedName]
-    val scoped = Map.newBuilder[(String, Int), DefinedName]
-    val seenGlobal = scala.collection.mutable.HashSet.empty[String]
-    val seenScoped = scala.collection.mutable.HashSet.empty[(String, Int)]
-    names.foreach { dn =>
-      val key = caseKey(dn.name)
-      dn.localSheetId match
-        case None => if seenGlobal.add(key) then global += key -> dn
-        case Some(idx) =>
-          val scopedKey = (key, idx)
-          if seenScoped.add(scopedKey) then scoped += scopedKey -> dn
-    }
-    new DefinedNameIndex(global.result(), scoped.result())
+    new DefinedNameIndex(
+      names.reverseIterator.collect {
+        case dn if dn.localSheetId.isEmpty => caseKey(dn.name) -> dn
+      }.toMap,
+      names.reverseIterator
+        .flatMap(dn => dn.localSheetId.map(idx => (caseKey(dn.name), idx) -> dn))
+        .toMap
+    )
 
-  /** The per-character `toLowerCase(toUpperCase(c))` mapping from the `equalsIgnoreCase` spec. */
+  /**
+   * The per-character `toLowerCase(toUpperCase(c))` mapping from the `equalsIgnoreCase` spec. Names
+   * already in key form — the overwhelmingly common case — return unchanged without allocating.
+   */
   private def caseKey(name: String): String =
-    name.map(c => Character.toLowerCase(Character.toUpperCase(c)))
+    if name.forall(c => Character.toLowerCase(Character.toUpperCase(c)) == c) then name
+    else name.map(c => Character.toLowerCase(Character.toUpperCase(c)))
