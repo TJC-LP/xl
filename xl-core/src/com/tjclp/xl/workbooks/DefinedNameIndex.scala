@@ -20,6 +20,10 @@ package com.tjclp.xl.workbooks
  * only through the lazy [[WorkbookMetadata.definedNameIndex]], so paths that never resolve a name
  * (streaming reads in particular) do not pay it.
  *
+ * `Serializable` because [[WorkbookMetadata]] is a serializable case class and a materialized lazy
+ * val is a real field that rides along in its serialized form — without it, serializing metadata
+ * whose index has been touched would throw `NotSerializableException`.
+ *
  * see:
  * https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/String.html#equalsIgnoreCase(java.lang.String)
  */
@@ -35,9 +39,10 @@ private[xl] final class DefinedNameIndex private (
    */
   def resolve(name: String, sheetIdx: Option[Int]): Option[DefinedName] =
     val key = DefinedNameIndex.caseKey(name)
-    sheetIdx
-      .flatMap(idx => sheetScopedByKey.get((key, idx)))
-      .orElse(globalByKey.get(key))
+    val scoped =
+      if sheetScopedByKey.isEmpty then None
+      else sheetIdx.flatMap(idx => sheetScopedByKey.get((key, idx)))
+    scoped.orElse(globalByKey.get(key))
 
 private[xl] object DefinedNameIndex:
 
@@ -56,8 +61,10 @@ private[xl] object DefinedNameIndex:
     )
 
   /**
-   * The per-character `toLowerCase(toUpperCase(c))` mapping from the `equalsIgnoreCase` spec. Names
-   * already in key form — the overwhelmingly common case — return unchanged without allocating.
+   * The per-character `toLowerCase(toUpperCase(c))` mapping from the `equalsIgnoreCase` spec.
+   * Already-canonical names (lower-case, digits, underscores) return unchanged without allocating;
+   * for conventionally capitalized names the `forall` short-circuits at the first upper-case
+   * character and only the `map` pass runs.
    */
   private def caseKey(name: String): String =
     if name.forall(c => Character.toLowerCase(Character.toUpperCase(c)) == c) then name

@@ -323,6 +323,12 @@ object Evaluator:
    * [[lookupDefinedName]] with the sheet position already resolved — for callers that loop over
    * (sheet × name) pairs and can compute positions once instead of an O(sheets) `indexWhere` per
    * lookup (DependencyGraph.dynamicCells makes sheets × names such calls per recalculation).
+   *
+   * Callers must thread positions computed once; a lazy position map on Workbook cannot replace
+   * this. Recalculation copies the workbook per evaluated cell (`wb.copy(sheets = …)`), so a
+   * per-instance lazy val would be rebuilt by every copy — the cost it was meant to remove.
+   * (WorkbookMetadata.definedNameIndex survives those copies only because the metadata FIELD is
+   * shared by reference.)
    */
   private[formula] def lookupDefinedNameAt(
     wb: Workbook,

@@ -44,6 +44,16 @@ class DefinedNameIndexSpec extends ScalaCheckSuite:
   private val genTable: Gen[Vector[DefinedName]] =
     Gen.containerOf[Vector, DefinedName](genDefinedName)
 
+  // Black-box over arbitrary strings: this is what actually exercises the caseKey ⟺
+  // equalsIgnoreCase biconditional on exotic characters (ſ, ı, µ, surrogates) that the
+  // small-alphabet generator below cannot reach.
+  property("resolve matches equalsIgnoreCase for arbitrary names") {
+    forAll { (declared: String, query: String) =>
+      val index = DefinedNameIndex(Vector(DefinedName(declared, "0.08")))
+      index.resolve(query, None).isDefined ?= declared.equalsIgnoreCase(query)
+    }
+  }
+
   property("resolve ≡ declaration-order linear scan for every (table, query, scope)") {
     forAll(genTable, genName, Gen.option(Gen.choose(0, 4))) { (table, query, sheetIdx) =>
       val index = DefinedNameIndex(table)
