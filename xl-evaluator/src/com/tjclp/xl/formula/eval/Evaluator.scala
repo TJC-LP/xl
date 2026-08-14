@@ -317,7 +317,19 @@ object Evaluator:
     name: String
   ): Option[DefinedName] =
     val sheetIdx = wb.sheets.indexWhere(_.name == currentSheet)
-    wb.metadata.definedNameIndex.resolve(name, Option.when(sheetIdx >= 0)(sheetIdx))
+    lookupDefinedNameAt(wb, Option.when(sheetIdx >= 0)(sheetIdx), name)
+
+  /**
+   * [[lookupDefinedName]] with the sheet position already resolved — for callers that loop over
+   * (sheet × name) pairs and can compute positions once instead of an O(sheets) `indexWhere` per
+   * lookup (DependencyGraph.dynamicCells makes sheets × names such calls per recalculation).
+   */
+  private[formula] def lookupDefinedNameAt(
+    wb: Workbook,
+    sheetIdx: Option[Int],
+    name: String
+  ): Option[DefinedName] =
+    wb.metadata.definedNameIndex.resolve(name, sheetIdx)
 
   /**
    * The sheet a defined name's refersTo evaluates against when the name is sheet-scoped; None for

@@ -50,4 +50,4 @@ final case class WorkbookMetadata(
    * once per name-table value; `copy(definedNames = …)` produces a fresh instance and therefore a
    * fresh index. Lazy vals do not participate in case-class equality or copy.
    */
-  lazy val definedNameIndex: DefinedNameIndex = DefinedNameIndex(definedNames)
+  private[xl] lazy val definedNameIndex: DefinedNameIndex = DefinedNameIndex(definedNames)
