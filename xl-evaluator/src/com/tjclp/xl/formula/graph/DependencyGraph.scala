@@ -335,6 +335,11 @@ object DependencyGraph:
 
     val dynamicFunctions = FunctionRegistry.dynamicFunctionNames
     val memo = scala.collection.mutable.HashMap.empty[NameKey, Boolean]
+    // Positions computed once: this function makes sheets × names lookups, so the per-lookup
+    // O(sheets) indexWhere inside lookupDefinedName would add an O(sheets² × names) term.
+    // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
+    val sheetPosition: Map[SheetName, Int] =
+      workbook.sheets.zipWithIndex.reverseIterator.map((s, i) => s.name -> i).toMap
 
     def expressionIsDynamic(
       expr: TExpr[?],
@@ -365,7 +370,11 @@ object DependencyGraph:
         case None =>
           val dynamic =
             (for
-              definedName <- Evaluator.lookupDefinedName(workbook, lookupFrom, name)
+              definedName <- Evaluator.lookupDefinedNameAt(
+                workbook,
+                sheetPosition.get(lookupFrom),
+                name
+              )
               target <- FormulaParser.parse(definedName.formula).toOption
             yield
               val definingSheet =

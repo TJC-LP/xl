@@ -316,13 +316,26 @@ object Evaluator:
     currentSheet: SheetName,
     name: String
   ): Option[DefinedName] =
-    val names = wb.metadata.definedNames
     val sheetIdx = wb.sheets.indexWhere(_.name == currentSheet)
-    val sheetScoped =
-      if sheetIdx >= 0 then
-        names.find(dn => dn.name.equalsIgnoreCase(name) && dn.localSheetId.contains(sheetIdx))
-      else None
-    sheetScoped.orElse(names.find(dn => dn.name.equalsIgnoreCase(name) && dn.localSheetId.isEmpty))
+    lookupDefinedNameAt(wb, Option.when(sheetIdx >= 0)(sheetIdx), name)
+
+  /**
+   * [[lookupDefinedName]] with the sheet position already resolved — for callers that loop over
+   * (sheet × name) pairs and can compute positions once instead of an O(sheets) `indexWhere` per
+   * lookup (DependencyGraph.dynamicCells makes sheets × names such calls per recalculation).
+   *
+   * Callers must thread positions computed once; a lazy position map on Workbook cannot replace
+   * this. Recalculation copies the workbook per evaluated cell (`wb.copy(sheets = …)`), so a
+   * per-instance lazy val would be rebuilt by every copy — the cost it was meant to remove.
+   * (WorkbookMetadata.definedNameIndex survives those copies only because the metadata FIELD is
+   * shared by reference.)
+   */
+  private[formula] def lookupDefinedNameAt(
+    wb: Workbook,
+    sheetIdx: Option[Int],
+    name: String
+  ): Option[DefinedName] =
+    wb.metadata.definedNameIndex.resolve(name, sheetIdx)
 
   /**
    * The sheet a defined name's refersTo evaluates against when the name is sheet-scoped; None for
