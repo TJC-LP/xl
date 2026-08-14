@@ -5,6 +5,33 @@ All notable changes to the XL project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.3] "Namesake" - 2026-08-14
+
+Patch release: one performance fix (#535, GH-536), found live on a
+production lender model that could not complete a recalculation.
+
+### Performance
+
+- **Defined-name resolution is indexed** (#535/GH-536). Name lookup was a
+  linear scan of the workbook's name table, and dynamic-name
+  classification ran it for every sheet × name during graph construction
+  — O(sheets × names²) per recalculation before any formula evaluated.
+  Bank-authored templates carry six-figure name tables: a 96,384-name /
+  28,537-formula model did not finish `recalc` in 33 minutes, with 98.5%
+  of JFR execution samples inside the scan. `WorkbookMetadata` now
+  derives a lazy case-insensitive index — first-declared-wins,
+  per-code-point case folding, exactly the `equalsIgnoreCase` relation —
+  and the same book recalculates in 8.2s; its `iterate="1"` original
+  converges in 2 of 300 declared rounds in 8.4s; a 126,510-name sibling
+  that exhausts all 400 declared rounds completes in 27s. Resolution
+  semantics are unchanged and property-tested against the scan they
+  replaced, including supplementary-plane case pairs.
+
+Follow-ups filed: #537 (iterative-calculation costs — whole-walk
+aggregate-memo disable, per-round re-parsing, no stationarity exit),
+#538 (defined-name mutation matches case-sensitively while resolution is
+case-insensitive).
+
 ## [0.19.2] "Fixpoint" - 2026-08-08
 
 Wave 24: the 0.19.1 blind-regression round. Four new silent-wrong-number
