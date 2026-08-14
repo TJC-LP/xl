@@ -316,13 +316,8 @@ object Evaluator:
     currentSheet: SheetName,
     name: String
   ): Option[DefinedName] =
-    val names = wb.metadata.definedNames
     val sheetIdx = wb.sheets.indexWhere(_.name == currentSheet)
-    val sheetScoped =
-      if sheetIdx >= 0 then
-        names.find(dn => dn.name.equalsIgnoreCase(name) && dn.localSheetId.contains(sheetIdx))
-      else None
-    sheetScoped.orElse(names.find(dn => dn.name.equalsIgnoreCase(name) && dn.localSheetId.isEmpty))
+    wb.metadata.definedNameIndex.resolve(name, Option.when(sheetIdx >= 0)(sheetIdx))
 
   /**
    * The sheet a defined name's refersTo evaluates against when the name is sheet-scoped; None for

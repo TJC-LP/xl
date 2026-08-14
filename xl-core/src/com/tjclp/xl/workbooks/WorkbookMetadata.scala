@@ -42,4 +42,12 @@ final case class WorkbookMetadata(
   date1904: Boolean = false,
   calcPr: Option[CalcPr] = None,
   defaultFont: Option[Font] = None
-)
+):
+
+  /**
+   * Case-insensitive index over [[definedNames]], built on first use. Metadata is shared by
+   * reference across the sheet-only `Workbook.copy` calls of a recalculation, so the index is built
+   * once per name-table value; `copy(definedNames = …)` produces a fresh instance and therefore a
+   * fresh index. Lazy vals do not participate in case-class equality or copy.
+   */
+  lazy val definedNameIndex: DefinedNameIndex = DefinedNameIndex(definedNames)
