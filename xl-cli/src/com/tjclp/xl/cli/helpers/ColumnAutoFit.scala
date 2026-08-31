@@ -14,11 +14,11 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  * (GH-156).
  *
  * Each cell's formatted display text is measured with its resolved font via AWT font metrics
- * (`RenderUtils.measureTextWidth`), then converted from pixels to Excel column-width units using
- * the OOXML/POI convention for the Calibri-11 default: max digit width (MDW) = 7px at 96 DPI plus
- * 5px of cell padding (2px left margin + 2px right margin + 1px gridline), i.e.
- * `width = (textPx + 5) / 7`. `RenderUtils.toAwtFont` sizes fonts at pt × 4/3 px — the
- * 96-DPI-equivalent space in which MDW = 7 holds.
+ * (`RenderUtils.measureTextWidth`, backed by `render.TextMeasure`), then converted from pixels to
+ * Excel column-width units using the OOXML/POI convention for the Calibri-11 default: max digit
+ * width (MDW) = 7px at 96 DPI plus 5px of cell padding (2px left margin + 2px right margin + 1px
+ * gridline), i.e. `width = (textPx + 5) / 7`. `TextMeasure.toAwtFont` sizes fonts at pt × 4/3 px —
+ * the 96-DPI-equivalent space in which MDW = 7 holds.
  *
  * Note: `RenderUtils.excelColWidthToPixels` deliberately uses a wider 8px/unit factor for SVG
  * display fidelity (so rendered text never clips); auto-fit needs the Excel-accurate MDW = 7 so
