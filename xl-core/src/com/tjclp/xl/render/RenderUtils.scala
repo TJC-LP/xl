@@ -346,7 +346,9 @@ object RenderUtils:
       .replace("\"", "\\\"")
       .replace("\n", "\\A ")
       .replace("\r", "\\D ")
-      .replace("\u0000", "")
+      // explicit filter, not String.replace: Scala Native's javalib String.replace
+      // mishandles the NUL pattern (ADR-016 spike); the JVM result is identical either way
+      .filterNot(_ == '\u0000')
 
   /**
    * Format a font family name for an SVG presentation attribute (`font-family="..."`).
