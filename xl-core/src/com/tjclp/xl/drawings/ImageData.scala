@@ -1,9 +1,9 @@
 package com.tjclp.xl.drawings
 
-import java.security.MessageDigest
 import scala.collection.immutable.ArraySeq
 
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.platform.Sha256
 import com.tjclp.xl.styles.units.{Emu, Px}
 
 /**
@@ -90,7 +90,7 @@ final case class ImageData(bytes: ArraySeq[Byte], format: ImageFormat) derives C
 
   /** SHA-256 of the bytes as lowercase hex: the media dedup key and a fast equality aid. */
   lazy val sha256: String =
-    val digest = MessageDigest.getInstance("SHA-256").digest(bytes.toArray)
+    val digest = Sha256.digest(bytes.toArray)
     digest.map("%02x".format(_)).mkString
 
   /**
