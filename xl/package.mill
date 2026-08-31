@@ -13,7 +13,7 @@ object `package` extends build.XLModule {
     "XL - Pure functional Excel library for Scala 3 (complete bundle)"
 
   override def moduleDeps = Seq(
-    build.`xl-core`,
+    build.`xl-core`.jvm,
     build.`xl-ooxml`,
     build.`xl-cats-effect`,
     build.`xl-evaluator`

@@ -6,6 +6,7 @@ import mill._
 import mill.scalalib._
 import mill.scalalib.publish._
 import mill.scalalib.scalafmt._
+import mill.scalanativelib._
 import contrib.jmh.JmhModule
 
 val scala3Version = "3.8.3"
@@ -31,10 +32,11 @@ trait XLModuleBase extends ScalaModule with ScalafmtModule {
   // JVM options for forked processes (run, test execution)
   override def forkArgs: T[Seq[String]] = BuildConfig.lazyValsJvmArgs
 
-  // WartRemover compiler plugin for enhanced code quality
-  def scalacPluginMvnDeps = Seq(
-    mvn"org.wartremover:::wartremover:3.5.6"
-  )
+  // WartRemover compiler plugin for enhanced code quality.
+  // Appends to super so platform toolchains (e.g. Scala Native's nscplugin) survive linearization.
+  override def scalacPluginMvnDeps = Task {
+    super.scalacPluginMvnDeps() ++ Seq(mvn"org.wartremover:::wartremover:3.5.6")
+  }
 
   override def scalacOptions = Seq(
     "-encoding", "utf-8",
@@ -88,6 +90,19 @@ trait XLModule extends XLModuleBase with PublishModule {
 
 /** Trait for internal modules that should not be published (CLI, benchmarks, testkit) */
 trait XLInternalModule extends XLModuleBase
+
+/**
+ * Cross-platform published module leg: shared sources in `<module>/src`, platform-specific
+ * sources in `<module>/src-jvm` / `<module>/src-native`. PlatformScalaModule strips the
+ * platform segment so the JVM artifact keeps its exact current name (e.g. `xl-core_3`).
+ */
+trait XLCrossModule extends XLModule with PlatformScalaModule
+
+/** Scala Native platform leg (SN 0.5.x; multithreading on for cats-effect 3.7+ runtime) */
+trait XLNativePlatform extends ScalaNativeModule {
+  override def scalaNativeVersion = "0.5.12"
+  override def nativeMultithreading = Some(true)
+}
 
 /**
  * Trait for test modules that silences Scala 3 LazyVals sun.misc.Unsafe deprecation warnings.

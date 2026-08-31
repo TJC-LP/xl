@@ -6,7 +6,7 @@ import mill.scalalib._
 object `package` extends build.XLInternalModule {
 
   override def moduleDeps = Seq(
-    build.`xl-core`,
+    build.`xl-core`.jvm,
     build.`xl-cats-effect`,
     build.`xl-evaluator`
   )

@@ -7,7 +7,7 @@ object `package` extends build.XLInternalModule with contrib.jmh.JmhModule {
   def jmhCoreVersion = "1.35"
 
   override def moduleDeps = Seq(
-    build.`xl-core`,
+    build.`xl-core`.jvm,
     build.`xl-ooxml`,
     build.`xl-cats-effect`
   )
