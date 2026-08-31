@@ -8,7 +8,6 @@ import java.io.{
   InputStream,
   OutputStream
 }
-import java.security.MessageDigest
 import java.util.zip.{ZipEntry, ZipFile, ZipInputStream, ZipOutputStream}
 import java.nio.file.{Files, Path, Paths, StandardCopyOption}
 import java.nio.charset.StandardCharsets
@@ -19,6 +18,7 @@ import com.tjclp.xl.api.{Sheet, Workbook, CellValue}
 import com.tjclp.xl.drawings.ImageFormat
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContent, SourceContext}
+import com.tjclp.xl.platform.Sha256
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.styles.{Border, Color, Fill}
 import com.tjclp.xl.tables.TableSpec
@@ -233,7 +233,7 @@ object XlsxWriter:
               s"Source file changed size since read (expected ${fingerprint.size} bytes, found $currentSize)"
             )
 
-          val digest = MessageDigest.getInstance("SHA-256")
+          val digest = Sha256.hasher()
 
           val bytesCopied = usingOrThrow(Using.Manager { use =>
             val in = use(Files.newInputStream(source))
@@ -259,9 +259,7 @@ object XlsxWriter:
             )
       case SourceContent.InMemory(bytes) =>
         val arr = SourceContent.rawArray(bytes)
-        val digest = MessageDigest.getInstance("SHA-256")
-        digest.update(arr)
-        if !ctx.fingerprint.matches(arr.length.toLong, digest.digest()) then
+        if !ctx.fingerprint.matches(arr.length.toLong, Sha256.digest(arr)) then
           throw new IllegalStateException(
             "Source bytes changed since read; refusing to copy verbatim"
           )
@@ -913,7 +911,7 @@ object XlsxWriter:
     if dot >= 0 && dot < name.length - 1 then name.substring(dot + 1) else ""
 
   private def sha256Hex(bytes: Array[Byte]): String =
-    MessageDigest.getInstance("SHA-256").digest(bytes).map("%02x".format(_)).mkString
+    Sha256.digest(bytes).map("%02x".format(_)).mkString
 
   /** Generated `<drawing r:id="rIdDr1"/>` element; GH-291 hoisting carries the r binding. */
   private def drawingRefElem: Elem =
