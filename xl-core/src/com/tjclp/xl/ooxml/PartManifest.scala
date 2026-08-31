@@ -1,7 +1,5 @@
 package com.tjclp.xl.ooxml
 
-import java.util.zip.ZipEntry
-
 /** Metadata about every part inside the originating XLSX ZIP. */
 final case class PartManifestEntry(
   path: String,
@@ -116,13 +114,25 @@ final case class PartManifestBuilder(entries: Map[String, PartManifestEntry] = M
   def withSheetIndex(path: String, sheetIndex: Int): PartManifestBuilder =
     updateEntry(path)(entry => entry.copy(sheetIndex = Some(sheetIndex)))
 
-  def +=(entry: ZipEntry): PartManifestBuilder =
-    updateEntry(entry.getName) { current =>
+  /**
+   * Record ZIP metadata for one entry. Plain fields, not `java.util.zip.ZipEntry` (which was only a
+   * metadata carrier here) — keeps xl-core free of `java.util.zip` (ADR-016). Negative
+   * size/compressedSize/crc mean "unknown" (streamed entries before their data descriptor) and are
+   * stored as None, exactly as `ZipEntry`'s -1 convention was.
+   */
+  def recordZipMetadata(
+    path: String,
+    size: Long,
+    compressedSize: Long,
+    crc: Long,
+    method: Int
+  ): PartManifestBuilder =
+    updateEntry(path) { current =>
       current.copy(
-        size = sizeOf(entry.getSize),
-        compressedSize = sizeOf(entry.getCompressedSize),
-        crc = sizeOf(entry.getCrc),
-        method = Some(entry.getMethod)
+        size = sizeOf(size),
+        compressedSize = sizeOf(compressedSize),
+        crc = sizeOf(crc),
+        method = Some(method)
       )
     }
 
