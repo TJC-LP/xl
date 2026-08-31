@@ -179,3 +179,37 @@
   - ❌ Requires explicit BigDecimal construction (not implicit from literals)
 - **Performance Impact**: Acceptable - formula complexity in typical workbooks is low (< 100 operations per formula). For performance-critical code, consider caching evaluation results (future: WI-09b dependency graph with memoization)
 - **Testing**: Round-trip tests verify BigDecimal values preserved exactly, including scientific notation edge cases
+
+## ADR-016: Cross-platform targets — Scala Native and Scala.js
+
+**Date**: 2026-08-31 (Wave 0 spike)
+**Status**: ✅ Accepted (spike verified; execution in waves — see `docs/plan/scala-native.md`)
+
+- **Decision**: Cross-compile the published library (`xl-core`, `xl-evaluator`, `xl-ooxml`,
+  `xl-cats-effect`, `xl`) and the `xl` CLI to Scala Native 0.5.x, and the library to Scala.js 1.x
+  (full ooxml included), via Mill `PlatformScalaModule` legs (`src/` shared, `src-jvm/` /
+  `src-native/` / `src-js/` splits). JVM artifact names are preserved exactly (`xl-core_3`).
+- **Context**: Native `xl` binary without the GraalVM toolchain, Maven Central reach for native
+  Scala consumers, and browser/Node formula evaluation + .xlsx I/O.
+- **Rationale**:
+  - The purity charter's core/interpreter split is exactly the seam a platform split needs;
+    the Wave 0 spike cross-compiled xl-core with only two platform shims (TextMeasure, Sha256).
+  - Owning the XML layer (in-house pull parser as the single path on ALL platforms, perf-gated)
+    retires the Xerces/JAXP release-bug class (#349, #457) everywhere, including GraalVM.
+  - Owning ZIP inflate/deflate (JS leg) makes output bytes deterministic across platforms.
+- **Alternatives Considered**:
+  - **GraalVM-only forever**: no library reach, no JS, keeps the Xerces bug class.
+  - **fs2-data-xml everywhere**: 3-4x slower on hot paths (measured previously); drags fs2 into
+    pure xl-ooxml.
+  - **Dual XML parsers (JAXP on JVM)**: two parsers to fuzz forever; keeps Xerces bugs on JVM.
+- **Consequences**:
+  - ✅ Wave 0 spike: xl-core suite runs on Native (1,283 tests, 9 classified failures, all
+    planned-for); CE 3.7.1 `unsafeRunSync`, `Executors`, ProcessBuilder, java.util.zip incl.
+    ZipFile all work on SN 0.5.12.
+  - ❌ Forced dependency bumps for native0.5 artifacts: cats-effect 3.7.1, fs2 3.13.0,
+    fs2-data 1.14.1, munit-cats-effect 2.2.0, decline-effect 2.6.2 (isolated JVM-only release).
+  - ❌ Permanent second/third test surface (CI native leg; law-fuzz native step).
+  - ❌ AWT-dependent rendering (Batik, font metrics) stays JVM-only by construction.
+- **Testing**: per-wave gates in `docs/plan/scala-native.md`; `./mill __.jvm.test` green at every
+  merge; differential XML law (portable == JAXP) + byte-parity writer goldens before the JVM
+  default flips; GraalVM remains the shipped CLI until the SN binary passes the cutover gate.
