@@ -341,7 +341,13 @@ object XlsxReader:
             )
           else
             // Record entry metadata in manifest (size, CRC, etc.)
-            builder = builder.+=(entry)
+            builder = builder.recordZipMetadata(
+              entryName,
+              size = entry.getSize,
+              compressedSize = entry.getCompressedSize,
+              crc = entry.getCrc,
+              method = entry.getMethod
+            )
 
             // Read content with size tracking
             val content = zip.readAllBytes()
