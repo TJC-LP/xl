@@ -30,6 +30,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 xl/              → Aggregate module + scripting prelude (com.tjclp.xl.scripting) + prelude probes
 xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), macros, DSL
+xl-xml/          → Zero-dependency portable XML engine: XmlPullParser + XmlTextWriter (ADR-016)
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based streaming)
 xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 108 functions, dependency graphs)
@@ -39,7 +40,7 @@ xl-benchmarks/   → JMH performance benchmarks
 xl-testkit/      → Test laws, generators, helpers [placeholder — no sources yet]
 ```
 
-Published to Maven Central: `xl` (aggregate), `xl-core`, `xl-ooxml`, `xl-cats-effect`, `xl-evaluator`. Internal: `xl-cli`, `xl-agent`, `xl-benchmarks`, `xl-testkit`.
+Published to Maven Central: `xl` (aggregate), `xl-core`, `xl-xml`, `xl-ooxml`, `xl-cats-effect`, `xl-evaluator`. Internal: `xl-cli`, `xl-agent`, `xl-benchmarks`, `xl-testkit`.
 
 ## Import Patterns
 
@@ -100,7 +101,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all
-./mill __.test             # Run all tests (5,455)
+./mill __.test             # Run all tests (5,724)
 ./mill xl-core.test        # Test specific module
 ./mill __.reformat         # Format (Scalafmt 3.10.1)
 ./mill __.checkFormat      # CI check
@@ -396,12 +397,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**5,455 tests** by module: xl-evaluator (2100), xl-core (1283), xl-ooxml (1047), xl-cli (727), xl-cats-effect (149), xl-agent (122), xl prelude probes (27). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**5,724 tests** by module: xl-evaluator (2100), xl-core (1283), xl-ooxml (1126), xl-cli (727), xl-xml (190), xl-cats-effect (149), xl-agent (122), xl prelude probes (27). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 5,455 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 5,724 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 
