@@ -473,7 +473,7 @@ object XlsxWriter:
     config.compression match
       case Compression.Stored =>
         val baos = new ByteArrayOutputStream()
-        val saxWriter = StaxSaxWriter.create(baos)
+        val saxWriter = PortableSaxWriter.create(baos)
         DirectSaxEmitter.emitWorksheet(
           saxWriter,
           sheet,
@@ -496,7 +496,7 @@ object XlsxWriter:
         // Buffer first to avoid many small writes to compressed stream
         // (single bulk write is much more efficient for DEFLATE algorithm)
         val baos = new ByteArrayOutputStream()
-        val saxWriter = StaxSaxWriter.create(baos)
+        val saxWriter = PortableSaxWriter.create(baos)
         DirectSaxEmitter.emitWorksheet(
           saxWriter,
           sheet,
@@ -608,7 +608,7 @@ object XlsxWriter:
     config.compression match
       case Compression.Stored =>
         val baos = new ByteArrayOutputStream()
-        val saxWriter = StaxSaxWriter.create(baos)
+        val saxWriter = PortableSaxWriter.create(baos)
         sheet.writeSax(saxWriter)
         saxWriter.flush()
         val bytes = baos.toByteArray
@@ -624,7 +624,7 @@ object XlsxWriter:
       case Compression.Deflated =>
         // Buffer first to avoid many small writes to compressed stream
         val baos = new ByteArrayOutputStream()
-        val saxWriter = StaxSaxWriter.create(baos)
+        val saxWriter = PortableSaxWriter.create(baos)
         sheet.writeSax(saxWriter)
         saxWriter.flush()
         val bytes = baos.toByteArray
@@ -661,7 +661,7 @@ object XlsxWriter:
     config.compression match
       case Compression.Stored =>
         val baos = new ByteArrayOutputStream()
-        val saxWriter = StaxSaxWriter.create(baos)
+        val saxWriter = PortableSaxWriter.create(baos)
         body(saxWriter)
         saxWriter.flush()
         val bytes = baos.toByteArray
@@ -677,7 +677,7 @@ object XlsxWriter:
       case Compression.Deflated =>
         // Buffer first to avoid many small writes to compressed stream
         val baos = new ByteArrayOutputStream()
-        val saxWriter = StaxSaxWriter.create(baos)
+        val saxWriter = PortableSaxWriter.create(baos)
         body(saxWriter)
         saxWriter.flush()
         val bytes = baos.toByteArray

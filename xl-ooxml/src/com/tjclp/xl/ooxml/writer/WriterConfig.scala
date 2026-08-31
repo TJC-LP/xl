@@ -67,7 +67,14 @@ enum XmlBackend derives CanEqual:
   /** Stable backend using scala-xml. Default for production use. */
   case ScalaXml
 
-  /** High-performance backend using StAX. 33% faster writes, ready for beta testing. */
+  /**
+   * High-performance streaming backend. 33% faster writes, ready for beta testing.
+   *
+   * Since GH-543 (ADR-016 wave A2) this case denotes the portable in-house engine in XlsxWriter —
+   * PortableSaxWriter over xl-xml's XmlTextWriter — proven byte-identical to the previous
+   * javax.xml.stream (StAX) implementation by the W0/W1/W2 parity suites. The name is kept for
+   * source compatibility.
+   */
   case SaxStax
 
 /**
