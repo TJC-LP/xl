@@ -50,14 +50,6 @@ import com.tjclp.xl.cli.raster.{
 import com.tjclp.xl.cli.helpers.{BatchParser, SheetResolver}
 import com.tjclp.xl.cli.output.Format
 
-/** Read version from generated resource, fallback to dev */
-private object BuildInfo:
-  val version: String =
-    val props = new java.util.Properties()
-    val stream = Option(getClass.getResourceAsStream("/version.properties"))
-    stream.foreach(props.load)
-    Option(props.getProperty("version")).getOrElse("dev")
-
 /**
  * XL CLI - LLM-friendly Excel operations.
  *

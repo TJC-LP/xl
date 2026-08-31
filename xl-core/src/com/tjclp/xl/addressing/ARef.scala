@@ -1,7 +1,5 @@
 package com.tjclp.xl.addressing
 
-import java.util.Locale
-
 /**
  * Absolute cell reference with 64-bit packed representation. Upper 32 bits: row index Lower 32
  * bits: column index
@@ -28,7 +26,7 @@ object ARef:
 
   /** Parse cell reference from A1 notation */
   def parse(s: String): Either[String, ARef] =
-    val normalized = s.toUpperCase(Locale.ROOT)
+    val normalized = AsciiCase.upper(s)
     val (letters, digits) = normalized.span(c => c >= 'A' && c <= 'Z')
     if letters.isEmpty then Left(s"No column letters in: $s")
     else if digits.isEmpty then Left(s"No row digits in: $s")

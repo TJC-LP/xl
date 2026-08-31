@@ -51,6 +51,14 @@ class ColumnSpec extends ScalaCheckSuite:
     assert(Column.parse("Δ").isLeft)
     assert(Column.parse("D١").isLeft) // Arabic-Indic digit is not a row number
 
+  test("parse rejects non-ASCII letters even when their Unicode uppercase is A-Z"):
+    // U+0131 (dotless i) and U+017F (long s) uppercase to 'I'/'S' under Locale.ROOT; the
+    // ASCII-only fold no longer smuggles them in as column letters.
+    assert(Column.parse("ı1").isLeft)
+    assert(Column.parse("ſ1").isLeft)
+    assert(Column.fromLetter("ı").isLeft)
+    assert(ARef.parse("ı1").isLeft)
+
   // ========== fromLetter edge cases (sibling of parse) ==========
 
   test("fromLetter rejects empty, mixed, and overflow inputs"):

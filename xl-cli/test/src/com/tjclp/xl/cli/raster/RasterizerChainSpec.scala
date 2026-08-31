@@ -220,6 +220,13 @@ class RasterizerChainSpec extends CatsEffectSuite:
     assertEquals(chain.map(_.name), List("Batik", "cairosvg", "rsvg-convert", "resvg"))
   }
 
+  test("defaultChain heads with the platform-bundled backends (ADR-016)") {
+    // The bundled prefix is the platform indirection point: JVM builds bundle Batik; builds
+    // without AWT supply their own list and the subprocess fallbacks keep the chain alive.
+    assertEquals(PlatformRasterizers.bundled.map(_.name), List("Batik"))
+    assert(RasterizerChain.defaultChain.startsWith(PlatformRasterizers.bundled))
+  }
+
   test("byName contains all rasterizers lowercase, including explicit-only ImageMagick (GH-86)") {
     val names = RasterizerChain.byName
     assertEquals(names.size, 5)

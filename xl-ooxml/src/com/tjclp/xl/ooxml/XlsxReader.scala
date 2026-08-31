@@ -17,12 +17,12 @@ import com.tjclp.xl.context.{ModificationTracker, SourceContent, SourceContext, 
 import com.tjclp.xl.tables.TableSpec
 
 import scala.xml.*
-import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
+import java.io.{ByteArrayInputStream, FileInputStream, FilterInputStream, InputStream}
 import java.nio.file.{Files, Path, Paths}
-import java.security.{DigestInputStream, MessageDigest}
 import java.util.zip.ZipInputStream
 import scala.collection.mutable
 import scala.collection.immutable.ArraySeq
+import com.tjclp.xl.platform.Sha256
 import com.tjclp.xl.styles.StyleRegistry
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.units.StyleId
@@ -114,21 +114,36 @@ object XlsxReader:
    * byte-array reads preserve unknown parts exactly like path-based reads.
    */
   enum SourceHandle:
-    case OnDisk(path: Path, size: Long, digest: MessageDigest)
+    case OnDisk(path: Path, size: Long, digest: Sha256.Hasher)
     case InMemory(bytes: ArraySeq[Byte])
 
     def finalizeFingerprint(): SourceFingerprint = this match
       case OnDisk(_, size, digest) =>
         SourceFingerprint(size, ArraySeq.unsafeWrapArray(digest.digest()))
       case InMemory(bytes) =>
-        val digest = MessageDigest.getInstance("SHA-256")
-        digest.update(SourceContent.rawArray(bytes))
-        SourceFingerprint(bytes.length.toLong, ArraySeq.unsafeWrapArray(digest.digest()))
+        val digest = Sha256.digest(SourceContent.rawArray(bytes))
+        SourceFingerprint(bytes.length.toLong, ArraySeq.unsafeWrapArray(digest))
 
     /** The [[SourceContent]] this handle resolves to (what the SourceContext carries). */
     def toContent: SourceContent = this match
       case OnDisk(path, _, _) => SourceContent.OnDisk(path)
       case InMemory(bytes) => SourceContent.InMemory(bytes)
+
+  /**
+   * Feeds every byte read through a [[Sha256.Hasher]] — the shim-backed replacement for
+   * `java.security.DigestInputStream` (ADR-016). Like DigestInputStream, `skip` is NOT hashed; the
+   * ZIP scan and the trailing drain only ever `read`.
+   */
+  private final class Sha256InputStream(in: InputStream, hasher: Sha256.Hasher)
+      extends FilterInputStream(in):
+    override def read(): Int =
+      val b = super.read()
+      if b != -1 then hasher.update(Array(b.toByte), 0, 1)
+      b
+    override def read(buf: Array[Byte], off: Int, len: Int): Int =
+      val n = in.read(buf, off, len)
+      if n > 0 then hasher.update(buf, off, n)
+      n
 
   /** Set of ZIP entry paths that XL knows how to parse. All other entries are preserved. */
   private val knownParts: Set[String] = Set(
@@ -227,13 +242,13 @@ object XlsxReader:
   ): XLResult[ReadResult] =
     try
       val size = Files.size(inputPath)
-      val digest = MessageDigest.getInstance("SHA-256")
+      val hasher = Sha256.hasher()
       val fileStream = new FileInputStream(inputPath.toFile)
-      val digestStream = new DigestInputStream(fileStream, digest)
+      val digestStream = new Sha256InputStream(fileStream, hasher)
       try
         readFromStreamWithWarnings(
           digestStream,
-          Some(SourceHandle.OnDisk(inputPath, size, digest)),
+          Some(SourceHandle.OnDisk(inputPath, size, hasher)),
           config
         )
       finally
@@ -326,7 +341,13 @@ object XlsxReader:
             )
           else
             // Record entry metadata in manifest (size, CRC, etc.)
-            builder = builder.+=(entry)
+            builder = builder.recordZipMetadata(
+              entryName,
+              size = entry.getSize,
+              compressedSize = entry.getCompressedSize,
+              crc = entry.getCrc,
+              method = entry.getMethod
+            )
 
             // Read content with size tracking
             val content = zip.readAllBytes()
