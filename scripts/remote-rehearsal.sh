@@ -35,7 +35,8 @@ if [[ -n "$(git status --porcelain -- .mill-jvm-version .mill-version build.mill
   echo "note: uncommitted changes to toolchain files are NOT part of the rehearsal (git archive HEAD)" >&2
 fi
 
-docker run --rm "${PLATFORM[@]}" -v "$WORK":/in:ro -e FULL="$FULL" ubuntu:24.04 bash -s <<'IN'
+# The inner script is mounted as a file (stdin is not attached to a non-interactive docker run).
+cat > "$WORK/inner.sh" <<'IN'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq > /dev/null
@@ -66,3 +67,5 @@ else
 fi
 echo "== rehearsal OK"
 IN
+
+docker run --rm "${PLATFORM[@]}" -v "$WORK":/in:ro -e FULL="$FULL" ubuntu:24.04 bash /in/inner.sh
