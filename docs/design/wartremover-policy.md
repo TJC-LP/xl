@@ -4,7 +4,7 @@ XL uses [WartRemover](https://www.wartremover.org/) to enforce functional progra
 
 ## Overview
 
-**Version**: WartRemover 3.5.6
+**Version**: WartRemover 3.6.1
 **Integration**: Compiler plugin via Mill build system (`XLModuleBase` in `build.mill`)
 **Scope**: All modules (xl, xl-core, xl-ooxml, xl-cats-effect, xl-evaluator, xl-cli, xl-agent, xl-benchmarks, xl-testkit)
 
@@ -186,7 +186,7 @@ WartRemover is configured in `build.mill`:
 ```scala
 trait XLModuleBase extends ScalaModule with ScalafmtModule {
   def scalacPluginMvnDeps = Seq(
-    mvn"org.wartremover:::wartremover:3.5.6"
+    mvn"org.wartremover:::wartremover:3.6.1"
   )
 
   override def scalacOptions = Seq(
@@ -253,6 +253,8 @@ Violations will fail CI builds for Tier 1 warts.
 
 ## Version History
 
+- **2026-09-03** (unreleased): WartRemover 3.5.6 → 3.6.1 (the only plugin build published for the Scala 3.9.0 LTS compiler)
+  - No behavior change for any enabled wart; 3.6.x dropped cross-builds for old Scala versions and tightened `ObjectThrowable` (not enabled here)
 - **2026-06-09** (0.10.0): WartRemover 3.4.1 → 3.5.6 (required for the Scala 3.8.3 compiler plugin)
   - 3.5.6 newly caught `Option2Iterable` violations (`.toSeq` on `Option` replaced with `.toList`)
 - **2025-11-14**: Initial WartRemover integration (v3.4.1)

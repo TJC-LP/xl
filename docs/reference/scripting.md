@@ -32,7 +32,7 @@ The canonical script header (byte-identical across the skill, recipes, and this 
 release bump is a mechanical substitution):
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -50,7 +50,7 @@ The sync `Excel` facade (`read`/`write`/`modify`) is the IO edge for scripts. Ev
 read and write is pure values.
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -129,7 +129,7 @@ difference is that `XLResult` is spelled in the signature, so the `.map`/`.unsaf
 intended instead of surprising the chain:
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -195,7 +195,7 @@ evaluates in dependency order, cross-sheet references resolve automatically, and
 throw — they are collected per cell.
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -352,7 +352,7 @@ area, repeat rows) live in `com.tjclp.xl.sheets` and are not part of the prelude
 them explicitly:
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
@@ -406,7 +406,7 @@ Both are in scope from the prelude. Switch to streaming above ~100k rows — `Ex
 the whole workbook:
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO

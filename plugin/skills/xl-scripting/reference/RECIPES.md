@@ -9,7 +9,7 @@ Convention: every fenced block starting with `//> using` is a complete script an
 Apply a 5% price increase to column C of every workbook in a directory, in place (atomic).
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
@@ -41,7 +41,7 @@ println(s"updated ${files.size} files")
 Read rows into case classes; collect per-cell validation failures into a new Issues sheet.
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -75,7 +75,7 @@ println(s"${orders.size} valid orders, ${issues.size} issues")
 Three-year projection with growth formulas; fail the script if any formula errors.
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -110,7 +110,7 @@ Workbook(model).recalculate().toEither match
 Stack the data rows of every input file under one header.
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
@@ -146,7 +146,7 @@ println(s"combined ${files.size} files, ${combined.cells.size} cells")
 ## 5. Streaming filter: 500k rows in, matching rows out (O(1) memory)
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
@@ -175,7 +175,7 @@ println("✓ filtered (constant memory)")
 ## 6. Cell-level workbook diff
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -203,7 +203,7 @@ else
 ## 7. CSV ingest → styled workbook (smart format detection)
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
@@ -231,7 +231,7 @@ A percent-postfix formula model (`=B2*10%`, 0.13.0), column widths folded from r
 cell ships a cached value for `data_only` readers, pandas, and Excel-before-recalc.
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -266,7 +266,7 @@ The professional-polish pass (0.13.0): gridline-free view at 85% zoom, a colored
 frozen header, a list-dropdown data validation, and a provenance comment — no XML surgery.
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.SheetView // SheetView lives one import deeper than the prelude
