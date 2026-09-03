@@ -9,21 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Scala 3.9.0 LTS.** The build, README, quick-start, scripting docs, examples, and the
+- **Scala 3.9.0 LTS** (#554). The build, README, quick-start, scripting docs, examples, and the
   xl-scripting skill snippets move from Scala 3.8.3 to 3.9.0, the new long-term-support line
   (maintained for at least three years; it succeeds 3.3 LTS as the recommended library
   baseline). WartRemover 3.5.6 → 3.6.1, the only plugin build published for 3.9.0; none of the
   enabled warts changed behavior. No source changes were required and all 5,455 tests pass
   unchanged. Consumers need a Scala 3.9.0+ compiler to read the published TASTy (previously
   3.8+); scala-cli scripts should pin `//> using scala 3.9.0`.
-- **Toolchain pinned in the repo.** `.mill-jvm-version` names Temurin 25, so `./mill` downloads
+- **Toolchain pinned in the repo** (#554). `.mill-jvm-version` names Temurin 25, so `./mill` downloads
   the JDK the build needs instead of failing on whatever `java` is on PATH. The `application`
   string written to `docProps/app.xml` no longer embeds a Scala minor version
   (`XL - Pure Scala 3 Excel Library`).
 
 ### Added
 
-- **Remote-session support for Claude Code** (cloud sessions, routines, `@claude` in GitHub
+- **Remote-session support for Claude Code** (#554; cloud sessions, routines, `@claude` in GitHub
   Actions): a shared `.claude/settings.json` (build/test permissions plus a SessionStart hook),
   `scripts/remote-setup.sh` (provisions JDK 25 and scala-cli inside the Ubuntu 24.04 / OpenJDK 21
   sandbox and exports them to the session), `scripts/remote-rehearsal.sh` (Docker rehearsal of
