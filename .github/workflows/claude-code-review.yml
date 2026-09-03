@@ -2,7 +2,8 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    # ready_for_review: a PR opened as a draft is reviewed when it is promoted, not only on its next push.
+    types: [opened, synchronize, ready_for_review]
     # Docs-only and changelog-only PRs skip the automated review: each run costs several minutes
     # of API time and the human review covers prose.
     paths-ignore:
