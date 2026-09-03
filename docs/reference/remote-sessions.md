@@ -41,25 +41,29 @@ Mill 1.1.5, and `scala-cli` for the examples harness. Three things close the gap
    commands so a session is not blocked on approvals for routine work. Pushing and opening PRs still
    ask.
 
-### Recommended environment setup script
+### The `xl` cloud environment
 
-Cloud environments accept a one-time setup script (environment dialog at claude.ai/code). It runs
-as root before Claude Code launches, must exit zero within about five minutes, and its result is
-snapshotted and reused by later sessions. Pasting this pre-warms the toolchain and the dependency
-cache so the first `./mill` in each session is fast:
+Cloud environments are configured per organization at claude.ai/admin-settings/cloud-environments.
+The TJC organization has an Anthropic-hosted environment named **`xl`** (Trusted network access, no
+environment variables) whose setup script is the snippet below; pick it when starting a cloud session
+or routine for this repo. The setup script runs once as root before Claude Code launches, must exit
+zero within about five minutes, and its result is snapshotted and reused by later sessions, so the
+first `./mill` in each session finds the toolchain and dependency cache already on disk.
 
 ```bash
 #!/bin/bash
-# xl: provision the toolchain once; the snapshot is reused by later sessions.
+# xl: provision the Scala/Mill toolchain once; Anthropic snapshots the result for later sessions.
+# Every step is guarded, so this is harmless in a checkout that is not xl.
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 [ -f scripts/remote-setup.sh ] && CLAUDE_CODE_REMOTE=true bash scripts/remote-setup.sh || true
-# Pre-fetch Mill, the compiler bridge, and every dependency. Network only, no compile.
-[ -f build.mill ] && timeout 240 ./mill --no-daemon __.prepareOffline || true
+# Pre-fetch Mill, the compiler bridge, and every dependency (network only, no compile).
+[ -f build.mill ] && timeout 180 ./mill --no-daemon __.prepareOffline || true
 exit 0
 ```
 
-Without it everything still works; the first build of a session just downloads dependencies
-first, which is why `CLAUDE.md` tells sessions to give `./mill` a 600000 ms timeout.
+Keep this block and the environment's script in sync when either changes. Without the environment
+everything still works; the first build of a session just downloads dependencies first, which is why
+`CLAUDE.md` tells sessions to give `./mill` a 600000 ms timeout.
 
 ## GitHub Actions
 
