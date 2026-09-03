@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**XL** is a purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.8. The design prioritizes **purity, totality, determinism, and law-governed semantics** with zero-overhead opaque types and compile-time DSLs.
+**XL** is a purely functional, mathematically rigorous Excel (OOXML) library for Scala 3 (3.9 LTS). The design prioritizes **purity, totality, determinism, and law-governed semantics** with zero-overhead opaque types and compile-time DSLs.
 
 > **Guiding Principle**: You are working on **the best Excel library in the world**. Before making any decision, ask yourself: **"What would the best Excel library in the world do?"**
 
-**Package**: `com.tjclp.xl` | **Build**: Mill 1.1.x | **Scala**: 3.8.3
+**Package**: `com.tjclp.xl` | **Build**: Mill 1.1.x | **Scala**: 3.9.0 (LTS) | **JDK**: Temurin 25, pinned in `.mill-jvm-version` and downloaded by Mill itself
 
 ## Core Philosophy (Non-Negotiables)
 
@@ -99,16 +99,26 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 ## Build Commands
 
 ```bash
-./mill __.compile          # Compile all
+./mill __.compile          # Compile all (main + test sources)
 ./mill __.test             # Run all tests (5,455)
-./mill xl-core.test        # Test specific module
-./mill __.reformat         # Format (Scalafmt 3.10.1)
-./mill __.checkFormat      # CI check
+./mill xl-core.test        # Test one module
+./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
+./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
+./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources  # CI format check
 ./mill clean               # Clean artifacts
-make install               # Install xl CLI to ~/.local/bin/xl
+make install               # Local only: GraalVM native-image CLI → ~/.local/bin/xl
+make install-jar           # Portable: assembly JAR + wrapper → ~/.local/bin/xl (cloud sessions, CI)
 ```
 
-**IMPORTANT**: After modifying CLI code, always run `make install` to update the installed CLI. Do NOT manually copy jars.
+**IMPORTANT**: After modifying CLI code, reinstall before verifying behavior: `make install` locally (GraalVM native-image), `make install-jar` where there is no GraalVM (cloud sessions, CI). Do NOT manually copy jars.
+
+### Toolchain
+
+`.mill-jvm-version` pins Temurin 25 and `.mill-version` pins Mill 1.1.5; the `./mill` launcher downloads both through Coursier. The only prerequisites are `bash`, `curl`, and network access to GitHub and Maven Central. Never install a JDK by hand to satisfy the build, and never edit `javacOptions` to fit the local JDK. A fresh checkout downloads dependencies on its first build: give `./mill` a 600000 ms timeout.
+
+### Remote sessions (Claude Code on the web, routines, `@claude` in GitHub Actions)
+
+The sandbox is Ubuntu 24.04 with OpenJDK 21 and no scala-cli or GraalVM. `.claude/settings.json` runs `scripts/remote-setup.sh` on SessionStart; when `CLAUDE_CODE_REMOTE=true` it provisions JDK 25 and scala-cli through Coursier, exports `JAVA_HOME`/`PATH` for the session, and prints a summary into context. There, `make install-jar` replaces `make install`, worktrees and `gtr` are unnecessary (the sandbox clone is isolated), and personal memory is absent: everything a session must know lives in this file, `.claude/rules/`, and `.claude/skills/`. Details, the environment setup script, and a Docker rehearsal: `docs/reference/remote-sessions.md`.
 
 ## xl-agent Benchmark Runner
 
@@ -301,7 +311,7 @@ The CLI skill (`plugin/skills/xl-cli/SKILL.md`) auto-detects the latest release 
 
 ## Code Style
 
-All code must pass `./mill __.checkFormat`. See `docs/design/style-guide.md`.
+All code must pass the CI format check (`./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources`). See `docs/design/style-guide.md` and the `xl-scala-style` skill.
 
 **Rules**: opaque types for domain quantities | enums with `derives CanEqual` | `final case class` for data | total functions returning Either/Option | extension methods over implicit classes
 
@@ -404,15 +414,16 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 - **Status**: `docs/STATUS.md` (current capabilities, 5,455 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
+- **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)
+- **Skills** (`.claude/skills/`, load on demand): `mill-build` (targeted builds/tests, Mill gotchas), `xl-scala-style` (Scala 3 idioms, compiler landmines), `xl-testing` (MUnit/ScalaCheck patterns, release gates). Always-on process rules: `.claude/rules/workflow.md`.
 
 ## AI Agent Workflow
 
 **Issue Tracking**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
 1. Check GitHub Issues for available tasks
-2. Run `gtr list` to verify no conflicting worktrees
-3. Create worktree: `gtr create issue-XXX-description`
-4. After PR merge: close GitHub issue, update STATUS.md if needed
+2. Locally: `gtr list` to check for conflicting worktrees, then `gtr create issue-XXX-description` (`gtr` is a personal shell helper; `git worktree add ../worktrees/xl/<branch> -b <branch>` is the plain-git equivalent). In a cloud session skip this step: the sandbox clone is already isolated.
+3. After PR merge: close GitHub issue, update STATUS.md if needed
 
 **Module Conflict Matrix**:
 - High risk: `xl-core/Sheet.scala` (serialize work)
@@ -438,7 +449,8 @@ extension (sheet: Sheet)
 Zinc's incremental state inconsistent — you get `Cyclic reference involving trait TExprReferenceOps`
 (and TExprLookupOps / TExprAggregateOps), pointing at files you never touched. It is not your code:
 `./mill clean xl-evaluator.compile` then recompile. New specs auto-register from the trait; there is
-no list to update.
+no list to update. Scala 3.9's Zinc bridge records macro type arguments as dependencies, so this
+should now be rare; the fix is unchanged when it appears.
 
 **Import order**: Java/javax → Scala stdlib → Cats → Project → Tests
 

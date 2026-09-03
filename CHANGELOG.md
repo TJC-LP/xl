@@ -5,6 +5,33 @@ All notable changes to the XL project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Scala 3.9.0 LTS.** The build, README, quick-start, scripting docs, examples, and the
+  xl-scripting skill snippets move from Scala 3.8.3 to 3.9.0, the new long-term-support line
+  (maintained for at least three years; it succeeds 3.3 LTS as the recommended library
+  baseline). WartRemover 3.5.6 → 3.6.1, the only plugin build published for 3.9.0; none of the
+  enabled warts changed behavior. No source changes were required and all 5,455 tests pass
+  unchanged. Consumers need a Scala 3.9.0+ compiler to read the published TASTy (previously
+  3.8+); scala-cli scripts should pin `//> using scala 3.9.0`.
+- **Toolchain pinned in the repo.** `.mill-jvm-version` names Temurin 25, so `./mill` downloads
+  the JDK the build needs instead of failing on whatever `java` is on PATH. The `application`
+  string written to `docProps/app.xml` no longer embeds a Scala minor version
+  (`XL - Pure Scala 3 Excel Library`).
+
+### Added
+
+- **Remote-session support for Claude Code** (cloud sessions, routines, `@claude` in GitHub
+  Actions): a shared `.claude/settings.json` (build/test permissions plus a SessionStart hook),
+  `scripts/remote-setup.sh` (provisions JDK 25 and scala-cli inside the Ubuntu 24.04 / OpenJDK 21
+  sandbox and exports them to the session), `scripts/remote-rehearsal.sh` (Docker rehearsal of
+  that sandbox), always-on rules in `.claude/rules/`, and three skills in `.claude/skills/`
+  (`mill-build`, `xl-scala-style`, `xl-testing`). `docs/reference/remote-sessions.md` documents
+  the setup. The `@claude` GitHub Action now installs the toolchain and can push commits and open
+  PRs; the automated PR review skips docs-only PRs and drafts.
+
 ## [0.19.3] "Namesake" - 2026-08-14
 
 Patch release: one performance fix (#535, GH-536), found live on a
