@@ -11,7 +11,11 @@ export const meta = {
 }
 
 const ARGS = typeof args === 'string' ? JSON.parse(args) : (args || {})
-const REPO = ARGS.repo || '/Users/rcaputo3/git/xl'
+// Where the main checkout lives, as a phrase for agent prompts. Agents run with the repo as their
+// working directory, so the default avoids any machine-specific path (cloud sandboxes differ).
+const REPO = ARGS.repo || 'the xl checkout at the current working directory (git rev-parse --show-toplevel)'
+// Git invocation that targets that checkout from anywhere.
+const GIT = ARGS.repo ? `git -C ${ARGS.repo}` : 'git'
 const WAVE = ARGS.wave || 0
 const BRANCH = ARGS.branch || `wave-${WAVE}`
 const CLUSTERS = ARGS.clusters || []
@@ -140,7 +144,7 @@ CLUSTER BRIEF (what was supposed to happen):
 ${c.brief}
 
 PROTOCOL:
-1. Get the code: work in the implementer's worktree if it still exists (cd ${impl.worktreePath}); otherwise create your own: git -C ${REPO} worktree add /tmp/review-${c.key}-w${WAVE} ${impl.sha} and work there (remove it when done).
+1. Get the code: work in the implementer's worktree if it still exists (cd ${impl.worktreePath}); otherwise create your own: ${GIT} worktree add /tmp/review-${c.key}-w${WAVE} ${impl.sha} and work there (remove it when done).
 2. Refutation pass: run the issue's ORIGINAL repro — it must now behave correctly. Then prove the new tests pin the bug: temporarily restore the pre-fix source (git checkout ${BRANCH} -- <changed src files>, NOT the test files), run the new tests, they MUST FAIL; then restore (git checkout ${impl.sha} -- <files>). A test that passes without the fix is a rubber stamp — that is a rework finding.
 3. Break it: probe edge cases the issue implies but the tests skip (empty/boundary/unicode/negative/huge inputs; for parser work, round-trip law parse-print-parse; for OOXML work, write-read round-trip AND streaming-vs-in-memory parity where both paths exist; for refactors, behavioral equivalence on the old test suite).
 4. Run the module test suite yourself (./mill <module>.test) — do not trust gateEvidence.
@@ -149,7 +153,7 @@ VERDICT: approve (everything held) | rework (fixable findings — give precise r
 
 const reworkPrompt = (c, impl, review) => `You are the rework agent for cluster "${c.key}" of wave ${WAVE} (xl repo). An adversarial reviewer found concrete problems in the implementation. Fix exactly these findings — no scope creep.
 
-WORKTREE: cd ${impl.worktreePath} — if it no longer exists, recreate it: git -C ${REPO} worktree add /tmp/rework-${c.key}-w${WAVE} ${impl.branch} && cd there.
+WORKTREE: cd ${impl.worktreePath} — if it no longer exists, recreate it: ${GIT} worktree add /tmp/rework-${c.key}-w${WAVE} ${impl.branch} && cd there.
 PRIOR IMPLEMENTATION REPORT: ${JSON.stringify(impl, null, 2)}
 REVIEWER FINDINGS (fix all of these):
 ${(review.findings || []).map(f => '- ' + f).join('\n')}

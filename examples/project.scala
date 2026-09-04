@@ -1,4 +1,4 @@
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using repository ivy2Local
 
 // XL aggregate - includes all modules (core, ooxml, cats-effect, evaluator)

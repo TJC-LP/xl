@@ -14,9 +14,12 @@ Configured in `.scalafmt.conf` at the repo root — **Scalafmt 3.10.1**, `runner
 `docstrings.style = Asterisk` with wrapping.
 
 ```bash
-./mill __.reformat       # Format all modules
-./mill __.checkFormat    # CI / pre-commit check (fails on drift)
+./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format everything (main + test)
+./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources  # CI / pre-commit check (fails on drift)
 ```
+
+`./mill __.reformat` and `./mill __.checkFormat` cover main sources only (test modules do not mix
+in `ScalafmtModule`), so use the `__.sources` forms above before committing.
 
 Never hand-format around the tool; if a construct formats badly, restructure the code.
 
@@ -94,7 +97,7 @@ Group imports top-down, separated by blank lines:
 
 ## WartRemover
 
-WartRemover **3.5.6** runs as a compiler plugin on every module (configured in `build.mill`,
+WartRemover **3.6.1** runs as a compiler plugin on every module (configured in `build.mill`,
 trait `XLModuleBase`). Two tiers:
 
 - **Tier 1 (errors, fail the build)**: `Null`, `TryPartial`, `EitherProjectionPartial`,
@@ -125,9 +128,9 @@ Tier rationale, suppression rules, and the process for adding warts are in
 ## Enforcement Pipeline
 
 ```bash
-./mill __.checkFormat    # Scalafmt drift → CI failure
-./mill __.compile        # WartRemover Tier 1 → compile error
-./mill __.test           # 3,858 tests
+./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources  # Scalafmt drift → CI failure
+./mill __.compile                                                        # WartRemover Tier 1 → compile error
+./mill __.test                                                           # 5,455 tests
 ```
 
 Pre-commit hooks (`.pre-commit-config.yaml`) run the same `checkFormat` and `compile` steps;

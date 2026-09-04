@@ -37,7 +37,7 @@ No JDK prerequisite — scala-cli auto-provisions a JVM via coursier. The first 
 The canonical header for every script (this is the single source of truth — recipes in `reference/RECIPES.md` use the identical header):
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 
 import com.tjclp.xl.scripting.{*, given}
@@ -103,7 +103,7 @@ wb.update("Sales", f).unsafe                       // throws structured XLExcept
 ### Read → modify → write
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -235,7 +235,7 @@ Excel.write(result.workbook, "model.xlsx")       // computed values cached for E
 Native Excel `TABLE()` two-variable data tables (0.18.0) — the house sensitivity engine. `interior` is the RESULT GRID: for `D5:F6` the corner formula sits at C4 (one-up-one-left), the row-input axis rides D4:F4 (above) and the column-input axis rides C5:C6 (left). Only the corner cell carries the record — exactly Excel's own bytes.
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -284,7 +284,7 @@ Or lean on totality so there is nothing to unwrap: literal refs, `upsert`, range
 ### Merge many workbooks into one
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
@@ -306,7 +306,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 ### Data → styled report
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 
@@ -334,7 +334,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 ### Streaming a 500k-row file (constant memory)
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO

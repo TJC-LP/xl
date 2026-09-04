@@ -11,14 +11,14 @@ XL is published as JVM libraries to Maven Central. Use the aggregate `xl` artifa
 import mill._, scalalib._
 
 object myproject extends ScalaModule {
-  def scalaVersion = "3.8.3"
+  def scalaVersion = "3.9.0"
   def ivyDeps = Agg(ivy"com.tjclp::xl:0.19.3")
 }
 ```
 
 ### With sbt (build.sbt)
 ```scala
-scalaVersion := "3.8.3"
+scalaVersion := "3.9.0"
 libraryDependencies += "com.tjclp" %% "xl" % "0.19.3"
 ```
 
@@ -43,7 +43,7 @@ For minimal dependencies, use individual modules:
 For scripts, skip the build setup entirely: a two-line `scala-cli` header and ONE import give you the whole library — core API, DSL, compile-time literals, formula evaluation, sync `Excel` I/O, and streaming.
 
 ```scala
-//> using scala 3.8.3
+//> using scala 3.9.0
 //> using dep com.tjclp::xl:0.19.3
 
 import com.tjclp.xl.scripting.{*, given}

@@ -18,17 +18,46 @@ jobs:
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
+      contents: write        # push commits to PR branches and new branches
+      pull-requests: write   # open and update pull requests
+      issues: write          # reply on issues
       id-token: write
-      actions: read # Required for Claude to read CI results on PRs
+      actions: read          # read CI results on PRs
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      # Same toolchain as ci.yml, so Claude can compile, run tests, and run the examples harness.
+      # Mill downloads the JDK pinned in .mill-jvm-version by itself; this step puts a matching
+      # java and scala-cli on PATH for scripts and the skill-snippet gate.
+      - name: Set up JDK + scala-cli
+        uses: coursier/setup-action@v1
+        with:
+          jvm: temurin:25
+          apps: scala-cli
+
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: ${{ runner.os }}-coursier-${{ hashFiles('**/build.mill', '**/.scalafmt.conf', '**/.scalafix.conf') }}
+          restore-keys: |
+            ${{ runner.os }}-coursier-
+
+      - name: Cache Mill
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.mill
+          key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
+          restore-keys: |
+            ${{ runner.os }}-mill-
 
       - name: Run Claude Code
         id: claude
@@ -36,14 +65,11 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
-          # This is an optional setting that allows Claude to read CI results on PRs
+          # Lets Claude read CI results on PRs.
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://docs.claude.com/en/docs/claude-code/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr:*)'
+          # Build, test, and gate commands Claude may run without prompting. The repo's
+          # .claude/settings.json, CLAUDE.md, rules, and skills are picked up from the checkout.
+          claude_args: |
+            --allowedTools "Bash(./mill:*),Bash(make build:*),Bash(make install-jar:*),Bash(scripts/test-examples.sh:*),Bash(scripts/verify-skill-snippets.sh:*),Bash(scala-cli:*),Bash(gh pr:*),Bash(gh issue:*),Bash(gh run:*)"

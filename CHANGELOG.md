@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`calc-chain-stale` lint** (#555): every `<c r= i=>` entry in
+  `xl/calcChain.xml` must name a formula cell on the worksheet whose
+  `sheetId` is `i` (`i` carries forward to entries that omit it). Entries for
+  cells without `<f>`, or for a sheet id `workbook.xml` does not declare, are
+  reported once per sheet id with a first-5 sample. Cells inside an
+  array-formula range count as formula cells. Formula cells absent from the
+  chain are not findings, and an entry for a declared sheet whose part is
+  missing is left to `missing-part`. A chain that is not well-formed XML is
+  one finding rather than a lint error. The check rides the existing sheet
+  scan (no second pass); streaming mode reports identical findings.
+- **Remote-session support for Claude Code** (#554; cloud sessions, routines, `@claude` in GitHub
+  Actions): a shared `.claude/settings.json` (build/test permissions plus a SessionStart hook),
+  `scripts/remote-setup.sh` (provisions JDK 25 and scala-cli inside the Ubuntu 24.04 / OpenJDK 21
+  sandbox and exports them to the session), `scripts/remote-rehearsal.sh` (Docker rehearsal of
+  that sandbox), always-on rules in `.claude/rules/`, and three skills in `.claude/skills/`
+  (`mill-build`, `xl-scala-style`, `xl-testing`). `docs/reference/remote-sessions.md` documents
+  the setup. The `@claude` GitHub Action now installs the toolchain and can push commits and open
+  PRs; the automated PR review skips docs-only PRs and drafts.
+
+### Changed
+
+- **Scala 3.9.0 LTS** (#554). The build, README, quick-start, scripting docs, examples, and the
+  xl-scripting skill snippets move from Scala 3.8.3 to 3.9.0, the new long-term-support line
+  (maintained for at least three years; it succeeds 3.3 LTS as the recommended library
+  baseline). WartRemover 3.5.6 → 3.6.1, the only plugin build published for 3.9.0; none of the
+  enabled warts changed behavior. No source changes were required and all 5,455 tests pass
+  unchanged. Consumers need a Scala 3.9.0+ compiler to read the published TASTy (previously
+  3.8+); scala-cli scripts should pin `//> using scala 3.9.0`.
+- **Toolchain pinned in the repo** (#554). `.mill-jvm-version` names Temurin 25, so `./mill` downloads
+  the JDK the build needs instead of failing on whatever `java` is on PATH. The `application`
+  string written to `docProps/app.xml` no longer embeds a Scala minor version
+  (`XL - Pure Scala 3 Excel Library`).
+
 ### Fixed
 
 - **The source `xl/calcChain.xml` is dropped on every write that rewrites a
@@ -21,19 +56,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming (`--stream`) writer alike; a clean read → write still copies
   the archive byte-for-byte. Excel rebuilds the chain on its next save, and
   a missing chain does not force a recalculation on open.
-
-### Added
-
-- **`calc-chain-stale` lint** (#555): every `<c r= i=>` entry in
-  `xl/calcChain.xml` must name a formula cell on the worksheet whose
-  `sheetId` is `i` (`i` carries forward to entries that omit it). Entries for
-  cells without `<f>`, or for a sheet id `workbook.xml` does not declare, are
-  reported once per sheet id with a first-5 sample. Cells inside an
-  array-formula range count as formula cells. Formula cells absent from the
-  chain are not findings, and an entry for a declared sheet whose part is
-  missing is left to `missing-part`. A chain that is not well-formed XML is
-  one finding rather than a lint error. The check rides the existing sheet
-  scan (no second pass); streaming mode reports identical findings.
 
 ## [0.19.3] "Namesake" - 2026-08-14
 

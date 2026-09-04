@@ -2,23 +2,20 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    # ready_for_review: a PR opened as a draft is reviewed when it is promoted, not only on its next push.
+    types: [opened, synchronize, ready_for_review]
+    # Docs-only and changelog-only PRs skip the automated review: each run costs several minutes
+    # of API time and the human review covers prose.
+    paths-ignore:
+      - "docs/**"
+      - "CHANGELOG.md"
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
+    # Draft PRs are reviewed once they are marked ready.
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: read

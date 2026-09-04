@@ -1,4 +1,4 @@
-# Domain Model (Scala 3.8, Deep Dive)
+# Domain Model (Scala 3, Deep Dive)
 
 This document mirrors the **current** xl-core data model. Core types lean on opaque types for zero-overhead safety; closed sums are enums with exhaustive matching. Package references use `com.tjclp.xl` (macros and syntax live in the same module).
 

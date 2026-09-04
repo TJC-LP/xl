@@ -34,7 +34,7 @@ final case class WorkbookMetadata(
   created: Option[java.time.LocalDateTime] = None,
   modified: Option[java.time.LocalDateTime] = None,
   lastModifiedBy: Option[String] = None,
-  application: Option[String] = Some("XL - Pure Scala 3.8 Excel Library"),
+  application: Option[String] = Some("XL - Pure Scala 3 Excel Library"),
   appVersion: Option[String] = Some("0.19.3"),
   theme: ThemePalette = ThemePalette.office,
   definedNames: Vector[DefinedName] = Vector.empty,
