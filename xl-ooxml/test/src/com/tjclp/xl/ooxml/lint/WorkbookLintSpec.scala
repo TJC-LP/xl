@@ -1341,6 +1341,61 @@ class WorkbookLintSpec extends FunSuite:
     )
   }
 
+  test("GH-555: a chain that is not well-formed XML is one finding, and other rules still run") {
+    val parts = calcChainParts("""<c r="B1" i="1"/>""") +
+      ("xl/calcChain.xml" -> "<calcChain><c r=\"B1\" i=\"1\"></calcChain") +
+      ("xl/worksheets/sheet1.xml" -> leadingEqualsSheetXml)
+    val findings = lintOf(parts)
+    assertEquals(
+      findings.map(_.category).sortBy(_.slug),
+      Vector(LintCategory.CalcChainStale, LintCategory.FormulaLeadingEquals)
+    )
+    val chain =
+      findings.find(_.category == LintCategory.CalcChainStale).getOrElse(fail("no chain finding"))
+    assertEquals(chain.locator, "<calcChain>")
+    assert(chain.message.contains("not well-formed XML"), chain.message)
+    assertEquals(lintStreamOf(parts), findings)
+  }
+
+  test("GH-555: i is the sheetId attribute, not the sheet position") {
+    val renumbered = calcChainParts("""<c r="B1" i="7"/><c r="C1"/>""") +
+      ("xl/workbook.xml" -> workbookXml.replace("""sheetId="1"""", """sheetId="7""""))
+    assertEquals(lintOf(renumbered), Vector.empty[Finding])
+    val positional = calcChainParts("""<c r="B1" i="1"/>""") +
+      ("xl/workbook.xml" -> workbookXml.replace("""sheetId="1"""", """sheetId="7""""))
+    val findings = lintOf(positional)
+    assertEquals(findings.map(_.category), Vector(LintCategory.CalcChainStale))
+    assert(findings.headOption.exists(_.message.contains("sheetId 1")), findings.toString)
+    assertEquals(lintStreamOf(renumbered), Vector.empty[Finding])
+  }
+
+  test("GH-555: entries inside an array-formula range are formula cells (anchor carries the <f>)") {
+    val arraySheet = worksheetWith(
+      """<sheetData>
+    <row r="1"><c r="A1"><v>1</v></c><c r="B1"><f t="array" ref="B1:B3">TRANSPOSE(A1:C1)</f><v>1</v></c></row>
+    <row r="2"><c r="B2"><v>2</v></c></row>
+    <row r="3"><c r="B3"><v>3</v></c><c r="D3"><v>9</v></c></row>
+  </sheetData>"""
+    )
+    val parts = calcChainParts("""<c r="B1" i="1"/><c r="B2"/><c r="B3"/>""") +
+      ("xl/worksheets/sheet1.xml" -> arraySheet)
+    assertEquals(lintOf(parts), Vector.empty[Finding])
+    assertEquals(lintStreamOf(parts), Vector.empty[Finding])
+    val outside = parts + ("xl/calcChain.xml" -> calcChainXml("""<c r="B1" i="1"/><c r="D3"/>"""))
+    assertEquals(lintOf(outside).map(_.category), Vector(LintCategory.CalcChainStale))
+    assert(
+      lintOf(outside).headOption.exists(_.message.contains("first: D3")),
+      lintOf(outside).toString
+    )
+  }
+
+  test("GH-555: an entry for a declared sheet whose part is missing is left to missing-part") {
+    val parts = calcChainParts("""<c r="B1" i="1"/>""") - "xl/worksheets/sheet1.xml"
+    val categories = lintOf(parts).map(_.category)
+    assert(categories.contains(LintCategory.MissingPart), categories.toString)
+    assert(!categories.contains(LintCategory.CalcChainStale), categories.toString)
+  }
+
   test("GH-555: streaming mode reports identical findings") {
     val parts = calcChainParts("""<c r="B1" i="1"/><c r="A1"/><c r="B1" i="7"/>""")
     assertEquals(lintStreamOf(parts), lintOf(parts))

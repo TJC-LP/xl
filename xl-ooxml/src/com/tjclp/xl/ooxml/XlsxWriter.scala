@@ -694,9 +694,6 @@ object XlsxWriter:
     crc.update(bytes)
     crc.getValue
 
-  /** Calculation chain part; never emitted, dropped from dirty writes (GH-555). */
-  private val calcChainPath = "xl/calcChain.xml"
-
   // ========== Surgical Modification Methods ==========
 
   /**
@@ -1728,9 +1725,9 @@ object XlsxWriter:
     // reaches this path (GH-555).
     // see: https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-calculation-chain
     val droppedCalcChain: Set[String] =
-      if sourceContext.exists(_.partManifest.contains(calcChainPath)) &&
+      if sourceContext.exists(_.partManifest.contains(XmlUtil.calcChainPath)) &&
         (sheetsToRegenerate.nonEmpty || tracker.deletedSheets.nonEmpty)
-      then Set(calcChainPath)
+      then Set(XmlUtil.calcChainPath)
       else Set.empty
     val livePreservableParts = preservableParts -- removalOrphans -- droppedCalcChain
 
@@ -2236,7 +2233,7 @@ object XlsxWriter:
         else
           Relationships(workbookRels.relationships.filterNot { rel =>
             rel.`type` == XmlUtil.relTypeCalcChain ||
-            Relationships.resolveWorkbookTarget(rel.target) == calcChainPath
+            Relationships.resolveWorkbookTarget(rel.target) == XmlUtil.calcChainPath
           })
       writePart(zip, "xl/_rels/workbook.xml.rels", workbookRelsOut, config)
       writeStyles(zip, "xl/styles.xml", styles, config)

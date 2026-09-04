@@ -8,6 +8,7 @@ import java.nio.file.{Files as JFiles, Path}
 import java.util.zip.{ZipEntry, ZipFile, ZipInputStream, ZipOutputStream}
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.ooxml.{ContentTypes, Relationships, XmlSecurity, XmlUtil}
 import com.tjclp.xl.styles.CellStyle
 import scala.collection.mutable
 import scala.util.Using
@@ -398,7 +399,7 @@ object ZipTransformer:
             zipIn.closeEntry()
           else
             // Copy unchanged entry
-            copyEntry(zipIn, zipOut, entry)
+            copyEntryDroppingCalcChain(zipIn, zipOut, entry)
 
           entry = zipIn.getNextEntry
       finally
@@ -456,7 +457,7 @@ object ZipTransformer:
             zipIn.closeEntry()
           else
             // Copy unchanged entry (including styles.xml)
-            copyEntry(zipIn, zipOut, entry)
+            copyEntryDroppingCalcChain(zipIn, zipOut, entry)
 
           entry = zipIn.getNextEntry
       finally
@@ -515,7 +516,7 @@ object ZipTransformer:
             val transformed = transformWorksheetEntryWithMetadata(zipIn, patches, worksheetMetadata)
             writeEntry(zipOut, entryName, transformed)
             zipIn.closeEntry()
-          else copyEntry(zipIn, zipOut, entry)
+          else copyEntryDroppingCalcChain(zipIn, zipOut, entry)
 
           entry = zipIn.getNextEntry
       finally
@@ -569,7 +570,7 @@ object ZipTransformer:
             val transformed = transformWorksheetEntryWithMetadata(zipIn, patches, worksheetMetadata)
             writeEntry(zipOut, entryName, transformed)
             zipIn.closeEntry()
-          else copyEntry(zipIn, zipOut, entry)
+          else copyEntryDroppingCalcChain(zipIn, zipOut, entry)
 
           entry = zipIn.getNextEntry
       finally
@@ -763,6 +764,61 @@ object ZipTransformer:
     zipOut.putNextEntry(entry)
     zipOut.write(data)
     zipOut.closeEntry()
+
+  /**
+   * Copy an entry, except the calculation chain (GH-555). A transformed worksheet may have changed
+   * which cells hold formulas, and Excel repairs a workbook whose `xl/calcChain.xml` names a cell
+   * without one, so the part is dropped together with its `[Content_Types].xml` Override and its
+   * `workbook.xml.rels` Relationship. Those two parts are re-serialized only when they carry the
+   * registration; every other entry copies byte-for-byte.
+   */
+  private def copyEntryDroppingCalcChain(
+    zipIn: ZipInputStream,
+    zipOut: ZipOutputStream,
+    sourceEntry: ZipEntry
+  ): Unit =
+    val name = sourceEntry.getName
+    if name == XmlUtil.calcChainPath then zipIn.closeEntry()
+    else if name == "[Content_Types].xml" then
+      rewriteIfRegistered(zipIn, zipOut, name) { text =>
+        XmlSecurity
+          .parseSafe(text, name)
+          .toOption
+          .flatMap(ContentTypes.fromXml(_).toOption)
+          .map(ct => XmlUtil.compact(ct.withoutParts(Set(XmlUtil.calcChainPath)).toXml))
+      }
+    else if name == "xl/_rels/workbook.xml.rels" then
+      rewriteIfRegistered(zipIn, zipOut, name) { text =>
+        XmlSecurity
+          .parseSafe(text, name)
+          .toOption
+          .flatMap(Relationships.fromXml(_).toOption)
+          .map { rels =>
+            val kept = rels.relationships.filterNot { rel =>
+              rel.`type` == XmlUtil.relTypeCalcChain ||
+              Relationships.resolveWorkbookTarget(rel.target) == XmlUtil.calcChainPath
+            }
+            XmlUtil.compact(Relationships(kept).toXml)
+          }
+      }
+    else copyEntry(zipIn, zipOut, sourceEntry)
+
+  /**
+   * Write the entry re-serialized by `rewrite` when its text mentions the calculation chain and
+   * parses; otherwise write the source bytes unchanged.
+   */
+  private def rewriteIfRegistered(
+    zipIn: ZipInputStream,
+    zipOut: ZipOutputStream,
+    name: String
+  )(rewrite: String => Option[String]): Unit =
+    val bytes = zipIn.readAllBytes()
+    val text = new String(bytes, StandardCharsets.UTF_8)
+    val out =
+      if text.contains("calcChain") then
+        rewrite(text).fold(bytes)(_.getBytes(StandardCharsets.UTF_8))
+      else bytes
+    writeEntry(zipOut, name, out)
 
   /**
    * Copy entry from input to output ZIP.

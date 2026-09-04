@@ -29,12 +29,17 @@ class CalcChainDropSpec extends FunSuite:
     val in = TestFixtures.copyToTemp(name)
     (in, XlsxReader.read(in).fold(err => fail(err.message), identity))
 
-  private def writeToBytes(wb: Workbook): Array[Byte] =
+  private def writeToBytes(wb: Workbook, config: WriterConfig = WriterConfig.default): Array[Byte] =
     val out = Files.createTempFile("xl-calcchain-", ".xlsx")
     try
-      XlsxWriter.writeWith(wb, out, WriterConfig.default).fold(err => fail(err.message), identity)
+      XlsxWriter.writeWith(wb, out, config).fold(err => fail(err.message), identity)
       Files.readAllBytes(out)
     finally Files.deleteIfExists(out)
+
+  private def assertNoChain(output: Map[String, Array[Byte]]): Unit =
+    assert(!output.contains(calcChain), output.keys.toVector.sorted.mkString(", "))
+    assert(!text(output, contentTypes).contains("calcChain"), text(output, contentTypes))
+    assert(!text(output, workbookRels).contains("calcChain"), text(output, workbookRels))
 
   private def entries(bytes: Array[Byte]): Map[String, Array[Byte]] =
     val zin = new ZipInputStream(new ByteArrayInputStream(bytes))
@@ -72,6 +77,31 @@ class CalcChainDropSpec extends FunSuite:
     assert(text(source, contentTypes).contains("calcChain"))
     assert(text(source, workbookRels).contains("calcChain"))
     assertEquals(lintOf(Files.readAllBytes(in)), Vector.empty[Finding])
+  }
+
+  test(
+    "datatable-excel-edge.xlsx (two sheets, chain on sheetId 1) lints clean and keeps its chain on a clean write"
+  ) {
+    val (in, wb) = readFixture("datatable-excel-edge.xlsx")
+    val source = entries(Files.readAllBytes(in))
+    assert(text(source, calcChain).contains("""i="1""""), text(source, calcChain))
+    assertEquals(lintOf(Files.readAllBytes(in)), Vector.empty[Finding])
+    assertEquals(text(entries(writeToBytes(wb)), calcChain), text(source, calcChain))
+  }
+
+  test("removing a sheet drops the chain, its Override and its Relationship") {
+    val (_, wb) = readFixture("datatable-excel-edge.xlsx")
+    val removed = wb.remove(SheetName.unsafe("Sheet2")).fold(err => fail(err.message), identity)
+    val bytes = writeToBytes(removed)
+    assertNoChain(entries(bytes))
+    assertEquals(lintOf(bytes), Vector.empty[Finding])
+  }
+
+  test("WriterConfig.secure rewrites every sheet, so an otherwise clean write drops the chain") {
+    val (_, wb) = readFixture("datatable-excel.xlsx")
+    val bytes = writeToBytes(wb, WriterConfig.secure)
+    assertNoChain(entries(bytes))
+    assertEquals(lintOf(bytes), Vector.empty[Finding])
   }
 
   test("a clean read -> write keeps the source chain byte-identically") {

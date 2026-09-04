@@ -17,9 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and every library write, so any edit that moved, added or removed a formula
   shipped a stale chain that LibreOffice, openpyxl and `xl lint` all accept.
   The part, its `[Content_Types].xml` Override and its `workbook.xml.rels`
-  Relationship now fall together; a clean read → write still copies the
-  archive byte-for-byte. Excel rebuilds the chain on its next save, and a
-  missing chain does not force a recalculation on open.
+  Relationship now fall together, in the in-memory writer and in the
+  streaming (`--stream`) writer alike; a clean read → write still copies
+  the archive byte-for-byte. Excel rebuilds the chain on its next save, and
+  a missing chain does not force a recalculation on open.
 
 ### Added
 
@@ -27,9 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xl/calcChain.xml` must name a formula cell on the worksheet whose
   `sheetId` is `i` (`i` carries forward to entries that omit it). Entries for
   cells without `<f>`, or for a sheet id `workbook.xml` does not declare, are
-  reported once per sheet id with a first-5 sample. Formula cells absent from
-  the chain are not findings. Streaming mode reports identical findings and
-  reads each worksheet with memory bounded by that sheet's chain entries.
+  reported once per sheet id with a first-5 sample. Cells inside an
+  array-formula range count as formula cells. Formula cells absent from the
+  chain are not findings, and an entry for a declared sheet whose part is
+  missing is left to `missing-part`. A chain that is not well-formed XML is
+  one finding rather than a lint error. The check rides the existing sheet
+  scan (no second pass); streaming mode reports identical findings.
 
 ## [0.19.3] "Namesake" - 2026-08-14
 

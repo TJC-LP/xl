@@ -68,7 +68,9 @@ object XmlUtil:
   // Workbook-level reference targets checked by the structural lint (GH-397)
   val relTypeExternalLink =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
-  // Calculation chain part; the writer drops it with the part on dirty writes (GH-555)
+  // Calculation chain part: never emitted; every dirty write drops it with its Override and
+  // Relationship, and lint validates a preserved one (GH-555)
+  val calcChainPath = "xl/calcChain.xml"
   val relTypeCalcChain =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain"
   // The externalLink part's own <externalBook r:id> target (GH-413)
