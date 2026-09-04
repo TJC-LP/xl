@@ -174,6 +174,20 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(ops)
   }
 
+  test("GH-499: putf writes every uncached cash flow into its NPV result") {
+    val sheet = Sheet("Data")
+      .put(ref"A1", CellValue.Formula("100"))
+      .put(ref"A2", CellValue.Number(BigDecimal(121)))
+    val wb = Workbook(sheet)
+    val out = tempXlsx()
+    try
+      WriteCommands
+        .putFormula(wb, Some(sheet), "C1", List("=NPV(0,A1:A2)"), out, config)
+        .unsafeRunSync()
+      assertCachedNumber(cachedFormulaValue(readBack(out), 2, 0), 221.0)
+    finally Files.deleteIfExists(out)
+  }
+
   test("batch with a formula error still writes and reports it in the summary") {
     val wb = Workbook(Sheet("Data"))
     val ops = writeOps("""[

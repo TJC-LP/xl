@@ -423,9 +423,8 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     assert((rate.toDouble - 0.1).abs < 0.01, s"expected ~0.1, got $rate")
   }
 
-  test("GH-405: out-of-range serials in a date range still drop (MaxExcelDateSerial guard)") {
-    // A negative serial is not a date; the coercion guard (0..MaxExcelDateSerial) keeps it
-    // out, so the length mismatch surfaces as a clean error rather than a bogus 1899 date
+  test("GH-405/GH-499: out-of-range date serials produce an explicit diagnostic") {
+    // Invalid dates must fail at their original position instead of changing the pair alignment.
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal("-1000")),
       ARef.from0(0, 1) -> CellValue.Number(BigDecimal("1100")),
@@ -438,6 +437,10 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
     val err = evalErr(expr, sheet)
     assert(err.toString.contains("XIRR"), s"expected an XIRR-scoped error, got $err")
+    assert(
+      err.toString.contains("invalid date"),
+      s"expected the invalid date to be named, got $err"
+    )
   }
 
   test("GH-405: XIRR returns block survives the OOXML value round trip (field chain)") {
