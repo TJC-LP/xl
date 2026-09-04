@@ -349,7 +349,9 @@ object WorkbookEvaluator:
           else if dynamicAll.isEmpty then Set.empty[QualifiedRef]
           else dynamicAll ++ DependencyGraph.qualifiedTransitiveDependents(dependents, dynamicAll)
 
-        val stripBySheet: Map[SheetName, Set[ARef]] = bucketIter.groupMap(_.sheet)(_.ref)
+        val blockedCaches = if iterating then Set.empty[QualifiedRef] else removed
+        val stripBySheet: Map[SheetName, Set[ARef]] =
+          (bucketIter ++ blockedCaches).groupMap(_.sheet)(_.ref)
         val initialSheets: Vector[Sheet] =
           wb.sheets.map { s =>
             val toStrip = stripBySheet.getOrElse(s.name, Set.empty)
@@ -412,7 +414,9 @@ object WorkbookEvaluator:
                     acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
                     errs
                   )
-                case Left(error) => (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
+                case Left(error) =>
+                  val stripped = SheetEvaluator.stripFormulaCaches(sheets(idx), Set(q.ref))
+                  (sheets.updated(idx, stripped), acc, errs :+ CellEvalError(q.sheet, q.ref, error))
 
         def evalPass(
           order: List[QualifiedRef],
@@ -649,7 +653,8 @@ object WorkbookEvaluator:
                     errs
                   )
                 case Some(Left(error)) =>
-                  (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
+                  val stripped = SheetEvaluator.stripFormulaCaches(sheets(idx), Set(q.ref))
+                  (sheets.updated(idx, stripped), acc, errs :+ CellEvalError(q.sheet, q.ref, error))
                 case None => (sheets, acc, errs) // unreachable: every member evaluates every round
           }
           val report = SccReport(
@@ -709,7 +714,43 @@ object WorkbookEvaluator:
               case Some(reason) => failPass(orderedBucket, mainState, reason)
             (completedState, Vector.empty[SccReport])
 
-        val (_, evaluated, evalErrors) = finalState
+        val (_, successful, evalErrors) = finalState
+        val failures = cycleErrors ++ blockedErrors ++ evalErrors
+        val failedRefs = failures.iterator.map(e => QualifiedRef(e.sheet, e.ref)).toSet
+        // A guarded fallback is not a certified result when an upstream formula could not run.
+        // Pinned external/table caches remain explicit boundaries of the recalculation contract.
+        val invalid =
+          if failedRefs.isEmpty then Set.empty[QualifiedRef]
+          else
+            val pinned = wb.sheets.iterator.flatMap { sheet =>
+              sheet.cells.iterator.collect {
+                case (ref, cell) if SheetEvaluator.pinnedCache(cell.value).isDefined =>
+                  QualifiedRef(sheet.name, ref)
+              }
+            }.toSet
+            val invalidationEdges = dependents.view.mapValues(_ -- pinned).toMap
+            failedRefs ++ DependencyGraph.qualifiedTransitiveDependents(
+              invalidationEdges,
+              failedRefs
+            )
+        val additionalErrors = (invalid -- failedRefs).toVector
+          .sortBy(q => (q.sheet.value, q.ref.row.index0, q.ref.col.index0))
+          .map(q =>
+            CellEvalError(
+              q.sheet,
+              q.ref,
+              XLError
+                .FormulaError(formulaText(q), "Blocked by an upstream formula evaluation failure")
+            )
+          )
+        val invalidBySheet = invalid.groupMap(_.sheet)(_.ref)
+        val evaluated =
+          if invalid.isEmpty then successful
+          else
+            successful.map { (name, cells) =>
+              val toClear = invalidBySheet.getOrElse(name, Set.empty)
+              name -> cells.filterNot((ref, _) => toClear.contains(ref))
+            }
         val cycles = cycleReports.sortBy(r =>
           r.members.headOption.fold(("", ""))((s, ref) => (s.value, ref.toA1))
         )
@@ -721,7 +762,14 @@ object WorkbookEvaluator:
         // value actually differs from the pre-existing cache (a newly cached cell — prior
         // cache None — counts as a change).
         val cachedSheets: Vector[(Sheet, Boolean)] = wb.sheets.map { orig =>
-          evaluated.getOrElse(orig.name, Map.empty).foldLeft((orig, false)) {
+          val toClear = invalidBySheet.getOrElse(orig.name, Set.empty)
+          val cleared = SheetEvaluator.stripFormulaCaches(orig, toClear)
+          val invalidated = toClear.exists(ref =>
+            orig(ref).value match
+              case CellValue.Formula(_, Some(_), _) => true
+              case _ => false
+          )
+          evaluated.getOrElse(orig.name, Map.empty).foldLeft((cleared, invalidated)) {
             case ((s, changed), (ref, computed)) =>
               s.cells.get(ref).map(_.value) match
                 // GH-430: a data-table cache is never rewritten by recalculation — pinned
@@ -750,7 +798,7 @@ object WorkbookEvaluator:
         RecalcResult(
           workbook = workbookWithCaches,
           evaluated = wb.sheets.map(s => s.name -> evaluated.getOrElse(s.name, Map.empty)).toMap,
-          errors = cycleErrors ++ blockedErrors ++ evalErrors,
+          errors = failures ++ additionalErrors,
           converged = converged,
           iterationsUsed = iterationsUsed,
           cycles = cycles

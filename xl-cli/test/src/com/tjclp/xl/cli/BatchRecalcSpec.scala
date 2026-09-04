@@ -188,6 +188,50 @@ class BatchRecalcSpec extends FunSuite:
     finally Files.deleteIfExists(out)
   }
 
+  test("GH-563: recalc persists cache invalidation on a source-backed workbook") {
+    val sheet = Sheet("Data")
+      .put(ref"A1", CellValue.Formula("UNSUPPORTED(1)", Some(CellValue.Number(6))))
+      .put(ref"A2", CellValue.Formula("A1*2", Some(CellValue.Number(12))))
+    val source = tempXlsx()
+    val out = tempXlsx()
+    try
+      ExcelIO.instance[IO].write(Workbook(sheet), source).unsafeRunSync()
+      val summary = WriteCommands.recalc(readBack(source), out, config).unsafeRunSync()
+      val result = readBack(out)
+      assertEquals(formulaOn(result, "Data", ref"A1").cachedValue, None)
+      assertEquals(formulaOn(result, "Data", ref"A2").cachedValue, None)
+      assert(summary.contains("2 errors"), summary)
+    finally
+      Files.deleteIfExists(source)
+      Files.deleteIfExists(out)
+  }
+
+  test("GH-507: default structural writes withdraw unknown named caches and dependent caches") {
+    val before = blindNameWorkbook("Data!$A$1:$A$3,Data!$A$8:$A$10", 33)
+    val other = before.sheets
+      .find(_.name.value == "Other")
+      .get
+      .put(ref"B3", CellValue.Formula("B2*2", Some(CellValue.Number(66))))
+    val wb = before.put(other)
+    val out = tempXlsx()
+    try
+      val summary = WriteCommands
+        .deleteRows(
+          wb,
+          wb.sheets.find(_.name.value == "Data"),
+          2,
+          1,
+          out,
+          config
+        )
+        .unsafeRunSync()
+      val result = readBack(out)
+      assertEquals(formulaOn(result, "Other", ref"B2").cachedValue, None)
+      assertEquals(formulaOn(result, "Other", ref"B3").cachedValue, None)
+      assert(summary.contains("2 errors"), summary)
+    finally Files.deleteIfExists(out)
+  }
+
   test("batch with a formula error still writes and reports it in the summary") {
     val wb = Workbook(Sheet("Data"))
     val ops = writeOps("""[
@@ -671,9 +715,8 @@ class BatchRecalcSpec extends FunSuite:
   }
 
   test("GH-493: an unresolvable cone reports the CONE, never 'interior cell(s) left unseeded'") {
-    // Round-2 review: B1 is axis-dependent but its cross-sheet leg is unresolvable, so the cone
-    // stays on its stale cache and the grid seeds FLAT (11 everywhere). Every interior IS seeded —
-    // rendering that as "1 interior cell(s) left unseeded" is a false statement about the run.
+    // The base calculation succeeds; only the substituted axis reaches the missing sheet.
+    // The seeder retains that base cache and reports the unresolved cone for the seeded grid.
     val kind: com.tjclp.xl.cells.FormulaKind.DataTable = com.tjclp.xl.cells.FormulaKind.DataTable(
       ref = CellRange.parse("D5:D7").fold(err => fail(err), identity),
       dt2D = false,
@@ -683,7 +726,10 @@ class BatchRecalcSpec extends FunSuite:
     )
     val sheet = Sheet("Data")
       .put(ref"A1" -> 0)
-      .put(ref"B1", CellValue.Formula("A1*10+Missing!A1", Some(CellValue.Number(BigDecimal(10)))))
+      .put(
+        ref"B1",
+        CellValue.Formula("IF(A1=0,10,A1*10+Missing!A1)", Some(CellValue.Number(BigDecimal(10))))
+      )
       .put(ref"D4", CellValue.Formula("B1+1"))
       .put(ref"C5" -> 1, ref"C6" -> 2, ref"C7" -> 3)
       .put(ref"D5", CellValue.dataTable(kind, None))
@@ -701,7 +747,7 @@ class BatchRecalcSpec extends FunSuite:
     assert(summary.contains("Data!B1"), s"the warning must name the cone cell: $summary")
     val written = readBack(out)
     Vector(ref"D5", ref"D6", ref"D7").foreach { r =>
-      assert(interiorDec(written, r).isDefined, s"${r.toA1} was seeded: $summary")
+      assertEquals(interiorDec(written, r), Some(BigDecimal(11)), s"${r.toA1} was seeded: $summary")
     }
     Files.deleteIfExists(out)
   }
@@ -1400,40 +1446,28 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
-  test("GH-507: --no-recalc drops a cache behind an INTERSECTION name whose text never changes") {
-    // Same class, and the reason a before/after name-text diff is NOT a sufficient detector:
-    // shiftDefinedNameText leaves the space-separated intersection form verbatim, so the name is
-    // byte-identical before and after. Pre-edit A1:A8 ∩ A5:A10 = A5:A8 = 5+6+7+8 = 26; after
-    // deleting Data row 2 the same intersection is 6+7+8+9 = 30.
+  test("GH-507: --no-recalc refuses an intersection-name rewrite it cannot preserve") {
     val wb = blindNameWorkbook("Data!$A$1:$A$8 Data!$A$5:$A$10", 26)
     val out = tempXlsx()
-
-    WriteCommands
-      .deleteRows(
-        wb,
-        wb.sheets.find(_.name.value == "Data"),
-        2,
-        1,
-        out,
-        config,
-        false,
-        preserveCaches
-      )
-      .unsafeRunSync()
-
-    val written = readBack(out)
-    assertEquals(
-      written.metadata.definedNames.find(_.name == "Blind").map(_.formula),
-      Some("Data!$A$1:$A$8 Data!$A$5:$A$10"),
-      "premise: the name text is unchanged, so no name-diff guard could fire (GH-507)"
-    )
-    val summed = formulaOn(written, "Other", ref"B2")
-    assertEquals(
-      summed.cachedValue,
-      None,
-      s"an unchanged blind name is still blind — the cache must be withdrawn: $summed"
-    )
-    Files.deleteIfExists(out)
+    try
+      val error = intercept[Exception] {
+        WriteCommands
+          .deleteRows(
+            wb,
+            wb.sheets.find(_.name.value == "Data"),
+            2,
+            1,
+            out,
+            config,
+            false,
+            preserveCaches
+          )
+          .unsafeRunSync()
+      }
+      assert(error.getMessage.contains("Blind"), error.getMessage)
+      assert(error.getMessage.contains("Cannot safely rewrite"), error.getMessage)
+      assertEquals(Files.size(out), 0L)
+    finally Files.deleteIfExists(out)
   }
 
   test("GH-507: a blind name withdraws only the caches that actually mention it") {

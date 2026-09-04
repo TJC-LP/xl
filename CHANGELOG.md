@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Failed recalculation withdraws stale caches from the failing cell and its dependents**
+  (#563), including cross-sheet and dynamic readers, while preserving genuine Excel error values
+  and declared pinned caches. Structural edits invalidate unresolved named dependencies and their
+  consumers on both default and `--no-recalc` paths (#507), respect local name shadowing, and
+  refuse unsupported reference rewrites before changing the workbook.
 - **Uncached cash-flow and array inputs are evaluated before they are consumed** (#499).
   NPV/IRR/XNPV/XIRR, array arithmetic, TRANSPOSE/SORT/UNIQUE/FILTER, and range-valued LET/names
   retain all evaluated inputs and propagate host failures. XNPV/XIRR validate values and dates
