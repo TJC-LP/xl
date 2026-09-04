@@ -1362,6 +1362,11 @@ xl -f deliverable.xlsx lint && echo "safe to send"
   `ぁ` vs `あ` — legacy fossil corpora carry these), a name past the 255-character limit, or
   whitespace / control characters — Excel repairs the file by removing the named range,
   sometimes without even logging it
+- **`calc-chain-stale`** — an `xl/calcChain.xml` entry names a cell that holds no formula, or a
+  sheet id `workbook.xml` does not declare — Excel repairs the file on open. The part is optional:
+  drop it together with its `[Content_Types].xml` Override and `workbook.xml.rels` Relationship
+  (Excel rebuilds it on save), or rebuild it. xl's writer drops the source chain on every write
+  that rewrites a worksheet, so xl output never carries one
 
 **Exit codes** (diff-tool convention): `0` no findings · `1` findings reported · `2` error
 (unreadable file, malformed core part).

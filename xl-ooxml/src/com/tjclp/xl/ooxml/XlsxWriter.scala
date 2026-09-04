@@ -694,6 +694,9 @@ object XlsxWriter:
     crc.update(bytes)
     crc.getValue
 
+  /** Calculation chain part; never emitted, dropped from dirty writes (GH-555). */
+  private val calcChainPath = "xl/calcChain.xml"
+
   // ========== Surgical Modification Methods ==========
 
   /**
@@ -1708,7 +1711,6 @@ object XlsxWriter:
       case Some(ctx) if tracker.deletedSheets.nonEmpty =>
         removalOrphanedParts(ctx, workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet)
       case _ => Set.empty
-    val livePreservableParts = preservableParts -- removalOrphans
 
     // Escaping must be applied to every text-bearing worksheet part; preserved sheets can contain
     // dangerous inline strings or shared-string references that would bypass WriterConfig.secure.
@@ -1716,6 +1718,21 @@ object XlsxWriter:
       if escapeFormulas || tracker.modifiedMetadata || tracker.reorderedSheets then
         workbook.sheets.indices.toSet
       else tracker.modifiedSheets
+
+    // xl/calcChain.xml lists every formula cell by sheet id, and Excel checks it on open: an entry
+    // naming a cell that holds no formula triggers the repair prompt. xl neither reads nor emits
+    // the part, and a regenerated worksheet may have added, moved or removed formula cells, so the
+    // source chain leaves the package (part, Override, Relationship) whenever a worksheet is
+    // rewritten or a sheet is removed. Excel rebuilds the chain on its next save; its absence does
+    // not force a recalculation on open. A clean write copies the archive verbatim and never
+    // reaches this path (GH-555).
+    // see: https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-calculation-chain
+    val droppedCalcChain: Set[String] =
+      if sourceContext.exists(_.partManifest.contains(calcChainPath)) &&
+        (sheetsToRegenerate.nonEmpty || tracker.deletedSheets.nonEmpty)
+      then Set(calcChainPath)
+      else Set.empty
+    val livePreservableParts = preservableParts -- removalOrphans -- droppedCalcChain
 
     val sharedStringsPath = "xl/sharedStrings.xml"
     val sourceHasSharedStrings = sourceContext.exists(_.partManifest.contains(sharedStringsPath))
@@ -2185,7 +2202,8 @@ object XlsxWriter:
     // GH-417: registrations of removal-orphaned parts fall with the parts — including model-side
     // re-registrations (withDrawingOverrides/withChartOverrides register every MANIFEST part) and
     // non-writer-owned classes reconcile keeps (chart colors/style).
-    val contentTypes = reconciledContentTypes.withoutParts(removalOrphans)
+    // GH-555: the calcChain Override leaves with the part.
+    val contentTypes = reconciledContentTypes.withoutParts(removalOrphans ++ droppedCalcChain)
 
     // GH-320: ungated like the content types (GH-314) — a metadata-modified write must keep the
     // preserved package-level rels (docProps/custom.xml and friends ride the verbatim copy loop).
@@ -2212,7 +2230,15 @@ object XlsxWriter:
       appPropsXml.foreach(x => writePart(zip, DocProps.appPath, x, config))
 
       writePart(zip, "xl/workbook.xml", ooxmlWb, config)
-      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels, config)
+      // GH-555: the calcChain Relationship leaves with the part.
+      val workbookRelsOut =
+        if droppedCalcChain.isEmpty then workbookRels
+        else
+          Relationships(workbookRels.relationships.filterNot { rel =>
+            rel.`type` == XmlUtil.relTypeCalcChain ||
+            Relationships.resolveWorkbookTarget(rel.target) == calcChainPath
+          })
+      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRelsOut, config)
       writeStyles(zip, "xl/styles.xml", styles, config)
 
       // Preserve theme file from source if available

@@ -5,6 +5,32 @@ All notable changes to the XL project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The source `xl/calcChain.xml` is dropped on every write that rewrites a
+  worksheet or removes a sheet** (#555). Excel validates the calculation chain
+  on open: an entry naming a cell that no longer holds a formula triggers the
+  repair prompt. xl never read or emitted the part, but carried the source's
+  copy verbatim through `clear`, `delete-rows`, `add-sheet`, `putf`, `recalc`
+  and every library write, so any edit that moved, added or removed a formula
+  shipped a stale chain that LibreOffice, openpyxl and `xl lint` all accept.
+  The part, its `[Content_Types].xml` Override and its `workbook.xml.rels`
+  Relationship now fall together; a clean read → write still copies the
+  archive byte-for-byte. Excel rebuilds the chain on its next save, and a
+  missing chain does not force a recalculation on open.
+
+### Added
+
+- **`calc-chain-stale` lint** (#555): every `<c r= i=>` entry in
+  `xl/calcChain.xml` must name a formula cell on the worksheet whose
+  `sheetId` is `i` (`i` carries forward to entries that omit it). Entries for
+  cells without `<f>`, or for a sheet id `workbook.xml` does not declare, are
+  reported once per sheet id with a first-5 sample. Formula cells absent from
+  the chain are not findings. Streaming mode reports identical findings and
+  reads each worksheet with memory bounded by that sheet's chain entries.
+
 ## [0.19.3] "Namesake" - 2026-08-14
 
 Patch release: one performance fix (#535, GH-536), found live on a

@@ -71,6 +71,12 @@ enum LintCategory derives CanEqual:
    */
   case DefinedNameInvalid
 
+  /**
+   * An `xl/calcChain.xml` entry names a cell that holds no formula, or a sheet id workbook.xml does
+   * not declare — Excel repairs the file on open (GH-555).
+   */
+  case CalcChainStale
+
   /** Stable kebab-case identifier used in CLI text and JSON output. */
   def slug: String = this match
     case LintCategory.ChildOrder => "child-order"
@@ -84,6 +90,7 @@ enum LintCategory derives CanEqual:
     case LintCategory.FormulaLeadingEquals => "formula-leading-equals"
     case LintCategory.ExternalRefDangling => "external-ref-dangling"
     case LintCategory.DefinedNameInvalid => "defined-name-invalid"
+    case LintCategory.CalcChainStale => "calc-chain-stale"
 
 /**
  * A single structural lint finding.
@@ -268,6 +275,7 @@ object WorkbookLint:
       rootRels <- readRelationships(parts, rootRelsPart)
       sheetResult <- lintSheets(wbElem, wbRels, parts, streaming, autoNoTableOf(wbElem))
       externalResult <- lintExternalLinks(wbElem, wbRels, parts)
+      calcChainResult <- calcChainFindings(wbElem, wbRels, parts, streaming)
       referenced =
         presentInternalTargets(rootRels, "", rootRelsPart, parts) ++
           presentInternalTargets(wbRels, "xl", workbookRelsPart, parts) ++
@@ -282,7 +290,7 @@ object WorkbookLint:
       checkRelRefs(workbookPart, workbookRelRefs(wbElem), wbRels, workbookRelsPart, parts, "xl") ++
       definedNameExternalRefFindings(wbElem) ++
       definedNameValidityFindings(wbElem) ++
-      sheetResult._1 ++ externalResult._1 ++ ctFindings
+      sheetResult._1 ++ externalResult._1 ++ calcChainResult ++ ctFindings
 
   /**
    * True when the book declares `calcMode="autoNoTable"` — the house dialect in which Excel never
@@ -1135,6 +1143,185 @@ object WorkbookLint:
       }
     }
     collisions ++ illegal
+
+  // ===== GH-555: stale calculation chain =====
+
+  private val calcChainPart = "xl/calcChain.xml"
+
+  /**
+   * Excel checks `xl/calcChain.xml` on open: each `<c r= i=>` entry must name a formula cell on the
+   * worksheet whose `sheetId` is `i`; `i` carries forward to following entries that omit it
+   * (ECMA-376 Part 1, 18.6.2). An entry naming a cell without `<f>`, or a sheet id workbook.xml
+   * does not declare, triggers the repair prompt. One finding per sheet id (count plus a first-5
+   * sample). Formula cells absent from the chain are not findings: Excel tolerates an incomplete
+   * chain and rebuilds it on save. Each worksheet with entries is read once more, with memory
+   * bounded by that sheet's chain entries, so the streaming mode stays O(1) in the row count.
+   */
+  private def calcChainFindings(
+    wbElem: Elem,
+    wbRels: Relationships,
+    parts: PartSource,
+    streaming: Boolean
+  ): XLResult[Vector[Finding]] =
+    if !parts.has(calcChainPart) then Right(Vector.empty)
+    else
+      val sheetPartById: Map[Int, String] = nestedElems(wbElem, "sheets", "sheet").flatMap { e =>
+        for
+          sheetId <- XmlUtil.getAttrOpt(e, "sheetId").flatMap(_.toIntOption)
+          relId <- relIdOf(e)
+          rel <- wbRels.findById(relId)
+        yield sheetId -> Relationships.resolveWorkbookTarget(rel.target)
+      }.toMap
+      for
+        xmlOpt <- parts.read(calcChainPart)
+        xml <- xmlOpt.toRight(XLError.ParseError(calcChainPart, s"Missing part: $calcChainPart"))
+        chain <- XmlSecurity.parseSafe(xml, calcChainPart)
+        findings <- calcChainEntries(chain)
+          .groupMap(_._1)(_._2)
+          .toVector
+          .sortBy(_._1)
+          .foldLeft[XLResult[Vector[Finding]]](Right(Vector.empty)) { case (acc, (sheetId, refs)) =>
+            for
+              found <- acc
+              more <- sheetPartById.get(sheetId).filter(parts.has) match
+                case Some(path) =>
+                  formulaCellsAmong(parts, path, refs.toSet, streaming).map { present =>
+                    val stale = refs.filterNot(present)
+                    if stale.isEmpty then Vector.empty
+                    else
+                      Vector(
+                        calcChainFinding(
+                          sheetId,
+                          stale,
+                          s"${stale.size} of ${refs.size} ${entryWord(refs.size)} for $path " +
+                            s"name cells that hold no formula (first: ${sample(stale)}) — " +
+                            calcChainRemedy
+                        )
+                      )
+                  }
+                case None =>
+                  Right(
+                    Vector(
+                      calcChainFinding(
+                        sheetId,
+                        refs,
+                        s"${refs.size} ${entryWord(refs.size)} name sheetId $sheetId, which " +
+                          s"workbook.xml does not declare (first: ${sample(refs)}) — " +
+                          calcChainRemedy
+                      )
+                    )
+                  )
+            yield found ++ more
+          }
+      yield findings
+
+  private val calcChainRemedy =
+    s"Excel repairs the file on open; drop $calcChainPart together with its " +
+      "[Content_Types].xml Override and workbook.xml.rels Relationship, or rebuild the chain"
+
+  private def entryWord(n: Int): String = if n == 1 then "entry" else "entries"
+
+  private def sample(refs: Vector[String]): String = refs.take(5).mkString(", ")
+
+  private def calcChainFinding(sheetId: Int, refs: Vector[String], message: String): Finding =
+    Finding(
+      calcChainPart,
+      LintCategory.CalcChainStale,
+      s"""<c r="${refs.headOption.getOrElse("")}" i="$sheetId">""",
+      message
+    )
+
+  /**
+   * `(sheetId, A1 ref)` per `<c>` entry, upper-cased; `i` carries forward. Entries before any `i`
+   * cannot be attributed to a sheet and are skipped.
+   */
+  private[lint] def calcChainEntries(chain: Elem): Vector[(Int, String)] =
+    childElems(chain, "c")
+      .foldLeft((Option.empty[Int], Vector.empty[(Int, String)])) { case ((current, acc), c) =>
+        val sheetId = XmlUtil.getAttrOpt(c, "i").flatMap(_.toIntOption).orElse(current)
+        val entry =
+          for
+            id <- sheetId
+            r <- XmlUtil.getAttrOpt(c, "r")
+          yield id -> r.trim.toUpperCase
+        (sheetId, acc ++ entry)
+      }
+      ._2
+
+  /**
+   * The subset of `candidates` (upper-case A1 refs) that are formula cells on the worksheet part: a
+   * `<c>` under sheetData/row with an `<f>` child (shared-formula members included).
+   */
+  private def formulaCellsAmong(
+    parts: PartSource,
+    path: String,
+    candidates: Set[String],
+    streaming: Boolean
+  ): XLResult[Set[String]] =
+    if candidates.isEmpty then Right(Set.empty)
+    else if streaming then
+      parts.openStream(path).flatMap {
+        case None => Left(XLError.ParseError(path, s"Missing part: $path"))
+        case Some(stream) =>
+          try FormulaCellScanner.scan(path, stream, candidates)
+          finally stream.close()
+      }
+    else
+      for
+        xmlOpt <- parts.read(path)
+        xml <- xmlOpt.toRight(XLError.ParseError(path, s"Missing part: $path"))
+        root <- XmlSecurity.parseSafe(xml, path)
+      yield nestedElems(root, "sheetData", "row")
+        .flatMap(childElems(_, "c"))
+        .filter(c => childElems(c, "f").nonEmpty)
+        .flatMap(c => XmlUtil.getAttrOpt(c, "r").map(_.trim.toUpperCase))
+        .filter(candidates)
+        .toSet
+
+  /** SAX side of [[formulaCellsAmong]]: state is the current cell's ref and the matched set. */
+  private object FormulaCellScanner:
+    import org.xml.sax.{Attributes, InputSource, SAXException}
+    import org.xml.sax.helpers.DefaultHandler
+
+    def scan(part: String, stream: InputStream, candidates: Set[String]): XLResult[Set[String]] =
+      try
+        val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
+        val handler = new Handler(candidates)
+        parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
+        Right(handler.matched)
+      catch
+        case e: SAXException =>
+          Left(XLError.ParseError(part, s"Malformed XML: ${e.getMessage}"))
+        case e: java.io.IOException =>
+          Left(XLError.IOError(s"Failed to read $part: ${e.getMessage}"))
+
+    @SuppressWarnings(Array("org.wartremover.warts.Var"))
+    private final class Handler(candidates: Set[String]) extends DefaultHandler:
+      private var depth = 0
+      private var parents: List[String] = Nil
+      private var cell: Option[String] = None
+      private val found = Set.newBuilder[String]
+
+      def matched: Set[String] = found.result()
+
+      override def startElement(
+        uri: String,
+        localName: String,
+        qName: String,
+        atts: Attributes
+      ): Unit =
+        val label = if localName.nonEmpty then localName else qName
+        // <c> sits at depth 3 under <row>/<sheetData>/<worksheet>, its <f> at depth 4.
+        if depth == 3 && label == "c" && parents.take(2) == List("row", "sheetData") then
+          cell = Option(atts.getValue("", "r")).map(_.trim.toUpperCase).filter(candidates)
+        else if depth == 4 && label == "f" then cell.foreach(found += _)
+        parents = label :: parents
+        depth += 1
+
+      override def endElement(uri: String, localName: String, qName: String): Unit =
+        depth -= 1
+        parents = parents.drop(1)
+        if depth == 3 then cell = None
 
   /**
    * External-workbook ordinals (>= 1) referenced by a formula's stored text (GH-525): the `[N]` of

@@ -698,6 +698,9 @@ lenient reader accepts silently:
   - defined names Excel refuses: same-scope names colliding under its
     case/width/kana-insensitive comparison, over-long names, whitespace
     or control characters (Excel repairs by removing the named range)
+  - xl/calcChain.xml entries naming a cell that holds no formula or a
+    sheet id the workbook does not declare (Excel repairs the file on
+    open; drop the part with its Override and Relationship, or rebuild it)
 
 USAGE:
   xl lint report.xlsx
@@ -708,7 +711,7 @@ FINDING CATEGORIES:
   child-order | unresolved-rel-id | wrong-rel-type | missing-part |
   missing-content-type | ref-out-of-bounds | data-table-torn |
   data-table-unseeded | formula-leading-equals | external-ref-dangling |
-  defined-name-invalid
+  defined-name-invalid | calc-chain-stale
 
 EXIT CODES:
   0 = no findings (package structure is clean)
