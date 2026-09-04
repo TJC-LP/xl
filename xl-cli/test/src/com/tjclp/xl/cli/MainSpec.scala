@@ -1499,6 +1499,51 @@ class MainSpec extends CatsEffectSuite:
     yield assertEquals(code, cats.effect.ExitCode.Success)
   }
 
+  test("GH-504: strict putf exits 1 and rolls back an in-place write") {
+    val wb = Workbook(Sheet("Data").put(ref"A1" -> 1))
+    for
+      in <- IO.blocking(Files.createTempFile("strict-putf-in", ".xlsx"))
+      out <- IO.blocking(Files.createTempFile("strict-putf-out", ".xlsx"))
+      _ <- ExcelIO.instance[IO].write(wb, in)
+      before <- IO.blocking(Files.readAllBytes(in))
+      outputCode <- runCli(
+        "-f",
+        in.toString,
+        "-s",
+        "Data",
+        "-o",
+        out.toString,
+        "--strict",
+        "putf",
+        "C1",
+        "=C1+1"
+      )
+      inPlaceCode <- runCli(
+        "-f",
+        in.toString,
+        "-s",
+        "Data",
+        "-i",
+        "--strict",
+        "putf",
+        "C1",
+        "=C1+1"
+      )
+      after <- IO.blocking(Files.readAllBytes(in))
+      written <- ExcelIO.instance[IO].read(out)
+      _ <- IO.blocking { Files.deleteIfExists(in); Files.deleteIfExists(out) }
+    yield
+      assertEquals(outputCode, cats.effect.ExitCode(1))
+      assertEquals(inPlaceCode, cats.effect.ExitCode(1))
+      assert(
+        java.util.Arrays.equals(before, after),
+        "in-place strict failure must leave the input unchanged"
+      )
+      written.sheets.head(ref"C1").value match
+        case CellValue.Formula(_, cached, _) => assertEquals(cached, None)
+        case other => fail(s"Expected an uncached formula, got $other")
+  }
+
   test("GH-468: recalc rejects --no-recalc as a contradiction") {
     val wb = Workbook(Vector(Sheet("T")))
     Main

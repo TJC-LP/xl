@@ -648,12 +648,13 @@ Hard-won rules from fleet use on real deal workbooks. Items marked **fixed in 0.
 
 #### Cache safety on writes
 
-Writes recalculate only the edit's **dirty dependency cone** (the changed cells, their transitive
-dependents across sheets, plus `INDIRECT`/`OFFSET` cells). Cached values outside the cone are left
-exactly as the file had them, so a workbook calculated by another engine is not re-poisoned.
+Writes refresh authored formulas and the edit's **dirty dependency cone**: changed cells, their
+transitive dependents across sheets, dynamic-reference cells, and readers whose dependencies cannot
+be resolved. Host failures withdraw stale caches and remain visible in the summary. Unaffected
+caches retain their original values.
 
 Use `--no-recalc` / `--preserve-caches` when an external calculator owns the numbers and xl should
-touch nothing:
+skip the post-edit recalculation:
 
 ```bash
 xl -f external.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
@@ -663,8 +664,8 @@ xl -f external.xlsx -s Data -o out.xlsx --preserve-caches insert-rows 20 1
 Honored by `put`, `putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`,
 `delete-cols`. `recalc` rejects it (it is the whole-book recalculation verb).
 
-On the non-structural verbs (`put`, `putf`, `fill`, `copy`, `batch`) every cached value in the file
-survives byte-identical. On the four **structural** verbs the edit moves cells, rewrites formulas
+On non-structural verbs (`put`, `putf`, `fill`, `copy`, `batch`), explicitly written cells take their
+new content while caches elsewhere are preserved. A verb can still author a new formula cache. On the four **structural** verbs the edit moves cells, rewrites formulas
 and rewrites defined names, so xl invalidates every formula that transitively reads the edited sheet
 and writes those cells **uncached** rather than re-stamping a stale number — it never carries a
 pre-edit cache forward, because deciding that an unchanged formula still has its old answer requires
@@ -676,13 +677,10 @@ Recalculation skipped (--no-recalc): 0 cached value(s) preserved, 11 formula(s) 
 edit left uncached (recalculate externally)
 ```
 
-Excel (or a later `xl recalc`) fills those in. xl never **re-asserts** a cache the edit invalidated,
-but it does not certify the ones that ride through: a cache survives only when the pre-edit
-dependency graph shows no path from it to the edited sheet, and a reference that graph cannot
-resolve (a multi-area or intersection defined name, a structured reference, an external link) can
-hide such a path — caches behind an unparseable defined name are withdrawn for that reason, the rest
-is [#507](https://github.com/TJC-LP/xl/issues/507). If you need every formula cached after a
-structural edit, do not pass `--no-recalc`.
+Excel (or a later `xl recalc`) can refill supported formulas. Unresolved named readers and their
+consumers lose their caches on both default and `--no-recalc` structural writes; name resolution
+respects local shadowing. Unsupported name rewrites that could change meaning are refused before
+editing. If you need every supported formula cached after a structural edit, omit `--no-recalc`.
 
 #### Strict exit codes for pipelines
 
@@ -693,7 +691,11 @@ xl -f model.xlsx -o out.xlsx --strict recalc   # exit 1 if a formula could not b
 `--strict` keeps the same printed summary and only changes the exit code. Excel error *values*
 (`#DIV/0!`, `#N/A`) never gate — they are data. With `-o` the file is still written on failure;
 with `-i` the input is left untouched and the summary says `NOT saved (--strict failure)`.
-`--strict` cannot be combined with `--stream`.
+`--strict` cannot be combined with `--stream`. It includes formulas authored by `put`, `putf`,
+`fill`, and `copy`, plus affected dependents. Workbook-level errors remain visible when structural
+or batch writes preserve caches outside their edit cone. Use it without `--no-recalc` to validate
+calculation outcomes. `recalc --tables` reports skipped dynamic cones and unseeded interiors;
+these warnings fail strict mode too.
 
 ### Info Commands
 

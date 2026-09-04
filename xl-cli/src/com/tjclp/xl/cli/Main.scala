@@ -296,7 +296,7 @@ object Main
     Opts
       .flag(
         "strict",
-        "Exit 1 when a write's recalculation reports formula errors, non-convergence, or data-table seed warnings (default: advisory, exit 0). The output file is written either way."
+        "Exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0). With -o the output is written; with -i a strict failure leaves the input unchanged."
       )
       .orFalse
 

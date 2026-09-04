@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.graph
 
-import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.{FunctionSpecs, FunctionRegistry, ArgValue}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
@@ -304,7 +304,7 @@ object DependencyGraph:
    * scoped exactly as evaluation, and only names actually reached by formulas are inspected. The
    * local memos avoid repeating definition parsing and name-chain walks across readers.
    */
-  private[formula] def unresolvedReaders(workbook: Workbook): Set[QualifiedRef] =
+  private[xl] def unresolvedReaders(workbook: Workbook): Set[QualifiedRef] =
     type NameKey = (SheetName, SheetName, String)
     val positions =
       workbook.sheets.zipWithIndex.reverseIterator.map((sheet, i) => sheet.name -> i).toMap
@@ -1398,7 +1398,13 @@ object DependencyGraph:
     val dependencies = formulas.iterator.map { case (ref, expression) =>
       val deps = FormulaParser.parse(expression) match
         case scala.util.Right(expr) =>
-          extractQualifiedDependencies(expr, ref.sheet, cellsFor, Some(workbook))
+          extractQualifiedDependencies(
+            expr,
+            ref.sheet,
+            cellsFor,
+            Some(workbook),
+            preciseLookups = true
+          )
             .filter(formulaNodes.contains)
         case scala.util.Left(_) => Set.empty[QualifiedRef]
       ref -> deps
@@ -1751,7 +1757,8 @@ object DependencyGraph:
     currentSheet: SheetName,
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells,
     workbook: Option[Workbook] = None,
-    visitingNames: Set[String] = Set.empty
+    visitingNames: Set[String] = Set.empty,
+    preciseLookups: Boolean = false
   ): Set[QualifiedRef] =
     def locCells(location: TExpr.RangeLocation): Set[QualifiedRef] =
       location match
@@ -1767,6 +1774,59 @@ object DependencyGraph:
           scope match
             case None => go(TExpr.NameRef(name))
             case Some(qualifier) => go(TExpr.SheetNameRef(qualifier, name))
+
+    def fixedIndex(expr: TExpr[?]): Option[Int] =
+      def number(value: Any): Option[Int] = value match
+        case n: Int => Some(n)
+        case n: BigDecimal if n.isValidInt => Some(n.toInt)
+        case _ => None
+      def cell(sheet: SheetName, ref: ARef): Option[Int] =
+        workbook.flatMap(_(sheet).toOption).flatMap { target =>
+          target(ref).value match
+            case CellValue.Number(n) => number(n)
+            case _ => None // a cached formula may change during this generation
+        }
+      expr match
+        case TExpr.Lit(value) => number(value)
+        case TExpr.ToInt(inner) => fixedIndex(inner)
+        case TExpr.UnaryPlus(inner) => fixedIndex(inner)
+        case TExpr.Coerced(inner, BindingCoercion.Integer) => fixedIndex(inner)
+        case TExpr.Ref(ref, _, _) => cell(currentSheet, ref)
+        case TExpr.SheetRef(sheet, ref, _, _) => cell(sheet, ref)
+        case _ => None
+
+    // Ordering needs only the lookup's key and selected result strip. Impact analysis retains
+    // the full declared range, so changing the selector still invalidates all relevant readers.
+    def lookupCells(name: String, args: List[ArgValue]): Option[Set[QualifiedRef]] =
+      if !preciseLookups || (name != "VLOOKUP" && name != "HLOOKUP") then None
+      else
+        args match
+          case ArgValue.Expr(_) :: ArgValue.Range(location) :: ArgValue.Expr(selector) :: _ =>
+            for
+              index <- fixedIndex(selector)
+              source <- workbook.flatMap(_(currentSheet).toOption)
+              resolved <- Evaluator.resolveRangeLocation(location, source, workbook).toOption
+            yield
+              val (target, range) = resolved
+              val vertical = name == "VLOOKUP"
+              val extent = if vertical then range.width else range.height
+              if index < 1 || index > extent then Set.empty[QualifiedRef]
+              else
+                def strip(offset: Int): CellRange =
+                  if vertical then
+                    val col = range.colStart.index0 + offset
+                    CellRange(
+                      ARef.from0(col, range.rowStart.index0),
+                      ARef.from0(col, range.rowEnd.index0)
+                    )
+                  else
+                    val row = range.rowStart.index0 + offset
+                    CellRange(
+                      ARef.from0(range.colStart.index0, row),
+                      ARef.from0(range.colEnd.index0, row)
+                    )
+                union(cellsFor(target.name, strip(0)), cellsFor(target.name, strip(index - 1)))
+          case _ => None
 
     def go(e: TExpr[?]): Set[QualifiedRef] =
       e match
@@ -1804,9 +1864,12 @@ object DependencyGraph:
 
         case call: TExpr.Call[?] =>
           val values = call.spec.argSpec.toValues(call.args)
-          values.foldLeft(Set.empty[QualifiedRef]) { (acc, value) =>
+          val selected = lookupCells(call.spec.name, values)
+          values.zipWithIndex.foldLeft(Set.empty[QualifiedRef]) { case (acc, (value, index)) =>
             value match
               case ArgValue.Expr(expr) => union(acc, go(expr))
+              case ArgValue.Range(_) if index == 1 && selected.isDefined =>
+                union(acc, selected.getOrElse(Set.empty))
               case ArgValue.Range(range) => union(acc, locCells(range))
               case ArgValue.Cells(range) => union(acc, cellsFor(currentSheet, range))
           }
@@ -1839,7 +1902,8 @@ object DependencyGraph:
                 definingSheet,
                 cellsFor,
                 workbook,
-                visitingNames + key
+                visitingNames + key,
+                preciseLookups
               )
             ).getOrElse(Set.empty)
 
@@ -1861,7 +1925,8 @@ object DependencyGraph:
                 definingSheet,
                 cellsFor,
                 workbook,
-                visitingNames + key
+                visitingNames + key,
+                preciseLookups
               )
             ).getOrElse(Set.empty)
 

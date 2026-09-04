@@ -64,7 +64,9 @@ object CopyOps:
    * After phase-2 cache population, transitive dependents on the target sheet are recalculated so
    * that pre-existing formulas pointing into the target range see the new values — unless
    * `recalcDependents` is false (GH-468 `--no-recalc`), which leaves every cache in the book as it
-   * was and writes only the copied cells.
+   * was and writes only the copied cells. `cacheCopiedFormulas = false` lets a caller own the
+   * complete post-copy evaluation and its diagnostics, without evaluating newly copied formulas
+   * twice.
    */
   def copyRange(
     wb: Workbook,
@@ -73,7 +75,8 @@ object CopyOps:
     targetSheet: Sheet,
     targetRange: CellRange,
     valuesOnly: Boolean,
-    recalcDependents: Boolean = true
+    recalcDependents: Boolean = true,
+    cacheCopiedFormulas: Boolean = true
   ): Workbook =
     // Snapshot source cells BEFORE any mutation so overlapping same-sheet copies are correct.
     val snapshot: Map[ARef, Cell] =
@@ -110,7 +113,7 @@ object CopyOps:
       }
 
     val cachedSheet =
-      if pendingFormulaCaches.isEmpty then phase1Sheet
+      if pendingFormulaCaches.isEmpty || !cacheCopiedFormulas then phase1Sheet
       else populateFormulaCaches(phase1Sheet, wb, pendingFormulaCaches)
 
     // Recalculate transitive dependents (pre-existing formulas that reference the target range).
