@@ -533,7 +533,10 @@ class BatchRecalcSpec extends FunSuite:
     // The what-if substitution is scoped to the seed: the base-case inputs survive untouched.
     assertEquals(interiorInt(seeded, ref"B1"), Some(5))
     assertEquals(interiorInt(seeded, ref"C4"), Some(35))
-    assert(summary.contains("data table"), s"summary must report the seeding: $summary")
+    assert(
+      summary.contains("Data table cache evaluation completed"),
+      s"summary must report the seeding: $summary"
+    )
     Files.deleteIfExists(out)
   }
 
@@ -712,6 +715,44 @@ class BatchRecalcSpec extends FunSuite:
     assert(summary.contains("1 interior cell(s) left unseeded"), s"summary: $summary")
     assert(summary.contains("Saved:"), s"exit must stay clean: $summary")
     Files.deleteIfExists(out)
+  }
+
+  test("GH-498/GH-506: strict table recalculation reports skipped dynamic and failed sources") {
+    val kind: com.tjclp.xl.cells.FormulaKind.DataTable = com.tjclp.xl.cells.FormulaKind.DataTable(
+      ref = ref"D5:D7",
+      dt2D = false,
+      dtr = false,
+      r1 = Some(ref"A1"),
+      r2 = None
+    )
+    List("INDIRECT(\"B1\")+1", "AND(B1:B1)").foreach { expression =>
+      val sheet = Sheet("Data")
+        .put(ref"A1" -> 0)
+        .put(ref"B1", CellValue.Formula("A1*10", Some(CellValue.Number(0))))
+        .put(ref"D4", CellValue.Formula(expression))
+        .put(ref"C5" -> 1, ref"C6" -> 2, ref"C7" -> 3)
+        .put(ref"D5", CellValue.dataTable(kind, None))
+      val out = tempXlsx()
+      try
+        val outcome = WriteCommands
+          .recalc(
+            Workbook(sheet),
+            out,
+            config,
+            seedTables = true,
+            policy = strictPolicy
+          )
+          .attempt
+          .unsafeRunSync()
+        val summary = outcome match
+          case Left(error: StrictFailure) => error.summary
+          case other => fail(s"Expected strict failure, got $other")
+        assert(summary.contains("3 interior cell(s) left unseeded"), summary)
+        assert(summary.contains("seeding warning"), summary)
+        assert(summary.contains("Data table cache evaluation completed"), summary)
+        assertEquals(formulaOn(readBack(out), "Data", ref"D5").cachedValue, None)
+      finally Files.deleteIfExists(out)
+    }
   }
 
   test("GH-493: an unresolvable cone reports the CONE, never 'interior cell(s) left unseeded'") {

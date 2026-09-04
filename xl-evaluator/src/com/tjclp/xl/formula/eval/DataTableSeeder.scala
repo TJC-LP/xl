@@ -34,8 +34,8 @@ enum SeedTableWarning derives CanEqual:
 
   /**
    * GH-453 (review follow-up): `cells` interior cells were left UNSEEDED, and `reason` says why —
-   * either an axis value or cycle member failed to evaluate on the iterated path, or the whole
-   * table was skipped by a budget guard (`MaxIterativeSeedBudget`, `MaxConeSeedBudget`) and `cells`
+   * an axis, source, or cycle member failed to evaluate, or the whole table was skipped by a
+   * dynamic-reference or budget guard (`MaxIterativeSeedBudget`, `MaxConeSeedBudget`) and `cells`
    * counts the interior. Both would otherwise read as a clean run. A table whose interiors WERE
    * seeded off a stale precedent reports [[ConeUnresolved]] instead — this case always means
    * unseeded cells.
@@ -44,10 +44,9 @@ enum SeedTableWarning derives CanEqual:
 
   /**
    * GH-493 (round-2 review): `cells` DISTINCT precedent cells in the what-if cone could not be
-   * re-derived under the substitution, so they stayed on their loaded caches — the interiors were
-   * still seeded (tolerant doctrine) but the grid may not reflect the substitution at all, which is
-   * the very FLAT-grid mechanism GH-493 filed. Distinct from [[Skipped]]: nothing was left unseeded
-   * here. `refs` renders the cells as `'Sheet'!A1`, sorted, capped at 8.
+   * re-derived under the substitution. Seeded interiors may have used those precedents' loaded
+   * caches; source failures can also leave interiors unseeded, counted separately by [[Skipped]].
+   * `refs` renders the cells as `'Sheet'!A1`, sorted, capped at 8.
    */
   case ConeUnresolved(sheet: SheetName, ref: CellRange, cells: Int, refs: Vector[String])
 
@@ -109,10 +108,10 @@ final case class DataTableSeedReport(
  * formula's transitive precedents split into input-INDEPENDENT uncached cells (evaluated once per
  * table) and axis-DEPENDENT cells (re-evaluated per combination), each in topological order with
  * every value written back before its dependents run — exactly `recalculate`'s `evalPass`. A cone
- * cell that fails to evaluate is left as it was and seeding continues (evalPass parity), but it is
- * COUNTED and reported: a stale cone cell is the very mechanism GH-493 filed, so it must never pass
- * silently. Precedents outside the cone keep the landed pinned-cache doctrine: a cached precedent
- * reads via its cache.
+ * cell that fails to evaluate is left as it was and seeding continues under the tolerant seeding
+ * policy, but it is COUNTED and reported: a stale cone cell is the very mechanism GH-493 filed, so
+ * it must never pass silently. Precedents outside the cone keep the landed pinned-cache doctrine: a
+ * cached precedent reads via its cache.
  *
  * GH-453 — circular books: a table whose source formula transitively depends on a reference cycle
  * cannot use the pinned-cache substitution (the what-if never propagates through the cycle and
@@ -239,7 +238,8 @@ object DataTableSeeder:
   private final case class CycleContext(
     deps: Map[QualifiedRef, Set[QualifiedRef]],
     dependents: Map[QualifiedRef, Set[QualifiedRef]],
-    core: Set[QualifiedRef]
+    core: Set[QualifiedRef],
+    dynamic: Set[QualifiedRef]
   )
 
   /**
@@ -266,7 +266,12 @@ object DataTableSeeder:
     lazy val pinnedClock: Clock = Clock.fixed(clock.today(), clock.now())
     lazy val cycles: CycleContext =
       val (deps, dependents) = DependencyGraph.fromWorkbookBounded(wb)
-      CycleContext(deps, dependents, DependencyGraph.qualifiedCyclicNodes(deps))
+      CycleContext(
+        deps,
+        dependents,
+        DependencyGraph.qualifiedCyclicNodes(deps),
+        DependencyGraph.dynamicCells(wb)
+      )
     targets.foldLeft((wb, Vector.empty[SeedTableWarning])) { case ((accWb, warns), name) =>
       accWb.sheets.find(_.name == name) match
         case None => (accWb, warns)
@@ -329,12 +334,30 @@ object DataTableSeeder:
         // GH-453 gate: does the source formula transitively depend on a reference cycle?
         val ctx = cycles
         val srcQ = sourceRefs(kind).map(r => QualifiedRef(sheet.name, r))
+        val inputQ = (Set(input1) ++ input2).map(ref => QualifiedRef(sheet.name, ref))
         // GH-493/GH-494: the precedent closure is needed on BOTH lanes now — the cyclic gate reads
         // it, and the acyclic lane re-derives its cone from it (it is no longer sound to skip the
         // walk just because the book declares no cycle).
-        val closure = DependencyGraph.qualifiedTransitivePrecedents(ctx.deps, srcQ) ++ srcQ
+        // The substituted inputs are boundaries: their original formulas and ancestors are not read.
+        val closure =
+          DependencyGraph.qualifiedTransitivePrecedents(ctx.deps -- inputQ, srcQ) ++ srcQ
         val relevantCore = ctx.core.intersect(closure)
-        if relevantCore.isEmpty then
+        val dynamic = ctx.dynamic.intersect(closure) -- inputQ
+        if dynamic.nonEmpty then
+          val reason = "dynamic references cannot be safely resolved for this table: " +
+            renderRefs(dynamic).mkString(", ")
+          (
+            sheet,
+            Vector(
+              SeedTableWarning.Skipped(
+                sheet.name,
+                interior,
+                (interior.width.toLong * interior.height.toLong).toInt,
+                reason
+              )
+            )
+          )
+        else if relevantCore.isEmpty then
           seedGroupAcyclic(wb, sheet, kind, input1, input2, clock, ctx, closure, srcQ)
         else
           iterative match
@@ -528,34 +551,59 @@ object DataTableSeeder:
           val probes = guardProbes(sheet, kind)
           // Input-independent uncached precedents are the same for every combination.
           val prepared = resolveCone(wb, wb.sheets, cone.base, clock)
-          val (seeded, guarded, guardName, unresolved) =
-            interior.cellsRowMajor.foldLeft((sheet, 0, Option.empty[String], prepared.unresolved)) {
-              case ((acc, fired, named, unres), cellRef) =>
-                computeCell(
-                  wb,
-                  sheet,
-                  kind,
-                  cellRef,
-                  input1,
-                  input2,
-                  clock,
-                  prepared.sheets,
-                  tableIdx,
-                  cone,
-                  probes
-                ) match
-                  case None => (acc, fired, named, unres) // tolerant: leave the cell untouched
-                  case Some(outcome) =>
-                    (
-                      writeInterior(acc, cellRef, outcome.value),
-                      if outcome.guard.isDefined then fired + 1 else fired,
-                      named.orElse(outcome.guard),
-                      unres ++ outcome.unresolved
-                    )
+          val (seeded, skipped, guarded, guardName, unresolved, failure) =
+            interior.cellsRowMajor.foldLeft(
+              (sheet, 0, 0, Option.empty[String], prepared.unresolved, Option.empty[String])
+            ) { case ((acc, skips, fired, named, unres, firstFailure), cellRef) =>
+              computeCell(
+                wb,
+                sheet,
+                kind,
+                cellRef,
+                input1,
+                input2,
+                clock,
+                prepared.sheets,
+                tableIdx,
+                cone,
+                probes
+              ) match
+                case None => (acc, skips + 1, fired, named, unres, firstFailure)
+                case Some(outcome) =>
+                  outcome.value match
+                    case Left(error) =>
+                      (
+                        acc,
+                        skips + 1,
+                        fired,
+                        named,
+                        unres ++ outcome.unresolved,
+                        firstFailure.orElse(Some(error.message.take(200)))
+                      )
+                    case Right(value) =>
+                      (
+                        writeInterior(acc, cellRef, value),
+                        skips,
+                        if outcome.guard.isDefined then fired + 1 else fired,
+                        named.orElse(outcome.guard),
+                        unres ++ outcome.unresolved,
+                        firstFailure
+                      )
             }
+          val skippedWarning = Option
+            .when(skipped > 0)(
+              SeedTableWarning.Skipped(
+                sheet.name,
+                interior,
+                skipped,
+                failure.getOrElse("axis value or source formula evaluation failed")
+              )
+            )
+            .toList
+            .toVector
           (
             seeded,
-            coneWarning(sheet.name, interior, unresolved) ++
+            skippedWarning ++ coneWarning(sheet.name, interior, unresolved) ++
               guardWarning(sheet.name, interior, guarded, guardName)
           )
 
@@ -697,10 +745,10 @@ object DataTableSeeder:
     // The clock arrives pinned from seedWorkbook: one seeding run is one volatile
     // generation, like one recalculation (GH-373) — axis values, member fixpoints, cone
     // cells and source formulas all read the same instant.
-    val (seeded, unconverged, skipped, guarded, guardName, unresolved) =
+    val (seeded, unconverged, skipped, guarded, guardName, unresolved, failure) =
       kind.ref.cellsRowMajor.foldLeft(
-        (sheet, 0, 0, 0, Option.empty[String], prepared.unresolved)
-      ) { case ((acc, fails, skips, fired, named, unres), cellRef) =>
+        (sheet, 0, 0, 0, Option.empty[String], prepared.unresolved, Option.empty[String])
+      ) { case ((acc, fails, skips, fired, named, unres, firstFailure), cellRef) =>
         val computed = computeCellIterative(
           wb,
           sheet,
@@ -717,16 +765,29 @@ object DataTableSeeder:
           probes
         )
         computed match
-          case None => (acc, fails, skips + 1, fired, named, unres) // tolerant: leave it untouched
+          case None => (acc, fails, skips + 1, fired, named, unres, firstFailure)
           case Some(outcome) =>
-            (
-              writeInterior(acc, cellRef, outcome.value),
-              if outcome.converged then fails else fails + 1,
-              skips,
-              if outcome.guard.isDefined then fired + 1 else fired,
-              named.orElse(outcome.guard),
-              unres ++ outcome.unresolved
-            )
+            outcome.value match
+              case Left(error) =>
+                (
+                  acc,
+                  fails,
+                  skips + 1,
+                  fired,
+                  named,
+                  unres ++ outcome.unresolved,
+                  firstFailure.orElse(Some(error.message.take(200)))
+                )
+              case Right(value) =>
+                (
+                  writeInterior(acc, cellRef, value),
+                  if outcome.converged then fails else fails + 1,
+                  skips,
+                  if outcome.guard.isDefined then fired + 1 else fired,
+                  named.orElse(outcome.guard),
+                  unres ++ outcome.unresolved,
+                  firstFailure
+                )
       }
     val notConverged =
       if unconverged > 0 then
@@ -748,7 +809,7 @@ object DataTableSeeder:
             sheet.name,
             kind.ref,
             skipped,
-            "axis value or cycle-member evaluation failed"
+            failure.getOrElse("axis value or cycle-member evaluation failed")
           )
         )
       else Vector.empty
@@ -814,39 +875,38 @@ object DataTableSeeder:
             // member values would advance it by one extra Jacobi round.
             results
               .get(sourceQ)
-              .flatMap(_.toOption)
               .map(value => CellOutcome(value, converged, None, upstream.unresolved))
           else
             // (4) fold member values in as plain values, resolve the cone downstream of the cycle,
             // then evaluate the source formula
-            val folded = members.foldLeft(Option(upstream.sheets)) { case (accOpt, (q, idx, _)) =>
-              accOpt.flatMap { sheets =>
-                results.get(q) match
-                  case Some(Right(v)) => Some(sheets.updated(idx, sheets(idx).put(q.ref, v)))
-                  case _ => None // tolerant: a failing member leaves this cell untouched
-              }
-            }
-            folded.flatMap { sheets =>
-              val resolved = resolveCone(wb, sheets, cone.afterCycle, clock)
-              val tempWb = wb.copy(sheets = resolved.sheets)
-              val tempSheet = resolved.sheets(tableIdx)
-              SheetEvaluator
-                .evaluateFormula(tempSheet)(expression, clock, Some(tempWb), None)
-                .toOption
-                .map { value =>
-                  val guard = firedGuard(probes.get(sourceRef), tempSheet, tempWb, clock)
-                  CellOutcome(
-                    value,
-                    converged,
-                    guard,
-                    upstream.unresolved ++ resolved.unresolved
-                  )
+            val folded = members.foldLeft[XLResult[Vector[Sheet]]](Right(upstream.sheets)) {
+              case (accOpt, (q, idx, _)) =>
+                accOpt.flatMap { sheets =>
+                  results.get(q) match
+                    case Some(Right(v)) => Right(sheets.updated(idx, sheets(idx).put(q.ref, v)))
+                    case Some(Left(error)) => Left(error)
+                    case None =>
+                      Left(
+                        XLError.FormulaError(q.ref.toA1, "Missing cycle-member evaluation result")
+                      )
                 }
             }
+            Some(folded match
+              case Left(error) => CellOutcome(Left(error), converged, None, upstream.unresolved)
+              case Right(sheets) =>
+                val resolved = resolveCone(wb, sheets, cone.afterCycle, clock)
+                val tempWb = wb.copy(sheets = resolved.sheets)
+                val tempSheet = resolved.sheets(tableIdx)
+                val value =
+                  SheetEvaluator.evaluateFormula(tempSheet)(expression, clock, Some(tempWb), None)
+                val guard =
+                  if value.isRight then firedGuard(probes.get(sourceRef), tempSheet, tempWb, clock)
+                  else None
+                CellOutcome(value, converged, guard, upstream.unresolved ++ resolved.unresolved))
         }
       case _ =>
         // Empty or non-formula source cell: Excel caches 0 (fixture-verified bytes).
-        Some(CellOutcome(CellValue.Number(BigDecimal(0)), converged = true, None, Set.empty))
+        Some(CellOutcome(Right(CellValue.Number(BigDecimal(0))), converged = true, None, Set.empty))
 
   /**
    * One interior cell's what-if outcome: the value to bank, whether the cycle converged (always
@@ -855,7 +915,7 @@ object DataTableSeeder:
    * review rework).
    */
   private final case class CellOutcome(
-    value: CellValue,
+    value: XLResult[CellValue],
     converged: Boolean,
     guard: Option[String],
     unresolved: Set[QualifiedRef]
@@ -890,28 +950,23 @@ object DataTableSeeder:
               .map(axisValue => sheets.updated(tableIdx, sheets(tableIdx).put(inputRef, axisValue)))
           }
         }
-        overlays.flatMap { overlaid =>
+        overlays.map { overlaid =>
           // GH-493/GH-494: re-derive the cone under THIS substitution before the source formula
           // reads it — a cached intermediate would otherwise answer with its base value and an
           // uncached one would vanish from any range argument.
           val resolved = resolveCone(wb, overlaid, cone.beforeCycle ++ cone.afterCycle, clock)
           val tempWb = wb.copy(sheets = resolved.sheets)
           val tempSheet = resolved.sheets(tableIdx)
-          SheetEvaluator
-            .evaluateFormula(tempSheet)(expression, clock, Some(tempWb), None)
-            .toOption
-            .map(value =>
-              CellOutcome(
-                value,
-                converged = true,
-                firedGuard(probes.get(sourceRef), tempSheet, tempWb, clock),
-                resolved.unresolved
-              )
-            )
+          val value =
+            SheetEvaluator.evaluateFormula(tempSheet)(expression, clock, Some(tempWb), None)
+          val guard =
+            if value.isRight then firedGuard(probes.get(sourceRef), tempSheet, tempWb, clock)
+            else None
+          CellOutcome(value, converged = true, guard, resolved.unresolved)
         }
       case _ =>
         // Empty or non-formula source cell: Excel caches 0 (fixture-verified bytes).
-        Some(CellOutcome(CellValue.Number(BigDecimal(0)), converged = true, None, Set.empty))
+        Some(CellOutcome(Right(CellValue.Number(BigDecimal(0))), converged = true, None, Set.empty))
 
   /**
    * GH-494: each of the group's source formulas parsed ONCE per table, kept only when it carries an

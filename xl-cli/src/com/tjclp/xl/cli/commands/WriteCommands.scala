@@ -1264,7 +1264,7 @@ object WriteCommands:
           ).map(report => (report.workbook, report.warnings))
       prepared.flatMap { case (workbook, warnings) =>
         writeWorkbook(workbook, outputPath, config, stream).flatMap { _ =>
-          val tableNote = if seedTables then "\nSeeded data table interior caches" else ""
+          val tableNote = if seedTables then "\nData table cache evaluation completed" else ""
           val advisory = run.advisory.fold("")(note => s"\n$note")
           val warningLines = warnings.map(w => s"\n${renderSeedWarning(w)}").mkString
           val rendered =
