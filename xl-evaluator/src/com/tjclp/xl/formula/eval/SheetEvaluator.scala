@@ -596,7 +596,7 @@ object SheetEvaluator:
    * non-external formula) merely keeps that cell's existing cache — the same value every earlier xl
    * version reported for it.
    */
-  private[eval] def pinnedExternalCache(value: CellValue): Option[CellValue] =
+  private[formula] def pinnedExternalCache(value: CellValue): Option[CellValue] =
     value match
       case CellValue.Formula(expr, Some(cached), _) if expr.contains('[') =>
         FormulaParser.parse(expr) match

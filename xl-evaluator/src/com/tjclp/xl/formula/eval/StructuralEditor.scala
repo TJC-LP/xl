@@ -133,7 +133,35 @@ object StructuralEditor:
     for
       _ <- boundsRefusal(wb, target, isRow, at, delta)
       _ <- dataTableRefusal(wb, target, isRow, at, delta)
+      _ <- definedNameRefusal(wb, target, delta)
     yield applyEdit(wb, target, isRow, at, delta, preserveUntouchedCaches)
+
+  /** An unknown reference expression must not survive an edit with silently changed meaning. */
+  private def definedNameRefusal(wb: Workbook, target: SheetName, delta: Int): XLResult[Unit] =
+    val bare = java.util.regex.Pattern.quote(target.value)
+    val quoted = java.util.regex.Pattern.quote("'" + target.value.replace("'", "''") + "'")
+    val qualifier = (s"(?iu)(?<![\\p{L}\\p{N}_.\\\\'\\]])(?:$bare|$quoted)\\s*!").r
+    def namesTarget(segment: String): Boolean =
+      segment.split("\"", -1).iterator.zipWithIndex.exists { (part, index) =>
+        index % 2 == 0 && qualifier.findFirstIn(part).isDefined
+      }
+    val unsupported =
+      if delta == 0 then None
+      else
+        wb.metadata.definedNames.find { name =>
+          splitTopLevelCommas(name.formula).exists(segment =>
+            namesTarget(segment) && FormulaParser.parse(segment).isLeft
+          )
+        }
+    unsupported
+      .map(name =>
+        XLError.FormulaError(
+          name.formula,
+          s"Cannot safely rewrite defined name '${name.name}' during a structural edit of ${target.value}; " +
+            "its reference syntax is unsupported"
+        )
+      )
+      .toLeft(())
 
   /**
    * GH-472: REFUSE an insert that would shift any populated position (cell, comment, row/column
@@ -314,7 +342,7 @@ object StructuralEditor:
       // Conservatively invalidate every dynamic cell and its static dependent closure: the edit
       // may have changed what its unchanged reference text resolves to.
       val dynamic = DependencyGraph.dynamicCells(wb)
-      val roots = pointSeeds ++ rangeReaders ++ dynamic
+      val roots = pointSeeds ++ rangeReaders ++ dynamic ++ DependencyGraph.unresolvedReaders(wb)
       roots ++ dependencyIndex.transitiveDependents(roots)
     val updatedSheets = wb.sheets.map { s =>
       // 1. Pure cell/merge/property shift — only on the edited sheet. Its own typed charts

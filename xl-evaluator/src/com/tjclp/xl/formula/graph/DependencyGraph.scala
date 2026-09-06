@@ -224,72 +224,148 @@ object DependencyGraph:
    * calls, and reference/literal leaves are never dynamic.
    */
   @nowarn("msg=Unreachable case")
-  private def containsDynamicReferenceResolved[A](
+  private def referencesMatching[A](
     expr: TExpr[A],
-    resolveName: (String, Option[SheetName]) => Boolean
+    resolveName: (String, Option[SheetName]) => Boolean,
+    includeDynamicCalls: Boolean
   ): Boolean =
     expr match
       case call: TExpr.Call[?] =>
-        call.spec.flags.dynamicDeps || call.spec.argSpec
+        (includeDynamicCalls && call.spec.flags.dynamicDeps) || call.spec.argSpec
           .toValues(call.args)
           .exists {
-            case ArgValue.Expr(e) => containsDynamicReferenceResolved(e, resolveName)
+            case ArgValue.Expr(e) => referencesMatching(e, resolveName, includeDynamicCalls)
             case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) =>
               resolveName(name, scope)
             case ArgValue.Range(_) => false
             case ArgValue.Cells(_) => false
           }
       case TExpr.Add(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Sub(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Mul(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Div(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Pow(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Concat(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Eq(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Neq(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Lt(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Lte(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Gt(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
       case TExpr.Gte(l, r) =>
-        containsDynamicReferenceResolved(l, resolveName) ||
-        containsDynamicReferenceResolved(r, resolveName)
-      case TExpr.ToInt(e) => containsDynamicReferenceResolved(e, resolveName)
-      case TExpr.UnaryPlus(e) => containsDynamicReferenceResolved(e, resolveName)
-      case TExpr.Percent(e) => containsDynamicReferenceResolved(e, resolveName)
-      case TExpr.DateToSerial(e) => containsDynamicReferenceResolved(e, resolveName)
-      case TExpr.DateTimeToSerial(e) => containsDynamicReferenceResolved(e, resolveName)
+        referencesMatching(l, resolveName, includeDynamicCalls) ||
+        referencesMatching(r, resolveName, includeDynamicCalls)
+      case TExpr.ToInt(e) => referencesMatching(e, resolveName, includeDynamicCalls)
+      case TExpr.UnaryPlus(e) => referencesMatching(e, resolveName, includeDynamicCalls)
+      case TExpr.Percent(e) => referencesMatching(e, resolveName, includeDynamicCalls)
+      case TExpr.DateToSerial(e) => referencesMatching(e, resolveName, includeDynamicCalls)
+      case TExpr.DateTimeToSerial(e) => referencesMatching(e, resolveName, includeDynamicCalls)
       // GH-306: runtime coercion wrapper — a coerced INDIRECT/OFFSET is still dynamic
-      case TExpr.Coerced(inner, _) => containsDynamicReferenceResolved(inner, resolveName)
+      case TExpr.Coerced(inner, _) => referencesMatching(inner, resolveName, includeDynamicCalls)
       // GH-193: LET — binding values and the body may carry dynamic calls
       case TExpr.Let(bindings, body) =>
-        bindings.exists((_, value) => containsDynamicReferenceResolved(value, resolveName)) ||
-        containsDynamicReferenceResolved(body, resolveName)
+        bindings.exists((_, value) =>
+          referencesMatching(value, resolveName, includeDynamicCalls)
+        ) ||
+        referencesMatching(body, resolveName, includeDynamicCalls)
       case TExpr.NameRef(name) => resolveName(name, None)
       case TExpr.SheetNameRef(sheet, name) => resolveName(name, Some(sheet))
       case TExpr.Aggregate(_, TExpr.RangeLocation.Name(name, scope)) => resolveName(name, scope)
       case _ => false
+
+  private def containsDynamicReferenceResolved[A](
+    expr: TExpr[A],
+    resolveName: (String, Option[SheetName]) => Boolean
+  ): Boolean = referencesMatching(expr, resolveName, includeDynamicCalls = true)
+
+  /**
+   * GH-507: readers whose dependencies cannot be proved by the static graph. Name resolution is
+   * scoped exactly as evaluation, and only names actually reached by formulas are inspected. The
+   * local memos avoid repeating definition parsing and name-chain walks across readers.
+   */
+  private[formula] def unresolvedReaders(workbook: Workbook): Set[QualifiedRef] =
+    type NameKey = (SheetName, SheetName, String)
+    val positions =
+      workbook.sheets.zipWithIndex.reverseIterator.map((sheet, i) => sheet.name -> i).toMap
+    val parsed = scala.collection.mutable.HashMap.empty[String, Option[TExpr[?]]]
+    val names = scala.collection.mutable.HashMap.empty[NameKey, Boolean]
+
+    def parse(text: String): Option[TExpr[?]] =
+      parsed.getOrElseUpdate(text, FormulaParser.parse(text).toOption)
+
+    def expressionUnknown(expr: TExpr[?], current: SheetName, visiting: Set[NameKey]): Boolean =
+      referencesMatching(
+        expr,
+        (name, scope) => nameUnknown(name, scope.getOrElse(current), current, visiting),
+        includeDynamicCalls = false
+      )
+
+    def nameUnknown(
+      name: String,
+      lookupFrom: SheetName,
+      fallback: SheetName,
+      visiting: Set[NameKey]
+    ): Boolean =
+      // Exact spelling is safe for the memo; the index applies Excel's case-fold relation.
+      val key = (lookupFrom, fallback, name)
+      names.get(key) match
+        case Some(unknown) => unknown
+        case None if visiting.contains(key) || visiting.size >= 100 => true
+        case None =>
+          val unknown =
+            if !positions.contains(lookupFrom) then true
+            else
+              Evaluator.lookupDefinedNameAt(workbook, positions.get(lookupFrom), name) match
+                case None => true
+                case Some(defined) =>
+                  parse(defined.formula) match
+                    case None => true
+                    case Some(expr) =>
+                      val current = Evaluator
+                        .definedNameScope(workbook, defined)
+                        .map(_.name)
+                        .getOrElse(fallback)
+                      expressionUnknown(expr, current, visiting + key)
+          names(key) = unknown
+          unknown
+
+    workbook.sheets.iterator.flatMap { sheet =>
+      sheet.cells.iterator.collect {
+        case (ref, cell) if (cell.value match
+              case CellValue.Formula(_, _, _: FormulaKind.DataTable) => false
+              case CellValue.Formula(text, _, _) =>
+                // Closed-workbook external caches are pinned by the explicit evaluation contract.
+                val external = text.contains('[') &&
+                  com.tjclp.xl.formula.eval.SheetEvaluator.pinnedExternalCache(cell.value).isDefined
+                !external && parse(text).fold(true)(expr =>
+                  expressionUnknown(expr, sheet.name, Set.empty)
+                )
+              case _ => false
+            ) =>
+          QualifiedRef(sheet.name, ref)
+      }
+    }.toSet
 
   def containsDynamicReference[A](expr: TExpr[A]): Boolean =
     containsDynamicReferenceResolved(expr, (_, _) => false)
