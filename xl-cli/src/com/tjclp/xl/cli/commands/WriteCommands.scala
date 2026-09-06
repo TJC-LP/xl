@@ -20,6 +20,7 @@ import com.tjclp.xl.cli.helpers.{
 }
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formula.{
+  Clock,
   DependencyGraph,
   FormulaParser,
   FormulaPrinter,
@@ -28,7 +29,7 @@ import com.tjclp.xl.formula.{
   SheetEvaluator,
   TExpr
 }
-import com.tjclp.xl.formula.eval.DependentRecalculation.*
+import com.tjclp.xl.formula.eval.DependentRecalculation
 import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -76,13 +77,45 @@ object WriteCommands:
    * GH-468: the targeted dependent refresh every single-target write ends with — suppressed
    * entirely by `--no-recalc`, which leaves every cached value in the file exactly as it was.
    */
-  private def refreshDependents(
+  private def writeAfterRefresh(
     wb: Workbook,
     sheetName: SheetName,
     modifiedRefs: Set[ARef],
+    message: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
     policy: WritePolicy
-  ): Workbook =
-    if policy.noRecalc then wb else wb.recalculateDependents(sheetName, modifiedRefs)
+  ): IO[String] =
+    val calculation: IO[Option[RecalcResult]] =
+      if policy.noRecalc then IO.pure(None)
+      else
+        IO.delay {
+          val result =
+            if wb.metadata.calcPr.exists(_.iterativeCalculation) then
+              val full = recalcHonoringCalcPr(wb).result
+              val cone = dirtyCone(wb, Map(sheetName -> modifiedRefs))
+              scopeToCone(full, cone).copy(workbook = applyConeCaches(wb, full.workbook, cone))
+            else
+              DependentRecalculation.recalculateAfterEdit(wb, sheetName, modifiedRefs, Clock.system)
+          Some(result)
+        }
+    calculation.flatMap { result =>
+      val finalWb = result.fold(wb)(_.workbook)
+      writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+        val note = result match
+          case None => noRecalcSuffix(policy)
+          case Some(r) if r.errors.isEmpty && r.converged && r.evaluated.values.forall(_.isEmpty) =>
+            ""
+          case Some(r) => "\n" + formatRecalcSummary(r)
+        strictGate(
+          policy,
+          s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
+          result,
+          Vector.empty
+        )
+      }
+    }
 
   /** Note appended to a write's message when `--no-recalc` suppressed its dependent refresh. */
   private def noRecalcSuffix(policy: WritePolicy): String =
@@ -240,10 +273,16 @@ object WriteCommands:
   ): IO[String] =
     val formatted = ValueParser.parsePutValue(valueStr, detect)
     val updatedSheet = putFormatted(sheet, ref, formatted)
-    val updatedWb = refreshDependents(wb.put(updatedSheet), sheet.name, Set(ref), policy)
-    writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-      s"${Format.putSuccess(ref, formatted.value)}${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
-    }
+    writeAfterRefresh(
+      wb.put(updatedSheet),
+      sheet.name,
+      Set(ref),
+      Format.putSuccess(ref, formatted.value),
+      outputPath,
+      config,
+      stream,
+      policy
+    )
 
   /** Apply a detected number format without creating a redundant General style. */
   private def putFormatted(sheet: Sheet, ref: ARef, formatted: Formatted): Sheet =
@@ -289,10 +328,16 @@ object WriteCommands:
     val cellCount = range.cellCount
     val modifiedRefs = range.cells.toSet
     val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => putFormatted(s, ref, formatted))
-    val updatedWb = refreshDependents(wb.put(updatedSheet), sheet.name, modifiedRefs, policy)
-    writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-      s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
-    }
+    writeAfterRefresh(
+      wb.put(updatedSheet),
+      sheet.name,
+      modifiedRefs,
+      s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}",
+      outputPath,
+      config,
+      stream,
+      policy
+    )
 
   /** Mode 3: Put different values to each cell (row-major order) */
   private def putBatchValues(
@@ -318,10 +363,16 @@ object WriteCommands:
           .toVector
         val modifiedRefs = updates.map(_._1).toSet
         val updatedSheet = sheet.put(updates*)
-        val updatedWb = refreshDependents(wb.put(updatedSheet), sheet.name, modifiedRefs, policy)
-        writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-          s"Put ${values.length} values to ${range.toA1} (row-major)${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
-        }
+        writeAfterRefresh(
+          wb.put(updatedSheet),
+          sheet.name,
+          modifiedRefs,
+          s"Put ${values.length} values to ${range.toA1} (row-major)",
+          outputPath,
+          config,
+          stream,
+          policy
+        )
 
   /**
    * Write formula to cell(s).
@@ -410,7 +461,10 @@ object WriteCommands:
           new Exception(ParseError.formatWithContext(e, fullFormula))
         }
       )
-      cachedValue = SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+      cachedValue =
+        if policy.noRecalc then
+          SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+        else None
       sheetWithFormula = sheet.put(ref, CellValue.Formula(formula, cachedValue))
       // Auto-apply date format if formula involves date functions
       finalSheet =
@@ -425,9 +479,17 @@ object WriteCommands:
           val mergedStyle = existingStyle.withNumFmt(numFmt)
           styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
         else sheetWithFormula
-      updatedWb = refreshDependents(wb.put(finalSheet), sheet.name, Set(ref), policy)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"${Format.putSuccess(ref, CellValue.Formula(formula))}${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
+      result <- writeAfterRefresh(
+        wb.put(finalSheet),
+        sheet.name,
+        Set(ref),
+        Format.putSuccess(ref, CellValue.Formula(formula)),
+        outputPath,
+        config,
+        stream,
+        policy
+      )
+    yield result
 
   /** Mode 2: Formula dragging with anchor-aware shifting (existing behavior) */
   private def putfFormulaDragging(
@@ -449,12 +511,20 @@ object WriteCommands:
         }
       )
       // Apply formula with Excel-style dragging (existing logic)
-      updatedSheet = putfDraggingLogic(sheet, wb, range, formula, parsedExpr)
+      updatedSheet = putfDraggingLogic(sheet, wb, range, formula, parsedExpr, policy.noRecalc)
       modifiedRefs = range.cells.toSet
-      updatedWb = refreshDependents(wb.put(updatedSheet), sheet.name, modifiedRefs, policy)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       cellCount = range.cellCount
-    yield s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
+      result <- writeAfterRefresh(
+        wb.put(updatedSheet),
+        sheet.name,
+        modifiedRefs,
+        s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)",
+        outputPath,
+        config,
+        stream,
+        policy
+      )
+    yield result
 
   /** Mode 3: Batch formulas (no dragging, apply as-is) */
   private def putfBatchFormulas(
@@ -485,15 +555,25 @@ object WriteCommands:
                 }
               ).map { _ =>
                 val cachedValue =
-                  SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+                  if policy.noRecalc then
+                    SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+                  else None
                 (ref, CellValue.Formula(formula, cachedValue))
               }
           }
           modifiedRefs = updates.map(_._1).toSet
           updatedSheet = sheet.put(updates*)
-          updatedWb = refreshDependents(wb.put(updatedSheet), sheet.name, modifiedRefs, policy)
-          _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-        yield s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
+          result <- writeAfterRefresh(
+            wb.put(updatedSheet),
+            sheet.name,
+            modifiedRefs,
+            s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)",
+            outputPath,
+            config,
+            stream,
+            policy
+          )
+        yield result
 
   /** Helper: Apply formula dragging logic (extracted from original putFormula) */
   private def putfDraggingLogic(
@@ -501,7 +581,8 @@ object WriteCommands:
     wb: Workbook,
     range: CellRange,
     formula: String,
-    parsedExpr: TExpr[?]
+    parsedExpr: TExpr[?],
+    cacheFormulas: Boolean
   ): Sheet =
     val startRef = range.start
     val startCol = Column.index0(startRef.col)
@@ -515,7 +596,9 @@ object WriteCommands:
       val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
       val fullShiftedFormula = s"=$shiftedFormula"
       val cachedValue =
-        SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
+        if cacheFormulas then
+          SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
+        else None
       s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
     }
     // Auto-apply date format if needed
@@ -963,7 +1046,7 @@ object WriteCommands:
     val seeded: Set[QualifiedRef] =
       seeds.iterator.flatMap((name, refs) => refs.iterator.map(QualifiedRef(name, _))).toSet
     val dynamic: Set[QualifiedRef] = DependencyGraph.dynamicCells(wb)
-    val roots = seeded ++ dynamic
+    val roots = seeded ++ dynamic ++ DependencyGraph.unresolvedReaders(wb)
     if roots.isEmpty then Map.empty
     else
       val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(wb)
@@ -1068,7 +1151,7 @@ object WriteCommands:
       }
     }
 
-  /** Restrict a whole-book result to the cone, so the summary counts what actually changed. */
+  /** Scope computed-value counts to the write while retaining workbook-level diagnostics. */
   private def scopeToCone(
     result: RecalcResult,
     cone: Map[SheetName, Set[ARef]]
@@ -1081,7 +1164,7 @@ object WriteCommands:
         val scope = cone.getOrElse(name, Set.empty[ARef])
         name -> cells.filter((r, _) => scope.contains(r))
       },
-      errors = result.errors.filter(e => cone.getOrElse(e.sheet, Set.empty[ARef]).contains(e.ref)),
+      errors = result.errors,
       converged = cycles.forall(_.converged),
       iterationsUsed = cycles.map(_.rounds).maxOption.getOrElse(0),
       cycles = cycles
@@ -1092,8 +1175,8 @@ object WriteCommands:
    *
    * Ordering and cycle isolation stay whole-book (one topological order over the qualified graph,
    * Excel's own model — a cone cell's precedents are recomputed before it), but only the cone's
-   * caches are written back and only the cone's outcomes are reported. Returns the workbook to
-   * write and the cone-scoped result for the summary.
+   * caches are written back. Errors remain visible even outside the cone: an unresolved dependency
+   * cannot be safely assigned to it. Returns the workbook to write and the result for the summary.
    *
    * Known limitations: the evaluation itself is still whole-book, so the SAVING is fidelity, not
    * time; a cone cell recomputes off freshly evaluated precedents rather than off any preserved
@@ -1340,12 +1423,27 @@ object WriteCommands:
       _ <- validateFillRanges(sourceRange, targetRange, direction)
 
       // Apply fill operation
-      updatedSheet = applyFill(targetSheet, wb, sourceRange, targetRange, direction)
+      updatedSheet = applyFill(
+        targetSheet,
+        wb,
+        sourceRange,
+        targetRange,
+        direction,
+        policy.noRecalc
+      )
       modifiedRefs = targetRange.cells.toSet
-      updatedWb = refreshDependents(wb.put(updatedSheet), targetSheet.name, modifiedRefs, policy)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       dirLabel = if direction == FillDirection.Right then "right" else "down"
-    yield s"Filled ${targetRange.toA1} from ${sourceRange.toA1} ($dirLabel)${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
+      result <- writeAfterRefresh(
+        wb.put(updatedSheet),
+        targetSheet.name,
+        modifiedRefs,
+        s"Filled ${targetRange.toA1} from ${sourceRange.toA1} ($dirLabel)",
+        outputPath,
+        config,
+        stream,
+        policy
+      )
+    yield result
 
   /** Validate that source and target ranges are compatible for fill direction */
   private def validateFillRanges(
@@ -1388,20 +1486,22 @@ object WriteCommands:
     wb: Workbook,
     source: CellRange,
     target: CellRange,
-    direction: FillDirection
+    direction: FillDirection,
+    cacheFormulas: Boolean
   ): Sheet =
     direction match
       case FillDirection.Down =>
-        applyFillDown(sheet, wb, source, target)
+        applyFillDown(sheet, wb, source, target, cacheFormulas)
       case FillDirection.Right =>
-        applyFillRight(sheet, wb, source, target)
+        applyFillRight(sheet, wb, source, target, cacheFormulas)
 
   /** Fill down: repeat source row(s) down through target range */
   private def applyFillDown(
     sheet: Sheet,
     wb: Workbook,
     source: CellRange,
-    target: CellRange
+    target: CellRange,
+    cacheFormulas: Boolean
   ): Sheet =
     val sourceStartRow = Row.index0(source.start.row)
     val sourceEndRow = Row.index0(source.end.row)
@@ -1428,7 +1528,15 @@ object WriteCommands:
           // ARef.from0 takes (colIndex, rowIndex)
           val sourceRef = com.tjclp.xl.addressing.ARef.from0(colIdx, sourceRowIdx)
           val targetRef = com.tjclp.xl.addressing.ARef.from0(colIdx, targetRowIdx)
-          copyCell(s2, wb, sourceRef, targetRef, colDelta = 0, rowDelta = rowDelta.toInt)
+          copyCell(
+            s2,
+            wb,
+            sourceRef,
+            targetRef,
+            colDelta = 0,
+            rowDelta = rowDelta.toInt,
+            cacheFormulas
+          )
         }
     }
 
@@ -1437,7 +1545,8 @@ object WriteCommands:
     sheet: Sheet,
     wb: Workbook,
     source: CellRange,
-    target: CellRange
+    target: CellRange,
+    cacheFormulas: Boolean
   ): Sheet =
     val sourceStartCol = Column.index0(source.start.col)
     val sourceEndCol = Column.index0(source.end.col)
@@ -1464,7 +1573,15 @@ object WriteCommands:
           // ARef.from0 takes (colIndex, rowIndex)
           val sourceRef = com.tjclp.xl.addressing.ARef.from0(sourceColIdx, rowIdx)
           val targetRef = com.tjclp.xl.addressing.ARef.from0(targetColIdx, rowIdx)
-          copyCell(s2, wb, sourceRef, targetRef, colDelta = colDelta.toInt, rowDelta = 0)
+          copyCell(
+            s2,
+            wb,
+            sourceRef,
+            targetRef,
+            colDelta = colDelta.toInt,
+            rowDelta = 0,
+            cacheFormulas
+          )
         }
     }
 
@@ -1475,7 +1592,8 @@ object WriteCommands:
     sourceRef: com.tjclp.xl.addressing.ARef,
     targetRef: com.tjclp.xl.addressing.ARef,
     colDelta: Int,
-    rowDelta: Int
+    rowDelta: Int,
+    cacheFormulas: Boolean
   ): Sheet =
     sheet.cells.get(sourceRef) match
       case None => sheet // Empty source cell, nothing to copy
@@ -1494,16 +1612,20 @@ object WriteCommands:
               case Left(_) =>
                 // If formula can't be parsed, copy as-is
                 val cachedValue =
-                  SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+                  if cacheFormulas then
+                    SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+                  else None
                 sheet.put(targetRef, CellValue.Formula(formula, cachedValue))
               case Right(parsedExpr) =>
                 val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
                 val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
                 val fullShiftedFormula = s"=$shiftedFormula"
                 val cachedValue =
-                  SheetEvaluator
-                    .evaluateFormula(sheet)(fullShiftedFormula, workbook = Some(wb))
-                    .toOption
+                  if cacheFormulas then
+                    SheetEvaluator
+                      .evaluateFormula(sheet)(fullShiftedFormula, workbook = Some(wb))
+                      .toOption
+                  else None
                 sheet.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
 
           case value =>
@@ -2091,23 +2213,37 @@ object WriteCommands:
       )
 
       // Delegate to shared helper (handles overlap, cross-sheet, style preservation, recalc)
-      finalWb = CopyOps.copyRange(
+      copiedWb = CopyOps.copyRange(
         wb,
         sourceSheet,
         sourceRange,
         targetSheet,
         targetRange,
         valuesOnly,
-        !policy.noRecalc
+        recalcDependents = false,
+        cacheCopiedFormulas = policy.noRecalc
       )
-      _ <- writeWorkbook(finalWb, outputPath, config, stream)
+      modifiedRefs = sourceRange.cellsRowMajor
+        .zip(targetRange.cellsRowMajor)
+        .collect { case (source, target) if sourceSheet.cells.contains(source) => target }
+        .toSet
 
       crossSheetLabel =
         if sourceSheet.name != targetSheet.name then
           s" (${sourceSheet.name.value} → ${targetSheet.name.value})"
         else ""
       modeLabel = if valuesOnly then " (values only)" else " (with formula adjustment)"
-    yield s"Copied ${sourceRange.toA1} to ${targetRange.toA1}$crossSheetLabel$modeLabel${noRecalcSuffix(policy)}\n${Format.saveSuffix(outputPath, stream)}"
+      result <- writeAfterRefresh(
+        copiedWb,
+        targetSheet.name,
+        modifiedRefs,
+        s"Copied ${sourceRange.toA1} to ${targetRange.toA1}$crossSheetLabel$modeLabel",
+        outputPath,
+        config,
+        stream,
+        policy
+      )
+    yield result
 
   /** Validate that all sort columns are within the range */
   private def validateSortColumns(range: CellRange, keys: List[SortKey]): IO[Unit] =

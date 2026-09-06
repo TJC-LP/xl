@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--strict` validates formulas authored by `put`/`putf`/`fill`/`copy` and their affected
+  dependents** (#504). Single writes retain targeted recalculation reports and evaluate formulas
+  against the completed edit, so fresh self-references cannot pass with a fabricated cache.
+  Declared iterative settings are honored, `-i` rolls back on strict failure, and workbook-level
+  diagnostics survive structural/batch cache scoping (#508). Fixed lookup selectors contribute
+  only their key and result strips to calculation ordering, avoiding false cycles through unused
+  table columns/rows; impact analysis still tracks the full declared table.
 - **Scenario-table seeding reports incomplete calculations** (#498, #506). Tables whose source
   cone contains dynamic references are left untouched with a named `Skipped` warning instead of
   silently seeding a flat grid. Source and cycle-member failures retain unresolved-precedent

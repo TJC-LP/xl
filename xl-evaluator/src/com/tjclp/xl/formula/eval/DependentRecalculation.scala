@@ -1,12 +1,15 @@
 package com.tjclp.xl.formula.eval
 
+import scala.util.control.NonFatal
+
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
-import com.tjclp.xl.formula.Clock
+import com.tjclp.xl.formula.{Clock, Rng}
 
 /**
  * Extension methods for eager recalculation of dependent formulas.
@@ -26,6 +29,117 @@ import com.tjclp.xl.formula.Clock
  * }}}
  */
 object DependentRecalculation:
+
+  /**
+   * GH-504/GH-508: evaluate authored formulas as well as affected dependents and retain outcomes.
+   * Unknown readers join the roots because a missing graph edge cannot prove independence.
+   * Unaffected formulas retain their caches and do not consume clock or randomness capabilities.
+   */
+  private[xl] def recalculateAfterEdit(
+    wb: Workbook,
+    sheetName: SheetName,
+    modifiedRefs: Set[ARef],
+    clock: Clock
+  ): RecalcResult =
+    if modifiedRefs.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty, Map.empty)
+    else
+      val calculationClock = WorkbookEvaluator.pinnedCalculationClock(clock)
+      val (graph, dependents) = DependencyGraph.fromWorkbookFormulaGraph(wb)
+      val index = DependencyGraph.fromWorkbookDependencyIndex(wb)
+      val dynamic = DependencyGraph.dynamicCells(wb)
+      val roots = modifiedRefs.map(QualifiedRef(sheetName, _)) ++ dynamic ++
+        DependencyGraph.unresolvedReaders(wb)
+      val affected = (roots ++ index.transitiveDependents(roots)).intersect(graph.keySet)
+      val affectedGraph = graph.filter((ref, _) => affected.contains(ref))
+      val allCyclic = DependencyGraph.qualifiedCyclicNodes(graph)
+      val cyclic = allCyclic.intersect(affected)
+      val blocked =
+        DependencyGraph.qualifiedTransitiveDependents(dependents, allCyclic).intersect(affected)
+      val skipped = cyclic ++ blocked
+
+      def expression(q: QualifiedRef): String =
+        wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
+          case Some(CellValue.Formula(text, _, _)) => text
+          case _ => q.ref.toA1
+
+      val cycleErrors = skipped.toVector
+        .sortBy(q => (q.sheet.value, q.ref.row.index0, q.ref.col.index0))
+        .map { q =>
+          val reason =
+            if cyclic.contains(q) then "Circular reference"
+            else "Blocked by an upstream circular reference"
+          CellEvalError(q.sheet, q.ref, XLError.FormulaError(expression(q), reason))
+        }
+      val orderedGraph = (affectedGraph -- skipped).view.mapValues(_ -- skipped).toMap
+      val orderedDependents = (dependents.filter((ref, _) =>
+        affected.contains(ref)
+      ) -- skipped).view.mapValues(_ -- skipped).toMap
+      DependencyGraph.qualifiedTopologicalSort(orderedGraph, orderedDependents) match
+        case Left(error) =>
+          val failures =
+            orderedGraph.keys.toVector.sortBy(q => (q.sheet.value, q.ref.toA1)).map { q =>
+              CellEvalError(
+                q.sheet,
+                q.ref,
+                XLError.FormulaError(expression(q), s"Unresolvable order: $error")
+              )
+            }
+          RecalcResult.cacheResults(wb, Map.empty, cycleErrors ++ failures, dependents)
+        case Right(order) =>
+          val dynamicClosure =
+            (dynamic ++ DependencyGraph.qualifiedTransitiveDependents(dependents, dynamic))
+              .intersect(affected) -- skipped
+          val ordered =
+            order.filterNot(dynamicClosure.contains) ++ order.filter(dynamicClosure.contains)
+          val stripBySheet = (dynamicClosure ++ skipped ++ allCyclic).groupMap(_.sheet)(_.ref)
+          val initialSheets = wb.sheets.map { sheet =>
+            SheetEvaluator.stripFormulaCaches(sheet, stripBySheet.getOrElse(sheet.name, Set.empty))
+          }
+          val positions = wb.sheets.zipWithIndex.map((sheet, i) => sheet.name -> i).toMap
+          val evaluator = Evaluator.recalculationInstance(Rng.system, new Evaluator.AggregateMemo)
+          val initial: WorkbookEvaluator.PassState =
+            (initialSheets, Map.empty, cycleErrors)
+          val (_, values, errors) = ordered.foldLeft(initial) {
+            case (state @ (sheets, evaluated, failures), q) =>
+              positions.get(q.sheet) match
+                case None => state
+                case Some(position) =>
+                  val result =
+                    try
+                      SheetEvaluator.evaluateCellWithEvaluator(
+                        sheets(position),
+                        q.ref,
+                        evaluator,
+                        calculationClock,
+                        Some(wb.copy(sheets = sheets))
+                      )
+                    catch
+                      case NonFatal(error) =>
+                        Left(
+                          XLError.FormulaError(
+                            expression(q),
+                            s"Evaluation threw ${error.getClass.getName}"
+                          )
+                        )
+                  result match
+                    case Right(value) =>
+                      (
+                        sheets.updated(position, sheets(position).put(q.ref, value)),
+                        evaluated.updated(
+                          q.sheet,
+                          evaluated.getOrElse(q.sheet, Map.empty) + (q.ref -> value)
+                        ),
+                        failures
+                      )
+                    case Left(error) =>
+                      val stripped = SheetEvaluator.stripFormulaCaches(sheets(position), Set(q.ref))
+                      (
+                        sheets.updated(position, stripped),
+                        evaluated,
+                        failures :+ CellEvalError(q.sheet, q.ref, error)
+                      )
+          }
+          RecalcResult.cacheResults(wb, values, errors, dependents)
 
   extension (sheet: Sheet)
     /**
