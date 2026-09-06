@@ -242,6 +242,15 @@ class LogicalArrayFoldSpec extends FunSuite:
     assertScalar(cached, "=OR(A1:A2)", CellValue.Bool(true))
   }
 
+  test("GH-564: uncached formula cells in a range are evaluated, not skipped (GH-499 reader)") {
+    val uncached = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"B1", CellValue.Formula("A1>0", None))
+      .put(ref"B2", CellValue.Formula("A1>2", None))
+    assertScalar(uncached, "=AND(B1:B2)", CellValue.Bool(false))
+    assertScalar(uncached, "=OR(B1:B2)", CellValue.Bool(true))
+  }
+
   test(
     "GH-338: NOT over a bare range keeps its pre-existing error (elementwise, no reference fold)"
   ) {

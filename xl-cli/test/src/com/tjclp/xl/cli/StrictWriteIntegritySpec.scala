@@ -73,6 +73,7 @@ class StrictWriteIntegritySpec extends FunSuite:
     }
   }
 
+  // NOT over a bare range is the host-failure fixture (GH-564: AND(range) now folds like Excel)
   test("GH-504: strict putf reports a supported formula whose evaluation fails") {
     withOutput { out =>
       val wb = plain
@@ -81,7 +82,7 @@ class StrictWriteIntegritySpec extends FunSuite:
           wb,
           Some(wb.sheets.head),
           "C1",
-          List("=AND(Z1:Z1)"),
+          List("=NOT(Z1:Z1)"),
           out,
           config,
           policy = strict
@@ -137,7 +138,7 @@ class StrictWriteIntegritySpec extends FunSuite:
     withOutput { out =>
       val sheet = Sheet("Data")
         .put(ref"A1", num(1))
-        .put(ref"B1", CellValue.Formula("AND(A1:A1)", Some(num(1))))
+        .put(ref"B1", CellValue.Formula("NOT(A1:A1)", Some(num(1))))
         .put(ref"C1", CellValue.Formula("B1*2", Some(num(2))))
       val summary = failure(
         WriteCommands.put(
