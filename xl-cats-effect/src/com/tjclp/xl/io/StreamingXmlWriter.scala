@@ -270,10 +270,11 @@ object StreamingXmlWriter:
               XmlEvent.EndTag(QName("f"))
             )
           case _ =>
-            // GH-456: <f> carries the expression, never the display form's leading '='
+            // GH-456: <f> carries the expression, never the display form's leading '=';
+            // GH-556: post-2007 functions carry Excel's _xlfn. storage prefix
             List(
               XmlEvent.StartTag(QName("f"), recordAttrs, false),
-              XmlEvent.XmlString(expr.stripPrefix("="), false),
+              XmlEvent.XmlString(com.tjclp.xl.ooxml.FormulaStorage.toStored(expr), false),
               XmlEvent.EndTag(QName("f"))
             )
         val cachedEvents = cachedValue.toList.flatMap {

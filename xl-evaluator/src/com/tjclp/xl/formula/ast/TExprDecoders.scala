@@ -193,7 +193,8 @@ trait TExprDecoders:
    *   - Text -> as-is
    *   - Number -> toString (42 -> "42")
    *   - Boolean -> toString (true -> "TRUE", false -> "FALSE")
-   *   - DateTime -> ISO format
+   *   - DateTime -> its Excel serial number as text (GH-561: dates are numbers; `">="&A1` with a
+   *     date in A1 must read ">=46023", the form COUNTIFS/SUMIFS criteria compare against)
    *   - Formula -> text representation
    *   - Empty -> empty string
    */
@@ -203,7 +204,7 @@ trait TExprDecoders:
       case CellValue.Text(s) => scala.util.Right(s)
       case CellValue.Number(n) => scala.util.Right(n.toString)
       case CellValue.Bool(b) => scala.util.Right(if b then "TRUE" else "FALSE")
-      case CellValue.DateTime(dt) => scala.util.Right(dt.toString)
+      case CellValue.DateTime(dt) => scala.util.Right(ScalarCoercion.dateSerialText(dt))
       case CellValue.Formula(text, _, _) => scala.util.Right(text)
       case CellValue.RichText(rt) => scala.util.Right(rt.toPlainText)
       case other => scala.util.Left(CodecError.TypeMismatch("String", other))

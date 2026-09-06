@@ -7,7 +7,7 @@ import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.Clock
 
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.ArrayArithmetic
 import scala.util.boundary
 import boundary.break
@@ -24,6 +24,8 @@ import scala.util.matching.Regex
  *   - **Less**: `"<10"`, `"<=5"` → Numeric comparison; `"<m"` → Text comparison
  *   - **Not Equal**: `"<>0"` → Numeric inequality; `"<>x"` → Text inequality; bare `"<>"` →
  *     non-blank; `"<>A*"` → negated wildcard
+ *   - **Error literal** (GH-565): `"#N/A"`, `"#DIV/0!"`, ... → Cells holding that error VALUE (not
+ *     the text); `"<>#N/A"` → cells not holding that error
  *
  * Laws:
  *   1. Exact match: `matches(Text("Apple"), Exact(ExprValue.Text("Apple"))) == true`
@@ -56,6 +58,12 @@ object CriteriaMatcher:
 
   /** Negated wildcard pattern, from `<>` followed by a pattern with unescaped wildcards */
   case class NotWildcard(pattern: String) extends Criterion
+
+  /**
+   * GH-565: `<>` followed by an error literal (`"<>#N/A"`) — every cell that does not hold that
+   * error value, blanks and other errors included.
+   */
+  case class NotError(err: CellError) extends Criterion
 
   /** Comparison operators for numeric criteria */
   enum CompareOp derives CanEqual:
@@ -105,17 +113,24 @@ object CriteriaMatcher:
    */
   private def parseString(s: String): Criterion =
     s match
+      // GH-565: a criteria string that spells an Excel error literal IS that error value — Excel
+      // parses criteria like formula text, so "#N/A" matches #N/A error cells, never the text
+      // "#N/A". Checked before the wildcard rule: "#NAME?" contains a '?' but is not a pattern.
+      case ErrorLiteral(err) => Exact(ExprValue.Cell(CellValue.Error(err)))
       // Not equal: <>
       // GH-466: non-numeric operands are text inequality (bare "<>" = non-blank);
       // wildcard operands negate the pattern (Excel "<>A*" = not-like "A*").
       case _ if s.startsWith("<>") =>
         val operand = s.drop(2)
-        parseNumeric(operand) match
-          case Some(n) => Compare(CompareOp.Neq, n)
-          case None if hasUnescapedWildcard(operand) => NotWildcard(operand)
-          case None if hasEscapeSequence(operand) =>
-            CompareText(CompareOp.Neq, unescapePattern(operand))
-          case None => CompareText(CompareOp.Neq, operand)
+        operand match
+          case ErrorLiteral(err) => NotError(err) // GH-565
+          case _ =>
+            parseNumeric(operand) match
+              case Some(n) => Compare(CompareOp.Neq, n)
+              case None if hasUnescapedWildcard(operand) => NotWildcard(operand)
+              case None if hasEscapeSequence(operand) =>
+                CompareText(CompareOp.Neq, unescapePattern(operand))
+              case None => CompareText(CompareOp.Neq, operand)
       // Greater than or equal: >=
       case _ if s.startsWith(">=") =>
         parseNumeric(s.drop(2)) match
@@ -138,9 +153,12 @@ object CriteriaMatcher:
           case None => CompareText(CompareOp.Lt, s.drop(1)) // GH-466: text ordering
       // Equal: =
       case _ if s.startsWith("=") =>
-        parseNumeric(s.drop(1)) match
-          case Some(n) => Exact(ExprValue.Number(n))
-          case None => Exact(ExprValue.Text(s.drop(1))) // Keep text after =
+        s.drop(1) match
+          case ErrorLiteral(err) => Exact(ExprValue.Cell(CellValue.Error(err))) // GH-565
+          case operand =>
+            parseNumeric(operand) match
+              case Some(n) => Exact(ExprValue.Number(n))
+              case None => Exact(ExprValue.Text(operand)) // Keep text after =
       // Wildcard pattern
       case _ if hasUnescapedWildcard(s) =>
         Wildcard(s)
@@ -150,6 +168,10 @@ object CriteriaMatcher:
       // Plain string - exact match
       case _ =>
         Exact(ExprValue.Text(s))
+
+  /** GH-565: extractor for the seven Excel error literals (`#N/A`, `#DIV/0!`, ...). */
+  private object ErrorLiteral:
+    def unapply(s: String): Option[CellError] = CellError.parse(s).toOption
 
   /**
    * Check if string contains unescaped wildcards (* or ?).
@@ -241,6 +263,18 @@ object CriteriaMatcher:
       case CompareText(op, operand) => matchesCompareText(cellValue, op, operand)
       case Wildcard(pattern) => matchesWildcard(cellValue, pattern)
       case NotWildcard(pattern) => matchesNotWildcard(cellValue, pattern)
+      case NotError(err) => matchesNotError(cellValue, err)
+
+  /**
+   * GH-565: `<>#N/A` — everything but that error value. Blanks, values and other errors match
+   * (consistent with `<>text` matching blanks); uncached formulas never match.
+   */
+  private def matchesNotError(cellValue: CellValue, err: CellError): Boolean =
+    cellValue match
+      case CellValue.Error(e) => e != err
+      case CellValue.Formula(_, Some(cached), _) => matchesNotError(cached, err)
+      case CellValue.Formula(_, None, _) => false
+      case _ => true
 
   /**
    * Exact matching with type coercion.
@@ -309,8 +343,12 @@ object CriteriaMatcher:
           case ExprValue.Text(s) => rt.toPlainText.equalsIgnoreCase(s)
           case _ => false
 
-      case CellValue.Error(_) =>
-        false
+      // GH-565: an error cell matches exactly the criterion carrying the same error value (an
+      // error literal, or a reference to a cell holding that error); never text or numbers
+      case CellValue.Error(err) =>
+        expected match
+          case ExprValue.Cell(CellValue.Error(e)) => e == err
+          case _ => false
 
   /**
    * Numeric comparison matching.

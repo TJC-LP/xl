@@ -5,7 +5,14 @@ import org.xml.sax.{Attributes, InputSource}
 import org.xml.sax.helpers.DefaultHandler
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
-import com.tjclp.xl.ooxml.{FormulaKindCodec, SharedFormula, SharedStrings, XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{
+  FormulaKindCodec,
+  FormulaStorage,
+  SharedFormula,
+  SharedStrings,
+  XmlSecurity,
+  XmlUtil
+}
 
 /**
  * SAX-based single cell reader with early-abort optimization.
@@ -323,12 +330,14 @@ object SaxSingleCellReader:
       styleId: Option[Int],
       kind: FormulaKind = FormulaKind.Normal()
     ): CellResult =
+      // GH-556: bare (formula-bar) spelling of post-2007 functions, DOM parity
       val cellValue = (expandedFormula, cached) match
         case (Some(formula), Some(cachedText)) =>
           val parsedCached = interpretCellValue(cachedText, cellType, sst)
           val cachedOpt = Option.when(parsedCached != CellValue.Empty)(parsedCached)
-          CellValue.Formula(formula, cachedOpt, kind)
-        case (Some(formula), None) => CellValue.Formula(formula, None, kind)
+          CellValue.Formula(FormulaStorage.fromStored(formula), cachedOpt, kind)
+        case (Some(formula), None) =>
+          CellValue.Formula(FormulaStorage.fromStored(formula), None, kind)
         case (None, Some(value)) => interpretCellValue(value, cellType, sst)
         case (None, None) => CellValue.Empty
 

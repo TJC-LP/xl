@@ -56,8 +56,11 @@ trait TExprCoercions:
     case TExpr.Lit(value: String) => TExpr.Lit(value)
     case TExpr.Lit(value: BigDecimal) => TExpr.Lit(value.toString)
     case TExpr.Lit(value: Boolean) => TExpr.Lit(if value then "TRUE" else "FALSE")
-    case TExpr.Lit(value: java.time.LocalDate) => TExpr.Lit(value.toString)
-    case TExpr.Lit(value: java.time.LocalDateTime) => TExpr.Lit(value.toString)
+    // GH-561: a date in a text position is its Excel serial, not ISO text
+    case TExpr.Lit(value: java.time.LocalDate) =>
+      TExpr.Lit(com.tjclp.xl.formula.eval.ScalarCoercion.dateSerialText(value))
+    case TExpr.Lit(value: java.time.LocalDateTime) =>
+      TExpr.Lit(com.tjclp.xl.formula.eval.ScalarCoercion.dateSerialText(value))
     // Concat is String by construction — the only statically text-typed operator
     case c: TExpr.Concat => c
     // GH-302/GH-306: numeric/boolean/array call results render as text at evaluation time

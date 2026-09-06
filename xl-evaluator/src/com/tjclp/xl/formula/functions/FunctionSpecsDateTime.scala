@@ -114,13 +114,31 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
         y <- ctx.evalExpr(yearExpr)
         m <- ctx.evalExpr(monthExpr)
         d <- ctx.evalExpr(dayExpr)
-        result <- scala.util.Try(LocalDate.of(y, m, d)).toEither.left.map { ex =>
-          EvalError.EvalFailed(
-            s"DATE: invalid date components (year=$y, month=$m, day=$d): ${ex.getMessage}"
-          )
-        }
+        result <- normalizeDate(y, m, d)
       yield result
     }
+
+  /**
+   * GH-562: Excel's DATE normalization. Month and day are OFFSETS from January 1 of the year, not
+   * validated fields: a month above 12 rolls into later years (DATE(2026,13,1) is 2027-01-01, the
+   * month-spine idiom `=DATE(YEAR(x),MONTH(x)+1,1)` on a December), a month below 1 rolls back
+   * (DATE(2008,-3,2) is 2007-09-02), and days overflow or underflow the month the same way
+   * (DATE(2008,1,35) is 2008-02-04; DATE(2008,1,-15) is 2007-12-16). A year from 0 to 1899 is
+   * offset by 1900, as in Excel; a year outside 0..9999 or a result outside the 1900 date system
+   * (before 1900-01-01 or after 9999-12-31) is #NUM!.
+   */
+  private def normalizeDate(y: Int, m: Int, d: Int): Either[EvalError, LocalDate] =
+    val numError =
+      Left(EvalError.ErrorValue(com.tjclp.xl.cells.CellError.Num, Some(s"DATE($y, $m, $d)")))
+    val year = if y >= 0 && y <= 1899 then y + 1900 else y
+    if year < 1900 || year > 9999 then numError
+    else
+      scala.util
+        .Try(LocalDate.of(year, 1, 1).plusMonths(m.toLong - 1).plusDays(d.toLong - 1))
+        .toOption match
+        case Some(date) if !date.isBefore(LocalDate.of(1900, 1, 1)) && date.getYear <= 9999 =>
+          Right(date)
+        case _ => numError
 
   val year: FunctionSpec[BigDecimal] { type Args = UnaryDate } =
     FunctionSpec.simple[BigDecimal, UnaryDate](

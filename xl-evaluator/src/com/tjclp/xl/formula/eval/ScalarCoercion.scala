@@ -53,6 +53,23 @@ private[formula] object ScalarCoercion:
    */
   val BlankDate: java.time.LocalDate = java.time.LocalDate.of(1900, 1, 1)
 
+  /**
+   * GH-561: the text form of a date in a TEXT position (`&`, CONCATENATE, LEN, ...) is its Excel
+   * serial number, never an ISO rendering — dates ARE numbers in Excel's value model and only
+   * TEXT() formats them, so `">="&DATE(2026,1,1)` is `">=46023"` and matches numeric date cells in
+   * COUNTIFS/SUMIFS criteria. Whole days print as integers ("46023"); times keep their fraction
+   * ("46023.5"), rounded to Excel's 15 significant digits.
+   */
+  def dateSerialText(dt: java.time.LocalDateTime): String =
+    BigDecimal(CellValue.dateTimeToExcelSerial(dt))
+      .round(new java.math.MathContext(15))
+      .bigDecimal
+      .stripTrailingZeros
+      .toPlainString
+
+  /** GH-561: see the LocalDateTime overload — a date-only value is its whole-day serial. */
+  def dateSerialText(ld: java.time.LocalDate): String = dateSerialText(ld.atStartOfDay())
+
   /** Collapse an ArrayResult to its scalar value: top-left, Empty when empty (GH-302). */
   def collapseArray(ar: ArrayResult): CellValue =
     if ar.isEmpty then CellValue.Empty else ar(0, 0)
@@ -116,8 +133,9 @@ private[formula] object ScalarCoercion:
     case bd: BigDecimal => Right(bd.toString)
     case i: Int => Right(i.toString)
     case b: Boolean => Right(if b then "TRUE" else "FALSE")
-    case ld: java.time.LocalDate => Right(ld.toString)
-    case ldt: java.time.LocalDateTime => Right(ldt.toString)
+    // GH-561: dates render as their Excel serial in text positions
+    case ld: java.time.LocalDate => Right(dateSerialText(ld))
+    case ldt: java.time.LocalDateTime => Right(dateSerialText(ldt))
     case CellValue.Empty => Right("")
     case other => mismatch(label, "text", other)
 

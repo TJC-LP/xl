@@ -440,31 +440,35 @@ object FormulaParser:
     }
 
   /**
-   * Parse exponentiation (right-associative, highest arithmetic precedence).
+   * Parse exponentiation (LEFT-associative, highest binary arithmetic precedence).
    *
-   * Right-associativity: 2^3^2 = 2^(3^2) = 512, not (2^3)^2 = 64 Excel precedence: ^ binds tighter
-   * than unary minus, so -2^2 = -(2^2) = -4 But the exponent can have unary minus: 2^-1 = 0.5
+   * GH-480: Excel folds chained '^' from the left like every other binary operator: 2^3^2 = (2^3)^2 =
+   * 64, not 2^(3^2) = 512 (the mathematical convention this parser used to follow, which silently
+   * changed the value of Excel-authored chained-pow formulas). Excel precedence: ^ binds tighter
+   * than unary minus, so -2^2 = -(2^2) = -4; the exponent itself may carry a unary sign (2^-1 =
+   * 0.5), and that signed exponent is one operand of the left fold (2^-3^2 = (2^-3)^2).
    */
   private def parsePow(state: ParserState): ParseResult[TExpr[?]] =
-    parsePostfix(state).flatMap { case (left, s1) =>
-      val s2 = skipWhitespace(s1)
-      s2.currentChar match
-        case Some('^') =>
-          descend(s2).flatMap { sd =>
-            val s3 = skipWhitespace(sd.advance())
-            // Allow unary minus in the exponent (2^-1 = 0.5)
-            parsePowExponent(s3).map {
-              case (right, s4) => // Recursive call for right-associativity
-                (
-                  TExpr.Pow(
-                    TExpr.asNumericExpr(left),
-                    TExpr.asNumericExpr(right)
-                  ),
-                  s4.copy(depth = s2.depth)
-                )
-            }
-          }
-        case _ => Right((left, s2))
+    parsePostfix(state).flatMap { case (first, s1) =>
+      @tailrec
+      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
+        val s2 = skipWhitespace(s)
+        s2.currentChar match
+          case Some('^') =>
+            // GH-56: each chained power deepens the left-nested spine — count it (see parseAddSub)
+            descend(s2) match
+              case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance())
+                parsePowExponent(s3) match
+                  case Right((right, s4)) =>
+                    loop(
+                      TExpr.Pow(TExpr.asNumericExpr(acc), TExpr.asNumericExpr(right)),
+                      s4.copy(depth = s2.depth)
+                    )
+                  case Left(err) => Left(err)
+          case _ => Right((acc, s2))
+      loop(first, s1)
     }
 
   /**
@@ -494,7 +498,8 @@ object FormulaParser:
   /**
    * Parse the exponent of a power expression, allowing unary minus and plus. This handles cases
    * like 2^-1 = 0.5 while keeping -2^2 = -(2^2) = -4. Unary plus wraps in TExpr.UnaryPlus so
-   * `=2^+2` prints back byte-identically (GH-271 acceptance, GH-374 preservation).
+   * `=2^+2` prints back byte-identically (GH-271 acceptance, GH-374 preservation). GH-480: the
+   * exponent is a single postfix operand — a following '^' belongs to the enclosing left fold.
    */
   private def parsePowExponent(state: ParserState): ParseResult[TExpr[?]] =
     val s = skipWhitespace(state)
@@ -516,7 +521,7 @@ object FormulaParser:
             (TExpr.UnaryPlus(expr), s3.copy(depth = s.depth))
           }
         }
-      case _ => parsePow(s)
+      case _ => parsePostfix(s)
 
   /**
    * Parse unary operators: -, +, NOT
@@ -773,9 +778,12 @@ object FormulaParser:
     state: ParserState,
     startPos: Int
   ): ParseResult[TExpr[?]] =
+    // GH-556: Excel stores post-2007 functions as _xlfn.NAME (FILTER/SORT as _xlfn._xlws.NAME);
+    // inherited formulas may still carry the prefix — drop it before the registry lookup.
+    val bareName = com.tjclp.xl.ooxml.FormulaStorage.bareFunctionName(name)
     // GH-193: LET is a special form (it introduces lexical bindings), not a FunctionSpec.
-    if name == "LET" then parseLet(state, startPos)
-    else parseRegularFunction(name, state, startPos)
+    if bareName == "LET" then parseLet(state, startPos)
+    else parseRegularFunction(bareName, state, startPos)
 
   private def parseRegularFunction(
     name: String,

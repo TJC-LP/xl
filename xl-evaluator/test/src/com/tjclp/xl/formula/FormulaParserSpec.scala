@@ -801,15 +801,31 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("parse exponentiation: right-associative (2^3^2 = 2^(3^2) = 512)") {
+  test("GH-480: parse exponentiation: left-associative (2^3^2 = (2^3)^2 = 64, like Excel)") {
     val result = FormulaParser.parse("=2^3^2")
     assert(result.isRight, s"Expected success, got $result")
     result.foreach {
-      case TExpr.Pow(TExpr.Lit(_), TExpr.Pow(_, _)) =>
-        // 2^(3^2) structure - right-associative
+      case TExpr.Pow(TExpr.Pow(_, _), TExpr.Lit(_)) =>
+        // (2^3)^2 structure - left-associative
         ()
-      case other => fail(s"Expected Pow(2, Pow(3, 2)), got $other")
+      case other => fail(s"Expected Pow(Pow(2, 3), 2), got $other")
     }
+  }
+
+  test("GH-480: parse exponentiation: a signed exponent is one operand of the left fold") {
+    // Excel: =2^-3^2 is (2^-3)^2 = 0.015625
+    val result = FormulaParser.parse("=2^-3^2")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach {
+      case TExpr.Pow(
+            TExpr.Pow(TExpr.Lit(_), TExpr.Sub(TExpr.Lit(_), TExpr.Lit(_))),
+            TExpr.Lit(_)
+          ) =>
+        ()
+      case other => fail(s"Expected Pow(Pow(2, -3), 2), got $other")
+    }
+    val value = result.flatMap(Evaluator.eval(_, Sheet("Test")))
+    assertEquals(value, Right(BigDecimal("0.015625")))
   }
 
   test("parse exponentiation: higher precedence than multiplication") {
@@ -841,10 +857,21 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight, s"Expected success, got $result")
     result.foreach {
       case TExpr.Pow(TExpr.Pow(_, _), TExpr.Lit(_)) =>
-        // (2^3)^2 structure - parentheses override right-associativity
+        // (2^3)^2 structure - the same tree the bare left fold produces (GH-480)
         ()
       case other => fail(s"Expected Pow(Pow(2, 3), 2), got $other")
     }
+  }
+
+  test("GH-480: parse exponentiation: parentheses on the right keep the nested power") {
+    val result = FormulaParser.parse("=2^(3^2)")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach {
+      case TExpr.Pow(TExpr.Lit(_), TExpr.Pow(_, _)) => ()
+      case other => fail(s"Expected Pow(2, Pow(3, 2)), got $other")
+    }
+    val value = result.flatMap(Evaluator.eval(_, Sheet("Test")))
+    assertEquals(value, Right(BigDecimal(512)))
   }
 
   test("parse exponentiation: with cell references") {
@@ -865,14 +892,14 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertEquals(result, Right(BigDecimal(8)))
   }
 
-  test("evaluate exponentiation: 2^3^2 = 512 (right-associative)") {
+  test("GH-480: evaluate exponentiation: 2^3^2 = 64 (left-associative, like Excel)") {
     val sheet = Sheet("Test")
     val result = for
       expr <- FormulaParser.parse("=2^3^2")
       value <- Evaluator.eval(expr, sheet)
     yield value
-    // 2^(3^2) = 2^9 = 512
-    assertEquals(result, Right(BigDecimal(512)))
+    // (2^3)^2 = 8^2 = 64 — Excel's answer; the mathematical right fold (512) was GH-480
+    assertEquals(result, Right(BigDecimal(64)))
   }
 
   test("evaluate exponentiation: 2^-1 = 0.5 (negative exponent)") {
@@ -914,16 +941,49 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("print exponentiation: nested right-associative") {
-    val result = FormulaParser.parse("=2^3^2")
+  test("GH-480: print exponentiation: chained powers round-trip byte-for-byte") {
+    // Left-nested prints flat; right-nested keeps its grouping parens; parse∘print = id on both,
+    // and the printed text re-parses to the SAME tree (reprint canonicalization is value-safe).
+    val cases = List("=2^3^2", "=2^(3^2)", "=2^-3^2", "=(-2)^3", "=2^-1", "=2^3%")
+    cases.foreach { formula =>
+      val parsed = FormulaParser.parse(formula)
+      assert(parsed.isRight, s"$formula: $parsed")
+      parsed.foreach { expr =>
+        val printed = FormulaPrinter.print(expr)
+        assertEquals(printed, formula)
+        assertEquals(FormulaParser.parse(printed), Right(expr), formula)
+      }
+    }
+  }
+
+  test("GH-480: print exponentiation: an explicit (2^3)^2 canonicalizes to 2^3^2") {
+    val result = FormulaParser.parse("=(2^3)^2")
     assert(result.isRight)
     result.foreach { expr =>
-      val printed = FormulaPrinter.print(expr)
-      assertEquals(printed, "=2^3^2")
-      // Verify round-trip
-      val reparsed = FormulaParser.parse(printed)
-      assert(reparsed.isRight)
+      assertEquals(FormulaPrinter.print(expr), "=2^3^2")
+      assertEquals(FormulaParser.parse("=2^3^2"), Right(expr))
     }
+  }
+
+  test("GH-556: parse strips Excel's _xlfn. / _xlfn._xlws. storage prefixes before lookup") {
+    val cases = List(
+      "=_xlfn.XLOOKUP(\"k\",A1:A2,B1:B2)" -> "=XLOOKUP(\"k\", A1:A2, B1:B2)",
+      "=_xlfn.MAXIFS(B1:B3,A1:A3,\"a\")" -> "=MAXIFS(B1:B3, A1:A3, \"a\")",
+      "=_xlfn._xlws.FILTER(A1:A3,B1:B3)" -> "=FILTER(A1:A3, B1:B3)",
+      "=_XLFN.IFS(A1>0,1,TRUE,0)" -> "=IFS(A1>0, 1, TRUE, 0)",
+      "=_xlfn.LET(x,1,x+1)" -> "=LET(x, 1, x+1)"
+    )
+    cases.foreach { case (stored, canonical) =>
+      val parsed = FormulaParser.parse(stored)
+      assert(parsed.isRight, s"$stored: $parsed")
+      parsed.foreach(expr => assertEquals(FormulaPrinter.print(expr), canonical, stored))
+    }
+  }
+
+  test("GH-556: a prefixed function that is still unknown reports the bare name") {
+    FormulaParser.parse("=_xlfn.NOSUCHFN(1)") match
+      case Left(ParseError.UnknownFunction(name, _, _)) => assertEquals(name, "NOSUCHFN")
+      case other => fail(s"expected UnknownFunction, got $other")
   }
 
   test("parse SUM function") {
@@ -1201,13 +1261,23 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertEquals(FormulaParser.parse(result), Right(expr))
   }
 
-  test("print exponentiation: parenthesize nested base") {
+  test("GH-480: print exponentiation: a nested base prints flat (left association)") {
     val expr = TExpr.Pow(
       TExpr.Pow(TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3))),
       TExpr.Lit(BigDecimal(2))
     )
     val result = FormulaPrinter.print(expr)
-    assertEquals(result, "=(2^3)^2")
+    assertEquals(result, "=2^3^2")
+    assertEquals(FormulaParser.parse(result), Right(expr))
+  }
+
+  test("GH-480: print exponentiation: a nested exponent keeps its parens") {
+    val expr = TExpr.Pow(
+      TExpr.Lit(BigDecimal(2)),
+      TExpr.Pow(TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(2)))
+    )
+    val result = FormulaPrinter.print(expr)
+    assertEquals(result, "=2^(3^2)")
     assertEquals(FormulaParser.parse(result), Right(expr))
   }
 
