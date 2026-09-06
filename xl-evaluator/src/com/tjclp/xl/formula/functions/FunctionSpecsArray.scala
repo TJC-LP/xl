@@ -29,11 +29,11 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    */
   val transpose: FunctionSpec[ArrayResult] { type Args = UnaryRange } =
     FunctionSpec.simple[ArrayResult, UnaryRange]("TRANSPOSE", Arity.one) { (location, ctx) =>
-      Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook) match
-        case Left(err) => Left(err)
-        case Right((targetSheet, range)) =>
-          val values = extractRangeAsMatrix(range, targetSheet)
-          Right(ArrayResult(values.transpose))
+      Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap {
+        case (targetSheet, range) =>
+          extractRangeAsMatrixEval(range, targetSheet, ctx)
+            .map(values => ArrayResult(values.transpose))
+      }
     }
 
   /**
@@ -229,8 +229,8 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
         sortOrder <- orderOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
         resolved <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
         (targetSheet, range) = resolved
+        matrix <- extractRangeAsMatrixEval(range, targetSheet, ctx)
         result <-
-          val matrix = extractRangeAsMatrix(range, targetSheet)
           val width = matrix.headOption.map(_.size).getOrElse(0)
           val colIdx = sortIndex - 1
           if matrix.isEmpty then Right(ArrayResult(matrix))
@@ -257,8 +257,8 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
         exactlyOnce <- onceOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
         resolved <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
         (targetSheet, range) = resolved
+        matrix0 <- extractRangeAsMatrixEval(range, targetSheet, ctx)
       yield
-        val matrix0 = extractRangeAsMatrix(range, targetSheet)
         val matrix = if byCol then matrix0.transpose else matrix0
         val resultRows =
           if exactlyOnce then
@@ -290,10 +290,10 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
         resolvedInclude <- Evaluator.resolveRangeLocation(includeLoc, ctx.sheet, ctx.workbook)
         (arraySheet, arrayRange) = resolvedArray
         (includeSheet, includeRange) = resolvedInclude
+        matrix <- extractRangeAsMatrixEval(arrayRange, arraySheet, ctx)
+        include <- extractRangeAsMatrixEval(includeRange, includeSheet, ctx)
         result <-
-          val matrix = extractRangeAsMatrix(arrayRange, arraySheet)
-          val flags = extractRangeAsMatrix(includeRange, includeSheet)
-            .map(row => row.headOption.exists(isTruthy))
+          val flags = include.map(row => row.headOption.exists(isTruthy))
           val kept = matrix.zip(flags).collect { case (row, true) => row }
           if kept.nonEmpty then Right(ArrayResult(kept))
           else
@@ -329,66 +329,3 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       case CellValue.Number(n) => n.signum != 0
       case CellValue.Formula(_, Some(c), _) => isTruthy(c)
       case _ => false
-
-  /**
-   * Extract a range from sheet as a 2D matrix of CellValues.
-   *
-   * @param range
-   *   The cell range to extract
-   * @param sheet
-   *   The sheet to read from
-   * @return
-   *   Row-major Vector[Vector[CellValue]]
-   */
-  private def extractRangeAsMatrix(range: CellRange, sheet: Sheet): Vector[Vector[CellValue]] =
-    (range.rowStart.index0 to range.rowEnd.index0).map { rowIdx =>
-      (range.colStart.index0 to range.colEnd.index0).map { colIdx =>
-        val ref = ARef.from0(colIdx, rowIdx)
-        val cell = sheet(ref)
-        // For formulas with cached values, use the cached value
-        cell.value match
-          case CellValue.Formula(_, Some(cachedValue), _) => cachedValue
-          case other => other
-      }.toVector
-    }.toVector
-
-  /**
-   * GH-274: eval-aware variant of [[extractRangeAsMatrix]] used by INDIRECT and (GH-301) OFFSET.
-   *
-   * Identical except UNCACHED formula cells are recursively evaluated (the GH-208 `Ref`-deref /
-   * GH-187 aggregate semantics: trust `Some(cached)`, evaluate `None`, depth-100 guard). This is
-   * what makes the quote laws `INDIRECT("X") ≡ X` and `SUM(INDIRECT(R)) ≡ SUM(R)` hold when targets
-   * are formulas that have not been evaluated yet — and what lets deferred-bucket evaluation strip
-   * dynamic-cell caches without OFFSET reading raw Formula values.
-   */
-  private def extractRangeAsMatrixEval(
-    range: CellRange,
-    targetSheet: Sheet,
-    ctx: EvalContext
-  ): Either[EvalError, Vector[Vector[CellValue]]] =
-    (range.rowStart.index0 to range.rowEnd.index0)
-      .foldLeft[Either[EvalError, Vector[Vector[CellValue]]]](Right(Vector.empty)) {
-        case (Left(err), _) => Left(err)
-        case (Right(rows), rowIdx) =>
-          (range.colStart.index0 to range.colEnd.index0)
-            .foldLeft[Either[EvalError, Vector[CellValue]]](Right(Vector.empty)) {
-              case (Left(err), _) => Left(err)
-              case (Right(cols), colIdx) =>
-                targetSheet(ARef.from0(colIdx, rowIdx)).value match
-                  case CellValue.Formula(_, Some(cachedValue), _) => Right(cols :+ cachedValue)
-                  case CellValue.Formula(formulaStr, None, _) =>
-                    Evaluator
-                      .evalCrossSheetFormula(
-                        formulaStr,
-                        targetSheet,
-                        ctx.clock,
-                        ctx.workbook,
-                        ctx.depth + 1,
-                        memo = ctx.memo.getOrElse(new Evaluator.EvalMemo),
-                        aggregateMemo = ctx.aggregateMemo
-                      )
-                      .map(cols :+ _)
-                  case other => Right(cols :+ other)
-            }
-            .map(rows :+ _)
-      }

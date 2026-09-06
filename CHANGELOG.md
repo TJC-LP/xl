@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Uncached cash-flow and array inputs are evaluated before they are consumed** (#499).
+  NPV/IRR/XNPV/XIRR, array arithmetic, TRANSPOSE/SORT/UNIQUE/FILTER, and range-valued LET/names
+  retain all evaluated inputs and propagate host failures. XNPV/XIRR validate values and dates
+  in their original positions before skipping aligned blank rows, preventing silent re-pairing.
+  Recursive range reads share the caller's clock, RNG, memo, and formula-cell context.
 - **The source `xl/calcChain.xml` is dropped on every write that rewrites a
   worksheet or removes a sheet** (#555). Excel validates the calculation chain
   on open: an entry naming a cell that no longer holds a formula triggers the

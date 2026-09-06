@@ -348,6 +348,37 @@ object Evaluator:
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
 
+  /** Resolve range cells with the same cache, recursion and context rules as scalar references. */
+  private[formula] def cellValueReader(
+    targetSheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    depth: Int,
+    rng: Rng,
+    memo: EvalMemo,
+    workbookPath: Option[String],
+    aggregateMemo: Option[AggregateMemo]
+  ): ARef => Either[EvalError, CellValue] = at =>
+    targetSheet(at).value match
+      case CellValue.Formula(_, Some(cached), _) => Right(cached)
+      case CellValue.Formula(_, None, _: FormulaKind.DataTable) => Right(CellValue.Empty)
+      case CellValue.Formula(expression, None, _) =>
+        memo.getOrCompute(targetSheet, at) {
+          evalCrossSheetFormula(
+            expression,
+            targetSheet,
+            clock,
+            workbook,
+            depth,
+            rng,
+            memo,
+            workbookPath,
+            aggregateMemo,
+            Some(at)
+          )
+        }
+      case value => Right(value)
+
   /**
    * Evaluate a formula string from a cross-sheet reference (GH-161).
    *
@@ -376,7 +407,8 @@ object Evaluator:
     rng: Rng = Rng.system,
     memo: EvalMemo = new EvalMemo,
     workbookPath: Option[String] = None,
-    aggregateMemo: Option[AggregateMemo] = None
+    aggregateMemo: Option[AggregateMemo] = None,
+    currentCell: Option[ARef] = None
   ): Either[EvalError, CellValue] =
     boundary:
       // GH-161 review: Add recursion depth limit to prevent stack overflow on circular refs
@@ -411,7 +443,7 @@ object Evaluator:
             workbookPath = workbookPath,
             aggregateMemo = aggregateMemo
           )
-            .eval(expr, targetSheet, clock, workbook) match
+            .eval(expr, targetSheet, clock, workbook, currentCell) match
             case Right(result) => Right(EvalResult.toCellValue(result))
             // GH-344: an error-computing precedent delivers its Excel error VALUE to readers
             // (the cell-mediated cascade); host failures stay loud Lefts.
@@ -935,9 +967,9 @@ private class EvaluatorImpl(
                       agg.name,
                       Evaluator.AggregateMemoMode.TypedNode
                     ) {
-                      evalAggregateNode(agg, range, targetSheet)
+                      evalAggregateNode(agg, range, targetSheet, clock, workbook)
                     }
-                  case None => evalAggregateNode(agg, range, targetSheet)
+                  case None => evalAggregateNode(agg, range, targetSheet, clock, workbook)
             }
 
       case call: TExpr.Call[?] =>
@@ -1105,7 +1137,7 @@ private class EvaluatorImpl(
         // contexts; scalar contexts keep the standard "range must be used within a function"
         // error from eval below.
         case TExpr.RangeRef(range) if allowArrayResults =>
-          Right(ArrayArithmetic.rangeToArray(range, sheet))
+          materializeRange(range, sheet, clock, workbook)
         case TExpr.SheetRange(sheetName, range) if allowArrayResults =>
           Evaluator
             .resolveRangeLocation(
@@ -1114,7 +1146,9 @@ private class EvaluatorImpl(
               workbook,
               resolvingNames
             )
-            .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(range, targetSheet) }
+            .flatMap { case (targetSheet, _) =>
+              materializeRange(range, targetSheet, clock, workbook)
+            }
         case other =>
           val resolvedBody = TExpr.asResolvedValueExpr(other)
           new EvaluatorWithDepth(
@@ -1200,7 +1234,7 @@ private class EvaluatorImpl(
                     // Range-shaped names materialize like literal ranges in array positions:
                     // consumers collapse (scalar), broadcast (operands), or aggregate (SUM)
                     case TExpr.RangeRef(range) =>
-                      Right(ArrayArithmetic.rangeToArray(range, definingSheet))
+                      materializeRange(range, definingSheet, clock, workbook)
                     case TExpr.SheetRange(sheetName, range) =>
                       Evaluator
                         .resolveRangeLocation(
@@ -1209,8 +1243,8 @@ private class EvaluatorImpl(
                           workbook,
                           resolvingNames + key
                         )
-                        .map { case (targetSheet, _) =>
-                          ArrayArithmetic.rangeToArray(range, targetSheet)
+                        .flatMap { case (targetSheet, _) =>
+                          materializeRange(range, targetSheet, clock, workbook)
                         }
                     case other =>
                       // Bare refs resolve to the cell's effective value (cached formula
@@ -1246,36 +1280,50 @@ private class EvaluatorImpl(
   private def evalAggregateNode[Acc](
     agg: Aggregator[Acc],
     range: CellRange,
-    targetSheet: Sheet
+    targetSheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook]
   ): Either[EvalError, BigDecimal] =
-    val cells = range.cells.map(cellRef => targetSheet(cellRef))
-    val result = cells.foldLeft[Either[EvalError, Acc]](Right(agg.empty)) { (accE, cell) =>
+    val readCell = Evaluator.cellValueReader(
+      targetSheet,
+      clock,
+      workbook,
+      currentDepth,
+      rng,
+      memoOpt.getOrElse(new Evaluator.EvalMemo),
+      workbookPath,
+      aggregateMemoOpt
+    )
+    val result = range.cells.foldLeft[Either[EvalError, Acc]](Right(agg.empty)) { (accE, at) =>
       accE.flatMap { acc =>
-        if agg.countsNonEmpty then
-          // COUNTA mode: count any non-empty cell (error cells are non-empty)
-          cell.value match
-            case CellValue.Empty => Right(acc)
-            case _ => Right(agg.combine(acc, BigDecimal(1)))
-        else if agg.countsEmpty then
-          // COUNTBLANK mode: count only empty cells
-          cell.value match
-            case CellValue.Empty => Right(agg.combine(acc, BigDecimal(1)))
-            case _ => Right(acc)
-        else
-          ArrayArithmetic.carriedError(cell.value) match
-            case Some(err) if agg.propagatesErrors =>
-              Left(
-                EvalError.ErrorValue(
-                  err,
-                  Some(s"${agg.name}: array element contains ${err.toExcel} error")
+        readCell(at).flatMap { value =>
+          val cell = Cell(at, value)
+          if agg.countsNonEmpty then
+            // COUNTA mode: count any non-empty cell (error cells are non-empty)
+            cell.value match
+              case CellValue.Empty => Right(acc)
+              case _ => Right(agg.combine(acc, BigDecimal(1)))
+          else if agg.countsEmpty then
+            // COUNTBLANK mode: count only empty cells
+            cell.value match
+              case CellValue.Empty => Right(agg.combine(acc, BigDecimal(1)))
+              case _ => Right(acc)
+          else
+            ArrayArithmetic.carriedError(cell.value) match
+              case Some(err) if agg.propagatesErrors =>
+                Left(
+                  EvalError.ErrorValue(
+                    err,
+                    Some(s"${agg.name}: array element contains ${err.toExcel} error")
+                  )
                 )
-              )
-            case Some(_) => Right(acc) // COUNT: errors are not numbers
-            case None =>
-              // Standard mode: only process numeric values
-              TExpr.decodeNumeric(cell) match
-                case Right(value) => Right(agg.combine(acc, value))
-                case Left(_) => Right(acc) // Skip non-numeric cells
+              case Some(_) => Right(acc) // COUNT: errors are not numbers
+              case None =>
+                // Standard mode: only process numeric values
+                TExpr.decodeNumeric(cell) match
+                  case Right(value) => Right(agg.combine(acc, value))
+                  case Left(_) => Right(acc) // Skip non-numeric cells
+        }
       }
     }
     // Finalize and return the result (may return error for AVERAGE on empty range)
@@ -1402,6 +1450,26 @@ private class EvaluatorImpl(
    * arithmetic with broadcasting.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def materializeRange(
+    range: CellRange,
+    targetSheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): Either[EvalError, ArrayResult] =
+    ArrayArithmetic.rangeToArrayEval(
+      range,
+      Evaluator.cellValueReader(
+        targetSheet,
+        clock,
+        workbook,
+        currentDepth,
+        rng,
+        memoOpt.getOrElse(new Evaluator.EvalMemo),
+        workbookPath,
+        aggregateMemoOpt
+      )
+    )
+
   private def evalMaybeArray(
     expr: TExpr[?],
     sheet: Sheet,
@@ -1411,8 +1479,7 @@ private class EvaluatorImpl(
   ): Either[EvalError, Any] =
     expr match
       case TExpr.RangeRef(range) =>
-        // Convert range to ArrayResult directly
-        Right(ArrayArithmetic.rangeToArray(range, sheet))
+        materializeRange(range, sheet, clock, workbook)
       case TExpr.SheetRange(sheetName, range) =>
         Evaluator
           .resolveRangeLocation(
@@ -1421,7 +1488,9 @@ private class EvaluatorImpl(
             workbook,
             resolvingNames
           )
-          .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(range, targetSheet) }
+          .flatMap { case (targetSheet, _) =>
+            materializeRange(range, targetSheet, clock, workbook)
+          }
       // GH-374: unary plus is transparent in operand positions — =+A1:A3*10 broadcasts
       // exactly like =A1:A3*10
       case TExpr.UnaryPlus(inner) =>
