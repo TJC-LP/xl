@@ -1,8 +1,12 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.XLError
+import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
+import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.syntax.*
 import com.tjclp.xl.workbooks.{CalcPr, Workbook}
 
 /**
@@ -226,3 +230,104 @@ final case class RecalcResult(
    */
   def toEither: Either[Vector[CellEvalError], Workbook] =
     if isClean then Right(workbook) else Left(errors)
+
+object RecalcResult:
+  /** One cache/diagnostic contract for whole-workbook and targeted recalculation. */
+  private[eval] def cacheResults(
+    wb: Workbook,
+    successful: Map[SheetName, Map[ARef, CellValue]],
+    failures: Vector[CellEvalError],
+    dependents: Map[QualifiedRef, Set[QualifiedRef]],
+    cycleReports: Vector[SccReport] = Vector.empty
+  ): RecalcResult =
+    def formulaText(q: QualifiedRef): String =
+      wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
+        case Some(CellValue.Formula(expression, _, _)) => expression
+        case _ => q.ref.toA1
+
+    val failedRefs = failures.iterator.map(e => QualifiedRef(e.sheet, e.ref)).toSet
+    // A guarded fallback is not a certified result when an upstream formula could not run.
+    // Pinned external/table caches remain explicit boundaries of the recalculation contract.
+    val invalid =
+      if failedRefs.isEmpty then Set.empty[QualifiedRef]
+      else
+        val pinned = wb.sheets.iterator.flatMap { sheet =>
+          sheet.cells.iterator.collect {
+            case (ref, cell) if SheetEvaluator.pinnedCache(cell.value).isDefined =>
+              QualifiedRef(sheet.name, ref)
+          }
+        }.toSet
+        val invalidationEdges = dependents.view.mapValues(_ -- pinned).toMap
+        failedRefs ++ DependencyGraph.qualifiedTransitiveDependents(
+          invalidationEdges,
+          failedRefs
+        )
+    val additionalErrors = (invalid -- failedRefs).toVector
+      .sortBy(q => (q.sheet.value, q.ref.row.index0, q.ref.col.index0))
+      .map(q =>
+        CellEvalError(
+          q.sheet,
+          q.ref,
+          XLError
+            .FormulaError(formulaText(q), "Blocked by an upstream formula evaluation failure")
+        )
+      )
+    val invalidBySheet = invalid.groupMap(_.sheet)(_.ref)
+    val evaluated =
+      if invalid.isEmpty then successful
+      else
+        successful.map { (name, cells) =>
+          val toClear = invalidBySheet.getOrElse(name, Set.empty)
+          name -> cells.filterNot((ref, _) => toClear.contains(ref))
+        }
+    val cycles =
+      cycleReports.sortBy(r => r.members.headOption.fold(("", ""))((s, ref) => (s.value, ref.toA1)))
+    val converged = cycles.forall(_.converged)
+    val iterationsUsed = cycles.map(_.rounds).maxOption.getOrElse(0)
+
+    // Cache computed values into formula cells on the original sheets; failed cells stay
+    // uncached (Excel recalculates them on open). Track per sheet whether any recomputed
+    // value actually differs from the pre-existing cache (a newly cached cell — prior
+    // cache None — counts as a change).
+    val cachedSheets: Vector[(Sheet, Boolean)] = wb.sheets.map { orig =>
+      val toClear = invalidBySheet.getOrElse(orig.name, Set.empty)
+      val cleared = SheetEvaluator.stripFormulaCaches(orig, toClear)
+      val invalidated = toClear.exists(ref =>
+        orig(ref).value match
+          case CellValue.Formula(_, Some(_), _) => true
+          case _ => false
+      )
+      evaluated.getOrElse(orig.name, Map.empty).foldLeft((cleared, invalidated)) {
+        case ((s, changed), (ref, computed)) =>
+          s.cells.get(ref).map(_.value) match
+            // GH-430: a data-table cache is never rewritten by recalculation — pinned
+            // evaluation echoes it, and an uncached record must stay uncached, not gain
+            // a synthetic Some(Empty).
+            case Some(CellValue.Formula(_, _, _: FormulaKind.DataTable)) => (s, changed)
+            case Some(f @ CellValue.Formula(_, cached, _)) if !cached.contains(computed) =>
+              (s.put(ref, f.copy(cachedValue = Some(computed))), true)
+            case _ => (s, changed)
+      }
+    }
+
+    // Reinstall changed sheets via Workbook.put — not copy — so the surgical-write
+    // ModificationTracker sees every sheet whose caches actually changed (GH-352). A raw
+    // copy leaves disk-read workbooks looking untouched, and the writer then preserves
+    // the original worksheet XML verbatim, silently dropping the new cached values.
+    // Sheets whose recomputed caches all equal the existing ones are left alone: putting
+    // them would mark them modified, forcing the writer to regenerate their XML and drop
+    // any unparsed parts (pivot tables, slicers, ctrlProps) that can only survive via
+    // byte-for-byte preservation.
+    val workbookWithCaches =
+      cachedSheets.foldLeft(wb) { case (acc, (cached, changed)) =>
+        if changed then acc.put(cached) else acc
+      }
+
+    RecalcResult(
+      workbook = workbookWithCaches,
+      evaluated = wb.sheets.map(s => s.name -> evaluated.getOrElse(s.name, Map.empty)).toMap,
+      errors = failures ++ additionalErrors,
+      converged = converged,
+      iterationsUsed = iterationsUsed,
+      cycles = cycles
+    )

@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-08-06
+**Last Updated**: 2026-09-04
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -10,7 +10,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,455 tests passing.
+**Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,624 tests passing; one existing performance comparison ignored.
 
 **Current Version**: **0.19.3** "Namesake" (defined-name resolution indexed — O(sheets × names²) recalc scans removed, released 2026-08-14)
 
@@ -22,6 +22,24 @@ The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four 
 executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
+
+### Unreleased — wave 26: Calculation integrity (stack under review)
+
+Four stacked changes close the stale/unevaluated-value and hidden-diagnostic family:
+
+| Layer | Issues | Result |
+|-------|--------|--------|
+| 1 — range evaluation | [#499](https://github.com/TJC-LP/xl/issues/499) | Resolve uncached cash-flow/array inputs; validate values/dates in their original positions. |
+| 2 — cache invalidation | [#563](https://github.com/TJC-LP/xl/issues/563), [#507](https://github.com/TJC-LP/xl/issues/507) | Withdraw failed/dependent caches, account for unresolved named readers, and refuse unsafe name rewrites. |
+| 3 — scenario tables | [#498](https://github.com/TJC-LP/xl/issues/498), [#506](https://github.com/TJC-LP/xl/issues/506) | Skip dynamic cones explicitly; retain source/cone failures and count unseeded interiors. |
+| 4 — strict reporting | [#504](https://github.com/TJC-LP/xl/issues/504), [#508](https://github.com/TJC-LP/xl/issues/508) | Validate authored formulas and affected dependents, preserve workbook diagnostics, and retain in-place rollback on strict failures. |
+
+Non-iterative cell writes use targeted evaluation; declared iterative books retain their existing
+fixpoint semantics. Cache finalization is shared with whole-workbook recalculation. Fixed lookup
+selectors avoid false calculation cycles through unused table columns/rows.
+
+Gate: full compilation and tests, all-source formatting, example compile/run checks, packaged
+skill/doc snippet compilation, native CLI installation, and the original command-line repros.
 
 ### v0.11.1 "Totality" — wave 1 (Released 2026-06-10)
 

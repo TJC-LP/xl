@@ -6,7 +6,7 @@ import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.CellRange
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import scala.util.control.NonFatal
@@ -30,46 +30,104 @@ private[functions] object NumericGuard:
         Left(EvalError.EvalFailed(s"$fn diverged (numeric overflow)", Some(usage)))
 
 trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
-  /**
-   * GH-394: cashflow/date ranges are RangeLocations resolved through the single boundary —
-   * sheet-qualified ranges and defined names read their TARGET sheet's cells.
-   */
-  private def numericValues(
+  private def rangeValues(
     location: TExpr.RangeLocation,
     ctx: EvalContext
-  ): Either[EvalError, List[BigDecimal]] =
-    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map {
+  ): Either[EvalError, Vector[Cell]] =
+    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap {
       case (targetSheet, range) =>
-        range.cells
-          .map(ref => targetSheet(ref))
-          .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
-          .toList
+        val readCell = rangeCellReader(targetSheet, ctx)
+        range.cellsRowMajor.foldLeft[Either[EvalError, Vector[Cell]]](Right(Vector.empty)) {
+          (result, at) =>
+            result.flatMap(cells => readCell(at).map(value => cells :+ Cell(at, value)))
+        }
     }
 
   /**
-   * GH-405: date-range collection uses the serial-COERCING decoder (decodeAsDate, the GH-385/396
-   * table: DateTime, raw serial Numbers guarded to 0..MaxExcelDateSerial, cached formula values) —
-   * a date anchor authored as DateTime writes to xlsx as a serial and re-reads as Number, so any
-   * post-round-trip recalc hands XIRR/XNPV a MIXED Number/DateTime range. The strict decodeDate
-   * silently dropped the serials, producing a values/dates length mismatch. Cashflow
-   * [[numericValues]] deliberately KEEPS strict decodeNumeric: a blank cashflow must skip, not
-   * become a period-shifting 0 (see TExprDecoders.decodeNumericScalar's rationale).
+   * Resolve before applying the function's skip policy: an unevaluated formula is never a blank.
+   * NPV's documented range policy also skips Excel error VALUES; host failures stay Left.
    */
-  private def dateValues(
+  private def numericValues(
+    function: String,
     location: TExpr.RangeLocation,
     ctx: EvalContext
-  ): Either[EvalError, List[LocalDate]] =
-    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map {
-      case (targetSheet, range) =>
-        range.cells
-          .map(ref => targetSheet(ref))
-          // Blank cells stay SKIPS in range folds (decodeAsDate's scalar Empty -> 1900-01-01 arm
-          // must not apply here): numericValues skips blank cashflows, so a sparse XIRR block
-          // drops aligned blank (value, date) pairs together and the lengths keep matching
-          .filterNot(_.value == CellValue.Empty)
-          .flatMap(cell => TExpr.decodeAsDate(cell).toOption)
-          .toList
+  ): Either[EvalError, List[BigDecimal]] =
+    rangeValues(location, ctx).flatMap { cells =>
+      cells
+        .foldLeft[Either[EvalError, List[BigDecimal]]](Right(Nil)) { (result, cell) =>
+          result.flatMap { values =>
+            cell.value match
+              case CellValue.Empty | CellValue.Text(_) | CellValue.RichText(_) |
+                  CellValue.Bool(_) =>
+                Right(values)
+              case CellValue.Error(_) if function == "NPV" => Right(values)
+              case CellValue.Error(error) => Left(EvalError.ErrorValue(error, Some(function)))
+              case _ =>
+                TExpr
+                  .decodeNumeric(cell)
+                  .left
+                  .map(error => EvalError.CodecFailed(cell.ref, error))
+                  .map(_ :: values)
+          }
+        }
+        .map(_.reverse)
     }
+
+  /** GH-499: validate each original pair before filtering aligned blank rows. */
+  private def datedValues(
+    function: String,
+    valuesLocation: TExpr.RangeLocation,
+    datesLocation: TExpr.RangeLocation,
+    ctx: EvalContext
+  ): Either[EvalError, (List[BigDecimal], List[LocalDate])] =
+    def invalid(message: String): EvalError =
+      EvalError.EvalFailed(s"$function: $message", None)
+
+    for
+      values <- rangeValues(valuesLocation, ctx)
+      dates <- rangeValues(datesLocation, ctx)
+      pairs <-
+        if values.size != dates.size then
+          Left(invalid("values and dates must have the same length"))
+        else
+          values
+            .zip(dates)
+            .foldLeft[Either[EvalError, List[(BigDecimal, LocalDate)]]](Right(Nil)) {
+              case (result, (valueCell, dateCell)) =>
+                result.flatMap { acc =>
+                  if valueCell.value == CellValue.Empty && dateCell.value == CellValue.Empty then
+                    Right(acc)
+                  else if valueCell.value == CellValue.Empty || dateCell.value == CellValue.Empty
+                  then
+                    Left(
+                      invalid(
+                        "values and dates must have the same length and aligned positions " +
+                          s"(${valueCell.ref.toA1}, ${dateCell.ref.toA1})"
+                      )
+                    )
+                  else
+                    for
+                      value <- valueCell.value match
+                        case CellValue.Error(error) =>
+                          Left(EvalError.ErrorValue(error, Some(function)))
+                        case _ =>
+                          TExpr
+                            .decodeNumeric(valueCell)
+                            .left
+                            .map(_ => invalid(s"invalid cash flow at ${valueCell.ref.toA1}"))
+                      date <- dateCell.value match
+                        case CellValue.Error(error) =>
+                          Left(EvalError.ErrorValue(error, Some(function)))
+                        case _ =>
+                          TExpr
+                            .decodeAsDate(dateCell)
+                            .left
+                            .map(_ => invalid(s"invalid date at ${dateCell.ref.toA1}"))
+                    yield (value, date) :: acc
+                }
+            }
+            .map(_.reverse)
+    yield pairs.unzip
 
   val npv: FunctionSpec[BigDecimal] { type Args = NpvArgs } =
     FunctionSpec.simple[BigDecimal, NpvArgs](
@@ -89,7 +147,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
           )
         else
           NumericGuard.contained("NPV", "NPV(rate, values)") {
-            numericValues(range, ctx).map { cashFlows =>
+            numericValues("NPV", range, ctx).map { cashFlows =>
               cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
                 val period = idx + 1
                 acc + cf / onePlusR.pow(period)
@@ -106,7 +164,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       flags = FunctionFlags(returnsNumeric = true)
     ) { (args, ctx) =>
       val (range, guessOpt) = args
-      numericValues(range, ctx).flatMap { cashFlows =>
+      numericValues("IRR", range, ctx).flatMap { cashFlows =>
         if cashFlows.isEmpty || !cashFlows.exists(_ < 0) || !cashFlows.exists(_ > 0) then
           Left(
             EvalError.EvalFailed(
@@ -178,8 +236,8 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       val (rateExpr, valuesRange, datesRange) = args
       for
         rate <- ctx.evalExpr(rateExpr)
-        values <- numericValues(valuesRange, ctx)
-        dates <- dateValues(datesRange, ctx)
+        flows <- datedValues("XNPV", valuesRange, datesRange, ctx)
+        (values, dates) = flows
         result <- {
           if values.isEmpty || dates.isEmpty then
             Left(
@@ -223,8 +281,8 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
     ) { (args, ctx) =>
       val (valuesRange, datesRange, guessOpt) = args
       for
-        values <- numericValues(valuesRange, ctx)
-        dates <- dateValues(datesRange, ctx)
+        flows <- datedValues("XIRR", valuesRange, datesRange, ctx)
+        (values, dates) = flows
         result <- {
           if values.isEmpty || dates.isEmpty then
             Left(

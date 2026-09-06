@@ -44,6 +44,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--strict` validates formulas authored by `put`/`putf`/`fill`/`copy` and their affected
+  dependents** (#504). Single writes retain targeted recalculation reports and evaluate formulas
+  against the completed edit, so fresh self-references cannot pass with a fabricated cache.
+  Declared iterative settings are honored, `-i` rolls back on strict failure, and workbook-level
+  diagnostics survive structural/batch cache scoping (#508). Fixed lookup selectors contribute
+  only their key and result strips to calculation ordering, avoiding false cycles through unused
+  table columns/rows; impact analysis still tracks the full declared table.
+- **Scenario-table seeding reports incomplete calculations** (#498, #506). Tables whose source
+  cone contains dynamic references are left untouched with a named `Skipped` warning instead of
+  silently seeding a flat grid. Source and cycle-member failures retain unresolved-precedent
+  diagnostics, and both seeding paths count unseeded interiors. `--strict` gates on these warnings;
+  the completion message no longer claims that every table was seeded.
+- **Failed recalculation withdraws stale caches from the failing cell and its dependents**
+  (#563), including cross-sheet and dynamic readers, while preserving genuine Excel error values
+  and declared pinned caches. Structural edits invalidate unresolved named dependencies and their
+  consumers on both default and `--no-recalc` paths (#507), respect local name shadowing, and
+  refuse unsupported reference rewrites before changing the workbook.
+- **Uncached cash-flow and array inputs are evaluated before they are consumed** (#499).
+  NPV/IRR/XNPV/XIRR, array arithmetic, TRANSPOSE/SORT/UNIQUE/FILTER, and range-valued LET/names
+  retain all evaluated inputs and propagate host failures. XNPV/XIRR validate values and dates
+  in their original positions before skipping aligned blank rows, preventing silent re-pairing.
+  Recursive range reads share the caller's clock, RNG, memo, and formula-cell context.
+
 Formula-correctness wave from the 2026-08-26 production-workbook QC (GH-556, GH-561, GH-562,
 GH-564, GH-565) plus the GH-480 parser follow-up. Every item is a silent wrong number, a valid
 formula rejected, or a `#NAME?` that only Excel could see.

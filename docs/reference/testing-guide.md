@@ -205,24 +205,24 @@ property("get-set") {
 
 ### CI Integration
 GitHub Actions runs:
-1. `./mill __.checkFormat` (Scalafmt verification)
+1. `./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources` (all-source Scalafmt verification)
 2. `./mill __.compile` (Compilation check)
 3. `./mill __.test` (All test modules)
 
 ## Test Counts by Module
 
-As of 0.12.6 (per-module `./mill <module>.test`; macros are part of xl-core — there is no separate xl-macros module):
+As of the calculation-integrity wave (2026-09-04), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 2100 |
-| xl-core | 1283 |
-| xl-ooxml | 1047 |
-| xl-cli | 727 |
-| xl-cats-effect | 149 |
+| xl-evaluator | 2196 |
+| xl-core | 1293 |
+| xl-ooxml | 1080 |
+| xl-cli | 754 |
+| xl-cats-effect | 153 |
 | xl-agent | 122 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 27 |
-| **Total** | **5,455** |
+| **Total** | **5,625** |
 
 ## Test Quality Metrics
 

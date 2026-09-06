@@ -101,6 +101,23 @@ object ArrayArithmetic:
     }.toVector
     ArrayResult(values)
 
+  /** GH-499: retain every position while resolving formulas, and keep host failures explicit. */
+  private[formula] def rangeToArrayEval(
+    range: CellRange,
+    readCell: ARef => Either[EvalError, CellValue]
+  ): Either[EvalError, ArrayResult] =
+    (range.rowStart.index0 to range.rowEnd.index0)
+      .foldLeft[Either[EvalError, Vector[Vector[CellValue]]]](Right(Vector.empty)) { (rows, row) =>
+        rows.flatMap { accumulated =>
+          (range.colStart.index0 to range.colEnd.index0)
+            .foldLeft[Either[EvalError, Vector[CellValue]]](Right(Vector.empty)) { (values, col) =>
+              values.flatMap(cells => readCell(ARef.from0(col, row)).map(cells :+ _))
+            }
+            .map(accumulated :+ _)
+        }
+      }
+      .map(ArrayResult(_))
+
   /**
    * Convert ArrayResult to numeric matrix.
    */

@@ -179,7 +179,7 @@ trait FunctionSpecsBase:
   protected def evalMaybeArrayArg(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
     expr match
       case TExpr.RangeRef(range) =>
-        Right(ArrayArithmetic.rangeToArray(range, ctx.sheet))
+        extractRangeAsMatrixEval(range, ctx.sheet, ctx).map(ArrayResult(_))
       case TExpr.SheetRange(sheetName, range) =>
         Evaluator
           .resolveRangeLocation(
@@ -187,11 +187,35 @@ trait FunctionSpecsBase:
             ctx.sheet,
             ctx.workbook
           )
-          .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(range, targetSheet) }
+          .flatMap { case (targetSheet, _) =>
+            extractRangeAsMatrixEval(range, targetSheet, ctx).map(ArrayResult(_))
+          }
       case _: TExpr.PolyRef | _: TExpr.SheetPolyRef =>
         ctx.evalArrayExpr(TExpr.asResolvedValueExpr(expr).asInstanceOf[TExpr[Any]])
       case other =>
         ctx.evalArrayExpr(other.asInstanceOf[TExpr[Any]])
+
+  protected def rangeCellReader(
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): ARef => Either[EvalError, CellValue] =
+    Evaluator.cellValueReader(
+      targetSheet,
+      ctx.clock,
+      ctx.workbook,
+      ctx.depth,
+      ctx.rng,
+      ctx.memo.getOrElse(new Evaluator.EvalMemo),
+      ctx.workbookPath,
+      ctx.aggregateMemo
+    )
+
+  protected def extractRangeAsMatrixEval(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, Vector[Vector[CellValue]]] =
+    ArrayArithmetic.rangeToArrayEval(range, rangeCellReader(targetSheet, ctx)).map(_.values)
 
   /** Normalize an evaluated value to an ArrayResult (scalars become 1x1). */
   protected def toCellArray(value: Any): ArrayResult = value match

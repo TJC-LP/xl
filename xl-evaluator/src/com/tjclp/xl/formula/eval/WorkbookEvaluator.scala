@@ -349,7 +349,9 @@ object WorkbookEvaluator:
           else if dynamicAll.isEmpty then Set.empty[QualifiedRef]
           else dynamicAll ++ DependencyGraph.qualifiedTransitiveDependents(dependents, dynamicAll)
 
-        val stripBySheet: Map[SheetName, Set[ARef]] = bucketIter.groupMap(_.sheet)(_.ref)
+        val blockedCaches = if iterating then Set.empty[QualifiedRef] else removed
+        val stripBySheet: Map[SheetName, Set[ARef]] =
+          (bucketIter ++ blockedCaches).groupMap(_.sheet)(_.ref)
         val initialSheets: Vector[Sheet] =
           wb.sheets.map { s =>
             val toStrip = stripBySheet.getOrElse(s.name, Set.empty)
@@ -412,7 +414,9 @@ object WorkbookEvaluator:
                     acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
                     errs
                   )
-                case Left(error) => (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
+                case Left(error) =>
+                  val stripped = SheetEvaluator.stripFormulaCaches(sheets(idx), Set(q.ref))
+                  (sheets.updated(idx, stripped), acc, errs :+ CellEvalError(q.sheet, q.ref, error))
 
         def evalPass(
           order: List[QualifiedRef],
@@ -649,7 +653,8 @@ object WorkbookEvaluator:
                     errs
                   )
                 case Some(Left(error)) =>
-                  (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
+                  val stripped = SheetEvaluator.stripFormulaCaches(sheets(idx), Set(q.ref))
+                  (sheets.updated(idx, stripped), acc, errs :+ CellEvalError(q.sheet, q.ref, error))
                 case None => (sheets, acc, errs) // unreachable: every member evaluates every round
           }
           val report = SccReport(
@@ -709,52 +714,9 @@ object WorkbookEvaluator:
               case Some(reason) => failPass(orderedBucket, mainState, reason)
             (completedState, Vector.empty[SccReport])
 
-        val (_, evaluated, evalErrors) = finalState
-        val cycles = cycleReports.sortBy(r =>
-          r.members.headOption.fold(("", ""))((s, ref) => (s.value, ref.toA1))
-        )
-        val converged = cycles.forall(_.converged)
-        val iterationsUsed = cycles.map(_.rounds).maxOption.getOrElse(0)
-
-        // Cache computed values into formula cells on the original sheets; failed cells stay
-        // uncached (Excel recalculates them on open). Track per sheet whether any recomputed
-        // value actually differs from the pre-existing cache (a newly cached cell — prior
-        // cache None — counts as a change).
-        val cachedSheets: Vector[(Sheet, Boolean)] = wb.sheets.map { orig =>
-          evaluated.getOrElse(orig.name, Map.empty).foldLeft((orig, false)) {
-            case ((s, changed), (ref, computed)) =>
-              s.cells.get(ref).map(_.value) match
-                // GH-430: a data-table cache is never rewritten by recalculation — pinned
-                // evaluation echoes it, and an uncached record must stay uncached, not gain
-                // a synthetic Some(Empty).
-                case Some(CellValue.Formula(_, _, _: FormulaKind.DataTable)) => (s, changed)
-                case Some(f @ CellValue.Formula(_, cached, _)) if !cached.contains(computed) =>
-                  (s.put(ref, f.copy(cachedValue = Some(computed))), true)
-                case _ => (s, changed)
-          }
-        }
-
-        // Reinstall changed sheets via Workbook.put — not copy — so the surgical-write
-        // ModificationTracker sees every sheet whose caches actually changed (GH-352). A raw
-        // copy leaves disk-read workbooks looking untouched, and the writer then preserves
-        // the original worksheet XML verbatim, silently dropping the new cached values.
-        // Sheets whose recomputed caches all equal the existing ones are left alone: putting
-        // them would mark them modified, forcing the writer to regenerate their XML and drop
-        // any unparsed parts (pivot tables, slicers, ctrlProps) that can only survive via
-        // byte-for-byte preservation.
-        val workbookWithCaches =
-          cachedSheets.foldLeft(wb) { case (acc, (cached, changed)) =>
-            if changed then acc.put(cached) else acc
-          }
-
-        RecalcResult(
-          workbook = workbookWithCaches,
-          evaluated = wb.sheets.map(s => s.name -> evaluated.getOrElse(s.name, Map.empty)).toMap,
-          errors = cycleErrors ++ blockedErrors ++ evalErrors,
-          converged = converged,
-          iterationsUsed = iterationsUsed,
-          cycles = cycles
-        )
+        val (_, successful, evalErrors) = finalState
+        val failures = cycleErrors ++ blockedErrors ++ evalErrors
+        RecalcResult.cacheResults(wb, successful, failures, dependents, cycleReports)
 
   /** GH-492: the threaded state of one recalculation pass (temp sheets, values, errors). */
   private[eval] type PassState =

@@ -78,18 +78,20 @@ xl rasterizers                                     # List available PNG/PDF back
 
 Every write verb that changes cell content ends with a recalculation scoped to the edit's **dirty
 dependency cone** — the changed cells plus their transitive dependents (cross-sheet included) plus
-the always-dirty `INDIRECT`/`OFFSET` cells. Cached values outside that cone are never rewritten, so
-a book whose caches come from another engine keeps them.
+the always-dirty `INDIRECT`/`OFFSET` cells. Readers with unresolved dependencies also join the
+invalidation set. Formula writes are evaluated against the completed edit; an authored cycle or
+host failure is reported and left uncached with its affected dependents. Unaffected caches keep
+the values supplied by their original calculator.
 
-`--no-recalc` (alias `--preserve-caches`) drops the recalculation entirely: the edit lands and no
-cached value is recomputed. Use it when an external calculator owns the numbers. Honored by `put`,
+`--no-recalc` (alias `--preserve-caches`) skips the post-edit recalculation. The edit still lands;
+newly written formulas can carry caches produced by the verb's authoring step. Use it when an external calculator owns the numbers. Honored by `put`,
 `putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`;
 `recalc` rejects it as a contradiction.
 
 How completely caches survive depends on the verb:
 
-- **Non-structural** (`put`, `putf`, `fill`, `copy`, `batch`): every existing cached value survives
-  byte-identical, cone included. The summary says so.
+- **Non-structural** (`put`, `putf`, `fill`, `copy`, `batch`): explicitly written cells take their
+  new content; existing formula caches elsewhere are preserved, including dependents.
 - **Structural** (`insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`): a structural edit
   moves cells, rewrites formula text and rewrites defined names, so xl invalidates the cache of
   every formula the edit could have changed and writes those cells **without a `<v>`**. It never
@@ -114,14 +116,12 @@ How completely caches survive depends on the verb:
 
   Reopening the file in Excel, or a later `xl recalc`, fills those back in. A missing `<v>` is a
   visible gap that any recalculation repairs; a wrong one is silent and permanent, which is why xl
-  never **re-asserts** a cache the edit invalidated. What it does not claim: a cache rides through
-  only when the pre-edit dependency graph shows no path from it to the edited sheet, and a
-  reference that graph cannot resolve — a multi-area or intersection defined name, a structured
-  reference, an external link — can hide such a path. xl withdraws the caches of formulas that
-  name a defined name it cannot parse, precisely because the graph is blind there; the remaining
-  cases are tracked in [#507](https://github.com/TJC-LP/xl/issues/507) and affect a normal
-  recalculating write too. **If you need every formula cached after a structural edit, do not pass
-  `--no-recalc`.**
+  never **re-asserts** a cache the edit invalidated. Unresolved named readers, aliases, and their
+  dependents are invalidated on both default and `--no-recalc` paths. Name resolution respects
+  sheet-local shadowing. An unsupported reference rewrite that could change a defined name's
+  meaning is refused before the edit; top-level unions remain supported for rewriting even though
+  the evaluator cannot compute them. **If you need every formula cached after a structural edit,
+  do not pass `--no-recalc`.**
 
 ```bash
 xl -f external-model.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
@@ -150,8 +150,15 @@ With `-o` the output file is written even on a strict failure (the gate only set
 With `-i` the temp file is discarded and the input is left byte-identical; the summary then says
 `NOT saved (--strict failure): <file> left untouched` instead of `Saved:`. `--strict` is refused
 together with `--stream` (streaming writes never recalculate, so the gate could never fire). Verbs
-that produce no recalculation result — `put`/`putf`/`fill`/`copy` for the cell they authored, and
-every presentation-only verb — cannot gate today (issue #504).
+that perform no recalculation, such as presentation-only verbs, have no calculation outcome to
+gate. `put`, `putf`, `fill`, and `copy` include authored formulas and affected dependents in their
+reported outcomes. Structural and batch writes retain workbook-level errors even when the failing
+cell is outside the cache-write cone. Use `--strict` without `--no-recalc` when the command must
+validate calculation results.
+
+For `recalc --tables`, unsupported dynamic source cones produce a named skip warning; failed
+source/axis/member evaluations report unseeded counts and retain unresolved-precedent diagnostics.
+These warnings also fail `--strict`.
 
 ---
 
