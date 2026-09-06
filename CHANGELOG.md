@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Scenario-table seeding reports incomplete calculations** (#498, #506). Tables whose source
+  cone contains dynamic references are left untouched with a named `Skipped` warning instead of
+  silently seeding a flat grid. Source and cycle-member failures retain unresolved-precedent
+  diagnostics, and both seeding paths count unseeded interiors. `--strict` gates on these warnings;
+  the completion message no longer claims that every table was seeded.
 - **Failed recalculation withdraws stale caches from the failing cell and its dependents**
   (#563), including cross-sheet and dynamic readers, while preserving genuine Excel error values
   and declared pinned caches. Structural edits invalidate unresolved named dependencies and their
