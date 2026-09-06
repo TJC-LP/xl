@@ -37,6 +37,18 @@ Mill 1.1.5, and `scala-cli` for the examples harness. Three things close the gap
    provisions the same JDK (shared cache with Mill), installs `scala-cli`, appends `JAVA_HOME` and
    `PATH` to `$CLAUDE_ENV_FILE` (sourced before every Bash call), and prints a summary that lands in
    Claude's context. Idempotent; seconds once the environment cache holds the toolchain.
+
+   **TLS-intercepting proxies.** Some sandboxes route HTTPS through a proxy that re-terminates TLS
+   and inject its CA into the JVM via `JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=…`. GraalVM
+   native launchers ignore that option: Mill's default `1.1.5-native-*` binary dies with a PKIX
+   error while fetching `mill-runner-daemon`, and coursier's `cs` and scala-cli's native image fail
+   the same way, so out of the box such a session can neither build nor run the scala-cli gates.
+   When the hook sees that truststore (or `XL_REMOTE_JVM_LAUNCHERS=true`) it switches every
+   launcher to the JVM, which does honour `JAVA_TOOL_OPTIONS`: it exports
+   `MILL_VERSION=<.mill-version>-jvm` (the `./mill` script's opt-in to the JVM launcher; the file
+   pin itself is untouched), runs coursier from its JAR, and installs scala-cli as a coursier
+   bootstrap launcher. `curl` needs nothing (it reads `SSL_CERT_FILE`). Doing it by hand:
+   `export MILL_VERSION=1.1.5-jvm` before `./mill`.
 3. **`.claude/settings.json`** — allowlists the build, test, format, gate, and read-only `git`/`gh`
    commands so a session is not blocked on approvals for routine work. Pushing and opening PRs still
    ask.
