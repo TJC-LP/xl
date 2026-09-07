@@ -13,6 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plan in `docs/plan/agent-first-refactor.md`). The CLI and the scripting prelude become
   projections of one contract: this wave lands the safety net and the first agent-facing
   capabilities; the edit algebra follows in wave 2.
+- **CLI contract harness and golden corpus** (xl-cli tests). An in-process `CliHarness` runs the
+  real `xl` parser and handlers with captured stdout, stderr and stdin, and 37 golden cases under
+  `xl-cli/test/resources/golden/` pin the agent-visible contract as it is today (help and version
+  channels, exit codes, output channels, JSON/CSV/markdown shapes, the streaming first-sheet
+  default), so every later change to what an agent sees is a reviewed diff. Re-record with
+  `XL_UPDATE_GOLDEN=1`. `Main` moved from decline-effect's `CommandIOApp` to `IOApp` through the
+  new `Cli`/`CliIO` seams; no CLI behaviour changed (verified by replaying the corpus against the
+  previous build).
+- **Runtime twins for the compile-time factories** (#465, scripting). `Sheet.putAt` (plain and
+  styled), `styleAt`, `mergeAt`, `commentAt` and `Workbook.named` spell `XLResult` in their
+  signatures for references and names computed at runtime, so a script never hits the
+  `Sheet | XLResult[Sheet]` return-type flip of the `transparent inline` forms. They accept the
+  `A1`/`A1:B2` corner forms only (parse other shapes with `String.asRange`/`asCell`). Bounded
+  navigation `ARef.tryShift/tryDown/tryRight/clampShift`, range slicing
+  `CellRange.rows/columns/row/column`, and `CellStyle.withUnderline`.
 - **Typed reads see cached formula values** (#477). `readTyped`, `readTypedOpt` and
   `readTypedOr` on a formula cell decode its cached value (`Formula(_, Some(v), _)` reads as
   `v`), so a recalculated or Excel-saved book reads like Excel shows it. An uncached formula still
