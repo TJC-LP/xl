@@ -172,9 +172,14 @@ object CriteriaMatcher:
       case _ =>
         Exact(ExprValue.Text(s))
 
-  /** GH-565: extractor for the seven Excel error literals (`#N/A`, `#DIV/0!`, ...). */
+  /**
+   * GH-565: extractor for the seven Excel error literals (`#N/A`, `#DIV/0!`, ...). Letter case is
+   * ignored, like the rest of criteria parsing (and like Excel's own cell input, where typing
+   * `#n/a` yields the #N/A error): `"#n/a"` is the error value, not the text.
+   */
   private object ErrorLiteral:
-    def unapply(s: String): Option[CellError] = CellError.parse(s).toOption
+    def unapply(s: String): Option[CellError] =
+      CellError.parse(s.toUpperCase(java.util.Locale.ROOT)).toOption
 
   /**
    * Check if string contains unescaped wildcards (* or ?).

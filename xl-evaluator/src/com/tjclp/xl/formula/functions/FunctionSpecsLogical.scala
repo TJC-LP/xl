@@ -21,8 +21,8 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
    * (numbers zero/non-zero, empty FALSE, error values propagate, text refuses).
    *
    * GH-564: bare ranges (`=AND(K9:K21)`, the house check-row idiom) follow Excel's REFERENCE rule
-   * instead: logical cells count as themselves, numeric cells as zero/non-zero, text and blank
-   * cells are ignored, and an error cell propagates. A range with nothing to fold contributes
+   * instead: logical cells count as themselves, numeric and date cells as zero/non-zero, text and
+   * blank cells are ignored, and an error cell propagates. A range with nothing to fold contributes
    * `None`; when no argument contributes at all the function is #VALUE!, as in Excel.
    */
   private def conditionArg(fnName: String, ctx: EvalContext, expr: TExpr[?])(
@@ -30,18 +30,18 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
     combine: (Boolean, Boolean) => Boolean
   ): Either[EvalError, Option[Boolean]] =
     val label = s"$fnName condition"
-    expr match
-      case _: TExpr.RangeRef | _: TExpr.SheetRange =>
-        evalMaybeArrayArg(ctx, expr).flatMap {
-          case arr: ArrayResult => rangeFold(label, arr, combine)
-          case scalar => scalarCondition(label, scalar).map(Some(_))
-        }
-      case other =>
-        evalMaybeArrayArg(ctx, other).flatMap {
-          case arr: ArrayResult =>
-            ArrayArithmetic.truthyElements(label, arr).map(v => Some(v.foldLeft(seed)(combine)))
-          case scalar => scalarCondition(label, scalar).map(Some(_))
-        }
+    // A bare range always arrives as an ArrayResult (evalMaybeArrayArg wraps RangeRef/SheetRange),
+    // so the two shapes differ only in which fold applies to the array: Excel's reference rule
+    // for a range, the array-condition rule for everything else.
+    val isRange = expr match
+      case _: TExpr.RangeRef | _: TExpr.SheetRange => true
+      case _ => false
+    evalMaybeArrayArg(ctx, expr).flatMap {
+      case arr: ArrayResult if isRange => rangeFold(label, arr, combine)
+      case arr: ArrayResult =>
+        ArrayArithmetic.truthyElements(label, arr).map(v => Some(v.foldLeft(seed)(combine)))
+      case scalar => scalarCondition(label, scalar).map(Some(_))
+    }
 
   private def scalarCondition(label: String, scalar: Any): Either[EvalError, Boolean] =
     ScalarCoercion.coerce(label, scalar, BindingCoercion.Bool).flatMap {
@@ -52,9 +52,9 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
   /**
    * GH-564: fold the logical values of a range argument in row-major order with O(1) state (an
    * `=AND(A:A)` check row is a million cells; nothing is materialized beyond the ArrayResult the
-   * range reader already produced). Booleans as-is, numbers zero/non-zero (Excel: "if an array or
-   * reference argument contains text or empty cells, those values are ignored"); the first error
-   * cell stops the walk and propagates as its Excel error VALUE (GH-344). `None` when no cell
+   * range reader already produced). Booleans as-is, numbers and dates zero/non-zero (Excel: "if an
+   * array or reference argument contains text or empty cells, those values are ignored"); the first
+   * error cell stops the walk and propagates as its Excel error VALUE (GH-344). `None` when no cell
    * contributed.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
@@ -88,6 +88,8 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
     cv match
       case CellValue.Bool(b) => Right(Some(b))
       case CellValue.Number(n) => Right(Some(n.signum != 0))
+      // Dates are numbers in Excel's value model: their serial is zero/non-zero like any number
+      case CellValue.DateTime(dt) => Right(Some(CellValue.dateTimeToExcelSerial(dt) != 0.0))
       case CellValue.Error(err) => Left(EvalError.ErrorValue(err, Some(label)))
       case CellValue.Formula(_, Some(cached), _) => rangeLogical(label, cached)
       case _ => Right(None)

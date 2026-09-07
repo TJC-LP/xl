@@ -288,3 +288,16 @@ class LogicalArrayFoldSpec extends FunSuite:
     assertScalar(mixedTF, "=IFS(1>2, 1, 2>1, 7)", CellValue.Number(7))
     assertScalar(mixedTF, "=IFS(1>2, 1)", CellValue.Error(CellError.NA))
   }
+
+  test("GH-564: date cells are numbers — a non-zero serial is TRUE in ranges, scalars and arrays") {
+    val dated = Sheet("Test")
+      .put(ref"A1", CellValue.DateTime(java.time.LocalDate.of(2026, 1, 1).atStartOfDay()))
+      .put(ref"A2", CellValue.Bool(false))
+    assertScalar(dated, "=OR(A1:A1)", CellValue.Bool(true))
+    assertScalar(dated, "=AND(A1:A2)", CellValue.Bool(false))
+    assertScalar(dated, "=AND(A1:A1)", CellValue.Bool(true))
+    assertScalar(dated, "=OR(A1)", CellValue.Bool(true))
+    assertScalar(dated, "=AND(A1, TRUE)", CellValue.Bool(true))
+    assertScalar(dated, "=IF(A1, 1, 0)", CellValue.Number(1))
+    assertScalar(dated, "=NOT(A1)", CellValue.Bool(false))
+  }

@@ -122,3 +122,20 @@ class FutureFunctionPrefixSpec extends FunSuite:
       case CellValue.Formula(expr, _, _) => assertEquals(expr, "_xlfn.NOSUCHFN(A1)")
       case other => fail(s"expected formula at D1, got $other")
   }
+
+  test("GH-556: LET is stored with _xlpm. on its parameters and reads back bare") {
+    val path = tempXlsx("let")
+    val let = CellValue.Formula("=LET(x,B1,x+1)", Some(CellValue.Number(2)))
+    XlsxWriter.write(workbookWith(ref"D1" -> let), path).fold(err => fail(s"$err"), identity)
+    val firstXml = entryText(path, "xl/worksheets/sheet1.xml")
+    assert(firstXml.contains("<f>_xlfn.LET(_xlpm.x,B1,_xlpm.x+1)</f>"), firstXml)
+    val wb = XlsxReader.read(path).fold(err => fail(s"read failed: $err"), identity)
+    wb.sheets(0)(ref"D1").value match
+      case CellValue.Formula(expr, cached, _) =>
+        assertEquals(expr, "LET(x,B1,x+1)")
+        assertEquals(cached, Some(CellValue.Number(2)))
+      case other => fail(s"expected formula at D1, got $other")
+    val again = tempXlsx("let-2")
+    XlsxWriter.write(wb, again).fold(err => fail(s"write failed: $err"), identity)
+    assertEquals(entryText(again, "xl/worksheets/sheet1.xml"), firstXml)
+  }

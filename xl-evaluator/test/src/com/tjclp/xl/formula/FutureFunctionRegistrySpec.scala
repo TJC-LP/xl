@@ -43,3 +43,13 @@ class FutureFunctionRegistrySpec extends FunSuite:
       assertEquals(FormulaStorage.bareFunctionName(s"_xlfn.$name"), name, name)
     }
   }
+
+  test("GH-556: storage laws hold for every registry function (fromStored ∘ toStored = id, ...)") {
+    FunctionRegistry.allNames.foreach { name =>
+      val model = s"IF($name(A1:A3,B1)>0,$name(A1:A3,B1),0)"
+      val stored = FormulaStorage.toStored(model)
+      assertEquals(FormulaStorage.fromStored(stored), model, name)
+      assertEquals(FormulaStorage.toStored(stored), stored, name)
+      assertEquals(FormulaStorage.toStored(FormulaStorage.fromStored(stored)), stored, name)
+    }
+  }

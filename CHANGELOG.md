@@ -66,29 +66,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retain all evaluated inputs and propagate host failures. XNPV/XIRR validate values and dates
   in their original positions before skipping aligned blank rows, preventing silent re-pairing.
   Recursive range reads share the caller's clock, RNG, memo, and formula-cell context.
-
-Formula-correctness wave from the 2026-08-26 production-workbook QC (GH-556, GH-561, GH-562,
-GH-564, GH-565) plus the GH-480 parser follow-up. Every item is a silent wrong number, a valid
-formula rejected, or a `#NAME?` that only Excel could see.
-
 - **Post-2007 functions are stored with Excel's `_xlfn.` prefix** (GH-556). Excel writes
   MAXIFS, MINIFS, IFS, SWITCH, IFNA, XLOOKUP, LET, SEQUENCE, UNIQUE, ... as `_xlfn.NAME(...)`
-  inside `<f>` (FILTER and SORT as `_xlfn._xlws.NAME`); a bare `MAXIFS(` is an undefined name
-  to desktop Excel and LibreOffice and shows `#NAME?` on the first recalculation, while the
-  cached value, `xl lint` and `--strict` all looked fine. Every `<f>` writer (both in-memory
-  backends, the streaming writer, the in-place `--stream` transform) now applies the prefix
-  from Microsoft's published future-function list via the new `FormulaStorage` object in
-  xl-core, and every reader (DOM, `readStream`, single-cell) strips it, so the model keeps the
-  formula-bar spelling and an Excel-authored book re-serializes byte-identically. The parser
-  drops `_xlfn.`/`_xlws.` before the registry lookup, so inherited `_xlfn.XLOOKUP(...)` cells
-  and their dependents parse, evaluate and keep their caches through structural edits. A
-  prefix on a function outside the list is carried verbatim in both directions. Cell formulas
-  only: conditional-formatting, data-validation and defined-name formula text is #577.
+  inside `<f>` (FILTER and SORT as `_xlfn._xlws.NAME`, and every LET/LAMBDA parameter name and
+  reference as `_xlpm.NAME`: `_xlfn.LET(_xlpm.x,1,_xlpm.x+1)`); a bare `MAXIFS(` is an
+  undefined name to desktop Excel and LibreOffice and shows `#NAME?` on the first
+  recalculation, while the cached value, `xl lint` and `--strict` all looked fine. Every `<f>`
+  writer (both in-memory backends, the streaming writer, the in-place `--stream` transform) now
+  applies the prefixes from Microsoft's published future-function list via the new
+  `FormulaStorage` object in xl-core, and every reader (DOM, `readStream`, single-cell) strips
+  them, so the model keeps the formula-bar spelling and an Excel-authored book re-serializes
+  byte-identically. The parser drops `_xlfn.`/`_xlws.` before the registry lookup, so inherited
+  `_xlfn.XLOOKUP(...)` cells and their dependents parse, evaluate and keep their caches through
+  structural edits. A prefix the writer would not restore (on a function outside the list, or
+  `_xlpm.` outside a recognized parameter position) is carried verbatim in both directions.
+  Cell formulas only: conditional-formatting, data-validation and defined-name formula text is
+  #577.
 - **`&` on a date yields its Excel serial, not ISO text** (GH-561). `">="&DATE(2026,1,1)`
   rendered `">=2026-01-01"`, so the COUNTIFS/SUMIFS/AVERAGEIFS/MAXIFS/MINIFS date-criteria
   idiom matched no numeric cell and cached a wrong number silently. Dates are numbers in
   Excel's value model; concatenation, CONCATENATE, LEN and every other text position now see
-  `46023` (times keep their fraction, 15 significant digits), and only TEXT() formats.
+  `46023` (times keep their fraction, 15 significant digits), and only TEXT() formats. The
+  serial is the 1900-system one like the rest of the evaluator (docs/LIMITATIONS.md): in a
+  `date1904` workbook it is 1,462 days off that file's own date cells.
 - **DATE() normalizes month and day overflow** (GH-562). `DATE(2026,13,1)` is 2027-01-01
   (the `=DATE(YEAR(x),MONTH(x)+1,1)` month spine no longer errors on every December);
   `DATE(2008,-3,2)` is 2007-09-02, `DATE(2008,1,35)` is 2008-02-04, years 0–1899 are offset by
@@ -96,14 +96,17 @@ formula rejected, or a `#NAME?` that only Excel could see.
 - **AND and OR accept range arguments** (GH-564). `=AND(K9:K21)`, the house check-row idiom,
   was a host error ("Range must be used within a function") that left the cell and its
   dependents uncached. Ranges now fold like Excel's reference rule: logical cells count as
-  themselves, numbers as zero/non-zero, text and blanks are ignored, an error cell propagates,
-  and a call with no logical value anywhere is `#VALUE!`. NOT over a bare range is unchanged.
+  themselves, numbers (dates included) as zero/non-zero, text and blanks are ignored, an error
+  cell propagates, and a call with no logical value anywhere is `#VALUE!`. Date cells are
+  numbers in every boolean position too (`=IF(A1,...)`, `=OR(A1)`, array conditions). NOT over
+  a bare range is unchanged.
 - **Criteria strings that spell an error literal match error cells** (GH-565).
   `COUNTIF(H1:H3,"#N/A")` counted cells holding the *text* "#N/A"; Excel parses the criterion
   as the `#N/A` error value. `"#N/A"`, `"#DIV/0!"`, `"#VALUE!"`, `"#REF!"`, `"#NAME?"`,
-  `"#NUM!"`, `"#NULL!"` (also after `=`) now match cells holding that error and never text
-  (`"#NAME?"` is no longer a one-character wildcard), `"<>#N/A"` matches everything but that
-  error, and a reference to an error cell as the criterion matches that error.
+  `"#NUM!"`, `"#NULL!"` (any letter case, also after `=`) now match cells holding that error
+  and never text (`"#NAME?"` is no longer a one-character wildcard), `"<>#N/A"` matches
+  everything but that error, and a reference to an error cell as the criterion matches that
+  error.
 - **`^` is left-associative** (GH-480). `=2^3^2` is 64 in Excel — `(2^3)^2` — but parsed as
   `2^(3^2)` = 512, so a reprint could change the value of chained-pow formulas from
   Excel-authored files. The parser now folds left like every other binary operator (a signed

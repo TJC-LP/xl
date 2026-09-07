@@ -103,3 +103,13 @@ class CriteriaErrorLiteralSpec extends FunSuite:
     assertScalar("=COUNTIF(A1:A5,\"x\")", CellValue.Number(0))
     assertScalar("=COUNTIF(A1:A5,1)", CellValue.Number(1))
   }
+
+  test("GH-565: error literals are recognized in any letter case, like TRUE/FALSE criteria") {
+    assertEquals(
+      parse(ExprValue.Text("#n/a")),
+      Exact(ExprValue.Cell(CellValue.Error(CellError.NA)))
+    )
+    assertEquals(parse(ExprValue.Text("<>#div/0!")), NotError(CellError.Div0))
+    assertScalar("=COUNTIF(A1:A5,\"#n/a\")", CellValue.Number(1))
+    assertScalar("=COUNTIF(A1:A5,\"=#Name?\")", CellValue.Number(0))
+  }

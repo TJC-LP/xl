@@ -159,6 +159,9 @@ private[formula] object ScalarCoercion:
     // Excel truthiness: 0 = FALSE, any other number = TRUE (GH-306)
     case bd: BigDecimal => Right(bd.signum != 0)
     case i: Int => Right(i != 0)
+    // GH-564: dates are numbers in Excel's value model — their serial is zero/non-zero, so
+    // =IF(A1,...) and =OR(A1) on a date cell are TRUE, as in Excel
+    case dt: java.time.LocalDateTime => Right(CellValue.dateTimeToExcelSerial(dt) != 0.0)
     // GH-344 item 5: exactly "TRUE"/"FALSE" (case-insensitive, no trim) coerce; other text
     // refuses — the [[boolTextValue]] table, aligned with decodeBool and conditionTruthy
     case s: String =>

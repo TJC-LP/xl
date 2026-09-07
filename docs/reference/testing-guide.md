@@ -211,18 +211,18 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of the Excel-parity wave (2026-09-06), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored.
+As of the Excel-parity wave (2026-09-07), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 2232 |
-| xl-core | 1308 |
-| xl-ooxml | 1088 |
+| xl-evaluator | 2235 |
+| xl-core | 1318 |
+| xl-ooxml | 1089 |
 | xl-cli | 754 |
 | xl-cats-effect | 160 |
 | xl-agent | 122 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 27 |
-| **Total** | **5,691** |
+| **Total** | **5,705** |
 
 ## Test Quality Metrics
 

@@ -73,6 +73,10 @@ object FormulaPrinter:
     val MulDiv = 6
     val Pow = 7
     val Unary = 8
+    // GH-480: the RIGHT operand of '^' prints one level tighter than Pow so a right-nested power
+    // keeps its parens (2^(3^2)). Pinned to Unary on purpose: a unary-signed exponent then prints
+    // flat (2^-1, 2^+2), exactly what parsePowExponent accepts, so those round-trip byte-for-byte.
+    val PowExponent = Unary
     // GH-355: postfix % binds tighter than ^ AND tighter than unary minus (-2% = -(2%))
     val Percent = 9
     val Primary = 10
@@ -153,7 +157,7 @@ object FormulaPrinter:
         // keeps its grouping as 2^(3^2) while Pow(Pow(2, 3), 2) prints flat as 2^3^2. A unary-signed
         // base still needs parens ((-2)^3) because -2^3 re-parses as -(2^3).
         val base = printPowBase(x, sep)
-        val exponent = printExpr(y, Precedence.Pow + 1, sep)
+        val exponent = printExpr(y, Precedence.PowExponent, sep)
         val result = s"$base^$exponent"
         parenthesizeIf(result, precedence > Precedence.Pow)
 
