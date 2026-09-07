@@ -43,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Cell.isUncachedFormula`, `CellReader.readStrict` (default = `read`) and
   `Sheet.readTypedStrict` (the 0.19 semantics: any formula is a mismatch) for callers that must
   tell formulas from values.
+- **One recalculation seam for scripts** (xl-evaluator, exported by the prelude).
+  `RecalcOptions(clock, rng, iterative: IterativeMode, parallelism, seedTables)` with
+  `IterativeMode.FromCalcPr | Off | Force(IterativeCalc)` replaces the growing family of
+  positional overloads: `wb.recalculate(options)`, `wb.recalculateAfterEdit(sheet, refs, options)`
+  (targeted, the pass the CLI's write verbs run) and `wb.recalculateUncached(options)` (fill
+  missing caches only). `RecalcResult.summary` is the CLI's `Recalculated …` line for scripts.
+  `FormulaOps.{renameSheet, mentionsSheet, shift}` rewrite formula text without touching a
+  workbook; `StructuralEditor`, `FormulaShifter` and `QualifiedRef` are exported from the formula
+  surface so a script reaches them with the one prelude import.
 - **Proxy-safe remote bootstrap.** `scripts/remote-setup.sh` detects a JVM truststore injected
   through `JAVA_TOOL_OPTIONS` (a TLS-intercepting egress proxy) and runs every launcher on the
   JVM: `MILL_VERSION=<.mill-version>-jvm` for `./mill`, coursier from its JAR with the canonical
@@ -103,6 +112,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`rename-sheet` rewrites every formula, defined name, conditional format and data validation
+  that references the renamed sheet** (#559). Before, a rename left `=Sheet1!A1` dangling
+  (`#REF!` in Excel) on every other sheet. The rename is refuse-before-mutate: a formula the
+  parser cannot read that mentions the sheet fails the whole command with the cell located, and no
+  file is written. The summary reports the count (`Renamed: Sheet1 → Data; 3 formula(s)
+  rewritten`), only the sheets whose text changed are marked modified, and typed charts keep the
+  remap `Workbook.rename` already performed. Not rewritten by design, and documented in
+  `docs/LIMITATIONS.md`: preserved (unparsed) payloads, hyperlink locations, 3-D ranges and
+  `_xlfn.`-prefixed formulas (the last two refuse rather than leave a dangling reference).
+- **`recalculateUncached` never withdraws a cache** (#468 contract). A failing or cyclic uncached
+  cell is reported in `errors`; cached cells stay byte-identical unconditionally.
 - **`insert-rows`/`delete-rows` no longer duplicate property-only rows** (#558). Rows that carry
   only `ht`, `hidden`, `outlineLevel` or a row style appeared at both the old and the new index
   after a structural edit: the worksheet writer re-emitted every preserved source `<row>` with its
