@@ -84,6 +84,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WorkbookSummary.of(wb)` back them, and the prelude exports `wb.describe` / `wb.audit`. `cell`
   now uses the same bounded graph: its `Dependencies:` line lists a range's occupied cells, so a
   `SUM(A:A)` reader no longer prints a million entries and empty cells inside a range are omitted.
+- **One sheet rule, and global flags anywhere on the command line.** Every verb, every batch op
+  and every streaming path now pick the sheet the same way: a qualified ref (`'Data'!A1`), then
+  `-s`, then (for batch) the op's `sheet`, then the only sheet of a single-sheet book, otherwise
+  `SHEET_REQUIRED` (exit 3) with the available names as candidates. Single-sheet books therefore
+  work without `-s` for `view`, `cell`, `stats`, `put`, `putf`, `style`, `--stream view`,
+  `--stream put` and the rest; under `--json` the auto-selection is reported as a
+  `SHEET_AUTOSELECTED` warning. Qualified refs now select the sheet under `--stream` writes too.
+  `Resolve` (xl-cli) is the single implementation; `SheetResolver` forwards to it. Global flags
+  (`-f`, `-s`, `-o`, `-i`, `--json`, `--stream`, `--strict`, `--max-size`, `--backend`,
+  `--no-recalc`, `--preserve-caches`) are accepted before or after the verb — `xl view A1:B2 -f
+  book.xlsx -s Data` is `xl -f book.xlsx -s Data view A1:B2` — with `--strict` after `view` staying
+  view's own flag and `new`'s own `--sheet`/`--backend` untouched; everything after `--` is left
+  alone. An unknown verb exits 2 with `did you mean: view`; a wrong command line prints the
+  `Error:` block and one usage line instead of the 60-subcommand help.
 - **Typed reads see cached formula values** (#477). `readTyped`, `readTypedOpt` and
   `readTypedOr` on a formula cell decode its cached value (`Formula(_, Some(v), _)` reads as
   `v`), so a recalculated or Excel-saved book reads like Excel shows it. An uncached formula still
@@ -145,6 +159,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `--stream` csv no longer prints a bare notice while in-memory csv prints a prefixed one.
   `bounds` on an unreadable file is `IO_READ` like every other verb (was `INTERNAL`). `--help`
   output lists the new `--json` flag.
+- **Streaming reads on a multi-sheet book without a sheet exit 3 `SHEET_REQUIRED`** instead of
+  silently reading the first sheet (`--stream view`, `--stream stats`, `--stream cell`,
+  `--stream bounds`); `--stream` writes no longer reject qualified refs or refuse with "Multiple
+  sheets found". Decline usage errors (missing argument, unknown flag, no verb) print the `Error:`
+  block and a single usage line on stderr, exit 2; the full subcommand listing is reserved for
+  `xl --help`.
 - **Scala 3.9.0 LTS** (#554). The build, README, quick-start, scripting docs, examples, and the
   xl-scripting skill snippets move from Scala 3.8.3 to 3.9.0, the new long-term-support line
   (maintained for at least three years; it succeeds 3.3 LTS as the recommended library

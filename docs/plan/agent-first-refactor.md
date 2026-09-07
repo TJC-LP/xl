@@ -655,7 +655,7 @@ bounded graph." Record the test count.
 
 ---
 
-### Cluster resolve-and-argv
+**Status**: done — `ca41a50`, `bb179c1`, `77db1e6` (`Resolve` one sheet rule on every path, `Argv` globals-anywhere, compact usage errors; review: auto-select warning only when the default decided, `import` on the rule)
 
 **Status**: pending
 **Modules**: xl-cli
