@@ -451,6 +451,17 @@ class StyleSpec extends ScalaCheckSuite:
     assertEquals(style.align, Align.default)
   }
 
+  test("CellStyle.withUnderline sets the font underline and keeps the rest (GH-465)") {
+    val base = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
+    val doubled = base.withUnderline(Underline.Double)
+    assertEquals(doubled.font.underline, Underline.Double)
+    assertEquals(doubled, base.withFont(base.font.withUnderline(Underline.Double)))
+    assertEquals(doubled.font.name, "Arial")
+    assertEquals(doubled.font.bold, true)
+    assertEquals(doubled.withUnderline(Underline.None), base)
+    assertEquals(CellStyle.default.withUnderline(Underline.Single).font.underline, Underline.Single)
+  }
+
   property("CellStyle builder methods work correctly") {
     forAll {
       (style: CellStyle, font: Font, fill: Fill, border: Border, numFmt: NumFmt, align: Align) =>

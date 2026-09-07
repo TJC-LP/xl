@@ -3,7 +3,7 @@ package com.tjclp.xl.styles
 import com.tjclp.xl.styles.alignment.Align
 import com.tjclp.xl.styles.border.Border
 import com.tjclp.xl.styles.fill.Fill
-import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -39,6 +39,12 @@ final case class CellStyle(
   def withBorder(b: Border): CellStyle = copy(border = b)
   def withNumFmt(n: NumFmt): CellStyle = copy(numFmt = n, numFmtId = None)
   def withAlign(a: Align): CellStyle = copy(align = a)
+
+  /**
+   * Set the font underline (single, double, accounting variants, or `Underline.None` to clear),
+   * keeping every other font property (GH-465). Equivalent to `withFont(font.withUnderline(u))`.
+   */
+  def withUnderline(u: Underline): CellStyle = withFont(font.withUnderline(u))
 
   /** Set explicit numFmt ID with semantic type (advanced use) */
   def withNumFmtId(id: Int, fmt: NumFmt): CellStyle = copy(numFmt = fmt, numFmtId = Some(id))

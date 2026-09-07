@@ -436,6 +436,72 @@ class ScriptingPreludeTest extends FunSuite:
         .isRight
     )
 
+  test("GH-465: runtime twins putAt/styleAt/mergeAt/commentAt and Workbook.named resolve"):
+    // Runtime strings (defeat constant folding): the twins spell XLResult in their signatures, so
+    // a computed ref never flips the return type the way the transparent put/style/merge do.
+    val s: String = List("Dyn").mkString
+    val r: String = List("B", "2").mkString
+    val built: XLResult[Sheet] = Sheet.named(s).flatMap(_.putAt(r, 1))
+    val finished: XLResult[Sheet] = for
+      a <- built
+      b <- a.putAt("C2", BigDecimal("2.50"), CellStyle.default.bold)
+      c <- b.styleAt("A1:C1", CellStyle.default.bold)
+      d <- c.mergeAt("A1:C1")
+      e <- d.commentAt(r, Comment.plainText("note", Some("gen")))
+    yield e
+    finished match
+      case Right(sheet) =>
+        assertEquals(sheet.name.value, "Dyn")
+        assertEquals(sheet.cells.get(ref"B2").map(_.value), Some(CellValue.Number(BigDecimal(1))))
+        assertEquals(sheet.readTypedOr[BigDecimal](ref"C2", BigDecimal(0)), BigDecimal("2.50"))
+        assertEquals(sheet.mergedRanges, Set(ref"A1:C1"))
+        assertEquals(sheet.getComment(ref"B2").map(_.text.toPlainText), Some("note"))
+        assertEquals(sheet.cells.size, 5) // B2, C2 + the three styled blanks A1:C1
+      case Left(err) => fail(s"expected Right, got Left($err)")
+    // The shared parsing contract is visible from outside the package too.
+    assertEquals(
+      Sheet("Q").putAt("Sales!A1", 1),
+      Left(
+        XLError.InvalidReference(
+          "sheet-qualified refs are not accepted by Sheet.putAt/styleAt/mergeAt/commentAt; " +
+            "use wb.update(sheet, ...)"
+        )
+      ): XLResult[Sheet]
+    )
+    assertEquals(
+      Sheet("Q").putAt("A1:B2", 1),
+      Left(XLError.InvalidCellRef("A1:B2", "expected a single cell")): XLResult[Sheet]
+    )
+    val wb: XLResult[Workbook] = Workbook.named("A", "B")
+    assertEquals(
+      wb.map(_.sheets.map(_.name.value)),
+      Right(Vector("A", "B")): XLResult[Vector[String]]
+    )
+    assertEquals(Workbook.named("A", "A"), Left(XLError.DuplicateSheet("A")): XLResult[Workbook])
+    assertEquals(Workbook.named(s).map(_.sheets.size), Right(1): XLResult[Int])
+
+  test("GH-465: bounded navigation, range slicing and withUnderline resolve through the prelude"):
+    // ARef extensions resolve via the companion implicit scope (no export forwarders — the
+    // opaque-type landmine); this probe is what proves it from outside com.tjclp.xl.
+    assertEquals(ref"A1".tryDown(1), Some(ref"A2"))
+    assertEquals(ref"A1".tryShift(-1, 0), None)
+    assertEquals(ref"A1".tryRight(1), Some(ref"B1"))
+    assertEquals(ref"XFD1".tryRight(1), None)
+    assertEquals(ref"A1".clampShift(-3, -3), ref"A1")
+    assertEquals(ref"C3".clampShift(-10, 5), ref"A8")
+    assertEquals(ref"A1:B3".rows.size, 3)
+    assertEquals(ref"A1:B3".columns.size, 2)
+    assertEquals(ref"A1:B3".row(1), Some(ref"A2:B2"))
+    assertEquals(ref"A1:B3".column(0), Some(ref"A1:A3"))
+    assertEquals(ref"A1:B3".column(5), None)
+    assertEquals(
+      CellStyle.default.withUnderline(Underline.Single).font.underline,
+      Underline.Single
+    )
+    // Bounded steps compose with the patch DSL without an Either in the loop body
+    val patch = ref"A1".tryDown(2).fold(Patch.empty)(_ := "third row")
+    assertEquals(Sheet("Nav").put(patch).cells.keySet, Set(ref"A3"))
+
   test("GH-430: a data-table record authors from scratch through the prelude and round-trips"):
     // FormulaKind must resolve through the prelude export alone (export-forwarder landmine
     // guard), and CellValue.dataTable must synthesize the derived TABLE(...) display text —

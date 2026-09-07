@@ -166,6 +166,41 @@ final case class CellRange(
       col <- (colStart.index0 to colEnd.index0).iterator
     yield ARef.from0(col, row)
 
+  // ----- Slicing (GH-465) -----
+  // Row/column slices of the range as ranges of their own, so a loop can address "row i of the
+  // table" without interpolating refs. Slices keep the parent's anchors; the iterators are lazy
+  // (a full-column range yields its 1,048,576 row slices on demand, never materialized).
+
+  /**
+   * The range's rows as one-row-high slices, top to bottom (lazy). `A1:B3` → `A1:B1, A2:B2, A3:B3`.
+   */
+  def rows: Iterator[CellRange] =
+    (rowStart.index0 to rowEnd.index0).iterator.map(rowSlice)
+
+  /**
+   * The range's columns as one-column-wide slices, left to right (lazy). `A1:B3` → `A1:A3, B1:B3`.
+   */
+  def columns: Iterator[CellRange] =
+    (colStart.index0 to colEnd.index0).iterator.map(columnSlice)
+
+  /** The `i`-th row slice, 0-based within the range; `None` outside `0 until height`. */
+  def row(i: Int): Option[CellRange] =
+    if i < 0 || i >= height then None else Some(rowSlice(rowStart.index0 + i))
+
+  /** The `i`-th column slice, 0-based within the range; `None` outside `0 until width`. */
+  def column(i: Int): Option[CellRange] =
+    if i < 0 || i >= width then None else Some(columnSlice(colStart.index0 + i))
+
+  // Direct construction is safe: colStart <= colEnd / rowStart <= rowEnd already hold, so the
+  // slice is normalized and the anchors stay attached to the same corners.
+  private def rowSlice(row0: Int): CellRange =
+    val row = Row.from0(row0)
+    new CellRange(ARef(colStart, row), ARef(colEnd, row), startAnchor, endAnchor)
+
+  private def columnSlice(col0: Int): CellRange =
+    val col = Column.from0(col0)
+    new CellRange(ARef(col, rowStart), ARef(col, rowEnd), startAnchor, endAnchor)
+
 object CellRange:
   /**
    * An empty range representing no cells.

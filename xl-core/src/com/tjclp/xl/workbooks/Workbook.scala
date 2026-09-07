@@ -612,6 +612,42 @@ object Workbook:
   ): Workbook | XLResult[Workbook] =
     ${ com.tjclp.xl.macros.WorkbookMacros.createMultiImpl('first, 'second, 'rest) }
 
+  /**
+   * Create a workbook with one empty sheet from a name computed at runtime — the explicit twin of
+   * the union-typed `apply(String)` (GH-465, the [[com.tjclp.xl.sheets.Sheet.named]] pattern).
+   *
+   * Semantically the dynamic branch of `apply`: the same [[SheetName]] validation and the same
+   * [[XLError.InvalidSheetName]] error, but non-inline with the `XLResult` spelled in the
+   * signature, so the `.map`/`.unsafe` step is expected rather than a surprise:
+   *
+   * {{{
+   * val nm: String = config.sheetName
+   * val wb: XLResult[Workbook] = Workbook.named(nm).map(_.upsert("Log", identity))
+   * }}}
+   */
+  def named(name: String): XLResult[Workbook] =
+    Sheet.named(name).map(sheet => Workbook(Vector(sheet)))
+
+  /**
+   * Create a workbook with several empty sheets from names computed at runtime — the twin of
+   * `apply(first, second, rest*)` (GH-465).
+   *
+   * Names are validated in argument order and the first failure wins: an invalid name is
+   * [[XLError.InvalidSheetName]]; a name already used earlier in the list is
+   * [[XLError.DuplicateSheet]] (Excel compares sheet names case-insensitively, so `"Data"` and
+   * `"data"` repeat). The union-typed `apply` performs no duplicate check.
+   */
+  def named(first: String, second: String, rest: String*): XLResult[Workbook] =
+    (first +: second +: rest)
+      .foldLeft[XLResult[Vector[Sheet]]](Right(Vector.empty)) { (acc, name) =>
+        acc.flatMap { sheets =>
+          if sheets.exists(_.name.value.equalsIgnoreCase(name)) then
+            Left(XLError.DuplicateSheet(name))
+          else Sheet.named(name).map(sheets :+ _)
+        }
+      }
+      .map(sheets => Workbook(sheets))
+
   /** Create empty workbook with a single sheet named "Sheet1" */
   def empty: Workbook =
     Workbook(Vector(Sheet(SheetName.unsafe("Sheet1"))))
