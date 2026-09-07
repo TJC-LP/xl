@@ -7,7 +7,9 @@ Every verb in `xl --help` order, with what it needs and how it can exit. Global 
 anywhere on the command line, before or after the verb. `needs` reads: `-f` an input
 workbook; `-s` ONE sheet (a sheet-qualified ref names it, else `-s`, else the only sheet
 of a single-sheet book, else `SHEET_REQUIRED`); `-o`/`-i` an output (or in-place edit);
-`--stream` that the verb accepts O(1)-memory streaming. `exit` lists the exit codes the
+`--stream` that the verb runs in O(1) memory under `--stream` (other write verbs accept
+the flag but load the workbook and only write through the streaming writer). `exit` lists
+the exit codes the
 verb can end with (see [exit-codes.md](exit-codes.md)); `batch twin` is the batch op that
 makes the same edit; `since` is the release the verb is documented from. Run
 `xl <verb> --help` for a verb's own options and `xl schema --json` for this table as JSON.
@@ -23,7 +25,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `--output` | `-o` | yes | Output file for a write |
 | `--in-place` | `-i` | no | Edit the input file in place (instead of -o) |
 | `--backend` | — | yes | XML writer backend: scalaxml (default) or saxstax (faster) |
-| `--stream` | — | no | O(1)-memory streaming for large files: search, stats, bounds, view, cell, describe, sheets; put, putf, style and the streamable batch ops |
+| `--stream` | — | no | O(1)-memory streaming for large files: search, stats, bounds, view, cell, describe, sheets; put, putf, style and the streamable batch ops (other write verbs accept the flag but load the workbook) |
 | `--no-recalc` | — | no | Write verbs: apply the edit and recalculate nothing; structural edits leave the formulas they invalidated uncached |
 | `--preserve-caches` | — | no | Alias for --no-recalc |
 | `--strict` | — | no | Write verbs: exit 1 when the recalculation reports formula errors, non-convergence or data-table seed warnings (after `view` it is view's own --eval gate) |
@@ -41,8 +43,8 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `eval` | `-s` | 0 2 3 | — | 0.4.2 | Evaluate a formula without modifying the sheet (--with overrides; no -f for constants) |
 | `evala` | `-f` `-s` | 0 2 3 | — | 0.9.0 | Evaluate an array formula and display, or spill (--at), the result grid |
 | `sheets` | `-f` `--stream` | 0 2 3 | — | 0.1.0 | List sheets with visibility state and dimension (--stats loads the book for counts) |
-| `sheets hide` | `-f` `-o`/`-i` `--stream` | 0 2 3 | — | 0.9.2 | Hide a sheet from the sheet tabs (--very for VBA-only) |
-| `sheets show` | `-f` `-o`/`-i` `--stream` | 0 2 3 | — | 0.9.2 | Show a hidden sheet |
+| `sheets hide` | `-f` `-o`/`-i` | 0 2 3 | — | 0.9.2 | Hide a sheet from the sheet tabs (--very for VBA-only) |
+| `sheets show` | `-f` `-o`/`-i` | 0 2 3 | — | 0.9.2 | Show a hidden sheet |
 | `names` | `-f` | 0 2 3 | — | 0.2.0 | List defined names (named ranges) |
 | `bounds` | `-f` `-s` `--stream` | 0 2 3 | — | 0.9.0 | Show the used range (instant from the dimension element; --scan for an accurate scan) |
 | `view` | `-f` `-s` `--stream` | 0 1 2 3 | — | 0.1.0 | View a range as markdown, json, csv, html, svg, png, jpeg, webp or pdf (--eval, --formulas) |

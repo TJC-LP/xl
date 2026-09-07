@@ -2625,6 +2625,28 @@ EXAMPLES:
     case _ => false
 
   /** Execute command using streaming mode (O(1) memory); `warn` is the run's warning sink. */
+  /**
+   * The verbs that run in O(1) memory under `--stream`: the reads [[executeStreaming]] dispatches
+   * (search, stats, bounds, view, cell), the metadata fast paths of `runResult` (`describe` without
+   * `--full`, `sheets` without `--stats`) and the writes [[executeStreamingWrite]] dispatches (put,
+   * putf, style, batch). Every other write verb accepts the flag, loads the workbook in memory and
+   * only writes through the streaming writer. `Schema.verbs`' `needs.streaming` column is pinned to
+   * this set by SchemaSpec; extend both when a dispatch arm is added.
+   */
+  private[cli] val streamingVerbs: Set[String] = Set(
+    "search",
+    "stats",
+    "bounds",
+    "view",
+    "cell",
+    "describe",
+    "sheets",
+    "put",
+    "putf",
+    "style",
+    "batch"
+  )
+
   private def executeStreaming(
     filePath: Path,
     sheetNameOpt: Option[String],

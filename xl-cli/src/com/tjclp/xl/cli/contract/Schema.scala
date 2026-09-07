@@ -15,7 +15,9 @@ final case class ExitCodeDoc(code: Int, meaning: String) derives CanEqual
 /**
  * What a verb requires: `-f` an input workbook; `sheet` — it works on ONE sheet, so THE sheet rule
  * applies (a qualified ref, else `-s`, else the only sheet of a single-sheet book); `output` — a
- * write, so `-o` or `-i`; `streaming` — it accepts `--stream`.
+ * write, so `-o` or `-i`; `streaming` — it runs in O(1) memory under `--stream` (the other write
+ * verbs accept the flag, load the workbook in memory and only write through the streaming writer;
+ * `Main.streamingVerbs` is the set, pinned by SchemaSpec).
  */
 final case class Needs(file: Boolean, sheet: Boolean, output: Boolean, streaming: Boolean)
     derives CanEqual
@@ -93,7 +95,8 @@ object Schema:
       "--stream",
       None,
       "O(1)-memory streaming for large files: search, stats, bounds, view, cell, describe, " +
-        "sheets; put, putf, style and the streamable batch ops"
+        "sheets; put, putf, style and the streamable batch ops (other write verbs accept the " +
+        "flag but load the workbook)"
     ),
     GlobalDoc(
       "--no-recalc",
@@ -213,7 +216,7 @@ object Schema:
       sheet = false,
       None,
       "0.9.2",
-      streaming = true,
+      streaming = false,
       plain
     ),
     write(
@@ -222,7 +225,7 @@ object Schema:
       sheet = false,
       None,
       "0.9.2",
-      streaming = true,
+      streaming = false,
       plain
     ),
     read(
@@ -809,6 +812,6 @@ object Schema:
         "`xl schema --json` prints this contract as JSON.",
       s"Globals (accepted anywhere on the command line): $globalsLine",
       "NEEDS: -f an input workbook; -s ONE sheet (a qualified ref, else -s, else the only sheet " +
-        "of a single-sheet book); -o|-i an output; --stream accepted.",
+        "of a single-sheet book); -o|-i an output; --stream runs in O(1) memory.",
       "Exit codes:"
     ) ++ exitLines ++ Vector("", line(headers)) ++ rows.map(line)).mkString("\n")

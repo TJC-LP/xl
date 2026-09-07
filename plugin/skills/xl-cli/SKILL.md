@@ -130,7 +130,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Style, merge, comments, hyperlinks | `style`, `merge`/`unmerge`, `comment`/`remove-comment` — or `batch` ops | styles merge unless `--replace` |
 | Rows and columns | `row`, `col`, `autofit`, `group-rows`/`group-cols`, `insert-rows`/`delete-rows`, `insert-cols`/`delete-cols` | structural edits rewrite formulas; `#REF!` on loss |
 | Sheets | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide\|show`, `name add\|rm` | `rename-sheet` rewrites every reference to the sheet |
-| Deliverable finish | `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `autofilter`, `freeze`, `cf add`, `chart add`, `add-image` | every one has a batch twin |
+| Deliverable finish | `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `autofilter`, `freeze`, `cf add`, `chart add`, `add-image` | every one but `add-image` has a batch twin |
 | Import data | `import <csv>`, `import-md <table.md\|->` | `--new-sheet`, type detection |
 | Refresh cached values | `recalc` (`--tables`, `--parallel n`) | `--strict` exits 1 on formula errors |
 | Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / findings |
@@ -220,11 +220,11 @@ edit into a batch heredoc (`<<'EOF'`), where nothing needs escaping.
 ### Output formats and images
 
 `view --format json` gives typed cells (`{ref, type, value, formatted}`; formula cells add
-`formula`); `csv` with `--show-labels` keeps row numbers visible; `png`/`jpeg`/`webp`/`pdf` need
-`--raster-output <path>` and a rasterizer — `xl rasterizers` lists what is available (the native
-binary needs one external tool: `pip install cairosvg` or `apt install librsvg2-bin`). Add
-`--eval` when formula cells should show computed values. `--format html` carries no cell
-styles; use `png` for a styled picture.
+`formula`); `csv` with `--show-labels` keeps row numbers visible; `--format html` renders inline
+CSS (fonts, fills, number formats) with no rasterizer; `svg` is pure vector, no backend either;
+`png`/`jpeg`/`webp`/`pdf` need `--raster-output <path>` and a rasterizer — `xl rasterizers` lists
+what is available (the native binary needs one external tool: `pip install cairosvg` or
+`apt install librsvg2-bin`). Add `--eval` when formula cells should show computed values.
 
 ```bash
 xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.png --show-labels --eval
@@ -232,12 +232,17 @@ xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.pn
 
 ### Large files (100k+ rows)
 
-`--stream` gives O(1) memory for `search`, `stats`, `bounds`, `view` (markdown/csv/json), `cell`,
-`describe`, `sheets` and for `put`, `putf`, `style` and the streamable batch ops (`xl batch
---schema` marks each op `x-streamable`; the batch help marks the others `[not with --stream]`).
-Anything else under `--stream` is refused up front (`UNSUPPORTED_IN_STREAM`, exit 2) — including
-`--eval`, `--strict`, and a batch op the streaming writer cannot apply, which is refused by
-index before any byte is written. Streaming never recalculates. For the rest, load in memory
+`--stream` runs in O(1) memory for the reads `search`, `stats`, `bounds`, `view`
+(markdown/csv/json), `cell`, `describe` (the metadata card) and `sheets` (the listing), and for
+the writes `put`, `putf`, `style` and `batch` — the last for streamable ops only (`xl batch
+--schema` marks each op `x-streamable`; `batch --help` marks the others `[not with --stream]`).
+Every other write verb accepts the flag but loads the workbook in memory and only writes through
+the streaming writer, so it saves no memory. Refused up front with `UNSUPPORTED_IN_STREAM`
+(exit 2): `audit`, `deps`, `describe --full`, `filter`, `view --eval`, `put --csv`, `--strict` on a
+streamed write, and a batch op the streaming writer cannot apply (refused by index before any
+byte is written). `view --format html|svg|png|jpeg|webp|pdf` needs the styles and is not
+available under `--stream`; `names`, `diff`, `lint`, `eval`, `evala` and `new` do not take the
+flag at all (usage error). Streaming never recalculates. For everything else, load in memory
 with `--max-size 0` (unlimited) or `--max-size 500`.
 
 ```bash
@@ -259,9 +264,10 @@ refreshes every cached value (`--tables` also seeds data-table interiors).
 
 ## Gotchas
 
-- **`view` and `search` clip at `--limit` (default 50).** The clip is visible — a
-  `… showing N of M rows` trailer, `truncated`/`totalRows` in json, a `TRUNCATED` warning — but a
-  50-row result is not the whole range: pass `--limit 0` for everything.
+- **`view` and `search` clip at `--limit` (default 50).** The clip is visible — markdown appends
+  a `… showing N of M rows` trailer, json carries `truncated`/`totalRows` in the payload, and
+  csv/html/svg emit a `TRUNCATED` warning — but a 50-row result is not the whole range: pass
+  `--limit 0` for everything.
 - **Use `--show-labels` whenever row numbers matter** in CSV output: hidden rows shift positional
   counting. `view` renders hidden rows and marks them (`--skip-hidden` to omit).
 - **`putf` for formulas only.** `putf A1 "Total Revenue"` is a parse error; use `put`.

@@ -2,7 +2,7 @@ package com.tjclp.xl.cli.contract
 
 import munit.CatsEffectSuite
 
-import com.tjclp.xl.cli.{BuildInfo, Cli, CliIO}
+import com.tjclp.xl.cli.{BuildInfo, Cli, CliIO, Main}
 import com.tjclp.xl.cli.batch.OpRegistry
 
 /**
@@ -88,10 +88,22 @@ class SchemaSpec extends CatsEffectSuite:
     }
     assertEquals(byPath.get("view").map(_.needs), Some(Needs(true, true, false, true)))
     assertEquals(byPath.get("put").map(_.needs), Some(Needs(true, true, true, true)))
-    assertEquals(byPath.get("sheets hide").map(_.needs), Some(Needs(true, false, true, true)))
+    assertEquals(byPath.get("sheets hide").map(_.needs), Some(Needs(true, false, true, false)))
     assertEquals(byPath.get("describe").map(_.needs), Some(Needs(true, false, false, true)))
     assertEquals(byPath.get("names").map(_.needs), Some(Needs(true, false, false, false)))
     assertEquals(byPath.get("schema").map(_.needs), Some(Needs(false, false, false, false)))
+  }
+
+  test("needs.streaming is exactly Main's streaming dispatch set (O(1)-memory verbs)") {
+    // A verb streams only when Main routes it to the streaming reader/writer or a metadata fast
+    // path; every other write verb accepts --stream but loads the book, so it must not claim it.
+    assertEquals(
+      Schema.verbs.filter(_.needs.streaming).map(_.verb).toSet,
+      Main.streamingVerbs
+    )
+    assert(!Schema.verbs.exists(v => v.verb == "sheets hide" && v.needs.streaming))
+    assert(!Schema.verbs.exists(v => v.verb == "merge" && v.needs.streaming))
+    assert(Schema.verbs.exists(v => v.verb == "sheets" && v.needs.streaming))
   }
 
   // ---------------------------------------------------------------------------------------------

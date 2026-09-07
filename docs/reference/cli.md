@@ -202,6 +202,9 @@ These warnings also fail `--strict`.
 | **Appearance & print** | `sheet-view`, `tab-color`, `page-setup`, `header-footer` | Deliverable finish: gridlines, zoom, tab colors, print setup, footers |
 | **Conditional formatting** | `cf add`, `cf list` | Highlight rules, color scales, data bars, top-N, text matches |
 
+The categories are a hand-written orientation; the complete, CI-gated verb list is the generated
+[`generated/cli-verbs.md`](generated/cli-verbs.md).
+
 ### Command Summary
 
 The verb table is generated from the binary and CI-gated: **[`generated/cli-verbs.md`](generated/cli-verbs.md)**

@@ -92,7 +92,9 @@ object DocsGen:
       "anywhere on the command line, before or after the verb. `needs` reads: `-f` an input\n" +
       "workbook; `-s` ONE sheet (a sheet-qualified ref names it, else `-s`, else the only sheet\n" +
       "of a single-sheet book, else `SHEET_REQUIRED`); `-o`/`-i` an output (or in-place edit);\n" +
-      "`--stream` that the verb accepts O(1)-memory streaming. `exit` lists the exit codes the\n" +
+      "`--stream` that the verb runs in O(1) memory under `--stream` (other write verbs accept\n" +
+      "the flag but load the workbook and only write through the streaming writer). `exit` lists\n" +
+      "the exit codes the\n" +
       "verb can end with (see [exit-codes.md](exit-codes.md)); `batch twin` is the batch op that\n" +
       "makes the same edit; `since` is the release the verb is documented from. Run\n" +
       "`xl <verb> --help` for a verb's own options and `xl schema --json` for this table as JSON.\n\n" +
