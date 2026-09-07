@@ -9,6 +9,7 @@ import com.tjclp.xl.{CellRange, Sheet, Workbook}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.cli.commands.{DiffCommands, WriteCommands}
+import com.tjclp.xl.cli.contract.{CliException, ErrorCode}
 import com.tjclp.xl.cli.helpers.{BatchParser, CopyOps, ValueParser}
 import com.tjclp.xl.cli.output.{Format, JsonRenderer, Markdown}
 import com.tjclp.xl.io.ExcelIO
@@ -66,10 +67,8 @@ class FormulaRecordCliSpec extends FunSuite:
     }
     assert(error.getMessage.contains("GH-419"), s"unexpected message: ${error.getMessage}")
     assert(
-      error.getMessage.contains(
-        """the data-table batch op ({"op":"data-table","ref":"D5:F6","rowInput":"B1","colInput":"B2"})"""
-      ),
-      s"steering must name the batch op: ${error.getMessage}"
+      !error.getMessage.contains("\"op\":\"data-table\""),
+      s"steering must not advertise a batch op that does not exist: ${error.getMessage}"
     )
     assert(
       error.getMessage.contains("sheet.dataTable(interior, rowInput, colInput)"),
@@ -85,12 +84,17 @@ class FormulaRecordCliSpec extends FunSuite:
     assert(ValueParser.dataTableFormulaError("=SUM(TABLE1)").isEmpty)
     val json = """[{"op":"putf","ref":"B9","formula":"=TABLE(A1,A2)"}]"""
     BatchParser.parseBatchJson(json) match
-      case Left(err) =>
+      case Left(err: CliException) =>
+        assertEquals(err.error.code, ErrorCode.BATCH_OP_INVALID)
+        assertEquals(err.error.location.flatMap(_.opIndex), Some(1))
         assert(err.getMessage.contains("GH-419"), err.getMessage)
         assert(
           err.getMessage.contains("sheet.dataTable(interior, rowInput, colInput)"),
           err.getMessage
         )
+        // there is no data-table batch op; the steering must not advertise one
+        assert(!err.getMessage.contains("\"op\":\"data-table\""), err.getMessage)
+      case Left(other) => fail(s"batch putf must raise a typed CliException, got $other")
       case Right(_) => fail("batch putf must reject TABLE( formulas")
   }
 
