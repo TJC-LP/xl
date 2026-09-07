@@ -2,12 +2,13 @@ package com.tjclp.xl
 
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
-import cats.syntax.all.*
 import Generators.given
 import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.patch.Patch.{*, given}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
+import com.tjclp.xl.algebra.Monoid
+import com.tjclp.xl.algebra.syntax.*
 import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.cf.{CfRule, ConditionalFormat}
 import com.tjclp.xl.codec.CellCodec.given
@@ -85,6 +86,36 @@ class PatchSpec extends ScalaCheckSuite:
 
       true
     }
+  }
+
+  test("|+| composes enum cases without type ascription (LUB resolves Monoid[Patch])") {
+    val ref = ARef.from1(1, 1)
+    val patch = Patch.Put(ref, CellValue.Text("Test")) |+| Patch.SetStyle(ref, StyleId(7))
+
+    assertEquals(
+      patch,
+      Patch.combine(Patch.Put(ref, CellValue.Text("Test")), Patch.SetStyle(ref, StyleId(7)))
+    )
+    val updated = Patch.applyPatch(emptySheet, patch)
+    assertEquals(updated(ref).value, CellValue.Text("Test"))
+    assertEquals(updated(ref).styleId, Some(StyleId(7)))
+  }
+
+  test("Monoid[Patch].combineAll folds patches in order (later wins)") {
+    val ref = ARef.from1(1, 1)
+    val patches = Vector[Patch](
+      Patch.Put(ref, CellValue.Text("First")),
+      Patch.SetStyle(ref, StyleId(1)),
+      Patch.Put(ref, CellValue.Text("Second"))
+    )
+
+    val combined = Monoid[Patch].combineAll(patches)
+    assertEquals(combined, Patch.Batch(patches))
+    assertEquals(Monoid[Patch].combineAll(Vector.empty), Patch.empty)
+
+    val updated = Patch.applyPatch(emptySheet, combined)
+    assertEquals(updated(ref).value, CellValue.Text("Second"))
+    assertEquals(updated(ref).styleId, Some(StyleId(1)))
   }
 
   // ========== Patch Application Tests ==========

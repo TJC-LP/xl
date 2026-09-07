@@ -211,18 +211,18 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of the calculation-integrity wave (2026-09-04), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored.
+As of ADR-017 phase 0 (2026-09-07), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored.
 
 | Module | Tests |
 |--------|-------|
 | xl-evaluator | 2196 |
-| xl-core | 1293 |
+| xl-core | 1296 |
 | xl-ooxml | 1080 |
 | xl-cli | 754 |
-| xl-cats-effect | 153 |
+| xl-cats-effect | 155 |
 | xl-agent | 122 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 27 |
-| **Total** | **5,625** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 28 |
+| **Total** | **5,631** |
 
 ## Test Quality Metrics
 

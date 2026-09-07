@@ -1,8 +1,7 @@
 package com.tjclp.xl.patch
 
-/** Syntax for patch composition using cats Monoid */
+/** Syntax for patch composition: `|+|` through xl's own [[com.tjclp.xl.algebra.Monoid]]. */
 object syntax:
-  export cats.syntax.monoid.given
-  export cats.syntax.semigroup.given
+  export com.tjclp.xl.algebra.syntax.*
 
 export syntax.*

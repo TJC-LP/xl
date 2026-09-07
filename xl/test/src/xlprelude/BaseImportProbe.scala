@@ -52,3 +52,11 @@ object BaseImportProbe:
   val cfSheet: Sheet = Sheet(SheetName.unsafe("CF")).conditionalFormat(ref"A1:A9", cfRule, cfScale)
   val cfBlocks: Vector[ConditionalFormat.Rules] = cfSheet.typedConditionalFormats
   val cfText: CfTextOp = CfTextOp.Contains
+
+  // Algebra (ADR-017 phase 0): xl's own Monoid and its |+| resolve through the base import, and
+  // |+| infers the operands' least upper bound, so enum cases need no ascription.
+  val composed: Patch = Patch.Put(cell, CellValue.Text("x")) |+| Patch.SetStyle(cell, StyleId(1))
+  val folded: Patch = Monoid[Patch].combineAll(Vector(composed, Patch.Remove(cell)))
+  val styleComposed: StylePatch =
+    StylePatch.SetNumFmt(NumFmt.Percent) |+| StylePatch.SetFont(Font("Arial", 11.0))
+  val styleIdentity: StylePatch = Monoid[StylePatch].empty

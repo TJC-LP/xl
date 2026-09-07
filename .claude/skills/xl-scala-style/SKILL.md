@@ -72,8 +72,12 @@ these. The gate is the external-consumer probe suite in `xl/test/src/xlprelude/`
 
 ## Everyday gotchas
 
-- **Monoid syntax needs type ascription on enum cases**:
-  `(Patch.Put(ref, v): Patch) |+| (Patch.SetStyle(ref, 1): Patch)`. Prefer the DSL's `++`.
+- **`|+|` is xl's own Monoid syntax** (`com.tjclp.xl.algebra.syntax`, in scope from the public
+  import). Its result type is the operands' least upper bound, so enum cases compose without
+  ascription: `Patch.Put(ref, v) |+| Patch.SetStyle(ref, 1)`. The DSL's `++` is the fixed-type
+  spelling. Cats syntax on patches needs `import com.tjclp.xl.interop.CatsInstances.given`
+  (`xl-cats-effect`) and still needs ascription. The pure modules have no Cats dependency: never
+  add one to `xl-core`, `xl-ooxml` or `xl-evaluator`.
 - **Macro literals** validate at compile time: `ref"A1"`, `fx"=SUM(A1:B10)"`, `money"$$1,234.56"`
   (`$` anchors need `$$`). Pure `fx""` literals return `CellValue`; runtime-interpolated ones
   return `Either`.

@@ -9,7 +9,7 @@ import java.util.zip.{ZipOutputStream, ZipEntry, CRC32, ZipFile}
 import java.nio.charset.StandardCharsets
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.error.{XLError, XLException, XLResult}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.Comment
@@ -106,7 +106,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     Sync[F].delay(XlsxReader.readWithWarnings(path, config)).flatMap {
       case Right(result) =>
         result.warnings.traverse_(warningHandler) *> Async[F].pure(result.workbook)
-      case Left(err) => Async[F].raiseError(new Exception(s"Failed to read XLSX: ${err.message}"))
+      case Left(err) => Async[F].raiseError(XLException(err))
     }
 
   /** Write workbook to XLSX file */
@@ -117,7 +117,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   def writeWith(wb: Workbook, path: Path, config: com.tjclp.xl.ooxml.WriterConfig): F[Unit] =
     Sync[F].delay(XlsxWriter.writeWith(wb, path, config)).flatMap {
       case Right(_) => Async[F].unit
-      case Left(err) => Async[F].raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
+      case Left(err) => Async[F].raiseError(XLException(err))
     }
 
   /** Write workbook using SAX/StAX backend for faster writes */
@@ -237,8 +237,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   def readMetadata(path: Path): F[LightMetadata] =
     Sync[F].delay(WorkbookMetadataReader.read(path)).flatMap {
       case Right(meta) => Async[F].pure(meta)
-      case Left(err) =>
-        Async[F].raiseError(new Exception(s"Failed to read metadata: ${err.message}"))
+      case Left(err) => Async[F].raiseError(XLException(err))
     }
 
   /**
@@ -247,8 +246,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   def readDimension(path: Path, sheetIndex: Int): F[Option[CellRange]] =
     Sync[F].delay(WorkbookMetadataReader.readDimension(path, sheetIndex)).flatMap {
       case Right(dim) => Async[F].pure(dim)
-      case Left(err) =>
-        Async[F].raiseError(new Exception(s"Failed to read dimension: ${err.message}"))
+      case Left(err) => Async[F].raiseError(XLException(err))
     }
 
   /** Load workbook styles for number format resolution in streaming mode. */
@@ -992,8 +990,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
             case Right(s) =>
               val wb = Workbook(Vector(s))
               write(wb, path)
-            case Left(err) =>
-              Async[F].raiseError(new Exception(s"Failed to create sheet: ${err.message}"))
+            case Left(err) => Async[F].raiseError(XLException(err))
         }
       }
 

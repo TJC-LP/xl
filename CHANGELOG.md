@@ -30,6 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The pure modules no longer depend on Cats** (ADR-017, phase 0). `Patch` and `StylePatch` are
+  instances of xl's own `com.tjclp.xl.algebra.Monoid` (`empty`, `combine`, `combineAll`), exported
+  through `com.tjclp.xl.api`; `|+|` now comes from `com.tjclp.xl.algebra.syntax` and is in scope
+  from `import com.tjclp.xl.{*, given}` as before. Its result type is the operands' least upper
+  bound, so enum cases compose without ascription (`Patch.Put(ref, v) |+| Patch.SetStyle(ref, id)`).
+  `xl-core` and `xl-evaluator` publish with no third-party runtime dependency: `xl-core` previously
+  put `cats-core`, `cats-laws`, `discipline-core` and ScalaCheck on every consumer's compile
+  classpath (`cats-laws` was referenced nowhere in the repo). Code that composes patches with Cats
+  syntax imports `com.tjclp.xl.interop.CatsInstances.given` (module `xl-cats-effect`), which
+  derives a lawful `cats.Monoid[A]` from any xl `Monoid[A]`. `xl-agent`'s tests declare ScalaCheck
+  explicitly instead of receiving it through that leak.
 - **Scala 3.9.0 LTS** (#554). The build, README, quick-start, scripting docs, examples, and the
   xl-scripting skill snippets move from Scala 3.8.3 to 3.9.0, the new long-term-support line
   (maintained for at least three years; it succeeds 3.3 LTS as the recommended library
@@ -44,6 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ExcelIO` keeps the structured error at its boundary** (ADR-017, phase 0). `read`, `readWith`,
+  `write`, `writeWith`, `readMetadata`, `readDimension` and the deprecated
+  `writeStreamMaterialized` raise `XLException(err)` carrying the `XLError`, instead of
+  `new Exception("Failed to …: " + err.message)`. The sync `Excel.read`/`Excel.write` facade
+  therefore throws the `XLException` its documentation always promised, and callers can match on
+  `ex.error`; `getMessage` is now the error's own message without the `Failed to read XLSX:` prefix.
 - **`--strict` validates formulas authored by `put`/`putf`/`fill`/`copy` and their affected
   dependents** (#504). Single writes retain targeted recalculation reports and evaluate formulas
   against the completed edit, so fresh self-references cannot pass with a fabricated cache.

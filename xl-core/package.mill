@@ -6,10 +6,8 @@ import mill.scalalib._
 object `package` extends build.XLModule {
   override def artifactDescription = "XL Core - Pure domain model, macros, and DSL for Excel"
 
-  override def mvnDeps = Seq(
-    mvn"org.typelevel::cats-core:2.12.0",
-    mvn"org.typelevel::cats-laws:2.12.0"
-  )
+  // No third-party runtime dependencies: the core's algebra (com.tjclp.xl.algebra.Monoid) is
+  // in-house, and law tests are plain ScalaCheck properties.
 
   object test extends ScalaTests with build.XLTestModule {
     override def mvnDeps = Seq(

@@ -1,6 +1,6 @@
 package com.tjclp.xl.styles.patch
 
-import cats.Monoid
+import com.tjclp.xl.algebra.Monoid
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.alignment.Align
 import com.tjclp.xl.styles.border.Border
@@ -54,12 +54,12 @@ object StylePatch:
 
   extension (p1: StylePatch)
     /**
-     * Compose two StylePatches without requiring Cats Monoid syntax.
+     * Compose two StylePatches with an operator fixed to `StylePatch`.
      *
-     * Eliminates the need for type ascription on enum cases, enabling clean composition:
+     * Equivalent to `|+|` from `com.tjclp.xl.algebra.syntax`, without a type class in the
+     * signature:
      * {{{
      *   val patch = StylePatch.SetFont(font) ++ StylePatch.SetFill(fill)
-     *   // No need for: (StylePatch.SetFont(font): StylePatch) |+| ...
      * }}}
      */
     infix def ++(p2: StylePatch): StylePatch = StylePatch.combine(p1, p2)

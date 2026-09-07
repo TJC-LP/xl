@@ -3,7 +3,8 @@ package com.tjclp.xl
 import munit.ScalaCheckSuite
 import org.scalacheck.{Arbitrary, Gen, Prop}
 import org.scalacheck.Prop.*
-import cats.syntax.all.*
+import com.tjclp.xl.algebra.Monoid
+import com.tjclp.xl.algebra.syntax.*
 import com.tjclp.xl.styles.{*, given}
 
 /** Property tests for StylePatch monoid laws */
@@ -76,6 +77,23 @@ class StylePatchSpec extends ScalaCheckSuite:
       assertEquals(leftResult, rightResult)
       true
     }
+  }
+
+  test("|+| composes StylePatch cases without type ascription") {
+    val font = Font("Arial", 14.0, bold = true)
+    val fill = Fill.Solid(Color.Rgb(0xffff0000))
+
+    val patch = StylePatch.SetFont(font) |+| StylePatch.SetFill(fill)
+    assertEquals(patch, StylePatch.SetFont(font) ++ StylePatch.SetFill(fill))
+    assertEquals(
+      Monoid[StylePatch].combineAll(Vector(StylePatch.SetFont(font), StylePatch.SetFill(fill))),
+      patch
+    )
+    assertEquals(Monoid[StylePatch].combineAll(Vector.empty), StylePatch.empty)
+
+    val result = applyPatch(CellStyle.default, patch)
+    assertEquals(result.font, font)
+    assertEquals(result.fill, fill)
   }
 
   // ========== Patch Application Tests ==========

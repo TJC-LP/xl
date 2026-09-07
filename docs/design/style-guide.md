@@ -111,14 +111,18 @@ Tier rationale, suppression rules, and the process for adding warts are in
 
 ## Known Gotchas
 
-- **Monoid syntax needs type ascription** on enum cases (the enum case's precise type is not the
-  enum type, so `Monoid[Patch]` is not found):
+- **`Monoid` is xl's own** (`com.tjclp.xl.algebra.Monoid`); the pure modules carry no Cats
+  dependency and must not gain one. `|+|` (from `com.tjclp.xl.algebra.syntax`, in scope from the
+  public import) infers the operands' least upper bound, so enum cases compose without
+  ascription; the DSL's `++` is the fixed-type spelling:
 
   ```scala
-  val p = (Patch.Put(ref, value): Patch) |+| (Patch.SetStyle(ref, 1): Patch)
+  val p = Patch.Put(ref, value) |+| Patch.SetStyle(ref, 1)
+  val q = (ref"A1" := "x") ++ ref"A1".styled(bold)
   ```
 
-  The DSL's `++` on patches avoids this; prefer it in examples and scripts.
+  Cats syntax on patches needs `import com.tjclp.xl.interop.CatsInstances.given`
+  (`xl-cats-effect`) and, as with any Cats `|+|`, type ascription on enum cases.
 - **`{*, given}` imports**: Scala 3's `*` does not pull in given instances — public API examples
   must write `import com.tjclp.xl.{*, given}` (or `com.tjclp.xl.scripting.{*, given}` in
   scripts, never both in one file).

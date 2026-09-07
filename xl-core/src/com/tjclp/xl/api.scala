@@ -79,8 +79,9 @@ object api:
   // Conditional formatting (GH-136) — plain enums/case classes, safe export forwarders.
   export cf.{ConditionalFormat, CfRule, CfOperator, CfTextOp, Cfvo, CfPoint}
 
-  // Patch types
+  // Patch types, and the algebra they compose under
   export patch.Patch
+  export algebra.Monoid
 
   // Workbook types
   export workbooks.{Workbook, WorkbookMetadata, CalcPr, CalcMode}

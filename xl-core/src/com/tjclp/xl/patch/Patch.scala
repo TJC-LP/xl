@@ -1,7 +1,7 @@
 package com.tjclp.xl.patch
 
-import cats.Monoid
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.algebra.Monoid
 import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.cf.CfRule
 import com.tjclp.xl.codec.CellCodec.given
@@ -15,12 +15,12 @@ import com.tjclp.xl.styles.units.StyleId
 /**
  * Patch ADT for Sheet updates with monoid semantics.
  *
- * Patches can be composed using the Monoid instance, allowing batch operations to be built
- * declaratively.
+ * Patches can be composed using the [[com.tjclp.xl.algebra.Monoid]] instance (`++`, or `|+|` from
+ * `com.tjclp.xl.algebra.syntax`), allowing batch operations to be built declaratively.
  *
  * Laws:
- *   - Associativity: (p1 |+| p2) |+| p3 == p1 |+| (p2 |+| p3)
- *   - Identity: Patch.empty |+| p == p == p |+| Patch.empty
+ *   - Associativity: (p1 ++ p2) ++ p3 == p1 ++ (p2 ++ p3)
+ *   - Identity: Patch.empty ++ p == p == p ++ Patch.empty
  *   - Idempotence: Applying the same patch twice yields the same result (SetConditionalFormat
  *     excepted — it appends one CF block per application, matching Sheet.conditionalFormat's
  *     append-only authoring semantics)

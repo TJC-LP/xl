@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (5,625)
+./mill __.test             # Run all tests (5,631)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -334,7 +334,10 @@ opaque type ARef = Long    // Packed: (row << 32) | col
 import com.tjclp.xl.dsl.*
 val patch = (ref"A1" := "Hello") ++ ref"A1".styled(boldStyle) ++ ref"A1:B2".merge
 ```
-Note: Using Cats `|+|` requires type ascription on enum cases.
+`Patch` and `StylePatch` are instances of xl's own `com.tjclp.xl.algebra.Monoid` (the core has no
+Cats dependency). `|+|` comes from `com.tjclp.xl.algebra.syntax` (in scope from the public import)
+and infers the operands' common type, so enum cases compose without ascription:
+`Patch.Put(ref, v) |+| Patch.SetStyle(ref, id)`.
 
 ### 3. Compile-Time Macros
 ```scala
@@ -406,12 +409,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**5,625 tests** by module: xl-evaluator (2196), xl-core (1293), xl-ooxml (1080), xl-cli (754), xl-cats-effect (153), xl-agent (122), xl prelude probes (27). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**5,631 tests** by module: xl-evaluator (2196), xl-core (1296), xl-ooxml (1080), xl-cli (754), xl-cats-effect (155), xl-agent (122), xl prelude probes (28). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 5,625 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 5,631 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)
@@ -432,10 +435,15 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 ## Known Gotchas
 
-**Monoid syntax needs type ascription**:
+**Cats syntax on patches needs the interop givens** (the core defines its own `Monoid`; `cats.Monoid[Patch]`
+is derived in `xl-cats-effect`, and Cats' `|+|` still needs type ascription on enum cases):
 ```scala
+import cats.syntax.all.*
+import com.tjclp.xl.interop.CatsInstances.given
 val p = (Patch.Put(ref, value): Patch) |+| (Patch.SetStyle(ref, 1): Patch)
 ```
+xl's own `|+|` (from `com.tjclp.xl.{*, given}`) needs no ascription. Never add a Cats dependency to
+`xl-core`, `xl-ooxml` or `xl-evaluator`.
 
 **Extension methods need @targetName**:
 ```scala

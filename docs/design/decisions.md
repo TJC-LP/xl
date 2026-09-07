@@ -239,6 +239,7 @@
 - **Alternatives Considered**: Ox everywhere (blocks ADR-016); ZIO (lateral rewrite); status quo
   (carries dependency weight, erased errors, and runtime ceremony into the cross-build).
 - **Consequences**: additive API (freeze honoured); `xl-cli` sheds 355 `IO` lift sites and
-  `decline-effect`; `xl-agent` concurrency becomes sequential Scala; phase-0 hygiene ships
-  regardless (`cats-laws` out of compile scope, unused `cats-core` off `xl-evaluator`,
-  `XLException` at the `ExcelIO` boundary).
+  `decline-effect`; `xl-agent` concurrency becomes sequential Scala. Phase-0 hygiene landed with
+  this ADR: the published `xl-core`, `xl-ooxml` and `xl-evaluator` artifacts no longer depend on
+  any Cats module (`com.tjclp.xl.algebra.Monoid` replaces `cats.Monoid`; `cats-laws` deleted), and
+  `ExcelIO` raises `XLException` at its boundary.

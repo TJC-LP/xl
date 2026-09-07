@@ -8,10 +8,6 @@ object `package` extends build.XLModule {
 
   override def moduleDeps = Seq(build.`xl-core`)
 
-  override def mvnDeps = Seq(
-    mvn"org.typelevel::cats-core:2.12.0"
-  )
-
   object test extends ScalaTests with build.XLTestModule {
     // Share the real-file fixture corpus (xl-ooxml/test/resources/fixtures) so the GH-419
     // DataTableSeeder oracle reads the exact Excel-authored files (resources travel on the

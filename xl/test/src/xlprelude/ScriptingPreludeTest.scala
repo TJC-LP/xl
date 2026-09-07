@@ -72,6 +72,16 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(sheet.getComment(ref"B2").map(_.text.toPlainText), Some("unit price"))
     assertEquals(sheet.conditionalFormats.size, 1)
 
+  test("xl's Monoid and |+| resolve through the prelude without type ascription (ADR-017)"):
+    val patch = Patch.Put(ref"A1", CellValue.Text("Title")) |+| Patch.SetStyle(ref"A1", StyleId(1))
+    assertEquals(
+      patch,
+      Patch.Put(ref"A1", CellValue.Text("Title")) ++ Patch.SetStyle(ref"A1", StyleId(1))
+    )
+    val folded = Monoid[Patch].combineAll(Vector(ref"A1" := "Report", ref"B1" := 2))
+    assertEquals(Sheet("Folded").put(folded).cells.size, 2)
+    assertEquals(Monoid[StylePatch].empty, StylePatch.empty)
+
   test("range fill := and ARef navigation resolve through the prelude"):
     val sheet = Sheet("Fill").put(ref"A1:B2" := 0)
     assertEquals(sheet.cells.size, 4)

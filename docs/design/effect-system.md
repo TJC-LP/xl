@@ -67,10 +67,11 @@ concurrency.
 `ExcelIO` is `class ExcelIO[F[_]: Async]`, but `F` is instantiated **27 times in the repo, every
 time as `IO`**; there is no second interpreter. Of its ~1,400 lines:
 
-- `read`/`write`/`readMetadata`/`readDimension`/`loadStyles` are `Sync[F].delay(pureFunction(…))`
-  followed by `raiseError(new Exception(s"Failed to …: ${err.message}"))` — **six places where the
-  structured `XLError` is flattened into an exception message** at the exact boundary the purity
-  charter cares about. (`ExcelR` keeps the `XLResult`, but nothing in the repo calls it.)
+- `read`/`write`/`readMetadata`/`readDimension` are `Sync[F].delay(pureFunction(…))` followed by
+  `raiseError(new Exception(s"Failed to …: ${err.message}"))` — **five places where the
+  structured `XLError` was flattened into an exception message** at the exact boundary the purity
+  charter cares about (fixed in phase 0: they raise `XLException(err)` now). (`ExcelR` keeps the
+  `XLResult`, but nothing in the repo calls it.)
 - The row-stream *read* path is a SAX parser on a dedicated thread pushing 1,024-row chunks into an
   `ArrayBlockingQueue`, drained by `Sync[F].interruptible(queue.take())` into an fs2 `Stream`
   (`SaxStreamingReader.scala:64-96`). `docs/plan/scala-native.md` already schedules deleting this
@@ -216,8 +217,9 @@ Maven Central POMs; 30 artifacts, of which 4 are xl's own modules and 2 the Scal
 | `scala-xml` (the OOXML DOM, stays) | 1 | scala-xml |
 | **Total** | **24** | |
 
-The effect-free proposal in §5 leaves `scala-xml` plus `cats-kernel` (or `cats-core` +
-`cats-kernel`): **2–3 third-party jars instead of 24**, and `xl-core` alone goes from 7 to 1–2.
+The effect-free proposal in §5 leaves `scala-xml` alone: **1 third-party jar instead of 24**.
+Phase 0 already took `xl-core` from 7 third-party jars to 0 and `xl-evaluator` to 0 beyond its
+own module dependencies.
 
 ### 3.4 Gears (for completeness)
 
@@ -336,19 +338,20 @@ supervised {
 `AtomicReference`; `Clock[IO].realTime` becomes `Instant.now()`; `Resource.make(upload)(delete)`
 becomes `useInScope(upload)(delete)`.
 
-### 5.5 Monoid
+### 5.5 Monoid (decided and landed in phase 0)
 
-Keep `Monoid[Patch]`/`Monoid[StylePatch]` as instances, but decide what they are instances *of*:
+`Monoid[Patch]`/`Monoid[StylePatch]` are now instances of xl's own
+`com.tjclp.xl.algebra.Monoid` (`empty`, `combine`, `combineAll`), exported through
+`com.tjclp.xl.api`. The `|+|` operator lives in `com.tjclp.xl.algebra.syntax` and reaches users
+through `com.tjclp.xl.{*, given}` exactly as before, now with the result type inferred as the
+operands' least upper bound so enum cases compose without ascription. Cats users import
+`com.tjclp.xl.interop.CatsInstances.given` (module `xl-cats-effect`), which derives a lawful
+`cats.Monoid[A]` from any xl `Monoid[A]`.
 
-- **Keep `cats-kernel` only** (not `cats-core`): `Monoid` lives in `cats-kernel`, a small artifact
-  with no further Scala dependencies; Cats users keep `|+|` and `combineAll`. Cheapest, keeps
-  interop.
-- **Own `Monoid` + optional Cats instance** in a `com.tjclp.xl.cats` package of the adapter module:
-  zero core dependencies; Cats users import one given. More work, purer.
-
-Either way, `cats-laws` leaves compile scope (it belongs to the test module, alongside the
-existing `Generators` and law suites — today it puts ScalaCheck and Discipline on every
-`xl-core` consumer's compile classpath) and `xl-evaluator` drops its unused `cats-core`.
+The alternative — keeping `cats-kernel` as the core's only dependency — was rejected because it
+keeps a Cats artifact on every consumer's classpath for two givens. `cats-laws` turned out to be
+referenced nowhere (main or test) and was deleted outright; `xl-evaluator` dropped its unused
+`cats-core`.
 
 ### 5.6 Decision matrix
 
@@ -359,7 +362,7 @@ existing `Generators` and law suites — today it puts ScalaCheck and Discipline
 | LLM authorship (scripts, recipes) | ✅ stdlib shapes, no runtime | ⚠️ small corpus, `boundary` footguns | ❌ runtime + `Unsafe` ceremony | ❌ runtime + implicit global |
 | Structured concurrency where needed (`xl-agent`) | ✅ Ox | ✅ Ox | ✅ fibers | ✅ fibers |
 | Streaming for library users | ✅ cursor + adapters (fs2/Ox/ZIO) | Flow only | ZStream only | fs2 only |
-| Dependency weight of `com.tjclp::xl` (third-party jars) | ✅ 2–3 (scala-xml + cats-kernel) | Ox core + scala-xml (JVM only) | ZIO + zio-streams + scala-xml | 24 today (§3.3), 19 after phase-0 hygiene |
+| Dependency weight of `com.tjclp::xl` (third-party jars) | ✅ 1 (scala-xml) | Ox core + scala-xml (JVM only) | ZIO + zio-streams + scala-xml | 24 at 0.19.3 (§3.3), 19 after phase 0 |
 | Ecosystem interop for existing users | ✅ `Excel[F]` kept as adapter | ❌ fs2 users cut | ❌ fs2 users cut | ✅ |
 | Migration cost | Medium: new module + mechanical CLI rewrite + agent rewrite; adapters small | High: everything + platform conflict | High: everything, for the same shape | None |
 | Risk | Additive API; freeze honoured; Ox contained to an internal module | Blocks ADR-016 | Second runtime; experimental Native | Carries today's costs into the cross-build |
@@ -372,7 +375,7 @@ Phased so that every step is independently shippable and aligned with the ADR-01
 
 | Phase | Work | Size | Notes |
 |---|---|---|---|
-| 0 — hygiene (no API change) | Move `cats-laws` to `xl-core.test`; remove `cats-core` from `xl-evaluator`; make `ExcelIO.read`/`write` raise `XLException(err)` instead of `new Exception(err.message)`; add `XLResult.block` (`boundary`-based) to `xl-core`; rewrite recipe 5 and the QUICK-START streaming snippets once §1 lands. | Small | Ships in the next patch. CHANGELOG entries under Unreleased. |
+| 0 — hygiene (no API change) — **landed** | `cats-laws` deleted (it was referenced nowhere, main or test); `cats-core` removed from `xl-core` and `xl-evaluator` — the core's `Monoid` is now `com.tjclp.xl.algebra.Monoid`, with `|+|` in `com.tjclp.xl.algebra.syntax` and a derived `cats.Monoid` in `com.tjclp.xl.interop.CatsInstances` (`xl-cats-effect`) for Cats users; `ExcelIO.read`/`write`/`readMetadata`/`readDimension` raise `XLException(err)` instead of `new Exception(err.message)`. Still open in this phase: `XLResult.block` (`boundary`-based); rewriting recipe 5 and the QUICK-START streaming snippets once phase 1 lands. | Small | CHANGELOG entries under Unreleased. |
 | 1 — direct-style IO (with Wave A3/A4) | `xl-io`: sync `Excel` implemented directly (no runtime), `RowCursor` (the planned `WorksheetRowCursor`), `RowWriter` over the planned `XmlTextWriter`, `Excel.rows`/`writeRows`. Prelude exports the new facade; `ExcelIO` stays. | ~2–3k LOC new, largely moved from `ExcelIO`/`StreamingXmlWriter`/`SaxStreamingReader` | The SAX-thread bridge and fs2-data-xml leave the hot path, as the native plan already intends. |
 | 2 — adapter + CLI | `xl-cats-effect` becomes a wrapper over `xl-io` (API frozen, behaviour identical, parity specs already exist). `xl-cli` drops `decline-effect` for `decline`, `IO` for direct calls, `Ref` scaffolding removed; tests lose 442 `unsafeRunSync`. | CLI: 43 files, mechanical (355 lift sites); tests 17 suites | Also removes the GH-519 runtime override — process exit is the JVM's again. Prerequisite for the Scala Native CLI. |
 | 3 — agent on Ox | `xl-agent` to Ox: `parLimit`, `Channel`, `supervised`, `retry`, `useInScope`. | 46 files; ~2–3k LOC of real concurrency, rest mechanical; 12 CE test suites | JVM-only module; JDK 25 satisfies Ox. Biggest readability win per line. |
