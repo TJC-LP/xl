@@ -209,7 +209,7 @@
 
 ### Test Coverage
 
-**6,271 test cases** (verified via `./mill __.test`, 2026-09-07, agent-first wave 1 merged with the Excel-parity wave): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**6,326 test cases** (verified via `./mill __.test`, 2026-09-07, agent-first wave 1 merged with the Excel-parity wave): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|

@@ -313,3 +313,14 @@ class BatchSheetScopeSpec extends FunSuite:
     assertEquals(result.scoped.map(_.index), Vector(1, 2))
     assertEquals(result.scoped.map(_.sheet), Vector(None, SheetName("Other").toOption))
   }
+
+  test("add-sheet refuses a name another sheet carries in a different letter case") {
+    // Excel compares sheet names case-insensitively; `data` beside `Data` would be two tabs Excel
+    // repairs on open. Same rule as Workbook.rename / the rename-sheet and add-sheet verbs.
+    val json = """[{"op":"put","ref":"A1","value":1},{"op":"add-sheet","name":"data"}]"""
+    val error = cliError(run(book, Some(data), json)).error
+    assertEquals(error.code, ErrorCode.BATCH_OP_FAILED)
+    assert(error.message.startsWith("Object 2 (add-sheet): "), error.message)
+    assert(error.message.contains("already exists"), error.message)
+    assertEquals(error.location.flatMap(_.opIndex), Some(2))
+  }

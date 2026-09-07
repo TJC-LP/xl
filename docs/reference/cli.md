@@ -490,7 +490,8 @@ Every reason a number can be wrong, bucketed in one pass over the loaded workboo
 bare error cell; `Uncached formulas` — no cached value (`xl recalc` fills them); `Unparseable
 formulas` — this evaluator cannot parse them, with the parser's diagnostic in context; `Cycles` —
 circular references (one line per strongly connected component; a note, not a finding, when the
-workbook's calcPr enables iterative calculation); `Unresolved names` — formulas
+workbook's calcPr enables iterative calculation — `iterativeCycles` in the JSON report, so
+`cycles` holds only findings); `Unresolved names` — formulas
 reading a defined name the graph cannot resolve. **Notes** (reported, never findings): `Volatile`
 (TODAY/NOW/RAND/RANDBETWEEN cells), `Dynamic` (INDIRECT/OFFSET readers), `External references`
 (other-workbook refs, whose caches are pinned), `Calculation` (the file's calcPr, when it has one).

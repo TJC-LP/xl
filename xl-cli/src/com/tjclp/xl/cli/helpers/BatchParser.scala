@@ -1914,11 +1914,13 @@ object BatchParser:
   ): IO[Workbook] =
     for
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
+      // Excel compares sheet names case-insensitively: `data` beside `Data` is a duplicate tab
+      // that Excel repairs on open, so refuse it like Workbook.rename/insertAt do.
       _ <-
-        if wb.sheets.exists(_.name == sheetName) then
+        if wb.sheets.exists(_.name.value.equalsIgnoreCase(sheetName.value)) then
           IO.raiseError(
             new Exception(
-              s"Sheet '$name' already exists. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+              s"Sheet '$name' already exists (sheet names are case-insensitive). Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
             )
           )
         else IO.unit

@@ -295,10 +295,12 @@ The envelope has exactly seven keys, identical for every verb, success or failur
              "location": { "file": "in.xlsx", "sheet": "Sales", "ref": null, "opIndex": null } } }
 ```
 
-`--json` is a global flag and orthogonal to `--format`. **`--format json` keeps printing the bare
+`--json` is a global flag; `--format` chooses the payload. **`--format json` keeps printing the bare
 payload forever** (`{sheet, range, rows}` for `view`; the existing shapes for `filter`, `diff`,
-`lint`) — the xl-agent grader and field scripts piping to `jq` depend on it. `view --json`
-therefore yields `data` equal to what `view --format json` prints bare. Prose verbs yield
+`lint`) — the xl-agent grader and field scripts piping to `jq` depend on it. Under `--json`,
+`view`/`filter`/`diff`/`lint` default to that JSON payload when no `--format` is given, so
+`view --json` yields `data` equal to what `view --format json` prints bare; an explicit text
+`--format` under `--json` rides inside as `data.text`. Prose verbs yield
 `data: {"text": "...", "saved": "out.xlsx", "written": true}` until they are typed (Wave 2's
 `Written` payload with per-edit before/after). Truncation is reported inside the verb payload
 (`view` already emits `truncated`/`totalRows`) and as a `TRUNCATED` warning; the envelope itself

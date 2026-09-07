@@ -187,7 +187,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--format` under `--json` still rides inside as `data.text`.
 - **`audit` treats cycles as notes, not findings, when the workbook declares iterative
   calculation** (they are the model's intended state there), so `--fail-on-findings` passes an
-  intentionally iterative book.
+  intentionally iterative book. The JSON report lists them under `iterativeCycles`; `cycles`
+  keeps only the findings.
+- **Did-you-mean suggestions for inputs of three characters or fewer require a closer match**
+  (`pu` no longer suggests `cf`); a candidate is never further away than the input is long.
 - **`-s` is validated on `describe`, `names` and `sheets`**: a name that is not a sheet is
   `SHEET_NOT_FOUND` (exit 3) instead of being ignored; the output is still the whole book.
 - `deps` takes typed `Direction`/`Depth` arguments internally; the CLI flags are unchanged.
@@ -240,8 +243,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   naming another sheet is refused by index; an op that fails to apply is `BATCH_OP_FAILED` with
   its index; `--dry-run` indexes are 1-based like apply-time errors; a `put` carrying both `value`
   and `values` is refused.
-- **`rename-sheet` and `Workbook.rename` refuse a name that differs from another sheet's only by
-  case** (Excel compares sheet names case-insensitively).
+- **Sheet names are unique case-insensitively, as in Excel**: `Workbook.rename`, `insertAt` and
+  `addSheet` return `DuplicateSheet` when another sheet carries the name in any letter case, and
+  `rename-sheet`, `add-sheet`, `copy-sheet` and the `add-sheet` batch op refuse with
+  `DUPLICATE_SHEET` (exit 3) / `BATCH_OP_FAILED`. Before, `rename-sheet T s` beside `S` wrote two
+  tabs Excel treats as one and rewrote `=T!A1` to `=s!A1`, which Excel resolves against `S`.
 - **`QualifiedGraph` canonicalises sheet qualifiers case-insensitively**, so `data!A1` and
   `Data!A1` are one node for `deps`, `audit` and `cell`.
 - **`RecalcOptions` compares structurally**: two records built with the same settings are `==`.
