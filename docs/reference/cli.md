@@ -1688,8 +1688,8 @@ otherwise:
   `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
   `functions` → `[{name, minArgs, maxArgs, args, returnsDate, returnsTime, dynamicDeps,
   specialForm}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
-  `batch --dry-run` → `{ops: [{index, op, summary}], warnings}` (`index` is the op's 1-based
-  position, the index a `BATCH_OP_FAILED` reports); `batch --schema` → the batch document's JSON
+  `batch --dry-run` → `{ops: [{index, op, summary}]}` (`index` is the op's 1-based position,
+  the index a `BATCH_OP_FAILED` reports; parse warnings ride in the envelope's `warnings[]`); `batch --schema` → the batch document's JSON
   Schema; `schema` → `{version, exitCodes, errorCodes, warningCodes, globals, verbs, batchOps,
   functions, envelope}` (see
   [`xl schema`](#xl-schema---json)); `describe` → `{sheets, definedNames, date1904}` (`--full`

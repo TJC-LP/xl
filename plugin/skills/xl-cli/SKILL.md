@@ -207,9 +207,10 @@ Batch essentials (the complete, generated field list is one command away: `xl ba
 - **Property names** are accepted in camelCase or kebab-case; `format`/`numFormat`,
   `from`/`anchor`, `target`/`url`, `align`/`halign` and `value`/`formula` (on `putf`) are aliases.
   An unknown property is an `UNKNOWN_PROPERTY` warning, not an error.
-- **Validate first**: `xl batch --dry-run ops.json` (no workbook needed). Under `--json` the
-  dry run's parse warnings are data (`data.warnings`), not stderr, and `data.ops[].index` is
-  1-based — the index a `BATCH_OP_FAILED` names at apply time.
+- **Validate first**: `xl batch --dry-run ops.json` (no workbook needed). The dry run's parse
+  warnings are `Warning[CODE]:` lines on stderr, or the envelope's `warnings[]` under `--json`
+  (with `location.opIndex`); `data.ops[].index` is 1-based — the index a `BATCH_OP_FAILED`
+  names at apply time.
 
 ### Formula dragging and anchors
 
