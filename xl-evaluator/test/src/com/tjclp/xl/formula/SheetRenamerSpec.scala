@@ -6,6 +6,7 @@ import java.nio.file.{Files, Path}
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.cf.{CfOperator, CfPoint, CfRule, Cfvo, ConditionalFormat}
+import com.tjclp.xl.charts.{Chart, ChartType, DataRef, Series, SeriesName}
 import com.tjclp.xl.formula.eval.SheetRenamer
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.printer.FormulaShifter
@@ -345,6 +346,104 @@ class SheetRenamerSpec extends ScalaCheckSuite:
     )
   }
 
+  test("Workbook.rename's refusals win over a formula refusal (rename runs first, purely)") {
+    val broken = repro.put(sheetNamed(repro, "Sheet2").put(ref"F1", f("Sheet1!A1+", None)))
+    assertEquals(
+      SheetRenamer.rename(broken, SheetName.unsafe("Nope"), Data),
+      Left(XLError.SheetNotFound("Nope")): XLResult[Workbook]
+    )
+    assertEquals(
+      SheetRenamer.rename(broken, Sheet1, SheetName.unsafe("Sheet2")),
+      Left(XLError.DuplicateSheet("Sheet2")): XLResult[Workbook]
+    )
+    // and the formula refusal still fires when the tab rename itself is fine
+    assert(SheetRenamer.rename(broken, Sheet1, Data).isLeft)
+  }
+
+  // ===== GH-222: the typed-chart remap Workbook.rename performs must survive =====
+
+  private def chartSourcing(sheet: SheetName, name: SeriesName): Chart =
+    Chart(
+      ChartType.Bar(),
+      Vector(
+        Series(
+          values = DataRef(sheet, ref"A1:A3"),
+          categories = Some(DataRef(sheet, ref"B1:B3")),
+          name = Some(name)
+        )
+      )
+    )
+
+  private def chartData: Sheet =
+    Sheet("Sheet1")
+      .put(ref"A1", num(1))
+      .put(ref"A2", num(2))
+      .put(ref"A3", num(3))
+      .put(ref"B1", CellValue.Text("x"))
+      .put(ref"B2", CellValue.Text("y"))
+      .put(ref"B3", CellValue.Text("z"))
+      .put(ref"C1", CellValue.Text("Units"))
+
+  test(
+    "a sheet holding both a formula and a typed chart sourcing the renamed sheet keeps both rewrites"
+  ) {
+    val dashboard = Sheet("Dashboard")
+      .put(ref"A1", f("Sheet1!A1*2", Some(num(2))))
+      .addChart(chartSourcing(Sheet1, SeriesName.FromCell(Sheet1, ref"C1")), ref"D2:K15")
+    val renamed = rename(Workbook(chartData, dashboard), Sheet1, Data)
+    assertEquals(formulaText(renamed, "Dashboard", ref"A1"), "Data!A1*2")
+    val chart = sheetNamed(renamed, "Dashboard").charts.headOption
+      .map(_.chart)
+      .getOrElse(fail("the dashboard lost its chart"))
+    chart.series match
+      case Vector(series) =>
+        assertEquals(series.values, DataRef(Data, ref"A1:A3"))
+        assertEquals(series.categories, Some(DataRef(Data, ref"B1:B3")))
+        assertEquals(series.name, Some(SeriesName.FromCell(Data, ref"C1")): Option[SeriesName])
+      case other => fail(s"expected one series, got $other")
+    // the same shape as Workbook.rename alone produces for the chart
+    val tabOnly =
+      Workbook(chartData, dashboard).rename(Sheet1, Data).fold(e => fail(e.message), identity)
+    assertEquals(
+      sheetNamed(renamed, "Dashboard").charts.map(_.chart),
+      sheetNamed(tabOnly, "Dashboard").charts.map(_.chart)
+    )
+  }
+
+  test("through a file: the chart part names the new sheet and the formula is rewritten") {
+    val dir = Files.createTempDirectory("xl-renamer-chart")
+    val in = dir.resolve("in-chart.xlsx")
+    val out = dir.resolve("out-chart.xlsx")
+    val chart = Chart
+      .bar(
+        Vector(
+          Series(
+            values = DataRef(Sheet1, ref"A1:A3"),
+            categories = Some(DataRef(Sheet1, ref"B1:B3")),
+            name = Some(SeriesName.Literal("Units"))
+          )
+        ),
+        title = Some("Rename")
+      )
+      .fold(e => fail(e.message), identity)
+    val dashboard = Sheet("Dashboard")
+      .put(ref"A1", f("Sheet1!A1*2", Some(num(2))))
+      .addChart(chart, ref"D2:K15")
+    XlsxWriter.write(Workbook(chartData, dashboard), in).fold(e => fail(e.message), identity)
+    val read = XlsxReader.read(in).fold(e => fail(e.message), identity)
+    val renamed = rename(read, Sheet1, Data)
+    XlsxWriter.write(renamed, out).fold(e => fail(e.message), identity)
+    val chartParts = zipEntriesUnder(out, "xl/charts/chart")
+    assert(chartParts.nonEmpty, s"no chart part written to $out")
+    chartParts.foreach { (name, xml) =>
+      assert(xml.contains("Data!$A$1:$A$3"), s"$name: $xml")
+      assert(!xml.contains("Sheet1!"), s"$name still names Sheet1: $xml")
+    }
+    val reread = XlsxReader.read(out).fold(e => fail(e.message), identity)
+    assertEquals(formulaText(reread, "Dashboard", ref"A1"), "Data!A1*2")
+    assertEquals(reread.sheets.map(_.name.value), Vector("Data", "Dashboard"))
+  }
+
   test("renaming a sheet to itself changes nothing but the tracker") {
     val same = rename(repro, Sheet1, Sheet1)
     assertEquals(same.sheets, repro.sheets)
@@ -465,6 +564,21 @@ class SheetRenamerSpec extends ScalaCheckSuite:
       Option(zip.getEntry(entryName)) match
         case Some(entry) => zip.getInputStream(entry).readAllBytes()
         case None => fail(s"missing $entryName in $path")
+    finally zip.close()
+
+  /** Every zip entry whose name starts with `prefix`, as (name, UTF-8 text). */
+  private def zipEntriesUnder(path: Path, prefix: String): Vector[(String, String)] =
+    import scala.jdk.CollectionConverters.*
+    val zip = new java.util.zip.ZipFile(path.toFile)
+    try
+      zip
+        .entries()
+        .asScala
+        .filter(_.getName.startsWith(prefix))
+        .map(e =>
+          e.getName -> new String(zip.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8)
+        )
+        .toVector
     finally zip.close()
 
   test(

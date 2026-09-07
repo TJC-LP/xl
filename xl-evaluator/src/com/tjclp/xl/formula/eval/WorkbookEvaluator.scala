@@ -309,9 +309,10 @@ object WorkbookEvaluator:
      * `options.parallelism` therefore do not apply to this pass; `options.clock` and `options.rng`
      * do.
      *
-     * The result is finalised through the same cache contract as every other recalculation: a cell
-     * that fails withdraws the caches of its transitive dependents (they can no longer be
-     * certified), so byte-identity of cached cells is guaranteed for a clean pass.
+     * Byte-identity of cached cells is unconditional: unlike the full and after-edit passes, a
+     * failing or cyclic uncached cell does NOT withdraw the caches of its cached dependents — those
+     * caches are the doctrine's truth, and this pass only ever ADDS caches. Failures are reported
+     * in `errors`, nothing else moves.
      */
     def recalculateUncached(options: RecalcOptions): RecalcResult =
       recalculateUncachedImpl(wb, options)
@@ -369,7 +370,7 @@ object WorkbookEvaluator:
                 XLError.FormulaError(formulaText(q), s"Unresolvable order: $circular")
               )
             }
-          RecalcResult.cacheResults(wb, Map.empty, skippedErrors ++ residual, dependents)
+          RecalcResult.cacheResults(wb, Map.empty, skippedErrors ++ residual, Map.empty)
         case Right(order) =>
           // GH-274: dynamic readers and their static dependents evaluate last, as in the full pass,
           // but no cache is stripped — a cached cell stays byte-identical by contract.
@@ -417,7 +418,10 @@ object WorkbookEvaluator:
                     case Left(error) =>
                       (sheets, evaluated, failures :+ CellEvalError(q.sheet, q.ref, error))
           }
-          RecalcResult.cacheResults(wb, values, errors, dependents)
+          // No dependents edges on purpose: cacheResults would otherwise withdraw the caches of
+          // cached cells downstream of a failure, and this pass promises cached cells stay
+          // byte-identical unconditionally (GH-468).
+          RecalcResult.cacheResults(wb, values, errors, Map.empty)
 
   /** A formula cell with no cache that evaluation can compute (data-table records cannot). */
   private def isUncachedEvaluable(value: CellValue): Boolean = value match

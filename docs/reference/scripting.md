@@ -397,9 +397,11 @@ Cached values and formula record kinds are preserved (a rename changes no value)
 that spells the name, an external-workbook reference (`[2]Sheet1!A1`) and a sibling whose name
 merely contains it (`Sheet10`) are untouched; a dependent text that mentions the sheet but cannot
 be parsed refuses the whole rename (`Left(FormulaError)`) with the workbook untouched. Every changed
-sheet goes back through `Workbook.put`, so a workbook read from disk writes the rewritten sheets and
-copies the untouched ones byte-for-byte. `Preserved` CF/DV/chart payloads and hyperlink locations
-are not rewritten (see LIMITATIONS.md). The same engine is exposed string-in/string-out as
+sheet goes back through `Workbook.put`, so a workbook read from disk marks exactly the rewritten
+sheets modified; because a rename also changes `workbook.xml`, the writer regenerates every
+worksheet part deterministically, and sheets that never mentioned the old name come out
+byte-identical. `Preserved` CF/DV/chart payloads, hyperlink locations, `_xlfn.`-prefixed functions
+and 3-D ranges are not rewritten (see LIMITATIONS.md; the last two refuse the rename). The same engine is exposed string-in/string-out as
 `FormulaOps.renameSheet(text, from, to)`, `FormulaOps.shift(text, dc, dr)` and
 `FormulaOps.mentionsSheet(text, sheet)`, and the structural editor (`StructuralEditor.insertRowsChecked`
 and friends) is reachable from the prelude too.

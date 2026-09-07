@@ -47,20 +47,26 @@ object SheetRenamer:
     if from == to then wb.rename(from, to)
     else
       for
-        rewrittenSheets <- wb.sheets.traverse(sheet => rewriteSheet(sheet, from, to))
-        rewrittenNames <- wb.metadata.definedNames.traverse(name => rewriteName(name, from, to))
+        // `Workbook.rename` FIRST: it is pure, so a later `Left` simply discards `renamed` and the
+        // caller still holds `wb` untouched, and its SheetNotFound/DuplicateSheet refusals take
+        // precedence over a formula refusal. The rewrite then runs over the RENAMED sheets, so the
+        // GH-222 typed-chart remap `Workbook.rename` performed on every sheet is carried forward
+        // (rewriting the pre-rename sheets and putting them back would overwrite it).
         renamed <- wb.rename(from, to)
+        rewrittenSheets <- renamed.sheets
+          .zip(wb.sheets)
+          .traverse((sheet, original) => rewriteSheet(sheet, original.name, from, to))
+        rewrittenNames <- renamed.metadata.definedNames.traverse(name =>
+          rewriteName(name, from, to)
+        )
       yield
-        // Invariant 1: `put` marks each changed sheet modified. Positions survive a rename, so the
-        // rewritten sheet takes the name the tab now carries (only `from`'s own name changed).
-        val withSheets = rewrittenSheets.zipWithIndex.foldLeft(renamed) {
-          case (acc, (Some(rewritten), index)) =>
-            acc.sheets
-              .lift(index)
-              .fold(acc)(current => acc.put(rewritten.copy(name = current.name)))
-          case (acc, (None, _)) => acc
+        // Invariant 1: every changed sheet goes back through `put`, which marks it modified. The
+        // sheet already carries the name its tab now has, so `put` replaces it in place.
+        val withSheets = rewrittenSheets.foldLeft(renamed) {
+          case (acc, Some(rewritten)) => acc.put(rewritten)
+          case (acc, None) => acc
         }
-        if rewrittenNames == wb.metadata.definedNames then withSheets
+        if rewrittenNames == renamed.metadata.definedNames then withSheets
         else
           withSheets.copy(
             metadata = withSheets.metadata.copy(definedNames = rewrittenNames),
@@ -87,9 +93,17 @@ object SheetRenamer:
     case CellValue.Formula(text, _, _) => FormulaOps.mentionsSheet(text, sheet)
     case _ => false
 
-  /** `Some(rewritten)` when anything on the sheet changed, `None` when it rides untouched. */
-  private def rewriteSheet(sheet: Sheet, from: SheetName, to: SheetName): XLResult[Option[Sheet]] =
-    val label = SheetName.quoteForFormula(sheet.name.value)
+  /**
+   * `Some(rewritten)` when anything on the sheet changed, `None` when it rides untouched. `label`
+   * is the sheet's PRE-rename name: refusals must name the sheet as the caller's file knows it.
+   */
+  private def rewriteSheet(
+    sheet: Sheet,
+    labelName: SheetName,
+    from: SheetName,
+    to: SheetName
+  ): XLResult[Option[Sheet]] =
+    val label = SheetName.quoteForFormula(labelName.value)
     def rewriteText(where: String)(text: String): XLResult[String] =
       FormulaOps.renameSheet(text, from, to).left.map(located(s"$label!$where", _))
     for

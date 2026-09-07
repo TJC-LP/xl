@@ -47,8 +47,10 @@ object FormulaOps:
    * True when `text` carries a sheet qualifier naming `sheet` — bare (`Sheet1!`), quoted (`'Q1
    * Data'!`, apostrophes doubled), case-insensitive, outside string literals. A qualifier preceded
    * by an identifier character, `]` or `'` is not a match: `MySheet1!A1` is another sheet and
-   * `[2]Sheet1!A1` another workbook. This is the text gate the structural refusal
-   * (`StructuralEditor`) and the renamer share; the AST decides the rest.
+   * `[2]Sheet1!A1` another workbook. Either end of a 3-D range counts too — `Sheet1:Sheet3!A1`,
+   * `'Q1 Data':'Q3 Data'!A1`, `'Sheet1:Sheet 3'!A1` — so a rename of either end reaches the parser
+   * (which has no 3-D support) and refuses instead of leaving one end stale. This is the text gate
+   * the structural refusal (`StructuralEditor`) and the renamer share; the AST decides the rest.
    */
   def mentionsSheet(text: String, sheet: SheetName): Boolean =
     val qualifier = qualifierPattern(sheet)
@@ -74,5 +76,20 @@ object FormulaOps:
 
   private def qualifierPattern(sheet: SheetName): Pattern =
     val bare = Pattern.quote(sheet.value)
-    val quoted = Pattern.quote("'" + sheet.value.replace("'", "''") + "'")
-    Pattern.compile(s"(?iu)(?<![\\p{L}\\p{N}_.\\\\'\\]])(?:$bare|$quoted)\\s*!")
+    val inner = Pattern.quote(sheet.value.replace("'", "''"))
+    val quoted = s"'$inner'"
+    // The other end of a 3-D range: a bare identifier-shaped name or a quoted one.
+    val otherBare = "[\\p{L}\\p{N}_.]+"
+    val otherQuoted = "'(?:[^']|'')*'"
+    val notPreceded = "(?<![\\p{L}\\p{N}_.\\\\'\\]])"
+    Pattern.compile(
+      s"(?iu)$notPreceded(?:" +
+        // Sheet1!A1, 'Q1 Data'!A1 — and the unquoted END of a 3-D range (Sheet1:Sheet3!A1)
+        s"(?:$bare|$quoted)\\s*!" +
+        // the START of a 3-D range, each end bare or quoted: Sheet1:Sheet3!A1, 'Q1 Data':'Q3 Data'!A1
+        s"|(?:$bare|$quoted)\\s*:\\s*(?:$otherBare|$otherQuoted)\\s*!" +
+        // a 3-D range quoted as a whole, this sheet at the start or the end: 'Sheet1:Sheet 3'!A1
+        s"|'$inner:(?:[^']|'')*'\\s*!" +
+        s"|'(?:[^']|'')*:$inner'\\s*!" +
+        ")"
+    )

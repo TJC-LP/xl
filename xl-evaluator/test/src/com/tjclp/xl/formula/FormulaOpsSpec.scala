@@ -128,3 +128,33 @@ class FormulaOpsSpec extends FunSuite:
         assert(reason.contains("Sheet1"), reason)
       case other => fail(s"expected FormulaError, got $other")
   }
+
+  // ===== 3-D ranges: both ends are mentions, so both ends refuse (the parser has no 3-D form) =====
+
+  private val Sheet3 = SheetName.unsafe("Sheet3")
+
+  test("mentionsSheet sees both ends of a 3-D range, bare or quoted") {
+    assert(FormulaOps.mentionsSheet("SUM(Sheet1:Sheet3!A1)", Sheet1))
+    assert(FormulaOps.mentionsSheet("SUM(Sheet1:Sheet3!A1)", Sheet3))
+    assert(FormulaOps.mentionsSheet("SUM(Sheet1 : Sheet3 !A1)", Sheet1))
+    assert(!FormulaOps.mentionsSheet("SUM(Sheet1:Sheet3!A1)", SheetName.unsafe("Sheet2")))
+    assert(!FormulaOps.mentionsSheet("SUM(Sheet10:Sheet13!A1)", Sheet1))
+    assert(!FormulaOps.mentionsSheet("SUM(Sheet10:Sheet13!A1)", Sheet3))
+    assert(FormulaOps.mentionsSheet("SUM('Q1 Data':'Q3 Data'!A1)", Q1Data))
+    assert(FormulaOps.mentionsSheet("SUM('Q1 Data':'Q3 Data'!A1)", SheetName.unsafe("Q3 Data")))
+    assert(FormulaOps.mentionsSheet("SUM('Sheet1:Sheet 3'!A1)", Sheet1))
+    assert(FormulaOps.mentionsSheet("SUM('Sheet1:Sheet 3'!A1)", SheetName.unsafe("Sheet 3")))
+    assert(FormulaOps.mentionsSheet("SUM('Sheet 1:Sheet3'!A1)", SheetName.unsafe("Sheet 1")))
+    assert(FormulaOps.mentionsSheet("SUM('Sheet 1:Sheet3'!A1)", Sheet3))
+    // a range between a defined NAME and a cell is not a 3-D range
+    assert(!FormulaOps.mentionsSheet("SUM(Sheet1:A5)", Sheet1))
+    assert(!FormulaOps.mentionsSheet("\"Sheet1:Sheet3!A1\"", Sheet1))
+  }
+
+  test("renameSheet refuses a 3-D range for EITHER end rather than leaving one end stale") {
+    for sheet <- Vector(Sheet1, Sheet3) do
+      FormulaOps.renameSheet("SUM(Sheet1:Sheet3!A1)", sheet, Data) match
+        case Left(XLError.FormulaError(formula, _)) =>
+          assertEquals(formula, "SUM(Sheet1:Sheet3!A1)")
+        case other => fail(s"renaming ${sheet.value}: expected FormulaError, got $other")
+  }

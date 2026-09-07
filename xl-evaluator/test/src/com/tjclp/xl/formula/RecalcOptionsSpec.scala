@@ -273,3 +273,33 @@ class RecalcOptionsSpec extends FunSuite:
       case CellValue.Formula(_, cached, _: FormulaKind.DataTable) => assertEquals(cached, None)
       case other => fail(s"expected an unseeded record, got $other")
   }
+
+  test("recalculateUncached never withdraws a cache downstream of a FAILING uncached cell") {
+    val wb = Workbook(
+      Sheet("S")
+        .put(ref"A1", formula("NOSUCHFN(1)"))
+        .put(ref"B1", formula("A1*2", Some(num(4))))
+        .put(ref"C1", formula("B1+1", Some(num(5))))
+    )
+    val result = wb.recalculateUncached(RecalcOptions())
+    assert(result.errors.exists(_.ref == ref"A1"), result.errors.map(_.render))
+    assertEquals(result.errors.map(_.ref), Vector(ref"A1")) // no "blocked by upstream" cascade
+    assertEquals(cellValue(result.workbook, "S", ref"B1"), formula("A1*2", Some(num(4))))
+    assertEquals(cellValue(result.workbook, "S", ref"C1"), formula("B1+1", Some(num(5))))
+    assertEquals(result.workbook, wb)
+  }
+
+  test("recalculateUncached never withdraws a cache downstream of an uncached CYCLE") {
+    val wb = Workbook(
+      Sheet("S")
+        .put(ref"A1", formula("B1*0.1"))
+        .put(ref"B1", formula("100+A1/2"))
+        .put(ref"C1", formula("B1+1", Some(num(7))))
+        .put(ref"D1", formula("C1*2", Some(num(14))))
+    )
+    val result = wb.recalculateUncached(RecalcOptions())
+    assertEquals(result.errors.map(_.ref).toSet, Set(ref"A1", ref"B1"))
+    assertEquals(cellValue(result.workbook, "S", ref"C1"), formula("B1+1", Some(num(7))))
+    assertEquals(cellValue(result.workbook, "S", ref"D1"), formula("C1*2", Some(num(14))))
+    assertEquals(result.workbook, wb)
+  }
