@@ -6,6 +6,25 @@ on:
     branches: [main]
 
 jobs:
+  # The plugin manifest must carry the same version as the build's PUBLISH_VERSION fallback:
+  # /release-prep bumps both, and a drift here ships a skill that claims the wrong xl.
+  plugin-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: plugin.json version equals build.mill
+        run: |
+          build_version=$(sed -n 's/.*getOrElse("PUBLISH_VERSION", *"\([^"]*\)").*/\1/p' build.mill)
+          plugin_version=$(jq -r .version plugin/.claude-plugin/plugin.json)
+          echo "build.mill: $build_version  plugin.json: $plugin_version"
+          test -n "$build_version" || { echo "no PUBLISH_VERSION fallback found in build.mill"; exit 1; }
+          test "$build_version" = "$plugin_version" || {
+            echo "plugin/.claude-plugin/plugin.json version ($plugin_version) differs from build.mill ($build_version)"
+            exit 1
+          }
+
   build:
     runs-on: ubuntu-latest
 
