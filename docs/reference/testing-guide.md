@@ -230,14 +230,14 @@ As of the agent-first wave 1 (2026-09-07), from the full-suite JUnit reports; ma
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 2278 |
-| xl-core | 1371 |
-| xl-ooxml | 1088 |
+| xl-evaluator | 2317 |
+| xl-core | 1396 |
+| xl-ooxml | 1097 |
 | xl-cli | 1145 |
-| xl-cats-effect | 153 |
+| xl-cats-effect | 160 |
 | xl-agent | 122 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 34 |
-| **Total** | **6,191** |
+| **Total** | **6,271** |
 
 ## Test Quality Metrics
 
