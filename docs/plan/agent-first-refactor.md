@@ -511,9 +511,11 @@ exported from the formula surface." Apply the `cli.md`/xl-cli `SKILL.md` deltas 
    `tab-color`, `page-setup`, `header-footer`, `cf`, `chart`, `autofilter`, `group-rows`,
    `group-cols`, `ungroup-rows`, `ungroup-cols`. `cellMutating` mirrors `WriteCommands.isCellMutating`
    (make it `private[cli]` — one-line visibility change — so `OpRegistrySpec` can assert parity);
-   `streamable` mirrors `buildStreamingBatchPatches` (`put`, `putf` single/explicit `values`,
-   `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `col-hide/show`, `row-hide/show`; **not**
-   `putf` with `from` — the "NO dragging" divergence — and not the 21 ops at `:806-816`);
+   `streamable` mirrors `buildStreamingBatchPatches` (`put`, `putf` single, explicit `values` and
+   dragging `from` — the streaming writer already shifts, `StreamingWriteSpec` pins it; the
+   "NO dragging" divergence is the streaming `putf` *verb*, not the batch op — `style`, `merge`,
+   `unmerge`, `colwidth`, `rowheight`, `col-hide/show`, `row-hide/show`; not the 21 ops at
+   `:806-816`);
    `sheetScoped = true` for every op except `add-sheet`/`rename-sheet`; `example` a valid object.
 2. `BatchParser.parseBatchJson`: replace the 20 hand-listed `known*Props` sets with
    `OpRegistry.find(op).fields` (+ aliases, camel and kebab spellings) — the 32 arms stay; the
@@ -555,7 +557,7 @@ exported from the formula surface." Apply the `cli.md`/xl-cli `SKILL.md` deltas 
 
 **Tests first**: `OpRegistrySpec` — "every `BatchOp` case corresponds to a registered op name
 (32)"; "`cellMutating` agrees with `WriteCommands.isCellMutating` for every op"; "`streamable`
-agrees with the streaming supported set (PutFormulaDragging is not streamable)"; "every example
+agrees with the streaming supported set (dragging `putf` shifts identically under `--stream`)"; "every example
 validates against `jsonSchema` and round-trips through `parseBatchJson`"; "names + aliases
 unique". `BatchSheetScopeSpec` — each op with `"sheet":"Other"` lands on `Other`; a qualified ref
 beats `sheet`; a disagreeing pair is `BATCH_OP_INVALID` naming the index; a missing sheet is
