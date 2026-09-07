@@ -46,9 +46,19 @@ Update all version references from current SNAPSHOT/version to the new release v
    - After bumping, run `./scripts/verify-skill-snippets.sh --local` — this also catches "new
      version breaks documented patterns" before tagging.
 
+9. **`plugin/skills/xl-cli/SKILL.md`** (the `**Requires xl >= …**` line and the marker under it)
+   - Bump `Requires xl >= <version>` to the release version.
+   - If the skill documents a contract that had not shipped yet, it carries the literal marker
+     `<!-- unreleased-contract -->` followed by a blockquote pointing at the from-source install
+     (`make install-jar`) and listing what the last release lacks. Remove the marker **and** that
+     blockquote when the release that carries the contract ships; a marker left behind, or a
+     `Requires` version that differs from `plugin.json` without the marker, fails CI's
+     `plugin-version` gate.
+   - The install snippets themselves auto-detect the latest release from the GitHub API and need
+     no edit.
+
 ### Files to SKIP
 
-- **`plugin/skills/xl-cli/SKILL.md`** - Auto-detects latest release from GitHub API (no version to update)
 - **`docs/RELEASING.md`** - Contains example version strings for documentation
 - **`CHANGELOG.md`** - Historical version headings; managed separately during release notes
 

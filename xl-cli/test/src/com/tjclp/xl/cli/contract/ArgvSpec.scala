@@ -94,6 +94,19 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
     }
   }
 
+  test("`--` shields a positional that spells a global: `search -- --json` keeps its pattern") {
+    // Without the escape the flag is hoisted and `search` is left with no pattern (a usage error);
+    // after `--` the same token is data, so `search` looks for the text `--json`.
+    assertEquals(
+      Argv.hoist(List("-f", "a.xlsx", "search", "--json")),
+      List("-f", "a.xlsx", "--json", "search")
+    )
+    assertEquals(
+      Argv.hoist(List("-f", "a.xlsx", "search", "--", "--json")),
+      List("-f", "a.xlsx", "search", "--", "--json")
+    )
+  }
+
   // ---------------------------------------------------------------------------------------------
   // hoist: the verb-owned exceptions and the --flag=value form
   // ---------------------------------------------------------------------------------------------
@@ -327,6 +340,20 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
       assert(version.stdout.trim.nonEmpty)
       assertEquals(verbHelpAfterGlobals.exit, 0)
       assert(verbHelpAfterGlobals.stderr.contains("View range"), verbHelpAfterGlobals.stderr)
+  }
+
+  test("`search -- --json` searches for the text `--json`; `search --json` is a usage error") {
+    for
+      escaped <- CliHarness.run("-f", file("simple.xlsx"), "search", "--", "--json")
+      hoisted <- CliHarness.run("-f", file("simple.xlsx"), "search", "--json")
+    yield
+      assertEquals(escaped.exit, 0, escaped.stderr)
+      assert(escaped.stdout.startsWith("Found 0 matches"), escaped.stdout)
+      // the hoisted --json puts the run in JSON mode: the usage error is an envelope on stdout
+      assertEquals(hoisted.exit, 2, hoisted.stdout)
+      val envelope = ujson.read(hoisted.stdout)
+      assertEquals(envelope("ok"), ujson.False)
+      assertEquals(envelope("error")("code"), ujson.Str("USAGE"))
   }
 
   test("decline's own `--` handling: `put A1 -- -5` stores -5") {

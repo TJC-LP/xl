@@ -7,7 +7,11 @@ on:
 
 jobs:
   # The plugin manifest must carry the same version as the build's PUBLISH_VERSION fallback:
-  # /release-prep bumps both, and a drift here ships a skill that claims the wrong xl.
+  # /release-prep bumps both, and a drift here ships a skill that claims the wrong xl. The xl-cli
+  # skill's `Requires xl >= X` must name that same version too, unless the skill carries the
+  # `<!-- unreleased-contract -->` marker: that marker says the skill documents a contract the
+  # latest release does not have yet and points agents at the from-source install, and
+  # /release-prep removes it when the release ships (a marker left behind fails the gate).
   plugin-version:
     runs-on: ubuntu-latest
 
@@ -24,6 +28,26 @@ jobs:
             echo "plugin/.claude-plugin/plugin.json version ($plugin_version) differs from build.mill ($build_version)"
             exit 1
           }
+
+      - name: xl-cli skill's Requires version equals plugin.json, or the skill is marked unreleased
+        run: |
+          skill=plugin/skills/xl-cli/SKILL.md
+          plugin_version=$(jq -r .version plugin/.claude-plugin/plugin.json)
+          skill_version=$(grep -oE 'Requires xl >= [0-9]+\.[0-9]+\.[0-9]+' "$skill" | head -1 | sed 's/Requires xl >= //')
+          echo "plugin.json: $plugin_version  $skill: Requires xl >= ${skill_version:-<none>}"
+          test -n "$skill_version" || { echo "no 'Requires xl >= X.Y.Z' line found in $skill"; exit 1; }
+          if grep -qF '<!-- unreleased-contract -->' "$skill"; then
+            test "$skill_version" != "$plugin_version" || {
+              echo "$skill still carries the unreleased-contract marker but Requires the released $plugin_version: remove the marker and its note"
+              exit 1
+            }
+            echo "$skill documents the unreleased $skill_version contract (marker present)"
+          else
+            test "$skill_version" = "$plugin_version" || {
+              echo "$skill requires xl >= $skill_version but plugin.json is $plugin_version: bump one, or add the <!-- unreleased-contract --> marker with the from-source install note"
+              exit 1
+            }
+          fi
 
   build:
     runs-on: ubuntu-latest

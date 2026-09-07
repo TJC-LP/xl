@@ -3,8 +3,10 @@
 #
 # Wired as a SessionStart hook in .claude/settings.json. It is a no-op unless CLAUDE_CODE_REMOTE=true
 # (Claude Code on the web, routines, `claude --cloud`, claude-code-action) or --force is passed, so
-# local sessions are untouched. Safe to re-run: every step is idempotent and takes seconds once the
-# environment cache already holds the toolchain.
+# local sessions are untouched. Safe to re-run: every step is idempotent — the toolchain is reused
+# from the environment cache, PATH is built without repeating a prefix it already has, and a line
+# is appended to $CLAUDE_ENV_FILE only when the file does not already carry it — so a second
+# SessionStart takes seconds and adds nothing.
 #
 # Why it exists: the Anthropic-hosted sandbox is Ubuntu 24.04 with OpenJDK 21 and no scala-cli.
 # The build compiles with `--release 25` and pins Temurin 25 in .mill-jvm-version. Mill downloads
@@ -26,7 +28,7 @@
 #   2. Provision the JDK named in .mill-jvm-version through coursier (shared cache with Mill).
 #   3. Install scala-cli (native launcher, or a JVM bootstrap behind a proxy).
 #   4. Append MILL_VERSION/JAVA_HOME/PATH to $CLAUDE_ENV_FILE, which Claude Code sources before
-#      every Bash call.
+#      every Bash call (each line once; a re-run appends nothing already there).
 #   5. Print a one-paragraph status; SessionStart stdout lands in Claude's context.
 #
 # Usage: bash scripts/remote-setup.sh [--force]
@@ -145,14 +147,20 @@ if [[ -n "$CS" || -n "$CS_JAR" ]]; then
 fi
 
 # ---------- 4. Export to the session ----------
-PATH_NEW="$BIN:$PATH"
-[[ -n "$JAVA_HOME_NEW" ]] && PATH_NEW="$JAVA_HOME_NEW/bin:$PATH_NEW"
+# The hook runs on every SessionStart, so $CLAUDE_ENV_FILE may already hold these lines and PATH
+# may already start with these directories: prepend only what is missing, append only new lines.
+prepend_path() { # prepend_path DIR PATH → DIR:PATH, or PATH unchanged when DIR is already on it
+  case ":$2:" in *":$1:"*) printf '%s' "$2" ;; *) printf '%s:%s' "$1" "$2" ;; esac
+}
+PATH_NEW="$(prepend_path "$BIN" "$PATH")"
+[[ -n "$JAVA_HOME_NEW" ]] && PATH_NEW="$(prepend_path "$JAVA_HOME_NEW/bin" "$PATH_NEW")"
 if [[ -n "${CLAUDE_ENV_FILE:-}" ]]; then
-  {
-    [[ -n "$MILL_VERSION_EXPORT" ]] && printf 'export MILL_VERSION=%q\n' "$MILL_VERSION_EXPORT"
-    [[ -n "$JAVA_HOME_NEW" ]] && printf 'export JAVA_HOME=%q\n' "$JAVA_HOME_NEW"
-    printf 'export PATH=%q\n' "$PATH_NEW"
-  } >> "$CLAUDE_ENV_FILE"
+  append_once() { # append_once LINE: add LINE to $CLAUDE_ENV_FILE unless the file already has it
+    [[ -f "$CLAUDE_ENV_FILE" ]] && grep -qxF -- "$1" "$CLAUDE_ENV_FILE" || printf '%s\n' "$1" >> "$CLAUDE_ENV_FILE"
+  }
+  [[ -n "$MILL_VERSION_EXPORT" ]] && append_once "$(printf 'export MILL_VERSION=%q' "$MILL_VERSION_EXPORT")"
+  [[ -n "$JAVA_HOME_NEW" ]] && append_once "$(printf 'export JAVA_HOME=%q' "$JAVA_HOME_NEW")"
+  append_once "$(printf 'export PATH=%q' "$PATH_NEW")"
   note "${MILL_VERSION_EXPORT:+MILL_VERSION/}JAVA_HOME/PATH exported for this session"
 else
   note "CLAUDE_ENV_FILE unset, so nothing was exported (prefix PATH with $BIN and the JDK bin yourself${MILL_VERSION_EXPORT:+, and export MILL_VERSION=$MILL_VERSION_EXPORT} if needed)"

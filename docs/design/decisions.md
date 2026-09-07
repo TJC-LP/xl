@@ -239,6 +239,10 @@
   make every later change an agent-visible, reviewed diff, while the algebra needs the contract in
   place to land without a fourth vocabulary. Full record, alternatives, and invariants:
   `docs/design/agent-first-architecture.md`.
-- **Consequences**: exit codes 2/3 and the stdout→stderr move are the only breaking changes (called
-  out in CHANGELOG); handler signatures stay frozen so the ~754 xl-cli specs keep passing; every
+- **Consequences**: the breaking changes, each led with **Breaking:** in CHANGELOG, are the exit
+  table (usage 1→2, failures 1/2→3), errors and warnings moving from stdout to stderr, streaming
+  reads on a multi-sheet book without a sheet exiting 3 `SHEET_REQUIRED` instead of reading the
+  first sheet, typed reads (`readTyped`/`readTypedOpt`/`readTypedOr`) returning a formula cell's
+  cached value (`readTypedStrict` keeps the old rule), and the new `XLError` cases (exhaustive
+  matches warn); handler signatures stay frozen so the ~754 xl-cli specs keep passing; every
   prelude-visible addition gets a probe; `--stream` never degrades an op silently.

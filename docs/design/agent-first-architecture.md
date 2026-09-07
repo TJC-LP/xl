@@ -161,7 +161,10 @@ object Main extends IOApp:                       // was CommandIOApp; its run is
 
 object Cli:
   def program(io: CliIO): Opts[IO[ExitCode]]
-  /** hoist globals → parse → --help (stdout, 0) | usage error (stderr, 2) | run. */
+  /**
+   * hoist globals → parse → --help (stderr, 0 — decline's CommandIOApp channel, preserved; the
+   * help goldens pin it) | usage error (stderr, 2) | run.
+   */
   def run(args: List[String], io: CliIO): IO[ExitCode]
 
 object Argv:
@@ -714,15 +717,18 @@ batch keys to exit 2 or `"bold": false` to un-bold in 0.20 (A) — warnings in `
   `--json`, new verbs (`describe`, `audit`, `deps`, `schema`), new flags (`batch --schema`,
   `audit --fail-on-findings`), new fields, and newly accepted inputs (globals after the verb,
   single-sheet auto-select, `sheet` on every batch op, qualified refs under `--stream`).
-- One breaking CLI change in 0.20.0, isolated in one cluster and CHANGELOG'd: exit codes 2/3 and
-  errors on stderr. Streaming reads on multi-sheet books without a sheet now exit 3
-  `SHEET_REQUIRED` instead of silently using the first sheet ("Changed", GH-reference).
-- Published library API (0.19.3 on Maven Central): additive only — new `XLError` cases and
-  extensions, `derives CanEqual`, twins, navigation, `RecalcOptions` and three extension methods,
+- The breaking changes in 0.20.0, each led with **Breaking:** in CHANGELOG: the exit table (usage
+  1→2, failures 1/2→3); errors and warnings on stderr instead of stdout; streaming reads on a
+  multi-sheet book without a sheet exit 3 `SHEET_REQUIRED` instead of silently using the first
+  sheet; typed reads (`readTyped`/`readTypedOpt`/`readTypedOr`) return a formula cell's cached
+  value (GH-477; `readTypedStrict` keeps the 0.19 rule); and `XLError` gains cases, so exhaustive
+  downstream matches warn. `--help` stays on stderr with exit 0 (decline's channel; the help
+  goldens pin it).
+- Published library API (0.19.3 on Maven Central): otherwise additive — `XLError` extensions,
+  `derives CanEqual`, twins, navigation, `RecalcOptions` and three extension methods,
   `FormulaOps`/`SheetRenamer`/`QualifiedGraph`/`WorkbookAudit`/`WorkbookSummary` exported from
-  `formulaExports`. Downstream exhaustive matches on `XLError` gain warnings (documented). Nothing
-  is removed; the `@targetName` lattices and `Workbook.rename` keep their meaning; deprecations
-  (0.21) are announced, not shipped, in this wave.
+  `formulaExports`. Nothing is removed; the `@targetName` lattices and `Workbook.rename` keep their
+  meaning; deprecations (0.21) are announced, not shipped, in this wave.
 - The 754 xl-cli handler tests keep passing because handler signatures are frozen:
   `WriteCommands.put(wb, sheetOpt, refStr, values, outputPath, config, stream, csvSplit, detect,
   policy)` and the rest of `WriteCommands`/`SheetCommands`/`CellCommands`/`CommentCommands`/
