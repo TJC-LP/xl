@@ -64,8 +64,8 @@ Ensure `~/.local/bin` is in your PATH: `export PATH="$HOME/.local/bin:$PATH"`
 ## Quick Reference
 
 ### Machine-Readable Results
-**Always pass `--json` when a program reads the result.** It is a global flag (before the verb) and
-wraps every result — success or failure — in one envelope on stdout:
+**Always pass `--json` when a program reads the result.** It is a global flag (accepted anywhere on
+the command line) and wraps every result — success or failure — in one envelope on stdout:
 `{ok, exitCode, verb, version, data, warnings, error}`. `ok` is `true` exactly when `error` is
 `null`; `exitCode` is the process exit code (0 ok, 1 findings or a failed gate, 2 usage, 3 failed);
 on a failure `data` is `null` and stderr carries one `Error: <message>` line.
@@ -248,16 +248,24 @@ xl -f model.xlsx --json deps Summary!B4 --depth all   # where does B4 come from,
 
 ### Sheet Selection
 
-Commands default to first sheet. For multi-sheet files, always specify:
+ONE rule, for every verb, batch op and `--stream` path: a sheet-qualified ref names the sheet;
+otherwise `-s`/`--sheet` (for a batch op, its `sheet` key comes first); otherwise the only sheet of
+a single-sheet book (a `SHEET_AUTOSELECTED` warning under `--json`); otherwise `SHEET_REQUIRED`,
+exit 3, with the sheet names as candidates. Single-sheet books therefore need no `-s` at all; on a
+multi-sheet file always specify:
 
 ```bash
 # Method 1: --sheet flag
 xl -f data.xlsx --sheet "P&L" view A1:D10
 
-# Method 2: Qualified A1 syntax (no -s needed)
+# Method 2: Qualified A1 syntax (no -s needed; wins over -s when both are given)
 xl -f data.xlsx view "P&L!A1:D10"
 xl -f data.xlsx eval "=SUM(Revenue!A1:A10)"
+xl -f data.xlsx -o out.xlsx --stream put "P&L!B2" 100   # qualified refs work under --stream too
 ```
+
+`search` (without `-s`), `sheets`, `names`, `diff`, `lint`, `describe` and `audit` read the whole
+book instead of selecting one sheet.
 
 **Workflow**: Start with `xl -f file.xlsx sheets` to discover sheet names.
 
@@ -325,9 +333,14 @@ xl -f f.xlsx -s Summary -o o.xlsx putf B4 "='Income Statement'!G8"
 xl -f f.xlsx -s Summary -o o.xlsx putf A1 "=SUM('Q1 Sales'!A1:A100)"
 ```
 
-For complex cases, batch JSON avoids shell quoting entirely:
+For complex cases, batch JSON avoids shell quoting: feed the document through a quoted heredoc
+(the JSON's own single quotes then need no escaping), and name the target sheet with the op's
+`sheet` key instead of `-s` when its name has spaces:
 ```bash
-echo '[{"op":"putf","ref":"B4","value":"='"'"'Income Statement'"'"'!G8"}]' | xl -f f.xlsx -s Summary -o o.xlsx batch -
+xl -f f.xlsx -o o.xlsx batch - <<'EOF'
+[{"op":"putf","sheet":"Summary","ref":"B4","value":"='Income Statement'!G8"},
+ {"op":"put","sheet":"Income Statement","ref":"G8","value":1250}]
+EOF
 ```
 
 Alternatively, rename sheets to avoid spaces when CLI manipulation is planned.
@@ -681,8 +694,12 @@ Hard-won rules from fleet use on real deal workbooks. Items marked **fixed in 0.
 | `--strict` | | Exit 1 when the write's recalculation reports errors/non-convergence/seed warnings |
 | `--dry-run` | | Validate batch JSON and show summary without writing (batch only) |
 
-**Global flags go BEFORE the verb.** `xl -f x.xlsx --strict recalc` works;
-`xl -f x.xlsx recalc --strict` fails with `Unexpected argument: recalc`.
+**Global flags go anywhere on the command line.** `xl -f x.xlsx --strict recalc` and
+`xl -f x.xlsx recalc --strict` are the same command; so are `xl -f f -s Data view A1:B2` and
+`xl view A1:B2 -f f -s Data`. The one exception is `view --strict`: after `view` it is view's own
+`--eval` gate, not the write gate. An unknown verb exits 2 with `code: UNKNOWN_VERB` and a
+`did you mean:` line; any other wrong command line exits 2 with a one-line usage, the parser's
+error and `run \`xl <verb> --help\``.
 
 #### Cache safety on writes
 

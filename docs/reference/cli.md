@@ -35,9 +35,9 @@ export PATH="$HOME/.local/bin:$PATH"
 ## Quick Reference
 
 ```bash
-# Global flags (used with all commands)
+# Global flags (accepted anywhere on the command line, before or after the verb)
 -f, --file <path>     # Input file (required for most commands)
--s, --sheet <name>    # Sheet to operate on (required for unqualified ranges)
+-s, --sheet <name>    # Sheet to operate on (a qualified ref wins; a single-sheet book needs neither)
 -o, --output <path>   # Output file for mutations
 -i, --in-place        # Edit file in place (same as -o matching -f)
 --stream              # O(1) memory streaming for large files (search/stats/bounds/view + writes)
@@ -55,7 +55,7 @@ xl -f model.xlsx sheets                    # List all sheets
 xl -f model.xlsx names                     # List defined names (named ranges)
 xl -f model.xlsx -s "P&L" bounds           # Show used range
 xl -f model.xlsx -s "P&L" view A1:D20      # View range as markdown
-xl -f model.xlsx cell B5                   # Get single cell details (sheet auto-detected if unambiguous)
+xl -f model.xlsx cell B5                   # Get single cell details (single-sheet books auto-select for every verb)
 xl -f model.xlsx search "Revenue"          # Find cells by content (all sheets)
 xl -f model.xlsx -s "P&L" stats B1:B100    # Numeric statistics for a range
 xl -f model.xlsx -s "P&L" eval "=SUM(B1:B10)"   # Evaluate formula (what-if)
@@ -74,8 +74,19 @@ xl functions                                       # List all 108 supported func
 xl rasterizers                                     # List available PNG/PDF backends
 ```
 
-> Global flags must come **before** the verb: `xl -f x.xlsx --strict recalc`, never
-> `xl -f x.xlsx recalc --strict` (decline reports `Unexpected argument: recalc`).
+> **Global flags go anywhere.** `xl -f x.xlsx --strict recalc` and `xl -f x.xlsx recalc --strict`
+> are the same command line; so are `xl -f f -s Data view A1:B2` and `xl view A1:B2 -f f -s Data`.
+> The one exception is `view --strict`: after `view` it is view's own `--eval` gate, not the write
+> gate. An unknown verb exits 2 with `code: UNKNOWN_VERB` and a `did you mean:` line; any other
+> wrong command line exits 2 with a one-line usage, the parser's error and `run \`xl <verb> --help\``.
+
+> **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
+> (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`/`--sheet` (for a batch op, its `sheet` key
+> comes first); otherwise the only sheet of a single-sheet book (under `--json` a
+> `SHEET_AUTOSELECTED` warning says so); otherwise `SHEET_REQUIRED`, exit 3, with the sheet names as
+> candidates. `search` (without `-s`), `sheets`, `names`, `diff`, `lint`, `describe` and `audit` read
+> the whole book instead. Streaming reads on a multi-sheet book without a sheet are `SHEET_REQUIRED`
+> too (they no longer default to the first sheet), and qualified refs work under `--stream` writes.
 
 ### Cache posture on writes (`--no-recalc` / `--preserve-caches`)
 
@@ -1605,8 +1616,8 @@ The same table is printed by `xl --help`. (Earlier releases exited `1` for usage
 
 ### Output contract (`--json`)
 
-**Pass the global `--json` whenever a program reads the result.** It goes before the verb like every
-global flag, and every verb — success or failure — then prints exactly one JSON envelope on stdout,
+**Pass the global `--json` whenever a program reads the result.** It goes anywhere on the command
+line like every global flag, and every verb — success or failure — then prints exactly one JSON envelope on stdout,
 with the same seven keys every time:
 
 ```json

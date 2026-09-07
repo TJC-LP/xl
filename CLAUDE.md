@@ -181,30 +181,29 @@ Results are written to `results/` directory:
 The `xl` CLI is stateless by design. Key patterns:
 
 ```bash
-# Global flags (used with all commands)
+# Global flags (accepted anywhere on the command line, before or after the verb)
 -f, --file <path>     # Input file (required)
 -s, --sheet <name>    # Sheet to operate on
 -o, --output <path>   # Output file for mutations
 --max-size <MB>       # Override 100MB security limit (0 = unlimited)
 --stream              # O(1) memory streaming mode for large files
 
-# Sheet selection is REQUIRED for unqualified ranges
+# ONE sheet rule, for every verb, batch op and --stream path:
+#   a qualified ref names the sheet > -s > the only sheet of a single-sheet book > SHEET_REQUIRED (exit 3)
 xl -f data.xlsx --sheet "Q1 Report" view A1:D20    # Using --sheet flag
-xl -f data.xlsx view "Q1 Report"!A1:D20            # Using qualified ref
+xl -f data.xlsx view "Q1 Report"!A1:D20            # Using qualified ref (wins over -s)
+xl -f single.xlsx view A1:D20                      # Single-sheet books auto-select for every verb
 
 # Commands that work without sheet (operate on all sheets)
 xl -f data.xlsx sheets                              # List all sheets
 xl -f data.xlsx search "Revenue"                    # Search all sheets
 
-# Single cell ops auto-detect sheet if unambiguous
-xl -f data.xlsx cell A1                             # Works if only one sheet
-
 # Mutations require -o
-xl -f in.xlsx -o out.xlsx put B5 1000              # Write value
-xl -f in.xlsx -o out.xlsx putf C5 "=B5*1.1"        # Write formula
+xl -f in.xlsx -s Data -o out.xlsx put B5 1000      # Write value
+xl -f in.xlsx -s Data -o out.xlsx putf C5 "=B5*1.1" # Write formula
 
-# Formula dragging with $ anchoring
-xl -f in.xlsx -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
+# Formula dragging with $ anchoring: one formula over a range drags from the range's first cell
+xl -f in.xlsx -s Data -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)"
 
 # Sheet names with spaces: use double quotes around the formula argument
 xl -f in.xlsx -s Summary -o out.xlsx putf B4 "='Income Statement'!G8"
@@ -291,12 +290,12 @@ echo '[{"op":"rename-sheet","from":"Old","to":"New"}]' | xl ...
 
 **All 32 batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`, `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `cf`, `chart`, `autofilter`, `group-rows`, `group-cols`, `ungroup-rows`, `ungroup-cols`
 
-**Common mistake**: Using unqualified range without `--sheet`:
+**Common mistake**: Using an unqualified range on a multi-sheet book without `--sheet`:
 ```bash
-# ❌ Wrong - will error
+# ❌ Wrong on a multi-sheet book - SHEET_REQUIRED (exit 3) naming the candidates
 xl -f data.xlsx view A1:B4
 
-# ✅ Correct options
+# ✅ Correct options (a single-sheet book needs neither: its only sheet is selected)
 xl -f data.xlsx --sheet "Sheet1" view A1:B4
 xl -f data.xlsx view "Sheet1"!A1:B4
 ```
