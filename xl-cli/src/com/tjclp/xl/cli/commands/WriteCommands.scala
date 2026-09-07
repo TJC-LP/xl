@@ -948,7 +948,7 @@ object WriteCommands:
    * silent `false` default would skip the recalculation for a new cell-mutating op and reintroduce
    * GH-352.
    */
-  private def isCellMutating(op: BatchParser.BatchOp): Boolean =
+  private[cli] def isCellMutating(op: BatchParser.BatchOp): Boolean =
     op match
       case _: BatchParser.BatchOp.Put | _: BatchParser.BatchOp.PutFormula |
           _: BatchParser.BatchOp.PutFormulaDragging | _: BatchParser.BatchOp.PutFormulas |
@@ -1283,9 +1283,9 @@ object WriteCommands:
         // Print warnings to stderr within IO monad
         IO(result.warnings.foreach(System.err.println)) *>
           BatchParser
-            .applyBatchOperations(wb, sheetOpt, result.ops, !policy.noRecalc)
+            .applyScoped(wb, sheetOpt, result.scoped, !policy.noRecalc)
             .flatMap { updatedWb =>
-              val mutating = result.ops.exists(isCellMutating)
+              val mutating = result.scoped.map(_.op).exists(isCellMutating)
               val recalcOpt =
                 if mutating && !policy.noRecalc then Some(scopedRecalc(wb, updatedWb)) else None
               val finalWb = recalcOpt.fold(updatedWb)(_._1)

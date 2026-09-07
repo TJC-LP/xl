@@ -251,12 +251,14 @@ class ErrorContractSpec extends CatsEffectSuite:
       }
   }
 
-  test("standalone batch --dry-run: invalid JSON and a missing source are diagnostics, exit 3") {
+  test(
+    "standalone batch --dry-run: a non-array document is usage (exit 2), a missing source exit 3"
+  ) {
     for
       notArray <- CliHarness.run(List("batch", "--dry-run", "-"), """{"op":"put","ref":"A1"}""")
       missing <- CliHarness.run("batch", "--dry-run", file("no-such-ops.json"))
     yield
-      assertFailure(notArray, 3, "Batch input must be a JSON array", "INTERNAL")
+      assertFailure(notArray, 2, "Batch input must be a JSON array", "BATCH_JSON_INVALID")
       assertEquals(missing.exit, 3, missing.stderr)
       assertEquals(missing.stdout, "")
       assert(missing.stderr.startsWith("Error: "), missing.stderr)

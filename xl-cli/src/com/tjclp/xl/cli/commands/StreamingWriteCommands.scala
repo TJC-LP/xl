@@ -20,7 +20,8 @@ import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.text.Suggest
 import com.tjclp.xl.cli.CliIO
-import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode}
+import com.tjclp.xl.cli.batch.{OpRegistry, ScopedOp}
+import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location}
 import com.tjclp.xl.cli.helpers.{BatchParser, StreamingCsvParser, StyleBuilder, ValueParser}
 import org.xml.sax.{Attributes, SAXException}
 import org.xml.sax.helpers.DefaultHandler
@@ -445,14 +446,22 @@ object StreamingWriteCommands:
     stdin: IO[String] = CliIO.system.stdin
   ): IO[String] =
     for
-      // Resolve worksheet path first
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
-
-      // Read and parse batch input
+      // Parse first: the refusals below come before the worksheet is even resolved
       input <- BatchParser.readBatchInput(batchSource, stdin)
       parseResult <- BatchParser.parseBatchOperations(input)
       _ <- IO(parseResult.warnings.foreach(System.err.println))
-      ops = parseResult.ops
+      scoped = parseResult.scoped
+
+      // ADR-017 invariant 2: refuse by index what this writer cannot apply, before any byte is
+      // read beyond workbook.xml or written
+      _ <- refuseNonStreamable(scoped)
+
+      // Resolve the worksheet (workbook.xml only), then refuse ops aimed at any other sheet
+      (sheetName, worksheetPath) <- resolveSheetTarget(sourcePath, sheetNameOpt)
+      _ <- refuseOtherSheets(scoped, sheetName)
+
+      // A ref qualified with the streamed sheet is honoured as its bare form
+      ops = scoped.map(s => OpRegistry.unqualified(s.op))
 
       // Separate operations into cell patches vs worksheet metadata
       (cellPatches, stylesXml, worksheetMetadata, summary) <-
@@ -468,6 +477,72 @@ object StreamingWriteCommands:
         stylesXml
       )
     yield s"Applied ${ops.size} operations (streaming):\n$summary\nCells modified: ${result.cellCount}\nSaved (streaming): $outputPath"
+
+  /**
+   * Whether [[buildStreamingBatchPatches]] has an arm for the op. Deliberately exhaustive with no
+   * wildcard, like `WriteCommands.isCellMutating`: a new `BatchOp` must be classified here and in
+   * `OpRegistry` — `OpRegistrySpec` asserts the two agree — or the match fails loudly. Dragging
+   * `putf` IS streamable: the arm shifts exactly like the in-memory path (StreamingWriteSpec).
+   */
+  private[cli] def isStreamable(op: BatchParser.BatchOp): Boolean =
+    op match
+      case _: BatchParser.BatchOp.Put | _: BatchParser.BatchOp.PutFormula |
+          _: BatchParser.BatchOp.PutFormulaDragging | _: BatchParser.BatchOp.PutFormulas |
+          _: BatchParser.BatchOp.PutValues | _: BatchParser.BatchOp.Style |
+          _: BatchParser.BatchOp.Merge | _: BatchParser.BatchOp.Unmerge |
+          _: BatchParser.BatchOp.ColWidth | _: BatchParser.BatchOp.RowHeight |
+          _: BatchParser.BatchOp.ColHide | _: BatchParser.BatchOp.ColShow |
+          _: BatchParser.BatchOp.RowHide | _: BatchParser.BatchOp.RowShow =>
+        true
+      case _: BatchParser.BatchOp.AddComment | _: BatchParser.BatchOp.RemoveComment |
+          _: BatchParser.BatchOp.Clear | _: BatchParser.BatchOp.AutoFit |
+          _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
+          _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
+          _: BatchParser.BatchOp.CopyRange | _: BatchParser.BatchOp.Hyperlink |
+          _: BatchParser.BatchOp.AddChart | _: BatchParser.BatchOp.SetSheetView |
+          _: BatchParser.BatchOp.SetTabColor | _: BatchParser.BatchOp.SetAutoFilter |
+          _: BatchParser.BatchOp.GroupRows | _: BatchParser.BatchOp.GroupCols |
+          _: BatchParser.BatchOp.UngroupRows | _: BatchParser.BatchOp.UngroupCols |
+          _: BatchParser.BatchOp.SetPageSetup | _: BatchParser.BatchOp.SetHeaderFooter |
+          _: BatchParser.BatchOp.AddConditionalFormat =>
+        false
+
+  /** `UNSUPPORTED_IN_STREAM` (exit 2) listing the offending ops as `[index op, …]`. */
+  private def refuse(rejects: Vector[ScopedOp], reason: String): IO[Unit] =
+    rejects.headOption match
+      case None => IO.unit
+      case Some(first) =>
+        val listed = rejects.map(s => s"${s.index} ${OpRegistry.nameOf(s.op)}").mkString(", ")
+        IO.raiseError(
+          CliException(
+            CliError(
+              ErrorCode.UNSUPPORTED_IN_STREAM,
+              s"ops [$listed] $reason; drop --stream to apply them in memory",
+              hint = Some("drop --stream to apply them in memory"),
+              location = Some(Location.none.copy(opIndex = Some(first.index)))
+            )
+          )
+        )
+
+  /** Ops this writer has no arm for. */
+  private def refuseNonStreamable(scoped: Vector[ScopedOp]): IO[Unit] =
+    refuse(scoped.filterNot(s => isStreamable(s.op)), "are not supported in streaming mode")
+
+  /** Ops whose `sheet` key or qualified target ref names a sheet other than the streamed one. */
+  private def refuseOtherSheets(scoped: Vector[ScopedOp], streamed: String): IO[Unit] =
+    def namedSheets(s: ScopedOp): Vector[String] =
+      val declared = s.sheet.toList.map(_.value)
+      val qualified = OpRegistry
+        .targetRefs(s.op)
+        .flatMap(r => OpRegistry.qualifiedSheet(r).toList.map(_.value))
+      (declared ++ qualified).toVector
+    val rejects = scoped.filter(s => namedSheets(s).exists(_ != streamed))
+    val others = rejects.flatMap(namedSheets).filter(_ != streamed).distinct
+    refuse(
+      rejects,
+      s"target ${others.mkString(", ")} rather than the streamed worksheet '$streamed', " +
+        "which is not supported in streaming mode"
+    )
 
   /**
    * Build streaming batch patches from batch operations.
@@ -807,27 +882,11 @@ object StreamingWriteCommands:
           rowProps(row) = existing.copy(hidden = false)
           summaryLines += s"  ROW-SHOW $rowNum"
 
-        // Ops that require full workbook context (not supported in streaming mode).
-        // Unfreeze is a parameterless (singleton) enum case, so it is matched by
-        // value reference rather than the `_:` typed pattern used for the others.
-        case _: BatchParser.BatchOp.AddComment | _: BatchParser.BatchOp.RemoveComment |
-            _: BatchParser.BatchOp.Clear | _: BatchParser.BatchOp.AutoFit |
-            _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
-            _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
-            _: BatchParser.BatchOp.CopyRange | _: BatchParser.BatchOp.Hyperlink |
-            _: BatchParser.BatchOp.AddChart | _: BatchParser.BatchOp.SetSheetView |
-            _: BatchParser.BatchOp.SetTabColor | _: BatchParser.BatchOp.SetAutoFilter |
-            _: BatchParser.BatchOp.GroupRows | _: BatchParser.BatchOp.GroupCols |
-            _: BatchParser.BatchOp.UngroupRows | _: BatchParser.BatchOp.UngroupCols |
-            _: BatchParser.BatchOp.SetPageSetup | _: BatchParser.BatchOp.SetHeaderFooter |
-            _: BatchParser.BatchOp.AddConditionalFormat =>
-          throw CliException(
-            CliError(
-              ErrorCode.UNSUPPORTED_IN_STREAM,
-              "This batch operation is not supported in streaming mode. " +
-                "Remove --stream to use full workbook mode.",
-              hint = Some("omit --stream to apply this operation in memory")
-            )
+        // Every op `isStreamable` rejects was refused by `batch` before any byte was written
+        // (UNSUPPORTED_IN_STREAM, by index); meeting one here is a caller's defect, not a user error.
+        case other =>
+          throw new IllegalStateException(
+            s"streaming writer received the non-streamable op '${OpRegistry.nameOf(other)}'"
           )
       }
 
@@ -1115,6 +1174,13 @@ object StreamingWriteCommands:
     sourcePath: Path,
     sheetNameOpt: Option[String]
   ): IO[String] =
+    resolveSheetTarget(sourcePath, sheetNameOpt).map(_._2)
+
+  /** The streamed worksheet as `(sheet name, worksheet part path)`; see [[resolveSheetPath]]. */
+  private def resolveSheetTarget(
+    sourcePath: Path,
+    sheetNameOpt: Option[String]
+  ): IO[(String, String)] =
     IO.delay {
       val zipFile = new ZipFile(sourcePath.toFile)
       try
@@ -1191,6 +1257,6 @@ object StreamingWriteCommands:
             if zipFile.getEntry(normalizedPath) == null then
               throw new Exception(s"Worksheet not found: $normalizedPath")
 
-            normalizedPath
+            ((targetSheet \ "@name").text, normalizedPath)
       finally zipFile.close()
     }

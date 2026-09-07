@@ -5,8 +5,8 @@ batch
 ## stdin
 {"op":"put","ref":"A1","value":"x"}
 ## exit
-3
+2
 ## stdout
 ## stderr
 Error: Batch input must be a JSON array
-  code: INTERNAL
+  code: BATCH_JSON_INVALID

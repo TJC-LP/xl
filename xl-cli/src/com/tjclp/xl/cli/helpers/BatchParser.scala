@@ -5,6 +5,8 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.CliIO
+import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, OpSpec, ScopedOp}
+import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location}
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
 import com.tjclp.xl.formula.{
   FormulaParser,
@@ -15,6 +17,7 @@ import com.tjclp.xl.formula.{
 }
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.text.Suggest
 
 /**
  * Batch operation parsing and execution for CLI.
@@ -159,8 +162,15 @@ object BatchParser:
    *   Parsed batch operations
    * @param warnings
    *   Non-fatal warnings (e.g., unknown properties ignored)
+   * @param scoped
+   *   The same ops with their `sheet` key, 1-based index and format hint (ADR-017 §2.6);
+   *   `ops == scoped.map(_.op)` always
    */
-  final case class ParseResult(ops: Vector[BatchOp], warnings: Vector[String])
+  final case class ParseResult(
+    ops: Vector[BatchOp],
+    warnings: Vector[String],
+    scoped: Vector[ScopedOp] = Vector.empty
+  )
 
   /** Render an optional format suffix like " (Currency)" / " (#,##0.0)". */
   private def formatSuffix(fmt: Option[NumFmt]): String =
@@ -278,7 +288,7 @@ object BatchParser:
   def parseBatchOperations(input: String): IO[ParseResult] =
     IO.fromEither {
       val trimmed = input.trim
-      if !trimmed.startsWith("[") then Left(new Exception("Batch input must be a JSON array"))
+      if !trimmed.startsWith("[") then Left(notAnArray)
       else parseBatchJson(trimmed)
     }
 
@@ -323,32 +333,38 @@ object BatchParser:
   def parseBatchJson(json: String): Either[Exception, ParseResult] =
     try
       val parsed = ujson.read(json)
-      val arr = parsed.arrOpt.getOrElse(
-        throw new Exception("Batch input must be a JSON array")
-      )
+      val arr = parsed.arrOpt.getOrElse(throw notAnArray)
 
       // Collect warnings during parsing
       val warnings = scala.collection.mutable.ListBuffer[String]()
 
-      val ops = arr.value.toVector.zipWithIndex.map { case (obj, idx) =>
-        val objMap = obj.objOpt.getOrElse(
-          throw new Exception(
-            s"Object ${idx + 1}: Expected JSON object, got ${obj.getClass.getSimpleName}"
-          )
+      val scoped = arr.value.toVector.zipWithIndex.map { case (obj, idx) =>
+        val rawMap = obj.objOpt.getOrElse(
+          throw invalid(idx, s"Expected JSON object, got ${obj.getClass.getSimpleName}")
         )
 
-        val op = objMap
+        val opName = rawMap
           .get("op")
           .flatMap(_.strOpt)
-          .getOrElse(
-            throw new Exception(
-              s"Object ${idx + 1}: Missing or invalid 'op' field"
-            )
-          )
+          .getOrElse(throw invalid(idx, "Missing or invalid 'op' field"))
 
-        op match
+        val spec = OpRegistry.find(opName).getOrElse(throw unknownOp(idx, opName))
+
+        // Aliases and kebab/camel spellings resolve to their canonical key; unknown keys survive
+        // for the warning, which the registry's field table drives instead of per-arm key sets.
+        val objMap = canonicalize(rawMap, spec)
+        collectUnknownPropsWarning(objMap, spec, idx).foreach(warnings += _)
+
+        val sheet = parseSheetKey(objMap, spec, idx)
+
+        // GH-560: an op-level `format` that parses is an Explicit hint; anything else is Inferred
+        val hint =
+          if objMap.get("format").flatMap(_.strOpt).flatMap(parseFormatName).isDefined then
+            FormatHint.Explicit
+          else FormatHint.Inferred
+
+        val op = spec.name match
           case "put" =>
-            collectUnknownPropsWarning(objMap, knownPutProps, "put", idx).foreach(warnings += _)
             collectFormatHintWarning(objMap, "put", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
             // detect defaults to true; set to false to disable smart detection
@@ -368,7 +384,6 @@ object BatchParser:
                 BatchOp.Put(ref, parsed.cellValue, parsed.format)
 
           case "putf" =>
-            collectUnknownPropsWarning(objMap, knownPutfProps, "putf", idx).foreach(warnings += _)
             collectFormatHintWarning(objMap, "putf", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
             // Optional number format applied to the formula cell(s) — parity with put (GH-356)
@@ -376,7 +391,7 @@ object BatchParser:
             // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
             def rejectDataTable(formula: String): String =
               ValueParser.dataTableFormulaError(formula) match
-                case Some(msg) => throw new Exception(s"Object ${idx + 1}: $msg")
+                case Some(msg) => throw invalid(idx, msg)
                 case None => formula
             // Check for explicit formulas array first
             objMap.get("values") match
@@ -384,9 +399,7 @@ object BatchParser:
                 val formulas = arr.arr.toVector.zipWithIndex.map { case (v, i) =>
                   rejectDataTable(
                     v.strOpt.getOrElse(
-                      throw new Exception(
-                        s"Object ${idx + 1}: 'values[$i]' must be a string formula"
-                      )
+                      throw invalid(idx, s"'values[$i]' must be a string formula")
                     )
                   )
                 }
@@ -399,7 +412,6 @@ object BatchParser:
                   case None => BatchOp.PutFormula(ref, formula, format)
 
           case "style" =>
-            collectUnknownPropsWarning(objMap, knownStyleProps, "style", idx).foreach(warnings += _)
             collectStyleNumFmtWarning(objMap, idx).foreach(warnings += _)
             val range = requireString(objMap, "range", idx)
             val props = parseStyleProps(objMap)
@@ -424,8 +436,6 @@ object BatchParser:
             BatchOp.RowHeight(row, height)
 
           case "comment" =>
-            collectUnknownPropsWarning(objMap, knownCommentProps, "comment", idx)
-              .foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
             val text = requireString(objMap, "text", idx)
             val author = objMap.get("author").flatMap(_.strOpt)
@@ -436,15 +446,11 @@ object BatchParser:
             BatchOp.RemoveComment(ref)
 
           case "hyperlink" =>
-            collectUnknownPropsWarning(objMap, knownHyperlinkProps, "hyperlink", idx)
-              .foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
             val target = objMap.get("target").flatMap(_.strOpt)
             BatchOp.Hyperlink(ref, target)
 
           case "clear" =>
-            collectUnknownPropsWarning(objMap, knownClearProps, "clear", idx)
-              .foreach(warnings += _)
             val range = requireString(objMap, "range", idx)
             val all = objMap.get("all").flatMap(_.boolOpt).getOrElse(false)
             val stylesFlag = objMap.get("styles").flatMap(_.boolOpt).getOrElse(false)
@@ -468,8 +474,6 @@ object BatchParser:
             BatchOp.RowShow(row)
 
           case "group-rows" =>
-            collectUnknownPropsWarning(objMap, knownGroupRowsProps, "group-rows", idx)
-              .foreach(warnings += _)
             BatchOp.GroupRows(
               rows = requireString(objMap, "rows", idx),
               level = objMap.get("level").flatMap(_.numOpt).map(_.toInt).getOrElse(1),
@@ -477,8 +481,6 @@ object BatchParser:
             )
 
           case "group-cols" =>
-            collectUnknownPropsWarning(objMap, knownGroupColsProps, "group-cols", idx)
-              .foreach(warnings += _)
             BatchOp.GroupCols(
               cols = requireString(objMap, "cols", idx),
               level = objMap.get("level").flatMap(_.numOpt).map(_.toInt).getOrElse(1),
@@ -486,31 +488,21 @@ object BatchParser:
             )
 
           case "ungroup-rows" =>
-            collectUnknownPropsWarning(objMap, knownUngroupRowsProps, "ungroup-rows", idx)
-              .foreach(warnings += _)
             BatchOp.UngroupRows(requireString(objMap, "rows", idx))
 
           case "ungroup-cols" =>
-            collectUnknownPropsWarning(objMap, knownUngroupColsProps, "ungroup-cols", idx)
-              .foreach(warnings += _)
             BatchOp.UngroupCols(requireString(objMap, "cols", idx))
 
           case "autofit" =>
-            collectUnknownPropsWarning(objMap, knownAutoFitProps, "autofit", idx)
-              .foreach(warnings += _)
             val columns = objMap.get("columns").flatMap(_.strOpt)
             BatchOp.AutoFit(columns)
 
           case "add-sheet" =>
-            collectUnknownPropsWarning(objMap, knownAddSheetProps, "add-sheet", idx)
-              .foreach(warnings += _)
             val name = requireString(objMap, "name", idx)
             val after = objMap.get("after").flatMap(_.strOpt)
             BatchOp.AddSheet(name, after)
 
           case "rename-sheet" =>
-            collectUnknownPropsWarning(objMap, knownRenameSheetProps, "rename-sheet", idx)
-              .foreach(warnings += _)
             val from = requireString(objMap, "from", idx)
             val to = requireString(objMap, "to", idx)
             BatchOp.RenameSheet(from, to)
@@ -529,8 +521,6 @@ object BatchParser:
             BatchOp.CopyRange(source, target, valuesOnly)
 
           case "chart" =>
-            collectUnknownPropsWarning(objMap, knownChartProps, "chart", idx)
-              .foreach(warnings += _)
             BatchOp.AddChart(
               chartType = requireString(objMap, "type", idx),
               grouping = objMap.get("grouping").flatMap(_.strOpt),
@@ -544,8 +534,6 @@ object BatchParser:
             )
 
           case "sheet-view" =>
-            collectUnknownPropsWarning(objMap, knownSheetViewProps, "sheet-view", idx)
-              .foreach(warnings += _)
             BatchOp.SetSheetView(
               gridlines = objMap.get("gridlines").flatMap(_.boolOpt),
               zoom = objMap.get("zoom").flatMap(_.numOpt).map(_.toInt),
@@ -553,24 +541,18 @@ object BatchParser:
             )
 
           case "tab-color" =>
-            collectUnknownPropsWarning(objMap, knownTabColorProps, "tab-color", idx)
-              .foreach(warnings += _)
             BatchOp.SetTabColor(
               color = objMap.get("color").flatMap(_.strOpt),
               clear = objMap.get("clear").flatMap(_.boolOpt).getOrElse(false)
             )
 
           case "autofilter" =>
-            collectUnknownPropsWarning(objMap, knownAutoFilterOpProps, "autofilter", idx)
-              .foreach(warnings += _)
             BatchOp.SetAutoFilter(
               range = objMap.get("range").flatMap(_.strOpt),
               clear = objMap.get("clear").flatMap(_.boolOpt).getOrElse(false)
             )
 
           case "page-setup" =>
-            collectUnknownPropsWarning(objMap, knownPageSetupProps, "page-setup", idx)
-              .foreach(warnings += _)
             BatchOp.SetPageSetup(
               orientation = objMap.get("orientation").flatMap(_.strOpt),
               scale = objMap.get("scale").flatMap(_.numOpt).map(_.toInt),
@@ -580,8 +562,6 @@ object BatchParser:
             )
 
           case "header-footer" =>
-            collectUnknownPropsWarning(objMap, knownHeaderFooterProps, "header-footer", idx)
-              .foreach(warnings += _)
             BatchOp.SetHeaderFooter(
               oddHeader = objMap.get("oddHeader").flatMap(_.strOpt),
               oddFooter = objMap.get("oddFooter").flatMap(_.strOpt),
@@ -594,7 +574,6 @@ object BatchParser:
             )
 
           case "cf" =>
-            collectUnknownPropsWarning(objMap, knownCfProps, "cf", idx).foreach(warnings += _)
             BatchOp.AddConditionalFormat(
               range = requireString(objMap, "range", idx),
               rule = requireString(objMap, "rule", idx),
@@ -606,124 +585,114 @@ object BatchParser:
               fg = objMap.get("fg").flatMap(_.strOpt)
             )
 
-          case other =>
-            throw new Exception(
-              s"Object ${idx + 1}: Unknown operation '$other'. " +
-                "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
-                "comment, remove-comment, hyperlink, clear, col-hide, col-show, " +
-                "row-hide, row-show, group-rows, group-cols, ungroup-rows, ungroup-cols, " +
-                "autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, " +
-                "chart, sheet-view, tab-color, autofilter, page-setup, header-footer, cf"
-            )
+          // `spec.name` is always a registered name; this arm only keeps the String match total.
+          case other => throw unknownOp(idx, other)
+
+        checkSheetAgreement(op, sheet, idx, spec.name)
+        ScopedOp(op, sheet, idx + 1, hint)
       }
 
-      Right(ParseResult(ops, warnings.toVector))
+      Right(ParseResult(scoped.map(_.op), warnings.toVector, scoped))
     catch
       case e: ujson.ParseException =>
-        Left(new Exception(s"JSON parse error: ${e.getMessage}"))
+        Left(jsonInvalid(s"JSON parse error: ${e.getMessage}"))
+      case e: ujson.IncompleteParseException =>
+        Left(jsonInvalid(s"JSON parse error: ${e.getMessage}"))
+      case e: upickle.core.TraceVisitor.TraceException =>
+        // ujson traces the failing path (`$[0]`) and carries the real parse error as the cause
+        val cause = Option(e.getCause).flatMap(c => Option(c.getMessage)).getOrElse("")
+        Left(jsonInvalid(s"JSON parse error at ${e.getMessage}: $cause".stripSuffix(": ")))
       case e: Exception =>
         Left(e)
 
   /** Type alias for uPickle's LinkedHashMap. */
   private type ObjMap = upickle.core.LinkedHashMap[String, ujson.Value]
 
-  // ========== Known Properties for Validation ==========
+  // ========== Registry-backed key resolution and typed errors (ADR-017 §2.3, §2.6) ==========
 
-  /** Known properties for 'put' operation */
-  private val knownPutProps = Set("op", "ref", "value", "values", "format", "detect")
+  private def at(idx: Int): Option[Location] = Some(Location.none.copy(opIndex = Some(idx + 1)))
 
-  /** Known properties for 'putf' operation */
-  private val knownPutfProps = Set("op", "ref", "value", "formula", "values", "from", "format")
+  /** A document that is not a JSON array, or not JSON at all (`BATCH_JSON_INVALID`, exit 2). */
+  private def jsonInvalid(message: String): CliException =
+    CliException(CliError(ErrorCode.BATCH_JSON_INVALID, message))
 
-  /** Known properties for 'style' operation */
-  private val knownStyleProps = Set(
-    "op",
-    "range",
-    "bold",
-    "italic",
-    "underline",
-    "bg",
-    "fg",
-    "fontSize",
-    "fontName",
-    "align",
-    "valign",
-    "wrap",
-    "numFormat",
-    "border",
-    "borderTop",
-    "borderRight",
-    "borderBottom",
-    "borderLeft",
-    "borderColor",
-    "replace"
-  )
+  private def notAnArray: CliException = jsonInvalid("Batch input must be a JSON array")
 
-  /** Known properties for 'comment' operation */
-  private val knownCommentProps = Set("op", "ref", "text", "author")
-  private val knownHyperlinkProps = Set("op", "ref", "target")
+  /** A malformed op object (`BATCH_OP_INVALID`, exit 2) with the historical `Object N: …` text. */
+  private def invalid(idx: Int, message: String): CliException =
+    CliException(
+      CliError(ErrorCode.BATCH_OP_INVALID, s"Object ${idx + 1}: $message", location = at(idx))
+    )
 
-  /** Known properties for 'chart' operation (GH-407) */
-  private val knownChartProps = Set(
-    "op",
-    "type",
-    "grouping",
-    "data",
-    "categories",
-    "seriesNames",
-    "seriesColors",
-    "title",
-    "legend",
-    "at"
-  )
+  /** The same, naming the op: `Object N (op): …`. */
+  private def invalidOp(idx: Int, opName: String, message: String): CliException =
+    CliException(
+      CliError(
+        ErrorCode.BATCH_OP_INVALID,
+        s"Object ${idx + 1} ($opName): $message",
+        location = at(idx)
+      )
+    )
 
-  /** Known properties for 'clear' operation */
-  private val knownClearProps = Set("op", "range", "all", "styles", "comments")
+  /**
+   * `BATCH_OP_UNKNOWN` (exit 2): the historical text — the valid names in their historical order —
+   * with `Did you mean: …` appended when a registered name is within edit distance.
+   */
+  private def unknownOp(idx: Int, name: String): CliException =
+    val valid = OpRegistry.all.map(_.name)
+    val candidates = Suggest.closest(name, valid)
+    val base = s"Object ${idx + 1}: Unknown operation '$name'. Valid: ${valid.mkString(", ")}"
+    val message =
+      if candidates.isEmpty then base else s"$base. Did you mean: ${candidates.mkString(", ")}?"
+    CliException(
+      CliError(ErrorCode.BATCH_OP_UNKNOWN, message, candidates = candidates, location = at(idx))
+    )
 
-  /** Known properties for 'autofit' operation */
-  private val knownAutoFitProps = Set("op", "columns")
+  /**
+   * Rewrite alias and kebab/camel keys to the spec's canonical names. The canonical key wins when
+   * it and an alias are both present; among aliases the first wins; unknown keys survive so the
+   * warning can name them.
+   */
+  private def canonicalize(objMap: ObjMap, spec: OpSpec): ObjMap =
+    val entries = objMap.toVector
+    val canonicalPresent = entries.map(_._1).filter(k => spec.canonicalName(k).contains(k)).toSet
+    def shadowedAlias(key: String): Boolean =
+      spec.canonicalName(key).exists(c => c != key && canonicalPresent.contains(c))
+    val rewritten = entries.collect {
+      case (key, value) if !shadowedAlias(key) => spec.canonicalName(key).getOrElse(key) -> value
+    }
+    ujson.Obj.from(rewritten.distinctBy(_._1)).value
 
-  /** Known properties for 'add-sheet' operation */
-  private val knownAddSheetProps = Set("op", "name", "after")
+  /** The op's `sheet` key as a validated name; None when absent or the op is not sheet-scoped. */
+  private def parseSheetKey(objMap: ObjMap, spec: OpSpec, idx: Int): Option[SheetName] =
+    objMap.get("sheet").filter(_ => spec.sheetScoped).map { value =>
+      val name = value.strOpt.getOrElse(throw invalid(idx, "'sheet' must be a string"))
+      SheetName(name) match
+        case Right(sheetName) => sheetName
+        case Left(reason) => throw invalid(idx, s"invalid 'sheet' '$name': $reason")
+    }
 
-  /** Known properties for 'rename-sheet' operation */
-  private val knownRenameSheetProps = Set("op", "from", "to")
-
-  /** Known properties for 'sheet-view' operation (GH-358) */
-  private val knownSheetViewProps = Set("op", "gridlines", "zoom", "tabSelected")
-
-  /** Known properties for 'tab-color' operation (GH-358) */
-  private val knownTabColorProps = Set("op", "color", "clear")
-
-  /** Known properties for 'autofilter' operation (GH-432) */
-  private val knownAutoFilterOpProps = Set("op", "range", "clear")
-
-  /** Known properties for the grouping operations (GH-421) */
-  private val knownGroupRowsProps = Set("op", "rows", "level", "collapsed")
-  private val knownGroupColsProps = Set("op", "cols", "level", "collapsed")
-  private val knownUngroupRowsProps = Set("op", "rows")
-  private val knownUngroupColsProps = Set("op", "cols")
-
-  /** Known properties for 'page-setup' operation (GH-358) */
-  private val knownPageSetupProps =
-    Set("op", "orientation", "scale", "fitToWidth", "fitToHeight", "fitToPage")
-
-  /** Known properties for 'header-footer' operation (GH-358) */
-  private val knownHeaderFooterProps = Set(
-    "op",
-    "oddHeader",
-    "oddFooter",
-    "evenHeader",
-    "evenFooter",
-    "firstHeader",
-    "firstFooter",
-    "differentOddEven",
-    "differentFirst"
-  )
-
-  /** Known properties for 'cf' operation (GH-324) */
-  private val knownCfProps =
-    Set("op", "range", "rule", "bold", "italic", "underline", "strike", "bg", "fg")
+  /**
+   * A target ref qualified with a sheet other than the op's `sheet` key is a contradiction, refused
+   * at parse time (ADR-017 §2.5: qualified ref > `sheet` > default — they may not disagree).
+   */
+  private def checkSheetAgreement(
+    op: BatchOp,
+    sheet: Option[SheetName],
+    idx: Int,
+    opName: String
+  ): Unit =
+    sheet.foreach { declared =>
+      OpRegistry.targetRefs(op).foreach { refStr =>
+        OpRegistry.qualifiedSheet(refStr).filter(_ != declared).foreach { named =>
+          throw invalidOp(
+            idx,
+            opName,
+            s"ref '$refStr' names sheet '${named.value}' but \"sheet\" is '${declared.value}'"
+          )
+        }
+      }
+    }
 
   /**
    * GH-475: warn when a put/putf `format` hint is neither a known name nor an Excel format code —
@@ -758,20 +727,16 @@ object BatchParser:
       .flatMap(StyleBuilder.numFmtWarning)
       .map(w => s"Warning: Object ${idx + 1} (style): ${w.stripPrefix("Warning: ")}")
 
-  /** Collect warning about unknown properties in a batch operation (if any) */
-  private def collectUnknownPropsWarning(
-    objMap: ObjMap,
-    known: Set[String],
-    opType: String,
-    idx: Int
-  ): Option[String] =
-    val keys = objMap.keys.toSet
-    val unknown = keys -- known
-    if unknown.nonEmpty then
-      Some(
-        s"Warning: Object ${idx + 1} ($opType): unknown properties ignored: ${unknown.mkString(", ")}"
-      )
-    else None
+  /**
+   * Warn about keys the op's spec does not know (after alias resolution, so an alias never warns),
+   * listing the canonical properties the op does accept.
+   */
+  private def collectUnknownPropsWarning(objMap: ObjMap, spec: OpSpec, idx: Int): Option[String] =
+    val unknown = objMap.keys.toVector.filterNot(key => spec.canonicalName(key).isDefined)
+    Option.when(unknown.nonEmpty)(
+      s"Warning: Object ${idx + 1} (${spec.name}): unknown properties ignored: " +
+        s"${unknown.mkString(", ")}. Known: ${spec.knownProperties.mkString(", ")}"
+    )
 
   // ========== Format Name Parsing ==========
 
@@ -833,13 +798,9 @@ object BatchParser:
                       // String value - use explicit format or smart detection
                       parseStringValue(s, explicitFormat, idx, detect)
                     case None =>
-                      throw new Exception(
-                        s"Object ${idx + 1}: 'value' must be string, number, boolean, or null"
-                      )
+                      throw invalid(idx, "'value' must be string, number, boolean, or null")
       }
-      .getOrElse(
-        throw new Exception(s"Object ${idx + 1}: Missing 'value' field")
-      )
+      .getOrElse(throw invalid(idx, "Missing 'value' field"))
 
   /**
    * Parse a string value with optional explicit format.
@@ -889,9 +850,9 @@ object BatchParser:
             FormattedParsers.parseDate(s) match
               case Right(f) => ParsedValue(f.value, Some(fmt))
               case Left(error) =>
-                throw new Exception(
-                  s"Object ${idx + 1}: value '$s' is invalid for explicit format '$fmt': " +
-                    error.message
+                throw invalid(
+                  idx,
+                  s"value '$s' is invalid for explicit format '$fmt': ${error.message}"
                 )
           case NumFmt.Integer | NumFmt.Decimal | NumFmt.General =>
             // Try to parse as number
@@ -969,8 +930,9 @@ object BatchParser:
                 case Some(s) =>
                   parseStringValue(s, explicitFormat, objIdx, detect)
                 case None =>
-                  throw new Exception(
-                    s"Object ${objIdx + 1}: 'values[$elemIdx]' must be string, number, boolean, or null"
+                  throw invalid(
+                    objIdx,
+                    s"'values[$elemIdx]' must be string, number, boolean, or null"
                   )
 
   /** Extract required string field from JSON object. */
@@ -978,20 +940,14 @@ object BatchParser:
     objMap
       .get(field)
       .flatMap(_.strOpt)
-      .getOrElse(
-        throw new Exception(s"Object ${idx + 1}: Missing or invalid '$field' field")
-      )
+      .getOrElse(throw invalid(idx, s"Missing or invalid '$field' field"))
 
   /** Extract required numeric field from JSON object. */
   private def requireNumber(objMap: ObjMap, field: String, idx: Int): Double =
     objMap
       .get(field)
       .flatMap(_.numOpt)
-      .getOrElse(
-        throw new Exception(
-          s"Object ${idx + 1}: Missing or invalid '$field' field (expected number)"
-        )
-      )
+      .getOrElse(throw invalid(idx, s"Missing or invalid '$field' field (expected number)"))
 
   /** Extract required integer field from JSON object. */
   private def requireInt(objMap: ObjMap, field: String, idx: Int): Int =
@@ -999,27 +955,23 @@ object BatchParser:
       .get(field)
       .flatMap(_.numOpt)
       .map(_.toInt)
-      .getOrElse(
-        throw new Exception(
-          s"Object ${idx + 1}: Missing or invalid '$field' field (expected integer)"
-        )
-      )
+      .getOrElse(throw invalid(idx, s"Missing or invalid '$field' field (expected integer)"))
 
-  /** Extract value field as string (for formulas). Accepts "formula" as alias for "value". */
+  /**
+   * Extract value field as string (for formulas). `formula` is an alias of `value`, so after
+   * [[canonicalize]] only the canonical key is present.
+   */
   private def requireStringValue(objMap: ObjMap, idx: Int): String =
     objMap
       .get("value")
-      .orElse(objMap.get("formula"))
       .map {
         case v if v.strOpt.isDefined => v.str
         case v if v.numOpt.isDefined => v.num.toString
         case v if v.boolOpt.isDefined => v.bool.toString
         case v if v.isNull => ""
-        case _ => throw new Exception(s"Object ${idx + 1}: Unsupported value type for 'value'")
+        case _ => throw invalid(idx, "Unsupported value type for 'value'")
       }
-      .getOrElse(
-        throw new Exception(s"Object ${idx + 1}: Missing 'value' (or 'formula') field")
-      )
+      .getOrElse(throw invalid(idx, "Missing 'value' (or 'formula') field"))
 
   /** Parse style properties from JSON object. */
   private def parseStyleProps(objMap: ObjMap): StyleProps =
@@ -1068,212 +1020,263 @@ object BatchParser:
     ops: Vector[BatchOp],
     recalcDependents: Boolean = true
   ): IO[Workbook] =
-    val defaultSheetName = defaultSheetOpt.map(_.name)
+    applyScoped(
+      wb,
+      defaultSheetOpt,
+      ops.zipWithIndex.map((op, i) => ScopedOp(op, None, i + 1)),
+      recalcDependents
+    )
 
-    ops.foldLeft(IO.pure(wb)) { (wbIO, op) =>
-      wbIO.flatMap { currentWb =>
-        op match
-          case BatchOp.Put(refStr, cellValue, format) =>
-            applyPutTyped(currentWb, defaultSheetName, refStr, cellValue, format)
+  /**
+   * Apply scoped operations in order (ADR-017 §2.6). The sheet for an op is: a sheet-qualified ref
+   * (each applier honours it) > the op's `sheet` key > the batch default; a `rename-sheet` of the
+   * default retargets the ops after it. Every failure is `BATCH_OP_FAILED` (exit 3) naming the op's
+   * 1-based index and op name, with the cause's own text as a suffix.
+   */
+  def applyScoped(
+    wb: Workbook,
+    defaultSheetOpt: Option[Sheet],
+    scoped: Vector[ScopedOp],
+    recalcDependents: Boolean = true
+  ): IO[Workbook] =
+    scoped
+      .foldLeft(IO.pure((wb, defaultSheetOpt.map(_.name)))) { (stateIO, op) =>
+        stateIO.flatMap { (currentWb, default) =>
+          applyOne(currentWb, op.sheet.orElse(default), op, recalcDependents)
+            .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
+            .map(next => (next, retarget(default, op.op)))
+        }
+      }
+      .map(_._1)
 
-          case BatchOp.PutFormula(refStr, formula, format) =>
-            applyPutFormula(currentWb, defaultSheetName, refStr, formula, format)
+  /** A `rename-sheet` of the batch's default sheet moves the default with it. */
+  private def retarget(default: Option[SheetName], op: BatchOp): Option[SheetName] = op match
+    case BatchOp.RenameSheet(from, to) =>
+      default.map(current =>
+        if current.value == from then SheetName(to).getOrElse(current) else current
+      )
+    case _ => default
 
-          case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
-            applyPutFormulaDragging(currentWb, defaultSheetName, rangeStr, formula, fromRef, format)
+  /** `BATCH_OP_FAILED`: `Object N (op): <cause>`, keeping the cause's hint and candidates. */
+  private def opFailed(scoped: ScopedOp, cause: Throwable): CliException =
+    val inner = CliError.fromThrowable(cause)
+    CliException(
+      CliError(
+        ErrorCode.BATCH_OP_FAILED,
+        s"Object ${scoped.index} (${OpRegistry.nameOf(scoped.op)}): ${inner.message}",
+        hint = inner.hint,
+        candidates = inner.candidates,
+        location = Some(Location(None, scoped.sheet.map(_.value), None, Some(scoped.index))),
+        cause = inner.cause
+      )
+    )
 
-          case BatchOp.PutFormulas(rangeStr, formulas, format) =>
-            applyPutFormulas(currentWb, defaultSheetName, rangeStr, formulas, format)
+  private def applyOne(
+    currentWb: Workbook,
+    defaultSheetName: Option[SheetName],
+    scoped: ScopedOp,
+    recalcDependents: Boolean
+  ): IO[Workbook] =
+    scoped.op match
+      case BatchOp.Put(refStr, cellValue, format) =>
+        applyPutTyped(currentWb, defaultSheetName, refStr, cellValue, format, scoped.hint)
 
-          case BatchOp.PutValues(rangeStr, values) =>
-            applyPutValues(currentWb, defaultSheetName, rangeStr, values)
+      case BatchOp.PutFormula(refStr, formula, format) =>
+        applyPutFormula(currentWb, defaultSheetName, refStr, formula, format)
 
-          case BatchOp.Style(rangeStr, props) =>
-            applyStyle(currentWb, defaultSheetName, rangeStr, props)
+      case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
+        applyPutFormulaDragging(currentWb, defaultSheetName, rangeStr, formula, fromRef, format)
 
-          case BatchOp.Merge(rangeStr) =>
-            applyMerge(currentWb, defaultSheetName, rangeStr)
+      case BatchOp.PutFormulas(rangeStr, formulas, format) =>
+        applyPutFormulas(currentWb, defaultSheetName, rangeStr, formulas, format)
 
-          case BatchOp.Unmerge(rangeStr) =>
-            applyUnmerge(currentWb, defaultSheetName, rangeStr)
+      case BatchOp.PutValues(rangeStr, values) =>
+        applyPutValues(currentWb, defaultSheetName, rangeStr, values, scoped.hint)
 
-          case BatchOp.ColWidth(colStr, width) =>
-            applyColWidth(currentWb, defaultSheetName, colStr, width)
+      case BatchOp.Style(rangeStr, props) =>
+        applyStyle(currentWb, defaultSheetName, rangeStr, props)
 
-          case BatchOp.RowHeight(row, height) =>
-            applyRowHeight(currentWb, defaultSheetName, row, height)
+      case BatchOp.Merge(rangeStr) =>
+        applyMerge(currentWb, defaultSheetName, rangeStr)
 
-          case BatchOp.AddComment(refStr, text, author) =>
-            applyAddComment(currentWb, defaultSheetName, refStr, text, author)
+      case BatchOp.Unmerge(rangeStr) =>
+        applyUnmerge(currentWb, defaultSheetName, rangeStr)
 
-          case BatchOp.RemoveComment(refStr) =>
-            applyRemoveComment(currentWb, defaultSheetName, refStr)
+      case BatchOp.ColWidth(colStr, width) =>
+        applyColWidth(currentWb, defaultSheetName, colStr, width)
 
-          case BatchOp.Hyperlink(refStr, target) =>
-            applyHyperlink(currentWb, defaultSheetName, refStr, target)
+      case BatchOp.RowHeight(row, height) =>
+        applyRowHeight(currentWb, defaultSheetName, row, height)
 
-          case op: BatchOp.AddChart =>
-            applyAddChart(currentWb, defaultSheetName, op)
+      case BatchOp.AddComment(refStr, text, author) =>
+        applyAddComment(currentWb, defaultSheetName, refStr, text, author)
 
-          case BatchOp.Clear(rangeStr, all, stylesFlag, commentsFlag) =>
-            applyClear(currentWb, defaultSheetName, rangeStr, all, stylesFlag, commentsFlag)
+      case BatchOp.RemoveComment(refStr) =>
+        applyRemoveComment(currentWb, defaultSheetName, refStr)
 
-          case BatchOp.ColHide(colStr) =>
-            applyColVisibility(currentWb, defaultSheetName, colStr, hidden = true)
+      case BatchOp.Hyperlink(refStr, target) =>
+        applyHyperlink(currentWb, defaultSheetName, refStr, target)
 
-          case BatchOp.ColShow(colStr) =>
-            applyColVisibility(currentWb, defaultSheetName, colStr, hidden = false)
+      case op: BatchOp.AddChart =>
+        applyAddChart(currentWb, defaultSheetName, op)
 
-          case BatchOp.RowHide(row) =>
-            applyRowVisibility(currentWb, defaultSheetName, row, hidden = true)
+      case BatchOp.Clear(rangeStr, all, stylesFlag, commentsFlag) =>
+        applyClear(currentWb, defaultSheetName, rangeStr, all, stylesFlag, commentsFlag)
 
-          case BatchOp.RowShow(row) =>
-            applyRowVisibility(currentWb, defaultSheetName, row, hidden = false)
+      case BatchOp.ColHide(colStr) =>
+        applyColVisibility(currentWb, defaultSheetName, colStr, hidden = true)
 
-          // Row/column outline grouping (GH-421): appliers shared with the CLI commands
-          case BatchOp.GroupRows(rows, level, collapsed) =>
-            updateSheetE(currentWb, defaultSheetName, "group-rows")(
-              GroupingOps.groupRows(_, rows, level, collapsed)
-            )
+      case BatchOp.ColShow(colStr) =>
+        applyColVisibility(currentWb, defaultSheetName, colStr, hidden = false)
 
-          case BatchOp.GroupCols(cols, level, collapsed) =>
-            updateSheetE(currentWb, defaultSheetName, "group-cols")(
-              GroupingOps.groupCols(_, cols, level, collapsed)
-            )
+      case BatchOp.RowHide(row) =>
+        applyRowVisibility(currentWb, defaultSheetName, row, hidden = true)
 
-          case BatchOp.UngroupRows(rows) =>
-            updateSheetE(currentWb, defaultSheetName, "ungroup-rows")(
-              GroupingOps.ungroupRows(_, rows)
-            )
+      case BatchOp.RowShow(row) =>
+        applyRowVisibility(currentWb, defaultSheetName, row, hidden = false)
 
-          case BatchOp.UngroupCols(cols) =>
-            updateSheetE(currentWb, defaultSheetName, "ungroup-cols")(
-              GroupingOps.ungroupCols(_, cols)
-            )
+      // Row/column outline grouping (GH-421): appliers shared with the CLI commands
+      case BatchOp.GroupRows(rows, level, collapsed) =>
+        updateSheetE(currentWb, defaultSheetName, "group-rows")(
+          GroupingOps.groupRows(_, rows, level, collapsed)
+        )
 
-          case BatchOp.AutoFit(columnsOpt) =>
-            applyAutoFit(currentWb, defaultSheetName, columnsOpt)
+      case BatchOp.GroupCols(cols, level, collapsed) =>
+        updateSheetE(currentWb, defaultSheetName, "group-cols")(
+          GroupingOps.groupCols(_, cols, level, collapsed)
+        )
 
-          case BatchOp.AddSheet(name, after) =>
-            applyAddSheet(currentWb, name, after)
+      case BatchOp.UngroupRows(rows) =>
+        updateSheetE(currentWb, defaultSheetName, "ungroup-rows")(
+          GroupingOps.ungroupRows(_, rows)
+        )
 
-          case BatchOp.RenameSheet(from, to) =>
-            applyRenameSheet(currentWb, from, to)
+      case BatchOp.UngroupCols(cols) =>
+        updateSheetE(currentWb, defaultSheetName, "ungroup-cols")(
+          GroupingOps.ungroupCols(_, cols)
+        )
 
-          case BatchOp.Freeze(refStr) =>
-            // Accept either bare ref ("B2") or qualified ref ("Sheet2!B2").
-            IO.fromEither(
-              RefType
-                .parse(refStr)
-                .left
-                .map(e => new Exception(s"Invalid freeze ref '$refStr': $e"))
-            ).flatMap {
-              case RefType.Cell(ref) =>
-                defaultSheetName match
-                  case Some(sheetName) =>
-                    IO.fromEither(
-                      currentWb(sheetName)
-                        .map(s => currentWb.put(s.freezeAt(ref)))
-                        .left
-                        .map(e => new Exception(e.message))
-                    )
-                  case None =>
-                    IO.raiseError(
-                      new Exception(
-                        "freeze requires --sheet or a qualified ref (e.g., 'Sheet1!B2')"
-                      )
-                    )
-              case RefType.QualifiedCell(sheetName, ref) =>
+      case BatchOp.AutoFit(columnsOpt) =>
+        applyAutoFit(currentWb, defaultSheetName, columnsOpt)
+
+      case BatchOp.AddSheet(name, after) =>
+        applyAddSheet(currentWb, name, after)
+
+      case BatchOp.RenameSheet(from, to) =>
+        applyRenameSheet(currentWb, from, to)
+
+      case BatchOp.Freeze(refStr) =>
+        // Accept either bare ref ("B2") or qualified ref ("Sheet2!B2").
+        IO.fromEither(
+          RefType
+            .parse(refStr)
+            .left
+            .map(e => new Exception(s"Invalid freeze ref '$refStr': $e"))
+        ).flatMap {
+          case RefType.Cell(ref) =>
+            defaultSheetName match
+              case Some(sheetName) =>
                 IO.fromEither(
                   currentWb(sheetName)
                     .map(s => currentWb.put(s.freezeAt(ref)))
                     .left
                     .map(e => new Exception(e.message))
                 )
-              case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
-                IO.raiseError(
-                  new Exception(s"freeze expects a single cell reference, got range: $refStr")
-                )
-            }
-
-          case BatchOp.Unfreeze =>
-            defaultSheetName match
-              case Some(sheetName) =>
-                IO.fromEither(
-                  currentWb(sheetName)
-                    .map(s => currentWb.put(s.unfreeze))
-                    .left
-                    .map(e => new Exception(e.message))
-                )
               case None =>
                 IO.raiseError(
-                  new Exception("unfreeze requires --sheet (specify which sheet to unfreeze)")
+                  new Exception(
+                    "freeze requires --sheet or a qualified ref (e.g., 'Sheet1!B2')"
+                  )
                 )
+          case RefType.QualifiedCell(sheetName, ref) =>
+            IO.fromEither(
+              currentWb(sheetName)
+                .map(s => currentWb.put(s.freezeAt(ref)))
+                .left
+                .map(e => new Exception(e.message))
+            )
+          case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
+            IO.raiseError(
+              new Exception(s"freeze expects a single cell reference, got range: $refStr")
+            )
+        }
 
-          case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
-            applyCopyRange(
-              currentWb,
-              defaultSheetName,
-              sourceStr,
-              targetStr,
-              valuesOnly,
-              recalcDependents
+      case BatchOp.Unfreeze =>
+        defaultSheetName match
+          case Some(sheetName) =>
+            IO.fromEither(
+              currentWb(sheetName)
+                .map(s => currentWb.put(s.unfreeze))
+                .left
+                .map(e => new Exception(e.message))
+            )
+          case None =>
+            IO.raiseError(
+              new Exception("unfreeze requires --sheet (specify which sheet to unfreeze)")
             )
 
-          case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
-            updateSheetE(currentWb, defaultSheetName, "sheet-view")(
-              AppearanceOps.applySheetView(_, gridlines, zoom, tabSelected)
-            )
+      case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
+        applyCopyRange(
+          currentWb,
+          defaultSheetName,
+          sourceStr,
+          targetStr,
+          valuesOnly,
+          recalcDependents
+        )
 
-          case BatchOp.SetTabColor(color, clear) =>
-            updateSheetE(currentWb, defaultSheetName, "tab-color")(
-              AppearanceOps.applyTabColor(_, color, clear)
-            )
+      case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
+        updateSheetE(currentWb, defaultSheetName, "sheet-view")(
+          AppearanceOps.applySheetView(_, gridlines, zoom, tabSelected)
+        )
 
-          case BatchOp.SetAutoFilter(rangeStrOpt, clear) =>
-            applyAutoFilterOp(currentWb, defaultSheetName, rangeStrOpt, clear)
+      case BatchOp.SetTabColor(color, clear) =>
+        updateSheetE(currentWb, defaultSheetName, "tab-color")(
+          AppearanceOps.applyTabColor(_, color, clear)
+        )
 
-          case BatchOp.SetPageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
-            updateSheetE(currentWb, defaultSheetName, "page-setup")(
-              AppearanceOps.applyPageSetup(
-                _,
-                orientation,
-                scale,
-                fitToWidth,
-                fitToHeight,
-                fitToPage
-              )
-            )
+      case BatchOp.SetAutoFilter(rangeStrOpt, clear) =>
+        applyAutoFilterOp(currentWb, defaultSheetName, rangeStrOpt, clear)
 
-          case BatchOp.SetHeaderFooter(oh, of, eh, ef, fh, ff, diffOddEven, diffFirst) =>
-            updateSheetE(currentWb, defaultSheetName, "header-footer")(
-              AppearanceOps.applyHeaderFooter(_, oh, of, eh, ef, fh, ff, diffOddEven, diffFirst)
-            )
+      case BatchOp.SetPageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
+        updateSheetE(currentWb, defaultSheetName, "page-setup")(
+          AppearanceOps.applyPageSetup(
+            _,
+            orientation,
+            scale,
+            fitToWidth,
+            fitToHeight,
+            fitToPage
+          )
+        )
 
-          case BatchOp.AddConditionalFormat(
-                rangeStr,
-                rule,
-                bold,
-                italic,
-                underline,
-                strike,
-                bg,
-                fg
-              ) =>
-            applyConditionalFormat(
-              currentWb,
-              defaultSheetName,
-              rangeStr,
-              rule,
-              bold,
-              italic,
-              underline,
-              strike,
-              bg,
-              fg
-            )
-      }
-    }
+      case BatchOp.SetHeaderFooter(oh, of, eh, ef, fh, ff, diffOddEven, diffFirst) =>
+        updateSheetE(currentWb, defaultSheetName, "header-footer")(
+          AppearanceOps.applyHeaderFooter(_, oh, of, eh, ef, fh, ff, diffOddEven, diffFirst)
+        )
+
+      case BatchOp.AddConditionalFormat(
+            rangeStr,
+            rule,
+            bold,
+            italic,
+            underline,
+            strike,
+            bg,
+            fg
+          ) =>
+        applyConditionalFormat(
+          currentWb,
+          defaultSheetName,
+          rangeStr,
+          rule,
+          bold,
+          italic,
+          underline,
+          strike,
+          bg,
+          fg
+        )
 
   // ========== Operation Helpers ==========
 
@@ -1283,39 +1286,45 @@ object BatchParser:
     defaultSheetName: Option[SheetName],
     refStr: String,
     cellValue: CellValue,
-    format: Option[NumFmt]
+    format: Option[NumFmt],
+    hint: FormatHint
   ): IO[Workbook] =
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) =>
         defaultSheetName match
           case Some(sheetName) =>
-            updateSheetWithFormat(wb, sheetName, ref, cellValue, format)
+            updateSheet(wb, sheetName)(putWithHint(_, ref, cellValue, format, hint))
           case None =>
             IO.raiseError(new Exception(s"batch requires --sheet for unqualified ref '$refStr'"))
 
       case RefType.QualifiedCell(sheetName, ref) =>
-        updateSheetWithFormat(wb, sheetName, ref, cellValue, format)
+        updateSheet(wb, sheetName)(putWithHint(_, ref, cellValue, format, hint))
 
       case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
         IO.raiseError(new Exception(s"batch put requires single cell ref, not range: $refStr"))
     }
 
-  /** Update sheet with value and optional format */
-  private def updateSheetWithFormat(
-    wb: Workbook,
-    sheetName: SheetName,
+  /**
+   * Put a value whose number format is a hint (ADR-017 invariant 4, GH-560). An Explicit hint — the
+   * op's `format` key — REPLACES the cell's number format through the putf path ([[applyNumFmt]]:
+   * font, fill and borders survive, only numFmt changes). An Inferred one — a detected date or
+   * currency string — goes through `Formatted`, whose codec keeps `Sheet.put`'s General-only merge
+   * rule. No format leaves the style untouched.
+   */
+  private def putWithHint(
+    sheet: Sheet,
     ref: ARef,
     cellValue: CellValue,
-    format: Option[NumFmt]
-  ): IO[Workbook] =
-    format match
-      case Some(numFmt) =>
-        // Use Formatted to apply both value and style
-        val formatted = Formatted(cellValue, numFmt)
-        updateSheet(wb, sheetName)(_.put(ref, formatted))
-      case None =>
-        // No format - just put the value
-        updateSheet(wb, sheetName)(_.put(ref, cellValue))
+    format: Option[NumFmt],
+    hint: FormatHint
+  ): Sheet =
+    (format, hint) match
+      case (Some(numFmt), FormatHint.Explicit) =>
+        applyNumFmt(sheet.put(ref, cellValue), ref, Some(numFmt))
+      case (Some(numFmt), FormatHint.Inferred) =>
+        sheet.put(ref, Formatted(cellValue, numFmt))
+      case (None, _) =>
+        sheet.put(ref, cellValue)
 
   /**
    * Merge a number format into the cell's existing style (GH-356).
@@ -1450,7 +1459,8 @@ object BatchParser:
     wb: Workbook,
     defaultSheetName: Option[SheetName],
     rangeStr: String,
-    values: Vector[ParsedValue]
+    values: Vector[ParsedValue],
+    hint: FormatHint
   ): IO[Workbook] =
     for
       rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
@@ -1467,15 +1477,10 @@ object BatchParser:
           )
         else IO.unit
 
-      // Apply values
+      // Apply values; the op-level `format` (GH-416) is the Explicit hint for every element
       result <- updateSheet(wb, sheetName) { sheet =>
         range.cellsRowMajor.zip(values.iterator).foldLeft(sheet) { case (s, (ref, pv)) =>
-          pv.format match
-            case Some(numFmt) =>
-              val formatted = Formatted(pv.cellValue, numFmt)
-              s.put(ref, formatted)
-            case None =>
-              s.put(ref, pv.cellValue)
+          putWithHint(s, ref, pv.cellValue, pv.format, hint)
         }
       }
     yield result
@@ -2028,20 +2033,25 @@ object BatchParser:
         IO.pure((sheetName, CellRange(ref, ref)))
     }
 
+  /** `SHEET_NOT_FOUND` with the historical text and did-you-mean candidates. */
+  private def sheetNotFound(wb: Workbook, sheetName: SheetName): CliException =
+    val names = wb.sheetNames.map(_.value).toVector
+    CliException(
+      CliError
+        .fromXLError(XLError.SheetNotFound(sheetName.value), None)
+        .copy(
+          message = s"Sheet '${sheetName.value}' not found. Available: ${names.mkString(", ")}",
+          candidates = Suggest.closest(sheetName.value, names)
+        )
+    )
+
   /** Update a sheet in the workbook, raising error if sheet not found. */
   private def updateSheet(wb: Workbook, sheetName: SheetName)(
     f: Sheet => Sheet
   ): IO[Workbook] =
     wb.sheets.find(_.name == sheetName) match
-      case None =>
-        IO.raiseError(
-          new Exception(
-            s"Sheet '${sheetName.value}' not found. " +
-              s"Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
-          )
-        )
-      case Some(sheet) =>
-        IO.pure(wb.put(f(sheet)))
+      case None => IO.raiseError(sheetNotFound(wb, sheetName))
+      case Some(sheet) => IO.pure(wb.put(f(sheet)))
 
   /**
    * Update the default sheet with a validated (Either-returning) transform; requires --sheet. Used
@@ -2062,12 +2072,6 @@ object BatchParser:
     sheetName: SheetName
   )(f: Sheet => Either[String, Sheet]): IO[Workbook] =
     wb.sheets.find(_.name == sheetName) match
-      case None =>
-        IO.raiseError(
-          new Exception(
-            s"Sheet '${sheetName.value}' not found. " +
-              s"Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
-          )
-        )
+      case None => IO.raiseError(sheetNotFound(wb, sheetName))
       case Some(sheet) =>
         IO.fromEither(f(sheet).left.map(msg => new Exception(msg))).map(wb.put)
