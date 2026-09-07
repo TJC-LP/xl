@@ -15,6 +15,7 @@ import com.tjclp.xl.cli.helpers.ValueParser
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown, RendererCommon}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.io.{ExcelIO, RowData}
+import com.tjclp.xl.ooxml.metadata.LightMetadata
 import com.tjclp.xl.ooxml.style.WorkbookStyles
 import com.tjclp.xl.styles.numfmt.NumFmt
 
@@ -380,34 +381,70 @@ object StreamingReadCommands:
     sheetNameOpt: Option[String]
   ): IO[String] =
     excel.readMetadata(filePath).flatMap { meta =>
-      // Find sheet index
-      val sheetIndexEither: Either[String, Int] = sheetNameOpt match
-        case Some(name) =>
-          meta.sheets.indexWhere(_.name.value == name) match
-            case -1 => Left(s"Sheet not found: $name")
-            case idx => Right(idx + 1) // 1-based
-        case None => Right(1) // First sheet
-
-      sheetIndexEither match
+      boundsTarget(meta, sheetNameOpt) match
         case Left(err) => IO.raiseError(new Exception(err))
-        case Right(sheetIndex) =>
-          val sheetInfo = meta.sheets.lift(sheetIndex - 1)
-          val sheetName = sheetInfo.map(_.name.value).getOrElse(s"Sheet$sheetIndex")
-          val dimension = sheetInfo.flatMap(_.dimension)
+        case Right((sheetName, Some(range))) =>
+          val rowCount = range.end.row.index1 - range.start.row.index1 + 1
+          val colCount = range.end.col.index0 - range.start.col.index0 + 1
+          IO.pure(
+            s"""Sheet: $sheetName
+               |Used range: ${range.toA1} (from dimension element)
+               |Rows: ${range.start.row.index1}-${range.end.row.index1} ($rowCount total)
+               |Columns: ${range.start.col.toLetter}-${range.end.col.toLetter} ($colCount total)""".stripMargin
+          )
+        case Right((_, None)) =>
+          // Fallback to streaming scan
+          boundsScan(filePath, sheetNameOpt)
+    }
 
-          dimension match
-            case Some(range) =>
-              val rowCount = range.end.row.index1 - range.start.row.index1 + 1
-              val colCount = range.end.col.index0 - range.start.col.index0 + 1
-              IO.pure(
-                s"""Sheet: $sheetName
-                   |Used range: ${range.toA1} (from dimension element)
-                   |Rows: ${range.start.row.index1}-${range.end.row.index1} ($rowCount total)
-                   |Columns: ${range.start.col.toLetter}-${range.end.col.toLetter} ($colCount total)""".stripMargin
-              )
-            case None =>
-              // Fallback to streaming scan
-              boundsScan(filePath, sheetNameOpt)
+  /**
+   * `bounds` as data (`bounds --json`): `{sheet, range, dimension}` — `range` the used range in A1
+   * form or `null` for an empty sheet, `dimension` true when it came from the worksheet's
+   * `<dimension>` element and false when from a streaming scan (`--scan`, or a sheet without one).
+   */
+  def boundsData(filePath: Path, sheetNameOpt: Option[String], scan: Boolean): IO[ujson.Value] =
+    def scanned(sheetName: Option[String]): IO[ujson.Value] =
+      scanBounds(filePath, sheetNameOpt).map { (fallbackName, acc) =>
+        boundsJson(sheetName.getOrElse(fallbackName), acc.range, fromDimension = false)
+      }
+    if scan then scanned(None)
+    else
+      excel.readMetadata(filePath).flatMap { meta =>
+        boundsTarget(meta, sheetNameOpt) match
+          case Left(err) => IO.raiseError(new Exception(err))
+          case Right((sheetName, Some(range))) =>
+            IO.pure(boundsJson(sheetName, Some(range), fromDimension = true))
+          case Right((sheetName, None)) => scanned(Some(sheetName))
+      }
+
+  private def boundsJson(
+    sheetName: String,
+    range: Option[CellRange],
+    fromDimension: Boolean
+  ): ujson.Value =
+    ujson.Obj(
+      "sheet" -> ujson.Str(sheetName),
+      "range" -> range.fold[ujson.Value](ujson.Null)(r => ujson.Str(r.toA1)),
+      "dimension" -> ujson.Bool(fromDimension)
+    )
+
+  /**
+   * The sheet `bounds` reads — `-s` by name, else the first — as its display name and the
+   * `<dimension>` range the metadata carries for it (None when the worksheet has none).
+   */
+  private def boundsTarget(
+    meta: LightMetadata,
+    sheetNameOpt: Option[String]
+  ): Either[String, (String, Option[CellRange])] =
+    val sheetIndexEither: Either[String, Int] = sheetNameOpt match
+      case Some(name) =>
+        meta.sheets.indexWhere(_.name.value == name) match
+          case -1 => Left(s"Sheet not found: $name")
+          case idx => Right(idx + 1) // 1-based
+      case None => Right(1) // First sheet
+    sheetIndexEither.map { sheetIndex =>
+      val sheetInfo = meta.sheets.lift(sheetIndex - 1)
+      (sheetInfo.map(_.name.value).getOrElse(s"Sheet$sheetIndex"), sheetInfo.flatMap(_.dimension))
     }
 
   /**
@@ -419,16 +456,22 @@ object StreamingReadCommands:
     filePath: Path,
     sheetNameOpt: Option[String]
   ): IO[String] =
+    scanBounds(filePath, sheetNameOpt).map { (sheetName, acc) =>
+      acc.format(sheetName, fromScan = true)
+    }
+
+  /** The scan itself: the name the result is reported under and the accumulated bounds. */
+  private def scanBounds(
+    filePath: Path,
+    sheetNameOpt: Option[String]
+  ): IO[(String, BoundsAccumulator)] =
     val rowStream = sheetNameOpt match
       case Some(name) => excel.readSheetStream(filePath, name)
       case None => excel.readStream(filePath)
 
     rowStream.compile
       .fold(BoundsAccumulator.empty)(_.update(_))
-      .map { acc =>
-        val sheetName = sheetNameOpt.getOrElse("Sheet1")
-        acc.format(sheetName, fromScan = true)
-      }
+      .map(acc => (sheetNameOpt.getOrElse("Sheet1"), acc))
 
   /**
    * View range using streaming (markdown/csv/json only).
@@ -563,6 +606,12 @@ object StreamingReadCommands:
           maxCol = Some(maxCol.fold(cols.max)(_ max cols.max)),
           cellCount = cellCount + row.cells.size
         )
+
+    /** The bounding range of every non-empty cell seen, None when the sheet is empty. */
+    def range: Option[CellRange] = (minRow, maxRow, minCol, maxCol) match
+      case (Some(r1), Some(r2), Some(c1), Some(c2)) =>
+        Some(CellRange(ARef.from0(c1, r1 - 1), ARef.from0(c2, r2 - 1))) // rowIndex is 1-based
+      case _ => None
 
     def format(sheetName: String, fromScan: Boolean = false): String =
       val source = if fromScan then "(from scan)" else "(streaming)"

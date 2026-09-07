@@ -11,64 +11,64 @@ names
 Unexpected argument: names
 
 Usage:
-    xl rasterizers
-    xl functions
-    xl new
-    xl --file <path> [--sheet <string>] [--max-size <integer>] diff
-    xl [--file <path>] lint
-    xl [--file <path>] [--sheet <string>] [--max-size <integer>] eval
-    xl [--file <path>] [--sheet <string>] [--max-size <integer>] evala
-    xl --file <path> [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] sheets
-    xl --file <path> [--max-size <integer>] names
-    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] bounds
-    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] view
-    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] cell
-    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] search
-    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] stats
-    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] filter
-    xl batch
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] put
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] putf
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] style
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] row
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] col
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] group-rows
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] group-cols
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] ungroup-rows
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] ungroup-cols
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] autofit
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] batch
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] recalc
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] import
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] import-md
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] add-sheet
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] remove-sheet
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] rename-sheet
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] move-sheet
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] copy-sheet
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] merge
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] unmerge
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] comment
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] remove-comment
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] clear
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] fill
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] sort
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] freeze
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] unfreeze
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] copy
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] name
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] insert-rows
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] delete-rows
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] insert-cols
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] delete-cols
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] chart
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] add-image
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] sheet-view
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] tab-color
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] autofilter
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] page-setup
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] header-footer
-    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] cf
+    xl [--json] rasterizers
+    xl [--json] functions
+    xl [--json] new
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--json] diff
+    xl [--file <path>] [--json] lint
+    xl [--file <path>] [--sheet <string>] [--max-size <integer>] [--json] eval
+    xl [--file <path>] [--sheet <string>] [--max-size <integer>] [--json] evala
+    xl --file <path> [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--json] sheets
+    xl --file <path> [--max-size <integer>] [--json] names
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] bounds
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] view
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] cell
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] search
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] stats
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] filter
+    xl [--json] batch
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] put
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] putf
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] style
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] row
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] col
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] group-rows
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] group-cols
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] ungroup-rows
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] ungroup-cols
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] autofit
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] batch
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] recalc
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] import
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] import-md
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] add-sheet
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] remove-sheet
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] rename-sheet
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] move-sheet
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] copy-sheet
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] merge
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] unmerge
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] comment
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] remove-comment
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] clear
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] fill
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] sort
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] freeze
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] unfreeze
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] copy
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] name
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] insert-rows
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] delete-rows
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] insert-cols
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] delete-cols
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] chart
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] add-image
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] sheet-view
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] tab-color
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] autofilter
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] page-setup
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] header-footer
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] cf
 
 LLM-friendly Excel operations (stateless)
 
@@ -78,12 +78,16 @@ Exit codes:
   2  usage — the command line is wrong; nothing read, nothing written
   3  failed — the operation could not complete; nothing written
 Results go to stdout; errors (Error: <message>, then code:/hint: lines) and warnings go to stderr.
+--json wraps every result, success or failure, in one JSON envelope on stdout:
+  {ok, exitCode, verb, version, data, warnings, error}
 
 Options and flags:
     --help
         Display this help text.
     --version, -v
         Print the version number and exit.
+    --json
+        Wrap every result in the JSON envelope; errors too
     --file <path>, -f <path>
         Excel file to operate on (required)
     --sheet <string>, -s <string>

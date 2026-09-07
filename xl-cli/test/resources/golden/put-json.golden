@@ -1,0 +1,28 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+-o
+<DIR>/put-json-out.xlsx
+--json
+put
+A5
+42
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "put",
+  "version": "<VERSION>",
+  "data": {
+    "text": "Put: A5 = 42 (number)\nSaved: <DIR>/put-json-out.xlsx",
+    "saved": "<DIR>/put-json-out.xlsx",
+    "written": true
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

@@ -1,0 +1,28 @@
+## args
+-f
+<DIR>/simple.xlsx
+--json
+view
+A1:B2
+-s
+Data
+## exit
+2
+## stdout
+{
+  "ok": false,
+  "exitCode": 2,
+  "verb": "view",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "USAGE",
+    "message": "Unexpected option: -s",
+    "hint": "run `xl --help` (or `xl <verb> --help`) for the usage",
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr
+Error: Unexpected option: -s

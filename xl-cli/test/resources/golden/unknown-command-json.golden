@@ -1,0 +1,23 @@
+## args
+frob
+--json
+## exit
+2
+## stdout
+{
+  "ok": false,
+  "exitCode": 2,
+  "verb": "",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "USAGE",
+    "message": "Unexpected argument: frob",
+    "hint": "run `xl --help` (or `xl <verb> --help`) for the usage",
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr
+Error: Unexpected argument: frob

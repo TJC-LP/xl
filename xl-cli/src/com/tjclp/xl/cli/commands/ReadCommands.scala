@@ -7,8 +7,15 @@ import cats.implicits.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.ViewFormat
-import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode}
+import com.tjclp.xl.cli.{CliIO, ViewFormat}
+import com.tjclp.xl.cli.contract.{
+  CliError,
+  CliException,
+  Diagnostics,
+  ErrorCode,
+  Warning,
+  WarningCode
+}
 import com.tjclp.xl.cli.helpers.{SheetResolver, ValueParser}
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown, RendererCommon}
 import com.tjclp.xl.cli.raster.{RasterFormat, RasterizerChain}
@@ -48,6 +55,13 @@ object ReadCommands:
 
   /**
    * View range in various formats.
+   *
+   * @param warn
+   *   where the out-of-band notices go — the truncation (`TRUNCATED`) and hidden-line
+   *   (`HIDDEN_OMITTED`) notices of the formats whose stdout must stay clean (csv, html, svg). The
+   *   runner collects them for the run's stderr or the `--json` envelope; the default prints
+   *   `Warning[CODE]: …` straight to the process stderr. Markdown and JSON carry the same notices
+   *   in-band (a trailer, `truncated`/`hiddenRows` fields) and do not warn.
    */
   def view(
     wb: Workbook,
@@ -67,7 +81,8 @@ object ReadCommands:
     skipEmpty: Boolean,
     headerRow: Option[Int],
     rasterizer: Option[String] = None,
-    skipHidden: Boolean = false
+    skipHidden: Boolean = false,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "view")
@@ -93,6 +108,8 @@ object ReadCommands:
         limitedRange.end.row.index0,
         skipHidden
       )
+      truncated = Warning(WarningCode.TRUNCATED, notice)
+      hiddenWarning = hiddenNote.map(Warning(WarningCode.HIDDEN_OMITTED, _))
       theme = wb.metadata.theme // Use workbook's parsed theme
       result <- format match
         case ViewFormat.Markdown =>
@@ -124,8 +141,8 @@ object ReadCommands:
             showLabels = showLabels
           )
           // In-band marker as a trailing HTML comment (comments after the root
-          // element are valid HTML), plus a human-visible notice on stderr.
-          IO(System.err.println(notice))
+          // element are valid HTML), plus a TRUNCATED warning out of band.
+          warn(truncated)
             .whenA(isTruncated)
             .as(if isTruncated then s"$html\n<!-- $notice -->" else html)
         case ViewFormat.Svg =>
@@ -140,8 +157,8 @@ object ReadCommands:
             showGridlines = showGridlines,
             showLabels = showLabels
           )
-          // SVG stdout must stay a clean XML document: notice goes to stderr only.
-          IO(System.err.println(notice)).whenA(isTruncated).as(svg)
+          // SVG stdout must stay a clean XML document: the notice is a warning only.
+          warn(truncated).whenA(isTruncated).as(svg)
         case ViewFormat.Json =>
           // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
           val sheetToRender =
@@ -175,10 +192,10 @@ object ReadCommands:
             evalFormulas = false,
             skipHidden = skipHidden
           )
-          // CSV stdout must stay machine-parseable: notices go to stderr only.
-          IO(System.err.println(notice))
+          // CSV stdout must stay machine-parseable: notices are warnings only.
+          warn(truncated)
             .whenA(isTruncated)
-            .productR(hiddenNote.traverse_(n => IO(System.err.println(n))))
+            .productR(hiddenWarning.traverse_(warn))
             .as(csv)
         case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
           rasterOutput match
@@ -385,6 +402,36 @@ object ReadCommands:
     formulaStr: String,
     overrides: List[String]
   ): IO[String] =
+    evalResult(wb, sheetOpt, formulaStr, overrides).map { (formula, result) =>
+      Format.evalSuccess(formula, result, overrides)
+    }
+
+  /**
+   * `eval` as data (`eval --json`): `{formula, result: {type, value, formatted}, overrides}` — the
+   * normalized formula (leading `=`), the value in the `view --format json` cell shape, and the
+   * `--with` overrides as given.
+   */
+  def evalData(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    formulaStr: String,
+    overrides: List[String]
+  ): IO[ujson.Value] =
+    evalResult(wb, sheetOpt, formulaStr, overrides).map { (formula, result) =>
+      ujson.Obj(
+        "formula" -> ujson.Str(formula),
+        "result" -> JsonRenderer.valueJson(result, NumFmt.General),
+        "overrides" -> ujson.Arr.from(overrides.map(ujson.Str.apply))
+      )
+    }
+
+  /** The evaluation both renderings share: the normalized formula and its value. */
+  private def evalResult(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    formulaStr: String,
+    overrides: List[String]
+  ): IO[(String, CellValue)] =
     val formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
 
     // Check if formula needs a sheet by parsing and checking for cell references
@@ -473,7 +520,7 @@ object ReadCommands:
               .left
               .map(e => new Exception(e.message))
           )
-        yield Format.evalSuccess(formula, result, overrides)
+        yield (formula, result)
     else if hasAnyCellRefs then
       // GH-210: All cell refs are qualified (e.g., =SUM(Revenue!B2:B5)) - need workbook but
       // any sheet works as the ambient context since the evaluator resolves cross-sheet refs by name
@@ -535,7 +582,7 @@ object ReadCommands:
               .left
               .map(e => new Exception(e.message))
           )
-        yield Format.evalSuccess(formula, result, overrides)
+        yield (formula, result)
     else
       // Constant formula - use empty sheet or provided sheet
       val sheet = sheetOpt.getOrElse(Sheet("_eval"))
@@ -547,7 +594,7 @@ object ReadCommands:
             .left
             .map(e => new Exception(e.message))
         )
-      yield Format.evalSuccess(formula, result, overrides)
+      yield (formula, result)
 
   /**
    * Evaluate array formula and display result as table.
@@ -562,6 +609,40 @@ object ReadCommands:
     targetRefOpt: Option[String],
     overrides: List[String]
   ): IO[String] =
+    evalArrayResult(wb, sheetOpt, formulaStr, targetRefOpt, overrides).map {
+      (formula, updatedSheet, spillRange) =>
+        Format.evalArraySuccess(formula, updatedSheet, spillRange, overrides)
+    }
+
+  /**
+   * `evala` as data (`evala --json`): `{formula, spillRange, result, overrides}` where `result` is
+   * the spilled grid in the exact `view --format json` shape (`{sheet, range, rows}`).
+   */
+  def evalArrayData(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    formulaStr: String,
+    targetRefOpt: Option[String],
+    overrides: List[String]
+  ): IO[ujson.Value] =
+    evalArrayResult(wb, sheetOpt, formulaStr, targetRefOpt, overrides).map {
+      (formula, updatedSheet, spillRange) =>
+        ujson.Obj(
+          "formula" -> ujson.Str(formula),
+          "spillRange" -> ujson.Str(spillRange.toA1),
+          "result" -> ujson.read(JsonRenderer.renderRange(updatedSheet, spillRange)),
+          "overrides" -> ujson.Arr.from(overrides.map(ujson.Str.apply))
+        )
+    }
+
+  /** The evaluation both renderings share: the normalized formula, the spilled sheet, the range. */
+  private def evalArrayResult(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    formulaStr: String,
+    targetRefOpt: Option[String],
+    overrides: List[String]
+  ): IO[(String, Sheet, CellRange)] =
     val formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
 
     // Array formulas always need a sheet context
@@ -622,7 +703,7 @@ object ReadCommands:
             .map(e => new Exception(e.message))
         )
         (updatedSheet, spillRange) = result
-      yield Format.evalArraySuccess(formula, updatedSheet, spillRange, overrides)
+      yield (formula, updatedSheet, spillRange)
 
   // ==========================================================================
   // Private helpers

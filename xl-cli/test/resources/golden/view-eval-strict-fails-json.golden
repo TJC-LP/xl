@@ -1,0 +1,30 @@
+## args
+-f
+<DIR>/circular.xlsx
+-s
+Data
+--json
+view
+A1:A1
+--eval
+--strict
+## exit
+1
+## stdout
+{
+  "ok": false,
+  "exitCode": 1,
+  "verb": "view",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "RECALC_GATE",
+    "message": "Formula evaluation failed: Formula error in '': Circular reference detected: cell_0 → cell_0",
+    "hint": "drop --strict to render cached values and see the failure as a warning",
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr
+Error: Formula evaluation failed: Formula error in '': Circular reference detected: cell_0 → cell_0

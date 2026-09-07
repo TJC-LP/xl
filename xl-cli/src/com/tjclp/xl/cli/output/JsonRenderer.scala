@@ -280,6 +280,34 @@ object JsonRenderer:
     if cols.nonEmpty then
       sb.append(s"""  "hiddenCols": [${cols.map(c => s"\"$c\"").mkString(", ")}],\n""")
 
+  /**
+   * One value as the `{type, value, formatted}` triple the `view --format json` cells carry, built
+   * as ujson for the typed `--json` payloads (`eval`). Same type names, raw-value rules and display
+   * formatting as [[renderCell]]; a formula projects its cached value (`null`/`""` when uncached).
+   */
+  def valueJson(value: CellValue, numFmt: NumFmt): ujson.Obj =
+    def obj(typeStr: String, raw: ujson.Value, formatted: String): ujson.Obj =
+      ujson.Obj(
+        "type" -> ujson.Str(typeStr),
+        "value" -> raw,
+        "formatted" -> ujson.Str(formatted)
+      )
+    value match
+      case CellValue.Text(s) => obj("text", ujson.Str(s), s)
+      case CellValue.Number(n) =>
+        obj("number", ujson.Num(n.toDouble), NumFmtFormatter.formatValue(value, numFmt))
+      case CellValue.Bool(b) => obj("boolean", ujson.Bool(b), if b then "TRUE" else "FALSE")
+      case CellValue.DateTime(dt) =>
+        obj("datetime", ujson.Str(dt.toString), NumFmtFormatter.formatValue(value, numFmt))
+      case CellValue.Error(err) => obj("error", ujson.Str(err.toExcel), err.toExcel)
+      case CellValue.RichText(rt) => obj("richtext", ujson.Str(rt.toPlainText), rt.toPlainText)
+      case CellValue.Empty => obj("empty", ujson.Null, "")
+      case CellValue.Formula(_, cached, _) =>
+        cached.fold(obj("formula", ujson.Null, "")) { cv =>
+          val inner = valueJson(cv, numFmt)
+          obj("formula", inner("value"), inner("formatted").str)
+        }
+
   private def renderCell(
     ref: ARef,
     cell: Cell,

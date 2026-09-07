@@ -39,6 +39,9 @@ object TestFixtures:
   def circularBook(): Workbook =
     Workbook(Vector(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None))))
 
+  /** `simpleBook` plus one workbook-scoped defined name, so `names` has something to list. */
+  def namedBook(): Workbook = simpleBook().withDefinedName("Total", "Data!$B$4")
+
   private def book(firstQuantity: Int): Workbook =
     val data = Sheet("Data")
       .put(ref"A1", "Hello")
@@ -59,7 +62,8 @@ object TestFixtures:
     "changed.xlsx" -> (() => changedBook()),
     "single.xlsx" -> (() => singleSheetBook()),
     "inplace.xlsx" -> (() => simpleBook()),
-    "circular.xlsx" -> (() => circularBook())
+    "circular.xlsx" -> (() => circularBook()),
+    "named.xlsx" -> (() => namedBook())
   )
 
   /** Write every fixture into a fresh temp directory and return it. */

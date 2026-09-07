@@ -1,0 +1,31 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Nope
+-o
+<DIR>/put-nope-json.xlsx
+--json
+put
+A1
+1
+## exit
+3
+## stdout
+{
+  "ok": false,
+  "exitCode": 3,
+  "verb": "put",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "SHEET_NOT_FOUND",
+    "message": "Sheet not found: Nope. Available: Data, Summary",
+    "hint": "list sheets with `xl -f <file> sheets`",
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr
+Error: Sheet not found: Nope. Available: Data, Summary

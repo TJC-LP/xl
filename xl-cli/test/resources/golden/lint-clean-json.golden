@@ -1,0 +1,21 @@
+## args
+--json
+lint
+<DIR>/simple.xlsx
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "lint",
+  "version": "<VERSION>",
+  "data": {
+    "text": "<DIR>/simple.xlsx: clean (no findings)",
+    "saved": null,
+    "written": false
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

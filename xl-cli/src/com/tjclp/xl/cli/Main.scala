@@ -53,6 +53,10 @@ import com.tjclp.xl.cli.contract.{
   ErrorCode,
   ExitCodes,
   Location,
+  Outcome,
+  OutputMode,
+  Payload,
+  Render,
   Warning,
   WarningCode
 }
@@ -79,6 +83,9 @@ private[cli] object BuildInfo:
  *     structural verbs leave the caches their edit invalidated uncached (see [[WritePolicy]])
  *   - `--strict` — write verbs only (GH-496): exit 1 when the write's recalculation reports formula
  *     errors, non-convergence, or data-table seed warnings
+ *   - `--json` — every verb (ADR-017 §2.4): print the result, success or failure, as one JSON
+ *     envelope `{ok, exitCode, verb, version, data, warnings, error}` on stdout; `--format json`
+ *     payloads ride inside it unchanged
  *
  * Global flags precede the verb: `xl -f in.xlsx -o out.xlsx --strict batch -`. (`view --eval
  * --strict` is a separate, subcommand-scoped flag of the same name.)
@@ -97,15 +104,28 @@ private[cli] object BuildInfo:
 object Main extends IOApp:
 
   /**
-   * Rendered command result plus whether a staged output is complete and eligible to commit, and
-   * the warnings collected while producing it (printed to stderr after the result).
+   * The name the staging tests know a run's result by: an [[contract.Outcome]], built here from the
+   * three fields `runStagedOutput`'s commit rule reads (exit code, rendered output, completeness)
+   * plus the run's warnings. Production code builds outcomes through [[contract.Outcome]]'s own
+   * constructors, which carry the verb and the error as well.
    */
-  private[cli] final case class CommandOutcome(
-    exitCode: ExitCode,
-    output: String,
-    outputComplete: Boolean,
-    warnings: Vector[Warning] = Vector.empty
-  )
+  private[cli] type CommandOutcome = Outcome
+
+  private[cli] object CommandOutcome:
+    def apply(
+      exitCode: ExitCode,
+      output: String,
+      outputComplete: Boolean,
+      warnings: Vector[Warning] = Vector.empty
+    ): Outcome =
+      Outcome(
+        verb = "",
+        payload = Option.when(output.nonEmpty)(Payload.text(output)),
+        warnings = warnings,
+        error = None,
+        exitCode = exitCode,
+        outputComplete = outputComplete
+      )
 
   /**
    * GH-519: SIGTERM/SIGINT must terminate the process even mid-recalculation. The evaluator is a
@@ -211,6 +231,17 @@ object Main extends IOApp:
   /** Cross-cutting write posture (GH-468/GH-496), parsed before the verb like -f/-o/--stream. */
   private[cli] val writePolicyOpt: Opts[WritePolicy] =
     (noRecalcOpt, strictWriteOpt).mapN(WritePolicy.apply)
+
+  /**
+   * Global `--json` (ADR-017 §2.4): the result — success or failure — as one JSON envelope on
+   * stdout. Orthogonal to a verb's own `--format`: `view --format json --json` wraps the bare
+   * payload as `data`.
+   */
+  private[cli] val jsonOpt: Opts[OutputMode] =
+    Opts
+      .flag("json", "Wrap every result in the JSON envelope; errors too")
+      .orFalse
+      .map(json => if json then OutputMode.Json else OutputMode.Text)
 
   // ==========================================================================
   // Command definitions
@@ -1617,7 +1648,8 @@ EXAMPLES:
     maxSizeOpt: Option[Long],
     stream: Boolean,
     cmd: CliCommand,
-    io: CliIO
+    io: CliIO,
+    mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
     runResult(
       filePath,
@@ -1628,24 +1660,26 @@ EXAMPLES:
       maxSizeOpt,
       stream,
       cmd,
-      io = io
-    ).flatMap(printRunResult(_, io))
+      io = io,
+      mode = mode
+    ).flatMap(emit(_, mode, io))
 
   /**
-   * Execute and render a command without printing, so in-place writes can commit first.
+   * Execute a command into an [[contract.Outcome]] without printing, so in-place writes can commit
+   * first; [[emit]] renders it in the run's [[contract.OutputMode]].
    *
-   * GH-496: a [[StrictFailure]] is not a crash — the write completed and its summary is printed
-   * verbatim (counts, failing refs, convergence verdict, plus the strict reason) — only the exit
-   * code becomes 1. With `-i` that non-success code means the temp file is discarded and the input
-   * is left untouched, which is the atomic reading of "this book did not pass the gate" — so the
-   * summary's `Saved:` line is rewritten to say exactly that. With `-o` the completed temp is still
-   * committed and `Saved:` stands.
+   * GH-496: a [[StrictFailure]] is not a crash — the write completed and its summary is the
+   * payload, verbatim (counts, failing refs, convergence verdict, plus the strict reason); the
+   * outcome is a `RECALC_GATE` signal (exit 1) whose one-line reason is the summary's
+   * `STRICT FAILURE` line. With `-i` that non-success code means the temp file is discarded and the
+   * input is left untouched, which is the atomic reading of "this book did not pass the gate" — so
+   * the summary's `Saved:` line is rewritten to say exactly that. With `-o` the completed temp is
+   * still committed and `Saved:` stands.
    *
-   * Any other failure is reported on stderr right here ([[contract.Diagnostics.report]]) and yields
-   * an outcome with EMPTY output and the exit code its [[contract.CliError]] selects: 2 for a wrong
-   * command line, 3 for an operation that could not complete. An un-migrated `new Exception(msg)`
-   * classifies as `INTERNAL` (exit 3) with the same message. Reader warnings collected during the
-   * run ride on the outcome and are printed after the result.
+   * Any other failure yields an outcome with NO payload and the exit code its [[contract.CliError]]
+   * selects: 2 for a wrong command line, 3 for an operation that could not complete. An un-migrated
+   * `new Exception(msg)` classifies as `INTERNAL` (exit 3) with the same message. Reader and view
+   * warnings collected during the run ride on the outcome.
    */
   private[cli] def runResult(
     filePath: Path,
@@ -1658,8 +1692,9 @@ EXAMPLES:
     cmd: CliCommand,
     policy: WritePolicy = WritePolicy.default,
     strictFailureDiscardsOutput: Boolean = false,
-    io: CliIO
-  ): IO[CommandOutcome] =
+    io: CliIO,
+    mode: OutputMode = OutputMode.Text
+  ): IO[Outcome] =
     Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
       execute(
         filePath,
@@ -1671,29 +1706,23 @@ EXAMPLES:
         cmd,
         policy,
         io,
-        warnings
+        warnings,
+        mode
       ).attempt.flatMap { attempt =>
-        warnings.get.flatMap { collected =>
+        warnings.get.map { collected =>
           attempt match
-            case Right(output) =>
-              IO.pure(
-                CommandOutcome(
-                  ExitCode.Success,
-                  renderWithTarget(output, outputOpt, displayOpt),
-                  outputComplete = true,
-                  collected
-                )
-              )
+            case Right(payload) =>
+              Outcome.ok(cmd.verb, relocate(payload, outputOpt, displayOpt), collected)
             case Left(strict: StrictFailure) =>
               val rendered = renderWithTarget(strict.summary, outputOpt, displayOpt)
-              IO.pure(
-                CommandOutcome(
-                  ExitCode(1),
-                  if strictFailureDiscardsOutput then unsayTheSave(rendered, outputOpt, displayOpt)
-                  else rendered,
-                  outputComplete = true,
-                  collected
-                )
+              val summary =
+                if strictFailureDiscardsOutput then unsayTheSave(rendered, outputOpt, displayOpt)
+                else rendered
+              Outcome.signal(
+                cmd.verb,
+                Payload.text(summary),
+                CliError(ErrorCode.RECALC_GATE, strictReason(summary)),
+                collected
               )
             case Left(err) =>
               // GH-483: the temp→target rewrite applies to failure messages too
@@ -1701,12 +1730,30 @@ EXAMPLES:
               val relocated = classified.copy(
                 message = renderWithTarget(classified.message, outputOpt, displayOpt)
               )
-              Diagnostics
-                .report(relocated, io)
-                .as(CommandOutcome(relocated.exitCode, "", outputComplete = false, collected))
+              Outcome.failed(cmd.verb, relocated, collected)
         }
       }
     }
+
+  /**
+   * The gate's one-line reason: the summary's `STRICT FAILURE (--strict): …` line, else its first.
+   */
+  private def strictReason(summary: String): String =
+    val lines = summary.linesIterator.toVector
+    lines.find(_.startsWith("STRICT FAILURE")).orElse(lines.headOption).getOrElse(summary)
+
+  /**
+   * The GH-464 temp→target rewrite on a prose payload; JSON payloads never name the staging file.
+   */
+  private def relocate(
+    payload: Payload,
+    outputOpt: Option[Path],
+    displayOpt: Option[Path]
+  ): Payload =
+    payload match
+      case Payload.Text(text, saved, written) =>
+        Payload.Text(renderWithTarget(text, outputOpt, displayOpt), saved, written)
+      case json: Payload.Json => json
 
   /**
    * GH-496: an in-place run whose exit code is non-success never commits its temp file, so the
@@ -1759,12 +1806,15 @@ EXAMPLES:
     Format.errorSimple(renderWithTarget(message, outputOpt, displayOpt))
 
   /**
-   * Result on stdout (nothing at all when there is none — a failure has already gone to stderr),
-   * then the run's warnings on stderr, then the exit code.
+   * Print an outcome in the run's mode ([[contract.Render]]): the result on stdout (nothing at all
+   * when there is none), the diagnostics and warnings — or the one-line `Error:` under `--json` —
+   * on stderr, then the exit code.
    */
-  private def printRunResult(result: CommandOutcome, io: CliIO): IO[ExitCode] =
-    val output = if result.output.isEmpty then IO.unit else io.out(result.output)
-    output *> result.warnings.traverse_(Diagnostics.warn(_, io)).as(result.exitCode)
+  private[cli] def emit(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
+    val rendered = Render(mode)(outcome, BuildInfo.version)
+    val out = if rendered.stdout.isEmpty then IO.unit else io.out(rendered.stdout)
+    val err = if rendered.stderr.isEmpty then IO.unit else io.err(rendered.stderr)
+    (out *> err).as(outcome.exitCode)
 
   /** An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s. */
   private def readerCollecting(warnings: Ref[IO, Vector[Warning]]): ExcelIO[IO] =
@@ -1795,22 +1845,52 @@ EXAMPLES:
   private def readWorkbook(excel: ExcelIO[IO], path: Path, config: ReaderConfig): IO[Workbook] =
     classifyRead(path)(excel.readWith(path, config))
 
-  private[cli] def runInfo(io: CliIO): IO[ExitCode] =
-    io.out(formatFunctionList()).as(ExitCode.Success)
+  private[cli] def runInfo(io: CliIO, mode: OutputMode = OutputMode.Text): IO[ExitCode] =
+    val payload = mode match
+      case OutputMode.Text => Payload.text(formatFunctionList())
+      case OutputMode.Json =>
+        // Typed `[{name}]` until docs-from-code types the registry entries
+        Payload.Json(
+          ujson.Arr.from(
+            FunctionRegistry.allNames.map(name => ujson.Obj("name" -> ujson.Str(name)))
+          )
+        )
+    emit(Outcome.ok("functions", payload), mode, io)
 
-  private[cli] def runRasterizers(io: CliIO): IO[ExitCode] =
-    formatRasterizerList().flatMap { (output, hasWorking) =>
-      io.out(output).as(ExitCode.Success)
+  private[cli] def runRasterizers(io: CliIO, mode: OutputMode = OutputMode.Text): IO[ExitCode] =
+    probeRasterizers().flatMap { rows =>
+      val anyAvailable = rows.exists(_.status == "available")
+      val payload = mode match
+        case OutputMode.Text =>
+          Payload.text(renderRasterizerText(rows, anyAvailable, NativeImage.inNativeImage))
+        case OutputMode.Json =>
+          Payload.Json(
+            ujson.Obj(
+              "backends" -> ujson.Arr.from(rows.map { row =>
+                ujson.Obj(
+                  "name" -> ujson.Str(row.backend),
+                  "status" -> ujson.Str(row.status),
+                  "note" -> ujson.Str(row.note)
+                )
+              }),
+              "anyAvailable" -> ujson.Bool(anyAvailable)
+            )
+          )
+      emit(Outcome.ok("rasterizers", payload), mode, io)
     }
 
   /**
-   * Check all rasterizers and format a status table.
-   *
-   * Returns (formatted output, true if at least one rasterizer works). Checks run in parallel for
-   * better performance.
+   * One line of the `xl rasterizers` table. Status terminology:
+   *   - available: Works correctly
+   *   - missing: Binary not in PATH
+   *   - broken: Found but non-functional (e.g., delegate missing)
+   *   - unavailable: Cannot be used in current environment (e.g., Batik on native-image)
    */
-  private def formatRasterizerList(): IO[(String, Boolean)] =
-    // Run all availability checks in parallel
+  private[cli] final case class RasterizerRow(backend: String, status: String, note: String)
+      derives CanEqual
+
+  /** Check all rasterizers in parallel and describe each. */
+  private def probeRasterizers(): IO[Vector[RasterizerRow]] =
     (
       BatikRasterizer.isAvailable,
       CairoSvg.isAvailable,
@@ -1820,7 +1900,7 @@ EXAMPLES:
       ImageMagick.diagnostics
     ).parMapN {
       (batikAvail, cairoAvail, rsvgAvail, resvgAvail, imageMagickAvail, imageMagickDiag) =>
-        renderRasterizerTable(
+        rasterizerRows(
           batikAvail = batikAvail,
           cairoAvail = cairoAvail,
           rsvgAvail = rsvgAvail,
@@ -1836,12 +1916,6 @@ EXAMPLES:
    * environment (JVM, native binary, nothing installed) is unit-testable.
    *
    * Returns (formatted output, true if at least one rasterizer works).
-   *
-   * Status terminology:
-   *   - available: Works correctly
-   *   - missing: Binary not in PATH
-   *   - broken: Found but non-functional (e.g., delegate missing)
-   *   - unavailable: Cannot be used in current environment (e.g., Batik on native-image)
    */
   private[cli] def renderRasterizerTable(
     batikAvail: Boolean,
@@ -1852,34 +1926,46 @@ EXAMPLES:
     imageMagickDiag: String,
     nativeImage: Boolean
   ): (String, Boolean) =
-    val sb = new StringBuilder
-    sb.append("SVG Rasterizer Status\n")
-    sb.append("=" * 60 + "\n\n")
-    sb.append(f"${"Backend"}%-14s | ${"Status"}%-11s | ${"Notes"}\n")
-    sb.append("-" * 60 + "\n")
+    val rows = rasterizerRows(
+      batikAvail,
+      cairoAvail,
+      rsvgAvail,
+      resvgAvail,
+      imageMagickAvail,
+      imageMagickDiag,
+      nativeImage
+    )
+    val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
+    (renderRasterizerText(rows, anyAvailable, nativeImage), anyAvailable)
 
+  /** The rows of the table, in display order. */
+  private def rasterizerRows(
+    batikAvail: Boolean,
+    cairoAvail: Boolean,
+    rsvgAvail: Boolean,
+    resvgAvail: Boolean,
+    imageMagickAvail: Boolean,
+    imageMagickDiag: String,
+    nativeImage: Boolean
+  ): Vector[RasterizerRow] =
     // Batik - the default backend; "unavailable" when AWT not present (native image)
     val batikStatus = if batikAvail then "available" else "unavailable"
     val batikNote =
       if batikAvail then "Built-in default (requires AWT)"
       else if nativeImage then "Native binary: no AWT, by design"
       else "Requires AWT (not present here)"
-    sb.append(f"${"batik"}%-14s | ${batikStatus}%-11s | $batikNote\n")
 
     // CairoSvg
     val cairoStatus = if cairoAvail then "available" else "missing"
     val cairoNote = if cairoAvail then "pip install cairosvg" else "Not in PATH"
-    sb.append(f"${"cairosvg"}%-14s | ${cairoStatus}%-11s | $cairoNote\n")
 
     // rsvg-convert
     val rsvgStatus = if rsvgAvail then "available" else "missing"
     val rsvgNote = if rsvgAvail then "librsvg2-bin" else "Not in PATH"
-    sb.append(f"${"rsvg-convert"}%-14s | ${rsvgStatus}%-11s | $rsvgNote\n")
 
     // resvg
     val resvgStatus = if resvgAvail then "available" else "missing"
     val resvgNote = if resvgAvail then "cargo install resvg" else "Not in PATH"
-    sb.append(f"${"resvg"}%-14s | ${resvgStatus}%-11s | $resvgNote\n")
 
     // ImageMagick (with delegate check) - explicit opt-in only, never tried automatically
     // "broken" = found but delegate missing, "missing" = not in PATH
@@ -1892,11 +1978,31 @@ EXAMPLES:
       val withOptIn =
         if imageMagickAvail then s"--rasterizer imagemagick only; $cleaned" else cleaned
       if withOptIn.length > 40 then withOptIn.take(37) + "..." else withOptIn
-    sb.append(f"${"imagemagick"}%-14s | ${imStatus}%-11s | $imNote\n")
 
+    Vector(
+      RasterizerRow("batik", batikStatus, batikNote),
+      RasterizerRow("cairosvg", cairoStatus, cairoNote),
+      RasterizerRow("rsvg-convert", rsvgStatus, rsvgNote),
+      RasterizerRow("resvg", resvgStatus, resvgNote),
+      RasterizerRow("imagemagick", imStatus, imNote)
+    )
+
+  /** The table as printed, byte for byte what `xl rasterizers` has always shown. */
+  private def renderRasterizerText(
+    rows: Vector[RasterizerRow],
+    anyAvailable: Boolean,
+    nativeImage: Boolean
+  ): String =
+    val sb = new StringBuilder
+    sb.append("SVG Rasterizer Status\n")
+    sb.append("=" * 60 + "\n\n")
+    sb.append(f"${"Backend"}%-14s | ${"Status"}%-11s | ${"Notes"}\n")
+    sb.append("-" * 60 + "\n")
+    rows.foreach { row =>
+      sb.append(f"${row.backend}%-14s | ${row.status}%-11s | ${row.note}\n")
+    }
     sb.append("\n")
 
-    val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
     if anyAvailable then
       sb.append("At least one rasterizer is available for PNG/JPEG/PDF export.\n")
     else
@@ -1912,7 +2018,7 @@ EXAMPLES:
       )
       sb.append("  apt install imagemagick        # then pass --rasterizer imagemagick\n")
 
-    (sb.toString, anyAvailable)
+    sb.toString
 
   private def formatFunctionList(): String =
     // Dynamically get all functions from the registry
@@ -1938,7 +2044,8 @@ EXAMPLES:
     sheetNameOpt: Option[String],
     maxSizeOpt: Option[Long],
     cmd: CliCommand,
-    io: CliIO
+    io: CliIO,
+    mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
     val readerConfig = buildReaderConfig(maxSizeOpt)
     Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
@@ -1950,27 +2057,33 @@ EXAMPLES:
       (for
         wb <- workbookIO
         sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
-        result <- cmd match
-          case CliCommand.Eval(formulaStr, overrides) =>
-            ReadCommands.eval(wb, sheet, formulaStr, overrides)
-          case CliCommand.EvalArray(formulaStr, targetRef, overrides) =>
-            ReadCommands.evalArray(wb, sheet, formulaStr, targetRef, overrides)
-          case other =>
+        payload <- (cmd, mode) match
+          case (CliCommand.Eval(formulaStr, overrides), OutputMode.Text) =>
+            ReadCommands.eval(wb, sheet, formulaStr, overrides).map(Payload.text)
+          case (CliCommand.Eval(formulaStr, overrides), OutputMode.Json) =>
+            ReadCommands.evalData(wb, sheet, formulaStr, overrides).map(Payload.Json(_))
+          case (CliCommand.EvalArray(formulaStr, targetRef, overrides), OutputMode.Text) =>
+            ReadCommands.evalArray(wb, sheet, formulaStr, targetRef, overrides).map(Payload.text)
+          case (CliCommand.EvalArray(formulaStr, targetRef, overrides), OutputMode.Json) =>
+            ReadCommands
+              .evalArrayData(wb, sheet, formulaStr, targetRef, overrides)
+              .map(Payload.Json(_))
+          case (other, _) =>
             IO.raiseError(new Exception(s"Unexpected headless command: $other"))
-      yield result).attempt.flatMap { attempt =>
-        val outcome = attempt match
-          case Right(output) => io.out(output).as(ExitCode.Success)
-          case Left(err) =>
-            val error = CliError.fromThrowable(err)
-            Diagnostics.report(error, io).as(error.exitCode)
-        outcome.flatTap(_ => warnings.get.flatMap(_.traverse_(Diagnostics.warn(_, io))))
+      yield payload).attempt.flatMap { attempt =>
+        warnings.get.flatMap { collected =>
+          val outcome = attempt match
+            case Right(payload) => Outcome.ok(cmd.verb, payload, collected)
+            case Left(err) => Outcome.failed(cmd.verb, CliError.fromThrowable(err), collected)
+          emit(outcome, mode, io)
+        }
       }
     }
 
   /**
    * Run the diff command with its exit codes: 0 = identical, 1 = differences found (a result, not a
-   * failure), 3 = error (unreadable file, sheet filter matching neither workbook, ...) reported on
-   * stderr.
+   * failure — a `DIFFERENCES_FOUND` signal whose report is the payload), 3 = error (unreadable
+   * file, sheet filter matching neither workbook, ...) reported on stderr.
    */
   private[cli] def runDiff(
     fileA: Path,
@@ -1978,7 +2091,8 @@ EXAMPLES:
     sheetFilter: Option[String],
     maxSizeOpt: Option[Long],
     format: DiffFormat,
-    io: CliIO = CliIO.system
+    io: CliIO = CliIO.system,
+    mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
     val excel = ExcelIO.instance[IO]
     val readerConfig = buildReaderConfig(maxSizeOpt)
@@ -1994,10 +2108,20 @@ EXAMPLES:
         case DiffFormat.Json => DiffCommands.renderJson(diff)
     yield (output, diff.identical)).attempt.flatMap {
       case Right((output, identical)) =>
-        io.out(output).as(if identical then ExitCode.Success else ExitCode(1))
+        val payload = (format, mode) match
+          case (DiffFormat.Json, OutputMode.Json) => Payload.Json(ujson.read(output))
+          case _ => Payload.text(output)
+        val outcome =
+          if identical then Outcome.ok("diff", payload)
+          else
+            Outcome.signal(
+              "diff",
+              payload,
+              CliError(ErrorCode.DIFFERENCES_FOUND, s"Differences found: $fileA vs $fileB")
+            )
+        emit(outcome, mode, io)
       case Left(err) =>
-        val error = CliError.fromThrowable(err)
-        Diagnostics.report(error, io).as(error.exitCode)
+        emit(Outcome.failed("diff", CliError.fromThrowable(err)), mode, io)
     }
 
   /**
@@ -2026,21 +2150,33 @@ EXAMPLES:
   private[cli] def runLint(
     file: Path,
     format: LintFormat,
-    io: CliIO = CliIO.system
+    io: CliIO = CliIO.system,
+    mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
     IO.blocking(WorkbookLint.lint(file)).flatMap {
       case Right(findings) =>
         val output = format match
           case LintFormat.Text => LintCommands.renderText(file.toString, findings)
           case LintFormat.Json => LintCommands.renderJson(file.toString, findings)
-        io.out(output).as(if findings.isEmpty then ExitCode.Success else ExitCode(1))
+        val payload = (format, mode) match
+          case (LintFormat.Json, OutputMode.Json) => Payload.Json(ujson.read(output))
+          case _ => Payload.text(output)
+        val outcome =
+          if findings.isEmpty then Outcome.ok("lint", payload)
+          else
+            Outcome.signal(
+              "lint",
+              payload,
+              CliError(ErrorCode.LINT_FINDINGS, s"$file: ${findings.size} finding(s)")
+            )
+        emit(outcome, mode, io)
       case Left(err) =>
         val at = Some(Location.file(file.toString))
         val error = err match
           case XLError.IOError(_) | XLError.ParseError(_, _) =>
             CliError(ErrorCode.IO_READ, err.message, location = at, cause = Some(err))
           case other => CliError.fromXLError(other, at)
-        Diagnostics.report(error, io).as(error.exitCode)
+        emit(Outcome.failed("lint", error), mode, io)
     }
 
   private[cli] def runStandalone(
@@ -2048,7 +2184,8 @@ EXAMPLES:
     sheetName: String,
     sheets: List[String],
     backendOpt: Option[XmlBackend],
-    io: CliIO
+    io: CliIO,
+    mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
     val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
     (for
@@ -2065,16 +2202,22 @@ EXAMPLES:
       s"Created ${outPath.toAbsolutePath} with ${names.size} sheet(s): $sheetList"
     ).attempt.flatMap {
       case Right(output) =>
-        io.out(output).as(ExitCode.Success)
+        val payload = Payload.Text(output, Some(outPath.toAbsolutePath.toString), written = true)
+        emit(Outcome.ok("new", payload), mode, io)
       case Left(err) =>
-        val error = CliError.fromThrowable(err)
-        Diagnostics.report(error, io).as(error.exitCode)
+        emit(Outcome.failed("new", CliError.fromThrowable(err)), mode, io)
     }
 
   /** A `--stream` refusal: usage (exit 2), naming the in-memory alternative as the hint. */
   private def unsupportedInStream(message: String, alternative: String): CliException =
     CliException(CliError(ErrorCode.UNSUPPORTED_IN_STREAM, message, hint = Some(alternative)))
 
+  /**
+   * Run one command to its [[contract.Payload]]. Under `--json` the typed verbs (`sheets`, `names`,
+   * `bounds`, `batch --dry-run`) build their data directly and `view`/`filter` with their own
+   * `--format json` pass it through ([[bridge]]); everything else is the prose the text mode
+   * prints.
+   */
   private def execute(
     filePath: Path,
     sheetNameOpt: Option[String],
@@ -2085,55 +2228,67 @@ EXAMPLES:
     cmd: CliCommand,
     policy: WritePolicy,
     io: CliIO,
-    warnings: Ref[IO, Vector[Warning]]
-  ): IO[String] =
+    warnings: Ref[IO, Vector[Warning]],
+    mode: OutputMode
+  ): IO[Payload] =
+    val excel = readerCollecting(warnings)
+    val readerConfig = buildReaderConfig(maxSizeOpt)
+    val warn: Warning => IO[Unit] = warning => warnings.update(_ :+ warning)
     // Handle metadata-only commands (instant for any file size)
     cmd match
-      // Sheets: list/hide/show operations
-      case CliCommand.Sheets(action) =>
-        action match
-          case SheetsAction.List(stats) =>
-            if stats then
-              // Full mode: load workbook and get cell counts
-              val excel = readerCollecting(warnings)
-              val readerConfig = buildReaderConfig(maxSizeOpt)
-              readWorkbook(excel, filePath, readerConfig).flatMap(wb => WorkbookCommands.sheets(wb))
-            else
-              // Quick mode: metadata only (instant)
-              classifyRead(filePath)(WorkbookCommands.sheetsQuick(filePath))
-          case SheetsAction.Hide(name, veryHide) =>
-            // Hide requires loading workbook and writing output
-            requireOutputAction(outputOpt, "sheets hide") { outputPath =>
-              val excel = readerCollecting(warnings)
-              val readerConfig = buildReaderConfig(maxSizeOpt)
-              val config = buildWriterConfig(backendOpt)
-              readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
-                SheetCommands.hideSheet(wb, name, veryHide, outputPath, config, stream)
-              }
-            }
-          case SheetsAction.Show(name) =>
-            // Show requires loading workbook and writing output
-            requireOutputAction(outputOpt, "sheets show") { outputPath =>
-              val excel = readerCollecting(warnings)
-              val readerConfig = buildReaderConfig(maxSizeOpt)
-              val config = buildWriterConfig(backendOpt)
-              readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
-                SheetCommands.showSheet(wb, name, outputPath, config, stream)
-              }
-            }
+      // Sheets list: quick mode (metadata only, instant) by default, --stats loads the workbook
+      case CliCommand.Sheets(SheetsAction.List(stats)) =>
+        (stats, mode) match
+          case (true, OutputMode.Text) =>
+            readWorkbook(excel, filePath, readerConfig)
+              .flatMap(WorkbookCommands.sheets)
+              .map(Payload.text)
+          case (true, OutputMode.Json) =>
+            readWorkbook(excel, filePath, readerConfig)
+              .map(wb => Payload.Json(WorkbookCommands.sheetsData(wb)))
+          case (false, OutputMode.Text) =>
+            classifyRead(filePath)(WorkbookCommands.sheetsQuick(filePath)).map(Payload.text)
+          case (false, OutputMode.Json) =>
+            classifyRead(filePath)(WorkbookCommands.sheetsQuickData(filePath)).map(Payload.Json(_))
+      case CliCommand.Sheets(SheetsAction.Hide(name, veryHide)) =>
+        // Hide requires loading workbook and writing output
+        requireOutputAction(outputOpt, "sheets hide") { outputPath =>
+          val config = buildWriterConfig(backendOpt)
+          readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
+            SheetCommands.hideSheet(wb, name, veryHide, outputPath, config, stream)
+          }
+        }.map(Payload.text)
+      case CliCommand.Sheets(SheetsAction.Show(name)) =>
+        // Show requires loading workbook and writing output
+        requireOutputAction(outputOpt, "sheets show") { outputPath =>
+          val config = buildWriterConfig(backendOpt)
+          readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
+            SheetCommands.showSheet(wb, name, outputPath, config, stream)
+          }
+        }.map(Payload.text)
 
       // Names: always lightweight (defined names don't require cell data)
       case CliCommand.Names =>
-        classifyRead(filePath)(WorkbookCommands.namesLight(filePath))
+        mode match
+          case OutputMode.Text =>
+            classifyRead(filePath)(WorkbookCommands.namesLight(filePath)).map(Payload.text)
+          case OutputMode.Json =>
+            classifyRead(filePath)(WorkbookCommands.namesData(filePath)).map(Payload.Json(_))
 
       // Bounds: dimension-first by default (--scan for full scan)
       case CliCommand.Bounds(scan) =>
-        if scan then
-          // Full streaming scan (accurate)
-          StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
-        else
-          // Dimension element (instant)
-          StreamingReadCommands.boundsDimension(filePath, sheetNameOpt)
+        mode match
+          case OutputMode.Text =>
+            val text =
+              if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
+              else StreamingReadCommands.boundsDimension(filePath, sheetNameOpt)
+            text.map(Payload.text)
+          case OutputMode.Json =>
+            StreamingReadCommands.boundsData(filePath, sheetNameOpt, scan).map(Payload.Json(_))
+
+      // A dry run validates the batch JSON and reads no workbook, whatever else is on the line
+      case CliCommand.Batch(source, true) =>
+        batchDryRunPayload(source, io, mode)
 
       // Other commands: regular execution path
       case _ =>
@@ -2153,7 +2308,8 @@ EXAMPLES:
           case _: CliCommand.Batch => true
           case _ => false
 
-        if stream && isReadCmd then executeStreaming(filePath, sheetNameOpt, cmd)
+        if stream && isReadCmd then
+          executeStreaming(filePath, sheetNameOpt, cmd).map(bridge(cmd, mode))
         else if stream && isStreamingWriteCmd then
           // GH-496: a streaming write never recalculates, so --strict could only ever report
           // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
@@ -2165,15 +2321,41 @@ EXAMPLES:
                 "omit --stream: the in-memory write recalculates the edit's dependency cone and can gate"
               )
             )
-          else executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io)
+          else
+            executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io).map(bridge(cmd, mode))
         else
-          val excel = readerCollecting(warnings)
-          val readerConfig = buildReaderConfig(maxSizeOpt)
           for
             wb <- readWorkbook(excel, filePath, readerConfig)
             sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
-            result <- executeCommand(wb, sheet, outputOpt, backendOpt, stream, cmd, policy, io)
-          yield result
+            result <- executeCommand(
+              wb,
+              sheet,
+              outputOpt,
+              backendOpt,
+              stream,
+              cmd,
+              policy,
+              io,
+              warn
+            )
+          yield bridge(cmd, mode)(result)
+
+  /**
+   * The legacy bridge from a handler's text to its payload: prose stays prose; under `--json` a
+   * verb whose own `--format json` produced JSON (`view`, `filter`) passes it through as `data`,
+   * parsed rather than rebuilt so the two spellings can never drift.
+   */
+  private def bridge(cmd: CliCommand, mode: OutputMode)(text: String): Payload =
+    (mode, cmd) match
+      case (OutputMode.Json, view: CliCommand.View) if emitsJson(view.format) =>
+        Payload.Json(ujson.read(text))
+      case (OutputMode.Json, CliCommand.Filter(_, _, _, FilterFormat.Json, _)) =>
+        Payload.Json(ujson.read(text))
+      case _ => Payload.text(text)
+
+  private def emitsJson(format: ViewFormat): Boolean = format match
+    case ViewFormat.Json => true
+    case _ => false
 
   /** Execute command using streaming mode (O(1) memory). */
   private def executeStreaming(
@@ -2242,16 +2424,58 @@ EXAMPLES:
         )
       )
 
-  /** Validate batch JSON and show summary without writing. */
+  /** Read and parse the batch source once, for either rendering of a dry run. */
+  private def parseBatchDryRun(source: String, io: CliIO): IO[BatchParser.ParseResult] =
+    BatchParser.readBatchInput(source, io.stdin).flatMap(BatchParser.parseBatchOperations)
+
+  /**
+   * Validate batch JSON and show summary without writing; the parse warnings go to stderr as they
+   * always have.
+   */
   private[cli] def batchDryRun(source: String, io: CliIO): IO[String] =
-    BatchParser.readBatchInput(source, io.stdin).flatMap { input =>
-      BatchParser.parseBatchOperations(input).flatMap { result =>
-        result.warnings.traverse_(io.err) *>
-          IO.pure {
-            val summary = BatchParser.formatSummary(result.ops)
-            s"Dry run - ${result.ops.size} operations parsed:\n$summary"
-          }
+    parseBatchDryRun(source, io).flatMap { result =>
+      result.warnings.traverse_(io.err) *>
+        IO.pure {
+          val summary = BatchParser.formatSummary(result.ops)
+          s"Dry run - ${result.ops.size} operations parsed:\n$summary"
+        }
+    }
+
+  /**
+   * The dry run as data (`batch --dry-run --json`): `{ops: [{index, op, summary}], warnings}` —
+   * `index` the op's 0-based position in the array, `op` the summary's leading keyword (`PUT`,
+   * `MERGE`, ...), `summary` the line `formatSummary` prints, and the parse warnings as data rather
+   * than on stderr.
+   */
+  private def batchDryRunData(source: String, io: CliIO): IO[ujson.Value] =
+    parseBatchDryRun(source, io).map { result =>
+      val ops = result.ops.zipWithIndex.map { (op, index) =>
+        val summary = BatchParser.formatSummary(Vector(op)).trim
+        ujson.Obj(
+          "index" -> ujson.Num(index),
+          "op" -> ujson.Str(summary.takeWhile(_ != ' ')),
+          "summary" -> ujson.Str(summary)
+        )
       }
+      ujson.Obj(
+        "ops" -> ujson.Arr.from(ops),
+        "warnings" -> ujson.Arr.from(result.warnings.map(ujson.Str.apply))
+      )
+    }
+
+  private def batchDryRunPayload(source: String, io: CliIO, mode: OutputMode): IO[Payload] =
+    mode match
+      case OutputMode.Text => batchDryRun(source, io).map(Payload.text)
+      case OutputMode.Json => batchDryRunData(source, io).map(Payload.Json(_))
+
+  /**
+   * The standalone `batch --dry-run` (no -f, no -o): a bad source (invalid JSON, missing file) is a
+   * failure classified like every other verb's, never an escaped exception.
+   */
+  private[cli] def batchDryRunOutcome(source: String, io: CliIO, mode: OutputMode): IO[Outcome] =
+    batchDryRunPayload(source, io, mode).attempt.map {
+      case Right(payload) => Outcome.ok("batch", payload)
+      case Left(failure) => Outcome.failed("batch", CliError.fromThrowable(failure))
     }
 
   /** Execute streaming write command (O(1) memory transform). */
@@ -2359,6 +2583,12 @@ EXAMPLES:
         )
       )
 
+  /**
+   * @param warn
+   *   where a handler's out-of-band notices go (`view`'s csv/html/svg truncation and hidden-line
+   *   notices); the runner collects them for the run's stderr or envelope, and the default prints
+   *   `Warning[CODE]: …` to `io` directly
+   */
   private[cli] def executeCommand(
     wb: Workbook,
     sheetOpt: Option[Sheet],
@@ -2367,7 +2597,8 @@ EXAMPLES:
     stream: Boolean,
     cmd: CliCommand,
     policy: WritePolicy = WritePolicy.default,
-    io: CliIO = CliIO.system
+    io: CliIO = CliIO.system,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] = cmd match
     // Workbook commands (these are now handled in execute() before reaching here)
     case CliCommand.Sheets(action) =>
@@ -2425,7 +2656,8 @@ EXAMPLES:
         skipEmpty,
         headerRow,
         rasterizer,
-        skipHidden
+        skipHidden,
+        warn
       )
 
     case CliCommand.Cell(refStr, noStyle) =>
@@ -2882,18 +3114,20 @@ EXAMPLES:
     outOpt: Option[Path],
     inPlace: Boolean,
     file: Path,
-    io: CliIO = CliIO.system
-  )(execute: (Option[Path], Option[Path]) => IO[CommandOutcome]): IO[ExitCode] =
+    io: CliIO = CliIO.system,
+    mode: OutputMode = OutputMode.Text,
+    verb: String = ""
+  )(execute: (Option[Path], Option[Path]) => IO[Outcome]): IO[ExitCode] =
     (outOpt, inPlace) match
       case (Some(_), true) =>
         val error =
           CliError.usage("--in-place (-i) and --output (-o) are mutually exclusive", None)
-        Diagnostics.report(error, io).as(error.exitCode)
+        emit(Outcome.failed(verb, error), mode, io)
       case (Some(out), false) =>
-        runStagedOutput(out, ".xl-output-", io)(outcome => outcome.outputComplete)(execute)
-      case (None, false) => execute(None, None).flatMap(printRunResult(_, io))
+        runStagedOutput(out, ".xl-output-", io, mode)(outcome => outcome.outputComplete)(execute)
+      case (None, false) => execute(None, None).flatMap(emit(_, mode, io))
       case (None, true) =>
-        runStagedOutput(file, ".xl-inplace-", io)(outcome =>
+        runStagedOutput(file, ".xl-inplace-", io, mode)(outcome =>
           outcome.outputComplete && outcome.exitCode == ExitCode.Success
         )(execute)
 
@@ -2919,25 +3153,33 @@ EXAMPLES:
       }
     Resource.make(acquire)(tmp => IO.blocking(Files.deleteIfExists(tmp)).void)
 
-  /** Run one command against a staging path and publish only an explicitly complete output. */
+  /**
+   * Run one command against a staging path and publish only an explicitly complete output. What the
+   * payload then says about the write (`saved`, `written`) is what this step actually did — a
+   * committed run names its target, a discarded one (an `-i` strict failure) says nothing was.
+   */
   private def runStagedOutput(
     target: Path,
     prefix: String,
-    io: CliIO
+    io: CliIO,
+    mode: OutputMode
   )(
-    shouldCommit: CommandOutcome => Boolean
+    shouldCommit: Outcome => Boolean
   )(
-    execute: (Option[Path], Option[Path]) => IO[CommandOutcome]
+    execute: (Option[Path], Option[Path]) => IO[Outcome]
   ): IO[ExitCode] =
     stagedOutput(target, prefix).use { tmp =>
       execute(Some(tmp), Some(target)).flatMap { outcome =>
-        val commit =
+        val commit: IO[Boolean] =
           if shouldCommit(outcome) then
             // A read-only command may accept the global -o flag but never touch its staging file.
             // An XLSX is necessarily non-empty, so do not replace a target with the untouched file.
-            IO.blocking(Files.size(tmp) > 0L).ifM(replaceAtomically(tmp, target), IO.unit)
-          else IO.unit
-        commit *> printRunResult(outcome, io)
+            IO.blocking(Files.size(tmp) > 0L)
+              .ifM(replaceAtomically(tmp, target).as(true), IO.pure(false))
+          else IO.pure(false)
+        commit.flatMap { committed =>
+          emit(outcome.committed(Option.when(committed)(target.toString)), mode, io)
+        }
       }
     }
 
