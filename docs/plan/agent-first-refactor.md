@@ -584,7 +584,7 @@ ops by index before writing anything; `OpRegistry` is the single table behind ba
 
 ---
 
-### Cluster describe-audit-deps
+**Status**: done — `fc6ed32`, `99c4b7c`, `ffd01ca`, `51ebd50` (`describe`/`audit`/`deps`; `QualifiedGraph`, `WorkbookAudit`, `WorkbookSummary`; review pinned `cell`'s occupied-cells semantics)
 
 **Status**: pending
 **Modules**: xl-evaluator, xl-cli, xl (probes)

@@ -68,6 +68,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   qualified refs to the streamed sheet now work. `page-setup` accepts `fitToHeight: 0` /
   `fitToWidth: 0` in batch and on the CLI flags (#463). Summary lines for sheet-scoped ops carry a
   `[Sheet]` prefix; unscoped lines are unchanged.
+- **`describe`, `audit`, `deps`: orient, find what is broken, trace a number — one call each.**
+  `xl -f book.xlsx describe` prints the sheets (state, dimension), defined names (with `hidden`) and
+  `date1904` from the workbook metadata alone, so it is identical under `--stream`; `--full` adds
+  per-sheet counts (cells, formulas, uncached formulas, merges, comments, hyperlinks, hidden rows and
+  columns, charts, pictures, tables, conditional formats, data validations) and `calcPr`. `xl audit`
+  buckets every formula problem the evaluator can see — cached Excel error values, uncached and
+  unparseable formulas, volatile and dynamic (`INDIRECT`/`OFFSET`) readers, cycles, external
+  references, readers of undefined names — and `--fail-on-findings` exits 1 `AUDIT_FINDINGS` when
+  the book is not clean (volatile, dynamic and external entries are informational). `xl deps
+  Sheet2!B4 [--direction precedents|dependents|both] [--depth n|all]` walks the bounded dependency
+  graph layer by layer with each node's formula and value. All three have typed `--json` payloads.
+  In xl-evaluator, `QualifiedGraph.of(wb)` (symbolic range readers: `SUM(A:A)` is one edge, an
+  empty cell inside a summed range still names its readers), `WorkbookAudit.of(wb)` and
+  `WorkbookSummary.of(wb)` back them, and the prelude exports `wb.describe` / `wb.audit`. `cell`
+  now uses the same bounded graph: its `Dependencies:` line lists a range's occupied cells, so a
+  `SUM(A:A)` reader no longer prints a million entries and empty cells inside a range are omitted.
 - **Typed reads see cached formula values** (#477). `readTyped`, `readTypedOpt` and
   `readTypedOr` on a formula cell decode its cached value (`Formula(_, Some(v), _)` reads as
   `v`), so a recalculated or Excel-saved book reads like Excel shows it. An uncached formula still
