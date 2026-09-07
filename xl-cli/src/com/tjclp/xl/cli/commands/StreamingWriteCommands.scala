@@ -159,7 +159,12 @@ object StreamingWriteCommands:
       (qualified, refOrRange) <- parseTarget(refStr, "reference")
 
       // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt, qualified, "put")
+      worksheetPath <- resolveSheetPath(
+        sourcePath,
+        sheetNameOpt,
+        qualified,
+        unqualifiedContext("put", refStr, refOrRange)
+      )
 
       // Build value map based on mode
       parsedValues <- (refOrRange, values) match
@@ -255,7 +260,12 @@ object StreamingWriteCommands:
       (qualified, refOrRange) <- parseTarget(refStr, "reference")
 
       // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt, qualified, "putf")
+      worksheetPath <- resolveSheetPath(
+        sourcePath,
+        sheetNameOpt,
+        qualified,
+        unqualifiedContext("putf", refStr, refOrRange)
+      )
 
       // Build formula map
       valueMap <- (refOrRange, formulas) match
@@ -339,7 +349,12 @@ object StreamingWriteCommands:
       range = target.fold(ref => CellRange(ref, ref), identity)
 
       // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt, qualified, "style")
+      worksheetPath <- resolveSheetPath(
+        sourcePath,
+        sheetNameOpt,
+        qualified,
+        unqualifiedContext("style", rangeStr, target)
+      )
 
       // GH-475: same typo signal as the in-memory style command
       _ <- StyleBuilder.warnNumFmt(numFormat)
@@ -1161,6 +1176,17 @@ object StreamingWriteCommands:
           case RefType.QualifiedCell(sheet, ref) => (Some(sheet), Left(ref))
           case RefType.QualifiedRange(sheet, range) => (Some(sheet), Right(range))
         }
+    )
+
+  /** The `SHEET_REQUIRED` context for an unqualified target, worded as the in-memory twin's. */
+  private def unqualifiedContext(
+    verb: String,
+    refStr: String,
+    target: Either[ARef, CellRange]
+  ): String =
+    target.fold(
+      _ => s"$verb with unqualified ref '$refStr'",
+      _ => s"$verb with unqualified range '$refStr'"
     )
 
   private val relsNamespace =

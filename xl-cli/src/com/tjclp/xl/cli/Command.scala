@@ -2,6 +2,9 @@ package com.tjclp.xl.cli
 
 import java.nio.file.Path
 
+import com.tjclp.xl.addressing.RefType
+import com.tjclp.xl.formula.{DependencyGraph, FormulaParser}
+
 /**
  * Sheets subcommand actions.
  *
@@ -232,6 +235,55 @@ enum CliCommand:
         CopySheet(_, _) | Name(_) | Diff(_, _) | Lint(_) =>
       false
     case _ => true
+
+  /**
+   * The ref strings the verb targets — what THE sheet rule's step 1 reads for a qualifier. `Nil`
+   * for a verb with no ref argument (`bounds`, `row`, `unfreeze`, …) or a formula one (`eval`).
+   */
+  def targetRefs: List[String] = this match
+    case v: View => List(v.range)
+    case Cell(ref, _) => List(ref)
+    case Stats(ref) => List(ref)
+    case Deps(ref, _, _) => List(ref)
+    case p: Put => List(p.ref)
+    case PutFormula(ref, _) => List(ref)
+    case s: Style => List(s.range)
+    case Merge(range) => List(range)
+    case Unmerge(range) => List(range)
+    case AddComment(ref, _, _) => List(ref)
+    case RemoveComment(ref) => List(ref)
+    case Clear(range, _, _, _) => List(range)
+    case Fill(source, target, _) => List(source, target)
+    case Sort(range, _, _) => List(range)
+    case Freeze(ref) => List(ref)
+    case AutoFilterOp(range, _) => range.toList
+    case c: CfAdd => List(c.range)
+    case c: ChartAdd => c.data :: c.at :: c.categories.toList
+    case AddImage(_, at, _) => List(at)
+    case Copy(source, target, _) => List(source, target)
+    case _ => Nil
+
+  /**
+   * Whether the run's default sheet (THE sheet rule's steps 2–3) can matter for this verb: it takes
+   * a sheet ([[takesSheet]]) and does not name its own — every target ref qualified, an `import`
+   * into `--new-sheet`, or an `eval` whose formula references only qualified cells needs none, so a
+   * single-sheet book's auto-select is not announced for them.
+   */
+  def usesDefaultSheet: Boolean = this match
+    case i: Import => i.newSheet.isEmpty
+    case i: ImportMarkdown => i.newSheet.isEmpty
+    case Eval(formula, overrides) =>
+      overrides.nonEmpty || FormulaParser
+        .parse(formula)
+        .toOption
+        .forall(DependencyGraph.containsUnqualifiedCellReferences)
+    case _ =>
+      takesSheet && (targetRefs.isEmpty || targetRefs.exists(ref =>
+        RefType.parse(ref).toOption.exists {
+          case RefType.Cell(_) | RefType.Range(_) => true
+          case _ => false
+        }
+      ))
 
   /**
    * The subcommand path as typed, joined by a space (`"sheets hide"`, `"cf add"`): the `verb` of

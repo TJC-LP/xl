@@ -230,7 +230,9 @@ object Cli:
           case Right(handler) => handler
           case Left(help) if help.errors.nonEmpty =>
             val error = CliError.usage(
-              help.errors.headOption.fold("invalid command line")(compact),
+              help.errors.headOption.fold("invalid command line") { first =>
+                if verb.isEmpty then compact(first) else first
+              },
               Some(s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage")
             )
             usageFailure(verb.getOrElse(""), error, mode, io)
@@ -240,6 +242,8 @@ object Cli:
   /**
    * decline's first error, minus the one dump it embeds: with no verb at all it lists every
    * subcommand inside "Missing expected command (a or b or …)!", which is the help, not an error.
+   * Applied only when no verb was given: a verb missing its sub-verb (`name`, `cf`) keeps decline's
+   * own short list (`Missing expected command (add or rm)!`).
    */
   private def compact(error: String): String =
     if error.startsWith("Missing expected command") then "Missing expected command: no verb given"

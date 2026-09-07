@@ -349,8 +349,24 @@ class ResolveSpec extends CatsEffectSuite with ScalaCheckSuite:
       search <- CliHarness.run("-f", single, "--json", "search", "solo")
       sheets <- CliHarness.run("-f", single, "--json", "sheets")
       text <- CliHarness.run("-f", single, "view", "A1:B1")
+      // step 1 decided these: the default sheet never mattered, so nothing was auto-selected
+      qualifiedView <- CliHarness.run("-f", single, "--json", "view", "Sheet1!A1:B1")
+      qualifiedCell <- CliHarness.run("-f", single, "--json", "cell", "Sheet1!A1")
+      qualifiedStreamPut <- CliHarness.run(
+        "-f",
+        single,
+        "-o",
+        file("single-qualified-stream-put.xlsx"),
+        "--json",
+        "--stream",
+        "put",
+        "Sheet1!A1",
+        "9"
+      )
+      qualifiedEval <- CliHarness.run("-f", single, "--json", "eval", "=Sheet1!B1*2")
+      unqualifiedEval <- CliHarness.run("-f", single, "--json", "eval", "=B1*2")
     yield
-      List(auto, streamAuto, cellAuto, boundsAuto).foreach { run =>
+      List(auto, streamAuto, cellAuto, boundsAuto, unqualifiedEval).foreach { run =>
         assertEquals(run.exit, 0, run.stderr)
         assertEquals(codes(run), Vector(WarningCode.SHEET_AUTOSELECTED), run.stdout)
         assertEquals(run.stderr, "", "the notice rides in the envelope, not on stderr")
@@ -358,8 +374,47 @@ class ResolveSpec extends CatsEffectSuite with ScalaCheckSuite:
       assertEquals(codes(flagged), Vector.empty, flagged.stdout)
       assertEquals(codes(search), Vector.empty, "search reads every sheet: no auto-select")
       assertEquals(codes(sheets), Vector.empty, "a workbook verb: no auto-select")
+      List(qualifiedView, qualifiedCell, qualifiedStreamPut, qualifiedEval).foreach { run =>
+        assertEquals(run.exit, 0, run.stderr)
+        assertEquals(codes(run), Vector.empty, s"qualified: no auto-select in ${run.stdout}")
+      }
       assertEquals(text.exit, 0)
       assertEquals(text.stderr, "")
+  }
+
+  test("import into an existing sheet follows the rule; --new-sheet needs no sheet") {
+    val csv = fixtures().resolve("import-rule.csv")
+    val outSingle = file("import-single.xlsx")
+    val outTwo = file("import-two.xlsx")
+    val outNew = file("import-new.xlsx")
+    for
+      _ <- IO.blocking(Files.writeString(csv, "name,qty\nwidget,3\n"))
+      single <- CliHarness.run("-f", file("single.xlsx"), "-o", outSingle, "import", csv.toString)
+      two <- CliHarness.run("-f", file("simple.xlsx"), "-o", outTwo, "import", csv.toString)
+      newSheet <- CliHarness.run(
+        "-f",
+        file("simple.xlsx"),
+        "-o",
+        outNew,
+        "--json",
+        "import",
+        csv.toString,
+        "--new-sheet",
+        "Imported"
+      )
+      cell <- CliHarness.run("-f", outSingle, "cell", "A2")
+    yield
+      assertEquals(single.exit, 0, single.stderr)
+      assert(cell.stdout.contains("widget"), cell.stdout)
+      assertSheetRequired(two, "import")
+      assert(two.stderr.contains("Error: import requires --sheet"), two.stderr)
+      assert(!Files.exists(Path.of(outTwo)))
+      assertEquals(newSheet.exit, 0, newSheet.stderr)
+      assertEquals(
+        ujson.read(newSheet.stdout)("warnings").arr.size,
+        0,
+        "--new-sheet needs no default: nothing auto-selected"
+      )
   }
 
   test("a batch op qualified with the renamed default resolves by the new identity") {

@@ -78,7 +78,8 @@ private[cli] object BuildInfo:
  *
  * Stateless by design: each command is self-contained. Use global flags:
  *   - `-f, --file` — Input file (required)
- *   - `-s, --sheet` — Sheet name (optional, defaults to first)
+ *   - `-s, --sheet` — Sheet name (ADR-017 §2.5: a qualified ref wins, a single-sheet book
+ *     auto-selects, otherwise a sheet verb is `SHEET_REQUIRED`)
  *   - `-o, --output` — Output file for mutations (required for put/putf)
  *   - `--no-recalc` / `--preserve-caches` — write verbs only (GH-468): apply the edit and
  *     recalculate nothing. Non-structural verbs keep every cached formula value in the file; the
@@ -89,8 +90,9 @@ private[cli] object BuildInfo:
  *     envelope `{ok, exitCode, verb, version, data, warnings, error}` on stdout; `--format json`
  *     payloads ride inside it unchanged
  *
- * Global flags precede the verb: `xl -f in.xlsx -o out.xlsx --strict batch -`. (`view --eval
- * --strict` is a separate, subcommand-scoped flag of the same name.)
+ * Global flags may go anywhere on the command line — [[contract.Argv.hoist]] moves them in front of
+ * the verb before decline parses. (`view --eval --strict` is a separate, subcommand-scoped flag of
+ * the same name and stays where it is.)
  *
  * This object is the process shell: option and verb definitions plus the handlers that read files
  * and print. The wiring between them is [[Cli.program]], and argv handling (help, version, parse
@@ -1970,7 +1972,7 @@ EXAMPLES:
     warn: Warning => IO[Unit]
   ): IO[Unit] =
     only match
-      case Some(name) if mode == OutputMode.Json && sheetNameOpt.isEmpty && cmd.takesSheet =>
+      case Some(name) if mode == OutputMode.Json && sheetNameOpt.isEmpty && cmd.usesDefaultSheet =>
         warn(Resolve.autoSelected(name))
       case _ => IO.unit
 
@@ -1987,7 +1989,7 @@ EXAMPLES:
     mode: OutputMode,
     warn: Warning => IO[Unit]
   ): IO[Unit] =
-    if mode == OutputMode.Json && sheetNameOpt.isEmpty && cmd.takesSheet then
+    if mode == OutputMode.Json && sheetNameOpt.isEmpty && cmd.usesDefaultSheet then
       excel.readMetadata(filePath).attempt.flatMap {
         case Right(meta) => announceAutoSelect(Resolve.only(meta), sheetNameOpt, cmd, mode, warn)
         case Left(_) => IO.unit

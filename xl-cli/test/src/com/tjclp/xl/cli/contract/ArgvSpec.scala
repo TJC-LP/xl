@@ -134,8 +134,45 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
     )
   }
 
-  test("a value-taking global as the last token hoists alone (decline reports the missing value)") {
-    assertEquals(Argv.hoist(List("view", "A1", "-f")), List("-f", "view", "A1"))
+  test("a value-taking global as the last token stays put (decline reports it, not a bogus verb)") {
+    assertEquals(Argv.hoist(List("view", "A1", "-f")), List("view", "A1", "-f"))
+    assertEquals(Argv.verbOf(Argv.hoist(List("view", "A1", "-f"))), Some("view"))
+  }
+
+  test("verbOf skips every flag, known or not: decline reports the unknown one") {
+    assertEquals(Argv.verbOf(List("--frobnicate", "view")), Some("view"))
+    assertEquals(Argv.verbOf(List("-f", "x.xlsx", "--frobnicate", "view", "A1:B2")), Some("view"))
+    assertEquals(Argv.verbOf(List("--frobnicate")), None)
+  }
+
+  test("an unknown flag is decline's `Unexpected option`, never an unknown verb") {
+    for
+      unknownFlag <- CliHarness.run("-f", file("simple.xlsx"), "--frobnicate", "view", "A1:B2")
+      dangling <- CliHarness.run("view", "A1:B2", "-f")
+      bareFlag <- CliHarness.run("--frobnicate")
+    yield
+      assertEquals(unknownFlag.exit, 2)
+      assert(
+        unknownFlag.stderr.startsWith("Error: Unexpected option: --frobnicate"),
+        unknownFlag.stderr
+      )
+      assertEquals(dangling.exit, 2)
+      assert(!dangling.stderr.contains("unknown verb"), dangling.stderr)
+      assert(dangling.stderr.contains("  code: USAGE"), dangling.stderr)
+      assertEquals(bareFlag.exit, 2)
+      assert(!bareFlag.stderr.contains("unknown verb"), bareFlag.stderr)
+  }
+
+  test("a verb missing its sub-verb keeps decline's own short list") {
+    for
+      name <- CliHarness.run("-f", file("simple.xlsx"), "name")
+      cf <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "cf")
+    yield
+      assertEquals(name.exit, 2)
+      assert(name.stderr.contains("Missing expected command (add or rm)!"), name.stderr)
+      assert(name.stderr.contains("run `xl name --help`"), name.stderr)
+      assertEquals(cf.exit, 2)
+      assert(cf.stderr.contains("Missing expected command (add or list)!"), cf.stderr)
   }
 
   // ---------------------------------------------------------------------------------------------

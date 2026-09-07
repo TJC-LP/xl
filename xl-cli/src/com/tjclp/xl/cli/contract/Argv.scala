@@ -46,9 +46,6 @@ object Argv:
     "new" -> Set("--sheet", "--backend")
   )
 
-  /** Flags that never name a verb and take no value: decline's own. */
-  private val meta: Set[String] = Set("--help", "--version", "-v")
-
   /**
    * Every top-level verb, in usage order — the names decline renders in `xl --help`, pinned against
    * that rendering by ArgvSpec so the two cannot drift.
@@ -151,7 +148,8 @@ object Argv:
             case Some((_, true)) =>
               tail match
                 case value :: after => walk(after, hoisted :+ token :+ value, others)
-                case Nil => (hoisted :+ token, others)
+                // a dangling value-taking global stays put, so decline reports it as it is
+                case Nil => (hoisted, others :+ token)
             case Some((_, false)) => walk(tail, hoisted :+ token, others)
             case None => walk(tail, hoisted, others :+ token)
     val (hoisted, others) = walk(scanned, Vector.empty, Vector.empty)
@@ -159,8 +157,9 @@ object Argv:
 
   /**
    * The verb the command line is heading for: the first token that is neither a global, a global's
-   * value, nor `--help`/`--version`, before any `--`. It need not be a known verb — [[verbs]] tells
-   * — and is `None` when no such token exists.
+   * value, nor a flag of any kind (`--help`, `--version`, an unknown `--frobnicate` — decline
+   * reports those), before any `--`. It need not be a known verb — [[verbs]] tells — and is `None`
+   * when no such token exists.
    */
   def verbOf(args: List[String]): Option[String] =
     @tailrec
@@ -170,6 +169,6 @@ object Argv:
         globalOf(token) match
           case Some((_, true)) => find(tail.drop(1))
           case Some((_, false)) => find(tail)
-          case None if meta.contains(token) => find(tail)
+          case None if token.startsWith("-") => find(tail)
           case None => Some(token)
     find(args.takeWhile(_ != "--"))
