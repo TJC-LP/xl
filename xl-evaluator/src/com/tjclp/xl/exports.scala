@@ -76,6 +76,13 @@ object formulaExports:
   val QualifiedRef: formula.graph.DependencyGraph.QualifiedRef.type =
     formula.graph.DependencyGraph.QualifiedRef
 
+  // ADR-017 §2.10: inspection — the bounded cross-sheet graph behind `cell`/`deps`, the audit
+  // buckets behind `audit`, the summary behind `describe --full`. `wb.describe` / `wb.audit` come
+  // from WorkbookInspect's extension block, which carries no default arguments (wildcard-safe).
+  export formula.graph.QualifiedGraph
+  export formula.eval.{SheetSummary, WorkbookAudit, WorkbookInspect, WorkbookSummary}
+  export formula.eval.WorkbookInspect.*
+
   // Display strategy with formula evaluation
   // The evaluating given has higher priority than default due to LowPriority pattern
   export formula.display.EvaluatingFormulaDisplay

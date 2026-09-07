@@ -602,3 +602,36 @@ class ScriptingPreludeTest extends FunSuite:
       .map(expr => FormulaPrinter.print(FormulaShifter.shift(expr, 1, 1)))
     assertEquals(shifted, Right("=B2"): Either[ParseError, String])
     assert(StructuralEditor.insertRowsChecked(wb, sheet1, 0, 1).isRight)
+
+  test("ADR-017 §2.10: wb.describe, wb.audit and QualifiedGraph.of resolve through the prelude"):
+    val sheet1 = SheetName.unsafe("Sheet1")
+    val sheet2 = SheetName.unsafe("Sheet2")
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1", 5),
+      Sheet("Sheet2").put(ref"A1", fx"=Sheet1!A1*2").put(ref"B1", fx"=A1+1")
+    ).recalculate().workbook
+    // WorkbookInspect's extension block, reached through the wildcard export (no default args)
+    val summary: WorkbookSummary = wb.describe
+    assertEquals(summary.sheets.map(_.name.value), Vector("Sheet1", "Sheet2"))
+    assertEquals(summary.sheets.map(_.formulaCount), Vector(0, 2))
+    assertEquals(summary.sheets.map(_.uncachedFormulas), Vector(0, 0))
+    val first: Option[SheetSummary] = summary.sheets.headOption
+    assertEquals(first.map(_.cellCount), Some(1))
+    assertEquals(summary.date1904, false)
+    val audit: WorkbookAudit = wb.audit
+    assert(audit.isClean)
+    assertEquals(audit.cycles, Vector.empty)
+    // The bounded cross-sheet graph: layers exactly k hops away
+    val graph: QualifiedGraph = QualifiedGraph.of(wb)
+    assertEquals(
+      graph.precedents(QualifiedRef(sheet2, ref"A1"), 1),
+      Vector(Vector(QualifiedRef(sheet1, ref"A1")))
+    )
+    assertEquals(
+      graph.dependents(QualifiedRef(sheet1, ref"A1"), 0),
+      Vector(Vector(QualifiedRef(sheet2, ref"A1")), Vector(QualifiedRef(sheet2, ref"B1")))
+    )
+    assertEquals(graph.sccs.count(_.cyclic), 0)
+    val dirty = Workbook(Sheet("Loop").put(ref"A1", fx"=A1+1"))
+    assertEquals(dirty.audit.isClean, false)
+    assertEquals(dirty.audit.cycles.map(_.members.size), Vector(1))
