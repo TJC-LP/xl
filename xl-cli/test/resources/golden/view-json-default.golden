@@ -1,11 +1,11 @@
 ## args
 -f
 <DIR>/simple.xlsx
+-s
+Data
 --json
 view
 A1:B2
--s
-Data
 ## exit
 0
 ## stdout

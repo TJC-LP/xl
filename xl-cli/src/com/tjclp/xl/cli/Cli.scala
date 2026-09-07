@@ -38,7 +38,9 @@ import com.tjclp.xl.text.Suggest
  * Help landing on stderr even when asked for is the current, pinned contract (golden `help`).
  * Command errors go to stderr as `Error: <message>` plus a `code:` line ([[contract.Diagnostics]]);
  * stdout is empty on every failure. Under the global `--json` every result — success or failure —
- * is one envelope on stdout ([[contract.Render.json]]).
+ * is one envelope on stdout ([[contract.Render.json]]). Nothing escapes as a stack trace: a failure
+ * no handler classified is rendered by [[run]]'s last-resort handler as `INTERNAL` (exit 3), in the
+ * mode the command line asked for.
  */
 object Cli:
 
@@ -166,7 +168,7 @@ object Cli:
       (file, sheet, maxSize, mode, cmd) =>
         cmd match
           case CliCommand.Diff(file2, format) =>
-            runDiff(file, file2, sheet, maxSize, format, io, mode)
+            runDiff(file, file2, sheet, maxSize, CliCommand.diffFormat(format, mode), io, mode)
           case other => internal("diff", s"Unexpected diff command: $other", io, mode)
     }
 
@@ -177,7 +179,7 @@ object Cli:
         cmd match
           case CliCommand.Lint(format) =>
             resolveLintFile(flagFile, positional) match
-              case Right(file) => runLint(file, format, io, mode)
+              case Right(file) => runLint(file, CliCommand.lintFormat(format, mode), io, mode)
               case Left(msg) => emit(Outcome.failed("lint", CliError.usage(msg, None)), mode, io)
           case other => internal("lint", s"Unexpected lint command: $other", io, mode)
     }
@@ -208,11 +210,17 @@ object Cli:
    * argv to exit code (see the object doc): hoist the globals in front of the verb, refuse an
    * unknown verb with a suggestion, then parse and run the handler or render help. A usage failure
    * with `--json` among the arguments is the envelope (exit 2) rather than text: the parser never
-   * reached a handler that could have seen the flag, so the flag is read here.
+   * reached a handler that could have seen the flag, so the flag is read here
+   * ([[contract.Argv.wantsJson]] — a `--json` that is the value of `-o` is a file name, not the
+   * flag, exactly as decline will read it).
+   *
+   * The last-resort handler is the contract's floor: whatever a handler lets escape (the staging
+   * and commit steps run outside the handlers' own `attempt`) is still one diagnostic — or one
+   * envelope — with the code [[contract.CliError.fromThrowable]] assigns, never a stack trace.
    */
   def run(args: List[String], io: CliIO): IO[ExitCode] =
     val argv = Argv.hoist(args)
-    val mode = if wantsJson(argv) then OutputMode.Json else OutputMode.Text
+    val mode = if Argv.wantsJson(argv) then OutputMode.Json else OutputMode.Text
     Argv.verbOf(argv) match
       case Some(word) if !Argv.verbs.contains(word) =>
         val error = CliError(
@@ -223,18 +231,22 @@ object Cli:
         )
         usageFailure("", error, mode, io)
       case verb =>
-        IO(command(io).parse(argv, sys.env)).flatMap {
-          case Right(handler) => handler
-          case Left(help) if help.errors.nonEmpty =>
-            val error = CliError.usage(
-              help.errors.headOption.fold("invalid command line") { first =>
-                if verb.isEmpty then compact(first) else first
-              },
-              Some(s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage")
-            )
-            usageFailure(verb.getOrElse(""), error, mode, io)
-          case Left(help) => io.err(help.toString).as(ExitCodes.ok)
-        }
+        IO(command(io).parse(argv, sys.env))
+          .flatMap {
+            case Right(handler) => handler
+            case Left(help) if help.errors.nonEmpty =>
+              val error = CliError.usage(
+                help.errors.headOption.fold("invalid command line") { first =>
+                  if verb.isEmpty then compact(first) else first
+                },
+                Some(s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage")
+              )
+              usageFailure(verb.getOrElse(""), error, mode, io)
+            case Left(help) => io.err(help.toString).as(ExitCodes.ok)
+          }
+          .handleErrorWith { escaped =>
+            emit(Outcome.failed(verb.getOrElse(""), CliError.fromThrowable(escaped)), mode, io)
+          }
 
   /**
    * decline's first error, minus the one dump it embeds: with no verb at all it lists every
@@ -261,10 +273,6 @@ object Cli:
       case OutputMode.Json => emit(Outcome.failed(verb, error), mode, io)
       case OutputMode.Text =>
         io.err(s"${Diagnostics.render(error)}\n$usage").as(error.exitCode)
-
-  /** `--json` among the arguments before any `--`: after it every token is data, not a flag. */
-  private def wantsJson(args: List[String]): Boolean =
-    args.takeWhile(_ != "--").contains("--json")
 
   /** A dispatch arm the parser cannot reach: a defect, reported like any other failure (exit 3). */
   private def internal(verb: String, message: String, io: CliIO, mode: OutputMode): IO[ExitCode] =

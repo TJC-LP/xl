@@ -56,7 +56,7 @@ object Resolve:
     refStr: String,
     verb: String
   ): Either[CliError, Resolved] =
-    parse(refStr).flatMap {
+    ref(refStr).flatMap {
       case (Some(qualifier), tgt) => named(wb, qualifier).map(Resolved(_, tgt, true, false))
       case (None, tgt) =>
         sheet(wb, sheetFlag, unqualified(verb, refStr, tgt))
@@ -73,7 +73,7 @@ object Resolve:
     refStr: String,
     verb: String
   ): Either[CliError, Resolved] =
-    parse(refStr).flatMap {
+    ref(refStr).flatMap {
       case (Some(qualifier), tgt) => named(wb, qualifier).map(Resolved(_, tgt, true, false))
       case (None, tgt) =>
         default match
@@ -132,8 +132,18 @@ object Resolve:
       case Some(qualifier) => known(qualifier)
       case None =>
         sheetFlag match
-          case Some(flag) => validName(flag).flatMap(known)
+          case Some(flag) => validSheetName(flag).flatMap(known)
           case None => only(meta).toRight(sheetRequired(verb, names.map(_.value)))
+
+  /**
+   * A name given on the command line (`-s`, one of `--sheets`) over metadata: `INVALID_SHEET_NAME`
+   * when the validator refuses it, `SHEET_NOT_FOUND` with the nearest names when the book lacks it.
+   */
+  def knownName(meta: LightMetadata, name: String): Either[CliError, SheetName] =
+    val names = meta.sheets.map(_.name)
+    validSheetName(name).flatMap { sn =>
+      if names.contains(sn) then Right(sn) else Left(sheetNotFound(names.map(_.value), sn.value))
+    }
 
   /** Step 3's premise over metadata. */
   def only(meta: LightMetadata): Option[SheetName] = meta.sheets.map(_.name) match
@@ -227,22 +237,30 @@ object Resolve:
         candidates = Suggest.closest(name, names)
       )
 
+  /**
+   * A ref of the wrong shape for the verb — a range where one cell is needed, a column that is not
+   * one: `INVALID_REFERENCE` as the domain renders it (`Invalid reference: <reason>`), the text
+   * `deps` has always used.
+   */
+  def invalidReference(reason: String): CliError =
+    CliError.fromXLError(XLError.InvalidReference(reason), None)
+
   private def at(index: Int): Option[Location] = Some(Location.none.copy(opIndex = Some(index)))
 
   private def invalidOp(index: Int, op: String, message: String): CliError =
     CliError(ErrorCode.BATCH_OP_INVALID, s"Object $index ($op): $message", location = at(index))
 
   /** A `-s` value as a sheet name: `INVALID_SHEET_NAME` with the validator's own text. */
-  private def validName(name: String): Either[CliError, SheetName] =
+  def validSheetName(name: String): Either[CliError, SheetName] =
     SheetName(name).left.map(reason =>
       CliError.fromXLError(XLError.InvalidSheetName(name, reason), None).copy(message = reason)
     )
 
   private def lookup(wb: Workbook, name: String): Either[CliError, Sheet] =
-    validName(name).flatMap(named(wb, _))
+    validSheetName(name).flatMap(named(wb, _))
 
   /** `INVALID_REFERENCE` with the parser's own text, else the qualifier (if any) and the target. */
-  private def parse(refStr: String): Either[CliError, (Option[SheetName], Target)] =
+  def ref(refStr: String): Either[CliError, (Option[SheetName], Target)] =
     RefType
       .parse(refStr)
       .left

@@ -14,11 +14,14 @@ import com.tjclp.xl.cli.helpers.{
   ColumnAutoFit,
   CopyOps,
   GroupingOps,
+  Resolve,
   SheetResolver,
   StyleBuilder,
   ValueParser
 }
 import com.tjclp.xl.cli.output.Format
+import com.tjclp.xl.cli.contract.{CliError, CliException, Diagnostics, Warning, WarningCode}
+import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{
   Clock,
   DependencyGraph,
@@ -58,6 +61,53 @@ import com.tjclp.xl.cli.{
  */
 object WriteCommands:
 
+  // --- Typed failures (ADR-017 §2.3): every refusal names its code ------------------------------
+
+  /** A wrong flag or argument combination: `USAGE` (exit 2). */
+  private def usage(message: String): CliException = CliException(CliError.usage(message, None))
+
+  /** A domain error as raised, with its own code. */
+  private def domain(error: XLError): CliException =
+    CliException(CliError.fromXLError(error, None))
+
+  /** A domain validation that failed with prose alone: `OTHER` (exit 3), a data condition. */
+  private def refused(message: String): CliException = domain(XLError.Other(message))
+
+  /**
+   * A ref of the wrong shape (a range where one cell is needed, a bad column): `INVALID_REFERENCE`.
+   */
+  private def invalidRef(reason: String): CliException = CliException(
+    Resolve.invalidReference(reason)
+  )
+
+  /** Too many or too few values for the target: `VALUE_COUNT_MISMATCH`, with today's text. */
+  private def countMismatch(
+    expected: Int,
+    actual: Int,
+    context: String,
+    message: String
+  ): CliException =
+    CliException(
+      CliError
+        .fromXLError(XLError.ValueCountMismatch(expected, actual, context), None)
+        .copy(message = message)
+    )
+
+  /**
+   * A formula that does not parse: `FORMULA_ERROR` (with the evaluator's hint) keeping the message
+   * the CLI has always printed — the formula, a caret under the offending position, the reason.
+   */
+  private def formulaError(
+    error: ParseError,
+    fullFormula: String,
+    prefix: String = ""
+  ): CliException =
+    CliException(
+      CliError
+        .fromXLError(ParseError.toXLError(error, fullFormula), None)
+        .copy(message = prefix + ParseError.formatWithContext(error, fullFormula))
+    )
+
   /**
    * Write workbook using the standard or SAX/StAX backend based on mode.
    *
@@ -86,7 +136,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean,
-    policy: WritePolicy
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val calculation: IO[Option[RecalcResult]] =
       if policy.noRecalc then IO.pure(None)
@@ -113,7 +164,8 @@ object WriteCommands:
           policy,
           s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
           result,
-          Vector.empty
+          Vector.empty,
+          warn
         )
       }
     }
@@ -125,7 +177,7 @@ object WriteCommands:
   /**
    * Validate that the count of values/formulas matches the cell count in a range.
    *
-   * Returns None if valid, Some(Exception) if counts mismatch with actionable error message.
+   * Returns None if valid, else a `VALUE_COUNT_MISMATCH` with an actionable message.
    */
   private def validateCountMatch(
     command: String,
@@ -133,7 +185,7 @@ object WriteCommands:
     cellCount: Int,
     providedCount: Int,
     itemType: String
-  ): Option[Exception] =
+  ): Option[CliException] =
     if cellCount == providedCount then None
     else
       val suggestion =
@@ -144,7 +196,10 @@ object WriteCommands:
         else s"Hint: Range has $cellCount cells but you provided $providedCount ${itemType}s."
 
       Some(
-        new Exception(
+        countMismatch(
+          cellCount,
+          providedCount,
+          range.toA1,
           s"Range ${range.toA1} has $cellCount cells but $providedCount ${itemType}s provided. " +
             suggestion
         )
@@ -178,7 +233,8 @@ object WriteCommands:
     stream: Boolean = false,
     csvSplit: Boolean = false,
     detect: Boolean = true,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "put")
@@ -189,11 +245,7 @@ object WriteCommands:
         case (Left(ref), List(singleValue)) =>
           // Mode 1: Single cell (--csv is meaningless here)
           if csvSplit then
-            IO.raiseError(
-              new Exception(
-                s"--csv requires a range target; ${ref.toA1} is a single cell."
-              )
-            )
+            IO.raiseError(usage(s"--csv requires a range target; ${ref.toA1} is a single cell."))
           else
             putSingleCell(
               wb,
@@ -204,7 +256,8 @@ object WriteCommands:
               config,
               stream,
               detect,
-              policy
+              policy,
+              warn
             )
 
         case (Right(range), List(singleValue)) =>
@@ -219,7 +272,8 @@ object WriteCommands:
               config,
               stream,
               detect,
-              policy
+              policy,
+              warn
             )
           else
             putFillPatternLiteral(
@@ -231,7 +285,8 @@ object WriteCommands:
               config,
               stream,
               detect,
-              policy
+              policy,
+              warn
             )
 
         case (Right(range), multipleValues @ (_ :: _ :: _)) =>
@@ -245,19 +300,23 @@ object WriteCommands:
             config,
             stream,
             detect,
-            policy
+            policy,
+            warn
           )
 
         case (Left(ref), multipleValues @ (_ :: _)) =>
           IO.raiseError(
-            new Exception(
+            countMismatch(
+              1,
+              multipleValues.length,
+              ref.toA1,
               s"Cannot put ${multipleValues.length} values to single cell ${ref.toA1}. " +
                 "Use a range (e.g., A1:A3) for batch operations."
             )
           )
 
         case (_, Nil) =>
-          IO.raiseError(new Exception("No values provided for put command"))
+          IO.raiseError(usage("No values provided for put command"))
     yield result
 
   /** Mode 1: Put single value to single cell */
@@ -270,7 +329,8 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean,
     detect: Boolean,
-    policy: WritePolicy
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val formatted = ValueParser.parsePutValue(valueStr, detect)
     val updatedSheet = putFormatted(sheet, ref, formatted)
@@ -282,7 +342,8 @@ object WriteCommands:
       outputPath,
       config,
       stream,
-      policy
+      policy,
+      warn
     )
 
   /** Apply a detected number format without creating a redundant General style. */
@@ -300,18 +361,22 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean,
     detect: Boolean,
-    policy: WritePolicy
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val parts = valueStr.split(",", -1).map(_.trim).toList
     val cellCount = range.cellCount.toInt
     if parts.length != cellCount then
       IO.raiseError(
-        new Exception(
+        countMismatch(
+          cellCount,
+          parts.length,
+          range.toA1,
           s"--csv: value split into ${parts.length} element(s) but range ${range.toA1} has $cellCount cell(s). " +
             "Adjust the range size or value count to match."
         )
       )
-    else putBatchValues(wb, sheet, range, parts, outputPath, config, stream, detect, policy)
+    else putBatchValues(wb, sheet, range, parts, outputPath, config, stream, detect, policy, warn)
 
   /** Fill all cells in range with the same literal value (no CSV splitting) */
   private def putFillPatternLiteral(
@@ -323,7 +388,8 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean,
     detect: Boolean,
-    policy: WritePolicy
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val formatted = ValueParser.parsePutValue(valueStr, detect)
     val cellCount = range.cellCount
@@ -337,7 +403,8 @@ object WriteCommands:
       outputPath,
       config,
       stream,
-      policy
+      policy,
+      warn
     )
 
   /** Mode 3: Put different values to each cell (row-major order) */
@@ -350,7 +417,8 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean,
     detect: Boolean,
-    policy: WritePolicy
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val cellCount = range.cellCount.toInt
     validateCountMatch("put", range, cellCount, values.length, "value") match
@@ -372,7 +440,8 @@ object WriteCommands:
           outputPath,
           config,
           stream,
-          policy
+          policy,
+          warn
         )
 
   /**
@@ -389,12 +458,18 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
-      _ <- formulas.flatMap(ValueParser.dataTableFormulaError) match
-        case msg :: _ => IO.raiseError(new Exception(msg))
+      _ <- formulas.flatMap(f => ValueParser.dataTableFormulaError(f).map((f, _))) match
+        case (formula, msg) :: _ =>
+          IO.raiseError(
+            CliException(
+              CliError.fromXLError(XLError.FormulaError(formula, msg), None).copy(message = msg)
+            )
+          )
         case Nil => IO.unit
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "putf")
       (targetSheet, refOrRange) = resolved
@@ -403,7 +478,17 @@ object WriteCommands:
       result <- (refOrRange, formulas) match
         case (Left(ref), List(singleFormula)) =>
           // Mode 1: Single cell
-          putfSingleCell(wb, targetSheet, ref, singleFormula, outputPath, config, stream, policy)
+          putfSingleCell(
+            wb,
+            targetSheet,
+            ref,
+            singleFormula,
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
+          )
 
         case (Right(range), List(singleFormula)) =>
           // Mode 2: Formula dragging (existing behavior with $ anchors)
@@ -415,7 +500,8 @@ object WriteCommands:
             outputPath,
             config,
             stream,
-            policy
+            policy,
+            warn
           )
 
         case (Right(range), multipleFormulas @ (_ :: _ :: _)) =>
@@ -428,19 +514,23 @@ object WriteCommands:
             outputPath,
             config,
             stream,
-            policy
+            policy,
+            warn
           )
 
         case (Left(ref), multipleFormulas @ (_ :: _)) =>
           IO.raiseError(
-            new Exception(
+            countMismatch(
+              1,
+              multipleFormulas.length,
+              ref.toA1,
               s"Cannot put ${multipleFormulas.length} formulas to single cell ${ref.toA1}. " +
                 "Use a range (e.g., B1:B3) for batch formula operations."
             )
           )
 
         case (_, Nil) =>
-          IO.raiseError(new Exception("No formulas provided for putf command"))
+          IO.raiseError(usage("No formulas provided for putf command"))
     yield result
 
   /** Mode 1: Put single formula to single cell */
@@ -452,15 +542,14 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean,
-    policy: WritePolicy
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
     val fullFormula = s"=$formula"
     for
       parsedExpr <- IO.fromEither(
-        FormulaParser.parse(fullFormula).left.map { e =>
-          new Exception(ParseError.formatWithContext(e, fullFormula))
-        }
+        FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
       )
       cachedValue =
         if policy.noRecalc then
@@ -488,7 +577,8 @@ object WriteCommands:
         outputPath,
         config,
         stream,
-        policy
+        policy,
+        warn
       )
     yield result
 
@@ -501,15 +591,14 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean,
-    policy: WritePolicy
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
     val fullFormula = s"=$formula"
     for
       parsedExpr <- IO.fromEither(
-        FormulaParser.parse(fullFormula).left.map { e =>
-          new Exception(ParseError.formatWithContext(e, fullFormula))
-        }
+        FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
       )
       // Apply formula with Excel-style dragging (existing logic)
       updatedSheet = putfDraggingLogic(sheet, wb, range, formula, parsedExpr, policy.noRecalc)
@@ -523,7 +612,8 @@ object WriteCommands:
         outputPath,
         config,
         stream,
-        policy
+        policy,
+        warn
       )
     yield result
 
@@ -536,7 +626,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean,
-    policy: WritePolicy
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val cellCount = range.cellCount.toInt
     validateCountMatch("putf", range, cellCount, formulas.length, "formula") match
@@ -549,11 +640,10 @@ object WriteCommands:
               val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
               val fullFormula = s"=$formula"
               IO.fromEither(
-                FormulaParser.parse(fullFormula).left.map { e =>
-                  new Exception(
-                    s"Formula for ${ref.toA1}: ${ParseError.formatWithContext(e, fullFormula)}"
-                  )
-                }
+                FormulaParser
+                  .parse(fullFormula)
+                  .left
+                  .map(formulaError(_, fullFormula, s"Formula for ${ref.toA1}: "))
               ).map { _ =>
                 val cachedValue =
                   if policy.noRecalc then
@@ -572,7 +662,8 @@ object WriteCommands:
             outputPath,
             config,
             stream,
-            policy
+            policy,
+            warn
           )
         yield result
 
@@ -772,7 +863,7 @@ object WriteCommands:
     SheetResolver.requireSheet(wb, sheetOpt, "col").flatMap { sheet =>
       // Try parsing as column range (A:F) first, then single column (A)
       parseColumnSpec(colStr) match
-        case Left(err) => IO.raiseError(new Exception(err))
+        case Left(err) => IO.raiseError(invalidRef(err))
         case Right(columns) =>
           val (updatedSheet, results) = columns.foldLeft((sheet, List.empty[String])) {
             case ((s, msgs), colRef) =>
@@ -891,7 +982,7 @@ object WriteCommands:
             case None => Right(List.empty) // Empty sheet
 
       columnsResult match
-        case Left(err) => IO.raiseError(new Exception(err))
+        case Left(err) => IO.raiseError(invalidRef(err))
         case Right(columns) if columns.isEmpty =>
           IO.pure(s"No columns to auto-fit (empty sheet)\n${Format.saveSuffix(outputPath, stream)}")
         case Right(columns) =>
@@ -1203,7 +1294,8 @@ object WriteCommands:
     policy: WritePolicy,
     summary: String,
     recalc: Option[RecalcResult],
-    warnings: Vector[SeedTableWarning]
+    warnings: Vector[SeedTableWarning],
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val recalcReasons = recalc.toList.flatMap { r =>
       List(
@@ -1219,7 +1311,19 @@ object WriteCommands:
       IO.raiseError(
         new StrictFailure(s"$summary\nSTRICT FAILURE (--strict): ${reasons.mkString("; ")}")
       )
-    else IO.pure(summary)
+    else
+      // Advisory: the summary names the failing cells; the warning is the machine-readable flag
+      // (`RECALC_ERRORS` on stderr, or in `warnings[]` under --json) that some formulas were left
+      // uncached
+      val advisory = recalc.filter(_.errors.nonEmpty).map { r =>
+        val count = r.errors.size
+        Warning(
+          WarningCode.RECALC_ERRORS,
+          s"$count formula${if count == 1 then "" else "s"} could not be evaluated and " +
+            "left uncached (see the recalculation summary; --strict makes this exit 1)"
+        )
+      }
+      advisory.traverse_(warn).as(summary)
 
   /**
    * One-line recalculation summary: formula count plus the first few failing refs (GH-352). Formula
@@ -1281,8 +1385,7 @@ object WriteCommands:
     stream: Boolean = false,
     policy: WritePolicy = WritePolicy.default,
     stdin: IO[String] = CliIO.system.stdin,
-    warn: com.tjclp.xl.cli.contract.Warning => IO[Unit] =
-      com.tjclp.xl.cli.contract.Diagnostics.warn(_, CliIO.system)
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] =
     BatchParser.readBatchInput(source, stdin).flatMap { input =>
       BatchParser.parseBatchOperations(input).flatMap { result =>
@@ -1303,7 +1406,7 @@ object WriteCommands:
                   case None => ""
                 val rendered =
                   s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
-                strictGate(policy, rendered, recalcOpt.map(_._2), Vector.empty)
+                strictGate(policy, rendered, recalcOpt.map(_._2), Vector.empty, warn)
               }
             }
       }
@@ -1339,7 +1442,8 @@ object WriteCommands:
     stream: Boolean = false,
     seedTables: Boolean = false,
     policy: WritePolicy = WritePolicy.default,
-    parallel: Option[Int] = None
+    parallel: Option[Int] = None,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     // Keep the expensive pure recalculation inside the returned IO. In particular, constructing an
     // IO value must not print the iterative fallback advisory or start consuming CPU.
@@ -1352,7 +1456,7 @@ object WriteCommands:
             result.workbook
               .seedDataTablesReport()
               .left
-              .map(err => new Exception(err.message))
+              .map(domain)
           ).map(report => (report.workbook, report.warnings))
       prepared.flatMap { case (workbook, warnings) =>
         writeWorkbook(workbook, outputPath, config, stream).flatMap { _ =>
@@ -1361,7 +1465,7 @@ object WriteCommands:
           val warningLines = warnings.map(w => s"\n${renderSeedWarning(w)}").mkString
           val rendered =
             s"${formatRecalcSummary(result)}$tableNote$advisory$warningLines\n${Format.saveSuffix(outputPath, stream)}"
-          strictGate(policy, rendered, Some(result), warnings)
+          strictGate(policy, rendered, Some(result), warnings, warn)
         }
       }
     }
@@ -1407,7 +1511,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       // Resolve source and target
@@ -1425,7 +1530,7 @@ object WriteCommands:
         case Right(range) => IO.pure(range)
         case Left(ref) =>
           IO.raiseError(
-            new Exception(s"Fill target must be a range, not a single cell: ${ref.toA1}")
+            invalidRef(s"Fill target must be a range, not a single cell: ${ref.toA1}")
           )
 
       // Validate source/target compatibility based on direction
@@ -1450,7 +1555,8 @@ object WriteCommands:
         outputPath,
         config,
         stream,
-        policy
+        policy,
+        warn
       )
     yield result
 
@@ -1470,7 +1576,7 @@ object WriteCommands:
         if sourceStartCol == targetStartCol && sourceEndCol == targetEndCol then IO.unit
         else
           IO.raiseError(
-            new Exception(
+            invalidRef(
               s"Fill down requires matching columns. Source: ${source.toA1}, Target: ${target.toA1}"
             )
           )
@@ -1484,7 +1590,7 @@ object WriteCommands:
         if sourceStartRow == targetStartRow && sourceEndRow == targetEndRow then IO.unit
         else
           IO.raiseError(
-            new Exception(
+            invalidRef(
               s"Fill right requires matching rows. Source: ${source.toA1}, Target: ${target.toA1}"
             )
           )
@@ -1678,9 +1784,7 @@ object WriteCommands:
       range <- refOrRange match
         case Right(r) => IO.pure(r)
         case Left(ref) =>
-          IO.raiseError(
-            new Exception(s"sort requires a range, not single cell: ${ref.toA1}")
-          )
+          IO.raiseError(invalidRef(s"sort requires a range, not single cell: ${ref.toA1}"))
 
       // Validate sort columns are within range
       _ <- validateSortColumns(range, sortKeys)
@@ -1722,9 +1826,7 @@ object WriteCommands:
         case Left(r) => IO.pure(r)
         case Right(range) =>
           IO.raiseError(
-            new Exception(
-              s"freeze expects a single cell reference, got range: ${range.toA1}"
-            )
+            invalidRef(s"freeze expects a single cell reference, got range: ${range.toA1}")
           )
       updatedSheet = sheet.freezeAt(ref)
       updatedWb = wb.put(updatedSheet)
@@ -1767,7 +1869,7 @@ object WriteCommands:
   )(f: Sheet => Either[String, Sheet])(message: Sheet => String): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, context)
-      updatedSheet <- IO.fromEither(f(sheet).left.map(new Exception(_)))
+      updatedSheet <- IO.fromEither(f(sheet).left.map(refused))
       _ <- writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
     yield s"${message(sheet)}\n${Format.saveSuffix(outputPath, stream)}"
 
@@ -1844,7 +1946,7 @@ object WriteCommands:
           SheetResolver.requireSheet(wb, sheetOpt, "autofilter").map(s => (s, None))
       (sheet, rangeOpt) = resolved
       updatedSheet <- IO.fromEither(
-        AppearanceOps.applyAutoFilter(sheet, rangeOpt, clear).left.map(new Exception(_))
+        AppearanceOps.applyAutoFilter(sheet, rangeOpt, clear).left.map(refused)
       )
       _ <- writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
       message = rangeOpt match
@@ -1953,9 +2055,9 @@ object WriteCommands:
         case Left(ref) => CellRange(ref, ref)
         case Right(r) => r
       dxf <- IO.fromEither(
-        CfRuleParser.buildDxf(bold, italic, underline, strike, bg, fg).left.map(new Exception(_))
+        CfRuleParser.buildDxf(bold, italic, underline, strike, bg, fg).left.map(refused)
       )
-      rule <- IO.fromEither(CfRuleParser.parse(ruleStr, dxf).left.map(new Exception(_)))
+      rule <- IO.fromEither(CfRuleParser.parse(ruleStr, dxf).left.map(refused))
       updatedSheet = sheet.conditionalFormat(range, rule)
       priority = updatedSheet.typedConditionalFormats.lastOption
         .flatMap(_.rules.lastOption)
@@ -1999,11 +2101,11 @@ object WriteCommands:
 
   private def requirePositive(n: Int, label: String): IO[Unit] =
     if n >= 1 then IO.unit
-    else IO.raiseError(new Exception(s"$label must be >= 1, got $n"))
+    else IO.raiseError(usage(s"$label must be >= 1, got $n"))
 
   private def singleColIndex(col: String): IO[Int] =
     IO.fromEither(
-      ARef.parse(col.trim + "1").left.map(e => new Exception(s"Invalid column '$col': $e"))
+      ARef.parse(col.trim + "1").left.map(e => invalidRef(s"Invalid column '$col': $e"))
     ).map(ref => Column.index0(ref.col))
 
   /**
@@ -2021,7 +2123,7 @@ object WriteCommands:
             endIdx <- singleColIndex(endStr)
           yield (math.min(startIdx, endIdx), math.abs(endIdx - startIdx) + 1)
         case _ =>
-          IO.raiseError(new Exception(s"Invalid column range '$col' (expected e.g. C:E)"))
+          IO.raiseError(invalidRef(s"Invalid column range '$col' (expected e.g. C:E)"))
     else singleColIndex(trimmed).map(idx => (idx, fallbackCount))
 
   /**
@@ -2044,7 +2146,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean,
-    policy: WritePolicy
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val recalcOpt = if policy.noRecalc then None else Some(scopedRecalc(before, edited))
     val (finalWb, recalcLine) = recalcOpt match
@@ -2055,7 +2158,8 @@ object WriteCommands:
         policy,
         s"$message\n$recalcLine\n${Format.saveSuffix(outputPath, stream)}",
         recalcOpt.map(_._2),
-        Vector.empty
+        Vector.empty,
+        warn
       )
     }
 
@@ -2067,7 +2171,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-rows")
@@ -2081,7 +2186,8 @@ object WriteCommands:
         outputPath,
         config,
         stream,
-        policy
+        policy,
+        warn
       )
     yield result
 
@@ -2093,7 +2199,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-rows")
@@ -2107,7 +2214,8 @@ object WriteCommands:
         outputPath,
         config,
         stream,
-        policy
+        policy,
+        warn
       )
     yield result
 
@@ -2119,7 +2227,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-cols")
@@ -2134,7 +2243,8 @@ object WriteCommands:
         outputPath,
         config,
         stream,
-        policy
+        policy,
+        warn
       )
     yield result
 
@@ -2146,7 +2256,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-cols")
@@ -2161,7 +2272,8 @@ object WriteCommands:
         outputPath,
         config,
         stream,
-        policy
+        policy,
+        warn
       )
     yield result
 
@@ -2190,7 +2302,8 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       // Resolve source sheet + ref/range
@@ -2218,7 +2331,7 @@ object WriteCommands:
 
       // Validate dimensions (shared helper keeps CLI + batch error text aligned)
       _ <- IO.fromEither(
-        CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
+        CopyOps.validateDimensions(sourceRange, targetRange).left.map(invalidRef)
       )
 
       // Delegate to shared helper (handles overlap, cross-sheet, style preservation, recalc)
@@ -2250,7 +2363,8 @@ object WriteCommands:
         outputPath,
         config,
         stream,
-        policy
+        policy,
+        warn
       )
     yield result
 
@@ -2261,15 +2375,11 @@ object WriteCommands:
 
     keys.traverse_ { key =>
       Column.fromLetter(key.column) match
-        case Left(err) => IO.raiseError(new Exception(s"Invalid column: ${key.column}"))
+        case Left(err) => IO.raiseError(invalidRef(s"Invalid column: ${key.column}"))
         case Right(col) =>
           val colIdx = Column.index0(col)
           if colIdx < rangeColStart || colIdx > rangeColEnd then
-            IO.raiseError(
-              new Exception(
-                s"Sort column ${key.column} is outside range ${range.toA1}"
-              )
-            )
+            IO.raiseError(invalidRef(s"Sort column ${key.column} is outside range ${range.toA1}"))
           else IO.unit
     }
 

@@ -121,6 +121,14 @@ object TestFixtures:
       .put(ref"C1", CellValue.Formula("SUM(Missing!A1:A3)", Some(CellValue.Error(CellError.Ref))))
     Workbook(Vector(data))
 
+  /**
+   * One sheet, one cell: `A1 = 12345678901234567`, an integer a `Double` cannot hold (it rounds to
+   * …568). Pins that every JSON rendering — bare `--format json` and the `--json` envelope's `data`
+   * for `view`, `eval` and `evala` — prints the number lexeme exactly.
+   */
+  def preciseBook(): Workbook =
+    Workbook(Vector(Sheet("Data").put(ref"A1", BigDecimal("12345678901234567"))))
+
   private def book(firstQuantity: Int): Workbook =
     val data = Sheet("Data")
       .put(ref"A1", "Hello")
@@ -145,7 +153,8 @@ object TestFixtures:
     "named.xlsx" -> (() => namedBook()),
     "linked.xlsx" -> (() => linkedBook()),
     "dirty.xlsx" -> (() => dirtyBook()),
-    "gaps.xlsx" -> (() => gapsBook())
+    "gaps.xlsx" -> (() => gapsBook()),
+    "precise.xlsx" -> (() => preciseBook())
   )
 
   /** Write every fixture into a fresh temp directory and return it. */

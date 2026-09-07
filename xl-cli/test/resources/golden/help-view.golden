@@ -63,7 +63,7 @@ Options and flags:
     --limit <integer>
         Maximum rows to display (default: 50; 0 = no limit)
     --format <string>
-        Output format: markdown, html, svg, json, csv, png, jpeg, webp, pdf
+        Output format: markdown (default; json under --json), html, svg, json, csv, png, jpeg, webp, pdf
     --print-scale
         Apply print scaling (for PDF-like output)
     --gridlines

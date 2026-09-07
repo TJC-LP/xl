@@ -1,0 +1,10 @@
+## args
+new
+<DIR>/no/such/dir/new.xlsx
+## exit
+3
+## stdout
+## stderr
+Error: cannot write <DIR>/no/such/dir/new.xlsx: no such directory: <DIR>/no/such/dir
+  code: IO_WRITE
+  hint: check that the directory exists and is writable

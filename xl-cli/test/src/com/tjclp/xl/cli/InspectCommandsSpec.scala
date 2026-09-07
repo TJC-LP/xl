@@ -204,7 +204,7 @@ class InspectCommandsSpec extends CatsEffectSuite:
       assertEquals(e("error")("code"), ujson.Str("AUDIT_FINDINGS"))
       assertEquals(e("data")("clean"), ujson.False)
       assertEquals(e("data")("findings").num.toInt, 6)
-      assert(run.stderr.startsWith("Error: "), run.stderr)
+      assertEquals(run.stderr, "", "findings keep their report as data: no Error: line, as in text")
     }
   }
 

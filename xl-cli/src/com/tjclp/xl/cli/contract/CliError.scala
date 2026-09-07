@@ -7,6 +7,7 @@ import scala.util.control.NoStackTrace
 import cats.effect.ExitCode
 
 import com.tjclp.xl.cli.StrictFailure
+import com.tjclp.xl.cli.raster.RasterError
 import com.tjclp.xl.error.{XLError, XLException}
 
 /** Where a failure happened, as far as the raising site knows. Every field is optional. */
@@ -66,7 +67,9 @@ object CliError:
   /**
    * Classify anything a handler can raise: a [[CliException]] is its error; a [[StrictFailure]] is
    * the `RECALC_GATE` (exit 1) carrying the summary as its message; an `XLException` projects its
-   * `XLError`; a `NoSuchFileException` is `IO_READ`; everything else is `INTERNAL` with its message
+   * `XLError`; a raster export with no backend to run it (none installed, or the `--rasterizer`
+   * asked for is missing) is `RASTERIZER_UNAVAILABLE` with the chain's own install hints as the
+   * message; a `NoSuchFileException` is `IO_READ`; everything else is `INTERNAL` with its message
    * (falling back to `toString` when the message is null — an un-migrated `new Exception(msg)`
    * still yields a well-formed diagnostic).
    */
@@ -75,6 +78,9 @@ object CliError:
     case s: CliSignal => s.error
     case s: StrictFailure => CliError(ErrorCode.RECALC_GATE, s.summary)
     case x: XLException => fromXLError(x.error, None)
+    case r: RasterError.NoRasterizerAvailable =>
+      CliError(ErrorCode.RASTERIZER_UNAVAILABLE, r.message)
+    case r: RasterError.RasterizerNotFound => CliError(ErrorCode.RASTERIZER_UNAVAILABLE, r.message)
     case n: NoSuchFileException =>
       CliError(ErrorCode.IO_READ, s"No such file: ${Option(n.getFile).getOrElse(messageOf(n))}")
     case other => CliError(ErrorCode.INTERNAL, messageOf(other))

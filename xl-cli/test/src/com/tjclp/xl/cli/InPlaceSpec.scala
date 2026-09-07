@@ -279,7 +279,7 @@ class InPlaceSpec extends CatsEffectSuite:
     }
   }
 
-  test("runWithOutput: -i leaves original untouched when execute throws") {
+  test("runWithOutput: -i leaves original untouched when execute throws (rendered, exit 3)") {
     withTempExcelFile { tempFile =>
       var writePath: Option[Path] = None
       val result = Main.runWithOutput(None, inPlace = true, tempFile) { (outOpt, _) =>
@@ -293,7 +293,8 @@ class InPlaceSpec extends CatsEffectSuite:
         a1 = wb.sheets.head.cells.get(ref"A1").map(_.value)
         tempExists = writePath.exists(p => Files.exists(p))
       yield
-        assert(outcome.isLeft, "Expected error to propagate")
+        // the staging step's last-resort handler renders the escape as a failure, never rethrows
+        assertEquals(outcome, Right(ExitCode(3)), "an escaped exception is a rendered failure")
         assertEquals(a1, Some(CellValue.Text("Hello")))
         assert(!tempExists, "Temp file should be cleaned up on exception")
     }
@@ -333,7 +334,8 @@ class InPlaceSpec extends CatsEffectSuite:
         }
         .attempt
       captureStdout(attempted).map { case (outcome, stdout) =>
-        assert(outcome.isLeft, "replacing a non-empty directory must fail")
+        // the commit failure is an IO_WRITE failure (exit 3), rendered — nothing escapes
+        assertEquals(outcome, Right(ExitCode(3)), "replacing a non-empty directory must fail")
         assert(!stdout.contains("Saved:"), s"success was printed before replacement:\n$stdout")
         assert(Files.isDirectory(destination), "failed replacement must preserve the destination")
       }

@@ -11,9 +11,9 @@ lint
   "verb": "lint",
   "version": "<VERSION>",
   "data": {
-    "text": "<DIR>/simple.xlsx: clean (no findings)",
-    "saved": null,
-    "written": false
+    "file": "<DIR>/simple.xlsx",
+    "clean": true,
+    "findings": []
   },
   "warnings": [],
   "error": null
