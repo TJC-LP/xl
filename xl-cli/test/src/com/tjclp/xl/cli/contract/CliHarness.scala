@@ -2,6 +2,7 @@ package com.tjclp.xl.cli.contract
 
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 
 import cats.effect.IO
 import cats.effect.std.Semaphore
@@ -51,18 +52,50 @@ object CliHarness:
       }
     }
 
-  /** Swap the JVM streams for the duration of `fa`, restoring them however `fa` ends. */
+  /**
+   * Swap the JVM streams and pin the default locale to `Locale.US` for the duration of `fa`,
+   * restoring both however `fa` ends. The locale pin makes the goldens machine-independent: `stats`
+   * renders through `f"$x%.2f"`, which formats with the JVM default locale, so a
+   * `-Duser.language=de` JVM would print `42,50` for the same file.
+   */
   private def redirected[A](out: PrintStream, err: PrintStream)(fa: IO[A]): IO[A] =
     IO.blocking {
-      val previous = (System.out, System.err)
+      val previous = Ambient.capture()
       System.setOut(out)
       System.setErr(err)
+      Locale.setDefault(Locale.US)
       previous
-    }.bracket(_ => fa) { (previousOut, previousErr) =>
+    }.bracket(_ => fa) { previous =>
       IO.blocking {
         out.flush()
         err.flush()
-        System.setOut(previousOut)
-        System.setErr(previousErr)
+        previous.restore()
       }
     }
+
+  /**
+   * The process-global state a run replaces: both JVM streams and every default-locale category.
+   */
+  private final case class Ambient(
+    out: PrintStream,
+    err: PrintStream,
+    locale: Locale,
+    formatLocale: Locale,
+    displayLocale: Locale
+  ):
+    def restore(): Unit =
+      System.setOut(out)
+      System.setErr(err)
+      Locale.setDefault(locale)
+      Locale.setDefault(Locale.Category.FORMAT, formatLocale)
+      Locale.setDefault(Locale.Category.DISPLAY, displayLocale)
+
+  private object Ambient:
+    def capture(): Ambient =
+      Ambient(
+        System.out,
+        System.err,
+        Locale.getDefault,
+        Locale.getDefault(Locale.Category.FORMAT),
+        Locale.getDefault(Locale.Category.DISPLAY)
+      )

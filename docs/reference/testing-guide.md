@@ -164,26 +164,10 @@ property("get-set") {
 }
 ```
 
-## Golden File Tests (Future - P11)
+## Golden File Tests
 
-### Planned Infrastructure
-- Curated `.xlsx` corpus covering:
-  - Edge cases (empty cells, large numbers, special characters)
-  - Excel compatibility (2007, 2010, 2013, 2016, 2019, M365)
-  - Feature coverage (all cell types, styles, multi-sheet)
-- Deterministic XML diff:
-  - Normalized attribute ordering
-  - Whitespace normalization
-  - Stable sort for elements
-- Version control:
-  - Check in `.xlsx` files with LFS
-  - Store expected XML separately
-
-### Not Yet Implemented
-- Golden file test framework for `.xlsx` output (the CLI contract goldens below pin CLI output,
-  not workbook bytes)
-- Compatibility test suite
-- Visual regression tests (for charts)
+The golden corpus that exists pins the CLI's output, not workbook bytes: see "CLI contract
+goldens" below. A curated `.xlsx` corpus with normalized XML diffs remains future work (P11).
 
 ## CLI contract goldens
 

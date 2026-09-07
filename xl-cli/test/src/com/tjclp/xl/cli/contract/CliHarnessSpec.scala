@@ -1,8 +1,10 @@
 package com.tjclp.xl.cli.contract
 
 import java.nio.file.{Files, Path}
+import java.util.Locale
 
 import cats.effect.IO
+import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
@@ -22,9 +24,14 @@ class CliHarnessSpec extends CatsEffectSuite:
       tempFile.toFile.deleteOnExit()
       tempFile
     }.flatMap { tempFile =>
-      val sheet = Sheet("Test").put(ref"A1", CellValue.Text("Hello"))
+      val sheet = Sheet("Test")
+        .put(ref"A1", CellValue.Text("Hello"))
+        .put(ref"A2", CellValue.Number(BigDecimal("1.5")))
       ExcelIO.instance[IO].write(Workbook(Vector(sheet)), tempFile) *> test(tempFile)
     }
+
+  private def occurrences(text: String, needle: String): Int =
+    text.sliding(needle.length).count(_ == needle)
 
   test("stdout and stderr are captured separately") {
     for
@@ -89,6 +96,44 @@ class CliHarnessSpec extends CatsEffectSuite:
     CliHarness.run("--version").map { _ =>
       assert(System.out eq before._1, "System.out was not restored")
       assert(System.err eq before._2, "System.err was not restored")
+    }
+  }
+
+  test("two concurrent harness runs do not interleave stderr") {
+    val helpArgs = List("--help")
+    val frobArgs = List("frob")
+    for
+      help <- CliHarness.run(helpArgs, "")
+      frob <- CliHarness.run(frobArgs, "")
+      concurrent <- List(helpArgs, frobArgs, helpArgs, frobArgs, helpArgs, frobArgs)
+        .parTraverse(args => CliHarness.run(args, "").map(args -> _))
+    yield
+      concurrent.foreach { (args, run) =>
+        val sequential = if args == helpArgs then help else frob
+        assertEquals(run, sequential, s"concurrent run of $args differs from its sequential result")
+      }
+      // Nothing crosses channels or runs: each stderr carries exactly its own help block
+      assertEquals(help.stdout, "")
+      assertEquals(frob.stdout, "")
+      assertEquals(occurrences(help.stderr, "Usage:"), 1)
+      assertEquals(occurrences(frob.stderr, "Usage:"), 1)
+      assert(!help.stderr.contains("Unexpected argument"), help.stderr)
+      assertEquals(occurrences(frob.stderr, "Unexpected argument: frob"), 1)
+  }
+
+  test("the harness pins the default locale to US for the run and restores the caller's") {
+    withTempExcelFile { file =>
+      val original = Locale.getDefault
+      // Premise: stats renders through f"%.2f", which under Locale.GERMANY prints a decimal comma
+      assertEquals(String.format(Locale.GERMANY, "%.2f", Double.box(1.5)), "1,50")
+      IO.blocking(Locale.setDefault(Locale.GERMANY))
+        .bracket { _ =>
+          CliHarness.run("-f", file.toString, "stats", "Test!A1:A2").map { run =>
+            assertEquals(run.exit, 0, run.stdout + run.stderr)
+            assert(run.stdout.contains("sum: 1.50"), s"locale not pinned to US:\n${run.stdout}")
+            assertEquals(Locale.getDefault, Locale.GERMANY, "caller's locale was not restored")
+          }
+        }(_ => IO.blocking(Locale.setDefault(original)))
     }
   }
 

@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/simple.xlsx
+--stream
+view
+A1:B2
+## exit
+0
+## stdout
+| | |
+|---|---|
+| Hello | 10 |
+| World | 20 |
+## stderr
