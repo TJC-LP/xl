@@ -209,7 +209,7 @@
 
 ### Test Coverage
 
-**5,625 test cases** (verified via `./mill __.test`, 2026-09-04): 5,624 passed; one existing style-performance comparison remains ignored.
+**6,190 test cases** (verified via `./mill __.test`, 2026-09-07, agent-first wave 1): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|

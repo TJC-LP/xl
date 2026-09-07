@@ -584,9 +584,9 @@ ops by index before writing anything; `OpRegistry` is the single table behind ba
 
 ---
 
-**Status**: done — `fc6ed32`, `99c4b7c`, `ffd01ca`, `51ebd50` (`describe`/`audit`/`deps`; `QualifiedGraph`, `WorkbookAudit`, `WorkbookSummary`; review pinned `cell`'s occupied-cells semantics)
+### Cluster describe-audit-deps
 
-**Status**: pending
+**Status**: done — `fc6ed32`, `99c4b7c`, `ffd01ca`, `51ebd50` (`describe`/`audit`/`deps`; `QualifiedGraph`, `WorkbookAudit`, `WorkbookSummary`; review pinned `cell`'s occupied-cells semantics)
 **Modules**: xl-evaluator, xl-cli, xl (probes)
 **Files**: new `xl-evaluator/src/com/tjclp/xl/formula/graph/QualifiedGraph.scala`; new `xl-evaluator/src/com/tjclp/xl/formula/eval/WorkbookAudit.scala`; new `xl-evaluator/src/com/tjclp/xl/formula/eval/WorkbookSummary.scala`; `xl-evaluator/src/com/tjclp/xl/exports.scala` (additive); new `xl-evaluator/test/src/com/tjclp/xl/formula/{QualifiedGraphSpec,WorkbookAuditSpec,WorkbookSummarySpec}.scala`; new `xl-cli/src/com/tjclp/xl/cli/commands/InspectCommands.scala`; `xl-cli/src/com/tjclp/xl/cli/Command.scala` (+3 cases); `xl-cli/src/com/tjclp/xl/cli/Main.scala` (+3 subcommands in the read-only group, execute arms, `describe` under `--stream`); `xl-cli/src/com/tjclp/xl/cli/commands/ReadCommands.scala` (`cell`, `:253-266`); new `xl-cli/test/src/com/tjclp/xl/cli/InspectCommandsSpec.scala`; `xl/test/src/xlprelude/ScriptingPreludeTest.scala`; `docs/reference/cli.md`; `plugin/skills/xl-cli/SKILL.md`
 **DependsOn**: envelope-json, recalc-options-renamer, harness-golden
@@ -655,9 +655,9 @@ bounded graph." Record the test count.
 
 ---
 
-**Status**: done — `ca41a50`, `bb179c1`, `77db1e6` (`Resolve` one sheet rule on every path, `Argv` globals-anywhere, compact usage errors; review: auto-select warning only when the default decided, `import` on the rule)
+### Cluster resolve-and-argv
 
-**Status**: pending
+**Status**: done — `ca41a50`, `bb179c1`, `77db1e6` (`Resolve` one sheet rule on every path, `Argv` globals-anywhere, compact usage errors; review: auto-select warning only when the default decided, `import` on the rule)
 **Modules**: xl-cli
 **Files**: new `xl-cli/src/com/tjclp/xl/cli/helpers/Resolve.scala`; `xl-cli/src/com/tjclp/xl/cli/helpers/SheetResolver.scala`; `xl-cli/src/com/tjclp/xl/cli/helpers/BatchParser.scala` (the 17 `requires --sheet` sites and the op-scope helper from `batch-opspec-scope`); `xl-cli/src/com/tjclp/xl/cli/commands/StreamingReadCommands.scala` (`resolveSheetName`, `cell`'s first-sheet default at `:130-136`); `xl-cli/src/com/tjclp/xl/cli/commands/StreamingWriteCommands.scala` (`resolveSheetPath`); new `xl-cli/src/com/tjclp/xl/cli/contract/Argv.scala`; `xl-cli/src/com/tjclp/xl/cli/Cli.scala`; new `xl-cli/test/src/com/tjclp/xl/cli/contract/{ResolveSpec,ArgvSpec}.scala`; `xl-cli/test/src/com/tjclp/xl/cli/{StreamingReadSpec,StreamingWriteSpec}.scala`; goldens; `docs/reference/cli.md`; `plugin/skills/xl-cli/SKILL.md`
 **DependsOn**: errors-exit-codes, batch-opspec-scope, harness-golden
@@ -791,7 +791,7 @@ commentAt` and `Workbook.named` (explicit `XLResult`), bounded navigation
 
 ### Cluster docs-from-code
 
-**Status**: pending
+**Status**: done — `d5a5bc1`, `4142471`, `9f120c6` (`xl schema [--json]`, `batch --schema`, `functions --json`, registry-driven `batch --help`, five generated reference pages CI-gated by `DocsGenSpec`, plugin.json version check)
 **Modules**: xl-cli, docs, plugin, CI
 **Files**: `xl-cli/src/com/tjclp/xl/cli/Main.scala` (`functions --json`; `schema [--json]` verb; `batch --schema` flag on `batchCmd`; `batchHelp` body from `OpRegistry.helpText`); new `xl-cli/src/com/tjclp/xl/cli/contract/{FunctionDoc,Schema}.scala`; new `xl-cli/test/src/com/tjclp/xl/cli/contract/{DocsGenSpec,FunctionDocSpec,SchemaSpec}.scala`; new `docs/reference/generated/{cli-verbs,batch-ops,functions,exit-codes,error-codes}.md`; `docs/reference/cli.md`; `plugin/skills/xl-cli/SKILL.md`; `plugin/skills/xl-cli/reference/FORMULAS.md`; `CLAUDE.md` (counts and the `putf --from` example only; test-count lines stay with the integrator); `plugin/.claude-plugin/plugin.json`; `.github/workflows/ci.yml`; goldens
 **DependsOn**: envelope-json, batch-opspec-scope, resolve-and-argv, describe-audit-deps

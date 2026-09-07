@@ -226,18 +226,18 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of the calculation-integrity wave (2026-09-04), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored.
+As of the agent-first wave 1 (2026-09-07), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored; four subprocess smokes skip when openpyxl is absent or the sandbox runs as root.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 2196 |
-| xl-core | 1293 |
-| xl-ooxml | 1080 |
-| xl-cli | 754 |
+| xl-evaluator | 2278 |
+| xl-core | 1371 |
+| xl-ooxml | 1088 |
+| xl-cli | 1144 |
 | xl-cats-effect | 153 |
 | xl-agent | 122 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 27 |
-| **Total** | **5,625** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 34 |
+| **Total** | **6,190** |
 
 ## Test Quality Metrics
 

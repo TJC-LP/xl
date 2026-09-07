@@ -98,6 +98,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   view's own flag and `new`'s own `--sheet`/`--backend` untouched; everything after `--` is left
   alone. An unknown verb exits 2 with `did you mean: view`; a wrong command line prints the
   `Error:` block and one usage line instead of the 60-subcommand help.
+- **The contract is published by the binary.** `xl schema` prints the verb table; `xl schema
+  --json` prints `{version, exitCodes, errorCodes, warningCodes, globals, verbs, batchOps,
+  functions, envelope}` — every verb with its path, summary, what it needs (file, sheet, output,
+  streaming), its exit behaviour and batch twin; the 32 batch ops as JSON Schema (`xl batch
+  --schema` prints that part alone, no `-f` needed); every formula function as `{name, minArgs,
+  maxArgs, args, returnsDate, returnsTime, dynamicDeps, specialForm}` (`xl functions --json`, 115
+  functions plus `LET`); and the envelope's own JSON Schema. `xl batch --help` lists all 32 ops
+  with their aliases and `[not with --stream]` markers from the registry instead of 17 by hand.
+  `docs/reference/generated/{cli-verbs,batch-ops,functions,exit-codes,error-codes}.md` are rendered
+  from that schema and compared by the test suite (`XL_UPDATE_DOCS=1` rewrites them); `cli.md`
+  links to them, the xl-cli skill is a routing layer (install, mental model, task→verb table, exit
+  table, `Requires xl >= 0.20.0`) over the generated reference, and `FORMULAS.md` is regenerated
+  from `functions --json`. CI fails when `plugin.json`'s version drifts from `build.mill`.
 - **Typed reads see cached formula values** (#477). `readTyped`, `readTypedOpt` and
   `readTypedOr` on a formula cell decode its cached value (`Formula(_, Some(v), _)` reads as
   `v`), so a recalculated or Excel-saved book reads like Excel shows it. An uncached formula still
