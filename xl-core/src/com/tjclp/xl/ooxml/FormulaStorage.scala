@@ -223,16 +223,20 @@ object FormulaStorage:
 
   /**
    * The storage form of a model formula: no leading '=' (GH-456) and every future-function call
-   * carrying Excel's `_xlfn.` (or `_xlfn._xlws.`) prefix. Calls already prefixed are left alone, so
-   * the mapping is idempotent.
+   * carrying Excel's `_xlfn.` (or `_xlfn._xlws.`) prefix. Calls already carrying `_xlfn.` are left
+   * alone, so the mapping is idempotent; a call spelled with `_xlws.` alone (which Excel does not
+   * resolve) gains the `_xlfn.` in front of it.
+   *
+   * Byte-identical re-serialization holds for Excel-authored books. A third-party writer that
+   * spells FILTER/SORT as plain `_xlfn.FILTER(` (no `_xlws.`) reads back bare and is re-written in
+   * Excel's own `_xlfn._xlws.FILTER(` form.
    */
   def toStored(expr: String): String =
     rewriteCalls(expr.stripPrefix("=")) { token =>
-      val upper = token.toUpperCase
-      if upper.startsWith(XlfnPrefix.toUpperCase) || upper.startsWith(XlwsPrefix.toUpperCase)
-      then token
-      else if WorksheetScoped.contains(upper) then s"$XlfnPrefix$XlwsPrefix$token"
-      else if FutureFunctions.contains(upper) then s"$XlfnPrefix$token"
+      if startsWithIgnoreCase(token, XlfnPrefix) then token
+      else if startsWithIgnoreCase(token, XlwsPrefix) then s"$XlfnPrefix$token"
+      else if isIn(WorksheetScoped, token) then s"$XlfnPrefix$XlwsPrefix$token"
+      else if isIn(FutureFunctions, token) then s"$XlfnPrefix$token"
       else token
     }
 
@@ -243,22 +247,48 @@ object FormulaStorage:
    */
   def fromStored(text: String): String =
     rewriteCalls(text) { token =>
-      val bare = bareFunctionName(token)
-      if bare != token && FutureFunctions.contains(bare.toUpperCase) then bare else token
+      if !hasStoragePrefix(token) then token
+      else
+        val bare = bareFunctionName(token)
+        if isIn(FutureFunctions, bare) then bare else token
     }
 
   /**
    * Drop any `_xlfn.` and `_xlws.` prefixes from a function identifier (case-insensitive). The
-   * parser applies this before the registry lookup so `_xlfn.XLOOKUP(` resolves to XLOOKUP.
+   * parser applies this before the registry lookup so `_xlfn.XLOOKUP(` resolves to XLOOKUP. A name
+   * without a prefix is returned as-is with no allocation — this sits on the parse hot path.
    */
   def bareFunctionName(name: String): String =
     @annotation.tailrec
     def loop(s: String): String =
-      val upper = s.toUpperCase
-      if upper.startsWith(XlfnPrefix.toUpperCase) then loop(s.drop(XlfnPrefix.length))
-      else if upper.startsWith(XlwsPrefix.toUpperCase) then loop(s.drop(XlwsPrefix.length))
+      if startsWithIgnoreCase(s, XlfnPrefix) then loop(s.substring(XlfnPrefix.length))
+      else if startsWithIgnoreCase(s, XlwsPrefix) then loop(s.substring(XlwsPrefix.length))
       else s
-    loop(name)
+    if hasStoragePrefix(name) then loop(name) else name
+
+  /** Case-insensitive prefix test without allocating (both prefixes are ASCII). */
+  private def startsWithIgnoreCase(s: String, prefix: String): Boolean =
+    s.regionMatches(true, 0, prefix, 0, prefix.length)
+
+  private def hasStoragePrefix(s: String): Boolean =
+    startsWithIgnoreCase(s, XlfnPrefix) || startsWithIgnoreCase(s, XlwsPrefix)
+
+  /**
+   * Membership of a token spelled in the author's case. The common all-caps spelling hits (or
+   * misses) without allocating; only a token that actually carries lower-case letters is
+   * upper-cased for a second look.
+   */
+  private def isIn(names: Set[String], token: String): Boolean =
+    names.contains(token) || (hasLowerCase(token) && names.contains(token.toUpperCase))
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def hasLowerCase(s: String): Boolean =
+    var i = 0
+    var found = false
+    while !found && i < s.length do
+      found = s.charAt(i).isLower
+      i += 1
+    found
 
   private def isIdentChar(c: Char): Boolean =
     c.isLetterOrDigit || c == '_' || c == '.'
@@ -269,7 +299,9 @@ object FormulaStorage:
   /**
    * Copy `text`, applying `f` to every identifier token that is directly followed (modulo
    * whitespace) by `(` — i.e. every function call — outside string literals, quoted sheet names,
-   * and bracketed references.
+   * and bracketed references. Inside brackets nothing is interpreted: a structured-reference column
+   * name escapes its specials with a single quote (`Table1['#Sales]`), so quote handling there
+   * would swallow the rest of the formula.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def rewriteCalls(text: String)(f: String => String): String =
@@ -279,12 +311,12 @@ object FormulaStorage:
     var bracketDepth = 0
     while i < n do
       val c = text.charAt(i)
-      if c == '"' then
+      if bracketDepth == 0 && c == '"' then
         // String literal: copy through the closing quote, honoring "" escapes
         val end = closingQuote(text, i, '"')
         sb.append(text.substring(i, end))
         i = end
-      else if c == '\'' then
+      else if bracketDepth == 0 && c == '\'' then
         // Quoted sheet name: copy through the closing quote, honoring '' escapes
         val end = closingQuote(text, i, '\'')
         sb.append(text.substring(i, end))

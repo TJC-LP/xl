@@ -8,6 +8,7 @@ import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.ooxml.{
   FormulaInjectionPolicy,
   FormulaKindCodec,
+  FormulaStorage,
   SSTEntry,
   SharedStrings,
   XmlUtil
@@ -274,7 +275,7 @@ object StreamingXmlWriter:
             // GH-556: post-2007 functions carry Excel's _xlfn. storage prefix
             List(
               XmlEvent.StartTag(QName("f"), recordAttrs, false),
-              XmlEvent.XmlString(com.tjclp.xl.ooxml.FormulaStorage.toStored(expr), false),
+              XmlEvent.XmlString(FormulaStorage.toStored(expr), false),
               XmlEvent.EndTag(QName("f"))
             )
         val cachedEvents = cachedValue.toList.flatMap {

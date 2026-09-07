@@ -59,6 +59,10 @@ private[formula] object ScalarCoercion:
    * TEXT() formats them, so `">="&DATE(2026,1,1)` is `">=46023"` and matches numeric date cells in
    * COUNTIFS/SUMIFS criteria. Whole days print as integers ("46023"); times keep their fraction
    * ("46023.5"), rounded to Excel's 15 significant digits.
+   *
+   * 1900 date system, like every other serial conversion in the evaluator (docs/LIMITATIONS.md): a
+   * `date1904` workbook renders the 1900-system serial here until the evaluator carries the
+   * workbook's date system.
    */
   def dateSerialText(dt: java.time.LocalDateTime): String =
     BigDecimal(CellValue.dateTimeToExcelSerial(dt))

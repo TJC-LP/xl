@@ -67,6 +67,28 @@ class FormulaStorageSpec extends FunSuite:
     assertEquals(FormulaStorage.toStored("[1]Sheet1!A1"), "[1]Sheet1!A1")
   }
 
+  test("toStored: bracketed references are opaque even when they carry quote escapes") {
+    // A structured-reference column name escapes its specials with a single quote; the scanner
+    // must not enter quote mode there, or the rest of the formula would be copied unrewritten.
+    assertEquals(
+      FormulaStorage.toStored("SUM(Table1['#Sales])+MAXIFS(A1:A3,B1:B3,1)"),
+      "SUM(Table1['#Sales])+_xlfn.MAXIFS(A1:A3,B1:B3,1)"
+    )
+    assertEquals(
+      FormulaStorage.toStored("SUM(Table1[a\"b])+IFS(A1>0,1,TRUE,0)"),
+      "SUM(Table1[a\"b])+_xlfn.IFS(A1>0,1,TRUE,0)"
+    )
+  }
+
+  test("toStored: a lone _xlws. gains the _xlfn. Excel requires in front of it") {
+    assertEquals(
+      FormulaStorage.toStored("_xlws.FILTER(A1:A3,B1:B3)"),
+      "_xlfn._xlws.FILTER(A1:A3,B1:B3)"
+    )
+    // a third-party `_xlfn.FILTER` reads back bare and is re-written in Excel's own form
+    assertEquals(FormulaStorage.fromStored("_xlfn.FILTER(A1:A3,B1:B3)"), "FILTER(A1:A3,B1:B3)")
+  }
+
   test("toStored: a future-function NAME that is not a call is not a function") {
     // a defined name or LET binding may legally be spelled like a function
     assertEquals(FormulaStorage.toStored("IFS+1"), "IFS+1")

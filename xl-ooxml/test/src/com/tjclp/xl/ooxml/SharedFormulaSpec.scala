@@ -64,6 +64,29 @@ class SharedFormulaSpec extends FunSuite:
     assertEquals(valueAt(parsed, "B2"), CellValue.Formula("A2*2", Some(CellValue.Number(4))))
   }
 
+  test("GH-556: DOM reader strips _xlfn. from a shared master and its shifted dependents") {
+    val worksheet = XML.loadString(
+      """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <sheetData>
+        |    <row r="1">
+        |      <c r="D1"><f t="shared" si="0" ref="D1:D2">_xlfn.MAXIFS(B1:B3,A1:A3,$C$1)</f><v>1</v></c>
+        |    </row>
+        |    <row r="2"><c r="D2"><f t="shared" si="0"/><v>2</v></c></row>
+        |  </sheetData>
+        |</worksheet>""".stripMargin
+    )
+
+    val parsed = OoxmlWorksheet.fromXml(worksheet).fold(error => fail(error), identity)
+    assertEquals(
+      valueAt(parsed, "D1"),
+      CellValue.Formula("MAXIFS(B1:B3,A1:A3,$C$1)", Some(CellValue.Number(1)))
+    )
+    assertEquals(
+      valueAt(parsed, "D2"),
+      CellValue.Formula("MAXIFS(B2:B4,A2:A4,$C$1)", Some(CellValue.Number(2)))
+    )
+  }
+
   test("malformed shared groups stay formula-shaped and duplicate masters keep the first") {
     val worksheet = XML.loadString(
       """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">

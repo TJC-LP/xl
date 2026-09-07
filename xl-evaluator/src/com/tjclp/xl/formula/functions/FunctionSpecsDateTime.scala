@@ -6,7 +6,7 @@ import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.CellRange
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
@@ -128,8 +128,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
    * (before 1900-01-01 or after 9999-12-31) is #NUM!.
    */
   private def normalizeDate(y: Int, m: Int, d: Int): Either[EvalError, LocalDate] =
-    val numError =
-      Left(EvalError.ErrorValue(com.tjclp.xl.cells.CellError.Num, Some(s"DATE($y, $m, $d)")))
+    def numError = Left(EvalError.ErrorValue(CellError.Num, Some(s"DATE($y, $m, $d)")))
     val year = if y >= 0 && y <= 1899 then y + 1900 else y
     if year < 1900 || year > 9999 then numError
     else

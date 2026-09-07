@@ -82,7 +82,8 @@ formula rejected, or a `#NAME?` that only Excel could see.
   formula-bar spelling and an Excel-authored book re-serializes byte-identically. The parser
   drops `_xlfn.`/`_xlws.` before the registry lookup, so inherited `_xlfn.XLOOKUP(...)` cells
   and their dependents parse, evaluate and keep their caches through structural edits. A
-  prefix on a function outside the list is carried verbatim in both directions.
+  prefix on a function outside the list is carried verbatim in both directions. Cell formulas
+  only: conditional-formatting, data-validation and defined-name formula text is #577.
 - **`&` on a date yields its Excel serial, not ISO text** (GH-561). `">="&DATE(2026,1,1)`
   rendered `">=2026-01-01"`, so the COUNTIFS/SUMIFS/AVERAGEIFS/MAXIFS/MINIFS date-criteria
   idiom matched no numeric cell and cached a wrong number silently. Dates are numbers in

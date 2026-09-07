@@ -116,6 +116,9 @@ object CriteriaMatcher:
       // GH-565: a criteria string that spells an Excel error literal IS that error value — Excel
       // parses criteria like formula text, so "#N/A" matches #N/A error cells, never the text
       // "#N/A". Checked before the wildcard rule: "#NAME?" contains a '?' but is not a pattern.
+      // Shared consequence: XLOOKUP's wildcard detector (FunctionSpecsLookupSearch) reuses this
+      // parse, so a wildcard-mode lookup value spelled exactly "#NAME?" is an error literal there
+      // too, not a one-character pattern — the same reading Excel gives it.
       case ErrorLiteral(err) => Exact(ExprValue.Cell(CellValue.Error(err)))
       // Not equal: <>
       // GH-466: non-numeric operands are text inequality (bare "<>" = non-blank);

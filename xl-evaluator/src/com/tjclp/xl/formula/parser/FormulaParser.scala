@@ -8,6 +8,7 @@ import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.RefParser
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec
+import com.tjclp.xl.ooxml.FormulaStorage
 
 import scala.annotation.tailrec
 
@@ -780,7 +781,7 @@ object FormulaParser:
   ): ParseResult[TExpr[?]] =
     // GH-556: Excel stores post-2007 functions as _xlfn.NAME (FILTER/SORT as _xlfn._xlws.NAME);
     // inherited formulas may still carry the prefix — drop it before the registry lookup.
-    val bareName = com.tjclp.xl.ooxml.FormulaStorage.bareFunctionName(name)
+    val bareName = FormulaStorage.bareFunctionName(name)
     // GH-193: LET is a special form (it introduces lexical bindings), not a FunctionSpec.
     if bareName == "LET" then parseLet(state, startPos)
     else parseRegularFunction(bareName, state, startPos)
