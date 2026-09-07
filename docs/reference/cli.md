@@ -1480,7 +1480,7 @@ with the same seven keys every time:
 | `verb` | the subcommand path, e.g. `"view"`, `"sheets hide"`, `"cf add"` (best-effort for a usage error raised before dispatch) |
 | `version` | the `xl` version that produced the envelope |
 | `data` | the verb's payload (below); `null` on a failure |
-| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines; `location` when known |
+| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict`, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `READER_WARNING`); `location` when known |
 | `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
 
 **What `data` holds.** `--json` is orthogonal to a verb's own `--format`:

@@ -24,6 +24,9 @@ object WarningCode:
   val SHEET_AUTOSELECTED: String = "SHEET_AUTOSELECTED"
   val FLAG_IGNORED: String = "FLAG_IGNORED"
 
+  /** `view --eval` without `--strict` could not evaluate the range; cached values were rendered. */
+  val EVAL_FAILED: String = "EVAL_FAILED"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -33,5 +36,6 @@ object WarningCode:
     STREAM_BACKEND_ONLY,
     RECALC_ERRORS,
     SHEET_AUTOSELECTED,
-    FLAG_IGNORED
+    FLAG_IGNORED,
+    EVAL_FAILED
   )

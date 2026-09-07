@@ -111,61 +111,53 @@ object ReadCommands:
       truncated = Warning(WarningCode.TRUNCATED, notice)
       hiddenWarning = hiddenNote.map(Warning(WarningCode.HIDDEN_OMITTED, _))
       theme = wb.metadata.theme // Use workbook's parsed theme
+      // Pre-evaluate formulas when --eval is set (cross-sheet references need the workbook);
+      // `gate` is whether an evaluation failure is the --strict gate or an EVAL_FAILED warning
+      evaluated = (gate: Boolean) =>
+        if evalFormulas then
+          evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), gate, warn)
+        else IO.pure(targetSheet)
       result <- format match
         case ViewFormat.Markdown =>
-          // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
-          val sheetToRender =
-            if evalFormulas then
-              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
-            else targetSheet
-          val table = Markdown.renderRange(
-            sheetToRender,
-            limitedRange,
-            showFormulas,
-            skipEmpty,
-            evalFormulas = false,
-            skipHidden = skipHidden
-          )
-          val withTruncation = if isTruncated then s"$table\n$notice" else table
-          IO.pure(hiddenNote.fold(withTruncation)(n => s"$withTruncation\n$n"))
+          evaluated(strict).map { sheetToRender =>
+            val table = Markdown.renderRange(
+              sheetToRender,
+              limitedRange,
+              showFormulas,
+              skipEmpty,
+              evalFormulas = false,
+              skipHidden = skipHidden
+            )
+            val withTruncation = if isTruncated then s"$table\n$notice" else table
+            hiddenNote.fold(withTruncation)(n => s"$withTruncation\n$n")
+          }
         case ViewFormat.Html =>
-          // Pre-evaluate formulas if --eval flag is set
-          val sheetToRender =
-            if evalFormulas then
-              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
-            else targetSheet
-          val html = sheetToRender.toHtml(
-            limitedRange,
-            theme = theme,
-            applyPrintScale = printScale,
-            showLabels = showLabels
-          )
-          // In-band marker as a trailing HTML comment (comments after the root
-          // element are valid HTML), plus a TRUNCATED warning out of band.
-          warn(truncated)
-            .whenA(isTruncated)
-            .as(if isTruncated then s"$html\n<!-- $notice -->" else html)
+          evaluated(strict).flatMap { sheetToRender =>
+            val html = sheetToRender.toHtml(
+              limitedRange,
+              theme = theme,
+              applyPrintScale = printScale,
+              showLabels = showLabels
+            )
+            // In-band marker as a trailing HTML comment (comments after the root
+            // element are valid HTML), plus a TRUNCATED warning out of band.
+            warn(truncated)
+              .whenA(isTruncated)
+              .as(if isTruncated then s"$html\n<!-- $notice -->" else html)
+          }
         case ViewFormat.Svg =>
-          // Pre-evaluate formulas if --eval flag is set
-          val sheetToRender =
-            if evalFormulas then
-              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
-            else targetSheet
-          val svg = sheetToRender.toSvg(
-            limitedRange,
-            theme = theme,
-            showGridlines = showGridlines,
-            showLabels = showLabels
-          )
-          // SVG stdout must stay a clean XML document: the notice is a warning only.
-          warn(truncated).whenA(isTruncated).as(svg)
+          evaluated(strict).flatMap { sheetToRender =>
+            val svg = sheetToRender.toSvg(
+              limitedRange,
+              theme = theme,
+              showGridlines = showGridlines,
+              showLabels = showLabels
+            )
+            // SVG stdout must stay a clean XML document: the notice is a warning only.
+            warn(truncated).whenA(isTruncated).as(svg)
+          }
         case ViewFormat.Json =>
-          // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
-          val sheetToRender =
-            if evalFormulas then
-              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
-            else targetSheet
-          IO.pure(
+          evaluated(strict).map { sheetToRender =>
             JsonRenderer.renderRange(
               sheetToRender,
               limitedRange,
@@ -176,27 +168,24 @@ object ReadCommands:
               truncatedTotalRows = Option.when(isTruncated)(totalRows),
               skipHidden = skipHidden
             )
-          )
+          }
         case ViewFormat.Csv =>
-          // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
-          val sheetToRender =
-            if evalFormulas then
-              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
-            else targetSheet
-          val csv = CsvRenderer.renderRange(
-            sheetToRender,
-            limitedRange,
-            showFormulas,
-            showLabels,
-            skipEmpty,
-            evalFormulas = false,
-            skipHidden = skipHidden
-          )
-          // CSV stdout must stay machine-parseable: notices are warnings only.
-          warn(truncated)
-            .whenA(isTruncated)
-            .productR(hiddenWarning.traverse_(warn))
-            .as(csv)
+          evaluated(strict).flatMap { sheetToRender =>
+            val csv = CsvRenderer.renderRange(
+              sheetToRender,
+              limitedRange,
+              showFormulas,
+              showLabels,
+              skipEmpty,
+              evalFormulas = false,
+              skipHidden = skipHidden
+            )
+            // CSV stdout must stay machine-parseable: notices are warnings only.
+            warn(truncated)
+              .whenA(isTruncated)
+              .productR(hiddenWarning.traverse_(warn))
+              .as(csv)
+          }
         case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
           rasterOutput match
             case None =>
@@ -206,35 +195,33 @@ object ReadCommands:
                 )
               )
             case Some(outputPath) =>
-              // Pre-evaluate formulas if --eval flag is set
-              val sheetToRender =
-                if evalFormulas then
-                  evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
-                else targetSheet
-              val svg = sheetToRender.toSvg(
-                limitedRange,
-                theme = theme,
-                showGridlines = showGridlines,
-                showLabels = showLabels
-              )
+              // Raster formats have never gated on --strict: an evaluation failure warns
+              evaluated(false).flatMap { sheetToRender =>
+                val svg = sheetToRender.toSvg(
+                  limitedRange,
+                  theme = theme,
+                  showGridlines = showGridlines,
+                  showLabels = showLabels
+                )
 
-              // Convert ViewFormat to RasterFormat
-              val rasterFormat = format match
-                case ViewFormat.Png => RasterFormat.Png
-                case ViewFormat.Jpeg => RasterFormat.Jpeg(quality)
-                case ViewFormat.WebP => RasterFormat.WebP
-                case ViewFormat.Pdf => RasterFormat.Pdf
-                case _ => RasterFormat.Png // unreachable
+                // Convert ViewFormat to RasterFormat
+                val rasterFormat = format match
+                  case ViewFormat.Png => RasterFormat.Png
+                  case ViewFormat.Jpeg => RasterFormat.Jpeg(quality)
+                  case ViewFormat.WebP => RasterFormat.WebP
+                  case ViewFormat.Pdf => RasterFormat.Pdf
+                  case _ => RasterFormat.Png // unreachable
 
-              // Use RasterizerChain for automatic fallback
-              RasterizerChain
-                .convert(svg, outputPath, rasterFormat, dpi, rasterizer)
-                .map { usedRasterizer =>
-                  val exported =
-                    s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, $usedRasterizer)"
-                  // Binary goes to --raster-output, so the notice can ride the status line.
-                  if isTruncated then s"$exported\n$notice" else exported
-                }
+                // Use RasterizerChain for automatic fallback
+                RasterizerChain
+                  .convert(svg, outputPath, rasterFormat, dpi, rasterizer)
+                  .map { usedRasterizer =>
+                    val exported =
+                      s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, $usedRasterizer)"
+                    // Binary goes to --raster-output, so the notice can ride the status line.
+                    if isTruncated then s"$exported\n$notice" else exported
+                  }
+              }
     yield result
 
   /**
@@ -775,13 +762,17 @@ object ReadCommands:
    *   Optional workbook context for cross-sheet formula references
    * @param range
    *   Optional range to limit evaluation to (formulas outside this range are not evaluated)
+   * @param strict
+   *   whether an evaluation failure is the `--strict` gate (`RECALC_GATE`, exit 1) or an
+   *   `EVAL_FAILED` warning through `warn`, with the original sheet rendered from its caches
    */
   private def evaluateSheetFormulas(
     sheet: Sheet,
-    workbook: Option[Workbook] = None,
-    range: Option[CellRange] = None,
-    strict: Boolean = false
-  ): Sheet =
+    workbook: Option[Workbook],
+    range: Option[CellRange],
+    strict: Boolean,
+    warn: Warning => IO[Unit]
+  ): IO[Sheet] =
     val evalResult = range match
       case Some(r) =>
         // Targeted evaluation: only evaluate formulas in range + their dependencies
@@ -793,21 +784,22 @@ object ReadCommands:
     evalResult match
       case Right(results) =>
         // Apply evaluated results. Sheet.put preserves existing cell styleId automatically.
-        results.foldLeft(sheet) { case (acc, (ref, value)) =>
-          acc.put(ref, value)
-        }
+        IO.pure(results.foldLeft(sheet) { case (acc, (ref, value)) => acc.put(ref, value) })
       case Left(error) =>
         // `view --eval --strict` is a user-requested gate (ADR-017 invariant 5): exit 1 with
         // RECALC_GATE, never a failure. The message text is unchanged.
         if strict then
-          throw CliException(
-            CliError(
-              ErrorCode.RECALC_GATE,
-              s"Formula evaluation failed: ${error.message}",
-              hint = Some("drop --strict to render cached values and see the failure as a warning")
+          IO.raiseError(
+            CliException(
+              CliError(
+                ErrorCode.RECALC_GATE,
+                s"Formula evaluation failed: ${error.message}",
+                hint =
+                  Some("drop --strict to render cached values and see the failure as a warning")
+              )
             )
           )
         else
-          // Warn on stderr but return original sheet
-          Console.err.println(s"Warning: Formula evaluation failed: ${error.message}")
-          sheet
+          // Advisory: warn, and render the original sheet from its cached values
+          warn(Warning(WarningCode.EVAL_FAILED, s"Formula evaluation failed: ${error.message}"))
+            .as(sheet)

@@ -267,7 +267,7 @@ object Cli:
   def run(args: List[String], io: CliIO): IO[ExitCode] =
     IO(command(io).parse(args, sys.env)).flatMap {
       case Right(handler) => handler
-      case Left(help) if help.errors.nonEmpty && args.contains("--json") =>
+      case Left(help) if help.errors.nonEmpty && wantsJson(args) =>
         val error = CliError.usage(
           help.errors.mkString("; "),
           Some("run `xl --help` (or `xl <verb> --help`) for the usage")
@@ -278,8 +278,37 @@ object Cli:
           .as(if help.errors.nonEmpty then ExitCodes.usage else ExitCodes.ok)
     }
 
-  /** The first argument that names a verb, else empty: what a failed parse was heading for. */
-  def verbOf(args: List[String]): String = args.find(verbs.contains).getOrElse("")
+  /** `--json` among the arguments before any `--`: after it every token is data, not a flag. */
+  private def wantsJson(args: List[String]): Boolean =
+    args.takeWhile(_ != "--").contains("--json")
+
+  /** The global options that take a value: the token after them is never the verb. */
+  private val valueOptions: Set[String] =
+    Set(
+      "-f",
+      "--file",
+      "-s",
+      "--sheet",
+      "-o",
+      "--output",
+      "-g",
+      "--file2",
+      "--max-size",
+      "--backend"
+    )
+
+  /**
+   * The first argument that names a verb — skipping the values of global options and stopping at
+   * `--` — else empty: what a failed parse was heading for. `--option=value` is one token and needs
+   * no skip.
+   */
+  def verbOf(args: List[String]): String =
+    @annotation.tailrec
+    def find(rest: List[String]): String = rest match
+      case Nil => ""
+      case option :: _ :: tail if valueOptions.contains(option) => find(tail)
+      case token :: tail => if verbs.contains(token) then token else find(tail)
+    find(args.takeWhile(_ != "--"))
 
   /** A dispatch arm the parser cannot reach: a defect, reported like any other failure (exit 3). */
   private def internal(verb: String, message: String, io: CliIO, mode: OutputMode): IO[ExitCode] =

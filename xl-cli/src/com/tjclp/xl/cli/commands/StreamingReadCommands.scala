@@ -10,7 +10,8 @@ import cats.implicits.*
 import fs2.Stream
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.ViewFormat
+import com.tjclp.xl.cli.{CliIO, ViewFormat}
+import com.tjclp.xl.cli.contract.{Diagnostics, Warning, WarningCode}
 import com.tjclp.xl.cli.helpers.ValueParser
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown, RendererCommon}
 import com.tjclp.xl.display.NumFmtFormatter
@@ -380,42 +381,56 @@ object StreamingReadCommands:
     filePath: Path,
     sheetNameOpt: Option[String]
   ): IO[String] =
-    excel.readMetadata(filePath).flatMap { meta =>
-      boundsTarget(meta, sheetNameOpt) match
-        case Left(err) => IO.raiseError(new Exception(err))
-        case Right((sheetName, Some(range))) =>
-          val rowCount = range.end.row.index1 - range.start.row.index1 + 1
-          val colCount = range.end.col.index0 - range.start.col.index0 + 1
-          IO.pure(
-            s"""Sheet: $sheetName
-               |Used range: ${range.toA1} (from dimension element)
-               |Rows: ${range.start.row.index1}-${range.end.row.index1} ($rowCount total)
-               |Columns: ${range.start.col.toLetter}-${range.end.col.toLetter} ($colCount total)""".stripMargin
-          )
-        case Right((_, None)) =>
-          // Fallback to streaming scan
-          boundsScan(filePath, sheetNameOpt)
-    }
+    excel.readMetadata(filePath).flatMap(meta => boundsFromMetadata(meta, filePath, sheetNameOpt))
+
+  /**
+   * [[boundsDimension]] over metadata the caller has already read — the runner reads it under its
+   * `IO_READ` classification, so a missing or unreadable file gets the same code as on every verb
+   * while a sheet the metadata does not list keeps its own failure.
+   */
+  def boundsFromMetadata(
+    meta: LightMetadata,
+    filePath: Path,
+    sheetNameOpt: Option[String]
+  ): IO[String] =
+    boundsTarget(meta, sheetNameOpt) match
+      case Left(err) => IO.raiseError(new Exception(err))
+      case Right((sheetName, Some(range))) =>
+        val rowCount = range.end.row.index1 - range.start.row.index1 + 1
+        val colCount = range.end.col.index0 - range.start.col.index0 + 1
+        IO.pure(
+          s"""Sheet: $sheetName
+             |Used range: ${range.toA1} (from dimension element)
+             |Rows: ${range.start.row.index1}-${range.end.row.index1} ($rowCount total)
+             |Columns: ${range.start.col.toLetter}-${range.end.col.toLetter} ($colCount total)""".stripMargin
+        )
+      case Right((_, None)) =>
+        // Fallback to streaming scan
+        boundsScan(filePath, sheetNameOpt)
 
   /**
    * `bounds` as data (`bounds --json`): `{sheet, range, dimension}` — `range` the used range in A1
    * form or `null` for an empty sheet, `dimension` true when it came from the worksheet's
    * `<dimension>` element and false when from a streaming scan (`--scan`, or a sheet without one).
+   * Takes the metadata already read (see [[boundsFromMetadata]]).
    */
-  def boundsData(filePath: Path, sheetNameOpt: Option[String], scan: Boolean): IO[ujson.Value] =
+  def boundsData(
+    meta: LightMetadata,
+    filePath: Path,
+    sheetNameOpt: Option[String],
+    scan: Boolean
+  ): IO[ujson.Value] =
     def scanned(sheetName: Option[String]): IO[ujson.Value] =
       scanBounds(filePath, sheetNameOpt).map { (fallbackName, acc) =>
         boundsJson(sheetName.getOrElse(fallbackName), acc.range, fromDimension = false)
       }
     if scan then scanned(None)
     else
-      excel.readMetadata(filePath).flatMap { meta =>
-        boundsTarget(meta, sheetNameOpt) match
-          case Left(err) => IO.raiseError(new Exception(err))
-          case Right((sheetName, Some(range))) =>
-            IO.pure(boundsJson(sheetName, Some(range), fromDimension = true))
-          case Right((sheetName, None)) => scanned(Some(sheetName))
-      }
+      boundsTarget(meta, sheetNameOpt) match
+        case Left(err) => IO.raiseError(new Exception(err))
+        case Right((sheetName, Some(range))) =>
+          IO.pure(boundsJson(sheetName, Some(range), fromDimension = true))
+        case Right((sheetName, None)) => scanned(Some(sheetName))
 
   private def boundsJson(
     sheetName: String,
@@ -480,8 +495,12 @@ object StreamingReadCommands:
    *
    * @param skipHidden
    *   GH-474: cannot be honored here (the streaming reader never parses row/column properties).
-   *   Passing it emits [[RendererCommon.streamingSkipHiddenNotice]] on stderr rather than being
-   *   silently ignored.
+   *   Passing it emits [[RendererCommon.streamingSkipHiddenNotice]] as a `FLAG_IGNORED` warning
+   *   rather than being silently ignored.
+   * @param warn
+   *   where the out-of-band notices go (that one, and the csv/json truncation notice); the runner
+   *   collects them for the run's stderr or the `--json` envelope, the default prints
+   *   `Warning[CODE]: …` straight to the process stderr — the same channel the in-memory view uses
    */
   def view(
     filePath: Path,
@@ -493,7 +512,8 @@ object StreamingReadCommands:
     showLabels: Boolean,
     skipEmpty: Boolean,
     headerRow: Option[Int],
-    skipHidden: Boolean = false
+    skipHidden: Boolean = false,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] =
     // Reject non-streamable formats
     format match
@@ -507,7 +527,8 @@ object StreamingReadCommands:
         )
       case _ =>
         // GH-474: the flag is unsupported here — announce it instead of no-oping in silence.
-        IO(System.err.println(RendererCommon.streamingSkipHiddenNotice)).whenA(skipHidden) *>
+        warn(Warning(WarningCode.FLAG_IGNORED, RendererCommon.streamingSkipHiddenNotice))
+          .whenA(skipHidden) *>
           parseRangeFromRef(rangeStr).flatMap { case (refSheetOpt, range) =>
             resolveSheetName(sheetNameOpt, refSheetOpt, "view", rangeStr).flatMap {
               resolvedSheetOpt =>
@@ -518,6 +539,7 @@ object StreamingReadCommands:
                 val shownRows = limitedRange.end.row.index0 - limitedRange.start.row.index0 + 1
                 val isTruncated = shownRows < totalRows
                 val notice = RendererCommon.truncationNotice(shownRows, totalRows)
+                val truncated = Warning(WarningCode.TRUNCATED, notice)
                 val rowStream = resolvedSheetOpt match
                   case Some(name) => excel.readSheetStreamRange(filePath, name, limitedRange)
                   case None => excel.readStreamRange(filePath, limitedRange)
@@ -539,16 +561,16 @@ object StreamingReadCommands:
                             )
                           IO.pure(if isTruncated then s"$table\n$notice" else table)
                         case ViewFormat.Csv =>
-                          // stdout must stay machine-parseable: notice goes to stderr only
-                          IO(System.err.println(notice))
+                          // stdout must stay machine-parseable: the notice is a warning only
+                          warn(truncated)
                             .whenA(isTruncated)
                             .as(
                               formatCsv(rows, limitedRange, showFormulas, skipEmpty, showLabels, s)
                             )
                         case ViewFormat.Json =>
                           // Streaming JSON is a bare array (no top-level object to extend):
-                          // notice goes to stderr only
-                          IO(System.err.println(notice))
+                          // the notice is a warning only
+                          warn(truncated)
                             .whenA(isTruncated)
                             .as(
                               formatJson(rows, limitedRange, showFormulas, skipEmpty, headerRow, s)

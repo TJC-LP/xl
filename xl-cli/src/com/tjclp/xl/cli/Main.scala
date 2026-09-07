@@ -112,18 +112,31 @@ object Main extends IOApp:
   private[cli] type CommandOutcome = Outcome
 
   private[cli] object CommandOutcome:
+    /**
+     * Total: the error is derived from the exit code so `ok ⇔ error.isEmpty ⇔ exitCode == 0` holds
+     * for these outcomes too — 1 is a gate (`RECALC_GATE`, the output being its report), 2 usage,
+     * anything else `INTERNAL`; the message is the output's first line.
+     */
     def apply(
       exitCode: ExitCode,
       output: String,
       outputComplete: Boolean,
       warnings: Vector[Warning] = Vector.empty
     ): Outcome =
+      val payload = Option.when(output.nonEmpty)(Payload.text(output))
+      val error = Option.when(exitCode != ExitCodes.ok) {
+        val code =
+          if exitCode == ExitCodes.signal then ErrorCode.RECALC_GATE
+          else if exitCode == ExitCodes.usage then ErrorCode.USAGE
+          else ErrorCode.INTERNAL
+        CliError(code, output.linesIterator.nextOption().getOrElse(s"exit ${exitCode.code}"))
+      }
       Outcome(
         verb = "",
-        payload = Option.when(output.nonEmpty)(Payload.text(output)),
+        payload = payload,
         warnings = warnings,
-        error = None,
-        exitCode = exitCode,
+        error = error,
+        exitCode = error.fold(ExitCodes.ok)(_.exitCode),
         outputComplete = outputComplete
       )
 
@@ -2275,16 +2288,21 @@ EXAMPLES:
           case OutputMode.Json =>
             classifyRead(filePath)(WorkbookCommands.namesData(filePath)).map(Payload.Json(_))
 
-      // Bounds: dimension-first by default (--scan for full scan)
+      // Bounds: dimension-first by default (--scan for full scan). The metadata read is the input
+      // read, so a missing or unreadable file is IO_READ here as on every other verb.
       case CliCommand.Bounds(scan) =>
-        mode match
-          case OutputMode.Text =>
-            val text =
-              if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
-              else StreamingReadCommands.boundsDimension(filePath, sheetNameOpt)
-            text.map(Payload.text)
-          case OutputMode.Json =>
-            StreamingReadCommands.boundsData(filePath, sheetNameOpt, scan).map(Payload.Json(_))
+        classifyRead(filePath)(excel.readMetadata(filePath)).flatMap { meta =>
+          mode match
+            case OutputMode.Text =>
+              val text =
+                if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
+                else StreamingReadCommands.boundsFromMetadata(meta, filePath, sheetNameOpt)
+              text.map(Payload.text)
+            case OutputMode.Json =>
+              StreamingReadCommands
+                .boundsData(meta, filePath, sheetNameOpt, scan)
+                .map(Payload.Json(_))
+        }
 
       // A dry run validates the batch JSON and reads no workbook, whatever else is on the line
       case CliCommand.Batch(source, true) =>
@@ -2309,7 +2327,7 @@ EXAMPLES:
           case _ => false
 
         if stream && isReadCmd then
-          executeStreaming(filePath, sheetNameOpt, cmd).map(bridge(cmd, mode))
+          executeStreaming(filePath, sheetNameOpt, cmd, warn).map(bridge(cmd, mode))
         else if stream && isStreamingWriteCmd then
           // GH-496: a streaming write never recalculates, so --strict could only ever report
           // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
@@ -2357,11 +2375,12 @@ EXAMPLES:
     case ViewFormat.Json => true
     case _ => false
 
-  /** Execute command using streaming mode (O(1) memory). */
+  /** Execute command using streaming mode (O(1) memory); `warn` is the run's warning sink. */
   private def executeStreaming(
     filePath: Path,
     sheetNameOpt: Option[String],
-    cmd: CliCommand
+    cmd: CliCommand,
+    warn: Warning => IO[Unit]
   ): IO[String] = cmd match
     case CliCommand.Search(pattern, limit, sheetsFilter) =>
       StreamingReadCommands.search(filePath, sheetNameOpt, pattern, limit, sheetsFilter)
@@ -2410,7 +2429,8 @@ EXAMPLES:
           skipEmpty,
           headerRow,
           // GH-474: unsupported under --stream, but reported rather than silently dropped
-          skipHidden
+          skipHidden,
+          warn
         )
 
     case CliCommand.Cell(refStr, noStyle) =>

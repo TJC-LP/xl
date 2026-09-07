@@ -3,6 +3,8 @@ package com.tjclp.xl.cli.contract
 import cats.effect.ExitCode
 import munit.FunSuite
 
+import com.tjclp.xl.cli.Main
+
 /**
  * The envelope and its text twin (ADR-017 §2.4), rendered from an [[Outcome]] without running a
  * command: seven keys, `ok` ⇔ `error == null`, `exitCode` from the code table, `version` present,
@@ -266,6 +268,30 @@ class RenderSpec extends FunSuite:
 
     val usage = Outcome.failed("", CliError.usage("Unexpected argument: frob", None))
     assertEquals(usage.exitCode, ExitCodes.usage)
+  }
+
+  test("the CommandOutcome forwarder derives its error from the exit code, so ok ⇔ exit 0") {
+    val ok = Main.CommandOutcome(ExitCode.Success, "ok", outputComplete = true)
+    assertEquals(ok.error, None)
+    assertEquals(ok.exitCode, ExitCodes.ok)
+    assertEquals(ok.payload, Some(Payload.text("ok")))
+
+    val gate = Main.CommandOutcome(ExitCode(1), "strict failure\nSaved: x", outputComplete = true)
+    assertEquals(gate.error.map(_.code), Some(ErrorCode.RECALC_GATE))
+    assertEquals(gate.error.map(_.message), Some("strict failure"))
+    assertEquals(gate.exitCode, ExitCodes.signal)
+    assertEquals(gate.payload, Some(Payload.text("strict failure\nSaved: x")))
+    assert(gate.outputComplete)
+    val e = envelope(Render.json(gate, version))
+    assertEquals(e("ok"), ujson.False)
+    assertEquals(e("exitCode"), ujson.Num(1))
+
+    val failed = Main.CommandOutcome(ExitCode(3), "", outputComplete = false)
+    assertEquals(failed.error.map(_.code), Some(ErrorCode.INTERNAL))
+    assertEquals(failed.error.map(_.message), Some("exit 3"))
+    assertEquals(failed.payload, None)
+    assertEquals(failed.exitCode, ExitCodes.failed)
+    assertEquals(Render.text(failed).stdout, "")
   }
 
   test("Outcome.signal exits per its code (1 for a gate or findings) and keeps the payload") {

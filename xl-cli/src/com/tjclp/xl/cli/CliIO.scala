@@ -13,8 +13,9 @@ import cats.syntax.all.*
  * xl-cli/test). [[CliIO.system]] is the process; [[CliIO.capturing]] is memory.
  *
  * Handler-level `System.err.println` calls (batch parse warnings in WriteCommands, the numFmt hint
- * in StyleBuilder, truncation notices in the read commands) and `import-md -`'s `System.in` read
- * are not routed here yet; the harness covers them with a `System.setErr` bracket.
+ * in StyleBuilder) and `import-md -`'s `System.in` read are not routed here yet; the harness covers
+ * them with a `System.setErr` bracket. The read commands' notices (truncation, hidden lines, a
+ * failed `--eval`) go through the run's warning sink instead.
  */
 final case class CliIO(out: String => IO[Unit], err: String => IO[Unit], stdin: IO[String])
 

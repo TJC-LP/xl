@@ -20,9 +20,9 @@ final case class CliRun(exit: Int, stdout: String, stderr: String)
  * `System.out` / `System.err` per write) while both JVM streams are redirected into buffers, and
  * with `stdin` replaced by the given text. Redirecting the JVM streams — rather than only handing
  * the program in-memory sinks — is what also captures the handler-level `System.err.println` calls
- * (batch parse warnings, numFmt hints, truncation notices) in their real order relative to the
- * program's own writes. Because those streams are process-global, every invocation takes a JVM-wide
- * lock: suites using the harness never race each other, whatever MUnit's parallelism.
+ * (batch parse warnings, numFmt hints) in their real order relative to the program's own writes.
+ * Because those streams are process-global, every invocation takes a JVM-wide lock: suites using
+ * the harness never race each other, whatever MUnit's parallelism.
  *
  * An exception the program lets escape propagates out of the returned IO (the binary would print a
  * stack trace and exit 1): a crash is a test failure here, never a pinned contract.

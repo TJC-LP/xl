@@ -507,6 +507,43 @@ class EnvelopeSpec extends CatsEffectSuite:
       assertEquals(envelope(noArgs)("error")("code"), ujson.Str("USAGE"))
   }
 
+  test("`--` ends the --json scan: a literal --json after it keeps the text-mode usage error") {
+    CliHarness.run("-f", file("simple.xlsx"), "search", "--", "--json", "extra").map { run =>
+      assertEquals(run.exit, 2)
+      assertEquals(run.stdout, "", "no envelope: that --json was data, not a flag")
+      assert(run.stderr.startsWith("Unexpected argument: extra"), run.stderr)
+      assert(run.stderr.contains("Usage:"), run.stderr)
+    }
+  }
+
+  test("verbOf skips the values of global options and stops at --") {
+    assertEquals(Cli.verbOf(List("-s", "view", "--json", "cell", "A1")), "cell")
+    assertEquals(Cli.verbOf(List("--file=view", "--json", "cell")), "cell")
+    assertEquals(Cli.verbOf(List("-f", "x.xlsx", "search", "--", "view")), "search")
+    assertEquals(Cli.verbOf(List("-s")), "")
+    assertEquals(Cli.verbOf(List("-f", "view")), "")
+    CliHarness.run("-s", "view", "--json", "cell", "A1").map { run =>
+      assertEquals(run.exit, 2)
+      val e = envelope(run)
+      assertEquals(e("error")("code"), ujson.Str("USAGE"))
+      assertEquals(e("verb"), ujson.Str("cell"))
+    }
+  }
+
+  test("bounds on a missing input file is IO_READ, exit 3, like every other verb") {
+    for
+      dimension <- CliHarness.run("-f", file("nope.xlsx"), "-s", "Data", "--json", "bounds")
+      scan <- CliHarness.run("-f", file("nope.xlsx"), "-s", "Data", "--json", "bounds", "--scan")
+      text <- CliHarness.run("-f", file("nope.xlsx"), "-s", "Data", "bounds")
+    yield
+      assertEquals(dimension.exit, 3)
+      assertEquals(envelope(dimension)("error")("code"), ujson.Str("IO_READ"))
+      assertEquals(scan.exit, 3)
+      assertEquals(envelope(scan)("error")("code"), ujson.Str("IO_READ"))
+      assertEquals(text.exit, 3)
+      assert(text.stderr.contains("  code: IO_READ"), text.stderr)
+  }
+
   test("Cli.verbs is the parser's own verb list, so a usage envelope's verb cannot drift") {
     CliHarness.run().map { run =>
       assertEquals(run.exit, 2)
@@ -536,6 +573,61 @@ class EnvelopeSpec extends CatsEffectSuite:
   // ---------------------------------------------------------------------------------------------
   // Warnings
   // ---------------------------------------------------------------------------------------------
+
+  test(
+    "--stream view --format csv --limit: TRUNCATED in warnings[], stderr empty; text mode warns"
+  ) {
+    val notice = "… showing 2 of 4 rows (use --limit to raise; --limit 0 = no limit)"
+    val common = List("-f", file("simple.xlsx"), "-s", "Data", "--stream")
+    val verb = List("view", "A1:C4", "--format", "csv", "--limit", "2")
+    for
+      wrapped <- CliHarness.run(common ++ ("--json" :: verb), "")
+      text <- CliHarness.run(common ++ verb, "")
+    yield
+      assertEquals(wrapped.exit, 0, wrapped.stderr)
+      val e = envelope(wrapped)
+      assertEquals(e("ok"), ujson.True)
+      assertEquals(
+        e("warnings"),
+        ujson.Arr(ujson.Obj("code" -> ujson.Str("TRUNCATED"), "message" -> ujson.Str(notice)))
+      )
+      assert(e("data")("text").str.startsWith("Hello,10,"), e("data")("text").str)
+      assertEquals(wrapped.stderr, "", "the notice is in the envelope, not on stderr")
+      assertEquals(text.exit, 0, text.stderr)
+      assertEquals(
+        text.stderr,
+        s"Warning[TRUNCATED]: $notice\n",
+        "same channel as the in-memory view"
+      )
+  }
+
+  test(
+    "view --eval without --strict on a cyclic book: ok:true, one EVAL_FAILED warning, stderr empty"
+  ) {
+    for
+      wrapped <- CliHarness
+        .run("-f", file("circular.xlsx"), "-s", "Data", "--json", "view", "A1:A1", "--eval")
+      text <- CliHarness.run("-f", file("circular.xlsx"), "-s", "Data", "view", "A1:A1", "--eval")
+    yield
+      assertEquals(wrapped.exit, 0, wrapped.stderr)
+      val e = envelope(wrapped)
+      assertEquals(e("ok"), ujson.True)
+      val warnings = e("warnings").arr
+      assertEquals(warnings.size, 1, warnings.toString)
+      assertEquals(warnings.headOption.map(_("code")), Some(ujson.Str("EVAL_FAILED")))
+      assert(
+        warnings.headOption.exists(_("message").str.startsWith("Formula evaluation failed: ")),
+        warnings.toString
+      )
+      assert(e("data")("text").str.contains("| A"), e("data")("text").str)
+      assertEquals(wrapped.stderr, "")
+      assertEquals(text.exit, 0)
+      assert(
+        text.stderr.startsWith("Warning[EVAL_FAILED]: Formula evaluation failed: "),
+        text.stderr
+      )
+      assertEquals(text.stderr.linesIterator.size, 1, text.stderr)
+  }
 
   test(
     "view --format csv --limit: TRUNCATED rides in warnings[]; text mode prints Warning[TRUNCATED]"
