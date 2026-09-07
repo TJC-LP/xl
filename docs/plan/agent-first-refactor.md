@@ -856,6 +856,40 @@ and set the test counts in `CLAUDE.md:103/409/414`, `docs/STATUS.md:212`,
 
 ---
 
+## Follow-ups recorded during the Wave 1 reviews
+
+Each adversarial review closed its blocking findings in a rework round; these are the items left
+open on purpose, to file as issues alongside Wave 2:
+
+- **Invariant 2 divergences still in the streaming writer**: the streaming `style` batch op
+  replaces the whole cell style where the in-memory op merges unless `replace: true`;
+  `--strict` is ignored for raster formats (`png`/`jpeg`/`webp`/`pdf`); `view --format
+  html|svg|pdf --stream` exits 3 `INTERNAL` instead of 2 `UNSUPPORTED_IN_STREAM`;
+  `--stream batch` on a multi-sheet book without `-s` does not take a unanimous op-level `sheet`.
+- **Envelope gaps**: handler-level `System.err.println` sites outside the read verbs (batch parse
+  warnings, the `StyleBuilder` number-format hint, rasterizer diagnostics) still bypass
+  `warnings[]` under `--json` (stdout stays the envelope alone); `ujson.read` normalises the lexical
+  form of large numbers in pass-through payloads; the batch summary line does not name the sheet of
+  a `sheet`-scoped op (Wave 2's `Written` payload supersedes it); `SHEET_AUTOSELECTED` still fires
+  for an all-qualified batch on a single-sheet book (ops are parsed inside the handler).
+- **Sheet rule tension**: a batch op's step-4 failure surfaces as `BATCH_OP_FAILED` (wrapping
+  `SHEET_REQUIRED`) in memory but as `SHEET_REQUIRED` under `--stream` — §2.5 and §2.6 disagree;
+  pick one when `Resolve.forOp` absorbs the op-scope rule fully.
+- **Library**: `Workbook.named` refuses case-insensitive duplicates while `put`/`rename` are
+  case-sensitive; `RecalcOptions() == RecalcOptions()` is false because `Clock.system`/`Rng.system`
+  mint instances; the zip-bomb `SECURITY_ERROR` hint is unreachable because `ExcelIO` wraps the
+  `XLError` in a plain exception; `rename-sheet` does not rewrite preserved (unparsed) payloads or
+  hyperlink locations, and refuses 3-D ranges and `_xlfn.`-prefixed formulas; full-column refs
+  canonicalise on rewrite (`Sheet1!A:A` → `Data!A1:A1048576`); no `FunctionFlags.volatile`, so
+  `WorkbookAudit` matches volatility by name.
+- **Docs/tooling**: `Suggest.closest`'s threshold admits any two-letter name (`pu` → `put, cf,
+  putf`); `cli.md` "Operation Categories" is still a hand list (the gated one is
+  `generated/cli-verbs.md`); `since` values in `Schema.verbs` are CHANGELOG-attested upper bounds
+  (no git tags); the envelope schema's native-image `resource-config.json` entry is unverified
+  without GraalVM; `import-md -` reads `System.in` directly (the harness cannot feed it);
+  `./mill a.test b.test` treats the second target as a test selector — always write
+  `a.test + b.test` (add to the `mill-build` skill).
+
 ## Wave 2 — the algebra underneath the contract (GitHub-issue-ready)
 
 Each item is one issue: title, modules, scope, acceptance. All are additive to the Wave 1
