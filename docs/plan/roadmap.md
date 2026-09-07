@@ -211,6 +211,7 @@ Authoring and rendering features not yet shipped:
 | Feature | Status |
 |---------|--------|
 | **Scala Native + Scala.js cross-platform** (library artifacts, SN CLI binary, in-house XML/ZIP engines; ADR-016, waves A1–A4 / B1–B8 in [scala-native.md](scala-native.md)) | In progress (Wave 0 spike ✅ 2026-08-31) |
+| **Effect-free direct-style IO surface** (sync `Excel` without a runtime, `Iterator`-based row cursor, `boundary`-based `XLResult` block; `xl-cats-effect` kept as adapter; Ox in `xl-agent` only; ADR-017, evaluation in [design/effect-system.md](../design/effect-system.md)) | 🔵 Proposed (2026-09-07) |
 | XLSM macro preservation policy + tests (macros never executed) | Planned |
 | Data-validation **authoring** (currently preserved through edits, no write API; conditional-formatting authoring shipped in 0.12.1) | Planned |
 | Drawing Layer — Shapes/connectors authoring (images shipped in 0.12.0) | Planned |

@@ -213,3 +213,32 @@
 - **Testing**: per-wave gates in `docs/plan/scala-native.md`; `./mill __.jvm.test` green at every
   merge; differential XML law (portable == JAXP) + byte-parity writer goldens before the JVM
   default flips; GraalVM remains the shipped CLI until the SN binary passes the cutover gate.
+
+## ADR-017: Effect-free direct-style published API; Ox confined to `xl-agent`
+
+**Date**: 2026-09-07 (evaluation)
+**Status**: 🔵 Proposed — full analysis in `docs/design/effect-system.md`
+
+- **Decision (proposed)**: Make the published IO surface effect-free and direct-style — a sync
+  `Excel` facade implemented without an effect runtime, streaming as a pull-based row cursor
+  (`Iterator[RowData]` + `AutoCloseable`), `XLResult` end-to-end, plus a zero-dependency
+  `boundary`-based block for sequential `XLResult` code. Keep `xl-cats-effect` as a thin adapter
+  honouring the frozen `Excel[F]`/`ExcelIO` API; add `xl-ox`/`xl-zio` adapters on demand. Adopt Ox
+  inside `xl-agent` only; keep the CLI free of any effect library. Do not migrate to ZIO.
+- **Context**: The pure core imports Cats in two files (`Monoid` givens). `ExcelIO`'s `F[_]` is
+  instantiated 27 times, always as `IO`; six boundary sites erase `XLError` into
+  `new Exception(message)`. The scripting prelude is already direct-style but runs
+  `unsafeRunSync()` on a full runtime to call pure functions; the only agent-facing leak is
+  streaming (fs2 imports, `.compile.drain.unsafeRunSync()`). `xl-agent` is the sole module with
+  real structured-concurrency needs and is JVM-only.
+- **Rationale**: Ox is JVM-only (JDK 21 virtual threads), so it cannot sit in any module ADR-016
+  cross-builds to Scala Native/Scala.js — but it is exactly right for the agent runner. ZIO is the
+  same monadic shape as Cats Effect with equal ceremony and experimental Native support. An
+  effect-free API is the smallest concept set for LLM authorship and needs no ecosystem choice from
+  users.
+- **Alternatives Considered**: Ox everywhere (blocks ADR-016); ZIO (lateral rewrite); status quo
+  (carries dependency weight, erased errors, and runtime ceremony into the cross-build).
+- **Consequences**: additive API (freeze honoured); `xl-cli` sheds 355 `IO` lift sites and
+  `decline-effect`; `xl-agent` concurrency becomes sequential Scala; phase-0 hygiene ships
+  regardless (`cats-laws` out of compile scope, unused `cats-core` off `xl-evaluator`,
+  `XLException` at the `ExcelIO` boundary).
