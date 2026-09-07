@@ -6,7 +6,7 @@ audit
 ## exit
 1
 ## stdout
-Audit: 6 findings
+Audit: 5 findings
 Error values (1):
   Calc!A1  #DIV/0!
 Uncached formulas (2):
@@ -17,10 +17,10 @@ Unparseable formulas (1):
     UNSUPPORTED(1)
     ^
     Formula error in 'UNSUPPORTED(1)': Unknown function 'UNSUPPORTED' at position 0
-Cycles (1):
-  Calc!E1, Calc!F1
 Unresolved names (1):
   Calc!I1
+Cycles (iterative calculation on, not a finding) (1):
+  Calc!E1, Calc!F1
 Volatile (1):
   Calc!C1
 Dynamic (1):

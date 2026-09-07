@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/linked.xlsx
+-s
+Sheet3
+describe
+## exit
+3
+## stdout
+## stderr
+Error: Sheet not found: Sheet3. Available: Sheet1, Sheet2, Hidden
+  code: SHEET_NOT_FOUND
+  did you mean: Sheet1, Sheet2
+  hint: list sheets with `xl -f <file> sheets`

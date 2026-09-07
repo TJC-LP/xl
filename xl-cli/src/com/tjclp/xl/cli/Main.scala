@@ -1004,33 +1004,37 @@ USAGE:
   xl -f model.xlsx --json deps Summary!B4 --direction dependents --depth all
 """
 
-  private val directionOpt: Opts[String] =
+  private val directionOpt: Opts[Direction] =
     Opts
       .option[String]("direction", "precedents, dependents or both (default: both)")
       .withDefault("both")
       .mapValidated {
-        case direction @ ("precedents" | "dependents" | "both") =>
-          cats.data.Validated.valid(direction)
+        case "precedents" => cats.data.Validated.valid(Direction.Precedents)
+        case "dependents" => cats.data.Validated.valid(Direction.Dependents)
+        case "both" => cats.data.Validated.valid(Direction.Both)
         case other =>
           cats.data.Validated.invalidNel(
             s"Unknown direction: $other. Use precedents, dependents or both"
           )
       }
 
-  private val depthOpt: Opts[Option[Int]] =
+  // The parser is the only place the sentinels live: 'all' and 0 are Depth.All, an absent flag is
+  // one hop, anything else is that many hops.
+  private val depthOpt: Opts[Depth] =
     Opts
       .option[String]("depth", "Hops to follow: a number, or 'all' (0 = all; default: 1)")
       .mapValidated {
-        case "all" => cats.data.Validated.valid(0)
+        case "all" => cats.data.Validated.valid(Depth.All)
         case text =>
           text.toIntOption.filter(_ >= 0) match
-            case Some(n) => cats.data.Validated.valid(n)
+            case Some(0) => cats.data.Validated.valid(Depth.All)
+            case Some(n) => cats.data.Validated.valid(Depth.Hops(n))
             case None =>
               cats.data.Validated.invalidNel(
                 s"Invalid --depth: $text. Use a positive number, 0 or 'all'"
               )
       }
-      .orNone
+      .withDefault(Depth.Hops(1))
 
   val depsCmd: Opts[CliCommand] =
     Opts.subcommand("deps", depsHelp) {
@@ -2508,11 +2512,17 @@ EXAMPLES:
         IO.pure(batchSchemaPayload)
 
       // Describe (ADR-017 §2.10): metadata only — instant, streaming-safe — unless --full asks for
-      // the loaded book's counts. A workbook verb: -s is ignored.
+      // the loaded book's counts. A workbook verb: -s selects nothing, but an explicit -s must
+      // still name a real sheet (SHEET_NOT_FOUND with candidates otherwise). The other workbook
+      // verbs (sheets, names) are parsed without --sheet at all (Cli.scala), so only describe
+      // can see the flag.
       case CliCommand.Describe(full) =>
         if !full then
-          classifyRead(filePath)(excel.readMetadata(filePath))
-            .map(meta => InspectCommands.describeLight(meta, mode))
+          classifyRead(filePath)(excel.readMetadata(filePath)).flatMap { meta =>
+            InspectCommands
+              .checkSheetFlag(sheetNameOpt, "describe")(IO.pure(meta))
+              .as(InspectCommands.describeLight(meta, mode))
+          }
         else if stream then
           IO.raiseError(
             unsupportedInStream(
@@ -2521,7 +2531,10 @@ EXAMPLES:
             )
           )
         else
-          readWorkbook(excel, filePath, readerConfig).map(wb => InspectCommands.describe(wb, mode))
+          InspectCommands.checkSheetFlag(sheetNameOpt, "describe")(
+            classifyRead(filePath)(excel.readMetadata(filePath))
+          ) *> readWorkbook(excel, filePath, readerConfig)
+            .map(wb => InspectCommands.describe(wb, mode))
 
       // Audit and deps (ADR-017 §2.10) analyze the loaded workbook: never under --stream
       case CliCommand.Audit(failOnFindings) =>

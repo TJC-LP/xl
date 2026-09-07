@@ -4,8 +4,9 @@ import cats.effect.IO
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cli.{Depth, Direction}
 import com.tjclp.xl.cli.contract.{CliError, CliException, CliSignal, ErrorCode, OutputMode, Payload}
-import com.tjclp.xl.cli.helpers.SheetResolver
+import com.tjclp.xl.cli.helpers.{Resolve, SheetResolver}
 import com.tjclp.xl.cli.output.RendererCommon
 import com.tjclp.xl.ooxml.metadata.LightMetadata
 import com.tjclp.xl.sheets.FreezePane
@@ -243,6 +244,21 @@ object InspectCommands:
       if parts.isEmpty then "default" else parts.mkString(", ")
     }
 
+  /**
+   * `describe` is a workbook verb: `-s` selects nothing. An explicit `-s` that names no sheet is
+   * still the caller's mistake, refused as `SHEET_NOT_FOUND` with candidates (exit 3) the way every
+   * sheet-taking verb refuses it; an existing sheet is accepted and ignored. `readMeta` runs only
+   * when the flag is present (a metadata read: instant for any file size).
+   */
+  def checkSheetFlag(sheetFlag: Option[String], verb: String)(
+    readMeta: IO[LightMetadata]
+  ): IO[Unit] =
+    sheetFlag.fold(IO.unit) { _ =>
+      readMeta.flatMap { meta =>
+        IO.fromEither(Resolve.sheetName(meta, sheetFlag, None, verb).left.map(CliException(_))).void
+      }
+    }
+
   // ===========================================================================================
   // audit
   // ===========================================================================================
@@ -303,7 +319,9 @@ object InspectCommands:
       "cycles" -> ujson.Arr.from(audit.cycles.map(scc => refs(scc.members))),
       "externalRefs" -> refs(audit.externalRefs),
       "unresolvedReaders" -> refs(audit.unresolvedReaders),
-      "calcPr" -> calcPrJson(audit.calcPr)
+      "calcPr" -> calcPrJson(audit.calcPr),
+      // a note, not a finding: the book declares iterative calculation, so its cycles are intended
+      "iterativeCycles" -> ujson.Arr.from(audit.iterativeCycles.map(scc => refs(scc.members)))
     )
 
   /** The headline, then one section per non-empty bucket: findings first, notes after. */
@@ -322,6 +340,10 @@ object InspectCommands:
         section("Unparseable formulas", unparseable) ++
         section("Cycles", audit.cycles.map(scc => one(scc.members.mkString(", ")))) ++
         section("Unresolved names", audit.unresolvedReaders.map(q => one(q.toString))) ++
+        section(
+          "Cycles (iterative calculation on, not a finding)",
+          audit.iterativeCycles.map(scc => one(scc.members.mkString(", ")))
+        ) ++
         section("Volatile", audit.volatile.map(q => one(q.toString))) ++
         section("Dynamic", audit.dynamic.map(q => one(q.toString))) ++
         section("External references", audit.externalRefs.map(q => one(q.toString))) ++
@@ -335,15 +357,16 @@ object InspectCommands:
   /**
    * `deps <ref> [--direction precedents|dependents|both] [--depth N|all]`: the cell, then its
    * precedent and/or dependent layers from [[QualifiedGraph]] — each node with its depth, formula
-   * and value. The ref resolves through the one sheet rule ([[SheetResolver.resolveRef]]); `depth`
-   * `None` is one hop, `Some(0)` is `all`.
+   * and value. The ref resolves through the one sheet rule ([[SheetResolver.resolveRef]]); the
+   * parser has already turned the flags into [[Direction]] and [[Depth]] (`Depth.Hops(1)` when
+   * `--depth` is absent).
    */
   def deps(
     wb: Workbook,
     sheetOpt: Option[Sheet],
     refStr: String,
-    direction: String,
-    depth: Option[Int],
+    direction: Direction,
+    depth: Depth,
     mode: OutputMode
   ): IO[Payload] =
     for
@@ -365,13 +388,18 @@ object InspectCommands:
     yield
       val graph = QualifiedGraph.of(wb)
       val start = QualifiedRef(sheet.name, ref)
-      val bound = depth.getOrElse(1)
-      val precedents = Option.when(direction != "dependents")(graph.precedents(start, bound))
-      val dependents = Option.when(direction != "precedents")(graph.dependents(start, bound))
+      // QualifiedGraph's walk takes a hop budget where `<= 0` means unbounded
+      val bound = depth match
+        case Depth.All => 0
+        case Depth.Hops(n) => n
+      val precedents =
+        Option.when(direction != Direction.Dependents)(graph.precedents(start, bound))
+      val dependents =
+        Option.when(direction != Direction.Precedents)(graph.dependents(start, bound))
       mode match
         case OutputMode.Json =>
-          Payload.Json(depsJson(wb, start, direction, bound, precedents, dependents))
-        case OutputMode.Text => Payload.text(depsText(wb, start, bound, precedents, dependents))
+          Payload.Json(depsJson(wb, start, direction, depth, precedents, dependents))
+        case OutputMode.Text => Payload.text(depsText(wb, start, depth, precedents, dependents))
 
   private def valueAt(wb: Workbook, q: QualifiedRef): CellValue =
     wb.sheets.find(_.name == q.sheet).flatMap(_.cells.get(q.ref)).fold(CellValue.Empty)(_.value)
@@ -417,14 +445,15 @@ object InspectCommands:
       layer.map(q => nodeJson(wb, q, i + 1))
     })
 
-  private def depthJson(bound: Int): ujson.Value =
-    if bound <= 0 then ujson.Str("all") else ujson.Num(bound)
+  private def depthJson(depth: Depth): ujson.Value = depth match
+    case Depth.All => ujson.Str("all")
+    case Depth.Hops(n) => ujson.Num(n)
 
   private def depsJson(
     wb: Workbook,
     start: QualifiedRef,
-    direction: String,
-    bound: Int,
+    direction: Direction,
+    depth: Depth,
     precedents: Option[Vector[Vector[QualifiedRef]]],
     dependents: Option[Vector[Vector[QualifiedRef]]]
   ): ujson.Obj =
@@ -433,8 +462,8 @@ object InspectCommands:
       "ref" -> ujson.Str(start.toString),
       "formula" -> formulaOf(value).fold[ujson.Value](ujson.Null)(ujson.Str.apply),
       "value" -> valueJson(value),
-      "direction" -> ujson.Str(direction),
-      "depth" -> depthJson(bound),
+      "direction" -> ujson.Str(direction.flag),
+      "depth" -> depthJson(depth),
       "precedents" -> precedents.fold[ujson.Value](ujson.Null)(layersJson(wb, _)),
       "dependents" -> dependents.fold[ujson.Value](ujson.Null)(layersJson(wb, _))
     )
@@ -442,11 +471,13 @@ object InspectCommands:
   private def depsText(
     wb: Workbook,
     start: QualifiedRef,
-    bound: Int,
+    depth: Depth,
     precedents: Option[Vector[Vector[QualifiedRef]]],
     dependents: Option[Vector[Vector[QualifiedRef]]]
   ): String =
-    val depthLabel = if bound <= 0 then "depth all" else s"depth $bound"
+    val depthLabel = depth match
+      case Depth.All => "depth all"
+      case Depth.Hops(n) => s"depth $n"
     def describe(q: QualifiedRef): String =
       val value = valueAt(wb, q)
       formulaOf(value).fold(valueText(value))(f => s"$f -> ${valueText(value)}")

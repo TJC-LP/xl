@@ -21,6 +21,23 @@ object SheetsAction:
   /** Show a hidden sheet (make it visible) */
   case class Show(name: String) extends SheetsAction
 
+/** `deps --direction`: which side of the cell's graph to walk (default `Both`). */
+enum Direction derives CanEqual:
+  case Precedents, Dependents, Both
+
+  /** The flag value as the agent typed it, and as `--json` echoes it. */
+  def flag: String = this match
+    case Precedents => "precedents"
+    case Dependents => "dependents"
+    case Both => "both"
+
+/**
+ * `deps --depth`: a hop budget (`Hops(1)` when the flag is absent) or the whole reachable graph.
+ */
+enum Depth derives CanEqual:
+  case Hops(n: Int)
+  case All
+
 /** Named-range (defined name) operations: add/replace and remove. */
 sealed trait NameAction derives CanEqual
 object NameAction:
@@ -77,11 +94,7 @@ enum CliCommand:
   // Inspect (ADR-017 §2.10, read-only): orient, find every reason a number is wrong, trace one
   case Describe(full: Boolean) // metadata only unless --full (then the loaded WorkbookSummary)
   case Audit(failOnFindings: Boolean) // exit 1 AUDIT_FINDINGS when asked and the book is dirty
-  case Deps(
-    ref: String,
-    direction: String, // precedents | dependents | both
-    depth: Option[Int] // None = 1 hop, Some(0) = all, Some(n) = n hops
-  )
+  case Deps(ref: String, direction: Direction, depth: Depth) // deps <ref> [--direction] [--depth]
   // Analyze
   case Eval(formula: String, overrides: List[String])
   case EvalArray(formula: String, targetRef: Option[String], overrides: List[String])
