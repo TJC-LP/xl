@@ -1,11 +1,9 @@
 package com.tjclp.xl.formula.eval
 
-import java.util.Locale
-
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.formula.ast.TExpr
-import com.tjclp.xl.formula.functions.ArgValue
+import com.tjclp.xl.formula.functions.{ArgValue, FunctionRegistry}
 import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.formula.graph.DependencyGraph.{QualifiedRef, Scc}
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
@@ -28,10 +26,10 @@ import com.tjclp.xl.workbooks.{CalcPr, Workbook}
  * Notes (reported, never findings): `iterativeCycles` (the same cyclic components when
  * `calcPr.iterativeCalculation` is on — an intentional circular model converges by design, so
  * `audit --fail-on-findings` must not fail it forever; every cycle lands in exactly one of `cycles`
- * and `iterativeCycles`), `volatile` (a call to TODAY/NOW/RAND/RANDBETWEEN — the registry has no
- * volatility flag yet, so these are matched by name), `dynamic` (INDIRECT/OFFSET readers,
- * [[DependencyGraph.dynamicCells]]), `externalRefs` (formulas touching another workbook, whose
- * caches are pinned) and the file's `calcPr`.
+ * and `iterativeCycles`), `volatile` (a call to a function flagged `FunctionFlags.volatile` —
+ * TODAY, NOW, RAND, RANDBETWEEN — read off the parsed call, GH-588), `dynamic` (INDIRECT/OFFSET
+ * readers, [[DependencyGraph.dynamicCells]]), `externalRefs` (formulas touching another workbook,
+ * whose caches are pinned) and the file's `calcPr`.
  *
  * Every bucket is in workbook order — sheet position, then row, then column — so two runs on the
  * same file print the same report. Pure and total.
@@ -79,8 +77,11 @@ final case class WorkbookAudit(
 
 object WorkbookAudit:
 
-  /** Matched by (case-insensitive) function name: there is no `FunctionFlags.volatile` yet. */
-  val volatileFunctions: Set[String] = Set("TODAY", "NOW", "RAND", "RANDBETWEEN")
+  /**
+   * Upper-case names of the functions flagged `FunctionFlags.volatile` (GH-588) — informational;
+   * the audit itself reads the flag off each parsed call, never this set.
+   */
+  lazy val volatileFunctions: Set[String] = FunctionRegistry.volatileFunctionNames.toSet
 
   val clean: WorkbookAudit = WorkbookAudit(
     errorCells = Vector.empty,
@@ -147,8 +148,7 @@ object WorkbookAudit:
       val parsed = FormulaParser.parse(text) match
         case Left(err) => List(Finding.Unparseable(q, ParseError.formatWithContext(err, text)))
         case Right(expr) =>
-          val volatile =
-            if callsAny(expr, volatileFunctions) then List(Finding.Volatile(q)) else Nil
+          val volatile = if callsVolatile(expr) then List(Finding.Volatile(q)) else Nil
           val external = if TExpr.containsExternalRef(expr) then List(Finding.External(q)) else Nil
           volatile ++ external
       cacheFindings(q, cached) ++ parsed
@@ -160,32 +160,32 @@ object WorkbookAudit:
       case Some(_) => Nil
       case None => List(Finding.Uncached(q))
 
-  /** Whether the expression calls any of `names` (upper-case), at any depth. */
-  private def callsAny(expr: TExpr[?], names: Set[String]): Boolean = expr match
+  /** Whether the expression calls a function flagged `FunctionFlags.volatile`, at any depth. */
+  private def callsVolatile(expr: TExpr[?]): Boolean = expr match
     case call: TExpr.Call[?] =>
-      names.contains(call.spec.name.toUpperCase(Locale.ROOT)) ||
+      call.spec.flags.volatile ||
       call.spec.argSpec.toValues(call.args).exists {
-        case ArgValue.Expr(e) => callsAny(e, names)
+        case ArgValue.Expr(e) => callsVolatile(e)
         case _ => false
       }
-    case TExpr.Add(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Sub(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Mul(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Div(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Pow(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Concat(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Eq(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Neq(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Lt(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Lte(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Gt(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.Gte(l, r) => callsAny(l, names) || callsAny(r, names)
-    case TExpr.ToInt(e) => callsAny(e, names)
-    case TExpr.UnaryPlus(e) => callsAny(e, names)
-    case TExpr.Percent(e) => callsAny(e, names)
-    case TExpr.DateToSerial(e) => callsAny(e, names)
-    case TExpr.DateTimeToSerial(e) => callsAny(e, names)
+    case TExpr.Add(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Sub(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Mul(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Div(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Pow(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Concat(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Eq(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Neq(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Lt(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Lte(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Gt(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.Gte(l, r) => callsVolatile(l) || callsVolatile(r)
+    case TExpr.ToInt(e) => callsVolatile(e)
+    case TExpr.UnaryPlus(e) => callsVolatile(e)
+    case TExpr.Percent(e) => callsVolatile(e)
+    case TExpr.DateToSerial(e) => callsVolatile(e)
+    case TExpr.DateTimeToSerial(e) => callsVolatile(e)
     case TExpr.Let(bindings, body) =>
-      bindings.exists((_, value) => callsAny(value, names)) || callsAny(body, names)
-    case TExpr.Coerced(inner, _) => callsAny(inner, names)
+      bindings.exists((_, value) => callsVolatile(value)) || callsVolatile(body)
+    case TExpr.Coerced(inner, _) => callsVolatile(inner)
     case _ => false

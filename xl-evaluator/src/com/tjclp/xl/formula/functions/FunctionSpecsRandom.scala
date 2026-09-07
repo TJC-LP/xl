@@ -21,7 +21,7 @@ trait FunctionSpecsRandom extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, NoArgs](
       "RAND",
       Arity.none,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, volatile = true)
     ) { (_, ctx) =>
       Right(BigDecimal(ctx.rng.nextDouble()))
     }
@@ -36,7 +36,7 @@ trait FunctionSpecsRandom extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumeric](
       "RANDBETWEEN",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, volatile = true)
     ) { (args, ctx) =>
       val (bottomExpr, topExpr) = args
       for

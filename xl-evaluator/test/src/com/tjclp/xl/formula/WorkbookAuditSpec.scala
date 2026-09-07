@@ -4,6 +4,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.formula.eval.WorkbookAudit
+import com.tjclp.xl.formula.functions.FunctionRegistry
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{CalcPr, Workbook}
@@ -239,6 +240,22 @@ class WorkbookAuditSpec extends FunSuite:
     assertEquals(noted.iterativeCycles.size, 2)
     assertEquals(noted.restrictTo(SheetName.unsafe("R")).iterativeCycles, Vector.empty)
     assertEquals(noted.restrictTo(SheetName.unsafe("P")).iterativeCycles.size, 2)
+  }
+
+  test("GH-588: volatility is the FunctionFlags.volatile flag on the specs, not a name list") {
+    // the flag is the single source of truth: the registry derives the names from it, the audit
+    // reads the flag off the parsed Call, and the two agree
+    assertEquals(
+      FunctionRegistry.volatileFunctionNames,
+      List("NOW", "RAND", "RANDBETWEEN", "TODAY")
+    )
+    assertEquals(WorkbookAudit.volatileFunctions, FunctionRegistry.volatileFunctionNames.toSet)
+    FunctionRegistry.volatileFunctionNames.foreach { name =>
+      assert(FunctionRegistry.lookup(name).exists(_.flags.volatile), s"$name must be flagged")
+    }
+    Vector("SUM", "INDIRECT", "OFFSET", "CELL", "IF").foreach { name =>
+      assert(FunctionRegistry.lookup(name).exists(!_.flags.volatile), s"$name must not be flagged")
+    }
   }
 
   test("the volatile function set is exactly TODAY, NOW, RAND and RANDBETWEEN, by name") {

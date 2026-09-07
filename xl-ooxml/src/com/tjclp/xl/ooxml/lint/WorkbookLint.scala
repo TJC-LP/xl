@@ -13,6 +13,7 @@ import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.ooxml.{
   ContentTypes,
   FormulaKindCodec,
+  FormulaStorage,
   OoxmlWorkbook,
   Relationships,
   XmlSecurity,
@@ -77,6 +78,14 @@ enum LintCategory derives CanEqual:
    */
   case CalcChainStale
 
+  /**
+   * A post-2007 function stored bare — `IFS(` instead of `_xlfn.IFS(` — in a cell `<f>`, a
+   * conditional-formatting `<formula>` / cfvo, a data-validation `<formula1>`/`<formula2>` or a
+   * `<definedName>`: an undefined name to Excel and LibreOffice, `#NAME?` on the first
+   * recalculation even though the cached value was right (GH-556, GH-577).
+   */
+  case XlfnMissing
+
   /** Stable kebab-case identifier used in CLI text and JSON output. */
   def slug: String = this match
     case LintCategory.ChildOrder => "child-order"
@@ -91,6 +100,7 @@ enum LintCategory derives CanEqual:
     case LintCategory.ExternalRefDangling => "external-ref-dangling"
     case LintCategory.DefinedNameInvalid => "defined-name-invalid"
     case LintCategory.CalcChainStale => "calc-chain-stale"
+    case LintCategory.XlfnMissing => "xlfn-missing"
 
 /**
  * A single structural lint finding.
@@ -137,6 +147,11 @@ final case class Finding(
  *     index the SOURCE book's table, so a sheet adopted verbatim carries danglers and Excel repairs
  *     the file by removing every such formula (plus calcChain). One finding per part per dangling
  *     ordinal
+ *   - post-2007 functions stored bare (GH-577) — `IFS(` where Excel stores `_xlfn.IFS(` — in a cell
+ *     `<f>` (or x14's `<xm:f>`), a CF `<formula>`, a DV `<formula1>`/`<formula2>` or a
+ *     `<definedName>`: not a repair class but a silent `#NAME?` on the first recalculation, which
+ *     no cached value reveals. Aggregated to ONE finding per part (first-5 site sample, total
+ *     count, the bare names) like the leading-'=' check
  *
  * Lint runs on the RAW ZIP PARTS, never on the parsed domain model — a full read would
  * repair/normalize the very structure lint inspects (the reader silently falls back on unresolved
@@ -297,6 +312,7 @@ object WorkbookLint:
       checkRelRefs(workbookPart, workbookRelRefs(wbElem), wbRels, workbookRelsPart, parts, "xl") ++
       definedNameExternalRefFindings(wbElem) ++
       definedNameValidityFindings(wbElem) ++
+      definedNameXlfnFindings(wbElem) ++
       sheetResult._1 ++ externalResult._1 ++ calcChainFindings(chain, sheetResult._3, parts) ++
       ctFindings
 
@@ -489,7 +505,7 @@ object WorkbookLint:
                   parts,
                   parentDir(path)
                 ) ++
-                scan.boundsFindings ++ scan.formulaFindings ++
+                scan.boundsFindings ++ scan.formulaFindings ++ scan.xlfnFindings ++
                 externalRefFindings(path, scan.externalRefs, declaredExternalRefs) ++
                 dataTableFindings(path, scan.dataTables, autoNoTable) ++ tableResult._1
           (
@@ -735,7 +751,8 @@ object WorkbookLint:
    * Everything the per-part checks need, produced identically by the DOM and SAX scanners: root
    * label, ordered main-namespace top-level labels (with positions among all top-level elements),
    * the captured r:id-bearing elements, the ref/sqref bounds findings, the aggregated leading-'='
-   * formula finding (GH-456), the external-workbook ordinal usage (GH-525 — findings need the
+   * formula finding (GH-456), the aggregated bare-post-2007-function finding over every
+   * formula-text element (GH-577), the external-workbook ordinal usage (GH-525 — findings need the
    * workbook-level `<externalReference>` count, so the scan carries facts, not findings), and the
    * data-table record state accumulated over sheetData (GH-442).
    */
@@ -745,6 +762,7 @@ object WorkbookLint:
     captures: Vector[CapturedRef],
     boundsFindings: Vector[Finding],
     formulaFindings: Vector[Finding],
+    xlfnFindings: Vector[Finding],
     externalRefs: ExternalRefFacts,
     dataTables: Vector[RecordFacts],
     chain: ChainSheetFacts
@@ -806,16 +824,36 @@ object WorkbookLint:
     )
     val extRefs = cellObs.foldLeft(ExternalRefFacts.empty)(_.add(_))
     val chain = cellObs.foldLeft(ChainSheetFacts.empty)(_.add(_, chainCandidates))
+    val xlfn = xlfnSitesOf(root).foldLeft(XlfnFacts.empty) { case (acc, (site, locator, text)) =>
+      acc.add(site, locator, bareFutureFunctions(text))
+    }
     SheetScan(
       root.label,
       mainChildLabelsOf(root),
       captures,
       bounds,
       formulaEq,
+      xlfnFindings(part, xlfn, "formula"),
       extRefs,
       dataTables,
       chain
     )
+
+  /**
+   * Every formula-text element of a part in document order, as (sample name, locator, text): an
+   * element in [[formulaTextLabels]] with no element children. One WITH element children (x14's
+   * `<x14:formula1><xm:f>…</xm:f></x14:formula1>`) is a container — the inner element is the site.
+   * The SAX scanner observes exactly the same set (parity-pinned).
+   */
+  private def xlfnSitesOf(root: Elem): Vector[(String, String, String)] =
+    def walk(e: Elem, parent: Option[Elem]): Vector[(String, String, String)] =
+      val children = e.child.toVector.collect { case c: Elem => c }
+      parent match
+        case Some(p) if formulaTextLabels.contains(e.label) && children.isEmpty =>
+          val (site, locator) = xlfnSite(e.label, p.label, XmlUtil.getAttrOpt(p, "r"))
+          Vector((site, locator, e.text))
+        case _ => children.flatMap(walk(_, Some(e)))
+    walk(root, None)
 
   /** One `<c>` element's data-table facts (DOM side of the parity pair). */
   private def domCellObs(cell: Elem): CellObs =
@@ -877,6 +915,11 @@ object WorkbookLint:
       // matching the DOM scanner's Elem.text. Bounded by Excel's formula-length limit, so the
       // streaming mode stays O(1) in the row count.
       private var formulaText: Option[java.lang.StringBuilder] = None
+      // GH-577: the open formula-text element (any <f>/<formula>/<formula1>/<formula2>, at any
+      // depth) whose text is being accumulated; the `r` of the innermost open <c> names a cell site.
+      private var xlfnCapture: Option[XlfnCapture] = None
+      private var cellR: Option[String] = None
+      private var xlfn: XlfnFacts = XlfnFacts.empty
 
       def result: Option[SheetScan] =
         rootLabel.map(
@@ -886,6 +929,7 @@ object WorkbookLint:
             captures.result(),
             bounds.result(),
             formulaEqualsFindings(part, leadingEq),
+            xlfnFindings(part, xlfn, "formula"),
             extRefs,
             dataTables,
             chain
@@ -948,16 +992,34 @@ object WorkbookLint:
             bounds ++= refBoundsFindings(part, label, attr, value)
           }
         }
+        // GH-577: a child element inside an open formula-text element makes it a container (the
+        // DOM scanner skips elements with element children); a nested formula-text element opens
+        // its own capture in its place.
+        xlfnCapture.foreach(_.sawChild = true)
+        if label == "c" then cellR = Option(atts.getValue("", "r"))
+        if formulaTextLabels.contains(label) then
+          val parentLabel = parents.headOption.getOrElse("")
+          val (site, locator) =
+            xlfnSite(label, parentLabel, if parentLabel == "c" then cellR else None)
+          xlfnCapture = Some(new XlfnCapture(depth, site, locator))
         parents = label :: parents
         depth += 1
 
       override def characters(ch: Array[Char], start: Int, length: Int): Unit =
         formulaText.foreach(_.append(ch, start, length))
+        xlfnCapture.foreach(_.text.append(ch, start, length))
 
       override def endElement(uri: String, localName: String, qName: String): Unit =
         val label = if localName.nonEmpty then localName else qName
         parents = parents.drop(1)
         depth -= 1
+        xlfnCapture match
+          case Some(open) if open.depth == depth =>
+            if !open.sawChild then
+              xlfn = xlfn.add(open.site, open.locator, bareFutureFunctions(open.text.toString))
+            xlfnCapture = None
+          case _ => ()
+        if label == "c" then cellR = None
         if label == "f" then
           formulaText.foreach { sb =>
             val text = sb.toString
@@ -1040,6 +1102,103 @@ object WorkbookLint:
             "re-writing the file with xl heals it"
         )
       )
+
+  // ===== Post-2007 functions stored bare (GH-577) =====
+
+  /**
+   * Local names of the elements whose text is formula text: a cell `<f>` (x14's `<xm:f>` shares the
+   * local name), a CF `<formula>`, a DV `<formula1>` / `<formula2>`.
+   */
+  private val formulaTextLabels: Set[String] = Set("f", "formula", "formula1", "formula2")
+
+  /** Sample size for the aggregated xlfn-missing finding: the first N offending sites (GH-577). */
+  private val xlfnSampleSize = 5
+
+  /**
+   * The two spellings of a formula-text site: the short name for the sample list (`B1` for a cell,
+   * `<cfRule><formula>` elsewhere) and the locator the finding carries for the first site.
+   */
+  private def xlfnSite(
+    label: String,
+    parentLabel: String,
+    cellRef: Option[String]
+  ): (String, String) =
+    if parentLabel == "c" then
+      (cellRef.getOrElse("<c><f>"), cellRef.fold("<c><f>")(r => s"""<c r="$r"><f>"""))
+    else
+      val site = s"<$parentLabel><$label>"
+      (site, site)
+
+  /**
+   * One open formula-text element in the SAX scanner (GH-577); see [[xlfnSitesOf]] for the rule.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private final class XlfnCapture(val depth: Int, val site: String, val locator: String):
+    val text: java.lang.StringBuilder = new java.lang.StringBuilder
+    var sawChild: Boolean = false
+
+  /**
+   * Accumulated bare-call facts for ONE part (GH-577): the count of offending formula-text sites,
+   * the first [[xlfnSampleSize]] of them in document order, the first site's locator, and the
+   * distinct bare names seen (bounded by [[FormulaStorage.FutureFunctions]], never by the cell
+   * count). Folded identically by both scanners for parity.
+   */
+  private final case class XlfnFacts(
+    sample: Vector[String],
+    firstLocator: Option[String],
+    count: Long,
+    functions: Set[String]
+  ):
+    def add(site: String, locator: String, bare: Vector[String]): XlfnFacts =
+      if bare.isEmpty then this
+      else
+        XlfnFacts(
+          if sample.sizeIs < xlfnSampleSize then sample :+ site else sample,
+          firstLocator.orElse(Some(locator)),
+          count + 1,
+          functions ++ bare
+        )
+
+  private object XlfnFacts:
+    val empty: XlfnFacts = XlfnFacts(Vector.empty, None, 0L, Set.empty)
+
+  /**
+   * GH-577: ONE finding per part for the formula-text sites (`noun` = "formula" on a sheet part,
+   * "defined name" on workbook.xml) that call a post-2007 function without `_xlfn.`: the bare
+   * names, the first-[[xlfnSampleSize]] site sample and the total count; the locator names the
+   * first offending site so the finding is actionable without re-deriving it.
+   */
+  private def xlfnFindings(part: String, facts: XlfnFacts, noun: String): Vector[Finding] =
+    if facts.count == 0L then Vector.empty
+    else
+      val sites =
+        if facts.count > facts.sample.size then
+          s"first ${facts.sample.size}: ${facts.sample.mkString(", ")}, …"
+        else facts.sample.mkString(", ")
+      Vector(
+        Finding(
+          part,
+          LintCategory.XlfnMissing,
+          facts.firstLocator.getOrElse(""),
+          s"${facts.count} $noun(s) call post-2007 function(s) without Excel's _xlfn. storage " +
+            s"prefix (${facts.functions.toVector.sorted.mkString(", ")}; $sites) — Excel and " +
+            "LibreOffice treat the bare name as undefined and show #NAME? on the first " +
+            "recalculation; re-writing the affected part with xl heals it"
+        )
+      )
+
+  /** GH-577 at workbook level: `<definedName>` bodies are formula text and go bare the same way. */
+  private def definedNameXlfnFindings(wbElem: Elem): Vector[Finding] =
+    val facts = nestedElems(wbElem, "definedNames", "definedName").foldLeft(XlfnFacts.empty) {
+      (acc, dn) =>
+        val name = XmlUtil.getAttrOpt(dn, "name").getOrElse("")
+        acc.add(
+          s""""$name"""",
+          s"""<definedName name="$name">""",
+          bareFutureFunctions(dn.text)
+        )
+    }
+    xlfnFindings(workbookPart, facts, "defined name")
 
   // ===== Dangling external-workbook ordinals (GH-525) =====
 
@@ -1435,6 +1594,67 @@ object WorkbookLint:
           case c => loop(i + 1, Some(c), acc)
 
     loop(0, None, Set.empty)
+
+  /**
+   * Upper-case names of the post-2007 functions a stored formula calls WITHOUT Excel's `_xlfn.`
+   * prefix (GH-577), distinct, in order of first appearance. A call is an identifier token directly
+   * followed (modulo whitespace) by `(`; the token is bare when its name (after any `_xlfn.` /
+   * `_xlws.` prefixes) is in [[FormulaStorage.FutureFunctions]] and it does not start with `_xlfn.`
+   * — so `_xlws.FILTER(` counts (Excel resolves only `_xlfn._xlws.FILTER`). Precision rules,
+   * false-positive-averse by construction: double-quoted string literals (`""` escape), quoted
+   * sheet names (`''` escape) and bracketed text (structured references, external ordinals,
+   * nesting-aware) are skipped; a token starting with a digit is never a call; membership is
+   * case-insensitive (`xlookup(` is bare).
+   */
+  private[lint] def bareFutureFunctions(formula: String): Vector[String] =
+    val n = formula.length
+
+    def isTokenChar(c: Char): Boolean = c.isLetterOrDigit || c == '_' || c == '.'
+
+    @annotation.tailrec
+    def skipQuoted(i: Int, quote: Char): Int = // i is the first index after the opening quote
+      if i >= n then n
+      else if formula(i) == quote then
+        if i + 1 < n && formula(i + 1) == quote then skipQuoted(i + 2, quote) else i + 1
+      else skipQuoted(i + 1, quote)
+
+    @annotation.tailrec
+    def skipBracket(i: Int, open: Int): Int = // i is the first index after an opening '['
+      if i >= n then n
+      else
+        formula(i) match
+          case '[' => skipBracket(i + 1, open + 1)
+          case ']' => if open == 1 then i + 1 else skipBracket(i + 1, open - 1)
+          case _ => skipBracket(i + 1, open)
+
+    @annotation.tailrec
+    def tokenEnd(i: Int): Int = if i < n && isTokenChar(formula(i)) then tokenEnd(i + 1) else i
+
+    @annotation.tailrec
+    def skipSpaces(i: Int): Int = if i < n && formula(i).isWhitespace then skipSpaces(i + 1) else i
+
+    def bareCall(token: String): Option[String] =
+      val name = FormulaStorage.bareFunctionName(token).toUpperCase(java.util.Locale.ROOT)
+      val prefixed = token.regionMatches(true, 0, FormulaStorage.XlfnPrefix, 0, 6)
+      Option.when(!prefixed && FormulaStorage.FutureFunctions.contains(name))(name)
+
+    @annotation.tailrec
+    def loop(i: Int, acc: Vector[String]): Vector[String] =
+      if i >= n then acc
+      else
+        formula(i) match
+          case '"' => loop(skipQuoted(i + 1, '"'), acc)
+          case '\'' => loop(skipQuoted(i + 1, '\''), acc)
+          case '[' => loop(skipBracket(i + 1, 1), acc)
+          case c if isTokenChar(c) =>
+            val end = tokenEnd(i)
+            val isCall = (c.isLetter || c == '_') && skipSpaces(end) < n &&
+              formula(skipSpaces(end)) == '('
+            val found = if isCall then bareCall(formula.substring(i, end)) else None
+            loop(end, found.filterNot(acc.contains).fold(acc)(acc :+ _))
+          case _ => loop(i + 1, acc)
+
+    loop(0, Vector.empty)
 
   /**
    * Accumulated facts for one data-table record, keyed by the record's own `ref`. Every field is a

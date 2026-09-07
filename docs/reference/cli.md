@@ -1569,6 +1569,12 @@ xl -f deliverable.xlsx lint && echo "safe to send"
   drop it together with its `[Content_Types].xml` Override and `workbook.xml.rels` Relationship
   (Excel rebuilds it on save), or rebuild it. Both xl writers, in-memory and `--stream`, drop
   the source chain on every write that rewrites a worksheet, so xl output never carries one
+- **`xlfn-missing`** — a post-2007 function stored bare (`IFS(`, `XLOOKUP(`, `MAXIFS(`, … where
+  Excel stores `_xlfn.IFS(`) in a cell `<f>`, a conditional-formatting `<formula>`, a
+  data-validation `<formula1>`/`<formula2>` or a `<definedName>`: not a repair class but a silent
+  `#NAME?` on the first recalculation, which no cached value reveals (the openpyxl class of
+  producer). One finding per part with the bare names, the first five sites and the total count.
+  xl's own writers always emit the prefix; re-writing the affected part with xl heals it
 
 **Exit codes**: `0` no findings · `1` findings reported · `3` error (unreadable file, malformed
 core part) · `2` usage (no file, or a file given both ways) — errors go to stderr with a `code:`

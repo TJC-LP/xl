@@ -30,7 +30,14 @@ final case class FunctionFlags(
    * (`DependencyGraph.deferDynamic`) and treated as always-dirty by targeted recalculation
    * (`DependentRecalculation`).
    */
-  dynamicDeps: Boolean = false
+  dynamicDeps: Boolean = false,
+  /**
+   * GH-588: True for functions whose value can change between two recalculations without any input
+   * changing — Excel's volatile marking (TODAY, NOW, RAND, RANDBETWEEN). The flag is the single
+   * source of truth: `FunctionRegistry.volatileFunctionNames` lists the flagged specs and
+   * `WorkbookAudit.volatile` reports the cells that call one.
+   */
+  volatile: Boolean = false
 )
 
 final case class ArgPrinter(
