@@ -1707,9 +1707,10 @@ findings, `audit --fail-on-findings` on a dirty book and a `--strict` write that
 `RECALC_GATE` — and `data` still holds the report (the diff, the findings, the audit buckets, the
 recalculation summary), so nothing text mode showed is lost.
 
-**Channels.** With `--json` the envelope is the only thing on stdout. Whenever `error` is present,
-stderr carries the single line `Error: <message>` so a human tailing a log still sees it; the
-`code:` and `hint:` lines live in the envelope instead. A wrong command line (unknown verb, a
+**Channels.** With `--json` the envelope is the only thing on stdout. When a run fails (exit `2`
+or `3`), stderr also carries the single line `Error: <message>` so a human tailing a log still
+sees it; the `code:` and `hint:` lines live in the envelope instead. Findings and gates (exit `1`)
+print nothing on stderr, exactly as text mode does — the report is in `data`. A wrong command line (unknown verb, a
 verb-owned flag before the verb, `-i` with `-o`) also produces the envelope — exit `2`,
 `code: USAGE` — when `--json` is among the arguments.
 

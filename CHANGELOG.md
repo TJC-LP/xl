@@ -216,8 +216,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   escapes every handler still ends in the one-line `Error:` block — or the envelope under `--json`
   — through a last-resort handler.
 - **User-input failures carry their own codes**: a formula the parser rejects is `FORMULA_ERROR`,
-  a missing sheet `SHEET_NOT_FOUND`, a malformed reference `INVALID_REFERENCE`, where several
-  paths reported `INTERNAL`.
+  a missing sheet `SHEET_NOT_FOUND` (including `--stream search --sheets`, `diff -s` and `new`),
+  a malformed reference `INVALID_REFERENCE` (`cell A1:B2`, `--stream cell`/`stats`), a `put`
+  whose values do not fit its range `VALUE_COUNT_MISMATCH`, and contradictory flags (`recalc`
+  with `--no-recalc`) `USAGE` (exit 2), where these paths reported `INTERNAL`. `INTERNAL` is now
+  reserved for defects.
+- **Findings and gates print no `Error:` line on stderr under `--json`** (exit 1: `diff`
+  differences, `lint`/`audit` findings, the `--strict` gate), matching text mode; the report is
+  in `data`.
+- **Every published code fires**: `STREAM_BACKEND_ONLY` (a `--stream` request answered by the
+  in-memory path) and `RECALC_ERRORS` (a non-strict write whose recalculation hit errors) are
+  emitted as warnings, `RASTERIZER_UNAVAILABLE` is raised when no raster backend is present, and a
+  spec (`CodeReachabilitySpec`) fails when a code in the vocabulary has no emission site.
+- **`-o --json` no longer selects JSON output**: a token consumed as a global flag's value is not
+  read as the output mode.
 - **`--json` keeps numbers exact**: pass-through payloads (`view`/`filter`/`diff`/`lint`) and
   `eval`/`evala` results are emitted as the numbers the verb computed, not re-parsed doubles.
 - **Batch parse warnings carry codes**: an unknown key is `UNKNOWN_PROPERTY` and an unrecognised
