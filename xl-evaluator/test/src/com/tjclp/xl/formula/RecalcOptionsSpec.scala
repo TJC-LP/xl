@@ -56,10 +56,15 @@ class RecalcOptionsSpec extends FunSuite:
       maxChange = Some(BigDecimal("0.001"))
     )
 
-  test("RecalcOptions.default carries the documented defaults") {
-    // Clock.system / Rng.system are capability instances compared by identity, so the record is
-    // pinned field by field rather than as a whole.
+  test("RecalcOptions.default carries the documented defaults and equals RecalcOptions()") {
+    // Clock.system / Rng.system are stateless singletons, so two default records compare equal
+    assertEquals(RecalcOptions.default, RecalcOptions())
+    assertEquals(RecalcOptions(), RecalcOptions())
+    assert(Clock.system eq Clock.system)
+    assert(Rng.system eq Rng.system)
     for opts <- Vector(RecalcOptions.default, RecalcOptions()) do
+      assertEquals(opts.clock, Clock.system)
+      assertEquals(opts.rng, Rng.system)
       assertEquals(opts.iterative, IterativeMode.FromCalcPr: IterativeMode)
       assertEquals(opts.parallelism, 1)
       assertEquals(opts.seedTables, false)

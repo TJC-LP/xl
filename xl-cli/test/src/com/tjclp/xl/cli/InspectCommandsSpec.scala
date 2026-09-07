@@ -1,6 +1,7 @@
 package com.tjclp.xl.cli
 
 import cats.effect.{IO, Resource}
+import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.cli.contract.{Argv, CliHarness, CliRun, EnvelopeSchema, TestFixtures}
@@ -141,11 +142,45 @@ class InspectCommandsSpec extends CatsEffectSuite:
     }
   }
 
-  test("describe is a workbook verb: -s is accepted and ignored") {
+  test("describe is a workbook verb: an existing -s is accepted and ignored") {
     for
       plain <- CliHarness.run("-f", file("linked.xlsx"), "--json", "describe")
       withSheet <- CliHarness.run("-f", file("linked.xlsx"), "-s", "Sheet2", "--json", "describe")
-    yield assertEquals(withSheet.stdout, plain.stdout)
+      full <- CliHarness.run(
+        "-f",
+        file("linked.xlsx"),
+        "-s",
+        "Sheet2",
+        "--json",
+        "describe",
+        "--full"
+      )
+    yield
+      assertEquals(withSheet.stdout, plain.stdout)
+      assertEquals(full.exit, 0, full.stderr)
+  }
+
+  test("describe refuses an unknown -s: SHEET_NOT_FOUND with candidates, exit 3") {
+    // (`sheets` and `names` are parsed without --sheet at all: `-s X names` is a USAGE error
+    // before any read, pinned by names-with-sheet.golden)
+    val verbs = Vector(
+      Vector("describe"),
+      Vector("describe", "--full"),
+      Vector("--stream", "describe")
+    )
+    verbs.traverse_ { verb =>
+      val args = Vector("-f", file("linked.xlsx"), "-s", "Sheet3", "--json") ++ verb
+      val name = verb.filterNot(_.startsWith("--")).headOption.getOrElse("")
+      CliHarness.run(args*).map { run =>
+        assertEquals(run.exit, 3, s"$verb: ${run.stdout}")
+        val e = envelope(run)
+        assertEquals(e("ok"), ujson.False)
+        assertEquals(e("error")("code"), ujson.Str("SHEET_NOT_FOUND"), verb.toString)
+        assertEquals(e("verb"), ujson.Str(name))
+        assertEquals(names(e("error")("candidates")), Vector("Sheet1", "Sheet2"))
+        assert(e("error")("message").str.contains("Sheet3"), e("error")("message").str)
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -169,11 +204,13 @@ class InspectCommandsSpec extends CatsEffectSuite:
           "cycles",
           "externalRefs",
           "unresolvedReaders",
-          "calcPr"
+          "calcPr",
+          "iterativeCycles"
         )
       )
       assertEquals(d("clean"), ujson.False)
-      assertEquals(d("findings").num.toInt, 6)
+      // the fixture declares iterative calculation, so its 2-cycle is a note, not a finding
+      assertEquals(d("findings").num.toInt, 5)
       assertEquals(
         d("errorCells").arr.toVector.map(e => (e("ref").str, e("error").str)),
         Vector(("Calc!A1", "#DIV/0!"))
@@ -183,8 +220,9 @@ class InspectCommandsSpec extends CatsEffectSuite:
       assert(d("unparseable")(0)("message").str.startsWith("UNSUPPORTED(1)"))
       assertEquals(names(d("volatile")), Vector("Calc!C1"))
       assertEquals(names(d("dynamic")), Vector("Calc!D1"))
+      assertEquals(d("cycles"), ujson.Arr())
       assertEquals(
-        d("cycles").arr.toVector.map(c => names(c).toSet),
+        d("iterativeCycles").arr.toVector.map(c => names(c).toSet),
         Vector(Set("Calc!E1", "Calc!F1"))
       )
       assertEquals(names(d("externalRefs")), Vector("Calc!G1"))
@@ -203,7 +241,7 @@ class InspectCommandsSpec extends CatsEffectSuite:
       assertEquals(e("verb"), ujson.Str("audit"))
       assertEquals(e("error")("code"), ujson.Str("AUDIT_FINDINGS"))
       assertEquals(e("data")("clean"), ujson.False)
-      assertEquals(e("data")("findings").num.toInt, 6)
+      assertEquals(e("data")("findings").num.toInt, 5)
       assertEquals(run.stderr, "", "findings keep their report as data: no Error: line, as in text")
     }
   }
@@ -211,7 +249,7 @@ class InspectCommandsSpec extends CatsEffectSuite:
   test("audit --fail-on-findings in text mode prints the report, not an Error: line") {
     CliHarness.run("-f", file("dirty.xlsx"), "audit", "--fail-on-findings").map { run =>
       assertEquals(run.exit, 1)
-      assert(run.stdout.startsWith("Audit: 6 findings"), run.stdout)
+      assert(run.stdout.startsWith("Audit: 5 findings"), run.stdout)
       assertEquals(run.stderr, "")
     }
   }
@@ -238,8 +276,8 @@ class InspectCommandsSpec extends CatsEffectSuite:
         "Error values (1):",
         "Uncached formulas (2):",
         "Unparseable formulas (1):",
-        "Cycles (1):",
         "Unresolved names (1):",
+        "Cycles (iterative calculation on, not a finding) (1):",
         "Volatile (1):",
         "Dynamic (1):",
         "External references (1):",

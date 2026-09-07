@@ -346,6 +346,25 @@ class SheetRenamerSpec extends ScalaCheckSuite:
     )
   }
 
+  test("a new name another sheet carries in a different case is DuplicateSheet, untouched") {
+    // Excel resolves `s!A1` against `S`: with tabs S and T, renaming T to s would leave `=s!A1*2`
+    // pointing at the ORIGINAL S — a silently wrong number — so the rename is refused up front.
+    val wb = Workbook(
+      Sheet("S").put(ref"A1", num(1)),
+      Sheet("T").put(ref"A1", num(5)),
+      Sheet("U").put(ref"A1", f("T!A1*2", Some(num(10))))
+    )
+    assertEquals(
+      SheetRenamer.rename(wb, SheetName.unsafe("T"), SheetName.unsafe("s")),
+      Left(XLError.DuplicateSheet("s")): XLResult[Workbook]
+    )
+    // a sheet may change the case of its own name, and its references follow
+    val recased = rename(wb, SheetName.unsafe("T"), SheetName.unsafe("t"))
+    assertEquals(recased.sheets.map(_.name.value), Vector("S", "t", "U"))
+    assertEquals(formulaText(recased, "U", ref"A1"), "t!A1*2")
+    assertEquals(cachedOf(recased, "U", ref"A1"), Some(num(10)))
+  }
+
   test("Workbook.rename's refusals win over a formula refusal (rename runs first, purely)") {
     val broken = repro.put(sheetNamed(repro, "Sheet2").put(ref"F1", f("Sheet1!A1+", None)))
     assertEquals(

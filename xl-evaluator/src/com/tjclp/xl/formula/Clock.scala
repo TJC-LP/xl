@@ -53,7 +53,8 @@ object Clock:
   /**
    * System clock that reads actual system time.
    *
-   * Use in production for real-time formula evaluation.
+   * Use in production for real-time formula evaluation. Stateless, so a single instance: two
+   * `RecalcOptions()` compare equal, and `RecalcOptions.default == RecalcOptions()` holds.
    *
    * Example:
    * {{{
@@ -61,7 +62,7 @@ object Clock:
    * evaluator.eval(TExpr.today(), sheet, Clock.system)
    * }}}
    */
-  def system: Clock = new Clock:
+  val system: Clock = new Clock:
     def today(): LocalDate = LocalDate.now()
     def now(): LocalDateTime = LocalDateTime.now()
 

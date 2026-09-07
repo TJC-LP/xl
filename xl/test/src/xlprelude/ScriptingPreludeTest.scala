@@ -632,6 +632,34 @@ class ScriptingPreludeTest extends FunSuite:
       Vector(Vector(QualifiedRef(sheet2, ref"A1")), Vector(QualifiedRef(sheet2, ref"B1")))
     )
     assertEquals(graph.sccs.count(_.cyclic), 0)
+    // direct neighbours, one hop, as sets
+    assertEquals(
+      graph.precedentsOf(QualifiedRef(sheet2, ref"A1")),
+      Set(QualifiedRef(sheet1, ref"A1"))
+    )
+    assertEquals(
+      graph.dependentsOf(QualifiedRef(sheet1, ref"A1")),
+      Set(QualifiedRef(sheet2, ref"A1"))
+    )
+    // the audit seen from one sheet
+    val onlySheet2: WorkbookAudit = audit.restrictTo(sheet2)
+    assert(onlySheet2.isClean)
+    assertEquals(audit.iterativeCycles, Vector.empty)
     val dirty = Workbook(Sheet("Loop").put(ref"A1", fx"=A1+1"))
     assertEquals(dirty.audit.isClean, false)
     assertEquals(dirty.audit.cycles.map(_.members.size), Vector(1))
+    // Cell.isUncachedFormula: the formula above has never been recalculated
+    val loopCell: Cell = dirty.sheets.flatMap(_.cells.values).headOption.getOrElse(fail("no cell"))
+    assert(loopCell.isUncachedFormula)
+    assert(wb.sheets.flatMap(_.cells.values).forall(!_.isUncachedFormula))
+    // an intentional circular model (iterative calculation declared, caches present) is clean;
+    // its cycle is reported as a note
+    val model = Workbook(
+      Sheet("Loop").put(ref"A1", CellValue.Formula("A1+1", Some(CellValue.Number(BigDecimal(1)))))
+    ).withCalcPr(CalcPr(iterativeCalculation = true))
+    val iterative: WorkbookAudit = model.audit
+    assert(iterative.isClean, s"$iterative")
+    assertEquals(iterative.cycles, Vector.empty)
+    assertEquals(iterative.iterativeCycles.map(_.members.size), Vector(1))
+    // the same cycle without the declaration is a finding
+    assertEquals(model.withCalcPr(CalcPr()).audit.cycles.map(_.members.size), Vector(1))

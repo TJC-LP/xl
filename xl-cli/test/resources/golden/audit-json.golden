@@ -13,7 +13,7 @@ audit
   "version": "<VERSION>",
   "data": {
     "clean": false,
-    "findings": 6,
+    "findings": 5,
     "errorCells": [
       {
         "ref": "Calc!A1",
@@ -36,12 +36,7 @@ audit
     "dynamic": [
       "Calc!D1"
     ],
-    "cycles": [
-      [
-        "Calc!E1",
-        "Calc!F1"
-      ]
-    ],
+    "cycles": [],
     "externalRefs": [
       "Calc!G1"
     ],
@@ -55,7 +50,13 @@ audit
       "calcMode": null,
       "fullCalcOnLoad": null,
       "calcId": null
-    }
+    },
+    "iterativeCycles": [
+      [
+        "Calc!E1",
+        "Calc!F1"
+      ]
+    ]
   },
   "warnings": [],
   "error": null

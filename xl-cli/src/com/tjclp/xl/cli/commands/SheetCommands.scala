@@ -7,6 +7,7 @@ import cats.implicits.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.XLError
+import com.tjclp.xl.cli.contract.{CliError, CliException}
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -18,6 +19,25 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
  * parameter to use the SAX/StAX workbook writer.
  */
 object SheetCommands:
+
+  /**
+   * Whether the book already has a sheet called `name` the way Excel compares sheet names —
+   * case-insensitively. `add-sheet data` beside `Data` and `rename-sheet T s` beside `S` would each
+   * write two tabs Excel treats as one name (and a rewritten `=s!A1` would resolve against `S`).
+   */
+  private def hasSheetNamed(wb: Workbook, name: SheetName): Boolean =
+    wb.sheets.exists(_.name.value.equalsIgnoreCase(name.value))
+
+  /** `DUPLICATE_SHEET` (exit 3) with the verb's message; nothing has been written when it fires. */
+  private def duplicateSheet(name: String, message: String): CliException =
+    CliException(
+      CliError
+        .fromXLError(XLError.DuplicateSheet(name), None)
+        .copy(
+          message = message,
+          hint = Some("sheet names are case-insensitive in Excel; choose a name no other sheet has")
+        )
+    )
 
   /** Write workbook using the standard or SAX/StAX backend based on mode */
   private def writeWorkbook(
@@ -49,11 +69,12 @@ object SheetCommands:
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
       _ <- IO
         .raiseError(
-          new Exception(
+          duplicateSheet(
+            name,
             s"Sheet '$name' already exists. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
           )
         )
-        .whenA(wb.sheets.exists(_.name == sheetName))
+        .whenA(hasSheetNamed(wb, sheetName))
       newSheet = Sheet(sheetName)
       updatedWb <- (afterOpt, beforeOpt) match
         case (Some(after), _) =>
@@ -151,7 +172,7 @@ object SheetCommands:
             s"Sheet '$oldName' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
           )
         case XLError.DuplicateSheet(_) =>
-          new Exception(s"Sheet '$newName' already exists")
+          duplicateSheet(newName, s"Sheet '$newName' already exists")
         case e => new Exception(e.message)
       })
       rewritten = rewrittenFormulaCount(wb, updatedWb)
@@ -267,8 +288,8 @@ object SheetCommands:
         )
       )
       _ <- IO
-        .raiseError(new Exception(s"Sheet '$targetName' already exists"))
-        .whenA(wb.sheets.exists(_.name == targetSheetName))
+        .raiseError(duplicateSheet(targetName, s"Sheet '$targetName' already exists"))
+        .whenA(hasSheetNamed(wb, targetSheetName))
       copiedSheet = sourceSheet.copy(name = targetSheetName)
       updatedWb = wb.put(copiedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)

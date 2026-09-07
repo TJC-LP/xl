@@ -121,11 +121,19 @@ final case class Workbook(
       acc.put(sheet)
     }
 
-  /** Add sheet at end */
+  /** Add sheet at end; a name already used (in any case) is [[XLError.DuplicateSheet]]. */
   @deprecated("Use put(sheet) instead (add-or-replace semantic)", "0.2.0")
   def addSheet(sheet: Sheet): XLResult[Workbook] =
-    if sheets.exists(_.name == sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
+    if hasSheetNamed(sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
     else Right(copy(sheets = sheets :+ sheet))
+
+  /**
+   * Whether a sheet other than `except` already carries `name` — compared the way Excel compares
+   * sheet names, case-insensitively: a book with tabs `S` and `s` is one Excel refuses to open
+   * cleanly, and a formula naming `s` resolves against `S`.
+   */
+  private def hasSheetNamed(name: SheetName, except: Option[SheetName] = None): Boolean =
+    sheets.exists(s => !except.contains(s.name) && s.name.value.equalsIgnoreCase(name.value))
 
   /** Remove sheet by name (preferred method) */
   def remove(name: SheetName): XLResult[Workbook] =
@@ -177,12 +185,17 @@ final case class Workbook(
    * Typed-chart data references (`DataRef.sheet` / `SeriesName.FromCell.sheet`) matching the old
    * name are remapped across ALL sheets (GH-222) — Excel tracks renames in chart sources. Preserved
    * chart fragments and formula strings are NOT remapped (existing limitation, documented).
+   *
+   * The new name is refused as [[XLError.DuplicateSheet]] when ANOTHER sheet already carries it in
+   * any case (Excel sheet names are case-insensitive: renaming `T` to `s` beside `S` would write
+   * two tabs Excel treats as one, and `=s!A1` would resolve against `S`). Renaming a sheet to a
+   * different spelling of its own name (`Data` to `DATA`) is a plain rename.
    */
   def rename(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == oldName) match
       case -1 => Left(XLError.SheetNotFound(oldName.value))
       case index =>
-        if sheets.exists(s => s.name == newName && s.name != oldName) then
+        if hasSheetNamed(newName, except = Some(oldName)) then
           Left(XLError.DuplicateSheet(newName.value))
         else
           val updated = sheets(index).copy(name = newName)
@@ -312,11 +325,14 @@ final case class Workbook(
         )
       )
 
-  /** Insert sheet at specific index (explicit positioning - rarely needed) */
+  /**
+   * Insert sheet at specific index (explicit positioning - rarely needed). A name already used, in
+   * any case, is [[XLError.DuplicateSheet]].
+   */
   def insertAt(index: Int, sheet: Sheet): XLResult[Workbook] =
     if index < 0 || index > sheets.size then
       Left(XLError.OutOfBounds(s"insert[$index]", s"Valid range: 0 to ${sheets.size}"))
-    else if sheets.exists(_.name == sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
+    else if hasSheetNamed(sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
     else
       val (before, after) = sheets.splitAt(index)
       val updatedContext = sourceContext.map(_.markMetadataModified)

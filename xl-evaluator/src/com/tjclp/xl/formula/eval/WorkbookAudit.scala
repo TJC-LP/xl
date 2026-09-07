@@ -19,12 +19,17 @@ import com.tjclp.xl.workbooks.{CalcPr, Workbook}
  *   - `errorCells` — a cached Excel error on a formula, or a bare error value
  *   - `uncachedFormulas` — formulas with no cached value (`xl recalc` fills them)
  *   - `unparseable` — formulas this evaluator cannot parse, with the parser's diagnostic in context
- *   - `cycles` — the cyclic strongly connected components of the formula graph
+ *   - `cycles` — the cyclic strongly connected components of the formula graph, when the file's
+ *     `calcPr` does NOT enable iterative calculation (Excel shows such a book with a circular
+ *     reference warning and zeros)
  *   - `unresolvedReaders` — formulas whose name references the static graph cannot resolve
  *     (GH-507); an unparseable formula is reported once, in `unparseable`
  *
- * Notes (reported, never findings): `volatile` (a call to TODAY/NOW/RAND/RANDBETWEEN — the registry
- * has no volatility flag yet, so these are matched by name), `dynamic` (INDIRECT/OFFSET readers,
+ * Notes (reported, never findings): `iterativeCycles` (the same cyclic components when
+ * `calcPr.iterativeCalculation` is on — an intentional circular model converges by design, so
+ * `audit --fail-on-findings` must not fail it forever; every cycle lands in exactly one of `cycles`
+ * and `iterativeCycles`), `volatile` (a call to TODAY/NOW/RAND/RANDBETWEEN — the registry has no
+ * volatility flag yet, so these are matched by name), `dynamic` (INDIRECT/OFFSET readers,
  * [[DependencyGraph.dynamicCells]]), `externalRefs` (formulas touching another workbook, whose
  * caches are pinned) and the file's `calcPr`.
  *
@@ -40,7 +45,8 @@ final case class WorkbookAudit(
   cycles: Vector[Scc],
   externalRefs: Vector[QualifiedRef],
   unresolvedReaders: Vector[QualifiedRef],
-  calcPr: Option[CalcPr]
+  calcPr: Option[CalcPr],
+  iterativeCycles: Vector[Scc]
 ) derives CanEqual:
 
   /** The number of findings: error cells, uncached and unparseable formulas, cycles, unresolved. */
@@ -48,7 +54,10 @@ final case class WorkbookAudit(
     errorCells.size + uncachedFormulas.size + unparseable.size + cycles.size +
       unresolvedReaders.size
 
-  /** No findings. Volatile, dynamic and external references and `calcPr` do not count. */
+  /**
+   * No findings. Iterative cycles, volatile, dynamic and external references and `calcPr` do not
+   * count.
+   */
   def isClean: Boolean = findings == 0
 
   /**
@@ -64,7 +73,8 @@ final case class WorkbookAudit(
       dynamic = dynamic.filter(_.sheet == sheet),
       cycles = cycles.filter(_.members.exists(_.sheet == sheet)),
       externalRefs = externalRefs.filter(_.sheet == sheet),
-      unresolvedReaders = unresolvedReaders.filter(_.sheet == sheet)
+      unresolvedReaders = unresolvedReaders.filter(_.sheet == sheet),
+      iterativeCycles = iterativeCycles.filter(_.members.exists(_.sheet == sheet))
     )
 
 object WorkbookAudit:
@@ -81,7 +91,8 @@ object WorkbookAudit:
     cycles = Vector.empty,
     externalRefs = Vector.empty,
     unresolvedReaders = Vector.empty,
-    calcPr = None
+    calcPr = None,
+    iterativeCycles = Vector.empty
   )
 
   def of(wb: Workbook): WorkbookAudit =
@@ -101,6 +112,10 @@ object WorkbookAudit:
     val unparseable = scanned.collect { case Finding.Unparseable(q, message) => (q, message) }
     val unparseableRefs = unparseable.iterator.map(_._1).toSet
     val graph = QualifiedGraph.of(wb)
+    // sccs come dependency-first; the report reads in workbook order like every other bucket
+    val cyclic = graph.sccs.filter(_.cyclic).sortBy(scc => scc.members.sorted.headOption)
+    // With iterative calculation on, a circular model is the file's declared intent, not a finding
+    val iterative = wb.metadata.calcPr.exists(_.iterativeCalculation)
 
     WorkbookAudit(
       errorCells = scanned.collect { case Finding.ErrorValue(q, e) => (q, e) }.sortBy(_._1),
@@ -108,12 +123,12 @@ object WorkbookAudit:
       unparseable = unparseable.sortBy(_._1),
       volatile = scanned.collect { case Finding.Volatile(q) => q }.sorted,
       dynamic = DependencyGraph.dynamicCells(wb).toVector.sorted,
-      // sccs come dependency-first; the report reads in workbook order like every other bucket
-      cycles = graph.sccs.filter(_.cyclic).sortBy(scc => scc.members.sorted.headOption),
+      cycles = if iterative then Vector.empty else cyclic,
       externalRefs = scanned.collect { case Finding.External(q) => q }.sorted,
       unresolvedReaders =
         DependencyGraph.unresolvedReaders(wb).iterator.filterNot(unparseableRefs).toVector.sorted,
-      calcPr = wb.metadata.calcPr
+      calcPr = wb.metadata.calcPr,
+      iterativeCycles = if iterative then cyclic else Vector.empty
     )
 
   /** One observation about one cell; a cell can yield several (an uncached volatile formula). */

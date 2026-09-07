@@ -35,8 +35,8 @@ class WorkbookAuditSpec extends FunSuite:
     maxChange = Some(BigDecimal("0.001"))
   )
 
-  /** One cell per bucket, and nothing that lands in two buckets. */
-  private val dirty: Workbook = Workbook(
+  /** One cell per bucket, and nothing that lands in two buckets; `calcPr` left as read. */
+  private val dirtyBook: Workbook = Workbook(
     Vector(
       sheetWith(
         "Calc",
@@ -51,22 +51,59 @@ class WorkbookAuditSpec extends FunSuite:
         "I1" -> cachedFormula("NoSuchName*2", 0)
       )
     )
-  ).withCalcPr(iterative)
+  )
+
+  /** The dirty book as an intentional circular model: iterative calculation declared. */
+  private val dirty: Workbook = dirtyBook.withCalcPr(iterative)
 
   test("the dirty fixture populates exactly one entry per bucket") {
-    val audit = WorkbookAudit.of(dirty)
+    val audit = WorkbookAudit.of(dirtyBook)
     assertEquals(audit.errorCells, Vector((q("Calc", "A1"), CellError.Div0)))
     assertEquals(audit.uncachedFormulas, Vector(q("Calc", "B1")))
     assertEquals(audit.volatile, Vector(q("Calc", "C1")))
     assertEquals(audit.dynamic, Vector(q("Calc", "D1")))
     assertEquals(audit.cycles.map(_.members.toSet), Vector(Set(q("Calc", "E1"), q("Calc", "F1"))))
     assert(audit.cycles.forall(_.cyclic))
+    assertEquals(audit.iterativeCycles, Vector.empty)
     assertEquals(audit.externalRefs, Vector(q("Calc", "G1")))
     assertEquals(audit.unparseable.map(_._1), Vector(q("Calc", "H1")))
     assertEquals(audit.unresolvedReaders, Vector(q("Calc", "I1")))
-    assertEquals(audit.calcPr, Some(iterative))
+    assertEquals(audit.calcPr, None)
     assertEquals(audit.isClean, false)
     assertEquals(audit.findings, 5)
+  }
+
+  test("with iterative calculation on, cycles are a note (iterativeCycles), not a finding") {
+    val audit = WorkbookAudit.of(dirty)
+    assertEquals(audit.cycles, Vector.empty)
+    assertEquals(
+      audit.iterativeCycles.map(_.members.toSet),
+      Vector(Set(q("Calc", "E1"), q("Calc", "F1")))
+    )
+    assert(audit.iterativeCycles.forall(_.cyclic))
+    assertEquals(audit.calcPr, Some(iterative))
+    assertEquals(audit.findings, 4, "the cycle no longer counts")
+    // every other bucket is exactly as without the calcPr
+    val plain = WorkbookAudit.of(dirtyBook)
+    assertEquals(
+      audit.copy(cycles = plain.cycles, iterativeCycles = Vector.empty, calcPr = None),
+      plain
+    )
+    // an intentional circular model with nothing else wrong is clean
+    val circular = Workbook(
+      Vector(
+        sheetWith("Model", "A1" -> cachedFormula("B1*0.1", 1), "B1" -> cachedFormula("100+A1/2", 2))
+      )
+    )
+    assertEquals(WorkbookAudit.of(circular).isClean, false)
+    assertEquals(WorkbookAudit.of(circular).cycles.size, 1)
+    val declared = WorkbookAudit.of(circular.withCalcPr(iterative))
+    assert(declared.isClean, s"iterative model must be clean: $declared")
+    assertEquals(declared.iterativeCycles.size, 1)
+    // iterativeCalculation = false in an explicit calcPr is the same as no calcPr
+    val off = WorkbookAudit.of(circular.withCalcPr(CalcPr(iterativeCalculation = false)))
+    assertEquals(off.cycles.size, 1)
+    assertEquals(off.iterativeCycles, Vector.empty)
   }
 
   test("an unparseable formula carries the parser's diagnostic with context") {
@@ -197,6 +234,11 @@ class WorkbookAuditSpec extends FunSuite:
     assertEquals(onlyP.calcPr, audit.calcPr)
     val nowhere = audit.restrictTo(SheetName.unsafe("Missing"))
     assert(nowhere.isClean)
+    // the iterative twin restricts its note the same way
+    val noted = WorkbookAudit.of(wb.withCalcPr(iterative))
+    assertEquals(noted.iterativeCycles.size, 2)
+    assertEquals(noted.restrictTo(SheetName.unsafe("R")).iterativeCycles, Vector.empty)
+    assertEquals(noted.restrictTo(SheetName.unsafe("P")).iterativeCycles.size, 2)
   }
 
   test("the volatile function set is exactly TODAY, NOW, RAND and RANDBETWEEN, by name") {

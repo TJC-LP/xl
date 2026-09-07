@@ -22,7 +22,8 @@ audit
     "cycles": [],
     "externalRefs": [],
     "unresolvedReaders": [],
-    "calcPr": null
+    "calcPr": null,
+    "iterativeCycles": []
   },
   "warnings": [],
   "error": null

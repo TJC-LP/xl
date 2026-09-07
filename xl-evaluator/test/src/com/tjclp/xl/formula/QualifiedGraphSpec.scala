@@ -158,6 +158,39 @@ class QualifiedGraphSpec extends FunSuite:
     )
   }
 
+  test("a qualifier spelled in another case resolves to the workbook's sheet, as in Excel") {
+    // `sheet1!A1` on a book whose tab is `Sheet1`: one node, not a phantom per spelling
+    val wb = Workbook(
+      Vector(
+        sheetWith("Sheet1", "A1" -> num(5), "A2" -> num(7)),
+        sheetWith("Summary", "B1" -> formula("sheet1!A1+SUM(SHEET1!A:A)"))
+      )
+    )
+    val graph = QualifiedGraph.of(wb)
+    assertEquals(
+      graph.precedentsOf(q("Summary", "B1")),
+      Set(q("Sheet1", "A1"), q("Sheet1", "A2"))
+    )
+    assertEquals(graph.dependentsOf(q("Sheet1", "A1")), Set(q("Summary", "B1")))
+    assertEquals(graph.dependentsOf(q("Sheet1", "A2")), Set(q("Summary", "B1")))
+    // the range reader is indexed under the tab's spelling too
+    assertEquals(graph.rangeReaders.keySet, Set(SheetName.unsafe("Sheet1")))
+    // a cycle routed through a re-spelled qualifier is still a cycle
+    val loop = Workbook(
+      Vector(
+        sheetWith("Alpha", "A1" -> formula("beta!A1+1")),
+        sheetWith("Beta", "A1" -> formula("ALPHA!A1+1"))
+      )
+    )
+    assertEquals(QualifiedGraph.of(loop).sccs.count(_.cyclic), 1)
+    // a qualifier naming no sheet at all is left as written (no edges: nothing to expand)
+    val unknown = Workbook(Vector(sheetWith("Only", "A1" -> formula("Nowhere!A1+1"))))
+    assertEquals(
+      QualifiedGraph.of(unknown).precedentsOf(q("Only", "A1")),
+      Set(q("Nowhere", "A1"))
+    )
+  }
+
   test("unparseable and data-table formulas are nodes without edges; empty book is empty") {
     val wb = Workbook(Vector(sheetWith("S", "A1" -> formula("UNSUPPORTED(1)"), "A2" -> num(1))))
     val graph = QualifiedGraph.of(wb)

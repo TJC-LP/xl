@@ -9,6 +9,7 @@ import munit.CatsEffectSuite
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.{SheetCommands, WriteCommands}
+import com.tjclp.xl.cli.contract.CliException
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -130,6 +131,52 @@ class RenameSheetSpec extends CatsEffectSuite:
         case Left(err) => assert(err.getMessage.contains("Sheet2!D1"), err.getMessage)
         case Right(msg) => fail(s"expected a refusal, got: $msg")
       assert(!Files.exists(out), "nothing may be written when the rename is refused")
+  }
+
+  test("rename-sheet verb: a new name another sheet has in a different case is DUPLICATE_SHEET") {
+    // With tabs S and T, `rename-sheet T s` used to write two tabs Excel treats as one name and
+    // rewrite `=T!A1*2` to `=s!A1*2` — which Excel resolves against the ORIGINAL S.
+    val in = tmp("verb-dup-in")
+    val out = tmp("verb-dup-out")
+    Files.deleteIfExists(out)
+    val wb = Workbook(
+      Sheet("S").put(ref"A1", num(1)),
+      Sheet("T").put(ref"A1", num(5)),
+      Sheet("U").put(ref"A1", f("T!A1*2", Some(num(10))))
+    )
+    for
+      _ <- excel.write(wb, in)
+      read <- excel.read(in)
+      attempt <- SheetCommands.renameSheet(read, "T", "s", out, config).attempt
+      untouched <- excel.read(in)
+    yield
+      attempt match
+        case Left(err: CliException) =>
+          assertEquals(err.error.code, "DUPLICATE_SHEET")
+          assertEquals(err.error.exitCode.code, 3)
+          assert(err.getMessage.contains("Sheet 's' already exists"), err.getMessage)
+        case Left(other) => fail(s"expected a CliException, got: $other")
+        case Right(msg) => fail(s"expected a refusal, got: $msg")
+      assert(!Files.exists(out), "nothing may be written when the rename is refused")
+      assertEquals(untouched.sheets.map(_.name.value), Vector("S", "T", "U"))
+      assertEquals(sheetNamed(untouched, "U")(ref"A1").value, f("T!A1*2", Some(num(10))))
+  }
+
+  test("add-sheet and copy-sheet refuse a name already used in any case as DUPLICATE_SHEET") {
+    val in = tmp("verb-add-dup-in")
+    val out = tmp("verb-add-dup-out")
+    Files.deleteIfExists(out)
+    for
+      _ <- excel.write(fixture, in)
+      read <- excel.read(in)
+      added <- SheetCommands.addSheet(read, "sheet1", None, None, out, config).attempt
+      copied <- SheetCommands.copySheet(read, "Sheet1", "NOTES", out, config).attempt
+    yield
+      for attempt <- Vector(added, copied) do
+        attempt match
+          case Left(err: CliException) => assertEquals(err.error.code, "DUPLICATE_SHEET")
+          case other => fail(s"expected DUPLICATE_SHEET, got: $other")
+      assert(!Files.exists(out), "nothing may be written when the add or copy is refused")
   }
 
   test("batch rename-sheet: rewrites dependents in the FILE without recalculating") {
