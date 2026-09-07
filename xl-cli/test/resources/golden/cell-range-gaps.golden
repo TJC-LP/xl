@@ -1,0 +1,15 @@
+## args
+-f
+<DIR>/gaps.xlsx
+cell
+Data!B1
+## exit
+0
+## stdout
+Cell: B1
+Type: formula
+Formula: =SUM(A1:A5)
+Cached: 4
+Dependencies: A1, A3
+Dependents: (none)
+## stderr

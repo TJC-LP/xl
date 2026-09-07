@@ -995,15 +995,15 @@ USAGE:
 
   private val depthOpt: Opts[Option[Int]] =
     Opts
-      .option[String]("depth", "Hops to follow: a positive number, or 'all' (default: 1)")
+      .option[String]("depth", "Hops to follow: a number, or 'all' (0 = all; default: 1)")
       .mapValidated {
         case "all" => cats.data.Validated.valid(0)
         case text =>
-          text.toIntOption.filter(_ >= 1) match
+          text.toIntOption.filter(_ >= 0) match
             case Some(n) => cats.data.Validated.valid(n)
             case None =>
               cats.data.Validated.invalidNel(
-                s"Invalid --depth: $text. Use a positive number or 'all'"
+                s"Invalid --depth: $text. Use a positive number, 0 or 'all'"
               )
       }
       .orNone

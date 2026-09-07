@@ -108,7 +108,8 @@ object WorkbookAudit:
       unparseable = unparseable.sortBy(_._1),
       volatile = scanned.collect { case Finding.Volatile(q) => q }.sorted,
       dynamic = DependencyGraph.dynamicCells(wb).toVector.sorted,
-      cycles = graph.sccs.filter(_.cyclic),
+      // sccs come dependency-first; the report reads in workbook order like every other bucket
+      cycles = graph.sccs.filter(_.cyclic).sortBy(scc => scc.members.sorted.headOption),
       externalRefs = scanned.collect { case Finding.External(q) => q }.sorted,
       unresolvedReaders =
         DependencyGraph.unresolvedReaders(wb).iterator.filterNot(unparseableRefs).toVector.sorted,

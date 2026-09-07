@@ -107,6 +107,20 @@ object TestFixtures:
       )
     )
 
+  /**
+   * The `cell` range-gap fixture (ADR-017 §2.10): `B1 = SUM(A1:A5)` over a column with only A1 and
+   * A3 occupied, and `C1 = SUM(Missing!A1:A3)` over a sheet the workbook does not have. Pins that
+   * `Dependencies` lists a range's OCCUPIED cells — empty cells and absent-sheet ranges are not
+   * listed. Caches authored explicitly (no recalculation): the graph, not the values, is the point.
+   */
+  def gapsBook(): Workbook =
+    val data = Sheet("Data")
+      .put(ref"A1", 1)
+      .put(ref"A3", 3)
+      .put(ref"B1", CellValue.Formula("SUM(A1:A5)", Some(CellValue.Number(BigDecimal(4)))))
+      .put(ref"C1", CellValue.Formula("SUM(Missing!A1:A3)", Some(CellValue.Error(CellError.Ref))))
+    Workbook(Vector(data))
+
   private def book(firstQuantity: Int): Workbook =
     val data = Sheet("Data")
       .put(ref"A1", "Hello")
@@ -130,7 +144,8 @@ object TestFixtures:
     "circular.xlsx" -> (() => circularBook()),
     "named.xlsx" -> (() => namedBook()),
     "linked.xlsx" -> (() => linkedBook()),
-    "dirty.xlsx" -> (() => dirtyBook())
+    "dirty.xlsx" -> (() => dirtyBook()),
+    "gaps.xlsx" -> (() => gapsBook())
   )
 
   /** Write every fixture into a fresh temp directory and return it. */

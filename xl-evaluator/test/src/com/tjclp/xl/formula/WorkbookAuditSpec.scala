@@ -157,6 +157,26 @@ class WorkbookAuditSpec extends FunSuite:
     )
   }
 
+  test("cycles are in workbook order too, not the graph's dependency-first order") {
+    // First's cycle READS Second's cycle, so the SCC condensation puts Second's component first;
+    // the audit lists First's first, by the position of its earliest member.
+    val wb = Workbook(
+      Vector(
+        sheetWith(
+          "First",
+          "A1" -> cachedFormula("B1+Second!A1", 0),
+          "B1" -> cachedFormula("A1", 0)
+        ),
+        sheetWith("Second", "A1" -> cachedFormula("B1", 0), "B1" -> cachedFormula("A1", 0))
+      )
+    )
+    val cycles = WorkbookAudit.of(wb).cycles
+    assertEquals(
+      cycles.map(_.members.toSet),
+      Vector(Set(q("First", "A1"), q("First", "B1")), Set(q("Second", "A1"), q("Second", "B1")))
+    )
+  }
+
   test("restrictTo keeps one sheet's findings and the cycles that touch it") {
     val wb = Workbook(
       Vector(

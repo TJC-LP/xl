@@ -778,7 +778,7 @@ these warnings fail strict mode too.
 |---------|---------|
 | `describe` | `--full` for per-sheet counts and calcPr; metadata-only otherwise (works with `--stream`) |
 | `audit` | `--fail-on-findings` (exit 1 on a dirty book); `-s` restricts to one sheet |
-| `deps <ref>` | `--direction precedents\|dependents\|both`, `--depth n\|all` |
+| `deps <ref>` | `--direction precedents\|dependents\|both`, `--depth n\|all` (`0` = `all`) |
 | `bounds` | Used range of sheet |
 | `view <range>` | `--format`, `--formulas`, `--eval`, `--raster-output`, etc. |
 | `cell <ref>` | `--no-style` |

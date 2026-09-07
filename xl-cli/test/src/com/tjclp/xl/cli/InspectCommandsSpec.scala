@@ -407,7 +407,7 @@ class InspectCommandsSpec extends CatsEffectSuite:
     }
   }
 
-  test("deps rejects a range, a bad direction and a non-positive depth") {
+  test("deps rejects a range, a bad direction and a negative or non-numeric depth; 0 means all") {
     for
       range <- CliHarness.run("-f", file("linked.xlsx"), "--json", "deps", "Sheet1!A1:A2")
       direction <- CliHarness.run(
@@ -419,7 +419,7 @@ class InspectCommandsSpec extends CatsEffectSuite:
         "--direction",
         "sideways"
       )
-      depth <- CliHarness.run(
+      zero <- CliHarness.run(
         "-f",
         file("linked.xlsx"),
         "--json",
@@ -427,6 +427,23 @@ class InspectCommandsSpec extends CatsEffectSuite:
         "Sheet1!A1",
         "--depth",
         "0"
+      )
+      all <- CliHarness.run(
+        "-f",
+        file("linked.xlsx"),
+        "--json",
+        "deps",
+        "Sheet1!A1",
+        "--depth",
+        "all"
+      )
+      negative <- CliHarness.run(
+        "-f",
+        file("linked.xlsx"),
+        "--json",
+        "deps",
+        "Sheet1!A1",
+        "--depth=-1"
       )
       garbage <- CliHarness.run(
         "-f",
@@ -442,7 +459,11 @@ class InspectCommandsSpec extends CatsEffectSuite:
       assertEquals(envelope(range)("error")("code"), ujson.Str("INVALID_REFERENCE"))
       assertEquals(direction.exit, 2, direction.stderr)
       assertEquals(envelope(direction)("error")("code"), ujson.Str("USAGE"))
-      assertEquals(depth.exit, 2, depth.stderr)
+      // `--depth 0` is the plan's spelling of `all`: same payload, byte for byte
+      assertEquals(zero.exit, 0, zero.stderr)
+      assertEquals(data(zero)("depth"), ujson.Str("all"))
+      assertEquals(zero.stdout, all.stdout)
+      assertEquals(negative.exit, 2, negative.stderr)
       assertEquals(garbage.exit, 2, garbage.stderr)
   }
 
@@ -457,6 +478,29 @@ class InspectCommandsSpec extends CatsEffectSuite:
   // ---------------------------------------------------------------------------------------------
   // cell keeps its text while moving to the bounded graph
   // ---------------------------------------------------------------------------------------------
+
+  test("cell lists a range's OCCUPIED cells: gaps and absent-sheet ranges are not Dependencies") {
+    // The declared behaviour change from the unbounded fromWorkbook expansion (ADR-017 §2.10):
+    // the old listing named every cell of the range (SUM(A:A) printed 1,048,576 entries) and
+    // three refs on a sheet the workbook does not have; Dependents lines are unchanged.
+    for
+      gaps <- CliHarness.run("-f", file("gaps.xlsx"), "cell", "Data!B1")
+      absent <- CliHarness.run("-f", file("gaps.xlsx"), "cell", "Data!C1")
+      constant <- CliHarness.run("-f", file("gaps.xlsx"), "cell", "Data!A3")
+      empty <- CliHarness.run("-f", file("gaps.xlsx"), "cell", "Data!A2")
+    yield
+      assertEquals(gaps.exit, 0, gaps.stderr)
+      assert(gaps.stdout.contains("Formula: =SUM(A1:A5)\n"), gaps.stdout)
+      assert(gaps.stdout.endsWith("Dependencies: A1, A3\nDependents: (none)\n"), gaps.stdout)
+      assertEquals(absent.exit, 0, absent.stderr)
+      assert(absent.stdout.contains("Formula: =SUM(Missing!A1:A3)\n"), absent.stdout)
+      assert(absent.stdout.endsWith("Dependencies: (none)\nDependents: (none)\n"), absent.stdout)
+      // an occupied cell inside the range is read by B1; so is the empty one (symbolic index)
+      assertEquals(constant.exit, 0, constant.stderr)
+      assert(constant.stdout.endsWith("Dependencies: (none)\nDependents: B1\n"), constant.stdout)
+      assertEquals(empty.exit, 0, empty.stderr)
+      assert(empty.stdout.endsWith("Dependencies: (none)\nDependents: B1\n"), empty.stdout)
+  }
 
   test("cell text output is unchanged: a formula's range inputs and a constant's range reader") {
     for

@@ -400,8 +400,10 @@ Value: Revenue
 
 `Dependencies` lists the cells the formula reads — single references exactly, ranges as their
 occupied cells — and `Dependents` the formulas that read the cell, by name or through a range that
-contains it (an empty cell inside a summed range still names the sum). Same-sheet refs are
-unqualified, cross-sheet ones carry the sheet. For more than one hop, use `deps`.
+contains it (an empty cell inside a summed range still names the sum). Empty cells inside a range
+and ranges over a sheet the workbook does not have are not listed (since 0.20.0; before, `SUM(A:A)`
+listed 1,048,576 entries). Same-sheet refs are unqualified, cross-sheet ones carry the sheet. For
+more than one hop, use `deps`.
 
 ---
 
@@ -512,8 +514,8 @@ Trace one cell hop by hop. **Precedents** are the cells the formula reads — si
 exactly, ranges as their occupied cells (a full-column reference never expands to a million rows);
 **dependents** are the formulas that read the cell, by name or through a range that contains it.
 Layer k holds the cells exactly k hops away that no earlier layer listed; each node carries its
-depth, formula and value. `--depth` defaults to `1`; `all` follows the whole cone (a cycle ends the
-walk once every member is seen). The ref follows the sheet rule: a qualified ref names the sheet,
+depth, formula and value. `--depth` defaults to `1`; `all` (or `0`) follows the whole cone (a cycle
+ends the walk once every member is seen). The ref follows the sheet rule: a qualified ref names the sheet,
 else `-s`, else the only sheet of a single-sheet book (`SHEET_REQUIRED` otherwise); a range is
 refused. Not available under `--stream`.
 
