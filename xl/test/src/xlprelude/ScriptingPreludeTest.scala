@@ -148,6 +148,33 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(sheet.readTypedOr[Int](ref"A1", 0), 10)
     assertEquals(sheet.readTypedOpt[Int](ref"Z9"), None)
 
+  test(
+    "GH-477: typed reads see a formula's cached value; readTypedStrict resolves via the prelude"
+  ):
+    val sheet = Sheet("Calc477").put(ref"A1", 2).put(ref"B1", fx"=A1*3")
+    // Authored, not yet recalculated: the formula has no cache, so there is nothing to read.
+    assertEquals(sheet.readTypedOpt[BigDecimal](ref"B1"), None)
+    val recalculated = Workbook(sheet)
+      .recalculate()
+      .workbook
+      .sheets
+      .headOption
+      .getOrElse(fail("missing sheet"))
+    assertEquals(recalculated.readTypedOpt[BigDecimal](ref"B1"), Some(BigDecimal(6)))
+    assertEquals(
+      recalculated.readTyped[Double](ref"B1"),
+      Right(Some(6.0)): Either[CodecError, Option[Double]]
+    )
+    assertEquals(recalculated.readTypedOr[Int](ref"B1", -1), 6)
+    // The strict escape hatch keeps rejecting the formula cell even though it is cached.
+    recalculated.readTypedStrict[BigDecimal](ref"B1") match
+      case Left(CodecError.TypeMismatch("BigDecimal", _: CellValue.Formula)) => ()
+      case other => fail(s"readTypedStrict must reject a formula cell, got $other")
+    assertEquals(
+      recalculated.cells.get(ref"B1").map(_.effectiveValue),
+      Some(CellValue.Number(BigDecimal(6)))
+    )
+
   test("recalculate with per-cell errors resolves through the prelude"):
     val sheet = Sheet("Calc2")
       .put(ref"A1", 10)

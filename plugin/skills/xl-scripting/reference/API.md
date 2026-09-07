@@ -76,9 +76,10 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.style(ref"A1:D1", style)` | `Sheet` | merges into existing style |
 | `sheet.cell("A1")` / `sheet.range("A1:B3")` | `Option[Cell]` / `Iterable[Cell]` | safe lookups |
 | `sheet.cells` | `Map[ARef, Cell]` | |
-| `sheet.readTyped[A](ref)` | `Either[CodecError, Option[A]]` | distinguish mismatch from empty |
-| `sheet.readTypedOr[A](ref, default)` | `A` | total |
-| `sheet.readTypedOpt[A](ref)` | `Option[A]` | total, flat |
+| `sheet.readTyped[A](ref)` | `Either[CodecError, Option[A]]` | distinguish mismatch from empty; a formula cell decodes as its cached value, an uncached formula is a `TypeMismatch` (GH-477) |
+| `sheet.readTypedOr[A](ref, default)` | `A` | total; cached formula → its value, uncached → default |
+| `sheet.readTypedOpt[A](ref)` | `Option[A]` | total, flat; cached formula → `Some`, uncached → `None` |
+| `sheet.readTypedStrict[A](ref)` | `Either[CodecError, Option[A]]` | like `readTyped`, but ANY formula cell is `Left(TypeMismatch(expected, formula))`, cached or not (GH-477) |
 | `sheet.comment(ref, Comment.plainText("note", Some("author")))` | `Sheet` | |
 | `sheet.toHtml(ref"A1:B10")` | `String` | inline-CSS HTML table |
 | `sheet.usedRange` | `Option[CellRange]` | |
@@ -89,6 +90,8 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.withDataValidation(range, DataValidation.list("\"Yes,No\""))` | `Sheet` | list dropdown (0.13.0); also `DataValidation.listOf("Yes", "No")` and a `Vector[CellRange]` overload |
 
 Codec types for `put`/`readTyped*`: String, Int, Long, Double, BigDecimal, Boolean, LocalDate (→ Date format), LocalDateTime (→ DateTime format), RichText.
+
+Typed reads see through a formula's cached value (GH-477): `Formula(expr, Some(v), kind)` decodes exactly as a plain cell holding `v` would, whatever the `FormulaKind`; `Formula(expr, None, kind)` (authored, not yet recalculated) has nothing to read and is a `TypeMismatch` whose `actual` is the formula. Do not unwrap `CellValue.Formula(_, Some(v), _)` by hand — `cell.effectiveValue` is the same rule when you do need a `CellValue`. `readTypedStrict` is the escape hatch that rejects every formula cell.
 
 ## Workbook Operations
 

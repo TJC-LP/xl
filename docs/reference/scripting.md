@@ -308,14 +308,27 @@ list).
 ## Typed extraction
 
 ```scala
-sheet.readTyped[BigDecimal](ref"C2")  // Either[CodecError, Option[BigDecimal]]
-sheet.readTypedOr[Int](ref"B2", 0)    // total, with default
-sheet.readTypedOpt[String](ref"A2")   // flat Option — mismatch and empty both None
+sheet.readTyped[BigDecimal](ref"C2")       // Either[CodecError, Option[BigDecimal]]
+sheet.readTypedOr[Int](ref"B2", 0)         // total, with default
+sheet.readTypedOpt[String](ref"A2")        // flat Option — mismatch and empty both None
+sheet.readTypedStrict[BigDecimal](ref"C2") // like readTyped, but ANY formula cell is a TypeMismatch
 ```
 
 Nine codec types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime,
 RichText. Use `readTyped` when you must distinguish a type mismatch from an empty cell;
 `readTypedOr`/`readTypedOpt` when you just need a value.
+
+**Formula cells read through their cached value** ([GH-477](https://github.com/TJC-LP/xl/issues/477)).
+After `recalculate()`, `writeRecalculated`, or `Excel.read` of a book Excel saved, `B1` holds
+`Formula("A1*3", Some(Number(6)), Normal())` and `readTyped[BigDecimal](ref"B1")` is
+`Right(Some(6))`, `readTypedOpt` is `Some(6)` — the same value `view`/`eval` show, with no manual
+`CellValue.Formula(_, Some(v), _)` unwrapping. A formula that has not been recalculated yet
+(`fx"=A1*3"` straight after `put`) has no cache and therefore nothing to read: `readTyped` is
+`Left(TypeMismatch(expected, formula))`, `readTypedOpt` is `None`, `readTypedOr` is the default.
+`readTypedStrict` is the escape hatch that rejects *every* formula cell, cached or not — reach for
+it when "is this a formula?" matters more than its result (auditing hand-entered constants, refusing
+a cache that may be stale). The same see-through rule is available for hand-written matches as
+`cell.effectiveValue` (and `cell.isUncachedFormula`).
 
 ## Smart value detection
 

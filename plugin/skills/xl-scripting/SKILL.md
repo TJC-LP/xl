@@ -82,10 +82,11 @@ sheet.put(patch)                                   // Sheet
 ref"E2:E9" := 0                                    // range fill: every cell (Ctrl+Enter semantics)
 ref"A2".down(3).right(1)                           // total navigation → B5
 
-// Typed reads
+// Typed reads (a formula cell reads as its cached value — GH-477)
 sheet.readTyped[BigDecimal](ref"C1")               // Either[CodecError, Option[BigDecimal]]
 sheet.readTypedOr[Int](ref"B1", 0)                 // total, with default
 sheet.readTypedOpt[LocalDate](ref"D1")             // flat Option
+sheet.readTypedStrict[BigDecimal](ref"C1")         // any formula cell → Left(TypeMismatch), cached or not
 
 // Formulas
 sheet.put(ref"D2", fx"=B2*C2")                     // compile-time validated literal
@@ -193,6 +194,8 @@ val products = (2 to 10).toList.flatMap { row =>
 ```
 
 9 codec types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText. Use `readTyped` (full `Either[CodecError, Option[A]]`) when you must distinguish a type mismatch from an empty cell; `readTypedOr(ref, default)` when you just need a value.
+
+Formula cells read through their cached value (GH-477): after `recalculate()`, `writeRecalculated`, or `Excel.read` of a book Excel saved, `readTypedOpt[BigDecimal](ref"B1")` on `Formula("A1*3", Some(Number(6)), _)` is `Some(6)` — never unwrap `CellValue.Formula(_, Some(v), _)` by hand. A formula authored with `fx"…"` and not yet recalculated has no cache, so `readTyped` is `Left(TypeMismatch)`, `readTypedOpt` is `None`, and `readTypedOr` is the default: recalculate first. `readTypedStrict` rejects every formula cell, cached or not, when the distinction itself is what you are checking.
 
 ### Styling
 

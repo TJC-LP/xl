@@ -21,18 +21,30 @@ trait CellCodec[A] extends CellReader[A]:
 object CellCodec:
   def apply[A](using cc: CellCodec[A]): CellCodec[A] = cc
 
-  // Helper to create codecs
-  private def codec[A](
+  /**
+   * Helper to create codecs. `expected` is the type name reported in `TypeMismatch` errors.
+   *
+   * The read arm `r` matches on `cell.value` and knows nothing about formulas: `read` feeds it the
+   * cell's [[Cell.effectiveValue]] (GH-477), so a cached formula decodes as its cached value while
+   * an uncached formula reaches the arm's catch-all `TypeMismatch(expected, formula)`. `readStrict`
+   * short-circuits every formula before the arm runs — the pre-GH-477 semantics.
+   */
+  private def codec[A](expected: String)(
     r: Cell => Either[CodecError, Option[A]],
     w: A => (CellValue, Option[CellStyle])
   ): CellCodec[A] = new CellCodec[A]:
-    def read(cell: Cell) = r(cell)
-    def write(a: A) = w(a)
+    def read(cell: Cell): Either[CodecError, Option[A]] = cell.value match
+      case _: CellValue.Formula => r(cell.withValue(cell.effectiveValue))
+      case _ => r(cell)
+    override def readStrict(cell: Cell): Either[CodecError, Option[A]] = cell.value match
+      case formula: CellValue.Formula => Left(CodecError.TypeMismatch(expected, formula))
+      case _ => r(cell)
+    def write(a: A): (CellValue, Option[CellStyle]) = w(a)
 
   // ========== 8 Primitive Codec Instances ==========
 
   /** String codec - reads text and number cells as strings */
-  inline given CellCodec[String] = codec(
+  inline given CellCodec[String] = codec("String")(
     cell =>
       cell.value match
         case CellValue.Empty => Right(None)
@@ -44,7 +56,7 @@ object CellCodec:
   )
 
   /** Int codec - reads numeric cells as integers */
-  inline given CellCodec[Int] = codec(
+  inline given CellCodec[Int] = codec("Int")(
     cell =>
       cell.value match
         case CellValue.Empty => Right(None)
@@ -61,7 +73,7 @@ object CellCodec:
   )
 
   /** Long codec - reads numeric cells as longs */
-  inline given CellCodec[Long] = codec(
+  inline given CellCodec[Long] = codec("Long")(
     cell =>
       cell.value match
         case CellValue.Empty => Right(None)
@@ -78,7 +90,7 @@ object CellCodec:
   )
 
   /** Double codec - reads numeric cells as doubles */
-  inline given CellCodec[Double] = codec(
+  inline given CellCodec[Double] = codec("Double")(
     cell =>
       cell.value match
         case CellValue.Empty => Right(None)
@@ -88,7 +100,7 @@ object CellCodec:
   )
 
   /** BigDecimal codec - reads numeric cells with auto-inferred decimal format */
-  inline given CellCodec[BigDecimal] = codec(
+  inline given CellCodec[BigDecimal] = codec("BigDecimal")(
     cell =>
       cell.value match
         case CellValue.Empty => Right(None)
@@ -98,7 +110,7 @@ object CellCodec:
   )
 
   /** Boolean codec - reads boolean cells */
-  inline given CellCodec[Boolean] = codec(
+  inline given CellCodec[Boolean] = codec("Boolean")(
     cell =>
       cell.value match
         case CellValue.Empty => Right(None)
@@ -113,7 +125,7 @@ object CellCodec:
    * LocalDate codec - reads date/datetime cells and Excel serial numbers with auto-inferred date
    * format
    */
-  inline given CellCodec[LocalDate] = codec(
+  inline given CellCodec[LocalDate] = codec("LocalDate")(
     cell =>
       cell.value match
         case CellValue.Empty => Right(None)
@@ -137,7 +149,7 @@ object CellCodec:
    * LocalDateTime codec - reads date/datetime cells and Excel serial numbers with auto-inferred
    * datetime format
    */
-  inline given CellCodec[LocalDateTime] = codec(
+  inline given CellCodec[LocalDateTime] = codec("LocalDateTime")(
     cell =>
       cell.value match
         case CellValue.Empty => Right(None)
@@ -164,7 +176,7 @@ object CellCodec:
    * level. Therefore, this codec does not return a CellStyle hint (formatting is in the TextRun
    * font properties).
    */
-  inline given CellCodec[RichText] = codec(
+  inline given CellCodec[RichText] = codec("RichText")(
     cell =>
       cell.value match
         case CellValue.Empty => Right(None)
