@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agent-first refactor, wave 1** (ADR-017, `docs/design/agent-first-architecture.md`;
+  plan in `docs/plan/agent-first-refactor.md`). The CLI and the scripting prelude become
+  projections of one contract: this wave lands the safety net and the first agent-facing
+  capabilities; the edit algebra follows in wave 2.
+- **Typed reads see cached formula values** (#477). `readTyped`, `readTypedOpt` and
+  `readTypedOr` on a formula cell decode its cached value (`Formula(_, Some(v), _)` reads as
+  `v`), so a recalculated or Excel-saved book reads like Excel shows it. An uncached formula still
+  decodes as a `TypeMismatch` whose `actual` is the formula. New `Cell.effectiveValue`,
+  `Cell.isUncachedFormula`, `CellReader.readStrict` (default = `read`) and
+  `Sheet.readTypedStrict` (the 0.19 semantics: any formula is a mismatch) for callers that must
+  tell formulas from values.
+- **Proxy-safe remote bootstrap.** `scripts/remote-setup.sh` detects a JVM truststore injected
+  through `JAVA_TOOL_OPTIONS` (a TLS-intercepting egress proxy) and runs every launcher on the
+  JVM: `MILL_VERSION=<.mill-version>-jvm` for `./mill`, coursier from its JAR with the canonical
+  `raw.githubusercontent.com` JVM index, scala-cli as a coursier bootstrap launcher. GraalVM native
+  launchers ignore that truststore and died with PKIX errors, which left cloud sessions unable to
+  build.
 - **`calc-chain-stale` lint** (#555): every `<c r= i=>` entry in
   `xl/calcChain.xml` must name a formula cell on the worksheet whose
   `sheetId` is `i` (`i` carries forward to entries that omit it). Entries for
@@ -44,6 +61,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`insert-rows`/`delete-rows` no longer duplicate property-only rows** (#558). Rows that carry
+  only `ht`, `hidden`, `outlineLevel` or a row style appeared at both the old and the new index
+  after a structural edit: the worksheet writer re-emitted every preserved source `<row>` with its
+  original modelled attributes at its original index and then emitted the shifted domain property
+  again. The domain `rowProperties` is now authoritative for every modelled row attribute
+  (`ht`/`customHeight`, `hidden`, `outlineLevel`, `collapsed`, `s`/`customFormat`) on both writer
+  backends; preserved source rows contribute only unmodelled attributes (`spans`, `thickBot`,
+  `thickTop`, `x14ac:dyDescent`), and an emptied `columnProperties` no longer resurrects the
+  source `<cols>`. Two consequences are deliberate: a replacement `RowProperties` without
+  `styleId` clears a source row style (the same "None actively clears" rule `ht` already
+  followed), and a row style that parses equal to the default loses its `s` on regeneration,
+  exactly as cells do.
 - **`--strict` validates formulas authored by `put`/`putf`/`fill`/`copy` and their affected
   dependents** (#504). Single writes retain targeted recalculation reports and evaluate formulas
   against the completed edit, so fresh self-references cannot pass with a fabricated cache.
