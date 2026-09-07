@@ -63,6 +63,22 @@ Ensure `~/.local/bin` is in your PATH: `export PATH="$HOME/.local/bin:$PATH"`
 
 ## Quick Reference
 
+### Machine-Readable Results
+**Always pass `--json` when a program reads the result.** It is a global flag (before the verb) and
+wraps every result — success or failure — in one envelope on stdout:
+`{ok, exitCode, verb, version, data, warnings, error}`. `ok` is `true` exactly when `error` is
+`null`; `exitCode` is the process exit code (0 ok, 1 findings or a failed gate, 2 usage, 3 failed);
+on a failure `data` is `null` and stderr carries one `Error: <message>` line.
+```bash
+xl -f <file> -s <sheet> --json view <range> --format json   # data = the bare view payload {sheet, range, rows}
+xl -f <file> -s <sheet> -o <out> --json put <ref> <value>   # data = {text, saved, written}
+xl -f <file> --json sheets                                  # data = [{name, index, state, dimension}]
+xl --json eval "=SUM(1,2,3)"                                # data = {formula, result: {type, value, formatted}, overrides}
+```
+A verb's own `--format json` still prints the bare payload without `--json`; with `--json` that
+payload becomes `data`. Prose verbs yield `data.text` (exactly what text mode prints) plus
+`data.saved`/`data.written` for writes.
+
 ### Info Commands (no file required)
 ```bash
 xl functions                           # List all 108 supported functions

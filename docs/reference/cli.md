@@ -1455,6 +1455,72 @@ Two rows worth spelling out:
 The same table is printed by `xl --help`. (Earlier releases exited `1` for usage and failures too,
 `2` for `diff`/`lint` runtime errors, and printed errors on stdout.)
 
+### Output contract (`--json`)
+
+**Pass the global `--json` whenever a program reads the result.** It goes before the verb like every
+global flag, and every verb — success or failure — then prints exactly one JSON envelope on stdout,
+with the same seven keys every time:
+
+```json
+{ "ok": true, "exitCode": 0, "verb": "view", "version": "0.20.0",
+  "data": { "sheet": "Data", "range": "A1:C3", "rows": [ ... ] },
+  "warnings": [ { "code": "TRUNCATED", "message": "… showing 50 of 120 rows (use --limit to raise; --limit 0 = no limit)" } ],
+  "error": null }
+
+{ "ok": false, "exitCode": 3, "verb": "put", "version": "0.20.0",
+  "data": null, "warnings": [],
+  "error": { "code": "SHEET_NOT_FOUND", "message": "Sheet not found: Sales. Available: Data, Summary",
+             "hint": "list sheets with `xl -f <file> sheets`", "candidates": [], "location": null } }
+```
+
+| key | meaning |
+|---|---|
+| `ok` | `true` exactly when `error` is `null` |
+| `exitCode` | the process exit code, from the table above (`0`/`1`/`2`/`3`) |
+| `verb` | the subcommand path, e.g. `"view"`, `"sheets hide"`, `"cf add"` (best-effort for a usage error raised before dispatch) |
+| `version` | the `xl` version that produced the envelope |
+| `data` | the verb's payload (below); `null` on a failure |
+| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines; `location` when known |
+| `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
+
+**What `data` holds.** `--json` is orthogonal to a verb's own `--format`:
+
+- `--format json` keeps printing the bare payload without `--json` — the shapes of `view`
+  (`{sheet, range, rows}`), `filter`, `diff` and `lint` are unchanged. With `--json` that same
+  payload is `data`: `view --format json --json` yields `data` equal to what `view --format json`
+  prints bare.
+- Typed verbs build `data` directly: `sheets` → `[{name, index, state, dimension}]` (`--stats` adds
+  `cells`, `formulas`); `names` → `[{name, refersTo, scope, hidden}]`; `bounds` →
+  `{sheet, range, dimension}`; `eval` → `{formula, result: {type, value, formatted}, overrides}`;
+  `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
+  `functions` → `[{name}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
+  `batch --dry-run` → `{ops: [{index, op, summary}], warnings}` (`index` is the op's 0-based
+  position).
+- Every other verb (`cell`, `search`, `stats`, `view` in a text format, and all writes) yields
+  `{"text": <what text mode prints>, "saved": <path or null>, "written": <bool>}`. `saved` is the
+  user-visible output path once the write was committed; it is `null` (and `written` is `false`)
+  when nothing was — a read, or an `-i` run whose `--strict` gate discarded the staged file.
+
+**Findings and gates are `ok: false` with the report kept.** `diff` with differences, `lint` with
+findings and a `--strict` write that fails its gate exit `1` and carry `error.code`
+`DIFFERENCES_FOUND` / `LINT_FINDINGS` / `RECALC_GATE` — and `data` still holds the report (the
+diff, the findings, the recalculation summary), so nothing text mode showed is lost.
+
+**Channels.** With `--json` the envelope is the only thing on stdout. Whenever `error` is present,
+stderr carries the single line `Error: <message>` so a human tailing a log still sees it; the
+`code:` and `hint:` lines live in the envelope instead. A wrong command line (unknown verb, a global
+flag after the verb, `-i` with `-o`) also produces the envelope — exit `2`, `code: USAGE` — when
+`--json` is among the arguments.
+
+```bash
+xl -f book.xlsx -s Data --json view A1:C3 --format json | jq '.data.rows'
+xl -f book.xlsx -s Data -o out.xlsx --json put A1 42 | jq -e '.ok' >/dev/null || echo "put failed"
+xl -f book.xlsx --json sheets | jq -r '.data[].name'
+```
+
+The envelope's JSON Schema is `xl-cli/test/resources/schema/envelope.schema.json`, and the golden
+corpus (`xl-cli/test/resources/golden/*-json.golden`) pins one envelope per shape.
+
 ---
 
 ## See Also
