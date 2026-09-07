@@ -6,8 +6,18 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 # XL CLI - Excel Operations
 
 **Requires xl >= 0.20.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
-`xl batch --schema`, the 0/1/2/3 exit table and globals-anywhere; every statement in this skill
-assumes 0.20.0 or later.
+`xl batch --schema`, `describe`, `audit`, `deps`, the 0/1/2/3 exit table and globals-anywhere; every
+statement in this skill assumes 0.20.0 or later.
+
+<!-- unreleased-contract -->
+> **This is the 0.20.0 contract, and 0.20.0 is unreleased at the time of writing.** The latest
+> GitHub release is 0.19.3, which has none of the verbs and flags named above (there, errors go to
+> stdout and every failure exits 1). Until 0.20.0 ships, install from source:
+> `git clone https://github.com/TJC-LP/xl && cd xl && make install-jar` (assembly JAR plus a wrapper
+> at `~/.local/bin/xl`; Mill downloads its own JDK), or `make install` where GraalVM is available
+> (native image). The release snippets below install 0.19.3 and are kept for that version: on it,
+> skip `--json`, `schema`, `describe`, `audit`, `deps` and `batch --schema`, put global flags before
+> the verb, and treat exit 1 as "something went wrong" rather than as findings.
 
 The binary documents itself and is the reference: `xl <verb> --help` for a verb's flags,
 `xl schema` for every verb, `xl batch --schema` for every batch op and field, `xl functions --json`
@@ -16,9 +26,10 @@ for every formula function. This skill is the map; those are the territory.
 ## Installation
 
 Check if installed: `which xl || echo "not installed"`; then `xl --version` (must print `0.20.0`
-or later — reinstall if it does not).
+or later; a `0.19.3` binary needs the from-source install above until 0.20.0 is released).
 
-**If not installed**, download the latest native binary (no JDK required):
+**Release download** — the latest published native binary (no JDK required; 0.19.3 until 0.20.0
+ships, see the note above):
 
 **macOS/Linux (recommended):**
 ```bash
