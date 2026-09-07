@@ -1,6 +1,6 @@
 ## args
 ## exit
-1
+2
 ## stdout
 ## stderr
 Missing expected command (rasterizers or functions or new or diff or lint or eval or evala or sheets or names or bounds or view or cell or search or stats or filter or batch or put or putf or style or row or col or group-rows or group-cols or ungroup-rows or ungroup-cols or autofit or recalc or import or import-md or add-sheet or remove-sheet or rename-sheet or move-sheet or copy-sheet or merge or unmerge or comment or remove-comment or clear or fill or sort or freeze or unfreeze or copy or name or insert-rows or delete-rows or insert-cols or delete-cols or chart or add-image or sheet-view or tab-color or autofilter or page-setup or header-footer or cf)!
@@ -66,6 +66,13 @@ Usage:
     xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] cf
 
 LLM-friendly Excel operations (stateless)
+
+Exit codes:
+  0  ok
+  1  completed with findings or a failed gate (diff differs, lint findings, --strict) — never a failure
+  2  usage — the command line is wrong; nothing read, nothing written
+  3  failed — the operation could not complete; nothing written
+Results go to stdout; errors (Error: <message>, then code:/hint: lines) and warnings go to stderr.
 
 Options and flags:
     --help

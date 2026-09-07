@@ -10,7 +10,8 @@ batch
 ## stdin
 [{"op":"frobnicate","ref":"A1"}]
 ## exit
-1
+3
 ## stdout
-Error: Object 1: Unknown operation 'frobnicate'. Valid: put, putf, style, merge, unmerge, colwidth, rowheight, comment, remove-comment, hyperlink, clear, col-hide, col-show, row-hide, row-show, group-rows, group-cols, ungroup-rows, ungroup-cols, autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, chart, sheet-view, tab-color, autofilter, page-setup, header-footer, cf
 ## stderr
+Error: Object 1: Unknown operation 'frobnicate'. Valid: put, putf, style, merge, unmerge, colwidth, rowheight, comment, remove-comment, hyperlink, clear, col-hide, col-show, row-hide, row-show, group-rows, group-cols, ungroup-rows, ungroup-cols, autofit, add-sheet, rename-sheet, freeze, unfreeze, copy, chart, sheet-view, tab-color, autofilter, page-setup, header-footer, cf
+  code: INTERNAL

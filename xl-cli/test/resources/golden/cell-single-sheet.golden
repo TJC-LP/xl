@@ -4,7 +4,10 @@
 cell
 A1
 ## exit
-1
+3
 ## stdout
-Error: cell with unqualified ref 'A1' requires --sheet or qualified ref (e.g., Sheet1!A1). Available sheets: Sheet1
 ## stderr
+Error: cell with unqualified ref 'A1' requires --sheet or qualified ref (e.g., Sheet1!A1). Available sheets: Sheet1
+  code: SHEET_REQUIRED
+  did you mean: Sheet1
+  hint: use -s <name> or a qualified ref like 'Name'!A1

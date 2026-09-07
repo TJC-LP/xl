@@ -1,7 +1,7 @@
 ## args
 frob
 ## exit
-1
+2
 ## stdout
 ## stderr
 Unexpected argument: frob
@@ -67,6 +67,13 @@ Usage:
     xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] cf
 
 LLM-friendly Excel operations (stateless)
+
+Exit codes:
+  0  ok
+  1  completed with findings or a failed gate (diff differs, lint findings, --strict) — never a failure
+  2  usage — the command line is wrong; nothing read, nothing written
+  3  failed — the operation could not complete; nothing written
+Results go to stdout; errors (Error: <message>, then code:/hint: lines) and warnings go to stderr.
 
 Options and flags:
     --help

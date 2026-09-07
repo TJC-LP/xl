@@ -10,7 +10,7 @@ import java.nio.file.{
 
 import scala.concurrent.duration.*
 
-import cats.effect.{ExitCode, IO, IOApp, Resource}
+import cats.effect.{ExitCode, IO, IOApp, Ref, Resource}
 import cats.effect.unsafe.IORuntimeConfig
 import cats.implicits.*
 import cats.syntax.parallel.*
@@ -46,6 +46,16 @@ import com.tjclp.xl.cli.raster.{
   Resvg,
   RsvgConvert
 }
+import com.tjclp.xl.cli.contract.{
+  CliError,
+  CliException,
+  Diagnostics,
+  ErrorCode,
+  ExitCodes,
+  Location,
+  Warning,
+  WarningCode
+}
 import com.tjclp.xl.cli.helpers.{BatchParser, SheetResolver}
 import com.tjclp.xl.cli.output.Format
 
@@ -77,14 +87,24 @@ private[cli] object BuildInfo:
  * and print. The wiring between them is [[Cli.program]], and argv handling (help, version, parse
  * errors) is [[Cli.run]] — both take the [[CliIO]] to print through, so the contract suite can run
  * the identical tree in-process; the binary passes [[CliIO.system]].
+ *
+ * Channels and exit codes (ADR-017 §2.3): results go to stdout, diagnostics to stderr, and stdout
+ * is empty on every failure. Exit 0 ok; 1 completed with findings or a failed gate (`diff` differs,
+ * `lint` findings, `--strict`) — never a failure; 2 the command line is wrong; 3 the operation
+ * could not complete. The code follows from the [[contract.CliError]]'s `code` through
+ * [[contract.ExitCodes.forCode]], so no handler picks a number.
  */
 object Main extends IOApp:
 
-  /** Rendered command result plus whether a staged output is complete and eligible to commit. */
+  /**
+   * Rendered command result plus whether a staged output is complete and eligible to commit, and
+   * the warnings collected while producing it (printed to stderr after the result).
+   */
   private[cli] final case class CommandOutcome(
     exitCode: ExitCode,
     output: String,
-    outputComplete: Boolean
+    outputComplete: Boolean,
+    warnings: Vector[Warning] = Vector.empty
   )
 
   /**
@@ -1620,6 +1640,12 @@ EXAMPLES:
    * is left untouched, which is the atomic reading of "this book did not pass the gate" — so the
    * summary's `Saved:` line is rewritten to say exactly that. With `-o` the completed temp is still
    * committed and `Saved:` stands.
+   *
+   * Any other failure is reported on stderr right here ([[contract.Diagnostics.report]]) and yields
+   * an outcome with EMPTY output and the exit code its [[contract.CliError]] selects: 2 for a wrong
+   * command line, 3 for an operation that could not complete. An un-migrated `new Exception(msg)`
+   * classifies as `INTERNAL` (exit 3) with the same message. Reader warnings collected during the
+   * run ride on the outcome and are printed after the result.
    */
   private[cli] def runResult(
     filePath: Path,
@@ -1634,39 +1660,53 @@ EXAMPLES:
     strictFailureDiscardsOutput: Boolean = false,
     io: CliIO
   ): IO[CommandOutcome] =
-    execute(
-      filePath,
-      sheetNameOpt,
-      outputOpt,
-      backendOpt,
-      maxSizeOpt,
-      stream,
-      cmd,
-      policy,
-      io
-    ).attempt
-      .map {
-        case Right(output) =>
-          CommandOutcome(
-            ExitCode.Success,
-            renderWithTarget(output, outputOpt, displayOpt),
-            outputComplete = true
-          )
-        case Left(strict: StrictFailure) =>
-          val rendered = renderWithTarget(strict.summary, outputOpt, displayOpt)
-          CommandOutcome(
-            ExitCode(1),
-            if strictFailureDiscardsOutput then unsayTheSave(rendered, outputOpt, displayOpt)
-            else rendered,
-            outputComplete = true
-          )
-        case Left(err) =>
-          CommandOutcome(
-            ExitCode.Error,
-            renderErrorMessage(err, outputOpt, displayOpt),
-            outputComplete = false
-          )
+    Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
+      execute(
+        filePath,
+        sheetNameOpt,
+        outputOpt,
+        backendOpt,
+        maxSizeOpt,
+        stream,
+        cmd,
+        policy,
+        io,
+        warnings
+      ).attempt.flatMap { attempt =>
+        warnings.get.flatMap { collected =>
+          attempt match
+            case Right(output) =>
+              IO.pure(
+                CommandOutcome(
+                  ExitCode.Success,
+                  renderWithTarget(output, outputOpt, displayOpt),
+                  outputComplete = true,
+                  collected
+                )
+              )
+            case Left(strict: StrictFailure) =>
+              val rendered = renderWithTarget(strict.summary, outputOpt, displayOpt)
+              IO.pure(
+                CommandOutcome(
+                  ExitCode(1),
+                  if strictFailureDiscardsOutput then unsayTheSave(rendered, outputOpt, displayOpt)
+                  else rendered,
+                  outputComplete = true,
+                  collected
+                )
+              )
+            case Left(err) =>
+              // GH-483: the temp→target rewrite applies to failure messages too
+              val classified = CliError.fromThrowable(err)
+              val relocated = classified.copy(
+                message = renderWithTarget(classified.message, outputOpt, displayOpt)
+              )
+              Diagnostics
+                .report(relocated, io)
+                .as(CommandOutcome(relocated.exitCode, "", outputComplete = false, collected))
+        }
       }
+    }
 
   /**
    * GH-496: an in-place run whose exit code is non-success never commits its temp file, so the
@@ -1718,8 +1758,36 @@ EXAMPLES:
     val message = Option(err.getMessage).getOrElse(err.toString)
     Format.errorSimple(renderWithTarget(message, outputOpt, displayOpt))
 
+  /**
+   * Result on stdout (nothing at all when there is none — a failure has already gone to stderr),
+   * then the run's warnings on stderr, then the exit code.
+   */
   private def printRunResult(result: CommandOutcome, io: CliIO): IO[ExitCode] =
-    io.out(result.output).as(result.exitCode)
+    val output = if result.output.isEmpty then IO.unit else io.out(result.output)
+    output *> result.warnings.traverse_(Diagnostics.warn(_, io)).as(result.exitCode)
+
+  /** An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s. */
+  private def readerCollecting(warnings: Ref[IO, Vector[Warning]]): ExcelIO[IO] =
+    ExcelIO.withWarnings[IO] { warning =>
+      warnings.update(_ :+ Warning(WarningCode.READER_WARNING, warning.toString))
+    }
+
+  /**
+   * Read the input through `excel`, classifying a failed read as `IO_READ` (exit 3) with ExcelIO's
+   * message verbatim; a `CliException` already raised below passes through unchanged.
+   */
+  private def readWorkbook(excel: ExcelIO[IO], path: Path, config: ReaderConfig): IO[Workbook] =
+    excel.readWith(path, config).adaptError {
+      case cli: CliException => cli
+      case other =>
+        CliException(
+          CliError(
+            ErrorCode.IO_READ,
+            CliError.messageOf(other),
+            location = Some(Location.file(path.toString))
+          )
+        )
+    }
 
   private[cli] def runInfo(io: CliIO): IO[ExitCode] =
     io.out(formatFunctionList()).as(ExitCode.Success)
@@ -1866,32 +1934,37 @@ EXAMPLES:
     cmd: CliCommand,
     io: CliIO
   ): IO[ExitCode] =
-    val excel = ExcelIO.instance[IO]
     val readerConfig = buildReaderConfig(maxSizeOpt)
-    val workbookIO: IO[Workbook] = filePathOpt match
-      case Some(filePath) => excel.readWith(filePath, readerConfig)
-      case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
+    Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
+      val excel = readerCollecting(warnings)
+      val workbookIO: IO[Workbook] = filePathOpt match
+        case Some(filePath) => readWorkbook(excel, filePath, readerConfig)
+        case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
 
-    (for
-      wb <- workbookIO
-      sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
-      result <- cmd match
-        case CliCommand.Eval(formulaStr, overrides) =>
-          ReadCommands.eval(wb, sheet, formulaStr, overrides)
-        case CliCommand.EvalArray(formulaStr, targetRef, overrides) =>
-          ReadCommands.evalArray(wb, sheet, formulaStr, targetRef, overrides)
-        case other =>
-          IO.raiseError(new Exception(s"Unexpected headless command: $other"))
-    yield result).attempt.flatMap {
-      case Right(output) =>
-        io.out(output).as(ExitCode.Success)
-      case Left(err) =>
-        io.out(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
+      (for
+        wb <- workbookIO
+        sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
+        result <- cmd match
+          case CliCommand.Eval(formulaStr, overrides) =>
+            ReadCommands.eval(wb, sheet, formulaStr, overrides)
+          case CliCommand.EvalArray(formulaStr, targetRef, overrides) =>
+            ReadCommands.evalArray(wb, sheet, formulaStr, targetRef, overrides)
+          case other =>
+            IO.raiseError(new Exception(s"Unexpected headless command: $other"))
+      yield result).attempt.flatMap { attempt =>
+        val outcome = attempt match
+          case Right(output) => io.out(output).as(ExitCode.Success)
+          case Left(err) =>
+            val error = CliError.fromThrowable(err)
+            Diagnostics.report(error, io).as(error.exitCode)
+        outcome.flatTap(_ => warnings.get.flatMap(_.traverse_(Diagnostics.warn(_, io))))
+      }
     }
 
   /**
-   * Run the diff command with diff-tool exit codes: 0 = identical, 1 = differences found, 2 = error
-   * (unreadable file, sheet filter matching neither workbook, ...).
+   * Run the diff command with its exit codes: 0 = identical, 1 = differences found (a result, not a
+   * failure), 3 = error (unreadable file, sheet filter matching neither workbook, ...) reported on
+   * stderr.
    */
   private[cli] def runDiff(
     fileA: Path,
@@ -1904,8 +1977,8 @@ EXAMPLES:
     val excel = ExcelIO.instance[IO]
     val readerConfig = buildReaderConfig(maxSizeOpt)
     (for
-      wbA <- excel.readWith(fileA, readerConfig)
-      wbB <- excel.readWith(fileB, readerConfig)
+      wbA <- readWorkbook(excel, fileA, readerConfig)
+      wbB <- readWorkbook(excel, fileB, readerConfig)
       diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter) match
         case Right(d) => IO.pure(d)
         case Left(err) => IO.raiseError(new Exception(err))
@@ -1917,12 +1990,13 @@ EXAMPLES:
       case Right((output, identical)) =>
         io.out(output).as(if identical then ExitCode.Success else ExitCode(1))
       case Left(err) =>
-        io.out(Format.errorSimple(err.getMessage)).as(ExitCode(2))
+        val error = CliError.fromThrowable(err)
+        Diagnostics.report(error, io).as(error.exitCode)
     }
 
   /**
    * Resolve lint's input file from the `-f` flag and the positional form — exactly one must be
-   * given (GH-422). Errors use lint's exit-code 2 convention at the call site.
+   * given (GH-422). A `Left` is a usage error (exit 2, stderr) at the call site.
    */
   private[cli] def resolveLintFile(
     flagFile: Option[Path],
@@ -1937,9 +2011,10 @@ EXAMPLES:
         Left("lint requires a file: xl lint <file> (or xl -f <file> lint)")
 
   /**
-   * Run the lint command with its exit-code convention: 0 = clean, 1 = findings, 2 = error
-   * (unreadable file, missing/malformed core part). Opens the zip directly — NOT ExcelIO.read —
-   * because a full parse would repair/normalize the very structure lint inspects (GH-397).
+   * Run the lint command with its exit codes: 0 = clean, 1 = findings (a result, not a failure), 3 =
+   * error (unreadable file, missing/malformed core part) reported on stderr with the `XLError`'s
+   * code. Opens the zip directly — NOT ExcelIO.read — because a full parse would repair/normalize
+   * the very structure lint inspects (GH-397).
    */
   private[cli] def runLint(
     file: Path,
@@ -1953,7 +2028,8 @@ EXAMPLES:
           case LintFormat.Json => LintCommands.renderJson(file.toString, findings)
         io.out(output).as(if findings.isEmpty then ExitCode.Success else ExitCode(1))
       case Left(err) =>
-        io.out(Format.errorSimple(err.message)).as(ExitCode(2))
+        val error = CliError.fromXLError(err, Some(Location.file(file.toString)))
+        Diagnostics.report(error, io).as(error.exitCode)
     }
 
   private[cli] def runStandalone(
@@ -1980,8 +2056,13 @@ EXAMPLES:
       case Right(output) =>
         io.out(output).as(ExitCode.Success)
       case Left(err) =>
-        io.out(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
+        val error = CliError.fromThrowable(err)
+        Diagnostics.report(error, io).as(error.exitCode)
     }
+
+  /** A `--stream` refusal: usage (exit 2), naming the in-memory alternative as the hint. */
+  private def unsupportedInStream(message: String, alternative: String): CliException =
+    CliException(CliError(ErrorCode.UNSUPPORTED_IN_STREAM, message, hint = Some(alternative)))
 
   private def execute(
     filePath: Path,
@@ -1992,7 +2073,8 @@ EXAMPLES:
     stream: Boolean,
     cmd: CliCommand,
     policy: WritePolicy,
-    io: CliIO
+    io: CliIO,
+    warnings: Ref[IO, Vector[Warning]]
   ): IO[String] =
     // Handle metadata-only commands (instant for any file size)
     cmd match
@@ -2002,29 +2084,29 @@ EXAMPLES:
           case SheetsAction.List(stats) =>
             if stats then
               // Full mode: load workbook and get cell counts
-              val excel = ExcelIO.instance[IO]
+              val excel = readerCollecting(warnings)
               val readerConfig = buildReaderConfig(maxSizeOpt)
-              excel.readWith(filePath, readerConfig).flatMap(wb => WorkbookCommands.sheets(wb))
+              readWorkbook(excel, filePath, readerConfig).flatMap(wb => WorkbookCommands.sheets(wb))
             else
               // Quick mode: metadata only (instant)
               WorkbookCommands.sheetsQuick(filePath)
           case SheetsAction.Hide(name, veryHide) =>
             // Hide requires loading workbook and writing output
             requireOutputAction(outputOpt, "sheets hide") { outputPath =>
-              val excel = ExcelIO.instance[IO]
+              val excel = readerCollecting(warnings)
               val readerConfig = buildReaderConfig(maxSizeOpt)
               val config = buildWriterConfig(backendOpt)
-              excel.readWith(filePath, readerConfig).flatMap { wb =>
+              readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
                 SheetCommands.hideSheet(wb, name, veryHide, outputPath, config, stream)
               }
             }
           case SheetsAction.Show(name) =>
             // Show requires loading workbook and writing output
             requireOutputAction(outputOpt, "sheets show") { outputPath =>
-              val excel = ExcelIO.instance[IO]
+              val excel = readerCollecting(warnings)
               val readerConfig = buildReaderConfig(maxSizeOpt)
               val config = buildWriterConfig(backendOpt)
-              excel.readWith(filePath, readerConfig).flatMap { wb =>
+              readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
                 SheetCommands.showSheet(wb, name, outputPath, config, stream)
               }
             }
@@ -2067,16 +2149,17 @@ EXAMPLES:
           // needs no guard: it is what the streaming path already does.
           if policy.strict then
             IO.raiseError(
-              new Exception(
-                "--strict is not supported with --stream (streaming writes never recalculate). Re-run without --stream."
+              unsupportedInStream(
+                "--strict is not supported with --stream (streaming writes never recalculate). Re-run without --stream.",
+                "omit --stream: the in-memory write recalculates the edit's dependency cone and can gate"
               )
             )
           else executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io)
         else
-          val excel = ExcelIO.instance[IO]
+          val excel = readerCollecting(warnings)
           val readerConfig = buildReaderConfig(maxSizeOpt)
           for
-            wb <- excel.readWith(filePath, readerConfig)
+            wb <- readWorkbook(excel, filePath, readerConfig)
             sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
             result <- executeCommand(wb, sheet, outputOpt, backendOpt, stream, cmd, policy, io)
           yield result
@@ -2117,8 +2200,9 @@ EXAMPLES:
         ) =>
       if evalFormulas then
         IO.raiseError(
-          new Exception(
-            "--eval is not supported with --stream (streaming view uses cached values only)"
+          unsupportedInStream(
+            "--eval is not supported with --stream (streaming view uses cached values only)",
+            "omit --stream to evaluate formulas; use --max-size <MB> for a large file"
           )
         )
       else
@@ -2141,8 +2225,9 @@ EXAMPLES:
 
     case _ =>
       IO.raiseError(
-        new Exception(
-          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only), cell"
+        unsupportedInStream(
+          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only), cell",
+          "omit --stream; use --max-size <MB> to load a large file in memory"
         )
       )
 
@@ -2189,7 +2274,7 @@ EXAMPLES:
         ) =>
       outputOpt match
         case None =>
-          IO.raiseError(new Exception("--output is required for style command"))
+          IO.raiseError(outputRequired("--output is required for style command"))
         case Some(outputPath) =>
           StreamingWriteCommands.style(
             filePath,
@@ -2219,14 +2304,15 @@ EXAMPLES:
     case CliCommand.Put(refStr, values, csvSplit, detect) =>
       if csvSplit then
         IO.raiseError(
-          new Exception(
-            "--csv auto-split is not supported with --stream. Omit --stream to use --csv."
+          unsupportedInStream(
+            "--csv auto-split is not supported with --stream. Omit --stream to use --csv.",
+            "omit --stream to use --csv"
           )
         )
       else
         outputOpt match
           case None =>
-            IO.raiseError(new Exception("--output is required for put command"))
+            IO.raiseError(outputRequired("--output is required for put command"))
           case Some(outputPath) =>
             StreamingWriteCommands.put(
               filePath,
@@ -2240,7 +2326,7 @@ EXAMPLES:
     case CliCommand.PutFormula(refStr, formulas) =>
       outputOpt match
         case None =>
-          IO.raiseError(new Exception("--output is required for putf command"))
+          IO.raiseError(outputRequired("--output is required for putf command"))
         case Some(outputPath) =>
           StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
@@ -2250,14 +2336,15 @@ EXAMPLES:
     case CliCommand.Batch(source, _) =>
       outputOpt match
         case None =>
-          IO.raiseError(new Exception("--output is required for batch command"))
+          IO.raiseError(outputRequired("--output is required for batch command"))
         case Some(outputPath) =>
           StreamingWriteCommands.batch(filePath, outputPath, sheetNameOpt, source, io.stdin)
 
     case _ =>
       IO.raiseError(
-        new Exception(
-          "--stream for write commands only supports: put, putf, style, batch"
+        unsupportedInStream(
+          "--stream for write commands only supports: put, putf, style, batch",
+          "omit --stream; use --max-size <MB> to load a large file in memory"
         )
       )
 
@@ -2746,6 +2833,13 @@ EXAMPLES:
   private def missingOutputError(commandName: String): String =
     s"$commandName requires -o <out.xlsx> (or -i to modify in place)"
 
+  /**
+   * A write verb without `-o`/`-i`: `OUTPUT_REQUIRED`, exit 2 (still raised after the read until
+   * Wave 2).
+   */
+  private def outputRequired(message: String): CliException =
+    CliException(CliError(ErrorCode.OUTPUT_REQUIRED, message))
+
   private[cli] def requireOutput(
     commandName: String,
     outputOpt: Option[Path],
@@ -2754,7 +2848,7 @@ EXAMPLES:
   )(f: (Path, WriterConfig, Boolean) => IO[String]): IO[String] =
     val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
     outputOpt.fold(
-      IO.raiseError[String](new Exception(missingOutputError(commandName)))
+      IO.raiseError[String](outputRequired(missingOutputError(commandName)))
     )(path => f(path, config, stream))
 
   /**
@@ -2771,7 +2865,7 @@ EXAMPLES:
    *   - `-i` only: writes to a sibling temp file then atomically moves onto input. If the command
    *     exits with a non-success code OR throws, the temp is deleted and the original is untouched
    *   - Neither: passes `None` through (for read-only subcommands that don't need output)
-   *   - Both: errors with "mutually exclusive"
+   *   - Both: a usage error ("mutually exclusive", exit 2, stderr); nothing is read or written
    */
   private[cli] def runWithOutput(
     outOpt: Option[Path],
@@ -2781,9 +2875,9 @@ EXAMPLES:
   )(execute: (Option[Path], Option[Path]) => IO[CommandOutcome]): IO[ExitCode] =
     (outOpt, inPlace) match
       case (Some(_), true) =>
-        io.out(
-          Format.errorSimple("--in-place (-i) and --output (-o) are mutually exclusive")
-        ).as(ExitCode.Error)
+        val error =
+          CliError.usage("--in-place (-i) and --output (-o) are mutually exclusive", None)
+        Diagnostics.report(error, io).as(error.exitCode)
       case (Some(out), false) =>
         runStagedOutput(out, ".xl-output-", io)(outcome => outcome.outputComplete)(execute)
       case (None, false) => execute(None, None).flatMap(printRunResult(_, io))
@@ -2866,7 +2960,7 @@ EXAMPLES:
     outputOpt match
       case Some(path) => f(path)
       case None =>
-        IO.raiseError(new Exception(missingOutputError(commandName)))
+        IO.raiseError(outputRequired(missingOutputError(commandName)))
 
   /** Build WriterConfig from CLI backend option */
   private def buildWriterConfig(backendOpt: Option[XmlBackend]): WriterConfig =

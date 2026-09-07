@@ -20,7 +20,8 @@ import com.tjclp.xl.sheets.dataTableSyntax.*
  * Tests for the lint command (GH-397).
  *
  * The structural checks themselves live in xl-ooxml (WorkbookLintSpec); this covers the CLI
- * surface: the exit-code convention (0 clean / 1 findings / 2 error) and the text/JSON renderers.
+ * surface: the exit-code convention (0 clean / 1 findings / 2 usage / 3 error) and the text/JSON
+ * renderers.
  */
 class LintCommandSpec extends CatsEffectSuite:
 
@@ -139,9 +140,9 @@ class LintCommandSpec extends CatsEffectSuite:
       assertEquals(parsed("findings").arr.map(_("category").str).toSet, Set("data-table-torn"))
   }
 
-  test("lint: unreadable file exits 2") {
+  test("lint: unreadable file exits 3 (a failure, not usage — ADR-017)") {
     for code <- Main.runLint(Paths.get("/nonexistent/no-such-file.xlsx"), LintFormat.Text)
-    yield assertEquals(code, ExitCode(2))
+    yield assertEquals(code, ExitCode(3))
   }
 
   test("lint: json format also drives the findings exit code") {

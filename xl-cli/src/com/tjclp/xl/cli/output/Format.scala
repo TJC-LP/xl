@@ -3,7 +3,6 @@ package com.tjclp.xl.cli.output
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{CellValue, Comment, FormulaKind}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.error.XLError
 import com.tjclp.xl.styles.{CellStyle, StyleId}
 import com.tjclp.xl.styles.alignment.Align
 import com.tjclp.xl.styles.border.{Border, BorderStyle}
@@ -13,7 +12,8 @@ import com.tjclp.xl.styles.font.{Font, Underline}
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
- * Output formatting utilities for xl CLI.
+ * Output formatting utilities for xl CLI (results only — errors render through
+ * `contract.Diagnostics`, on stderr).
  */
 object Format:
 
@@ -24,43 +24,6 @@ object Format:
     val typeStr = valueType(value)
     val valueStr = formatValue(value)
     s"Put: ${ref.toA1} = $valueStr ($typeStr)"
-
-  /**
-   * Format a batch put success message.
-   */
-  def batchSuccess(updates: Vector[(ARef, CellValue)]): String =
-    val sb = new StringBuilder
-    sb.append(s"Batch update: ${updates.size} cells\n")
-    updates.foreach { case (ref, value) =>
-      val typeStr = valueType(value)
-      val valueStr = formatValue(value)
-      sb.append(s"  ${ref.toA1} = $valueStr ($typeStr)\n")
-    }
-    sb.toString.stripSuffix("\n")
-
-  /**
-   * Format a workbook open success message.
-   */
-  def openSuccess(path: String, sheets: Vector[String]): String =
-    val sheetList = sheets.mkString(", ")
-    s"""Opened: $path
-       |Sheets: $sheetList (${sheets.size} total)
-       |Active: ${sheets.headOption.getOrElse("(none)")}""".stripMargin
-
-  /**
-   * Format a workbook create success message.
-   */
-  def createSuccess(sheets: Vector[String]): String =
-    val sheetList = sheets.mkString(", ")
-    s"""Created new workbook
-       |Sheets: $sheetList (${sheets.size} total)
-       |Active: ${sheets.headOption.getOrElse("(none)")}""".stripMargin
-
-  /**
-   * Format a save success message.
-   */
-  def saveSuccess(path: String, sheetCount: Int, cellCount: Int): String =
-    s"Saved: $path ($sheetCount sheets, $cellCount cells)"
 
   /**
    * Save-confirmation suffix appended to write-command output (GH-483: the one shared definition —
@@ -103,30 +66,7 @@ object Format:
     sb.toString
 
   /**
-   * Format a sheet select success message.
-   */
-  def selectSuccess(
-    name: String,
-    usedRange: Option[String],
-    cellCount: Int,
-    formulaCount: Int
-  ): String =
-    val rangeStr = usedRange.getOrElse("(empty)")
-    s"""Selected: $name
-       |Used range: $rangeStr
-       |Cells: $cellCount non-empty, $formulaCount formulas""".stripMargin
-
-  /**
-   * Format an error message with location and suggestion.
-   */
-  def error(err: XLError): String =
-    val (errType, details, suggestion) = errorDetails(err)
-    s"""Error: $errType
-       |Details: $details
-       |Suggestion: $suggestion""".stripMargin
-
-  /**
-   * Format a simple error message.
+   * Format a simple error message: the first line `contract.Diagnostics.render` emits.
    */
   def errorSimple(message: String): String =
     s"Error: $message"
@@ -297,42 +237,3 @@ object Format:
       case CellValue.Formula(expr, cached, kind) =>
         val displayExpr = RendererCommon.formulaDisplay(expr, kind)
         cached.map(formatValue).getOrElse(displayExpr)
-
-  private def errorDetails(err: XLError): (String, String, String) =
-    err match
-      case XLError.InvalidCellRef(ref, reason) =>
-        (
-          "InvalidCellRef",
-          s"'$ref' is not a valid cell reference: $reason",
-          "Use A1-style references like A1, B5, or AA100"
-        )
-      case XLError.InvalidRange(range, reason) =>
-        (
-          "InvalidRange",
-          s"'$range' is not a valid range: $reason",
-          "Use ranges like A1:D10 or B5:B20"
-        )
-      case XLError.InvalidSheetName(name, reason) =>
-        (
-          "InvalidSheetName",
-          s"'$name' is not a valid sheet name: $reason",
-          "Sheet names cannot contain []:*?/\\"
-        )
-      case XLError.SheetNotFound(name) =>
-        (
-          "SheetNotFound",
-          s"No sheet named '$name' exists",
-          "Use 'xl sheets' to see available sheets"
-        )
-      case XLError.DuplicateSheet(name) =>
-        ("DuplicateSheet", s"A sheet named '$name' already exists", "Choose a different name")
-      case XLError.IOError(reason) =>
-        ("IOError", reason, "Check file path and permissions")
-      case XLError.ParseError(location, reason) =>
-        ("ParseError", s"$reason at $location", "Check the syntax of your input")
-      case XLError.TypeMismatch(expected, actual, ctx) =>
-        ("TypeMismatch", s"Expected $expected but got $actual in $ctx", "Check the data types")
-      case XLError.FormulaError(expr, reason) =>
-        ("FormulaError", s"$reason in formula '$expr'", "Check the formula syntax")
-      case other =>
-        ("Error", other.message, "Check the documentation for more information")

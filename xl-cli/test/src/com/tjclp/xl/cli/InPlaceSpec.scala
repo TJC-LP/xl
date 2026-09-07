@@ -212,12 +212,12 @@ class InPlaceSpec extends CatsEffectSuite:
       }
   }
 
-  test("runWithOutput: -i and -o together exits with error code") {
+  test("runWithOutput: -i and -o together is a usage error (exit 2, ADR-017)") {
     val file = Path.of("/tmp/input.xlsx")
     val out = Path.of("/tmp/output.xlsx")
     Main
       .runWithOutput(Some(out), inPlace = true, file)((_, _) => IO.pure(outcome()))
-      .map { code => assertEquals(code, ExitCode.Error) }
+      .map { code => assertEquals(code, ExitCode(2)) }
   }
 
   test("runWithOutput: -i writes to temp, atomically moves to input on success") {

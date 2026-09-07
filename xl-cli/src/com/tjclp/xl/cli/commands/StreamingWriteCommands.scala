@@ -8,6 +8,7 @@ import cats.effect.IO
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, ParseError}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
@@ -17,7 +18,9 @@ import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.text.Suggest
 import com.tjclp.xl.cli.CliIO
+import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode}
 import com.tjclp.xl.cli.helpers.{BatchParser, StreamingCsvParser, StyleBuilder, ValueParser}
 import org.xml.sax.{Attributes, SAXException}
 import org.xml.sax.helpers.DefaultHandler
@@ -818,9 +821,13 @@ object StreamingWriteCommands:
             _: BatchParser.BatchOp.UngroupRows | _: BatchParser.BatchOp.UngroupCols |
             _: BatchParser.BatchOp.SetPageSetup | _: BatchParser.BatchOp.SetHeaderFooter |
             _: BatchParser.BatchOp.AddConditionalFormat =>
-          throw new Exception(
-            "This batch operation is not supported in streaming mode. " +
-              "Remove --stream to use full workbook mode."
+          throw CliException(
+            CliError(
+              ErrorCode.UNSUPPORTED_IN_STREAM,
+              "This batch operation is not supported in streaming mode. " +
+                "Remove --stream to use full workbook mode.",
+              hint = Some("omit --stream to apply this operation in memory")
+            )
           )
       }
 
@@ -1124,14 +1131,19 @@ object StreamingWriteCommands:
 
             if sheets.isEmpty then throw new Exception("Workbook has no sheets")
 
+            val sheetNames = sheets.map(s => (s \ "@name").text).toVector
             // IterableOps: .head safe because sheets.isEmpty checked above and size>1 throws
             @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
             val targetSheet = sheetNameOpt match
               case None =>
                 if sheets.size > 1 then
-                  val names = sheets.map(s => (s \ "@name").text).mkString(", ")
-                  throw new Exception(
-                    s"Multiple sheets found: $names. Use --sheet to specify which sheet to modify."
+                  val names = sheetNames.mkString(", ")
+                  throw CliException(
+                    CliError
+                      .fromXLError(XLError.SheetRequired("--stream write", sheetNames), None)
+                      .copy(message =
+                        s"Multiple sheets found: $names. Use --sheet to specify which sheet to modify."
+                      )
                   )
                 sheets.head
               case Some(targetName) =>
@@ -1139,9 +1151,14 @@ object StreamingWriteCommands:
                   (sheetElem \ "@name").text == targetName
                 }
                 found.getOrElse {
-                  val names = sheets.map(s => (s \ "@name").text).mkString(", ")
-                  throw new Exception(
-                    s"Sheet '$targetName' not found. Available sheets: $names"
+                  val names = sheetNames.mkString(", ")
+                  throw CliException(
+                    CliError
+                      .fromXLError(XLError.SheetNotFound(targetName), None)
+                      .copy(
+                        message = s"Sheet '$targetName' not found. Available sheets: $names",
+                        candidates = Suggest.closest(targetName, sheetNames)
+                      )
                   )
                 }
 

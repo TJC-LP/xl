@@ -66,9 +66,10 @@ class CliHarnessSpec extends CatsEffectSuite:
       lintMissing <- CliHarness.run("lint", "/nonexistent/no-such-file.xlsx")
       eval <- CliHarness.run("eval", "=1+1")
     yield
-      assertEquals(unknown.exit, 1)
+      // ADR-017 §2.3: a parse failure is usage (2); an unreadable file is a failure (3)
+      assertEquals(unknown.exit, 2)
       assert(unknown.stderr.contains("Unexpected argument: frob"), unknown.stderr)
-      assertEquals(lintMissing.exit, 2)
+      assertEquals(lintMissing.exit, 3)
       assertEquals(eval.exit, 0)
       assertEquals(eval.stdout, "Formula: =1+1\nResult: 2 (number)\n")
   }

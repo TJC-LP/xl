@@ -112,9 +112,9 @@ xl -f <file> -o <out> recalc --parallel 4             # Opt-in independent-wave 
 
 ### Compare & Query (read-only, 0.11.3+)
 ```bash
-xl -f a.xlsx diff -g b.xlsx --format markdown          # Workbook diff (exit 0 identical, 1 differs)
+xl -f a.xlsx diff -g b.xlsx --format markdown          # Workbook diff (exit 0 identical, 1 differs, 3 unreadable)
 xl -f a.xlsx diff -g b.xlsx --format json              # Stable JSON schema for tooling
-xl -f out.xlsx lint                                    # Validate package structure before sending (exit 0 clean, 1 findings) (0.15.0+)
+xl -f out.xlsx lint                                    # Validate package structure before sending (exit 0 clean, 1 findings, 3 unreadable) (0.15.0+)
                                                        # Rules: child-order, unresolved-rel-id, wrong-rel-type, missing-part, missing-content-type, ref-out-of-bounds, data-table-torn, data-table-unseeded (0.19.0), formula-leading-equals (0.19.1), external-ref-dangling + defined-name-invalid (0.19.2), calc-chain-stale (0.19.4)
 xl -f <file> -s <sheet> filter --where "B > 100 AND D = TRUE" --header --format csv
 xl -f <file> -s <sheet> filter --where "Name LIKE 'Acme%'" --columns A,C:E --limit 20
@@ -687,6 +687,22 @@ editing. If you need every supported formula cached after a structural edit, omi
 ```bash
 xl -f model.xlsx -o out.xlsx --strict recalc   # exit 1 if a formula could not be evaluated
 ```
+
+Every `xl` invocation exits with one of four codes (also printed by `xl --help`):
+
+| exit | meaning | examples | file written? |
+|---|---|---|---|
+| `0` | ok | | as requested |
+| `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | `-o`: yes; `-i`: no |
+| `2` | usage — the command line is wrong | unknown verb, flag after the verb, `-o` missing, `-i` with `-o`, `--stream` on an unsupported verb/flag | no |
+| `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable file | no |
+
+Results go to **stdout**; errors and warnings go to **stderr**, and stdout is empty on any
+failure. An error is `Error: <message>` followed by indented `code: <CODE>` (stable, e.g.
+`SHEET_NOT_FOUND`, `OUTPUT_REQUIRED`, `UNSUPPORTED_IN_STREAM`), an optional `did you mean: a, b`
+and an optional `hint: <text>`; warnings are `Warning[<CODE>]: <message>` lines. Branch on the
+exit code and the `code:` line, not on message text. (Earlier releases exited `1` for usage and
+failures too, `2` for `diff`/`lint` runtime errors, and printed errors on stdout.)
 
 `--strict` keeps the same printed summary and only changes the exit code. Excel error *values*
 (`#DIV/0!`, `#N/A`) never gate — they are data. With `-o` the file is still written on failure;

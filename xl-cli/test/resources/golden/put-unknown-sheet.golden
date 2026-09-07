@@ -9,7 +9,9 @@ put
 A1
 1
 ## exit
-1
+3
 ## stdout
-Error: Sheet not found: Nope. Available: Data, Summary
 ## stderr
+Error: Sheet not found: Nope. Available: Data, Summary
+  code: SHEET_NOT_FOUND
+  hint: list sheets with `xl -f <file> sheets`

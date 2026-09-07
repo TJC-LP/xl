@@ -2,7 +2,8 @@
 lint
 <DIR>/missing.xlsx
 ## exit
-2
+3
 ## stdout
-Error: IO error: Failed to open file: <DIR>/missing.xlsx
 ## stderr
+Error: IO error: Failed to open file: <DIR>/missing.xlsx
+  code: IO_ERROR

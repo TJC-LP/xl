@@ -265,7 +265,7 @@ class DiffCommandSpec extends CatsEffectSuite:
     yield assertEquals(code, ExitCode(1))
   }
 
-  test("diff: exit code 2 when a file cannot be read") {
+  test("diff: exit code 3 when a file cannot be read (a failure, not usage — ADR-017)") {
     for
       fa <- writeTemp(wb(Sheet("S")))
       code <- Main.runDiff(
@@ -275,5 +275,5 @@ class DiffCommandSpec extends CatsEffectSuite:
         None,
         DiffFormat.Markdown
       )
-    yield assertEquals(code, ExitCode(2))
+    yield assertEquals(code, ExitCode(3))
   }

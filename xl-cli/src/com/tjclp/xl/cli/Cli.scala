@@ -5,7 +5,7 @@ import cats.implicits.*
 import com.monovore.decline.{Command, Opts, Visibility}
 
 import com.tjclp.xl.cli.Main.*
-import com.tjclp.xl.cli.output.Format
+import com.tjclp.xl.cli.contract.{CliError, Diagnostics, ErrorCode, ExitCodes}
 
 /**
  * The `xl` command line as a value.
@@ -18,17 +18,28 @@ import com.tjclp.xl.cli.output.Format
  * Help and version behaviour reproduce decline-effect's `CommandIOApp`, which this replaced because
  * its `run` is final and prints through an ambient console:
  *   - `--help` renders the help on STDERR and exits 0
- *   - a parse failure renders the errors plus help on stderr and exits 1
+ *   - a parse failure renders the errors plus help on stderr and exits 2 (usage — ADR-017 §2.3; the
+ *     one-line usage instead of the full help arrives with the argv cluster)
  *   - `--version` / `-v` prints the version on stdout and exits 0
  *
- * Help landing on stderr even when asked for is the current, pinned contract (golden `help`); so is
- * every command error printing to stdout. Changing either is a later cluster's job and shows up as
- * a golden diff.
+ * Help landing on stderr even when asked for is the current, pinned contract (golden `help`).
+ * Command errors go to stderr as `Error: <message>` plus a `code:` line ([[contract.Diagnostics]]);
+ * stdout is empty on every failure.
  */
 object Cli:
 
   val name: String = "xl"
-  val header: String = "LLM-friendly Excel operations (stateless)"
+
+  /** The `--help` header: what the tool is, then the exit-code table every pipeline branches on. */
+  val header: String =
+    """LLM-friendly Excel operations (stateless)
+      |
+      |Exit codes:
+      |  0  ok
+      |  1  completed with findings or a failed gate (diff differs, lint findings, --strict) — never a failure
+      |  2  usage — the command line is wrong; nothing read, nothing written
+      |  3  failed — the operation could not complete; nothing written
+      |Results go to stdout; errors (Error: <message>, then code:/hint: lines) and warnings go to stderr.""".stripMargin
 
   /** The verb tree. Options and handlers live in [[Main]]; this is the wiring between them. */
   def program(io: CliIO): Opts[IO[ExitCode]] =
@@ -120,8 +131,7 @@ object Cli:
     val diffOpts = (fileOpt, sheetOpt, maxSizeOpt, diffCmd).mapN { (file, sheet, maxSize, cmd) =>
       cmd match
         case CliCommand.Diff(file2, format) => runDiff(file, file2, sheet, maxSize, format, io)
-        case other =>
-          io.out(Format.errorSimple(s"Unexpected diff command: $other")).as(ExitCode.Error)
+        case other => internal(s"Unexpected diff command: $other", io)
     }
 
     // Lint: raw-zip structural validation (GH-397, no output file); custom exit codes.
@@ -131,9 +141,10 @@ object Cli:
         case CliCommand.Lint(format) =>
           resolveLintFile(flagFile, positional) match
             case Right(file) => runLint(file, format, io)
-            case Left(msg) => io.out(Format.errorSimple(msg)).as(ExitCode(2))
-        case other =>
-          io.out(Format.errorSimple(s"Unexpected lint command: $other")).as(ExitCode.Error)
+            case Left(msg) =>
+              val error = CliError.usage(msg, None)
+              Diagnostics.report(error, io).as(error.exitCode)
+        case other => internal(s"Unexpected lint command: $other", io)
     }
 
     // Info commands: no file required
@@ -162,8 +173,13 @@ object Cli:
       case Right(handler) => handler
       case Left(help) =>
         io.err(help.toString)
-          .as(if help.errors.nonEmpty then ExitCode.Error else ExitCode.Success)
+          .as(if help.errors.nonEmpty then ExitCodes.usage else ExitCodes.ok)
     }
+
+  /** A dispatch arm the parser cannot reach: a defect, reported like any other failure (exit 3). */
+  private def internal(message: String, io: CliIO): IO[ExitCode] =
+    val error = CliError(ErrorCode.INTERNAL, message)
+    Diagnostics.report(error, io).as(error.exitCode)
 
   /**
    * Exactly the flag decline-effect's `CommandIOApp` added: `--version`/`-v`, partially visible.

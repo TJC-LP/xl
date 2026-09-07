@@ -9,9 +9,10 @@ putf
 A5
 =SUM(
 ## exit
-1
+3
 ## stdout
+## stderr
 Error: =SUM(
     ^
 Formula error in '=SUM(': Unexpected end of formula at position 4: expected expression
-## stderr
+  code: INTERNAL

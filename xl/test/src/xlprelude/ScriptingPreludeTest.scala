@@ -111,6 +111,20 @@ class ScriptingPreludeTest extends FunSuite:
     intercept[XLException]:
       Sheet("Unsafe").put(invalidRef, "boom").unsafe
 
+  test("XLError.code / hint / candidates / root / opIndex resolve through the prelude (ADR-017)"):
+    val notFound: XLError = XLError.SheetNotFound("x")
+    assertEquals(notFound.code, "SHEET_NOT_FOUND")
+    assertEquals(notFound.hint, Some("list sheets with `xl -f <file> sheets`"))
+    val required: XLError = XLError.SheetRequired("view", Vector("Data"))
+    assertEquals(required.code, "SHEET_REQUIRED")
+    assertEquals(required.candidates, Vector("Data"))
+    val failed: XLError = XLError.EditFailed(2, "put", notFound)
+    assertEquals(failed.code, "SHEET_NOT_FOUND")
+    assertEquals(failed.root, notFound)
+    assertEquals(failed.opIndex, Some(2))
+    assert(XLError.codes.contains("EDIT_FAILED"))
+    assert(XLError.Other("a") == XLError.Other("a"))
+
   test("formula evaluation extensions resolve through the prelude"):
     val sheet = Sheet("Calc")
       .put(ref"A1", 2)

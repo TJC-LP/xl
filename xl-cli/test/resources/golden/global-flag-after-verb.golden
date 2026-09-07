@@ -6,7 +6,7 @@ A1:B2
 -s
 Data
 ## exit
-1
+2
 ## stdout
 ## stderr
 Unexpected option: -s

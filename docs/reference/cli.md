@@ -47,6 +47,9 @@ export PATH="$HOME/.local/bin:$PATH"
 --preserve-caches     # Same flag, spelled for the intent
 --strict              # Write verbs: exit 1 when the write's recalculation reports problems
 
+# Exit codes: 0 ok · 1 findings/gate (diff, lint, --strict; never a failure) · 2 usage · 3 failed
+# Results on stdout; errors (Error: <message> + code:/hint: lines) and warnings on stderr
+
 # Read-only operations
 xl -f model.xlsx sheets                    # List all sheets
 xl -f model.xlsx names                     # List defined names (named ranges)
@@ -232,8 +235,8 @@ These warnings also fail `--strict`.
 | `insert-cols` | `<at-col> [count]` | Insert columns; shifts cells, rewrites formulas (requires `-o`) |
 | `delete-cols` | `<at-col> [count]` | Delete columns; `#REF!` on lost references (requires `-o`) |
 | `batch` | `<file\|-> [--dry-run]` | Apply multiple operations from JSON (requires `-o`; `--dry-run` validates without a file) |
-| `diff` | `-g <file2> [--format markdown\|json]` | Compare two workbooks; exit 0 identical, 1 differs, 2 error |
-| `lint` | `[<file>] [--format text\|json]` | Validate package structure (child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, `<f>` canon); positional file or `-f`; exit 0 clean, 1 findings, 2 error |
+| `diff` | `-g <file2> [--format markdown\|json]` | Compare two workbooks; exit 0 identical, 1 differs, 3 error |
+| `lint` | `[<file>] [--format text\|json]` | Validate package structure (child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, `<f>` canon); positional file or `-f`; exit 0 clean, 1 findings, 3 error |
 
 ---
 
@@ -1288,7 +1291,9 @@ Compare two workbooks and report differences. The first file comes from the glob
 | `-g, --file2` | path | Yes | — | Second file to compare against |
 | `--format` | string | No | markdown | `markdown` (human) or `json` (stable schema) |
 
-**Exit codes** (diff-tool convention): `0` identical, `1` differences found, `2` error.
+**Exit codes**: `0` identical, `1` differences found, `3` error (unreadable file, sheet filter
+matching neither workbook, ...) — the error goes to stderr with a `code:` line (see
+[Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
 
 **What is compared** (per sheet, refs in A1, row-major order):
 - **Changed cells** — value, formula text, and resolved style (`styleChanged` boolean). Formula cells compare by formula text; cached values are derived and ignored. Styles compare resolved formatting (style id lookup), so equal formatting under different ids is not a difference.
@@ -1375,8 +1380,9 @@ xl -f deliverable.xlsx lint && echo "safe to send"
   (Excel rebuilds it on save), or rebuild it. Both xl writers, in-memory and `--stream`, drop
   the source chain on every write that rewrites a worksheet, so xl output never carries one
 
-**Exit codes** (diff-tool convention): `0` no findings · `1` findings reported · `2` error
-(unreadable file, malformed core part).
+**Exit codes**: `0` no findings · `1` findings reported · `3` error (unreadable file, malformed
+core part) · `2` usage (no file, or a file given both ways) — errors go to stderr with a `code:`
+line (see [Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
 
 `xl lint` is read-only — it never repairs or rewrites the file. xl's own output always
 lints clean; use it as a pre-send self-check in agent pipelines that splice or post-process
@@ -1398,22 +1404,47 @@ Always include explicit references in output:
 | 2 | COGS     | $400K   |
 ```
 
-### Error Format
+### Errors, warnings and exit codes
+
+Results go to **stdout**; diagnostics go to **stderr**. On any failure stdout is empty, so a
+pipeline that captures stdout never has to parse an error out of a result. An error is rendered
+as today's `Error: <message>` line followed by indented, machine-stable fields:
 
 ```
-Error: <ErrorType>
-Location: <Context>
-Details: <Human-readable explanation>
-Suggestion: <How to fix>
+Error: <message>                  human text, unchanged from earlier releases
+  code: <CODE>                    stable SCREAMING_SNAKE code (see below)
+  did you mean: <a>, <b>          only when there are close candidates (sheet names, ...)
+  hint: <text>                    only when the error has an obvious next step
 ```
 
 Example:
 ```
-Error: CircularReference
-Location: B10
-Details: Formula =A10+B10 creates cycle: B10 → A10 → B10
-Suggestion: Use a different cell reference to break the cycle
+$ xl -f book.xlsx -s Dat view A1:B2
+Error: Sheet not found: Dat. Available: Data, Summary
+  code: SHEET_NOT_FOUND
+  did you mean: Data
+  hint: list sheets with `xl -f <file> sheets`
 ```
+
+Warnings are `Warning[<CODE>]: <message>` lines on stderr and never change the exit code — for
+instance `Warning[READER_WARNING]: MissingStylesXml` when the input has no `xl/styles.xml`.
+
+`code` is either the domain error's code (the SCREAMING_SNAKE of the `XLError` case: `SHEET_NOT_FOUND`,
+`INVALID_CELL_REF`, `FORMULA_ERROR`, `SECURITY_ERROR`, `SHEET_REQUIRED`, `IO_ERROR`, ...) or one of the
+CLI-only codes: `USAGE`, `UNKNOWN_VERB`, `OUTPUT_REQUIRED`, `UNSUPPORTED_IN_STREAM`,
+`BATCH_JSON_INVALID`, `BATCH_OP_UNKNOWN`, `BATCH_OP_INVALID`, `BATCH_OP_FAILED`,
+`RASTERIZER_UNAVAILABLE`, `IO_READ`, `IO_WRITE`, `RECALC_GATE`, `DIFFERENCES_FOUND`, `LINT_FINDINGS`,
+`AUDIT_FINDINGS`, `INTERNAL`. The exit code follows from the code alone:
+
+| exit | meaning | examples | file written? |
+|---|---|---|---|
+| `0` | ok | | as requested |
+| `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | `-o`: yes; `-i`: no |
+| `2` | usage — the command line is wrong | unknown verb, flag after the verb, `-o` missing, `-i` with `-o`, `--stream` with an unsupported verb or flag | no |
+| `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit | no |
+
+The same table is printed by `xl --help`. (Earlier releases exited `1` for usage and failures too,
+`2` for `diff`/`lint` runtime errors, and printed errors on stdout.)
 
 ---
 
