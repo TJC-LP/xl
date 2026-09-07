@@ -67,6 +67,9 @@ object extensions:
      *   val s1: Sheet = sheet.style("A1:B10", boldStyle)         // literal
      *   val s2: XLResult[Sheet] = sheet.style(userRef, boldStyle) // runtime
      *   }}}
+     *
+     * The literal-vs-dynamic specialization is invisible at the call site. For a reference computed
+     * at runtime prefer `Sheet.styleAt`, which spells the `XLResult` in its signature (GH-465).
      */
     @annotation.targetName("styleSheet")
     transparent inline def style(
@@ -204,6 +207,9 @@ object extensions:
      *   Range like "A1:B1"
      * @return
      *   `Sheet` for literal refs (compile-time validated), `XLResult[Sheet]` for runtime refs
+     *
+     * For a range computed at runtime prefer `Sheet.mergeAt`, which spells the `XLResult` in its
+     * signature (GH-465).
      */
     @annotation.targetName("mergeSheet")
     transparent inline def merge(inline rangeRef: String): Sheet | XLResult[Sheet] =

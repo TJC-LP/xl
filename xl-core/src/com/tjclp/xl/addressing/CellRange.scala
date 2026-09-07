@@ -168,26 +168,35 @@ final case class CellRange(
 
   // ----- Slicing (GH-465) -----
   // Row/column slices of the range as ranges of their own, so a loop can address "row i of the
-  // table" without interpolating refs. Slices keep the parent's anchors; the iterators are lazy
-  // (a full-column range yields its 1,048,576 row slices on demand, never materialized).
+  // table" without interpolating refs. Anchor flags are kept and re-pointed on the slices (the
+  // start flag on each slice's start corner, the end flag on its end corner); the iterators are
+  // lazy (a full-column range yields its 1,048,576 row slices on demand, never materialized).
 
   /**
    * The range's rows as one-row-high slices, top to bottom (lazy). `A1:B3` → `A1:B1, A2:B2, A3:B3`.
+   * Anchor flags are kept and re-pointed on each slice.
    */
   def rows: Iterator[CellRange] =
     (rowStart.index0 to rowEnd.index0).iterator.map(rowSlice)
 
   /**
    * The range's columns as one-column-wide slices, left to right (lazy). `A1:B3` → `A1:A3, B1:B3`.
+   * Anchor flags are kept and re-pointed on each slice.
    */
   def columns: Iterator[CellRange] =
     (colStart.index0 to colEnd.index0).iterator.map(columnSlice)
 
-  /** The `i`-th row slice, 0-based within the range; `None` outside `0 until height`. */
+  /**
+   * The `i`-th row slice, 0-based within the range; `None` outside `0 until height`. Anchor flags
+   * are kept and re-pointed on the slice.
+   */
   def row(i: Int): Option[CellRange] =
     if i < 0 || i >= height then None else Some(rowSlice(rowStart.index0 + i))
 
-  /** The `i`-th column slice, 0-based within the range; `None` outside `0 until width`. */
+  /**
+   * The `i`-th column slice, 0-based within the range; `None` outside `0 until width`. Anchor flags
+   * are kept and re-pointed on the slice.
+   */
   def column(i: Int): Option[CellRange] =
     if i < 0 || i >= width then None else Some(columnSlice(colStart.index0 + i))
 

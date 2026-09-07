@@ -136,9 +136,9 @@ Two rules keep this from ever surprising you:
    signatures so the `.map`/`.flatMap`/`.unsafe` step reads as intended instead of ambushing the
    chain: **`Sheet.named`** (since 0.18.0), and — since 0.20.0 — **`Workbook.named`**,
    **`sheet.putAt`**, **`sheet.styleAt`**, **`sheet.mergeAt`**, **`sheet.commentAt`**. Validation
-   is identical to the literal forms (Excel's sheet-name rules; the same `RefType` parser), and the
-   value path is the same code the literal `put` expands to, so inferred number formats and style
-   handling do not change.
+   follows the **literal** forms (Excel's sheet-name rules; the same `RefType` parser — corner
+   forms only, see below), and the value path is the same code the literal `put` expands to, so
+   inferred number formats and style handling do not change.
 
 ```scala
 // since 0.20.0 (fragment — the published 0.19.3 has Sheet.named only)
@@ -151,7 +151,7 @@ val sheet: XLResult[Sheet] =
     a <- s.putAt(cell, total)                         // InvalidCellRef on a bad ref
     b <- a.putAt("C2", BigDecimal("2.50"), currency)  // styled put, same codec merge as the literal
     c <- b.styleAt("A1:C1", header)                   // a cell styles one cell, a range every cell
-    d <- c.mergeAt("A1:C1")                           // InvalidRange for a single cell or garbage
+    d <- c.mergeAt("A1:C1")                           // InvalidRange for a single cell, A:A, $-anchors or garbage
     e <- d.commentAt(cell, Comment.plainText("computed"))
   yield e
 
@@ -163,6 +163,20 @@ The twins share one parsing contract: a range where a cell is required is
 `"Sales!A1"` is `Left(InvalidReference(…))` — qualify at the workbook instead
 (`wb.update(sheetName, _.putAt("A1", v))`); unparseable input is `Left(InvalidCellRef(…))` or
 `Left(InvalidRange(…))` naming the offending string.
+
+**Corner forms only.** The twins accept exactly what a *literal* would: `A1` cells and `A1:B2`
+two-corner ranges. They do **not** accept full-column/row spellings (`A:A`, `1:1`), `$` anchors
+(`$A$1:C3`), or a single cell for `mergeAt` — all of which the *dynamic* branch of the transparent
+`merge`/`style` (backed by `CellRange.parse`) happens to accept today. So `sheet.merge(s"$c:$c")`
+must not be rewritten as `mergeAt(s"$c:$c")` (that is `Left(InvalidRange)`); keep the existing
+parse-then-typed escape hatch for those spellings — it also spells the `XLResult`:
+
+```scala
+val s: String = s"$c:$c"                 // "D:D", "1:1", "$A$1:C3" and plain "A1" all parse
+s.asRange.map(sheet.merge)               // XLResult[Sheet] — String.asRange is CellRange.parse-backed
+s.asRange.map(r => sheet.style(r, header))
+cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse; no $ anchors — use asRange)
+```
 
 `Sheet.named` alone (0.18.0+):
 

@@ -154,9 +154,12 @@ so a chained `.put(...)` type-errors. Two rules:
    you write the script.
 2. **Computed strings use the explicit runtime twins**, which spell `XLResult` in their signatures:
    `Sheet.named` (0.18.0) and, since 0.20.0, `Workbook.named`, `sheet.putAt`, `sheet.styleAt`,
-   `sheet.mergeAt`, `sheet.commentAt`. Same validation and the same value/style path as the literal
-   forms (`putAt` reaches the very code the literal `put` expands to). Do not pass a computed string
-   to the transparent `put`/`style`/`merge`/`comment` — it compiles, but the return type flips.
+   `sheet.mergeAt`, `sheet.commentAt`. Same validation and the same value/style path as the
+   **literal** forms (`putAt` reaches the very code the literal `put` expands to). Do not pass a
+   computed string to the transparent `put`/`style`/`merge`/`comment` — it compiles, but the return
+   type flips. **Corner forms only**: the twins take `A1` and `A1:B2` — no `A:A`/`1:1`, no `$`
+   anchors, and `mergeAt` needs two corners (the *dynamic* transparent `merge`/`style` accept those
+   via `CellRange.parse`); for such spellings parse first: `s.asRange.map(sheet.merge)`.
 
 ```scala
 val lit = Sheet("Acquisitions").put("A1", 1)      // : Sheet (both literals, compile-time validated)
@@ -172,15 +175,21 @@ val ok: XLResult[Sheet] =
     a <- s.putAt(cell, 42)                          // Left(InvalidCellRef) on a bad ref; a range is rejected
     b <- a.putAt("C2", BigDecimal("2.5"), currency) // styled twin: same codec-format merge as the literal
     c <- b.styleAt("A1:C1", header)                 // cell → that cell; range → every cell in it
-    d <- c.mergeAt("A1:C1")                         // Left(InvalidRange) for a single cell or garbage
+    d <- c.mergeAt("A1:C1")                         // Left(InvalidRange) for a single cell, A:A, $-anchors, garbage
   yield d
 val wb: XLResult[Workbook] = Workbook.named("Data", "Summary") // Left(DuplicateSheet) on a repeat
+
+// Corner forms only: for "D:D", "1:1", "$A$1:C3" (or a one-cell merge) parse first, then use the typed overloads
+val col: String = "D"
+s"$col:$col".asRange.map(sheet.merge)            // XLResult[Sheet]; String.asRange is CellRange.parse-backed
+s"$col:$col".asRange.map(r => sheet.style(r, header))
+cell.asCell.map(r => sheet.put(r, 42))           // String.asCell: A1 cells (no $ anchors — use asRange)
 ```
 
 A sheet-qualified string (`"Sales!A1"`) is refused by every twin with `InvalidReference` — qualify
 at the workbook instead: `wb.update(sheetName, _.putAt("A1", v))`. On ≤0.19.x (twins absent),
 ascribe the union explicitly (`val s: XLResult[Sheet] = sheet.put(cell, 42)`) or parse once with
-`RefType.parse(cell)` and use the typed `ARef`/`CellRange` overloads.
+`s.asCell`/`s.asRange` (or `RefType.parse`) and use the typed `ARef`/`CellRange` overloads.
 
 **Prefer total navigation over interpolated refs in loops** — no Either at all:
 
@@ -417,7 +426,7 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 - **`Excel.write` does NOT recalculate** — freshly built `fx"…"` cells are written with no cached values, so Excel-before-recalc, openpyxl `data_only`, pandas, and previewers all show blanks. Since 0.13.0 the one-call fix is **`Excel.writeRecalculated(wb, path)`** ([#360](https://github.com/TJC-LP/xl/issues/360)): it recalculates, writes the cached workbook (even when some formulas fail — errors are data), and returns the `RecalcResult` (inspect `result.errors` / `result.isClean`). For fail-hard pipelines that must abort *before* anything lands on disk, keep the explicit `val result = wb.recalculate(); …; Excel.write(result.workbook, path)` pattern. On ≤0.12.x, `writeRecalculated` is unavailable — recalculate then write `result.workbook` (a single pass suffices on 0.12.5+).
 - **Percent postfix works since 0.13.0** ([#355](https://github.com/TJC-LP/xl/issues/355)): `fx"=A1*10%"`, `fx"=10%"`, `fx"=(1+5%)^2"` parse, evaluate (`10%` → exact `0.1`), broadcast over ranges, and print back byte-identically (never rewritten to `/100`). On ≤0.12.x the parser rejects `%` — write `/100` there. External-workbook refs (`[2]Book!A1`) parse and pin their Excel-written caches **since 0.12.6** ([#353](https://github.com/TJC-LP/xl/issues/353)): `recalculate()` preserves those cells verbatim and dependents compute from the caches (uncached external cells yield a per-cell error); on ≤0.12.5 they fail to parse entirely — compute from cached values there.
 - **Runtime column handles for `setColumnProperties`** ([#361](https://github.com/TJC-LP/xl/issues/361), since 0.13.0): fold over letters computed at runtime with `Column.parse("D")` (`Either[String, Column]`; trailing row digits tolerated, so `"D1"` works) — e.g. `Column.parse(letter).map(c => sheet.setColumnProperties(c, ColumnProperties(width = Some(w))))`. A runtime `RefType` also exposes `.col` (`RefType.parse(s).map(_.col)`). On ≤0.12.x only the compile-time `ref"D1".col` existed — set widths with literal refs per column there.
-- **A runtime string flips the return type of every transparent string form** — `Sheet(name)`, `Workbook(name, …)`, `sheet.put("A1", v)`, `sheet.style("A1:D1", st)`, `sheet.merge("A1:C1")`, `sheet.comment("A1", c)` ([#420](https://github.com/TJC-LP/xl/issues/420), [#465](https://github.com/TJC-LP/xl/issues/465)): they are `transparent inline` — a string literal validates at compile time and returns `Sheet`/`Workbook`, while the very same call with a `val` returns `XLResult[…]`, so a chained `.put(...)` type-errors with nothing at the call site to warn you. Never pass a computed string to those forms. Use the twins that spell `XLResult` in their signatures: **`Sheet.named(name)`** (0.18.0) and, since 0.20.0, **`Workbook.named(…)`** (`DuplicateSheet` on repeats), **`sheet.putAt(ref, v)`** / **`putAt(ref, v, style)`**, **`sheet.styleAt(ref, st)`** (cell or range), **`sheet.mergeAt(range)`**, **`sheet.commentAt(ref, c)`** — identical validation, same value/style path as the literal forms; a range where a cell is required is `InvalidCellRef`, a sheet-qualified ref is `InvalidReference` (qualify at the workbook: `wb.update(name, _.putAt(...))`). On ≤0.19.x, make the union explicit with an ascription: `val s: XLResult[Sheet] = sheet.put(cell, 42)`.
+- **A runtime string flips the return type of every transparent string form** — `Sheet(name)`, `Workbook(name, …)`, `sheet.put("A1", v)`, `sheet.style("A1:D1", st)`, `sheet.merge("A1:C1")`, `sheet.comment("A1", c)` ([#420](https://github.com/TJC-LP/xl/issues/420), [#465](https://github.com/TJC-LP/xl/issues/465)): they are `transparent inline` — a string literal validates at compile time and returns `Sheet`/`Workbook`, while the very same call with a `val` returns `XLResult[…]`, so a chained `.put(...)` type-errors with nothing at the call site to warn you. Do not rely on those forms for computed strings. Use the twins that spell `XLResult` in their signatures: **`Sheet.named(name)`** (0.18.0) and, since 0.20.0, **`Workbook.named(…)`** (`DuplicateSheet` on repeats), **`sheet.putAt(ref, v)`** / **`putAt(ref, v, style)`**, **`sheet.styleAt(ref, st)`** (cell or range), **`sheet.mergeAt(range)`**, **`sheet.commentAt(ref, c)`** — the validation of the **literal** forms and the same value/style path; a range where a cell is required is `InvalidCellRef`, a sheet-qualified ref is `InvalidReference` (qualify at the workbook: `wb.update(name, _.putAt(...))`). **The twins take corner forms only** (`A1`, `A1:B2`): no full-column/row `A:A`/`1:1`, no `$` anchors, and `mergeAt` needs two corners — spellings the *dynamic* transparent `merge`/`style` accept today via `CellRange.parse`, so do not rewrite `sheet.merge(s"$c:$c")` as `mergeAt`; parse first instead: `s.asRange.map(sheet.merge)` / `s.asRange.map(r => sheet.style(r, st))` / `s.asCell.map(r => sheet.put(r, v))` (`String.asRange` is `CellRange.parse`-backed, `asCell` is `ARef.parse`-backed). On ≤0.19.x, make the union explicit with an ascription: `val s: XLResult[Sheet] = sheet.put(cell, 42)`.
 
 ## Reference
 

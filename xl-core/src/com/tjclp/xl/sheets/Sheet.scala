@@ -775,6 +775,10 @@ final case class Sheet(
    * in it (`withRangeStyle`, creating blank styled cells where needed). A sheet-qualified ref is
    * `Left(InvalidReference(…))`; unparseable input is `Left(InvalidRange(…))` when it contains `:`
    * and `Left(InvalidCellRef(…))` otherwise.
+   *
+   * Corner forms only (`A1`, `A1:B2`), like the literal form: full-column/row spellings (`A:A`,
+   * `1:1`) and `$` anchors are rejected — unlike the dynamic branch of the transparent `style`
+   * (`CellRange.parse`-backed); parse those with `String.asRange` and call `style(range, style)`.
    */
   def styleAt(ref: String, style: CellStyle): XLResult[Sheet] =
     import com.tjclp.xl.sheets.styleSyntax.{withCellStyle, withRangeStyle}
@@ -788,6 +792,10 @@ final case class Sheet(
    * Requires a range: a single cell is `Left(InvalidRange(range, "expected a range like A1:B2"))`
    * (the literal form rejects it at compile time), a sheet-qualified ref is
    * `Left(InvalidReference(…))`, unparseable input is `Left(InvalidRange(range, reason))`.
+   *
+   * Corner forms only (`A1:B2`), like the literal form: full-column/row spellings (`A:A`, `1:1`),
+   * `$` anchors and one-cell merges are rejected — unlike the dynamic branch of the transparent
+   * `merge` (`CellRange.parse`-backed); parse those with `String.asRange` and call `merge(range)`.
    */
   def mergeAt(range: String): XLResult[Sheet] =
     Sheet.runtimeRange(range).map(merge)
