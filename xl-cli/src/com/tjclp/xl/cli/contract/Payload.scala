@@ -14,18 +14,32 @@ enum Payload derives CanEqual:
   case Text(text: String, saved: Option[String], written: Boolean)
 
   /**
-   * Verbs that already emit JSON (`view`/`filter`/`diff`/`lint` under their own `--format json`)
-   * pass their payload through unchanged; typed verbs (`sheets`, `names`, `bounds`, `eval`,
-   * `evala`, `functions`, `rasterizers`, `batch --dry-run`) build ujson directly.
+   * Typed verbs whose data holds only strings, booleans and small integers (`sheets`, `names`,
+   * `bounds`, `functions`, `rasterizers`, `batch --dry-run`, `describe`, `audit`, `deps`) build
+   * ujson directly.
    */
   case Json(value: ujson.Value)
+
+  /**
+   * Valid JSON text produced by a renderer of ours ([[com.tjclp.xl.cli.output.JsonRenderer]],
+   * `DiffCommands.renderJson`, …), spliced into the envelope AS TEXT — never through a ujson tree,
+   * whose numbers are `Double`-backed: `12345678901234567` would come out as `12345678901234568`.
+   * The pass-through verbs (`view`/`filter`/`diff`/`lint` with a JSON payload format) and the
+   * number-carrying typed verbs (`eval`, `evala`) use this so every number lexeme in `data` is
+   * exactly what the bare `--format json` output prints.
+   */
+  case Raw(json: String)
 
 object Payload:
 
   /** Prose with nothing committed (yet). */
   def text(text: String): Payload = Payload.Text(text, None, false)
 
-  /** The envelope's `data`. */
+  /**
+   * The envelope's `data` as a ujson tree — for callers that inspect it, not for rendering: a
+   * [[Payload.Raw]] read this way loses number precision, which is why [[Render.json]] splices its
+   * text instead.
+   */
   def toJson(payload: Payload): ujson.Value = payload match
     case Text(text, saved, written) =>
       ujson.Obj(
@@ -34,6 +48,7 @@ object Payload:
         "written" -> ujson.Bool(written)
       )
     case Json(value) => value
+    case Raw(json) => ujson.read(json)
 
   /**
    * Record what the staging step actually did: a committed run names its target; a run that
@@ -42,3 +57,4 @@ object Payload:
   def committed(payload: Payload, target: Option[String]): Payload = payload match
     case Text(text, _, _) => Text(text, target, target.isDefined)
     case json: Json => json
+    case raw: Raw => raw

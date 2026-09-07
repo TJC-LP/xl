@@ -134,7 +134,39 @@ class RenderSpec extends FunSuite:
       e("data"),
       ujson.Obj("text" -> ujson.Str(summary), "saved" -> ujson.Null, "written" -> ujson.False)
     )
-    assertEquals(rendered.stderr, s"Error: ${gate.message}")
+    assertEquals(
+      rendered.stderr,
+      "",
+      "a signal's report is its data: no Error: line, as in text mode"
+    )
+  }
+
+  test("json: a Raw payload is spliced as text — a 17-digit integer keeps every digit") {
+    val raw =
+      """{"sheet": "Data", "range": "A1:A1", "rows": [{"row": 1, "cells": [{"ref": "A1", "type": "number", "value": 12345678901234567, "formatted": "12345678901234567"}]}]}"""
+    val rendered = Render.json(Outcome.ok("view", Payload.Raw(raw)), version)
+    val e = envelope(rendered)
+    assertEquals(e.obj.keys.toList, sevenKeys)
+    assertEquals(e("verb"), ujson.Str("view"))
+    assert(rendered.stdout.contains("\"value\": 12345678901234567,"), rendered.stdout)
+    assert(!rendered.stdout.contains("12345678901234568"), rendered.stdout)
+    // the same indentation ujson.write would give, so the envelope is one uniformly indented document
+    assertEquals(rendered.stdout, ujson.reformat(rendered.stdout, indent = 2))
+    assert(rendered.stdout.contains("\n  \"data\": {\n    \"sheet\": \"Data\","), rendered.stdout)
+    assertEquals(rendered.stderr, "")
+  }
+
+  test("json: a Raw payload that is not JSON still yields a well-formed envelope (as a string)") {
+    val rendered = Render.json(Outcome.ok("view", Payload.Raw("not json {")), version)
+    val e = envelope(rendered)
+    assertEquals(e("data"), ujson.Str("not json {"))
+  }
+
+  test("text: a Raw payload prints its text verbatim") {
+    assertEquals(
+      Render.text(Outcome.ok("view", Payload.Raw("""{"a": 1}"""))).stdout,
+      """{"a": 1}"""
+    )
   }
 
   test("json: ok ⇔ error == null, and exitCode follows the code table for every code") {
