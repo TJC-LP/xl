@@ -1,0 +1,20 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+-o
+<DIR>/batch-out.xlsx
+batch
+-
+## stdin
+[{"op":"put","ref":"A5","value":"from stdin"},{"op":"putf","ref":"B5","value":"=B4*2"}]
+## exit
+0
+## stdout
+Applied 2 operations:
+  PUT A5 = Text(from stdin)
+  PUTF B5 = =B4*2
+Recalculated 1 formula
+Saved: <DIR>/batch-out.xlsx
+## stderr

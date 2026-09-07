@@ -1,0 +1,77 @@
+## args
+batch
+--help
+## exit
+0
+## stdout
+## stderr
+Usage: xl batch --dry-run [<operations>]
+
+Apply multiple operations atomically from JSON.
+
+USAGE:
+  xl -f in.xlsx -s Sheet1 -o out.xlsx batch ops.json
+  echo '[...]' | xl -f in.xlsx -s Sheet1 -o out.xlsx batch -
+
+OPERATIONS:
+  put       {"op": "put", "ref": "A1", "value": "Hello"}
+  putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}  (also accepts "formula";
+            optional "format" applies a number format to the formula cell(s))
+  style     {"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}
+  merge     {"op": "merge", "range": "A1:D1"}
+  unmerge   {"op": "unmerge", "range": "A1:D1"}
+  colwidth  {"op": "colwidth", "col": "A", "width": 15.5}
+  rowheight {"op": "rowheight", "row": 1, "height": 30}
+
+ROW/COLUMN GROUPING (GH-421):
+  group-rows    {"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}
+  group-cols    {"op": "group-cols", "cols": "E:H", "level": 1, "collapsed": false}
+  ungroup-rows  {"op": "ungroup-rows", "rows": "10:20"}
+  ungroup-cols  {"op": "ungroup-cols", "cols": "E:H"}
+                (collapsed hides the members and marks the summary row/col after the group)
+
+APPEARANCE & PRINT SETUP (GH-358):
+  sheet-view    {"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
+  tab-color     {"op": "tab-color", "color": "#1F4E79"}  (or {"clear": true};
+                colors: named, #hex, rgb(r,g,b), theme:accent1[:tint])
+  autofilter    {"op": "autofilter", "range": "A1:M29"}  (or {"clear": true} to strip
+                the sheet's autoFilter, even one preserved from the source file)
+  page-setup    {"op": "page-setup", "orientation": "landscape", "scale": 90,
+                "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
+  header-footer {"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N",
+                "oddHeader": ..., "evenHeader/evenFooter": ..., "firstHeader/firstFooter": ...,
+                "differentOddEven": true, "differentFirst": true}
+                (&L/&C/&R sections; &P page, &N total, &D date, &F file, &A sheet)
+
+CONDITIONAL FORMATTING (GH-324):
+  cf            {"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100",
+                "bold": true, "bg": "#FFC7CE", "fg": "#9C0006"}
+                (rule DSL and flags as `xl cf add`; priorities auto-assigned in order)
+
+STYLE PROPERTIES:
+  Font:      bold, italic, underline, fg, fontSize, fontName
+  Fill:      bg (background color, e.g., "#FFFF00" or "yellow")
+  Align:     align (left/center/right), valign (top/middle/bottom), wrap
+  Format:    numFormat (general/number/currency/percent/date/text)
+  Border:    border (all), borderTop/Right/Bottom/Left, borderColor
+  Mode:      replace (true=replace style, false=merge with existing)
+
+EXAMPLE:
+  [
+    {"op": "put", "ref": "A1", "value": "Revenue Report"},
+    {"op": "style", "range": "A1:D1", "bold": true, "bg": "#4472C4", "fg": "#FFFFFF", "align": "center"},
+    {"op": "merge", "range": "A1:D1"},
+    {"op": "colwidth", "col": "A", "width": 25},
+    {"op": "put", "ref": "A2", "value": "Q1"},
+    {"op": "put", "ref": "B2", "value": 1000},
+    {"op": "putf", "ref": "C2", "value": "=B2*1.1"}
+  ]
+
+Operations execute in order. Use "-" to read from stdin.
+Use --dry-run to validate JSON without writing.
+
+Options and flags:
+    --help
+        Display this help text.
+    --dry-run
+        Validate batch JSON without writing

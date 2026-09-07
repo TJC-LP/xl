@@ -1,0 +1,8 @@
+## args
+lint
+<DIR>/missing.xlsx
+## exit
+2
+## stdout
+Error: IO error: Failed to open file: <DIR>/missing.xlsx
+## stderr

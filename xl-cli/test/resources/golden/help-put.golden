@@ -1,0 +1,49 @@
+## args
+put
+--help
+## exit
+0
+## stdout
+## stderr
+Usage:
+    xl put --value <string> [--csv] [--no-detect] <ref>
+    xl put [--csv] [--no-detect] <ref> <value>...
+
+Write value(s) to cell or range.
+
+USAGE:
+  xl -f file.xlsx -s Sheet1 -o out.xlsx put <ref> <value>
+  xl -f file.xlsx -s Sheet1 -o out.xlsx put <range> <value>        # Fill all
+  xl -f file.xlsx -s Sheet1 -o out.xlsx put <range> <v1> <v2> ...  # Batch
+
+MODES:
+  Single:   put A1 100              → Write 100 to A1
+  Fill:     put A1:A10 "TBD"        → Fill range with same value
+  Batch:    put A1:C1 "X" "Y" "Z"   → Different value per cell (row-major)
+
+TYPE DETECTION:
+  Currency, percent, ISO dates, numbers, and booleans are detected automatically.
+  Use --no-detect to preserve every input as text.
+
+NEGATIVE NUMBERS:
+  Use --value flag (- is interpreted as flag prefix):
+  ❌ put A1 -100              → Error: unknown flag
+  ✅ put A1 --value "-100"    → Writes -100 to A1
+
+EXAMPLES:
+  xl -f f.xlsx -s S1 -o o.xlsx put A1 "Hello"
+  xl -f f.xlsx -s S1 -o o.xlsx put A1 2025-01-15
+  xl -f f.xlsx -s S1 -o o.xlsx put A1 2025-01-15 --no-detect
+  xl -f f.xlsx -s S1 -o o.xlsx put B2:B10 0              # Fill with zeros
+  xl -f f.xlsx -s S1 -o o.xlsx put A1:D1 "Q1" "Q2" "Q3" "Q4"
+  xl -f f.xlsx -s S1 -o o.xlsx put A1 --value "-500"     # Negative number
+
+Options and flags:
+    --help
+        Display this help text.
+    --value <string>, -v <string>
+        Cell value (use for negative numbers)
+    --csv
+        Split a single comma-separated value across the target range (count must match)
+    --no-detect
+        Preserve put values as text instead of detecting currency, percent, dates, or numbers

@@ -1,0 +1,683 @@
+## args
+--help
+## exit
+0
+## stdout
+## stderr
+Usage:
+    xl rasterizers
+    xl functions
+    xl new
+    xl --file <path> [--sheet <string>] [--max-size <integer>] diff
+    xl [--file <path>] lint
+    xl [--file <path>] [--sheet <string>] [--max-size <integer>] eval
+    xl [--file <path>] [--sheet <string>] [--max-size <integer>] evala
+    xl --file <path> [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] sheets
+    xl --file <path> [--max-size <integer>] names
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] bounds
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] view
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] cell
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] search
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] stats
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] filter
+    xl batch
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] put
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] putf
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] style
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] row
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] col
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] group-rows
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] group-cols
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] ungroup-rows
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] ungroup-cols
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] autofit
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] batch
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] recalc
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] import
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] import-md
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] add-sheet
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] remove-sheet
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] rename-sheet
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] move-sheet
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] copy-sheet
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] merge
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] unmerge
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] comment
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] remove-comment
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] clear
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] fill
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] sort
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] freeze
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] unfreeze
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] copy
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] name
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] insert-rows
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] delete-rows
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] insert-cols
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] delete-cols
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] chart
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] add-image
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] sheet-view
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] tab-color
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] autofilter
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] page-setup
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] header-footer
+    xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] cf
+
+LLM-friendly Excel operations (stateless)
+
+Options and flags:
+    --help
+        Display this help text.
+    --version, -v
+        Print the version number and exit.
+    --file <path>, -f <path>
+        Excel file to operate on (required)
+    --sheet <string>, -s <string>
+        Sheet to select (required for sheet-level operations)
+    --max-size <integer>
+        Max uncompressed size in MB for in-memory load (default: 100, 0 = unlimited). Use for large files when --stream is not supported.
+    --output <path>, -o <path>
+        Output file (required)
+    --in-place, -i
+        Edit file in-place (same as -o matching -f)
+    --backend <string>
+        XML backend: scalaxml (default, stable) or saxstax (faster)
+    --stream
+        Use O(1) memory streaming for large files (100k+ rows). Supports: search, stats, bounds, view (markdown/csv/json). 7-8x faster than in-memory.
+    --no-recalc
+        Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) leave every formula the edit invalidated UNCACHED rather than re-stamp a stale number, and report both counts. Use when the caches come from another engine.
+    --preserve-caches
+        Alias for --no-recalc
+    --strict
+        Exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0). With -o the output is written; with -i a strict failure leaves the input unchanged.
+
+Subcommands:
+    rasterizers
+        List available SVG-to-raster backends
+    functions
+        List supported Excel functions
+    new
+        Create a blank xlsx file
+    diff
+        Compare two workbooks and report cell, style, and structure differences.
+
+        USAGE:
+          xl -f old.xlsx diff -g new.xlsx
+          xl -f old.xlsx -s Sheet1 diff -g new.xlsx          # Single sheet only
+          xl -f old.xlsx diff -g new.xlsx --format json      # Stable JSON schema
+
+        COMPARES (per sheet, refs in A1):
+          - Changed cells: value, formula text, resolved style (styleChanged flag)
+          - Added / removed cells
+          - Sheets added / removed
+          - Merged-range, comment, and hyperlink deltas
+
+        NOTES:
+          - Formula cells compare by formula text (cached values are derived, ignored)
+          - Styles compare RESOLVED formatting, not raw style ids
+          - Both files load in memory (--max-size applies to each)
+
+        EXIT CODES (diff-tool convention):
+          0 = files are identical
+          1 = differences found
+          2 = error (unreadable file, bad sheet filter, ...)
+
+        Docs: docs/reference/cli.md (diff section)
+
+        EXAMPLES:
+          xl -f v1.xlsx diff -g v2.xlsx
+          xl -f v1.xlsx diff -g v2.xlsx --format json | jq '.sheets[0].changed'
+          xl -f v1.xlsx diff -g v2.xlsx && echo "no changes\"
+    lint
+        Validate workbook package structure against the Excel-repair classes.
+
+        Lints the RAW ZIP PARTS (never the parsed model — a full load would repair
+        the very structure being checked). Flags what Excel repairs loudly but every
+        lenient reader accepts silently:
+          - Child-element order in xl/workbook.xml (CT_Workbook) and each worksheet
+            (CT_Worksheet) vs the ECMA-376 schema sequence
+          - r:id references (sheet, externalReference, pivotCache, drawing,
+            legacyDrawing, hyperlink, tablePart, ...) that do not resolve in the
+            paired .rels, resolve to a relationship of the wrong type, or target a
+            part missing from the package
+          - ref/sqref/dimension tokens past row 1048576 or column XFD
+          - data-table records whose grid was torn by an unguarded edit, and
+            uncached table interiors in a calcMode="autoNoTable" book (they open
+            BLANK — refresh them with `xl recalc --tables`)
+          - formula text stored with a leading '=' inside <f> (non-spec; strict
+            readers misread it — re-writing the file with xl heals it)
+          - formulas / defined names referencing external workbook [N] with no
+            N-th <externalReference> entry (the cross-workbook sheet-transplant
+            class — Excel repairs the file by removing every such formula)
+          - defined names Excel refuses: same-scope names colliding under its
+            case/width/kana-insensitive comparison, over-long names, whitespace
+            or control characters (Excel repairs by removing the named range)
+          - xl/calcChain.xml entries naming a cell that holds no formula or a
+            sheet id the workbook does not declare (Excel repairs the file on
+            open; drop the part with its Override and Relationship, or rebuild it)
+
+        USAGE:
+          xl lint report.xlsx
+          xl -f report.xlsx lint                     # Equivalent flag form
+          xl lint report.xlsx --format json          # Stable machine-readable schema
+
+        FINDING CATEGORIES:
+          child-order | unresolved-rel-id | wrong-rel-type | missing-part |
+          missing-content-type | ref-out-of-bounds | data-table-torn |
+          data-table-unseeded | formula-leading-equals | external-ref-dangling |
+          defined-name-invalid | calc-chain-stale
+
+        EXIT CODES:
+          0 = no findings (package structure is clean)
+          1 = findings reported
+          2 = error (unreadable file, missing/malformed core part, ...)
+
+        Docs: xl lint is read-only; it never repairs or rewrites the file.
+
+        EXAMPLES:
+          xl lint deliverable.xlsx && echo "safe to send"
+          xl lint deliverable.xlsx --format json | jq '.findings'
+    eval
+        Evaluate formula without modifying sheet
+    evala
+        Evaluate array formula and display result grid
+    sheets
+        Sheet operations: list, hide, show
+    names
+        List defined names (named ranges)
+    bounds
+        Show used range (instant from dimension element, --scan for accurate scan)
+    view
+        View range in multiple formats (table, JSON, image, PDF).
+
+        USAGE:
+          xl -f file.xlsx -s Sheet1 view A1:D10
+          xl -f file.xlsx view "Sheet1!A1:D10"    # Qualified ref (no -s needed)
+
+        FORMATS:
+          markdown (default), json, csv, html, svg, png, jpeg, webp, pdf
+
+        OUTPUT FLAGS:
+          --format <fmt>      Output format
+          --limit <n>         Max rows to display (default: 50; 0 = no limit).
+                              When output is clipped, markdown appends a "… showing X of Y rows"
+                              trailer; json adds "truncated"/"totalRows" fields (with --stream the
+                              notice goes to stderr instead — streaming json stays a bare array);
+                              csv/svg note on stderr; html notes on stderr and appends an HTML
+                              comment; raster formats append the notice to the "Exported:" line.
+          --formulas          Show formulas instead of values
+          --eval              Evaluate formulas (compute live values)
+          --strict            Fail on formula evaluation errors (use with --eval)
+          --skip-empty        Skip empty cells/rows
+          --skip-hidden       Omit hidden rows/columns. Default renders them (an explicitly
+                              requested range never silently loses cells) with a marker:
+                              markdown appends a "note: …" trailer, csv notes on stderr, json
+                              carries "hiddenRows"/"hiddenCols". With --skip-hidden the same
+                              marker names what was dropped. Data formats only — html/svg/raster
+                              mirror Excel's display and always omit hidden lines.
+          --show-labels       Include row/column headers (A, B, C / 1, 2, 3)
+          --header-row <n>    Use row N as JSON keys (1-based)
+
+        RASTER FLAGS (png/jpeg/webp/pdf):
+          --raster-output <path>  Output file (required for raster formats)
+          --dpi <n>               Resolution (default: 144)
+          --quality <n>           JPEG quality 1-100 (default: 90)
+          --rasterizer <name>     Force: batik, cairosvg, rsvg-convert, resvg, imagemagick
+
+        EXAMPLES:
+          xl -f data.xlsx -s Sheet1 view A1:D10                    # Markdown table
+          xl -f data.xlsx -s Sheet1 view A1:D10 --format json      # JSON array
+          xl -f data.xlsx -s Sheet1 view A1:D10 --eval             # Computed values
+          xl -f data.xlsx -s Sheet1 view A1:D10 --eval --strict    # Fail on eval errors
+          xl -f data.xlsx -s Sheet1 view A1:D10 --formulas         # Show formulas
+          xl -f data.xlsx -s Sheet1 view A1:D10 --format png --raster-output chart.png
+    cell
+        Get cell details
+    search
+        Search for cells (all sheets by default)
+    stats
+        Calculate statistics for numeric values in range
+    filter
+        Filter rows of the used range with a --where predicate (read-only).
+
+        USAGE:
+          xl -f data.xlsx -s Sheet1 filter --where "B > 100"
+          xl -f data.xlsx -s Sheet1 filter --where "Price > 100" --header
+          xl -f data.xlsx -s Sheet1 filter --where "A LIKE 'Widget%'" --columns A,C:E --format csv
+
+        PREDICATE GRAMMAR (keywords case-insensitive):
+          Comparisons:  B > 100, A = 'Widget', C != TRUE   (= != <> > >= < <=)
+          Wildcards:    A LIKE 'Widget%'                   (% matches any run)
+          Ranges:       B BETWEEN 10 AND 100               (inclusive)
+          Sets:         A IN ('x', 'y', 'z')
+          Blanks:       A IS EMPTY / A IS NOT EMPTY
+          Logic:        AND, OR, NOT, parentheses          (NOT > AND > OR)
+
+        SEMANTICS:
+          - Columns are letters (A, B) or header names with --header (first used row;
+            header names win over letters on collision, matched case-insensitively)
+          - Numbers compare numerically, strings case-insensitively, booleans to TRUE/FALSE
+          - Type mismatch (e.g. text cell vs number literal) = row doesn't match, never an error
+          - Formula cells compare by cached value
+
+        OPTIONS:
+          --where <pred>      Filter predicate (required)
+          --columns <spec>    Output columns, e.g. A,C:E (default: all used columns)
+          --limit <n>         Max rows to display (default: 50)
+          --format <fmt>      markdown (default), csv, json
+          --header            First used row holds column names (excluded from matching)
+
+        NOTES:
+          - Read-only: does not modify the file (no -o needed)
+          - Loads the workbook in memory; --stream is not supported (use --max-size for large files)
+          - Output rows keep their original row numbers
+
+        Docs: docs/reference/cli.md (filter section)
+
+        EXAMPLES:
+          xl -f sales.xlsx -s Q1 filter --where "Revenue > 10000 AND Region = 'EMEA'" --header
+          xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
+          xl -f data.xlsx -s Sheet1 filter --where "A IS NOT EMPTY" --columns A:C --limit 200
+    batch
+        Apply multiple operations atomically from JSON.
+
+        USAGE:
+          xl -f in.xlsx -s Sheet1 -o out.xlsx batch ops.json
+          echo '[...]' | xl -f in.xlsx -s Sheet1 -o out.xlsx batch -
+
+        OPERATIONS:
+          put       {"op": "put", "ref": "A1", "value": "Hello"}
+          putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}  (also accepts "formula";
+                    optional "format" applies a number format to the formula cell(s))
+          style     {"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}
+          merge     {"op": "merge", "range": "A1:D1"}
+          unmerge   {"op": "unmerge", "range": "A1:D1"}
+          colwidth  {"op": "colwidth", "col": "A", "width": 15.5}
+          rowheight {"op": "rowheight", "row": 1, "height": 30}
+
+        ROW/COLUMN GROUPING (GH-421):
+          group-rows    {"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}
+          group-cols    {"op": "group-cols", "cols": "E:H", "level": 1, "collapsed": false}
+          ungroup-rows  {"op": "ungroup-rows", "rows": "10:20"}
+          ungroup-cols  {"op": "ungroup-cols", "cols": "E:H"}
+                        (collapsed hides the members and marks the summary row/col after the group)
+
+        APPEARANCE & PRINT SETUP (GH-358):
+          sheet-view    {"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
+          tab-color     {"op": "tab-color", "color": "#1F4E79"}  (or {"clear": true};
+                        colors: named, #hex, rgb(r,g,b), theme:accent1[:tint])
+          autofilter    {"op": "autofilter", "range": "A1:M29"}  (or {"clear": true} to strip
+                        the sheet's autoFilter, even one preserved from the source file)
+          page-setup    {"op": "page-setup", "orientation": "landscape", "scale": 90,
+                        "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
+          header-footer {"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N",
+                        "oddHeader": ..., "evenHeader/evenFooter": ..., "firstHeader/firstFooter": ...,
+                        "differentOddEven": true, "differentFirst": true}
+                        (&L/&C/&R sections; &P page, &N total, &D date, &F file, &A sheet)
+
+        CONDITIONAL FORMATTING (GH-324):
+          cf            {"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100",
+                        "bold": true, "bg": "#FFC7CE", "fg": "#9C0006"}
+                        (rule DSL and flags as `xl cf add`; priorities auto-assigned in order)
+
+        STYLE PROPERTIES:
+          Font:      bold, italic, underline, fg, fontSize, fontName
+          Fill:      bg (background color, e.g., "#FFFF00" or "yellow")
+          Align:     align (left/center/right), valign (top/middle/bottom), wrap
+          Format:    numFormat (general/number/currency/percent/date/text)
+          Border:    border (all), borderTop/Right/Bottom/Left, borderColor
+          Mode:      replace (true=replace style, false=merge with existing)
+
+        EXAMPLE:
+          [
+            {"op": "put", "ref": "A1", "value": "Revenue Report"},
+            {"op": "style", "range": "A1:D1", "bold": true, "bg": "#4472C4", "fg": "#FFFFFF", "align": "center"},
+            {"op": "merge", "range": "A1:D1"},
+            {"op": "colwidth", "col": "A", "width": 25},
+            {"op": "put", "ref": "A2", "value": "Q1"},
+            {"op": "put", "ref": "B2", "value": 1000},
+            {"op": "putf", "ref": "C2", "value": "=B2*1.1"}
+          ]
+
+        Operations execute in order. Use "-" to read from stdin.
+        Use --dry-run to validate JSON without writing.
+    put
+        Write value(s) to cell or range.
+
+        USAGE:
+          xl -f file.xlsx -s Sheet1 -o out.xlsx put <ref> <value>
+          xl -f file.xlsx -s Sheet1 -o out.xlsx put <range> <value>        # Fill all
+          xl -f file.xlsx -s Sheet1 -o out.xlsx put <range> <v1> <v2> ...  # Batch
+
+        MODES:
+          Single:   put A1 100              → Write 100 to A1
+          Fill:     put A1:A10 "TBD"        → Fill range with same value
+          Batch:    put A1:C1 "X" "Y" "Z"   → Different value per cell (row-major)
+
+        TYPE DETECTION:
+          Currency, percent, ISO dates, numbers, and booleans are detected automatically.
+          Use --no-detect to preserve every input as text.
+
+        NEGATIVE NUMBERS:
+          Use --value flag (- is interpreted as flag prefix):
+          ❌ put A1 -100              → Error: unknown flag
+          ✅ put A1 --value "-100"    → Writes -100 to A1
+
+        EXAMPLES:
+          xl -f f.xlsx -s S1 -o o.xlsx put A1 "Hello"
+          xl -f f.xlsx -s S1 -o o.xlsx put A1 2025-01-15
+          xl -f f.xlsx -s S1 -o o.xlsx put A1 2025-01-15 --no-detect
+          xl -f f.xlsx -s S1 -o o.xlsx put B2:B10 0              # Fill with zeros
+          xl -f f.xlsx -s S1 -o o.xlsx put A1:D1 "Q1" "Q2" "Q3" "Q4"
+          xl -f f.xlsx -s S1 -o o.xlsx put A1 --value "-500"     # Negative number
+    putf
+        Write formula(s) to cell or range with Excel-style dragging.
+
+        USAGE:
+          xl -f file.xlsx -s Sheet1 -o out.xlsx putf <ref> <formula>
+          xl -f file.xlsx -s Sheet1 -o out.xlsx putf <range> <formula>     # Drag
+          xl -f file.xlsx -s Sheet1 -o out.xlsx putf <range> <f1> <f2> ... # Batch
+
+        FORMULA DRAGGING:
+          Single formula + range → references shift automatically:
+          putf B2:B10 "=A2*1.1"  →  B2: =A2*1.1, B3: =A3*1.1, B4: =A4*1.1 ...
+
+        ANCHOR MODES ($ controls shifting):
+          $A$1   Absolute (never shifts)
+          $A1    Column absolute, row relative
+          A$1    Column relative, row absolute
+          A1     Fully relative (shifts both ways)
+
+        RUNNING TOTALS:
+          putf C2:C10 "=SUM(\$B\$2:B2)"  →  C2: =SUM($B$2:B2), C3: =SUM($B$2:B3) ...
+
+        BATCH (explicit, no dragging):
+          putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3"  → Formulas applied as-is
+
+        EXAMPLES:
+          xl -f f.xlsx -s S1 -o o.xlsx putf C1 "=A1+B1"
+          xl -f f.xlsx -s S1 -o o.xlsx putf B2:B100 "=A2*1.1"
+          xl -f f.xlsx -s S1 -o o.xlsx putf C2:C10 "=SUM(\$A\$1:A2)"
+          xl -f f.xlsx -s S1 -o o.xlsx putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3\"
+    style
+        Apply formatting to cells. Styles merge by default (use --replace to overwrite).
+
+        USAGE:
+          xl -f file.xlsx -s Sheet1 -o out.xlsx style A1:D1 --bold --bg yellow
+
+        FONT:
+          --bold, --italic, --underline
+          --font-size <pt>    Font size in points
+          --font-name <name>  Font family (e.g., "Arial", "Calibri")
+          --fg <color>        Text color
+
+        FILL:
+          --bg <color>        Background color
+
+        ALIGNMENT:
+          --align <left|center|right>
+          --valign <top|middle|bottom>
+          --wrap              Enable text wrapping
+
+        NUMBER FORMAT:
+          --format <general|number|currency|percent|date|text>
+
+        BORDERS:
+          --border <none|thin|medium|thick>      All sides
+          --border-top/right/bottom/left <style> Individual sides
+          --border-color <color>                 Border color
+
+        COLORS:
+          Named: red, blue, navy, yellow, green, white, black, orange, purple, gray
+          Hex: #FF6600, #4472C4
+          RGB: rgb(100,150,200)
+
+        EXAMPLES:
+          xl -f f.xlsx -s S1 -o o.xlsx style A1:E1 --bold --bg navy --fg white --align center
+          xl -f f.xlsx -s S1 -o o.xlsx style B2:B100 --format currency
+          xl -f f.xlsx -s S1 -o o.xlsx style A1 --border thin --border-color black
+          xl -f f.xlsx -s S1 -o o.xlsx style C1:C10 --replace --bg yellow  # Replace, don't merge
+    row
+        Set row properties (height, hide/show)
+    col
+        Set column properties (width, hide/show, auto-fit). Supports ranges like A:F
+    group-rows
+        Group rows into a collapsible outline (e.g., 10:20)
+    group-cols
+        Group columns into a collapsible outline (e.g., E:H)
+    ungroup-rows
+        Remove outline grouping from rows (rows hidden by a collapse stay hidden; use `row <n> --show`)
+    ungroup-cols
+        Remove outline grouping from columns (columns hidden by a collapse stay hidden; use `col <letter> --show`)
+    autofit
+        Auto-fit column widths based on content
+    batch
+        Apply multiple operations atomically from JSON.
+
+        USAGE:
+          xl -f in.xlsx -s Sheet1 -o out.xlsx batch ops.json
+          echo '[...]' | xl -f in.xlsx -s Sheet1 -o out.xlsx batch -
+
+        OPERATIONS:
+          put       {"op": "put", "ref": "A1", "value": "Hello"}
+          putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}  (also accepts "formula";
+                    optional "format" applies a number format to the formula cell(s))
+          style     {"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}
+          merge     {"op": "merge", "range": "A1:D1"}
+          unmerge   {"op": "unmerge", "range": "A1:D1"}
+          colwidth  {"op": "colwidth", "col": "A", "width": 15.5}
+          rowheight {"op": "rowheight", "row": 1, "height": 30}
+
+        ROW/COLUMN GROUPING (GH-421):
+          group-rows    {"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}
+          group-cols    {"op": "group-cols", "cols": "E:H", "level": 1, "collapsed": false}
+          ungroup-rows  {"op": "ungroup-rows", "rows": "10:20"}
+          ungroup-cols  {"op": "ungroup-cols", "cols": "E:H"}
+                        (collapsed hides the members and marks the summary row/col after the group)
+
+        APPEARANCE & PRINT SETUP (GH-358):
+          sheet-view    {"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
+          tab-color     {"op": "tab-color", "color": "#1F4E79"}  (or {"clear": true};
+                        colors: named, #hex, rgb(r,g,b), theme:accent1[:tint])
+          autofilter    {"op": "autofilter", "range": "A1:M29"}  (or {"clear": true} to strip
+                        the sheet's autoFilter, even one preserved from the source file)
+          page-setup    {"op": "page-setup", "orientation": "landscape", "scale": 90,
+                        "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
+          header-footer {"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N",
+                        "oddHeader": ..., "evenHeader/evenFooter": ..., "firstHeader/firstFooter": ...,
+                        "differentOddEven": true, "differentFirst": true}
+                        (&L/&C/&R sections; &P page, &N total, &D date, &F file, &A sheet)
+
+        CONDITIONAL FORMATTING (GH-324):
+          cf            {"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100",
+                        "bold": true, "bg": "#FFC7CE", "fg": "#9C0006"}
+                        (rule DSL and flags as `xl cf add`; priorities auto-assigned in order)
+
+        STYLE PROPERTIES:
+          Font:      bold, italic, underline, fg, fontSize, fontName
+          Fill:      bg (background color, e.g., "#FFFF00" or "yellow")
+          Align:     align (left/center/right), valign (top/middle/bottom), wrap
+          Format:    numFormat (general/number/currency/percent/date/text)
+          Border:    border (all), borderTop/Right/Bottom/Left, borderColor
+          Mode:      replace (true=replace style, false=merge with existing)
+
+        EXAMPLE:
+          [
+            {"op": "put", "ref": "A1", "value": "Revenue Report"},
+            {"op": "style", "range": "A1:D1", "bold": true, "bg": "#4472C4", "fg": "#FFFFFF", "align": "center"},
+            {"op": "merge", "range": "A1:D1"},
+            {"op": "colwidth", "col": "A", "width": 25},
+            {"op": "put", "ref": "A2", "value": "Q1"},
+            {"op": "put", "ref": "B2", "value": 1000},
+            {"op": "putf", "ref": "C2", "value": "=B2*1.1"}
+          ]
+
+        Operations execute in order. Use "-" to read from stdin.
+        Use --dry-run to validate JSON without writing.
+    recalc
+        Recalculate all formulas and rewrite cached values.
+
+        Runs one whole-workbook recalculation and writes the result, so every formula
+        cell carries a cached value (<v>) that cached-value readers see (pandas,
+        openpyxl data_only=True, previewers, Excel before a manual recalc).
+
+        Formula errors (e.g. circular references) are data conditions, not tool
+        failures: affected cells are left uncached, the file is still written, the
+        errors are listed in the summary, and the exit code is 0. Pass the global
+        --strict flag (before the verb) to exit 1 instead when the summary carries
+        formula errors, iterative non-convergence, or --tables seed warnings.
+
+        Data-table records (<f t="dataTable">) keep their PINNED caches by default —
+        xl never evaluates TABLE(...) implicitly. Pass --tables to also replay each
+        table's what-if substitution and refresh its interior caches; that is what an
+        autoNoTable book needs, since Excel never recomputes tables on open.
+
+        USAGE:
+          xl -f in.xlsx -o out.xlsx recalc
+          xl -f in.xlsx -i recalc
+          xl -f in.xlsx -o out.xlsx recalc --tables       # Also seed data-table interiors
+          xl -f in.xlsx -o out.xlsx recalc --parallel 4   # Independent regions on 4 threads
+    import
+        Import CSV data with automatic type detection.
+
+        USAGE:
+          xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1
+          xl -f file.xlsx -o out.xlsx import data.csv --new-sheet "Data"
+
+        OPTIONS:
+          --delimiter <char>      Field separator (default: ,)
+          --encoding <enc>        Input encoding (default: UTF-8)
+          --skip-header           Skip first row (treat as header, do not import)
+          --no-type-inference     Treat all values as text
+          --new-sheet <name>      Create new sheet for imported data
+
+        TYPE INFERENCE:
+          Numbers:   100, 29.99, -5.5 → Number type
+          Booleans:  true, false (case-insensitive) → Boolean type
+          Dates:     2024-01-15 (ISO 8601 only) → DateTime type
+          Text:      Everything else
+
+        LIMITATIONS:
+          - Entire CSV loaded into memory (not streamed)
+          - Recommended: <50k rows for optimal performance
+          - Date formats: Only ISO 8601 (YYYY-MM-DD) supported
+
+        EXAMPLES:
+          xl -f f.xlsx -s S1 -o o.xlsx import data.csv A1
+          xl -f f.xlsx -o o.xlsx import data.csv --new-sheet "Imported"
+          xl -f f.xlsx -s S1 -o o.xlsx import data.csv A1 --delimiter ";" --skip-header
+          xl -f f.xlsx -s S1 -o o.xlsx import data.csv A1 --no-type-inference
+    import-md
+        Import a GFM markdown table with automatic type detection.
+
+        USAGE:
+          xl -f file.xlsx -s Sheet1 -o out.xlsx import-md table.md --start A1
+          cat table.md | xl -f file.xlsx -s Sheet1 -o out.xlsx import-md -
+          xl -f file.xlsx -o out.xlsx import-md table.md --new-sheet "Data"
+
+        OPTIONS:
+          --start <ref>           Top-left cell for the table (default: A1)
+          --skip-header           Skip the table's header row (do not import it)
+          --no-type-inference     Treat all values as text
+          --new-sheet <name>      Create new sheet for imported data
+
+        FORMAT:
+          GFM pipe tables: header row, delimiter row (|---|---|), body rows.
+          Outer pipes optional; \| inside a cell is a literal pipe; cells are trimmed.
+          Alignment markers (:--- left, :---: center, ---: right) become cell alignment.
+
+        TYPE DETECTION (same smart detection as batch put):
+          Currency:  $1,234.56 → Number + Currency format
+          Percent:   45.5% → 0.455 + Percent format
+          Dates:     2025-01-15 (ISO 8601) → DateTime + Date format
+          Numbers:   100, 29.99, -5.5 | Booleans: true/false | Text: everything else
+
+        NOTES:
+          - The first table found in the input is imported (preamble text is skipped)
+          - Input is read as UTF-8; entire table loads in memory
+          - Use "-" to read from stdin
+
+        Docs: docs/reference/cli.md (import-md section)
+
+        EXAMPLES:
+          xl -f f.xlsx -s S1 -o o.xlsx import-md table.md
+          xl -f f.xlsx -s S1 -o o.xlsx import-md table.md --start C5 --skip-header
+          echo "| A | B |\n|---|---|\n| 1 | 2 |" | xl -f f.xlsx -s S1 -o o.xlsx import-md -
+    add-sheet
+        Add new empty sheet to workbook
+    remove-sheet
+        Remove sheet from workbook
+    rename-sheet
+        Rename a sheet
+    move-sheet
+        Move sheet to new position
+    copy-sheet
+        Copy sheet to new name
+    merge
+        Merge cells in range
+    unmerge
+        Unmerge cells in range
+    comment
+        Add comment to cell
+    remove-comment
+        Remove comment from cell
+    clear
+        Clear cell contents, styles, or comments from range
+    fill
+        Fill cells with source value/formula (Excel Ctrl+D/Ctrl+R)
+    sort
+        Sort rows in range by one or more columns.
+
+        USAGE:
+          xl -f file.xlsx -s Sheet1 -o out.xlsx sort <range> --by <col> [options]
+
+        OPTIONS:
+          --by <col>        Primary sort column (required)
+          --then-by <col>   Secondary sort column (repeatable)
+          --desc            Sort descending (default: ascending)
+          --numeric         Force numeric comparison ("10" > "9")
+          --header          First row is header (exclude from sort)
+
+        BEHAVIOR:
+          - Empty cells sort last
+          - Formulas use cached value for sorting
+          - Booleans sort as 0 (FALSE) / 1 (TRUE)
+          - Rows move together (columns outside range preserved)
+
+        EXAMPLES:
+          xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B
+          xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B --desc --numeric
+          xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B --then-by C --header
+    freeze
+        Freeze panes at cell reference (rows above and columns left are locked)
+    unfreeze
+        Remove freeze panes
+    copy
+        Copy range to another location (with formula adjustment)
+    name
+        Manage named ranges: add, rm
+    insert-rows
+        Insert rows (shifts cells & rewrites formulas)
+    delete-rows
+        Delete rows (shifts cells & rewrites formulas; #REF! on loss)
+    insert-cols
+        Insert columns (shifts cells & rewrites formulas)
+    delete-cols
+        Delete columns (shifts cells & rewrites formulas; #REF! on loss)
+    chart
+        Chart operations: add
+    add-image
+        Embed an image (png/jpeg/gif/bmp/tiff/emf/wmf)
+    sheet-view
+        Set sheet view options: gridlines, zoom, tab selection (requires -o)
+    tab-color
+        Set the sheet tab color: named, #hex, rgb(r,g,b), or theme:accent1[:tint] (requires -o). --clear removes a modeled color (a color preserved from the source XML is not stripped).
+    autofilter
+        Set the sheet-level autoFilter range (filter dropdowns on the header row) or remove it (requires -o). --clear strips the autoFilter even when it was preserved from the source file; existing filter criteria ride along when only the range changes.
+    page-setup
+        Set print page setup: orientation, scale, fit-to-page (requires -o)
+    header-footer
+        Set print header/footer text with Excel codes: &L/&C/&R sections, &P page, &N total, &D date, &F file, &A sheet (requires -o)
+    cf
+        Conditional formatting: add, list

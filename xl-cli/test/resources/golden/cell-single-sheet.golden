@@ -1,0 +1,10 @@
+## args
+-f
+<DIR>/single.xlsx
+cell
+A1
+## exit
+1
+## stdout
+Error: cell with unqualified ref 'A1' requires --sheet or qualified ref (e.g., Sheet1!A1). Available sheets: Sheet1
+## stderr

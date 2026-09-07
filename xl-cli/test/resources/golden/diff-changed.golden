@@ -1,0 +1,18 @@
+## args
+-f
+<DIR>/simple.xlsx
+diff
+-g
+<DIR>/changed.xlsx
+## exit
+1
+## stdout
+Comparing <DIR>/simple.xlsx vs <DIR>/changed.xlsx
+
+## Data
+
+Changed (1):
+  B1: 10 -> 11
+
+Summary: 1 changed, 0 added, 0 removed cell(s) across 1 sheet(s)
+## stderr

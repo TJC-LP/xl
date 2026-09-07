@@ -38,6 +38,7 @@ import com.tjclp.xl.sheets.styleSyntax
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.cli.{
+  CliIO,
   FillDirection,
   SortDirection,
   SortKey,
@@ -1264,6 +1265,8 @@ object WriteCommands:
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer
+   * @param stdin
+   *   Where `source == "-"` reads from (the CLI passes its `CliIO.stdin`)
    */
   def batch(
     wb: Workbook,
@@ -1272,9 +1275,10 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    stdin: IO[String] = CliIO.system.stdin
   ): IO[String] =
-    BatchParser.readBatchInput(source).flatMap { input =>
+    BatchParser.readBatchInput(source, stdin).flatMap { input =>
       BatchParser.parseBatchOperations(input).flatMap { result =>
         // Print warnings to stderr within IO monad
         IO(result.warnings.foreach(System.err.println)) *>

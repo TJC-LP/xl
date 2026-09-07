@@ -1,0 +1,46 @@
+## args
+-f
+<DIR>/simple.xlsx
+diff
+-g
+<DIR>/changed.xlsx
+--format
+json
+## exit
+1
+## stdout
+{
+  "identical": false,
+  "sheetsAdded": [],
+  "sheetsRemoved": [],
+  "sheets": [
+    {
+      "name": "Data",
+      "added": [],
+      "removed": [],
+      "changed": [
+        {
+          "ref": "B1",
+          "before": {
+            "value": "10",
+            "formula": null
+          },
+          "after": {
+            "value": "11",
+            "formula": null
+          },
+          "styleChanged": false
+        }
+      ],
+      "mergesAdded": [],
+      "mergesRemoved": [],
+      "commentsAdded": [],
+      "commentsRemoved": [],
+      "commentsChanged": [],
+      "hyperlinksAdded": [],
+      "hyperlinksRemoved": [],
+      "hyperlinksChanged": []
+    }
+  ]
+}
+## stderr

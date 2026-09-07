@@ -1,0 +1,17 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+-o
+<DIR>/putf-bad.xlsx
+putf
+A5
+=SUM(
+## exit
+1
+## stdout
+Error: =SUM(
+    ^
+Formula error in '=SUM(': Unexpected end of formula at position 4: expected expression
+## stderr

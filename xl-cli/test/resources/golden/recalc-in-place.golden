@@ -1,0 +1,11 @@
+## args
+-f
+<DIR>/inplace.xlsx
+-i
+recalc
+## exit
+0
+## stdout
+Recalculated 1 formula
+Saved: <DIR>/inplace.xlsx
+## stderr

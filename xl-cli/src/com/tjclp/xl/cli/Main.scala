@@ -10,12 +10,11 @@ import java.nio.file.{
 
 import scala.concurrent.duration.*
 
-import cats.effect.{ExitCode, IO, Resource}
+import cats.effect.{ExitCode, IO, IOApp, Resource}
 import cats.effect.unsafe.IORuntimeConfig
 import cats.implicits.*
 import cats.syntax.parallel.*
 import com.monovore.decline.*
-import com.monovore.decline.effect.*
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
@@ -51,7 +50,7 @@ import com.tjclp.xl.cli.helpers.{BatchParser, SheetResolver}
 import com.tjclp.xl.cli.output.Format
 
 /** Read version from generated resource, fallback to dev */
-private object BuildInfo:
+private[cli] object BuildInfo:
   val version: String =
     val props = new java.util.Properties()
     val stream = Option(getClass.getResourceAsStream("/version.properties"))
@@ -73,13 +72,13 @@ private object BuildInfo:
  *
  * Global flags precede the verb: `xl -f in.xlsx -o out.xlsx --strict batch -`. (`view --eval
  * --strict` is a separate, subcommand-scoped flag of the same name.)
+ *
+ * This object is the process shell: option and verb definitions plus the handlers that read files
+ * and print. The wiring between them is [[Cli.program]], and argv handling (help, version, parse
+ * errors) is [[Cli.run]] — both take the [[CliIO]] to print through, so the contract suite can run
+ * the identical tree in-process; the binary passes [[CliIO.system]].
  */
-object Main
-    extends CommandIOApp(
-      name = "xl",
-      header = "LLM-friendly Excel operations (stateless)",
-      version = BuildInfo.version
-    ):
+object Main extends IOApp:
 
   /** Rendered command result plus whether a staged output is complete and eligible to commit. */
   private[cli] final case class CommandOutcome(
@@ -108,141 +107,30 @@ object Main
       cpuStarvationCheckInitialDelay = Duration.Inf
     )
 
-  override def main: Opts[IO[ExitCode]] =
-    // Workbook-level: only --file (no --sheet)
-    // Note: --stream not supported for workbook-level commands (need full metadata)
-    val workbookSubcmds = namesCmd
-    val workbookOpts = (fileOpt, maxSizeOpt, workbookSubcmds).mapN { (file, maxSize, cmd) =>
-      run(file, None, None, None, None, maxSize, false, cmd)
-    }
+  /**
+   * The complete verb tree over the process streams. Tests parse it directly (`Command("xl",
+   * "test")(Main.main).parse(args)`); the binary goes through [[run]].
+   */
+  def main: Opts[IO[ExitCode]] = Cli.program(CliIO.system)
 
-    // Sheets command: --file required, --output optional (required for hide/show, not for list)
-    // This needs its own opts chain because list doesn't need output but hide/show do
-    val sheetsOpts =
-      (fileOpt, outputOpt.orNone, inPlaceOpt, backendOpt, maxSizeOpt, streamOpt, sheetsCmd).mapN {
-        (file, outOpt, inPlace, backend, maxSize, stream, cmd) =>
-          runWithOutput(outOpt, inPlace, file) { (out, display) =>
-            runResult(
-              file,
-              None,
-              out,
-              display,
-              backend,
-              maxSize,
-              stream,
-              cmd,
-              strictFailureDiscardsOutput = inPlace
-            )
-          }
-      }
-
-    // Headless commands: --file is optional (for constant formulas like =1+1, =PI())
-    // Note: --stream not supported for eval (needs formula analysis)
-    // evala requires --file (array formulas need sheet context)
-    val headlessOpts = (fileOpt.orNone, sheetOpt, maxSizeOpt, evalCmd orElse evalArrayCmd).mapN {
-      (fileOpt, sheet, maxSize, cmd) =>
-        runHeadless(fileOpt, sheet, maxSize, cmd)
-    }
-
-    // Sheet-level read-only: --file and --sheet (no --output)
-    val sheetReadOnlySubcmds =
-      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd orElse filterCmd
-
-    val sheetReadOnlyOpts = (fileOpt, sheetOpt, maxSizeOpt, streamOpt, sheetReadOnlySubcmds).mapN {
-      (file, sheet, maxSize, stream, cmd) =>
-        run(file, sheet, None, None, None, maxSize, stream, cmd)
-    }
-
-    // Sheet-level write: --file, --sheet, and --output (required)
-    // --stream uses SAX/StAX workbook writes for modifying commands.
-    val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse groupRowsCmd orElse groupColsCmd orElse ungroupRowsCmd orElse ungroupColsCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd orElse sheetViewCmd orElse tabColorCmd orElse autoFilterCmd orElse pageSetupCmd orElse headerFooterCmd orElse cfCmd
-
-    val sheetWriteOpts =
-      (
-        fileOpt,
-        sheetOpt,
-        outputOpt.orNone,
-        inPlaceOpt,
-        backendOpt,
-        maxSizeOpt,
-        streamOpt,
-        writePolicyOpt,
-        sheetWriteSubcmds
-      ).mapN { (file, sheet, outOpt, inPlace, backend, maxSize, stream, policy, cmd) =>
-        runWithOutput(outOpt, inPlace, file) { (out, display) =>
-          runResult(
-            file,
-            sheet,
-            out,
-            display,
-            backend,
-            maxSize,
-            stream,
-            cmd,
-            policy,
-            strictFailureDiscardsOutput = inPlace
-          )
-        }
-      }
-
-    // Standalone: no --file required (creates new files)
-    val standaloneOpts = newCmd.map { case (outPath, sheetName, sheets, backend) =>
-      runStandalone(outPath, sheetName, sheets, backend)
-    }
-
-    // Diff: compares -f against -g (two inputs, no output); custom exit codes
-    val diffOpts = (fileOpt, sheetOpt, maxSizeOpt, diffCmd).mapN { (file, sheet, maxSize, cmd) =>
-      cmd match
-        case CliCommand.Diff(file2, format) => runDiff(file, file2, sheet, maxSize, format)
-        case other =>
-          IO.println(Format.errorSimple(s"Unexpected diff command: $other")).as(ExitCode.Error)
-    }
-
-    // Lint: raw-zip structural validation (GH-397, no output file); custom exit codes.
-    // The file arrives via -f or positionally (GH-422); exactly one form must be used.
-    val lintOpts = (fileOpt.orNone, lintCmd).mapN { case (flagFile, (cmd, positional)) =>
-      cmd match
-        case CliCommand.Lint(format) =>
-          resolveLintFile(flagFile, positional) match
-            case Right(file) => runLint(file, format)
-            case Left(msg) => IO.println(Format.errorSimple(msg)).as(ExitCode(2))
-        case other =>
-          IO.println(Format.errorSimple(s"Unexpected lint command: $other")).as(ExitCode.Error)
-    }
-
-    // Info commands: no file required
-    val infoOpts = functionsCmd.map(_ => runInfo())
-    val rasterOpts = rasterizersCmd.map(_ => runRasterizers())
-
-    // Batch dry-run: only needs batch source, no --file or --output
-    val dryRunFlag =
-      Opts.flag("dry-run", "Validate batch JSON without writing")
-    val batchDryRunOpts =
-      Opts
-        .subcommand("batch", batchHelp) {
-          (batchArg, dryRunFlag).mapN((src, _) => src)
-        }
-        .map(src => batchDryRun(src).flatMap(IO.println).as(ExitCode.Success))
-
-    rasterOpts orElse infoOpts orElse standaloneOpts orElse diffOpts orElse lintOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
+  def run(args: List[String]): IO[ExitCode] = Cli.run(args, CliIO.system)
 
   // ==========================================================================
   // Global options
   // ==========================================================================
 
-  private val fileOpt =
+  private[cli] val fileOpt =
     Opts.option[Path]("file", "Excel file to operate on (required)", "f")
 
-  private val sheetOpt =
+  private[cli] val sheetOpt =
     Opts
       .option[String]("sheet", "Sheet to select (required for sheet-level operations)", "s")
       .orNone
 
-  private val outputOpt =
+  private[cli] val outputOpt =
     Opts.option[Path]("output", "Output file (required)", "o")
 
-  private val backendOpt: Opts[Option[XmlBackend]] =
+  private[cli] val backendOpt: Opts[Option[XmlBackend]] =
     Opts
       .option[String]("backend", "XML backend: scalaxml (default, stable) or saxstax (faster)")
       .mapValidated {
@@ -257,7 +145,7 @@ object Main
       }
       .orNone
 
-  private val maxSizeOpt: Opts[Option[Long]] =
+  private[cli] val maxSizeOpt: Opts[Option[Long]] =
     Opts
       .option[Long](
         "max-size",
@@ -265,7 +153,7 @@ object Main
       )
       .orNone
 
-  private val streamOpt: Opts[Boolean] =
+  private[cli] val streamOpt: Opts[Boolean] =
     Opts
       .flag(
         "stream",
@@ -273,7 +161,7 @@ object Main
       )
       .orFalse
 
-  private val inPlaceOpt: Opts[Boolean] =
+  private[cli] val inPlaceOpt: Opts[Boolean] =
     Opts.flag("in-place", "Edit file in-place (same as -o matching -f)", "i").orFalse
 
   /**
@@ -301,7 +189,7 @@ object Main
       .orFalse
 
   /** Cross-cutting write posture (GH-468/GH-496), parsed before the verb like -f/-o/--stream. */
-  private val writePolicyOpt: Opts[WritePolicy] =
+  private[cli] val writePolicyOpt: Opts[WritePolicy] =
     (noRecalcOpt, strictWriteOpt).mapN(WritePolicy.apply)
 
   // ==========================================================================
@@ -1159,8 +1047,8 @@ EXAMPLES:
     }
 
   // --- Batch command ---
-  private val batchArg = Opts.argument[String]("operations").withDefault("-")
-  private val batchHelp = """Apply multiple operations atomically from JSON.
+  private[cli] val batchArg = Opts.argument[String]("operations").withDefault("-")
+  private[cli] val batchHelp = """Apply multiple operations atomically from JSON.
 
 USAGE:
   xl -f in.xlsx -s Sheet1 -o out.xlsx batch ops.json
@@ -1422,7 +1310,7 @@ USAGE:
 
   // --- Freeze/Unfreeze commands ---
 
-  private val freezeCmd: Opts[CliCommand] =
+  private[cli] val freezeCmd: Opts[CliCommand] =
     Opts.subcommand(
       "freeze",
       "Freeze panes at cell reference (rows above and columns left are locked)"
@@ -1430,7 +1318,7 @@ USAGE:
       refArg.map(CliCommand.Freeze.apply)
     }
 
-  private val unfreezeCmd: Opts[CliCommand] =
+  private[cli] val unfreezeCmd: Opts[CliCommand] =
     Opts.subcommand("unfreeze", "Remove freeze panes") {
       Opts(CliCommand.Unfreeze)
     }
@@ -1449,7 +1337,7 @@ USAGE:
       }
       .orNone
 
-  private val sheetViewCmd: Opts[CliCommand] =
+  private[cli] val sheetViewCmd: Opts[CliCommand] =
     Opts.subcommand(
       "sheet-view",
       "Set sheet view options: gridlines, zoom, tab selection (requires -o)"
@@ -1460,7 +1348,7 @@ USAGE:
       (viewGridlines, viewZoom, viewTabSelected).mapN(CliCommand.SheetViewOp.apply)
     }
 
-  private val tabColorCmd: Opts[CliCommand] =
+  private[cli] val tabColorCmd: Opts[CliCommand] =
     Opts.subcommand(
       "tab-color",
       "Set the sheet tab color: named, #hex, rgb(r,g,b), or theme:accent1[:tint] (requires -o). " +
@@ -1471,7 +1359,7 @@ USAGE:
       (colorArg, clearFlag).mapN(CliCommand.TabColorOp.apply)
     }
 
-  private val autoFilterCmd: Opts[CliCommand] =
+  private[cli] val autoFilterCmd: Opts[CliCommand] =
     Opts.subcommand(
       "autofilter",
       "Set the sheet-level autoFilter range (filter dropdowns on the header row) or remove it " +
@@ -1483,7 +1371,7 @@ USAGE:
       (rangeArg, clearFlag).mapN(CliCommand.AutoFilterOp.apply)
     }
 
-  private val pageSetupCmd: Opts[CliCommand] =
+  private[cli] val pageSetupCmd: Opts[CliCommand] =
     Opts.subcommand(
       "page-setup",
       "Set print page setup: orientation, scale, fit-to-page (requires -o)"
@@ -1502,7 +1390,7 @@ USAGE:
         .mapN(CliCommand.PageSetupOp.apply)
     }
 
-  private val headerFooterCmd: Opts[CliCommand] =
+  private[cli] val headerFooterCmd: Opts[CliCommand] =
     Opts.subcommand(
       "header-footer",
       "Set print header/footer text with Excel codes: &L/&C/&R sections, &P page, &N total, " +
@@ -1539,7 +1427,7 @@ USAGE:
 
   // --- Copy command ---
 
-  private val copyCmd: Opts[CliCommand] =
+  private[cli] val copyCmd: Opts[CliCommand] =
     Opts.subcommand("copy", "Copy range to another location (with formula adjustment)") {
       val copySrcArg = Opts.argument[String]("source")
       val copyTgtArg = Opts.argument[String]("target")
@@ -1550,7 +1438,7 @@ USAGE:
 
   // --- Conditional formatting command (GH-324) ---
 
-  private val cfCmd: Opts[CliCommand] =
+  private[cli] val cfCmd: Opts[CliCommand] =
     Opts.subcommand("cf", "Conditional formatting: add, list") {
       val addSub = Opts.subcommand(
         "add",
@@ -1595,7 +1483,7 @@ EXAMPLES:
 
   // --- Chart + image commands (GH-222) ---
 
-  private val chartCmd: Opts[CliCommand] =
+  private[cli] val chartCmd: Opts[CliCommand] =
     Opts.subcommand("chart", "Chart operations: add") {
       Opts.subcommand("add", "Add a typed chart built from sheet data ranges") {
         val typeOpt =
@@ -1648,7 +1536,7 @@ EXAMPLES:
       }
     }
 
-  private val addImageCmd: Opts[CliCommand] =
+  private[cli] val addImageCmd: Opts[CliCommand] =
     Opts.subcommand("add-image", "Embed an image (png/jpeg/gif/bmp/tiff/emf/wmf)") {
       val imageArg = Opts.argument[Path]("image-file")
       val atOpt = Opts.option[String](
@@ -1662,14 +1550,14 @@ EXAMPLES:
 
   // --- Structural editing commands (insert/delete rows & columns) ---
 
-  private val insertRowsCmd: Opts[CliCommand] =
+  private[cli] val insertRowsCmd: Opts[CliCommand] =
     Opts.subcommand("insert-rows", "Insert rows (shifts cells & rewrites formulas)") {
       val atArg = Opts.argument[Int]("at-row")
       val countArg = Opts.argument[Int]("count").withDefault(1)
       (atArg, countArg).mapN(CliCommand.InsertRows.apply)
     }
 
-  private val deleteRowsCmd: Opts[CliCommand] =
+  private[cli] val deleteRowsCmd: Opts[CliCommand] =
     Opts.subcommand(
       "delete-rows",
       "Delete rows (shifts cells & rewrites formulas; #REF! on loss)"
@@ -1679,14 +1567,14 @@ EXAMPLES:
       (atArg, countArg).mapN(CliCommand.DeleteRows.apply)
     }
 
-  private val insertColsCmd: Opts[CliCommand] =
+  private[cli] val insertColsCmd: Opts[CliCommand] =
     Opts.subcommand("insert-cols", "Insert columns (shifts cells & rewrites formulas)") {
       val colArg = Opts.argument[String]("at-col")
       val countArg = Opts.argument[Int]("count").withDefault(1)
       (colArg, countArg).mapN(CliCommand.InsertColumns.apply)
     }
 
-  private val deleteColsCmd: Opts[CliCommand] =
+  private[cli] val deleteColsCmd: Opts[CliCommand] =
     Opts.subcommand(
       "delete-cols",
       "Delete columns (shifts cells & rewrites formulas; #REF! on loss)"
@@ -1700,7 +1588,7 @@ EXAMPLES:
   // Command execution
   // ==========================================================================
 
-  private def run(
+  private[cli] def run(
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
@@ -1708,7 +1596,8 @@ EXAMPLES:
     backendOpt: Option[XmlBackend],
     maxSizeOpt: Option[Long],
     stream: Boolean,
-    cmd: CliCommand
+    cmd: CliCommand,
+    io: CliIO
   ): IO[ExitCode] =
     runResult(
       filePath,
@@ -1718,8 +1607,9 @@ EXAMPLES:
       backendOpt,
       maxSizeOpt,
       stream,
-      cmd
-    ).flatMap(printRunResult)
+      cmd,
+      io = io
+    ).flatMap(printRunResult(_, io))
 
   /**
    * Execute and render a command without printing, so in-place writes can commit first.
@@ -1731,7 +1621,7 @@ EXAMPLES:
    * summary's `Saved:` line is rewritten to say exactly that. With `-o` the completed temp is still
    * committed and `Saved:` stands.
    */
-  private def runResult(
+  private[cli] def runResult(
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
@@ -1741,9 +1631,20 @@ EXAMPLES:
     stream: Boolean,
     cmd: CliCommand,
     policy: WritePolicy = WritePolicy.default,
-    strictFailureDiscardsOutput: Boolean = false
+    strictFailureDiscardsOutput: Boolean = false,
+    io: CliIO
   ): IO[CommandOutcome] =
-    execute(filePath, sheetNameOpt, outputOpt, backendOpt, maxSizeOpt, stream, cmd, policy).attempt
+    execute(
+      filePath,
+      sheetNameOpt,
+      outputOpt,
+      backendOpt,
+      maxSizeOpt,
+      stream,
+      cmd,
+      policy,
+      io
+    ).attempt
       .map {
         case Right(output) =>
           CommandOutcome(
@@ -1817,15 +1718,15 @@ EXAMPLES:
     val message = Option(err.getMessage).getOrElse(err.toString)
     Format.errorSimple(renderWithTarget(message, outputOpt, displayOpt))
 
-  private def printRunResult(result: CommandOutcome): IO[ExitCode] =
-    IO.println(result.output).as(result.exitCode)
+  private def printRunResult(result: CommandOutcome, io: CliIO): IO[ExitCode] =
+    io.out(result.output).as(result.exitCode)
 
-  private def runInfo(): IO[ExitCode] =
-    IO.println(formatFunctionList()).as(ExitCode.Success)
+  private[cli] def runInfo(io: CliIO): IO[ExitCode] =
+    io.out(formatFunctionList()).as(ExitCode.Success)
 
-  private def runRasterizers(): IO[ExitCode] =
+  private[cli] def runRasterizers(io: CliIO): IO[ExitCode] =
     formatRasterizerList().flatMap { (output, hasWorking) =>
-      IO.println(output).as(ExitCode.Success)
+      io.out(output).as(ExitCode.Success)
     }
 
   /**
@@ -1958,11 +1859,12 @@ EXAMPLES:
     sb.append("Example: xl eval \"=SUM(1,2,3)\" or xl -f data.xlsx eval \"=SUM(A1:A10)\"\n")
     sb.toString
 
-  private def runHeadless(
+  private[cli] def runHeadless(
     filePathOpt: Option[Path],
     sheetNameOpt: Option[String],
     maxSizeOpt: Option[Long],
-    cmd: CliCommand
+    cmd: CliCommand,
+    io: CliIO
   ): IO[ExitCode] =
     val excel = ExcelIO.instance[IO]
     val readerConfig = buildReaderConfig(maxSizeOpt)
@@ -1982,9 +1884,9 @@ EXAMPLES:
           IO.raiseError(new Exception(s"Unexpected headless command: $other"))
     yield result).attempt.flatMap {
       case Right(output) =>
-        IO.println(output).as(ExitCode.Success)
+        io.out(output).as(ExitCode.Success)
       case Left(err) =>
-        IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
+        io.out(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
     }
 
   /**
@@ -1996,7 +1898,8 @@ EXAMPLES:
     fileB: Path,
     sheetFilter: Option[String],
     maxSizeOpt: Option[Long],
-    format: DiffFormat
+    format: DiffFormat,
+    io: CliIO = CliIO.system
   ): IO[ExitCode] =
     val excel = ExcelIO.instance[IO]
     val readerConfig = buildReaderConfig(maxSizeOpt)
@@ -2012,9 +1915,9 @@ EXAMPLES:
         case DiffFormat.Json => DiffCommands.renderJson(diff)
     yield (output, diff.identical)).attempt.flatMap {
       case Right((output, identical)) =>
-        IO.println(output).as(if identical then ExitCode.Success else ExitCode(1))
+        io.out(output).as(if identical then ExitCode.Success else ExitCode(1))
       case Left(err) =>
-        IO.println(Format.errorSimple(err.getMessage)).as(ExitCode(2))
+        io.out(Format.errorSimple(err.getMessage)).as(ExitCode(2))
     }
 
   /**
@@ -2038,22 +1941,27 @@ EXAMPLES:
    * (unreadable file, missing/malformed core part). Opens the zip directly — NOT ExcelIO.read —
    * because a full parse would repair/normalize the very structure lint inspects (GH-397).
    */
-  private[cli] def runLint(file: Path, format: LintFormat): IO[ExitCode] =
+  private[cli] def runLint(
+    file: Path,
+    format: LintFormat,
+    io: CliIO = CliIO.system
+  ): IO[ExitCode] =
     IO.blocking(WorkbookLint.lint(file)).flatMap {
       case Right(findings) =>
         val output = format match
           case LintFormat.Text => LintCommands.renderText(file.toString, findings)
           case LintFormat.Json => LintCommands.renderJson(file.toString, findings)
-        IO.println(output).as(if findings.isEmpty then ExitCode.Success else ExitCode(1))
+        io.out(output).as(if findings.isEmpty then ExitCode.Success else ExitCode(1))
       case Left(err) =>
-        IO.println(Format.errorSimple(err.message)).as(ExitCode(2))
+        io.out(Format.errorSimple(err.message)).as(ExitCode(2))
     }
 
-  private def runStandalone(
+  private[cli] def runStandalone(
     outPath: Path,
     sheetName: String,
     sheets: List[String],
-    backendOpt: Option[XmlBackend]
+    backendOpt: Option[XmlBackend],
+    io: CliIO
   ): IO[ExitCode] =
     val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
     (for
@@ -2070,9 +1978,9 @@ EXAMPLES:
       s"Created ${outPath.toAbsolutePath} with ${names.size} sheet(s): $sheetList"
     ).attempt.flatMap {
       case Right(output) =>
-        IO.println(output).as(ExitCode.Success)
+        io.out(output).as(ExitCode.Success)
       case Left(err) =>
-        IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
+        io.out(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
     }
 
   private def execute(
@@ -2083,7 +1991,8 @@ EXAMPLES:
     maxSizeOpt: Option[Long],
     stream: Boolean,
     cmd: CliCommand,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy,
+    io: CliIO
   ): IO[String] =
     // Handle metadata-only commands (instant for any file size)
     cmd match
@@ -2162,14 +2071,14 @@ EXAMPLES:
                 "--strict is not supported with --stream (streaming writes never recalculate). Re-run without --stream."
               )
             )
-          else executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd)
+          else executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io)
         else
           val excel = ExcelIO.instance[IO]
           val readerConfig = buildReaderConfig(maxSizeOpt)
           for
             wb <- excel.readWith(filePath, readerConfig)
             sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
-            result <- executeCommand(wb, sheet, outputOpt, backendOpt, stream, cmd, policy)
+            result <- executeCommand(wb, sheet, outputOpt, backendOpt, stream, cmd, policy, io)
           yield result
 
   /** Execute command using streaming mode (O(1) memory). */
@@ -2238,10 +2147,10 @@ EXAMPLES:
       )
 
   /** Validate batch JSON and show summary without writing. */
-  private def batchDryRun(source: String): IO[String] =
-    BatchParser.readBatchInput(source).flatMap { input =>
+  private[cli] def batchDryRun(source: String, io: CliIO): IO[String] =
+    BatchParser.readBatchInput(source, io.stdin).flatMap { input =>
       BatchParser.parseBatchOperations(input).flatMap { result =>
-        IO(result.warnings.foreach(System.err.println)) *>
+        result.warnings.traverse_(io.err) *>
           IO.pure {
             val summary = BatchParser.formatSummary(result.ops)
             s"Dry run - ${result.ops.size} operations parsed:\n$summary"
@@ -2254,7 +2163,8 @@ EXAMPLES:
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
-    cmd: CliCommand
+    cmd: CliCommand,
+    io: CliIO
   ): IO[String] = cmd match
     case CliCommand.Style(
           rangeStr,
@@ -2335,14 +2245,14 @@ EXAMPLES:
           StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
     case CliCommand.Batch(source, dryRun) if dryRun =>
-      batchDryRun(source)
+      batchDryRun(source, io)
 
     case CliCommand.Batch(source, _) =>
       outputOpt match
         case None =>
           IO.raiseError(new Exception("--output is required for batch command"))
         case Some(outputPath) =>
-          StreamingWriteCommands.batch(filePath, outputPath, sheetNameOpt, source)
+          StreamingWriteCommands.batch(filePath, outputPath, sheetNameOpt, source, io.stdin)
 
     case _ =>
       IO.raiseError(
@@ -2358,7 +2268,8 @@ EXAMPLES:
     backendOpt: Option[XmlBackend],
     stream: Boolean,
     cmd: CliCommand,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    io: CliIO = CliIO.system
   ): IO[String] = cmd match
     // Workbook commands (these are now handled in execute() before reaching here)
     case CliCommand.Sheets(action) =>
@@ -2530,11 +2441,11 @@ EXAMPLES:
       )
 
     case CliCommand.Batch(source, dryRun) if dryRun =>
-      batchDryRun(source)
+      batchDryRun(source, io)
 
     case CliCommand.Batch(source, _) =>
       requireOutput("batch", outputOpt, backendOpt, stream)(
-        WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy)
+        WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy, io.stdin)
       )
 
     case CliCommand.Recalc(tables, parallel) =>
@@ -2865,18 +2776,19 @@ EXAMPLES:
   private[cli] def runWithOutput(
     outOpt: Option[Path],
     inPlace: Boolean,
-    file: Path
+    file: Path,
+    io: CliIO = CliIO.system
   )(execute: (Option[Path], Option[Path]) => IO[CommandOutcome]): IO[ExitCode] =
     (outOpt, inPlace) match
       case (Some(_), true) =>
-        IO.println(
+        io.out(
           Format.errorSimple("--in-place (-i) and --output (-o) are mutually exclusive")
         ).as(ExitCode.Error)
       case (Some(out), false) =>
-        runStagedOutput(out, ".xl-output-")(outcome => outcome.outputComplete)(execute)
-      case (None, false) => execute(None, None).flatMap(printRunResult)
+        runStagedOutput(out, ".xl-output-", io)(outcome => outcome.outputComplete)(execute)
+      case (None, false) => execute(None, None).flatMap(printRunResult(_, io))
       case (None, true) =>
-        runStagedOutput(file, ".xl-inplace-")(outcome =>
+        runStagedOutput(file, ".xl-inplace-", io)(outcome =>
           outcome.outputComplete && outcome.exitCode == ExitCode.Success
         )(execute)
 
@@ -2905,7 +2817,8 @@ EXAMPLES:
   /** Run one command against a staging path and publish only an explicitly complete output. */
   private def runStagedOutput(
     target: Path,
-    prefix: String
+    prefix: String,
+    io: CliIO
   )(
     shouldCommit: CommandOutcome => Boolean
   )(
@@ -2919,7 +2832,7 @@ EXAMPLES:
             // An XLSX is necessarily non-empty, so do not replace a target with the untouched file.
             IO.blocking(Files.size(tmp) > 0L).ifM(replaceAtomically(tmp, target), IO.unit)
           else IO.unit
-        commit *> printRunResult(outcome)
+        commit *> printRunResult(outcome, io)
       }
     }
 

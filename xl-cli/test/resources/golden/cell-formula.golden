@@ -1,0 +1,15 @@
+## args
+-f
+<DIR>/simple.xlsx
+cell
+Data!B4
+## exit
+0
+## stdout
+Cell: B4
+Type: formula
+Formula: =SUM(B1:B3)
+Cached: 42.5
+Dependencies: B1, B2, B3
+Dependents: (none)
+## stderr

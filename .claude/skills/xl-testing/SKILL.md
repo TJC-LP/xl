@@ -83,6 +83,16 @@ deterministic (fixed timestamps, no randomness) and shared with `xl-cats-effect`
 `moduleDeps`. Do not hand-edit fixtures; regenerate with the script and note that the `-lo` files
 embed LibreOffice metadata and are not byte-stable.
 
+## CLI contract goldens
+
+`xl-cli/test/resources/golden/<case>.golden` pins the `xl` binary's agent-visible contract — exit
+code, stdout and stderr per invocation — through the in-process `CliHarness` (`Cli.run` with an
+injected `CliIO`, in `xl-cli/test/src/com/tjclp/xl/cli/contract/`). A golden diff is a contract
+change, not noise: review it, then re-record deliberately with
+`XL_UPDATE_GOLDEN=1 ./mill xl-cli.test.testOnly com.tjclp.xl.cli.contract.GoldenSpec` and add a
+CHANGELOG line. New CLI behaviour gets a new `.golden` (write `## args`/`## stdin`, record). Details
+in `docs/reference/testing-guide.md` ("CLI contract goldens").
+
 ## Gates before a PR touching the public surface
 
 Run all four, with `set -o pipefail` when piping:

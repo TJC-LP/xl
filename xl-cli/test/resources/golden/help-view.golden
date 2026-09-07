@@ -1,0 +1,86 @@
+## args
+view
+--help
+## exit
+0
+## stdout
+## stderr
+Usage: xl view [--formulas] [--eval] [--strict] [--limit <integer>] [--format <string>] [--print-scale] [--gridlines] [--show-labels] [--dpi <integer>] [--quality <integer>] [--raster-output <path>] [--skip-empty] [--header-row <integer>] [--rasterizer <string>] [--skip-hidden] <range>
+
+View range in multiple formats (table, JSON, image, PDF).
+
+USAGE:
+  xl -f file.xlsx -s Sheet1 view A1:D10
+  xl -f file.xlsx view "Sheet1!A1:D10"    # Qualified ref (no -s needed)
+
+FORMATS:
+  markdown (default), json, csv, html, svg, png, jpeg, webp, pdf
+
+OUTPUT FLAGS:
+  --format <fmt>      Output format
+  --limit <n>         Max rows to display (default: 50; 0 = no limit).
+                      When output is clipped, markdown appends a "… showing X of Y rows"
+                      trailer; json adds "truncated"/"totalRows" fields (with --stream the
+                      notice goes to stderr instead — streaming json stays a bare array);
+                      csv/svg note on stderr; html notes on stderr and appends an HTML
+                      comment; raster formats append the notice to the "Exported:" line.
+  --formulas          Show formulas instead of values
+  --eval              Evaluate formulas (compute live values)
+  --strict            Fail on formula evaluation errors (use with --eval)
+  --skip-empty        Skip empty cells/rows
+  --skip-hidden       Omit hidden rows/columns. Default renders them (an explicitly
+                      requested range never silently loses cells) with a marker:
+                      markdown appends a "note: …" trailer, csv notes on stderr, json
+                      carries "hiddenRows"/"hiddenCols". With --skip-hidden the same
+                      marker names what was dropped. Data formats only — html/svg/raster
+                      mirror Excel's display and always omit hidden lines.
+  --show-labels       Include row/column headers (A, B, C / 1, 2, 3)
+  --header-row <n>    Use row N as JSON keys (1-based)
+
+RASTER FLAGS (png/jpeg/webp/pdf):
+  --raster-output <path>  Output file (required for raster formats)
+  --dpi <n>               Resolution (default: 144)
+  --quality <n>           JPEG quality 1-100 (default: 90)
+  --rasterizer <name>     Force: batik, cairosvg, rsvg-convert, resvg, imagemagick
+
+EXAMPLES:
+  xl -f data.xlsx -s Sheet1 view A1:D10                    # Markdown table
+  xl -f data.xlsx -s Sheet1 view A1:D10 --format json      # JSON array
+  xl -f data.xlsx -s Sheet1 view A1:D10 --eval             # Computed values
+  xl -f data.xlsx -s Sheet1 view A1:D10 --eval --strict    # Fail on eval errors
+  xl -f data.xlsx -s Sheet1 view A1:D10 --formulas         # Show formulas
+  xl -f data.xlsx -s Sheet1 view A1:D10 --format png --raster-output chart.png
+
+Options and flags:
+    --help
+        Display this help text.
+    --formulas
+        Show formulas instead of values
+    --eval
+        Evaluate formulas (compute live values)
+    --strict
+        Fail on formula evaluation errors (use with --eval)
+    --limit <integer>
+        Maximum rows to display (default: 50; 0 = no limit)
+    --format <string>
+        Output format: markdown, html, svg, json, csv, png, jpeg, webp, pdf
+    --print-scale
+        Apply print scaling (for PDF-like output)
+    --gridlines
+        Show cell gridlines in SVG output
+    --show-labels
+        Include column letters (A, B, C) and row numbers (1, 2, 3)
+    --dpi <integer>
+        DPI for raster output (default: 144 for retina)
+    --quality <integer>
+        JPEG quality 1-100 (default: 90)
+    --raster-output <path>
+        Output file for raster formats (required for png/jpeg/webp/pdf)
+    --skip-empty
+        Skip empty cells (JSON) or empty rows/columns (tabular)
+    --header-row <integer>
+        Use values from this row as keys in JSON output (1-based row number)
+    --rasterizer <string>
+        Force specific rasterizer: batik, cairosvg, rsvg-convert, resvg, imagemagick
+    --skip-hidden
+        Omit hidden rows/columns (default: render them, marked) — markdown/json/csv only

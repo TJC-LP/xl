@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/simple.xlsx
+cell
+Data!A1
+## exit
+0
+## stdout
+Cell: A1
+Type: text
+Raw: "Hello"
+Dependencies: (none)
+Dependents: (none)
+## stderr

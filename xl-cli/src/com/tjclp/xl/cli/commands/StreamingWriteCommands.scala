@@ -17,6 +17,7 @@ import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.helpers.{BatchParser, StreamingCsvParser, StyleBuilder, ValueParser}
 import org.xml.sax.{Attributes, SAXException}
 import org.xml.sax.helpers.DefaultHandler
@@ -428,6 +429,8 @@ object StreamingWriteCommands:
    *   Sheet name (required for multi-sheet files)
    * @param batchSource
    *   JSON file path or "-" for stdin
+   * @param stdin
+   *   Where `batchSource == "-"` reads from (the CLI passes its `CliIO.stdin`)
    * @return
    *   Result message with operation count
    */
@@ -435,14 +438,15 @@ object StreamingWriteCommands:
     sourcePath: Path,
     outputPath: Path,
     sheetNameOpt: Option[String],
-    batchSource: String
+    batchSource: String,
+    stdin: IO[String] = CliIO.system.stdin
   ): IO[String] =
     for
       // Resolve worksheet path first
       worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
 
       // Read and parse batch input
-      input <- BatchParser.readBatchInput(batchSource)
+      input <- BatchParser.readBatchInput(batchSource, stdin)
       parseResult <- BatchParser.parseBatchOperations(input)
       _ <- IO(parseResult.warnings.foreach(System.err.println))
       ops = parseResult.ops

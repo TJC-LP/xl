@@ -180,9 +180,40 @@ property("get-set") {
   - Store expected XML separately
 
 ### Not Yet Implemented
-- Golden file test framework
+- Golden file test framework for `.xlsx` output (the CLI contract goldens below pin CLI output,
+  not workbook bytes)
 - Compatibility test suite
 - Visual regression tests (for charts)
+
+## CLI contract goldens
+
+`xl-cli/test/resources/golden/<case>.golden` pins what an agent sees from the `xl` binary — exit
+code, stdout and stderr, separately — for representative invocations: `--help`/`--version`, parse
+errors (including a global flag after the verb), the read verbs in every text format, write verbs
+with and without `-o`, `batch -` fed through stdin, `diff` and `lint` exit codes, `-i recalc`, and
+`--stream`. `GoldenSpec` (`com.tjclp.xl.cli.contract`) runs each case through `CliHarness`, an
+in-process harness that drives the real parser and handlers (`Cli.run(args, io)`) with the
+production sinks, redirected JVM streams and an injected stdin, and compares the result with the
+file after normalization: the per-run fixture directory becomes `<DIR>`, any other temp path
+`<TMP>`, the build version `<VERSION>`, trailing whitespace is trimmed. Fixtures are built
+in-process by `TestFixtures` on every run — nothing binary is checked in.
+
+File format, one `## ` header per section: `args` (one argv token per line), optional `stdin`,
+`exit`, `stdout`, `stderr`.
+
+```bash
+./mill xl-cli.test.testOnly com.tjclp.xl.cli.contract.GoldenSpec       # verify
+XL_UPDATE_GOLDEN=1 ./mill xl-cli.test.testOnly com.tjclp.xl.cli.contract.GoldenSpec   # (re)record
+XL_GOLDEN_KEEP=1 ./mill xl-cli.test.testOnly com.tjclp.xl.cli.contract.GoldenSpec     # keep fixtures, print the dir
+```
+
+To add a case, write `<name>.golden` with its `## args` (and `## stdin`) and record. A mismatch
+fails with a unified diff in the assertion message.
+
+**Review discipline**: a golden diff is an agent-visible contract change, never noise. Read the
+diff, decide whether the change is intended, and only then re-record — and add a CHANGELOG line
+under `## [Unreleased]` saying what agents now see differently. Re-recording to turn a red build
+green without that line is how a contract drifts unnoticed.
 
 ## Test Execution
 

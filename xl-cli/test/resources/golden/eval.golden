@@ -1,0 +1,9 @@
+## args
+eval
+=1+1
+## exit
+0
+## stdout
+Formula: =1+1
+Result: 2 (number)
+## stderr

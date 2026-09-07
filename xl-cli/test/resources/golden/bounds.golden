@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+bounds
+## exit
+0
+## stdout
+Sheet: Data
+Used range: A1:C4 (from dimension element)
+Rows: 1-4 (4 total)
+Columns: A-C (3 total)
+## stderr

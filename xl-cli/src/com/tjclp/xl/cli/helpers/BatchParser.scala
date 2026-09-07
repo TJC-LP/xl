@@ -4,6 +4,7 @@ import cats.effect.{IO, Resource}
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.{CellValue, Comment}
+import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
 import com.tjclp.xl.formula.{
   FormulaParser,
@@ -239,7 +240,7 @@ object BatchParser:
       .mkString("\n")
 
   /**
-   * Read batch input from file or stdin.
+   * Read batch input from file or the process's stdin.
    *
    * @param source
    *   File path or "-" for stdin
@@ -247,7 +248,14 @@ object BatchParser:
    *   IO containing input string
    */
   def readBatchInput(source: String): IO[String] =
-    if source == "-" then IO.blocking(scala.io.Source.stdin.mkString)
+    readBatchInput(source, CliIO.system.stdin)
+
+  /**
+   * Read batch input from file or the given stdin — which is consumed only when `source` is "-".
+   * The CLI passes its [[CliIO]]'s stdin so the contract harness can feed `batch -` in-process.
+   */
+  def readBatchInput(source: String, stdin: IO[String]): IO[String] =
+    if source == "-" then stdin
     else
       Resource
         .fromAutoCloseable(IO.blocking(scala.io.Source.fromFile(source)))
