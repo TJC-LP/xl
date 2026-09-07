@@ -12,11 +12,39 @@ import scala.util.Using
 /** Shared file management utilities for benchmarks */
 object FileManager:
 
-  // Release asset patterns. Version-agnostic on purpose: resolution picks the
-  // highest version present, and auto-download always fetches the latest
-  // release, so there is no pinned version to keep in sync with releases.
+  // Release asset patterns. The binary is version-agnostic on purpose: resolution picks the
+  // highest version present and auto-download fetches the latest release, so there is no pinned
+  // version to keep in sync with releases. The skill zip is then locked to the binary's release
+  // (GH-592): a skill from another release teaches a contract the binary does not have.
   private val BinaryPattern = "xl-*-linux-amd64"
   private val SkillPattern = "xl-skill-*.zip"
+
+  /** The skill zip of one release, as `release.yml` names it. */
+  def skillPatternFor(version: String): String = s"xl-skill-$version.zip"
+
+  private val VersionInName = """\d+\.\d+\.\d+""".r
+
+  /**
+   * The release version embedded in an asset name: `xl-0.20.0-linux-amd64`, `xl-skill-0.20.0.zip`.
+   */
+  def assetVersion(fileName: String): Option[String] = VersionInName.findFirstIn(fileName)
+
+  private def fileName(path: Path): String = Option(path.getFileName).fold("")(_.toString)
+
+  /**
+   * Left when both assets name a release and the releases differ. Nothing to check when either name
+   * carries no version (a local build, a hand-made skill): the caller chose them explicitly.
+   */
+  def lockSkillToBinary(binary: Path, skill: Path): Either[AgentError, Unit] =
+    (assetVersion(fileName(binary)), assetVersion(fileName(skill))) match
+      case (Some(b), Some(s)) if b != s =>
+        Left(
+          AgentError.ConfigError(
+            s"skill ${fileName(skill)} is release $s but binary ${fileName(binary)} is release $b: " +
+              s"the skill must match the binary (use --xl-skill ${skillPatternFor(b)})"
+          )
+        )
+      case _ => Right(())
 
   // Default search directories
   private val DefaultSearchDirs = List(
@@ -33,13 +61,46 @@ object FileManager:
   ): IO[Path] =
     resolveAsset("Binary", BinaryPattern, "--xl-binary", pathOverride, searchDirs, autoDownload)
 
-  /** Resolve path to xl skill zip, optionally downloading the latest release from GitHub */
+  /**
+   * Resolve path to xl skill zip, optionally downloading it from GitHub. With `lockTo`, only the
+   * zip of that release qualifies (and the download is that release's, not the latest).
+   */
   def resolveSkillPath(
     pathOverride: Option[Path] = None,
     searchDirs: List[String] = DefaultSearchDirs,
-    autoDownload: Boolean = true
+    autoDownload: Boolean = true,
+    lockTo: Option[String] = None
   ): IO[Path] =
-    resolveAsset("Skill", SkillPattern, "--xl-skill", pathOverride, searchDirs, autoDownload)
+    resolveAsset(
+      "Skill",
+      lockTo.fold(SkillPattern)(skillPatternFor),
+      "--xl-skill",
+      pathOverride,
+      searchDirs,
+      autoDownload,
+      tag = lockTo.map(v => s"v$v")
+    )
+
+  /**
+   * The binary, then the skill zip of the same release (GH-592). Overrides are honoured but still
+   * checked against each other: a versioned skill from another release than the binary is refused.
+   */
+  def resolveReleaseAssets(
+    binaryOverride: Option[Path],
+    skillOverride: Option[Path],
+    searchDirs: List[String] = DefaultSearchDirs,
+    autoDownload: Boolean = true
+  ): IO[(Path, Path)] =
+    for
+      binary <- resolveBinaryPath(binaryOverride, searchDirs, autoDownload)
+      skill <- resolveSkillPath(
+        skillOverride,
+        searchDirs,
+        autoDownload,
+        lockTo = assetVersion(fileName(binary))
+      )
+      _ <- IO.fromEither(lockSkillToBinary(binary, skill))
+    yield (binary, skill)
 
   private def resolveAsset(
     label: String,
@@ -47,7 +108,8 @@ object FileManager:
     overrideFlag: String,
     pathOverride: Option[Path],
     searchDirs: List[String],
-    autoDownload: Boolean
+    autoDownload: Boolean,
+    tag: Option[String] = None
   ): IO[Path] =
     pathOverride match
       case Some(p) => IO.pure(p)
@@ -57,7 +119,7 @@ object FileManager:
           case None if autoDownload =>
             for
               targetDir <- IO.pure(searchDirs.lastOption.getOrElse("."))
-              _ <- downloadFromGitHub(pattern, targetDir)
+              _ <- downloadFromGitHub(pattern, targetDir, tag)
               path <- findByPattern(pattern, searchDirs)
                 .flatMap(
                   _.liftTo[IO](
@@ -115,13 +177,10 @@ object FileManager:
         .maxByOption(versionKey)
     }
 
-  /** Download assets from GitHub release using gh CLI */
-  def downloadFromGitHub(pattern: String, targetDir: String): IO[Unit] =
+  /** Download assets from a GitHub release using the gh CLI: the latest, or the tagged one. */
+  def downloadFromGitHub(pattern: String, targetDir: String, tag: Option[String] = None): IO[Unit] =
     IO.blocking {
-      val cmd = Seq(
-        "gh",
-        "release",
-        "download",
+      val cmd = Seq("gh", "release", "download") ++ tag.toList ++ Seq(
         "--repo",
         "TJC-LP/xl",
         "--pattern",
@@ -133,28 +192,32 @@ object FileManager:
       val exitCode = cmd.!
       if exitCode != 0 then
         throw AgentError.ConfigError(
-          s"Failed to download '$pattern' from GitHub (exit code: $exitCode)"
+          s"Failed to download '$pattern'${tag.fold("")(t => s" of release $t")} from GitHub (exit code: $exitCode)"
         )
     }
 
-  /** Download both binary and skill from GitHub release */
+  /** Download the latest binary and the skill of the same release from GitHub */
   def downloadReleaseAssets(targetDir: String): IO[(Path, Path)] =
     for
       _ <- IO.println(s"   Downloading xl binary from GitHub...")
-      _ <- downloadFromGitHub("xl-*-linux-amd64", targetDir)
-
-      _ <- IO.println(s"   Downloading xl skill from GitHub...")
-      _ <- downloadFromGitHub("xl-skill-*.zip", targetDir)
-
-      binary <- findByPattern("xl-*-linux-amd64", List(targetDir))
+      _ <- downloadFromGitHub(BinaryPattern, targetDir)
+      binary <- findByPattern(BinaryPattern, List(targetDir))
         .flatMap(
           _.liftTo[IO](AgentError.ConfigError("Binary download succeeded but file not found"))
         )
 
-      skill <- findByPattern("xl-skill-*.zip", List(targetDir))
+      version = assetVersion(fileName(binary))
+      _ <- IO.println(s"   Downloading xl skill ${version.getOrElse("(latest)")} from GitHub...")
+      _ <- downloadFromGitHub(
+        version.fold(SkillPattern)(skillPatternFor),
+        targetDir,
+        version.map(v => s"v$v")
+      )
+      skill <- findByPattern(version.fold(SkillPattern)(skillPatternFor), List(targetDir))
         .flatMap(
           _.liftTo[IO](AgentError.ConfigError("Skill download succeeded but file not found"))
         )
+      _ <- IO.fromEither(lockSkillToBinary(binary, skill))
     yield (binary, skill)
 
   /** Ensure a directory exists, creating it if necessary */

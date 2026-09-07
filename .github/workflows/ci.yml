@@ -14,6 +14,7 @@ jobs:
   # /release-prep removes it when the release ships (a marker left behind fails the gate).
   plugin-version:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +52,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
       - uses: actions/checkout@v4
@@ -92,6 +94,7 @@ jobs:
 
   examples:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -125,3 +128,119 @@ jobs:
       # This is the anti-rot guarantee for examples and the xl-scripting skill snippets.
       - name: Verify examples
         run: ./scripts/test-examples.sh
+
+  # The agent-visible contract of `xl` as its own check (GH-592). The golden corpus, the generated
+  # reference pages and the code vocabulary run explicitly, so a golden diff fails THIS job with the
+  # unified diff in its log instead of somewhere inside the full suite; then the assembly JAR is
+  # driven the way an agent drives it — `--help`, `sheets`, `view --json`, `schema --json`, `lint`,
+  # and two failures whose envelopes must carry the error code — against the checked-in fixtures.
+  # release.yml runs the same smoke against every native binary.
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: coursier/setup-action@v1
+        with:
+          jvm: temurin:25
+
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: ${{ runner.os }}-coursier-${{ hashFiles('**/build.mill', '**/.scalafmt.conf', '**/.scalafix.conf') }}
+          restore-keys: |
+            ${{ runner.os }}-coursier-
+
+      - name: Cache Mill
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.mill
+          key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
+          restore-keys: |
+            ${{ runner.os }}-mill-
+
+      # A failing golden prints `golden '<name>' differs from the recorded contract` followed by the
+      # unified diff (--- expected / +++ actual); re-record deliberately with XL_UPDATE_GOLDEN=1 and
+      # add a CHANGELOG line. DocsGenSpec does the same for docs/reference/generated/*.md
+      # (XL_UPDATE_DOCS=1); ContractSpec holds the code tables against the vocabulary and the corpus.
+      - name: Golden corpus, generated reference, code vocabulary
+        run: >-
+          ./mill -i xl-cli.test.testOnly
+          com.tjclp.xl.cli.contract.GoldenSpec
+          com.tjclp.xl.cli.contract.DocsGenSpec
+          com.tjclp.xl.cli.contract.ContractSpec
+
+      - name: Build CLI JAR
+        run: ./mill -i xl-cli.assembly
+
+      - name: Smoke test CLI JAR
+        run: |
+          set -euo pipefail
+          XL=(java -jar out/xl-cli/assembly.dest/out.jar)
+          FIXTURE=xl-ooxml/test/resources/fixtures/small-values.xlsx
+          VERSION=$(sed -n 's/.*getOrElse("PUBLISH_VERSION", *"\([^"]*\)").*/\1/p' build.mill)
+          test -n "$VERSION" || { echo "::error::no PUBLISH_VERSION fallback found in build.mill"; exit 1; }
+          ERR=$(mktemp)
+
+          # run <expected exit> <args...>: stdout in $OUT (CRs stripped), stderr in the $ERR file;
+          # any other exit code fails the step with both channels shown.
+          run() {
+            local want=$1; shift
+            set +e
+            OUT=$("${XL[@]}" "$@" 2>"$ERR"); local status=$?
+            set -e
+            OUT=${OUT//$'\r'/}
+            if [ "$status" -ne "$want" ]; then
+              echo "::error::xl $* exited $status, expected $want"
+              echo "--- stdout"; echo "$OUT"; echo "--- stderr"; cat "$ERR"
+              exit 1
+            fi
+          }
+          # check <what> <jq filter>: the filter must hold of $OUT.
+          check() {
+            local what=$1 filter=$2
+            if ! echo "$OUT" | jq -e "$filter" >/dev/null; then
+              echo "::error::$what: jq '$filter' does not hold of:"; echo "$OUT"; exit 1
+            fi
+          }
+
+          run 0 --version
+          [ "$OUT" = "$VERSION" ] || { echo "::error::--version printed '$OUT'; build.mill says $VERSION"; exit 1; }
+
+          run 0 --help
+          [ -z "$OUT" ] || { echo "::error::--help wrote to stdout; the contract puts usage on stderr"; echo "$OUT"; exit 1; }
+          grep -q '^Usage:' "$ERR" || { echo "::error::--help did not print usage on stderr"; cat "$ERR"; exit 1; }
+
+          run 0 -f "$FIXTURE" sheets
+          grep -q 'Values' <<<"$OUT" || { echo "::error::sheets did not list the Values sheet"; echo "$OUT"; exit 1; }
+
+          run 0 -f "$FIXTURE" --json sheets
+          check "sheets --json" ".ok == true and .verb == \"sheets\" and .version == \"$VERSION\" and .data[0].name == \"Values\" and .error == null"
+
+          run 0 -f "$FIXTURE" --json view A1:C4
+          check "view --json" '.ok == true and .verb == "view" and .data.sheet == "Values" and (.data.rows | length) == 4 and .data.rows[0].cells[1].value == 42'
+
+          run 0 --json schema
+          check "schema --json" ".ok == true and .verb == \"schema\" and .data.version == \"$VERSION\" and (.data.verbs | length) > 0 and ([.data.errorCodes[].code] | index(\"SHEET_REQUIRED\")) != null and (.data.warningCodes | index(\"TRUNCATED\")) != null and (.data.exitCodes | map(.code)) == [0, 1, 2, 3]"
+
+          run 0 -f "$FIXTURE" lint
+          grep -q 'clean' <<<"$OUT" || { echo "::error::lint did not report the fixture clean"; echo "$OUT"; exit 1; }
+
+          run 0 -f "$FIXTURE" --json lint
+          check "lint --json" '.ok == true and .verb == "lint" and .data.clean == true'
+
+          # Failures are envelopes too: the code, never the message, is the contract.
+          run 3 -f does-not-exist.xlsx --json sheets
+          check "missing-file envelope" '.ok == false and .exitCode == 3 and .error.code == "IO_READ"'
+
+          run 2 -f "$FIXTURE" --json nonsense-verb
+          check "unknown-verb envelope" '.ok == false and .exitCode == 2 and .error.code == "UNKNOWN_VERB"'
+
+          echo "JAR smoke: every verb answered as the contract says"

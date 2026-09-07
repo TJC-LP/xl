@@ -38,6 +38,7 @@ jobs:
             platform: windows-amd64
             extension: ".exe"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     # Only run on the main repository, not forks
     if: github.repository == 'TJC-LP/xl'
 
@@ -164,6 +165,75 @@ jobs:
             exit 1
           fi
 
+      # GH-592: the native binary answers the agent-visible contract the same way the JAR does in
+      # ci.yml's `contract` job — `--help`, `sheets`, `view --json`, `schema --json`, `lint`, and two
+      # failures whose envelopes must carry the error code — and reports the release version
+      # everywhere it prints one. Keep this body identical to ci.yml's "Smoke test CLI JAR".
+      - name: Smoke test native binary contract (GH-592)
+        shell: bash
+        run: |
+          set -euo pipefail
+          XL=("out/xl-cli/nativeImage.dest/native-executable${{ matrix.extension }}")
+          FIXTURE=xl-ooxml/test/resources/fixtures/small-values.xlsx
+          VERSION="${{ steps.version.outputs.version }}"
+          ERR=$(mktemp)
+
+          # run <expected exit> <args...>: stdout in $OUT (CRs stripped), stderr in the $ERR file;
+          # any other exit code fails the step with both channels shown.
+          run() {
+            local want=$1; shift
+            set +e
+            OUT=$("${XL[@]}" "$@" 2>"$ERR"); local status=$?
+            set -e
+            OUT=${OUT//$'\r'/}
+            if [ "$status" -ne "$want" ]; then
+              echo "::error::xl $* exited $status, expected $want"
+              echo "--- stdout"; echo "$OUT"; echo "--- stderr"; cat "$ERR"
+              exit 1
+            fi
+          }
+          # check <what> <jq filter>: the filter must hold of $OUT.
+          check() {
+            local what=$1 filter=$2
+            if ! echo "$OUT" | jq -e "$filter" >/dev/null; then
+              echo "::error::$what: jq '$filter' does not hold of:"; echo "$OUT"; exit 1
+            fi
+          }
+
+          run 0 --version
+          [ "$OUT" = "$VERSION" ] || { echo "::error::--version printed '$OUT'; the tag says $VERSION"; exit 1; }
+
+          run 0 --help
+          [ -z "$OUT" ] || { echo "::error::--help wrote to stdout; the contract puts usage on stderr"; echo "$OUT"; exit 1; }
+          grep -q '^Usage:' "$ERR" || { echo "::error::--help did not print usage on stderr"; cat "$ERR"; exit 1; }
+
+          run 0 -f "$FIXTURE" sheets
+          grep -q 'Values' <<<"$OUT" || { echo "::error::sheets did not list the Values sheet"; echo "$OUT"; exit 1; }
+
+          run 0 -f "$FIXTURE" --json sheets
+          check "sheets --json" ".ok == true and .verb == \"sheets\" and .version == \"$VERSION\" and .data[0].name == \"Values\" and .error == null"
+
+          run 0 -f "$FIXTURE" --json view A1:C4
+          check "view --json" '.ok == true and .verb == "view" and .data.sheet == "Values" and (.data.rows | length) == 4 and .data.rows[0].cells[1].value == 42'
+
+          run 0 --json schema
+          check "schema --json" ".ok == true and .verb == \"schema\" and .data.version == \"$VERSION\" and (.data.verbs | length) > 0 and ([.data.errorCodes[].code] | index(\"SHEET_REQUIRED\")) != null and (.data.warningCodes | index(\"TRUNCATED\")) != null and (.data.exitCodes | map(.code)) == [0, 1, 2, 3]"
+
+          run 0 -f "$FIXTURE" lint
+          grep -q 'clean' <<<"$OUT" || { echo "::error::lint did not report the fixture clean"; echo "$OUT"; exit 1; }
+
+          run 0 -f "$FIXTURE" --json lint
+          check "lint --json" '.ok == true and .verb == "lint" and .data.clean == true'
+
+          # Failures are envelopes too: the code, never the message, is the contract.
+          run 3 -f does-not-exist.xlsx --json sheets
+          check "missing-file envelope" '.ok == false and .exitCode == 3 and .error.code == "IO_READ"'
+
+          run 2 -f "$FIXTURE" --json nonsense-verb
+          check "unknown-verb envelope" '.ok == false and .exitCode == 2 and .error.code == "UNKNOWN_VERB"'
+
+          echo "native smoke: every verb answered as the contract says"
+
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
         run: mv out/xl-cli/nativeImage.dest/native-executable xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}
@@ -173,9 +243,15 @@ jobs:
         run: mv out/xl-cli/nativeImage.dest/native-executable.exe xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}.exe
         shell: bash
 
-      - name: Smoke test binary
-        run: ./xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}${{ matrix.extension }} --version
+      - name: Smoke test renamed binary
         shell: bash
+        run: |
+          OUT=$(./xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}${{ matrix.extension }} --version)
+          OUT=${OUT//$'\r'/}
+          [ "$OUT" = "${{ steps.version.outputs.version }}" ] || {
+            echo "::error::renamed binary reports version '$OUT', expected ${{ steps.version.outputs.version }}"
+            exit 1
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -187,6 +263,7 @@ jobs:
   release:
     name: Publish to Maven Central
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: build-native
     # Only run on the main repository, not forks
     if: github.repository == 'TJC-LP/xl'

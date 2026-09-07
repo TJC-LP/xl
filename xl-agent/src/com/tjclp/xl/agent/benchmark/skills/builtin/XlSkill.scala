@@ -24,9 +24,10 @@ object XlSkill extends Skill:
 
   override def setup(client: AnthropicClientIO, config: AgentConfig): IO[SkillContext] =
     for
-      // Resolve paths
-      binaryPath <- FileManager.resolveBinaryPath(config.xlBinaryPath)
-      skillPath <- FileManager.resolveSkillPath(config.xlSkillPath)
+      // Resolve paths: the binary, then the skill zip of the same release (GH-592)
+      assets <- FileManager.resolveReleaseAssets(config.xlBinaryPath, config.xlSkillPath)
+      binaryPath = assets._1
+      skillPath = assets._2
 
       _ <- IO.println(s"  [$name] Checking binary: ${binaryPath.getFileName}")
       binaryFile <- client.uploadFileIfNeeded(binaryPath, config.forceUpload)

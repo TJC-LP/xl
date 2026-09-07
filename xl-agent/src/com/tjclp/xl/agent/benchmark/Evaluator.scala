@@ -78,21 +78,62 @@ object Evaluator:
       )
     yield json.rows.flatMap(_.cells).map(c => c.ref -> normalizeCell(c)).toMap
 
-  /** Detect the first sheet name in a workbook */
+  /**
+   * The command the grader runs to learn a workbook's sheets: the `--json` envelope, never the text
+   * table (GH-592).
+   */
+  def sheetsCommand(xlPath: String, path: Path): List[String] =
+    List(xlPath, "-f", path.toString, "--json", "sheets")
+
+  /**
+   * The first sheet of a `sheets --json` envelope: `data[0].name`. A failed envelope (`ok: false`)
+   * is an evaluation failure naming `error.code`; anything that is not the envelope — the text
+   * table included — is a parse error. There is no default sheet: a guess would grade the wrong
+   * range silently.
+   */
+  def firstSheet(envelope: String): Either[AgentError, String] =
+    def parseError(cause: String): AgentError = AgentError.ParseError(envelope.take(200), cause)
+    for
+      json <- parse(envelope).leftMap(e => parseError(e.getMessage))
+      cursor = json.hcursor
+      ok <- cursor.get[Boolean]("ok").leftMap(e => parseError(e.getMessage))
+      name <-
+        if !ok then
+          val error = cursor.downField("error")
+          val code = error.get[String]("code").getOrElse("UNKNOWN")
+          val message = error.get[String]("message").getOrElse("")
+          Left(AgentError.EvaluationFailed(s"xl sheets failed [$code]: $message"))
+        else
+          cursor.get[Vector[Json]]("data").leftMap(e => parseError(e.getMessage)).flatMap {
+            case first +: _ =>
+              first.hcursor.get[String]("name").leftMap(e => parseError(e.getMessage))
+            case _ => Left(AgentError.EvaluationFailed("xl sheets: the workbook has no sheets"))
+          }
+    yield name
+
+  /** Detect the first sheet name in a workbook from `xl --json sheets` */
   private def detectFirstSheet(path: Path, xlPath: String): IO[String] =
     IO.blocking {
-      val cmd = List(xlPath, "-f", path.toString, "sheets")
-      val output = cmd.!!
-      // Parse markdown table output
-      val lines = output.linesIterator.toList
-      val dataLines = lines.drop(2) // Skip header and separator
-      dataLines.headOption
-        .flatMap { line =>
-          val cols = line.split("\\|").map(_.trim).filter(_.nonEmpty)
-          cols.lift(1) // Name is the second column (after #)
-        }
-        .getOrElse("Sheet1")
-    }.adaptError(e => AgentError.EvaluationFailed(s"Failed to detect sheet: ${e.getMessage}"))
+      val out = new StringBuilder
+      val err = new StringBuilder
+      val logger = ProcessLogger(
+        line => { out.append(line).append('\n'); () },
+        line => { err.append(line).append('\n'); () }
+      )
+      val exit = Process(sheetsCommand(xlPath, path)).!(logger)
+      (exit, out.toString, err.toString)
+    }.adaptError(e => AgentError.EvaluationFailed(s"xl CLI failed to start: ${e.getMessage}"))
+      .flatMap { (exit, stdout, stderr) =>
+        // With --json the envelope is on stdout whatever the exit code; an empty stdout means the
+        // binary died before printing one, and stderr is all there is to report.
+        if stdout.trim.isEmpty then
+          IO.raiseError(
+            AgentError.EvaluationFailed(
+              s"xl sheets exited $exit without an envelope: ${stderr.trim}"
+            )
+          )
+        else IO.fromEither(firstSheet(stdout))
+      }
 
   /** Normalize a cell value for comparison */
   private def normalizeCell(cell: CellJson): ComparableValue =
