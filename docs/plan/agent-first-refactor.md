@@ -88,7 +88,7 @@ hours at two concurrent implementers plus integration.
 
 ### Cluster harness-golden
 
-**Status**: in progress (worktree `.claude/worktrees/agent-aece60b92b7995bf7`, cut from `a9cdb73`; nothing committed at plan time)
+**Status**: done — `7510c5d`, `3d13f14` (in-process harness, 39 goldens, `Locale.US` pin, concurrent-run test)
 **Modules**: xl-cli (src + test)
 **Files**: new `xl-cli/src/com/tjclp/xl/cli/CliIO.scala`; new `xl-cli/src/com/tjclp/xl/cli/Cli.scala`; `xl-cli/src/com/tjclp/xl/cli/Main.scala`; `xl-cli/package.mill`; new `xl-cli/test/src/com/tjclp/xl/cli/contract/CliHarness.scala`; new `xl-cli/test/src/com/tjclp/xl/cli/contract/GoldenSpec.scala`; new `xl-cli/test/src/com/tjclp/xl/cli/contract/CliHarnessSpec.scala`; new `xl-cli/test/src/com/tjclp/xl/cli/contract/TestFixtures.scala`; new `xl-cli/test/resources/golden/*.golden` (~30); `docs/reference/testing-guide.md`
 **DependsOn**: —
@@ -163,7 +163,7 @@ stayed in `Main.scala` (default assumption for group 5).
 
 ### Cluster errors-exit-codes
 
-**Status**: pending
+**Status**: done — `7ab44f2`, `9f98be4` (typed `CliError`, exit table 0/1/2/3, diagnostics on stderr, `Session.scala` removed)
 **Modules**: xl-core (two files), xl-cli
 **Files**: `xl-core/src/com/tjclp/xl/error/XLError.scala`; new `xl-core/src/com/tjclp/xl/text/Suggest.scala`; new `xl-core/test/src/com/tjclp/xl/error/XLErrorCodesSpec.scala`; new `xl-core/test/src/com/tjclp/xl/text/SuggestSpec.scala`; new `xl-cli/src/com/tjclp/xl/cli/contract/{CliError,ErrorCode,ExitCodes,Diagnostics,Warning}.scala`; `xl-cli/src/com/tjclp/xl/cli/Main.scala`; `xl-cli/src/com/tjclp/xl/cli/helpers/SheetResolver.scala`; `xl-cli/src/com/tjclp/xl/cli/output/Format.scala`; `xl-cli/src/com/tjclp/xl/cli/Session.scala` (delete); new `xl-cli/test/src/com/tjclp/xl/cli/contract/{CliErrorSpec,DiagnosticsSpec,ExitCodesSpec}.scala`; `xl-cli/test/src/com/tjclp/xl/cli/{DiffCommandSpec,LintCommandSpec,InPlaceSpec}.scala`; goldens; `docs/reference/cli.md`; `plugin/skills/xl-cli/SKILL.md`
 **DependsOn**: harness-golden
@@ -269,7 +269,7 @@ failed (was 1; `diff`/`lint` runtime errors were 2). Errors and warnings go to s
 
 ### Cluster structural-row-props
 
-**Status**: pending
+**Status**: done — `86afeb7` (domain `rowProperties` authoritative on both writers; `PropertyOnlyRowShiftSpec`)
 **Modules**: xl-ooxml (+ one xl-cli test)
 **Files**: `xl-ooxml/src/com/tjclp/xl/ooxml/worksheet/OoxmlWorksheet.scala` (`:496-525`); new `xl-ooxml/test/src/com/tjclp/xl/ooxml/PropertyOnlyRowShiftSpec.scala`; `xl-cli/test/src/com/tjclp/xl/cli/StructuralCommandSpec.scala` (+1 case)
 **DependsOn**: —
@@ -381,7 +381,7 @@ json` payloads are unchanged." Record the new test count.
 
 ### Cluster recalc-options-renamer
 
-**Status**: pending
+**Status**: done — `fdaf89b`, `850198c` (rework round: chart remap kept, `recalculateUncached` never withdraws a cache, 3-D ranges refuse)
 **Modules**: xl-evaluator, xl-cli (two call sites + one comment), xl (probes)
 **Files**: new `xl-evaluator/src/com/tjclp/xl/formula/eval/RecalcOptions.scala`; `xl-evaluator/src/com/tjclp/xl/formula/eval/WorkbookEvaluator.scala` (additive members of the existing `extension (wb: Workbook)` block only); `xl-evaluator/src/com/tjclp/xl/formula/eval/Recalc.scala` (one additive method after `toEither`); `xl-evaluator/src/com/tjclp/xl/formula/printer/FormulaShifter.scala` (additive); new `xl-evaluator/src/com/tjclp/xl/formula/printer/FormulaOps.scala`; new `xl-evaluator/src/com/tjclp/xl/formula/eval/SheetRenamer.scala`; `xl-evaluator/src/com/tjclp/xl/exports.scala` (additive); new `xl-evaluator/test/src/com/tjclp/xl/formula/{RecalcOptionsSpec,SheetRenamerSpec,FormulaOpsSpec}.scala`; `xl-cli/src/com/tjclp/xl/cli/commands/SheetCommands.scala` (`renameSheet` body); `xl-cli/src/com/tjclp/xl/cli/helpers/BatchParser.scala` (`applyRenameSheet` body only, `:1852-1861`); `xl-cli/src/com/tjclp/xl/cli/commands/WriteCommands.scala` (the `isCellMutating` doc comment at `:940-949` only); new `xl-cli/test/src/com/tjclp/xl/cli/RenameSheetSpec.scala`; `xl/test/src/xlprelude/ScriptingPreludeTest.scala`; `docs/reference/scripting.md`; `plugin/skills/xl-scripting/SKILL.md`; `docs/LIMITATIONS.md`
 **DependsOn**: — (the only evaluator cluster in its group)
@@ -730,7 +730,7 @@ CLAUDE.md with `docs-from-code`.
 
 ### Cluster twins-and-navigation
 
-**Status**: pending
+**Status**: done — `90b9170`, `3dc2d4e` (corner-form-only contract documented after review)
 **Modules**: xl-core, xl (probes)
 **Files**: `xl-core/src/com/tjclp/xl/sheets/Sheet.scala` (additive: `putAt` ×2, `styleAt`, `mergeAt`, `commentAt`; Scaladoc of the transparent forms names the twin); `xl-core/src/com/tjclp/xl/workbooks/Workbook.scala` (companion: `named` ×2); `xl-core/src/com/tjclp/xl/addressing/ARef.scala` (`tryShift`, `tryDown`, `tryRight`, `clampShift`); `xl-core/src/com/tjclp/xl/addressing/CellRange.scala` (`rows`, `columns`, `row`, `column`); `xl-core/src/com/tjclp/xl/styles/cellstyle.scala` (`withUnderline`); new `xl-core/test/src/com/tjclp/xl/sheets/RuntimeTwinsSpec.scala`; new `xl-core/test/src/com/tjclp/xl/addressing/BoundedNavigationSpec.scala`; `xl-core/test/src/com/tjclp/xl/StyleSpec.scala` (+1); `xl/test/src/xlprelude/ScriptingPreludeTest.scala`; `docs/reference/scripting.md`; `plugin/skills/xl-scripting/SKILL.md`
 **DependsOn**: —
