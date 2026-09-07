@@ -1395,6 +1395,7 @@ object DependencyGraph:
         .toSet
     }
 
+    val canonicalSheet = sheetCanonicaliser(workbook)
     val dependencies = formulas.iterator.map { case (ref, expression) =>
       val deps = FormulaParser.parse(expression) match
         case scala.util.Right(expr) =>
@@ -1403,7 +1404,8 @@ object DependencyGraph:
             ref.sheet,
             cellsFor,
             Some(workbook),
-            preciseLookups = true
+            preciseLookups = true,
+            canonicalSheet = canonicalSheet
           )
             .filter(formulaNodes.contains)
         case scala.util.Left(_) => Set.empty[QualifiedRef]
@@ -1477,6 +1479,7 @@ object DependencyGraph:
       scala.collection.mutable.HashSet[QualifiedRef]
     ]
 
+    val canonicalSheet = sheetCanonicaliser(workbook)
     workbook.sheets.foreach { sheet =>
       sheet.cells.foreach { case (cellRef, cell) =>
         cell.value match
@@ -1495,7 +1498,8 @@ object DependencyGraph:
                   expr,
                   sheet.name,
                   recordRange,
-                  Some(workbook)
+                  Some(workbook),
+                  canonicalSheet = canonicalSheet
                 )
                 points.foreach { point =>
                   pointBuilders.getOrElseUpdate(
@@ -1751,6 +1755,19 @@ object DependencyGraph:
    * @return
    *   Set of qualified cell references used in the expression
    */
+  /**
+   * The workbook's spelling of every sheet name, keyed case-insensitively: a formula's qualifier
+   * (`sheet1!A1` on a book whose tab is `Sheet1`) is folded onto the tab it resolves to in Excel,
+   * so the graph has one node per cell rather than a phantom per spelling. A qualifier naming no
+   * sheet is returned as written. The first sheet wins for a duplicated name, like `indexWhere`.
+   */
+  private[xl] def sheetCanonicaliser(workbook: Workbook): SheetName => SheetName =
+    val byFold: Map[String, SheetName] =
+      workbook.sheets.reverseIterator
+        .map(sheet => sheet.name.value.toLowerCase(java.util.Locale.ROOT) -> sheet.name)
+        .toMap
+    sheet => byFold.getOrElse(sheet.value.toLowerCase(java.util.Locale.ROOT), sheet)
+
   @nowarn("msg=Unreachable case")
   private def extractQualifiedDependencies[A](
     expr: TExpr[A],
@@ -1758,12 +1775,13 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells,
     workbook: Option[Workbook] = None,
     visitingNames: Set[String] = Set.empty,
-    preciseLookups: Boolean = false
+    preciseLookups: Boolean = false,
+    canonicalSheet: SheetName => SheetName = identity
   ): Set[QualifiedRef] =
     def locCells(location: TExpr.RangeLocation): Set[QualifiedRef] =
       location match
         case TExpr.RangeLocation.Local(range) => cellsFor(currentSheet, range)
-        case TExpr.RangeLocation.CrossSheet(sheet, range) => cellsFor(sheet, range)
+        case TExpr.RangeLocation.CrossSheet(sheet, range) => cellsFor(canonicalSheet(sheet), range)
         // GH-353: external-workbook ranges target cells OUTSIDE the workbook — no edges ever
         case TExpr.RangeLocation.External(_, _, _) => Set.empty
         // GH-394: a name in a range slot resolves like the equivalent name EXPRESSION — its
@@ -1773,7 +1791,7 @@ object DependencyGraph:
         case TExpr.RangeLocation.Name(name, scope) =>
           scope match
             case None => go(TExpr.NameRef(name))
-            case Some(qualifier) => go(TExpr.SheetNameRef(qualifier, name))
+            case Some(qualifier) => go(TExpr.SheetNameRef(canonicalSheet(qualifier), name))
 
     def fixedIndex(expr: TExpr[?]): Option[Int] =
       def number(value: Any): Option[Int] = value match
@@ -1792,7 +1810,7 @@ object DependencyGraph:
         case TExpr.UnaryPlus(inner) => fixedIndex(inner)
         case TExpr.Coerced(inner, BindingCoercion.Integer) => fixedIndex(inner)
         case TExpr.Ref(ref, _, _) => cell(currentSheet, ref)
-        case TExpr.SheetRef(sheet, ref, _, _) => cell(sheet, ref)
+        case TExpr.SheetRef(sheet, ref, _, _) => cell(canonicalSheet(sheet), ref)
         case _ => None
 
     // Ordering needs only the lookup's key and selected result strip. Impact analysis retains
@@ -1835,10 +1853,10 @@ object DependencyGraph:
         case TExpr.PolyRef(at, _) => Set(QualifiedRef(currentSheet, at))
         case TExpr.RangeRef(range) => cellsFor(currentSheet, range)
 
-        // Cross-sheet references - use target sheet
-        case TExpr.SheetRef(sheet, at, _, _) => Set(QualifiedRef(sheet, at))
-        case TExpr.SheetPolyRef(sheet, at, _) => Set(QualifiedRef(sheet, at))
-        case TExpr.SheetRange(sheet, range) => cellsFor(sheet, range)
+        // Cross-sheet references - use the target sheet as the workbook spells it
+        case TExpr.SheetRef(sheet, at, _, _) => Set(QualifiedRef(canonicalSheet(sheet), at))
+        case TExpr.SheetPolyRef(sheet, at, _) => Set(QualifiedRef(canonicalSheet(sheet), at))
+        case TExpr.SheetRange(sheet, range) => cellsFor(canonicalSheet(sheet), range)
         // GH-353: external-workbook refs target cells OUTSIDE the workbook — no edges ever
         case TExpr.ExternalRef(_, _, _, _) => Set.empty
         case TExpr.ExternalRange(_, _, _) => Set.empty
@@ -1903,7 +1921,8 @@ object DependencyGraph:
                 cellsFor,
                 workbook,
                 visitingNames + key,
-                preciseLookups
+                preciseLookups,
+                canonicalSheet
               )
             ).getOrElse(Set.empty)
 
@@ -1915,7 +1934,7 @@ object DependencyGraph:
           else
             (for
               wb <- workbook
-              dn <- Evaluator.lookupDefinedName(wb, qualifier, name)
+              dn <- Evaluator.lookupDefinedName(wb, canonicalSheet(qualifier), name)
               target <- FormulaParser.parse(dn.formula).toOption
             yield
               val definingSheet =
@@ -1926,7 +1945,8 @@ object DependencyGraph:
                 cellsFor,
                 workbook,
                 visitingNames + key,
-                preciseLookups
+                preciseLookups,
+                canonicalSheet
               )
             ).getOrElse(Set.empty)
 
