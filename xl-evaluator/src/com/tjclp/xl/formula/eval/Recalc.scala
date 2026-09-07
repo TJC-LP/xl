@@ -231,6 +231,41 @@ final case class RecalcResult(
   def toEither: Either[Vector[CellEvalError], Workbook] =
     if isClean then Right(workbook) else Left(errors)
 
+  /**
+   * One-line recalculation summary — byte-identical to what the `xl` CLI prints after a
+   * recalculating verb (ADR-017 §2.8), so scripts and the CLI report the same thing: formula count,
+   * the computed-error-value count as a parenthetical (GH-344, only when > 0), the first three
+   * could-not-evaluate failures rendered with their location (GH-352), and the iterative verdict
+   * (GH-454: `maxIter` exhaustion keeps the last values with no error, so this line is where it
+   * becomes visible).
+   *
+   * {{{
+   * Recalculated 12 formulas
+   * Recalculated 12 formulas (1 error value)
+   * Recalculated 11 formulas; 1 error (Sales!B2: Formula error in 'NOSUCHFN(A1)': ...)
+   * Recalculated 40 formulas; converged in 7 iterative round(s)
+   * }}}
+   */
+  def summary: String =
+    val formulaCount = evaluated.valuesIterator.map(_.size).sum
+    val formulasLabel = if formulaCount == 1 then "formula" else "formulas"
+    val errorValueCount = excelErrors.size
+    val errorValues =
+      if errorValueCount == 0 then ""
+      else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
+    val convergence =
+      if !converged then
+        s"; WARNING: iterative calculation exhausted $iterationsUsed round(s) without converging (last values kept)"
+      else if iterationsUsed > 0 then s"; converged in $iterationsUsed iterative round(s)"
+      else ""
+    if isClean then s"Recalculated $formulaCount $formulasLabel$errorValues$convergence"
+    else
+      val maxShown = 3
+      val shown = errors.take(maxShown).map(_.render).mkString("; ")
+      val ellipsis = if errors.size > maxShown then "; ..." else ""
+      val errorsLabel = if errors.size == 1 then "error" else "errors"
+      s"Recalculated $formulaCount $formulasLabel$errorValues; ${errors.size} $errorsLabel ($shown$ellipsis)$convergence"
+
 object RecalcResult:
   /** One cache/diagnostic contract for whole-workbook and targeted recalculation. */
   private[eval] def cacheResults(

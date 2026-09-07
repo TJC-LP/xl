@@ -287,6 +287,18 @@ Excel.write(result.workbook, "model.xlsx")       // computed values cached for E
 
 **Circular models are opt-in** (0.13.0): professional schedules (interest on average debt) ship circular by design. `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` Jacobi-fixpoints declared cycles instead of erroring; plain `recalculate()` still isolates cycles as errors. Honor a file's own `<calcPr>` with `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr).fold(wb.recalculate())(wb.recalculate)`, and author it on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))`.
 
+**One options record** (since 0.20.0 — not on the 0.19.3 dep pinned above): every recalculation knob lives on `RecalcOptions`, and `RecalcOptions()` reproduces `recalculate()` exactly, so there is one thing to learn:
+
+```scala
+// since 0.20.0 — fragment, not a runnable script
+val opts = RecalcOptions(iterative = IterativeMode.FromCalcPr, parallelism = 4)  // clock, rng, seedTables too
+wb.recalculate(opts).summary                            // "Recalculated 12 formulas" — the line `xl recalc` prints
+wb.recalculateAfterEdit(sheet, Set(ref"A1"), opts)      // only the edit's dependents; every other cache byte-identical
+wb.recalculateUncached(opts)                            // only cache-less formulas; cached cells never touched
+```
+
+**Renaming a sheet rewrites its references** (since 0.20.0, [#559](https://github.com/TJC-LP/xl/issues/559)): `SheetRenamer.rename(wb, SheetName.unsafe("Sheet1"), SheetName.unsafe("Q1 Data"))` renames the tab AND rewrites `Sheet1!A1` → `'Q1 Data'!A1` in cell formulas on every sheet, defined names, CF and DV formulas, caches preserved; it refuses (`Left`) when a dependent that mentions the sheet cannot be parsed. `Workbook.rename` alone stays tab-only. `SheetRenamer.references(wb, sheet)` lists the cells a rename would touch; `FormulaOps.renameSheet/shift/mentionsSheet` are the string-level pieces.
+
 112 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/MROUND/RAND/NPV/IRR/SEARCH/N/HYPERLINK/CELL/... plus LET) — full list in `reference/API.md`.
 
 ### Data tables (what-if sensitivity)
@@ -419,6 +431,7 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 - **Compose patches with `++`**, not Cats `|+|` (the latter needs type ascription on enum cases).
 - **`fx` with runtime interpolation returns `Either`** — there is deliberately no `:=` overload that swallows a `Left`; unwrap with `.unsafe` or sequence it.
 - **`wb.update` fails on a missing sheet; `wb.upsert` creates it.** Pick by intent.
+- **`wb.rename` does NOT rewrite formulas** ([#559](https://github.com/TJC-LP/xl/issues/559)): it changes the tab and leaves `Sheet1!A1` in every dependent — the file lints clean and Excel shows `#REF!`. Since 0.20.0 use `SheetRenamer.rename(wb, from, to)` (what `xl rename-sheet` and batch `rename-sheet` now do): formulas on every sheet, defined names, CF and DV follow the rename with caches preserved. On ≤0.19.3 rewrite dependents yourself (`FormulaParser.parse` → walk → `FormulaPrinter.printFileForm`) or rename before authoring cross-sheet formulas.
 - **Range fill cost = range size**: `ref"A:A" := 0` really creates 1,048,576 cells (that's what a fill means) — size fill ranges to your data.
 - **`shift`/`down`/`up`/`left`/`right` are unchecked at the edges**: `ref"A1".up()` produces an invalid "A0" ref that corrupts output if written. Since 0.20.0 ([#465](https://github.com/TJC-LP/xl/issues/465)) use the bounded forms in loops — `ref.tryDown(n)`/`tryRight(n)`/`tryShift(dc, dr)` return `None` past the grid (column A..XFD, row 1..1048576) and `ref.clampShift(dc, dr)` pins each axis to the nearest edge; `range.rows`/`columns` and `range.row(i)`/`column(i)` (`Option`, 0-based) slice a range instead of interpolating its corners. On ≤0.19.x keep loop bounds inside your data extent.
 - **First run is slow** (dependency download); afterwards scala-cli caches everything.

@@ -125,7 +125,11 @@ object SheetCommands:
     yield s"Removed sheet: $name\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
-   * Rename a sheet.
+   * Rename a sheet AND every reference to it (GH-559): `SheetRenamer.rename` rewrites the sheet
+   * qualifier in cell formulas on every sheet, defined names, conditional-format and
+   * data-validation formulas, preserving cached values (a rename changes no value). The summary
+   * counts the cell formulas whose text changed. A dependent formula that mentions the sheet but
+   * cannot be parsed refuses the whole rename before anything is written.
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer
@@ -141,7 +145,7 @@ object SheetCommands:
     for
       oldSheetName <- IO.fromEither(SheetName(oldName).left.map(e => new Exception(e)))
       newSheetName <- IO.fromEither(SheetName(newName).left.map(e => new Exception(e)))
-      updatedWb <- IO.fromEither(wb.rename(oldSheetName, newSheetName).left.map {
+      updatedWb <- IO.fromEither(SheetRenamer.rename(wb, oldSheetName, newSheetName).left.map {
         case XLError.SheetNotFound(_) =>
           new Exception(
             s"Sheet '$oldName' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
@@ -150,8 +154,27 @@ object SheetCommands:
           new Exception(s"Sheet '$newName' already exists")
         case e => new Exception(e.message)
       })
+      rewritten = rewrittenFormulaCount(wb, updatedWb)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Renamed: $oldName → $newName\n${Format.saveSuffix(outputPath, stream)}"
+      suffix = if rewritten > 0 then s"; $rewritten formula(s) rewritten" else ""
+    yield s"Renamed: $oldName → $newName$suffix\n${Format.saveSuffix(outputPath, stream)}"
+
+  /**
+   * Cell formulas whose text a rename changed: sheets keep their positions under a rename, so the
+   * two workbooks are compared position by position.
+   */
+  private def rewrittenFormulaCount(before: Workbook, after: Workbook): Int =
+    before.sheets
+      .zip(after.sheets)
+      .map { (was, is) =>
+        is.cells.count { (ref, cell) =>
+          (cell.value, was.cells.get(ref).map(_.value)) match
+            case (CellValue.Formula(after, _, _), Some(CellValue.Formula(before, _, _))) =>
+              after != before
+            case _ => false
+        }
+      }
+      .sum
 
   /**
    * Move sheet to new position.

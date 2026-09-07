@@ -1856,7 +1856,10 @@ object BatchParser:
           IO.pure(wb.put(newSheet))
     yield result
 
-  /** Rename a sheet. */
+  /**
+   * Rename a sheet and every reference to it (GH-559): cell formulas on every sheet, defined names,
+   * CF and DV formulas follow the rename through `SheetRenamer.rename`, caches preserved.
+   */
   private def applyRenameSheet(
     wb: Workbook,
     from: String,
@@ -1865,7 +1868,9 @@ object BatchParser:
     for
       oldName <- IO.fromEither(SheetName(from).left.map(e => new Exception(e)))
       newName <- IO.fromEither(SheetName(to).left.map(e => new Exception(e)))
-      result <- IO.fromEither(wb.rename(oldName, newName).left.map(e => new Exception(e.message)))
+      result <- IO.fromEither(
+        SheetRenamer.rename(wb, oldName, newName).left.map(e => new Exception(e.message))
+      )
     yield result
 
   /**

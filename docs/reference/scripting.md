@@ -342,6 +342,68 @@ Reference cycles are **isolated**: the participants and their downstream depende
 (e.g. `Model!A7: Formula error in '=B7': Circular reference` via `CellEvalError.render`) while
 the acyclic remainder still evaluates and caches.
 
+### One primitive: `recalculate(options)` (since 0.20.0)
+
+The clock/rng/iterative/parallel overloads above remain, but they are forwarders for one
+options-driven primitive. `RecalcOptions` carries every knob with the value the zero-argument
+`recalculate()` uses, so `wb.recalculate(RecalcOptions())` is `wb.recalculate()` on an acyclic
+book, byte for byte:
+
+```scala
+// since 0.20.0 — fragment, not a runnable script
+val opts = RecalcOptions(
+  clock = Clock.fixedDate(java.time.LocalDate.of(2026, 1, 31)),
+  rng = Rng.seeded(42L),
+  iterative = IterativeMode.FromCalcPr, // honour <calcPr iterate>; Off isolates cycles; Force(calc) iterates regardless
+  parallelism = 4,                      // wave-parallel independent regions (a declared iteration wins and runs sequentially)
+  seedTables = false                    // true also seeds data-table interiors afterwards
+)
+val result = wb.recalculate(opts)
+println(result.summary)                // exactly the line `xl recalc` prints: "Recalculated 12 formulas"
+```
+
+Three entry points share the record — no default arguments, because extension methods reached
+through the prelude's wildcard export cannot carry them:
+
+| Method | Computes | Leaves alone |
+|--------|----------|--------------|
+| `wb.recalculate(opts)` | every formula on every sheet | — |
+| `wb.recalculateAfterEdit(sheet, refs, opts)` | the edited cells and everything that depends on them (plus dynamic `INDIRECT`/`OFFSET` readers) — what the CLI's `put`/`putf` do after a write; falls back to a full pass when the book iterates | every other cache, byte-identical; unaffected volatile cells never touch the clock |
+| `wb.recalculateUncached(opts)` | only formulas with **no** cached value, in dependency order, reading their inputs' caches as they are | every cached cell, even when its cache is wrong (the caches-are-truth doctrine); uncached cycle members are reported, not guessed |
+
+`RecalcResult.summary` renders the result as the CLI does — formula count, `(N error values)`,
+the first three failures, and the iterative verdict — so a script and `xl recalc` report the same
+thing on the same file.
+
+### Renaming a sheet rewrites its references (since 0.20.0)
+
+`Workbook.rename` is deliberately formula-blind (xl-core has no parser): it changes the tab and
+leaves `Sheet1!A1` in every other formula — a file that lints clean and opens in Excel as `#REF!`
+([#559](https://github.com/TJC-LP/xl/issues/559)). `SheetRenamer.rename` is the rename that
+follows through:
+
+```scala
+// since 0.20.0 — fragment, not a runnable script
+val renamed: XLResult[Workbook] =
+  SheetRenamer.rename(wb, SheetName.unsafe("Sheet1"), SheetName.unsafe("Q1 Data"))
+// Sheet2!A1  =Sheet1!A1*2        → ='Q1 Data'!A1*2   (quoted because the name needs it)
+// name Total Sheet1!$A$1         → 'Q1 Data'!$A$1     (comma unions rewritten segment by segment)
+// CF  Expression("Sheet1!A1>0")  → 'Q1 Data'!A1>0     (CellIs, Expression, Cfvo.Formula)
+// DV  List("Sheet1!$A$1:$A$3")   → 'Q1 Data'!$A$1:$A$3
+SheetRenamer.references(wb, SheetName.unsafe("Sheet1")) // Vector[QualifiedRef]: the cells it would touch
+```
+
+Cached values and formula record kinds are preserved (a rename changes no value); a string literal
+that spells the name, an external-workbook reference (`[2]Sheet1!A1`) and a sibling whose name
+merely contains it (`Sheet10`) are untouched; a dependent text that mentions the sheet but cannot
+be parsed refuses the whole rename (`Left(FormulaError)`) with the workbook untouched. Every changed
+sheet goes back through `Workbook.put`, so a workbook read from disk writes the rewritten sheets and
+copies the untouched ones byte-for-byte. `Preserved` CF/DV/chart payloads and hyperlink locations
+are not rewritten (see LIMITATIONS.md). The same engine is exposed string-in/string-out as
+`FormulaOps.renameSheet(text, from, to)`, `FormulaOps.shift(text, dc, dr)` and
+`FormulaOps.mentionsSheet(text, sheet)`, and the structural editor (`StructuralEditor.insertRowsChecked`
+and friends) is reachable from the prelude too.
+
 Since 0.13.0, **circular models are opt-in** rather than always errors: pass an `IterativeCalc` to
 fixpoint declared cycles instead —
 `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` runs Jacobi

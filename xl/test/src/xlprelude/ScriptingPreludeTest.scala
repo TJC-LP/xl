@@ -548,3 +548,57 @@ class ScriptingPreludeTest extends FunSuite:
         assertEquals(cached, Some(CellValue.Number(BigDecimal(7))))
         assertEquals(k.ca, true)
       case other => fail(s"G2 record lost through prelude round-trip: $other")
+
+  test("GH-559: RecalcOptions, IterativeMode and the options-driven recalculate family resolve"):
+    val opts: RecalcOptions = RecalcOptions()
+    assertEquals(opts.parallelism, RecalcOptions.default.parallelism)
+    assertEquals(opts.iterative, IterativeMode.FromCalcPr: IterativeMode)
+    val off: IterativeMode = IterativeMode.Off
+    val forced: IterativeMode = IterativeMode.Force(IterativeCalc(100, BigDecimal("0.001")))
+    assert(off != forced)
+    val sheet1 = SheetName.unsafe("Sheet1")
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1", 5),
+      Sheet("Sheet2").put(ref"A1", fx"=Sheet1!A1*2").put(ref"B1", fx"=A1+1")
+    )
+    val full: RecalcResult = wb.recalculate(RecalcOptions.default)
+    assert(full.isClean)
+    assertEquals(full.summary, "Recalculated 2 formulas")
+    val parallel: RecalcResult = wb.recalculate(RecalcOptions(parallelism = 2, iterative = off))
+    assertEquals(parallel.evaluated, full.evaluated)
+    val afterEdit: RecalcResult = wb.recalculateAfterEdit(sheet1, Set(ref"A1"), opts)
+    assert(afterEdit.isClean)
+    val uncached: RecalcResult = wb.recalculateUncached(opts)
+    assertEquals(uncached.evaluated, full.evaluated)
+    assertEquals(uncached.workbook, full.workbook)
+
+  test(
+    "GH-559: SheetRenamer, FormulaOps, FormulaShifter, StructuralEditor and QualifiedRef resolve"
+  ):
+    val sheet1 = SheetName.unsafe("Sheet1")
+    val data = SheetName.unsafe("Data")
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1", 5),
+      Sheet("Sheet2").put(ref"A1", fx"=Sheet1!A1*2")
+    )
+    val refs: Vector[QualifiedRef] = SheetRenamer.references(wb, sheet1)
+    assertEquals(refs, Vector(QualifiedRef(SheetName.unsafe("Sheet2"), ref"A1")))
+    val renamed: XLResult[Workbook] = SheetRenamer.rename(wb, sheet1, data)
+    val rewritten = renamed
+      .fold(e => fail(e.message), identity)
+      .sheets
+      .find(_.name.value == "Sheet2")
+      .map(_(ref"A1").value)
+    // fx literals keep their display-form leading '='; the rewrite keeps the caller's convention.
+    assertEquals(rewritten, Some(CellValue.Formula("=Data!A1*2", None)))
+    assertEquals(
+      FormulaOps.renameSheet("=Sheet1!A1*2", sheet1, data),
+      Right("=Data!A1*2"): XLResult[String]
+    )
+    assertEquals(FormulaOps.shift("=A1+$B$1", 1, 1), Right("=B2+$B$1"): XLResult[String])
+    assert(FormulaOps.mentionsSheet("Sheet1!A1", sheet1))
+    val shifted = FormulaParser
+      .parse("=A1")
+      .map(expr => FormulaPrinter.print(FormulaShifter.shift(expr, 1, 1)))
+    assertEquals(shifted, Right("=B2"): Either[ParseError, String])
+    assert(StructuralEditor.insertRowsChecked(wb, sheet1, 0, 1).isRight)

@@ -6,7 +6,7 @@ import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
 import scala.annotation.nowarn
 
 import com.tjclp.xl.{Anchor, CellRange}
-import com.tjclp.xl.addressing.{ARef, Column, Row}
+import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
 import TExpr.RangeLocation
 
 /**
@@ -321,6 +321,135 @@ object FormulaShifter:
           CoercedBindingRef(_, _) =>
         false
     go(expr)
+
+  /**
+   * GH-559: true when `expr` mentions `sheet` anywhere a rename must follow — every node
+   * [[referencesSheet]] counts PLUS sheet-qualified defined names (`Sheet!name`,
+   * [[TExpr.SheetNameRef]]). `referencesSheet` deliberately returns false for `SheetNameRef` (a
+   * structural edit never moves an identifier) and `StructuralEditor` depends on that; a rename
+   * changes the qualifier itself, so it needs this wider gate. External-workbook references never
+   * count: `[2]Sheet1!A1` names a sheet in ANOTHER workbook.
+   */
+  def mentionsSheet(expr: TExpr[?], sheet: String): Boolean =
+    referencesSheet(expr, sheet) || mentionsSheetName(expr, sheet)
+
+  /** The `SheetNameRef` half of [[mentionsSheet]]: does any sheet-qualified NAME target `sheet`? */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def mentionsSheetName(expr: TExpr[?], sheet: String): Boolean =
+    import TExpr.*
+    // GH-394: a sheet-qualified name can also sit in a range slot (`SUMIF(Model!rev_range, …)`)
+    def goLoc(location: RangeLocation): Boolean = location match
+      case RangeLocation.Name(_, Some(scope)) => scope.value.equalsIgnoreCase(sheet)
+      case RangeLocation.Name(_, None) | RangeLocation.Local(_) | RangeLocation.CrossSheet(_, _) |
+          RangeLocation.External(_, _, _) =>
+        false
+    def go(e: TExpr[?]): Boolean = e match
+      case SheetNameRef(qualifier, _) => qualifier.value.equalsIgnoreCase(sheet)
+      case Aggregate(_, location) => goLoc(location)
+      case call: Call[?] =>
+        var found = false
+        call.spec.argSpec.map(call.args)(
+          arg => { if go(arg) then found = true; arg },
+          loc => { if goLoc(loc) then found = true; loc },
+          range => range
+        )
+        found
+      case Add(x, y) => go(x) || go(y)
+      case Sub(x, y) => go(x) || go(y)
+      case Mul(x, y) => go(x) || go(y)
+      case Div(x, y) => go(x) || go(y)
+      case Pow(x, y) => go(x) || go(y)
+      case Concat(x, y) => go(x) || go(y)
+      case Eq(x, y) => go(x) || go(y)
+      case Neq(x, y) => go(x) || go(y)
+      case Lt(x, y) => go(x) || go(y)
+      case Lte(x, y) => go(x) || go(y)
+      case Gt(x, y) => go(x) || go(y)
+      case Gte(x, y) => go(x) || go(y)
+      case ToInt(inner) => go(inner)
+      case UnaryPlus(inner) => go(inner)
+      case Percent(inner) => go(inner)
+      case DateToSerial(inner) => go(inner)
+      case DateTimeToSerial(inner) => go(inner)
+      case Coerced(inner, _) => go(inner)
+      case Let(bindings, body) => bindings.exists((_, value) => go(value)) || go(body)
+      case Lit(_) | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_) | SheetRef(_, _, _, _) |
+          SheetPolyRef(_, _, _) | SheetRange(_, _) | ExternalRef(_, _, _, _) |
+          ExternalRange(_, _, _) | BindingRef(_) | NameRef(_) | CoercedBindingRef(_, _) =>
+        false
+    go(expr)
+
+  /**
+   * GH-559: rewrite every reference to sheet `from` (case-insensitive, matching
+   * [[shiftStructural]]'s convention) so it names `to` instead — `SheetRef`, `SheetPolyRef`,
+   * `SheetRange`, `RangeLocation.CrossSheet` in aggregate and function arguments, and
+   * sheet-qualified defined names (`SheetNameRef`). Coordinates, anchors, decoders, local
+   * references, defined names and external-workbook references (`[2]Sheet1!A1` lives in another
+   * workbook) are untouched, so the result prints with the new qualifier and nothing else changed.
+   *
+   * Laws (pinned in SheetRenamerSpec): `renameSheet(renameSheet(e, a, b), b, a) == e` when `e`
+   * never mentions `b`; `!mentionsSheet(renameSheet(e, a, b), a)` for `a != b`.
+   */
+  def renameSheet[A](expr: TExpr[A], from: SheetName, to: SheetName): TExpr[A] =
+    if from == to then expr else renameSheetInternal(expr, from.value, to)
+
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  @nowarn("msg=Unreachable case")
+  private def renameSheetInternal[A](expr: TExpr[A], from: String, to: SheetName): TExpr[A] =
+    import TExpr.*
+    def target(sheet: SheetName): SheetName =
+      if sheet.value.equalsIgnoreCase(from) then to else sheet
+    def go[B](e: TExpr[B]): TExpr[B] = renameSheetInternal(e, from, to)
+    def goLocation(location: RangeLocation): RangeLocation = location match
+      case RangeLocation.CrossSheet(sheet, range) => RangeLocation.CrossSheet(target(sheet), range)
+      // GH-394: a sheet-qualified name in a range slot (`SUMIF(Model!rev_range, …)`) follows too
+      case RangeLocation.Name(name, Some(scope)) => RangeLocation.Name(name, Some(target(scope)))
+      case other @ (RangeLocation.Local(_) | RangeLocation.External(_, _, _) |
+          RangeLocation.Name(_, None)) =>
+        other
+
+    expr match
+      case SheetRef(sheet, at, anchor, decode) => SheetRef(target(sheet), at, anchor, decode)
+      case SheetPolyRef(sheet, at, anchor) =>
+        SheetPolyRef(target(sheet), at, anchor).asInstanceOf[TExpr[A]]
+      case SheetRange(sheet, range) => SheetRange(target(sheet), range).asInstanceOf[TExpr[A]]
+      case SheetNameRef(sheet, name) => SheetNameRef(target(sheet), name).asInstanceOf[TExpr[A]]
+      // Nothing to rename: local refs, literals, identifiers, external-workbook refs
+      case _: Ref[?] | _: PolyRef | _: RangeRef | _: ExternalRef | _: ExternalRange | _: Lit[?] |
+          _: BindingRef | _: NameRef | _: CoercedBindingRef[?] =>
+        expr
+      case Add(x, y) => Add(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Sub(x, y) => Sub(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Mul(x, y) => Mul(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Div(x, y) => Div(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Pow(x, y) => Pow(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Concat(x, y) => Concat(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Eq(x, y) => Eq(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Neq(x, y) => Neq(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Lt(x, y) => Lt(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Lte(x, y) => Lte(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Gt(x, y) => Gt(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case Gte(x, y) => Gte(go(x), go(y)).asInstanceOf[TExpr[A]]
+      case ToInt(e) => ToInt(go(e)).asInstanceOf[TExpr[A]]
+      case UnaryPlus(e) => UnaryPlus(go(e))
+      case Percent(e) => Percent(go(e)).asInstanceOf[TExpr[A]]
+      case Aggregate(aggId, location) =>
+        Aggregate(aggId, goLocation(location)).asInstanceOf[TExpr[A]]
+      case call: Call[?] =>
+        val renamed = call.spec.argSpec.map(call.args)(
+          e => go(e),
+          goLocation,
+          range => range
+        )
+        Call(call.spec, renamed).asInstanceOf[TExpr[A]]
+      case DateToSerial(e) => DateToSerial(go(e)).asInstanceOf[TExpr[A]]
+      case DateTimeToSerial(e) => DateTimeToSerial(go(e)).asInstanceOf[TExpr[A]]
+      case Let(bindings, body) =>
+        Let(
+          bindings.map((name, value) => (name, go(value.asInstanceOf[TExpr[Any]]))),
+          go(body)
+        ).asInstanceOf[TExpr[A]]
+      case Coerced(inner, coercion) => Coerced(go(inner), coercion).asInstanceOf[TExpr[A]]
 
   /**
    * Structurally shift references in `expr` for a row/column insert (delta > 0) or delete (delta <

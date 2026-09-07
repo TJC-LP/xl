@@ -938,9 +938,9 @@ object WriteCommands:
    * invalidate cached formula values anywhere in the workbook (cross-sheet dependents included),
    * and `BatchParser` stores batch formulas uncached (`Formula(expr, None)`). Ops that only touch
    * presentation or metadata (styles, comments, widths, visibility, merges, freeze panes, sheet
-   * management, hyperlinks) leave every existing cached value correct — a rename even rewrites
-   * referencing formulas without changing their values — so a batch made exclusively of them skips
-   * the recalculation and preserves the input's caches as-is.
+   * management, hyperlinks) leave every existing cached value correct — `rename-sheet` (GH-559)
+   * rewrites referencing formulas and names without changing a value — so a batch made exclusively
+   * of them skips the recalculation and preserves the input's caches as-is.
    *
    * The match is deliberately exhaustive (no wildcard): a future `BatchOp` must be consciously
    * classified here or the match fails loudly — in practice as a MatchError in the batch specs (the

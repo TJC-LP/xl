@@ -64,6 +64,18 @@ object formulaExports:
   // not via wildcard export (Scala 3 compiler bug)
   export formula.eval.DependentRecalculation
 
+  // ADR-017 §2.8/§2.9 (GH-559): the options record behind wb.recalculate(options) /
+  // recalculateAfterEdit / recalculateUncached, the reference-rewriting sheet renamer, and the
+  // structural editor + string-level formula rewriting the CLI and scripts share. The objects are
+  // exported, never their `.*` members: StructuralEditor's extension block carries default
+  // arguments (the wildcard-export landmine above).
+  export formula.eval.{IterativeMode, RecalcOptions, SheetRenamer, StructuralEditor}
+  export formula.printer.{FormulaOps, FormulaShifter}
+  // Explicit type + val pair (an exported companion loses its type alias for external consumers).
+  type QualifiedRef = formula.graph.DependencyGraph.QualifiedRef
+  val QualifiedRef: formula.graph.DependencyGraph.QualifiedRef.type =
+    formula.graph.DependencyGraph.QualifiedRef
+
   // Display strategy with formula evaluation
   // The evaluating given has higher priority than default due to LowPriority pattern
   export formula.display.EvaluatingFormulaDisplay
