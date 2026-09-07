@@ -12,6 +12,9 @@ import java.time.{LocalDate, LocalDateTime}
 
 /** Extension methods for type-safe cell operations using codecs */
 object syntax:
+  // Records as rows (GH-590): readRows / readRowsByHeader / headers / column / putRows / putTable
+  export rowSyntax.*
+
   extension (sheet: Sheet)
 
     /**

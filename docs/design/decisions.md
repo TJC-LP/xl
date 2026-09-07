@@ -58,12 +58,12 @@
 - **Update**: Streaming *reads* later moved to a plain SAX parser (`SaxStreamingReader`, 3–4x faster, still O(1) — see `performance-investigation.md`); fs2-data-xml remains the row-stream *write* backend (`StreamingXmlWriter`)
 
 ## ADR-008: CellCodec primitives over derivation
-**Date**: 2025-01 (P6)
-**Status**: ✅ Implemented (primitives), ⬜ Deferred (derivation)
+**Date**: 2025-01 (P6); amended 2026-09 (W2.9, GH-590)
+**Status**: ✅ Implemented (primitives, hand-written), ✅ Implemented (row codecs, derived)
 
-- **Decision**: Ship 9 inline `given CellCodec[A]` instances for primitives; defer Magnolia/Shapeless derivation to P6b
-- **Rationale**: 80% use case covered with zero dependencies; derivation is complex and can wait
-- **Consequence**: Users write case class codecs manually for now, but library stays lean
+- **Decision**: Primitives hand-written, row codecs derived. The 9 `given CellCodec[A]` instances stay hand-written and nothing is derived at the cell level. Records are a separate type class, `RowCodec[A]` (one record ↔ one row of cells), derived from `Mirror.ProductOf` with `case class Order(...) derives RowCodec`: one `FieldCodec` per field, resolved from the field type's `CellCodec`, `Option[T]` fields as empty cells. Zero dependencies — the P6b Magnolia/Shapeless plan is superseded.
+- **Rationale**: a cell holds one primitive, so a cell codec has nothing to derive; a row holds a product, so a row codec has everything to derive — and deriving at the row level fixes the layout too (field order = column order, field names = header row), which is exactly what `readRowsByHeader` and `putTable` need. A new field type costs one `given CellCodec[T]`, never a second derivation.
+- **Consequence**: `Sheet.readRows` / `readRowsByHeader` / `headers` / `column` / `putRows` / `putRowsWithHeader` / `putTable` come for free from a `derives` clause; `RowCodecError.Field(row, column, field, cause)` names the cell an agent has to fix. Derivation is `inline` only for the per-field summons and the label read — the codec instance is built once, non-inline — and the external-consumer probe (`xlprelude.RowCodecPreludeTest`) gates the export/inline landmine (`xl-scala-style`). The round-trip law `readRows(putRows(at, rows).dataRange) == Right(rows)` holds over generators for every codec type, required and optional (`RowCodecSpec`).
 
 ## ADR-009: HTML export as core feature
 **Date**: 2025-01 (P31)

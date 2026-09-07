@@ -80,4 +80,17 @@ val updated = loaded
   .unsafe
 println(s"  ✓ Updated via XLResult + .unsafe boundary")
 
+// ========== 8. Records: a case class is a row (derives RowCodec) ==========
+// Field order = column order, field names = header row, Option fields = empty cells.
+final case class Order(id: Int, customer: String, qty: Int, price: BigDecimal, shipped: Option[LocalDate])
+  derives RowCodec
+
+val orders = Vector(
+  Order(1, "Acme", 3, BigDecimal("9.99"), Some(LocalDate.of(2026, 1, 15))),
+  Order(2, "Globex", 1, BigDecimal("120.00"), None)
+)
+val placed = Sheet("Orders").putTable(ref"A1", orders, "Orders").unsafe // header + rows + Excel table
+val back = placed.sheet.readRowsByHeader[Order](Row.from1(1))            // Either[RowCodecError, Vector[Order]]
+println(s"  ✓ Records: wrote ${placed.count} rows over ${placed.range.map(_.toA1).getOrElse("-")}, read back ${back.map(_.size).getOrElse(-1)}")
+
 println("\n✨ One import. Compile-time refs. Total loops. Either at the edges.")

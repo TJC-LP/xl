@@ -236,6 +236,23 @@ val sheet = Sheet("Sales").put(rows)
 
 ### Typed extraction
 
+Records first (0.21.0): a case class that `derives RowCodec` reads and writes whole rows — field
+order is column order, field names are the header row, `Option[T]` fields are empty cells.
+
+```scala
+final case class Product(name: String, units: Int, price: BigDecimal, note: Option[String])
+  derives RowCodec
+
+val products = sheet.readRowsByHeader[Product](Row.from1(1)) // Either[RowCodecError, Vector[Product]]
+val placed = Sheet("Out").putRowsWithHeader(ref"A1", products.unsafe).unsafe // header + rows
+placed.dataRange                                             // Some(A2:D…) — style/filter/total from here
+Sheet("Out").putTable(ref"A1", products.unsafe, "Products")  // + an Excel table over header + rows
+```
+
+`readRows[Product](range)` is the positional twin (range width must equal the record's); errors
+are `RowCodecError.Field(row, column, field, cause)` / `Missing` / `HeaderNotFound` / `Width`
+with `.message` and `.toXLError`. Per-cell reads remain for ad-hoc shapes:
+
 ```scala
 final case class Product(name: String, units: Int, price: BigDecimal)
 
