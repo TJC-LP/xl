@@ -427,6 +427,8 @@ object ArrayArithmetic:
   def conditionTruthy(label: String, cv: CellValue): Either[EvalError, Boolean] = cv match
     case CellValue.Bool(b) => Right(b)
     case CellValue.Number(n) => Right(n.signum != 0)
+    // GH-564: dates are numbers in Excel's value model — their serial is zero/non-zero
+    case CellValue.DateTime(dt) => Right(CellValue.dateTimeToExcelSerial(dt) != 0.0)
     case CellValue.Empty => Right(false)
     case CellValue.Formula(_, Some(cached), _) => conditionTruthy(label, cached)
     case CellValue.Error(err) =>

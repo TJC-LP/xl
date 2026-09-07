@@ -1365,12 +1365,14 @@ private class EvaluatorImpl(
     case b: Boolean => if b then "TRUE" else "FALSE"
     case bd: BigDecimal => bd.toString
     case i: Int => i.toString
-    case ld: java.time.LocalDate => ld.toString
-    case ldt: java.time.LocalDateTime => ldt.toString
+    // GH-561: `&` on a date yields its Excel serial ("46023"), never ISO text — dates are
+    // numbers; only TEXT() formats them (the `">="&DATE(y,m,d)` criteria idiom depends on it)
+    case ld: java.time.LocalDate => ScalarCoercion.dateSerialText(ld)
+    case ldt: java.time.LocalDateTime => ScalarCoercion.dateSerialText(ldt)
     case CellValue.Text(s) => s
     case CellValue.Number(n) => n.toString
     case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-    case CellValue.DateTime(dt) => dt.toString
+    case CellValue.DateTime(dt) => ScalarCoercion.dateSerialText(dt)
     case CellValue.Empty => ""
     case other => other.toString
 

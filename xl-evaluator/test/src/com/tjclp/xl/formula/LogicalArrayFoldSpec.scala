@@ -178,15 +178,82 @@ class LogicalArrayFoldSpec extends FunSuite:
     assertScalar(mixedTF, "=OR(1<2, 2<1)", CellValue.Bool(true))
   }
 
-  test("GH-338: bare-range arguments keep their pre-existing error (out of scope)") {
-    // Raw-range coercion parity (Excel skips text/blanks) is documented out of scope in GH-338
-    val andResult = mixedTF.evaluateFormula("=AND(A1:A2)")
-    assert(andResult.isLeft, s"Expected Left, got $andResult")
-    assert(
-      andResult.left.toOption.get.message.contains("must be used within a function"),
-      s"unexpected error: $andResult"
-    )
-    assert(mixedTF.evaluateFormula("=OR(A1:A2)").isLeft)
+  // ===== GH-564: bare RANGE arguments fold like Excel's reference rule =====
+
+  test("GH-564: AND/OR over a bare range fold its logical cells (the =AND(K9:K21) check row)") {
+    val allTrue = Sheet("Test")
+      .put(ref"G1", CellValue.Bool(true))
+      .put(ref"G2", CellValue.Bool(true))
+      .put(ref"G3", CellValue.Bool(true))
+    assertScalar(allTrue, "=AND(G1:G3)", CellValue.Bool(true))
+    assertScalar(allTrue, "=OR(G1:G3)", CellValue.Bool(true))
+    val oneFalse = allTrue.put(ref"G2", CellValue.Bool(false))
+    assertScalar(oneFalse, "=AND(G1:G3)", CellValue.Bool(false))
+    assertScalar(oneFalse, "=OR(G1:G3)", CellValue.Bool(true))
+    assertScalar(oneFalse, "=AND(G1:G3, 2>1)", CellValue.Bool(false))
+    assertScalar(oneFalse, "=OR(G2, G2:G2)", CellValue.Bool(false))
+  }
+
+  test("GH-564: numeric cells in a range count as zero/non-zero, like Excel") {
+    // mixedTF: A1 = 5, A2 = -1 — both non-zero
+    assertScalar(mixedTF, "=AND(A1:A2)", CellValue.Bool(true))
+    assertScalar(mixedTF, "=OR(A1:A2)", CellValue.Bool(true))
+    val withZero = mixedTF.put(ref"A2", CellValue.Number(0))
+    assertScalar(withZero, "=AND(A1:A2)", CellValue.Bool(false))
+    assertScalar(withZero, "=OR(A1:A2)", CellValue.Bool(true))
+  }
+
+  test("GH-564: text and blank cells in a range are ignored") {
+    val mixed = Sheet("Test")
+      .put(ref"A1", CellValue.Bool(true))
+      .put(ref"A2", CellValue.Text("n/a"))
+      // A3 blank
+      .put(ref"A4", CellValue.Bool(true))
+    assertScalar(mixed, "=AND(A1:A4)", CellValue.Bool(true))
+    assertScalar(mixed, "=OR(A1:A4)", CellValue.Bool(true))
+    val falseTail = mixed.put(ref"A4", CellValue.Bool(false))
+    assertScalar(falseTail, "=AND(A1:A4)", CellValue.Bool(false))
+    assertScalar(falseTail, "=OR(A1:A4)", CellValue.Bool(true))
+  }
+
+  test("GH-564: a range with no logical values is #VALUE! unless another argument decides") {
+    val textOnly = Sheet("Test")
+      .put(ref"A1", CellValue.Text("x"))
+      .put(ref"A2", CellValue.Text("y"))
+    assertScalar(textOnly, "=AND(A1:A3)", CellValue.Error(CellError.Value))
+    assertScalar(textOnly, "=OR(A1:A3)", CellValue.Error(CellError.Value))
+    assertScalar(textOnly, "=AND(TRUE, A1:A3)", CellValue.Bool(true))
+    assertScalar(textOnly, "=OR(A1:A3, FALSE)", CellValue.Bool(false))
+  }
+
+  test("GH-564: an error cell in a range propagates its error value (GH-344 parity)") {
+    val withError = Sheet("Test")
+      .put(ref"A1", CellValue.Bool(true))
+      .put(ref"A2", CellValue.Error(CellError.NA))
+    assertScalar(withError, "=AND(A1:A2)", CellValue.Error(CellError.NA))
+    assertScalar(withError, "=OR(A1:A2)", CellValue.Error(CellError.NA))
+  }
+
+  test("GH-564: cached formula cells in a range contribute their cached logical value") {
+    val cached = Sheet("Test")
+      .put(ref"A1", CellValue.Formula("1>0", Some(CellValue.Bool(true))))
+      .put(ref"A2", CellValue.Formula("1>2", Some(CellValue.Bool(false))))
+    assertScalar(cached, "=AND(A1:A2)", CellValue.Bool(false))
+    assertScalar(cached, "=OR(A1:A2)", CellValue.Bool(true))
+  }
+
+  test("GH-564: uncached formula cells in a range are evaluated, not skipped (GH-499 reader)") {
+    val uncached = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"B1", CellValue.Formula("A1>0", None))
+      .put(ref"B2", CellValue.Formula("A1>2", None))
+    assertScalar(uncached, "=AND(B1:B2)", CellValue.Bool(false))
+    assertScalar(uncached, "=OR(B1:B2)", CellValue.Bool(true))
+  }
+
+  test(
+    "GH-338: NOT over a bare range keeps its pre-existing error (elementwise, no reference fold)"
+  ) {
     assert(mixedTF.evaluateFormula("=NOT(A1:A2)").isLeft)
   }
 
@@ -220,4 +287,17 @@ class LogicalArrayFoldSpec extends FunSuite:
     assertScalar(mixedTF, "=IFS(TRUE, 42, 1/0>0, 99)", CellValue.Number(42))
     assertScalar(mixedTF, "=IFS(1>2, 1, 2>1, 7)", CellValue.Number(7))
     assertScalar(mixedTF, "=IFS(1>2, 1)", CellValue.Error(CellError.NA))
+  }
+
+  test("GH-564: date cells are numbers — a non-zero serial is TRUE in ranges, scalars and arrays") {
+    val dated = Sheet("Test")
+      .put(ref"A1", CellValue.DateTime(java.time.LocalDate.of(2026, 1, 1).atStartOfDay()))
+      .put(ref"A2", CellValue.Bool(false))
+    assertScalar(dated, "=OR(A1:A1)", CellValue.Bool(true))
+    assertScalar(dated, "=AND(A1:A2)", CellValue.Bool(false))
+    assertScalar(dated, "=AND(A1:A1)", CellValue.Bool(true))
+    assertScalar(dated, "=OR(A1)", CellValue.Bool(true))
+    assertScalar(dated, "=AND(A1, TRUE)", CellValue.Bool(true))
+    assertScalar(dated, "=IF(A1, 1, 0)", CellValue.Number(1))
+    assertScalar(dated, "=NOT(A1)", CellValue.Bool(false))
   }
