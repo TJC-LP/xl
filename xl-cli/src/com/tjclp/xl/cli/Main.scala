@@ -1773,11 +1773,13 @@ EXAMPLES:
     }
 
   /**
-   * Read the input through `excel`, classifying a failed read as `IO_READ` (exit 3) with ExcelIO's
-   * message verbatim; a `CliException` already raised below passes through unchanged.
+   * Classify a failure while reading the input at `path` as `IO_READ` (exit 3), keeping the message
+   * verbatim; a `CliException` already raised below passes through unchanged. Every read of the
+   * input — full workbook, metadata quick path, lint's raw zip — goes through this so one condition
+   * (missing or unreadable file) has one code.
    */
-  private def readWorkbook(excel: ExcelIO[IO], path: Path, config: ReaderConfig): IO[Workbook] =
-    excel.readWith(path, config).adaptError {
+  private def classifyRead[A](path: Path)(read: IO[A]): IO[A] =
+    read.adaptError {
       case cli: CliException => cli
       case other =>
         CliException(
@@ -1788,6 +1790,10 @@ EXAMPLES:
           )
         )
     }
+
+  /** Read the input through `excel` under [[classifyRead]]. */
+  private def readWorkbook(excel: ExcelIO[IO], path: Path, config: ReaderConfig): IO[Workbook] =
+    classifyRead(path)(excel.readWith(path, config))
 
   private[cli] def runInfo(io: CliIO): IO[ExitCode] =
     io.out(formatFunctionList()).as(ExitCode.Success)
@@ -2012,9 +2018,10 @@ EXAMPLES:
 
   /**
    * Run the lint command with its exit codes: 0 = clean, 1 = findings (a result, not a failure), 3 =
-   * error (unreadable file, missing/malformed core part) reported on stderr with the `XLError`'s
-   * code. Opens the zip directly — NOT ExcelIO.read — because a full parse would repair/normalize
-   * the very structure lint inspects (GH-397).
+   * error reported on stderr — an unreadable input (missing file, not a zip, missing/malformed core
+   * part) as `IO_READ`, the same code every other verb gives that condition. Opens the zip directly
+   * — NOT ExcelIO.read — because a full parse would repair/normalize the very structure lint
+   * inspects (GH-397).
    */
   private[cli] def runLint(
     file: Path,
@@ -2028,7 +2035,11 @@ EXAMPLES:
           case LintFormat.Json => LintCommands.renderJson(file.toString, findings)
         io.out(output).as(if findings.isEmpty then ExitCode.Success else ExitCode(1))
       case Left(err) =>
-        val error = CliError.fromXLError(err, Some(Location.file(file.toString)))
+        val at = Some(Location.file(file.toString))
+        val error = err match
+          case XLError.IOError(_) | XLError.ParseError(_, _) =>
+            CliError(ErrorCode.IO_READ, err.message, location = at, cause = Some(err))
+          case other => CliError.fromXLError(other, at)
         Diagnostics.report(error, io).as(error.exitCode)
     }
 
@@ -2089,7 +2100,7 @@ EXAMPLES:
               readWorkbook(excel, filePath, readerConfig).flatMap(wb => WorkbookCommands.sheets(wb))
             else
               // Quick mode: metadata only (instant)
-              WorkbookCommands.sheetsQuick(filePath)
+              classifyRead(filePath)(WorkbookCommands.sheetsQuick(filePath))
           case SheetsAction.Hide(name, veryHide) =>
             // Hide requires loading workbook and writing output
             requireOutputAction(outputOpt, "sheets hide") { outputPath =>
@@ -2113,7 +2124,7 @@ EXAMPLES:
 
       // Names: always lightweight (defined names don't require cell data)
       case CliCommand.Names =>
-        WorkbookCommands.namesLight(filePath)
+        classifyRead(filePath)(WorkbookCommands.namesLight(filePath))
 
       // Bounds: dimension-first by default (--scan for full scan)
       case CliCommand.Bounds(scan) =>

@@ -1,0 +1,16 @@
+## args
+-f
+<DIR>/circular.xlsx
+-s
+Data
+view
+A1:A1
+--eval
+--strict
+## exit
+1
+## stdout
+## stderr
+Error: Formula evaluation failed: Formula error in '': Circular reference detected: cell_0 → cell_0
+  code: RECALC_GATE
+  hint: drop --strict to render cached values and see the failure as a warning

@@ -32,6 +32,13 @@ object TestFixtures:
   def singleSheetBook(): Workbook =
     Workbook(Vector(Sheet("Sheet1").put(ref"A1", "solo").put(ref"B1", 7)))
 
+  /**
+   * `A1 = A1+1`: a circular reference, so `--eval` cannot evaluate the sheet and `--strict` (on
+   * `view` or a write) gates deterministically.
+   */
+  def circularBook(): Workbook =
+    Workbook(Vector(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None))))
+
   private def book(firstQuantity: Int): Workbook =
     val data = Sheet("Data")
       .put(ref"A1", "Hello")
@@ -51,7 +58,8 @@ object TestFixtures:
     "simple-copy.xlsx" -> (() => simpleBook()),
     "changed.xlsx" -> (() => changedBook()),
     "single.xlsx" -> (() => singleSheetBook()),
-    "inplace.xlsx" -> (() => simpleBook())
+    "inplace.xlsx" -> (() => simpleBook()),
+    "circular.xlsx" -> (() => circularBook())
   )
 
   /** Write every fixture into a fresh temp directory and return it. */

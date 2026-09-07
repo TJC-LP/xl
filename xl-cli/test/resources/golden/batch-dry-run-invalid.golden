@@ -1,0 +1,12 @@
+## args
+batch
+--dry-run
+-
+## stdin
+{"op":"put","ref":"A1","value":"x"}
+## exit
+3
+## stdout
+## stderr
+Error: Batch input must be a JSON array
+  code: INTERNAL

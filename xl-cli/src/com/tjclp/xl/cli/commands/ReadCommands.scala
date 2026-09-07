@@ -8,6 +8,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.ViewFormat
+import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode}
 import com.tjclp.xl.cli.helpers.{SheetResolver, ValueParser}
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown, RendererCommon}
 import com.tjclp.xl.cli.raster.{RasterFormat, RasterizerChain}
@@ -715,7 +716,16 @@ object ReadCommands:
           acc.put(ref, value)
         }
       case Left(error) =>
-        if strict then throw new Exception(s"Formula evaluation failed: ${error.message}")
+        // `view --eval --strict` is a user-requested gate (ADR-017 invariant 5): exit 1 with
+        // RECALC_GATE, never a failure. The message text is unchanged.
+        if strict then
+          throw CliException(
+            CliError(
+              ErrorCode.RECALC_GATE,
+              s"Formula evaluation failed: ${error.message}",
+              hint = Some("drop --strict to render cached values and see the failure as a warning")
+            )
+          )
         else
           // Warn on stderr but return original sheet
           Console.err.println(s"Warning: Formula evaluation failed: ${error.message}")

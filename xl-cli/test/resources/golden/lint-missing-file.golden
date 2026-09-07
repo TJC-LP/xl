@@ -6,4 +6,4 @@ lint
 ## stdout
 ## stderr
 Error: IO error: Failed to open file: <DIR>/missing.xlsx
-  code: IO_ERROR
+  code: IO_READ

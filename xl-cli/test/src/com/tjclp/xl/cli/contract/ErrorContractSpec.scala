@@ -8,11 +8,7 @@ import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
 import cats.effect.{IO, Resource}
 import munit.CatsEffectSuite
 
-import com.tjclp.xl.{*, given}
-import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.BuildInfo
-import com.tjclp.xl.io.ExcelIO
-import com.tjclp.xl.macros.ref
 
 /**
  * The error contract end to end (ADR-017 §2.3), through the in-process harness: every failure
@@ -32,7 +28,8 @@ class ErrorContractSpec extends CatsEffectSuite:
   override def munitFixtures = List(fixtures)
 
   /**
-   * Beyond the golden fixtures: a non-zip, a styles-less package, a circular book, a lint incident.
+   * Beyond the golden fixtures (which include `circular.xlsx`): a non-zip, a styles-less package, a
+   * lint incident.
    */
   private def extras(dir: Path): IO[Unit] =
     for
@@ -40,12 +37,6 @@ class ErrorContractSpec extends CatsEffectSuite:
         Files.write(dir.resolve("corrupt.xlsx"), "not a zip".getBytes(StandardCharsets.UTF_8))
       )
       _ <- IO.blocking(withoutStyles(dir.resolve("simple.xlsx"), dir.resolve("nostyles.xlsx")))
-      _ <- ExcelIO
-        .instance[IO]
-        .write(
-          Workbook(Vector(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None)))),
-          dir.resolve("circular.xlsx")
-        )
       _ <- IO.blocking(writeZip(dir.resolve("incident.xlsx"), incidentParts))
     yield ()
 
@@ -239,8 +230,72 @@ class ErrorContractSpec extends CatsEffectSuite:
         missing,
         3,
         s"IO error: Failed to open file: ${file("missing.xlsx")}",
-        "IO_ERROR"
+        "IO_READ"
       )
+  }
+
+  test("a missing input file is IO_READ (exit 3) on every verb: sheets, names, view, cell, lint") {
+    val missing = file("missing.xlsx")
+    for
+      sheets <- CliHarness.run("-f", missing, "sheets")
+      names <- CliHarness.run("-f", missing, "names")
+      view <- CliHarness.run("-f", missing, "-s", "Data", "view", "A1:B2")
+      cell <- CliHarness.run("-f", missing, "cell", "Data!A1")
+      lint <- CliHarness.run("lint", missing)
+    yield List("sheets" -> sheets, "names" -> names, "view" -> view, "cell" -> cell, "lint" -> lint)
+      .foreach { (verb, run) =>
+        assertEquals(run.exit, 3, s"$verb exit\n${run.stderr}")
+        assertEquals(run.stdout, "", s"$verb stdout must be empty")
+        assert(run.stderr.startsWith("Error: "), s"$verb: ${run.stderr}")
+        assert(run.stderr.contains("  code: IO_READ"), s"$verb: ${run.stderr}")
+      }
+  }
+
+  test("standalone batch --dry-run: invalid JSON and a missing source are diagnostics, exit 3") {
+    for
+      notArray <- CliHarness.run(List("batch", "--dry-run", "-"), """{"op":"put","ref":"A1"}""")
+      missing <- CliHarness.run("batch", "--dry-run", file("no-such-ops.json"))
+    yield
+      assertFailure(notArray, 3, "Batch input must be a JSON array", "INTERNAL")
+      assertEquals(missing.exit, 3, missing.stderr)
+      assertEquals(missing.stdout, "")
+      assert(missing.stderr.startsWith("Error: "), missing.stderr)
+      assert(missing.stderr.contains("  code: "), missing.stderr)
+  }
+
+  test("view --eval --strict on an unevaluable sheet is a gate: exit 1, RECALC_GATE, no result") {
+    for
+      strict <- CliHarness.run(
+        "-f",
+        file("circular.xlsx"),
+        "-s",
+        "Data",
+        "view",
+        "A1:A1",
+        "--eval",
+        "--strict"
+      )
+      advisory <- CliHarness.run(
+        "-f",
+        file("circular.xlsx"),
+        "-s",
+        "Data",
+        "view",
+        "A1:A1",
+        "--eval"
+      )
+    yield
+      assertEquals(strict.exit, 1, strict.stderr)
+      assertEquals(strict.stdout, "", "a gated view renders nothing")
+      assert(
+        lines(strict.stderr).headOption.exists(_.startsWith("Error: Formula evaluation failed: ")),
+        strict.stderr
+      )
+      assert(strict.stderr.contains("  code: RECALC_GATE"), strict.stderr)
+      assert(strict.stderr.contains("  hint: "), strict.stderr)
+      // without --strict the same failure is advisory: the view renders and exits 0
+      assertEquals(advisory.exit, 0, advisory.stderr)
+      assert(advisory.stdout.contains("| A"), advisory.stdout)
   }
 
   test("strict gate still exits 1 with the summary on stdout; -o still writes, -i does not") {

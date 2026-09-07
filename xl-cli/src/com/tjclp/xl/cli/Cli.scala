@@ -151,7 +151,9 @@ object Cli:
     val infoOpts = functionsCmd.map(_ => runInfo(io))
     val rasterOpts = rasterizersCmd.map(_ => runRasterizers(io))
 
-    // Batch dry-run: only needs batch source, no --file or --output
+    // Batch dry-run: only needs batch source, no --file or --output. Same shape as the other
+    // standalone runners: a bad source (invalid JSON, missing file) is a diagnostic on stderr with
+    // the code's exit, never an escaped exception (which IOApp would print as a trace with exit 1).
     val dryRunFlag =
       Opts.flag("dry-run", "Validate batch JSON without writing")
     val batchDryRunOpts =
@@ -159,7 +161,14 @@ object Cli:
         .subcommand("batch", batchHelp) {
           (batchArg, dryRunFlag).mapN((src, _) => src)
         }
-        .map(src => batchDryRun(src, io).flatMap(io.out).as(ExitCode.Success))
+        .map { src =>
+          batchDryRun(src, io).attempt.flatMap {
+            case Right(text) => io.out(text).as(ExitCodes.ok)
+            case Left(failure) =>
+              val error = CliError.fromThrowable(failure)
+              Diagnostics.report(error, io).as(error.exitCode)
+          }
+        }
 
     rasterOpts orElse infoOpts orElse standaloneOpts orElse diffOpts orElse lintOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
 

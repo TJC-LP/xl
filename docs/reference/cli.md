@@ -1443,6 +1443,15 @@ CLI-only codes: `USAGE`, `UNKNOWN_VERB`, `OUTPUT_REQUIRED`, `UNSUPPORTED_IN_STRE
 | `2` | usage — the command line is wrong | unknown verb, flag after the verb, `-o` missing, `-i` with `-o`, `--stream` with an unsupported verb or flag | no |
 | `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit | no |
 
+Two rows worth spelling out:
+
+- `view --eval --strict` whose evaluation fails (a circular reference, an unsupported function) is
+  a **gate**, not a failure: exit `1` with `code: RECALC_GATE` on stderr and nothing rendered on
+  stdout — the same code the write verbs' `--strict` uses. Without `--strict` the view renders the
+  cached values and the failure is a stderr warning, exit `0`.
+- A missing or unreadable input file is `code: IO_READ`, exit `3`, on every verb — `sheets`,
+  `names`, `view`, `cell`, `diff`, `lint` alike.
+
 The same table is printed by `xl --help`. (Earlier releases exited `1` for usage and failures too,
 `2` for `diff`/`lint` runtime errors, and printed errors on stdout.)
 

@@ -695,7 +695,10 @@ Every `xl` invocation exits with one of four codes (also printed by `xl --help`)
 | `0` | ok | | as requested |
 | `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | `-o`: yes; `-i`: no |
 | `2` | usage — the command line is wrong | unknown verb, flag after the verb, `-o` missing, `-i` with `-o`, `--stream` on an unsupported verb/flag | no |
-| `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable file | no |
+| `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable file (`code: IO_READ` on every verb) | no |
+
+`view --eval --strict` whose evaluation fails (e.g. a circular reference) is a gate like the write
+verbs' `--strict`: exit `1`, `code: RECALC_GATE` on stderr, nothing on stdout.
 
 Results go to **stdout**; errors and warnings go to **stderr**, and stdout is empty on any
 failure. An error is `Error: <message>` followed by indented `code: <CODE>` (stable, e.g.
