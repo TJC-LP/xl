@@ -269,7 +269,7 @@ class GroupingCommandSpec extends FunSuite:
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
     assertEquals(result.toOption.get.ops.size, 2)
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: ungroup-rows and ungroup-cols parse without warnings") {
@@ -281,14 +281,14 @@ class GroupingCommandSpec extends FunSuite:
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
     assertEquals(result.toOption.get.ops.size, 2)
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: group-rows unknown property warns") {
     val json = """[{"op": "group-rows", "rows": "1:3", "depth": 2}]"""
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
-    assert(result.toOption.get.warnings.exists(_.contains("depth")), result.toString)
+    assert(result.toOption.get.warnings.exists(_.message.contains("depth")), result.toString)
   }
 
   // ========== batch ops: apply ==========

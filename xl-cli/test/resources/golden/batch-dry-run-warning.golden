@@ -1,0 +1,16 @@
+## args
+batch
+--dry-run
+-
+## stdin
+[{"op":"put","ref":"A1","value":"x","bogus":true,"format":1},{"op":"style","range":"A1","numFormat":"curency"}]
+## exit
+0
+## stdout
+Dry run - 2 operations parsed:
+  PUT A1 = Text(x)
+  STYLE A1
+## stderr
+Warning[UNKNOWN_PROPERTY]: Object 1 (put): unknown properties ignored: bogus. Known: op, sheet, ref, value, values, format, detect
+Warning[FORMAT_HINT_IGNORED]: Object 1 (put): format must be a string (a format name or an Excel format code), got 1 — ignored. Known names: general, integer, number, decimal, currency, percent, percent_decimal, date, datetime, time, text.
+Warning[FORMAT_HINT_IGNORED]: Object 2 (style): numFmt 'curency' is neither a known format name nor an Excel format code — applying it verbatim as a custom code. Known names: general, integer, number, decimal, currency, percent, percent_decimal, date, datetime, time, text.

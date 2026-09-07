@@ -201,14 +201,14 @@ class AutoFilterCommandSpec extends FunSuite:
     val json = """[{"op": "autofilter", "range": "A1:M29"}]"""
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: autofilter clear form parses without warnings") {
     val json = """[{"op": "autofilter", "clear": true}]"""
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: autofilter unknown property warns") {
@@ -216,7 +216,7 @@ class AutoFilterCommandSpec extends FunSuite:
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
     val warnings = result.toOption.get.warnings
-    assert(warnings.exists(_.contains("bogus")), warnings.toString)
+    assert(warnings.exists(_.message.contains("bogus")), warnings.toString)
   }
 
   // ========== batch op: apply ==========

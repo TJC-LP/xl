@@ -200,7 +200,9 @@ class BatchSheetScopeSpec extends FunSuite:
     val result = BatchParser.parseBatchOperations(json).unsafeRunSync()
     assertEquals(result.scoped.map(_.sheet), Vector(None))
     assert(
-      result.warnings.exists(w => w.contains("unknown properties ignored") && w.contains("sheet")),
+      result.warnings.exists(w =>
+        w.message.contains("unknown properties ignored") && w.message.contains("sheet")
+      ),
       result.warnings.toString
     )
   }

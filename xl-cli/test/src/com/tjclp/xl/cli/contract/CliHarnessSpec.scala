@@ -74,21 +74,41 @@ class CliHarnessSpec extends CatsEffectSuite:
       assertEquals(eval.stdout, "Formula: =1+1\nResult: 2 (number)\n")
   }
 
-  test("System.err prints from handlers are captured") {
+  test("batch parse warnings go through the run's warning sink, in both modes") {
     withTempExcelFile { file =>
-      val out = file.resolveSibling(file.getFileName.toString + ".out.xlsx")
-      CliHarness
-        .run(
-          List("-f", file.toString, "-s", "Test", "-o", out.toString, "batch", "-"),
-          """[{"op":"put","ref":"A1","value":"x","bogus":true}]"""
+      val textOut = file.resolveSibling(file.getFileName.toString + ".text.xlsx")
+      val jsonOut = file.resolveSibling(file.getFileName.toString + ".json.xlsx")
+      val ops = """[{"op":"put","ref":"A1","value":"x","bogus":true}]"""
+      def args(out: Path): List[String] =
+        List("-f", file.toString, "-s", "Test", "-o", out.toString, "batch", "-")
+      for
+        text <- CliHarness.run(args(textOut), ops)
+        json <- CliHarness.run("--json" :: args(jsonOut), ops)
+      yield
+        // Text mode: the warning is a `Warning[CODE]:` line on stderr, never a bare handler print
+        assertEquals(text.exit, 0, text.stdout + text.stderr)
+        assert(
+          text.stderr.contains(
+            "Warning[UNKNOWN_PROPERTY]: Object 1 (put): unknown properties ignored: bogus"
+          ),
+          s"warning did not reach stderr through the sink:\n${text.stderr}"
         )
-        .map { run =>
-          assertEquals(run.exit, 0, run.stdout + run.stderr)
-          // WriteCommands.batch prints parse warnings with System.err.println, not through CliIO
-          assert(run.stderr.contains("bogus"), s"handler-level stderr lost:\n${run.stderr}")
-          assert(!run.stdout.contains("bogus"), s"warning leaked to stdout:\n${run.stdout}")
-          assert(run.stdout.contains("Applied 1 operations"), run.stdout)
-        }
+        assert(!text.stderr.contains("Warning: Object"), s"bypassed the sink:\n${text.stderr}")
+        assert(!text.stdout.contains("bogus"), s"warning leaked to stdout:\n${text.stdout}")
+        assert(text.stdout.contains("Applied 1 operations"), text.stdout)
+        // --json: the warning rides in the envelope's warnings[] with the op's index; stderr is empty
+        assertEquals(json.exit, 0, json.stdout + json.stderr)
+        assertEquals(json.stderr, "", "under --json a warning belongs to the envelope")
+        val warnings = ujson.read(json.stdout)("warnings").arr
+        assertEquals(warnings.size, 1, json.stdout)
+        assertEquals(warnings(0)("code").str, "UNKNOWN_PROPERTY")
+        assertEquals(warnings(0)("location")("opIndex").num.toInt, 1)
+        assert(
+          warnings(0)("message").str
+            .startsWith("Object 1 (put): unknown properties ignored: bogus"),
+          warnings(0)("message").str
+        )
+        assert(!json.stdout.contains("\"warnings\": [],"), "the envelope must carry the warning")
     }
   }
 

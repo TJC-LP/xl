@@ -1267,6 +1267,10 @@ object WriteCommands:
    *   If true, uses the SAX/StAX workbook writer
    * @param stdin
    *   Where `source == "-"` reads from (the CLI passes its `CliIO.stdin`)
+   * @param warn
+   *   The run's warning sink (ADR-017 §2.3): the parse warnings — unknown properties, dropped
+   *   format hints — go through it, so text mode prints `Warning[CODE]: …` on stderr and `--json`
+   *   carries them in the envelope's `warnings[]`. The default prints to the system stderr.
    */
   def batch(
     wb: Workbook,
@@ -1276,12 +1280,13 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean = false,
     policy: WritePolicy = WritePolicy.default,
-    stdin: IO[String] = CliIO.system.stdin
+    stdin: IO[String] = CliIO.system.stdin,
+    warn: com.tjclp.xl.cli.contract.Warning => IO[Unit] =
+      com.tjclp.xl.cli.contract.Diagnostics.warn(_, CliIO.system)
   ): IO[String] =
     BatchParser.readBatchInput(source, stdin).flatMap { input =>
       BatchParser.parseBatchOperations(input).flatMap { result =>
-        // Print warnings to stderr within IO monad
-        IO(result.warnings.foreach(System.err.println)) *>
+        result.warnings.traverse_(warn) *>
           BatchParser
             .applyScoped(wb, sheetOpt, result.scoped, !policy.noRecalc)
             .flatMap { updatedWb =>

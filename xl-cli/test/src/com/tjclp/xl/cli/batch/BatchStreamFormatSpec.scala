@@ -27,8 +27,15 @@ class BatchStreamFormatSpec extends CatsEffectSuite:
 
   private val percentCode = """0.0%_);\(0.0%\)"""
 
-  /** What a cell's style contributes here: its number format and whether its font is bold. */
-  private final case class Facts(value: Option[CellValue], numFmt: Option[NumFmt], bold: Boolean)
+  /**
+   * What a cell's style contributes here: its number format, and whether its font is bold/italic.
+   */
+  private final case class Facts(
+    value: Option[CellValue],
+    numFmt: Option[NumFmt],
+    bold: Boolean,
+    italic: Boolean = false
+  )
 
   private def bold(numFmt: NumFmt): CellStyle =
     CellStyle.default.withFont(Font.default.withBold()).withNumFmt(numFmt)
@@ -74,7 +81,8 @@ class BatchStreamFormatSpec extends CatsEffectSuite:
         Facts(
           data.cells.get(ref).map(_.value),
           data.getCellStyle(ref).map(_.numFmt),
-          data.getCellStyle(ref).exists(_.font.bold)
+          data.getCellStyle(ref).exists(_.font.bold),
+          data.getCellStyle(ref).exists(_.font.italic)
         )
       }
     }
@@ -105,6 +113,66 @@ class BatchStreamFormatSpec extends CatsEffectSuite:
   private val b2 = ARef.from0(1, 1)
   private val c2 = ARef.from0(2, 1)
   private val d2 = ARef.from0(3, 1)
+
+  /** Outside the fixture's styled block: no cell, no style — a General cell. */
+  private val e1 = ARef.from0(4, 0)
+
+  // ---------------------------------------------------------------------------------------------
+  // The batch `style` op: a merge (the default) lays the op's properties over each cell's CURRENT
+  // style — in the file, or as an earlier op in the same batch left it — exactly as in memory;
+  // `replace` starts from scratch. Every case runs both paths and compares them.
+  // ---------------------------------------------------------------------------------------------
+
+  test("--stream style merge onto a pre-formatted cell keeps its numFmt and bold, like in memory") {
+    val json = """[{"op":"style","range":"A1","italic":true}]"""
+    bothPaths("style-formatted", json, Vector(a1)).map { (streamed, memory) =>
+      assertEquals(streamed, memory)
+      assertEquals(streamed.map(_.numFmt), Vector(Some(NumFmt.Custom(percentCode))))
+      assertEquals(streamed.map(f => (f.bold, f.italic)), Vector((true, true)))
+    }
+  }
+
+  test(
+    "--stream style merge with a numFormat onto a pre-bolded cell keeps the bold, like in memory"
+  ) {
+    val json = """[{"op":"style","range":"B1","numFormat":"0.0"}]"""
+    bothPaths("style-bolded", json, Vector(b1)).map { (streamed, memory) =>
+      assertEquals(streamed, memory)
+      assertEquals(streamed.map(_.numFmt), Vector(Some(NumFmt.Custom("0.0"))))
+      assertEquals(streamed.map(_.bold), Vector(true), "bold lost under --stream")
+    }
+  }
+
+  test(
+    "--stream put with a format then style bold in one batch is bold AND percent, like in memory"
+  ) {
+    val json =
+      """[{"op":"put","ref":"E1","value":1,"format":"percent"},{"op":"style","range":"E1","bold":true}]"""
+    bothPaths("style-after-put", json, Vector(e1)).map { (streamed, memory) =>
+      assertEquals(streamed, memory)
+      assertEquals(streamed.map(_.numFmt), Vector(Some(NumFmt.Percent)))
+      assertEquals(streamed.map(_.bold), Vector(true))
+      assertEquals(streamed.map(_.value), Vector(Some(CellValue.Number(BigDecimal(1)))))
+    }
+  }
+
+  test("--stream two style ops on one cell in one batch accumulate, like in memory") {
+    val json =
+      """[{"op":"style","range":"E1","bold":true},{"op":"style","range":"E1","numFormat":"percent"}]"""
+    bothPaths("style-twice", json, Vector(e1)).map { (streamed, memory) =>
+      assertEquals(streamed, memory)
+      assertEquals(streamed.map(f => (f.numFmt, f.bold)), Vector((Some(NumFmt.Percent), true)))
+    }
+  }
+
+  test("--stream style replace drops the cell's existing style, like in memory") {
+    val json = """[{"op":"style","range":"B1","italic":true,"replace":true}]"""
+    bothPaths("style-replace", json, Vector(b1)).map { (streamed, memory) =>
+      assertEquals(streamed, memory)
+      assertEquals(streamed.map(_.numFmt), Vector(Some(NumFmt.General)))
+      assertEquals(streamed.map(f => (f.bold, f.italic)), Vector((false, true)))
+    }
+  }
 
   test(
     "--stream explicit format keeps the font, replaces the numFmt, and equals the in-memory result"

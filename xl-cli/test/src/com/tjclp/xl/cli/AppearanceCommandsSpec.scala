@@ -410,7 +410,7 @@ class AppearanceCommandsSpec extends FunSuite:
     val json = """[{"op": "sheet-view", "gridlines": false, "zoom": 85}]"""
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: tab-color, page-setup, header-footer ops parse") {
@@ -423,7 +423,7 @@ class AppearanceCommandsSpec extends FunSuite:
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
     assertEquals(result.toOption.get.ops.size, 3)
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: sheet-view invalid zoom fails cleanly at apply time") {

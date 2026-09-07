@@ -2501,7 +2501,7 @@ EXAMPLES:
 
       // A dry run validates the batch JSON and reads no workbook, whatever else is on the line
       case CliCommand.Batch(source, true, _) =>
-        batchDryRunPayload(source, io, mode)
+        batchDryRunPayload(source, io, mode, warn)
 
       // --schema prints the document's JSON Schema; no workbook is read, nothing is written
       case CliCommand.Batch(_, _, true) =>
@@ -2588,7 +2588,7 @@ EXAMPLES:
             )
           else
             streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
-              executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io)
+              executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io, warn)
                 .map(bridge(cmd, mode))
         else
           for
@@ -2719,63 +2719,81 @@ EXAMPLES:
   private def parseBatchDryRun(source: String, io: CliIO): IO[BatchParser.ParseResult] =
     BatchParser.readBatchInput(source, io.stdin).flatMap(BatchParser.parseBatchOperations)
 
+  /** The dry run's text: the count and one summary line per op. */
+  private def batchDryRunText(result: BatchParser.ParseResult): String =
+    s"Dry run - ${result.ops.size} operations parsed:\n${BatchParser.formatSummary(result.ops)}"
+
   /**
-   * Validate batch JSON and show summary without writing; the parse warnings go to stderr as they
-   * always have.
+   * Validate batch JSON and show the summary without writing. The parse warnings go through the
+   * run's warning sink like every other warning (ADR-017 §2.3): `Warning[CODE]: …` on stderr in
+   * text mode, the envelope's `warnings[]` under `--json`.
    */
-  private[cli] def batchDryRun(source: String, io: CliIO): IO[String] =
+  private[cli] def batchDryRun(
+    source: String,
+    io: CliIO,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
+  ): IO[String] =
     parseBatchDryRun(source, io).flatMap { result =>
-      result.warnings.traverse_(io.err) *>
-        IO.pure {
-          val summary = BatchParser.formatSummary(result.ops)
-          s"Dry run - ${result.ops.size} operations parsed:\n$summary"
-        }
+      result.warnings.traverse_(warn).as(batchDryRunText(result))
     }
 
   /**
-   * The dry run as data (`batch --dry-run --json`): `{ops: [{index, op, summary}], warnings}` —
-   * `index` the op's 0-based position in the array, `op` the summary's leading keyword (`PUT`,
-   * `MERGE`, ...), `summary` the line `formatSummary` prints, and the parse warnings as data rather
-   * than on stderr.
+   * The dry run as data (`batch --dry-run --json`): `{ops: [{index, op, summary}]}` — `index` the
+   * op's 1-based position in the array, the same number every `Object N` message and
+   * `location.opIndex` carry (ADR-017 §2.6); `op` the summary's leading keyword (`PUT`, `MERGE`,
+   * ...); `summary` the line `formatSummary` prints. The parse warnings ride in the envelope's
+   * `warnings[]`, never inside `data`.
    */
-  private def batchDryRunData(source: String, io: CliIO): IO[ujson.Value] =
-    parseBatchDryRun(source, io).map { result =>
-      val ops = result.ops.zipWithIndex.map { (op, index) =>
-        val summary = BatchParser.formatSummary(Vector(op)).trim
-        ujson.Obj(
-          "index" -> ujson.Num(index),
-          "op" -> ujson.Str(summary.takeWhile(_ != ' ')),
-          "summary" -> ujson.Str(summary)
-        )
-      }
+  private def batchDryRunData(result: BatchParser.ParseResult): ujson.Value =
+    val ops = result.scoped.map { scoped =>
+      val summary = BatchParser.formatSummary(Vector(scoped.op)).trim
       ujson.Obj(
-        "ops" -> ujson.Arr.from(ops),
-        "warnings" -> ujson.Arr.from(result.warnings.map(ujson.Str.apply))
+        "index" -> ujson.Num(scoped.index),
+        "op" -> ujson.Str(summary.takeWhile(_ != ' ')),
+        "summary" -> ujson.Str(summary)
       )
     }
+    ujson.Obj("ops" -> ujson.Arr.from(ops))
 
-  private def batchDryRunPayload(source: String, io: CliIO, mode: OutputMode): IO[Payload] =
+  /** The parsed dry run in the run's mode. */
+  private def dryRunPayload(result: BatchParser.ParseResult, mode: OutputMode): Payload =
     mode match
-      case OutputMode.Text => batchDryRun(source, io).map(Payload.text)
-      case OutputMode.Json => batchDryRunData(source, io).map(Payload.Json(_))
+      case OutputMode.Text => Payload.text(batchDryRunText(result))
+      case OutputMode.Json => Payload.Json(batchDryRunData(result))
+
+  /** A dry run inside a run: its parse warnings go to the run's sink. */
+  private def batchDryRunPayload(
+    source: String,
+    io: CliIO,
+    mode: OutputMode,
+    warn: Warning => IO[Unit]
+  ): IO[Payload] =
+    parseBatchDryRun(source, io).flatMap { result =>
+      result.warnings.traverse_(warn).as(dryRunPayload(result, mode))
+    }
 
   /**
    * The standalone `batch --dry-run` (no -f, no -o): a bad source (invalid JSON, missing file) is a
-   * failure classified like every other verb's, never an escaped exception.
+   * failure classified like every other verb's, never an escaped exception; the parse warnings ride
+   * on the outcome.
    */
   private[cli] def batchDryRunOutcome(source: String, io: CliIO, mode: OutputMode): IO[Outcome] =
-    batchDryRunPayload(source, io, mode).attempt.map {
-      case Right(payload) => Outcome.ok("batch", payload)
+    parseBatchDryRun(source, io).attempt.map {
+      case Right(result) => Outcome.ok("batch", dryRunPayload(result, mode), result.warnings)
       case Left(failure) => Outcome.failed("batch", CliError.fromThrowable(failure))
     }
 
-  /** Execute streaming write command (O(1) memory transform). */
+  /**
+   * Execute streaming write command (O(1) memory transform). `warn` is the run's warning sink; the
+   * streaming batch sends its parse warnings through it like the in-memory batch does.
+   */
   private def executeStreamingWrite(
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
     cmd: CliCommand,
-    io: CliIO
+    io: CliIO,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] = cmd match
     case CliCommand.Style(
           rangeStr,
@@ -2857,14 +2875,14 @@ EXAMPLES:
           StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
     case CliCommand.Batch(source, dryRun, _) if dryRun =>
-      batchDryRun(source, io)
+      batchDryRun(source, io, warn)
 
     case CliCommand.Batch(source, _, _) =>
       outputOpt match
         case None =>
           IO.raiseError(outputRequired("--output is required for batch command"))
         case Some(outputPath) =>
-          StreamingWriteCommands.batch(filePath, outputPath, sheetNameOpt, source, io.stdin)
+          StreamingWriteCommands.batch(filePath, outputPath, sheetNameOpt, source, io.stdin, warn)
 
     case _ =>
       IO.raiseError(
@@ -3062,11 +3080,11 @@ EXAMPLES:
       )
 
     case CliCommand.Batch(source, dryRun, _) if dryRun =>
-      batchDryRun(source, io)
+      batchDryRun(source, io, warn)
 
     case CliCommand.Batch(source, _, _) =>
       requireOutput("batch", outputOpt, backendOpt, stream)(
-        WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy, io.stdin)
+        WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy, io.stdin, warn)
       )
 
     case CliCommand.Recalc(tables, parallel) =>
