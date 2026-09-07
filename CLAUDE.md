@@ -32,7 +32,7 @@ xl/              → Aggregate module + scripting prelude (com.tjclp.xl.scriptin
 xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), macros, DSL
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based streaming)
-xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 108 functions, dependency graphs)
+xl-evaluator/    → Formula parser/evaluator (TExpr GADT, function registry, dependency graphs)
 xl-cli/          → Stateless `xl` CLI (internal, native-image capable)
 xl-agent/        → AI agent benchmark runner (Anthropic API, skill comparison)
 xl-benchmarks/   → JMH performance benchmarks
@@ -279,6 +279,12 @@ echo '[{"op":"putf","ref":"A1","formula":"=1+1"}]' | xl batch --dry-run -
 # Also works with --file/--output (skips read/write, just validates)
 echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
 
+# The document's JSON Schema: every op, field, alias and example (no -f needed)
+xl batch --schema
+
+# Every op accepts "sheet" (except add-sheet/rename-sheet); keys in camelCase or kebab-case
+echo '[{"op":"put","sheet":"Summary","ref":"A1","value":1}]' | xl -f in.xlsx -o out.xlsx batch -
+
 # Comments, visibility, autofit, sheet management
 echo '[{"op":"comment","ref":"A1","text":"Note","author":"User"}]' | xl ...
 echo '[{"op":"clear","range":"A1:B10","all":true}]' | xl ...
@@ -288,7 +294,9 @@ echo '[{"op":"add-sheet","name":"Summary","after":"Sheet1"}]' | xl ...
 echo '[{"op":"rename-sheet","from":"Old","to":"New"}]' | xl ...
 ```
 
-**All 32 batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`, `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `cf`, `chart`, `autofilter`, `group-rows`, `group-cols`, `ungroup-rows`, `ungroup-cols`
+**Every batch operation**, with its fields, aliases and example, is generated from the registry that parses the document: run `xl batch --schema` (JSON Schema) or read `docs/reference/generated/batch-ops.md`. Never copy the list by hand — `DocsGenSpec` fails when the page drifts from the code.
+
+**The CLI contract as data**: `xl schema` prints every verb with what it needs and how it exits; `xl schema --json` publishes exit/error/warning codes, globals, verbs, the batch schema, the function registry and the envelope schema in one document; `docs/reference/generated/{cli-verbs,batch-ops,functions,exit-codes,error-codes}.md` are rendered from it (`XL_UPDATE_DOCS=1 ./mill xl-cli.test.testOnly com.tjclp.xl.cli.contract.DocsGenSpec` regenerates; same discipline as `XL_UPDATE_GOLDEN=1` for the goldens).
 
 **Common mistake**: Using an unqualified range on a multi-sheet book without `--sheet`:
 ```bash
@@ -373,7 +381,7 @@ sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
 sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
 ```
 
-**115 Functions**: SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, MIN, MAX, IF, IFS, IFERROR, IFNA, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, ISNA, NA, N, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SEARCH, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, MROUND, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, HYPERLINK, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER, RAND, RANDBETWEEN, CELL — plus LET (lexical bindings; a parser-level special form, not in the registry listing)
+**Functions**: the registry (`FunctionRegistry.all`, macro-collected from the `FunctionSpecs*` traits) plus `LET` (lexical bindings; a parser-level special form, not in the registry). The complete list with arity, argument slots and flags is generated from the code: `xl functions --json` or `docs/reference/generated/functions.md`. Do not maintain a count or a list by hand.
 
 ### Rich Text
 ```scala
