@@ -16,17 +16,16 @@ batch
   "data": {
     "ops": [
       {
-        "index": 0,
+        "index": 1,
         "op": "PUT",
         "summary": "PUT A1 = Number(1234.56) (Currency)"
       },
       {
-        "index": 1,
+        "index": 2,
         "op": "MERGE",
         "summary": "MERGE A1:B1"
       }
-    ],
-    "warnings": []
+    ]
   },
   "warnings": [],
   "error": null

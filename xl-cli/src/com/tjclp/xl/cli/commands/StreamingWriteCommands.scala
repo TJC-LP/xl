@@ -5,6 +5,7 @@ import java.nio.file.Path
 import java.util.zip.ZipFile
 
 import cats.effect.IO
+import cats.syntax.all.*
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
@@ -21,7 +22,7 @@ import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, ScopedOp}
-import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location}
+import com.tjclp.xl.cli.contract.{CliError, CliException, Diagnostics, ErrorCode, Location, Warning}
 import com.tjclp.xl.cli.helpers.{
   BatchParser,
   Resolve,
@@ -431,6 +432,8 @@ object StreamingWriteCommands:
    *   JSON file path or "-" for stdin
    * @param stdin
    *   Where `batchSource == "-"` reads from (the CLI passes its `CliIO.stdin`)
+   * @param warn
+   *   The run's warning sink (ADR-017 §2.3) for the parse warnings, as on the in-memory path
    * @return
    *   Result message with operation count
    */
@@ -439,13 +442,14 @@ object StreamingWriteCommands:
     outputPath: Path,
     sheetNameOpt: Option[String],
     batchSource: String,
-    stdin: IO[String] = CliIO.system.stdin
+    stdin: IO[String] = CliIO.system.stdin,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] =
     for
       // Parse first: the refusals below come before the worksheet is even resolved
       input <- BatchParser.readBatchInput(batchSource, stdin)
       parseResult <- BatchParser.parseBatchOperations(input)
-      _ <- IO(parseResult.warnings.foreach(System.err.println))
+      _ <- parseResult.warnings.traverse_(warn)
       scoped = parseResult.scoped
 
       // ADR-017 invariant 2: refuse by index what this writer cannot apply, before any byte is

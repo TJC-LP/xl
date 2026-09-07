@@ -6,7 +6,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, OpSpec, ScopedOp}
-import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location}
+import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
 import com.tjclp.xl.formula.{
   FormulaParser,
@@ -161,14 +161,17 @@ object BatchParser:
    * @param ops
    *   Parsed batch operations
    * @param warnings
-   *   Non-fatal warnings (e.g., unknown properties ignored)
+   *   Non-fatal conditions (ADR-017 §2.3): `UNKNOWN_PROPERTY` for keys the op does not know,
+   *   `FORMAT_HINT_IGNORED` for a `format`/`numFormat` that is neither a name nor a code. Each
+   *   carries the op's 1-based index as its location and a message starting `Object N (op): …`; the
+   *   run's warning sink renders them (`Warning[CODE]: …` on stderr, `warnings[]` under `--json`)
    * @param scoped
    *   The same ops with their `sheet` key, 1-based index and format hint (ADR-017 §2.6);
    *   `ops == scoped.map(_.op)` always
    */
   final case class ParseResult(
     ops: Vector[BatchOp],
-    warnings: Vector[String],
+    warnings: Vector[Warning],
     scoped: Vector[ScopedOp] = Vector.empty
   )
 
@@ -349,7 +352,7 @@ object BatchParser:
       val arr = parsed.arrOpt.getOrElse(throw notAnArray)
 
       // Collect warnings during parsing
-      val warnings = scala.collection.mutable.ListBuffer[String]()
+      val warnings = scala.collection.mutable.ListBuffer[Warning]()
 
       val scoped = arr.value.toVector.zipWithIndex.map { case (obj, idx) =>
         val rawMap = obj.objOpt.getOrElse(
@@ -380,6 +383,7 @@ object BatchParser:
           case "put" =>
             collectFormatHintWarning(objMap, "put", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
+            rejectValueAndValues(objMap, "put", idx)
             // detect defaults to true; set to false to disable smart detection
             val detect = objMap.get("detect").flatMap(_.boolOpt).getOrElse(true)
             // Check for explicit values array first (like putf's "values" support)
@@ -399,6 +403,7 @@ object BatchParser:
           case "putf" =>
             collectFormatHintWarning(objMap, "putf", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
+            rejectValueAndValues(objMap, "putf", idx)
             // Optional number format applied to the formula cell(s) — parity with put (GH-356)
             val format = objMap.get("format").flatMap(_.strOpt).flatMap(parseFormatName)
             // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
@@ -648,6 +653,16 @@ object BatchParser:
     )
 
   /**
+   * `value` and `values` are the schema's `oneOf` for put and putf (ADR-017 §2.6): an op carrying
+   * both is malformed, and the parser refuses it as the schema does rather than silently preferring
+   * one — with `formula` already canonicalised to `value`, a `{"formula": …, "values": […]}` lands
+   * here too.
+   */
+  private def rejectValueAndValues(objMap: ObjMap, opName: String, idx: Int): Unit =
+    if objMap.contains("value") && objMap.contains("values") then
+      throw invalidOp(idx, opName, "give value or values, not both")
+
+  /**
    * `BATCH_OP_UNKNOWN` (exit 2): the historical text — the valid names in their historical order —
    * with `Did you mean: …` appended when a registered name is within edit distance.
    */
@@ -709,48 +724,75 @@ object BatchParser:
         .foreach(error => throw CliException(error))
     }
 
+  /** A parse warning located at the op: `Object N (op): <text>`. */
+  private def warning(code: String, idx: Int, opName: String, text: String): Warning =
+    Warning(code, s"Object ${idx + 1} ($opName): $text", at(idx))
+
   /**
    * GH-475: warn when a put/putf `format` hint is neither a known name nor an Excel format code —
    * such a string is DROPPED (a value hint must not become a garbage code), and dropping it in
-   * silence is how `"curency"` shipped as General with exit 0.
+   * silence is how `"curency"` shipped as General with exit 0. A non-string `format` (`1`, `true`,
+   * an object) is dropped the same way and warns the same way: the schema types the key as a
+   * string, so the parser must not accept it in silence either.
    */
   private def collectFormatHintWarning(
     objMap: ObjMap,
     opType: String,
     idx: Int
-  ): Option[String] =
-    objMap
-      .get("format")
-      .flatMap(_.strOpt)
-      .filter(s => parseFormatName(s).isEmpty)
-      .map(s =>
-        s"Warning: Object ${idx + 1} ($opType): format '$s' is neither a known format name nor " +
-          s"an Excel format code — ignored. Known names: ${StyleBuilder.numFmtNames.mkString(", ")}."
-      )
+  ): Option[Warning] =
+    val known = s"Known names: ${StyleBuilder.numFmtNames.mkString(", ")}."
+    objMap.get("format").flatMap { json =>
+      json.strOpt match
+        case Some(s) if parseFormatName(s).isDefined => None
+        case Some(s) =>
+          Some(
+            warning(
+              WarningCode.FORMAT_HINT_IGNORED,
+              idx,
+              opType,
+              s"format '$s' is neither a known format name nor an Excel format code — ignored. $known"
+            )
+          )
+        case None =>
+          Some(
+            warning(
+              WarningCode.FORMAT_HINT_IGNORED,
+              idx,
+              opType,
+              s"format must be a string (a format name or an Excel format code), got ${ujson.write(json)} — ignored. $known"
+            )
+          )
+    }
 
   /**
    * GH-475: warn when a style op's `numFormat` is neither a known name nor code-shaped. Unlike the
-   * put/putf hint this one IS applied (as a custom code), so the message says so.
+   * put/putf hint this one IS applied (as a custom code), so the message says so; the code is the
+   * vocabulary's format-hint code all the same, because that is the condition an agent keys on.
    */
   private def collectStyleNumFmtWarning(
     objMap: ObjMap,
     idx: Int
-  ): Option[String] =
+  ): Option[Warning] =
     objMap
       .get("numFormat")
       .flatMap(_.strOpt)
       .flatMap(StyleBuilder.numFmtWarning)
-      .map(w => s"Warning: Object ${idx + 1} (style): ${w.stripPrefix("Warning: ")}")
+      .map(w => warning(WarningCode.FORMAT_HINT_IGNORED, idx, "style", w.stripPrefix("Warning: ")))
 
   /**
    * Warn about keys the op's spec does not know (after alias resolution, so an alias never warns),
    * listing the canonical properties the op does accept.
    */
-  private def collectUnknownPropsWarning(objMap: ObjMap, spec: OpSpec, idx: Int): Option[String] =
+  private def collectUnknownPropsWarning(objMap: ObjMap, spec: OpSpec, idx: Int): Option[Warning] =
     val unknown = objMap.keys.toVector.filterNot(key => spec.canonicalName(key).isDefined)
     Option.when(unknown.nonEmpty)(
-      s"Warning: Object ${idx + 1} (${spec.name}): unknown properties ignored: " +
-        s"${unknown.mkString(", ")}. Known: ${spec.knownProperties.mkString(", ")}"
+      warning(
+        WarningCode.UNKNOWN_PROPERTY,
+        idx,
+        spec.name,
+        s"unknown properties ignored: ${unknown.mkString(", ")}. " +
+          s"Known: ${spec.knownProperties.mkString(", ")}"
+      )
     )
 
   // ========== Format Name Parsing ==========
@@ -1072,8 +1114,12 @@ object BatchParser:
       )
     case _ => default
 
-  /** `BATCH_OP_FAILED`: `Object N (op): <cause>`, keeping the cause's hint and candidates. */
-  private def opFailed(scoped: ScopedOp, cause: Throwable): CliException =
+  /**
+   * `BATCH_OP_FAILED`: `Object N (op): <cause>`, keeping the cause's hint and candidates. Shared
+   * with the streaming writer so an apply-time failure carries the same code, prefix and
+   * `location.opIndex` on both paths (ADR-017 invariant 2).
+   */
+  def opFailed(scoped: ScopedOp, cause: Throwable): CliException =
     val inner = CliError.fromThrowable(cause)
     CliException(
       CliError(
@@ -2060,7 +2106,13 @@ object BatchParser:
 
   /** `SHEET_NOT_FOUND` with the historical text and did-you-mean candidates. */
   private def sheetNotFound(wb: Workbook, sheetName: SheetName): CliException =
-    val names = wb.sheetNames.map(_.value).toVector
+    sheetNotFound(wb.sheetNames.map(_.value).toVector, sheetName)
+
+  /**
+   * The same from the workbook's sheet names alone, for the streaming writer, which knows them from
+   * `workbook.xml` and must refuse a missing sheet with the very text the in-memory batch reports.
+   */
+  def sheetNotFound(names: Vector[String], sheetName: SheetName): CliException =
     CliException(
       CliError
         .fromXLError(XLError.SheetNotFound(sheetName.value), None)

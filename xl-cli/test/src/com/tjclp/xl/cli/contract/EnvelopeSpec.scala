@@ -391,7 +391,9 @@ class EnvelopeSpec extends CatsEffectSuite:
     }
   }
 
-  test("batch --dry-run --json: data is {ops: [{index, op, summary}], warnings}") {
+  test(
+    "batch --dry-run --json: data is {ops: [{index, op, summary}]} with 1-based index; parse warnings ride in warnings[]"
+  ) {
     val stdin =
       """[{"op":"put","ref":"A1","value":"$1,234.56"},{"op":"merge","range":"A1:B1"},{"op":"put","ref":"A2","value":1,"bogus":true}]"""
     CliHarness.run(List("--json", "batch", "--dry-run", "-"), stdin).map { run =>
@@ -399,30 +401,37 @@ class EnvelopeSpec extends CatsEffectSuite:
       val e = envelope(run)
       assertEquals(e("verb"), ujson.Str("batch"))
       val d = e("data")
+      // `index` is the op's 1-based position — the number every `Object N` message and
+      // `location.opIndex` carry (ADR-017 §2.6) — and `data` holds nothing but the ops
       assertEquals(
-        d("ops"),
-        ujson.Arr(
-          ujson.Obj(
-            "index" -> ujson.Num(0),
-            "op" -> ujson.Str("PUT"),
-            "summary" -> ujson.Str("PUT A1 = Number(1234.56) (Currency)")
-          ),
-          ujson.Obj(
-            "index" -> ujson.Num(1),
-            "op" -> ujson.Str("MERGE"),
-            "summary" -> ujson.Str("MERGE A1:B1")
-          ),
-          ujson.Obj(
-            "index" -> ujson.Num(2),
-            "op" -> ujson.Str("PUT"),
-            "summary" -> ujson.Str("PUT A2 = Number(1.0)")
+        d,
+        ujson.Obj(
+          "ops" -> ujson.Arr(
+            ujson.Obj(
+              "index" -> ujson.Num(1),
+              "op" -> ujson.Str("PUT"),
+              "summary" -> ujson.Str("PUT A1 = Number(1234.56) (Currency)")
+            ),
+            ujson.Obj(
+              "index" -> ujson.Num(2),
+              "op" -> ujson.Str("MERGE"),
+              "summary" -> ujson.Str("MERGE A1:B1")
+            ),
+            ujson.Obj(
+              "index" -> ujson.Num(3),
+              "op" -> ujson.Str("PUT"),
+              "summary" -> ujson.Str("PUT A2 = Number(1.0)")
+            )
           )
         )
       )
-      val warnings = d("warnings").arr.map(_.str)
+      // The parse warning is an envelope warning like any other, located at its op
+      val warnings = e("warnings").arr
       assertEquals(warnings.size, 1, warnings.mkString("; "))
-      assert(warnings(0).contains("bogus"), warnings(0))
-      assertEquals(run.stderr, "", "dry-run parse warnings are data in JSON mode, not stderr")
+      assertEquals(warnings(0)("code"), ujson.Str("UNKNOWN_PROPERTY"))
+      assert(warnings(0)("message").str.contains("bogus"), warnings(0)("message").str)
+      assertEquals(warnings(0)("location")("opIndex"), ujson.Num(3))
+      assertEquals(run.stderr, "", "under --json the warning rides in the envelope, not on stderr")
     }
   }
 

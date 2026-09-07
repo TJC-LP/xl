@@ -293,6 +293,22 @@ class OpRegistrySpec extends FunSuite:
     assertEquals(addSheet.canonicalName("sheet"), None, "add-sheet is not sheet-scoped")
   }
 
+  test("Spelling.camel undoes Spelling.kebab for every field name and alias") {
+    // The two are only inverse when no name carries consecutive capitals (`numFmtID` would kebab
+    // to `num-fmt-id` and camel back to `numFmtId`), so every name the registry accepts is checked
+    val names = OpRegistry.all.flatMap(_.fields).flatMap(f => f.name +: f.aliases).distinct
+    assert(names.nonEmpty)
+    names.foreach { name =>
+      assertEquals(Spelling.camel(Spelling.kebab(name)), name, s"round trip broke for '$name'")
+      // and a kebab name is a fixpoint of kebab, so a second pass never changes a key
+      assertEquals(Spelling.kebab(Spelling.kebab(name)), Spelling.kebab(name), name)
+    }
+    // Op names are kebab already: camel then kebab gives them back
+    OpRegistry.all.flatMap(spec => spec.name +: spec.aliases).foreach { name =>
+      assertEquals(Spelling.kebab(Spelling.camel(name)), name, s"op name round trip broke: '$name'")
+    }
+  }
+
   test("helpText names every op with its example") {
     val text = OpRegistry.helpText
     OpRegistry.all.foreach { spec =>

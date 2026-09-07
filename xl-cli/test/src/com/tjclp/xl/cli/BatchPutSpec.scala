@@ -9,7 +9,7 @@ import com.tjclp.xl.{Workbook, Sheet}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
-import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, ExitCodes}
+import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, ExitCodes, WarningCode}
 import com.tjclp.xl.cli.helpers.BatchParser
 import com.tjclp.xl.cli.helpers.BatchParser.BatchOp
 import com.tjclp.xl.io.ExcelIO
@@ -398,14 +398,66 @@ class BatchPutSpec extends FunSuite:
     val result = parseOk("""[{"op":"put","ref":"A1","value":1,"colour":"red"}]""")
     assertEquals(result.warnings.size, 1)
     val warning = result.warnings.head
+    // ADR-017 §2.3: a typed warning — the vocabulary's code, the op's index as its location, and
+    // a message that starts `Object N (op):` like every batch diagnostic (no `Warning:` prefix: the
+    // renderer adds `Warning[CODE]:`)
+    assertEquals(warning.code, WarningCode.UNKNOWN_PROPERTY)
+    assertEquals(warning.location.flatMap(_.opIndex), Some(1))
     assert(
-      warning.startsWith("Warning: Object 1 (put): unknown properties ignored: colour"),
-      warning
+      warning.message.startsWith("Object 1 (put): unknown properties ignored: colour"),
+      warning.message
     )
-    assert(warning.contains("Known: "), warning)
+    assert(warning.message.contains("Known: "), warning.message)
     assert(
-      warning.contains("format") && warning.contains("sheet") && warning.contains("detect"),
-      warning
+      warning.message.contains("format") && warning.message.contains("sheet") &&
+        warning.message.contains("detect"),
+      warning.message
+    )
+  }
+
+  test("batch: a put/putf carrying both value and values is BATCH_OP_INVALID, as the schema says") {
+    // The schema's oneOf rejects both keys; the parser must not silently prefer `values`
+    val put = parseError("""[{"op":"put","ref":"A1","value":1,"values":[1,2]}]""")
+    assertEquals(put.code, ErrorCode.BATCH_OP_INVALID)
+    assertEquals(put.message, "Object 1 (put): give value or values, not both")
+    assertEquals(put.location.flatMap(_.opIndex), Some(1))
+    val putf = parseError(
+      """[{"op":"merge","range":"A1:B1"},{"op":"putf","ref":"A1:A2","value":"=1","values":["=1","=2"]}]"""
+    )
+    assertEquals(putf.code, ErrorCode.BATCH_OP_INVALID)
+    assertEquals(putf.message, "Object 2 (putf): give value or values, not both")
+    assertEquals(putf.location.flatMap(_.opIndex), Some(2))
+    // `formula` is an alias of `value`, so it collides with `values` the same way
+    val aliased =
+      parseError("""[{"op":"putf","ref":"A1:A2","formula":"=1","values":["=1","=2"]}]""")
+    assertEquals(aliased.message, "Object 1 (putf): give value or values, not both")
+    // Either key alone still parses
+    assertEquals(parseOk("""[{"op":"put","ref":"A1:A2","values":[1,2]}]""").ops.size, 1)
+    assertEquals(parseOk("""[{"op":"putf","ref":"A1","formula":"=1"}]""").ops.size, 1)
+  }
+
+  test("batch: a format hint that is dropped warns FORMAT_HINT_IGNORED at the op, string or not") {
+    // GH-475: a string that is neither a name nor a code is dropped and warns
+    val typo = parseOk("""[{"op":"put","ref":"A1","value":1,"format":"curency"}]""")
+    assertEquals(typo.warnings.map(_.code), Vector(WarningCode.FORMAT_HINT_IGNORED))
+    assertEquals(typo.warnings.map(_.location.flatMap(_.opIndex)), Vector(Some(1)))
+    assert(typo.warnings.head.message.startsWith("Object 1 (put): format 'curency'"), typo.warnings)
+    // A non-string `format` was dropped in silence; it now warns with the same code, naming the value
+    val number = parseOk(
+      """[{"op":"merge","range":"A1:B1"},{"op":"putf","ref":"A1","value":"=1","format":1}]"""
+    )
+    assertEquals(number.warnings.map(_.code), Vector(WarningCode.FORMAT_HINT_IGNORED))
+    assertEquals(number.warnings.map(_.location.flatMap(_.opIndex)), Vector(Some(2)))
+    val message = number.warnings.head.message
+    assert(message.startsWith("Object 2 (putf): format must be a string"), message)
+    assert(message.contains("got 1"), message)
+    number.ops match
+      case Vector(_, BatchOp.PutFormula(_, _, format)) => assertEquals(format, None)
+      case other => fail(s"unexpected ops: $other")
+    // A real name or code is silent
+    assertEquals(
+      parseOk("""[{"op":"put","ref":"A1","value":1,"format":"percent"}]""").warnings.size,
+      0
     )
   }
 
