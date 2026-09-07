@@ -8,6 +8,7 @@ import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.ooxml.{
   FormulaInjectionPolicy,
   FormulaKindCodec,
+  FormulaStorage,
   SSTEntry,
   SharedStrings,
   XmlUtil
@@ -270,10 +271,11 @@ object StreamingXmlWriter:
               XmlEvent.EndTag(QName("f"))
             )
           case _ =>
-            // GH-456: <f> carries the expression, never the display form's leading '='
+            // GH-456: <f> carries the expression, never the display form's leading '=';
+            // GH-556: post-2007 functions carry Excel's _xlfn. storage prefix
             List(
               XmlEvent.StartTag(QName("f"), recordAttrs, false),
-              XmlEvent.XmlString(expr.stripPrefix("="), false),
+              XmlEvent.XmlString(FormulaStorage.toStored(expr), false),
               XmlEvent.EndTag(QName("f"))
             )
         val cachedEvents = cachedValue.toList.flatMap {

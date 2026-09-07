@@ -108,6 +108,9 @@ trait TExprDecoders:
     cell.value match
       case CellValue.Bool(value) => scala.util.Right(value)
       case CellValue.Number(n) => scala.util.Right(n.signum != 0)
+      // GH-564: dates are numbers in Excel's value model — their serial is zero/non-zero
+      case CellValue.DateTime(dt) =>
+        scala.util.Right(CellValue.dateTimeToExcelSerial(dt) != 0.0)
       case CellValue.Empty => scala.util.Right(false)
       case CellValue.Text(s) =>
         ScalarCoercion.boolTextValue(s) match
@@ -117,6 +120,8 @@ trait TExprDecoders:
         scala.util.Right(cached)
       case CellValue.Formula(_, Some(CellValue.Number(cached)), _) =>
         scala.util.Right(cached.signum != 0)
+      case CellValue.Formula(_, Some(CellValue.DateTime(cached)), _) =>
+        scala.util.Right(CellValue.dateTimeToExcelSerial(cached) != 0.0)
       case CellValue.Formula(_, Some(CellValue.Text(cached)), _) =>
         ScalarCoercion.boolTextValue(cached) match
           case Some(b) => scala.util.Right(b)
@@ -193,7 +198,8 @@ trait TExprDecoders:
    *   - Text -> as-is
    *   - Number -> toString (42 -> "42")
    *   - Boolean -> toString (true -> "TRUE", false -> "FALSE")
-   *   - DateTime -> ISO format
+   *   - DateTime -> its Excel serial number as text (GH-561: dates are numbers; `">="&A1` with a
+   *     date in A1 must read ">=46023", the form COUNTIFS/SUMIFS criteria compare against)
    *   - Formula -> text representation
    *   - Empty -> empty string
    */
@@ -203,7 +209,7 @@ trait TExprDecoders:
       case CellValue.Text(s) => scala.util.Right(s)
       case CellValue.Number(n) => scala.util.Right(n.toString)
       case CellValue.Bool(b) => scala.util.Right(if b then "TRUE" else "FALSE")
-      case CellValue.DateTime(dt) => scala.util.Right(dt.toString)
+      case CellValue.DateTime(dt) => scala.util.Right(ScalarCoercion.dateSerialText(dt))
       case CellValue.Formula(text, _, _) => scala.util.Right(text)
       case CellValue.RichText(rt) => scala.util.Right(rt.toPlainText)
       case other => scala.util.Left(CodecError.TypeMismatch("String", other))

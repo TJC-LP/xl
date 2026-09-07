@@ -73,6 +73,10 @@ object FormulaPrinter:
     val MulDiv = 6
     val Pow = 7
     val Unary = 8
+    // GH-480: the RIGHT operand of '^' prints one level tighter than Pow so a right-nested power
+    // keeps its parens (2^(3^2)). Pinned to Unary on purpose: a unary-signed exponent then prints
+    // flat (2^-1, 2^+2), exactly what parsePowExponent accepts, so those round-trip byte-for-byte.
+    val PowExponent = Unary
     // GH-355: postfix % binds tighter than ^ AND tighter than unary minus (-2% = -(2%))
     val Percent = 9
     val Primary = 10
@@ -148,9 +152,12 @@ object FormulaPrinter:
         parenthesizeIf(result, precedence > Precedence.MulDiv)
 
       case TExpr.Pow(x, y) =>
-        // Right-associative: allow nested powers on the right, but parenthesize ambiguous bases.
+        // GH-480: '^' is LEFT-associative in Excel (=2^3^2 is (2^3)^2 = 64), so like the other
+        // left-associative operators the RIGHT operand prints one level tighter: Pow(2, Pow(3, 2))
+        // keeps its grouping as 2^(3^2) while Pow(Pow(2, 3), 2) prints flat as 2^3^2. A unary-signed
+        // base still needs parens ((-2)^3) because -2^3 re-parses as -(2^3).
         val base = printPowBase(x, sep)
-        val exponent = printPowExponent(y, sep)
+        val exponent = printExpr(y, Precedence.PowExponent, sep)
         val result = s"$base^$exponent"
         parenthesizeIf(result, precedence > Precedence.Pow)
 
@@ -327,12 +334,9 @@ object FormulaPrinter:
     val rendered = printExpr(expr, Precedence.Pow, sep)
     if needsPowBaseParens(expr) then s"($rendered)" else rendered
 
-  private def printPowExponent(expr: TExpr[?], sep: String): String =
-    printExpr(expr, Precedence.Pow, sep)
-
   private def needsPowBaseParens(expr: TExpr[?]): Boolean =
     unwrapTransparent(expr) match
-      case TExpr.Pow(_, _) => true
+      // GH-480: a Pow BASE prints flat — left association makes (2^3)^2 and 2^3^2 the same tree
       case TExpr.Sub(TExpr.Lit(n: BigDecimal), _) if n == BigDecimal(0) => true
       // GH-374: a bare `+2^3` re-parses as +(2^3), so a UnaryPlus BASE needs parens: (+2)^3
       case TExpr.UnaryPlus(_) => true

@@ -151,6 +151,30 @@ class SharedFormulaStreamingSpec extends CatsEffectSuite:
     assertEquals(result.formulaText, Some("#REF!"))
   }
 
+  // GH-556: a shared master carrying Excel's _xlfn. storage prefix — dependents are expanded and
+  // ref-shifted from the prefixed text, then every cell hands the model the bare spelling.
+  private val prefixedSharedXml =
+    """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      |  <sheetData>
+      |    <row r="1">
+      |      <c r="D1"><f t="shared" si="0" ref="D1:D2">_xlfn.MAXIFS(B1:B3,A1:A3,$C$1)</f><v>1</v></c>
+      |    </row>
+      |    <row r="2"><c r="D2"><f t="shared" si="0"/><v>2</v></c></row>
+      |  </sheetData>
+      |</worksheet>""".stripMargin
+
+  test("GH-556: row stream strips _xlfn. from a shared master and its shifted dependents") {
+    rows(prefixedSharedXml).map { parsed =>
+      assertEquals(valueAt(parsed, 1, 3), formula("MAXIFS(B1:B3,A1:A3,$C$1)", 1))
+      assertEquals(valueAt(parsed, 2, 3), formula("MAXIFS(B2:B4,A2:A4,$C$1)", 2))
+    }
+  }
+
+  test("GH-556: single-cell reader strips _xlfn. from an expanded shared dependent") {
+    val result = extract(prefixedSharedXml, "D2").getOrElse(fail("missing D2"))
+    assertEquals(result.value, formula("MAXIFS(B2:B4,A2:A4,$C$1)", 2))
+  }
+
   private val masterFirstXml =
     """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
       |  <sheetData>

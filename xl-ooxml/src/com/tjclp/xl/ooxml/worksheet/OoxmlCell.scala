@@ -6,7 +6,7 @@ import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.ooxml.SaxSupport.*
 import com.tjclp.xl.ooxml.XmlUtil.{elem, elemOrdered, needsXmlSpacePreserve}
-import com.tjclp.xl.ooxml.{FormulaKindCodec, SaxWriter, XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{FormulaKindCodec, FormulaStorage, SaxWriter, XmlSecurity, XmlUtil}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.font.Underline
 
@@ -69,8 +69,9 @@ case class OoxmlCell(
               FormulaKindCodec.toAttrs(kind).foreach { case (name, v) =>
                 writer.writeAttribute(name, v)
               }
-              // GH-456: <f> carries the expression, never the display form's leading '='
-              writer.writeCharacters(expr.stripPrefix("="))
+              // GH-456: <f> carries the expression, never the display form's leading '=';
+              // GH-556: post-2007 functions carry Excel's _xlfn. storage prefix
+              writer.writeCharacters(FormulaStorage.toStored(expr))
               writer.endElement() // f
           // Write cached value if present
           cachedValue.foreach {
@@ -287,10 +288,11 @@ case class OoxmlCell(
         // Write formula element. GH-430: record attrs via the shared codec in schema order
         // (elemOrdered keeps the given order); dataTable records carry no text.
         val recordAttrs = FormulaKindCodec.toAttrs(kind)
-        // GH-456: <f> carries the expression, never the display form's leading '='
+        // GH-456: <f> carries the expression, never the display form's leading '=';
+        // GH-556: post-2007 functions carry Excel's _xlfn. storage prefix
         val formulaElem = kind match
           case _: FormulaKind.DataTable => elemOrdered("f", recordAttrs*)()
-          case _ => elemOrdered("f", recordAttrs*)(Text(expr.stripPrefix("=")))
+          case _ => elemOrdered("f", recordAttrs*)(Text(FormulaStorage.toStored(expr)))
         // Write cached value if present
         val cachedElem = cachedValue.flatMap {
           case CellValue.Number(num) => Some(elem("v")(Text(XmlUtil.plainNumber(num))))

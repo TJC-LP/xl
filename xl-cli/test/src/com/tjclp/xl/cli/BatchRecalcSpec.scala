@@ -725,7 +725,8 @@ class BatchRecalcSpec extends FunSuite:
       r1 = Some(ref"A1"),
       r2 = None
     )
-    List("INDIRECT(\"B1\")+1", "AND(B1:B1)").foreach { expression =>
+    // NOT over a bare range is the host-failure fixture (GH-564: AND(range) now folds like Excel)
+    List("INDIRECT(\"B1\")+1", "NOT(B1:B1)").foreach { expression =>
       val sheet = Sheet("Data")
         .put(ref"A1" -> 0)
         .put(ref"B1", CellValue.Formula("A1*10", Some(CellValue.Number(0))))

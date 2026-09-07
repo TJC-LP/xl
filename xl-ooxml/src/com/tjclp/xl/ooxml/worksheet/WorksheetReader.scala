@@ -13,7 +13,13 @@ import com.tjclp.xl.ooxml.XmlUtil.{
   getTextPreservingWhitespace,
   parseTextRuns
 }
-import com.tjclp.xl.ooxml.{FormulaKindCodec, SharedFormula, SharedStrings, XmlReadable}
+import com.tjclp.xl.ooxml.{
+  FormulaKindCodec,
+  FormulaStorage,
+  SharedFormula,
+  SharedStrings,
+  XmlReadable
+}
 
 /** Reader for parsing OoxmlWorksheet from XML */
 object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
@@ -256,14 +262,21 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
               // A malformed/orphan shared dependent must remain visibly formula-shaped. Falling
               // back to its cached literal would recreate the silent data loss GH-370 fixes.
               .getOrElse("#REF!")
-        Right(CellValue.Formula(expression, parseFormulaCache(elem, cellType)))
+        // GH-556: the model keeps the bare (formula-bar) spelling of post-2007 functions
+        Right(
+          CellValue.Formula(
+            FormulaStorage.fromStored(expression),
+            parseFormulaCache(elem, cellType)
+          )
+        )
 
       case Some(formulaElem) =>
         // GH-430: non-shared records. `t="array"`/`t="dataTable"` attrs are modeled per cell —
         // exactly the cells whose XML carried a record keep one (no group inference). A record
         // whose load-bearing `ref` is missing/corrupt degrades VISIBLY (array keeps its text as a
         // plain formula; dataTable falls back to its cached constant) — never invent a range.
-        val text = formulaElem.text.trim
+        // GH-556: the model keeps the bare (formula-bar) spelling of post-2007 functions
+        val text = FormulaStorage.fromStored(formulaElem.text.trim)
         FormulaKindCodec.fromAttrs(
           getAttrOpt(formulaElem, "t"),
           name => getAttrOpt(formulaElem, name)

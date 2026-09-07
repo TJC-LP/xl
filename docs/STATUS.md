@@ -209,15 +209,15 @@
 
 ### Test Coverage
 
-**5,625 test cases** (verified via `./mill __.test`, 2026-09-04): 5,624 passed; one existing style-performance comparison remains ignored.
+**5,705 test cases** (verified via `./mill __.test`, 2026-09-07): all passed; one existing style-performance comparison remains ignored.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2196 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1293 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1080 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-evaluator | 2235 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1318 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1089 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 754 | command parsing, batch ops, view/eval/export, streaming mode |
-| xl-cats-effect | 153 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-cats-effect | 160 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 122 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 27 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |

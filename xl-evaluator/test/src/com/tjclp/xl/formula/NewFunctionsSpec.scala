@@ -170,10 +170,10 @@ class NewFunctionsSpec extends FunSuite:
     assertEquals(result, Right(LocalDate.of(2025, 11, 21)))
   }
 
-  test("DATE: invalid date returns error") {
+  test("DATE: day overflow rolls into the next month (GH-562, Excel semantics)") {
     val expr = TExpr.date(TExpr.Lit(2025), TExpr.Lit(2), TExpr.Lit(30))
     val result = evaluator.eval(expr, emptySheet)
-    assert(result.isLeft)
+    assertEquals(result, Right(LocalDate.of(2025, 3, 2)))
   }
 
   test("YEAR: extract year from date") {

@@ -12,7 +12,7 @@ import com.tjclp.xl.ooxml.{FormulaKindCodec, SharedStrings, XmlSecurity, XmlUtil
 import java.util.concurrent.{ArrayBlockingQueue, BlockingQueue}
 import java.util.concurrent.atomic.AtomicBoolean
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.ooxml.SharedFormula
+import com.tjclp.xl.ooxml.{FormulaStorage, SharedFormula}
 
 /**
  * SAX-based streaming XML reader for maximum performance.
@@ -383,13 +383,14 @@ object SaxStreamingReader:
                   CellValue.Formula(FormulaKind.displayExpression(dt), cachedOpt, dt)
                 case _ =>
                   (expandedFormula, inlineText, cachedValue) match
+                    // GH-556: bare (formula-bar) spelling of post-2007 functions, DOM parity
                     case (Some(formula), _, Some(cached)) =>
                       val parsedCached = interpretCellValue(cached, currentCellType, sst)
                       val cachedOpt =
                         if parsedCached == CellValue.Empty then None else Some(parsedCached)
-                      CellValue.Formula(formula, cachedOpt, textKind)
+                      CellValue.Formula(FormulaStorage.fromStored(formula), cachedOpt, textKind)
                     case (Some(formula), _, None) =>
-                      CellValue.Formula(formula, None, textKind)
+                      CellValue.Formula(FormulaStorage.fromStored(formula), None, textKind)
                     case (None, Some(text), _) =>
                       CellValue.Text(text)
                     case (None, None, Some(value)) =>

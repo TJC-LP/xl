@@ -5,7 +5,14 @@ import org.xml.sax.{Attributes, InputSource}
 import org.xml.sax.helpers.DefaultHandler
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
-import com.tjclp.xl.ooxml.{FormulaKindCodec, SaxWriter, StaxSaxWriter, XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{
+  FormulaKindCodec,
+  FormulaStorage,
+  SaxWriter,
+  StaxSaxWriter,
+  XmlSecurity,
+  XmlUtil
+}
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.styles.font.Underline
 import scala.collection.mutable
@@ -174,8 +181,9 @@ object StreamingTransform:
             FormulaKindCodec.toAttrs(kind).foreach { case (name, v) =>
               writer.writeAttribute(name, v)
             }
-            // GH-456: <f> carries the expression, never the display form's leading '='
-            writer.writeCharacters(expr.stripPrefix("="))
+            // GH-456: <f> carries the expression, never the display form's leading '=';
+            // GH-556: post-2007 functions carry Excel's _xlfn. storage prefix
+            writer.writeCharacters(FormulaStorage.toStored(expr))
             writer.endElement()
         cachedValue.foreach(cv => writeCachedValue(writer, cv))
 

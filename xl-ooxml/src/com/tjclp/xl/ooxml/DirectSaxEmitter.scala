@@ -430,8 +430,9 @@ object DirectSaxEmitter:
             FormulaKindCodec.toAttrs(kind).foreach { case (name, v) =>
               writer.writeAttribute(name, v)
             }
-            // GH-456: <f> carries the expression, never the display form's leading '='
-            writer.writeCharacters(expr.stripPrefix("="))
+            // GH-456: <f> carries the expression, never the display form's leading '=';
+            // GH-556: post-2007 functions carry Excel's _xlfn. storage prefix
+            writer.writeCharacters(FormulaStorage.toStored(expr))
             writer.endElement()
         emitCachedValue(writer, cachedValue)
 
