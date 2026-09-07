@@ -53,6 +53,7 @@ object Argv:
   val verbs: Vector[String] = Vector(
     "rasterizers",
     "functions",
+    "schema",
     "new",
     "diff",
     "lint",

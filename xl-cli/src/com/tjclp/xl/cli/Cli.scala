@@ -186,22 +186,19 @@ object Cli:
     val infoOpts = (jsonOpt, functionsCmd).mapN((mode, _) => runInfo(io, mode))
     val rasterOpts = (jsonOpt, rasterizersCmd).mapN((mode, _) => runRasterizers(io, mode))
 
-    // Batch dry-run: only needs batch source, no --file or --output. Same shape as the other
-    // standalone runners: a bad source (invalid JSON, missing file) is a diagnostic on stderr with
-    // the code's exit, never an escaped exception (which IOApp would print as a trace with exit 1).
-    val dryRunFlag =
-      Opts.flag("dry-run", "Validate batch JSON without writing")
+    // Standalone batch forms — `--dry-run <source>` validates, `--schema` prints the document's
+    // JSON Schema — need no --file or --output. Same shape as the other standalone runners: a bad
+    // source (invalid JSON, missing file) is a diagnostic on stderr with the code's exit, never an
+    // escaped exception (which IOApp would print as a trace with exit 1).
     val batchDryRunOpts =
-      (
-        jsonOpt,
-        Opts.subcommand("batch", batchHelp) {
-          (batchArg, dryRunFlag).mapN((src, _) => src)
-        }
-      ).mapN { (mode, src) =>
-        batchDryRunOutcome(src, io, mode).flatMap(emit(_, mode, io))
+      (jsonOpt, Opts.subcommand("batch", batchHelp)(batchStandaloneArgs)).mapN { (mode, form) =>
+        batchStandaloneOutcome(form, io, mode).flatMap(emit(_, mode, io))
       }
 
-    rasterOpts orElse infoOpts orElse standaloneOpts orElse diffOpts orElse lintOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
+    // The contract itself (ADR-017 §2.13): `xl schema [--json]`, no file required
+    val contractOpts = schemaOpts(io)
+
+    rasterOpts orElse infoOpts orElse contractOpts orElse standaloneOpts orElse diffOpts orElse lintOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
 
   /** The parser the binary runs: the program plus `--version`, under decline's `--help`. */
   def command(io: CliIO): Command[IO[ExitCode]] =

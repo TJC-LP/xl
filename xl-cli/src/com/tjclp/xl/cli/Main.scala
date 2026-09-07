@@ -54,14 +54,17 @@ import com.tjclp.xl.cli.contract.{
   Diagnostics,
   ErrorCode,
   ExitCodes,
+  FunctionDoc,
   Location,
   Outcome,
   OutputMode,
   Payload,
   Render,
+  Schema,
   Warning,
   WarningCode
 }
+import com.tjclp.xl.cli.batch.OpRegistry
 import com.tjclp.xl.cli.helpers.{BatchParser, Resolve}
 import com.tjclp.xl.cli.output.Format
 
@@ -715,6 +718,25 @@ EXAMPLES:
       Opts.unit
     }
 
+  /**
+   * `xl schema` (ADR-017 §2.13): the CLI contract from the binary itself — the verb table as text,
+   * or with `--json` the whole contract (exit and error codes, globals, verbs, the batch JSON
+   * Schema, the function registry, the envelope's JSON Schema) as one document.
+   */
+  val schemaCmd: Opts[Unit] =
+    Opts.subcommand(
+      "schema",
+      "Print the CLI contract: every verb with what it needs and how it exits; " +
+        "--json adds exit/error/warning codes, globals, the batch op schema, the functions " +
+        "and the envelope schema"
+    ) {
+      Opts.unit
+    }
+
+  /** The `schema` verb wired to its runner; [[Cli.program]] places it after `functions`. */
+  private[cli] def schemaOpts(io: CliIO): Opts[IO[ExitCode]] =
+    (jsonOpt, schemaCmd).mapN((mode, _) => runSchema(io, mode))
+
   // --- Standalone commands (no --file required) ---
 
   private val outputArg = Opts.argument[Path]("output")
@@ -1212,52 +1234,26 @@ USAGE:
 
   // --- Batch command ---
   private[cli] val batchArg = Opts.argument[String]("operations").withDefault("-")
-  private[cli] val batchHelp = """Apply multiple operations atomically from JSON.
+
+  /**
+   * The `batch` help: the op table comes from [[OpRegistry.helpText]] — every op the registry
+   * knows, its example and aliases — so the help can never list fewer ops than the parser accepts.
+   */
+  private[cli] val batchHelp: String =
+    val head = """Apply multiple operations atomically from JSON.
 
 USAGE:
   xl -f in.xlsx -s Sheet1 -o out.xlsx batch ops.json
   echo '[...]' | xl -f in.xlsx -s Sheet1 -o out.xlsx batch -
-
-OPERATIONS:
-  put       {"op": "put", "ref": "A1", "value": "Hello"}
-  putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}  (also accepts "formula";
-            optional "format" applies a number format to the formula cell(s))
-  style     {"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}
-  merge     {"op": "merge", "range": "A1:D1"}
-  unmerge   {"op": "unmerge", "range": "A1:D1"}
-  colwidth  {"op": "colwidth", "col": "A", "width": 15.5}
-  rowheight {"op": "rowheight", "row": 1, "height": 30}
-
-ROW/COLUMN GROUPING (GH-421):
-  group-rows    {"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}
-  group-cols    {"op": "group-cols", "cols": "E:H", "level": 1, "collapsed": false}
-  ungroup-rows  {"op": "ungroup-rows", "rows": "10:20"}
-  ungroup-cols  {"op": "ungroup-cols", "cols": "E:H"}
-                (collapsed hides the members and marks the summary row/col after the group)
-
-APPEARANCE & PRINT SETUP (GH-358):
-  sheet-view    {"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
-  tab-color     {"op": "tab-color", "color": "#1F4E79"}  (or {"clear": true};
-                colors: named, #hex, rgb(r,g,b), theme:accent1[:tint])
-  autofilter    {"op": "autofilter", "range": "A1:M29"}  (or {"clear": true} to strip
-                the sheet's autoFilter, even one preserved from the source file)
-  page-setup    {"op": "page-setup", "orientation": "landscape", "scale": 90,
-                "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
-  header-footer {"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N",
-                "oddHeader": ..., "evenHeader/evenFooter": ..., "firstHeader/firstFooter": ...,
-                "differentOddEven": true, "differentFirst": true}
-                (&L/&C/&R sections; &P page, &N total, &D date, &F file, &A sheet)
-
-CONDITIONAL FORMATTING (GH-324):
-  cf            {"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100",
-                "bold": true, "bg": "#FFC7CE", "fg": "#9C0006"}
-                (rule DSL and flags as `xl cf add`; priorities auto-assigned in order)
-
-STYLE PROPERTIES:
+  xl batch --dry-run ops.json      # validate and summarise without a workbook
+  xl batch --schema                # the document's JSON Schema (every op, field and alias)
+"""
+    val tail = """
+STYLE PROPERTIES (style op):
   Font:      bold, italic, underline, fg, fontSize, fontName
   Fill:      bg (background color, e.g., "#FFFF00" or "yellow")
   Align:     align (left/center/right), valign (top/middle/bottom), wrap
-  Format:    numFormat (general/number/currency/percent/date/text)
+  Format:    numFormat (general/number/currency/percent/date/text or an Excel format code)
   Border:    border (all), borderTop/Right/Bottom/Left, borderColor
   Mode:      replace (true=replace style, false=merge with existing)
 
@@ -1273,15 +1269,49 @@ EXAMPLE:
   ]
 
 Operations execute in order. Use "-" to read from stdin.
-Use --dry-run to validate JSON without writing."""
+Use --dry-run to validate JSON without writing; --schema prints the JSON Schema."""
+    head + "\n" + OpRegistry.helpText + "\n" + tail
 
-  private val dryRunOpt =
-    Opts.flag("dry-run", "Validate batch JSON and show summary without writing").orFalse
+  private val dryRunHelp = "Validate batch JSON and show summary without writing"
+  private val batchSchemaHelp =
+    "Print the JSON Schema of the batch document (every op, field and alias) and exit"
 
+  private val dryRunOpt = Opts.flag("dry-run", dryRunHelp).orFalse
+  private val batchSchemaFlag = Opts.flag("schema", batchSchemaHelp).orFalse
+
+  // decline runs every same-named subcommand over the same arguments and fails the parse if any of
+  // them rejects one (Parser.Accumulator.OrElse.parseSub), so the full `batch` and the standalone
+  // forms below accept the same two flags.
   val batchCmd: Opts[CliCommand] =
     Opts.subcommand("batch", batchHelp) {
-      (batchArg, dryRunOpt).mapN(CliCommand.Batch.apply)
+      (batchArg, dryRunOpt, batchSchemaFlag).mapN(CliCommand.Batch.apply)
     }
+
+  /**
+   * The `batch` forms that need neither `-f` nor `-o`: `--dry-run <source>` validates the document
+   * and `--schema` prints its JSON Schema — `OpRegistry.jsonSchema`, the `batchOps` of
+   * `xl schema --json` (ADR-017 §2.13).
+   */
+  enum BatchStandalone derives CanEqual:
+    case DryRun(source: String)
+    case PrintSchema
+
+  private[cli] val batchStandaloneArgs: Opts[BatchStandalone] =
+    (batchArg, Opts.flag("dry-run", dryRunHelp))
+      .mapN((source, _) => BatchStandalone.DryRun(source): BatchStandalone)
+      .orElse(Opts.flag("schema", batchSchemaHelp).as(BatchStandalone.PrintSchema: BatchStandalone))
+
+  /** The batch document's JSON Schema as a payload: the same JSON `xl schema --json` embeds. */
+  private[cli] def batchSchemaPayload: Payload =
+    Payload.Json(OpRegistry.jsonSchema(BuildInfo.version))
+
+  private[cli] def batchStandaloneOutcome(
+    form: BatchStandalone,
+    io: CliIO,
+    mode: OutputMode
+  ): IO[Outcome] = form match
+    case BatchStandalone.DryRun(source) => batchDryRunOutcome(source, io, mode)
+    case BatchStandalone.PrintSchema => IO.pure(Outcome.ok("batch", batchSchemaPayload))
 
   // --- Recalc command (GH-352) ---
   private val recalcHelp = """Recalculate all formulas and rewrite cached values.
@@ -2022,14 +2052,16 @@ EXAMPLES:
   private[cli] def runInfo(io: CliIO, mode: OutputMode = OutputMode.Text): IO[ExitCode] =
     val payload = mode match
       case OutputMode.Text => Payload.text(formatFunctionList())
-      case OutputMode.Json =>
-        // Typed `[{name}]` until docs-from-code types the registry entries
-        Payload.Json(
-          ujson.Arr.from(
-            FunctionRegistry.allNames.map(name => ujson.Obj("name" -> ujson.Str(name)))
-          )
-        )
+      // Typed rows (ADR-017 §2.13): every registry function plus LET, the special form
+      case OutputMode.Json => Payload.Json(FunctionDoc.toJson(FunctionDoc.all))
     emit(Outcome.ok("functions", payload), mode, io)
+
+  /** `xl schema`: the verb table as text; `--json`: the whole contract ([[Schema.json]]). */
+  private[cli] def runSchema(io: CliIO, mode: OutputMode): IO[ExitCode] =
+    val payload = mode match
+      case OutputMode.Text => Payload.text(Schema.verbTable(BuildInfo.version))
+      case OutputMode.Json => Payload.Json(Schema.json(BuildInfo.version))
+    emit(Outcome.ok("schema", payload), mode, io)
 
   private[cli] def runRasterizers(io: CliIO, mode: OutputMode = OutputMode.Text): IO[ExitCode] =
     probeRasterizers().flatMap { rows =>
@@ -2468,8 +2500,12 @@ EXAMPLES:
         }
 
       // A dry run validates the batch JSON and reads no workbook, whatever else is on the line
-      case CliCommand.Batch(source, true) =>
+      case CliCommand.Batch(source, true, _) =>
         batchDryRunPayload(source, io, mode)
+
+      // --schema prints the document's JSON Schema; no workbook is read, nothing is written
+      case CliCommand.Batch(_, _, true) =>
+        IO.pure(batchSchemaPayload)
 
       // Describe (ADR-017 §2.10): metadata only — instant, streaming-safe — unless --full asks for
       // the loaded book's counts. A workbook verb: -s is ignored.
@@ -2798,10 +2834,10 @@ EXAMPLES:
         case Some(outputPath) =>
           StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
-    case CliCommand.Batch(source, dryRun) if dryRun =>
+    case CliCommand.Batch(source, dryRun, _) if dryRun =>
       batchDryRun(source, io)
 
-    case CliCommand.Batch(source, _) =>
+    case CliCommand.Batch(source, _, _) =>
       outputOpt match
         case None =>
           IO.raiseError(outputRequired("--output is required for batch command"))
@@ -3003,10 +3039,10 @@ EXAMPLES:
         WriteCommands.ungroupCols(wb, sheetOpt, cols, _, _, _)
       )
 
-    case CliCommand.Batch(source, dryRun) if dryRun =>
+    case CliCommand.Batch(source, dryRun, _) if dryRun =>
       batchDryRun(source, io)
 
-    case CliCommand.Batch(source, _) =>
+    case CliCommand.Batch(source, _, _) =>
       requireOutput("batch", outputOpt, backendOpt, stream)(
         WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy, io.stdin)
       )

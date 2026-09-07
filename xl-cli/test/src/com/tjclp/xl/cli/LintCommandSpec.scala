@@ -285,11 +285,16 @@ class LintCommandSpec extends CatsEffectSuite:
     )
   }
 
-  test("GH-486: cli.md's lint one-liner names the same category families") {
-    val body = Files.readString(repoRoot.resolve("docs/reference/cli.md"), StandardCharsets.UTF_8)
+  test("GH-486: the generated verb table's lint one-liner names the same category families") {
+    // The command table is generated from Schema.verbs (docs/reference/generated/cli-verbs.md,
+    // rendered by DocsGenSpec); the anti-drift gate follows it there.
+    val body = Files.readString(
+      repoRoot.resolve("docs/reference/generated/cli-verbs.md"),
+      StandardCharsets.UTF_8
+    )
     val summaryLine = body.linesIterator
       .find(l => l.startsWith("| `lint`"))
-      .getOrElse(fail("cli.md has no `lint` row in the command table"))
+      .getOrElse(fail("generated/cli-verbs.md has no `lint` row in the verb table"))
     // The summary is prose, not a slug list, but it must not claim a narrower scope than reality.
     assert(
       summaryLine.contains("data-table") && summaryLine.contains("content-type"),

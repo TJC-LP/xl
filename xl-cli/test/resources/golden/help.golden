@@ -7,6 +7,7 @@
 Usage:
     xl [--json] rasterizers
     xl [--json] functions
+    xl [--json] schema
     xl [--json] new
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--json] diff
     xl [--file <path>] [--json] lint
@@ -111,6 +112,8 @@ Subcommands:
         List available SVG-to-raster backends
     functions
         List supported Excel functions
+    schema
+        Print the CLI contract: every verb with what it needs and how it exits; --json adds exit/error/warning codes, globals, the batch op schema, the functions and the envelope schema
     new
         Create a blank xlsx file
     diff
@@ -341,47 +344,52 @@ Subcommands:
         USAGE:
           xl -f in.xlsx -s Sheet1 -o out.xlsx batch ops.json
           echo '[...]' | xl -f in.xlsx -s Sheet1 -o out.xlsx batch -
+          xl batch --dry-run ops.json      # validate and summarise without a workbook
+          xl batch --schema                # the document's JSON Schema (every op, field and alias)
 
         OPERATIONS:
-          put       {"op": "put", "ref": "A1", "value": "Hello"}
-          putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}  (also accepts "formula";
-                    optional "format" applies a number format to the formula cell(s))
-          style     {"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}
-          merge     {"op": "merge", "range": "A1:D1"}
-          unmerge   {"op": "unmerge", "range": "A1:D1"}
-          colwidth  {"op": "colwidth", "col": "A", "width": 15.5}
-          rowheight {"op": "rowheight", "row": 1, "height": 30}
+          put             {"op":"put","ref":"A1","value":1234.5,"format":"currency"}  (aliases: format|numFormat)
+          putf            {"op":"putf","ref":"B2:B10","value":"=A2*2","from":"B2","format":"#,##0.0"}  (aliases: value|formula, from|anchor, format|numFormat)
+          style           {"op":"style","range":"A1:D1","bold":true,"bg":"#4472C4","fg":"#FFFFFF","align":"center"}  (aliases: align|halign, numFormat|format)
+          merge           {"op":"merge","range":"A1:D1"}
+          unmerge         {"op":"unmerge","range":"A1:D1"}
+          colwidth        {"op":"colwidth","col":"A","width":15.5}
+          rowheight       {"op":"rowheight","row":1,"height":30}
+          comment         {"op":"comment","ref":"A1","text":"Note","author":"User"}  [not with --stream]
+          remove-comment  {"op":"remove-comment","ref":"A1"}  [not with --stream]
+          hyperlink       {"op":"hyperlink","ref":"A1","target":"https://example.com"}  (aliases: target|url)  [not with --stream]
+          clear           {"op":"clear","range":"A1:B10","all":true}  [not with --stream]
+          col-hide        {"op":"col-hide","col":"C"}
+          col-show        {"op":"col-show","col":"C"}
+          row-hide        {"op":"row-hide","row":5}
+          row-show        {"op":"row-show","row":5}
+          group-rows      {"op":"group-rows","rows":"10:20","level":1,"collapsed":false}  [not with --stream]
+          group-cols      {"op":"group-cols","cols":"E:H","level":1,"collapsed":false}  [not with --stream]
+          ungroup-rows    {"op":"ungroup-rows","rows":"10:20"}  [not with --stream]
+          ungroup-cols    {"op":"ungroup-cols","cols":"E:H"}  [not with --stream]
+          autofit         {"op":"autofit","columns":"A:F"}  [not with --stream]
+          add-sheet       {"op":"add-sheet","name":"Summary","after":"Sheet1"}  [not with --stream]
+          rename-sheet    {"op":"rename-sheet","from":"Old","to":"New"}  [not with --stream]
+          freeze          {"op":"freeze","ref":"B2"}  [not with --stream]
+          unfreeze        {"op":"unfreeze"}  [not with --stream]
+          copy            {"op":"copy","source":"A1:B2","target":"D1","valuesOnly":false}  [not with --stream]
+          chart           {"op":"chart","type":"column","data":"B2:C4","categories":"A2:A4","seriesNames":"North,South","title":"Sales","legend":"right","at":"E2:K15"}  [not with --stream]
+          sheet-view      {"op":"sheet-view","gridlines":false,"zoom":85}  [not with --stream]
+          tab-color       {"op":"tab-color","color":"#1F4E79"}  [not with --stream]
+          autofilter      {"op":"autofilter","range":"A1:M29"}  [not with --stream]
+          page-setup      {"op":"page-setup","orientation":"landscape","fitToWidth":1,"fitToHeight":0}  [not with --stream]
+          header-footer   {"op":"header-footer","oddFooter":"&LConfidential&RPage &P of &N"}  [not with --stream]
+          cf              {"op":"cf","range":"A1:A10","rule":"cellIs:greaterThan:100","bold":true,"bg":"#FFC7CE","fg":"#9C0006"}  [not with --stream]
 
-        ROW/COLUMN GROUPING (GH-421):
-          group-rows    {"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}
-          group-cols    {"op": "group-cols", "cols": "E:H", "level": 1, "collapsed": false}
-          ungroup-rows  {"op": "ungroup-rows", "rows": "10:20"}
-          ungroup-cols  {"op": "ungroup-cols", "cols": "E:H"}
-                        (collapsed hides the members and marks the summary row/col after the group)
+        Every op except add-sheet/rename-sheet accepts "sheet": the sheet for its unqualified refs
+        (a sheet-qualified ref wins, then "sheet", then -s/--sheet). Property names are accepted in
+        camelCase or kebab-case. put/putf "format" is explicit and replaces the cell's number format.
 
-        APPEARANCE & PRINT SETUP (GH-358):
-          sheet-view    {"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
-          tab-color     {"op": "tab-color", "color": "#1F4E79"}  (or {"clear": true};
-                        colors: named, #hex, rgb(r,g,b), theme:accent1[:tint])
-          autofilter    {"op": "autofilter", "range": "A1:M29"}  (or {"clear": true} to strip
-                        the sheet's autoFilter, even one preserved from the source file)
-          page-setup    {"op": "page-setup", "orientation": "landscape", "scale": 90,
-                        "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
-          header-footer {"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N",
-                        "oddHeader": ..., "evenHeader/evenFooter": ..., "firstHeader/firstFooter": ...,
-                        "differentOddEven": true, "differentFirst": true}
-                        (&L/&C/&R sections; &P page, &N total, &D date, &F file, &A sheet)
-
-        CONDITIONAL FORMATTING (GH-324):
-          cf            {"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100",
-                        "bold": true, "bg": "#FFC7CE", "fg": "#9C0006"}
-                        (rule DSL and flags as `xl cf add`; priorities auto-assigned in order)
-
-        STYLE PROPERTIES:
+        STYLE PROPERTIES (style op):
           Font:      bold, italic, underline, fg, fontSize, fontName
           Fill:      bg (background color, e.g., "#FFFF00" or "yellow")
           Align:     align (left/center/right), valign (top/middle/bottom), wrap
-          Format:    numFormat (general/number/currency/percent/date/text)
+          Format:    numFormat (general/number/currency/percent/date/text or an Excel format code)
           Border:    border (all), borderTop/Right/Bottom/Left, borderColor
           Mode:      replace (true=replace style, false=merge with existing)
 
@@ -397,7 +405,7 @@ Subcommands:
           ]
 
         Operations execute in order. Use "-" to read from stdin.
-        Use --dry-run to validate JSON without writing.
+        Use --dry-run to validate JSON without writing; --schema prints the JSON Schema.
     put
         Write value(s) to cell or range.
 
@@ -514,47 +522,52 @@ Subcommands:
         USAGE:
           xl -f in.xlsx -s Sheet1 -o out.xlsx batch ops.json
           echo '[...]' | xl -f in.xlsx -s Sheet1 -o out.xlsx batch -
+          xl batch --dry-run ops.json      # validate and summarise without a workbook
+          xl batch --schema                # the document's JSON Schema (every op, field and alias)
 
         OPERATIONS:
-          put       {"op": "put", "ref": "A1", "value": "Hello"}
-          putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}  (also accepts "formula";
-                    optional "format" applies a number format to the formula cell(s))
-          style     {"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}
-          merge     {"op": "merge", "range": "A1:D1"}
-          unmerge   {"op": "unmerge", "range": "A1:D1"}
-          colwidth  {"op": "colwidth", "col": "A", "width": 15.5}
-          rowheight {"op": "rowheight", "row": 1, "height": 30}
+          put             {"op":"put","ref":"A1","value":1234.5,"format":"currency"}  (aliases: format|numFormat)
+          putf            {"op":"putf","ref":"B2:B10","value":"=A2*2","from":"B2","format":"#,##0.0"}  (aliases: value|formula, from|anchor, format|numFormat)
+          style           {"op":"style","range":"A1:D1","bold":true,"bg":"#4472C4","fg":"#FFFFFF","align":"center"}  (aliases: align|halign, numFormat|format)
+          merge           {"op":"merge","range":"A1:D1"}
+          unmerge         {"op":"unmerge","range":"A1:D1"}
+          colwidth        {"op":"colwidth","col":"A","width":15.5}
+          rowheight       {"op":"rowheight","row":1,"height":30}
+          comment         {"op":"comment","ref":"A1","text":"Note","author":"User"}  [not with --stream]
+          remove-comment  {"op":"remove-comment","ref":"A1"}  [not with --stream]
+          hyperlink       {"op":"hyperlink","ref":"A1","target":"https://example.com"}  (aliases: target|url)  [not with --stream]
+          clear           {"op":"clear","range":"A1:B10","all":true}  [not with --stream]
+          col-hide        {"op":"col-hide","col":"C"}
+          col-show        {"op":"col-show","col":"C"}
+          row-hide        {"op":"row-hide","row":5}
+          row-show        {"op":"row-show","row":5}
+          group-rows      {"op":"group-rows","rows":"10:20","level":1,"collapsed":false}  [not with --stream]
+          group-cols      {"op":"group-cols","cols":"E:H","level":1,"collapsed":false}  [not with --stream]
+          ungroup-rows    {"op":"ungroup-rows","rows":"10:20"}  [not with --stream]
+          ungroup-cols    {"op":"ungroup-cols","cols":"E:H"}  [not with --stream]
+          autofit         {"op":"autofit","columns":"A:F"}  [not with --stream]
+          add-sheet       {"op":"add-sheet","name":"Summary","after":"Sheet1"}  [not with --stream]
+          rename-sheet    {"op":"rename-sheet","from":"Old","to":"New"}  [not with --stream]
+          freeze          {"op":"freeze","ref":"B2"}  [not with --stream]
+          unfreeze        {"op":"unfreeze"}  [not with --stream]
+          copy            {"op":"copy","source":"A1:B2","target":"D1","valuesOnly":false}  [not with --stream]
+          chart           {"op":"chart","type":"column","data":"B2:C4","categories":"A2:A4","seriesNames":"North,South","title":"Sales","legend":"right","at":"E2:K15"}  [not with --stream]
+          sheet-view      {"op":"sheet-view","gridlines":false,"zoom":85}  [not with --stream]
+          tab-color       {"op":"tab-color","color":"#1F4E79"}  [not with --stream]
+          autofilter      {"op":"autofilter","range":"A1:M29"}  [not with --stream]
+          page-setup      {"op":"page-setup","orientation":"landscape","fitToWidth":1,"fitToHeight":0}  [not with --stream]
+          header-footer   {"op":"header-footer","oddFooter":"&LConfidential&RPage &P of &N"}  [not with --stream]
+          cf              {"op":"cf","range":"A1:A10","rule":"cellIs:greaterThan:100","bold":true,"bg":"#FFC7CE","fg":"#9C0006"}  [not with --stream]
 
-        ROW/COLUMN GROUPING (GH-421):
-          group-rows    {"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}
-          group-cols    {"op": "group-cols", "cols": "E:H", "level": 1, "collapsed": false}
-          ungroup-rows  {"op": "ungroup-rows", "rows": "10:20"}
-          ungroup-cols  {"op": "ungroup-cols", "cols": "E:H"}
-                        (collapsed hides the members and marks the summary row/col after the group)
+        Every op except add-sheet/rename-sheet accepts "sheet": the sheet for its unqualified refs
+        (a sheet-qualified ref wins, then "sheet", then -s/--sheet). Property names are accepted in
+        camelCase or kebab-case. put/putf "format" is explicit and replaces the cell's number format.
 
-        APPEARANCE & PRINT SETUP (GH-358):
-          sheet-view    {"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
-          tab-color     {"op": "tab-color", "color": "#1F4E79"}  (or {"clear": true};
-                        colors: named, #hex, rgb(r,g,b), theme:accent1[:tint])
-          autofilter    {"op": "autofilter", "range": "A1:M29"}  (or {"clear": true} to strip
-                        the sheet's autoFilter, even one preserved from the source file)
-          page-setup    {"op": "page-setup", "orientation": "landscape", "scale": 90,
-                        "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
-          header-footer {"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N",
-                        "oddHeader": ..., "evenHeader/evenFooter": ..., "firstHeader/firstFooter": ...,
-                        "differentOddEven": true, "differentFirst": true}
-                        (&L/&C/&R sections; &P page, &N total, &D date, &F file, &A sheet)
-
-        CONDITIONAL FORMATTING (GH-324):
-          cf            {"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100",
-                        "bold": true, "bg": "#FFC7CE", "fg": "#9C0006"}
-                        (rule DSL and flags as `xl cf add`; priorities auto-assigned in order)
-
-        STYLE PROPERTIES:
+        STYLE PROPERTIES (style op):
           Font:      bold, italic, underline, fg, fontSize, fontName
           Fill:      bg (background color, e.g., "#FFFF00" or "yellow")
           Align:     align (left/center/right), valign (top/middle/bottom), wrap
-          Format:    numFormat (general/number/currency/percent/date/text)
+          Format:    numFormat (general/number/currency/percent/date/text or an Excel format code)
           Border:    border (all), borderTop/Right/Bottom/Left, borderColor
           Mode:      replace (true=replace style, false=merge with existing)
 
@@ -570,7 +583,7 @@ Subcommands:
           ]
 
         Operations execute in order. Use "-" to read from stdin.
-        Use --dry-run to validate JSON without writing.
+        Use --dry-run to validate JSON without writing; --schema prints the JSON Schema.
     recalc
         Recalculate all formulas and rewrite cached values.
 

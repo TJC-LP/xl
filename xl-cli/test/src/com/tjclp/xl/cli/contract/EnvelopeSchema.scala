@@ -6,16 +6,18 @@ import java.nio.file.Files
 import munit.Assertions.fail
 
 /**
- * `xl-cli/test/resources/schema/envelope.schema.json` — the published shape of the `--json`
- * envelope — plus a hand-written structural checker over `ujson.Value` for the JSON Schema subset
- * the file uses: `type` (a name or a list of names), `enum`, `pattern`, `required`, `properties`,
- * `additionalProperties: false`, `items`, `oneOf` and local `$ref`s (`#/$defs/...`). No schema
- * library: the contract suite depends on nothing xl-cli itself does not.
+ * `xl-cli/resources/schema/envelope.schema.json` — the published shape of the `--json` envelope,
+ * the file the binary serves as `xl schema --json`'s `envelope` — plus a hand-written structural
+ * checker over `ujson.Value` for the JSON Schema subset the file uses: `type` (a name or a list of
+ * names), `enum`, `pattern`, `required`, `properties`, `additionalProperties: false`, `items`,
+ * `oneOf` and local `$ref`s (`#/$defs/...`). No schema library: the contract suite depends on
+ * nothing xl-cli itself does not.
  */
 object EnvelopeSchema:
 
+  /** Read from the checkout, not the classpath, so the test pins the file as committed. */
   lazy val schema: ujson.Value =
-    val path = Golden.repoRoot.resolve("xl-cli/test/resources/schema/envelope.schema.json")
+    val path = Golden.repoRoot.resolve("xl-cli/resources/schema/envelope.schema.json")
     ujson.read(Files.readString(path, StandardCharsets.UTF_8))
 
   /** Every violation, as `<json pointer>: <problem>`; empty when the value conforms. */

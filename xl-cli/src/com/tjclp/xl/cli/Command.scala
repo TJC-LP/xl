@@ -121,7 +121,9 @@ enum CliCommand:
   case GroupCols(cols: String, level: Int, collapsed: Boolean)
   case UngroupRows(rows: String)
   case UngroupCols(cols: String)
-  case Batch(source: String, dryRun: Boolean = false) // "-" for stdin or file path
+  // "-" for stdin or file path; --dry-run validates without writing, --schema prints the
+  // document's JSON Schema (ADR-017 §2.13) — both skip the read and the write
+  case Batch(source: String, dryRun: Boolean = false, schema: Boolean = false)
   // Whole-workbook recalculation: cache every formula's value (GH-352).
   // `tables` additionally seeds data-table interior caches (GH-442); default stays pinned-cache.
   // `parallel` evaluates independent formula regions on N threads (GH-520); None = sequential.
@@ -316,7 +318,7 @@ enum CliCommand:
     case GroupCols(_, _, _) => "group-cols"
     case UngroupRows(_) => "ungroup-rows"
     case UngroupCols(_) => "ungroup-cols"
-    case Batch(_, _) => "batch"
+    case _: Batch => "batch"
     case Recalc(_, _) => "recalc"
     case _: Import => "import"
     case _: ImportMarkdown => "import-md"
