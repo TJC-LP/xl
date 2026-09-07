@@ -54,6 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Schema ships in the test corpus and 17 goldens pin one envelope per shape. Text-mode stdout is
   byte-identical to before for every verb (the golden corpus proves it); see "Output contract" in
   `docs/reference/cli.md`.
+- **Batch ops are one registry, and every op takes a `sheet`.** `OpRegistry` (xl-cli) holds the
+  32 `OpSpec`s — fields, aliases, whether an op mutates cells, whether it streams, an example —
+  and `batch` parses against it: `numFormat`/`format`/`num-format`, `anchor`/`from`, `url`/`target`,
+  `halign`/`align` and kebab or camel spellings are accepted without a warning, an unknown key still
+  warns with the known list, and an unknown op suggests the nearest name (`Did you mean: …`). Every
+  sheet-scoped op accepts `"sheet": "Other"`; the resolution rule is qualified ref, then the op's
+  `sheet`, then `-s`, and a qualified ref that disagrees with `sheet` is `BATCH_OP_INVALID` naming
+  the object. A `rename-sheet` of the current default retargets the ops after it. Apply-time
+  failures read `Object N (op): <cause>` and carry the cause's did-you-mean candidates. `--stream
+  batch` refuses ops the streaming writer cannot apply, or that target another sheet, by index
+  (`ops [3 putf, 7 clear] are not supported with --stream …`, exit 2) before writing a single byte;
+  qualified refs to the streamed sheet now work. `page-setup` accepts `fitToHeight: 0` /
+  `fitToWidth: 0` in batch and on the CLI flags (#463). Summary lines for sheet-scoped ops carry a
+  `[Sheet]` prefix; unscoped lines are unchanged.
 - **Typed reads see cached formula values** (#477). `readTyped`, `readTypedOpt` and
   `readTypedOr` on a formula cell decode its cached value (`Formula(_, Some(v), _)` reads as
   `v`), so a recalculated or Excel-saved book reads like Excel shows it. An uncached formula still
@@ -145,6 +159,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remap `Workbook.rename` already performed. Not rewritten by design, and documented in
   `docs/LIMITATIONS.md`: preserved (unparsed) payloads, hyperlink locations, 3-D ranges and
   `_xlfn.`-prefixed formulas (the last two refuse rather than leave a dangling reference).
+- **Batch `put` with an explicit `format` replaces an existing custom number format** (#560).
+  `[{"op":"put","ref":"A1","value":1234,"format":"#,##0"}]` on a cell formatted `0.0%_);\(0.0%\)`
+  now yields `#,##0` with the font, fill and border kept; before, `Sheet.put`'s merge rule kept the
+  old format because it treats any non-General format as authoritative. A detected format (no
+  `format` key: `$1,234.56`, `2025-01-15`) still applies only to General cells, so a date-shaped
+  string written onto a Currency cell stays Currency. The same two rules now hold under `--stream`,
+  where a formatted `put`/`putf` used to replace the whole cell style (bold and borders were lost).
+  The `TABLE(` steering message no longer advertises a `data-table` batch op that never existed;
+  it points at `sheet.dataTable(...)` in scripts.
 - **`recalculateUncached` never withdraws a cache** (#468 contract). A failing or cyclic uncached
   cell is reported in `errors`; cached cells stay byte-identical unconditionally.
 - **`insert-rows`/`delete-rows` no longer duplicate property-only rows** (#558). Rows that carry

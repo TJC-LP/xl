@@ -490,7 +490,7 @@ exported from the formula surface." Apply the `cli.md`/xl-cli `SKILL.md` deltas 
 
 ### Cluster batch-opspec-scope
 
-**Status**: pending
+**Status**: done — `f058ddc`, `49ba36c`, `d60ad13` (32 `OpSpec`s, `sheet` on every op, `--stream` refusal by index, #560; rework: streaming formats keep the cell style)
 **Modules**: xl-cli
 **Files**: new `xl-cli/src/com/tjclp/xl/cli/batch/{OpSpec,OpRegistry}.scala`; `xl-cli/src/com/tjclp/xl/cli/helpers/BatchParser.scala`; `xl-cli/src/com/tjclp/xl/cli/helpers/ValueParser.scala` (`:59-66`); `xl-cli/src/com/tjclp/xl/cli/commands/WriteCommands.scala` (`:950` visibility and the one call site in `batch` at `:1268-1301`); `xl-cli/src/com/tjclp/xl/cli/commands/StreamingWriteCommands.scala` (`batch`, `:434-463`); new `xl-cli/test/src/com/tjclp/xl/cli/batch/{OpRegistrySpec,BatchSheetScopeSpec,BatchPutFormatSpec,BatchStreamRefusalSpec}.scala`; `xl-cli/test/src/com/tjclp/xl/cli/BatchPutSpec.scala` (additions)
 **DependsOn**: errors-exit-codes, recalc-options-renamer
