@@ -314,7 +314,7 @@ property-only rows (height, hidden, outline level) at both the old and the new i
 
 ### Cluster envelope-json
 
-**Status**: pending
+**Status**: done — `2f879a8`, `7640737`, `5b60dff` (seven-key envelope, typed `data` for the read verbs, warnings sink, review rework closed the `--stream`/`--eval` stderr leaks)
 **Modules**: xl-cli
 **Files**: new `xl-cli/src/com/tjclp/xl/cli/contract/{Outcome,Payload,Render}.scala`; `xl-cli/src/com/tjclp/xl/cli/Main.scala`; `xl-cli/src/com/tjclp/xl/cli/commands/WorkbookCommands.scala`; `xl-cli/src/com/tjclp/xl/cli/commands/ReadCommands.scala`; new `xl-cli/test/src/com/tjclp/xl/cli/contract/{RenderSpec,EnvelopeSpec}.scala`; new `xl-cli/test/resources/schema/envelope.schema.json`; goldens; `docs/reference/cli.md`; `plugin/skills/xl-cli/SKILL.md`
 **DependsOn**: errors-exit-codes

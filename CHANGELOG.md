@@ -36,6 +36,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `com.tjclp.xl.text.Suggest.closest` (case-insensitive edit distance) is the one did-you-mean
   helper. In xl-cli, `CliError`/`ErrorCode`/`ExitCodes`/`Diagnostics` project those codes to the
   exit table and the stderr format.
+- **Global `--json`: one envelope for every verb, success or failure.** `xl --json <verb> …`
+  prints exactly one JSON document on stdout with seven keys, always the same:
+  `{ok, exitCode, verb, version, data, warnings, error}`; `ok` is true exactly when `error` is
+  null, and `exitCode` equals the process exit code. `data` is the verb's own `--format json`
+  payload for `view`/`filter`/`diff`/`lint` (those bare payloads are unchanged: `--json` is
+  orthogonal to `--format`), typed objects for `sheets`, `names`, `bounds`, `eval`, `evala`,
+  `functions` and `rasterizers`, `{ops: [{index, op, summary}]}` for `batch --dry-run` (now
+  validated before the workbook is read), and `{text, saved, written}` for every prose and write
+  verb until Wave 2 types them (`saved` is the path actually committed, `written:false` when an
+  `-i --strict` gate rolled back). Findings and gates (`diff` differs, `lint` findings,
+  `--strict`) are `ok:false` with the report kept in `data` and `error.code`
+  `DIFFERENCES_FOUND`/`LINT_FINDINGS`/`RECALC_GATE`. Usage errors, unknown verbs and decline parse
+  failures produce the envelope too (exit 2). Notices become `warnings[]` entries with stable codes
+  (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED`, `FLAG_IGNORED`, `READER_WARNING`) and stderr stays
+  empty on success; on failure stderr carries one `Error: <message>` line. The envelope's JSON
+  Schema ships in the test corpus and 17 goldens pin one envelope per shape. Text-mode stdout is
+  byte-identical to before for every verb (the golden corpus proves it); see "Output contract" in
+  `docs/reference/cli.md`.
 - **Typed reads see cached formula values** (#477). `readTyped`, `readTypedOpt` and
   `readTypedOr` on a formula cell decode its cached value (`Formula(_, Some(v), _)` reads as
   `v`), so a recalculated or Excel-saved book reads like Excel shows it. An uncached formula still
@@ -91,6 +109,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on every failure; stdout carries results only. Reader warnings surface as
   `Warning[READER_WARNING]: <case>` on stderr. `xl --help` prints the table. Downstream code with
   an exhaustive `match` on `XLError` gets a non-exhaustive warning for the three new cases.
+- **Text-mode notices are `Warning[CODE]: …` lines on stderr** for every read verb, in memory and
+  under `--stream` alike (`view --format csv` truncation, `--skip-hidden` ignored under `--stream`,
+  an advisory `--eval` failure). The wording after the prefix is unchanged; only the prefix is new,
+  and `--stream` csv no longer prints a bare notice while in-memory csv prints a prefixed one.
+  `bounds` on an unreadable file is `IO_READ` like every other verb (was `INTERNAL`). `--help`
+  output lists the new `--json` flag.
 - **Scala 3.9.0 LTS** (#554). The build, README, quick-start, scripting docs, examples, and the
   xl-scripting skill snippets move from Scala 3.8.3 to 3.9.0, the new long-term-support line
   (maintained for at least three years; it succeeds 3.3 LTS as the recommended library
