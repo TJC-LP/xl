@@ -414,12 +414,16 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     condFmt: Option[Seq[Elem]] = None,
     dataValidations: Option[Option[Elem]] = None
   ): OoxmlWorksheet =
-    // Build a map of row indices to preserved row attributes
-    val preservedRowAttrs = preservedMetadata
-      .map { preserved =>
-        preserved.rows.map(r => r.rowIndex -> r).toMap
-      }
-      .getOrElse(Map.empty)
+    // GH-558: the domain `sheet.rowProperties` is authoritative for every row attribute the reader
+    // models (s/customFormat, ht/customHeight, hidden, outlineLevel, collapsed). A structural edit
+    // remaps rowProperties, so a source row's copy of those attributes is stale at its ORIGINAL
+    // index — re-emitting it there put a moved spacer height / hidden flag on two rows at once.
+    // Preserved source rows therefore contribute only their UNMODELLED metadata (spans, thickBot,
+    // thickTop, x14ac:dyDescent); the domain props for each index are applied on top, and every
+    // index is emitted at most once (a malformed duplicate source record collapses to one).
+    val preservedRows: Seq[OoxmlRow] =
+      preservedMetadata.toList.flatMap(_.rows).map(_.withoutModelledProps).distinctBy(_.rowIndex)
+    val preservedRowAttrs: Map[Int, OoxmlRow] = preservedRows.map(r => r.rowIndex -> r).toMap
 
     // Group cells by row
     // Optimization: Use TreeMap for auto-sorted grouping (avoids O(n log n) sort after groupBy)
@@ -476,43 +480,35 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
         OoxmlCell(cell.ref, value, globalStyleIdx, cellType)
       }.toSeq
 
-      // Preserve row attributes from original if available
+      // The source record's unmodelled metadata rides along when the row existed in the source
       val baseRow = preservedRowAttrs.get(rowIdx) match
-        case Some(original) =>
-          // Merge: use original's attributes, replace cells with new data
-          original.copy(cells = ooxmlCells)
-        case None =>
-          // New row - create with defaults
-          OoxmlRow(rowIdx, ooxmlCells)
+        case Some(source) => source.copy(cells = ooxmlCells)
+        case None => OoxmlRow(rowIdx, ooxmlCells)
 
-      // Apply domain row properties (height, hidden, style, outlineLevel, collapsed)
-      val rowWithDomainProps = sheet.rowProperties.get(Row.from1(rowIdx)) match
+      // Domain row properties for THIS index (authoritative for the modelled attributes)
+      sheet.rowProperties.get(Row.from1(rowIdx)) match
         case Some(domainProps) => applyDomainRowProps(baseRow, domainProps, styleRemapping)
         case None => baseRow
-
-      rowWithDomainProps
     }
 
-    // Reconcile source rows that have no cells in the domain model. This preserves formatting-only
-    // rows and the non-cell metadata of rows whose cells were removed. Exclude rows that still have
-    // (or gained) domain cells so every row index is emitted exactly once by one branch.
+    // Cell-free source rows: unmodelled metadata plus the domain props for THAT index, if any. A
+    // row left with neither cells nor attributes — its cells and its properties both moved away —
+    // is dropped, so a moved property leaves nothing behind at its old index. Rows that still have
+    // (or gained) domain cells are excluded so each index comes from exactly one branch.
     val rowsWithCellsIndices = rowsWithCells.iterator.map(_.rowIndex).toSet
-    val preservedRowsWithoutDomainCells = preservedMetadata.toList.flatMap { preserved =>
-      preserved.rows
-        .filterNot(row => rowsWithCellsIndices.contains(row.rowIndex))
-        .map { original =>
-          val withoutSourceCells = original.copy(cells = Seq.empty)
-          sheet.rowProperties
-            .get(Row.from1(original.rowIndex))
-            .fold(withoutSourceCells)(props =>
-              applyDomainRowProps(withoutSourceCells, props, styleRemapping)
-            )
-        }
-    }
+    val preservedRowsWithoutDomainCells = preservedRows
+      .filterNot(row => rowsWithCellsIndices.contains(row.rowIndex))
+      .map { source =>
+        val cellFree = source.copy(cells = Seq.empty)
+        sheet.rowProperties
+          .get(Row.from1(source.rowIndex))
+          .fold(cellFree)(props => applyDomainRowProps(cellFree, props, styleRemapping))
+      }
+      .filter(_.hasAttributes)
 
     // Generate empty rows for domain row properties not already represented
     val existingRowIndices =
-      cellsByRow.map(_._1).toSet ++ preservedRowsWithoutDomainCells.map(_.rowIndex).toSet
+      rowsWithCellsIndices ++ preservedRowsWithoutDomainCells.iterator.map(_.rowIndex)
     val emptyRowsFromDomain = sheet.rowProperties
       .filterNot { case (row, _) => existingRowIndices.contains(row.index1) }
       .map { case (row, props) =>
@@ -591,7 +587,10 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
               maxColOutline
             )
           },
-          generatedCols.orElse(preserved.cols), // Prefer domain props over preserved XML
+          // GH-558: the domain columnProperties is authoritative — the reader models every
+          // well-formed <col> (min/max with width/style/hidden/outlineLevel/collapsed), so an empty
+          // domain after a structural edit means NO column records, never the stale source <cols>.
+          generatedCols,
           condFmt.getOrElse(preserved.conditionalFormatting), // GH-136: planned slot wins
           dataValidations.getOrElse(preserved.dataValidations), // GH-375: planned slot wins
           preserved.printOptions,

@@ -914,27 +914,27 @@ private def stripFitToPage(existing: Option[Elem]): Option[Elem] =
 /**
  * Apply domain RowProperties to an OoxmlRow.
  *
- * Domain properties override existing row attributes (if any). This allows setting row height,
- * hidden state, and outline level from the domain model.
+ * The domain entry is authoritative for every attribute the reader models into `RowProperties`
+ * (GH-558): `s`/`customFormat` (the GH-445 styleId, remapped like cell styleIds — the workbook
+ * default xf 0 is omitted exactly as for cells), `ht`/`customHeight`, `hidden`, `outlineLevel` and
+ * `collapsed`. `None`/`false` actively clears: a source row that carried a modelled attribute the
+ * domain no longer has at this index loses it, which is what lets a structural shift leave nothing
+ * behind at the old index (and lets a caller unhide / uncollapse / unstyle a row). Unmodelled row
+ * metadata (`spans`, `thickBot`, `thickTop`, `x14ac:dyDescent`) is untouched by the copy.
  */
 private[ooxml] def applyDomainRowProps(
   row: OoxmlRow,
   props: RowProperties,
   styleRemapping: Map[Int, Int] = Map.empty
 ): OoxmlRow =
-  // GH-445: row-default style, remapped like cell styleIds. Overlay-when-defined (the
-  // tabSelected/GH-372 precedent): a None styleId leaves any preserved `s=` attribute
-  // untouched, so source-backed rows keep their row-level style unless the domain sets one.
   val remappedStyle =
     props.styleId.map(sid => styleRemapping.getOrElse(sid.value, 0)).filter(_ > 0)
   row.copy(
-    // A RowProperties entry is authoritative for the fields emitted here. None actively clears
-    // optional source attributes; other preserved row metadata remains intact via case-class copy.
+    style = remappedStyle,
+    customFormat = remappedStyle.isDefined,
     height = props.height,
     customHeight = props.height.isDefined,
-    hidden = props.hidden, // Domain always wins (allows unhide)
+    hidden = props.hidden,
     outlineLevel = props.outlineLevel,
-    collapsed = props.collapsed, // Domain always wins (allows uncollapse)
-    style = remappedStyle.orElse(row.style),
-    customFormat = row.customFormat || remappedStyle.isDefined
+    collapsed = props.collapsed
   )

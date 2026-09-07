@@ -520,7 +520,10 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
         "xl/styles.xml",
         """<?xml version="1.0"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><name val="Calibri"/></font>
+  </fonts>
   <fills count="2">
     <fill><patternFill patternType="none"/></fill>
     <fill><patternFill patternType="gray125"/></fill>
@@ -528,12 +531,15 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
   <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
   <cellXfs count="2">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
-    <xf numFmtId="0" fontId="0" fillId="1" borderId="0" applyFill="1"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyFont="1"/>
   </cellXfs>
 </styleSheet>"""
       )
 
-      // Worksheet with empty rows
+      // Worksheet with empty rows. Row 2's style xf 1 is a genuine (bold) style: `<row s=>` is
+      // lifted into RowProperties.styleId (GH-445) and re-emitted from the model (GH-558), so an xf
+      // the style parser folds into the default (a bare gray125 placeholder fill) could not
+      // round-trip through the row model — exactly as for cells.
       writeEntry(
         out,
         "xl/worksheets/sheet1.xml",

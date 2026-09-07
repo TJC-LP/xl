@@ -207,6 +207,56 @@ class StructuralCommandSpec extends CatsEffectSuite:
       assert(zipEntry(out, "xl/workbook.xml").contains("Alpha!$A$1:$D$12"))
   }
 
+  test("GH-558: insert-rows emits each property-only row once, at its shifted index") {
+    import com.tjclp.xl.addressing.Row
+    import com.tjclp.xl.sheets.RowProperties
+    // The issue fixture: text at A1, A2, A4, A6, =A2&A4 at A7; property-only rows 3, 5 and 8.
+    val sheet = Sheet("S")
+      .put(ref"A1", CellValue.Text("a"))
+      .put(ref"A2", CellValue.Text("b"))
+      .put(ref"A4", CellValue.Text("d"))
+      .put(ref"A6", CellValue.Text("f"))
+      .put(ref"A7", CellValue.Formula("A2&A4", None))
+      .setRowProperties(Row.from1(3), RowProperties(height = Some(3.0)))
+      .setRowProperties(Row.from1(5), RowProperties(hidden = true, outlineLevel = Some(1)))
+      .setRowProperties(Row.from1(8), RowProperties(height = Some(5.15)))
+    val in = tmp("in558")
+    val out = tmp("out558")
+    for
+      _ <- excel.write(Workbook(sheet), in)
+      read <- excel.read(in)
+      _ <- WriteCommands.insertRows(read, read.sheets.headOption, 2, 1, out, config)
+      result <- excel.read(out)
+      raw <- IO.blocking {
+        val zip = new java.util.zip.ZipFile(out.toFile)
+        try
+          val entry = zip.getEntry("xl/worksheets/sheet1.xml")
+          new String(zip.getInputStream(entry).readAllBytes(), "UTF-8")
+        finally zip.close()
+      }
+    yield
+      // file: every row index appears exactly once ...
+      val rowTags = """<row\b[^>]*>""".r.findAllIn(raw).toList
+      val indices = rowTags.flatMap(t => """\br="(\d+)"""".r.findFirstMatchIn(t).map(_.group(1)))
+      assertEquals(indices, indices.distinct, s"a row index was emitted twice:\n$raw")
+      // ... and the properties sit ONLY at their shifted positions 4 / 6 / 9
+      def tag(r: Int): String = rowTags.find(_.contains(s"""r="$r"""")).getOrElse("")
+      assert(tag(4).contains("""ht="3.0""""), s"row 4 must carry the moved height:\n$raw")
+      assert(tag(6).contains("""hidden="1""""), s"row 6 must carry the moved hidden flag:\n$raw")
+      assert(tag(6).contains("""outlineLevel="1""""), s"row 6 must carry the outline level:\n$raw")
+      assert(tag(9).contains("""ht="5.15""""), s"row 9 must carry the moved height:\n$raw")
+      Seq(3, 5, 8).foreach { r =>
+        val residue =
+          Seq("ht=", "customHeight=", "hidden=", "outlineLevel=").filter(tag(r).contains)
+        assert(residue.isEmpty, s"row $r keeps stale source attributes $residue:\n$raw")
+      }
+      // model: the re-read workbook agrees with the file
+      val s = result.sheets.head
+      assertEquals(s.rowProperties.keySet.map(_.index1), Set(4, 6, 9))
+      assertEquals(s(ref"A3").value, CellValue.Text("b"))
+      assertEquals(s(ref"A8").value, CellValue.Formula("A3&A5", Some(CellValue.Text("bd"))))
+  }
+
   test("delete-cols: range form C:E removes the whole span (GH-129)") {
     val wb = Workbook(
       Vector(
