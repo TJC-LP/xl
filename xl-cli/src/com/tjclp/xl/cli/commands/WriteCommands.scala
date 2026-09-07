@@ -1291,7 +1291,7 @@ object WriteCommands:
               val finalWb = recalcOpt.fold(updatedWb)(_._1)
               writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
                 val ops = result.ops
-                val summary = BatchParser.formatSummary(ops)
+                val summary = BatchParser.formatScopedSummary(result.scoped)
                 val recalcLine = recalcOpt match
                   case Some((_, r)) => s"${formatRecalcSummary(r)}\n"
                   case None if mutating => s"$noRecalcNote\n"

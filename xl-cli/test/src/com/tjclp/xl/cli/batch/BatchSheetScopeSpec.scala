@@ -1,14 +1,17 @@
 package com.tjclp.xl.cli.batch
 
+import java.nio.file.Files
+
 import munit.FunSuite
 
-import cats.effect.unsafe
+import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{Sheet, Workbook}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.contract.{CliException, ErrorCode, ExitCodes}
+import com.tjclp.xl.cli.contract.{CliException, CliHarness, ErrorCode, ExitCodes}
 import com.tjclp.xl.cli.helpers.BatchParser
 import com.tjclp.xl.cli.helpers.BatchParser.BatchOp
+import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.sheets.syntax.*
 
 /**
@@ -263,6 +266,41 @@ class BatchSheetScopeSpec extends FunSuite:
     val error = cliError(run(book, None, json))
     assert(error.getMessage.startsWith("Object 1 (put): "), error.getMessage)
     assert(error.getMessage.contains("requires --sheet"), error.getMessage)
+  }
+
+  test(
+    "formatScopedSummary names the sheet of a scoped op and leaves unscoped lines byte-identical"
+  ) {
+    val json =
+      """[{"op":"put","ref":"A1","value":1},{"op":"merge","sheet":"Other","range":"A1:B1"},{"op":"unfreeze","sheet":"Other"}]"""
+    val result = BatchParser.parseBatchOperations(json).unsafeRunSync()
+    val plain = BatchParser.formatSummary(result.ops).split("\n").toVector
+    val scoped = BatchParser.formatScopedSummary(result.scoped).split("\n").toVector
+    assertEquals(
+      scoped,
+      Vector("  PUT A1 = Number(1.0)", "  [Other] MERGE A1:B1", "  [Other] UNFREEZE")
+    )
+    assertEquals(scoped.headOption, plain.headOption, "an unscoped line is unchanged")
+    assertEquals(plain, Vector("  PUT A1 = Number(1.0)", "  MERGE A1:B1", "  UNFREEZE"))
+  }
+
+  test("the CLI batch summary shows the sheet of a scoped op through a real file") {
+    val dir = Files.createTempDirectory("xl-scope-summary-")
+    val in = dir.resolve("in.xlsx")
+    val out = dir.resolve("out.xlsx")
+    try
+      ExcelIO.instance[IO].write(book, in).unsafeRunSync()
+      val json =
+        """[{"op":"put","ref":"A2","value":1},{"op":"merge","sheet":"Other","range":"F1:G1"}]"""
+      val run = CliHarness
+        .run(List("-f", in.toString, "-s", "Data", "-o", out.toString, "batch", "-"), json)
+        .unsafeRunSync()
+      assertEquals(run.exit, 0, run.stderr)
+      assert(run.stdout.contains("  PUT A2 = Number(1.0)\n  [Other] MERGE F1:G1"), run.stdout)
+    finally
+      Files.deleteIfExists(out)
+      Files.deleteIfExists(in)
+      Files.deleteIfExists(dir)
   }
 
   test("ParseResult.ops equals scoped.map(_.op) and indices are 1-based in order") {

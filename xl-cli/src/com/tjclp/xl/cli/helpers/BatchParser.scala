@@ -182,72 +182,85 @@ object BatchParser:
       .getOrElse("")
 
   /** Format a human-readable summary of batch operations. */
-  def formatSummary(ops: Vector[BatchOp]): String =
-    ops
-      .map {
-        case BatchOp.Put(ref, value, fmt) =>
-          s"  PUT $ref = $value${formatSuffix(fmt)}"
-        case BatchOp.PutFormula(ref, formula, fmt) =>
-          s"  PUTF $ref = $formula${formatSuffix(fmt)}"
-        case BatchOp.PutFormulaDragging(range, formula, from, fmt) =>
-          s"  PUTF $range = $formula (from $from)${formatSuffix(fmt)}"
-        case BatchOp.PutFormulas(range, formulas, fmt) =>
-          s"  PUTF $range = [${formulas.length} formulas]${formatSuffix(fmt)}"
-        case BatchOp.PutValues(range, values) =>
-          s"  PUT $range = [${values.length} values]"
-        case BatchOp.Style(range, _) => s"  STYLE $range"
-        case BatchOp.Merge(range) => s"  MERGE $range"
-        case BatchOp.Unmerge(range) => s"  UNMERGE $range"
-        case BatchOp.ColWidth(col, width) => s"  COLWIDTH $col = $width"
-        case BatchOp.RowHeight(row, height) => s"  ROWHEIGHT $row = $height"
-        case BatchOp.AddComment(ref, text, _) => s"  COMMENT $ref = \"$text\""
-        case BatchOp.RemoveComment(ref) => s"  REMOVE-COMMENT $ref"
-        case BatchOp.Hyperlink(ref, target) => s"  HYPERLINK $ref = ${target.getOrElse("(clear)")}"
-        case BatchOp.Clear(range, _, _, _) => s"  CLEAR $range"
-        case BatchOp.ColHide(col) => s"  COL-HIDE $col"
-        case BatchOp.ColShow(col) => s"  COL-SHOW $col"
-        case BatchOp.RowHide(row) => s"  ROW-HIDE $row"
-        case BatchOp.RowShow(row) => s"  ROW-SHOW $row"
-        case BatchOp.GroupRows(rows, level, collapsed) =>
-          s"  GROUP-ROWS $rows level=$level${if collapsed then " (collapsed)" else ""}"
-        case BatchOp.GroupCols(cols, level, collapsed) =>
-          s"  GROUP-COLS $cols level=$level${if collapsed then " (collapsed)" else ""}"
-        case BatchOp.UngroupRows(rows) => s"  UNGROUP-ROWS $rows"
-        case BatchOp.UngroupCols(cols) => s"  UNGROUP-COLS $cols"
-        case BatchOp.AutoFit(cols) => s"  AUTOFIT ${cols.getOrElse("all")}"
-        case BatchOp.AddSheet(name, _) => s"  ADD-SHEET $name"
-        case BatchOp.RenameSheet(from, to) => s"  RENAME-SHEET $from -> $to"
-        case BatchOp.Freeze(ref) => s"  FREEZE $ref"
-        case BatchOp.Unfreeze => "  UNFREEZE"
-        case BatchOp.CopyRange(src, tgt, vo) =>
-          s"  COPY $src -> $tgt${if vo then " (values-only)" else ""}"
-        case BatchOp.AddChart(chartType, _, data, _, _, _, _, _, at) =>
-          s"  CHART $chartType $data at $at"
-        case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
-          val desc = AppearanceOps.describe(
-            "gridlines" -> gridlines.map(g => if g then "on" else "off"),
-            "zoom" -> zoom.map(_.toString),
-            "tabSelected" -> tabSelected.map(_.toString)
-          )
-          s"  SHEET-VIEW $desc"
-        case BatchOp.SetTabColor(color, clear) =>
-          s"  TAB-COLOR ${color.getOrElse(if clear then "(clear)" else "")}"
-        case BatchOp.SetAutoFilter(range, clear) =>
-          s"  AUTOFILTER ${range.getOrElse(if clear then "(clear)" else "")}"
-        case BatchOp.SetPageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
-          val desc = AppearanceOps.describe(
-            "orientation" -> orientation,
-            "scale" -> scale.map(_.toString),
-            "fitToWidth" -> fitToWidth.map(_.toString),
-            "fitToHeight" -> fitToHeight.map(_.toString),
-            "fitToPage" -> fitToPage.map(_.toString)
-          )
-          s"  PAGE-SETUP $desc"
-        case _: BatchOp.SetHeaderFooter => "  HEADER-FOOTER"
-        case BatchOp.AddConditionalFormat(range, rule, _, _, _, _, _, _) =>
-          s"  CF $range $rule"
+  def formatSummary(ops: Vector[BatchOp]): String = ops.map(summaryLine).mkString("\n")
+
+  /**
+   * The same summary for scoped ops: a line whose op carries a `sheet` key is prefixed with
+   * `[sheet]`, so the summary names where the op landed; a line without one is byte-identical to
+   * [[formatSummary]]'s.
+   */
+  def formatScopedSummary(scoped: Vector[ScopedOp]): String =
+    scoped
+      .map { s =>
+        val line = summaryLine(s.op)
+        s.sheet.fold(line)(sheet => s"  [${sheet.value}] ${line.stripPrefix("  ")}")
       }
       .mkString("\n")
+
+  /** One two-space-indented summary line. */
+  private def summaryLine(op: BatchOp): String =
+    op match
+      case BatchOp.Put(ref, value, fmt) =>
+        s"  PUT $ref = $value${formatSuffix(fmt)}"
+      case BatchOp.PutFormula(ref, formula, fmt) =>
+        s"  PUTF $ref = $formula${formatSuffix(fmt)}"
+      case BatchOp.PutFormulaDragging(range, formula, from, fmt) =>
+        s"  PUTF $range = $formula (from $from)${formatSuffix(fmt)}"
+      case BatchOp.PutFormulas(range, formulas, fmt) =>
+        s"  PUTF $range = [${formulas.length} formulas]${formatSuffix(fmt)}"
+      case BatchOp.PutValues(range, values) =>
+        s"  PUT $range = [${values.length} values]"
+      case BatchOp.Style(range, _) => s"  STYLE $range"
+      case BatchOp.Merge(range) => s"  MERGE $range"
+      case BatchOp.Unmerge(range) => s"  UNMERGE $range"
+      case BatchOp.ColWidth(col, width) => s"  COLWIDTH $col = $width"
+      case BatchOp.RowHeight(row, height) => s"  ROWHEIGHT $row = $height"
+      case BatchOp.AddComment(ref, text, _) => s"  COMMENT $ref = \"$text\""
+      case BatchOp.RemoveComment(ref) => s"  REMOVE-COMMENT $ref"
+      case BatchOp.Hyperlink(ref, target) => s"  HYPERLINK $ref = ${target.getOrElse("(clear)")}"
+      case BatchOp.Clear(range, _, _, _) => s"  CLEAR $range"
+      case BatchOp.ColHide(col) => s"  COL-HIDE $col"
+      case BatchOp.ColShow(col) => s"  COL-SHOW $col"
+      case BatchOp.RowHide(row) => s"  ROW-HIDE $row"
+      case BatchOp.RowShow(row) => s"  ROW-SHOW $row"
+      case BatchOp.GroupRows(rows, level, collapsed) =>
+        s"  GROUP-ROWS $rows level=$level${if collapsed then " (collapsed)" else ""}"
+      case BatchOp.GroupCols(cols, level, collapsed) =>
+        s"  GROUP-COLS $cols level=$level${if collapsed then " (collapsed)" else ""}"
+      case BatchOp.UngroupRows(rows) => s"  UNGROUP-ROWS $rows"
+      case BatchOp.UngroupCols(cols) => s"  UNGROUP-COLS $cols"
+      case BatchOp.AutoFit(cols) => s"  AUTOFIT ${cols.getOrElse("all")}"
+      case BatchOp.AddSheet(name, _) => s"  ADD-SHEET $name"
+      case BatchOp.RenameSheet(from, to) => s"  RENAME-SHEET $from -> $to"
+      case BatchOp.Freeze(ref) => s"  FREEZE $ref"
+      case BatchOp.Unfreeze => "  UNFREEZE"
+      case BatchOp.CopyRange(src, tgt, vo) =>
+        s"  COPY $src -> $tgt${if vo then " (values-only)" else ""}"
+      case BatchOp.AddChart(chartType, _, data, _, _, _, _, _, at) =>
+        s"  CHART $chartType $data at $at"
+      case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
+        val desc = AppearanceOps.describe(
+          "gridlines" -> gridlines.map(g => if g then "on" else "off"),
+          "zoom" -> zoom.map(_.toString),
+          "tabSelected" -> tabSelected.map(_.toString)
+        )
+        s"  SHEET-VIEW $desc"
+      case BatchOp.SetTabColor(color, clear) =>
+        s"  TAB-COLOR ${color.getOrElse(if clear then "(clear)" else "")}"
+      case BatchOp.SetAutoFilter(range, clear) =>
+        s"  AUTOFILTER ${range.getOrElse(if clear then "(clear)" else "")}"
+      case BatchOp.SetPageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
+        val desc = AppearanceOps.describe(
+          "orientation" -> orientation,
+          "scale" -> scale.map(_.toString),
+          "fitToWidth" -> fitToWidth.map(_.toString),
+          "fitToHeight" -> fitToHeight.map(_.toString),
+          "fitToPage" -> fitToPage.map(_.toString)
+        )
+        s"  PAGE-SETUP $desc"
+      case _: BatchOp.SetHeaderFooter => "  HEADER-FOOTER"
+      case BatchOp.AddConditionalFormat(range, rule, _, _, _, _, _, _) =>
+        s"  CF $range $rule"
 
   /**
    * Read batch input from file or the process's stdin.
