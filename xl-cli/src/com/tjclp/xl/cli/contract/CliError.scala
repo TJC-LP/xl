@@ -44,6 +44,16 @@ final case class CliError(
  */
 final class CliException(val error: CliError) extends Exception(error.message) with NoStackTrace
 
+/**
+ * A run that COMPLETED with findings, carried through `IO` like [[CliException]]: the report is the
+ * payload, the verdict is `error` (a signal code, exit 1 — `AUDIT_FINDINGS`). The runner turns it
+ * into [[Outcome.signal]], so text mode prints the report with no `Error:` line and `--json` keeps
+ * it as `data`. Stack-trace free: nothing here is a defect to debug.
+ */
+final class CliSignal(val payload: Payload, val error: CliError)
+    extends Exception(error.message)
+    with NoStackTrace
+
 object CliError:
 
   /**
@@ -62,6 +72,7 @@ object CliError:
    */
   def fromThrowable(t: Throwable): CliError = t match
     case e: CliException => e.error
+    case s: CliSignal => s.error
     case s: StrictFailure => CliError(ErrorCode.RECALC_GATE, s.summary)
     case x: XLException => fromXLError(x.error, None)
     case n: NoSuchFileException =>

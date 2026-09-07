@@ -1,0 +1,15 @@
+## args
+-f
+<DIR>/linked.xlsx
+cell
+Sheet1!A1
+## exit
+0
+## stdout
+Cell: A1
+Type: number
+Raw: 5
+Comment: "input" (Author: qa)
+Dependencies: (none)
+Dependents: A3, Sheet2!A1
+## stderr

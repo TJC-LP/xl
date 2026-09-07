@@ -67,6 +67,9 @@ object Cli:
     "search",
     "stats",
     "filter",
+    "describe",
+    "audit",
+    "deps",
     "batch",
     "put",
     "putf",
@@ -162,7 +165,7 @@ object Cli:
 
     // Sheet-level read-only: --file and --sheet (no --output)
     val sheetReadOnlySubcmds =
-      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd orElse filterCmd
+      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd orElse filterCmd orElse describeCmd orElse auditCmd orElse depsCmd
 
     val sheetReadOnlyOpts =
       (fileOpt, sheetOpt, maxSizeOpt, streamOpt, jsonOpt, sheetReadOnlySubcmds).mapN {

@@ -28,6 +28,7 @@ import com.tjclp.xl.cli.commands.{
   DiffCommands,
   FilterCommands,
   ImportCommands,
+  InspectCommands,
   LintCommands,
   ReadCommands,
   SheetCommands,
@@ -49,6 +50,7 @@ import com.tjclp.xl.cli.raster.{
 import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
+  CliSignal,
   Diagnostics,
   ErrorCode,
   ExitCodes,
@@ -915,6 +917,102 @@ EXAMPLES:
         .mapN(CliCommand.Filter.apply)
     }
 
+  // --- Inspect (ADR-017 §2.10): describe, audit, deps ---
+
+  private val describeHelp = """Orient in a workbook: sheets, defined names, date system.
+
+Metadata only by default — instant for any file size, works under --stream — listing every sheet
+with its visibility state and dimension, every defined name (hidden ones flagged) and the date
+system. --full loads the book and adds per-sheet counts: cells, formulas (and how many are
+uncached), merges, comments, hyperlinks, freeze pane, tab color, autoFilter, tables, charts,
+pictures, conditional formats, data validations, hidden rows/columns, plus the calcPr settings.
+
+USAGE:
+  xl -f model.xlsx describe
+  xl -f model.xlsx --stream describe          # same card, O(1) memory
+  xl -f model.xlsx describe --full
+  xl -f model.xlsx --json describe --full     # {sheets: [...], definedNames: [...], date1904, calcPr}
+"""
+
+  private val fullOpt: Opts[Boolean] =
+    Opts.flag("full", "Load the workbook and add per-sheet counts and calcPr").orFalse
+
+  val describeCmd: Opts[CliCommand] =
+    Opts.subcommand("describe", describeHelp) {
+      fullOpt.map(CliCommand.Describe.apply)
+    }
+
+  private val auditHelp = """Find every reason a number can be wrong, in one pass.
+
+Findings: cached error values (#DIV/0!, #REF!, ...), uncached formulas, formulas this evaluator
+cannot parse, circular references, and readers of names that do not resolve. Notes (reported,
+never findings): volatile TODAY/NOW/RAND/RANDBETWEEN cells, dynamic INDIRECT/OFFSET readers,
+external-workbook references, and the file's calcPr. Text mode prints one section per non-empty
+bucket; -s restricts the cell buckets to one sheet.
+
+Exit 0 whether or not there are findings; --fail-on-findings exits 1 (AUDIT_FINDINGS) on a dirty
+book with the report kept, so a CI lane can gate on it.
+
+USAGE:
+  xl -f model.xlsx audit
+  xl -f model.xlsx -s Summary audit
+  xl -f model.xlsx --json audit --fail-on-findings   # data.clean, data.findings, one array per bucket
+"""
+
+  private val failOnFindingsOpt: Opts[Boolean] =
+    Opts.flag("fail-on-findings", "Exit 1 (AUDIT_FINDINGS) when the audit has findings").orFalse
+
+  val auditCmd: Opts[CliCommand] =
+    Opts.subcommand("audit", auditHelp) {
+      failOnFindingsOpt.map(CliCommand.Audit.apply)
+    }
+
+  private val depsHelp = """Trace one cell's precedents and dependents, hop by hop.
+
+Precedents are the cells the formula reads (single refs exactly, ranges as their occupied cells);
+dependents are the formulas that read the cell, by name or through a range that contains it.
+Each node carries its depth, formula and value. The ref follows the sheet rule: a qualified ref
+('Q1 Data'!B4) names the sheet, else -s, else the only sheet of a single-sheet book.
+
+USAGE:
+  xl -f model.xlsx deps Summary!B4                          # both directions, one hop
+  xl -f model.xlsx -s Data deps B4 --direction precedents --depth 3
+  xl -f model.xlsx --json deps Summary!B4 --direction dependents --depth all
+"""
+
+  private val directionOpt: Opts[String] =
+    Opts
+      .option[String]("direction", "precedents, dependents or both (default: both)")
+      .withDefault("both")
+      .mapValidated {
+        case direction @ ("precedents" | "dependents" | "both") =>
+          cats.data.Validated.valid(direction)
+        case other =>
+          cats.data.Validated.invalidNel(
+            s"Unknown direction: $other. Use precedents, dependents or both"
+          )
+      }
+
+  private val depthOpt: Opts[Option[Int]] =
+    Opts
+      .option[String]("depth", "Hops to follow: a positive number, or 'all' (default: 1)")
+      .mapValidated {
+        case "all" => cats.data.Validated.valid(0)
+        case text =>
+          text.toIntOption.filter(_ >= 1) match
+            case Some(n) => cats.data.Validated.valid(n)
+            case None =>
+              cats.data.Validated.invalidNel(
+                s"Invalid --depth: $text. Use a positive number or 'all'"
+              )
+      }
+      .orNone
+
+  val depsCmd: Opts[CliCommand] =
+    Opts.subcommand("deps", depsHelp) {
+      (refArg, directionOpt, depthOpt).mapN(CliCommand.Deps.apply)
+    }
+
   // --- Analyze ---
 
   private val formulaArg = Opts.argument[String]("formula")
@@ -1737,6 +1835,14 @@ EXAMPLES:
                 CliError(ErrorCode.RECALC_GATE, strictReason(summary)),
                 collected
               )
+            // ADR-017 §2.10: a read verb that completed with findings (`audit --fail-on-findings`)
+            case Left(signal: CliSignal) =>
+              Outcome.signal(
+                cmd.verb,
+                relocate(signal.payload, outputOpt, displayOpt),
+                signal.error,
+                collected
+              )
             case Left(err) =>
               // GH-483: the temp→target rewrite applies to failure messages too
               val classified = CliError.fromThrowable(err)
@@ -2308,6 +2414,53 @@ EXAMPLES:
       case CliCommand.Batch(source, true) =>
         batchDryRunPayload(source, io, mode)
 
+      // Describe (ADR-017 §2.10): metadata only — instant, streaming-safe — unless --full asks for
+      // the loaded book's counts. A workbook verb: -s is ignored.
+      case CliCommand.Describe(full) =>
+        if !full then
+          classifyRead(filePath)(excel.readMetadata(filePath))
+            .map(meta => InspectCommands.describeLight(meta, mode))
+        else if stream then
+          IO.raiseError(
+            unsupportedInStream(
+              "describe --full is not supported with --stream (the counts need the whole workbook)",
+              "omit --full for the metadata-only card, or omit --stream; use --max-size <MB> for a large file"
+            )
+          )
+        else
+          readWorkbook(excel, filePath, readerConfig).map(wb => InspectCommands.describe(wb, mode))
+
+      // Audit and deps (ADR-017 §2.10) analyze the loaded workbook: never under --stream
+      case CliCommand.Audit(failOnFindings) =>
+        if stream then
+          IO.raiseError(
+            unsupportedInStream(
+              "audit is not supported with --stream (the analysis needs the whole workbook)",
+              "omit --stream; use --max-size <MB> to load a large file in memory"
+            )
+          )
+        else
+          for
+            wb <- readWorkbook(excel, filePath, readerConfig)
+            sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
+            payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
+          yield payload
+
+      case CliCommand.Deps(refStr, direction, depth) =>
+        if stream then
+          IO.raiseError(
+            unsupportedInStream(
+              "deps is not supported with --stream (the graph needs the whole workbook)",
+              "omit --stream; use --max-size <MB> to load a large file in memory"
+            )
+          )
+        else
+          for
+            wb <- readWorkbook(excel, filePath, readerConfig)
+            sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
+            payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, mode)
+          yield payload
+
       // Other commands: regular execution path
       case _ =>
         // For write commands: stream flag uses the SAX/StAX workbook writer
@@ -2439,7 +2592,7 @@ EXAMPLES:
     case _ =>
       IO.raiseError(
         unsupportedInStream(
-          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only), cell",
+          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only), cell, describe",
           "omit --stream; use --max-size <MB> to load a large file in memory"
         )
       )
@@ -3079,6 +3232,14 @@ EXAMPLES:
       requireOutput("delete-cols", outputOpt, backendOpt, stream)(
         WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _, policy)
       )
+
+    // The inspection verbs are dispatched in execute() (typed payloads) — never reach here
+    case CliCommand.Describe(_) =>
+      IO.raiseError(new Exception("Internal: describe is dispatched in execute"))
+    case CliCommand.Audit(_) =>
+      IO.raiseError(new Exception("Internal: audit is dispatched in execute"))
+    case CliCommand.Deps(_, _, _) =>
+      IO.raiseError(new Exception("Internal: deps is dispatched in execute"))
 
     // Diff has its own runner (two input files, custom exit codes) — never reaches here
     case CliCommand.Diff(_, _) =>

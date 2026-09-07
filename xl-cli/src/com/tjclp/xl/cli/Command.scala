@@ -71,6 +71,14 @@ enum CliCommand:
     format: FilterFormat,
     header: Boolean
   )
+  // Inspect (ADR-017 §2.10, read-only): orient, find every reason a number is wrong, trace one
+  case Describe(full: Boolean) // metadata only unless --full (then the loaded WorkbookSummary)
+  case Audit(failOnFindings: Boolean) // exit 1 AUDIT_FINDINGS when asked and the book is dirty
+  case Deps(
+    ref: String,
+    direction: String, // precedents | dependents | both
+    depth: Option[Int] // None = 1 hop, Some(0) = all, Some(n) = n hops
+  )
   // Analyze
   case Eval(formula: String, overrides: List[String])
   case EvalArray(formula: String, targetRef: Option[String], overrides: List[String])
@@ -229,6 +237,9 @@ enum CliCommand:
     case Search(_, _, _) => "search"
     case Stats(_) => "stats"
     case _: Filter => "filter"
+    case Describe(_) => "describe"
+    case Audit(_) => "audit"
+    case Deps(_, _, _) => "deps"
     case Eval(_, _) => "eval"
     case EvalArray(_, _, _) => "evala"
     case _: Put => "put"

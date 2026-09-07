@@ -20,6 +20,9 @@ Usage:
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] search
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] stats
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] filter
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] describe
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] audit
+    xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] deps
     xl [--json] batch
     xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] put
     xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] putf
@@ -290,6 +293,48 @@ Subcommands:
           xl -f sales.xlsx -s Q1 filter --where "Revenue > 10000 AND Region = 'EMEA'" --header
           xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
           xl -f data.xlsx -s Sheet1 filter --where "A IS NOT EMPTY" --columns A:C --limit 200
+    describe
+        Orient in a workbook: sheets, defined names, date system.
+
+        Metadata only by default — instant for any file size, works under --stream — listing every sheet
+        with its visibility state and dimension, every defined name (hidden ones flagged) and the date
+        system. --full loads the book and adds per-sheet counts: cells, formulas (and how many are
+        uncached), merges, comments, hyperlinks, freeze pane, tab color, autoFilter, tables, charts,
+        pictures, conditional formats, data validations, hidden rows/columns, plus the calcPr settings.
+
+        USAGE:
+          xl -f model.xlsx describe
+          xl -f model.xlsx --stream describe          # same card, O(1) memory
+          xl -f model.xlsx describe --full
+          xl -f model.xlsx --json describe --full     # {sheets: [...], definedNames: [...], date1904, calcPr}
+    audit
+        Find every reason a number can be wrong, in one pass.
+
+        Findings: cached error values (#DIV/0!, #REF!, ...), uncached formulas, formulas this evaluator
+        cannot parse, circular references, and readers of names that do not resolve. Notes (reported,
+        never findings): volatile TODAY/NOW/RAND/RANDBETWEEN cells, dynamic INDIRECT/OFFSET readers,
+        external-workbook references, and the file's calcPr. Text mode prints one section per non-empty
+        bucket; -s restricts the cell buckets to one sheet.
+
+        Exit 0 whether or not there are findings; --fail-on-findings exits 1 (AUDIT_FINDINGS) on a dirty
+        book with the report kept, so a CI lane can gate on it.
+
+        USAGE:
+          xl -f model.xlsx audit
+          xl -f model.xlsx -s Summary audit
+          xl -f model.xlsx --json audit --fail-on-findings   # data.clean, data.findings, one array per bucket
+    deps
+        Trace one cell's precedents and dependents, hop by hop.
+
+        Precedents are the cells the formula reads (single refs exactly, ranges as their occupied cells);
+        dependents are the formulas that read the cell, by name or through a range that contains it.
+        Each node carries its depth, formula and value. The ref follows the sheet rule: a qualified ref
+        ('Q1 Data'!B4) names the sheet, else -s, else the only sheet of a single-sheet book.
+
+        USAGE:
+          xl -f model.xlsx deps Summary!B4                          # both directions, one hop
+          xl -f model.xlsx -s Data deps B4 --direction precedents --depth 3
+          xl -f model.xlsx --json deps Summary!B4 --direction dependents --depth all
     batch
         Apply multiple operations atomically from JSON.
 

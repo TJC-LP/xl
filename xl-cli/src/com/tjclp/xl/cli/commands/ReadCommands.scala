@@ -255,20 +255,13 @@ object ReadCommands:
       comment = targetSheet.getComment(ref)
       // Get hyperlink from cell
       hyperlink = cellOpt.flatMap(_.hyperlink)
-      // Build dependency graph for dependencies/dependents (workbook-level for cross-sheet support)
+      // ADR-017 §2.10: the bounded cross-sheet graph — precedents at cell granularity (ranges as
+      // their occupied cells), dependents through the symbolic range index. Replaces the unbounded
+      // fromWorkbook expansion plus an O(workbook) reverse fold; the text is unchanged.
       currentRef = DependencyGraph.QualifiedRef(targetSheet.name, ref)
-      wbGraph = DependencyGraph.fromWorkbook(wb)
-      // Get dependencies for this cell
-      rawDeps = wbGraph.getOrElse(currentRef, Set.empty)
-      // Build reverse graph for dependents
-      allDependents = wbGraph.foldLeft(
-        Map.empty[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]]
-      ) { case (acc, (source, targets)) =>
-        targets.foldLeft(acc) { (m, target) =>
-          m.updated(target, m.getOrElse(target, Set.empty) + source)
-        }
-      }
-      rawDependents = allDependents.getOrElse(currentRef, Set.empty)
+      graph = QualifiedGraph.of(wb)
+      rawDeps = graph.precedentsOf(currentRef)
+      rawDependents = graph.dependentsOf(currentRef)
       // Format qualified refs - omit sheet name if same sheet as current cell
       formatQRef = (qref: DependencyGraph.QualifiedRef) =>
         if qref.sheet == targetSheet.name then qref.ref.toA1

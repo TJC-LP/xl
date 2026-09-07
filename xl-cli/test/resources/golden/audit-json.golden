@@ -1,0 +1,63 @@
+## args
+-f
+<DIR>/dirty.xlsx
+--json
+audit
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "audit",
+  "version": "<VERSION>",
+  "data": {
+    "clean": false,
+    "findings": 6,
+    "errorCells": [
+      {
+        "ref": "Calc!A1",
+        "error": "#DIV/0!"
+      }
+    ],
+    "uncachedFormulas": [
+      "Calc!B1",
+      "Notes!A1"
+    ],
+    "unparseable": [
+      {
+        "ref": "Calc!H1",
+        "message": "UNSUPPORTED(1)\n^\nFormula error in 'UNSUPPORTED(1)': Unknown function 'UNSUPPORTED' at position 0"
+      }
+    ],
+    "volatile": [
+      "Calc!C1"
+    ],
+    "dynamic": [
+      "Calc!D1"
+    ],
+    "cycles": [
+      [
+        "Calc!E1",
+        "Calc!F1"
+      ]
+    ],
+    "externalRefs": [
+      "Calc!G1"
+    ],
+    "unresolvedReaders": [
+      "Calc!I1"
+    ],
+    "calcPr": {
+      "iterativeCalculation": true,
+      "maxIterations": 100,
+      "maxChange": 0.001,
+      "calcMode": null,
+      "fullCalcOnLoad": null,
+      "calcId": null
+    }
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

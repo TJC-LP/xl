@@ -7,9 +7,12 @@ import cats.effect.IO
 import cats.syntax.all.*
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.addressing.{Row, SheetName}
+import com.tjclp.xl.cells.{CellError, CellValue, Comment}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.sheets.RowProperties
+import com.tjclp.xl.workbooks.{CalcPr, DefinedName}
 
 /**
  * Workbooks the golden corpus runs against. Built in-process on every run (never checked in) so a
@@ -42,6 +45,68 @@ object TestFixtures:
   /** `simpleBook` plus one workbook-scoped defined name, so `names` has something to list. */
   def namedBook(): Workbook = simpleBook().withDefinedName("Total", "Data!$B$4")
 
+  /**
+   * The `describe`/`deps` fixture (ADR-017 §2.10). `Sheet1` holds two constants and their sum plus
+   * a merge, a comment and a freeze pane; `Sheet2!A1` reads `Sheet1!A1` and `Sheet2!B1` chains once
+   * more; `Hidden` is a hidden sheet with a hidden row; one visible and one hidden defined name.
+   * Recalculated before the write, so every formula is cached.
+   */
+  def linkedBook(): Workbook =
+    val sheet1 = Sheet("Sheet1")
+      .put(ref"A1", 5)
+      .put(ref"A2", 7)
+      .put(ref"A3", CellValue.Formula("SUM(A1:A2)", None))
+      .merge(ref"B1:C1")
+      .comment(ref"A1", Comment.plainText("input", Some("qa")))
+      .freezeAt(ref"B2")
+    val sheet2 = Sheet("Sheet2")
+      .put(ref"A1", CellValue.Formula("Sheet1!A1*2", None))
+      .put(ref"B1", CellValue.Formula("A1+1", None))
+    val hidden = Sheet("Hidden")
+      .put(ref"A1", "x")
+      .setRowProperties(Row.from1(2), RowProperties(hidden = true))
+    val recalculated = Workbook(Vector(sheet1, sheet2, hidden)).recalculate().workbook
+    val withState = recalculated
+      .setSheetState(SheetName.unsafe("Hidden"), Some("hidden"))
+      .getOrElse(recalculated)
+    withState.copy(metadata =
+      withState.metadata.copy(definedNames =
+        Vector(
+          DefinedName("Total", "Sheet1!$A$3"),
+          DefinedName("Secret", "Sheet1!$A$1", hidden = true)
+        )
+      )
+    )
+
+  /**
+   * The `audit` fixture: on `Calc` one cell per bucket — a cached `#DIV/0!`, an uncached formula, a
+   * `TODAY()`, an `INDIRECT`, a two-cycle, an external-workbook reference, an unparseable function
+   * and a reader of an undefined name — plus a second uncached formula on `Notes` (so `-s Calc` has
+   * something to exclude) and an iterative `calcPr`. Written WITHOUT recalculation: the caches are
+   * the fixture.
+   */
+  def dirtyBook(): Workbook =
+    def cached(expr: String, value: Int): CellValue =
+      CellValue.Formula(expr, Some(CellValue.Number(BigDecimal(value))))
+    val calc = Sheet("Calc")
+      .put(ref"A1", CellValue.Formula("1/0", Some(CellValue.Error(CellError.Div0))))
+      .put(ref"B1", CellValue.Formula("A1+1", None))
+      .put(ref"C1", cached("TODAY()", 45000))
+      .put(ref"D1", cached("INDIRECT(\"A2\")", 0))
+      .put(ref"E1", cached("F1+1", 0))
+      .put(ref"F1", cached("E1+1", 0))
+      .put(ref"G1", cached("'[1]Ext'!A1", 3))
+      .put(ref"H1", cached("UNSUPPORTED(1)", 0))
+      .put(ref"I1", cached("NoSuchName*2", 0))
+    val notes = Sheet("Notes").put(ref"A1", CellValue.Formula("1+1", None))
+    Workbook(Vector(calc, notes)).withCalcPr(
+      CalcPr(
+        iterativeCalculation = true,
+        maxIterations = Some(100),
+        maxChange = Some(BigDecimal("0.001"))
+      )
+    )
+
   private def book(firstQuantity: Int): Workbook =
     val data = Sheet("Data")
       .put(ref"A1", "Hello")
@@ -63,7 +128,9 @@ object TestFixtures:
     "single.xlsx" -> (() => singleSheetBook()),
     "inplace.xlsx" -> (() => simpleBook()),
     "circular.xlsx" -> (() => circularBook()),
-    "named.xlsx" -> (() => namedBook())
+    "named.xlsx" -> (() => namedBook()),
+    "linked.xlsx" -> (() => linkedBook()),
+    "dirty.xlsx" -> (() => dirtyBook())
   )
 
   /** Write every fixture into a fresh temp directory and return it. */

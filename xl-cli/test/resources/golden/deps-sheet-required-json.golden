@@ -1,0 +1,30 @@
+## args
+-f
+<DIR>/linked.xlsx
+--json
+deps
+A1
+## exit
+3
+## stdout
+{
+  "ok": false,
+  "exitCode": 3,
+  "verb": "deps",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "SHEET_REQUIRED",
+    "message": "deps with unqualified ref 'A1' requires --sheet or qualified ref (e.g., Sheet1!A1). Available sheets: Sheet1, Sheet2, Hidden",
+    "hint": "use -s <name> or a qualified ref like 'Name'!A1",
+    "candidates": [
+      "Sheet1",
+      "Sheet2",
+      "Hidden"
+    ],
+    "location": null
+  }
+}
+## stderr
+Error: deps with unqualified ref 'A1' requires --sheet or qualified ref (e.g., Sheet1!A1). Available sheets: Sheet1, Sheet2, Hidden
