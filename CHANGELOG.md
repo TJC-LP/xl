@@ -14,10 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projections of one contract: this wave lands the safety net and the first agent-facing
   capabilities; the edit algebra follows in wave 2.
 - **CLI contract harness and golden corpus** (xl-cli tests). An in-process `CliHarness` runs the
-  real `xl` parser and handlers with captured stdout, stderr and stdin, and 37 golden cases under
-  `xl-cli/test/resources/golden/` pin the agent-visible contract as it is today (help and version
-  channels, exit codes, output channels, JSON/CSV/markdown shapes, the streaming first-sheet
-  default), so every later change to what an agent sees is a reviewed diff. Re-record with
+  real `xl` parser and handlers with captured stdout, stderr and stdin, and the golden cases under
+  `xl-cli/test/resources/golden/` pin the agent-visible contract (help and version channels, exit
+  codes, output channels, JSON/CSV/markdown shapes, one `*-json.golden` envelope per shape, the
+  `--stream` paths), so every later change to what an agent sees is a reviewed diff. Re-record with
   `XL_UPDATE_GOLDEN=1`. `Main` moved from decline-effect's `CommandIOApp` to `IOApp` through the
   new `Cli`/`CliIO` seams; no CLI behaviour changed (verified by replaying the corpus against the
   previous build).
@@ -40,20 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prints exactly one JSON document on stdout with seven keys, always the same:
   `{ok, exitCode, verb, version, data, warnings, error}`; `ok` is true exactly when `error` is
   null, and `exitCode` equals the process exit code. `data` is the verb's own `--format json`
-  payload for `view`/`filter`/`diff`/`lint` (those bare payloads are unchanged: `--json` is
-  orthogonal to `--format`), typed objects for `sheets`, `names`, `bounds`, `eval`, `evala`,
-  `functions` and `rasterizers`, `{ops: [{index, op, summary}]}` for `batch --dry-run` (now
-  validated before the workbook is read), and `{text, saved, written}` for every prose and write
-  verb until Wave 2 types them (`saved` is the path actually committed, `written:false` when an
+  payload for `view`/`filter`/`diff`/`lint` (those bare payloads are unchanged; without an
+  explicit `--format`, `--json` selects that payload — see Changed), typed objects for `sheets`,
+  `names`, `bounds`, `eval`, `evala`, `functions` and `rasterizers`, `{ops: [{index, op,
+  summary}]}` for `batch --dry-run` (now validated before the workbook is read), and `{text,
+  saved, written}` for every prose and write verb until Wave 2 types them (`saved` is the path
+  actually committed, `written:false` when an
   `-i --strict` gate rolled back). Findings and gates (`diff` differs, `lint` findings,
   `--strict`) are `ok:false` with the report kept in `data` and `error.code`
   `DIFFERENCES_FOUND`/`LINT_FINDINGS`/`RECALC_GATE`. Usage errors, unknown verbs and decline parse
   failures produce the envelope too (exit 2). Notices become `warnings[]` entries with stable codes
   (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED`, `FLAG_IGNORED`, `READER_WARNING`) and stderr stays
   empty on success; on failure stderr carries one `Error: <message>` line. The envelope's JSON
-  Schema ships in the test corpus and 17 goldens pin one envelope per shape. Text-mode stdout is
-  byte-identical to before for every verb (the golden corpus proves it); see "Output contract" in
-  `docs/reference/cli.md`.
+  Schema ships in the test corpus and a `*-json.golden` case pins each envelope shape. Text-mode
+  stdout is byte-identical to before for every verb (the golden corpus proves it); see "Output
+  contract" in `docs/reference/cli.md`.
 - **Batch ops are one registry, and every op takes a `sheet`.** `OpRegistry` (xl-cli) holds the
   32 `OpSpec`s — fields, aliases, whether an op mutates cells, whether it streams, an example —
   and `batch` parses against it: `numFormat`/`format`/`num-format`, `anchor`/`from`, `url`/`target`,
@@ -111,13 +112,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   links to them, the xl-cli skill is a routing layer (install, mental model, task→verb table, exit
   table, `Requires xl >= 0.20.0`) over the generated reference, and `FORMULAS.md` is regenerated
   from `functions --json`. CI fails when `plugin.json`'s version drifts from `build.mill`.
-- **Typed reads see cached formula values** (#477). `readTyped`, `readTypedOpt` and
-  `readTypedOr` on a formula cell decode its cached value (`Formula(_, Some(v), _)` reads as
-  `v`), so a recalculated or Excel-saved book reads like Excel shows it. An uncached formula still
-  decodes as a `TypeMismatch` whose `actual` is the formula. New `Cell.effectiveValue`,
-  `Cell.isUncachedFormula`, `CellReader.readStrict` (default = `read`) and
-  `Sheet.readTypedStrict` (the 0.19 semantics: any formula is a mismatch) for callers that must
-  tell formulas from values.
 - **One recalculation seam for scripts** (xl-evaluator, exported by the prelude).
   `RecalcOptions(clock, rng, iterative: IterativeMode, parallelism, seedTables)` with
   `IterativeMode.FromCalcPr | Off | Force(IterativeCalc)` replaces the growing family of
@@ -154,8 +148,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **CLI exit codes and channels (breaking for scripts that parsed stdout or tested for exit 1).**
-  Exit codes now mean one thing each: `0` ok; `1` completed with findings or a failed gate
+- **Breaking: typed reads see cached formula values** (#477). `readTyped`, `readTypedOpt` and
+  `readTypedOr` on a formula cell now decode its cached value (`Formula(_, Some(v), _)` reads as
+  `v`), so a recalculated or Excel-saved book reads like Excel shows it; existing callers that
+  relied on a formula cell being `Left(TypeMismatch)` / `None` / the default get the value
+  instead. An uncached formula still decodes as a `TypeMismatch` whose `actual` is the formula.
+  New `Cell.effectiveValue`, `Cell.isUncachedFormula`, `CellReader.readStrict` (default = `read`)
+  and `Sheet.readTypedStrict` keep the 0.19 semantics (any formula is a mismatch) for callers
+  that must tell formulas from values.
+- **Breaking: CLI exit codes and output channels** (for scripts that parsed stdout or tested for
+  exit 1). Exit codes now mean one thing each: `0` ok; `1` completed with findings or a failed gate
   (`diff` differs, `lint` findings, a failed `--strict` gate on a write verb or on
   `view --eval --strict`) — never a failure; `2` usage (the command line is wrong: unknown verb,
   flag not accepted, `-o` missing, `-i` with `-o`, `--stream` on an unsupported verb; was `1`);
@@ -164,20 +166,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warnings go to stderr — the first line is still `Error: <message>`, followed by indented
   `code: <CODE>`, `did you mean: …` when a near match exists, and `hint: …` — and stdout is empty
   on every failure; stdout carries results only. Reader warnings surface as
-  `Warning[READER_WARNING]: <case>` on stderr. `xl --help` prints the table. Downstream code with
-  an exhaustive `match` on `XLError` gets a non-exhaustive warning for the three new cases.
+  `Warning[READER_WARNING]: <case>` on stderr. `xl --help` prints the table.
+- **Breaking: `XLError` gains cases.** `EditFailed`, `UnsupportedCapability` and `SheetRequired`
+  join the enum (see "Stable error codes" above), so downstream code with an exhaustive `match` on
+  `XLError` gets a non-exhaustive warning until it handles them.
 - **Text-mode notices are `Warning[CODE]: …` lines on stderr** for every read verb, in memory and
   under `--stream` alike (`view --format csv` truncation, `--skip-hidden` ignored under `--stream`,
   an advisory `--eval` failure). The wording after the prefix is unchanged; only the prefix is new,
   and `--stream` csv no longer prints a bare notice while in-memory csv prints a prefixed one.
   `bounds` on an unreadable file is `IO_READ` like every other verb (was `INTERNAL`). `--help`
   output lists the new `--json` flag.
-- **Streaming reads on a multi-sheet book without a sheet exit 3 `SHEET_REQUIRED`** instead of
-  silently reading the first sheet (`--stream view`, `--stream stats`, `--stream cell`,
+- **Breaking: streaming reads on a multi-sheet book without a sheet exit 3 `SHEET_REQUIRED`**
+  instead of silently reading the first sheet (`--stream view`, `--stream stats`, `--stream cell`,
   `--stream bounds`); `--stream` writes no longer reject qualified refs or refuse with "Multiple
   sheets found". Decline usage errors (missing argument, unknown flag, no verb) print the `Error:`
   block and a single usage line on stderr, exit 2; the full subcommand listing is reserved for
   `xl --help`.
+- **`--json` implies the JSON payload** for `view`, `filter`, `diff` and `lint` when no `--format`
+  is given: `xl --json view A1:C3` puts the `--format json` shape in `data`; an explicit text
+  `--format` under `--json` still rides inside as `data.text`.
+- **`audit` treats cycles as notes, not findings, when the workbook declares iterative
+  calculation** (they are the model's intended state there), so `--fail-on-findings` passes an
+  intentionally iterative book.
+- **`-s` is validated on `describe`, `names` and `sheets`**: a name that is not a sheet is
+  `SHEET_NOT_FOUND` (exit 3) instead of being ignored; the output is still the whole book.
+- `deps` takes typed `Direction`/`Depth` arguments internally; the CLI flags are unchanged.
 - **Scala 3.9.0 LTS** (#554). The build, README, quick-start, scripting docs, examples, and the
   xl-scripting skill snippets move from Scala 3.8.3 to 3.9.0, the new long-term-support line
   (maintained for at least three years; it succeeds 3.3 LTS as the recommended library
@@ -199,6 +212,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Write-side I/O failures are `IO_WRITE`** (exit 3) rather than `INTERNAL`, and a failure that
+  escapes every handler still ends in the one-line `Error:` block — or the envelope under `--json`
+  — through a last-resort handler.
+- **User-input failures carry their own codes**: a formula the parser rejects is `FORMULA_ERROR`,
+  a missing sheet `SHEET_NOT_FOUND`, a malformed reference `INVALID_REFERENCE`, where several
+  paths reported `INTERNAL`.
+- **`--json` keeps numbers exact**: pass-through payloads (`view`/`filter`/`diff`/`lint`) and
+  `eval`/`evala` results are emitted as the numbers the verb computed, not re-parsed doubles.
+- **Batch parse warnings carry codes**: an unknown key is `UNKNOWN_PROPERTY` and an unrecognised
+  `format` hint is `FORMAT_HINT_IGNORED`, in `warnings[]` under `--json` and as `Warning[CODE]:`
+  lines on stderr in text mode.
+- **Streaming `batch` behaves like the in-memory path**: `style` merges into the existing style
+  instead of replacing it; an op's `sheet` or a qualified ref may name the streamed sheet, and one
+  naming another sheet is refused by index; an op that fails to apply is `BATCH_OP_FAILED` with
+  its index; `--dry-run` indexes are 1-based like apply-time errors; a `put` carrying both `value`
+  and `values` is refused.
+- **`rename-sheet` and `Workbook.rename` refuse a name that differs from another sheet's only by
+  case** (Excel compares sheet names case-insensitively).
+- **`QualifiedGraph` canonicalises sheet qualifiers case-insensitively**, so `data!A1` and
+  `Data!A1` are one node for `deps`, `audit` and `cell`.
+- **`RecalcOptions` compares structurally**: two records built with the same settings are `==`.
 - **`rename-sheet` rewrites every formula, defined name, conditional format and data validation
   that references the renamed sheet** (#559). Before, a rename left `=Sheet1!A1` dangling
   (`#REF!` in Excel) on every other sheet. The rename is refuse-before-mutate: a formula the
@@ -207,7 +241,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewritten`), only the sheets whose text changed are marked modified, and typed charts keep the
   remap `Workbook.rename` already performed. Not rewritten by design, and documented in
   `docs/LIMITATIONS.md`: preserved (unparsed) payloads, hyperlink locations, 3-D ranges and
-  `_xlfn.`-prefixed formulas (the last two refuse rather than leave a dangling reference).
+  formulas calling a function the parser does not know (the last two refuse rather than leave a
+  dangling reference; known functions stored with Excel's `_xlfn.` prefix rename cleanly since
+  #576).
 - **Batch `put` with an explicit `format` replaces an existing custom number format** (#560).
   `[{"op":"put","ref":"A1","value":1234,"format":"#,##0"}]` on a cell formatted `0.0%_);\(0.0%\)`
   now yields `#,##0` with the font, fill and border kept; before, `Sheet.put`'s merge rule kept the

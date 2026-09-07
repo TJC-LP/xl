@@ -85,20 +85,28 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
    `-s`/`--sheet`, `-o`/`--output`, `-i`/`--in-place`, `--stream`, `--max-size`, `--backend`,
    `--no-recalc` (`--preserve-caches`), `--strict`, `--json`. `xl view A1:B2 -f f -s Data` is
    `xl -f f -s Data view A1:B2`. The one exception: `--strict` right after `view` is view's own
-   `--eval` gate, not the write gate.
+   `--eval` gate, not the write gate. After `--` every token is data —
+   `xl -f a.xlsx search -- --json` searches for the text `--json` (without the `--` the flag is
+   hoisted and `search` has no pattern: exit 2).
 2. **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
    (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`; otherwise the only sheet of a
    single-sheet book (a `SHEET_AUTOSELECTED` warning under `--json`); otherwise `SHEET_REQUIRED`,
    exit 3, with the sheet names as candidates. `search` (without `-s`), `sheets`, `names`, `diff`,
-   `lint`, `describe` and `audit` read the whole book instead. Start with `xl -f file describe`.
+   `lint`, `describe` and `audit` read the whole book instead (a `-s` given to `describe`, `names`
+   or `sheets` must still name a real sheet: `SHEET_NOT_FOUND`, exit 3). Start with
+   `xl -f file describe`.
 3. **Reads need `-f`; writes need `-o` (a new file) or `-i` (in place).** A write with neither is
    `OUTPUT_REQUIRED`, exit 2, before anything is read. Writes are atomic: the output appears only
    when the whole command succeeded.
 4. **Always pass `--json` when a program reads the result.** Every verb, success or failure, then
    prints exactly one envelope on stdout — `{ok, exitCode, verb, version, data, warnings, error}`
-   — and nothing else there. `ok` is `true` exactly when `error` is `null`; on failure `data` is
-   `null` and stderr carries one `Error: <message>` line. A verb's own `--format json` payload
-   rides inside as `data`; prose verbs yield `data.text` plus `data.saved`/`data.written`.
+   — and nothing else there. `ok` is `true` exactly when `error` is `null`. On a failure (exit 2
+   or 3) `data` is `null`; on findings and gates (exit 1: `diff` differs, `lint` findings,
+   `audit --fail-on-findings`, `--strict`) `ok` is `false` but `data` keeps the report. Either way
+   stderr carries one `Error: <message>` line. For `view`, `filter`, `diff` and `lint`, `--json`
+   alone selects the verb's JSON payload as `data` (no `--format json` needed; an explicit text
+   `--format` rides inside as `data.text`); prose verbs yield `data.text` plus
+   `data.saved`/`data.written`.
 5. **Exit codes** (branch on these and on `error.code`, never on message text):
 
    | exit | meaning | file written? |
@@ -118,7 +126,7 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
 ```bash
 xl -f model.xlsx --json describe                   # what is in this file?
 xl -f model.xlsx --json audit --fail-on-findings   # anything already broken? (exit 1 if so)
-xl -f model.xlsx -s Data --json view A1:D20 --format json | jq '.data.rows'
+xl -f model.xlsx -s Data --json view A1:D20 | jq '.data.rows'   # --json alone selects the JSON payload
 xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/null || echo "batch failed"
 ```
 
@@ -129,7 +137,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Task | Verb | Notes |
 |------|------|-------|
 | Orient in an unknown workbook | `describe` (`--full` for counts) | sheets with state and dimension, defined names, date system; metadata-only, works under `--stream` |
-| "This number looks wrong" | `audit` | error values, uncached/unparseable formulas, cycles, unresolved names; `--fail-on-findings` exits 1 for CI |
+| "This number looks wrong" | `audit` | error values, uncached/unparseable formulas, cycles (notes, not findings, when iterative calculation is on), unresolved names; `--fail-on-findings` exits 1 for CI |
 | Where a cell's value comes from / what reads it | `deps <ref>` | `--direction precedents\|dependents\|both`, `--depth n\|all` |
 | One cell: value, style, comment, direct deps | `cell <ref>` | |
 | Read a block | `view <range>` | `--format markdown\|json\|csv\|html\|svg\|png\|jpeg\|webp\|pdf`, `--eval`, `--formulas`, `--limit`, `--show-labels` |
@@ -190,7 +198,7 @@ Batch essentials (the complete, generated field list is one command away: `xl ba
   `percent`, `date`, `datetime`, `time`, `text`) or any Excel format code (`"0.0x"`,
   `"$#,##0;($#,##0)"`), and it **replaces** the cell's number format. A detected format only
   applies to a General cell. A string that is neither a name nor code-shaped is ignored with a
-  warning that names it and lists the known names (the cell stays General).
+  `FORMAT_HINT_IGNORED` warning that names it and lists the known names (the cell stays General).
 - **`values`** writes a row-major array over a range; `putf` with a single `value` over a range
   drags it from `from` (Excel `$` anchoring); `putf` `values` writes each formula as-is.
 - **`sheet`** on any op (except `add-sheet`/`rename-sheet`) names the sheet for its unqualified
@@ -200,7 +208,8 @@ Batch essentials (the complete, generated field list is one command away: `xl ba
   `from`/`anchor`, `target`/`url`, `align`/`halign` and `value`/`formula` (on `putf`) are aliases.
   An unknown property is an `UNKNOWN_PROPERTY` warning, not an error.
 - **Validate first**: `xl batch --dry-run ops.json` (no workbook needed). Under `--json` the
-  dry run's parse warnings are data (`data.warnings`), not stderr.
+  dry run's parse warnings are data (`data.warnings`), not stderr, and `data.ops[].index` is
+  1-based — the index a `BATCH_OP_FAILED` names at apply time.
 
 ### Formula dragging and anchors
 
@@ -250,8 +259,10 @@ the writes `put`, `putf`, `style` and `batch` — the last for streamable ops on
 Every other write verb accepts the flag but loads the workbook in memory and only writes through
 the streaming writer, so it saves no memory. Refused up front with `UNSUPPORTED_IN_STREAM`
 (exit 2): `audit`, `deps`, `describe --full`, `filter`, `view --eval`, `put --csv`, `--strict` on a
-streamed write, and a batch op the streaming writer cannot apply (refused by index before any
-byte is written). `view --format html|svg|png|jpeg|webp|pdf` needs the styles and is not
+streamed write, and a batch op the streaming writer cannot apply or whose `sheet`/qualified ref
+names a sheet other than the streamed one (refused by index before any byte is written; a
+streamed `style` merges as in memory, and an op that fails to apply is `BATCH_OP_FAILED` with its
+index). `view --format html|svg|png|jpeg|webp|pdf` needs the styles and is not
 available under `--stream`; `names`, `diff`, `lint`, `eval`, `evala` and `new` do not take the
 flag at all (usage error). Streaming never recalculates. For everything else, load in memory
 with `--max-size 0` (unlimited) or `--max-size 500`.
@@ -290,7 +301,8 @@ refreshes every cached value (`--tables` also seeds data-table interiors).
 - **`rename-sheet` rewrites references** in formulas, defined names, conditional-formatting rules
   and charts, on every sheet; inside a batch a rename of the default sheet retargets the ops that
   follow. `move-sheet` changes tab order only.
-- **Negative numbers** look like flags: `put A1 --value "-100"` or `put A1 -- -5`.
+- **Negative numbers** look like flags: `put A1 --value "-100"` or `put A1 -- -5`. After `--`
+  every token is data, so `search -- --json` searches for the text `--json`.
 - **`--strict` after `view`** is view's `--eval` gate (exit 1 on evaluation failure, nothing
   rendered); everywhere else it is the write gate.
 - **PNG/PDF on the native binary needs an external rasterizer** — `xl rasterizers` tells you.

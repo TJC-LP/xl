@@ -173,9 +173,9 @@ goldens" below. A curated `.xlsx` corpus with normalized XML diffs remains futur
 
 `xl-cli/test/resources/golden/<case>.golden` pins what an agent sees from the `xl` binary — exit
 code, stdout and stderr, separately — for representative invocations: `--help`/`--version`, parse
-errors (including a global flag after the verb), the read verbs in every text format, write verbs
-with and without `-o`, `batch -` fed through stdin, `diff` and `lint` exit codes, `-i recalc`, and
-`--stream`. `GoldenSpec` (`com.tjclp.xl.cli.contract`) runs each case through `CliHarness`, an
+errors (and the acceptance of a global flag after the verb), the read verbs in every text format,
+write verbs with and without `-o`, `batch -` fed through stdin, `diff` and `lint` exit codes,
+`-i recalc`, and `--stream`. `GoldenSpec` (`com.tjclp.xl.cli.contract`) runs each case through `CliHarness`, an
 in-process harness that drives the real parser and handlers (`Cli.run(args, io)`) with the
 production sinks, redirected JVM streams and an injected stdin, and compares the result with the
 file after normalization: the per-run fixture directory becomes `<DIR>`, any other temp path

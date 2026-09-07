@@ -76,10 +76,10 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.style(ref"A1:D1", style)` | `Sheet` | merges into existing style |
 | `sheet.cell("A1")` / `sheet.range("A1:B3")` | `Option[Cell]` / `Iterable[Cell]` | safe lookups |
 | `sheet.cells` | `Map[ARef, Cell]` | |
-| `sheet.readTyped[A](ref)` | `Either[CodecError, Option[A]]` | distinguish mismatch from empty; a formula cell decodes as its cached value, an uncached formula is a `TypeMismatch` (GH-477) |
-| `sheet.readTypedOr[A](ref, default)` | `A` | total; cached formula → its value, uncached → default |
-| `sheet.readTypedOpt[A](ref)` | `Option[A]` | total, flat; cached formula → `Some`, uncached → `None` |
-| `sheet.readTypedStrict[A](ref)` | `Either[CodecError, Option[A]]` | like `readTyped`, but ANY formula cell is `Left(TypeMismatch(expected, formula))`, cached or not (GH-477) |
+| `sheet.readTyped[A](ref)` | `Either[CodecError, Option[A]]` | distinguish mismatch from empty; since 0.20.0 (GH-477 — not on the 0.19.3 dep the skill pins) a formula cell decodes as its cached value and only an uncached formula is a `TypeMismatch`; on ≤0.19.3 every formula cell is a `TypeMismatch` |
+| `sheet.readTypedOr[A](ref, default)` | `A` | total; 0.20.0: cached formula → its value, uncached → default (≤0.19.3: any formula → default) |
+| `sheet.readTypedOpt[A](ref)` | `Option[A]` | total, flat; 0.20.0: cached formula → `Some`, uncached → `None` (≤0.19.3: any formula → `None`) |
+| `sheet.readTypedStrict[A](ref)` | `Either[CodecError, Option[A]]` | 0.20.0: like `readTyped`, but ANY formula cell is `Left(TypeMismatch(expected, formula))`, cached or not (GH-477) |
 | `sheet.comment(ref, Comment.plainText("note", Some("author")))` | `Sheet` | |
 | `sheet.toHtml(ref"A1:B10")` | `String` | inline-CSS HTML table |
 | `sheet.usedRange` | `Option[CellRange]` | |
@@ -91,7 +91,7 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 
 Codec types for `put`/`readTyped*`: String, Int, Long, Double, BigDecimal, Boolean, LocalDate (→ Date format), LocalDateTime (→ DateTime format), RichText.
 
-Typed reads see through a formula's cached value (GH-477): `Formula(expr, Some(v), kind)` decodes exactly as a plain cell holding `v` would, whatever the `FormulaKind`; `Formula(expr, None, kind)` (authored, not yet recalculated) has nothing to read and is a `TypeMismatch` whose `actual` is the formula. Do not unwrap `CellValue.Formula(_, Some(v), _)` by hand — `cell.effectiveValue` is the same rule when you do need a `CellValue`. `readTypedStrict` is the escape hatch that rejects every formula cell.
+Typed reads see through a formula's cached value (since 0.20.0 — not on the 0.19.3 dep the skill pins; GH-477): `Formula(expr, Some(v), kind)` decodes exactly as a plain cell holding `v` would, whatever the `FormulaKind`; `Formula(expr, None, kind)` (authored, not yet recalculated) has nothing to read and is a `TypeMismatch` whose `actual` is the formula. Do not unwrap `CellValue.Formula(_, Some(v), _)` by hand — `cell.effectiveValue` (0.20.0) is the same rule when you do need a `CellValue`. `readTypedStrict` (0.20.0) is the escape hatch that rejects every formula cell. On ≤0.19.3 every formula cell is a `TypeMismatch` whatever its cache, and `effectiveValue`/`readTypedStrict` do not exist.
 
 ## Workbook Operations
 

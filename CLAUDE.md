@@ -230,25 +230,27 @@ xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                   # Array arithmetic
 --rasterizer <name>   # Force a specific backend: batik, cairosvg, rsvg-convert, resvg, imagemagick
 
 # Large file handling (100k+ rows)
---stream              # Use O(1) memory streaming (search, stats, bounds, view)
+--stream              # O(1) memory streaming: search, stats, bounds, view, cell, describe, sheets; put, putf, style, batch
 --max-size 0          # Disable security limits for in-memory load
 --max-size 500        # Set custom limit in MB
 ```
 
 **Large File Operations** (~10s vs ~80s for 1M rows):
 ```bash
-# Streaming mode - O(1) memory, 7-8x faster
+# Streaming mode - O(1) memory, 7-8x faster (ONE sheet rule: sheet-scoped verbs need -s or a
+# qualified ref on a multi-sheet book, else SHEET_REQUIRED exit 3; search/sheets read the whole book)
 xl -f huge.xlsx --stream search "pattern" --limit 10
-xl -f huge.xlsx --stream stats A1:E100000
-xl -f huge.xlsx --stream bounds
-xl -f huge.xlsx --stream view A1:D100 --format csv
+xl -f huge.xlsx -s Sheet1 --stream stats A1:E100000
+xl -f huge.xlsx -s Sheet1 --stream bounds
+xl -f huge.xlsx -s Sheet1 --stream view A1:D100 --format csv
+xl -f huge.xlsx -s Sheet1 -o out.xlsx --stream putf A2 "=B2*1.1"
 
 # In-memory mode - when you need full workbook access
-xl -f huge.xlsx --max-size 0 sheets      # Disable limits
-xl -f huge.xlsx --max-size 500 cell A1   # 500MB limit
+xl -f huge.xlsx --max-size 0 sheets                # Disable limits
+xl -f huge.xlsx --max-size 500 -s Sheet1 cell A1   # 500MB limit
 ```
 
-**Streaming limitations**: HTML/SVG/PDF need styles (use --max-size instead). Cell details, formula eval, writes, and `put --csv` auto-split require full workbook load.
+**Streaming limitations**: `--stream` covers the reads (`search`, `stats`, `bounds`, `view` in markdown/csv/json, `cell`, `describe`, `sheets`) and the writes (`put`, `putf`, `style`, and `batch` for streamable ops); it never recalculates. An in-memory load (`--max-size`) is needed only for `--eval`, `put --csv`, `--strict` on a write, the html/svg/png/jpeg/webp/pdf renders (they need styles), and the whole-book verbs `audit`, `deps`, `filter` and `describe --full`.
 
 See `docs/design/smart-streaming.md` for future enhancements.
 

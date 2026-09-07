@@ -86,16 +86,21 @@ xl batch --schema                                  # JSON Schema of the batch do
 > **Global flags go anywhere.** `xl -f x.xlsx --strict recalc` and `xl -f x.xlsx recalc --strict`
 > are the same command line; so are `xl -f f -s Data view A1:B2` and `xl view A1:B2 -f f -s Data`.
 > The one exception is `view --strict`: after `view` it is view's own `--eval` gate, not the write
-> gate. An unknown verb exits 2 with `code: UNKNOWN_VERB` and a `did you mean:` line; any other
-> wrong command line exits 2 with a one-line usage, the parser's error and `run \`xl <verb> --help\``.
+> gate. After `--` every token is data and nothing is hoisted: `xl -f a.xlsx search -- --json`
+> searches for the text `--json` (without the `--` the flag is hoisted and `search` is left with no
+> pattern: exit 2). An unknown verb exits 2 with `code: UNKNOWN_VERB` and a `did you mean:` line;
+> any other wrong command line exits 2 with a one-line usage, the parser's error and
+> `run \`xl <verb> --help\``.
 
 > **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
 > (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`/`--sheet` (for a batch op, its `sheet` key
 > comes first); otherwise the only sheet of a single-sheet book (under `--json` a
 > `SHEET_AUTOSELECTED` warning says so); otherwise `SHEET_REQUIRED`, exit 3, with the sheet names as
 > candidates. `search` (without `-s`), `sheets`, `names`, `diff`, `lint`, `describe` and `audit` read
-> the whole book instead. Streaming reads on a multi-sheet book without a sheet are `SHEET_REQUIRED`
-> too (they no longer default to the first sheet), and qualified refs work under `--stream` writes.
+> the whole book instead (a `-s` given to `describe`, `names` or `sheets` is still validated: a name
+> that is not a sheet is `SHEET_NOT_FOUND`, exit 3). Streaming reads on a multi-sheet book without a
+> sheet are `SHEET_REQUIRED` too (they no longer default to the first sheet), and qualified refs
+> work under `--stream` writes.
 
 ### Cache posture on writes (`--no-recalc` / `--preserve-caches`)
 
@@ -439,7 +444,8 @@ Orient in a workbook with one call. Without `--full` it reads metadata only — 
 size and identical under `--stream` — listing every sheet with its visibility state and dimension,
 every defined name (hidden ones flagged) and the date system. `--full` loads the book and adds the
 per-sheet counts an agent needs before reading a cell, plus the calcPr settings. A workbook verb:
-`-s` is accepted and ignored.
+`-s` does not narrow the card, but it is validated — a name that is not a sheet is
+`SHEET_NOT_FOUND`, exit 3.
 
 ```bash
 xl -f model.xlsx describe
@@ -483,7 +489,8 @@ Every reason a number can be wrong, bucketed in one pass over the loaded workboo
 **Findings** (they make the book dirty): `Error values` — a cached Excel error on a formula or a
 bare error cell; `Uncached formulas` — no cached value (`xl recalc` fills them); `Unparseable
 formulas` — this evaluator cannot parse them, with the parser's diagnostic in context; `Cycles` —
-circular references (one line per strongly connected component); `Unresolved names` — formulas
+circular references (one line per strongly connected component; a note, not a finding, when the
+workbook's calcPr enables iterative calculation); `Unresolved names` — formulas
 reading a defined name the graph cannot resolve. **Notes** (reported, never findings): `Volatile`
 (TODAY/NOW/RAND/RANDBETWEEN cells), `Dynamic` (INDIRECT/OFFSET readers), `External references`
 (other-workbook refs, whose caches are pinned), `Calculation` (the file's calcPr, when it has one).
@@ -704,9 +711,11 @@ Write value(s) to a cell or range.
 Use `--no-detect` to preserve all positional values as text, including numbers and ISO date-like
 strings.
 
-**Negative numbers**: use the `--value` flag (a leading `-` is parsed as a flag):
+**Negative numbers**: use the `--value` flag (a leading `-` is parsed as a flag), or put the value
+after `--`, which makes every following token data:
 ```bash
 xl -f input.xlsx -s S1 -o output.xlsx put A1 --value "-500"
+xl -f input.xlsx -s S1 -o output.xlsx put A1 -- -500
 ```
 
 **Example**:
@@ -1284,10 +1293,12 @@ fields, types, required flags, aliases, example, streamability and CLI twin, and
   leaves an existing format alone.
 - **`rename-sheet` rewrites references**: every formula, defined name, conditional-formatting
   rule and chart series that named the old sheet now names the new one, on every sheet.
-- **Under `--stream`** the streamable ops (see the table) are applied with identical semantics;
-  any other op, or one whose resolved sheet differs from the streamed worksheet, is refused **by
-  index before any byte is written** (`UNSUPPORTED_IN_STREAM`, exit 2). Streaming never
-  recalculates and never degrades an op.
+- **Under `--stream`** the streamable ops (see the table) are applied with identical semantics —
+  `style` merges, `format` replaces, a `put` with both `value` and `values` is refused — and an
+  op's `sheet` or a qualified ref may name the streamed worksheet; any other op, or one whose
+  resolved sheet differs from the streamed worksheet, is refused **by index before any byte is
+  written** (`UNSUPPORTED_IN_STREAM`, exit 2), and one that fails to apply is `BATCH_OP_FAILED`
+  with its 1-based index, as in memory. Streaming never recalculates and never degrades an op.
 
 **Native JSON Types** (recommended):
 
@@ -1340,8 +1351,9 @@ fields, types, required flags, aliases, example, streamability and CLI twin, and
 
 **Unrecognized format strings** (GH-475): a string that is neither a known name nor Excel
 format-code-shaped is a typo far more often than a code.
-- On the put/putf `format` hint it is **ignored, with a warning on stderr** naming the string and
-  listing the known names (`format: "curency"` → warning, cell stays General).
+- On the put/putf `format` hint it is **ignored, with a `FORMAT_HINT_IGNORED` warning** (stderr in
+  text mode, `warnings[]` under `--json`) naming the string and listing the known names
+  (`format: "curency"` → warning, cell stays General).
 - On the `style` op's `numFormat` it is still **applied as a custom code** (Excel, not xl, is the
   authority on codes) but warns the same way.
 
@@ -1619,7 +1631,7 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 |---|---|---|---|
 | `0` | ok | | as requested |
 | `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | `-o`: yes; `-i`: no |
-| `2` | usage — the command line is wrong | unknown verb, flag after the verb, `-o` missing, `-i` with `-o`, `--stream` with an unsupported verb or flag | no |
+| `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, `--stream` with an unsupported verb or flag | no |
 | `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit | no |
 
 Two rows worth spelling out:
@@ -1662,21 +1674,24 @@ with the same seven keys every time:
 | `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict`, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `READER_WARNING`); `location` when known |
 | `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
 
-**What `data` holds.** `--json` is orthogonal to a verb's own `--format`:
+**What `data` holds.** `--json` selects a verb's JSON payload where it has one and wraps the text
+otherwise:
 
 - `--format json` keeps printing the bare payload without `--json` — the shapes of `view`
-  (`{sheet, range, rows}`), `filter`, `diff` and `lint` are unchanged. With `--json` that same
-  payload is `data`: `view --format json --json` yields `data` equal to what `view --format json`
-  prints bare.
+  (`{sheet, range, rows}`), `filter`, `diff` and `lint` are unchanged. With `--json` and no
+  explicit `--format`, that same payload is `data`: `xl --json view A1:C3` yields `data` equal to
+  what `view --format json` prints bare (`--format json --json` spells the same thing out). An
+  explicit text `--format` (markdown, csv, html, …) under `--json` rides inside as `data.text`.
 - Typed verbs build `data` directly: `sheets` → `[{name, index, state, dimension}]` (`--stats` adds
   `cells`, `formulas`); `names` → `[{name, refersTo, scope, hidden}]`; `bounds` →
   `{sheet, range, dimension}`; `eval` → `{formula, result: {type, value, formatted}, overrides}`;
   `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
   `functions` → `[{name, minArgs, maxArgs, args, returnsDate, returnsTime, dynamicDeps,
   specialForm}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
-  `batch --dry-run` → `{ops: [{index, op, summary}], warnings}` (`index` is the op's 0-based
-  position); `batch --schema` → the batch document's JSON Schema; `schema` → `{version,
-  exitCodes, errorCodes, warningCodes, globals, verbs, batchOps, functions, envelope}` (see
+  `batch --dry-run` → `{ops: [{index, op, summary}], warnings}` (`index` is the op's 1-based
+  position, the index a `BATCH_OP_FAILED` reports); `batch --schema` → the batch document's JSON
+  Schema; `schema` → `{version, exitCodes, errorCodes, warningCodes, globals, verbs, batchOps,
+  functions, envelope}` (see
   [`xl schema`](#xl-schema---json)); `describe` → `{sheets, definedNames, date1904}` (`--full`
   adds per-sheet counts and `calcPr`); `audit` → `{clean, findings, errorCells,
   uncachedFormulas, unparseable, volatile, dynamic, cycles, externalRefs, unresolvedReaders,
@@ -1694,12 +1709,12 @@ recalculation summary), so nothing text mode showed is lost.
 
 **Channels.** With `--json` the envelope is the only thing on stdout. Whenever `error` is present,
 stderr carries the single line `Error: <message>` so a human tailing a log still sees it; the
-`code:` and `hint:` lines live in the envelope instead. A wrong command line (unknown verb, a global
-flag after the verb, `-i` with `-o`) also produces the envelope — exit `2`, `code: USAGE` — when
-`--json` is among the arguments.
+`code:` and `hint:` lines live in the envelope instead. A wrong command line (unknown verb, a
+verb-owned flag before the verb, `-i` with `-o`) also produces the envelope — exit `2`,
+`code: USAGE` — when `--json` is among the arguments.
 
 ```bash
-xl -f book.xlsx -s Data --json view A1:C3 --format json | jq '.data.rows'
+xl -f book.xlsx -s Data --json view A1:C3 | jq '.data.rows'   # --json alone selects the JSON payload
 xl -f book.xlsx -s Data -o out.xlsx --json put A1 42 | jq -e '.ok' >/dev/null || echo "put failed"
 xl -f book.xlsx --json sheets | jq -r '.data[].name'
 ```
