@@ -104,8 +104,9 @@ enum XLError derives CanEqual:
   case Other(message: String)
 
   /**
-   * The edit at position `index` (0-based) of a batch failed; `cause` is the domain error. Its
-   * [[XLError.code]], [[XLError.hint]] and [[XLError.candidates]] are the cause's (ADR-017 §2.7).
+   * The edit at position `index` (1-based, the batch's `Object N`) of a sequence failed; `cause` is
+   * the domain error. Its [[XLError.code]], [[XLError.hint]] and [[XLError.candidates]] are the
+   * cause's (ADR-017 §2.7).
    */
   case EditFailed(index: Int, op: String, cause: XLError)
 
