@@ -5,23 +5,34 @@ import cats.implicits.*
 import com.monovore.decline.{Command, Opts, Visibility}
 
 import com.tjclp.xl.cli.Main.*
-import com.tjclp.xl.cli.contract.{CliError, ErrorCode, ExitCodes, Outcome, OutputMode}
+import com.tjclp.xl.cli.contract.{
+  Argv,
+  CliError,
+  Diagnostics,
+  ErrorCode,
+  ExitCodes,
+  Outcome,
+  OutputMode
+}
+import com.tjclp.xl.text.Suggest
 
 /**
  * The `xl` command line as a value.
  *
  * [[program]] is the complete verb tree with every handler wired to a [[CliIO]]; [[run]] is what
- * the binary does with argv: parse, then run the selected handler or render help. Keeping both
- * behind an injectable `CliIO` lets the contract suite (`CliHarness` under xl-cli/test) drive the
- * real parser and the real handlers in-process and pin exit code, stdout and stderr byte for byte.
+ * the binary does with argv: hoist the globals ([[contract.Argv]]), parse, then run the selected
+ * handler or render help. Keeping both behind an injectable `CliIO` lets the contract suite
+ * (`CliHarness` under xl-cli/test) drive the real parser and the real handlers in-process and pin
+ * exit code, stdout and stderr byte for byte.
  *
  * Help and version behaviour reproduce decline-effect's `CommandIOApp`, which this replaced because
  * its `run` is final and prints through an ambient console:
  *   - `--help` renders the help on STDERR and exits 0
- *   - a parse failure renders the errors plus help on stderr and exits 2 (usage — ADR-017 §2.3; the
- *     one-line usage instead of the full help arrives with the argv cluster). With `--json` among
- *     the arguments it renders the `ok:false` envelope instead (§2.4), so a program never has to
- *     parse help text out of a failed call
+ *   - an unknown verb is `UNKNOWN_VERB` (exit 2) with the nearest verb names as "did you mean"
+ *   - any other parse failure is `USAGE` (exit 2): the first parser error with the verb's `--help`
+ *     as the hint, then the one-line [[usage]] — never the full subcommand dump (ADR-017 §2.2).
+ *     With `--json` among the arguments both render the `ok:false` envelope instead (§2.4), so a
+ *     program never has to parse help text out of a failed call
  *   - `--version` / `-v` prints the version on stdout and exits 0
  *
  * Help landing on stderr even when asked for is the current, pinned contract (golden `help`).
@@ -32,6 +43,9 @@ import com.tjclp.xl.cli.contract.{CliError, ErrorCode, ExitCodes, Outcome, Outpu
 object Cli:
 
   val name: String = "xl"
+
+  /** The one-line usage a wrong command line gets; the verbs are listed by `xl --help`. */
+  val usage: String = "usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …"
 
   /** The `--help` header: what the tool is, then the exit-code table every pipeline branches on. */
   val header: String =
@@ -45,74 +59,6 @@ object Cli:
       |Results go to stdout; errors (Error: <message>, then code:/hint: lines) and warnings go to stderr.
       |--json wraps every result, success or failure, in one JSON envelope on stdout:
       |  {ok, exitCode, verb, version, data, warnings, error}""".stripMargin
-
-  /**
-   * Every top-level verb, in usage order — the best-effort `verb` of an envelope for a usage error
-   * raised before dispatch ([[verbOf]]). Pinned against the parser's own list by the contract
-   * suite.
-   */
-  val verbs: Vector[String] = Vector(
-    "rasterizers",
-    "functions",
-    "new",
-    "diff",
-    "lint",
-    "eval",
-    "evala",
-    "sheets",
-    "names",
-    "bounds",
-    "view",
-    "cell",
-    "search",
-    "stats",
-    "filter",
-    "describe",
-    "audit",
-    "deps",
-    "batch",
-    "put",
-    "putf",
-    "style",
-    "row",
-    "col",
-    "group-rows",
-    "group-cols",
-    "ungroup-rows",
-    "ungroup-cols",
-    "autofit",
-    "recalc",
-    "import",
-    "import-md",
-    "add-sheet",
-    "remove-sheet",
-    "rename-sheet",
-    "move-sheet",
-    "copy-sheet",
-    "merge",
-    "unmerge",
-    "comment",
-    "remove-comment",
-    "clear",
-    "fill",
-    "sort",
-    "freeze",
-    "unfreeze",
-    "copy",
-    "name",
-    "insert-rows",
-    "delete-rows",
-    "insert-cols",
-    "delete-cols",
-    "chart",
-    "add-image",
-    "sheet-view",
-    "tab-color",
-    "autofilter",
-    "page-setup",
-    "header-footer",
-    "cf"
-  )
 
   /** The verb tree. Options and handlers live in [[Main]]; this is the wiring between them. */
   def program(io: CliIO): Opts[IO[ExitCode]] =
@@ -262,56 +208,62 @@ object Cli:
     Command(name, header, helpFlag = true)(versionFlag(io) orElse program(io))
 
   /**
-   * argv to exit code: parse, then run the handler or render help (see the object doc). A parse
-   * error with `--json` among the raw arguments is the `USAGE` envelope (exit 2) rather than help
-   * text: the parser never reached a handler that could have seen the flag, so the flag is read
-   * here.
+   * argv to exit code (see the object doc): hoist the globals in front of the verb, refuse an
+   * unknown verb with a suggestion, then parse and run the handler or render help. A usage failure
+   * with `--json` among the arguments is the envelope (exit 2) rather than text: the parser never
+   * reached a handler that could have seen the flag, so the flag is read here.
    */
   def run(args: List[String], io: CliIO): IO[ExitCode] =
-    IO(command(io).parse(args, sys.env)).flatMap {
-      case Right(handler) => handler
-      case Left(help) if help.errors.nonEmpty && wantsJson(args) =>
-        val error = CliError.usage(
-          help.errors.mkString("; "),
-          Some("run `xl --help` (or `xl <verb> --help`) for the usage")
+    val argv = Argv.hoist(args)
+    val mode = if wantsJson(argv) then OutputMode.Json else OutputMode.Text
+    Argv.verbOf(argv) match
+      case Some(word) if !Argv.verbs.contains(word) =>
+        val error = CliError(
+          ErrorCode.UNKNOWN_VERB,
+          s"unknown verb '$word'",
+          hint = Some("run `xl --help` for the list of verbs"),
+          candidates = Suggest.closest(word, Argv.verbs)
         )
-        emit(Outcome.failed(verbOf(args), error), OutputMode.Json, io)
-      case Left(help) =>
-        io.err(help.toString)
-          .as(if help.errors.nonEmpty then ExitCodes.usage else ExitCodes.ok)
-    }
+        usageFailure("", error, mode, io)
+      case verb =>
+        IO(command(io).parse(argv, sys.env)).flatMap {
+          case Right(handler) => handler
+          case Left(help) if help.errors.nonEmpty =>
+            val error = CliError.usage(
+              help.errors.headOption.fold("invalid command line")(compact),
+              Some(s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage")
+            )
+            usageFailure(verb.getOrElse(""), error, mode, io)
+          case Left(help) => io.err(help.toString).as(ExitCodes.ok)
+        }
+
+  /**
+   * decline's first error, minus the one dump it embeds: with no verb at all it lists every
+   * subcommand inside "Missing expected command (a or b or …)!", which is the help, not an error.
+   */
+  private def compact(error: String): String =
+    if error.startsWith("Missing expected command") then "Missing expected command: no verb given"
+    else error
+
+  /**
+   * A wrong command line (exit 2): under `--json` the `ok:false` envelope; in text mode the
+   * diagnostics block — `Error:` first on stderr, as on every failure — then the one-line
+   * [[usage]], nothing on stdout.
+   */
+  private def usageFailure(
+    verb: String,
+    error: CliError,
+    mode: OutputMode,
+    io: CliIO
+  ): IO[ExitCode] =
+    mode match
+      case OutputMode.Json => emit(Outcome.failed(verb, error), mode, io)
+      case OutputMode.Text =>
+        io.err(s"${Diagnostics.render(error)}\n$usage").as(error.exitCode)
 
   /** `--json` among the arguments before any `--`: after it every token is data, not a flag. */
   private def wantsJson(args: List[String]): Boolean =
     args.takeWhile(_ != "--").contains("--json")
-
-  /** The global options that take a value: the token after them is never the verb. */
-  private val valueOptions: Set[String] =
-    Set(
-      "-f",
-      "--file",
-      "-s",
-      "--sheet",
-      "-o",
-      "--output",
-      "-g",
-      "--file2",
-      "--max-size",
-      "--backend"
-    )
-
-  /**
-   * The first argument that names a verb — skipping the values of global options and stopping at
-   * `--` — else empty: what a failed parse was heading for. `--option=value` is one token and needs
-   * no skip.
-   */
-  def verbOf(args: List[String]): String =
-    @annotation.tailrec
-    def find(rest: List[String]): String = rest match
-      case Nil => ""
-      case option :: _ :: tail if valueOptions.contains(option) => find(tail)
-      case token :: tail => if verbs.contains(token) then token else find(tail)
-    find(args.takeWhile(_ != "--"))
 
   /** A dispatch arm the parser cannot reach: a defect, reported like any other failure (exit 3). */
   private def internal(verb: String, message: String, io: CliIO, mode: OutputMode): IO[ExitCode] =

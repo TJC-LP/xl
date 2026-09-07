@@ -6,23 +6,29 @@ import java.util.zip.ZipFile
 
 import cats.effect.IO
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, ParseError}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
 import com.tjclp.xl.ooxml.XmlSecurity
+import com.tjclp.xl.ooxml.metadata.WorkbookMetadataReader
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
-import com.tjclp.xl.text.Suggest
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, ScopedOp}
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location}
-import com.tjclp.xl.cli.helpers.{BatchParser, StreamingCsvParser, StyleBuilder, ValueParser}
+import com.tjclp.xl.cli.helpers.{
+  BatchParser,
+  Resolve,
+  StreamingCsvParser,
+  StyleBuilder,
+  ValueParser
+}
 import org.xml.sax.{Attributes, SAXException}
 import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
@@ -149,21 +155,11 @@ object StreamingWriteCommands:
     detect: Boolean = true
   ): IO[String] =
     for
-      // Resolve sheet path
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
+      // Parse the reference (single cell or range, optionally sheet-qualified)
+      (qualified, refOrRange) <- parseTarget(refStr, "reference")
 
-      // Parse reference (single cell or range)
-      refOrRange <- IO.fromEither(
-        CellRange
-          .parse(refStr)
-          .map(Right(_))
-          .left
-          .flatMap { _ =>
-            ARef.parse(refStr).map(Left(_))
-          }
-          .left
-          .map(e => new Exception(s"Invalid reference: $refStr"))
-      )
+      // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
+      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt, qualified, "put")
 
       // Build value map based on mode
       parsedValues <- (refOrRange, values) match
@@ -255,21 +251,11 @@ object StreamingWriteCommands:
     import com.tjclp.xl.cells.CellValue
 
     for
-      // Resolve sheet path
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
+      // Parse the reference (single cell or range, optionally sheet-qualified)
+      (qualified, refOrRange) <- parseTarget(refStr, "reference")
 
-      // Parse reference
-      refOrRange <- IO.fromEither(
-        CellRange
-          .parse(refStr)
-          .map(Right(_))
-          .left
-          .flatMap { _ =>
-            ARef.parse(refStr).map(Left(_))
-          }
-          .left
-          .map(e => new Exception(s"Invalid reference: $refStr"))
-      )
+      // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
+      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt, qualified, "putf")
 
       // Build formula map
       valueMap <- (refOrRange, formulas) match
@@ -348,13 +334,12 @@ object StreamingWriteCommands:
     replace: Boolean
   ): IO[String] =
     for
-      // Resolve sheet path
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
+      // Parse the range (optionally sheet-qualified; a single cell is a 1x1 range)
+      (qualified, target) <- parseTarget(rangeStr, "range")
+      range = target.fold(ref => CellRange(ref, ref), identity)
 
-      // Parse range
-      range <- IO.fromEither(
-        CellRange.parse(rangeStr).left.map(e => new Exception(s"Invalid range: $rangeStr"))
-      )
+      // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
+      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt, qualified, "style")
 
       // GH-475: same typo signal as the in-memory style command
       _ <- StyleBuilder.warnNumFmt(numFormat)
@@ -452,8 +437,9 @@ object StreamingWriteCommands:
       // read beyond workbook.xml or written
       _ <- refuseNonStreamable(scoped)
 
-      // Resolve the worksheet (workbook.xml only), then refuse ops aimed at any other sheet
-      (sheetName, worksheetPath) <- resolveSheetTarget(sourcePath, sheetNameOpt)
+      // Resolve the worksheet (workbook.xml only: -s, else the only sheet, else SHEET_REQUIRED),
+      // then refuse ops aimed at any other sheet
+      (sheetName, worksheetPath) <- resolveSheetTarget(sourcePath, sheetNameOpt, None, "batch")
       _ <- refuseOtherSheets(scoped, sheetName)
 
       // A ref qualified with the streamed sheet is honoured as its bare form
@@ -1157,24 +1143,76 @@ object StreamingWriteCommands:
       |</styleSheet>""".stripMargin.replaceAll("\n", "")
 
   /**
-   * Resolve worksheet path from name by parsing workbook.xml and workbook.xml.rels metadata.
-   *
-   * Lightweight operation - only reads workbook.xml/workbook.xml.rels, not worksheet data.
+   * A target ref as its optional sheet qualifier and its cell or range; `label` names it in the
+   * error (`Invalid reference: …`, `Invalid range: …`).
    */
+  private def parseTarget(
+    refStr: String,
+    label: String
+  ): IO[(Option[SheetName], Either[ARef, CellRange])] =
+    IO.fromEither(
+      RefType
+        .parse(refStr)
+        .left
+        .map(_ => new Exception(s"Invalid $label: $refStr"))
+        .map {
+          case RefType.Cell(ref) => (None, Left(ref))
+          case RefType.Range(range) => (None, Right(range))
+          case RefType.QualifiedCell(sheet, ref) => (Some(sheet), Left(ref))
+          case RefType.QualifiedRange(sheet, range) => (Some(sheet), Right(range))
+        }
+    )
+
   private val relsNamespace =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
   private def resolveSheetPath(
     sourcePath: Path,
-    sheetNameOpt: Option[String]
+    sheetNameOpt: Option[String],
+    qualified: Option[SheetName],
+    verb: String
   ): IO[String] =
-    resolveSheetTarget(sourcePath, sheetNameOpt).map(_._2)
+    resolveSheetTarget(sourcePath, sheetNameOpt, qualified, verb).map(_._2)
 
-  /** The streamed worksheet as `(sheet name, worksheet part path)`; see [[resolveSheetPath]]. */
+  /**
+   * The streamed worksheet as `(sheet name, worksheet part path)`: the name by THE sheet rule over
+   * `workbook.xml` ([[Resolve.sheetName]], ADR-017 §2.5 — the ref's qualifier, else `-s`, else the
+   * only sheet of a single-sheet book, else `SHEET_REQUIRED`), the part path from
+   * `workbook.xml.rels` ([[worksheetPath]]). Lightweight: reads those two parts and each
+   * worksheet's opening `<dimension>` only, never cell data.
+   */
   private def resolveSheetTarget(
     sourcePath: Path,
-    sheetNameOpt: Option[String]
+    sheetNameOpt: Option[String],
+    qualified: Option[SheetName],
+    verb: String
   ): IO[(String, String)] =
+    for
+      meta <- IO.fromEither(
+        WorkbookMetadataReader.read(sourcePath).left.map(readFailure(sourcePath, _))
+      )
+      name <- IO.fromEither(
+        Resolve.sheetName(meta, sheetNameOpt, qualified, verb).left.map(CliException(_))
+      )
+      path <- worksheetPath(sourcePath, name.value)
+    yield (name.value, path)
+
+  /** An unreadable input is `IO_READ` (exit 3), as on every other verb. */
+  private def readFailure(sourcePath: Path, err: XLError): CliException =
+    CliException(
+      CliError(
+        ErrorCode.IO_READ,
+        err.message,
+        location = Some(Location.file(sourcePath.toString)),
+        cause = Some(err)
+      )
+    )
+
+  /**
+   * The worksheet part path of the named sheet: its `<sheet r:id>` in workbook.xml resolved through
+   * workbook.xml.rels, with the `sheet<sheetId>.xml` convention as the fallback.
+   */
+  private def worksheetPath(sourcePath: Path, sheetName: String): IO[String] =
     IO.delay {
       val zipFile = new ZipFile(sourcePath.toFile)
       try
@@ -1188,39 +1226,9 @@ object StreamingWriteCommands:
             throw new Exception(s"Failed to parse workbook.xml: ${err.message}")
           case Right(wbXml) =>
             val sheets = (wbXml \\ "sheet").collect { case elem: Elem => elem }.toSeq
-
-            if sheets.isEmpty then throw new Exception("Workbook has no sheets")
-
-            val sheetNames = sheets.map(s => (s \ "@name").text).toVector
-            // IterableOps: .head safe because sheets.isEmpty checked above and size>1 throws
-            @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
-            val targetSheet = sheetNameOpt match
-              case None =>
-                if sheets.size > 1 then
-                  val names = sheetNames.mkString(", ")
-                  throw CliException(
-                    CliError
-                      .fromXLError(XLError.SheetRequired("--stream write", sheetNames), None)
-                      .copy(message =
-                        s"Multiple sheets found: $names. Use --sheet to specify which sheet to modify."
-                      )
-                  )
-                sheets.head
-              case Some(targetName) =>
-                val found = sheets.find { sheetElem =>
-                  (sheetElem \ "@name").text == targetName
-                }
-                found.getOrElse {
-                  val names = sheetNames.mkString(", ")
-                  throw CliException(
-                    CliError
-                      .fromXLError(XLError.SheetNotFound(targetName), None)
-                      .copy(
-                        message = s"Sheet '$targetName' not found. Available sheets: $names",
-                        candidates = Suggest.closest(targetName, sheetNames)
-                      )
-                  )
-                }
+            val targetSheet = sheets
+              .find(sheetElem => (sheetElem \ "@name").text == sheetName)
+              .getOrElse(throw new Exception(s"Worksheet not found in workbook.xml: $sheetName"))
 
             val sheetIdStr = targetSheet \@ "sheetId"
             val sheetId = sheetIdStr.toIntOption.getOrElse {
@@ -1251,6 +1259,6 @@ object StreamingWriteCommands:
             if zipFile.getEntry(normalizedPath) == null then
               throw new Exception(s"Worksheet not found: $normalizedPath")
 
-            ((targetSheet \ "@name").text, normalizedPath)
+            normalizedPath
       finally zipFile.close()
     }

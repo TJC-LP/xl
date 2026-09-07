@@ -221,6 +221,19 @@ enum CliCommand:
   case Lint(format: LintFormat)
 
   /**
+   * Whether the verb works on ONE sheet, so THE sheet rule's step 3 applies (ADR-017 §2.5: a
+   * single-sheet book auto-selects). False for the AllSheets verbs — `search` (without `-s`),
+   * `sheets`, `names`, `diff`, `lint`, `describe`, `audit` — and for the verbs that need no sheet
+   * at all: `recalc`, the sheet-structure verbs and `name`.
+   */
+  def takesSheet: Boolean = this match
+    case Sheets(_) | Names | Search(_, _, _) | Describe(_) | Audit(_) | Recalc(_, _) |
+        AddSheet(_, _, _) | RemoveSheet(_) | RenameSheet(_, _) | MoveSheet(_, _, _, _) |
+        CopySheet(_, _) | Name(_) | Diff(_, _) | Lint(_) =>
+      false
+    case _ => true
+
+  /**
    * The subcommand path as typed, joined by a space (`"sheets hide"`, `"cf add"`): the `verb` of
    * the `--json` envelope (ADR-017 §2.4). `sheets list` and the bare `sheets` are both `"sheets"`.
    */

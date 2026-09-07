@@ -687,7 +687,8 @@ object BatchParser:
 
   /**
    * A target ref qualified with a sheet other than the op's `sheet` key is a contradiction, refused
-   * at parse time (ADR-017 §2.5: qualified ref > `sheet` > default — they may not disagree).
+   * at parse time (ADR-017 §2.5: qualified ref > `sheet` > default — they may not disagree). The
+   * rule is [[Resolve.opSheetAgreement]]'s; this only feeds it each target ref.
    */
   private def checkSheetAgreement(
     op: BatchOp,
@@ -695,16 +696,17 @@ object BatchParser:
     idx: Int,
     opName: String
   ): Unit =
-    sheet.foreach { declared =>
-      OpRegistry.targetRefs(op).foreach { refStr =>
-        OpRegistry.qualifiedSheet(refStr).filter(_ != declared).foreach { named =>
-          throw invalidOp(
-            idx,
-            opName,
-            s"ref '$refStr' names sheet '${named.value}' but \"sheet\" is '${declared.value}'"
-          )
-        }
-      }
+    OpRegistry.targetRefs(op).foreach { refStr =>
+      Resolve
+        .opSheetAgreement(
+          idx + 1,
+          opName,
+          s"ref '$refStr'",
+          OpRegistry.qualifiedSheet(refStr),
+          sheet
+        )
+        .left
+        .foreach(error => throw CliException(error))
     }
 
   /**
@@ -1055,7 +1057,7 @@ object BatchParser:
     scoped
       .foldLeft(IO.pure((wb, defaultSheetOpt.map(_.name)))) { (stateIO, op) =>
         stateIO.flatMap { (currentWb, default) =>
-          applyOne(currentWb, op.sheet.orElse(default), op, recalcDependents)
+          applyOne(currentWb, default, op, recalcDependents)
             .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
             .map(next => (next, retarget(default, op.op)))
         }
@@ -1084,7 +1086,72 @@ object BatchParser:
       )
     )
 
+  /** One op against the current workbook: THE sheet rule first ([[opSheet]]), then its applier. */
   private def applyOne(
+    currentWb: Workbook,
+    default: Option[SheetName],
+    scoped: ScopedOp,
+    recalcDependents: Boolean
+  ): IO[Workbook] =
+    IO.fromEither(opSheet(currentWb, default, scoped).left.map(CliException(_)))
+      .flatMap(dispatch(currentWb, _, scoped, recalcDependents))
+
+  /**
+   * THE sheet rule for one op ([[Resolve.forOp]], ADR-017 §2.5), before dispatch. An op whose
+   * target ref is unqualified — or that has no target ref at all (`colwidth`, `unfreeze`,
+   * `autofit`, …) — needs a sheet: its `sheet` key, else the batch default, else the only sheet of
+   * a single-sheet book, else `SHEET_REQUIRED` at its index. An op whose target ref is qualified
+   * (or does not parse — the applier reports that) needs none; `copy` and `chart` resolve their own
+   * sides; `add-sheet` and `rename-sheet` take none.
+   */
+  private def opSheet(
+    wb: Workbook,
+    default: Option[SheetName],
+    scoped: ScopedOp
+  ): Either[CliError, Option[SheetName]] =
+    val merged = scoped.sheet.orElse(default)
+    scoped.op match
+      case _: BatchOp.CopyRange | _: BatchOp.AddChart | _: BatchOp.AddSheet |
+          _: BatchOp.RenameSheet =>
+        Right(merged)
+      case op =>
+        val refs = OpRegistry.targetRefs(op)
+        val unqualified = refs.exists(r =>
+          RefType.parse(r).toOption.exists {
+            case RefType.Cell(_) | RefType.Range(_) => true
+            case _ => false
+          }
+        )
+        if refs.nonEmpty && !unqualified then Right(merged)
+        else
+          Resolve
+            .forOp(
+              wb,
+              default,
+              scoped.sheet.map(_.value),
+              None,
+              scoped.index,
+              OpRegistry.nameOf(op)
+            )
+            .map(Some(_))
+
+  /**
+   * The sheet an unqualified target lands on: the resolved default, else THE rule's steps 3–4
+   * ([[Resolve.sheet]]) — reached only by the ops that parse their own sides (`copy`, `chart`),
+   * since [[opSheet]] has already run the rule for every registry-listed target; `opFailed` adds
+   * the op index.
+   */
+  private def sheetFor(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    op: String
+  ): IO[SheetName] =
+    defaultSheetName match
+      case Some(name) => IO.pure(name)
+      case None =>
+        IO.fromEither(Resolve.sheet(wb, None, s"batch $op").map(_.name).left.map(CliException(_)))
+
+  private def dispatch(
     currentWb: Workbook,
     defaultSheetName: Option[SheetName],
     scoped: ScopedOp,
@@ -1187,20 +1254,14 @@ object BatchParser:
             .map(e => new Exception(s"Invalid freeze ref '$refStr': $e"))
         ).flatMap {
           case RefType.Cell(ref) =>
-            defaultSheetName match
-              case Some(sheetName) =>
-                IO.fromEither(
-                  currentWb(sheetName)
-                    .map(s => currentWb.put(s.freezeAt(ref)))
-                    .left
-                    .map(e => new Exception(e.message))
-                )
-              case None =>
-                IO.raiseError(
-                  new Exception(
-                    "freeze requires --sheet or a qualified ref (e.g., 'Sheet1!B2')"
-                  )
-                )
+            sheetFor(currentWb, defaultSheetName, "freeze").flatMap { sheetName =>
+              IO.fromEither(
+                currentWb(sheetName)
+                  .map(s => currentWb.put(s.freezeAt(ref)))
+                  .left
+                  .map(e => new Exception(e.message))
+              )
+            }
           case RefType.QualifiedCell(sheetName, ref) =>
             IO.fromEither(
               currentWb(sheetName)
@@ -1215,18 +1276,14 @@ object BatchParser:
         }
 
       case BatchOp.Unfreeze =>
-        defaultSheetName match
-          case Some(sheetName) =>
-            IO.fromEither(
-              currentWb(sheetName)
-                .map(s => currentWb.put(s.unfreeze))
-                .left
-                .map(e => new Exception(e.message))
-            )
-          case None =>
-            IO.raiseError(
-              new Exception("unfreeze requires --sheet (specify which sheet to unfreeze)")
-            )
+        sheetFor(currentWb, defaultSheetName, "unfreeze").flatMap { sheetName =>
+          IO.fromEither(
+            currentWb(sheetName)
+              .map(s => currentWb.put(s.unfreeze))
+              .left
+              .map(e => new Exception(e.message))
+          )
+        }
 
       case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
         applyCopyRange(
@@ -1304,11 +1361,9 @@ object BatchParser:
   ): IO[Workbook] =
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) =>
-        defaultSheetName match
-          case Some(sheetName) =>
-            updateSheet(wb, sheetName)(putWithHint(_, ref, cellValue, format, hint))
-          case None =>
-            IO.raiseError(new Exception(s"batch requires --sheet for unqualified ref '$refStr'"))
+        sheetFor(wb, defaultSheetName, "put").flatMap { sheetName =>
+          updateSheet(wb, sheetName)(putWithHint(_, ref, cellValue, format, hint))
+        }
 
       case RefType.QualifiedCell(sheetName, ref) =>
         updateSheet(wb, sheetName)(putWithHint(_, ref, cellValue, format, hint))
@@ -1366,11 +1421,9 @@ object BatchParser:
 
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) =>
-        defaultSheetName match
-          case Some(sheetName) =>
-            updateSheet(wb, sheetName)(s => applyNumFmt(s.put(ref -> value), ref, format))
-          case None =>
-            IO.raiseError(new Exception(s"batch requires --sheet for unqualified ref '$refStr'"))
+        sheetFor(wb, defaultSheetName, "putf").flatMap { sheetName =>
+          updateSheet(wb, sheetName)(s => applyNumFmt(s.put(ref -> value), ref, format))
+        }
 
       case RefType.QualifiedCell(sheetName, ref) =>
         updateSheet(wb, sheetName)(s => applyNumFmt(s.put(ref -> value), ref, format))
@@ -1397,7 +1450,7 @@ object BatchParser:
     val fullFormula = s"=$formula"
 
     for
-      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
 
       // Parse the 'from' reference
@@ -1442,7 +1495,7 @@ object BatchParser:
     format: Option[NumFmt]
   ): IO[Workbook] =
     for
-      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
 
       // Validate count matches
@@ -1476,7 +1529,7 @@ object BatchParser:
     hint: FormatHint
   ): IO[Workbook] =
     for
-      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
 
       // Validate count matches
@@ -1506,7 +1559,7 @@ object BatchParser:
     props: StyleProps
   ): IO[Workbook] =
     for
-      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
       cellStyle <- StyleBuilder.buildCellStyle(
         bold = props.bold,
@@ -1548,7 +1601,7 @@ object BatchParser:
     rangeStr: String
   ): IO[Workbook] =
     for
-      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
       result <- updateSheet(wb, sheetName)(_.merge(range))
     yield result
@@ -1560,7 +1613,7 @@ object BatchParser:
     rangeStr: String
   ): IO[Workbook] =
     for
-      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
       result <- updateSheet(wb, sheetName)(_.unmerge(range))
     yield result
@@ -1574,9 +1627,7 @@ object BatchParser:
   ): IO[Workbook] =
     for
       col <- IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e)))
-      sheetName <- defaultSheetName match
-        case Some(name) => IO.pure(name)
-        case None => IO.raiseError(new Exception(s"batch colwidth requires --sheet"))
+      sheetName <- sheetFor(wb, defaultSheetName, "colwidth")
       result <- updateSheet(wb, sheetName) { sheet =>
         val props = sheet.getColumnProperties(col).copy(width = Some(width))
         sheet.setColumnProperties(col, props)
@@ -1592,9 +1643,7 @@ object BatchParser:
   ): IO[Workbook] =
     for
       row <- IO.pure(Row.from1(rowNum))
-      sheetName <- defaultSheetName match
-        case Some(name) => IO.pure(name)
-        case None => IO.raiseError(new Exception(s"batch rowheight requires --sheet"))
+      sheetName <- sheetFor(wb, defaultSheetName, "rowheight")
       result <- updateSheet(wb, sheetName) { sheet =>
         val props = sheet.getRowProperties(row).copy(height = Some(height))
         sheet.setRowProperties(row, props)
@@ -1611,13 +1660,9 @@ object BatchParser:
   ): IO[Workbook] =
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) =>
-        defaultSheetName match
-          case Some(sheetName) =>
-            updateSheet(wb, sheetName)(_.comment(ref, Comment.plainText(text, author)))
-          case None =>
-            IO.raiseError(
-              new Exception(s"batch comment requires --sheet for unqualified ref '$refStr'")
-            )
+        sheetFor(wb, defaultSheetName, "comment").flatMap { sheetName =>
+          updateSheet(wb, sheetName)(_.comment(ref, Comment.plainText(text, author)))
+        }
 
       case RefType.QualifiedCell(sheetName, ref) =>
         updateSheet(wb, sheetName)(_.comment(ref, Comment.plainText(text, author)))
@@ -1639,12 +1684,7 @@ object BatchParser:
       )
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) =>
-        defaultSheetName match
-          case Some(sheetName) => setOn(sheetName, ref)
-          case None =>
-            IO.raiseError(
-              new Exception(s"batch hyperlink requires --sheet for unqualified ref '$refStr'")
-            )
+        sheetFor(wb, defaultSheetName, "hyperlink").flatMap(setOn(_, ref))
       case RefType.QualifiedCell(sheetName, ref) => setOn(sheetName, ref)
       case _ =>
         IO.raiseError(
@@ -1691,13 +1731,9 @@ object BatchParser:
   ): IO[Workbook] =
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) =>
-        defaultSheetName match
-          case Some(sheetName) =>
-            updateSheet(wb, sheetName)(_.removeComment(ref))
-          case None =>
-            IO.raiseError(
-              new Exception(s"batch remove-comment requires --sheet for unqualified ref '$refStr'")
-            )
+        sheetFor(wb, defaultSheetName, "remove-comment").flatMap { sheetName =>
+          updateSheet(wb, sheetName)(_.removeComment(ref))
+        }
 
       case RefType.QualifiedCell(sheetName, ref) =>
         updateSheet(wb, sheetName)(_.removeComment(ref))
@@ -1718,7 +1754,7 @@ object BatchParser:
     commentsFlag: Boolean
   ): IO[Workbook] =
     for
-      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
       result <- updateSheet(wb, sheetName) { sheet =>
         val clearContents = all || (!stylesFlag && !commentsFlag)
@@ -1746,12 +1782,7 @@ object BatchParser:
   ): IO[Workbook] =
     for
       col <- IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e)))
-      sheetName <- defaultSheetName match
-        case Some(name) => IO.pure(name)
-        case None =>
-          IO.raiseError(
-            new Exception(s"batch col-${if hidden then "hide" else "show"} requires --sheet")
-          )
+      sheetName <- sheetFor(wb, defaultSheetName, s"col-${if hidden then "hide" else "show"}")
       result <- updateSheet(wb, sheetName) { sheet =>
         val props = sheet.getColumnProperties(col).copy(hidden = hidden)
         sheet.setColumnProperties(col, props)
@@ -1767,12 +1798,7 @@ object BatchParser:
   ): IO[Workbook] =
     for
       row <- IO.pure(Row.from1(rowNum))
-      sheetName <- defaultSheetName match
-        case Some(name) => IO.pure(name)
-        case None =>
-          IO.raiseError(
-            new Exception(s"batch row-${if hidden then "hide" else "show"} requires --sheet")
-          )
+      sheetName <- sheetFor(wb, defaultSheetName, s"row-${if hidden then "hide" else "show"}")
       result <- updateSheet(wb, sheetName) { sheet =>
         val props = sheet.getRowProperties(row).copy(hidden = hidden)
         sheet.setRowProperties(row, props)
@@ -1786,9 +1812,7 @@ object BatchParser:
     columnsOpt: Option[String]
   ): IO[Workbook] =
     for
-      sheetName <- defaultSheetName match
-        case Some(name) => IO.pure(name)
-        case None => IO.raiseError(new Exception("batch autofit requires --sheet"))
+      sheetName <- sheetFor(wb, defaultSheetName, "autofit")
       parsedColumnsOpt <- columnsOpt match
         case Some(spec) =>
           IO.fromEither(parseAutoFitColumnsSpec(spec).left.map(msg => new Exception(msg)))
@@ -1918,13 +1942,9 @@ object BatchParser:
         case RefType.QualifiedRange(sheet, r) => (Some(sheet), Right(r))
       }
 
+    /** Each side by THE rule: its own qualifier, else the scoped default, else the only sheet. */
     def resolveSheetName(label: String, qualified: Option[SheetName]): IO[SheetName] =
-      qualified.orElse(defaultSheetName) match
-        case Some(name) => IO.pure(name)
-        case None =>
-          IO.raiseError(
-            new Exception(s"copy $label requires --sheet or a qualified ref")
-          )
+      sheetFor(wb, qualified.orElse(defaultSheetName), s"copy $label")
 
     for
       (srcQualified, srcEither) <- parseSide("source", sourceStr)
@@ -1982,7 +2002,7 @@ object BatchParser:
     fg: Option[String]
   ): IO[Workbook] =
     for
-      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
       dxf <- IO.fromEither(
         CfRuleParser.buildDxf(bold, italic, underline, strike, bg, fg).left.map(new Exception(_))
@@ -2005,7 +2025,7 @@ object BatchParser:
     rangeStrOpt match
       case Some(rangeStr) =>
         for
-          rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+          rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
           (sheetName, range) = rangeRef
           result <- updateNamedSheetE(wb, sheetName)(
             AppearanceOps.applyAutoFilter(_, Some(range), clear)
@@ -2018,30 +2038,22 @@ object BatchParser:
 
   // ========== Utilities ==========
 
-  /** Parse a range reference (possibly qualified with sheet name). */
+  /**
+   * Parse a range reference (possibly qualified with sheet name); an unqualified one lands on the
+   * sheet THE rule gives it ([[sheetFor]]). A single cell is a 1x1 range.
+   */
   private def parseRangeRef(
+    wb: Workbook,
     rangeStr: String,
     defaultSheetName: Option[SheetName]
   ): IO[(SheetName, CellRange)] =
     IO.fromEither(RefType.parse(rangeStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Range(range) =>
-        defaultSheetName match
-          case Some(name) => IO.pure((name, range))
-          case None =>
-            IO.raiseError(
-              new Exception(s"batch requires --sheet for unqualified range '$rangeStr'")
-            )
-
+        sheetFor(wb, defaultSheetName, "op").map(name => (name, range))
       case RefType.QualifiedRange(sheetName, range) =>
         IO.pure((sheetName, range))
-
       case RefType.Cell(ref) =>
-        // Single cell treated as 1x1 range
-        defaultSheetName match
-          case Some(name) => IO.pure((name, CellRange(ref, ref)))
-          case None =>
-            IO.raiseError(new Exception(s"batch requires --sheet for unqualified ref '$rangeStr'"))
-
+        sheetFor(wb, defaultSheetName, "op").map(name => (name, CellRange(ref, ref)))
       case RefType.QualifiedCell(sheetName, ref) =>
         IO.pure((sheetName, CellRange(ref, ref)))
     }
@@ -2067,17 +2079,16 @@ object BatchParser:
       case Some(sheet) => IO.pure(wb.put(f(sheet)))
 
   /**
-   * Update the default sheet with a validated (Either-returning) transform; requires --sheet. Used
-   * by the appearance ops (GH-358) whose appliers pre-validate and report clean errors.
+   * Update the default sheet — the one THE rule gives the op ([[sheetFor]]) — with a validated
+   * (Either-returning) transform. Used by the appearance ops (GH-358) whose appliers pre-validate
+   * and report clean errors.
    */
   private def updateSheetE(
     wb: Workbook,
     defaultSheetName: Option[SheetName],
     opName: String
   )(f: Sheet => Either[String, Sheet]): IO[Workbook] =
-    defaultSheetName match
-      case None => IO.raiseError(new Exception(s"batch $opName requires --sheet"))
-      case Some(sheetName) => updateNamedSheetE(wb, sheetName)(f)
+    sheetFor(wb, defaultSheetName, opName).flatMap(updateNamedSheetE(wb, _)(f))
 
   /** Update a named sheet with a validated (Either-returning) transform. */
   private def updateNamedSheetE(

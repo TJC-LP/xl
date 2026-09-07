@@ -62,7 +62,7 @@ import com.tjclp.xl.cli.contract.{
   Warning,
   WarningCode
 }
-import com.tjclp.xl.cli.helpers.{BatchParser, SheetResolver}
+import com.tjclp.xl.cli.helpers.{BatchParser, Resolve}
 import com.tjclp.xl.cli.output.Format
 
 /** Read version from generated resource, fallback to dev */
@@ -1942,6 +1942,59 @@ EXAMPLES:
     }
 
   /**
+   * THE sheet rule's steps 2–3 for the run's default sheet, before dispatch ([[Resolve.default]],
+   * ADR-017 §2.5): `-s` by name; else, for a verb that takes a sheet, the only sheet of a
+   * single-sheet book — announced through [[announceAutoSelect]]. AllSheets and no-sheet verbs get
+   * `None` and behave as they always have.
+   */
+  private def defaultSheet(
+    wb: Workbook,
+    sheetNameOpt: Option[String],
+    cmd: CliCommand,
+    mode: OutputMode,
+    warn: Warning => IO[Unit]
+  ): IO[Option[Sheet]] =
+    IO.fromEither(Resolve.default(wb, sheetNameOpt, cmd.takesSheet).left.map(CliException(_)))
+      .flatTap(sheet => announceAutoSelect(sheet.map(_.name), sheetNameOpt, cmd, mode, warn))
+
+  /**
+   * Step 3 as the run reports it: under `--json` only, when no `-s` was given and the verb takes a
+   * sheet, the only sheet's name rides in `warnings[]` as `SHEET_AUTOSELECTED`. Text mode prints
+   * nothing extra — its stdout and stderr stay byte-identical to before the rule.
+   */
+  private def announceAutoSelect(
+    only: Option[SheetName],
+    sheetNameOpt: Option[String],
+    cmd: CliCommand,
+    mode: OutputMode,
+    warn: Warning => IO[Unit]
+  ): IO[Unit] =
+    only match
+      case Some(name) if mode == OutputMode.Json && sheetNameOpt.isEmpty && cmd.takesSheet =>
+        warn(Resolve.autoSelected(name))
+      case _ => IO.unit
+
+  /**
+   * The streaming twins resolve their sheet from `workbook.xml` themselves ([[Resolve.sheetName]]);
+   * the run announces step 3 from the same metadata, read only when the announcement can apply and
+   * never failing the run — an unreadable file is the verb's own `IO_READ`.
+   */
+  private def streamAutoSelect(
+    excel: ExcelIO[IO],
+    filePath: Path,
+    sheetNameOpt: Option[String],
+    cmd: CliCommand,
+    mode: OutputMode,
+    warn: Warning => IO[Unit]
+  ): IO[Unit] =
+    if mode == OutputMode.Json && sheetNameOpt.isEmpty && cmd.takesSheet then
+      excel.readMetadata(filePath).attempt.flatMap {
+        case Right(meta) => announceAutoSelect(Resolve.only(meta), sheetNameOpt, cmd, mode, warn)
+        case Left(_) => IO.unit
+      }
+    else IO.unit
+
+  /**
    * Classify a failure while reading the input at `path` as `IO_READ` (exit 3), keeping the message
    * verbatim; a `CliException` already raised below passes through unchanged. Every read of the
    * input — full workbook, metadata quick path, lint's raw zip — goes through this so one condition
@@ -2175,7 +2228,7 @@ EXAMPLES:
 
       (for
         wb <- workbookIO
-        sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
+        sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, w => warnings.update(_ :+ w))
         payload <- (cmd, mode) match
           case (CliCommand.Eval(formulaStr, overrides), OutputMode.Text) =>
             ReadCommands.eval(wb, sheet, formulaStr, overrides).map(Payload.text)
@@ -2398,16 +2451,18 @@ EXAMPLES:
       // read, so a missing or unreadable file is IO_READ here as on every other verb.
       case CliCommand.Bounds(scan) =>
         classifyRead(filePath)(excel.readMetadata(filePath)).flatMap { meta =>
-          mode match
-            case OutputMode.Text =>
-              val text =
-                if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
-                else StreamingReadCommands.boundsFromMetadata(meta, filePath, sheetNameOpt)
-              text.map(Payload.text)
-            case OutputMode.Json =>
-              StreamingReadCommands
-                .boundsData(meta, filePath, sheetNameOpt, scan)
-                .map(Payload.Json(_))
+          announceAutoSelect(Resolve.only(meta), sheetNameOpt, cmd, mode, warn) *> {
+            mode match
+              case OutputMode.Text =>
+                val text =
+                  if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
+                  else StreamingReadCommands.boundsFromMetadata(meta, filePath, sheetNameOpt)
+                text.map(Payload.text)
+              case OutputMode.Json =>
+                StreamingReadCommands
+                  .boundsData(meta, filePath, sheetNameOpt, scan)
+                  .map(Payload.Json(_))
+          }
         }
 
       // A dry run validates the batch JSON and reads no workbook, whatever else is on the line
@@ -2442,7 +2497,7 @@ EXAMPLES:
         else
           for
             wb <- readWorkbook(excel, filePath, readerConfig)
-            sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
+            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
             payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
           yield payload
 
@@ -2457,7 +2512,7 @@ EXAMPLES:
         else
           for
             wb <- readWorkbook(excel, filePath, readerConfig)
-            sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
+            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
             payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, mode)
           yield payload
 
@@ -2480,7 +2535,8 @@ EXAMPLES:
           case _ => false
 
         if stream && isReadCmd then
-          executeStreaming(filePath, sheetNameOpt, cmd, warn).map(bridge(cmd, mode))
+          streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
+            executeStreaming(filePath, sheetNameOpt, cmd, warn).map(bridge(cmd, mode))
         else if stream && isStreamingWriteCmd then
           // GH-496: a streaming write never recalculates, so --strict could only ever report
           // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
@@ -2493,11 +2549,13 @@ EXAMPLES:
               )
             )
           else
-            executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io).map(bridge(cmd, mode))
+            streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
+              executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io)
+                .map(bridge(cmd, mode))
         else
           for
             wb <- readWorkbook(excel, filePath, readerConfig)
-            sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
+            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
             result <- executeCommand(
               wb,
               sheet,

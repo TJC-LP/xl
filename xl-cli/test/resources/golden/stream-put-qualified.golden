@@ -1,0 +1,16 @@
+## args
+-f
+<DIR>/simple.xlsx
+-o
+<DIR>/stream-put-qualified.xlsx
+--stream
+put
+Data!A6
+5
+## exit
+0
+## stdout
+Put 5 → A6 (streaming)
+Cells modified: 1
+Saved (streaming): <DIR>/stream-put-qualified.xlsx
+## stderr

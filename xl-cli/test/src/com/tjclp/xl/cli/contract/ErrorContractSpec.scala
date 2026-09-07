@@ -335,17 +335,18 @@ class ErrorContractSpec extends CatsEffectSuite:
       assertEquals(eval.stderr, "Warning[READER_WARNING]: MissingStylesXml\n")
   }
 
-  test("a parse failure is usage: exit 2, help on stderr, stdout empty") {
+  test("a wrong command line is usage: exit 2, one-line usage plus the error on stderr") {
     for
       unknown <- CliHarness.run("frob")
       flagAfterVerb <- CliHarness.run("-f", file("simple.xlsx"), "view", "A1:B2", "-s", "Data")
+      missingArg <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "view")
       noArgs <- CliHarness.run()
     yield
-      assertEquals(unknown.exit, 2)
-      assertEquals(unknown.stdout, "")
-      assert(unknown.stderr.contains("Unexpected argument: frob"), unknown.stderr)
-      assertEquals(flagAfterVerb.exit, 2)
-      assertEquals(flagAfterVerb.stdout, "")
+      assertFailure(unknown, 2, "unknown verb 'frob'", "UNKNOWN_VERB")
+      // ADR-017 §2.2: a global after the verb is hoisted in front of it — a plain success
+      assertEquals(flagAfterVerb.exit, 0, flagAfterVerb.stderr)
+      assertFailure(missingArg, 2, "Missing expected positional argument!", "USAGE")
+      assert(missingArg.stderr.contains("usage: xl "), missingArg.stderr)
       assertEquals(noArgs.exit, 2)
       assertEquals(noArgs.stdout, "")
   }

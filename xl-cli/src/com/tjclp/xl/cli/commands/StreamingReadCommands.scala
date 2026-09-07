@@ -11,8 +11,8 @@ import fs2.Stream
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.{CliIO, ViewFormat}
-import com.tjclp.xl.cli.contract.{Diagnostics, Warning, WarningCode}
-import com.tjclp.xl.cli.helpers.ValueParser
+import com.tjclp.xl.cli.contract.{CliError, CliException, Diagnostics, Warning, WarningCode}
+import com.tjclp.xl.cli.helpers.{Resolve, ValueParser}
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown, RendererCommon}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.io.{ExcelIO, RowData}
@@ -115,27 +115,17 @@ object StreamingReadCommands:
       )
       (refSheetOpt, ref) <- parsed match
         case RefType.Cell(r) => IO.pure((None, r))
-        case RefType.QualifiedCell(sheet, r) => IO.pure((Some(sheet.value), r))
+        case RefType.QualifiedCell(sheet, r) => IO.pure((Some(sheet), r))
         case _ =>
           IO.raiseError(new Exception("cell command requires single cell, not range"))
 
-      // Resolve sheet name
-      targetSheet <- (refSheetOpt, sheetNameOpt) match
-        case (Some(refSheet), Some(cliSheet)) if refSheet != cliSheet =>
-          IO.raiseError(
-            new Exception(
-              s"cell ref '$refStr' targets sheet '$refSheet' but --sheet is '$cliSheet'"
-            )
-          )
-        case (Some(refSheet), _) => IO.pure(refSheet)
-        case (None, Some(cliSheet)) => IO.pure(cliSheet)
-        case (None, None) =>
-          // Use first sheet from metadata
-          excel.readMetadata(filePath).flatMap { meta =>
-            meta.sheets.headOption match
-              case Some(info) => IO.pure(info.name.value)
-              case None => IO.raiseError(new Exception("Workbook has no sheets"))
-          }
+      // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
+      targetSheet <- resolveSheetName(
+        filePath,
+        sheetNameOpt,
+        refSheetOpt,
+        s"cell with unqualified ref '$refStr'"
+      )
 
       // Get streaming cell details
       details <- excel.streamCellDetails(filePath, targetSheet, ref)
@@ -338,25 +328,24 @@ object StreamingReadCommands:
     sheetNameOpt: Option[String],
     refStr: String
   ): IO[String] =
-    parseRangeFromRef(refStr).flatMap { case (refSheetOpt, range) =>
-      resolveSheetName(sheetNameOpt, refSheetOpt, "stats", refStr).flatMap { resolvedSheetOpt =>
-        val rowStream = resolvedSheetOpt match
-          case Some(name) => excel.readSheetStreamRange(filePath, name, range)
-          case None => excel.readStreamRange(filePath, range)
+    parseRangeFromRef(refStr).flatMap { case (refSheetOpt, range, unqualified) =>
+      resolveSheetName(filePath, sheetNameOpt, refSheetOpt, s"stats $unqualified").flatMap {
+        sheetName =>
+          val rowStream = excel.readSheetStreamRange(filePath, sheetName, range)
 
-        rowStream
-          .flatMap(row => Stream.emits(cellsInRange(row, range)))
-          .collect {
-            case CellValue.Number(n) => n
-            case CellValue.Formula(_, Some(CellValue.Number(n)), _) => n
-          }
-          .compile
-          .fold(StatsAccumulator.empty)(_.add(_))
-          .flatMap { acc =>
-            if acc.count == 0 then
-              IO.raiseError(new Exception(s"No numeric values in range ${range.toA1}"))
-            else IO.pure(acc.format)
-          }
+          rowStream
+            .flatMap(row => Stream.emits(cellsInRange(row, range)))
+            .collect {
+              case CellValue.Number(n) => n
+              case CellValue.Formula(_, Some(CellValue.Number(n)), _) => n
+            }
+            .compile
+            .fold(StatsAccumulator.empty)(_.add(_))
+            .flatMap { acc =>
+              if acc.count == 0 then
+                IO.raiseError(new Exception(s"No numeric values in range ${range.toA1}"))
+              else IO.pure(acc.format)
+            }
       }
     }
 
@@ -394,7 +383,7 @@ object StreamingReadCommands:
     sheetNameOpt: Option[String]
   ): IO[String] =
     boundsTarget(meta, sheetNameOpt) match
-      case Left(err) => IO.raiseError(new Exception(err))
+      case Left(err) => IO.raiseError(CliException(err))
       case Right((sheetName, Some(range))) =>
         val rowCount = range.end.row.index1 - range.start.row.index1 + 1
         val colCount = range.end.col.index0 - range.start.col.index0 + 1
@@ -420,17 +409,17 @@ object StreamingReadCommands:
     sheetNameOpt: Option[String],
     scan: Boolean
   ): IO[ujson.Value] =
-    def scanned(sheetName: Option[String]): IO[ujson.Value] =
-      scanBounds(filePath, sheetNameOpt).map { (fallbackName, acc) =>
-        boundsJson(sheetName.getOrElse(fallbackName), acc.range, fromDimension = false)
+    def scanned: IO[ujson.Value] =
+      scanBounds(filePath, sheetNameOpt).map { (sheetName, acc) =>
+        boundsJson(sheetName, acc.range, fromDimension = false)
       }
-    if scan then scanned(None)
+    if scan then scanned
     else
       boundsTarget(meta, sheetNameOpt) match
-        case Left(err) => IO.raiseError(new Exception(err))
+        case Left(err) => IO.raiseError(CliException(err))
         case Right((sheetName, Some(range))) =>
           IO.pure(boundsJson(sheetName, Some(range), fromDimension = true))
-        case Right((sheetName, None)) => scanned(Some(sheetName))
+        case Right((_, None)) => scanned
 
   private def boundsJson(
     sheetName: String,
@@ -444,22 +433,16 @@ object StreamingReadCommands:
     )
 
   /**
-   * The sheet `bounds` reads — `-s` by name, else the first — as its display name and the
-   * `<dimension>` range the metadata carries for it (None when the worksheet has none).
+   * The sheet `bounds` reads, by THE sheet rule over the metadata ([[Resolve.sheetName]]: `-s`,
+   * else the only sheet, else `SHEET_REQUIRED`) — as its display name and the `<dimension>` range
+   * the metadata carries for it (None when the worksheet has none).
    */
   private def boundsTarget(
     meta: LightMetadata,
     sheetNameOpt: Option[String]
-  ): Either[String, (String, Option[CellRange])] =
-    val sheetIndexEither: Either[String, Int] = sheetNameOpt match
-      case Some(name) =>
-        meta.sheets.indexWhere(_.name.value == name) match
-          case -1 => Left(s"Sheet not found: $name")
-          case idx => Right(idx + 1) // 1-based
-      case None => Right(1) // First sheet
-    sheetIndexEither.map { sheetIndex =>
-      val sheetInfo = meta.sheets.lift(sheetIndex - 1)
-      (sheetInfo.map(_.name.value).getOrElse(s"Sheet$sheetIndex"), sheetInfo.flatMap(_.dimension))
+  ): Either[CliError, (String, Option[CellRange])] =
+    Resolve.sheetName(meta, sheetNameOpt, None, "bounds").map { name =>
+      (name.value, meta.sheets.find(_.name == name).flatMap(_.dimension))
     }
 
   /**
@@ -475,18 +458,21 @@ object StreamingReadCommands:
       acc.format(sheetName, fromScan = true)
     }
 
-  /** The scan itself: the name the result is reported under and the accumulated bounds. */
+  /**
+   * The scan itself: the sheet THE rule selects (its name is what the result is reported under) and
+   * the accumulated bounds.
+   */
   private def scanBounds(
     filePath: Path,
     sheetNameOpt: Option[String]
   ): IO[(String, BoundsAccumulator)] =
-    val rowStream = sheetNameOpt match
-      case Some(name) => excel.readSheetStream(filePath, name)
-      case None => excel.readStream(filePath)
-
-    rowStream.compile
-      .fold(BoundsAccumulator.empty)(_.update(_))
-      .map(acc => (sheetNameOpt.getOrElse("Sheet1"), acc))
+    resolveSheetName(filePath, sheetNameOpt, None, "bounds").flatMap { sheetName =>
+      excel
+        .readSheetStream(filePath, sheetName)
+        .compile
+        .fold(BoundsAccumulator.empty)(_.update(_))
+        .map(acc => (sheetName, acc))
+    }
 
   /**
    * View range using streaming (markdown/csv/json only).
@@ -529,9 +515,9 @@ object StreamingReadCommands:
         // GH-474: the flag is unsupported here — announce it instead of no-oping in silence.
         warn(Warning(WarningCode.FLAG_IGNORED, RendererCommon.streamingSkipHiddenNotice))
           .whenA(skipHidden) *>
-          parseRangeFromRef(rangeStr).flatMap { case (refSheetOpt, range) =>
-            resolveSheetName(sheetNameOpt, refSheetOpt, "view", rangeStr).flatMap {
-              resolvedSheetOpt =>
+          parseRangeFromRef(rangeStr).flatMap { case (refSheetOpt, range, unqualified) =>
+            resolveSheetName(filePath, sheetNameOpt, refSheetOpt, s"view $unqualified").flatMap {
+              sheetName =>
                 // Limit rows and filter to range
                 val limitedRange = limitRange(range, limit)
                 // GH-351: report truncation when --limit clips the requested range
@@ -540,9 +526,7 @@ object StreamingReadCommands:
                 val isTruncated = shownRows < totalRows
                 val notice = RendererCommon.truncationNotice(shownRows, totalRows)
                 val truncated = Warning(WarningCode.TRUNCATED, notice)
-                val rowStream = resolvedSheetOpt match
-                  case Some(name) => excel.readSheetStreamRange(filePath, name, limitedRange)
-                  case None => excel.readStreamRange(filePath, limitedRange)
+                val rowStream = excel.readSheetStreamRange(filePath, sheetName, limitedRange)
 
                 excel.loadStyles(filePath).flatMap { styles =>
                   rowStream.compile.toVector
@@ -656,34 +640,43 @@ object StreamingReadCommands:
   private object BoundsAccumulator:
     def empty: BoundsAccumulator = BoundsAccumulator(None, None, None, None, 0)
 
-  /** Parse range and optional sheet name from ref string (handles both single cell and range). */
-  private def parseRangeFromRef(refStr: String): IO[(Option[String], CellRange)] =
+  /**
+   * Parse a ref string into its optional sheet qualifier, its range (a single cell is a 1x1 range)
+   * and the words the `SHEET_REQUIRED` message uses for it (`with unqualified ref 'A1'`, exactly as
+   * the in-memory twin says).
+   */
+  private def parseRangeFromRef(refStr: String): IO[(Option[SheetName], CellRange, String)] =
     IO.fromEither(
       RefType.parse(refStr).left.map(e => new Exception(e))
-    ).flatMap {
-      case RefType.Cell(ref) => IO.pure((None, CellRange(ref, ref)))
-      case RefType.Range(range) => IO.pure((None, range))
-      case RefType.QualifiedCell(sheet, ref) => IO.pure((Some(sheet.value), CellRange(ref, ref)))
-      case RefType.QualifiedRange(sheet, range) => IO.pure((Some(sheet.value), range))
+    ).map {
+      case RefType.Cell(ref) => (None, CellRange(ref, ref), s"with unqualified ref '$refStr'")
+      case RefType.Range(range) => (None, range, s"with unqualified range '$refStr'")
+      case RefType.QualifiedCell(sheet, ref) =>
+        (Some(sheet), CellRange(ref, ref), s"with unqualified ref '$refStr'")
+      case RefType.QualifiedRange(sheet, range) =>
+        (Some(sheet), range, s"with unqualified range '$refStr'")
     }
 
-  /** Resolve sheet selection for streaming range commands, honoring qualified refs. */
+  /**
+   * THE sheet rule over `workbook.xml` ([[Resolve.sheetName]], ADR-017 §2.5): the ref's qualifier,
+   * else `-s`, else the only sheet of a single-sheet book, else `SHEET_REQUIRED` naming `context`.
+   * Reads the metadata part only.
+   */
   private def resolveSheetName(
+    filePath: Path,
     sheetNameOpt: Option[String],
-    refSheetOpt: Option[String],
-    context: String,
-    refStr: String
-  ): IO[Option[String]] =
-    (refSheetOpt, sheetNameOpt) match
-      case (Some(refSheet), Some(cliSheet)) if refSheet != cliSheet =>
-        IO.raiseError(
-          new Exception(
-            s"$context ref '$refStr' targets sheet '$refSheet' but --sheet is '$cliSheet'"
-          )
-        )
-      case (Some(refSheet), _) => IO.pure(Some(refSheet))
-      case (None, Some(cliSheet)) => IO.pure(Some(cliSheet))
-      case (None, None) => IO.pure(None)
+    qualified: Option[SheetName],
+    context: String
+  ): IO[String] =
+    excel.readMetadata(filePath).flatMap { meta =>
+      IO.fromEither(
+        Resolve
+          .sheetName(meta, sheetNameOpt, qualified, context)
+          .map(_.value)
+          .left
+          .map(CliException(_))
+      )
+    }
 
   /** Resolve target sheets for streaming search, matching --sheets/--sheet semantics. */
   private def resolveSearchSheets(

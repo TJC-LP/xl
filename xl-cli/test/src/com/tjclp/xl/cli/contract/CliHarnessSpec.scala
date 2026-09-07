@@ -66,9 +66,9 @@ class CliHarnessSpec extends CatsEffectSuite:
       lintMissing <- CliHarness.run("lint", "/nonexistent/no-such-file.xlsx")
       eval <- CliHarness.run("eval", "=1+1")
     yield
-      // ADR-017 §2.3: a parse failure is usage (2); an unreadable file is a failure (3)
+      // ADR-017 §2.3: an unknown verb is usage (2); an unreadable file is a failure (3)
       assertEquals(unknown.exit, 2)
-      assert(unknown.stderr.contains("Unexpected argument: frob"), unknown.stderr)
+      assert(unknown.stderr.contains("unknown verb 'frob'"), unknown.stderr)
       assertEquals(lintMissing.exit, 3)
       assertEquals(eval.exit, 0)
       assertEquals(eval.stdout, "Formula: =1+1\nResult: 2 (number)\n")
@@ -113,13 +113,13 @@ class CliHarnessSpec extends CatsEffectSuite:
         val sequential = if args == helpArgs then help else frob
         assertEquals(run, sequential, s"concurrent run of $args differs from its sequential result")
       }
-      // Nothing crosses channels or runs: each stderr carries exactly its own help block
+      // Nothing crosses channels or runs: each stderr carries exactly its own block
       assertEquals(help.stdout, "")
       assertEquals(frob.stdout, "")
       assertEquals(occurrences(help.stderr, "Usage:"), 1)
-      assertEquals(occurrences(frob.stderr, "Usage:"), 1)
-      assert(!help.stderr.contains("Unexpected argument"), help.stderr)
-      assertEquals(occurrences(frob.stderr, "Unexpected argument: frob"), 1)
+      assertEquals(occurrences(frob.stderr, "usage: xl"), 1)
+      assert(!help.stderr.contains("unknown verb"), help.stderr)
+      assertEquals(occurrences(frob.stderr, "unknown verb 'frob'"), 1)
   }
 
   test("the harness pins the default locale to US for the run and restores the caller's") {

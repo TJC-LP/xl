@@ -455,10 +455,12 @@ class ChartCommandSpec extends CatsEffectSuite:
           config
         )
       )
+      // ADR-017 §2.5: on a single-sheet book the rule would auto-select; add a sheet so the
+      // unqualified --at needs a default
       missingSheet <- attempt(
         ChartCommands
           .chartAdd(
-            wb,
+            wb.put(Sheet("Other")),
             None,
             "column",
             None,

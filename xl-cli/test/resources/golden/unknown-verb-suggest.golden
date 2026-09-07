@@ -1,11 +1,14 @@
 ## args
-frob
+-f
+<DIR>/simple.xlsx
+viwe
+A1
 ## exit
 2
 ## stdout
 ## stderr
-Error: unknown verb 'frob'
+Error: unknown verb 'viwe'
   code: UNKNOWN_VERB
-  did you mean: row
+  did you mean: view
   hint: run `xl --help` for the list of verbs
 usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …

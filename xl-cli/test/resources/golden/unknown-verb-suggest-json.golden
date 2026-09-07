@@ -1,6 +1,6 @@
 ## args
-frob
 --json
+viwe
 ## exit
 2
 ## stdout
@@ -13,13 +13,13 @@ frob
   "warnings": [],
   "error": {
     "code": "UNKNOWN_VERB",
-    "message": "unknown verb 'frob'",
+    "message": "unknown verb 'viwe'",
     "hint": "run `xl --help` for the list of verbs",
     "candidates": [
-      "row"
+      "view"
     ],
     "location": null
   }
 }
 ## stderr
-Error: unknown verb 'frob'
+Error: unknown verb 'viwe'

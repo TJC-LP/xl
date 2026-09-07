@@ -3,7 +3,7 @@ package com.tjclp.xl.cli
 import cats.effect.{IO, Resource}
 import munit.CatsEffectSuite
 
-import com.tjclp.xl.cli.contract.{CliHarness, CliRun, EnvelopeSchema, TestFixtures}
+import com.tjclp.xl.cli.contract.{Argv, CliHarness, CliRun, EnvelopeSchema, TestFixtures}
 
 /**
  * The inspection verbs of ADR-017 §2.10 through the in-process harness: `describe [--full]`,
@@ -523,9 +523,9 @@ class InspectCommandsSpec extends CatsEffectSuite:
       )
   }
 
-  test("Cli.verbs lists the three inspection verbs in parser order") {
+  test("Argv.verbs lists the three inspection verbs in parser order") {
     IO {
-      val verbs = Cli.verbs
+      val verbs = Argv.verbs
       assertEquals(
         verbs.slice(verbs.indexOf("filter") + 1, verbs.indexOf("filter") + 4),
         Vector("describe", "audit", "deps")

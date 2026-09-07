@@ -531,13 +531,14 @@ class AppearanceCommandsSpec extends FunSuite:
     }
   }
 
-  test("batch: appearance ops require --sheet") {
+  test("batch: appearance ops require --sheet on a multi-sheet book") {
     val ops = BatchParser
       .parseBatchJson("""[{"op": "sheet-view", "zoom": 85}]""")
       .toOption
       .get
       .ops
-    val wb = Workbook(Sheet("Test"))
+    // ADR-017 §2.5: a single-sheet book would auto-select; two sheets make the default required
+    val wb = Workbook(Sheet("Test"), Sheet("Other"))
     val result = BatchParser.applyBatchOperations(wb, None, ops).attempt.unsafeRunSync()
     assert(result.isLeft)
     assert(

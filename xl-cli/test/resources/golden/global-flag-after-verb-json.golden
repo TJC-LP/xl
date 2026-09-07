@@ -7,22 +7,19 @@ A1:B2
 -s
 Data
 ## exit
-2
+0
 ## stdout
 {
-  "ok": false,
-  "exitCode": 2,
+  "ok": true,
+  "exitCode": 0,
   "verb": "view",
   "version": "<VERSION>",
-  "data": null,
+  "data": {
+    "text": "|   | A     | B   |\n|---|-------|-----|\n| 1 | Hello | 10  |\n| 2 | World | 20  |\n",
+    "saved": null,
+    "written": false
+  },
   "warnings": [],
-  "error": {
-    "code": "USAGE",
-    "message": "Unexpected option: -s",
-    "hint": "run `xl --help` (or `xl <verb> --help`) for the usage",
-    "candidates": [],
-    "location": null
-  }
+  "error": null
 }
 ## stderr
-Error: Unexpected option: -s

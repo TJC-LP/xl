@@ -5,7 +5,7 @@ import java.nio.file.{Files, Path}
 import cats.effect.{IO, Resource}
 import munit.CatsEffectSuite
 
-import com.tjclp.xl.cli.Cli
+import com.tjclp.xl.cli.{Cli, CliIO}
 
 /**
  * The global `--json` flag end to end (ADR-017 §2.4), through the in-process harness: every verb,
@@ -481,27 +481,35 @@ class EnvelopeSpec extends CatsEffectSuite:
     }
   }
 
-  test("--json with a decline parse error still yields an envelope (USAGE, exit 2)") {
+  test("--json with a usage failure still yields an envelope (UNKNOWN_VERB / USAGE, exit 2)") {
     for
       unknown <- CliHarness.run("frob", "--json")
       flagAfterVerb <- CliHarness
         .run("-f", file("simple.xlsx"), "--json", "view", "A1:B2", "-s", "Data")
+      missingArg <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "--json", "view")
       noArgs <- CliHarness.run("--json")
     yield
       assertEquals(unknown.exit, 2)
       val u = envelope(unknown)
       assertEquals(u("ok"), ujson.False)
       assertEquals(u("exitCode"), ujson.Num(2))
-      assertEquals(u("error")("code"), ujson.Str("USAGE"))
-      assertEquals(u("error")("message"), ujson.Str("Unexpected argument: frob"))
+      assertEquals(u("error")("code"), ujson.Str("UNKNOWN_VERB"))
+      assertEquals(u("error")("message"), ujson.Str("unknown verb 'frob'"))
       assertEquals(u("data"), ujson.Null)
-      oneErrorLine(unknown, "Unexpected argument: frob")
+      oneErrorLine(unknown, "unknown verb 'frob'")
 
-      assertEquals(flagAfterVerb.exit, 2)
+      // ADR-017 §2.2: a global after the verb is hoisted, so this is now a plain success
+      assertEquals(flagAfterVerb.exit, 0, flagAfterVerb.stderr)
       val f = envelope(flagAfterVerb)
-      assertEquals(f("error")("code"), ujson.Str("USAGE"))
+      assertEquals(f("ok"), ujson.True)
       assertEquals(f("verb"), ujson.Str("view"))
-      oneErrorLine(flagAfterVerb, "Unexpected option: -s")
+
+      assertEquals(missingArg.exit, 2)
+      val m = envelope(missingArg)
+      assertEquals(m("error")("code"), ujson.Str("USAGE"))
+      assertEquals(m("verb"), ujson.Str("view"))
+      assertEquals(m("error")("hint"), ujson.Str("run `xl view --help` for the usage"))
+      assertEquals(missingArg.stderr.linesIterator.size, 1, missingArg.stderr)
 
       assertEquals(noArgs.exit, 2)
       assertEquals(envelope(noArgs)("error")("code"), ujson.Str("USAGE"))
@@ -511,23 +519,27 @@ class EnvelopeSpec extends CatsEffectSuite:
     CliHarness.run("-f", file("simple.xlsx"), "search", "--", "--json", "extra").map { run =>
       assertEquals(run.exit, 2)
       assertEquals(run.stdout, "", "no envelope: that --json was data, not a flag")
-      assert(run.stderr.startsWith("Unexpected argument: extra"), run.stderr)
-      assert(run.stderr.contains("Usage:"), run.stderr)
+      assert(run.stderr.startsWith("Error: Unexpected argument: extra"), run.stderr)
+      assert(run.stderr.contains(Cli.usage), run.stderr)
+      assert(run.stderr.contains("  code: USAGE"), run.stderr)
     }
   }
 
-  test("verbOf skips the values of global options and stops at --") {
-    assertEquals(Cli.verbOf(List("-s", "view", "--json", "cell", "A1")), "cell")
-    assertEquals(Cli.verbOf(List("--file=view", "--json", "cell")), "cell")
-    assertEquals(Cli.verbOf(List("-f", "x.xlsx", "search", "--", "view")), "search")
-    assertEquals(Cli.verbOf(List("-s")), "")
-    assertEquals(Cli.verbOf(List("-f", "view")), "")
-    CliHarness.run("-s", "view", "--json", "cell", "A1").map { run =>
-      assertEquals(run.exit, 2)
-      val e = envelope(run)
+  test("Argv.verbOf names the verb a usage envelope reports; an unknown one is not a verb") {
+    assertEquals(Argv.verbOf(List("-s", "view", "--json", "cell", "A1")), Some("cell"))
+    assertEquals(Argv.verbOf(List("--file=view", "--json", "cell")), Some("cell"))
+    assertEquals(Argv.verbOf(List("-f", "x.xlsx", "search", "--", "view")), Some("search"))
+    assertEquals(Argv.verbOf(List("-s")), None)
+    assertEquals(Argv.verbOf(List("-f", "view")), None)
+    for
+      missingFile <- CliHarness.run("-s", "view", "--json", "cell", "A1")
+      unknown <- CliHarness.run("--json", "frob", "A1")
+    yield
+      assertEquals(missingFile.exit, 2)
+      val e = envelope(missingFile)
       assertEquals(e("error")("code"), ujson.Str("USAGE"))
       assertEquals(e("verb"), ujson.Str("cell"))
-    }
+      assertEquals(envelope(unknown)("verb"), ujson.Str(""))
   }
 
   test("bounds on a missing input file is IO_READ, exit 3, like every other verb") {
@@ -544,16 +556,16 @@ class EnvelopeSpec extends CatsEffectSuite:
       assert(text.stderr.contains("  code: IO_READ"), text.stderr)
   }
 
-  test("Cli.verbs is the parser's own verb list, so a usage envelope's verb cannot drift") {
+  test("Argv.verbs is the parser's own verb list, so a usage envelope's verb cannot drift") {
+    // decline names one subcommand per usage line: `xl [globals] <verb>`
+    val usage = Cli.command(CliIO.system).showHelp.linesIterator.toVector
+    val names = usage.takeWhile(_.trim.nonEmpty).drop(1).map(_.trim.split(" ").last).distinct
+    assertEquals(names, Argv.verbs)
+    // and the no-argument run still reports usage (exit 2) without listing them all
     CliHarness.run().map { run =>
       assertEquals(run.exit, 2)
-      val listed = run.stderr.linesIterator.toVector.headOption.getOrElse("")
-      val names = listed
-        .stripPrefix("Missing expected command (")
-        .takeWhile(_ != ')')
-        .split(" or ")
-        .toVector
-      assertEquals(names, Cli.verbs)
+      assert(run.stderr.contains(Cli.usage), run.stderr)
+      assert(!run.stderr.contains("Missing expected command ("), run.stderr)
     }
   }
 

@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/circular.xlsx
+-o
+<DIR>/recalc-strict-after-verb.xlsx
+recalc
+--strict
+## exit
+1
+## stdout
+Recalculated 0 formulas; 1 error (Data!A1: Formula error in 'A1+1': Circular reference)
+Saved: <DIR>/recalc-strict-after-verb.xlsx
+STRICT FAILURE (--strict): 1 formula evaluation error(s)
+## stderr
