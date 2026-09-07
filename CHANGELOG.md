@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `A1`/`A1:B2` corner forms only (parse other shapes with `String.asRange`/`asCell`). Bounded
   navigation `ARef.tryShift/tryDown/tryRight/clampShift`, range slicing
   `CellRange.rows/columns/row/column`, and `CellStyle.withUnderline`.
+- **Stable error codes on `XLError`** (library and CLI share one vocabulary). Every `XLError`
+  case has a `code` (`SHEET_NOT_FOUND`, `INVALID_CELL_REF`, …), an optional `hint`, ranked
+  `candidates` (did-you-mean), `root` and `opIndex`; `XLError.codes` enumerates them and
+  `XLError` now `derives CanEqual`. New cases `EditFailed(index, op, cause)`,
+  `UnsupportedCapability(op, capability, hint)` and `SheetRequired(context, available)`. New
+  `com.tjclp.xl.text.Suggest.closest` (case-insensitive edit distance) is the one did-you-mean
+  helper. In xl-cli, `CliError`/`ErrorCode`/`ExitCodes`/`Diagnostics` project those codes to the
+  exit table and the stderr format.
 - **Typed reads see cached formula values** (#477). `readTyped`, `readTypedOpt` and
   `readTypedOr` on a formula cell decode its cached value (`Formula(_, Some(v), _)` reads as
   `v`), so a recalculated or Excel-saved book reads like Excel shows it. An uncached formula still
@@ -62,6 +70,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CLI exit codes and channels (breaking for scripts that parsed stdout or tested for exit 1).**
+  Exit codes now mean one thing each: `0` ok; `1` completed with findings or a failed gate
+  (`diff` differs, `lint` findings, a failed `--strict` gate on a write verb or on
+  `view --eval --strict`) — never a failure; `2` usage (the command line is wrong: unknown verb,
+  flag not accepted, `-o` missing, `-i` with `-o`, `--stream` on an unsupported verb; was `1`);
+  `3` the operation failed (sheet not found, invalid reference, formula parse error, count
+  mismatch, unreadable input; was `1`, and `2` for `diff`/`lint` runtime errors). Errors and
+  warnings go to stderr — the first line is still `Error: <message>`, followed by indented
+  `code: <CODE>`, `did you mean: …` when a near match exists, and `hint: …` — and stdout is empty
+  on every failure; stdout carries results only. Reader warnings surface as
+  `Warning[READER_WARNING]: <case>` on stderr. `xl --help` prints the table. Downstream code with
+  an exhaustive `match` on `XLError` gets a non-exhaustive warning for the three new cases.
 - **Scala 3.9.0 LTS** (#554). The build, README, quick-start, scripting docs, examples, and the
   xl-scripting skill snippets move from Scala 3.8.3 to 3.9.0, the new long-term-support line
   (maintained for at least three years; it succeeds 3.3 LTS as the recommended library
@@ -73,6 +93,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the JDK the build needs instead of failing on whatever `java` is on PATH. The `application`
   string written to `docProps/app.xml` no longer embeds a Scala minor version
   (`XL - Pure Scala 3 Excel Library`).
+
+### Removed
+
+- Dead CLI scaffolding: `Session.scala` (the unused REPL session model) and the `Format`
+  renderers with no callers (`batchSuccess`, `openSuccess`, `createSuccess`, `selectSuccess`,
+  `saveSuccess`, `error`, `errorDetails`). The documented "Error Format" that no code path emitted
+  is replaced in `docs/reference/cli.md` by the real stderr format and the exit table.
 
 ### Fixed
 
