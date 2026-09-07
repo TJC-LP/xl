@@ -25,9 +25,9 @@ class SuggestSpec extends FunSuite:
     assertEquals(Suggest.closest("SUMARY", Seq("Data", "Summary")), Vector("Summary"))
   }
 
-  test("closest keeps distance <= max(2, input.length / 3)") {
-    // short input: two edits allowed, three refused
-    assertEquals(Suggest.closest("ab", Seq("abcd", "abcde")), Vector("abcd"))
+  test("closest keeps distance <= max(2, input.length / 3) for inputs longer than three") {
+    // four characters: two edits allowed, three refused
+    assertEquals(Suggest.closest("abcd", Seq("abcdef", "abcdefg")), Vector("abcdef"))
     // long input (15 chars): length / 3 = 5 edits allowed, six refused
     assertEquals(Suggest.closest("IncomeStatement", Seq("IncomeStatementFY2025")), Vector.empty)
     assertEquals(
@@ -38,6 +38,26 @@ class SuggestSpec extends FunSuite:
       Suggest.closest("IncomeStatement", Seq("Income Statemnt")),
       Vector("Income Statemnt")
     )
+  }
+
+  test("closest allows one edit for an input of three characters or fewer") {
+    // `pu` is one edit from put; cf and putf (two edits each) are not near misses
+    assertEquals(Suggest.closest("pu", Seq("put", "cf", "putf", "style")), Vector("put"))
+    assertEquals(Suggest.closest("Dat", Seq("Data", "Date", "Summary")), Vector("Data", "Date"))
+    assertEquals(Suggest.closest("ab", Seq("abcd", "abcde")), Vector.empty[String])
+  }
+
+  test("closest never accepts a distance equal to the input length (a full rewrite)") {
+    // two-character input: `cf` is two substitutions away from `pu`
+    assertEquals(Suggest.closest("pu", Seq("cf")), Vector.empty[String])
+    // one character: only an exact (case-insensitive) match remains
+    assertEquals(Suggest.closest("a", Seq("A", "b", "ab")), Vector("A"))
+    // empty input suggests nothing
+    assertEquals(Suggest.closest("", Seq("a", "put")), Vector.empty[String])
+    assertEquals(Suggest.threshold("pu"), 1)
+    assertEquals(Suggest.threshold("a"), 0)
+    assertEquals(Suggest.threshold("abcd"), 2)
+    assertEquals(Suggest.threshold("IncomeStatement"), 5)
   }
 
   test("closest honours the limit and defaults to three") {
