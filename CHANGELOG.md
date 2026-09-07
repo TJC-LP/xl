@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] "Contract" - 2026-09-07
+
+The agent-first CLI and scripting contract (ADR-017, wave 1): one sheet rule, one error
+vocabulary with a 0/1/2/3 exit table, one `--json` envelope for every verb, `describe`/`audit`/
+`deps`, and a schema the binary publishes — on top of three weeks of correctness work: the
+Excel-parity wave (`_xlfn.`/`_xlpm.` storage, dates as serials in text, DATE overflow, AND/OR over
+ranges, error-literal criteria, left-associative `^`), the calculation-integrity wave (uncached
+inputs evaluated, stale caches withdrawn, scenario-table diagnostics, authored-formula validation),
+the calcChain fix, Scala 3.9.0 LTS with a repo-pinned JDK, and cloud-session support. Entries led
+with **Breaking:** change behaviour for existing users: the CLI exit codes and stderr channel,
+`--json` payloads for `view`/`filter`/`diff`/`lint`, streaming reads requiring a sheet, `readTyped*`
+on cached formulas, new `XLError` cases, case-insensitive sheet-name uniqueness, and the Scala 3.9
+compiler needed to read the published TASTy.
+
 ### Added
 
 - **Agent-first refactor, wave 1** (ADR-017, `docs/design/agent-first-architecture.md`;

@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 6,326 tests passing; one existing performance comparison ignored.
 
-**Current Version**: **0.19.3** "Namesake" (defined-name resolution indexed — O(sheets × names²) recalc scans removed, released 2026-08-14)
+**Current Version**: **0.20.0** "Contract" (agent-first CLI and scripting contract, Excel-parity and calculation-integrity waves — released 2026-09-07)
 
 ---
 
@@ -23,7 +23,7 @@ executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (ba
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
 
-### Unreleased — wave 27: Agent-first contract (0.20.0)
+### v0.20.0 "Contract" — wave 27: Agent-first contract (Released 2026-09-07)
 
 ADR-017 (`docs/design/agent-first-architecture.md`) makes the CLI and the scripting prelude two
 projections of one contract; the wave plan with per-cluster briefs, reviews and status is

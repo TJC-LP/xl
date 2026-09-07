@@ -305,8 +305,12 @@ class DocsGenSpec extends FunSuite:
   }
 
   test("generated pages never carry the build version (a release bump must not rewrite them)") {
+    // The property itself: rendering under any other version yields byte-identical pages. A
+    // literal search for the version string would also trip on `since` values that legitimately
+    // equal the current release (every verb added in 0.20.0 says `since 0.20.0`).
+    val underOtherVersion = DocsGen.render(Schema.json("0.0.0-probe"))
     rendered.foreach { (name, text) =>
-      assert(!text.contains(BuildInfo.version), s"$name mentions ${BuildInfo.version}")
+      assertEquals(underOtherVersion.get(name), Some(text), s"$name changes with the build version")
       assert(text.startsWith("<!-- GENERATED"), s"$name lacks the generated header")
     }
   }
