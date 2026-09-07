@@ -451,6 +451,35 @@ For one-off questions, `wb.evaluateFormula("=SUM(Data!A1:A9)", "Summary")` retur
 see the [skill API reference](../../plugin/skills/xl-scripting/reference/API.md) for the full
 list).
 
+### Inspect a workbook: `wb.describe`, `wb.audit`, `QualifiedGraph` (since 0.20.0)
+
+The same analyses `xl describe --full`, `xl audit` and `xl deps` print are values a script can
+branch on — all pure, all total:
+
+```scala
+// since 0.20.0 — fragment, not a runnable script
+val summary: WorkbookSummary = wb.describe          // one SheetSummary per sheet + names, date1904, calcPr
+summary.sheets.filter(_.uncachedFormulas > 0).map(_.name.value)
+
+val audit: WorkbookAudit = wb.audit                 // buckets, each in workbook order (sheet, row, column)
+if !audit.isClean then                              // error cells, uncached/unparseable formulas, cycles, unresolved names
+  audit.errorCells.foreach((ref, err) => println(s"$ref ${err.toExcel}"))
+audit.volatile                                      // TODAY/NOW/RAND/RANDBETWEEN cells: a note, not a finding
+audit.restrictTo(SheetName.unsafe("Summary"))       // what `xl audit -s Summary` reports
+
+val graph = QualifiedGraph.of(wb)                   // bounded: a full-column reader expands only to occupied cells
+val b4 = QualifiedRef(SheetName.unsafe("Summary"), ref"B4")
+graph.precedents(b4, 2)                             // Vector of layers: exactly 1 hop, exactly 2 hops
+graph.dependents(b4, 0)                             // 0 = every layer; an empty cell inside a summed range still names the sum
+graph.sccs.filter(_.cyclic)                         // the circular references
+```
+
+`SheetSummary` carries `cellCount`, `formulaCount`, `uncachedFormulas`, `mergedRanges`, `comments`,
+`hyperlinks`, `freeze`, `tabColor`, `autoFilter`, `tables`, `charts`, `pictures`,
+`conditionalFormats`, `dataValidations`, `hiddenRows`, `hiddenCols` plus `state` and `dimension`.
+`QualifiedGraph.precedentsOf`/`dependentsOf` are the single-hop sets; the `dependencies` map is the
+forward graph and `rangeReaders` the symbolic range index behind the reverse question.
+
 ## Typed extraction
 
 ```scala

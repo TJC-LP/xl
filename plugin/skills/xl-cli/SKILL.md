@@ -87,6 +87,9 @@ xl rasterizers                         # Check SVG-to-raster backends
 
 ### Read Operations
 ```bash
+xl -f <file> describe                  # Sheets + names + date system in one call (--full adds counts)
+xl -f <file> audit                     # Error values, uncached/unparseable formulas, cycles, unresolved names
+xl -f <file> deps <ref>                # Precedents/dependents of one cell (--direction, --depth n|all)
 xl -f <file> sheets                    # List sheets with visibility state
 xl -f <file> names                     # List defined names (named ranges)
 xl -f <file> -s <sheet> bounds         # Used range
@@ -224,6 +227,24 @@ xl new <output> --sheet Data --sheet Summary # Multiple sheets
 ---
 
 ## Essential Patterns
+
+### Which verb for the task
+
+| Task | Verb | Why |
+|------|------|-----|
+| Orient in an unknown workbook | `describe` (add `--full` for counts) | Sheets with state and dimension, defined names (hidden flagged), date system in ONE call; metadata-only, so it is instant and works under `--stream` |
+| "This number looks wrong" — find every suspect at once | `audit` | Error values, uncached/unparseable formulas, cycles, unresolved names as findings; volatile/dynamic/external refs and calcPr as notes. `--fail-on-findings` exits 1 for CI |
+| Trace how one cell gets its value / what it feeds | `deps <ref>` (`--direction`, `--depth n|all`) | Precedents and dependents in layers with depth, formula and value; ranges list only occupied cells |
+| One cell's value, style, comment, direct deps | `cell <ref>` | Single-hop view of one cell |
+| Read a block of data | `view <range>` | Markdown/CSV/JSON/images; `--eval` for live values |
+| Find text or a number anywhere | `search <pattern>` | Regex over all sheets |
+| What-if without writing | `eval` / `evala` | Evaluate a formula against the book (`--with` overrides) |
+
+```bash
+xl -f model.xlsx --json describe                  # start here: what is in this file?
+xl -f model.xlsx --json audit --fail-on-findings  # anything already broken? (exit 1 if so)
+xl -f model.xlsx --json deps Summary!B4 --depth all   # where does B4 come from, what reads it?
+```
 
 ### Sheet Selection
 
@@ -463,8 +484,7 @@ See `xl view --help` for all options.
 ### Explore Unknown Spreadsheet
 
 ```bash
-xl -f data.xlsx sheets                     # List sheets with cell counts
-xl -f data.xlsx names                      # List defined names
+xl -f data.xlsx describe --full            # Sheets, names, date system, per-sheet counts — one call
 xl -f data.xlsx -s "Sheet1" bounds         # Get used range
 xl -f data.xlsx -s "Sheet1" view A1:E20    # Preview data
 xl -f data.xlsx -s "Sheet1" stats B2:B100  # Quick statistics
@@ -473,6 +493,8 @@ xl -f data.xlsx -s "Sheet1" stats B2:B100  # Quick statistics
 ### Formula Analysis & What-If
 
 ```bash
+xl -f data.xlsx audit                                # Every suspect at once: errors, uncached, cycles, unresolved names
+xl -f data.xlsx -s Sheet1 deps C5 --depth all        # Where C5 comes from and what it feeds, in layers
 xl -f data.xlsx -s Sheet1 view --formulas A1:D10     # Show formulas
 xl -f data.xlsx -s Sheet1 cell C5                    # Dependencies
 xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10)" --with "A1=500"  # What-if
@@ -754,6 +776,9 @@ these warnings fail strict mode too.
 
 | Command | Options |
 |---------|---------|
+| `describe` | `--full` for per-sheet counts and calcPr; metadata-only otherwise (works with `--stream`) |
+| `audit` | `--fail-on-findings` (exit 1 on a dirty book); `-s` restricts to one sheet |
+| `deps <ref>` | `--direction precedents\|dependents\|both`, `--depth n\|all` |
 | `bounds` | Used range of sheet |
 | `view <range>` | `--format`, `--formulas`, `--eval`, `--raster-output`, etc. |
 | `cell <ref>` | `--no-style` |

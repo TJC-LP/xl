@@ -175,6 +175,7 @@ These warnings also fail `--strict`.
 | **Navigate** | `sheets`, `bounds`, `names` | Find your way around |
 | **Explore** | `view`, `cell`, `search`, `stats` | Read data incrementally |
 | **Analyze** | `eval`, `evala` | What-if formula evaluation (scalar + array) |
+| **Inspect** | `describe`, `audit`, `deps` | Orient in one call, find every reason a number is wrong, trace one cell's precedents/dependents |
 | **Mutate cells** | `put`, `putf`, `style`, `fill`, `clear`, `copy`, `sort`, `merge`, `unmerge`, `comment`, `remove-comment`, `batch`, `import` | Make changes (require `-o` or `-i`) |
 | **Rows/columns** | `row`, `col`, `autofit`, `insert-rows`, `delete-rows`, `insert-cols`, `delete-cols` | Sizing, visibility, structural editing |
 | **Sheets & view** | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide/show`, `freeze`, `unfreeze`, `name` | Workbook structure |
@@ -197,6 +198,9 @@ These warnings also fail `--strict`.
 | `search` | `<pattern> [--limit n] [--sheets a,b]` | Find cells matching pattern (regex, all sheets by default) |
 | `stats` | `<range>` | Statistics for numeric values in range |
 | `filter` | `--where <pred> [--columns A,C:E] [--limit n] [--format md\|csv\|json] [--header]` | Show rows matching a predicate (read-only) |
+| `describe` | `[--full]` | Sheets (state, dimension), defined names (hidden flagged), date system; `--full` adds per-sheet counts and calcPr. Metadata-only by default, works under `--stream` |
+| `audit` | `[--fail-on-findings]` | Error values, uncached/unparseable formulas, cycles, unresolved names (findings) + volatile/dynamic/external/calcPr (notes); `--fail-on-findings` exits 1 on a dirty book |
+| `deps` | `<ref> [--direction precedents\|dependents\|both] [--depth n\|all]` | Trace one cell's precedents and dependents in layers, each node with depth, formula and value |
 | `eval` | `<formula> [--with overrides]` | Evaluate formula without modifying |
 | `evala` | `<formula> [--at <ref>] [--with overrides]` | Evaluate array formula; display or spill result grid |
 | `put` | `<ref\|range> <value...> [--csv] [--no-detect]` | Write value(s) to cell or range (requires `-o`) |
@@ -393,6 +397,148 @@ Cell: A1
 Type: Text
 Value: Revenue
 ```
+
+`Dependencies` lists the cells the formula reads — single references exactly, ranges as their
+occupied cells — and `Dependents` the formulas that read the cell, by name or through a range that
+contains it (an empty cell inside a summed range still names the sum). Same-sheet refs are
+unqualified, cross-sheet ones carry the sheet. For more than one hop, use `deps`.
+
+---
+
+### `xl describe [--full]`
+
+Orient in a workbook with one call. Without `--full` it reads metadata only — instant for any file
+size and identical under `--stream` — listing every sheet with its visibility state and dimension,
+every defined name (hidden ones flagged) and the date system. `--full` loads the book and adds the
+per-sheet counts an agent needs before reading a cell, plus the calcPr settings. A workbook verb:
+`-s` is accepted and ignored.
+
+```bash
+xl -f model.xlsx describe
+xl -f model.xlsx --stream describe                    # same card, O(1) memory
+xl -f model.xlsx describe --full
+xl -f model.xlsx --json describe --full | jq '.data.sheets[] | {name, formulas, uncachedFormulas}'
+```
+
+**Output**:
+```
+Sheets (3):
+  1  Sheet1  A1:A3
+       cells 3, formulas 1, merged 1, comments 1, freeze B2
+  2  Sheet2  A1:B1
+       cells 2, formulas 2
+  3  Hidden  A1:A1  hidden
+       cells 1, formulas 0, hidden rows 1
+Defined names (2):
+  Total   Sheet1!$A$3
+  Secret  Sheet1!$A$1  (hidden)
+Date system: 1900
+Calculation: default
+```
+(The indented count lines and `Calculation:` appear only with `--full`; only the facets a sheet has
+are printed — merges, comments, hyperlinks, freeze, tab color, autofilter, tables, charts, pictures,
+cf, dv, hidden rows/cols.)
+
+**JSON** (`--json`): `data` = `{sheets: [{name, index, state, dimension}], definedNames: [{name,
+refersTo, scope, hidden}], date1904}`; `--full` adds to each sheet `cells, formulas,
+uncachedFormulas, mergedRanges, comments, hyperlinks, freeze, tabColor, autoFilter, tables, charts,
+pictures, conditionalFormats, dataValidations, hiddenRows, hiddenCols` and the top-level `calcPr`
+(`{iterativeCalculation, maxIterations, maxChange, calcMode, fullCalcOnLoad, calcId}` or `null`).
+`--stream describe --full` is refused (`UNSUPPORTED_IN_STREAM`, exit 2): the counts need the book.
+
+---
+
+### `xl audit [--fail-on-findings]`
+
+Every reason a number can be wrong, bucketed in one pass over the loaded workbook.
+
+**Findings** (they make the book dirty): `Error values` — a cached Excel error on a formula or a
+bare error cell; `Uncached formulas` — no cached value (`xl recalc` fills them); `Unparseable
+formulas` — this evaluator cannot parse them, with the parser's diagnostic in context; `Cycles` —
+circular references (one line per strongly connected component); `Unresolved names` — formulas
+reading a defined name the graph cannot resolve. **Notes** (reported, never findings): `Volatile`
+(TODAY/NOW/RAND/RANDBETWEEN cells), `Dynamic` (INDIRECT/OFFSET readers), `External references`
+(other-workbook refs, whose caches are pinned), `Calculation` (the file's calcPr, when it has one).
+
+Text mode prints the headline, then one section per non-empty bucket, findings before notes, every
+list in workbook order (sheet, row, column). `-s <sheet>` restricts the cell buckets to one sheet (a
+cycle stays when any member is on it). Exit 0 regardless of findings; `--fail-on-findings` exits 1
+with code `AUDIT_FINDINGS` on a dirty book and keeps the report (text mode prints it with no
+`Error:` line; `--json` keeps it as `data`), so a CI lane can gate on it. Not available under
+`--stream`.
+
+```bash
+xl -f model.xlsx audit
+xl -f model.xlsx -s Summary audit
+xl -f model.xlsx --json audit --fail-on-findings | jq '.data.errorCells, .data.cycles'
+```
+
+**Output**:
+```
+Audit: 6 findings
+Error values (1):
+  Calc!A1  #DIV/0!
+Uncached formulas (2):
+  Calc!B1
+  Notes!A1
+Unparseable formulas (1):
+  Calc!H1
+    UNSUPPORTED(1)
+    ^
+    Formula error in 'UNSUPPORTED(1)': Unknown function 'UNSUPPORTED' at position 0
+Cycles (1):
+  Calc!E1, Calc!F1
+Unresolved names (1):
+  Calc!I1
+Volatile (1):
+  Calc!C1
+Dynamic (1):
+  Calc!D1
+External references (1):
+  Calc!G1
+Calculation: iterative (100 iterations, max change 0.001)
+```
+A clean book prints `Audit: clean`.
+
+**JSON** (`--json`): `data` = `{clean, findings, errorCells: [{ref, error}], uncachedFormulas: [ref],
+unparseable: [{ref, message}], volatile: [ref], dynamic: [ref], cycles: [[ref]], externalRefs: [ref],
+unresolvedReaders: [ref], calcPr}` — refs as `Sheet!A1` (quoted when the name needs it).
+
+---
+
+### `xl deps <ref> [--direction precedents|dependents|both] [--depth n|all]`
+
+Trace one cell hop by hop. **Precedents** are the cells the formula reads — single references
+exactly, ranges as their occupied cells (a full-column reference never expands to a million rows);
+**dependents** are the formulas that read the cell, by name or through a range that contains it.
+Layer k holds the cells exactly k hops away that no earlier layer listed; each node carries its
+depth, formula and value. `--depth` defaults to `1`; `all` follows the whole cone (a cycle ends the
+walk once every member is seen). The ref follows the sheet rule: a qualified ref names the sheet,
+else `-s`, else the only sheet of a single-sheet book (`SHEET_REQUIRED` otherwise); a range is
+refused. Not available under `--stream`.
+
+```bash
+xl -f model.xlsx deps Summary!B4                                   # both directions, one hop
+xl -f model.xlsx -s Data deps B4 --direction precedents --depth 3
+xl -f model.xlsx --json deps Summary!B4 --direction dependents --depth all | jq '.data.dependents[].ref'
+```
+
+**Output**:
+```
+Cell: Sheet2!A1
+Formula: =Sheet1!A1*2
+Value: 10
+Precedents (depth 1): 1
+  1  Sheet1!A1  5
+Dependents (depth 1): 1
+  1  Sheet2!B1  =A1+1 -> 11
+```
+Each node line is `<depth>  <ref>  <value>` for a constant and `<depth>  <ref>  <formula> -> <cached
+value>` for a formula (`(uncached)` when it has none); an empty side prints `(none)`.
+
+**JSON** (`--json`): `data` = `{ref, formula, value, direction, depth, precedents, dependents}` —
+`depth` is the number or `"all"`, each side is `[{ref, depth, formula, value}]` or `null` when the
+direction was not requested; `formula` is `null` for a constant, `value` a formula's cached value.
 
 ---
 
@@ -1495,16 +1641,20 @@ with the same seven keys every time:
   `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
   `functions` → `[{name}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
   `batch --dry-run` → `{ops: [{index, op, summary}], warnings}` (`index` is the op's 0-based
-  position).
+  position); `describe` → `{sheets, definedNames, date1904}` (`--full` adds per-sheet counts and
+  `calcPr`); `audit` → `{clean, findings, errorCells, uncachedFormulas, unparseable, volatile,
+  dynamic, cycles, externalRefs, unresolvedReaders, calcPr}`; `deps` → `{ref, formula, value,
+  direction, depth, precedents, dependents}`.
 - Every other verb (`cell`, `search`, `stats`, `view` in a text format, and all writes) yields
   `{"text": <what text mode prints>, "saved": <path or null>, "written": <bool>}`. `saved` is the
   user-visible output path once the write was committed; it is `null` (and `written` is `false`)
   when nothing was — a read, or an `-i` run whose `--strict` gate discarded the staged file.
 
 **Findings and gates are `ok: false` with the report kept.** `diff` with differences, `lint` with
-findings and a `--strict` write that fails its gate exit `1` and carry `error.code`
-`DIFFERENCES_FOUND` / `LINT_FINDINGS` / `RECALC_GATE` — and `data` still holds the report (the
-diff, the findings, the recalculation summary), so nothing text mode showed is lost.
+findings, `audit --fail-on-findings` on a dirty book and a `--strict` write that fails its gate exit
+`1` and carry `error.code` `DIFFERENCES_FOUND` / `LINT_FINDINGS` / `AUDIT_FINDINGS` /
+`RECALC_GATE` — and `data` still holds the report (the diff, the findings, the audit buckets, the
+recalculation summary), so nothing text mode showed is lost.
 
 **Channels.** With `--json` the envelope is the only thing on stdout. Whenever `error` is present,
 stderr carries the single line `Error: <message>` so a human tailing a log still sees it; the
