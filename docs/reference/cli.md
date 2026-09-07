@@ -1574,7 +1574,11 @@ xl -f deliverable.xlsx lint && echo "safe to send"
   data-validation `<formula1>`/`<formula2>` or a `<definedName>`: not a repair class but a silent
   `#NAME?` on the first recalculation, which no cached value reveals (the openpyxl class of
   producer). One finding per part with the bare names, the first five sites and the total count.
-  xl's own writers always emit the prefix; re-writing the affected part with xl heals it
+  xl's own writers emit the prefix for every slot they regenerate, but a slot a write leaves
+  untouched is copied verbatim — a CF block, DV container or name table whose model still equals
+  the source, an untouched worksheet, and every cell a `--stream` write does not patch. Re-author
+  the rule, validation or name (or edit the sheet in-memory, for a cell) with xl to heal it; see
+  [LIMITATIONS.md](../LIMITATIONS.md)
 
 **Exit codes**: `0` no findings · `1` findings reported · `3` error (unreadable file, malformed
 core part) · `2` usage (no file, or a file given both ways) — errors go to stderr with a `code:`

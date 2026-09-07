@@ -1490,6 +1490,19 @@ class WorkbookLintSpec extends FunSuite:
     assert(f.message.contains("#NAME?"), f.toString)
   }
 
+  test("GH-588: the remediation names the slots xl regenerates, not a blanket re-write") {
+    // A write that leaves the slot untouched copies the bare text through (LIMITATIONS.md), so a
+    // message promising that "re-writing the affected part" heals it sends an agent into a loop.
+    val cf = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> bareCfIfsSheetXml)).head
+    val dn = lintOf(baseParts + ("xl/workbook.xml" -> bareNameWorkbookXml)).head
+    Vector(cf, dn).foreach { f =>
+      assert(!f.message.contains("re-writing the affected part"), f.toString)
+      assert(f.message.contains("regenerates the slot"), f.toString)
+      assert(f.message.contains("re-author"), f.toString)
+      assert(f.message.contains("untouched"), f.toString)
+    }
+  }
+
   test("GH-588: bare calls in <f>, <formula> and <formula1> aggregate to ONE finding per part") {
     val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> bareXlfnSheetXml))
     assertEquals(findings.map(_.category), Vector(LintCategory.XlfnMissing))
