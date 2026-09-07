@@ -1,9 +1,11 @@
 package com.tjclp.xl.cli
 
 import java.nio.file.{
+  AccessDeniedException,
   AtomicMoveNotSupportedException,
   FileAlreadyExistsException,
   Files,
+  NoSuchFileException,
   Path,
   StandardCopyOption
 }
@@ -255,7 +257,9 @@ object Main extends IOApp:
   /**
    * Global `--json` (ADR-017 §2.4): the result — success or failure — as one JSON envelope on
    * stdout. Orthogonal to a verb's own `--format`: `view --format json --json` wraps the bare
-   * payload as `data`.
+   * payload as `data`, and a pass-through verb with no `--format` at all uses its JSON payload
+   * format under `--json` ([[CliCommand.viewFormat]]), so `data` is structured unless the user
+   * asked for a text format.
    */
   private[cli] val jsonOpt: Opts[OutputMode] =
     Opts
@@ -281,9 +285,16 @@ object Main extends IOApp:
   private val limitOpt = Opts
     .option[Int]("limit", "Maximum rows to display (default: 50; 0 = no limit)")
     .withDefault(50)
-  private val formatOpt = Opts
-    .option[String]("format", "Output format: markdown, html, svg, json, csv, png, jpeg, webp, pdf")
-    .withDefault("markdown")
+
+  /**
+   * `view --format`, as given: no baked default, so the runner can pick JSON under `--json` when
+   * the user chose nothing ([[CliCommand.viewFormat]]); text mode defaults to markdown.
+   */
+  private val formatOpt: Opts[Option[ViewFormat]] = Opts
+    .option[String](
+      "format",
+      "Output format: markdown (default; json under --json), html, svg, json, csv, png, jpeg, webp, pdf"
+    )
     .mapValidated { s =>
       s.toLowerCase match
         case "markdown" | "md" => cats.data.Validated.valid(ViewFormat.Markdown)
@@ -300,6 +311,7 @@ object Main extends IOApp:
             s"Unknown format: $other. Use markdown, html, svg, json, csv, png, jpeg, webp, or pdf"
           )
     }
+    .orNone
   private val printScaleOpt =
     Opts.flag("print-scale", "Apply print scaling (for PDF-like output)").orFalse
   private val gridlinesOpt =
@@ -614,10 +626,9 @@ EXAMPLES:
   private val file2Opt =
     Opts.option[Path]("file2", "Second file to compare against (required)", "g")
 
-  private val diffFormatOpt: Opts[DiffFormat] =
+  private val diffFormatOpt: Opts[Option[DiffFormat]] =
     Opts
-      .option[String]("format", "Output format: markdown (default), json")
-      .withDefault("markdown")
+      .option[String]("format", "Output format: markdown (default; json under --json), json")
       .mapValidated { s =>
         s.toLowerCase match
           case "markdown" | "md" => cats.data.Validated.valid(DiffFormat.Markdown)
@@ -625,6 +636,7 @@ EXAMPLES:
           case other =>
             cats.data.Validated.invalidNel(s"Unknown format: $other. Use markdown or json")
       }
+      .orNone
 
   val diffCmd: Opts[CliCommand] =
     Opts.subcommand("diff", diffHelp) {
@@ -683,10 +695,9 @@ EXAMPLES:
   xl lint deliverable.xlsx && echo "safe to send"
   xl lint deliverable.xlsx --format json | jq '.findings'"""
 
-  private val lintFormatOpt: Opts[LintFormat] =
+  private val lintFormatOpt: Opts[Option[LintFormat]] =
     Opts
-      .option[String]("format", "Output format: text (default), json")
-      .withDefault("text")
+      .option[String]("format", "Output format: text (default; json under --json), json")
       .mapValidated { s =>
         s.toLowerCase match
           case "text" => cats.data.Validated.valid(LintFormat.Text)
@@ -694,6 +705,7 @@ EXAMPLES:
           case other =>
             cats.data.Validated.invalidNel(s"Unknown format: $other. Use text or json")
       }
+      .orNone
 
   /**
    * Lint reads exactly one file and writes nothing, so it also accepts the file as a positional
@@ -918,10 +930,9 @@ EXAMPLES:
     Opts.option[String]("columns", "Columns to output, e.g. A,C:E (default: all used)").orNone
   private val filterLimitOpt =
     Opts.option[Int]("limit", "Maximum matching rows to display").withDefault(50)
-  private val filterFormatOpt: Opts[FilterFormat] =
+  private val filterFormatOpt: Opts[Option[FilterFormat]] =
     Opts
-      .option[String]("format", "Output format: markdown (default), csv, json")
-      .withDefault("markdown")
+      .option[String]("format", "Output format: markdown (default; json under --json), csv, json")
       .mapValidated { s =>
         s.toLowerCase match
           case "markdown" | "md" => cats.data.Validated.valid(FilterFormat.Markdown)
@@ -930,6 +941,7 @@ EXAMPLES:
           case other =>
             cats.data.Validated.invalidNel(s"Unknown format: $other. Use markdown, csv, or json")
       }
+      .orNone
   private val filterHeaderOpt =
     Opts
       .flag("header", "Treat the first used row as column names (excluded from matching)")
@@ -1905,6 +1917,7 @@ EXAMPLES:
       case Payload.Text(text, saved, written) =>
         Payload.Text(renderWithTarget(text, outputOpt, displayOpt), saved, written)
       case json: Payload.Json => json
+      case raw: Payload.Raw => raw
 
   /**
    * GH-496: an in-place run whose exit code is non-success never commits its temp file, so the
@@ -2048,6 +2061,56 @@ EXAMPLES:
   /** Read the input through `excel` under [[classifyRead]]. */
   private def readWorkbook(excel: ExcelIO[IO], path: Path, config: ReaderConfig): IO[Workbook] =
     classifyRead(path)(excel.readWith(path, config))
+
+  /**
+   * Classify a failure while producing the output at `target` — allocating its staging file,
+   * committing it, or `new`'s direct write — as `IO_WRITE` (exit 3) naming the target: `cannot
+   * write <target>: <reason>`, with the hint every unwritable destination needs. A `CliException`
+   * already raised below passes through. The reason is stable text, never a staging path: a missing
+   * directory (`NoSuchFileException` from the temp allocation, `FileNotFoundException` from a
+   * stream) is named as such, permission failures likewise, anything else by its message.
+   */
+  private def classifyWrite[A](target: Path)(write: IO[A]): IO[A] =
+    write.adaptError {
+      case cli: CliException => cli
+      case other =>
+        CliException(
+          CliError(
+            ErrorCode.IO_WRITE,
+            s"cannot write $target: ${writeReason(target, other)}",
+            hint = Some("check that the directory exists and is writable"),
+            location = Some(Location.file(target.toString))
+          )
+        )
+    }
+
+  private def writeReason(target: Path, failure: Throwable): String =
+    val directory = Option(target.toAbsolutePath.getParent).fold(".")(_.toString)
+    failure match
+      case _: NoSuchFileException => s"no such directory: $directory"
+      case _: AccessDeniedException => "permission denied"
+      case other =>
+        strerror(CliError.messageOf(other)) match
+          case "No such file or directory" => s"no such directory: $directory"
+          case "Permission denied" => "permission denied"
+          case reason => reason
+
+  /**
+   * The OS reason inside a write failure's message. The writer and `ExcelIO` each wrap the
+   * `FileOutputStream` failure once — `Failed to write XLSX: IO error: Failed to write XLSX: <path>
+   * (No such file or directory)` — so peel those prefixes and keep the parenthesised reason when
+   * the text ends in one (`java.io` spells every stream failure `<path> (<reason>)`).
+   */
+  private def strerror(message: String): String =
+    val prefixes = List("Failed to write XLSX: ", "IO error: ")
+    @scala.annotation.tailrec
+    def peel(text: String): String = prefixes.find(text.startsWith) match
+      case Some(prefix) => peel(text.stripPrefix(prefix))
+      case None => text
+    val inner = peel(message)
+    val open = inner.lastIndexOf(" (")
+    if open >= 0 && inner.endsWith(")") then inner.substring(open + 2, inner.length - 1)
+    else inner
 
   private[cli] def runInfo(io: CliIO, mode: OutputMode = OutputMode.Text): IO[ExitCode] =
     val payload = mode match
@@ -2267,15 +2330,17 @@ EXAMPLES:
           case (CliCommand.Eval(formulaStr, overrides), OutputMode.Text) =>
             ReadCommands.eval(wb, sheet, formulaStr, overrides).map(Payload.text)
           case (CliCommand.Eval(formulaStr, overrides), OutputMode.Json) =>
-            ReadCommands.evalData(wb, sheet, formulaStr, overrides).map(Payload.Json(_))
+            ReadCommands.evalData(wb, sheet, formulaStr, overrides).map(Payload.Raw(_))
           case (CliCommand.EvalArray(formulaStr, targetRef, overrides), OutputMode.Text) =>
             ReadCommands.evalArray(wb, sheet, formulaStr, targetRef, overrides).map(Payload.text)
           case (CliCommand.EvalArray(formulaStr, targetRef, overrides), OutputMode.Json) =>
             ReadCommands
               .evalArrayData(wb, sheet, formulaStr, targetRef, overrides)
-              .map(Payload.Json(_))
+              .map(Payload.Raw(_))
           case (other, _) =>
-            IO.raiseError(new Exception(s"Unexpected headless command: $other"))
+            IO.raiseError(
+              CliException(CliError(ErrorCode.INTERNAL, s"Unexpected headless command: $other"))
+            )
       yield payload).attempt.flatMap { attempt =>
         warnings.get.flatMap { collected =>
           val outcome = attempt match
@@ -2307,15 +2372,26 @@ EXAMPLES:
       wbB <- readWorkbook(excel, fileB, readerConfig)
       diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter) match
         case Right(d) => IO.pure(d)
-        case Left(err) => IO.raiseError(new Exception(err))
+        // The only refusal: a -s filter naming a sheet neither workbook has — SHEET_NOT_FOUND
+        // with the nearest names from both books, keeping the diff's own message
+        case Left(err) =>
+          val names = (wbA.sheets ++ wbB.sheets).map(_.name.value).distinct
+          IO.raiseError(
+            CliException(
+              sheetFilter.fold(CliError(ErrorCode.INTERNAL, err))(filter =>
+                Resolve.sheetNotFound(names, filter).copy(message = err)
+              )
+            )
+          )
       output = format match
         case DiffFormat.Markdown =>
           DiffCommands.renderMarkdown(diff, fileA.toString, fileB.toString)
         case DiffFormat.Json => DiffCommands.renderJson(diff)
     yield (output, diff.identical)).attempt.flatMap {
       case Right((output, identical)) =>
+        // The JSON report rides as text (Payload.Raw): its numbers are never re-parsed
         val payload = (format, mode) match
-          case (DiffFormat.Json, OutputMode.Json) => Payload.Json(ujson.read(output))
+          case (DiffFormat.Json, OutputMode.Json) => Payload.Raw(output)
           case _ => Payload.text(output)
         val outcome =
           if identical then Outcome.ok("diff", payload)
@@ -2365,7 +2441,7 @@ EXAMPLES:
           case LintFormat.Text => LintCommands.renderText(file.toString, findings)
           case LintFormat.Json => LintCommands.renderJson(file.toString, findings)
         val payload = (format, mode) match
-          case (LintFormat.Json, OutputMode.Json) => Payload.Json(ujson.read(output))
+          case (LintFormat.Json, OutputMode.Json) => Payload.Raw(output)
           case _ => Payload.text(output)
         val outcome =
           if findings.isEmpty then Outcome.ok("lint", payload)
@@ -2396,13 +2472,12 @@ EXAMPLES:
     val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
     (for
       // --sheet takes precedence over --sheet-name; if neither, default to "Sheet1"
-      names <- sheets match
-        case Nil =>
-          IO.fromEither(SheetName(sheetName).left.map(e => new Exception(e))).map(List(_))
-        case list =>
-          list.traverse(n => IO.fromEither(SheetName(n).left.map(e => new Exception(e))))
+      // A name the validator refuses is INVALID_SHEET_NAME with its own text
+      names <- (if sheets.isEmpty then List(sheetName) else sheets).traverse(n =>
+        IO.fromEither(Resolve.validSheetName(n).left.map(CliException(_)))
+      )
       wb = Workbook(names.map(Sheet(_)).toVector)
-      _ <- ExcelIO.instance[IO].writeWith(wb, outPath, config)
+      _ <- classifyWrite(outPath)(ExcelIO.instance[IO].writeWith(wb, outPath, config))
     yield
       val sheetList = names.map(_.value).mkString(", ")
       s"Created ${outPath.toAbsolutePath} with ${names.size} sheet(s): $sheetList"
@@ -2559,8 +2634,8 @@ EXAMPLES:
         // For write commands: stream flag uses the SAX/StAX workbook writer
         // For read commands: stream flag enables O(1) input memory (true streaming)
         val isReadCmd = cmd match
-          case _: CliCommand.Search | _: CliCommand.Stats | _: CliCommand.Bounds |
-              _: CliCommand.View | _: CliCommand.Cell =>
+          case _: CliCommand.Search | _: CliCommand.Stats | _: CliCommand.View |
+              _: CliCommand.Cell =>
             true
           case _ => false
 
@@ -2574,7 +2649,7 @@ EXAMPLES:
 
         if stream && isReadCmd then
           streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
-            executeStreaming(filePath, sheetNameOpt, cmd, warn).map(bridge(cmd, mode))
+            executeStreaming(filePath, sheetNameOpt, cmd, warn, mode).map(bridge(cmd, mode))
         else if stream && isStreamingWriteCmd then
           // GH-496: a streaming write never recalculates, so --strict could only ever report
           // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
@@ -2591,7 +2666,15 @@ EXAMPLES:
               executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io)
                 .map(bridge(cmd, mode))
         else
+          // --stream accepted but with no O(1) path for this verb: the workbook is loaded in
+          // memory and only the write goes through the streaming backend — say so
+          val backendOnly = Warning(
+            WarningCode.STREAM_BACKEND_ONLY,
+            s"--stream has no O(1) path for ${cmd.verb}: the workbook was loaded in memory " +
+              "(a write still goes through the streaming writer)"
+          )
           for
+            _ <- warn(backendOnly).whenA(stream)
             wb <- readWorkbook(excel, filePath, readerConfig)
             sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
             result <- executeCommand(
@@ -2603,26 +2686,27 @@ EXAMPLES:
               cmd,
               policy,
               io,
-              warn
+              warn,
+              mode
             )
           yield bridge(cmd, mode)(result)
 
   /**
    * The legacy bridge from a handler's text to its payload: prose stays prose; under `--json` a
-   * verb whose own `--format json` produced JSON (`view`, `filter`) passes it through as `data`,
-   * parsed rather than rebuilt so the two spellings can never drift.
+   * verb whose payload format is JSON (`view`, `filter` — asked for with `--format json`, or the
+   * default when no format was given) passes it through as `data` AS TEXT
+   * ([[contract.Payload.Raw]]) so the two spellings can never drift, not even in a number's last
+   * digit.
    */
   private def bridge(cmd: CliCommand, mode: OutputMode)(text: String): Payload =
     (mode, cmd) match
-      case (OutputMode.Json, view: CliCommand.View) if emitsJson(view.format) =>
-        Payload.Json(ujson.read(text))
-      case (OutputMode.Json, CliCommand.Filter(_, _, _, FilterFormat.Json, _)) =>
-        Payload.Json(ujson.read(text))
+      case (OutputMode.Json, view: CliCommand.View)
+          if CliCommand.viewFormat(view.format, mode) == ViewFormat.Json =>
+        Payload.Raw(text)
+      case (OutputMode.Json, filter: CliCommand.Filter)
+          if CliCommand.filterFormat(filter.format, mode) == FilterFormat.Json =>
+        Payload.Raw(text)
       case _ => Payload.text(text)
-
-  private def emitsJson(format: ViewFormat): Boolean = format match
-    case ViewFormat.Json => true
-    case _ => false
 
   /** Execute command using streaming mode (O(1) memory); `warn` is the run's warning sink. */
   /**
@@ -2651,7 +2735,8 @@ EXAMPLES:
     filePath: Path,
     sheetNameOpt: Option[String],
     cmd: CliCommand,
-    warn: Warning => IO[Unit]
+    warn: Warning => IO[Unit],
+    mode: OutputMode
   ): IO[String] = cmd match
     case CliCommand.Search(pattern, limit, sheetsFilter) =>
       StreamingReadCommands.search(filePath, sheetNameOpt, pattern, limit, sheetsFilter)
@@ -2659,9 +2744,7 @@ EXAMPLES:
     case CliCommand.Stats(refStr) =>
       StreamingReadCommands.stats(filePath, sheetNameOpt, refStr)
 
-    case CliCommand.Bounds(scan) =>
-      if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
-      else StreamingReadCommands.boundsDimension(filePath, sheetNameOpt)
+    // bounds never reaches here: `execute` answers it from the metadata part for every mode
 
     case CliCommand.View(
           rangeStr,
@@ -2695,7 +2778,7 @@ EXAMPLES:
           rangeStr,
           showFormulas,
           limit,
-          format,
+          CliCommand.viewFormat(format, mode),
           showLabels,
           skipEmpty,
           headerRow,
@@ -2856,9 +2939,7 @@ EXAMPLES:
         case Some(outputPath) =>
           StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
-    case CliCommand.Batch(source, dryRun, _) if dryRun =>
-      batchDryRun(source, io)
-
+    // `--dry-run` never reaches here: `execute` answers it before any dispatch
     case CliCommand.Batch(source, _, _) =>
       outputOpt match
         case None =>
@@ -2889,7 +2970,8 @@ EXAMPLES:
     cmd: CliCommand,
     policy: WritePolicy = WritePolicy.default,
     io: CliIO = CliIO.system,
-    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system),
+    mode: OutputMode = OutputMode.Text
   ): IO[String] = cmd match
     // Workbook commands (these are now handled in execute() before reaching here)
     case CliCommand.Sheets(action) =>
@@ -2937,7 +3019,7 @@ EXAMPLES:
         evalFormulas,
         strict,
         limit,
-        format,
+        CliCommand.viewFormat(format, mode),
         printScale,
         showGridlines,
         showLabels,
@@ -2961,7 +3043,15 @@ EXAMPLES:
       ReadCommands.stats(wb, sheetOpt, refStr)
 
     case CliCommand.Filter(where, columns, limit, format, header) =>
-      FilterCommands.filter(wb, sheetOpt, where, columns, limit, format, header)
+      FilterCommands.filter(
+        wb,
+        sheetOpt,
+        where,
+        columns,
+        limit,
+        CliCommand.filterFormat(format, mode),
+        header
+      )
 
     case CliCommand.Eval(formulaStr, overrides) =>
       ReadCommands.eval(wb, sheetOpt, formulaStr, overrides)
@@ -2972,12 +3062,12 @@ EXAMPLES:
     // Write commands (require output)
     case CliCommand.Put(refStr, values, csvSplit, detect) =>
       requireOutput("put", outputOpt, backendOpt, stream)(
-        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect, policy)
+        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect, policy, warn)
       )
 
     case CliCommand.PutFormula(refStr, formulas) =>
       requireOutput("putf", outputOpt, backendOpt, stream)(
-        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _, policy)
+        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _, policy, warn)
       )
 
     case CliCommand.Style(
@@ -3061,12 +3151,10 @@ EXAMPLES:
         WriteCommands.ungroupCols(wb, sheetOpt, cols, _, _, _)
       )
 
-    case CliCommand.Batch(source, dryRun, _) if dryRun =>
-      batchDryRun(source, io)
-
+    // `--dry-run` never reaches here: `execute` answers it before any dispatch
     case CliCommand.Batch(source, _, _) =>
       requireOutput("batch", outputOpt, backendOpt, stream)(
-        WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy, io.stdin)
+        WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy, io.stdin, warn)
       )
 
     case CliCommand.Recalc(tables, parallel) =>
@@ -3074,13 +3162,16 @@ EXAMPLES:
       // than writing a file the caller will read as freshened (GH-468).
       if policy.noRecalc then
         IO.raiseError(
-          new Exception(
-            "recalc cannot be combined with --no-recalc/--preserve-caches (it exists to rewrite caches). Drop the flag, or drop the recalc."
+          CliException(
+            CliError.usage(
+              "recalc cannot be combined with --no-recalc/--preserve-caches (it exists to rewrite caches). Drop the flag, or drop the recalc.",
+              None
+            )
           )
         )
       else
         requireOutput("recalc", outputOpt, backendOpt, stream)(
-          WriteCommands.recalc(wb, _, _, _, tables, policy, parallel)
+          WriteCommands.recalc(wb, _, _, _, tables, policy, parallel, warn)
         )
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
@@ -3184,7 +3275,7 @@ EXAMPLES:
 
     case CliCommand.Fill(source, target, direction) =>
       requireOutput("fill", outputOpt, backendOpt, stream)(
-        WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _, _, policy)
+        WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _, _, policy, warn)
       )
 
     case CliCommand.AutoFit(columnsOpt) =>
@@ -3293,7 +3384,7 @@ EXAMPLES:
 
     case CliCommand.Copy(source, target, valuesOnly) =>
       requireOutput("copy", outputOpt, backendOpt, stream)(
-        WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _, policy)
+        WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _, policy, warn)
       )
 
     case CliCommand.ChartAdd(
@@ -3333,22 +3424,22 @@ EXAMPLES:
 
     case CliCommand.InsertRows(at, count) =>
       requireOutput("insert-rows", outputOpt, backendOpt, stream)(
-        WriteCommands.insertRows(wb, sheetOpt, at, count, _, _, _, policy)
+        WriteCommands.insertRows(wb, sheetOpt, at, count, _, _, _, policy, warn)
       )
 
     case CliCommand.DeleteRows(at, count) =>
       requireOutput("delete-rows", outputOpt, backendOpt, stream)(
-        WriteCommands.deleteRows(wb, sheetOpt, at, count, _, _, _, policy)
+        WriteCommands.deleteRows(wb, sheetOpt, at, count, _, _, _, policy, warn)
       )
 
     case CliCommand.InsertColumns(col, count) =>
       requireOutput("insert-cols", outputOpt, backendOpt, stream)(
-        WriteCommands.insertColumns(wb, sheetOpt, col, count, _, _, _, policy)
+        WriteCommands.insertColumns(wb, sheetOpt, col, count, _, _, _, policy, warn)
       )
 
     case CliCommand.DeleteColumns(col, count) =>
       requireOutput("delete-cols", outputOpt, backendOpt, stream)(
-        WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _, policy)
+        WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _, policy, warn)
       )
 
     // The inspection verbs are dispatched in execute() (typed payloads) — never reach here
@@ -3423,15 +3514,19 @@ EXAMPLES:
           CliError.usage("--in-place (-i) and --output (-o) are mutually exclusive", None)
         emit(Outcome.failed(verb, error), mode, io)
       case (Some(out), false) =>
-        runStagedOutput(out, ".xl-output-", io, mode)(outcome => outcome.outputComplete)(execute)
+        runStagedOutput(out, ".xl-output-", io, mode, verb)(outcome => outcome.outputComplete)(
+          execute
+        )
       case (None, false) => execute(None, None).flatMap(emit(_, mode, io))
       case (None, true) =>
-        runStagedOutput(file, ".xl-inplace-", io, mode)(outcome =>
+        runStagedOutput(file, ".xl-inplace-", io, mode, verb)(outcome =>
           outcome.outputComplete && outcome.exitCode == ExitCode.Success
         )(execute)
 
   /**
-   * Allocate a sibling staging path and register it with the JVM before handing it to a writer.
+   * Allocate a sibling staging path and register it with the JVM before handing it to a writer. A
+   * destination that cannot take a file (missing directory, no permission) fails here, as
+   * `IO_WRITE` naming the target ([[classifyWrite]]).
    *
    * The Resource finalizer is the normal cleanup path. `deleteOnExit` is the hard-shutdown
    * backstop: the CLI runtime deliberately stops waiting after two seconds, so a canceled writer
@@ -3450,37 +3545,58 @@ EXAMPLES:
             IO.blocking(Files.deleteIfExists(tmp)).attempt *> IO.raiseError[Path](error)
         }
       }
-    Resource.make(acquire)(tmp => IO.blocking(Files.deleteIfExists(tmp)).void)
+    Resource.make(classifyWrite(target)(acquire))(tmp =>
+      IO.blocking(Files.deleteIfExists(tmp)).void
+    )
 
   /**
    * Run one command against a staging path and publish only an explicitly complete output. What the
    * payload then says about the write (`saved`, `written`) is what this step actually did — a
    * committed run names its target, a discarded one (an `-i` strict failure) says nothing was.
+   *
+   * Nothing escapes: a staging file that cannot be allocated or a commit that fails is an
+   * `IO_WRITE` failure ([[classifyWrite]]) rendered like any other — no payload, exit 3, the run's
+   * warnings kept — never a stack trace.
    */
   private def runStagedOutput(
     target: Path,
     prefix: String,
     io: CliIO,
-    mode: OutputMode
+    mode: OutputMode,
+    verb: String
   )(
     shouldCommit: Outcome => Boolean
   )(
     execute: (Option[Path], Option[Path]) => IO[Outcome]
   ): IO[ExitCode] =
-    stagedOutput(target, prefix).use { tmp =>
-      execute(Some(tmp), Some(target)).flatMap { outcome =>
-        val commit: IO[Boolean] =
-          if shouldCommit(outcome) then
-            // A read-only command may accept the global -o flag but never touch its staging file.
-            // An XLSX is necessarily non-empty, so do not replace a target with the untouched file.
-            IO.blocking(Files.size(tmp) > 0L)
-              .ifM(replaceAtomically(tmp, target).as(true), IO.pure(false))
-          else IO.pure(false)
-        commit.flatMap { committed =>
-          emit(outcome.committed(Option.when(committed)(target.toString)), mode, io)
+    stagedOutput(target, prefix)
+      .use { tmp =>
+        execute(Some(tmp), Some(target)).flatMap { outcome =>
+          val commit: IO[Boolean] =
+            if shouldCommit(outcome) then
+              // A read-only command may accept the global -o flag but never touch its staging
+              // file. An XLSX is necessarily non-empty, so do not replace a target with the
+              // untouched file.
+              classifyWrite(target)(
+                IO.blocking(Files.size(tmp) > 0L)
+                  .ifM(replaceAtomically(tmp, target).as(true), IO.pure(false))
+              )
+            else IO.pure(false)
+          commit.attempt.flatMap {
+            case Right(committed) =>
+              emit(outcome.committed(Option.when(committed)(target.toString)), mode, io)
+            case Left(failure) =>
+              emit(
+                Outcome.failed(verb, CliError.fromThrowable(failure), outcome.warnings),
+                mode,
+                io
+              )
+          }
         }
       }
-    }
+      .handleErrorWith(failure =>
+        emit(Outcome.failed(verb, CliError.fromThrowable(failure)), mode, io)
+      )
 
   /** Replace `target` atomically when supported, with the JDK-prescribed total fallback. */
   private[cli] def replaceAtomically(source: Path, target: Path): IO[Unit] =

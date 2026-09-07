@@ -367,9 +367,7 @@ class ErrorContractSpec extends CatsEffectSuite:
       }
   }
 
-  test(
-    "an un-migrated `new Exception(msg)` still yields a well-formed INTERNAL diagnostic, exit 3"
-  ) {
+  test("a value-count mismatch is VALUE_COUNT_MISMATCH (exit 3) with today's message and a hint") {
     CliHarness
       .run(
         "-f",
@@ -391,7 +389,145 @@ class ErrorContractSpec extends CatsEffectSuite:
           run.stderr.startsWith("Error: Range A1:B2 has 4 cells but 3 values provided"),
           run.stderr
         )
-        assert(run.stderr.contains("  code: INTERNAL"), run.stderr)
+        assert(run.stderr.contains("  code: VALUE_COUNT_MISMATCH"), run.stderr)
+        assert(run.stderr.contains("  hint: provide exactly 4 values"), run.stderr)
+      }
+  }
+
+  test("a formula that does not parse is FORMULA_ERROR with the caret context, on putf and eval") {
+    for
+      putf <- CliHarness
+        .run(
+          "-f",
+          file("simple.xlsx"),
+          "-s",
+          "Data",
+          "-o",
+          file("bad-f.xlsx"),
+          "putf",
+          "A5",
+          "=SUM("
+        )
+      eval <- CliHarness.run("eval", "=SUM(")
+    yield
+      assertFailure(putf, 3, "=SUM(", "FORMULA_ERROR")
+      assert(putf.stderr.contains("    ^\nFormula error in '=SUM(':"), putf.stderr)
+      assert(putf.stderr.contains("  hint: check the formula with `xl eval`"), putf.stderr)
+      assertEquals(eval.exit, 3, eval.stderr)
+      assert(eval.stderr.contains("  code: FORMULA_ERROR"), eval.stderr)
+  }
+
+  test("a range where one cell is needed is INVALID_REFERENCE: cell, in memory and --stream") {
+    val message = "Invalid reference: cell requires a single cell, not the range A1:B2"
+    for
+      memory <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "cell", "A1:B2")
+      stream <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "--stream", "cell", "A1:B2")
+    yield
+      assertFailure(memory, 3, message, "INVALID_REFERENCE")
+      assertFailure(stream, 3, message, "INVALID_REFERENCE")
+  }
+
+  test("an unknown sheet is SHEET_NOT_FOUND with candidates on --stream search and on diff") {
+    for
+      search <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Dat", "--stream", "search", "x")
+      filter <- CliHarness
+        .run("-f", file("simple.xlsx"), "--stream", "search", "x", "--sheets", "Data,Summry")
+      diff <- CliHarness
+        .run("-f", file("simple.xlsx"), "-s", "Summry", "diff", "-g", file("changed.xlsx"))
+      badName <- CliHarness.run("-f", file("simple.xlsx"), "-s", "a[b", "--stream", "search", "x")
+    yield
+      assertFailure(search, 3, "Sheet not found: Dat. Available: Data, Summary", "SHEET_NOT_FOUND")
+      assert(search.stderr.contains("  did you mean: Data"), search.stderr)
+      assertFailure(
+        filter,
+        3,
+        "Sheet not found: Summry. Available: Data, Summary",
+        "SHEET_NOT_FOUND"
+      )
+      assert(filter.stderr.contains("  did you mean: Summary"), filter.stderr)
+      assertFailure(diff, 3, "Sheet 'Summry' not found in either workbook", "SHEET_NOT_FOUND")
+      assert(diff.stderr.contains("  did you mean: Summary"), diff.stderr)
+      assertEquals(badName.exit, 3, badName.stderr)
+      assert(badName.stderr.contains("  code: INVALID_SHEET_NAME"), badName.stderr)
+  }
+
+  test("an output directory that does not exist is IO_WRITE (exit 3), never a stack trace: put") {
+    val target = fixtures().resolve("no").resolve("such").resolve("dir").resolve("out.xlsx")
+    val message =
+      s"cannot write $target: no such directory: ${target.getParent}"
+    for
+      text <- CliHarness
+        .run("-f", file("simple.xlsx"), "-s", "Data", "-o", target.toString, "put", "A1", "1")
+      json <- CliHarness.run(
+        "-f",
+        file("simple.xlsx"),
+        "-s",
+        "Data",
+        "-o",
+        target.toString,
+        "--json",
+        "put",
+        "A1",
+        "1"
+      )
+    yield
+      assertFailure(text, 3, message, "IO_WRITE")
+      assert(
+        text.stderr.contains("  hint: check that the directory exists and is writable"),
+        text.stderr
+      )
+      assertEquals(json.exit, 3, json.stderr)
+      val e = ujson.read(json.stdout)
+      assertEquals(e("ok"), ujson.False)
+      assertEquals(e("exitCode"), ujson.Num(3))
+      assertEquals(e("verb"), ujson.Str("put"))
+      assertEquals(e("data"), ujson.Null)
+      assertEquals(e("error")("code"), ujson.Str("IO_WRITE"))
+      assertEquals(e("error")("message"), ujson.Str(message))
+      assertEquals(e("error")("location")("file"), ujson.Str(target.toString))
+      assertEquals(json.stdout.count(_ == '\n'), ujson.write(e, indent = 2).count(_ == '\n') + 1)
+      assertEquals(json.stderr, s"Error: $message\n")
+  }
+
+  test("an output directory that does not exist is IO_WRITE (exit 3), never a stack trace: new") {
+    val target = fixtures().resolve("no").resolve("such").resolve("dir").resolve("new.xlsx")
+    for
+      text <- CliHarness.run("new", target.toString)
+      json <- CliHarness.run("--json", "new", target.toString)
+    yield
+      assertEquals(text.exit, 3, text.stderr)
+      assertEquals(text.stdout, "")
+      assert(text.stderr.startsWith(s"Error: cannot write $target: "), text.stderr)
+      assert(text.stderr.contains("  code: IO_WRITE"), text.stderr)
+      assert(!text.stderr.contains("\tat "), s"no stack trace:\n${text.stderr}")
+      assertEquals(json.exit, 3, json.stderr)
+      val e = ujson.read(json.stdout)
+      assertEquals(e("error")("code"), ujson.Str("IO_WRITE"))
+      assertEquals(e("verb"), ujson.Str("new"))
+      assertEquals(e("data"), ujson.Null)
+      assertEquals(json.stderr.linesIterator.size, 1, json.stderr)
+  }
+
+  test(
+    "a `--json` that is the value of -o is a file name: the usage failure is text, not an envelope"
+  ) {
+    // the verb's positional is missing, so decline fails before anything is read or written
+    CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "-o", "--json", "put").map { run =>
+      assertFailure(run, 2, "Missing expected positional argument!", "USAGE")
+      assert(!Files.exists(fixtures().resolve("--json")), "nothing is written")
+    }
+  }
+
+  test("recalc with --no-recalc is a usage error (exit 2), not INTERNAL") {
+    CliHarness
+      .run("-f", file("simple.xlsx"), "-o", file("contradiction.xlsx"), "--no-recalc", "recalc")
+      .map { run =>
+        assertEquals(run.exit, 2, run.stderr)
+        assert(
+          run.stderr.startsWith("Error: recalc cannot be combined with --no-recalc"),
+          run.stderr
+        )
+        assert(run.stderr.contains("  code: USAGE"), run.stderr)
       }
   }
 

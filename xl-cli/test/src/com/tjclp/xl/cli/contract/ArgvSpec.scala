@@ -27,6 +27,31 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
   private def file(name: String): String = fixtures().resolve(name).toString
 
   // ---------------------------------------------------------------------------------------------
+  // wantsJson: the flag, not a value spelled like it
+
+  test("wantsJson: --json anywhere before `--` is the flag; as a global's value it is data") {
+    assertEquals(Argv.wantsJson(List("--json", "sheets")), true)
+    assertEquals(Argv.wantsJson(List("-f", "a.xlsx", "view", "A1", "--json")), true)
+    assertEquals(Argv.wantsJson(List("-o", "--json", "put", "A1", "1")), false)
+    assertEquals(Argv.wantsJson(List("--output", "--json", "put", "A1", "1")), false)
+    assertEquals(Argv.wantsJson(List("-s", "--json", "--json", "view", "A1")), true)
+    assertEquals(Argv.wantsJson(List("--file=--json", "--json", "sheets")), true)
+    assertEquals(Argv.wantsJson(List("search", "--", "--json")), false)
+    assertEquals(Argv.wantsJson(Nil), false)
+  }
+
+  test(
+    "wantsJson agrees with hoist: the mode a usage failure renders is the mode a parse would run"
+  ) {
+    val globals = Argv.globals.keys.toList
+    val gen = Gen.listOfN(6, Gen.oneOf(globals ++ List("--json", "view", "A1", "x.xlsx", "--")))
+    Prop.forAll(gen) { args =>
+      // hoisting never changes whether --json is the flag
+      Argv.wantsJson(Argv.hoist(args)) == Argv.wantsJson(args)
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // hoist: laws
   // ---------------------------------------------------------------------------------------------
 

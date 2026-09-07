@@ -13,9 +13,27 @@ A1:B1
   "verb": "view",
   "version": "<VERSION>",
   "data": {
-    "text": "|   | A    | B   |\n|---|------|-----|\n| 1 | solo | 7   |\n",
-    "saved": null,
-    "written": false
+    "sheet": "Sheet1",
+    "range": "A1:B1",
+    "rows": [
+      {
+        "row": 1,
+        "cells": [
+          {
+            "ref": "A1",
+            "type": "text",
+            "value": "solo",
+            "formatted": "solo"
+          },
+          {
+            "ref": "B1",
+            "type": "number",
+            "value": 7,
+            "formatted": "7"
+          }
+        ]
+      }
+    ]
   },
   "warnings": [
     {

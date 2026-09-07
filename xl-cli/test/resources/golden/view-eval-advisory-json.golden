@@ -16,9 +16,22 @@ A1:A1
   "verb": "view",
   "version": "<VERSION>",
   "data": {
-    "text": "|   | A     |\n|---|-------|\n| 1 | =A1+1 |\n",
-    "saved": null,
-    "written": false
+    "sheet": "Data",
+    "range": "A1:A1",
+    "rows": [
+      {
+        "row": 1,
+        "cells": [
+          {
+            "ref": "A1",
+            "type": "formula",
+            "formula": "=A1+1",
+            "value": null,
+            "formatted": ""
+          }
+        ]
+      }
+    ]
   },
   "warnings": [
     {

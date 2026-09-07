@@ -8,10 +8,18 @@ import scala.util.boundary.break
 import cats.effect.IO
 import cats.implicits.*
 import fs2.Stream
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.{CliIO, ViewFormat}
-import com.tjclp.xl.cli.contract.{CliError, CliException, Diagnostics, Warning, WarningCode}
+import com.tjclp.xl.cli.contract.{
+  CliError,
+  CliException,
+  Diagnostics,
+  ErrorCode,
+  Warning,
+  WarningCode
+}
+import com.tjclp.xl.error.XLError
 import com.tjclp.xl.cli.helpers.{Resolve, ValueParser}
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown, RendererCommon}
 import com.tjclp.xl.display.NumFmtFormatter
@@ -49,7 +57,7 @@ object StreamingReadCommands:
         .Try(pattern.r)
         .toEither
         .left
-        .map(e => new Exception(s"Invalid regex pattern: ${e.getMessage}"))
+        .map(e => CliException(CliError.usage(s"Invalid regex pattern: ${e.getMessage}", None)))
     ).flatMap { regex =>
       resolveSearchSheets(filePath, sheetNameOpt, sheetsFilter).flatMap { targetSheets =>
         val rowStream = Stream
@@ -106,18 +114,19 @@ object StreamingReadCommands:
     noStyle: Boolean
   ): IO[String] =
     for
-      // Parse the ref (may include sheet name like "Sheet1!A1")
-      parsed <- IO.fromEither(
-        RefType
-          .parse(refStr)
-          .left
-          .map(e => new Exception(s"Invalid cell reference: $e"))
-      )
+      // Parse the ref (may include sheet name like "Sheet1!A1"): INVALID_REFERENCE either way —
+      // the parser's own text, or the same shape refusal the in-memory `cell` and `deps` give
+      parsed <- IO.fromEither(Resolve.ref(refStr).left.map(CliException(_)))
       (refSheetOpt, ref) <- parsed match
-        case RefType.Cell(r) => IO.pure((None, r))
-        case RefType.QualifiedCell(sheet, r) => IO.pure((Some(sheet), r))
-        case _ =>
-          IO.raiseError(new Exception("cell command requires single cell, not range"))
+        case (qualifier, Resolve.Target.Cell(r)) => IO.pure((qualifier, r))
+        case (_, Resolve.Target.Range(range)) =>
+          IO.raiseError(
+            CliException(
+              Resolve.invalidReference(
+                s"cell requires a single cell, not the range ${range.toA1}"
+              )
+            )
+          )
 
       // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
       targetSheet <- resolveSheetName(
@@ -343,7 +352,14 @@ object StreamingReadCommands:
             .fold(StatsAccumulator.empty)(_.add(_))
             .flatMap { acc =>
               if acc.count == 0 then
-                IO.raiseError(new Exception(s"No numeric values in range ${range.toA1}"))
+                IO.raiseError(
+                  CliException(
+                    CliError.fromXLError(
+                      XLError.Other(s"No numeric values in range ${range.toA1}"),
+                      None
+                    )
+                  )
+                )
               else IO.pure(acc.format)
             }
       }
@@ -506,9 +522,13 @@ object StreamingReadCommands:
       case ViewFormat.Html | ViewFormat.Svg | ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP |
           ViewFormat.Pdf =>
         IO.raiseError(
-          new Exception(
-            s"--stream not supported for ${format.toString.toLowerCase} (needs styles). " +
-              "Remove --stream flag or use markdown/csv/json format."
+          CliException(
+            CliError(
+              ErrorCode.UNSUPPORTED_IN_STREAM,
+              s"--stream not supported for ${format.toString.toLowerCase} (needs styles). " +
+                "Remove --stream flag or use markdown/csv/json format.",
+              hint = Some("omit --stream, or use --format markdown, csv or json")
+            )
           )
         )
       case _ =>
@@ -646,15 +666,11 @@ object StreamingReadCommands:
    * the in-memory twin says).
    */
   private def parseRangeFromRef(refStr: String): IO[(Option[SheetName], CellRange, String)] =
-    IO.fromEither(
-      RefType.parse(refStr).left.map(e => new Exception(e))
-    ).map {
-      case RefType.Cell(ref) => (None, CellRange(ref, ref), s"with unqualified ref '$refStr'")
-      case RefType.Range(range) => (None, range, s"with unqualified range '$refStr'")
-      case RefType.QualifiedCell(sheet, ref) =>
-        (Some(sheet), CellRange(ref, ref), s"with unqualified ref '$refStr'")
-      case RefType.QualifiedRange(sheet, range) =>
-        (Some(sheet), range, s"with unqualified range '$refStr'")
+    IO.fromEither(Resolve.ref(refStr).left.map(CliException(_))).map {
+      case (sheet, Resolve.Target.Cell(ref)) =>
+        (sheet, CellRange(ref, ref), s"with unqualified ref '$refStr'")
+      case (sheet, Resolve.Target.Range(range)) =>
+        (sheet, range, s"with unqualified range '$refStr'")
     }
 
   /**
@@ -678,41 +694,29 @@ object StreamingReadCommands:
       )
     }
 
-  /** Resolve target sheets for streaming search, matching --sheets/--sheet semantics. */
+  /**
+   * Resolve target sheets for streaming search, matching --sheets/--sheet semantics: every name
+   * goes through [[Resolve.knownName]], so a miss is `SHEET_NOT_FOUND` with the nearest names and a
+   * name the validator refuses is `INVALID_SHEET_NAME` — the codes the in-memory twin gives.
+   */
   private def resolveSearchSheets(
     filePath: Path,
     sheetNameOpt: Option[String],
     sheetsFilter: Option[String]
   ): IO[Vector[String]] =
     excel.readMetadata(filePath).flatMap { meta =>
-      val available = meta.sheets.map(_.name.value)
-      val availableList = available.mkString(", ")
-
+      def known(name: String): IO[String] =
+        IO.fromEither(Resolve.knownName(meta, name).map(_.value).left.map(CliException(_)))
       (sheetsFilter, sheetNameOpt) match
         case (Some(filterStr), _) =>
           val names = filterStr.split(",").map(_.trim).filter(_.nonEmpty).toVector
           if names.isEmpty then
-            IO.raiseError(new Exception("--sheets requires at least one sheet name"))
-          else
-            names.traverse { name =>
-              IO.fromEither(SheetName(name).left.map(e => new Exception(e))).flatMap { sn =>
-                if available.contains(sn.value) then IO.pure(sn.value)
-                else
-                  IO.raiseError(
-                    new Exception(s"Sheet not found: $name. Available: $availableList")
-                  )
-              }
-            }
-        case (None, Some(sheetName)) =>
-          IO.fromEither(SheetName(sheetName).left.map(e => new Exception(e))).flatMap { sn =>
-            if available.contains(sn.value) then IO.pure(Vector(sn.value))
-            else
-              IO.raiseError(
-                new Exception(s"Sheet not found: $sheetName. Available: $availableList")
-              )
-          }
-        case (None, None) =>
-          IO.pure(available)
+            IO.raiseError(
+              CliException(CliError.usage("--sheets requires at least one sheet name", None))
+            )
+          else names.traverse(known)
+        case (None, Some(sheetName)) => known(sheetName).map(Vector(_))
+        case (None, None) => IO.pure(meta.sheets.map(_.name.value))
     }
 
   /** Extract cells from row that fall within range columns. */

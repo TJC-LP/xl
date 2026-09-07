@@ -3,6 +3,7 @@ package com.tjclp.xl.cli
 import java.nio.file.Path
 
 import com.tjclp.xl.addressing.RefType
+import com.tjclp.xl.cli.contract.OutputMode
 import com.tjclp.xl.formula.{DependencyGraph, FormulaParser}
 
 /**
@@ -33,9 +34,12 @@ object NameAction:
 /**
  * Command ADT representing all CLI operations.
  *
- * Named CliCommand to avoid conflict with com.monovore.decline.Command.
+ * Named CliCommand to avoid conflict with com.monovore.decline.Command. The pass-through verbs
+ * (`view`, `filter`, `diff`, `lint`) carry their `--format` as given — `None` when the user did not
+ * choose one — so the runner can pick the JSON payload format under `--json`
+ * ([[CliCommand.viewFormat]] and friends, ADR-017 §2.4).
  */
-enum CliCommand:
+enum CliCommand derives CanEqual:
   // Read-only (workbook-level)
   case Sheets(action: SheetsAction)
   case Names
@@ -49,7 +53,7 @@ enum CliCommand:
     evalFormulas: Boolean,
     strict: Boolean,
     limit: Int,
-    format: ViewFormat,
+    format: Option[ViewFormat], // None: markdown, or JSON under --json
     printScale: Boolean,
     showGridlines: Boolean,
     showLabels: Boolean,
@@ -71,7 +75,7 @@ enum CliCommand:
     where: String,
     columns: Option[String],
     limit: Int,
-    format: FilterFormat,
+    format: Option[FilterFormat], // None: markdown, or JSON under --json
     header: Boolean
   )
   // Inspect (ADR-017 §2.10, read-only): orient, find every reason a number is wrong, trace one
@@ -220,10 +224,10 @@ enum CliCommand:
   case DeleteRows(at: Int, count: Int) // Delete `count` rows starting at 1-based row `at`
   case InsertColumns(col: String, count: Int) // Insert `count` columns before column `col`
   case DeleteColumns(col: String, count: Int) // Delete `count` columns starting at column `col`
-  // Compare two workbooks (-f vs -g); exit code 0 = identical, 1 = differs, 2 = error
-  case Diff(file2: Path, format: DiffFormat)
-  // Validate package structure on the raw zip (GH-397); exit 0 = clean, 1 = findings, 2 = error
-  case Lint(format: LintFormat)
+  // Compare two workbooks (-f vs -g); exit code 0 = identical, 1 = differs, 3 = error
+  case Diff(file2: Path, format: Option[DiffFormat]) // None: markdown, or JSON under --json
+  // Validate package structure on the raw zip (GH-397); exit 0 = clean, 1 = findings, 3 = error
+  case Lint(format: Option[LintFormat]) // None: text, or JSON under --json
 
   /**
    * Whether the verb works on ONE sheet, so THE sheet rule's step 3 applies (ADR-017 §2.5: a
@@ -353,6 +357,33 @@ enum CliCommand:
     case DeleteColumns(_, _) => "delete-cols"
     case Diff(_, _) => "diff"
     case Lint(_) => "lint"
+
+object CliCommand:
+
+  /**
+   * ADR-017 §2.4: the payload format of a pass-through verb when no `--format` was given — its JSON
+   * shape under `--json`, so `data` is structured rather than a table inside `data.text`, and its
+   * text default otherwise. An explicit `--format` always wins: `--json view --format csv` still
+   * rides as `data.text`.
+   */
+  def viewFormat(chosen: Option[ViewFormat], mode: OutputMode): ViewFormat =
+    chosen.getOrElse(byMode(mode, ViewFormat.Json, ViewFormat.Markdown))
+
+  /** [[viewFormat]] for `filter`. */
+  def filterFormat(chosen: Option[FilterFormat], mode: OutputMode): FilterFormat =
+    chosen.getOrElse(byMode(mode, FilterFormat.Json, FilterFormat.Markdown))
+
+  /** [[viewFormat]] for `diff`. */
+  def diffFormat(chosen: Option[DiffFormat], mode: OutputMode): DiffFormat =
+    chosen.getOrElse(byMode(mode, DiffFormat.Json, DiffFormat.Markdown))
+
+  /** [[viewFormat]] for `lint`. */
+  def lintFormat(chosen: Option[LintFormat], mode: OutputMode): LintFormat =
+    chosen.getOrElse(byMode(mode, LintFormat.Json, LintFormat.Text))
+
+  private def byMode[A](mode: OutputMode, json: A, text: A): A = mode match
+    case OutputMode.Json => json
+    case OutputMode.Text => text
 
 /** Fill direction for the fill command */
 enum FillDirection derives CanEqual:

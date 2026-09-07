@@ -15,4 +15,5 @@ A5
 Error: =SUM(
     ^
 Formula error in '=SUM(': Unexpected end of formula at position 4: expected expression
-  code: INTERNAL
+  code: FORMULA_ERROR
+  hint: check the formula with `xl eval`

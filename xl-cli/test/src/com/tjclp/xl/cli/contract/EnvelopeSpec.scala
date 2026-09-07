@@ -10,8 +10,9 @@ import com.tjclp.xl.cli.{Cli, CliIO}
 /**
  * The global `--json` flag end to end (ADR-017 §2.4), through the in-process harness: every verb,
  * success or failure, prints exactly one envelope on stdout; `--format json` payloads ride inside
- * it unchanged; failures put one `Error: <message>` line on stderr; and every envelope validates
- * against `envelope.schema.json`.
+ * it unchanged (as text — no number is re-parsed); a pass-through verb with no `--format` uses its
+ * JSON payload format; failures put one `Error: <message>` line on stderr while signals (findings,
+ * gates) print nothing there; and every envelope validates against `envelope.schema.json`.
  */
 class EnvelopeSpec extends CatsEffectSuite:
 
@@ -31,7 +32,12 @@ class EnvelopeSpec extends CatsEffectSuite:
   private def envelope(run: CliRun): ujson.Obj =
     val parsed = ujson.read(run.stdout)
     EnvelopeSchema.assertValid(parsed)
-    assertEquals(run.stdout, ujson.write(parsed, indent = 2) + "\n", "stdout is the envelope alone")
+    // reformat, not read-then-write: the comparison must not round a 17-digit integer either
+    assertEquals(
+      run.stdout,
+      ujson.reformat(run.stdout, indent = 2) + "\n",
+      "stdout is the envelope alone"
+    )
     assertEquals(
       parsed.obj.keys.toList,
       List("ok", "exitCode", "verb", "version", "data", "warnings", "error")
@@ -47,7 +53,15 @@ class EnvelopeSpec extends CatsEffectSuite:
   // Payload pass-through and the legacy Text bridge
   // ---------------------------------------------------------------------------------------------
 
-  test("view --json: data equals what view --format json prints bare") {
+  /**
+   * The `data` block of an envelope as TEXT: `bare` reformatted to the envelope's indentation and
+   * depth — what [[Render.json]] splices — so the comparison is lexeme for lexeme, never through a
+   * ujson tree.
+   */
+  private def dataBlock(bare: String): String =
+    "  \"data\": " + ujson.reformat(bare, indent = 2).replace("\n", "\n  ") + ",\n"
+
+  test("view --json: data equals what view --format json prints bare, lexeme for lexeme") {
     val simple = file("simple.xlsx")
     for
       bare <- CliHarness.run("-f", simple, "-s", "Data", "view", "A1:C4", "--format", "json")
@@ -59,19 +73,61 @@ class EnvelopeSpec extends CatsEffectSuite:
       val e = envelope(wrapped)
       assertEquals(e("ok"), ujson.True)
       assertEquals(e("verb"), ujson.Str("view"))
-      assertEquals(e("data"), ujson.read(bare.stdout))
+      assert(wrapped.stdout.contains(dataBlock(bare.stdout)), wrapped.stdout)
       assertEquals(wrapped.stderr, "")
   }
 
-  test("view --json (markdown): the table rides as data.text with saved:null, written:false") {
+  test("view --json without --format: data is the JSON payload, as with --format json") {
+    val simple = file("simple.xlsx")
     for
-      text <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "view", "A1:B2")
-      wrapped <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "--json", "view", "A1:B2")
+      bare <- CliHarness.run("-f", simple, "-s", "Data", "view", "A1:B2", "--format", "json")
+      wrapped <- CliHarness.run("-f", simple, "-s", "Data", "--json", "view", "A1:B2")
+      text <- CliHarness.run("-f", simple, "-s", "Data", "view", "A1:B2")
+    yield
+      val e = envelope(wrapped)
+      assertEquals(e("data")("sheet"), ujson.Str("Data"))
+      assertEquals(e("data")("range"), ujson.Str("A1:B2"))
+      assert(wrapped.stdout.contains(dataBlock(bare.stdout)), wrapped.stdout)
+      // and text mode still defaults to the markdown table
+      assert(text.stdout.startsWith("|   | A"), text.stdout)
+  }
+
+  test("view --json --format csv: an explicit text format still rides as data.text") {
+    for
+      text <- CliHarness
+        .run("-f", file("simple.xlsx"), "-s", "Data", "view", "A1:B2", "--format", "csv")
+      wrapped <- CliHarness
+        .run("-f", file("simple.xlsx"), "-s", "Data", "--json", "view", "A1:B2", "--format", "csv")
+      markdown <- CliHarness
+        .run("-f", file("simple.xlsx"), "-s", "Data", "--json", "view", "A1:B2", "--format", "md")
     yield
       val e = envelope(wrapped)
       assertEquals(e("data")("text"), ujson.Str(text.stdout.stripSuffix("\n")))
       assertEquals(e("data")("saved"), ujson.Null)
       assertEquals(e("data")("written"), ujson.False)
+      assert(envelope(markdown)("data")("text").str.startsWith("|   | A"), markdown.stdout)
+  }
+
+  test("a 17-digit integer keeps every digit in data: view, eval and evala") {
+    val precise = file("precise.xlsx")
+    val digits = "12345678901234567"
+    for
+      bare <- CliHarness.run("-f", precise, "view", "A1:A1", "--format", "json")
+      view <- CliHarness.run("-f", precise, "--json", "view", "A1:A1")
+      eval <- CliHarness.run("-f", precise, "--json", "eval", "=A1")
+      constant <- CliHarness.run("--json", "eval", s"=$digits")
+      evala <- CliHarness.run("-f", precise, "--json", "evala", "=TRANSPOSE(A1:A1)")
+    yield
+      assert(bare.stdout.contains(s"\"value\": $digits,"), bare.stdout)
+      List("view" -> view, "eval" -> eval, "eval constant" -> constant, "evala" -> evala).foreach {
+        (verb, run) =>
+          assertEquals(run.exit, 0, s"$verb: ${run.stderr}")
+          envelope(run)
+          assert(run.stdout.contains(s"\"value\": $digits,"), s"$verb:\n${run.stdout}")
+          assert(!run.stdout.contains("12345678901234568"), s"$verb rounded:\n${run.stdout}")
+      }
+      assertEquals(envelope(eval)("data")("result")("type"), ujson.Str("number"))
+      assertEquals(envelope(evala)("data")("spillRange"), ujson.Str("Z1000:Z1000"))
   }
 
   test("--json never alters text-mode stdout: data.text is the text run's stdout") {
@@ -191,8 +247,7 @@ class EnvelopeSpec extends CatsEffectSuite:
       assertEquals(e("data")("saved"), ujson.Null)
       assert(e("data")("text").str.contains("NOT saved (--strict failure)"), e("data")("text").str)
       assert(e("data")("text").str.contains("STRICT FAILURE (--strict)"), e("data")("text").str)
-      assertEquals(run.stderr.linesIterator.size, 1, run.stderr)
-      assert(run.stderr.startsWith("Error: "), run.stderr)
+      assertEquals(run.stderr, "", "a gate keeps its report as data and prints no Error: line")
       assert(java.util.Arrays.equals(before, after), "-i leaves the input untouched")
   }
 
@@ -444,30 +499,55 @@ class EnvelopeSpec extends CatsEffectSuite:
       val e = envelope(differs)
       assertEquals(e("verb"), ujson.Str("diff"))
       assertEquals(e("error")("code"), ujson.Str("DIFFERENCES_FOUND"))
-      assert(e("data")("text").str.startsWith("Comparing "), e("data")("text").str)
-      assertEquals(differs.stderr.linesIterator.size, 1, differs.stderr)
+      // no --format under --json: the JSON report, exactly as --format json gives it
+      assertEquals(e("data")("identical"), ujson.False)
+      assertEquals(e("data"), envelope(typed)("data"))
+      assertEquals(differs.stderr, "", "findings are the report, not an Error: line")
 
       assertEquals(typed.exit, 1)
       assertEquals(envelope(typed)("data")("identical"), ujson.False)
+      assertEquals(typed.stderr, "")
 
       assertEquals(same.exit, 0, same.stderr)
       val s = envelope(same)
       assertEquals(s("ok"), ujson.True)
-      assert(s("data")("text").str.contains("identical"), s("data")("text").str)
+      assertEquals(s("data")("identical"), ujson.True)
   }
 
-  test("lint --json: clean is ok:true; --format json rides as data") {
+  test("diff --json --format markdown: the explicit text format rides as data.text") {
+    CliHarness
+      .run(
+        "-f",
+        file("simple.xlsx"),
+        "--json",
+        "diff",
+        "-g",
+        file("changed.xlsx"),
+        "--format",
+        "markdown"
+      )
+      .map { run =>
+        assertEquals(run.exit, 1)
+        val e = envelope(run)
+        assert(e("data")("text").str.startsWith("Comparing "), e("data")("text").str)
+        assertEquals(run.stderr, "")
+      }
+  }
+
+  test("lint --json: clean is ok:true with the JSON report as data; --format text rides as text") {
     val simple = file("simple.xlsx")
     for
-      text <- CliHarness.run("--json", "lint", simple)
+      plain <- CliHarness.run("--json", "lint", simple)
       typed <- CliHarness.run("--json", "lint", simple, "--format", "json")
+      text <- CliHarness.run("--json", "lint", simple, "--format", "text")
     yield
-      assertEquals(text.exit, 0, text.stderr)
-      val e = envelope(text)
+      assertEquals(plain.exit, 0, plain.stderr)
+      val e = envelope(plain)
       assertEquals(e("verb"), ujson.Str("lint"))
-      assertEquals(e("data")("text"), ujson.Str(s"$simple: clean (no findings)"))
+      assertEquals(e("data")("clean"), ujson.True)
+      assertEquals(e("data"), envelope(typed)("data"))
       assertEquals(typed.exit, 0, typed.stderr)
-      assertEquals(envelope(typed)("data")("clean"), ujson.True)
+      assertEquals(envelope(text)("data")("text"), ujson.Str(s"$simple: clean (no findings)"))
   }
 
   test("a missing input file is IO_READ, exit 3, with the file in error.location") {
@@ -631,7 +711,8 @@ class EnvelopeSpec extends CatsEffectSuite:
         warnings.headOption.exists(_("message").str.startsWith("Formula evaluation failed: ")),
         warnings.toString
       )
-      assert(e("data")("text").str.contains("| A"), e("data")("text").str)
+      // no --format under --json: the JSON grid, with the formula's (uncached) cell
+      assertEquals(e("data")("rows")(0)("cells")(0)("formula"), ujson.Str("=A1+1"))
       assertEquals(wrapped.stderr, "")
       assertEquals(text.exit, 0)
       assert(

@@ -157,6 +157,23 @@ object Argv:
     (hoisted ++ others).toList ++ rest
 
   /**
+   * Whether `--json` is among the flags before any `--`. A token that is the VALUE of a
+   * value-taking global is data, not a flag — `-o --json` names an output file called `--json` (the
+   * same rule [[hoist]] applies) — so this reads what decline will read: a usage failure and a
+   * successful parse of the same command line always agree on the output mode.
+   */
+  def wantsJson(args: List[String]): Boolean =
+    @tailrec
+    def scan(tokens: List[String]): Boolean = tokens match
+      case Nil => false
+      case "--json" :: _ => true
+      case token :: tail =>
+        globalOf(token) match
+          case Some((_, true)) => scan(tail.drop(1))
+          case _ => scan(tail)
+    scan(args.takeWhile(_ != "--"))
+
+  /**
    * The verb the command line is heading for: the first token that is neither a global, a global's
    * value, nor a flag of any kind (`--help`, `--version`, an unknown `--frobnicate` — decline
    * reports those), before any `--`. It need not be a known verb — [[verbs]] tells — and is `None`

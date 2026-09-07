@@ -6,6 +6,7 @@ import cats.effect.ExitCode
 import munit.FunSuite
 
 import com.tjclp.xl.cli.StrictFailure
+import com.tjclp.xl.cli.raster.RasterError
 import com.tjclp.xl.error.{XLError, XLException}
 
 class CliErrorSpec extends FunSuite:
@@ -55,6 +56,17 @@ class CliErrorSpec extends FunSuite:
     assertEquals(err.message, "Formula error in '=SUM(': unexpected end")
     assertEquals(err.hint, Some("check the formula with `xl eval`"))
     assertEquals(err.exitCode, ExitCode(3))
+  }
+
+  test("fromThrowable: a raster export with no backend is RASTERIZER_UNAVAILABLE, exit 3") {
+    val none = CliError.fromThrowable(RasterError.NoRasterizerAvailable(List("batik", "resvg")))
+    assertEquals(none.code, ErrorCode.RASTERIZER_UNAVAILABLE)
+    assert(none.message.contains("No SVG rasterizer available"), none.message)
+    assertEquals(none.exitCode, ExitCode(3))
+    val missing =
+      CliError.fromThrowable(RasterError.RasterizerNotFound("resvg", "brew install resvg"))
+    assertEquals(missing.code, ErrorCode.RASTERIZER_UNAVAILABLE)
+    assert(missing.message.contains("resvg"), missing.message)
   }
 
   test("fromThrowable: NoSuchFileException is IO_READ naming the file") {
