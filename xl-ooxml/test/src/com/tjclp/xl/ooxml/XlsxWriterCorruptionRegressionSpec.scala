@@ -226,6 +226,8 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     test(s"GH-371: explicit properties override a preserved empty row ($backendName)") {
       val source = createWorkbookWithRichRowAttributes()
       val output = Files.createTempFile(s"row-props-$backendName", ".xlsx")
+      // the row-style attribute proper — a bare `s="1` substring also matches `spans="1:5"`
+      val rowStyleAttr = """\bs="\d+"""".r
 
       try
         val updated = for
@@ -272,20 +274,23 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
         assert(row1Xml.contains("""outlineLevel="2"""), row1Xml)
         assert(row1Xml.contains("""collapsed="1"""), row1Xml)
 
-        // Preserved row metadata not emitted by applyDomainRowProps still rides through. Source
-        // row style `s` is preserved; authoring RowProperties.styleId remains deferred.
+        // Unmodelled row metadata (spans, x14ac:dyDescent) still rides through. The row style is
+        // modelled (GH-445 styleId), so a replacement RowProperties without one clears the source
+        // `s`/`customFormat` exactly as None clears `ht` (GH-558: the domain is authoritative for
+        // every modelled row attribute; nothing stale survives from the source record).
         assert(row1Xml.contains("""spans="1:5"""), row1Xml)
-        assert(row1Xml.contains("""s="1"""), row1Xml)
-        assert(row1Xml.contains("""customFormat="1"""), row1Xml)
+        assert(rowStyleAttr.findFirstIn(row1Xml).isEmpty, row1Xml)
+        assert(!row1Xml.contains("""customFormat="""), row1Xml)
         assert(row1Xml.contains("""x14ac:dyDescent="0.25"""), row1Xml)
 
-        // None actively clears modeled optional properties, while preserved metadata survives.
+        // None actively clears modeled optional properties (height AND the GH-445 row style),
+        // while unmodelled metadata survives.
         assert(row2Xml.contains("""hidden="1"""), row2Xml)
         assert(!row2Xml.contains("""ht="""), row2Xml)
         assert(!row2Xml.contains("""customHeight="""), row2Xml)
         assert(row2Xml.contains("""spans="1:5"""), row2Xml)
-        assert(row2Xml.contains("""s="1"""), row2Xml)
-        assert(row2Xml.contains("""customFormat="1"""), row2Xml)
+        assert(rowStyleAttr.findFirstIn(row2Xml).isEmpty, row2Xml)
+        assert(!row2Xml.contains("""customFormat="""), row2Xml)
         assert(row2Xml.contains("""x14ac:dyDescent="0.3"""), row2Xml)
 
         // A default RowProperties explicitly clears every modeled source attribute on an empty
@@ -669,7 +674,10 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
         "xl/styles.xml",
         """<?xml version="1.0"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><name val="Calibri"/></font>
+  </fonts>
   <fills count="2">
     <fill><patternFill patternType="none"/></fill>
     <fill><patternFill patternType="gray125"/></fill>
@@ -677,12 +685,15 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
   <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
   <cellXfs count="2">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
-    <xf numFmtId="0" fontId="0" fillId="1" borderId="0" applyFill="1"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyFont="1"/>
   </cellXfs>
 </styleSheet>"""
       )
 
-      // Worksheet with rich row attributes
+      // Worksheet with rich row attributes. The row style xf 1 is a genuine (bold) style: the
+      // reader lifts `<row s=>` into RowProperties.styleId (GH-445) and the writer re-emits it from
+      // the model (GH-558), so an xf the style parser folds into the default (the bare gray125
+      // placeholder fill) could not round-trip through the row model — exactly as for cells.
       writeEntry(
         out,
         "xl/worksheets/sheet1.xml",

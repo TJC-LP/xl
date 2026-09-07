@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+names
+## exit
+2
+## stdout
+## stderr
+Error: Unexpected argument: names
+  code: USAGE
+  hint: run `xl names --help` for the usage
+usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …

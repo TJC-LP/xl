@@ -335,7 +335,7 @@ class CfCommandSpec extends FunSuite:
       """[{"op":"cf","range":"A1:A10","rule":"cellIs:greaterThan:100","bold":true,"bg":"#FFC7CE"}]"""
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: cf op applies rule with dxf and auto-priority") {

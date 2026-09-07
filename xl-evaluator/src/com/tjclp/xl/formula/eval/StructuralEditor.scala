@@ -11,7 +11,7 @@ import com.tjclp.xl.error.{XLError, XLException, XLResult}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.parser.FormulaParser
-import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
+import com.tjclp.xl.formula.printer.{FormulaOps, FormulaPrinter, FormulaShifter}
 
 /**
  * GH-128 / GH-129: workbook-level structural editing (insert/delete rows & columns) WITH formula
@@ -136,21 +136,17 @@ object StructuralEditor:
       _ <- definedNameRefusal(wb, target, delta)
     yield applyEdit(wb, target, isRow, at, delta, preserveUntouchedCaches)
 
-  /** An unknown reference expression must not survive an edit with silently changed meaning. */
+  /**
+   * An unknown reference expression must not survive an edit with silently changed meaning. The
+   * text gate is `FormulaOps.mentionsSheet` — the one qualifier scan the renamer (GH-559) shares.
+   */
   private def definedNameRefusal(wb: Workbook, target: SheetName, delta: Int): XLResult[Unit] =
-    val bare = java.util.regex.Pattern.quote(target.value)
-    val quoted = java.util.regex.Pattern.quote("'" + target.value.replace("'", "''") + "'")
-    val qualifier = (s"(?iu)(?<![\\p{L}\\p{N}_.\\\\'\\]])(?:$bare|$quoted)\\s*!").r
-    def namesTarget(segment: String): Boolean =
-      segment.split("\"", -1).iterator.zipWithIndex.exists { (part, index) =>
-        index % 2 == 0 && qualifier.findFirstIn(part).isDefined
-      }
     val unsupported =
       if delta == 0 then None
       else
         wb.metadata.definedNames.find { name =>
           splitTopLevelCommas(name.formula).exists(segment =>
-            namesTarget(segment) && FormulaParser.parse(segment).isLeft
+            FormulaOps.mentionsSheet(segment, target) && FormulaParser.parse(segment).isLeft
           )
         }
     unsupported
@@ -676,9 +672,10 @@ object StructuralEditor:
    * Split refersTo text on TOP-LEVEL commas (the multi-range union). Commas inside quoted sheet
    * names (`'It''s, ok'!A1`), string literals (`"a,b"`) or any `()`/`{}` nesting (function
    * arguments, array literals) do not split. Doubled quotes toggle twice — net unchanged, and no
-   * comma is consumed between the pair.
+   * comma is consumed between the pair. Shared with [[SheetRenamer]] (GH-559), which rewrites
+   * defined names segment by segment the same way.
    */
-  private def splitTopLevelCommas(s: String): Vector[String] =
+  private[eval] def splitTopLevelCommas(s: String): Vector[String] =
     @tailrec
     def loop(
       i: Int,

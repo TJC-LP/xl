@@ -99,13 +99,14 @@ object AppearanceOps:
           .filter(sc => sc < 10 || sc > 400)
           .map(sc => s"Scale must be 10-400, got: $sc")
           .toLeft(())
+        // GH-463: 0 is Excel's "automatic" (as many pages as needed on that axis)
         _ <- fitToWidth
-          .filter(_ < 1)
-          .map(n => s"fit-to-width must be >= 1, got: $n")
+          .filter(_ < 0)
+          .map(n => s"fit-to-width must be >= 0 (0 = automatic), got: $n")
           .toLeft(())
         _ <- fitToHeight
-          .filter(_ < 1)
-          .map(n => s"fit-to-height must be >= 1, got: $n")
+          .filter(_ < 0)
+          .map(n => s"fit-to-height must be >= 0 (0 = automatic), got: $n")
           .toLeft(())
       yield
         val current = sheet.pageSetup.getOrElse(PageSetup.default)

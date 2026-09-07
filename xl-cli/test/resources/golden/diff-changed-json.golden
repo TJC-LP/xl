@@ -1,0 +1,61 @@
+## args
+-f
+<DIR>/simple.xlsx
+--json
+diff
+-g
+<DIR>/changed.xlsx
+--format
+json
+## exit
+1
+## stdout
+{
+  "ok": false,
+  "exitCode": 1,
+  "verb": "diff",
+  "version": "<VERSION>",
+  "data": {
+    "identical": false,
+    "sheetsAdded": [],
+    "sheetsRemoved": [],
+    "sheets": [
+      {
+        "name": "Data",
+        "added": [],
+        "removed": [],
+        "changed": [
+          {
+            "ref": "B1",
+            "before": {
+              "value": "10",
+              "formula": null
+            },
+            "after": {
+              "value": "11",
+              "formula": null
+            },
+            "styleChanged": false
+          }
+        ],
+        "mergesAdded": [],
+        "mergesRemoved": [],
+        "commentsAdded": [],
+        "commentsRemoved": [],
+        "commentsChanged": [],
+        "hyperlinksAdded": [],
+        "hyperlinksRemoved": [],
+        "hyperlinksChanged": []
+      }
+    ]
+  },
+  "warnings": [],
+  "error": {
+    "code": "DIFFERENCES_FOUND",
+    "message": "Differences found: <DIR>/simple.xlsx vs <DIR>/changed.xlsx",
+    "hint": null,
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr

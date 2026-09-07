@@ -1,0 +1,15 @@
+## args
+-f
+<DIR>/simple.xlsx
+view
+A1:B2
+-s
+Data
+## exit
+0
+## stdout
+|   | A     | B   |
+|---|-------|-----|
+| 1 | Hello | 10  |
+| 2 | World | 20  |
+## stderr

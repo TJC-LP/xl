@@ -2,6 +2,10 @@ package com.tjclp.xl.cli
 
 import java.nio.file.Path
 
+import com.tjclp.xl.addressing.RefType
+import com.tjclp.xl.cli.contract.OutputMode
+import com.tjclp.xl.formula.{DependencyGraph, FormulaParser}
+
 /**
  * Sheets subcommand actions.
  *
@@ -18,6 +22,23 @@ object SheetsAction:
   /** Show a hidden sheet (make it visible) */
   case class Show(name: String) extends SheetsAction
 
+/** `deps --direction`: which side of the cell's graph to walk (default `Both`). */
+enum Direction derives CanEqual:
+  case Precedents, Dependents, Both
+
+  /** The flag value as the agent typed it, and as `--json` echoes it. */
+  def flag: String = this match
+    case Precedents => "precedents"
+    case Dependents => "dependents"
+    case Both => "both"
+
+/**
+ * `deps --depth`: a hop budget (`Hops(1)` when the flag is absent) or the whole reachable graph.
+ */
+enum Depth derives CanEqual:
+  case Hops(n: Int)
+  case All
+
 /** Named-range (defined name) operations: add/replace and remove. */
 sealed trait NameAction derives CanEqual
 object NameAction:
@@ -30,9 +51,12 @@ object NameAction:
 /**
  * Command ADT representing all CLI operations.
  *
- * Named CliCommand to avoid conflict with com.monovore.decline.Command.
+ * Named CliCommand to avoid conflict with com.monovore.decline.Command. The pass-through verbs
+ * (`view`, `filter`, `diff`, `lint`) carry their `--format` as given — `None` when the user did not
+ * choose one — so the runner can pick the JSON payload format under `--json`
+ * ([[CliCommand.viewFormat]] and friends, ADR-017 §2.4).
  */
-enum CliCommand:
+enum CliCommand derives CanEqual:
   // Read-only (workbook-level)
   case Sheets(action: SheetsAction)
   case Names
@@ -46,7 +70,7 @@ enum CliCommand:
     evalFormulas: Boolean,
     strict: Boolean,
     limit: Int,
-    format: ViewFormat,
+    format: Option[ViewFormat], // None: markdown, or JSON under --json
     printScale: Boolean,
     showGridlines: Boolean,
     showLabels: Boolean,
@@ -68,9 +92,13 @@ enum CliCommand:
     where: String,
     columns: Option[String],
     limit: Int,
-    format: FilterFormat,
+    format: Option[FilterFormat], // None: markdown, or JSON under --json
     header: Boolean
   )
+  // Inspect (ADR-017 §2.10, read-only): orient, find every reason a number is wrong, trace one
+  case Describe(full: Boolean) // metadata only unless --full (then the loaded WorkbookSummary)
+  case Audit(failOnFindings: Boolean) // exit 1 AUDIT_FINDINGS when asked and the book is dirty
+  case Deps(ref: String, direction: Direction, depth: Depth) // deps <ref> [--direction] [--depth]
   // Analyze
   case Eval(formula: String, overrides: List[String])
   case EvalArray(formula: String, targetRef: Option[String], overrides: List[String])
@@ -110,7 +138,9 @@ enum CliCommand:
   case GroupCols(cols: String, level: Int, collapsed: Boolean)
   case UngroupRows(rows: String)
   case UngroupCols(cols: String)
-  case Batch(source: String, dryRun: Boolean = false) // "-" for stdin or file path
+  // "-" for stdin or file path; --dry-run validates without writing, --schema prints the
+  // document's JSON Schema (ADR-017 §2.13) — both skip the read and the write
+  case Batch(source: String, dryRun: Boolean = false, schema: Boolean = false)
   // Whole-workbook recalculation: cache every formula's value (GH-352).
   // `tables` additionally seeds data-table interior caches (GH-442); default stays pinned-cache.
   // `parallel` evaluates independent formula regions on N threads (GH-520); None = sequential.
@@ -207,10 +237,166 @@ enum CliCommand:
   case DeleteRows(at: Int, count: Int) // Delete `count` rows starting at 1-based row `at`
   case InsertColumns(col: String, count: Int) // Insert `count` columns before column `col`
   case DeleteColumns(col: String, count: Int) // Delete `count` columns starting at column `col`
-  // Compare two workbooks (-f vs -g); exit code 0 = identical, 1 = differs, 2 = error
-  case Diff(file2: Path, format: DiffFormat)
-  // Validate package structure on the raw zip (GH-397); exit 0 = clean, 1 = findings, 2 = error
-  case Lint(format: LintFormat)
+  // Compare two workbooks (-f vs -g); exit code 0 = identical, 1 = differs, 3 = error
+  case Diff(file2: Path, format: Option[DiffFormat]) // None: markdown, or JSON under --json
+  // Validate package structure on the raw zip (GH-397); exit 0 = clean, 1 = findings, 3 = error
+  case Lint(format: Option[LintFormat]) // None: text, or JSON under --json
+
+  /**
+   * Whether the verb works on ONE sheet, so THE sheet rule's step 3 applies (ADR-017 §2.5: a
+   * single-sheet book auto-selects). False for the AllSheets verbs — `search` (without `-s`),
+   * `sheets`, `names`, `diff`, `lint`, `describe`, `audit` — and for the verbs that need no sheet
+   * at all: `recalc`, the sheet-structure verbs and `name`.
+   */
+  def takesSheet: Boolean = this match
+    case Sheets(_) | Names | Search(_, _, _) | Describe(_) | Audit(_) | Recalc(_, _) |
+        AddSheet(_, _, _) | RemoveSheet(_) | RenameSheet(_, _) | MoveSheet(_, _, _, _) |
+        CopySheet(_, _) | Name(_) | Diff(_, _) | Lint(_) =>
+      false
+    case _ => true
+
+  /**
+   * The ref strings the verb targets — what THE sheet rule's step 1 reads for a qualifier. `Nil`
+   * for a verb with no ref argument (`bounds`, `row`, `unfreeze`, …) or a formula one (`eval`).
+   */
+  def targetRefs: List[String] = this match
+    case v: View => List(v.range)
+    case Cell(ref, _) => List(ref)
+    case Stats(ref) => List(ref)
+    case Deps(ref, _, _) => List(ref)
+    case p: Put => List(p.ref)
+    case PutFormula(ref, _) => List(ref)
+    case s: Style => List(s.range)
+    case Merge(range) => List(range)
+    case Unmerge(range) => List(range)
+    case AddComment(ref, _, _) => List(ref)
+    case RemoveComment(ref) => List(ref)
+    case Clear(range, _, _, _) => List(range)
+    case Fill(source, target, _) => List(source, target)
+    case Sort(range, _, _) => List(range)
+    case Freeze(ref) => List(ref)
+    case AutoFilterOp(range, _) => range.toList
+    case c: CfAdd => List(c.range)
+    case c: ChartAdd => c.data :: c.at :: c.categories.toList
+    case AddImage(_, at, _) => List(at)
+    case Copy(source, target, _) => List(source, target)
+    case _ => Nil
+
+  /**
+   * Whether the run's default sheet (THE sheet rule's steps 2–3) can matter for this verb: it takes
+   * a sheet ([[takesSheet]]) and does not name its own — every target ref qualified, an `import`
+   * into `--new-sheet`, or an `eval` whose formula references only qualified cells needs none, so a
+   * single-sheet book's auto-select is not announced for them.
+   */
+  def usesDefaultSheet: Boolean = this match
+    case i: Import => i.newSheet.isEmpty
+    case i: ImportMarkdown => i.newSheet.isEmpty
+    case Eval(formula, overrides) =>
+      overrides.nonEmpty || FormulaParser
+        .parse(formula)
+        .toOption
+        .forall(DependencyGraph.containsUnqualifiedCellReferences)
+    case _ =>
+      takesSheet && (targetRefs.isEmpty || targetRefs.exists(ref =>
+        RefType.parse(ref).toOption.exists {
+          case RefType.Cell(_) | RefType.Range(_) => true
+          case _ => false
+        }
+      ))
+
+  /**
+   * The subcommand path as typed, joined by a space (`"sheets hide"`, `"cf add"`): the `verb` of
+   * the `--json` envelope (ADR-017 §2.4). `sheets list` and the bare `sheets` are both `"sheets"`.
+   */
+  def verb: String = this match
+    case Sheets(SheetsAction.List(_)) => "sheets"
+    case Sheets(SheetsAction.Hide(_, _)) => "sheets hide"
+    case Sheets(SheetsAction.Show(_)) => "sheets show"
+    case Names => "names"
+    case Name(NameAction.Add(_, _)) => "name add"
+    case Name(NameAction.Remove(_)) => "name rm"
+    case Bounds(_) => "bounds"
+    case _: View => "view"
+    case Cell(_, _) => "cell"
+    case Search(_, _, _) => "search"
+    case Stats(_) => "stats"
+    case _: Filter => "filter"
+    case Describe(_) => "describe"
+    case Audit(_) => "audit"
+    case Deps(_, _, _) => "deps"
+    case Eval(_, _) => "eval"
+    case EvalArray(_, _, _) => "evala"
+    case _: Put => "put"
+    case PutFormula(_, _) => "putf"
+    case _: Style => "style"
+    case _: RowOp => "row"
+    case _: ColOp => "col"
+    case GroupRows(_, _, _) => "group-rows"
+    case GroupCols(_, _, _) => "group-cols"
+    case UngroupRows(_) => "ungroup-rows"
+    case UngroupCols(_) => "ungroup-cols"
+    case _: Batch => "batch"
+    case Recalc(_, _) => "recalc"
+    case _: Import => "import"
+    case _: ImportMarkdown => "import-md"
+    case AddSheet(_, _, _) => "add-sheet"
+    case RemoveSheet(_) => "remove-sheet"
+    case RenameSheet(_, _) => "rename-sheet"
+    case MoveSheet(_, _, _, _) => "move-sheet"
+    case CopySheet(_, _) => "copy-sheet"
+    case Merge(_) => "merge"
+    case Unmerge(_) => "unmerge"
+    case AddComment(_, _, _) => "comment"
+    case RemoveComment(_) => "remove-comment"
+    case Clear(_, _, _, _) => "clear"
+    case Fill(_, _, _) => "fill"
+    case AutoFit(_) => "autofit"
+    case Sort(_, _, _) => "sort"
+    case Freeze(_) => "freeze"
+    case Unfreeze => "unfreeze"
+    case SheetViewOp(_, _, _) => "sheet-view"
+    case TabColorOp(_, _) => "tab-color"
+    case AutoFilterOp(_, _) => "autofilter"
+    case _: PageSetupOp => "page-setup"
+    case _: HeaderFooterOp => "header-footer"
+    case _: CfAdd => "cf add"
+    case CfList => "cf list"
+    case _: ChartAdd => "chart add"
+    case AddImage(_, _, _) => "add-image"
+    case Copy(_, _, _) => "copy"
+    case InsertRows(_, _) => "insert-rows"
+    case DeleteRows(_, _) => "delete-rows"
+    case InsertColumns(_, _) => "insert-cols"
+    case DeleteColumns(_, _) => "delete-cols"
+    case Diff(_, _) => "diff"
+    case Lint(_) => "lint"
+
+object CliCommand:
+
+  /**
+   * ADR-017 §2.4: the payload format of a pass-through verb when no `--format` was given — its JSON
+   * shape under `--json`, so `data` is structured rather than a table inside `data.text`, and its
+   * text default otherwise. An explicit `--format` always wins: `--json view --format csv` still
+   * rides as `data.text`.
+   */
+  def viewFormat(chosen: Option[ViewFormat], mode: OutputMode): ViewFormat =
+    chosen.getOrElse(byMode(mode, ViewFormat.Json, ViewFormat.Markdown))
+
+  /** [[viewFormat]] for `filter`. */
+  def filterFormat(chosen: Option[FilterFormat], mode: OutputMode): FilterFormat =
+    chosen.getOrElse(byMode(mode, FilterFormat.Json, FilterFormat.Markdown))
+
+  /** [[viewFormat]] for `diff`. */
+  def diffFormat(chosen: Option[DiffFormat], mode: OutputMode): DiffFormat =
+    chosen.getOrElse(byMode(mode, DiffFormat.Json, DiffFormat.Markdown))
+
+  /** [[viewFormat]] for `lint`. */
+  def lintFormat(chosen: Option[LintFormat], mode: OutputMode): LintFormat =
+    chosen.getOrElse(byMode(mode, LintFormat.Json, LintFormat.Text))
+
+  private def byMode[A](mode: OutputMode, json: A, text: A): A = mode match
+    case OutputMode.Json => json
+    case OutputMode.Text => text
 
 /** Fill direction for the fill command */
 enum FillDirection derives CanEqual:

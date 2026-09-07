@@ -269,7 +269,7 @@ class GroupingCommandSpec extends FunSuite:
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
     assertEquals(result.toOption.get.ops.size, 2)
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: ungroup-rows and ungroup-cols parse without warnings") {
@@ -281,14 +281,14 @@ class GroupingCommandSpec extends FunSuite:
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
     assertEquals(result.toOption.get.ops.size, 2)
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: group-rows unknown property warns") {
     val json = """[{"op": "group-rows", "rows": "1:3", "depth": 2}]"""
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
-    assert(result.toOption.get.warnings.exists(_.contains("depth")), result.toString)
+    assert(result.toOption.get.warnings.exists(_.message.contains("depth")), result.toString)
   }
 
   // ========== batch ops: apply ==========
@@ -394,13 +394,14 @@ class GroupingCommandSpec extends FunSuite:
     }
   }
 
-  test("batch: grouping ops require --sheet") {
+  test("batch: grouping ops require --sheet on a multi-sheet book") {
     val ops = BatchParser
       .parseBatchJson("""[{"op": "group-rows", "rows": "1:2"}]""")
       .toOption
       .get
       .ops
-    val wb = Workbook(Sheet("Data"))
+    // ADR-017 §2.5: a single-sheet book would auto-select; two sheets make the default required
+    val wb = Workbook(Sheet("Data"), Sheet("Other"))
     val result = BatchParser.applyBatchOperations(wb, None, ops).attempt.unsafeRunSync()
     assert(result.isLeft)
     assert(

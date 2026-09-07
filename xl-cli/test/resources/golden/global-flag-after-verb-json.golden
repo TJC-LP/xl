@@ -1,0 +1,60 @@
+## args
+-f
+<DIR>/simple.xlsx
+--json
+view
+A1:B2
+-s
+Data
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "view",
+  "version": "<VERSION>",
+  "data": {
+    "sheet": "Data",
+    "range": "A1:B2",
+    "rows": [
+      {
+        "row": 1,
+        "cells": [
+          {
+            "ref": "A1",
+            "type": "text",
+            "value": "Hello",
+            "formatted": "Hello"
+          },
+          {
+            "ref": "B1",
+            "type": "number",
+            "value": 10,
+            "formatted": "10"
+          }
+        ]
+      },
+      {
+        "row": 2,
+        "cells": [
+          {
+            "ref": "A2",
+            "type": "text",
+            "value": "World",
+            "formatted": "World"
+          },
+          {
+            "ref": "B2",
+            "type": "number",
+            "value": 20,
+            "formatted": "20"
+          }
+        ]
+      }
+    ]
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

@@ -1,0 +1,25 @@
+## args
+--json
+viwe
+## exit
+2
+## stdout
+{
+  "ok": false,
+  "exitCode": 2,
+  "verb": "",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "UNKNOWN_VERB",
+    "message": "unknown verb 'viwe'",
+    "hint": "run `xl --help` for the list of verbs",
+    "candidates": [
+      "view"
+    ],
+    "location": null
+  }
+}
+## stderr
+Error: unknown verb 'viwe'

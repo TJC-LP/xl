@@ -280,6 +280,44 @@ object JsonRenderer:
     if cols.nonEmpty then
       sb.append(s"""  "hiddenCols": [${cols.map(c => s"\"$c\"").mkString(", ")}],\n""")
 
+  /**
+   * One value as the `{type, value, formatted}` triple the `view --format json` cells carry, as
+   * JSON TEXT for the number-carrying `--json` payloads (`eval`): the same type names, raw-value
+   * rules and display formatting as [[renderCell]] — a whole number prints every digit, never a
+   * `Double` — and a formula projects its cached value (`null`/`""` when uncached).
+   */
+  def valueJson(value: CellValue, numFmt: NumFmt): String =
+    def obj(typeStr: String, raw: String, formatted: String): String =
+      s"""{"type": "$typeStr", "value": $raw, "formatted": ${escapeJsonString(formatted)}}"""
+    value match
+      case CellValue.Formula(_, cached, _) =>
+        cached.fold(obj("formula", "null", "")) { cv =>
+          obj("formula", renderCellValueFromCellValue(cv, numFmt), formattedText(cv, numFmt))
+        }
+      case CellValue.Text(_) =>
+        obj("text", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
+      case CellValue.Number(_) =>
+        obj("number", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
+      case CellValue.Bool(_) =>
+        obj("boolean", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
+      case CellValue.DateTime(_) =>
+        obj("datetime", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
+      case CellValue.Error(_) =>
+        obj("error", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
+      case CellValue.RichText(_) =>
+        obj("richtext", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
+      case CellValue.Empty => obj("empty", "null", "")
+
+  /** The display text of a non-formula value, as `formatted` carries it. */
+  private def formattedText(value: CellValue, numFmt: NumFmt): String = value match
+    case CellValue.Text(s) => s
+    case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
+    case CellValue.Error(err) => err.toExcel
+    case CellValue.RichText(rt) => rt.toPlainText
+    case CellValue.Empty => ""
+    case CellValue.Formula(_, _, _) => ""
+    case CellValue.Number(_) | CellValue.DateTime(_) => NumFmtFormatter.formatValue(value, numFmt)
+
   private def renderCell(
     ref: ARef,
     cell: Cell,
@@ -389,11 +427,11 @@ object JsonRenderer:
     s"""{"ref": "${ref.toA1}", "type": "empty", "value": null, "formatted": ""}"""
 
   /**
-   * Escape a string for JSON output.
+   * Escape a string for JSON output (quotes included).
    *
    * Handles special characters per JSON spec (RFC 8259).
    */
-  private def escapeJsonString(s: String): String =
+  def escapeJsonString(s: String): String =
     val sb = new StringBuilder
     sb.append('"')
     s.foreach {

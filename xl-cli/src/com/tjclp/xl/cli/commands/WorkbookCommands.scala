@@ -33,15 +33,50 @@ object WorkbookCommands:
     IO.pure(Markdown.renderSheetList(sheetStats))
 
   /**
+   * The full listing as data (`sheets --stats --json`): `[{name, index, state, dimension, cells,
+   * formulas}]`, `index` 1-based in workbook order, `state` one of `visible`/`hidden`/`veryHidden`,
+   * `dimension` the used range or `null` for an empty sheet.
+   */
+  def sheetsData(wb: Workbook): ujson.Value =
+    ujson.Arr.from(wb.sheets.zipWithIndex.map { (s, idx) =>
+      ujson.Obj(
+        "name" -> ujson.Str(s.name.value),
+        "index" -> ujson.Num(idx + 1),
+        "state" -> ujson.Str(wb.getSheetState(s.name).getOrElse("visible")),
+        "dimension" -> s.usedRange.fold[ujson.Value](ujson.Null)(r => ujson.Str(r.toA1)),
+        "cells" -> ujson.Num(s.cells.size),
+        "formulas" -> ujson.Num(s.cells.values.count(_.isFormula))
+      )
+    })
+
+  /**
    * List all sheets with dimensions only (quick mode - no cell data).
    *
    * Uses lightweight metadata reader for instant response on large files. Shows: name, dimension
    * (from worksheet metadata or streaming scan if missing), visibility state.
-   *
-   * When dimension metadata is missing from the worksheet XML, falls back to streaming scan to
-   * compute accurate bounds (O(rows) time, O(1) memory per sheet).
    */
   def sheetsQuick(filePath: Path): IO[String] =
+    sheetInfos(filePath).map(Markdown.renderSheetListQuick)
+
+  /** The quick listing as data (`sheets --json`): `[{name, index, state, dimension}]`. */
+  def sheetsQuickData(filePath: Path): IO[ujson.Value] =
+    sheetInfos(filePath).map { infos =>
+      ujson.Arr.from(infos.zipWithIndex.map { (info, idx) =>
+        ujson.Obj(
+          "name" -> ujson.Str(info.name.value),
+          "index" -> ujson.Num(idx + 1),
+          "state" -> ujson.Str(info.state.getOrElse("visible")),
+          "dimension" -> info.dimension.fold[ujson.Value](ujson.Null)(r => ujson.Str(r.toA1))
+        )
+      })
+    }
+
+  /**
+   * Sheet metadata with every dimension filled in. When dimension metadata is missing from the
+   * worksheet XML, falls back to a streaming scan to compute accurate bounds (O(rows) time, O(1)
+   * memory per sheet); a sheet the scan finds empty keeps `dimension = None`.
+   */
+  private def sheetInfos(filePath: Path): IO[Vector[SheetInfo]] =
     excel.readMetadata(filePath).flatMap { meta =>
       // Find sheets with missing dimensions
       val missingIndices = meta.sheets.zipWithIndex.collect {
@@ -50,7 +85,7 @@ object WorkbookCommands:
 
       if missingIndices.isEmpty then
         // All sheets have dimensions from metadata - fast path
-        IO.pure(Markdown.renderSheetListQuick(meta.sheets))
+        IO.pure(meta.sheets)
       else
         // Scan missing dimensions sequentially (to avoid multiple zip file handles)
         missingIndices
@@ -61,14 +96,13 @@ object WorkbookCommands:
             // Build map of index -> scanned dimension
             val boundsMap = scannedBounds.toMap
             // Update sheets with scanned dimensions
-            val updatedSheets = meta.sheets.zipWithIndex.map { case (info, idx) =>
+            meta.sheets.zipWithIndex.map { case (info, idx) =>
               if info.dimension.isEmpty then
                 boundsMap.get(idx).flatten match
                   case Some(range) => info.copy(dimension = Some(range))
                   case None => info // Empty sheet, keep as unknown
               else info
             }
-            Markdown.renderSheetListQuick(updatedSheets)
           }
     }
 
@@ -127,6 +161,26 @@ object WorkbookCommands:
           s"$paddedName  ${dn.formula}$scope"
         }
         IO.pure(lines.mkString("\n"))
+
+  /**
+   * Defined names as data (`names --json`): `[{name, refersTo, scope, hidden}]`, every name
+   * including hidden ones (the text listing omits those), `scope` the sheet name for a sheet-scoped
+   * name and `null` for a workbook-scoped one.
+   */
+  def namesData(filePath: Path): IO[ujson.Value] =
+    excel.readMetadata(filePath).map { meta =>
+      ujson.Arr.from(meta.definedNames.map { dn =>
+        val scope = dn.localSheetId.fold[ujson.Value](ujson.Null) { idx =>
+          ujson.Str(meta.sheets.lift(idx).map(_.name.value).getOrElse(s"sheet $idx"))
+        }
+        ujson.Obj(
+          "name" -> ujson.Str(dn.name),
+          "refersTo" -> ujson.Str(dn.formula),
+          "scope" -> scope,
+          "hidden" -> ujson.Bool(dn.hidden)
+        )
+      })
+    }
 
   /**
    * List defined names using lightweight metadata reader (instant for any file size).

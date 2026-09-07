@@ -1,0 +1,30 @@
+## args
+-f
+<DIR>/circular.xlsx
+-i
+--strict
+--json
+recalc
+## exit
+1
+## stdout
+{
+  "ok": false,
+  "exitCode": 1,
+  "verb": "recalc",
+  "version": "<VERSION>",
+  "data": {
+    "text": "Recalculated 0 formulas; 1 error (Data!A1: Formula error in 'A1+1': Circular reference)\nNOT saved (--strict failure): <DIR>/circular.xlsx left untouched\nSTRICT FAILURE (--strict): 1 formula evaluation error(s)",
+    "saved": null,
+    "written": false
+  },
+  "warnings": [],
+  "error": {
+    "code": "RECALC_GATE",
+    "message": "STRICT FAILURE (--strict): 1 formula evaluation error(s)",
+    "hint": null,
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr

@@ -1,0 +1,31 @@
+## args
+-f
+<DIR>/simple.xlsx
+--json
+sheets
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "sheets",
+  "version": "<VERSION>",
+  "data": [
+    {
+      "name": "Data",
+      "index": 1,
+      "state": "visible",
+      "dimension": "A1:C4"
+    },
+    {
+      "name": "Summary",
+      "index": 2,
+      "state": "visible",
+      "dimension": null
+    }
+  ],
+  "warnings": [],
+  "error": null
+}
+## stderr

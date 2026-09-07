@@ -35,9 +35,9 @@ export PATH="$HOME/.local/bin:$PATH"
 ## Quick Reference
 
 ```bash
-# Global flags (used with all commands)
+# Global flags (accepted anywhere on the command line, before or after the verb)
 -f, --file <path>     # Input file (required for most commands)
--s, --sheet <name>    # Sheet to operate on (required for unqualified ranges)
+-s, --sheet <name>    # Sheet to operate on (a qualified ref wins; a single-sheet book needs neither)
 -o, --output <path>   # Output file for mutations
 -i, --in-place        # Edit file in place (same as -o matching -f)
 --stream              # O(1) memory streaming for large files (search/stats/bounds/view + writes)
@@ -47,12 +47,15 @@ export PATH="$HOME/.local/bin:$PATH"
 --preserve-caches     # Same flag, spelled for the intent
 --strict              # Write verbs: exit 1 when the write's recalculation reports problems
 
+# Exit codes: 0 ok · 1 findings/gate (diff, lint, --strict; never a failure) · 2 usage · 3 failed
+# Results on stdout; errors (Error: <message> + code:/hint: lines) and warnings on stderr
+
 # Read-only operations
 xl -f model.xlsx sheets                    # List all sheets
 xl -f model.xlsx names                     # List defined names (named ranges)
 xl -f model.xlsx -s "P&L" bounds           # Show used range
 xl -f model.xlsx -s "P&L" view A1:D20      # View range as markdown
-xl -f model.xlsx cell B5                   # Get single cell details (sheet auto-detected if unambiguous)
+xl -f model.xlsx cell B5                   # Get single cell details (single-sheet books auto-select for every verb)
 xl -f model.xlsx search "Revenue"          # Find cells by content (all sheets)
 xl -f model.xlsx -s "P&L" stats B1:B100    # Numeric statistics for a range
 xl -f model.xlsx -s "P&L" eval "=SUM(B1:B10)"   # Evaluate formula (what-if)
@@ -67,12 +70,37 @@ xl -f model.xlsx -s S1 eval "=B1*1.1" --with "B1=100"      # Evaluate with tempo
 
 # No file needed
 xl new report.xlsx --sheet Data --sheet Summary   # Create a blank workbook
-xl functions                                       # List all 108 supported functions
+xl functions                                       # List the supported functions (--json: typed rows)
 xl rasterizers                                     # List available PNG/PDF backends
+xl schema                                          # Every verb: what it needs, how it exits, its batch twin
+xl schema --json                                   # The whole contract as one JSON document (see below)
+xl batch --schema                                  # JSON Schema of the batch document (every op, field, alias)
 ```
 
-> Global flags must come **before** the verb: `xl -f x.xlsx --strict recalc`, never
-> `xl -f x.xlsx recalc --strict` (decline reports `Unexpected argument: recalc`).
+> **The binary documents itself.** `xl <verb> --help` is the reference for a verb's own flags;
+> `xl schema` lists every verb; `xl schema --json` publishes the contract — exit codes, error and
+> warning codes, global flags, verbs, the batch JSON Schema, the function registry and the `--json`
+> envelope's schema — and the pages under [`generated/`](generated/cli-verbs.md) are rendered from
+> it and CI-gated, so they cannot drift from the code.
+
+> **Global flags go anywhere.** `xl -f x.xlsx --strict recalc` and `xl -f x.xlsx recalc --strict`
+> are the same command line; so are `xl -f f -s Data view A1:B2` and `xl view A1:B2 -f f -s Data`.
+> The one exception is `view --strict`: after `view` it is view's own `--eval` gate, not the write
+> gate. After `--` every token is data and nothing is hoisted: `xl -f a.xlsx search -- --json`
+> searches for the text `--json` (without the `--` the flag is hoisted and `search` is left with no
+> pattern: exit 2). An unknown verb exits 2 with `code: UNKNOWN_VERB` and a `did you mean:` line;
+> any other wrong command line exits 2 with a one-line usage, the parser's error and
+> `run \`xl <verb> --help\``.
+
+> **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
+> (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`/`--sheet` (for a batch op, its `sheet` key
+> comes first); otherwise the only sheet of a single-sheet book (under `--json` a
+> `SHEET_AUTOSELECTED` warning says so); otherwise `SHEET_REQUIRED`, exit 3, with the sheet names as
+> candidates. `search` (without `-s`), `sheets`, `names`, `diff`, `lint`, `describe` and `audit` read
+> the whole book instead (a `-s` given to `describe`, `names` or `sheets` is still validated: a name
+> that is not a sheet is `SHEET_NOT_FOUND`, exit 3). Streaming reads on a multi-sheet book without a
+> sheet are `SHEET_REQUIRED` too (they no longer default to the first sheet), and qualified refs
+> work under `--stream` writes.
 
 ### Cache posture on writes (`--no-recalc` / `--preserve-caches`)
 
@@ -168,72 +196,34 @@ These warnings also fail `--strict`.
 
 | Category | Commands | Purpose |
 |----------|----------|---------|
-| **Info** (no `-f`) | `functions`, `rasterizers`, `new` | Capability listing, blank workbook |
+| **Info** (no `-f`) | `functions`, `rasterizers`, `schema`, `new` | Capability listing, the contract itself, blank workbook |
 | **Navigate** | `sheets`, `bounds`, `names` | Find your way around |
 | **Explore** | `view`, `cell`, `search`, `stats` | Read data incrementally |
 | **Analyze** | `eval`, `evala` | What-if formula evaluation (scalar + array) |
+| **Inspect** | `describe`, `audit`, `deps` | Orient in one call, find every reason a number is wrong, trace one cell's precedents/dependents |
 | **Mutate cells** | `put`, `putf`, `style`, `fill`, `clear`, `copy`, `sort`, `merge`, `unmerge`, `comment`, `remove-comment`, `batch`, `import` | Make changes (require `-o` or `-i`) |
 | **Rows/columns** | `row`, `col`, `autofit`, `insert-rows`, `delete-rows`, `insert-cols`, `delete-cols` | Sizing, visibility, structural editing |
 | **Sheets & view** | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide/show`, `freeze`, `unfreeze`, `name` | Workbook structure |
 | **Appearance & print** | `sheet-view`, `tab-color`, `page-setup`, `header-footer` | Deliverable finish: gridlines, zoom, tab colors, print setup, footers |
 | **Conditional formatting** | `cf add`, `cf list` | Highlight rules, color scales, data bars, top-N, text matches |
 
+The categories are a hand-written orientation; the complete, CI-gated verb list is the generated
+[`generated/cli-verbs.md`](generated/cli-verbs.md).
+
 ### Command Summary
 
-| Command | Arguments | Description |
-|---------|-----------|-------------|
-| `functions` | | List all 108 supported Excel functions (no `-f` needed) |
-| `rasterizers` | | List available SVG-to-raster backends (no `-f` needed) |
-| `new` | `<output> [--sheet <name>]...` | Create a blank xlsx file (no `-f` needed) |
-| `sheets` | `[list\|hide <name> [--very]\|show <name>]` | List sheets (default) or hide/show one |
-| `names` | | List defined names (named ranges) |
-| `name` | `add <name> <refers-to>` \| `rm <name>` | Manage named ranges (requires `-o`) |
-| `bounds` | `[--scan]` | Show used range of current sheet |
-| `view` | `<range> [flags]` | Render range (markdown/json/csv/html/svg/png/jpeg/webp/pdf) |
-| `cell` | `<ref> [--no-style]` | Get single cell details |
-| `search` | `<pattern> [--limit n] [--sheets a,b]` | Find cells matching pattern (regex, all sheets by default) |
-| `stats` | `<range>` | Statistics for numeric values in range |
-| `filter` | `--where <pred> [--columns A,C:E] [--limit n] [--format md\|csv\|json] [--header]` | Show rows matching a predicate (read-only) |
-| `eval` | `<formula> [--with overrides]` | Evaluate formula without modifying |
-| `evala` | `<formula> [--at <ref>] [--with overrides]` | Evaluate array formula; display or spill result grid |
-| `put` | `<ref\|range> <value...> [--csv] [--no-detect]` | Write value(s) to cell or range (requires `-o`) |
-| `putf` | `<ref\|range> <formula...>` | Write formula(s); single formula + range drags with `$` anchors (requires `-o`) |
-| `style` | `<range> [options]` | Apply styling (requires `-o`) |
-| `row` | `<n> [--height pt] [--hide\|--show]` | Set row properties (requires `-o`) |
-| `col` | `<letter\|A:F> [--width n] [--auto-fit] [--hide\|--show]` | Set column properties (requires `-o`) |
-| `autofit` | `[--columns A:F]` | Auto-fit column widths from content (requires `-o`) |
-| `fill` | `<source> <target> [--right]` | Fill cells with source value/formula (requires `-o`) |
-| `clear` | `<range> [--all\|--styles\|--comments]` | Clear cell contents/styles/comments (requires `-o`) |
-| `copy` | `<source> <target> [--values-only]` | Copy range with formula adjustment (requires `-o`) |
-| `sort` | `<range> --by <col> [options]` | Sort rows by one or more columns (requires `-o`) |
-| `merge` | `<range>` | Merge cells (requires `-o`) |
-| `unmerge` | `<range>` | Unmerge cells (requires `-o`) |
-| `comment` | `<ref> <text> [--author name]` | Add cell comment (requires `-o`) |
-| `remove-comment` | `<ref>` | Remove cell comment (requires `-o`) |
-| `freeze` | `<ref>` | Freeze panes at cell (requires `-o`) |
-| `unfreeze` | | Remove freeze panes (requires `-o`) |
-| `sheet-view` | `[--gridlines on\|off] [--zoom n] [--tab-selected on\|off]` | Set sheet view options (requires `-o`) |
-| `tab-color` | `<color>` \| `--clear` | Set/clear the sheet tab color (requires `-o`) |
-| `page-setup` | `[--orientation portrait\|landscape] [--scale n] [--fit-to-width n] [--fit-to-height n] [--fit-to-page on\|off]` | Set print page setup (requires `-o`) |
-| `header-footer` | `[--odd-header s] [--odd-footer s] [--even-\*] [--first-\*] [--different-odd-even] [--different-first]` | Set print header/footer text (requires `-o`) |
-| `cf add` | `--range <range> --rule <dsl> [format flags]` | Add a conditional-formatting rule (requires `-o`) |
-| `cf list` | | List conditional-formatting rules on the sheet (read-only) |
-| `chart add` | `--type <t> --data <range> --at <ref> [options]` | Add a chart built from sheet ranges (requires `-o`) |
-| `add-image` | `<image-file> --at <ref> [--size WxH]` | Embed an image (requires `-o`) |
-| `import` | `<csv-file> [start-ref] [options]` | Import CSV with type detection (requires `-o`) |
-| `import-md` | `<md-file\|-> [--start ref] [options]` | Import GFM markdown table with type detection (requires `-o`) |
-| `add-sheet` | `<name> [--after s] [--before s]` | Add new empty sheet (requires `-o`) |
-| `remove-sheet` | `<name>` | Remove sheet (requires `-o`) |
-| `rename-sheet` | `<name> <new-name>` | Rename sheet (requires `-o`) |
-| `move-sheet` | `<name> [--to idx] [--after s] [--before s]` | Move sheet to new position (requires `-o`) |
-| `copy-sheet` | `<name> <new-name>` | Copy sheet to new name (requires `-o`) |
-| `insert-rows` | `<at-row> [count]` | Insert rows; shifts cells, rewrites formulas (requires `-o`) |
-| `delete-rows` | `<at-row> [count]` | Delete rows; `#REF!` on lost references (requires `-o`) |
-| `insert-cols` | `<at-col> [count]` | Insert columns; shifts cells, rewrites formulas (requires `-o`) |
-| `delete-cols` | `<at-col> [count]` | Delete columns; `#REF!` on lost references (requires `-o`) |
-| `batch` | `<file\|-> [--dry-run]` | Apply multiple operations from JSON (requires `-o`; `--dry-run` validates without a file) |
-| `diff` | `-g <file2> [--format markdown\|json]` | Compare two workbooks; exit 0 identical, 1 differs, 2 error |
-| `lint` | `[<file>] [--format text\|json]` | Validate package structure (child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, `<f>` canon); positional file or `-f`; exit 0 clean, 1 findings, 2 error |
+The verb table is generated from the binary and CI-gated: **[`generated/cli-verbs.md`](generated/cli-verbs.md)**
+lists every verb in `xl --help` order with what it needs (`-f`, one sheet, `-o`/`-i`, `--stream`),
+the exit codes it can end with, its batch twin and the release it is documented from — the same
+rows `xl schema` prints and `xl schema --json` publishes under `verbs`. Each verb's own arguments
+and flags are in `xl <verb> --help` and in the details below. Companion pages, all generated:
+[`generated/exit-codes.md`](generated/exit-codes.md), [`generated/error-codes.md`](generated/error-codes.md)
+(every `code:` value with its exit code, plus the warning codes),
+[`generated/batch-ops.md`](generated/batch-ops.md) (every batch op, field, alias and example) and
+[`generated/functions.md`](generated/functions.md) (every formula function with its arity, argument
+slots and flags). Regenerate them with
+`XL_UPDATE_DOCS=1 ./mill xl-cli.test.testOnly com.tjclp.xl.cli.contract.DocsGenSpec`; a stale page
+fails `DocsGenSpec`, the same discipline as the golden corpus.
 
 ---
 
@@ -366,6 +356,54 @@ When no backend is available, raster exports fail with an error naming the probe
 
 ---
 
+### `xl functions [--json]`
+
+List every formula function the evaluator supports (no `-f` needed). Text mode prints the names in
+columns with the count; `--json` prints typed rows — `{name, minArgs, maxArgs, args, returnsDate,
+returnsTime, dynamicDeps, specialForm}`, `maxArgs` `null` for a variadic function — for every
+registry function plus `LET`, the parser-level special form (`specialForm: true`). The generated
+page [`generated/functions.md`](generated/functions.md) is rendered from exactly these rows.
+
+```bash
+xl functions                                  # names in columns, "Supported Excel Functions (N total)"
+xl --json functions | jq '.data[] | select(.dynamicDeps) | .name'   # INDIRECT, OFFSET
+```
+
+---
+
+### `xl schema [--json]`
+
+The CLI contract from the binary itself (no `-f` needed). Text mode prints the verb table: every
+verb in `xl --help` order with `NEEDS` (`-f` an input workbook; `-s` ONE sheet; `-o|-i` an output;
+`--stream` accepted), `EXIT` (the exit codes the verb can end with), `BATCH TWIN` (the batch op
+that makes the same edit), `SINCE` (the release the verb is documented from) and a one-line
+summary, preceded by the global flags and the exit-code table.
+
+`--json` publishes the whole contract as one document — the envelope's `data`:
+
+| key | contents |
+|---|---|
+| `version` | the `xl` version |
+| `exitCodes` | `[{code, meaning}]` — the four exit codes |
+| `errorCodes` | `[{code, exit}]` — every `code:` value an error can carry (CLI codes, then domain codes) with the exit code it implies |
+| `warningCodes` | `["READER_WARNING", "TRUNCATED", ...]` |
+| `globals` | `[{name, short, takesValue, doc}]` — the global flags (`--file`/`-f`, ...) |
+| `verbs` | `[{path, summary, needs: {file, sheet, output, streaming}, exit, batchTwin, since}]` — `path` is the subcommand path (`["sheets", "hide"]`), joined by a space it is the envelope's `verb` |
+| `batchOps` | the batch document's JSON Schema — what `xl batch --schema` prints alone |
+| `functions` | the `xl functions --json` rows |
+| `envelope` | the JSON Schema of the `--json` envelope itself |
+
+```bash
+xl schema                                     # the verb table
+xl --json schema | jq -r '.data.verbs[] | select(.needs.output) | .path | join(" ")'   # every write verb
+xl --json schema | jq '.data.errorCodes[] | select(.exit == 1)'                          # the gates and findings
+```
+
+The pages under [`generated/`](generated/cli-verbs.md) are rendered from this document by
+`DocsGenSpec` and compared with the checked-in files on every test run.
+
+---
+
 ### `xl cell <ref>`
 
 Get complete information about a single cell.
@@ -390,6 +428,153 @@ Cell: A1
 Type: Text
 Value: Revenue
 ```
+
+`Dependencies` lists the cells the formula reads — single references exactly, ranges as their
+occupied cells — and `Dependents` the formulas that read the cell, by name or through a range that
+contains it (an empty cell inside a summed range still names the sum). Empty cells inside a range
+and ranges over a sheet the workbook does not have are not listed (since 0.20.0; before, `SUM(A:A)`
+listed 1,048,576 entries). Same-sheet refs are unqualified, cross-sheet ones carry the sheet. For
+more than one hop, use `deps`.
+
+---
+
+### `xl describe [--full]`
+
+Orient in a workbook with one call. Without `--full` it reads metadata only — instant for any file
+size and identical under `--stream` — listing every sheet with its visibility state and dimension,
+every defined name (hidden ones flagged) and the date system. `--full` loads the book and adds the
+per-sheet counts an agent needs before reading a cell, plus the calcPr settings. A workbook verb:
+`-s` does not narrow the card, but it is validated — a name that is not a sheet is
+`SHEET_NOT_FOUND`, exit 3.
+
+```bash
+xl -f model.xlsx describe
+xl -f model.xlsx --stream describe                    # same card, O(1) memory
+xl -f model.xlsx describe --full
+xl -f model.xlsx --json describe --full | jq '.data.sheets[] | {name, formulas, uncachedFormulas}'
+```
+
+**Output**:
+```
+Sheets (3):
+  1  Sheet1  A1:A3
+       cells 3, formulas 1, merged 1, comments 1, freeze B2
+  2  Sheet2  A1:B1
+       cells 2, formulas 2
+  3  Hidden  A1:A1  hidden
+       cells 1, formulas 0, hidden rows 1
+Defined names (2):
+  Total   Sheet1!$A$3
+  Secret  Sheet1!$A$1  (hidden)
+Date system: 1900
+Calculation: default
+```
+(The indented count lines and `Calculation:` appear only with `--full`; only the facets a sheet has
+are printed — merges, comments, hyperlinks, freeze, tab color, autofilter, tables, charts, pictures,
+cf, dv, hidden rows/cols.)
+
+**JSON** (`--json`): `data` = `{sheets: [{name, index, state, dimension}], definedNames: [{name,
+refersTo, scope, hidden}], date1904}`; `--full` adds to each sheet `cells, formulas,
+uncachedFormulas, mergedRanges, comments, hyperlinks, freeze, tabColor, autoFilter, tables, charts,
+pictures, conditionalFormats, dataValidations, hiddenRows, hiddenCols` and the top-level `calcPr`
+(`{iterativeCalculation, maxIterations, maxChange, calcMode, fullCalcOnLoad, calcId}` or `null`).
+`--stream describe --full` is refused (`UNSUPPORTED_IN_STREAM`, exit 2): the counts need the book.
+
+---
+
+### `xl audit [--fail-on-findings]`
+
+Every reason a number can be wrong, bucketed in one pass over the loaded workbook.
+
+**Findings** (they make the book dirty): `Error values` — a cached Excel error on a formula or a
+bare error cell; `Uncached formulas` — no cached value (`xl recalc` fills them); `Unparseable
+formulas` — this evaluator cannot parse them, with the parser's diagnostic in context; `Cycles` —
+circular references (one line per strongly connected component; a note, not a finding, when the
+workbook's calcPr enables iterative calculation — `iterativeCycles` in the JSON report, so
+`cycles` holds only findings); `Unresolved names` — formulas
+reading a defined name the graph cannot resolve. **Notes** (reported, never findings): `Volatile`
+(TODAY/NOW/RAND/RANDBETWEEN cells), `Dynamic` (INDIRECT/OFFSET readers), `External references`
+(other-workbook refs, whose caches are pinned), `Calculation` (the file's calcPr, when it has one).
+
+Text mode prints the headline, then one section per non-empty bucket, findings before notes, every
+list in workbook order (sheet, row, column). `-s <sheet>` restricts the cell buckets to one sheet (a
+cycle stays when any member is on it). Exit 0 regardless of findings; `--fail-on-findings` exits 1
+with code `AUDIT_FINDINGS` on a dirty book and keeps the report (text mode prints it with no
+`Error:` line; `--json` keeps it as `data`), so a CI lane can gate on it. Not available under
+`--stream`.
+
+```bash
+xl -f model.xlsx audit
+xl -f model.xlsx -s Summary audit
+xl -f model.xlsx --json audit --fail-on-findings | jq '.data.errorCells, .data.cycles'
+```
+
+**Output**:
+```
+Audit: 6 findings
+Error values (1):
+  Calc!A1  #DIV/0!
+Uncached formulas (2):
+  Calc!B1
+  Notes!A1
+Unparseable formulas (1):
+  Calc!H1
+    UNSUPPORTED(1)
+    ^
+    Formula error in 'UNSUPPORTED(1)': Unknown function 'UNSUPPORTED' at position 0
+Cycles (1):
+  Calc!E1, Calc!F1
+Unresolved names (1):
+  Calc!I1
+Volatile (1):
+  Calc!C1
+Dynamic (1):
+  Calc!D1
+External references (1):
+  Calc!G1
+Calculation: iterative (100 iterations, max change 0.001)
+```
+A clean book prints `Audit: clean`.
+
+**JSON** (`--json`): `data` = `{clean, findings, errorCells: [{ref, error}], uncachedFormulas: [ref],
+unparseable: [{ref, message}], volatile: [ref], dynamic: [ref], cycles: [[ref]], externalRefs: [ref],
+unresolvedReaders: [ref], calcPr}` — refs as `Sheet!A1` (quoted when the name needs it).
+
+---
+
+### `xl deps <ref> [--direction precedents|dependents|both] [--depth n|all]`
+
+Trace one cell hop by hop. **Precedents** are the cells the formula reads — single references
+exactly, ranges as their occupied cells (a full-column reference never expands to a million rows);
+**dependents** are the formulas that read the cell, by name or through a range that contains it.
+Layer k holds the cells exactly k hops away that no earlier layer listed; each node carries its
+depth, formula and value. `--depth` defaults to `1`; `all` (or `0`) follows the whole cone (a cycle
+ends the walk once every member is seen). The ref follows the sheet rule: a qualified ref names the sheet,
+else `-s`, else the only sheet of a single-sheet book (`SHEET_REQUIRED` otherwise); a range is
+refused. Not available under `--stream`.
+
+```bash
+xl -f model.xlsx deps Summary!B4                                   # both directions, one hop
+xl -f model.xlsx -s Data deps B4 --direction precedents --depth 3
+xl -f model.xlsx --json deps Summary!B4 --direction dependents --depth all | jq '.data.dependents[].ref'
+```
+
+**Output**:
+```
+Cell: Sheet2!A1
+Formula: =Sheet1!A1*2
+Value: 10
+Precedents (depth 1): 1
+  1  Sheet1!A1  5
+Dependents (depth 1): 1
+  1  Sheet2!B1  =A1+1 -> 11
+```
+Each node line is `<depth>  <ref>  <value>` for a constant and `<depth>  <ref>  <formula> -> <cached
+value>` for a formula (`(uncached)` when it has none); an empty side prints `(none)`.
+
+**JSON** (`--json`): `data` = `{ref, formula, value, direction, depth, precedents, dependents}` —
+`depth` is the number or `"all"`, each side is `[{ref, depth, formula, value}]` or `null` when the
+direction was not requested; `formula` is `null` for a constant, `value` a formula's cached value.
 
 ---
 
@@ -527,9 +712,11 @@ Write value(s) to a cell or range.
 Use `--no-detect` to preserve all positional values as text, including numbers and ISO date-like
 strings.
 
-**Negative numbers**: use the `--value` flag (a leading `-` is parsed as a flag):
+**Negative numbers**: use the `--value` flag (a leading `-` is parsed as a flag), or put the value
+after `--`, which makes every following token data:
 ```bash
 xl -f input.xlsx -s S1 -o output.xlsx put A1 --value "-500"
+xl -f input.xlsx -s S1 -o output.xlsx put A1 -- -500
 ```
 
 **Example**:
@@ -1063,8 +1250,10 @@ Apply multiple operations atomically from JSON input.
 |-----|------|----------|-------------|
 | `file` | string | No (default `-`) | JSON file path or `-` for stdin |
 | `--dry-run` | flag | No | Validate JSON and show a summary without writing (works without `-f`/`-o`) |
+| `--schema` | flag | No | Print the document's JSON Schema (draft 2020-12) and exit — every op, field, alias and example; works without `-f`/`-o` |
 
-**JSON Schema**:
+**The document**: a JSON array of operations, applied in order, atomically — nothing is written
+unless every op applies:
 
 ```json
 [
@@ -1076,41 +1265,41 @@ Apply multiple operations atomically from JSON input.
   {"op": "rowheight", "row": 1, "height": 30},
   {"op": "comment", "ref": "A1", "text": "Revenue figure", "author": "Analyst"},
   {"op": "autofit", "columns": "A:D"},
-  {"op": "add-sheet", "name": "Summary", "after": "Sheet1"}
+  {"op": "add-sheet", "name": "Summary", "after": "Sheet1"},
+  {"op": "put", "sheet": "Summary", "ref": "A1", "value": "Total"}
 ]
 ```
 
-**Supported Operations**:
+**Supported operations**: the op table is generated from the registry that also parses the
+document — **[`generated/batch-ops.md`](generated/batch-ops.md)** lists every op with its
+fields, types, required flags, aliases, example, streamability and CLI twin, and
+`xl batch --schema` prints the same as a JSON Schema. An unknown `op` is `BATCH_OP_UNKNOWN`
+(exit 2) with a `did you mean`; an op that fails to apply is `BATCH_OP_FAILED` with
+`location.opIndex` (1-based).
 
-| Operation | Required Fields | Optional Fields | Description |
-|-----------|-----------------|-----------------|-------------|
-| `put` | `ref`, `value` | `format`, `values`, `detect` | Write value to cell |
-| `putf` | `ref`, `value` | `from`, `values`, `format` | Write formula(s) to cell(s); `format` applies a number format to the formula cell(s) |
-| `style` | `range` | styling options | Apply cell styling |
-| `merge` | `range` | | Merge cells |
-| `unmerge` | `range` | | Unmerge cells |
-| `colwidth` | `col`, `width` | | Set column width |
-| `rowheight` | `row`, `height` | | Set row height |
-| `comment` | `ref`, `text` | `author` | Add cell comment |
-| `remove-comment` | `ref` | | Remove cell comment |
-| `hyperlink` | `ref` | `target` | Set cell hyperlink (omit `target` to clear) |
-| `clear` | `range` | `all`, `styles`, `comments` | Clear cell contents/styles/comments |
-| `col-hide` | `col` | | Hide column |
-| `col-show` | `col` | | Show column |
-| `row-hide` | `row` | | Hide row |
-| `row-show` | `row` | | Show row |
-| `autofit` | | `columns` | Auto-fit column widths |
-| `add-sheet` | `name` | `after` | Add new sheet |
-| `rename-sheet` | `from`, `to` | | Rename sheet |
-| `freeze` | `ref` | | Freeze panes at cell |
-| `unfreeze` | | | Remove freeze panes |
-| `copy` | `source`, `target` | `valuesOnly` | Copy range with formula adjustment |
-| `sheet-view` | | `gridlines`, `zoom`, `tabSelected` | Set sheet view options (operates on `--sheet`) |
-| `tab-color` | | `color`, `clear` | Set (`color`) or clear (`clear: true`) the sheet tab color |
-| `page-setup` | | `orientation`, `scale`, `fitToWidth`, `fitToHeight`, `fitToPage` | Set print page setup |
-| `header-footer` | | `oddHeader`, `oddFooter`, `evenHeader`, `evenFooter`, `firstHeader`, `firstFooter`, `differentOddEven`, `differentFirst` | Set print header/footer text |
-| `cf` | `range`, `rule` | `bold`, `italic`, `underline`, `strike`, `bg`, `fg` | Add a conditional-formatting rule (see `cf add`) |
-| `chart` | `type`, `data`, `at` | `categories`, `seriesNames`, `seriesColors`, `title`, `legend`, `grouping` | Add a chart (mirrors `chart add`) |
+**Rules every op follows**:
+
+- **The `sheet` key.** Every op except `add-sheet`/`rename-sheet` accepts `"sheet"`: the sheet
+  for its unqualified refs. THE sheet rule applies per op — a sheet-qualified ref
+  (`"Summary!A1"`) wins, then the op's `sheet`, then `-s`/`--sheet`, then the only sheet of a
+  single-sheet book, else `SHEET_REQUIRED`. A `rename-sheet` of the batch's default sheet
+  retargets the ops that follow it.
+- **Property names** are accepted in camelCase or kebab-case (`fitToWidth` / `fit-to-width`),
+  and a few properties have aliases honoured silently: `format` ↔ `numFormat`, `from` ↔ `anchor`,
+  `target` ↔ `url`, `align` ↔ `halign`, `value` ↔ `formula` (on `putf`). An unknown property is an
+  `UNKNOWN_PROPERTY` warning (stderr in text mode, `warnings[]` under `--json`), never an error.
+- **`format` on `put`/`putf` is explicit** and REPLACES the cell's number format, whatever it was
+  ([#560](https://github.com/TJC-LP/xl/issues/560)). A format *detected* from a string value
+  (currency, percent, ISO date) is only a hint: it applies when the cell's format is General and
+  leaves an existing format alone.
+- **`rename-sheet` rewrites references**: every formula, defined name, conditional-formatting
+  rule and chart series that named the old sheet now names the new one, on every sheet.
+- **Under `--stream`** the streamable ops (see the table) are applied with identical semantics —
+  `style` merges, `format` replaces, a `put` with both `value` and `values` is refused — and an
+  op's `sheet` or a qualified ref may name the streamed worksheet; any other op, or one whose
+  resolved sheet differs from the streamed worksheet, is refused **by index before any byte is
+  written** (`UNSUPPORTED_IN_STREAM`, exit 2), and one that fails to apply is `BATCH_OP_FAILED`
+  with its 1-based index, as in memory. Streaming never recalculates and never degrades an op.
 
 **Native JSON Types** (recommended):
 
@@ -1163,8 +1352,9 @@ Apply multiple operations atomically from JSON input.
 
 **Unrecognized format strings** (GH-475): a string that is neither a known name nor Excel
 format-code-shaped is a typo far more often than a code.
-- On the put/putf `format` hint it is **ignored, with a warning on stderr** naming the string and
-  listing the known names (`format: "curency"` → warning, cell stays General).
+- On the put/putf `format` hint it is **ignored, with a `FORMAT_HINT_IGNORED` warning** (stderr in
+  text mode, `warnings[]` under `--json`) naming the string and listing the known names
+  (`format: "curency"` → warning, cell stays General).
 - On the `style` op's `numFormat` it is still **applied as a custom code** (Excel, not xl, is the
   authority on codes) but warns the same way.
 
@@ -1241,7 +1431,10 @@ Works with all three variants (single, dragging, explicit `values`):
 | `borderColor` | string | Border color (hex) |
 | `replace` | boolean | Replace style instead of merge (default: false) |
 
-**Note**: Use `align` for horizontal alignment, not `halign`. Unknown properties are ignored with a warning.
+**Note**: `align` is the canonical horizontal-alignment key (`halign` is accepted as its alias);
+`numFormat` and `format` are aliases on `style` too. Unknown properties are ignored with an
+`UNKNOWN_PROPERTY` warning. The complete, generated field list is
+[`generated/batch-ops.md`](generated/batch-ops.md#style).
 
 **Examples**:
 
@@ -1288,7 +1481,9 @@ Compare two workbooks and report differences. The first file comes from the glob
 | `-g, --file2` | path | Yes | — | Second file to compare against |
 | `--format` | string | No | markdown | `markdown` (human) or `json` (stable schema) |
 
-**Exit codes** (diff-tool convention): `0` identical, `1` differences found, `2` error.
+**Exit codes**: `0` identical, `1` differences found, `3` error (unreadable file, sheet filter
+matching neither workbook, ...) — the error goes to stderr with a `code:` line (see
+[Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
 
 **What is compared** (per sheet, refs in A1, row-major order):
 - **Changed cells** — value, formula text, and resolved style (`styleChanged` boolean). Formula cells compare by formula text; cached values are derived and ignored. Styles compare resolved formatting (style id lookup), so equal formatting under different ids is not a difference.
@@ -1375,8 +1570,9 @@ xl -f deliverable.xlsx lint && echo "safe to send"
   (Excel rebuilds it on save), or rebuild it. Both xl writers, in-memory and `--stream`, drop
   the source chain on every write that rewrites a worksheet, so xl output never carries one
 
-**Exit codes** (diff-tool convention): `0` no findings · `1` findings reported · `2` error
-(unreadable file, malformed core part).
+**Exit codes**: `0` no findings · `1` findings reported · `3` error (unreadable file, malformed
+core part) · `2` usage (no file, or a file given both ways) — errors go to stderr with a `code:`
+line (see [Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
 
 `xl lint` is read-only — it never repairs or rewrites the file. xl's own output always
 lints clean; use it as a pre-send self-check in agent pipelines that splice or post-process
@@ -1398,22 +1594,136 @@ Always include explicit references in output:
 | 2 | COGS     | $400K   |
 ```
 
-### Error Format
+### Errors, warnings and exit codes
+
+Results go to **stdout**; diagnostics go to **stderr**. On any failure stdout is empty, so a
+pipeline that captures stdout never has to parse an error out of a result. An error is rendered
+as today's `Error: <message>` line followed by indented, machine-stable fields:
 
 ```
-Error: <ErrorType>
-Location: <Context>
-Details: <Human-readable explanation>
-Suggestion: <How to fix>
+Error: <message>                  human text, unchanged from earlier releases
+  code: <CODE>                    stable SCREAMING_SNAKE code (see below)
+  did you mean: <a>, <b>          only when there are close candidates (sheet names, ...)
+  hint: <text>                    only when the error has an obvious next step
 ```
 
 Example:
 ```
-Error: CircularReference
-Location: B10
-Details: Formula =A10+B10 creates cycle: B10 → A10 → B10
-Suggestion: Use a different cell reference to break the cycle
+$ xl -f book.xlsx -s Dat view A1:B2
+Error: Sheet not found: Dat. Available: Data, Summary
+  code: SHEET_NOT_FOUND
+  did you mean: Data
+  hint: list sheets with `xl -f <file> sheets`
 ```
+
+Warnings are `Warning[<CODE>]: <message>` lines on stderr and never change the exit code — for
+instance `Warning[READER_WARNING]: MissingStylesXml` when the input has no `xl/styles.xml`.
+
+`code` is either the domain error's code (the SCREAMING_SNAKE of the `XLError` case: `SHEET_NOT_FOUND`,
+`INVALID_CELL_REF`, `FORMULA_ERROR`, `SECURITY_ERROR`, `SHEET_REQUIRED`, `IO_ERROR`, ...) or one of the
+CLI-only codes: `USAGE`, `UNKNOWN_VERB`, `OUTPUT_REQUIRED`, `UNSUPPORTED_IN_STREAM`,
+`BATCH_JSON_INVALID`, `BATCH_OP_UNKNOWN`, `BATCH_OP_INVALID`, `BATCH_OP_FAILED`,
+`RASTERIZER_UNAVAILABLE`, `IO_READ`, `IO_WRITE`, `RECALC_GATE`, `DIFFERENCES_FOUND`, `LINT_FINDINGS`,
+`AUDIT_FINDINGS`, `INTERNAL`. The complete vocabulary, each code with the exit it implies, is the
+generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schema --json` →
+`errorCodes`/`warningCodes`). The exit code follows from the code alone:
+
+| exit | meaning | examples | file written? |
+|---|---|---|---|
+| `0` | ok | | as requested |
+| `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | `-o`: yes; `-i`: no |
+| `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, `--stream` with an unsupported verb or flag | no |
+| `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit | no |
+
+Two rows worth spelling out:
+
+- `view --eval --strict` whose evaluation fails (a circular reference, an unsupported function) is
+  a **gate**, not a failure: exit `1` with `code: RECALC_GATE` on stderr and nothing rendered on
+  stdout — the same code the write verbs' `--strict` uses. Without `--strict` the view renders the
+  cached values and the failure is a stderr warning, exit `0`.
+- A missing or unreadable input file is `code: IO_READ`, exit `3`, on every verb — `sheets`,
+  `names`, `view`, `cell`, `diff`, `lint` alike.
+
+The same table is printed by `xl --help`. (Earlier releases exited `1` for usage and failures too,
+`2` for `diff`/`lint` runtime errors, and printed errors on stdout.)
+
+### Output contract (`--json`)
+
+**Pass the global `--json` whenever a program reads the result.** It goes anywhere on the command
+line like every global flag, and every verb — success or failure — then prints exactly one JSON envelope on stdout,
+with the same seven keys every time:
+
+```json
+{ "ok": true, "exitCode": 0, "verb": "view", "version": "0.20.0",
+  "data": { "sheet": "Data", "range": "A1:C3", "rows": [ ... ] },
+  "warnings": [ { "code": "TRUNCATED", "message": "… showing 50 of 120 rows (use --limit to raise; --limit 0 = no limit)" } ],
+  "error": null }
+
+{ "ok": false, "exitCode": 3, "verb": "put", "version": "0.20.0",
+  "data": null, "warnings": [],
+  "error": { "code": "SHEET_NOT_FOUND", "message": "Sheet not found: Sales. Available: Data, Summary",
+             "hint": "list sheets with `xl -f <file> sheets`", "candidates": [], "location": null } }
+```
+
+| key | meaning |
+|---|---|
+| `ok` | `true` exactly when `error` is `null` |
+| `exitCode` | the process exit code, from the table above (`0`/`1`/`2`/`3`) |
+| `verb` | the subcommand path, e.g. `"view"`, `"sheets hide"`, `"cf add"` (best-effort for a usage error raised before dispatch) |
+| `version` | the `xl` version that produced the envelope |
+| `data` | the verb's payload (below); `null` on a failure |
+| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict`, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `READER_WARNING`); `location` when known |
+| `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
+
+**What `data` holds.** `--json` selects a verb's JSON payload where it has one and wraps the text
+otherwise:
+
+- `--format json` keeps printing the bare payload without `--json` — the shapes of `view`
+  (`{sheet, range, rows}`), `filter`, `diff` and `lint` are unchanged. With `--json` and no
+  explicit `--format`, that same payload is `data`: `xl --json view A1:C3` yields `data` equal to
+  what `view --format json` prints bare (`--format json --json` spells the same thing out). An
+  explicit text `--format` (markdown, csv, html, …) under `--json` rides inside as `data.text`.
+- Typed verbs build `data` directly: `sheets` → `[{name, index, state, dimension}]` (`--stats` adds
+  `cells`, `formulas`); `names` → `[{name, refersTo, scope, hidden}]`; `bounds` →
+  `{sheet, range, dimension}`; `eval` → `{formula, result: {type, value, formatted}, overrides}`;
+  `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
+  `functions` → `[{name, minArgs, maxArgs, args, returnsDate, returnsTime, dynamicDeps,
+  specialForm}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
+  `batch --dry-run` → `{ops: [{index, op, summary}]}` (`index` is the op's 1-based position,
+  the index a `BATCH_OP_FAILED` reports; parse warnings ride in the envelope's `warnings[]`); `batch --schema` → the batch document's JSON
+  Schema; `schema` → `{version, exitCodes, errorCodes, warningCodes, globals, verbs, batchOps,
+  functions, envelope}` (see
+  [`xl schema`](#xl-schema---json)); `describe` → `{sheets, definedNames, date1904}` (`--full`
+  adds per-sheet counts and `calcPr`); `audit` → `{clean, findings, errorCells,
+  uncachedFormulas, unparseable, volatile, dynamic, cycles, externalRefs, unresolvedReaders,
+  calcPr}`; `deps` → `{ref, formula, value, direction, depth, precedents, dependents}`.
+- Every other verb (`cell`, `search`, `stats`, `view` in a text format, and all writes) yields
+  `{"text": <what text mode prints>, "saved": <path or null>, "written": <bool>}`. `saved` is the
+  user-visible output path once the write was committed; it is `null` (and `written` is `false`)
+  when nothing was — a read, or an `-i` run whose `--strict` gate discarded the staged file.
+
+**Findings and gates are `ok: false` with the report kept.** `diff` with differences, `lint` with
+findings, `audit --fail-on-findings` on a dirty book and a `--strict` write that fails its gate exit
+`1` and carry `error.code` `DIFFERENCES_FOUND` / `LINT_FINDINGS` / `AUDIT_FINDINGS` /
+`RECALC_GATE` — and `data` still holds the report (the diff, the findings, the audit buckets, the
+recalculation summary), so nothing text mode showed is lost.
+
+**Channels.** With `--json` the envelope is the only thing on stdout. When a run fails (exit `2`
+or `3`), stderr also carries the single line `Error: <message>` so a human tailing a log still
+sees it; the `code:` and `hint:` lines live in the envelope instead. Findings and gates (exit `1`)
+print nothing on stderr, exactly as text mode does — the report is in `data`. A wrong command line (unknown verb, a
+verb-owned flag before the verb, `-i` with `-o`) also produces the envelope — exit `2`,
+`code: USAGE` — when `--json` is among the arguments.
+
+```bash
+xl -f book.xlsx -s Data --json view A1:C3 | jq '.data.rows'   # --json alone selects the JSON payload
+xl -f book.xlsx -s Data -o out.xlsx --json put A1 42 | jq -e '.ok' >/dev/null || echo "put failed"
+xl -f book.xlsx --json sheets | jq -r '.data[].name'
+```
+
+The envelope's JSON Schema is `xl-cli/resources/schema/envelope.schema.json` — shipped in the
+binary and published as `xl schema --json` → `envelope` — and the golden corpus
+(`xl-cli/test/resources/golden/*-json.golden`) pins one envelope per shape.
 
 ---
 

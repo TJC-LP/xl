@@ -1,0 +1,18 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+--stream
+view
+A1:C4
+--format
+json
+## exit
+0
+## stdout
+[{"A":"Hello","B":"10","C":"1/15/24"},
+{"A":"World","B":"20","C":"6/30/24"},
+{"A":"Total","B":"12.50","C":""},
+{"A":"","B":"42.5","C":""}]
+## stderr

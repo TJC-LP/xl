@@ -1,0 +1,16 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+-o
+<DIR>/put-out.xlsx
+put
+A5
+42
+## exit
+0
+## stdout
+Put: A5 = 42 (number)
+Saved: <DIR>/put-out.xlsx
+## stderr

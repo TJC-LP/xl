@@ -1,0 +1,52 @@
+## args
+-f
+<DIR>/single.xlsx
+--json
+view
+A1:B1
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "view",
+  "version": "<VERSION>",
+  "data": {
+    "sheet": "Sheet1",
+    "range": "A1:B1",
+    "rows": [
+      {
+        "row": 1,
+        "cells": [
+          {
+            "ref": "A1",
+            "type": "text",
+            "value": "solo",
+            "formatted": "solo"
+          },
+          {
+            "ref": "B1",
+            "type": "number",
+            "value": 7,
+            "formatted": "7"
+          }
+        ]
+      }
+    ]
+  },
+  "warnings": [
+    {
+      "code": "SHEET_AUTOSELECTED",
+      "message": "no -s given: 'Sheet1' is the workbook's only sheet, so it was selected",
+      "location": {
+        "file": null,
+        "sheet": "Sheet1",
+        "ref": null,
+        "opIndex": null
+      }
+    }
+  ],
+  "error": null
+}
+## stderr

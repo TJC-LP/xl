@@ -410,7 +410,7 @@ class AppearanceCommandsSpec extends FunSuite:
     val json = """[{"op": "sheet-view", "gridlines": false, "zoom": 85}]"""
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: tab-color, page-setup, header-footer ops parse") {
@@ -423,7 +423,7 @@ class AppearanceCommandsSpec extends FunSuite:
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
     assertEquals(result.toOption.get.ops.size, 3)
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: sheet-view invalid zoom fails cleanly at apply time") {
@@ -531,13 +531,14 @@ class AppearanceCommandsSpec extends FunSuite:
     }
   }
 
-  test("batch: appearance ops require --sheet") {
+  test("batch: appearance ops require --sheet on a multi-sheet book") {
     val ops = BatchParser
       .parseBatchJson("""[{"op": "sheet-view", "zoom": 85}]""")
       .toOption
       .get
       .ops
-    val wb = Workbook(Sheet("Test"))
+    // ADR-017 §2.5: a single-sheet book would auto-select; two sheets make the default required
+    val wb = Workbook(Sheet("Test"), Sheet("Other"))
     val result = BatchParser.applyBatchOperations(wb, None, ops).attempt.unsafeRunSync()
     assert(result.isLeft)
     assert(

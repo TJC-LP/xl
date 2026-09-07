@@ -1,0 +1,13 @@
+## args
+-f
+<DIR>/simple.xlsx
+diff
+-g
+<DIR>/simple-copy.xlsx
+## exit
+0
+## stdout
+Comparing <DIR>/simple.xlsx vs <DIR>/simple-copy.xlsx
+
+Files are identical.
+## stderr

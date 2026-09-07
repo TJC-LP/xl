@@ -1,0 +1,30 @@
+## args
+-f
+<DIR>/simple.xlsx
+--json
+--stream
+view
+A1:B2
+## exit
+3
+## stdout
+{
+  "ok": false,
+  "exitCode": 3,
+  "verb": "view",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "SHEET_REQUIRED",
+    "message": "view with unqualified range 'A1:B2' requires --sheet or qualified ref (e.g., Sheet1!A1). Available sheets: Data, Summary",
+    "hint": "use -s <name> or a qualified ref like 'Name'!A1",
+    "candidates": [
+      "Data",
+      "Summary"
+    ],
+    "location": null
+  }
+}
+## stderr
+Error: view with unqualified range 'A1:B2' requires --sheet or qualified ref (e.g., Sheet1!A1). Available sheets: Data, Summary

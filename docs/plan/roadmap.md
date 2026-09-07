@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-09-04
+**Last Updated**: 2026-09-07
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -10,7 +10,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 5,624 tests passing; one existing performance comparison ignored.
+**Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 6,326 tests passing; one existing performance comparison ignored.
 
 **Current Version**: **0.19.3** "Namesake" (defined-name resolution indexed — O(sheets × names²) recalc scans removed, released 2026-08-14)
 
@@ -22,6 +22,34 @@ The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four 
 executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
+
+### Unreleased — wave 27: Agent-first contract (0.20.0)
+
+ADR-017 (`docs/design/agent-first-architecture.md`) makes the CLI and the scripting prelude two
+projections of one contract; the wave plan with per-cluster briefs, reviews and status is
+`docs/plan/agent-first-refactor.md`. Wave 1 lands the safety net and the agent-facing surface:
+
+| Cluster | Result |
+|---------|--------|
+| harness-golden | In-process `CliHarness`, golden corpus pinning stdout/stderr/exit for every verb shape. |
+| errors-exit-codes | `XLError.code`/`hint`/`candidates`, `CliError`, exit table 0 ok / 1 findings / 2 usage / 3 failed, diagnostics on stderr. |
+| structural-row-props | [#558](https://github.com/TJC-LP/xl/issues/558) property-only rows emitted once after structural edits. |
+| codec-cached | [#477](https://github.com/TJC-LP/xl/issues/477) typed reads see cached formula values; `readTypedStrict`. |
+| twins-and-navigation | [#465](https://github.com/TJC-LP/xl/issues/465) `putAt`/`styleAt`/`mergeAt`/`commentAt`/`Workbook.named`, bounded `ARef` navigation, range slicing. |
+| envelope-json | Global `--json`: one seven-key envelope for every verb, success or failure; `--format json` unchanged. |
+| recalc-options-renamer | [#559](https://github.com/TJC-LP/xl/issues/559) `rename-sheet` rewrites references; `RecalcOptions`, `recalculateAfterEdit`, `FormulaOps`. |
+| batch-opspec-scope | [#560](https://github.com/TJC-LP/xl/issues/560) `OpRegistry` behind `batch`, `sheet` on every op, `--stream` refusal by index. |
+| describe-audit-deps | `describe`, `audit`, `deps`; `WorkbookSummary`/`WorkbookAudit`/`QualifiedGraph` with `wb.describe`/`wb.audit`. |
+| resolve-and-argv | One sheet rule for every verb, batch op and streaming path; global flags anywhere; unknown verbs suggest. |
+| docs-from-code | `xl schema`, `batch --schema`, `functions --json`; generated reference files CI-gated against the binary. |
+
+Waves 2–4 (the `Edit` algebra and typed `Written` payloads, `Resolve`-driven batch/streaming
+parity, the `CommandSpec` registry that derives docs and help, and the remaining invariant-2
+divergences such as the streaming `style` op and `--strict` on raster formats) are issue-ready in
+the plan and are filed as GitHub issues at release time.
+
+Gate: full compilation and tests, all-source formatting, example compile/run checks, packaged
+skill/doc snippet compilation, and the golden corpus.
 
 ### Unreleased — wave 26: Calculation integrity (stack under review)
 

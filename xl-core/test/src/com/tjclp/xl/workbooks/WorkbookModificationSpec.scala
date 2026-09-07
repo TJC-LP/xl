@@ -7,6 +7,7 @@ import com.tjclp.xl.context.{SourceContext, SourceFingerprint}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.*
 import com.tjclp.xl.codec.CellCodec.given
+import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.PartManifest
 import com.tjclp.xl.sheets.Sheet
@@ -70,6 +71,44 @@ class WorkbookModificationSpec extends FunSuite:
       "Sheet should be marked modified to preserve styles"
     )
     assertEquals(renamed.sheets(0).name.value, "Sales")
+  }
+
+  test("rename refuses a new name another sheet carries in any case (Excel sheet-name rule)") {
+    val wb = Workbook(Vector(Sheet(SheetName.unsafe("S")), Sheet(SheetName.unsafe("T"))))
+    assertEquals(
+      wb.rename(SheetName.unsafe("T"), SheetName.unsafe("s")),
+      Left(XLError.DuplicateSheet("s")): XLResult[Workbook]
+    )
+    assertEquals(
+      wb.rename(SheetName.unsafe("T"), SheetName.unsafe("S")),
+      Left(XLError.DuplicateSheet("S")): XLResult[Workbook]
+    )
+    // a sheet may change the case of its OWN name
+    val recased = wb
+      .rename(SheetName.unsafe("T"), SheetName.unsafe("t"))
+      .fold(err => fail(s"Rename failed: $err"), identity)
+    assertEquals(recased.sheets.map(_.name.value), Vector("S", "t"))
+    // and an unrelated new name is a plain rename
+    val renamed = wb
+      .rename(SheetName.unsafe("T"), SheetName.unsafe("Data"))
+      .fold(err => fail(s"Rename failed: $err"), identity)
+    assertEquals(renamed.sheets.map(_.name.value), Vector("S", "Data"))
+  }
+
+  test("insertAt and addSheet refuse a name already used in any case") {
+    val wb = Workbook(Vector(Sheet(SheetName.unsafe("Data"))))
+    assertEquals(
+      wb.insertAt(1, Sheet(SheetName.unsafe("data"))),
+      Left(XLError.DuplicateSheet("data")): XLResult[Workbook]
+    )
+    assertEquals(
+      wb.insertAt(0, Sheet(SheetName.unsafe("DATA"))),
+      Left(XLError.DuplicateSheet("DATA")): XLResult[Workbook]
+    )
+    assert(wb.insertAt(1, Sheet(SheetName.unsafe("Notes"))).isRight)
+    @annotation.nowarn("cat=deprecation")
+    val added = wb.addSheet(Sheet(SheetName.unsafe("data")))
+    assertEquals(added, Left(XLError.DuplicateSheet("data")): XLResult[Workbook])
   }
 
   test("put marks sheet as modified when replacing existing sheet") {

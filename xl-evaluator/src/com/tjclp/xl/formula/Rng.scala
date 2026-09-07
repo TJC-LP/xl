@@ -42,8 +42,10 @@ object Rng:
    * System generator backed by ThreadLocalRandom — non-deterministic, thread-safe, no contention.
    *
    * Use in production where Excel-style volatile behavior (a fresh draw per evaluation) is wanted.
+   * Stateless (the generator is the calling thread's), so a single instance: two `RecalcOptions()`
+   * compare equal.
    */
-  def system: Rng = new Rng:
+  val system: Rng = new Rng:
     def nextDouble(): Double = java.util.concurrent.ThreadLocalRandom.current().nextDouble()
 
   /**

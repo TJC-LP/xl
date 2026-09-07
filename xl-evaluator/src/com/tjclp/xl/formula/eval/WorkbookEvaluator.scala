@@ -238,7 +238,196 @@ object WorkbookEvaluator:
     def recalculateParallel(clock: Clock, parallelism: Int): RecalcResult =
       recalculateImpl(wb, clock, None, None, parallelism)
 
+    // ========== ADR-017 §2.8: the options-driven primitive ==========
+
+    /**
+     * Total whole-workbook recalculation driven by ONE options record (ADR-017 §2.8) — the
+     * primitive the overloads above are forwarders for. `recalculate(RecalcOptions())` is
+     * `recalculate()` on an acyclic book, byte for byte.
+     *
+     * Resolution, in this order:
+     *   1. [[IterativeMode]]: `Off` → cycles isolate as errors; `FromCalcPr` → the book's own
+     *      `<calcPr iterate="1"/>` is honoured exactly as the CLI's calcPr rule does
+     *      (`wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)`);
+     *      `Force(calc)` → iterate with `calc`.
+     *   2. A resolved iteration fixpoints sequentially with `options.clock` and `options.rng`
+     *      (`parallelism` is ignored — cyclic components have no wave order; the CLI prints the
+     *      same advisory). Otherwise `parallelism > 1` runs `recalculateParallel(options.clock,
+     *      parallelism)` (the thread-safe system rng, see that method), else the sequential
+     *      `recalculate(options.clock, options.rng)`.
+     *   3. `seedTables` seeds every data-table interior of the RESULT with the same clock and
+     *      iterative settings (`seedDataTablesReport`); the seeder's per-table warnings are not
+     *      carried by the result.
+     *
+     * No default arguments — an extension method with defaults crashes the compiler when merged
+     * through the formulaExports wildcard export; the options record is the mechanism.
+     */
+    @annotation.targetName("recalculateWithOptions")
+    def recalculate(options: RecalcOptions): RecalcResult =
+      val iterative = resolveIterative(wb, options)
+      val base = iterative match
+        case Some(calc) => recalculate(options.clock, options.rng, calc)
+        case None if options.parallelism > 1 =>
+          recalculateParallel(options.clock, options.parallelism)
+        case None => recalculate(options.clock, options.rng)
+      if !options.seedTables then base
+      else
+        DataTableSeeder
+          .seedDataTablesReport(base.workbook)(options.clock, iterative)
+          .fold(_ => base, report => base.copy(workbook = report.workbook))
+
+    /**
+     * The public form of the after-edit seam (ADR-017 §2.8): recalculate the formulas an edit of
+     * `modified` on `sheet` can have affected — the edited cells themselves when they are formulas,
+     * their transitive dependents, every dynamic (INDIRECT/OFFSET) reader and every reader the
+     * graph cannot resolve — leaving every other cache byte-identical and never touching the clock
+     * for an unaffected volatile cell (GH-504/GH-508). Wraps
+     * `DependentRecalculation.recalculateAfterEdit`; it never re-derives the cone.
+     *
+     * When the resolved [[IterativeMode]] iterates (a `<calcPr iterate>` book under the default
+     * `FromCalcPr`, or `Force`), the targeted pass has no fixpoint to offer and the whole book
+     * recalculates through [[recalculate(options)]] instead — the same decision the CLI's write
+     * path makes (WriteCommands.writeAfterRefresh); the CLI's cone-scoping of that result is Wave
+     * 2's `Recalc.afterEdits`.
+     */
+    def recalculateAfterEdit(
+      sheet: SheetName,
+      modified: Set[ARef],
+      options: RecalcOptions
+    ): RecalcResult =
+      if resolveIterative(wb, options).isDefined then recalculate(options)
+      else DependentRecalculation.recalculateAfterEdit(wb, sheet, modified, options.clock)
+
+    /**
+     * Compute ONLY the formula cells that have no cached value (`Formula(_, None, _)`), in
+     * dependency order, reading every input's cache exactly as it is; every cached cell stays
+     * byte-identical (GH-468 doctrine — a cache another engine wrote is never second-guessed here,
+     * even when it is wrong). Data-table records are never evaluated (their cache is their only
+     * truth, GH-430). Uncached members of a reference cycle, and uncached cells blocked behind one,
+     * are reported as errors — there is no dependency order to compute them in; use
+     * [[recalculate(options)]] with an iterative mode for those. `options.iterative` and
+     * `options.parallelism` therefore do not apply to this pass; `options.clock` and `options.rng`
+     * do.
+     *
+     * Byte-identity of cached cells is unconditional: unlike the full and after-edit passes, a
+     * failing or cyclic uncached cell does NOT withdraw the caches of its cached dependents — those
+     * caches are the doctrine's truth, and this pass only ever ADDS caches. Failures are reported
+     * in `errors`, nothing else moves.
+     */
+    def recalculateUncached(options: RecalcOptions): RecalcResult =
+      recalculateUncachedImpl(wb, options)
+
   // ========== recalculate internals ==========
+
+  /** The iterative settings `options` resolve to for `wb` — None when cycles must isolate. */
+  private def resolveIterative(wb: Workbook, options: RecalcOptions): Option[IterativeCalc] =
+    options.iterative match
+      case IterativeMode.Off => None
+      case IterativeMode.FromCalcPr =>
+        wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)
+      case IterativeMode.Force(calc) => Some(calc)
+
+  private def recalculateUncachedImpl(wb: Workbook, options: RecalcOptions): RecalcResult =
+    val uncached: Set[QualifiedRef] = wb.sheets.iterator.flatMap { sheet =>
+      sheet.cells.iterator.collect {
+        case (ref, cell) if isUncachedEvaluable(cell.value) => QualifiedRef(sheet.name, ref)
+      }
+    }.toSet
+    if uncached.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty, Map.empty)
+    else
+      val calculationClock = pinnedCalculationClock(options.clock)
+      val evaluator = Evaluator.recalculationInstance(options.rng, new Evaluator.AggregateMemo)
+      val (deps, dependents) = DependencyGraph.fromWorkbookFormulaGraph(wb)
+
+      def formulaText(q: QualifiedRef): String =
+        wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
+          case Some(CellValue.Formula(expr, _, _)) => expr
+          case _ => q.ref.toA1
+
+      val cyclicCore = DependencyGraph.qualifiedCyclicNodes(deps)
+      val blocked = DependencyGraph.qualifiedTransitiveDependents(dependents, cyclicCore)
+      val skipped = cyclicCore ++ blocked
+      val skippedErrors = (skipped & uncached).toVector
+        .sortBy(q => (q.sheet.value, q.ref.row.index0, q.ref.col.index0))
+        .map { q =>
+          val reason =
+            if cyclicCore.contains(q) then "Circular reference"
+            else "Blocked by an upstream circular reference"
+          CellEvalError(q.sheet, q.ref, XLError.FormulaError(formulaText(q), reason))
+        }
+      val prunedDeps = (deps -- skipped).view.mapValues(_ -- skipped).toMap
+      val prunedDependents = (dependents -- skipped).view.mapValues(_ -- skipped).toMap
+
+      DependencyGraph.qualifiedTopologicalSort(prunedDeps, prunedDependents) match
+        case Left(circular) =>
+          // Unreachable: qualifiedCyclicNodes removed every cycle participant. Stay total anyway.
+          val residual = (prunedDeps.keySet & uncached).toVector
+            .sortBy(q => (q.sheet.value, q.ref.toA1))
+            .map { q =>
+              CellEvalError(
+                q.sheet,
+                q.ref,
+                XLError.FormulaError(formulaText(q), s"Unresolvable order: $circular")
+              )
+            }
+          RecalcResult.cacheResults(wb, Map.empty, skippedErrors ++ residual, Map.empty)
+        case Right(order) =>
+          // GH-274: dynamic readers and their static dependents evaluate last, as in the full pass,
+          // but no cache is stripped — a cached cell stays byte-identical by contract.
+          val dynamic = DependencyGraph.dynamicCells(wb) -- skipped
+          val bucket =
+            if dynamic.isEmpty then Set.empty[QualifiedRef]
+            else dynamic ++ DependencyGraph.qualifiedTransitiveDependents(prunedDependents, dynamic)
+          val targets = order.filter(uncached.contains)
+          val ordered = targets.filterNot(bucket.contains) ++ targets.filter(bucket.contains)
+          val sheetIndex: Map[SheetName, Int] =
+            wb.sheets.zipWithIndex.map((s, i) => s.name -> i).toMap
+          val initial: PassState = (wb.sheets, Map.empty, skippedErrors)
+          val (_, values, errors) = ordered.foldLeft(initial) {
+            case (state @ (sheets, evaluated, failures), q) =>
+              sheetIndex.get(q.sheet) match
+                case None => state
+                case Some(idx) =>
+                  val result =
+                    try
+                      SheetEvaluator.evaluateCellWithEvaluator(
+                        sheets(idx),
+                        q.ref,
+                        evaluator,
+                        calculationClock,
+                        Some(wb.copy(sheets = sheets))
+                      )
+                    catch
+                      case NonFatal(e) =>
+                        Left(
+                          XLError.FormulaError(
+                            formulaText(q),
+                            s"Evaluation threw ${e.getClass.getName}"
+                          )
+                        )
+                  result match
+                    case Right(value) =>
+                      (
+                        sheets.updated(idx, sheets(idx).put(q.ref, value)),
+                        evaluated.updated(
+                          q.sheet,
+                          evaluated.getOrElse(q.sheet, Map.empty) + (q.ref -> value)
+                        ),
+                        failures
+                      )
+                    case Left(error) =>
+                      (sheets, evaluated, failures :+ CellEvalError(q.sheet, q.ref, error))
+          }
+          // No dependents edges on purpose: cacheResults would otherwise withdraw the caches of
+          // cached cells downstream of a failure, and this pass promises cached cells stay
+          // byte-identical unconditionally (GH-468).
+          RecalcResult.cacheResults(wb, values, errors, Map.empty)
+
+  /** A formula cell with no cache that evaluation can compute (data-table records cannot). */
+  private def isUncachedEvaluable(value: CellValue): Boolean = value match
+    case CellValue.Formula(_, None, _: FormulaKind.DataTable) => false
+    case CellValue.Formula(_, None, _) => true
+    case _ => false
 
   private def recalculateImpl(
     wb: Workbook,

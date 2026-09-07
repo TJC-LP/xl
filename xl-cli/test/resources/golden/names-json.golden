@@ -1,0 +1,25 @@
+## args
+-f
+<DIR>/named.xlsx
+--json
+names
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "names",
+  "version": "<VERSION>",
+  "data": [
+    {
+      "name": "Total",
+      "refersTo": "Data!$B$4",
+      "scope": null,
+      "hidden": false
+    }
+  ],
+  "warnings": [],
+  "error": null
+}
+## stderr

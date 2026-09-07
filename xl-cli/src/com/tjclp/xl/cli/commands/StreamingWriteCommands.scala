@@ -5,19 +5,31 @@ import java.nio.file.Path
 import java.util.zip.ZipFile
 
 import cats.effect.IO
+import cats.syntax.all.*
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, ParseError}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
 import com.tjclp.xl.ooxml.XmlSecurity
+import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
-import com.tjclp.xl.cli.helpers.{BatchParser, StreamingCsvParser, StyleBuilder, ValueParser}
+import com.tjclp.xl.cli.CliIO
+import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, ScopedOp}
+import com.tjclp.xl.cli.contract.{CliError, CliException, Diagnostics, ErrorCode, Location, Warning}
+import com.tjclp.xl.cli.helpers.{
+  BatchParser,
+  Resolve,
+  StreamingCsvParser,
+  StyleBuilder,
+  ValueParser
+}
 import org.xml.sax.{Attributes, SAXException}
 import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
@@ -144,20 +156,15 @@ object StreamingWriteCommands:
     detect: Boolean = true
   ): IO[String] =
     for
-      // Resolve sheet path
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
+      // Parse the reference (single cell or range, optionally sheet-qualified)
+      (qualified, refOrRange) <- parseTarget(refStr, "reference")
 
-      // Parse reference (single cell or range)
-      refOrRange <- IO.fromEither(
-        CellRange
-          .parse(refStr)
-          .map(Right(_))
-          .left
-          .flatMap { _ =>
-            ARef.parse(refStr).map(Left(_))
-          }
-          .left
-          .map(e => new Exception(s"Invalid reference: $refStr"))
+      // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
+      worksheetPath <- resolveSheetPath(
+        sourcePath,
+        sheetNameOpt,
+        qualified,
+        unqualifiedContext("put", refStr, refOrRange)
       )
 
       // Build value map based on mode
@@ -195,16 +202,12 @@ object StreamingWriteCommands:
             )
           )
 
-      batchOps = parsedValues.map { case (ref, formatted) =>
+      // Detected formats are Inferred hints: they apply onto General cells only (Sheet.put's rule)
+      batchOps = parsedValues.zipWithIndex.map { case ((ref, formatted), i) =>
         val format = Option.when(formatted.numFmt != NumFmt.General)(formatted.numFmt)
-        BatchParser.BatchOp.Put(ref.toA1, formatted.value, format)
+        ScopedOp(BatchParser.BatchOp.Put(ref.toA1, formatted.value, format), None, i + 1)
       }
-      patches <- buildStreamingBatchPatches(
-        sourcePath,
-        worksheetPath,
-        batchOps,
-        mergePutFormats = true
-      )
+      patches <- buildStreamingBatchPatches(sourcePath, worksheetPath, batchOps)
       (cellPatches, updatedStylesXml, worksheetMetadata, _) = patches
 
       // Execute streaming transform, including any detected number formats.
@@ -254,20 +257,15 @@ object StreamingWriteCommands:
     import com.tjclp.xl.cells.CellValue
 
     for
-      // Resolve sheet path
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
+      // Parse the reference (single cell or range, optionally sheet-qualified)
+      (qualified, refOrRange) <- parseTarget(refStr, "reference")
 
-      // Parse reference
-      refOrRange <- IO.fromEither(
-        CellRange
-          .parse(refStr)
-          .map(Right(_))
-          .left
-          .flatMap { _ =>
-            ARef.parse(refStr).map(Left(_))
-          }
-          .left
-          .map(e => new Exception(s"Invalid reference: $refStr"))
+      // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
+      worksheetPath <- resolveSheetPath(
+        sourcePath,
+        sheetNameOpt,
+        qualified,
+        unqualifiedContext("putf", refStr, refOrRange)
       )
 
       // Build formula map
@@ -347,12 +345,16 @@ object StreamingWriteCommands:
     replace: Boolean
   ): IO[String] =
     for
-      // Resolve sheet path
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
+      // Parse the range (optionally sheet-qualified; a single cell is a 1x1 range)
+      (qualified, target) <- parseTarget(rangeStr, "range")
+      range = target.fold(ref => CellRange(ref, ref), identity)
 
-      // Parse range
-      range <- IO.fromEither(
-        CellRange.parse(rangeStr).left.map(e => new Exception(s"Invalid range: $rangeStr"))
+      // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
+      worksheetPath <- resolveSheetPath(
+        sourcePath,
+        sheetNameOpt,
+        qualified,
+        unqualifiedContext("style", rangeStr, target)
       )
 
       // GH-475: same typo signal as the in-memory style command
@@ -428,6 +430,10 @@ object StreamingWriteCommands:
    *   Sheet name (required for multi-sheet files)
    * @param batchSource
    *   JSON file path or "-" for stdin
+   * @param stdin
+   *   Where `batchSource == "-"` reads from (the CLI passes its `CliIO.stdin`)
+   * @param warn
+   *   The run's warning sink (ADR-017 §2.3) for the parse warnings, as on the in-memory path
    * @return
    *   Result message with operation count
    */
@@ -435,17 +441,28 @@ object StreamingWriteCommands:
     sourcePath: Path,
     outputPath: Path,
     sheetNameOpt: Option[String],
-    batchSource: String
+    batchSource: String,
+    stdin: IO[String] = CliIO.system.stdin,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] =
     for
-      // Resolve worksheet path first
-      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
-
-      // Read and parse batch input
-      input <- BatchParser.readBatchInput(batchSource)
+      // Parse first: the refusals below come before the worksheet is even resolved
+      input <- BatchParser.readBatchInput(batchSource, stdin)
       parseResult <- BatchParser.parseBatchOperations(input)
-      _ <- IO(parseResult.warnings.foreach(System.err.println))
-      ops = parseResult.ops
+      _ <- parseResult.warnings.traverse_(warn)
+      scoped = parseResult.scoped
+
+      // ADR-017 invariant 2: refuse by index what this writer cannot apply, before any byte is
+      // read beyond workbook.xml or written
+      _ <- refuseNonStreamable(scoped)
+
+      // Resolve the one worksheet this batch streams (workbook.xml only), then refuse by index
+      // every op that would land anywhere else
+      (sheetName, worksheetPath) <- resolveBatchSheet(sourcePath, sheetNameOpt, scoped)
+      _ <- refuseOtherSheets(scoped, sheetName)
+
+      // A ref qualified with the streamed sheet is honoured as its bare form
+      ops = scoped.map(s => s.copy(op = OpRegistry.unqualified(s.op)))
 
       // Separate operations into cell patches vs worksheet metadata
       (cellPatches, stylesXml, worksheetMetadata, summary) <-
@@ -463,6 +480,131 @@ object StreamingWriteCommands:
     yield s"Applied ${ops.size} operations (streaming):\n$summary\nCells modified: ${result.cellCount}\nSaved (streaming): $outputPath"
 
   /**
+   * Whether [[buildStreamingBatchPatches]] has an arm for the op. Deliberately exhaustive with no
+   * wildcard, like `WriteCommands.isCellMutating`: a new `BatchOp` must be classified here and in
+   * `OpRegistry` — `OpRegistrySpec` asserts the two agree — or the match fails loudly. Dragging
+   * `putf` IS streamable: the arm shifts exactly like the in-memory path (StreamingWriteSpec).
+   */
+  private[cli] def isStreamable(op: BatchParser.BatchOp): Boolean =
+    op match
+      case _: BatchParser.BatchOp.Put | _: BatchParser.BatchOp.PutFormula |
+          _: BatchParser.BatchOp.PutFormulaDragging | _: BatchParser.BatchOp.PutFormulas |
+          _: BatchParser.BatchOp.PutValues | _: BatchParser.BatchOp.Style |
+          _: BatchParser.BatchOp.Merge | _: BatchParser.BatchOp.Unmerge |
+          _: BatchParser.BatchOp.ColWidth | _: BatchParser.BatchOp.RowHeight |
+          _: BatchParser.BatchOp.ColHide | _: BatchParser.BatchOp.ColShow |
+          _: BatchParser.BatchOp.RowHide | _: BatchParser.BatchOp.RowShow =>
+        true
+      case _: BatchParser.BatchOp.AddComment | _: BatchParser.BatchOp.RemoveComment |
+          _: BatchParser.BatchOp.Clear | _: BatchParser.BatchOp.AutoFit |
+          _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
+          _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
+          _: BatchParser.BatchOp.CopyRange | _: BatchParser.BatchOp.Hyperlink |
+          _: BatchParser.BatchOp.AddChart | _: BatchParser.BatchOp.SetSheetView |
+          _: BatchParser.BatchOp.SetTabColor | _: BatchParser.BatchOp.SetAutoFilter |
+          _: BatchParser.BatchOp.GroupRows | _: BatchParser.BatchOp.GroupCols |
+          _: BatchParser.BatchOp.UngroupRows | _: BatchParser.BatchOp.UngroupCols |
+          _: BatchParser.BatchOp.SetPageSetup | _: BatchParser.BatchOp.SetHeaderFooter |
+          _: BatchParser.BatchOp.AddConditionalFormat =>
+        false
+
+  /**
+   * `UNSUPPORTED_IN_STREAM` (exit 2) listing the offending ops as `[index op, …]`, located at the
+   * first of them.
+   */
+  private def refusal(rejects: Vector[ScopedOp], reason: String): CliException =
+    val listed = rejects.map(s => s"${s.index} ${OpRegistry.nameOf(s.op)}").mkString(", ")
+    CliException(
+      CliError(
+        ErrorCode.UNSUPPORTED_IN_STREAM,
+        s"ops [$listed] $reason; drop --stream to apply them in memory",
+        hint = Some("drop --stream to apply them in memory"),
+        location = rejects.headOption.map(first => Location.none.copy(opIndex = Some(first.index)))
+      )
+    )
+
+  /** Raise [[refusal]] when there is anything to refuse. */
+  private def refuse(rejects: Vector[ScopedOp], reason: String): IO[Unit] =
+    if rejects.isEmpty then IO.unit else IO.raiseError(refusal(rejects, reason))
+
+  /** Ops this writer has no arm for. */
+  private def refuseNonStreamable(scoped: Vector[ScopedOp]): IO[Unit] =
+    refuse(scoped.filterNot(s => isStreamable(s.op)), "are not supported in streaming mode")
+
+  /**
+   * The sheets an op names itself: its `sheet` key and the qualifier of each target ref. The parser
+   * has already refused an op whose two disagree, so this has at most one distinct element.
+   */
+  private def namedSheets(s: ScopedOp): Vector[SheetName] =
+    val qualified = OpRegistry.targetRefs(s.op).flatMap(r => OpRegistry.qualifiedSheet(r).toList)
+    (s.sheet.toList ++ qualified).toVector.distinct
+
+  /** Ops whose `sheet` key or qualified target ref names a sheet other than the streamed one. */
+  private def refuseOtherSheets(scoped: Vector[ScopedOp], streamed: String): IO[Unit] =
+    val rejects = scoped.filter(s => namedSheets(s).exists(_.value != streamed))
+    val others = rejects.flatMap(namedSheets).map(_.value).filter(_ != streamed).distinct
+    refuse(
+      rejects,
+      s"target ${others.mkString(", ")} rather than the streamed worksheet '$streamed', " +
+        "which is not supported in streaming mode"
+    )
+
+  /**
+   * The one worksheet a streamed batch writes, as `(sheet name, worksheet part path)`, from
+   * `workbook.xml` alone and before any byte is written (ADR-017 invariant 2):
+   *
+   *   - with `-s`: THE sheet rule's step 2 ([[resolveSheetTarget]]); the caller then refuses by
+   *     index every op naming another sheet ([[refuseOtherSheets]])
+   *   - without `-s`: each op's sheet as the in-memory path resolves it, in document order — its
+   *     `sheet` key or qualified target ref, else the only sheet of a single-sheet book — failing
+   *     at the first op that cannot be placed exactly as in memory (`BATCH_OP_FAILED` at the op's
+   *     index: a sheet that does not exist, or `SHEET_REQUIRED` for an unscoped op on a multi-sheet
+   *     book). Ops that all resolve to one sheet stream to it; ops resolving to two or more are
+   *     refused by index (`UNSUPPORTED_IN_STREAM`): one streamed batch writes one worksheet.
+   */
+  private def resolveBatchSheet(
+    sourcePath: Path,
+    sheetNameOpt: Option[String],
+    scoped: Vector[ScopedOp]
+  ): IO[(String, String)] =
+    sheetNameOpt match
+      case Some(_) => resolveSheetTarget(sourcePath, sheetNameOpt, None, "batch")
+      case None =>
+        for
+          meta <- readMeta(sourcePath)
+          resolved <- scoped.traverse(opSheetInMemory(meta, _))
+          name <- resolved.distinct match
+            case Vector(single) => IO.pure(single)
+            case Vector() =>
+              // Nothing to place: the verb-level rule, as an empty in-memory batch would see it
+              IO.fromEither(Resolve.sheetName(meta, None, None, "batch").left.map(CliException(_)))
+            case many =>
+              IO.raiseError(
+                refusal(
+                  scoped,
+                  s"target different sheets (${many.map(_.value).mkString(", ")}); a streamed " +
+                    "batch writes one worksheet — pass -s to choose it"
+                )
+              )
+          path <- worksheetPath(sourcePath, name.value)
+        yield (name.value, path)
+
+  /**
+   * One op's sheet exactly as [[Resolve.forOp]] resolves it in memory with no batch default: the
+   * sheet the op names, else the only sheet; the two failures are the ones `applyScoped` would
+   * raise for that op, so the refusal reads the same on both paths.
+   */
+  private def opSheetInMemory(meta: LightMetadata, s: ScopedOp): IO[SheetName] =
+    val names = meta.sheets.map(_.name)
+    def failed(cause: CliException): IO[SheetName] = IO.raiseError(BatchParser.opFailed(s, cause))
+    namedSheets(s).headOption.orElse(Resolve.only(meta)) match
+      case Some(name) if names.contains(name) => IO.pure(name)
+      case Some(name) => failed(BatchParser.sheetNotFound(names.map(_.value), name))
+      case None =>
+        val verb = s"batch ${OpRegistry.nameOf(s.op)}"
+        failed(CliException(Resolve.sheetRequired(verb, names.map(_.value))))
+
+  /**
    * Build streaming batch patches from batch operations.
    *
    * Separates operations into:
@@ -477,8 +619,7 @@ object StreamingWriteCommands:
   private def buildStreamingBatchPatches(
     sourcePath: Path,
     worksheetPath: String,
-    ops: Vector[BatchParser.BatchOp],
-    mergePutFormats: Boolean = false
+    ops: Vector[ScopedOp]
   ): IO[
     (
       Map[ARef, StreamingTransform.CellPatch],
@@ -498,30 +639,25 @@ object StreamingWriteCommands:
           else minimalStylesXml
         finally zipFile.close()
 
-      val needsColumnMetadata = ops.exists {
+      val plainOps = ops.map(_.op)
+      val needsColumnMetadata = plainOps.exists {
         case BatchParser.BatchOp.ColWidth(_, _) | BatchParser.BatchOp.ColHide(_) |
             BatchParser.BatchOp.ColShow(_) =>
           true
         case _ => false
       }
-      val targetRows = ops.collect {
+      val targetRows = plainOps.collect {
         case BatchParser.BatchOp.RowHeight(rowNum, _) => Row.from1(rowNum)
         case BatchParser.BatchOp.RowHide(rowNum) => Row.from1(rowNum)
         case BatchParser.BatchOp.RowShow(rowNum) => Row.from1(rowNum)
       }.toSet
       val existingMetadata =
         readExistingWorksheetMetadata(sourcePath, worksheetPath, needsColumnMetadata, targetRows)
-      val formattedPutRefs =
-        if mergePutFormats then
-          ops.collect { case BatchParser.BatchOp.Put(refStr, _, Some(_)) =>
-            ARef.parse(refStr) match
-              case Right(ref) => ref
-              case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
-          }.toSet
-        else Set.empty[ARef]
-      val existingPutStyles =
-        if formattedPutRefs.nonEmpty then
-          scanExistingStyles(sourcePath, worksheetPath, formattedPutRefs)
+      // Every cell a formatted write lands on: its existing xf decides the outcome (GH-560), so
+      // read those xfs once, without materializing the worksheet.
+      val formattedRefs = plainOps.flatMap(formattedTargets).toSet
+      val existingStyles =
+        if formattedRefs.nonEmpty then scanExistingStyles(sourcePath, worksheetPath, formattedRefs)
         else Map.empty[ARef, Int]
 
       // Accumulate patches and metadata
@@ -532,292 +668,286 @@ object StreamingWriteCommands:
       val rowProps = mutable.Map[Row, RowProperties]() ++ existingMetadata.rowProps
       val summaryLines = mutable.ListBuffer[String]()
       val existingStyleCache = mutable.Map[Int, CellStyle]()
-      val addedPutStyleIds = mutable.Map[String, Int]()
+      val addedStyleIds = mutable.Map[String, Int]()
+      // The xfs this batch appended, by id: a later op that merges onto a cell an earlier op
+      // styled reads the cell's style from here, not from the file
+      val addedStyles = mutable.Map[Int, CellStyle]()
 
       var currentStylesXml = stylesXml
       var stylesModified = false
 
-      ops.foreach {
-        case BatchParser.BatchOp.Put(refStr, cellValue, formatOpt) =>
-          val ref = ARef.parse(refStr) match
-            case Right(r) => r
-            case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
-          formatOpt match
-            case Some(numFmt) =>
-              val (cellStyle, reusableStyleId) =
-                if mergePutFormats then
-                  val existingStyleId = existingPutStyles.get(ref)
-                  val existingStyle = existingStyleId
-                    .map { styleId =>
-                      existingStyleCache.getOrElseUpdate(
-                        styleId,
-                        StylePatcher.getStyle(stylesXml, styleId) match
-                          case Right(Some(style)) => style
-                          case Right(None) =>
-                            throw new Exception(s"Existing style ID $styleId was not found")
-                          case Left(e) =>
-                            throw new Exception(s"Failed to read existing style: ${e.message}")
-                      )
-                    }
-                    .getOrElse(CellStyle.default)
-                  // Match Sheet.put(Formatted): preserve explicitly formatted cells, otherwise
-                  // merge the detected number format into existing font/fill/border/alignment.
-                  if existingStyle.numFmt == NumFmt.General then
-                    (existingStyle.withNumFmt(numFmt), None)
-                  else (existingStyle, existingStyleId)
-                else (CellStyle.default.withNumFmt(numFmt), None)
-              val styleId = reusableStyleId.getOrElse {
-                addedPutStyleIds.getOrElseUpdate(
-                  cellStyle.canonicalKey,
-                  StylePatcher.addStyle(currentStylesXml, cellStyle) match
-                    case Right((updatedStyles, addedStyleId)) =>
-                      currentStylesXml = updatedStyles
-                      stylesModified = true
-                      addedStyleId
-                    case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
-                )
-              }
-              cellPatches(ref) = StreamingTransform.CellPatch.SetStyleAndValue(styleId, cellValue)
-            case None =>
-              cellPatches(ref) =
-                StreamingTransform.CellPatch.SetValue(cellValue, preserveStyle = true)
-          summaryLines += s"  PUT $refStr = $cellValue"
+      /** The file's xf `styleId`, decoded once. */
+      def fileStyleById(styleId: Int): CellStyle =
+        existingStyleCache.getOrElseUpdate(
+          styleId,
+          StylePatcher.getStyle(stylesXml, styleId) match
+            case Right(Some(style)) => style
+            case Right(None) =>
+              throw new Exception(s"Existing style ID $styleId was not found")
+            case Left(e) =>
+              throw new Exception(s"Failed to read existing style: ${e.message}")
+        )
 
-        case BatchParser.BatchOp.PutFormula(refStr, formula, formatOpt) =>
-          val ref = ARef.parse(refStr) match
-            case Right(r) => r
-            case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
-          val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
-          val formulaValue = CellValue.Formula(formulaText, None)
-          formatOpt match
-            case Some(numFmt) =>
-              // GH-356: apply numFmt to the formula cell (same styles.xml patching as put)
-              val cellStyle = CellStyle.default.withNumFmt(numFmt)
-              val (updatedStyles, styleId) =
-                StylePatcher.addStyle(currentStylesXml, cellStyle) match
-                  case Right(result) => result
-                  case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
+      def existingStyleOf(ref: ARef): (Option[Int], CellStyle) =
+        val styleIdOpt = existingStyles.get(ref)
+        (styleIdOpt, styleIdOpt.map(fileStyleById).getOrElse(CellStyle.default))
+
+      /**
+       * The style a cell has at this point of the batch — the xf an earlier op in this batch gave
+       * it, else its xf in the file — which is what the in-memory arms see when they read
+       * `getCellStyle` after the ops before them have applied.
+       */
+      def currentStyleOf(ref: ARef): CellStyle =
+        def byId(id: Int): CellStyle = addedStyles.getOrElse(id, fileStyleById(id))
+        cellPatches.get(ref) match
+          case Some(StreamingTransform.CellPatch.SetStyle(id)) => byId(id)
+          case Some(StreamingTransform.CellPatch.SetStyleAndValue(id, _)) => byId(id)
+          case _ => existingStyleOf(ref)._2
+
+      def registerStyle(cellStyle: CellStyle): Int =
+        addedStyleIds.getOrElseUpdate(
+          cellStyle.canonicalKey,
+          StylePatcher.addStyle(currentStylesXml, cellStyle) match
+            case Right((updatedStyles, addedStyleId)) =>
               currentStylesXml = updatedStyles
               stylesModified = true
-              cellPatches(ref) =
-                StreamingTransform.CellPatch.SetStyleAndValue(styleId, formulaValue)
-            case None =>
-              cellPatches(ref) =
-                StreamingTransform.CellPatch.SetValue(formulaValue, preserveStyle = true)
-          summaryLines += s"  PUTF $refStr = $formula"
+              addedStyles(addedStyleId) = cellStyle
+              addedStyleId
+            case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
+        )
 
-        case BatchParser.BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, formatOpt) =>
-          // Parse formula and apply with shifting (same as non-streaming batch mode)
-          val fromARef = ARef.parse(fromRef) match
-            case Right(r) => r
-            case Left(e) => throw new Exception(s"Invalid 'from' ref '$fromRef': $e")
-          val range = CellRange.parse(rangeStr) match
-            case Right(r) => r
-            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-          val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
-          val fullFormula = s"=$formulaText"
+      /**
+       * The xf a formatted write lands on — identical to the in-memory path (ADR-017 invariant 4,
+       * GH-560): an Explicit hint replaces the numFmt on the cell's existing style, keeping its
+       * font, fill and borders (the `applyNumFmt` path); an Inferred one applies only onto a
+       * General cell and otherwise leaves the cell's xf as it is (`Sheet.put`'s merge rule).
+       */
+      def formattedStyleId(ref: ARef, numFmt: NumFmt, hint: FormatHint): Int =
+        val (existingId, existingStyle) = existingStyleOf(ref)
+        (hint, existingId) match
+          case (FormatHint.Inferred, Some(id)) if existingStyle.numFmt != NumFmt.General => id
+          case _ => registerStyle(existingStyle.withNumFmt(numFmt))
 
-          // Parse formula for shifting
-          val parsedExpr = FormulaParser.parse(fullFormula) match
-            case Right(expr) => expr
-            case Left(e) =>
-              throw new Exception(
-                s"Invalid formula '$fullFormula': ${ParseError.formatWithContext(e, fullFormula)}"
-              )
-
-          // GH-356: register the format's style once, reuse across the dragged range
-          val styleIdOpt = formatOpt.map { numFmt =>
-            val cellStyle = CellStyle.default.withNumFmt(numFmt)
-            val (updatedStyles, styleId) =
-              StylePatcher.addStyle(currentStylesXml, cellStyle) match
-                case Right(result) => result
-                case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
-            currentStylesXml = updatedStyles
-            stylesModified = true
-            styleId
-          }
-
-          // Apply formula with shifting
-          val startCol = Column.index0(fromARef.col)
-          val startRow = Row.index0(fromARef.row)
-
-          range.cells.foreach { targetRef =>
-            val colDelta = Column.index0(targetRef.col) - startCol
-            val rowDelta = Row.index0(targetRef.row) - startRow
-            val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
-            val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
-            val formulaValue = CellValue.Formula(shiftedFormula, None)
-            cellPatches(targetRef) = styleIdOpt match
-              case Some(styleId) =>
-                StreamingTransform.CellPatch.SetStyleAndValue(styleId, formulaValue)
+      def applyOp(scoped: ScopedOp): Unit =
+        val hint = scoped.hint
+        scoped.op match
+          case BatchParser.BatchOp.Put(refStr, cellValue, formatOpt) =>
+            val ref = ARef.parse(refStr) match
+              case Right(r) => r
+              case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
+            formatOpt match
+              case Some(numFmt) =>
+                val styleId = formattedStyleId(ref, numFmt, hint)
+                cellPatches(ref) = StreamingTransform.CellPatch.SetStyleAndValue(styleId, cellValue)
               case None =>
-                StreamingTransform.CellPatch.SetValue(formulaValue, preserveStyle = true)
-          }
-          summaryLines += s"  PUTF $rangeStr = $formula (from $fromRef, ${range.cells.size} formulas)"
+                cellPatches(ref) =
+                  StreamingTransform.CellPatch.SetValue(cellValue, preserveStyle = true)
+            summaryLines += s"  PUT $refStr = $cellValue"
 
-        case BatchParser.BatchOp.PutFormulas(rangeStr, formulas, formatOpt) =>
-          val range = CellRange.parse(rangeStr) match
-            case Right(r) => r
-            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-          val cells = range.cellsRowMajor.toVector
-          if cells.length != formulas.length then
-            throw new Exception(
-              s"Range $rangeStr has ${cells.length} cells but ${formulas.length} formulas provided"
-            )
-          // GH-356: register the format's style once, reuse across the range
-          val styleIdOpt = formatOpt.map { numFmt =>
-            val cellStyle = CellStyle.default.withNumFmt(numFmt)
-            val (updatedStyles, styleId) =
-              StylePatcher.addStyle(currentStylesXml, cellStyle) match
-                case Right(result) => result
-                case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
-            currentStylesXml = updatedStyles
-            stylesModified = true
-            styleId
-          }
-          cells.zip(formulas).foreach { case (ref, formula) =>
+          case BatchParser.BatchOp.PutFormula(refStr, formula, formatOpt) =>
+            val ref = ARef.parse(refStr) match
+              case Right(r) => r
+              case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
             val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
             val formulaValue = CellValue.Formula(formulaText, None)
-            cellPatches(ref) = styleIdOpt match
-              case Some(styleId) =>
-                StreamingTransform.CellPatch.SetStyleAndValue(styleId, formulaValue)
-              case None =>
-                StreamingTransform.CellPatch.SetValue(formulaValue, preserveStyle = true)
-          }
-          summaryLines += s"  PUTF $rangeStr = [${formulas.length} formulas]"
-
-        case BatchParser.BatchOp.PutValues(rangeStr, values) =>
-          val range = CellRange.parse(rangeStr) match
-            case Right(r) => r
-            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-          val cells = range.cellsRowMajor.toVector
-          if cells.length != values.length then
-            throw new Exception(
-              s"Range $rangeStr has ${cells.length} cells but ${values.length} values provided"
-            )
-          cells.zip(values).foreach { case (ref, pv) =>
-            pv.format match
+            formatOpt match
               case Some(numFmt) =>
-                val cellStyle = CellStyle.default.withNumFmt(numFmt)
-                val (updatedStyles, styleId) =
-                  StylePatcher.addStyle(currentStylesXml, cellStyle) match
-                    case Right(result) => result
-                    case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
-                currentStylesXml = updatedStyles
-                stylesModified = true
+                // GH-356: a putf format is always explicit — replace the numFmt, keep the font
+                val styleId = formattedStyleId(ref, numFmt, FormatHint.Explicit)
                 cellPatches(ref) =
-                  StreamingTransform.CellPatch.SetStyleAndValue(styleId, pv.cellValue)
+                  StreamingTransform.CellPatch.SetStyleAndValue(styleId, formulaValue)
               case None =>
                 cellPatches(ref) =
-                  StreamingTransform.CellPatch.SetValue(pv.cellValue, preserveStyle = true)
-          }
-          summaryLines += s"  PUT $rangeStr = [${values.length} values]"
+                  StreamingTransform.CellPatch.SetValue(formulaValue, preserveStyle = true)
+            summaryLines += s"  PUTF $refStr = $formula"
 
-        case BatchParser.BatchOp.Style(rangeStr, props) =>
-          val range = CellRange.parse(rangeStr) match
-            case Right(r) => r
-            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+          case BatchParser.BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, formatOpt) =>
+            // Parse formula and apply with shifting (same as non-streaming batch mode)
+            val fromARef = ARef.parse(fromRef) match
+              case Right(r) => r
+              case Left(e) => throw new Exception(s"Invalid 'from' ref '$fromRef': $e")
+            val range = CellRange.parse(rangeStr) match
+              case Right(r) => r
+              case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+            val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
+            val fullFormula = s"=$formulaText"
 
-          // Build CellStyle from props using same approach as StyleBuilder
-          val cellStyle = buildCellStyleFromPropsSync(props)
+            // Parse formula for shifting
+            val parsedExpr = FormulaParser.parse(fullFormula) match
+              case Right(expr) => expr
+              case Left(e) =>
+                throw new Exception(
+                  s"Invalid formula '$fullFormula': ${ParseError.formatWithContext(e, fullFormula)}"
+                )
 
-          // Add style to styles.xml and get ID
-          val (updatedStyles, styleId) = StylePatcher.addStyle(currentStylesXml, cellStyle) match
-            case Right(result) => result
-            case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
-          currentStylesXml = updatedStyles
-          stylesModified = true
+            // Apply formula with shifting; GH-356: the explicit format lands on each cell's own xf
+            val startCol = Column.index0(fromARef.col)
+            val startRow = Row.index0(fromARef.row)
 
-          // Apply to all cells in range, merging with existing patches
-          range.cells.foreach { ref =>
-            cellPatches.get(ref) match
-              case Some(StreamingTransform.CellPatch.SetValue(value, _)) =>
-                // Cell already has a value patch - convert to SetStyleAndValue
-                cellPatches(ref) = StreamingTransform.CellPatch.SetStyleAndValue(styleId, value)
-              case Some(StreamingTransform.CellPatch.SetStyleAndValue(_, value)) =>
-                // Cell already has SetStyleAndValue - update the style
-                cellPatches(ref) = StreamingTransform.CellPatch.SetStyleAndValue(styleId, value)
-              case Some(StreamingTransform.CellPatch.SetStyle(_)) =>
-                // Cell already has style - replace it
-                cellPatches(ref) = StreamingTransform.CellPatch.SetStyle(styleId)
-              case None =>
-                // No existing patch - just set style
-                cellPatches(ref) = StreamingTransform.CellPatch.SetStyle(styleId)
-          }
-          summaryLines += s"  STYLE $rangeStr"
+            range.cells.foreach { targetRef =>
+              val colDelta = Column.index0(targetRef.col) - startCol
+              val rowDelta = Row.index0(targetRef.row) - startRow
+              val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
+              val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
+              val formulaValue = CellValue.Formula(shiftedFormula, None)
+              cellPatches(targetRef) = formatOpt match
+                case Some(numFmt) =>
+                  val styleId = formattedStyleId(targetRef, numFmt, FormatHint.Explicit)
+                  StreamingTransform.CellPatch.SetStyleAndValue(styleId, formulaValue)
+                case None =>
+                  StreamingTransform.CellPatch.SetValue(formulaValue, preserveStyle = true)
+            }
+            summaryLines += s"  PUTF $rangeStr = $formula (from $fromRef, ${range.cells.size} formulas)"
 
-        case BatchParser.BatchOp.Merge(rangeStr) =>
-          val range = CellRange.parse(rangeStr) match
-            case Right(r) => r
-            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-          addMerges += range
-          summaryLines += s"  MERGE $rangeStr"
+          case BatchParser.BatchOp.PutFormulas(rangeStr, formulas, formatOpt) =>
+            val range = CellRange.parse(rangeStr) match
+              case Right(r) => r
+              case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+            val cells = range.cellsRowMajor.toVector
+            if cells.length != formulas.length then
+              throw new Exception(
+                s"Range $rangeStr has ${cells.length} cells but ${formulas.length} formulas provided"
+              )
+            // GH-356: the explicit format lands on each cell's own xf (font kept, numFmt replaced)
+            cells.zip(formulas).foreach { case (ref, formula) =>
+              val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
+              val formulaValue = CellValue.Formula(formulaText, None)
+              cellPatches(ref) = formatOpt match
+                case Some(numFmt) =>
+                  val styleId = formattedStyleId(ref, numFmt, FormatHint.Explicit)
+                  StreamingTransform.CellPatch.SetStyleAndValue(styleId, formulaValue)
+                case None =>
+                  StreamingTransform.CellPatch.SetValue(formulaValue, preserveStyle = true)
+            }
+            summaryLines += s"  PUTF $rangeStr = [${formulas.length} formulas]"
 
-        case BatchParser.BatchOp.Unmerge(rangeStr) =>
-          val range = CellRange.parse(rangeStr) match
-            case Right(r) => r
-            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-          removeMerges += range
-          summaryLines += s"  UNMERGE $rangeStr"
+          case BatchParser.BatchOp.PutValues(rangeStr, values) =>
+            val range = CellRange.parse(rangeStr) match
+              case Right(r) => r
+              case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+            val cells = range.cellsRowMajor.toVector
+            if cells.length != values.length then
+              throw new Exception(
+                s"Range $rangeStr has ${cells.length} cells but ${values.length} values provided"
+              )
+            // The op-level `format` (GH-416) is the Explicit hint for every element; detected
+            // formats inside the array are Inferred (GH-560)
+            cells.zip(values).foreach { case (ref, pv) =>
+              pv.format match
+                case Some(numFmt) =>
+                  val styleId = formattedStyleId(ref, numFmt, hint)
+                  cellPatches(ref) =
+                    StreamingTransform.CellPatch.SetStyleAndValue(styleId, pv.cellValue)
+                case None =>
+                  cellPatches(ref) =
+                    StreamingTransform.CellPatch.SetValue(pv.cellValue, preserveStyle = true)
+            }
+            summaryLines += s"  PUT $rangeStr = [${values.length} values]"
 
-        case BatchParser.BatchOp.ColWidth(colStr, width) =>
-          val col = Column.fromLetter(colStr) match
-            case Right(c) => c
-            case Left(e) => throw new Exception(s"Invalid column '$colStr': $e")
-          columns(col) = columns.getOrElse(col, ColumnProperties()).copy(width = Some(width))
-          summaryLines += s"  COLWIDTH $colStr = $width"
+          case BatchParser.BatchOp.Style(rangeStr, props) =>
+            val range = CellRange.parse(rangeStr) match
+              case Right(r) => r
+              case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
 
-        case BatchParser.BatchOp.RowHeight(rowNum, height) =>
-          val row = Row.from1(rowNum)
-          rowProps(row) = rowProps.getOrElse(row, RowProperties()).copy(height = Some(height))
-          summaryLines += s"  ROWHEIGHT $rowNum = $height"
+            // The op's properties as a style, built as StyleBuilder would
+            val overlay = buildCellStyleFromPropsSync(props)
 
-        case BatchParser.BatchOp.ColHide(colStr) =>
-          val col = Column.fromLetter(colStr) match
-            case Right(c) => c
-            case Left(e) => throw new Exception(s"Invalid column '$colStr': $e")
-          val existing = columns.getOrElse(col, ColumnProperties())
-          columns(col) = existing.copy(hidden = true)
-          summaryLines += s"  COL-HIDE $colStr"
+            // `replace`: every cell gets the overlay as its whole xf. Otherwise (the default) the
+            // overlay is laid over each cell's CURRENT style — the xf an earlier op in this batch
+            // gave it, else its xf in the file — through the very merge the in-memory arm uses, so
+            // a `put … "format":"percent"` followed by `style … "bold":true` is bold AND percent
+            // on both paths (ADR-017 invariant 2)
+            def styleIdFor(ref: ARef): Int =
+              if props.replace then registerStyle(overlay)
+              else registerStyle(StyleBuilder.mergeStyles(currentStyleOf(ref), overlay))
 
-        case BatchParser.BatchOp.ColShow(colStr) =>
-          val col = Column.fromLetter(colStr) match
-            case Right(c) => c
-            case Left(e) => throw new Exception(s"Invalid column '$colStr': $e")
-          val existing = columns.getOrElse(col, ColumnProperties())
-          columns(col) = existing.copy(hidden = false)
-          summaryLines += s"  COL-SHOW $colStr"
+            // Apply to all cells in range, keeping any value an earlier op wrote
+            range.cells.foreach { ref =>
+              val styleId = styleIdFor(ref)
+              cellPatches(ref) = cellPatches.get(ref) match
+                case Some(StreamingTransform.CellPatch.SetValue(value, _)) =>
+                  StreamingTransform.CellPatch.SetStyleAndValue(styleId, value)
+                case Some(StreamingTransform.CellPatch.SetStyleAndValue(_, value)) =>
+                  StreamingTransform.CellPatch.SetStyleAndValue(styleId, value)
+                case _ =>
+                  StreamingTransform.CellPatch.SetStyle(styleId)
+            }
+            summaryLines += s"  STYLE $rangeStr"
 
-        case BatchParser.BatchOp.RowHide(rowNum) =>
-          val row = Row.from1(rowNum)
-          val existing = rowProps.getOrElse(row, RowProperties())
-          rowProps(row) = existing.copy(hidden = true)
-          summaryLines += s"  ROW-HIDE $rowNum"
+          case BatchParser.BatchOp.Merge(rangeStr) =>
+            val range = CellRange.parse(rangeStr) match
+              case Right(r) => r
+              case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+            addMerges += range
+            summaryLines += s"  MERGE $rangeStr"
 
-        case BatchParser.BatchOp.RowShow(rowNum) =>
-          val row = Row.from1(rowNum)
-          val existing = rowProps.getOrElse(row, RowProperties())
-          rowProps(row) = existing.copy(hidden = false)
-          summaryLines += s"  ROW-SHOW $rowNum"
+          case BatchParser.BatchOp.Unmerge(rangeStr) =>
+            val range = CellRange.parse(rangeStr) match
+              case Right(r) => r
+              case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+            removeMerges += range
+            summaryLines += s"  UNMERGE $rangeStr"
 
-        // Ops that require full workbook context (not supported in streaming mode).
-        // Unfreeze is a parameterless (singleton) enum case, so it is matched by
-        // value reference rather than the `_:` typed pattern used for the others.
-        case _: BatchParser.BatchOp.AddComment | _: BatchParser.BatchOp.RemoveComment |
-            _: BatchParser.BatchOp.Clear | _: BatchParser.BatchOp.AutoFit |
-            _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
-            _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
-            _: BatchParser.BatchOp.CopyRange | _: BatchParser.BatchOp.Hyperlink |
-            _: BatchParser.BatchOp.AddChart | _: BatchParser.BatchOp.SetSheetView |
-            _: BatchParser.BatchOp.SetTabColor | _: BatchParser.BatchOp.SetAutoFilter |
-            _: BatchParser.BatchOp.GroupRows | _: BatchParser.BatchOp.GroupCols |
-            _: BatchParser.BatchOp.UngroupRows | _: BatchParser.BatchOp.UngroupCols |
-            _: BatchParser.BatchOp.SetPageSetup | _: BatchParser.BatchOp.SetHeaderFooter |
-            _: BatchParser.BatchOp.AddConditionalFormat =>
-          throw new Exception(
-            "This batch operation is not supported in streaming mode. " +
-              "Remove --stream to use full workbook mode."
-          )
+          case BatchParser.BatchOp.ColWidth(colStr, width) =>
+            val col = Column.fromLetter(colStr) match
+              case Right(c) => c
+              case Left(e) => throw new Exception(s"Invalid column '$colStr': $e")
+            columns(col) = columns.getOrElse(col, ColumnProperties()).copy(width = Some(width))
+            summaryLines += s"  COLWIDTH $colStr = $width"
+
+          case BatchParser.BatchOp.RowHeight(rowNum, height) =>
+            val row = Row.from1(rowNum)
+            rowProps(row) = rowProps.getOrElse(row, RowProperties()).copy(height = Some(height))
+            summaryLines += s"  ROWHEIGHT $rowNum = $height"
+
+          case BatchParser.BatchOp.ColHide(colStr) =>
+            val col = Column.fromLetter(colStr) match
+              case Right(c) => c
+              case Left(e) => throw new Exception(s"Invalid column '$colStr': $e")
+            val existing = columns.getOrElse(col, ColumnProperties())
+            columns(col) = existing.copy(hidden = true)
+            summaryLines += s"  COL-HIDE $colStr"
+
+          case BatchParser.BatchOp.ColShow(colStr) =>
+            val col = Column.fromLetter(colStr) match
+              case Right(c) => c
+              case Left(e) => throw new Exception(s"Invalid column '$colStr': $e")
+            val existing = columns.getOrElse(col, ColumnProperties())
+            columns(col) = existing.copy(hidden = false)
+            summaryLines += s"  COL-SHOW $colStr"
+
+          case BatchParser.BatchOp.RowHide(rowNum) =>
+            val row = Row.from1(rowNum)
+            val existing = rowProps.getOrElse(row, RowProperties())
+            rowProps(row) = existing.copy(hidden = true)
+            summaryLines += s"  ROW-HIDE $rowNum"
+
+          case BatchParser.BatchOp.RowShow(rowNum) =>
+            val row = Row.from1(rowNum)
+            val existing = rowProps.getOrElse(row, RowProperties())
+            rowProps(row) = existing.copy(hidden = false)
+            summaryLines += s"  ROW-SHOW $rowNum"
+
+          // Every op `isStreamable` rejects was refused by `batch` before any byte was written
+          // (UNSUPPORTED_IN_STREAM, by index). Should a caller ever bypass that guard, the failure
+          // stays typed — `BATCH_OP_FAILED` by index carrying this text and hint, never a stack
+          // trace.
+          case other =>
+            throw CliException(
+              CliError(
+                ErrorCode.UNSUPPORTED_IN_STREAM,
+                s"op '${OpRegistry.nameOf(other)}' is not supported in streaming mode; " +
+                  "drop --stream to apply it in memory",
+                hint = Some("drop --stream to apply it in memory")
+              )
+            )
+
+      // Every failure while applying an op is `BATCH_OP_FAILED` naming the op's 1-based index and
+      // name, with the cause's text as the suffix and `location.opIndex` set — the same rewrap the
+      // in-memory path applies (`BatchParser.opFailed`), so an agent reads one shape on both paths
+      ops.foreach { scoped =>
+        try applyOp(scoped)
+        catch case scala.util.control.NonFatal(cause) => throw BatchParser.opFailed(scoped, cause)
       }
 
       val worksheetMetadata = StreamingTransform.WorksheetMetadata(
@@ -831,6 +961,26 @@ object StreamingWriteCommands:
 
       (cellPatches.toMap, updatedStylesXml, worksheetMetadata, summaryLines.mkString("\n"))
     }
+
+  /**
+   * The cells whose existing style an op consults: a `put`/`putf` with a format, a dragged or
+   * listed formula range with a format, a `values` array with any formatted element, and a merging
+   * (non-`replace`) `style`, which lays its properties over each cell's current style. Unparseable
+   * refs are left for the arm to report.
+   */
+  private def formattedTargets(op: BatchParser.BatchOp): Vector[ARef] =
+    def cellsOf(rangeStr: String): Vector[ARef] =
+      CellRange.parse(rangeStr).toOption.toList.flatMap(_.cells).toVector
+    def cellOf(refStr: String): Vector[ARef] = ARef.parse(refStr).toOption.toList.toVector
+    op match
+      case BatchParser.BatchOp.Put(refStr, _, Some(_)) => cellOf(refStr)
+      case BatchParser.BatchOp.PutValues(rangeStr, values) if values.exists(_.format.isDefined) =>
+        cellsOf(rangeStr)
+      case BatchParser.BatchOp.PutFormula(refStr, _, Some(_)) => cellOf(refStr)
+      case BatchParser.BatchOp.PutFormulaDragging(rangeStr, _, _, Some(_)) => cellsOf(rangeStr)
+      case BatchParser.BatchOp.PutFormulas(rangeStr, _, Some(_)) => cellsOf(rangeStr)
+      case BatchParser.BatchOp.Style(rangeStr, props) if !props.replace => cellsOf(rangeStr)
+      case _ => Vector.empty
 
   /** Read style IDs for selected cells without materializing the worksheet. */
   private def scanExistingStyles(
@@ -1093,17 +1243,91 @@ object StreamingWriteCommands:
       |</styleSheet>""".stripMargin.replaceAll("\n", "")
 
   /**
-   * Resolve worksheet path from name by parsing workbook.xml and workbook.xml.rels metadata.
-   *
-   * Lightweight operation - only reads workbook.xml/workbook.xml.rels, not worksheet data.
+   * A target ref as its optional sheet qualifier and its cell or range; `label` names it in the
+   * error (`Invalid reference: …`, `Invalid range: …`).
    */
+  private def parseTarget(
+    refStr: String,
+    label: String
+  ): IO[(Option[SheetName], Either[ARef, CellRange])] =
+    IO.fromEither(
+      RefType
+        .parse(refStr)
+        .left
+        .map(_ => new Exception(s"Invalid $label: $refStr"))
+        .map {
+          case RefType.Cell(ref) => (None, Left(ref))
+          case RefType.Range(range) => (None, Right(range))
+          case RefType.QualifiedCell(sheet, ref) => (Some(sheet), Left(ref))
+          case RefType.QualifiedRange(sheet, range) => (Some(sheet), Right(range))
+        }
+    )
+
+  /** The `SHEET_REQUIRED` context for an unqualified target, worded as the in-memory twin's. */
+  private def unqualifiedContext(
+    verb: String,
+    refStr: String,
+    target: Either[ARef, CellRange]
+  ): String =
+    target.fold(
+      _ => s"$verb with unqualified ref '$refStr'",
+      _ => s"$verb with unqualified range '$refStr'"
+    )
+
   private val relsNamespace =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
   private def resolveSheetPath(
     sourcePath: Path,
-    sheetNameOpt: Option[String]
+    sheetNameOpt: Option[String],
+    qualified: Option[SheetName],
+    verb: String
   ): IO[String] =
+    resolveSheetTarget(sourcePath, sheetNameOpt, qualified, verb).map(_._2)
+
+  /**
+   * The streamed worksheet as `(sheet name, worksheet part path)`: the name by THE sheet rule over
+   * `workbook.xml` ([[Resolve.sheetName]], ADR-017 §2.5 — the ref's qualifier, else `-s`, else the
+   * only sheet of a single-sheet book, else `SHEET_REQUIRED`), the part path from
+   * `workbook.xml.rels` ([[worksheetPath]]). Lightweight: reads those two parts and each
+   * worksheet's opening `<dimension>` only, never cell data.
+   */
+  private def resolveSheetTarget(
+    sourcePath: Path,
+    sheetNameOpt: Option[String],
+    qualified: Option[SheetName],
+    verb: String
+  ): IO[(String, String)] =
+    for
+      meta <- readMeta(sourcePath)
+      name <- IO.fromEither(
+        Resolve.sheetName(meta, sheetNameOpt, qualified, verb).left.map(CliException(_))
+      )
+      path <- worksheetPath(sourcePath, name.value)
+    yield (name.value, path)
+
+  /**
+   * `workbook.xml` (and each sheet's `<dimension>`) as [[LightMetadata]]; unreadable is `IO_READ`.
+   */
+  private def readMeta(sourcePath: Path): IO[LightMetadata] =
+    IO.fromEither(WorkbookMetadataReader.read(sourcePath).left.map(readFailure(sourcePath, _)))
+
+  /** An unreadable input is `IO_READ` (exit 3), as on every other verb. */
+  private def readFailure(sourcePath: Path, err: XLError): CliException =
+    CliException(
+      CliError(
+        ErrorCode.IO_READ,
+        err.message,
+        location = Some(Location.file(sourcePath.toString)),
+        cause = Some(err)
+      )
+    )
+
+  /**
+   * The worksheet part path of the named sheet: its `<sheet r:id>` in workbook.xml resolved through
+   * workbook.xml.rels, with the `sheet<sheetId>.xml` convention as the fallback.
+   */
+  private def worksheetPath(sourcePath: Path, sheetName: String): IO[String] =
     IO.delay {
       val zipFile = new ZipFile(sourcePath.toFile)
       try
@@ -1117,29 +1341,9 @@ object StreamingWriteCommands:
             throw new Exception(s"Failed to parse workbook.xml: ${err.message}")
           case Right(wbXml) =>
             val sheets = (wbXml \\ "sheet").collect { case elem: Elem => elem }.toSeq
-
-            if sheets.isEmpty then throw new Exception("Workbook has no sheets")
-
-            // IterableOps: .head safe because sheets.isEmpty checked above and size>1 throws
-            @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
-            val targetSheet = sheetNameOpt match
-              case None =>
-                if sheets.size > 1 then
-                  val names = sheets.map(s => (s \ "@name").text).mkString(", ")
-                  throw new Exception(
-                    s"Multiple sheets found: $names. Use --sheet to specify which sheet to modify."
-                  )
-                sheets.head
-              case Some(targetName) =>
-                val found = sheets.find { sheetElem =>
-                  (sheetElem \ "@name").text == targetName
-                }
-                found.getOrElse {
-                  val names = sheets.map(s => (s \ "@name").text).mkString(", ")
-                  throw new Exception(
-                    s"Sheet '$targetName' not found. Available sheets: $names"
-                  )
-                }
+            val targetSheet = sheets
+              .find(sheetElem => (sheetElem \ "@name").text == sheetName)
+              .getOrElse(throw new Exception(s"Worksheet not found in workbook.xml: $sheetName"))
 
             val sheetIdStr = targetSheet \@ "sheetId"
             val sheetId = sheetIdStr.toIntOption.getOrElse {

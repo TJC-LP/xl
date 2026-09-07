@@ -1,0 +1,9 @@
+## args
+-f
+<DIR>/simple.xlsx
+names
+## exit
+0
+## stdout
+No defined names in workbook
+## stderr

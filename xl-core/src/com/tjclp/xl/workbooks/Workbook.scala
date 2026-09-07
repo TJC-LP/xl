@@ -121,11 +121,19 @@ final case class Workbook(
       acc.put(sheet)
     }
 
-  /** Add sheet at end */
+  /** Add sheet at end; a name already used (in any case) is [[XLError.DuplicateSheet]]. */
   @deprecated("Use put(sheet) instead (add-or-replace semantic)", "0.2.0")
   def addSheet(sheet: Sheet): XLResult[Workbook] =
-    if sheets.exists(_.name == sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
+    if hasSheetNamed(sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
     else Right(copy(sheets = sheets :+ sheet))
+
+  /**
+   * Whether a sheet other than `except` already carries `name` — compared the way Excel compares
+   * sheet names, case-insensitively: a book with tabs `S` and `s` is one Excel refuses to open
+   * cleanly, and a formula naming `s` resolves against `S`.
+   */
+  private def hasSheetNamed(name: SheetName, except: Option[SheetName] = None): Boolean =
+    sheets.exists(s => !except.contains(s.name) && s.name.value.equalsIgnoreCase(name.value))
 
   /** Remove sheet by name (preferred method) */
   def remove(name: SheetName): XLResult[Workbook] =
@@ -177,12 +185,17 @@ final case class Workbook(
    * Typed-chart data references (`DataRef.sheet` / `SeriesName.FromCell.sheet`) matching the old
    * name are remapped across ALL sheets (GH-222) — Excel tracks renames in chart sources. Preserved
    * chart fragments and formula strings are NOT remapped (existing limitation, documented).
+   *
+   * The new name is refused as [[XLError.DuplicateSheet]] when ANOTHER sheet already carries it in
+   * any case (Excel sheet names are case-insensitive: renaming `T` to `s` beside `S` would write
+   * two tabs Excel treats as one, and `=s!A1` would resolve against `S`). Renaming a sheet to a
+   * different spelling of its own name (`Data` to `DATA`) is a plain rename.
    */
   def rename(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == oldName) match
       case -1 => Left(XLError.SheetNotFound(oldName.value))
       case index =>
-        if sheets.exists(s => s.name == newName && s.name != oldName) then
+        if hasSheetNamed(newName, except = Some(oldName)) then
           Left(XLError.DuplicateSheet(newName.value))
         else
           val updated = sheets(index).copy(name = newName)
@@ -312,11 +325,14 @@ final case class Workbook(
         )
       )
 
-  /** Insert sheet at specific index (explicit positioning - rarely needed) */
+  /**
+   * Insert sheet at specific index (explicit positioning - rarely needed). A name already used, in
+   * any case, is [[XLError.DuplicateSheet]].
+   */
   def insertAt(index: Int, sheet: Sheet): XLResult[Workbook] =
     if index < 0 || index > sheets.size then
       Left(XLError.OutOfBounds(s"insert[$index]", s"Valid range: 0 to ${sheets.size}"))
-    else if sheets.exists(_.name == sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
+    else if hasSheetNamed(sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
     else
       val (before, after) = sheets.splitAt(index)
       val updatedContext = sourceContext.map(_.markMetadataModified)
@@ -611,6 +627,42 @@ object Workbook:
     inline rest: String*
   ): Workbook | XLResult[Workbook] =
     ${ com.tjclp.xl.macros.WorkbookMacros.createMultiImpl('first, 'second, 'rest) }
+
+  /**
+   * Create a workbook with one empty sheet from a name computed at runtime — the explicit twin of
+   * the union-typed `apply(String)` (GH-465, the [[com.tjclp.xl.sheets.Sheet.named]] pattern).
+   *
+   * Semantically the dynamic branch of `apply`: the same [[SheetName]] validation and the same
+   * [[XLError.InvalidSheetName]] error, but non-inline with the `XLResult` spelled in the
+   * signature, so the `.map`/`.unsafe` step is expected rather than a surprise:
+   *
+   * {{{
+   * val nm: String = config.sheetName
+   * val wb: XLResult[Workbook] = Workbook.named(nm).map(_.upsert("Log", identity))
+   * }}}
+   */
+  def named(name: String): XLResult[Workbook] =
+    Sheet.named(name).map(sheet => Workbook(Vector(sheet)))
+
+  /**
+   * Create a workbook with several empty sheets from names computed at runtime — the twin of
+   * `apply(first, second, rest*)` (GH-465).
+   *
+   * Names are validated in argument order and the first failure wins: an invalid name is
+   * [[XLError.InvalidSheetName]]; a name already used earlier in the list is
+   * [[XLError.DuplicateSheet]] (Excel compares sheet names case-insensitively, so `"Data"` and
+   * `"data"` repeat). The union-typed `apply` performs no duplicate check.
+   */
+  def named(first: String, second: String, rest: String*): XLResult[Workbook] =
+    (first +: second +: rest)
+      .foldLeft[XLResult[Vector[Sheet]]](Right(Vector.empty)) { (acc, name) =>
+        acc.flatMap { sheets =>
+          if sheets.exists(_.name.value.equalsIgnoreCase(name)) then
+            Left(XLError.DuplicateSheet(name))
+          else Sheet.named(name).map(sheets :+ _)
+        }
+      }
+      .map(sheets => Workbook(sheets))
 
   /** Create empty workbook with a single sheet named "Sheet1" */
   def empty: Workbook =

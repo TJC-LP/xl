@@ -1,0 +1,44 @@
+## args
+-f
+<DIR>/circular.xlsx
+-s
+Data
+--json
+view
+A1:A1
+--eval
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "view",
+  "version": "<VERSION>",
+  "data": {
+    "sheet": "Data",
+    "range": "A1:A1",
+    "rows": [
+      {
+        "row": 1,
+        "cells": [
+          {
+            "ref": "A1",
+            "type": "formula",
+            "formula": "=A1+1",
+            "value": null,
+            "formatted": ""
+          }
+        ]
+      }
+    ]
+  },
+  "warnings": [
+    {
+      "code": "EVAL_FAILED",
+      "message": "Formula evaluation failed: Formula error in '': Circular reference detected: cell_0 → cell_0"
+    }
+  ],
+  "error": null
+}
+## stderr

@@ -5,14 +5,25 @@ import java.nio.file.Path
 import cats.effect.IO
 import cats.implicits.*
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.ViewFormat
-import com.tjclp.xl.cli.helpers.{SheetResolver, ValueParser}
+import com.tjclp.xl.cli.{CliIO, ViewFormat}
+import com.tjclp.xl.cli.contract.{
+  CliError,
+  CliException,
+  Diagnostics,
+  ErrorCode,
+  Warning,
+  WarningCode
+}
+import com.tjclp.xl.cli.helpers.{Resolve, SheetResolver, ValueParser}
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown, RendererCommon}
 import com.tjclp.xl.cli.raster.{RasterFormat, RasterizerChain}
 import com.tjclp.xl.display.NumFmtFormatter
+import com.tjclp.xl.error.XLException
 import com.tjclp.xl.formula.{DependencyGraph, FormulaParser, SheetEvaluator}
+import com.tjclp.xl.formula.eval.EvalError
+import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -21,6 +32,23 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  * Commands that read data without modification: bounds, view, cell, search, stats, eval.
  */
 object ReadCommands:
+
+  // --- Typed failures (ADR-017 §2.3): every refusal names its code ------------------------------
+
+  /** A wrong flag or argument combination: `USAGE` (exit 2). */
+  private def usage(message: String): CliException = CliException(CliError.usage(message, None))
+
+  /** A ref of the wrong shape (a range where one cell is needed): `INVALID_REFERENCE`. */
+  private def invalidRef(reason: String): CliException =
+    CliException(Resolve.invalidReference(reason))
+
+  /** A formula that does not parse: `FORMULA_ERROR` with the parser's own message. */
+  private def unparseable(error: ParseError, formula: String): XLException =
+    XLException(ParseError.toXLError(error, formula))
+
+  /** A cycle found while ordering the closure: the evaluator's own error, with its code. */
+  private def cyclic(error: EvalError, formula: String): XLException =
+    XLException(EvalError.toXLError(error, Some(formula)))
 
   /**
    * Show used range of current sheet.
@@ -47,6 +75,13 @@ object ReadCommands:
 
   /**
    * View range in various formats.
+   *
+   * @param warn
+   *   where the out-of-band notices go — the truncation (`TRUNCATED`) and hidden-line
+   *   (`HIDDEN_OMITTED`) notices of the formats whose stdout must stay clean (csv, html, svg). The
+   *   runner collects them for the run's stderr or the `--json` envelope; the default prints
+   *   `Warning[CODE]: …` straight to the process stderr. Markdown and JSON carry the same notices
+   *   in-band (a trailer, `truncated`/`hiddenRows` fields) and do not warn.
    */
   def view(
     wb: Workbook,
@@ -66,7 +101,8 @@ object ReadCommands:
     skipEmpty: Boolean,
     headerRow: Option[Int],
     rasterizer: Option[String] = None,
-    skipHidden: Boolean = false
+    skipHidden: Boolean = false,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "view")
@@ -92,62 +128,56 @@ object ReadCommands:
         limitedRange.end.row.index0,
         skipHidden
       )
+      truncated = Warning(WarningCode.TRUNCATED, notice)
+      hiddenWarning = hiddenNote.map(Warning(WarningCode.HIDDEN_OMITTED, _))
       theme = wb.metadata.theme // Use workbook's parsed theme
+      // Pre-evaluate formulas when --eval is set (cross-sheet references need the workbook);
+      // `gate` is whether an evaluation failure is the --strict gate or an EVAL_FAILED warning
+      evaluated = (gate: Boolean) =>
+        if evalFormulas then
+          evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), gate, warn)
+        else IO.pure(targetSheet)
       result <- format match
         case ViewFormat.Markdown =>
-          // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
-          val sheetToRender =
-            if evalFormulas then
-              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
-            else targetSheet
-          val table = Markdown.renderRange(
-            sheetToRender,
-            limitedRange,
-            showFormulas,
-            skipEmpty,
-            evalFormulas = false,
-            skipHidden = skipHidden
-          )
-          val withTruncation = if isTruncated then s"$table\n$notice" else table
-          IO.pure(hiddenNote.fold(withTruncation)(n => s"$withTruncation\n$n"))
+          evaluated(strict).map { sheetToRender =>
+            val table = Markdown.renderRange(
+              sheetToRender,
+              limitedRange,
+              showFormulas,
+              skipEmpty,
+              evalFormulas = false,
+              skipHidden = skipHidden
+            )
+            val withTruncation = if isTruncated then s"$table\n$notice" else table
+            hiddenNote.fold(withTruncation)(n => s"$withTruncation\n$n")
+          }
         case ViewFormat.Html =>
-          // Pre-evaluate formulas if --eval flag is set
-          val sheetToRender =
-            if evalFormulas then
-              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
-            else targetSheet
-          val html = sheetToRender.toHtml(
-            limitedRange,
-            theme = theme,
-            applyPrintScale = printScale,
-            showLabels = showLabels
-          )
-          // In-band marker as a trailing HTML comment (comments after the root
-          // element are valid HTML), plus a human-visible notice on stderr.
-          IO(System.err.println(notice))
-            .whenA(isTruncated)
-            .as(if isTruncated then s"$html\n<!-- $notice -->" else html)
+          evaluated(strict).flatMap { sheetToRender =>
+            val html = sheetToRender.toHtml(
+              limitedRange,
+              theme = theme,
+              applyPrintScale = printScale,
+              showLabels = showLabels
+            )
+            // In-band marker as a trailing HTML comment (comments after the root
+            // element are valid HTML), plus a TRUNCATED warning out of band.
+            warn(truncated)
+              .whenA(isTruncated)
+              .as(if isTruncated then s"$html\n<!-- $notice -->" else html)
+          }
         case ViewFormat.Svg =>
-          // Pre-evaluate formulas if --eval flag is set
-          val sheetToRender =
-            if evalFormulas then
-              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
-            else targetSheet
-          val svg = sheetToRender.toSvg(
-            limitedRange,
-            theme = theme,
-            showGridlines = showGridlines,
-            showLabels = showLabels
-          )
-          // SVG stdout must stay a clean XML document: notice goes to stderr only.
-          IO(System.err.println(notice)).whenA(isTruncated).as(svg)
+          evaluated(strict).flatMap { sheetToRender =>
+            val svg = sheetToRender.toSvg(
+              limitedRange,
+              theme = theme,
+              showGridlines = showGridlines,
+              showLabels = showLabels
+            )
+            // SVG stdout must stay a clean XML document: the notice is a warning only.
+            warn(truncated).whenA(isTruncated).as(svg)
+          }
         case ViewFormat.Json =>
-          // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
-          val sheetToRender =
-            if evalFormulas then
-              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
-            else targetSheet
-          IO.pure(
+          evaluated(strict).map { sheetToRender =>
             JsonRenderer.renderRange(
               sheetToRender,
               limitedRange,
@@ -158,65 +188,60 @@ object ReadCommands:
               truncatedTotalRows = Option.when(isTruncated)(totalRows),
               skipHidden = skipHidden
             )
-          )
+          }
         case ViewFormat.Csv =>
-          // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
-          val sheetToRender =
-            if evalFormulas then
-              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
-            else targetSheet
-          val csv = CsvRenderer.renderRange(
-            sheetToRender,
-            limitedRange,
-            showFormulas,
-            showLabels,
-            skipEmpty,
-            evalFormulas = false,
-            skipHidden = skipHidden
-          )
-          // CSV stdout must stay machine-parseable: notices go to stderr only.
-          IO(System.err.println(notice))
-            .whenA(isTruncated)
-            .productR(hiddenNote.traverse_(n => IO(System.err.println(n))))
-            .as(csv)
+          evaluated(strict).flatMap { sheetToRender =>
+            val csv = CsvRenderer.renderRange(
+              sheetToRender,
+              limitedRange,
+              showFormulas,
+              showLabels,
+              skipEmpty,
+              evalFormulas = false,
+              skipHidden = skipHidden
+            )
+            // CSV stdout must stay machine-parseable: notices are warnings only.
+            warn(truncated)
+              .whenA(isTruncated)
+              .productR(hiddenWarning.traverse_(warn))
+              .as(csv)
+          }
         case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
           rasterOutput match
             case None =>
               IO.raiseError(
-                new Exception(
+                usage(
                   s"--raster-output required for ${format.toString.toLowerCase} format (binary output cannot go to stdout)"
                 )
               )
             case Some(outputPath) =>
-              // Pre-evaluate formulas if --eval flag is set
-              val sheetToRender =
-                if evalFormulas then
-                  evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
-                else targetSheet
-              val svg = sheetToRender.toSvg(
-                limitedRange,
-                theme = theme,
-                showGridlines = showGridlines,
-                showLabels = showLabels
-              )
+              // Raster formats have never gated on --strict: an evaluation failure warns
+              evaluated(false).flatMap { sheetToRender =>
+                val svg = sheetToRender.toSvg(
+                  limitedRange,
+                  theme = theme,
+                  showGridlines = showGridlines,
+                  showLabels = showLabels
+                )
 
-              // Convert ViewFormat to RasterFormat
-              val rasterFormat = format match
-                case ViewFormat.Png => RasterFormat.Png
-                case ViewFormat.Jpeg => RasterFormat.Jpeg(quality)
-                case ViewFormat.WebP => RasterFormat.WebP
-                case ViewFormat.Pdf => RasterFormat.Pdf
-                case _ => RasterFormat.Png // unreachable
+                // Convert ViewFormat to RasterFormat
+                val rasterFormat = format match
+                  case ViewFormat.Png => RasterFormat.Png
+                  case ViewFormat.Jpeg => RasterFormat.Jpeg(quality)
+                  case ViewFormat.WebP => RasterFormat.WebP
+                  case ViewFormat.Pdf => RasterFormat.Pdf
+                  case _ => RasterFormat.Png // unreachable
 
-              // Use RasterizerChain for automatic fallback
-              RasterizerChain
-                .convert(svg, outputPath, rasterFormat, dpi, rasterizer)
-                .map { usedRasterizer =>
-                  val exported =
-                    s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, $usedRasterizer)"
-                  // Binary goes to --raster-output, so the notice can ride the status line.
-                  if isTruncated then s"$exported\n$notice" else exported
-                }
+                // Use RasterizerChain for automatic fallback
+                RasterizerChain
+                  .convert(svg, outputPath, rasterFormat, dpi, rasterizer)
+                  .map { usedRasterizer =>
+                    val exported =
+                      s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, $usedRasterizer)"
+                    // Binary goes to --raster-output, so the notice can ride the status line.
+                    if isTruncated then s"$exported\n$notice" else exported
+                  }
+              }
     yield result
 
   /**
@@ -233,8 +258,8 @@ object ReadCommands:
       (targetSheet, refOrRange) = resolved
       ref <- refOrRange match
         case Left(r) => IO.pure(r)
-        case Right(_) =>
-          IO.raiseError(new Exception("cell command requires single cell, not range"))
+        case Right(range) =>
+          IO.raiseError(invalidRef(s"cell requires a single cell, not the range ${range.toA1}"))
       cellOpt = targetSheet.cells.get(ref)
       value = cellOpt.map(_.value).getOrElse(CellValue.Empty)
       // Get style from registry for NumFmt formatting (unless --no-style)
@@ -250,20 +275,13 @@ object ReadCommands:
       comment = targetSheet.getComment(ref)
       // Get hyperlink from cell
       hyperlink = cellOpt.flatMap(_.hyperlink)
-      // Build dependency graph for dependencies/dependents (workbook-level for cross-sheet support)
+      // ADR-017 §2.10: the bounded cross-sheet graph — precedents at cell granularity (ranges as
+      // their occupied cells), dependents through the symbolic range index. Replaces the unbounded
+      // fromWorkbook expansion plus an O(workbook) reverse fold; the text is unchanged.
       currentRef = DependencyGraph.QualifiedRef(targetSheet.name, ref)
-      wbGraph = DependencyGraph.fromWorkbook(wb)
-      // Get dependencies for this cell
-      rawDeps = wbGraph.getOrElse(currentRef, Set.empty)
-      // Build reverse graph for dependents
-      allDependents = wbGraph.foldLeft(
-        Map.empty[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]]
-      ) { case (acc, (source, targets)) =>
-        targets.foldLeft(acc) { (m, target) =>
-          m.updated(target, m.getOrElse(target, Set.empty) + source)
-        }
-      }
-      rawDependents = allDependents.getOrElse(currentRef, Set.empty)
+      graph = QualifiedGraph.of(wb)
+      rawDeps = graph.precedentsOf(currentRef)
+      rawDependents = graph.dependentsOf(currentRef)
       // Format qualified refs - omit sheet name if same sheet as current cell
       formatQRef = (qref: DependencyGraph.QualifiedRef) =>
         if qref.sheet == targetSheet.name then qref.ref.toA1
@@ -287,7 +305,7 @@ object ReadCommands:
         .Try(pattern.r)
         .toEither
         .left
-        .map(e => new Exception(s"Invalid regex pattern: ${e.getMessage}"))
+        .map(e => usage(s"Invalid regex pattern: ${e.getMessage}"))
     ).flatMap { regex =>
       // Determine which sheets to search:
       // 1. If --sheets provided, use those
@@ -297,14 +315,11 @@ object ReadCommands:
         case (Some(filterStr), _) =>
           // --sheets=Sheet1,Sheet2
           val names = filterStr.split(",").map(_.trim).toVector
+          // INVALID_SHEET_NAME / SHEET_NOT_FOUND (with the nearest names), as -s would give
           names.traverse { name =>
-            IO.fromEither(SheetName(name).left.map(e => new Exception(e))).flatMap { sn =>
-              IO.fromOption(wb.sheets.find(_.name == sn))(
-                new Exception(
-                  s"Sheet not found: $name. Available: ${wb.sheets.map(_.name.value).mkString(", ")}"
-                )
-              )
-            }
+            IO.fromEither(
+              Resolve.validSheetName(name).flatMap(Resolve.named(wb, _)).left.map(CliException(_))
+            )
           }
         case (None, Some(sheet)) =>
           // --sheet provided, use that single sheet
@@ -362,7 +377,11 @@ object ReadCommands:
           case _ => None
       }.toVector
       _ <- IO
-        .raiseError(new Exception(s"No numeric values in range ${range.toA1}"))
+        .raiseError(
+          CliException(
+            CliError.fromXLError(XLError.Other(s"No numeric values in range ${range.toA1}"), None)
+          )
+        )
         .whenA(numbers.isEmpty)
     yield
       val count = numbers.size
@@ -384,6 +403,40 @@ object ReadCommands:
     formulaStr: String,
     overrides: List[String]
   ): IO[String] =
+    evalResult(wb, sheetOpt, formulaStr, overrides).map { (formula, result) =>
+      Format.evalSuccess(formula, result, overrides)
+    }
+
+  /**
+   * `eval` as data (`eval --json`): `{formula, result: {type, value, formatted}, overrides}` — the
+   * normalized formula (leading `=`), the value in the `view --format json` cell shape, and the
+   * `--with` overrides as given. JSON TEXT, not a ujson tree: the number lexeme is exactly what
+   * [[JsonRenderer]] prints (`12345678901234567` stays so), for the runner to splice as
+   * `Payload.Raw`.
+   */
+  def evalData(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    formulaStr: String,
+    overrides: List[String]
+  ): IO[String] =
+    evalResult(wb, sheetOpt, formulaStr, overrides).map { (formula, result) =>
+      s"{\"formula\": ${JsonRenderer.escapeJsonString(formula)}, " +
+        s"\"result\": ${JsonRenderer.valueJson(result, NumFmt.General)}, " +
+        s"\"overrides\": ${overridesJson(overrides)}}"
+    }
+
+  /** The `--with` list as a JSON array of strings. */
+  private def overridesJson(overrides: List[String]): String =
+    ujson.write(ujson.Arr.from(overrides.map(ujson.Str.apply)))
+
+  /** The evaluation both renderings share: the normalized formula and its value. */
+  private def evalResult(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    formulaStr: String,
+    overrides: List[String]
+  ): IO[(String, CellValue)] =
     val formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
 
     // Check if formula needs a sheet by parsing and checking for cell references
@@ -407,7 +460,7 @@ object ReadCommands:
       // Check if workbook is empty (no file provided)
       if wb.sheets.isEmpty then
         IO.raiseError(
-          new Exception(
+          usage(
             "Formula references cells but no file provided. Use --file to specify an Excel file."
           )
         )
@@ -428,7 +481,7 @@ object ReadCommands:
               .parse(formula)
               .map(expr => DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange))
               .left
-              .map(e => new Exception(s"Parse error: $e"))
+              .map(unparseable(_, formula))
           )
 
           // 2. Build dependency graph and compute transitive closure
@@ -450,7 +503,7 @@ object ReadCommands:
                 .topologicalSort(graph)
                 .map(_.filter(formulaDeps.contains))
                 .left
-                .map(e => new Exception(e.toString))
+                .map(cyclic(_, formula))
           )
 
           // 5. Evaluate only formulas in the closure
@@ -461,7 +514,7 @@ object ReadCommands:
                   .evaluateCell(s)(ref, workbook = Some(wb))
                   .map(value => s.put(ref, value))
                   .left
-                  .map(e => new Exception(e.message))
+                  .map(XLException(_))
               )
             }
           }
@@ -470,15 +523,15 @@ object ReadCommands:
             SheetEvaluator
               .evaluateFormula(evalSheet)(formula, workbook = Some(wb))
               .left
-              .map(e => new Exception(e.message))
+              .map(XLException(_))
           )
-        yield Format.evalSuccess(formula, result, overrides)
+        yield (formula, result)
     else if hasAnyCellRefs then
       // GH-210: All cell refs are qualified (e.g., =SUM(Revenue!B2:B5)) - need workbook but
       // any sheet works as the ambient context since the evaluator resolves cross-sheet refs by name
       if wb.sheets.isEmpty then
         IO.raiseError(
-          new Exception(
+          usage(
             "Formula references cells but no file provided. Use --file to specify an Excel file."
           )
         )
@@ -494,7 +547,7 @@ object ReadCommands:
               .parse(formula)
               .map(expr => DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange))
               .left
-              .map(e => new Exception(s"Parse error: $e"))
+              .map(unparseable(_, formula))
           )
 
           graph = DependencyGraph.fromSheet(tempSheet)
@@ -513,7 +566,7 @@ object ReadCommands:
                 .topologicalSort(graph)
                 .map(_.filter(formulaDeps.contains))
                 .left
-                .map(e => new Exception(e.toString))
+                .map(cyclic(_, formula))
           )
 
           evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
@@ -523,7 +576,7 @@ object ReadCommands:
                   .evaluateCell(s)(ref, workbook = Some(wb))
                   .map(value => s.put(ref, value))
                   .left
-                  .map(e => new Exception(e.message))
+                  .map(XLException(_))
               )
             }
           }
@@ -532,9 +585,9 @@ object ReadCommands:
             SheetEvaluator
               .evaluateFormula(evalSheet)(formula, workbook = Some(wb))
               .left
-              .map(e => new Exception(e.message))
+              .map(XLException(_))
           )
-        yield Format.evalSuccess(formula, result, overrides)
+        yield (formula, result)
     else
       // Constant formula - use empty sheet or provided sheet
       val sheet = sheetOpt.getOrElse(Sheet("_eval"))
@@ -544,9 +597,9 @@ object ReadCommands:
           SheetEvaluator
             .evaluateFormula(sheet)(formula, workbook = wbOpt)
             .left
-            .map(e => new Exception(e.message))
+            .map(XLException(_))
         )
-      yield Format.evalSuccess(formula, result, overrides)
+      yield (formula, result)
 
   /**
    * Evaluate array formula and display result as table.
@@ -561,14 +614,45 @@ object ReadCommands:
     targetRefOpt: Option[String],
     overrides: List[String]
   ): IO[String] =
+    evalArrayResult(wb, sheetOpt, formulaStr, targetRefOpt, overrides).map {
+      (formula, updatedSheet, spillRange) =>
+        Format.evalArraySuccess(formula, updatedSheet, spillRange, overrides)
+    }
+
+  /**
+   * `evala` as data (`evala --json`): `{formula, spillRange, result, overrides}` where `result` is
+   * the spilled grid in the exact `view --format json` shape (`{sheet, range, rows}`) — as the text
+   * [[JsonRenderer]] prints it, so no number is re-parsed (`Payload.Raw`).
+   */
+  def evalArrayData(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    formulaStr: String,
+    targetRefOpt: Option[String],
+    overrides: List[String]
+  ): IO[String] =
+    evalArrayResult(wb, sheetOpt, formulaStr, targetRefOpt, overrides).map {
+      (formula, updatedSheet, spillRange) =>
+        s"{\"formula\": ${JsonRenderer.escapeJsonString(formula)}, " +
+          s"\"spillRange\": \"${spillRange.toA1}\", " +
+          s"\"result\": ${JsonRenderer.renderRange(updatedSheet, spillRange)}, " +
+          s"\"overrides\": ${overridesJson(overrides)}}"
+    }
+
+  /** The evaluation both renderings share: the normalized formula, the spilled sheet, the range. */
+  private def evalArrayResult(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    formulaStr: String,
+    targetRefOpt: Option[String],
+    overrides: List[String]
+  ): IO[(String, Sheet, CellRange)] =
     val formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
 
     // Array formulas always need a sheet context
     if wb.sheets.isEmpty then
       IO.raiseError(
-        new Exception(
-          "Array formula evaluation requires a file. Use --file to specify an Excel file."
-        )
+        usage("Array formula evaluation requires a file. Use --file to specify an Excel file.")
       )
     else
       for
@@ -581,7 +665,7 @@ object ReadCommands:
             .parse(formula)
             .map(expr => DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange))
             .left
-            .map(e => new Exception(s"Parse error: $e"))
+            .map(unparseable(_, formula))
         )
         graph = DependencyGraph.fromSheet(tempSheet)
         allDeps = DependencyGraph.transitiveDependencies(graph, targetDeps)
@@ -597,7 +681,7 @@ object ReadCommands:
               .topologicalSort(graph)
               .map(_.filter(formulaDeps.contains))
               .left
-              .map(e => new Exception(e.toString))
+              .map(cyclic(_, formula))
         )
         evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
           sheetIO.flatMap { s =>
@@ -606,7 +690,7 @@ object ReadCommands:
                 .evaluateCell(s)(ref, workbook = Some(wb))
                 .map(value => s.put(ref, value))
                 .left
-                .map(e => new Exception(e.message))
+                .map(XLException(_))
             )
           }
         }
@@ -618,10 +702,10 @@ object ReadCommands:
           SheetEvaluator
             .evaluateArrayFormula(evalSheet)(formula, originRef, workbook = Some(wb))
             .left
-            .map(e => new Exception(e.message))
+            .map(XLException(_))
         )
         (updatedSheet, spillRange) = result
-      yield Format.evalArraySuccess(formula, updatedSheet, spillRange, overrides)
+      yield (formula, updatedSheet, spillRange)
 
   // ==========================================================================
   // Private helpers
@@ -640,35 +724,34 @@ object ReadCommands:
       sheetIO.flatMap { s =>
         override_.split("=", 2) match
           case Array(refStr, valueStr) if valueStr.trim.nonEmpty =>
-            IO.fromEither(RefType.parse(refStr.trim).left.map(e => new Exception(e))).flatMap {
-              case RefType.Cell(ref) =>
+            // INVALID_REFERENCE: the parser's own text, a range, or another sheet's cell
+            IO.fromEither(Resolve.ref(refStr.trim).left.map(CliException(_))).flatMap {
+              case (None, Resolve.Target.Cell(ref)) =>
                 val value = ValueParser.parseValue(valueStr.trim)
                 IO.pure(s.put(ref, value))
-              case RefType.QualifiedCell(sheetName, ref) =>
+              case (Some(sheetName), Resolve.Target.Cell(ref)) =>
                 if sheetName == sheet.name then
                   val value = ValueParser.parseValue(valueStr.trim)
                   IO.pure(s.put(ref, value))
                 else
                   IO.raiseError(
-                    new Exception(
+                    invalidRef(
                       s"Cross-sheet override not supported: ${refStr.trim}. " +
                         s"Eval operates on ${sheet.name.value}, not ${sheetName.value}"
                     )
                   )
-              case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
+              case (_, Resolve.Target.Range(_)) =>
                 IO.raiseError(
-                  new Exception(s"Override requires single cell, not range: ${refStr.trim}")
+                  invalidRef(s"Override requires single cell, not range: ${refStr.trim}")
                 )
             }
           case Array(refStr, _) =>
             IO.raiseError(
-              new Exception(
-                s"Empty value for override: ${refStr.trim}. Use ref=value (e.g., B5=1000)"
-              )
+              usage(s"Empty value for override: ${refStr.trim}. Use ref=value (e.g., B5=1000)")
             )
           case _ =>
             IO.raiseError(
-              new Exception(s"Invalid override format: $override_. Use ref=value (e.g., B5=1000)")
+              usage(s"Invalid override format: $override_. Use ref=value (e.g., B5=1000)")
             )
       }
     }
@@ -693,13 +776,17 @@ object ReadCommands:
    *   Optional workbook context for cross-sheet formula references
    * @param range
    *   Optional range to limit evaluation to (formulas outside this range are not evaluated)
+   * @param strict
+   *   whether an evaluation failure is the `--strict` gate (`RECALC_GATE`, exit 1) or an
+   *   `EVAL_FAILED` warning through `warn`, with the original sheet rendered from its caches
    */
   private def evaluateSheetFormulas(
     sheet: Sheet,
-    workbook: Option[Workbook] = None,
-    range: Option[CellRange] = None,
-    strict: Boolean = false
-  ): Sheet =
+    workbook: Option[Workbook],
+    range: Option[CellRange],
+    strict: Boolean,
+    warn: Warning => IO[Unit]
+  ): IO[Sheet] =
     val evalResult = range match
       case Some(r) =>
         // Targeted evaluation: only evaluate formulas in range + their dependencies
@@ -711,12 +798,22 @@ object ReadCommands:
     evalResult match
       case Right(results) =>
         // Apply evaluated results. Sheet.put preserves existing cell styleId automatically.
-        results.foldLeft(sheet) { case (acc, (ref, value)) =>
-          acc.put(ref, value)
-        }
+        IO.pure(results.foldLeft(sheet) { case (acc, (ref, value)) => acc.put(ref, value) })
       case Left(error) =>
-        if strict then throw new Exception(s"Formula evaluation failed: ${error.message}")
+        // `view --eval --strict` is a user-requested gate (ADR-017 invariant 5): exit 1 with
+        // RECALC_GATE, never a failure. The message text is unchanged.
+        if strict then
+          IO.raiseError(
+            CliException(
+              CliError(
+                ErrorCode.RECALC_GATE,
+                s"Formula evaluation failed: ${error.message}",
+                hint =
+                  Some("drop --strict to render cached values and see the failure as a warning")
+              )
+            )
+          )
         else
-          // Warn on stderr but return original sheet
-          Console.err.println(s"Warning: Formula evaluation failed: ${error.message}")
-          sheet
+          // Advisory: warn, and render the original sheet from its cached values
+          warn(Warning(WarningCode.EVAL_FAILED, s"Formula evaluation failed: ${error.message}"))
+            .as(sheet)

@@ -26,9 +26,12 @@ case class OoxmlRow(
   thickTop: Boolean = false, // thickTop="1" (thick top border)
   dyDescent: Option[Double] = None // x14ac:dyDescent="0.25" (font descent adjustment)
 ):
-  def writeSax(writer: SaxWriter): Unit =
-    writer.startElement("row")
-
+  /**
+   * Serialized attributes in the order Excel writes them (not alphabetical!): r, spans, s,
+   * customFormat, ht, customHeight, hidden, outlineLevel, collapsed, thickBot, thickTop,
+   * x14ac:dyDescent. Shared by both serializers so they cannot drift.
+   */
+  def attributes: Seq[(String, String)] =
     val attrs = Seq.newBuilder[(String, String)]
     attrs += ("r" -> rowIndex.toString)
     spans.foreach(s => attrs += ("spans" -> s))
@@ -42,31 +45,38 @@ case class OoxmlRow(
     if thickBot then attrs += ("thickBot" -> "1")
     if thickTop then attrs += ("thickTop" -> "1")
     dyDescent.foreach(d => attrs += ("x14ac:dyDescent" -> d.toString))
+    attrs.result()
 
-    SaxWriter.withAttributes(writer, attrs.result()*) {
+  /** True when the record carries anything beyond its own index (`r`). */
+  def hasAttributes: Boolean = attributes.sizeIs > 1
+
+  /**
+   * This row without every attribute the reader models into `RowProperties` (GH-558): `s` /
+   * `customFormat`, `ht` / `customHeight`, `hidden`, `outlineLevel` and `collapsed`. What remains —
+   * `spans`, `thickBot`, `thickTop`, `x14ac:dyDescent` — is the unmodelled metadata a preserved
+   * source row may contribute to a regenerated worksheet; the domain properties for the row's index
+   * are then applied on top (`applyDomainRowProps`). Without this the source row's copy of a
+   * modelled attribute survives at its ORIGINAL index after a structural edit moved the property.
+   */
+  def withoutModelledProps: OoxmlRow =
+    copy(
+      style = None,
+      customFormat = false,
+      height = None,
+      customHeight = false,
+      hidden = false,
+      outlineLevel = None,
+      collapsed = false
+    )
+
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startElement("row")
+    SaxWriter.withAttributes(writer, attributes*) {
       cells.sortBy(_.ref.col.index0).foreach(_.writeSax(writer))
     }
-
     writer.endElement() // row
 
   def toXml: Elem =
-    // Excel expects attributes in specific order (not alphabetical!)
-    // Order: r, spans, s, customFormat, ht, customHeight, hidden, outlineLevel, collapsed, thickBot, thickTop, x14ac:dyDescent
-    val attrs = Seq.newBuilder[(String, String)]
-
-    attrs += ("r" -> rowIndex.toString)
-    spans.foreach(s => attrs += ("spans" -> s))
-    style.foreach(s => attrs += ("s" -> s.toString))
-    if customFormat then attrs += ("customFormat" -> "1")
-    height.foreach(h => attrs += ("ht" -> h.toString))
-    if customHeight then attrs += ("customHeight" -> "1")
-    if hidden then attrs += ("hidden" -> "1")
-    outlineLevel.foreach(l => attrs += ("outlineLevel" -> l.toString))
-    if collapsed then attrs += ("collapsed" -> "1")
-    if thickBot then attrs += ("thickBot" -> "1")
-    if thickTop then attrs += ("thickTop" -> "1")
-    dyDescent.foreach(d => attrs += ("x14ac:dyDescent" -> d.toString))
-
-    elemOrdered("row", attrs.result()*)(
+    elemOrdered("row", attributes*)(
       cells.sortBy(_.ref.col.index0).map(_.toXml)*
     )

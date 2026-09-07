@@ -997,7 +997,7 @@ class MainSpec extends CatsEffectSuite:
     assert(result.isRight, s"Should parse: $result")
     assertEquals(
       result.toOption.get.warnings,
-      Vector.empty[String],
+      Vector.empty,
       "format is a known putf property and must not be warned about"
     )
   }

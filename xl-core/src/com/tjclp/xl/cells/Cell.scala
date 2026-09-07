@@ -97,6 +97,28 @@ final case class Cell(
     case _: CellValue.Formula => true
     case _ => false
 
+  /**
+   * The value a reader sees (GH-477): a formula's cached result when it has one, otherwise the
+   * value itself. `Formula(_, Some(v), _)` yields `v`; every other value — including an UNCACHED
+   * formula, `Formula(_, None, _)` — yields itself.
+   *
+   * By the [[CellValue.Formula]] invariant (`cachedValue` "must never be another Formula", enforced
+   * by `CellValue.formula`) the result is a Formula only when this cell is an uncached formula,
+   * which [[isUncachedFormula]] detects. Typed reads (`CellCodec.read`, `Sheet.readTyped*`) decode
+   * through this, so a recalculated or Excel-saved book reads like `view`/`eval` show it.
+   */
+  def effectiveValue: CellValue = value match
+    case CellValue.Formula(_, Some(cached), _) => cached
+    case other => other
+
+  /**
+   * A formula cell with no cached result (GH-477): nothing to read until it is recalculated — typed
+   * reads report it as a `TypeMismatch` whose `actual` is the formula.
+   */
+  def isUncachedFormula: Boolean = value match
+    case CellValue.Formula(_, None, _) => true
+    case _ => false
+
   /** Check if cell contains an error */
   def isError: Boolean = value match
     case CellValue.Error(_) => true

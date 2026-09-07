@@ -1,0 +1,12 @@
+## args
+-f
+<DIR>/single.xlsx
+view
+A1:B1
+## exit
+0
+## stdout
+|   | A    | B   |
+|---|------|-----|
+| 1 | solo | 7   |
+## stderr

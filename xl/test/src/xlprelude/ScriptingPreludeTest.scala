@@ -111,6 +111,20 @@ class ScriptingPreludeTest extends FunSuite:
     intercept[XLException]:
       Sheet("Unsafe").put(invalidRef, "boom").unsafe
 
+  test("XLError.code / hint / candidates / root / opIndex resolve through the prelude (ADR-017)"):
+    val notFound: XLError = XLError.SheetNotFound("x")
+    assertEquals(notFound.code, "SHEET_NOT_FOUND")
+    assertEquals(notFound.hint, Some("list sheets with `xl -f <file> sheets`"))
+    val required: XLError = XLError.SheetRequired("view", Vector("Data"))
+    assertEquals(required.code, "SHEET_REQUIRED")
+    assertEquals(required.candidates, Vector("Data"))
+    val failed: XLError = XLError.EditFailed(2, "put", notFound)
+    assertEquals(failed.code, "SHEET_NOT_FOUND")
+    assertEquals(failed.root, notFound)
+    assertEquals(failed.opIndex, Some(2))
+    assert(XLError.codes.contains("EDIT_FAILED"))
+    assert(XLError.Other("a") == XLError.Other("a"))
+
   test("formula evaluation extensions resolve through the prelude"):
     val sheet = Sheet("Calc")
       .put(ref"A1", 2)
@@ -147,6 +161,33 @@ class ScriptingPreludeTest extends FunSuite:
     val sheet = wb.sheets.headOption.getOrElse(fail("missing sheet"))
     assertEquals(sheet.readTypedOr[Int](ref"A1", 0), 10)
     assertEquals(sheet.readTypedOpt[Int](ref"Z9"), None)
+
+  test(
+    "GH-477: typed reads see a formula's cached value; readTypedStrict resolves via the prelude"
+  ):
+    val sheet = Sheet("Calc477").put(ref"A1", 2).put(ref"B1", fx"=A1*3")
+    // Authored, not yet recalculated: the formula has no cache, so there is nothing to read.
+    assertEquals(sheet.readTypedOpt[BigDecimal](ref"B1"), None)
+    val recalculated = Workbook(sheet)
+      .recalculate()
+      .workbook
+      .sheets
+      .headOption
+      .getOrElse(fail("missing sheet"))
+    assertEquals(recalculated.readTypedOpt[BigDecimal](ref"B1"), Some(BigDecimal(6)))
+    assertEquals(
+      recalculated.readTyped[Double](ref"B1"),
+      Right(Some(6.0)): Either[CodecError, Option[Double]]
+    )
+    assertEquals(recalculated.readTypedOr[Int](ref"B1", -1), 6)
+    // The strict escape hatch keeps rejecting the formula cell even though it is cached.
+    recalculated.readTypedStrict[BigDecimal](ref"B1") match
+      case Left(CodecError.TypeMismatch("BigDecimal", _: CellValue.Formula)) => ()
+      case other => fail(s"readTypedStrict must reject a formula cell, got $other")
+    assertEquals(
+      recalculated.cells.get(ref"B1").map(_.effectiveValue),
+      Some(CellValue.Number(BigDecimal(6)))
+    )
 
   test("recalculate with per-cell errors resolves through the prelude"):
     val sheet = Sheet("Calc2")
@@ -409,6 +450,72 @@ class ScriptingPreludeTest extends FunSuite:
         .isRight
     )
 
+  test("GH-465: runtime twins putAt/styleAt/mergeAt/commentAt and Workbook.named resolve"):
+    // Runtime strings (defeat constant folding): the twins spell XLResult in their signatures, so
+    // a computed ref never flips the return type the way the transparent put/style/merge do.
+    val s: String = List("Dyn").mkString
+    val r: String = List("B", "2").mkString
+    val built: XLResult[Sheet] = Sheet.named(s).flatMap(_.putAt(r, 1))
+    val finished: XLResult[Sheet] = for
+      a <- built
+      b <- a.putAt("C2", BigDecimal("2.50"), CellStyle.default.bold)
+      c <- b.styleAt("A1:C1", CellStyle.default.bold)
+      d <- c.mergeAt("A1:C1")
+      e <- d.commentAt(r, Comment.plainText("note", Some("gen")))
+    yield e
+    finished match
+      case Right(sheet) =>
+        assertEquals(sheet.name.value, "Dyn")
+        assertEquals(sheet.cells.get(ref"B2").map(_.value), Some(CellValue.Number(BigDecimal(1))))
+        assertEquals(sheet.readTypedOr[BigDecimal](ref"C2", BigDecimal(0)), BigDecimal("2.50"))
+        assertEquals(sheet.mergedRanges, Set(ref"A1:C1"))
+        assertEquals(sheet.getComment(ref"B2").map(_.text.toPlainText), Some("note"))
+        assertEquals(sheet.cells.size, 5) // B2, C2 + the three styled blanks A1:C1
+      case Left(err) => fail(s"expected Right, got Left($err)")
+    // The shared parsing contract is visible from outside the package too.
+    assertEquals(
+      Sheet("Q").putAt("Sales!A1", 1),
+      Left(
+        XLError.InvalidReference(
+          "sheet-qualified refs are not accepted by Sheet.putAt/styleAt/mergeAt/commentAt; " +
+            "use wb.update(sheet, ...)"
+        )
+      ): XLResult[Sheet]
+    )
+    assertEquals(
+      Sheet("Q").putAt("A1:B2", 1),
+      Left(XLError.InvalidCellRef("A1:B2", "expected a single cell")): XLResult[Sheet]
+    )
+    val wb: XLResult[Workbook] = Workbook.named("A", "B")
+    assertEquals(
+      wb.map(_.sheets.map(_.name.value)),
+      Right(Vector("A", "B")): XLResult[Vector[String]]
+    )
+    assertEquals(Workbook.named("A", "A"), Left(XLError.DuplicateSheet("A")): XLResult[Workbook])
+    assertEquals(Workbook.named(s).map(_.sheets.size), Right(1): XLResult[Int])
+
+  test("GH-465: bounded navigation, range slicing and withUnderline resolve through the prelude"):
+    // ARef extensions resolve via the companion implicit scope (no export forwarders — the
+    // opaque-type landmine); this probe is what proves it from outside com.tjclp.xl.
+    assertEquals(ref"A1".tryDown(1), Some(ref"A2"))
+    assertEquals(ref"A1".tryShift(-1, 0), None)
+    assertEquals(ref"A1".tryRight(1), Some(ref"B1"))
+    assertEquals(ref"XFD1".tryRight(1), None)
+    assertEquals(ref"A1".clampShift(-3, -3), ref"A1")
+    assertEquals(ref"C3".clampShift(-10, 5), ref"A8")
+    assertEquals(ref"A1:B3".rows.size, 3)
+    assertEquals(ref"A1:B3".columns.size, 2)
+    assertEquals(ref"A1:B3".row(1), Some(ref"A2:B2"))
+    assertEquals(ref"A1:B3".column(0), Some(ref"A1:A3"))
+    assertEquals(ref"A1:B3".column(5), None)
+    assertEquals(
+      CellStyle.default.withUnderline(Underline.Single).font.underline,
+      Underline.Single
+    )
+    // Bounded steps compose with the patch DSL without an Either in the loop body
+    val patch = ref"A1".tryDown(2).fold(Patch.empty)(_ := "third row")
+    assertEquals(Sheet("Nav").put(patch).cells.keySet, Set(ref"A3"))
+
   test("GH-430: a data-table record authors from scratch through the prelude and round-trips"):
     // FormulaKind must resolve through the prelude export alone (export-forwarder landmine
     // guard), and CellValue.dataTable must synthesize the derived TABLE(...) display text —
@@ -441,3 +548,118 @@ class ScriptingPreludeTest extends FunSuite:
         assertEquals(cached, Some(CellValue.Number(BigDecimal(7))))
         assertEquals(k.ca, true)
       case other => fail(s"G2 record lost through prelude round-trip: $other")
+
+  test("GH-559: RecalcOptions, IterativeMode and the options-driven recalculate family resolve"):
+    val opts: RecalcOptions = RecalcOptions()
+    assertEquals(opts.parallelism, RecalcOptions.default.parallelism)
+    assertEquals(opts.iterative, IterativeMode.FromCalcPr: IterativeMode)
+    val off: IterativeMode = IterativeMode.Off
+    val forced: IterativeMode = IterativeMode.Force(IterativeCalc(100, BigDecimal("0.001")))
+    assert(off != forced)
+    val sheet1 = SheetName.unsafe("Sheet1")
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1", 5),
+      Sheet("Sheet2").put(ref"A1", fx"=Sheet1!A1*2").put(ref"B1", fx"=A1+1")
+    )
+    val full: RecalcResult = wb.recalculate(RecalcOptions.default)
+    assert(full.isClean)
+    assertEquals(full.summary, "Recalculated 2 formulas")
+    val parallel: RecalcResult = wb.recalculate(RecalcOptions(parallelism = 2, iterative = off))
+    assertEquals(parallel.evaluated, full.evaluated)
+    val afterEdit: RecalcResult = wb.recalculateAfterEdit(sheet1, Set(ref"A1"), opts)
+    assert(afterEdit.isClean)
+    val uncached: RecalcResult = wb.recalculateUncached(opts)
+    assertEquals(uncached.evaluated, full.evaluated)
+    assertEquals(uncached.workbook, full.workbook)
+
+  test(
+    "GH-559: SheetRenamer, FormulaOps, FormulaShifter, StructuralEditor and QualifiedRef resolve"
+  ):
+    val sheet1 = SheetName.unsafe("Sheet1")
+    val data = SheetName.unsafe("Data")
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1", 5),
+      Sheet("Sheet2").put(ref"A1", fx"=Sheet1!A1*2")
+    )
+    val refs: Vector[QualifiedRef] = SheetRenamer.references(wb, sheet1)
+    assertEquals(refs, Vector(QualifiedRef(SheetName.unsafe("Sheet2"), ref"A1")))
+    val renamed: XLResult[Workbook] = SheetRenamer.rename(wb, sheet1, data)
+    val rewritten = renamed
+      .fold(e => fail(e.message), identity)
+      .sheets
+      .find(_.name.value == "Sheet2")
+      .map(_(ref"A1").value)
+    // fx literals keep their display-form leading '='; the rewrite keeps the caller's convention.
+    assertEquals(rewritten, Some(CellValue.Formula("=Data!A1*2", None)))
+    assertEquals(
+      FormulaOps.renameSheet("=Sheet1!A1*2", sheet1, data),
+      Right("=Data!A1*2"): XLResult[String]
+    )
+    assertEquals(FormulaOps.shift("=A1+$B$1", 1, 1), Right("=B2+$B$1"): XLResult[String])
+    assert(FormulaOps.mentionsSheet("Sheet1!A1", sheet1))
+    val shifted = FormulaParser
+      .parse("=A1")
+      .map(expr => FormulaPrinter.print(FormulaShifter.shift(expr, 1, 1)))
+    assertEquals(shifted, Right("=B2"): Either[ParseError, String])
+    assert(StructuralEditor.insertRowsChecked(wb, sheet1, 0, 1).isRight)
+
+  test("ADR-017 §2.10: wb.describe, wb.audit and QualifiedGraph.of resolve through the prelude"):
+    val sheet1 = SheetName.unsafe("Sheet1")
+    val sheet2 = SheetName.unsafe("Sheet2")
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1", 5),
+      Sheet("Sheet2").put(ref"A1", fx"=Sheet1!A1*2").put(ref"B1", fx"=A1+1")
+    ).recalculate().workbook
+    // WorkbookInspect's extension block, reached through the wildcard export (no default args)
+    val summary: WorkbookSummary = wb.describe
+    assertEquals(summary.sheets.map(_.name.value), Vector("Sheet1", "Sheet2"))
+    assertEquals(summary.sheets.map(_.formulaCount), Vector(0, 2))
+    assertEquals(summary.sheets.map(_.uncachedFormulas), Vector(0, 0))
+    val first: Option[SheetSummary] = summary.sheets.headOption
+    assertEquals(first.map(_.cellCount), Some(1))
+    assertEquals(summary.date1904, false)
+    val audit: WorkbookAudit = wb.audit
+    assert(audit.isClean)
+    assertEquals(audit.cycles, Vector.empty)
+    // The bounded cross-sheet graph: layers exactly k hops away
+    val graph: QualifiedGraph = QualifiedGraph.of(wb)
+    assertEquals(
+      graph.precedents(QualifiedRef(sheet2, ref"A1"), 1),
+      Vector(Vector(QualifiedRef(sheet1, ref"A1")))
+    )
+    assertEquals(
+      graph.dependents(QualifiedRef(sheet1, ref"A1"), 0),
+      Vector(Vector(QualifiedRef(sheet2, ref"A1")), Vector(QualifiedRef(sheet2, ref"B1")))
+    )
+    assertEquals(graph.sccs.count(_.cyclic), 0)
+    // direct neighbours, one hop, as sets
+    assertEquals(
+      graph.precedentsOf(QualifiedRef(sheet2, ref"A1")),
+      Set(QualifiedRef(sheet1, ref"A1"))
+    )
+    assertEquals(
+      graph.dependentsOf(QualifiedRef(sheet1, ref"A1")),
+      Set(QualifiedRef(sheet2, ref"A1"))
+    )
+    // the audit seen from one sheet
+    val onlySheet2: WorkbookAudit = audit.restrictTo(sheet2)
+    assert(onlySheet2.isClean)
+    assertEquals(audit.iterativeCycles, Vector.empty)
+    val dirty = Workbook(Sheet("Loop").put(ref"A1", fx"=A1+1"))
+    assertEquals(dirty.audit.isClean, false)
+    assertEquals(dirty.audit.cycles.map(_.members.size), Vector(1))
+    // Cell.isUncachedFormula: the formula above has never been recalculated
+    val loopCell: Cell = dirty.sheets.flatMap(_.cells.values).headOption.getOrElse(fail("no cell"))
+    assert(loopCell.isUncachedFormula)
+    assert(wb.sheets.flatMap(_.cells.values).forall(!_.isUncachedFormula))
+    // an intentional circular model (iterative calculation declared, caches present) is clean;
+    // its cycle is reported as a note
+    val model = Workbook(
+      Sheet("Loop").put(ref"A1", CellValue.Formula("A1+1", Some(CellValue.Number(BigDecimal(1)))))
+    ).withCalcPr(CalcPr(iterativeCalculation = true))
+    val iterative: WorkbookAudit = model.audit
+    assert(iterative.isClean, s"$iterative")
+    assertEquals(iterative.cycles, Vector.empty)
+    assertEquals(iterative.iterativeCycles.map(_.members.size), Vector(1))
+    // the same cycle without the declaration is a finding
+    assertEquals(model.withCalcPr(CalcPr()).audit.cycles.map(_.members.size), Vector(1))

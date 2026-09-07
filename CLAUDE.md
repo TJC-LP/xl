@@ -32,7 +32,7 @@ xl/              → Aggregate module + scripting prelude (com.tjclp.xl.scriptin
 xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), macros, DSL
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based streaming)
-xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 108 functions, dependency graphs)
+xl-evaluator/    → Formula parser/evaluator (TExpr GADT, function registry, dependency graphs)
 xl-cli/          → Stateless `xl` CLI (internal, native-image capable)
 xl-agent/        → AI agent benchmark runner (Anthropic API, skill comparison)
 xl-benchmarks/   → JMH performance benchmarks
@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (5,705)
+./mill __.test             # Run all tests (6,326)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -181,30 +181,29 @@ Results are written to `results/` directory:
 The `xl` CLI is stateless by design. Key patterns:
 
 ```bash
-# Global flags (used with all commands)
+# Global flags (accepted anywhere on the command line, before or after the verb)
 -f, --file <path>     # Input file (required)
 -s, --sheet <name>    # Sheet to operate on
 -o, --output <path>   # Output file for mutations
 --max-size <MB>       # Override 100MB security limit (0 = unlimited)
 --stream              # O(1) memory streaming mode for large files
 
-# Sheet selection is REQUIRED for unqualified ranges
+# ONE sheet rule, for every verb, batch op and --stream path:
+#   a qualified ref names the sheet > -s > the only sheet of a single-sheet book > SHEET_REQUIRED (exit 3)
 xl -f data.xlsx --sheet "Q1 Report" view A1:D20    # Using --sheet flag
-xl -f data.xlsx view "Q1 Report"!A1:D20            # Using qualified ref
+xl -f data.xlsx view "Q1 Report"!A1:D20            # Using qualified ref (wins over -s)
+xl -f single.xlsx view A1:D20                      # Single-sheet books auto-select for every verb
 
 # Commands that work without sheet (operate on all sheets)
 xl -f data.xlsx sheets                              # List all sheets
 xl -f data.xlsx search "Revenue"                    # Search all sheets
 
-# Single cell ops auto-detect sheet if unambiguous
-xl -f data.xlsx cell A1                             # Works if only one sheet
-
 # Mutations require -o
-xl -f in.xlsx -o out.xlsx put B5 1000              # Write value
-xl -f in.xlsx -o out.xlsx putf C5 "=B5*1.1"        # Write formula
+xl -f in.xlsx -s Data -o out.xlsx put B5 1000      # Write value
+xl -f in.xlsx -s Data -o out.xlsx putf C5 "=B5*1.1" # Write formula
 
-# Formula dragging with $ anchoring
-xl -f in.xlsx -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
+# Formula dragging with $ anchoring: one formula over a range drags from the range's first cell
+xl -f in.xlsx -s Data -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)"
 
 # Sheet names with spaces: use double quotes around the formula argument
 xl -f in.xlsx -s Summary -o out.xlsx putf B4 "='Income Statement'!G8"
@@ -231,25 +230,27 @@ xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                   # Array arithmetic
 --rasterizer <name>   # Force a specific backend: batik, cairosvg, rsvg-convert, resvg, imagemagick
 
 # Large file handling (100k+ rows)
---stream              # Use O(1) memory streaming (search, stats, bounds, view)
+--stream              # O(1) memory streaming: search, stats, bounds, view, cell, describe, sheets; put, putf, style, batch
 --max-size 0          # Disable security limits for in-memory load
 --max-size 500        # Set custom limit in MB
 ```
 
 **Large File Operations** (~10s vs ~80s for 1M rows):
 ```bash
-# Streaming mode - O(1) memory, 7-8x faster
+# Streaming mode - O(1) memory, 7-8x faster (ONE sheet rule: sheet-scoped verbs need -s or a
+# qualified ref on a multi-sheet book, else SHEET_REQUIRED exit 3; search/sheets read the whole book)
 xl -f huge.xlsx --stream search "pattern" --limit 10
-xl -f huge.xlsx --stream stats A1:E100000
-xl -f huge.xlsx --stream bounds
-xl -f huge.xlsx --stream view A1:D100 --format csv
+xl -f huge.xlsx -s Sheet1 --stream stats A1:E100000
+xl -f huge.xlsx -s Sheet1 --stream bounds
+xl -f huge.xlsx -s Sheet1 --stream view A1:D100 --format csv
+xl -f huge.xlsx -s Sheet1 -o out.xlsx --stream putf A2 "=B2*1.1"
 
 # In-memory mode - when you need full workbook access
-xl -f huge.xlsx --max-size 0 sheets      # Disable limits
-xl -f huge.xlsx --max-size 500 cell A1   # 500MB limit
+xl -f huge.xlsx --max-size 0 sheets                # Disable limits
+xl -f huge.xlsx --max-size 500 -s Sheet1 cell A1   # 500MB limit
 ```
 
-**Streaming limitations**: HTML/SVG/PDF need styles (use --max-size instead). Cell details, formula eval, writes, and `put --csv` auto-split require full workbook load.
+**Streaming limitations**: `--stream` covers the reads (`search`, `stats`, `bounds`, `view` in markdown/csv/json, `cell`, `describe`, `sheets`) and the writes (`put`, `putf`, `style`, and `batch` for streamable ops); it never recalculates. An in-memory load (`--max-size`) is needed only for `--eval`, `put --csv`, `--strict` on a write, the html/svg/png/jpeg/webp/pdf renders (they need styles), and the whole-book verbs `audit`, `deps`, `filter` and `describe --full`.
 
 See `docs/design/smart-streaming.md` for future enhancements.
 
@@ -280,6 +281,12 @@ echo '[{"op":"putf","ref":"A1","formula":"=1+1"}]' | xl batch --dry-run -
 # Also works with --file/--output (skips read/write, just validates)
 echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
 
+# The document's JSON Schema: every op, field, alias and example (no -f needed)
+xl batch --schema
+
+# Every op accepts "sheet" (except add-sheet/rename-sheet); keys in camelCase or kebab-case
+echo '[{"op":"put","sheet":"Summary","ref":"A1","value":1}]' | xl -f in.xlsx -o out.xlsx batch -
+
 # Comments, visibility, autofit, sheet management
 echo '[{"op":"comment","ref":"A1","text":"Note","author":"User"}]' | xl ...
 echo '[{"op":"clear","range":"A1:B10","all":true}]' | xl ...
@@ -289,14 +296,16 @@ echo '[{"op":"add-sheet","name":"Summary","after":"Sheet1"}]' | xl ...
 echo '[{"op":"rename-sheet","from":"Old","to":"New"}]' | xl ...
 ```
 
-**All 32 batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`, `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `cf`, `chart`, `autofilter`, `group-rows`, `group-cols`, `ungroup-rows`, `ungroup-cols`
+**Every batch operation**, with its fields, aliases and example, is generated from the registry that parses the document: run `xl batch --schema` (JSON Schema) or read `docs/reference/generated/batch-ops.md`. Never copy the list by hand — `DocsGenSpec` fails when the page drifts from the code.
 
-**Common mistake**: Using unqualified range without `--sheet`:
+**The CLI contract as data**: `xl schema` prints every verb with what it needs and how it exits; `xl schema --json` publishes exit/error/warning codes, globals, verbs, the batch schema, the function registry and the envelope schema in one document; `docs/reference/generated/{cli-verbs,batch-ops,functions,exit-codes,error-codes}.md` are rendered from it (`XL_UPDATE_DOCS=1 ./mill xl-cli.test.testOnly com.tjclp.xl.cli.contract.DocsGenSpec` regenerates; same discipline as `XL_UPDATE_GOLDEN=1` for the goldens).
+
+**Common mistake**: Using an unqualified range on a multi-sheet book without `--sheet`:
 ```bash
-# ❌ Wrong - will error
+# ❌ Wrong on a multi-sheet book - SHEET_REQUIRED (exit 3) naming the candidates
 xl -f data.xlsx view A1:B4
 
-# ✅ Correct options
+# ✅ Correct options (a single-sheet book needs neither: its only sheet is selected)
 xl -f data.xlsx --sheet "Sheet1" view A1:B4
 xl -f data.xlsx view "Sheet1"!A1:B4
 ```
@@ -374,7 +383,7 @@ sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
 sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
 ```
 
-**115 Functions**: SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, MIN, MAX, IF, IFS, IFERROR, IFNA, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, ISNA, NA, N, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SEARCH, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, MROUND, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, HYPERLINK, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER, RAND, RANDBETWEEN, CELL — plus LET (lexical bindings; a parser-level special form, not in the registry listing)
+**Functions**: the registry (`FunctionRegistry.all`, macro-collected from the `FunctionSpecs*` traits) plus `LET` (lexical bindings; a parser-level special form, not in the registry). The complete list with arity, argument slots and flags is generated from the code: `xl functions --json` or `docs/reference/generated/functions.md`. Do not maintain a count or a list by hand.
 
 ### Rich Text
 ```scala
@@ -406,12 +415,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**5,705 tests** by module: xl-evaluator (2235), xl-core (1318), xl-ooxml (1089), xl-cli (754), xl-cats-effect (160), xl-agent (122), xl prelude probes (27). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**6,326 tests** by module: xl-evaluator (2320), xl-core (1400), xl-ooxml (1097), xl-cli (1193), xl-cats-effect (160), xl-agent (122), xl prelude probes (34). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 5,705 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 6,326 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

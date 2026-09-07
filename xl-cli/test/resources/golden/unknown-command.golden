@@ -1,0 +1,11 @@
+## args
+frob
+## exit
+2
+## stdout
+## stderr
+Error: unknown verb 'frob'
+  code: UNKNOWN_VERB
+  did you mean: row
+  hint: run `xl --help` for the list of verbs
+usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …

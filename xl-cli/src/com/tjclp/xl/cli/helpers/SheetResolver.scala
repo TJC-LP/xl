@@ -2,92 +2,40 @@ package com.tjclp.xl.cli.helpers
 
 import cats.effect.IO
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
+import com.tjclp.xl.cli.contract.{CliError, CliException}
 
 /**
- * Sheet resolution utilities for CLI commands.
- *
- * Provides helpers for finding sheets by name, resolving qualified references, and validating sheet
- * context requirements.
+ * The IO face of THE sheet rule ([[Resolve]], ADR-017 §2.5) with the signatures every handler
+ * calls. Each method is a one-line forwarder: the rule lives in `Resolve`, and every failure is a
+ * [[CliException]] carrying the domain error's code — `SHEET_NOT_FOUND` with "did you mean"
+ * candidates, `SHEET_REQUIRED` with the available sheets, `INVALID_SHEET_NAME`, `INVALID_REFERENCE`
+ * — with the message texts the CLI has always printed.
  */
 object SheetResolver:
 
-  /**
-   * Resolve an optional sheet name to a Sheet.
-   *
-   * @param wb
-   *   Workbook to search
-   * @param sheetNameOpt
-   *   Optional sheet name (if None, returns None)
-   * @return
-   *   IO containing Some(Sheet) if found, None if not specified
-   */
+  private def lift[A](result: Either[CliError, A]): IO[A] =
+    IO.fromEither(result.left.map(CliException(_)))
+
+  /** The `-s` sheet by name, or `None` without one: step 2 alone (no auto-select). */
   def resolveSheet(wb: Workbook, sheetNameOpt: Option[String]): IO[Option[Sheet]] =
-    sheetNameOpt match
-      case Some(name) =>
-        IO.fromEither(SheetName.apply(name).left.map(e => new Exception(e))).flatMap { sheetName =>
-          IO.fromOption(wb.sheets.find(_.name == sheetName))(
-            new Exception(
-              s"Sheet not found: $name. Available: ${wb.sheets.map(_.name.value).mkString(", ")}"
-            )
-          ).map(Some(_))
-        }
-      case None =>
-        IO.pure(None)
+    lift(Resolve.default(wb, sheetNameOpt, takesSheet = false))
 
   /**
-   * Require a sheet to be present.
-   *
-   * @param wb
-   *   Workbook for error message
-   * @param sheetOpt
-   *   Optional sheet
-   * @param context
-   *   Command name for error message
-   * @return
-   *   IO containing the sheet, or error if not present
+   * The given sheet, else steps 3–4: the only sheet of a single-sheet book, or a `SHEET_REQUIRED`
+   * error naming the available sheets (`context` names the command).
    */
   def requireSheet(wb: Workbook, sheetOpt: Option[Sheet], context: String): IO[Sheet] =
-    IO.fromOption(sheetOpt)(
-      new Exception(
-        s"$context requires --sheet or qualified ref (e.g., Sheet1!A1). " +
-          s"Available sheets: ${wb.sheets.map(_.name.value).mkString(", ")}"
-      )
-    )
+    lift(sheetOpt.fold(Resolve.sheet(wb, None, context))(Right(_)))
 
-  /**
-   * Find a sheet by name.
-   *
-   * @param wb
-   *   Workbook to search
-   * @param name
-   *   Sheet name
-   * @return
-   *   IO containing the sheet, or error if not found
-   */
+  /** The sheet a name denotes, or a `SHEET_NOT_FOUND` error. */
   def findSheet(wb: Workbook, name: SheetName): IO[Sheet] =
-    IO.fromOption(wb.sheets.find(_.name == name))(
-      new Exception(
-        s"Sheet not found: ${name.value}. Available: ${wb.sheets.map(_.name.value).mkString(", ")}"
-      )
-    )
+    lift(Resolve.named(wb, name))
 
   /**
-   * Resolve a reference string to a (Sheet, Either[ARef, CellRange]).
-   *
-   * Supports qualified refs like `Sheet1!A1` which override the default sheet context. For
-   * unqualified refs, requires a default sheet or fails with helpful error.
-   *
-   * @param wb
-   *   Workbook to search
-   * @param defaultSheetOpt
-   *   Default sheet context
-   * @param refStr
-   *   Reference string (e.g., "A1", "A1:B10", "Sheet1!A1")
-   * @param context
-   *   Command name for error messages
-   * @return
-   *   IO containing (Sheet, Either[ARef, CellRange])
+   * A reference string to its `(Sheet, Either[ARef, CellRange])` by THE rule: a qualified ref
+   * (`Sheet1!A1`) names the sheet, else the default, else the only sheet of a single-sheet book,
+   * else `SHEET_REQUIRED` (`context` names the command).
    */
   def resolveRef(
     wb: Workbook,
@@ -95,15 +43,8 @@ object SheetResolver:
     refStr: String,
     context: String
   ): IO[(Sheet, Either[ARef, CellRange])] =
-    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
-      case RefType.Cell(ref) =>
-        requireSheet(wb, defaultSheetOpt, s"$context with unqualified ref '$refStr'")
-          .map(s => (s, Left(ref)))
-      case RefType.Range(range) =>
-        requireSheet(wb, defaultSheetOpt, s"$context with unqualified range '$refStr'")
-          .map(s => (s, Right(range)))
-      case RefType.QualifiedCell(sheetName, ref) =>
-        findSheet(wb, sheetName).map(s => (s, Left(ref)))
-      case RefType.QualifiedRange(sheetName, range) =>
-        findSheet(wb, sheetName).map(s => (s, Right(range)))
-    }
+    lift(
+      Resolve
+        .targetWith(wb, defaultSheetOpt, refStr, context)
+        .map(r => (r.sheet, r.target.toEither))
+    )

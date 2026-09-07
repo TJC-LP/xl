@@ -278,7 +278,7 @@ class ChartCommandSpec extends CatsEffectSuite:
     val wb = dataWorkbook()
     for
       parsed <- IO.fromEither(BatchParser.parseBatchJson(json))
-      _ = assertEquals(parsed.warnings, Vector.empty[String])
+      _ = assertEquals(parsed.warnings, Vector.empty)
       updated <- BatchParser.applyBatchOperations(wb, wb.sheets.headOption, parsed.ops)
       // write→read so the assertion covers the full emission path, like the CLI tests above
       out = tmp("batch-chart")
@@ -455,10 +455,12 @@ class ChartCommandSpec extends CatsEffectSuite:
           config
         )
       )
+      // ADR-017 §2.5: on a single-sheet book the rule would auto-select; add a sheet so the
+      // unqualified --at needs a default
       missingSheet <- attempt(
         ChartCommands
           .chartAdd(
-            wb,
+            wb.put(Sheet("Other")),
             None,
             "column",
             None,

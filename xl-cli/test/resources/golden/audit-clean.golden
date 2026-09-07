@@ -1,0 +1,10 @@
+## args
+-f
+<DIR>/simple.xlsx
+audit
+--fail-on-findings
+## exit
+0
+## stdout
+Audit: clean
+## stderr

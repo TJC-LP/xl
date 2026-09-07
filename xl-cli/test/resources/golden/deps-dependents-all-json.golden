@@ -1,0 +1,52 @@
+## args
+-f
+<DIR>/linked.xlsx
+-s
+Sheet1
+--json
+deps
+A1
+--direction
+dependents
+--depth
+all
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "deps",
+  "version": "<VERSION>",
+  "data": {
+    "ref": "Sheet1!A1",
+    "formula": null,
+    "value": 5,
+    "direction": "dependents",
+    "depth": "all",
+    "precedents": null,
+    "dependents": [
+      {
+        "ref": "Sheet1!A3",
+        "depth": 1,
+        "formula": "=SUM(A1:A2)",
+        "value": 12
+      },
+      {
+        "ref": "Sheet2!A1",
+        "depth": 1,
+        "formula": "=Sheet1!A1*2",
+        "value": 10
+      },
+      {
+        "ref": "Sheet2!B1",
+        "depth": 2,
+        "formula": "=A1+1",
+        "value": 11
+      }
+    ]
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

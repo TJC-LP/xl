@@ -1,0 +1,16 @@
+## args
+-f
+<DIR>/linked.xlsx
+describe
+## exit
+0
+## stdout
+Sheets (3):
+  1  Sheet1  A1:A3
+  2  Sheet2  A1:B1
+  3  Hidden  A1:A1  hidden
+Defined names (2):
+  Total   Sheet1!$A$3
+  Secret  Sheet1!$A$1  (hidden)
+Date system: 1900
+## stderr

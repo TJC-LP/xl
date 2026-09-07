@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/single.xlsx
+cell
+A1
+## exit
+0
+## stdout
+Cell: A1
+Type: text
+Raw: "solo"
+Dependencies: (none)
+Dependents: (none)
+## stderr

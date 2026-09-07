@@ -1,0 +1,10 @@
+## args
+-f
+<DIR>/simple.xlsx
+stats
+Data!B1:B3
+## exit
+0
+## stdout
+count: 3, sum: 42.50, min: 10.00, max: 20.00, mean: 14.17
+## stderr

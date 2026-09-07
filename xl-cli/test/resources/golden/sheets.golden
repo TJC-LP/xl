@@ -1,0 +1,12 @@
+## args
+-f
+<DIR>/simple.xlsx
+sheets
+## exit
+0
+## stdout
+| #   | Name    | Dimension | State |
+|-----|---------|-----------|-------|
+| 1   | Data    | A1:C4     |       |
+| 2   | Summary | (unknown) |       |
+## stderr

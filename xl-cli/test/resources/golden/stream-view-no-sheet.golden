@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/simple.xlsx
+--stream
+view
+A1:B2
+## exit
+3
+## stdout
+## stderr
+Error: view with unqualified range 'A1:B2' requires --sheet or qualified ref (e.g., Sheet1!A1). Available sheets: Data, Summary
+  code: SHEET_REQUIRED
+  did you mean: Data, Summary
+  hint: use -s <name> or a qualified ref like 'Name'!A1

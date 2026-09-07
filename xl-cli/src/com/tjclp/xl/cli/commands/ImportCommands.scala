@@ -6,7 +6,7 @@ import cats.effect.{IO, Resource}
 import com.tjclp.xl.{Workbook, Sheet, style, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.helpers.{CsvParser, MarkdownTableParser, StreamingCsvParser}
+import com.tjclp.xl.cli.helpers.{CsvParser, MarkdownTableParser, SheetResolver, StreamingCsvParser}
 import com.tjclp.xl.cli.helpers.MarkdownTableParser.ColumnAlignment
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
@@ -100,27 +100,22 @@ object ImportCommands:
         importToNewSheet(wb, csvPathResolved, name, options, outputPath, config, stream)
 
       case None =>
-        // Import to existing sheet at position
-        sheetOpt match
-          case None =>
-            IO.raiseError(
-              new Exception(
-                "Import to existing sheet requires --sheet flag. Use --new-sheet to create a new sheet."
-              )
-            )
-          case Some(sheet) =>
-            val startRef = startRefStr match
-              case Some(refStr) =>
-                ARef.parse(refStr) match
-                  case Right(ref) => IO.pure(ref)
-                  case Left(err) =>
-                    IO.raiseError(new Exception(s"Invalid start reference '$refStr': $err"))
-              case None =>
-                IO.pure(ARef.from0(0, 0)) // Default to A1
+        // Import to an existing sheet at position: THE sheet rule (-s, else the only sheet of a
+        // single-sheet book, else SHEET_REQUIRED with the candidates); --new-sheet needs none
+        SheetResolver.requireSheet(wb, sheetOpt, "import").flatMap { sheet =>
+          val startRef = startRefStr match
+            case Some(refStr) =>
+              ARef.parse(refStr) match
+                case Right(ref) => IO.pure(ref)
+                case Left(err) =>
+                  IO.raiseError(new Exception(s"Invalid start reference '$refStr': $err"))
+            case None =>
+              IO.pure(ARef.from0(0, 0)) // Default to A1
 
-            startRef.flatMap { ref =>
-              importToPosition(wb, sheet, csvPathResolved, ref, options, outputPath, config, stream)
-            }
+          startRef.flatMap { ref =>
+            importToPosition(wb, sheet, csvPathResolved, ref, options, outputPath, config, stream)
+          }
+        }
 
   /**
    * Import CSV to an existing sheet at a specified position.
@@ -351,25 +346,19 @@ ${Format.saveSuffix(outputPath, stream)}"""
             yield importMessage(sourceName, s"new sheet '$name'", rows, table.columnCount) +
               "\n" + Format.saveSuffix(outputPath, stream)
         case None =>
-          sheetOpt match
-            case None =>
-              IO.raiseError(
-                new Exception(
-                  "Import to existing sheet requires --sheet flag. Use --new-sheet to create a new sheet."
-                )
-              )
-            case Some(sheet) =>
-              for
-                filled <- applyMarkdownTable(
-                  sheet,
-                  rows,
-                  table.alignments,
-                  startRef,
-                  !noTypeInference
-                )
-                _ <- writeWorkbook(wb.put(filled), outputPath, config, stream)
-              yield importMessage(sourceName, sheet.name.value, rows, table.columnCount) +
-                "\n" + Format.saveSuffix(outputPath, stream)
+          // THE sheet rule (-s, else the only sheet, else SHEET_REQUIRED); --new-sheet needs none
+          for
+            sheet <- SheetResolver.requireSheet(wb, sheetOpt, "import-md")
+            filled <- applyMarkdownTable(
+              sheet,
+              rows,
+              table.alignments,
+              startRef,
+              !noTypeInference
+            )
+            _ <- writeWorkbook(wb.put(filled), outputPath, config, stream)
+          yield importMessage(sourceName, sheet.name.value, rows, table.columnCount) +
+            "\n" + Format.saveSuffix(outputPath, stream)
     yield result
 
   private def importMessage(

@@ -1,0 +1,25 @@
+## args
+--json
+eval
+=1+1
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "eval",
+  "version": "<VERSION>",
+  "data": {
+    "formula": "=1+1",
+    "result": {
+      "type": "number",
+      "value": 2,
+      "formatted": "2"
+    },
+    "overrides": []
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

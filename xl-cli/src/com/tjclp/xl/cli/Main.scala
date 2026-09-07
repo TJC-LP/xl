@@ -1,21 +1,22 @@
 package com.tjclp.xl.cli
 
 import java.nio.file.{
+  AccessDeniedException,
   AtomicMoveNotSupportedException,
   FileAlreadyExistsException,
   Files,
+  NoSuchFileException,
   Path,
   StandardCopyOption
 }
 
 import scala.concurrent.duration.*
 
-import cats.effect.{ExitCode, IO, Resource}
+import cats.effect.{ExitCode, IO, IOApp, Ref, Resource}
 import cats.effect.unsafe.IORuntimeConfig
 import cats.implicits.*
 import cats.syntax.parallel.*
 import com.monovore.decline.*
-import com.monovore.decline.effect.*
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
@@ -29,6 +30,7 @@ import com.tjclp.xl.cli.commands.{
   DiffCommands,
   FilterCommands,
   ImportCommands,
+  InspectCommands,
   LintCommands,
   ReadCommands,
   SheetCommands,
@@ -47,11 +49,29 @@ import com.tjclp.xl.cli.raster.{
   Resvg,
   RsvgConvert
 }
-import com.tjclp.xl.cli.helpers.{BatchParser, SheetResolver}
+import com.tjclp.xl.cli.contract.{
+  CliError,
+  CliException,
+  CliSignal,
+  Diagnostics,
+  ErrorCode,
+  ExitCodes,
+  FunctionDoc,
+  Location,
+  Outcome,
+  OutputMode,
+  Payload,
+  Render,
+  Schema,
+  Warning,
+  WarningCode
+}
+import com.tjclp.xl.cli.batch.OpRegistry
+import com.tjclp.xl.cli.helpers.{BatchParser, Resolve}
 import com.tjclp.xl.cli.output.Format
 
 /** Read version from generated resource, fallback to dev */
-private object BuildInfo:
+private[cli] object BuildInfo:
   val version: String =
     val props = new java.util.Properties()
     val stream = Option(getClass.getResourceAsStream("/version.properties"))
@@ -63,30 +83,71 @@ private object BuildInfo:
  *
  * Stateless by design: each command is self-contained. Use global flags:
  *   - `-f, --file` — Input file (required)
- *   - `-s, --sheet` — Sheet name (optional, defaults to first)
+ *   - `-s, --sheet` — Sheet name (ADR-017 §2.5: a qualified ref wins, a single-sheet book
+ *     auto-selects, otherwise a sheet verb is `SHEET_REQUIRED`)
  *   - `-o, --output` — Output file for mutations (required for put/putf)
  *   - `--no-recalc` / `--preserve-caches` — write verbs only (GH-468): apply the edit and
  *     recalculate nothing. Non-structural verbs keep every cached formula value in the file; the
  *     structural verbs leave the caches their edit invalidated uncached (see [[WritePolicy]])
  *   - `--strict` — write verbs only (GH-496): exit 1 when the write's recalculation reports formula
  *     errors, non-convergence, or data-table seed warnings
+ *   - `--json` — every verb (ADR-017 §2.4): print the result, success or failure, as one JSON
+ *     envelope `{ok, exitCode, verb, version, data, warnings, error}` on stdout; `--format json`
+ *     payloads ride inside it unchanged
  *
- * Global flags precede the verb: `xl -f in.xlsx -o out.xlsx --strict batch -`. (`view --eval
- * --strict` is a separate, subcommand-scoped flag of the same name.)
+ * Global flags may go anywhere on the command line — [[contract.Argv.hoist]] moves them in front of
+ * the verb before decline parses. (`view --eval --strict` is a separate, subcommand-scoped flag of
+ * the same name and stays where it is.)
+ *
+ * This object is the process shell: option and verb definitions plus the handlers that read files
+ * and print. The wiring between them is [[Cli.program]], and argv handling (help, version, parse
+ * errors) is [[Cli.run]] — both take the [[CliIO]] to print through, so the contract suite can run
+ * the identical tree in-process; the binary passes [[CliIO.system]].
+ *
+ * Channels and exit codes (ADR-017 §2.3): results go to stdout, diagnostics to stderr, and stdout
+ * is empty on every failure. Exit 0 ok; 1 completed with findings or a failed gate (`diff` differs,
+ * `lint` findings, `--strict`) — never a failure; 2 the command line is wrong; 3 the operation
+ * could not complete. The code follows from the [[contract.CliError]]'s `code` through
+ * [[contract.ExitCodes.forCode]], so no handler picks a number.
  */
-object Main
-    extends CommandIOApp(
-      name = "xl",
-      header = "LLM-friendly Excel operations (stateless)",
-      version = BuildInfo.version
-    ):
+object Main extends IOApp:
 
-  /** Rendered command result plus whether a staged output is complete and eligible to commit. */
-  private[cli] final case class CommandOutcome(
-    exitCode: ExitCode,
-    output: String,
-    outputComplete: Boolean
-  )
+  /**
+   * The name the staging tests know a run's result by: an [[contract.Outcome]], built here from the
+   * three fields `runStagedOutput`'s commit rule reads (exit code, rendered output, completeness)
+   * plus the run's warnings. Production code builds outcomes through [[contract.Outcome]]'s own
+   * constructors, which carry the verb and the error as well.
+   */
+  private[cli] type CommandOutcome = Outcome
+
+  private[cli] object CommandOutcome:
+    /**
+     * Total: the error is derived from the exit code so `ok ⇔ error.isEmpty ⇔ exitCode == 0` holds
+     * for these outcomes too — 1 is a gate (`RECALC_GATE`, the output being its report), 2 usage,
+     * anything else `INTERNAL`; the message is the output's first line.
+     */
+    def apply(
+      exitCode: ExitCode,
+      output: String,
+      outputComplete: Boolean,
+      warnings: Vector[Warning] = Vector.empty
+    ): Outcome =
+      val payload = Option.when(output.nonEmpty)(Payload.text(output))
+      val error = Option.when(exitCode != ExitCodes.ok) {
+        val code =
+          if exitCode == ExitCodes.signal then ErrorCode.RECALC_GATE
+          else if exitCode == ExitCodes.usage then ErrorCode.USAGE
+          else ErrorCode.INTERNAL
+        CliError(code, output.linesIterator.nextOption().getOrElse(s"exit ${exitCode.code}"))
+      }
+      Outcome(
+        verb = "",
+        payload = payload,
+        warnings = warnings,
+        error = error,
+        exitCode = error.fold(ExitCodes.ok)(_.exitCode),
+        outputComplete = outputComplete
+      )
 
   /**
    * GH-519: SIGTERM/SIGINT must terminate the process even mid-recalculation. The evaluator is a
@@ -108,141 +169,30 @@ object Main
       cpuStarvationCheckInitialDelay = Duration.Inf
     )
 
-  override def main: Opts[IO[ExitCode]] =
-    // Workbook-level: only --file (no --sheet)
-    // Note: --stream not supported for workbook-level commands (need full metadata)
-    val workbookSubcmds = namesCmd
-    val workbookOpts = (fileOpt, maxSizeOpt, workbookSubcmds).mapN { (file, maxSize, cmd) =>
-      run(file, None, None, None, None, maxSize, false, cmd)
-    }
+  /**
+   * The complete verb tree over the process streams. Tests parse it directly (`Command("xl",
+   * "test")(Main.main).parse(args)`); the binary goes through [[run]].
+   */
+  def main: Opts[IO[ExitCode]] = Cli.program(CliIO.system)
 
-    // Sheets command: --file required, --output optional (required for hide/show, not for list)
-    // This needs its own opts chain because list doesn't need output but hide/show do
-    val sheetsOpts =
-      (fileOpt, outputOpt.orNone, inPlaceOpt, backendOpt, maxSizeOpt, streamOpt, sheetsCmd).mapN {
-        (file, outOpt, inPlace, backend, maxSize, stream, cmd) =>
-          runWithOutput(outOpt, inPlace, file) { (out, display) =>
-            runResult(
-              file,
-              None,
-              out,
-              display,
-              backend,
-              maxSize,
-              stream,
-              cmd,
-              strictFailureDiscardsOutput = inPlace
-            )
-          }
-      }
-
-    // Headless commands: --file is optional (for constant formulas like =1+1, =PI())
-    // Note: --stream not supported for eval (needs formula analysis)
-    // evala requires --file (array formulas need sheet context)
-    val headlessOpts = (fileOpt.orNone, sheetOpt, maxSizeOpt, evalCmd orElse evalArrayCmd).mapN {
-      (fileOpt, sheet, maxSize, cmd) =>
-        runHeadless(fileOpt, sheet, maxSize, cmd)
-    }
-
-    // Sheet-level read-only: --file and --sheet (no --output)
-    val sheetReadOnlySubcmds =
-      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd orElse filterCmd
-
-    val sheetReadOnlyOpts = (fileOpt, sheetOpt, maxSizeOpt, streamOpt, sheetReadOnlySubcmds).mapN {
-      (file, sheet, maxSize, stream, cmd) =>
-        run(file, sheet, None, None, None, maxSize, stream, cmd)
-    }
-
-    // Sheet-level write: --file, --sheet, and --output (required)
-    // --stream uses SAX/StAX workbook writes for modifying commands.
-    val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse groupRowsCmd orElse groupColsCmd orElse ungroupRowsCmd orElse ungroupColsCmd orElse autoFitCmd orElse batchCmd orElse recalcCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd orElse sheetViewCmd orElse tabColorCmd orElse autoFilterCmd orElse pageSetupCmd orElse headerFooterCmd orElse cfCmd
-
-    val sheetWriteOpts =
-      (
-        fileOpt,
-        sheetOpt,
-        outputOpt.orNone,
-        inPlaceOpt,
-        backendOpt,
-        maxSizeOpt,
-        streamOpt,
-        writePolicyOpt,
-        sheetWriteSubcmds
-      ).mapN { (file, sheet, outOpt, inPlace, backend, maxSize, stream, policy, cmd) =>
-        runWithOutput(outOpt, inPlace, file) { (out, display) =>
-          runResult(
-            file,
-            sheet,
-            out,
-            display,
-            backend,
-            maxSize,
-            stream,
-            cmd,
-            policy,
-            strictFailureDiscardsOutput = inPlace
-          )
-        }
-      }
-
-    // Standalone: no --file required (creates new files)
-    val standaloneOpts = newCmd.map { case (outPath, sheetName, sheets, backend) =>
-      runStandalone(outPath, sheetName, sheets, backend)
-    }
-
-    // Diff: compares -f against -g (two inputs, no output); custom exit codes
-    val diffOpts = (fileOpt, sheetOpt, maxSizeOpt, diffCmd).mapN { (file, sheet, maxSize, cmd) =>
-      cmd match
-        case CliCommand.Diff(file2, format) => runDiff(file, file2, sheet, maxSize, format)
-        case other =>
-          IO.println(Format.errorSimple(s"Unexpected diff command: $other")).as(ExitCode.Error)
-    }
-
-    // Lint: raw-zip structural validation (GH-397, no output file); custom exit codes.
-    // The file arrives via -f or positionally (GH-422); exactly one form must be used.
-    val lintOpts = (fileOpt.orNone, lintCmd).mapN { case (flagFile, (cmd, positional)) =>
-      cmd match
-        case CliCommand.Lint(format) =>
-          resolveLintFile(flagFile, positional) match
-            case Right(file) => runLint(file, format)
-            case Left(msg) => IO.println(Format.errorSimple(msg)).as(ExitCode(2))
-        case other =>
-          IO.println(Format.errorSimple(s"Unexpected lint command: $other")).as(ExitCode.Error)
-    }
-
-    // Info commands: no file required
-    val infoOpts = functionsCmd.map(_ => runInfo())
-    val rasterOpts = rasterizersCmd.map(_ => runRasterizers())
-
-    // Batch dry-run: only needs batch source, no --file or --output
-    val dryRunFlag =
-      Opts.flag("dry-run", "Validate batch JSON without writing")
-    val batchDryRunOpts =
-      Opts
-        .subcommand("batch", batchHelp) {
-          (batchArg, dryRunFlag).mapN((src, _) => src)
-        }
-        .map(src => batchDryRun(src).flatMap(IO.println).as(ExitCode.Success))
-
-    rasterOpts orElse infoOpts orElse standaloneOpts orElse diffOpts orElse lintOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
+  def run(args: List[String]): IO[ExitCode] = Cli.run(args, CliIO.system)
 
   // ==========================================================================
   // Global options
   // ==========================================================================
 
-  private val fileOpt =
+  private[cli] val fileOpt =
     Opts.option[Path]("file", "Excel file to operate on (required)", "f")
 
-  private val sheetOpt =
+  private[cli] val sheetOpt =
     Opts
       .option[String]("sheet", "Sheet to select (required for sheet-level operations)", "s")
       .orNone
 
-  private val outputOpt =
+  private[cli] val outputOpt =
     Opts.option[Path]("output", "Output file (required)", "o")
 
-  private val backendOpt: Opts[Option[XmlBackend]] =
+  private[cli] val backendOpt: Opts[Option[XmlBackend]] =
     Opts
       .option[String]("backend", "XML backend: scalaxml (default, stable) or saxstax (faster)")
       .mapValidated {
@@ -257,7 +207,7 @@ object Main
       }
       .orNone
 
-  private val maxSizeOpt: Opts[Option[Long]] =
+  private[cli] val maxSizeOpt: Opts[Option[Long]] =
     Opts
       .option[Long](
         "max-size",
@@ -265,7 +215,7 @@ object Main
       )
       .orNone
 
-  private val streamOpt: Opts[Boolean] =
+  private[cli] val streamOpt: Opts[Boolean] =
     Opts
       .flag(
         "stream",
@@ -273,7 +223,7 @@ object Main
       )
       .orFalse
 
-  private val inPlaceOpt: Opts[Boolean] =
+  private[cli] val inPlaceOpt: Opts[Boolean] =
     Opts.flag("in-place", "Edit file in-place (same as -o matching -f)", "i").orFalse
 
   /**
@@ -301,8 +251,21 @@ object Main
       .orFalse
 
   /** Cross-cutting write posture (GH-468/GH-496), parsed before the verb like -f/-o/--stream. */
-  private val writePolicyOpt: Opts[WritePolicy] =
+  private[cli] val writePolicyOpt: Opts[WritePolicy] =
     (noRecalcOpt, strictWriteOpt).mapN(WritePolicy.apply)
+
+  /**
+   * Global `--json` (ADR-017 §2.4): the result — success or failure — as one JSON envelope on
+   * stdout. Orthogonal to a verb's own `--format`: `view --format json --json` wraps the bare
+   * payload as `data`, and a pass-through verb with no `--format` at all uses its JSON payload
+   * format under `--json` ([[CliCommand.viewFormat]]), so `data` is structured unless the user
+   * asked for a text format.
+   */
+  private[cli] val jsonOpt: Opts[OutputMode] =
+    Opts
+      .flag("json", "Wrap every result in the JSON envelope; errors too")
+      .orFalse
+      .map(json => if json then OutputMode.Json else OutputMode.Text)
 
   // ==========================================================================
   // Command definitions
@@ -322,9 +285,16 @@ object Main
   private val limitOpt = Opts
     .option[Int]("limit", "Maximum rows to display (default: 50; 0 = no limit)")
     .withDefault(50)
-  private val formatOpt = Opts
-    .option[String]("format", "Output format: markdown, html, svg, json, csv, png, jpeg, webp, pdf")
-    .withDefault("markdown")
+
+  /**
+   * `view --format`, as given: no baked default, so the runner can pick JSON under `--json` when
+   * the user chose nothing ([[CliCommand.viewFormat]]); text mode defaults to markdown.
+   */
+  private val formatOpt: Opts[Option[ViewFormat]] = Opts
+    .option[String](
+      "format",
+      "Output format: markdown (default; json under --json), html, svg, json, csv, png, jpeg, webp, pdf"
+    )
     .mapValidated { s =>
       s.toLowerCase match
         case "markdown" | "md" => cats.data.Validated.valid(ViewFormat.Markdown)
@@ -341,6 +311,7 @@ object Main
             s"Unknown format: $other. Use markdown, html, svg, json, csv, png, jpeg, webp, or pdf"
           )
     }
+    .orNone
   private val printScaleOpt =
     Opts.flag("print-scale", "Apply print scaling (for PDF-like output)").orFalse
   private val gridlinesOpt =
@@ -655,10 +626,9 @@ EXAMPLES:
   private val file2Opt =
     Opts.option[Path]("file2", "Second file to compare against (required)", "g")
 
-  private val diffFormatOpt: Opts[DiffFormat] =
+  private val diffFormatOpt: Opts[Option[DiffFormat]] =
     Opts
-      .option[String]("format", "Output format: markdown (default), json")
-      .withDefault("markdown")
+      .option[String]("format", "Output format: markdown (default; json under --json), json")
       .mapValidated { s =>
         s.toLowerCase match
           case "markdown" | "md" => cats.data.Validated.valid(DiffFormat.Markdown)
@@ -666,6 +636,7 @@ EXAMPLES:
           case other =>
             cats.data.Validated.invalidNel(s"Unknown format: $other. Use markdown or json")
       }
+      .orNone
 
   val diffCmd: Opts[CliCommand] =
     Opts.subcommand("diff", diffHelp) {
@@ -724,10 +695,9 @@ EXAMPLES:
   xl lint deliverable.xlsx && echo "safe to send"
   xl lint deliverable.xlsx --format json | jq '.findings'"""
 
-  private val lintFormatOpt: Opts[LintFormat] =
+  private val lintFormatOpt: Opts[Option[LintFormat]] =
     Opts
-      .option[String]("format", "Output format: text (default), json")
-      .withDefault("text")
+      .option[String]("format", "Output format: text (default; json under --json), json")
       .mapValidated { s =>
         s.toLowerCase match
           case "text" => cats.data.Validated.valid(LintFormat.Text)
@@ -735,6 +705,7 @@ EXAMPLES:
           case other =>
             cats.data.Validated.invalidNel(s"Unknown format: $other. Use text or json")
       }
+      .orNone
 
   /**
    * Lint reads exactly one file and writes nothing, so it also accepts the file as a positional
@@ -758,6 +729,25 @@ EXAMPLES:
     Opts.subcommand("rasterizers", "List available SVG-to-raster backends") {
       Opts.unit
     }
+
+  /**
+   * `xl schema` (ADR-017 §2.13): the CLI contract from the binary itself — the verb table as text,
+   * or with `--json` the whole contract (exit and error codes, globals, verbs, the batch JSON
+   * Schema, the function registry, the envelope's JSON Schema) as one document.
+   */
+  val schemaCmd: Opts[Unit] =
+    Opts.subcommand(
+      "schema",
+      "Print the CLI contract: every verb with what it needs and how it exits; " +
+        "--json adds exit/error/warning codes, globals, the batch op schema, the functions " +
+        "and the envelope schema"
+    ) {
+      Opts.unit
+    }
+
+  /** The `schema` verb wired to its runner; [[Cli.program]] places it after `functions`. */
+  private[cli] def schemaOpts(io: CliIO): Opts[IO[ExitCode]] =
+    (jsonOpt, schemaCmd).mapN((mode, _) => runSchema(io, mode))
 
   // --- Standalone commands (no --file required) ---
 
@@ -940,10 +930,9 @@ EXAMPLES:
     Opts.option[String]("columns", "Columns to output, e.g. A,C:E (default: all used)").orNone
   private val filterLimitOpt =
     Opts.option[Int]("limit", "Maximum matching rows to display").withDefault(50)
-  private val filterFormatOpt: Opts[FilterFormat] =
+  private val filterFormatOpt: Opts[Option[FilterFormat]] =
     Opts
-      .option[String]("format", "Output format: markdown (default), csv, json")
-      .withDefault("markdown")
+      .option[String]("format", "Output format: markdown (default; json under --json), csv, json")
       .mapValidated { s =>
         s.toLowerCase match
           case "markdown" | "md" => cats.data.Validated.valid(FilterFormat.Markdown)
@@ -952,6 +941,7 @@ EXAMPLES:
           case other =>
             cats.data.Validated.invalidNel(s"Unknown format: $other. Use markdown, csv, or json")
       }
+      .orNone
   private val filterHeaderOpt =
     Opts
       .flag("header", "Treat the first used row as column names (excluded from matching)")
@@ -961,6 +951,106 @@ EXAMPLES:
     Opts.subcommand("filter", filterHelp) {
       (whereOpt, filterColumnsOpt, filterLimitOpt, filterFormatOpt, filterHeaderOpt)
         .mapN(CliCommand.Filter.apply)
+    }
+
+  // --- Inspect (ADR-017 §2.10): describe, audit, deps ---
+
+  private val describeHelp = """Orient in a workbook: sheets, defined names, date system.
+
+Metadata only by default — instant for any file size, works under --stream — listing every sheet
+with its visibility state and dimension, every defined name (hidden ones flagged) and the date
+system. --full loads the book and adds per-sheet counts: cells, formulas (and how many are
+uncached), merges, comments, hyperlinks, freeze pane, tab color, autoFilter, tables, charts,
+pictures, conditional formats, data validations, hidden rows/columns, plus the calcPr settings.
+
+USAGE:
+  xl -f model.xlsx describe
+  xl -f model.xlsx --stream describe          # same card, O(1) memory
+  xl -f model.xlsx describe --full
+  xl -f model.xlsx --json describe --full     # {sheets: [...], definedNames: [...], date1904, calcPr}
+"""
+
+  private val fullOpt: Opts[Boolean] =
+    Opts.flag("full", "Load the workbook and add per-sheet counts and calcPr").orFalse
+
+  val describeCmd: Opts[CliCommand] =
+    Opts.subcommand("describe", describeHelp) {
+      fullOpt.map(CliCommand.Describe.apply)
+    }
+
+  private val auditHelp = """Find every reason a number can be wrong, in one pass.
+
+Findings: cached error values (#DIV/0!, #REF!, ...), uncached formulas, formulas this evaluator
+cannot parse, circular references, and readers of names that do not resolve. Notes (reported,
+never findings): volatile TODAY/NOW/RAND/RANDBETWEEN cells, dynamic INDIRECT/OFFSET readers,
+external-workbook references, and the file's calcPr. Text mode prints one section per non-empty
+bucket; -s restricts the cell buckets to one sheet.
+
+Exit 0 whether or not there are findings; --fail-on-findings exits 1 (AUDIT_FINDINGS) on a dirty
+book with the report kept, so a CI lane can gate on it.
+
+USAGE:
+  xl -f model.xlsx audit
+  xl -f model.xlsx -s Summary audit
+  xl -f model.xlsx --json audit --fail-on-findings   # data.clean, data.findings, one array per bucket
+"""
+
+  private val failOnFindingsOpt: Opts[Boolean] =
+    Opts.flag("fail-on-findings", "Exit 1 (AUDIT_FINDINGS) when the audit has findings").orFalse
+
+  val auditCmd: Opts[CliCommand] =
+    Opts.subcommand("audit", auditHelp) {
+      failOnFindingsOpt.map(CliCommand.Audit.apply)
+    }
+
+  private val depsHelp = """Trace one cell's precedents and dependents, hop by hop.
+
+Precedents are the cells the formula reads (single refs exactly, ranges as their occupied cells);
+dependents are the formulas that read the cell, by name or through a range that contains it.
+Each node carries its depth, formula and value. The ref follows the sheet rule: a qualified ref
+('Q1 Data'!B4) names the sheet, else -s, else the only sheet of a single-sheet book.
+
+USAGE:
+  xl -f model.xlsx deps Summary!B4                          # both directions, one hop
+  xl -f model.xlsx -s Data deps B4 --direction precedents --depth 3
+  xl -f model.xlsx --json deps Summary!B4 --direction dependents --depth all
+"""
+
+  private val directionOpt: Opts[Direction] =
+    Opts
+      .option[String]("direction", "precedents, dependents or both (default: both)")
+      .withDefault("both")
+      .mapValidated {
+        case "precedents" => cats.data.Validated.valid(Direction.Precedents)
+        case "dependents" => cats.data.Validated.valid(Direction.Dependents)
+        case "both" => cats.data.Validated.valid(Direction.Both)
+        case other =>
+          cats.data.Validated.invalidNel(
+            s"Unknown direction: $other. Use precedents, dependents or both"
+          )
+      }
+
+  // The parser is the only place the sentinels live: 'all' and 0 are Depth.All, an absent flag is
+  // one hop, anything else is that many hops.
+  private val depthOpt: Opts[Depth] =
+    Opts
+      .option[String]("depth", "Hops to follow: a number, or 'all' (0 = all; default: 1)")
+      .mapValidated {
+        case "all" => cats.data.Validated.valid(Depth.All)
+        case text =>
+          text.toIntOption.filter(_ >= 0) match
+            case Some(0) => cats.data.Validated.valid(Depth.All)
+            case Some(n) => cats.data.Validated.valid(Depth.Hops(n))
+            case None =>
+              cats.data.Validated.invalidNel(
+                s"Invalid --depth: $text. Use a positive number, 0 or 'all'"
+              )
+      }
+      .withDefault(Depth.Hops(1))
+
+  val depsCmd: Opts[CliCommand] =
+    Opts.subcommand("deps", depsHelp) {
+      (refArg, directionOpt, depthOpt).mapN(CliCommand.Deps.apply)
     }
 
   // --- Analyze ---
@@ -1159,53 +1249,27 @@ EXAMPLES:
     }
 
   // --- Batch command ---
-  private val batchArg = Opts.argument[String]("operations").withDefault("-")
-  private val batchHelp = """Apply multiple operations atomically from JSON.
+  private[cli] val batchArg = Opts.argument[String]("operations").withDefault("-")
+
+  /**
+   * The `batch` help: the op table comes from [[OpRegistry.helpText]] — every op the registry
+   * knows, its example and aliases — so the help can never list fewer ops than the parser accepts.
+   */
+  private[cli] val batchHelp: String =
+    val head = """Apply multiple operations atomically from JSON.
 
 USAGE:
   xl -f in.xlsx -s Sheet1 -o out.xlsx batch ops.json
   echo '[...]' | xl -f in.xlsx -s Sheet1 -o out.xlsx batch -
-
-OPERATIONS:
-  put       {"op": "put", "ref": "A1", "value": "Hello"}
-  putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}  (also accepts "formula";
-            optional "format" applies a number format to the formula cell(s))
-  style     {"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}
-  merge     {"op": "merge", "range": "A1:D1"}
-  unmerge   {"op": "unmerge", "range": "A1:D1"}
-  colwidth  {"op": "colwidth", "col": "A", "width": 15.5}
-  rowheight {"op": "rowheight", "row": 1, "height": 30}
-
-ROW/COLUMN GROUPING (GH-421):
-  group-rows    {"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}
-  group-cols    {"op": "group-cols", "cols": "E:H", "level": 1, "collapsed": false}
-  ungroup-rows  {"op": "ungroup-rows", "rows": "10:20"}
-  ungroup-cols  {"op": "ungroup-cols", "cols": "E:H"}
-                (collapsed hides the members and marks the summary row/col after the group)
-
-APPEARANCE & PRINT SETUP (GH-358):
-  sheet-view    {"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
-  tab-color     {"op": "tab-color", "color": "#1F4E79"}  (or {"clear": true};
-                colors: named, #hex, rgb(r,g,b), theme:accent1[:tint])
-  autofilter    {"op": "autofilter", "range": "A1:M29"}  (or {"clear": true} to strip
-                the sheet's autoFilter, even one preserved from the source file)
-  page-setup    {"op": "page-setup", "orientation": "landscape", "scale": 90,
-                "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
-  header-footer {"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N",
-                "oddHeader": ..., "evenHeader/evenFooter": ..., "firstHeader/firstFooter": ...,
-                "differentOddEven": true, "differentFirst": true}
-                (&L/&C/&R sections; &P page, &N total, &D date, &F file, &A sheet)
-
-CONDITIONAL FORMATTING (GH-324):
-  cf            {"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100",
-                "bold": true, "bg": "#FFC7CE", "fg": "#9C0006"}
-                (rule DSL and flags as `xl cf add`; priorities auto-assigned in order)
-
-STYLE PROPERTIES:
+  xl batch --dry-run ops.json      # validate and summarise without a workbook
+  xl batch --schema                # the document's JSON Schema (every op, field and alias)
+"""
+    val tail = """
+STYLE PROPERTIES (style op):
   Font:      bold, italic, underline, fg, fontSize, fontName
   Fill:      bg (background color, e.g., "#FFFF00" or "yellow")
   Align:     align (left/center/right), valign (top/middle/bottom), wrap
-  Format:    numFormat (general/number/currency/percent/date/text)
+  Format:    numFormat (general/number/currency/percent/date/text or an Excel format code)
   Border:    border (all), borderTop/Right/Bottom/Left, borderColor
   Mode:      replace (true=replace style, false=merge with existing)
 
@@ -1221,15 +1285,49 @@ EXAMPLE:
   ]
 
 Operations execute in order. Use "-" to read from stdin.
-Use --dry-run to validate JSON without writing."""
+Use --dry-run to validate JSON without writing; --schema prints the JSON Schema."""
+    head + "\n" + OpRegistry.helpText + "\n" + tail
 
-  private val dryRunOpt =
-    Opts.flag("dry-run", "Validate batch JSON and show summary without writing").orFalse
+  private val dryRunHelp = "Validate batch JSON and show summary without writing"
+  private val batchSchemaHelp =
+    "Print the JSON Schema of the batch document (every op, field and alias) and exit"
 
+  private val dryRunOpt = Opts.flag("dry-run", dryRunHelp).orFalse
+  private val batchSchemaFlag = Opts.flag("schema", batchSchemaHelp).orFalse
+
+  // decline runs every same-named subcommand over the same arguments and fails the parse if any of
+  // them rejects one (Parser.Accumulator.OrElse.parseSub), so the full `batch` and the standalone
+  // forms below accept the same two flags.
   val batchCmd: Opts[CliCommand] =
     Opts.subcommand("batch", batchHelp) {
-      (batchArg, dryRunOpt).mapN(CliCommand.Batch.apply)
+      (batchArg, dryRunOpt, batchSchemaFlag).mapN(CliCommand.Batch.apply)
     }
+
+  /**
+   * The `batch` forms that need neither `-f` nor `-o`: `--dry-run <source>` validates the document
+   * and `--schema` prints its JSON Schema — `OpRegistry.jsonSchema`, the `batchOps` of
+   * `xl schema --json` (ADR-017 §2.13).
+   */
+  enum BatchStandalone derives CanEqual:
+    case DryRun(source: String)
+    case PrintSchema
+
+  private[cli] val batchStandaloneArgs: Opts[BatchStandalone] =
+    (batchArg, Opts.flag("dry-run", dryRunHelp))
+      .mapN((source, _) => BatchStandalone.DryRun(source): BatchStandalone)
+      .orElse(Opts.flag("schema", batchSchemaHelp).as(BatchStandalone.PrintSchema: BatchStandalone))
+
+  /** The batch document's JSON Schema as a payload: the same JSON `xl schema --json` embeds. */
+  private[cli] def batchSchemaPayload: Payload =
+    Payload.Json(OpRegistry.jsonSchema(BuildInfo.version))
+
+  private[cli] def batchStandaloneOutcome(
+    form: BatchStandalone,
+    io: CliIO,
+    mode: OutputMode
+  ): IO[Outcome] = form match
+    case BatchStandalone.DryRun(source) => batchDryRunOutcome(source, io, mode)
+    case BatchStandalone.PrintSchema => IO.pure(Outcome.ok("batch", batchSchemaPayload))
 
   // --- Recalc command (GH-352) ---
   private val recalcHelp = """Recalculate all formulas and rewrite cached values.
@@ -1422,7 +1520,7 @@ USAGE:
 
   // --- Freeze/Unfreeze commands ---
 
-  private val freezeCmd: Opts[CliCommand] =
+  private[cli] val freezeCmd: Opts[CliCommand] =
     Opts.subcommand(
       "freeze",
       "Freeze panes at cell reference (rows above and columns left are locked)"
@@ -1430,7 +1528,7 @@ USAGE:
       refArg.map(CliCommand.Freeze.apply)
     }
 
-  private val unfreezeCmd: Opts[CliCommand] =
+  private[cli] val unfreezeCmd: Opts[CliCommand] =
     Opts.subcommand("unfreeze", "Remove freeze panes") {
       Opts(CliCommand.Unfreeze)
     }
@@ -1449,7 +1547,7 @@ USAGE:
       }
       .orNone
 
-  private val sheetViewCmd: Opts[CliCommand] =
+  private[cli] val sheetViewCmd: Opts[CliCommand] =
     Opts.subcommand(
       "sheet-view",
       "Set sheet view options: gridlines, zoom, tab selection (requires -o)"
@@ -1460,7 +1558,7 @@ USAGE:
       (viewGridlines, viewZoom, viewTabSelected).mapN(CliCommand.SheetViewOp.apply)
     }
 
-  private val tabColorCmd: Opts[CliCommand] =
+  private[cli] val tabColorCmd: Opts[CliCommand] =
     Opts.subcommand(
       "tab-color",
       "Set the sheet tab color: named, #hex, rgb(r,g,b), or theme:accent1[:tint] (requires -o). " +
@@ -1471,7 +1569,7 @@ USAGE:
       (colorArg, clearFlag).mapN(CliCommand.TabColorOp.apply)
     }
 
-  private val autoFilterCmd: Opts[CliCommand] =
+  private[cli] val autoFilterCmd: Opts[CliCommand] =
     Opts.subcommand(
       "autofilter",
       "Set the sheet-level autoFilter range (filter dropdowns on the header row) or remove it " +
@@ -1483,7 +1581,7 @@ USAGE:
       (rangeArg, clearFlag).mapN(CliCommand.AutoFilterOp.apply)
     }
 
-  private val pageSetupCmd: Opts[CliCommand] =
+  private[cli] val pageSetupCmd: Opts[CliCommand] =
     Opts.subcommand(
       "page-setup",
       "Set print page setup: orientation, scale, fit-to-page (requires -o)"
@@ -1502,7 +1600,7 @@ USAGE:
         .mapN(CliCommand.PageSetupOp.apply)
     }
 
-  private val headerFooterCmd: Opts[CliCommand] =
+  private[cli] val headerFooterCmd: Opts[CliCommand] =
     Opts.subcommand(
       "header-footer",
       "Set print header/footer text with Excel codes: &L/&C/&R sections, &P page, &N total, " +
@@ -1539,7 +1637,7 @@ USAGE:
 
   // --- Copy command ---
 
-  private val copyCmd: Opts[CliCommand] =
+  private[cli] val copyCmd: Opts[CliCommand] =
     Opts.subcommand("copy", "Copy range to another location (with formula adjustment)") {
       val copySrcArg = Opts.argument[String]("source")
       val copyTgtArg = Opts.argument[String]("target")
@@ -1550,7 +1648,7 @@ USAGE:
 
   // --- Conditional formatting command (GH-324) ---
 
-  private val cfCmd: Opts[CliCommand] =
+  private[cli] val cfCmd: Opts[CliCommand] =
     Opts.subcommand("cf", "Conditional formatting: add, list") {
       val addSub = Opts.subcommand(
         "add",
@@ -1595,7 +1693,7 @@ EXAMPLES:
 
   // --- Chart + image commands (GH-222) ---
 
-  private val chartCmd: Opts[CliCommand] =
+  private[cli] val chartCmd: Opts[CliCommand] =
     Opts.subcommand("chart", "Chart operations: add") {
       Opts.subcommand("add", "Add a typed chart built from sheet data ranges") {
         val typeOpt =
@@ -1648,7 +1746,7 @@ EXAMPLES:
       }
     }
 
-  private val addImageCmd: Opts[CliCommand] =
+  private[cli] val addImageCmd: Opts[CliCommand] =
     Opts.subcommand("add-image", "Embed an image (png/jpeg/gif/bmp/tiff/emf/wmf)") {
       val imageArg = Opts.argument[Path]("image-file")
       val atOpt = Opts.option[String](
@@ -1662,14 +1760,14 @@ EXAMPLES:
 
   // --- Structural editing commands (insert/delete rows & columns) ---
 
-  private val insertRowsCmd: Opts[CliCommand] =
+  private[cli] val insertRowsCmd: Opts[CliCommand] =
     Opts.subcommand("insert-rows", "Insert rows (shifts cells & rewrites formulas)") {
       val atArg = Opts.argument[Int]("at-row")
       val countArg = Opts.argument[Int]("count").withDefault(1)
       (atArg, countArg).mapN(CliCommand.InsertRows.apply)
     }
 
-  private val deleteRowsCmd: Opts[CliCommand] =
+  private[cli] val deleteRowsCmd: Opts[CliCommand] =
     Opts.subcommand(
       "delete-rows",
       "Delete rows (shifts cells & rewrites formulas; #REF! on loss)"
@@ -1679,14 +1777,14 @@ EXAMPLES:
       (atArg, countArg).mapN(CliCommand.DeleteRows.apply)
     }
 
-  private val insertColsCmd: Opts[CliCommand] =
+  private[cli] val insertColsCmd: Opts[CliCommand] =
     Opts.subcommand("insert-cols", "Insert columns (shifts cells & rewrites formulas)") {
       val colArg = Opts.argument[String]("at-col")
       val countArg = Opts.argument[Int]("count").withDefault(1)
       (colArg, countArg).mapN(CliCommand.InsertColumns.apply)
     }
 
-  private val deleteColsCmd: Opts[CliCommand] =
+  private[cli] val deleteColsCmd: Opts[CliCommand] =
     Opts.subcommand(
       "delete-cols",
       "Delete columns (shifts cells & rewrites formulas; #REF! on loss)"
@@ -1700,7 +1798,7 @@ EXAMPLES:
   // Command execution
   // ==========================================================================
 
-  private def run(
+  private[cli] def run(
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
@@ -1708,7 +1806,9 @@ EXAMPLES:
     backendOpt: Option[XmlBackend],
     maxSizeOpt: Option[Long],
     stream: Boolean,
-    cmd: CliCommand
+    cmd: CliCommand,
+    io: CliIO,
+    mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
     runResult(
       filePath,
@@ -1718,20 +1818,29 @@ EXAMPLES:
       backendOpt,
       maxSizeOpt,
       stream,
-      cmd
-    ).flatMap(printRunResult)
+      cmd,
+      io = io,
+      mode = mode
+    ).flatMap(emit(_, mode, io))
 
   /**
-   * Execute and render a command without printing, so in-place writes can commit first.
+   * Execute a command into an [[contract.Outcome]] without printing, so in-place writes can commit
+   * first; [[emit]] renders it in the run's [[contract.OutputMode]].
    *
-   * GH-496: a [[StrictFailure]] is not a crash — the write completed and its summary is printed
-   * verbatim (counts, failing refs, convergence verdict, plus the strict reason) — only the exit
-   * code becomes 1. With `-i` that non-success code means the temp file is discarded and the input
-   * is left untouched, which is the atomic reading of "this book did not pass the gate" — so the
-   * summary's `Saved:` line is rewritten to say exactly that. With `-o` the completed temp is still
-   * committed and `Saved:` stands.
+   * GH-496: a [[StrictFailure]] is not a crash — the write completed and its summary is the
+   * payload, verbatim (counts, failing refs, convergence verdict, plus the strict reason); the
+   * outcome is a `RECALC_GATE` signal (exit 1) whose one-line reason is the summary's
+   * `STRICT FAILURE` line. With `-i` that non-success code means the temp file is discarded and the
+   * input is left untouched, which is the atomic reading of "this book did not pass the gate" — so
+   * the summary's `Saved:` line is rewritten to say exactly that. With `-o` the completed temp is
+   * still committed and `Saved:` stands.
+   *
+   * Any other failure yields an outcome with NO payload and the exit code its [[contract.CliError]]
+   * selects: 2 for a wrong command line, 3 for an operation that could not complete. An un-migrated
+   * `new Exception(msg)` classifies as `INTERNAL` (exit 3) with the same message. Reader and view
+   * warnings collected during the run ride on the outcome.
    */
-  private def runResult(
+  private[cli] def runResult(
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
@@ -1741,31 +1850,78 @@ EXAMPLES:
     stream: Boolean,
     cmd: CliCommand,
     policy: WritePolicy = WritePolicy.default,
-    strictFailureDiscardsOutput: Boolean = false
-  ): IO[CommandOutcome] =
-    execute(filePath, sheetNameOpt, outputOpt, backendOpt, maxSizeOpt, stream, cmd, policy).attempt
-      .map {
-        case Right(output) =>
-          CommandOutcome(
-            ExitCode.Success,
-            renderWithTarget(output, outputOpt, displayOpt),
-            outputComplete = true
-          )
-        case Left(strict: StrictFailure) =>
-          val rendered = renderWithTarget(strict.summary, outputOpt, displayOpt)
-          CommandOutcome(
-            ExitCode(1),
-            if strictFailureDiscardsOutput then unsayTheSave(rendered, outputOpt, displayOpt)
-            else rendered,
-            outputComplete = true
-          )
-        case Left(err) =>
-          CommandOutcome(
-            ExitCode.Error,
-            renderErrorMessage(err, outputOpt, displayOpt),
-            outputComplete = false
-          )
+    strictFailureDiscardsOutput: Boolean = false,
+    io: CliIO,
+    mode: OutputMode = OutputMode.Text
+  ): IO[Outcome] =
+    Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
+      execute(
+        filePath,
+        sheetNameOpt,
+        outputOpt,
+        backendOpt,
+        maxSizeOpt,
+        stream,
+        cmd,
+        policy,
+        io,
+        warnings,
+        mode
+      ).attempt.flatMap { attempt =>
+        warnings.get.map { collected =>
+          attempt match
+            case Right(payload) =>
+              Outcome.ok(cmd.verb, relocate(payload, outputOpt, displayOpt), collected)
+            case Left(strict: StrictFailure) =>
+              val rendered = renderWithTarget(strict.summary, outputOpt, displayOpt)
+              val summary =
+                if strictFailureDiscardsOutput then unsayTheSave(rendered, outputOpt, displayOpt)
+                else rendered
+              Outcome.signal(
+                cmd.verb,
+                Payload.text(summary),
+                CliError(ErrorCode.RECALC_GATE, strictReason(summary)),
+                collected
+              )
+            // ADR-017 §2.10: a read verb that completed with findings (`audit --fail-on-findings`)
+            case Left(signal: CliSignal) =>
+              Outcome.signal(
+                cmd.verb,
+                relocate(signal.payload, outputOpt, displayOpt),
+                signal.error,
+                collected
+              )
+            case Left(err) =>
+              // GH-483: the temp→target rewrite applies to failure messages too
+              val classified = CliError.fromThrowable(err)
+              val relocated = classified.copy(
+                message = renderWithTarget(classified.message, outputOpt, displayOpt)
+              )
+              Outcome.failed(cmd.verb, relocated, collected)
+        }
       }
+    }
+
+  /**
+   * The gate's one-line reason: the summary's `STRICT FAILURE (--strict): …` line, else its first.
+   */
+  private def strictReason(summary: String): String =
+    val lines = summary.linesIterator.toVector
+    lines.find(_.startsWith("STRICT FAILURE")).orElse(lines.headOption).getOrElse(summary)
+
+  /**
+   * The GH-464 temp→target rewrite on a prose payload; JSON payloads never name the staging file.
+   */
+  private def relocate(
+    payload: Payload,
+    outputOpt: Option[Path],
+    displayOpt: Option[Path]
+  ): Payload =
+    payload match
+      case Payload.Text(text, saved, written) =>
+        Payload.Text(renderWithTarget(text, outputOpt, displayOpt), saved, written)
+      case json: Payload.Json => json
+      case raw: Payload.Raw => raw
 
   /**
    * GH-496: an in-place run whose exit code is non-success never commits its temp file, so the
@@ -1817,25 +1973,197 @@ EXAMPLES:
     val message = Option(err.getMessage).getOrElse(err.toString)
     Format.errorSimple(renderWithTarget(message, outputOpt, displayOpt))
 
-  private def printRunResult(result: CommandOutcome): IO[ExitCode] =
-    IO.println(result.output).as(result.exitCode)
+  /**
+   * Print an outcome in the run's mode ([[contract.Render]]): the result on stdout (nothing at all
+   * when there is none), the diagnostics and warnings — or the one-line `Error:` under `--json` —
+   * on stderr, then the exit code.
+   */
+  private[cli] def emit(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
+    val rendered = Render(mode)(outcome, BuildInfo.version)
+    val out = if rendered.stdout.isEmpty then IO.unit else io.out(rendered.stdout)
+    val err = if rendered.stderr.isEmpty then IO.unit else io.err(rendered.stderr)
+    (out *> err).as(outcome.exitCode)
 
-  private def runInfo(): IO[ExitCode] =
-    IO.println(formatFunctionList()).as(ExitCode.Success)
-
-  private def runRasterizers(): IO[ExitCode] =
-    formatRasterizerList().flatMap { (output, hasWorking) =>
-      IO.println(output).as(ExitCode.Success)
+  /** An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s. */
+  private def readerCollecting(warnings: Ref[IO, Vector[Warning]]): ExcelIO[IO] =
+    ExcelIO.withWarnings[IO] { warning =>
+      warnings.update(_ :+ Warning(WarningCode.READER_WARNING, warning.toString))
     }
 
   /**
-   * Check all rasterizers and format a status table.
-   *
-   * Returns (formatted output, true if at least one rasterizer works). Checks run in parallel for
-   * better performance.
+   * THE sheet rule's steps 2–3 for the run's default sheet, before dispatch ([[Resolve.default]],
+   * ADR-017 §2.5): `-s` by name; else, for a verb that takes a sheet, the only sheet of a
+   * single-sheet book — announced through [[announceAutoSelect]]. AllSheets and no-sheet verbs get
+   * `None` and behave as they always have.
    */
-  private def formatRasterizerList(): IO[(String, Boolean)] =
-    // Run all availability checks in parallel
+  private def defaultSheet(
+    wb: Workbook,
+    sheetNameOpt: Option[String],
+    cmd: CliCommand,
+    mode: OutputMode,
+    warn: Warning => IO[Unit]
+  ): IO[Option[Sheet]] =
+    IO.fromEither(Resolve.default(wb, sheetNameOpt, cmd.takesSheet).left.map(CliException(_)))
+      .flatTap(sheet => announceAutoSelect(sheet.map(_.name), sheetNameOpt, cmd, mode, warn))
+
+  /**
+   * Step 3 as the run reports it: under `--json` only, when no `-s` was given and the verb takes a
+   * sheet, the only sheet's name rides in `warnings[]` as `SHEET_AUTOSELECTED`. Text mode prints
+   * nothing extra — its stdout and stderr stay byte-identical to before the rule.
+   */
+  private def announceAutoSelect(
+    only: Option[SheetName],
+    sheetNameOpt: Option[String],
+    cmd: CliCommand,
+    mode: OutputMode,
+    warn: Warning => IO[Unit]
+  ): IO[Unit] =
+    only match
+      case Some(name) if mode == OutputMode.Json && sheetNameOpt.isEmpty && cmd.usesDefaultSheet =>
+        warn(Resolve.autoSelected(name))
+      case _ => IO.unit
+
+  /**
+   * The streaming twins resolve their sheet from `workbook.xml` themselves ([[Resolve.sheetName]]);
+   * the run announces step 3 from the same metadata, read only when the announcement can apply and
+   * never failing the run — an unreadable file is the verb's own `IO_READ`.
+   */
+  private def streamAutoSelect(
+    excel: ExcelIO[IO],
+    filePath: Path,
+    sheetNameOpt: Option[String],
+    cmd: CliCommand,
+    mode: OutputMode,
+    warn: Warning => IO[Unit]
+  ): IO[Unit] =
+    if mode == OutputMode.Json && sheetNameOpt.isEmpty && cmd.usesDefaultSheet then
+      excel.readMetadata(filePath).attempt.flatMap {
+        case Right(meta) => announceAutoSelect(Resolve.only(meta), sheetNameOpt, cmd, mode, warn)
+        case Left(_) => IO.unit
+      }
+    else IO.unit
+
+  /**
+   * Classify a failure while reading the input at `path` as `IO_READ` (exit 3), keeping the message
+   * verbatim; a `CliException` already raised below passes through unchanged. Every read of the
+   * input — full workbook, metadata quick path, lint's raw zip — goes through this so one condition
+   * (missing or unreadable file) has one code.
+   */
+  private def classifyRead[A](path: Path)(read: IO[A]): IO[A] =
+    read.adaptError {
+      case cli: CliException => cli
+      case other =>
+        CliException(
+          CliError(
+            ErrorCode.IO_READ,
+            CliError.messageOf(other),
+            location = Some(Location.file(path.toString))
+          )
+        )
+    }
+
+  /** Read the input through `excel` under [[classifyRead]]. */
+  private def readWorkbook(excel: ExcelIO[IO], path: Path, config: ReaderConfig): IO[Workbook] =
+    classifyRead(path)(excel.readWith(path, config))
+
+  /**
+   * Classify a failure while producing the output at `target` — allocating its staging file,
+   * committing it, or `new`'s direct write — as `IO_WRITE` (exit 3) naming the target: `cannot
+   * write <target>: <reason>`, with the hint every unwritable destination needs. A `CliException`
+   * already raised below passes through. The reason is stable text, never a staging path: a missing
+   * directory (`NoSuchFileException` from the temp allocation, `FileNotFoundException` from a
+   * stream) is named as such, permission failures likewise, anything else by its message.
+   */
+  private def classifyWrite[A](target: Path)(write: IO[A]): IO[A] =
+    write.adaptError {
+      case cli: CliException => cli
+      case other =>
+        CliException(
+          CliError(
+            ErrorCode.IO_WRITE,
+            s"cannot write $target: ${writeReason(target, other)}",
+            hint = Some("check that the directory exists and is writable"),
+            location = Some(Location.file(target.toString))
+          )
+        )
+    }
+
+  private def writeReason(target: Path, failure: Throwable): String =
+    val directory = Option(target.toAbsolutePath.getParent).fold(".")(_.toString)
+    failure match
+      case _: NoSuchFileException => s"no such directory: $directory"
+      case _: AccessDeniedException => "permission denied"
+      case other =>
+        strerror(CliError.messageOf(other)) match
+          case "No such file or directory" => s"no such directory: $directory"
+          case "Permission denied" => "permission denied"
+          case reason => reason
+
+  /**
+   * The OS reason inside a write failure's message. The writer and `ExcelIO` each wrap the
+   * `FileOutputStream` failure once — `Failed to write XLSX: IO error: Failed to write XLSX: <path>
+   * (No such file or directory)` — so peel those prefixes and keep the parenthesised reason when
+   * the text ends in one (`java.io` spells every stream failure `<path> (<reason>)`).
+   */
+  private def strerror(message: String): String =
+    val prefixes = List("Failed to write XLSX: ", "IO error: ")
+    @scala.annotation.tailrec
+    def peel(text: String): String = prefixes.find(text.startsWith) match
+      case Some(prefix) => peel(text.stripPrefix(prefix))
+      case None => text
+    val inner = peel(message)
+    val open = inner.lastIndexOf(" (")
+    if open >= 0 && inner.endsWith(")") then inner.substring(open + 2, inner.length - 1)
+    else inner
+
+  private[cli] def runInfo(io: CliIO, mode: OutputMode = OutputMode.Text): IO[ExitCode] =
+    val payload = mode match
+      case OutputMode.Text => Payload.text(formatFunctionList())
+      // Typed rows (ADR-017 §2.13): every registry function plus LET, the special form
+      case OutputMode.Json => Payload.Json(FunctionDoc.toJson(FunctionDoc.all))
+    emit(Outcome.ok("functions", payload), mode, io)
+
+  /** `xl schema`: the verb table as text; `--json`: the whole contract ([[Schema.json]]). */
+  private[cli] def runSchema(io: CliIO, mode: OutputMode): IO[ExitCode] =
+    val payload = mode match
+      case OutputMode.Text => Payload.text(Schema.verbTable(BuildInfo.version))
+      case OutputMode.Json => Payload.Json(Schema.json(BuildInfo.version))
+    emit(Outcome.ok("schema", payload), mode, io)
+
+  private[cli] def runRasterizers(io: CliIO, mode: OutputMode = OutputMode.Text): IO[ExitCode] =
+    probeRasterizers().flatMap { rows =>
+      val anyAvailable = rows.exists(_.status == "available")
+      val payload = mode match
+        case OutputMode.Text =>
+          Payload.text(renderRasterizerText(rows, anyAvailable, NativeImage.inNativeImage))
+        case OutputMode.Json =>
+          Payload.Json(
+            ujson.Obj(
+              "backends" -> ujson.Arr.from(rows.map { row =>
+                ujson.Obj(
+                  "name" -> ujson.Str(row.backend),
+                  "status" -> ujson.Str(row.status),
+                  "note" -> ujson.Str(row.note)
+                )
+              }),
+              "anyAvailable" -> ujson.Bool(anyAvailable)
+            )
+          )
+      emit(Outcome.ok("rasterizers", payload), mode, io)
+    }
+
+  /**
+   * One line of the `xl rasterizers` table. Status terminology:
+   *   - available: Works correctly
+   *   - missing: Binary not in PATH
+   *   - broken: Found but non-functional (e.g., delegate missing)
+   *   - unavailable: Cannot be used in current environment (e.g., Batik on native-image)
+   */
+  private[cli] final case class RasterizerRow(backend: String, status: String, note: String)
+      derives CanEqual
+
+  /** Check all rasterizers in parallel and describe each. */
+  private def probeRasterizers(): IO[Vector[RasterizerRow]] =
     (
       BatikRasterizer.isAvailable,
       CairoSvg.isAvailable,
@@ -1845,7 +2173,7 @@ EXAMPLES:
       ImageMagick.diagnostics
     ).parMapN {
       (batikAvail, cairoAvail, rsvgAvail, resvgAvail, imageMagickAvail, imageMagickDiag) =>
-        renderRasterizerTable(
+        rasterizerRows(
           batikAvail = batikAvail,
           cairoAvail = cairoAvail,
           rsvgAvail = rsvgAvail,
@@ -1861,12 +2189,6 @@ EXAMPLES:
    * environment (JVM, native binary, nothing installed) is unit-testable.
    *
    * Returns (formatted output, true if at least one rasterizer works).
-   *
-   * Status terminology:
-   *   - available: Works correctly
-   *   - missing: Binary not in PATH
-   *   - broken: Found but non-functional (e.g., delegate missing)
-   *   - unavailable: Cannot be used in current environment (e.g., Batik on native-image)
    */
   private[cli] def renderRasterizerTable(
     batikAvail: Boolean,
@@ -1877,34 +2199,46 @@ EXAMPLES:
     imageMagickDiag: String,
     nativeImage: Boolean
   ): (String, Boolean) =
-    val sb = new StringBuilder
-    sb.append("SVG Rasterizer Status\n")
-    sb.append("=" * 60 + "\n\n")
-    sb.append(f"${"Backend"}%-14s | ${"Status"}%-11s | ${"Notes"}\n")
-    sb.append("-" * 60 + "\n")
+    val rows = rasterizerRows(
+      batikAvail,
+      cairoAvail,
+      rsvgAvail,
+      resvgAvail,
+      imageMagickAvail,
+      imageMagickDiag,
+      nativeImage
+    )
+    val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
+    (renderRasterizerText(rows, anyAvailable, nativeImage), anyAvailable)
 
+  /** The rows of the table, in display order. */
+  private def rasterizerRows(
+    batikAvail: Boolean,
+    cairoAvail: Boolean,
+    rsvgAvail: Boolean,
+    resvgAvail: Boolean,
+    imageMagickAvail: Boolean,
+    imageMagickDiag: String,
+    nativeImage: Boolean
+  ): Vector[RasterizerRow] =
     // Batik - the default backend; "unavailable" when AWT not present (native image)
     val batikStatus = if batikAvail then "available" else "unavailable"
     val batikNote =
       if batikAvail then "Built-in default (requires AWT)"
       else if nativeImage then "Native binary: no AWT, by design"
       else "Requires AWT (not present here)"
-    sb.append(f"${"batik"}%-14s | ${batikStatus}%-11s | $batikNote\n")
 
     // CairoSvg
     val cairoStatus = if cairoAvail then "available" else "missing"
     val cairoNote = if cairoAvail then "pip install cairosvg" else "Not in PATH"
-    sb.append(f"${"cairosvg"}%-14s | ${cairoStatus}%-11s | $cairoNote\n")
 
     // rsvg-convert
     val rsvgStatus = if rsvgAvail then "available" else "missing"
     val rsvgNote = if rsvgAvail then "librsvg2-bin" else "Not in PATH"
-    sb.append(f"${"rsvg-convert"}%-14s | ${rsvgStatus}%-11s | $rsvgNote\n")
 
     // resvg
     val resvgStatus = if resvgAvail then "available" else "missing"
     val resvgNote = if resvgAvail then "cargo install resvg" else "Not in PATH"
-    sb.append(f"${"resvg"}%-14s | ${resvgStatus}%-11s | $resvgNote\n")
 
     // ImageMagick (with delegate check) - explicit opt-in only, never tried automatically
     // "broken" = found but delegate missing, "missing" = not in PATH
@@ -1917,11 +2251,31 @@ EXAMPLES:
       val withOptIn =
         if imageMagickAvail then s"--rasterizer imagemagick only; $cleaned" else cleaned
       if withOptIn.length > 40 then withOptIn.take(37) + "..." else withOptIn
-    sb.append(f"${"imagemagick"}%-14s | ${imStatus}%-11s | $imNote\n")
 
+    Vector(
+      RasterizerRow("batik", batikStatus, batikNote),
+      RasterizerRow("cairosvg", cairoStatus, cairoNote),
+      RasterizerRow("rsvg-convert", rsvgStatus, rsvgNote),
+      RasterizerRow("resvg", resvgStatus, resvgNote),
+      RasterizerRow("imagemagick", imStatus, imNote)
+    )
+
+  /** The table as printed, byte for byte what `xl rasterizers` has always shown. */
+  private def renderRasterizerText(
+    rows: Vector[RasterizerRow],
+    anyAvailable: Boolean,
+    nativeImage: Boolean
+  ): String =
+    val sb = new StringBuilder
+    sb.append("SVG Rasterizer Status\n")
+    sb.append("=" * 60 + "\n\n")
+    sb.append(f"${"Backend"}%-14s | ${"Status"}%-11s | ${"Notes"}\n")
+    sb.append("-" * 60 + "\n")
+    rows.foreach { row =>
+      sb.append(f"${row.backend}%-14s | ${row.status}%-11s | ${row.note}\n")
+    }
     sb.append("\n")
 
-    val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
     if anyAvailable then
       sb.append("At least one rasterizer is available for PNG/JPEG/PDF export.\n")
     else
@@ -1937,7 +2291,7 @@ EXAMPLES:
       )
       sb.append("  apt install imagemagick        # then pass --rasterizer imagemagick\n")
 
-    (sb.toString, anyAvailable)
+    sb.toString
 
   private def formatFunctionList(): String =
     // Dynamically get all functions from the registry
@@ -1958,68 +2312,107 @@ EXAMPLES:
     sb.append("Example: xl eval \"=SUM(1,2,3)\" or xl -f data.xlsx eval \"=SUM(A1:A10)\"\n")
     sb.toString
 
-  private def runHeadless(
+  private[cli] def runHeadless(
     filePathOpt: Option[Path],
     sheetNameOpt: Option[String],
     maxSizeOpt: Option[Long],
-    cmd: CliCommand
+    cmd: CliCommand,
+    io: CliIO,
+    mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
-    val excel = ExcelIO.instance[IO]
     val readerConfig = buildReaderConfig(maxSizeOpt)
-    val workbookIO: IO[Workbook] = filePathOpt match
-      case Some(filePath) => excel.readWith(filePath, readerConfig)
-      case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
+    Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
+      val excel = readerCollecting(warnings)
+      val workbookIO: IO[Workbook] = filePathOpt match
+        case Some(filePath) => readWorkbook(excel, filePath, readerConfig)
+        case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
 
-    (for
-      wb <- workbookIO
-      sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
-      result <- cmd match
-        case CliCommand.Eval(formulaStr, overrides) =>
-          ReadCommands.eval(wb, sheet, formulaStr, overrides)
-        case CliCommand.EvalArray(formulaStr, targetRef, overrides) =>
-          ReadCommands.evalArray(wb, sheet, formulaStr, targetRef, overrides)
-        case other =>
-          IO.raiseError(new Exception(s"Unexpected headless command: $other"))
-    yield result).attempt.flatMap {
-      case Right(output) =>
-        IO.println(output).as(ExitCode.Success)
-      case Left(err) =>
-        IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
+      (for
+        wb <- workbookIO
+        sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, w => warnings.update(_ :+ w))
+        payload <- (cmd, mode) match
+          case (CliCommand.Eval(formulaStr, overrides), OutputMode.Text) =>
+            ReadCommands.eval(wb, sheet, formulaStr, overrides).map(Payload.text)
+          case (CliCommand.Eval(formulaStr, overrides), OutputMode.Json) =>
+            ReadCommands.evalData(wb, sheet, formulaStr, overrides).map(Payload.Raw(_))
+          case (CliCommand.EvalArray(formulaStr, targetRef, overrides), OutputMode.Text) =>
+            ReadCommands.evalArray(wb, sheet, formulaStr, targetRef, overrides).map(Payload.text)
+          case (CliCommand.EvalArray(formulaStr, targetRef, overrides), OutputMode.Json) =>
+            ReadCommands
+              .evalArrayData(wb, sheet, formulaStr, targetRef, overrides)
+              .map(Payload.Raw(_))
+          case (other, _) =>
+            IO.raiseError(
+              CliException(CliError(ErrorCode.INTERNAL, s"Unexpected headless command: $other"))
+            )
+      yield payload).attempt.flatMap { attempt =>
+        warnings.get.flatMap { collected =>
+          val outcome = attempt match
+            case Right(payload) => Outcome.ok(cmd.verb, payload, collected)
+            case Left(err) => Outcome.failed(cmd.verb, CliError.fromThrowable(err), collected)
+          emit(outcome, mode, io)
+        }
+      }
     }
 
   /**
-   * Run the diff command with diff-tool exit codes: 0 = identical, 1 = differences found, 2 = error
-   * (unreadable file, sheet filter matching neither workbook, ...).
+   * Run the diff command with its exit codes: 0 = identical, 1 = differences found (a result, not a
+   * failure — a `DIFFERENCES_FOUND` signal whose report is the payload), 3 = error (unreadable
+   * file, sheet filter matching neither workbook, ...) reported on stderr.
    */
   private[cli] def runDiff(
     fileA: Path,
     fileB: Path,
     sheetFilter: Option[String],
     maxSizeOpt: Option[Long],
-    format: DiffFormat
+    format: DiffFormat,
+    io: CliIO = CliIO.system,
+    mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
     val excel = ExcelIO.instance[IO]
     val readerConfig = buildReaderConfig(maxSizeOpt)
     (for
-      wbA <- excel.readWith(fileA, readerConfig)
-      wbB <- excel.readWith(fileB, readerConfig)
+      wbA <- readWorkbook(excel, fileA, readerConfig)
+      wbB <- readWorkbook(excel, fileB, readerConfig)
       diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter) match
         case Right(d) => IO.pure(d)
-        case Left(err) => IO.raiseError(new Exception(err))
+        // The only refusal: a -s filter naming a sheet neither workbook has — SHEET_NOT_FOUND
+        // with the nearest names from both books, keeping the diff's own message
+        case Left(err) =>
+          val names = (wbA.sheets ++ wbB.sheets).map(_.name.value).distinct
+          IO.raiseError(
+            CliException(
+              sheetFilter.fold(CliError(ErrorCode.INTERNAL, err))(filter =>
+                Resolve.sheetNotFound(names, filter).copy(message = err)
+              )
+            )
+          )
       output = format match
         case DiffFormat.Markdown =>
           DiffCommands.renderMarkdown(diff, fileA.toString, fileB.toString)
         case DiffFormat.Json => DiffCommands.renderJson(diff)
     yield (output, diff.identical)).attempt.flatMap {
       case Right((output, identical)) =>
-        IO.println(output).as(if identical then ExitCode.Success else ExitCode(1))
+        // The JSON report rides as text (Payload.Raw): its numbers are never re-parsed
+        val payload = (format, mode) match
+          case (DiffFormat.Json, OutputMode.Json) => Payload.Raw(output)
+          case _ => Payload.text(output)
+        val outcome =
+          if identical then Outcome.ok("diff", payload)
+          else
+            Outcome.signal(
+              "diff",
+              payload,
+              CliError(ErrorCode.DIFFERENCES_FOUND, s"Differences found: $fileA vs $fileB")
+            )
+        emit(outcome, mode, io)
       case Left(err) =>
-        IO.println(Format.errorSimple(err.getMessage)).as(ExitCode(2))
+        emit(Outcome.failed("diff", CliError.fromThrowable(err)), mode, io)
     }
 
   /**
    * Resolve lint's input file from the `-f` flag and the positional form — exactly one must be
-   * given (GH-422). Errors use lint's exit-code 2 convention at the call site.
+   * given (GH-422). A `Left` is a usage error (exit 2, stderr) at the call site.
    */
   private[cli] def resolveLintFile(
     flagFile: Option[Path],
@@ -2034,47 +2427,82 @@ EXAMPLES:
         Left("lint requires a file: xl lint <file> (or xl -f <file> lint)")
 
   /**
-   * Run the lint command with its exit-code convention: 0 = clean, 1 = findings, 2 = error
-   * (unreadable file, missing/malformed core part). Opens the zip directly — NOT ExcelIO.read —
-   * because a full parse would repair/normalize the very structure lint inspects (GH-397).
+   * Run the lint command with its exit codes: 0 = clean, 1 = findings (a result, not a failure), 3 =
+   * error reported on stderr — an unreadable input (missing file, not a zip, missing/malformed core
+   * part) as `IO_READ`, the same code every other verb gives that condition. Opens the zip directly
+   * — NOT ExcelIO.read — because a full parse would repair/normalize the very structure lint
+   * inspects (GH-397).
    */
-  private[cli] def runLint(file: Path, format: LintFormat): IO[ExitCode] =
+  private[cli] def runLint(
+    file: Path,
+    format: LintFormat,
+    io: CliIO = CliIO.system,
+    mode: OutputMode = OutputMode.Text
+  ): IO[ExitCode] =
     IO.blocking(WorkbookLint.lint(file)).flatMap {
       case Right(findings) =>
         val output = format match
           case LintFormat.Text => LintCommands.renderText(file.toString, findings)
           case LintFormat.Json => LintCommands.renderJson(file.toString, findings)
-        IO.println(output).as(if findings.isEmpty then ExitCode.Success else ExitCode(1))
+        val payload = (format, mode) match
+          case (LintFormat.Json, OutputMode.Json) => Payload.Raw(output)
+          case _ => Payload.text(output)
+        val outcome =
+          if findings.isEmpty then Outcome.ok("lint", payload)
+          else
+            Outcome.signal(
+              "lint",
+              payload,
+              CliError(ErrorCode.LINT_FINDINGS, s"$file: ${findings.size} finding(s)")
+            )
+        emit(outcome, mode, io)
       case Left(err) =>
-        IO.println(Format.errorSimple(err.message)).as(ExitCode(2))
+        val at = Some(Location.file(file.toString))
+        val error = err match
+          case XLError.IOError(_) | XLError.ParseError(_, _) =>
+            CliError(ErrorCode.IO_READ, err.message, location = at, cause = Some(err))
+          case other => CliError.fromXLError(other, at)
+        emit(Outcome.failed("lint", error), mode, io)
     }
 
-  private def runStandalone(
+  private[cli] def runStandalone(
     outPath: Path,
     sheetName: String,
     sheets: List[String],
-    backendOpt: Option[XmlBackend]
+    backendOpt: Option[XmlBackend],
+    io: CliIO,
+    mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
     val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
     (for
       // --sheet takes precedence over --sheet-name; if neither, default to "Sheet1"
-      names <- sheets match
-        case Nil =>
-          IO.fromEither(SheetName(sheetName).left.map(e => new Exception(e))).map(List(_))
-        case list =>
-          list.traverse(n => IO.fromEither(SheetName(n).left.map(e => new Exception(e))))
+      // A name the validator refuses is INVALID_SHEET_NAME with its own text
+      names <- (if sheets.isEmpty then List(sheetName) else sheets).traverse(n =>
+        IO.fromEither(Resolve.validSheetName(n).left.map(CliException(_)))
+      )
       wb = Workbook(names.map(Sheet(_)).toVector)
-      _ <- ExcelIO.instance[IO].writeWith(wb, outPath, config)
+      _ <- classifyWrite(outPath)(ExcelIO.instance[IO].writeWith(wb, outPath, config))
     yield
       val sheetList = names.map(_.value).mkString(", ")
       s"Created ${outPath.toAbsolutePath} with ${names.size} sheet(s): $sheetList"
     ).attempt.flatMap {
       case Right(output) =>
-        IO.println(output).as(ExitCode.Success)
+        val payload = Payload.Text(output, Some(outPath.toAbsolutePath.toString), written = true)
+        emit(Outcome.ok("new", payload), mode, io)
       case Left(err) =>
-        IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
+        emit(Outcome.failed("new", CliError.fromThrowable(err)), mode, io)
     }
 
+  /** A `--stream` refusal: usage (exit 2), naming the in-memory alternative as the hint. */
+  private def unsupportedInStream(message: String, alternative: String): CliException =
+    CliException(CliError(ErrorCode.UNSUPPORTED_IN_STREAM, message, hint = Some(alternative)))
+
+  /**
+   * Run one command to its [[contract.Payload]]. Under `--json` the typed verbs (`sheets`, `names`,
+   * `bounds`, `batch --dry-run`) build their data directly and `view`/`filter` with their own
+   * `--format json` pass it through ([[bridge]]); everything else is the prose the text mode
+   * prints.
+   */
   private def execute(
     filePath: Path,
     sheetNameOpt: Option[String],
@@ -2083,63 +2511,144 @@ EXAMPLES:
     maxSizeOpt: Option[Long],
     stream: Boolean,
     cmd: CliCommand,
-    policy: WritePolicy = WritePolicy.default
-  ): IO[String] =
+    policy: WritePolicy,
+    io: CliIO,
+    warnings: Ref[IO, Vector[Warning]],
+    mode: OutputMode
+  ): IO[Payload] =
+    val excel = readerCollecting(warnings)
+    val readerConfig = buildReaderConfig(maxSizeOpt)
+    val warn: Warning => IO[Unit] = warning => warnings.update(_ :+ warning)
     // Handle metadata-only commands (instant for any file size)
     cmd match
-      // Sheets: list/hide/show operations
-      case CliCommand.Sheets(action) =>
-        action match
-          case SheetsAction.List(stats) =>
-            if stats then
-              // Full mode: load workbook and get cell counts
-              val excel = ExcelIO.instance[IO]
-              val readerConfig = buildReaderConfig(maxSizeOpt)
-              excel.readWith(filePath, readerConfig).flatMap(wb => WorkbookCommands.sheets(wb))
-            else
-              // Quick mode: metadata only (instant)
-              WorkbookCommands.sheetsQuick(filePath)
-          case SheetsAction.Hide(name, veryHide) =>
-            // Hide requires loading workbook and writing output
-            requireOutputAction(outputOpt, "sheets hide") { outputPath =>
-              val excel = ExcelIO.instance[IO]
-              val readerConfig = buildReaderConfig(maxSizeOpt)
-              val config = buildWriterConfig(backendOpt)
-              excel.readWith(filePath, readerConfig).flatMap { wb =>
-                SheetCommands.hideSheet(wb, name, veryHide, outputPath, config, stream)
-              }
-            }
-          case SheetsAction.Show(name) =>
-            // Show requires loading workbook and writing output
-            requireOutputAction(outputOpt, "sheets show") { outputPath =>
-              val excel = ExcelIO.instance[IO]
-              val readerConfig = buildReaderConfig(maxSizeOpt)
-              val config = buildWriterConfig(backendOpt)
-              excel.readWith(filePath, readerConfig).flatMap { wb =>
-                SheetCommands.showSheet(wb, name, outputPath, config, stream)
-              }
-            }
+      // Sheets list: quick mode (metadata only, instant) by default, --stats loads the workbook
+      case CliCommand.Sheets(SheetsAction.List(stats)) =>
+        (stats, mode) match
+          case (true, OutputMode.Text) =>
+            readWorkbook(excel, filePath, readerConfig)
+              .flatMap(WorkbookCommands.sheets)
+              .map(Payload.text)
+          case (true, OutputMode.Json) =>
+            readWorkbook(excel, filePath, readerConfig)
+              .map(wb => Payload.Json(WorkbookCommands.sheetsData(wb)))
+          case (false, OutputMode.Text) =>
+            classifyRead(filePath)(WorkbookCommands.sheetsQuick(filePath)).map(Payload.text)
+          case (false, OutputMode.Json) =>
+            classifyRead(filePath)(WorkbookCommands.sheetsQuickData(filePath)).map(Payload.Json(_))
+      case CliCommand.Sheets(SheetsAction.Hide(name, veryHide)) =>
+        // Hide requires loading workbook and writing output
+        requireOutputAction(outputOpt, "sheets hide") { outputPath =>
+          val config = buildWriterConfig(backendOpt)
+          readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
+            SheetCommands.hideSheet(wb, name, veryHide, outputPath, config, stream)
+          }
+        }.map(Payload.text)
+      case CliCommand.Sheets(SheetsAction.Show(name)) =>
+        // Show requires loading workbook and writing output
+        requireOutputAction(outputOpt, "sheets show") { outputPath =>
+          val config = buildWriterConfig(backendOpt)
+          readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
+            SheetCommands.showSheet(wb, name, outputPath, config, stream)
+          }
+        }.map(Payload.text)
 
       // Names: always lightweight (defined names don't require cell data)
       case CliCommand.Names =>
-        WorkbookCommands.namesLight(filePath)
+        mode match
+          case OutputMode.Text =>
+            classifyRead(filePath)(WorkbookCommands.namesLight(filePath)).map(Payload.text)
+          case OutputMode.Json =>
+            classifyRead(filePath)(WorkbookCommands.namesData(filePath)).map(Payload.Json(_))
 
-      // Bounds: dimension-first by default (--scan for full scan)
+      // Bounds: dimension-first by default (--scan for full scan). The metadata read is the input
+      // read, so a missing or unreadable file is IO_READ here as on every other verb.
       case CliCommand.Bounds(scan) =>
-        if scan then
-          // Full streaming scan (accurate)
-          StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
+        classifyRead(filePath)(excel.readMetadata(filePath)).flatMap { meta =>
+          announceAutoSelect(Resolve.only(meta), sheetNameOpt, cmd, mode, warn) *> {
+            mode match
+              case OutputMode.Text =>
+                val text =
+                  if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
+                  else StreamingReadCommands.boundsFromMetadata(meta, filePath, sheetNameOpt)
+                text.map(Payload.text)
+              case OutputMode.Json =>
+                StreamingReadCommands
+                  .boundsData(meta, filePath, sheetNameOpt, scan)
+                  .map(Payload.Json(_))
+          }
+        }
+
+      // A dry run validates the batch JSON and reads no workbook, whatever else is on the line
+      case CliCommand.Batch(source, true, _) =>
+        batchDryRunPayload(source, io, mode, warn)
+
+      // --schema prints the document's JSON Schema; no workbook is read, nothing is written
+      case CliCommand.Batch(_, _, true) =>
+        IO.pure(batchSchemaPayload)
+
+      // Describe (ADR-017 §2.10): metadata only — instant, streaming-safe — unless --full asks for
+      // the loaded book's counts. A workbook verb: -s selects nothing, but an explicit -s must
+      // still name a real sheet (SHEET_NOT_FOUND with candidates otherwise). The other workbook
+      // verbs (sheets, names) are parsed without --sheet at all (Cli.scala), so only describe
+      // can see the flag.
+      case CliCommand.Describe(full) =>
+        if !full then
+          classifyRead(filePath)(excel.readMetadata(filePath)).flatMap { meta =>
+            InspectCommands
+              .checkSheetFlag(sheetNameOpt, "describe")(IO.pure(meta))
+              .as(InspectCommands.describeLight(meta, mode))
+          }
+        else if stream then
+          IO.raiseError(
+            unsupportedInStream(
+              "describe --full is not supported with --stream (the counts need the whole workbook)",
+              "omit --full for the metadata-only card, or omit --stream; use --max-size <MB> for a large file"
+            )
+          )
         else
-          // Dimension element (instant)
-          StreamingReadCommands.boundsDimension(filePath, sheetNameOpt)
+          InspectCommands.checkSheetFlag(sheetNameOpt, "describe")(
+            classifyRead(filePath)(excel.readMetadata(filePath))
+          ) *> readWorkbook(excel, filePath, readerConfig)
+            .map(wb => InspectCommands.describe(wb, mode))
+
+      // Audit and deps (ADR-017 §2.10) analyze the loaded workbook: never under --stream
+      case CliCommand.Audit(failOnFindings) =>
+        if stream then
+          IO.raiseError(
+            unsupportedInStream(
+              "audit is not supported with --stream (the analysis needs the whole workbook)",
+              "omit --stream; use --max-size <MB> to load a large file in memory"
+            )
+          )
+        else
+          for
+            wb <- readWorkbook(excel, filePath, readerConfig)
+            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
+            payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
+          yield payload
+
+      case CliCommand.Deps(refStr, direction, depth) =>
+        if stream then
+          IO.raiseError(
+            unsupportedInStream(
+              "deps is not supported with --stream (the graph needs the whole workbook)",
+              "omit --stream; use --max-size <MB> to load a large file in memory"
+            )
+          )
+        else
+          for
+            wb <- readWorkbook(excel, filePath, readerConfig)
+            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
+            payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, mode)
+          yield payload
 
       // Other commands: regular execution path
       case _ =>
         // For write commands: stream flag uses the SAX/StAX workbook writer
         // For read commands: stream flag enables O(1) input memory (true streaming)
         val isReadCmd = cmd match
-          case _: CliCommand.Search | _: CliCommand.Stats | _: CliCommand.Bounds |
-              _: CliCommand.View | _: CliCommand.Cell =>
+          case _: CliCommand.Search | _: CliCommand.Stats | _: CliCommand.View |
+              _: CliCommand.Cell =>
             true
           case _ => false
 
@@ -2151,32 +2660,96 @@ EXAMPLES:
           case _: CliCommand.Batch => true
           case _ => false
 
-        if stream && isReadCmd then executeStreaming(filePath, sheetNameOpt, cmd)
+        if stream && isReadCmd then
+          streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
+            executeStreaming(filePath, sheetNameOpt, cmd, warn, mode).map(bridge(cmd, mode))
         else if stream && isStreamingWriteCmd then
           // GH-496: a streaming write never recalculates, so --strict could only ever report
           // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
           // needs no guard: it is what the streaming path already does.
           if policy.strict then
             IO.raiseError(
-              new Exception(
-                "--strict is not supported with --stream (streaming writes never recalculate). Re-run without --stream."
+              unsupportedInStream(
+                "--strict is not supported with --stream (streaming writes never recalculate). Re-run without --stream.",
+                "omit --stream: the in-memory write recalculates the edit's dependency cone and can gate"
               )
             )
-          else executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd)
+          else
+            streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
+              executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io, warn)
+                .map(bridge(cmd, mode))
         else
-          val excel = ExcelIO.instance[IO]
-          val readerConfig = buildReaderConfig(maxSizeOpt)
+          // --stream accepted but with no O(1) path for this verb: the workbook is loaded in
+          // memory and only the write goes through the streaming backend — say so
+          val backendOnly = Warning(
+            WarningCode.STREAM_BACKEND_ONLY,
+            s"--stream has no O(1) path for ${cmd.verb}: the workbook was loaded in memory " +
+              "(a write still goes through the streaming writer)"
+          )
           for
-            wb <- excel.readWith(filePath, readerConfig)
-            sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
-            result <- executeCommand(wb, sheet, outputOpt, backendOpt, stream, cmd, policy)
-          yield result
+            _ <- warn(backendOnly).whenA(stream)
+            wb <- readWorkbook(excel, filePath, readerConfig)
+            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
+            result <- executeCommand(
+              wb,
+              sheet,
+              outputOpt,
+              backendOpt,
+              stream,
+              cmd,
+              policy,
+              io,
+              warn,
+              mode
+            )
+          yield bridge(cmd, mode)(result)
 
-  /** Execute command using streaming mode (O(1) memory). */
+  /**
+   * The legacy bridge from a handler's text to its payload: prose stays prose; under `--json` a
+   * verb whose payload format is JSON (`view`, `filter` — asked for with `--format json`, or the
+   * default when no format was given) passes it through as `data` AS TEXT
+   * ([[contract.Payload.Raw]]) so the two spellings can never drift, not even in a number's last
+   * digit.
+   */
+  private def bridge(cmd: CliCommand, mode: OutputMode)(text: String): Payload =
+    (mode, cmd) match
+      case (OutputMode.Json, view: CliCommand.View)
+          if CliCommand.viewFormat(view.format, mode) == ViewFormat.Json =>
+        Payload.Raw(text)
+      case (OutputMode.Json, filter: CliCommand.Filter)
+          if CliCommand.filterFormat(filter.format, mode) == FilterFormat.Json =>
+        Payload.Raw(text)
+      case _ => Payload.text(text)
+
+  /** Execute command using streaming mode (O(1) memory); `warn` is the run's warning sink. */
+  /**
+   * The verbs that run in O(1) memory under `--stream`: the reads [[executeStreaming]] dispatches
+   * (search, stats, bounds, view, cell), the metadata fast paths of `runResult` (`describe` without
+   * `--full`, `sheets` without `--stats`) and the writes [[executeStreamingWrite]] dispatches (put,
+   * putf, style, batch). Every other write verb accepts the flag, loads the workbook in memory and
+   * only writes through the streaming writer. `Schema.verbs`' `needs.streaming` column is pinned to
+   * this set by SchemaSpec; extend both when a dispatch arm is added.
+   */
+  private[cli] val streamingVerbs: Set[String] = Set(
+    "search",
+    "stats",
+    "bounds",
+    "view",
+    "cell",
+    "describe",
+    "sheets",
+    "put",
+    "putf",
+    "style",
+    "batch"
+  )
+
   private def executeStreaming(
     filePath: Path,
     sheetNameOpt: Option[String],
-    cmd: CliCommand
+    cmd: CliCommand,
+    warn: Warning => IO[Unit],
+    mode: OutputMode
   ): IO[String] = cmd match
     case CliCommand.Search(pattern, limit, sheetsFilter) =>
       StreamingReadCommands.search(filePath, sheetNameOpt, pattern, limit, sheetsFilter)
@@ -2184,9 +2757,7 @@ EXAMPLES:
     case CliCommand.Stats(refStr) =>
       StreamingReadCommands.stats(filePath, sheetNameOpt, refStr)
 
-    case CliCommand.Bounds(scan) =>
-      if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
-      else StreamingReadCommands.boundsDimension(filePath, sheetNameOpt)
+    // bounds never reaches here: `execute` answers it from the metadata part for every mode
 
     case CliCommand.View(
           rangeStr,
@@ -2208,8 +2779,9 @@ EXAMPLES:
         ) =>
       if evalFormulas then
         IO.raiseError(
-          new Exception(
-            "--eval is not supported with --stream (streaming view uses cached values only)"
+          unsupportedInStream(
+            "--eval is not supported with --stream (streaming view uses cached values only)",
+            "omit --stream to evaluate formulas; use --max-size <MB> for a large file"
           )
         )
       else
@@ -2219,12 +2791,13 @@ EXAMPLES:
           rangeStr,
           showFormulas,
           limit,
-          format,
+          CliCommand.viewFormat(format, mode),
           showLabels,
           skipEmpty,
           headerRow,
           // GH-474: unsupported under --stream, but reported rather than silently dropped
-          skipHidden
+          skipHidden,
+          warn
         )
 
     case CliCommand.Cell(refStr, noStyle) =>
@@ -2232,29 +2805,91 @@ EXAMPLES:
 
     case _ =>
       IO.raiseError(
-        new Exception(
-          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only), cell"
+        unsupportedInStream(
+          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only), cell, describe",
+          "omit --stream; use --max-size <MB> to load a large file in memory"
         )
       )
 
-  /** Validate batch JSON and show summary without writing. */
-  private def batchDryRun(source: String): IO[String] =
-    BatchParser.readBatchInput(source).flatMap { input =>
-      BatchParser.parseBatchOperations(input).flatMap { result =>
-        IO(result.warnings.foreach(System.err.println)) *>
-          IO.pure {
-            val summary = BatchParser.formatSummary(result.ops)
-            s"Dry run - ${result.ops.size} operations parsed:\n$summary"
-          }
-      }
+  /** Read and parse the batch source once, for either rendering of a dry run. */
+  private def parseBatchDryRun(source: String, io: CliIO): IO[BatchParser.ParseResult] =
+    BatchParser.readBatchInput(source, io.stdin).flatMap(BatchParser.parseBatchOperations)
+
+  /** The dry run's text: the count and one summary line per op. */
+  private def batchDryRunText(result: BatchParser.ParseResult): String =
+    s"Dry run - ${result.ops.size} operations parsed:\n${BatchParser.formatSummary(result.ops)}"
+
+  /**
+   * Validate batch JSON and show the summary without writing. The parse warnings go through the
+   * run's warning sink like every other warning (ADR-017 §2.3): `Warning[CODE]: …` on stderr in
+   * text mode, the envelope's `warnings[]` under `--json`.
+   */
+  private[cli] def batchDryRun(
+    source: String,
+    io: CliIO,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
+  ): IO[String] =
+    parseBatchDryRun(source, io).flatMap { result =>
+      result.warnings.traverse_(warn).as(batchDryRunText(result))
     }
 
-  /** Execute streaming write command (O(1) memory transform). */
+  /**
+   * The dry run as data (`batch --dry-run --json`): `{ops: [{index, op, summary}]}` — `index` the
+   * op's 1-based position in the array, the same number every `Object N` message and
+   * `location.opIndex` carry (ADR-017 §2.6); `op` the summary's leading keyword (`PUT`, `MERGE`,
+   * ...); `summary` the line `formatSummary` prints. The parse warnings ride in the envelope's
+   * `warnings[]`, never inside `data`.
+   */
+  private def batchDryRunData(result: BatchParser.ParseResult): ujson.Value =
+    val ops = result.scoped.map { scoped =>
+      val summary = BatchParser.formatSummary(Vector(scoped.op)).trim
+      ujson.Obj(
+        "index" -> ujson.Num(scoped.index),
+        "op" -> ujson.Str(summary.takeWhile(_ != ' ')),
+        "summary" -> ujson.Str(summary)
+      )
+    }
+    ujson.Obj("ops" -> ujson.Arr.from(ops))
+
+  /** The parsed dry run in the run's mode. */
+  private def dryRunPayload(result: BatchParser.ParseResult, mode: OutputMode): Payload =
+    mode match
+      case OutputMode.Text => Payload.text(batchDryRunText(result))
+      case OutputMode.Json => Payload.Json(batchDryRunData(result))
+
+  /** A dry run inside a run: its parse warnings go to the run's sink. */
+  private def batchDryRunPayload(
+    source: String,
+    io: CliIO,
+    mode: OutputMode,
+    warn: Warning => IO[Unit]
+  ): IO[Payload] =
+    parseBatchDryRun(source, io).flatMap { result =>
+      result.warnings.traverse_(warn).as(dryRunPayload(result, mode))
+    }
+
+  /**
+   * The standalone `batch --dry-run` (no -f, no -o): a bad source (invalid JSON, missing file) is a
+   * failure classified like every other verb's, never an escaped exception; the parse warnings ride
+   * on the outcome.
+   */
+  private[cli] def batchDryRunOutcome(source: String, io: CliIO, mode: OutputMode): IO[Outcome] =
+    parseBatchDryRun(source, io).attempt.map {
+      case Right(result) => Outcome.ok("batch", dryRunPayload(result, mode), result.warnings)
+      case Left(failure) => Outcome.failed("batch", CliError.fromThrowable(failure))
+    }
+
+  /**
+   * Execute streaming write command (O(1) memory transform). `warn` is the run's warning sink; the
+   * streaming batch sends its parse warnings through it like the in-memory batch does.
+   */
   private def executeStreamingWrite(
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
-    cmd: CliCommand
+    cmd: CliCommand,
+    io: CliIO,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] = cmd match
     case CliCommand.Style(
           rangeStr,
@@ -2279,7 +2914,7 @@ EXAMPLES:
         ) =>
       outputOpt match
         case None =>
-          IO.raiseError(new Exception("--output is required for style command"))
+          IO.raiseError(outputRequired("--output is required for style command"))
         case Some(outputPath) =>
           StreamingWriteCommands.style(
             filePath,
@@ -2309,14 +2944,15 @@ EXAMPLES:
     case CliCommand.Put(refStr, values, csvSplit, detect) =>
       if csvSplit then
         IO.raiseError(
-          new Exception(
-            "--csv auto-split is not supported with --stream. Omit --stream to use --csv."
+          unsupportedInStream(
+            "--csv auto-split is not supported with --stream. Omit --stream to use --csv.",
+            "omit --stream to use --csv"
           )
         )
       else
         outputOpt match
           case None =>
-            IO.raiseError(new Exception("--output is required for put command"))
+            IO.raiseError(outputRequired("--output is required for put command"))
           case Some(outputPath) =>
             StreamingWriteCommands.put(
               filePath,
@@ -2330,27 +2966,32 @@ EXAMPLES:
     case CliCommand.PutFormula(refStr, formulas) =>
       outputOpt match
         case None =>
-          IO.raiseError(new Exception("--output is required for putf command"))
+          IO.raiseError(outputRequired("--output is required for putf command"))
         case Some(outputPath) =>
           StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
-    case CliCommand.Batch(source, dryRun) if dryRun =>
-      batchDryRun(source)
-
-    case CliCommand.Batch(source, _) =>
+    // `--dry-run` never reaches here: `execute` answers it before any dispatch
+    case CliCommand.Batch(source, _, _) =>
       outputOpt match
         case None =>
-          IO.raiseError(new Exception("--output is required for batch command"))
+          IO.raiseError(outputRequired("--output is required for batch command"))
         case Some(outputPath) =>
-          StreamingWriteCommands.batch(filePath, outputPath, sheetNameOpt, source)
+          StreamingWriteCommands.batch(filePath, outputPath, sheetNameOpt, source, io.stdin, warn)
 
     case _ =>
       IO.raiseError(
-        new Exception(
-          "--stream for write commands only supports: put, putf, style, batch"
+        unsupportedInStream(
+          "--stream for write commands only supports: put, putf, style, batch",
+          "omit --stream; use --max-size <MB> to load a large file in memory"
         )
       )
 
+  /**
+   * @param warn
+   *   where a handler's out-of-band notices go (`view`'s csv/html/svg truncation and hidden-line
+   *   notices); the runner collects them for the run's stderr or envelope, and the default prints
+   *   `Warning[CODE]: …` to `io` directly
+   */
   private[cli] def executeCommand(
     wb: Workbook,
     sheetOpt: Option[Sheet],
@@ -2358,7 +2999,10 @@ EXAMPLES:
     backendOpt: Option[XmlBackend],
     stream: Boolean,
     cmd: CliCommand,
-    policy: WritePolicy = WritePolicy.default
+    policy: WritePolicy = WritePolicy.default,
+    io: CliIO = CliIO.system,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system),
+    mode: OutputMode = OutputMode.Text
   ): IO[String] = cmd match
     // Workbook commands (these are now handled in execute() before reaching here)
     case CliCommand.Sheets(action) =>
@@ -2406,7 +3050,7 @@ EXAMPLES:
         evalFormulas,
         strict,
         limit,
-        format,
+        CliCommand.viewFormat(format, mode),
         printScale,
         showGridlines,
         showLabels,
@@ -2416,7 +3060,8 @@ EXAMPLES:
         skipEmpty,
         headerRow,
         rasterizer,
-        skipHidden
+        skipHidden,
+        warn
       )
 
     case CliCommand.Cell(refStr, noStyle) =>
@@ -2429,7 +3074,15 @@ EXAMPLES:
       ReadCommands.stats(wb, sheetOpt, refStr)
 
     case CliCommand.Filter(where, columns, limit, format, header) =>
-      FilterCommands.filter(wb, sheetOpt, where, columns, limit, format, header)
+      FilterCommands.filter(
+        wb,
+        sheetOpt,
+        where,
+        columns,
+        limit,
+        CliCommand.filterFormat(format, mode),
+        header
+      )
 
     case CliCommand.Eval(formulaStr, overrides) =>
       ReadCommands.eval(wb, sheetOpt, formulaStr, overrides)
@@ -2440,12 +3093,12 @@ EXAMPLES:
     // Write commands (require output)
     case CliCommand.Put(refStr, values, csvSplit, detect) =>
       requireOutput("put", outputOpt, backendOpt, stream)(
-        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect, policy)
+        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect, policy, warn)
       )
 
     case CliCommand.PutFormula(refStr, formulas) =>
       requireOutput("putf", outputOpt, backendOpt, stream)(
-        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _, policy)
+        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _, policy, warn)
       )
 
     case CliCommand.Style(
@@ -2529,12 +3182,10 @@ EXAMPLES:
         WriteCommands.ungroupCols(wb, sheetOpt, cols, _, _, _)
       )
 
-    case CliCommand.Batch(source, dryRun) if dryRun =>
-      batchDryRun(source)
-
-    case CliCommand.Batch(source, _) =>
+    // `--dry-run` never reaches here: `execute` answers it before any dispatch
+    case CliCommand.Batch(source, _, _) =>
       requireOutput("batch", outputOpt, backendOpt, stream)(
-        WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy)
+        WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy, io.stdin, warn)
       )
 
     case CliCommand.Recalc(tables, parallel) =>
@@ -2542,13 +3193,16 @@ EXAMPLES:
       // than writing a file the caller will read as freshened (GH-468).
       if policy.noRecalc then
         IO.raiseError(
-          new Exception(
-            "recalc cannot be combined with --no-recalc/--preserve-caches (it exists to rewrite caches). Drop the flag, or drop the recalc."
+          CliException(
+            CliError.usage(
+              "recalc cannot be combined with --no-recalc/--preserve-caches (it exists to rewrite caches). Drop the flag, or drop the recalc.",
+              None
+            )
           )
         )
       else
         requireOutput("recalc", outputOpt, backendOpt, stream)(
-          WriteCommands.recalc(wb, _, _, _, tables, policy, parallel)
+          WriteCommands.recalc(wb, _, _, _, tables, policy, parallel, warn)
         )
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
@@ -2652,7 +3306,7 @@ EXAMPLES:
 
     case CliCommand.Fill(source, target, direction) =>
       requireOutput("fill", outputOpt, backendOpt, stream)(
-        WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _, _, policy)
+        WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _, _, policy, warn)
       )
 
     case CliCommand.AutoFit(columnsOpt) =>
@@ -2761,7 +3415,7 @@ EXAMPLES:
 
     case CliCommand.Copy(source, target, valuesOnly) =>
       requireOutput("copy", outputOpt, backendOpt, stream)(
-        WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _, policy)
+        WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _, policy, warn)
       )
 
     case CliCommand.ChartAdd(
@@ -2801,23 +3455,31 @@ EXAMPLES:
 
     case CliCommand.InsertRows(at, count) =>
       requireOutput("insert-rows", outputOpt, backendOpt, stream)(
-        WriteCommands.insertRows(wb, sheetOpt, at, count, _, _, _, policy)
+        WriteCommands.insertRows(wb, sheetOpt, at, count, _, _, _, policy, warn)
       )
 
     case CliCommand.DeleteRows(at, count) =>
       requireOutput("delete-rows", outputOpt, backendOpt, stream)(
-        WriteCommands.deleteRows(wb, sheetOpt, at, count, _, _, _, policy)
+        WriteCommands.deleteRows(wb, sheetOpt, at, count, _, _, _, policy, warn)
       )
 
     case CliCommand.InsertColumns(col, count) =>
       requireOutput("insert-cols", outputOpt, backendOpt, stream)(
-        WriteCommands.insertColumns(wb, sheetOpt, col, count, _, _, _, policy)
+        WriteCommands.insertColumns(wb, sheetOpt, col, count, _, _, _, policy, warn)
       )
 
     case CliCommand.DeleteColumns(col, count) =>
       requireOutput("delete-cols", outputOpt, backendOpt, stream)(
-        WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _, policy)
+        WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _, policy, warn)
       )
+
+    // The inspection verbs are dispatched in execute() (typed payloads) — never reach here
+    case CliCommand.Describe(_) =>
+      IO.raiseError(new Exception("Internal: describe is dispatched in execute"))
+    case CliCommand.Audit(_) =>
+      IO.raiseError(new Exception("Internal: audit is dispatched in execute"))
+    case CliCommand.Deps(_, _, _) =>
+      IO.raiseError(new Exception("Internal: deps is dispatched in execute"))
 
     // Diff has its own runner (two input files, custom exit codes) — never reaches here
     case CliCommand.Diff(_, _) =>
@@ -2835,6 +3497,13 @@ EXAMPLES:
   private def missingOutputError(commandName: String): String =
     s"$commandName requires -o <out.xlsx> (or -i to modify in place)"
 
+  /**
+   * A write verb without `-o`/`-i`: `OUTPUT_REQUIRED`, exit 2 (still raised after the read until
+   * Wave 2).
+   */
+  private def outputRequired(message: String): CliException =
+    CliException(CliError(ErrorCode.OUTPUT_REQUIRED, message))
+
   private[cli] def requireOutput(
     commandName: String,
     outputOpt: Option[Path],
@@ -2843,7 +3512,7 @@ EXAMPLES:
   )(f: (Path, WriterConfig, Boolean) => IO[String]): IO[String] =
     val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
     outputOpt.fold(
-      IO.raiseError[String](new Exception(missingOutputError(commandName)))
+      IO.raiseError[String](outputRequired(missingOutputError(commandName)))
     )(path => f(path, config, stream))
 
   /**
@@ -2860,28 +3529,35 @@ EXAMPLES:
    *   - `-i` only: writes to a sibling temp file then atomically moves onto input. If the command
    *     exits with a non-success code OR throws, the temp is deleted and the original is untouched
    *   - Neither: passes `None` through (for read-only subcommands that don't need output)
-   *   - Both: errors with "mutually exclusive"
+   *   - Both: a usage error ("mutually exclusive", exit 2, stderr); nothing is read or written
    */
   private[cli] def runWithOutput(
     outOpt: Option[Path],
     inPlace: Boolean,
-    file: Path
-  )(execute: (Option[Path], Option[Path]) => IO[CommandOutcome]): IO[ExitCode] =
+    file: Path,
+    io: CliIO = CliIO.system,
+    mode: OutputMode = OutputMode.Text,
+    verb: String = ""
+  )(execute: (Option[Path], Option[Path]) => IO[Outcome]): IO[ExitCode] =
     (outOpt, inPlace) match
       case (Some(_), true) =>
-        IO.println(
-          Format.errorSimple("--in-place (-i) and --output (-o) are mutually exclusive")
-        ).as(ExitCode.Error)
+        val error =
+          CliError.usage("--in-place (-i) and --output (-o) are mutually exclusive", None)
+        emit(Outcome.failed(verb, error), mode, io)
       case (Some(out), false) =>
-        runStagedOutput(out, ".xl-output-")(outcome => outcome.outputComplete)(execute)
-      case (None, false) => execute(None, None).flatMap(printRunResult)
+        runStagedOutput(out, ".xl-output-", io, mode, verb)(outcome => outcome.outputComplete)(
+          execute
+        )
+      case (None, false) => execute(None, None).flatMap(emit(_, mode, io))
       case (None, true) =>
-        runStagedOutput(file, ".xl-inplace-")(outcome =>
+        runStagedOutput(file, ".xl-inplace-", io, mode, verb)(outcome =>
           outcome.outputComplete && outcome.exitCode == ExitCode.Success
         )(execute)
 
   /**
-   * Allocate a sibling staging path and register it with the JVM before handing it to a writer.
+   * Allocate a sibling staging path and register it with the JVM before handing it to a writer. A
+   * destination that cannot take a file (missing directory, no permission) fails here, as
+   * `IO_WRITE` naming the target ([[classifyWrite]]).
    *
    * The Resource finalizer is the normal cleanup path. `deleteOnExit` is the hard-shutdown
    * backstop: the CLI runtime deliberately stops waiting after two seconds, so a canceled writer
@@ -2900,28 +3576,58 @@ EXAMPLES:
             IO.blocking(Files.deleteIfExists(tmp)).attempt *> IO.raiseError[Path](error)
         }
       }
-    Resource.make(acquire)(tmp => IO.blocking(Files.deleteIfExists(tmp)).void)
+    Resource.make(classifyWrite(target)(acquire))(tmp =>
+      IO.blocking(Files.deleteIfExists(tmp)).void
+    )
 
-  /** Run one command against a staging path and publish only an explicitly complete output. */
+  /**
+   * Run one command against a staging path and publish only an explicitly complete output. What the
+   * payload then says about the write (`saved`, `written`) is what this step actually did — a
+   * committed run names its target, a discarded one (an `-i` strict failure) says nothing was.
+   *
+   * Nothing escapes: a staging file that cannot be allocated or a commit that fails is an
+   * `IO_WRITE` failure ([[classifyWrite]]) rendered like any other — no payload, exit 3, the run's
+   * warnings kept — never a stack trace.
+   */
   private def runStagedOutput(
     target: Path,
-    prefix: String
+    prefix: String,
+    io: CliIO,
+    mode: OutputMode,
+    verb: String
   )(
-    shouldCommit: CommandOutcome => Boolean
+    shouldCommit: Outcome => Boolean
   )(
-    execute: (Option[Path], Option[Path]) => IO[CommandOutcome]
+    execute: (Option[Path], Option[Path]) => IO[Outcome]
   ): IO[ExitCode] =
-    stagedOutput(target, prefix).use { tmp =>
-      execute(Some(tmp), Some(target)).flatMap { outcome =>
-        val commit =
-          if shouldCommit(outcome) then
-            // A read-only command may accept the global -o flag but never touch its staging file.
-            // An XLSX is necessarily non-empty, so do not replace a target with the untouched file.
-            IO.blocking(Files.size(tmp) > 0L).ifM(replaceAtomically(tmp, target), IO.unit)
-          else IO.unit
-        commit *> printRunResult(outcome)
+    stagedOutput(target, prefix)
+      .use { tmp =>
+        execute(Some(tmp), Some(target)).flatMap { outcome =>
+          val commit: IO[Boolean] =
+            if shouldCommit(outcome) then
+              // A read-only command may accept the global -o flag but never touch its staging
+              // file. An XLSX is necessarily non-empty, so do not replace a target with the
+              // untouched file.
+              classifyWrite(target)(
+                IO.blocking(Files.size(tmp) > 0L)
+                  .ifM(replaceAtomically(tmp, target).as(true), IO.pure(false))
+              )
+            else IO.pure(false)
+          commit.attempt.flatMap {
+            case Right(committed) =>
+              emit(outcome.committed(Option.when(committed)(target.toString)), mode, io)
+            case Left(failure) =>
+              emit(
+                Outcome.failed(verb, CliError.fromThrowable(failure), outcome.warnings),
+                mode,
+                io
+              )
+          }
+        }
       }
-    }
+      .handleErrorWith(failure =>
+        emit(Outcome.failed(verb, CliError.fromThrowable(failure)), mode, io)
+      )
 
   /** Replace `target` atomically when supported, with the JDK-prescribed total fallback. */
   private[cli] def replaceAtomically(source: Path, target: Path): IO[Unit] =
@@ -2953,7 +3659,7 @@ EXAMPLES:
     outputOpt match
       case Some(path) => f(path)
       case None =>
-        IO.raiseError(new Exception(missingOutputError(commandName)))
+        IO.raiseError(outputRequired(missingOutputError(commandName)))
 
   /** Build WriterConfig from CLI backend option */
   private def buildWriterConfig(backendOpt: Option[XmlBackend]): WriterConfig =

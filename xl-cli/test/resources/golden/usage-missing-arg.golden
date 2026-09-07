@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+view
+## exit
+2
+## stdout
+## stderr
+Error: Missing expected positional argument!
+  code: USAGE
+  hint: run `xl view --help` for the usage
+usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …

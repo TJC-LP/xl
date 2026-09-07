@@ -1,0 +1,104 @@
+## args
+-f
+<DIR>/linked.xlsx
+--json
+describe
+--full
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "describe",
+  "version": "<VERSION>",
+  "data": {
+    "sheets": [
+      {
+        "name": "Sheet1",
+        "index": 1,
+        "state": "visible",
+        "dimension": "A1:A3",
+        "cells": 3,
+        "formulas": 1,
+        "uncachedFormulas": 0,
+        "mergedRanges": 1,
+        "comments": 1,
+        "hyperlinks": 0,
+        "freeze": "B2",
+        "tabColor": null,
+        "autoFilter": null,
+        "tables": [],
+        "charts": 0,
+        "pictures": 0,
+        "conditionalFormats": 0,
+        "dataValidations": 0,
+        "hiddenRows": 0,
+        "hiddenCols": 0
+      },
+      {
+        "name": "Sheet2",
+        "index": 2,
+        "state": "visible",
+        "dimension": "A1:B1",
+        "cells": 2,
+        "formulas": 2,
+        "uncachedFormulas": 0,
+        "mergedRanges": 0,
+        "comments": 0,
+        "hyperlinks": 0,
+        "freeze": null,
+        "tabColor": null,
+        "autoFilter": null,
+        "tables": [],
+        "charts": 0,
+        "pictures": 0,
+        "conditionalFormats": 0,
+        "dataValidations": 0,
+        "hiddenRows": 0,
+        "hiddenCols": 0
+      },
+      {
+        "name": "Hidden",
+        "index": 3,
+        "state": "hidden",
+        "dimension": "A1:A1",
+        "cells": 1,
+        "formulas": 0,
+        "uncachedFormulas": 0,
+        "mergedRanges": 0,
+        "comments": 0,
+        "hyperlinks": 0,
+        "freeze": null,
+        "tabColor": null,
+        "autoFilter": null,
+        "tables": [],
+        "charts": 0,
+        "pictures": 0,
+        "conditionalFormats": 0,
+        "dataValidations": 0,
+        "hiddenRows": 1,
+        "hiddenCols": 0
+      }
+    ],
+    "definedNames": [
+      {
+        "name": "Total",
+        "refersTo": "Sheet1!$A$3",
+        "scope": null,
+        "hidden": false
+      },
+      {
+        "name": "Secret",
+        "refersTo": "Sheet1!$A$1",
+        "scope": null,
+        "hidden": true
+      }
+    ],
+    "date1904": false,
+    "calcPr": null
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

@@ -440,6 +440,9 @@ final case class Sheet(
    *     case Right(s) => // valid
    *     case Left(err) => // invalid reference
    *   }}}
+   *
+   * The literal-vs-dynamic specialization is invisible at the call site. For a reference computed
+   * at runtime prefer [[putAt]], which spells the `XLResult` in its signature (GH-465).
    */
   @annotation.targetName("putString")
   transparent inline def put[A](inline ref: String, value: A)(using
@@ -470,7 +473,8 @@ final case class Sheet(
    * Put a single value at string reference with explicit style.
    *
    * For string literals, validates at compile time and returns `Sheet` directly. For runtime
-   * strings, validates at runtime and returns `XLResult[Sheet]`.
+   * strings, validates at runtime and returns `XLResult[Sheet]`. For a reference computed at
+   * runtime prefer the styled [[putAt]], which spells the `XLResult` in its signature (GH-465).
    */
   @annotation.targetName("putStringStyled")
   transparent inline def put[A](inline ref: String, value: A, style: CellStyle)(using
@@ -637,6 +641,9 @@ final case class Sheet(
    * val col = "A"
    * val result = Sheet("Demo").put(s"$${col}1" -> "Dynamic")
    * }}}
+   *
+   * For references computed at runtime prefer [[putAt]] (one cell per call, `XLResult` spelled in
+   * the signature) or fold a [[com.tjclp.xl.patch.Patch]] over `ref.tryDown`/`tryRight` (GH-465).
    */
   @annotation.targetName("putStringTuples")
   transparent inline def put[A](inline updates: (String, A)*)(using
@@ -718,10 +725,87 @@ final case class Sheet(
    *
    * When called with a string literal, the cell reference is validated at compile time and returns
    * `Sheet` directly. Invalid literals fail to compile. Runtime strings return `XLResult[Sheet]`.
+   * For a reference computed at runtime prefer [[commentAt]], which spells the `XLResult` in its
+   * signature (GH-465).
    */
   @annotation.targetName("commentString")
   transparent inline def comment(inline ref: String, cmt: Comment): Sheet | XLResult[Sheet] =
     ${ com.tjclp.xl.macros.PutLiteral.commentImpl('{ this }, 'ref, 'cmt) }
+
+  // ===== Runtime twins of the transparent-inline string forms (GH-465) =====
+  //
+  // `put(String, …)`, `style(String, …)`, `merge(String)` and `comment(String, …)` are
+  // `transparent inline`: a string literal specializes to `Sheet`, a computed String to
+  // `XLResult[Sheet]`, and nothing at the call site says which — the top scripting footgun. The
+  // twins below spell the `XLResult` in a plain non-inline signature, share one parser (RefType,
+  // so a sheet-qualified ref is recognized and refused explicitly instead of failing as garbage),
+  // and delegate to the very same ARef/CellRange overloads the literal forms expand to — codec
+  // formats, style-registry deduplication and existing-style merging are identical by construction.
+
+  /**
+   * Put a value at a cell reference computed at runtime — the explicit twin of `put(ref: String,
+   * value)` (GH-465).
+   *
+   * Reaches the same `put(ARef, A)` the literal form expands to, so inferred number formats and
+   * style handling are identical. `ref` must be an unqualified single cell (`"B7"`, `"b7"`):
+   *   - a range is `Left(InvalidCellRef(ref, "expected a single cell"))`,
+   *   - a sheet-qualified ref (`"Sales!B7"`) is `Left(InvalidReference(…))` — qualify at the
+   *     workbook instead: `wb.update(sheet, _.putAt("B7", v))`,
+   *   - anything unparseable is `Left(InvalidCellRef(ref, reason))`.
+   *
+   * {{{
+   * val cell: String = s"B${row + 1}"
+   * val updated: XLResult[Sheet] = sheet.putAt(cell, total)
+   * }}}
+   */
+  def putAt[A: CellWriter](ref: String, value: A): XLResult[Sheet] =
+    Sheet.runtimeCell(ref).map(aref => put(aref, value))
+
+  /**
+   * Put a value with an explicit style at a cell reference computed at runtime — the twin of
+   * `put(ref: String, value, style)` (GH-465). Same reference contract as [[putAt]]; the explicit
+   * style merges with the codec-inferred format exactly as the literal form does.
+   */
+  def putAt[A: CellWriter](ref: String, value: A, style: CellStyle): XLResult[Sheet] =
+    Sheet.runtimeCell(ref).map(aref => put(aref, value, style))
+
+  /**
+   * Apply a style at a cell or range reference computed at runtime — the twin of `style(ref:
+   * String, style)` (GH-465). A cell styles that cell (`withCellStyle`); a range styles every cell
+   * in it (`withRangeStyle`, creating blank styled cells where needed). A sheet-qualified ref is
+   * `Left(InvalidReference(…))`; unparseable input is `Left(InvalidRange(…))` when it contains `:`
+   * and `Left(InvalidCellRef(…))` otherwise.
+   *
+   * Corner forms only (`A1`, `A1:B2`), like the literal form: full-column/row spellings (`A:A`,
+   * `1:1`) and `$` anchors are rejected — unlike the dynamic branch of the transparent `style`
+   * (`CellRange.parse`-backed); parse those with `String.asRange` and call `style(range, style)`.
+   */
+  def styleAt(ref: String, style: CellStyle): XLResult[Sheet] =
+    import com.tjclp.xl.sheets.styleSyntax.{withCellStyle, withRangeStyle}
+    Sheet.runtimeCellOrRange(ref).map {
+      case Left(aref) => this.withCellStyle(aref, style)
+      case Right(range) => this.withRangeStyle(range, style)
+    }
+
+  /**
+   * Merge a range reference computed at runtime — the twin of `merge(range: String)` (GH-465).
+   * Requires a range: a single cell is `Left(InvalidRange(range, "expected a range like A1:B2"))`
+   * (the literal form rejects it at compile time), a sheet-qualified ref is
+   * `Left(InvalidReference(…))`, unparseable input is `Left(InvalidRange(range, reason))`.
+   *
+   * Corner forms only (`A1:B2`), like the literal form: full-column/row spellings (`A:A`, `1:1`),
+   * `$` anchors and one-cell merges are rejected — unlike the dynamic branch of the transparent
+   * `merge` (`CellRange.parse`-backed); parse those with `String.asRange` and call `merge(range)`.
+   */
+  def mergeAt(range: String): XLResult[Sheet] =
+    Sheet.runtimeRange(range).map(merge)
+
+  /**
+   * Add a comment at a cell reference computed at runtime — the twin of `comment(ref: String, cmt)`
+   * (GH-465). Same reference contract as [[putAt]].
+   */
+  def commentAt(ref: String, comment: Comment): XLResult[Sheet] =
+    Sheet.runtimeCell(ref).map(aref => this.comment(aref, comment))
 
   /** Get comment at cell reference */
   def getComment(ref: ARef): Option[Comment] =
@@ -1089,6 +1173,49 @@ final case class Sheet(
     copy(comments = comments.filterNot((ref, _) => range.contains(ref)))
 
 object Sheet:
+  // ----- Shared parsing for the runtime twins (GH-465) -----
+  // One parser for putAt/styleAt/mergeAt/commentAt: RefType.parse (the parser behind
+  // RefType.parseToXLError) understands every A1 spelling including `Sheet!A1`, so a qualified ref
+  // gets a targeted refusal, while a parse failure is reported as the ref-shaped error the caller
+  // expects (InvalidCellRef / InvalidRange naming the offending input) rather than the generic
+  // InvalidReference wrapping that parseToXLError applies.
+
+  private val QualifiedRefRejected: XLError = XLError.InvalidReference(
+    "sheet-qualified refs are not accepted by Sheet.putAt/styleAt/mergeAt/commentAt; " +
+      "use wb.update(sheet, ...)"
+  )
+
+  /** Cell → `Left(aref)`, range → `Right(range)`; qualified refs and garbage are errors. */
+  private def runtimeRef(
+    ref: String,
+    onParseError: String => XLError
+  ): XLResult[Either[ARef, CellRange]] =
+    RefType.parse(ref) match
+      case Right(RefType.Cell(aref)) => Right(Left(aref))
+      case Right(RefType.Range(range)) => Right(Right(range))
+      case Right(RefType.QualifiedCell(_, _) | RefType.QualifiedRange(_, _)) =>
+        Left(QualifiedRefRejected)
+      case Left(reason) => Left(onParseError(reason))
+
+  private def runtimeCell(ref: String): XLResult[ARef] =
+    runtimeRef(ref, reason => XLError.InvalidCellRef(ref, reason)).flatMap {
+      case Left(aref) => Right(aref)
+      case Right(_) => Left(XLError.InvalidCellRef(ref, "expected a single cell"))
+    }
+
+  private def runtimeRange(range: String): XLResult[CellRange] =
+    runtimeRef(range, reason => XLError.InvalidRange(range, reason)).flatMap {
+      case Right(r) => Right(r)
+      case Left(_) => Left(XLError.InvalidRange(range, "expected a range like A1:B2"))
+    }
+
+  private def runtimeCellOrRange(ref: String): XLResult[Either[ARef, CellRange]] =
+    runtimeRef(
+      ref,
+      reason =>
+        if ref.contains(':') then XLError.InvalidRange(ref, reason)
+        else XLError.InvalidCellRef(ref, reason)
+    )
 
   /**
    * Span algebra shared by every range-shaped structure a structural edit moves: merged ranges,

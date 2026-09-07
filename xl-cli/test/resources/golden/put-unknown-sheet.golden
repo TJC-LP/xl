@@ -1,0 +1,17 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Nope
+-o
+<DIR>/put-nope.xlsx
+put
+A1
+1
+## exit
+3
+## stdout
+## stderr
+Error: Sheet not found: Nope. Available: Data, Summary
+  code: SHEET_NOT_FOUND
+  hint: list sheets with `xl -f <file> sheets`

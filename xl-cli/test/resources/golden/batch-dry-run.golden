@@ -1,0 +1,13 @@
+## args
+batch
+--dry-run
+-
+## stdin
+[{"op":"put","ref":"A1","value":"$1,234.56"},{"op":"merge","range":"A1:B1"}]
+## exit
+0
+## stdout
+Dry run - 2 operations parsed:
+  PUT A1 = Number(1234.56) (Currency)
+  MERGE A1:B1
+## stderr

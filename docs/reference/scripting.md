@@ -112,21 +112,73 @@ val formE = fx"=B$row*C$row" // Either[XLError, CellValue]
 val cell2 = fx"=B$row*2".unsafe // explicit boundary when fail-fast is fine
 ```
 
-The **same split applies to `Sheet(name)`** — and it is easier to trip over because there is no
-`$` at the call site to warn you. A string **literal** validates at compile time and returns
-`Sheet`; a name held in a `val` makes the very same call return `XLResult[Sheet]`, so a chained
+The **same split applies to every string-taking form** — `Sheet(name)`, `Workbook(name, …)`,
+`sheet.put("A1", v)`, `sheet.style("A1:D1", st)`, `sheet.merge("A1:C1")`,
+`sheet.comment("A1", c)` — and it is easier to trip over because there is no `$` at the call site
+to warn you. These are `transparent inline`: a string **literal** validates at compile time and
+returns `Sheet`/`Workbook`; the very same call with a `val` returns `XLResult[…]`, so a chained
 `.put(...)` suddenly type-errors:
 
 ```scala
-val lit = Sheet("Acquisitions").put(ref"A1", 1) // : Sheet
+val lit = Sheet("Acquisitions").put("A1", 1)    // : Sheet — both strings are literals
 val nm: String = config.sheetName
-val dyn = Sheet(nm)                             // : XLResult[Sheet] — the return type changed!
+val cell: String = s"B${row + 1}"
+val dyn = Sheet(nm)                             // : XLResult[Sheet]  — the return type changed!
+val dyn2 = lit.put(cell, 42)                    // : XLResult[Sheet]  — and again
 ```
 
-For names computed at runtime, use **`Sheet.named`** (since 0.18.0) — the documented dynamic-name
-factory. Validation is identical (Excel's rules: non-empty, ≤31 chars, no `: \ / ? * [ ]`); the
-difference is that `XLResult` is spelled in the signature, so the `.map`/`.unsafe` step reads as
-intended instead of surprising the chain:
+Two rules keep this from ever surprising you:
+
+1. **Literals are total.** A string literal or a `ref"…"`/`fx"…"` literal is checked at compile
+   time and the call returns the plain value. Reach for the literal forms whenever the address is
+   known when you write the script.
+2. **Computed strings use the explicit runtime twins**, which spell `XLResult` in their
+   signatures so the `.map`/`.flatMap`/`.unsafe` step reads as intended instead of ambushing the
+   chain: **`Sheet.named`** (since 0.18.0), and — since 0.20.0 — **`Workbook.named`**,
+   **`sheet.putAt`**, **`sheet.styleAt`**, **`sheet.mergeAt`**, **`sheet.commentAt`**. Validation
+   follows the **literal** forms (Excel's sheet-name rules; the same `RefType` parser — corner
+   forms only, see below), and the value path is the same code the literal `put` expands to, so
+   inferred number formats and style handling do not change.
+
+```scala
+// since 0.20.0 (fragment — the published 0.19.3 has Sheet.named only)
+val region: String = Seq("North", "East").mkString(" ")
+val cell: String = s"B${row + 1}"
+
+val sheet: XLResult[Sheet] =
+  for
+    s <- Sheet.named(region)                          // InvalidSheetName on a bad name
+    a <- s.putAt(cell, total)                         // InvalidCellRef on a bad ref
+    b <- a.putAt("C2", BigDecimal("2.50"), currency)  // styled put, same codec merge as the literal
+    c <- b.styleAt("A1:C1", header)                   // a cell styles one cell, a range every cell
+    d <- c.mergeAt("A1:C1")                           // InvalidRange for a single cell, A:A, $-anchors or garbage
+    e <- d.commentAt(cell, Comment.plainText("computed"))
+  yield e
+
+val wb: XLResult[Workbook] = Workbook.named("Data", "Summary") // DuplicateSheet on a repeat
+```
+
+The twins share one parsing contract: a range where a cell is required is
+`Left(InvalidCellRef(ref, "expected a single cell"))`; a **sheet-qualified** ref such as
+`"Sales!A1"` is `Left(InvalidReference(…))` — qualify at the workbook instead
+(`wb.update(sheetName, _.putAt("A1", v))`); unparseable input is `Left(InvalidCellRef(…))` or
+`Left(InvalidRange(…))` naming the offending string.
+
+**Corner forms only.** The twins accept exactly what a *literal* would: `A1` cells and `A1:B2`
+two-corner ranges. They do **not** accept full-column/row spellings (`A:A`, `1:1`), `$` anchors
+(`$A$1:C3`), or a single cell for `mergeAt` — all of which the *dynamic* branch of the transparent
+`merge`/`style` (backed by `CellRange.parse`) happens to accept today. So `sheet.merge(s"$c:$c")`
+must not be rewritten as `mergeAt(s"$c:$c")` (that is `Left(InvalidRange)`); keep the existing
+parse-then-typed escape hatch for those spellings — it also spells the `XLResult`:
+
+```scala
+val s: String = s"$c:$c"                 // "D:D", "1:1", "$A$1:C3" and plain "A1" all parse
+s.asRange.map(sheet.merge)               // XLResult[Sheet] — String.asRange is CellRange.parse-backed
+s.asRange.map(r => sheet.style(r, header))
+cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse; no $ anchors — use asRange)
+```
+
+`Sheet.named` alone (0.18.0+):
 
 ```scala
 //> using scala 3.9.0
@@ -138,8 +190,9 @@ val sheet = Sheet.named(region).map(_.put(ref"A1", "ready")).unsafe // XLResult,
 Excel.write(Workbook(sheet), "/tmp/named.xlsx")
 ```
 
-On ≤0.18.0 (no `named`), make the union explicit at the call site with an ascription:
-`val s: XLResult[Sheet] = Sheet(nm)`.
+On ≤0.19.x (no `putAt`/`styleAt`/`mergeAt`/`commentAt`/`Workbook.named`), make the union explicit
+at the call site with an ascription — `val s: XLResult[Sheet] = sheet.put(cell, 42)` — or parse
+once with `RefType.parse(cell)` and use the typed `ARef`/`CellRange` overloads.
 
 Prefer **total navigation** over interpolated refs in loops — no `Either` at all:
 
@@ -152,8 +205,37 @@ base.left(1)     // out of bounds! see below
 base.shift(1, 2) // B4   (colOffset, rowOffset)
 ```
 
-Navigation is total but **unchecked at the sheet edges**: `ref"A1".up()` produces the
-non-existent "A0", which corrupts output if written. Keep loop bounds inside your data extent.
+`shift`/`down`/`up`/`left`/`right` are total but **unchecked at the sheet edges**: `ref"A1".up()`
+produces the non-existent "A0", which corrupts output if written. Since 0.20.0 the **bounded
+navigation** forms make the edge explicit — `None` past it, or a clamp onto it — so a loop can
+stop cleanly instead of minting an invalid ref:
+
+```scala
+// since 0.20.0
+ref"A1".tryDown(1)            // Some(A2)
+ref"A1".tryShift(-1, 0)       // None — would be column -1
+ref"XFD1".tryRight(1)         // None — past the last column
+ref"A1048576".tryDown(1)      // None — past the last row
+ref"C3".clampShift(-10, 5)    // A8  — column pinned to A, row shifted
+ref"A1".clampShift(-3, -3)    // A1  — already at the corner
+
+// Bounded steps compose with the patch DSL without an Either in the loop body:
+val patch = ref"A1".tryDown(2).fold(Patch.empty)(_ := "third row")
+```
+
+`tryShift(dc, dr)` agrees with `shift(dc, dr)` whenever it is `Some`, and
+`tryShift(dc, dr).flatMap(_.tryShift(-dc, -dr))` is `Some(ref)` in bounds. A range can also be
+walked by **slices** instead of by interpolated corners (since 0.20.0):
+
+```scala
+// since 0.20.0
+val table = ref"A1:D10"
+table.rows.size                 // 10 — one-row-high CellRanges, top to bottom (lazy)
+table.columns.map(_.toA1).toList // List("A1:A10", "B1:B10", "C1:C10", "D1:D10")
+table.row(0)                    // Some(A1:D1)  — 0-based within the range
+table.row(10)                   // None         — outside 0 until height
+table.column(3)                 // Some(D1:D10)
+```
 
 For **runtime column handles** (since 0.13.0) — column-oriented builders that fold over letters
 computed at runtime — use `Column.parse` instead of special-casing macro literals; a runtime
@@ -260,6 +342,70 @@ Reference cycles are **isolated**: the participants and their downstream depende
 (e.g. `Model!A7: Formula error in '=B7': Circular reference` via `CellEvalError.render`) while
 the acyclic remainder still evaluates and caches.
 
+### One primitive: `recalculate(options)` (since 0.20.0)
+
+The clock/rng/iterative/parallel overloads above remain, but they are forwarders for one
+options-driven primitive. `RecalcOptions` carries every knob with the value the zero-argument
+`recalculate()` uses, so `wb.recalculate(RecalcOptions())` is `wb.recalculate()` on an acyclic
+book, byte for byte:
+
+```scala
+// since 0.20.0 — fragment, not a runnable script
+val opts = RecalcOptions(
+  clock = Clock.fixedDate(java.time.LocalDate.of(2026, 1, 31)),
+  rng = Rng.seeded(42L),
+  iterative = IterativeMode.FromCalcPr, // honour <calcPr iterate>; Off isolates cycles; Force(calc) iterates regardless
+  parallelism = 4,                      // wave-parallel independent regions (a declared iteration wins and runs sequentially)
+  seedTables = false                    // true also seeds data-table interiors afterwards
+)
+val result = wb.recalculate(opts)
+println(result.summary)                // exactly the line `xl recalc` prints: "Recalculated 12 formulas"
+```
+
+Three entry points share the record — no default arguments, because extension methods reached
+through the prelude's wildcard export cannot carry them:
+
+| Method | Computes | Leaves alone |
+|--------|----------|--------------|
+| `wb.recalculate(opts)` | every formula on every sheet | — |
+| `wb.recalculateAfterEdit(sheet, refs, opts)` | the edited cells and everything that depends on them (plus dynamic `INDIRECT`/`OFFSET` readers) — what the CLI's `put`/`putf` do after a write; falls back to a full pass when the book iterates | every other cache, byte-identical; unaffected volatile cells never touch the clock |
+| `wb.recalculateUncached(opts)` | only formulas with **no** cached value, in dependency order, reading their inputs' caches as they are | every cached cell, even when its cache is wrong (the caches-are-truth doctrine); uncached cycle members are reported, not guessed |
+
+`RecalcResult.summary` renders the result as the CLI does — formula count, `(N error values)`,
+the first three failures, and the iterative verdict — so a script and `xl recalc` report the same
+thing on the same file.
+
+### Renaming a sheet rewrites its references (since 0.20.0)
+
+`Workbook.rename` is deliberately formula-blind (xl-core has no parser): it changes the tab and
+leaves `Sheet1!A1` in every other formula — a file that lints clean and opens in Excel as `#REF!`
+([#559](https://github.com/TJC-LP/xl/issues/559)). `SheetRenamer.rename` is the rename that
+follows through:
+
+```scala
+// since 0.20.0 — fragment, not a runnable script
+val renamed: XLResult[Workbook] =
+  SheetRenamer.rename(wb, SheetName.unsafe("Sheet1"), SheetName.unsafe("Q1 Data"))
+// Sheet2!A1  =Sheet1!A1*2        → ='Q1 Data'!A1*2   (quoted because the name needs it)
+// name Total Sheet1!$A$1         → 'Q1 Data'!$A$1     (comma unions rewritten segment by segment)
+// CF  Expression("Sheet1!A1>0")  → 'Q1 Data'!A1>0     (CellIs, Expression, Cfvo.Formula)
+// DV  List("Sheet1!$A$1:$A$3")   → 'Q1 Data'!$A$1:$A$3
+SheetRenamer.references(wb, SheetName.unsafe("Sheet1")) // Vector[QualifiedRef]: the cells it would touch
+```
+
+Cached values and formula record kinds are preserved (a rename changes no value); a string literal
+that spells the name, an external-workbook reference (`[2]Sheet1!A1`) and a sibling whose name
+merely contains it (`Sheet10`) are untouched; a dependent text that mentions the sheet but cannot
+be parsed refuses the whole rename (`Left(FormulaError)`) with the workbook untouched. Every changed
+sheet goes back through `Workbook.put`, so a workbook read from disk marks exactly the rewritten
+sheets modified; because a rename also changes `workbook.xml`, the writer regenerates every
+worksheet part deterministically, and sheets that never mentioned the old name come out
+byte-identical. `Preserved` CF/DV/chart payloads, hyperlink locations, `_xlfn.`-prefixed functions
+and 3-D ranges are not rewritten (see LIMITATIONS.md; the last two refuse the rename). The same engine is exposed string-in/string-out as
+`FormulaOps.renameSheet(text, from, to)`, `FormulaOps.shift(text, dc, dr)` and
+`FormulaOps.mentionsSheet(text, sheet)`, and the structural editor (`StructuralEditor.insertRowsChecked`
+and friends) is reachable from the prelude too.
+
 Since 0.13.0, **circular models are opt-in** rather than always errors: pass an `IterativeCalc` to
 fixpoint declared cycles instead —
 `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` runs Jacobi
@@ -305,17 +451,59 @@ For one-off questions, `wb.evaluateFormula("=SUM(Data!A1:A9)", "Summary")` retur
 see the [skill API reference](../../plugin/skills/xl-scripting/reference/API.md) for the full
 list).
 
+### Inspect a workbook: `wb.describe`, `wb.audit`, `QualifiedGraph` (since 0.20.0)
+
+The same analyses `xl describe --full`, `xl audit` and `xl deps` print are values a script can
+branch on — all pure, all total:
+
+```scala
+// since 0.20.0 — fragment, not a runnable script
+val summary: WorkbookSummary = wb.describe          // one SheetSummary per sheet + names, date1904, calcPr
+summary.sheets.filter(_.uncachedFormulas > 0).map(_.name.value)
+
+val audit: WorkbookAudit = wb.audit                 // buckets, each in workbook order (sheet, row, column)
+if !audit.isClean then                              // error cells, uncached/unparseable formulas, cycles, unresolved names
+  audit.errorCells.foreach((ref, err) => println(s"$ref ${err.toExcel}"))
+audit.volatile                                      // TODAY/NOW/RAND/RANDBETWEEN cells: a note, not a finding
+audit.restrictTo(SheetName.unsafe("Summary"))       // what `xl audit -s Summary` reports
+
+val graph = QualifiedGraph.of(wb)                   // bounded: a full-column reader expands only to occupied cells
+val b4 = QualifiedRef(SheetName.unsafe("Summary"), ref"B4")
+graph.precedents(b4, 2)                             // Vector of layers: exactly 1 hop, exactly 2 hops
+graph.dependents(b4, 0)                             // 0 = every layer; an empty cell inside a summed range still names the sum
+graph.sccs.filter(_.cyclic)                         // the circular references
+```
+
+`SheetSummary` carries `cellCount`, `formulaCount`, `uncachedFormulas`, `mergedRanges`, `comments`,
+`hyperlinks`, `freeze`, `tabColor`, `autoFilter`, `tables`, `charts`, `pictures`,
+`conditionalFormats`, `dataValidations`, `hiddenRows`, `hiddenCols` plus `state` and `dimension`.
+`QualifiedGraph.precedentsOf`/`dependentsOf` are the single-hop sets; the `dependencies` map is the
+forward graph and `rangeReaders` the symbolic range index behind the reverse question.
+
 ## Typed extraction
 
 ```scala
-sheet.readTyped[BigDecimal](ref"C2")  // Either[CodecError, Option[BigDecimal]]
-sheet.readTypedOr[Int](ref"B2", 0)    // total, with default
-sheet.readTypedOpt[String](ref"A2")   // flat Option — mismatch and empty both None
+sheet.readTyped[BigDecimal](ref"C2")       // Either[CodecError, Option[BigDecimal]]
+sheet.readTypedOr[Int](ref"B2", 0)         // total, with default
+sheet.readTypedOpt[String](ref"A2")        // flat Option — mismatch and empty both None
+sheet.readTypedStrict[BigDecimal](ref"C2") // like readTyped, but ANY formula cell is a TypeMismatch
 ```
 
 Nine codec types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime,
 RichText. Use `readTyped` when you must distinguish a type mismatch from an empty cell;
 `readTypedOr`/`readTypedOpt` when you just need a value.
+
+**Formula cells read through their cached value** ([GH-477](https://github.com/TJC-LP/xl/issues/477)).
+After `recalculate()`, `writeRecalculated`, or `Excel.read` of a book Excel saved, `B1` holds
+`Formula("A1*3", Some(Number(6)), Normal())` and `readTyped[BigDecimal](ref"B1")` is
+`Right(Some(6))`, `readTypedOpt` is `Some(6)` — the same value `view`/`eval` show, with no manual
+`CellValue.Formula(_, Some(v), _)` unwrapping. A formula that has not been recalculated yet
+(`fx"=A1*3"` straight after `put`) has no cache and therefore nothing to read: `readTyped` is
+`Left(TypeMismatch(expected, formula))`, `readTypedOpt` is `None`, `readTypedOr` is the default.
+`readTypedStrict` is the escape hatch that rejects *every* formula cell, cached or not — reach for
+it when "is this a formula?" matters more than its result (auditing hand-entered constants, refusing
+a cache that may be stale). The same see-through rule is available for hand-written matches as
+`cell.effectiveValue` (and `cell.isUncachedFormula`).
 
 ## Smart value detection
 
@@ -333,6 +521,7 @@ sheet.put(ref"C1", "$1,234.56".toFormatted) // Number(1234.56) + Currency format
 
 ```scala
 CellStyle.default.bold.italic.underline.size(12.0).fontFamily("Arial")
+CellStyle.default.withUnderline(Underline.Double)   // since 0.20.0: any Underline variant (.underline is Single)
 CellStyle.default.center.middle.wrap.indent(2)      // alignment (+ Align indent)
 CellStyle.default.red.bgGray                        // font / background color
 CellStyle.default.currency                          // named formats: .percent .decimal .dateFormat .dateTime

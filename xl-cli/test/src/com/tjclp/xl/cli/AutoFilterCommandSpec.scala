@@ -201,14 +201,14 @@ class AutoFilterCommandSpec extends FunSuite:
     val json = """[{"op": "autofilter", "range": "A1:M29"}]"""
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: autofilter clear form parses without warnings") {
     val json = """[{"op": "autofilter", "clear": true}]"""
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get.warnings, Vector.empty[String])
+    assertEquals(result.toOption.get.warnings, Vector.empty)
   }
 
   test("batch: autofilter unknown property warns") {
@@ -216,7 +216,7 @@ class AutoFilterCommandSpec extends FunSuite:
     val result = BatchParser.parseBatchJson(json)
     assert(result.isRight, s"Should parse: $result")
     val warnings = result.toOption.get.warnings
-    assert(warnings.exists(_.contains("bogus")), warnings.toString)
+    assert(warnings.exists(_.message.contains("bogus")), warnings.toString)
   }
 
   // ========== batch op: apply ==========
@@ -314,13 +314,14 @@ class AutoFilterCommandSpec extends FunSuite:
     }
   }
 
-  test("batch: autofilter with unqualified range requires --sheet") {
+  test("batch: autofilter with unqualified range requires --sheet on a multi-sheet book") {
     val ops = BatchParser
       .parseBatchJson("""[{"op": "autofilter", "range": "A1:M29"}]""")
       .toOption
       .get
       .ops
-    val wb = Workbook(Sheet("Data"))
+    // ADR-017 §2.5: a single-sheet book would auto-select; two sheets make the default required
+    val wb = Workbook(Sheet("Data"), Sheet("Other"))
     val result = BatchParser.applyBatchOperations(wb, None, ops).attempt.unsafeRunSync()
     assert(result.isLeft)
     assert(

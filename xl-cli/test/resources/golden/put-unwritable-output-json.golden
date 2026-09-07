@@ -1,0 +1,36 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+-o
+<DIR>/no/such/dir/out.xlsx
+--json
+put
+A1
+1
+## exit
+3
+## stdout
+{
+  "ok": false,
+  "exitCode": 3,
+  "verb": "put",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "IO_WRITE",
+    "message": "cannot write <DIR>/no/such/dir/out.xlsx: no such directory: <DIR>/no/such/dir",
+    "hint": "check that the directory exists and is writable",
+    "candidates": [],
+    "location": {
+      "file": "<DIR>/no/such/dir/out.xlsx",
+      "sheet": null,
+      "ref": null,
+      "opIndex": null
+    }
+  }
+}
+## stderr
+Error: cannot write <DIR>/no/such/dir/out.xlsx: no such directory: <DIR>/no/such/dir

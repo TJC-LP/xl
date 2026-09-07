@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+put
+A5
+42
+## exit
+2
+## stdout
+## stderr
+Error: put requires -o <out.xlsx> (or -i to modify in place)
+  code: OUTPUT_REQUIRED

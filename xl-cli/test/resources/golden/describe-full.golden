@@ -1,0 +1,21 @@
+## args
+-f
+<DIR>/linked.xlsx
+describe
+--full
+## exit
+0
+## stdout
+Sheets (3):
+  1  Sheet1  A1:A3
+       cells 3, formulas 1, merged 1, comments 1, freeze B2
+  2  Sheet2  A1:B1
+       cells 2, formulas 2
+  3  Hidden  A1:A1  hidden
+       cells 1, formulas 0, hidden rows 1
+Defined names (2):
+  Total   Sheet1!$A$3
+  Secret  Sheet1!$A$1  (hidden)
+Date system: 1900
+Calculation: default
+## stderr

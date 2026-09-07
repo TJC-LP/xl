@@ -213,3 +213,36 @@
 - **Testing**: per-wave gates in `docs/plan/scala-native.md`; `./mill __.jvm.test` green at every
   merge; differential XML law (portable == JAXP) + byte-parity writer goldens before the JVM
   default flips; GraalVM remains the shipped CLI until the SN binary passes the cutover gate.
+
+## ADR-017: Agent-first operation algebra and CLI contract
+
+**Date**: 2026-09-07
+**Status**: ✅ Accepted (Wave 1 in progress — see `docs/plan/agent-first-refactor.md`)
+
+- **Decision**: Make every agent surface a projection of one contract and, in Wave 2, one
+  operation algebra. Wave 1 pins the contract: an in-process CLI harness with a golden corpus, a
+  typed `CliError`/`ErrorCode` vocabulary projected from stable `XLError.code`s, a four-row exit
+  table (0 ok / 1 findings-or-gate / 2 usage / 3 failed) with diagnostics on stderr, a global
+  `--json` envelope (`--format json` stays the bare payload), ONE sheet-resolution rule, an
+  `OpSpec` registry over batch JSON (`sheet` on every op, op-indexed errors, `--schema`),
+  `RecalcOptions` + a public after-edit recalc seam, `FormulaOps`/`SheetRenamer` (GH-559),
+  `QualifiedGraph`/`WorkbookAudit`/`WorkbookSummary` behind `describe`/`audit`/`deps`, explicit
+  runtime twins for the `transparent inline` factories, and docs generated from `xl schema --json`.
+  Wave 2 lands `enum Edit` in xl-core with a `FormulaSupport` capability that refuses rather than
+  degrades, CLI verbs and batch ops lowering to it, and streaming as a declared per-op capability.
+- **Context**: three incompatible write vocabularies (55-case `CliCommand`, 35-case `BatchOp`,
+  `--stream` XML patching), prose-only output on 52 of 56 verbs, exit code 1 meaning five things,
+  contradictory sheet-selection rules, a formula-blind `rename-sheet`, typed reads blind to cached
+  formula values, and agent docs hand-maintained in nine drifting places.
+- **Rationale**: a three-architect judge panel (algebra-first, contract-first, agent-journey-first)
+  scored the contract-first sequencing highest on all three lenses because the harness and goldens
+  make every later change an agent-visible, reviewed diff, while the algebra needs the contract in
+  place to land without a fourth vocabulary. Full record, alternatives, and invariants:
+  `docs/design/agent-first-architecture.md`.
+- **Consequences**: the breaking changes, each led with **Breaking:** in CHANGELOG, are the exit
+  table (usage 1→2, failures 1/2→3), errors and warnings moving from stdout to stderr, streaming
+  reads on a multi-sheet book without a sheet exiting 3 `SHEET_REQUIRED` instead of reading the
+  first sheet, typed reads (`readTyped`/`readTypedOpt`/`readTypedOr`) returning a formula cell's
+  cached value (`readTypedStrict` keeps the old rule), and the new `XLError` cases (exhaustive
+  matches warn); handler signatures stay frozen so the ~754 xl-cli specs keep passing; every
+  prelude-visible addition gets a probe; `--stream` never degrades an op silently.

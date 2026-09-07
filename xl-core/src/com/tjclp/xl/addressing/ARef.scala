@@ -65,4 +65,38 @@ object ARef:
     def shift(colOffset: Int, rowOffset: Int): ARef =
       ARef(ref.col + colOffset, ref.row + rowOffset)
 
+    // ----- Bounded navigation (GH-465) -----
+    // `shift` (and the DSL's down/up/left/right) are total but unchecked: they mint "A0" or
+    // column -1 past the grid edge, which corrupts output if written. The forms below make the
+    // edge explicit — `None` past it, or a clamp onto it. Offsets may be any Int; the arithmetic
+    // is done in Long so extreme offsets cannot wrap around into the grid.
+
+    /**
+     * Bounded shift: `Some` of the shifted reference, or `None` when the target would leave the
+     * grid (column 0..16383 = A..XFD, row 0..1048575 = 1..1048576). Agrees with [[shift]] whenever
+     * it is `Some`; `tryShift(dc, dr).flatMap(_.tryShift(-dc, -dr))` is `Some(ref)` in bounds.
+     */
+    def tryShift(colOffset: Int, rowOffset: Int): Option[ARef] =
+      val c = colIndex(ref.col).toLong + colOffset
+      val r = rowIndex(ref.row).toLong + rowOffset
+      if c < 0L || c > Column.MaxIndex0.toLong || r < 0L || r > Row.MaxIndex0.toLong then None
+      else Some(from0(c.toInt, r.toInt))
+
+    /** Bounded step along rows: `None` past row 1048576 (or above row 1 for a negative `n`). */
+    def tryDown(n: Int): Option[ARef] = ref.tryShift(0, n)
+
+    /** Bounded step along columns: `None` past column XFD (or left of A for a negative `n`). */
+    def tryRight(n: Int): Option[ARef] = ref.tryShift(n, 0)
+
+    /**
+     * Shift, pinning each axis independently to the nearest grid edge instead of overrunning it:
+     * `ref"C3".clampShift(-10, 5)` is `A8` (column pinned to A, row shifted). Agrees with [[shift]]
+     * whenever [[tryShift]] is `Some`; once both axes are pinned, re-applying the same offsets is a
+     * no-op.
+     */
+    def clampShift(colOffset: Int, rowOffset: Int): ARef =
+      val c = math.max(0L, math.min(colIndex(ref.col).toLong + colOffset, Column.MaxIndex0.toLong))
+      val r = math.max(0L, math.min(rowIndex(ref.row).toLong + rowOffset, Row.MaxIndex0.toLong))
+      from0(c.toInt, r.toInt)
+
 end ARef

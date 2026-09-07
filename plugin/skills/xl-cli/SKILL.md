@@ -5,11 +5,31 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 # XL CLI - Excel Operations
 
+**Requires xl >= 0.20.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
+`xl batch --schema`, `describe`, `audit`, `deps`, the 0/1/2/3 exit table and globals-anywhere; every
+statement in this skill assumes 0.20.0 or later.
+
+<!-- unreleased-contract -->
+> **This is the 0.20.0 contract, and 0.20.0 is unreleased at the time of writing.** The latest
+> GitHub release is 0.19.3, which has none of the verbs and flags named above (there, errors go to
+> stdout and every failure exits 1). Until 0.20.0 ships, install from source:
+> `git clone https://github.com/TJC-LP/xl && cd xl && make install-jar` (assembly JAR plus a wrapper
+> at `~/.local/bin/xl`; Mill downloads its own JDK), or `make install` where GraalVM is available
+> (native image). The release snippets below install 0.19.3 and are kept for that version: on it,
+> skip `--json`, `schema`, `describe`, `audit`, `deps` and `batch --schema`, put global flags before
+> the verb, and treat exit 1 as "something went wrong" rather than as findings.
+
+The binary documents itself and is the reference: `xl <verb> --help` for a verb's flags,
+`xl schema` for every verb, `xl batch --schema` for every batch op and field, `xl functions --json`
+for every formula function. This skill is the map; those are the territory.
+
 ## Installation
 
-Check if installed: `which xl || echo "not installed"`
+Check if installed: `which xl || echo "not installed"`; then `xl --version` (must print `0.20.0`
+or later; a `0.19.3` binary needs the from-source install above until 0.20.0 is released).
 
-**If not installed**, download the latest native binary (no JDK required):
+**Release download** — the latest published native binary (no JDK required; 0.19.3 until 0.20.0
+ships, see the note above):
 
 **macOS/Linux (recommended):**
 ```bash
@@ -19,8 +39,6 @@ LATEST=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"t
 VERSION=${LATEST#v}
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)  BINARY="xl-$VERSION-linux-amd64" ;;
-  # linux-arm64 binaries ship from v0.12.6 (xl#354); on older releases the curl below
-  # fails loud — fall back to the JAR distribution (xl-$VERSION-cli.tar.gz, needs a JRE).
   Linux-aarch64) BINARY="xl-$VERSION-linux-arm64" ;;
   Darwin-x86_64) BINARY="xl-$VERSION-darwin-amd64" ;;
   Darwin-arm64)  BINARY="xl-$VERSION-darwin-arm64" ;;
@@ -33,6 +51,7 @@ curl -fsSL "https://github.com/$REPO/releases/download/$LATEST/$BINARY" -o ~/.lo
 }
 chmod +x ~/.local/bin/xl
 echo "Installed xl $VERSION to ~/.local/bin/xl"
+xl --version
 ```
 
 **Alternative using GitHub CLI:**
@@ -56,184 +75,149 @@ Ensure `~/.local/bin` is in your PATH: `export PATH="$HOME/.local/bin:$PATH"`
 
 ---
 
-> **Self-Documenting CLI**: Run `xl <command> --help` for comprehensive usage, options, and examples.
-> Commands like `view`, `style`, `put`, `putf`, `import`, `sort`, and `batch` have detailed built-in help.
+## Mental model (read once)
 
----
-
-## Quick Reference
-
-### Info Commands (no file required)
-```bash
-xl functions                           # List all 108 supported functions
-xl rasterizers                         # Check SVG-to-raster backends
+```
+usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
 ```
 
-### Read Operations
-```bash
-xl -f <file> sheets                    # List sheets with visibility state
-xl -f <file> names                     # List defined names (named ranges)
-xl -f <file> -s <sheet> bounds         # Used range
-xl -f <file> -s <sheet> view <range>   # View as table
-xl -f <file> -s <sheet> cell <ref>     # Cell details + dependencies
-xl -f <file> -s <sheet> search <pattern>  # Find cells
-xl -f <file> -s <sheet> stats <range>  # Calculate statistics
-xl -f <file> -s <sheet> eval <formula> # Evaluate formula
-xl -f <file> -s <sheet> evala <formula>          # Array formula result grid
-xl -f <file> -s <sheet> evala <formula> --at <ref>  # Spill to target cell
-```
+1. **Global flags go anywhere** on the command line, before or after the verb: `-f`/`--file`,
+   `-s`/`--sheet`, `-o`/`--output`, `-i`/`--in-place`, `--stream`, `--max-size`, `--backend`,
+   `--no-recalc` (`--preserve-caches`), `--strict`, `--json`. `xl view A1:B2 -f f -s Data` is
+   `xl -f f -s Data view A1:B2`. The one exception: `--strict` right after `view` is view's own
+   `--eval` gate, not the write gate. After `--` every token is data —
+   `xl -f a.xlsx search -- --json` searches for the text `--json` (without the `--` the flag is
+   hoisted and `search` has no pattern: exit 2).
+2. **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
+   (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`; otherwise the only sheet of a
+   single-sheet book (a `SHEET_AUTOSELECTED` warning under `--json`); otherwise `SHEET_REQUIRED`,
+   exit 3, with the sheet names as candidates. `search` (without `-s`), `sheets`, `names`, `diff`,
+   `lint`, `describe` and `audit` read the whole book instead (a `-s` given to `describe`, `names`
+   or `sheets` must still name a real sheet: `SHEET_NOT_FOUND`, exit 3). Start with
+   `xl -f file describe`.
+3. **Reads need `-f`; writes need `-o` (a new file) or `-i` (in place).** A write with neither is
+   `OUTPUT_REQUIRED`, exit 2, before anything is read. Writes are atomic: the output appears only
+   when the whole command succeeded.
+4. **Always pass `--json` when a program reads the result.** Every verb, success or failure, then
+   prints exactly one envelope on stdout — `{ok, exitCode, verb, version, data, warnings, error}`
+   — and nothing else there. `ok` is `true` exactly when `error` is `null`. On a failure (exit 2
+   or 3) `data` is `null`; on findings and gates (exit 1: `diff` differs, `lint` findings,
+   `audit --fail-on-findings`, `--strict`) `ok` is `false` but `data` keeps the report. Either way
+   stderr carries one `Error: <message>` line. For `view`, `filter`, `diff` and `lint`, `--json`
+   alone selects the verb's JSON payload as `data` (no `--format json` needed; an explicit text
+   `--format` rides inside as `data.text`); prose verbs yield `data.text` plus
+   `data.saved`/`data.written`.
+5. **Exit codes** (branch on these and on `error.code`, never on message text):
 
-### Output Formats
-```bash
-xl -f <file> -s <sheet> view <range> --format json
-xl -f <file> -s <sheet> view <range> --format csv --show-labels
-xl -f <file> -s <sheet> view <range> --format png --raster-output out.png
-xl -f <file> -s <sheet> view <range> --formulas   # Show formulas
-xl -f <file> -s <sheet> view <range> --eval       # Computed values
-```
+   | exit | meaning | file written? |
+   |---|---|---|
+   | `0` | ok | as requested |
+   | `1` | completed with findings or a failed gate (`diff` differs, `lint` findings, `audit --fail-on-findings`, `--strict`) — **never a failure** | `-o`: yes; `-i`: no |
+   | `2` | usage — the command line is wrong (unknown verb, `-o` missing, `-i` with `-o`, unsupported under `--stream`) | no |
+   | `3` | failed — the operation could not complete (sheet not found, bad ref, formula error, unreadable file) | no |
 
-**Note**: since 0.12.5, `--eval` computes deep multi-hop cross-sheet chains in one pass (global dependency order with memoization). Since 0.12.6, formulas containing **external-workbook references** (`[2]Book!A1`) evaluate from their Excel-written cached values ([#353](https://github.com/TJC-LP/xl/issues/353)); on ≤0.12.5 they fail with `UnexpectedChar([` — read those cells with a plain `view` there.
-
-### Write Operations (require `-o` or `-i`)
-```bash
-xl -f <file> -s <sheet> -o <out> put <ref> <value>
-xl -f <file> -s <sheet> -i put <ref> <value>         # In-place edit (no -o needed)
-xl -f <file> -s <sheet> -o <out> putf <ref> <formula>
-xl -f <file> -s <sheet> -o <out> style <range> --bold --bg yellow
-xl -f <file> -s <sheet> -o <out> copy <source> <target>  # Range copy with formula shift
-xl -f <file> -s <sheet> -o <out> freeze <ref>         # Freeze panes
-xl -f <file> -s <sheet> -o <out> unfreeze             # Remove freeze panes
-xl -f <file> -o <out> import <csv-file> --new-sheet "Data"
-xl -f <file> -o <out> import-md <table.md> --start A1   # GFM markdown table import (0.11.3+; '-' = stdin)
-xl -f <file> -o <out> recalc                          # Refresh every formula's cached value (0.12.6+)
-xl -f <file> -o <out> recalc --tables                 # Also seed data-table interior caches (0.19.0)
-xl -f <file> -o <out> recalc --parallel 4             # Opt-in independent-wave evaluation
-```
-
-### Compare & Query (read-only, 0.11.3+)
-```bash
-xl -f a.xlsx diff -g b.xlsx --format markdown          # Workbook diff (exit 0 identical, 1 differs)
-xl -f a.xlsx diff -g b.xlsx --format json              # Stable JSON schema for tooling
-xl -f out.xlsx lint                                    # Validate package structure before sending (exit 0 clean, 1 findings) (0.15.0+)
-                                                       # Rules: child-order, unresolved-rel-id, wrong-rel-type, missing-part, missing-content-type, ref-out-of-bounds, data-table-torn, data-table-unseeded (0.19.0), formula-leading-equals (0.19.1), external-ref-dangling + defined-name-invalid (0.19.2), calc-chain-stale (0.19.4)
-xl -f <file> -s <sheet> filter --where "B > 100 AND D = TRUE" --header --format csv
-xl -f <file> -s <sheet> filter --where "Name LIKE 'Acme%'" --columns A,C:E --limit 20
-```
-
-### Images & Charts (require `-o`, 0.12.0+)
-```bash
-xl -f <file> -s <sheet> -o <out> add-image logo.png --at B2          # Embed picture (png/jpeg/gif/bmp...)
-xl -f <file> -s <sheet> -o <out> chart add --type bar --data B2:D10 --categories A2:A10 --title "Revenue" --at F2:K15
-xl -f <file> -s <sheet> -o <out> chart add --type column --data B2:D10 --series-colors "#307FE2,#005670" --at F2  # Brand colors (0.15.0+; unset series cycle theme accents)
-```
-
-### Row/Column Operations (require `-o`)
-```bash
-xl -f <file> -s <sheet> -o <out> row <n> --height 30
-xl -f <file> -s <sheet> -o <out> col <letter> --width 20
-xl -f <file> -s <sheet> -o <out> col A:F --auto-fit
-xl -f <file> -s <sheet> -o <out> autofit              # All columns
-xl -f <file> -s <sheet> -o <out> group-rows 10:20     # Collapsible outline (0.18.0); --level N, --collapsed
-xl -f <file> -s <sheet> -o <out> group-cols E:H --collapsed
-xl -f <file> -s <sheet> -o <out> ungroup-rows 10:20   # Clear outline level + collapse markers
-xl -f <file> -s <sheet> -o <out> ungroup-cols E:H
-```
-
-### Structural Editing (require `-o`)
-
-Insert/delete rows and columns Excel-style: cells, merges, row/column properties, and freeze
-panes shift, and every affected formula (including cross-sheet references) is rewritten.
-References to deleted cells become `#REF!`.
+6. **`xl <verb> --help` is the documentation** for a verb's arguments and flags; `xl schema`
+   lists every verb with what it needs, how it can exit and its batch twin.
+7. **`batch` is the primary write surface**: one JSON array of ops, applied in order, atomically,
+   with the recalculation once at the end. `xl batch --schema` prints the JSON Schema of the
+   document (every op, field, alias, example); `xl batch --dry-run ops.json` validates without a
+   workbook. Prefer one `batch` over a chain of single verbs.
 
 ```bash
-xl -f <file> -s <sheet> -o <out> insert-rows 5        # Insert 1 row before row 5
-xl -f <file> -s <sheet> -o <out> insert-rows 5 3      # Insert 3 rows before row 5
-xl -f <file> -s <sheet> -o <out> delete-rows 5 2      # Delete rows 5-6
-xl -f <file> -s <sheet> -o <out> insert-cols C 2      # Insert 2 columns at C
-xl -f <file> -s <sheet> -o <out> delete-cols C        # Delete column C
-xl -f <file> -s <sheet> -o <out> delete-cols C:E      # Delete columns C through E
-```
-
-### Sheet Management (require `-o`)
-```bash
-xl -f <file> -o <out> add-sheet "NewSheet"
-xl -f <file> -o <out> remove-sheet "OldSheet"
-xl -f <file> -o <out> rename-sheet "Old" "New"
-xl -f <file> -o <out> copy-sheet "Template" "Copy"
-xl -f <file> -o <out> sheets hide "Archive"        # Hide from tabs
-xl -f <file> -o <out> sheets hide "Internal" --very # Very hidden (VBA only)
-xl -f <file> -o <out> sheets show "Archive"        # Unhide
-```
-
-### Cell Operations (require `-o` and `-s`)
-```bash
-xl -f <file> -s <sheet> -o <out> merge A1:C1
-xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B --header
-xl -f <file> -s <sheet> -o <out> fill A1 A2:A10           # Fill down
-xl -f <file> -s <sheet> -o <out> clear A1:D10 --all
-xl -f <file> -s <sheet> -o <out> comment A1 "Note" --author "John"
-```
-
-### Appearance & Print Setup (require `-o`, 0.13.0)
-```bash
-xl -f <file> -s <sheet> -o <out> sheet-view --gridlines off --zoom 85 --tab-selected on
-xl -f <file> -s <sheet> -o <out> tab-color "#1F4E79"     # named, #hex, rgb(r,g,b), theme:accent1[:tint]
-xl -f <file> -s <sheet> -o <out> tab-color --clear       # clear a modeled tab color
-xl -f <file> -s <sheet> -o <out> page-setup --orientation landscape --scale 90 --fit-to-width 1
-xl -f <file> -s <sheet> -o <out> header-footer --odd-footer "&LConfidential&RPage &P of &N"
-xl -f <file> -s <sheet> -o <out> autofilter A1:M29       # filter dropdowns on the header row (0.18.0)
-xl -f <file> -s <sheet> -o <out> autofilter --clear      # remove the filter (even a preserved one)
-```
-
-### Conditional Formatting (0.13.0)
-```bash
-xl -f <file> -s <sheet> -o <out> cf add --range A1:A10 --rule 'cellIs:greaterThan:100' --bold --bg '#FFC7CE'
-xl -f <file> -s <sheet> -o <out> cf add --range B2:B20 --rule 'colorScale:red:white:green'
-xl -f <file> -s <sheet> cf list                          # list rules (read-only, no -o)
-```
-
-### Batch Operations (require `-o`)
-```bash
-xl -f <file> -s <sheet> -o <out> batch operations.json
-echo '[...]' | xl -f <file> -s <sheet> -o <out> batch -   # From stdin
-xl batch --help                                           # Full reference
-```
-
-### Create New Workbook
-```bash
-xl new <output>                              # Default Sheet1
-xl new <output> --sheet Data --sheet Summary # Multiple sheets
+xl -f model.xlsx --json describe                   # what is in this file?
+xl -f model.xlsx --json audit --fail-on-findings   # anything already broken? (exit 1 if so)
+xl -f model.xlsx -s Data --json view A1:D20 | jq '.data.rows'   # --json alone selects the JSON payload
+xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/null || echo "batch failed"
 ```
 
 ---
 
-## Essential Patterns
+## Task → verb
 
-### Sheet Selection
+| Task | Verb | Notes |
+|------|------|-------|
+| Orient in an unknown workbook | `describe` (`--full` for counts) | sheets with state and dimension, defined names, date system; metadata-only, works under `--stream` |
+| "This number looks wrong" | `audit` | error values, uncached/unparseable formulas, cycles (notes, not findings, when iterative calculation is on), unresolved names; `--fail-on-findings` exits 1 for CI |
+| Where a cell's value comes from / what reads it | `deps <ref>` | `--direction precedents\|dependents\|both`, `--depth n\|all` |
+| One cell: value, style, comment, direct deps | `cell <ref>` | |
+| Read a block | `view <range>` | `--format markdown\|json\|csv\|html\|svg\|png\|jpeg\|webp\|pdf`, `--eval`, `--formulas`, `--limit`, `--show-labels` |
+| Find text or a number | `search <regex>` | all sheets unless `-s`; `--limit` |
+| Rows matching a predicate | `filter --where "B > 100 AND D = TRUE"` | `--header` uses row 1 names; `--columns A,C:E` |
+| Used range, numeric summary | `bounds`, `stats <range>` | |
+| What-if without writing | `eval "=…" --with "A1=5"`, `evala` (arrays, `--at` to spill) | no `-f` for constants |
+| Write values / formulas | `put`, `putf` — or a `batch` | one formula over a range drags with `$` anchoring |
+| Style, merge, comments, hyperlinks | `style`, `merge`/`unmerge`, `comment`/`remove-comment` — or `batch` ops | styles merge unless `--replace` |
+| Rows and columns | `row`, `col`, `autofit`, `group-rows`/`group-cols`, `insert-rows`/`delete-rows`, `insert-cols`/`delete-cols` | structural edits rewrite formulas; `#REF!` on loss |
+| Sheets | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide\|show`, `name add\|rm` | `rename-sheet` rewrites every reference to the sheet |
+| Deliverable finish | `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `autofilter`, `freeze`, `cf add`, `chart add`, `add-image` | every one but `add-image` has a batch twin |
+| Import data | `import <csv>`, `import-md <table.md\|->` | `--new-sheet`, type detection |
+| Refresh cached values | `recalc` (`--tables`, `--parallel n`) | `--strict` exits 1 on formula errors |
+| Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / findings |
+| New workbook | `new out.xlsx --sheet Data --sheet Summary` | |
+| What can the binary do? | `schema`, `functions`, `rasterizers`, `batch --schema` | no `-f` |
 
-Commands default to first sheet. For multi-sheet files, always specify:
+---
+
+## Recipes
+
+### Explore, then act
 
 ```bash
-# Method 1: --sheet flag
-xl -f data.xlsx --sheet "P&L" view A1:D10
-
-# Method 2: Qualified A1 syntax (no -s needed)
-xl -f data.xlsx view "P&L!A1:D10"
-xl -f data.xlsx eval "=SUM(Revenue!A1:A10)"
+xl -f data.xlsx describe --full             # sheets, names, date system, per-sheet counts
+xl -f data.xlsx -s Sheet1 view A1:E20       # preview (markdown; add --limit 0 for all rows)
+xl -f data.xlsx -s Sheet1 stats B2:B100
+xl -f data.xlsx -s Sheet1 deps C5 --depth all
+xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10)" --with "A1=500,A5=0"
 ```
 
-**Workflow**: Start with `xl -f file.xlsx sheets` to discover sheet names.
-
-### Formula Dragging (putf with range)
-
-Single formula + range = Excel-style dragging with automatic reference shifting:
+### Build a formatted report in one atomic batch
 
 ```bash
-xl -f f.xlsx -s S1 -o o.xlsx putf B2:B10 "=A2*1.1"
-# Result: B2: =A2*1.1, B3: =A3*1.1, B4: =A4*1.1, ...
+xl -f template.xlsx -o report.xlsx batch - <<'EOF'
+[
+  {"op": "put",   "sheet": "Data", "ref": "A1", "value": "Sales Report"},
+  {"op": "style", "sheet": "Data", "range": "A1:E1", "bold": true, "bg": "navy", "fg": "white"},
+  {"op": "put",   "sheet": "Data", "ref": "A2:E2", "values": ["Date", "Company", "Revenue", "Growth", "Status"]},
+  {"op": "put",   "sheet": "Data", "ref": "C3", "value": 1234.5, "format": "currency"},
+  {"op": "putf",  "sheet": "Data", "ref": "D3:D10", "value": "=C3/C$3-1", "from": "D3", "format": "percent"},
+  {"op": "colwidth", "sheet": "Data", "col": "A", "width": 25},
+  {"op": "autofit",  "sheet": "Data", "columns": "B:E"},
+  {"op": "freeze",   "sheet": "Data", "ref": "A3"},
+  {"op": "add-sheet", "name": "Summary", "after": "Data"},
+  {"op": "putf", "sheet": "Summary", "ref": "B2", "value": "=SUM(Data!C3:C10)", "format": "currency"}
+]
+EOF
 ```
 
-**Anchor modes** ($ controls shifting):
+Batch essentials (the complete, generated field list is one command away: `xl batch --schema`):
+
+- **Native JSON types**: numbers, booleans and `null` are stored as such. Strings are
+  smart-detected — `"$1,234.56"` → currency, `"59.4%"` → 0.594 with a percent format,
+  `"2025-11-10"` → a date; `"detect": false` keeps a string as text.
+- **`format`** on `put`/`putf` is explicit: a name (`general`, `integer`, `decimal`, `currency`,
+  `percent`, `date`, `datetime`, `time`, `text`) or any Excel format code (`"0.0x"`,
+  `"$#,##0;($#,##0)"`), and it **replaces** the cell's number format. A detected format only
+  applies to a General cell. A string that is neither a name nor code-shaped is ignored with a
+  `FORMAT_HINT_IGNORED` warning that names it and lists the known names (the cell stays General).
+- **`values`** writes a row-major array over a range; `putf` with a single `value` over a range
+  drags it from `from` (Excel `$` anchoring); `putf` `values` writes each formula as-is.
+- **`sheet`** on any op (except `add-sheet`/`rename-sheet`) names the sheet for its unqualified
+  refs, so a batch can touch several sheets and never needs shell quoting for sheet names with
+  spaces. A qualified ref (`"Summary!B2"`) wins over it.
+- **Property names** are accepted in camelCase or kebab-case; `format`/`numFormat`,
+  `from`/`anchor`, `target`/`url`, `align`/`halign` and `value`/`formula` (on `putf`) are aliases.
+  An unknown property is an `UNKNOWN_PROPERTY` warning, not an error.
+- **Validate first**: `xl batch --dry-run ops.json` (no workbook needed). The dry run's parse
+  warnings are `Warning[CODE]:` lines on stderr, or the envelope's `warnings[]` under `--json`
+  (with `location.opIndex`); `data.ops[].index` is 1-based — the index a `BATCH_OP_FAILED`
+  names at apply time.
+
+### Formula dragging and anchors
+
+```bash
+xl -f f.xlsx -s S1 -o o.xlsx putf B2:B10 "=A2*1.1"          # B2: =A2*1.1, B3: =A3*1.1, …
+xl -f f.xlsx -s S1 -o o.xlsx putf C2:C10 "=SUM(\$A\$1:A2)"   # running total: C3: =SUM($A$1:A3), …
+```
 
 | Syntax | Behavior |
 |--------|----------|
@@ -242,589 +226,108 @@ xl -f f.xlsx -s S1 -o o.xlsx putf B2:B10 "=A2*1.1"
 | `A$1`  | Column relative, row absolute |
 | `A1`   | Fully relative (shifts both ways) |
 
-**Running totals**:
-```bash
-xl -f f.xlsx -s S1 -o o.xlsx putf C2:C10 "=SUM(\$A\$1:A2)"
-# Result: C2: =SUM($A$1:A2), C3: =SUM($A$1:A3), ...
-```
+`put` writes text and values (`put A1 "Total Revenue"`); `putf` always parses a formula. Batch
+`put`: `put A1:D1 "Q1" "Q2" "Q3" "Q4"` (row-major), `put A1:A10 "TBD"` (fill), `--csv` to split
+one comma-separated value across the range, `--no-detect` to keep dates/numbers as text,
+`--value "-100"` (or `put A1 -- -5`) for a negative number.
 
-See `xl putf --help` for full documentation.
+### Cross-sheet references and shell quoting
 
-**put vs putf**: `putf` always interprets input as a formula. Using `putf` for text like "Total Revenue" will cause a parse error. Use `put` for text labels, `putf` for formulas.
+Cross-sheet references use `!`: `=Data!B5`, `=SUM('Q1 Sales'!A1:A100)`. In bash, single-quote
+the formula so `!` is not history-expanded (`putf A1 '=Sheet2!B1'`); when the sheet name itself
+needs single quotes, double-quote the argument (`putf B4 "='Income Statement'!G8"`) or move the
+edit into a batch heredoc (`<<'EOF'`), where nothing needs escaping.
 
-### Cross-Sheet References in Formulas
+### Output formats and images
 
-**CRITICAL**: Cross-sheet references use Excel's `!` operator (NOT `.` or other separators):
-
-```bash
-# Single cell from another sheet
-xl -f f.xlsx -s Summary -o o.xlsx putf A1 "=Data!B5"
-
-# Range from another sheet
-xl -f f.xlsx -s Summary -o o.xlsx putf A1 "=SUM(Data!A1:A100)"
-
-# SUMIFS with cross-sheet references (common pattern)
-xl -f f.xlsx -s Summary -o o.xlsx putf H2 "=SUMIFS(Data!D:D,Data!A:A,A2,Data!C:C,E2)"
-
-# Sheet names with spaces require single quotes AROUND the sheet name
-xl -f f.xlsx -s Summary -o o.xlsx putf A1 "=SUM('Q1 Sales'!A1:A100)"
-```
-
-**Shell escaping**: The `!` character has special meaning in bash. Use single quotes around the formula:
-```bash
-# ✓ Correct - single quotes protect !
-xl -f f.xlsx -s S1 putf A1 '=Sheet2!B1'
-
-# ✗ Wrong - double quotes allow ! expansion in bash
-xl -f f.xlsx -s S1 putf A1 "=Sheet2!B1"  # May fail with "event not found"
-```
-
-### Shell Quoting for Sheet Names with Spaces
-
-The parser fully supports `='Sheet Name'!A1` syntax. Use double quotes around the CLI argument so the shell passes the string intact:
+`view --format json` gives typed cells (`{ref, type, value, formatted}`; formula cells add
+`formula`); `csv` with `--show-labels` keeps row numbers visible; `--format html` renders inline
+CSS (fonts, fills, number formats) with no rasterizer; `svg` is pure vector, no backend either;
+`png`/`jpeg`/`webp`/`pdf` need `--raster-output <path>` and a rasterizer — `xl rasterizers` lists
+what is available (the native binary needs one external tool: `pip install cairosvg` or
+`apt install librsvg2-bin`). Add `--eval` when formula cells should show computed values.
 
 ```bash
-xl -f f.xlsx -s Summary -o o.xlsx putf B4 "='Income Statement'!G8"
-xl -f f.xlsx -s Summary -o o.xlsx putf A1 "=SUM('Q1 Sales'!A1:A100)"
+xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.png --show-labels --eval
 ```
 
-For complex cases, batch JSON avoids shell quoting entirely:
+### Large files (100k+ rows)
+
+`--stream` runs in O(1) memory for the reads `search`, `stats`, `bounds`, `view`
+(markdown/csv/json), `cell`, `describe` (the metadata card) and `sheets` (the listing), and for
+the writes `put`, `putf`, `style` and `batch` — the last for streamable ops only (`xl batch
+--schema` marks each op `x-streamable`; `batch --help` marks the others `[not with --stream]`).
+Every other write verb accepts the flag but loads the workbook in memory and only writes through
+the streaming writer, so it saves no memory. Refused up front with `UNSUPPORTED_IN_STREAM`
+(exit 2): `audit`, `deps`, `describe --full`, `filter`, `view --eval`, `put --csv`, `--strict` on a
+streamed write, and a batch op the streaming writer cannot apply or whose `sheet`/qualified ref
+names a sheet other than the streamed one (refused by index before any byte is written; a
+streamed `style` merges as in memory, and an op that fails to apply is `BATCH_OP_FAILED` with its
+index). `view --format html|svg|png|jpeg|webp|pdf` needs the styles and is not
+available under `--stream`; `names`, `diff`, `lint`, `eval`, `evala` and `new` do not take the
+flag at all (usage error). Streaming never recalculates. For everything else, load in memory
+with `--max-size 0` (unlimited) or `--max-size 500`.
+
 ```bash
-echo '[{"op":"putf","ref":"B4","value":"='"'"'Income Statement'"'"'!G8"}]' | xl -f f.xlsx -s Summary -o o.xlsx batch -
+xl -f huge.xlsx --stream search "pattern" --limit 10
+xl -f huge.xlsx -o out.xlsx --stream putf A2 "=B2*1.1"
+xl -f huge.xlsx --max-size 0 sheets
 ```
 
-Alternatively, rename sheets to avoid spaces when CLI manipulation is planned.
+### Cache posture and strict pipelines
 
-### Batch Put & Fill
-
-`put` supports three modes based on argument count:
-
-```bash
-# Single cell
-xl ... put A1 100
-
-# Fill pattern (same value everywhere)
-xl ... put A1:A10 "TBD"
-
-# Batch values (row-major order)
-xl ... put A1:D1 "Q1" "Q2" "Q3" "Q4"
-
-# CSV split (opt-in: requires --csv flag)
-xl ... put A1:D1 "Q1,Q2,Q3,Q4" --csv
-
-# Preserve date-like or numeric input as text
-xl ... put A1 2025-01-15 --no-detect
-```
-
-**`--csv`**: Opt-in flag that splits a single comma-separated value across the target range. Required because comma-containing values are common in real data (`"Smith, John"`); without `--csv`, the value is written as literal text. The split count must match the range size exactly, otherwise the command errors. Smart type detection applies to each split value.
-
-**`--no-detect`**: Opt out of positional `put` type detection and preserve every supplied value as text.
-
-**Negative numbers**: Use `--value` flag (bare `-` is interpreted as flag):
-```bash
-xl ... put A1 --value "-100"
-```
-
-See `xl put --help` for full documentation.
-
-### Batch JSON Operations
-
-Apply multiple operations atomically:
-
-```json
-[
-  {"op": "put", "ref": "A1", "value": "Revenue Report"},
-  {"op": "style", "range": "A1:D1", "bold": true, "bg": "#4472C4", "fg": "#FFFFFF"},
-  {"op": "merge", "range": "A1:D1"},
-  {"op": "colwidth", "col": "A", "width": 25},
-  {"op": "putf", "ref": "C2", "value": "=B2*1.1"}
-]
-```
-
-**Operations**: put, putf, style, merge, unmerge, colwidth, rowheight, and more — all 32 listed under "All batch operations" below
-
-**Native JSON types** (recommended for numeric data):
-```json
-{"op": "put", "ref": "A1", "value": 99.0}                    // Number
-{"op": "put", "ref": "A2", "value": true}                    // Boolean
-{"op": "put", "ref": "A3", "value": 99.0, "format": "currency"}  // $99.00
-{"op": "put", "ref": "A4", "value": 0.594, "format": "percent"}  // 59%
-{"op": "put", "ref": "A5", "value": 3.5, "format": "0.0x"}   // Custom: 3.5x
-```
-
-**Smart detection** (auto-formats string values):
-```json
-{"op": "put", "ref": "A1", "value": "$1,234.56"}    // → Currency
-{"op": "put", "ref": "A2", "value": "59.4%"}        // → Percent (stored as 0.594)
-{"op": "put", "ref": "A3", "value": "2025-11-10"}   // → Date
-```
-
-**Format names**: `general`, `integer`, `decimal`, `currency`, `percent`, `date`, `datetime`, `time`, `text`, or any custom Excel format code (e.g., `"0.0x"`, `"$#,##0;($#,##0)"`, `"#,##0.0_);(#,##0.0)"` for accounting).
-
-**Disable detection**: Set `"detect": false` to treat strings as plain text:
-```json
-{"op": "put", "ref": "A1", "value": "$99.00", "detect": false}  // → Text, not Currency
-```
-
-**Batch values** (put/putf with range):
-```json
-// Put multiple values in row-major order (supports smart detection)
-{"op": "put", "ref": "A1:E1", "values": ["Date", "Company", "Revenue", "Growth", "Status"]}
-{"op": "put", "ref": "B2:B4", "values": [1234.56, 5678.90, 9012.34]}
-{"op": "put", "ref": "C2:C4", "values": ["$1,234", "$5,678", "$9,012"]}
-
-// Single formula (use "value" or "formula" — both accepted)
-{"op": "putf", "ref": "D14", "value": "=SUM(D5:D12)"}
-{"op": "putf", "ref": "D14", "formula": "=SUM(D5:D12)"}
-
-// Number format on a formula cell in one op (0.13.0 — no second style pass; works with values[]/from too)
-{"op": "putf", "ref": "C1", "value": "=A1*2", "format": "#,##0.0"}
-
-// Drag formula across range (Excel-style $ anchoring)
-{"op": "putf", "ref": "B2:B10", "value": "=SUM($A$1:A2)", "from": "B2"}
-
-// Explicit formulas for each cell (no dragging)
-{"op": "putf", "ref": "B2:B4", "values": ["=A2*2", "=A3*2", "=A4*2"]}
-```
-
-**Style properties** (batch JSON property names):
-
-| CLI Flag | JSON Property | Type |
-|----------|--------------|------|
-| `--bold` | `bold` | boolean |
-| `--italic` | `italic` | boolean |
-| `--underline` | `underline` | boolean |
-| `--bg` | `bg` | string (color name or #hex) |
-| `--fg` | `fg` | string (color name or #hex) |
-| `--font-size` | `fontSize` | number |
-| `--font-name` | `fontName` | string |
-| `--format` | `numFormat` | string (format name or code) |
-| `--align` | `align` | string (left/center/right) |
-| `--valign` | `valign` | string (top/center/bottom) |
-| `--wrap` | `wrap` | boolean |
-| `--border` | `border` | string (thin/medium/thick) |
-| `--border-color` | `borderColor` | string (color) |
-| `--replace` | `replace` | boolean (default: merge) |
-
-Use `align` (not `halign`) for horizontal alignment. The JSON property for number format is `numFormat` (camelCase), not `format`. Unknown properties emit warnings.
-
-See `xl batch --help` for full reference.
-
-### Output Format Summary
-
-| Format | Flag | Notes |
-|--------|------|-------|
-| markdown | Default | Text table |
-| json | `--format json` | Structured data |
-| csv | `--format csv` | Add `--show-labels` for headers |
-| html | `--format html` | Inline CSS |
-| svg | `--format svg` | Vector graphics |
-| png/jpeg/pdf | `--format <fmt> --raster-output <path>` | Requires rasterizer |
-| webp | `--format webp --raster-output <path>` | ImageMagick only |
-
-**Note**: `--format html` does not apply cell styles or number formats. Use `--format png` (via rasterizer) for styled output.
-
-**Rasterizer discovery**: `xl rasterizers` shows available backends.
-
-**Installing a rasterizer** (needed for PNG/JPEG/PDF/WebP export):
-```bash
-# macOS
-brew install librsvg
-
-# Linux (Debian/Ubuntu)
-apt install librsvg2-bin
-
-# Python alternative
-pip install cairosvg
-```
-
-See `xl view --help` for all options.
+Writes recalculate the edit's dependency cone and report formula errors advisorily (exit 0).
+`--strict` turns those reports into exit 1 (`RECALC_GATE`): with `-o` the file is still written,
+with `-i` the input is left untouched. `--no-recalc` (`--preserve-caches`) applies the edit and
+recalculates nothing — for books whose numbers come from another engine; structural edits then
+leave the formulas they invalidated uncached rather than re-stamp stale numbers. `recalc`
+refreshes every cached value (`--tables` also seeds data-table interiors).
 
 ---
 
-## Workflows
+## Gotchas
 
-### Explore Unknown Spreadsheet
-
-```bash
-xl -f data.xlsx sheets                     # List sheets with cell counts
-xl -f data.xlsx names                      # List defined names
-xl -f data.xlsx -s "Sheet1" bounds         # Get used range
-xl -f data.xlsx -s "Sheet1" view A1:E20    # Preview data
-xl -f data.xlsx -s "Sheet1" stats B2:B100  # Quick statistics
-```
-
-### Formula Analysis & What-If
-
-```bash
-xl -f data.xlsx -s Sheet1 view --formulas A1:D10     # Show formulas
-xl -f data.xlsx -s Sheet1 cell C5                    # Dependencies
-xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10)" --with "A1=500"  # What-if
-xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A5)" --with "A1=0,A5=0"  # Multiple overrides (comma-separated)
-```
-
-See [reference/FORMULAS.md](reference/FORMULAS.md) for 108 supported functions.
-
-### Create Formatted Report
-
-```bash
-# Set data and styling
-xl -f template.xlsx -s Sheet1 -o report.xlsx put A1 "Sales Report"
-xl -f report.xlsx -s Sheet1 -o report.xlsx style A1:E1 --bold --bg navy --fg white
-xl -f report.xlsx -s Sheet1 -o report.xlsx style B2:B100 --format currency
-xl -f report.xlsx -s Sheet1 -o report.xlsx style C2:C100 --format "#,##0.00"   # Custom decimal
-xl -f report.xlsx -s Sheet1 -o report.xlsx style D2:D100 --format "0.0%"       # Custom percent
-xl -f report.xlsx -s Sheet1 -o report.xlsx style E2:E100 --format "yyyy-mm-dd" # Custom date
-xl -f report.xlsx -s Sheet1 -o report.xlsx style F2:F100 --format "0.0x"       # Multiples
-xl -f report.xlsx -s Sheet1 -o report.xlsx col A --width 25
-```
-
-Or use batch for atomicity (preferred for multi-step operations):
-```bash
-echo '[
-  {"op": "put", "ref": "A1", "value": "Sales Report"},
-  {"op": "style", "range": "A1:E1", "bold": true, "bg": "navy", "fg": "white"},
-  {"op": "style", "range": "B2:B100", "numFormat": "currency"},
-  {"op": "colwidth", "col": "A", "width": 25},
-  {"op": "comment", "ref": "A1", "text": "Generated report", "author": "Agent"},
-  {"op": "autofit", "columns": "A:E"},
-  {"op": "row-hide", "row": 2},
-  {"op": "add-sheet", "name": "Summary", "after": "Sheet1"}
-]' | xl -f template.xlsx -s Sheet1 -o report.xlsx batch -
-```
-
-**Dry-run validation** (validate JSON and show summary without writing):
-```bash
-# Standalone (no --file or --output needed)
-echo '[{"op":"putf","ref":"A1","formula":"=SUM(B1:B10)"},{"op":"style","range":"A1","bold":true}]' | xl batch --dry-run -
-
-# Also works on existing batch invocations — skips read/write, just validates
-echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
-```
-
-**All batch operations** (32): `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`, `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `cf` (last five: 0.13.0), `chart` (0.15.0), `autofilter`, `group-rows`, `group-cols`, `ungroup-rows`, `ungroup-cols` (last five: 0.18.0)
-
-**Freeze/unfreeze/copy/hyperlink in batch:**
-```json
-{"op": "freeze", "ref": "B2"}
-{"op": "unfreeze"}
-{"op": "copy", "source": "A1:D10", "target": "F1"}
-{"op": "copy", "source": "A1:D10", "target": "F1", "valuesOnly": true}
-{"op": "hyperlink", "ref": "A1", "target": "https://example.com"}
-{"op": "hyperlink", "ref": "A1"}
-```
-
-`hyperlink` sets a cell's hyperlink target; omit `target` to clear an existing hyperlink.
-
-**Appearance, print setup & conditional formatting in batch (0.13.0):**
-```json
-{"op": "sheet-view", "gridlines": false, "zoom": 85, "tabSelected": true}
-{"op": "tab-color", "color": "#1F4E79"}
-{"op": "tab-color", "clear": true}
-{"op": "page-setup", "orientation": "landscape", "scale": 90, "fitToWidth": 1, "fitToHeight": 1, "fitToPage": true}
-{"op": "header-footer", "oddFooter": "&LConfidential&RPage &P of &N", "differentFirst": true, "firstHeader": "&CDRAFT"}
-{"op": "cf", "range": "A1:A10", "rule": "cellIs:greaterThan:100", "bold": true, "bg": "#FFC7CE", "fg": "#9C0006"}
-```
-
-Tab colors accept named/`#hex`/`rgb(r,g,b)`/`theme:accent1[:tint]`. The `cf` rule DSL and flags match `xl cf add` (see below); priorities auto-assign in order. Header/footer strings use Excel codes (`&L`/`&C`/`&R` sections; `&P` page, `&N` total, `&D` date, `&F` file, `&A` sheet). The full deliverable finish is one batch file with zero XML patching.
-
-### CSV to Styled Table
-
-```bash
-# Import CSV to new sheet
-xl -f workbook.xlsx -o out.xlsx import data.csv --new-sheet "Imported"
-
-# Style the header row
-xl -f out.xlsx -s Imported -o out.xlsx style A1:Z1 --bold --bg navy --fg white
-
-# Auto-fit columns
-xl -f out.xlsx -s Imported -o out.xlsx autofit
-```
-
-Import options: `xl import --help`
-
-### Multi-Sheet Workbook Setup
-
-```bash
-# Create with multiple sheets
-xl new output.xlsx --sheet Data --sheet Summary --sheet Notes
-
-# Or add sheets to existing
-xl -f output.xlsx -o output.xlsx add-sheet "Archive" --after "Notes"
-xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
-
-# Move sheet to front (may affect cross-sheet formula references; verify formulas after reordering)
-xl -f output.xlsx -o output.xlsx move-sheet "Summary" --to 0
-
-# Hide internal sheets from users
-xl -f output.xlsx -o output.xlsx sheets hide "Notes"
-xl -f output.xlsx -o output.xlsx sheets hide "Config" --very  # VBA-only
-```
-
-### Visual Analysis (for Claude Vision)
-
-```bash
-xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.png --show-labels
-```
-
-### Large File Operations (100k+ rows)
-
-For files with 100k+ rows, use streaming mode for O(1) memory:
-
-**Streaming Read:**
-```bash
-xl -f huge.xlsx --stream search "pattern" --limit 10    # ~10s for 1M rows
-xl -f huge.xlsx --stream stats A1:E100000               # Aggregate without loading
-xl -f huge.xlsx --stream bounds                          # Get used range
-xl -f huge.xlsx --stream view A1:D100 --format csv      # Export range
-```
-
-**Streaming Write:**
-```bash
-xl -f huge.xlsx -o out.xlsx --stream put A1 "Header"           # Put values
-xl -f huge.xlsx -o out.xlsx --stream putf A2 "=B2*1.1"         # Put formulas
-xl -f huge.xlsx -o out.xlsx --stream style A1:Z1 --bold --bg navy  # Apply styles
-```
-
-**Performance:** Styling row 1 of 100k rows: ~0.3s (early-abort optimization)
-
-**In-memory mode** (when streaming not supported):
-```bash
-xl -f huge.xlsx --max-size 0 sheets       # Disable 100MB limit
-xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
-```
-
-**Note**: Streaming CSV shows formula expressions without the `=` prefix (streaming mode reads raw cell content).
-
-**Streaming supports**: search, stats, bounds, view (markdown/csv/json), put, putf, style
-
-**Requires in-memory**: cell (dependencies), eval (formulas), HTML/SVG/PDF (styles), formula dragging, `put --csv` (CSV auto-split)
+- **`view` and `search` clip at `--limit` (default 50).** The clip is visible — markdown appends
+  a `… showing N of M rows` trailer, json carries `truncated`/`totalRows` in the payload, and
+  csv/html/svg emit a `TRUNCATED` warning — but a 50-row result is not the whole range: pass
+  `--limit 0` for everything.
+- **Use `--show-labels` whenever row numbers matter** in CSV output: hidden rows shift positional
+  counting. `view` renders hidden rows and marks them (`--skip-hidden` to omit).
+- **`putf` for formulas only.** `putf A1 "Total Revenue"` is a parse error; use `put`.
+- **`format` replaces, detection defers.** An explicit `format` on `put`/`putf` overwrites the
+  cell's number format; a detected one (`"$1,234"`) leaves an existing non-General format alone.
+- **Batch keys are forgiving, unknown keys are warnings.** camelCase and kebab-case both work and
+  the aliases above are silent; a typo (`"bolds": true`) is an `UNKNOWN_PROPERTY` warning on
+  stderr (or `warnings[]`) and the op still applies — read the warnings.
+- **`rename-sheet` rewrites references** in formulas, defined names, conditional-formatting rules
+  and charts, on every sheet; inside a batch a rename of the default sheet retargets the ops that
+  follow. `move-sheet` changes tab order only.
+- **Negative numbers** look like flags: `put A1 --value "-100"` or `put A1 -- -5`. After `--`
+  every token is data, so `search -- --json` searches for the text `--json`.
+- **`--strict` after `view`** is view's `--eval` gate (exit 1 on evaluation failure, nothing
+  rendered); everywhere else it is the write gate.
+- **PNG/PDF on the native binary needs an external rasterizer** — `xl rasterizers` tells you.
+- **A file that will not read** fails with `IO_READ` (exit 3) and a message naming the construct.
+  Rebuild it with openpyxl, then xl works on the rebuilt file — and report the message upstream.
+- **Formula caches**: `xl lint` catches structure Excel would repair; `xl audit` catches numbers
+  that are wrong or uncached; `xl recalc` fills caches for readers that never recalculate
+  (pandas, `openpyxl data_only=True`, previewers).
 
 ---
 
-## Field Gotchas (verified in production)
+## Reference
 
-Hard-won rules from fleet use on real deal workbooks. Items marked **fixed in 0.12.6** / **fixed in 0.13.0** still apply when the installed binary is older — check `xl --version`.
+Generated from the binary and CI-gated (a stale page fails the build), so these never drift:
 
-**Reading**
-- **`view` and `search` clip at `--limit` (default 50)** ([#351](https://github.com/TJC-LP/xl/issues/351)). Since 0.12.6 the clip is visible (`… showing N of M rows` trailer; stderr notice for csv; `truncated`/`totalRows` in json; `--limit 0` = unlimited). **On ≤0.12.5 the clip is SILENT** — a `view A1:A259` returning ~50 rows is NOT the whole range; pass `--limit <n>` explicitly and verify the last expected row is present.
-- **Use `--show-labels` whenever row numbers matter** in CSV output — hidden rows shift positional counting silently.
-- **JSON formula cells carry a dedicated `formula` field, fixed in 0.13.0** ([#357](https://github.com/TJC-LP/xl/issues/357)): `view --format json` now always emits `{"ref", "type":"formula", "formula", "value", "formatted"}` — `value`/`formatted` hold the computed/cached value, `formula` the expression. **Behavioral change**: on ≤0.12.x, `--formulas --format json` put the formula *text* in `value` and emitted no `formula` key — consumers keying on `value` under `--formulas` were reading the misfeature this fixes; update them to read `formula`. CSV/markdown are unchanged (on ≤0.12.x, scan formulas via `--format csv --formulas --show-labels`).
-- **Percent postfix works, fixed in 0.13.0** (`=A1*10%`, `=10%`, `=(1+5%)^2`; [#355](https://github.com/TJC-LP/xl/issues/355)): parses, evaluates (`10%` → exact `0.1`), and round-trips byte-identically. On ≤0.12.x the parser rejects `%` — write `/100` there. External-workbook refs are **fixed in 0.12.6** (evaluate from Excel-written caches; uncached external cells report a clear per-cell error); on ≤0.12.5 any formula whose precedents include one dies with `UnexpectedChar([` — use plain `view` there.
+- [Verbs](https://github.com/TJC-LP/xl/blob/main/docs/reference/generated/cli-verbs.md) — every verb, what it needs, how it exits, its batch twin (`xl schema`)
+- [Batch operations](https://github.com/TJC-LP/xl/blob/main/docs/reference/generated/batch-ops.md) — every op, field, alias and example (`xl batch --schema`)
+- [Functions](https://github.com/TJC-LP/xl/blob/main/docs/reference/generated/functions.md) — every formula function with arity and argument slots (`xl functions --json`)
+- [Exit codes](https://github.com/TJC-LP/xl/blob/main/docs/reference/generated/exit-codes.md) and [error/warning codes](https://github.com/TJC-LP/xl/blob/main/docs/reference/generated/error-codes.md) (`xl schema --json`)
 
-**Writing**
-- **`batch` recalculates at the end since 0.12.6** ([#352](https://github.com/TJC-LP/xl/issues/352)): `putf` cells carry cached values and formula errors appear in the batch summary; `xl recalc` (also 0.12.6+) refreshes any workbook. **On ≤0.12.5 batch writes formulas with NO cached values** — `data_only` readers, pandas, and previewers show blanks for every `putf` cell; prefer single `putf` commands there, verify with `--eval`, or recalculate via the scripting API before shipping.
-- **Batch `putf` takes a `format` field, fixed in 0.13.0** ([#356](https://github.com/TJC-LP/xl/issues/356)): `{"op":"putf","ref":"C1","value":"=A1*2","format":"#,##0.0"}` applies the numFmt with the formula (single, `values[]`, and `from`-dragging variants; in-memory and streaming paths) — no second `style` pass. On ≤0.12.x the field is ignored — follow with a `style` op / `xl style RANGE --format '…'` there.
-- **Batch JSON style keys are camelCase**: `numFormat`, `borderTop`, `borderBottom`, `borderLeft`, `borderRight`, `borderColor`. Kebab-case (`border-top`) is treated as an unknown property — the warning goes to stderr only, so it is easy to miss.
-- **Build cross-sheet models in dependency order** (put referenced cells before the formulas that use them) — on ≤0.12.5 batches evaluate nothing and single-command recalcs are dependents-only; on 0.12.6+ the batch-end recalculation makes order matter less, but dependency order remains the safe habit.
-- **`-i` (in-place) round-trips preserve hand-patched XML**: sheetPr/tabColor, pageSetup, headerFooter, sheetView gridlines/zoom, sheet-local `_xlnm.Print_Area`, and hand-inserted cached `<v>` values all survive later xl writes.
-- **Sheet appearance/print setup has a CLI, fixed in 0.13.0** ([#358](https://github.com/TJC-LP/xl/issues/358)): `sheet-view` (gridlines/zoom/tab-selected), `tab-color`, `page-setup` (orientation/scale/fit), and `header-footer` — each with a batch-op twin (see the tables below). The full deliverable finish (gridlines off, zoom 85, tab color, landscape + fit, confidential footer) is one batch file with zero XML patching. On ≤0.12.x it still requires zip round-trip XML patching.
+In this skill:
 
-**Rendering & environment**
-- **PNG/PDF on the native binary needs an external rasterizer** (Batik is JAR-only; [#359](https://github.com/TJC-LP/xl/issues/359)): install `cairosvg` (`pip install cairosvg`) or `rsvg-convert`, and check availability with `xl rasterizers`. Add `--eval` when rendering or formula cells show as text.
-- **Real-world workbooks that fail to read**: since 0.12.6, benign `<!DOCTYPE>` prologs are tolerated and parse errors name the construct with line/column ([#350](https://github.com/TJC-LP/xl/issues/350)); the native binary reports real Xerces messages instead of the opaque `Could not load any resource bundle …XMLMessages` ([#349](https://github.com/TJC-LP/xl/issues/349)). If a file still refuses to read (on any version): read with openpyxl, rebuild clean, then xl works on the rebuilt file — and report the 0.12.6+ error message upstream.
+- [reference/FORMULAS.md](reference/FORMULAS.md) — the function table plus hand-written semantics notes
+- [reference/COLORS.md](reference/COLORS.md) — color names
+- [reference/OUTPUT-FORMATS.md](reference/OUTPUT-FORMATS.md) — format specs
 
----
-
-## Command Reference
-
-### Global Options
-
-| Option | Alias | Description |
-|--------|-------|-------------|
-| `--file <path>` | `-f` | Input file (required) |
-| `--sheet <name>` | `-s` | Sheet name |
-| `--output <path>` | `-o` | Output file (for writes) |
-| `--in-place` | `-i` | Edit file in-place (mutually exclusive with `-o`) |
-| `--backend <type>` | | Write backend: scalaxml (default) or saxstax (36-39% faster). Reads always use StAX. |
-| `--max-size <MB>` | | Override 100MB security limit (0 = unlimited) |
-| `--stream` | | O(1) memory mode for reads + writes (search/stats/bounds/view/put/putf/style) |
-| `--no-recalc` | `--preserve-caches` | Apply the edit, recalculate nothing (see cache safety below) |
-| `--strict` | | Exit 1 when the write's recalculation reports errors/non-convergence/seed warnings |
-| `--dry-run` | | Validate batch JSON and show summary without writing (batch only) |
-
-**Global flags go BEFORE the verb.** `xl -f x.xlsx --strict recalc` works;
-`xl -f x.xlsx recalc --strict` fails with `Unexpected argument: recalc`.
-
-#### Cache safety on writes
-
-Writes refresh authored formulas and the edit's **dirty dependency cone**: changed cells, their
-transitive dependents across sheets, dynamic-reference cells, and readers whose dependencies cannot
-be resolved. Host failures withdraw stale caches and remain visible in the summary. Unaffected
-caches retain their original values.
-
-Use `--no-recalc` / `--preserve-caches` when an external calculator owns the numbers and xl should
-skip the post-edit recalculation:
-
-```bash
-xl -f external.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
-xl -f external.xlsx -s Data -o out.xlsx --preserve-caches insert-rows 20 1
-```
-
-Honored by `put`, `putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`,
-`delete-cols`. `recalc` rejects it (it is the whole-book recalculation verb).
-
-On non-structural verbs (`put`, `putf`, `fill`, `copy`, `batch`), explicitly written cells take their
-new content while caches elsewhere are preserved. A verb can still author a new formula cache. On the four **structural** verbs the edit moves cells, rewrites formulas
-and rewrites defined names, so xl invalidates every formula that transitively reads the edited sheet
-and writes those cells **uncached** rather than re-stamping a stale number — it never carries a
-pre-edit cache forward, because deciding that an unchanged formula still has its old answer requires
-the recalculation the flag refuses. Formulas the edit did not reach ride through byte-identical. The
-summary counts both halves:
-
-```
-Recalculation skipped (--no-recalc): 0 cached value(s) preserved, 11 formula(s) invalidated by the
-edit left uncached (recalculate externally)
-```
-
-Excel (or a later `xl recalc`) can refill supported formulas. Unresolved named readers and their
-consumers lose their caches on both default and `--no-recalc` structural writes; name resolution
-respects local shadowing. Unsupported name rewrites that could change meaning are refused before
-editing. If you need every supported formula cached after a structural edit, omit `--no-recalc`.
-
-#### Strict exit codes for pipelines
-
-```bash
-xl -f model.xlsx -o out.xlsx --strict recalc   # exit 1 if a formula could not be evaluated
-```
-
-`--strict` keeps the same printed summary and only changes the exit code. Excel error *values*
-(`#DIV/0!`, `#N/A`) never gate — they are data. With `-o` the file is still written on failure;
-with `-i` the input is left untouched and the summary says `NOT saved (--strict failure)`.
-`--strict` cannot be combined with `--stream`. It includes formulas authored by `put`, `putf`,
-`fill`, and `copy`, plus affected dependents. Workbook-level errors remain visible when structural
-or batch writes preserve caches outside their edit cone. Use it without `--no-recalc` to validate
-calculation outcomes. `recalc --tables` reports skipped dynamic cones and unseeded interiors;
-these warnings fail strict mode too.
-
-### Info Commands
-
-| Command | Description |
-|---------|-------------|
-| `functions` | List all 108 supported Excel functions |
-| `rasterizers` | List SVG-to-raster backends with status |
-
-### Workbook Commands
-
-| Command | Description |
-|---------|-------------|
-| `sheets` | List sheets with visibility state |
-| `sheets list` | Explicit list (`--stats` for cell counts) |
-| `sheets hide <name>` | Hide sheet (`--very` for VBA-only access) |
-| `sheets show <name>` | Unhide sheet |
-| `names` | List defined names (named ranges) |
-| `new <output>` | Create blank workbook (`--sheet` for names) |
-
-### Read Commands
-
-| Command | Options |
-|---------|---------|
-| `bounds` | Used range of sheet |
-| `view <range>` | `--format`, `--formulas`, `--eval`, `--raster-output`, etc. |
-| `cell <ref>` | `--no-style` |
-| `search <pattern>` | `--limit`, `--sheets` |
-| `stats <range>` | Calculate count, sum, min, max, mean |
-| `eval <formula>` | `--with` for overrides (comma-separated: `--with "A1=0,A5=0"`) |
-| `evala <formula>` | `--at` to spill result starting at ref |
-
-Run `xl view --help` for complete options.
-
-### Write Commands
-
-| Command | Key Options |
-|---------|-------------|
-| `put <ref> <values>` | `--value` for negatives, `--stream` for O(1) memory, `--csv` to split comma-separated value, `--no-detect` for literal text |
-| `putf <ref> <formulas>` | Supports dragging (no dragging with `--stream`) |
-| `style <range>` | `--bold`, `--bg`, `--fg`, `--format`, `--border`, `--stream` for O(1) memory |
-| `copy <source> <target>` | `--values-only` (no formula adjustment) |
-| `freeze <ref>` | Freeze panes (rows above + columns left of ref) |
-| `unfreeze` | Remove freeze panes |
-| `batch <json-file>` | 26 operations (see below) |
-| `import <csv> [ref]` | `--new-sheet`, `--delimiter`, `--no-type-inference` |
-
-Run `xl <command> --help` for complete options.
-
-### Sheet Management Commands
-
-| Command | Options |
-|---------|---------|
-| `sheets hide <name>` | `--very` (VBA-only access) |
-| `sheets show <name>` | |
-| `add-sheet <name>` | `--after`, `--before` |
-| `remove-sheet <name>` | |
-| `rename-sheet <old> <new>` | |
-| `move-sheet <name>` | `--to`, `--after`, `--before` (may affect cross-sheet refs) |
-| `copy-sheet <src> <dest>` | |
-
-### Cell Commands
-
-| Command | Options |
-|---------|---------|
-| `merge <range>` | |
-| `unmerge <range>` | |
-| `copy <source> <target>` | `--values-only` |
-| `freeze <ref>` | Rows above + columns left of ref are locked |
-| `unfreeze` | |
-| `comment <ref> <text>` | `--author` |
-| `remove-comment <ref>` | |
-| `clear <range>` | `--all`, `--styles`, `--comments` |
-| `fill <source> <target>` | `--right` |
-| `sort <range>` | `--by`, `--then-by`, `--desc`, `--numeric`, `--header` |
-
-Run `xl sort --help` for sorting details.
-
-### Appearance & Print Setup Commands (0.13.0, require `-o`)
-
-| Command | Options |
-|---------|---------|
-| `sheet-view` | `--gridlines on\|off`, `--zoom <10-400>`, `--tab-selected on\|off` |
-| `tab-color <color>` | named / `#hex` / `rgb(r,g,b)` / `theme:accent1[:tint]`; `--clear` removes a modeled color |
-| `page-setup` | `--orientation portrait\|landscape`, `--scale <10-400>`, `--fit-to-width <n>`, `--fit-to-height <n>`, `--fit-to-page on\|off` |
-| `header-footer` | `--odd-header/--odd-footer`, `--even-header/--even-footer`, `--first-header/--first-footer`, `--different-odd-even`, `--different-first` |
-| `autofilter [range]` | set the sheet-level `<autoFilter>` range (0.18.0); `--clear` strips it, even one preserved from the source file. Structural edits shift the range; existing filter criteria ride along on a pure range change. No zip/XML injection needed. |
-
-Each has a batch-op twin (`sheet-view`/`tab-color`/`page-setup`/`header-footer`/`autofilter`). Header/footer strings use Excel codes: `&L`/`&C`/`&R` sections; `&P` page, `&N` total, `&D` date, `&F` file, `&A` sheet.
-
-### Conditional Formatting Commands (0.13.0)
-
-| Command | Options |
-|---------|---------|
-| `cf add` | `--range <A1:A10>`, `--rule '<dsl>'`, `--bold`, `--italic`, `--underline`, `--strike`, `--bg <color>`, `--fg <color>` (requires `-o`) |
-| `cf list` | list rules on the sheet (read-only) |
-
-Rule DSL (`--rule`): `cellIs:<op>:<value>`, `between:<lo>:<hi>` (`notBetween:…`), `expression:<formula>`, `colorScale:<c1>:<c2>[:<c3>]`, `dataBar:<color>`, `top10:<n>[:percent]` (`bottom10:…`), `text:<op>:<s>`. A batch `cf` op mirrors `cf add`; priorities auto-assign in add order. Run `xl cf add --help` for the full DSL.
-
-### Row/Column Commands
-
-| Command | Options |
-|---------|---------|
-| `row <n>` | `--height`, `--hide`, `--show` |
-| `col <letter(s)>` | `--width`, `--auto-fit`, `--hide`, `--show` |
-| `autofit` | `--columns` (range like A:Z) |
-| `group-rows <10:20>` / `group-cols <E:H>` | collapsible outline grouping (0.18.0); `--level <1-7>` (default 1), `--collapsed` (hides members; the row/col after the group gets the +/- marker, Excel-style) |
-| `ungroup-rows <10:20>` / `ungroup-cols <E:H>` | clear outline level + collapse markers; members hidden by a collapse stay hidden (unhide via `row`/`col --show`) |
-
-Grouping batch twins: `{"op": "group-rows", "rows": "10:20", "level": 1, "collapsed": false}`, `{"op": "group-cols", "cols": "E:H", ...}`, `{"op": "ungroup-rows", "rows": "10:20"}`, `{"op": "ungroup-cols", "cols": "E:H"}`.
-
-### Structural Editing Commands
-
-| Command | Arguments |
-|---------|-----------|
-| `insert-rows <at-row> [count]` | Insert `count` rows (default 1) before 1-based row `at-row` |
-| `delete-rows <at-row> [count]` | Delete `count` rows (default 1) starting at row `at-row` |
-| `insert-cols <at-col> [count]` | Insert `count` columns (default 1) at column letter `at-col` |
-| `delete-cols <at-col> [count]` | Delete `count` columns (default 1) starting at `at-col` |
-
-Column commands also accept an inclusive range (`delete-cols C:E`), which derives the count and
-overrides the positional `count` argument. All four shift cells, merges, row/column properties,
-and freeze panes, then rewrite affected formulas across all sheets; formulas referencing deleted
-cells get `#REF!` and ranges shrink correctly.
-
----
-
-## Links
-
-- `xl <command> --help` for detailed usage and examples
-- [reference/FORMULAS.md](reference/FORMULAS.md) for 108 supported functions
-- [reference/COLORS.md](reference/COLORS.md) for color names
-- [reference/OUTPUT-FORMATS.md](reference/OUTPUT-FORMATS.md) for format specs
+Full prose reference: [docs/reference/cli.md](https://github.com/TJC-LP/xl/blob/main/docs/reference/cli.md).

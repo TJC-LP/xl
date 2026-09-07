@@ -1,0 +1,17 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+-o
+<DIR>/no/such/dir/out.xlsx
+put
+A1
+1
+## exit
+3
+## stdout
+## stderr
+Error: cannot write <DIR>/no/such/dir/out.xlsx: no such directory: <DIR>/no/such/dir
+  code: IO_WRITE
+  hint: check that the directory exists and is writable

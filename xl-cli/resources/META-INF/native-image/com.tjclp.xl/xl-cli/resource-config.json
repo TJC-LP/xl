@@ -1,6 +1,7 @@
 {
   "resources": {
     "includes": [
+      { "pattern": "schema/envelope\\.schema\\.json" },
       { "pattern": "org/apache/batik/.*\\.properties" },
       { "pattern": "META-INF/services/org\\.apache\\.batik\\.ext\\.awt\\.image\\.spi\\.RegistryEntry" },
       { "pattern": "META-INF/services/org\\.apache\\.batik\\.ext\\.awt\\.image\\.spi\\.ImageWriter" }

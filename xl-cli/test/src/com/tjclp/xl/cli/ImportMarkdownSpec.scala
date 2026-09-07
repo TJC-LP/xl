@@ -222,12 +222,14 @@ class ImportMarkdownSpec extends CatsEffectSuite:
     }
   }
 
-  test("import-md: import to existing sheet without --sheet fails with guidance") {
+  test("import-md: import to an existing sheet without --sheet on a multi-sheet book is refused") {
     withOutput { out =>
-      val wb = Workbook(Vector(Sheet("Data")))
+      // ADR-017 §2.5: a single-sheet book would auto-select; two sheets make the default required
+      val wb = Workbook(Vector(Sheet("Data"), Sheet("Other")))
       importMd(wb, None, basicTable, outputPath = out).attempt.map {
         case Left(err) =>
           assert(err.getMessage.contains("--sheet"), s"Got: ${err.getMessage}")
+          assert(err.getMessage.contains("Data, Other"), s"Got: ${err.getMessage}")
         case Right(_) => fail("Missing sheet should fail")
       }
     }

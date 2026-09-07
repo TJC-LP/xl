@@ -7,6 +7,7 @@ import cats.implicits.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.XLError
+import com.tjclp.xl.cli.contract.{CliError, CliException}
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -18,6 +19,25 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
  * parameter to use the SAX/StAX workbook writer.
  */
 object SheetCommands:
+
+  /**
+   * Whether the book already has a sheet called `name` the way Excel compares sheet names —
+   * case-insensitively. `add-sheet data` beside `Data` and `rename-sheet T s` beside `S` would each
+   * write two tabs Excel treats as one name (and a rewritten `=s!A1` would resolve against `S`).
+   */
+  private def hasSheetNamed(wb: Workbook, name: SheetName): Boolean =
+    wb.sheets.exists(_.name.value.equalsIgnoreCase(name.value))
+
+  /** `DUPLICATE_SHEET` (exit 3) with the verb's message; nothing has been written when it fires. */
+  private def duplicateSheet(name: String, message: String): CliException =
+    CliException(
+      CliError
+        .fromXLError(XLError.DuplicateSheet(name), None)
+        .copy(
+          message = message,
+          hint = Some("sheet names are case-insensitive in Excel; choose a name no other sheet has")
+        )
+    )
 
   /** Write workbook using the standard or SAX/StAX backend based on mode */
   private def writeWorkbook(
@@ -49,11 +69,12 @@ object SheetCommands:
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
       _ <- IO
         .raiseError(
-          new Exception(
+          duplicateSheet(
+            name,
             s"Sheet '$name' already exists. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
           )
         )
-        .whenA(wb.sheets.exists(_.name == sheetName))
+        .whenA(hasSheetNamed(wb, sheetName))
       newSheet = Sheet(sheetName)
       updatedWb <- (afterOpt, beforeOpt) match
         case (Some(after), _) =>
@@ -125,7 +146,11 @@ object SheetCommands:
     yield s"Removed sheet: $name\n${Format.saveSuffix(outputPath, stream)}"
 
   /**
-   * Rename a sheet.
+   * Rename a sheet AND every reference to it (GH-559): `SheetRenamer.rename` rewrites the sheet
+   * qualifier in cell formulas on every sheet, defined names, conditional-format and
+   * data-validation formulas, preserving cached values (a rename changes no value). The summary
+   * counts the cell formulas whose text changed. A dependent formula that mentions the sheet but
+   * cannot be parsed refuses the whole rename before anything is written.
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer
@@ -141,17 +166,36 @@ object SheetCommands:
     for
       oldSheetName <- IO.fromEither(SheetName(oldName).left.map(e => new Exception(e)))
       newSheetName <- IO.fromEither(SheetName(newName).left.map(e => new Exception(e)))
-      updatedWb <- IO.fromEither(wb.rename(oldSheetName, newSheetName).left.map {
+      updatedWb <- IO.fromEither(SheetRenamer.rename(wb, oldSheetName, newSheetName).left.map {
         case XLError.SheetNotFound(_) =>
           new Exception(
             s"Sheet '$oldName' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
           )
         case XLError.DuplicateSheet(_) =>
-          new Exception(s"Sheet '$newName' already exists")
+          duplicateSheet(newName, s"Sheet '$newName' already exists")
         case e => new Exception(e.message)
       })
+      rewritten = rewrittenFormulaCount(wb, updatedWb)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Renamed: $oldName → $newName\n${Format.saveSuffix(outputPath, stream)}"
+      suffix = if rewritten > 0 then s"; $rewritten formula(s) rewritten" else ""
+    yield s"Renamed: $oldName → $newName$suffix\n${Format.saveSuffix(outputPath, stream)}"
+
+  /**
+   * Cell formulas whose text a rename changed: sheets keep their positions under a rename, so the
+   * two workbooks are compared position by position.
+   */
+  private def rewrittenFormulaCount(before: Workbook, after: Workbook): Int =
+    before.sheets
+      .zip(after.sheets)
+      .map { (was, is) =>
+        is.cells.count { (ref, cell) =>
+          (cell.value, was.cells.get(ref).map(_.value)) match
+            case (CellValue.Formula(after, _, _), Some(CellValue.Formula(before, _, _))) =>
+              after != before
+            case _ => false
+        }
+      }
+      .sum
 
   /**
    * Move sheet to new position.
@@ -244,8 +288,8 @@ object SheetCommands:
         )
       )
       _ <- IO
-        .raiseError(new Exception(s"Sheet '$targetName' already exists"))
-        .whenA(wb.sheets.exists(_.name == targetSheetName))
+        .raiseError(duplicateSheet(targetName, s"Sheet '$targetName' already exists"))
+        .whenA(hasSheetNamed(wb, targetSheetName))
       copiedSheet = sourceSheet.copy(name = targetSheetName)
       updatedWb = wb.put(copiedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)

@@ -20,7 +20,8 @@ import com.tjclp.xl.sheets.dataTableSyntax.*
  * Tests for the lint command (GH-397).
  *
  * The structural checks themselves live in xl-ooxml (WorkbookLintSpec); this covers the CLI
- * surface: the exit-code convention (0 clean / 1 findings / 2 error) and the text/JSON renderers.
+ * surface: the exit-code convention (0 clean / 1 findings / 2 usage / 3 error) and the text/JSON
+ * renderers.
  */
 class LintCommandSpec extends CatsEffectSuite:
 
@@ -139,9 +140,9 @@ class LintCommandSpec extends CatsEffectSuite:
       assertEquals(parsed("findings").arr.map(_("category").str).toSet, Set("data-table-torn"))
   }
 
-  test("lint: unreadable file exits 2") {
+  test("lint: unreadable file exits 3 (a failure, not usage — ADR-017)") {
     for code <- Main.runLint(Paths.get("/nonexistent/no-such-file.xlsx"), LintFormat.Text)
-    yield assertEquals(code, ExitCode(2))
+    yield assertEquals(code, ExitCode(3))
   }
 
   test("lint: json format also drives the findings exit code") {
@@ -284,11 +285,16 @@ class LintCommandSpec extends CatsEffectSuite:
     )
   }
 
-  test("GH-486: cli.md's lint one-liner names the same category families") {
-    val body = Files.readString(repoRoot.resolve("docs/reference/cli.md"), StandardCharsets.UTF_8)
+  test("GH-486: the generated verb table's lint one-liner names the same category families") {
+    // The command table is generated from Schema.verbs (docs/reference/generated/cli-verbs.md,
+    // rendered by DocsGenSpec); the anti-drift gate follows it there.
+    val body = Files.readString(
+      repoRoot.resolve("docs/reference/generated/cli-verbs.md"),
+      StandardCharsets.UTF_8
+    )
     val summaryLine = body.linesIterator
       .find(l => l.startsWith("| `lint`"))
-      .getOrElse(fail("cli.md has no `lint` row in the command table"))
+      .getOrElse(fail("generated/cli-verbs.md has no `lint` row in the verb table"))
     // The summary is prose, not a slug list, but it must not claim a narrower scope than reality.
     assert(
       summaryLine.contains("data-table") && summaryLine.contains("content-type"),

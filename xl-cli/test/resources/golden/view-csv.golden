@@ -1,0 +1,17 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+view
+A1:C4
+--format
+csv
+## exit
+0
+## stdout
+Hello,10,1/15/24
+World,20,6/30/24
+Total,12.50,
+,42.5,
+## stderr

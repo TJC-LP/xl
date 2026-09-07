@@ -1,0 +1,25 @@
+## args
+frob
+--json
+## exit
+2
+## stdout
+{
+  "ok": false,
+  "exitCode": 2,
+  "verb": "",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "UNKNOWN_VERB",
+    "message": "unknown verb 'frob'",
+    "hint": "run `xl --help` for the list of verbs",
+    "candidates": [
+      "row"
+    ],
+    "location": null
+  }
+}
+## stderr
+Error: unknown verb 'frob'

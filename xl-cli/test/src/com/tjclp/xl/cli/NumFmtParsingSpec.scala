@@ -78,7 +78,7 @@ class NumFmtParsingSpec extends CatsEffectSuite:
     val json = """[{"op":"put","ref":"A1","value":1,"format":"curency"}]"""
     BatchParser.parseBatchOperations(json).map { result =>
       assert(
-        result.warnings.exists(_.contains("curency")),
+        result.warnings.exists(_.message.contains("curency")),
         s"expected a numFmt warning, got ${result.warnings}"
       )
     }
@@ -88,7 +88,7 @@ class NumFmtParsingSpec extends CatsEffectSuite:
     val json = """[{"op":"style","range":"A1","numFormat":"curency"}]"""
     BatchParser.parseBatchOperations(json).map { result =>
       assert(
-        result.warnings.exists(_.contains("curency")),
+        result.warnings.exists(_.message.contains("curency")),
         s"expected a numFmt warning, got ${result.warnings}"
       )
     }
@@ -97,7 +97,7 @@ class NumFmtParsingSpec extends CatsEffectSuite:
   test("GH-475: style op with a real code stays silent") {
     val json = """[{"op":"style","range":"A1","numFormat":"#,##0.0"}]"""
     BatchParser.parseBatchOperations(json).map { result =>
-      assertEquals(result.warnings.filter(_.contains("numFmt")), Vector.empty)
+      assertEquals(result.warnings.filter(_.message.contains("numFmt")), Vector.empty)
     }
   }
 

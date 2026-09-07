@@ -1,0 +1,33 @@
+## args
+--json
+batch
+--dry-run
+-
+## stdin
+[{"op":"put","ref":"A1","value":"$1,234.56"},{"op":"merge","range":"A1:B1"}]
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "batch",
+  "version": "<VERSION>",
+  "data": {
+    "ops": [
+      {
+        "index": 1,
+        "op": "PUT",
+        "summary": "PUT A1 = Number(1234.56) (Currency)"
+      },
+      {
+        "index": 2,
+        "op": "MERGE",
+        "summary": "MERGE A1:B1"
+      }
+    ]
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

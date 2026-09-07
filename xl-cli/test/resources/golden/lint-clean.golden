@@ -1,0 +1,8 @@
+## args
+lint
+<DIR>/simple.xlsx
+## exit
+0
+## stdout
+<DIR>/simple.xlsx: clean (no findings)
+## stderr
