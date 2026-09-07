@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -141,7 +141,7 @@ Two rules keep this from ever surprising you:
    inferred number formats and style handling do not change.
 
 ```scala
-// since 0.20.0 (fragment — the published 0.19.3 has Sheet.named only)
+// since 0.20.0 (fragment)
 val region: String = Seq("North", "East").mkString(" ")
 val cell: String = s"B${row + 1}"
 
@@ -182,7 +182,7 @@ cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 
 val region = Seq("North", "East").mkString(" ")                     // runtime name
@@ -278,7 +278,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -542,7 +542,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -596,7 +596,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

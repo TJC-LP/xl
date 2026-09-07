@@ -119,7 +119,20 @@ object Golden:
     val tmpPath = Pattern.compile(Pattern.quote(tmp) + "/[^\\s\"'`|]*")
     val withDir = text.replace(dir.toString, "<DIR>").replace(realDir, "<DIR>")
     val withTmp = tmpPath.matcher(withDir).replaceAll("<TMP>")
-    trimTrailing(withTmp.replace(BuildInfo.version, "<VERSION>"))
+    trimTrailing(scrubBuildVersion(withTmp))
+
+  /**
+   * Replace the build version only where the BUILD version appears: the envelope's `"version"` key
+   * (and the same key inside `schema --json`), the `xl <version> —` schema header, and the bare
+   * `--version` line. A `since` column that happens to equal the current release (every verb added
+   * in this release says `since 0.20.0` while 0.20.0 is the build) is contract text, not the build
+   * version, and stays literal — otherwise each release bump would rewrite those goldens.
+   */
+  def scrubBuildVersion(text: String): String =
+    val v = BuildInfo.version
+    val keyed = text.replace(s"\"version\": \"$v\"", "\"version\": \"<VERSION>\"")
+    val header = keyed.replace(s"xl $v —", "xl <VERSION> —")
+    Pattern.compile("(?m)^" + Pattern.quote(v) + "$").matcher(header).replaceAll("<VERSION>")
 
   def trimTrailing(text: String): String =
     dropTrailingBlank(text.split("\n", -1).toVector.map(_.replaceAll("\\s+$", ""))).mkString("\n")

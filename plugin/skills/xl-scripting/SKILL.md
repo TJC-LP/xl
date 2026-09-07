@@ -38,7 +38,7 @@ The canonical header for every script (this is the single source of truth — re
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -86,7 +86,7 @@ ref"A2".down(3).right(1)                           // total navigation → B5 (u
 ref"A2".tryDown(3)                                 // 0.20.0: bounded → Some(A5); None past the edge; clampShift pins
 ref"A1:D10".rows                                   // 0.20.0: lazy one-row slices; row(i)/column(i) are Option
 
-// Typed reads (since 0.20.0 a formula cell reads as its cached value — GH-477; not on the 0.19.3 dep pinned above)
+// Typed reads (since 0.20.0 a formula cell reads as its cached value — GH-477)
 sheet.readTyped[BigDecimal](ref"C1")               // Either[CodecError, Option[BigDecimal]]
 sheet.readTypedOr[Int](ref"B1", 0)                 // total, with default
 sheet.readTypedOpt[LocalDate](ref"D1")             // flat Option
@@ -109,7 +109,7 @@ wb.update("Sales", f).unsafe                       // throws structured XLExcept
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -251,7 +251,7 @@ val products = (2 to 10).toList.flatMap { row =>
 
 9 codec types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText. Use `readTyped` (full `Either[CodecError, Option[A]]`) when you must distinguish a type mismatch from an empty cell; `readTypedOr(ref, default)` when you just need a value.
 
-Formula cells read through their cached value (since 0.20.0 — not on the 0.19.3 dep pinned above; GH-477): after `recalculate()`, `writeRecalculated`, or `Excel.read` of a book Excel saved, `readTypedOpt[BigDecimal](ref"B1")` on `Formula("A1*3", Some(Number(6)), _)` is `Some(6)` — never unwrap `CellValue.Formula(_, Some(v), _)` by hand. A formula authored with `fx"…"` and not yet recalculated has no cache, so `readTyped` is `Left(TypeMismatch)`, `readTypedOpt` is `None`, and `readTypedOr` is the default: recalculate first. `readTypedStrict` (0.20.0) rejects every formula cell, cached or not, when the distinction itself is what you are checking. On ≤0.19.3 every formula cell is `Left(TypeMismatch)` / `None` / the default whatever its cache: match `CellValue.Formula(_, Some(v), _)` yourself there.
+Formula cells read through their cached value (since 0.20.0; GH-477): after `recalculate()`, `writeRecalculated`, or `Excel.read` of a book Excel saved, `readTypedOpt[BigDecimal](ref"B1")` on `Formula("A1*3", Some(Number(6)), _)` is `Some(6)` — never unwrap `CellValue.Formula(_, Some(v), _)` by hand. A formula authored with `fx"…"` and not yet recalculated has no cache, so `readTyped` is `Left(TypeMismatch)`, `readTypedOpt` is `None`, and `readTypedOr` is the default: recalculate first. `readTypedStrict` (0.20.0) rejects every formula cell, cached or not, when the distinction itself is what you are checking. On ≤0.19.3 every formula cell is `Left(TypeMismatch)` / `None` / the default whatever its cache: match `CellValue.Formula(_, Some(v), _)` yourself there.
 
 ### Styling
 
@@ -287,7 +287,7 @@ Excel.write(result.workbook, "model.xlsx")       // computed values cached for E
 
 **Circular models are opt-in** (0.13.0): professional schedules (interest on average debt) ship circular by design. `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` Jacobi-fixpoints declared cycles instead of erroring; plain `recalculate()` still isolates cycles as errors. Honor a file's own `<calcPr>` with `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr).fold(wb.recalculate())(wb.recalculate)`, and author it on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))`.
 
-**One options record** (since 0.20.0 — not on the 0.19.3 dep pinned above): every recalculation knob lives on `RecalcOptions`, and `RecalcOptions()` reproduces `recalculate()` exactly, so there is one thing to learn:
+**One options record** (since 0.20.0): every recalculation knob lives on `RecalcOptions`, and `RecalcOptions()` reproduces `recalculate()` exactly, so there is one thing to learn:
 
 ```scala
 // since 0.20.0 — fragment, not a runnable script
@@ -307,7 +307,7 @@ Native Excel `TABLE()` two-variable data tables (0.18.0) — the house sensitivi
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 
 val model = Sheet("Sensitivity")
@@ -356,7 +356,7 @@ Or lean on totality so there is nothing to unwrap: literal refs, `upsert`, range
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -378,7 +378,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 
 val data = List(("North", 125000.50), ("South", 98000.25), ("West", 143500.00))
@@ -406,7 +406,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.19.3
+//> using dep com.tjclp::xl:0.20.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

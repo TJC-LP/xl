@@ -1,12 +1,20 @@
 # XL Project Status
 
-**Last Updated**: 2026-08-14 (0.19.3)
+**Last Updated**: 2026-09-07 (0.20.0)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.20.0 "Contract"** (2026-09-07) — the agent-first CLI and scripting contract (ADR-017 wave 1) on top of the Excel-parity and calculation-integrity waves:
+- ✅ **One CLI contract** — a 0/1/2/3 exit table (ok / findings / usage / failed), errors and `Warning[CODE]:` notices on stderr, one seven-key `--json` envelope for every verb, one sheet rule (`Resolve`) on every path, globals anywhere on the command line, a registry behind all 32 batch ops, and `xl schema`/`batch --schema`/`functions --json` publishing the surface; 86 goldens pin what an agent sees
+- ✅ **`describe`, `audit`, `deps`** — orient, find what is broken (cached errors, uncached/unparseable formulas, cycles, unresolved names), trace a number; backed by `QualifiedGraph`/`WorkbookAudit`/`WorkbookSummary`, also in the prelude
+- ✅ **Excel-parity wave** (#556, #561, #562, #564, #565, #480) — post-2007 functions stored as `_xlfn.NAME` and LET/LAMBDA parameters as `_xlpm.`, dates render as serials in text positions, DATE normalizes overflow, AND/OR fold ranges, error-literal criteria match error cells, `^` is left-associative
+- ✅ **Calculation integrity** (#499, #563, #507, #504, #508, #569–#572) — uncached inputs evaluated before use, stale caches withdrawn after failures, scenario-table skips reported, authored formulas validated
+- ✅ **Library** — `Sheet.putAt`/`styleAt`/`mergeAt`/`commentAt`, `Workbook.named`, bounded `ARef` navigation, typed reads see cached formula values (#477), `RecalcOptions`, `rename-sheet` rewrites references (#559), property-only rows emitted once (#558), case-insensitive sheet-name uniqueness
+- ✅ **Toolchain** — Scala 3.9.0 LTS, Temurin 25 pinned in `.mill-jvm-version`, Claude Code remote sessions (#554); `calcChain.xml` dropped on dirty writes with a `calc-chain-stale` lint (#555)
 
 **New in 0.19.3 "Namesake"** (2026-08-14) — defined-name resolution indexed:
 - ✅ **Defined-name lookup is O(1)** (#535/GH-536) — name resolution was a linear scan of the name table and dynamic-name classification ran it per sheet × name (O(sheets × names²) per recalc); a production 96,384-name model went from >33 min (unfinished) to 8.2s, its `iterate="1"` original converges in 2/300 rounds in 8.4s, a 126,510-name sibling exhausting 400 rounds completes in 27s. Lazy per-metadata `DefinedNameIndex`, first-declared-wins, per-code-point case folding ≡ `equalsIgnoreCase`, property-tested against the scan it replaced. Follow-ups: #537 (iterative-path costs), #538 (mutation-API case sensitivity)
