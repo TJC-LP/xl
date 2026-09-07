@@ -30,7 +30,7 @@ view            -f -s --stream        0 1 2 3  -               0.1.0   View a ra
 cell            -f -s --stream        0 2 3    -               0.1.0   Get one cell's value, style, comment and direct dependencies
 search          -f --stream           0 2 3    -               0.1.0   Search cells by regex (all sheets unless -s)
 stats           -f -s --stream        0 2 3    -               0.2.0   Statistics for the numeric values in a range
-filter          -f -s                 0 2 3    -               0.11.3  Filter rows of the used range with a --where predicate (read-only)
+filter          -f -s --stream        0 2 3    -               0.11.3  Filter rows of the used range with a --where predicate (read-only)
 describe        -f --stream           0 2 3    -               0.20.0  Orient in a workbook: sheets, defined names, date system (--full adds per-sheet counts)
 audit           -f                    0 1 2 3  -               0.20.0  Find every reason a number can be wrong, in one pass (--fail-on-findings exits 1)
 deps            -f -s                 0 2 3    -               0.20.0  Trace one cell's precedents and dependents, hop by hop (--direction, --depth)

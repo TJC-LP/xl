@@ -1,17 +1,15 @@
 package com.tjclp.xl.cli.output
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column}
-import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
-import com.tjclp.xl.display.NumFmtFormatter
-import com.tjclp.xl.formula.SheetEvaluator
+import com.tjclp.xl.addressing.{CellRange, Column}
+import com.tjclp.xl.cli.read.{InMemorySource, RecordGrid}
 import com.tjclp.xl.ooxml.metadata.SheetInfo
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Markdown table rendering for xl CLI output.
  *
- * All output includes row numbers and column letters for LLM consumption.
+ * All output includes row numbers and column letters for LLM consumption. Range tables render from
+ * a [[RecordGrid]], the same rows whether they came from a loaded sheet or the streaming reader.
  */
 object Markdown:
 
@@ -41,38 +39,37 @@ object Markdown:
     evalFormulas: Boolean = false,
     skipHidden: Boolean = false
   ): String =
+    val grid =
+      if evalFormulas then InMemorySource.evaluatedGrid(sheet, range)
+      else InMemorySource.grid(sheet, range)
+    render(grid, showFormulas, skipEmpty, skipHidden)
+
+  /** Render a grid as a markdown table (see [[renderRange]] for the flags). */
+  def render(
+    grid: RecordGrid,
+    showFormulas: Boolean,
+    skipEmpty: Boolean,
+    skipHidden: Boolean
+  ): String =
     val sb = new StringBuilder
-    val startCol = range.start.col.index0
-    val endCol = range.end.col.index0
-    val startRow = range.start.row.index0
-    val endRow = range.end.row.index0
 
     // GH-474: hidden rows/columns render unless --skip-hidden asked for the visible-only view
-    val visibleCols = RendererCommon.renderedColumns(sheet, startCol, endCol, skipHidden)
-    val visibleRows = RendererCommon.renderedRows(sheet, startRow, endRow, skipHidden)
+    val visibleCols = grid.renderedCols(skipHidden)
+    val visibleRows = grid.renderedRows(skipHidden)
 
     // Filter empty columns/rows if skipEmpty is true
     val nonEmptyCols =
-      if skipEmpty then RendererCommon.nonEmptyColumns(sheet, visibleCols, visibleRows)
-      else visibleCols
-
+      if skipEmpty then grid.nonEmptyCols(visibleCols, visibleRows) else visibleCols
     val nonEmptyRows =
-      if skipEmpty then RendererCommon.nonEmptyRows(sheet, visibleRows, nonEmptyCols)
-      else visibleRows
+      if skipEmpty then grid.nonEmptyRows(visibleRows, nonEmptyCols) else visibleRows
+
+    def text(rowIdx: Int, colIdx: Int): String =
+      grid.at(rowIdx, colIdx).fold("")(_.text(showFormulas))
 
     // Calculate column widths for better formatting (only visible rows/cols)
     val colWidths = nonEmptyCols.map { col =>
       val header = Column.from0(col).toLetter
-      val maxContent = nonEmptyRows
-        .map { row =>
-          val ref = ARef.from0(col, row)
-          sheet.cells
-            .get(ref)
-            .map(c => formatCell(c, sheet, showFormulas, evalFormulas).length)
-            .getOrElse(0)
-        }
-        .maxOption
-        .getOrElse(0)
+      val maxContent = nonEmptyRows.map(row => text(row, col).length).maxOption.getOrElse(0)
       math.max(header.length, math.max(maxContent, 3)) // Minimum width 3
     }
 
@@ -97,13 +94,7 @@ object Markdown:
       val rowNum = (row + 1).toString
       sb.append(s"| ${rowNum.padTo(2, ' ')}|")
       colWidths.zip(nonEmptyCols).foreach { case (width, col) =>
-        val ref = ARef.from0(col, row)
-        val value =
-          sheet.cells
-            .get(ref)
-            .map(c => formatCell(c, sheet, showFormulas, evalFormulas))
-            .getOrElse("")
-        val escaped = escapeMarkdown(value)
+        val escaped = Escape.markdown(text(row, col))
         sb.append(s" ${escaped.padTo(width, ' ')} |")
       }
       sb.append("\n")
@@ -150,27 +141,7 @@ object Markdown:
     renderTable(headers, rows)
 
   /**
-   * Render label-value pairs as a markdown table.
-   */
-  def renderLabels(labels: Vector[(String, String, ARef, ARef, String)]): String =
-    val headers = Vector("Label", "Value", "Label Ref", "Value Ref", "Position")
-    val rows = labels.map { case (label, value, labelRef, valueRef, position) =>
-      Vector(label, value, labelRef.toA1, valueRef.toA1, position)
-    }
-    s"Found ${labels.size} label-value pairs:\n\n${renderTable(headers, rows)}"
-
-  /**
-   * Render search results as a markdown table.
-   */
-  def renderSearchResults(results: Vector[(ARef, String, String)]): String =
-    val headers = Vector("Ref", "Value", "Context")
-    val rows = results.map { case (ref, value, context) =>
-      Vector(ref.toA1, value, context)
-    }
-    s"Found ${results.size} matches:\n\n${renderTable(headers, rows)}"
-
-  /**
-   * Render search results with qualified refs (for --all-sheets mode).
+   * Render search results with qualified refs (`Sheet!A1`) as a two-column table.
    */
   def renderSearchResultsWithRef(results: Vector[(String, String)]): String =
     val headers = Vector("Ref", "Value")
@@ -180,53 +151,9 @@ object Markdown:
     renderTable(headers, rows)
 
   /**
-   * Format a cell value for display with Excel-style number formatting.
-   *
-   * @param evalFormulas
-   *   If true, evaluate formulas live (compute values). Takes precedence over cached values.
-   */
-  private def formatCell(
-    cell: Cell,
-    sheet: Sheet,
-    showFormulas: Boolean,
-    evalFormulas: Boolean
-  ): String =
-    // Extract NumFmt from cell's style
-    val numFmt = cell.styleId
-      .flatMap(sheet.styleRegistry.get)
-      .map(_.numFmt)
-      .getOrElse(NumFmt.General)
-
-    cell.value match
-      case CellValue.Formula(expr, cached, kind) =>
-        val evalExpr = if expr.startsWith("=") then expr else s"=$expr"
-        val displayExpr = RendererCommon.formulaDisplay(expr, kind)
-        if showFormulas then displayExpr
-        else
-          kind match
-            case _: FormulaKind.DataTable =>
-              // GH-430: TABLE(...) is a record, never evaluable — the cache IS the value
-              cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
-            case _ if evalFormulas =>
-              // Evaluate formula live
-              SheetEvaluator.evaluateFormula(sheet)(evalExpr) match
-                case Right(result) => NumFmtFormatter.formatValue(result, numFmt)
-                case Left(err) => RendererCommon.formatEvalError(err.message)
-            case _ =>
-              cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
-      case CellValue.RichText(rt) =>
-        // Rich text has its own formatting, don't apply NumFmt
-        rt.toPlainText
-      case CellValue.Empty => ""
-      case other => NumFmtFormatter.formatValue(other, numFmt)
-
-  private def escapeMarkdown(s: String): String =
-    s.replace("|", "\\|").replace("\n", " ").replace("\r", "")
-
-  /**
    * Generic table renderer with proper column alignment.
    */
-  private def renderTable(headers: Vector[String], rows: Vector[Vector[String]]): String =
+  def renderTable(headers: Vector[String], rows: Vector[Vector[String]]): String =
     val sb = new StringBuilder
 
     // Calculate column widths
@@ -256,7 +183,7 @@ object Markdown:
     rows.foreach { row =>
       sb.append("|")
       row.zip(colWidths).foreach { case (cell, width) =>
-        sb.append(s" ${escapeMarkdown(cell).padTo(width, ' ')} |")
+        sb.append(s" ${Escape.markdown(cell).padTo(width, ' ')} |")
       }
       sb.append("\n")
     }

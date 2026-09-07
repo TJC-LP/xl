@@ -1,16 +1,13 @@
 package com.tjclp.xl.cli.output
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column}
-import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
-import com.tjclp.xl.display.NumFmtFormatter
-import com.tjclp.xl.formula.SheetEvaluator
+import com.tjclp.xl.addressing.{CellRange, Column}
+import com.tjclp.xl.cli.read.{InMemorySource, RecordGrid}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * CSV renderer for xl CLI output.
  *
- * Produces RFC 4180-compliant CSV output with optional row/column labels.
+ * Produces RFC 4180-compliant CSV output with optional row/column labels, from a [[RecordGrid]].
  */
 object CsvRenderer:
 
@@ -41,49 +38,46 @@ object CsvRenderer:
     evalFormulas: Boolean = false,
     skipHidden: Boolean = false
   ): String =
-    val startCol = range.start.col.index0
-    val endCol = range.end.col.index0
-    val startRow = range.start.row.index0
-    val endRow = range.end.row.index0
+    val grid =
+      if evalFormulas then InMemorySource.evaluatedGrid(sheet, range)
+      else InMemorySource.grid(sheet, range)
+    render(grid, showFormulas, showLabels, skipEmpty, skipHidden)
 
+  /** Render a grid as CSV (see [[renderRange]] for the flags). No trailing newline. */
+  def render(
+    grid: RecordGrid,
+    showFormulas: Boolean,
+    showLabels: Boolean,
+    skipEmpty: Boolean,
+    skipHidden: Boolean
+  ): String =
     // GH-474: hidden rows/columns render unless --skip-hidden asked for the visible-only view
-    val visibleCols = RendererCommon.renderedColumns(sheet, startCol, endCol, skipHidden)
-    val visibleRows = RendererCommon.renderedRows(sheet, startRow, endRow, skipHidden)
+    val visibleCols = grid.renderedCols(skipHidden)
+    val visibleRows = grid.renderedRows(skipHidden)
 
     // Filter empty columns/rows if skipEmpty is true
     val nonEmptyCols =
-      if skipEmpty then RendererCommon.nonEmptyColumns(sheet, visibleCols, visibleRows)
-      else visibleCols
-
+      if skipEmpty then grid.nonEmptyCols(visibleCols, visibleRows) else visibleCols
     val nonEmptyRows =
-      if skipEmpty then RendererCommon.nonEmptyRows(sheet, visibleRows, nonEmptyCols)
-      else visibleRows
+      if skipEmpty then grid.nonEmptyRows(visibleRows, nonEmptyCols) else visibleRows
 
     val sb = new StringBuilder
 
     // Header row with column letters (if showLabels)
     if showLabels then
-      val headerCells = nonEmptyCols.map { colIdx =>
-        Column.from0(colIdx).toLetter
-      }
       sb.append(",") // Empty cell for row number column
-      sb.append(headerCells.mkString(","))
+      sb.append(nonEmptyCols.map(colIdx => Column.from0(colIdx).toLetter).mkString(","))
       sb.append("\n")
 
     // Data rows
     val lastRowIdx = nonEmptyRows.lastOption
     nonEmptyRows.foreach { rowIdx =>
-      val rowNum = rowIdx + 1
-
       if showLabels then
-        sb.append(rowNum.toString)
+        sb.append((rowIdx + 1).toString)
         sb.append(",")
 
       val cellValues = nonEmptyCols.map { colIdx =>
-        val ref = ARef.from0(colIdx, rowIdx)
-        sheet.cells.get(ref) match
-          case Some(cell) => formatCell(cell, sheet, showFormulas, evalFormulas)
-          case None => ""
+        grid.at(rowIdx, colIdx).fold("")(record => Escape.csv(record.text(showFormulas)))
       }
       sb.append(cellValues.mkString(","))
 
@@ -92,67 +86,3 @@ object CsvRenderer:
     }
 
     sb.toString
-
-  private def formatCell(
-    cell: Cell,
-    sheet: Sheet,
-    showFormulas: Boolean,
-    evalFormulas: Boolean
-  ): String =
-    val numFmt = cell.styleId
-      .flatMap(sheet.styleRegistry.get)
-      .map(_.numFmt)
-      .getOrElse(NumFmt.General)
-
-    val raw = cell.value match
-      case CellValue.Text(s) => s
-
-      case CellValue.Number(n) =>
-        NumFmtFormatter.formatValue(cell.value, numFmt)
-
-      case CellValue.Bool(b) =>
-        if b then "TRUE" else "FALSE"
-
-      case CellValue.DateTime(dt) =>
-        NumFmtFormatter.formatValue(cell.value, numFmt)
-
-      case CellValue.Error(err) =>
-        err.toExcel
-
-      case CellValue.RichText(rt) =>
-        rt.toPlainText
-
-      case CellValue.Empty =>
-        ""
-
-      case CellValue.Formula(expr, cached, kind) =>
-        val evalExpr = if expr.startsWith("=") then expr else s"=$expr"
-        val displayExpr = RendererCommon.formulaDisplay(expr, kind)
-        if showFormulas then displayExpr
-        else
-          kind match
-            case _: FormulaKind.DataTable =>
-              // GH-430: TABLE(...) is a record, never evaluable — the cache IS the value
-              cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
-            case _ if evalFormulas =>
-              SheetEvaluator.evaluateFormula(sheet)(evalExpr) match
-                case Right(result) => NumFmtFormatter.formatValue(result, numFmt)
-                case Left(err) => RendererCommon.formatEvalError(err.message)
-            case _ =>
-              cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
-
-    escapeCsv(raw)
-
-  /**
-   * Escape a value for CSV output per RFC 4180.
-   *
-   * Rules:
-   *   - If value contains comma, quote, or newline: wrap in quotes
-   *   - Escape quotes by doubling them
-   */
-  private def escapeCsv(s: String): String =
-    val needsQuoting = s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r')
-    if needsQuoting then
-      val escaped = s.replace("\"", "\"\"")
-      s"\"$escaped\""
-    else s

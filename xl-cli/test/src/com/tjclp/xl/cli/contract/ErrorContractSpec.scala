@@ -339,7 +339,8 @@ class ErrorContractSpec extends CatsEffectSuite:
     for
       unknown <- CliHarness.run("frob")
       flagAfterVerb <- CliHarness.run("-f", file("simple.xlsx"), "view", "A1:B2", "-s", "Data")
-      missingArg <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "view")
+      // W2.4: `view` no longer needs a range (it defaults to the used range); `cell` still does
+      missingArg <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "cell")
       noArgs <- CliHarness.run()
     yield
       assertFailure(unknown, 2, "unknown verb 'frob'", "UNKNOWN_VERB")

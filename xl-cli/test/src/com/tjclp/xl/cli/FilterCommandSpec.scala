@@ -5,11 +5,13 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.{Sheet, Workbook, given}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.commands.FilterCommands
+import com.tjclp.xl.cli.contract.Outcome
+import com.tjclp.xl.cli.read.ReadTestKit
 import com.tjclp.xl.macros.ref
 
 /**
- * Tests for the filter command (GH-134, phase 1 — no SQL).
+ * Tests for the filter command (GH-134, phase 1 — no SQL), as a [[com.tjclp.xl.cli.read.Reads]]
+ * query (W2.4): the same code answers `filter` over a loaded workbook and under `--stream`.
  *
  * Covers: --where row filtering, --header name resolution, --columns projection, --limit, and
  * markdown/csv/json output formats.
@@ -37,6 +39,20 @@ class FilterCommandSpec extends CatsEffectSuite:
 
   private val wb = Workbook(Vector(sheet))
 
+  private def outcome(
+    where: String,
+    columns: Option[String] = None,
+    limit: Int = 50,
+    format: FilterFormat = FilterFormat.Markdown,
+    header: Boolean = false,
+    book: Workbook = wb
+  ): IO[Outcome] =
+    ReadTestKit.inMemory(
+      book,
+      book.sheets.headOption.map(_.name.value),
+      ReadTestKit.filter(where, columns, limit, format, header)
+    )
+
   private def run(
     where: String,
     columns: Option[String] = None,
@@ -44,7 +60,10 @@ class FilterCommandSpec extends CatsEffectSuite:
     format: FilterFormat = FilterFormat.Markdown,
     header: Boolean = false
   ): IO[String] =
-    FilterCommands.filter(wb, Some(sheet), where, columns, limit, format, header)
+    outcome(where, columns, limit, format, header).map(ReadTestKit.text)
+
+  private def runOn(book: Workbook, where: String, format: FilterFormat): IO[String] =
+    outcome(where, format = format, book = book).map(ReadTestKit.text)
 
   test("filter: --where keeps only matching rows (markdown)") {
     run("B > 100").map { out =>
@@ -78,29 +97,28 @@ class FilterCommandSpec extends CatsEffectSuite:
   }
 
   test("filter: unknown column errors with available headers") {
-    run("Cost > 100", header = true).attempt.map {
-      case Left(err) =>
-        assert(err.getMessage.contains("Cost"), err.getMessage)
-        assert(
-          err.getMessage.contains("Price"),
-          s"Should list available headers: ${err.getMessage}"
-        )
-      case Right(out) => fail(s"Expected error, got: $out")
+    outcome("Cost > 100", header = true).map { result =>
+      val message = result.error.fold("")(_.message)
+      assert(!result.ok, "expected a failure")
+      assert(message.contains("Cost"), message)
+      assert(message.contains("Price"), s"Should list available headers: $message")
+      assertEquals(result.error.map(_.code), Some("INVALID_REFERENCE"))
     }
   }
 
   test("filter: column letters beyond the used range error without --header") {
-    run("ZZ > 100").attempt.map {
-      case Left(err) => assert(err.getMessage.contains("ZZ"), err.getMessage)
-      case Right(out) => fail(s"Expected error, got: $out")
+    outcome("ZZ > 100").map { result =>
+      assert(result.error.exists(_.message.contains("ZZ")), result.error.toString)
     }
   }
 
-  test("filter: invalid predicate reports a parse error") {
-    run("B >").attempt.map {
-      case Left(err) =>
-        assert(err.getMessage.toLowerCase.contains("predicate"), err.getMessage)
-      case Right(out) => fail(s"Expected error, got: $out")
+  test("filter: invalid predicate is a usage error naming the predicate") {
+    outcome("B >").map { result =>
+      assert(
+        result.error.exists(_.message.toLowerCase.contains("predicate")),
+        result.error.toString
+      )
+      assertEquals(result.error.map(_.code), Some("USAGE"))
     }
   }
 
@@ -138,11 +156,9 @@ class FilterCommandSpec extends CatsEffectSuite:
 
   test("filter: csv escapes commas and quotes") {
     val s = Sheet("S").put(ref"A1", CellValue.Text("a,b \"c\"")).put(ref"B1", CellValue.Number(1))
-    FilterCommands
-      .filter(Workbook(Vector(s)), Some(s), "B = 1", None, 50, FilterFormat.Csv, false)
-      .map { out =>
-        assert(out.contains("\"a,b \"\"c\"\"\""), out)
-      }
+    runOn(Workbook(Vector(s)), "B = 1", FilterFormat.Csv).map { out =>
+      assert(out.contains("\"a,b \"\"c\"\"\""), out)
+    }
   }
 
   test("filter: json output has row numbers and typed cells") {
@@ -154,6 +170,15 @@ class FilterCommandSpec extends CatsEffectSuite:
       assertEquals(rows.head("cells")("A").str, "Widget")
       assertEquals(rows.head("cells")("B").num, 150.0)
       assertEquals(rows.head("cells")("C").bool, true)
+    }
+  }
+
+  test("filter: json keeps every digit of a number (never rounds through a Double)") {
+    val s = Sheet("S")
+      .put(ref"A1", CellValue.Number(BigDecimal("12345678901234567")))
+      .put(ref"B1", CellValue.Number(1))
+    runOn(Workbook(Vector(s)), "B = 1", FilterFormat.Json).map { out =>
+      assert(out.contains("12345678901234567"), out)
     }
   }
 
@@ -177,9 +202,7 @@ class FilterCommandSpec extends CatsEffectSuite:
   }
 
   test("filter: empty sheet yields no matches rather than an error") {
-    val empty = Sheet("Empty")
-    FilterCommands
-      .filter(Workbook(Vector(empty)), Some(empty), "A > 1", None, 50, FilterFormat.Markdown, false)
+    runOn(Workbook(Vector(Sheet("Empty"))), "A > 1", FilterFormat.Markdown)
       .map(out => assert(out.toLowerCase.contains("no rows"), out))
   }
 
@@ -190,11 +213,26 @@ class FilterCommandSpec extends CatsEffectSuite:
       .put(ref"A2", CellValue.Text("y"))
       .put(ref"A3", CellValue.Text("z"))
       .put(ref"B3", CellValue.Number(3))
-    FilterCommands
-      .filter(Workbook(Vector(s)), Some(s), "B IS EMPTY", None, 50, FilterFormat.Markdown, false)
-      .map { out =>
-        assert(out.contains("y"), out)
-        assert(!out.contains("x"), out)
-        assert(!out.contains("z"), out)
+    runOn(Workbook(Vector(s)), "B IS EMPTY", FilterFormat.Markdown).map { out =>
+      assert(out.contains("y"), out)
+      assert(!out.contains("x"), out)
+      assert(!out.contains("z"), out)
+    }
+  }
+
+  test("filter --stream: the streaming source answers the same rows (W2.4)") {
+    ReadTestKit.withTempWorkbook(wb) { path =>
+      val queries = Vector(
+        ReadTestKit.filter("B > 100"),
+        ReadTestKit
+          .filter("Price > 100 AND Active = TRUE", header = true, format = FilterFormat.Csv),
+        ReadTestKit.filter("B > 0", limit = 2, format = FilterFormat.Json)
+      )
+      queries.foldLeft(IO.unit) { (acc, query) =>
+        acc *> (for
+          memory <- ReadTestKit.inMemory(wb, Some("Data"), query).map(ReadTestKit.text)
+          streamed <- ReadTestKit.streaming(path, Some("Data"), query).map(ReadTestKit.text)
+        yield assertEquals(streamed, memory, s"filter parity broke for $query"))
       }
+    }
   }

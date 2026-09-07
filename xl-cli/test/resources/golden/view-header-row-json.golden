@@ -1,0 +1,43 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+--json
+view
+A1:C4
+--header-row
+1
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "view",
+  "version": "<VERSION>",
+  "data": {
+    "sheet": "Data",
+    "range": "A1:C4",
+    "records": [
+      {
+        "Hello": "World",
+        "10": 20,
+        "1/15/24": 45473
+      },
+      {
+        "Hello": "Total",
+        "10": 12.5,
+        "1/15/24": null
+      },
+      {
+        "Hello": null,
+        "10": 42.5,
+        "1/15/24": null
+      }
+    ]
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

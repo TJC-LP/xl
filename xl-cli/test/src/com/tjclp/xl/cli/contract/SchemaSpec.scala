@@ -4,6 +4,7 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.cli.{BuildInfo, Cli, CliIO, Main}
 import com.tjclp.xl.cli.batch.OpRegistry
+import com.tjclp.xl.cli.read.Capability
 
 /**
  * `xl schema` (ADR-017 §2.13): the machine-readable contract. The verb table is a literal in
@@ -139,7 +140,7 @@ class SchemaSpec extends CatsEffectSuite:
   // Schema.json
   // ---------------------------------------------------------------------------------------------
 
-  test("Schema.json has exactly the nine keys, in order, and the version") {
+  test("Schema.json has exactly the ten keys, in order, and the version") {
     val json = Schema.json(version)
     assertEquals(
       json.value.keys.toList,
@@ -150,10 +151,20 @@ class SchemaSpec extends CatsEffectSuite:
         "warningCodes",
         "globals",
         "verbs",
+        "capabilities",
         "batchOps",
         "functions",
         "envelope"
       )
+    )
+    // W2.4: the read-source capability table — every capability, in memory and streaming
+    assertEquals(json("capabilities"), Capability.json)
+    val capabilities = json("capabilities").arr.toVector
+    assertEquals(capabilities.map(_("name").str), Capability.all.map(_.name))
+    assert(capabilities.forall(_("inMemory").bool), "the loaded workbook answers everything")
+    assertEquals(
+      capabilities.filter(_("streaming").bool).map(_("name").str).toSet,
+      Capability.streaming.map(_.name)
     )
     assertEquals(json("version"), ujson.Str(version))
     assertEquals(

@@ -1,10 +1,9 @@
 package com.tjclp.xl.cli.helpers
 
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cli.read.CellRecord
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
 import com.tjclp.xl.styles.numfmt.NumFmt
-
-import com.tjclp.xl.cli.output.RendererCommon
 
 /**
  * Value parsing utilities for CLI commands.
@@ -73,17 +72,4 @@ object ValueParser:
    * @return
    *   String representation
    */
-  def formatCellValue(value: CellValue): String =
-    value match
-      case CellValue.Text(s) => s
-      case CellValue.Number(n) =>
-        if n.isWhole then n.toBigInt.toString
-        else n.underlying.stripTrailingZeros.toPlainString
-      case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-      case CellValue.DateTime(dt) => dt.toString
-      case CellValue.Error(err) => err.toExcel
-      case CellValue.RichText(rt) => rt.toPlainText
-      case CellValue.Empty => ""
-      case CellValue.Formula(expr, cached, kind) =>
-        val displayExpr = RendererCommon.formulaDisplay(expr, kind)
-        cached.map(formatCellValue).getOrElse(displayExpr)
+  def formatCellValue(value: CellValue): String = CellRecord.raw(value)

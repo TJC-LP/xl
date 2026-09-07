@@ -7,7 +7,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.ViewFormat
-import com.tjclp.xl.cli.commands.ReadCommands
+import com.tjclp.xl.cli.read.ReadTestKit
 import com.tjclp.xl.macros.ref
 
 /**
@@ -203,23 +203,16 @@ class JsonRendererSpec extends CatsEffectSuite:
     showFormulas: Boolean = false,
     evalFormulas: Boolean = false
   ): IO[String] =
-    ReadCommands.view(
+    ReadTestKit.readText(
       wb,
-      wb.sheets.headOption,
-      range,
-      showFormulas = showFormulas,
-      evalFormulas = evalFormulas,
-      strict = false,
-      limit = 0,
-      format = format,
-      printScale = false,
-      showGridlines = false,
-      showLabels = false,
-      dpi = 96,
-      quality = 90,
-      rasterOutput = None,
-      skipEmpty = false,
-      headerRow = None
+      Some("Data"),
+      ReadTestKit.view(
+        Some(range),
+        format,
+        showFormulas = showFormulas,
+        evalFormulas = evalFormulas,
+        limit = 0
+      )
     )
 
   test("view json: formula cells carry formula and cached value by default") {

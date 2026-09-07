@@ -1,20 +1,19 @@
 package com.tjclp.xl.cli.output
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column}
-import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
-import com.tjclp.xl.display.NumFmtFormatter
-import com.tjclp.xl.formula.SheetEvaluator
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, SheetName}
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cli.read.{CellRecord, InMemorySource, RecordGrid}
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * JSON renderer for xl CLI output.
  *
  * Produces structured JSON suitable for LLM consumption with cell references, types, raw values,
- * and formatted values.
- *
- * No external JSON library dependency - uses manual string building for simplicity and to match the
- * project's minimal-dependency philosophy.
+ * and formatted values. Consumes a [[RecordGrid]] — the same rows whether they came from a loaded
+ * sheet or the streaming reader — and writes text rather than a JSON tree so every number lexeme is
+ * exactly the record's ([[CellRecord.rawJson]]).
  */
 object JsonRenderer:
 
@@ -83,80 +82,106 @@ object JsonRenderer:
     truncatedTotalRows: Option[Int] = None,
     skipHidden: Boolean = false
   ): String =
-    headerRow match
-      case Some(headerRowNum) =>
-        renderAsRecords(
-          sheet,
-          range,
-          skipEmpty,
-          headerRowNum,
-          evalFormulas,
-          truncatedTotalRows,
-          skipHidden
-        )
-      case None =>
-        renderAsRows(sheet, range, skipEmpty, evalFormulas, truncatedTotalRows, skipHidden)
+    val grid =
+      if evalFormulas then InMemorySource.evaluatedGrid(sheet, range)
+      else InMemorySource.grid(sheet, range)
+    val header = headerRow.map { rowNum =>
+      val idx = rowNum - 1
+      val records = grid.rows
+        .lift(idx - range.start.row.index0)
+        .getOrElse {
+          val headerRange =
+            CellRange(
+              ARef.from0(range.start.col.index0, idx),
+              ARef.from0(range.end.col.index0, idx)
+            )
+          val projected =
+            if evalFormulas then InMemorySource.evaluatedGrid(sheet, headerRange)
+            else InMemorySource.grid(sheet, headerRange)
+          projected.rows.headOption.getOrElse(Vector.empty)
+        }
+      (idx, records)
+    }
+    render(grid, header, skipEmpty, truncatedTotalRows, None, skipHidden)
 
   /**
-   * Render range as array of records with header row values as keys.
+   * Render a grid: `rows` mode, or `records` mode when `header` gives the header row's 0-based
+   * index and its records (one per column of the grid; the header row itself is never a record).
    */
-  private def renderAsRecords(
-    sheet: Sheet,
-    range: CellRange,
+  def render(
+    grid: RecordGrid,
+    header: Option[(Int, Vector[CellRecord])],
     skipEmpty: Boolean,
-    headerRowNum: Int,
-    evalFormulas: Boolean,
     truncatedTotalRows: Option[Int],
+    truncatedTotalCols: Option[Int],
     skipHidden: Boolean
   ): String =
-    val startCol = range.start.col.index0
-    val endCol = range.end.col.index0
-    val startRow = range.start.row.index0
-    val endRow = range.end.row.index0
-    val headerRowIdx = headerRowNum - 1 // Convert to 0-based
+    header match
+      case Some((headerRowIdx, records)) =>
+        renderAsRecords(
+          grid,
+          headerRowIdx,
+          records,
+          skipEmpty,
+          truncatedTotalRows,
+          truncatedTotalCols,
+          skipHidden
+        )
+      case None => renderAsRows(grid, skipEmpty, truncatedTotalRows, truncatedTotalCols, skipHidden)
 
+  /**
+   * An empty sheet viewed without a range: nothing to address, so `range` is `null` and the rows
+   * (or records) are empty.
+   */
+  def renderEmptySheet(sheet: SheetName, records: Boolean): String =
+    val body = if records then "records" else "rows"
+    s"""{
+       |  "sheet": ${Escape.json(sheet.value)},
+       |  "range": null,
+       |  "$body": []
+       |}""".stripMargin
+
+  /** Render range as array of records with header row values as keys. */
+  private def renderAsRecords(
+    grid: RecordGrid,
+    headerRowIdx: Int,
+    headerRecords: Vector[CellRecord],
+    skipEmpty: Boolean,
+    truncatedTotalRows: Option[Int],
+    truncatedTotalCols: Option[Int],
+    skipHidden: Boolean
+  ): String =
     // GH-474: hidden columns render unless --skip-hidden asked for the visible-only view
-    val visibleCols = RendererCommon.renderedColumns(sheet, startCol, endCol, skipHidden)
+    val visibleCols = grid.renderedCols(skipHidden)
+    val firstCol = grid.range.start.col.index0
 
-    // Get header values
+    // Header names: the header cell's display text, the column letter when it is blank
     val headers: Map[Int, String] = visibleCols.flatMap { colIdx =>
-      val ref = ARef.from0(colIdx, headerRowIdx)
-      sheet.cells.get(ref).map { cell =>
-        val headerName = getCellTextValue(cell, sheet)
-        // Use column letter as fallback if header is empty
+      headerRecords.lift(colIdx - firstCol).map { record =>
+        val headerName = headerText(record)
         val name = if headerName.trim.isEmpty then Column.from0(colIdx).toLetter else headerName
         colIdx -> name
       }
     }.toMap
 
     // GH-474: hidden rows render unless --skip-hidden; the header row itself is never a record
-    val dataRows =
-      RendererCommon.renderedRows(sheet, startRow, endRow, skipHidden).filterNot(_ == headerRowIdx)
+    val dataRows = grid.renderedRows(skipHidden).filterNot(_ == headerRowIdx)
 
     val sb = new StringBuilder
     sb.append("{\n")
-    sb.append(s"""  "sheet": ${escapeJsonString(sheet.name.value)},\n""")
-    sb.append(s"""  "range": "${range.toA1}",\n""")
-    appendTruncationFields(sb, truncatedTotalRows)
-    appendHiddenFields(sb, sheet, startCol, endCol, startRow, endRow)
+    sb.append(s"""  "sheet": ${Escape.json(grid.sheet.value)},\n""")
+    sb.append(s"""  "range": "${grid.range.toA1}",\n""")
+    appendTruncationFields(sb, truncatedTotalRows, truncatedTotalCols)
+    appendHiddenFields(sb, grid)
     sb.append("""  "records": [""")
 
     val recordJsons = dataRows.flatMap { rowIdx =>
       val fields = visibleCols.flatMap { colIdx =>
-        val ref = ARef.from0(colIdx, rowIdx)
         val headerName = headers.getOrElse(colIdx, Column.from0(colIdx).toLetter)
-
-        sheet.cells.get(ref) match
-          case Some(cell) =>
-            val isEmpty = RendererCommon.isCellEmpty(cell)
-            if skipEmpty && isEmpty then None
-            else
-              Some(
-                s"${escapeJsonString(headerName)}: ${renderCellValue(cell, sheet, evalFormulas)}"
-              )
-          case None =>
-            if skipEmpty then None
-            else Some(s"${escapeJsonString(headerName)}: null")
+        grid.at(rowIdx, colIdx) match
+          case Some(record) if skipEmpty && record.isEmpty => None
+          case Some(record) => Some(s"${Escape.json(headerName)}: ${record.rawJson}")
+          case None => if skipEmpty then None else Some(s"${Escape.json(headerName)}: null")
       }
       // Skip entire record if all fields are empty
       if skipEmpty && fields.isEmpty then None
@@ -172,47 +197,40 @@ object JsonRenderer:
     sb.append("}")
     sb.toString
 
-  /**
-   * Original row-based rendering.
-   */
+  /** Original row-based rendering. */
   private def renderAsRows(
-    sheet: Sheet,
-    range: CellRange,
+    grid: RecordGrid,
     skipEmpty: Boolean,
-    evalFormulas: Boolean,
     truncatedTotalRows: Option[Int],
+    truncatedTotalCols: Option[Int],
     skipHidden: Boolean
   ): String =
-    val startCol = range.start.col.index0
-    val endCol = range.end.col.index0
-    val startRow = range.start.row.index0
-    val endRow = range.end.row.index0
-
     // GH-474: hidden rows/cols render unless --skip-hidden (same as Markdown renderer)
-    val visibleCols = RendererCommon.renderedColumns(sheet, startCol, endCol, skipHidden)
-    val visibleRows = RendererCommon.renderedRows(sheet, startRow, endRow, skipHidden)
+    val visibleCols = grid.renderedCols(skipHidden)
+    val visibleRows = grid.renderedRows(skipHidden)
 
     val sb = new StringBuilder
     sb.append("{\n")
-    sb.append(s"""  "sheet": ${escapeJsonString(sheet.name.value)},\n""")
-    sb.append(s"""  "range": "${range.toA1}",\n""")
-    appendTruncationFields(sb, truncatedTotalRows)
-    appendHiddenFields(sb, sheet, startCol, endCol, startRow, endRow)
+    sb.append(s"""  "sheet": ${Escape.json(grid.sheet.value)},\n""")
+    sb.append(s"""  "range": "${grid.range.toA1}",\n""")
+    appendTruncationFields(sb, truncatedTotalRows, truncatedTotalCols)
+    appendHiddenFields(sb, grid)
     sb.append("""  "rows": [""")
 
     val rowJsons = visibleRows.flatMap { rowIdx =>
       val rowNum = rowIdx + 1
       val cellJsons = visibleCols.flatMap { colIdx =>
-        val ref = ARef.from0(colIdx, rowIdx)
-        sheet.cells.get(ref) match
-          case Some(cell) =>
-            // Check if cell is effectively empty (including formulas returning empty)
-            val isEmpty = RendererCommon.isCellEmpty(cell)
-            if skipEmpty && isEmpty then None
-            else Some(renderCell(ref, cell, sheet, evalFormulas))
+        grid.at(rowIdx, colIdx) match
+          case Some(record) if skipEmpty && record.isEmpty => None
+          case Some(record) => Some(record.toJson(legacyKeys = true))
           case None =>
             if skipEmpty then None
-            else Some(renderEmptyCell(ref))
+            else
+              Some(
+                CellRecord
+                  .empty(grid.sheet, ARef.from0(colIdx, rowIdx), hidden = false, None)
+                  .toJson(legacyKeys = true)
+              )
       }
       // Skip entire row if all cells are empty (when skipEmpty is true)
       if skipEmpty && cellJsons.isEmpty then None
@@ -229,35 +247,18 @@ object JsonRenderer:
     sb.toString
 
   /**
-   * Render search results as JSON.
+   * Append `"truncated": true` / `"totalRows": N` fields when --limit clipped output (GH-351), and
+   * `"totalCols": M` when --max-cols clipped the columns.
    */
-  def renderSearchResults(results: Vector[(ARef, String, String)]): String =
-    val sb = new StringBuilder
-    sb.append("{\n")
-    sb.append(s"""  "count": ${results.size},\n""")
-    sb.append("""  "matches": [""")
-
-    val matchJsons = results.map { case (ref, value, context) =>
-      s"""{"ref": "${ref.toA1}", "value": ${escapeJsonString(value)}, "context": ${escapeJsonString(
-          context
-        )}}"""
-    }
-
-    if matchJsons.nonEmpty then
-      sb.append("\n    ")
-      sb.append(matchJsons.mkString(",\n    "))
-      sb.append("\n  ")
-
-    sb.append("]\n")
-    sb.append("}")
-    sb.toString
-
-  /** Append `"truncated": true` / `"totalRows": N` fields when --limit clipped output (GH-351). */
-  private def appendTruncationFields(sb: StringBuilder, truncatedTotalRows: Option[Int]): Unit =
-    truncatedTotalRows.foreach { total =>
+  private def appendTruncationFields(
+    sb: StringBuilder,
+    truncatedTotalRows: Option[Int],
+    truncatedTotalCols: Option[Int]
+  ): Unit =
+    if truncatedTotalRows.isDefined || truncatedTotalCols.isDefined then
       sb.append("  \"truncated\": true,\n")
-      sb.append(s"""  "totalRows": $total,\n""")
-    }
+    truncatedTotalRows.foreach(total => sb.append(s"""  "totalRows": $total,\n"""))
+    truncatedTotalCols.foreach(total => sb.append(s"""  "totalCols": $total,\n"""))
 
   /**
    * GH-474: report the hidden rows/columns inside the requested range so a consumer can never
@@ -265,263 +266,36 @@ object JsonRenderer:
    * were rendered; omitted entirely when the range holds no hidden lines, keeping the payload
    * byte-identical to previous releases for ordinary ranges.
    */
-  private def appendHiddenFields(
-    sb: StringBuilder,
-    sheet: Sheet,
-    startCol: Int,
-    endCol: Int,
-    startRow: Int,
-    endRow: Int
-  ): Unit =
-    val rows = RendererCommon.hiddenRows(sheet, startRow, endRow).map(_ + 1)
-    val cols =
-      RendererCommon.hiddenColumns(sheet, startCol, endCol).map(c => Column.from0(c).toLetter)
+  private def appendHiddenFields(sb: StringBuilder, grid: RecordGrid): Unit =
+    val rows = grid.hiddenRowNumbers
+    val cols = grid.hiddenColLetters
     if rows.nonEmpty then sb.append(s"""  "hiddenRows": [${rows.mkString(", ")}],\n""")
     if cols.nonEmpty then
       sb.append(s"""  "hiddenCols": [${cols.map(c => s"\"$c\"").mkString(", ")}],\n""")
 
   /**
+   * A header cell's key text: its display text — an uncached formula shows its stored expression,
+   * having no value to show.
+   */
+  private def headerText(record: CellRecord): String = record.formula match
+    case Some(f) if !f.cached => f.expression
+    case _ => record.formatted
+
+  /**
    * One value as the `{type, value, formatted}` triple the `view --format json` cells carry, as
    * JSON TEXT for the number-carrying `--json` payloads (`eval`): the same type names, raw-value
-   * rules and display formatting as [[renderCell]] — a whole number prints every digit, never a
+   * rules and display formatting as a rendered cell — a whole number prints every digit, never a
    * `Double` — and a formula projects its cached value (`null`/`""` when uncached).
    */
   def valueJson(value: CellValue, numFmt: NumFmt): String =
-    def obj(typeStr: String, raw: String, formatted: String): String =
-      s"""{"type": "$typeStr", "value": $raw, "formatted": ${escapeJsonString(formatted)}}"""
-    value match
-      case CellValue.Formula(_, cached, _) =>
-        cached.fold(obj("formula", "null", "")) { cv =>
-          obj("formula", renderCellValueFromCellValue(cv, numFmt), formattedText(cv, numFmt))
-        }
-      case CellValue.Text(_) =>
-        obj("text", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
-      case CellValue.Number(_) =>
-        obj("number", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
-      case CellValue.Bool(_) =>
-        obj("boolean", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
-      case CellValue.DateTime(_) =>
-        obj("datetime", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
-      case CellValue.Error(_) =>
-        obj("error", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
-      case CellValue.RichText(_) =>
-        obj("richtext", renderCellValueFromCellValue(value, numFmt), formattedText(value, numFmt))
-      case CellValue.Empty => obj("empty", "null", "")
-
-  /** The display text of a non-formula value, as `formatted` carries it. */
-  private def formattedText(value: CellValue, numFmt: NumFmt): String = value match
-    case CellValue.Text(s) => s
-    case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-    case CellValue.Error(err) => err.toExcel
-    case CellValue.RichText(rt) => rt.toPlainText
-    case CellValue.Empty => ""
-    case CellValue.Formula(_, _, _) => ""
-    case CellValue.Number(_) | CellValue.DateTime(_) => NumFmtFormatter.formatValue(value, numFmt)
-
-  private def renderCell(
-    ref: ARef,
-    cell: Cell,
-    sheet: Sheet,
-    evalFormulas: Boolean
-  ): String =
-    val numFmt = cell.styleId
-      .flatMap(sheet.styleRegistry.get)
-      .map(_.numFmt)
-      .getOrElse(NumFmt.General)
-
-    val (typeStr, rawValue, formatted) = cell.value match
-      case CellValue.Text(s) =>
-        ("text", escapeJsonString(s), escapeJsonString(s))
-
-      case CellValue.Number(n) =>
-        val raw =
-          if n.isWhole then n.toBigInt.toString
-          else n.underlying.stripTrailingZeros.toPlainString
-        ("number", raw, escapeJsonString(NumFmtFormatter.formatValue(cell.value, numFmt)))
-
-      case CellValue.Bool(b) =>
-        val boolStr = if b then "true" else "false"
-        ("boolean", boolStr, escapeJsonString(if b then "TRUE" else "FALSE"))
-
-      case CellValue.DateTime(dt) =>
-        (
-          "datetime",
-          escapeJsonString(dt.toString),
-          escapeJsonString(NumFmtFormatter.formatValue(cell.value, numFmt))
-        )
-
-      case CellValue.Error(err) =>
-        ("error", escapeJsonString(err.toExcel), escapeJsonString(err.toExcel))
-
-      case CellValue.RichText(rt) =>
-        val plain = rt.toPlainText
-        ("richtext", escapeJsonString(plain), escapeJsonString(plain))
-
-      case CellValue.Empty =>
-        ("empty", "null", "\"\"")
-
-      case CellValue.Formula(expr, cached, kind) =>
-        // GH-430: a dataTable record is never evaluated — its cache IS the value
-        val evaluable = kind match
-          case _: FormulaKind.DataTable => false
-          case _ => true
-        val (raw, fmt) =
-          formulaValueJson(
-            sheet,
-            displayExpression(expr),
-            cached,
-            numFmt,
-            evalFormulas && evaluable
-          )
-        ("formula", raw, fmt)
-
-    // GH-357: formula cells always carry the expression in a dedicated field; value/formatted
-    // hold the computed or cached value. --formulas only affects non-JSON display formats.
-    // GH-430: non-Normal record kinds surface additively as "formulaKind".
-    val formulaField = cell.value match
-      case CellValue.Formula(expr, _, kind) =>
-        val kindField = kind match
-          case _: FormulaKind.Normal => ""
-          case _: FormulaKind.ArrayFormula => """, "formulaKind": "array""""
-          case _: FormulaKind.DataTable => """, "formulaKind": "dataTable""""
-        s""", "formula": ${escapeJsonString(displayExpression(expr))}$kindField"""
-      case _ => ""
-
-    s"""{"ref": "${ref.toA1}", "type": "$typeStr"$formulaField, "value": $rawValue, "formatted": $formatted}"""
-
-  /** Formula expression as displayed: always with a leading `=`. */
-  private def displayExpression(expr: String): String =
-    if expr.startsWith("=") then expr else s"=$expr"
-
-  /**
-   * Raw JSON value + formatted string for a formula cell (GH-357): evaluated when `evalFormulas`
-   * (error token on failure), else the cached value; `null`/`""` when uncached.
-   */
-  private def formulaValueJson(
-    sheet: Sheet,
-    displayExpr: String,
-    cached: Option[CellValue],
-    numFmt: NumFmt,
-    evalFormulas: Boolean
-  ): (String, String) =
-    if evalFormulas then
-      SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
-        case Right(result) =>
-          (
-            renderCellValueFromCellValue(result, numFmt),
-            escapeJsonString(NumFmtFormatter.formatValue(result, numFmt))
-          )
-        case Left(err) =>
-          val errStr = escapeJsonString(RendererCommon.formatEvalError(err.message))
-          (errStr, errStr)
-    else
-      cached match
-        case Some(cv) =>
-          (
-            renderCellValueFromCellValue(cv, numFmt),
-            escapeJsonString(NumFmtFormatter.formatValue(cv, numFmt))
-          )
-        case None => ("null", "\"\"")
-
-  private def renderEmptyCell(ref: ARef): String =
-    s"""{"ref": "${ref.toA1}", "type": "empty", "value": null, "formatted": ""}"""
-
-  /**
-   * Escape a string for JSON output (quotes included).
-   *
-   * Handles special characters per JSON spec (RFC 8259).
-   */
-  def escapeJsonString(s: String): String =
-    val sb = new StringBuilder
-    sb.append('"')
-    s.foreach {
-      case '"' => sb.append("\\\"")
-      case '\\' => sb.append("\\\\")
-      case '\n' => sb.append("\\n")
-      case '\r' => sb.append("\\r")
-      case '\t' => sb.append("\\t")
-      case '\b' => sb.append("\\b")
-      case '\f' => sb.append("\\f")
-      case c if c < 32 => sb.append(f"\\u${c.toInt}%04x")
-      case c => sb.append(c)
-    }
-    sb.append('"')
-    sb.toString
-
-  /** Get text value from cell for use as header */
-  private def getCellTextValue(cell: Cell, sheet: Sheet): String =
-    val numFmt = cell.styleId
-      .flatMap(sheet.styleRegistry.get)
-      .map(_.numFmt)
-      .getOrElse(NumFmt.General)
-
-    cell.value match
-      case CellValue.Text(s) => s
-      case CellValue.Number(n) => NumFmtFormatter.formatValue(cell.value, numFmt)
-      case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-      case CellValue.DateTime(dt) => NumFmtFormatter.formatValue(cell.value, numFmt)
-      case CellValue.RichText(rt) => rt.toPlainText
-      case CellValue.Formula(_, Some(cached), _) => getCellTextValueFromCellValue(cached, numFmt)
-      case CellValue.Formula(expr, None, _) => expr
-      case CellValue.Error(err) => err.toExcel
-      case CellValue.Empty => ""
-
-  private def getCellTextValueFromCellValue(value: CellValue, numFmt: NumFmt): String =
-    value match
-      case CellValue.Text(s) => s
-      case CellValue.Number(n) => NumFmtFormatter.formatValue(value, numFmt)
-      case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-      case CellValue.DateTime(dt) => NumFmtFormatter.formatValue(value, numFmt)
-      case CellValue.RichText(rt) => rt.toPlainText
-      case CellValue.Error(err) => err.toExcel
-      case CellValue.Empty => ""
-      case CellValue.Formula(_, _, _) => "" // Shouldn't happen
-
-  /** Render cell value as JSON value (unquoted for numbers/booleans) */
-  private def renderCellValue(
-    cell: Cell,
-    sheet: Sheet,
-    evalFormulas: Boolean
-  ): String =
-    val numFmt = cell.styleId
-      .flatMap(sheet.styleRegistry.get)
-      .map(_.numFmt)
-      .getOrElse(NumFmt.General)
-
-    cell.value match
-      case CellValue.Text(s) => escapeJsonString(s)
-      case CellValue.Number(n) =>
-        if n.isWhole then n.toBigInt.toString
-        else n.underlying.stripTrailingZeros.toPlainString
-      case CellValue.Bool(b) => if b then "true" else "false"
-      case CellValue.DateTime(dt) => escapeJsonString(dt.toString)
-      case CellValue.RichText(rt) => escapeJsonString(rt.toPlainText)
-      case CellValue.Error(err) => escapeJsonString(err.toExcel)
-      case CellValue.Empty => "null"
-      case CellValue.Formula(expr, cached, kind) =>
-        // GH-357: records mode is a scalar projection — always the computed/cached value,
-        // never the expression; null when uncached (matches empty cells).
-        // GH-430: a dataTable record is never evaluated — its cache IS the value.
-        val evaluable = kind match
-          case _: FormulaKind.DataTable => false
-          case _ => true
-        formulaValueJson(
-          sheet,
-          displayExpression(expr),
-          cached,
-          numFmt,
-          evalFormulas && evaluable
-        )._1
-
-  private def renderCellValueFromCellValue(value: CellValue, numFmt: NumFmt): String =
-    value match
-      case CellValue.Text(s) => escapeJsonString(s)
-      case CellValue.Number(n) =>
-        if n.isWhole then n.toBigInt.toString
-        else n.underlying.stripTrailingZeros.toPlainString
-      case CellValue.Bool(b) => if b then "true" else "false"
-      case CellValue.DateTime(dt) => escapeJsonString(dt.toString)
-      case CellValue.RichText(rt) => escapeJsonString(rt.toPlainText)
-      case CellValue.Error(err) => escapeJsonString(err.toExcel)
-      case CellValue.Empty => "null"
-      case CellValue.Formula(_, _, _) => "null" // Shouldn't happen
+    val record = CellRecord.of(
+      SheetName.unsafe("eval"),
+      ARef.from0(0, 0),
+      value,
+      Some(CellStyle.default.withNumFmt(numFmt)),
+      hidden = false,
+      mergedInto = None
+    )
+    s"""{"type": "${record.kind.name}", "value": ${record.rawJson}, "formatted": ${Escape.json(
+        record.formatted
+      )}}"""

@@ -575,7 +575,8 @@ class EnvelopeSpec extends CatsEffectSuite:
       unknown <- CliHarness.run("frob", "--json")
       flagAfterVerb <- CliHarness
         .run("-f", file("simple.xlsx"), "--json", "view", "A1:B2", "-s", "Data")
-      missingArg <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "--json", "view")
+      // W2.4: `view` no longer needs a range (it defaults to the used range); `cell` still does
+      missingArg <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "--json", "cell")
       noArgs <- CliHarness.run("--json")
     yield
       assertEquals(unknown.exit, 2)
@@ -596,8 +597,8 @@ class EnvelopeSpec extends CatsEffectSuite:
       assertEquals(missingArg.exit, 2)
       val m = envelope(missingArg)
       assertEquals(m("error")("code"), ujson.Str("USAGE"))
-      assertEquals(m("verb"), ujson.Str("view"))
-      assertEquals(m("error")("hint"), ujson.Str("run `xl view --help` for the usage"))
+      assertEquals(m("verb"), ujson.Str("cell"))
+      assertEquals(m("error")("hint"), ujson.Str("run `xl cell --help` for the usage"))
       assertEquals(missingArg.stderr.linesIterator.size, 1, missingArg.stderr)
 
       assertEquals(noArgs.exit, 2)

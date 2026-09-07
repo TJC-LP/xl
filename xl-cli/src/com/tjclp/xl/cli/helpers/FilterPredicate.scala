@@ -339,7 +339,8 @@ object FilterPredicate:
     case CmpOp.Lt => cmp < 0
     case CmpOp.Le => cmp <= 0
 
-  private def textOf(value: CellValue): Option[String] = value match
+  /** The text a predicate compares or a header names: plain and rich text, nothing else. */
+  def textOf(value: CellValue): Option[String] = value match
     case CellValue.Text(s) => Some(s)
     case CellValue.RichText(rt) => Some(rt.toPlainText)
     case _ => scala.None

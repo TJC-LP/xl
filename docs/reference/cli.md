@@ -278,19 +278,23 @@ Non-empty: 892 cells
 
 ---
 
-### `xl view <range>`
+### `xl view [range]`
 
 View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG/JPEG/WebP/PDF.
+Without a range, the sheet's used range; `--offset` and `--limit` page through the rows and
+`--max-cols` caps the columns.
 
 **Arguments**:
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `range` | string | Yes | — | Cell range (e.g., "A1:D20") |
+| `range` | string | No | used range | Cell range (e.g., "A1:D20"); absent, the sheet's used range (an empty sheet renders `(empty sheet)`, `""` for csv, `{"sheet", "range": null, "rows": []}` for json) |
 | `--format` | string | No | markdown | Output format: markdown, json, csv, html, svg, png, jpeg, webp, pdf |
 | `--formulas` | flag | No | false | Show formulas instead of values |
 | `--eval` | flag | No | false | Evaluate formulas (compute live values) |
 | `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
-| `--limit` | int | No | 50 | Max rows to display (0 = no limit). When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (with `--stream` the notice goes to stderr instead); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
+| `--limit` | int | No | 50 | Max rows to display (0 = no limit). When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (under `--stream` too, since 0.21.0); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
+| `--offset` | int | No | 0 | Rows to skip from the top of the range before `--limit` applies; the trailer then reads "… showing rows X–Y of N". An offset past the last row is a usage error |
+| `--max-cols` | int | No | 0 | Max columns to display, from the left (0 = all); json adds `totalCols` when clipped, the other formats report "… showing X of Y columns" like the row notice |
 | `--skip-empty` | flag | No | false | Skip empty cells (JSON) or empty rows/columns (tabular) |
 | `--skip-hidden` | flag | No | false | Omit hidden rows/columns. **Default renders them** — a range you named never silently loses cells (GH-474) |
 | `--show-labels` | flag | No | false | Include column letters and row numbers |
@@ -327,6 +331,17 @@ properties, so it has always rendered every addressed cell — and for the same 
 honour `--skip-hidden` or emit the hidden-line marker: passing `--skip-hidden` with `--stream`
 prints `note: --skip-hidden is ignored with --stream …` on stderr and renders everything. Drop
 `--stream` when you need hidden lines elided or flagged.
+
+**One projection, two sources** (since 0.21.0): `view`, `cell`, `search`, `stats` and `filter`
+render the same `CellRecord`s whether the cells come from the loaded workbook or from the
+streaming reader, so `--stream` changes what a verb *can* answer, never how it prints: streaming
+`view --format json` is the same `{sheet, range, rows}` document as in memory (it used to be a bare
+array of strings), streaming `search` reports the true total and the same trailer, and `filter`
+streams. What each source can answer is the `capabilities` table of `xl schema --json`
+(`values`, `styles`, `formulas`, `comments` from both; `hidden`, `merges`, `hyperlinks`, `graph`,
+`eval`, `render` from the loaded workbook only). A query needing more than `--stream` has is
+refused before the file is opened: `UNSUPPORTED_IN_STREAM`, exit 2, with the in-memory
+alternative as the hint.
 
 Why the default: `xl search` finds a value in a hidden row and `xl cell C5` reads it, so a `view`
 that silently elided the same cell read as file corruption.
@@ -439,7 +454,13 @@ occupied cells — and `Dependents` the formulas that read the cell, by name or 
 contains it (an empty cell inside a summed range still names the sum). Empty cells inside a range
 and ranges over a sheet the workbook does not have are not listed (since 0.20.0; before, `SUM(A:A)`
 listed 1,048,576 entries). Same-sheet refs are unqualified, cross-sheet ones carry the sheet. For
-more than one hop, use `deps`.
+more than one hop, use `deps`. Under `--stream` the graph is not built: `Dependents: (not available
+in streaming mode)`.
+
+`--json`: `{ref, sheet, kind, value, formatted, formula, hidden, mergedInto, style, comment,
+hyperlink, dependencies, dependents}` — the typed cell record plus what the sheet attaches to it;
+`style` is `{font, fill, numFmt, align, border}` or `null` (`--no-style`), `dependents` is `null`
+under `--stream`.
 
 ---
 
@@ -586,13 +607,20 @@ direction was not requested; `formula` is `null` for a constant, `value` a formu
 ### `xl search <pattern>`
 
 Find cells containing text matching pattern. Searches all sheets by default (no `-s` needed).
+Matches are listed in row-major order per sheet; the text matched is the cell's raw lexeme (a
+number with every digit, `TRUE`/`FALSE`, an error token, an uncached formula's expression), not
+its formatted display.
 
 **Arguments**:
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `pattern` | string | Yes | — | Search pattern (supports regex) |
 | `--sheets` | string | No | all | Comma-separated list of sheets to search |
-| `--limit` | int | No | 50 | Max results (0 = no limit). Reports the true total ("Found Y matches") and appends a "… showing X of Y matches" trailer when the hit list is clipped |
+| `--limit` | int | No | 50 | Max results (0 = no limit). Reports the true total ("Found Y matches") and appends a "… showing X of Y matches" trailer when the hit list is clipped — under `--stream` too |
+
+`--json`: `{pattern, sheets, count, total, matches: [{ref, sheet, kind, value, formatted, formula,
+hidden, mergedInto}]}` — `count` the matches listed, `total` every match, each match the typed
+cell record (`value` an exact JSON lexeme, `formula` an object or `null`).
 
 **Output**:
 ```markdown
@@ -653,6 +681,9 @@ xl -f data.xlsx -s Sheet1 stats B2:B10000
 xl -f huge.xlsx --stream stats A1:E100000
 ```
 
+`--json`: `{sheet, range, count, sum, min, max, mean}` with every number an exact lexeme (never
+rounded through a `Double`); the text form keeps its two-decimal rendering.
+
 ---
 
 ### `xl filter --where <predicate> [options]`
@@ -692,7 +723,8 @@ xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
 
 **Output**: matching rows keep their original row numbers. Markdown adds a `Row` column and a match-count footer; CSV starts with a `row,<labels>` header line; JSON is an array of `{"row": n, "cells": {<label>: <typed value>}}` objects (labels are header names with `--header`, letters otherwise).
 
-**Limitations**: loads the workbook in memory (`--max-size` envelope applies); `--stream` is not supported. No date literals in predicates yet.
+**Streaming**: `--stream` scans the used range in O(1) memory, keeping only the matching rows
+(since 0.21.0; the output is identical to the in-memory run). No date literals in predicates yet.
 
 ---
 
@@ -1713,13 +1745,17 @@ otherwise:
   volatile, specialForm}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
   `batch --dry-run` → `{ops: [{index, op, summary}]}` (`index` is the op's 1-based position,
   the index a `BATCH_OP_FAILED` reports; parse warnings ride in the envelope's `warnings[]`); `batch --schema` → the batch document's JSON
-  Schema; `schema` → `{version, exitCodes, errorCodes, warningCodes, globals, verbs, batchOps,
-  functions, envelope}` (see
+  Schema; `schema` → `{version, exitCodes, errorCodes, warningCodes, globals, verbs,
+  capabilities, batchOps, functions, envelope}` (see
   [`xl schema`](#xl-schema---json)); `describe` → `{sheets, definedNames, date1904}` (`--full`
   adds per-sheet counts and `calcPr`); `audit` → `{clean, findings, errorCells,
   uncachedFormulas, unparseable, volatile, dynamic, cycles, externalRefs, unresolvedReaders,
   calcPr}`; `deps` → `{ref, formula, value, direction, depth, precedents, dependents}`.
-- Every other verb (`cell`, `search`, `stats`, `view` in a text format, and all writes) yields
+- The record-based reads are typed too (since 0.21.0): `cell` → the cell record with `style`,
+  `comment`, `hyperlink`, `dependencies`, `dependents`; `search` → `{pattern, sheets, count,
+  total, matches}`; `stats` → `{sheet, range, count, sum, min, max, mean}` — every number an
+  exact lexeme.
+- Every other verb (`view` in a text format, and all writes) yields
   `{"text": <what text mode prints>, "saved": <path or null>, "written": <bool>}`. `saved` is the
   user-visible output path once the write was committed; it is `null` (and `written` is `false`)
   when nothing was — a read, or an `-i` run whose `--strict` gate discarded the staged file.

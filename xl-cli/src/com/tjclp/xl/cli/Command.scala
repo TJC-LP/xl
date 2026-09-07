@@ -65,11 +65,13 @@ enum CliCommand derives CanEqual:
   // Read-only (sheet-level)
   case Bounds(scan: Boolean) // scan=false: instant (dimension element), scan=true: full scan
   case View(
-    range: String,
+    range: Option[String], // None: the sheet's used range (W2.4)
     showFormulas: Boolean,
     evalFormulas: Boolean,
     strict: Boolean,
     limit: Int,
+    offset: Int, // rows skipped from the top of the range
+    maxCols: Int, // columns kept from the left (0 = all)
     format: Option[ViewFormat], // None: markdown, or JSON under --json
     printScale: Boolean,
     showGridlines: Boolean,
@@ -260,7 +262,7 @@ enum CliCommand derives CanEqual:
    * for a verb with no ref argument (`bounds`, `row`, `unfreeze`, …) or a formula one (`eval`).
    */
   def targetRefs: List[String] = this match
-    case v: View => List(v.range)
+    case v: View => v.range.toList
     case Cell(ref, _) => List(ref)
     case Stats(ref) => List(ref)
     case Deps(ref, _, _) => List(ref)

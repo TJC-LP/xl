@@ -1,7 +1,8 @@
 package com.tjclp.xl.cli.output
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{CellValue, Comment, FormulaKind}
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cli.read.{CellDetail, CellKind, CellRecord}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.{CellStyle, StyleId}
 import com.tjclp.xl.styles.alignment.Align
@@ -75,58 +76,55 @@ object Format:
    * Format cell info output with full details.
    *
    * Shows raw value, formatted value (using NumFmt), style info (non-default only), comment,
-   * hyperlink, and formula dependencies.
+   * hyperlink, and formula dependencies. `Dependents` prints the list, `(none)` when it is empty,
+   * and `(not available in streaming mode)` when the source could not compute it.
    */
-  def cellInfo(
-    ref: ARef,
-    value: CellValue,
-    formatted: String,
-    style: Option[CellStyle],
-    comment: Option[Comment],
-    hyperlink: Option[String],
-    dependencies: Vector[String],
-    dependents: Vector[String]
-  ): String =
+  def cellInfo(detail: CellDetail): String =
+    val record = detail.record
     val sb = new StringBuilder
-    sb.append(s"Cell: ${ref.toA1}\n")
-    sb.append(s"Type: ${valueType(value)}\n")
+    sb.append(s"Cell: ${record.ref.toA1}\n")
+    sb.append(s"Type: ${record.kind.name}\n")
 
     // For formulas, show expression and cached value separately
-    value match
-      case CellValue.Formula(expr, cached, kind) =>
-        val displayExpr = RendererCommon.formulaDisplay(expr, kind)
-        sb.append(s"Formula: $displayExpr\n")
-        cached.foreach { v =>
-          sb.append(s"Cached: ${formatValue(v)}\n")
+    record.formula match
+      case Some(f) =>
+        sb.append(s"Formula: ${f.display}\n")
+        if f.cached then
+          val cachedRaw = quoted(record.value)
+          sb.append(s"Cached: $cachedRaw\n")
           // Only show Formatted for cached value if different from raw
-          val cachedRaw = formatValue(v)
-          if formatted != cachedRaw && formatted != cachedRaw.stripPrefix("\"").stripSuffix("\"")
-          then sb.append(s"Formatted: $formatted\n")
-        }
-      case CellValue.Empty =>
+          if record.formatted != cachedRaw &&
+            record.formatted != cachedRaw.stripPrefix("\"").stripSuffix("\"")
+          then sb.append(s"Formatted: ${record.formatted}\n")
+      case None if record.kind == CellKind.Empty =>
         sb.append("Value: (empty)\n")
-      case _ =>
-        sb.append(s"Raw: ${formatValue(value)}\n")
+      case None =>
+        val rawStr = quoted(record.value)
+        sb.append(s"Raw: $rawStr\n")
         // Only show Formatted if different from Raw
-        val rawStr = formatValue(value)
-        if formatted != rawStr && formatted != rawStr.stripPrefix("\"").stripSuffix("\"") then
-          sb.append(s"Formatted: $formatted\n")
+        if record.formatted != rawStr &&
+          record.formatted != rawStr.stripPrefix("\"").stripSuffix("\"")
+        then sb.append(s"Formatted: ${record.formatted}\n")
 
     // Style (non-default properties only)
-    formatStyle(style).foreach(s => sb.append(s).append("\n"))
+    formatStyle(record.style).foreach(s => sb.append(s).append("\n"))
 
     // Comment
-    comment.foreach { c =>
+    detail.comment.foreach { c =>
       val authorStr = c.author.map(a => s" (Author: $a)").getOrElse("")
       sb.append(s"""Comment: "${c.text.toPlainText}"$authorStr\n""")
     }
 
     // Hyperlink
-    hyperlink.foreach(h => sb.append(s"Hyperlink: $h\n"))
+    detail.hyperlink.foreach(h => sb.append(s"Hyperlink: $h\n"))
 
     // Dependencies and dependents
-    val depsStr = if dependencies.isEmpty then "(none)" else dependencies.mkString(", ")
-    val deptsStr = if dependents.isEmpty then "(none)" else dependents.mkString(", ")
+    val depsStr =
+      if detail.dependencies.isEmpty then "(none)" else detail.dependencies.mkString(", ")
+    val deptsStr = detail.dependents match
+      case None => "(not available in streaming mode)"
+      case Some(ds) if ds.isEmpty => "(none)"
+      case Some(ds) => ds.mkString(", ")
     sb.append(s"Dependencies: $depsStr\n")
     sb.append(s"Dependents: $deptsStr")
 
@@ -212,28 +210,19 @@ object Format:
       else Some(result.map("  " + _).mkString("Style:\n", "\n", ""))
     }
 
-  private def valueType(value: CellValue): String =
-    value match
-      case CellValue.Text(_) => "text"
-      case CellValue.Number(_) => "number"
-      case CellValue.Bool(_) => "boolean"
-      case CellValue.DateTime(_) => "datetime"
-      case CellValue.Error(_) => "error"
-      case CellValue.RichText(_) => "richtext"
-      case CellValue.Empty => "empty"
-      case CellValue.Formula(_, _, _) => "formula"
+  /** The kind name of a value, as the `Type:` line and `put`/`eval` messages print it. */
+  private def valueType(value: CellValue): String = CellKind.of(value).name
 
-  private def formatValue(value: CellValue): String =
-    value match
-      case CellValue.Text(s) => s"\"$s\""
-      case CellValue.Number(n) =>
-        if n.isWhole then n.toBigInt.toString
-        else n.underlying.stripTrailingZeros.toPlainString
-      case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-      case CellValue.DateTime(dt) => dt.toString
-      case CellValue.Error(err) => err.toExcel
-      case CellValue.RichText(rt) => s"\"${rt.toPlainText}\""
-      case CellValue.Empty => "(empty)"
-      case CellValue.Formula(expr, cached, kind) =>
-        val displayExpr = RendererCommon.formulaDisplay(expr, kind)
-        cached.map(formatValue).getOrElse(displayExpr)
+  /**
+   * A value as the prose messages spell it: the record's canonical lexeme ([[CellRecord.raw]]),
+   * with text quoted and an empty cell shown as `(empty)`; a formula shows its cached value that
+   * way, or its expression when it has none.
+   */
+  private def formatValue(value: CellValue): String = quoted(value)
+
+  private def quoted(value: CellValue): String = value match
+    case CellValue.Text(_) | CellValue.RichText(_) => s"\"${CellRecord.raw(value)}\""
+    case CellValue.Empty => "(empty)"
+    case CellValue.Formula(expr, cached, kind) =>
+      cached.fold(RendererCommon.formulaDisplay(expr, kind))(quoted)
+    case other => CellRecord.raw(other)

@@ -1,0 +1,15 @@
+## args
+-f
+<DIR>/simple.xlsx
+--stream
+search
+Hello
+## exit
+0
+## stdout
+Found 1 matches in 2 sheets:
+
+| Ref     | Value |
+|---------|-------|
+| Data!A1 | Hello |
+## stderr

@@ -1,8 +1,6 @@
 package com.tjclp.xl.cli
 
-import java.io.{ByteArrayOutputStream, PrintStream}
-import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.Files
 
 import cats.effect.IO
 import munit.CatsEffectSuite
@@ -10,21 +8,21 @@ import munit.CatsEffectSuite
 import com.tjclp.xl.{Sheet, Workbook, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.commands.{ReadCommands, StreamingReadCommands}
+import com.tjclp.xl.cli.contract.{Outcome, WarningCode}
 import com.tjclp.xl.cli.raster.BatikRasterizer
-import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.cli.read.{ReadQuery, ReadTestKit}
 
 /**
  * GH-351: view/search must report when --limit clips output.
  *
  * Pins the truncation marker semantics per format:
  *   - markdown: trailer line after the table ("… showing X of Y rows")
- *   - csv/svg: stdout stays byte-identical, notice goes to stderr
- *   - html: notice on stderr plus a trailing HTML comment on stdout
- *   - json: top-level "truncated"/"totalRows" fields (only when clipped); streaming json stays a
- *     bare array and notes on stderr instead
+ *   - csv/svg: stdout stays byte-identical, notice goes to the warnings (stderr in text mode)
+ *   - html: notice as a warning plus a trailing HTML comment on stdout
+ *   - json: top-level "truncated"/"totalRows" fields (only when clipped) — the streaming source too
+ *     (W2.4: one renderer for both sources)
  *   - raster (png/jpeg/webp/pdf): notice appended to the "Exported:" status line
- *   - search: total match count + trailer when the hit list is clipped
+ *   - search: total match count + trailer when the hit list is clipped, in both sources
  *   - --limit 0 means "no limit"
  */
 class ViewTruncationSpec extends CatsEffectSuite:
@@ -37,48 +35,16 @@ class ViewTruncationSpec extends CatsEffectSuite:
 
   private def wbWithRows(n: Int): Workbook = Workbook(Vector(sheetWithRows(n)))
 
-  private def runView(
-    wb: Workbook,
-    range: String,
-    limit: Int,
-    format: ViewFormat
-  ): IO[String] =
-    ReadCommands.view(
-      wb,
-      wb.sheets.headOption,
-      range,
-      showFormulas = false,
-      evalFormulas = false,
-      strict = false,
-      limit = limit,
-      format = format,
-      printScale = false,
-      showGridlines = false,
-      showLabels = false,
-      dpi = 96,
-      quality = 90,
-      rasterOutput = None,
-      skipEmpty = false,
-      headerRow = None
-    )
+  private def runView(wb: Workbook, range: String, limit: Int, format: ViewFormat): IO[Outcome] =
+    ReadTestKit.inMemory(wb, Some("Data"), ReadTestKit.view(Some(range), format, limit = limit))
 
-  /** Capture System.err produced while running the given IO. */
-  private def captureStderr[A](io: IO[A]): IO[(A, String)] =
-    IO.blocking {
-      val baos = new ByteArrayOutputStream()
-      val prevErr = System.err
-      System.setErr(new PrintStream(baos, true, "UTF-8"))
-      try
-        import cats.effect.unsafe.implicits.global
-        val result = io.unsafeRunSync()
-        (result, new String(baos.toByteArray, StandardCharsets.UTF_8))
-      finally System.setErr(prevErr)
-    }
+  private def truncationWarnings(outcome: Outcome): Vector[String] =
+    outcome.warnings.filter(_.code == WarningCode.TRUNCATED).map(_.message)
 
   // ========== view: markdown ==========
 
   test("view markdown: clipped output appends trailer with correct counts") {
-    runView(wbWithRows(100), "A1:A100", 50, ViewFormat.Markdown).map { out =>
+    runView(wbWithRows(100), "A1:A100", 50, ViewFormat.Markdown).map(ReadTestKit.text).map { out =>
       assert(out.contains("… showing 50 of 100 rows"), s"missing trailer:\n$out")
       assert(out.contains("--limit 0 = no limit"), s"missing unlimited hint:\n$out")
       assert(out.contains("| 50"), "row 50 should be rendered")
@@ -97,53 +63,113 @@ class ViewTruncationSpec extends CatsEffectSuite:
   }
 
   test("view markdown: unclipped output has no trailer") {
-    runView(wbWithRows(30), "A1:A30", 50, ViewFormat.Markdown).map { out =>
+    runView(wbWithRows(30), "A1:A30", 50, ViewFormat.Markdown).map(ReadTestKit.text).map { out =>
       assert(!out.contains("… showing"), s"unexpected trailer:\n$out")
     }
   }
 
   test("view markdown: exact-limit output has no trailer") {
-    runView(wbWithRows(50), "A1:A50", 50, ViewFormat.Markdown).map { out =>
+    runView(wbWithRows(50), "A1:A50", 50, ViewFormat.Markdown).map(ReadTestKit.text).map { out =>
       assert(!out.contains("… showing"), s"unexpected trailer:\n$out")
     }
   }
 
   test("view markdown: --limit 0 returns everything with no trailer") {
-    runView(wbWithRows(100), "A1:A100", 0, ViewFormat.Markdown).map { out =>
+    runView(wbWithRows(100), "A1:A100", 0, ViewFormat.Markdown).map(ReadTestKit.text).map { out =>
       assert(out.contains("| 100"), "row 100 should be rendered with --limit 0")
       assert(!out.contains("… showing"), s"unexpected trailer:\n$out")
     }
   }
 
-  // ========== view: csv ==========
+  // ========== view: paging (W2.4) ==========
 
-  test("view csv: stdout stays byte-identical, notice goes to stderr") {
-    val wb = wbWithRows(100)
-    val io =
-      for
-        clipped <- runView(wb, "A1:A100", 50, ViewFormat.Csv)
-        exact <- runView(wb, "A1:A50", 50, ViewFormat.Csv)
-      yield (clipped, exact)
-    captureStderr(io).map { case ((clipped, exact), stderr) =>
-      assertEquals(clipped, exact, "clipped CSV stdout must equal the unclipped 50-row render")
-      assert(!clipped.contains("showing"), "notice must not leak into CSV stdout")
-      assert(
-        stderr.contains("… showing 50 of 100 rows"),
-        s"expected truncation notice on stderr, got: '$stderr'"
-      )
-    }
+  test("view --offset pages the range and says which rows are shown") {
+    val wb = wbWithRows(10)
+    ReadTestKit
+      .inMemory(wb, Some("Data"), ReadTestKit.view(Some("A1:A10"), limit = 3, offset = 4))
+      .map { outcome =>
+        val out = ReadTestKit.text(outcome)
+        assert(out.contains("| 5 "), s"first shown row must be 5:\n$out")
+        assert(out.contains("| 7 "), s"last shown row must be 7:\n$out")
+        assert(!out.contains("| 4 "), s"row 4 must be skipped:\n$out")
+        assert(!out.contains("| 8 "), s"row 8 must be clipped:\n$out")
+        assert(out.contains("… showing rows 5–7 of 10"), s"paging trailer missing:\n$out")
+      }
   }
 
-  test("view csv: no stderr notice when not clipped") {
-    captureStderr(runView(wbWithRows(30), "A1:A30", 50, ViewFormat.Csv)).map { case (_, stderr) =>
-      assert(!stderr.contains("showing"), s"unexpected stderr notice: '$stderr'")
+  test("view --offset beyond the range is a usage error") {
+    ReadTestKit
+      .inMemory(wbWithRows(3), Some("Data"), ReadTestKit.view(Some("A1:A3"), offset = 3))
+      .map { outcome =>
+        assertEquals(outcome.error.map(_.code), Some("USAGE"))
+        assertEquals(outcome.exitCode.code, 2)
+      }
+  }
+
+  test("view --max-cols clips columns and json reports totalCols") {
+    val sheet = (0 until 5).foldLeft(Sheet("Data")) { (s, col) =>
+      s.put(ARef.from0(col, 0), CellValue.Number(BigDecimal(col)))
     }
+    val wb = Workbook(Vector(sheet))
+    for
+      json <- ReadTestKit.readText(
+        wb,
+        Some("Data"),
+        ReadTestKit.view(None, ViewFormat.Json, maxCols = 2)
+      )
+      md <- ReadTestKit.inMemory(wb, Some("Data"), ReadTestKit.view(None, maxCols = 2))
+    yield
+      assert(json.contains("\"range\": \"A1:B1\""), json)
+      assert(json.contains("\"truncated\": true"), json)
+      assert(json.contains("\"totalCols\": 5"), json)
+      assert(!json.contains("totalRows"), json)
+      val text = ReadTestKit.text(md)
+      assert(text.contains("… showing 2 of 5 columns"), text)
+  }
+
+  test("view with no range shows the used range") {
+    val sheet = Sheet("Data")
+      .put(ARef.from0(1, 1), CellValue.Text("b2"))
+      .put(ARef.from0(3, 4), CellValue.Text("d5"))
+    val wb = Workbook(Vector(sheet))
+    for
+      json <- ReadTestKit.readText(wb, Some("Data"), ReadTestKit.view(None, ViewFormat.Json))
+      empty <- ReadTestKit.readText(
+        Workbook(Vector(Sheet("Data"))),
+        Some("Data"),
+        ReadTestKit.view(None, ViewFormat.Json)
+      )
+    yield
+      assert(json.contains("\"range\": \"B2:D5\""), json)
+      assertEquals(ujson.read(empty)("range"), ujson.Null)
+      assertEquals(ujson.read(empty)("rows").arr.size, 0)
+  }
+
+  // ========== view: csv ==========
+
+  test("view csv: stdout stays byte-identical, notice goes to the warnings") {
+    val wb = wbWithRows(100)
+    for
+      clipped <- runView(wb, "A1:A100", 50, ViewFormat.Csv)
+      exact <- runView(wb, "A1:A50", 50, ViewFormat.Csv)
+    yield
+      assertEquals(
+        ReadTestKit.text(clipped),
+        ReadTestKit.text(exact),
+        "clipped CSV stdout must equal the unclipped 50-row render"
+      )
+      assert(!ReadTestKit.text(clipped).contains("showing"), "notice must not leak into CSV stdout")
+      assert(
+        truncationWarnings(clipped).exists(_.contains("… showing 50 of 100 rows")),
+        s"expected truncation warning, got: ${clipped.warnings}"
+      )
+      assertEquals(exact.warnings, Vector.empty)
   }
 
   // ========== view: json ==========
 
   test("view json: clipped output carries truncated/totalRows fields") {
-    runView(wbWithRows(100), "A1:A100", 50, ViewFormat.Json).map { out =>
+    runView(wbWithRows(100), "A1:A100", 50, ViewFormat.Json).map(ReadTestKit.text).map { out =>
       assert(out.contains("\"truncated\": true"), s"missing truncated field:\n$out")
       assert(out.contains("\"totalRows\": 100"), s"missing totalRows field:\n$out")
       assert(out.contains("\"range\": \"A1:A50\""), "range should reflect emitted rows")
@@ -151,7 +177,7 @@ class ViewTruncationSpec extends CatsEffectSuite:
   }
 
   test("view json: unclipped output has no truncation fields") {
-    runView(wbWithRows(30), "A1:A30", 50, ViewFormat.Json).map { out =>
+    runView(wbWithRows(30), "A1:A30", 50, ViewFormat.Json).map(ReadTestKit.text).map { out =>
       assert(!out.contains("truncated"), s"unexpected truncated field:\n$out")
       assert(!out.contains("totalRows"), s"unexpected totalRows field:\n$out")
     }
@@ -162,24 +188,11 @@ class ViewTruncationSpec extends CatsEffectSuite:
       (s, i) => s.put(ARef.from0(0, i), CellValue.Number(BigDecimal(i)))
     }
     val wb = Workbook(Vector(sheet))
-    ReadCommands
-      .view(
+    ReadTestKit
+      .readText(
         wb,
-        wb.sheets.headOption,
-        "A1:A101",
-        showFormulas = false,
-        evalFormulas = false,
-        strict = false,
-        limit = 50,
-        format = ViewFormat.Json,
-        printScale = false,
-        showGridlines = false,
-        showLabels = false,
-        dpi = 96,
-        quality = 90,
-        rasterOutput = None,
-        skipEmpty = false,
-        headerRow = Some(1)
+        Some("Data"),
+        ReadTestKit.view(Some("A1:A101"), ViewFormat.Json, limit = 50, headerRow = Some(1))
       )
       .map { out =>
         assert(out.contains("\"records\""), s"expected records mode:\n$out")
@@ -188,55 +201,67 @@ class ViewTruncationSpec extends CatsEffectSuite:
       }
   }
 
+  test("view json: a header row outside the window still keys the records") {
+    val sheet = (1 to 10).foldLeft(Sheet("Data").put(ARef.from0(0, 0), CellValue.Text("Col"))) {
+      (s, i) => s.put(ARef.from0(0, i), CellValue.Number(BigDecimal(i)))
+    }
+    val wb = Workbook(Vector(sheet))
+    ReadTestKit
+      .readText(
+        wb,
+        Some("Data"),
+        ReadTestKit.view(Some("A5:A7"), ViewFormat.Json, headerRow = Some(1))
+      )
+      .map { out =>
+        assert(out.contains("""{"Col": 4}"""), s"header outside the window must still key:\n$out")
+        assert(out.contains("""{"Col": 6}"""), out)
+      }
+  }
+
   // ========== view: html ==========
 
-  test("view html: clipped output appends HTML comment trailer and notes on stderr") {
-    captureStderr(runView(wbWithRows(100), "A1:A100", 50, ViewFormat.Html)).map {
-      case (out, stderr) =>
-        assert(
-          out.trim.endsWith(
-            "<!-- … showing 50 of 100 rows (use --limit to raise; --limit 0 = no limit) -->"
-          ),
-          s"missing trailing HTML comment:\n${out.takeRight(200)}"
-        )
-        assert(
-          stderr.contains("… showing 50 of 100 rows"),
-          s"expected truncation notice on stderr, got: '$stderr'"
-        )
+  test("view html: clipped output appends HTML comment trailer and warns") {
+    runView(wbWithRows(100), "A1:A100", 50, ViewFormat.Html).map { outcome =>
+      val out = ReadTestKit.text(outcome)
+      assert(
+        out.trim.endsWith(
+          "<!-- … showing 50 of 100 rows (use --limit to raise; --limit 0 = no limit) -->"
+        ),
+        s"missing trailing HTML comment:\n${out.takeRight(200)}"
+      )
+      assert(
+        truncationWarnings(outcome).exists(_.contains("… showing 50 of 100 rows")),
+        s"expected truncation warning, got: ${outcome.warnings}"
+      )
     }
   }
 
-  test("view html: unclipped output has no comment or stderr notice") {
-    captureStderr(runView(wbWithRows(30), "A1:A30", 50, ViewFormat.Html)).map {
-      case (out, stderr) =>
-        assert(!out.contains("… showing"), s"unexpected marker:\n${out.takeRight(200)}")
-        assert(!stderr.contains("showing"), s"unexpected stderr notice: '$stderr'")
+  test("view html: unclipped output has no comment or warning") {
+    runView(wbWithRows(30), "A1:A30", 50, ViewFormat.Html).map { outcome =>
+      assert(!ReadTestKit.text(outcome).contains("… showing"), "unexpected marker")
+      assertEquals(outcome.warnings, Vector.empty)
     }
   }
 
   // ========== view: svg ==========
 
-  test("view svg: stdout stays byte-identical, notice goes to stderr") {
+  test("view svg: stdout stays byte-identical, notice goes to the warnings") {
     val wb = wbWithRows(100)
-    val io =
-      for
-        clipped <- runView(wb, "A1:A100", 50, ViewFormat.Svg)
-        exact <- runView(wb, "A1:A50", 50, ViewFormat.Svg)
-      yield (clipped, exact)
-    captureStderr(io).map { case ((clipped, exact), stderr) =>
-      assertEquals(clipped, exact, "clipped SVG stdout must equal the unclipped 50-row render")
-      assert(!clipped.contains("showing"), "notice must not leak into SVG stdout")
-      assert(
-        stderr.contains("… showing 50 of 100 rows"),
-        s"expected truncation notice on stderr, got: '$stderr'"
+    for
+      clipped <- runView(wb, "A1:A100", 50, ViewFormat.Svg)
+      exact <- runView(wb, "A1:A50", 50, ViewFormat.Svg)
+    yield
+      assertEquals(
+        ReadTestKit.text(clipped),
+        ReadTestKit.text(exact),
+        "clipped SVG stdout must equal the unclipped 50-row render"
       )
-    }
-  }
-
-  test("view svg: no stderr notice when not clipped") {
-    captureStderr(runView(wbWithRows(30), "A1:A30", 50, ViewFormat.Svg)).map { case (_, stderr) =>
-      assert(!stderr.contains("showing"), s"unexpected stderr notice: '$stderr'")
-    }
+      assert(!ReadTestKit.text(clipped).contains("showing"), "notice must not leak into SVG stdout")
+      assert(
+        truncationWarnings(clipped).exists(_.contains("… showing 50 of 100 rows")),
+        s"expected truncation warning, got: ${clipped.warnings}"
+      )
+      assertEquals(exact.warnings, Vector.empty)
   }
 
   // ========== view: raster ==========
@@ -246,24 +271,12 @@ class ViewTruncationSpec extends CatsEffectSuite:
       assume(batikAvailable, "AWT not available - skipping raster truncation test")
       val tempFile = Files.createTempFile("xl-cli-truncation-", ".png")
       tempFile.toFile.deleteOnExit()
-      ReadCommands
-        .view(
+      ReadTestKit
+        .readText(
           wbWithRows(100),
-          wbWithRows(100).sheets.headOption,
-          "A1:A100",
-          showFormulas = false,
-          evalFormulas = false,
-          strict = false,
-          limit = 5,
-          format = ViewFormat.Png,
-          printScale = false,
-          showGridlines = false,
-          showLabels = false,
-          dpi = 48,
-          quality = 90,
-          rasterOutput = Some(tempFile),
-          skipEmpty = false,
-          headerRow = None
+          Some("Data"),
+          ReadTestKit
+            .view(Some("A1:A100"), ViewFormat.Png, limit = 5, rasterOutput = Some(tempFile))
         )
         .map { out =>
           assert(out.contains("Exported:"), s"expected export status line:\n$out")
@@ -276,180 +289,118 @@ class ViewTruncationSpec extends CatsEffectSuite:
 
   // ========== search ==========
 
+  private def search(wb: Workbook, limit: Int): IO[String] =
+    ReadTestKit.readText(wb, Some("Data"), ReadQuery.Search("\\d", limit, None))
+
   test("search: clipped hit list reports total count and trailer") {
-    val wb = wbWithRows(100) // every cell matches \d
-    ReadCommands.search(wb, wb.sheets.headOption, "\\d", limit = 10, sheetsFilter = None).map {
-      out =>
-        assert(out.contains("Found 100 matches"), s"expected true total count:\n$out")
-        assert(out.contains("… showing 10 of 100 matches"), s"missing trailer:\n$out")
+    search(wbWithRows(100), 10).map { out =>
+      assert(out.contains("Found 100 matches"), s"expected true total count:\n$out")
+      assert(out.contains("… showing 10 of 100 matches"), s"missing trailer:\n$out")
     }
   }
 
   test("search: unclipped hit list has no trailer") {
-    val wb = wbWithRows(10)
-    ReadCommands.search(wb, wb.sheets.headOption, "\\d", limit = 50, sheetsFilter = None).map {
-      out =>
-        assert(out.contains("Found 10 matches"), s"expected count:\n$out")
-        assert(!out.contains("… showing"), s"unexpected trailer:\n$out")
+    search(wbWithRows(10), 50).map { out =>
+      assert(out.contains("Found 10 matches"), s"expected count:\n$out")
+      assert(!out.contains("… showing"), s"unexpected trailer:\n$out")
     }
   }
 
   test("search: --limit 0 returns all matches with no trailer") {
-    val wb = wbWithRows(100)
-    ReadCommands.search(wb, wb.sheets.headOption, "\\d", limit = 0, sheetsFilter = None).map {
-      out =>
-        assert(out.contains("Found 100 matches"), s"expected all matches:\n$out")
-        assert(out.contains("Data!A100"), "last match should be present with --limit 0")
-        assert(!out.contains("… showing"), s"unexpected trailer:\n$out")
+    search(wbWithRows(100), 0).map { out =>
+      assert(out.contains("Found 100 matches"), s"expected all matches:\n$out")
+      assert(out.contains("Data!A100"), "last match should be present with --limit 0")
+      assert(!out.contains("… showing"), s"unexpected trailer:\n$out")
+    }
+  }
+
+  test("search: matches are listed in row-major order") {
+    val sheet = Sheet("Data")
+      .put(ARef.from0(2, 0), CellValue.Number(BigDecimal(3)))
+      .put(ARef.from0(0, 1), CellValue.Number(BigDecimal(4)))
+      .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
+      .put(ARef.from0(1, 0), CellValue.Number(BigDecimal(2)))
+    search(Workbook(Vector(sheet)), 0).map { out =>
+      val refs = out.linesIterator.collect {
+        case l if l.contains("Data!") => l.split("\\|")(1).trim
+      }
+      assertEquals(refs.toVector, Vector("Data!A1", "Data!B1", "Data!C1", "Data!A2"))
     }
   }
 
   // ========== streaming parity ==========
 
-  private def withTempWorkbook[A](wb: Workbook)(test: Path => IO[A]): IO[A] =
-    IO.blocking {
-      val tempFile = Files.createTempFile("xl-cli-truncation-", ".xlsx")
-      tempFile.toFile.deleteOnExit()
-      tempFile
-    }.flatMap { tempFile =>
-      ExcelIO.instance[IO].write(wb, tempFile) *> test(tempFile)
-    }
-
   test("streaming view markdown: clipped output appends the same trailer") {
-    withTempWorkbook(wbWithRows(100)) { path =>
-      StreamingReadCommands
-        .view(
-          path,
-          Some("Data"),
-          "A1:A100",
-          showFormulas = false,
-          limit = 50,
-          format = ViewFormat.Markdown,
-          showLabels = true,
-          skipEmpty = false,
-          headerRow = None
-        )
-        .map { out =>
-          assert(out.contains("… showing 50 of 100 rows"), s"missing trailer:\n$out")
-        }
+    ReadTestKit.withTempWorkbook(wbWithRows(100)) { path =>
+      ReadTestKit
+        .streaming(path, Some("Data"), ReadTestKit.view(Some("A1:A100"), limit = 50))
+        .map(ReadTestKit.text)
+        .map(out => assert(out.contains("… showing 50 of 100 rows"), s"missing trailer:\n$out"))
     }
   }
 
   test("streaming view markdown: --limit 0 returns everything with no trailer") {
-    withTempWorkbook(wbWithRows(100)) { path =>
-      StreamingReadCommands
-        .view(
-          path,
-          Some("Data"),
-          "A1:A100",
-          showFormulas = false,
-          limit = 0,
-          format = ViewFormat.Markdown,
-          showLabels = true,
-          skipEmpty = false,
-          headerRow = None
-        )
+    ReadTestKit.withTempWorkbook(wbWithRows(100)) { path =>
+      ReadTestKit
+        .streaming(path, Some("Data"), ReadTestKit.view(Some("A1:A100"), limit = 0))
+        .map(ReadTestKit.text)
         .map { out =>
-          assert(out.contains("| 100 |"), "row 100 should be rendered with --limit 0")
+          assert(out.contains("| 100|"), "row 100 should be rendered with --limit 0")
           assert(!out.contains("… showing"), s"unexpected trailer:\n$out")
         }
     }
   }
 
-  private def runStreamingView(
-    path: Path,
-    range: String,
-    limit: Int,
-    format: ViewFormat
-  ): IO[String] =
-    StreamingReadCommands.view(
-      path,
-      Some("Data"),
-      range,
-      showFormulas = false,
-      limit = limit,
-      format = format,
-      showLabels = false,
-      skipEmpty = false,
-      headerRow = None
-    )
-
-  test("streaming view csv: stdout stays byte-identical, notice goes to stderr") {
-    withTempWorkbook(wbWithRows(100)) { path =>
-      val io =
-        for
-          clipped <- runStreamingView(path, "A1:A100", 50, ViewFormat.Csv)
-          exact <- runStreamingView(path, "A1:A50", 50, ViewFormat.Csv)
-        yield (clipped, exact)
-      captureStderr(io).map { case ((clipped, exact), stderr) =>
-        assertEquals(clipped, exact, "clipped CSV stdout must equal the unclipped 50-row render")
-        assert(!clipped.contains("showing"), "notice must not leak into CSV stdout")
-        assert(
-          stderr.contains("… showing 50 of 100 rows"),
-          s"expected truncation notice on stderr, got: '$stderr'"
+  test("streaming view csv: stdout stays byte-identical, notice goes to the warnings") {
+    ReadTestKit.withTempWorkbook(wbWithRows(100)) { path =>
+      for
+        clipped <- ReadTestKit.streaming(
+          path,
+          Some("Data"),
+          ReadTestKit.view(Some("A1:A100"), ViewFormat.Csv, limit = 50)
         )
-      }
-    }
-  }
-
-  test("streaming view csv: no stderr notice when not clipped") {
-    withTempWorkbook(wbWithRows(30)) { path =>
-      captureStderr(runStreamingView(path, "A1:A30", 50, ViewFormat.Csv)).map { case (_, stderr) =>
-        assert(!stderr.contains("showing"), s"unexpected stderr notice: '$stderr'")
-      }
-    }
-  }
-
-  test("streaming view json: stdout stays a bare parseable array, notice goes to stderr") {
-    withTempWorkbook(wbWithRows(100)) { path =>
-      val io =
-        for
-          clipped <- runStreamingView(path, "A1:A100", 50, ViewFormat.Json)
-          exact <- runStreamingView(path, "A1:A50", 50, ViewFormat.Json)
-        yield (clipped, exact)
-      captureStderr(io).map { case ((clipped, exact), stderr) =>
-        assertEquals(clipped, exact, "clipped JSON stdout must equal the unclipped 50-row render")
-        assert(clipped.trim.startsWith("["), s"streaming JSON must stay a bare array:\n$clipped")
-        assert(clipped.trim.endsWith("]"), s"streaming JSON must stay a bare array:\n$clipped")
-        assert(!clipped.contains("truncated"), "no in-band truncated field in streaming JSON")
-        assert(!clipped.contains("showing"), "notice must not leak into JSON stdout")
-        assert(
-          stderr.contains("… showing 50 of 100 rows"),
-          s"expected truncation notice on stderr, got: '$stderr'"
+        exact <- ReadTestKit.streaming(
+          path,
+          Some("Data"),
+          ReadTestKit.view(Some("A1:A50"), ViewFormat.Csv, limit = 50)
         )
-      }
+      yield
+        assertEquals(ReadTestKit.text(clipped), ReadTestKit.text(exact))
+        assert(!ReadTestKit.text(clipped).contains("showing"))
+        assert(truncationWarnings(clipped).exists(_.contains("… showing 50 of 100 rows")))
+        assertEquals(exact.warnings, Vector.empty)
     }
   }
 
-  test("streaming view json: no stderr notice when not clipped") {
-    withTempWorkbook(wbWithRows(30)) { path =>
-      captureStderr(runStreamingView(path, "A1:A30", 50, ViewFormat.Json)).map { case (_, stderr) =>
-        assert(!stderr.contains("showing"), s"unexpected stderr notice: '$stderr'")
-      }
+  test("streaming view json: the typed shape with in-band truncation fields, no warning") {
+    ReadTestKit.withTempWorkbook(wbWithRows(100)) { path =>
+      for
+        streamed <- ReadTestKit.streaming(
+          path,
+          Some("Data"),
+          ReadTestKit.view(Some("A1:A100"), ViewFormat.Json, limit = 50)
+        )
+        memory <- runView(wbWithRows(100), "A1:A100", 50, ViewFormat.Json)
+      yield
+        assertEquals(ReadTestKit.text(streamed), ReadTestKit.text(memory))
+        assert(ReadTestKit.text(streamed).contains("\"truncated\": true"))
+        assertEquals(streamed.warnings, Vector.empty)
     }
   }
 
-  test("streaming search: hitting the limit flags a possible clip") {
-    withTempWorkbook(wbWithRows(100)) { path =>
-      StreamingReadCommands
-        .search(path, Some("Data"), "\\d", limit = 10, sheetsFilter = None)
-        .map { out =>
-          assert(out.contains("Found 10 matches"), s"expected clipped count:\n$out")
-          assert(
-            out.contains("… showing first 10 matches"),
-            s"missing streaming clip notice:\n$out"
-          )
-        }
-    }
-  }
-
-  test("streaming search: --limit 0 scans everything with no clip notice") {
-    withTempWorkbook(wbWithRows(100)) { path =>
-      StreamingReadCommands
-        .search(path, Some("Data"), "\\d", limit = 0, sheetsFilter = None)
-        .map { out =>
-          assert(out.contains("Found 100 matches"), s"expected all matches:\n$out")
-          assert(!out.contains("… showing"), s"unexpected clip notice:\n$out")
-        }
+  test("streaming search: the true total and the same trailer as the in-memory search") {
+    ReadTestKit.withTempWorkbook(wbWithRows(100)) { path =>
+      for
+        clipped <- ReadTestKit
+          .streaming(path, Some("Data"), ReadQuery.Search("\\d", 10, None))
+          .map(ReadTestKit.text)
+        all <- ReadTestKit
+          .streaming(path, Some("Data"), ReadQuery.Search("\\d", 0, None))
+          .map(ReadTestKit.text)
+      yield
+        assert(clipped.contains("Found 100 matches"), s"expected the true total:\n$clipped")
+        assert(clipped.contains("… showing 10 of 100 matches"), s"missing trailer:\n$clipped")
+        assert(all.contains("Found 100 matches"), s"expected all matches:\n$all")
+        assert(!all.contains("… showing"), s"unexpected clip notice:\n$all")
     }
   }

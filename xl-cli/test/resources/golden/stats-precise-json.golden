@@ -1,0 +1,27 @@
+## args
+-f
+<DIR>/precise.xlsx
+--json
+stats
+Data!A1
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "stats",
+  "version": "<VERSION>",
+  "data": {
+    "sheet": "Data",
+    "range": "A1:A1",
+    "count": 1,
+    "sum": 12345678901234567,
+    "min": 12345678901234567,
+    "max": 12345678901234567,
+    "mean": 12345678901234567
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

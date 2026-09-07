@@ -4,9 +4,11 @@ import cats.effect.IO
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
+import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.helpers.StyleBuilder
 import com.tjclp.xl.cli.output.Format
+import com.tjclp.xl.cli.read.{CellDetail, CellRecord}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.styles.{CellStyle, StyleId}
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
@@ -467,16 +469,15 @@ class V030RegressionSpec extends CatsEffectSuite:
   // We test via the public cellInfo method
   private def formatStyleHelper(style: Option[CellStyle]): Option[String] =
     // Use reflection or test via the full cellInfo output
-    val output = Format.cellInfo(
-      ref = ref"A1",
-      value = CellValue.Text("test"),
-      formatted = "test",
-      style = style,
-      comment = None,
-      hyperlink = None,
-      dependencies = Vector.empty,
-      dependents = Vector.empty
+    val record = CellRecord.of(
+      SheetName.unsafe("Data"),
+      ref"A1",
+      CellValue.Text("test"),
+      style,
+      hidden = false,
+      mergedInto = None
     )
+    val output = Format.cellInfo(CellDetail(record, None, None, Vector.empty, Some(Vector.empty)))
 
     // Extract the Style section if present
     val lines = output.split("\n")
