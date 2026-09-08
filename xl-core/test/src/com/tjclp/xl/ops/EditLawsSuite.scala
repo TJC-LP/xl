@@ -35,7 +35,12 @@ abstract class EditLawsSuite(support: FormulaSupport, label: String) extends Sca
   }
 
   test("validateFill's refusal is reached through genEdit (fills are not all direction-legal)") {
-    val fills = (1 to 600).flatMap(_ => genEdit.sample).collect { case f: Edit.Fill => f }
+    // Deterministic draw: a fixed seed over a large sample, so the coverage claim cannot flake on
+    // an unlucky run (fills are ~1 case in 49 and only one target in four breaks the rule).
+    val seeded = Gen
+      .listOfN(3000, genEdit)
+      .pureApply(Gen.Parameters.default, org.scalacheck.rng.Seed(0x5eed5eedL))
+    val fills = seeded.collect { case f: Edit.Fill => f }
     val refused = fills.filter(f => Edit.validate(f).isLeft)
     assert(fills.size >= 4, s"genEdit yielded only ${fills.size} fills")
     assert(refused.nonEmpty, "no generated fill was refused by the direction rule")
