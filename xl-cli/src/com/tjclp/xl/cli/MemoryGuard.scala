@@ -282,7 +282,7 @@ object MemoryGuard:
 
   /**
    * [[admit]] for files loaded TOGETHER (`diff`): one verdict on the sum of their footprints, since
-   * both books are resident at once; the message names every file.
+   * both books are resident at once; the message names every file, `location.file` the first.
    */
   def admitAll(
     paths: Vector[Path],
@@ -296,8 +296,10 @@ object MemoryGuard:
         val sum = fps.foldLeft(Footprint.empty) { (a, b) =>
           Footprint(a.sheetBytes + b.sheetBytes, a.sstBytes + b.sstBytes)
         }
+        // The message names every file; `location.file` stays ONE path (consumers treat it as one)
         val label = paths.mkString(" + ")
-        act(decide(label, Location.file(paths.mkString(", ")), sum, heap), warn)
+        val location = Location.file(paths.headOption.fold("")(_.toString))
+        act(decide(label, location, sum, heap), warn)
       }
 
   private def act(verdict: Verdict, warn: Warning => IO[Unit]): IO[Unit] = verdict match

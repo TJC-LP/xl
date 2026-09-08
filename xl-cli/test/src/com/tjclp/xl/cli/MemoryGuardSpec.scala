@@ -7,6 +7,7 @@ import java.util.zip.{ZipEntry, ZipFile, ZipInputStream, ZipOutputStream}
 import scala.jdk.CollectionConverters.*
 
 import cats.effect.{IO, Resource}
+import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import munit.CatsEffectSuite
 
@@ -413,7 +414,7 @@ class MemoryGuardSpec extends CatsEffectSuite:
         e.error.message.contains(a.toString) && e.error.message.contains(b.toString),
         e.error.message
       )
-      assertEquals(e.error.location, Some(Location.file(s"$a, $b")))
+      assertEquals(e.error.location, Some(Location.file(a.toString)), "one path, not a joined pair")
       assertEquals(atDefault, Right(()), "the default limit never arms the guard")
       assertEquals(none, Right(()))
       assertEquals(
@@ -440,6 +441,51 @@ class MemoryGuardSpec extends CatsEffectSuite:
     } *> MemoryGuard.writer.writeWith(book(), out, WriterConfig.default).map { _ =>
       assert(Files.exists(out), "the fault cleared, the write lands")
     }
+  }
+
+  /** The `.xl-*.tmp` files the atomic writer stages beside its destination. */
+  private def tempFiles(directory: Path): IO[Vector[String]] = IO.blocking {
+    val listing = Files.list(directory)
+    try
+      listing.iterator.asScala
+        .map(_.getFileName.toString)
+        .filter(n => n.startsWith(".xl-") && n.endsWith(".tmp"))
+        .toVector
+    finally listing.close()
+  }
+
+  /**
+   * A cell map that raises an `OutOfMemoryError` the moment serialisation iterates it WHILE the
+   * writer's temp file exists: a real `Error` inside the atomic write, self-verifying via
+   * `sawTemp`.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var")) // a test probe
+  final class SerialisationTrap(directory: Path)
+      extends scala.collection.immutable.AbstractMap[ARef, Cell]:
+    @volatile var sawTemp: Boolean = false
+    def iterator: Iterator[(ARef, Cell)] =
+      if tempFiles(directory).unsafeRunSync().nonEmpty then
+        sawTemp = true
+        throw new OutOfMemoryError("test: serialisation")
+      else Iterator.empty
+    def get(key: ARef): Option[Cell] = None
+    def removed(key: ARef): Map[ARef, Cell] = this
+    def updated[V1 >: Cell](key: ARef, value: V1): Map[ARef, V1] = this
+
+  test("writer: an OutOfMemoryError while serialising is RESOURCE_LIMIT and leaves no .xl-*.tmp") {
+    for
+      source <- fixture("book.xlsx")
+      read <- IO.fromEither(XlsxReader.read(source).left.map(e => new Exception(e.message)))
+      trap = new SerialisationTrap(dir())
+      trapped = read.put(read.sheets(0).copy(cells = trap)) // modified: the atomic write path
+      out = dir().resolve("trapped-out.xlsx")
+      attempt <- MemoryGuard.writer.writeWith(trapped, out, WriterConfig.default).attempt
+      leftovers <- tempFiles(dir())
+    yield
+      assertEquals(resourceLimit(attempt).error, MemoryGuard.exhausted)
+      assert(trap.sawTemp, "the Error was raised while the writer's temp file existed")
+      assertEquals(leftovers, Vector.empty, "no partial temp file may outlive the typed failure")
+      assert(!Files.exists(out), "nothing committed")
   }
 
   test("writer: an unwritable target fails with exactly the message ExcelIO.writeWith produces") {

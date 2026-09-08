@@ -275,6 +275,11 @@ class ResourceLimitSpec extends CatsEffectSuite:
       assertEquals(pressure.size, 1, json.stdout)
       val message = pressure.headOption.map(_("message").str).getOrElse("")
       assert(message.contains(a.toString) && message.contains(b.toString), message)
+      assertEquals(
+        pressure.headOption.map(_("location")("file").str),
+        Some(a.toString),
+        "location.file is one path"
+      )
   }
 
   test("RESOURCE_LIMIT is published: in ErrorCode.cli, exit 3, in schema --json's errorCodes") {
