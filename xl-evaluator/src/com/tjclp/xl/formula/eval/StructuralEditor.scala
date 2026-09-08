@@ -343,6 +343,8 @@ object StructuralEditor:
       // Conservatively invalidate every dynamic cell and its static dependent closure: the edit
       // may have changed what its unchanged reference text resolves to.
       val dynamic = DependencyGraph.dynamicCells(wb)
+      // Every unresolved reader stays stale here, unlike the value-edit cone (GH-606): a structural
+      // edit rewrites reference TEXT, which a reader the parser rejects cannot receive.
       val roots = pointSeeds ++ rangeReaders ++ dynamic ++ DependencyGraph.unresolvedReaders(wb)
       roots ++ dependencyIndex.transitiveDependents(roots)
     val updatedSheets = wb.sheets.map { s =>

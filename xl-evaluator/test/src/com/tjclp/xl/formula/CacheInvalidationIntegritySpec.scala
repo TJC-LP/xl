@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.formula.eval.StructuralEditor
+import com.tjclp.xl.formula.eval.{DependentRecalculation, StructuralEditor}
 
 import munit.FunSuite
 
@@ -193,4 +193,194 @@ class CacheInvalidationIntegritySpec extends FunSuite:
   test("GH-563: recalculation is stable after withdrawing failed caches") {
     val first = failingChain.recalculate()
     assertEquals(first.workbook.recalculate(), first)
+  }
+
+  // ===== GH-606: blind readers are dirty only when the edit lies inside their textual reach =====
+
+  private def afterEdit(wb: Workbook, sheet: String, refs: ARef*) =
+    DependentRecalculation.recalculateAfterEdit(
+      wb,
+      SheetName.unsafe(sheet),
+      refs.toSet,
+      Clock.system
+    )
+
+  /**
+   * `Data!C3` is a parseable formula over `Data!A1`; every `Calc` formula is a blind reader whose
+   * text names only cells the scanner can bound (`ZZZNOTAFUNC` is a stable parse failure).
+   */
+  private def boundedBlindWorkbook: Workbook = Workbook(
+    Sheet("Data")
+      .put(ref"A1", num(2))
+      .put(ref"C3", formula("A1*2", 4)),
+    Sheet("Calc")
+      .put(ref"C1", num(1))
+      .put(ref"C3", num(5))
+      .put(ref"B2", formula("ZZZNOTAFUNC(C3)", 7))
+      .put(ref"B3", formula("B2*2", 14))
+      .put(ref"D1", formula("ZZZNOTAFUNC(\"B16\")", 1))
+      .put(ref"D2", formula("ZZZNOTAFUNC(#REF!)", 2))
+      .put(ref"D3", formula("ZZZNOTAFUNC(PI())", 3))
+      .put(ref"F1", formula("ZZZNOTAFUNC(Data!C3)", 8))
+      .put(ref"G1", formula("ZZZNOTAFUNC('Q1 Data'!B16)", 9))
+      .put(ref"G2", formula("ZZZNOTAFUNC(3:3)", 10))
+      .put(ref"G3", formula("ZZZNOTAFUNC(H:H)", 11)),
+    Sheet("Q1 Data").put(ref"B16", num(16))
+  )
+
+  private val boundedCalcRefs =
+    List(ref"B2", ref"B3", ref"D1", ref"D2", ref"D3", ref"F1", ref"G1", ref"G2", ref"G3")
+
+  test(
+    "GH-606: an edit outside every blind reader's reach keeps their caches and reports nothing"
+  ) {
+    val before = boundedBlindWorkbook
+    val result = afterEdit(before, "Q1 Data", ref"B15")
+    assertEquals(result.errors, Vector.empty)
+    boundedCalcRefs.foreach { ref =>
+      assertEquals(cache(result.workbook, "Calc", ref), cache(before, "Calc", ref), ref.toA1)
+    }
+    assertEquals(result.workbook, before)
+  }
+
+  test(
+    "GH-606: an edit inside a blind reader's reach withdraws its cache and reports the failure"
+  ) {
+    val result = afterEdit(boundedBlindWorkbook, "Calc", ref"C3")
+    assertEquals(cache(result.workbook, "Calc", ref"B2"), None)
+    assert(result.errors.exists(e => e.sheet.value == "Calc" && e.ref == ref"B2"))
+    // a parseable reader of the blind cell cannot trust a value computed from a failed precedent
+    assertEquals(cache(result.workbook, "Calc", ref"B3"), None)
+    assert(result.errors.exists(e => e.sheet.value == "Calc" && e.ref == ref"B3"))
+    // C3 lies in row 3, which the whole-row reader names
+    assertEquals(cache(result.workbook, "Calc", ref"G2"), None)
+    // literals, error literals and function names are not dependencies
+    assertEquals(cache(result.workbook, "Calc", ref"D1"), Some(num(1)))
+    assertEquals(cache(result.workbook, "Calc", ref"D2"), Some(num(2)))
+    assertEquals(cache(result.workbook, "Calc", ref"D3"), Some(num(3)))
+    assertEquals(result.errors.map(_.ref).toSet, Set(ref"B2", ref"B3", ref"G2"))
+  }
+
+  test("GH-606: a blind reader of a formula inside the cone is withdrawn transitively") {
+    // Data!A1 -> Data!C3 (parseable) -> Calc!F1 (blind, names Data!C3 textually)
+    val result = afterEdit(boundedBlindWorkbook, "Data", ref"A1")
+    assertEquals(cache(result.workbook, "Data", ref"C3"), Some(num(4)))
+    assertEquals(cache(result.workbook, "Calc", ref"F1"), None)
+    assert(result.errors.exists(e => e.sheet.value == "Calc" && e.ref == ref"F1"))
+    assertEquals(cache(result.workbook, "Calc", ref"B2"), Some(num(7)))
+    assertEquals(result.errors.size, 1)
+  }
+
+  test("GH-606: a quoted cross-sheet qualifier bounds the reach to that sheet") {
+    assertEquals(
+      cache(afterEdit(boundedBlindWorkbook, "Q1 Data", ref"B16").workbook, "Calc", ref"G1"),
+      None
+    )
+    assertEquals(
+      cache(afterEdit(boundedBlindWorkbook, "Calc", ref"B16").workbook, "Calc", ref"G1"),
+      Some(num(9)),
+      "B16 on the reader's own sheet is not the qualified B16"
+    )
+  }
+
+  test("GH-606: whole-row and whole-column reaches") {
+    assertEquals(
+      cache(afterEdit(boundedBlindWorkbook, "Calc", ref"Z3").workbook, "Calc", ref"G2"),
+      None
+    )
+    assertEquals(
+      cache(afterEdit(boundedBlindWorkbook, "Calc", ref"A4").workbook, "Calc", ref"G2"),
+      Some(num(10))
+    )
+    assertEquals(
+      cache(afterEdit(boundedBlindWorkbook, "Calc", ref"H100").workbook, "Calc", ref"G3"),
+      None
+    )
+    assertEquals(
+      cache(afterEdit(boundedBlindWorkbook, "Calc", ref"I1").workbook, "Calc", ref"G3"),
+      Some(num(11))
+    )
+    assertEquals(
+      cache(afterEdit(boundedBlindWorkbook, "Data", ref"H1").workbook, "Calc", ref"G3"),
+      Some(num(11))
+    )
+  }
+
+  test("GH-606: a 3-D span reaches every sheet between its ends") {
+    val wb = boundedBlindWorkbook.put(
+      boundedBlindWorkbook.sheets(1).put(ref"J1", formula("ZZZNOTAFUNC(Data:Calc!A1)", 12))
+    )
+    assertEquals(cache(afterEdit(wb, "Calc", ref"A1").workbook, "Calc", ref"J1"), None)
+    assertEquals(cache(afterEdit(wb, "Q1 Data", ref"A1").workbook, "Calc", ref"J1"), Some(num(12)))
+  }
+
+  test("GH-606: unbounded blind readers are withdrawn on any edit") {
+    val wb = Workbook(
+      Sheet("Data").put(ref"A1", num(2)),
+      Sheet("Calc")
+        .put(ref"E1", formula("ZZZNOTAFUNC(INDIRECT(\"A1\"))", 1))
+        .put(ref"E2", formula("ZZZNOTAFUNC(Table1[Col])", 2))
+        .put(ref"E3", formula("ZZZNOTAFUNC(NoSuchName)", 3))
+        .put(ref"E4", formula("ZZZNOTAFUNC(A1:INDEX(A1:A9,3))", 4))
+    )
+    val result = afterEdit(wb, "Data", ref"A1")
+    List(ref"E1", ref"E2", ref"E3", ref"E4").foreach { ref =>
+      assertEquals(cache(result.workbook, "Calc", ref), None, ref.toA1)
+      assert(result.errors.exists(e => e.sheet.value == "Calc" && e.ref == ref), ref.toA1)
+    }
+  }
+
+  test("GH-606: a call to a workbook LAMBDA reads through its definition") {
+    // `MyFunc(1)` does not parse, so the caller is a blind reader; its reach must include what the
+    // LAMBDA body reads. A parametrised body is unbounded (its `_xlpm.` parameters resolve to no
+    // name), a parameterless one is bounded to the cells it spells.
+    val wb = Workbook(
+      Sheet("Data").put(ref"A1", num(5)).put(ref"A2", num(6)),
+      Sheet("Calc")
+        .put(ref"B1", formula("MyFunc(1)", 6))
+        .put(ref"B2", formula("Twice()", 10))
+    )
+      .withDefinedName("MyFunc", "_xlfn.LAMBDA(_xlpm.x,_xlpm.x+Data!$A$1)")
+      .withDefinedName("Twice", "_xlfn.LAMBDA(Data!$A$1*2)")
+    val inside = afterEdit(wb, "Data", ref"A1")
+    assertEquals(cache(inside.workbook, "Calc", ref"B1"), None)
+    assertEquals(cache(inside.workbook, "Calc", ref"B2"), None)
+    assert(inside.errors.exists(e => e.sheet.value == "Calc" && e.ref == ref"B2"))
+    val elsewhere = afterEdit(wb, "Data", ref"A2")
+    assertEquals(
+      cache(elsewhere.workbook, "Calc", ref"B1"),
+      None,
+      "a parametrised body is unbounded"
+    )
+    assertEquals(
+      cache(elsewhere.workbook, "Calc", ref"B2"),
+      Some(num(10)),
+      "the body names only A1"
+    )
+  }
+
+  test("GH-606: name resolution honours sheet-scoped shadowing") {
+    val data = (1 to 10).foldLeft(Sheet("Data")) { (sheet, row) =>
+      sheet.put(ARef.from0(0, row - 1), num(row))
+    }
+    val base = Workbook(
+      data,
+      Sheet("Calc").put(ref"C1", num(1)).put(ref"B5", formula("ZZZNOTAFUNC(Multi)", 2)),
+      Sheet("Other").put(ref"B5", formula("ZZZNOTAFUNC(Multi)", 33))
+    ).withDefinedName("Multi", "Data!$A$1:$A$3,Data!$A$8:$A$10")
+    val local = com.tjclp.xl.workbooks.DefinedName("Multi", "Calc!$C$1", localSheetId = Some(1))
+    val wb =
+      base.copy(metadata = base.metadata.copy(definedNames = base.metadata.definedNames :+ local))
+    // Data row 2 is inside the global union: Other's reader is dirty, Calc's shadowed one is not
+    val dataEdit = afterEdit(wb, "Data", ref"A2")
+    assertEquals(cache(dataEdit.workbook, "Other", ref"B5"), None)
+    assertEquals(cache(dataEdit.workbook, "Calc", ref"B5"), Some(num(2)))
+    // Calc!C1 is what the local definition reads
+    val calcEdit = afterEdit(wb, "Calc", ref"C1")
+    assertEquals(cache(calcEdit.workbook, "Calc", ref"B5"), None)
+    assertEquals(cache(calcEdit.workbook, "Other", ref"B5"), Some(num(33)))
+    // Data row 5 is outside both areas of the union
+    val outside = afterEdit(wb, "Data", ref"A5")
+    assertEquals(outside.errors, Vector.empty)
+    assertEquals(cache(outside.workbook, "Other", ref"B5"), Some(num(33)))
   }

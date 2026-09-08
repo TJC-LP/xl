@@ -280,8 +280,9 @@ object WorkbookEvaluator:
      * The public form of the after-edit seam (ADR-017 §2.8): recalculate the formulas an edit of
      * `modified` on `sheet` can have affected — the edited cells themselves when they are formulas,
      * their transitive dependents, every dynamic (INDIRECT/OFFSET) reader and every reader the
-     * graph cannot resolve — leaving every other cache byte-identical and never touching the clock
-     * for an unaffected volatile cell (GH-504/GH-508). Wraps
+     * graph cannot resolve whose formula text can name a dirty cell (`DependencyGraph.editCone`,
+     * GH-606) — leaving every other cache byte-identical and never touching the clock for an
+     * unaffected volatile cell (GH-504/GH-508). Wraps
      * `DependentRecalculation.recalculateAfterEdit`; it never re-derives the cone.
      *
      * When the resolved [[IterativeMode]] iterates (a `<calcPr iterate>` book under the default

@@ -226,7 +226,7 @@ object DependencyGraph:
    * calls, and reference/literal leaves are never dynamic.
    */
   @nowarn("msg=Unreachable case")
-  private def referencesMatching[A](
+  private[graph] def referencesMatching[A](
     expr: TExpr[A],
     resolveName: (String, Option[SheetName]) => Boolean,
     includeDynamicCalls: Boolean
@@ -368,6 +368,59 @@ object DependencyGraph:
           QualifiedRef(sheet.name, ref)
       }
     }.toSet
+
+  /**
+   * GH-606: the dirty cone of an edit — every formula whose cached value the edit may have changed,
+   * shared by `DependentRecalculation.recalculateAfterEdit` and the CLI's cone-scoped writes so the
+   * two cannot drift.
+   *
+   * Roots are the edited cells, every dynamic (INDIRECT/OFFSET) reader (GH-274: the static graph
+   * cannot see what their text resolves to) and every unresolved reader whose textual reach is
+   * [[ReferenceScan.Reach.Unbounded]]. The closure adds their transitive dependents through the
+   * symbolic index. Unresolved readers with a bounded reach (GH-507 readers the parser rejects, or
+   * that reach a name whose definition it rejects) join only when an area of theirs contains a cell
+   * of the closure — an edited cell or a formula already dirty — and the closure is recomputed
+   * until no reader joins: a blind reader of a blind reader's cell is dirty through the second
+   * reader's membership, and parseable readers of a newly dirty blind cell follow through the
+   * index. A reader outside the cone is provably unaffected: nothing its text can name changed
+   * value, so its cache — Excel's, usually — stays. Inside the cone it is evaluated like any other
+   * formula, fails, and is withdrawn and reported.
+   *
+   * Structural edits do not use this cone: `StructuralEditor` keeps treating every unresolved
+   * reader as stale, because a shift rewrites reference TEXT, which a blind reader cannot receive.
+   */
+  private[xl] def editCone(
+    workbook: Workbook,
+    seeds: Set[QualifiedRef],
+    index: QualifiedDependencyIndex,
+    dynamic: Set[QualifiedRef]
+  ): Set[QualifiedRef] =
+    val reaches = ReferenceScan.reaches(workbook, unresolvedReaders(workbook))
+    val unbounded = reaches.collect { case (reader, ReferenceScan.Reach.Unbounded) => reader }.toSet
+    val bounded = reaches.toVector.collect { case (reader, areas: ReferenceScan.Reach.Areas) =>
+      reader -> (areas: ReferenceScan.Reach)
+    }
+    val roots = seeds ++ dynamic ++ unbounded
+
+    @tailrec
+    def close(
+      closure: Set[QualifiedRef],
+      pending: Vector[(QualifiedRef, ReferenceScan.Reach)]
+    ): Set[QualifiedRef] =
+      val cellsBySheet =
+        closure
+          .groupMap(_.sheet)(_.ref)
+          .map((sheet, cells) => sheet -> ReferenceScan.SheetCells.of(cells))
+      val (joining, waiting) = pending
+        .filterNot((reader, _) => closure.contains(reader))
+        .partition((_, reach) => reach.touches(cellsBySheet))
+      if joining.isEmpty then closure
+      else
+        val readers = joining.iterator.map(_._1).toSet
+        // dependents of a union are the union of dependents: extend rather than recompute
+        close(closure ++ readers ++ index.transitiveDependents(readers), waiting)
+
+    close(roots ++ index.transitiveDependents(roots), bounded)
 
   def containsDynamicReference[A](expr: TExpr[A]): Boolean =
     containsDynamicReferenceResolved(expr, (_, _) => false)
@@ -1779,7 +1832,7 @@ object DependencyGraph:
     sheet => byFold.getOrElse(sheet.value.toLowerCase(java.util.Locale.ROOT), sheet)
 
   @nowarn("msg=Unreachable case")
-  private def extractQualifiedDependencies[A](
+  private[graph] def extractQualifiedDependencies[A](
     expr: TExpr[A],
     currentSheet: SheetName,
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells,
