@@ -433,7 +433,7 @@ class SheetDataTableSpec extends ScalaCheckSuite:
       base2D.dataTable(interior2D, ref"B1", ref"B2", Seq(Seq(num(1), num(2), num(3))))
     ) match
       case XLError.ValueCountMismatch(expected, actual, context) =>
-        assertEquals(expected, 2)
+        assertEquals(expected, 2L)
         assertEquals(actual, 1)
         assertEquals(context, "data table interior D5:F6")
       case other => fail(s"expected ValueCountMismatch, got $other")
@@ -441,7 +441,7 @@ class SheetDataTableSpec extends ScalaCheckSuite:
       base2D.dataTable(interior2D, ref"B1", ref"B2", Seq(Seq(num(1), num(2), num(3)), Seq(num(4))))
     ) match
       case XLError.ValueCountMismatch(expected, actual, context) =>
-        assertEquals(expected, 3)
+        assertEquals(expected, 3L)
         assertEquals(actual, 1)
         assertEquals(context, "data table interior D5:F6")
       case other => fail(s"expected ValueCountMismatch, got $other")

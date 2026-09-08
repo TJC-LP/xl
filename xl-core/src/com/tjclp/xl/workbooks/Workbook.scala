@@ -4,6 +4,7 @@ import com.tjclp.xl.context.SourceContext
 import com.tjclp.xl.addressing.{RefType, SheetName}
 import com.tjclp.xl.cells.Cell
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.ops.{Edit, FormulaSupport, Scope}
 import com.tjclp.xl.sheets.Sheet
 
 /**
@@ -209,6 +210,21 @@ final case class Workbook(
             _.markSheetModified(index).markMetadataModified.markSheetRenamed(oldName, newName)
           )
           Right(copy(sheets = renamedSheets, sourceContext = updatedContext))
+
+  /**
+   * Apply `edits` (ADR-017 §2.12) under no default sheet: a qualified target names its sheet, an
+   * unqualified one resolves to the only sheet of a single-sheet book and otherwise fails
+   * `SheetRequired`. Fail-fast and all-or-nothing — `Left(EditFailed(i, op, cause))` names the
+   * 1-based position that failed and this workbook is untouched. Needs a [[FormulaSupport]]: the
+   * scripting prelude and `import com.tjclp.xl.{*, given}` (with xl-evaluator) provide the
+   * evaluator's; `FormulaSupport.textOnly` refuses the edits that rewrite formulas.
+   */
+  def edit(edits: Edit*)(using FormulaSupport): XLResult[Workbook] =
+    Edit.applyAll(this, edits.toVector, Scope.none).map(_.workbook)
+
+  /** [[edit]] with `defaultSheet` as the sheet of every unqualified target (the CLI's `-s`). */
+  def editIn(defaultSheet: SheetName)(edits: Edit*)(using FormulaSupport): XLResult[Workbook] =
+    Edit.applyAll(this, edits.toVector, Scope.of(defaultSheet)).map(_.workbook)
 
   /**
    * Update sheet by applying a function to it.

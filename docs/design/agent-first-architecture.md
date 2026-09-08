@@ -620,6 +620,17 @@ set" — that rule broke the monoid-action law. `Patch` stays; `Patch.toEdits(p,
 as the single metadata table; batch JSON becomes the codec of `Vector[Edit]`; every mutating verb
 lowers to `Vector[Edit]` and can print it with `--print-batch`.
 
+**Accepted package cycles.** `ops` imports `patch.Patch` (the `lower` target) and `sheets.Sheet`
+(the interpreter's subject); `patch.Patch` imports `ops` for the `Patch.toEdits` forwarder to
+`ops.PatchLowering`, and `sheets.Sheet`/`Workbook` import `ops` because `Sheet.fill/sort/clear/
+group/edit` take the algebra's own types (`Edit.FillDir`, `ColSpan`, `ClearWhat`, `Scope`). Both
+cycles are deliberate: `Patch.toEdits` is the promised API (this section, §6, the prelude probe),
+and the sheet methods taking `ops` types is what lets the CLI forwarders and the interpreter share
+one implementation. All lowering logic lives on the `ops` side (`PatchLowering`); `Patch` and
+`Sheet` hold one-line forwarders, so each cycle has exactly one crossing edge pointing back. If a
+Zinc "cyclic reference" appears after editing these files, `./mill clean xl-core.compile` — the
+same remedy CLAUDE.md records for the `FunctionSpecs` macro.
+
 ### 2.13 Docs generated from code, gated in CI
 
 `xl schema --json` → `{version, exitCodes[], errorCodes[], warningCodes[], globals[], verbs[{path,

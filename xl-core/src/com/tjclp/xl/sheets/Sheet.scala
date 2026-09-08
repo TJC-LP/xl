@@ -7,10 +7,12 @@ import com.tjclp.xl.charts.{Chart, DataRef, Series, SeriesName}
 import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
 import com.tjclp.xl.drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData}
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, RowSpan, Scope}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.tables.{TableColumn, TableSpec}
+import com.tjclp.xl.workbooks.Workbook
 
 import scala.collection.immutable.{Map, Set}
 import scala.util.boundary, boundary.break
@@ -1171,6 +1173,133 @@ final case class Sheet(
    */
   def clearCommentsInRange(range: CellRange): Sheet =
     copy(comments = comments.filterNot((ref, _) => range.contains(ref)))
+
+  // ===== Edit semantics shared with the CLI (ADR-017 §2.12, W2.1) =====
+  // The bodies live in SheetEdits; these are the entry points the Edit interpreter and the CLI's
+  // forwarders (WriteCommands/CopyOps/GroupingOps/AppearanceOps/ColumnAutoFit) both reach.
+
+  /**
+   * Repeat `source` down or right through `target`, shifting relative references by the
+   * displacement (formula text through the [[FormulaSupport]]). `Left(InvalidReference)` when the
+   * direction's matching-columns/rows rule fails; `Left(UnsupportedCapability)` when a formula must
+   * shift and the support cannot.
+   */
+  def fill(source: CellRange, target: CellRange, direction: Edit.FillDir)(using
+    FormulaSupport
+  ): XLResult[Sheet] =
+    SheetEdits.fill(this, source, target, direction)
+
+  /**
+   * Copy `source` onto `target` (same dimensions) within this sheet: values and styles move,
+   * relative references shift by the displacement, `valuesOnly` pastes cached values. An
+   * overlapping copy reads the pre-copy state.
+   */
+  def copyRange(source: CellRange, target: CellRange, valuesOnly: Boolean)(using
+    FormulaSupport
+  ): XLResult[Sheet] =
+    SheetEdits.copyRange(this, this, source, target, valuesOnly)
+
+  /** [[copyRange]] from another sheet's `source` into this sheet's `target`. */
+  def copyRangeFrom(sourceSheet: Sheet, source: CellRange, target: CellRange, valuesOnly: Boolean)(
+    using FormulaSupport
+  ): XLResult[Sheet] =
+    SheetEdits.copyRange(this, sourceSheet, source, target, valuesOnly)
+
+  /**
+   * Sort the rows of `range` by `keys` (stable): only cells in the range's columns move, styles and
+   * comments move with their rows, moved formulas have their relative row references shifted and
+   * their caches dropped. `Left(InvalidReference)` for a key outside the range.
+   */
+  def sort(range: CellRange, keys: Vector[Edit.SortKeySpec], hasHeader: Boolean)(using
+    FormulaSupport
+  ): XLResult[Sheet] =
+    SheetEdits.sort(this, range, keys, hasHeader)
+
+  /** Clear contents (unmerging overlapping merges), styles and/or comments in `range`. */
+  def clearRange(range: CellRange, what: ClearWhat): Sheet = SheetEdits.clear(this, range, what)
+
+  /** The width `col` needs for its formatted content, in Excel character units (GH-156). */
+  def autoFitWidth(col: Column): Double = SheetEdits.autoFitWidth(this, col)
+
+  /** Set each column's width to its [[autoFitWidth]]. */
+  def autoFit(columns: Iterable[Column]): Sheet = SheetEdits.autoFit(this, columns)
+
+  /** [[autoFit]] over every column of the used range; identity on an empty sheet. */
+  def autoFitAll: Sheet =
+    usedRange.fold(this)(r => autoFit((r.colStart.index0 to r.colEnd.index0).map(Column.from0)))
+
+  /** Outline-group rows at `level` (1-7); `collapsed` hides them and marks the summary row. */
+  def groupRows(rows: RowSpan, level: Int, collapsed: Boolean): XLResult[Sheet] =
+    SheetEdits.groupRows(this, rows, level, collapsed)
+
+  def groupCols(cols: ColSpan, level: Int, collapsed: Boolean): XLResult[Sheet] =
+    SheetEdits.groupCols(this, cols, level, collapsed)
+
+  /** Clear the outline level and collapse markers (hidden members stay hidden, like Excel). */
+  def ungroupRows(rows: RowSpan): Sheet = SheetEdits.ungroupRows(this, rows)
+
+  def ungroupCols(cols: ColSpan): Sheet = SheetEdits.ungroupCols(this, cols)
+
+  /** Merge view options into the current view settings; `Left` for a zoom outside 10-400. */
+  def mergeSheetView(
+    gridlines: Option[Boolean],
+    zoom: Option[Int],
+    tabSelected: Option[Boolean]
+  ): XLResult[Sheet] =
+    SheetEdits.mergeSheetView(this, gridlines, zoom, tabSelected)
+
+  /** Merge print options into the current page setup; `Left` for values outside the schema. */
+  def mergePageSetup(
+    orientation: Option[String],
+    scale: Option[Int],
+    fitToWidth: Option[Int],
+    fitToHeight: Option[Int],
+    fitToPage: Option[Boolean]
+  ): XLResult[Sheet] =
+    SheetEdits.mergePageSetup(this, orientation, scale, fitToWidth, fitToHeight, fitToPage)
+
+  /** Merge header/footer text into the page setup (even/first text sets the matching flag). */
+  def mergeHeaderFooter(
+    oddHeader: Option[String],
+    oddFooter: Option[String],
+    evenHeader: Option[String],
+    evenFooter: Option[String],
+    firstHeader: Option[String],
+    firstFooter: Option[String],
+    differentOddEven: Boolean,
+    differentFirst: Boolean
+  ): Sheet =
+    SheetEdits.mergeHeaderFooter(
+      this,
+      oddHeader,
+      oddFooter,
+      evenHeader,
+      evenFooter,
+      firstHeader,
+      firstFooter,
+      differentOddEven,
+      differentFirst
+    )
+
+  /** Set the sheet-level autoFilter over `range` (source filterColumn/sortState children ride). */
+  def withAutoFilter(range: CellRange): Sheet =
+    copy(autoFilter = Some(AutoFilterState.Ranged(range)))
+
+  /** Actively strip the autoFilter, even one preserved from the source file (GH-429). */
+  def removeAutoFilter: Sheet = copy(autoFilter = Some(AutoFilterState.Remove))
+
+  /**
+   * Apply `edits` to this sheet alone (ADR-017 §2.12): a one-sheet workbook under `Scope.of(name)`,
+   * fail-fast and all-or-nothing, giving back the sheet the scope names afterwards (a rename of
+   * this sheet retargets it). An edit naming another sheet fails `SheetNotFound`. Needs a
+   * [[FormulaSupport]]: the scripting prelude and `import com.tjclp.xl.{*, given}` (with
+   * xl-evaluator) provide the evaluator's; `FormulaSupport.textOnly` refuses what rewrites
+   * formulas.
+   */
+  def edit(edits: Edit*)(using FormulaSupport): XLResult[Sheet] =
+    Edit.applyAll(Workbook(this), edits.toVector, Scope.of(name)).flatMap { applied =>
+      applied.workbook(applied.scope.defaultSheet.getOrElse(name))
+    }
 
 object Sheet:
   // ----- Shared parsing for the runtime twins (GH-465) -----

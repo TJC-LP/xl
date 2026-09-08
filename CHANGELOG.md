@@ -36,6 +36,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`FunctionFlags.volatile`** marks TODAY/NOW/RAND/RANDBETWEEN on their specs; `WorkbookAudit`
   reports volatility from the flag instead of matching names, and `xl functions --json` publishes
   it as `volatile` beside `dynamicDeps` (also the `volatile` flag in `generated/functions.md`).
+- **The `Edit` algebra** (#582, ADR-017 §2.12): `com.tjclp.xl.ops.Edit` is one operation
+  vocabulary for every batch op and mutating verb (49 cases), with `Loc`/`Area`/`ColSpan`/`RowSpan`
+  parsers, `Scope` (a rename updates the default sheet), `FormatHint = Inferred | Explicit`,
+  `StyleOverlay`, and `EditSchema` describing each case's fields. `Edit.applyAll` applies a
+  sequence all-or-nothing with the 1-based index of the failing edit, `Edit.plan` is the same fold
+  keeping only the planned rows (a semantic dry-run), `Edit.validate` the static edit-local check;
+  `Edit.lower` maps an edit to a `Patch` when one exists and `Patch.toEdits` goes the other way.
+  `XLError.ValueCountMismatch.expected` is now a `Long`, so a values edit over an area larger than
+  `Int.MaxValue` cells reports the true count. Formula-aware edits take
+  a `FormulaSupport`: `FormulaSupport.textOnly` refuses shift, structural and rename edits with
+  `UnsupportedCapability`; `EvalFormulaSupport` (xl-evaluator) performs them. Scripts get
+  `wb.edit(edits*)`, `sheet.edit` and an explicit `given FormulaSupport = EvalFormulaSupport`. Seven
+  laws hold as ScalaCheck properties: identity, fold, idempotence class, lowering coherence, desugar
+  coherence, determinism, all-or-nothing.
+- **`Sheet.fill`/`copy`/`sort`/`clear`/`autofit`/group/appearance methods**: the semantics moved
+  from the CLI handlers into the library; the CLI verbs forward to them. `autoFit`/`autoFitAll`
+  measure every column from one pass over the cells (O(cells + columns), not O(cells x columns)),
+  width for width what the per-column scan produced.
+
+### Changed
+
+- `fill --no-recalc` caches uncached formulas on source rows inside the target and evaluates them
+  against the fully filled sheet (previously source rows were skipped and evaluated against the
+  partially filled sheet). Group/ungroup validation reports a malformed span before an invalid
+  level when both are wrong. `Edit.MoveSheet.toIndex` is the sheet's final 0-based position; the
+  `move-sheet` verb keeps its pre-removal index for now (#583 reconciles them).
 
 ### Fixed
 

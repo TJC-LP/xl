@@ -56,6 +56,11 @@ object scripting:
   // The one sanctioned unwrap: .unsafe / .getOrElse on XLResult
   export com.tjclp.xl.unsafe.*
 
+  // ADR-017 §2.12 (W2.1): the evaluator-backed FormulaSupport behind wb.edit / sheet.edit, stated
+  // explicitly — wildcard exports skip givens, and a LowPriority default would not survive the
+  // export hop (see the display-strategy note above). `Edit` and its targets come through api.*.
+  given com.tjclp.xl.ops.FormulaSupport = com.tjclp.xl.formula.eval.EvalFormulaSupport
+
   // Script-only sugar: total smart detection of currency/percent/date/number/boolean from raw
   // strings ("$1,234.56".toFormatted → Currency). Kept out of the pure core import — heuristics
   // are script/CLI territory; the underlying FormattedParsers.detect is available everywhere.

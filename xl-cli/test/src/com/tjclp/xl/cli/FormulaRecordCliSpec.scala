@@ -131,7 +131,9 @@ class FormulaRecordCliSpec extends FunSuite:
       range("D9:D9"),
       valuesOnly = false
     )
-    val s2 = out.sheets.find(_.name == SheetName.unsafe("S")).getOrElse(fail("missing S"))
+    val s2 = out
+      .fold(e => fail(e.message), _.sheets.find(_.name == SheetName.unsafe("S")))
+      .getOrElse(fail("missing S"))
     assertEquals(s2(aref("D9")).value, num(42))
     // Source record untouched.
     assertEquals(s2(aref("F2")).value, CellValue.dataTable(tableKind, Some(num(42))))
@@ -185,7 +187,9 @@ class FormulaRecordCliSpec extends FunSuite:
       range("C5:C5"),
       valuesOnly = false
     )
-    val s2 = out.sheets.find(_.name == SheetName.unsafe("S")).getOrElse(fail("missing S"))
+    val s2 = out
+      .fold(e => fail(e.message), _.sheets.find(_.name == SheetName.unsafe("S")))
+      .getOrElse(fail("missing S"))
     s2(aref("C5")).value match
       case CellValue.Formula(expr, _, kind) =>
         assertEquals(expr, "SUM(A5:A6*10)")
