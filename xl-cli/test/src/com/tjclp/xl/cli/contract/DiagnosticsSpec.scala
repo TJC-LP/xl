@@ -35,6 +35,29 @@ class DiagnosticsSpec extends CatsEffectSuite:
     )
   }
 
+  test(
+    "render of a domain error is XLError.renderDiagnostic — the prelude's exitMessage (GH-589)"
+  ) {
+    val errors: List[XLError] = List(
+      XLError.SheetNotFound("Sumary", Vector("Data", "Summary")),
+      XLError.SheetNotFound("Nope"),
+      XLError.SheetRequired("view", Vector("Data", "Summary")),
+      XLError.FormulaError("=SUM(", "unexpected end"),
+      XLError.EditFailed(2, "put", XLError.OutOfBounds("A0", "row 0")),
+      XLError.Other("boom")
+    )
+    errors.foreach { e =>
+      assertEquals(Diagnostics.render(CliError.fromXLError(e, None)), e.renderDiagnostic)
+    }
+    assertEquals(
+      XLError.SheetNotFound("Sumary", Vector("Data", "Summary")).renderDiagnostic,
+      """Error: Sheet not found: 'Sumary'. Available: Data, Summary
+        |  code: SHEET_NOT_FOUND
+        |  did you mean: Summary
+        |  hint: list sheets with `xl -f <file> sheets`""".stripMargin
+    )
+  }
+
   test("render: a multi-line message keeps the code line after the last message line") {
     val err = CliError("FORMULA_ERROR", "=SUM(\n    ^\nFormula error in '=SUM(': unexpected end")
     assertEquals(

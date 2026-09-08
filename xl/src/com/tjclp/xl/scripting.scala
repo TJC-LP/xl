@@ -69,8 +69,8 @@ object scripting:
   /**
    * Unwrap an `XLResult` at the script edge or end the run: on `Left` the [[exitMessage]] goes to
    * stderr and the process exits with status 1. The script-shaped twin of `.unsafe` — a failed step
-   * reports the error's code, hint and candidates instead of a stack trace, the way `xl` itself
-   * fails.
+   * reports the error's code, candidates and hint instead of a stack trace, in the CLI's own
+   * envelope.
    *
    * {{{
    * val wb = orExit(Workbook.named("Data", "Summary"))
@@ -84,16 +84,12 @@ object scripting:
       sys.exit(1)
 
   /**
-   * What [[orExit]] prints: `error: <message>` and `code: <CODE>`, then a `hint:` line and a
-   * `did you mean:` line when the error carries them (ADR-017 §2.7) — the CLI's text envelope, so a
-   * script and `xl` fail the same way on the same error.
+   * What [[orExit]] prints: `Error: <message>`, then indented `code: <CODE>`, `did you mean: …`
+   * (when the error has candidates) and `hint: …` (when it has one) — `XLError.renderDiagnostic`,
+   * the very renderer behind the CLI's `Diagnostics.render`, so a script and `xl` print the same
+   * bytes for the same error (ADR-017 §2.3/§2.7).
    */
-  def exitMessage(err: com.tjclp.xl.error.XLError): String =
-    val lines =
-      Vector(s"error: ${err.message}", s"code: ${err.code}") ++
-        err.hint.map(h => s"hint: $h") ++
-        Option.when(err.candidates.nonEmpty)(s"did you mean: ${err.candidates.mkString(", ")}")
-    lines.mkString("\n")
+  def exitMessage(err: com.tjclp.xl.error.XLError): String = err.renderDiagnostic
   // ===== end GH-589 block =====
 
   // Script-only sugar: total smart detection of currency/percent/date/number/boolean from raw

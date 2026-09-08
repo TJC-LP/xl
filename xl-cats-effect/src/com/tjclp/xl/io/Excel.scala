@@ -351,7 +351,6 @@ object Excel:
   import com.tjclp.xl.error.XLException
   import com.tjclp.xl.ooxml.metadata.WorkbookMetadataReader
   import com.tjclp.xl.sheets.Sheet
-  import com.tjclp.xl.text.Suggest
   import java.nio.file.{Files, Paths, StandardCopyOption}
 
   private lazy val excel = ExcelIO.instance[IO]
@@ -373,44 +372,42 @@ object Excel:
 
   /**
    * Read one sheet by name (Easy Mode, GH-589): `Excel.read(path)` followed by the lookup a script
-   * would otherwise spell as `wb(name).unsafe`, with a better failure — the exception names the
-   * nearest sheet names ("did you mean") and every available sheet, so a typo is fixed from the
-   * message alone. Exact-name lookup, like `Workbook.apply(SheetName)` and the CLI's `-s`.
+   * would otherwise spell as `wb(name).unsafe` — the WHOLE workbook is loaded, then one sheet is
+   * selected (for a large file, `ExcelIO.readSheetStream` reads one sheet in constant memory). The
+   * failure is better than the lookup's: the error carries every available sheet, so its message
+   * lists them and its `candidates` ("did you mean") name the nearest — `orExit` prints both, the
+   * way `xl -s` does. Exact-name lookup, like `Workbook.apply(SheetName)` and the CLI's `-s`. The
+   * returned sheet is detached from its workbook: a cross-sheet formula needs `read` and
+   * `wb.evaluateFormula`.
    *
    * @param path
    *   File path (string)
    * @param sheet
    *   Sheet name as spelled on the tab
    * @throws XLException
-   *   `SheetNotFound(sheet)` (code `SHEET_NOT_FOUND`) whose message lists candidates, or the parse
-   *   failure `read` would throw
+   *   `SheetNotFound(sheet, available)` (code `SHEET_NOT_FOUND`, `candidates` = the nearest of
+   *   `available`), or the parse failure `read` would throw
    * @throws java.io.IOException
    *   if file cannot be read
    */
   def readSheet(path: String, sheet: String): Sheet =
     val wb = read(path)
     wb.sheets.find(_.name.value == sheet).getOrElse {
-      val names = wb.sheets.map(_.name.value)
-      val nearest = Suggest.closest(sheet, names)
-      val didYouMean =
-        if nearest.isEmpty then "" else s" Did you mean: ${nearest.mkString(", ")}?"
-      throw XLException(
-        XLError.SheetNotFound(sheet),
-        s"Sheet not found: '$sheet'.$didYouMean Available: ${names.mkString(", ")}"
-      )
+      throw XLException(XLError.SheetNotFound(sheet, wb.sheets.map(_.name.value)))
     }
 
   /**
    * Read workbook metadata only — sheet names, visibility and dimensions, defined names, the date
    * system — without loading a single cell (Easy Mode, GH-589). Parses `workbook.xml` and each
    * worksheet's `<dimension>` element; instant on files of any size, so a script can decide what to
-   * read (or stream) before it reads anything.
+   * read (or stream) before it reads anything. The parts it inflates are held to the same ZIP-bomb
+   * limits as `Excel.read` (`XlsxReader.ReaderConfig.default`: 100 MB, 100:1).
    *
    * @param path
    *   File path (string)
    * @throws XLException
-   *   if the package cannot be opened or its workbook part parsed (`IOError`, `ParseError`,
-   *   `SecurityError`)
+   *   if the package cannot be opened, its workbook part parsed, or a part exceeds the limits
+   *   (`IOError`, `ParseError`, `SecurityError`)
    */
   def readMetadata(path: String): LightMetadata =
     WorkbookMetadataReader.read(Paths.get(path)).fold(e => throw XLException(e), identity)

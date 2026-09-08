@@ -1,19 +1,26 @@
 package com.tjclp.xl.sheets
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.addressing.{CellRange, Column, Row}
+import com.tjclp.xl.error.XLError
+import com.tjclp.xl.ops.{ColSpan, RowSpan}
 import munit.FunSuite
 
 /**
  * GH-465 (second half) / GH-589: `collapseRows`/`collapseCols` compose what the CLI's
- * `group-rows --collapsed` assembles by hand — hide the members, mark the summary row/column after
- * the group `collapsed`, and make ungrouped members a level-1 group so Excel draws the outline
- * button. `expandRows`/`expandCols` are the inverse (members unhidden, marker cleared, level kept).
+ * `group-rows --collapsed` assembles — hide the members, mark the summary row/column after the
+ * group `collapsed`, and make ungrouped members a level-1 group so Excel draws the outline button.
+ * `expandRows`/`expandCols` are the inverse (members unhidden, marker cleared, level kept). Both
+ * are the `SheetEdits.outlineRows`/`outlineCols` fold `groupRows`/`ungroupRows` use, and the
+ * `CellRange` overloads refuse a range of the wrong axis instead of projecting it.
  */
 class SheetOutlineSpec extends FunSuite:
 
   private def row(n: Int): Row = Row.from1(n)
   private def col(letter: String): Column =
     Column.fromLetter(letter).getOrElse(fail(s"bad column $letter"))
+  private def range(s: String): CellRange =
+    CellRange.parse(s).getOrElse(fail(s"bad range $s"))
 
   test("collapseRows hides the members and marks the summary row collapsed") {
     val sheet = Sheet("Outline").collapseRows(row(5), row(8))
@@ -41,12 +48,41 @@ class SheetOutlineSpec extends FunSuite:
     assert(sheet.getRowProperties(row(7)).collapsed)
   }
 
-  test("collapseRows normalizes a reversed span and accepts a CellRange") {
+  test("collapseRows normalizes a reversed span; RowSpan and full-row CellRange overloads agree") {
     val bySpan = Sheet("Norm").collapseRows(row(8), row(5))
-    val byRange = Sheet("Norm").collapseRows(CellRange(ARef.from0(0, 4), ARef.from0(3, 7)))
-    assertEquals(bySpan.rowProperties, byRange.rowProperties)
+    val byRowSpan = Sheet("Norm").collapseRows(RowSpan(row(5), row(8)))
+    val byRange = Sheet("Norm").collapseRows(range("5:8"))
+    assertEquals(byRowSpan, bySpan)
+    assertEquals(byRange, Right(bySpan))
     assert(bySpan.getRowProperties(row(5)).hidden)
     assert(bySpan.getRowProperties(row(9)).collapsed)
+  }
+
+  test("collapseRows on an ungrouped sheet is groupRows(level 1, collapsed) — one composition") {
+    val span = RowSpan(row(5), row(8))
+    val sheet = Sheet("Same").put("A1" -> "x")
+    assertEquals(sheet.groupRows(span, 1, collapsed = true), Right(sheet.collapseRows(span)))
+    val cols = ColSpan(col("E"), col("H"))
+    assertEquals(sheet.groupCols(cols, 1, collapsed = true), Right(sheet.collapseCols(cols)))
+  }
+
+  test("the CellRange overloads refuse a range of the wrong axis instead of projecting it") {
+    val columns = range("E:H") // rows 1..1048576 — collapseRows would hide the whole sheet
+    val rows = range("2:3") // columns A..XFD
+    val cells = range("A5:D8")
+    val sheet = Sheet("Axis")
+    Seq(sheet.collapseRows(columns), sheet.expandRows(columns), sheet.collapseRows(cells)).foreach {
+      case Left(XLError.InvalidReference(reason)) =>
+        assert(reason.contains("is not a row span"), reason)
+      case other => fail(s"expected InvalidReference, got $other")
+    }
+    Seq(sheet.collapseCols(rows), sheet.expandCols(rows), sheet.collapseCols(cells)).foreach {
+      case Left(XLError.InvalidReference(reason)) =>
+        assert(reason.contains("is not a column span"), reason)
+      case other => fail(s"expected InvalidReference, got $other")
+    }
+    assertEquals(sheet.collapseCols(columns), Right(sheet.collapseCols(col("E"), col("H"))))
+    assertEquals(sheet.collapseRows(rows), Right(sheet.collapseRows(row(2), row(3))))
   }
 
   test("collapseRows on the last row has no summary row to mark") {
@@ -65,7 +101,23 @@ class SheetOutlineSpec extends FunSuite:
       assertEquals(props.outlineLevel, Some(1), s"row $r keeps its group level")
     }
     assert(!expanded.getRowProperties(row(9)).collapsed)
-    assertEquals(expanded.expandRows(CellRange(ARef.from0(0, 4), ARef.from0(0, 7))), expanded)
+    assertEquals(expanded.expandRows(RowSpan(row(5), row(8))), expanded)
+    assertEquals(expanded.expandRows(range("5:8")), Right(expanded))
+  }
+
+  test("expandRows/expandCols over rows and columns without properties are no-ops") {
+    val sheet = Sheet("Untouched").put("A1" -> 1)
+    assertEquals(sheet.expandRows(row(1), row(50)), sheet)
+    assertEquals(sheet.expandRows(RowSpan(row(1), row(50))), sheet)
+    assertEquals(sheet.expandCols(col("A"), col("Z")), sheet)
+    assertEquals(sheet.rowProperties, Map.empty)
+    assertEquals(sheet.columnProperties, Map.empty)
+    // an entry that exists is updated in place (and kept when it becomes all-default)
+    val hiddenOnly = sheet.setRowProperties(row(3), RowProperties(hidden = true))
+    assertEquals(
+      hiddenOnly.expandRows(row(1), row(5)).rowProperties,
+      Map(row(3) -> RowProperties())
+    )
   }
 
   test("collapseCols hides the members and marks the summary column collapsed") {
@@ -82,7 +134,7 @@ class SheetOutlineSpec extends FunSuite:
     assertEquals(sheet.columnProperties.size, 5)
   }
 
-  test("collapseCols keeps width and level; CellRange overload and reversed span agree") {
+  test("collapseCols keeps width and each member's level; ColSpan, CellRange and reversed agree") {
     val grouped = Sheet("ColLevels")
       .setColumnProperties(col("E"), ColumnProperties(width = Some(18.0), outlineLevel = Some(3)))
     val sheet = grouped.collapseCols(col("E"), col("F"))
@@ -90,8 +142,9 @@ class SheetOutlineSpec extends FunSuite:
     assertEquals(sheet.getColumnProperties(col("E")).outlineLevel, Some(3))
     assertEquals(sheet.getColumnProperties(col("F")).outlineLevel, Some(1))
     val reversed = Sheet("ColNorm").collapseCols(col("F"), col("E"))
-    val byRange = Sheet("ColNorm").collapseCols(CellRange(ARef.from0(4, 0), ARef.from0(5, 9)))
-    assertEquals(reversed.columnProperties, byRange.columnProperties)
+    val bySpan = Sheet("ColNorm").collapseCols(ColSpan(col("E"), col("F")))
+    assertEquals(bySpan, reversed)
+    assertEquals(Sheet("ColNorm").collapseCols(range("E:F")), Right(reversed))
   }
 
   test("collapseCols on the last column has no summary column to mark") {
@@ -109,5 +162,6 @@ class SheetOutlineSpec extends FunSuite:
       assertEquals(expanded.getColumnProperties(col(c)).outlineLevel, Some(1))
     }
     assert(!expanded.getColumnProperties(col("I")).collapsed)
-    assertEquals(expanded.expandCols(CellRange(ARef.from0(4, 0), ARef.from0(7, 0))), expanded)
+    assertEquals(expanded.expandCols(ColSpan(col("E"), col("H"))), expanded)
+    assertEquals(expanded.expandCols(range("E:H")), Right(expanded))
   }

@@ -60,9 +60,15 @@ object BaseImportProbe:
     (wb, opts) => Excel.writeRecalculated(wb, "/tmp/never-run.xlsx", opts)
 
   // GH-465 / GH-589: outline collapse composes hidden members + the collapsed summary marker
-  // (whole-row/column spans are runtime strings — the ref macro takes A1 / A1:B2 shapes only)
-  val colSpan: Either[String, CellRange] = CellRange.parse("E:H")
+  // (whole-row/column spans are runtime strings — the ref macro takes A1 / A1:B2 shapes only —
+  // and ColSpan/RowSpan carry the axis; the CellRange overload is XLResult and refuses the other)
+  val colSpan: XLResult[ColSpan] = ColSpan.parse("E:H")
+  val colRange: Either[String, CellRange] = CellRange.parse("E:H")
   val collapsed: Sheet =
     cfSheet.collapseRows(Row.from1(2), Row.from1(4)).collapseCols(Column.from0(4), Column.from0(7))
   val reopened: Sheet =
-    colSpan.fold(_ => collapsed, collapsed.expandCols).expandRows(Row.from1(2), Row.from1(4))
+    colSpan
+      .fold(_ => collapsed, span => collapsed.expandCols(span))
+      .expandRows(Row.from1(2), Row.from1(4))
+  val viaRange: XLResult[Sheet] =
+    colRange.left.map(XLError.InvalidReference(_)).flatMap(r => collapsed.expandCols(r))

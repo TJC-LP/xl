@@ -5,6 +5,8 @@ import java.util.Locale
 import scala.compiletime.constValueTuple
 import scala.deriving.Mirror
 
+import com.tjclp.xl.text.Suggest
+
 /**
  * Error types for the XL library. All errors are pure values that can be composed and transformed.
  *
@@ -28,8 +30,12 @@ enum XLError derives CanEqual:
   /** Cell reference out of bounds */
   case OutOfBounds(ref: String, reason: String)
 
-  /** Sheet not found */
-  case SheetNotFound(name: String)
+  /**
+   * Sheet not found. `available` lists the workbook's sheet names when the caller has them
+   * (GH-589): the nearest ones become [[XLError.candidates]] ("did you mean") and the message names
+   * them all, so the diagnostic is structural rather than prose baked into a message.
+   */
+  case SheetNotFound(name: String, available: Vector[String] = Vector.empty)
 
   /** Duplicate sheet name */
   case DuplicateSheet(name: String)
@@ -129,7 +135,9 @@ object XLError:
       case InvalidReference(reason) => s"Invalid reference: $reason"
       case InvalidSheetName(name, reason) => s"Invalid sheet name '$name': $reason"
       case OutOfBounds(ref, reason) => s"Reference out of bounds '$ref': $reason"
-      case SheetNotFound(name) => s"Sheet not found: '$name'"
+      case SheetNotFound(name, available) =>
+        if available.isEmpty then s"Sheet not found: '$name'"
+        else s"Sheet not found: '$name'. Available: ${available.mkString(", ")}"
       case DuplicateSheet(name) => s"Duplicate sheet name: '$name'"
       case DuplicateCellRef(refs) => s"Duplicate cell references not allowed: $refs"
       case InvalidColumn(index, reason) => s"Invalid column index $index: $reason"
@@ -175,7 +183,7 @@ object XLError:
 
     /** A one-line next step for the cases that have an obvious one; `None` otherwise. */
     def hint: Option[String] = error match
-      case SheetNotFound(_) => Some("list sheets with `xl -f <file> sheets`")
+      case SheetNotFound(_, _) => Some("list sheets with `xl -f <file> sheets`")
       case SheetRequired(_, _) => Some("use -s <name> or a qualified ref like 'Name'!A1")
       case ValueCountMismatch(expected, _, _) =>
         Some(s"provide exactly $expected values, or 1 to fill the range")
@@ -186,9 +194,13 @@ object XLError:
       case EditFailed(_, _, cause) => cause.hint
       case _ => None
 
-    /** Names to offer as "did you mean": the available sheets of a [[SheetRequired]]. */
+    /**
+     * Names to offer as "did you mean": the available sheets of a [[SheetRequired]], the nearest of
+     * the available sheets of a [[SheetNotFound]] (`Suggest.closest`, as the CLI has always done).
+     */
     def candidates: Vector[String] = error match
       case SheetRequired(_, available) => available
+      case SheetNotFound(name, available) => Suggest.closest(name, available)
       case EditFailed(_, _, cause) => cause.candidates
       case _ => Vector.empty
 
@@ -201,6 +213,34 @@ object XLError:
     def opIndex: Option[Int] = error match
       case EditFailed(index, _, _) => Some(index)
       case _ => None
+
+    /** The error as `xl` prints it on stderr — see [[XLError.renderDiagnostic]]. */
+    def renderDiagnostic: String =
+      XLError.renderDiagnostic(error.code, error.message, error.hint, error.candidates)
+
+  /**
+   * The stderr text of a failure (ADR-017 §2.3), the ONE renderer behind the CLI's
+   * `Diagnostics.render` and the scripting prelude's `exitMessage`/`orExit`, so a script and `xl`
+   * fail with the same bytes on the same error:
+   *
+   * {{{
+   * Error: <message>
+   *   code: <CODE>                 stable, XLError.code or a CLI-only ErrorCode
+   *   did you mean: <a>, <b>       only when candidates is non-empty
+   *   hint: <text>                 only when the error has one
+   * }}}
+   */
+  def renderDiagnostic(
+    code: String,
+    message: String,
+    hint: Option[String],
+    candidates: Vector[String]
+  ): String =
+    val head = List(s"Error: $message", s"  code: $code")
+    val suggestions =
+      if candidates.isEmpty then Nil else List(s"  did you mean: ${candidates.mkString(", ")}")
+    val hintLine = hint.toList.map(text => s"  hint: $text")
+    (head ++ suggestions ++ hintLine).mkString("\n")
 
   /** SCREAMING_SNAKE of a CamelCase case name; acronyms stay together (`IOError` → `IO_ERROR`). */
   private def caseCode(name: String): String =

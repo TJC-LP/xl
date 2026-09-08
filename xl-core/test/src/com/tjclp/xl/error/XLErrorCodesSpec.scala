@@ -123,6 +123,29 @@ class XLErrorCodesSpec extends FunSuite:
     assertEquals(XLError.SheetNotFound("x").candidates, Vector.empty[String])
   }
 
+  test("candidates: SheetNotFound offers the nearest of its available sheets (GH-589)") {
+    val err = XLError.SheetNotFound("Sumary", Vector("Data", "Summary"))
+    assertEquals(err.candidates, Vector("Summary"))
+    assertEquals(err.message, "Sheet not found: 'Sumary'. Available: Data, Summary")
+    assertEquals(XLError.SheetNotFound("Zebra", Vector("Data", "Summary")).candidates, Vector.empty)
+    assertEquals(XLError.SheetNotFound("Zebra").message, "Sheet not found: 'Zebra'")
+  }
+
+  test(
+    "renderDiagnostic: Error line, indented code, did-you-mean before hint, absent lines skipped"
+  ) {
+    assertEquals(XLError.Other("boom").renderDiagnostic, "Error: boom\n  code: OTHER")
+    assertEquals(
+      XLError.SheetRequired("view", Vector("Data", "Summary")).renderDiagnostic,
+      "Error: view requires a sheet: pass -s <name> or qualify the ref (Sheet!A1). Available: Data, Summary\n" +
+        "  code: SHEET_REQUIRED\n  did you mean: Data, Summary\n  hint: use -s <name> or a qualified ref like 'Name'!A1"
+    )
+    assertEquals(
+      XLError.renderDiagnostic("USAGE", "unknown verb", None, Vector("view", "cell")),
+      "Error: unknown verb\n  code: USAGE\n  did you mean: view, cell"
+    )
+  }
+
   test("messages of the new cases") {
     assertEquals(
       XLError.EditFailed(3, "put", XLError.SheetNotFound("x")).message,

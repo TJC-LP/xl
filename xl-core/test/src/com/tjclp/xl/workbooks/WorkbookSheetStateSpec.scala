@@ -122,7 +122,7 @@ class WorkbookSheetStateSpec extends FunSuite:
     val result = workbook.setSheetState(SheetName.unsafe("NonExistent"), Some("hidden"))
     assert(result.isLeft, "Expected Left for non-existent sheet")
     result match
-      case Left(XLError.SheetNotFound(name)) =>
+      case Left(XLError.SheetNotFound(name, _)) =>
         assertEquals(name, "NonExistent")
       case other =>
         fail(s"Expected SheetNotFound error but got: $other")

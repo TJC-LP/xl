@@ -234,11 +234,15 @@ class EasyExcelSpec extends CatsEffectSuite:
       val ex = intercept[XLException] {
         Excel.readSheet(tempFile.toString, "Sumary")
       }
-      assertEquals(ex.error, XLError.SheetNotFound("Sumary"))
+      assertEquals(ex.error, XLError.SheetNotFound("Sumary", Vector("Data", "Summary")))
       assertEquals(ex.error.code, "SHEET_NOT_FOUND")
-      assertEquals(
-        ex.getMessage,
-        "Sheet not found: 'Sumary'. Did you mean: Summary? Available: Data, Summary"
+      // the candidates are the error's, not prose in the message
+      assertEquals(ex.error.candidates, Vector("Summary"))
+      assertEquals(ex.getMessage, "Sheet not found: 'Sumary'. Available: Data, Summary")
+      assertEquals(ex.getMessage, ex.error.message)
+      assert(
+        ex.error.renderDiagnostic.contains("  did you mean: Summary"),
+        ex.error.renderDiagnostic
       )
     }
   }
@@ -249,7 +253,8 @@ class EasyExcelSpec extends CatsEffectSuite:
       val ex = intercept[XLException] {
         Excel.readSheet(tempFile.toString, "Zebra")
       }
-      assertEquals(ex.error, XLError.SheetNotFound("Zebra"))
+      assertEquals(ex.error, XLError.SheetNotFound("Zebra", Vector("Data", "Summary")))
+      assertEquals(ex.error.candidates, Vector.empty)
       assertEquals(ex.getMessage, "Sheet not found: 'Zebra'. Available: Data, Summary")
     }
   }

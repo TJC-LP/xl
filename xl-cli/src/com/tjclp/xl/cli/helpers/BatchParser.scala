@@ -2123,11 +2123,8 @@ object BatchParser:
   def sheetNotFound(names: Vector[String], sheetName: SheetName): CliException =
     CliException(
       CliError
-        .fromXLError(XLError.SheetNotFound(sheetName.value), None)
-        .copy(
-          message = s"Sheet '${sheetName.value}' not found. Available: ${names.mkString(", ")}",
-          candidates = Suggest.closest(sheetName.value, names)
-        )
+        .fromXLError(XLError.SheetNotFound(sheetName.value, names), None)
+        .copy(message = s"Sheet '${sheetName.value}' not found. Available: ${names.mkString(", ")}")
     )
 
   /** Update a sheet in the workbook, raising error if sheet not found. */

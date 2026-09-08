@@ -3,6 +3,7 @@ package com.tjclp.xl.cli.contract
 import cats.effect.IO
 
 import com.tjclp.xl.cli.CliIO
+import com.tjclp.xl.error.XLError
 
 /**
  * The text form of errors and warnings on stderr (ADR-017 §2.3). Results go to stdout; everything
@@ -15,16 +16,14 @@ import com.tjclp.xl.cli.CliIO
  *   did you mean: <a>, <b>         only when candidates is non-empty
  *   hint: <text>                   only when the error has one
  * }}}
+ *
+ * The format itself lives in xl-core as `XLError.renderDiagnostic` (GH-589), shared with the
+ * scripting prelude's `exitMessage`/`orExit`: a failing script prints the same bytes as `xl`.
  */
 object Diagnostics:
 
   def render(err: CliError): String =
-    val head = List(s"Error: ${err.message}", s"  code: ${err.code}")
-    val suggestions =
-      if err.candidates.isEmpty then Nil
-      else List(s"  did you mean: ${err.candidates.mkString(", ")}")
-    val hint = err.hint.toList.map(text => s"  hint: $text")
-    (head ++ suggestions ++ hint).mkString("\n")
+    XLError.renderDiagnostic(err.code, err.message, err.hint, err.candidates)
 
   def report(err: CliError, io: CliIO): IO[Unit] = io.err(render(err))
 

@@ -424,7 +424,8 @@ private[xl] object SheetEdits:
    * Apply `f` to the row's properties, keeping the entry even when the result is all-default: an
    * explicit entry is authoritative on write (actively clearing preserved source attributes),
    * whereas a missing entry lets a preserved `<row>` ride through verbatim — pruning would
-   * resurrect the very collapsed/outlineLevel attrs an ungroup just cleared.
+   * resurrect the very collapsed/outlineLevel attrs an ungroup just cleared. A row without an entry
+   * gains one, as `Edit.lower`'s `SetRowProperties` per member does (the lowering-coherence law).
    */
   private def updateRow(sheet: Sheet, row: Row)(f: RowProperties => RowProperties): Sheet =
     sheet.setRowProperties(row, f(sheet.getRowProperties(row)))
@@ -433,28 +434,82 @@ private[xl] object SheetEdits:
     sheet.setColumnProperties(col, f(sheet.getColumnProperties(col)))
 
   /**
+   * [[updateRow]] for an edit that is a no-op wherever nothing was set (GH-589 expand): an existing
+   * entry is updated and kept as above, but a row WITHOUT an entry that `f` leaves at the default
+   * stays absent — nothing changed, so nothing is emitted. Expanding rows that were never hidden
+   * leaves the file byte-identical instead of adding an empty `<row>` per member.
+   */
+  private def touchRow(sheet: Sheet, row: Row)(f: RowProperties => RowProperties): Sheet =
+    val current = sheet.getRowProperties(row)
+    val next = f(current)
+    if next == current && !sheet.rowProperties.contains(row) then sheet
+    else sheet.setRowProperties(row, next)
+
+  private def touchCol(sheet: Sheet, col: Column)(f: ColumnProperties => ColumnProperties): Sheet =
+    val current = sheet.getColumnProperties(col)
+    val next = f(current)
+    if next == current && !sheet.columnProperties.contains(col) then sheet
+    else sheet.setColumnProperties(col, next)
+
+  /**
+   * The one outline composition (GH-421 grouping, GH-465/GH-589 collapse and expand): `f` on every
+   * row of the span, then the summary row AFTER it — Excel's `summaryBelow` default — gets
+   * `collapsed = marker` when a marker is given (a span ending on the last row has no summary row).
+   * [[groupRows]]/[[ungroupRows]] here and `Sheet.collapseRows`/`expandRows` (`outlineSyntax`) are
+   * all this fold, so the summary-marker rule cannot drift between the CLI and scripts. `sparse`
+   * selects [[touchRow]] over [[updateRow]]: rows without an entry stay absent when `f` would leave
+   * them at the default (expand); grouping keeps [[updateRow]] to stay coherent with `Edit.lower`.
+   */
+  private[xl] def outlineRows(
+    sheet: Sheet,
+    rows: RowSpan,
+    marker: Option[Boolean],
+    sparse: Boolean
+  )(
+    f: RowProperties => RowProperties
+  ): Sheet =
+    def step(s: Sheet, r: Row)(g: RowProperties => RowProperties): Sheet =
+      if sparse then touchRow(s, r)(g) else updateRow(s, r)(g)
+    val members = rows.rows.foldLeft(sheet)((s, r) => step(s, r)(f))
+    marker match
+      case Some(collapsed) if rows.end.index0 < Row.MaxIndex0 =>
+        step(members, rows.end + 1)(_.copy(collapsed = collapsed))
+      case _ => members
+
+  /** The column twin of [[outlineRows]] (`summaryRight`). */
+  private[xl] def outlineCols(
+    sheet: Sheet,
+    cols: ColSpan,
+    marker: Option[Boolean],
+    sparse: Boolean
+  )(
+    f: ColumnProperties => ColumnProperties
+  ): Sheet =
+    def step(s: Sheet, c: Column)(g: ColumnProperties => ColumnProperties): Sheet =
+      if sparse then touchCol(s, c)(g) else updateCol(s, c)(g)
+    val members = cols.columns.foldLeft(sheet)((s, c) => step(s, c)(f))
+    marker match
+      case Some(collapsed) if cols.end.index0 < Column.MaxIndex0 =>
+        step(members, cols.end + 1)(_.copy(collapsed = collapsed))
+      case _ => members
+
+  /**
    * Group rows into a collapsible outline: every row gets `level`; `collapsed` hides the members
    * and marks the summary row AFTER the group (Excel's summaryBelow default) so the "+" button
    * draws there.
    */
   def groupRows(sheet: Sheet, rows: RowSpan, level: Int, collapsed: Boolean): XLResult[Sheet] =
     validateLevel(level).map { _ =>
-      val withMembers = rows.rows.foldLeft(sheet) { (s, r) =>
-        updateRow(s, r)(p => p.copy(outlineLevel = Some(level), hidden = collapsed || p.hidden))
+      outlineRows(sheet, rows, Option.when(collapsed)(true), sparse = false) { p =>
+        p.copy(outlineLevel = Some(level), hidden = collapsed || p.hidden)
       }
-      if collapsed && rows.end.index0 < Row.MaxIndex0 then
-        updateRow(withMembers, rows.end + 1)(_.copy(collapsed = true))
-      else withMembers
     }
 
   def groupCols(sheet: Sheet, cols: ColSpan, level: Int, collapsed: Boolean): XLResult[Sheet] =
     validateLevel(level).map { _ =>
-      val withMembers = cols.columns.foldLeft(sheet) { (s, c) =>
-        updateCol(s, c)(p => p.copy(outlineLevel = Some(level), hidden = collapsed || p.hidden))
+      outlineCols(sheet, cols, Option.when(collapsed)(true), sparse = false) { p =>
+        p.copy(outlineLevel = Some(level), hidden = collapsed || p.hidden)
       }
-      if collapsed && cols.end.index0 < Column.MaxIndex0 then
-        updateCol(withMembers, cols.end + 1)(_.copy(collapsed = true))
-      else withMembers
     }
 
   /**
@@ -462,20 +517,14 @@ private[xl] object SheetEdits:
    * Members a collapse hid stay hidden, like Excel (show them with a row-show edit).
    */
   def ungroupRows(sheet: Sheet, rows: RowSpan): Sheet =
-    val cleared = rows.rows.foldLeft(sheet) { (s, r) =>
-      updateRow(s, r)(_.copy(outlineLevel = None, collapsed = false))
-    }
-    if rows.end.index0 < Row.MaxIndex0 then
-      updateRow(cleared, rows.end + 1)(_.copy(collapsed = false))
-    else cleared
+    outlineRows(sheet, rows, Some(false), sparse = false)(
+      _.copy(outlineLevel = None, collapsed = false)
+    )
 
   def ungroupCols(sheet: Sheet, cols: ColSpan): Sheet =
-    val cleared = cols.columns.foldLeft(sheet) { (s, c) =>
-      updateCol(s, c)(_.copy(outlineLevel = None, collapsed = false))
-    }
-    if cols.end.index0 < Column.MaxIndex0 then
-      updateCol(cleared, cols.end + 1)(_.copy(collapsed = false))
-    else cleared
+    outlineCols(sheet, cols, Some(false), sparse = false)(
+      _.copy(outlineLevel = None, collapsed = false)
+    )
 
   // ===== Appearance & print setup (GH-358) =====
 

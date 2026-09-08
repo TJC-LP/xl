@@ -747,8 +747,11 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(summary.readTypedOpt[Int](ref"A1"), Some(2))
     val ex = intercept[XLException]:
       Excel.readSheet(path.toString, "Sumary")
-    assertEquals(ex.error, XLError.SheetNotFound("Sumary"))
-    assert(ex.getMessage.contains("Did you mean: Summary?"), ex.getMessage)
+    // the candidates are the error's own, so exitMessage renders them as `xl` would
+    assertEquals(ex.error, XLError.SheetNotFound("Sumary", Vector("Data", "Summary")))
+    assertEquals(ex.error.candidates, Vector("Summary"))
+    assertEquals(ex.getMessage, ex.error.message)
+    assert(exitMessage(ex.error).contains("\n  did you mean: Summary\n"), exitMessage(ex.error))
     val meta: LightMetadata = Excel.readMetadata(path.toString)
     val infos: Vector[SheetInfo] = meta.sheets
     assertEquals(infos.map(_.name.value), Vector("Data", "Summary"))
@@ -757,24 +760,35 @@ class ScriptingPreludeTest extends FunSuite:
     intercept[XLException]:
       Excel.modifyR(path.toString)(_.update("Nope", identity))
 
-  test("GH-589: orExit unwraps Right and renders Left with code, hint and candidates"):
+  test(
+    "GH-589: orExit unwraps Right; exitMessage is the CLI's envelope (XLError.renderDiagnostic)"
+  ):
     val wb: Workbook = orExit(Workbook.named("Data", "Summary"))
     assertEquals(wb.sheets.map(_.name.value), Vector("Data", "Summary"))
     val sheet: Sheet = orExit(Sheet.named("Dyn"))
     assertEquals(sheet.name.value, "Dyn")
-    val rendered = exitMessage(XLError.SheetRequired("view", Vector("Data", "Summary")))
-    assert(rendered.startsWith("error: view requires a sheet"), rendered)
-    assert(rendered.contains("code: SHEET_REQUIRED"), rendered)
-    assert(rendered.contains("hint: use -s <name>"), rendered)
-    assert(rendered.contains("did you mean: Data, Summary"), rendered)
-    val plain = exitMessage(XLError.Other("boom"))
-    assertEquals(plain, "error: boom\ncode: OTHER")
+    val required = XLError.SheetRequired("view", Vector("Data", "Summary"))
+    val rendered = exitMessage(required)
+    // Diagnostics.render in xl-cli prints exactly this for the same error (DiagnosticsSpec pins
+    // Diagnostics.render(CliError.fromXLError(e)) == e.renderDiagnostic)
+    assertEquals(rendered, required.renderDiagnostic)
+    assertEquals(
+      rendered,
+      "Error: view requires a sheet: pass -s <name> or qualify the ref (Sheet!A1). Available: Data, Summary\n" +
+        "  code: SHEET_REQUIRED\n  did you mean: Data, Summary\n  hint: use -s <name> or a qualified ref like 'Name'!A1"
+    )
+    assertEquals(exitMessage(XLError.Other("boom")), "Error: boom\n  code: OTHER")
 
   test("GH-589 / GH-465: collapseRows and collapseCols resolve and round-trip through the file"):
     // Whole-row/column spans are runtime-only (the ref macro rejects "2:3" and "E:F");
-    // String.asRange parses them — and orExit unwraps at the edge.
-    val rows: CellRange = orExit("2:3".asRange)
-    val cols: CellRange = orExit("E:F".asRange)
+    // RowSpan/ColSpan.parse put the axis in the type — and orExit unwraps at the edge.
+    val rows: RowSpan = orExit(RowSpan.parse("2:3"))
+    val cols: ColSpan = orExit(ColSpan.parse("E:F"))
+    // the CellRange overloads are XLResult: a range of the wrong axis is refused, never projected
+    val colRange: CellRange = orExit("E:F".asRange)
+    assert(Sheet("Axis").collapseRows(colRange).isLeft)
+    assertEquals(Sheet("Axis").collapseCols(colRange), Right(Sheet("Axis").collapseCols(cols)))
+    assert(ColSpan.parse("2:3").isLeft)
     val sheet = Sheet("Outline")
       .put(ref"A1", "Header")
       .put(ref"A2", 1)
