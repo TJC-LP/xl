@@ -118,12 +118,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message (`Unknown function 'SINGLE' at position 3. Did you mean: SIGN?`, never the constructor
   text `UnknownFunction(SINGLE,3,List(SIGN))`) and a hint (`fix or replace the formula at
   Summary!I23 before renaming`). `SheetRenamer.renameLocated` carries the site (cell, conditional
-  format, data validation, defined name) alongside the error; `FormulaOps.shift` refusals and the
-  `putf --from`/`copy`/structural rewrite paths report the same parser diagnostic. The other sheet
-  verbs (`add-sheet`, `remove-sheet`, `move-sheet`, `copy-sheet`, hide/show, `name remove`) no
-  longer wrap their refusals in a plain exception: an unknown sheet is `SHEET_NOT_FOUND`, an
-  invalid name `INVALID_SHEET_NAME`, a missing `--to/--after/--before` on `move-sheet` is `USAGE`
-  (exit 2); every message text is unchanged. New goldens `rename-sheet-unrewritable[-json]`.
+  format, data validation, defined name) alongside the error. The batch `rename-sheet` and
+  `add-sheet` ops raise the verb's typed refusals, so `BATCH_OP_FAILED` carries the cause's code,
+  hint and location (`Summary!I23`, `opIndex`) instead of an `INTERNAL` cause with no hint. The
+  `putf --from` shift refusal (`FormulaOps.shift`) and the structural editor's defined-name refusal
+  report the same parser diagnostic. The other sheet verbs (`add-sheet`, `remove-sheet`,
+  `move-sheet`, `copy-sheet`, `sheets hide/show`, `name rm`) no longer wrap their refusals in a
+  plain exception: an unknown sheet is `SHEET_NOT_FOUND` (with did-you-mean candidates), an
+  invalid name `INVALID_SHEET_NAME`, an unknown named range `OTHER`, and a `move-sheet` without
+  `--to/--after/--before` is `USAGE` (exit 2) from the command-line parser, before the file is read;
+  every message text is unchanged. New goldens `rename-sheet-unrewritable[-json]`.
 - **`cell` quotes sheet qualifiers the way `deps` does** (#609). `Dependencies`/`Dependents` in
   the text output and the `--json` arrays render a cross-sheet reference through the formula
   printer (`SheetName.quoteForFormula`): `'On-Premise'!G9`, not `On-Premise!G9`, so the spelling is

@@ -218,6 +218,8 @@ class RenameSheetSpec extends CatsEffectSuite:
     val ops = opsFile("""[{"op":"rename-sheet","from":"M&A","to":"MandA"}]""")
     for
       _ <- excel.write(TestFixtures.qualifiedBook(), in)
+      read <- excel.read(in)
+      direct <- WriteCommands.batch(read, read.sheets.headOption, ops.toString, out, config).attempt
       verb <- CliHarness.run(
         "-f",
         in.toString,
@@ -252,12 +254,37 @@ class RenameSheetSpec extends CatsEffectSuite:
         ujson.Str("fix or replace the formula at Summary!I23 before renaming")
       )
       assert(!Files.exists(out), "nothing may be written when the rename is refused")
-      // the batch op: BATCH_OP_FAILED names the op index; the cause's text and hint ride along
+      // the batch op: BATCH_OP_FAILED names the op index; the verb's cause, hint and location ride
+      // along (the op raises the same typed refusal, not a plain exception)
       assertEquals(batch.exit, 3, batch.stderr)
       val batchError = ujson.read(batch.stdout)("error")
       assertEquals(batchError("code"), ujson.Str("BATCH_OP_FAILED"))
+      assert(
+        batchError("message").str.startsWith("Object 1 (rename-sheet): "),
+        batchError("message").str
+      )
       assert(batchError("message").str.contains("Summary!I23"), batchError("message").str)
       assert(!batchError("message").str.contains("UnknownFunction("), batchError("message").str)
+      assertEquals(
+        batchError("hint"),
+        ujson.Str("fix or replace the formula at Summary!I23 before renaming")
+      )
+      assertEquals(batchError("location")("sheet"), ujson.Str("Summary"))
+      assertEquals(batchError("location")("ref"), ujson.Str("I23"))
+      assertEquals(batchError("location")("opIndex"), ujson.Num(1))
+      direct match
+        case Left(err: CliException) =>
+          assertEquals(err.error.code, "BATCH_OP_FAILED")
+          assertEquals(err.error.cause.map(_.code), Some("FORMULA_ERROR"))
+          assertEquals(
+            err.error.hint,
+            Some("fix or replace the formula at Summary!I23 before renaming")
+          )
+          assertEquals(
+            err.error.location,
+            Some(Location(None, Some("Summary"), Some("I23"), Some(1)))
+          )
+        case other => fail(s"expected a BATCH_OP_FAILED CliException, got: $other")
       assert(!Files.exists(out), "nothing may be written when the batch is refused")
   }
 

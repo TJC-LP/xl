@@ -6,6 +6,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, OpSpec, ScopedOp}
+import com.tjclp.xl.cli.commands.SheetCommands
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
 import com.tjclp.xl.formula.{
@@ -1115,19 +1116,22 @@ object BatchParser:
     case _ => default
 
   /**
-   * `BATCH_OP_FAILED`: `Object N (op): <cause>`, keeping the cause's hint and candidates. Shared
-   * with the streaming writer so an apply-time failure carries the same code, prefix and
-   * `location.opIndex` on both paths (ADR-017 invariant 2).
+   * `BATCH_OP_FAILED`: `Object N (op): <cause>`, keeping the cause's hint, candidates and domain
+   * `cause`. `location` is the cause's own when it named one (the cell a `rename-sheet` could not
+   * rewrite, GH-608), else the op's sheet; `opIndex` is always the op's. Shared with the streaming
+   * writer so an apply-time failure carries the same code, prefix and `location.opIndex` on both
+   * paths (ADR-017 invariant 2).
    */
   def opFailed(scoped: ScopedOp, cause: Throwable): CliException =
     val inner = CliError.fromThrowable(cause)
+    val at = inner.location.getOrElse(Location(None, scoped.sheet.map(_.value), None, None))
     CliException(
       CliError(
         ErrorCode.BATCH_OP_FAILED,
         s"Object ${scoped.index} (${OpRegistry.nameOf(scoped.op)}): ${inner.message}",
         hint = inner.hint,
         candidates = inner.candidates,
-        location = Some(Location(None, scoped.sheet.map(_.value), None, Some(scoped.index))),
+        location = Some(at.copy(opIndex = Some(scoped.index))),
         cause = inner.cause
       )
     )
@@ -1906,20 +1910,24 @@ object BatchParser:
         .map(err => s"Invalid autofit columns '$spec': $err")
         .map(col => List(col))
 
-  /** Add a new sheet to the workbook. */
+  /**
+   * Add a new sheet to the workbook. Refusals are the verb's (`SheetCommands`, GH-608):
+   * `INVALID_SHEET_NAME`, `DUPLICATE_SHEET`, `SHEET_NOT_FOUND` for the `after` anchor.
+   */
   private def applyAddSheet(
     wb: Workbook,
     name: String,
     afterOpt: Option[String]
   ): IO[Workbook] =
     for
-      sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
+      sheetName <- SheetCommands.sheetName(name)
       // Excel compares sheet names case-insensitively: `data` beside `Data` is a duplicate tab
       // that Excel repairs on open, so refuse it like Workbook.rename/insertAt do.
       _ <-
         if wb.sheets.exists(_.name.value.equalsIgnoreCase(sheetName.value)) then
           IO.raiseError(
-            new Exception(
+            SheetCommands.duplicateSheet(
+              name,
               s"Sheet '$name' already exists (sheet names are case-insensitive). Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
             )
           )
@@ -1928,18 +1936,11 @@ object BatchParser:
       result <- afterOpt match
         case Some(after) =>
           for
-            afterName <- IO.fromEither(SheetName(after).left.map(e => new Exception(e)))
+            afterName <- SheetCommands.sheetName(after)
             idx = wb.sheets.indexWhere(_.name == afterName)
-            _ <-
-              if idx < 0 then
-                IO.raiseError(
-                  new Exception(
-                    s"Sheet '$after' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
-                  )
-                )
-              else IO.unit
+            _ <- if idx < 0 then IO.raiseError(SheetCommands.sheetNotFound(after, wb)) else IO.unit
             inserted <- IO.fromEither(
-              wb.insertAt(idx + 1, newSheet).left.map(e => new Exception(e.message))
+              wb.insertAt(idx + 1, newSheet).left.map(SheetCommands.domain)
             )
           yield inserted
         case None =>
@@ -1948,20 +1949,16 @@ object BatchParser:
 
   /**
    * Rename a sheet and every reference to it (GH-559): cell formulas on every sheet, defined names,
-   * CF and DV formulas follow the rename through `SheetRenamer.rename`, caches preserved.
+   * CF and DV formulas follow the rename through `SheetRenamer.renameLocated`, caches preserved.
+   * The verb's own rename (`SheetCommands.renamed`), so a refusal carries the same code, hint and
+   * location under `BATCH_OP_FAILED` (GH-608).
    */
   private def applyRenameSheet(
     wb: Workbook,
     from: String,
     to: String
   ): IO[Workbook] =
-    for
-      oldName <- IO.fromEither(SheetName(from).left.map(e => new Exception(e)))
-      newName <- IO.fromEither(SheetName(to).left.map(e => new Exception(e)))
-      result <- IO.fromEither(
-        SheetRenamer.rename(wb, oldName, newName).left.map(e => new Exception(e.message))
-      )
-    yield result
+    SheetCommands.renamed(wb, from, to)
 
   /**
    * Apply a copy range operation, respecting qualified sheet refs on each side.

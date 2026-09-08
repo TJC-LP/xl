@@ -21,14 +21,16 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
  *
  * Every refusal here is typed (ADR-017 §2.3): a domain error keeps its own `XLError.code`, a wrong
  * flag combination is `USAGE`, and nothing falls through to `INTERNAL` — that code is reserved for
- * defects (GH-608). The verbs' historical message texts are kept.
+ * defects (GH-608). The verbs' historical message texts are kept. The `private[cli]` helpers are
+ * shared with the batch `add-sheet`/`rename-sheet` ops (`BatchParser`), so an op fails with the
+ * same code, hint and location as the verb, wrapped by `BATCH_OP_FAILED`.
  */
 object SheetCommands:
 
   // --- Typed failures (ADR-017 §2.3): every refusal names its code ------------------------------
 
   /** A domain error as raised, with its own code (exit 3). */
-  private def domain(error: XLError): CliException =
+  private[cli] def domain(error: XLError): CliException =
     CliException(CliError.fromXLError(error, None))
 
   /** A domain error with the verb's own wording in place of the domain message. */
@@ -39,7 +41,7 @@ object SheetCommands:
   private def usage(message: String): CliException = CliException(CliError.usage(message, None))
 
   /** `INVALID_SHEET_NAME` (exit 3) with the validator's own sentence. */
-  private def sheetName(name: String): IO[SheetName] =
+  private[cli] def sheetName(name: String): IO[SheetName] =
     IO.fromEither(
       SheetName(name).left.map(reason => domain(XLError.InvalidSheetName(name, reason), reason))
     )
@@ -48,7 +50,7 @@ object SheetCommands:
    * `SHEET_NOT_FOUND` (exit 3) with the verb's message, plus the domain hint and the nearest names
    * as candidates.
    */
-  private def sheetNotFound(name: String, wb: Workbook): CliException =
+  private[cli] def sheetNotFound(name: String, wb: Workbook): CliException =
     val available = wb.sheetNames.map(_.value).toVector
     domain(
       XLError.SheetNotFound(name, available),
@@ -64,7 +66,7 @@ object SheetCommands:
     wb.sheets.exists(_.name.value.equalsIgnoreCase(name.value))
 
   /** `DUPLICATE_SHEET` (exit 3) with the verb's message; nothing has been written when it fires. */
-  private def duplicateSheet(name: String, message: String): CliException =
+  private[cli] def duplicateSheet(name: String, message: String): CliException =
     CliException(
       CliError
         .fromXLError(XLError.DuplicateSheet(name), None)
@@ -80,7 +82,7 @@ object SheetCommands:
    * format or data validation refused, and a hint saying what to change. The message already names
    * the site and carries the parser's diagnostic. Nothing has been written when it fires.
    */
-  private def unrewritable(site: Option[SheetRenamer.Site], error: XLError): CliException =
+  private[cli] def unrewritable(site: Option[SheetRenamer.Site], error: XLError): CliException =
     import SheetRenamer.Site
     val location = site.flatMap {
       case Site.Cell(sheet, ref) => Some(Location(None, Some(sheet.value), Some(ref.toA1), None))
@@ -98,6 +100,26 @@ object SheetCommands:
     }
     val base = CliError.fromXLError(error, location)
     CliException(base.copy(hint = hint.orElse(base.hint)))
+
+  /**
+   * Validate both names and rename `oldName` to `newName` with every reference rewritten
+   * (`SheetRenamer.renameLocated`), every refusal typed: `INVALID_SHEET_NAME`, `SHEET_NOT_FOUND`,
+   * `DUPLICATE_SHEET`, or [[unrewritable]]. The one rename the verb and the batch op share, so both
+   * fail with the same code, hint and location; nothing has been written when it fails.
+   */
+  private[cli] def renamed(wb: Workbook, oldName: String, newName: String): IO[Workbook] =
+    for
+      oldSheetName <- sheetName(oldName)
+      newSheetName <- sheetName(newName)
+      updated <- IO.fromEither(
+        SheetRenamer.renameLocated(wb, oldSheetName, newSheetName).left.map {
+          case SheetRenamer.Refusal(_, XLError.SheetNotFound(_, _)) => sheetNotFound(oldName, wb)
+          case SheetRenamer.Refusal(_, XLError.DuplicateSheet(_)) =>
+            duplicateSheet(newName, s"Sheet '$newName' already exists")
+          case SheetRenamer.Refusal(site, error) => unrewritable(site, error)
+        }
+      )
+    yield updated
 
   /** Write workbook using the standard or SAX/StAX backend based on mode */
   private def writeWorkbook(
@@ -206,16 +228,7 @@ object SheetCommands:
     stream: Boolean = false
   ): IO[String] =
     for
-      oldSheetName <- sheetName(oldName)
-      newSheetName <- sheetName(newName)
-      updatedWb <- IO.fromEither(
-        SheetRenamer.renameLocated(wb, oldSheetName, newSheetName).left.map {
-          case SheetRenamer.Refusal(_, XLError.SheetNotFound(_, _)) => sheetNotFound(oldName, wb)
-          case SheetRenamer.Refusal(_, XLError.DuplicateSheet(_)) =>
-            duplicateSheet(newName, s"Sheet '$newName' already exists")
-          case SheetRenamer.Refusal(site, error) => unrewritable(site, error)
-        }
-      )
+      updatedWb <- renamed(wb, oldName, newName)
       rewritten = rewrittenFormulaCount(wb, updatedWb)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       suffix = if rewritten > 0 then s"; $rewritten formula(s) rewritten" else ""

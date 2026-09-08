@@ -1460,7 +1460,13 @@ USAGE:
 
   val moveSheetCmd: Opts[CliCommand] =
     Opts.subcommand("move-sheet", "Move sheet to new position") {
-      (sheetNameArg, toIndexOpt, afterOpt, beforeOpt).mapN(CliCommand.MoveSheet.apply)
+      // ADR-017 §2.3: a missing position is a command-line mistake — USAGE (exit 2) before the read
+      (sheetNameArg, toIndexOpt, afterOpt, beforeOpt).tupled.mapValidated {
+        case (_, None, None, None) =>
+          cats.data.Validated.invalidNel("move-sheet requires --to, --after, or --before option")
+        case (name, to, after, before) =>
+          cats.data.Validated.valid(CliCommand.MoveSheet(name, to, after, before))
+      }
     }
 
   val copySheetCmd: Opts[CliCommand] =

@@ -1,6 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{DefinedName, Workbook, WorkbookMetadata}
@@ -39,6 +40,22 @@ class StructuralDefinedNameSpec extends FunSuite:
     val wb = wbWith(DefinedName("Total", "Two!$A$1:$B$2"))
     val r = StructuralEditor.insertRows(wb, Two, at = 0, count = 5)
     assertEquals(formulas(r), Vector("Two!$A$6:$B$7"))
+  }
+
+  test("the checked edit refuses an unparsable name with the parser's diagnostic (GH-608)") {
+    // A name that mentions the edited sheet but cannot be parsed must not survive with silently
+    // changed meaning; the refusal reads like `eval`'s, never like a Scala constructor.
+    val wb = wbWith(DefinedName("Bad", "Two!$A$1+ZZZNOTAFUNC(1)"))
+    StructuralEditor.insertRowsChecked(wb, Two, 0, 1) match
+      case Left(XLError.FormulaError(formula, reason)) =>
+        assertEquals(formula, "Two!$A$1+ZZZNOTAFUNC(1)")
+        assert(reason.startsWith("Cannot safely rewrite defined name 'Bad'"), reason)
+        assert(reason.contains("Unknown function 'ZZZNOTAFUNC'"), reason)
+        assert(!reason.contains("UnknownFunction("), reason)
+      case other => fail(s"expected a FormulaError refusal, got $other")
+    // an unparsable name that does NOT mention the sheet is no obstacle
+    val unrelated = wbWith(DefinedName("Odd", "One!$A$1+"))
+    assert(StructuralEditor.insertRowsChecked(unrelated, Two, 0, 1).isRight)
   }
 
   test("a name targeting an UNTOUCHED sheet rides byte-identical") {

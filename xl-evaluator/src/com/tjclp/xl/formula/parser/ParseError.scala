@@ -182,8 +182,9 @@ object ParseError:
 
   /**
    * The diagnostic as a person reads it — `Unknown function 'SUMM' at position 1. Did you mean:
-   * SUM?` — the ONE rendering of a parse failure every surface shows (`eval`, `putf`, the sheet
-   * renamer, the structural editor, GH-608), never a case's constructor text.
+   * SUM?` — the ONE rendering of a parse failure every surface that reports one shows (`eval`,
+   * `putf` and `putf --from`, the sheet renamer, the structural editor's defined-name refusal,
+   * GH-608), never a case's constructor text.
    */
   def describe(error: ParseError): String =
     error match
