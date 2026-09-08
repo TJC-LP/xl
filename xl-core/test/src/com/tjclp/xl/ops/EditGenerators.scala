@@ -165,13 +165,20 @@ object EditGenerators:
       width <- Gen.choose(0, 2)
       dir <- Gen.oneOf(Edit.FillDir.Down, Edit.FillDir.Right)
       len <- Gen.choose(1, 6)
+      legal <- Gen.frequency(3 -> true, 1 -> false)
     yield
       val source = CellRange(cell(col, srcRows), cell(col + width, srcRows + 1))
+      // One in four targets breaks the direction rule (fill down over shifted columns, fill right
+      // over shifted rows) so `validateFill`'s refusal is exercised through the laws.
+      val skew = if legal then 0 else 1
       val target = dir match
         case Edit.FillDir.Down =>
-          CellRange(cell(col, srcRows + 2), cell(col + width, srcRows + 2 + len))
+          CellRange(cell(col + skew, srcRows + 2), cell(col + width + skew, srcRows + 2 + len))
         case Edit.FillDir.Right =>
-          CellRange(cell(col + width + 1, srcRows), cell(col + width + 1 + len, srcRows + 1))
+          CellRange(
+            cell(col + width + 1, srcRows + skew),
+            cell(col + width + 1 + len, srcRows + 1 + skew)
+          )
       Edit.Fill(Area(s, source), target, dir)
     ,
     for src <- genArea; tgt <- genLoc; v <- Gen.oneOf(true, false) yield Edit.Copy(src, tgt, v),
