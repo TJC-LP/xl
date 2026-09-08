@@ -5,9 +5,11 @@ import scala.annotation.tailrec
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cli.contract.OffGridHit
 import com.tjclp.xl.formula.SheetEvaluator
 import com.tjclp.xl.formula.eval.DependentRecalculation.*
 import com.tjclp.xl.formula.eval.EvalFormulaSupport
+import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.sheets.Sheet
 
 /**
@@ -59,6 +61,32 @@ object CopyOps:
     recalcDependents: Boolean = true,
     cacheCopiedFormulas: Boolean = true
   ): XLResult[Workbook] =
+    copyRangeReporting(
+      wb,
+      sourceSheet,
+      sourceRange,
+      targetSheet,
+      targetRange,
+      valuesOnly,
+      recalcDependents,
+      cacheCopiedFormulas
+    ).map(_._1)
+
+  /**
+   * GH-628: [[copyRange]], also reporting every target cell whose formula gained a `#REF!` because
+   * the displacement carried a reference off the grid — the `copy` verb's and batch op's
+   * `OFF_GRID_REF` warning.
+   */
+  def copyRangeReporting(
+    wb: Workbook,
+    sourceSheet: Sheet,
+    sourceRange: CellRange,
+    targetSheet: Sheet,
+    targetRange: CellRange,
+    valuesOnly: Boolean,
+    recalcDependents: Boolean = true,
+    cacheCopiedFormulas: Boolean = true
+  ): XLResult[(Workbook, Vector[OffGridHit])] =
     val colDelta = Column.index0(targetRange.start.col) - Column.index0(sourceRange.start.col)
     val rowDelta = Row.index0(targetRange.start.row) - Row.index0(sourceRange.start.row)
     def targetOf(src: ARef): ARef =
@@ -74,15 +102,12 @@ object CopyOps:
           case _ => None
       }
 
-    val copied: XLResult[Sheet] =
-      if sourceSheet.name == targetSheet.name then
-        sourceSheet.copyRange(sourceRange, targetRange, valuesOnly)(using EvalFormulaSupport)
-      else
-        targetSheet.copyRangeFrom(sourceSheet, sourceRange, targetRange, valuesOnly)(using
-          EvalFormulaSupport
-        )
+    val copied: XLResult[(Sheet, Vector[OffGridRef])] =
+      targetSheet.copyRangeReporting(sourceSheet, sourceRange, targetRange, valuesOnly)(using
+        EvalFormulaSupport
+      )
 
-    copied.map { pure =>
+    copied.map { (pure, offGrid) =>
       val materialized =
         if valuesOnly then
           // Sheet.copyRange pastes Empty for an uncached formula; the CLI evaluates it against the
@@ -103,9 +128,11 @@ object CopyOps:
         if valuesOnly || !cacheCopiedFormulas || liveFormulas.isEmpty then materialized
         else populateFormulaCaches(materialized, wb, liveFormulas.map((src, _, _) => targetOf(src)))
       val wbWithCopied = wb.put(cached)
-      if recalcDependents then
-        wbWithCopied.recalculateDependents(cached.name, targetRange.cells.toSet)
-      else wbWithCopied
+      val result =
+        if recalcDependents then
+          wbWithCopied.recalculateDependents(cached.name, targetRange.cells.toSet)
+        else wbWithCopied
+      (result, OffGridHit.of(targetSheet.name, offGrid))
     }
 
   /**

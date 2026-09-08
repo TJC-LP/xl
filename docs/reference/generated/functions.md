@@ -3,7 +3,7 @@
 
 # Formula functions
 
-115 functions in the evaluator's registry, plus `LET` — a parser-level special form
+116 functions in the evaluator's registry, plus `LET` — a parser-level special form
 (lexical bindings) that the registry does not hold. `args` is the accepted argument count
 (`n+` = at least n, no upper bound); `arguments` names each slot as the parser describes it
 (`optional …` may be omitted, `…...` repeats). `flags`: `date`/`time` — the result is a date
@@ -37,6 +37,7 @@ RANDBETWEEN), which `xl audit` reports. Run `xl functions --json` for this table
 | `DAY` | 1 | date | — |
 | `EDATE` | 2 | date, integer | date |
 | `EOMONTH` | 2 | date, integer | date |
+| `ERROR.TYPE` | 1 | cell | — |
 | `EXP` | 1 | number | — |
 | `FILTER` | 2–3 | range, range, optional value | — |
 | `FIND` | 2–3 | text, text, optional integer | — |

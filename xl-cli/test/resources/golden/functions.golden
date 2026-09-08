@@ -3,32 +3,33 @@ functions
 ## exit
 0
 ## stdout
-Supported Excel Functions (115 total)
+Supported Excel Functions (116 total)
 ========================================
 
 ABS             ADDRESS         AND             AVERAGE         AVERAGEIF
 AVERAGEIFS      CEILING         CELL            CHOOSE          COLUMN
 COLUMNS         CONCATENATE     COUNT           COUNTA          COUNTBLANK
 COUNTIF         COUNTIFS        DATE            DATEDIF         DAY
-EDATE           EOMONTH         EXP             FILTER          FIND
-FLOOR           FV              HLOOKUP         HYPERLINK       IF
-IFERROR         IFNA            IFS             INDEX           INDIRECT
-INT             IRR             ISBLANK         ISERR           ISERROR
-ISNA            ISNUMBER        ISTEXT          LARGE           LEFT
-LEN             LN              LOG             LOWER           MATCH
-MAX             MAXIFS          MEDIAN          MID             MIN
-MINIFS          MOD             MONTH           MROUND          N
-NA              NETWORKDAYS     NOT             NOW             NPER
-NPV             OFFSET          OR              PERCENTILE      PI
-PMT             POWER           PV              QUARTILE        RAND
-RANDBETWEEN     RANK            RATE            RIGHT           ROUND
-ROUNDDOWN       ROUNDUP         ROW             ROWS            SEARCH
-SEQUENCE        SIGN            SMALL           SORT            SQRT
-STDEV           STDEVP          SUBSTITUTE      SUM             SUMIF
-SUMIFS          SUMPRODUCT      SWITCH          TEXT            TODAY
-TRANSPOSE       TRIM            TRUNC           UNIQUE          UPPER
-VALUE           VAR             VARP            VLOOKUP         WORKDAY
-XIRR            XLOOKUP         XNPV            YEAR            YEARFRAC
+EDATE           EOMONTH         ERROR.TYPE      EXP             FILTER
+FIND            FLOOR           FV              HLOOKUP         HYPERLINK
+IF              IFERROR         IFNA            IFS             INDEX
+INDIRECT        INT             IRR             ISBLANK         ISERR
+ISERROR         ISNA            ISNUMBER        ISTEXT          LARGE
+LEFT            LEN             LN              LOG             LOWER
+MATCH           MAX             MAXIFS          MEDIAN          MID
+MIN             MINIFS          MOD             MONTH           MROUND
+N               NA              NETWORKDAYS     NOT             NOW
+NPER            NPV             OFFSET          OR              PERCENTILE
+PI              PMT             POWER           PV              QUARTILE
+RAND            RANDBETWEEN     RANK            RATE            RIGHT
+ROUND           ROUNDDOWN       ROUNDUP         ROW             ROWS
+SEARCH          SEQUENCE        SIGN            SMALL           SORT
+SQRT            STDEV           STDEVP          SUBSTITUTE      SUM
+SUMIF           SUMIFS          SUMPRODUCT      SWITCH          TEXT
+TODAY           TRANSPOSE       TRIM            TRUNC           UNIQUE
+UPPER           VALUE           VAR             VARP            VLOOKUP
+WORKDAY         XIRR            XLOOKUP         XNPV            YEAR
+YEARFRAC
 
 Usage: xl eval "=FUNCTION(args)"
 Example: xl eval "=SUM(1,2,3)" or xl -f data.xlsx eval "=SUM(A1:A10)"

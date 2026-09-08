@@ -3,7 +3,7 @@ package com.tjclp.xl.sheets
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, RowSpan}
+import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, OffGridRef, RowSpan}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -90,6 +90,73 @@ class SheetEditsSpec extends FunSuite:
         XLError.InvalidReference("Fill right requires matching rows. Source: A1:A1, Target: B2:D2")
       )
     )
+  }
+
+  /**
+   * GH-628: a support that "voids" every reference of a formula spelled `X…`: the shifted text is
+   * `#REF!` and the report names the source formula, the way the evaluator's support reports the
+   * references a drag carried off the grid.
+   */
+  private val voiding: FormulaSupport = new FormulaSupport:
+    def validate(formula: String): XLResult[Unit] = FormulaSupport.textOnly.validate(formula)
+    def shift(formula: String, colDelta: Int, rowDelta: Int): XLResult[String] =
+      shiftReporting(formula, colDelta, rowDelta).map(_.formula)
+    override def shiftReporting(
+      formula: String,
+      colDelta: Int,
+      rowDelta: Int
+    ): XLResult[FormulaSupport.Shifted] =
+      if formula.startsWith("X") then Right(FormulaSupport.Shifted("#REF!", Vector(formula)))
+      else Right(FormulaSupport.Shifted(s"$formula|$colDelta,$rowDelta", Vector.empty))
+    def insertRows(wb: Workbook, sheet: SheetName, at: Row, count: Int): XLResult[Workbook] =
+      FormulaSupport.textOnly.insertRows(wb, sheet, at, count)
+    def deleteRows(wb: Workbook, sheet: SheetName, at: Row, count: Int): XLResult[Workbook] =
+      FormulaSupport.textOnly.deleteRows(wb, sheet, at, count)
+    def insertCols(wb: Workbook, sheet: SheetName, at: Column, count: Int): XLResult[Workbook] =
+      FormulaSupport.textOnly.insertCols(wb, sheet, at, count)
+    def deleteCols(wb: Workbook, sheet: SheetName, at: Column, count: Int): XLResult[Workbook] =
+      FormulaSupport.textOnly.deleteCols(wb, sheet, at, count)
+    def renameSheet(wb: Workbook, from: SheetName, to: SheetName): XLResult[Workbook] =
+      FormulaSupport.textOnly.renameSheet(wb, from, to)
+
+  test("GH-628: fillReporting names each target cell whose formula gained a #REF!, in order") {
+    val s = Sheet(name).put(a1("A1"), formula("X1")).put(a1("B1"), formula("B9"))
+    val (filled, offGrid) =
+      ok(s.fillReporting(rng("A1:B1"), rng("A1:B3"), Edit.FillDir.Down)(using voiding))
+    assertEquals(filled(a1("A2")).value, formula("#REF!"))
+    assertEquals(filled(a1("A3")).value, formula("#REF!"))
+    assertEquals(filled(a1("B3")).value, formula("B9|0,2"))
+    assertEquals(
+      offGrid,
+      Vector(OffGridRef(a1("A2"), Vector("X1")), OffGridRef(a1("A3"), Vector("X1")))
+    )
+    // the plain fill is the same sheet without the report; a clean fill reports nothing
+    assertEquals(ok(s.fill(rng("A1:B1"), rng("A1:B3"), Edit.FillDir.Down)(using voiding)), filled)
+    val clean = Sheet(name).put(a1("A1"), formula("B9"))
+    assertEquals(
+      ok(clean.fillReporting(rng("A1"), rng("A1:A3"), Edit.FillDir.Down)(using voiding))._2,
+      Vector.empty
+    )
+  }
+
+  test("GH-628: copyRangeReporting reports across the target range and across sheets") {
+    val s = Sheet(name).put(a1("A1"), formula("X1")).put(a1("A2"), num(4))
+    val (copied, offGrid) =
+      ok(s.copyRangeReporting(s, rng("A1:A2"), rng("C5:C6"), valuesOnly = false)(using voiding))
+    assertEquals(copied(a1("C5")).value, formula("#REF!"))
+    assertEquals(copied(a1("C6")).value, num(4))
+    assertEquals(offGrid, Vector(OffGridRef(a1("C5"), Vector("X1"))))
+    // values-only pastes never shift, so never report
+    val (_, none) =
+      ok(s.copyRangeReporting(s, rng("A1:A2"), rng("C5:C6"), valuesOnly = true)(using voiding))
+    assertEquals(none, Vector.empty)
+    val target = Sheet(SheetName.unsafe("T"))
+    val (cross, crossReport) =
+      ok(
+        target.copyRangeReporting(s, rng("A1:A1"), rng("B2:B2"), valuesOnly = false)(using voiding)
+      )
+    assertEquals(cross.name, target.name)
+    assertEquals(crossReport, Vector(OffGridRef(a1("B2"), Vector("X1"))))
   }
 
   // ========== copy ==========

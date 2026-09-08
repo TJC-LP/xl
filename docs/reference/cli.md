@@ -1071,7 +1071,10 @@ xl -f input.xlsx -o output.xlsx fill B1 B1:B10
 
 ### `xl autofit [--columns A:F]`
 
-Auto-fit column widths based on content (defaults to all used columns).
+Auto-fit column widths based on content (defaults to all used columns). A column is fitted to what
+it displays: a formula cell counts by its value (an uncached formula in the fitted columns is
+evaluated first, so an `autofit` after a `putf` in the same batch sizes to the value, never to the
+formula text — #613).
 
 ```bash
 xl -f input.xlsx -s S1 -o output.xlsx autofit

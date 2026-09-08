@@ -19,6 +19,18 @@ trait FormulaSupport:
   /** Shift every relative reference by `(colDelta, rowDelta)` the way a fill-drag does. */
   def shift(formula: String, colDelta: Int, rowDelta: Int): XLResult[String]
 
+  /**
+   * GH-628: [[shift]], also reporting the references the shift carried off the grid and wrote as
+   * `#REF!` (each as it was spelled before the shift). The default reports none, so a support that
+   * only implements [[shift]] keeps working; xl-evaluator's `EvalFormulaSupport` reports them.
+   */
+  def shiftReporting(
+    formula: String,
+    colDelta: Int,
+    rowDelta: Int
+  ): XLResult[FormulaSupport.Shifted] =
+    shift(formula, colDelta, rowDelta).map(FormulaSupport.Shifted(_, Vector.empty))
+
   /** Insert `count` rows before `at` on `sheet`, rewriting references on every sheet. */
   def insertRows(wb: Workbook, sheet: SheetName, at: Row, count: Int): XLResult[Workbook]
 
@@ -35,6 +47,13 @@ trait FormulaSupport:
   def renameSheet(wb: Workbook, from: SheetName, to: SheetName): XLResult[Workbook]
 
 object FormulaSupport:
+
+  /**
+   * GH-628: a shifted formula and the references the shift voided — spelled as they were BEFORE the
+   * shift (`A1`, `$A:$A`, `Data!B2:B4`) — because they would have left the grid. Excel writes such
+   * a reference as `#REF!`; the list lets a caller say so instead of writing it silently.
+   */
+  final case class Shifted(formula: String, voided: Vector[String]) derives CanEqual
 
   private val Capability = "formula support"
 

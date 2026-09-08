@@ -15,13 +15,22 @@ import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransform
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, ScopedOp}
-import com.tjclp.xl.cli.contract.{CliError, CliException, Diagnostics, ErrorCode, Location, Warning}
+import com.tjclp.xl.cli.contract.{
+  CliError,
+  CliException,
+  Diagnostics,
+  ErrorCode,
+  Location,
+  OffGridHit,
+  Warning
+}
 import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.helpers.{
   BatchParser,
@@ -208,7 +217,7 @@ object StreamingWriteCommands:
         ScopedOp(BatchParser.BatchOp.Put(ref.toA1, formatted.value, format), None, i + 1)
       }
       patches <- buildStreamingBatchPatches(sourcePath, worksheetPath, batchOps)
-      (cellPatches, updatedStylesXml, worksheetMetadata, _) = patches
+      (cellPatches, updatedStylesXml, worksheetMetadata, _, _) = patches
 
       // Execute streaming transform, including any detected number formats.
       result <- ZipTransformer.transformWithMetadata[IO](
@@ -465,8 +474,12 @@ object StreamingWriteCommands:
       ops = scoped.map(s => s.copy(op = OpRegistry.unqualified(s.op)))
 
       // Separate operations into cell patches vs worksheet metadata
-      (cellPatches, stylesXml, worksheetMetadata, summary) <-
+      (cellPatches, stylesXml, worksheetMetadata, summary, offGrid) <-
         buildStreamingBatchPatches(sourcePath, worksheetPath, ops)
+      // GH-628: a dragged putf that wrote #REF! for an off-grid reference is reported, not silent
+      _ <- OffGridHit
+        .warning(offGrid.map(OffGridHit(sheetName, _)), OffGridHit.streamingHint)
+        .traverse_(warn)
 
       // Execute streaming transform with metadata
       result <- ZipTransformer.transformWithMetadata[IO](
@@ -625,7 +638,8 @@ object StreamingWriteCommands:
       Map[ARef, StreamingTransform.CellPatch],
       Option[String],
       StreamingTransform.WorksheetMetadata,
-      String
+      String,
+      Vector[OffGridRef]
     )
   ] =
     IO.delay {
@@ -667,6 +681,8 @@ object StreamingWriteCommands:
       val removeMerges = mutable.Set[CellRange]()
       val rowProps = mutable.Map[Row, RowProperties]() ++ existingMetadata.rowProps
       val summaryLines = mutable.ListBuffer[String]()
+      // GH-628: the cells a dragged putf wrote #REF! into for an off-grid reference
+      val offGrid = mutable.ListBuffer[OffGridRef]()
       val existingStyleCache = mutable.Map[Int, CellStyle]()
       val addedStyleIds = mutable.Map[String, Int]()
       // The xfs this batch appended, by id: a later op that merges onto a cell an earlier op
@@ -787,8 +803,9 @@ object StreamingWriteCommands:
             range.cells.foreach { targetRef =>
               val colDelta = Column.index0(targetRef.col) - startCol
               val rowDelta = Row.index0(targetRef.row) - startRow
-              val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
-              val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
+              val shifted = FormulaShifter.shiftReporting(parsedExpr, colDelta, rowDelta)
+              if shifted.anyVoided then offGrid += OffGridRef(targetRef, shifted.voided)
+              val shiftedFormula = FormulaPrinter.printFileForm(shifted.expr)
               val formulaValue = CellValue.Formula(shiftedFormula, None)
               cellPatches(targetRef) = formatOpt match
                 case Some(numFmt) =>
@@ -959,7 +976,13 @@ object StreamingWriteCommands:
 
       val updatedStylesXml = if stylesModified then Some(currentStylesXml) else None
 
-      (cellPatches.toMap, updatedStylesXml, worksheetMetadata, summaryLines.mkString("\n"))
+      (
+        cellPatches.toMap,
+        updatedStylesXml,
+        worksheetMetadata,
+        summaryLines.mkString("\n"),
+        offGrid.toVector
+      )
     }
 
   /**

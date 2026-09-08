@@ -118,12 +118,13 @@ class StructuralCommandSpec extends CatsEffectSuite:
       )
   }
 
-  test("delete-rows: a reference into the deleted row becomes #REF!") {
+  test("delete-rows: a reference into the deleted row becomes the #REF! literal (GH-629)") {
     val wb = Workbook(
       Vector(
         Sheet("S")
           .put(ref"A4", CellValue.Number(40))
           .put(ref"B1", CellValue.Formula("=A4", None))
+          .put(ref"C1", CellValue.Formula("A4+A1", None))
       )
     )
     val in = tmp("in2")
@@ -133,7 +134,16 @@ class StructuralCommandSpec extends CatsEffectSuite:
       read <- excel.read(in)
       _ <- WriteCommands.deleteRows(read, read.sheets.headOption, 4, 1, out, config)
       result <- excel.read(out)
-    yield assertEquals(result.sheets.head(ref"B1").value, CellValue.Error(CellError.Ref))
+    yield
+      // the formula stays a formula, as Excel writes it; the recalculation caches the error value
+      assertEquals(
+        result.sheets.head(ref"B1").value,
+        CellValue.Formula("#REF!", Some(CellValue.Error(CellError.Ref)))
+      )
+      assertEquals(
+        result.sheets.head(ref"C1").value,
+        CellValue.Formula("#REF!+A1", Some(CellValue.Error(CellError.Ref)))
+      )
   }
 
   test("insert-cols: column references at/after the insertion point shift right") {

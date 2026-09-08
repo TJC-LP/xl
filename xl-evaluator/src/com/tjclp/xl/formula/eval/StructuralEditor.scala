@@ -19,9 +19,11 @@ import com.tjclp.xl.formula.printer.{FormulaOps, FormulaPrinter, FormulaShifter}
  *
  * The pure cell/merge/property shift lives in `xl-core` (`Sheet.insertRows`, ...). This layer adds
  * what xl-core cannot do (it has no formula parser): after shifting cells on the edited sheet, it
- * rewrites the formula strings of EVERY sheet so references track the edit. A formula that
- * references a fully-deleted cell/range becomes `#REF!` (`CellValue.Error(Ref)`); partially
- * overlapped ranges shrink. Cross-sheet references to the edited sheet are rewritten too.
+ * rewrites the formula strings of EVERY sheet so references track the edit. A reference to a
+ * fully-deleted cell/range becomes the error literal `#REF!` in place — `=A1+B3` with row 1 deleted
+ * is `=#REF!+B2`, as Excel writes it (GH-629; before it the whole cell became `#REF!`) — and its
+ * cache is withdrawn; partially overlapped ranges shrink. Cross-sheet references to the edited
+ * sheet are rewritten too.
  *
  * Determinism: the edit is a pure `Workbook => Workbook`; re-running on identical input yields
  * identical output.
@@ -462,50 +464,41 @@ object StructuralEditor:
                   if !shiftLocal && !FormulaShifter.referencesSheet(expr, editedSheet) =>
                 (ref, keepNonParticipant(ref, cell, f))
               case Right(expr) =>
-                FormulaShifter.shiftStructural(
-                  expr,
-                  shiftLocal,
-                  editedSheet,
-                  isRow,
-                  at,
-                  delta
-                ) match
-                  case Some(shiftedExpr) =>
-                    // GH-427: the model's canonical formula form is equals-free (the reader strips
-                    // the '='; the writer serializes the string VERBATIM into <f>, where a leading
-                    // '=' is a spec deviation openpyxl reads back as '==...').
-                    //
-                    // A structural edit invalidates a formula cache whenever the edit can have
-                    // changed the answer: a shortened range produces a different aggregate, a
-                    // rewritten reference asks a different question, and moving a cell changes
-                    // position-sensitive formulas such as ROW(). Leave those evaluatable and
-                    // uncached so the next recalculation cannot expose stale data.
-                    //
-                    // GH-503: the edit CANNOT have changed the answer when the printed text is
-                    // byte-identical, the record kind is unchanged, and the cell lies outside the
-                    // dirty cone (`stale` carries every cell the edit moved or removed, plus their
-                    // transitive dependents and every dynamic reference). An insert far below a
-                    // formula leaves its text, its address and every value it reads exactly as they
-                    // were; dropping that cache is what left `--no-recalc` preserving almost
-                    // nothing. Keeping it asserts nothing new — the value is the one already in the
-                    // file, and any doubt puts the cell in the cone.
-                    val newStr = FormulaPrinter.printFileForm(shiftedExpr)
-                    val newKind = shiftedArrayKind(kind, shiftLocal, isRow, at, delta)
-                    // `ref` is the POST-shift address while `stale` is keyed on PRE-edit ones, so
-                    // on the edited sheet a cell that MOVED would miss its own seed. Anything at
-                    // or past the post-edit cut moved (an insert's [at, at+delta) band is newly
-                    // blank), which is exactly the position-sensitive case — `=ROW()` keeps its
-                    // text and changes its answer.
-                    val movedCut = if delta >= 0 then at + delta else at
-                    val moved =
-                      shiftLocal && (if isRow then ref.row.index0 else ref.col.index0) >= movedCut
-                    val untouched =
-                      preserveUntouchedCaches &&
-                        newStr == formulaStr && newKind == kind && !moved && !stale(ref)
-                    val carried = if untouched then f.cachedValue else None
-                    (ref, cell.copy(value = CellValue.Formula(newStr, carried, newKind)))
-                  case None =>
-                    (ref, cell.copy(value = CellValue.Error(CellError.Ref)))
+                val shiftedExpr =
+                  FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta)
+                // GH-427: the model's canonical formula form is equals-free (the reader strips
+                // the '='; the writer serializes the string VERBATIM into <f>, where a leading
+                // '=' is a spec deviation openpyxl reads back as '==...').
+                //
+                // A structural edit invalidates a formula cache whenever the edit can have
+                // changed the answer: a shortened range produces a different aggregate, a
+                // rewritten reference asks a different question, and moving a cell changes
+                // position-sensitive formulas such as ROW(). Leave those evaluatable and
+                // uncached so the next recalculation cannot expose stale data.
+                //
+                // GH-503: the edit CANNOT have changed the answer when the printed text is
+                // byte-identical, the record kind is unchanged, and the cell lies outside the
+                // dirty cone (`stale` carries every cell the edit moved or removed, plus their
+                // transitive dependents and every dynamic reference). An insert far below a
+                // formula leaves its text, its address and every value it reads exactly as they
+                // were; dropping that cache is what left `--no-recalc` preserving almost
+                // nothing. Keeping it asserts nothing new — the value is the one already in the
+                // file, and any doubt puts the cell in the cone.
+                val newStr = FormulaPrinter.printFileForm(shiftedExpr)
+                val newKind = shiftedArrayKind(kind, shiftLocal, isRow, at, delta)
+                // `ref` is the POST-shift address while `stale` is keyed on PRE-edit ones, so
+                // on the edited sheet a cell that MOVED would miss its own seed. Anything at
+                // or past the post-edit cut moved (an insert's [at, at+delta) band is newly
+                // blank), which is exactly the position-sensitive case — `=ROW()` keeps its
+                // text and changes its answer.
+                val movedCut = if delta >= 0 then at + delta else at
+                val moved =
+                  shiftLocal && (if isRow then ref.row.index0 else ref.col.index0) >= movedCut
+                val untouched =
+                  preserveUntouchedCaches &&
+                    newStr == formulaStr && newKind == kind && !moved && !stale(ref)
+                val carried = if untouched then f.cachedValue else None
+                (ref, cell.copy(value = CellValue.Formula(newStr, carried, newKind)))
               // Preserve unparseable text rather than guessing at a rewrite, but invalidate its
               // cache too: the edit may have moved the cell or changed a dynamically-read value.
               case Left(_) => (ref, cell.copy(value = f.copy(cachedValue = None)))
@@ -629,8 +622,8 @@ object StructuralEditor:
   /**
    * Rewrite bare formula TEXT (no leading '=') through the structural shift: unparseable text —
    * including inline list literals like `"yes,no"`, which parse as string literals and print back
-   * verbatim — rides unchanged; a fully-deleted reference degrades the text to `"#REF!"` (the
-   * Excel-observable surface). Shared by the CF and DV formula rewrites.
+   * verbatim — rides unchanged; a fully-deleted reference becomes `#REF!` in place (`$A$1:$A$3`
+   * alone degrades to `"#REF!"`, the Excel-observable surface). Shared by the CF and DV rewrites.
    */
   private def shiftFormulaText(
     formula: String,
@@ -648,9 +641,9 @@ object StructuralEditor:
         case Right(expr) if !shiftLocal && !FormulaShifter.referencesSheet(expr, editedSheet) =>
           formula
         case Right(expr) =>
-          FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
-            case Some(shifted) => FormulaPrinter.printFileForm(shifted)
-            case None => "#REF!"
+          FormulaPrinter.printFileForm(
+            FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta)
+          )
         case Left(_) => formula
 
   /**
@@ -709,11 +702,11 @@ object StructuralEditor:
   /**
    * GH-136: rewrite TYPED conditional-format formula text (CellIs.formula1/formula2,
    * Expression.formula, Cfvo.Formula inside ColorScale points and DataBar bounds) through the same
-   * shift as cell formulas. A fully-deleted reference degrades the formula TEXT to "#REF!" with the
-   * rule kept — the Excel-observable surface, consistent with the whole-cell `CellValue.Error(Ref)`
-   * behavior above. Unparseable text rides verbatim (same precedent). Text-family rules store no
-   * formula (derived at emission) and Preserved payloads are never touched; their typed envelopes
-   * were already shifted by the pure core shift.
+   * shift as cell formulas. A fully-deleted reference becomes `#REF!` in the formula TEXT with the
+   * rule kept — the Excel-observable surface, consistent with the cell-formula rewrite above.
+   * Unparseable text rides verbatim (same precedent). Text-family rules store no formula (derived
+   * at emission) and Preserved payloads are never touched; their typed envelopes were already
+   * shifted by the pure core shift.
    */
   private def rewriteCfFormulas(
     cfs: Vector[ConditionalFormat],

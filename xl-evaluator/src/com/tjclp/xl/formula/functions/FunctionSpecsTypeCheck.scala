@@ -58,6 +58,24 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
       Right(CellValue.Error(CellError.NA))
     }
 
+  /**
+   * GH-630: ERROR.TYPE(error_val) — the number Excel assigns each error value (`#NULL!` 1 … `#N/A`
+   * 7, `#GETTING_DATA` 8, `#SPILL!` 9 … `#CALC!` 14, [[CellError.errorTypeNumber]]), `#N/A` for
+   * anything that is not an error. The error reaches here on either channel — as a VALUE from a
+   * cell, a cache or an error literal, or on the Left channel from a computation that failed with
+   * one (`ERROR.TYPE(1/0)` is 2); host failures stay loud.
+   */
+  val errorType: FunctionSpec[CellValue] { type Args = UnaryCellValue } =
+    FunctionSpec.simple[CellValue, UnaryCellValue]("ERROR.TYPE", Arity.one) { (expr, ctx) =>
+      def number(err: CellError): CellValue = CellValue.Number(BigDecimal(err.errorTypeNumber))
+      evalValue(ctx, expr) match
+        case Left(failure) =>
+          EvalError.toErrorValue(failure).map(number).toRight(failure)
+        case Right(ExprValue.Cell(cv)) =>
+          Right(ArrayArithmetic.carriedError(cv).fold(CellValue.Error(CellError.NA))(number))
+        case Right(_) => Right(CellValue.Error(CellError.NA))
+    }
+
   val iserror: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
     FunctionSpec.simple[Boolean, UnaryCellValue]("ISERROR", Arity.one) { (expr, ctx) =>
       evalValue(ctx, expr) match
