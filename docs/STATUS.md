@@ -227,14 +227,14 @@
 
 ### Test Coverage
 
-**6,830 test cases** (verified via `./mill __.test`, 2026-09-08, after the 0.21.0 dogfood fixes #606, #608/#609, #612, #637, the #636 memory guard, the Wave 25 A1 shims and the 0.21.1 formula-semantics cluster #613/#628-#631): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**6,866 test cases** (verified via `./mill __.test`, 2026-09-08, after the 0.21.0 dogfood fixes #606, #608/#609, #612, #637, the #636 memory guard, the Wave 25 A1 shims, the #610/#611 styles preservation and the 0.21.1 formula-semantics cluster #613/#628-#631): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2441 | parser, evaluator, 116-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 2445 | parser, evaluator, 116-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1558 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1120 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1347 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-ooxml | 1151 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1348 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 168 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 145 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 51 | external-consumer probes (`xl/test/src/xlprelude/`) |

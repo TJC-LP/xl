@@ -477,7 +477,9 @@ object StreamingWriteCommands:
       (cellPatches, stylesXml, worksheetMetadata, summary, offGrid) <-
         buildStreamingBatchPatches(sourcePath, worksheetPath, ops)
       // GH-628: a dragged putf that wrote #REF! for an off-grid reference is reported, not silent
-      _ <- OffGridHit.warning(offGrid.map(OffGridHit(sheetName, _))).traverse_(warn)
+      _ <- OffGridHit
+        .warning(offGrid.map(OffGridHit(sheetName, _)), OffGridHit.streamingHint)
+        .traverse_(warn)
 
       // Execute streaming transform with metadata
       result <- ZipTransformer.transformWithMetadata[IO](

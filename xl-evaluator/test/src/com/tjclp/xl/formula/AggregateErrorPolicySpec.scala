@@ -7,6 +7,7 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
+import com.tjclp.xl.workbooks.Workbook
 
 /**
  * GH-337/GH-344: aggregate error policy.
@@ -152,4 +153,40 @@ class AggregateErrorPolicySpec extends FunSuite:
   test("GH-630: a host failure inside COUNT stays loud — only Excel error VALUES are skipped") {
     val circular = Sheet("Test").put(ref"B1", CellValue.Formula("COUNT(B1)", None))
     assert(circular.evaluateCell(ref"B1").isLeft)
+  }
+
+  test("GH-630: a defined name bound to an error literal is triaged like the literal itself") {
+    // LibreOffice: COUNT(bad)=0, COUNTA(bad)=1, SUM(bad)=#N/A, COUNT(bad,1)=1 with bad = #N/A
+    val named = Workbook(withNa).withDefinedName("bad", "#N/A")
+    val sheet = named.sheets.headOption.getOrElse(fail("sheet"))
+    def evalNamed(formula: String): Either[?, CellValue] =
+      sheet.evaluateFormula(formula, workbook = Some(named))
+    assertEquals(evalNamed("=COUNT(bad)"), Right(num(0)))
+    assertEquals(evalNamed("=COUNTA(bad)"), Right(num(1)))
+    assertEquals(evalNamed("=COUNT(bad,1)"), Right(num(1)))
+    assertEquals(evalNamed("=SUM(bad)"), Right(CellValue.Error(CellError.NA)))
+    assertEquals(evalNamed("=MAX(bad,1)"), Right(CellValue.Error(CellError.NA)))
+  }
+
+  test("GH-630: the typed Aggregate node triages an error slot exactly like the Call form") {
+    val evaluator = Evaluator.instance
+    def node(name: String, location: TExpr.RangeLocation): Either[?, Any] =
+      evaluator.eval(TExpr.Aggregate(name, location), withError)
+    val error = TExpr.RangeLocation.Error(CellError.Ref)
+    assertEquals(node("COUNT", error), Right(BigDecimal(0)))
+    assertEquals(node("COUNTA", error), Right(BigDecimal(1)))
+    assert(node("SUM", error).isLeft)
+    assert(node("COUNTBLANK", error).isLeft)
+    // and, through a workbook, the same for a name bound to #N/A
+    val named = Workbook(withNa).withDefinedName("bad", "#N/A")
+    val sheet = named.sheets.headOption.getOrElse(fail("sheet"))
+    val bad = TExpr.RangeLocation.Name("bad", None)
+    assertEquals(
+      evaluator.eval(TExpr.Aggregate("COUNT", bad), sheet, workbook = Some(named)),
+      Right(BigDecimal(0))
+    )
+    assertEquals(
+      evaluator.eval(TExpr.Aggregate("COUNTA", bad), sheet, workbook = Some(named)),
+      Right(BigDecimal(1))
+    )
   }

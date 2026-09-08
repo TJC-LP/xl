@@ -50,6 +50,60 @@ class SumIfResizeSpec extends FunSuite:
     assertEquals(eval("=AVERAGEIF(A1:A3,\">1\",D1:D1)"), num(250))
   }
 
+  // ===== the review repro: a used range that starts below row 1, whole columns, whole rows =====
+  // LibreOffice: SUMIF(A:A,">0",C4)=4300, SUMIF(A:A,">0",C:C)=10, SUMIF(A3:A4,">0",C4)=30,
+  // SUMIF(A:A,">0",C1)=10, AVERAGEIF(A:A,">0",C4)=2150, SUMIF(C:C,">0",A4)=0,
+  // AVERAGEIF(A:A,">0",C:C)=10; on the row sheet SUMIF(1:1,">0",D3)=30, AVERAGEIF(1:1,">0",D3)=15,
+  // SUMIF(1:1,">0",3:3)=0, SUMIF(1:1,">0",A3)=0.
+
+  /** A3=1, A4=2; C4=10, C5=20, C6=300, C7=4000 — nothing in rows 1-2. */
+  private val below: Sheet = Sheet("Off")
+    .put(ref"A3", num(1))
+    .put(ref"A4", num(2))
+    .put(ref"C4", num(10))
+    .put(ref"C5", num(20))
+    .put(ref"C6", num(300))
+    .put(ref"C7", num(4000))
+
+  private def evalBelow(formula: String): CellValue =
+    below
+      .evaluateFormula(formula, workbook = Some(Workbook(below)))
+      .fold(e => fail(e.message), identity)
+
+  test("pairing uses the unconstrained origins when the used range starts below row 1") {
+    // A:A is walked from row 3 (the used area) but A3 pairs with C6 — row 3 from C4's origin —
+    // not with C4; the first cut of this fix offset from the clipped A3 and summed 30
+    assertEquals(evalBelow("=SUMIF(A:A,\">0\",C4)"), num(4300))
+    assertEquals(evalBelow("=AVERAGEIF(A:A,\">0\",C4)"), num(2150))
+    assertEquals(evalBelow("=SUMIF(A3:A4,\">0\",C4)"), num(30))
+    assertEquals(evalBelow("=SUMIF(A:A,\">0\",C1)"), num(10))
+    assertEquals(evalBelow("=SUMIF(C:C,\">0\",A4)"), num(0))
+  }
+
+  test("two whole columns pair row by row") {
+    assertEquals(evalBelow("=SUMIF(A:A,\">0\",C:C)"), num(10))
+    assertEquals(evalBelow("=AVERAGEIF(A:A,\">0\",C:C)"), num(10))
+  }
+
+  test("the whole-row analogue: a used range that starts right of column A") {
+    // C1=1, D1=2; F3=10, G3=20, H3=300 — 1:1 is walked from column C, C1 pairs with F3 (two
+    // columns from D3's origin), D1 with G3
+    val rows = Sheet("Row")
+      .put(ref"C1", num(1))
+      .put(ref"D1", num(2))
+      .put(ref"F3", num(10))
+      .put(ref"G3", num(20))
+      .put(ref"H3", num(300))
+    def evalRows(formula: String): CellValue =
+      rows
+        .evaluateFormula(formula, workbook = Some(Workbook(rows)))
+        .fold(e => fail(e.message), identity)
+    assertEquals(evalRows("=SUMIF(1:1,\">0\",D3)"), num(30))
+    assertEquals(evalRows("=AVERAGEIF(1:1,\">0\",D3)"), num(15))
+    assertEquals(evalRows("=SUMIF(1:1,\">0\",3:3)"), num(0))
+    assertEquals(evalRows("=SUMIF(1:1,\">0\",A3)"), num(0))
+  }
+
   test("a pairing past the grid edge contributes nothing, as LibreOffice computes it") {
     assertEquals(eval("=SUMIF(A1:A3,\">1\",Z1048575)"), num(0))
     assertEquals(

@@ -266,10 +266,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     acc: A,
     err: EvalError
   ): Either[EvalError, A] =
-    EvalError.toErrorValue(err) match
-      case Some(_) if agg.countsNonEmpty => Right(agg.combine(acc, aggregateCountUnit))
-      case Some(_) if !agg.propagatesErrors && !agg.countsEmpty => Right(acc)
-      case _ => Left(err)
+    EvalError
+      .toErrorValue(err)
+      .flatMap(_ => Aggregator.onErrorArgument(agg, acc))
+      .toRight(err)
 
   /** Helper to evaluate variadic aggregates with proper type handling. */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -386,16 +386,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     // contains no uncached formula cells. Mixed/scalar/array arguments keep the exact streaming
     // fold above and are deliberately outside the cache's narrow safety proof.
     args match
-      // GH-630: the one-range shape with an ERROR in the slot (`COUNT(#REF!)`) has no range to
-      // memoize — triage it like any error argument and finalize
-      case List(Left(location @ TExpr.RangeLocation.Error(_))) =>
-        Evaluator
-          .resolveRangeLocation(location, ctx.sheet, ctx.workbook)
-          .fold(triageErrorArgument(agg, agg.empty, _), _ => Right(agg.empty))
-          .flatMap(agg.finalizeWithError)
       case List(Left(location)) =>
-        Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap {
-          case (targetSheet, rawRange) =>
+        Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook) match
+          // GH-630: a slot that resolves to an error VALUE — `COUNT(#REF!)`, `COUNT(name)` with
+          // the name bound to `#N/A` — has no range to memoize; it is triaged like any error
+          // argument (COUNT 0, COUNTA 1, the rest propagate) and finalized
+          case Left(err) =>
+            triageErrorArgument(agg, agg.empty, err).flatMap(agg.finalizeWithError)
+          case Right((targetSheet, rawRange)) =>
             // Full-row/column aggregate semantics depend on the CURRENT sheet used bounds. Those
             // bounds may shrink when an earlier formula evaluates to Empty even though the formula
             // lies outside the referenced row/column, so resolve them before keying. Ordinary
@@ -418,7 +416,6 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   Evaluator.AggregateMemoMode.FunctionCall
                 )(compute)
               case None => compute
-        }
       case _ => foldAllArgs.flatMap(agg.finalizeWithError)
 
   private def evalCriteriaValues(
@@ -679,9 +676,12 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 (sumRange0, sumSheet)
               )
             )
-            // GH-192: Constrain full-column/row ranges to shared bounds
+            // GH-192: Constrain a full-column/row CRITERIA range to the shared used bounds — the
+            // cells walked. The PAIRING below uses the unconstrained origins: `constrainRange`
+            // clips only whole columns/rows, so `SUMIF(A:A, ">0", C4)` on a sheet used from row 3
+            // walks A3.. while C4:C1048576 keeps its origin, and offsetting from the clipped A3
+            // paired A3 with C4 instead of C6 (a silent wrong sum).
             val criteriaRange = constrainRange(criteriaRange0, bounds)
-            val sumRange = constrainRange(sumRange0, bounds)
 
             // GH-192: Use iterator-based folding (no .toList) for memory efficiency
             criteriaRange.cells
@@ -691,9 +691,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   // Evaluate test cell value (may be uncached formula)
                   evalCellValueForMatch(criteriaSheet(testRef).value, criteriaSheet, ctx)
                     .flatMap { testValue =>
-                      // GH-631: the summed cell sits at the same offset in sum_range; one past the
-                      // grid edge contributes nothing
-                      CriteriaRangeResize.pairedCell(testRef, criteriaRange, sumRange) match
+                      // GH-631: the summed cell sits at the same offset from sum_range's origin as
+                      // testRef from range's origin; one past the grid edge contributes nothing
+                      CriteriaRangeResize.pairedCell(testRef, criteriaRange0, sumRange0) match
                         case Some(sumRef) if CriteriaMatcher.matches(testValue, criterion) =>
                           resolveNumericPolicing(
                             sumSheet(sumRef).value,
@@ -1055,9 +1055,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 (avgRange0, avgSheet)
               )
             )
-            // GH-192: Constrain full-column/row ranges to shared bounds
+            // GH-192: the walked CRITERIA range is constrained; the pairing uses the unconstrained
+            // origins (see SUMIF above)
             val criteriaRange = constrainRange(criteriaRange0, bounds)
-            val avgRange = constrainRange(avgRange0, bounds)
 
             // GH-192: Use iterator-based folding (no .toList) for memory efficiency
             criteriaRange.cells
@@ -1067,7 +1067,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   // Evaluate test cell value (may be uncached formula)
                   evalCellValueForMatch(criteriaSheet(testRef).value, criteriaSheet, ctx)
                     .flatMap { testValue =>
-                      CriteriaRangeResize.pairedCell(testRef, criteriaRange, avgRange) match
+                      CriteriaRangeResize.pairedCell(testRef, criteriaRange0, avgRange0) match
                         case Some(avgRef) if CriteriaMatcher.matches(testValue, criterion) =>
                           resolveNumericPolicing(
                             avgSheet(avgRef).value,

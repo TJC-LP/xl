@@ -31,18 +31,27 @@ object OffGridHit:
         "dragged off the grid"
     )
 
+  /** The in-memory paths' hint: they have the `--strict` gate. */
+  val strictHint: String = "--strict makes this exit 1"
+
+  /**
+   * The streaming batch's hint: `--stream --strict` is UNSUPPORTED_IN_STREAM, so it cannot gate.
+   */
+  val streamingHint: String = "drop --stream to gate on it with --strict"
+
   /**
    * The `OFF_GRID_REF` warning listing the cells (the first ten, then a count), located at the
-   * first of them; None when nothing was voided.
+   * first of them, ending with the caller's `hint` for making it fatal; None when nothing was
+   * voided.
    */
-  def warning(hits: Vector[OffGridHit]): Option[Warning] =
+  def warning(hits: Vector[OffGridHit], hint: String = strictHint): Option[Warning] =
     hits.headOption.map { first =>
       val listed = hits.take(MaxListed).map(describe).mkString(", ")
       val more = if hits.size > MaxListed then s", … (+${hits.size - MaxListed} more)" else ""
       Warning(
         WarningCode.OFF_GRID_REF,
         s"${hits.size} formula${if hits.size == 1 then "" else "s"} gained #REF! for a reference " +
-          s"dragged off the grid: $listed$more; Excel writes it silently, --strict makes this exit 1",
+          s"dragged off the grid: $listed$more; Excel writes it silently, $hint",
         Some(Location(None, Some(first.sheet), Some(first.cell.toA1), None))
       )
     }

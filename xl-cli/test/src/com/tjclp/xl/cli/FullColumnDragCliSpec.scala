@@ -223,6 +223,9 @@ class FullColumnDragCliSpec extends FunSuite:
           val hits = offGrid(warnings)
           assertEquals(hits.size, 1)
           assert(hits.exists(_.message.contains("Data!Z1 (A2)")), hits.map(_.message).toString)
+          // --stream --strict is UNSUPPORTED_IN_STREAM, so the hint must not promise a gate
+          assert(hits.forall(!_.message.contains("--strict makes this exit 1")), hits.toString)
+          assert(hits.forall(_.message.contains("drop --stream")), hits.toString)
         finally Files.deleteIfExists(json)
       }
     }
