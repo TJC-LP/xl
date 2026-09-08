@@ -663,3 +663,143 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(iterative.iterativeCycles.map(_.members.size), Vector(1))
     // the same cycle without the declaration is a finding
     assertEquals(model.withCalcPr(CalcPr()).audit.cycles.map(_.members.size), Vector(1))
+
+  // ===== GH-589 (W2.8): scripting completions — one probe per new name =====
+
+  private def tempDir(prefix: String): java.nio.file.Path =
+    java.nio.file.Files.createTempDirectory(prefix)
+
+  private def cachedNumber(sheet: Sheet, at: ARef): Option[BigDecimal] =
+    sheet.cells.get(at).map(_.value).collect {
+      case CellValue.Formula(_, Some(CellValue.Number(n)), _) => n
+    }
+
+  test("GH-589: writeChecked caches only the uncached formulas and returns the RecalcResult"):
+    // A3 carries a (deliberately wrong) cache another engine wrote; B1 has none.
+    val sheet = Sheet("Checked")
+      .put(ref"A1", 10)
+      .put(ref"A2", 20)
+      .put(ref"A3", CellValue.Formula("SUM(A1:A2)", Some(CellValue.Number(BigDecimal(999)))))
+      .put(ref"B1", fx"=A1*2")
+    val path = tempDir("xl-prelude-wchecked").resolve("checked.xlsx")
+    val result: RecalcResult = Excel.writeChecked(Workbook(sheet), path.toString)
+    assert(result.isClean, result.summary)
+    assertEquals(result.evaluated.values.flatten.map(_._1.toA1).toSet, Set("B1"))
+    val loaded = Excel.readSheet(path.toString, "Checked")
+    assertEquals(cachedNumber(loaded, ref"B1"), Some(BigDecimal(20)))
+    // the caches-are-truth doctrine: the pre-existing cache is written byte-for-byte
+    assertEquals(cachedNumber(loaded, ref"A3"), Some(BigDecimal(999)))
+    // the same book through writeRecalculated recomputes A3 as well
+    val full = Excel.writeRecalculated(Workbook(sheet), path.toString)
+    assertEquals(
+      cachedNumber(Excel.readSheet(path.toString, "Checked"), ref"A3"),
+      Some(BigDecimal(30))
+    )
+    assert(full.isClean)
+
+  test("GH-589: writeChecked and writeRecalculated take RecalcOptions; XLResult overloads resolve"):
+    val dir = tempDir("xl-prelude-wchecked-opts")
+    val clock = Clock.fixedDate(java.time.LocalDate.of(2026, 9, 7))
+    // A seeded Rng is a stateful sequence: each write gets its own so the two runs are comparable.
+    def opts: RecalcOptions = RecalcOptions(clock = clock, rng = Rng.seeded(7L))
+    val wb =
+      Workbook(Sheet("Opts").put(ref"A1", fx"=TODAY()").put(ref"A2", fx"=RANDBETWEEN(1,100)"))
+    val checked = Excel.writeChecked(wb, dir.resolve("checked.xlsx").toString, opts)
+    val recalculated = Excel.writeRecalculated(wb, dir.resolve("recalc.xlsx").toString, opts)
+    val expectedToday = CellValue.DateTime(java.time.LocalDate.of(2026, 9, 7).atStartOfDay())
+    assertEquals(checked.evaluated.values.headOption.flatMap(_.get(ref"A1")), Some(expectedToday))
+    assertEquals(
+      recalculated.evaluated.values.headOption.flatMap(_.get(ref"A1")),
+      Some(expectedToday)
+    )
+    assertEquals(
+      checked.evaluated.values.headOption.flatMap(_.get(ref"A2")),
+      recalculated.evaluated.values.headOption.flatMap(_.get(ref"A2"))
+    )
+    // XLResult[Workbook] overloads: Right writes, Left throws before anything lands on disk
+    val fromResult = Excel.writeChecked(wb.update("Opts", identity), dir.resolve("r.xlsx").toString)
+    assert(fromResult.isClean)
+    val fromResultOpts =
+      Excel.writeChecked(wb.update("Opts", identity), dir.resolve("ro.xlsx").toString, opts)
+    assert(fromResultOpts.isClean)
+    val never = dir.resolve("never.xlsx")
+    intercept[XLException]:
+      Excel.writeChecked(wb.update("Missing", identity), never.toString)
+    assert(!java.nio.file.Files.exists(never))
+
+  test("GH-589: writeChecked writes anyway on an uncached failure — errors are data"):
+    val sheet = Sheet("Err").put(ref"A1", 2).put(ref"A2", fx"=NOSUCHFN(A1)").put(ref"A3", fx"=A1*3")
+    val path = tempDir("xl-prelude-wchecked-err").resolve("partial.xlsx")
+    val result = Excel.writeChecked(Workbook(sheet), path.toString)
+    assert(!result.isClean)
+    assertEquals(result.errors.map(_.ref.toA1), Vector("A2"))
+    val loaded = Excel.readSheet(path.toString, "Err")
+    assertEquals(cachedNumber(loaded, ref"A3"), Some(BigDecimal(6)))
+    assert(loaded.cells.get(ref"A2").exists(_.isUncachedFormula))
+
+  test("GH-589: readSheet / readMetadata / modifyR resolve through the prelude"):
+    val dir = tempDir("xl-prelude-facade")
+    val path = dir.resolve("facade.xlsx")
+    val wb = Workbook(Sheet("Data").put(ref"A1", 1), Sheet("Summary").put(ref"A1", fx"=Data!A1+1"))
+    Excel.writeChecked(wb, path.toString)
+    val summary: Sheet = Excel.readSheet(path.toString, "Summary")
+    assertEquals(summary.name.value, "Summary")
+    assertEquals(summary.readTypedOpt[Int](ref"A1"), Some(2))
+    val ex = intercept[XLException]:
+      Excel.readSheet(path.toString, "Sumary")
+    assertEquals(ex.error, XLError.SheetNotFound("Sumary"))
+    assert(ex.getMessage.contains("Did you mean: Summary?"), ex.getMessage)
+    val meta: LightMetadata = Excel.readMetadata(path.toString)
+    val infos: Vector[SheetInfo] = meta.sheets
+    assertEquals(infos.map(_.name.value), Vector("Data", "Summary"))
+    Excel.modifyR(path.toString)(_.update("Data", _.put(ref"B1", "note")))
+    assertEquals(Excel.readSheet(path.toString, "Data").readTypedOpt[String](ref"B1"), Some("note"))
+    intercept[XLException]:
+      Excel.modifyR(path.toString)(_.update("Nope", identity))
+
+  test("GH-589: orExit unwraps Right and renders Left with code, hint and candidates"):
+    val wb: Workbook = orExit(Workbook.named("Data", "Summary"))
+    assertEquals(wb.sheets.map(_.name.value), Vector("Data", "Summary"))
+    val sheet: Sheet = orExit(Sheet.named("Dyn"))
+    assertEquals(sheet.name.value, "Dyn")
+    val rendered = exitMessage(XLError.SheetRequired("view", Vector("Data", "Summary")))
+    assert(rendered.startsWith("error: view requires a sheet"), rendered)
+    assert(rendered.contains("code: SHEET_REQUIRED"), rendered)
+    assert(rendered.contains("hint: use -s <name>"), rendered)
+    assert(rendered.contains("did you mean: Data, Summary"), rendered)
+    val plain = exitMessage(XLError.Other("boom"))
+    assertEquals(plain, "error: boom\ncode: OTHER")
+
+  test("GH-589 / GH-465: collapseRows and collapseCols resolve and round-trip through the file"):
+    // Whole-row/column spans are runtime-only (the ref macro rejects "2:3" and "E:F");
+    // String.asRange parses them — and orExit unwraps at the edge.
+    val rows: CellRange = orExit("2:3".asRange)
+    val cols: CellRange = orExit("E:F".asRange)
+    val sheet = Sheet("Outline")
+      .put(ref"A1", "Header")
+      .put(ref"A2", 1)
+      .put(ref"A3", 2)
+      .put(ref"A4", fx"=SUM(A2:A3)")
+      .collapseRows(rows)
+      .collapseCols(cols)
+    assert(sheet.getRowProperties(Row.from1(2)).hidden)
+    assertEquals(sheet.getRowProperties(Row.from1(3)).outlineLevel, Some(1))
+    assert(sheet.getRowProperties(Row.from1(4)).collapsed)
+    assert(sheet.getColumnProperties(Column.from0(4)).hidden)
+    assert(sheet.getColumnProperties(Column.from0(6)).collapsed)
+    val path = tempDir("xl-prelude-outline").resolve("outline.xlsx")
+    assert(Excel.writeChecked(Workbook(sheet), path.toString).isClean)
+    val loaded = Excel.readSheet(path.toString, "Outline")
+    assert(loaded.getRowProperties(Row.from1(2)).hidden)
+    assertEquals(loaded.getRowProperties(Row.from1(2)).outlineLevel, Some(1))
+    assert(loaded.getRowProperties(Row.from1(4)).collapsed)
+    assert(loaded.getColumnProperties(Column.from0(5)).hidden)
+    assert(loaded.getColumnProperties(Column.from0(6)).collapsed)
+    // the typed overloads and the inverses resolve too
+    val reopened =
+      loaded.expandRows(Row.from1(2), Row.from1(3)).expandCols(Column.from0(4), Column.from0(5))
+    assert(!reopened.getRowProperties(Row.from1(2)).hidden)
+    assert(!reopened.getRowProperties(Row.from1(4)).collapsed)
+    assert(!reopened.getColumnProperties(Column.from0(4)).hidden)
+    assert(!reopened.getColumnProperties(Column.from0(6)).collapsed)
+    assertEquals(reopened.expandRows(rows).expandCols(cols), reopened)

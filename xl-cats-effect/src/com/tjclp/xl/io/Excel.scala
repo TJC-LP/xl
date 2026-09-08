@@ -349,6 +349,9 @@ object Excel:
   import cats.effect.{IO, Sync}
   import cats.effect.unsafe.implicits.global
   import com.tjclp.xl.error.XLException
+  import com.tjclp.xl.ooxml.metadata.WorkbookMetadataReader
+  import com.tjclp.xl.sheets.Sheet
+  import com.tjclp.xl.text.Suggest
   import java.nio.file.{Files, Paths, StandardCopyOption}
 
   private lazy val excel = ExcelIO.instance[IO]
@@ -367,6 +370,50 @@ object Excel:
    */
   def read(path: String): Workbook =
     excel.read(Paths.get(path)).unsafeRunSync()
+
+  /**
+   * Read one sheet by name (Easy Mode, GH-589): `Excel.read(path)` followed by the lookup a script
+   * would otherwise spell as `wb(name).unsafe`, with a better failure — the exception names the
+   * nearest sheet names ("did you mean") and every available sheet, so a typo is fixed from the
+   * message alone. Exact-name lookup, like `Workbook.apply(SheetName)` and the CLI's `-s`.
+   *
+   * @param path
+   *   File path (string)
+   * @param sheet
+   *   Sheet name as spelled on the tab
+   * @throws XLException
+   *   `SheetNotFound(sheet)` (code `SHEET_NOT_FOUND`) whose message lists candidates, or the parse
+   *   failure `read` would throw
+   * @throws java.io.IOException
+   *   if file cannot be read
+   */
+  def readSheet(path: String, sheet: String): Sheet =
+    val wb = read(path)
+    wb.sheets.find(_.name.value == sheet).getOrElse {
+      val names = wb.sheets.map(_.name.value)
+      val nearest = Suggest.closest(sheet, names)
+      val didYouMean =
+        if nearest.isEmpty then "" else s" Did you mean: ${nearest.mkString(", ")}?"
+      throw XLException(
+        XLError.SheetNotFound(sheet),
+        s"Sheet not found: '$sheet'.$didYouMean Available: ${names.mkString(", ")}"
+      )
+    }
+
+  /**
+   * Read workbook metadata only — sheet names, visibility and dimensions, defined names, the date
+   * system — without loading a single cell (Easy Mode, GH-589). Parses `workbook.xml` and each
+   * worksheet's `<dimension>` element; instant on files of any size, so a script can decide what to
+   * read (or stream) before it reads anything.
+   *
+   * @param path
+   *   File path (string)
+   * @throws XLException
+   *   if the package cannot be opened or its workbook part parsed (`IOError`, `ParseError`,
+   *   `SecurityError`)
+   */
+  def readMetadata(path: String): LightMetadata =
+    WorkbookMetadataReader.read(Paths.get(path)).fold(e => throw XLException(e), identity)
 
   /**
    * Write workbook to file path (Easy Mode).
@@ -413,10 +460,33 @@ object Excel:
    *   if file cannot be read/written
    */
   def modify(path: String)(f: Workbook => Workbook): Unit =
-    val targetPath = Paths.get(path)
+    replaceAtomically(Paths.get(path))(wb => IO(f(wb)))
+
+  /**
+   * Modify workbook in-place with a fallible transform (Easy Mode, GH-589): the `XLResult` twin of
+   * [[modify]], for the common script shape `wb.update(name, …)` whose result would otherwise need
+   * an `.unsafe` inside the lambda. A `Left` throws [[com.tjclp.xl.error.XLException]] BEFORE any
+   * scratch file exists, so the target is untouched (byte-identical) and nothing is left behind.
+   *
+   * Uses the same atomic file replacement as [[modify]].
+   *
+   * @param path
+   *   File path (string)
+   * @param f
+   *   Transformation returning `XLResult[Workbook]`
+   * @throws XLException
+   *   if `f` returns `Left`, or if the workbook cannot be parsed
+   * @throws java.io.IOException
+   *   if file cannot be read/written
+   */
+  def modifyR(path: String)(f: Workbook => XLResult[Workbook]): Unit =
+    replaceAtomically(Paths.get(path))(wb => IO.fromEither(f(wb).left.map(XLException(_))))
+
+  /** read → transform → write to a sibling temp file → atomic move; the transform runs first. */
+  private def replaceAtomically(targetPath: Path)(transform: Workbook => IO[Workbook]): Unit =
     val result = for
       wb <- excel.read(targetPath)
-      modified = f(wb)
+      modified <- transform(wb)
       parent = Option(targetPath.getParent).getOrElse(Paths.get("."))
       tempFile <- Sync[IO].delay(Files.createTempFile(parent, ".xl-modify-", ".tmp"))
       writeResult <- excel.write(modified, tempFile).attempt
