@@ -10,7 +10,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 6,326 tests passing; one existing performance comparison ignored.
+**Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 6,613 tests passing; one existing performance comparison ignored.
 
 **Current Version**: **0.20.0** "Contract" (agent-first CLI and scripting contract, Excel-parity and calculation-integrity waves — released 2026-09-07)
 
