@@ -8,9 +8,9 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.helpers.{CsvParser, MarkdownTableParser, SheetResolver, StreamingCsvParser}
 import com.tjclp.xl.cli.helpers.MarkdownTableParser.ColumnAlignment
+import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
-import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.alignment.{Align, HAlign}
@@ -35,7 +35,7 @@ object ImportCommands:
     config: WriterConfig,
     stream: Boolean
   ): IO[Unit] =
-    val excel = ExcelIO.instance[IO]
+    val excel = MemoryGuard.writer
     if stream then excel.writeWorkbookStream(wb, outputPath, config)
     else excel.writeWith(wb, outputPath, config)
 
@@ -227,7 +227,7 @@ ${Format.saveSuffix(outputPath, stream)}"""
 
     StreamingCsvParser
       .streamCsv(csvPath, streamingOpts)
-      .through(ExcelIO.instance[IO].writeStreamWithAutoDetect(outputPath, sheetName))
+      .through(MemoryGuard.writer.writeStreamWithAutoDetect(outputPath, sheetName))
       .compile
       .drain
       .map(_ =>

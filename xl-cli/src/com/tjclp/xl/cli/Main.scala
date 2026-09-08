@@ -205,6 +205,15 @@ object Main extends IOApp:
         "max-size",
         "Max uncompressed size in MB for in-memory load (default: 100, 0 = unlimited). Use for large files when --stream is not supported."
       )
+      // A negative value would read as "no limit" (the reader tests `> 0`) while looking like a
+      // typo: refuse it as usage (GH-636)
+      .mapValidated { mb =>
+        if mb < 0 then
+          cats.data.Validated.invalidNel(
+            s"--max-size must be 0 or more (MB; 0 = unlimited), got $mb"
+          )
+        else cats.data.Validated.valid(mb)
+      }
       .orNone
 
   private[cli] val streamOpt: Opts[Boolean] =
@@ -2018,11 +2027,19 @@ EXAMPLES:
     val err = if rendered.stderr.isEmpty then IO.unit else io.err(rendered.stderr)
     (out *> err).as(outcome.exitCode)
 
-  /** An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s. */
-  private def readerCollecting(warnings: Ref[IO, Vector[Warning]]): ExcelIO[IO] =
-    ExcelIO.withWarnings[IO] { warning =>
-      warnings.update(_ :+ Warning(WarningCode.READER_WARNING, warning.toString))
-    }
+  /**
+   * An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s and whose in-memory
+   * load runs under the [[MemoryGuard]] (GH-636): a lifted `--max-size` that cannot fit the heap is
+   * refused up front, one that may not fit is announced as `MEMORY_PRESSURE` in the same sink, and
+   * a load that exhausts the heap is `RESOURCE_LIMIT` rather than a fatal `OutOfMemoryError`.
+   */
+  private def readerCollecting(warnings: Ref[IO, Vector[Warning]], heap: Long): ExcelIO[IO] =
+    MemoryGuard.excel(
+      handler =
+        warning => warnings.update(_ :+ Warning(WarningCode.READER_WARNING, warning.toString)),
+      warn = warning => warnings.update(_ :+ warning),
+      heap = heap
+    )
 
   /**
    * THE sheet rule's steps 2–3 for the run's default sheet, before dispatch ([[Resolve.default]],
@@ -2096,7 +2113,10 @@ EXAMPLES:
         )
     }
 
-  /** Read the input through `excel` under [[classifyRead]]. */
+  /**
+   * Read the input through `excel` under [[classifyRead]]. Every in-memory load of the CLI goes
+   * through here with a [[MemoryGuard.excel]] instance, so one seam owns the heap (GH-636).
+   */
   private def readWorkbook(excel: ExcelIO[IO], path: Path, config: ReaderConfig): IO[Workbook] =
     classifyRead(path)(excel.readWith(path, config))
 
@@ -2356,7 +2376,8 @@ EXAMPLES:
   ): IO[ExitCode] =
     val readerConfig = buildReaderConfig(maxSizeOpt)
     Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
-      val excel = readerCollecting(warnings)
+      val excel =
+        readerCollecting(warnings, filePathOpt.fold(MemoryGuard.maxHeapBytes)(MemoryGuard.heapFor))
       val workbookIO: IO[Workbook] = filePathOpt match
         case Some(filePath) => readWorkbook(excel, filePath, readerConfig)
         case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
@@ -2403,9 +2424,34 @@ EXAMPLES:
     io: CliIO = CliIO.system,
     mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
-    val excel = ExcelIO.instance[IO]
     val readerConfig = buildReaderConfig(maxSizeOpt)
+    Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
+      // Both books are resident at once: ONE verdict on the sum of their footprints (in
+      // runDiffWith, under its attempt), then two loads under the guard with no per-file sizing;
+      // a MEMORY_PRESSURE rides on the outcome
+      val excel =
+        MemoryGuard.excel(_ => IO.unit, warn = w => warnings.update(_ :+ w), admitLoads = false)
+      runDiffWith(excel, warnings, fileA, fileB, sheetFilter, readerConfig, format, io, mode)
+    }
+
+  private def runDiffWith(
+    excel: ExcelIO[IO],
+    warnings: Ref[IO, Vector[Warning]],
+    fileA: Path,
+    fileB: Path,
+    sheetFilter: Option[String],
+    readerConfig: ReaderConfig,
+    format: DiffFormat,
+    io: CliIO,
+    mode: OutputMode
+  ): IO[ExitCode] =
     (for
+      _ <- MemoryGuard.admitAll(
+        Vector(fileA, fileB),
+        readerConfig,
+        MemoryGuard.heapFor(fileA),
+        w => warnings.update(_ :+ w)
+      )
       wbA <- readWorkbook(excel, fileA, readerConfig)
       wbB <- readWorkbook(excel, fileB, readerConfig)
       diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter) match
@@ -2425,23 +2471,27 @@ EXAMPLES:
         case DiffFormat.Markdown =>
           DiffCommands.renderMarkdown(diff, fileA.toString, fileB.toString)
         case DiffFormat.Json => DiffCommands.renderJson(diff)
-    yield (output, diff.identical)).attempt.flatMap {
-      case Right((output, identical)) =>
-        // The JSON report rides as text (Payload.Raw): its numbers are never re-parsed
-        val payload = (format, mode) match
-          case (DiffFormat.Json, OutputMode.Json) => Payload.Raw(output)
-          case _ => Payload.text(output)
-        val outcome =
-          if identical then Outcome.ok("diff", payload)
-          else
-            Outcome.signal(
-              "diff",
-              payload,
-              CliError(ErrorCode.DIFFERENCES_FOUND, s"Differences found: $fileA vs $fileB")
-            )
-        emit(outcome, mode, io)
-      case Left(err) =>
-        emit(Outcome.failed("diff", CliError.fromThrowable(err)), mode, io)
+    yield (output, diff.identical)).attempt.flatMap { attempt =>
+      warnings.get.flatMap { collected =>
+        attempt match
+          case Right((output, identical)) =>
+            // The JSON report rides as text (Payload.Raw): its numbers are never re-parsed
+            val payload = (format, mode) match
+              case (DiffFormat.Json, OutputMode.Json) => Payload.Raw(output)
+              case _ => Payload.text(output)
+            val outcome =
+              if identical then Outcome.ok("diff", payload, collected)
+              else
+                Outcome.signal(
+                  "diff",
+                  payload,
+                  CliError(ErrorCode.DIFFERENCES_FOUND, s"Differences found: $fileA vs $fileB"),
+                  collected
+                )
+            emit(outcome, mode, io)
+          case Left(err) =>
+            emit(Outcome.failed("diff", CliError.fromThrowable(err), collected), mode, io)
+      }
     }
 
   /**
@@ -2515,7 +2565,7 @@ EXAMPLES:
         IO.fromEither(Resolve.validSheetName(n).left.map(CliException(_)))
       )
       wb = Workbook(names.map(Sheet(_)).toVector)
-      _ <- classifyWrite(outPath)(ExcelIO.instance[IO].writeWith(wb, outPath, config))
+      _ <- classifyWrite(outPath)(MemoryGuard.writer.writeWith(wb, outPath, config))
     yield
       val sheetList = names.map(_.value).mkString(", ")
       s"Created ${outPath.toAbsolutePath} with ${names.size} sheet(s): $sheetList"
@@ -2550,7 +2600,7 @@ EXAMPLES:
     warnings: Ref[IO, Vector[Warning]],
     mode: OutputMode
   ): IO[Payload] =
-    val excel = readerCollecting(warnings)
+    val excel = readerCollecting(warnings, MemoryGuard.heapFor(filePath))
     val readerConfig = buildReaderConfig(maxSizeOpt)
     val warn: Warning => IO[Unit] = warning => warnings.update(_ :+ warning)
     // Handle metadata-only commands (instant for any file size)

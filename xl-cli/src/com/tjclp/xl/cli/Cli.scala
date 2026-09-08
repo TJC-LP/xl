@@ -216,7 +216,10 @@ object Cli:
    *
    * The last-resort handler is the contract's floor: whatever a handler lets escape (the staging
    * and commit steps run outside the handlers' own `attempt`) is still one diagnostic — or one
-   * envelope — with the code [[contract.CliError.fromThrowable]] assigns, never a stack trace.
+   * envelope — with the code [[contract.CliError.fromThrowable]] assigns, never a stack trace. Its
+   * floor has a floor: cats-effect never delivers a fatal error (an `OutOfMemoryError` above all)
+   * to this handler — it halts the runtime — so the in-memory load catches that one inside its own
+   * thunk and re-raises it typed ([[MemoryGuard]], GH-636); every other `Error` stays fatal.
    */
   def run(args: List[String], io: CliIO): IO[ExitCode] =
     val argv = Argv.hoist(args)

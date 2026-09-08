@@ -7,6 +7,7 @@ import fs2.{Chunk, Stream}
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
+import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Warning, WarningCode}
 import com.tjclp.xl.cli.helpers.Resolve
@@ -118,24 +119,29 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
           InMemorySource.evaluateSheetFormulas(s, Some(wb), Some(window), gate, warn)
         else IO.pure(s)
       spec.format match
+        // The renders build the whole window's markup at once: under the memory guard (GH-636)
         case ViewFormat.Html =>
-          evaluated(spec.strict).map(
-            _.toHtml(
-              window,
-              theme = theme,
-              applyPrintScale = spec.printScale,
-              showLabels = spec.showLabels
+          evaluated(spec.strict).flatMap { s =>
+            MemoryGuard.blocking(
+              s.toHtml(
+                window,
+                theme = theme,
+                applyPrintScale = spec.printScale,
+                showLabels = spec.showLabels
+              )
             )
-          )
+          }
         case ViewFormat.Svg =>
-          evaluated(spec.strict).map(
-            _.toSvg(
-              window,
-              theme = theme,
-              showGridlines = spec.showGridlines,
-              showLabels = spec.showLabels
+          evaluated(spec.strict).flatMap { s =>
+            MemoryGuard.blocking(
+              s.toSvg(
+                window,
+                theme = theme,
+                showGridlines = spec.showGridlines,
+                showLabels = spec.showLabels
+              )
             )
-          )
+          }
         case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
           spec.rasterOutput match
             case None =>
@@ -150,21 +156,26 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
             case Some(outputPath) =>
               // Raster formats have never gated on --strict: an evaluation failure warns
               evaluated(false).flatMap { rendered =>
-                val svg = rendered.toSvg(
-                  window,
-                  theme = theme,
-                  showGridlines = spec.showGridlines,
-                  showLabels = spec.showLabels
-                )
-                val rasterFormat = spec.format match
-                  case ViewFormat.Jpeg => RasterFormat.Jpeg(spec.quality)
-                  case ViewFormat.WebP => RasterFormat.WebP
-                  case ViewFormat.Pdf => RasterFormat.Pdf
-                  case _ => RasterFormat.Png
-                RasterizerChain
-                  .convert(svg, outputPath, rasterFormat, spec.dpi, spec.rasterizer)
-                  .map { used =>
-                    s"Exported: $outputPath (${spec.format.toString.toLowerCase}, ${spec.dpi} DPI, $used)"
+                MemoryGuard
+                  .blocking(
+                    rendered.toSvg(
+                      window,
+                      theme = theme,
+                      showGridlines = spec.showGridlines,
+                      showLabels = spec.showLabels
+                    )
+                  )
+                  .flatMap { svg =>
+                    val rasterFormat = spec.format match
+                      case ViewFormat.Jpeg => RasterFormat.Jpeg(spec.quality)
+                      case ViewFormat.WebP => RasterFormat.WebP
+                      case ViewFormat.Pdf => RasterFormat.Pdf
+                      case _ => RasterFormat.Png
+                    RasterizerChain
+                      .convert(svg, outputPath, rasterFormat, spec.dpi, spec.rasterizer)
+                      .map { used =>
+                        s"Exported: $outputPath (${spec.format.toString.toLowerCase}, ${spec.dpi} DPI, $used)"
+                      }
                   }
               }
         case ViewFormat.Markdown | ViewFormat.Json | ViewFormat.Csv =>
@@ -365,27 +376,33 @@ object InMemorySource:
     strict: Boolean,
     warn: Warning => IO[Unit]
   ): IO[Sheet] =
-    val evalResult = range match
-      case Some(r) => SheetEvaluator.evaluateForRange(sheet)(r, workbook = workbook)
-      case None => SheetEvaluator.evaluateWithDependencyCheck(sheet)(workbook = workbook)
-    evalResult match
-      case Right(results) =>
-        // Sheet.put preserves the existing cell styleId
-        IO.pure(results.foldLeft(sheet) { case (acc, (ref, value)) => acc.put(ref, value) })
-      case Left(error) =>
-        // `view --eval --strict` is a user-requested gate (ADR-017 invariant 5): exit 1 with
-        // RECALC_GATE, never a failure. The message text is unchanged.
-        if strict then
-          IO.raiseError(
-            CliException(
-              CliError(
-                ErrorCode.RECALC_GATE,
-                s"Formula evaluation failed: ${error.message}",
-                hint =
-                  Some("drop --strict to render cached values and see the failure as a warning")
+    // GH-636: the evaluation builds the dependency graph and every result at once — under the
+    // memory guard, so a heap it exhausts is RESOURCE_LIMIT rather than a fatal error
+    MemoryGuard
+      .blocking {
+        range match
+          case Some(r) => SheetEvaluator.evaluateForRange(sheet)(r, workbook = workbook)
+          case None => SheetEvaluator.evaluateWithDependencyCheck(sheet)(workbook = workbook)
+      }
+      .flatMap {
+        case Right(results) =>
+          // Sheet.put preserves the existing cell styleId
+          IO.pure(results.foldLeft(sheet) { case (acc, (ref, value)) => acc.put(ref, value) })
+        case Left(error) =>
+          // `view --eval --strict` is a user-requested gate (ADR-017 invariant 5): exit 1 with
+          // RECALC_GATE, never a failure. The message text is unchanged.
+          if strict then
+            IO.raiseError(
+              CliException(
+                CliError(
+                  ErrorCode.RECALC_GATE,
+                  s"Formula evaluation failed: ${error.message}",
+                  hint =
+                    Some("drop --strict to render cached values and see the failure as a warning")
+                )
               )
             )
-          )
-        else
-          warn(Warning(WarningCode.EVAL_FAILED, s"Formula evaluation failed: ${error.message}"))
-            .as(sheet)
+          else
+            warn(Warning(WarningCode.EVAL_FAILED, s"Formula evaluation failed: ${error.message}"))
+              .as(sheet)
+      }

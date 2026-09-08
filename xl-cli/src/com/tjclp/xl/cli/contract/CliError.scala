@@ -6,7 +6,7 @@ import scala.util.control.NoStackTrace
 
 import cats.effect.ExitCode
 
-import com.tjclp.xl.cli.StrictFailure
+import com.tjclp.xl.cli.{MemoryGuard, StrictFailure}
 import com.tjclp.xl.cli.raster.RasterError
 import com.tjclp.xl.error.{XLError, XLException}
 
@@ -69,9 +69,13 @@ object CliError:
    * the `RECALC_GATE` (exit 1) carrying the summary as its message; an `XLException` projects its
    * `XLError`; a raster export with no backend to run it (none installed, or the `--rasterizer`
    * asked for is missing) is `RASTERIZER_UNAVAILABLE` with the chain's own install hints as the
-   * message; a `NoSuchFileException` is `IO_READ`; everything else is `INTERNAL` with its message
-   * (falling back to `toString` when the message is null — an un-migrated `new Exception(msg)`
-   * still yields a well-formed diagnostic).
+   * message; a `NoSuchFileException` is `IO_READ`; an `OutOfMemoryError` is the `RESOURCE_LIMIT`
+   * failure [[com.tjclp.xl.cli.MemoryGuard.exhausted]] (GH-636 — the classification of a heap that
+   * ran out; note that cats-effect halts on a fatal error before any handler runs, so the error
+   * only ever arrives here after `MemoryGuard.blocking` caught it inside its thunk); everything
+   * else — every other `Error` included — is `INTERNAL` with its message (falling back to
+   * `toString` when the message is null — an un-migrated `new Exception(msg)` still yields a
+   * well-formed diagnostic).
    */
   def fromThrowable(t: Throwable): CliError = t match
     case e: CliException => e.error
@@ -83,6 +87,7 @@ object CliError:
     case r: RasterError.RasterizerNotFound => CliError(ErrorCode.RASTERIZER_UNAVAILABLE, r.message)
     case n: NoSuchFileException =>
       CliError(ErrorCode.IO_READ, s"No such file: ${Option(n.getFile).getOrElse(messageOf(n))}")
+    case _: OutOfMemoryError => MemoryGuard.exhausted
     case other => CliError(ErrorCode.INTERNAL, messageOf(other))
 
   /** The command line is wrong (exit 2). */

@@ -5,7 +5,7 @@ import java.nio.file.NoSuchFileException
 import cats.effect.ExitCode
 import munit.FunSuite
 
-import com.tjclp.xl.cli.StrictFailure
+import com.tjclp.xl.cli.{MemoryGuard, StrictFailure}
 import com.tjclp.xl.cli.raster.RasterError
 import com.tjclp.xl.error.{XLError, XLException}
 
@@ -88,6 +88,21 @@ class CliErrorSpec extends FunSuite:
     assertEquals(safe.code, ErrorCode.INTERNAL)
     assertEquals(safe.message, nullMessage.toString)
     assert(safe.message.nonEmpty)
+  }
+
+  test("fromThrowable: an OutOfMemoryError is RESOURCE_LIMIT naming the heap, exit 3 (GH-636)") {
+    val err = CliError.fromThrowable(new OutOfMemoryError("Garbage-collected heap size exceeded"))
+    assertEquals(err.code, ErrorCode.RESOURCE_LIMIT)
+    assertEquals(err, MemoryGuard.exhausted)
+    assert(err.message.contains(MemoryGuard.human(MemoryGuard.maxHeapBytes)), err.message)
+    assert(err.hint.exists(h => h.contains("--stream") && h.contains("-Xmx")), err.hint.toString)
+    assertEquals(err.exitCode, ExitCode(3))
+  }
+
+  test("fromThrowable: every other Error stays INTERNAL — only memory exhaustion is classified") {
+    assertEquals(CliError.fromThrowable(new StackOverflowError("deep")).code, ErrorCode.INTERNAL)
+    assertEquals(CliError.fromThrowable(new AssertionError("boom")).code, ErrorCode.INTERNAL)
+    assertEquals(CliError.fromThrowable(new LinkageError("link")).code, ErrorCode.INTERNAL)
   }
 
   test("usage errors carry USAGE and exit 2") {

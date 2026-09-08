@@ -11,7 +11,6 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, ParseError}
-import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
@@ -23,6 +22,7 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, ScopedOp}
 import com.tjclp.xl.cli.contract.{CliError, CliException, Diagnostics, ErrorCode, Location, Warning}
+import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.helpers.{
   BatchParser,
   Resolve,
@@ -70,7 +70,7 @@ object StreamingWriteCommands:
     sheetName: String,
     options: StreamingCsvParser.Options
   ): IO[String] =
-    val excel = ExcelIO.instance[IO]
+    val excel = MemoryGuard.writer
 
     StreamingCsvParser
       .streamCsv(csvPath, options)
@@ -101,7 +101,7 @@ object StreamingWriteCommands:
     outputPath: Path,
     config: WriterConfig = WriterConfig.default
   ): IO[Unit] =
-    ExcelIO.instance[IO].writeWorkbookStream(wb, outputPath, config)
+    MemoryGuard.writer.writeWorkbookStream(wb, outputPath, config)
 
   /**
    * Hybrid streaming workbook write with success message.

@@ -226,18 +226,18 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of the #606 blind-reader fix (2026-09-08), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored; four subprocess smokes skip when openpyxl is absent or the sandbox runs as root.
+As of the #606 blind-reader fix and the #636 memory guard (2026-09-08), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored; four subprocess smokes skip when openpyxl is absent or the sandbox runs as root.
 
 | Module | Tests |
 |--------|-------|
 | xl-evaluator | 2417 |
 | xl-core | 1551 |
-| xl-ooxml | 1118 |
-| xl-cli | 1301 |
+| xl-ooxml | 1119 |
+| xl-cli | 1340 |
 | xl-cats-effect | 167 |
 | xl-agent | 145 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 51 |
-| **Total** | **6,750** |
+| **Total** | **6,790** |
 
 ## Test Quality Metrics
 

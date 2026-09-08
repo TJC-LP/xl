@@ -41,7 +41,7 @@ export PATH="$HOME/.local/bin:$PATH"
 -o, --output <path>   # Output file for mutations
 -i, --in-place        # Edit file in place (same as -o matching -f)
 --stream              # O(1) memory streaming for large files (search/stats/bounds/view + writes)
---max-size <MB>       # Max uncompressed size for in-memory load (default 100, 0 = unlimited)
+--max-size <MB>       # Max uncompressed size for in-memory load (default 100, 0 = unlimited; the heap still bounds what fits — see below)
 --backend <name>      # XML backend: scalaxml (default) or saxstax (faster)
 --no-recalc           # Write verbs: apply the edit, recalculate nothing (alias --preserve-caches)
 --preserve-caches     # Same flag, spelled for the intent
@@ -96,6 +96,32 @@ xl batch --schema                                  # JSON Schema of the batch do
 > line is the verb, so `xl data.xlsx view A1:B4` takes `data.xlsx` for a verb and fails
 > `UNKNOWN_VERB` (exit 2). A verb's positional arguments are its own — the range, the ref, the
 > formula, `copy`'s source and target, `delete-rows`' row and count.
+
+> **`--max-size` lifts the security limit, not the heap.** `--max-size 0` ("unlimited") only stops
+> the reader refusing large uncompressed content; what fits is bounded by the process heap. The
+> native binary is built with an 8 GB ceiling (`-R:MaxHeapSize=8g`), raised by passing `-Xmx<size>`
+> on the command line — the native runtime consumes it anywhere; put it before `-f` to be safe
+> (`xl -Xmx64g -f big.xlsx --max-size 0 audit`; the JAR takes the JVM's own `java -Xmx64g -jar
+> xl.jar …`). `--max-size` below 0 is a usage error (exit 2), not "unlimited". An in-memory load
+> needs many times its uncompressed XML.
+> Measured with the reader on 1,000,000-row books (smallest heap that loads): dense numeric or
+> short-text cells need 16–20× their worksheet XML (346 MB of sheet XML loads in 6 GB, not in 5);
+> the wide text rows of the 0.21.0 dogfood book needed 33–41× (1.09 GB of sheet XML, 36–45 GB of
+> heap); long text costs only 2–3× the bytes of `sharedStrings.xml` (380 MB of mostly strings loads
+> in 1.75 GB). Large files belong to `--stream`. When `--max-size` is lifted, the load is sized from
+> the zip's central directory before anything is parsed, in two bands: a *lower* estimate of
+> `14 × worksheet XML + 2 × shared-string XML` already above the heap is hopeless and is refused
+> (`code: RESOURCE_LIMIT`, exit 3, the file in `error.location`); an *upper* estimate of
+> `30 × worksheet + 3 × strings` above the heap proceeds under a `Warning[MEMORY_PRESSURE]`
+> carrying both figures and the hint; below both the load is silent (`diff` sizes its two books
+> together). A load that does exhaust the heap is reported the same way — `code: RESOURCE_LIMIT`,
+> exit 3, with the `--stream`/`-Xmx` hint — never a raw `java.lang.OutOfMemoryError` with exit 1
+> and, under `--json`, no envelope. The catch covers every stage that builds a large structure:
+> the load, the recalculation after an edit and `recalc` itself, `view --eval`'s evaluation, the
+> html/svg/raster renders and the serialisation. Two residuals: an `OutOfMemoryError` raised first
+> on another thread (a `recalc --parallel` fiber) can still end the process the old way, and a
+> non-heap `OutOfMemoryError` (Metaspace, "unable to create native thread") is reported with the
+> heap wording.
 
 > **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
 > (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`/`--sheet` (for a batch op, its `sheet` key
@@ -1768,8 +1794,8 @@ instance `Warning[READER_WARNING]: MissingStylesXml` when the input has no `xl/s
 `INVALID_CELL_REF`, `FORMULA_ERROR`, `SECURITY_ERROR`, `SHEET_REQUIRED`, `IO_ERROR`, ...) or one of the
 CLI-only codes: `USAGE`, `UNKNOWN_VERB`, `OUTPUT_REQUIRED`, `UNSUPPORTED_IN_STREAM`,
 `BATCH_JSON_INVALID`, `BATCH_OP_UNKNOWN`, `BATCH_OP_INVALID`, `BATCH_OP_FAILED`,
-`RASTERIZER_UNAVAILABLE`, `IO_READ`, `IO_WRITE`, `RECALC_GATE`, `DIFFERENCES_FOUND`, `LINT_FINDINGS`,
-`AUDIT_FINDINGS`, `INTERNAL`. The complete vocabulary, each code with the exit it implies, is the
+`RASTERIZER_UNAVAILABLE`, `IO_READ`, `IO_WRITE`, `RESOURCE_LIMIT`, `RECALC_GATE`,
+`DIFFERENCES_FOUND`, `LINT_FINDINGS`, `AUDIT_FINDINGS`, `INTERNAL`. The complete vocabulary, each code with the exit it implies, is the
 generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schema --json` →
 `errorCodes`/`warningCodes`). The exit code follows from the code alone:
 
@@ -1778,7 +1804,7 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 | `0` | ok | | as requested |
 | `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | `-o`: yes; `-i`: no |
 | `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, `--stream` with an unsupported verb or flag | no |
-| `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit | no |
+| `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit, a workbook that does not fit in memory (`RESOURCE_LIMIT`) | no |
 
 Two rows worth spelling out:
 

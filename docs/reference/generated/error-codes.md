@@ -23,6 +23,7 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `RASTERIZER_UNAVAILABLE` | 3 |
 | `IO_READ` | 3 |
 | `IO_WRITE` | 3 |
+| `RESOURCE_LIMIT` | 3 |
 | `RECALC_GATE` | 1 |
 | `DIFFERENCES_FOUND` | 1 |
 | `LINT_FINDINGS` | 1 |
@@ -76,3 +77,4 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `SHEET_AUTOSELECTED` |
 | `FLAG_IGNORED` |
 | `EVAL_FAILED` |
+| `MEMORY_PRESSURE` |

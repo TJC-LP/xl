@@ -202,13 +202,13 @@ final class CliException(val error: CliError) extends Exception(error.message) w
 
 object CliError:
   def fromXLError(e: XLError, at: Option[Location]): CliError   // code = e.code, hint = e.hint, candidates = e.candidates
-  def fromThrowable(t: Throwable): CliError                     // CliException → its error; StrictFailure → RECALC_GATE; XLException → fromXLError; NoSuchFileException → IO_READ; else INTERNAL
+  def fromThrowable(t: Throwable): CliError                     // CliException → its error; StrictFailure → RECALC_GATE; XLException → fromXLError; NoSuchFileException → IO_READ; OutOfMemoryError → RESOURCE_LIMIT (caught inside the load's thunk: fatal to cats-effect otherwise); else INTERNAL
   def usage(message: String, hint: Option[String]): CliError
 
 object ErrorCode:                       // CLI-only codes; domain codes come from XLError.code
   val USAGE, UNKNOWN_VERB, OUTPUT_REQUIRED, UNSUPPORTED_IN_STREAM, BATCH_JSON_INVALID,
       BATCH_OP_UNKNOWN, BATCH_OP_INVALID, BATCH_OP_FAILED, RASTERIZER_UNAVAILABLE,
-      IO_READ, IO_WRITE, RECALC_GATE, DIFFERENCES_FOUND, LINT_FINDINGS, AUDIT_FINDINGS, INTERNAL: String
+      IO_READ, IO_WRITE, RESOURCE_LIMIT, RECALC_GATE, DIFFERENCES_FOUND, LINT_FINDINGS, AUDIT_FINDINGS, INTERNAL: String
   val all: Vector[String]               // every CLI code + every XLError case code (from XLError.codes), unique, SCREAMING_SNAKE
 
 object ExitCodes:
@@ -221,7 +221,7 @@ object ExitCodes:
 final case class Warning(code: String, message: String, location: Option[Location] = None)
 object WarningCode:
   val READER_WARNING, TRUNCATED, HIDDEN_OMITTED, UNKNOWN_PROPERTY, FORMAT_HINT_IGNORED,
-      STREAM_BACKEND_ONLY, RECALC_ERRORS, SHEET_AUTOSELECTED, FLAG_IGNORED: String
+      STREAM_BACKEND_ONLY, RECALC_ERRORS, SHEET_AUTOSELECTED, FLAG_IGNORED, EVAL_FAILED, MEMORY_PRESSURE: String
 
 object Diagnostics:
   def render(err: CliError): String            // text form, see below
@@ -235,7 +235,7 @@ object Diagnostics:
 | 0 | ok | | as requested |
 | 1 | completed with findings / a gate — **never a failure** | `diff` differs, `lint` findings, `audit --fail-on-findings`, `--strict` gate | `-o`: yes (today's GH-496 rule); `-i`: no |
 | 2 | usage — the command line is wrong | unknown verb, flag not accepted, `-o` missing, `-i` with `-o`, `--stream` on an unsupported verb, batch JSON not an array, unknown or malformed batch op | no (nothing read) |
-| 3 | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, count mismatch, batch op failed at apply time, security limit, I/O | no |
+| 3 | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, count mismatch, batch op failed at apply time, security limit, a workbook that does not fit the heap (`RESOURCE_LIMIT`, GH-636), I/O | no |
 
 Today: 1 = crash/usage/strict/diff/lint, 2 = diff/lint runtime error only. Every `1` that means
 "gate or findings" is kept (the CI-lane pins at `MainSpec`, `InPlaceSpec:132-136`,

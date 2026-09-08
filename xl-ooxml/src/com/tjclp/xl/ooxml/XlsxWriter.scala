@@ -183,7 +183,9 @@ object XlsxWriter:
    *   1. Create temp file in same directory as destination
    *   2. Write complete XLSX to temp file
    *   3. Atomically rename temp → destination
-   *   4. Clean up temp file on failure
+   *   4. Clean up temp file on failure — in `finally`, so an `Error` (an `OutOfMemoryError` while
+   *      serialising, which the CLI reports as a typed failure) leaves no `.xl-*.tmp` beside the
+   *      destination either; a no-op after the successful move
    */
   private def writeAtomically(
     workbook: Workbook,
@@ -209,6 +211,7 @@ object XlsxWriter:
       case e: Exception =>
         Files.deleteIfExists(tempPath)
         throw e
+    finally Files.deleteIfExists(tempPath)
 
   private def formulaEscapingRequested(config: WriterConfig): Boolean =
     config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
