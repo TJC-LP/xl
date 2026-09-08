@@ -92,6 +92,14 @@ ref"A2".down(3).right(1)                           // total navigation → B5 (u
 ref"A2".tryDown(3)                                 // 0.20.0: bounded → Some(A5); None past the edge; clampShift pins
 ref"A1:D10".rows                                   // 0.20.0: lazy one-row slices; row(i)/column(i) are Option
 
+// Edit algebra (0.21.0): the batch/CLI operation vocabulary as values, one interpreter for all three surfaces
+wb.editIn(sales)(edits*)                           // XLResult[Workbook]; `sales` is the sheet for every target with sheet = None (the CLI's -s)
+wb.edit(Edit.put(Loc(Some(sales), ref"A1"), 1))    // no default sheet: qualify with Some(...), or a single-sheet book — else SheetRequired
+sheet.edit(Edit.Merge(Area(None, ref"A1:C1")))     // XLResult[Sheet]; fail-fast, all-or-nothing
+Edit.DragFormula(Area(None, ref"D2:D9"), "=B2*C2", ref"D2", None) // fill-down; also Fill/Copy/Sort/Clear/InsertRows/DeleteRows/AddSheet/RenameSheet/...
+Edit.plan(wb, edits, EditScope.of(sales))          // XLResult[Vector[Planned]]: semantic dry-run; Edit.validate(e) is the static check
+err.opIndex                                        // Some(n): 1-based position of the failing edit (EditFailed); err.code/hint are the cause's
+
 // Typed reads (since 0.20.0 a formula cell reads as its cached value — GH-477)
 sheet.readTyped[BigDecimal](ref"C1")               // Either[CodecError, Option[BigDecimal]]
 sheet.readTypedOr[Int](ref"B1", 0)                 // total, with default
@@ -241,6 +249,44 @@ val sheet = Sheet("Sales").put(rows)
 ```
 
 `range := value` fills every cell in the range (Excel Ctrl+Enter): `ref"E2:E100" := 0`.
+
+### Batch-shaped edits: the `Edit` algebra (0.21.0)
+
+A `Patch` is sheet-local and formula-blind. `Edit` is the operation vocabulary behind `xl batch` and every mutating verb — one case per op, 49 in all — and `wb.edit` / `wb.editIn(sheet)` / `sheet.edit` run the very interpreter the CLI does. Reach for it when a script needs what a `Patch` cannot say: formula dragging (`DragFormula`, `Fill`, `Copy`), structural edits (`InsertRows`/`DeleteRows`/`InsertCols`/`DeleteCols` — references rewritten on every sheet, `#REF!` on loss), sheet management (`AddSheet`, `RenameSheet` with reference rewriting, `MoveSheet`, `CopySheet`, `HideSheet`/`ShowSheet`), outline groups, comments/hyperlinks, CF/charts/images, view and print setup, defined names — beside the plain `Put`/`PutValues`/`PutFormula`/`PutFormulas`, `Style`, `Merge`/`Unmerge`, `Clear`, `Sort`, widths/heights, hide/show and `AutoFit`.
+
+```scala
+//> using scala 3.9.0
+//> using dep com.tjclp::xl:0.21.0
+import com.tjclp.xl.scripting.{*, given}
+
+val Data = SheetName.unsafe("Data")
+val book = Workbook(
+  Sheet(Data)
+    .put(ref"A1", "Item").put(ref"B1", "Qty").put(ref"C1", "Price")
+    .put(ref"A2", "Widget").put(ref"B2", 3).put(ref"C2", BigDecimal("19.99"))
+    .put(ref"A3", "Gadget").put(ref"B3", 5).put(ref"C3", BigDecimal("29.99"))
+)
+
+val edited = orExit(
+  book.editIn(Data)(                                                     // Data is the sheet for every `None` target
+    Edit.put(ref"D1", "Total"),                                          // codec format inference kept
+    Edit.DragFormula(Area(None, ref"D2:D3"), "=B2*C2", ref"D2", None),   // D3: =B3*C3
+    Edit.PutFormula(Loc(None, ref"D4"), "=SUM(D2:D3)", Some(FormatHint.Explicit(NumFmt.Currency))),
+    Edit.Style(Area(None, ref"A1:D1"), StyleOverlay(bold = Some(true)), StyleMode.Merge),
+    Edit.InsertRows(None, Row.from1(1), 1),                              // every formula shifts: D5 = SUM(D3:D4)
+    Edit.AddSheet(SheetName.unsafe("Summary"), after = Some(Data), before = None),
+    Edit.PutFormula(Loc(Some(SheetName.unsafe("Summary")), ref"B2"), "=Data!D5", None) // qualified target
+  )
+) // Left → "Error: op N (<op>): …" + code/hint on stderr (the CLI's envelope), exit 1
+val result = Excel.writeChecked(edited, "/tmp/edited.xlsx")              // caches the new formulas, writes
+println(s"clean: ${result.isClean}")
+```
+
+- **Targets carry their sheet**: `Loc(sheet: Option[SheetName], ref)`, `Area(sheet, range)`, and `sheet: Option[SheetName]` on the row/column and sheet-level cases. `None` is *the scope's default* — THE sheet rule (qualifier > default > the only sheet of a single-sheet book > `SheetRequired`). `wb.edit` has no default: give one with `wb.editIn(sheet)(…)`, qualify with `Some(sheet)`, or use `sheet.edit` (a one-sheet scope; a target naming another sheet is `SheetNotFound`). `Loc.parse("'Q1 Data'!B7")`, `Area.parse("A1:B2")`, `RowSpan.parse("10:20")`, `ColSpan.parse("E:H")` read the CLI spellings; `Area.cell(loc)` is a 1x1 area.
+- **All-or-nothing**: edits apply in order and the first failure is `Left(EditFailed(index, op, cause))` — `index` 1-based (`err.opIndex`), `op` the kebab name (`drag-formula`), and `err.code`/`hint`/`candidates` are the *cause's* (`err.root`) — with the input workbook untouched. `err.message` reads `op 2 (drag-formula): …`; `orExit` prints it exactly as `xl batch` reports a `BATCH_OP_FAILED`.
+- **Formats**: `Edit.put(ref, a)` / `Edit.put(loc, a)` lift the codec's format as `FormatHint.Inferred` (fills a General format only, as `sheet.put` does); `FormatHint.Explicit(fmt)` replaces the number format and keeps font/fill/border. `StyleOverlay` is a partial style (every field `Option`, so "un-bold" is sayable; `++` right-biased; `StyleOverlay.of(style)`); `StyleMode.Merge` overlays each cell's style, `Replace` starts from `CellStyle.default`.
+- **Scope and the fold**: the scope type is **`EditScope`** on the prelude surface (the source name `ops.Scope` collides with JMH's/ZIO's) — `EditScope.none`, `EditScope.of(sheet)`; a `RenameSheet` of the default sheet retargets the edits after it. `Edit.applyAll(wb, edits, scope)` → `Applied(workbook, planned, scope)` (`touchedBySheet`, `structural`); `Edit.plan(wb, edits, scope)` keeps only the `Planned(index, edit, sheet, touched)` rows — a *semantic* dry-run that fails exactly where `applyAll` would; `Edit.validate(edit)` is the static, workbook-free check (counts, spans, levels, formula syntax); `Edit.lower(edit, sheet)` / `Patch.toEdits(patch, sheet)` bridge to `Patch`. `EditSchema.all` / `find("putf")` / `nameOf(edit)` is `xl batch --schema` as values.
+- The prelude's `given FormulaSupport` (xl-evaluator's) powers the formula-aware cases; `FormulaSupport.textOnly` (`wb.edit(e)(using FormulaSupport.textOnly)`) stores formula text as written and **refuses** drags, structural edits and renames with `UnsupportedCapability` rather than write a silent `#REF!`.
 
 ### Typed extraction
 
@@ -460,6 +506,7 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 - **Compose patches with `++`**, not Cats `|+|` (the latter needs type ascription on enum cases).
 - **`fx` with runtime interpolation returns `Either`** — there is deliberately no `:=` overload that swallows a `Left`; unwrap with `.unsafe` or sequence it.
 - **`wb.update` fails on a missing sheet; `wb.upsert` creates it.** Pick by intent.
+- **`wb.edit` has no default sheet** (0.21.0): an `Edit` target with `sheet = None` resolves only on a single-sheet book — otherwise `SheetRequired`, reported as `EditFailed` at that edit's 1-based index. Give the default with `wb.editIn(sheet)(…)`, qualify with `Some(sheet)`, or use `sheet.edit`. The scope type is spelled **`EditScope`** on the prelude surface (`EditScope.none` / `EditScope.of(sheet)`), not `Scope`; `Edit.FillDir` / `Edit.SortDir` / `Edit.SortMode` nest in the companion (xl-cli's `FillDirection`/`SortDirection`/`SortMode` are not on this surface).
 - **`wb.rename` does NOT rewrite formulas** ([#559](https://github.com/TJC-LP/xl/issues/559)): it changes the tab and leaves `Sheet1!A1` in every dependent — the file lints clean and Excel shows `#REF!`. Since 0.20.0 use `SheetRenamer.rename(wb, from, to)` (what `xl rename-sheet` and batch `rename-sheet` now do): formulas on every sheet, defined names, CF and DV follow the rename with caches preserved. On ≤0.19.3 rewrite dependents yourself (`FormulaParser.parse` → walk → `FormulaPrinter.printFileForm`) or rename before authoring cross-sheet formulas.
 - **Range fill cost = range size**: `ref"A:A" := 0` really creates 1,048,576 cells (that's what a fill means) — size fill ranges to your data.
 - **`shift`/`down`/`up`/`left`/`right` are unchecked at the edges**: `ref"A1".up()` produces an invalid "A0" ref that corrupts output if written. Since 0.20.0 ([#465](https://github.com/TJC-LP/xl/issues/465)) use the bounded forms in loops — `ref.tryDown(n)`/`tryRight(n)`/`tryShift(dc, dr)` return `None` past the grid (column A..XFD, row 1..1048576) and `ref.clampShift(dc, dr)` pins each axis to the nearest edge; `range.rows`/`columns` and `range.row(i)`/`column(i)` (`Option`, 0-based) slice a range instead of interpolating its corners. On ≤0.19.x keep loop bounds inside your data extent.
@@ -472,7 +519,7 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 
 ## Reference
 
-- `reference/API.md` — types, extension methods, style builders, all 108 formula functions, streaming API
+- `reference/API.md` — types, extension methods, the `Edit` algebra, style builders, all 108 formula functions, streaming API
 - `reference/RECIPES.md` — 9 complete, runnable scripts (bulk transform, typed extraction, model build, merge, streaming, diff, CSV ingest, recalculated write + runtime column widths, deliverable finish)
 - Repo examples: `examples/*.sc` in https://github.com/TJC-LP/xl (start with `scripting_tour.sc`)
 - The `xl-cli` skill for CLI operations (visual exports, quick inspection)

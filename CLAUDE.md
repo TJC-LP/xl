@@ -139,9 +139,6 @@ The `xl-agent` module runs AI agent benchmarks comparing different Excel manipul
 # Compare multiple skills
 ./mill xl-agent.run --benchmark spreadsheetbench --task 2768 --skills xl,xlsx
 
-# List available tasks
-./mill xl-agent.run --benchmark spreadsheetbench --list-tasks
-
 # List available skills
 ./mill xl-agent.run --list-skills
 
@@ -154,13 +151,13 @@ The `xl-agent` module runs AI agent benchmarks comparing different Excel manipul
 | Flag | Description |
 |------|-------------|
 | `--benchmark <name>` | Benchmark suite: `spreadsheetbench`, `tokenbenchmark` |
-| `--task <id>` | Run specific task ID (can repeat) |
+| `--task <ids>` | Task ID(s), comma-separated (`--task 2768,2769`); a repeated `--task` replaces the earlier one |
 | `--skills <list>` | Comma-separated: `xl`, `xlsx`, or `xl,xlsx` |
 | `--parallelism <n>` | Number of parallel work units (default: 4) |
 | `--max-tokens <n>` | Per-iteration output cap for agent turns (default: 32768; thinking counts against it) |
 | `--stream` | Real-time colored console output |
 | `--force-upload` | Bypass file cache, re-upload skill |
-| `--output-dir <path>` | Results directory (default: `results/`) |
+| `--output <dir>` | Results directory (default: `results/<timestamp>/`) |
 
 ### Architecture
 
@@ -171,9 +168,9 @@ The `xl-agent` module runs AI agent benchmarks comparing different Excel manipul
 
 ### Output
 
-Results are written to `results/` directory:
+Results are written under the `--output` directory (default `results/<timestamp>/`):
 - `outputs/<taskId>/<skill>/` - Output xlsx files
-- `traces/<taskId>/<skill>/` - Conversation traces (JSON)
+- `tasks/<taskId>/<skill>/case<N>/conversation.json` - Conversation traces (one per case)
 - `summary.json` - Aggregated results
 
 ## CLI Usage

@@ -282,6 +282,142 @@ ref"A1" := "one cell"      // a 1x1 fill is a single Put
 Fill cost is proportional to range size by design — `ref"A:A" := 0` really creates 1,048,576
 cells. Size fill ranges to your data.
 
+## The Edit algebra: `wb.edit` / `sheet.edit` (since 0.21.0)
+
+A `Patch` is sheet-local and formula-blind. `Edit` (`com.tjclp.xl.ops.Edit`, on the prelude
+surface) is the **workbook-level** operation vocabulary — one case per batch op and mutating CLI
+verb, 49 in all — and every mutating surface lowers to `Vector[Edit]`: the batch JSON document,
+the CLI verbs and `wb.edit(...)` in a script all run through the same interpreter
+(`Edit.applyAll`), so a script gets exactly the semantics `xl batch` has, including the ones a
+`Patch` cannot express (formula dragging, structural edits, sheet management).
+
+**Targets carry their own sheet.** `Loc(sheet: Option[SheetName], ref: ARef)` is one cell,
+`Area(sheet, range: CellRange)` a range, and the row/column edits take `sheet: Option[SheetName]`
+directly with a `RowSpan` / `ColSpan`. `None` means *the scope's default sheet* — THE sheet rule,
+the same one the CLI applies: a qualifier wins, then the scope's default, then the only sheet of a
+single-sheet book, else `SheetRequired`. `Loc.parse("'Q1 Data'!B7")`, `Area.parse("A1:B2")`,
+`ColSpan.parse("E:H")` and `RowSpan.parse("10:20")` read the CLI spellings; `Area.cell(loc)` is a
+1x1 area.
+
+| Group | Cases |
+|-------|-------|
+| Cell content | `Put(at: Loc, value: CellValue, format: Option[FormatHint])` — build it with **`Edit.put(loc, a)`** / **`Edit.put(ref, a)`** so a `LocalDate`/`BigDecimal` keeps its codec format; `PutValues(at: Area, values: Vector[CellValue], format)` row-major; `PutFormula(at: Loc, formula: String, format)`; `PutFormulas(at: Area, formulas, format)` one per cell, as written; **`DragFormula(at: Area, formula, anchor: ARef, format)`** shifts relative refs from `anchor` like fill-down; **`Fill(source: Area, target: CellRange, Edit.FillDir.Down \| Right)`**; `Copy(source: Area, target: Loc, valuesOnly)` (either side may name another sheet); `Sort(at: Area, keys: Vector[Edit.SortKeySpec], hasHeader)` (`SortKeySpec.ascending(col)` / `.descending(col)`); `Clear(at: Area, what: ClearWhat)` (`ClearWhat.contents` / `.styles` / `.comments` / `.all`) |
+| Style & layout | `Style(at: Area, overlay: StyleOverlay, mode: StyleMode.Merge \| Replace)`; `Merge(at)`, `Unmerge(at)`; `ColWidth(sheet, cols: ColSpan, width)`, `RowHeight(sheet, rows: RowSpan, height)`; `HideCols`/`ShowCols(sheet, cols)`, `HideRows`/`ShowRows(sheet, rows)`; `AutoFit(sheet, cols: Option[ColSpan])` (`None` = every used column) |
+| Outline | `GroupRows(sheet, rows, level, collapsed)`, `GroupCols(sheet, cols, level, collapsed)` (level 1-7); `UngroupRows(sheet, rows)`, `UngroupCols(sheet, cols)` |
+| Annotations & objects | `SetComment(at: Loc, comment: Comment)`, `RemoveComment(at)`; `Hyperlink(at, target: Option[String])` (`None` clears); `AddConditionalFormat(sheet, ranges: Vector[CellRange], rules: Vector[CfRule])`; `AddChart(sheet, chart, anchor: DrawingAnchor)`; `AddImage(sheet, image: ImageData, anchor)` |
+| Sheet view & print | `Freeze(at: Loc)`, `Unfreeze(sheet)`; `SetSheetView(sheet, gridlines, zoom, tabSelected)`; `SetTabColor(sheet, color: Option[Color])`; `SetAutoFilter(sheet, range: Option[CellRange])`; `SetPageSetup(sheet, orientation, scale, fitToWidth, fitToHeight, fitToPage)`; `SetHeaderFooter(sheet, oddHeader, oddFooter, evenHeader, evenFooter, firstHeader, firstFooter, differentOddEven, differentFirst)` |
+| Structure | `InsertRows(sheet, at: Row, count)`, `DeleteRows(sheet, at: Row, count)`, `InsertCols(sheet, at: Column, count)`, `DeleteCols(sheet, at: Column, count)` — references on every sheet are rewritten through the evaluator (`#REF!` on loss) |
+| Workbook | `AddSheet(name, after, before)` (at most one of the two); `RemoveSheet(name)`; `RenameSheet(from, to)` (rewrites every reference, and retargets the scope when it renames the default sheet); `MoveSheet(name, toIndex, after, before)` (exactly one; `toIndex` is the FINAL 0-based position); `CopySheet(source, target)`; `HideSheet(name, veryHidden)`, `ShowSheet(name)`; `DefineName(name, refersTo, scope)`, `RemoveName(name, scope)` |
+
+Two value types ride along. **`FormatHint`** says where a number format came from: `Inferred(fmt)`
+(a codec's hint — applied only when the cell's format is General, exactly as `Sheet.put` does)
+and `Explicit(fmt)` (the caller asked — replaces the number format, keeps font/fill/border).
+**`StyleOverlay`** is a *partial* style — every field `Option`, so "un-bold" is expressible —
+with a right-biased `++` (`StyleOverlay.empty` is the identity) and `StyleOverlay.of(style)` /
+`ofBorder(border)` to lift a full style; `StyleMode.Merge` overlays onto each cell's current
+style, `Replace` applies it to `CellStyle.default`.
+
+**Entry points** — all take the prelude's `given FormulaSupport` (the evaluator's
+`EvalFormulaSupport`, stated explicitly in the prelude because wildcard exports skip givens):
+
+| Call | Returns | Default sheet |
+|------|---------|---------------|
+| `wb.edit(edits*)` | `XLResult[Workbook]` | none — a qualified target names its sheet; an unqualified one resolves only on a single-sheet book, else `SheetRequired` |
+| `wb.editIn(defaultSheet)(edits*)` | `XLResult[Workbook]` | `defaultSheet` for every unqualified target — the CLI's `-s` |
+| `sheet.edit(edits*)` | `XLResult[Sheet]` | the sheet itself (a one-sheet workbook under the hood); an edit naming another sheet is `SheetNotFound`; a rename of this sheet is followed |
+| `Edit.applyAll(wb, Vector[Edit], scope: EditScope)` | `XLResult[Applied]` | explicit — `Applied(workbook, planned, scope)` is the edited book, one `Planned(index, edit, sheet, touched)` row per edit and the scope *after* the sequence; `applied.touchedBySheet` seeds an after-edit recalculation cone, `applied.structural` says the whole book needs one |
+| `Edit.plan(wb, edits, scope)` | `XLResult[Vector[Planned]]` | the same fold with the workbook discarded — a **semantic** dry-run that fails exactly where `applyAll` would (and costs the same) |
+| `Edit.validate(edit)` | `XLResult[Unit]` | the **static**, workbook-free checks of one edit: counts match the area, spans and levels are in range, a formula parses, `MoveSheet` names exactly one destination, … |
+| `Edit.lower(edit, sheet)` / `Patch.toEdits(patch, sheet)` | `Option[Patch]` / `Option[Vector[Edit]]` | the bridge to the sheet-local kernel, `None` when the edit needs formula support, another sheet or the workbook |
+
+The scope type is **`EditScope`** on the prelude and pure surfaces (its source name, `ops.Scope`,
+collides with JMH's and ZIO's `Scope` in files that import both): `EditScope.none`,
+`EditScope.of(sheet)`, and `scope.after(edit)` moves the default when a `RenameSheet` renames it.
+
+**Fail-fast, all-or-nothing.** The edits apply in order; the first failure ends the run with
+`Left(XLError.EditFailed(index, op, cause))` — `index` is the **1-based** position of the failing
+edit, `op` its kebab name (`drag-formula`, `delete-rows`, …), `cause` the underlying error — and
+the input workbook is never partially written. `err.opIndex` is `Some(index)`, `err.root` the
+cause, and `err.code` / `err.hint` / `err.candidates` are the *cause's*, so a batch failure is
+classified by what went wrong, not by where; `err.message` reads `op 2 (drag-formula): …`. It is
+the very `location.opIndex` a `BATCH_OP_FAILED` from `xl batch` carries, and `orExit` prints it
+in the CLI's envelope. `EditSchema` is the registry `xl batch --schema` prints, as values:
+`EditSchema.all`, `EditSchema.find("putf")`, `EditSchema.nameOf(edit)`.
+
+```scala
+//> using scala 3.9.0
+//> using dep com.tjclp::xl:0.21.0
+import com.tjclp.xl.scripting.{*, given}
+
+val Data = SheetName.unsafe("Data")
+val Summary = SheetName.unsafe("Summary")
+val book = Workbook(
+  Sheet(Data)
+    .put(ref"A1", "Region").put(ref"B1", "Units").put(ref"C1", "Price")
+    .put(ref"A2", "North").put(ref"B2", 12).put(ref"C2", BigDecimal("9.50"))
+    .put(ref"A3", "South").put(ref"B3", 7).put(ref"C3", BigDecimal("11.25"))
+)
+
+// editIn(Data): every target with sheet = None lands on Data; a Some(...) names its own sheet.
+val edited = orExit(
+  book.editIn(Data)(
+    Edit.put(ref"D1", "Total"),                                            // codec inference kept
+    Edit.DragFormula(Area(None, ref"D2:D3"), "=B2*C2", ref"D2", None),     // D3 becomes =B3*C3
+    Edit.PutFormula(Loc(None, ref"D4"), "=SUM(D2:D3)", Some(FormatHint.Explicit(NumFmt.Currency))),
+    Edit.Style(Area(None, ref"A1:D1"), StyleOverlay(bold = Some(true)), StyleMode.Merge),
+    Edit.AutoFit(None, None),                                              // every used column
+    Edit.Freeze(Loc(None, ref"A2")),
+    Edit.AddSheet(Summary, after = Some(Data), before = None),
+    Edit.PutFormula(Loc(Some(Summary), ref"B2"), "=Data!D4", None)         // qualified: not the default
+  )
+) // a Left prints "Error: op N (<op>): …" + code/hint in the CLI's envelope and exits 1
+
+val result = Excel.writeChecked(edited, "/tmp/edited.xlsx") // caches D2:D4 and Summary!B2, writes
+println(s"wrote ${edited.sheets.size} sheets; clean: ${result.isClean}")
+```
+
+`Edit.plan` and `Edit.applyAll` expose the fold itself; `Edit.validate` is the static check:
+
+```scala
+//> using scala 3.9.0
+//> using dep com.tjclp::xl:0.21.0
+import com.tjclp.xl.scripting.{*, given}
+
+val Data = SheetName.unsafe("Data")
+val book = Workbook(Sheet(Data).put(ref"A1", 10).put(ref"A2", 20).put(ref"B1", fx"=A1*2"))
+
+val edits = Vector(
+  Edit.Fill(Area.cell(Loc(None, ref"B1")), ref"B1:B2", Edit.FillDir.Down), // B2 = A2*2
+  Edit.InsertRows(None, Row.from1(1), 1),                                  // every formula shifts
+  Edit.RenameSheet(Data, SheetName.unsafe("Model"))                        // the scope follows
+)
+
+edits.foreach(e => orExit(Edit.validate(e)))                       // static, no workbook needed
+
+val planned = orExit(Edit.plan(book, edits, EditScope.of(Data)))   // semantic dry-run
+planned.foreach { p =>
+  println(s"${p.index} ${EditSchema.nameOf(p.edit)} on ${p.sheet.map(_.value)} touched ${p.touched.map(_.toA1)}")
+}
+
+val applied = orExit(Edit.applyAll(book, edits, EditScope.of(Data)))
+println(s"default sheet now ${applied.scope.defaultSheet.map(_.value)}; structural = ${applied.structural}")
+
+// All-or-nothing: the failing edit names its 1-based position; `book` is untouched
+book.edit(
+  Edit.Merge(Area(None, ref"A1:B1")),
+  Edit.DeleteRows(Some(SheetName.unsafe("Nope")), Row.from1(1), 1)
+) match
+  case Left(err) => println(s"${err.opIndex} ${err.code}: ${err.message}") // Some(2) SHEET_NOT_FOUND: op 2 (delete-rows): …
+  case Right(_) => println("unexpected")
+```
+
+Formula-aware edits (`DragFormula`, `Fill`, the structural four, `RenameSheet`) need a parser,
+which xl-core does not have: the prelude supplies xl-evaluator's `EvalFormulaSupport` as the
+`given`, so scripts never see the seam. `FormulaSupport.textOnly` is the explicit opt-out for a
+text-only interpreter — it stores formulas as written and **refuses** those edits with
+`UnsupportedCapability` rather than write a silent `#REF!`
+(`book.edit(drag)(using FormulaSupport.textOnly)`).
+
 ## Formulas: build, recalculate, inspect
 
 `wb.recalculate()` is a **total** whole-workbook recalculation: every formula on every sheet

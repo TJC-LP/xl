@@ -86,7 +86,10 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
    `xl -f file describe`.
 3. **Reads need `-f`; writes need `-o` (a new file) or `-i` (in place).** A write with neither is
    `OUTPUT_REQUIRED`, exit 2, before anything is read. Writes are atomic: the output appears only
-   when the whole command succeeded.
+   when the whole command succeeded. **The file is never positional**: the first non-flag token
+   is the verb, so `xl data.xlsx view A1:B4` takes `data.xlsx` for a verb and fails
+   `UNKNOWN_VERB` (exit 2) — a verb's positionals are its own (the range, the ref, the formula,
+   `copy`'s source and target, `delete-rows`' row and count).
 4. **Always pass `--json` when a program reads the result.** Every verb, success or failure, then
    prints exactly one envelope on stdout — `{ok, exitCode, verb, version, data, warnings, error}`
    — and nothing else there. `ok` is `true` exactly when `error` is `null`. On a failure (exit 2
@@ -136,7 +139,8 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | What-if without writing | `eval "=…" --with "A1=5"`, `evala` (arrays, `--at` to spill) | no `-f` for constants |
 | Write values / formulas | `put`, `putf` — or a `batch` | one formula over a range drags with `$` anchoring |
 | Style, merge, comments, hyperlinks | `style`, `merge`/`unmerge`, `comment`/`remove-comment` — or `batch` ops | styles merge unless `--replace` |
-| Rows and columns | `row`, `col`, `autofit`, `group-rows`/`group-cols`, `insert-rows`/`delete-rows`, `insert-cols`/`delete-cols` | structural edits rewrite formulas; `#REF!` on loss |
+| Copy, fill, sort or clear a block | `copy <source> <target> [--values-only]`, `fill <source> <target> [--right]`, `sort <range> --by <col>`, `clear <range> [--all\|--styles\|--comments]` — or the batch ops `copy` and `clear` | `copy` shifts relative references like Excel; the target is a cell (expanded to the source's size) or a range, and either side may be sheet-qualified: `{"op":"copy","source":"Data!A1:B2","target":"Summary!A1","valuesOnly":false}`. `fill` and `sort` have no batch twin |
+| Rows and columns | `row <n>`, `col <letter>`, `autofit [--columns A:F]`, `group-rows <10:20>`/`group-cols <E:H>` (`--level n`, `--collapsed`), `insert-rows <at-row> [count]`/`delete-rows <at-row> [count]`, `insert-cols <at-col> [count]`/`delete-cols <at-col\|C:E> [count]` | `at-row` is one 1-based row and `count` defaults to 1: `delete-rows 7 5` deletes rows 7-11 — there is **no** `7:11` form (only the column verbs take `C:E`). Structural edits rewrite formulas on every sheet, `#REF!` on loss; they have no batch twin |
 | Sheets | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide\|show`, `name add\|rm` | `rename-sheet` rewrites every reference to the sheet |
 | Deliverable finish | `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `autofilter`, `freeze`, `cf add`, `chart add`, `add-image` | every one but `add-image` has a batch twin |
 | Import data | `import <csv>`, `import-md <table.md\|->` | `--new-sheet`, type detection |
