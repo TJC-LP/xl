@@ -30,6 +30,8 @@ Everything below is in scope after `import com.tjclp.xl.scripting.{*, given}`.
 | `RowCodecError` | `Field(row, column, field, cause)` \| `Missing(row, column, field)` \| `HeaderNotFound(header, headerRow, available)` \| `Width(expected, actual)` — `.message`, `.toXLError` (0.21.0) |
 | `RowsPlaced` | `(sheet, headerRange, dataRange)` + `range` (header ∪ data) and `count` — what `putRows`/`putRowsWithHeader`/`putTable` return (0.21.0) |
 | `CellEvalError` | `(sheet, ref, error)` with `.render` → `"Sales!B2: ..."` |
+| `TExpr[A]` | typed formula AST from `FormulaParser.parse`. **Breaking in 0.21.0** ([#612](https://github.com/TJC-LP/xl/issues/612)): `RangeRef`/`SheetRange`/`ExternalRange` and `RangeLocation.Local`/`CrossSheet`/`External` gained a trailing `form: RangeForm = RangeForm.Cells` field (a positional match on any of the six needs one more `_`), and `TExpr.ErrorLit(err)` / `RangeLocation.Error(err)` are new arms an exhaustive match must add — error literals (`#REF!`, `#N/A`, `#DIV/0!`, …) parse to them and print back verbatim. Constructor calls are source-compatible; a downstream artifact compiled against ≤0.20.0 must be rebuilt |
+| `RangeForm` | `Cells` (`A1:B2`) \| `Columns` (`A:A`, `$A:C`) \| `Rows` (`1:1`, `$3:$10`) — the whole-column / whole-row marker on range nodes, so `A:A` prints as `A:A` (not `$A1:$A1048576`) and a drag moves it only along its axis; exported beside `TExpr` (0.21.0) |
 | `Edit` | enum, 49 cases — the batch/CLI operation vocabulary as values (`Put`, `DragFormula`, `Fill`, `Copy`, `Sort`, `Clear`, `Style`, `Merge`, `InsertRows`, `AddSheet`, `RenameSheet`, …); `Edit.FillDir` / `Edit.SortDir` / `Edit.SortMode` / `Edit.SortKeySpec` nest in the companion (0.21.0) — see Edit algebra |
 | `Loc` / `Area` | `(sheet: Option[SheetName], ref: ARef)` / `(sheet, range: CellRange)` — an edit's target; `None` = the scope's default sheet; `Loc.parse("'Q1 Data'!B7")` / `Area.parse("A1:B2")`; `Area.cell(loc)` (0.21.0) |
 | `RowSpan` / `ColSpan` | inclusive, normalized `10:20` / `E:H`; `RowSpan.parse` / `ColSpan.parse` refuse the other axis; `.rows` / `.columns`, `.size`, `.render` (0.21.0) |
@@ -146,7 +148,9 @@ Typed reads see through a formula's cached value (since 0.20.0; GH-477): `Formul
 | `wb.upsert("Name", f: Sheet => Sheet)` | `Workbook` (literal) / `XLResult` (runtime) | update-or-create, total |
 | `wb.update("Name", f)` | `XLResult[Workbook]` | fails if sheet absent |
 | `wb.remove("Name")` | `XLResult[Workbook]` | can't remove last sheet |
-| `wb.rename(old, new)` | `XLResult[Workbook]` | |
+| `wb.rename(old, new)` | `XLResult[Workbook]` | tab-only: does NOT rewrite `Sheet1!A1` in formulas — use `SheetRenamer.rename` |
+| `SheetRenamer.rename(wb, from, to)` | `XLResult[Workbook]` | 0.20.0 ([#559](https://github.com/TJC-LP/xl/issues/559)): `wb.rename` plus the reference rewrite in every cell formula, defined name, CF and DV formula, caches preserved; `Left(FormulaError)` naming the first text that mentions `from` but cannot be parsed, workbook untouched |
+| `SheetRenamer.renameLocated(wb, from, to)` | `Either[SheetRenamer.Refusal, Workbook]` | 0.21.0 ([#608](https://github.com/TJC-LP/xl/issues/608)): `rename` with WHERE it refused — `Refusal(site: Option[Site], error: XLError)`; `Site.Cell(sheet, ref)` \| `ConditionalFormat(sheet)` \| `DataValidation(sheet)` \| `Name(name)`, `site.describe` spells `Summary!I23`; `site` is `None` for `Workbook.rename`'s own `SheetNotFound`/`DuplicateSheet` |
 | `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))` | `Workbook` | author `<calcPr>` iterative calc (0.13.0); `wb.metadata.calcPr` reads it back |
 | `wb.edit(edits: Edit*)` | `XLResult[Workbook]` | 0.21.0: apply `Edit`s in order under no default sheet — fail-fast, all-or-nothing, `Left(EditFailed(index, op, cause))` names the 1-based failing edit; a `None` target resolves only on a single-sheet book (else `SheetRequired`) — see Edit algebra |
 | `wb.editIn(sheet: SheetName)(edits: Edit*)` | `XLResult[Workbook]` | 0.21.0: `edit` with `sheet` as the default for every unqualified target (the CLI's `-s`) |
@@ -316,7 +320,7 @@ Header/footer strings support Excel codes — `&P` page, `&N` total pages, `&D` 
 | `sheet.evaluateFormula(formula[, clock][, rng][, workbook])` | `XLResult[CellValue]` | pass `Some(wb)` iff formula references other sheets |
 | `sheet.putFormulaInheriting(ref, formula[, workbook])` | `XLResult[Sheet]` | 0.11.2+: puts the formula AND inherits the referenced cells' number format into a General target (Excel's entry behavior) |
 | `sheet.evaluateWithDependencyCheck([clock])` | `XLResult[Map[ARef, CellValue]]` | fail-fast on first error/cycle |
-| `FormulaParser.parse("=A1+B1")` | `Either[ParseError, TExpr[?]]` | AST access |
+| `FormulaParser.parse("=A1+B1")` | `Either[ParseError, TExpr[?]]` | AST access; 0.21.0: range nodes carry a `RangeForm` and error literals parse to `TExpr.ErrorLit` — a **Breaking** pattern-arity change for code matching range nodes, see `TExpr` in Key Types |
 | `DependencyGraph.fromSheet(sheet)` | `DependencyGraph` | `.precedents(ref)` / `.dependents(ref)` |
 | `Clock.system` / `Clock.fixedDate(LocalDate)` | `Clock` | deterministic TODAY()/NOW() |
 

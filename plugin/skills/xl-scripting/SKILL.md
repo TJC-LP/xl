@@ -38,7 +38,7 @@ The canonical header for every script (this is the single source of truth — re
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -125,7 +125,7 @@ orExit(wb.update("Sales", f))                      // 0.21.0: or print "Error: �
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -379,7 +379,7 @@ Native Excel `TABLE()` two-variable data tables (0.18.0) — the house sensitivi
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 
 val model = Sheet("Sensitivity")
@@ -433,7 +433,7 @@ val sales = orExit(wb("Sales"))                      // SheetNotFound → printe
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -482,7 +482,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

@@ -5,9 +5,9 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 # XL CLI - Excel Operations
 
-**Requires xl >= 0.20.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
+**Requires xl >= 0.21.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
 `xl batch --schema`, `describe`, `audit`, `deps`, the 0/1/2/3 exit table and globals-anywhere; every
-statement in this skill assumes 0.20.0 or later.
+statement in this skill assumes 0.21.0 or later.
 
 The binary documents itself and is the reference: `xl <verb> --help` for a verb's flags,
 `xl schema` for every verb, `xl batch --schema` for every batch op and field, `xl functions --json`
@@ -15,7 +15,7 @@ for every formula function. This skill is the map; those are the territory.
 
 ## Installation
 
-Check if installed: `which xl || echo "not installed"`; then `xl --version` (must print `0.20.0`
+Check if installed: `which xl || echo "not installed"`; then `xl --version` (must print `0.21.0`
 or later).
 
 **Release download** — the latest published native binary (no JDK required):
@@ -247,7 +247,8 @@ xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.pn
 ### Large files (100k+ rows)
 
 `--stream` runs in O(1) memory for the reads `search`, `stats`, `bounds`, `view`
-(markdown/csv/json), `cell`, `describe` (the metadata card) and `sheets` (the listing), and for
+(markdown/csv/json, a bounded window — `view --limit 0` materialises the whole sheet first, so page
+with `--limit`/`--offset` or a range; #635), `cell`, `describe` (the metadata card) and `sheets` (the listing), and for
 the writes `put`, `putf`, `style` and `batch` — the last for streamable ops only (`xl batch
 --schema` marks each op `x-streamable`; `batch --help` marks the others `[not with --stream]`).
 Every other write verb accepts the flag but loads the workbook in memory and only writes through

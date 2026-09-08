@@ -40,7 +40,7 @@ export PATH="$HOME/.local/bin:$PATH"
 -s, --sheet <name>    # Sheet to operate on (a qualified ref wins; a single-sheet book needs neither)
 -o, --output <path>   # Output file for mutations
 -i, --in-place        # Edit file in place (same as -o matching -f)
---stream              # O(1) memory streaming for large files (search/stats/bounds/view + writes)
+--stream              # O(1) memory streaming for large files (search/stats/bounds/filter, a bounded view window, writes; `view --limit 0` materialises the whole sheet — #635)
 --max-size <MB>       # Max uncompressed size for in-memory load (default 100, 0 = unlimited; the heap still bounds what fits — see below)
 --backend <name>      # XML backend: scalaxml (default) or saxstax (faster)
 --no-recalc           # Write verbs: apply the edit, recalculate nothing (alias --preserve-caches)
@@ -342,7 +342,7 @@ Without a range, the sheet's used range; `--offset` and `--limit` page through t
 | `--formulas` | flag | No | false | Show formulas instead of values |
 | `--eval` | flag | No | false | Evaluate formulas (compute live values) |
 | `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
-| `--limit` | int | No | 50 | Max rows to display (0 = no limit). When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (under `--stream` too, since 0.21.0); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
+| `--limit` | int | No | 50 | Max rows to display (0 = no limit). Under `--stream`, `--limit 0` is the one read that is NOT constant-memory: the whole sheet is materialised before the first row is rendered ([#635](https://github.com/TJC-LP/xl/issues/635)) — page a very large sheet with `--limit`/`--offset` or a range instead. When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (under `--stream` too, since 0.21.0); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
 | `--offset` | int | No | 0 | Rows to skip from the top of the range before `--limit` applies; the trailer then reads "… showing rows X–Y of N". An offset past the last row is a usage error |
 | `--max-cols` | int | No | 0 | Max columns to display, from the left (0 = all); json adds `totalCols` when clipped, the other formats report "… showing X of Y columns" like the row notice |
 | `--skip-empty` | flag | No | false | Skip empty cells (JSON) or empty rows/columns (tabular) |

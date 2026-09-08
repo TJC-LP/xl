@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -194,7 +194,7 @@ cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 
 val region = Seq("North", "East").mkString(" ")                     // runtime name
@@ -439,7 +439,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -557,7 +557,12 @@ SheetRenamer.references(wb, SheetName.unsafe("Sheet1")) // Vector[QualifiedRef]:
 Cached values and formula record kinds are preserved (a rename changes no value); a string literal
 that spells the name, an external-workbook reference (`[2]Sheet1!A1`) and a sibling whose name
 merely contains it (`Sheet10`) are untouched; a dependent text that mentions the sheet but cannot
-be parsed refuses the whole rename (`Left(FormulaError)`) with the workbook untouched. Every changed
+be parsed refuses the whole rename (`Left(FormulaError)`) with the workbook untouched. Since 0.21.0
+([#608](https://github.com/TJC-LP/xl/issues/608)) `SheetRenamer.renameLocated(wb, from, to)` is the
+same rename whose `Left` is a `Refusal(site, error)` naming where that text lives — `Site.Cell(sheet,
+ref)`, `ConditionalFormat(sheet)`, `DataValidation(sheet)` or `Name(name)`, spelled by `site.describe`
+as `Summary!I23` — with `site = None` for `Workbook.rename`'s own `SheetNotFound`/`DuplicateSheet`;
+`rename` is `renameLocated` with the site dropped. Every changed
 sheet goes back through `Workbook.put`, so a workbook read from disk marks exactly the rewritten
 sheets modified; because a rename also changes `workbook.xml`, the writer regenerates every
 worksheet part deterministically, and sheets that never mentioned the old name come out
@@ -816,7 +821,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -886,7 +891,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

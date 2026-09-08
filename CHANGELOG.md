@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-08
+
+Agent-first Wave 2a (ADR-017): the `Edit` algebra — one operation vocabulary for every batch op and
+mutating verb, with a refusing `FormulaSupport` and seven laws — `RowCodec` records
+(`derives RowCodec`, `readRows`/`readRowsByHeader`/`putRows`/`putTable`), `CellRecord`/`SheetSource`
+behind every read verb with typed `--json` payloads, the scripting completions
+`Excel.writeChecked`/`readSheet`/`readMetadata`/`modifyR` and `orExit`, the CLI contract as a CI
+gate, and the `_xlfn.` remainder (#577, #588). The 0.21.0 dogfood then fixed what a million-row book
+and a real financial model surfaced: an edit no longer withdraws the caches of formulas it cannot
+reach (#606), whole-column and whole-row forms survive every rewrite and error literals parse (#612),
+an in-memory load that cannot fit is a typed `RESOURCE_LIMIT` instead of a raw `OutOfMemoryError`
+(#636), `search` stops at `--limit` (#637), and `rename-sheet` refusals are typed and located (#608,
+#609). ADR-016 (Scala Native / Scala.js) is deferred; its Wave 25 A1 platform shims (#542) landed as
+hygiene with byte-identical output. Entries led with **Breaking:** change behaviour for existing
+users: `search`'s total is a lower bound unless `--total`, the formula AST's range nodes carry a
+`RangeForm` (pattern arity), a fill-drag writes `#REF!` instead of clamping, column letters parse
+ASCII-only, and `RenderUtils.toAwtFont` is removed.
+
 ### Added
 
 - **`RESOURCE_LIMIT` and `MEMORY_PRESSURE`** (#636): a CLI error code (exit 3) for a workbook
@@ -70,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it as `volatile` beside `dynamicDeps` (also the `volatile` flag in `generated/functions.md`).
 - **The `Edit` algebra** (#582, ADR-017 §2.12): `com.tjclp.xl.ops.Edit` is one operation
   vocabulary for every batch op and mutating verb (49 cases), with `Loc`/`Area`/`ColSpan`/`RowSpan`
-  parsers, `Scope` (a rename updates the default sheet), `FormatHint = Inferred | Explicit`,
+  parsers, `EditScope` (a rename updates the default sheet), `FormatHint = Inferred | Explicit`,
   `StyleOverlay`, and `EditSchema` describing each case's fields. `Edit.applyAll` applies a
   sequence all-or-nothing with the 1-based index of the failing edit, `Edit.plan` is the same fold
   keeping only the planned rows (a semantic dry-run), `Edit.validate` the static edit-local check;
