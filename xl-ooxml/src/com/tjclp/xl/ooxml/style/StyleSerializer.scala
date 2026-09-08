@@ -3,7 +3,7 @@ package com.tjclp.xl.ooxml.style
 import scala.xml.*
 
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.ooxml.XmlUtil.{elem, nsSpreadsheetML}
+import com.tjclp.xl.ooxml.XmlUtil.{elem, getChildren, nsSpreadsheetML}
 import com.tjclp.xl.ooxml.{SaxSerializable, SaxWriter, XmlWritable}
 import com.tjclp.xl.ooxml.SaxSupport.*
 import com.tjclp.xl.styles.CellStyle
@@ -18,14 +18,78 @@ import com.tjclp.xl.styles.units.StyleId
 private[ooxml] val defaultStylesScope: NamespaceBinding =
   NamespaceBinding(null, nsSpreadsheetML, TopScope)
 
-/** Serializer for xl/styles.xml */
+/**
+ * Serializer for xl/styles.xml
+ *
+ * @param preservedDxfs
+ *   differential formats for conditional formatting, verbatim from the source
+ * @param preserved
+ *   the source's unmodeled sections — named-style masters and names, table-style defaults, palette,
+ *   styles-level extLst — re-emitted verbatim in schema order (GH-610). With `cellStyleXfs` present
+ *   every cellXf carries its `StyleIndex.xfIds` master; otherwise the single `Normal` pair is
+ *   written and every `xfId` is 0, so no reference can dangle.
+ */
 final case class OoxmlStyles(
   index: StyleIndex,
   rootAttributes: Option[MetaData] = None,
   rootScope: NamespaceBinding = defaultStylesScope,
-  preservedDxfs: Option[Elem] = None // Differential formats for conditional formatting
+  preservedDxfs: Option[Elem] = None, // Differential formats for conditional formatting
+  preserved: PreservedStyleParts = PreservedStyleParts.empty
 ) extends XmlWritable,
       SaxSerializable:
+
+  /** Named-style masters riding through; 0 when the single Normal pair is written instead. */
+  private val masterCount: Int = preserved.masterCount
+
+  /**
+   * An `xfId` as written: the carried master when it exists in the emitted `cellStyleXfs`, else 0.
+   * xl introduces no dangling reference — a source's own out-of-range `xfId`, or one whose masters
+   * table is empty, is repaired to Normal, as the pre-GH-610 writer did for every xf.
+   */
+  private def clampXfId(id: Int): Int =
+    if preserved.hasNamedStyles && id >= 0 && id < masterCount then id else 0
+
+  private def xfIdToken(i: Int): String = clampXfId(index.xfIdAt(i)).toString
+
+  /**
+   * The source `<xf>` records of `cellXfs`, in table order (GH-610). Output slot `i` IS source xf
+   * `i` — `StyleIndex` keeps the source table positional and only appends — so such a slot is
+   * emitted verbatim (references followed, `xfId` clamped) rather than regenerated from its
+   * `CellStyle`, keeping `applyFont`/`applyFill`/`applyBorder`/`applyNumberFormat`, `quotePrefix`,
+   * `<protection>` and the source's own attribute order. Slots past the source table are xl's.
+   */
+  private val sourceCellXfs: Vector[Elem] =
+    preserved.cellXfs.map(e => getChildren(e, "xf").toVector).getOrElse(Vector.empty)
+
+  /**
+   * Component-reference remaps for a preserved `<xf>`: where source table entry `i` landed in the
+   * output. Fonts and borders are positional in source mode, so those are identity; the fills table
+   * can shift when the serializer's mandatory `none`/`gray125` leaders dedup against a source table
+   * that does not lead with them, or when two source fills parse equal.
+   */
+  private def componentRemaps(
+    allFills: Vector[Fill],
+    fillMap: Map[Fill, Int]
+  ): Map[String, Int => Int] =
+    Map(
+      "fontId" -> OoxmlStyles
+        .followTable(index.fonts, index.fonts, OoxmlStyles.firstIndex(index.fonts)),
+      "fillId" -> OoxmlStyles.followTable(index.fills, allFills, fillMap),
+      "borderId" -> OoxmlStyles
+        .followTable(index.borders, index.borders, OoxmlStyles.firstIndex(index.borders))
+    )
+
+  /** The preserved `<cellStyleXfs>` (when it has masters), component references followed. */
+  private def preservedCellStyleXfs(allFills: Vector[Fill], fillMap: Map[Fill, Int]): Option[Elem] =
+    preserved.cellStyleXfs
+      .filter(_ => preserved.hasNamedStyles)
+      .map(OoxmlStyles.remapXfChildren(_, componentRemaps(allFills, fillMap)))
+
+  /**
+   * `<cellStyles>` rides through only alongside the masters it names (see [[PreservedStyleParts]]).
+   */
+  private def preservedCellStyles: Option[Elem] =
+    preserved.cellStyles.filter(_ => preserved.hasNamedStyles)
 
   def toXml: Elem =
     // Number formats (only custom ones; built-ins are implicit)
@@ -83,67 +147,57 @@ final case class OoxmlStyles(
     // The getOrElse(_, 0) fallback doubles as the GH-425 sentinel resolution: a workbook
     // defaultFont keeps Font.default out of the table (see StyleIndex), so styles carrying
     // the "unspecified" sentinel resolve to font slot 0 — the Normal font.
-    val fontMap = index.fonts.zipWithIndex.toMap
-    val fillMap = allFills.zipWithIndex.toMap
-    val borderMap = index.borders.zipWithIndex.toMap
+    // First occurrence wins: a source table can hold equal entries (fonts differing only in
+    // unmodeled attributes), and a regenerated xf must keep pointing at the earliest one.
+    val fontMap = OoxmlStyles.firstIndex(index.fonts)
+    val fillMap = OoxmlStyles.firstIndex(allFills)
+    val borderMap = OoxmlStyles.firstIndex(index.borders)
 
-    val cellXfsElem = elem("cellXfs", "count" -> index.cellStyles.size.toString)(
-      index.cellStyles.map { style =>
-        // Use 0 (default style) as fallback - OOXML requires non-negative indices
-        val fontIdx = fontMap.getOrElse(style.font, 0)
-        val fillIdx = fillMap.getOrElse(style.fill, 0)
-        val borderIdx = borderMap.getOrElse(style.border, 0)
-        val numFmtId = style.numFmtId.getOrElse {
-          // No raw ID -> derive from NumFmt enum (programmatic creation)
-          NumFmt
-            .builtInId(style.numFmt)
-            .getOrElse(
-              index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0)
-            )
-        }
-
-        // Serialize alignment as child element if non-default
-        val alignmentChild = alignmentToXml(style.align).toList
-        val hasAlignment = alignmentChild.nonEmpty
-
-        elem(
-          "xf",
-          "applyAlignment" -> (if hasAlignment then "1" else "0"),
-          "borderId" -> borderIdx.toString,
-          "fillId" -> fillIdx.toString,
-          "fontId" -> fontIdx.toString,
-          "numFmtId" -> numFmtId.toString,
-          "xfId" -> "0"
-        )(alignmentChild*)
-      }*
-    )
+    // GH-610: source cellXfs verbatim (references followed, xfId clamped); xl's own regenerated
+    val cellXfRemaps = componentRemaps(allFills, fillMap) + ("xfId" -> clampXfId)
+    val cellXfChildren = index.cellStyles.zipWithIndex.map { case (style, i) =>
+      sourceCellXfs.lift(i) match
+        case Some(xf) => OoxmlStyles.remapXfAttrs(xf, cellXfRemaps)
+        case None => cellXfToXml(style, i, fontMap, fillMap, borderMap)
+    }
+    // Preserved xfs carry the source document's scope: the container takes that same scope so
+    // nothing is re-declared on them (under a TopScope container scala.xml would print the whole
+    // chain on every xf); regenerated (TopScope) children print nothing under either.
+    val cellXfsElem = elem("cellXfs", "count" -> index.cellStyles.size.toString)(cellXfChildren*)
+      .copy(scope = sourceCellXfs.headOption.map(_.scope).getOrElse(TopScope))
 
     // cellStyleXfs: Master formatting records (required per ECMA-376 section 18.8.9).
-    // One Normal entry that cellXfs reference via xfId; fontId 0 makes font slot 0 the
-    // workbook default font (GH-425 — StyleIndex puts metadata.defaultFont there).
-    val cellStyleXfsElem = elem("cellStyleXfs", "count" -> "1")(
-      elem(
-        "xf",
-        "numFmtId" -> "0",
-        "fontId" -> "0",
-        "fillId" -> "0",
-        "borderId" -> "0"
-      )()
+    // A source's named-style masters ride through verbatim (GH-610); otherwise one Normal entry
+    // that cellXfs reference via xfId — fontId 0 makes font slot 0 the workbook default font
+    // (GH-425 — StyleIndex puts metadata.defaultFont there).
+    val cellStyleXfsElem = preservedCellStyleXfs(allFills, fillMap).getOrElse(
+      elem("cellStyleXfs", "count" -> "1")(
+        elem(
+          "xf",
+          "numFmtId" -> "0",
+          "fontId" -> "0",
+          "fillId" -> "0",
+          "borderId" -> "0"
+        )()
+      )
     )
 
-    // cellStyles: Named styles (required per ECMA-376 section 18.8.8)
-    // At minimum, need the default "Normal" style
-    val cellStylesElem = elem("cellStyles", "count" -> "1")(
-      elem(
-        "cellStyle",
-        "name" -> "Normal",
-        "xfId" -> "0",
-        "builtinId" -> "0"
-      )()
+    // cellStyles: Named styles (required per ECMA-376 section 18.8.8) — the source's names
+    // verbatim (GH-610), or at minimum the default "Normal" style
+    val cellStylesElem = preservedCellStyles.getOrElse(
+      elem("cellStyles", "count" -> "1")(
+        elem(
+          "cellStyle",
+          "name" -> "Normal",
+          "xfId" -> "0",
+          "builtinId" -> "0"
+        )()
+      )
     )
 
-    // Assemble styles.xml with preserved namespaces and differential formats
-    // OOXML order: numFmts, fonts, fills, borders, cellStyleXfs, cellXfs, cellStyles, dxfs
+    // Assemble styles.xml with preserved namespaces, differential formats and passthrough sections
+    // CT_Stylesheet order: numFmts, fonts, fills, borders, cellStyleXfs, cellXfs, cellStyles,
+    // dxfs, tableStyles, colors, extLst
     val children = numFmtsElem.toList ++ Seq(
       fontsElem,
       fillsElem,
@@ -151,7 +205,8 @@ final case class OoxmlStyles(
       cellStyleXfsElem,
       cellXfsElem,
       cellStylesElem
-    ) ++ preservedDxfs.toList
+    ) ++ preservedDxfs.toList ++ preserved.tableStyles.toList ++ preserved.colors.toList ++
+      preserved.extLst.toList
 
     // Use preserved attributes if available, otherwise create minimal xmlns
     rootAttributes match
@@ -211,67 +266,116 @@ final case class OoxmlStyles(
       index.borders.foreach(writeBorderSax(writer, _))
       writer.endElement()
 
+      val fontMap = OoxmlStyles.firstIndex(index.fonts)
+      val fillMap = OoxmlStyles.firstIndex(allFills)
+      val borderMap = OoxmlStyles.firstIndex(index.borders)
+
       // cellStyleXfs: Master formatting records (required per ECMA-376 section 18.8.9).
-      // fontId 0 = workbook default font, same contract as the DOM backend (GH-425)
-      writer.startElement("cellStyleXfs")
-      writer.writeAttribute("count", "1")
-      writer.startElement("xf")
-      writer.writeAttribute("numFmtId", "0")
-      writer.writeAttribute("fontId", "0")
-      writer.writeAttribute("fillId", "0")
-      writer.writeAttribute("borderId", "0")
-      writer.endElement() // xf
-      writer.endElement() // cellStyleXfs
+      // Source masters ride through verbatim (GH-610); else one Normal with fontId 0 = workbook
+      // default font, same contract as the DOM backend (GH-425)
+      preservedCellStyleXfs(allFills, fillMap) match
+        case Some(el) => writer.writeElem(el)
+        case None =>
+          writer.startElement("cellStyleXfs")
+          writer.writeAttribute("count", "1")
+          writer.startElement("xf")
+          writer.writeAttribute("numFmtId", "0")
+          writer.writeAttribute("fontId", "0")
+          writer.writeAttribute("fillId", "0")
+          writer.writeAttribute("borderId", "0")
+          writer.endElement() // xf
+          writer.endElement() // cellStyleXfs
 
-      // CellXfs
-      val fontMap = index.fonts.zipWithIndex.toMap
-      val fillMap = allFills.zipWithIndex.toMap
-      val borderMap = index.borders.zipWithIndex.toMap
-
+      // CellXfs — GH-610: source records verbatim (references followed, xfId clamped), xl's own
+      // regenerated, same split as the DOM backend
+      val cellXfRemaps = componentRemaps(allFills, fillMap) + ("xfId" -> clampXfId)
       writer.startElement("cellXfs")
       writer.writeAttribute("count", index.cellStyles.size.toString)
-      index.cellStyles.foreach { style =>
-        // Use 0 (default style) as fallback - OOXML requires non-negative indices
-        val fontIdx = fontMap.getOrElse(style.font, 0)
-        val fillIdx = fillMap.getOrElse(style.fill, 0)
-        val borderIdx = borderMap.getOrElse(style.border, 0)
-        val numFmtId = style.numFmtId.getOrElse {
-          NumFmt
-            .builtInId(style.numFmt)
-            .getOrElse(index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0))
-        }
-
-        writer.startElement("xf")
-        val alignmentChild = alignmentToSax(writer, style.align)
-        val hasAlignment = alignmentChild.isDefined
-        writer.writeAttribute("applyAlignment", if hasAlignment then "1" else "0")
-        writer.writeAttribute("borderId", borderIdx.toString)
-        writer.writeAttribute("fillId", fillIdx.toString)
-        writer.writeAttribute("fontId", fontIdx.toString)
-        writer.writeAttribute("numFmtId", numFmtId.toString)
-        writer.writeAttribute("xfId", "0")
-        alignmentChild.foreach(_.apply())
-        writer.endElement()
+      index.cellStyles.zipWithIndex.foreach { case (style, i) =>
+        sourceCellXfs.lift(i) match
+          case Some(xf) => writer.writeElem(OoxmlStyles.remapXfAttrs(xf, cellXfRemaps))
+          case None => writeCellXfSax(writer, style, i, fontMap, fillMap, borderMap)
       }
       writer.endElement() // cellXfs
 
-      // cellStyles: Named styles (required per ECMA-376 section 18.8.8)
-      writer.startElement("cellStyles")
-      writer.writeAttribute("count", "1")
-      writer.startElement("cellStyle")
-      writer.writeAttribute("name", "Normal")
-      writer.writeAttribute("xfId", "0")
-      writer.writeAttribute("builtinId", "0")
-      writer.endElement() // cellStyle
-      writer.endElement() // cellStyles
+      // cellStyles: Named styles (required per ECMA-376 section 18.8.8) — source names verbatim
+      // (GH-610), else the default Normal
+      preservedCellStyles match
+        case Some(el) => writer.writeElem(el)
+        case None =>
+          writer.startElement("cellStyles")
+          writer.writeAttribute("count", "1")
+          writer.startElement("cellStyle")
+          writer.writeAttribute("name", "Normal")
+          writer.writeAttribute("xfId", "0")
+          writer.writeAttribute("builtinId", "0")
+          writer.endElement() // cellStyle
+          writer.endElement() // cellStyles
 
-      // dxfs if preserved
+      // dxfs, tableStyles, colors, extLst if preserved (CT_Stylesheet order)
       preservedDxfs.foreach(writer.writeElem)
+      preserved.tableStyles.foreach(writer.writeElem)
+      preserved.colors.foreach(writer.writeElem)
+      preserved.extLst.foreach(writer.writeElem)
     }
 
     writer.endElement() // styleSheet
     writer.endDocument()
     writer.flush()
+
+  /** Built-in id, else the declared custom id for the style's format code, else General (0). */
+  private def numFmtIdOf(style: CellStyle): Int =
+    style.numFmtId.getOrElse {
+      // No raw ID -> derive from NumFmt enum (programmatic creation)
+      NumFmt
+        .builtInId(style.numFmt)
+        .getOrElse(index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0))
+    }
+
+  /**
+   * An xl-authored cellXf regenerated from its `CellStyle`. The `getOrElse(_, 0)` fallbacks double
+   * as the GH-425 sentinel resolution: a workbook defaultFont keeps Font.default out of the table
+   * (see StyleIndex), so styles carrying the "unspecified" sentinel resolve to font slot 0 — the
+   * Normal font. OOXML requires non-negative indices, so 0 (the default entry) is the fallback.
+   */
+  private def cellXfToXml(
+    style: CellStyle,
+    i: Int,
+    fontMap: Map[Font, Int],
+    fillMap: Map[Fill, Int],
+    borderMap: Map[Border, Int]
+  ): Elem =
+    // Serialize alignment as child element if non-default
+    val alignmentChild = alignmentToXml(style.align).toList
+    elem(
+      "xf",
+      "applyAlignment" -> (if alignmentChild.nonEmpty then "1" else "0"),
+      "borderId" -> borderMap.getOrElse(style.border, 0).toString,
+      "fillId" -> fillMap.getOrElse(style.fill, 0).toString,
+      "fontId" -> fontMap.getOrElse(style.font, 0).toString,
+      "numFmtId" -> numFmtIdOf(style).toString,
+      "xfId" -> xfIdToken(i)
+    )(alignmentChild*)
+
+  /** SAX twin of [[cellXfToXml]]: same attributes, same order. */
+  private def writeCellXfSax(
+    writer: SaxWriter,
+    style: CellStyle,
+    i: Int,
+    fontMap: Map[Font, Int],
+    fillMap: Map[Fill, Int],
+    borderMap: Map[Border, Int]
+  ): Unit =
+    writer.startElement("xf")
+    val alignmentChild = alignmentToSax(writer, style.align)
+    writer.writeAttribute("applyAlignment", if alignmentChild.isDefined then "1" else "0")
+    writer.writeAttribute("borderId", borderMap.getOrElse(style.border, 0).toString)
+    writer.writeAttribute("fillId", fillMap.getOrElse(style.fill, 0).toString)
+    writer.writeAttribute("fontId", fontMap.getOrElse(style.font, 0).toString)
+    writer.writeAttribute("numFmtId", numFmtIdOf(style).toString)
+    writer.writeAttribute("xfId", xfIdToken(i))
+    alignmentChild.foreach(_.apply())
+    writer.endElement()
 
   private def fontToXml(font: Font): Elem =
     val children = Vector(
@@ -520,6 +624,77 @@ final case class OoxmlStyles(
         OoxmlStyles.tintToken(tint).foreach(writer.writeAttribute("tint", _))
 
 object OoxmlStyles:
+
+  /**
+   * Where source table entry `i` lands in the output table (GH-610): `i` itself when the output
+   * still holds that entry at `i` (the positional, byte-stable case), else the output index of an
+   * equal entry, else `i` unchanged (a reference the source already left dangling is not ours to
+   * invent a target for).
+   */
+  private[ooxml] def followTable[A](source: Vector[A], out: Vector[A], outIndex: Map[A, Int])(
+    i: Int
+  ): Int =
+    source.lift(i) match
+      case Some(a) if out.lift(i).contains(a) => i
+      case Some(a) => outIndex.getOrElse(a, i)
+      case None => i
+
+  /**
+   * Re-point the `fontId`/`fillId`/`borderId` references of every `<xf>` in a preserved
+   * `<cellStyleXfs>` through the given index maps (GH-610). Attribute order, every other attribute
+   * (`numFmtId`, `applyX`, `quotePrefix`, ...) and child `<alignment>`/`<protection>` records are
+   * untouched; when no reference moves the SAME element comes back, so the DOM serializer emits the
+   * source bytes verbatim.
+   */
+  private[ooxml] def remapCellStyleXfs(
+    cellStyleXfs: Elem,
+    fontIdx: Int => Int,
+    fillIdx: Int => Int,
+    borderIdx: Int => Int
+  ): Elem =
+    remapXfChildren(
+      cellStyleXfs,
+      Map("fontId" -> fontIdx, "fillId" -> fillIdx, "borderId" -> borderIdx)
+    )
+
+  /**
+   * Value -> FIRST table index. `zipWithIndex.toMap` keeps the LAST duplicate, which moved every
+   * regenerated cellXf's `fontId` on a source whose fonts parse equal (GH-610 review).
+   */
+  private[ooxml] def firstIndex[A](table: Vector[A]): Map[A, Int] =
+    table.zipWithIndex.foldLeft(Map.empty[A, Int]) { case (acc, (a, i)) =>
+      if acc.contains(a) then acc else acc.updated(a, i)
+    }
+
+  /**
+   * Re-point the integer attributes named in `remaps` on one `<xf>`. Attribute order, every other
+   * attribute and the child records are untouched; when no value changes the SAME element comes
+   * back, so the DOM serializer emits the source bytes verbatim.
+   */
+  private[ooxml] def remapXfAttrs(xf: Elem, remaps: Map[String, Int => Int]): Elem =
+    def remapped(attr: MetaData): Option[String] =
+      remaps.get(attr.key).flatMap { f =>
+        attr.value.text.toIntOption.map(f).map(_.toString).filter(_ != attr.value.text)
+      }
+    val attrs = xf.attributes.iterator.toList
+    if attrs.forall(a => remapped(a).isEmpty) then xf
+    else
+      val rebuilt = attrs.foldRight(Null: MetaData) { (a, acc) =>
+        val v = remapped(a).getOrElse(a.value.text)
+        a match
+          case p: PrefixedAttribute => new PrefixedAttribute(p.pre, p.key, v, acc)
+          case _ => new UnprefixedAttribute(a.key, v, acc)
+      }
+      xf.copy(attributes = rebuilt)
+
+  /** [[remapXfAttrs]] over every `<xf>` child of a table; the SAME container when nothing moves. */
+  private[ooxml] def remapXfChildren(container: Elem, remaps: Map[String, Int => Int]): Elem =
+    val children = container.child.map {
+      case e: Elem if e.label == "xf" => remapXfAttrs(e, remaps)
+      case other => other
+    }
+    if children.iterator.zip(container.child.iterator).forall(_ eq _) then container
+    else container.copy(child = children)
 
   /** Excel writes integral font sizes without a decimal point ("10", not "10.0") — GH-448. */
   private[ooxml] def fontSizeToken(sizePt: Double): String =

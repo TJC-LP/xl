@@ -9,7 +9,7 @@ import com.tjclp.xl.Generators
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cf.{CfOperator, CfPoint, CfRule, CfTextOp, Cfvo, ConditionalFormat}
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.ooxml.XmlSecurity
+import com.tjclp.xl.ooxml.{XmlSecurity, XmlUtil}
 import com.tjclp.xl.ooxml.style.DxfCodec
 import com.tjclp.xl.styles.{Dxf, DxfFont}
 import com.tjclp.xl.styles.color.Color
@@ -115,8 +115,9 @@ class CfCodecSpec extends ScalaCheckSuite:
 
   test("text with quotes: doubled in the derived formula, round-trips") {
     val cfs = block(CfRule.Text(CfTextOp.Contains, "say \"hi\"", Some(red), 1))
-    val emitted = CfCodec.toElems(cfs, Map(red -> 0)).map(_.toString).mkString
-    assert(emitted.contains("SEARCH(&quot;say &quot;&quot;hi&quot;&quot;&quot;,A1)"), emitted)
+    // through XmlUtil.compact — what the part contains (GH-611: quotes verbatim in text)
+    val emitted = CfCodec.toElems(cfs, Map(red -> 0)).map(XmlUtil.compact).mkString
+    assert(emitted.contains("SEARCH(\"say \"\"hi\"\"\",A1)"), emitted)
     assertEquals(roundTrip(cfs), cfs)
   }
 
@@ -127,9 +128,9 @@ class CfCodecSpec extends ScalaCheckSuite:
         Vector(CfRule.Text(CfTextOp.Contains, "x", Some(red), 1))
       )
     )
-    val emitted = CfCodec.toElems(cfs, Map(red -> 0)).map(_.toString).mkString
+    val emitted = CfCodec.toElems(cfs, Map(red -> 0)).map(XmlUtil.compact).mkString
     assert(emitted.contains("sqref=\"B2:B9 D2:D9\""), emitted)
-    assert(emitted.contains("SEARCH(&quot;x&quot;,B2)"), emitted)
+    assert(emitted.contains("SEARCH(\"x\",B2)"), emitted)
     assertEquals(roundTrip(cfs), cfs)
   }
 

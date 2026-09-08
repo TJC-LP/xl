@@ -17,18 +17,30 @@ import com.tjclp.xl.styles.units.StyleId
  * collections of unique fonts, fills, borders, and cellXfs.
  */
 
-/** Index mapping for style components */
+/**
+ * Index mapping for style components
+ *
+ * @param xfIds
+ *   per cellXf, the `xfId` of the named-style master it derives from (GH-610), parallel to
+ *   `cellStyles`. Source-backed writes carry the source values for the preserved cellXfs; every
+ *   xl-authored cellXf — and every entry on a fresh write — is 0 (Normal). Shorter than
+ *   `cellStyles` means the tail is 0.
+ */
 final case class StyleIndex(
   fonts: Vector[Font],
   fills: Vector[Fill],
   borders: Vector[Border],
   numFmts: Vector[(Int, NumFmt)], // Custom formats with IDs
   cellStyles: Vector[CellStyle],
-  styleToIndex: Map[String, StyleId] // Canonical key -> cellXf index
+  styleToIndex: Map[String, StyleId], // Canonical key -> cellXf index
+  xfIds: Vector[Int] = Vector.empty
 ):
   /** Get style index for a CellStyle (returns 0 if not found - default style) */
   def indexOf(style: CellStyle): StyleId =
     styleToIndex.getOrElse(style.canonicalKey, StyleId(0))
+
+  /** The named-style master (`xfId`) cellXf `index` derives from; 0 (Normal) when unrecorded. */
+  def xfIdAt(index: Int): Int = xfIds.lift(index).getOrElse(0)
 
 object StyleIndex:
   /** Empty StyleIndex with only default style (useful for testing) */
@@ -277,6 +289,13 @@ object StyleIndex:
     var nextIdx = originalStyles.size
     var additionalStyles = mutable.Map[String, Int]() // Track styles added after original
 
+    // GH-610 (review): when several source xfs share a canonical key, a NEW use of that
+    // formatting shares the DIRECT one (xfId 0) if there is one — sharing a named-style twin
+    // would make Excel show the cell as, say, "Comma 2" and "Modify Comma 2" would restyle it.
+    // Otherwise the first twin, as before.
+    def preferredSlot(indices: List[Int]): Int =
+      indices.find(i => originalWorkbookStyles.xfIdAt(i) == 0).getOrElse(indices.head)
+
     // Step 3: Build mutable component collections starting from original
     // These will grow if new styles introduce new fonts/fills/borders/numFmts
     val fontsBuilder = mutable.ArrayBuffer.from(originalWorkbookStyles.fonts)
@@ -326,45 +345,53 @@ object StyleIndex:
         registry.styles.zipWithIndex.foreach { case (style, localIdx) =>
           val key = style.canonicalKey
 
-          // First, check if this key exists in original styles
-          unifiedIndex.get(key) match
-            case Some(indices) =>
-              // Style exists in original - use FIRST matching index
-              // This preserves original layout and avoids adding duplicates
-              remapping(localIdx) = indices.head
-            case None =>
-              // Not in original - check if we've already added it
-              additionalStyles.get(key) match
-                case Some(addedIdx) =>
-                  // Already added by earlier sheet processing
-                  remapping(localIdx) = addedIdx
-                case None =>
-                  // Truly new style - add it now
-                  unifiedStyles = unifiedStyles :+ style
-                  additionalStyles(key) = nextIdx
-                  remapping(localIdx) = nextIdx
-                  nextIdx += 1
+          // GH-610: the reader registers the source cellXfs POSITIONALLY (XlsxReader
+          // buildStyleRegistry), so a local id below the source table size that still holds the
+          // source's style IS that cellXf. Keep it — its xfId (named-style master) and its
+          // canonical-key twins intact — rather than collapsing onto the first twin, which may
+          // derive from a different named style. Excel treats xfId as part of the xf.
+          if localIdx < originalStyles.size && originalStyles(localIdx) == style then
+            remapping(localIdx) = localIdx
+          else
+            // First, check if this key exists in original styles
+            unifiedIndex.get(key) match
+              case Some(indices) =>
+                // Style exists in original - share the direct twin, else the FIRST matching index
+                // This preserves original layout and avoids adding duplicates
+                remapping(localIdx) = preferredSlot(indices)
+              case None =>
+                // Not in original - check if we've already added it
+                additionalStyles.get(key) match
+                  case Some(addedIdx) =>
+                    // Already added by earlier sheet processing
+                    remapping(localIdx) = addedIdx
+                  case None =>
+                    // Truly new style - add it now
+                    unifiedStyles = unifiedStyles :+ style
+                    additionalStyles(key) = nextIdx
+                    remapping(localIdx) = nextIdx
+                    nextIdx += 1
 
-                  // CRITICAL: Also add new font/fill/border/numFmt if not already present
-                  // Without this, new styles reference non-existent component indices
-                  if !fontSet.contains(style.font) then
-                    fontSet += style.font
-                    fontsBuilder += style.font
+                    // CRITICAL: Also add new font/fill/border/numFmt if not already present
+                    // Without this, new styles reference non-existent component indices
+                    if !fontSet.contains(style.font) then
+                      fontSet += style.font
+                      fontsBuilder += style.font
 
-                  if !fillSet.contains(style.fill) then
-                    fillSet += style.fill
-                    fillsBuilder += style.fill
+                    if !fillSet.contains(style.fill) then
+                      fillSet += style.fill
+                      fillsBuilder += style.fill
 
-                  if !borderSet.contains(style.border) then
-                    borderSet += style.border
-                    bordersBuilder += style.border
+                    if !borderSet.contains(style.border) then
+                      borderSet += style.border
+                      bordersBuilder += style.border
 
-                  style.numFmt match
-                    case NumFmt.Custom(code) if !numFmtCodeSet.contains(code) =>
-                      numFmtCodeSet += code
-                      numFmtsBuilder += ((nextNumFmtId, NumFmt.Custom(code)))
-                      nextNumFmtId += 1
-                    case _ => ()
+                    style.numFmt match
+                      case NumFmt.Custom(code) if !numFmtCodeSet.contains(code) =>
+                        numFmtCodeSet += code
+                        numFmtsBuilder += ((nextNumFmtId, NumFmt.Custom(code)))
+                        nextNumFmtId += 1
+                      case _ => ()
         }
 
         sheetIdx -> remapping.toMap
@@ -380,8 +407,15 @@ object StyleIndex:
     val customNumFmts = numFmtsBuilder.toVector
 
     // Convert unifiedIndex back to Map[String, StyleId] for StyleIndex
-    // Use first index from each canonicalKey's list (preserves original layout)
-    val styleToIndexMap = unifiedIndex.view.mapValues(indices => StyleId(indices.head)).toMap
+    // Direct twin, else first index from each canonicalKey's list (preserves original layout)
+    val styleToIndexMap =
+      unifiedIndex.view.mapValues(indices => StyleId(preferredSlot(indices))).toMap
+
+    // GH-610: the preserved cellXfs keep the named-style master they derive from; every style
+    // xl appended is direct formatting on Normal (xfId 0).
+    val xfIds = originalWorkbookStyles.xfIds
+      .padTo(originalStyles.size, 0)
+      .padTo(unifiedStyles.size, 0)
 
     val styleIndex = StyleIndex(
       uniqueFonts,
@@ -389,7 +423,8 @@ object StyleIndex:
       uniqueBorders,
       customNumFmts,
       unifiedStyles,
-      styleToIndexMap
+      styleToIndexMap,
+      xfIds
     )
 
     (styleIndex, remappings)
