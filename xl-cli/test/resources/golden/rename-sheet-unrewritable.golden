@@ -1,0 +1,15 @@
+## args
+-f
+<DIR>/qualified.xlsx
+-o
+<DIR>/rename-unrewritable.xlsx
+rename-sheet
+M&A
+MandA
+## exit
+3
+## stdout
+## stderr
+Error: Formula error in 'IF(ZZZNOTAFUNC(1)=1,'M&A'!I12,0)': Summary!I23: Cannot rewrite its reference to sheet 'M&A': Unknown function 'ZZZNOTAFUNC' at position 3
+  code: FORMULA_ERROR
+  hint: fix or replace the formula at Summary!I23 before renaming

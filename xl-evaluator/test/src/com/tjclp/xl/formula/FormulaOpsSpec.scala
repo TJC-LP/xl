@@ -129,6 +129,21 @@ class FormulaOpsSpec extends FunSuite:
       case other => fail(s"expected FormulaError, got $other")
   }
 
+  test("refusals carry the parser's diagnostic, never its constructor text (GH-608)") {
+    FormulaOps.renameSheet("IF(ZZZNOTAFUNC(1)=1,Sheet1!A1,0)", Sheet1, Data) match
+      case Left(XLError.FormulaError(formula, reason)) =>
+        assertEquals(formula, "IF(ZZZNOTAFUNC(1)=1,Sheet1!A1,0)")
+        assert(reason.contains("Unknown function 'ZZZNOTAFUNC' at position 3"), reason)
+        assert(!reason.contains("UnknownFunction("), reason)
+        assert(!reason.contains("List("), reason)
+      case other => fail(s"expected FormulaError, got $other")
+    FormulaOps.shift("=ZZZNOTAFUNC(A1)", 1, 1) match
+      case Left(XLError.FormulaError(_, reason)) =>
+        assert(reason.contains("Unknown function 'ZZZNOTAFUNC'"), reason)
+        assert(!reason.contains("UnknownFunction("), reason)
+      case other => fail(s"expected FormulaError, got $other")
+  }
+
   // ===== 3-D ranges: both ends are mentions, so both ends refuse (the parser has no 3-D form) =====
 
   private val Sheet3 = SheetName.unsafe("Sheet3")

@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/qualified.xlsx
+search
+Servers
+## exit
+0
+## stdout
+Found 1 matches in 3 sheets:
+
+| Ref             | Value   |
+|-----------------|---------|
+| 'On-Premise'!A1 | Servers |
+## stderr

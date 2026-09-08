@@ -5,7 +5,7 @@ import java.util.regex.Pattern
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.ast.TExpr
-import com.tjclp.xl.formula.parser.FormulaParser
+import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 
 /**
  * String-in, string-out formula rewriting (ADR-017 §2.9): parse → transform → reprint, total.
@@ -27,7 +27,9 @@ object FormulaOps:
    * including a string literal that spells it, an external-workbook reference (`[2]Sheet1!A1`) or a
    * sibling whose name merely contains it (`Sheet10!A1`) — comes back byte-identical, parseable or
    * not. `Left(FormulaError)` only when text that DOES mention the sheet cannot be parsed: an
-   * unknown reference expression must not survive a rename with silently changed meaning.
+   * unknown reference expression must not survive a rename with silently changed meaning. The
+   * reason carries the parser's diagnostic (`ParseError.describe`), the text `eval` and `putf`
+   * print for the same formula.
    */
   def renameSheet(text: String, from: SheetName, to: SheetName): XLResult[String] =
     if from == to || !mentionsSheet(text, from) then Right(text)
@@ -37,7 +39,7 @@ object FormulaOps:
           Left(
             XLError.FormulaError(
               text,
-              s"Cannot rewrite its reference to sheet '${from.value}': unsupported syntax ($err)"
+              s"Cannot rewrite its reference to sheet '${from.value}': ${ParseError.describe(err)}"
             )
           )
         case Right(expr) if !FormulaShifter.mentionsSheet(expr, from.value) => Right(text)
@@ -67,7 +69,7 @@ object FormulaOps:
   def shift(text: String, colDelta: Int, rowDelta: Int): XLResult[String] =
     FormulaParser.parse(text) match
       case Left(err) =>
-        Left(XLError.FormulaError(text, s"Cannot shift references: unsupported syntax ($err)"))
+        Left(XLError.FormulaError(text, s"Cannot shift references: ${ParseError.describe(err)}"))
       case Right(expr) => Right(reprint(text, FormulaShifter.shift(expr, colDelta, rowDelta)))
 
   /** File-form reprint that keeps the caller's leading-'=' convention. */

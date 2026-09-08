@@ -8,11 +8,13 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cf.CfRule
 import com.tjclp.xl.cli.commands.{SheetCommands, WriteCommands}
-import com.tjclp.xl.cli.contract.CliException
+import com.tjclp.xl.cli.contract.{CliException, CliHarness, EnvelopeSchema, Location, TestFixtures}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.sheets.DataValidation
 
 /**
  * GH-559: `rename-sheet` (the verb and the batch op) must rewrite every `Sheet!ref` in other
@@ -177,6 +179,174 @@ class RenameSheetSpec extends CatsEffectSuite:
           case Left(err: CliException) => assertEquals(err.error.code, "DUPLICATE_SHEET")
           case other => fail(s"expected DUPLICATE_SHEET, got: $other")
       assert(!Files.exists(out), "nothing may be written when the add or copy is refused")
+  }
+
+  test("rename-sheet verb: an unrewritable dependent is FORMULA_ERROR at its location (GH-608)") {
+    // `Summary!I23 = IF(ZZZNOTAFUNC(1)=1,'M&A'!I12,0)`: mentions the sheet, cannot be parsed. The
+    // refusal is a data condition, not a defect: typed code, exit 3, the cell, a human diagnostic.
+    val in = tmp("verb-unrewritable-in")
+    val out = tmp("verb-unrewritable-out")
+    Files.deleteIfExists(out)
+    for
+      _ <- excel.write(TestFixtures.qualifiedBook(), in)
+      read <- excel.read(in)
+      attempt <- SheetCommands.renameSheet(read, "M&A", "MandA", out, config).attempt
+    yield
+      attempt match
+        case Left(err: CliException) =>
+          assertEquals(err.error.code, "FORMULA_ERROR")
+          assertEquals(err.error.exitCode.code, 3)
+          assertEquals(
+            err.error.location,
+            Some(Location(None, Some("Summary"), Some("I23"), None))
+          )
+          assert(err.error.message.contains("Summary!I23"), err.error.message)
+          assert(err.error.message.contains("Unknown function 'ZZZNOTAFUNC'"), err.error.message)
+          assert(!err.error.message.contains("UnknownFunction("), err.error.message)
+          assert(!err.error.message.contains("List("), err.error.message)
+          assertEquals(
+            err.error.hint,
+            Some("fix or replace the formula at Summary!I23 before renaming")
+          )
+        case Left(other) => fail(s"expected a CliException, got: $other")
+        case Right(msg) => fail(s"expected a refusal, got: $msg")
+      assert(!Files.exists(out), "nothing may be written when the rename is refused")
+  }
+
+  test("rename-sheet refusal envelopes: the verb is FORMULA_ERROR, the batch op BATCH_OP_FAILED") {
+    val in = tmp("json-unrewritable-in")
+    val out = tmp("json-unrewritable-out")
+    Files.deleteIfExists(out)
+    val ops = opsFile("""[{"op":"rename-sheet","from":"M&A","to":"MandA"}]""")
+    for
+      _ <- excel.write(TestFixtures.qualifiedBook(), in)
+      read <- excel.read(in)
+      direct <- WriteCommands.batch(read, read.sheets.headOption, ops.toString, out, config).attempt
+      verb <- CliHarness.run(
+        "-f",
+        in.toString,
+        "-o",
+        out.toString,
+        "--json",
+        "rename-sheet",
+        "M&A",
+        "MandA"
+      )
+      batch <- CliHarness.run(
+        "-f",
+        in.toString,
+        "-o",
+        out.toString,
+        "--json",
+        "batch",
+        ops.toString
+      )
+    yield
+      assertEquals(verb.exit, 3, verb.stderr)
+      val envelope = ujson.read(verb.stdout)
+      EnvelopeSchema.assertValid(envelope)
+      val error = envelope("error")
+      assertEquals(error("code"), ujson.Str("FORMULA_ERROR"))
+      assertEquals(error("location")("sheet"), ujson.Str("Summary"))
+      assertEquals(error("location")("ref"), ujson.Str("I23"))
+      assert(error("message").str.contains("Unknown function 'ZZZNOTAFUNC'"), error("message").str)
+      assert(!error("message").str.contains("UnknownFunction("), error("message").str)
+      assertEquals(
+        error("hint"),
+        ujson.Str("fix or replace the formula at Summary!I23 before renaming")
+      )
+      assert(!Files.exists(out), "nothing may be written when the rename is refused")
+      // the batch op: BATCH_OP_FAILED names the op index; the verb's cause, hint and location ride
+      // along (the op raises the same typed refusal, not a plain exception)
+      assertEquals(batch.exit, 3, batch.stderr)
+      val batchError = ujson.read(batch.stdout)("error")
+      assertEquals(batchError("code"), ujson.Str("BATCH_OP_FAILED"))
+      assert(
+        batchError("message").str.startsWith("Object 1 (rename-sheet): "),
+        batchError("message").str
+      )
+      assert(batchError("message").str.contains("Summary!I23"), batchError("message").str)
+      assert(!batchError("message").str.contains("UnknownFunction("), batchError("message").str)
+      assertEquals(
+        batchError("hint"),
+        ujson.Str("fix or replace the formula at Summary!I23 before renaming")
+      )
+      assertEquals(batchError("location")("sheet"), ujson.Str("Summary"))
+      assertEquals(batchError("location")("ref"), ujson.Str("I23"))
+      assertEquals(batchError("location")("opIndex"), ujson.Num(1))
+      direct match
+        case Left(err: CliException) =>
+          assertEquals(err.error.code, "BATCH_OP_FAILED")
+          assertEquals(err.error.cause.map(_.code), Some("FORMULA_ERROR"))
+          assertEquals(
+            err.error.hint,
+            Some("fix or replace the formula at Summary!I23 before renaming")
+          )
+          assertEquals(
+            err.error.location,
+            Some(Location(None, Some("Summary"), Some("I23"), Some(1)))
+          )
+        case other => fail(s"expected a BATCH_OP_FAILED CliException, got: $other")
+      assert(!Files.exists(out), "nothing may be written when the batch is refused")
+  }
+
+  test(
+    "rename-sheet refusal on a conditional format or data validation locates the sheet, no ref"
+  ) {
+    // GH-608: `location.sheet` names the sheet whose rule mentions the renamed sheet; `location.ref`
+    // is null (a rule is not a cell) — the branch an agent takes on the envelope depends on it.
+    def book(summary: Sheet): Workbook = Workbook(Sheet("M&A").put(ref"I12", num(7)), summary)
+    val cfBook = book(
+      Sheet("Summary")
+        .conditionalFormat(ref"A1:A3", CfRule.Expression("ZZZNOTAFUNC('M&A'!I12)", None, 1))
+    )
+    val dvBook = book(
+      Sheet("Summary")
+        .withDataValidation(ref"B1:B3", DataValidation.custom("ZZZNOTAFUNC('M&A'!I12)"))
+    )
+    def refusal(tag: String, wb: Workbook): IO[(ujson.Value, java.nio.file.Path)] =
+      val in = tmp(s"$tag-in")
+      val out = tmp(s"$tag-out")
+      Files.deleteIfExists(out)
+      for
+        _ <- excel.write(wb, in)
+        run <- CliHarness.run(
+          "-f",
+          in.toString,
+          "-o",
+          out.toString,
+          "--json",
+          "rename-sheet",
+          "M&A",
+          "MandA"
+        )
+      yield
+        assertEquals(run.exit, 3, run.stderr)
+        val envelope = ujson.read(run.stdout)
+        EnvelopeSchema.assertValid(envelope)
+        (envelope("error"), out)
+    for
+      (cf, cfOut) <- refusal("cf", cfBook)
+      (dv, dvOut) <- refusal("dv", dvBook)
+    yield
+      for (error, kind) <- Vector((cf, "conditional format"), (dv, "data validation")) do
+        assertEquals(error("code"), ujson.Str("FORMULA_ERROR"), kind)
+        assertEquals(error("location")("sheet"), ujson.Str("Summary"), kind)
+        assertEquals(error("location")("ref"), ujson.Null, kind)
+        assert(error("message").str.contains(s"Summary!$kind: "), error("message").str)
+        assert(
+          error("message").str.contains("Unknown function 'ZZZNOTAFUNC'"),
+          error("message").str
+        )
+        assert(!error("message").str.contains("UnknownFunction("), error("message").str)
+        assertEquals(
+          error("hint"),
+          ujson.Str(
+            s"fix or remove the $kind on sheet Summary that names the renamed sheet before renaming"
+          ),
+          kind
+        )
+      assert(!Files.exists(cfOut) && !Files.exists(dvOut), "nothing may be written on a refusal")
   }
 
   test("batch rename-sheet: rewrites dependents in the FILE without recalculating") {
