@@ -388,8 +388,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
         at = 0,
         delta = 2
       )
-    yield shifted.map(FormulaPrinter.print(_))
-    assertEquals(result, Right(Some("=+A7")))
+    yield FormulaPrinter.print(shifted)
+    assertEquals(result, Right("=+A7"))
   }
 
   // ==================== GH-355: postfix percent operator ====================
@@ -1739,7 +1739,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("IFNA"))
     assert(functions.contains("NA"))
     assert(functions.contains("ISNA"))
-    assertEquals(functions.length, 115)
+    // GH-630 the error-code number
+    assert(functions.contains("ERROR.TYPE"))
+    assertEquals(functions.length, 116)
   }
 
   // ==================== INDIRECT Parsing Tests (GH-274) ====================
@@ -2326,10 +2328,12 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertPreserved("=#N/A/2")
     assertPreserved("=1/#N/A")
     assertPreserved("=IF(#N/A/2, 1, 0)")
-    FormulaParser.parse("=#GETTING_DATA") match
-      case Left(err) => assert(err.toString.contains("#GETTING_DATA"), err.toString)
-      case Right(expr) => fail(s"#GETTING_DATA is not a CellError, got $expr")
-    FormulaParser.parse("=#SPILL!") match
-      case Left(err) => assert(err.toString.contains("#SPILL!"), err.toString)
-      case Right(expr) => fail(s"#SPILL! is not a CellError, got $expr")
+    // GH-630: the modern codes are CellError models too — #GETTING_DATA has no terminator and is
+    // matched whole, longest first
+    assertCanonical("=#getting_data", "=#GETTING_DATA")
+    assertCanonical("=#spill!", "=#SPILL!")
+    assertPreserved("=IFERROR(#CALC!, #FIELD!)")
+    FormulaParser.parse("=#BOGUS!") match
+      case Left(err) => assert(err.toString.contains("#BOGUS!"), err.toString)
+      case Right(expr) => fail(s"#BOGUS! is not a CellError, got $expr")
   }

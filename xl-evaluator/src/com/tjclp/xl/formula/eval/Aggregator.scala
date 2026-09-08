@@ -74,6 +74,19 @@ trait Aggregator[A]:
   def propagatesErrors: Boolean = true
 
 object Aggregator:
+  /**
+   * GH-630: what an aggregate does with an ARGUMENT that is itself an Excel error value — the
+   * literal `#REF!`, `1/0`, a range slot that resolved to an error, a defined name bound to one.
+   * COUNTA counts it (`Some(acc + 1)`: an error is not empty), COUNT skips it (`Some(acc)`: an
+   * error is not a number), and every other aggregate — COUNTBLANK included, whose argument must be
+   * a range — propagates it (`None`). Shared by the `Call` form (`FunctionSpecsAggregate`) and the
+   * typed `TExpr.Aggregate` node (`Evaluator`), so `Aggregate ≡ Call` holds for the error form too.
+   */
+  def onErrorArgument[A](agg: Aggregator[A], acc: A): Option[A] =
+    if agg.countsNonEmpty then Some(agg.combine(acc, BigDecimal(1)))
+    else if !agg.propagatesErrors && !agg.countsEmpty then Some(acc)
+    else None
+
   /** Registry of all aggregators by name (uppercase) */
   private lazy val registry: Map[String, Aggregator[?]] = Map(
     "SUM" -> sumAggregator,

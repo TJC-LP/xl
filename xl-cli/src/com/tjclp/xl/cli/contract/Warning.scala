@@ -41,6 +41,14 @@ object WarningCode:
    */
   val NO_NUMERIC_VALUES: String = "NO_NUMERIC_VALUES"
 
+  /**
+   * GH-628: a `putf` drag, batch `putf … from`, `fill` or `copy` wrote `#REF!` for a reference the
+   * shift carried off the grid (before row 1 or column A, past XFD1048576). Excel writes the
+   * `#REF!` silently; for an agent it is almost always a mistake, so every such cell is listed —
+   * and `--strict` fails on it.
+   */
+  val OFF_GRID_REF: String = "OFF_GRID_REF"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -53,5 +61,6 @@ object WarningCode:
     FLAG_IGNORED,
     EVAL_FAILED,
     MEMORY_PRESSURE,
-    NO_NUMERIC_VALUES
+    NO_NUMERIC_VALUES,
+    OFF_GRID_REF
   )

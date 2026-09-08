@@ -80,9 +80,10 @@ class RangeFormSpec extends ScalaCheckSuite:
     val node = TExpr.RangeRef(CellRange(ref"A1", ref"B2"), RangeForm.Columns)
     assertEquals(FormulaPrinter.print(FormulaShifter.shift(node, 1, 1)), "=B2:C3")
     val inserted = FormulaShifter.shiftStructural(node, shiftLocal = true, "S", isRow = true, 0, 2)
-    assertEquals(inserted.map(FormulaPrinter.print(_)), Some("=A3:B4"))
+    assertEquals(FormulaPrinter.print(inserted), "=A3:B4")
     val deleted = FormulaShifter.shiftStructural(node, shiftLocal = true, "S", isRow = true, 0, -2)
-    assertEquals(deleted, None) // both rows deleted: #REF!, not "still every row"
+    // both rows deleted: #REF!, not "still every row"
+    assertEquals(FormulaPrinter.print(deleted), "=#REF!")
   }
 
   // Every reference sits at least four cells from the grid's edges (the summed deltas below reach

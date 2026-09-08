@@ -7,7 +7,15 @@ import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, OpSpec, ScopedOp}
 import com.tjclp.xl.cli.commands.SheetCommands
-import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
+import com.tjclp.xl.cli.contract.{
+  CliError,
+  CliException,
+  ErrorCode,
+  Location,
+  OffGridHit,
+  Warning,
+  WarningCode
+}
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
 import com.tjclp.xl.formula.{
   FormulaParser,
@@ -17,6 +25,7 @@ import com.tjclp.xl.formula.{
   SheetEvaluator
 }
 import com.tjclp.xl.sheets.SheetEdits
+import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.text.Suggest
@@ -1098,15 +1107,29 @@ object BatchParser:
     scoped: Vector[ScopedOp],
     recalcDependents: Boolean = true
   ): IO[Workbook] =
+    applyScopedReporting(wb, defaultSheetOpt, scoped, recalcDependents).map(_._1)
+
+  /**
+   * GH-628: [[applyScoped]], also reporting every cell a `putf … from` drag or a `copy` wrote
+   * `#REF!` into for a reference that left the grid — the batch verb's `OFF_GRID_REF` warning and
+   * `--strict` reason.
+   */
+  def applyScopedReporting(
+    wb: Workbook,
+    defaultSheetOpt: Option[Sheet],
+    scoped: Vector[ScopedOp],
+    recalcDependents: Boolean = true
+  ): IO[(Workbook, Vector[OffGridHit])] =
     scoped
-      .foldLeft(IO.pure((wb, defaultSheetOpt.map(_.name)))) { (stateIO, op) =>
-        stateIO.flatMap { (currentWb, default) =>
-          applyOne(currentWb, default, op, recalcDependents)
-            .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
-            .map(next => (next, retarget(default, op.op)))
-        }
+      .foldLeft(IO.pure((wb, defaultSheetOpt.map(_.name), Vector.empty[OffGridHit]))) {
+        (stateIO, op) =>
+          stateIO.flatMap { (currentWb, default, offGrid) =>
+            applyOne(currentWb, default, op, recalcDependents)
+              .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
+              .map((next, hits) => (next, retarget(default, op.op), offGrid ++ hits))
+          }
       }
-      .map(_._1)
+      .map((book, _, offGrid) => (book, offGrid))
 
   /** A `rename-sheet` of the batch's default sheet moves the default with it. */
   private def retarget(default: Option[SheetName], op: BatchOp): Option[SheetName] = op match
@@ -1142,15 +1165,25 @@ object BatchParser:
       )
     )
 
-  /** One op against the current workbook: THE sheet rule first ([[opSheet]]), then its applier. */
+  /**
+   * One op against the current workbook: THE sheet rule first ([[opSheet]]), then its applier —
+   * with the off-grid report of the two ops that shift formulas (GH-628).
+   */
   private def applyOne(
     currentWb: Workbook,
     default: Option[SheetName],
     scoped: ScopedOp,
     recalcDependents: Boolean
-  ): IO[Workbook] =
-    IO.fromEither(opSheet(currentWb, default, scoped).left.map(CliException(_)))
-      .flatMap(dispatch(currentWb, _, scoped, recalcDependents))
+  ): IO[(Workbook, Vector[OffGridHit])] =
+    IO.fromEither(opSheet(currentWb, default, scoped).left.map(CliException(_))).flatMap {
+      sheetName =>
+        scoped.op match
+          case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
+            applyPutFormulaDragging(currentWb, sheetName, rangeStr, formula, fromRef, format)
+          case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
+            applyCopyRange(currentWb, sheetName, sourceStr, targetStr, valuesOnly, recalcDependents)
+          case _ => dispatch(currentWb, sheetName, scoped, recalcDependents).map((_, Vector.empty))
+    }
 
   /**
    * THE sheet rule for one op ([[Resolve.forOp]], ADR-017 §2.5), before dispatch. An op whose
@@ -1222,6 +1255,7 @@ object BatchParser:
 
       case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
         applyPutFormulaDragging(currentWb, defaultSheetName, rangeStr, formula, fromRef, format)
+          .map(_._1)
 
       case BatchOp.PutFormulas(rangeStr, formulas, format) =>
         applyPutFormulas(currentWb, defaultSheetName, rangeStr, formulas, format)
@@ -1349,7 +1383,7 @@ object BatchParser:
           targetStr,
           valuesOnly,
           recalcDependents
-        )
+        ).map(_._1)
 
       case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
         updateSheetE(currentWb, defaultSheetName, "sheet-view")(
@@ -1493,7 +1527,10 @@ object BatchParser:
         )
     }
 
-  /** Apply formula with dragging to a range */
+  /**
+   * Apply formula with dragging to a range. GH-628: also reports every target cell whose shifted
+   * formula gained a `#REF!` for a reference that left the grid.
+   */
   private def applyPutFormulaDragging(
     wb: Workbook,
     defaultSheetName: Option[SheetName],
@@ -1501,7 +1538,7 @@ object BatchParser:
     formulaStr: String,
     fromRef: String,
     format: Option[NumFmt]
-  ): IO[Workbook] =
+  ): IO[(Workbook, Vector[OffGridHit])] =
     val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
     val fullFormula = s"=$formula"
 
@@ -1521,26 +1558,30 @@ object BatchParser:
         }
       )
 
-      // Apply formula with shifting
-      result <- updateSheet(wb, sheetName) { sheet =>
-        val startCol = Column.index0(fromARef.col)
-        val startRow = Row.index0(fromARef.row)
-
-        range.cells.foldLeft(sheet) { (s, targetRef) =>
+      // Apply formula with shifting, reporting the references the shift voided (GH-628)
+      sheet <- IO.fromEither(wb(sheetName).left.map(_ => sheetNotFound(wb, sheetName)))
+      startCol = Column.index0(fromARef.col)
+      startRow = Row.index0(fromARef.row)
+      (updated, offGrid) = range.cells.foldLeft((sheet, Vector.empty[OffGridHit])) {
+        case ((s, hits), targetRef) =>
           val colDelta = Column.index0(targetRef.col) - startCol
           val rowDelta = Row.index0(targetRef.row) - startRow
-          val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
-          val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
+          val shifted = FormulaShifter.shiftReporting(parsedExpr, colDelta, rowDelta)
+          val shiftedFormula = FormulaPrinter.printFileForm(shifted.expr)
           val cachedValue =
             SheetEvaluator.evaluateFormula(s)(s"=$shiftedFormula", workbook = Some(wb)).toOption
-          applyNumFmt(
+          val next = applyNumFmt(
             s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue)),
             targetRef,
             format
           )
-        }
+          val recorded =
+            if shifted.anyVoided then
+              hits :+ OffGridHit(sheetName.value, OffGridRef(targetRef, shifted.voided))
+            else hits
+          (next, recorded)
       }
-    yield result
+    yield (wb.put(updated), offGrid)
 
   /** Apply explicit formulas to a range (no dragging) */
   private def applyPutFormulas(
@@ -1899,8 +1940,12 @@ object BatchParser:
             case None => List.empty
         }
 
+        // GH-613: measure the sheet with its uncached formulas evaluated — a `putf` earlier in
+        // the batch has no cache yet (the recalculation runs after the ops), and the fit must size
+        // to the value it will show, not to its formula text
+        val measured = ColumnAutoFit.withEvaluatedCaches(sheet, wb, columns)
         columns.foldLeft(sheet) { (s, col) =>
-          val w = autoFitWidth(s, col)
+          val w = autoFitWidth(measured, col)
           val props = s.getColumnProperties(col).copy(width = Some(w))
           s.setColumnProperties(col, props)
         }
@@ -1994,7 +2039,7 @@ object BatchParser:
     targetStr: String,
     valuesOnly: Boolean,
     recalcDependents: Boolean
-  ): IO[Workbook] =
+  ): IO[(Workbook, Vector[OffGridHit])] =
 
     def parseSide(label: String, s: String): IO[(Option[SheetName], Either[ARef, CellRange])] =
       IO.fromEither(
@@ -2039,9 +2084,10 @@ object BatchParser:
       _ <- IO.fromEither(
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
       )
+      // GH-628: the copy reports every target cell the displacement wrote #REF! into
       copied <- IO.fromEither(
         CopyOps
-          .copyRange(
+          .copyRangeReporting(
             wb,
             sourceSheet,
             sourceRange,

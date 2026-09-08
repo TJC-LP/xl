@@ -102,7 +102,9 @@ class ReferenceScanSpec extends ScalaCheckSuite:
       "prefixes"
     )
     assertEquals(reach("=ZZZNOTAFUNC(#WHAT)"), Reach.Unbounded)
-    assertEquals(reach("=ZZZNOTAFUNC(#SPILL!)"), Reach.Unbounded, "not modelled by CellError")
+    // GH-630: the modern codes are CellError models, so they are dead operands too
+    assertEquals(reach("=ZZZNOTAFUNC(#SPILL!,#GETTING_DATA)"), Reach.Areas(Set.empty))
+    assertEquals(reach("=ZZZNOTAFUNC(#BOGUS!)"), Reach.Unbounded, "not modelled by CellError")
   }
 
   test("a spill reference A1# is unbounded, never read as A1") {

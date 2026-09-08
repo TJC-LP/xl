@@ -21,7 +21,14 @@ import com.tjclp.xl.cli.helpers.{
 }
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.cli.MemoryGuard
-import com.tjclp.xl.cli.contract.{CliError, CliException, Diagnostics, Warning, WarningCode}
+import com.tjclp.xl.cli.contract.{
+  CliError,
+  CliException,
+  Diagnostics,
+  OffGridHit,
+  Warning,
+  WarningCode
+}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{
   Clock,
@@ -39,7 +46,7 @@ import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
-import com.tjclp.xl.ops.Edit
+import com.tjclp.xl.ops.{Edit, OffGridRef}
 import com.tjclp.xl.sheets.{styleSyntax, SheetEdits}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -138,7 +145,8 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean,
     policy: WritePolicy,
-    warn: Warning => IO[Unit]
+    warn: Warning => IO[Unit],
+    offGrid: Vector[OffGridHit] = Vector.empty
   ): IO[String] =
     val calculation: IO[Option[RecalcResult]] =
       if policy.noRecalc then IO.pure(None)
@@ -168,7 +176,8 @@ object WriteCommands:
           s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
           result,
           Vector.empty,
-          warn
+          warn,
+          offGrid
         )
       }
     }
@@ -604,7 +613,8 @@ object WriteCommands:
         FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
       )
       // Apply formula with Excel-style dragging (existing logic)
-      updatedSheet = putfDraggingLogic(sheet, wb, range, formula, parsedExpr, policy.noRecalc)
+      (updatedSheet, offGrid) =
+        putfDraggingLogic(sheet, wb, range, formula, parsedExpr, policy.noRecalc)
       modifiedRefs = range.cells.toSet
       cellCount = range.cellCount
       result <- writeAfterRefresh(
@@ -616,7 +626,8 @@ object WriteCommands:
         config,
         stream,
         policy,
-        warn
+        warn,
+        OffGridHit.of(sheet.name, offGrid)
       )
     yield result
 
@@ -670,7 +681,11 @@ object WriteCommands:
           )
         yield result
 
-  /** Helper: Apply formula dragging logic (extracted from original putFormula) */
+  /**
+   * Helper: Apply formula dragging logic (extracted from original putFormula). GH-628: also reports
+   * every target cell whose shifted formula gained a `#REF!` for a reference that left the grid —
+   * the shifter says which, so a `#REF!` the author typed is never mistaken for one.
+   */
   private def putfDraggingLogic(
     sheet: Sheet,
     wb: Workbook,
@@ -678,37 +693,43 @@ object WriteCommands:
     formula: String,
     parsedExpr: TExpr[?],
     cacheFormulas: Boolean
-  ): Sheet =
+  ): (Sheet, Vector[OffGridRef]) =
     val startRef = range.start
     val startCol = Column.index0(startRef.col)
     val startRow = Row.index0(startRef.row)
     val cells = range.cells.toList
     // Apply formula with shifting (existing logic)
-    val sheetWithFormulas = cells.foldLeft(sheet) { (s, targetRef) =>
-      val colDelta = Column.index0(targetRef.col) - startCol
-      val rowDelta = Row.index0(targetRef.row) - startRow
-      val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
-      val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
-      val fullShiftedFormula = s"=$shiftedFormula"
-      val cachedValue =
-        if cacheFormulas then
-          SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
-        else None
-      s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
-    }
-    // Auto-apply date format if needed
-    if TExpr.containsDateFunction(parsedExpr) then
-      val numFmt = if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
-      cells.foldLeft(sheetWithFormulas) { (s, cellRef) =>
-        val existingStyle = s.cells
-          .get(cellRef)
-          .flatMap(_.styleId)
-          .flatMap(s.styleRegistry.get)
-          .getOrElse(CellStyle.default)
-        val mergedStyle = existingStyle.withNumFmt(numFmt)
-        styleSyntax.withRangeStyle(s)(CellRange(cellRef, cellRef), mergedStyle)
+    val (sheetWithFormulas, offGrid) =
+      cells.foldLeft((sheet, Vector.empty[OffGridRef])) { case ((s, hits), targetRef) =>
+        val colDelta = Column.index0(targetRef.col) - startCol
+        val rowDelta = Row.index0(targetRef.row) - startRow
+        val shifted = FormulaShifter.shiftReporting(parsedExpr, colDelta, rowDelta)
+        val shiftedFormula = FormulaPrinter.printFileForm(shifted.expr)
+        val fullShiftedFormula = s"=$shiftedFormula"
+        val cachedValue =
+          if cacheFormulas then
+            SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
+          else None
+        val recorded =
+          if shifted.anyVoided then hits :+ OffGridRef(targetRef, shifted.voided) else hits
+        (s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue)), recorded)
       }
-    else sheetWithFormulas
+    // Auto-apply date format if needed
+    val styled =
+      if TExpr.containsDateFunction(parsedExpr) then
+        val numFmt =
+          if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
+        cells.foldLeft(sheetWithFormulas) { (s, cellRef) =>
+          val existingStyle = s.cells
+            .get(cellRef)
+            .flatMap(_.styleId)
+            .flatMap(s.styleRegistry.get)
+            .getOrElse(CellStyle.default)
+          val mergedStyle = existingStyle.withNumFmt(numFmt)
+          styleSyntax.withRangeStyle(s)(CellRange(cellRef, cellRef), mergedStyle)
+        }
+      else sheetWithFormulas
+    (styled, offGrid)
 
   /**
    * Apply styling to cells.
@@ -875,11 +896,14 @@ object WriteCommands:
         case (Left(err), _) => IO.raiseError(err)
         case (_, Left(err)) => IO.raiseError(invalidRef(err))
         case (Right(_), Right(columns)) =>
+          // GH-613: widths are measured on the sheet with its uncached formulas evaluated
+          val measured =
+            if autoFit then ColumnAutoFit.withEvaluatedCaches(sheet, wb, columns) else sheet
           val (updatedSheet, results) = columns.foldLeft((sheet, List.empty[String])) {
             case ((s, msgs), colRef) =>
               val currentProps = s.getColumnProperties(colRef)
               val effectiveWidth: Option[Double] =
-                if autoFit then Some(calculateAutoFitWidth(s, colRef))
+                if autoFit then Some(calculateAutoFitWidth(measured, colRef))
                 else width
               val newProps = currentProps.copy(
                 width = effectiveWidth.orElse(currentProps.width),
@@ -996,9 +1020,11 @@ object WriteCommands:
         case Right(columns) if columns.isEmpty =>
           IO.pure(s"No columns to auto-fit (empty sheet)\n${Format.saveSuffix(outputPath, stream)}")
         case Right(columns) =>
+          // GH-613: widths are measured on the sheet with its uncached formulas evaluated
+          val measured = ColumnAutoFit.withEvaluatedCaches(sheet, wb, columns)
           val (updatedSheet, widths) = columns.foldLeft((sheet, List.empty[(Column, Double)])) {
             case ((s, ws), colRef) =>
-              val w = calculateAutoFitWidth(s, colRef)
+              val w = calculateAutoFitWidth(measured, colRef)
               val currentProps = s.getColumnProperties(colRef)
               val newProps = currentProps.copy(width = Some(w))
               (s.setColumnProperties(colRef, newProps), ws :+ (colRef, w))
@@ -1326,7 +1352,8 @@ object WriteCommands:
     summary: String,
     recalc: Option[RecalcResult],
     warnings: Vector[SeedTableWarning],
-    warn: Warning => IO[Unit]
+    warn: Warning => IO[Unit],
+    offGrid: Vector[OffGridHit] = Vector.empty
   ): IO[String] =
     val recalcReasons = recalc.toList.flatMap { r =>
       List(
@@ -1336,8 +1363,11 @@ object WriteCommands:
         )
       ).flatten
     }
+    // GH-628: a #REF! written for a reference dragged off the grid is a successful evaluation of
+    // an error VALUE, so no recalculation error reports it — the shifter's report does
     val reasons = recalcReasons ++
-      Option.when(warnings.nonEmpty)(s"${warnings.size} data-table seeding warning(s)").toList
+      Option.when(warnings.nonEmpty)(s"${warnings.size} data-table seeding warning(s)").toList ++
+      OffGridHit.strictReason(offGrid).toList
     if policy.strict && reasons.nonEmpty then
       IO.raiseError(
         new StrictFailure(s"$summary\nSTRICT FAILURE (--strict): ${reasons.mkString("; ")}")
@@ -1345,7 +1375,7 @@ object WriteCommands:
     else
       // Advisory: the summary names the failing cells; the warning is the machine-readable flag
       // (`RECALC_ERRORS` on stderr, or in `warnings[]` under --json) that some formulas were left
-      // uncached
+      // uncached; `OFF_GRID_REF` lists the cells a drag wrote #REF! into
       val advisory = recalc.filter(_.errors.nonEmpty).map { r =>
         val count = r.errors.size
         Warning(
@@ -1354,7 +1384,7 @@ object WriteCommands:
             "left uncached (see the recalculation summary; --strict makes this exit 1)"
         )
       }
-      advisory.traverse_(warn).as(summary)
+      (OffGridHit.warning(offGrid).toList ++ advisory).traverse_(warn).as(summary)
 
   /**
    * One-line recalculation summary: formula count plus the first few failing refs (GH-352). Formula
@@ -1422,8 +1452,8 @@ object WriteCommands:
       BatchParser.parseBatchOperations(input).flatMap { result =>
         result.warnings.traverse_(warn) *>
           BatchParser
-            .applyScoped(wb, sheetOpt, result.scoped, !policy.noRecalc)
-            .flatMap { updatedWb =>
+            .applyScopedReporting(wb, sheetOpt, result.scoped, !policy.noRecalc)
+            .flatMap { (updatedWb, offGrid) =>
               val mutating = result.scoped.map(_.op).exists(isCellMutating)
               val recalculation: IO[Option[(Workbook, RecalcResult)]] =
                 if mutating && !policy.noRecalc then
@@ -1440,7 +1470,7 @@ object WriteCommands:
                     case None => ""
                   val rendered =
                     s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
-                  strictGate(policy, rendered, recalcOpt.map(_._2), Vector.empty, warn)
+                  strictGate(policy, rendered, recalcOpt.map(_._2), Vector.empty, warn, offGrid)
                 }
               }
             }
@@ -1571,9 +1601,10 @@ object WriteCommands:
 
       // The fill semantics live in Sheet.fill (ADR-017 §2.12, W2.1); the direction rule's refusal
       // keeps its INVALID_REFERENCE code and text
-      filledSheet <- IO.fromEither(
+      // GH-628: the fill reports every target cell a displacement wrote #REF! into
+      (filledSheet, offGrid) <- IO.fromEither(
         targetSheet
-          .fill(sourceRange, targetRange, fillDir(direction))(using EvalFormulaSupport)
+          .fillReporting(sourceRange, targetRange, fillDir(direction))(using EvalFormulaSupport)
           .left
           .map {
             case XLError.InvalidReference(reason) => invalidRef(reason)
@@ -1594,7 +1625,8 @@ object WriteCommands:
         config,
         stream,
         policy,
-        warn
+        warn,
+        OffGridHit.of(targetSheet.name, offGrid)
       )
     yield result
 
@@ -2223,10 +2255,11 @@ object WriteCommands:
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(invalidRef)
       )
 
-      // Delegate to shared helper (Sheet.copyRange plus the CLI's cache/recalc phases)
-      copiedWb <- IO.fromEither(
+      // Delegate to shared helper (Sheet.copyRange plus the CLI's cache/recalc phases); GH-628:
+      // it reports every target cell the displacement wrote #REF! into
+      (copiedWb, offGrid) <- IO.fromEither(
         CopyOps
-          .copyRange(
+          .copyRangeReporting(
             wb,
             sourceSheet,
             sourceRange,
@@ -2258,7 +2291,8 @@ object WriteCommands:
         config,
         stream,
         policy,
-        warn
+        warn,
+        offGrid
       )
     yield result
 

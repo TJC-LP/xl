@@ -1,7 +1,12 @@
 package com.tjclp.xl.formula.graph
 
 import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
-import com.tjclp.xl.formula.functions.{FunctionSpecs, FunctionRegistry, ArgValue}
+import com.tjclp.xl.formula.functions.{
+  ArgValue,
+  CriteriaRangeResize,
+  FunctionRegistry,
+  FunctionSpecs
+}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 
@@ -719,8 +724,9 @@ object DependencyGraph:
         range.cells.toSet
 
       case call: TExpr.Call[?] =>
+        // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first
         depsFromArgValues(
-          call.spec.argSpec.toValues(call.args),
+          CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
           expr => extractDependencies(expr),
           _.localCells,
           _.cells.toSet
@@ -862,8 +868,9 @@ object DependencyGraph:
       case TExpr.Aggregate(_, location) => localCells(location)
 
       case call: TExpr.Call[?] =>
+        // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first
         depsFromArgValues(
-          call.spec.argSpec.toValues(call.args),
+          CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
           recurse,
           localCells,
           boundRange
@@ -1947,7 +1954,20 @@ object DependencyGraph:
         case TExpr.Aggregate(_, location) => locCells(location)
 
         case call: TExpr.Call[?] =>
-          val values = call.spec.argSpec.toValues(call.args)
+          // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first — a static
+          // shape, or a defined name's resolved through the workbook when one is at hand
+          val values = CriteriaRangeResize.resizedArgs(
+            call.spec.name,
+            call.spec.argSpec.toValues(call.args),
+            shapeOf = location =>
+              location.staticRange.orElse(
+                for
+                  wb <- workbook
+                  source <- wb(currentSheet).toOption
+                  resolved <- Evaluator.resolveRangeLocation(location, source, workbook).toOption
+                yield resolved._2
+              )
+          )
           val selected = lookupCells(call.spec.name, values)
           values.zipWithIndex.foldLeft(Set.empty[QualifiedRef]) { case (acc, (value, index)) =>
             value match

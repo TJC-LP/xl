@@ -7,7 +7,7 @@ import com.tjclp.xl.charts.{Chart, DataRef, Series, SeriesName}
 import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
 import com.tjclp.xl.drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, RowSpan, Scope}
+import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, OffGridRef, RowSpan, Scope}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.units.StyleId
@@ -1181,6 +1181,15 @@ final case class Sheet(
     SheetEdits.fill(this, source, target, direction)
 
   /**
+   * GH-628: [[fill]], also reporting every target cell whose formula gained a `#REF!` because the
+   * displacement carried a reference off the grid (Excel writes the `#REF!` silently).
+   */
+  def fillReporting(source: CellRange, target: CellRange, direction: Edit.FillDir)(using
+    FormulaSupport
+  ): XLResult[(Sheet, Vector[OffGridRef])] =
+    SheetEdits.fillReporting(this, source, target, direction)
+
+  /**
    * Copy `source` onto `target` (same dimensions) within this sheet: values and styles move,
    * relative references shift by the displacement, `valuesOnly` pastes cached values. An
    * overlapping copy reads the pre-copy state.
@@ -1195,6 +1204,18 @@ final case class Sheet(
     using FormulaSupport
   ): XLResult[Sheet] =
     SheetEdits.copyRange(this, sourceSheet, source, target, valuesOnly)
+
+  /**
+   * GH-628: [[copyRangeFrom]] (`sourceSheet` may be this sheet), also reporting every target cell
+   * whose formula gained a `#REF!` because the displacement carried a reference off the grid.
+   */
+  def copyRangeReporting(
+    sourceSheet: Sheet,
+    source: CellRange,
+    target: CellRange,
+    valuesOnly: Boolean
+  )(using FormulaSupport): XLResult[(Sheet, Vector[OffGridRef])] =
+    SheetEdits.copyRangeReporting(this, sourceSheet, source, target, valuesOnly)
 
   /**
    * Sort the rows of `range` by `keys` (stable): only cells in the range's columns move, styles and

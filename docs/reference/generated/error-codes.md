@@ -81,3 +81,4 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `EVAL_FAILED` |
 | `MEMORY_PRESSURE` |
 | `NO_NUMERIC_VALUES` |
+| `OFF_GRID_REF` |
