@@ -84,9 +84,9 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.readTypedOpt[A](ref)` | `Option[A]` | total, flat; 0.20.0: cached formula → `Some`, uncached → `None` (≤0.19.3: any formula → `None`) |
 | `sheet.readTypedStrict[A](ref)` | `Either[CodecError, Option[A]]` | 0.20.0: like `readTyped`, but ANY formula cell is `Left(TypeMismatch(expected, formula))`, cached or not (GH-477) |
 | `sheet.readRows[A](range)` | `Either[RowCodecError, Vector[A]]` | one record per row of `range`, positional (`fields(i)` ↔ column i); range width must equal the record's, else `Width`; a blank row is `Missing` unless every field is `Option` (0.21.0, needs `RowCodec[A]`) |
-| `sheet.readRowsByHeader[A](headerRow)` | `Either[RowCodecError, Vector[A]]` | fields matched to header text via `column` (exact, then case/space/`_`/`-`-insensitive), any column order, extra columns ignored; reads the contiguous block under the header, stops at the first blank row (0.21.0) |
-| `sheet.headers(row)` | `Vector[(Column, String)]` | header texts in `row`, left to right, verbatim (numbers/rich text as text; blanks skipped) (0.21.0) |
-| `sheet.column(header, headerRow)` | `Option[Column]` | the column headed `header`: exact match, else case/whitespace/`_`/`-`-insensitive, leftmost wins (0.21.0) |
+| `sheet.readRowsByHeader[A](headerRow)` | `Either[RowCodecError, Vector[A]]` | fields matched to header text via `columnOf` (exact, then case/space/`_`/`-`-insensitive), any column order, extra columns ignored; reads the contiguous block under the header, stops at the first blank row (0.21.0) |
+| `sheet.columnHeaders(row)` | `Vector[(Column, String)]` | header texts in `row`, left to right, verbatim (numbers/rich text as text; blanks skipped) (0.21.0) |
+| `sheet.columnOf(header, headerRow)` | `Option[Column]` | the column headed `header`: exact match, else case/whitespace/`_`/`-`-insensitive, leftmost wins (0.21.0) |
 | `sheet.putRows(at, records)` | `XLResult[RowsPlaced]` | one row per record from `at`, no header; `None` fields stay empty; codec formats register like `put`; `OutOfBounds` past XFD/1048576 (0.21.0) |
 | `sheet.putRowsWithHeader(at, records)` | `XLResult[RowsPlaced]` | field names as a header row at `at`, records below (0.21.0) |
 | `sheet.putTable(at, records, name)` | `XLResult[RowsPlaced]` | `putRowsWithHeader` + an Excel table named/columned after the record; `name` = display name, letters/digits/`_`, unique on the sheet; no records → header + one blank data row (0.21.0) |

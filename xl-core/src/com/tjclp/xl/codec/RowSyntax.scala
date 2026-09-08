@@ -41,7 +41,7 @@ final case class RowsPlaced(
  *
  * Positional entry points (`readRows`, `putRows`) align `fields(i)` with the i-th column of the
  * range; header-driven ones (`readRowsByHeader`, `putRowsWithHeader`, `putTable`) go through a
- * header row of field names, matched by [[rowSyntax.column]]. Reads see a formula's cached value
+ * header row of field names, matched by [[rowSyntax.columnOf]]. Reads see a formula's cached value
  * (GH-477).
  */
 object rowSyntax:
@@ -61,7 +61,7 @@ object rowSyntax:
 
     /**
      * Decode the records under `headerRow`: each field is read from the column whose header matches
-     * its name ([[column]]), so column order is free and extra columns are ignored. Reads the
+     * its name ([[columnOf]]), so column order is free and extra columns are ignored. Reads the
      * contiguous block below the header — Excel's current region — and stops at the first row whose
      * record cells are all empty; `Right(Vector.empty)` when nothing follows the header. A field
      * with no header is a [[RowCodecError.HeaderNotFound]] listing the headers present.
@@ -69,7 +69,7 @@ object rowSyntax:
     def readRowsByHeader[A](headerRow: Row)(using
       codec: RowCodec[A]
     ): Either[RowCodecError, Vector[A]] =
-      val present = headers(headerRow)
+      val present = columnHeaders(headerRow)
       resolveColumns(codec.fields, present, headerRow).flatMap { columns =>
         val firstRow = headerRow.index0 + 1
         val colSet = columns.toSet
@@ -90,11 +90,11 @@ object rowSyntax:
       }
 
     /**
-     * Header texts in `row`, left to right, each with its column. A header is the cell's
+     * Column headers in `row`, left to right, each with its column. A header is the cell's
      * [[Cell.effectiveValue]] as text (numbers and rich text included), verbatim; blank cells,
-     * errors and uncached formulas are skipped.
+     * errors and uncached formulas are skipped. Distinct from a page header (`PageSetup`).
      */
-    def headers(row: Row): Vector[(Column, String)] =
+    def columnHeaders(row: Row): Vector[(Column, String)] =
       sheet.cells.valuesIterator
         .filter(_.row.index0 == row.index0)
         .flatMap(c => headerText(c.effectiveValue).map(text => (c.col, text)))
@@ -106,8 +106,8 @@ object rowSyntax:
      * ignoring case, whitespace, `_` and `-` (`"Order ID"`, `order_id` and `orderId` all agree);
      * the leftmost of several. `None` when no header agrees.
      */
-    def column(header: String, headerRow: Row): Option[Column] =
-      columnIn(headers(headerRow), header)
+    def columnOf(header: String, headerRow: Row): Option[Column] =
+      columnIn(columnHeaders(headerRow), header)
 
     /**
      * Write one row per record starting at `at` (no header): `fields(i)` goes to column `at.col +

@@ -53,17 +53,17 @@ class RowCodecPreludeTest extends FunSuite:
     assertEquals(placed.sheet.cells.get(ref"E3"), None)
 
   test(
-    "GH-590: putRowsWithHeader writes field names; headers/column/readRowsByHeader resolve"
+    "GH-590: putRowsWithHeader writes field names; columnHeaders/columnOf/readRowsByHeader resolve"
   ):
     val placed = Sheet("Orders").putRowsWithHeader(ref"B1", orders).unsafe
     assertEquals(placed.headerRange.map(_.toA1), Some("B1:F1"))
     assertEquals(placed.dataRange.map(_.toA1), Some("B2:F3"))
     assertEquals(placed.range.map(_.toA1), Some("B1:F3"))
     val sheet = placed.sheet
-    assertEquals(sheet.headers(Row.from1(1)).map(_._2), RowCodec[Order].fields)
-    assertEquals(sheet.column("qty", Row.from1(1)), Some(Column.from0(3)))
-    assertEquals(sheet.column("Qty", Row.from1(1)), Some(Column.from0(3)))
-    assertEquals(sheet.column("missing", Row.from1(1)), None)
+    assertEquals(sheet.columnHeaders(Row.from1(1)).map(_._2), RowCodec[Order].fields)
+    assertEquals(sheet.columnOf("qty", Row.from1(1)), Some(Column.from0(3)))
+    assertEquals(sheet.columnOf("Qty", Row.from1(1)), Some(Column.from0(3)))
+    assertEquals(sheet.columnOf("missing", Row.from1(1)), None)
     assertEquals(
       sheet.readRowsByHeader[Order](Row.from1(1)),
       Right(orders): Either[RowCodecError, Vector[Order]]

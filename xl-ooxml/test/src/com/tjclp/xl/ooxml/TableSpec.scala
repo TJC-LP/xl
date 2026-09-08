@@ -1264,7 +1264,7 @@ class TableSpec extends FunSuite:
     assertEquals(table.range.toA1, "B2:F4")
     assertEquals(table.displayName, "Orders")
     assertEquals(table.columns.map(_.name), RowCodec[Order].fields)
-    assertEquals(sheet.headers(Row.from1(2)).map(_._2), RowCodec[Order].fields)
+    assertEquals(sheet.columnHeaders(Row.from1(2)).map(_._2), RowCodec[Order].fields)
     assertEquals(
       sheet.readRowsByHeader[Order](Row.from1(2)),
       Right(orders): Either[RowCodecError, Vector[Order]]

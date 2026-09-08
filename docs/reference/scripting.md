@@ -560,11 +560,11 @@ The rules, all of them:
   width must equal the record's (`RowCodecError.Width` otherwise). Every row is a record: a blank
   row is `Missing` unless every field is an `Option`.
 - **Reading by header**: `readRowsByHeader[A](headerRow)` finds each field's column through
-  `sheet.column(field, headerRow)` — an exact header match wins, otherwise the match ignoring
+  `sheet.columnOf(field, headerRow)` — an exact header match wins, otherwise the match ignoring
   case, whitespace, `_` and `-` (`"Order ID"`, `order_id`, `orderId` agree), leftmost on ties —
   then reads the contiguous block under the header and stops at the first row whose record cells
   are all empty (Excel's current region), so a totals row after a blank line is not a record.
-  `sheet.headers(row)` lists `(Column, text)` pairs for discovery.
+  `sheet.columnHeaders(row)` lists `(Column, text)` pairs for discovery.
 - **Errors** (`Either[RowCodecError, Vector[A]]`, first failing cell in row-major order):
   `Field(row, column, field, cause)` for a value the field's codec rejected, `Missing(row, column,
   field)` for a required field on an empty cell, `HeaderNotFound(header, headerRow, available)`,

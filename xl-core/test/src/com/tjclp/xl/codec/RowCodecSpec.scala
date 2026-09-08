@@ -475,7 +475,7 @@ class RowCodecSpec extends ScalaCheckSuite:
   // ========== Headers ==========
 
   test(
-    "headers: verbatim non-blank header text left to right; numbers and rich text included"
+    "columnHeaders: verbatim non-blank header text left to right; numbers and rich text included"
   ) {
     val sheet = Sheet("H")
       .put(ref"B1", " Qty ")
@@ -485,7 +485,7 @@ class RowCodecSpec extends ScalaCheckSuite:
       .put(ref"F1", "")
       .put(ref"G1", "   ")
     assertEquals(
-      sheet.headers(row1),
+      sheet.columnHeaders(row1),
       Vector(
         Column.from0(0) -> "Id",
         Column.from0(1) -> " Qty ",
@@ -493,20 +493,20 @@ class RowCodecSpec extends ScalaCheckSuite:
         Column.from0(4) -> "Rich"
       )
     )
-    assertEquals(sheet.headers(Row.from1(2)), Vector.empty)
+    assertEquals(sheet.columnHeaders(Row.from1(2)), Vector.empty)
   }
 
-  test("column: exact match wins, then case/space/underscore-insensitive; leftmost on ties") {
+  test("columnOf: exact match wins, then case/space/underscore-insensitive; leftmost on ties") {
     val sheet = Sheet("C")
       .put(ref"A1", "Order ID")
       .put(ref"B1", "order_id")
       .put(ref"C1", "orderId")
       .put(ref"D1", "Unit Price")
-    assertEquals(sheet.column("orderId", row1), Some(Column.from0(2)))
-    assertEquals(sheet.column("OrderID", row1), Some(Column.from0(0)))
-    assertEquals(sheet.column("unitPrice", row1), Some(Column.from0(3)))
-    assertEquals(sheet.column("unit_price", row1), Some(Column.from0(3)))
-    assertEquals(sheet.column("total", row1), None)
+    assertEquals(sheet.columnOf("orderId", row1), Some(Column.from0(2)))
+    assertEquals(sheet.columnOf("OrderID", row1), Some(Column.from0(0)))
+    assertEquals(sheet.columnOf("unitPrice", row1), Some(Column.from0(3)))
+    assertEquals(sheet.columnOf("unit_price", row1), Some(Column.from0(3)))
+    assertEquals(sheet.columnOf("total", row1), None)
   }
 
   test("readRowsByHeader: matches fields to headers in any column order, ignores extra columns") {
