@@ -5,9 +5,9 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 # XL CLI - Excel Operations
 
-**Requires xl >= 0.21.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
+**Requires xl >= 0.21.1.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
 `xl batch --schema`, `describe`, `audit`, `deps`, the 0/1/2/3 exit table and globals-anywhere; every
-statement in this skill assumes 0.21.0 or later.
+statement in this skill assumes 0.21.1 or later.
 
 The binary documents itself and is the reference: `xl <verb> --help` for a verb's flags,
 `xl schema` for every verb, `xl batch --schema` for every batch op and field, `xl functions --json`
@@ -15,7 +15,7 @@ for every formula function. This skill is the map; those are the territory.
 
 ## Installation
 
-Check if installed: `which xl || echo "not installed"`; then `xl --version` (must print `0.21.0`
+Check if installed: `which xl || echo "not installed"`; then `xl --version` (must print `0.21.1`
 or later).
 
 **Release download** — the latest published native binary (no JDK required):

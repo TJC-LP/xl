@@ -1,12 +1,18 @@
 # XL Project Status
 
-**Last Updated**: 2026-09-08 (0.21.0)
+**Last Updated**: 2026-09-08 (0.21.1)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.21.1** (2026-09-08) — the 0.21.0 dogfood's follow-through (#646, #647, #648, #650); twelve **Breaking:** entries, each a behaviour fix toward Excel or the contract:
+- ✅ **Named cell styles survive every write** (#610) — `cellStyleXfs`, `cellStyles`, `tableStyles`, `colors` and the styles `extLst` ride through the in-memory writer verbatim (`PreservedStyleParts`), every `cellXf` keeps its `xfId`, source cellXfs are registered positionally; `"` written verbatim in element text (#611)
+- ✅ **Unbounded `--stream view` streams** (#635) — csv/json/markdown as a `Payload.Streamed`, row by row, inside the `--json` envelope too; the 1M × 41 dogfood dump completes in a 384 MB heap. `xl schema --json` publishes each verb's `stream` (`o1`/`backend`/`refused`) and `refusedWith` (#638); the shared-string table is a value (`ExcelIO.loadSharedStrings`) parsed once per run and shared with `cell` (#640)
+- ✅ **Formula semantics per Excel** — a structural delete writes `#REF!` for the deleted reference alone (#629); `COUNT`/`COUNTA`/`COUNTBLANK` error semantics (#630); the seven modern error values (`#SPILL!` … `#GETTING_DATA`) as `CellError` cases plus `ERROR.TYPE` (#630); a single cell in a range slot as `RangeForm.Cell` and `SUMIF`/`AVERAGEIF` sizing `sum_range` to `range` (#631); `OFF_GRID_REF` warning, `--strict`-gated, for references dragged off the grid (#628); AutoFit measures cached values, never formula text (#613)
+- ✅ **CLI contract cleanup** — `INVALID_ARGUMENT` (#617) and `NAME_NOT_FOUND` (#626) typed errors; `--help` on stdout, exit 0, as an envelope under `--json` (#620); one `No such file` diagnostic for every verb (#621); `diff` compares caches with a `kind` per changed cell (#607); `filter --limit 0` = no limit and a `{matched, shown, truncated, limit, rows}` document (#639); `stats`/`view` take `B:B`/`3:3` spans and an empty `stats` is a result with `NO_NUMERIC_VALUES` (#641); positional-path hint (#619); `Excel.readSheet` returns `XLResult[Sheet]` and every `SheetNotFound` names its candidates (#615); `rename-sheet` refusal punctuation (#644); `xl-agent` traces record the sandbox exit code (#622)
 
 **New in 0.21.0** (2026-09-08) — agent-first Wave 2a (ADR-017) plus the dogfood fixes it surfaced:
 - ✅ **The `Edit` algebra** (#582) — `com.tjclp.xl.ops.Edit`, 49 cases, one vocabulary for every batch op and mutating verb; `Edit.applyAll` (all-or-nothing), `Edit.plan` (semantic dry-run), `Edit.validate`, `Edit.lower`/`Patch.toEdits`, `EditSchema`; a refusing `FormulaSupport.textOnly` and xl-evaluator's `EvalFormulaSupport`; `wb.edit`/`sheet.edit` in the prelude; seven laws as ScalaCheck properties; the CLI's fill/copy/sort/clear/autofit/group kernels moved into `Sheet`
@@ -227,15 +233,15 @@
 
 ### Test Coverage
 
-**6,947 test cases** (verified via `./mill __.test`, 2026-09-08, 0.21.1 clusters A/C/D and the streaming fixes #635/#638/#640 merged): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**6,952 test cases** (verified via `./mill __.test`, 2026-09-08, the 0.21.1 release): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
 | xl-evaluator | 2447 | parser, evaluator, 116-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1560 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1151 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1387 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 170 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-ooxml | 1152 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1420 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cats-effect | 175 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 146 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 52 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |

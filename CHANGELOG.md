@@ -7,8 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The 0.21.0 dogfood's CLI contract nits, one PR (#607, #615, #617, #619, #620, #621, #622, #626,
-#639, #641, #644). Entries led with **Breaking:** change the meaning of an existing shape.
+## [0.21.1] - 2026-09-08
+
+The 0.21.0 dogfood's follow-through, four PRs (#646, #647, #648, #650): named cell styles, the
+recent-colours palette and the styles `extLst` survive every write and `"` is written verbatim in
+element text (#610, #611); an unbounded `--stream view` streams in constant memory, every verb
+declares what `--stream` does to it in `xl schema`, and the shared-string table is parsed once per
+run (#635, #638, #640). Formula semantics follow Excel: a structural delete writes `#REF!` for the
+deleted reference alone, `COUNT`/`COUNTA` treat error arguments as Excel does, the seven modern
+error values and `ERROR.TYPE` join `CellError`, `SUMIF`/`AVERAGEIF` size `sum_range` to `range`, a
+reference dragged off the grid raises `OFF_GRID_REF`, and AutoFit measures cached values, never
+formula text (#628–#631, #613). The CLI contract is tidied — `INVALID_ARGUMENT` and
+`NAME_NOT_FOUND`, help on stdout, one diagnostic for a missing input, `diff` sees caches, the
+`filter`/`stats` shapes, `Excel.readSheet` as an `XLResult` with `SheetNotFound` candidates
+everywhere, `xl-agent` traces carrying the sandbox exit code (#607, #615, #617, #619–#622, #626,
+#639, #641, #644). Twelve entries are led with **Breaking:** — each a behaviour fix toward Excel or
+the contract, and each states the old behaviour beside the new.
 
 ### Added
 
@@ -67,8 +81,6 @@ The 0.21.0 dogfood's CLI contract nits, one PR (#607, #615, #617, #619, #620, #6
   bash tool's `return_code` instead of `null`, so error-recovery statistics (how many `USAGE`
   errors, how many turns to recover) need no stdout regex; `UnifiedRunner --help` names the real
   `--output` default, `results/<timestamp>/`.
-### Added
-
 - **Library: the shared-string table as a value** (#640): `ExcelIO.loadSharedStrings(path, config)`
   parses `xl/sharedStrings.xml` once through the streaming reader's SAX parser under the reader's
   ZIP-bomb limits (`ReaderConfig.maxUncompressedSize`, `maxCompressionRatio`; a breach is an
@@ -83,7 +95,6 @@ The 0.21.0 dogfood's CLI contract nits, one PR (#607, #615, #617, #619, #620, #6
   `view --eval` and its styled formats, `sheets --stats`, `describe --full`, `put --csv`, `--strict`
   on the streamed writes); the text table gains a STREAM column and
   `docs/reference/generated/cli-verbs.md` the two columns.
-
 - **`OFF_GRID_REF` warning** (#628): a `putf` range drag, a batch `putf … from`, `fill`, `copy`
   or a streaming batch drag that writes `#REF!` for a reference the shift carried off the grid
   (before row 1 or column A, past XFD1048576) now says so — `Warning[OFF_GRID_REF]: 2 formulas

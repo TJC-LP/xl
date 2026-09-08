@@ -835,7 +835,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 - Tested: 100k rows (completes in ~3s)
 - Projected: 1M rows (~30s)
 - Memory: O(1) constant (~50-100MB regardless of size)
-- CLI: every `--stream` read is O(1) except `view --limit 0`, which materialises the whole sheet before rendering (§30, #635)
+- CLI: every `--stream` read is O(1), `view --limit 0` included since 0.21.1 — its rows are written as the reader produces them (§30, #635)
 
 **In-Memory API**: ~500k rows before OOM (8GB heap)
 
