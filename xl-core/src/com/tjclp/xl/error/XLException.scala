@@ -24,7 +24,16 @@ package com.tjclp.xl.error
  * }
  * }}}
  *
+ * '''Detail messages''' (GH-589): the sync facade's edge methods may say more than the error
+ * renders on its own — `Excel.readSheet` names the nearest sheet names and every available sheet —
+ * while keeping the structured `error` (and so its `code`/`hint`) exactly what the domain returned.
+ * The one-argument form is the error's own message, byte for byte.
+ *
  * @param error
  *   The underlying structured error
+ * @param detail
+ *   The exception message; defaults to `error.message`
  */
-final class XLException private[xl] (val error: XLError) extends RuntimeException(error.message)
+final class XLException private[xl] (val error: XLError, detail: String)
+    extends RuntimeException(detail):
+  private[xl] def this(error: XLError) = this(error, error.message)
