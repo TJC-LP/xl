@@ -38,15 +38,23 @@ import com.tjclp.xl.workbooks.{DefinedName, Workbook}
  *   - `#` error literals (`#REF!`, `#N/A`, `#DIV/0!`, …): dead operands, no references. Any other
  *     `#…` token is unknown.
  *   - numbers: none — except `n:m` between two integers, a whole-row range.
- *   - identifiers: a call (`NAME(`) contributes nothing unless the bare name (`_xlfn.` / `_xlws.`
- *     stripped) is a dynamic-reference function, which is unbounded; `TRUE`/`FALSE` are literals;
- *     an A1 shape within the grid is a cell (`$` anchors stripped), `A:A` a whole-column range,
- *     `A1:B2` the bounding rectangle; anything else is a defined name, resolved with the
- *     evaluator's case-insensitive sheet-scoped shadowing from the qualifier sheet or the reader's
- *     sheet. A missing name is unbounded. A found name reads what its definition reads: through the
- *     parsed expression when the definition parses and names no other name or dynamic call,
- *     otherwise textually with the definition's scope sheet as home — a workbook-scoped definition
- *     has none, so an unqualified reference inside it is unbounded. Name chains carry the same
+ *   - identifiers: a call (`NAME(`) to a registry function contributes nothing — its arguments are
+ *     scanned like any other text — except a dynamic-reference function (INDIRECT, OFFSET) and the
+ *     functions in [[UnboundedFunctions]], which are unbounded; a call to a name the registry does
+ *     not know (`_xlfn.` / `_xlws.` stripped) is looked up as a defined name, because Excel 365
+ *     stores a LAMBDA as `MyFunc = _xlfn.LAMBDA(…)` and its caller as `MyFunc(1)`: found, the
+ *     definition's reach is included (a parametrised body is unbounded through its `_xlpm.`
+ *     parameters); absent, the call reads only its arguments (`SINGLE`, `RRI`, `ZZZNOTAFUNC`).
+ *     `TRUE`/`FALSE` are literals; an A1 shape within the grid is a cell (`$` anchors stripped),
+ *     `A:A` a whole-column range, `A1:B2` the bounding rectangle; anything else is a defined name,
+ *     resolved with the evaluator's case-insensitive sheet-scoped shadowing from the qualifier
+ *     sheet or the reader's sheet. A missing name is unbounded. A found name reads what its
+ *     definition reads. When the definition parses and names no other name or dynamic call, the
+ *     parsed expression is read with the evaluator's own rule for an unqualified reference: the
+ *     scope sheet, or for a workbook-scoped definition the sheet the reader is on (sound relative
+ *     to xl's name semantics, which resolve such a reference the same way). Otherwise the
+ *     definition text is scanned with the scope sheet as home; a workbook-scoped definition then
+ *     has none, and an unqualified reference inside it is unbounded. Name chains carry the same
  *     cycle/depth guard as `unresolvedReaders`.
  *   - `:` anywhere else — after a name, a call or a literal — is unbounded (`INDEX(…):INDEX(…)`
  *     spans cells only evaluation can locate).
@@ -68,11 +76,35 @@ private[xl] object ReferenceScan:
     case Unbounded
     case Areas(areas: Set[Area])
 
-    /** Whether any of `cells` (grouped by sheet) lies inside the reach. */
-    def touches(cellsBySheet: Map[SheetName, Set[ARef]]): Boolean = this match
+    /** Whether any of the cells (grouped by sheet) lies inside the reach. */
+    def touches(cellsBySheet: Map[SheetName, SheetCells]): Boolean = this match
       case Unbounded => true
       case Areas(areas) =>
-        areas.exists((sheet, range) => cellsBySheet.get(sheet).exists(_.exists(range.contains)))
+        areas.exists((sheet, range) => cellsBySheet.get(sheet).exists(_.intersects(range)))
+
+  /**
+   * One sheet's share of a cell set with its bounding box, so an area that cannot intersect is
+   * rejected in O(1) and one that can is checked from its smaller side — a `put --csv` of 10⁵ cells
+   * against a few hundred bounded readers must not do 10⁸ containment tests per fixpoint round.
+   */
+  final case class SheetCells(cells: Set[ARef], bounds: CellRange):
+    def intersects(range: CellRange): Boolean =
+      cells.nonEmpty && bounds.intersects(range) &&
+        (if range.cellCount < cells.size then range.cells.exists(cells.contains)
+         else cells.exists(range.contains))
+
+  object SheetCells:
+    def of(cells: Set[ARef]): SheetCells =
+      val (minCol, minRow, maxCol, maxRow) =
+        cells.foldLeft((Column.MaxIndex0, Row.MaxIndex0, 0, 0)) { case ((c0, r0, c1, r1), ref) =>
+          (
+            math.min(c0, ref.col.index0),
+            math.min(r0, ref.row.index0),
+            math.max(c1, ref.col.index0),
+            math.max(r1, ref.row.index0)
+          )
+        }
+      SheetCells(cells, CellRange(ARef.from0(minCol, minRow), ARef.from0(maxCol, maxRow)))
 
   /** The reach of formula `text` (leading `=` optional) as read from `sheet`. */
   def reach(workbook: Workbook, sheet: SheetName, text: String): Reach =
@@ -116,6 +148,15 @@ private[xl] object ReferenceScan:
 
   /** Characters that separate references without contributing any. */
   private val Inert = "+-*/^&=<>%,;(){}@"
+
+  /**
+   * Registry functions whose reads the argument text does not bound. `ANCHORARRAY` — the stored
+   * spelling of `A1#` — reads the whole spill range anchored at its argument; `SUMIF` and
+   * `AVERAGEIF` read `sum_range` resized to the shape of `range`, so `SUMIF(A1:A10,">0",C1)` reads
+   * `C1:C10` (the `…IFS` forms demand matching shapes and stay bounded). Scanner-side only: the
+   * parseable-formula dependency graph has the same gap, tracked separately.
+   */
+  private val UnboundedFunctions: Set[String] = Set("ANCHORARRAY", "SUMIF", "AVERAGEIF")
 
   /**
    * Where an unqualified reference lands and how an unqualified name is looked up.
@@ -227,13 +268,23 @@ private[xl] object ReferenceScan:
         val next = at(s, end)
         if bare.isEmpty || next == '!' then None
         else if next == '(' then
-          // A call: the arguments are scanned by the caller; only the function itself matters
+          // A call: the arguments are scanned by the caller; the function decides whether they
+          // bound its reads
           if qualifier.isDefined || token.contains('$') then None
-          else if dynamicFunctions.contains(
-              FormulaStorage.bareFunctionName(bare).toUpperCase(Locale.ROOT)
-            )
-          then None
-          else Some((Reach.Areas(Set.empty), end))
+          else
+            val function = FormulaStorage.bareFunctionName(bare)
+            val upper = function.toUpperCase(Locale.ROOT)
+            if dynamicFunctions.contains(upper) || UnboundedFunctions.contains(upper) then None
+            else if FunctionRegistry.lookup(function).isDefined then
+              Some((Reach.Areas(Set.empty), end))
+            else
+              // Not a registry function: a LAMBDA the workbook defines (`MyFunc(1)`) reads through
+              // its definition; an unknown function that is no name reads only its arguments
+              val lookupFrom = context.ambient.getOrElse(context.fallback)
+              val reach =
+                if definedAt(function, lookupFrom) then resolveName(function, lookupFrom, context)
+                else Reach.Areas(Set.empty)
+              Some((reach, end))
         else if isCell(bare) then
           if next == ':' then
             val end2 = tokenEnd(s, end + 1)
@@ -298,6 +349,11 @@ private[xl] object ReferenceScan:
       qualifier match
         case Some(sheets) => Some(Reach.Areas(sheets.iterator.map(sheet => (sheet, range)).toSet))
         case None => context.ambient.map(sheet => Reach.Areas(Set((sheet, range))))
+
+    private def definedAt(name: String, lookupFrom: SheetName): Boolean =
+      positions
+        .get(lookupFrom)
+        .exists(position => Evaluator.lookupDefinedNameAt(workbook, Some(position), name).isDefined)
 
     private def resolveName(name: String, lookupFrom: SheetName, context: Context): Reach =
       val key: NameKey = (lookupFrom, context.fallback, name.toUpperCase(Locale.ROOT))

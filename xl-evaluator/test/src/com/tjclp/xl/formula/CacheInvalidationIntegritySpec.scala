@@ -330,6 +330,35 @@ class CacheInvalidationIntegritySpec extends FunSuite:
     }
   }
 
+  test("GH-606: a call to a workbook LAMBDA reads through its definition") {
+    // `MyFunc(1)` does not parse, so the caller is a blind reader; its reach must include what the
+    // LAMBDA body reads. A parametrised body is unbounded (its `_xlpm.` parameters resolve to no
+    // name), a parameterless one is bounded to the cells it spells.
+    val wb = Workbook(
+      Sheet("Data").put(ref"A1", num(5)).put(ref"A2", num(6)),
+      Sheet("Calc")
+        .put(ref"B1", formula("MyFunc(1)", 6))
+        .put(ref"B2", formula("Twice()", 10))
+    )
+      .withDefinedName("MyFunc", "_xlfn.LAMBDA(_xlpm.x,_xlpm.x+Data!$A$1)")
+      .withDefinedName("Twice", "_xlfn.LAMBDA(Data!$A$1*2)")
+    val inside = afterEdit(wb, "Data", ref"A1")
+    assertEquals(cache(inside.workbook, "Calc", ref"B1"), None)
+    assertEquals(cache(inside.workbook, "Calc", ref"B2"), None)
+    assert(inside.errors.exists(e => e.sheet.value == "Calc" && e.ref == ref"B2"))
+    val elsewhere = afterEdit(wb, "Data", ref"A2")
+    assertEquals(
+      cache(elsewhere.workbook, "Calc", ref"B1"),
+      None,
+      "a parametrised body is unbounded"
+    )
+    assertEquals(
+      cache(elsewhere.workbook, "Calc", ref"B2"),
+      Some(num(10)),
+      "the body names only A1"
+    )
+  }
+
   test("GH-606: name resolution honours sheet-scoped shadowing") {
     val data = (1 to 10).foldLeft(Sheet("Data")) { (sheet, row) =>
       sheet.put(ARef.from0(0, row - 1), num(row))

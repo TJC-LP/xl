@@ -405,7 +405,10 @@ object DependencyGraph:
       closure: Set[QualifiedRef],
       pending: Vector[(QualifiedRef, ReferenceScan.Reach)]
     ): Set[QualifiedRef] =
-      val cellsBySheet = closure.groupMap(_.sheet)(_.ref)
+      val cellsBySheet =
+        closure
+          .groupMap(_.sheet)(_.ref)
+          .map((sheet, cells) => sheet -> ReferenceScan.SheetCells.of(cells))
       val (joining, waiting) = pending
         .filterNot((reader, _) => closure.contains(reader))
         .partition((_, reach) => reach.touches(cellsBySheet))

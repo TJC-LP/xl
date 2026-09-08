@@ -120,9 +120,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TEXT: string and error literals, numbers, operators and function names contribute nothing; cells,
   ranges, whole rows/columns, sheet qualifiers, 3-D spans and defined names (resolved with the
   evaluator's sheet-scoped shadowing, recursing textually through definitions the parser rejects)
-  contribute their areas; anything the scanner cannot classify — a structured or external
-  reference, a missing name, a dynamic call, a colon after a name or a call — leaves the reader
-  `Unbounded` and always dirty, as before. `DependencyGraph.editCone` is the one cone both
+  contribute their areas; a call to a name the registry does not know (an Excel 365 `LAMBDA`
+  stored as a defined name, `MyFunc(1)`) reads through that definition; anything the scanner cannot
+  classify — a structured or external reference, a missing name, a dynamic call, `ANCHORARRAY`,
+  `SUMIF`/`AVERAGEIF` (whose reads exceed their argument text), a colon after a name or a call —
+  leaves the reader `Unbounded` and always dirty, as before. `DependencyGraph.editCone` is the one cone both
   `recalculateAfterEdit` and the CLI's cone-scoped writes use: roots, their transitive dependents,
   then a fixpoint adding every bounded reader whose areas contain a dirty cell. A reader inside the
   cone is still evaluated, withdrawn and reported; one outside keeps the cache the file carried and

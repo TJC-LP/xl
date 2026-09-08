@@ -25,6 +25,8 @@ class ReferenceScanSpec extends FunSuite:
       .withDefinedName("Loop", "Loop")
       .withDefinedName("Bare", "$A$1:$A$3,$A$8:$A$10")
       .withDefinedName("Chain", "Inputs")
+      .withDefinedName("MyFunc", "_xlfn.LAMBDA(_xlpm.x,_xlpm.x+Sheet2!$A$1)")
+      .withDefinedName("Twice", "_xlfn.LAMBDA(Sheet2!$A$1*2)")
     // Sheet1 shadows the workbook-scoped Multi with a parseable local definition; Sheet2 carries
     // a sheet-scoped copy of the unparseable union so its unqualified areas have a home.
     base.copy(metadata =
@@ -114,6 +116,29 @@ class ReferenceScanSpec extends FunSuite:
     assertEquals(reach("=ZZZNOTAFUNC(INDIRECT(\"A1\"))"), Reach.Unbounded)
     assertEquals(reach("=ZZZNOTAFUNC(_xlfn.indirect(\"A1\"))"), Reach.Unbounded)
     assertEquals(reach("=ZZZNOTAFUNC(OFFSET(A1,1,1))"), Reach.Unbounded)
+  }
+
+  test("a call to a name the registry does not know reads through the definition") {
+    // Excel 365 stores a LAMBDA as a defined name and its caller as `MyFunc(1)`, which the parser
+    // rejects; the parametrised body is unbounded through `_xlpm.x`, a parameterless one bounded
+    assertEquals(reach("=MyFunc(1)"), Reach.Unbounded)
+    assertEquals(reach("=ZZZNOTAFUNC(Twice())"), areas("Sheet2" -> "A1"))
+    assertEquals(
+      reach("=ZZZNOTAFUNC(SINGLE(A1),RRI(3,B1,B2))"),
+      areas("Sheet1" -> "A1", "Sheet1" -> "B1", "Sheet1" -> "B2"),
+      "an unknown function that is no name reads only its arguments"
+    )
+  }
+
+  test("ANCHORARRAY, SUMIF and AVERAGEIF read beyond their argument text") {
+    assertEquals(reach("=ZZZNOTAFUNC(_xlfn.ANCHORARRAY(A1))"), Reach.Unbounded)
+    assertEquals(reach("=ZZZNOTAFUNC(SUMIF(A1:A10,\">0\",C1))"), Reach.Unbounded)
+    assertEquals(reach("=ZZZNOTAFUNC(averageif(A1:A10,\">0\",C1))"), Reach.Unbounded)
+    assertEquals(
+      reach("=ZZZNOTAFUNC(SUMIFS(C1:C10,A1:A10,\">0\"))"),
+      areas("Sheet1" -> "C1:C10", "Sheet1" -> "A1:A10"),
+      "SUMIFS demands matching shapes and stays bounded"
+    )
   }
 
   test("a defined name reads what its parseable definition reads") {
