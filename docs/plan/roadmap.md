@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 6,790 tests passing; one existing performance comparison ignored.
+**Current Status**: Production-ready with **116 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 6,952 tests passing; one existing performance comparison ignored.
 
-**Current Version**: **0.21.0** (agent-first Wave 2a — the `Edit` algebra, `RowCodec`, `CellRecord`/`SheetSource`, `writeChecked`/`orExit` — plus the dogfood fixes #606/#608/#609/#612/#636/#637 and the Wave 25 A1 platform shims — released 2026-09-08)
+**Current Version**: **0.21.1** (the 0.21.0 dogfood's follow-through — named styles preserved on every write (#610), constant-memory `--stream view` and per-verb `--stream` capabilities (#635/#638/#640), formula semantics per Excel (#628–#631, #613), the CLI contract cleanup (#607/#615/#617/#619–#622/#626/#639/#641/#644) — released 2026-09-08)
 
 ---
 
@@ -84,6 +84,18 @@ Part b — [#583](https://github.com/TJC-LP/xl/issues/583) batch on the algebra,
 follow-ups filed: [#593](https://github.com/TJC-LP/xl/issues/593) (writer heals bare `_xlfn.` text
 on every write), [#595](https://github.com/TJC-LP/xl/issues/595) (table uid determinism),
 [#596](https://github.com/TJC-LP/xl/issues/596) (descending sort puts blanks first).
+
+### v0.21.1 — the 0.21.0 dogfood's follow-through (Released 2026-09-08)
+
+Four PRs on top of 0.21.0 — twelve **Breaking:** entries,
+each a behaviour fix toward Excel or the contract:
+
+| PR | Issues | Result |
+|----|--------|--------|
+| [#646](https://github.com/TJC-LP/xl/pull/646) | [#610](https://github.com/TJC-LP/xl/issues/610), [#611](https://github.com/TJC-LP/xl/issues/611) | Named cell styles, the recent-colours palette and the styles `extLst` survive every write; `cellXf`s keep their `xfId`; `"` verbatim in element text. |
+| [#648](https://github.com/TJC-LP/xl/pull/648) | [#628](https://github.com/TJC-LP/xl/issues/628)–[#631](https://github.com/TJC-LP/xl/issues/631), [#613](https://github.com/TJC-LP/xl/issues/613) | Per-reference `#REF!` on structural deletes, `COUNT`/`COUNTA` error semantics, the seven modern error values and `ERROR.TYPE`, `RangeForm.Cell` and `SUMIF`/`AVERAGEIF` resize, the `OFF_GRID_REF` warning, AutoFit on cached values. |
+| [#647](https://github.com/TJC-LP/xl/pull/647) | [#607](https://github.com/TJC-LP/xl/issues/607), [#615](https://github.com/TJC-LP/xl/issues/615), [#617](https://github.com/TJC-LP/xl/issues/617), [#619](https://github.com/TJC-LP/xl/issues/619)–[#622](https://github.com/TJC-LP/xl/issues/622), [#626](https://github.com/TJC-LP/xl/issues/626), [#639](https://github.com/TJC-LP/xl/issues/639), [#641](https://github.com/TJC-LP/xl/issues/641), [#644](https://github.com/TJC-LP/xl/issues/644) | `INVALID_ARGUMENT`/`NAME_NOT_FOUND`, help on stdout, one missing-file diagnostic, `diff` sees caches, `filter`/`stats` shapes, `Excel.readSheet` as an `XLResult`, `SheetNotFound` candidates everywhere. |
+| [#650](https://github.com/TJC-LP/xl/pull/650) | [#635](https://github.com/TJC-LP/xl/issues/635), [#638](https://github.com/TJC-LP/xl/issues/638), [#640](https://github.com/TJC-LP/xl/issues/640) | Unbounded `--stream view` streams in constant memory; every verb's `--stream` capability in `xl schema --json`; the shared-string table parsed once per run and shared with `cell`. |
 
 ### v0.20.0 — wave 26: Calculation integrity (Released 2026-09-07, in 0.20.0)
 

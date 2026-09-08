@@ -226,18 +226,18 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of the #610 named-style preservation and #611 text-escaping fixes (2026-09-08), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored; four subprocess smokes skip when openpyxl is absent or the sandbox runs as root.
+As of the 0.21.1 release (2026-09-08), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored; four subprocess smokes skip when openpyxl is absent or the sandbox runs as root.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 2445 |
-| xl-core | 1559 |
+| xl-evaluator | 2447 |
+| xl-core | 1560 |
 | xl-ooxml | 1152 |
-| xl-cli | 1418 |
+| xl-cli | 1420 |
 | xl-cats-effect | 175 |
 | xl-agent | 146 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 52 |
-| **Total** | **6,947** |
+| **Total** | **6,952** |
 
 ## Test Quality Metrics
 
