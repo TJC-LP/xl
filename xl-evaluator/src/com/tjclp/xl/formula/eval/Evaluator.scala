@@ -205,6 +205,8 @@ object Evaluator:
       // GH-394: a defined name in a range slot resolves through the name table
       case TExpr.RangeLocation.Name(name, scope) =>
         resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames)
+      // GH-612: an error in a range slot (SUM(#REF!)) IS the error value it names
+      case TExpr.RangeLocation.Error(error) => Left(EvalError.ErrorValue(error))
 
   /**
    * GH-394: resolve a defined name used in a RANGE-typed argument slot to its (sheet, range).

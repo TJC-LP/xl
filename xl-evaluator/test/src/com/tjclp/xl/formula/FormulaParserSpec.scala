@@ -2187,7 +2187,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
   private val genRangeText: Gen[String] =
     Gen.oneOf(genFullColumnText, genFullRowText, genBoundedRangeText)
 
-  private val genSheetQualifier: Gen[String] = Gen.oneOf("", "Sheet1!", "'Q1 Data'!")
+  private val genSheetQualifier: Gen[String] =
+    Gen.oneOf("", "Sheet1!", "'Q1 Data'!", "[2]Book1!")
 
   property("GH-612: parse ∘ print = id for full-column, full-row and bounded range forms") {
     forAllNoShrink(genSheetQualifier, genRangeText, Gen.choose(0, 2)) { (sheet, range, shape) =>
@@ -2222,10 +2223,23 @@ class FormulaParserSpec extends ScalaCheckSuite:
     ).foreach(assertPreserved)
   }
 
-  test("GH-612: an explicit corner range spanning every row stays explicit") {
-    assertPreserved("=SUM(A1:A1048576)")
-    assertPreserved("=SUM($A$1:$A$1048576)")
-    assertPreserved("=SUM(A1:XFD1)")
+  test("GH-612: a corner range over every row or column canonicalises to A:A / 1:1 like Excel") {
+    // Excel rewrites a typed A1:A1048576 to A:A at entry, so the corner spelling only reaches xl
+    // from other producers or a putf — and is treated exactly as Excel would have treated it
+    def assertCanonical(source: String, expected: String): Unit =
+      FormulaParser.parse(source) match
+        case Right(expr) => assertEquals(FormulaPrinter.print(expr), expected)
+        case Left(err) => fail(s"$source should parse: $err")
+    assertCanonical("=SUM(A1:A1048576)", "=SUM(A:A)")
+    assertCanonical("=SUM($A$1:$A$1048576)", "=SUM($A:$A)")
+    assertCanonical("=SUM(A$1:C$1048576)", "=SUM(A:C)")
+    assertCanonical("=SUM(A1:XFD1)", "=SUM(1:1)")
+    assertCanonical("=SUM($A$3:$XFD$10)", "=SUM($3:$10)")
+    assertCanonical("=SUM(A1:XFD1048576)", "=SUM(1:1048576)")
+    assertCanonical("=Sheet1!A1:A1048576", "=Sheet1!A:A")
+    // one row or one column short of the edge is still a corner range
+    assertPreserved("=SUM(A2:A1048576)")
+    assertPreserved("=SUM(A1:XFC1)")
   }
 
   test("GH-612: the parser records the form it consumed on the range node") {
@@ -2244,7 +2258,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     FormulaParser.parse("=A1:A1048576") match
       case Right(TExpr.RangeRef(range, form)) =>
         assert(range.isFullColumn)
-        assertEquals(form, RangeForm.Cells)
+        assertEquals(form, RangeForm.Columns) // Excel's entry canonicalisation
+      case other => fail(s"expected RangeRef, got $other")
+    FormulaParser.parse("=A2:A1048576") match
+      case Right(TExpr.RangeRef(_, form)) => assertEquals(form, RangeForm.Cells)
       case other => fail(s"expected RangeRef, got $other")
     FormulaParser.parse("=Sheet1!A:C") match
       case Right(TExpr.SheetRange(_, _, form)) => assertEquals(form, RangeForm.Columns)
@@ -2267,4 +2284,35 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertPreserved("=#REF!+B2")
     assertPreserved("=SUM(#REF!)")
     assertPreserved("=IFERROR(#DIV/0!, 0)")
+    // range-typed slots carry the error as RangeLocation.Error — what Excel writes after a delete
+    assertPreserved("=COUNTIF(#REF!, B1)")
+    assertPreserved("=VLOOKUP(A1, #REF!, 2, FALSE)")
+    assertPreserved("=SUMPRODUCT(#REF!, B1:B3)")
+    FormulaParser.parse("=COUNTIF(#REF!,1)") match
+      case Right(TExpr.Call(_, (TExpr.RangeLocation.Error(error), _))) =>
+        assertEquals(error, CellError.Ref)
+      case other => fail(s"expected COUNTIF over a RangeLocation.Error, got $other")
+    FormulaParser.parse("=SUM(#N/A)") match
+      case Right(TExpr.Call(_, Left(TExpr.RangeLocation.Error(error)) :: Nil)) =>
+        assertEquals(error, CellError.NA)
+      case other => fail(s"expected SUM over a RangeLocation.Error, got $other")
+  }
+
+  test(
+    "GH-612: error literals parse case-insensitively and print upper-cased; unknown codes fail whole"
+  ) {
+    def assertCanonical(source: String, expected: String): Unit =
+      FormulaParser.parse(source) match
+        case Right(expr) => assertEquals(FormulaPrinter.print(expr), expected)
+        case Left(err) => fail(s"$source should parse: $err")
+    assertCanonical("=#ref!", "=#REF!")
+    assertCanonical("=#n/a", "=#N/A")
+    assertCanonical("=#Div/0!", "=#DIV/0!")
+    assertCanonical("=#name?", "=#NAME?")
+    FormulaParser.parse("=#GETTING_DATA") match
+      case Left(err) => assert(err.toString.contains("#GETTING_DATA"), err.toString)
+      case Right(expr) => fail(s"#GETTING_DATA is not a CellError, got $expr")
+    FormulaParser.parse("=#SPILL!") match
+      case Left(err) => assert(err.toString.contains("#SPILL!"), err.toString)
+      case Right(expr) => fail(s"#SPILL! is not a CellError, got $expr")
   }

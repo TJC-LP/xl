@@ -832,9 +832,10 @@ __.test`, `scripts/test-examples.sh`, `scripts/verify-skill-snippets.sh --local`
 5. **`FunctionFlags.volatile`.** `WorkbookAudit` uses a name set in Wave 1; adding the flag
    touches `FunctionSpecs*` (Zinc/macro gotcha) and is a Wave 2 chore.
 6. **Drag edge policy.** Decided in #612: `FormulaShifter.shift` writes `#REF!` for a reference
-   that would leave the grid (per reference, as Excel does) instead of clamping at A1; the
-   whole-column / whole-row forms (`A:A`, `1:1`) carry a `RangeForm` and move along their own
-   axis only.
+   that would leave the grid (per reference, as Excel does; `SUM(#REF!)` for a range slot) instead
+   of clamping at A1; the whole-column / whole-row forms (`A:A`, `1:1`) carry a `RangeForm` and
+   move along their own axis only, and a corner spelling over every row/column is that form (Excel
+   canonicalises `A1:A1048576` to `A:A` at entry).
 7. **`recalc` as a batch directive vs an op** in the Wave 2 codec — decide after field use.
 8. **`Excel`/`Excel[F]` homonym** (sync object and F-polymorphic trait share a name): rename or
    alias in 1.0.

@@ -102,8 +102,10 @@ enum TExpr[A] derives CanEqual:
   case SheetRef[A](sheet: SheetName, at: ARef, anchor: Anchor, decode: Cell => Either[CodecError, A])
       extends TExpr[A]
   case SheetPolyRef(sheet: SheetName, at: ARef, anchor: Anchor = Anchor.Relative) extends TExpr[Nothing]
-  case RangeRef(range: CellRange) extends TExpr[Nothing]
-  case SheetRange(sheet: SheetName, range: CellRange) extends TExpr[Nothing]
+  case RangeRef(range: CellRange, form: RangeForm = RangeForm.Cells) extends TExpr[Nothing]
+  case SheetRange(sheet: SheetName, range: CellRange, form: RangeForm = RangeForm.Cells)
+      extends TExpr[Nothing]
+  case ErrorLit(error: CellError) extends TExpr[Nothing]   // #REF!, #N/A, …
 
   // Arithmetic (TExpr[BigDecimal])
   case Add(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]

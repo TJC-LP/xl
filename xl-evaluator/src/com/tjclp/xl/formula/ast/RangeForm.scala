@@ -1,5 +1,7 @@
 package com.tjclp.xl.formula.ast
 
+import com.tjclp.xl.CellRange
+
 /**
  * GH-612: the SURFACE FORM of a range reference in formula text.
  *
@@ -22,12 +24,22 @@ enum RangeForm derives CanEqual:
 
 object RangeForm:
   /**
-   * The form spelled by range TEXT (`start:end`, anchors allowed, no sheet qualifier): letters-only
-   * parts are [[Columns]], digits-only parts are [[Rows]], anything else [[Cells]]. This is the
-   * parser's classification of the syntax it consumed — the same split `CellRange.parse` makes when
-   * it decides which corners to synthesize — never an inference from the cells addressed.
+   * The form Excel displays for range TEXT `start:end` (anchors allowed, no sheet qualifier) that
+   * parsed to `range`. Letters-only parts are [[Columns]] and digits-only parts [[Rows]]; a CORNER
+   * spelling that addresses every row (`A1:A1048576`) is [[Columns]] and one that addresses every
+   * column (`A1:XFD1`) is [[Rows]], because Excel canonicalises such an entry to `A:A` / `1:1`
+   * before it reaches the file — the explicit corner form only arrives from other producers
+   * (openpyxl, a `putf`) and is treated as Excel would have treated it. A corner range spanning
+   * every row AND every column is `1:1048576`. Anything else is [[Cells]].
    */
-  def ofText(rangeText: String): RangeForm =
+  def of(rangeText: String, range: CellRange): RangeForm =
+    ofText(rangeText) match
+      case Cells if range.isFullRow => Rows
+      case Cells if range.isFullColumn => Columns
+      case form => form
+
+  /** The form SPELLED by the text alone: the parser's classification of the syntax it consumed. */
+  private def ofText(rangeText: String): RangeForm =
     rangeText.split(':') match
       case Array(start, end) =>
         val s = start.stripPrefix("$")

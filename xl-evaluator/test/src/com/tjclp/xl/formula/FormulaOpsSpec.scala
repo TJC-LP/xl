@@ -197,24 +197,41 @@ class FormulaOpsSpec extends FunSuite:
     )
   }
 
-  test("GH-612: an explicit corner range is a cell range: it drags on both axes and can void") {
-    assertEquals(shifted("=SUM(A1:A1048576)", 1, 0), "=SUM(B1:B1048576)")
-    assertEquals(shifted("=SUM(A1:A1048576)", 0, 1), "=#REF!")
+  test("GH-612: a corner range over every row is the whole-column form and drags like one") {
+    // Excel canonicalises A1:A1048576 to A:A at entry; the corner spelling only reaches xl from
+    // other producers or a putf, and drags exactly as A:A would
+    assertEquals(shifted("=SUM(A1:A1048576)", 1, 0), "=SUM(B:B)")
+    assertEquals(shifted("=SUM(A1:A1048576)", 0, 1), "=SUM(A:A)")
+    assertEquals(shifted("=SUM(A1:XFD1)", 0, 2), "=SUM(3:3)")
+    assertEquals(shifted("=SUM(A2:A1048576)", 0, 1), "=SUM(#REF!)")
+  }
+
+  test("GH-612: a shift that makes a relative corner overtake an anchored one prints normalised") {
+    assertEquals(shifted("=SUM(E:$E)", 1, 0), "=SUM($E:F)")
+    assertEquals(shifted("=SUM($E:E)", -1, 0), "=SUM(D:$E)")
+    assertEquals(shifted("=SUM(3:$3)", 0, 2), "=SUM($3:5)")
+    assertEquals(shifted("=SUM(A1:$B$1)", 2, 0), "=SUM($B$1:C1)")
   }
 
   test("GH-612: a reference pushed off the grid becomes #REF!, never a non-existent address") {
     // before row 1 / column A
     assertEquals(shifted("=A1+B3", 0, -1), "=#REF!+B2")
     assertEquals(shifted("=Sheet1!A1", 0, -1), "=#REF!")
-    assertEquals(shifted("=SUM(A1:A2)+C5", 0, -1), "=#REF!+C4")
-    assertEquals(shifted("=SUM(A:A)", -1, 0), "=#REF!")
-    assertEquals(shifted("=SUM(1:1)", 0, -1), "=#REF!")
+    // a range in a range-typed slot becomes #REF! inside the call, as Excel writes it
+    assertEquals(shifted("=SUM(A1:A2)+C5", 0, -1), "=SUM(#REF!)+C4")
+    assertEquals(shifted("=COUNTIF(A1:A2,B5)", 0, -1), "=COUNTIF(#REF!,B4)")
+    assertEquals(shifted("=SUM(A:A)", -1, 0), "=SUM(#REF!)")
+    assertEquals(shifted("=SUM(1:1)", 0, -1), "=SUM(#REF!)")
+    assertEquals(shifted("=SUM(Sheet1!A:A)", -1, 0), "=SUM(#REF!)")
+    assertEquals(shifted("=A:A", -1, 0), "=#REF!")
     // past row 1048576 / column XFD
     assertEquals(shifted("=A1048576", 0, 1), "=#REF!")
     assertEquals(shifted("=XFD1", 1, 0), "=#REF!")
-    assertEquals(shifted("=SUM(XFC1:XFD1)", 1, 0), "=#REF!")
-    assertEquals(shifted("=SUM(XFD:XFD)", 1, 0), "=#REF!")
-    assertEquals(shifted("=SUM(1048576:1048576)", 0, 1), "=#REF!")
+    assertEquals(shifted("=SUM(XFC1:XFD1)", 1, 0), "=SUM(#REF!)")
+    assertEquals(shifted("=SUM(XFD:XFD)", 1, 0), "=SUM(#REF!)")
+    assertEquals(shifted("=SUM(1048576:1048576)", 0, 1), "=SUM(#REF!)")
+    // the written #REF! re-parses and shifts as an error, staying put
+    assertEquals(shifted("=SUM(#REF!)+C4", 1, 1), "=SUM(#REF!)+D5")
     // anchors pin an axis, so it cannot fall off
     assertEquals(shifted("=A$1", 0, -1), "=A$1")
     assertEquals(shifted("=$A1", -1, 0), "=$A1")

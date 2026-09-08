@@ -1106,8 +1106,9 @@ object FormulaParser:
           // Range reference: Sheet1!A1:B10
           CellRange.parse(refPart) match
             case Right(range) =>
-              // GH-612: keep the whole-column / whole-row form the text spelled
-              Right((TExpr.SheetRange(sheetName, range, RangeForm.ofText(refPart)), s2))
+              // GH-612: keep the whole-column / whole-row form the text spelled (a corner range
+              // over every row/column canonicalises to it, as Excel does at entry)
+              Right((TExpr.SheetRange(sheetName, range, RangeForm.of(refPart, range)), s2))
             case Left(err) =>
               Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
         else
@@ -1232,7 +1233,7 @@ object FormulaParser:
       // External range reference: [2]Book1!A1:B2
       CellRange.parse(refPart) match
         case Right(range) =>
-          Right((TExpr.ExternalRange(index, name, range, RangeForm.ofText(refPart)), s2))
+          Right((TExpr.ExternalRange(index, name, range, RangeForm.of(refPart, range)), s2))
         case Left(err) =>
           Left(ParseError.InvalidCellRef(s"$prefix!$refPart", startPos, err))
     else
@@ -1295,29 +1296,32 @@ object FormulaParser:
     CellRange.parse(rangeStr) match
       case Right(range) =>
         // GH-612: the form is the syntax consumed — A:C is whole columns, A1:C10 corners — so a
-        // whole-column reference prints back as written and drags only along columns
-        Right((TExpr.RangeRef(range, RangeForm.ofText(rangeStr)), s3))
+        // whole-column reference prints back as written and drags only along columns; a corner
+        // spelling over every row (A1:A1048576) is the whole-column form, as Excel canonicalises it
+        Right((TExpr.RangeRef(range, RangeForm.of(rangeStr, range)), s3))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
 
   /**
-   * GH-612: parse an Excel error literal: `#` followed by the code's letters/digits/`/` and its
-   * closing `!` or `?` (`#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`). Anything `CellError.parse` does not
-   * recognize is a parse error — never a silent literal.
+   * GH-612: parse an Excel error literal: `#` followed by the code's letters/digits/`/`/`_` and its
+   * closing `!` or `?` (`#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`), case-insensitively (`#ref!` is
+   * `#REF!`, as Excel upper-cases it at entry). The whole token is read before it is judged, so an
+   * unknown code (`#GETTING_DATA`) is reported whole; anything `CellError.parse` does not recognize
+   * is a parse error — never a silent literal.
    */
   private def parseErrorLiteral(state: ParserState): ParseResult[TExpr[?]] =
     val startPos = state.pos
     @tailrec
     def readBody(s: ParserState): ParserState =
       s.currentChar match
-        case Some(c) if c.isLetterOrDigit || c == '/' => readBody(s.advance())
+        case Some(c) if c.isLetterOrDigit || c == '/' || c == '_' => readBody(s.advance())
         case _ => s
     val afterBody = readBody(state.advance())
     val afterTerminator = afterBody.currentChar match
       case Some('!' | '?') => afterBody.advance()
       case _ => afterBody
     val text = state.input.substring(startPos, afterTerminator.pos)
-    CellError.parse(text) match
+    CellError.parse(text.toUpperCase) match
       case Right(error) => Right((TExpr.ErrorLit(error), afterTerminator))
       case Left(_) =>
         Left(ParseError.UnexpectedChar('#', startPos, s"unknown error literal '$text'"))

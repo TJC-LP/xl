@@ -282,9 +282,11 @@ object FormulaPrinter:
     s"${formatARef(range.start, range.startAnchor)}:${formatARef(range.end, range.endAnchor)}"
 
   /**
-   * GH-612: format a range in the form it was written — whole columns as `$A:C`, whole rows as
-   * `$3:10` (a `$` on the coordinate axis only), corner ranges as today. The form is never inferred
-   * from the cells addressed: `A1:A1048576` written explicitly prints its corners.
+   * GH-612: format a range in the form the AST carries — whole columns as `$A:C`, whole rows as
+   * `$3:10` (a `$` on the coordinate axis only), corner ranges as today. The printer never infers
+   * the form from the cells addressed: the PARSER decides it (Excel's entry rule makes a corner
+   * spelling over every row the whole-column form), and a `RangeRef(range)` built by hand with the
+   * default `Cells` prints its corners.
    */
   private def formatRange(range: CellRange, form: RangeForm): String =
     form match
@@ -316,6 +318,8 @@ object FormulaPrinter:
         scope match
           case Some(sheet) => s"${formatSheetName(sheet)}!$name"
           case None => name
+      // GH-612: an error in a range slot prints as its code — SUM(#REF!), as Excel writes it
+      case TExpr.RangeLocation.Error(error) => error.toExcel
 
   /**
    * Format ARef to A1 notation with anchor support.

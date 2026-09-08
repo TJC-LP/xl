@@ -30,8 +30,8 @@ import TExpr.RangeLocation
  * whole-row reference (`3:3`) only along rows — the other axis is "all of them", not a coordinate.
  * A reference that a shift would carry off the grid (before A1, past XFD1048576) becomes the error
  * literal `#REF!`, per reference, exactly as Excel writes when copying `=A1` from B2 to B1; a range
- * in a range-typed argument slot that falls off the grid voids the enclosing call (`SUM(A1:A2)` →
- * `#REF!`, the same value Excel's `SUM(#REF!)` evaluates to).
+ * in a range-typed argument slot becomes [[RangeLocation.Error]] the same way (`SUM(A1:A2)` →
+ * `SUM(#REF!)`).
  *
  * Laws:
  *   - Identity: shift(expr, 0, 0) == expr
@@ -41,8 +41,9 @@ import TExpr.RangeLocation
  */
 object FormulaShifter:
 
-  /** GH-612: what an off-grid reference becomes. */
+  /** GH-612: what an off-grid reference becomes, in expression and in range-slot position. */
   private val refError: TExpr[Nothing] = TExpr.ErrorLit(CellError.Ref)
+  private val refErrorLocation: RangeLocation = RangeLocation.Error(CellError.Ref)
 
   /**
    * Shift all cell references in the expression by the given deltas.
@@ -60,8 +61,9 @@ object FormulaShifter:
     if colDelta == 0 && rowDelta == 0 then expr
     else shiftInternal(expr, colDelta, rowDelta)
 
-  // Var: the argSpec.map traversal cannot return a different node shape, so a voided range slot
-  // is flagged through a local var exactly as shiftStructuralInternal does
+  // Var: the deprecated bare-CellRange argument slot (ArgSpec.cellRange, no in-repo consumers) has
+  // no error form, so an off-grid range there voids the call through a local var exactly as
+  // shiftStructuralInternal flags a deleted one
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Var"))
   @nowarn(
     "msg=Unreachable case"
@@ -169,16 +171,16 @@ object FormulaShifter:
         Percent(shiftInternal(e, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
       // Arithmetic range functions (now using RangeLocation). GH-612: a range slot that falls off
-      // the grid voids the call — the value Excel's `SUM(#REF!)` evaluates to
+      // the grid becomes RangeLocation.Error — SUM(#REF!), as Excel writes it
       case Aggregate(aggregatorId, location) =>
-        orRefError(shiftLocation(location, colDelta, rowDelta).map(Aggregate(aggregatorId, _)))
+        Aggregate(aggregatorId, shiftLocation(location, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
       case call: Call[?] =>
         var voided = false
         val shifted =
           call.spec.argSpec.map(call.args)(
             expr => shiftInternal(expr, colDelta, rowDelta),
-            loc => shiftLocation(loc, colDelta, rowDelta).getOrElse { voided = true; loc },
+            loc => shiftLocation(loc, colDelta, rowDelta),
             range =>
               shiftRange(range, RangeForm.Cells, colDelta, rowDelta).getOrElse {
                 voided = true; range
@@ -276,31 +278,40 @@ object FormulaShifter:
     for
       newStart <- shiftARef(range.start, range.startAnchor, cd, rd)
       newEnd <- shiftARef(range.end, range.endAnchor, cd, rd)
-    yield new CellRange(newStart, newEnd, range.startAnchor, range.endAnchor)
+    // The normalising constructor: when a relative corner overtakes an anchored one (`E:$E` dragged
+    // right is `$E:F`, `A1:$B$1` is `$B$1:C1`) the corners swap and each anchor follows its corner,
+    // as Excel prints. A DIAGONAL swap of mixed anchors (`A$1:$B2` overtaken on one axis only) still
+    // swaps the anchors wholesale where Excel recombines them per axis.
+    yield CellRange(newStart, newEnd, range.startAnchor, range.endAnchor)
 
   /**
    * Shift a RangeLocation by the given deltas.
    *
-   * Handles both Local and CrossSheet locations, shifting the underlying CellRange. None when the
-   * range leaves the grid (GH-612).
+   * Handles both Local and CrossSheet locations, shifting the underlying CellRange. A range that
+   * leaves the grid becomes [[RangeLocation.Error]] `#REF!` (GH-612), exactly as Excel writes
+   * `SUM(#REF!)`.
    */
   private def shiftLocation(
     location: RangeLocation,
     colDelta: Int,
     rowDelta: Int
-  ): Option[RangeLocation] =
+  ): RangeLocation =
     location match
       case RangeLocation.Local(range, form) =>
-        shiftRange(range, form, colDelta, rowDelta).map(RangeLocation.Local(_, form))
+        shiftRange(range, form, colDelta, rowDelta)
+          .fold(refErrorLocation)(RangeLocation.Local(_, form))
       case RangeLocation.CrossSheet(sheet, range, form) =>
-        shiftRange(range, form, colDelta, rowDelta).map(RangeLocation.CrossSheet(sheet, _, form))
+        shiftRange(range, form, colDelta, rowDelta)
+          .fold(refErrorLocation)(RangeLocation.CrossSheet(sheet, _, form))
       // GH-353: external-workbook range args drag anchor-aware like the TExpr.ExternalRange node
       case RangeLocation.External(index, name, range, form) =>
         shiftRange(range, form, colDelta, rowDelta)
-          .map(RangeLocation.External(index, name, _, form))
+          .fold(refErrorLocation)(RangeLocation.External(index, name, _, form))
       // GH-394: a defined name is an identifier, not coordinates — shifting is a no-op
       // (its refersTo text lives in workbook metadata, not in this formula)
-      case name @ RangeLocation.Name(_, _) => Some(name)
+      case name @ RangeLocation.Name(_, _) => name
+      // GH-612: an error has no coordinates
+      case error @ RangeLocation.Error(_) => error
 
   /**
    * Helper to shift TExpr[?] (wildcard type).
@@ -341,7 +352,7 @@ object FormulaShifter:
     def goLoc(location: RangeLocation): Boolean = location match
       case RangeLocation.CrossSheet(sheet, _, _) => matches(sheet)
       case RangeLocation.Local(_, _) | RangeLocation.External(_, _, _, _) |
-          RangeLocation.Name(_, _) =>
+          RangeLocation.Name(_, _) | RangeLocation.Error(_) =>
         false
     def go(e: TExpr[?]): Boolean = e match
       case SheetRef(sheet, _, _, _) => matches(sheet)
@@ -400,7 +411,8 @@ object FormulaShifter:
     def goLoc(location: RangeLocation): Boolean = location match
       case RangeLocation.Name(_, Some(scope)) => scope.value.equalsIgnoreCase(sheet)
       case RangeLocation.Name(_, None) | RangeLocation.Local(_, _) |
-          RangeLocation.CrossSheet(_, _, _) | RangeLocation.External(_, _, _, _) =>
+          RangeLocation.CrossSheet(_, _, _) | RangeLocation.External(_, _, _, _) |
+          RangeLocation.Error(_) =>
         false
     def go(e: TExpr[?]): Boolean = e match
       case SheetNameRef(qualifier, _) => qualifier.value.equalsIgnoreCase(sheet)
@@ -466,7 +478,7 @@ object FormulaShifter:
       // GH-394: a sheet-qualified name in a range slot (`SUMIF(Model!rev_range, …)`) follows too
       case RangeLocation.Name(name, Some(scope)) => RangeLocation.Name(name, Some(target(scope)))
       case other @ (RangeLocation.Local(_, _) | RangeLocation.External(_, _, _, _) |
-          RangeLocation.Name(_, None)) =>
+          RangeLocation.Name(_, None) | RangeLocation.Error(_)) =>
         other
 
     expr match
@@ -639,6 +651,8 @@ object FormulaShifter:
       // GH-394: a defined name is an identifier — structural edits never move or void it
       // (its refersTo text lives in workbook metadata, not in this formula)
       case RangeLocation.Name(_, _) => Some(location)
+      // GH-612: an error has no coordinates
+      case RangeLocation.Error(_) => Some(location)
 
   @SuppressWarnings(
     Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Var")

@@ -230,14 +230,14 @@ As of the wave-28a stack (2026-09-08), from the full-suite JUnit reports; macros
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 2360 |
-| xl-core | 1534 |
+| xl-evaluator | 2367 |
+| xl-core | 1536 |
 | xl-ooxml | 1119 |
 | xl-cli | 1264 |
 | xl-cats-effect | 167 |
 | xl-agent | 145 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 51 |
-| **Total** | **6,640** |
+| **Total** | **6,649** |
 
 ## Test Quality Metrics
 

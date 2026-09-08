@@ -548,6 +548,7 @@ object DependencyGraph:
       // GH-394: an unqualified name's lookup depends on the ambient sheet (sheet-scoped names
       // shadow workbook-scoped ones); a sheet-qualified name carries its own context
       case TExpr.Aggregate(_, TExpr.RangeLocation.Name(_, scope)) => scope.isEmpty
+      case TExpr.Aggregate(_, TExpr.RangeLocation.Error(_)) => false
 
       // Function calls - check arguments
       case call: TExpr.Call[?] =>
@@ -563,6 +564,7 @@ object DependencyGraph:
                 case TExpr.RangeLocation.External(_, _, _, _) => false
                 // GH-394: unqualified name lookup depends on the ambient sheet
                 case TExpr.RangeLocation.Name(_, scope) => scope.isEmpty
+                case TExpr.RangeLocation.Error(_) => false
             case ArgValue.Cells(_) => true
           }
 
@@ -1801,6 +1803,8 @@ object DependencyGraph:
           scope match
             case None => go(TExpr.NameRef(name))
             case Some(qualifier) => go(TExpr.SheetNameRef(canonicalSheet(qualifier), name))
+        // GH-612: an error in a range slot has no cells
+        case TExpr.RangeLocation.Error(_) => Set.empty
 
     def fixedIndex(expr: TExpr[?]): Option[Int] =
       def number(value: Any): Option[Int] = value match

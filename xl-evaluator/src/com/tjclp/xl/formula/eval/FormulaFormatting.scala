@@ -115,6 +115,7 @@ object FormulaFormatting:
         // GH-394: the target range lives behind workbook metadata this walk cannot see —
         // no format to inherit (the GH-384 NameRef precedent)
         case TExpr.RangeLocation.Name(_, _) => Vector.empty
+        case TExpr.RangeLocation.Error(_) => Vector.empty
 
     def loop(e: TExpr[?]): Vector[(Sheet, ARef)] =
       e match

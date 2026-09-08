@@ -243,6 +243,10 @@ object ArgSpec:
           Right((TExpr.RangeLocation.Name(name, None), tail))
         case TExpr.SheetNameRef(sheet, name) :: tail =>
           Right((TExpr.RangeLocation.Name(name, Some(sheet)), tail))
+        // GH-612: SUM(#REF!) / COUNTIF(#REF!, x) — what Excel writes after a delete or an
+        // off-grid drag; the slot carries the error and evaluation yields it
+        case TExpr.ErrorLit(error) :: tail =>
+          Right((TExpr.RangeLocation.Error(error), tail))
         case _ =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
 
@@ -428,6 +432,10 @@ object ArgSpec:
         // GH-353: external-workbook ranges take the range branch (like the other two shapes)
         case TExpr.ExternalRange(index, name, range, form) :: tail =>
           Right((Left(TExpr.RangeLocation.External(index, name, range, form)), tail))
+        // GH-612: an error literal takes the range branch so SUM(#REF!) round-trips to the same
+        // AST the shifter writes for an off-grid range
+        case TExpr.ErrorLit(error) :: tail =>
+          Right((Left(TExpr.RangeLocation.Error(error)), tail))
         case head :: tail =>
           Right((Right(TExpr.asNumericExpr(head)), tail))
         case Nil =>
@@ -474,6 +482,8 @@ object ArgSpec:
         // GH-353: external-workbook ranges take the range branch (like the other two shapes)
         case TExpr.ExternalRange(index, name, range, form) :: tail =>
           Right((Left(TExpr.RangeLocation.External(index, name, range, form)), tail))
+        case TExpr.ErrorLit(error) :: tail =>
+          Right((Left(TExpr.RangeLocation.Error(error)), tail))
         case head :: tail =>
           Right((Right(head.asInstanceOf[TExpr[Any]]), tail))
         case Nil =>
