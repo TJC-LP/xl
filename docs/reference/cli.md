@@ -111,10 +111,15 @@ xl batch --schema                                  # JSON Schema of the batch do
 
 Every write verb that changes cell content ends with a recalculation scoped to the edit's **dirty
 dependency cone** — the changed cells plus their transitive dependents (cross-sheet included) plus
-the always-dirty `INDIRECT`/`OFFSET` cells. Readers with unresolved dependencies also join the
-invalidation set. Formula writes are evaluated against the completed edit; an authored cycle or
-host failure is reported and left uncached with its affected dependents. Unaffected caches keep
-the values supplied by their original calculator.
+the always-dirty `INDIRECT`/`OFFSET` cells. A formula the parser rejects (an omitted argument, an
+unsupported function, a name whose definition it cannot read) has no graph edges, so its TEXT
+decides: it joins the cone only when a cell or range it spells — resolved through sheet qualifiers,
+3-D spans and defined names — contains a dirty cell; a text the scanner cannot bound (a structured
+or external reference, an unknown name, `INDIRECT` inside it) is dirty on every edit. Inside the
+cone such a formula is evaluated, fails, and is left uncached and reported; outside it, the cache
+the file already carried stays untouched (#606). Formula writes are evaluated against the completed
+edit; an authored cycle or host failure is reported and left uncached with its affected dependents.
+Unaffected caches keep the values supplied by their original calculator.
 
 `--no-recalc` (alias `--preserve-caches`) skips the post-edit recalculation. The edit still lands;
 newly written formulas can carry caches produced by the verb's authoring step. Use it when an external calculator owns the numbers. Honored by `put`,
@@ -185,9 +190,10 @@ With `-i` the temp file is discarded and the input is left byte-identical; the s
 together with `--stream` (streaming writes never recalculate, so the gate could never fire). Verbs
 that perform no recalculation, such as presentation-only verbs, have no calculation outcome to
 gate. `put`, `putf`, `fill`, and `copy` include authored formulas and affected dependents in their
-reported outcomes. Structural and batch writes retain workbook-level errors even when the failing
-cell is outside the cache-write cone. Use `--strict` without `--no-recalc` when the command must
-validate calculation results.
+reported outcomes. Structural and batch writes recalculate the whole book but report a failure only
+for a cell inside the cache-write cone or one the written file leaves uncached; a formula outside
+the cone whose cache was kept is never reported as "left uncached" (#606). Use `--strict` without
+`--no-recalc` when the command must validate calculation results.
 
 For `recalc --tables`, unsupported dynamic source cones produce a named skip warning; failed
 source/axis/member evaluations report unseeded counts and retain unresolved-precedent diagnostics.

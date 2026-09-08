@@ -10,6 +10,7 @@ import com.tjclp.xl.{CellRange, Workbook, Sheet, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
+import com.tjclp.xl.cli.contract.{CliHarness, Warning, WarningCode}
 import com.tjclp.xl.formula.FormulaParser
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
@@ -1561,6 +1562,209 @@ class BatchRecalcSpec extends FunSuite:
       "an unrelated independent formula keeps its cache"
     )
     Files.deleteIfExists(out)
+  }
+
+  // ===== GH-606: blind readers outside the edit's textual reach keep their caches =====
+
+  /**
+   * The dogfood shape of #606: a formula-free cover sheet, then sheets whose formulas the parser
+   * rejects (`ZZZNOTAFUNC` is a stable UnknownFunction failure) and whose text names only cells on
+   * `Summary`. Written to disk with preservation markers on the blind sheets so a regenerated part
+   * is distinguishable from a verbatim copy.
+   */
+  private def blindModelOnDisk(): Path =
+    val srcFile = tempXlsx()
+    ExcelIO
+      .instance[IO]
+      .write(
+        Workbook(
+          Sheet("Cover").put(ref"A1", CellValue.Text("Projection model")),
+          Sheet("Summary")
+            .put(ref"A1", CellValue.Number(BigDecimal(5)))
+            .put(ref"B1", CellValue.Formula("ZZZNOTAFUNC(A1)", Some(CellValue.Number(7))))
+            .put(
+              ref"B2",
+              CellValue.Formula("ZZZNOTAFUNC(A1:A5,\"B16\")", Some(CellValue.Number(8)))
+            ),
+          Sheet("Detail")
+            .put(ref"C1", CellValue.Formula("ZZZNOTAFUNC('Summary'!A1)", Some(CellValue.Number(9))))
+        ),
+        srcFile
+      )
+      .unsafeRunSync()
+    injectPreservationMarker(srcFile, "xl/worksheets/sheet2.xml")
+    injectPreservationMarker(srcFile, "xl/worksheets/sheet3.xml")
+    srcFile
+
+  private def assertVerbatim(out: Path, srcFile: Path, entry: String): Unit =
+    assertEquals(zipEntryBytes(out, entry).toSeq, zipEntryBytes(srcFile, entry).toSeq, entry)
+    assert(
+      new String(zipEntryBytes(out, entry), StandardCharsets.UTF_8).contains(preservationMarker),
+      s"$entry was regenerated: preservation marker lost"
+    )
+
+  test("GH-606: a put outside every blind reader's reach keeps their caches and worksheet parts") {
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val out = tempXlsx()
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    try
+      val summary = WriteCommands
+        .put(
+          wb,
+          wb.sheets.find(_.name.value == "Cover"),
+          "B16",
+          List("dogfood"),
+          out,
+          config,
+          warn = w => IO(warnings += w)
+        )
+        .unsafeRunSync()
+      assert(!summary.contains("error"), s"no cone formula can fail: $summary")
+      assertEquals(warnings.toList, Nil, "no RECALC_ERRORS for formulas the edit cannot reach")
+
+      val written = readBack(out)
+      assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, Some(CellValue.Number(7)))
+      assertEquals(formulaOn(written, "Summary", ref"B2").cachedValue, Some(CellValue.Number(8)))
+      assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, Some(CellValue.Number(9)))
+      assertEquals(
+        written.sheets.head.cells.get(ref"B16").map(_.value),
+        Some(CellValue.Text("dogfood"))
+      )
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet2.xml")
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet3.xml")
+
+      val audit = CliHarness.run("-f", out.toString, "--json", "audit").unsafeRunSync()
+      assertEquals(audit.exit, 0, audit.stderr)
+      val data = ujson.read(audit.stdout)("data")
+      assertEquals(data("uncachedFormulas").arr.size, 0, audit.stdout)
+      assertEquals(data("unparseable").arr.size, 3, "the formulas are still unparseable, cached")
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(out)
+  }
+
+  test("GH-606: a put inside a blind reader's reach withdraws its cache and warns") {
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val out = tempXlsx()
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    try
+      val summary = WriteCommands
+        .put(
+          wb,
+          wb.sheets.find(_.name.value == "Summary"),
+          "A1",
+          List("6"),
+          out,
+          config,
+          warn = w => IO(warnings += w)
+        )
+        .unsafeRunSync()
+      assert(summary.contains("3 errors"), summary)
+      assertEquals(warnings.map(_.code).toList, List(WarningCode.RECALC_ERRORS))
+      val written = readBack(out)
+      assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, None)
+      assertEquals(formulaOn(written, "Summary", ref"B2").cachedValue, None)
+      assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, None)
+      // Detail's only formula was withdrawn, so its part is regenerated without the marker
+      assert(
+        !new String(zipEntryBytes(out, "xl/worksheets/sheet3.xml"), StandardCharsets.UTF_8)
+          .contains(preservationMarker)
+      )
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(out)
+  }
+
+  test("GH-606: a batch put outside every blind reader's reach rides their parts verbatim") {
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val out = tempXlsx()
+    val ops = writeOps("""[{"op":"put","ref":"Cover!B16","value":"dogfood"}]""")
+    try
+      WriteCommands.batch(wb, None, ops.toString, out, config).unsafeRunSync()
+      val written = readBack(out)
+      assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, Some(CellValue.Number(7)))
+      assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, Some(CellValue.Number(9)))
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet2.xml")
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet3.xml")
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(out)
+      Files.deleteIfExists(ops)
+  }
+
+  test("GH-606: a strict batch put outside every blind reader's reach reports no errors") {
+    // The batch path recalculates the whole book, so the blind formulas fail in that pass; their
+    // caches are kept (outside the cone), and a failure on a kept cache must not be reported,
+    // must not warn, and must not fail --strict: the summary may never say "left uncached" about
+    // a cache the file still carries.
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val out = tempXlsx()
+    val ops = writeOps("""[{"op":"put","ref":"Cover!B16","value":"dogfood"}]""")
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    try
+      val summary = WriteCommands
+        .batch(
+          wb,
+          None,
+          ops.toString,
+          out,
+          config,
+          policy = WritePolicy(strict = true),
+          warn = w => IO(warnings += w)
+        )
+        .unsafeRunSync()
+      assert(summary.contains("Recalculated 0 formulas"), summary)
+      assert(!summary.contains("error"), s"a kept cache is not a failure: $summary")
+      assertEquals(warnings.toList, Nil, "no RECALC_ERRORS for caches the write preserved")
+      val written = readBack(out)
+      assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, Some(CellValue.Number(7)))
+      assertEquals(formulaOn(written, "Summary", ref"B2").cachedValue, Some(CellValue.Number(8)))
+      assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, Some(CellValue.Number(9)))
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet2.xml")
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet3.xml")
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(out)
+      Files.deleteIfExists(ops)
+  }
+
+  test("GH-606: a batch that authors an unparseable formula is reported and fails --strict") {
+    // The authored cell is a seed, hence in the cone: the #572 guarantee is untouched, while the
+    // blind formulas elsewhere still ride through cached and unreported.
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val ops = writeOps("""[{"op":"putf","ref":"Cover!B16","formula":"=ZZZNOTAFUNC(A1)"}]""")
+    val advisoryOut = tempXlsx()
+    val strictOut = tempXlsx()
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    try
+      val advisory = WriteCommands
+        .batch(wb, None, ops.toString, advisoryOut, config, warn = w => IO(warnings += w))
+        .unsafeRunSync()
+      assert(advisory.contains("1 error"), advisory)
+      assert(advisory.contains("Cover!B16"), advisory)
+      assertEquals(warnings.map(_.code).toList, List(WarningCode.RECALC_ERRORS))
+
+      val strict = strictFailure(
+        WriteCommands
+          .batch(wb, None, ops.toString, strictOut, config, policy = WritePolicy(strict = true))
+      )
+      assert(strict.contains("Cover!B16"), strict)
+      assert(strict.contains("1 formula evaluation error"), strict)
+      val written = readBack(strictOut)
+      assertEquals(formulaOn(written, "Cover", ref"B16").cachedValue, None)
+      assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, Some(CellValue.Number(7)))
+      assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, Some(CellValue.Number(9)))
+      assertVerbatim(strictOut, srcFile, "xl/worksheets/sheet2.xml")
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(advisoryOut)
+      Files.deleteIfExists(strictOut)
+      Files.deleteIfExists(ops)
   }
 
   test("GH-468: the unconditional preservation claim still holds for the NON-structural verbs") {
