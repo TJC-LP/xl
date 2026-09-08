@@ -183,7 +183,7 @@
 ## ADR-016: Cross-platform targets — Scala Native and Scala.js
 
 **Date**: 2026-08-31 (Wave 0 spike)
-**Status**: ✅ Accepted (spike verified; execution in waves — see `docs/plan/scala-native.md`)
+**Status**: ⏸️ Deferred (2026-09-08) — A1 platform shims landed; A2+ parked. See the deferral note below and `docs/plan/scala-native.md`.
 
 - **Decision**: Cross-compile the published library (`xl-core`, `xl-evaluator`, `xl-ooxml`,
   `xl-cats-effect`, `xl`) and the `xl` CLI to Scala Native 0.5.x, and the library to Scala.js 1.x
@@ -213,6 +213,18 @@
 - **Testing**: per-wave gates in `docs/plan/scala-native.md`; `./mill __.jvm.test` green at every
   merge; differential XML law (portable == JAXP) + byte-parity writer goldens before the JVM
   default flips; GraalVM remains the shipped CLI until the SN binary passes the cutover gate.
+
+- **Deferral (2026-09-08)**: reviewed against evidence after the 0.21.0 dogfood. The two JAXP
+  bugs the rationale cites (#349, #457) were GraalVM packaging faults fixed by configuration, not
+  parser faults; no consumer has asked for Native or JS artifacts; the plan keeps the scala-xml DOM,
+  so it does not address the in-memory reader's footprint (a 218 MB workbook needs ~38 GB), which
+  the streaming-default read engine does; and the fidelity backlog on the JVM (silent wrong numbers
+  in #612, cache stripping in #606, named-style loss in #610) is where the users are. Wave 25 A1
+  (platform shims: `Sha256`, `TextMeasure`, English month tables, `AsciiCase`, `PartManifest`,
+  `BuildInfo`) is kept as hygiene and merged on its own. A2 (`xl-xml`) stays on branch
+  `wave-25-sn-a1-a2`; the B waves are closed as deferred. **Re-entry triggers**: a named consumer
+  for a Scala.js or Scala Native artifact; a JAXP/Xerces defect that configuration cannot fix; or
+  the JVM fidelity backlog and streaming-default engine being done.
 
 ## ADR-017: Agent-first operation algebra and CLI contract
 
