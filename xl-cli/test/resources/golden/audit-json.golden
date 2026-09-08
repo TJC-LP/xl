@@ -27,7 +27,7 @@ audit
     "unparseable": [
       {
         "ref": "Calc!H1",
-        "message": "UNSUPPORTED(1)\n^\nFormula error in 'UNSUPPORTED(1)': Unknown function 'UNSUPPORTED' at position 0"
+        "message": "UNSUPPORTED(1)\n^\nUnknown function 'UNSUPPORTED' at position 0"
       }
     ],
     "volatile": [

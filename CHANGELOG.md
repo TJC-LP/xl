@@ -144,6 +144,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reading after the limit to report the exact total; the scan now stops one match past `--limit`
   (the streamed sheet's SAX parser is interrupted there and a sheet after the one that filled the
   limit is never opened) and reports the total as a lower bound; `--total` restores the full scan.
+- **`rename-sheet` refusals are typed, located and human-readable** (#608). A dependent formula
+  that mentions the sheet but cannot be parsed still refuses the whole rename before anything is
+  written, but now as `FORMULA_ERROR` (exit 3) — `INTERNAL` stays reserved for defects — with
+  `location.sheet`/`location.ref` naming the offending cell, the parser's own diagnostic in the
+  message (`Unknown function 'SINGLE' at position 3. Did you mean: SIGN?`, never the constructor
+  text `UnknownFunction(SINGLE,3,List(SIGN))`) and a hint (`fix or replace the formula at
+  Summary!I23 before renaming`). `SheetRenamer.renameLocated` carries the site (cell, conditional
+  format, data validation, defined name) alongside the error. The batch `rename-sheet` and
+  `add-sheet` ops raise the verb's typed refusals, so `BATCH_OP_FAILED` carries the cause's code,
+  hint and location (`Summary!I23`, `opIndex`) instead of an `INTERNAL` cause with no hint. The
+  `putf --from` shift refusal (`FormulaOps.shift`) and the structural editor's defined-name refusal
+  report the same parser diagnostic. The other sheet verbs (`add-sheet`, `remove-sheet`,
+  `move-sheet`, `copy-sheet`, `sheets hide/show`, `name rm`) no longer wrap their refusals in a
+  plain exception: an unknown sheet is `SHEET_NOT_FOUND` (with did-you-mean candidates), an
+  invalid name `INVALID_SHEET_NAME`, an unknown named range `OTHER`, and a `move-sheet` without
+  `--to/--after/--before` is `USAGE` (exit 2) from the command-line parser, before the file is read.
+  New goldens `rename-sheet-unrewritable[-json]`.
+- **One `SHEET_NOT_FOUND` text.** The sheet verbs and the batch ops now report an unknown sheet
+  with the wording every read verb already used — `Sheet not found: X. Available: …` — instead of
+  their own `Sheet 'X' not found. Available: …`, so one code has one message an agent can match.
+- **The caret block no longer repeats the formula.** A formula that does not parse (`putf`,
+  `--stream putf`, batch `putf`, an `audit` unparseable finding) prints the formula, the caret and
+  the parser's diagnostic — `Unknown function 'UNSUPPORTED' at position 0` — where the third line
+  used to be the domain message `Formula error in 'UNSUPPORTED(1)': …`, i.e. the formula twice
+  (`ParseError.formatWithContext` renders through `ParseError.describe`). Goldens re-recorded.
+- **`cell` quotes sheet qualifiers the way `deps` does** (#609). `Dependencies`/`Dependents` in
+  the text output and the `--json` arrays render a cross-sheet reference through the formula
+  printer (`SheetName.quoteForFormula`): `'On-Premise'!G9`, not `On-Premise!G9`, so the spelling is
+  a reference an agent can paste into `putf`/`eval` and the two verbs agree. Plain names stay bare
+  and same-sheet references unqualified; both lists are ordered by (sheet, row, column) rather than
+  by rendered text, so quoting never reorders them. `search`'s `Ref` column is spelled the same way
+  (`'On-Premise'!A1`). New goldens `cell-quoted-sheet[-json]`, `search-quoted-sheet`.
 - **`_xlfn.` storage prefix on conditional-formatting, data-validation and defined-name formulas**
   (#577). `CfCodec`, `DataValidationCodec` and the workbook's defined names now go through
   `FormulaStorage` like cell formulas: an Excel-authored `_xlfn.IFS(` in a rule reads bare and

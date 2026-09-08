@@ -1,0 +1,34 @@
+## args
+-f
+<DIR>/qualified.xlsx
+-o
+<DIR>/rename-unrewritable-json.xlsx
+--json
+rename-sheet
+M&A
+MandA
+## exit
+3
+## stdout
+{
+  "ok": false,
+  "exitCode": 3,
+  "verb": "rename-sheet",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "FORMULA_ERROR",
+    "message": "Formula error in 'IF(ZZZNOTAFUNC(1)=1,'M&A'!I12,0)': Summary!I23: Cannot rewrite its reference to sheet 'M&A': Unknown function 'ZZZNOTAFUNC' at position 3",
+    "hint": "fix or replace the formula at Summary!I23 before renaming",
+    "candidates": [],
+    "location": {
+      "file": null,
+      "sheet": "Summary",
+      "ref": "I23",
+      "opIndex": null
+    }
+  }
+}
+## stderr
+Error: Formula error in 'IF(ZZZNOTAFUNC(1)=1,'M&A'!I12,0)': Summary!I23: Cannot rewrite its reference to sheet 'M&A': Unknown function 'ZZZNOTAFUNC' at position 3
