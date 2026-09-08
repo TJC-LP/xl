@@ -1,0 +1,12 @@
+## args
+view
+input.xlsx
+A1:B4
+## exit
+2
+## stdout
+## stderr
+Error: Unexpected argument: A1:B4
+  code: USAGE
+  hint: did you mean -f input.xlsx? xl takes the file as -f/--file; the positional argument is the range or verb argument
+usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …

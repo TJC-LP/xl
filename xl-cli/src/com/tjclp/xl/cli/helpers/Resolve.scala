@@ -276,20 +276,45 @@ object Resolve:
   private def lookup(wb: Workbook, name: String): Either[CliError, Sheet] =
     validSheetName(name).flatMap(named(wb, _))
 
-  /** `INVALID_REFERENCE` with the parser's own text, else the qualifier (if any) and the target. */
+  /**
+   * `INVALID_REFERENCE` with the parser's own text, else the qualifier (if any) and the target. A
+   * whole-column (`AM:AM`, `A:C`) or whole-row (`3:3`, `1:5`) span, bare or sheet-qualified, is the
+   * range over every row (or column) of the sheet (GH-641), the form `view` and `stats` take over a
+   * column of unknown height; the source streams it lazily.
+   */
   def ref(refStr: String): Either[CliError, (Option[SheetName], Target)] =
-    RefType
-      .parse(refStr)
-      .left
-      .map(reason =>
-        CliError.fromXLError(XLError.InvalidReference(reason), None).copy(message = reason)
-      )
-      .map {
-        case RefType.Cell(ref) => (None, Target.Cell(ref))
-        case RefType.Range(range) => (None, Target.Range(range))
-        case RefType.QualifiedCell(sheet, ref) => (Some(sheet), Target.Cell(ref))
-        case RefType.QualifiedRange(sheet, range) => (Some(sheet), Target.Range(range))
-      }
+    RefType.parse(refStr) match
+      case Right(RefType.Cell(ref)) => Right((None, Target.Cell(ref)))
+      case Right(RefType.Range(range)) => Right((None, Target.Range(range)))
+      case Right(RefType.QualifiedCell(sheet, ref)) => Right((Some(sheet), Target.Cell(ref)))
+      case Right(RefType.QualifiedRange(sheet, range)) => Right((Some(sheet), Target.Range(range)))
+      case Left(reason) =>
+        wholeSpan(refStr).toRight(
+          CliError.fromXLError(XLError.InvalidReference(reason), None).copy(message = reason)
+        )
+
+  /** `[Sheet!]A:C` or `[Sheet!]1:5` as the full-height (full-width) range, else `None`. */
+  private def wholeSpan(refStr: String): Option[(Option[SheetName], Target)] =
+    val bang = refStr.lastIndexOf('!')
+    val (qualifier, spanPart) =
+      if bang < 0 then (None, refStr)
+      else (Some(refStr.substring(0, bang)), refStr.substring(bang + 1))
+    val sheet: Option[Option[SheetName]] = qualifier match
+      case None => Some(None)
+      case Some(quoted) if quoted.length >= 2 && quoted.startsWith("'") && quoted.endsWith("'") =>
+        SheetName(quoted.substring(1, quoted.length - 1).replace("''", "'")).toOption.map(Some(_))
+      case Some(bare) => SheetName(bare).toOption.map(Some(_))
+    for
+      s <- sheet
+      range <- CellRange.parse(spanPart.trim).toOption
+      if range.isFullColumn || range.isFullRow
+    yield (s, Target.Range(range))
+
+  /** `A:C` for a whole-column range, `1:5` for a whole-row one, `A1:B2` otherwise. */
+  def rangeLabel(range: CellRange): String =
+    if range.isFullColumn then s"${range.start.col.toLetter}:${range.end.col.toLetter}"
+    else if range.isFullRow then s"${range.start.row.index1}:${range.end.row.index1}"
+    else range.toA1
 
   /** The `SHEET_REQUIRED` context for an unqualified ref: today's exact wording. */
   def unqualified(verb: String, refStr: String, target: Target): String = target match

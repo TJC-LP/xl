@@ -65,22 +65,29 @@ final case class RecordWindow(
 
 /**
  * What a table renderer must know about every row before it writes the first (GH-635): per column
- * of the window, the widest display text among the drawn rows (markdown's column widths) and
- * whether any drawn row holds a non-empty record there (`--skip-empty`'s column pruning). Folded
- * over the rows in O(columns) memory, so the pass reads the window without holding it; a renderer
- * that needs neither skips the pass.
+ * of the window, the widest display text among the drawn rows (markdown's column widths), whether
+ * any drawn row holds a non-empty record there (`--skip-empty`'s column pruning), and the last row
+ * drawn (the width of the row-label column). Folded over the rows in O(columns) memory, so the pass
+ * reads the window without holding it; a renderer that needs neither skips the pass.
  */
-final case class ColumnFacts(widths: Map[Int, Int], nonEmpty: Set[Int]) derives CanEqual:
+final case class ColumnFacts(widths: Map[Int, Int], nonEmpty: Set[Int], lastDrawnRow: Option[Int])
+    derives CanEqual:
 
   /** The widest drawn text in `col` (0 when nothing was drawn there). */
   def width(col: Int): Int = widths.getOrElse(col, 0)
+
+  /**
+   * How wide the widest row number drawn is (GH-641: `| 10 |` lines up under `| 9  |`) — the last
+   * drawn row's, since rows are ascending; 1 when nothing is drawn.
+   */
+  def labelWidth: Int = lastDrawnRow.fold(1)(row => (row + 1).toString.length)
 
   /** `cols` minus the ones no drawn row fills. */
   def nonEmptyAmong(cols: Vector[Int]): Vector[Int] = cols.filter(nonEmpty.contains)
 
 object ColumnFacts:
 
-  val empty: ColumnFacts = ColumnFacts(Map.empty, Set.empty)
+  val empty: ColumnFacts = ColumnFacts(Map.empty, Set.empty, None)
 
   /**
    * The facts of a window's dense rows, as a one-element stream (a fold, so it runs on the same
@@ -100,13 +107,13 @@ object ColumnFacts:
       val rowIdx = firstRow + i.toInt
       if !window.isDrawn(row, rowIdx, cols, skipEmpty, skipHidden) then facts
       else
-        cols.foldLeft(facts) { (acc, col) =>
+        cols.foldLeft(facts.copy(lastDrawnRow = Some(rowIdx))) { (acc, col) =>
           window.cell(row, col) match
             case None => acc
             case Some(record) =>
               val width = math.max(acc.width(col), text(record).length)
               val nonEmpty = if record.isEmpty then acc.nonEmpty else acc.nonEmpty + col
-              ColumnFacts(acc.widths.updated(col, width), nonEmpty)
+              acc.copy(widths = acc.widths.updated(col, width), nonEmpty = nonEmpty)
         }
     }
 

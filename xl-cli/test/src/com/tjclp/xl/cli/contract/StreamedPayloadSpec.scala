@@ -153,10 +153,12 @@ class StreamedPayloadSpec extends ScalaCheckSuite:
     val f = facts(t)
     val cols = Markdown.columns(window, f, t.skipEmpty, t.skipHidden)
     val widths = Markdown.columnWidths(cols, f)
-    val body =
-      Markdown.lines(window, rows(t), cols, widths, t.showFormulas, t.skipEmpty, t.skipHidden)
+    val label = f.labelWidth
+    val body = Markdown
+      .lines(window, rows(t), cols, widths, label, t.showFormulas, t.skipEmpty, t.skipHidden)
     val after = "" +: t.warnings.map(_.message)
-    val streamed = Payload.Streamed(StreamedBody.Lines(Markdown.header(cols, widths), body, after))
+    val streamed =
+      Payload.Streamed(StreamedBody.Lines(Markdown.header(cols, widths, label), body, after))
     val whole = Markdown.render(t.grid, t.showFormulas, t.skipEmpty, t.skipHidden)
     (streamed, (whole +: t.warnings.map(_.message)).mkString("\n"))
 

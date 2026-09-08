@@ -71,9 +71,13 @@ Excel.write(updated, "output.xlsx")
   byte-identical, no scratch file is left behind).
 - `Excel.readSheet(path, name)` (since 0.21.0) is `Excel.read` plus the lookup — the whole
   workbook is loaded, then one sheet is selected (stream one sheet of a large file with
-  `ExcelIO.readSheetStream`). A missing name throws an `XLException` whose `error` is
-  `SheetNotFound(name, available)`: its message lists every available sheet and its `candidates`
-  name the nearest, so `orExit` prints a `did you mean:` line exactly as `xl -s` does.
+  `ExcelIO.readSheetStream`). Since 0.21.1 it returns `XLResult[Sheet]` like the rest of the sync
+  surface, so `orExit(Excel.readSheet(path, name))` is the script shape: a missing name is
+  `Left(SheetNotFound(name, available))`, whose message lists every available sheet and whose
+  `candidates` name the nearest, so `orExit` prints a `did you mean:` line exactly as `xl -s` does;
+  a missing, corrupt or over-limit file is `Left` of the reader's own `IOError`/`ParseError`/
+  `SecurityError`. (0.21.0 threw an `XLException` instead.) `wb(name)`, `wb.update`, `wb.remove`,
+  `wb.rename` and `wb.setSheetState` carry the same candidates (0.21.1).
   `Excel.readMetadata(path)` (since 0.21.0) returns `LightMetadata` — sheet names, visibility,
   dimensions, defined names, the date system — without loading a cell, under the same ZIP-bomb
   limits as `Excel.read`.
@@ -729,6 +733,11 @@ The rules, all of them:
 - **Reading by position**: `readRows[A](range)` decodes one record per row of `range`, whose
   width must equal the record's (`RowCodecError.Width` otherwise). Every row is a record: a blank
   row is `Missing` unless every field is an `Option`.
+- An `Option[T]` field is `None` only for an absent or `CellValue.Empty` cell. A cell holding the
+  empty string — SheetJS and some exporters write `<v></v>` text cells where a person would leave
+  a blank — is `Some("")` for `Option[String]` and a `TypeMismatch` for `Option[Int]`, because
+  Excel distinguishes `""` from blank (`ISBLANK` is FALSE, `COUNTA` counts it). Normalise with
+  `.filter(_.nonEmpty)`, or clear such cells before reading (#617).
 - **Reading by header**: `readRowsByHeader[A](headerRow)` finds each field's column through
   `sheet.columnOf(field, headerRow)` — an exact header match wins, otherwise the match ignoring
   case, whitespace, `_` and `-` (`"Order ID"`, `order_id`, `orderId` agree), leftmost on ties —
@@ -872,6 +881,7 @@ report and continue.
 ```scala
 val wb = orExit(Workbook.named("Data", "Summary")) // DuplicateSheet on a repeat → printed, exit 1
 val sales = orExit(wb("Sales"))                    // SheetNotFound → printed with its hint, exit 1
+val summary = orExit(Excel.readSheet("model.xlsx", "Sumary")) // 0.21.1: readSheet is an XLResult
 // Error: Sheet not found: 'Sumary'. Available: Data, Summary     ← Excel.readSheet's error via orExit
 //   code: SHEET_NOT_FOUND
 //   did you mean: Summary

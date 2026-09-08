@@ -1,0 +1,25 @@
+## args
+--json
+view
+input.xlsx
+A1:B4
+## exit
+2
+## stdout
+{
+  "ok": false,
+  "exitCode": 2,
+  "verb": "view",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "USAGE",
+    "message": "Unexpected argument: A1:B4",
+    "hint": "did you mean -f input.xlsx? xl takes the file as -f/--file; the positional argument is the range or verb argument",
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr
+Error: Unexpected argument: A1:B4

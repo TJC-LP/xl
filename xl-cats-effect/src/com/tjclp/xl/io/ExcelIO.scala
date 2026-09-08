@@ -111,7 +111,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     Sync[F].delay(XlsxReader.readWithWarnings(path, config)).flatMap {
       case Right(result) =>
         result.warnings.traverse_(warningHandler) *> Async[F].pure(result.workbook)
-      case Left(err) => Async[F].raiseError(new Exception(s"Failed to read XLSX: ${err.message}"))
+      case Left(err) => Async[F].raiseError(XLException(err))
     }
 
   /** Write workbook to XLSX file */
@@ -268,8 +268,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   def readMetadata(path: Path): F[LightMetadata] =
     Sync[F].delay(WorkbookMetadataReader.read(path)).flatMap {
       case Right(meta) => Async[F].pure(meta)
-      case Left(err) =>
-        Async[F].raiseError(new Exception(s"Failed to read metadata: ${err.message}"))
+      case Left(err) => Async[F].raiseError(XLException(err))
     }
 
   /**
@@ -278,8 +277,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   def readDimension(path: Path, sheetIndex: Int): F[Option[CellRange]] =
     Sync[F].delay(WorkbookMetadataReader.readDimension(path, sheetIndex)).flatMap {
       case Right(dim) => Async[F].pure(dim)
-      case Left(err) =>
-        Async[F].raiseError(new Exception(s"Failed to read dimension: ${err.message}"))
+      case Left(err) => Async[F].raiseError(XLException(err))
     }
 
   /** Load workbook styles for number format resolution in streaming mode. */

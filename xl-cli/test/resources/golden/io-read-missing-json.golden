@@ -1,0 +1,30 @@
+## args
+-f
+<DIR>/missing.xlsx
+--json
+sheets
+## exit
+3
+## stdout
+{
+  "ok": false,
+  "exitCode": 3,
+  "verb": "sheets",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "IO_READ",
+    "message": "No such file: <DIR>/missing.xlsx",
+    "hint": "check the path; the previous write may have failed",
+    "candidates": [],
+    "location": {
+      "file": "<DIR>/missing.xlsx",
+      "sheet": null,
+      "ref": null,
+      "opIndex": null
+    }
+  }
+}
+## stderr
+Error: No such file: <DIR>/missing.xlsx

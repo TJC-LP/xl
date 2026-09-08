@@ -388,8 +388,11 @@ object SheetCommands:
     stream: Boolean = false
   ): IO[String] =
     if !wb.metadata.definedNames.exists(d => d.name == name && d.localSheetId.isEmpty) then
-      // a data condition with prose alone: `OTHER` (exit 3), as WriteCommands.refused
-      IO.raiseError(domain(XLError.Other(s"Named range '$name' not found")))
+      // GH-626: `NAME_NOT_FOUND` (exit 3) carrying the names this verb can remove — the
+      // workbook-scoped ones — so the nearest become the "did you mean" candidates, as
+      // SHEET_NOT_FOUND has always done for sheets
+      val removable = wb.metadata.definedNames.filter(_.localSheetId.isEmpty).map(_.name).distinct
+      IO.raiseError(domain(XLError.NameNotFound(name, removable)))
     else
       val updated = wb.removeDefinedName(name)
       writeWorkbook(updated, outputPath, config, stream)

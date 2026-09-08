@@ -46,8 +46,31 @@ class XLErrorCodesSpec extends FunSuite:
     XLError.Other("misc"),
     XLError.EditFailed(3, "put", XLError.SheetNotFound("x")),
     XLError.UnsupportedCapability("chart", "--stream", "omit --stream"),
-    XLError.SheetRequired("view", Vector("Data", "Summary"))
+    XLError.SheetRequired("view", Vector("Data", "Summary")),
+    XLError.NameNotFound("Totl", Vector("Total", "Tax")),
+    XLError.InvalidArgument("col-width", "width must be 0-255 character units, got 300.0")
   )
+
+  test("GH-626: NameNotFound is NAME_NOT_FOUND with the nearest names as candidates") {
+    val err = XLError.NameNotFound("Totl", Vector("Total", "Tax"))
+    assertEquals(err.code, "NAME_NOT_FOUND")
+    assertEquals(err.message, "Named range 'Totl' not found. Available: Total, Tax")
+    assertEquals(err.candidates, Vector("Total"))
+    assertEquals(err.hint, Some("list defined names with `xl -f <file> names`"))
+    assertEquals(XLError.NameNotFound("Nope").message, "Named range 'Nope' not found")
+    assertEquals(XLError.NameNotFound("Nope").candidates, Vector.empty[String])
+  }
+
+  test("GH-617: InvalidArgument is INVALID_ARGUMENT, op-prefixed, positioned by EditFailed") {
+    val err = XLError.InvalidArgument("col-width", "width must be 0-255 character units, got 300.0")
+    assertEquals(err.code, "INVALID_ARGUMENT")
+    assertEquals(err.message, "col-width: width must be 0-255 character units, got 300.0")
+    assertEquals(err.hint, None)
+    val wrapped = XLError.EditFailed(4, "col-width", err)
+    assertEquals(wrapped.code, "INVALID_ARGUMENT")
+    assertEquals(wrapped.opIndex, Some(4))
+    assertEquals(wrapped.root, err)
+  }
 
   test("the sample table covers every case (one code per case)") {
     assertEquals(samples.size, XLError.codes.size)

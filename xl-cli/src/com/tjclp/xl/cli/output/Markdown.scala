@@ -68,8 +68,9 @@ object Markdown:
       .getOrElse(ColumnFacts.empty)
     val cols = columns(window, facts, skipEmpty, skipHidden)
     val widths = columnWidths(cols, facts)
-    val body = lines(window, rows, cols, widths, showFormulas, skipEmpty, skipHidden).toList
-    (header(cols, widths) ++ body :+ "").mkString("\n")
+    val label = facts.labelWidth
+    val body = lines(window, rows, cols, widths, label, showFormulas, skipEmpty, skipHidden).toList
+    (header(cols, widths, label) ++ body :+ "").mkString("\n")
 
   /** The text a table cell shows and is measured by: the record's display text. */
   def cellText(showFormulas: Boolean): CellRecord => String = _.text(showFormulas)
@@ -94,13 +95,20 @@ object Markdown:
       math.max(letter.length, math.max(facts.width(col), 3))
     }
 
-  /** The two lines before the rows: the column-letter header and the separator. */
-  def header(cols: Vector[Int], widths: Vector[Int]): Vector[String] =
+  /**
+   * The two lines before the rows: the column-letter header and the separator. `labelWidth` is the
+   * row-label column's (GH-641: as wide as the widest row number shown, so `| 10 |` lines up under
+   * `| 9  |` instead of drifting once the window passes row 9).
+   */
+  def header(cols: Vector[Int], widths: Vector[Int], labelWidth: Int): Vector[String] =
     val letters = cols.zip(widths).map { (col, width) =>
       s" ${Column.from0(col).toLetter.padTo(width, ' ')} |"
     }
     val rule = widths.map(width => "-" * (width + 2) + "|")
-    Vector("|   |" + letters.mkString, "|---|" + rule.mkString)
+    Vector(
+      s"| ${" " * labelWidth} |" + letters.mkString,
+      s"|${"-" * (labelWidth + 2)}|" + rule.mkString
+    )
 
   /**
    * One table line per drawn row of the window ([[RecordWindow.isDrawn]] over `cols`): the row
@@ -111,6 +119,7 @@ object Markdown:
     rows: Stream[F, Vector[CellRecord]],
     cols: Vector[Int],
     widths: Vector[Int],
+    labelWidth: Int,
     showFormulas: Boolean,
     skipEmpty: Boolean,
     skipHidden: Boolean
@@ -124,7 +133,7 @@ object Markdown:
           val escaped = Escape.markdown(window.cell(row, col).fold("")(text))
           s" ${escaped.padTo(width, ' ')} |"
         }
-        s"| ${(rowIdx + 1).toString.padTo(2, ' ')}|" + cells.mkString
+        s"| ${(rowIdx + 1).toString.padTo(labelWidth, ' ')} |" + cells.mkString
       }
     }.unNone
 

@@ -412,11 +412,12 @@ class StreamingContractSpec extends CatsEffectSuite:
       audit <- CliHarness.run("--stream", "audit", "--help")
       view <- CliHarness.run("--stream", "view", "--help")
     yield Vector(diff, eval, audit, view).foreach { run =>
+      // GH-620: help is a result, on stdout
       assertEquals(run.exit, 0, run.stderr)
-      assertEquals(run.stdout, "")
-      assert(run.stderr.contains("Usage"), run.stderr)
-      assert(!run.stderr.contains("Unexpected argument"), run.stderr)
-      assert(!run.stderr.contains("not supported with --stream"), run.stderr)
+      assertEquals(run.stderr, "")
+      assert(run.stdout.startsWith("Usage:"), run.stdout)
+      assert(!run.stdout.contains("Unexpected argument"), run.stdout)
+      assert(!(run.stdout + run.stderr).contains("not supported with --stream"), run.stdout)
     }
   }
 

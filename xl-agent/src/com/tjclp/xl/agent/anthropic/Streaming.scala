@@ -220,7 +220,10 @@ class StreamEventProcessor private (
                 val stdout = r.stdout()
                 val stderr = r.stderr()
                 val fileIds = r.content().asScala.map(_.fileId()).toList
-                val event = AgentEvent.ToolResult(lastToolUseId, stdout, stderr, None, fileIds)
+                // GH-622: the sandbox command's exit status, when the API reported one
+                val exitCode = r._returnCode().asKnown().toScala.map(_.toInt)
+                val event =
+                  AgentEvent.ToolResult(lastToolUseId, stdout, stderr, exitCode, fileIds)
                 val emitResult = eventQueue.offer(event)
                 val callbackIO = onEvent(event)
 

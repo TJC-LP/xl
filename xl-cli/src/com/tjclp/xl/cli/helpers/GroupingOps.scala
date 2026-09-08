@@ -2,6 +2,7 @@ package com.tjclp.xl.cli.helpers
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{Column, Row}
+import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.ops.{ColSpan, RowSpan}
 
 /**
@@ -9,39 +10,37 @@ import com.tjclp.xl.ops.{ColSpan, RowSpan}
  * / `ungroupCols` (ADR-017 §2.12, W2.1 — the GH-421 appliers moved into xl-core), shared by the CLI
  * command handlers (WriteCommands) and the batch ops (BatchParser). What stays here is the CLI's
  * spec syntax (`10:20`, `E:H`) and its messages; the level guard and Excel's collapsed-summary
- * convention are the core's, so the two paths cannot drift.
+ * convention are the core's, so the two paths cannot drift. Every refusal is typed (GH-617): the
+ * core's own `INVALID_ARGUMENT` for a level outside 1-7, and `INVALID_ARGUMENT` naming the verb for
+ * a spec that does not parse.
  */
 object GroupingOps:
 
   /** Group rows into a collapsible outline: every row in the spec gets `level`. */
-  def groupRows(
-    sheet: Sheet,
-    spec: String,
-    level: Int,
-    collapsed: Boolean
-  ): Either[String, Sheet] =
-    parseRowSpec(spec).flatMap((start, end) =>
-      sheet.groupRows(rowSpan(start, end), level, collapsed).left.map(_.message)
+  def groupRows(sheet: Sheet, spec: String, level: Int, collapsed: Boolean): XLResult[Sheet] =
+    rowSpec("group-rows", spec).flatMap((start, end) =>
+      sheet.groupRows(rowSpan(start, end), level, collapsed)
     )
 
   /** Group columns into a collapsible outline: every column in the spec gets `level`. */
-  def groupCols(
-    sheet: Sheet,
-    spec: String,
-    level: Int,
-    collapsed: Boolean
-  ): Either[String, Sheet] =
-    parseColSpec(spec).flatMap((start, end) =>
-      sheet.groupCols(ColSpan(start, end), level, collapsed).left.map(_.message)
+  def groupCols(sheet: Sheet, spec: String, level: Int, collapsed: Boolean): XLResult[Sheet] =
+    colSpec("group-cols", spec).flatMap((start, end) =>
+      sheet.groupCols(ColSpan(start, end), level, collapsed)
     )
 
   /** Clear outline level + collapse markers for the rows (and the group's summary row). */
-  def ungroupRows(sheet: Sheet, spec: String): Either[String, Sheet] =
-    parseRowSpec(spec).map((start, end) => sheet.ungroupRows(rowSpan(start, end)))
+  def ungroupRows(sheet: Sheet, spec: String): XLResult[Sheet] =
+    rowSpec("ungroup-rows", spec).map((start, end) => sheet.ungroupRows(rowSpan(start, end)))
 
   /** Clear outline level + collapse markers for the columns (and the group's summary column). */
-  def ungroupCols(sheet: Sheet, spec: String): Either[String, Sheet] =
-    parseColSpec(spec).map((start, end) => sheet.ungroupCols(ColSpan(start, end)))
+  def ungroupCols(sheet: Sheet, spec: String): XLResult[Sheet] =
+    colSpec("ungroup-cols", spec).map((start, end) => sheet.ungroupCols(ColSpan(start, end)))
+
+  private def rowSpec(op: String, spec: String): XLResult[(Int, Int)] =
+    parseRowSpec(spec).left.map(XLError.InvalidArgument(op, _))
+
+  private def colSpec(op: String, spec: String): XLResult[(Column, Column)] =
+    parseColSpec(spec).left.map(XLError.InvalidArgument(op, _))
 
   /** Parse a 1-based row spec: a single row ("10") or an inclusive range ("10:20"). */
   def parseRowSpec(spec: String): Either[String, (Int, Int)] =

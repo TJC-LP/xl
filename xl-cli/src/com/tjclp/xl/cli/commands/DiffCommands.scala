@@ -14,8 +14,11 @@ import com.tjclp.xl.styles.CellStyle
  * differs, 2 error).
  *
  * Comparison semantics:
- *   - Cells are compared by formula text and record kind for formulas (cached values are derived
- *     and ignored) and by typed value otherwise
+ *   - Formula cells are compared by formula text and record kind, then by cached value (GH-607): a
+ *     formula whose text is unchanged but whose cache differs, or is present on one side only, is a
+ *     change of kind `cache` — what a recalculation, a `--no-recalc` edit or a cache-stripping
+ *     writer produces. `formulasOnly` restores the text-only rule. Every other cell compares by
+ *     typed value
  *   - `styleChanged` compares RESOLVED styles (styleId looked up in the sheet's registry; missing
  *     style = default), so identical formatting under different style ids is not a difference
  *   - A cell with Empty value, default resolved style, and no hyperlink is equivalent to a missing
@@ -27,12 +30,31 @@ object DiffCommands:
   /** Display snapshot of one side of a cell: formatted value + formula text when present. */
   final case class CellSnapshot(value: String, formula: Option[String]) derives CanEqual
 
-  /** A cell present on both sides whose value, formula, or resolved style differs. */
+  /**
+   * What changed in a cell present on both sides (GH-607): its `value` (a constant), its `formula`
+   * (text or record kind, or a formula replacing a constant and vice versa), its `cache` (same
+   * formula, a different or missing cached value) or only its `style`.
+   */
+  enum ChangeKind derives CanEqual:
+    case Value, Formula, Cache, Style
+
+    /** The JSON `kind` field and the markdown tag. */
+    def name: String = this match
+      case Value => "value"
+      case Formula => "formula"
+      case Cache => "cache"
+      case Style => "style"
+
+  /**
+   * A cell present on both sides whose value, formula, cached value or resolved style differs.
+   * `styleChanged` is kept beside `kind`: a value change may also restyle the cell.
+   */
   final case class CellChange(
     ref: ARef,
     before: CellSnapshot,
     after: CellSnapshot,
-    styleChanged: Boolean
+    styleChanged: Boolean,
+    kind: ChangeKind
   )
 
   /** All differences for one sheet present in both workbooks. */
@@ -68,14 +90,16 @@ object DiffCommands:
     def identical: Boolean = sheetsAdded.isEmpty && sheetsRemoved.isEmpty && sheets.isEmpty
 
   /**
-   * Compare two workbooks, optionally restricted to one sheet name.
+   * Compare two workbooks, optionally restricted to one sheet name. `formulasOnly` compares formula
+   * cells by text alone, ignoring cached values (the rule before 0.21.1).
    *
    * Left when the filtered sheet exists in neither workbook.
    */
   def computeDiff(
     wbA: Workbook,
     wbB: Workbook,
-    sheetFilter: Option[String]
+    sheetFilter: Option[String],
+    formulasOnly: Boolean = false
   ): Either[String, WorkbookDiff] =
     val namesA = wbA.sheets.map(_.name.value)
     val namesB = wbB.sheets.map(_.name.value)
@@ -94,7 +118,7 @@ object DiffCommands:
           for
             sheetA <- wbA.sheets.find(_.name.value == name)
             sheetB <- wbB.sheets.find(_.name.value == name)
-            diff = diffSheet(sheetA, sheetB)
+            diff = diffSheet(sheetA, sheetB, formulasOnly)
             if !diff.isEmpty
           yield diff
         }
@@ -104,7 +128,7 @@ object DiffCommands:
   // Sheet comparison
   // ==========================================================================
 
-  private def diffSheet(sheetA: Sheet, sheetB: Sheet): SheetDiff =
+  private def diffSheet(sheetA: Sheet, sheetB: Sheet, formulasOnly: Boolean): SheetDiff =
     val cellsA = nonTrivialCells(sheetA)
     val cellsB = nonTrivialCells(sheetB)
     val refs = (cellsA.keySet ++ cellsB.keySet).toVector.sortBy(r => (r.row.index0, r.col.index0))
@@ -120,15 +144,15 @@ object DiffCommands:
         case (None, Some(cellB)) => (add :+ (ref, snapshot(cellB, sheetB)), rem, chg)
         case (Some(cellA), None) => (add, rem :+ (ref, snapshot(cellA, sheetA)), chg)
         case (Some(cellA), Some(cellB)) =>
-          val valueDiffers = !sameValue(cellA.value, cellB.value)
           val styleDiffers = resolvedStyleKey(cellA, sheetA) != resolvedStyleKey(cellB, sheetB)
-          if valueDiffers || styleDiffers then
-            (
-              add,
-              rem,
-              chg :+ CellChange(ref, snapshot(cellA, sheetA), snapshot(cellB, sheetB), styleDiffers)
-            )
-          else (add, rem, chg)
+          val kind = valueChange(cellA.value, cellB.value, formulasOnly)
+            .orElse(Option.when(styleDiffers)(ChangeKind.Style))
+          kind match
+            case Some(k) =>
+              val change =
+                CellChange(ref, snapshot(cellA, sheetA), snapshot(cellB, sheetB), styleDiffers, k)
+              (add, rem, chg :+ change)
+            case None => (add, rem, chg)
         case (None, None) => (add, rem, chg)
     }
 
@@ -194,13 +218,21 @@ object DiffCommands:
   private def resolvedStyleKey(cell: Cell, sheet: Sheet): String =
     cell.styleId.flatMap(sheet.styleRegistry.get).getOrElse(CellStyle.default).canonicalKey
 
-  /** Formulas compare by normalized text and record payload; everything else by typed value. */
-  private def sameValue(a: CellValue, b: CellValue): Boolean =
+  /**
+   * The kind of value change between two cells, `None` when they agree. Formulas compare by
+   * normalized text and record kind, then — unless `formulasOnly` — by cached value (GH-607);
+   * everything else by typed value.
+   */
+  private def valueChange(a: CellValue, b: CellValue, formulasOnly: Boolean): Option[ChangeKind] =
     (a, b) match
-      case (CellValue.Formula(exprA, _, kindA), CellValue.Formula(exprB, _, kindB)) =>
-        normalizeFormula(exprA) == normalizeFormula(exprB) && kindA == kindB
-      case (CellValue.Formula(_, _, _), _) | (_, CellValue.Formula(_, _, _)) => false
-      case (va, vb) => va == vb
+      case (CellValue.Formula(exprA, cachedA, kindA), CellValue.Formula(exprB, cachedB, kindB)) =>
+        if normalizeFormula(exprA) != normalizeFormula(exprB) || kindA != kindB then
+          Some(ChangeKind.Formula)
+        else if !formulasOnly && cachedA != cachedB then Some(ChangeKind.Cache)
+        else None
+      case (CellValue.Formula(_, _, _), _) | (_, CellValue.Formula(_, _, _)) =>
+        Some(ChangeKind.Formula)
+      case (va, vb) => if va == vb then None else Some(ChangeKind.Value)
 
   private def normalizeFormula(expr: String): String =
     if expr.startsWith("=") then expr else s"=$expr"
@@ -237,7 +269,18 @@ object DiffCommands:
           sb.append(s"\nChanged (${sd.changed.length}):\n")
           sd.changed.foreach { c =>
             val styleNote = if c.styleChanged then " [style]" else ""
-            sb.append(s"  ${c.ref.toA1}: ${display(c.before)} -> ${display(c.after)}$styleNote\n")
+            c.kind match
+              case ChangeKind.Cache =>
+                // the formula is the same on both sides: show it once, then the two caches
+                val formula = c.before.formula.getOrElse(display(c.before))
+                sb.append(
+                  s"  ${c.ref.toA1}: $formula cached ${cachedDisplay(c.before)} -> " +
+                    s"${cachedDisplay(c.after)} [cache]$styleNote\n"
+                )
+              case _ =>
+                sb.append(
+                  s"  ${c.ref.toA1}: ${display(c.before)} -> ${display(c.after)}$styleNote\n"
+                )
           }
         if sd.added.nonEmpty then
           sb.append(s"\nAdded (${sd.added.length}):\n")
@@ -282,6 +325,12 @@ object DiffCommands:
   private def isPlainScalar(s: String): Boolean =
     s == "TRUE" || s == "FALSE" || scala.util.Try(BigDecimal(s)).isSuccess
 
+  /** A formula's cached value as text, `(none)` when the side has no cache. */
+  private def cachedDisplay(snap: CellSnapshot): String =
+    if snap.value.isEmpty then "(none)"
+    else if isPlainScalar(snap.value) then snap.value
+    else s"\"${snap.value}\""
+
   /**
    * Stable JSON schema:
    * {{{
@@ -295,7 +344,8 @@ object DiffCommands:
    *     "changed": [{"ref": "A5",
    *                  "before": {"value": "1", "formula": null},
    *                  "after":  {"value": "2", "formula": null},
-   *                  "styleChanged": false}],
+   *                  "styleChanged": false,
+   *                  "kind": "value"}],
    *     "mergesAdded": [], "mergesRemoved": [],
    *     "commentsAdded": [], "commentsRemoved": [], "commentsChanged": [],
    *     "hyperlinksAdded": [], "hyperlinksRemoved": [], "hyperlinksChanged": []
@@ -331,7 +381,8 @@ object DiffCommands:
             "ref" -> ujson.Str(c.ref.toA1),
             "before" -> snapJson(c.before),
             "after" -> snapJson(c.after),
-            "styleChanged" -> ujson.Bool(c.styleChanged)
+            "styleChanged" -> ujson.Bool(c.styleChanged),
+            "kind" -> ujson.Str(c.kind.name)
           )
         }),
         "mergesAdded" -> strArr(sd.mergesAdded),

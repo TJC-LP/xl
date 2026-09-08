@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/missing.xlsx
+-s
+Data
+view
+A1:B2
+## exit
+3
+## stdout
+## stderr
+Error: No such file: <DIR>/missing.xlsx
+  code: IO_READ
+  hint: check the path; the previous write may have failed

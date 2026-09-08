@@ -300,13 +300,18 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
                 val loadedData = ujson.read(memoryOut.stdout)("data")("matches").arr
                 stream.foreach(m => assertEquals(m("hidden"), ujson.Null))
                 loadedData.foreach(m => assertEquals(m("hidden"), ujson.Bool(false)))
-              // filter's JSON rides the envelope as the array it is, never as a string of text
+              // filter's JSON rides the envelope as the document it is (GH-639: matched/shown/
+              // truncated/limit around the rows), never as a string of text
               case (f: ReadQuery.Filter, OutputMode.Json)
                   if memory.ok && f.format == FilterFormat.Json =>
                 Vector(memoryOut.stdout, streamOut.stdout).foreach { out =>
                   val data = ujson.read(out)("data")
-                  assert(data.arrOpt.isDefined, s"filter data is not an array for $label: $data")
-                  data.arr.foreach(row => assert(row("row").numOpt.isDefined, row.toString))
+                  assert(
+                    data("rows").arrOpt.isDefined,
+                    s"filter data has no rows for $label: $data"
+                  )
+                  assert(data("matched").numOpt.isDefined, s"no matched for $label: $data")
+                  data("rows").arr.foreach(row => assert(row("row").numOpt.isDefined, row.toString))
                 }
               case _ => ()
           }

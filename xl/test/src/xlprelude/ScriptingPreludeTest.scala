@@ -696,14 +696,14 @@ class ScriptingPreludeTest extends FunSuite:
     val result: RecalcResult = Excel.writeChecked(Workbook(sheet), path.toString)
     assert(result.isClean, result.summary)
     assertEquals(result.evaluated.values.flatten.map(_._1.toA1).toSet, Set("B1"))
-    val loaded = Excel.readSheet(path.toString, "Checked")
+    val loaded = Excel.readSheet(path.toString, "Checked").unsafe
     assertEquals(cachedNumber(loaded, ref"B1"), Some(BigDecimal(20)))
     // the caches-are-truth doctrine: the pre-existing cache is written byte-for-byte
     assertEquals(cachedNumber(loaded, ref"A3"), Some(BigDecimal(999)))
     // the same book through writeRecalculated recomputes A3 as well
     val full = Excel.writeRecalculated(Workbook(sheet), path.toString)
     assertEquals(
-      cachedNumber(Excel.readSheet(path.toString, "Checked"), ref"A3"),
+      cachedNumber(Excel.readSheet(path.toString, "Checked").unsafe, ref"A3"),
       Some(BigDecimal(30))
     )
     assert(full.isClean)
@@ -744,7 +744,7 @@ class ScriptingPreludeTest extends FunSuite:
     val result = Excel.writeChecked(Workbook(sheet), path.toString)
     assert(!result.isClean)
     assertEquals(result.errors.map(_.ref.toA1), Vector("A2"))
-    val loaded = Excel.readSheet(path.toString, "Err")
+    val loaded = Excel.readSheet(path.toString, "Err").unsafe
     assertEquals(cachedNumber(loaded, ref"A3"), Some(BigDecimal(6)))
     assert(loaded.cells.get(ref"A2").exists(_.isUncachedFormula))
 
@@ -753,21 +753,37 @@ class ScriptingPreludeTest extends FunSuite:
     val path = dir.resolve("facade.xlsx")
     val wb = Workbook(Sheet("Data").put(ref"A1", 1), Sheet("Summary").put(ref"A1", fx"=Data!A1+1"))
     Excel.writeChecked(wb, path.toString)
-    val summary: Sheet = Excel.readSheet(path.toString, "Summary")
+    // GH-615: readSheet is an XLResult like the rest of the sync surface — `orExit` unwraps it
+    val summary: Sheet = orExit(Excel.readSheet(path.toString, "Summary"))
     assertEquals(summary.name.value, "Summary")
     assertEquals(summary.readTypedOpt[Int](ref"A1"), Some(2))
-    val ex = intercept[XLException]:
-      Excel.readSheet(path.toString, "Sumary")
+    val missing: XLResult[Sheet] = Excel.readSheet(path.toString, "Sumary")
     // the candidates are the error's own, so exitMessage renders them as `xl` would
-    assertEquals(ex.error, XLError.SheetNotFound("Sumary", Vector("Data", "Summary")))
-    assertEquals(ex.error.candidates, Vector("Summary"))
-    assertEquals(ex.getMessage, ex.error.message)
-    assert(exitMessage(ex.error).contains("\n  did you mean: Summary\n"), exitMessage(ex.error))
+    assertEquals(missing, Left(XLError.SheetNotFound("Sumary", Vector("Data", "Summary"))))
+    val err = missing.left.getOrElse(fail("expected Left"))
+    assertEquals(err.candidates, Vector("Summary"))
+    assert(exitMessage(err).contains("\n  did you mean: Summary\n"), exitMessage(err))
+    // GH-615: Workbook.apply / update / remove name the candidates too, so orExit(wb("Sumary"))
+    // prints the same "did you mean" line as readSheet and `xl -s`
+    val book: Workbook = Excel.read(path.toString)
+    assertEquals(book("Sumary"), Left(XLError.SheetNotFound("Sumary", Vector("Data", "Summary"))))
+    assertEquals(
+      book.update("Sumary", identity).left.map(_.candidates),
+      Left(Vector("Summary"))
+    )
+    val removed: XLResult[Workbook] = book.remove("Sumary")
+    assertEquals(
+      removed.swap.map(err => exitMessage(err).contains("did you mean: Summary")),
+      Right(true)
+    )
     val meta: LightMetadata = Excel.readMetadata(path.toString)
     val infos: Vector[SheetInfo] = meta.sheets
     assertEquals(infos.map(_.name.value), Vector("Data", "Summary"))
     Excel.modifyR(path.toString)(_.update("Data", _.put(ref"B1", "note")))
-    assertEquals(Excel.readSheet(path.toString, "Data").readTypedOpt[String](ref"B1"), Some("note"))
+    assertEquals(
+      Excel.readSheet(path.toString, "Data").unsafe.readTypedOpt[String](ref"B1"),
+      Some("note")
+    )
     intercept[XLException]:
       Excel.modifyR(path.toString)(_.update("Nope", identity))
 
@@ -814,7 +830,7 @@ class ScriptingPreludeTest extends FunSuite:
     assert(sheet.getColumnProperties(Column.from0(6)).collapsed)
     val path = tempDir("xl-prelude-outline").resolve("outline.xlsx")
     assert(Excel.writeChecked(Workbook(sheet), path.toString).isClean)
-    val loaded = Excel.readSheet(path.toString, "Outline")
+    val loaded = Excel.readSheet(path.toString, "Outline").unsafe
     assert(loaded.getRowProperties(Row.from1(2)).hidden)
     assertEquals(loaded.getRowProperties(Row.from1(2)).outlineLevel, Some(1))
     assert(loaded.getRowProperties(Row.from1(4)).collapsed)
