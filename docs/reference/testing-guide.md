@@ -230,14 +230,14 @@ As of the #610 named-style preservation and #611 text-escaping fixes (2026-09-08
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 2447 |
-| xl-core | 1560 |
-| xl-ooxml | 1151 |
-| xl-cli | 1420 |
+| xl-evaluator | 2445 |
+| xl-core | 1559 |
+| xl-ooxml | 1152 |
+| xl-cli | 1418 |
 | xl-cats-effect | 175 |
 | xl-agent | 146 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 52 |
-| **Total** | **6,951** |
+| **Total** | **6,947** |
 
 ## Test Quality Metrics
 
