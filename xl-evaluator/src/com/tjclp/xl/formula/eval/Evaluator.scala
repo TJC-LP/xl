@@ -294,6 +294,10 @@ object Evaluator:
                     resolveNameToRange(next, None, definingSheet, workbook, guard)
                   case TExpr.SheetNameRef(qualifier, next) =>
                     resolveNameToRange(next, Some(qualifier), definingSheet, workbook, guard)
+                  // GH-630: a name bound to an error literal IS that error (Excel: SUM(bad) with
+                  // bad = #N/A is #N/A), so COUNT/COUNTA can triage it as an error argument
+                  case TExpr.ErrorLit(err) =>
+                    Left(EvalError.ErrorValue(err, Some(s"Defined name '$name' is ${err.toExcel}")))
                   case _ =>
                     // Excel: a non-reference name in a range position is #VALUE!
                     Left(
@@ -964,8 +968,11 @@ private class EvaluatorImpl(
           case Some(agg) =>
             // GH-411: the ambient name-cycle guard rides along so a name's refersTo cannot
             // re-enter itself through a range slot
-            Evaluator.resolveRangeLocation(location, sheet, workbook, resolvingNames).flatMap {
-              case (targetSheet, range) =>
+            Evaluator.resolveRangeLocation(location, sheet, workbook, resolvingNames) match
+              // GH-630: a slot that IS an error value (`COUNT(#REF!)`, a name bound to `#N/A`)
+              // follows the aggregate's error-argument policy, exactly as the Call form does
+              case Left(err) => errorArgumentResult(agg, err)
+              case Right((targetSheet, range)) =>
                 aggregateMemoOpt match
                   case Some(memo) =>
                     memo.getOrCompute(
@@ -977,7 +984,6 @@ private class EvaluatorImpl(
                       evalAggregateNode(agg, range, targetSheet, clock, workbook)
                     }
                   case None => evalAggregateNode(agg, range, targetSheet, clock, workbook)
-            }
 
       case call: TExpr.Call[?] =>
         // GH-302: scalar argument positions COLLAPSE ArrayResults (implicit intersection:
@@ -1284,6 +1290,21 @@ private class EvaluatorImpl(
    * propagate as the element's Excel error VALUE per the aggregator's policy (COUNT skips them) —
    * pinning the `Aggregate(id, r) ≡ Call(spec, r)` law.
    */
+  /**
+   * GH-630: the aggregate's answer when its ONE range slot resolved to an Excel error value: COUNT
+   * 0, COUNTA 1, everything else the error ([[Aggregator.onErrorArgument]]). A host failure (no
+   * workbook, an unknown name, a cycle) is not an error value and stays loud.
+   */
+  private def errorArgumentResult[Acc](
+    agg: Aggregator[Acc],
+    err: EvalError
+  ): Either[EvalError, BigDecimal] =
+    EvalError
+      .toErrorValue(err)
+      .flatMap(_ => Aggregator.onErrorArgument(agg, agg.empty))
+      .toRight(err)
+      .flatMap(agg.finalizeWithError)
+
   private def evalAggregateNode[Acc](
     agg: Aggregator[Acc],
     range: CellRange,

@@ -35,10 +35,11 @@ import com.tjclp.xl.workbooks.{DefinedName, Workbook}
  *   - `[` anywhere outside a string: unbounded — structured (`Table1[Col]`) and external
  *     (`[1]Sheet!A1`) references stay coarse; readers with a pinned closed-workbook cache never
  *     reach this scanner (`DependencyGraph.unresolvedReaders` excludes them).
- *   - `#` error literals — the seven `CellError` models (`#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`,
- *     `#NULL!`, `#NUM!`, `#VALUE!`): dead operands, no references. Any other `#…` token is unknown:
- *     `#SPILL!`, `#CALC!`, and a spill reference `A1#`, whose trailing `#` deliberately matches no
- *     literal — the reference reads A1's whole spill range, not A1.
+ *   - `#` error literals — the `CellError` models (the classic seven and, since GH-630, `#SPILL!`,
+ *     `#CALC!`, `#FIELD!`, `#CONNECT!`, `#BLOCKED!`, `#UNKNOWN!`, `#GETTING_DATA`): dead operands,
+ *     no references. Any other `#…` token is unknown, in particular a spill reference `A1#`, whose
+ *     trailing `#` deliberately matches no literal — the reference reads A1's whole spill range,
+ *     not A1.
  *   - numbers: none — except `n:m` between two integers, a whole-row range.
  *   - identifiers: a call (`NAME(`) to a registry function contributes nothing — its arguments are
  *     scanned like any other text — except a dynamic-reference function (INDIRECT, OFFSET) and the
@@ -140,10 +141,10 @@ private[xl] object ReferenceScan:
   /**
    * Excel's error literals as `CellError` spells them, longest first so `#NAME?`, `#NUM!` and
    * `#NULL!` are matched before `#N/A` could claim their prefix. Each is a dead operand that reads
-   * nothing. A `#…` token that is not one of them — `#SPILL!`, `#CALC!`, a spill reference `A1#` —
-   * is unknown and makes the reach unbounded: the whitelist is deliberate, since a generic `#…`
-   * lexer would read `A1#` as `A1`. Derived from the model so a new `CellError` lands here without
-   * a table edit; independent of the parser's own handling of error literals.
+   * nothing. A `#…` token that is not one of them — a spill reference `A1#`, a code Excel has not
+   * yet invented — is unknown and makes the reach unbounded: the whitelist is deliberate, since a
+   * generic `#…` lexer would read `A1#` as `A1`. Derived from the model so a new `CellError` lands
+   * here without a table edit; independent of the parser's own handling of error literals.
    */
   private val ErrorLiterals: Vector[String] =
     CellError.values.toVector.map(_.toExcel).sortBy(literal => -literal.length)

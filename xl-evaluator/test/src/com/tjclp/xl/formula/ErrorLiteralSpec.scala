@@ -77,7 +77,76 @@ class ErrorLiteralSpec extends FunSuite:
   test("an unknown # token is a parse error naming the whole token, not a literal") {
     assert(FormulaParser.parse("=#BOGUS!").isLeft)
     assert(FormulaParser.parse("=#").isLeft)
-    FormulaParser.parse("=#GETTING_DATA") match
-      case Left(err) => assert(err.toString.contains("#GETTING_DATA"), err.toString)
+    FormulaParser.parse("=#NOT_AN_ERROR") match
+      case Left(err) => assert(err.toString.contains("#NOT_AN_ERROR"), err.toString)
       case Right(expr) => fail(s"expected a parse error, got $expr")
+  }
+
+  // ===== GH-630: the modern error codes and ERROR.TYPE =====
+
+  test("GH-630: the modern codes parse (case-insensitively), print canonically and evaluate") {
+    val modern = List(
+      "#SPILL!" -> CellError.Spill,
+      "#CALC!" -> CellError.Calc,
+      "#FIELD!" -> CellError.Field,
+      "#CONNECT!" -> CellError.Connect,
+      "#BLOCKED!" -> CellError.Blocked,
+      "#UNKNOWN!" -> CellError.Unknown,
+      "#GETTING_DATA" -> CellError.GettingData
+    )
+    modern.foreach { (code, err) =>
+      assertEquals(CellError.parse(code), Right(err), code)
+      assertEquals(CellError.parse(code.toLowerCase), Right(err), code)
+      assertEquals(err.toExcel, code)
+      assertEquals(eval(s"=$code"), CellValue.Error(err), code)
+      assertEquals(eval(s"=${code.toLowerCase}"), CellValue.Error(err), code)
+      assertEquals(FormulaParser.parse(s"=$code").map(FormulaPrinter.print(_)), Right(s"=$code"))
+    }
+    // #GETTING_DATA has no terminator: it is matched whole, and what follows it is an operator
+    assertEquals(eval("=#GETTING_DATA+1"), CellValue.Error(CellError.GettingData))
+    assertEquals(eval("=IFERROR(#SPILL!,0)"), CellValue.Number(BigDecimal(0)))
+    assertEquals(eval("=ISERROR(#CALC!)"), CellValue.Bool(true))
+  }
+
+  test("GH-630: ERROR.TYPE returns Microsoft's number for each error, #N/A for anything else") {
+    val expected = Map(
+      CellError.Null -> 1,
+      CellError.Div0 -> 2,
+      CellError.Value -> 3,
+      CellError.Ref -> 4,
+      CellError.Name -> 5,
+      CellError.Num -> 6,
+      CellError.NA -> 7,
+      CellError.GettingData -> 8,
+      CellError.Spill -> 9,
+      CellError.Connect -> 10,
+      CellError.Blocked -> 11,
+      CellError.Unknown -> 12,
+      CellError.Field -> 13,
+      CellError.Calc -> 14
+    )
+    CellError.values.foreach { err =>
+      val n = expected(err)
+      assertEquals(err.errorTypeNumber, n)
+      assertEquals(
+        eval(s"=ERROR.TYPE(${err.toExcel})"),
+        CellValue.Number(BigDecimal(n)),
+        err.toExcel
+      )
+    }
+    // a computed error, a cell holding one, a cached formula error — and non-errors
+    val errors = Sheet("T")
+      .put(ref"A1", CellValue.Error(CellError.Div0))
+      .put(ref"A2", CellValue.Formula("1/0", Some(CellValue.Error(CellError.Div0))))
+      .put(ref"A3", CellValue.Number(BigDecimal(3)))
+    def evalIn(formula: String): CellValue =
+      errors.evaluateFormula(formula).fold(e => fail(e.message), identity)
+    assertEquals(evalIn("=ERROR.TYPE(1/0)"), CellValue.Number(BigDecimal(2)))
+    assertEquals(evalIn("=ERROR.TYPE(A1)"), CellValue.Number(BigDecimal(2)))
+    assertEquals(evalIn("=ERROR.TYPE(A2)"), CellValue.Number(BigDecimal(2)))
+    assertEquals(evalIn("=ERROR.TYPE(A3)"), CellValue.Error(CellError.NA))
+    assertEquals(evalIn("=ERROR.TYPE(1)"), CellValue.Error(CellError.NA))
+    assertEquals(evalIn("=ERROR.TYPE(\"x\")"), CellValue.Error(CellError.NA))
+    assertEquals(evalIn("=ERROR.TYPE(A9)"), CellValue.Error(CellError.NA))
+    assertEquals(evalIn("=IF(ERROR.TYPE(A1)=2,\"div\",\"other\")"), CellValue.Text("div"))
   }

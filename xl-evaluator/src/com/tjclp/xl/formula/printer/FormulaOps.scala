@@ -6,6 +6,7 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
+import com.tjclp.xl.ops.FormulaSupport
 
 /**
  * String-in, string-out formula rewriting (ADR-017 §2.9): parse → transform → reprint, total.
@@ -67,10 +68,20 @@ object FormulaOps:
    * it. `Left(FormulaError)` when the text cannot be parsed.
    */
   def shift(text: String, colDelta: Int, rowDelta: Int): XLResult[String] =
+    shiftReporting(text, colDelta, rowDelta).map(_.formula)
+
+  /**
+   * GH-628: [[shift]], also reporting the references the shift carried off the grid and wrote as
+   * `#REF!`, spelled as they were in `text` — the `FormulaSupport.shiftReporting` behind fill and
+   * copy, and the `putf`/batch drag's source for the CLI's `OFF_GRID_REF` warning.
+   */
+  def shiftReporting(text: String, colDelta: Int, rowDelta: Int): XLResult[FormulaSupport.Shifted] =
     FormulaParser.parse(text) match
       case Left(err) =>
         Left(XLError.FormulaError(text, s"Cannot shift references: ${ParseError.describe(err)}"))
-      case Right(expr) => Right(reprint(text, FormulaShifter.shift(expr, colDelta, rowDelta)))
+      case Right(expr) =>
+        val shifted = FormulaShifter.shiftReporting(expr, colDelta, rowDelta)
+        Right(FormulaSupport.Shifted(reprint(text, shifted.expr), shifted.voided))
 
   /** File-form reprint that keeps the caller's leading-'=' convention. */
   private def reprint(original: String, expr: TExpr[?]): String =

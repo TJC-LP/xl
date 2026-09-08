@@ -776,6 +776,24 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
+  tempDir.test("GH-630: readStream keeps every error code, the modern ones included") { dir =>
+    val path = dir.resolve("every-error.xlsx")
+    val excel = ExcelIO.instance[IO]
+    val errors = CellError.values.toVector
+    val rows = fs2.Stream.emit(
+      RowData(1, errors.zipWithIndex.map((err, i) => i -> CellValue.Error(err)).toMap)
+    )
+    rows.through(excel.writeStream(path, "Errors")).compile.drain.flatMap { _ =>
+      excel.readStream(path).compile.toVector.map { readRows =>
+        assertEquals(readRows.size, 1)
+        val cells = readRows.headOption.map(_.cells).getOrElse(fail("no row"))
+        errors.zipWithIndex.foreach { (err, i) =>
+          assertEquals(cells.get(i), Some(CellValue.Error(err)), err.toExcel)
+        }
+      }
+    }
+  }
+
   tempDir.test("readStream: processes rows incrementally") { dir =>
     val path = dir.resolve("incremental.xlsx")
     val excel = ExcelIO.instance[IO]

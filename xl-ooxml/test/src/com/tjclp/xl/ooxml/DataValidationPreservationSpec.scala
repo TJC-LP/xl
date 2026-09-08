@@ -147,9 +147,9 @@ class DataValidationPreservationSpec extends FunSuite:
     val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
     assert(sheetXml.contains("<dataValidations count=\"2\">"), sheetXml.take(800))
     assert(sheetXml.contains("type=\"list\""), sheetXml.take(800))
-    // inline values keep their literal quotes (scala.xml text-escapes them as &quot;);
+    // inline values keep their literal quotes verbatim (GH-611: no &quot; in element text);
     // the range ref rides verbatim
-    assert(sheetXml.contains("<formula1>&quot;1,2,3&quot;</formula1>"), sheetXml.take(800))
+    assert(sheetXml.contains("<formula1>\"1,2,3\"</formula1>"), sheetXml.take(800))
     assert(sheetXml.contains("<formula1>$Z$1:$Z$3</formula1>"), sheetXml.take(800))
     // default flags: allowBlank=true emits, showDropdown=true emits NO attribute (inversion!)
     assert(sheetXml.contains("allowBlank=\"1\""), sheetXml.take(800))
@@ -221,7 +221,7 @@ class DataValidationPreservationSpec extends FunSuite:
     assert(sheetXml.contains("count=\"2\""), s"container count must be 2: $sheetXml")
     assertEquals(occurrences(sheetXml, "type=\"decimal\""), 1, "preserved entry exactly once")
     assertEquals(occurrences(sheetXml, "errorTitle=\"Range\""), 1, "foreign attrs survive")
-    assertEquals(occurrences(sheetXml, "<formula1>&quot;Low,Med,High&quot;</formula1>"), 1)
+    assertEquals(occurrences(sheetXml, "<formula1>\"Low,Med,High\"</formula1>"), 1)
 
     val back = reread(out).sheets(0).dataValidations
     assertEquals(back.size, 2)

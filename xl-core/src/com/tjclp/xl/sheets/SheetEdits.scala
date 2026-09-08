@@ -5,7 +5,7 @@ import scala.util.Try
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, RowSpan}
+import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, OffGridRef, RowSpan}
 import com.tjclp.xl.render.RenderUtils
 import com.tjclp.xl.sheets.styleSyntax.withCellStyle
 import com.tjclp.xl.styles.CellStyle
@@ -26,25 +26,28 @@ private[xl] object SheetEdits:
   // ===== Formula shifting shared by fill / copy / sort =====
 
   /**
-   * The value a cell takes when it moves by `(colDelta, rowDelta)`. A data-table record always
-   * copies as its cached constant (GH-430: pasting the TABLE(...) display text would be a `#NAME?`
-   * bomb, and the record would claim a table interior that does not exist at the target). A formula
-   * is shifted; its cache is dropped because it no longer describes the shifted text.
+   * The value a cell takes when it moves by `(colDelta, rowDelta)`, with the references the shift
+   * voided (GH-628). A data-table record always copies as its cached constant (GH-430: pasting the
+   * TABLE(...) display text would be a `#NAME?` bomb, and the record would claim a table interior
+   * that does not exist at the target). A formula is shifted; its cache is dropped because it no
+   * longer describes the shifted text.
    */
   private def shifted(
     value: CellValue,
     colDelta: Int,
     rowDelta: Int
-  )(using fs: FormulaSupport): XLResult[CellValue] =
+  )(using fs: FormulaSupport): XLResult[(CellValue, Vector[String])] =
     value match
       case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
-        Right(cachedOpt.getOrElse(CellValue.Empty))
+        Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
       case CellValue.Formula(expr, _, _) =>
-        fs.shift(expr, colDelta, rowDelta) match
-          case Right(text) => Right(CellValue.Formula(text, None))
+        fs.shiftReporting(expr, colDelta, rowDelta) match
+          case Right(FormulaSupport.Shifted(text, voided)) =>
+            Right((CellValue.Formula(text, None), voided))
           case Left(refusal: XLError.UnsupportedCapability) => Left(refusal)
-          case Left(_) => Right(CellValue.Formula(expr, None)) // unparseable: copied as written
-      case other => Right(other)
+          // unparseable: copied as written
+          case Left(_) => Right((CellValue.Formula(expr, None), Vector.empty))
+      case other => Right((other, Vector.empty))
 
   /** `foldLeft` that stops at the first `Left`. */
   private def foldE[A, B](as: Iterator[A])(zero: B)(f: (B, A) => XLResult[B]): XLResult[B] =
@@ -52,6 +55,12 @@ private[xl] object SheetEdits:
       case (Right(acc), a) => f(acc, a)
       case (left, _) => left
     }
+
+  /** A sheet being edited plus the off-grid references its formula shifts have produced so far. */
+  private type Reporting = (Sheet, Vector[OffGridRef])
+
+  private def recordOffGrid(acc: Vector[OffGridRef], cell: ARef, voided: Vector[String]) =
+    if voided.isEmpty then acc else acc :+ OffGridRef(cell, voided)
 
   // ===== Fill =====
 
@@ -88,20 +97,33 @@ private[xl] object SheetEdits:
     target: CellRange,
     direction: Edit.FillDir
   )(using FormulaSupport): XLResult[Sheet] =
+    fillReporting(sheet, source, target, direction).map(_._1)
+
+  /**
+   * GH-628: [[fill]], also reporting every target cell whose formula gained a `#REF!` because the
+   * displacement carried a reference off the grid (Excel writes the `#REF!` silently).
+   */
+  def fillReporting(
+    sheet: Sheet,
+    source: CellRange,
+    target: CellRange,
+    direction: Edit.FillDir
+  )(using FormulaSupport): XLResult[(Sheet, Vector[OffGridRef])] =
     validateFill(source, target, direction).flatMap { _ =>
+      val zero: Reporting = (sheet, Vector.empty)
       direction match
         case Edit.FillDir.Down =>
           val sourceStartRow = source.rowStart.index0
           val sourceRowCount = source.rowEnd.index0 - sourceStartRow + 1
           val targetStartRow = target.rowStart.index0
           val cols = source.colStart.index0 to source.colEnd.index0
-          foldE((targetStartRow to target.rowEnd.index0).iterator)(sheet) { (s, targetRow) =>
+          foldE((targetStartRow to target.rowEnd.index0).iterator)(zero) { (acc, targetRow) =>
             val sourceRow = sourceStartRow + (targetRow - targetStartRow) % sourceRowCount
             val rowDelta = targetRow - sourceRow
-            if rowDelta == 0 then Right(s)
+            if rowDelta == 0 then Right(acc)
             else
-              foldE(cols.iterator)(s) { (s2, col) =>
-                copyCell(s2, ARef.from0(col, sourceRow), ARef.from0(col, targetRow), 0, rowDelta)
+              foldE(cols.iterator)(acc) { (acc2, col) =>
+                copyCell(acc2, ARef.from0(col, sourceRow), ARef.from0(col, targetRow), 0, rowDelta)
               }
           }
         case Edit.FillDir.Right =>
@@ -109,29 +131,32 @@ private[xl] object SheetEdits:
           val sourceColCount = source.colEnd.index0 - sourceStartCol + 1
           val targetStartCol = target.colStart.index0
           val rows = source.rowStart.index0 to source.rowEnd.index0
-          foldE((targetStartCol to target.colEnd.index0).iterator)(sheet) { (s, targetCol) =>
+          foldE((targetStartCol to target.colEnd.index0).iterator)(zero) { (acc, targetCol) =>
             val sourceCol = sourceStartCol + (targetCol - targetStartCol) % sourceColCount
             val colDelta = targetCol - sourceCol
-            if colDelta == 0 then Right(s)
+            if colDelta == 0 then Right(acc)
             else
-              foldE(rows.iterator)(s) { (s2, row) =>
-                copyCell(s2, ARef.from0(sourceCol, row), ARef.from0(targetCol, row), colDelta, 0)
+              foldE(rows.iterator)(acc) { (acc2, row) =>
+                copyCell(acc2, ARef.from0(sourceCol, row), ARef.from0(targetCol, row), colDelta, 0)
               }
           }
     }
 
   /** One fill step: the source cell's value, shifted, onto the target (styles are not copied). */
   private def copyCell(
-    sheet: Sheet,
+    acc: Reporting,
     sourceRef: ARef,
     targetRef: ARef,
     colDelta: Int,
     rowDelta: Int
-  )(using FormulaSupport): XLResult[Sheet] =
+  )(using FormulaSupport): XLResult[Reporting] =
+    val (sheet, offGrid) = acc
     sheet.cells.get(sourceRef) match
-      case None => Right(sheet)
+      case None => Right(acc)
       case Some(sourceCell) =>
-        shifted(sourceCell.value, colDelta, rowDelta).map(v => sheet.put(targetRef, v))
+        shifted(sourceCell.value, colDelta, rowDelta).map { (v, voided) =>
+          (sheet.put(targetRef, v), recordOffGrid(offGrid, targetRef, voided))
+        }
 
   // ===== Copy =====
 
@@ -150,27 +175,42 @@ private[xl] object SheetEdits:
     targetRange: CellRange,
     valuesOnly: Boolean
   )(using FormulaSupport): XLResult[Sheet] =
+    copyRangeReporting(target, sourceSheet, sourceRange, targetRange, valuesOnly).map(_._1)
+
+  /**
+   * GH-628: [[copyRange]], also reporting every target cell whose formula gained a `#REF!` because
+   * the displacement carried a reference off the grid.
+   */
+  def copyRangeReporting(
+    target: Sheet,
+    sourceSheet: Sheet,
+    sourceRange: CellRange,
+    targetRange: CellRange,
+    valuesOnly: Boolean
+  )(using FormulaSupport): XLResult[(Sheet, Vector[OffGridRef])] =
     val snapshot: Map[ARef, Cell] =
       sourceRange.cells.flatMap(ref => sourceSheet.cells.get(ref).map(ref -> _)).toMap
     val colDelta = targetRange.colStart.index0 - sourceRange.colStart.index0
     val rowDelta = targetRange.rowStart.index0 - sourceRange.rowStart.index0
     val working = if sourceSheet.name == target.name then sourceSheet else target
-    foldE(sourceRange.cells)(working) { (s, srcRef) =>
+    val zero: Reporting = (working, Vector.empty)
+    foldE(sourceRange.cells)(zero) { case ((s, offGrid), srcRef) =>
       val tgtRef = ARef.from0(srcRef.col.index0 + colDelta, srcRef.row.index0 + rowDelta)
       snapshot.get(srcRef) match
-        case None => Right(s)
+        case None => Right((s, offGrid))
         case Some(srcCell) =>
-          val copied: XLResult[CellValue] = srcCell.value match
+          val copied: XLResult[(CellValue, Vector[String])] = srcCell.value match
             case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
-              Right(cachedOpt.getOrElse(CellValue.Empty))
+              Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
             case CellValue.Formula(_, cachedOpt, _) if valuesOnly =>
-              Right(cachedOpt.getOrElse(CellValue.Empty))
+              Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
             case other => shifted(other, colDelta, rowDelta)
-          copied.map { v =>
+          copied.map { (v, voided) =>
             val withValue = s.put(tgtRef, v)
-            srcCell.styleId.flatMap(sourceSheet.styleRegistry.get) match
+            val styled = srcCell.styleId.flatMap(sourceSheet.styleRegistry.get) match
               case Some(style) => withValue.withCellStyle(tgtRef, style)
               case None => withValue
+            (styled, recordOffGrid(offGrid, tgtRef, voided))
           }
     }
 
@@ -316,7 +356,7 @@ private[xl] object SheetEdits:
                 case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
                   Right(cachedOpt.getOrElse(CellValue.Empty))
                 case v => Right(v)
-            else shifted(cell.value, 0, rowDelta)
+            else shifted(cell.value, 0, rowDelta).map(_._1)
           moved.map(v => s2.put(Cell(newRef, v, cell.styleId, None, cell.hyperlink)))
         }
     }
@@ -364,7 +404,8 @@ private[xl] object SheetEdits:
    * `width = (textPx + 5) / 7` — the Calibri-11 max-digit-width convention that matches Excel's own
    * auto-fit (`RenderUtils.excelColWidthToPixels` deliberately uses a wider factor for SVG
    * fidelity). If measurement throws (no fontconfig), the pre-0.12 `chars × 0.90 + 1.5` heuristic
-   * is used for that cell.
+   * is used for that cell. A formula cell is measured by its cached value; an UNCACHED formula
+   * contributes nothing (GH-613) — evaluate or recalculate first when the fit must reflect it.
    */
   def autoFitWidth(sheet: Sheet, col: Column): Double =
     fitWidth(sheet, sheet.cells.valuesIterator.filter(_.ref.col == col).toVector)
@@ -392,7 +433,12 @@ private[xl] object SheetEdits:
   private def cellWidth(cell: Cell, sheet: Sheet): Double =
     val styleOpt = cell.styleId.flatMap(sheet.styleRegistry.get)
     val numFmt = styleOpt.map(_.numFmt).getOrElse(NumFmt.General)
-    val text = RenderUtils.cellValueToText(cell.value, numFmt)
+    // GH-613: a column is fitted to what it DISPLAYS. A formula with a cache displays that value;
+    // one without has nothing to measure yet — its text (`=COUNTIF('Deal Pipeline'!$E$2:$E$1000,A2)`)
+    // is not what Excel shows, so it contributes nothing rather than a 44-character width.
+    val text = cell.value match
+      case CellValue.Formula(_, None, _) => ""
+      case value => RenderUtils.cellValueToText(value, numFmt)
     if text.isEmpty then 0.0
     else
       Try(RenderUtils.measureTextWidth(text, styleOpt.map(_.font))).fold(

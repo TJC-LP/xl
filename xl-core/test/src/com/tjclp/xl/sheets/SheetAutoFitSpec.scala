@@ -19,6 +19,27 @@ import org.scalacheck.Prop.forAll
  */
 class SheetAutoFitSpec extends ScalaCheckSuite:
 
+  // ===== GH-613: a column is fitted to what it displays, never to uncached formula text =====
+
+  test("GH-613: an uncached formula contributes nothing; a cached one is measured by its value") {
+    val long = "COUNTIF('Deal Pipeline'!$E$2:$E$1000,A2)"
+    val uncachedOnly =
+      Sheet(SheetName.unsafe("S")).put(ARef.from0(0, 0), CellValue.Formula(long, None))
+    // nothing measurable in the column: the floor, not the 40-odd characters of formula text
+    assertEquals(uncachedOnly.autoFitWidth(Column.from0(0)), 5.0)
+    val cached = Sheet(SheetName.unsafe("S"))
+      .put(ARef.from0(0, 0), CellValue.Formula(long, Some(CellValue.Number(BigDecimal(6816)))))
+      .put(ARef.from0(0, 1), CellValue.Formula(long, None))
+    val width = cached.autoFitWidth(Column.from0(0))
+    assert(width < 12.0, s"a cached 6816 must size like a four-digit number, got $width")
+    assertEquals(
+      width,
+      Sheet(SheetName.unsafe("S"))
+        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(6816)))
+        .autoFitWidth(Column.from0(0))
+    )
+  }
+
   override def scalaCheckTestParameters =
     super.scalaCheckTestParameters.withMinSuccessfulTests(100)
 

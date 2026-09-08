@@ -52,12 +52,16 @@ object TestFixtures:
    * subsets with comment traps), a UTF-8 BOM on styles.xml, 3000 extra cellXfs, and an
    * externalLinks part. formula-records.xlsx = deterministic zip assembly (GH-430): 2-D data table
    * with a cached #NUM! `ca="1"` interior, 1-D row and column data tables, a multi-cell CSE array
-   * group, and a single-cell array record.
+   * group, and a single-cell array record. named-styles-excel.xlsx = an Excel model's styles.xml
+   * stripped to 8 named styles (GH-610): `cellStyleXfs`/`cellStyles` with `xr:uid`s, 10 cellXfs
+   * carrying `xfId`s (two differ only in `xfId`), `mruColors`, `tableStyles`, the x14/x15 `extLst`,
+   * plus a quoted shared string, formula and defined-name array constant for GH-611.
    */
   val derived: List[String] = List(
     "image-shape.xlsx",
     "doctype-hostile.xlsx",
-    "formula-records.xlsx"
+    "formula-records.xlsx",
+    "named-styles-excel.xlsx"
   )
 
   /**

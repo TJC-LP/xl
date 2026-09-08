@@ -17,7 +17,7 @@ import com.tjclp.xl.CellRange
  * `parse ∘ print = id` is stated for parser-built nodes). A node built by hand with an inconsistent
  * pairing is TREATED AS THE CORNER RANGE IT ADDRESSES — the printer and both shifters go through
  * [[RangeForm.actualFor]], so `RangeRef(CellRange(A1, B2), Columns)` prints `A1:B2`, never a
- * silently widened `A:B`.
+ * silently widened `A:B`; `RangeLocation.Local(CellRange(A1, B2), Cell)` prints `A1:B2`.
  */
 enum RangeForm derives CanEqual:
   /** `A1:B2` — two corner cells; both axes are coordinates. */
@@ -28,6 +28,14 @@ enum RangeForm derives CanEqual:
 
   /** `1:1`, `$3:$10` — whole rows; only the row axis is a coordinate. */
   case Rows
+
+  /**
+   * GH-631: `C1` — a single cell written where a range is expected (`SUMIF(A1:A10, ">0", C1)`,
+   * `COUNTIF(A1, "x")`, `VLOOKUP(x, A1, 1)`). Excel accepts a cell in every range slot and treats
+   * it as the 1×1 range it addresses; the form keeps the spelling so the formula prints back as
+   * `C1`, never `C1:C1`. Both axes are coordinates, exactly as for [[Cells]].
+   */
+  case Cell
 
 object RangeForm:
   /**
@@ -68,4 +76,5 @@ object RangeForm:
     def actualFor(range: CellRange): RangeForm = form match
       case Columns if !range.isFullColumn => Cells
       case Rows if !range.isFullRow => Cells
+      case Cell if range.start != range.end => Cells
       case consistent => consistent

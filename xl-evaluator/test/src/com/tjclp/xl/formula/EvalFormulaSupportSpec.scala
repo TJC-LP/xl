@@ -56,10 +56,10 @@ class EvalFormulaSupportSpec extends FunSuite:
     )
     val deleted = EvalFormulaSupport.deleteRows(book, Data, Row.from0(0), 1)
     assertEquals(deleted.flatMap(_(Data)).map(_(ref"A1").value), Right(num(20)))
-    // Other!A1 referenced the deleted Data!A1: the whole cell degrades to #REF!
+    // Other!A1 referenced the deleted Data!A1: that reference is #REF!, the formula survives (GH-629)
     assertEquals(
-      deleted.flatMap(_(Other)).map(_(ref"A1").value),
-      Right(CellValue.Error(CellError.Ref))
+      deleted.flatMap(_(Other)).map(s => formulaText(s(ref"A1").value)),
+      Right("#REF!+1")
     )
     val widened = EvalFormulaSupport.insertCols(book, Data, Column.from0(0), 2)
     assertEquals(widened.flatMap(_(Data)).map(s => formulaText(s(ref"D1").value)), Right("C1*2"))

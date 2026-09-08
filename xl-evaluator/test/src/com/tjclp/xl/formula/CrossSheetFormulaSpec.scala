@@ -1283,24 +1283,25 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(40))))
   }
 
-  test("GH-192: SUMIF rejects mismatched range sizes even with full-column refs") {
+  test("GH-631: SUMIF sizes sum_range to range from its upper-left cell, full columns too") {
     val sheet = sheetWith(
       "Data",
       ref"A1" -> CellValue.Text("Apple"),
+      ref"A3" -> CellValue.Text("Apple"),
       ref"B1" -> CellValue.Number(BigDecimal(10)),
-      ref"B2" -> CellValue.Number(BigDecimal(20))
+      ref"B2" -> CellValue.Number(BigDecimal(20)),
+      ref"B3" -> CellValue.Number(BigDecimal(5))
     )
     val wb = workbookWith(sheet)
-
-    val result = sheet.evaluateFormula(
-      "=SUMIF(A:A, \"Apple\", B1:B2)",
-      workbook = Some(wb)
+    // B1:B2 is read as B1:B1048576 — the shape of A:A from B1 — so the Apple in row 3 counts
+    assertEquals(
+      sheet.evaluateFormula("=SUMIF(A:A, \"Apple\", B1:B2)", workbook = Some(wb)),
+      Right(CellValue.Number(BigDecimal(15)))
     )
-    result match
-      case Left(err) =>
-        assert(err.message.contains("SUMIF: range and sum_range must have same dimensions"))
-      case other =>
-        fail(s"Expected FormulaError, got $other")
+    assertEquals(
+      sheet.evaluateFormula("=SUMIF(A:A, \"Apple\", B1)", workbook = Some(wb)),
+      Right(CellValue.Number(BigDecimal(15)))
+    )
   }
 
   test("GH-192: COUNTIF with full-column reference (same sheet)") {

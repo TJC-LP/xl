@@ -332,6 +332,26 @@ class OoxmlRoundTripSpec extends FunSuite:
         fail(s"Expected Formula with cached Bool, got $other")
   }
 
+  test("GH-630: every CellError round-trips as a t=\"e\" constant and as a formula cache") {
+    val initial = Workbook("Errors")
+    val sheet = CellError.values.zipWithIndex.foldLeft(initial.sheets(0)) { case (s, (err, i)) =>
+      s.put(ARef.from0(0, i), CellValue.Error(err))
+        .put(ARef.from0(1, i), CellValue.Formula("A1", Some(CellValue.Error(err))))
+    }
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("workbook"))
+    val outputPath = tempDir.resolve("every-error.xlsx")
+    XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
+    val readSheet = XlsxReader.read(outputPath).getOrElse(fail("Read failed")).sheets(0)
+    CellError.values.zipWithIndex.foreach { (err, i) =>
+      assertEquals(readSheet(ARef.from0(0, i)).value, CellValue.Error(err), err.toExcel)
+      assertEquals(
+        readSheet(ARef.from0(1, i)).value,
+        CellValue.Formula("A1", Some(CellValue.Error(err))),
+        err.toExcel
+      )
+    }
+  }
+
   test("Formula cell roundtrips expression with cached error value") {
     val initial = Workbook("Formulas")
     val sheet = initial

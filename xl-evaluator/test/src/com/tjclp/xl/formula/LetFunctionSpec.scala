@@ -497,10 +497,7 @@ class LetFunctionSpec extends ScalaCheckSuite:
     parsed.foreach { expr =>
       val shifted =
         FormulaShifter.shiftStructural(expr, shiftLocal = true, "S", isRow = true, 0, 2)
-      assertEquals(
-        shifted.map(e => FormulaPrinter.print(e)),
-        Some("""=LET(k, A7, LEFT("hey", k))""")
-      )
+      assertEquals(FormulaPrinter.print(shifted), """=LET(k, A7, LEFT("hey", k))""")
     }
   }
 

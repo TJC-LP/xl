@@ -288,11 +288,13 @@ object FormulaPrinter:
    * spelling over every row the whole-column form), and a `RangeRef(range)` built by hand with the
    * default `Cells` prints its corners.
    */
-  private def formatRange(range: CellRange, form: RangeForm): String =
+  private[printer] def formatRange(range: CellRange, form: RangeForm): String =
     // `actualFor`: a hand-built inconsistent pairing (Columns on a range that does not span every
     // row) prints its corners, never a widened A:B
     form.actualFor(range) match
       case RangeForm.Cells => formatRange(range)
+      // GH-631: a single cell in a range slot prints as the cell it was written as
+      case RangeForm.Cell => formatARef(range.start, range.startAnchor)
       case RangeForm.Columns =>
         def col(c: Column, anchor: Anchor): String =
           if anchor.isColAbsolute then s"$$${c.toLetter}" else c.toLetter
@@ -305,7 +307,7 @@ object FormulaPrinter:
   /**
    * Format RangeLocation (local, cross-sheet, or external-workbook) to A1 notation.
    */
-  private def formatLocation(location: TExpr.RangeLocation): String =
+  private[printer] def formatLocation(location: TExpr.RangeLocation): String =
     location match
       case TExpr.RangeLocation.Local(range, form) => formatRange(range, form)
       case TExpr.RangeLocation.CrossSheet(sheet, range, form) =>
@@ -330,7 +332,7 @@ object FormulaPrinter:
    * packed Long representation and adds $ prefixes based on anchor mode.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
-  private def formatARef(aref: ARef, anchor: Anchor): String =
+  private[printer] def formatARef(aref: ARef, anchor: Anchor): String =
     // ARef is opaque type = Long with (row << 32) | col packing
     // Extract col (low 32 bits) and row (high 32 bits)
     val arefLong: Long = aref.asInstanceOf[Long] // Safe: ARef is opaque type = Long
@@ -388,7 +390,7 @@ object FormulaPrinter:
    * characters, leading digits, and names that would parse as cell references (Q1, A1, R1C1).
    * Single quotes within the name are doubled (Excel escape convention).
    */
-  private def formatSheetName(sheet: SheetName): String =
+  private[printer] def formatSheetName(sheet: SheetName): String =
     SheetName.quoteForFormula(sheet.value)
 
   /**
