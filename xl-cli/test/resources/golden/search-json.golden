@@ -1,0 +1,39 @@
+## args
+-f
+<DIR>/simple.xlsx
+--json
+search
+Hello
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "search",
+  "version": "<VERSION>",
+  "data": {
+    "pattern": "Hello",
+    "sheets": [
+      "Data",
+      "Summary"
+    ],
+    "count": 1,
+    "total": 1,
+    "matches": [
+      {
+        "ref": "A1",
+        "sheet": "Data",
+        "kind": "text",
+        "value": "Hello",
+        "formatted": "Hello",
+        "formula": null,
+        "hidden": false,
+        "mergedInto": null
+      }
+    ]
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

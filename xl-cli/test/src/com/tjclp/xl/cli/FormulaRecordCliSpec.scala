@@ -12,6 +12,7 @@ import com.tjclp.xl.cli.commands.{DiffCommands, WriteCommands}
 import com.tjclp.xl.cli.contract.{CliException, ErrorCode}
 import com.tjclp.xl.cli.helpers.{BatchParser, CopyOps, ValueParser}
 import com.tjclp.xl.cli.output.{Format, JsonRenderer, Markdown}
+import com.tjclp.xl.cli.read.{CellDetail, CellRecord}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
 
@@ -301,15 +302,15 @@ class FormulaRecordCliSpec extends FunSuite:
     finally zip.close()
 
   test("cell detail shows the braced record expression") {
-    val info = Format.cellInfo(
+    val record = CellRecord.of(
+      SheetName.unsafe("Data"),
       aref("F2"),
       CellValue.dataTable(tableKind, Some(num(42))),
-      formatted = "42",
       style = None,
-      comment = None,
-      hyperlink = None,
-      dependencies = Vector.empty,
-      dependents = Vector.empty
+      hidden = Some(false),
+      mergedInto = None
     )
+    val info =
+      Format.cellInfo(CellDetail(record, None, None, Some(Vector.empty), Some(Vector.empty)))
     assert(info.contains("Formula: {=TABLE(A1,A2)}"), info)
   }

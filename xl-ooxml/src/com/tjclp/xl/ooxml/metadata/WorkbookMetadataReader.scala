@@ -8,7 +8,7 @@ import scala.xml.*
 
 import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.ooxml.{FormulaStorage, XmlSecurity}
+import com.tjclp.xl.ooxml.{FormulaStorage, Relationships, XmlSecurity}
 import com.tjclp.xl.workbooks.DefinedName
 
 /**
@@ -95,8 +95,14 @@ object WorkbookMetadataReader:
 
           // For each sheet, read dimension from worksheet (stop at sheetData)
           sheetsWithDimensions <- sheetRefs.traverse { ref =>
-            val sheetPath = rIdMap.getOrElse(ref.rId, s"xl/worksheets/sheet${ref.sheetId}.xml")
-            val fullPath = if sheetPath.startsWith("xl/") then sheetPath else s"xl/$sheetPath"
+            // The rels Target resolved the one way the reader and the writer agree on (GH-320): a
+            // leading `/` is package-absolute (openpyxl writes `/xl/worksheets/sheet1.xml`),
+            // anything else is relative to xl/. Prefixing `xl/` blindly turned the absolute form
+            // into `xl//xl/worksheets/sheet1.xml`, a part no zip has, so every openpyxl-authored
+            // sheet lost its <dimension> and the streaming used range fell back to a scan.
+            val fullPath = rIdMap
+              .get(ref.rId)
+              .fold(s"xl/worksheets/sheet${ref.sheetId}.xml")(Relationships.resolveWorkbookTarget)
             val dimension = readDimensionFromWorksheet(zipFile, fullPath)
             Right(
               SheetInfo(

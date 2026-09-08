@@ -251,7 +251,8 @@ class ResolveSpec extends CatsEffectSuite with ScalaCheckSuite:
         assertEquals(run.stderr, "", "text mode: no auto-select notice on stderr")
       }
       assert(view.stdout.contains("solo"), view.stdout)
-      assert(streamView.stdout.contains("| solo | 7 |"), streamView.stdout)
+      // W2.4: one renderer for both sources — the streaming table is the in-memory table
+      assertEquals(streamView.stdout, view.stdout)
       assert(cell.stdout.contains("solo"), cell.stdout)
       assert(streamCell.stdout.contains("7"), streamCell.stdout)
       assert(stats.stdout.startsWith("count: 1"), stats.stdout)

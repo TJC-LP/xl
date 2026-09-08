@@ -1,0 +1,27 @@
+## args
+-f
+<DIR>/simple.xlsx
+--json
+stats
+Data!B1:B3
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "stats",
+  "version": "<VERSION>",
+  "data": {
+    "sheet": "Data",
+    "range": "B1:B3",
+    "count": 3,
+    "sum": 42.5,
+    "min": 10,
+    "max": 20,
+    "mean": 14.16666666666666666666666666666667
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

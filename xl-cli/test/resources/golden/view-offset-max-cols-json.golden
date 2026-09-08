@@ -1,0 +1,27 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+view
+--offset
+2
+--max-cols
+2
+--format
+json
+## exit
+0
+## stdout
+{
+  "sheet": "Data",
+  "range": "A3:B4",
+  "truncated": true,
+  "totalRows": 4,
+  "totalCols": 3,
+  "rows": [
+    {"row": 3, "cells": [{"ref": "A3", "type": "text", "value": "Total", "formatted": "Total"}, {"ref": "B3", "type": "number", "value": 12.5, "formatted": "12.50"}]},
+    {"row": 4, "cells": [{"ref": "A4", "type": "empty", "value": null, "formatted": ""}, {"ref": "B4", "type": "formula", "formula": "=SUM(B1:B3)", "value": 42.5, "formatted": "42.5"}]}
+  ]
+}
+## stderr

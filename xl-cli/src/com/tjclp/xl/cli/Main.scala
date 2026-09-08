@@ -28,7 +28,6 @@ import com.tjclp.xl.cli.commands.{
   ChartCommands,
   CommentCommands,
   DiffCommands,
-  FilterCommands,
   ImportCommands,
   InspectCommands,
   LintCommands,
@@ -39,6 +38,7 @@ import com.tjclp.xl.cli.commands.{
   WorkbookCommands,
   WriteCommands
 }
+import com.tjclp.xl.cli.read.{ReadQuery, Reads, SheetSource}
 import com.tjclp.xl.ooxml.lint.WorkbookLint
 import com.tjclp.xl.cli.raster.{
   BatikRasterizer,
@@ -272,6 +272,15 @@ object Main extends IOApp:
   // ==========================================================================
 
   private val rangeArg = Opts.argument[String]("range")
+
+  /** `view [range]`: absent, the sheet's used range (W2.4). */
+  private val viewRangeArg = Opts.argument[String]("range").orNone
+  private val offsetOpt = Opts
+    .option[Int]("offset", "Rows to skip from the top of the range (default: 0)")
+    .withDefault(0)
+  private val maxColsOpt = Opts
+    .option[Int]("max-cols", "Maximum columns to display, from the left (default: 0 = all)")
+    .withDefault(0)
   private val refArg = Opts.argument[String]("ref")
   private val valueArg = Opts.argument[String]("value")
   // Alternative flag for values starting with - (e.g., --value=-5)
@@ -361,11 +370,12 @@ object Main extends IOApp:
   // Extended help strings
   // ==========================================================================
 
-  private val viewHelp = """View range in multiple formats (table, JSON, image, PDF).
+  private val viewHelp = """View a range in multiple formats (table, JSON, image, PDF).
 
 USAGE:
   xl -f file.xlsx -s Sheet1 view A1:D10
   xl -f file.xlsx view "Sheet1!A1:D10"    # Qualified ref (no -s needed)
+  xl -f file.xlsx -s Sheet1 view          # No range: the sheet's used range
 
 FORMATS:
   markdown (default), json, csv, html, svg, png, jpeg, webp, pdf
@@ -374,10 +384,12 @@ OUTPUT FLAGS:
   --format <fmt>      Output format
   --limit <n>         Max rows to display (default: 50; 0 = no limit).
                       When output is clipped, markdown appends a "… showing X of Y rows"
-                      trailer; json adds "truncated"/"totalRows" fields (with --stream the
-                      notice goes to stderr instead — streaming json stays a bare array);
+                      trailer; json adds "truncated"/"totalRows" fields (also with --stream);
                       csv/svg note on stderr; html notes on stderr and appends an HTML
                       comment; raster formats append the notice to the "Exported:" line.
+  --offset <n>        Rows to skip from the top of the range (default: 0); pages with --limit
+  --max-cols <n>      Max columns to display, from the left (default: 0 = all); json adds
+                      "totalCols" when clipped
   --formulas          Show formulas instead of values
   --eval              Evaluate formulas (compute live values)
   --strict            Fail on formula evaluation errors (use with --eval)
@@ -848,11 +860,13 @@ EXAMPLES:
   val viewCmd: Opts[CliCommand] =
     Opts.subcommand("view", viewHelp) {
       (
-        rangeArg,
+        viewRangeArg,
         formulasOpt,
         evalOpt,
         strictOpt,
         limitOpt,
+        offsetOpt,
+        maxColsOpt,
         formatOpt,
         printScaleOpt,
         gridlinesOpt,
@@ -911,14 +925,15 @@ SEMANTICS:
 
 OPTIONS:
   --where <pred>      Filter predicate (required)
-  --columns <spec>    Output columns, e.g. A,C:E (default: all used columns)
-  --limit <n>         Max rows to display (default: 50)
+  --columns <spec>    Output columns, e.g. A,C:E (default: all used columns); a column
+                      outside the used range is blank (null in json); a repeat is an error
+  --limit <n>         Max rows to display (default: 50; 0 shows none, reports the count)
   --format <fmt>      markdown (default), csv, json
   --header            First used row holds column names (excluded from matching)
 
 NOTES:
   - Read-only: does not modify the file (no -o needed)
-  - Loads the workbook in memory; --stream is not supported (use --max-size for large files)
+  - --stream scans the used range in O(1) memory (only the matching rows are kept)
   - Output rows keep their original row numbers
 
 Docs: docs/reference/cli.md (filter section)
@@ -2650,11 +2665,9 @@ EXAMPLES:
       case _ =>
         // For write commands: stream flag uses the SAX/StAX workbook writer
         // For read commands: stream flag enables O(1) input memory (true streaming)
-        val isReadCmd = cmd match
-          case _: CliCommand.Search | _: CliCommand.Stats | _: CliCommand.View |
-              _: CliCommand.Cell =>
-            true
-          case _ => false
+        // W2.4: the record-based reads are one function of a query and a source; the source
+        // is the strategy (streaming reader or loaded workbook)
+        val readQuery = ReadQuery.of(cmd, mode)
 
         // Check for streaming write commands (true O(1) memory transform)
         val isStreamingWriteCmd = cmd match
@@ -2664,75 +2677,63 @@ EXAMPLES:
           case _: CliCommand.Batch => true
           case _ => false
 
-        if stream && isReadCmd then
-          streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
-            executeStreaming(filePath, sheetNameOpt, cmd, warn, mode).map(bridge(cmd, mode))
-        else if stream && isStreamingWriteCmd then
-          // GH-496: a streaming write never recalculates, so --strict could only ever report
-          // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
-          // needs no guard: it is what the streaming path already does.
-          if policy.strict then
-            IO.raiseError(
-              unsupportedInStream(
-                "--strict is not supported with --stream (streaming writes never recalculate). Re-run without --stream.",
-                "omit --stream: the in-memory write recalculates the edit's dependency cone and can gate"
-              )
-            )
-          else
+        (stream, readQuery) match
+          case (true, Some(query)) =>
             streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
-              executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io, warn)
-                .map(bridge(cmd, mode))
-        else
-          // --stream accepted but with no O(1) path for this verb: the workbook is loaded in
-          // memory and only the write goes through the streaming backend — say so
-          val backendOnly = Warning(
-            WarningCode.STREAM_BACKEND_ONLY,
-            s"--stream has no O(1) path for ${cmd.verb}: the workbook was loaded in memory " +
-              "(a write still goes through the streaming writer)"
-          )
-          for
-            _ <- warn(backendOnly).whenA(stream)
-            wb <- readWorkbook(excel, filePath, readerConfig)
-            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-            result <- executeCommand(
-              wb,
-              sheet,
-              outputOpt,
-              backendOpt,
-              stream,
-              cmd,
-              policy,
-              io,
-              warn,
-              mode
+              Reads.run(query, SheetSource.streaming(filePath, excel), sheetNameOpt, mode, warn)
+          case _ if stream && isStreamingWriteCmd =>
+            // GH-496: a streaming write never recalculates, so --strict could only ever report
+            // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
+            // needs no guard: it is what the streaming path already does.
+            if policy.strict then
+              IO.raiseError(
+                unsupportedInStream(
+                  "--strict is not supported with --stream (streaming writes never recalculate). Re-run without --stream.",
+                  "omit --stream: the in-memory write recalculates the edit's dependency cone and can gate"
+                )
+              )
+            else
+              streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
+                executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io, warn)
+                  .map(Payload.text)
+          case _ =>
+            // --stream accepted but with no O(1) path for this verb: the workbook is loaded in
+            // memory and only the write goes through the streaming backend — say so
+            val backendOnly = Warning(
+              WarningCode.STREAM_BACKEND_ONLY,
+              s"--stream has no O(1) path for ${cmd.verb}: the workbook was loaded in memory " +
+                "(a write still goes through the streaming writer)"
             )
-          yield bridge(cmd, mode)(result)
+            for
+              _ <- warn(backendOnly).whenA(stream)
+              wb <- readWorkbook(excel, filePath, readerConfig)
+              sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
+              payload <- readQuery match
+                case Some(query) =>
+                  Reads.run(query, SheetSource.inMemory(wb), sheet.map(_.name.value), mode, warn)
+                case None =>
+                  executeCommand(
+                    wb,
+                    sheet,
+                    outputOpt,
+                    backendOpt,
+                    stream,
+                    cmd,
+                    policy,
+                    io,
+                    warn,
+                    mode
+                  ).map(Payload.text)
+            yield payload
 
   /**
-   * The legacy bridge from a handler's text to its payload: prose stays prose; under `--json` a
-   * verb whose payload format is JSON (`view`, `filter` — asked for with `--format json`, or the
-   * default when no format was given) passes it through as `data` AS TEXT
-   * ([[contract.Payload.Raw]]) so the two spellings can never drift, not even in a number's last
-   * digit.
-   */
-  private def bridge(cmd: CliCommand, mode: OutputMode)(text: String): Payload =
-    (mode, cmd) match
-      case (OutputMode.Json, view: CliCommand.View)
-          if CliCommand.viewFormat(view.format, mode) == ViewFormat.Json =>
-        Payload.Raw(text)
-      case (OutputMode.Json, filter: CliCommand.Filter)
-          if CliCommand.filterFormat(filter.format, mode) == FilterFormat.Json =>
-        Payload.Raw(text)
-      case _ => Payload.text(text)
-
-  /** Execute command using streaming mode (O(1) memory); `warn` is the run's warning sink. */
-  /**
-   * The verbs that run in O(1) memory under `--stream`: the reads [[executeStreaming]] dispatches
-   * (search, stats, bounds, view, cell), the metadata fast paths of `runResult` (`describe` without
-   * `--full`, `sheets` without `--stats`) and the writes [[executeStreamingWrite]] dispatches (put,
-   * putf, style, batch). Every other write verb accepts the flag, loads the workbook in memory and
-   * only writes through the streaming writer. `Schema.verbs`' `needs.streaming` column is pinned to
-   * this set by SchemaSpec; extend both when a dispatch arm is added.
+   * The verbs that run in O(1) memory under `--stream`: the record-based reads
+   * ([[com.tjclp.xl.cli.read.Reads]] over the streaming source: search, stats, view, cell, filter),
+   * `bounds` and the metadata fast paths of `runResult` (`describe` without `--full`, `sheets`
+   * without `--stats`), and the writes [[executeStreamingWrite]] dispatches (put, putf, style,
+   * batch). Every other write verb accepts the flag, loads the workbook in memory and only writes
+   * through the streaming writer. `Schema.verbs`' `needs.streaming` column is pinned to this set by
+   * SchemaSpec; extend both when a dispatch arm is added.
    */
   private[cli] val streamingVerbs: Set[String] = Set(
     "search",
@@ -2740,6 +2741,7 @@ EXAMPLES:
     "bounds",
     "view",
     "cell",
+    "filter",
     "describe",
     "sheets",
     "put",
@@ -2747,73 +2749,6 @@ EXAMPLES:
     "style",
     "batch"
   )
-
-  private def executeStreaming(
-    filePath: Path,
-    sheetNameOpt: Option[String],
-    cmd: CliCommand,
-    warn: Warning => IO[Unit],
-    mode: OutputMode
-  ): IO[String] = cmd match
-    case CliCommand.Search(pattern, limit, sheetsFilter) =>
-      StreamingReadCommands.search(filePath, sheetNameOpt, pattern, limit, sheetsFilter)
-
-    case CliCommand.Stats(refStr) =>
-      StreamingReadCommands.stats(filePath, sheetNameOpt, refStr)
-
-    // bounds never reaches here: `execute` answers it from the metadata part for every mode
-
-    case CliCommand.View(
-          rangeStr,
-          showFormulas,
-          evalFormulas,
-          _, // strict - not used in streaming mode
-          limit,
-          format,
-          _,
-          _,
-          showLabels,
-          _,
-          _,
-          _,
-          skipEmpty,
-          headerRow,
-          _,
-          skipHidden
-        ) =>
-      if evalFormulas then
-        IO.raiseError(
-          unsupportedInStream(
-            "--eval is not supported with --stream (streaming view uses cached values only)",
-            "omit --stream to evaluate formulas; use --max-size <MB> for a large file"
-          )
-        )
-      else
-        StreamingReadCommands.view(
-          filePath,
-          sheetNameOpt,
-          rangeStr,
-          showFormulas,
-          limit,
-          CliCommand.viewFormat(format, mode),
-          showLabels,
-          skipEmpty,
-          headerRow,
-          // GH-474: unsupported under --stream, but reported rather than silently dropped
-          skipHidden,
-          warn
-        )
-
-    case CliCommand.Cell(refStr, noStyle) =>
-      StreamingReadCommands.cell(filePath, sheetNameOpt, refStr, noStyle)
-
-    case _ =>
-      IO.raiseError(
-        unsupportedInStream(
-          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only), cell, describe",
-          "omit --stream; use --max-size <MB> to load a large file in memory"
-        )
-      )
 
   /** Read and parse the batch source once, for either rendering of a dry run. */
   private def parseBatchDryRun(source: String, io: CliIO): IO[BatchParser.ParseResult] =
@@ -3028,65 +2963,24 @@ EXAMPLES:
     case CliCommand.Bounds(_) =>
       ReadCommands.bounds(wb, sheetOpt)
 
-    case CliCommand.View(
-          rangeStr,
-          showFormulas,
-          evalFormulas,
-          strict,
-          limit,
-          format,
-          printScale,
-          showGridlines,
-          showLabels,
-          dpi,
-          quality,
-          rasterOutput,
-          skipEmpty,
-          headerRow,
-          rasterizer,
-          skipHidden
-        ) =>
-      ReadCommands.view(
-        wb,
-        sheetOpt,
-        rangeStr,
-        showFormulas,
-        evalFormulas,
-        strict,
-        limit,
-        CliCommand.viewFormat(format, mode),
-        printScale,
-        showGridlines,
-        showLabels,
-        dpi,
-        quality,
-        rasterOutput,
-        skipEmpty,
-        headerRow,
-        rasterizer,
-        skipHidden,
-        warn
-      )
-
-    case CliCommand.Cell(refStr, noStyle) =>
-      ReadCommands.cell(wb, sheetOpt, refStr, noStyle)
-
-    case CliCommand.Search(pattern, limit, sheetsFilter) =>
-      ReadCommands.search(wb, sheetOpt, pattern, limit, sheetsFilter)
-
-    case CliCommand.Stats(refStr) =>
-      ReadCommands.stats(wb, sheetOpt, refStr)
-
-    case CliCommand.Filter(where, columns, limit, format, header) =>
-      FilterCommands.filter(
-        wb,
-        sheetOpt,
-        where,
-        columns,
-        limit,
-        CliCommand.filterFormat(format, mode),
-        header
-      )
+    // W2.4: the record-based reads run over the loaded workbook as a source; their payload text
+    // is what text mode prints (the runner reaches them through `execute`, which keeps the
+    // typed payloads — this arm exists for the verbs the tests drive directly)
+    case _: CliCommand.View | _: CliCommand.Cell | _: CliCommand.Search | _: CliCommand.Stats |
+        _: CliCommand.Filter =>
+      ReadQuery.of(cmd, mode) match
+        case Some(query) =>
+          Reads
+            .run(query, SheetSource.inMemory(wb), sheetOpt.map(_.name.value), mode, warn)
+            .map {
+              case Payload.Text(text, _, _) => text
+              case Payload.Raw(json) => json
+              case Payload.Json(value) => ujson.write(value, indent = 2)
+            }
+        case None =>
+          IO.raiseError(
+            CliException(CliError(ErrorCode.INTERNAL, s"no read query for ${cmd.verb}"))
+          )
 
     case CliCommand.Eval(formulaStr, overrides) =>
       ReadCommands.eval(wb, sheetOpt, formulaStr, overrides)

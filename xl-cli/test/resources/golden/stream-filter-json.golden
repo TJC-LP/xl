@@ -1,0 +1,49 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+--stream
+--json
+filter
+--where
+B > 10
+--header
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "filter",
+  "version": "<VERSION>",
+  "data": [
+    {
+      "row": 2,
+      "cells": {
+        "Hello": "World",
+        "B": 20,
+        "C": 45473
+      }
+    },
+    {
+      "row": 3,
+      "cells": {
+        "Hello": "Total",
+        "B": 12.5,
+        "C": null
+      }
+    },
+    {
+      "row": 4,
+      "cells": {
+        "Hello": null,
+        "B": 42.5,
+        "C": null
+      }
+    }
+  ],
+  "warnings": [],
+  "error": null
+}
+## stderr

@@ -25,7 +25,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `--output` | `-o` | yes | Output file for a write |
 | `--in-place` | `-i` | no | Edit the input file in place (instead of -o) |
 | `--backend` | — | yes | XML writer backend: scalaxml (default) or saxstax (faster) |
-| `--stream` | — | no | O(1)-memory streaming for large files: search, stats, bounds, view, cell, describe, sheets; put, putf, style and the streamable batch ops (other write verbs accept the flag but load the workbook) |
+| `--stream` | — | no | O(1)-memory streaming for large files: search, stats, bounds, view, cell, filter, describe, sheets; put, putf, style and the streamable batch ops (other write verbs accept the flag but load the workbook) |
 | `--no-recalc` | — | no | Write verbs: apply the edit and recalculate nothing; structural edits leave the formulas they invalidated uncached |
 | `--preserve-caches` | — | no | Alias for --no-recalc |
 | `--strict` | — | no | Write verbs: exit 1 when the recalculation reports formula errors, non-convergence or data-table seed warnings (after `view` it is view's own --eval gate) |
@@ -51,7 +51,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `cell` | `-f` `-s` `--stream` | 0 2 3 | — | 0.1.0 | Get one cell's value, style, comment and direct dependencies |
 | `search` | `-f` `--stream` | 0 2 3 | — | 0.1.0 | Search cells by regex (all sheets unless -s) |
 | `stats` | `-f` `-s` `--stream` | 0 2 3 | — | 0.2.0 | Statistics for the numeric values in a range |
-| `filter` | `-f` `-s` | 0 2 3 | — | 0.11.3 | Filter rows of the used range with a --where predicate (read-only) |
+| `filter` | `-f` `-s` `--stream` | 0 2 3 | — | 0.11.3 | Filter rows of the used range with a --where predicate (read-only) |
 | `describe` | `-f` `--stream` | 0 2 3 | — | 0.20.0 | Orient in a workbook: sheets, defined names, date system (--full adds per-sheet counts) |
 | `audit` | `-f` | 0 1 2 3 | — | 0.20.0 | Find every reason a number can be wrong, in one pass (--fail-on-findings exits 1) |
 | `deps` | `-f` `-s` | 0 2 3 | — | 0.20.0 | Trace one cell's precedents and dependents, hop by hop (--direction, --depth) |

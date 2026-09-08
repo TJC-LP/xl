@@ -1,12 +1,18 @@
 package com.tjclp.xl.ooxml.metadata
 
+import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
+import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
+
+import scala.jdk.CollectionConverters.*
 
 import munit.FunSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.ooxml.{TestFixtures, XlsxWriter}
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 // Test code uses .get/.head for brevity in assertions
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
@@ -18,6 +24,34 @@ class WorkbookMetadataReaderSpec extends FunSuite:
     val wb = Workbook(sheets)
     XlsxWriter.write(wb, path)
     path
+
+  /** Copy the zip at `from` to `to`, each entry's bytes passed through `f` (entry name, bytes). */
+  private def rewriteZip(from: Path, to: Path)(f: (String, Array[Byte]) => Array[Byte]): Unit =
+    val zip = new ZipFile(from.toFile)
+    val entries =
+      try
+        zip.entries().asScala.toVector.map { entry =>
+          val in = zip.getInputStream(entry)
+          try entry.getName -> in.readAllBytes()
+          finally in.close()
+        }
+      finally zip.close()
+    val out = new ZipOutputStream(Files.newOutputStream(to))
+    try
+      entries.foreach { (name, bytes) =>
+        out.putNextEntry(new ZipEntry(name))
+        out.write(f(name, bytes))
+        out.closeEntry()
+      }
+    finally out.close()
+
+  private def zipEntryText(path: Path, name: String): String =
+    val zip = new ZipFile(path.toFile)
+    try
+      val in = zip.getInputStream(zip.getEntry(name))
+      try new String(in.readAllBytes(), UTF_8)
+      finally in.close()
+    finally zip.close()
 
   test("read: extracts sheet names from workbook") {
     val path = createTempWorkbook(
@@ -53,6 +87,36 @@ class WorkbookMetadataReaderSpec extends FunSuite:
       assertEquals(range.start, ARef.parse("A1").toOption.get)
       assertEquals(range.end, ARef.parse("C10").toOption.get)
     finally Files.deleteIfExists(path)
+  }
+
+  test("read: resolves openpyxl's package-absolute worksheet Target to the sheet's <dimension>") {
+    // A1:B2 hold values and D5 is styled but empty, so the <dimension> the writer records (every
+    // stored cell: A1:D5) is wider than any scan of the non-empty cells could recover — the
+    // streaming used range depends on this element being found
+    val sheet = Sheet(SheetName.unsafe("Data")).put("A1" -> "h", "B1" -> 1, "A2" -> "x", "B2" -> 2)
+    val styled = sheet.styleAt("D5", CellStyle.default.withNumFmt(NumFmt.Percent)).getOrElse(sheet)
+    val relative = createTempWorkbook(Vector(styled))
+    val absolute = Files.createTempFile("metadata-test-openpyxl-", ".xlsx")
+    try
+      val written = WorkbookMetadataReader.read(relative).toOption.get.sheets.head.dimension
+      assertEquals(written.map(_.toA1), Some("A1:D5"))
+      // openpyxl writes `Target="/xl/worksheets/sheet1.xml"`; the library (like Excel) writes the
+      // Target relative to xl/. Same zip otherwise.
+      rewriteZip(relative, absolute) { (name, bytes) =>
+        if name == "xl/_rels/workbook.xml.rels" then
+          new String(bytes, UTF_8)
+            .replace("Target=\"worksheets/", "Target=\"/xl/worksheets/")
+            .getBytes(UTF_8)
+        else bytes
+      }
+      val rels = zipEntryText(absolute, "xl/_rels/workbook.xml.rels")
+      assert(rels.contains("Target=\"/xl/worksheets/sheet1.xml\""), rels)
+      val meta = WorkbookMetadataReader.read(absolute).toOption.get
+      assert(meta.sheets.head.dimension.isDefined, "absolute Target lost the <dimension>")
+      assertEquals(meta.sheets.head.dimension, written)
+    finally
+      Files.deleteIfExists(relative)
+      Files.deleteIfExists(absolute)
   }
 
   test("read: handles empty workbook (single empty sheet)") {

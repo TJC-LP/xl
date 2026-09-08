@@ -5,11 +5,13 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.{Sheet, Workbook, given}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.commands.FilterCommands
+import com.tjclp.xl.cli.contract.{Outcome, OutputMode, Render}
+import com.tjclp.xl.cli.read.ReadTestKit
 import com.tjclp.xl.macros.ref
 
 /**
- * Tests for the filter command (GH-134, phase 1 — no SQL).
+ * Tests for the filter command (GH-134, phase 1 — no SQL), as a [[com.tjclp.xl.cli.read.Reads]]
+ * query (W2.4): the same code answers `filter` over a loaded workbook and under `--stream`.
  *
  * Covers: --where row filtering, --header name resolution, --columns projection, --limit, and
  * markdown/csv/json output formats.
@@ -37,6 +39,20 @@ class FilterCommandSpec extends CatsEffectSuite:
 
   private val wb = Workbook(Vector(sheet))
 
+  private def outcome(
+    where: String,
+    columns: Option[String] = None,
+    limit: Int = 50,
+    format: FilterFormat = FilterFormat.Markdown,
+    header: Boolean = false,
+    book: Workbook = wb
+  ): IO[Outcome] =
+    ReadTestKit.inMemory(
+      book,
+      book.sheets.headOption.map(_.name.value),
+      ReadTestKit.filter(where, columns, limit, format, header)
+    )
+
   private def run(
     where: String,
     columns: Option[String] = None,
@@ -44,7 +60,10 @@ class FilterCommandSpec extends CatsEffectSuite:
     format: FilterFormat = FilterFormat.Markdown,
     header: Boolean = false
   ): IO[String] =
-    FilterCommands.filter(wb, Some(sheet), where, columns, limit, format, header)
+    outcome(where, columns, limit, format, header).map(ReadTestKit.text)
+
+  private def runOn(book: Workbook, where: String, format: FilterFormat): IO[String] =
+    outcome(where, format = format, book = book).map(ReadTestKit.text)
 
   test("filter: --where keeps only matching rows (markdown)") {
     run("B > 100").map { out =>
@@ -78,29 +97,28 @@ class FilterCommandSpec extends CatsEffectSuite:
   }
 
   test("filter: unknown column errors with available headers") {
-    run("Cost > 100", header = true).attempt.map {
-      case Left(err) =>
-        assert(err.getMessage.contains("Cost"), err.getMessage)
-        assert(
-          err.getMessage.contains("Price"),
-          s"Should list available headers: ${err.getMessage}"
-        )
-      case Right(out) => fail(s"Expected error, got: $out")
+    outcome("Cost > 100", header = true).map { result =>
+      val message = result.error.fold("")(_.message)
+      assert(!result.ok, "expected a failure")
+      assert(message.contains("Cost"), message)
+      assert(message.contains("Price"), s"Should list available headers: $message")
+      assertEquals(result.error.map(_.code), Some("INVALID_REFERENCE"))
     }
   }
 
   test("filter: column letters beyond the used range error without --header") {
-    run("ZZ > 100").attempt.map {
-      case Left(err) => assert(err.getMessage.contains("ZZ"), err.getMessage)
-      case Right(out) => fail(s"Expected error, got: $out")
+    outcome("ZZ > 100").map { result =>
+      assert(result.error.exists(_.message.contains("ZZ")), result.error.toString)
     }
   }
 
-  test("filter: invalid predicate reports a parse error") {
-    run("B >").attempt.map {
-      case Left(err) =>
-        assert(err.getMessage.toLowerCase.contains("predicate"), err.getMessage)
-      case Right(out) => fail(s"Expected error, got: $out")
+  test("filter: invalid predicate is a usage error naming the predicate") {
+    outcome("B >").map { result =>
+      assert(
+        result.error.exists(_.message.toLowerCase.contains("predicate")),
+        result.error.toString
+      )
+      assertEquals(result.error.map(_.code), Some("USAGE"))
     }
   }
 
@@ -138,11 +156,9 @@ class FilterCommandSpec extends CatsEffectSuite:
 
   test("filter: csv escapes commas and quotes") {
     val s = Sheet("S").put(ref"A1", CellValue.Text("a,b \"c\"")).put(ref"B1", CellValue.Number(1))
-    FilterCommands
-      .filter(Workbook(Vector(s)), Some(s), "B = 1", None, 50, FilterFormat.Csv, false)
-      .map { out =>
-        assert(out.contains("\"a,b \"\"c\"\"\""), out)
-      }
+    runOn(Workbook(Vector(s)), "B = 1", FilterFormat.Csv).map { out =>
+      assert(out.contains("\"a,b \"\"c\"\"\""), out)
+    }
   }
 
   test("filter: json output has row numbers and typed cells") {
@@ -154,6 +170,15 @@ class FilterCommandSpec extends CatsEffectSuite:
       assertEquals(rows.head("cells")("A").str, "Widget")
       assertEquals(rows.head("cells")("B").num, 150.0)
       assertEquals(rows.head("cells")("C").bool, true)
+    }
+  }
+
+  test("filter: json keeps every digit of a number (never rounds through a Double)") {
+    val s = Sheet("S")
+      .put(ref"A1", CellValue.Number(BigDecimal("12345678901234567")))
+      .put(ref"B1", CellValue.Number(1))
+    runOn(Workbook(Vector(s)), "B = 1", FilterFormat.Json).map { out =>
+      assert(out.contains("12345678901234567"), out)
     }
   }
 
@@ -177,9 +202,7 @@ class FilterCommandSpec extends CatsEffectSuite:
   }
 
   test("filter: empty sheet yields no matches rather than an error") {
-    val empty = Sheet("Empty")
-    FilterCommands
-      .filter(Workbook(Vector(empty)), Some(empty), "A > 1", None, 50, FilterFormat.Markdown, false)
+    runOn(Workbook(Vector(Sheet("Empty"))), "A > 1", FilterFormat.Markdown)
       .map(out => assert(out.toLowerCase.contains("no rows"), out))
   }
 
@@ -190,11 +213,116 @@ class FilterCommandSpec extends CatsEffectSuite:
       .put(ref"A2", CellValue.Text("y"))
       .put(ref"A3", CellValue.Text("z"))
       .put(ref"B3", CellValue.Number(3))
-    FilterCommands
-      .filter(Workbook(Vector(s)), Some(s), "B IS EMPTY", None, 50, FilterFormat.Markdown, false)
-      .map { out =>
-        assert(out.contains("y"), out)
-        assert(!out.contains("x"), out)
-        assert(!out.contains("z"), out)
+    runOn(Workbook(Vector(s)), "B IS EMPTY", FilterFormat.Markdown).map { out =>
+      assert(out.contains("y"), out)
+      assert(!out.contains("x"), out)
+      assert(!out.contains("z"), out)
+    }
+  }
+
+  test("filter --stream: the streaming source answers the same rows (W2.4)") {
+    ReadTestKit.withTempWorkbook(wb) { path =>
+      val queries = Vector(
+        ReadTestKit.filter("B > 100"),
+        ReadTestKit
+          .filter("Price > 100 AND Active = TRUE", header = true, format = FilterFormat.Csv),
+        ReadTestKit.filter("B > 0", limit = 2, format = FilterFormat.Json),
+        ReadTestKit.filter("B > 0", columns = Some("Z"), format = FilterFormat.Json),
+        ReadTestKit.filter("B > 0", columns = Some("Z,A"), format = FilterFormat.Csv),
+        ReadTestKit.filter("B > 0", limit = 0)
+      )
+      queries.foldLeft(IO.unit) { (acc, query) =>
+        acc *> (for
+          memory <- ReadTestKit.inMemory(wb, Some("Data"), query).map(ReadTestKit.text)
+          streamed <- ReadTestKit.streaming(path, Some("Data"), query).map(ReadTestKit.text)
+        yield assertEquals(streamed, memory, s"filter parity broke for $query"))
       }
+    }
+  }
+
+  // A used range that starts at B: a --columns token left of it selects no cell either
+  private val offsetSheet = Sheet("Off")
+    .put(ref"B2", CellValue.Text("k"))
+    .put(ref"C2", CellValue.Number(1))
+    .put(ref"B3", CellValue.Text("m"))
+    .put(ref"C3", CellValue.Number(2))
+
+  test("filter: a --columns token outside the used range is blank; the row number stays") {
+    for
+      json <- run("B > 0", columns = Some("Z"), format = FilterFormat.Json)
+      md <- run("B > 0", columns = Some("Z,A"))
+      csv <- run("B > 0", columns = Some("Z"), format = FilterFormat.Csv)
+      left <- outcome(
+        "C > 0",
+        columns = Some("A"),
+        format = FilterFormat.Json,
+        book = Workbook(Vector(offsetSheet))
+      ).map(ReadTestKit.text)
+    yield
+      val rows = ujson.read(json).arr.toVector
+      assertEquals(rows.map(_("row").num.toInt), Vector(2, 3, 4, 5))
+      rows.foreach(r => assertEquals(r("cells")("Z"), ujson.Null))
+      assert(md.linesIterator.exists(_.matches("[|]\\s*2\\s*[|]\\s*[|]\\s*Widget\\s*[|]")), md)
+      assertEquals(csv.linesIterator.toVector, Vector("row,Z", "2,", "3,", "4,", "5,"))
+      val leftRows = ujson.read(left).arr.toVector
+      assertEquals(leftRows.map(_("row").num.toInt), Vector(2, 3))
+      leftRows.foreach(r => assertEquals(r("cells")("A"), ujson.Null))
+  }
+
+  test("filter --json: the envelope carries the rows when every selected column is outside") {
+    val query = ReadTestKit.filter("B > 0", columns = Some("Z"), format = FilterFormat.Json)
+    def rowsOf(outcome: Outcome): Vector[Int] =
+      val data = ujson.read(Render.json(outcome, "test").stdout)("data")
+      assert(data.arrOpt.isDefined, s"filter's data is not an array: $data")
+      data.arr.toVector.map(_("row").num.toInt)
+    ReadTestKit.withTempWorkbook(wb) { path =>
+      for
+        memory <- ReadTestKit.inMemory(wb, Some("Data"), query, OutputMode.Json)
+        streamed <- ReadTestKit.streaming(path, Some("Data"), query, OutputMode.Json)
+      yield
+        assert(memory.ok, memory.error.toString)
+        assertEquals(rowsOf(memory), Vector(2, 3, 4, 5))
+        assertEquals(rowsOf(streamed), Vector(2, 3, 4, 5))
+    }
+  }
+
+  test("filter: a repeated --columns token is a usage error") {
+    for
+      twice <- outcome("B > 0", columns = Some("A,A"))
+      overlap <- outcome("B > 0", columns = Some("A:C,B"), format = FilterFormat.Json)
+    yield
+      assertEquals(twice.error.map(_.code), Some("USAGE"))
+      assertEquals(twice.exitCode.code, 2)
+      assertEquals(twice.error.map(_.message), Some("Duplicate column(s) in --columns: A"))
+      assertEquals(overlap.error.map(_.message), Some("Duplicate column(s) in --columns: B"))
+  }
+
+  test("filter: json collapses a repeated header label to one key (first position, last value)") {
+    val s = Sheet("S")
+      .put(ref"A1", CellValue.Text("Total"))
+      .put(ref"B1", CellValue.Text("Other"))
+      .put(ref"C1", CellValue.Text("Total"))
+      .put(ref"A2", CellValue.Number(1))
+      .put(ref"B2", CellValue.Number(2))
+      .put(ref"C2", CellValue.Number(3))
+    outcome("Other > 0", format = FilterFormat.Json, header = true, book = Workbook(Vector(s)))
+      .map(ReadTestKit.text)
+      .map { out =>
+        assertEquals(out.split("\"Total\"", -1).length - 1, 1, out)
+        val cells = ujson.read(out).arr.head("cells").obj
+        assertEquals(cells.keys.toList, List("Total", "Other"))
+        assertEquals(cells("Total").num, 3.0)
+      }
+  }
+
+  test("filter: --limit 0 shows no rows and reports the match count alone") {
+    for
+      md <- run("B > 0", limit = 0)
+      csv <- run("B > 0", limit = 0, format = FilterFormat.Csv)
+      json <- run("B > 0", limit = 0, format = FilterFormat.Json)
+    yield
+      assert(md.contains("Matched 4 row(s); showing first 0 (--limit)."), md)
+      assert(!md.contains("Widget"), md)
+      assertEquals(csv, "row,A,B,C")
+      assertEquals(ujson.read(json).arr.toVector, Vector.empty[ujson.Value])
   }

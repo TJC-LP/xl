@@ -686,11 +686,6 @@ object XlsxReader:
         yield domainComments
 
   /**
-   * Convert OOXML comments to domain Comment map.
-   *
-   * Maps author IDs to author names and creates domain Comment objects.
-   */
-  /**
    * Strip author prefix from comment text if present AND it matches XL's exact format.
    *
    * Only strips if:
@@ -728,7 +723,13 @@ object XlsxReader:
     else if text.startsWith("\n") then text.drop(1)
     else text
 
-  private[ooxml] def convertToDomainComments(
+  /**
+   * The OOXML comments of one sheet as domain comments: author ids resolved (an empty author is
+   * unauthored) and the author prefix XL's writer adds stripped. Shared with the streaming reader
+   * (`private[xl]`, not published) so both read paths convert through one code and agree on every
+   * comment's text.
+   */
+  private[xl] def convertToDomainComments(
     ooxmlComments: OoxmlComments,
     commentPath: String = "comments.xml"
   ): XLResult[Map[ARef, com.tjclp.xl.cells.Comment]] =

@@ -124,7 +124,18 @@ object Resolve:
     qualified: Option[SheetName],
     verb: String
   ): Either[CliError, SheetName] =
-    val names = meta.sheets.map(_.name)
+    sheetNameAmong(meta.sheets.map(_.name), sheetFlag, qualified, verb)
+
+  /**
+   * Steps 1–4 over the sheet names alone — the form every [[com.tjclp.xl.cli.read.SheetSource]]
+   * resolves through, so a loaded workbook and the streaming reader apply one rule with one text.
+   */
+  def sheetNameAmong(
+    names: Vector[SheetName],
+    sheetFlag: Option[String],
+    qualified: Option[SheetName],
+    verb: String
+  ): Either[CliError, SheetName] =
     def known(name: SheetName): Either[CliError, SheetName] =
       if names.contains(name) then Right(name)
       else Left(sheetNotFound(names.map(_.value), name.value))
@@ -133,20 +144,26 @@ object Resolve:
       case None =>
         sheetFlag match
           case Some(flag) => validSheetName(flag).flatMap(known)
-          case None => only(meta).toRight(sheetRequired(verb, names.map(_.value)))
+          case None => onlyAmong(names).toRight(sheetRequired(verb, names.map(_.value)))
 
   /**
    * A name given on the command line (`-s`, one of `--sheets`) over metadata: `INVALID_SHEET_NAME`
    * when the validator refuses it, `SHEET_NOT_FOUND` with the nearest names when the book lacks it.
    */
   def knownName(meta: LightMetadata, name: String): Either[CliError, SheetName] =
-    val names = meta.sheets.map(_.name)
+    knownAmong(meta.sheets.map(_.name), name)
+
+  /** [[knownName]] over the sheet names alone. */
+  def knownAmong(names: Vector[SheetName], name: String): Either[CliError, SheetName] =
     validSheetName(name).flatMap { sn =>
       if names.contains(sn) then Right(sn) else Left(sheetNotFound(names.map(_.value), sn.value))
     }
 
   /** Step 3's premise over metadata. */
-  def only(meta: LightMetadata): Option[SheetName] = meta.sheets.map(_.name) match
+  def only(meta: LightMetadata): Option[SheetName] = onlyAmong(meta.sheets.map(_.name))
+
+  /** Step 3's premise over the sheet names alone. */
+  def onlyAmong(names: Vector[SheetName]): Option[SheetName] = names match
     case Vector(single) => Some(single)
     case _ => None
 
@@ -275,6 +292,6 @@ object Resolve:
       }
 
   /** The `SHEET_REQUIRED` context for an unqualified ref: today's exact wording. */
-  private def unqualified(verb: String, refStr: String, target: Target): String = target match
+  def unqualified(verb: String, refStr: String, target: Target): String = target match
     case Target.Cell(_) => s"$verb with unqualified ref '$refStr'"
     case Target.Range(_) => s"$verb with unqualified range '$refStr'"

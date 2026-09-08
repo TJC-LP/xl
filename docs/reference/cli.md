@@ -278,23 +278,27 @@ Non-empty: 892 cells
 
 ---
 
-### `xl view <range>`
+### `xl view [range]`
 
 View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG/JPEG/WebP/PDF.
+Without a range, the sheet's used range; `--offset` and `--limit` page through the rows and
+`--max-cols` caps the columns.
 
 **Arguments**:
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `range` | string | Yes | — | Cell range (e.g., "A1:D20") |
+| `range` | string | No | used range | Cell range (e.g., "A1:D20"); absent, the sheet's used range. From the loaded workbook that is the bounding box of every stored cell, styled-but-empty ones included (the `<dimension>` the library's writer records); `--stream` trusts the worksheet's `<dimension>` as written — a stale one, or openpyxl's merged-extent one, can differ from the stored-cell box — and when the file has no readable `<dimension>`, or it names a single cell (Excel's `A1` on an empty sheet), uses the bounding box of the non-empty cells. An empty sheet renders `(empty sheet)`, `""` for csv, `{"sheet", "range": null, "rows": []}` for json from both sources |
 | `--format` | string | No | markdown | Output format: markdown, json, csv, html, svg, png, jpeg, webp, pdf |
 | `--formulas` | flag | No | false | Show formulas instead of values |
 | `--eval` | flag | No | false | Evaluate formulas (compute live values) |
 | `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
-| `--limit` | int | No | 50 | Max rows to display (0 = no limit). When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (with `--stream` the notice goes to stderr instead); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
+| `--limit` | int | No | 50 | Max rows to display (0 = no limit). When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (under `--stream` too, since 0.21.0); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
+| `--offset` | int | No | 0 | Rows to skip from the top of the range before `--limit` applies; the trailer then reads "… showing rows X–Y of N". An offset past the last row is a usage error |
+| `--max-cols` | int | No | 0 | Max columns to display, from the left (0 = all); json adds `totalCols` when clipped, the other formats report "… showing X of Y columns" like the row notice |
 | `--skip-empty` | flag | No | false | Skip empty cells (JSON) or empty rows/columns (tabular) |
 | `--skip-hidden` | flag | No | false | Omit hidden rows/columns. **Default renders them** — a range you named never silently loses cells (GH-474) |
 | `--show-labels` | flag | No | false | Include column letters and row numbers |
-| `--header-row` | int | No | — | Use values from this row as keys in JSON output (1-based) |
+| `--header-row` | int | No | — | Use values from this row as keys in JSON output (1-based; `0` or less is a usage error) |
 | `--raster-output` | path | For raster | — | Output file (required for png/jpeg/webp/pdf) |
 | `--dpi` | int | No | 144 | Resolution for raster output |
 | `--quality` | int | No | 90 | JPEG quality 1-100 |
@@ -325,8 +329,39 @@ lines included — and every data format carries a marker:
 mirror Excel's display and always omit hidden lines. Streaming (`--stream`) never read row/column
 properties, so it has always rendered every addressed cell — and for the same reason it cannot
 honour `--skip-hidden` or emit the hidden-line marker: passing `--skip-hidden` with `--stream`
-prints `note: --skip-hidden is ignored with --stream …` on stderr and renders everything. Drop
-`--stream` when you need hidden lines elided or flagged.
+prints `note: --skip-hidden is ignored with --stream …` on stderr and renders everything, and the
+absence of `hiddenRows`/`hiddenCols` (or of the note) under `--stream` means *unknown*, not
+*none*. The typed records of `cell --json` and `search --json` say so explicitly: their `hidden`
+field is `true`/`false` from the loaded workbook and `null` under `--stream`. Drop `--stream` when
+you need hidden lines elided or flagged.
+
+**One projection, two sources** (since 0.21.0): `view`, `cell`, `search`, `stats` and `filter`
+render the same `CellRecord`s whether the cells come from the loaded workbook or from the
+streaming reader, so `--stream` changes what a verb *can* answer, never how it prints: streaming
+`view --format json` is the same `{sheet, range, rows}` document as in memory (it used to be a bare
+array of strings), streaming `search` reports the true total and the same trailer, and `filter`
+streams. What each source can answer is the `capabilities` table of `xl schema --json`
+(`values`, `styles`, `formulas`, `comments` from both; `hidden`, `merges`, `hyperlinks`, `graph`,
+`eval`, `render` from the loaded workbook only). A query needing more than `--stream` has is
+refused before the file is opened: `UNSUPPORTED_IN_STREAM`, exit 2, with the in-memory
+alternative as the hint. A field that belongs to a missing capability is reported unknown rather
+than guessed: `hidden`, `dependencies` and `dependents` are `null` (text: `(not available in
+streaming mode)`) under `--stream`; `mergedInto` and `hyperlink` read `null` there whether the cell
+has none or the reader cannot tell. Everything else — values, kinds, formatted text, formulas with
+their caches, comments, styles — is byte-identical from either source (a property test writes
+generated books — with openpyxl's package-absolute worksheet Targets and Excel's `<dimension
+ref="A1"/>` on empty sheets among them — and compares every read verb through both).
+
+The one window the two sources derive differently is the default one of `view` without a range
+and of `filter`. The loaded workbook addresses its stored-cell box: every cell it holds,
+styled-but-empty ones included, which is the `<dimension>` the library's own writer records.
+`--stream` trusts the worksheet's `<dimension>` as written, so a stale dimension, or openpyxl's
+merged-extent one, can differ from the stored-cell box; when a file has no readable `<dimension>`,
+or it names a single cell (Excel writes `A1` on an empty sheet), the streaming used range is the
+bounding box of the non-empty cells, so an empty sheet prints `(empty sheet)` from both sources.
+`bounds` and `sheets` report the `<dimension>` as the file declares it, a scan of the non-empty
+cells when it has none (`bounds --scan` and `sheets --stats` always the non-empty box,
+`Sheet.usedRange`); `view` and `filter` address the stored-cell box.
 
 Why the default: `xl search` finds a value in a hidden row and `xl cell C5` reads it, so a `view`
 that silently elided the same cell read as file corruption.
@@ -439,7 +474,17 @@ occupied cells — and `Dependents` the formulas that read the cell, by name or 
 contains it (an empty cell inside a summed range still names the sum). Empty cells inside a range
 and ranges over a sheet the workbook does not have are not listed (since 0.20.0; before, `SUM(A:A)`
 listed 1,048,576 entries). Same-sheet refs are unqualified, cross-sheet ones carry the sheet. For
-more than one hop, use `deps`.
+more than one hop, use `deps`. Under `--stream` the graph is not built and both lines say so:
+`Dependencies: (not available in streaming mode)` / `Dependents: (not available in streaming mode)`
+(before 0.21.0 streaming listed the formula's reference tokens — `B1, B1:B3, B3` for
+`=SUM(B1:B3)` — which was neither the precedent set nor exact; drop `--stream` for the graph).
+
+`--json`: `{ref, sheet, kind, value, formatted, formula, hidden, mergedInto, style, comment,
+hyperlink, dependencies, dependents}` — the typed cell record plus what the sheet attaches to it;
+`style` is `{font, fill, numFmt, align, border}` or `null` (`--no-style`). Under `--stream`
+`dependencies`, `dependents` and `hidden` are `null` (unknown), and `mergedInto`/`hyperlink` are
+`null` whether absent or unknown. The comment text is the same from both sources (the author-prefix
+run XL's writer adds is stripped on both paths).
 
 ---
 
@@ -586,13 +631,22 @@ direction was not requested; `formula` is `null` for a constant, `value` a formu
 ### `xl search <pattern>`
 
 Find cells containing text matching pattern. Searches all sheets by default (no `-s` needed).
+Matches are listed in row-major order per sheet; the text matched is the cell's raw lexeme (a
+number with every digit, `TRUE`/`FALSE`, an error token, an uncached formula's expression), not
+its formatted display.
 
 **Arguments**:
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `pattern` | string | Yes | — | Search pattern (supports regex) |
 | `--sheets` | string | No | all | Comma-separated list of sheets to search |
-| `--limit` | int | No | 50 | Max results (0 = no limit). Reports the true total ("Found Y matches") and appends a "… showing X of Y matches" trailer when the hit list is clipped |
+| `--limit` | int | No | 50 | Max results (0 = no limit). Reports the true total ("Found Y matches") and appends a "… showing X of Y matches" trailer when the hit list is clipped — under `--stream` too |
+
+`--json`: `{pattern, sheets, count, total, matches: [{ref, sheet, kind, value, formatted, formula,
+hidden, mergedInto}]}` — `count` the matches listed, `total` every match, each match the typed
+cell record (`value` an exact JSON lexeme, `formula` an object or `null`, `hidden` a boolean or
+`null` under `--stream`). Matches are the occupied cells in row-major order; a cell that carries a
+style but no value is not occupied (it matches nothing, from either source).
 
 **Output**:
 ```markdown
@@ -653,6 +707,9 @@ xl -f data.xlsx -s Sheet1 stats B2:B10000
 xl -f huge.xlsx --stream stats A1:E100000
 ```
 
+`--json`: `{sheet, range, count, sum, min, max, mean}` with every number an exact lexeme (never
+rounded through a `Double`); the text form keeps its two-decimal rendering.
+
 ---
 
 ### `xl filter --where <predicate> [options]`
@@ -663,8 +720,8 @@ Show rows of the used range matching a predicate. Read-only (no `-o`); phase 1 o
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `--where` | string | Yes | — | Filter predicate (grammar below) |
-| `--columns` | string | No | all used | Output columns, e.g. `A,C:E` |
-| `--limit` | int | No | 50 | Max matching rows to display |
+| `--columns` | string | No | all used | Output columns, e.g. `A,C:E`. A column outside the used range is blank (`null` in JSON); a repeated column is a `USAGE` error |
+| `--limit` | int | No | 50 | Max matching rows to display; `0` shows none and reports the match count alone |
 | `--format` | string | No | markdown | `markdown`, `csv`, or `json` |
 | `--header` | flag | No | false | First used row holds column names (excluded from matching) |
 
@@ -690,9 +747,12 @@ xl -f data.xlsx -s Sheet1 filter --where "A LIKE 'Widget%'" --columns A,C:E --fo
 xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
 ```
 
-**Output**: matching rows keep their original row numbers. Markdown adds a `Row` column and a match-count footer; CSV starts with a `row,<labels>` header line; JSON is an array of `{"row": n, "cells": {<label>: <typed value>}}` objects (labels are header names with `--header`, letters otherwise).
+**Output**: matching rows keep their original row numbers, present whatever `--columns` selects. Markdown adds a `Row` column and a match-count footer; CSV starts with a `row,<labels>` header line; JSON is an array of `{"row": n, "cells": {<label>: <typed value>}}` objects (labels are header names with `--header`, letters otherwise; two selected columns under one header name share the key, which keeps the first's position and the last's value).
 
-**Limitations**: loads the workbook in memory (`--max-size` envelope applies); `--stream` is not supported. No date literals in predicates yet.
+**Streaming**: `--stream` scans the used range in O(1) memory, keeping only the matching rows
+(since 0.21.0). The rows and cells are those the in-memory run renders over the same window; the
+window is each source's own used range, which can differ for a file another producer wrote — see
+**One projection, two sources** above. No date literals in predicates yet.
 
 ---
 
@@ -1713,13 +1773,17 @@ otherwise:
   volatile, specialForm}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
   `batch --dry-run` → `{ops: [{index, op, summary}]}` (`index` is the op's 1-based position,
   the index a `BATCH_OP_FAILED` reports; parse warnings ride in the envelope's `warnings[]`); `batch --schema` → the batch document's JSON
-  Schema; `schema` → `{version, exitCodes, errorCodes, warningCodes, globals, verbs, batchOps,
-  functions, envelope}` (see
+  Schema; `schema` → `{version, exitCodes, errorCodes, warningCodes, globals, verbs,
+  capabilities, batchOps, functions, envelope}` (see
   [`xl schema`](#xl-schema---json)); `describe` → `{sheets, definedNames, date1904}` (`--full`
   adds per-sheet counts and `calcPr`); `audit` → `{clean, findings, errorCells,
   uncachedFormulas, unparseable, volatile, dynamic, cycles, externalRefs, unresolvedReaders,
   calcPr}`; `deps` → `{ref, formula, value, direction, depth, precedents, dependents}`.
-- Every other verb (`cell`, `search`, `stats`, `view` in a text format, and all writes) yields
+- The record-based reads are typed too (since 0.21.0): `cell` → the cell record with `style`,
+  `comment`, `hyperlink`, `dependencies`, `dependents`; `search` → `{pattern, sheets, count,
+  total, matches}`; `stats` → `{sheet, range, count, sum, min, max, mean}` — every number an
+  exact lexeme.
+- Every other verb (`view` in a text format, and all writes) yields
   `{"text": <what text mode prints>, "saved": <path or null>, "written": <bool>}`. `saved` is the
   user-visible output path once the write was committed; it is `null` (and `written` is `false`)
   when nothing was — a read, or an `-i` run whose `--strict` gate discarded the staged file.

@@ -1,0 +1,28 @@
+## args
+-f
+<DIR>/simple.xlsx
+--stream
+--json
+view
+Data!A1:B2
+--eval
+## exit
+2
+## stdout
+{
+  "ok": false,
+  "exitCode": 2,
+  "verb": "view",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "UNSUPPORTED_IN_STREAM",
+    "message": "--eval is not supported with --stream (streaming view uses cached values only)",
+    "hint": "omit --stream to evaluate formulas; use --max-size <MB> for a large file",
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr
+Error: --eval is not supported with --stream (streaming view uses cached values only)

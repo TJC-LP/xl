@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets
 import scala.util.{Try, Using}
 
 import com.tjclp.xl.cli.batch.OpRegistry
+import com.tjclp.xl.cli.read.Capability
 
 /** One global flag as `xl schema` documents it; `takesValue` comes from [[Argv.globals]]. */
 final case class GlobalDoc(name: String, short: Option[String], doc: String) derives CanEqual
@@ -94,9 +95,9 @@ object Schema:
     GlobalDoc(
       "--stream",
       None,
-      "O(1)-memory streaming for large files: search, stats, bounds, view, cell, describe, " +
-        "sheets; put, putf, style and the streamable batch ops (other write verbs accept the " +
-        "flag but load the workbook)"
+      "O(1)-memory streaming for large files: search, stats, bounds, view, cell, filter, " +
+        "describe, sheets; put, putf, style and the streamable batch ops (other write verbs " +
+        "accept the flag but load the workbook)"
     ),
     GlobalDoc(
       "--no-recalc",
@@ -280,7 +281,7 @@ object Schema:
       "filter",
       "Filter rows of the used range with a --where predicate (read-only)",
       sheet = true,
-      streaming = false,
+      streaming = true,
       "0.11.3",
       plain
     ),
@@ -742,8 +743,10 @@ object Schema:
     )
 
   /**
-   * `{version, exitCodes, errorCodes, warningCodes, globals, verbs, batchOps, functions, envelope}`
-   * — what `xl schema --json` prints as `data`.
+   * `{version, exitCodes, errorCodes, warningCodes, globals, verbs, capabilities, batchOps,
+   * functions, envelope}` — what `xl schema --json` prints as `data`. `capabilities` is the
+   * [[com.tjclp.xl.cli.read.Capability]] table: what a read verb can ask of a loaded workbook and
+   * of the streaming reader (`[{name, doc, inMemory, streaming}]`).
    */
   def json(version: String): ujson.Obj =
     ujson.Obj(
@@ -768,6 +771,7 @@ object Schema:
         )
       }),
       "verbs" -> ujson.Arr.from(verbs.map(verbJson)),
+      "capabilities" -> Capability.json,
       "batchOps" -> OpRegistry.jsonSchema(version),
       "functions" -> FunctionDoc.toJson(FunctionDoc.all),
       "envelope" -> envelope

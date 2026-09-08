@@ -1,0 +1,38 @@
+## args
+-f
+<DIR>/simple.xlsx
+--stream
+--json
+cell
+Data!B4
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "cell",
+  "version": "<VERSION>",
+  "data": {
+    "ref": "B4",
+    "sheet": "Data",
+    "kind": "formula",
+    "value": 42.5,
+    "formatted": "42.5",
+    "formula": {
+      "expression": "=SUM(B1:B3)",
+      "kind": "normal",
+      "cached": true
+    },
+    "hidden": null,
+    "mergedInto": null,
+    "style": null,
+    "comment": null,
+    "hyperlink": null,
+    "dependencies": null,
+    "dependents": null
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

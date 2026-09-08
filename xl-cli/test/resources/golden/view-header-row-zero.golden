@@ -1,0 +1,17 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+view
+A1:B2
+--format
+json
+--header-row
+0
+## exit
+2
+## stdout
+## stderr
+Error: --header-row must be 1 or more (got 0)
+  code: USAGE

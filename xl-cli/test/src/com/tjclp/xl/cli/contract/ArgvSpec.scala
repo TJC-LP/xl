@@ -326,7 +326,8 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
 
   test("a wrong command line is one usage line plus the first parser error, never the verb dump") {
     for
-      missing <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "view")
+      // W2.4: `view` no longer needs a range (it defaults to the used range); `cell` still does
+      missing <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "cell")
       noArgs <- CliHarness.run()
     yield
       assertEquals(missing.exit, 2)
@@ -339,7 +340,7 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
         Some("usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …")
       )
       assert(lines.contains("  code: USAGE"), missing.stderr)
-      assert(lines.exists(_.contains("run `xl view --help`")), missing.stderr)
+      assert(lines.exists(_.contains("run `xl cell --help`")), missing.stderr)
       assert(lines.size < 10, missing.stderr)
       assert(!missing.stderr.contains("ungroup-cols"), "no subcommand dump: " + missing.stderr)
 
@@ -364,7 +365,7 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
       assertEquals(version.exit, 0)
       assert(version.stdout.trim.nonEmpty)
       assertEquals(verbHelpAfterGlobals.exit, 0)
-      assert(verbHelpAfterGlobals.stderr.contains("View range"), verbHelpAfterGlobals.stderr)
+      assert(verbHelpAfterGlobals.stderr.contains("View a range"), verbHelpAfterGlobals.stderr)
   }
 
   test("`search -- --json` searches for the text `--json`; `search --json` is a usage error") {
