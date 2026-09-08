@@ -37,17 +37,20 @@ object RowCodecError:
 
     /** Bridge into the library-wide error vocabulary (the `CodecError.toXLError` precedent). */
     def toXLError: XLError = error match
-      case Field(row, column, field, CodecError.TypeMismatch(expected, actual)) =>
-        XLError.TypeMismatch(
-          s"$expected for field '$field'",
-          actual.toString,
-          ARef(column, row).toA1
-        )
-      case Field(row, column, field, CodecError.ParseError(value, targetType, detail)) =>
-        XLError.ParseError(
-          ARef(column, row).toA1,
-          s"field '$field': cannot parse '$value' as $targetType: $detail"
-        )
+      case Field(row, column, field, cause) =>
+        // Matched on the cause alone so a new CodecError case fails to compile here, not widen.
+        cause match
+          case CodecError.TypeMismatch(expected, actual) =>
+            XLError.TypeMismatch(
+              s"$expected for field '$field'",
+              actual.toString,
+              ARef(column, row).toA1
+            )
+          case CodecError.ParseError(value, targetType, detail) =>
+            XLError.ParseError(
+              ARef(column, row).toA1,
+              s"field '$field': cannot parse '$value' as $targetType: $detail"
+            )
       case Missing(row, column, field) =>
         XLError.TypeMismatch(s"a value for field '$field'", "Empty", ARef(column, row).toA1)
       case HeaderNotFound(header, headerRow, available) =>

@@ -7,7 +7,7 @@ import org.scalacheck.{Arbitrary, Gen}
 import org.scalacheck.Prop.*
 
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.codec.rowSyntax.*
 import com.tjclp.xl.macros.ref
@@ -48,6 +48,35 @@ class RowCodecSpec extends ScalaCheckSuite:
     odate: Option[LocalDate],
     odateTime: Option[LocalDateTime],
     orich: Option[RichText]
+  ) derives RowCodec
+
+  /**
+   * 23 fields: past `Tuple22`, so `Tuple.fromArray` yields a `TupleXXL` and `fromProduct` sees it.
+   */
+  final case class Wide(
+    f01: Int,
+    f02: String,
+    f03: Long,
+    f04: Double,
+    f05: BigDecimal,
+    f06: Boolean,
+    f07: LocalDate,
+    f08: Option[Int],
+    f09: Option[String],
+    f10: Int,
+    f11: Int,
+    f12: Int,
+    f13: Int,
+    f14: Int,
+    f15: Int,
+    f16: Int,
+    f17: Int,
+    f18: Int,
+    f19: Int,
+    f20: Int,
+    f21: Int,
+    f22: Int,
+    f23: Option[Long]
   ) derives RowCodec
 
   private val row1 = Row.from1(1)
@@ -201,6 +230,41 @@ class RowCodecSpec extends ScalaCheckSuite:
     }
   }
 
+  test("law: a 23-field record (past Tuple22) round-trips by position and by header") {
+    val wide = Wide(
+      1,
+      "two",
+      3L,
+      4.5,
+      BigDecimal("6.25"),
+      true,
+      LocalDate.of(2026, 9, 8),
+      None,
+      Some("nine"),
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      Some(23L)
+    )
+    assertEquals(RowCodec[Wide].width, 23)
+    assertEquals(RowCodec[Wide].fields.take(2), Vector("f01", "f02"))
+    val rows = Vector(wide, wide.copy(f01 = 2, f08 = Some(8), f23 = None))
+    val placed = right(Sheet("Wide").putRowsWithHeader(ref"B2", rows))
+    assertEquals(placed.dataRange.map(_.toA1), Some("B3:X4"))
+    assertEquals(placed.sheet.readRowsByHeader[Wide](Row.from1(2)), Right(rows))
+    assertEquals(placed.dataRange.map(placed.sheet.readRows[Wide]), Some(Right(rows)))
+  }
+
   test("putRows with no records writes nothing and reports no data range") {
     val sheet = Sheet("Empty").put(ref"A1", "keep")
     val placed = right(sheet.putRows(ref"A2", Vector.empty[Order]))
@@ -231,6 +295,44 @@ class RowCodecSpec extends ScalaCheckSuite:
       placed.sheet.cells.get(ref"D1").flatMap(_.styleId).flatMap(placed.sheet.styleRegistry.get)
     assertEquals(style.map(_.numFmt), Some(NumFmt.Decimal))
     assertEquals(style.map(_.font.bold), Some(true))
+  }
+
+  test("putRows: a codec NumFmt hint over a Currency-formatted cell keeps Currency, like put") {
+    val currency = CellStyle.default.withNumFmt(NumFmt.Currency)
+    val sheet = Sheet("Cur").withCellStyle(ref"D1", currency)
+    def styleAt(s: Sheet) = s.cells.get(ref"D1").flatMap(_.styleId).flatMap(s.styleRegistry.get)
+    val viaRows =
+      right(sheet.putRows(ref"A1", Vector(Order(1, "a", 1, BigDecimal("2.5"), None)))).sheet
+    val viaPut = sheet.put(ref"D1", BigDecimal("2.5"))
+    assertEquals(styleAt(viaRows).map(_.numFmt), Some(NumFmt.Currency))
+    assertEquals(styleAt(viaRows), styleAt(viaPut))
+    assertEquals(viaRows.cells.get(ref"D1"), viaPut.cells.get(ref"D1"))
+    // The same policy fills a General format in: bold-only D1 gains Decimal both ways
+    val bold = CellStyle.default.withFont(CellStyle.default.font.withBold(true))
+    val boldSheet = Sheet("Bold").withCellStyle(ref"D1", bold)
+    val boldRows =
+      right(boldSheet.putRows(ref"A1", Vector(Order(1, "a", 1, BigDecimal("2.5"), None)))).sheet
+    assertEquals(styleAt(boldRows), styleAt(boldSheet.put(ref"D1", BigDecimal("2.5"))))
+    assertEquals(styleAt(boldRows).map(s => (s.numFmt, s.font.bold)), Some((NumFmt.Decimal, true)))
+  }
+
+  test("putRows: only the records' cells are written — rows of a longer earlier block survive") {
+    val three = Vector(
+      Order(1, "a", 1, BigDecimal(1), None),
+      Order(2, "b", 2, BigDecimal(2), None),
+      Order(3, "c", 3, BigDecimal(3), None)
+    )
+    val first = right(Sheet("Regen").putRows(ref"A1", three)).sheet
+    val shorter = right(first.putRows(ref"A1", three.take(1).map(_.copy(customer = "z")))).sheet
+    assertEquals(
+      shorter.readRows[Order](ref"A1:E3").map(_.map(_.customer)),
+      Right(Vector("z", "b", "c")): Either[RowCodecError, Vector[String]]
+    )
+    // Regenerating in place means clearing the old block first
+    val cleared = ref"A1:E3".cells.foldLeft(first)(_.remove(_))
+    val regenerated = right(cleared.putRowsWithHeader(ref"A1", three.take(1)))
+    assertEquals(regenerated.sheet.readRowsByHeader[Order](row1), Right(three.take(1)))
+    assertEquals(regenerated.sheet.cells.size, 5 + 4)
   }
 
   test("putRows: a None field clears an existing cell's value but never creates a cell") {
@@ -270,6 +372,23 @@ class RowCodecSpec extends ScalaCheckSuite:
     Sheet("Drift").putRows(ref"A1", Vector(1)) match
       case Left(XLError.ValueCountMismatch(2, 1, _)) => ()
       case other => fail(s"expected ValueCountMismatch(2, 1), got $other")
+  }
+
+  test("putRows: a width drift on a later record is all-or-nothing and names the record") {
+    // Record n writes n cells: the first fits the two fields, the second does not
+    given RowCodec[Int] = new RowCodec[Int]:
+      def fields: Vector[String] = Vector("a", "b")
+      def read(cells: Vector[Cell]): Either[RowCodecError, Int] = Right(0)
+      def write(a: Int): Vector[(CellValue, Option[CellStyle])] =
+        Vector.fill(a)((CellValue.Number(BigDecimal(a)), None))
+    val sheet = Sheet("Drift").put(ref"A1", "keep")
+    sheet.putRows(ref"A2", Vector(2, 1, 2)) match
+      case Left(XLError.ValueCountMismatch(2, 1, context)) =>
+        assert(context.contains("record 1"), context)
+      case other => fail(s"expected ValueCountMismatch(2, 1), got $other")
+    assertEquals(sheet.cells.size, 1)
+    // With every record the right width the same rows go through
+    assertEquals(right(sheet.putRows(ref"A2", Vector(2, 2))).dataRange.map(_.toA1), Some("A2:B3"))
   }
 
   test("putRows: a codec without fields cannot place anything") {
@@ -329,6 +448,22 @@ class RowCodecSpec extends ScalaCheckSuite:
     )
   }
 
+  test("readRows: an error cell under an Option field is a Field error, not None") {
+    final case class Sparse(a: Option[Int], b: Option[String]) derives RowCodec
+    val sheet = Sheet("Err").put(ref"A1", CellValue.Error(CellError.NA))
+    assertEquals(
+      sheet.readRows[Sparse](ref"A1:B1"),
+      Left(
+        RowCodecError.Field(
+          row1,
+          Column.from0(0),
+          "a",
+          CodecError.TypeMismatch("Int", CellValue.Error(CellError.NA))
+        )
+      ): Either[RowCodecError, Vector[Sparse]]
+    )
+  }
+
   test("readRows: an all-optional record decodes blank rows as all-None records") {
     final case class Sparse(a: Option[Int], b: Option[String]) derives RowCodec
     assertEquals(
@@ -339,7 +474,9 @@ class RowCodecSpec extends ScalaCheckSuite:
 
   // ========== Headers ==========
 
-  test("headers: verbatim non-blank header text left to right; numbers and rich text included") {
+  test(
+    "headers: verbatim non-blank header text left to right; numbers and rich text included"
+  ) {
     val sheet = Sheet("H")
       .put(ref"B1", " Qty ")
       .put(ref"A1", "Id")

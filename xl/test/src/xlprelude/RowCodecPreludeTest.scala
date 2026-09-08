@@ -52,7 +52,9 @@ class RowCodecPreludeTest extends FunSuite:
     // Option fields: None is an empty cell, so nothing is stored there
     assertEquals(placed.sheet.cells.get(ref"E3"), None)
 
-  test("GH-590: putRowsWithHeader writes field names; headers/column/readRowsByHeader resolve"):
+  test(
+    "GH-590: putRowsWithHeader writes field names; headers/column/readRowsByHeader resolve"
+  ):
     val placed = Sheet("Orders").putRowsWithHeader(ref"B1", orders).unsafe
     assertEquals(placed.headerRange.map(_.toA1), Some("B1:F1"))
     assertEquals(placed.dataRange.map(_.toA1), Some("B2:F3"))

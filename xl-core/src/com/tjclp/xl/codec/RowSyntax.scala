@@ -9,7 +9,6 @@ import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
-import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.tables.TableSpec
 
 /**
@@ -114,7 +113,9 @@ object rowSyntax:
      * Write one row per record starting at `at` (no header): `fields(i)` goes to column `at.col +
      * i`. Codec format hints register as styles and merge into any existing cell style the way
      * `put` does; a `None` field leaves its cell empty (an existing cell's value is cleared, none
-     * is created). `OutOfBounds` when the block would run past column XFD or row 1048576.
+     * is created). Only the records' cells are touched: rows below a previous, longer block
+     * survive, so clear the old block first when regenerating a table in place. `OutOfBounds` when
+     * the block would run past column XFD or row 1048576.
      */
     def putRows[A](at: ARef, rows: Iterable[A])(using codec: RowCodec[A]): XLResult[RowsPlaced] =
       place(sheet, at, rows, header = false, codec)
@@ -219,6 +220,10 @@ object rowSyntax:
       )
     else Right(())
 
+  // One pass over the records (GH-297's discipline for `put`): each record is encoded, its width
+  // checked and its cells written before the next is touched, so no block-sized intermediate is
+  // materialised. A width drift is still all-or-nothing: the caller's sheet is immutable and the
+  // partially built map is simply dropped with the `Left`.
   private def place[A](
     sheet: Sheet,
     at: ARef,
@@ -227,63 +232,65 @@ object rowSyntax:
     codec: RowCodec[A]
   ): XLResult[RowsPlaced] =
     val width = codec.width
-    val records = rows.toVector
+    val count = rows.size
     val headerRows = if header then 1 else 0
-    for
-      _ <- checkBounds(at, width, headerRows + records.size)
-      encoded <- encode(records, codec)
-    yield
-      val headerCells =
+    checkBounds(at, width, headerRows + count).flatMap { _ =>
+      val start: WriteState = (sheet.cells, sheet.styleRegistry)
+      val afterHeader =
         if header then
-          codec.fields.zipWithIndex.map { (field, j) =>
-            (ARef(at.col + j, at.row), CellValue.Text(field), None)
+          codec.fields.zipWithIndex.foldLeft(start) { case (state, (field, j)) =>
+            writeCell(state, ARef(at.col + j, at.row), CellValue.Text(field), None)
           }
-        else Vector.empty
-      val recordCells = encoded.zipWithIndex.flatMap { (payloads, i) =>
-        payloads.zipWithIndex.map { case ((value, hint), j) =>
-          (ARef(at.col + j, at.row + headerRows + i), value, hint)
-        }
-      }
-      val (cells, registry) =
-        (headerCells ++ recordCells).foldLeft((sheet.cells, sheet.styleRegistry))(writeCell)
-      val lastCol = at.col + width - 1
-      RowsPlaced(
-        sheet = sheet.copy(cells = cells, styleRegistry = registry),
-        headerRange = Option.when(header)(CellRange(at, ARef(lastCol, at.row))),
-        dataRange = Option.when(records.nonEmpty)(
-          CellRange(
-            ARef(at.col, at.row + headerRows),
-            ARef(lastCol, at.row + headerRows + records.size - 1)
+        else start
+      val records = rows.iterator
+      @tailrec def loop(i: Int, state: WriteState): XLResult[WriteState] =
+        if !records.hasNext then Right(state)
+        else
+          val payloads = codec.write(records.next())
+          if payloads.size != width then
+            Left(XLError.ValueCountMismatch(width, payloads.size, s"RowCodec.write, record $i"))
+          else loop(i + 1, writeRecord(state, at.col, at.row + headerRows + i, payloads))
+      loop(0, afterHeader).map { (cells, registry) =>
+        val lastCol = at.col + width - 1
+        RowsPlaced(
+          sheet = sheet.copy(cells = cells, styleRegistry = registry),
+          headerRange = Option.when(header)(CellRange(at, ARef(lastCol, at.row))),
+          dataRange = Option.when(count > 0)(
+            CellRange(
+              ARef(at.col, at.row + headerRows),
+              ARef(lastCol, at.row + headerRows + count - 1)
+            )
           )
         )
-      )
+      }
+    }
 
-  private def encode[A](
-    records: Vector[A],
-    codec: RowCodec[A]
-  ): XLResult[Vector[Vector[(CellValue, Option[CellStyle])]]] =
-    @tailrec def loop(
-      i: Int,
-      acc: Vector[Vector[(CellValue, Option[CellStyle])]]
-    ): XLResult[Vector[Vector[(CellValue, Option[CellStyle])]]] =
-      if i == records.size then Right(acc)
+  private type WriteState = (Map[ARef, Cell], StyleRegistry)
+
+  private def writeRecord(
+    state: WriteState,
+    firstCol: Column,
+    row: Row,
+    payloads: Vector[(CellValue, Option[CellStyle])]
+  ): WriteState =
+    @tailrec def loop(j: Int, acc: WriteState): WriteState =
+      if j == payloads.size then acc
       else
-        val payloads = codec.write(records(i))
-        if payloads.size != codec.width then
-          Left(XLError.ValueCountMismatch(codec.width, payloads.size, s"RowCodec.write, record $i"))
-        else loop(i + 1, acc :+ payloads)
-    loop(0, Vector.empty)
+        val (value, hint) = payloads(j)
+        loop(j + 1, writeCell(acc, ARef(firstCol + j, row), value, hint))
+    loop(0, state)
 
   // The single-cell `put` semantics, fused over a block (GH-297): the value replaces the
-  // existing one, the codec's format hint merges into the existing style (existing wins except
-  // a General NumFmt), styles register once per distinct style, and an empty value creates no
-  // cell.
+  // existing one, the codec's format hint merges into the existing style through the one policy
+  // `put` uses (`Sheet.mergeStyles`), styles register once per distinct style, and an empty value
+  // creates no cell.
   private def writeCell(
-    state: (Map[ARef, Cell], StyleRegistry),
-    write: (ARef, CellValue, Option[CellStyle])
-  ): (Map[ARef, Cell], StyleRegistry) =
+    state: WriteState,
+    ref: ARef,
+    value: CellValue,
+    hint: Option[CellStyle]
+  ): WriteState =
     val (cells, registry) = state
-    val (ref, value, hint) = write
     val existing = cells.get(ref)
     (existing, value, hint) match
       case (None, CellValue.Empty, None) => state
@@ -293,10 +300,7 @@ object rowSyntax:
           case None => (cells.updated(ref, cell), registry)
           case Some(codecStyle) =>
             val merged = existing.flatMap(_.styleId).flatMap(registry.get) match
-              case Some(current)
-                  if current.numFmt == NumFmt.General && codecStyle.numFmt != NumFmt.General =>
-                current.copy(numFmt = codecStyle.numFmt)
-              case Some(current) => current
+              case Some(current) => Sheet.mergeStyles(current, codecStyle)
               case None => codecStyle
             val (nextRegistry, styleId) = registry.register(merged)
             (cells.updated(ref, cell.withStyle(styleId)), nextRegistry)
