@@ -1126,11 +1126,13 @@ object WriteCommands:
       .toMap
 
   /**
-   * The dirty dependency cone of an edit: the changed cells themselves plus every transitive
-   * dependent, workbook-wide (cross-sheet dependents included). Dynamic-reference cells (INDIRECT /
-   * OFFSET) on every sheet join unconditionally and drag their own dependents in — the static graph
-   * cannot see what text they resolve to, so any edit may affect them (the same always-dirty
-   * posture `DependentRecalculation` takes).
+   * The dirty dependency cone of an edit — `DependencyGraph.editCone`, the same cone
+   * `DependentRecalculation.recalculateAfterEdit` evaluates, grouped by sheet: the changed cells
+   * themselves plus every transitive dependent, workbook-wide (cross-sheet dependents included).
+   * Dynamic-reference cells (INDIRECT / OFFSET) on every sheet join unconditionally and drag their
+   * own dependents in — the static graph cannot see what text they resolve to, so any edit may
+   * affect them. Formulas the parser rejects join only when their TEXT names a dirty cell (GH-606,
+   * `ReferenceScan`); one the scanner cannot bound is always dirty, as before.
    */
   private def dirtyCone(
     wb: Workbook,
@@ -1140,12 +1142,8 @@ object WriteCommands:
     val seeded: Set[QualifiedRef] =
       seeds.iterator.flatMap((name, refs) => refs.iterator.map(QualifiedRef(name, _))).toSet
     val dynamic: Set[QualifiedRef] = DependencyGraph.dynamicCells(wb)
-    val roots = seeded ++ dynamic ++ DependencyGraph.unresolvedReaders(wb)
-    if roots.isEmpty then Map.empty
-    else
-      val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(wb)
-      (roots ++ dependencyIndex.transitiveDependents(roots))
-        .groupMap(_.sheet)(_.ref)
+    val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(wb)
+    DependencyGraph.editCone(wb, seeded, dependencyIndex, dynamic).groupMap(_.sheet)(_.ref)
 
   /**
    * Carry the recalculated caches of the cone — and only those — back onto the edited workbook.
@@ -1224,9 +1222,11 @@ object WriteCommands:
    * resolve (a `#REF!`-ed name, an unparseable structured reference, an external link) breaks the
    * closure the same way, and a dynamic reference is invisible to it by definition. There is no
    * sound local test, and the only complete one is a recalculation — which is exactly what the flag
-   * refuses. So `--no-recalc` leaves the edit's invalidated formulas uncached and says how many: a
-   * missing `<v>` is recoverable by any recalculation, a wrong one is not, and a `data_only=True`
-   * reader cannot tell a stale number from a fresh one.
+   * refuses. (The VALUE-edit cone can afford more: `DependencyGraph.editCone` bounds such a reader
+   * by the cells its text spells, GH-606, because a value edit never rewrites that text.) So
+   * `--no-recalc` leaves the edit's invalidated formulas uncached and says how many: a missing
+   * `<v>` is recoverable by any recalculation, a wrong one is not, and a `data_only=True` reader
+   * cannot tell a stale number from a fresh one.
    *
    * WHAT `preserved` DOES AND DOES NOT CERTIFY. It counts caches `StructuralEditor` did not
    * invalidate, i.e. ones the PRE-EDIT dependency graph showed no path from to the edited sheet. It

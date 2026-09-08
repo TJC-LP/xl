@@ -10,6 +10,7 @@ import com.tjclp.xl.{CellRange, Workbook, Sheet, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
+import com.tjclp.xl.cli.contract.{CliHarness, Warning, WarningCode}
 import com.tjclp.xl.formula.FormulaParser
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
@@ -1561,6 +1562,137 @@ class BatchRecalcSpec extends FunSuite:
       "an unrelated independent formula keeps its cache"
     )
     Files.deleteIfExists(out)
+  }
+
+  // ===== GH-606: blind readers outside the edit's textual reach keep their caches =====
+
+  /**
+   * The dogfood shape of #606: a formula-free cover sheet, then sheets whose formulas the parser
+   * rejects (`ZZZNOTAFUNC` is a stable UnknownFunction failure) and whose text names only cells on
+   * `Summary`. Written to disk with preservation markers on the blind sheets so a regenerated part
+   * is distinguishable from a verbatim copy.
+   */
+  private def blindModelOnDisk(): Path =
+    val srcFile = tempXlsx()
+    ExcelIO
+      .instance[IO]
+      .write(
+        Workbook(
+          Sheet("Cover").put(ref"A1", CellValue.Text("Projection model")),
+          Sheet("Summary")
+            .put(ref"A1", CellValue.Number(BigDecimal(5)))
+            .put(ref"B1", CellValue.Formula("ZZZNOTAFUNC(A1)", Some(CellValue.Number(7))))
+            .put(
+              ref"B2",
+              CellValue.Formula("ZZZNOTAFUNC(A1:A5,\"B16\")", Some(CellValue.Number(8)))
+            ),
+          Sheet("Detail")
+            .put(ref"C1", CellValue.Formula("ZZZNOTAFUNC('Summary'!A1)", Some(CellValue.Number(9))))
+        ),
+        srcFile
+      )
+      .unsafeRunSync()
+    injectPreservationMarker(srcFile, "xl/worksheets/sheet2.xml")
+    injectPreservationMarker(srcFile, "xl/worksheets/sheet3.xml")
+    srcFile
+
+  private def assertVerbatim(out: Path, srcFile: Path, entry: String): Unit =
+    assertEquals(zipEntryBytes(out, entry).toSeq, zipEntryBytes(srcFile, entry).toSeq, entry)
+    assert(
+      new String(zipEntryBytes(out, entry), StandardCharsets.UTF_8).contains(preservationMarker),
+      s"$entry was regenerated: preservation marker lost"
+    )
+
+  test("GH-606: a put outside every blind reader's reach keeps their caches and worksheet parts") {
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val out = tempXlsx()
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    try
+      val summary = WriteCommands
+        .put(
+          wb,
+          wb.sheets.find(_.name.value == "Cover"),
+          "B16",
+          List("dogfood"),
+          out,
+          config,
+          warn = w => IO(warnings += w)
+        )
+        .unsafeRunSync()
+      assert(!summary.contains("error"), s"no cone formula can fail: $summary")
+      assertEquals(warnings.toList, Nil, "no RECALC_ERRORS for formulas the edit cannot reach")
+
+      val written = readBack(out)
+      assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, Some(CellValue.Number(7)))
+      assertEquals(formulaOn(written, "Summary", ref"B2").cachedValue, Some(CellValue.Number(8)))
+      assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, Some(CellValue.Number(9)))
+      assertEquals(
+        written.sheets.head.cells.get(ref"B16").map(_.value),
+        Some(CellValue.Text("dogfood"))
+      )
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet2.xml")
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet3.xml")
+
+      val audit = CliHarness.run("-f", out.toString, "--json", "audit").unsafeRunSync()
+      assertEquals(audit.exit, 0, audit.stderr)
+      val data = ujson.read(audit.stdout)("data")
+      assertEquals(data("uncachedFormulas").arr.size, 0, audit.stdout)
+      assertEquals(data("unparseable").arr.size, 3, "the formulas are still unparseable, cached")
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(out)
+  }
+
+  test("GH-606: a put inside a blind reader's reach withdraws its cache and warns") {
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val out = tempXlsx()
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    try
+      val summary = WriteCommands
+        .put(
+          wb,
+          wb.sheets.find(_.name.value == "Summary"),
+          "A1",
+          List("6"),
+          out,
+          config,
+          warn = w => IO(warnings += w)
+        )
+        .unsafeRunSync()
+      assert(summary.contains("3 errors"), summary)
+      assertEquals(warnings.map(_.code).toList, List(WarningCode.RECALC_ERRORS))
+      val written = readBack(out)
+      assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, None)
+      assertEquals(formulaOn(written, "Summary", ref"B2").cachedValue, None)
+      assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, None)
+      // Detail's only formula was withdrawn, so its part is regenerated without the marker
+      assert(
+        !new String(zipEntryBytes(out, "xl/worksheets/sheet3.xml"), StandardCharsets.UTF_8)
+          .contains(preservationMarker)
+      )
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(out)
+  }
+
+  test("GH-606: a batch put outside every blind reader's reach rides their parts verbatim") {
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val out = tempXlsx()
+    val ops = writeOps("""[{"op":"put","ref":"Cover!B16","value":"dogfood"}]""")
+    try
+      WriteCommands.batch(wb, None, ops.toString, out, config).unsafeRunSync()
+      val written = readBack(out)
+      assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, Some(CellValue.Number(7)))
+      assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, Some(CellValue.Number(9)))
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet2.xml")
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet3.xml")
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(out)
+      Files.deleteIfExists(ops)
   }
 
   test("GH-468: the unconditional preservation claim still holds for the NON-structural verbs") {

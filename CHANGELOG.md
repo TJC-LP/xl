@@ -111,6 +111,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An edit no longer withdraws the caches of unparseable formulas it cannot reach** (#606). A
+  formula the parser rejects (an omitted argument such as `RATE(n,,pv,fv,)`, `SINGLE`, a name whose
+  definition is a union) has no graph edges, and the after-edit recalculation treated every one of
+  them as dirty on every edit — evaluated, failed, cache withdrawn: a `put` of a text value on a
+  formula-free cover sheet printed `Recalculated 0 formulas; 273 errors`, stripped 273 caches Excel
+  had written and rewrote 11 of 16 worksheet parts. `ReferenceScan` now bounds such a reader by its
+  TEXT: string and error literals, numbers, operators and function names contribute nothing; cells,
+  ranges, whole rows/columns, sheet qualifiers, 3-D spans and defined names (resolved with the
+  evaluator's sheet-scoped shadowing, recursing textually through definitions the parser rejects)
+  contribute their areas; anything the scanner cannot classify — a structured or external
+  reference, a missing name, a dynamic call, a colon after a name or a call — leaves the reader
+  `Unbounded` and always dirty, as before. `DependencyGraph.editCone` is the one cone both
+  `recalculateAfterEdit` and the CLI's cone-scoped writes use: roots, their transitive dependents,
+  then a fixpoint adding every bounded reader whose areas contain a dirty cell. A reader inside the
+  cone is still evaluated, withdrawn and reported; one outside keeps the cache the file carried and
+  its worksheet part rides verbatim. Structural edits are unchanged: `StructuralEditor` keeps every
+  unresolved reader stale, since a shift rewrites reference text.
 - **`_xlfn.` storage prefix on conditional-formatting, data-validation and defined-name formulas**
   (#577). `CfCodec`, `DataValidationCodec` and the workbook's defined names now go through
   `FormulaStorage` like cell formulas: an Excel-authored `_xlfn.IFS(` in a rule reads bare and

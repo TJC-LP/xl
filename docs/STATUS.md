@@ -217,14 +217,14 @@
 
 ### Test Coverage
 
-**6,613 test cases** (verified via `./mill __.test`, 2026-09-08, top of the wave-28a stack after the review-fix round): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**6,647 test cases** (verified via `./mill __.test`, 2026-09-08, after the #606 blind-reader fix on the wave-28a stack): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2340 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 2371 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1533 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1119 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1259 | command parsing, batch ops, view/eval/export, streaming mode |
+| xl-cli | 1262 | command parsing, batch ops, view/eval/export, streaming mode |
 | xl-cats-effect | 167 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 145 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 50 | external-consumer probes (`xl/test/src/xlprelude/`) |
