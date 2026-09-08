@@ -513,7 +513,7 @@ cells — no per-cell `readTyped` loops:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
 
@@ -554,8 +554,10 @@ The rules, all of them:
   row). All three return `XLResult[RowsPlaced]` — `sheet`, `headerRange`, `dataRange`, `range`
   (header ∪ data), `count` — and are `OutOfBounds` when the block would run past column XFD or
   row 1048576. Codec format hints (Decimal, Date, DateTime) register as styles and merge into an
-  existing cell style exactly as `put` does; a `None` field leaves its cell empty and never
-  creates one.
+  existing cell style exactly as `put` does (the existing style wins; only a General number
+  format is filled in); a `None` field leaves its cell empty and never creates one. Only the
+  records' cells are written: rewriting a shorter block over a longer one leaves the rows below
+  it in place, so clear the old block before regenerating a table in place.
 - **Reading by position**: `readRows[A](range)` decodes one record per row of `range`, whose
   width must equal the record's (`RowCodecError.Width` otherwise). Every row is a record: a blank
   row is `Missing` unless every field is an `Option`.
@@ -572,7 +574,8 @@ The rules, all of them:
   Text(three)`); `.toXLError` bridges into `XLResult`.
 - **Formulas** read through their cached value, like every typed read (GH-477): a recalculated
   or Excel-saved formula decodes as its result, an uncached one is a `Field` error naming the
-  formula.
+  formula. An error cell (`#N/A`, `#DIV/0!`, …) is a `Field` error too, even under an `Option`
+  field — only an empty cell is `None` — so a stray `#N/A` fails the whole read at that cell.
 - **Law** (pinned in `RowCodecSpec` over generators): `readRows(putRows(at, rows).dataRange) ==
   Right(rows)` and `readRowsByHeader(putRowsWithHeader(at, rows).headerRow) == Right(rows)` for
   every codec type, required and optional.

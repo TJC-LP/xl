@@ -87,7 +87,7 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.readRowsByHeader[A](headerRow)` | `Either[RowCodecError, Vector[A]]` | fields matched to header text via `columnOf` (exact, then case/space/`_`/`-`-insensitive), any column order, extra columns ignored; reads the contiguous block under the header, stops at the first blank row (0.21.0) |
 | `sheet.columnHeaders(row)` | `Vector[(Column, String)]` | header texts in `row`, left to right, verbatim (numbers/rich text as text; blanks skipped) (0.21.0) |
 | `sheet.columnOf(header, headerRow)` | `Option[Column]` | the column headed `header`: exact match, else case/whitespace/`_`/`-`-insensitive, leftmost wins (0.21.0) |
-| `sheet.putRows(at, records)` | `XLResult[RowsPlaced]` | one row per record from `at`, no header; `None` fields stay empty; codec formats register like `put`; `OutOfBounds` past XFD/1048576 (0.21.0) |
+| `sheet.putRows(at, records)` | `XLResult[RowsPlaced]` | one row per record from `at`, no header; `None` fields stay empty; codec formats register like `put`; only the records' cells are written (clear a longer old block first); `OutOfBounds` past XFD/1048576 (0.21.0) |
 | `sheet.putRowsWithHeader(at, records)` | `XLResult[RowsPlaced]` | field names as a header row at `at`, records below (0.21.0) |
 | `sheet.putTable(at, records, name)` | `XLResult[RowsPlaced]` | `putRowsWithHeader` + an Excel table named/columned after the record; `name` = display name, letters/digits/`_`, unique on the sheet; no records → header + one blank data row (0.21.0) |
 | `sheet.comment(ref, Comment.plainText("note", Some("author")))` | `Sheet` | |
