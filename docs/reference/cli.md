@@ -287,7 +287,7 @@ Without a range, the sheet's used range; `--offset` and `--limit` page through t
 **Arguments**:
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `range` | string | No | used range | Cell range (e.g., "A1:D20"); absent, the sheet's used range — the bounding box of every stored cell, styled-but-empty ones included, i.e. the worksheet's `<dimension>`, so both sources address the same window (an empty sheet renders `(empty sheet)`, `""` for csv, `{"sheet", "range": null, "rows": []}` for json) |
+| `range` | string | No | used range | Cell range (e.g., "A1:D20"); absent, the sheet's used range. From the loaded workbook that is the bounding box of every stored cell, styled-but-empty ones included (the `<dimension>` the library's writer records); `--stream` trusts the worksheet's `<dimension>` as written — a stale one, or openpyxl's merged-extent one, can differ from the stored-cell box — and when the file has no readable `<dimension>`, or it names a single cell (Excel's `A1` on an empty sheet), uses the bounding box of the non-empty cells. An empty sheet renders `(empty sheet)`, `""` for csv, `{"sheet", "range": null, "rows": []}` for json from both sources |
 | `--format` | string | No | markdown | Output format: markdown, json, csv, html, svg, png, jpeg, webp, pdf |
 | `--formulas` | flag | No | false | Show formulas instead of values |
 | `--eval` | flag | No | false | Evaluate formulas (compute live values) |
@@ -349,7 +349,19 @@ than guessed: `hidden`, `dependencies` and `dependents` are `null` (text: `(not 
 streaming mode)`) under `--stream`; `mergedInto` and `hyperlink` read `null` there whether the cell
 has none or the reader cannot tell. Everything else — values, kinds, formatted text, formulas with
 their caches, comments, styles — is byte-identical from either source (a property test writes
-generated books and compares every read verb through both).
+generated books — with openpyxl's package-absolute worksheet Targets and Excel's `<dimension
+ref="A1"/>` on empty sheets among them — and compares every read verb through both).
+
+The one window the two sources derive differently is the default one of `view` without a range
+and of `filter`. The loaded workbook addresses its stored-cell box: every cell it holds,
+styled-but-empty ones included, which is the `<dimension>` the library's own writer records.
+`--stream` trusts the worksheet's `<dimension>` as written, so a stale dimension, or openpyxl's
+merged-extent one, can differ from the stored-cell box; when a file has no readable `<dimension>`,
+or it names a single cell (Excel writes `A1` on an empty sheet), the streaming used range is the
+bounding box of the non-empty cells, so an empty sheet prints `(empty sheet)` from both sources.
+`bounds` and `sheets` report the `<dimension>` as the file declares it, a scan of the non-empty
+cells when it has none (`bounds --scan` and `sheets --stats` always the non-empty box,
+`Sheet.usedRange`); `view` and `filter` address the stored-cell box.
 
 Why the default: `xl search` finds a value in a hidden row and `xl cell C5` reads it, so a `view`
 that silently elided the same cell read as file corruption.
