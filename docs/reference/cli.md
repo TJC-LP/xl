@@ -674,15 +674,31 @@ JSON lexeme, `formula` an object or `null`, `hidden` a boolean or `null` under `
 Matches are the occupied cells in row-major order; a cell that carries a style but no value is not
 occupied (it matches nothing, from either source).
 
-**Output**:
+**Output** (`-s Data`, two hits, the scan ran to the end):
 ```markdown
-Found 5 matches for "Revenue":
+Found 2 matches in Data:
 
-| Ref | Value           | Context (row)              |
-|-----|-----------------|----------------------------|
-| A1  | Revenue         | Revenue | | $1,000,000     |
-| A10 | Revenue Growth  | Revenue Growth | | 5%      |
+| Ref      | Value          |
+|----------|----------------|
+| Data!A1  | Revenue        |
+| Data!A10 | Revenue Growth |
 ```
+
+Clipped (`search Revenue --limit 2` with more hits below): the scan stopped one match past the
+limit, so the count is a lower bound and the trailer names `--total`:
+```markdown
+Found at least 3 matches in Data:
+
+| Ref      | Value          |
+|----------|----------------|
+| Data!A1  | Revenue        |
+| Data!A10 | Revenue Growth |
+
+… showing first 2 matches; more exist (use --limit to raise; --limit 0 = no limit; --total for the exact count)
+```
+Without `-s` the header counts sheets (`in 2 sheets`) and the `Ref` column carries each hit's
+sheet. No `TRUNCATED` warning accompanies a clipped `search`: the clip is in the payload
+(`count`/`total`/`totalExact`) or the trailer.
 
 ---
 

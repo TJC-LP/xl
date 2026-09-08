@@ -93,7 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`search` stops scanning at `--limit` and says so** (#637). The payload gains `totalExact`:
+- **Breaking: `search` stops scanning at `--limit` and says so** (#637). In memory, `search` had
+  reported the exact total since 0.12.6 (#351) — a 0.20.0 text-mode user with more than 50 hits
+  read `Found 120 matches` and now reads `Found at least 51 matches`; by default it stops at
+  `--limit` like the streaming path and needs `--total` for the exact count. The payload gains
+  `totalExact`:
   `true` when the scan read every cell (`--total`, `--limit 0`, or a hit list that fit within the
   limit) and `total` is the exact count; `false` when the scan stopped at `--limit`, and `total`
   is then a lower bound (`limit + 1`: one more match was seen, so more exist). Text mode reads

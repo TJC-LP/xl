@@ -280,12 +280,13 @@ refreshes every cached value (`--tables` also seeds data-table interiors).
 
 ## Gotchas
 
-- **`view` and `search` clip at `--limit` (default 50).** The clip is visible — markdown appends
-  a `… showing N of M rows` trailer, json carries `truncated`/`totalRows` in the payload, and
-  csv/html/svg emit a `TRUNCATED` warning — but a 50-row result is not the whole range: pass
-  `--limit 0` for everything. `search` also *stops scanning* at the limit: `Found at least 11
-  matches` / `"total": 11, "totalExact": false` means the rest of the sheet was never read; pass
-  `--total` when the count itself is the answer.
+- **`view` and `search` clip at `--limit` (default 50).** The clip is visible — `view` markdown
+  appends a `… showing N of M rows` trailer, `view` json carries `truncated`/`totalRows`, and
+  csv/html/svg emit a `TRUNCATED` warning; `search` says it in its own payload
+  (`count`/`total`/`totalExact`) or its trailer, never as a warning — but a 50-row result is not
+  the whole range: pass `--limit 0` for everything. `search` also *stops scanning* at the limit:
+  `Found at least 11 matches` / `"total": 11, "totalExact": false` means the rest of the sheet was
+  never read; pass `--total` when the count itself is the answer.
 - **Use `--show-labels` whenever row numbers matter** in CSV output: hidden rows shift positional
   counting. `view` renders hidden rows and marks them (`--skip-hidden` to omit).
 - **`putf` for formulas only.** `putf A1 "Total Revenue"` is a parse error; use `put`.

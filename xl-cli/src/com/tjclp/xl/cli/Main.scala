@@ -882,6 +882,13 @@ EXAMPLES:
   }
 
   // GH-637: the scan stops one match past --limit unless the exact total is asked for
+  private val searchLimitOpt = Opts
+    .option[Int](
+      "limit",
+      "Maximum matches to list (default: 50; 0 = no limit). The scan stops one match past the " +
+        "limit and reports the total as a lower bound unless --total is given"
+    )
+    .withDefault(50)
   private val exactTotalOpt =
     Opts
       .flag(
@@ -893,7 +900,7 @@ EXAMPLES:
 
   val searchCmd: Opts[CliCommand] =
     Opts.subcommand("search", "Search for cells (all sheets by default)") {
-      (patternArg, limitOpt, sheetsFilterOpt, exactTotalOpt).mapN(CliCommand.Search.apply)
+      (patternArg, searchLimitOpt, sheetsFilterOpt, exactTotalOpt).mapN(CliCommand.Search.apply)
     }
 
   val statsCmd: Opts[CliCommand] =
