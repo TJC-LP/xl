@@ -196,11 +196,9 @@ object Agent:
 
       // Resolve the binary (newest present, else the latest release) and the skill of the same
       // release (GH-592)
-      assets <- Resource.eval(
+      (binaryPath, skillPath) <- Resource.eval(
         FileManager.resolveReleaseAssets(config.xlBinaryPath, config.xlSkillPath)
       )
-      binaryPath = assets._1
-      skillPath = assets._2
 
       // Upload binary file
       binaryFile <- Resource.make(client.uploadFile(binaryPath))(f =>

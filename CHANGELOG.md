@@ -18,10 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`scripts/smoke-cli-contract.sh - xl`). `ContractSpec` pins that
   `docs/reference/generated/error-codes.md` publishes exactly `ErrorCode.all` and `WarningCode.all`
   with their exits and that every golden failure carries a code.
-- **The xl-agent grader reads `sheets --json`** instead of scraping the markdown table (no more
-  `Sheet1` guess on a failed run), and locks the skill zip to the binary's release
-  (`FileManager.lockSkillToBinary`). The grading host needs an `xl` that accepts the global `--json`
-  (0.20.0 or later).
+- **The xl-agent grader reads `--json` envelopes only**: `sheets --json` for the first sheet
+  (no more `Sheet1` guess on a failed run) and `view --json --eval` for the graded cells, so a
+  failure surfaces its `error.code` instead of a swallowed non-zero exit. The skill zip is locked to
+  the binary's release (`FileManager.lockSkillToBinary`), pre-release tags included
+  (`xl-0.21.0-RC1-linux-amd64` pairs with `xl-skill-0.21.0-RC1.zip`); a versioned binary with no
+  zip of its release present fails instead of falling back to the highest zip. The grading host
+  needs an `xl` that accepts the global `--json` (0.20.0 or later).
 
 
 ## [0.20.0] "Contract" - 2026-09-07

@@ -46,7 +46,7 @@ object Evaluator:
       mismatches = mismatches
     )
 
-  /** Get cell values from a workbook using xl CLI */
+  /** The graded cells of one range, read through the `view --json` envelope (GH-592). */
   private def getCellValues(
     path: Path,
     sheetOpt: Option[String],
@@ -57,26 +57,9 @@ object Evaluator:
       sheet <- sheetOpt match
         case Some(s) => IO.pure(s)
         case None => detectFirstSheet(path, xlPath)
-
-      sheetArgs = List("--sheet", sheet)
-      cmd = List(xlPath, "-f", path.toString) ++ sheetArgs ++ List(
-        "view",
-        range,
-        "--format",
-        "json",
-        "--eval"
-      )
-
-      result <- IO
-        .blocking(cmd.!!)
-        .adaptError(e => AgentError.EvaluationFailed(s"xl CLI failed: ${e.getMessage}"))
-
-      json <- IO.fromEither(
-        decode[ViewOutput](result).leftMap(e =>
-          AgentError.ParseError(result.take(200), e.getMessage)
-        )
-      )
-    yield json.rows.flatMap(_.cells).map(c => c.ref -> normalizeCell(c)).toMap
+      envelope <- runForEnvelope("view", viewCommand(xlPath, path, sheet, range))
+      cells <- IO.fromEither(viewCells(envelope))
+    yield cells
 
   /**
    * The command the grader runs to learn a workbook's sheets: the `--json` envelope, never the text
@@ -86,33 +69,70 @@ object Evaluator:
     List(xlPath, "-f", path.toString, "--json", "sheets")
 
   /**
-   * The first sheet of a `sheets --json` envelope: `data[0].name`. A failed envelope (`ok: false`)
-   * is an evaluation failure naming `error.code`; anything that is not the envelope — the text
-   * table included — is a parse error. There is no default sheet: a guess would grade the wrong
-   * range silently.
+   * The command the grader runs to read a graded range: the `--json` envelope of `view --eval`, so
+   * formulas compare by their computed values. Evaluation is advisory on purpose (no `--strict`): a
+   * formula the evaluator cannot compute is a warning and an error cell that grades as a mismatch,
+   * never a failed envelope that aborts the whole task.
    */
-  def firstSheet(envelope: String): Either[AgentError, String] =
+  def viewCommand(xlPath: String, path: Path, sheet: String, range: String): List[String] =
+    List(xlPath, "-f", path.toString, "-s", sheet, "--json", "view", range, "--eval")
+
+  /**
+   * `data` of a `--json` envelope. A failed envelope (`ok: false`) is an evaluation failure naming
+   * `error.code` and its message. Anything that is not the envelope — the text table the CLI prints
+   * without `--json`, or a failure without the `error.code` the contract promises — is a parse
+   * error.
+   */
+  def envelopeData(verb: String, envelope: String): Either[AgentError, Json] =
     def parseError(cause: String): AgentError = AgentError.ParseError(envelope.take(200), cause)
     for
       json <- parse(envelope).leftMap(e => parseError(e.getMessage))
       cursor = json.hcursor
       ok <- cursor.get[Boolean]("ok").leftMap(e => parseError(e.getMessage))
-      name <-
-        if !ok then
-          val error = cursor.downField("error")
-          val code = error.get[String]("code").getOrElse("UNKNOWN")
-          val message = error.get[String]("message").getOrElse("")
-          Left(AgentError.EvaluationFailed(s"xl sheets failed [$code]: $message"))
+      data <-
+        if ok then cursor.get[Json]("data").leftMap(e => parseError(e.getMessage))
         else
-          cursor.get[Vector[Json]]("data").leftMap(e => parseError(e.getMessage)).flatMap {
-            case first +: _ =>
-              first.hcursor.get[String]("name").leftMap(e => parseError(e.getMessage))
-            case _ => Left(AgentError.EvaluationFailed("xl sheets: the workbook has no sheets"))
-          }
-    yield name
+          val error = cursor.downField("error")
+          val message = error.get[String]("message").getOrElse("")
+          error.get[String]("code") match
+            case Right(code) =>
+              Left(AgentError.EvaluationFailed(s"xl $verb failed [$code]: $message"))
+            case Left(_) => Left(parseError(s"failed envelope without error.code: $message"))
+    yield data
 
-  /** Detect the first sheet name in a workbook from `xl --json sheets` */
-  private def detectFirstSheet(path: Path, xlPath: String): IO[String] =
+  /**
+   * The first sheet of a `sheets --json` envelope: `data[0].name`. There is no default sheet: a
+   * guess would grade the wrong range silently.
+   */
+  def firstSheet(envelope: String): Either[AgentError, String] =
+    def parseError(cause: String): AgentError = AgentError.ParseError(envelope.take(200), cause)
+    envelopeData("sheets", envelope).flatMap { data =>
+      data.as[Vector[Json]].leftMap(e => parseError(e.getMessage)).flatMap {
+        case first +: _ =>
+          first.hcursor.get[String]("name").leftMap(e => parseError(e.getMessage))
+        case _ => Left(AgentError.EvaluationFailed("xl sheets: the workbook has no sheets"))
+      }
+    }
+
+  /**
+   * The cells of a `view --json` envelope — `data.rows[].cells[]` — normalized for comparison and
+   * keyed by ref.
+   */
+  def viewCells(envelope: String): Either[AgentError, Map[String, ComparableValue]] =
+    envelopeData("view", envelope).flatMap { data =>
+      data
+        .as[ViewOutput]
+        .leftMap(e => AgentError.ParseError(envelope.take(200), e.getMessage))
+        .map(_.rows.flatMap(_.cells).map(c => c.ref -> normalizeCell(c)).toMap)
+    }
+
+  /**
+   * Run an `xl … --json …` command and return its stdout: the envelope. With `--json` the envelope
+   * is on stdout whatever the exit code, so a non-zero exit is not a failure here — the envelope
+   * says what went wrong. An empty stdout means the binary died before printing one, and stderr is
+   * all there is to report.
+   */
+  private def runForEnvelope(verb: String, cmd: List[String]): IO[String] =
     IO.blocking {
       val out = new StringBuilder
       val err = new StringBuilder
@@ -120,20 +140,23 @@ object Evaluator:
         line => { out.append(line).append('\n'); () },
         line => { err.append(line).append('\n'); () }
       )
-      val exit = Process(sheetsCommand(xlPath, path)).!(logger)
+      val exit = Process(cmd).!(logger)
       (exit, out.toString, err.toString)
     }.adaptError(e => AgentError.EvaluationFailed(s"xl CLI failed to start: ${e.getMessage}"))
       .flatMap { (exit, stdout, stderr) =>
-        // With --json the envelope is on stdout whatever the exit code; an empty stdout means the
-        // binary died before printing one, and stderr is all there is to report.
         if stdout.trim.isEmpty then
           IO.raiseError(
             AgentError.EvaluationFailed(
-              s"xl sheets exited $exit without an envelope: ${stderr.trim}"
+              s"xl $verb exited $exit without an envelope: ${stderr.trim}"
             )
           )
-        else IO.fromEither(firstSheet(stdout))
+        else IO.pure(stdout)
       }
+
+  /** Detect the first sheet name in a workbook from `xl --json sheets` */
+  private def detectFirstSheet(path: Path, xlPath: String): IO[String] =
+    runForEnvelope("sheets", sheetsCommand(xlPath, path))
+      .flatMap(envelope => IO.fromEither(firstSheet(envelope)))
 
   /** Normalize a cell value for comparison */
   private def normalizeCell(cell: CellJson): ComparableValue =

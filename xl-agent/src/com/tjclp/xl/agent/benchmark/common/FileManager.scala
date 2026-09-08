@@ -8,6 +8,7 @@ import java.nio.file.{Files, Path, Paths}
 import scala.jdk.CollectionConverters.*
 import scala.sys.process.*
 import scala.util.Using
+import scala.util.matching.Regex
 
 /** Shared file management utilities for benchmarks */
 object FileManager:
@@ -22,12 +23,41 @@ object FileManager:
   /** The skill zip of one release, as `release.yml` names it. */
   def skillPatternFor(version: String): String = s"xl-skill-$version.zip"
 
-  private val VersionInName = """\d+\.\d+\.\d+""".r
+  /** The git tag of one release, as `release.yml` triggers on it: `v0.21.0`, `v0.21.0-RC1`. */
+  def releaseTag(version: String): String = s"v$version"
+
+  // Release asset names, as release.yml publishes them: `xl-<version>-<os>-<arch>[.exe]` and
+  // `xl-skill-<version>.zip`, where <version> is X.Y.Z with an optional pre-release suffix
+  // (`0.21.0-RC1`, `0.21.0-rc.1`). Anchoring to the whole name is what keeps a pre-release suffix
+  // apart from the platform suffix: `xl-0.21.0-RC1-linux-amd64` is release `0.21.0-RC1`.
+  private val ReleaseVersion = """\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?"""
+  private val BinaryName: Regex =
+    raw"""^xl-($ReleaseVersion)-(?:linux|darwin|windows)-(?:amd64|arm64)(?:\.exe)?$$""".r
+  private val SkillName: Regex = raw"""^xl-skill-($ReleaseVersion)\.zip$$""".r
+  private val SemVer: Regex = """(\d+)\.(\d+)\.(\d+)(?:-(.+))?""".r
 
   /**
-   * The release version embedded in an asset name: `xl-0.20.0-linux-amd64`, `xl-skill-0.20.0.zip`.
+   * The release version a release asset's name carries: `xl-0.20.0-linux-amd64` and
+   * `xl-skill-0.20.0.zip` are `0.20.0`; `xl-0.21.0-RC1-linux-amd64` is `0.21.0-RC1`. None for any
+   * other name (a local build, a hand-made skill).
    */
-  def assetVersion(fileName: String): Option[String] = VersionInName.findFirstIn(fileName)
+  def assetVersion(fileName: String): Option[String] = fileName match
+    case BinaryName(version) => Some(version)
+    case SkillName(version) => Some(version)
+    case _ => None
+
+  /**
+   * Sort key of an asset's release version: the numeric parts, then a final release above every
+   * pre-release of the same triple (`0.21.0-RC1` < `0.21.0`), pre-releases of one triple by suffix.
+   * Names without a version sort below every release.
+   */
+  private[common] def versionKey(version: Option[String]): (Int, Int, Int, Int, String) =
+    def num(s: String): Int = s.toIntOption.getOrElse(-1)
+    version match
+      case Some(SemVer(major, minor, patch, pre)) =>
+        val suffix = Option(pre).getOrElse("")
+        (num(major), num(minor), num(patch), if suffix.isEmpty then 1 else 0, suffix)
+      case _ => (-1, -1, -1, -1, "")
 
   private def fileName(path: Path): String = Option(path.getFileName).fold("")(_.toString)
 
@@ -78,7 +108,7 @@ object FileManager:
       pathOverride,
       searchDirs,
       autoDownload,
-      tag = lockTo.map(v => s"v$v")
+      tag = lockTo.map(releaseTag)
     )
 
   /**
@@ -147,18 +177,12 @@ object FileManager:
    * Find a file by pattern (glob) in the given directories.
    *
    * When several files match (e.g. binaries from multiple releases side by side), the one with the
-   * highest embedded semantic version wins.
+   * highest release version in its name wins ([[assetVersion]], [[versionKey]]).
    */
   def findByPattern(pattern: String, dirs: List[String]): IO[Option[Path]] =
     IO.blocking {
       import java.nio.file.FileSystems
       val matcher = FileSystems.getDefault.getPathMatcher(s"glob:$pattern")
-      val versionRegex = """(\d+)\.(\d+)\.(\d+)""".r
-
-      def versionKey(p: Path): (Int, Int, Int) =
-        versionRegex.findFirstMatchIn(p.getFileName.toString) match
-          case Some(m) => (m.group(1).toInt, m.group(2).toInt, m.group(3).toInt)
-          case None => (-1, -1, -1)
 
       dirs
         .flatMap { dir =>
@@ -174,7 +198,7 @@ object FileManager:
             }
           else Nil
         }
-        .maxByOption(versionKey)
+        .maxByOption(p => versionKey(assetVersion(fileName(p))))
     }
 
   /** Download assets from a GitHub release using the gh CLI: the latest, or the tagged one. */
@@ -195,30 +219,6 @@ object FileManager:
           s"Failed to download '$pattern'${tag.fold("")(t => s" of release $t")} from GitHub (exit code: $exitCode)"
         )
     }
-
-  /** Download the latest binary and the skill of the same release from GitHub */
-  def downloadReleaseAssets(targetDir: String): IO[(Path, Path)] =
-    for
-      _ <- IO.println(s"   Downloading xl binary from GitHub...")
-      _ <- downloadFromGitHub(BinaryPattern, targetDir)
-      binary <- findByPattern(BinaryPattern, List(targetDir))
-        .flatMap(
-          _.liftTo[IO](AgentError.ConfigError("Binary download succeeded but file not found"))
-        )
-
-      version = assetVersion(fileName(binary))
-      _ <- IO.println(s"   Downloading xl skill ${version.getOrElse("(latest)")} from GitHub...")
-      _ <- downloadFromGitHub(
-        version.fold(SkillPattern)(skillPatternFor),
-        targetDir,
-        version.map(v => s"v$v")
-      )
-      skill <- findByPattern(version.fold(SkillPattern)(skillPatternFor), List(targetDir))
-        .flatMap(
-          _.liftTo[IO](AgentError.ConfigError("Skill download succeeded but file not found"))
-        )
-      _ <- IO.fromEither(lockSkillToBinary(binary, skill))
-    yield (binary, skill)
 
   /** Ensure a directory exists, creating it if necessary */
   def ensureDirectory(path: Path): IO[Unit] =
