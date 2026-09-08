@@ -225,7 +225,7 @@ class BatchStreamRefusalSpec extends CatsEffectSuite:
     yield
       assertFailed(s, streamed, "BATCH_OP_FAILED")
       assertFailed(m, memory, "BATCH_OP_FAILED")
-      assert(s.stderr.contains("Object 1 (put): Sheet 'Dat' not found. Available: "), s.stderr)
+      assert(s.stderr.contains("Object 1 (put): Sheet not found: Dat. Available: "), s.stderr)
       assert(s.stderr.contains("did you mean: Data"), s.stderr)
       assertEquals(s.stderr.linesIterator.next(), m.stderr.linesIterator.next(), "same first line")
   }

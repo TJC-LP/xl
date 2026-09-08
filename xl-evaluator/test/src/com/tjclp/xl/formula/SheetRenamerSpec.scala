@@ -335,6 +335,80 @@ class SheetRenamerSpec extends ScalaCheckSuite:
       case other => fail(s"expected a FormulaError refusal, got $other")
   }
 
+  test("renameLocated names the site of a refusal: cell, defined name, none (GH-608)") {
+    val Sheet2 = SheetName.unsafe("Sheet2")
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1", num(1)),
+      Sheet("Sheet2").put(ref"B1", f("IF(ZZZNOTAFUNC(1)=1,Sheet1!A1,0)", None))
+    )
+    SheetRenamer.renameLocated(wb, Sheet1, Data) match
+      case Left(SheetRenamer.Refusal(site, XLError.FormulaError(formula, reason))) =>
+        assertEquals(site, Some(SheetRenamer.Site.Cell(Sheet2, ref"B1")))
+        assertEquals(formula, "IF(ZZZNOTAFUNC(1)=1,Sheet1!A1,0)")
+        // the message still names the site for text readers, then the parser's own diagnostic
+        assert(reason.startsWith("Sheet2!B1: "), reason)
+        assert(reason.contains("Unknown function 'ZZZNOTAFUNC'"), reason)
+        assert(!reason.contains("UnknownFunction("), reason)
+      case other => fail(s"expected a located FormulaError refusal, got $other")
+    // `rename` is the same decision with the site dropped
+    assertEquals(
+      SheetRenamer.rename(wb, Sheet1, Data),
+      SheetRenamer.renameLocated(wb, Sheet1, Data).left.map(_.error)
+    )
+    val named = Workbook(
+      Vector(Sheet("Sheet1"), Sheet("Sheet2")),
+      metadata = WorkbookMetadata(definedNames = Vector(DefinedName("Bad", "Sheet1!$A$1 +")))
+    )
+    SheetRenamer.renameLocated(named, Sheet1, Data) match
+      case Left(SheetRenamer.Refusal(site, _: XLError.FormulaError)) =>
+        assertEquals(site, Some(SheetRenamer.Site.Name("Bad")))
+      case other => fail(s"expected a located FormulaError refusal, got $other")
+    // a quoted-name sheet is described the way a formula spells it
+    assertEquals(SheetRenamer.Site.Cell(Q1Data, ref"C3").describe, "'Q1 Data'!C3")
+    assertEquals(SheetRenamer.Site.Name("Total").describe, "defined name 'Total'")
+    // workbook-level refusals have no site
+    assertEquals(
+      SheetRenamer.renameLocated(wb, SheetName.unsafe("Nope"), Data),
+      Left(SheetRenamer.Refusal(None, XLError.SheetNotFound("Nope"))): Either[
+        SheetRenamer.Refusal,
+        Workbook
+      ]
+    )
+  }
+
+  test("renameLocated names a conditional-format and a data-validation site (GH-608)") {
+    val Sheet2 = SheetName.unsafe("Sheet2")
+    val cf = Workbook(
+      Sheet("Sheet1").put(ref"A1", num(1)),
+      Sheet("Sheet2")
+        .conditionalFormat(ref"A1:A9", CfRule.Expression("ZZZNOTAFUNC(Sheet1!A1)", None, 1))
+    )
+    SheetRenamer.renameLocated(cf, Sheet1, Data) match
+      case Left(SheetRenamer.Refusal(site, XLError.FormulaError(formula, reason))) =>
+        assertEquals(site, Some(SheetRenamer.Site.ConditionalFormat(Sheet2)))
+        assertEquals(formula, "ZZZNOTAFUNC(Sheet1!A1)")
+        assert(reason.startsWith("Sheet2!conditional format: "), reason)
+        assert(reason.contains("Unknown function 'ZZZNOTAFUNC'"), reason)
+      case other => fail(s"expected a located FormulaError refusal, got $other")
+    val dv = Workbook(
+      Sheet("Sheet1").put(ref"A1", num(1)),
+      Sheet("Sheet2")
+        .withDataValidation(ref"B1:B9", DataValidation.custom("ZZZNOTAFUNC(Sheet1!A1)"))
+    )
+    SheetRenamer.renameLocated(dv, Sheet1, Data) match
+      case Left(SheetRenamer.Refusal(site, XLError.FormulaError(formula, reason))) =>
+        assertEquals(site, Some(SheetRenamer.Site.DataValidation(Sheet2)))
+        assertEquals(formula, "ZZZNOTAFUNC(Sheet1!A1)")
+        assert(reason.startsWith("Sheet2!data validation: "), reason)
+        assert(reason.contains("Unknown function 'ZZZNOTAFUNC'"), reason)
+      case other => fail(s"expected a located FormulaError refusal, got $other")
+    assertEquals(
+      SheetRenamer.Site.ConditionalFormat(Q1Data).describe,
+      "'Q1 Data'!conditional format"
+    )
+    assertEquals(SheetRenamer.Site.DataValidation(Q1Data).describe, "'Q1 Data'!data validation")
+  }
+
   test("the usual Workbook.rename refusals still apply") {
     assertEquals(
       SheetRenamer.rename(repro, SheetName.unsafe("Nope"), Data),

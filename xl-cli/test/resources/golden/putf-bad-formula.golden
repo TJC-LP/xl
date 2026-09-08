@@ -14,6 +14,6 @@ A5
 ## stderr
 Error: =SUM(
     ^
-Formula error in '=SUM(': Unexpected end of formula at position 4: expected expression
+Unexpected end of formula at position 4: expected expression
   code: FORMULA_ERROR
   hint: check the formula with `xl eval`

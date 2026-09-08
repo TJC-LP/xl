@@ -122,10 +122,15 @@ xl batch --schema                                  # JSON Schema of the batch do
 
 Every write verb that changes cell content ends with a recalculation scoped to the edit's **dirty
 dependency cone** — the changed cells plus their transitive dependents (cross-sheet included) plus
-the always-dirty `INDIRECT`/`OFFSET` cells. Readers with unresolved dependencies also join the
-invalidation set. Formula writes are evaluated against the completed edit; an authored cycle or
-host failure is reported and left uncached with its affected dependents. Unaffected caches keep
-the values supplied by their original calculator.
+the always-dirty `INDIRECT`/`OFFSET` cells. A formula the parser rejects (an omitted argument, an
+unsupported function, a name whose definition it cannot read) has no graph edges, so its TEXT
+decides: it joins the cone only when a cell or range it spells — resolved through sheet qualifiers,
+3-D spans and defined names — contains a dirty cell; a text the scanner cannot bound (a structured
+or external reference, an unknown name, `INDIRECT` inside it) is dirty on every edit. Inside the
+cone such a formula is evaluated, fails, and is left uncached and reported; outside it, the cache
+the file already carried stays untouched (#606). Formula writes are evaluated against the completed
+edit; an authored cycle or host failure is reported and left uncached with its affected dependents.
+Unaffected caches keep the values supplied by their original calculator.
 
 `--no-recalc` (alias `--preserve-caches`) skips the post-edit recalculation. The edit still lands;
 newly written formulas can carry caches produced by the verb's authoring step. Use it when an external calculator owns the numbers. Honored by `put`,
@@ -196,9 +201,10 @@ With `-i` the temp file is discarded and the input is left byte-identical; the s
 together with `--stream` (streaming writes never recalculate, so the gate could never fire). Verbs
 that perform no recalculation, such as presentation-only verbs, have no calculation outcome to
 gate. `put`, `putf`, `fill`, and `copy` include authored formulas and affected dependents in their
-reported outcomes. Structural and batch writes retain workbook-level errors even when the failing
-cell is outside the cache-write cone. Use `--strict` without `--no-recalc` when the command must
-validate calculation results.
+reported outcomes. Structural and batch writes recalculate the whole book but report a failure only
+for a cell inside the cache-write cone or one the written file leaves uncached; a formula outside
+the cone whose cache was kept is never reported as "left uncached" (#606). Use `--strict` without
+`--no-recalc` when the command must validate calculation results.
 
 For `recalc --tables`, unsupported dynamic source cones produce a named skip warning; failed
 source/axis/member evaluations report unseeded counts and retain unresolved-precedent diagnostics.
@@ -502,8 +508,11 @@ Value: Revenue
 occupied cells — and `Dependents` the formulas that read the cell, by name or through a range that
 contains it (an empty cell inside a summed range still names the sum). Empty cells inside a range
 and ranges over a sheet the workbook does not have are not listed (since 0.20.0; before, `SUM(A:A)`
-listed 1,048,576 entries). Same-sheet refs are unqualified, cross-sheet ones carry the sheet. For
-more than one hop, use `deps`. Under `--stream` the graph is not built and both lines say so:
+listed 1,048,576 entries). Same-sheet refs are unqualified; cross-sheet ones carry the sheet
+quoted as a formula would spell it (`'On-Premise'!G9`, `Sheet2!A1`), the same rendering `deps` and
+`search` use, so the text pastes into `putf`/`eval`; both lists are ordered by sheet, then row, then
+column. For more than one hop, use `deps`. Under `--stream` the graph is not built and both lines
+say so:
 `Dependencies: (not available in streaming mode)` / `Dependents: (not available in streaming mode)`
 (before 0.21.0 streaming listed the formula's reference tokens — `B1, B1:B3, B3` for
 `=SUM(B1:B3)` — which was neither the precedent set nor exact; drop `--stream` for the graph).
@@ -1319,6 +1328,14 @@ xl -f f.xlsx -o o.xlsx move-sheet Summary --to 0             # or --after/--befo
 xl -f f.xlsx -o o.xlsx copy-sheet Template "Q2 Report"
 ```
 
+`rename-sheet` rewrites every reference to the old name (formulas on every sheet, defined names,
+conditional formats, data validations). A dependent that mentions the sheet but cannot be parsed
+refuses the whole rename before anything is written: `FORMULA_ERROR` (exit 3) with `location`
+naming the cell (`sheet` and `ref`) — or the sheet alone for a conditional format or data
+validation — the parser's own diagnostic in the message and a hint to fix or replace that formula
+first. An unknown sheet on any of these verbs is `SHEET_NOT_FOUND`, a name Excel would reject
+`INVALID_SHEET_NAME`, and a `move-sheet` without `--to`/`--after`/`--before` is `USAGE` (exit 2).
+
 ---
 
 ### Structural editing: `insert-rows`, `delete-rows`, `insert-cols`, `delete-cols`
@@ -1372,7 +1389,9 @@ document — **[`generated/batch-ops.md`](generated/batch-ops.md)** lists every 
 fields, types, required flags, aliases, example, streamability and CLI twin, and
 `xl batch --schema` prints the same as a JSON Schema. An unknown `op` is `BATCH_OP_UNKNOWN`
 (exit 2) with a `did you mean`; an op that fails to apply is `BATCH_OP_FAILED` with
-`location.opIndex` (1-based).
+`location.opIndex` (1-based) and the op's `sheet` — or, when the cause names a cell (a
+`rename-sheet` that cannot rewrite `Summary!I23`), that cell's `sheet` and `ref` — plus the cause's
+own `hint`.
 
 **Rules every op follows**:
 
