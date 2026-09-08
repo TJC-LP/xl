@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -71,13 +71,13 @@ Excel.write(updated, "output.xlsx")
   byte-identical, no scratch file is left behind).
 - `Excel.readSheet(path, name)` (since 0.21.0) is `Excel.read` plus the lookup — the whole
   workbook is loaded, then one sheet is selected (stream one sheet of a large file with
-  `ExcelIO.readSheetStream`). Since 0.21.1 it returns `XLResult[Sheet]` like the rest of the sync
+  `ExcelIO.readSheetStream`). Since 0.22.0 it returns `XLResult[Sheet]` like the rest of the sync
   surface, so `orExit(Excel.readSheet(path, name))` is the script shape: a missing name is
   `Left(SheetNotFound(name, available))`, whose message lists every available sheet and whose
   `candidates` name the nearest, so `orExit` prints a `did you mean:` line exactly as `xl -s` does;
   a missing, corrupt or over-limit file is `Left` of the reader's own `IOError`/`ParseError`/
   `SecurityError`. (0.21.0 threw an `XLException` instead.) `wb(name)`, `wb.update`, `wb.remove`,
-  `wb.rename` and `wb.setSheetState` carry the same candidates (0.21.1).
+  `wb.rename` and `wb.setSheetState` carry the same candidates (0.22.0).
   `Excel.readMetadata(path)` (since 0.21.0) returns `LightMetadata` — sheet names, visibility,
   dimensions, defined names, the date system — without loading a cell, under the same ZIP-bomb
   limits as `Excel.read`.
@@ -198,7 +198,7 @@ cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 val region = Seq("North", "East").mkString(" ")                     // runtime name
@@ -339,7 +339,7 @@ style, `Replace` applies it to `CellStyle.default`.
 | `sheet.edit(edits*)` | `XLResult[Sheet]` | the sheet itself (a one-sheet workbook under the hood); an edit naming another sheet is `SheetNotFound`; a rename of this sheet is followed |
 | `Edit.applyAll(wb, Vector[Edit], scope: EditScope)` | `XLResult[Applied]` | explicit — `Applied(workbook, planned, scope)` is the edited book, one `Planned(index, edit, sheet, touched)` row per edit and the scope *after* the sequence; `applied.touchedBySheet` seeds an after-edit recalculation cone, `applied.structural` says the whole book needs one |
 | `Edit.plan(wb, edits, scope)` | `XLResult[Vector[Planned]]` | the same fold with the workbook discarded — a **semantic** dry-run that fails exactly where `applyAll` would (and costs the same) |
-| `Edit.validate(edit)` | `XLResult[Unit]` | the **static**, workbook-free checks of one edit: counts match the area, spans and levels are in range, a formula parses, `MoveSheet` names exactly one destination, … — a refusal is `XLError.InvalidArgument(op, reason)`, code `INVALID_ARGUMENT` (since 0.21.1, [#617](https://github.com/TJC-LP/xl/issues/617)), so a script can branch on it |
+| `Edit.validate(edit)` | `XLResult[Unit]` | the **static**, workbook-free checks of one edit: counts match the area, spans and levels are in range, a formula parses, `MoveSheet` names exactly one destination, … — a refusal is `XLError.InvalidArgument(op, reason)`, code `INVALID_ARGUMENT` (since 0.22.0, [#617](https://github.com/TJC-LP/xl/issues/617)), so a script can branch on it |
 | `Edit.lower(edit, sheet)` / `Patch.toEdits(patch, sheet)` | `Option[Patch]` / `Option[Vector[Edit]]` | the bridge to the sheet-local kernel, `None` when the edit needs formula support, another sheet or the workbook |
 
 The scope type is **`EditScope`** on the prelude and pure surfaces (its source name, `ops.Scope`,
@@ -363,7 +363,7 @@ the batch schema).
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -397,7 +397,7 @@ println(s"wrote ${edited.sheets.size} sheets; clean: ${result.isClean}")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -443,7 +443,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -685,7 +685,7 @@ cells — no per-cell `readTyped` loops:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
 
@@ -804,7 +804,7 @@ and a full-column range for the column forms: `sheet.collapseRows("E:H".asRange 
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 // Whole-row/column spans are runtime strings (the ref macro takes A1 / A1:B2 shapes) — parse them.
@@ -830,7 +830,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -881,7 +881,7 @@ report and continue.
 ```scala
 val wb = orExit(Workbook.named("Data", "Summary")) // DuplicateSheet on a repeat → printed, exit 1
 val sales = orExit(wb("Sales"))                    // SheetNotFound → printed with its hint, exit 1
-val summary = orExit(Excel.readSheet("model.xlsx", "Sumary")) // 0.21.1: readSheet is an XLResult
+val summary = orExit(Excel.readSheet("model.xlsx", "Sumary")) // 0.22.0: readSheet is an XLResult
 // Error: Sheet not found: 'Sumary'. Available: Data, Summary     ← Excel.readSheet's error via orExit
 //   code: SHEET_NOT_FOUND
 //   did you mean: Summary
@@ -901,7 +901,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

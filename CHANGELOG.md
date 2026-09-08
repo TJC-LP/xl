@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.21.1] - 2026-09-08
+## [0.22.0] - 2026-09-08
 
 The 0.21.0 dogfood's follow-through, four PRs (#646, #647, #648, #650): named cell styles, the
 recent-colours palette and the styles `extLst` survive every write and `"` is written verbatim in

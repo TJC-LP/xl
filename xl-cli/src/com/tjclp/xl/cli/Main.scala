@@ -662,7 +662,7 @@ EXAMPLES:
     Opts
       .flag(
         "formulas-only",
-        "Compare formula cells by text only, ignoring cached values (the pre-0.21.1 rule)"
+        "Compare formula cells by text only, ignoring cached values (the pre-0.22.0 rule)"
       )
       .orFalse
 

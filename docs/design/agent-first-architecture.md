@@ -162,7 +162,7 @@ object Main extends IOApp:                       // was CommandIOApp; its run is
 object Cli:
   def program(io: CliIO): Opts[IO[ExitCode]]
   /**
-   * hoist globals → parse → --help (stdout, 0; `{data: {usage}}` under --json — GH-620, 0.21.1;
+   * hoist globals → parse → --help (stdout, 0; `{data: {usage}}` under --json — GH-620, 0.22.0;
    * the help goldens pin it) | usage error (stderr, 2) | run.
    */
   def run(args: List[String], io: CliIO): IO[ExitCode]
@@ -738,7 +738,7 @@ batch keys to exit 2 or `"bold": false` to un-bold in 0.20 (A) — warnings in `
   sheet; typed reads (`readTyped`/`readTypedOpt`/`readTypedOr`) return a formula cell's cached
   value (GH-477; `readTypedStrict` keeps the 0.19 rule); and `XLError` gains cases, so exhaustive
   downstream matches warn. `--help` went to stderr with exit 0 in 0.20.0 (decline's channel);
-  since 0.21.1 it is a result — stdout, exit 0, and the `ok:true` envelope with `data.usage` under
+  since 0.22.0 it is a result — stdout, exit 0, and the `ok:true` envelope with `data.usage` under
   `--json` (GH-620; the help goldens pin it).
 - Published library API (0.19.3 on Maven Central): otherwise additive — `XLError` extensions,
   `derives CanEqual`, twins, navigation, `RecalcOptions` and three extension methods,

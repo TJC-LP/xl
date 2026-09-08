@@ -24,7 +24,7 @@ final case class Rendered(stdout: String, stderr: String) derives CanEqual
  * [[json]] is the envelope, identical for every verb, success or failure, and the only thing on
  * stdout:
  * {{{
- * { "ok": true, "exitCode": 0, "verb": "view", "version": "0.21.1",
+ * { "ok": true, "exitCode": 0, "verb": "view", "version": "0.22.0",
  *   "data": …, "warnings": [ { "code": "TRUNCATED", "message": "…" } ], "error": null }
  * }}}
  * `ok ⇔ error == null`; `data` is `null` on a failure, `{text, saved, written}` for prose verbs and

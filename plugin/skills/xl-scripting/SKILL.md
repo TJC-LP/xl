@@ -38,7 +38,7 @@ The canonical header for every script (this is the single source of truth — re
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -60,7 +60,7 @@ val wb  = Excel.read("in.xlsx")                    // Workbook
 Excel.write(wb, "out.xlsx")                        // also accepts XLResult[Workbook]; NEVER for a freshly built model — see writeChecked
 Excel.modify("file.xlsx")(_.upsert("Log", identity)) // atomic in-place read→transform→write
 Excel.modifyR("file.xlsx")(_.update("Log", f))     // 0.21.0: XLResult-returning transform; a Left throws BEFORE any write
-orExit(Excel.readSheet("in.xlsx", "Summary"))      // 0.21.1: XLResult[Sheet] — loads the WHOLE workbook, then picks one; a typo is Left(SheetNotFound(name, available)) with "did you mean" candidates (0.21.0 returned Sheet and threw)
+orExit(Excel.readSheet("in.xlsx", "Summary"))      // 0.22.0: XLResult[Sheet] — loads the WHOLE workbook, then picks one; a typo is Left(SheetNotFound(name, available)) with "did you mean" candidates (0.21.0 returned Sheet and threw)
 Excel.readMetadata("in.xlsx")                      // 0.21.0: LightMetadata (sheet names/dimensions/defined names), no cells loaded, ZIP-bomb guarded
 
 // Sheets in a workbook
@@ -125,7 +125,7 @@ orExit(wb.update("Sales", f))                      // 0.21.0: or print "Error: �
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -136,7 +136,7 @@ val updated = wb
 Excel.write(updated, "output.xlsx")
 ```
 
-`Excel.modify("file.xlsx")(f)` does the same in place with atomic file replacement. Since 0.21.0 `Excel.modifyR("file.xlsx")(f)` takes an `XLResult`-returning transform — `_.update("Data", …)` needs no `.unsafe` inside the lambda, and a `Left` throws *before* anything is written, leaving the file byte-identical. `Excel.readSheet(path, name)` (0.21.0) is `Excel.read` plus the lookup — the whole workbook is loaded, then one sheet is selected; since 0.21.1 it returns `XLResult[Sheet]` (0.21.0 returned `Sheet` and threw), so `orExit(Excel.readSheet(path, name))` unwraps it: a typo is `Left(SheetNotFound(name, available))` whose message lists every available sheet and whose `candidates` name the nearest (`orExit` prints them as `did you mean:`), and a missing or corrupt file is `Left` of the reader's `IOError`/`ParseError`; `wb(name)`/`wb.update`/`wb.remove` carry the same candidates (0.21.1); `Excel.readMetadata(path)` (0.21.0) lists sheets, dimensions and defined names without loading a cell — decide what to read (or stream) before reading it.
+`Excel.modify("file.xlsx")(f)` does the same in place with atomic file replacement. Since 0.21.0 `Excel.modifyR("file.xlsx")(f)` takes an `XLResult`-returning transform — `_.update("Data", …)` needs no `.unsafe` inside the lambda, and a `Left` throws *before* anything is written, leaving the file byte-identical. `Excel.readSheet(path, name)` (0.21.0) is `Excel.read` plus the lookup — the whole workbook is loaded, then one sheet is selected; since 0.22.0 it returns `XLResult[Sheet]` (0.21.0 returned `Sheet` and threw), so `orExit(Excel.readSheet(path, name))` unwraps it: a typo is `Left(SheetNotFound(name, available))` whose message lists every available sheet and whose `candidates` name the nearest (`orExit` prints them as `did you mean:`), and a missing or corrupt file is `Left` of the reader's `IOError`/`ParseError`; `wb(name)`/`wb.update`/`wb.remove` carry the same candidates (0.22.0); `Excel.readMetadata(path)` (0.21.0) lists sheets, dimensions and defined names without loading a cell — decide what to read (or stream) before reading it.
 
 ### Compile-time literals vs runtime refs
 
@@ -256,7 +256,7 @@ A `Patch` is sheet-local and formula-blind. `Edit` is the operation vocabulary b
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -379,7 +379,7 @@ Native Excel `TABLE()` two-variable data tables (0.18.0) — the house sensitivi
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 val model = Sheet("Sensitivity")
@@ -433,7 +433,7 @@ val sales = orExit(wb("Sales"))                      // SheetNotFound → printe
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -455,7 +455,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 
 val data = List(("North", 125000.50), ("South", 98000.25), ("West", 143500.00))
@@ -482,7 +482,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.21.1
+//> using dep com.tjclp::xl:0.22.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

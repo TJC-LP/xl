@@ -578,10 +578,10 @@ val headerStyle = style"font-weight: bold; background: #CCCCCC; border: all thin
 **Workaround**: normalise with `.filter(_.nonEmpty)` after the read, or clear such cells (`clear --all` on the range) before reading.
 
 #### 26. Named Cell Styles: Preserved, Not Yet Modeled (#610)
-**Status**: Preservation fixed in 0.21.1 ([#610](https://github.com/TJC-LP/xl/issues/610)); no typed named-style model yet
+**Status**: Preservation fixed in 0.22.0 ([#610](https://github.com/TJC-LP/xl/issues/610)); no typed named-style model yet
 **Impact**: A workbook's Cell Styles gallery, recent-colours palette and styles `extLst` survive every write; named styles cannot be authored from xl
 
-**Fixed in 0.21.1**: a source workbook's `cellStyleXfs`, `cellStyles`, `tableStyles`, `colors` (`mruColors`/`indexedColors`) and styles-level `extLst` ride through every write of the in-memory writer verbatim — byte-identical on the default DOM backend, attribute-sorted on the StAX backend — the same opaque-passthrough contract as `dxfs`. Every `cellXf` keeps the `xfId` of the named style it derives from: the reader registers a source's cellXfs positionally in each sheet's `StyleRegistry`, so two xfs that differ only in `xfId` ("Comma 2" applied vs the same formatting typed by hand) stay two xfs through a regenerating write. A style xl authors is appended with `xfId="0"` (`Normal` + direct formatting) unless an equal direct xf already exists, which it shares; when only a named-style twin exists, the cell shares that twin. Source `cellXfs` records are emitted verbatim (`applyX` flags, `quotePrefix`, `<protection>` and attribute order intact); only the xfs xl adds are regenerated. An empty `<cellStyleXfs count="0"/>` or an out-of-range `xfId` in the source is repaired to `Normal`. An xl-authored workbook, or one written after its `sourceContext` is dropped, still emits exactly one `Normal`. `--stream put`/`putf`/`style` patch the source `styles.xml` in place and never dropped these sections.
+**Fixed in 0.22.0**: a source workbook's `cellStyleXfs`, `cellStyles`, `tableStyles`, `colors` (`mruColors`/`indexedColors`) and styles-level `extLst` ride through every write of the in-memory writer verbatim — byte-identical on the default DOM backend, attribute-sorted on the StAX backend — the same opaque-passthrough contract as `dxfs`. Every `cellXf` keeps the `xfId` of the named style it derives from: the reader registers a source's cellXfs positionally in each sheet's `StyleRegistry`, so two xfs that differ only in `xfId` ("Comma 2" applied vs the same formatting typed by hand) stay two xfs through a regenerating write. A style xl authors is appended with `xfId="0"` (`Normal` + direct formatting) unless an equal direct xf already exists, which it shares; when only a named-style twin exists, the cell shares that twin. Source `cellXfs` records are emitted verbatim (`applyX` flags, `quotePrefix`, `<protection>` and attribute order intact); only the xfs xl adds are regenerated. An empty `<cellStyleXfs count="0"/>` or an out-of-range `xfId` in the source is repaired to `Normal`. An xl-authored workbook, or one written after its `sourceContext` is dropped, still emits exactly one `Normal`. `--stream put`/`putf`/`style` patch the source `styles.xml` in place and never dropped these sections.
 
 **Remaining**:
 - No typed `NamedStyle` model: a named style cannot be created, renamed, modified or applied from the API or CLI, and a cell xl restyles becomes direct formatting on `Normal` even when its source xf derived from a named style (the API cannot tell — `CellStyle` carries no `xfId`).
@@ -657,7 +657,7 @@ excel.readStreamByIndex(path, 2)  // Sheet 2 (separate call)
 
 ---
 
-### 30. Unbounded `--stream view` Streams (#635, resolved in 0.21.1)
+### 30. Unbounded `--stream view` Streams (#635, resolved in 0.22.0)
 **Status**: Resolved — `--stream view --limit 0` writes its rows as the reader produces them, for csv, json (bare and inside the `--json` envelope) and markdown, in constant memory; the bytes are those of the gathered table (a property law holds every generated window in both output modes). On the 1,000,000 × 41 dogfood book the csv dump used to run 57 minutes and 13.8 GB and print nothing.
 
 **What remains, by design**:
@@ -835,7 +835,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 - Tested: 100k rows (completes in ~3s)
 - Projected: 1M rows (~30s)
 - Memory: O(1) constant (~50-100MB regardless of size)
-- CLI: every `--stream` read is O(1), `view --limit 0` included since 0.21.1 — its rows are written as the reader produces them (§30, #635)
+- CLI: every `--stream` read is O(1), `view --limit 0` included since 0.22.0 — its rows are written as the reader produces them (§30, #635)
 
 **In-Memory API**: ~500k rows before OOM (8GB heap)
 

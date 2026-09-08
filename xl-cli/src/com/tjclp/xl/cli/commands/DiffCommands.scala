@@ -91,7 +91,7 @@ object DiffCommands:
 
   /**
    * Compare two workbooks, optionally restricted to one sheet name. `formulasOnly` compares formula
-   * cells by text alone, ignoring cached values (the rule before 0.21.1).
+   * cells by text alone, ignoring cached values (the rule before 0.22.0).
    *
    * Left when the filtered sheet exists in neither workbook.
    */

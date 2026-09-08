@@ -26,7 +26,7 @@ import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.{SstPolicy, WriterConfig}
 
 /**
- * The streaming contract of the 0.21.1 fixes, end to end through the harness.
+ * The streaming contract of the 0.22.0 fixes, end to end through the harness.
  *
  *   - GH-635: `--stream view --limit 0` streams — the same bytes as the bounded and the in-memory
  *     runs, for csv, json (bare and in the envelope) and markdown; `--limit -1` is a usage error; a
