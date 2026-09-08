@@ -111,6 +111,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`rename-sheet` refusals are typed, located and human-readable** (#608). A dependent formula
+  that mentions the sheet but cannot be parsed still refuses the whole rename before anything is
+  written, but now as `FORMULA_ERROR` (exit 3) — `INTERNAL` stays reserved for defects — with
+  `location.sheet`/`location.ref` naming the offending cell, the parser's own diagnostic in the
+  message (`Unknown function 'SINGLE' at position 3. Did you mean: SIGN?`, never the constructor
+  text `UnknownFunction(SINGLE,3,List(SIGN))`) and a hint (`fix or replace the formula at
+  Summary!I23 before renaming`). `SheetRenamer.renameLocated` carries the site (cell, conditional
+  format, data validation, defined name) alongside the error; `FormulaOps.shift` refusals and the
+  `putf --from`/`copy`/structural rewrite paths report the same parser diagnostic. The other sheet
+  verbs (`add-sheet`, `remove-sheet`, `move-sheet`, `copy-sheet`, hide/show, `name remove`) no
+  longer wrap their refusals in a plain exception: an unknown sheet is `SHEET_NOT_FOUND`, an
+  invalid name `INVALID_SHEET_NAME`, a missing `--to/--after/--before` on `move-sheet` is `USAGE`
+  (exit 2); every message text is unchanged. New goldens `rename-sheet-unrewritable[-json]`.
+- **`cell` quotes sheet qualifiers the way `deps` does** (#609). `Dependencies`/`Dependents` in
+  the text output and the `--json` arrays render a cross-sheet reference through the formula
+  printer (`SheetName.quoteForFormula`): `'On-Premise'!G9`, not `On-Premise!G9`, so the spelling is
+  a reference an agent can paste into `putf`/`eval` and the two verbs agree. Plain names stay bare
+  and same-sheet references unqualified. New goldens `cell-quoted-sheet[-json]`.
 - **`_xlfn.` storage prefix on conditional-formatting, data-validation and defined-name formulas**
   (#577). `CfCodec`, `DataValidationCodec` and the workbook's defined names now go through
   `FormulaStorage` like cell formulas: an Excel-authored `_xlfn.IFS(` in a rule reads bare and

@@ -24,7 +24,9 @@ import com.tjclp.xl.workbooks.{DefinedName, Workbook}
  *
  * Refuse-before-mutate: every text that mentions the old name is rewritten first, purely; if any
  * cannot be parsed the whole rename is `Left` and the workbook is returned untouched. An unknown
- * reference expression must not survive with silently changed meaning.
+ * reference expression must not survive with silently changed meaning. [[renameLocated]] says WHERE
+ * the unrewritable text lives ([[Site]]) so a caller can point at the cell (GH-608); [[rename]] is
+ * the same decision as a plain `XLResult`.
  *
  * ADR-017 invariant 1: every changed sheet is written back through `Workbook.put`, never
  * `copy(sheets = …)`, so `SourceContext.modifiedSheets` names exactly the sheets whose XML must be
@@ -38,13 +40,58 @@ import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 object SheetRenamer:
 
   /**
+   * Where a refused rename's unrewritable text lives, named as the caller's file knows it: sheets
+   * by their PRE-rename names.
+   */
+  enum Site derives CanEqual:
+    /** A cell formula. */
+    case Cell(sheet: SheetName, ref: ARef)
+
+    /** A typed conditional-format formula on `sheet`. */
+    case ConditionalFormat(sheet: SheetName)
+
+    /** A typed data-validation formula on `sheet`. */
+    case DataValidation(sheet: SheetName)
+
+    /** A workbook defined name's `refersTo`. */
+    case Name(name: String)
+
+    /**
+     * The site as the refusal message spells it: `Summary!I23` / `'Q1 Data'!C3` (a cell, quoted the
+     * way a formula would), `Sheet1!conditional format`, `Sheet1!data validation`, `defined name
+     * 'Total'`.
+     */
+    def describe: String = this match
+      case Cell(sheet, ref) => s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}"
+      case ConditionalFormat(sheet) =>
+        s"${SheetName.quoteForFormula(sheet.value)}!conditional format"
+      case DataValidation(sheet) => s"${SheetName.quoteForFormula(sheet.value)}!data validation"
+      case Name(name) => s"defined name '$name'"
+
+  /**
+   * A refused rename. `error` is what [[rename]] reports — a `FormulaError` whose message already
+   * names the site, or one of `Workbook.rename`'s own refusals; `site` is where the unrewritable
+   * text lives, `None` for the workbook-level refusals (`SheetNotFound`, `DuplicateSheet`).
+   */
+  final case class Refusal(site: Option[Site], error: XLError) derives CanEqual
+
+  private type Refused[A] = Either[Refusal, A]
+
+  /**
    * `Workbook.rename(from, to)` plus the reference rewrite described above. `Left` with the same
    * errors `Workbook.rename` reports (`SheetNotFound`, `DuplicateSheet`) or a `FormulaError` naming
    * the first text that mentions `from` but cannot be parsed — in every `Left` case the input
-   * workbook is untouched.
+   * workbook is untouched. [[renameLocated]] with the [[Site]] dropped.
    */
   def rename(wb: Workbook, from: SheetName, to: SheetName): XLResult[Workbook] =
-    if from == to then wb.rename(from, to)
+    renameLocated(wb, from, to).left.map(_.error)
+
+  /**
+   * [[rename]], with every refusal carrying WHERE it fired: the cell, the sheet whose conditional
+   * format or data validation, or the defined name whose text cannot be rewritten (GH-608).
+   */
+  def renameLocated(wb: Workbook, from: SheetName, to: SheetName): Either[Refusal, Workbook] =
+    if from == to then wb.rename(from, to).left.map(Refusal(None, _))
     else
       for
         // `Workbook.rename` FIRST: it is pure, so a later `Left` simply discards `renamed` and the
@@ -52,7 +99,7 @@ object SheetRenamer:
         // precedence over a formula refusal. The rewrite then runs over the RENAMED sheets, so the
         // GH-222 typed-chart remap `Workbook.rename` performed on every sheet is carried forward
         // (rewriting the pre-rename sheets and putting them back would overwrite it).
-        renamed <- wb.rename(from, to)
+        renamed <- wb.rename(from, to).left.map(Refusal(None, _))
         rewrittenSheets <- renamed.sheets
           .zip(wb.sheets)
           .traverse((sheet, original) => rewriteSheet(sheet, original.name, from, to))
@@ -94,25 +141,29 @@ object SheetRenamer:
     case _ => false
 
   /**
-   * `Some(rewritten)` when anything on the sheet changed, `None` when it rides untouched. `label`
-   * is the sheet's PRE-rename name: refusals must name the sheet as the caller's file knows it.
+   * `Some(rewritten)` when anything on the sheet changed, `None` when it rides untouched.
+   * `labelName` is the sheet's PRE-rename name: refusals must name the sheet as the caller's file
+   * knows it.
    */
   private def rewriteSheet(
     sheet: Sheet,
     labelName: SheetName,
     from: SheetName,
     to: SheetName
-  ): XLResult[Option[Sheet]] =
-    val label = SheetName.quoteForFormula(labelName.value)
-    def rewriteText(where: String)(text: String): XLResult[String] =
-      FormulaOps.renameSheet(text, from, to).left.map(located(s"$label!$where", _))
+  ): Refused[Option[Sheet]] =
+    def rewriteText(site: Site)(text: String): Refused[String] =
+      FormulaOps.renameSheet(text, from, to).left.map(located(site, _))
     for
       changedCells <- sheet.cells.toVector
         .sortBy((ref, _) => (ref.row.index0, ref.col.index0))
-        .traverse((ref, cell) => rewriteCell(ref, cell, rewriteText(ref.toA1)))
+        .traverse((ref, cell) => rewriteCell(ref, cell, rewriteText(Site.Cell(labelName, ref))))
         .map(_.flatten)
-      cfs <- sheet.conditionalFormats.traverse(rewriteCf(_, rewriteText("conditional format")))
-      dvs <- sheet.dataValidations.traverse(rewriteDv(_, rewriteText("data validation")))
+      cfs <- sheet.conditionalFormats.traverse(
+        rewriteCf(_, rewriteText(Site.ConditionalFormat(labelName)))
+      )
+      dvs <- sheet.dataValidations.traverse(
+        rewriteDv(_, rewriteText(Site.DataValidation(labelName)))
+      )
     yield
       val cfChanged = cfs != sheet.conditionalFormats
       val dvChanged = dvs != sheet.dataValidations
@@ -130,8 +181,8 @@ object SheetRenamer:
   private def rewriteCell(
     ref: ARef,
     cell: Cell,
-    rewrite: String => XLResult[String]
-  ): XLResult[Option[(ARef, Cell)]] =
+    rewrite: String => Refused[String]
+  ): Refused[Option[(ARef, Cell)]] =
     cell.value match
       // GH-430: a data-table record's TABLE(...) text is derived from local geometry, never parsed
       case CellValue.Formula(_, _, _: FormulaKind.DataTable) => Right(None)
@@ -146,7 +197,7 @@ object SheetRenamer:
     name: DefinedName,
     from: SheetName,
     to: SheetName
-  ): XLResult[DefinedName] =
+  ): Refused[DefinedName] =
     // A refersTo may be a top-level comma union the parser rejects as a whole; each segment is a
     // formula of its own (the StructuralEditor convention).
     StructuralEditor
@@ -155,7 +206,7 @@ object SheetRenamer:
       .map(segments => segments.mkString(","))
       .map(rewritten => if rewritten == name.formula then name else name.copy(formula = rewritten))
       .left
-      .map(located(s"defined name '${name.name}'", _))
+      .map(located(Site.Name(name.name), _))
 
   /**
    * Typed CF formulas follow the rename (CellIs.formula1/formula2, Expression.formula, Cfvo.Formula
@@ -164,16 +215,16 @@ object SheetRenamer:
    */
   private def rewriteCf(
     cf: ConditionalFormat,
-    rewrite: String => XLResult[String]
-  ): XLResult[ConditionalFormat] =
-    def cfvo(v: Cfvo): XLResult[Cfvo] = v match
+    rewrite: String => Refused[String]
+  ): Refused[ConditionalFormat] =
+    def cfvo(v: Cfvo): Refused[Cfvo] = v match
       case Cfvo.Formula(f) => rewrite(f).map(Cfvo.Formula.apply)
       case other => Right(other)
-    def point(p: CfPoint): XLResult[CfPoint] = cfvo(p.cfvo).map(c => p.copy(cfvo = c))
+    def point(p: CfPoint): Refused[CfPoint] = cfvo(p.cfvo).map(c => p.copy(cfvo = c))
     cf match
       case ConditionalFormat.Rules(ranges, rules, pivot) =>
         rules
-          .traverse[XLResult, CfRule] {
+          .traverse[Refused, CfRule] {
             case r: CfRule.CellIs =>
               for
                 f1 <- rewrite(r.formula1)
@@ -202,11 +253,11 @@ object SheetRenamer:
    */
   private def rewriteDv(
     dv: DataValidation,
-    rewrite: String => XLResult[String]
-  ): XLResult[DataValidation] =
+    rewrite: String => Refused[String]
+  ): Refused[DataValidation] =
     dv match
       case rules: DataValidation.Rules =>
-        val kind: XLResult[DvKind] = rules.kind match
+        val kind: Refused[DvKind] = rules.kind match
           case DvKind.List(f) => rewrite(f).map(DvKind.List.apply)
           case DvKind.Custom(f) => rewrite(f).map(DvKind.Custom.apply)
           case DvKind.AnyValue => Right(DvKind.AnyValue)
@@ -218,7 +269,11 @@ object SheetRenamer:
         kind.map(k => rules.copy(kind = k))
       case preserved: DataValidation.Preserved => Right(preserved)
 
-  /** Prefix a refusal with where the offending text lives, keeping the text itself. */
-  private def located(where: String, error: XLError): XLError = error match
-    case XLError.FormulaError(formula, reason) => XLError.FormulaError(formula, s"$where: $reason")
-    case other => other
+  /**
+   * Attach the site to a refusal, and prefix the message with it so a text reader sees where the
+   * offending text lives (`Summary!I23: Cannot rewrite …`); the formula text itself is kept.
+   */
+  private def located(site: Site, error: XLError): Refusal = error match
+    case XLError.FormulaError(formula, reason) =>
+      Refusal(Some(site), XLError.FormulaError(formula, s"${site.describe}: $reason"))
+    case other => Refusal(Some(site), other)

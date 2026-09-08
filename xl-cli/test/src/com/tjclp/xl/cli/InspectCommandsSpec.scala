@@ -561,6 +561,38 @@ class InspectCommandsSpec extends CatsEffectSuite:
       )
   }
 
+  test("cell quotes a cross-sheet qualifier the way deps does: 'On-Premise'!G9 (GH-609)") {
+    // A hyphenated sheet name must be quoted in a formula; `cell` printed `On-Premise!G9` (not a
+    // reference an agent can paste into `putf`/`eval`) while `deps` printed `'On-Premise'!G9`.
+    for
+      text <- CliHarness.run("-f", file("qualified.xlsx"), "cell", "Summary!G9")
+      json <- CliHarness.run("-f", file("qualified.xlsx"), "--json", "cell", "Summary!G9")
+      deps <- CliHarness.run("-f", file("qualified.xlsx"), "deps", "Summary!G9")
+      reverse <- CliHarness.run(
+        "-f",
+        file("qualified.xlsx"),
+        "-s",
+        "On-Premise",
+        "--json",
+        "cell",
+        "G9"
+      )
+      plain <- CliHarness.run("-f", file("linked.xlsx"), "--json", "cell", "Sheet1!A1")
+    yield
+      assertEquals(text.exit, 0, text.stderr)
+      assert(
+        text.stdout.endsWith("Dependencies: 'On-Premise'!G9\nDependents: (none)\n"),
+        text.stdout
+      )
+      assertEquals(deps.exit, 0, deps.stderr)
+      assert(deps.stdout.contains("'On-Premise'!G9"), deps.stdout)
+      assertEquals(names(data(json)("dependencies")), Vector("'On-Premise'!G9"))
+      // the reverse edge: the reader lives on a sheet whose name needs no quoting
+      assertEquals(names(data(reverse)("dependents")), Vector("Summary!G9"))
+      // a plain sheet name stays bare, same-sheet refs stay unqualified
+      assertEquals(names(data(plain)("dependents")), Vector("A3", "Sheet2!A1"))
+  }
+
   test("Argv.verbs lists the three inspection verbs in parser order") {
     IO {
       val verbs = Argv.verbs

@@ -178,7 +178,15 @@ object ParseError:
    * Convert ParseError to XLError for integration with existing error handling.
    */
   def toXLError(error: ParseError, formula: String): XLError =
-    val message = error match
+    XLError.FormulaError(formula, describe(error))
+
+  /**
+   * The diagnostic as a person reads it — `Unknown function 'SUMM' at position 1. Did you mean:
+   * SUM?` — the ONE rendering of a parse failure every surface shows (`eval`, `putf`, the sheet
+   * renamer, the structural editor, GH-608), never a case's constructor text.
+   */
+  def describe(error: ParseError): String =
+    error match
       case UnexpectedChar(char, pos, ctx) =>
         s"Unexpected character '$char' at position $pos: $ctx"
       case UnexpectedEOF(pos, expected) =>
@@ -206,8 +214,6 @@ object ParseError:
         s"Formula nesting too deep: $depth levels (max $max)"
       case GenericError(msg, posOpt) =>
         posOpt.fold(msg)(pos => s"$msg at position $pos")
-
-    XLError.FormulaError(formula, message)
 
   /**
    * Format error with visual pointer to error location.

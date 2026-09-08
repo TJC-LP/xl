@@ -1287,6 +1287,13 @@ xl -f f.xlsx -o o.xlsx move-sheet Summary --to 0             # or --after/--befo
 xl -f f.xlsx -o o.xlsx copy-sheet Template "Q2 Report"
 ```
 
+`rename-sheet` rewrites every reference to the old name (formulas on every sheet, defined names,
+conditional formats, data validations). A dependent that mentions the sheet but cannot be parsed
+refuses the whole rename before anything is written: `FORMULA_ERROR` (exit 3) with
+`location.sheet`/`location.ref` naming the cell, the parser's own diagnostic in the message and a
+hint to fix or replace that formula first. An unknown sheet on any of these verbs is
+`SHEET_NOT_FOUND`, a name Excel would reject `INVALID_SHEET_NAME`.
+
 ---
 
 ### Structural editing: `insert-rows`, `delete-rows`, `insert-cols`, `delete-cols`
