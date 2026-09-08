@@ -93,6 +93,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`--strict` on `batch` and the structural verbs no longer fails for a recalculation failure on a
+  cell outside the edit's cone whose cache the written file kept** (#606). The whole-book pass
+  behind those verbs still runs, but a failure it never applied to the output is not a condition of
+  the write; a script that relied on `--strict` to reject a book full of cached-but-unevaluable
+  formulas will now pass, as it always did for `put`/`putf`/`fill`/`copy`. Failures inside the cone
+  (every authored formula) and on cells the file leaves uncached still fail it.
 - `fill --no-recalc` caches uncached formulas on source rows inside the target and evaluates them
   against the fully filled sheet (previously source rows were skipped and evaluated against the
   partially filled sheet). Group/ungroup validation reports a malformed span before an invalid

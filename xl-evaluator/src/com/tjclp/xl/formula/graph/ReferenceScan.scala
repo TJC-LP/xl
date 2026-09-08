@@ -5,7 +5,7 @@ import java.util.Locale
 import scala.annotation.tailrec
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.Evaluator
 import com.tjclp.xl.formula.functions.FunctionRegistry
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -35,8 +35,10 @@ import com.tjclp.xl.workbooks.{DefinedName, Workbook}
  *   - `[` anywhere outside a string: unbounded — structured (`Table1[Col]`) and external
  *     (`[1]Sheet!A1`) references stay coarse; readers with a pinned closed-workbook cache never
  *     reach this scanner (`DependencyGraph.unresolvedReaders` excludes them).
- *   - `#` error literals (`#REF!`, `#N/A`, `#DIV/0!`, …): dead operands, no references. Any other
- *     `#…` token is unknown.
+ *   - `#` error literals — the seven `CellError` models (`#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`,
+ *     `#NULL!`, `#NUM!`, `#VALUE!`): dead operands, no references. Any other `#…` token is unknown:
+ *     `#SPILL!`, `#CALC!`, and a spill reference `A1#`, whose trailing `#` deliberately matches no
+ *     literal — the reference reads A1's whole spill range, not A1.
  *   - numbers: none — except `n:m` between two integers, a whole-row range.
  *   - identifiers: a call (`NAME(`) to a registry function contributes nothing — its arguments are
  *     scanned like any other text — except a dynamic-reference function (INDIRECT, OFFSET) and the
@@ -62,9 +64,19 @@ import com.tjclp.xl.workbooks.{DefinedName, Workbook}
  *     operator is harmless to an over-approximation): no references.
  *   - any other character: unbounded.
  *
- * Coarse on purpose: `LET`/`LAMBDA` parameter names look like defined names (unbounded when they do
- * not resolve), and no attempt is made to shrink a range by what a function actually consumes. Pure
- * and total; the scanner never throws.
+ * Coarse on purpose, and documented as such:
+ *   - `LET`/`LAMBDA` parameter names look like defined names and are unbounded when they do not
+ *     resolve — in a blind reader, and in a LAMBDA body reached through a `MyFunc(…)` call.
+ *   - A spill reference `A1#` is unbounded (see the `#` class above), not read as `A1`.
+ *   - A call to a function neither the registry nor the name table knows reads only its arguments.
+ *     A VBA UDF can read anything, so `=MyUdf(A1)` is not truly bounded by `{A1}`; the rule is kept
+ *     because `SINGLE`, `RRI` and `RATE(n,,pv,fv,)` are exactly such calls — the readers GH-606
+ *     exists for — and a possibly stale value serves a `data_only` reader better than a deleted
+ *     one.
+ *   - An unquoted digit-leading sheet qualifier (`2024!A1`) is not lexed as a qualifier and is
+ *     unbounded; Excel writes it quoted (`'2024'!A1`), which is bounded.
+ *   - No attempt is made to shrink a range by what a function actually consumes.
+ * Pure and total; the scanner never throws.
  */
 private[xl] object ReferenceScan:
 
@@ -125,29 +137,19 @@ private[xl] object ReferenceScan:
   /** Name-chain depth guard, as in `DependencyGraph.unresolvedReaders`. */
   private val MaxNameDepth = 100
 
-  /** Excel's error literals; each is a dead operand that reads nothing. */
-  private val ErrorLiterals: Vector[String] = Vector(
-    "#N/A",
-    "#REF!",
-    "#DIV/0!",
-    "#NAME?",
-    "#VALUE!",
-    "#NUM!",
-    "#NULL!",
-    "#SPILL!",
-    "#CALC!",
-    "#GETTING_DATA",
-    "#BLOCKED!",
-    "#CONNECT!",
-    "#FIELD!",
-    "#UNKNOWN!",
-    "#BUSY!",
-    "#PYTHON!",
-    "#EXTERNAL!"
-  )
+  /**
+   * Excel's error literals as `CellError` spells them, longest first so `#NAME?`, `#NUM!` and
+   * `#NULL!` are matched before `#N/A` could claim their prefix. Each is a dead operand that reads
+   * nothing. A `#…` token that is not one of them — `#SPILL!`, `#CALC!`, a spill reference `A1#` —
+   * is unknown and makes the reach unbounded: the whitelist is deliberate, since a generic `#…`
+   * lexer would read `A1#` as `A1`. Derived from the model so a new `CellError` lands here without
+   * a table edit; independent of the parser's own handling of error literals.
+   */
+  private val ErrorLiterals: Vector[String] =
+    CellError.values.toVector.map(_.toExcel).sortBy(literal => -literal.length)
 
   /** Characters that separate references without contributing any. */
-  private val Inert = "+-*/^&=<>%,;(){}@"
+  private val Inert: Set[Char] = "+-*/^&=<>%,;(){}@".toSet
 
   /**
    * Registry functions whose reads the argument text does not bound. `ANCHORARRAY` — the stored
@@ -188,7 +190,10 @@ private[xl] object ReferenceScan:
     private val dynamicFunctions: Set[String] = FunctionRegistry.dynamicFunctionNames.toSet
     private val canonicalSheet: SheetName => SheetName =
       DependencyGraph.sheetCanonicaliser(workbook)
-    // Build-local memo of resolved names; a guard-truncated result is only ever more conservative
+    // Build-local memo of resolved names, keyed without the visiting path: a result the cycle/depth
+    // guard truncated to Unbounded on one path is reused on another where the name might have been
+    // bounded — sound (only ever more conservative) and deterministic for a given workbook, since
+    // `reaches` visits readers in one fixed order; precision, not soundness, is path-dependent.
     private val names = scala.collection.mutable.HashMap.empty[NameKey, Reach]
 
     def reach(text: String, context: Context): Reach =
@@ -207,7 +212,7 @@ private[xl] object ReferenceScan:
             case Some(end) => scan(s, end, context, acc)
             case None => Reach.Unbounded
         else if c == '[' then Reach.Unbounded
-        else if c.isWhitespace || Inert.indexOf(c.toInt) >= 0 then scan(s, i + 1, context, acc)
+        else if c.isWhitespace || Inert.contains(c) then scan(s, i + 1, context, acc)
         else
           unit(s, i, context) match
             case Some((Reach.Areas(areas), end)) => scan(s, end, context, acc ++ areas)
@@ -377,6 +382,16 @@ private[xl] object ReferenceScan:
      * the areas are exactly its declared references. Otherwise the definition text is scanned like
      * a formula: the textual rules resolve nested names (an unparseable one reached through a
      * parseable alias included) and make a dynamic call unbounded.
+     *
+     * The parsed branch uses `extractQualifiedDependencies`'s `cellsFor` as a VISITOR, not a
+     * resolver: it records each range and returns no cells, and the points come back as the result.
+     * Soundness rests on two properties of that extraction, both pinned by `ReferenceScanSpec` ("a
+     * parseable definition's reach covers every reference node shape"): (a) `cellsFor` is invoked
+     * with the FULL declared range of every range-typed node — `RangeRef`, `SheetRange`,
+     * `Aggregate` locations, `ArgValue.Range`/`Cells` — and every cell-typed node yields a point
+     * (`go` is exhaustive over `TExpr` with no catch-all, so a new node type is a compile error
+     * there, not a silent hole here); (b) `preciseLookups` stays false — with it true, a
+     * VLOOKUP/HLOOKUP range is narrowed to two strips and the reach would under-approximate.
      */
     private def definitionReach(dn: DefinedName, context: Context): Reach =
       val scope = Evaluator.definedNameScope(workbook, dn).map(_.name)
@@ -399,6 +414,7 @@ private[xl] object ReferenceScan:
               Set.empty
             ,
             workbook = Some(workbook),
+            preciseLookups = false, // (b) above: the full declared range, never the lookup strips
             canonicalSheet = canonicalSheet
           )
           Reach.Areas(ranges.toSet ++ points.map(q => (q.sheet, CellRange(q.ref, q.ref))))
