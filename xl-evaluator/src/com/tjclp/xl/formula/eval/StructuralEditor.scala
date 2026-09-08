@@ -10,7 +10,7 @@ import com.tjclp.xl.cf.{CfRule, Cfvo, ConditionalFormat}
 import com.tjclp.xl.error.{XLError, XLException, XLResult}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
-import com.tjclp.xl.formula.parser.FormulaParser
+import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.printer.{FormulaOps, FormulaPrinter, FormulaShifter}
 
 /**
@@ -138,23 +138,28 @@ object StructuralEditor:
 
   /**
    * An unknown reference expression must not survive an edit with silently changed meaning. The
-   * text gate is `FormulaOps.mentionsSheet` — the one qualifier scan the renamer (GH-559) shares.
+   * text gate is `FormulaOps.mentionsSheet` — the one qualifier scan the renamer (GH-559) shares;
+   * the reason carries the parser's diagnostic (`ParseError.describe`), as the renamer's does.
    */
   private def definedNameRefusal(wb: Workbook, target: SheetName, delta: Int): XLResult[Unit] =
     val unsupported =
       if delta == 0 then None
       else
-        wb.metadata.definedNames.find { name =>
-          splitTopLevelCommas(name.formula).exists(segment =>
-            FormulaOps.mentionsSheet(segment, target) && FormulaParser.parse(segment).isLeft
-          )
-        }
+        wb.metadata.definedNames.iterator
+          .flatMap { name =>
+            splitTopLevelCommas(name.formula).iterator
+              .filter(FormulaOps.mentionsSheet(_, target))
+              .flatMap(segment =>
+                FormulaParser.parse(segment).swap.toOption.map(err => (name, err))
+              )
+          }
+          .nextOption()
     unsupported
-      .map(name =>
+      .map((name, err) =>
         XLError.FormulaError(
           name.formula,
-          s"Cannot safely rewrite defined name '${name.name}' during a structural edit of ${target.value}; " +
-            "its reference syntax is unsupported"
+          s"Cannot safely rewrite defined name '${name.name}' during a structural edit of ${target.value}: " +
+            ParseError.describe(err)
         )
       )
       .toLeft(())

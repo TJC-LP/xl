@@ -1,0 +1,39 @@
+## args
+-f
+<DIR>/qualified.xlsx
+--json
+cell
+Summary!G9
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "cell",
+  "version": "<VERSION>",
+  "data": {
+    "ref": "G9",
+    "sheet": "Summary",
+    "kind": "formula",
+    "value": 10,
+    "formatted": "10",
+    "formula": {
+      "expression": "='On-Premise'!G9*2",
+      "kind": "normal",
+      "cached": true
+    },
+    "hidden": false,
+    "mergedInto": null,
+    "style": null,
+    "comment": null,
+    "hyperlink": null,
+    "dependencies": [
+      "'On-Premise'!G9"
+    ],
+    "dependents": []
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

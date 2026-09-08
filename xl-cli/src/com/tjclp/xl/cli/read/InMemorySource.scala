@@ -86,17 +86,21 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
       )
       // ADR-017 §2.10: the bounded cross-sheet graph — precedents at cell granularity (ranges as
       // their occupied cells), dependents through the symbolic range index. Same-sheet refs are
-      // unqualified, cross-sheet ones carry the sheet.
+      // unqualified; cross-sheet ones carry the sheet spelled as a formula would (`QualifiedRef`'s
+      // own rendering, the printer `deps` uses): `'On-Premise'!G9`, not `On-Premise!G9` (GH-609).
+      // Ordered by (sheet, row, column) BEFORE rendering, so the order owes nothing to quoting.
       val current = DependencyGraph.QualifiedRef(s.name, ref)
       val graph = QualifiedGraph.of(wb)
       def show(q: DependencyGraph.QualifiedRef): String =
-        if q.sheet == s.name then q.ref.toA1 else s"${q.sheet.value}!${q.ref.toA1}"
+        if q.sheet == s.name then q.ref.toA1 else q.toString
+      def listed(qs: Iterable[DependencyGraph.QualifiedRef]): Vector[String] =
+        qs.toVector.sortBy(q => (q.sheet.value, q.ref.row.index0, q.ref.col.index0)).map(show)
       CellDetail(
         record,
         s.getComment(ref),
         cell.flatMap(_.hyperlink),
-        Some(graph.precedentsOf(current).toVector.map(show).sorted),
-        Some(graph.dependentsOf(current).toVector.map(show).sorted)
+        Some(listed(graph.precedentsOf(current))),
+        Some(listed(graph.dependentsOf(current)))
       )
     }
 

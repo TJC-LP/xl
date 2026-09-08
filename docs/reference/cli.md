@@ -497,8 +497,11 @@ Value: Revenue
 occupied cells — and `Dependents` the formulas that read the cell, by name or through a range that
 contains it (an empty cell inside a summed range still names the sum). Empty cells inside a range
 and ranges over a sheet the workbook does not have are not listed (since 0.20.0; before, `SUM(A:A)`
-listed 1,048,576 entries). Same-sheet refs are unqualified, cross-sheet ones carry the sheet. For
-more than one hop, use `deps`. Under `--stream` the graph is not built and both lines say so:
+listed 1,048,576 entries). Same-sheet refs are unqualified; cross-sheet ones carry the sheet
+quoted as a formula would spell it (`'On-Premise'!G9`, `Sheet2!A1`), the same rendering `deps` and
+`search` use, so the text pastes into `putf`/`eval`; both lists are ordered by sheet, then row, then
+column. For more than one hop, use `deps`. Under `--stream` the graph is not built and both lines
+say so:
 `Dependencies: (not available in streaming mode)` / `Dependents: (not available in streaming mode)`
 (before 0.21.0 streaming listed the formula's reference tokens — `B1, B1:B3, B3` for
 `=SUM(B1:B3)` — which was neither the precedent set nor exact; drop `--stream` for the graph).
@@ -1314,6 +1317,14 @@ xl -f f.xlsx -o o.xlsx move-sheet Summary --to 0             # or --after/--befo
 xl -f f.xlsx -o o.xlsx copy-sheet Template "Q2 Report"
 ```
 
+`rename-sheet` rewrites every reference to the old name (formulas on every sheet, defined names,
+conditional formats, data validations). A dependent that mentions the sheet but cannot be parsed
+refuses the whole rename before anything is written: `FORMULA_ERROR` (exit 3) with `location`
+naming the cell (`sheet` and `ref`) — or the sheet alone for a conditional format or data
+validation — the parser's own diagnostic in the message and a hint to fix or replace that formula
+first. An unknown sheet on any of these verbs is `SHEET_NOT_FOUND`, a name Excel would reject
+`INVALID_SHEET_NAME`, and a `move-sheet` without `--to`/`--after`/`--before` is `USAGE` (exit 2).
+
 ---
 
 ### Structural editing: `insert-rows`, `delete-rows`, `insert-cols`, `delete-cols`
@@ -1367,7 +1378,9 @@ document — **[`generated/batch-ops.md`](generated/batch-ops.md)** lists every 
 fields, types, required flags, aliases, example, streamability and CLI twin, and
 `xl batch --schema` prints the same as a JSON Schema. An unknown `op` is `BATCH_OP_UNKNOWN`
 (exit 2) with a `did you mean`; an op that fails to apply is `BATCH_OP_FAILED` with
-`location.opIndex` (1-based).
+`location.opIndex` (1-based) and the op's `sheet` — or, when the cause names a cell (a
+`rename-sheet` that cannot rewrite `Summary!I23`), that cell's `sheet` and `ref` — plus the cause's
+own `hint`.
 
 **Rules every op follows**:
 
