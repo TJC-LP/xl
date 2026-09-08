@@ -82,6 +82,32 @@ object api:
   // Patch types
   export patch.Patch
 
+  // The edit algebra (ADR-017 §2.12, W2.1): Edit and its targets, hints, overlay, scope, schema
+  // and the formula-support seam. Edit.FillDir / SortDir / SortMode stay nested in the companion
+  // and are deliberately NOT exported here: xl-cli's FillDirection / SortDirection / SortMode must
+  // stay unambiguous under `import com.tjclp.xl.{*, given}`. `ops.Scope` travels as `EditScope`:
+  // a bare `Scope` on the wildcard surface collides with JMH's and ZIO's `Scope` in any file that
+  // imports both (xl-benchmarks did).
+  export ops.{
+    Applied,
+    Area,
+    ClearWhat,
+    ColSpan,
+    Edit,
+    EditField,
+    EditSchema,
+    EditSpec,
+    FieldKind,
+    FormatHint,
+    FormulaSupport,
+    Loc,
+    Planned,
+    RowSpan,
+    Scope as EditScope,
+    StyleMode,
+    StyleOverlay
+  }
+
   // Workbook types
   export workbooks.{Workbook, WorkbookMetadata, CalcPr, CalcMode}
 

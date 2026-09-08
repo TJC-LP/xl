@@ -7,11 +7,12 @@ import com.tjclp.xl.charts.{Chart, DataRef, Series, SeriesName}
 import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
 import com.tjclp.xl.drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, RowSpan}
+import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, RowSpan, Scope}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.tables.{TableColumn, TableSpec}
+import com.tjclp.xl.workbooks.Workbook
 
 import scala.collection.immutable.{Map, Set}
 import scala.util.boundary, boundary.break
@@ -1286,6 +1287,19 @@ final case class Sheet(
 
   /** Actively strip the autoFilter, even one preserved from the source file (GH-429). */
   def removeAutoFilter: Sheet = copy(autoFilter = Some(AutoFilterState.Remove))
+
+  /**
+   * Apply `edits` to this sheet alone (ADR-017 §2.12): a one-sheet workbook under `Scope.of(name)`,
+   * fail-fast and all-or-nothing, giving back the sheet the scope names afterwards (a rename of
+   * this sheet retargets it). An edit naming another sheet fails `SheetNotFound`. Needs a
+   * [[FormulaSupport]]: the scripting prelude and `import com.tjclp.xl.{*, given}` (with
+   * xl-evaluator) provide the evaluator's; `FormulaSupport.textOnly` refuses what rewrites
+   * formulas.
+   */
+  def edit(edits: Edit*)(using FormulaSupport): XLResult[Sheet] =
+    Edit.applyAll(Workbook(this), edits.toVector, Scope.of(name)).flatMap { applied =>
+      applied.workbook(applied.scope.defaultSheet.getOrElse(name))
+    }
 
 object Sheet:
   // ----- Shared parsing for the runtime twins (GH-465) -----

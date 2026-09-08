@@ -30,8 +30,11 @@ final case class EditField(
  * The metadata row of one [[Edit]] case — the `OpSpec` shape of ADR-017 §2.6 without the JSON
  * example (xl-core is JSON-free; the batch codec of Wave 2.2 owns examples). `name` is the kebab
  * form of the case; `batchOp` the Wave 1 batch op the case is a form of (`put-values` → `put`);
- * `cliVerb` the verb that lowers to it. `idempotent` declares the class the idempotence law is
- * asserted for.
+ * `cliVerb` the verb that lowers to it. `idempotent` declares the class the idempotence law
+ * (EditLawsSpec) asserts `apply(e) == apply(e, e)` for, over the law generators' domain — a `fill`
+ * whose target extends the source rather than preceding it; the interpreter has no evaluator, so an
+ * edit whose second pass would read a cache the first pass dropped (`sort` by a formula column) is
+ * declared outside the class rather than asserted on a lucky fixture.
  */
 final case class EditSpec(
   name: String,
@@ -259,7 +262,10 @@ object EditSchema:
     since = "0.9.6",
     cliVerb = Some("sort"),
     cellMutating = true,
-    needsFormula = true
+    needsFormula = true,
+    // A moved formula loses its cache (a shifted cache would be a lie), so a formula-valued key
+    // can order differently on a second pass until the touched range is recalculated.
+    idempotent = false
   )
 
   private val clear = spec(

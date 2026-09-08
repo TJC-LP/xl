@@ -6,7 +6,11 @@ import com.tjclp.xl.cf.CfRule
 import com.tjclp.xl.charts.Chart
 import com.tjclp.xl.codec.CellWriter
 import com.tjclp.xl.drawings.{DrawingAnchor, ImageData}
+import com.tjclp.xl.error.XLResult
+import com.tjclp.xl.patch.Patch
+import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.workbooks.Workbook
 
 /**
  * The edit algebra (ADR-017 §2.12): one case per batch op of the Wave 1 `OpRegistry` (the two `put`
@@ -151,7 +155,10 @@ enum Edit derives CanEqual:
   /** Rename a sheet and every reference to it; a rename of the scope's default retargets it. */
   case RenameSheet(from: SheetName, to: SheetName)
 
-  /** Move a sheet to an index, or after/before a named one (exactly one of the three). */
+  /**
+   * Move a sheet to `toIndex` (its final 0-based position among the sheets; the last position is
+   * `sheetCount - 1`), or after/before a named one — exactly one of the three.
+   */
   case MoveSheet(
     name: SheetName,
     toIndex: Option[Int],
@@ -201,3 +208,32 @@ object Edit:
 
   /** [[put]] at a bare cell of the scope's default sheet. */
   def put[A: CellWriter](ref: ARef, value: A): Edit = put(Loc(None, ref), value)
+
+  // ----- the one interpreter (ADR-017 §2.12), reached through the companion -----
+
+  /** The edit-local checks that need no workbook: counts, spans, the guards the model throws on. */
+  def validate(edit: Edit)(using FormulaSupport): XLResult[Unit] = EditInterpreter.validate(edit)
+
+  /** The [[Planned]] row of every edit — what [[applyAll]] would touch — without the workbook. */
+  def plan(wb: Workbook, edits: Vector[Edit], scope: Scope)(using
+    FormulaSupport
+  ): XLResult[Vector[Planned]] =
+    EditInterpreter.plan(wb, edits, scope)
+
+  /**
+   * Apply `edits` in order under `scope`: fail-fast and all-or-nothing, so a `Left` is
+   * `EditFailed(index, name, cause)` at the 1-based position that failed and the input workbook is
+   * never partially written. Every changed sheet goes back through `Workbook.put` (invariant 1).
+   */
+  def applyAll(wb: Workbook, edits: Vector[Edit], scope: Scope)(using
+    FormulaSupport
+  ): XLResult[Applied] =
+    EditInterpreter.applyAll(wb, edits, scope)
+
+  /**
+   * The Sheet-local subset as a `Patch` over `existing`, or `None` when the edit needs the formula
+   * support, another sheet, the workbook, or a state the kernel has no case for. Coherence law
+   * (EditLawsSpec): `lower(e, s) == Some(p)` and `e` applying to `s` imply the result equals
+   * `Patch.applyPatch(s, p)`.
+   */
+  def lower(edit: Edit, existing: Sheet): Option[Patch] = EditInterpreter.lower(edit, existing)

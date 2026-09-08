@@ -6,6 +6,7 @@ import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.cf.CfRule
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.XLResult
+import com.tjclp.xl.ops.{Edit, PatchLowering}
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
 import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.styles.CellStyle
@@ -91,6 +92,16 @@ enum Patch:
   case Batch(patches: Vector[Patch])
 
 object Patch:
+
+  /**
+   * The edits that mean the same as `patch` on `sheet` (ADR-017 §2.12), or `None` when no edit
+   * sequence reproduces it EXACTLY (a `ClearStyle` on a cell that does not exist, a `Remove` inside
+   * a merged region, column/row properties beyond width/height/visibility). Desugar-coherence law
+   * (EditLawsSpec): applying them under the sheet's scope equals `applyPatch(sheet, patch)`.
+   */
+  def toEdits(patch: Patch, sheet: Sheet): Option[Vector[Edit]] =
+    PatchLowering.toEdits(patch, sheet)
+
   /** Empty patch (identity element) */
   val empty: Patch = Batch(Vector.empty)
 

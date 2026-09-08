@@ -3,14 +3,15 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.EvalFormulaSupport
-import com.tjclp.xl.ops.FormulaSupport
 import munit.FunSuite
 
 /**
  * W2.1 (ADR-017 §2.12), the formula half: `EvalFormulaSupport` is the evaluator behind the core
  * `Edit` interpreter — `validate` parses, `shift` is `FormulaOps.shift`, the structural edits are
  * `StructuralEditor.*Checked`, `renameSheet` is `SheetRenamer.rename` — and
- * `import com.tjclp.xl.{*, given}` supplies it as the `given FormulaSupport`.
+ * `import com.tjclp.xl.{*, given}` supplies it as the `given FormulaSupport`, so the edits the
+ * text-only support refuses (a drag, an insert, a rename) apply here and rewrite the formulas of
+ * every sheet.
  */
 class EvalFormulaSupportSpec extends FunSuite:
 
@@ -89,10 +90,24 @@ class EvalFormulaSupportSpec extends FunSuite:
     assert(EvalFormulaSupport.renameSheet(book, Data, Other).isLeft)
   }
 
-  test("import com.tjclp.xl.{*, given} supplies EvalFormulaSupport as the given FormulaSupport") {
+  test(
+    "import com.tjclp.xl.{*, given} supplies EvalFormulaSupport and the interpreter runs on it"
+  ) {
     assert(summon[FormulaSupport] eq EvalFormulaSupport)
-    // and xl-core's text-only instance is still reachable explicitly, refusing what it cannot do
-    FormulaSupport.textOnly.insertRows(book, Data, Row.from0(0), 1) match
-      case Left(XLError.UnsupportedCapability("insert-rows", _, _)) => ()
+    val r = book.editIn(Data)(
+      Edit.DragFormula(Area(None, ref"C1:C2"), "=A1*3", ref"C1", None),
+      Edit.Fill(Area(None, CellRange(ref"B1", ref"B1")), ref"B1:B2", Edit.FillDir.Down),
+      Edit.InsertRows(None, Row.from0(0), 1),
+      Edit.RenameSheet(Data, Renamed)
+    )
+    val data = r.flatMap(_(Renamed)).fold(e => fail(e.message), identity)
+    assertEquals(formulaText(data(ref"C2").value), "A2*3")
+    assertEquals(formulaText(data(ref"C3").value), "A3*3")
+    assertEquals(formulaText(data(ref"B3").value), "A3*2")
+    val other = r.flatMap(_(Other)).fold(e => fail(e.message), identity)
+    assertEquals(formulaText(other(ref"A1").value), "Renamed!A2+1")
+    // the text-only support refuses the same insert with the capability it lacks
+    book.editIn(Data)(Edit.InsertRows(None, Row.from0(0), 1))(using FormulaSupport.textOnly) match
+      case Left(XLError.EditFailed(1, "insert-rows", XLError.UnsupportedCapability(_, _, _))) => ()
       case other => fail(s"expected an UnsupportedCapability refusal, got $other")
   }
