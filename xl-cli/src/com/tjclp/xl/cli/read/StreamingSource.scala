@@ -155,7 +155,7 @@ object StreamingSource:
    * The streamed rows of a window as dense records: every row of the window in order, the rows the
    * reader never emitted (no cells) filled with empty records, every column of the window present.
    */
-  private def dense(
+  private[read] def dense(
     streamed: Stream[IO, RowData],
     sheet: SheetName,
     window: CellRange,
@@ -188,9 +188,10 @@ object StreamingSource:
       s.pull.uncons1.flatMap {
         case Some((row, tail)) =>
           val idx = row.rowIndex - 1
-          // Outside the window, or not after the last emitted row: the reader is row-ordered, so
-          // such a row is a duplicate and is skipped
-          if idx < next || idx > lastRow then go(next, tail)
+          // The reader is row-ordered: a row past the window ends the pull (its tail is never read);
+          // one not after the last emitted row is a duplicate and is skipped
+          if idx > lastRow then gap(next, lastRow + 1)
+          else if idx < next then go(next, tail)
           else gap(next, idx) >> Pull.output1(denseRow(row, idx)) >> go(idx + 1, tail)
         case None => gap(next, lastRow + 1)
       }

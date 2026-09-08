@@ -2,10 +2,10 @@ package com.tjclp.xl.cli.read
 
 import cats.effect.IO
 import cats.syntax.all.*
-import fs2.Stream
+import fs2.{Chunk, Stream}
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Warning, WarningCode}
@@ -34,6 +34,9 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
 
   def hiddenLines(sheet: SheetName, window: CellRange): IO[(Set[Int], Set[Int])] =
     named(sheet).map(InMemorySource.hiddenLines(_, window))
+
+  override def grid(sheet: SheetName, window: CellRange): IO[RecordGrid] =
+    named(sheet).map(InMemorySource.grid(_, window))
 
   def evaluated(
     sheet: SheetName,
@@ -179,7 +182,9 @@ object InMemorySource:
   /** The projection of a loaded sheet's window: what the sheet-based renderer adapters use. */
   def grid(sheet: Sheet, window: CellRange): RecordGrid =
     val (hiddenRows, hiddenCols) = hiddenLines(sheet, window)
-    RecordGrid(sheet.name, window, denseRows(sheet, window), hiddenRows, hiddenCols)
+    val project = rowProjection(sheet, window, hiddenRows, hiddenCols)
+    val rows = (window.start.row.index0 to window.end.row.index0).toVector.map(project)
+    RecordGrid(sheet.name, window, rows, hiddenRows, hiddenCols)
 
   /**
    * [[grid]] with the window's formula cells evaluated one by one (the renderer-level `--eval` the
@@ -202,8 +207,25 @@ object InMemorySource:
         case _ => record
     }))
 
+  /**
+   * The window's dense rows, [[rowChunk]] rows at a time: `stats` over a full column and `filter`
+   * fold a million rows through here holding one chunk of them, where a `Vector` of every row
+   * (fs2's `emits` takes its rows by value) would be the whole column's records in memory before
+   * the first was seen.
+   */
   def rows(sheet: Sheet, window: CellRange): Stream[IO, Vector[CellRecord]] =
-    Stream.emits(denseRows(sheet, window))
+    val (hiddenRows, hiddenCols) = hiddenLines(sheet, window)
+    val project = rowProjection(sheet, window, hiddenRows, hiddenCols)
+    val lastRow = window.end.row.index0
+    Stream.unfoldChunk(window.start.row.index0) { row =>
+      Option.when(row <= lastRow) {
+        val until = math.min(row + rowChunk, lastRow + 1)
+        (Chunk.from((row until until).map(project)), until)
+      }
+    }
+
+  /** How many rows of a window [[rows]] holds at once. */
+  private[read] val rowChunk: Int = 256
 
   /**
    * The bounding box of every cell the sheet stores, styled-but-empty ones included — the
@@ -221,12 +243,20 @@ object InMemorySource:
       }
       .map { case (c1, r1, c2, r2) => CellRange(ARef.from0(c1, r1), ARef.from0(c2, r2)) }
 
-  private def denseRows(sheet: Sheet, window: CellRange): Vector[Vector[CellRecord]] =
+  /**
+   * One row of the window as dense records, with the state every row shares — the window's columns,
+   * its hidden lines and the merges that touch it — computed once, not per row.
+   */
+  private def rowProjection(
+    sheet: Sheet,
+    window: CellRange,
+    hiddenRows: Set[Int],
+    hiddenCols: Set[Int]
+  ): Int => Vector[CellRecord] =
     val cols = (window.start.col.index0 to window.end.col.index0).toVector
-    val (hiddenRows, hiddenCols) = hiddenLines(sheet, window)
     // Only the merges that touch the window can contain one of its cells
     val merges = MergeIndex(sheet.mergedRanges.filter(m => intersects(m, window)))
-    (window.start.row.index0 to window.end.row.index0).toVector.map { row =>
+    row =>
       val rowHidden = hiddenRows.contains(row)
       cols.map { col =>
         val ref = ARef.from0(col, row)
@@ -239,7 +269,6 @@ object InMemorySource:
           merges.at(ref)
         )
       }
-    }
 
   /**
    * Merged ranges indexed by the rows they cover, so the merge containing a cell is found among the
@@ -282,7 +311,7 @@ object InMemorySource:
    * The sheet's hidden rows and columns, read once: `getRowProperties`/`getColumnProperties` build
    * a default record on every miss, which over a 60k-cell scan is 120k allocations for nothing.
    */
-  final class HiddenLines private (rows: Set[Int], cols: Set[Int]):
+  final class HiddenLines private (val rows: Set[Int], val cols: Set[Int]):
     def contains(ref: ARef): Boolean =
       (rows.nonEmpty && rows.contains(ref.row.index0)) ||
         (cols.nonEmpty && cols.contains(ref.col.index0))
@@ -294,14 +323,16 @@ object InMemorySource:
         sheet.columnProperties.collect { case (col, p) if p.hidden => col.index0 }.toSet
       )
 
+  /**
+   * The window's hidden rows and columns: the sheet's ([[HiddenLines]], read once off the property
+   * maps) clipped to the window — never a `getRowProperties` per row of a full column.
+   */
   def hiddenLines(sheet: Sheet, window: CellRange): (Set[Int], Set[Int]) =
-    val rows = (window.start.row.index0 to window.end.row.index0)
-      .filter(r => sheet.getRowProperties(Row.from0(r)).hidden)
-      .toSet
-    val cols = (window.start.col.index0 to window.end.col.index0)
-      .filter(c => sheet.getColumnProperties(Column.from0(c)).hidden)
-      .toSet
-    (rows, cols)
+    val hidden = HiddenLines(sheet)
+    (
+      hidden.rows.filter(r => r >= window.start.row.index0 && r <= window.end.row.index0),
+      hidden.cols.filter(c => c >= window.start.col.index0 && c <= window.end.col.index0)
+    )
 
   private def isHidden(sheet: Sheet, ref: ARef): Boolean =
     sheet.getRowProperties(ref.row).hidden || sheet.getColumnProperties(ref.col).hidden

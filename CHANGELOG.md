@@ -69,7 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   abstraction with two strategies — the loaded workbook and the O(1) streaming reader — whose
   capabilities `schema --json` publishes. `view` without a range shows the used range
   (`--offset`, `--max-cols` page through it); `search`, `stats`, `cell` and `filter` gain typed
-  `--json` payloads; `filter --stream` works. A property law over generated books pins that both
+  `--json` payloads; `filter --stream` works. `filter` always carries the row number (a `--columns`
+  token outside the used range selects blank cells, `null` in JSON) and refuses a repeated
+  `--columns` token (`USAGE`). A property law over generated books pins that both
   sources produce byte-equal payloads for every read verb on shared capabilities (values, cached
   formulas, comments, styled-but-empty cells, openpyxl-style package-absolute rels targets).
 

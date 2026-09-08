@@ -203,7 +203,14 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       (name, ReadTestKit.filter("B > 0")),
       (name, ReadTestKit.filter("A IS NOT EMPTY", format = FilterFormat.Csv, header = true)),
       (name, ReadTestKit.filter("B >= 0 OR C = TRUE", format = FilterFormat.Json, limit = 2)),
-      (name, ReadTestKit.filter("A IS EMPTY", columns = Some("A:B")))
+      (name, ReadTestKit.filter("A IS EMPTY", columns = Some("A:B"))),
+      // A --columns token outside the used range: blank cells, the row number kept, from both
+      (name, ReadTestKit.filter("B > 0", columns = Some("Z"), format = FilterFormat.Json)),
+      (
+        name,
+        ReadTestKit.filter("A IS NOT EMPTY", columns = Some("Z,A"), format = FilterFormat.Csv)
+      ),
+      (name, ReadTestKit.filter("B > 0", limit = 0))
     )
     val cells = (refs ++ commented :+ ARef.from0(7, 7)).distinct.map { r =>
       (name, ReadQuery.Cell(r.toA1, noStyle = false))
@@ -280,6 +287,14 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
                 val loadedData = ujson.read(memoryOut.stdout)("data")("matches").arr
                 stream.foreach(m => assertEquals(m("hidden"), ujson.Null))
                 loadedData.foreach(m => assertEquals(m("hidden"), ujson.Bool(false)))
+              // filter's JSON rides the envelope as the array it is, never as a string of text
+              case (f: ReadQuery.Filter, OutputMode.Json)
+                  if memory.ok && f.format == FilterFormat.Json =>
+                Vector(memoryOut.stdout, streamOut.stdout).foreach { out =>
+                  val data = ujson.read(out)("data")
+                  assert(data.arrOpt.isDefined, s"filter data is not an array for $label: $data")
+                  data.arr.foreach(row => assert(row("row").numOpt.isDefined, row.toString))
+                }
               case _ => ()
           }
         }

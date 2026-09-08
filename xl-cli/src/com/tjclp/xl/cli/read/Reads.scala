@@ -13,6 +13,7 @@ import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
   CliSignal,
+  ErrorCode,
   Outcome,
   OutputMode,
   Payload,
@@ -581,21 +582,27 @@ object Reads:
         )
         .whenA(unresolved.nonEmpty)
       selectedCols <- lift(parseColumns(q.columns, usedCols).left.map(CliError.usage(_, None)))
-      // One pass over the used range: keep the first --limit matching rows, count them all
+      // One pass over the used range: keep the first --limit matching rows, count them all. A row's
+      // number is its position in the dense window, never recovered from the cells kept for it: a
+      // --columns token outside the used range selects no cell, and the row is still a match.
+      // `--limit 0` keeps none and reports the count alone, as filter always has (`view` and
+      // `search` read 0 as no limit)
       scanned <- source
         .rows(sheet, range)
-        .filter { row =>
-          val rowIdx = row.headOption.fold(-1)(_.ref.row.index0)
+        .zipWithIndex
+        .map { (row, i) => (range.start.row.index0 + i.toInt, row) }
+        .filter { (rowIdx, row) =>
           !(q.header && rowIdx == headerRowIdx) &&
           FilterPredicate.evaluate(pred, resolve, col => row.lift(col - firstCol).map(_.cellValue))
         }
         .compile
-        .fold((Vector.empty[Vector[CellRecord]], 0)) { case ((kept, total), row) =>
-          (if kept.size < math.max(0, q.limit) then kept :+ row else kept, total + 1)
+        .fold((Vector.empty[FilterRow], 0)) { case ((kept, total), (rowIdx, row)) =>
+          val keep = kept.size < math.max(0, q.limit)
+          val cells = selectedCols.map(col => row.lift(col - firstCol))
+          (if keep then kept :+ FilterRow(rowIdx + 1, cells) else kept, total + 1)
         }
       (shown, total) = scanned
-    yield
-      val labels = selectedCols.map { col =>
+      labels = selectedCols.map { col =>
         val letter = Column.from0(col).toLetter
         if q.header then
           header
@@ -606,14 +613,22 @@ object Reads:
             .getOrElse(letter)
         else letter
       }
-      def cellsOf(row: Vector[CellRecord]): Vector[Option[CellRecord]] =
-        selectedCols.map(col => row.lift(col - firstCol))
-      q.format match
-        case FilterFormat.Markdown => filterMarkdown(shown.map(cellsOf), total, labels)
-        case FilterFormat.Csv => filterCsv(shown.map(cellsOf), labels)
-        case FilterFormat.Json => filterJson(shown.map(cellsOf), labels)
+      text <- q.format match
+        case FilterFormat.Markdown => IO.pure(filterMarkdown(shown, total, labels))
+        case FilterFormat.Csv => IO.pure(filterCsv(shown, labels))
+        case FilterFormat.Json => filterJson(shown, labels)
+    yield text
 
-  /** Parse "A,C:E" into 0-based column indices; None = all used columns. */
+  /**
+   * One matching row as rendered: its 1-based number and the selected cells, `None` where the
+   * column lies outside the used range (a `--columns` token past it, or left of it).
+   */
+  private final case class FilterRow(number: Int, cells: Vector[Option[CellRecord]])
+
+  /**
+   * Parse "A,C:E" into 0-based column indices; None = all used columns. A column may be named once:
+   * a repeat would be a second column of the same label (the same JSON key), so it is refused.
+   */
   private def parseColumns(
     spec: Option[String],
     usedCols: Vector[Int]
@@ -621,21 +636,26 @@ object Reads:
     spec match
       case None => Right(usedCols)
       case Some(s) =>
-        s.split(",").toVector.map(_.trim).filter(_.nonEmpty).flatTraverse { token =>
-          token.split(":", -1) match
-            case Array(single) =>
-              Column.fromLetter(single.trim.toUpperCase).map(c => Vector(c.index0))
-            case Array(lo, hi) =>
-              for
-                l <- Column.fromLetter(lo.trim.toUpperCase)
-                h <- Column.fromLetter(hi.trim.toUpperCase)
-              yield (math.min(l.index0, h.index0) to math.max(l.index0, h.index0)).toVector
-            case _ => Left(s"Invalid --columns token '$token' (use A or A:C)")
-        }
-
-  /** The row number of a rendered filter row: every record of the row shares it. */
-  private def rowNumber(cells: Vector[Option[CellRecord]]): String =
-    cells.flatten.headOption.fold("")(r => (r.ref.row.index0 + 1).toString)
+        s.split(",")
+          .toVector
+          .map(_.trim)
+          .filter(_.nonEmpty)
+          .flatTraverse { token =>
+            token.split(":", -1) match
+              case Array(single) =>
+                Column.fromLetter(single.trim.toUpperCase).map(c => Vector(c.index0))
+              case Array(lo, hi) =>
+                for
+                  l <- Column.fromLetter(lo.trim.toUpperCase)
+                  h <- Column.fromLetter(hi.trim.toUpperCase)
+                yield (math.min(l.index0, h.index0) to math.max(l.index0, h.index0)).toVector
+              case _ => Left(s"Invalid --columns token '$token' (use A or A:C)")
+          }
+          .flatMap { cols =>
+            val repeated = cols.diff(cols.distinct).distinct.map(Column.from0(_).toLetter)
+            if repeated.isEmpty then Right(cols)
+            else Left(s"Duplicate column(s) in --columns: ${repeated.mkString(", ")}")
+          }
 
   private def filterNoData(format: FilterFormat, labels: Vector[String]): String =
     format match
@@ -644,15 +664,15 @@ object Reads:
       case FilterFormat.Json => "[]"
 
   private def filterMarkdown(
-    shown: Vector[Vector[Option[CellRecord]]],
+    shown: Vector[FilterRow],
     totalMatched: Int,
     labels: Vector[String]
   ): String =
     if totalMatched == 0 then "No rows matched."
     else
       val headers = "Row" +: labels
-      val rows = shown.map { cells =>
-        rowNumber(cells) +: cells.map(_.fold("")(_.text(showFormulas = false)))
+      val rows = shown.map { row =>
+        row.number.toString +: row.cells.map(_.fold("")(_.text(showFormulas = false)))
       }
       val widths = headers.indices.map { i =>
         val dataMax = rows.map(r => Escape.markdown(r(i)).length).maxOption.getOrElse(0)
@@ -676,10 +696,10 @@ object Reads:
       else sb.append(s"\n$totalMatched row(s) matched.\n")
       sb.toString
 
-  private def filterCsv(shown: Vector[Vector[Option[CellRecord]]], labels: Vector[String]): String =
+  private def filterCsv(shown: Vector[FilterRow], labels: Vector[String]): String =
     val header = ("row" +: labels).map(Escape.csv).mkString(",")
-    val lines = shown.map { cells =>
-      (rowNumber(cells) +: cells.map(_.fold("")(_.text(showFormulas = false))))
+    val lines = shown.map { row =>
+      (row.number.toString +: row.cells.map(_.fold("")(_.text(showFormulas = false))))
         .map(Escape.csv)
         .mkString(",")
     }
@@ -687,20 +707,32 @@ object Reads:
 
   /**
    * `[{"row": n, "cells": {label: value}}]`, every number lexeme exact; an uncached formula shows
-   * its expression as a string, as it always has.
+   * its expression as a string, as it always has; a column outside the used range is `null`. Two
+   * selected columns under one header name share a key, which keeps the first's position and the
+   * last's value — `ujson.Obj` semantics, as before. The text is re-emitted through `ujson`: a
+   * lexeme this renderer got wrong is its defect (`INTERNAL`), never malformed stdout.
    */
-  private def filterJson(
-    shown: Vector[Vector[Option[CellRecord]]],
-    labels: Vector[String]
-  ): String =
+  private def filterJson(shown: Vector[FilterRow], labels: Vector[String]): IO[String] =
     def valueJson(record: CellRecord): String = record.formula match
       case Some(f) if !f.cached => Escape.json(f.text)
       case _ => record.rawJson
-    val rows = shown.map { cells =>
-      val fields = cells.zip(labels).map { (cell, label) =>
-        s"${Escape.json(label)}: ${cell.fold("null")(valueJson)}"
-      }
-      s"""{"row": ${rowNumber(cells)}, "cells": {${fields.mkString(", ")}}}"""
+    val rows = shown.map { row =>
+      val fields = uniqueKeys(row.cells.zip(labels).map { (cell, label) =>
+        Escape.json(label) -> cell.fold("null")(valueJson)
+      })
+      s"""{"row": ${row.number}, "cells": {${fields.map((k, v) => s"$k: $v").mkString(", ")}}}"""
     }
     val text = rows.mkString("[", ", ", "]")
-    Try(ujson.reformat(text, indent = 2)).getOrElse(text)
+    IO(ujson.reformat(text, indent = 2)).adaptError { case e =>
+      CliException(
+        CliError(ErrorCode.INTERNAL, s"filter produced malformed JSON: ${CliError.messageOf(e)}")
+      )
+    }
+
+  /** A repeated key keeps its first position and takes its last value (`ujson.Obj` on update). */
+  private def uniqueKeys(fields: Vector[(String, String)]): Vector[(String, String)] =
+    fields.foldLeft(Vector.empty[(String, String)]) { (acc, field) =>
+      acc.indexWhere(_._1 == field._1) match
+        case -1 => acc :+ field
+        case i => acc.updated(i, field)
+    }

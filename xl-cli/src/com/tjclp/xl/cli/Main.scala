@@ -925,8 +925,9 @@ SEMANTICS:
 
 OPTIONS:
   --where <pred>      Filter predicate (required)
-  --columns <spec>    Output columns, e.g. A,C:E (default: all used columns)
-  --limit <n>         Max rows to display (default: 50)
+  --columns <spec>    Output columns, e.g. A,C:E (default: all used columns); a column
+                      outside the used range is blank (null in json); a repeat is an error
+  --limit <n>         Max rows to display (default: 50; 0 shows none, reports the count)
   --format <fmt>      markdown (default), csv, json
   --header            First used row holds column names (excluded from matching)
 

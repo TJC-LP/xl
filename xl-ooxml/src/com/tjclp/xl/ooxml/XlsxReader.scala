@@ -725,10 +725,11 @@ object XlsxReader:
 
   /**
    * The OOXML comments of one sheet as domain comments: author ids resolved (an empty author is
-   * unauthored) and the author prefix XL's writer adds stripped. Public so the streaming reader
-   * converts through the same code and the two read paths agree on every comment's text.
+   * unauthored) and the author prefix XL's writer adds stripped. Shared with the streaming reader
+   * (`private[xl]`, not published) so both read paths convert through one code and agree on every
+   * comment's text.
    */
-  def convertToDomainComments(
+  private[xl] def convertToDomainComments(
     ooxmlComments: OoxmlComments,
     commentPath: String = "comments.xml"
   ): XLResult[Map[ARef, com.tjclp.xl.cells.Comment]] =
