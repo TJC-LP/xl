@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-Xmx` is the override: both estimates are measured against the heap the process actually has.
   The codes are in `xl schema --json`, `generated/error-codes.md` and the `--max-size` global's
   doc; every other `Error` keeps its `INTERNAL` classification.
+- **Error literals in formulas** (#612): `#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`, `#NULL!`, `#NUM!`
+  and `#VALUE!` parse (case-insensitively, as Excel upper-cases them at entry) to the new
+  `TExpr.ErrorLit`, print back verbatim, evaluate to the error value they name (`=IF(x, #N/A, 1)`,
+  `=IFERROR(#DIV/0!, 0)`, `=ROWS(#REF!)`) and contribute no dependency edges. In a range-typed
+  argument slot they are the new `RangeLocation.Error` (`SUM(#REF!)`, `COUNTIF(#REF!, x)`,
+  `VLOOKUP(x, #REF!, 2)`), which evaluates to the same error. This is what a drag writes for an
+  off-grid reference and what Excel writes after a delete; such formulas used to be unparseable.
+  `RangeForm` is exported from `com.tjclp.xl` beside `TExpr`.
 - **The CLI contract is a CI gate** (#592). A `contract` job runs the golden runner, the
   generated-docs drift check and the new `ContractSpec` explicitly, so a golden diff fails with the
   unified diff in the log, then builds the assembly JAR and runs `scripts/smoke-cli-contract.sh`
@@ -111,6 +119,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: `search` stops scanning at `--limit` and says so** (#637). In memory, `search` had
+  reported the exact total since 0.12.6 (#351) — a 0.20.0 text-mode user with more than 50 hits
+  read `Found 120 matches` and now reads `Found at least 51 matches`; by default it stops at
+  `--limit` like the streaming path and needs `--total` for the exact count. The payload gains
+  `totalExact`:
+  `true` when the scan read every cell (`--total`, `--limit 0`, or a hit list that fit within the
+  limit) and `total` is the exact count; `false` when the scan stopped at `--limit`, and `total`
+  is then a lower bound (`limit + 1`: one more match was seen, so more exist). Text mode reads
+  `Found at least 11 matches in Data:` with a `… showing first 10 matches; more exist (…; --total
+  for the exact count)` trailer in that case, and keeps `Found 100 matches` / `… showing 10 of 100
+  matches` when the total is exact. The new `search --total` flag opts into the full scan. Same
+  contract from both sources; the `search-json` golden gains the field.
+- **Breaking: formula AST range nodes carry their form** (#612). `TExpr.RangeRef`, `SheetRange`,
+  `ExternalRange` and `RangeLocation.Local`/`CrossSheet`/`External` gained a trailing
+  `form: RangeForm = RangeForm.Cells` field (their `unapply`, `copy` and constructor signatures
+  changed), `TExpr` gained an `ErrorLit` case and `RangeLocation` an `Error(CellError)` case.
+  Constructor calls are source-compatible; a positional pattern match on any of the six nodes needs
+  one more `_`, an exhaustive match on `TExpr` or `RangeLocation` needs the new arm, and an
+  already-compiled downstream artifact must be rebuilt against this `xl-evaluator`. A hand-built
+  node whose form does not fit its range (`Columns` on `A1:B2`) prints and shifts as the corner
+  range it addresses.
+- **Breaking: a fill-drag no longer clamps at the sheet edge** (#612). `FormulaShifter.shift`,
+  `FormulaOps.shift`, `Edit.DragFormula`/`Edit.Fill`, `putf <range>` and batch `putf … from` write
+  `#REF!` for a reference the drag would carry off the grid (`=A1` from B2 to B1 is `=#REF!`,
+  `SUM(A1:A2)` is `SUM(#REF!)`) where they used to clamp at A1 or emit a row/column that does not
+  exist — an error value in the file instead of a silently different cell.
 - **`--strict` on `batch` and the structural verbs no longer fails for a recalculation failure on a
   cell outside the edit's cone whose cache the written file kept** (#606). The whole-book pass
   behind those verbs still runs, but a failure it never applied to the output is not a condition of
@@ -126,7 +160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Under `--stream`, `cell` prints `Dependencies:` and `Dependents:` as `(not available in
   streaming mode)` (`null` in `--json`) instead of a regex-derived token list, typed records carry
   `hidden: null` where the source cannot see hidden lines (was an affirmative `false`), and
-  `search` scans the whole sheet so its total is true. In-memory `search` returns hits in row-major
+  `search` reports the same total from both sources. In-memory `search` returns hits in row-major
   order and no longer matches styled-but-empty cells (they are not occupied, so `search '^$'`
   agrees with `--stream`). `view` without a range and `filter` address the worksheet's stored-cell
   box from both sources (`filter`'s window can widen by formatted empty cells); streaming
@@ -165,6 +199,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now say it lifts the security limit only, that the native binary's heap is capped at 8 GB unless
   `-Xmx<size>` is passed as the first argument (`xl -Xmx64g …`; the JAR takes `java -Xmx64g -jar`),
   and that a million-row book needs tens of GB in memory — use `--stream`.
+- **`--stream search --limit N` scanned the whole sheet** (#637, a regression against 0.19.3:
+  1.5 s became 56 s on a million-row sheet with 30k matches). The unreleased candidate kept
+  reading after the limit to report the exact total; the scan now stops one match past `--limit`
+  (the streamed sheet's SAX parser is interrupted there and a sheet after the one that filled the
+  limit is never opened) and reports the total as a lower bound; `--total` restores the full scan.
+- **Whole-column and whole-row references keep their form through every rewrite** (#612).
+  `A:A`, `$A:$A`, `A:C`, `1:1`, `$3:$10` used to be parsed into corner ranges and printed back as
+  `$A1:$A1048576`, so a `putf` drag, a batch `putf … from`, `Edit.DragFormula`/`Edit.Fill`,
+  `FormulaOps.shift` and every structural insert/delete produced addresses that do not exist
+  (`$A2:$A1048577`, `SUM(B1:XFE1)`) — LibreOffice opened the book and silently computed garbage.
+  The AST now carries the form (`RangeForm.{Cells, Columns, Rows}` on `TExpr.RangeRef`,
+  `SheetRange`, `ExternalRange` and the `RangeLocation` cases): the printer reproduces the text as
+  written, a fill-drag moves a whole-column reference only along columns and a whole-row reference
+  only along rows (`$` anchors as for cells), and a structural edit on the other axis leaves it
+  untouched (`E:E` survives a row insert; inserting a column before E makes it `F:F`; deleting
+  column E voids it; deleting a column inside `A:C` narrows it to `A:B`). A corner spelling that
+  addresses every row or every column (`A1:A1048576`, `A1:XFD1`) is the whole-column / whole-row
+  form too — Excel canonicalises such an entry to `A:A` / `1:1` before it reaches the file, so the
+  corner text only arrives from other producers and is treated as Excel would have. A `$` on a
+  whole-row part (`$3:$10`) now anchors the row, a bare row range may anchor only its end
+  (`3:$10`), and a shift that makes a relative corner overtake an anchored one prints normalised
+  (`E:$E` dragged right is `$E:F`).
+- **A fill-drag that would carry a reference off the grid writes `#REF!`** instead of clamping at
+  A1 or emitting a row/column that does not exist (#612): `=A1` copied from B2 to B1 is `=#REF!`,
+  `=A1+B3` copied up one is `=#REF!+B2`, `=A1048576` dragged down is `=#REF!` — per reference, the
+  rest of the formula intact, as Excel writes it. A range in a range-typed argument slot that falls
+  off the grid becomes `#REF!` inside the call (`SUM(A1:A2)` → `SUM(#REF!)`, `COUNTIF(A1:A2,B5)`
+  → `COUNTIF(#REF!,B4)`), again as Excel writes it.
 - **An edit no longer withdraws the caches of unparseable formulas it cannot reach** (#606). A
   formula the parser rejects (an omitted argument such as `RATE(n,,pv,fv,)`, `SINGLE`, a name whose
   definition is a union) has no graph edges, and the after-edit recalculation treated every one of

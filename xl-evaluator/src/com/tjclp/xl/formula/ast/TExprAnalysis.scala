@@ -106,7 +106,7 @@ trait TExprAnalysis:
    */
   def containsExternalRef(expr: TExpr[?]): Boolean = expr match
     case ExternalRef(_, _, _, _) => true
-    case ExternalRange(_, _, _) => true
+    case ExternalRange(_, _, _, _) => true
     case call: Call[?] =>
       call.spec.argSpec
         .toValues(call.args)
@@ -114,10 +114,10 @@ trait TExprAnalysis:
           case ArgValue.Expr(e) => containsExternalRef(e)
           // Range positions carry externality via RangeLocation.External (SUMIF([2]Book1!…, …));
           // Cells positions hold local literal ranges only
-          case ArgValue.Range(RangeLocation.External(_, _, _)) => true
+          case ArgValue.Range(RangeLocation.External(_, _, _, _)) => true
           case _ => false
         }
-    case Aggregate(_, RangeLocation.External(_, _, _)) => true
+    case Aggregate(_, RangeLocation.External(_, _, _, _)) => true
     case Add(l, r) => containsExternalRef(l) || containsExternalRef(r)
     case Sub(l, r) => containsExternalRef(l) || containsExternalRef(r)
     case Mul(l, r) => containsExternalRef(l) || containsExternalRef(r)
@@ -151,15 +151,15 @@ trait TExprAnalysis:
    * by SUMPRODUCT to compute shared bounds across all ranges in array expressions.
    */
   def collectRanges(expr: TExpr[?]): List[(Option[SheetName], CellRange)] = expr match
-    case RangeRef(range) => List((None, range))
-    case SheetRange(sheet, range) => List((Some(sheet), range))
+    case RangeRef(range, _) => List((None, range))
+    case SheetRange(sheet, range, _) => List((Some(sheet), range))
     case call: Call[?] =>
       call.spec.argSpec
         .toValues(call.args)
         .flatMap {
           case ArgValue.Expr(e) => collectRanges(e)
-          case ArgValue.Range(RangeLocation.Local(range)) => List((None, range))
-          case ArgValue.Range(RangeLocation.CrossSheet(sheet, range)) =>
+          case ArgValue.Range(RangeLocation.Local(range, _)) => List((None, range))
+          case ArgValue.Range(RangeLocation.CrossSheet(sheet, range, _)) =>
             List((Some(sheet), range))
           // GH-353: external-workbook ranges are not in this workbook — nothing to bound.
           // GH-394: a Name's target range is behind the workbook name table — statically unknown
@@ -208,8 +208,13 @@ trait TExprAnalysis:
   @annotation.nowarn("msg=Unreachable case")
   def transformRanges[A](expr: TExpr[A], f: (Option[SheetName], CellRange) => CellRange): TExpr[A] =
     (expr match
-      case RangeRef(range) => RangeRef(f(None, range))
-      case SheetRange(sheet, range) => SheetRange(sheet, f(Some(sheet), range))
+      // GH-612: a bounded whole-column range is a corner range from here on (evaluation only)
+      case RangeRef(range, form) =>
+        val bounded = f(None, range)
+        RangeRef(bounded, if bounded == range then form else RangeForm.Cells)
+      case SheetRange(sheet, range, form) =>
+        val bounded = f(Some(sheet), range)
+        SheetRange(sheet, bounded, if bounded == range then form else RangeForm.Cells)
       // Arithmetic - recursively transform operands
       case Add(l, r) =>
         Add(transformRanges(l, f), transformRanges(r, f))

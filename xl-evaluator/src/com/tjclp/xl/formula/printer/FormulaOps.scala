@@ -62,8 +62,9 @@ object FormulaOps:
 
   /**
    * Shift every relative reference by (`colDelta`, `rowDelta`) the way a fill-drag does — anchors
-   * respected, coordinates clamped at the sheet edge exactly as `FormulaShifter.shift` clamps them.
-   * `Left(FormulaError)` when the text cannot be parsed.
+   * respected, whole-column / whole-row references moving only along their own axis (GH-612), and a
+   * reference that would leave the grid written as `#REF!` exactly as `FormulaShifter.shift` writes
+   * it. `Left(FormulaError)` when the text cannot be parsed.
    */
   def shift(text: String, colDelta: Int, rowDelta: Int): XLResult[String] =
     FormulaParser.parse(text) match

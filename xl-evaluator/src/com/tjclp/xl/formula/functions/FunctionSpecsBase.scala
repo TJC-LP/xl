@@ -178,9 +178,9 @@ trait FunctionSpecsBase:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   protected def evalMaybeArrayArg(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
     expr match
-      case TExpr.RangeRef(range) =>
+      case TExpr.RangeRef(range, _) =>
         extractRangeAsMatrixEval(range, ctx.sheet, ctx).map(ArrayResult(_))
-      case TExpr.SheetRange(sheetName, range) =>
+      case TExpr.SheetRange(sheetName, range, _) =>
         Evaluator
           .resolveRangeLocation(
             TExpr.RangeLocation.CrossSheet(sheetName, range),
@@ -289,8 +289,8 @@ trait FunctionSpecsBase:
       case TExpr.Ref(ref, _, _) => Some(ref)
       case TExpr.SheetPolyRef(_, ref, _) => Some(ref)
       case TExpr.SheetRef(_, ref, _, _) => Some(ref)
-      case TExpr.RangeRef(range) => Some(range.start)
-      case TExpr.SheetRange(_, range) => Some(range.start)
+      case TExpr.RangeRef(range, _) => Some(range.start)
+      case TExpr.SheetRange(_, range, _) => Some(range.start)
       case _ => None
 
   /**

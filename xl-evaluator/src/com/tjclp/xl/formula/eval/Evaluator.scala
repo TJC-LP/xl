@@ -185,9 +185,9 @@ object Evaluator:
     resolvingNames: Set[String] = Set.empty
   ): Either[EvalError, (Sheet, CellRange)] =
     location match
-      case TExpr.RangeLocation.Local(range) =>
+      case TExpr.RangeLocation.Local(range, _) =>
         Right((currentSheet, range))
-      case TExpr.RangeLocation.CrossSheet(sheetName, range) =>
+      case TExpr.RangeLocation.CrossSheet(sheetName, range, _) =>
         workbook match
           case None =>
             // GH-280: quote cell-ref-shaped sheet names so diagnostics read unambiguously
@@ -200,11 +200,13 @@ object Evaluator:
       // GH-353: the target workbook is not loaded — same friendly error as a direct external
       // ref; cells CONTAINING such calls are pinned to their Excel cache upstream and never
       // reach this point
-      case loc @ TExpr.RangeLocation.External(_, _, _) =>
+      case loc @ TExpr.RangeLocation.External(_, _, _, _) =>
         Left(externalRefUnsupported(loc.toA1))
       // GH-394: a defined name in a range slot resolves through the name table
       case TExpr.RangeLocation.Name(name, scope) =>
         resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames)
+      // GH-612: an error in a range slot (SUM(#REF!)) IS the error value it names
+      case TExpr.RangeLocation.Error(error) => Left(EvalError.ErrorValue(error))
 
   /**
    * GH-394: resolve a defined name used in a RANGE-typed argument slot to its (sheet, range).
@@ -259,8 +261,8 @@ object Evaluator:
               case Right(target) =>
                 val definingSheet = definedNameScope(wb, dn).getOrElse(currentSheet)
                 target match
-                  case TExpr.RangeRef(range) => Right((definingSheet, range))
-                  case TExpr.SheetRange(sheetName, range) =>
+                  case TExpr.RangeRef(range, _) => Right((definingSheet, range))
+                  case TExpr.SheetRange(sheetName, range, _) =>
                     resolveRangeLocation(
                       TExpr.RangeLocation.CrossSheet(sheetName, range),
                       definingSheet,
@@ -781,10 +783,10 @@ private class EvaluatorImpl(
       // reach this point; direct evaluation and uncached cells get a clear per-cell error.
       case TExpr.ExternalRef(index, name, at, _) =>
         Left(Evaluator.externalRefUnsupported(s"[$index]$name!${(at: ARef).toA1}"))
-      case TExpr.ExternalRange(index, name, range) =>
+      case TExpr.ExternalRange(index, name, range, _) =>
         Left(Evaluator.externalRefUnsupported(s"[$index]$name!${range.toA1}"))
 
-      case TExpr.SheetRange(sheetName, range) =>
+      case TExpr.SheetRange(sheetName, range, _) =>
         // SheetRange should be wrapped in a function (SUM, COUNT, etc.) before evaluation
         // GH-280: quote cell-ref-shaped sheet names so diagnostics read unambiguously
         val refStr = s"${SheetName.quoteForFormula(sheetName.value)}!${range.toA1}"
@@ -795,7 +797,7 @@ private class EvaluatorImpl(
           )
         )
 
-      case TExpr.RangeRef(range) =>
+      case TExpr.RangeRef(range, _) =>
         Left(
           EvalError.EvalFailed(
             s"Range ${range.toA1} must be used within a function like SUM or COUNT.",
@@ -807,6 +809,11 @@ private class EvaluatorImpl(
       case TExpr.Lit(value) =>
         // Literal: return value directly (identity law)
         Right(value)
+
+      // GH-612: an error literal IS the error value it names — it travels the Left channel like
+      // any other Excel error value and promotes to CellValue.Error at the cell boundary
+      case TExpr.ErrorLit(error) =>
+        Left(EvalError.ErrorValue(error))
 
       // ===== Cell References =====
       case TExpr.Ref(at, _, decode) =>
@@ -1136,9 +1143,9 @@ private class EvaluatorImpl(
         // A range-valued body (e.g. LET(r, A1:A10, r) under SUM) yields an array in array
         // contexts; scalar contexts keep the standard "range must be used within a function"
         // error from eval below.
-        case TExpr.RangeRef(range) if allowArrayResults =>
+        case TExpr.RangeRef(range, _) if allowArrayResults =>
           materializeRange(range, sheet, clock, workbook)
-        case TExpr.SheetRange(sheetName, range) if allowArrayResults =>
+        case TExpr.SheetRange(sheetName, range, _) if allowArrayResults =>
           Evaluator
             .resolveRangeLocation(
               TExpr.RangeLocation.CrossSheet(sheetName, range),
@@ -1233,9 +1240,9 @@ private class EvaluatorImpl(
                   target match
                     // Range-shaped names materialize like literal ranges in array positions:
                     // consumers collapse (scalar), broadcast (operands), or aggregate (SUM)
-                    case TExpr.RangeRef(range) =>
+                    case TExpr.RangeRef(range, _) =>
                       materializeRange(range, definingSheet, clock, workbook)
-                    case TExpr.SheetRange(sheetName, range) =>
+                    case TExpr.SheetRange(sheetName, range, _) =>
                       Evaluator
                         .resolveRangeLocation(
                           TExpr.RangeLocation.CrossSheet(sheetName, range),
@@ -1480,9 +1487,9 @@ private class EvaluatorImpl(
     currentCell: Option[ARef]
   ): Either[EvalError, Any] =
     expr match
-      case TExpr.RangeRef(range) =>
+      case TExpr.RangeRef(range, _) =>
         materializeRange(range, sheet, clock, workbook)
-      case TExpr.SheetRange(sheetName, range) =>
+      case TExpr.SheetRange(sheetName, range, _) =>
         Evaluator
           .resolveRangeLocation(
             TExpr.RangeLocation.CrossSheet(sheetName, range),

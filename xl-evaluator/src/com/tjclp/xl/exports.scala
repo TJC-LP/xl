@@ -18,8 +18,9 @@ object formulaExports:
   export formula.printer.FormulaPrinter
   export formula.functions.FunctionRegistry
 
-  // Typed expression AST
+  // Typed expression AST (GH-612: RangeForm is the whole-column / whole-row marker on range nodes)
   export formula.ast.TExpr
+  export formula.ast.RangeForm
 
   // Dependency analysis
   export formula.graph.DependencyGraph

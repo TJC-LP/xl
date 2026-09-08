@@ -5,6 +5,7 @@ import com.tjclp.xl.formula.eval.EvalError
 import com.tjclp.xl.formula.functions.EvalContext
 
 import com.tjclp.xl.{ARef, CellRange, Column, Row, SheetName}
+import com.tjclp.xl.cells.CellError
 
 trait TExprRangeLocation:
   /**
@@ -14,8 +15,11 @@ trait TExprRangeLocation:
    * cases (e.g., Min + SheetMin). Used by TExpr.Aggregate for unified aggregation.
    */
   enum RangeLocation derives CanEqual:
-    case Local(range: CellRange)
-    case CrossSheet(sheet: SheetName, range: CellRange)
+    /**
+     * A local range; `form` (GH-612) is the surface form it was written in, see [[TExpr.RangeRef]].
+     */
+    case Local(range: CellRange, form: RangeForm = RangeForm.Cells)
+    case CrossSheet(sheet: SheetName, range: CellRange, form: RangeForm = RangeForm.Cells)
 
     /**
      * GH-353: external-workbook range in a range-typed argument slot — `SUMIF([2]Book1!A1:A9, …)`.
@@ -27,7 +31,12 @@ trait TExprRangeLocation:
      * `Evaluator.externalRefUnsupported`; cells CONTAINING such calls are pinned to their
      * Excel-written cache upstream (SheetEvaluator.pinnedExternalCache).
      */
-    case External(workbookIndex: Int, sheetName: String, range: CellRange)
+    case External(
+      workbookIndex: Int,
+      sheetName: String,
+      range: CellRange,
+      form: RangeForm = RangeForm.Cells
+    )
 
     /**
      * GH-394: a defined name in a range-typed argument slot — `=VLOOKUP(x, named_table, 2)`,
@@ -44,6 +53,16 @@ trait TExprRangeLocation:
      */
     case Name(name: String, scope: Option[SheetName])
 
+    /**
+     * GH-612: an error literal in a range-typed argument slot — `SUM(#REF!)`, `COUNTIF(#REF!, x)`.
+     *
+     * What Excel writes when a range argument is deleted or dragged off the grid, and what
+     * [[com.tjclp.xl.formula.printer.FormulaShifter]] writes for the same event. It has no cells:
+     * `staticRange` is None, it contributes no dependency edges, prints as its code, and evaluates
+     * (through `Evaluator.resolveRangeLocation`) to the error VALUE it names.
+     */
+    case Error(error: CellError)
+
   object RangeLocation:
     extension (loc: RangeLocation)
       /**
@@ -54,19 +73,20 @@ trait TExprRangeLocation:
        * dependency extraction) that inspect locations without a workbook.
        */
       def staticRange: Option[CellRange] = loc match
-        case Local(r) => Some(r)
-        case CrossSheet(_, r) => Some(r)
-        case External(_, _, r) => Some(r)
+        case Local(r, _) => Some(r)
+        case CrossSheet(_, r, _) => Some(r)
+        case External(_, _, r, _) => Some(r)
         case Name(_, _) => None
+        case Error(_) => None
 
       /** Get sheet name for cross-sheet, None for local or external-workbook locations */
       def sheetName: Option[SheetName] = loc match
-        case CrossSheet(s, _) => Some(s)
+        case CrossSheet(s, _, _) => Some(s)
         case _ => None
 
       /** Get cells for local ranges only (for intra-sheet dependency graphs) */
       def localCells: Set[ARef] = loc match
-        case Local(r) => r.cells.toSet
+        case Local(r, _) => r.cells.toSet
         case _ => Set.empty
 
       /**
@@ -81,7 +101,7 @@ trait TExprRangeLocation:
        *   Set of cell references in the intersection of this range and bounds
        */
       def localCellsBounded(bounds: Option[CellRange]): Set[ARef] = loc match
-        case Local(r) =>
+        case Local(r, _) =>
           bounds match
             case Some(b) => r.intersect(b).map(_.cells.toSet).getOrElse(Set.empty)
             case None => r.cells.toSet
@@ -89,7 +109,7 @@ trait TExprRangeLocation:
 
       /** Check if this is a cross-sheet reference */
       def isCrossSheet: Boolean = loc match
-        case CrossSheet(_, _) => true
+        case CrossSheet(_, _, _) => true
         case _ => false
 
       /**
@@ -97,10 +117,10 @@ trait TExprRangeLocation:
        * shaped sheet names quote so a sheet literally named "A1" reads unambiguously.
        */
       def toA1: String = loc match
-        case Local(r) => r.toA1
-        case CrossSheet(s, r) => s"${SheetName.quoteForFormula(s.value)}!${r.toA1}"
+        case Local(r, _) => r.toA1
+        case CrossSheet(s, r, _) => s"${SheetName.quoteForFormula(s.value)}!${r.toA1}"
         // GH-353: same quoting rule as FormulaPrinter.formatExternalSheet
-        case External(i, n, r) =>
+        case External(i, n, r, _) =>
           s"${com.tjclp.xl.formula.printer.FormulaPrinter.formatExternalSheet(i, n)}!${r.toA1}"
         // GH-394: a name prints as its identifier (optionally sheet-qualified) — correct
         // diagnostics for the user's source text; the target range is not statically known
@@ -108,3 +128,4 @@ trait TExprRangeLocation:
           scope match
             case Some(s) => s"${SheetName.quoteForFormula(s.value)}!$n"
             case None => n
+        case Error(e) => e.toExcel

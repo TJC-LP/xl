@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.printer
 
-import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, ArgPrinter}
 
 import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
@@ -109,16 +109,19 @@ object FormulaPrinter:
         s"${formatSheetName(sheet)}!${formatARef(at, anchor)}"
       case TExpr.SheetPolyRef(sheet, at, anchor) =>
         s"${formatSheetName(sheet)}!${formatARef(at, anchor)}"
-      case TExpr.RangeRef(range) =>
-        formatRange(range)
-      case TExpr.SheetRange(sheet, range) =>
-        s"${formatSheetName(sheet)}!${formatRange(range)}"
+      case TExpr.RangeRef(range, form) =>
+        formatRange(range, form)
+      case TExpr.SheetRange(sheet, range, form) =>
+        s"${formatSheetName(sheet)}!${formatRange(range, form)}"
 
       // GH-353: external-workbook references round-trip their surface form exactly
       case TExpr.ExternalRef(index, name, at, anchor) =>
         s"${formatExternalSheet(index, name)}!${formatARef(at, anchor)}"
-      case TExpr.ExternalRange(index, name, range) =>
-        s"${formatExternalSheet(index, name)}!${formatRange(range)}"
+      case TExpr.ExternalRange(index, name, range, form) =>
+        s"${formatExternalSheet(index, name)}!${formatRange(range, form)}"
+
+      // GH-612: an error literal prints as its Excel code (#REF!, #N/A, …)
+      case TExpr.ErrorLit(error) => error.toExcel
 
       // Arithmetic operators.
       //
@@ -279,16 +282,37 @@ object FormulaPrinter:
     s"${formatARef(range.start, range.startAnchor)}:${formatARef(range.end, range.endAnchor)}"
 
   /**
+   * GH-612: format a range in the form the AST carries — whole columns as `$A:C`, whole rows as
+   * `$3:10` (a `$` on the coordinate axis only), corner ranges as today. The printer never infers
+   * the form from the cells addressed: the PARSER decides it (Excel's entry rule makes a corner
+   * spelling over every row the whole-column form), and a `RangeRef(range)` built by hand with the
+   * default `Cells` prints its corners.
+   */
+  private def formatRange(range: CellRange, form: RangeForm): String =
+    // `actualFor`: a hand-built inconsistent pairing (Columns on a range that does not span every
+    // row) prints its corners, never a widened A:B
+    form.actualFor(range) match
+      case RangeForm.Cells => formatRange(range)
+      case RangeForm.Columns =>
+        def col(c: Column, anchor: Anchor): String =
+          if anchor.isColAbsolute then s"$$${c.toLetter}" else c.toLetter
+        s"${col(range.colStart, range.startAnchor)}:${col(range.colEnd, range.endAnchor)}"
+      case RangeForm.Rows =>
+        def row(r: Row, anchor: Anchor): String =
+          if anchor.isRowAbsolute then s"$$${r.index1}" else r.index1.toString
+        s"${row(range.rowStart, range.startAnchor)}:${row(range.rowEnd, range.endAnchor)}"
+
+  /**
    * Format RangeLocation (local, cross-sheet, or external-workbook) to A1 notation.
    */
   private def formatLocation(location: TExpr.RangeLocation): String =
     location match
-      case TExpr.RangeLocation.Local(range) => formatRange(range)
-      case TExpr.RangeLocation.CrossSheet(sheet, range) =>
-        s"${formatSheetName(sheet)}!${formatRange(range)}"
+      case TExpr.RangeLocation.Local(range, form) => formatRange(range, form)
+      case TExpr.RangeLocation.CrossSheet(sheet, range, form) =>
+        s"${formatSheetName(sheet)}!${formatRange(range, form)}"
       // GH-353: external-workbook range args round-trip their surface form exactly
-      case TExpr.RangeLocation.External(index, name, range) =>
-        s"${formatExternalSheet(index, name)}!${formatRange(range)}"
+      case TExpr.RangeLocation.External(index, name, range, form) =>
+        s"${formatExternalSheet(index, name)}!${formatRange(range, form)}"
       // GH-394: a defined name in a range slot prints as its identifier (optionally
       // sheet-qualified), matching the TExpr.NameRef / SheetNameRef precedent — the
       // parse∘print=id law holds because re-parsing re-derives the same Name location
@@ -296,6 +320,8 @@ object FormulaPrinter:
         scope match
           case Some(sheet) => s"${formatSheetName(sheet)}!$name"
           case None => name
+      // GH-612: an error in a range slot prints as its code — SUM(#REF!), as Excel writes it
+      case TExpr.RangeLocation.Error(error) => error.toExcel
 
   /**
    * Format ARef to A1 notation with anchor support.
@@ -437,14 +463,15 @@ object FormulaPrinter:
         s"SheetRef(${SheetName.quoteForFormula(sheet.value)}, $at, $anchor)"
       case TExpr.SheetPolyRef(sheet, at, anchor) =>
         s"SheetPolyRef(${SheetName.quoteForFormula(sheet.value)}, $at, $anchor)"
-      case TExpr.RangeRef(range) =>
-        s"RangeRef(${formatRange(range)})"
-      case TExpr.SheetRange(sheet, range) =>
-        s"SheetRange(${SheetName.quoteForFormula(sheet.value)}, ${formatRange(range)})"
+      case TExpr.RangeRef(range, form) =>
+        s"RangeRef(${formatRange(range, form)})"
+      case TExpr.SheetRange(sheet, range, form) =>
+        s"SheetRange(${SheetName.quoteForFormula(sheet.value)}, ${formatRange(range, form)})"
       case TExpr.ExternalRef(index, name, at, anchor) =>
         s"ExternalRef([$index]$name, $at, $anchor)"
-      case TExpr.ExternalRange(index, name, range) =>
-        s"ExternalRange([$index]$name, ${formatRange(range)})"
+      case TExpr.ExternalRange(index, name, range, form) =>
+        s"ExternalRange([$index]$name, ${formatRange(range, form)})"
+      case TExpr.ErrorLit(error) => s"ErrorLit(${error.toExcel})"
       case TExpr.Add(x, y) =>
         s"Add(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Sub(x, y) =>

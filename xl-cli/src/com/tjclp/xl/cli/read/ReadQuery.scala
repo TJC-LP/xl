@@ -38,7 +38,12 @@ enum ReadQuery derives CanEqual:
     skipHidden: Boolean
   )
   case Cell(ref: String, noStyle: Boolean)
-  case Search(pattern: String, limit: Int, sheetsFilter: Option[String])
+
+  /**
+   * `search <pattern>`: `limit` caps the matches listed (0 = no limit); `exactTotal` (`--total`)
+   * scans every cell for the exact total, else the scan stops one match past the limit (GH-637).
+   */
+  case Search(pattern: String, limit: Int, sheetsFilter: Option[String], exactTotal: Boolean)
   case Stats(ref: String)
   case Filter(
     where: String,
@@ -106,8 +111,8 @@ object ReadQuery:
         )
       )
     case CliCommand.Cell(ref, noStyle) => Some(Cell(ref, noStyle))
-    case CliCommand.Search(pattern, limit, sheetsFilter) =>
-      Some(Search(pattern, limit, sheetsFilter))
+    case CliCommand.Search(pattern, limit, sheetsFilter, exactTotal) =>
+      Some(Search(pattern, limit, sheetsFilter, exactTotal))
     case CliCommand.Stats(ref) => Some(Stats(ref))
     case f: CliCommand.Filter =>
       Some(Filter(f.where, f.columns, f.limit, CliCommand.filterFormat(f.format, mode), f.header))

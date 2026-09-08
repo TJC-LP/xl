@@ -412,16 +412,24 @@ object Reads:
           else listed.traverse(name => lift(Resolve.knownAmong(names, name)))
         case (None, Some(flag)) => lift(Resolve.knownAmong(names, flag)).map(Vector(_))
         case (None, None) => IO.pure(names)
-      // GH-351: the true total is always reported; only the first --limit matches are kept
-      scanned <- Stream
+      // GH-351: only the first --limit matches are listed, the total is reported. GH-637: by
+      // default the scan stops ONE match past the limit — enough to know more exist without reading
+      // the rest of a million-row sheet — and the total is a lower bound; --total (or --limit 0)
+      // reads every cell for the exact total. The sources are lazy: a streamed sheet's parser is
+      // interrupted where the pull ends, and a sheet after the one that filled the limit is never
+      // opened
+      matched = Stream
         .emits(targets)
         .flatMap(source.occupied)
         .filter(record => regex.findFirstIn(record.searchText).isDefined)
-        .compile
-        .fold((Vector.empty[CellRecord], 0)) { case ((kept, total), record) =>
-          (if q.limit <= 0 || kept.size < q.limit then kept :+ record else kept, total + 1)
+      bounded = q.limit > 0 && !q.exactTotal
+      scanned <- (if bounded then matched.take(q.limit.toLong + 1) else matched).compile
+        .fold((Vector.empty[CellRecord], 0)) { case ((kept, seen), record) =>
+          (if q.limit <= 0 || kept.size < q.limit then kept :+ record else kept, seen + 1)
         }
       (shown, total) = scanned
+      // The bounded scan that ran past the limit saw `limit + 1` matches: at least that many exist
+      totalExact = !bounded || total <= q.limit
     yield
       val body = mode match
         case OutputMode.Text =>
@@ -435,9 +443,14 @@ object Reads:
               (s"${SheetName.quoteForFormula(r.sheet.value)}!${r.ref.toA1}", r.searchText)
             )
           )
-          val base = s"Found $total matches in $sheetDesc:\n\n$table"
+          val found =
+            if totalExact then s"Found $total matches" else s"Found at least $total matches"
+          val base = s"$found in $sheetDesc:\n\n$table"
           if shown.size < total then
-            s"$base\n${RendererCommon.truncationNotice(shown.size, total, "matches")}"
+            val notice =
+              if totalExact then RendererCommon.truncationNotice(shown.size, total, "matches")
+              else RendererCommon.searchStoppedNotice(shown.size)
+            s"$base\n$notice"
           else base
         case OutputMode.Json =>
           val sheets = targets.map(n => Escape.json(n.value)).mkString("[", ", ", "]")
@@ -445,7 +458,7 @@ object Reads:
           s"""{"pattern": ${Escape.json(
               q.pattern
             )}, "sheets": $sheets, "count": ${shown.size}, """ +
-            s""""total": $total, "matches": $matches}"""
+            s""""total": $total, "totalExact": $totalExact, "matches": $matches}"""
       mode match
         case OutputMode.Json => Payload.Raw(body)
         case OutputMode.Text => Payload.text(body)

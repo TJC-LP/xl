@@ -266,7 +266,7 @@ object Schema:
     ),
     read(
       "search",
-      "Search cells by regex (all sheets unless -s)",
+      "Search cells by regex (all sheets unless -s; the scan stops at --limit, --total counts every match)",
       sheet = false,
       streaming = true,
       "0.1.0",

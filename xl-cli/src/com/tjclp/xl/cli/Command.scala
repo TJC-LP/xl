@@ -87,7 +87,9 @@ enum CliCommand derives CanEqual:
     skipHidden: Boolean
   )
   case Cell(ref: String, noStyle: Boolean)
-  case Search(pattern: String, limit: Int, sheetsFilter: Option[String])
+  // GH-637: `exactTotal` (--total) scans every cell for the exact match total; by default the
+  // scan stops one match past `limit` and reports the total as a lower bound
+  case Search(pattern: String, limit: Int, sheetsFilter: Option[String], exactTotal: Boolean)
   case Stats(ref: String)
   // Row filtering with a --where predicate (GH-134, phase 1 — read-only, in-memory)
   case Filter(
@@ -251,7 +253,7 @@ enum CliCommand derives CanEqual:
    * at all: `recalc`, the sheet-structure verbs and `name`.
    */
   def takesSheet: Boolean = this match
-    case Sheets(_) | Names | Search(_, _, _) | Describe(_) | Audit(_) | Recalc(_, _) |
+    case Sheets(_) | Names | Search(_, _, _, _) | Describe(_) | Audit(_) | Recalc(_, _) |
         AddSheet(_, _, _) | RemoveSheet(_) | RenameSheet(_, _) | MoveSheet(_, _, _, _) |
         CopySheet(_, _) | Name(_) | Diff(_, _) | Lint(_) =>
       false
@@ -320,7 +322,7 @@ enum CliCommand derives CanEqual:
     case Bounds(_) => "bounds"
     case _: View => "view"
     case Cell(_, _) => "cell"
-    case Search(_, _, _) => "search"
+    case Search(_, _, _, _) => "search"
     case Stats(_) => "stats"
     case _: Filter => "filter"
     case Describe(_) => "describe"

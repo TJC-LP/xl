@@ -412,3 +412,75 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(s2(ref"B1").value, formulaCell("IF(A6=1,1,0)"))
     assertEquals(s2(ref"B2").value, formulaCell("SUMIF(A1:A11,\">2\",C1:C11)"))
   }
+
+  // ===== GH-612: whole-column / whole-row references under structural edits =====
+
+  test("GH-612: inserting or deleting rows leaves a whole-column reference unchanged") {
+    val s = new Sheet(name = S)
+      .put(ref"A5", formulaCell("SUM(E:E)"))
+      .put(ref"B5", formulaCell("COUNTIF($E:$E,A5)"))
+      .put(ref"C5", formulaCell("SUM(A:C)"))
+    val inserted = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 3)
+    val si = sheetNamed(inserted, "S")
+    assertEquals(si(ref"A8").value, formulaCell("SUM(E:E)"))
+    assertEquals(si(ref"B8").value, formulaCell("COUNTIF($E:$E,A8)"))
+    assertEquals(si(ref"C8").value, formulaCell("SUM(A:C)"))
+    val deleted = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 0, count = 2)
+    val sd = sheetNamed(deleted, "S")
+    assertEquals(sd(ref"A3").value, formulaCell("SUM(E:E)"))
+    assertEquals(sd(ref"B3").value, formulaCell("COUNTIF($E:$E,A3)"))
+    assertEquals(sd(ref"C3").value, formulaCell("SUM(A:C)"))
+  }
+
+  test("GH-612: column edits move, widen, narrow or void a whole-column reference") {
+    val s = new Sheet(name = S)
+      .put(ref"A1", formulaCell("SUM(E:E)"))
+      .put(ref"A2", formulaCell("SUM(A:C)"))
+      .put(ref"A3", formulaCell("SUM($E:$E)"))
+    // insert before E: E:E -> F:F (anchors do not matter for structural edits); A:C widens
+    val inserted = StructuralEditor.insertColumns(Workbook(Vector(s)), S, at = 2, count = 1)
+    val si = sheetNamed(inserted, "S")
+    assertEquals(si(ref"A1").value, formulaCell("SUM(F:F)"))
+    assertEquals(si(ref"A2").value, formulaCell("SUM(A:D)"))
+    assertEquals(si(ref"A3").value, formulaCell("SUM($F:$F)"))
+    // delete column E entirely: #REF!; A:C untouched
+    val deletedE = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 4, count = 1)
+    val se = sheetNamed(deletedE, "S")
+    assertEquals(se(ref"A1").value, CellValue.Error(CellError.Ref))
+    assertEquals(se(ref"A2").value, formulaCell("SUM(A:C)"))
+    assertEquals(se(ref"A3").value, CellValue.Error(CellError.Ref))
+    // delete column B inside A:C: narrows to A:B; E:E moves left to D:D
+    val deletedB = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 1, count = 1)
+    val sb = sheetNamed(deletedB, "S")
+    assertEquals(sb(ref"A1").value, formulaCell("SUM(D:D)"))
+    assertEquals(sb(ref"A2").value, formulaCell("SUM(A:B)"))
+  }
+
+  test("GH-612: whole-row references move only with row edits") {
+    val s = new Sheet(name = S)
+      .put(ref"A1", formulaCell("SUM(3:3)"))
+      .put(ref"B1", formulaCell("SUM($3:$10)"))
+    val insertedRows = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 2)
+    val sr = sheetNamed(insertedRows, "S")
+    assertEquals(sr(ref"A3").value, formulaCell("SUM(5:5)"))
+    assertEquals(sr(ref"B3").value, formulaCell("SUM($5:$12)"))
+    val insertedCols = StructuralEditor.insertColumns(Workbook(Vector(s)), S, at = 0, count = 1)
+    val sc = sheetNamed(insertedCols, "S")
+    assertEquals(sc(ref"B1").value, formulaCell("SUM(3:3)"))
+    assertEquals(sc(ref"C1").value, formulaCell("SUM($3:$10)"))
+    val deletedRow3 = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val sd = sheetNamed(deletedRow3, "S")
+    assertEquals(sd(ref"A1").value, CellValue.Error(CellError.Ref))
+    assertEquals(sd(ref"B1").value, formulaCell("SUM($3:$9)"))
+    val deletedInside = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 4, count = 2)
+    assertEquals(sheetNamed(deletedInside, "S")(ref"B1").value, formulaCell("SUM($3:$8)"))
+  }
+
+  test("GH-612: a defined name over a whole column survives a row insert unchanged") {
+    val s = new Sheet(name = S).put(ref"A1", formulaCell("SUM(col)"))
+    val wb = Workbook(Vector(s)).withDefinedName("col", "S!$E:$E")
+    val r = StructuralEditor.insertRows(wb, S, at = 0, count = 3)
+    assertEquals(r.metadata.definedNames.map(_.formula), Vector("S!$E:$E"))
+    val c = StructuralEditor.insertColumns(wb, S, at = 0, count = 1)
+    assertEquals(c.metadata.definedNames.map(_.formula), Vector("S!$F:$F"))
+  }

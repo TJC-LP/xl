@@ -191,12 +191,21 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       ReadTestKit.view(None, ViewFormat.Csv, showFormulas = true)
     ).map(q => (name, q: ReadQuery))
     val searches = Vector(
-      (None, ReadQuery.Search("\\d", 50, None)),
-      (None, ReadQuery.Search("\\d", 2, None)),
-      (name, ReadQuery.Search("TRUE|FALSE", 0, None)),
-      (None, ReadQuery.Search("^$", 50, None)),
-      (None, ReadQuery.Search("SUM|\\*", 50, None)),
-      (None, ReadQuery.Search(java.util.regex.Pattern.quote(someText.getOrElse("Total")), 50, None))
+      (None, ReadQuery.Search("\\d", 50, None, exactTotal = false)),
+      (None, ReadQuery.Search("\\d", 2, None, exactTotal = false)),
+      (None, ReadQuery.Search("\\d", 2, None, exactTotal = true)),
+      (name, ReadQuery.Search("TRUE|FALSE", 0, None, exactTotal = false)),
+      (None, ReadQuery.Search("^$", 50, None, exactTotal = false)),
+      (None, ReadQuery.Search("SUM|\\*", 50, None, exactTotal = false)),
+      (
+        None,
+        ReadQuery.Search(
+          java.util.regex.Pattern.quote(someText.getOrElse("Total")),
+          50,
+          None,
+          exactTotal = false
+        )
+      )
     )
     val stats = Vector((name, ReadQuery.Stats("A1:E8")), (name, ReadQuery.Stats("B2:B3")))
     val filters = Vector(

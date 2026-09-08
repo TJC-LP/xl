@@ -60,7 +60,7 @@ class InMemorySourceSpec extends CatsEffectSuite:
       .merge(tallMerge)
       .merge(shortMerge)
     ReadTestKit.withTempWorkbook(Workbook(Vector(sheet))) { path =>
-      val query = ReadQuery.Search("Total|wide|free|inner", 50, None)
+      val query = ReadQuery.Search("Total|wide|free|inner", 50, None, exactTotal = false)
       def mergedInto(json: String): Map[String, ujson.Value] =
         ujson.read(json)("matches").arr.map(m => m("ref").str -> m("mergedInto")).toMap
       for

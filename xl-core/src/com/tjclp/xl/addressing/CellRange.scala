@@ -270,6 +270,16 @@ object CellRange:
     s.nonEmpty && s.forall(c => c.isDigit)
 
   /**
+   * GH-612: whether one side of a `start:end` spelling (`$` anchor allowed) names a whole COLUMN —
+   * `A`, `$XFD` — the split [[parse]] makes before synthesizing the range's corners, exposed so the
+   * formula layer classifies range text with the very same predicate.
+   */
+  def spellsWholeColumn(part: String): Boolean = isColumnOnly(Anchor.parse(part)._1)
+
+  /** GH-612: the whole-ROW twin of [[spellsWholeColumn]] — `3`, `$10`. */
+  def spellsWholeRow(part: String): Boolean = isRowOnly(Anchor.parse(part)._1)
+
+  /**
    * Parse full column range like A:C or $A:$C. Returns range spanning all rows (0 to MaxIndex0) for
    * the specified columns.
    */
@@ -315,9 +325,17 @@ object CellRange:
       new CellRange(
         ARef(Column.from0(0), minRow),
         ARef(Column.from0(Column.MaxIndex0), maxRow),
-        startAnchor,
-        endAnchor
+        rowAnchor(startAnchor),
+        rowAnchor(endAnchor)
       )
+
+  /**
+   * GH-612: `Anchor.parse` reads a leading `$` as a COLUMN anchor because a cell reference starts
+   * with its column; on a digits-only whole-row part (`$3`) the `$` anchors the ROW.
+   */
+  private def rowAnchor(anchor: Anchor): Anchor = anchor match
+    case Anchor.AbsCol => Anchor.AbsRow
+    case other => other
 
   /**
    * Parse range from A1:B2 notation, preserving anchors.
