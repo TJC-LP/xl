@@ -41,7 +41,7 @@ export PATH="$HOME/.local/bin:$PATH"
 -o, --output <path>   # Output file for mutations
 -i, --in-place        # Edit file in place (same as -o matching -f)
 --stream              # O(1) memory streaming for large files (search/stats/bounds/view + writes)
---max-size <MB>       # Max uncompressed size for in-memory load (default 100, 0 = unlimited)
+--max-size <MB>       # Max uncompressed size for in-memory load (default 100, 0 = unlimited; the heap still bounds what fits — see below)
 --backend <name>      # XML backend: scalaxml (default) or saxstax (faster)
 --no-recalc           # Write verbs: apply the edit, recalculate nothing (alias --preserve-caches)
 --preserve-caches     # Same flag, spelled for the intent
@@ -96,6 +96,17 @@ xl batch --schema                                  # JSON Schema of the batch do
 > line is the verb, so `xl data.xlsx view A1:B4` takes `data.xlsx` for a verb and fails
 > `UNKNOWN_VERB` (exit 2). A verb's positional arguments are its own — the range, the ref, the
 > formula, `copy`'s source and target, `delete-rows`' row and count.
+
+> **`--max-size` lifts the security limit, not the heap.** `--max-size 0` ("unlimited") only stops
+> the reader refusing large uncompressed content; what fits is bounded by the process heap. The
+> native binary is built with an 8 GB ceiling (`-R:MaxHeapSize=8g`), raised only by passing
+> `-Xmx<size>` as the first argument (`xl -Xmx64g -f big.xlsx --max-size 0 audit`; the JAR takes the
+> JVM's own `java -Xmx64g -jar xl.jar …`). An in-memory load needs roughly 30–40× the uncompressed
+> worksheet XML — a million-row book is tens of GB — so large files belong to `--stream`. When
+> `--max-size` is lifted, a load whose estimate (30× the worksheet and shared-string XML) exceeds
+> 70% of the heap is refused before anything is parsed, and a load that does exhaust the heap is
+> reported the same way: `code: RESOURCE_LIMIT`, exit 3, with the `--stream`/`-Xmx` hint — never a
+> raw `java.lang.OutOfMemoryError` with exit 1 and, under `--json`, no envelope.
 
 > **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
 > (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`/`--sheet` (for a batch op, its `sheet` key
@@ -1726,8 +1737,8 @@ instance `Warning[READER_WARNING]: MissingStylesXml` when the input has no `xl/s
 `INVALID_CELL_REF`, `FORMULA_ERROR`, `SECURITY_ERROR`, `SHEET_REQUIRED`, `IO_ERROR`, ...) or one of the
 CLI-only codes: `USAGE`, `UNKNOWN_VERB`, `OUTPUT_REQUIRED`, `UNSUPPORTED_IN_STREAM`,
 `BATCH_JSON_INVALID`, `BATCH_OP_UNKNOWN`, `BATCH_OP_INVALID`, `BATCH_OP_FAILED`,
-`RASTERIZER_UNAVAILABLE`, `IO_READ`, `IO_WRITE`, `RECALC_GATE`, `DIFFERENCES_FOUND`, `LINT_FINDINGS`,
-`AUDIT_FINDINGS`, `INTERNAL`. The complete vocabulary, each code with the exit it implies, is the
+`RASTERIZER_UNAVAILABLE`, `IO_READ`, `IO_WRITE`, `RESOURCE_LIMIT`, `RECALC_GATE`,
+`DIFFERENCES_FOUND`, `LINT_FINDINGS`, `AUDIT_FINDINGS`, `INTERNAL`. The complete vocabulary, each code with the exit it implies, is the
 generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schema --json` →
 `errorCodes`/`warningCodes`). The exit code follows from the code alone:
 
@@ -1736,7 +1747,7 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 | `0` | ok | | as requested |
 | `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | `-o`: yes; `-i`: no |
 | `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, `--stream` with an unsupported verb or flag | no |
-| `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit | no |
+| `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit, a workbook that does not fit in memory (`RESOURCE_LIMIT`) | no |
 
 Two rows worth spelling out:
 

@@ -259,12 +259,19 @@ streamed `style` merges as in memory, and an op that fails to apply is `BATCH_OP
 index). `view --format html|svg|png|jpeg|webp|pdf` needs the styles and is not
 available under `--stream`; `names`, `diff`, `lint`, `eval`, `evala` and `new` do not take the
 flag at all (usage error). Streaming never recalculates. For everything else, load in memory
-with `--max-size 0` (unlimited) or `--max-size 500`.
+with `--max-size 0` (lifts the 100 MB security limit) or `--max-size 500`. That lifts the limit,
+not the heap: the native binary's heap is capped at 8 GB unless `-Xmx<size>` is the first
+argument (`xl -Xmx64g -f big.xlsx …`; the JAR takes `java -Xmx64g -jar`), and an in-memory load
+needs roughly 30–40× the uncompressed worksheet XML — a million-row book is tens of GB, so stream
+it. With `--max-size` lifted, a load estimated not to fit is refused before parsing, and a load
+that exhausts the heap is reported, both as `RESOURCE_LIMIT` (exit 3) with the `--stream`/`-Xmx`
+hint — never a raw `OutOfMemoryError`.
 
 ```bash
 xl -f huge.xlsx --stream search "pattern" --limit 10
 xl -f huge.xlsx -o out.xlsx --stream putf A2 "=B2*1.1"
 xl -f huge.xlsx --max-size 0 sheets
+xl -Xmx32g -f huge.xlsx --max-size 0 audit          # native image: -Xmx must come first
 ```
 
 ### Cache posture and strict pipelines

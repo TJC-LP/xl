@@ -1995,9 +1995,13 @@ EXAMPLES:
     val err = if rendered.stderr.isEmpty then IO.unit else io.err(rendered.stderr)
     (out *> err).as(outcome.exitCode)
 
-  /** An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s. */
+  /**
+   * An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s and whose in-memory
+   * load runs under the [[MemoryGuard]] (GH-636): refused up front when a lifted `--max-size`
+   * cannot fit the heap, `RESOURCE_LIMIT` rather than a fatal `OutOfMemoryError` when it does not.
+   */
   private def readerCollecting(warnings: Ref[IO, Vector[Warning]]): ExcelIO[IO] =
-    ExcelIO.withWarnings[IO] { warning =>
+    MemoryGuard.excel { warning =>
       warnings.update(_ :+ Warning(WarningCode.READER_WARNING, warning.toString))
     }
 
@@ -2073,7 +2077,10 @@ EXAMPLES:
         )
     }
 
-  /** Read the input through `excel` under [[classifyRead]]. */
+  /**
+   * Read the input through `excel` under [[classifyRead]]. Every in-memory load of the CLI goes
+   * through here with a [[MemoryGuard.excel]] instance, so one seam owns the heap (GH-636).
+   */
   private def readWorkbook(excel: ExcelIO[IO], path: Path, config: ReaderConfig): IO[Workbook] =
     classifyRead(path)(excel.readWith(path, config))
 
@@ -2380,7 +2387,7 @@ EXAMPLES:
     io: CliIO = CliIO.system,
     mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
-    val excel = ExcelIO.instance[IO]
+    val excel = MemoryGuard.excel(_ => IO.unit) // two loads, each under the memory guard
     val readerConfig = buildReaderConfig(maxSizeOpt)
     (for
       wbA <- readWorkbook(excel, fileA, readerConfig)

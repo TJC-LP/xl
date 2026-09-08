@@ -21,7 +21,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `--json` | — | no | Wrap every result, success or failure, in the JSON envelope |
 | `--file` | `-f` | yes | Excel file to operate on |
 | `--sheet` | `-s` | yes | Sheet to select; a sheet-qualified ref wins over it and a single-sheet book needs neither |
-| `--max-size` | — | yes | Max uncompressed size in MB for an in-memory load (default 100, 0 = unlimited) |
+| `--max-size` | — | yes | Max uncompressed size in MB for an in-memory load (default 100, 0 = unlimited); lifts the security limit only — the heap (native image: 8 GB unless -Xmx is the first argument) still bounds what fits, and a load estimated not to fit is refused with RESOURCE_LIMIT |
 | `--output` | `-o` | yes | Output file for a write |
 | `--in-place` | `-i` | no | Edit the input file in place (instead of -o) |
 | `--backend` | — | yes | XML writer backend: scalaxml (default) or saxstax (faster) |

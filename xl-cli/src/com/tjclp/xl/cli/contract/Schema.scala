@@ -87,7 +87,9 @@ object Schema:
     GlobalDoc(
       "--max-size",
       None,
-      "Max uncompressed size in MB for an in-memory load (default 100, 0 = unlimited)"
+      "Max uncompressed size in MB for an in-memory load (default 100, 0 = unlimited); lifts the " +
+        "security limit only — the heap (native image: 8 GB unless -Xmx is the first argument) " +
+        "still bounds what fits, and a load estimated not to fit is refused with RESOURCE_LIMIT"
     ),
     GlobalDoc("--output", Some("-o"), "Output file for a write"),
     GlobalDoc("--in-place", Some("-i"), "Edit the input file in place (instead of -o)"),

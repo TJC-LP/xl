@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`RESOURCE_LIMIT`** (#636): a CLI error code (exit 3) for a workbook that does not fit in
+  memory. Every in-memory load now runs under `MemoryGuard` (xl-cli): an `OutOfMemoryError` raised
+  while parsing — fatal to cats-effect, which halted the binary with a raw stack trace, exit 1 and
+  no `--json` envelope — is caught inside the load's own thunk (the only place the runtime lets it
+  be caught) and reported as `RESOURCE_LIMIT`, the heap size in the message and `use --stream for
+  constant-memory reads, or raise the heap with -Xmx<size> (native image: xl -Xmx64g …)` as the
+  hint. When `--max-size` lifts the default, a load whose estimated footprint — 30× the worksheet
+  and shared-string XML, sized from the zip's central directory without inflating anything —
+  exceeds 70% of the heap is refused before a byte is parsed, same code and hint, the file in
+  `error.location` (the 0.21.0 dogfood book: 1.09 GB of sheet XML needed 36–45 GB of heap, so the
+  estimate brackets the observed need). `-Xmx` is the override: the estimate is measured against
+  the heap the process actually has. The code is in `xl schema --json`, `generated/error-codes.md`
+  and the `--max-size` global's doc; every other `Error` keeps its `INTERNAL` classification.
 - **The CLI contract is a CI gate** (#592). A `contract` job runs the golden runner, the
   generated-docs drift check and the new `ContractSpec` explicitly, so a golden diff fails with the
   unified diff in the log, then builds the assembly JAR and runs `scripts/smoke-cli-contract.sh`
@@ -131,6 +144,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An in-memory load of a large workbook died with a raw `java.lang.OutOfMemoryError`** (#636):
+  `xl -f nyc1m.xlsx --max-size 0 view A1:H20` ran for three minutes, then exited 1 with a stack
+  trace on stderr and — under `--json` — an empty stdout and no envelope, two ADR-017 violations,
+  because the native image's baked 8 GB heap could never hold the book. It is now `RESOURCE_LIMIT`,
+  exit 3, envelope emitted, refused up front when the estimate says it cannot fit (see Added). The
+  docs called `--max-size 0` "unlimited": `docs/reference/cli.md`, `CLAUDE.md` and the xl-cli skill
+  now say it lifts the security limit only, that the native binary's heap is capped at 8 GB unless
+  `-Xmx<size>` is passed as the first argument (`xl -Xmx64g …`; the JAR takes `java -Xmx64g -jar`),
+  and that a million-row book needs tens of GB in memory — use `--stream`.
 - **`_xlfn.` storage prefix on conditional-formatting, data-validation and defined-name formulas**
   (#577). `CfCodec`, `DataValidationCodec` and the workbook's defined names now go through
   `FormulaStorage` like cell formulas: an Excel-authored `_xlfn.IFS(` in a rule reads bare and
