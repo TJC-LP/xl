@@ -306,11 +306,19 @@ class ViewTruncationSpec extends CatsEffectSuite:
 
   // ========== search ==========
 
-  private def search(wb: Workbook, limit: Int): IO[String] =
-    ReadTestKit.readText(wb, Some("Data"), ReadQuery.Search("\\d", limit, None))
+  private def search(wb: Workbook, limit: Int, exactTotal: Boolean = false): IO[String] =
+    ReadTestKit.readText(wb, Some("Data"), ReadQuery.Search("\\d", limit, None, exactTotal))
 
-  test("search: clipped hit list reports total count and trailer") {
+  test("search: clipped hit list reports the total as a lower bound and a trailer (GH-637)") {
     search(wbWithRows(100), 10).map { out =>
+      assert(out.contains("Found at least 11 matches"), s"expected a lower bound:\n$out")
+      assert(out.contains("… showing first 10 matches; more exist"), s"missing trailer:\n$out")
+      assert(out.contains("--total for the exact count"), s"missing --total hint:\n$out")
+    }
+  }
+
+  test("search --total: clipped hit list reports the exact total and trailer") {
+    search(wbWithRows(100), 10, exactTotal = true).map { out =>
       assert(out.contains("Found 100 matches"), s"expected true total count:\n$out")
       assert(out.contains("… showing 10 of 100 matches"), s"missing trailer:\n$out")
     }
@@ -405,18 +413,26 @@ class ViewTruncationSpec extends CatsEffectSuite:
     }
   }
 
-  test("streaming search: the true total and the same trailer as the in-memory search") {
+  test("streaming search: the same lower bound, exact total and trailers as the in-memory search") {
     ReadTestKit.withTempWorkbook(wbWithRows(100)) { path =>
       for
         clipped <- ReadTestKit
-          .streaming(path, Some("Data"), ReadQuery.Search("\\d", 10, None))
+          .streaming(path, Some("Data"), ReadQuery.Search("\\d", 10, None, exactTotal = false))
+          .map(ReadTestKit.text)
+        exact <- ReadTestKit
+          .streaming(path, Some("Data"), ReadQuery.Search("\\d", 10, None, exactTotal = true))
           .map(ReadTestKit.text)
         all <- ReadTestKit
-          .streaming(path, Some("Data"), ReadQuery.Search("\\d", 0, None))
+          .streaming(path, Some("Data"), ReadQuery.Search("\\d", 0, None, exactTotal = false))
           .map(ReadTestKit.text)
       yield
-        assert(clipped.contains("Found 100 matches"), s"expected the true total:\n$clipped")
-        assert(clipped.contains("… showing 10 of 100 matches"), s"missing trailer:\n$clipped")
+        assert(clipped.contains("Found at least 11 matches"), s"expected a lower bound:\n$clipped")
+        assert(
+          clipped.contains("… showing first 10 matches; more exist"),
+          s"missing trailer:\n$clipped"
+        )
+        assert(exact.contains("Found 100 matches"), s"expected the true total:\n$exact")
+        assert(exact.contains("… showing 10 of 100 matches"), s"missing trailer:\n$exact")
         assert(all.contains("Found 100 matches"), s"expected all matches:\n$all")
         assert(!all.contains("… showing"), s"unexpected clip notice:\n$all")
     }

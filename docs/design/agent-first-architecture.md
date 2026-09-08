@@ -303,8 +303,9 @@ payload forever** (`{sheet, range, rows}` for `view`; the existing shapes for `f
 `--format` under `--json` rides inside as `data.text`. Prose verbs yield
 `data: {"text": "...", "saved": "out.xlsx", "written": true}` until they are typed (Wave 2's
 `Written` payload with per-edit before/after). Truncation is reported inside the verb payload
-(`view` already emits `truncated`/`totalRows`) and as a `TRUNCATED` warning; the envelope itself
-does not grow an eighth key. `schema --json` publishes the envelope's JSON Schema.
+(`view` emits `truncated`/`totalRows`; `search` emits `count`/`total`/`totalExact` and no
+warning) and, where the payload format cannot carry it (`view` csv/svg/html), as a `TRUNCATED`
+warning; the envelope itself does not grow an eighth key. `schema --json` publishes the envelope's JSON Schema.
 
 ### 2.5 `Resolve` — ONE sheet rule
 

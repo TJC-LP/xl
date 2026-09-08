@@ -74,7 +74,7 @@ class StreamingReadSpec extends CatsEffectSuite:
   test("streaming search, stats and cell agree with the in-memory verbs") {
     ReadTestKit.withTempWorkbook(wb) { path =>
       val queries: Vector[(Option[String], ReadQuery)] = Vector(
-        (None, ReadQuery.Search("o", 50, None)),
+        (None, ReadQuery.Search("o", 50, None, exactTotal = false)),
         (Some("Test"), ReadQuery.Stats("A1:A3")),
         (Some("Test"), ReadQuery.Cell("A2", noStyle = false))
       )
