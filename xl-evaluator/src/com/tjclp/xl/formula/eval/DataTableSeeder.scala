@@ -1118,8 +1118,8 @@ object DataTableSeeder:
     clock: Clock
   ): Either[EvalError, Any] =
     expr match
-      case TExpr.RangeRef(cellRange) => Right(ArrayArithmetic.rangeToArray(cellRange, sheet))
-      case TExpr.SheetRange(sheetName, cellRange) =>
+      case TExpr.RangeRef(cellRange, _) => Right(ArrayArithmetic.rangeToArray(cellRange, sheet))
+      case TExpr.SheetRange(sheetName, cellRange, _) =>
         Evaluator
           .resolveRangeLocation(
             TExpr.RangeLocation.CrossSheet(sheetName, cellRange),

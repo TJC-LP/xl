@@ -107,14 +107,15 @@ object FormulaFormatting:
 
     def locationRefs(location: TExpr.RangeLocation): Vector[(Sheet, ARef)] =
       location match
-        case TExpr.RangeLocation.Local(range) => boundedCells(sheet, range)
-        case TExpr.RangeLocation.CrossSheet(name, range) =>
+        case TExpr.RangeLocation.Local(range, _) => boundedCells(sheet, range)
+        case TExpr.RangeLocation.CrossSheet(name, range, _) =>
           resolve(name).map(boundedCells(_, range)).getOrElse(Vector.empty)
         // GH-353: the target cells are not in this workbook — no format to inherit from
-        case TExpr.RangeLocation.External(_, _, _) => Vector.empty
+        case TExpr.RangeLocation.External(_, _, _, _) => Vector.empty
         // GH-394: the target range lives behind workbook metadata this walk cannot see —
         // no format to inherit (the GH-384 NameRef precedent)
         case TExpr.RangeLocation.Name(_, _) => Vector.empty
+        case TExpr.RangeLocation.Error(_) => Vector.empty
 
     def loop(e: TExpr[?]): Vector[(Sheet, ARef)] =
       e match
@@ -127,15 +128,15 @@ object FormulaFormatting:
           resolve(name).map(target => Vector(target -> at)).getOrElse(Vector.empty)
 
         // Range references
-        case TExpr.RangeRef(range) => boundedCells(sheet, range)
-        case TExpr.SheetRange(name, range) =>
+        case TExpr.RangeRef(range, _) => boundedCells(sheet, range)
+        case TExpr.SheetRange(name, range, _) =>
           resolve(name).map(boundedCells(_, range)).getOrElse(Vector.empty)
         case TExpr.Aggregate(_, location) => locationRefs(location)
 
         // GH-353: external-workbook refs — the target cells are not in this workbook, so
         // there is no format to inherit from
         case TExpr.ExternalRef(_, _, _, _) => Vector.empty
-        case TExpr.ExternalRange(_, _, _) => Vector.empty
+        case TExpr.ExternalRange(_, _, _, _) => Vector.empty
 
         // Function calls: arguments in declaration order
         case call: TExpr.Call[?] =>
@@ -190,6 +191,7 @@ object FormulaFormatting:
 
         // Literals: no references
         case TExpr.Lit(_) => Vector.empty
+        case TExpr.ErrorLit(_) => Vector.empty
 
     loop(expr)
 

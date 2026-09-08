@@ -27,9 +27,9 @@ class FormulaOpsSpec extends FunSuite:
     assertEquals(FormulaOps.shift("A1", 0, 1), Right("A2"): XLResult[String])
   }
 
-  test("shift keeps today's clamp at the sheet edge") {
-    assertEquals(FormulaOps.shift("=A1", -5, -5), Right("=A1"): XLResult[String])
-    assertEquals(FormulaOps.shift("=B2", -1, -5), Right("=A1"): XLResult[String])
+  test("GH-612: shift never clamps — a reference pushed before A1 becomes #REF!") {
+    assertEquals(FormulaOps.shift("=A1", -5, -5), Right("=#REF!"): XLResult[String])
+    assertEquals(FormulaOps.shift("=B2", -1, -5), Right("=#REF!"): XLResult[String])
   }
 
   test("shift(text, 0, 0) canonicalises but never changes meaning") {
@@ -172,4 +172,89 @@ class FormulaOpsSpec extends FunSuite:
         case Left(XLError.FormulaError(formula, _)) =>
           assertEquals(formula, "SUM(Sheet1:Sheet3!A1)")
         case other => fail(s"renaming ${sheet.value}: expected FormulaError, got $other")
+  }
+
+  // ===== GH-612: full-column / full-row forms and off-grid references =====
+
+  private def shifted(text: String, colDelta: Int, rowDelta: Int): String =
+    FormulaOps.shift(text, colDelta, rowDelta).fold(e => fail(e.message), identity)
+
+  test("GH-612: a full-column reference drags along columns only") {
+    assertEquals(shifted("=COUNTIF($A:$A,B1)", 0, 1), "=COUNTIF($A:$A,B2)")
+    assertEquals(shifted("=COUNTIF($A:$A,B1)", 0, 2), "=COUNTIF($A:$A,B3)")
+    assertEquals(shifted("=SUM(E:E)", 1, 0), "=SUM(F:F)")
+    assertEquals(shifted("=SUM(E:E)", 0, 5), "=SUM(E:E)")
+    assertEquals(shifted("=SUM(E:E)", 0, 1048575), "=SUM(E:E)")
+    assertEquals(shifted("=SUM($E:$E)", 3, 3), "=SUM($E:$E)")
+    assertEquals(shifted("=SUM($A:C)", 1, 1), "=SUM($A:D)")
+    assertEquals(shifted("=SUM(Sheet1!A:A)", 2, 9), "=SUM(Sheet1!C:C)")
+    assertEquals(shifted("=SUM([2]Book1!A:A)", 1, 4), "=SUM([2]Book1!B:B)")
+    assertEquals(shifted("=[2]Book1!A:A", 1, 0), "=[2]Book1!B:B")
+    assertEquals(shifted("=A:A", 1, 1), "=B:B")
+  }
+
+  test("GH-612: a full-row reference drags along rows only") {
+    assertEquals(shifted("=SUM(1:1)", 1, 0), "=SUM(1:1)")
+    assertEquals(shifted("=SUM(1:1)", 16383, 0), "=SUM(1:1)")
+    assertEquals(shifted("=SUM(1:1)", 0, 1), "=SUM(2:2)")
+    assertEquals(shifted("=SUM($3:$10)", 4, 4), "=SUM($3:$10)")
+    assertEquals(shifted("=SUM($3:10)", 0, 1), "=SUM($3:11)")
+    assertEquals(shifted("=1:1", 1, 1), "=2:2")
+  }
+
+  test("GH-612: a zero shift keeps the whole-column form (the first dragged cell)") {
+    assertEquals(shifted("=COUNTIF($A:$A,B1)", 0, 0), "=COUNTIF($A:$A,B1)")
+    assertEquals(shifted("=SUM(1:1)", 0, 0), "=SUM(1:1)")
+  }
+
+  test("GH-612: the mixed formula dragged down two and right one") {
+    assertEquals(
+      shifted("=COUNTIF($A:$A,B1)+SUM(1:1)+A1", 1, 2),
+      "=COUNTIF($A:$A,C3)+SUM(3:3)+B3"
+    )
+  }
+
+  test("GH-612: a corner range over every row is the whole-column form and drags like one") {
+    // Excel canonicalises A1:A1048576 to A:A at entry; the corner spelling only reaches xl from
+    // other producers or a putf, and drags exactly as A:A would
+    assertEquals(shifted("=SUM(A1:A1048576)", 1, 0), "=SUM(B:B)")
+    assertEquals(shifted("=SUM(A1:A1048576)", 0, 1), "=SUM(A:A)")
+    assertEquals(shifted("=SUM(A1:XFD1)", 0, 2), "=SUM(3:3)")
+    assertEquals(shifted("=SUM(A2:A1048576)", 0, 1), "=SUM(#REF!)")
+  }
+
+  test("GH-612: a shift that makes a relative corner overtake an anchored one prints normalised") {
+    assertEquals(shifted("=SUM(E:$E)", 1, 0), "=SUM($E:F)")
+    assertEquals(shifted("=SUM($E:E)", -1, 0), "=SUM(D:$E)")
+    assertEquals(shifted("=SUM(3:$3)", 0, 2), "=SUM($3:5)")
+    assertEquals(shifted("=SUM(A1:$B$1)", 2, 0), "=SUM($B$1:C1)")
+  }
+
+  test("GH-612: a reference pushed off the grid becomes #REF!, never a non-existent address") {
+    // before row 1 / column A
+    assertEquals(shifted("=A1+B3", 0, -1), "=#REF!+B2")
+    assertEquals(shifted("=Sheet1!A1", 0, -1), "=#REF!")
+    // a range in a range-typed slot becomes #REF! inside the call, as Excel writes it
+    assertEquals(shifted("=SUM(A1:A2)+C5", 0, -1), "=SUM(#REF!)+C4")
+    assertEquals(shifted("=COUNTIF(A1:A2,B5)", 0, -1), "=COUNTIF(#REF!,B4)")
+    assertEquals(shifted("=SUM(A:A)", -1, 0), "=SUM(#REF!)")
+    assertEquals(shifted("=SUM(1:1)", 0, -1), "=SUM(#REF!)")
+    assertEquals(shifted("=SUM(Sheet1!A:A)", -1, 0), "=SUM(#REF!)")
+    assertEquals(shifted("=A:A", -1, 0), "=#REF!")
+    // past row 1048576 / column XFD
+    assertEquals(shifted("=A1048576", 0, 1), "=#REF!")
+    assertEquals(shifted("=XFD1", 1, 0), "=#REF!")
+    assertEquals(shifted("=SUM(XFC1:XFD1)", 1, 0), "=SUM(#REF!)")
+    assertEquals(shifted("=SUM(XFD:XFD)", 1, 0), "=SUM(#REF!)")
+    assertEquals(shifted("=SUM(1048576:1048576)", 0, 1), "=SUM(#REF!)")
+    // the written #REF! re-parses and shifts as an error, staying put
+    assertEquals(shifted("=SUM(#REF!)+C4", 1, 1), "=SUM(#REF!)+D5")
+    // anchors pin an axis, so it cannot fall off
+    assertEquals(shifted("=A$1", 0, -1), "=A$1")
+    assertEquals(shifted("=$A1", -1, 0), "=$A1")
+    assertEquals(shifted("=$A:$A", -1, 0), "=$A:$A")
+    assertEquals(shifted("=$1:$1", 0, -1), "=$1:$1")
+    // the #REF! is per reference: the rest of the formula survives and re-parses
+    assertEquals(shifted("=IF(A1>0,ABS(A1),B5)", 0, -1), "=IF(#REF!>0,ABS(#REF!),B4)")
+    assertEquals(shifted("=#REF!+B2", 1, 1), "=#REF!+C3")
   }

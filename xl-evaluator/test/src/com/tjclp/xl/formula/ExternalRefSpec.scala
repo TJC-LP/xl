@@ -54,7 +54,7 @@ class ExternalRefSpec extends ScalaCheckSuite:
 
   test("parse: unquoted external range [2]Book1!A1:B2"):
     FormulaParser.parse("=[2]Book1!A1:B2") match
-      case Right(TExpr.ExternalRange(index, name, range)) =>
+      case Right(TExpr.ExternalRange(index, name, range, _)) =>
         assertEquals(index, 2)
         assertEquals(name, "Book1")
         assertEquals(range.toA1, "A1:B2")

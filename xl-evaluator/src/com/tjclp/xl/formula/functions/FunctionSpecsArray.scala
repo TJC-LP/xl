@@ -159,10 +159,10 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
     expr match
       case TExpr.Ref(at, _, _) => Some((None, CellRange(at, at)))
       case TExpr.PolyRef(at, _) => Some((None, CellRange(at, at)))
-      case TExpr.RangeRef(range) => Some((None, range))
+      case TExpr.RangeRef(range, _) => Some((None, range))
       case TExpr.SheetRef(sheet, at, _, _) => Some((Some(sheet), CellRange(at, at)))
       case TExpr.SheetPolyRef(sheet, at, _) => Some((Some(sheet), CellRange(at, at)))
-      case TExpr.SheetRange(sheet, range) => Some((Some(sheet), range))
+      case TExpr.SheetRange(sheet, range, _) => Some((Some(sheet), range))
       case _ => None
 
   /**

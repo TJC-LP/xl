@@ -1,12 +1,13 @@
 package com.tjclp.xl.formula.printer
 
-import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
 
 import scala.annotation.nowarn
 
 import com.tjclp.xl.{Anchor, CellRange}
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
+import com.tjclp.xl.cells.CellError
 import TExpr.RangeLocation
 
 /**
@@ -25,12 +26,26 @@ import TExpr.RangeLocation
  *   - B4: =A3*$B$1
  *   - B5: =A4*$B$1
  *
+ * GH-612: a whole-column reference (`E:E`, [[RangeForm.Columns]]) moves only along columns and a
+ * whole-row reference (`3:3`) only along rows — the other axis is "all of them", not a coordinate.
+ * A reference that a shift would carry off the grid (before A1, past XFD1048576) becomes the error
+ * literal `#REF!`, per reference, exactly as Excel writes when copying `=A1` from B2 to B1; a range
+ * in a range-typed argument slot becomes [[RangeLocation.Error]] the same way (`SUM(A1:A2)` →
+ * `SUM(#REF!)`).
+ *
  * Laws:
  *   - Identity: shift(expr, 0, 0) == expr
- *   - Commutativity: shift(shift(expr, c1, r1), c2, r2) == shift(expr, c1+c2, r1+r2)
+ *   - Commutativity: shift(shift(expr, c1, r1), c2, r2) == shift(expr, c1+c2, r1+r2) while every
+ *     reference stays on the grid and no relative corner overtakes an anchored one (the normalised
+ *     print of a crossed range swaps the `$`, which is not invertible — Excel has the same
+ *     asymmetry; pinned in RangeFormSpec)
  *   - Anchor preservation: Anchor of shifted ref equals original anchor
  */
 object FormulaShifter:
+
+  /** GH-612: what an off-grid reference becomes, in expression and in range-slot position. */
+  private val refError: TExpr[Nothing] = TExpr.ErrorLit(CellError.Ref)
+  private val refErrorLocation: RangeLocation = RangeLocation.Error(CellError.Ref)
 
   /**
    * Shift all cell references in the expression by the given deltas.
@@ -48,52 +63,60 @@ object FormulaShifter:
     if colDelta == 0 && rowDelta == 0 then expr
     else shiftInternal(expr, colDelta, rowDelta)
 
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  // Var: the deprecated bare-CellRange argument slot (ArgSpec.cellRange, no in-repo consumers) has
+  // no error form, so an off-grid range there voids the call through a local var exactly as
+  // shiftStructuralInternal flags a deleted one
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Var"))
   @nowarn(
     "msg=Unreachable case"
   ) // PolyRef extends TExpr[Nothing], reachable via asInstanceOf casts
   private def shiftInternal[A](expr: TExpr[A], colDelta: Int, rowDelta: Int): TExpr[A] =
     import TExpr.*
 
+    // GH-612: an off-grid reference becomes #REF! — the whole reference, never a clamped or
+    // non-existent address
+    def orRefError(shifted: Option[TExpr[?]]): TExpr[A] =
+      shifted.getOrElse(refError).asInstanceOf[TExpr[A]]
+
     expr match
       // Cell references - apply anchor-aware shifting
       case Ref(at, anchor, decode) =>
-        val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
-        Ref(shiftedRef, anchor, decode)
+        orRefError(shiftARef(at, anchor, colDelta, rowDelta).map(Ref(_, anchor, decode)))
 
       case PolyRef(at, anchor) =>
-        val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
-        PolyRef(shiftedRef, anchor).asInstanceOf[TExpr[A]]
+        orRefError(shiftARef(at, anchor, colDelta, rowDelta).map(PolyRef(_, anchor)))
 
       // Sheet-qualified references - shift the cell ref but keep the sheet
       case SheetRef(sheet, at, anchor, decode) =>
-        val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
-        SheetRef(sheet, shiftedRef, anchor, decode)
+        orRefError(
+          shiftARef(at, anchor, colDelta, rowDelta).map(SheetRef(sheet, _, anchor, decode))
+        )
 
       case SheetPolyRef(sheet, at, anchor) =>
-        val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
-        SheetPolyRef(sheet, shiftedRef, anchor).asInstanceOf[TExpr[A]]
+        orRefError(shiftARef(at, anchor, colDelta, rowDelta).map(SheetPolyRef(sheet, _, anchor)))
 
-      case RangeRef(range) =>
-        val shiftedRange = shiftRange(range, colDelta, rowDelta)
-        RangeRef(shiftedRange).asInstanceOf[TExpr[A]]
+      case RangeRef(range, form) =>
+        orRefError(shiftRange(range, form, colDelta, rowDelta).map(RangeRef(_, form)))
 
-      case SheetRange(sheet, range) =>
-        val shiftedRange = shiftRange(range, colDelta, rowDelta)
-        SheetRange(sheet, shiftedRange).asInstanceOf[TExpr[A]]
+      case SheetRange(sheet, range, form) =>
+        orRefError(shiftRange(range, form, colDelta, rowDelta).map(SheetRange(sheet, _, form)))
 
       // GH-353: external-workbook references shift anchor-aware like sheet-qualified ones —
       // the workbook/sheet qualifier is fixed, the cell coordinates drag
       case ExternalRef(index, name, at, anchor) =>
-        val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
-        ExternalRef(index, name, shiftedRef, anchor).asInstanceOf[TExpr[A]]
+        orRefError(
+          shiftARef(at, anchor, colDelta, rowDelta).map(ExternalRef(index, name, _, anchor))
+        )
 
-      case ExternalRange(index, name, range) =>
-        val shiftedRange = shiftRange(range, colDelta, rowDelta)
-        ExternalRange(index, name, shiftedRange).asInstanceOf[TExpr[A]]
+      case ExternalRange(index, name, range, form) =>
+        orRefError(
+          shiftRange(range, form, colDelta, rowDelta).map(ExternalRange(index, name, _, form))
+        )
 
       // Literals - unchanged
       case lit: Lit[?] => lit.asInstanceOf[TExpr[A]]
+      // GH-612: an error literal has no coordinates
+      case err: ErrorLit => err.asInstanceOf[TExpr[A]]
 
       // Arithmetic operators
       case Add(x, y) =>
@@ -149,18 +172,24 @@ object FormulaShifter:
       case Percent(e) =>
         Percent(shiftInternal(e, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
-      // Arithmetic range functions (now using RangeLocation)
+      // Arithmetic range functions (now using RangeLocation). GH-612: a range slot that falls off
+      // the grid becomes RangeLocation.Error — SUM(#REF!), as Excel writes it
       case Aggregate(aggregatorId, location) =>
         Aggregate(aggregatorId, shiftLocation(location, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
       case call: Call[?] =>
+        var voided = false
         val shifted =
           call.spec.argSpec.map(call.args)(
             expr => shiftInternal(expr, colDelta, rowDelta),
             loc => shiftLocation(loc, colDelta, rowDelta),
-            range => shiftRange(range, colDelta, rowDelta)
+            range =>
+              shiftRange(range, RangeForm.Cells, colDelta, rowDelta).getOrElse {
+                voided = true; range
+              }
           )
-        Call(call.spec, shifted).asInstanceOf[TExpr[A]]
+        if voided then refError.asInstanceOf[TExpr[A]]
+        else Call(call.spec, shifted).asInstanceOf[TExpr[A]]
 
       // Date-to-serial converters - shift inner expression
       case DateToSerial(dateExpr) =>
@@ -186,6 +215,17 @@ object FormulaShifter:
         Coerced(shiftInternal(inner, colDelta, rowDelta), target).asInstanceOf[TExpr[A]]
 
   /**
+   * Shift one 0-based coordinate unless anchored; None when it leaves the grid (GH-612: Excel
+   * writes `#REF!`, never a clamped or non-existent address). Long arithmetic so a pathological
+   * delta cannot wrap.
+   */
+  private def shiftIndex(index0: Int, anchored: Boolean, delta: Int, max: Int): Option[Int] =
+    if anchored then Some(index0)
+    else
+      val shifted = index0.toLong + delta
+      Option.when(shifted >= 0 && shifted <= max)(shifted.toInt)
+
+  /**
    * Shift a cell reference based on its anchor mode.
    *
    * @param ref
@@ -197,52 +237,85 @@ object FormulaShifter:
    * @param rowDelta
    *   Row shift amount
    * @return
-   *   Shifted cell reference (clamped to valid bounds)
+   *   Shifted cell reference; None when either moving axis leaves the grid
    */
-  private def shiftARef(cellRef: ARef, anchor: Anchor, colDelta: Int, rowDelta: Int): ARef =
-    // Extract column and row indices using companion object methods
-    val colIdx = Column.index0(cellRef.col)
-    val rowIdx = Row.index0(cellRef.row)
-
-    val newCol =
-      if anchor.isColAbsolute then colIdx
-      else math.max(0, colIdx + colDelta)
-
-    val newRow =
-      if anchor.isRowAbsolute then rowIdx
-      else math.max(0, rowIdx + rowDelta)
-
-    ARef.from0(newCol, newRow)
+  private def shiftARef(
+    cellRef: ARef,
+    anchor: Anchor,
+    colDelta: Int,
+    rowDelta: Int
+  ): Option[ARef] =
+    for
+      newCol <- shiftIndex(
+        Column.index0(cellRef.col),
+        anchor.isColAbsolute,
+        colDelta,
+        Column.MaxIndex0
+      )
+      newRow <- shiftIndex(Row.index0(cellRef.row), anchor.isRowAbsolute, rowDelta, Row.MaxIndex0)
+    yield ARef.from0(newCol, newRow)
 
   /**
-   * Shift a cell range by the given deltas, respecting per-endpoint anchors.
+   * Shift a cell range by the given deltas, respecting per-endpoint anchors and (GH-612) the form
+   * the range was written in.
    *
    * Each endpoint shifts according to its own anchor mode:
    *   - `$A$1:B10` → start ($A$1) is Absolute (fixed), end (B10) is Relative (shifts)
    *   - `$A1:B$10` → start has AbsCol (col fixed), end has AbsRow (row fixed)
+   *
+   * A whole-column range (`E:E`) moves only along columns and a whole-row range (`3:3`) only along
+   * rows: the other axis spans the sheet and is not a coordinate. None when an endpoint leaves the
+   * grid — the reference becomes `#REF!`.
    */
-  private def shiftRange(range: CellRange, colDelta: Int, rowDelta: Int): CellRange =
-    val newStart = shiftARef(range.start, range.startAnchor, colDelta, rowDelta)
-    val newEnd = shiftARef(range.end, range.endAnchor, colDelta, rowDelta)
-    new CellRange(newStart, newEnd, range.startAnchor, range.endAnchor)
+  private def shiftRange(
+    range: CellRange,
+    form: RangeForm,
+    colDelta: Int,
+    rowDelta: Int
+  ): Option[CellRange] =
+    // `actualFor`: a hand-built `Columns` form on a range that does not span every row is a corner
+    // range and moves on both axes — the same guard the printer applies
+    val (cd, rd) = form.actualFor(range) match
+      case RangeForm.Cells => (colDelta, rowDelta)
+      case RangeForm.Columns => (colDelta, 0)
+      case RangeForm.Rows => (0, rowDelta)
+    for
+      newStart <- shiftARef(range.start, range.startAnchor, cd, rd)
+      newEnd <- shiftARef(range.end, range.endAnchor, cd, rd)
+    // The normalising constructor: when a relative corner overtakes an anchored one (`E:$E` dragged
+    // right is `$E:F`, `A1:$B$1` is `$B$1:C1`) the corners swap and each anchor follows its corner,
+    // as Excel prints. A DIAGONAL swap of mixed anchors (`A$1:$B2` overtaken on one axis only) still
+    // swaps the anchors wholesale where Excel recombines them per axis.
+    yield CellRange(newStart, newEnd, range.startAnchor, range.endAnchor)
 
   /**
    * Shift a RangeLocation by the given deltas.
    *
-   * Handles both Local and CrossSheet locations, shifting the underlying CellRange.
+   * Handles both Local and CrossSheet locations, shifting the underlying CellRange. A range that
+   * leaves the grid becomes [[RangeLocation.Error]] `#REF!` (GH-612), exactly as Excel writes
+   * `SUM(#REF!)`.
    */
-  private def shiftLocation(location: RangeLocation, colDelta: Int, rowDelta: Int): RangeLocation =
+  private def shiftLocation(
+    location: RangeLocation,
+    colDelta: Int,
+    rowDelta: Int
+  ): RangeLocation =
     location match
-      case RangeLocation.Local(range) =>
-        RangeLocation.Local(shiftRange(range, colDelta, rowDelta))
-      case RangeLocation.CrossSheet(sheet, range) =>
-        RangeLocation.CrossSheet(sheet, shiftRange(range, colDelta, rowDelta))
+      case RangeLocation.Local(range, form) =>
+        shiftRange(range, form, colDelta, rowDelta)
+          .fold(refErrorLocation)(RangeLocation.Local(_, form))
+      case RangeLocation.CrossSheet(sheet, range, form) =>
+        shiftRange(range, form, colDelta, rowDelta)
+          .fold(refErrorLocation)(RangeLocation.CrossSheet(sheet, _, form))
       // GH-353: external-workbook range args drag anchor-aware like the TExpr.ExternalRange node
-      case RangeLocation.External(index, name, range) =>
-        RangeLocation.External(index, name, shiftRange(range, colDelta, rowDelta))
+      case RangeLocation.External(index, name, range, form) =>
+        shiftRange(range, form, colDelta, rowDelta)
+          .fold(refErrorLocation)(RangeLocation.External(index, name, _, form))
       // GH-394: a defined name is an identifier, not coordinates — shifting is a no-op
       // (its refersTo text lives in workbook metadata, not in this formula)
       case name @ RangeLocation.Name(_, _) => name
+      // GH-612: an error has no coordinates
+      case error @ RangeLocation.Error(_) => error
 
   /**
    * Helper to shift TExpr[?] (wildcard type).
@@ -281,13 +354,14 @@ object FormulaShifter:
     def matches(sheet: com.tjclp.xl.SheetName): Boolean =
       sheet.value.equalsIgnoreCase(editedSheet)
     def goLoc(location: RangeLocation): Boolean = location match
-      case RangeLocation.CrossSheet(sheet, _) => matches(sheet)
-      case RangeLocation.Local(_) | RangeLocation.External(_, _, _) | RangeLocation.Name(_, _) =>
+      case RangeLocation.CrossSheet(sheet, _, _) => matches(sheet)
+      case RangeLocation.Local(_, _) | RangeLocation.External(_, _, _, _) |
+          RangeLocation.Name(_, _) | RangeLocation.Error(_) =>
         false
     def go(e: TExpr[?]): Boolean = e match
       case SheetRef(sheet, _, _, _) => matches(sheet)
       case SheetPolyRef(sheet, _, _) => matches(sheet)
-      case SheetRange(sheet, _) => matches(sheet)
+      case SheetRange(sheet, _, _) => matches(sheet)
       case Aggregate(_, location) => goLoc(location)
       case call: Call[?] =>
         var found = false
@@ -316,9 +390,9 @@ object FormulaShifter:
       case DateTimeToSerial(inner) => go(inner)
       case Coerced(inner, _) => go(inner)
       case Let(bindings, body) => bindings.exists((_, value) => go(value)) || go(body)
-      case Lit(_) | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_) | ExternalRef(_, _, _, _) |
-          ExternalRange(_, _, _) | BindingRef(_) | NameRef(_) | SheetNameRef(_, _) |
-          CoercedBindingRef(_, _) =>
+      case Lit(_) | ErrorLit(_) | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_, _) |
+          ExternalRef(_, _, _, _) | ExternalRange(_, _, _, _) | BindingRef(_) | NameRef(_) |
+          SheetNameRef(_, _) | CoercedBindingRef(_, _) =>
         false
     go(expr)
 
@@ -340,8 +414,9 @@ object FormulaShifter:
     // GH-394: a sheet-qualified name can also sit in a range slot (`SUMIF(Model!rev_range, …)`)
     def goLoc(location: RangeLocation): Boolean = location match
       case RangeLocation.Name(_, Some(scope)) => scope.value.equalsIgnoreCase(sheet)
-      case RangeLocation.Name(_, None) | RangeLocation.Local(_) | RangeLocation.CrossSheet(_, _) |
-          RangeLocation.External(_, _, _) =>
+      case RangeLocation.Name(_, None) | RangeLocation.Local(_, _) |
+          RangeLocation.CrossSheet(_, _, _) | RangeLocation.External(_, _, _, _) |
+          RangeLocation.Error(_) =>
         false
     def go(e: TExpr[?]): Boolean = e match
       case SheetNameRef(qualifier, _) => qualifier.value.equalsIgnoreCase(sheet)
@@ -373,9 +448,10 @@ object FormulaShifter:
       case DateTimeToSerial(inner) => go(inner)
       case Coerced(inner, _) => go(inner)
       case Let(bindings, body) => bindings.exists((_, value) => go(value)) || go(body)
-      case Lit(_) | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_) | SheetRef(_, _, _, _) |
-          SheetPolyRef(_, _, _) | SheetRange(_, _) | ExternalRef(_, _, _, _) |
-          ExternalRange(_, _, _) | BindingRef(_) | NameRef(_) | CoercedBindingRef(_, _) =>
+      case Lit(_) | ErrorLit(_) | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_, _) |
+          SheetRef(_, _, _, _) | SheetPolyRef(_, _, _) | SheetRange(_, _, _) |
+          ExternalRef(_, _, _, _) | ExternalRange(_, _, _, _) | BindingRef(_) | NameRef(_) |
+          CoercedBindingRef(_, _) =>
         false
     go(expr)
 
@@ -401,22 +477,24 @@ object FormulaShifter:
       if sheet.value.equalsIgnoreCase(from) then to else sheet
     def go[B](e: TExpr[B]): TExpr[B] = renameSheetInternal(e, from, to)
     def goLocation(location: RangeLocation): RangeLocation = location match
-      case RangeLocation.CrossSheet(sheet, range) => RangeLocation.CrossSheet(target(sheet), range)
+      case RangeLocation.CrossSheet(sheet, range, form) =>
+        RangeLocation.CrossSheet(target(sheet), range, form)
       // GH-394: a sheet-qualified name in a range slot (`SUMIF(Model!rev_range, …)`) follows too
       case RangeLocation.Name(name, Some(scope)) => RangeLocation.Name(name, Some(target(scope)))
-      case other @ (RangeLocation.Local(_) | RangeLocation.External(_, _, _) |
-          RangeLocation.Name(_, None)) =>
+      case other @ (RangeLocation.Local(_, _) | RangeLocation.External(_, _, _, _) |
+          RangeLocation.Name(_, None) | RangeLocation.Error(_)) =>
         other
 
     expr match
       case SheetRef(sheet, at, anchor, decode) => SheetRef(target(sheet), at, anchor, decode)
       case SheetPolyRef(sheet, at, anchor) =>
         SheetPolyRef(target(sheet), at, anchor).asInstanceOf[TExpr[A]]
-      case SheetRange(sheet, range) => SheetRange(target(sheet), range).asInstanceOf[TExpr[A]]
+      case SheetRange(sheet, range, form) =>
+        SheetRange(target(sheet), range, form).asInstanceOf[TExpr[A]]
       case SheetNameRef(sheet, name) => SheetNameRef(target(sheet), name).asInstanceOf[TExpr[A]]
       // Nothing to rename: local refs, literals, identifiers, external-workbook refs
       case _: Ref[?] | _: PolyRef | _: RangeRef | _: ExternalRef | _: ExternalRange | _: Lit[?] |
-          _: BindingRef | _: NameRef | _: CoercedBindingRef[?] =>
+          _: ErrorLit | _: BindingRef | _: NameRef | _: CoercedBindingRef[?] =>
         expr
       case Add(x, y) => Add(go(x), go(y)).asInstanceOf[TExpr[A]]
       case Sub(x, y) => Sub(go(x), go(y)).asInstanceOf[TExpr[A]]
@@ -508,7 +586,25 @@ object FormulaShifter:
     if isRow then shiftPos(rowIdx, at, delta, Row.MaxIndex0).map(nr => ARef.from0(colIdx, nr))
     else shiftPos(colIdx, at, delta, Column.MaxIndex0).map(nc => ARef.from0(nc, rowIdx))
 
+  /**
+   * GH-612: a whole-column range (`E:E`) has no row coordinates, so a ROW insert or delete leaves
+   * it as it is (it still spans every row); a whole-row range is likewise untouched by a column
+   * edit. Along its own axis it moves, widens, narrows or voids exactly like a corner range.
+   */
   private def shiftRangeStructural(
+    range: CellRange,
+    form: RangeForm,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Option[CellRange] =
+    val spansEditedAxis = form.actualFor(range) match
+      case RangeForm.Columns => isRow
+      case RangeForm.Rows => !isRow
+      case RangeForm.Cells => false
+    if spansEditedAxis then Some(range) else shiftCornersStructural(range, isRow, at, delta)
+
+  private def shiftCornersStructural(
     range: CellRange,
     isRow: Boolean,
     at: Int,
@@ -544,20 +640,23 @@ object FormulaShifter:
     delta: Int
   ): Option[RangeLocation] =
     location match
-      case RangeLocation.Local(range) =>
+      case RangeLocation.Local(range, form) =>
         if shiftLocal then
-          shiftRangeStructural(range, isRow, at, delta).map(RangeLocation.Local.apply)
+          shiftRangeStructural(range, form, isRow, at, delta).map(RangeLocation.Local(_, form))
         else Some(location)
-      case RangeLocation.CrossSheet(sheet, range) =>
+      case RangeLocation.CrossSheet(sheet, range, form) =>
         if sheet.value.equalsIgnoreCase(editedSheet) then
-          shiftRangeStructural(range, isRow, at, delta).map(r => RangeLocation.CrossSheet(sheet, r))
+          shiftRangeStructural(range, form, isRow, at, delta)
+            .map(r => RangeLocation.CrossSheet(sheet, r, form))
         else Some(location)
       // GH-353: external-workbook ranges point into ANOTHER workbook — structural edits here
       // never move or void them
-      case RangeLocation.External(_, _, _) => Some(location)
+      case RangeLocation.External(_, _, _, _) => Some(location)
       // GH-394: a defined name is an identifier — structural edits never move or void it
       // (its refersTo text lives in workbook metadata, not in this formula)
       case RangeLocation.Name(_, _) => Some(location)
+      // GH-612: an error has no coordinates
+      case RangeLocation.Error(_) => Some(location)
 
   @SuppressWarnings(
     Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Var")
@@ -596,20 +695,24 @@ object FormulaShifter:
             SheetPolyRef(sheet, r, anchor).asInstanceOf[TExpr[A]]
           )
         else Some(expr)
-      case RangeRef(range) =>
+      case RangeRef(range, form) =>
         if shiftLocal then
-          shiftRangeStructural(range, isRow, at, delta).map(r => RangeRef(r).asInstanceOf[TExpr[A]])
+          shiftRangeStructural(range, form, isRow, at, delta).map(r =>
+            RangeRef(r, form).asInstanceOf[TExpr[A]]
+          )
         else Some(expr)
-      case SheetRange(sheet, range) =>
+      case SheetRange(sheet, range, form) =>
         if sheet.value.equalsIgnoreCase(editedSheet) then
-          shiftRangeStructural(range, isRow, at, delta).map(r =>
-            SheetRange(sheet, r).asInstanceOf[TExpr[A]]
+          shiftRangeStructural(range, form, isRow, at, delta).map(r =>
+            SheetRange(sheet, r, form).asInstanceOf[TExpr[A]]
           )
         else Some(expr)
       // GH-353: external-workbook refs point into ANOTHER workbook — structural edits here
       // never move or void them
       case _: ExternalRef | _: ExternalRange => Some(expr)
       case lit: Lit[?] => Some(lit.asInstanceOf[TExpr[A]])
+      // GH-612: an error literal has no coordinates
+      case _: ErrorLit => Some(expr)
       case Add(x, y) => for sx <- go(x); sy <- go(y) yield Add(sx, sy).asInstanceOf[TExpr[A]]
       case Sub(x, y) => for sx <- go(x); sy <- go(y) yield Sub(sx, sy).asInstanceOf[TExpr[A]]
       case Mul(x, y) => for sx <- go(x); sy <- go(y) yield Mul(sx, sy).asInstanceOf[TExpr[A]]
@@ -640,7 +743,7 @@ object FormulaShifter:
             },
           range =>
             if shiftLocal then
-              shiftRangeStructural(range, isRow, at, delta).getOrElse { deleted = true; range }
+              shiftCornersStructural(range, isRow, at, delta).getOrElse { deleted = true; range }
             else range
         )
         if deleted then None else Some(Call(call.spec, shifted).asInstanceOf[TExpr[A]])

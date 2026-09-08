@@ -1,12 +1,12 @@
 package com.tjclp.xl.formula.parser
 
-import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, FunctionRegistry}
 import com.tjclp.xl.formula.{Arity}
 
 import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.RefParser
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.codec
 import com.tjclp.xl.ooxml.FormulaStorage
 
@@ -607,6 +607,9 @@ object FormulaParser:
       case Some('[') =>
         // GH-353: external-workbook reference (e.g., [2]Book1!A1, [2]Consolidation.xlsx!D5:D9)
         parseExternalRef(s)
+      case Some('#') =>
+        // GH-612: error literal (#REF!, #N/A, #DIV/0!, …)
+        parseErrorLiteral(s)
       case Some(c) =>
         Left(ParseError.UnexpectedChar(c, s.pos, "expected expression"))
 
@@ -656,15 +659,18 @@ object FormulaParser:
     afterDigits.currentChar match
       case Some(':') =>
         val afterColon = afterDigits.advance()
-        afterColon.currentChar match
+        // GH-612: the end row may carry its own anchor (3:$10)
+        val afterEndAnchor =
+          if afterColon.currentChar.contains('$') then afterColon.advance() else afterColon
+        afterEndAnchor.currentChar match
           case Some(c) if c.isDigit =>
             // This is a row range like 1:5
-            val afterSecondDigits = readDigits(afterColon)
+            val afterSecondDigits = readDigits(afterEndAnchor)
             val rangeStr = state.input.substring(startPos, afterSecondDigits.pos)
             CellRange.parse(rangeStr) match
               case Right(range) =>
-                // Create RangeRef for range arguments
-                Right((TExpr.RangeRef(range), afterSecondDigits))
+                // GH-612: digits on both sides is Excel's whole-row form
+                Right((TExpr.RangeRef(range, RangeForm.Rows), afterSecondDigits))
               case Left(err) =>
                 Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
           case _ =>
@@ -1100,7 +1106,9 @@ object FormulaParser:
           // Range reference: Sheet1!A1:B10
           CellRange.parse(refPart) match
             case Right(range) =>
-              Right((TExpr.SheetRange(sheetName, range), s2))
+              // GH-612: keep the whole-column / whole-row form the text spelled (a corner range
+              // over every row/column canonicalises to it, as Excel does at entry)
+              Right((TExpr.SheetRange(sheetName, range, RangeForm.of(refPart, range)), s2))
             case Left(err) =>
               Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
         else
@@ -1225,7 +1233,7 @@ object FormulaParser:
       // External range reference: [2]Book1!A1:B2
       CellRange.parse(refPart) match
         case Right(range) =>
-          Right((TExpr.ExternalRange(index, name, range), s2))
+          Right((TExpr.ExternalRange(index, name, range, RangeForm.of(refPart, range)), s2))
         case Left(err) =>
           Left(ParseError.InvalidCellRef(s"$prefix!$refPart", startPos, err))
     else
@@ -1287,10 +1295,47 @@ object FormulaParser:
 
     CellRange.parse(rangeStr) match
       case Right(range) =>
-        // Create RangeRef for range arguments
-        Right((TExpr.RangeRef(range), s3))
+        // GH-612: the form is the syntax consumed — A:C is whole columns, A1:C10 corners — so a
+        // whole-column reference prints back as written and drags only along columns; a corner
+        // spelling over every row (A1:A1048576) is the whole-column form, as Excel canonicalises it
+        Right((TExpr.RangeRef(range, RangeForm.of(rangeStr, range)), s3))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
+
+  /**
+   * The Excel error codes, longest first, so a prefix match never stops short (`#N/A` vs `#NAME?`).
+   */
+  private val errorCodesLongestFirst: List[(String, CellError)] =
+    CellError.values.toList.map(e => (e.toExcel, e)).sortBy(-_._1.length)
+
+  /**
+   * GH-612: parse an Excel error literal (`#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`, …) by matching the
+   * known codes case-insensitively at the cursor (`#ref!` is `#REF!`, as Excel upper-cases it at
+   * entry). Matching the codes rather than scanning a character class keeps `#N/A` — the one code
+   * with no `!`/`?` terminator — from swallowing what follows it: `#N/A/2` is `#N/A` divided by 2,
+   * as Excel reads it. When no code matches, the whole `#`-token (letters, digits, `/`, `_` and a
+   * closing `!`/`?`) is reported, so `#GETTING_DATA` fails as itself — never a silent literal.
+   */
+  private def parseErrorLiteral(state: ParserState): ParseResult[TExpr[?]] =
+    val startPos = state.pos
+    val matched = errorCodesLongestFirst.collectFirst {
+      case (code, error) if state.input.regionMatches(true, startPos, code, 0, code.length) =>
+        (code, error)
+    }
+    matched match
+      case Some((code, error)) => Right((TExpr.ErrorLit(error), state.advance(code.length)))
+      case None =>
+        @tailrec
+        def readBody(s: ParserState): ParserState =
+          s.currentChar match
+            case Some(c) if c.isLetterOrDigit || c == '/' || c == '_' => readBody(s.advance())
+            case _ => s
+        val afterBody = readBody(state.advance())
+        val afterTerminator = afterBody.currentChar match
+          case Some('!' | '?') => afterBody.advance()
+          case _ => afterBody
+        val text = state.input.substring(startPos, afterTerminator.pos)
+        Left(ParseError.UnexpectedChar('#', startPos, s"unknown error literal '$text'"))
 
   /**
    * Suggest similar function names for unknown functions.

@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.eval.EvalError
 import com.tjclp.xl.formula.functions.EvalContext
 
 import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
-import com.tjclp.xl.cells.Cell
+import com.tjclp.xl.cells.{Cell, CellError}
 import com.tjclp.xl.codec.CodecError
 
 import scala.math.BigDecimal
@@ -128,14 +128,27 @@ enum TExpr[A] derives CanEqual:
    *
    * The range analog of [[ExternalRef]]; same closed-workbook semantics.
    */
-  case ExternalRange(workbookIndex: Int, sheetName: String, range: CellRange) extends TExpr[Nothing]
+  case ExternalRange(
+    workbookIndex: Int,
+    sheetName: String,
+    range: CellRange,
+    form: RangeForm = RangeForm.Cells
+  ) extends TExpr[Nothing]
 
   /**
    * Local range reference.
    *
    * Represents a range like A1:B10 before being consumed by a function.
+   *
+   * @param form
+   *   GH-612: the surface form the range was written in — `A:A` ([[RangeForm.Columns]]) and `1:1`
+   *   ([[RangeForm.Rows]]) address the same cells as their corner spellings but print back as
+   *   written and move only along their own axis when dragged or restructured. Precondition:
+   *   `Columns` on a range spanning every row, `Rows` on one spanning every column (what the parser
+   *   builds; `parse ∘ print = id` is stated for parser-built nodes). An inconsistent hand-built
+   *   pairing is treated as the corner range it addresses (`RangeForm.actualFor`), never widened.
    */
-  case RangeRef(range: CellRange) extends TExpr[Nothing]
+  case RangeRef(range: CellRange, form: RangeForm = RangeForm.Cells) extends TExpr[Nothing]
 
   /**
    * Sheet-qualified range reference - references a range in another sheet.
@@ -144,10 +157,24 @@ enum TExpr[A] derives CanEqual:
    *   The target sheet name
    * @param range
    *   The cell range within the target sheet
+   * @param form
+   *   GH-612: the surface form (see [[RangeRef]])
    *
    * Example: SheetRange("Sales", CellRange(A1, A10)) represents Sales!A1:A10
    */
-  case SheetRange(sheet: SheetName, range: CellRange) extends TExpr[Nothing]
+  case SheetRange(sheet: SheetName, range: CellRange, form: RangeForm = RangeForm.Cells)
+      extends TExpr[Nothing]
+
+  /**
+   * GH-612: an Excel error literal — `#REF!`, `#N/A`, `#DIV/0!`, …
+   *
+   * What a fill-drag writes when a reference falls off the grid (`=A1` copied from B2 to B1 is
+   * `=#REF!`), what Excel writes after a delete, and what users type (`=IF(x, #N/A, 1)`). It prints
+   * back verbatim, evaluates to the error VALUE it names (`EvalError.ErrorValue`, promoted to
+   * `CellValue.Error` at the cell boundary), and contributes no dependency edges. Typed `Nothing`
+   * like [[PolyRef]]: it can stand in any argument position.
+   */
+  case ErrorLit(error: CellError) extends TExpr[Nothing]
 
   // Arithmetic operators (form commutative semiring over BigDecimal)
 

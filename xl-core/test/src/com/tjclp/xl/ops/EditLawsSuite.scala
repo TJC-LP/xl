@@ -189,6 +189,64 @@ abstract class EditLawsSuite(support: FormulaSupport, label: String) extends Sca
     assert(desugared > samples.size / 2, s"only $desugared of ${samples.size} patches desugar")
   }
 
+  // ===== GH-612: whole-column references through DragFormula and Fill =====
+  // Under the semantic support `$A:$A` keeps its form while the criterion drags; under textOnly the
+  // edit takes the refusal path like every other formula shift (the suite's standing split).
+
+  private def formulaTextAt(wb: Workbook, ref: com.tjclp.xl.addressing.ARef): Option[String] =
+    wb(data).toOption.flatMap(_.cells.get(ref)).map(_.value).collect {
+      case com.tjclp.xl.cells.CellValue.Formula(text, _, _) => text
+    }
+
+  private def assertShiftedOrRefused(
+    result: XLResult[Applied],
+    expected: Map[com.tjclp.xl.addressing.ARef, String]
+  ): Unit =
+    outcome(result) match
+      case Right(wb) =>
+        assertNotEquals(support, FormulaSupport.textOnly, "textOnly cannot shift a formula")
+        expected.foreach { (ref, text) =>
+          assertEquals(formulaTextAt(wb, ref), Some(text), s"at ${ref.toA1}")
+        }
+      case Left(XLError.UnsupportedCapability(op, _, _)) =>
+        assertEquals(support, FormulaSupport.textOnly)
+        assertEquals(op, "shift")
+      case Left(other) => fail(s"unexpected failure: $other")
+
+  test(
+    "GH-612: DragFormula keeps $A:$A and drags only the criterion (or refuses without a parser)"
+  ) {
+    import com.tjclp.xl.addressing.ARef
+    val range = CellRange(ARef.from0(25, 0), ARef.from0(25, 2)) // Z1:Z3
+    val edit =
+      Edit.DragFormula(Area(Some(data), range), "=COUNTIF($A:$A,B1)", ARef.from0(25, 0), None)
+    assertShiftedOrRefused(
+      run(baseWorkbook, Vector(edit)),
+      Map(
+        ARef.from0(25, 0) -> "COUNTIF($A:$A,B1)",
+        ARef.from0(25, 1) -> "COUNTIF($A:$A,B2)",
+        ARef.from0(25, 2) -> "COUNTIF($A:$A,B3)"
+      )
+    )
+  }
+
+  test("GH-612: Fill down keeps $A:$A in the repeated formula (or refuses without a parser)") {
+    import com.tjclp.xl.addressing.ARef
+    import com.tjclp.xl.cells.CellValue
+    val z1 = ARef.from0(25, 0)
+    val seeded = baseWorkbook.update(data, _.put(z1, CellValue.Formula("COUNTIF($A:$A,B1)", None)))
+    val source = Area(Some(data), CellRange(z1, z1))
+    val target = CellRange(z1, ARef.from0(25, 2)) // Z1:Z3
+    val wb = seeded.fold(e => fail(e.message), identity)
+    assertShiftedOrRefused(
+      run(wb, Vector(Edit.Fill(source, target, Edit.FillDir.Down))),
+      Map(
+        ARef.from0(25, 1) -> "COUNTIF($A:$A,B2)",
+        ARef.from0(25, 2) -> "COUNTIF($A:$A,B3)"
+      )
+    )
+  }
+
   test("PatchSpec's kernel is untouched: Patch.applyPatch on a Put still puts") {
     val p =
       Patch.Put(com.tjclp.xl.addressing.ARef.from0(0, 0), com.tjclp.xl.cells.CellValue.Text("x"))

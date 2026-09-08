@@ -213,11 +213,11 @@ class AnchorSpec extends FunSuite:
     val shifted = FormulaShifter.shift(parsed, colDelta = 1, rowDelta = 1)
     assertEquals(FormulaPrinter.print(shifted), "=SUM(B2:C3)")
 
-  test("FormulaShifter: clamps to valid range (no negative indices)"):
+  test("FormulaShifter: a reference pushed before A1 becomes #REF! (GH-612, no clamping)"):
     val parsed = FormulaParser.parse("=A1").toOption.get
     val shifted = FormulaShifter.shift(parsed, colDelta = -5, rowDelta = -5)
-    // Should clamp to A1 (0,0) not go negative
-    assertEquals(FormulaPrinter.print(shifted), "=A1")
+    // Excel writes #REF! when a copy would address a cell that does not exist
+    assertEquals(FormulaPrinter.print(shifted), "=#REF!")
 
   // ===== Anchor extension method tests =====
 
