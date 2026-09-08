@@ -25,6 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`xl-0.21.0-RC1-linux-amd64` pairs with `xl-skill-0.21.0-RC1.zip`); a versioned binary with no
   zip of its release present fails instead of falling back to the highest zip. The grading host
   needs an `xl` that accepts the global `--json` (0.20.0 or later).
+- **`xlfn-missing` lint** (#588): a post-2007 function stored without Excel's `_xlfn.` prefix
+  anywhere in the package — a cell `<f>`, a conditional-formatting `<formula>`, a data-validation
+  `<formula1>`/`<formula2>` or a `<definedName>` — is reported with its sites, in DOM and streaming
+  lint alike. The finding says when a write heals it: a part xl regenerates gains the prefix; an
+  untouched part, or one re-authored with identical text, is copied through (#593 tracks healing on
+  every write).
+- **`FunctionFlags.volatile`** marks TODAY/NOW/RAND/RANDBETWEEN on their specs; `WorkbookAudit`
+  reports volatility from the flag instead of matching names.
+
+### Fixed
+
+- **`_xlfn.` storage prefix on conditional-formatting, data-validation and defined-name formulas**
+  (#577). `CfCodec`, `DataValidationCodec` and the workbook's defined names now go through
+  `FormulaStorage` like cell formulas: an Excel-authored `_xlfn.IFS(` in a rule reads bare and
+  re-serialises byte-identically, and an xl-authored `IFS`/`XLOOKUP` in a rule, validation or name
+  lands prefixed instead of showing `#NAME?` in Excel.
 
 
 ## [0.20.0] "Contract" - 2026-09-07
