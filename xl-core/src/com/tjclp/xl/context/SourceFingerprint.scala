@@ -1,7 +1,8 @@
 package com.tjclp.xl.context
 
+import com.tjclp.xl.platform.Sha256
+
 import java.nio.file.{Files, Path}
-import java.security.MessageDigest
 import scala.collection.immutable.ArraySeq
 import scala.util.Using
 
@@ -10,7 +11,7 @@ object SourceFingerprint:
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def fromPath(path: Path): SourceFingerprint =
     Using.resource(Files.newInputStream(path)) { in =>
-      val digest = MessageDigest.getInstance("SHA-256")
+      val digest = Sha256.hasher()
       val buffer = new Array[Byte](8192)
       var bytesRead = 0L
       var read = in.read(buffer)
@@ -25,4 +26,4 @@ final case class SourceFingerprint(size: Long, sha256: ArraySeq[Byte]) derives C
 
   /** Verify that the provided digest and size matches the recorded fingerprint. */
   def matches(bytesRead: Long, digest: Array[Byte]): Boolean =
-    bytesRead == size && MessageDigest.isEqual(sha256.toArray, digest)
+    bytesRead == size && Sha256.isEqual(sha256.toArray, digest)

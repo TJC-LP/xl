@@ -954,3 +954,64 @@ class FormatCodeParserSpec extends FunSuite:
       expected
     )
   }
+
+  // ========== English Month/Weekday Tables (exhaustive) ==========
+  // These pin the exact strings the hardcoded English tables must produce — previously
+  // TextStyle.getDisplayName(…, Locale.US), which Scala Native's locale data renders
+  // differently (ADR-016). Every reachable (token, value) pair is asserted.
+
+  test("applyDateFormat: mmm — all 12 English month abbreviations") {
+    val expected =
+      Vector("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    val code = FormatCodeParser.parse("mmm").toOption.get
+    for month <- 1 to 12 do
+      val dt = java.time.LocalDateTime.of(2025, month, 15, 0, 0, 0)
+      assertEquals(FormatCodeParser.applyDateFormat(dt, code), expected(month - 1))
+  }
+
+  test("applyDateFormat: mmmm — all 12 English month names") {
+    val expected = Vector(
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December"
+    )
+    val code = FormatCodeParser.parse("mmmm").toOption.get
+    for month <- 1 to 12 do
+      val dt = java.time.LocalDateTime.of(2025, month, 15, 0, 0, 0)
+      assertEquals(FormatCodeParser.applyDateFormat(dt, code), expected(month - 1))
+  }
+
+  test("applyDateFormat: mmmmm — all 12 English month initials") {
+    val expected = Vector("J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D")
+    val code = FormatCodeParser.parse("mmmmm").toOption.get
+    for month <- 1 to 12 do
+      val dt = java.time.LocalDateTime.of(2025, month, 15, 0, 0, 0)
+      assertEquals(FormatCodeParser.applyDateFormat(dt, code), expected(month - 1))
+  }
+
+  test("applyDateFormat: ddd — all 7 English weekday abbreviations") {
+    val expected = Vector("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    val code = FormatCodeParser.parse("ddd").toOption.get
+    for offset <- 0 to 6 do
+      // 2024-01-01 is a Monday
+      val dt = java.time.LocalDateTime.of(2024, 1, 1, 0, 0, 0).plusDays(offset.toLong)
+      assertEquals(FormatCodeParser.applyDateFormat(dt, code), expected(offset))
+  }
+
+  test("applyDateFormat: dddd — all 7 English weekday names") {
+    val expected =
+      Vector("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    val code = FormatCodeParser.parse("dddd").toOption.get
+    for offset <- 0 to 6 do
+      val dt = java.time.LocalDateTime.of(2024, 1, 1, 0, 0, 0).plusDays(offset.toLong)
+      assertEquals(FormatCodeParser.applyDateFormat(dt, code), expected(offset))
+  }

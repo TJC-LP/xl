@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - "plugin/skills/xl-scripting/**"
+      - "docs/reference/scripting.md"
       - "scripts/verify-skill-snippets.sh"
       - "xl*/src/**"
   workflow_dispatch:
