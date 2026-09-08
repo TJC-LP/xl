@@ -93,4 +93,23 @@ val placed = Sheet("Orders").putTable(ref"A1", orders, "Orders").unsafe // heade
 val back = placed.sheet.readRowsByHeader[Order](Row.from1(1))            // Either[RowCodecError, Vector[Order]]
 println(s"  ✓ Records: wrote ${placed.count} rows over ${placed.range.map(_.toA1).getOrElse("-")}, read back ${back.map(_.size).getOrElse(-1)}")
 
+// ========== 9. Writing a model: writeChecked fills in the uncached formulas ==========
+// `stamped` still holds the fx"" cells exactly as authored — no cached values. Excel.write would
+// ship them blank to every cached-value consumer (openpyxl data_only, pandas, previewers, Excel
+// before its first recalc); writeChecked computes exactly those cells, writes, and reports.
+val checkedOut = "/tmp/scripting-tour-checked.xlsx"
+val checked = Excel.writeChecked(Workbook(stamped), checkedOut)
+println(s"  ✓ ${checked.summary}") // "Recalculated 3 formulas" — the same line `xl recalc` prints
+
+// One sheet straight from disk (a typo throws an XLException naming the candidate sheets), and
+// the workbook's shape without loading a cell.
+val salesOnDisk = Excel.readSheet(checkedOut, "Sales")
+println(s"  ✓ D2 on disk: ${salesOnDisk.readTypedOr[BigDecimal](ref"D2", BigDecimal(0))}")
+val meta = Excel.readMetadata(checkedOut)
+println(s"  ✓ Sheets: ${meta.sheets.map(_.name.value).mkString(", ")}")
+
+// orExit: the value, or "error:/code:/hint:" on stderr and exit 1 — how a script fails like `xl`
+val audited = orExit(salesOnDisk.putAt("F3", "audited"))
+println(s"  ✓ orExit unwrapped a ${audited.cells.size}-cell sheet")
+
 println("\n✨ One import. Compile-time refs. Total loops. Either at the edges.")

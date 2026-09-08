@@ -26,7 +26,8 @@ import com.tjclp.xl.{*, given}
       "B4"    -> CellStyle.default.percent
     )
 
-  Excel.write(Workbook(report), "/tmp/q1-report.xlsx")
+  // writeChecked computes the formulas' values on the way out — a plain write ships them blank
+  Excel.writeChecked(Workbook(report), "/tmp/q1-report.xlsx")
   println(s"Created /tmp/q1-report.xlsx with ${report.cellCount} cells")
 ```
 

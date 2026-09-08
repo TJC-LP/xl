@@ -45,7 +45,9 @@ test("Hero Example - Financial Report") {
     .style("A1:A4", CellStyle.default.bold)
     .style("B4", CellStyle.default.percent)
 
-  Excel.write(Workbook.empty.put(report), "/tmp/readme-hero.xlsx")
+  // writeChecked, not write: B3/B4 are freshly authored formulas with no cached value
+  val hero = Excel.writeChecked(Workbook.empty.put(report), "/tmp/readme-hero.xlsx")
+  assert(hero.isClean, s"hero formulas must compute: ${hero.summary}")
   assert(report.cells.size >= 8, s"Expected at least 8 cells, got ${report.cells.size}")
   assert(report.cell("A1").isDefined, "A1 should exist")
 }
@@ -331,7 +333,9 @@ test("Final Workbook Write") {
     .remove("Sheet1")
     .unsafe
 
-  Excel.write(workbook, "/tmp/readme-examples.xlsx")
+  // writeChecked caches the freshly authored formulas (B3/B4, D2/D3) as it writes
+  val written = Excel.writeChecked(workbook, "/tmp/readme-examples.xlsx")
+  assert(written.isClean, s"formulas must compute: ${written.summary}")
 
   // Verify file was created (read-back of formula-only cells requires evaluation)
   assert(java.nio.file.Files.exists(java.nio.file.Paths.get("/tmp/readme-examples.xlsx")),

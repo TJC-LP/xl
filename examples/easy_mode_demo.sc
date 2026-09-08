@@ -130,7 +130,7 @@ val commentedSheet = Sheet("Commented Data")
   .put("A2", "Q4 Expenses")
   .put("B2", 87500)
   .put("A3", "Net Profit")
-  .put("B3", "=B1-B2")  // Formula
+  .put("B3", fx"=B1-B2")  // Formula (fx literal — a plain "=B1-B2" string is just text)
   // Add plain text comments
   .comment(ref"B1", Comment.plainText("Revenue increased by 15% vs Q3", Some("Finance Team")))
   .comment(ref"B2", Comment.plainText("Includes one-time marketing spend", Some("CFO")))
@@ -177,7 +177,7 @@ val workbook = Workbook.empty
   .remove("Sheet1")  // Sheet1 is always created by default per Excel standards
   .unsafe  // Single unwrap at the end!
 
-Excel.write(workbook, "/tmp/easy-mode-demo.xlsx")
+Excel.writeChecked(workbook, "/tmp/easy-mode-demo.xlsx") // caches B3 as it writes; Excel.write would ship it blank
 println(s"  ✓ Wrote /tmp/easy-mode-demo.xlsx")
 
 val loaded = Excel.read("/tmp/easy-mode-demo.xlsx")

@@ -98,6 +98,9 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.freezeAt(ref"A3")` | `Sheet` | freeze rows above + cols left; `freezeAt(anchor, scrolledTo)` sets the pane scroll target (0.13.0) |
 | `sheet.withTabColor(color)` | `Sheet` | sheet tab color (rgb or theme; 0.13.0). `unfreeze` removes freeze panes |
 | `sheet.withDataValidation(range, DataValidation.list("\"Yes,No\""))` | `Sheet` | list dropdown (0.13.0); also `DataValidation.listOf("Yes", "No")` and a `Vector[CellRange]` overload |
+| `sheet.collapseRows(first: Row, last: Row)` / `collapseRows(range: CellRange)` | `Sheet` | 0.21.0 ([#465](https://github.com/TJC-LP/xl/issues/465)): hide the member rows AND mark the row after the span `collapsed` (Excel's "+" button — what `group-rows --collapsed` composes); members without an outline level become a level-1 group, an existing level is kept; total (either order, no summary past the last row). Full-row spans are runtime strings: `"5:8".asRange.map(sheet.collapseRows)` |
+| `sheet.collapseCols(first: Column, last: Column)` / `collapseCols(range: CellRange)` | `Sheet` | 0.21.0: the column form — `"E:H".asRange.map(sheet.collapseCols)` for a letter span (the `ref` macro takes `A1` / `A1:B2` shapes only; whole-row/column spans are runtime strings) |
+| `sheet.expandRows(…)` / `sheet.expandCols(…)` | `Sheet` | 0.21.0: the inverses — members unhidden, marker cleared, outline level kept (same overloads) |
 
 Codec types for `put`/`readTyped*`: String, Int, Long, Double, BigDecimal, Boolean, LocalDate (→ Date format), LocalDateTime (→ DateTime format), RichText.
 
@@ -273,9 +276,13 @@ SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AV
 | Method | Notes |
 |--------|-------|
 | `Excel.read(path: String): Workbook` | throws `XLException`/IO errors at this edge |
-| `Excel.write(wb, path: String): Unit` | also accepts `XLResult[Workbook]` |
-| `Excel.writeRecalculated(wb, path: String): RecalcResult` | 0.13.0: recalc + write (even on partial failure) + return the result; overloads add `Clock`, `Clock`+`Rng`, or accept `XLResult[Workbook]` |
+| `Excel.readSheet(path, name: String): Sheet` | 0.21.0: one sheet by exact name; a missing name throws `XLException(SheetNotFound)` whose message lists "did you mean" and the available sheets |
+| `Excel.readMetadata(path): LightMetadata` | 0.21.0: `sheets` (`SheetInfo`: name, sheetId, state, dimension), `definedNames`, `date1904` — no cells loaded, instant on any file size; `XLException` on an unreadable package |
+| `Excel.write(wb, path: String): Unit` | also accepts `XLResult[Workbook]`; writes formulas with whatever cache they carry — never for a freshly built model |
+| `Excel.writeChecked(wb, path: String): RecalcResult` | 0.21.0: compute ONLY the uncached formulas (`recalculateUncached`), write, return the result — every existing cache is written byte for byte; overloads take `RecalcOptions` or accept `XLResult[Workbook]` |
+| `Excel.writeRecalculated(wb, path: String): RecalcResult` | 0.13.0: recalc EVERY formula + write (even on partial failure) + return the result; overloads add `Clock`, `Clock`+`Rng`, `RecalcOptions` (0.21.0), or accept `XLResult[Workbook]` |
 | `Excel.modify(path)(f: Workbook => Workbook): Unit` | atomic in-place replacement |
+| `Excel.modifyR(path)(f: Workbook => XLResult[Workbook]): Unit` | 0.21.0: the same replacement for a fallible transform; `Left` throws `XLException` BEFORE any write (file byte-identical, no scratch file) |
 
 ### Streaming (`ExcelIO`) — 100k+ rows, O(1) memory
 
@@ -308,6 +315,9 @@ sheet.displayCell(ref"A1")          // String
 ```scala
 XLResult[A]                  // = Either[XLError, A]
 err.message                  // human-readable
+err.code; err.hint; err.candidates   // 0.20.0: stable SCREAMING_SNAKE code, next step, "did you mean"
 result.unsafe                // throws XLException(err) — the one sanctioned unwrap (prelude)
 result.getOrElse(fallback)
+orExit(result)               // 0.21.0: the value, or print exitMessage(err) to stderr and exit 1
+exitMessage(err)             // 0.21.0: "error: …\ncode: …" plus "hint: …" / "did you mean: …" when present
 ```

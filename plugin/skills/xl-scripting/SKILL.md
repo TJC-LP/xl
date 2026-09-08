@@ -57,8 +57,11 @@ println(s"wrote ${sheet.cells.size} cells")
 ```scala
 // Create / read / write (sync facade; throws only at this IO edge)
 val wb  = Excel.read("in.xlsx")                    // Workbook
-Excel.write(wb, "out.xlsx")                        // also accepts XLResult[Workbook]
+Excel.write(wb, "out.xlsx")                        // also accepts XLResult[Workbook]; NEVER for a freshly built model — see writeChecked
 Excel.modify("file.xlsx")(_.upsert("Log", identity)) // atomic in-place read→transform→write
+Excel.modifyR("file.xlsx")(_.update("Log", f))     // 0.21.0: XLResult-returning transform; a Left throws BEFORE any write
+Excel.readSheet("in.xlsx", "Summary")              // 0.21.0: Sheet; a typo throws naming "did you mean" + the available sheets
+Excel.readMetadata("in.xlsx")                      // 0.21.0: LightMetadata (sheet names/dimensions/defined names), no cells loaded
 
 // Sheets in a workbook
 wb.sheets                                          // Vector[Sheet]
@@ -77,6 +80,8 @@ sheet.putAt(cellStr, "Title")                      // 0.20.0: RUNTIME string →
 sheet.put(ref"B1", 42)                             // Int/Long/Double/BigDecimal/Boolean/LocalDate(Time)/RichText
 sheet.put(ref"C1", "$1,234.56".toFormatted)        // smart detection → Currency format
 sheet.style(ref"A1:D1", CellStyle.default.bold)    // Sheet
+sheet.collapseRows(Row.from1(5), Row.from1(8))     // 0.21.0: hide 5:8 + mark row 9 collapsed (level-1 group if ungrouped); also any CellRange
+"E:H".asRange.map(sheet.collapseCols)              // 0.21.0: column form; whole-row/column spans are runtime strings (ref"" takes A1/A1:B2 only)
 
 // Patch DSL (compose pure values, apply once)
 val patch = (ref"A1" := "Report") ++ ref"A1:C1".merge ++ ref"A1".styled(CellStyle.default.bold)
@@ -97,10 +102,12 @@ sheet.put(ref"D2", fx"=B2*C2")                     // compile-time validated lit
 wb.evaluateFormula("=SUM(Sales!A1:A9)", "Summary") // XLResult[CellValue], cross-sheet aware
 val r = wb.recalculate()                           // RecalcResult: total, per-cell errors
 r.isClean; r.errors.map(_.render); r.workbook      // inspect, then write r.workbook
-Excel.writeRecalculated(wb, "out.xlsx")            // 0.13.0: recalc + write + RecalcResult in one call
+Excel.writeChecked(wb, "out.xlsx")                 // 0.21.0: cache ONLY the uncached formulas + write + RecalcResult — THE write for a built model
+Excel.writeRecalculated(wb, "out.xlsx")            // 0.13.0: recompute EVERY formula + write + RecalcResult; both take a RecalcOptions (0.21.0)
 
 // Errors: XLResult[A] = Either[XLError, A]; unwrap ONCE at the edge
 wb.update("Sales", f).unsafe                       // throws structured XLException if Left
+orExit(wb.update("Sales", f))                      // 0.21.0: or print "error:/code:/hint:/did you mean:" to stderr and exit 1
 ```
 
 ## Essential Patterns
@@ -120,7 +127,7 @@ val updated = wb
 Excel.write(updated, "output.xlsx")
 ```
 
-`Excel.modify("file.xlsx")(f)` does the same in place with atomic file replacement.
+`Excel.modify("file.xlsx")(f)` does the same in place with atomic file replacement. Since 0.21.0 `Excel.modifyR("file.xlsx")(f)` takes an `XLResult`-returning transform — `_.update("Data", …)` needs no `.unsafe` inside the lambda, and a `Left` throws *before* anything is written, leaving the file byte-identical. `Excel.readSheet(path, name)` (0.21.0) reads one sheet, throwing an `XLException` whose message names the nearest sheet names and every available sheet on a typo; `Excel.readMetadata(path)` (0.21.0) lists sheets, dimensions and defined names without loading a cell — decide what to read (or stream) before reading it.
 
 ### Compile-time literals vs runtime refs
 
@@ -292,13 +299,13 @@ val model = Sheet("Model")
   .put(ref"A2", fx"=A1*1.08")
   .put(ref"A3", fx"=A2*1.08")
 
-val result = Workbook(model).recalculate()       // total: never throws, never partial-silently
+// 0.21.0: compute the formulas that have no cached value (all of them here), write, report.
+val result = Excel.writeChecked(Workbook(model), "model.xlsx")   // total: never throws, never partial-silently
 if !result.isClean then
-  result.errors.foreach(e => println(s"⚠ ${e.render}"))   // e.g. "Model!A7: Circular reference"
-Excel.write(result.workbook, "model.xlsx")       // computed values cached for Excel/viewers
+  result.errors.foreach(e => println(s"⚠ ${e.render}"))          // e.g. "Model!A7: Circular reference"
 ```
 
-`recalculate` evaluates every formula across all sheets in dependency order, resolves cross-sheet references automatically, isolates reference cycles (the rest of the workbook still computes), and reports failures per cell in `result.errors`. `result.toEither` gives `Left(errors)` for fail-hard pipelines. **Excel error values are results, not failures** (0.14.0): `=1/0` evaluates to `#DIV/0!` — catchable with `IFERROR`, cached into the written file exactly like Excel would, and listed via `result.excelErrors` rather than `result.errors` (which now carries only host failures: parse errors, missing sheets, cycles). For one-off questions: `wb.evaluateFormula("=SUM(Data!A:A)", "Summary")`. When the very next step is a write, `Excel.writeRecalculated(wb, path)` (0.13.0) fuses recalculate + write and returns the same `RecalcResult` — see the gotcha below.
+**A freshly built model is written with `writeChecked` or `writeRecalculated`, never `Excel.write`.** `Excel.writeChecked(wb, path)` (0.21.0) computes only the formulas that have no cached value — in dependency order, reading every input's cache as it is — writes the workbook, and returns the `RecalcResult`; every cache the book already carried (Excel's, another engine's) is written byte for byte, so an edited model keeps what it had and gains what it lacked. `Excel.writeRecalculated(wb, path)` (0.13.0) recomputes *every* formula instead — reach for it when the caches themselves are suspect. Both write even when some formulas fail (errors are data; failed cells stay uncached and Excel computes them on open), and both take a `RecalcOptions` (0.21.0) for a fixed clock, seeded rng, iterative mode or parallelism. The pure step is `wb.recalculate()`: it evaluates every formula across all sheets in dependency order, resolves cross-sheet references automatically, isolates reference cycles (the rest of the workbook still computes), and reports failures per cell in `result.errors`; `result.toEither` gives `Left(errors)` for pipelines that must abort before anything lands on disk — then `Excel.write(result.workbook, path)` is the one legitimate plain write of a model, because the workbook is already cached. **Excel error values are results, not failures** (0.14.0): `=1/0` evaluates to `#DIV/0!` — catchable with `IFERROR`, cached into the written file exactly like Excel would, and listed via `result.excelErrors` rather than `result.errors` (which carries only host failures: parse errors, missing sheets, cycles). For one-off questions: `wb.evaluateFormula("=SUM(Data!A:A)", "Summary")`.
 
 **Defined names resolve** (0.13.0): `fx"=IF(case=2,rev,cost)"`, `fx"=entry_mult*ltm_ebitda"`, `fx"=SUM(rev_range)"` evaluate against workbook- and sheet-scoped defined names (sheet-scoped shadows global), contribute dependency edges so recalc orders name-gated families correctly, and round-trip byte-faithfully; an unresolvable name is a clean per-cell error.
 
@@ -365,7 +372,12 @@ result match
   case Left(err) => println(s"failed: ${err.message}"); sys.exit(1)
 ```
 
-Or lean on totality so there is nothing to unwrap: literal refs, `upsert`, range fill, `readTypedOr`, `recalculate` are all total. `.unsafe` throws a structured `XLException` (wraps the `XLError`) — fine for scripts where fail-fast is correct.
+Or lean on totality so there is nothing to unwrap: literal refs, `upsert`, range fill, `readTypedOr`, `recalculate` are all total. `.unsafe` throws a structured `XLException` (wraps the `XLError`) — fine for scripts where fail-fast is correct. `orExit(result)` (0.21.0) is the script-shaped form of the `match` above: the value on `Right`, or `error: …` / `code: …` / `hint: …` / `did you mean: …` on stderr and exit status 1 — the same envelope `xl` prints, so a failing script reads like a failing CLI call:
+
+```scala
+val wb = orExit(Workbook.named("Data", "Summary"))   // DuplicateSheet on a repeat → printed, exit 1
+val sales = orExit(wb("Sales"))                      // SheetNotFound → printed with its hint, exit 1
+```
 
 ## Workflows
 
@@ -414,8 +426,7 @@ val report = Sheet("Q2")
       (ref"A8" := "Total") ++ (ref"B8" := fx"=SUM(B4:B6)") ++ ref"B8".styled(currency)
   )
 
-val result = Workbook(report).recalculate()
-Excel.write(result.workbook, "/tmp/q2-report.xlsx")
+val result = Excel.writeChecked(Workbook(report), "/tmp/q2-report.xlsx") // caches B8, writes, reports
 println(if result.isClean then "✓ report written" else result.errors.map(_.render).mkString("\n"))
 ```
 
@@ -453,7 +464,7 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 - **`shift`/`down`/`up`/`left`/`right` are unchecked at the edges**: `ref"A1".up()` produces an invalid "A0" ref that corrupts output if written. Since 0.20.0 ([#465](https://github.com/TJC-LP/xl/issues/465)) use the bounded forms in loops — `ref.tryDown(n)`/`tryRight(n)`/`tryShift(dc, dr)` return `None` past the grid (column A..XFD, row 1..1048576) and `ref.clampShift(dc, dr)` pins each axis to the nearest edge; `range.rows`/`columns` and `range.row(i)`/`column(i)` (`Option`, 0-based) slice a range instead of interpolating its corners. On ≤0.19.x keep loop bounds inside your data extent.
 - **First run is slow** (dependency download); afterwards scala-cli caches everything.
 - **`.sc` files**: top-level statements, no `@main`. A `.scala` file needs `@main def run(): Unit`.
-- **`Excel.write` does NOT recalculate** — freshly built `fx"…"` cells are written with no cached values, so Excel-before-recalc, openpyxl `data_only`, pandas, and previewers all show blanks. Since 0.13.0 the one-call fix is **`Excel.writeRecalculated(wb, path)`** ([#360](https://github.com/TJC-LP/xl/issues/360)): it recalculates, writes the cached workbook (even when some formulas fail — errors are data), and returns the `RecalcResult` (inspect `result.errors` / `result.isClean`). For fail-hard pipelines that must abort *before* anything lands on disk, keep the explicit `val result = wb.recalculate(); …; Excel.write(result.workbook, path)` pattern. On ≤0.12.x, `writeRecalculated` is unavailable — recalculate then write `result.workbook` (a single pass suffices on 0.12.5+).
+- **Never `Excel.write` a freshly built model — it does NOT recalculate.** `fx"…"` cells are written with no cached values, so Excel-before-recalc, openpyxl `data_only`, pandas, and previewers all show blanks. Write models with **`Excel.writeChecked(wb, path)`** (0.21.0, [#589](https://github.com/TJC-LP/xl/issues/589)): it computes only the formulas that have no cache (every existing cache — Excel's or another engine's — is written byte for byte), writes, and returns the `RecalcResult`; or with **`Excel.writeRecalculated(wb, path)`** (0.13.0, [#360](https://github.com/TJC-LP/xl/issues/360)) when every formula must be recomputed. Both write even when some formulas fail — errors are data; inspect `result.errors` / `result.isClean` — and both take a `RecalcOptions` (0.21.0). For fail-hard pipelines that must abort *before* anything lands on disk, keep the explicit `val result = wb.recalculate(); …; Excel.write(result.workbook, path)` pattern — the one plain `write` of a model that is right, because the workbook is already cached. On ≤0.20.0 `writeChecked` is unavailable: use `writeRecalculated`; on ≤0.12.x recalculate then write `result.workbook` (a single pass suffices on 0.12.5+).
 - **Percent postfix works since 0.13.0** ([#355](https://github.com/TJC-LP/xl/issues/355)): `fx"=A1*10%"`, `fx"=10%"`, `fx"=(1+5%)^2"` parse, evaluate (`10%` → exact `0.1`), broadcast over ranges, and print back byte-identically (never rewritten to `/100`). On ≤0.12.x the parser rejects `%` — write `/100` there. External-workbook refs (`[2]Book!A1`) parse and pin their Excel-written caches **since 0.12.6** ([#353](https://github.com/TJC-LP/xl/issues/353)): `recalculate()` preserves those cells verbatim and dependents compute from the caches (uncached external cells yield a per-cell error); on ≤0.12.5 they fail to parse entirely — compute from cached values there.
 - **Runtime column handles for `setColumnProperties`** ([#361](https://github.com/TJC-LP/xl/issues/361), since 0.13.0): fold over letters computed at runtime with `Column.parse("D")` (`Either[String, Column]`; trailing row digits tolerated, so `"D1"` works) — e.g. `Column.parse(letter).map(c => sheet.setColumnProperties(c, ColumnProperties(width = Some(w))))`. A runtime `RefType` also exposes `.col` (`RefType.parse(s).map(_.col)`). On ≤0.12.x only the compile-time `ref"D1".col` existed — set widths with literal refs per column there.
 - **A runtime string flips the return type of every transparent string form** — `Sheet(name)`, `Workbook(name, …)`, `sheet.put("A1", v)`, `sheet.style("A1:D1", st)`, `sheet.merge("A1:C1")`, `sheet.comment("A1", c)` ([#420](https://github.com/TJC-LP/xl/issues/420), [#465](https://github.com/TJC-LP/xl/issues/465)): they are `transparent inline` — a string literal validates at compile time and returns `Sheet`/`Workbook`, while the very same call with a `val` returns `XLResult[…]`, so a chained `.put(...)` type-errors with nothing at the call site to warn you. Do not rely on those forms for computed strings. Use the twins that spell `XLResult` in their signatures: **`Sheet.named(name)`** (0.18.0) and, since 0.20.0, **`Workbook.named(…)`** (`DuplicateSheet` on repeats), **`sheet.putAt(ref, v)`** / **`putAt(ref, v, style)`**, **`sheet.styleAt(ref, st)`** (cell or range), **`sheet.mergeAt(range)`**, **`sheet.commentAt(ref, c)`** — the validation of the **literal** forms and the same value/style path; a range where a cell is required is `InvalidCellRef`, a sheet-qualified ref is `InvalidReference` (qualify at the workbook: `wb.update(name, _.putAt(...))`). **The twins take corner forms only** (`A1`, `A1:B2`): no full-column/row `A:A`/`1:1`, no `$` anchors, and `mergeAt` needs two corners — spellings the *dynamic* transparent `merge`/`style` accept today via `CellRange.parse`, so do not rewrite `sheet.merge(s"$c:$c")` as `mergeAt`; parse first instead: `s.asRange.map(sheet.merge)` / `s.asRange.map(r => sheet.style(r, st))` / `s.asCell.map(r => sheet.put(r, v))` (`String.asRange` is `CellRange.parse`-backed, `asCell` is `ARef.parse`-backed). On ≤0.19.x, make the union explicit with an ascription: `val s: XLResult[Sheet] = sheet.put(cell, 42)`.

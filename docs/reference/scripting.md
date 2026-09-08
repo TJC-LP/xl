@@ -65,18 +65,26 @@ Excel.write(updated, "output.xlsx")
 - `Workbook.upsert(name, f)` is total update-or-create; `Workbook.update(name, f)` returns
   `XLResult[Workbook]` and fails if the sheet is absent. Pick by intent.
 - `Excel.modify("file.xlsx")(f)` does read → transform → write in place with atomic file
-  replacement (no ZIP corruption on a crashed write).
+  replacement (no ZIP corruption on a crashed write). `Excel.modifyR("file.xlsx")(f)` (since
+  0.21.0) is the same for an `XLResult`-returning transform — `_.update("Data", …)` needs no
+  `.unsafe` inside the lambda, and a `Left` throws *before* anything is written (the file stays
+  byte-identical, no scratch file is left behind).
+- `Excel.readSheet(path, name)` (since 0.21.0) reads one sheet; a missing name throws an
+  `XLException` whose `error` is `SheetNotFound` and whose message names the nearest sheet names
+  and every available sheet. `Excel.readMetadata(path)` (since 0.21.0) returns `LightMetadata` —
+  sheet names, visibility, dimensions, defined names, the date system — without loading a cell.
 - `Excel.write` also accepts an `XLResult[Workbook]` directly.
 
-> **Formulas are written with whatever cache they carry — recalculate first.** A freshly built
-> `fx"…"` cell has no cached value, so a plain `Excel.write` produces a file whose formulas show
-> up **blank** in every cached-value consumer (openpyxl `data_only`, pandas, previewers, Excel
-> before its first recalc). If the workbook contains formulas, write it with
-> `Excel.writeRecalculated` (since 0.13.0) instead — one call recalculates and writes, returning
-> the `RecalcResult` so failures are visible instead of silent:
+> **Formulas are written with whatever cache they carry — never `Excel.write` a freshly built
+> model.** A `fx"…"` cell has no cached value, so a plain `Excel.write` produces a file whose
+> formulas show up **blank** in every cached-value consumer (openpyxl `data_only`, pandas,
+> previewers, Excel before its first recalc). Write a model with `Excel.writeChecked` (since
+> 0.21.0) — it computes only the formulas that have no cache, keeps every existing cache byte for
+> byte, writes, and returns the `RecalcResult` — or with `Excel.writeRecalculated` (since 0.13.0)
+> when every formula must be recomputed. Either way failures are visible instead of silent:
 >
 > ```scala
-> val result = Excel.writeRecalculated(updated, "output.xlsx") // recalc → write → report
+> val result = Excel.writeChecked(updated, "output.xlsx")       // uncached cells → computed → written
 > if !result.isClean then result.errors.foreach(e => println(e.render))
 > ```
 >
@@ -441,10 +449,12 @@ Also since 0.13.0, **defined names resolve** in formulas: `=IF(case=2,…)`,
 (sheet-scoped shadows global), contribute dependency edges so `recalculate()` orders name-gated
 families correctly, and round-trip byte-faithfully; unresolvable names are clean per-cell errors.
 
-When the very next step is a write, `Excel.writeRecalculated(wb, path)` (since 0.13.0) fuses the
-two — recalculate, write the cached workbook (even on partial failure), return the same
-`RecalcResult`. Use the explicit `recalculate().toEither` pattern above when a dirty result must
-abort *before* anything lands on disk.
+When the very next step is a write, `Excel.writeChecked(wb, path)` (since 0.21.0) fills in only
+the uncached formulas (`recalculateUncached`) and writes, and `Excel.writeRecalculated(wb, path)`
+(since 0.13.0) recalculates everything and writes — both write the cached workbook even on partial
+failure and return the same `RecalcResult`; both take a `RecalcOptions` (since 0.21.0). Use the
+explicit `recalculate().toEither` pattern above when a dirty result must abort *before* anything
+lands on disk.
 
 For one-off questions, `wb.evaluateFormula("=SUM(Data!A1:A9)", "Summary")` returns
 `XLResult[CellValue]` with cross-sheet context wired automatically (108 functions supported —
@@ -609,6 +619,33 @@ ref"B3:F9".outlined(BorderStyle.Medium)             // outline the range edges o
 `range.outlined` is edge-correct (corners get both sides, interior cells untouched) and merges
 into existing borders at apply time, preserving each cell's font/fill/format.
 
+## Outline groups: collapse and expand (since 0.21.0)
+
+A collapsed Excel group is two things at once — the member rows/columns are hidden AND the summary
+row/column after the span carries the `collapsed` marker that draws the "+" button. `collapseRows`
+/ `collapseCols` compose both (what `xl group-rows --collapsed` does), make ungrouped members a
+level-1 group, and keep an existing outline level; `expandRows` / `expandCols` unhide the members
+and clear the marker, keeping the level ([#465](https://github.com/TJC-LP/xl/issues/465)):
+
+```scala
+//> using scala 3.9.0
+//> using dep com.tjclp::xl:0.20.0
+import com.tjclp.xl.scripting.{*, given}
+
+// Whole-row/column spans are runtime strings (the ref macro takes A1 / A1:B2 shapes) — parse them.
+val cols = orExit("E:H".asRange)
+val detail = Sheet("Detail")
+  .put(ref"A1", "Region").put(ref"A2", "North").put(ref"A3", "South").put(ref"A4", "Total")
+  .put(ref"B2", 10).put(ref"B3", 20).put(ref"B4", fx"=SUM(B2:B3)")
+  .collapseRows(Row.from1(2), Row.from1(3)) // rows 2-3 hidden at level 1, row 4 marked collapsed
+  .collapseCols(cols)                       // E:H hidden at level 1, column I marked collapsed
+
+val rows = orExit("2:3".asRange)
+val reopened = detail.expandRows(rows).expandCols(cols)
+Excel.writeChecked(Workbook(detail), "/tmp/outline.xlsx")
+println(s"rows hidden: ${detail.rowProperties.count(_._2.hidden)}, reopened: ${reopened.rowProperties.count(_._2.hidden)}")
+```
+
 ## Print and view setup
 
 `SheetView` (gridlines, zoom) and `PageSetup` (orientation, fit, margins, header/footer, print
@@ -657,6 +694,16 @@ val wb2 = wb.update("Sales", _.put(ref"A1", "x")).unsafe // fail-fast script sty
 Use it **once, at the edge** — compose with `for`-comprehensions in between, or lean on the
 total APIs (literal refs, `upsert`, range fill, `readTypedOr`, `recalculate`) so there is
 nothing to unwrap.
+
+`orExit(result)` (since 0.21.0) is the script-shaped alternative: the value on `Right`, or the
+error's `error:` / `code:` / `hint:` / `did you mean:` lines on stderr and exit status 1 — the
+same envelope `xl` prints, so a failing script reads like a failing CLI call. `exitMessage(err)`
+is the text it prints, for scripts that report and continue.
+
+```scala
+val wb = orExit(Workbook.named("Data", "Summary")) // DuplicateSheet on a repeat → printed, exit 1
+val sales = orExit(wb("Sales"))                    // SheetNotFound → printed with its hint, exit 1
+```
 
 ## `Excel` vs `ExcelIO`
 
