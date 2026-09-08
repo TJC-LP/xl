@@ -25,12 +25,18 @@ final class StreamingSource(path: Path, excel: ExcelIO[IO]) extends SheetSource:
 
   def sheets: IO[Vector[SheetName]] = metadata.map(_.sheets.map(_.name))
 
-  /** The worksheet's `<dimension>` when it has one, else a scan of its occupied cells. */
+  /**
+   * The worksheet's `<dimension>` as written, else the bounding box of its non-empty cells. A
+   * single-cell `<dimension>` is not trusted: Excel writes `<dimension ref="A1"/>` for an EMPTY
+   * sheet, which the loaded workbook (no stored cell) reports as no used range, so a one-cell
+   * extent is re-derived by the scan — a pass over at most one cell when the declaration is honest,
+   * and the right answer when it is not.
+   */
   def usedRange(sheet: SheetName): IO[Option[CellRange]] =
     metadata.flatMap { meta =>
       meta.sheets.find(_.name == sheet).flatMap(_.dimension) match
-        case Some(range) => IO.pure(Some(range))
-        case None => scanBounds(sheet)
+        case Some(range) if range.width > 1 || range.height > 1 => IO.pure(Some(range))
+        case _ => scanBounds(sheet)
     }
 
   def rows(sheet: SheetName, window: CellRange): Stream[IO, Vector[CellRecord]] =

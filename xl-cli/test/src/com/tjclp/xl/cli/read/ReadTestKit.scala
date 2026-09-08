@@ -1,6 +1,10 @@
 package com.tjclp.xl.cli.read
 
+import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
+import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
+
+import scala.jdk.CollectionConverters.*
 
 import cats.effect.IO
 
@@ -97,3 +101,68 @@ object ReadTestKit:
       tempFile.toFile.deleteOnExit()
       tempFile
     }.flatMap(tempFile => excel.write(wb, tempFile) *> test(tempFile))
+
+  /**
+   * Copy the zip at `path` onto itself entry by entry, each entry's bytes passed through `f` (entry
+   * name, bytes): how a test hands the readers a file another producer would have written.
+   */
+  def rewriteZip(path: Path)(f: (String, Array[Byte]) => Array[Byte]): IO[Unit] =
+    IO.blocking {
+      val zip = new ZipFile(path.toFile)
+      val entries =
+        try
+          zip.entries().asScala.toVector.map { entry =>
+            val in = zip.getInputStream(entry)
+            try entry.getName -> in.readAllBytes()
+            finally in.close()
+          }
+        finally zip.close()
+      val out = new ZipOutputStream(Files.newOutputStream(path))
+      try
+        entries.foreach { (name, bytes) =>
+          out.putNextEntry(new ZipEntry(name))
+          out.write(f(name, bytes))
+          out.closeEntry()
+        }
+      finally out.close()
+    }
+
+  /** One zip entry's text. */
+  def zipEntry(path: Path, name: String): IO[String] =
+    IO.blocking {
+      val zip = new ZipFile(path.toFile)
+      try
+        val in = zip.getInputStream(zip.getEntry(name))
+        try new String(in.readAllBytes(), UTF_8)
+        finally in.close()
+      finally zip.close()
+    }
+
+  /**
+   * openpyxl's workbook rels: worksheet Targets package-absolute (`/xl/worksheets/sheet1.xml`)
+   * where the library's writer, like Excel, writes them relative to xl/ (`worksheets/sheet1.xml`).
+   */
+  val openpyxlTargets: (String, Array[Byte]) => Array[Byte] = (name, bytes) =>
+    if name == "xl/_rels/workbook.xml.rels" then
+      new String(bytes, UTF_8)
+        .replace("Target=\"worksheets/", "Target=\"/xl/worksheets/")
+        .getBytes(UTF_8)
+    else bytes
+
+  /**
+   * Excel's empty worksheet: `<dimension ref="A1"/>` on every worksheet the library's writer left
+   * without one (it records no `<dimension>` for a sheet with no cells; Excel always writes `A1`).
+   */
+  val excelEmptySheetDimension: (String, Array[Byte]) => Array[Byte] = (name, bytes) =>
+    if name.startsWith("xl/worksheets/sheet") && name.endsWith(".xml") then
+      val xml = new String(bytes, UTF_8)
+      if xml.contains("<dimension") then bytes
+      else
+        // CT_Worksheet order: sheetPr, dimension, sheetViews, sheetFormatPr, cols, sheetData
+        val at = Vector("<sheetViews", "<sheetFormatPr", "<cols", "<sheetData")
+          .map(xml.indexOf)
+          .filter(_ >= 0)
+          .minOption
+          .getOrElse(xml.length)
+        (xml.substring(0, at) + "<dimension ref=\"A1\"/>" + xml.substring(at)).getBytes(UTF_8)
+    else bytes

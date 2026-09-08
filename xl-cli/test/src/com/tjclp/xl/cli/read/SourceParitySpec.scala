@@ -26,7 +26,9 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  * cached and uncached formulas, comments (authored and not, on occupied and on empty cells) and
  * styled-but-empty cells — no hidden lines, merges or hyperlinks — written to a file and read back
  * through both strategies; every query runs in both output modes and the rendered stdout, stderr
- * and exit code must agree.
+ * and exit code must agree. The file is written as other producers write it: openpyxl's
+ * package-absolute worksheet Targets on half the books, and Excel's `<dimension ref="A1"/>` on
+ * every empty sheet (the library's writer records none there).
  *
  * The payload fields that BELONG to a capability the streaming reader lacks are the only allowed
  * difference, and they must say so rather than guess: `cell`'s `Dependencies`/`Dependents` (the
@@ -96,8 +98,10 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
 
   /**
    * A sheet: up to 6 rows by 4 columns, a header row of words first. A position with no value but a
-   * number format becomes a styled-but-empty cell; up to two comments land anywhere in the grid or
-   * on the row below it (an empty cell).
+   * number format becomes a styled-but-empty cell, and half the sheets carry one more such cell
+   * just past the grid's last row and column — outside the non-empty bounding box, so the
+   * stored-cell box (the `<dimension>`) is wider than any scan of the values could recover; up to
+   * two comments land anywhere in the grid or on the row below it (an empty cell).
    */
   private def genSheet(name: String): Gen[Sheet] =
     for
@@ -105,6 +109,7 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       cols <- Gen.choose(1, 4)
       headers <- Gen.listOfN(cols, Gen.identifier.map(_.take(6)).suchThat(_.nonEmpty))
       cells <- Gen.listOfN(rows * cols, Gen.zip(genValue, genNumFmt))
+      styledCorner <- Gen.oneOf(true, false)
       commentCount <- Gen.choose(0, 2)
       comments <- Gen.listOfN(
         commentCount,
@@ -122,24 +127,46 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
           put.styleAt(ref.toA1, CellStyle.default.withNumFmt(fmt)).getOrElse(put)
         )
       }
-      comments.foldLeft(withCells) { case (s, (col, row, comment)) =>
+      val withCorner =
+        if styledCorner then
+          val corner = ARef.from0(cols, rows + 1).toA1
+          withCells
+            .styleAt(corner, CellStyle.default.withNumFmt(NumFmt.Decimal))
+            .getOrElse(withCells)
+        else withCells
+      comments.foldLeft(withCorner) { case (s, (col, row, comment)) =>
         s.comment(ARef.from0(col, row), comment)
       }
 
-  private val genBook: Gen[Workbook] =
+  /**
+   * A book as another producer would have written it: with `openpyxlTargets` the workbook rels name
+   * the worksheets by package-absolute Target (`/xl/worksheets/sheet1.xml`); the `Blank` sheet,
+   * when present, is an empty sheet that will carry Excel's `<dimension ref="A1"/>`.
+   */
+  private final case class ParityBook(wb: Workbook, openpyxlTargets: Boolean)
+
+  private val genBook: Gen[ParityBook] =
     for
       two <- Gen.oneOf(true, false)
+      blank <- Gen.oneOf(true, false)
+      openpyxl <- Gen.oneOf(true, false)
       data <- genSheet("Data")
       other <- genSheet("Other")
-    yield Workbook(if two then Vector(data, other) else Vector(data))
+    yield
+      val sheets = Vector(data) ++ Option.when(blank)(Sheet("Blank")) ++ Option.when(two)(other)
+      ParityBook(Workbook(sheets), openpyxl)
 
   // --- The law -----------------------------------------------------------------------------------
 
   private val excel = ReadTestKit.excel
 
-  private def withFile[A](wb: Workbook)(f: (Workbook, Path) => IO[A]): IO[A] =
+  private def withFile[A](book: ParityBook)(f: (Workbook, Path) => IO[A]): IO[A] =
     IO.blocking(Files.createTempFile("xl-parity-", ".xlsx")).flatMap { path =>
-      (excel.write(wb, path) *> excel.read(path).flatMap(loaded => f(loaded, path)))
+      val asProduced: (String, Array[Byte]) => Array[Byte] = (name, bytes) =>
+        val excelShaped = ReadTestKit.excelEmptySheetDimension(name, bytes)
+        if book.openpyxlTargets then ReadTestKit.openpyxlTargets(name, excelShaped) else excelShaped
+      (excel.write(book.wb, path) *> ReadTestKit.rewriteZip(path)(asProduced) *>
+        excel.read(path).flatMap(loaded => f(loaded, path)))
         .guarantee(IO.blocking(Files.deleteIfExists(path)).void)
     }
 
@@ -212,8 +239,9 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       case _ => text
 
   property("in-memory and streaming sources produce equal payloads for every read verb") {
-    forAll(genBook) { (wb: Workbook) =>
-      withFile(wb) { (loaded, path) =>
+    forAll(genBook) { (book: ParityBook) =>
+      withFile(book) { (loaded, path) =>
+        val wb = book.wb
         val checks = wb.sheets.flatMap(sheet => queries(wb, sheet)).flatMap { case (flag, query) =>
           Vector(OutputMode.Text, OutputMode.Json).map(mode => (flag, query, mode))
         }

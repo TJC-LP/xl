@@ -1,13 +1,17 @@
 package com.tjclp.xl.cli
 
 import cats.effect.IO
+import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{Workbook, Sheet, given}
+import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.contract.OutputMode
-import com.tjclp.xl.cli.read.{ReadQuery, ReadTestKit}
+import com.tjclp.xl.cli.read.{InMemorySource, ReadQuery, ReadTestKit, SheetSource}
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * The streaming source renders through the same renderers as the loaded workbook (W2.4): the
@@ -170,5 +174,94 @@ class StreamingReadSpec extends CatsEffectSuite:
           assertEquals(outcome.warnings.map(_.code), Vector("FLAG_IGNORED"))
           assert(outcome.warnings.exists(_.message.contains("--skip-hidden")))
         }
+    }
+  }
+
+  /** Both sources' payload text for `query`, asserted byte-equal; the in-memory text returned. */
+  private def agree(
+    loaded: Workbook,
+    path: java.nio.file.Path,
+    sheet: String,
+    query: ReadQuery,
+    mode: OutputMode = OutputMode.Text
+  ): IO[String] =
+    for
+      memory <- ReadTestKit.inMemory(loaded, Some(sheet), query, mode).map(ReadTestKit.text)
+      stream <- ReadTestKit.streaming(path, Some(sheet), query, mode).map(ReadTestKit.text)
+    yield
+      assertEquals(stream, memory, s"$query differs between the sources")
+      memory
+
+  test(
+    "openpyxl's package-absolute worksheet Targets: the default window is one box from both sources"
+  ) {
+    // A1:B2 hold values; D5 is styled but empty. The stored-cell box, A1:D5, is the <dimension> the
+    // writer records — and no scan of the non-empty cells (A1:B2) could recover it, so the
+    // streaming source must find the element behind `Target="/xl/worksheets/sheet1.xml"`.
+    val values = Sheet("Data").put(ref"A1", "h1").put(ref"B1", "h2").put(ref"A2", 1).put(ref"B2", 2)
+    val data = values.styleAt("D5", CellStyle.default.withNumFmt(NumFmt.Percent)).getOrElse(values)
+    ReadTestKit.withTempWorkbook(Workbook(Vector(data))) { path =>
+      for
+        _ <- ReadTestKit.rewriteZip(path)(ReadTestKit.openpyxlTargets)
+        rels <- ReadTestKit.zipEntry(path, "xl/_rels/workbook.xml.rels")
+        _ = assert(rels.contains("Target=\"/xl/worksheets/sheet1.xml\""), rels)
+        loaded <- ReadTestKit.excel.read(path)
+        streamed <- SheetSource
+          .streaming(path, ReadTestKit.excel)
+          .usedRange(SheetName.unsafe("Data"))
+        _ = assertEquals(streamed.map(_.toA1), Some("A1:D5"))
+        _ = assertEquals(streamed, loaded.sheets.headOption.flatMap(InMemorySource.dimension))
+        markdown <- agree(loaded, path, "Data", ReadTestKit.view(None))
+        json <- agree(loaded, path, "Data", ReadTestKit.view(None, ViewFormat.Json))
+        _ <- agree(loaded, path, "Data", ReadTestKit.view(None, ViewFormat.Csv))
+        filtered <- agree(loaded, path, "Data", ReadTestKit.filter("A IS EMPTY"))
+        _ <- agree(
+          loaded,
+          path,
+          "Data",
+          ReadTestKit.filter("A IS EMPTY", format = FilterFormat.Json)
+        )
+        _ <- agree(loaded, path, "Data", ReadTestKit.filter("A IS EMPTY"), OutputMode.Json)
+      yield
+        // the window really is the stored-cell box: column D and row 5 are addressed
+        assertEquals(ujson.read(json)("range").str, "A1:D5")
+        assert(markdown.linesIterator.exists(_.startsWith("| 5 ")), markdown)
+        // rows 3, 4 and 5 have an empty A; a scan window (A1:B2) would have matched none
+        assert(!filtered.startsWith("No rows matched"), filtered)
+        assert(filtered.linesIterator.exists(_.startsWith("| 5 ")), filtered)
+    }
+  }
+
+  test("Excel's <dimension ref=\"A1\"/> on an empty sheet: (empty sheet) from both sources") {
+    // Excel writes `A1` for an empty sheet and `C3` for a sheet whose only cell is C3: a one-cell
+    // <dimension> cannot say which, so the streaming source scans instead of trusting it
+    val one = Sheet("One").put(ref"C3", "only")
+    ReadTestKit.withTempWorkbook(Workbook(Vector(Sheet("Blank"), one))) { path =>
+      for
+        _ <- ReadTestKit.rewriteZip(path)(ReadTestKit.excelEmptySheetDimension)
+        xml <- ReadTestKit.zipEntry(path, "xl/worksheets/sheet1.xml")
+        _ = assert(xml.contains("<dimension ref=\"A1\"/>"), xml)
+        meta <- ReadTestKit.excel.readMetadata(path)
+        _ = assertEquals(
+          meta.sheets.map(_.dimension.map(_.toA1)),
+          Vector(Some("A1:A1"), Some("C3:C3"))
+        )
+        loaded <- ReadTestKit.excel.read(path)
+        source = SheetSource.streaming(path, ReadTestKit.excel)
+        blank <- source.usedRange(SheetName.unsafe("Blank"))
+        _ = assertEquals(blank, None)
+        oneUsed <- source.usedRange(SheetName.unsafe("One"))
+        _ = assertEquals(oneUsed.map(_.toA1), Some("C3:C3"))
+        empty <- agree(loaded, path, "Blank", ReadTestKit.view(None))
+        _ = assertEquals(empty, "(empty sheet)")
+        emptyJson <- agree(loaded, path, "Blank", ReadTestKit.view(None, ViewFormat.Json))
+        _ = assertEquals(ujson.read(emptyJson)("range"), ujson.Null)
+        _ <- agree(loaded, path, "Blank", ReadTestKit.view(None, ViewFormat.Csv))
+        noRows <- agree(loaded, path, "Blank", ReadTestKit.filter("A IS EMPTY"))
+        _ = assertEquals(noRows, "No rows matched.")
+        cell <- agree(loaded, path, "One", ReadTestKit.view(None))
+        _ = assert(cell.contains("only"), cell)
+        _ <- agree(loaded, path, "One", ReadTestKit.view(None, ViewFormat.Json))
+      yield ()
     }
   }

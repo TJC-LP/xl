@@ -206,10 +206,10 @@ object InMemorySource:
     Stream.emits(denseRows(sheet, window))
 
   /**
-   * The worksheet's `<dimension>`: the bounding box of every cell the sheet stores,
-   * styled-but-empty ones included — what the streaming reader takes from the file, so `view`
-   * without a range and `filter` address the same window from both sources. (`Sheet.usedRange`
-   * spans the non-empty cells only.)
+   * The bounding box of every cell the sheet stores, styled-but-empty ones included — the
+   * `<dimension>` the library's writer records, so `view` without a range and `filter` address the
+   * same window from both sources for a file it wrote. (`Sheet.usedRange` spans the non-empty cells
+   * only; another producer's `<dimension>` is whatever it wrote, see `StreamingSource`.)
    */
   def dimension(sheet: Sheet): Option[CellRange] =
     sheet.cells.keysIterator
@@ -253,6 +253,12 @@ object InMemorySource:
         .get(ref.row.index0)
         .flatMap(_.find(_.contains(ref)))
         .orElse(tall.find(_.contains(ref)))
+
+    /** The ranges kept aside as tall (the two buckets are the test's business, not a caller's). */
+    private[read] def tallRanges: Vector[CellRange] = tall
+
+    /** How many rows the short ranges are indexed under. */
+    private[read] def indexedRows: Int = byRow.size
 
   object MergeIndex:
     val tallRows: Int = 64
