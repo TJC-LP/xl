@@ -227,7 +227,7 @@
 
 ### Test Coverage
 
-**6,951 test cases** (verified via `./mill __.test`, 2026-09-08, 0.21.1 clusters A/C/D and the streaming fixes #635/#638/#640 merged): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**6,947 test cases** (verified via `./mill __.test`, 2026-09-08, 0.21.1 clusters A/C/D and the streaming fixes #635/#638/#640 merged): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
