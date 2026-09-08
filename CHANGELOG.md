@@ -25,14 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`xl-0.21.0-RC1-linux-amd64` pairs with `xl-skill-0.21.0-RC1.zip`); a versioned binary with no
   zip of its release present fails instead of falling back to the highest zip. The grading host
   needs an `xl` that accepts the global `--json` (0.20.0 or later).
-- **`xlfn-missing` lint** (#588): a post-2007 function stored without Excel's `_xlfn.` prefix
-  anywhere in the package — a cell `<f>`, a conditional-formatting `<formula>`, a data-validation
+- **`xlfn-missing` lint** (#588): a post-2007 function stored without Excel's `_xlfn.` prefix, or
+  a `LET`/`LAMBDA` whose parameters lack `_xlpm.` (openpyxl's `_xlfn.LET(x,1,x+1)`), anywhere in
+  the package — a cell `<f>`, a conditional-formatting `<formula>`, a data-validation
   `<formula1>`/`<formula2>` or a `<definedName>` — is reported with its sites, in DOM and streaming
-  lint alike. The finding says when a write heals it: a part xl regenerates gains the prefix; an
-  untouched part, or one re-authored with identical text, is copied through (#593 tracks healing on
-  every write).
+  lint alike. The rule is the writer's: `FormulaStorage.bareFutureCalls` runs the storage scanner
+  with recording callbacks, so the lint flags exactly what `toStored` would still change. The
+  finding is one line — count, names, sites, `#NAME?`, the regeneration condition — and points at
+  the `xl lint` reference for the slot-by-slot semantics (#593 tracks healing on every write).
 - **`FunctionFlags.volatile`** marks TODAY/NOW/RAND/RANDBETWEEN on their specs; `WorkbookAudit`
-  reports volatility from the flag instead of matching names.
+  reports volatility from the flag instead of matching names, and `xl functions --json` publishes
+  it as `volatile` beside `dynamicDeps` (also the `volatile` flag in `generated/functions.md`).
 
 ### Fixed
 

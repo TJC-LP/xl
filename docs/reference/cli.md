@@ -360,13 +360,18 @@ When no backend is available, raster exports fail with an error naming the probe
 
 List every formula function the evaluator supports (no `-f` needed). Text mode prints the names in
 columns with the count; `--json` prints typed rows — `{name, minArgs, maxArgs, args, returnsDate,
-returnsTime, dynamicDeps, specialForm}`, `maxArgs` `null` for a variadic function — for every
-registry function plus `LET`, the parser-level special form (`specialForm: true`). The generated
-page [`generated/functions.md`](generated/functions.md) is rendered from exactly these rows.
+returnsTime, dynamicDeps, volatile, specialForm}`, `maxArgs` `null` for a variadic function — for
+every registry function plus `LET`, the parser-level special form (`specialForm: true`).
+`dynamicDeps` and `volatile` are the evaluator's recalculation flags: the cells a call reads are
+decided at evaluation time (INDIRECT, OFFSET); the value can change between two recalculations with
+no input changing (TODAY, NOW, RAND, RANDBETWEEN — what `xl audit` lists under `volatile`). The
+generated page [`generated/functions.md`](generated/functions.md) is rendered from exactly these
+rows.
 
 ```bash
 xl functions                                  # names in columns, "Supported Excel Functions (N total)"
 xl --json functions | jq '.data[] | select(.dynamicDeps) | .name'   # INDIRECT, OFFSET
+xl --json functions | jq '.data[] | select(.volatile) | .name'      # NOW, RAND, RANDBETWEEN, TODAY
 ```
 
 ---
@@ -1570,10 +1575,14 @@ xl -f deliverable.xlsx lint && echo "safe to send"
   (Excel rebuilds it on save), or rebuild it. Both xl writers, in-memory and `--stream`, drop
   the source chain on every write that rewrites a worksheet, so xl output never carries one
 - **`xlfn-missing`** — a post-2007 function stored bare (`IFS(`, `XLOOKUP(`, `MAXIFS(`, … where
-  Excel stores `_xlfn.IFS(`) in a cell `<f>`, a conditional-formatting `<formula>`, a
-  data-validation `<formula1>`/`<formula2>` or a `<definedName>`: not a repair class but a silent
-  `#NAME?` on the first recalculation, which no cached value reveals (the openpyxl class of
-  producer). One finding per part with the bare names, the first five sites and the total count.
+  Excel stores `_xlfn.IFS(`), or a `LET`/`LAMBDA` whose parameters lack `_xlpm.` (openpyxl's
+  `_xlfn.LET(x,1,x+1)`, which Excel reports as unreadable content on open), in a cell `<f>`, a
+  conditional-formatting `<formula>`, a data-validation `<formula1>`/`<formula2>` or a
+  `<definedName>`: not a repair class but a silent `#NAME?` on the first recalculation, which no
+  cached value reveals (the openpyxl class of producer). The rule is the writer's own —
+  `FormulaStorage.bareFutureCalls` runs the same scanner as the storage mapping, so the lint flags
+  exactly the text xl's writer would still prefix. One finding per part with the bare names (a
+  half-prefixed `LET` is listed as `LET`), the first five sites and the total count.
   xl's own writers emit the prefix for every slot they regenerate, but a slot a write leaves
   untouched is copied verbatim, and a CF block, DV container or name table is regenerated only
   when its parsed model no longer equals the source. To heal one, add or change a rule, validation
@@ -1701,7 +1710,7 @@ otherwise:
   `{sheet, range, dimension}`; `eval` → `{formula, result: {type, value, formatted}, overrides}`;
   `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
   `functions` → `[{name, minArgs, maxArgs, args, returnsDate, returnsTime, dynamicDeps,
-  specialForm}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
+  volatile, specialForm}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
   `batch --dry-run` → `{ops: [{index, op, summary}]}` (`index` is the op's 1-based position,
   the index a `BATCH_OP_FAILED` reports; parse warnings ride in the envelope's `warnings[]`); `batch --schema` → the batch document's JSON
   Schema; `schema` → `{version, exitCodes, errorCodes, warningCodes, globals, verbs, batchOps,
