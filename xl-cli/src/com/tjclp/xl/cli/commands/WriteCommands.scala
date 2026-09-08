@@ -33,10 +33,12 @@ import com.tjclp.xl.formula.{
   TExpr
 }
 import com.tjclp.xl.formula.eval.DependentRecalculation
+import com.tjclp.xl.formula.eval.EvalFormulaSupport
 import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.ops.Edit
 import com.tjclp.xl.sheets.styleSyntax
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -1533,18 +1535,20 @@ object WriteCommands:
             invalidRef(s"Fill target must be a range, not a single cell: ${ref.toA1}")
           )
 
-      // Validate source/target compatibility based on direction
-      _ <- validateFillRanges(sourceRange, targetRange, direction)
-
-      // Apply fill operation
-      updatedSheet = applyFill(
-        targetSheet,
-        wb,
-        sourceRange,
-        targetRange,
-        direction,
-        policy.noRecalc
+      // The fill semantics live in Sheet.fill (ADR-017 §2.12, W2.1); the direction rule's refusal
+      // keeps its INVALID_REFERENCE code and text
+      filledSheet <- IO.fromEither(
+        targetSheet
+          .fill(sourceRange, targetRange, fillDir(direction))(using EvalFormulaSupport)
+          .left
+          .map {
+            case XLError.InvalidReference(reason) => invalidRef(reason)
+            case other => domain(other)
+          }
       )
+      // A --no-recalc write leaves every other cache alone but still caches what it wrote
+      updatedSheet =
+        if policy.noRecalc then cacheFilledFormulas(filledSheet, wb, targetRange) else filledSheet
       modifiedRefs = targetRange.cells.toSet
       dirLabel = if direction == FillDirection.Right then "right" else "down"
       result <- writeAfterRefresh(
@@ -1560,192 +1564,25 @@ object WriteCommands:
       )
     yield result
 
-  /** Validate that source and target ranges are compatible for fill direction */
-  private def validateFillRanges(
-    source: CellRange,
-    target: CellRange,
-    direction: FillDirection
-  ): IO[Unit] =
-    direction match
-      case FillDirection.Down =>
-        // For fill down, source columns must match target columns
-        val sourceStartCol = Column.index0(source.start.col)
-        val sourceEndCol = Column.index0(source.end.col)
-        val targetStartCol = Column.index0(target.start.col)
-        val targetEndCol = Column.index0(target.end.col)
-        if sourceStartCol == targetStartCol && sourceEndCol == targetEndCol then IO.unit
-        else
-          IO.raiseError(
-            invalidRef(
-              s"Fill down requires matching columns. Source: ${source.toA1}, Target: ${target.toA1}"
-            )
-          )
+  /** The CLI's fill direction as the algebra's. */
+  private def fillDir(direction: FillDirection): Edit.FillDir = direction match
+    case FillDirection.Down => Edit.FillDir.Down
+    case FillDirection.Right => Edit.FillDir.Right
 
-      case FillDirection.Right =>
-        // For fill right, source rows must match target rows
-        val sourceStartRow = Row.index0(source.start.row)
-        val sourceEndRow = Row.index0(source.end.row)
-        val targetStartRow = Row.index0(target.start.row)
-        val targetEndRow = Row.index0(target.end.row)
-        if sourceStartRow == targetStartRow && sourceEndRow == targetEndRow then IO.unit
-        else
-          IO.raiseError(
-            invalidRef(
-              s"Fill right requires matching rows. Source: ${source.toA1}, Target: ${target.toA1}"
-            )
-          )
-
-  /** Apply fill operation by copying source cells to target range with formula shifting */
-  private def applyFill(
-    sheet: Sheet,
-    wb: Workbook,
-    source: CellRange,
-    target: CellRange,
-    direction: FillDirection,
-    cacheFormulas: Boolean
-  ): Sheet =
-    direction match
-      case FillDirection.Down =>
-        applyFillDown(sheet, wb, source, target, cacheFormulas)
-      case FillDirection.Right =>
-        applyFillRight(sheet, wb, source, target, cacheFormulas)
-
-  /** Fill down: repeat source row(s) down through target range */
-  private def applyFillDown(
-    sheet: Sheet,
-    wb: Workbook,
-    source: CellRange,
-    target: CellRange,
-    cacheFormulas: Boolean
-  ): Sheet =
-    val sourceStartRow = Row.index0(source.start.row)
-    val sourceEndRow = Row.index0(source.end.row)
-    val sourceRowCount = sourceEndRow - sourceStartRow + 1
-
-    val targetStartRow = Row.index0(target.start.row)
-    val targetEndRow = Row.index0(target.end.row)
-
-    val startCol = Column.index0(source.start.col)
-    val endCol = Column.index0(source.end.col)
-
-    // For each target row, copy from corresponding source row (cycling if needed)
-    (targetStartRow to targetEndRow).foldLeft(sheet) { (s, targetRowIdx) =>
-      // Determine which source row to copy from (0-indexed within source)
-      val sourceRowOffset = (targetRowIdx - targetStartRow) % sourceRowCount
-      val sourceRowIdx = sourceStartRow + sourceRowOffset.toInt
-      val rowDelta = targetRowIdx - sourceRowIdx
-
-      // Skip if we're on a source row (no shifting needed for source itself)
-      if rowDelta == 0 then s
-      else
-        // Copy each cell in the row
-        (startCol to endCol).foldLeft(s) { (s2, colIdx) =>
-          // ARef.from0 takes (colIndex, rowIndex)
-          val sourceRef = com.tjclp.xl.addressing.ARef.from0(colIdx, sourceRowIdx)
-          val targetRef = com.tjclp.xl.addressing.ARef.from0(colIdx, targetRowIdx)
-          copyCell(
-            s2,
-            wb,
-            sourceRef,
-            targetRef,
-            colDelta = 0,
-            rowDelta = rowDelta.toInt,
-            cacheFormulas
-          )
-        }
+  /**
+   * `--no-recalc` (GH-468) leaves every cache in the book as it was but still caches the formulas
+   * the fill wrote: each uncached plain formula in the target is evaluated in row-major order
+   * against the filled sheet, so a filled cell sees the filled cells before it.
+   */
+  private def cacheFilledFormulas(filled: Sheet, wb: Workbook, target: CellRange): Sheet =
+    target.cellsRowMajor.foldLeft(filled) { (s, ref) =>
+      s.cells.get(ref).map(_.value) match
+        case Some(CellValue.Formula(expr, None, _: FormulaKind.Normal)) =>
+          val cached =
+            SheetEvaluator.evaluateFormula(s)(s"=$expr", workbook = Some(wb.put(s))).toOption
+          s.put(ref, CellValue.Formula(expr, cached))
+        case _ => s
     }
-
-  /** Fill right: repeat source column(s) right through target range */
-  private def applyFillRight(
-    sheet: Sheet,
-    wb: Workbook,
-    source: CellRange,
-    target: CellRange,
-    cacheFormulas: Boolean
-  ): Sheet =
-    val sourceStartCol = Column.index0(source.start.col)
-    val sourceEndCol = Column.index0(source.end.col)
-    val sourceColCount = sourceEndCol - sourceStartCol + 1
-
-    val targetStartCol = Column.index0(target.start.col)
-    val targetEndCol = Column.index0(target.end.col)
-
-    val startRow = Row.index0(source.start.row)
-    val endRow = Row.index0(source.end.row)
-
-    // For each target column, copy from corresponding source column (cycling if needed)
-    (targetStartCol to targetEndCol).foldLeft(sheet) { (s, targetColIdx) =>
-      // Determine which source column to copy from (0-indexed within source)
-      val sourceColOffset = (targetColIdx - targetStartCol) % sourceColCount
-      val sourceColIdx = sourceStartCol + sourceColOffset.toInt
-      val colDelta = targetColIdx - sourceColIdx
-
-      // Skip if we're on a source column (no shifting needed for source itself)
-      if colDelta == 0 then s
-      else
-        // Copy each cell in the column
-        (startRow to endRow).foldLeft(s) { (s2, rowIdx) =>
-          // ARef.from0 takes (colIndex, rowIndex)
-          val sourceRef = com.tjclp.xl.addressing.ARef.from0(sourceColIdx, rowIdx)
-          val targetRef = com.tjclp.xl.addressing.ARef.from0(targetColIdx, rowIdx)
-          copyCell(
-            s2,
-            wb,
-            sourceRef,
-            targetRef,
-            colDelta = colDelta.toInt,
-            rowDelta = 0,
-            cacheFormulas
-          )
-        }
-    }
-
-  /** Copy a single cell with formula shifting */
-  private def copyCell(
-    sheet: Sheet,
-    wb: Workbook,
-    sourceRef: com.tjclp.xl.addressing.ARef,
-    targetRef: com.tjclp.xl.addressing.ARef,
-    colDelta: Int,
-    rowDelta: Int,
-    cacheFormulas: Boolean
-  ): Sheet =
-    sheet.cells.get(sourceRef) match
-      case None => sheet // Empty source cell, nothing to copy
-      case Some(sourceCell) =>
-        sourceCell.value match
-          // A data-table record has only derived TABLE(...) display text, not an evaluable
-          // formula. Like CopyOps, fill destinations receive the cached constant rather than a
-          // degraded Normal formula that Excel would evaluate as #NAME?.
-          case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
-            sheet.put(targetRef, cachedOpt.getOrElse(CellValue.Empty))
-
-          case CellValue.Formula(formula, _, _) =>
-            // Shift formula references
-            val fullFormula = s"=$formula"
-            FormulaParser.parse(fullFormula) match
-              case Left(_) =>
-                // If formula can't be parsed, copy as-is
-                val cachedValue =
-                  if cacheFormulas then
-                    SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
-                  else None
-                sheet.put(targetRef, CellValue.Formula(formula, cachedValue))
-              case Right(parsedExpr) =>
-                val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
-                val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
-                val fullShiftedFormula = s"=$shiftedFormula"
-                val cachedValue =
-                  if cacheFormulas then
-                    SheetEvaluator
-                      .evaluateFormula(sheet)(fullShiftedFormula, workbook = Some(wb))
-                      .toOption
-                  else None
-                sheet.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
-
-          case value =>
-            // Non-formula: copy value as-is
-            sheet.put(targetRef, value)
 
   /**
    * Sort rows in a range by specified column(s).
@@ -1786,11 +1623,14 @@ object WriteCommands:
         case Left(ref) =>
           IO.raiseError(invalidRef(s"sort requires a range, not single cell: ${ref.toA1}"))
 
-      // Validate sort columns are within range
-      _ <- validateSortColumns(range, sortKeys)
-
-      // Perform sort
-      sortedSheet = applySortToRange(targetSheet, range, sortKeys, hasHeader)
+      keys <- sortKeySpecs(range, sortKeys)
+      // The sort semantics live in Sheet.sort (ADR-017 §2.12, W2.1)
+      sortedSheet <- IO.fromEither(
+        targetSheet.sort(range, keys, hasHeader)(using EvalFormulaSupport).left.map {
+          case XLError.InvalidReference(reason) => invalidRef(reason)
+          case other => domain(other)
+        }
+      )
       updatedWb = wb.put(sortedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
 
@@ -2334,16 +2174,21 @@ object WriteCommands:
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(invalidRef)
       )
 
-      // Delegate to shared helper (handles overlap, cross-sheet, style preservation, recalc)
-      copiedWb = CopyOps.copyRange(
-        wb,
-        sourceSheet,
-        sourceRange,
-        targetSheet,
-        targetRange,
-        valuesOnly,
-        recalcDependents = false,
-        cacheCopiedFormulas = policy.noRecalc
+      // Delegate to shared helper (Sheet.copyRange plus the CLI's cache/recalc phases)
+      copiedWb <- IO.fromEither(
+        CopyOps
+          .copyRange(
+            wb,
+            sourceSheet,
+            sourceRange,
+            targetSheet,
+            targetRange,
+            valuesOnly,
+            recalcDependents = false,
+            cacheCopiedFormulas = policy.noRecalc
+          )
+          .left
+          .map(domain)
       )
       modifiedRefs = sourceRange.cellsRowMajor
         .zip(targetRange.cellsRowMajor)
@@ -2368,220 +2213,28 @@ object WriteCommands:
       )
     yield result
 
-  /** Validate that all sort columns are within the range */
-  private def validateSortColumns(range: CellRange, keys: List[SortKey]): IO[Unit] =
+  /**
+   * The sort keys as the algebra's, each column validated to lie inside the range — keeping the
+   * CLI's messages (`Invalid column: x`, `Sort column X is outside range A1:B4`).
+   */
+  private def sortKeySpecs(range: CellRange, keys: List[SortKey]): IO[Vector[Edit.SortKeySpec]] =
     val rangeColStart = Column.index0(range.colStart)
     val rangeColEnd = Column.index0(range.colEnd)
-
-    keys.traverse_ { key =>
+    keys.toVector.traverse { key =>
       Column.fromLetter(key.column) match
-        case Left(err) => IO.raiseError(invalidRef(s"Invalid column: ${key.column}"))
+        case Left(_) => IO.raiseError(invalidRef(s"Invalid column: ${key.column}"))
         case Right(col) =>
           val colIdx = Column.index0(col)
           if colIdx < rangeColStart || colIdx > rangeColEnd then
             IO.raiseError(invalidRef(s"Sort column ${key.column} is outside range ${range.toA1}"))
-          else IO.unit
+          else
+            IO.pure(
+              Edit.SortKeySpec(
+                col,
+                if key.direction == SortDirection.Descending then Edit.SortDir.Descending
+                else Edit.SortDir.Ascending,
+                if key.mode == SortMode.Numeric then Edit.SortMode.Numeric
+                else Edit.SortMode.Alphanumeric
+              )
+            )
     }
-
-  /** Apply sort to the specified range */
-  private def applySortToRange(
-    sheet: Sheet,
-    range: CellRange,
-    sortKeys: List[SortKey],
-    hasHeader: Boolean
-  ): Sheet =
-    val rowStart = Row.index0(range.rowStart)
-    val rowEnd = Row.index0(range.rowEnd)
-    val colStart = Column.index0(range.colStart)
-    val colEnd = Column.index0(range.colEnd)
-
-    // Determine which rows to sort (skip header if specified)
-    val dataRowStart = if hasHeader then rowStart + 1 else rowStart
-
-    // If only header row or empty, nothing to sort
-    if dataRowStart > rowEnd then sheet
-    else
-      // Extract row data as Map[colIndex -> Cell] for O(1) lookup during comparison
-      val rowsToSort: Vector[(Int, Map[Int, Cell])] =
-        (dataRowStart to rowEnd).map { rowIdx =>
-          val cellMap = (colStart to colEnd).flatMap { colIdx =>
-            val ref = com.tjclp.xl.addressing.ARef.from0(colIdx, rowIdx)
-            sheet.cells.get(ref).map(colIdx -> _)
-          }.toMap
-          (rowIdx, cellMap)
-        }.toVector
-
-      // Sort rows using comparison function
-      val comparator = buildRowComparator(sortKeys)
-      val sortedRows = rowsToSort.sortWith { (a, b) =>
-        comparator(a._2, b._2) < 0
-      }
-
-      // Reconstruct sheet with sorted rows
-      reconstructWithSortedRows(sheet, range, dataRowStart, sortedRows)
-
-  /** Build a comparator for rows based on sort keys. Uses Map for O(1) cell lookup. */
-  private def buildRowComparator(
-    sortKeys: List[SortKey]
-  ): (Map[Int, Cell], Map[Int, Cell]) => Int =
-    (rowA, rowB) =>
-      // Find first non-equal comparison
-      sortKeys.iterator
-        .flatMap { key =>
-          // Column was already validated, so this should always succeed
-          Column.fromLetter(key.column).toOption.map { col =>
-            val colIdx = col.index0
-            val cellA = rowA.get(colIdx) // O(1) lookup
-            val cellB = rowB.get(colIdx) // O(1) lookup
-
-            val valueA = cellA.map(c => getSortableValue(c.value, key.mode))
-            val valueB = cellB.map(c => getSortableValue(c.value, key.mode))
-
-            val cmp = compareSortValues(valueA, valueB, key.mode)
-
-            // Apply direction
-            if key.direction == SortDirection.Descending then -cmp else cmp
-          }
-        }
-        .find(_ != 0)
-        .getOrElse(0)
-
-  /** ADT for sortable values with natural ordering */
-  private enum SortValue:
-    case Empty
-    case Error
-    case Num(value: Double)
-    case Str(value: String)
-
-  /** Extract a sortable value from a cell value */
-  private def getSortableValue(value: CellValue, mode: SortMode): SortValue =
-    import com.tjclp.xl.cells.CellValue.*
-    value match
-      case CellValue.Empty => SortValue.Empty
-      case Text(s) =>
-        if mode == SortMode.Numeric then
-          s.toDoubleOption.map(SortValue.Num(_)).getOrElse(SortValue.Str(s.toLowerCase))
-        else SortValue.Str(s.toLowerCase)
-      case Number(n) => SortValue.Num(n.toDouble)
-      case Bool(b) => SortValue.Num(if b then 1.0 else 0.0)
-      case DateTime(dt) =>
-        // Convert to Excel serial number for comparison
-        SortValue.Num(CellValue.dateTimeToExcelSerial(dt))
-      case Formula(_, Some(cached), _) =>
-        getSortableValue(cached, mode)
-      case Formula(_, None, _) => SortValue.Str("")
-      case RichText(rt) => SortValue.Str(rt.toPlainText.toLowerCase)
-      case CellValue.Error(_) => SortValue.Error
-
-  /** Compare two sort values (Empty/Error sort last) */
-  private def compareSortValues(
-    a: Option[SortValue],
-    b: Option[SortValue],
-    mode: SortMode
-  ): Int =
-    (a, b) match
-      case (None, None) => 0
-      case (None, _) => 1 // Empty cells sort last
-      case (_, None) => -1
-      case (Some(va), Some(vb)) =>
-        (va, vb) match
-          case (SortValue.Empty, SortValue.Empty) => 0
-          case (SortValue.Empty, _) => 1
-          case (_, SortValue.Empty) => -1
-          case (SortValue.Error, SortValue.Error) => 0
-          case (SortValue.Error, _) => 1
-          case (_, SortValue.Error) => -1
-          case (SortValue.Num(na), SortValue.Num(nb)) => na.compare(nb)
-          case (SortValue.Str(sa), SortValue.Str(sb)) => sa.compare(sb)
-          case (SortValue.Num(n), SortValue.Str(s)) =>
-            // In numeric mode, numbers come before strings
-            if mode == SortMode.Numeric then -1 else n.toString.compare(s)
-          case (SortValue.Str(s), SortValue.Num(n)) =>
-            if mode == SortMode.Numeric then 1 else s.compare(n.toString)
-
-  /** Reconstruct sheet with rows in sorted order */
-  private def reconstructWithSortedRows(
-    sheet: Sheet,
-    range: CellRange,
-    dataRowStart: Int,
-    sortedRows: Vector[(Int, Map[Int, Cell])]
-  ): Sheet =
-    val rowEnd = Row.index0(range.rowEnd)
-    val colStart = Column.index0(range.colStart)
-    val colEnd = Column.index0(range.colEnd)
-
-    // Remove all cells in the data portion of the range
-    val sheetWithoutDataCells = (dataRowStart to rowEnd).foldLeft(sheet) { (s, rowIdx) =>
-      (colStart to colEnd).foldLeft(s) { (s2, colIdx) =>
-        val ref = com.tjclp.xl.addressing.ARef.from0(colIdx, rowIdx)
-        s2.remove(ref)
-      }
-    }
-
-    // Build old→new ref mapping for remapping Sheet.comments
-    val refMapping: Map[ARef, ARef] = sortedRows.zipWithIndex.flatMap {
-      case ((originalRowIdx, cellMap), newRowOffset) =>
-        val newRowIdx = dataRowStart + newRowOffset
-        cellMap.keys.map { colIdx =>
-          com.tjclp.xl.addressing.ARef.from0(colIdx, originalRowIdx) ->
-            com.tjclp.xl.addressing.ARef.from0(colIdx, newRowIdx)
-        }
-    }.toMap
-
-    // Insert sorted cells at new positions
-    val sheetWithSortedCells = sortedRows.zipWithIndex.foldLeft(sheetWithoutDataCells) {
-      case (s, ((originalRowIdx, cellMap), newRowOffset)) =>
-        val newRowIdx = dataRowStart + newRowOffset
-        val rowDelta = newRowIdx - originalRowIdx
-        cellMap.values.foldLeft(s) { (s2, cell) =>
-          // Create new cell with updated row position, preserving styleId and other properties
-          val newRef = com.tjclp.xl.addressing.ARef.from0(cell.col.index0, newRowIdx)
-          // Shift formula references if the row moved
-          val shiftedValue = shiftCellValueForSort(cell.value, rowDelta)
-          val newCell = Cell(newRef, shiftedValue, cell.styleId, cell.comment, cell.hyperlink)
-          s2.put(newCell)
-        }
-    }
-
-    // Remap Sheet.comments to new cell positions (comments move with their data rows)
-    val remappedComments = sheetWithSortedCells.comments.map { (ref, comment) =>
-      refMapping.getOrElse(ref, ref) -> comment
-    }
-    sheetWithSortedCells.copy(comments = remappedComments)
-
-  /**
-   * Shift formula references when a cell moves to a different row during sorting.
-   *
-   * When a row moves from position X to Y, relative row references in formulas should be adjusted
-   * by (Y - X) so they continue pointing to the same relative positions. This matches Excel's
-   * behavior for sorting.
-   *
-   * @param value
-   *   The cell value to potentially shift
-   * @param rowDelta
-   *   The number of rows the cell moved (positive = down, negative = up)
-   * @return
-   *   Shifted cell value, or the original when no relocation is needed. Data-table records are
-   *   always materialized because sorting can invalidate the table range they describe.
-   */
-  private def shiftCellValueForSort(value: CellValue, rowDelta: Int): CellValue =
-    value match
-      // Sorting a data-table record can detach it or its table interior from the range described
-      // by its ref. Match CopyOps paste semantics and materialize the cached constant instead of
-      // turning the derived TABLE(...) display text into a Normal formula.
-      case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
-        cachedOpt.getOrElse(CellValue.Empty)
-      case _ if rowDelta == 0 => value
-      case CellValue.Formula(formula, _, _) =>
-        val fullFormula = s"=$formula"
-        FormulaParser.parse(fullFormula) match
-          case Left(_) =>
-            // If formula can't be parsed, keep as-is
-            value
-          case Right(parsedExpr) =>
-            // Shift only row references, not columns (colDelta = 0)
-            val shiftedExpr = FormulaShifter.shift(parsedExpr, 0, rowDelta)
-            val shiftedFormula = FormulaPrinter.printFileForm(shiftedExpr)
-            // Clear cached value since it will need re-evaluation
-            CellValue.Formula(shiftedFormula, None)
-      case other => other

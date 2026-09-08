@@ -3,17 +3,14 @@ package com.tjclp.xl.cli.helpers
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.cli.ColorParser
-import com.tjclp.xl.sheets.{AutoFilterState, HeaderFooter, PageSetup, SheetView}
 
 /**
- * Pure sheet-appearance and print-setup appliers (GH-358) plus the sheet-level autoFilter applier
- * (GH-432), shared by the CLI command handlers (WriteCommands) and the batch ops (BatchParser) so
- * the two paths cannot drift.
- *
- * Every applier merges into the sheet's CURRENT settings: unspecified fields are preserved
- * (read-modify-write on the whole case class — the model has no granular withers). Validation
- * happens here, returning Left with a clean message, so the model case classes' `require` guards
- * are never tripped from the CLI.
+ * Forwarders onto the sheet-appearance and print-setup merges of `Sheet.mergeSheetView` /
+ * `mergePageSetup` / `mergeHeaderFooter` / `withAutoFilter` / `removeAutoFilter` (ADR-017 §2.12,
+ * W2.1 — the GH-358 and GH-432 appliers moved into xl-core), shared by the CLI command handlers
+ * (WriteCommands) and the batch ops (BatchParser). What stays here is the CLI's flag grammar — "at
+ * least one option", "<range> and --clear are mutually exclusive" — and the colour parser; the
+ * merge-into-current-settings rule and the value guards are the core's.
  */
 object AppearanceOps:
 
@@ -31,8 +28,8 @@ object AppearanceOps:
     (range, clear) match
       case (Some(_), true) => Left("autofilter: <range> and --clear are mutually exclusive")
       case (None, false) => Left("autofilter requires a <range> argument or --clear")
-      case (Some(r), false) => Right(sheet.copy(autoFilter = Some(AutoFilterState.Ranged(r))))
-      case (None, true) => Right(sheet.copy(autoFilter = Some(AutoFilterState.Remove)))
+      case (Some(r), false) => Right(sheet.withAutoFilter(r))
+      case (None, true) => Right(sheet.removeAutoFilter)
 
   /** Merge view options (gridlines, zoom, tab selection) into the sheet's view settings. */
   def applySheetView(
@@ -43,20 +40,7 @@ object AppearanceOps:
   ): Either[String, Sheet] =
     if gridlines.isEmpty && zoom.isEmpty && tabSelected.isEmpty then
       Left("sheet-view requires at least one of: gridlines, zoom, tab-selected")
-    else
-      zoom.filter(z => z < 10 || z > 400) match
-        case Some(z) => Left(s"Zoom scale must be 10-400, got: $z")
-        case None =>
-          val current = sheet.viewSettings.getOrElse(SheetView.default)
-          Right(
-            sheet.withViewSettings(
-              current.copy(
-                showGridLines = gridlines.getOrElse(current.showGridLines),
-                zoomScale = zoom.orElse(current.zoomScale),
-                tabSelected = tabSelected.orElse(current.tabSelected)
-              )
-            )
-          )
+    else sheet.mergeSheetView(gridlines, zoom, tabSelected).left.map(_.message)
 
   /**
    * Set or clear the sheet tab color. Clearing removes the MODELED color only: on write, a
@@ -90,37 +74,10 @@ object AppearanceOps:
         "page-setup requires at least one of: orientation, scale, fit-to-width, fit-to-height, fit-to-page"
       )
     else
-      for
-        _ <- orientation
-          .filterNot(o => o == "portrait" || o == "landscape")
-          .map(o => s"Orientation must be 'portrait' or 'landscape', got: $o")
-          .toLeft(())
-        _ <- scale
-          .filter(sc => sc < 10 || sc > 400)
-          .map(sc => s"Scale must be 10-400, got: $sc")
-          .toLeft(())
-        // GH-463: 0 is Excel's "automatic" (as many pages as needed on that axis)
-        _ <- fitToWidth
-          .filter(_ < 0)
-          .map(n => s"fit-to-width must be >= 0 (0 = automatic), got: $n")
-          .toLeft(())
-        _ <- fitToHeight
-          .filter(_ < 0)
-          .map(n => s"fit-to-height must be >= 0 (0 = automatic), got: $n")
-          .toLeft(())
-      yield
-        val current = sheet.pageSetup.getOrElse(PageSetup.default)
-        sheet.withPageSetup(
-          current.copy(
-            scale = scale.getOrElse(current.scale),
-            orientation = orientation.orElse(current.orientation),
-            fitToWidth = fitToWidth.orElse(current.fitToWidth),
-            fitToHeight = fitToHeight.orElse(current.fitToHeight),
-            // Tri-state (GH-284): None derives from fitToWidth/fitToHeight and preserves
-            // any flag in the source file; Some(false) actively strips a preserved flag.
-            fitToPage = fitToPage.orElse(current.fitToPage)
-          )
-        )
+      sheet
+        .mergePageSetup(orientation, scale, fitToWidth, fitToHeight, fitToPage)
+        .left
+        .map(_.message)
 
   /**
    * Merge header/footer text into the sheet's page setup. Providing even-page text sets
@@ -147,21 +104,18 @@ object AppearanceOps:
           "even-footer, first-header, first-footer, different-odd-even, different-first"
       )
     else
-      val setup = sheet.pageSetup.getOrElse(PageSetup.default)
-      val hf = setup.headerFooter.getOrElse(HeaderFooter())
-      val updated = hf.copy(
-        oddHeader = oddHeader.orElse(hf.oddHeader),
-        oddFooter = oddFooter.orElse(hf.oddFooter),
-        evenHeader = evenHeader.orElse(hf.evenHeader),
-        evenFooter = evenFooter.orElse(hf.evenFooter),
-        firstHeader = firstHeader.orElse(hf.firstHeader),
-        firstFooter = firstFooter.orElse(hf.firstFooter),
-        differentOddEven =
-          hf.differentOddEven || differentOddEven || evenHeader.isDefined || evenFooter.isDefined,
-        differentFirst =
-          hf.differentFirst || differentFirst || firstHeader.isDefined || firstFooter.isDefined
+      Right(
+        sheet.mergeHeaderFooter(
+          oddHeader,
+          oddFooter,
+          evenHeader,
+          evenFooter,
+          firstHeader,
+          firstFooter,
+          differentOddEven,
+          differentFirst
+        )
       )
-      Right(sheet.withPageSetup(setup.copy(headerFooter = Some(updated))))
 
   /** Human-readable "key=value, ..." description of the provided (Some) options. */
   def describe(pairs: (String, Option[String])*): String =

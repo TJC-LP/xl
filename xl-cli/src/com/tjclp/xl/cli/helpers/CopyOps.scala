@@ -1,35 +1,29 @@
 package com.tjclp.xl.cli.helpers
 
-import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, SheetEvaluator}
-import com.tjclp.xl.formula.eval.DependentRecalculation.*
-import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-
 import scala.annotation.tailrec
 
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.formula.SheetEvaluator
+import com.tjclp.xl.formula.eval.DependentRecalculation.*
+import com.tjclp.xl.formula.eval.EvalFormulaSupport
+import com.tjclp.xl.sheets.Sheet
+
 /**
- * Shared copy logic used by both the `copy` CLI command and the `copy` batch operation.
- *
- * Handles:
- *   - Overlapping copies (source and target ranges overlap in the same sheet). Source cells are
- *     snapshotted into an immutable map before mutation so each target read sees the pre-copy state
- *     regardless of iteration order.
- *   - Cross-sheet copies (source and target in different sheets).
- *   - Formula adjustment: relative references shifted by the source-to-target displacement.
- *   - `valuesOnly` mode: formulas materialized to their cached value, or evaluated against the
- *     source sheet if no cache is present.
- *   - Formula cache population against the final target-sheet state, so copied formulas see the
- *     destination context and any copied dependencies in the target range.
- *   - Transitive dependent recalculation on the target sheet after the copy completes.
- *   - Style preservation in all modes (source cell styles applied to target cells).
+ * The `copy` verb and the `copy` batch op share this forwarder onto `Sheet.copyRange` /
+ * `copyRangeFrom` (ADR-017 §2.12, W2.1). The pure semantics live in xl-core — source cells
+ * snapshotted before any write (an overlapping same-sheet copy reads the pre-copy state),
+ * cross-sheet targets, relative references shifted through the evaluator's `FormulaSupport`
+ * (unparseable text copies as written), styles travelling with their cells, `valuesOnly` pasting
+ * cached values. What stays here is what needs the evaluator: a `valuesOnly` paste of an UNCACHED
+ * formula evaluates it against the source sheet, copied formulas are cached against the finished
+ * target sheet (a fixed-point pass, so lookups over freshly copied siblings see their caches), and
+ * the target sheet's transitive dependents are recalculated unless `recalcDependents` is false
+ * (GH-468 `--no-recalc`, which leaves every other cache as it was). `cacheCopiedFormulas = false`
+ * lets a caller own the complete post-copy evaluation and its diagnostics.
  */
 object CopyOps:
-
-  /** Formula cell written in phase 1; cache is populated after the target sheet is complete. */
-  private final case class PendingFormulaCache(ref: ARef, expr: String)
 
   /**
    * Validate that `source` and `target` have identical dimensions.
@@ -50,23 +44,10 @@ object CopyOps:
       )
 
   /**
-   * Copy `sourceRange` cells from `sourceSheet` into `targetSheet` at `targetRange`.
-   *
-   * Requires `sourceRange.cells.size == targetRange.cells.size`; the caller must validate
-   * dimensions first (see [[validateDimensions]]).
-   *
-   * When `sourceSheet.name == targetSheet.name` (same sheet), a single updated sheet is written
-   * back. When they differ, only `targetSheet` is updated; the source sheet is untouched.
-   *
-   * Empty source cells (absent from `sourceSheet.cells`) are skipped — the target cell is left
-   * unchanged rather than cleared.
-   *
-   * After phase-2 cache population, transitive dependents on the target sheet are recalculated so
-   * that pre-existing formulas pointing into the target range see the new values — unless
-   * `recalcDependents` is false (GH-468 `--no-recalc`), which leaves every cache in the book as it
-   * was and writes only the copied cells. `cacheCopiedFormulas = false` lets a caller own the
-   * complete post-copy evaluation and its diagnostics, without evaluating newly copied formulas
-   * twice.
+   * Copy `sourceRange` cells from `sourceSheet` into `targetSheet` at `targetRange` (same
+   * dimensions — the caller validates with [[validateDimensions]]; the same sheet when the names
+   * agree). Empty source cells leave their target unchanged. `Left` only when the formula support
+   * refuses a shift, which the evaluator's never does; the CLI paths map it to a domain error.
    */
   def copyRange(
     wb: Workbook,
@@ -77,98 +58,58 @@ object CopyOps:
     valuesOnly: Boolean,
     recalcDependents: Boolean = true,
     cacheCopiedFormulas: Boolean = true
-  ): Workbook =
-    // Snapshot source cells BEFORE any mutation so overlapping same-sheet copies are correct.
-    val snapshot: Map[ARef, Cell] =
-      sourceRange.cells.flatMap(ref => sourceSheet.cells.get(ref).map(ref -> _)).toMap
-
+  ): XLResult[Workbook] =
     val colDelta = Column.index0(targetRange.start.col) - Column.index0(sourceRange.start.col)
     val rowDelta = Row.index0(targetRange.start.row) - Row.index0(sourceRange.start.row)
+    def targetOf(src: ARef): ARef =
+      ARef.from0(Column.index0(src.col) + colDelta, Row.index0(src.row) + rowDelta)
 
-    // Same-sheet vs cross-sheet: work on one sheet when both refer to the same one by name.
-    val sameSheet = sourceSheet.name == targetSheet.name
-    val workingSheet = if sameSheet then sourceSheet else targetSheet
-
-    val (phase1Sheet, pendingFormulaCaches) =
-      sourceRange.cells.foldLeft((workingSheet, Vector.empty[PendingFormulaCache])) {
-        case ((s, pending), srcRef) =>
-          val tgtRef = ARef.from0(
-            Column.index0(srcRef.col) + colDelta,
-            Row.index0(srcRef.row) + rowDelta
-          )
-          snapshot.get(srcRef) match
-            case None => (s, pending) // Empty source cell: skip, leave target unchanged.
-            case Some(srcCell) =>
-              val (copiedValue, pendingFormula) =
-                copiedCellValue(sourceSheet, wb, srcCell, colDelta, rowDelta, valuesOnly)
-              val withValue = s.put(tgtRef, copiedValue)
-              // Preserve style from source (looked up in source's registry, registered into target's).
-              val withStyle = srcCell.styleId.flatMap(sourceSheet.styleRegistry.get) match
-                case Some(style) => withValue.withCellStyle(tgtRef, style)
-                case None => withValue
-              val updatedPending = pendingFormula match
-                case Some(expr) => pending :+ PendingFormulaCache(tgtRef, expr)
-                case None => pending
-              (withStyle, updatedPending)
+    // The source formula cells that paste as formulas (values-only: as their value). A data-table
+    // record always pastes its cached constant (GH-430) and needs no evaluator phase.
+    val liveFormulas: Vector[(ARef, String, Option[CellValue])] =
+      sourceRange.cells.toVector.flatMap { src =>
+        sourceSheet.cells.get(src).map(_.value) match
+          case Some(CellValue.Formula(_, _, _: FormulaKind.DataTable)) => None
+          case Some(CellValue.Formula(expr, cached, _)) => Some((src, expr, cached))
+          case _ => None
       }
 
-    val cachedSheet =
-      if pendingFormulaCaches.isEmpty || !cacheCopiedFormulas then phase1Sheet
-      else populateFormulaCaches(phase1Sheet, wb, pendingFormulaCaches)
+    val copied: XLResult[Sheet] =
+      if sourceSheet.name == targetSheet.name then
+        sourceSheet.copyRange(sourceRange, targetRange, valuesOnly)(using EvalFormulaSupport)
+      else
+        targetSheet.copyRangeFrom(sourceSheet, sourceRange, targetRange, valuesOnly)(using
+          EvalFormulaSupport
+        )
 
-    // Recalculate transitive dependents (pre-existing formulas that reference the target range).
-    val wbWithCopied = wb.put(cachedSheet)
-    if recalcDependents then
-      wbWithCopied.recalculateDependents(cachedSheet.name, targetRange.cells.toSet)
-    else wbWithCopied
-
-  /** Compute the copied value, shifting formulas unless `valuesOnly` is set. */
-  private def copiedCellValue(
-    sourceSheet: Sheet,
-    wb: Workbook,
-    srcCell: Cell,
-    colDelta: Int,
-    rowDelta: Int,
-    valuesOnly: Boolean
-  ): (CellValue, Option[String]) =
-    srcCell.value match
-      // GH-430: a data-table record cell always copies as its cached constant — pasting the
-      // TABLE(...) display text would be a #NAME? bomb, and pasting the record would claim a
-      // table interior that does not exist at the target. Excel pastes values here too.
-      case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
-        (cachedOpt.getOrElse(CellValue.Empty), None)
-
-      case CellValue.Formula(expr, cachedOpt, _) if valuesOnly =>
-        // Materialize: prefer cached value, fall back to evaluating against source sheet.
-        val materialized = cachedOpt.getOrElse {
-          SheetEvaluator
-            .evaluateFormula(sourceSheet)(
-              s"=$expr",
-              workbook = Some(wb),
-              currentCell = Some(srcCell.ref)
-            )
-            .getOrElse(CellValue.Empty)
-        }
-        (materialized, None)
-
-      case CellValue.Formula(expr, _, _) =>
-        // Shift formula references by the displacement. An ArrayFormula-kind source pastes as a
-        // plain formula (kind degrades to Normal by construction) — Excel's paste-of-anchor
-        // behavior (GH-430).
-        FormulaParser.parse(s"=$expr") match
-          case Right(parsed) =>
-            val shifted = FormulaShifter.shift(parsed, colDelta, rowDelta)
-            val shiftedExpr = FormulaPrinter.printFileForm(shifted)
-            (CellValue.Formula(shiftedExpr, None), Some(shiftedExpr))
-          case Left(_) =>
-            // Unparseable formula: preserve as-is and try to cache in phase 2.
-            (CellValue.Formula(expr, None), Some(expr))
-
-      case other =>
-        (other, None)
+    copied.map { pure =>
+      val materialized =
+        if valuesOnly then
+          // Sheet.copyRange pastes Empty for an uncached formula; the CLI evaluates it against the
+          // source sheet first and pastes the value when the evaluation succeeds.
+          liveFormulas.foldLeft(pure) {
+            case (s, (src, expr, None)) =>
+              SheetEvaluator
+                .evaluateFormula(sourceSheet)(
+                  s"=$expr",
+                  workbook = Some(wb),
+                  currentCell = Some(src)
+                )
+                .fold(_ => s, value => s.put(targetOf(src), value))
+            case (s, _) => s
+          }
+        else pure
+      val cached =
+        if valuesOnly || !cacheCopiedFormulas || liveFormulas.isEmpty then materialized
+        else populateFormulaCaches(materialized, wb, liveFormulas.map((src, _, _) => targetOf(src)))
+      val wbWithCopied = wb.put(cached)
+      if recalcDependents then
+        wbWithCopied.recalculateDependents(cached.name, targetRange.cells.toSet)
+      else wbWithCopied
+    }
 
   /**
-   * Populate caches for copied formulas against the final target-sheet state.
+   * Populate caches for the copied formulas against the final target-sheet state.
    *
    * Some evaluator paths (notably lookup/match functions over ranges) only consult formula caches
    * rather than recursively evaluating uncached sibling formulas. We therefore iterate until the
@@ -180,24 +121,18 @@ object CopyOps:
    * pass resolves one more layer of dependencies. Cyclic or otherwise unevaluable formulas remain
    * uncached (`None`), matching the prior best-effort behavior.
    */
-  private def populateFormulaCaches(
-    sheet: Sheet,
-    wb: Workbook,
-    pendingFormulaCaches: Vector[PendingFormulaCache]
-  ): Sheet =
+  private def populateFormulaCaches(sheet: Sheet, wb: Workbook, refs: Vector[ARef]): Sheet =
     @tailrec
     def loop(currentSheet: Sheet, passesRemaining: Int): Sheet =
-      val nextSheet = pendingFormulaCaches.foldLeft(currentSheet) {
-        case (s, PendingFormulaCache(ref, expr)) =>
-          val currentWorkbook = wb.put(s)
-          val cached =
-            SheetEvaluator
-              .evaluateCell(s)(ref, workbook = Some(currentWorkbook))
-              .toOption
-          s.put(ref, CellValue.Formula(expr, cached))
+      val nextSheet = refs.foldLeft(currentSheet) { (s, ref) =>
+        s.cells.get(ref).map(_.value) match
+          case Some(CellValue.Formula(expr, _, _)) =>
+            val cached =
+              SheetEvaluator.evaluateCell(s)(ref, workbook = Some(wb.put(s))).toOption
+            s.put(ref, CellValue.Formula(expr, cached))
+          case _ => s
       }
-
       if nextSheet == currentSheet || passesRemaining <= 1 then nextSheet
       else loop(nextSheet, passesRemaining - 1)
 
-    loop(sheet, pendingFormulaCaches.length.max(1))
+    loop(sheet, refs.length.max(1))

@@ -2023,15 +2023,21 @@ object BatchParser:
       _ <- IO.fromEither(
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
       )
-    yield CopyOps.copyRange(
-      wb,
-      sourceSheet,
-      sourceRange,
-      targetSheet,
-      targetRange,
-      valuesOnly,
-      recalcDependents
-    )
+      copied <- IO.fromEither(
+        CopyOps
+          .copyRange(
+            wb,
+            sourceSheet,
+            sourceRange,
+            targetSheet,
+            targetRange,
+            valuesOnly,
+            recalcDependents
+          )
+          .left
+          .map(e => new Exception(e.message))
+      )
+    yield copied
 
   /**
    * Add one conditional-formatting rule to a range (GH-324). Rule DSL + dxf flags are parsed by
