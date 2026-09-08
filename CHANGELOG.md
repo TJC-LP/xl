@@ -64,6 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RowCodecError.Field(row, column, field, cause)`, `Missing`, `HeaderNotFound` or `Width`. A field
   without a `CellCodec` is a compile error naming the type; a record with no fields is one too.
   ADR-008 amended: primitives are hand-written codecs, rows are derived.
+- **`CellRecord` and `SheetSource`** (#585): one projection of a cell (`ref, sheet, kind, value,
+  formatted, formula, hidden, mergedInto, style`) behind every read verb, and one source
+  abstraction with two strategies — the loaded workbook and the O(1) streaming reader — whose
+  capabilities `schema --json` publishes. `view` without a range shows the used range
+  (`--offset`, `--max-cols` page through it); `search`, `stats`, `cell` and `filter` gain typed
+  `--json` payloads; `filter --stream` works. A property law over generated books pins that both
+  sources produce byte-equal payloads for every read verb on shared capabilities (values, cached
+  formulas, comments, styled-but-empty cells, openpyxl-style package-absolute rels targets).
 
 ### Changed
 
@@ -72,6 +80,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   partially filled sheet). Group/ungroup validation reports a malformed span before an invalid
   level when both are wrong. `Edit.MoveSheet.toIndex` is the sheet's final 0-based position; the
   `move-sheet` verb keeps its pre-removal index for now (#583 reconciles them).
+- **Streaming `view --format json` is the typed in-memory shape** (never documented as stable).
+  Under `--stream`, `cell` prints `Dependencies:` and `Dependents:` as `(not available in
+  streaming mode)` (`null` in `--json`) instead of a regex-derived token list, typed records carry
+  `hidden: null` where the source cannot see hidden lines (was an affirmative `false`), and
+  `search` scans the whole sheet so its total is true. In-memory `search` returns hits in row-major
+  order and no longer matches styled-but-empty cells (they are not occupied, so `search '^$'`
+  agrees with `--stream`). `view` without a range and `filter` address the worksheet's stored-cell
+  box from both sources (`filter`'s window can widen by formatted empty cells); streaming
+  `view --format csv` emits every row of the window. `filter` errors are `USAGE` (exit 2) or
+  `INVALID_REFERENCE` instead of `INTERNAL`; `--header-row 0` or negative is `USAGE`.
 
 ### Fixed
 
@@ -80,6 +98,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FormulaStorage` like cell formulas: an Excel-authored `_xlfn.IFS(` in a rule reads bare and
   re-serialises byte-identically, and an xl-authored `IFS`/`XLOOKUP` in a rule, validation or name
   lands prefixed instead of showing `#NAME?` in Excel.
+- **openpyxl-authored files read their `<dimension>`** — `WorkbookMetadataReader` resolves a
+  package-absolute workbook-rels Target (`/xl/worksheets/sheetN.xml`) instead of producing
+  `xl//xl/…`, so `bounds`, `sheets` and the streaming used range no longer fall back to a scan of
+  non-empty cells on those files.
+- **Streaming `cell` comment text equals the in-memory text** (the author-prefix run is stripped on
+  both paths), and a single-cell `<dimension>` (Excel's `A1` on an empty sheet) is re-derived from
+  the cells, so an empty sheet prints `(empty sheet)` from both sources.
 
 
 ## [0.20.0] "Contract" - 2026-09-07
