@@ -286,10 +286,18 @@ cells. Size fill ranges to your data.
 
 A `Patch` is sheet-local and formula-blind. `Edit` (`com.tjclp.xl.ops.Edit`, on the prelude
 surface) is the **workbook-level** operation vocabulary — one case per batch op and mutating CLI
-verb, 49 in all — and every mutating surface lowers to `Vector[Edit]`: the batch JSON document,
-the CLI verbs and `wb.edit(...)` in a script all run through the same interpreter
-(`Edit.applyAll`), so a script gets exactly the semantics `xl batch` has, including the ones a
-`Patch` cannot express (formula dragging, structural edits, sheet management).
+verb, 49 in all — with one interpreter, `Edit.applyAll`, behind `wb.edit(...)` /
+`sheet.edit(...)`. It says what a `Patch` cannot (formula dragging, structural edits, sheet
+management).
+
+What a script shares with the CLI at 0.21.0 is the **kernels**, not the interpreter: `xl batch`
+and the mutating verbs still run their own path (xl-cli's `OpRegistry` → `BatchParser` → the
+command handlers) and nothing in xl-cli calls `Edit.applyAll` yet, but both sides call the same
+library methods — `Sheet.fill` / `copyRange` / `sort` / `clearRange` / `groupRows` / `autoFit`,
+`StructuralEditor` for the structural four, `SheetRenamer` for renames — so `wb.edit` and the verb
+make the same change to the same cells. Lowering the CLI onto `Edit.applyAll` is [#583](https://github.com/TJC-LP/xl/issues/583) (W2.2);
+until then two divergences are documented: `MoveSheet.toIndex` (below) and `Copy.target`, a single
+cell (`Loc`) where batch `copy` also accepts a range target.
 
 **Targets carry their own sheet.** `Loc(sheet: Option[SheetName], ref: ARef)` is one cell,
 `Area(sheet, range: CellRange)` a range, and the row/column edits take `sheet: Option[SheetName]`
@@ -301,13 +309,13 @@ single-sheet book, else `SheetRequired`. `Loc.parse("'Q1 Data'!B7")`, `Area.pars
 
 | Group | Cases |
 |-------|-------|
-| Cell content | `Put(at: Loc, value: CellValue, format: Option[FormatHint])` — build it with **`Edit.put(loc, a)`** / **`Edit.put(ref, a)`** so a `LocalDate`/`BigDecimal` keeps its codec format; `PutValues(at: Area, values: Vector[CellValue], format)` row-major; `PutFormula(at: Loc, formula: String, format)`; `PutFormulas(at: Area, formulas, format)` one per cell, as written; **`DragFormula(at: Area, formula, anchor: ARef, format)`** shifts relative refs from `anchor` like fill-down; **`Fill(source: Area, target: CellRange, Edit.FillDir.Down \| Right)`**; `Copy(source: Area, target: Loc, valuesOnly)` (either side may name another sheet); `Sort(at: Area, keys: Vector[Edit.SortKeySpec], hasHeader)` (`SortKeySpec.ascending(col)` / `.descending(col)`); `Clear(at: Area, what: ClearWhat)` (`ClearWhat.contents` / `.styles` / `.comments` / `.all`) |
+| Cell content | `Put(at: Loc, value: CellValue, format: Option[FormatHint])` — build it with **`Edit.put(loc, a)`** / **`Edit.put(ref, a)`** so a `LocalDate`/`BigDecimal` keeps its codec format; `PutValues(at: Area, values: Vector[CellValue], format)` row-major; `PutFormula(at: Loc, formula: String, format)`; `PutFormulas(at: Area, formulas, format)` one per cell, as written; **`DragFormula(at: Area, formula, anchor: ARef, format)`** shifts relative refs from `anchor` like fill-down; **`Fill(source: Area, target: CellRange, direction: Edit.FillDir)`** (`Down` / `Right`); `Copy(source: Area, target: Loc, valuesOnly)` (either side may name another sheet); `Sort(at: Area, keys: Vector[Edit.SortKeySpec], hasHeader)` (`SortKeySpec.ascending(col)` / `.descending(col)`); `Clear(at: Area, what: ClearWhat)` (`ClearWhat.contents` / `.styles` / `.comments` / `.all`) |
 | Style & layout | `Style(at: Area, overlay: StyleOverlay, mode: StyleMode.Merge \| Replace)`; `Merge(at)`, `Unmerge(at)`; `ColWidth(sheet, cols: ColSpan, width)`, `RowHeight(sheet, rows: RowSpan, height)`; `HideCols`/`ShowCols(sheet, cols)`, `HideRows`/`ShowRows(sheet, rows)`; `AutoFit(sheet, cols: Option[ColSpan])` (`None` = every used column) |
 | Outline | `GroupRows(sheet, rows, level, collapsed)`, `GroupCols(sheet, cols, level, collapsed)` (level 1-7); `UngroupRows(sheet, rows)`, `UngroupCols(sheet, cols)` |
 | Annotations & objects | `SetComment(at: Loc, comment: Comment)`, `RemoveComment(at)`; `Hyperlink(at, target: Option[String])` (`None` clears); `AddConditionalFormat(sheet, ranges: Vector[CellRange], rules: Vector[CfRule])`; `AddChart(sheet, chart, anchor: DrawingAnchor)`; `AddImage(sheet, image: ImageData, anchor)` |
 | Sheet view & print | `Freeze(at: Loc)`, `Unfreeze(sheet)`; `SetSheetView(sheet, gridlines, zoom, tabSelected)`; `SetTabColor(sheet, color: Option[Color])`; `SetAutoFilter(sheet, range: Option[CellRange])`; `SetPageSetup(sheet, orientation, scale, fitToWidth, fitToHeight, fitToPage)`; `SetHeaderFooter(sheet, oddHeader, oddFooter, evenHeader, evenFooter, firstHeader, firstFooter, differentOddEven, differentFirst)` |
 | Structure | `InsertRows(sheet, at: Row, count)`, `DeleteRows(sheet, at: Row, count)`, `InsertCols(sheet, at: Column, count)`, `DeleteCols(sheet, at: Column, count)` — references on every sheet are rewritten through the evaluator (`#REF!` on loss) |
-| Workbook | `AddSheet(name, after, before)` (at most one of the two); `RemoveSheet(name)`; `RenameSheet(from, to)` (rewrites every reference, and retargets the scope when it renames the default sheet); `MoveSheet(name, toIndex, after, before)` (exactly one; `toIndex` is the FINAL 0-based position); `CopySheet(source, target)`; `HideSheet(name, veryHidden)`, `ShowSheet(name)`; `DefineName(name, refersTo, scope)`, `RemoveName(name, scope)` |
+| Workbook | `AddSheet(name, after, before)` (at most one of the two); `RemoveSheet(name)`; `RenameSheet(from, to)` (rewrites every reference, and retargets the scope when it renames the default sheet); `MoveSheet(name, toIndex, after, before)` (exactly one; `toIndex` is the sheet's FINAL 0-based position, `0` to `sheetCount - 1`, refused outside — **not** what `xl move-sheet --to N` does today: the verb reads `N` against the order BEFORE the sheet is removed and clamps, so on `[A, B, C]` the verb's `A --to 2` gives `[B, A, C]` where this edit gives `[B, C, A]`; [#583](https://github.com/TJC-LP/xl/issues/583) reconciles them); `CopySheet(source, target)`; `HideSheet(name, veryHidden)`, `ShowSheet(name)`; `DefineName(name, refersTo, scope)`, `RemoveName(name, scope)` |
 
 Two value types ride along. **`FormatHint`** says where a number format came from: `Inferred(fmt)`
 (a codec's hint — applied only when the cell's format is General, exactly as `Sheet.put` does)
@@ -338,11 +346,16 @@ collides with JMH's and ZIO's `Scope` in files that import both): `EditScope.non
 `Left(XLError.EditFailed(index, op, cause))` — `index` is the **1-based** position of the failing
 edit, `op` its kebab name (`drag-formula`, `delete-rows`, …), `cause` the underlying error — and
 the input workbook is never partially written. `err.opIndex` is `Some(index)`, `err.root` the
-cause, and `err.code` / `err.hint` / `err.candidates` are the *cause's*, so a batch failure is
-classified by what went wrong, not by where; `err.message` reads `op 2 (drag-formula): …`. It is
-the very `location.opIndex` a `BATCH_OP_FAILED` from `xl batch` carries, and `orExit` prints it
-in the CLI's envelope. `EditSchema` is the registry `xl batch --schema` prints, as values:
-`EditSchema.all`, `EditSchema.find("putf")`, `EditSchema.nameOf(edit)`.
+innermost cause (an `EditFailed` unwrapped), and `err.code` / `err.hint` / `err.candidates` are
+the cause's, so a batch failure is classified by what went wrong, not by where; `err.message`
+reads `op 2 (drag-formula): …`. It is the same 1-based position `xl batch` reports as
+`location.opIndex` on a `BATCH_OP_FAILED`, and `orExit` prints it as the CLI's stderr diagnostic
+(`Error: …`, `code:`, `hint:`). `EditSchema` is the algebra's own metadata — one `EditSpec` per
+`Edit` case, 49 rows (`EditSchema.all`, `EditSchema.find("putf")`, `EditSchema.nameOf(edit)`),
+each naming its `batchOp` and `cliVerb`. It has the shape of the batch schema but is not the
+document `xl batch --schema` prints: that is xl-cli's `OpRegistry` (32 ops), a subset, and the two
+have already drifted in detail (`copy.target` is a single cell in `EditSchema`, a cell or range in
+the batch schema).
 
 ```scala
 //> using scala 3.9.0
@@ -370,7 +383,7 @@ val edited = orExit(
     Edit.AddSheet(Summary, after = Some(Data), before = None),
     Edit.PutFormula(Loc(Some(Summary), ref"B2"), "=Data!D4", None)         // qualified: not the default
   )
-) // a Left prints "Error: op N (<op>): …" + code/hint in the CLI's envelope and exits 1
+) // a Left prints "Error: op N (<op>): …" + code/hint on stderr — the CLI's diagnostic — and exits 1
 
 val result = Excel.writeChecked(edited, "/tmp/edited.xlsx") // caches D2:D4 and Summary!B2, writes
 println(s"wrote ${edited.sheets.size} sheets; clean: ${result.isClean}")

@@ -38,7 +38,7 @@ Everything below is in scope after `import com.tjclp.xl.scripting.{*, given}`.
 | `StyleOverlay` | partial style, every field `Option`; `++` right-biased with `StyleOverlay.empty` as identity; `.of(style)` / `.ofBorder(border)` / `.applyTo(style)`; paired with `StyleMode.Merge` \| `Replace` (0.21.0) |
 | `ClearWhat` | `(contents, styles, comments)` — `ClearWhat.contents` / `.styles` / `.comments` / `.all` (0.21.0) |
 | `Applied` / `Planned` | `Edit.applyAll`'s result `(workbook, planned, scope)` + `touchedBySheet`, `structural`; one `Planned(index, edit, sheet, touched)` per edit (0.21.0) |
-| `EditSchema` / `EditSpec` | the op registry `xl batch --schema` prints: `EditSchema.all`, `find("putf")`, `nameOf(edit)`; `EditSpec(name, aliases, batchOp, cliVerb, fields, …)` (0.21.0) |
+| `EditSchema` / `EditSpec` | the algebra's own metadata: one `EditSpec(name, aliases, batchOp, cliVerb, fields, …)` per `Edit` case (49) — `EditSchema.all`, `find("putf")`, `nameOf(edit)`; the shape of the batch schema, but `xl batch --schema` prints xl-cli's `OpRegistry` (32 ops), a subset (0.21.0) |
 | `FormulaSupport` | the parser seam the formula-aware edits need; the prelude's `given` is xl-evaluator's, `FormulaSupport.textOnly` refuses drags/structural/rename with `UnsupportedCapability` (0.21.0) |
 | `DisplayWrapper` | `(formatted: String)` with `toString = formatted` — what `sheet.displayCell` returns and what `excel""`/`s""` interpolation renders |
 
@@ -179,7 +179,7 @@ Runtime `RefType` (from `ref"$s"`) supports the same `:=` / `.styled` / `.merge`
 
 ## Edit algebra (0.21.0)
 
-`Edit` is the operation vocabulary behind `xl batch` and every mutating CLI verb, as values — one case per op (49) — and `wb.edit` / `wb.editIn` / `sheet.edit` run the same interpreter the CLI does. Targets carry their sheet: `Loc(sheet: Option[SheetName], ref)`, `Area(sheet, range)`, or a `sheet: Option[SheetName]` field beside a `RowSpan`/`ColSpan`; `None` is the scope's default (THE sheet rule: qualifier > default > the only sheet of a single-sheet book > `SheetRequired`).
+`Edit` is the operation vocabulary behind `xl batch` and every mutating CLI verb, as values — one case per op (49) — applied by one interpreter (`Edit.applyAll`) behind `wb.edit` / `wb.editIn` / `sheet.edit`. At 0.21.0 the CLI keeps its own batch path (lowering it onto `Edit.applyAll` is [#583](https://github.com/TJC-LP/xl/issues/583)) but calls the same library kernels (`Sheet.fill`/`copyRange`/`sort`/`clearRange`/`groupRows`/`autoFit`, `StructuralEditor`, `SheetRenamer`). Targets carry their sheet: `Loc(sheet: Option[SheetName], ref)`, `Area(sheet, range)`, or a `sheet: Option[SheetName]` field beside a `RowSpan`/`ColSpan`; `None` is the scope's default (THE sheet rule: qualifier > default > the only sheet of a single-sheet book > `SheetRequired`).
 
 | Call | Returns | Notes |
 |------|---------|-------|
@@ -192,19 +192,19 @@ Runtime `RefType` (from `ref"$s"`) supports the same `:=` / `.styled` / `.merge`
 | `Edit.lower(edit, sheet)` / `Patch.toEdits(patch, sheet)` | `Option[Patch]` / `Option[Vector[Edit]]` | the bridge to `Patch`; `None` when formula support, another sheet or the workbook is needed |
 | `Edit.put(loc, a)` / `Edit.put(ref, a)` | `Edit` | THE way to build a `Put`: lifts the codec's format as `FormatHint.Inferred` so a `LocalDate`/`BigDecimal` keeps its format, exactly like `sheet.put` |
 | `EditScope.none` / `EditScope.of(sheet)` / `scope.after(edit)` | `EditScope` | the scope type (`ops.Scope`, renamed on export); a `RenameSheet` of the default sheet retargets what follows |
-| `EditSchema.all` / `EditSchema.find(name)` / `EditSchema.nameOf(edit)` | `Vector[EditSpec]` / `Option[EditSpec]` / `String` | `xl batch --schema` as values; `nameOf(Edit.DragFormula(…))` is `"drag-formula"` |
+| `EditSchema.all` / `EditSchema.find(name)` / `EditSchema.nameOf(edit)` | `Vector[EditSpec]` / `Option[EditSpec]` / `String` | the algebra's metadata, one row per case (49; each names its `batchOp`/`cliVerb`); `nameOf(Edit.DragFormula(…))` is `"drag-formula"`. Not the document `xl batch --schema` prints (xl-cli's `OpRegistry`, 32 ops) |
 
-**Semantics.** Edits apply in order, fail-fast and all-or-nothing: the first failure is `Left(XLError.EditFailed(index, op, cause))` — `index` 1-based (`err.opIndex`), `op` the kebab name, `cause` the real error (`err.root`; `err.code`/`hint`/`candidates` are the cause's) — and the input workbook is never partially written. `err.message` is `op 2 (drag-formula): …`; `orExit` prints it as `xl batch` reports `BATCH_OP_FAILED`. Formula-aware cases (`DragFormula`, `Fill`, `Copy`, the structural four, `RenameSheet`) use the prelude's `given FormulaSupport` (xl-evaluator's); `FormulaSupport.textOnly` refuses them with `UnsupportedCapability`.
+**Semantics.** Edits apply in order, fail-fast and all-or-nothing: the first failure is `Left(XLError.EditFailed(index, op, cause))` — `index` 1-based (`err.opIndex`), `op` the kebab name, `cause` the real error (`err.root` is the innermost cause; `err.code`/`hint`/`candidates` are the cause's) — and the input workbook is never partially written. `err.message` is `op 2 (drag-formula): …` — the same 1-based position `xl batch` reports as `location.opIndex` on a `BATCH_OP_FAILED`; `orExit` prints it as the CLI's stderr diagnostic. Formula-aware cases (`DragFormula`, `Fill`, `Copy`, the structural four, `RenameSheet`) use the prelude's `given FormulaSupport` (xl-evaluator's); `FormulaSupport.textOnly` refuses them with `UnsupportedCapability`.
 
 | Group | Cases |
 |-------|-------|
-| Cell content | `Put(at: Loc, value: CellValue, format: Option[FormatHint])`, `PutValues(at: Area, values: Vector[CellValue], format)` (row-major), `PutFormula(at: Loc, formula: String, format)`, `PutFormulas(at: Area, formulas: Vector[String], format)`, `DragFormula(at: Area, formula, anchor: ARef, format)`, `Fill(source: Area, target: CellRange, Edit.FillDir.Down \| Right)`, `Copy(source: Area, target: Loc, valuesOnly: Boolean)`, `Sort(at: Area, keys: Vector[Edit.SortKeySpec], hasHeader)` (`SortKeySpec.ascending(col)`/`.descending(col)`), `Clear(at: Area, what: ClearWhat)` |
+| Cell content | `Put(at: Loc, value: CellValue, format: Option[FormatHint])`, `PutValues(at: Area, values: Vector[CellValue], format)` (row-major), `PutFormula(at: Loc, formula: String, format)`, `PutFormulas(at: Area, formulas: Vector[String], format)`, `DragFormula(at: Area, formula, anchor: ARef, format)`, `Fill(source: Area, target: CellRange, direction: Edit.FillDir)` (`Down`/`Right`), `Copy(source: Area, target: Loc, valuesOnly: Boolean)` (a single-cell target; batch `copy` also takes a range), `Sort(at: Area, keys: Vector[Edit.SortKeySpec], hasHeader)` (`SortKeySpec.ascending(col)`/`.descending(col)`), `Clear(at: Area, what: ClearWhat)` |
 | Style & layout | `Style(at: Area, overlay: StyleOverlay, mode: StyleMode)`, `Merge(at)`, `Unmerge(at)`, `ColWidth(sheet, cols: ColSpan, width)`, `RowHeight(sheet, rows: RowSpan, height)`, `HideCols`/`ShowCols(sheet, cols)`, `HideRows`/`ShowRows(sheet, rows)`, `AutoFit(sheet, cols: Option[ColSpan])` |
 | Outline | `GroupRows(sheet, rows, level, collapsed)`, `GroupCols(sheet, cols, level, collapsed)`, `UngroupRows(sheet, rows)`, `UngroupCols(sheet, cols)` |
 | Annotations & objects | `SetComment(at: Loc, comment)`, `RemoveComment(at)`, `Hyperlink(at, target: Option[String])`, `AddConditionalFormat(sheet, ranges, rules)`, `AddChart(sheet, chart, anchor)`, `AddImage(sheet, image, anchor)` |
 | Sheet view & print | `Freeze(at: Loc)`, `Unfreeze(sheet)`, `SetSheetView(sheet, gridlines, zoom, tabSelected)`, `SetTabColor(sheet, color)`, `SetAutoFilter(sheet, range)`, `SetPageSetup(sheet, orientation, scale, fitToWidth, fitToHeight, fitToPage)`, `SetHeaderFooter(sheet, oddHeader, oddFooter, evenHeader, evenFooter, firstHeader, firstFooter, differentOddEven, differentFirst)` |
 | Structure | `InsertRows(sheet, at: Row, count)`, `DeleteRows(sheet, at: Row, count)`, `InsertCols(sheet, at: Column, count)`, `DeleteCols(sheet, at: Column, count)` — references rewritten on every sheet, `#REF!` on loss |
-| Workbook | `AddSheet(name, after, before)`, `RemoveSheet(name)`, `RenameSheet(from, to)` (rewrites references), `MoveSheet(name, toIndex, after, before)` (exactly one; `toIndex` = final 0-based position), `CopySheet(source, target)`, `HideSheet(name, veryHidden)`, `ShowSheet(name)`, `DefineName(name, refersTo, scope)`, `RemoveName(name, scope)` |
+| Workbook | `AddSheet(name, after, before)`, `RemoveSheet(name)`, `RenameSheet(from, to)` (rewrites references), `MoveSheet(name, toIndex, after, before)` (exactly one; `toIndex` = the FINAL 0-based position — `xl move-sheet --to N` still uses the pre-removal, clamped index, [#583](https://github.com/TJC-LP/xl/issues/583)), `CopySheet(source, target)`, `HideSheet(name, veryHidden)`, `ShowSheet(name)`, `DefineName(name, refersTo, scope)`, `RemoveName(name, scope)` |
 
 ```scala
 val Data = SheetName.unsafe("Data")
@@ -216,7 +216,7 @@ val edited: XLResult[Workbook] = wb.editIn(Data)(
   Edit.DeleteRows(None, Row.from1(5), 2),                     // rows 5-6; formulas on every sheet rewritten
   Edit.AddSheet(SheetName.unsafe("Summary"), after = Some(Data), before = None)
 )
-Excel.writeChecked(orExit(edited), "out.xlsx")                // Left → the CLI's envelope on stderr, exit 1
+Excel.writeChecked(orExit(edited), "out.xlsx")                // Left → the CLI's diagnostic on stderr, exit 1
 ```
 
 Full prose, two runnable scripts and the design rationale: `docs/reference/scripting.md` → "The Edit algebra".
@@ -381,7 +381,7 @@ err.message                  // human-readable
 err.code; err.hint; err.candidates   // 0.20.0: stable SCREAMING_SNAKE code, next step, "did you mean"
 result.unsafe                // throws XLException(err) — the one sanctioned unwrap (prelude)
 result.getOrElse(fallback)
-err.opIndex; err.root        // 0.21.0: Some(1-based index) of the failing edit in an EditFailed(index, op, cause), and the cause itself (code/hint/candidates are the cause's)
+err.opIndex; err.root        // 0.21.0: Some(1-based index) of the failing edit in an EditFailed(index, op, cause), and the innermost cause (code/hint/candidates are the cause's)
 orExit(result)               // 0.21.0: the value, or print exitMessage(err) to stderr and exit 1
-exitMessage(err)             // 0.21.0: err.renderDiagnostic — "Error: …\n  code: …" then "  did you mean: …" / "  hint: …" when present; the CLI's exact envelope
+exitMessage(err)             // 0.21.0: err.renderDiagnostic — "Error: …\n  code: …" then "  did you mean: …" / "  hint: …" when present; the CLI's exact stderr diagnostic
 ```

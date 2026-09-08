@@ -92,7 +92,7 @@ ref"A2".down(3).right(1)                           // total navigation → B5 (u
 ref"A2".tryDown(3)                                 // 0.20.0: bounded → Some(A5); None past the edge; clampShift pins
 ref"A1:D10".rows                                   // 0.20.0: lazy one-row slices; row(i)/column(i) are Option
 
-// Edit algebra (0.21.0): the batch/CLI operation vocabulary as values, one interpreter for all three surfaces
+// Edit algebra (0.21.0): the batch/CLI operation vocabulary as values; one interpreter (Edit.applyAll) over the kernels the CLI verbs call
 wb.editIn(sales)(edits*)                           // XLResult[Workbook]; `sales` is the sheet for every target with sheet = None (the CLI's -s)
 wb.edit(Edit.put(Loc(Some(sales), ref"A1"), 1))    // no default sheet: qualify with Some(...), or a single-sheet book — else SheetRequired
 sheet.edit(Edit.Merge(Area(None, ref"A1:C1")))     // XLResult[Sheet]; fail-fast, all-or-nothing
@@ -116,7 +116,7 @@ Excel.writeRecalculated(wb, "out.xlsx")            // 0.13.0: recompute EVERY fo
 
 // Errors: XLResult[A] = Either[XLError, A]; unwrap ONCE at the edge
 wb.update("Sales", f).unsafe                       // throws structured XLException if Left
-orExit(wb.update("Sales", f))                      // 0.21.0: or print "Error: …" + indented "code:/did you mean:/hint:" (the CLI's exact envelope) to stderr, exit 1
+orExit(wb.update("Sales", f))                      // 0.21.0: or print "Error: …" + indented "code:/did you mean:/hint:" (the CLI's exact stderr diagnostic), exit 1
 ```
 
 ## Essential Patterns
@@ -252,7 +252,7 @@ val sheet = Sheet("Sales").put(rows)
 
 ### Batch-shaped edits: the `Edit` algebra (0.21.0)
 
-A `Patch` is sheet-local and formula-blind. `Edit` is the operation vocabulary behind `xl batch` and every mutating verb — one case per op, 49 in all — and `wb.edit` / `wb.editIn(sheet)` / `sheet.edit` run the very interpreter the CLI does. Reach for it when a script needs what a `Patch` cannot say: formula dragging (`DragFormula`, `Fill`, `Copy`), structural edits (`InsertRows`/`DeleteRows`/`InsertCols`/`DeleteCols` — references rewritten on every sheet, `#REF!` on loss), sheet management (`AddSheet`, `RenameSheet` with reference rewriting, `MoveSheet`, `CopySheet`, `HideSheet`/`ShowSheet`), outline groups, comments/hyperlinks, CF/charts/images, view and print setup, defined names — beside the plain `Put`/`PutValues`/`PutFormula`/`PutFormulas`, `Style`, `Merge`/`Unmerge`, `Clear`, `Sort`, widths/heights, hide/show and `AutoFit`.
+A `Patch` is sheet-local and formula-blind. `Edit` is the operation vocabulary behind `xl batch` and every mutating verb — one case per op, 49 in all — applied by one interpreter, `Edit.applyAll`, behind `wb.edit` / `wb.editIn(sheet)` / `sheet.edit`. At 0.21.0 the CLI still runs its own batch path (`OpRegistry`/`BatchParser`; lowering it onto `Edit.applyAll` is [#583](https://github.com/TJC-LP/xl/issues/583)), but both call the same library kernels (`Sheet.fill`/`copyRange`/`sort`/`clearRange`/`groupRows`/`autoFit`, `StructuralEditor`, `SheetRenamer`), so a script and a verb make the same change. Reach for it when a script needs what a `Patch` cannot say: formula dragging (`DragFormula`, `Fill`, `Copy`), structural edits (`InsertRows`/`DeleteRows`/`InsertCols`/`DeleteCols` — references rewritten on every sheet, `#REF!` on loss), sheet management (`AddSheet`, `RenameSheet` with reference rewriting, `MoveSheet`, `CopySheet`, `HideSheet`/`ShowSheet`), outline groups, comments/hyperlinks, CF/charts/images, view and print setup, defined names — beside the plain `Put`/`PutValues`/`PutFormula`/`PutFormulas`, `Style`, `Merge`/`Unmerge`, `Clear`, `Sort`, widths/heights, hide/show and `AutoFit`.
 
 ```scala
 //> using scala 3.9.0
@@ -277,15 +277,16 @@ val edited = orExit(
     Edit.AddSheet(SheetName.unsafe("Summary"), after = Some(Data), before = None),
     Edit.PutFormula(Loc(Some(SheetName.unsafe("Summary")), ref"B2"), "=Data!D5", None) // qualified target
   )
-) // Left → "Error: op N (<op>): …" + code/hint on stderr (the CLI's envelope), exit 1
+) // Left → "Error: op N (<op>): …" + code/hint on stderr (the CLI's diagnostic), exit 1
 val result = Excel.writeChecked(edited, "/tmp/edited.xlsx")              // caches the new formulas, writes
 println(s"clean: ${result.isClean}")
 ```
 
 - **Targets carry their sheet**: `Loc(sheet: Option[SheetName], ref)`, `Area(sheet, range)`, and `sheet: Option[SheetName]` on the row/column and sheet-level cases. `None` is *the scope's default* — THE sheet rule (qualifier > default > the only sheet of a single-sheet book > `SheetRequired`). `wb.edit` has no default: give one with `wb.editIn(sheet)(…)`, qualify with `Some(sheet)`, or use `sheet.edit` (a one-sheet scope; a target naming another sheet is `SheetNotFound`). `Loc.parse("'Q1 Data'!B7")`, `Area.parse("A1:B2")`, `RowSpan.parse("10:20")`, `ColSpan.parse("E:H")` read the CLI spellings; `Area.cell(loc)` is a 1x1 area.
-- **All-or-nothing**: edits apply in order and the first failure is `Left(EditFailed(index, op, cause))` — `index` 1-based (`err.opIndex`), `op` the kebab name (`drag-formula`), and `err.code`/`hint`/`candidates` are the *cause's* (`err.root`) — with the input workbook untouched. `err.message` reads `op 2 (drag-formula): …`; `orExit` prints it exactly as `xl batch` reports a `BATCH_OP_FAILED`.
+- **All-or-nothing**: edits apply in order and the first failure is `Left(EditFailed(index, op, cause))` — `index` 1-based (`err.opIndex`), `op` the kebab name (`drag-formula`), and `err.code`/`hint`/`candidates` are the *cause's* (`err.root` is the innermost cause) — with the input workbook untouched. `err.message` reads `op 2 (drag-formula): …` — the same 1-based position `xl batch` reports as `location.opIndex` on a `BATCH_OP_FAILED`; `orExit` prints it as the CLI's stderr diagnostic.
 - **Formats**: `Edit.put(ref, a)` / `Edit.put(loc, a)` lift the codec's format as `FormatHint.Inferred` (fills a General format only, as `sheet.put` does); `FormatHint.Explicit(fmt)` replaces the number format and keeps font/fill/border. `StyleOverlay` is a partial style (every field `Option`, so "un-bold" is sayable; `++` right-biased; `StyleOverlay.of(style)`); `StyleMode.Merge` overlays each cell's style, `Replace` starts from `CellStyle.default`.
-- **Scope and the fold**: the scope type is **`EditScope`** on the prelude surface (the source name `ops.Scope` collides with JMH's/ZIO's) — `EditScope.none`, `EditScope.of(sheet)`; a `RenameSheet` of the default sheet retargets the edits after it. `Edit.applyAll(wb, edits, scope)` → `Applied(workbook, planned, scope)` (`touchedBySheet`, `structural`); `Edit.plan(wb, edits, scope)` keeps only the `Planned(index, edit, sheet, touched)` rows — a *semantic* dry-run that fails exactly where `applyAll` would; `Edit.validate(edit)` is the static, workbook-free check (counts, spans, levels, formula syntax); `Edit.lower(edit, sheet)` / `Patch.toEdits(patch, sheet)` bridge to `Patch`. `EditSchema.all` / `find("putf")` / `nameOf(edit)` is `xl batch --schema` as values.
+- **Scope and the fold**: the scope type is **`EditScope`** on the prelude surface (the source name `ops.Scope` collides with JMH's/ZIO's) — `EditScope.none`, `EditScope.of(sheet)`; a `RenameSheet` of the default sheet retargets the edits after it. `Edit.applyAll(wb, edits, scope)` → `Applied(workbook, planned, scope)` (`touchedBySheet`, `structural`); `Edit.plan(wb, edits, scope)` keeps only the `Planned(index, edit, sheet, touched)` rows — a *semantic* dry-run that fails exactly where `applyAll` would; `Edit.validate(edit)` is the static, workbook-free check (counts, spans, levels, formula syntax); `Edit.lower(edit, sheet)` / `Patch.toEdits(patch, sheet)` bridge to `Patch`. `EditSchema.all` / `find("putf")` / `nameOf(edit)` is the algebra's own metadata — one `EditSpec` per case (49 rows, each naming its `batchOp`/`cliVerb`), the shape of the batch schema but not the document `xl batch --schema` prints (xl-cli's `OpRegistry`, 32 ops, a subset that has already drifted in detail: `copy.target`).
+- **Edit vs verb, today**: `Edit.MoveSheet.toIndex` is the sheet's FINAL 0-based position, while `xl move-sheet --to N` still reads `N` against the pre-removal order and clamps ([#583](https://github.com/TJC-LP/xl/issues/583)); `Edit.Copy.target` is a single cell (`Loc`) where batch `copy` also takes a range. Port CLI recipes with those two in mind.
 - The prelude's `given FormulaSupport` (xl-evaluator's) powers the formula-aware cases; `FormulaSupport.textOnly` (`wb.edit(e)(using FormulaSupport.textOnly)`) stores formula text as written and **refuses** drags, structural edits and renames with `UnsupportedCapability` rather than write a silent `#REF!`.
 
 ### Typed extraction

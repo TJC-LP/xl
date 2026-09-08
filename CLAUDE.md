@@ -171,7 +171,8 @@ The `xl-agent` module runs AI agent benchmarks comparing different Excel manipul
 Results are written under the `--output` directory (default `results/<timestamp>/`):
 - `outputs/<taskId>/<skill>/` - Output xlsx files
 - `tasks/<taskId>/<skill>/case<N>/conversation.json` - Conversation traces (one per case)
-- `summary.json` - Aggregated results
+- `summary.json` / `summary.md` - Aggregated results (JSON + Markdown)
+- `<skill>/summary.json` - Per-skill summary
 
 ## CLI Usage
 
