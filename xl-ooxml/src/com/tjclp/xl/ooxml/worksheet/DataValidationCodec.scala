@@ -2,7 +2,7 @@ package com.tjclp.xl.ooxml.worksheet
 
 import scala.xml.*
 
-import com.tjclp.xl.ooxml.{XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{FormulaStorage, XmlSecurity, XmlUtil}
 import com.tjclp.xl.ooxml.XmlUtil.{elem, elemOrdered}
 import com.tjclp.xl.sheets.{
   DataValidation,
@@ -31,6 +31,10 @@ import com.tjclp.xl.sheets.{
  * `<dataValidations count="N">` container: emission always regenerates ONE container holding typed
  * emissions and Preserved payloads together, overlaying `count` while any unmodeled container
  * attributes of the source (disablePrompts, xWindow, ...) ride through via `base`.
+ *
+ * `<formula1>` / `<formula2>` text crosses the same storage boundary as a cell `<f>` (GH-577): the
+ * model holds the bare formula-bar spelling, the file holds Excel's `_xlfn.`-prefixed form, mapped
+ * by [[FormulaStorage]] on both sides.
  */
 object DataValidationCodec:
 
@@ -168,16 +172,11 @@ object DataValidationCodec:
     opAttr: Option[String],
     children: Vector[Elem]
   ): Option[DvKind] =
+    def text(e: Elem): String = FormulaStorage.fromStored(XmlUtil.getTextPreservingWhitespace(e))
     def formulas: Option[(String, Option[String])] = children match
-      case Vector(f1) if f1.label == "formula1" =>
-        Some((XmlUtil.getTextPreservingWhitespace(f1), None))
+      case Vector(f1) if f1.label == "formula1" => Some((text(f1), None))
       case Vector(f1, f2) if f1.label == "formula1" && f2.label == "formula2" =>
-        Some(
-          (
-            XmlUtil.getTextPreservingWhitespace(f1),
-            Some(XmlUtil.getTextPreservingWhitespace(f2))
-          )
-        )
+        Some((text(f1), Some(text(f2))))
       case _ => None
     typeAttr match
       case None | Some("none") =>
@@ -234,8 +233,8 @@ object DataValidationCodec:
           Some("sqref" -> rules.ranges.map(_.toA1).mkString(" "))
         ).flatten
         val formulaElems =
-          formula1.map(f => elem("formula1")(Text(f))).toList ++
-            formula2.map(f => elem("formula2")(Text(f))).toList
+          formula1.map(f => elem("formula1")(Text(FormulaStorage.toStored(f)))).toList ++
+            formula2.map(f => elem("formula2")(Text(FormulaStorage.toStored(f)))).toList
         Some(elemOrdered("dataValidation", attrs*)(formulaElems*))
       case _: DataValidation.Rules => None
       case DataValidation.Preserved(xml) => parsePreserved(xml)

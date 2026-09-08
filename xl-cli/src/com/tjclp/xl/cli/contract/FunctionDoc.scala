@@ -6,7 +6,9 @@ import com.tjclp.xl.formula.functions.{FunctionRegistry, FunctionSpec}
 /**
  * One row of `xl functions --json` (ADR-017 §2.13): what the evaluator knows about a function,
  * without its implementation. `args` names each argument slot as the parser describes it (`optional
- * text`, `number or range...`); `maxArgs` is `None` for a variadic function. `specialForm` marks
+ * text`, `number or range...`); `maxArgs` is `None` for a variadic function. `dynamicDeps` and
+ * `volatile` are the evaluator's recalculation flags (`FunctionFlags`): the cells a call reads are
+ * decided at evaluation time; the value can change with no input changing. `specialForm` marks
  * `LET`, a parser-level construct the registry does not hold.
  */
 final case class FunctionDoc(
@@ -17,10 +19,13 @@ final case class FunctionDoc(
   returnsDate: Boolean,
   returnsTime: Boolean,
   dynamicDeps: Boolean,
+  volatile: Boolean,
   specialForm: Boolean
 ) derives CanEqual:
 
-  /** `{name, minArgs, maxArgs, args, returnsDate, returnsTime, dynamicDeps, specialForm}`. */
+  /**
+   * `{name, minArgs, maxArgs, args, returnsDate, returnsTime, dynamicDeps, volatile, specialForm}`.
+   */
   def toJson: ujson.Obj =
     ujson.Obj(
       "name" -> ujson.Str(name),
@@ -30,6 +35,7 @@ final case class FunctionDoc(
       "returnsDate" -> ujson.Bool(returnsDate),
       "returnsTime" -> ujson.Bool(returnsTime),
       "dynamicDeps" -> ujson.Bool(dynamicDeps),
+      "volatile" -> ujson.Bool(volatile),
       "specialForm" -> ujson.Bool(specialForm)
     )
 
@@ -47,6 +53,7 @@ object FunctionDoc:
     returnsDate = false,
     returnsTime = false,
     dynamicDeps = false,
+    volatile = false,
     specialForm = true
   )
 
@@ -64,6 +71,7 @@ object FunctionDoc:
       returnsDate = spec.flags.returnsDate,
       returnsTime = spec.flags.returnsTime,
       dynamicDeps = spec.flags.dynamicDeps,
+      volatile = spec.flags.volatile,
       specialForm = false
     )
 

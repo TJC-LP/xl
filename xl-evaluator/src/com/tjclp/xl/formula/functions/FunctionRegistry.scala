@@ -25,3 +25,11 @@ object FunctionRegistry:
    */
   lazy val dynamicFunctionNames: List[String] =
     byName.values.filter(_.flags.dynamicDeps).map(_.name.toUpperCase).toList.sorted
+
+  /**
+   * GH-588: upper-case names of functions flagged `FunctionFlags.volatile` (TODAY, NOW, RAND,
+   * RANDBETWEEN). `WorkbookAudit.volatileFunctions` is this list as a set — the flag on the spec is
+   * the single source of truth, there is no name table to keep in step.
+   */
+  lazy val volatileFunctionNames: List[String] =
+    byName.values.filter(_.flags.volatile).map(_.name.toUpperCase).toList.sorted

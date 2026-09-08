@@ -4,7 +4,7 @@ import scala.xml.*
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cf.{CfOperator, CfPoint, CfRule, CfTextOp, Cfvo, ConditionalFormat}
-import com.tjclp.xl.ooxml.{XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{FormulaStorage, XmlSecurity, XmlUtil}
 import com.tjclp.xl.ooxml.XmlUtil.{elem, elemOrdered}
 import com.tjclp.xl.ooxml.style.DxfCodec
 import com.tjclp.xl.sheets.Sheet
@@ -21,6 +21,11 @@ import com.tjclp.xl.styles.Dxf
  * [[CfRule.Preserved]] while its typed envelope keeps shifting under structural edits. Preserved
  * payloads are captured as scope-self-contained canonical XML (the DrawingReader pattern) and
  * re-emitted verbatim.
+ *
+ * Formula text — `<formula>` and a `<cfvo type="formula">` val — crosses the same storage boundary
+ * as a cell `<f>` (GH-577): the model holds the bare formula-bar spelling and the file holds
+ * Excel's `_xlfn.`-prefixed form, mapped by [[FormulaStorage]] on both sides. The text-rule
+ * derive/verify comparison runs on the model form, so it is unaffected.
  *
  * NOTE for future evaluator work: typed rule formulas are stored as text and never re-parsed on
  * read; xl-evaluator's StructuralEditor rewrites them through the formula parser on structural
@@ -174,9 +179,10 @@ object CfCodec:
       case Some(raw) =>
         raw.toIntOption.flatMap(dxfs.lift).flatMap(DxfCodec.parse).map(Some.apply)
 
+  /** `<formula>` children in the model form: the storage prefixes stripped (GH-577). */
   private def formulaTexts(children: Vector[Elem]): Option[Vector[String]] =
     Option.when(children.forall(_.label == "formula"))(
-      children.map(XmlUtil.getTextPreservingWhitespace)
+      children.map(e => FormulaStorage.fromStored(XmlUtil.getTextPreservingWhitespace(e)))
     )
 
   private def parseFamily(
@@ -282,7 +288,8 @@ object CfCodec:
           case Some("num") => valAttr.flatMap(parseDecimal).map(Cfvo.Num.apply)
           case Some("percent") => valAttr.flatMap(parseDecimal).map(Cfvo.Percent.apply)
           case Some("percentile") => valAttr.flatMap(parseDecimal).map(Cfvo.Percentile.apply)
-          case Some("formula") => valAttr.map(f => Cfvo.Formula(f.stripPrefix("=")))
+          case Some("formula") =>
+            valAttr.map(f => Cfvo.Formula(FormulaStorage.fromStored(f.stripPrefix("="))))
           case _ => None
     }
 
@@ -398,7 +405,8 @@ object CfCodec:
   private def parsePreserved(xml: String): Option[Elem] =
     XmlSecurity.parseSafe(xml, "preserved conditional formatting").toOption
 
-  private def formulaElem(text: String): Elem = elem("formula")(Text(text))
+  /** `<formula>` in the storage form: post-2007 calls prefixed, no leading '=' (GH-577). */
+  private def formulaElem(text: String): Elem = elem("formula")(Text(FormulaStorage.toStored(text)))
 
   private def boolAttr(name: String, value: Boolean): Seq[(String, String)] =
     if value then Seq(name -> "1") else Seq.empty
@@ -474,7 +482,8 @@ object CfCodec:
     case Cfvo.Num(v) => elemOrdered("cfvo", "type" -> "num", "val" -> v.toString)()
     case Cfvo.Percent(v) => elemOrdered("cfvo", "type" -> "percent", "val" -> v.toString)()
     case Cfvo.Percentile(v) => elemOrdered("cfvo", "type" -> "percentile", "val" -> v.toString)()
-    case Cfvo.Formula(f) => elemOrdered("cfvo", "type" -> "formula", "val" -> f)()
+    case Cfvo.Formula(f) =>
+      elemOrdered("cfvo", "type" -> "formula", "val" -> FormulaStorage.toStored(f))()
 
   private def cfColorToXml(color: com.tjclp.xl.styles.color.Color): Elem =
     DxfCodec.colorToXml(color)

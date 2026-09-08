@@ -1404,6 +1404,224 @@ class WorkbookLintSpec extends FunSuite:
     assertEquals(lintStreamOf(clean), Vector.empty[Finding])
   }
 
+  // ===== GH-577 / GH-588: post-2007 functions stored bare (xlfn-missing) =====
+
+  /**
+   * D1, E1, the cfRule `<formula>` and the dataValidation `<formula1>` are bare; A1 carries the
+   * prefix, B1 is an Excel 2007 function, C1 hides `IFS(` inside a string literal.
+   */
+  private val bareXlfnSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1">
+      <c r="A1"><f>_xlfn.IFS(B1=1,1,TRUE,0)</f><v>1</v></c>
+      <c r="B1"><f>SUMIFS(C1:C3,D1:D3,1)</f><v>0</v></c>
+      <c r="C1" t="str"><f>"IFS(" &amp; "x"</f><v>IFS(x</v></c>
+      <c r="D1"><f>IFS(B1=1,1,TRUE,0)</f><v>1</v></c>
+      <c r="E1"><f>xlookup(A1,A1:A3,B1:B3)</f><v>1</v></c>
+    </row>
+  </sheetData>
+  <conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>IFS(A1=1,TRUE,TRUE,FALSE)</formula></cfRule></conditionalFormatting>
+  <dataValidations count="1"><dataValidation type="custom" sqref="D1:D3"><formula1>MAXIFS(B1:B3,A1:A3,C1)</formula1></dataValidation></dataValidations>"""
+  )
+
+  /** The issue's repro: a hand-built CF rule calling IFS without the prefix, nothing else. */
+  private val bareCfIfsSheetXml = worksheetWith(
+    """<sheetData/>
+  <conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>IFS(A1=1,TRUE,TRUE,FALSE)</formula></cfRule></conditionalFormatting>"""
+  )
+
+  /** Every slot prefixed the way Excel writes it — including x14 rules' `<xm:f>`. */
+  private val prefixedXlfnSheetXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="$nsMain" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1"><f>_xlfn.IFS(B1=1,1,TRUE,0)</f><v>1</v></c><c r="B1"><f>_xlfn._xlws.FILTER(A1:A3,B1:B3)</f><v>1</v></c></row>
+  </sheetData>
+  <conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>_xlfn.IFS(A1=1,TRUE,TRUE,FALSE)</formula></cfRule></conditionalFormatting>
+  <dataValidations count="1"><dataValidation type="custom" sqref="D1:D3"><formula1>_xlfn.MAXIFS(B1:B3,A1:A3,C1)</formula1></dataValidation></dataValidations>
+  <extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="expression" priority="2"><xm:f>_xlfn.XLOOKUP(A1,A1:A3,B1:B3)=1</xm:f></x14:cfRule><xm:sqref>A1:A3</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>
+</worksheet>"""
+
+  /** Seven bare cells in document order A1, B1, C1, A2, B2, C2, A3 (the aggregation shape). */
+  private val manyBareXlfnSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><f>IFS(1,1)</f></c><c r="B1"><f>CONCAT(1)</f></c><c r="C1"><f>IFS(1,1)</f></c></row>
+    <row r="2"><c r="A2"><f>IFNA(1,1)</f></c><c r="B2"><f>IFS(1,1)</f></c><c r="C2"><f>IFS(1,1)</f></c></row>
+    <row r="3"><c r="A3"><f>IFS(1,1)</f></c></row>
+  </sheetData>"""
+  )
+
+  private val bareNameWorkbookXml = workbookWithNames(
+    """<definedName name="Best">MAXIFS(Sheet1!$B$1:$B$3,Sheet1!$A$1:$A$3,1)</definedName>""" +
+      """<definedName name="Fine">_xlfn.MAXIFS(Sheet1!$B$1:$B$3,Sheet1!$A$1:$A$3,1)</definedName>"""
+  )
+
+  /**
+   * The openpyxl class the lint exists for: `_xlfn.` present on LET, `_xlpm.` absent from its
+   * parameters — Excel reports the book as unreadable content on open.
+   */
+  private val halfPrefixedLetSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><f>_xlfn.LET(x,1,x+1)</f><v>2</v></c></row>
+  </sheetData>"""
+  )
+
+  /** A part whose ROOT is a formula-text label: never a site (it has no parent to name one). */
+  private val rootFormulaSheetXml = "<f>IFS(1,1)</f>"
+
+  test("GH-588: the lint's rule is the writer's — an _xlfn.LET with bare parameters is flagged") {
+    // FormulaStorage.bareFutureCalls runs toStored's scanner with recording callbacks, so the
+    // half-prefixed LET (which toStored completes to _xlfn.LET(_xlpm.x,1,_xlpm.x+1)) is a finding
+    // here exactly because the writer would change it; FormulaStorageSpec pins the invariant.
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> halfPrefixedLetSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.XlfnMissing))
+    val f = findings.head
+    assertEquals(f.locator, """<c r="A1"><f>""")
+    assert(f.message.contains("1 formula(s)"), f.toString)
+    assert(f.message.contains("(LET; A1)"), f.toString)
+    assert(f.message.contains("_xlpm."), f.toString)
+  }
+
+  test("GH-588: a part whose root element is formula text records no site in either mode") {
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> rootFormulaSheetXml)
+    val dom = lintOf(parts)
+    assert(!dom.exists(_.category == LintCategory.XlfnMissing), dom.toString)
+    assertEquals(lintStreamOf(parts), dom)
+  }
+
+  test("GH-588: a hand-built bare IFS in a CF rule is flagged as XlfnMissing on the sheet part") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> bareCfIfsSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.XlfnMissing))
+    val f = findings.head
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    assertEquals(f.locator, "<cfRule><formula>")
+    assert(f.message.contains("IFS"), f.toString)
+    assert(f.message.contains("1 formula(s)"), f.toString)
+    assert(f.message.contains("_xlfn."), f.toString)
+    assert(f.message.contains("#NAME?"), f.toString)
+  }
+
+  test("GH-588: the remediation states the regeneration condition, not an identical re-author") {
+    // A CF block, DV container or name table is regenerated only when its model no longer equals
+    // the source, and bare text parses to the same model as prefixed text — so an IDENTICAL
+    // re-author (`xl name add` with the same formula) copies the bare text through and lints the
+    // same (FutureFunctionPrefixSpec pins the writer). A message promising that "re-writing the
+    // affected part" or re-authoring the same rule heals it sends an agent into a loop. The
+    // finding states the condition in one clause and points at the lint docs for the slot-by-slot
+    // semantics (cli.md, LIMITATIONS.md), which is where GH-593 will edit them.
+    val cf = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> bareCfIfsSheetXml)).head
+    val dn = lintOf(baseParts + ("xl/workbook.xml" -> bareNameWorkbookXml)).head
+    Vector(cf, dn).foreach { f =>
+      assert(!f.message.contains("re-writing the affected part"), f.toString)
+      assert(
+        !f.message.contains("re-author the rule, validation or name with xl to heal it"),
+        f.toString
+      )
+      assert(f.message.contains("only when xl regenerates it"), f.toString)
+      assert(f.message.contains("re-authoring identical text does not"), f.toString)
+      assert(f.message.contains("docs/reference/cli.md"), f.toString)
+      // CLI-level detail (verbs, --stream) lives in the docs, not in a library finding
+      assert(!f.message.contains("--stream"), f.toString)
+      assert(!f.message.contains("name add"), f.toString)
+      assert(f.message.length <= 320, s"${f.message.length} chars: ${f.message}")
+    }
+  }
+
+  test("GH-588: bare calls in <f>, <formula> and <formula1> aggregate to ONE finding per part") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> bareXlfnSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.XlfnMissing))
+    val f = findings.head
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    // the first offending site in document order is the cell D1 (A1 is prefixed, B1 is 2007,
+    // C1 only mentions IFS( inside a string literal)
+    assertEquals(f.locator, """<c r="D1"><f>""")
+    assert(f.message.contains("4 formula(s)"), f.toString)
+    assert(f.message.contains("IFS, MAXIFS, XLOOKUP"), f.toString)
+    assert(f.message.contains("D1, E1, <cfRule><formula>, <dataValidation><formula1>"), f.toString)
+  }
+
+  test("GH-588: the sample is bounded to the first 5 sites plus a total count") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> manyBareXlfnSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.XlfnMissing))
+    val f = findings.head
+    assertEquals(f.locator, """<c r="A1"><f>""")
+    assert(f.message.contains("7 formula(s)"), f.toString)
+    assert(f.message.contains("first 5: A1, B1, C1, A2, B2"), f.toString)
+    assert(f.message.contains("CONCAT, IFNA, IFS"), f.toString)
+    assert(!f.message.contains("A3"), f.toString)
+  }
+
+  test("GH-588: Excel's own storage form (incl. _xlfn._xlws. and x14 <xm:f>) is clean") {
+    assertEquals(
+      lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> prefixedXlfnSheetXml)),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("GH-588: a bare post-2007 call in a <definedName> is flagged on workbook.xml") {
+    val findings = lintOf(baseParts + ("xl/workbook.xml" -> bareNameWorkbookXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.XlfnMissing))
+    val f = findings.head
+    assertEquals(f.part, "xl/workbook.xml")
+    assertEquals(f.locator, """<definedName name="Best">""")
+    assert(f.message.contains("MAXIFS"), f.toString)
+    assert(f.message.contains("1 defined name(s)"), f.toString)
+    assert(!f.message.contains("Fine"), f.toString)
+  }
+
+  test("GH-588: streaming mode flags bare calls identically (cells, CF, DV, names)") {
+    val parts = baseParts +
+      ("xl/worksheets/sheet1.xml" -> bareXlfnSheetXml) +
+      ("xl/workbook.xml" -> bareNameWorkbookXml)
+    assertEquals(lintStreamOf(parts), lintOf(parts))
+    assertEquals(
+      lintStreamOf(parts).map(f => (f.part, f.category)),
+      Vector(
+        "xl/workbook.xml" -> LintCategory.XlfnMissing,
+        "xl/worksheets/sheet1.xml" -> LintCategory.XlfnMissing
+      )
+    )
+  }
+
+  private def customDv(formula: String): com.tjclp.xl.sheets.DataValidation.Rules =
+    com.tjclp.xl.sheets.DataValidation
+      .Rules(Vector.empty, com.tjclp.xl.sheets.DvKind.Custom(formula))
+
+  test("GH-588: an xl-written book with post-2007 functions in every slot lints clean") {
+    import com.tjclp.xl.cf.{CfOperator, CfPoint, CfRule, Cfvo}
+    import com.tjclp.xl.styles.color.Color
+    val sheet = Sheet("Data")
+      .put(ref"A1" -> "a")
+      .put(ref"B1" -> 1)
+      .put(ref"C1" -> CellValue.Formula("IFS(B1=1,1,TRUE,0)", Some(CellValue.Number(1))))
+      .put(ref"D1" -> CellValue.Formula("FILTER(A1:A3,B1:B3)", None))
+      .put(ref"E1" -> CellValue.Formula("LET(x,B1,x+1)", None))
+      .conditionalFormat(
+        ref"A1:A3",
+        CfRule.Expression("IFS(A1=1,1,TRUE,0)", None, 1),
+        CfRule.CellIs(CfOperator.GreaterThan, "XLOOKUP(C1,A1:A3,B1:B3)", None, None, 2),
+        CfRule.ColorScale(
+          CfPoint(Cfvo.Formula("MINIFS(B1:B3,A1:A3,C1)"), Color.Rgb(0xffff0000)),
+          None,
+          CfPoint(Cfvo.Max, Color.Rgb(0xff00ff00)),
+          3
+        )
+      )
+      .withDataValidation(ref"F1:F3", customDv("MAXIFS(B1:B3,A1:A3,C1)"))
+    val wb = Workbook(Vector(sheet))
+      .withDefinedName("Best", "MAXIFS(Data!$B$1:$B$3,Data!$A$1:$A$3,Data!$C$1)")
+    Vector(XmlBackend.ScalaXml, XmlBackend.SaxStax).foreach { backend =>
+      val path = Files.createTempFile("lint-xlfn", ".xlsx")
+      try
+        XlsxWriter
+          .writeWith(wb, path, WriterConfig(backend = backend))
+          .fold(e => fail(s"write failed: $e"), identity)
+        assertEquals(WorkbookLint.lint(path), Right(Vector.empty[Finding]), backend.toString)
+        assertEquals(WorkbookLint.lintStream(path), Right(Vector.empty[Finding]), backend.toString)
+      finally Files.deleteIfExists(path)
+    }
+  }
+
   private def lintStreamOf(parts: Map[String, String]): Vector[Finding] =
     WorkbookLint
       .lintStreamBytes(zipBytes(parts))
@@ -1471,6 +1689,20 @@ class WorkbookLintSpec extends FunSuite:
     // GH-528: defined-name validity is workbook-level (always DOM) but must agree in both modes
     "fold-duplicate defined names" ->
       (baseParts + ("xl/workbook.xml" -> foldDupWorkbookXml)),
+    // GH-588: formula-text observation (<f>, <formula>, <formula1>/<formula2>, <xm:f>) must agree
+    // between the DOM and SAX scanners, including the per-part aggregation
+    "bare xlfn everywhere" -> (baseParts + ("xl/worksheets/sheet1.xml" -> bareXlfnSheetXml)),
+    "bare xlfn cf rule" -> (baseParts + ("xl/worksheets/sheet1.xml" -> bareCfIfsSheetXml)),
+    "many bare xlfn cells" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> manyBareXlfnSheetXml)),
+    "prefixed xlfn everywhere" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> prefixedXlfnSheetXml)),
+    "bare xlfn defined name" -> (baseParts + ("xl/workbook.xml" -> bareNameWorkbookXml)),
+    "half-prefixed LET cell" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> halfPrefixedLetSheetXml)),
+    // the root element is never a formula-text site, in either scanner
+    "root-level formula element" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> rootFormulaSheetXml)),
     // GH-529: suffix-less Microsoft externalLinkPath variants resolve clean in both modes
     "ms xlStartup external" ->
       (externalParts +

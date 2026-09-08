@@ -89,7 +89,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[LocalDate, NoArgs](
       "TODAY",
       Arity.none,
-      flags = FunctionFlags(returnsDate = true)
+      flags = FunctionFlags(returnsDate = true, volatile = true)
     ) { (_, ctx) =>
       Right(ctx.clock.today())
     }
@@ -98,7 +98,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[java.time.LocalDateTime, NoArgs](
       "NOW",
       Arity.none,
-      flags = FunctionFlags(returnsTime = true)
+      flags = FunctionFlags(returnsTime = true, volatile = true)
     ) { (_, ctx) =>
       Right(ctx.clock.now())
     }

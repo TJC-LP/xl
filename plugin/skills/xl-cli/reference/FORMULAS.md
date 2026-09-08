@@ -10,7 +10,9 @@ it are hand-written semantics worth knowing.
 - `arguments`: each slot as the parser describes it (`optional …` may be omitted, `…...` repeats).
 - `flags`: `date`/`time` — the result is a date or time and infers a number format;
   `dynamic deps` — the cells read are decided at evaluation time (`INDIRECT`, `OFFSET`), so such
-  cells are always recalculated; `special form` — parsed by the formula parser itself (`LET`).
+  cells are always recalculated; `volatile` — the value can change between two recalculations
+  with no input changing (`TODAY`, `NOW`, `RAND`, `RANDBETWEEN`; `xl audit` lists the cells);
+  `special form` — parsed by the formula parser itself (`LET`).
 
 <!-- generated:functions:begin -->
 | function | args | arguments | flags |
@@ -78,7 +80,7 @@ it are hand-written semantics worth knowing.
 | `NA` | 0 | — | — |
 | `NETWORKDAYS` | 2–3 | date, date, optional range | — |
 | `NOT` | 1 | boolean | — |
-| `NOW` | 0 | — | time |
+| `NOW` | 0 | — | time, volatile |
 | `NPER` | 3–5 | number, number, number, optional number, optional number | — |
 | `NPV` | 2 | number, range | — |
 | `OFFSET` | 3–5 | value, integer, integer, optional integer, optional integer | dynamic deps |
@@ -89,8 +91,8 @@ it are hand-written semantics worth knowing.
 | `POWER` | 2 | number, number | — |
 | `PV` | 3–5 | number, number, number, optional number, optional number | — |
 | `QUARTILE` | 2 | range, integer | — |
-| `RAND` | 0 | — | — |
-| `RANDBETWEEN` | 2 | number, number | — |
+| `RAND` | 0 | — | volatile |
+| `RANDBETWEEN` | 2 | number, number | volatile |
 | `RANK` | 2–3 | number, range, optional integer | — |
 | `RATE` | 3–6 | number, number, number, optional number, optional number, optional number | — |
 | `RIGHT` | 2 | text, integer | — |
@@ -114,7 +116,7 @@ it are hand-written semantics worth knowing.
 | `SUMPRODUCT` | 1+ | array or range... | — |
 | `SWITCH` | 3+ | value... | — |
 | `TEXT` | 2 | value, text | — |
-| `TODAY` | 0 | — | date |
+| `TODAY` | 0 | — | date, volatile |
 | `TRANSPOSE` | 1 | range | — |
 | `TRIM` | 1 | text | — |
 | `TRUNC` | 1–2 | number, optional number | — |

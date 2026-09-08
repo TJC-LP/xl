@@ -545,7 +545,9 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   /**
    * Build a `<definedNames>` element from the typed model (GH-236), or None when empty. Order
    * follows the model (preserving the source order on round-trips); attributes are emitted in a
-   * fixed order for deterministic output.
+   * fixed order for deterministic output. The name's text is formula text and crosses the same
+   * storage boundary as a cell `<f>` (GH-577): [[FormulaStorage.toStored]] prefixes post-2007 calls
+   * and drops a leading '='.
    */
   def buildDefinedNames(names: Vector[DefinedName]): Option[Elem] =
     if names.isEmpty then None
@@ -556,7 +558,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
         dn.comment.foreach(c => attrs += ("comment" -> c))
         dn.localSheetId.foreach(id => attrs += ("localSheetId" -> id.toString))
         if dn.hidden then attrs += ("hidden" -> "1")
-        elemOrdered("definedName", attrs.result()*)(Text(dn.formula))
+        elemOrdered("definedName", attrs.result()*)(Text(FormulaStorage.toStored(dn.formula)))
       }
       Some(elem("definedNames")(children*))
 
@@ -574,7 +576,9 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   /**
    * Parse `<definedNames>` into the typed model. Single source of truth shared by the reader and
    * the surgical writer (so the writer can detect whether the model is unchanged and keep raw
-   * bytes).
+   * bytes). The text comes back in the model form — `_xlfn.` / `_xlfn._xlws.` stripped from
+   * post-2007 calls ([[FormulaStorage.fromStored]], GH-577) — so an Excel-authored name and an
+   * xl-authored one compare equal and the preserved bytes survive a clean round trip.
    */
   def parseDefinedNames(rawElem: Option[Elem]): Vector[DefinedName] =
     rawElem match
@@ -583,7 +587,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
         (dnsElem \ "definedName").collect { case e: Elem =>
           DefinedName(
             name = e \@ "name",
-            formula = e.text.trim,
+            formula = FormulaStorage.fromStored(e.text.trim),
             localSheetId = Option(e \@ "localSheetId").filter(_.nonEmpty).flatMap(_.toIntOption),
             hidden = (e \@ "hidden") == "1",
             comment = Option(e \@ "comment").filter(_.nonEmpty)

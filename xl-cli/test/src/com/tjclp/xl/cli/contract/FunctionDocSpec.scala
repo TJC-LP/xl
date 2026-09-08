@@ -51,7 +51,21 @@ class FunctionDocSpec extends FunSuite:
     )
   }
 
-  test("toJson: exactly the eight keys, typed; maxArgs is null for a variadic function") {
+  test("GH-588: volatile comes from FunctionFlags.volatile — TODAY, NOW, RAND, RANDBETWEEN") {
+    val byName = FunctionDoc.all.map(d => d.name -> d).toMap
+    Vector("TODAY", "NOW", "RAND", "RANDBETWEEN").foreach { name =>
+      assertEquals(byName.get(name).map(_.volatile), Some(true), name)
+    }
+    assertEquals(byName.get("SUM").map(_.volatile), Some(false))
+    assertEquals(byName.get("INDIRECT").map(_.volatile), Some(false), "dynamic deps ≠ volatile")
+    assertEquals(byName.get("LET").map(_.volatile), Some(false))
+    assertEquals(
+      FunctionDoc.all.filter(_.volatile).map(_.name),
+      FunctionRegistry.volatileFunctionNames.toVector
+    )
+  }
+
+  test("toJson: exactly the nine keys, typed; maxArgs is null for a variadic function") {
     val keys = List(
       "name",
       "minArgs",
@@ -60,6 +74,7 @@ class FunctionDocSpec extends FunSuite:
       "returnsDate",
       "returnsTime",
       "dynamicDeps",
+      "volatile",
       "specialForm"
     )
     FunctionDoc.all.foreach { doc =>
@@ -72,6 +87,7 @@ class FunctionDocSpec extends FunSuite:
       assertEquals(json("returnsDate"), ujson.Bool(doc.returnsDate))
       assertEquals(json("returnsTime"), ujson.Bool(doc.returnsTime))
       assertEquals(json("dynamicDeps"), ujson.Bool(doc.dynamicDeps))
+      assertEquals(json("volatile"), ujson.Bool(doc.volatile))
       assertEquals(json("specialForm"), ujson.Bool(doc.specialForm))
     }
     val all = FunctionDoc.toJson(FunctionDoc.all)

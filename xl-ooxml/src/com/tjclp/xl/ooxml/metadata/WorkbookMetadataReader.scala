@@ -8,7 +8,7 @@ import scala.xml.*
 
 import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.ooxml.XmlSecurity
+import com.tjclp.xl.ooxml.{FormulaStorage, XmlSecurity}
 import com.tjclp.xl.workbooks.DefinedName
 
 /**
@@ -229,7 +229,8 @@ object WorkbookMetadataReader:
       case Some(elem) =>
         (elem \ "definedName").collect { case e: Elem =>
           val name = e \@ "name"
-          val formula = e.text.trim
+          // GH-577: the model form, as the full reader hands it out (storage prefixes stripped)
+          val formula = FormulaStorage.fromStored(e.text.trim)
           val localSheetId = Option(e \@ "localSheetId").filter(_.nonEmpty).flatMap(_.toIntOption)
           val hidden = (e \@ "hidden") == "1"
           val comment = Option(e \@ "comment").filter(_.nonEmpty)

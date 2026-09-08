@@ -201,6 +201,7 @@ object DocsGen:
         Option.when(flag(f("returnsDate")))("date"),
         Option.when(flag(f("returnsTime")))("time"),
         Option.when(flag(f("dynamicDeps")))("dynamic deps"),
+        Option.when(flag(f("volatile")))("volatile"),
         Option.when(flag(f("specialForm")))("special form")
       ).flatten
       Vector(
@@ -224,8 +225,10 @@ object DocsGen:
       "(`n+` = at least n, no upper bound); `arguments` names each slot as the parser describes it\n" +
       "(`optional …` may be omitted, `…...` repeats). `flags`: `date`/`time` — the result is a date\n" +
       "or time (drives number-format inference); `dynamic deps` — the cells read are decided at\n" +
-      "evaluation time (INDIRECT/OFFSET), so such cells are always recalculated. Run\n" +
-      "`xl functions --json` for this table as JSON, `xl eval \"=F(...)\"` to try one.\n\n" +
+      "evaluation time (INDIRECT/OFFSET), so such cells are always recalculated; `volatile` — the\n" +
+      "value can change between two recalculations with no input changing (TODAY/NOW/RAND/\n" +
+      "RANDBETWEEN), which `xl audit` reports. Run `xl functions --json` for this table as JSON,\n" +
+      "`xl eval \"=F(...)\"` to try one.\n\n" +
       functionTable(schema)
 
   def exitCodes(schema: ujson.Value): String =
