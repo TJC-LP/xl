@@ -4,7 +4,7 @@ import cats.effect.IO
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{Workbook, Sheet, given}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.contract.OutputMode
 import com.tjclp.xl.cli.read.{ReadQuery, ReadTestKit}
 import com.tjclp.xl.macros.ref
@@ -83,12 +83,81 @@ class StreamingReadSpec extends CatsEffectSuite:
           val streamData = ujson.read(ReadTestKit.text(streaming))
           query match
             case _: ReadQuery.Cell =>
+              // the graph and hidden fields belong to capabilities the reader lacks: null, not a guess
+              assertEquals(memoryData("dependencies"), ujson.Arr())
               assertEquals(memoryData("dependents"), ujson.Arr())
+              assertEquals(memoryData("hidden"), ujson.Bool(false))
+              assertEquals(streamData("dependencies"), ujson.Null)
               assertEquals(streamData("dependents"), ujson.Null)
-              memoryData.obj.remove("dependents")
-              streamData.obj.remove("dependents")
+              assertEquals(streamData("hidden"), ujson.Null)
+              Vector("dependencies", "dependents", "hidden").foreach { key =>
+                memoryData.obj.remove(key)
+                streamData.obj.remove(key)
+              }
+              assertEquals(streamData, memoryData)
+            case _: ReadQuery.Search =>
+              streamData("matches").arr.foreach(m => assertEquals(m("hidden"), ujson.Null))
+              streamData("matches").arr.foreach(_.obj.remove("hidden"))
+              memoryData("matches").arr.foreach(_.obj.remove("hidden"))
               assertEquals(streamData, memoryData)
             case _ => assertEquals(streamData, memoryData))
+      }
+    }
+  }
+
+  test("streaming cell on a formula: both graph lists say they are not available") {
+    val formulas = Sheet("Calc")
+      .put(ref"A1", CellValue.Number(BigDecimal(2)))
+      .put(ref"A2", CellValue.Number(BigDecimal(3)))
+      .put(ref"A3", CellValue.Formula("SUM(A1:A2)", Some(CellValue.Number(BigDecimal(5)))))
+    ReadTestKit.withTempWorkbook(Workbook(Vector(formulas))) { path =>
+      val query = ReadQuery.Cell("A3", noStyle = false)
+      for
+        inMemory <- ReadTestKit.inMemory(Workbook(Vector(formulas)), Some("Calc"), query)
+        streaming <- ReadTestKit.streaming(path, Some("Calc"), query)
+      yield
+        val loaded = ReadTestKit.text(inMemory)
+        val streamed = ReadTestKit.text(streaming)
+        assert(loaded.contains("Dependencies: A1, A2"), loaded)
+        assert(streamed.contains("Dependencies: (not available in streaming mode)"), streamed)
+        assert(streamed.contains("Dependents: (not available in streaming mode)"), streamed)
+        // and never the reader's token list (`A1, A1:A2, A2`) that pre-0.21.0 streaming printed
+        val dependenciesLine = streamed.linesIterator.find(_.startsWith("Dependencies:"))
+        assertEquals(dependenciesLine, Some("Dependencies: (not available in streaming mode)"))
+    }
+  }
+
+  test("streaming cell on a commented cell prints the comment the in-memory reader prints") {
+    val commented = Sheet("Notes")
+      .put(ref"A1", CellValue.Number(BigDecimal(5)))
+      .comment(ref"A1", Comment.plainText("input", Some("qa")))
+      .comment(ref"B2", Comment.plainText("no author", None))
+    val book = Workbook(Vector(commented))
+    ReadTestKit.withTempWorkbook(book) { path =>
+      Vector("A1", "B2").foldLeft(IO.unit) { (acc, cellRef) =>
+        acc *> (for
+          inMemory <- ReadTestKit.inMemory(book, Some("Notes"), ReadQuery.Cell(cellRef, false))
+          streaming <- ReadTestKit.streaming(path, Some("Notes"), ReadQuery.Cell(cellRef, false))
+          memoryJson <- ReadTestKit
+            .inMemory(book, Some("Notes"), ReadQuery.Cell(cellRef, false), OutputMode.Json)
+          streamJson <- ReadTestKit
+            .streaming(path, Some("Notes"), ReadQuery.Cell(cellRef, false), OutputMode.Json)
+        yield
+          val loaded = ReadTestKit.text(inMemory)
+          val streamed = ReadTestKit.text(streaming)
+          val commentLine = loaded.linesIterator.find(_.startsWith("Comment:"))
+          assert(commentLine.isDefined, loaded)
+          assertEquals(streamed.linesIterator.find(_.startsWith("Comment:")), commentLine)
+          assertEquals(
+            ujson.read(ReadTestKit.text(streamJson))("comment"),
+            ujson.read(ReadTestKit.text(memoryJson))("comment")
+          ))
+      } *> ReadTestKit.streaming(path, Some("Notes"), ReadQuery.Cell("A1", false)).map { out =>
+        // the writer's "qa:" prefix run is stripped on both paths, the author reported separately
+        assert(
+          ReadTestKit.text(out).contains("Comment: \"input\" (Author: qa)"),
+          ReadTestKit.text(out)
+        )
       }
     }
   }

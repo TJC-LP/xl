@@ -228,7 +228,7 @@ object JsonRenderer:
             else
               Some(
                 CellRecord
-                  .empty(grid.sheet, ARef.from0(colIdx, rowIdx), hidden = false, None)
+                  .empty(grid.sheet, ARef.from0(colIdx, rowIdx), hidden = None, None)
                   .toJson(legacyKeys = true)
               )
       }
@@ -293,7 +293,7 @@ object JsonRenderer:
       ARef.from0(0, 0),
       value,
       Some(CellStyle.default.withNumFmt(numFmt)),
-      hidden = false,
+      hidden = None,
       mergedInto = None
     )
     s"""{"type": "${record.kind.name}", "value": ${record.rawJson}, "formatted": ${Escape.json(

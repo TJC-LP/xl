@@ -11,6 +11,6 @@ Cell: B4
 Type: formula
 Formula: =SUM(B1:B3)
 Cached: 42.5
-Dependencies: B1, B1:B3, B3
+Dependencies: (not available in streaming mode)
 Dependents: (not available in streaming mode)
 ## stderr

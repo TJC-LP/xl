@@ -28,7 +28,7 @@ class CellRecordSpec extends FunSuite:
       ref"A1",
       value,
       Some(CellStyle.default.withNumFmt(numFmt)),
-      hidden = false,
+      hidden = Some(false),
       mergedInto = None
     )
 
@@ -137,7 +137,7 @@ class CellRecordSpec extends FunSuite:
         ref"A1",
         CellValue.Formula("=A2", Some(CellValue.Number(BigDecimal(7)))),
         None,
-        hidden = true,
+        hidden = Some(true),
         mergedInto = Some(CellRange(ref"A1", ref"B2"))
       )
       .toJson(legacyKeys = false)
@@ -149,6 +149,18 @@ class CellRecordSpec extends FunSuite:
     assertEquals(parsed("hidden").bool, true)
     assertEquals(parsed("mergedInto").str, "A1:B2")
     assertEquals(parsed("value").num, 7.0)
+  }
+
+  test("typed JSON: hidden is null when the source cannot see row/column properties") {
+    val unknown = CellRecord
+      .of(data, ref"A1", CellValue.Number(BigDecimal(7)), None, hidden = None, mergedInto = None)
+      .toJson(legacyKeys = false)
+    val parsed = ujson.read(unknown)
+    assertEquals(parsed("hidden"), ujson.Null)
+    assertEquals(parsed("mergedInto"), ujson.Null)
+    assert(unknown.contains("\"hidden\": null"), unknown)
+    // the legacy view cell never carried the flag, known or not
+    assert(!record(CellValue.Number(BigDecimal(7))).toJson(legacyKeys = true).contains("hidden"))
   }
 
   test("raw is the search text: digits, ISO date-times, TRUE/FALSE, error tokens, plain text") {

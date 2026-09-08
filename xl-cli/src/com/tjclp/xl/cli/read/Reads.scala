@@ -150,6 +150,10 @@ object Reads:
     warn: Warning => IO[Unit]
   ): IO[Payload] =
     for
+      // A 1-based row: 0 or less would address a row above the sheet
+      _ <- IO
+        .raiseError(usage(s"--header-row must be 1 or more (got ${q.headerRow.getOrElse(0)})"))
+        .whenA(q.headerRow.exists(_ < 1))
       parsed <- q.range.traverse(r => lift(Resolve.ref(r)))
       context = (q.range, parsed) match
         case (Some(refStr), Some((_, target))) => Resolve.unqualified("view", refStr, target)
@@ -368,7 +372,7 @@ object Reads:
 
   /**
    * `cell --json`: the typed record plus `style`, `comment`, `hyperlink`, `dependencies` and
-   * `dependents` (`null` when the source cannot compute them).
+   * `dependents` — the two graph lists `null` when the source cannot compute them.
    */
   private def cellJson(detail: CellDetail): String =
     val record = detail.record
@@ -379,8 +383,10 @@ object Reads:
         )}}"""
     }
     val hyperlink = detail.hyperlink.fold("null")(Escape.json)
-    val dependencies = detail.dependencies.map(Escape.json).mkString("[", ", ", "]")
-    val dependents = detail.dependents.fold("null")(_.map(Escape.json).mkString("[", ", ", "]"))
+    def refList(refs: Option[Vector[String]]): String =
+      refs.fold("null")(_.map(Escape.json).mkString("[", ", ", "]"))
+    val dependencies = refList(detail.dependencies)
+    val dependents = refList(detail.dependents)
     s"""{${record.typedFields}, "style": $style, "comment": $comment, "hyperlink": $hyperlink, """ +
       s""""dependencies": $dependencies, "dependents": $dependents}"""
 

@@ -307,9 +307,10 @@ class FormulaRecordCliSpec extends FunSuite:
       aref("F2"),
       CellValue.dataTable(tableKind, Some(num(42))),
       style = None,
-      hidden = false,
+      hidden = Some(false),
       mergedInto = None
     )
-    val info = Format.cellInfo(CellDetail(record, None, None, Vector.empty, Some(Vector.empty)))
+    val info =
+      Format.cellInfo(CellDetail(record, None, None, Some(Vector.empty), Some(Vector.empty)))
     assert(info.contains("Formula: {=TABLE(A1,A2)}"), info)
   }

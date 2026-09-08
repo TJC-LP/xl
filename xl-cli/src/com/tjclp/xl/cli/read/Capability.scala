@@ -49,16 +49,23 @@ enum Capability derives CanEqual:
     case Eval => "eval"
     case Render => "render"
 
+  /**
+   * What the capability answers, and how its fields read from a source without it: `null`, or
+   * `(not available in streaming mode)` in text — never a guess.
+   */
   def doc: String = this match
     case Values => "cell values, kinds and display text (view, search, stats, filter)"
     case Styles => "number formats and cell styles"
     case Formulas => "formula expressions with their cached values"
-    case Comments => "cell comments"
-    case Hyperlinks => "cell hyperlinks"
+    case Comments => "cell comments (cell)"
+    case Hyperlinks => "cell hyperlinks (cell: hyperlink; null without it)"
     case Hidden =>
-      "hidden rows and columns: --skip-hidden and the hidden-line markers (view)"
-    case Merges => "merged ranges (cell --json mergedInto)"
-    case Graph => "exact precedents and dependents across sheets (cell)"
+      "hidden rows and columns: --skip-hidden, the hidden-line markers (view) and the record's " +
+        "hidden flag (null without it)"
+    case Merges => "merged ranges (mergedInto; null without it)"
+    case Graph =>
+      "exact precedents and dependents across sheets (cell: dependencies and dependents; " +
+        "null / '(not available in streaming mode)' without it)"
     case Eval => "formula evaluation (view --eval)"
     case Render => "styled renderings: html, svg, png, jpeg, webp, pdf (view --format)"
 
@@ -71,9 +78,10 @@ object Capability:
   val inMemory: Set[Capability] = all.toSet
 
   /**
-   * What the streaming reader answers: values, styles (from `styles.xml`), cached formulas and
-   * comments. It never parses row/column properties, merges, hyperlinks or the other sheets'
-   * formulas, and it cannot evaluate or render.
+   * What the streaming reader answers: values, styles (from `styles.xml`), formulas with their
+   * cached values and comments. It never parses row/column properties, merges, hyperlinks or the
+   * other sheets' formulas — the fields of those capabilities read `null` — and it cannot evaluate
+   * or render, so `--eval` and the styled formats are refused.
    */
   val streaming: Set[Capability] = Set(Values, Styles, Formulas, Comments)
 

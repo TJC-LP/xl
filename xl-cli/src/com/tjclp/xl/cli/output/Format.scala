@@ -118,17 +118,17 @@ object Format:
     // Hyperlink
     detail.hyperlink.foreach(h => sb.append(s"Hyperlink: $h\n"))
 
-    // Dependencies and dependents
-    val depsStr =
-      if detail.dependencies.isEmpty then "(none)" else detail.dependencies.mkString(", ")
-    val deptsStr = detail.dependents match
-      case None => "(not available in streaming mode)"
-      case Some(ds) if ds.isEmpty => "(none)"
-      case Some(ds) => ds.mkString(", ")
-    sb.append(s"Dependencies: $depsStr\n")
-    sb.append(s"Dependents: $deptsStr")
+    // The graph: both lists say when the source cannot know them (no `graph` capability)
+    sb.append(s"Dependencies: ${graphList(detail.dependencies)}\n")
+    sb.append(s"Dependents: ${graphList(detail.dependents)}")
 
     sb.toString
+
+  /** A precedent or dependent list: the refs, `(none)`, or the streaming reader's disclaimer. */
+  private def graphList(refs: Option[Vector[String]]): String = refs match
+    case None => "(not available in streaming mode)"
+    case Some(rs) if rs.isEmpty => "(none)"
+    case Some(rs) => rs.mkString(", ")
 
   /**
    * Format style properties (non-default only).

@@ -76,27 +76,33 @@ final case class FormulaInfo(expression: String, kind: FormulaKind, cached: Bool
  * @param value
  *   the scalar the cell shows: the stored value, or for a formula its cached (or evaluated) value —
  *   `Empty` when the formula carries none
- * @param formatted
- *   the display text of `value` under the cell's number format
  * @param formula
  *   the expression and record kind when the cell is a formula
  * @param hidden
- *   whether the cell's row or column is hidden (always false from a source without the `hidden`
- *   capability)
+ *   whether the cell's row or column is hidden; `None` from a source without the `hidden`
+ *   capability (the streaming reader never sees row/column properties), rendered `null` — never an
+ *   affirmative `false` the source cannot vouch for
  * @param mergedInto
- *   the merged range containing the cell, if any
+ *   the merged range containing the cell, if any (`None` also when the source lacks `merges`)
  */
 final case class CellRecord(
   ref: ARef,
   sheet: SheetName,
   kind: CellKind,
   value: CellValue,
-  formatted: String,
   formula: Option[FormulaInfo],
-  hidden: Boolean,
+  hidden: Option[Boolean],
   mergedInto: Option[CellRange],
   style: Option[CellStyle]
 ) derives CanEqual:
+
+  /**
+   * The display text of `value` under the cell's number format (General without a style), computed
+   * on first use: `search` scans every occupied cell of a sheet but shows only the matches it
+   * keeps, so the text of the rest is never built. An `Empty` value formats to the empty string.
+   */
+  lazy val formatted: String =
+    NumFmtFormatter.formatValue(value, style.map(_.numFmt).getOrElse(NumFmt.General))
 
   /**
    * The scalar's canonical lexeme, the text `search` matches and `cell` prints as `Raw:`: a number
@@ -147,8 +153,8 @@ final case class CellRecord(
    * `legacyKeys = true` is the `view --format json` cell, byte for byte: `{"ref", "type"[,
    * "formula"[, "formulaKind"]], "value", "formatted"}`. `legacyKeys = false` is the typed record
    * the newer payloads carry: `{"ref", "sheet", "kind", "value", "formatted", "formula", "hidden",
-   * "mergedInto"}` with `formula` an object or `null` — the style is rendered by [[CellDetail]]
-   * alone.
+   * "mergedInto"}` with `formula` an object or `null` and `hidden` a boolean or `null` (unknown) —
+   * the style is rendered by [[CellDetail]] alone.
    */
   def toJson(legacyKeys: Boolean): String =
     if legacyKeys then
@@ -167,9 +173,10 @@ final case class CellRecord(
           .getOrElse("normal")}", "cached": ${f.cached}}"""
     }
     val merged = mergedInto.fold("null")(r => s"\"${r.toA1}\"")
+    val hiddenField = hidden.fold("null")(_.toString)
     s""""ref": "${ref.toA1}", "sheet": ${Escape.json(sheet.value)}, "kind": "${kind.name}", """ +
       s""""value": $rawJson, "formatted": ${Escape.json(formatted)}, "formula": $formulaField, """ +
-      s""""hidden": $hidden, "mergedInto": $merged"""
+      s""""hidden": $hiddenField, "mergedInto": $merged"""
 
 object CellRecord:
 
@@ -182,10 +189,9 @@ object CellRecord:
     ref: ARef,
     value: CellValue,
     style: Option[CellStyle],
-    hidden: Boolean,
+    hidden: Option[Boolean],
     mergedInto: Option[CellRange]
   ): CellRecord =
-    val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
     value match
       case CellValue.Formula(expr, cached, kind) =>
         CellRecord(
@@ -193,30 +199,19 @@ object CellRecord:
           sheet,
           CellKind.Formula,
           cached.getOrElse(CellValue.Empty),
-          cached.fold("")(cv => NumFmtFormatter.formatValue(cv, numFmt)),
           Some(FormulaInfo(expr, kind, cached.isDefined)),
           hidden,
           mergedInto,
           style
         )
       case scalar =>
-        CellRecord(
-          ref,
-          sheet,
-          CellKind.of(scalar),
-          scalar,
-          NumFmtFormatter.formatValue(scalar, numFmt),
-          None,
-          hidden,
-          mergedInto,
-          style
-        )
+        CellRecord(ref, sheet, CellKind.of(scalar), scalar, None, hidden, mergedInto, style)
 
   /** An addressed position with no cell in it. */
   def empty(
     sheet: SheetName,
     ref: ARef,
-    hidden: Boolean,
+    hidden: Option[Boolean],
     mergedInto: Option[CellRange]
   ): CellRecord =
     of(sheet, ref, CellValue.Empty, None, hidden, mergedInto)
@@ -227,7 +222,7 @@ object CellRecord:
     ref: ARef,
     cell: Option[Cell],
     style: Cell => Option[CellStyle],
-    hidden: Boolean,
+    hidden: Option[Boolean],
     mergedInto: Option[CellRange]
   ): CellRecord =
     cell.fold(empty(sheet, ref, hidden, mergedInto))(c =>
@@ -243,20 +238,9 @@ object CellRecord:
     record.formula match
       case None => record
       case Some(f) =>
-        val numFmt = record.style.map(_.numFmt).getOrElse(NumFmt.General)
-        result match
-          case Right(cv) =>
-            record.copy(
-              value = cv,
-              formatted = NumFmtFormatter.formatValue(cv, numFmt),
-              formula = Some(f.copy(cached = true))
-            )
-          case Left(token) =>
-            record.copy(
-              value = CellValue.Text(token),
-              formatted = token,
-              formula = Some(f.copy(cached = true))
-            )
+        // A text value formats to itself under every number format, so the token is its own text
+        val value = result.fold(token => CellValue.Text(token), identity)
+        record.copy(value = value, formula = Some(f.copy(cached = true)))
 
   /** [[CellRecord.raw]] of a scalar value. */
   def raw(value: CellValue): String = value match

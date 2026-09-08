@@ -287,7 +287,7 @@ Without a range, the sheet's used range; `--offset` and `--limit` page through t
 **Arguments**:
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `range` | string | No | used range | Cell range (e.g., "A1:D20"); absent, the sheet's used range (an empty sheet renders `(empty sheet)`, `""` for csv, `{"sheet", "range": null, "rows": []}` for json) |
+| `range` | string | No | used range | Cell range (e.g., "A1:D20"); absent, the sheet's used range — the bounding box of every stored cell, styled-but-empty ones included, i.e. the worksheet's `<dimension>`, so both sources address the same window (an empty sheet renders `(empty sheet)`, `""` for csv, `{"sheet", "range": null, "rows": []}` for json) |
 | `--format` | string | No | markdown | Output format: markdown, json, csv, html, svg, png, jpeg, webp, pdf |
 | `--formulas` | flag | No | false | Show formulas instead of values |
 | `--eval` | flag | No | false | Evaluate formulas (compute live values) |
@@ -298,7 +298,7 @@ Without a range, the sheet's used range; `--offset` and `--limit` page through t
 | `--skip-empty` | flag | No | false | Skip empty cells (JSON) or empty rows/columns (tabular) |
 | `--skip-hidden` | flag | No | false | Omit hidden rows/columns. **Default renders them** — a range you named never silently loses cells (GH-474) |
 | `--show-labels` | flag | No | false | Include column letters and row numbers |
-| `--header-row` | int | No | — | Use values from this row as keys in JSON output (1-based) |
+| `--header-row` | int | No | — | Use values from this row as keys in JSON output (1-based; `0` or less is a usage error) |
 | `--raster-output` | path | For raster | — | Output file (required for png/jpeg/webp/pdf) |
 | `--dpi` | int | No | 144 | Resolution for raster output |
 | `--quality` | int | No | 90 | JPEG quality 1-100 |
@@ -329,8 +329,11 @@ lines included — and every data format carries a marker:
 mirror Excel's display and always omit hidden lines. Streaming (`--stream`) never read row/column
 properties, so it has always rendered every addressed cell — and for the same reason it cannot
 honour `--skip-hidden` or emit the hidden-line marker: passing `--skip-hidden` with `--stream`
-prints `note: --skip-hidden is ignored with --stream …` on stderr and renders everything. Drop
-`--stream` when you need hidden lines elided or flagged.
+prints `note: --skip-hidden is ignored with --stream …` on stderr and renders everything, and the
+absence of `hiddenRows`/`hiddenCols` (or of the note) under `--stream` means *unknown*, not
+*none*. The typed records of `cell --json` and `search --json` say so explicitly: their `hidden`
+field is `true`/`false` from the loaded workbook and `null` under `--stream`. Drop `--stream` when
+you need hidden lines elided or flagged.
 
 **One projection, two sources** (since 0.21.0): `view`, `cell`, `search`, `stats` and `filter`
 render the same `CellRecord`s whether the cells come from the loaded workbook or from the
@@ -341,7 +344,12 @@ streams. What each source can answer is the `capabilities` table of `xl schema -
 (`values`, `styles`, `formulas`, `comments` from both; `hidden`, `merges`, `hyperlinks`, `graph`,
 `eval`, `render` from the loaded workbook only). A query needing more than `--stream` has is
 refused before the file is opened: `UNSUPPORTED_IN_STREAM`, exit 2, with the in-memory
-alternative as the hint.
+alternative as the hint. A field that belongs to a missing capability is reported unknown rather
+than guessed: `hidden`, `dependencies` and `dependents` are `null` (text: `(not available in
+streaming mode)`) under `--stream`; `mergedInto` and `hyperlink` read `null` there whether the cell
+has none or the reader cannot tell. Everything else — values, kinds, formatted text, formulas with
+their caches, comments, styles — is byte-identical from either source (a property test writes
+generated books and compares every read verb through both).
 
 Why the default: `xl search` finds a value in a hidden row and `xl cell C5` reads it, so a `view`
 that silently elided the same cell read as file corruption.
@@ -454,13 +462,17 @@ occupied cells — and `Dependents` the formulas that read the cell, by name or 
 contains it (an empty cell inside a summed range still names the sum). Empty cells inside a range
 and ranges over a sheet the workbook does not have are not listed (since 0.20.0; before, `SUM(A:A)`
 listed 1,048,576 entries). Same-sheet refs are unqualified, cross-sheet ones carry the sheet. For
-more than one hop, use `deps`. Under `--stream` the graph is not built: `Dependents: (not available
-in streaming mode)`.
+more than one hop, use `deps`. Under `--stream` the graph is not built and both lines say so:
+`Dependencies: (not available in streaming mode)` / `Dependents: (not available in streaming mode)`
+(before 0.21.0 streaming listed the formula's reference tokens — `B1, B1:B3, B3` for
+`=SUM(B1:B3)` — which was neither the precedent set nor exact; drop `--stream` for the graph).
 
 `--json`: `{ref, sheet, kind, value, formatted, formula, hidden, mergedInto, style, comment,
 hyperlink, dependencies, dependents}` — the typed cell record plus what the sheet attaches to it;
-`style` is `{font, fill, numFmt, align, border}` or `null` (`--no-style`), `dependents` is `null`
-under `--stream`.
+`style` is `{font, fill, numFmt, align, border}` or `null` (`--no-style`). Under `--stream`
+`dependencies`, `dependents` and `hidden` are `null` (unknown), and `mergedInto`/`hyperlink` are
+`null` whether absent or unknown. The comment text is the same from both sources (the author-prefix
+run XL's writer adds is stripped on both paths).
 
 ---
 
@@ -620,7 +632,9 @@ its formatted display.
 
 `--json`: `{pattern, sheets, count, total, matches: [{ref, sheet, kind, value, formatted, formula,
 hidden, mergedInto}]}` — `count` the matches listed, `total` every match, each match the typed
-cell record (`value` an exact JSON lexeme, `formula` an object or `null`).
+cell record (`value` an exact JSON lexeme, `formula` an object or `null`, `hidden` a boolean or
+`null` under `--stream`). Matches are the occupied cells in row-major order; a cell that carries a
+style but no value is not occupied (it matches nothing, from either source).
 
 **Output**:
 ```markdown

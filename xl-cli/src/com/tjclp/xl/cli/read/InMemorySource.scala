@@ -26,7 +26,8 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
 
   def sheets: IO[Vector[SheetName]] = IO.pure(wb.sheets.map(_.name))
 
-  def usedRange(sheet: SheetName): IO[Option[CellRange]] = named(sheet).map(_.usedRange)
+  def usedRange(sheet: SheetName): IO[Option[CellRange]] =
+    named(sheet).map(InMemorySource.dimension)
 
   def rows(sheet: SheetName, window: CellRange): Stream[IO, Vector[CellRecord]] =
     Stream.eval(named(sheet)).flatMap(s => InMemorySource.rows(s, window))
@@ -48,15 +49,22 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
 
   def occupied(sheet: SheetName): Stream[IO, CellRecord] =
     Stream.eval(named(sheet)).flatMap { s =>
-      val ordered = s.cells.toVector.sortBy { (ref, _) => (ref.row.index0, ref.col.index0) }
+      // A cell that holds no value — a style-only record — is not occupied: the streaming reader
+      // never emits one, and `search` has nothing to match in it. Row-major order over a hash map
+      // means a sort; the key is one primitive per cell
+      val ordered = s.cells.toVector
+        .filter { (_, cell) => InMemorySource.holdsValue(cell) }
+        .sortBy { (ref, _) => InMemorySource.rowMajor(ref) }
+      val merges = InMemorySource.MergeIndex(s.mergedRanges)
+      val hidden = InMemorySource.HiddenLines(s)
       Stream.emits(ordered).map { (ref, cell) =>
         CellRecord.of(
           s.name,
           ref,
           cell.value,
           InMemorySource.styleOf(s, cell),
-          InMemorySource.isHidden(s, ref),
-          s.getMergedRange(ref)
+          Some(hidden.contains(ref)),
+          merges.at(ref)
         )
       }
     }
@@ -70,7 +78,7 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
         ref,
         cell.fold(CellValue.Empty)(_.value),
         style,
-        InMemorySource.isHidden(s, ref),
+        Some(InMemorySource.isHidden(s, ref)),
         s.getMergedRange(ref)
       )
       // ADR-017 §2.10: the bounded cross-sheet graph — precedents at cell granularity (ranges as
@@ -84,7 +92,7 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
         record,
         s.getComment(ref),
         cell.flatMap(_.hyperlink),
-        graph.precedentsOf(current).toVector.map(show).sorted,
+        Some(graph.precedentsOf(current).toVector.map(show).sorted),
         Some(graph.dependentsOf(current).toVector.map(show).sorted)
       )
     }
@@ -197,11 +205,27 @@ object InMemorySource:
   def rows(sheet: Sheet, window: CellRange): Stream[IO, Vector[CellRecord]] =
     Stream.emits(denseRows(sheet, window))
 
+  /**
+   * The worksheet's `<dimension>`: the bounding box of every cell the sheet stores,
+   * styled-but-empty ones included — what the streaming reader takes from the file, so `view`
+   * without a range and `filter` address the same window from both sources. (`Sheet.usedRange`
+   * spans the non-empty cells only.)
+   */
+  def dimension(sheet: Sheet): Option[CellRange] =
+    sheet.cells.keysIterator
+      .foldLeft(Option.empty[(Int, Int, Int, Int)]) { (acc, ref) =>
+        val (c, r) = (ref.col.index0, ref.row.index0)
+        Some(acc.fold((c, r, c, r)) { case (c1, r1, c2, r2) =>
+          (c1 min c, r1 min r, c2 max c, r2 max r)
+        })
+      }
+      .map { case (c1, r1, c2, r2) => CellRange(ARef.from0(c1, r1), ARef.from0(c2, r2)) }
+
   private def denseRows(sheet: Sheet, window: CellRange): Vector[Vector[CellRecord]] =
     val cols = (window.start.col.index0 to window.end.col.index0).toVector
     val (hiddenRows, hiddenCols) = hiddenLines(sheet, window)
     // Only the merges that touch the window can contain one of its cells
-    val merges = sheet.mergedRanges.toVector.filter(m => intersects(m, window))
+    val merges = MergeIndex(sheet.mergedRanges.filter(m => intersects(m, window)))
     (window.start.row.index0 to window.end.row.index0).toVector.map { row =>
       val rowHidden = hiddenRows.contains(row)
       cols.map { col =>
@@ -211,11 +235,58 @@ object InMemorySource:
           ref,
           sheet.cells.get(ref),
           styleOf(sheet, _),
-          rowHidden || hiddenCols.contains(col),
-          merges.find(_.contains(ref))
+          Some(rowHidden || hiddenCols.contains(col)),
+          merges.at(ref)
         )
       }
     }
+
+  /**
+   * Merged ranges indexed by the rows they cover, so the merge containing a cell is found among the
+   * few ranges on its row rather than by scanning them all (`search` over 60k cells with 5k merged
+   * headers was O(cells × merges)). A range taller than [[MergeIndex.tallRows]] is kept aside and
+   * scanned directly, so a whole-column merge does not index a million rows.
+   */
+  final class MergeIndex private (byRow: Map[Int, Vector[CellRange]], tall: Vector[CellRange]):
+    def at(ref: ARef): Option[CellRange] =
+      byRow
+        .get(ref.row.index0)
+        .flatMap(_.find(_.contains(ref)))
+        .orElse(tall.find(_.contains(ref)))
+
+  object MergeIndex:
+    val tallRows: Int = 64
+
+    def apply(merges: Iterable[CellRange]): MergeIndex =
+      val (tall, short) = merges.toVector.partition(_.height > tallRows)
+      val byRow = short
+        .flatMap(m => (m.start.row.index0 to m.end.row.index0).map(_ -> m))
+        .groupMap(_._1)(_._2)
+      new MergeIndex(byRow, tall)
+
+  /** Whether the cell holds a value (a type test — `!= Empty` would run every value's `equals`). */
+  private def holdsValue(cell: Cell): Boolean = cell.value match
+    case CellValue.Empty => false
+    case _ => true
+
+  /** The row-major sort key of a ref — one primitive, so a 60k-cell sort allocates no tuples. */
+  private def rowMajor(ref: ARef): Long = (ref.row.index0.toLong << 32) | ref.col.index0.toLong
+
+  /**
+   * The sheet's hidden rows and columns, read once: `getRowProperties`/`getColumnProperties` build
+   * a default record on every miss, which over a 60k-cell scan is 120k allocations for nothing.
+   */
+  final class HiddenLines private (rows: Set[Int], cols: Set[Int]):
+    def contains(ref: ARef): Boolean =
+      (rows.nonEmpty && rows.contains(ref.row.index0)) ||
+        (cols.nonEmpty && cols.contains(ref.col.index0))
+
+  object HiddenLines:
+    def apply(sheet: Sheet): HiddenLines =
+      new HiddenLines(
+        sheet.rowProperties.collect { case (row, p) if p.hidden => row.index0 }.toSet,
+        sheet.columnProperties.collect { case (col, p) if p.hidden => col.index0 }.toSet
+      )
 
   def hiddenLines(sheet: Sheet, window: CellRange): (Set[Int], Set[Int]) =
     val rows = (window.start.row.index0 to window.end.row.index0)

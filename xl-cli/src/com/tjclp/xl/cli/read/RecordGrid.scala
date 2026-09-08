@@ -58,8 +58,11 @@ final case class RecordGrid(
 /**
  * Everything `cell` reports about one cell: the record plus what the sheet attaches to it.
  *
+ * @param hyperlink
+ *   the cell's hyperlink — `None` when it has none, and also when the source lacks `hyperlinks`
  * @param dependencies
- *   the cells the formula reads, as `A1` / `Sheet!A1` text
+ *   the cells the formula reads, as `A1` / `Sheet!A1` text (ranges as their occupied cells) —
+ *   `None` when the source cannot know (no `graph` capability)
  * @param dependents
  *   the formulas that read the cell — `None` when the source cannot know (no `graph` capability)
  */
@@ -67,6 +70,6 @@ final case class CellDetail(
   record: CellRecord,
   comment: Option[Comment],
   hyperlink: Option[String],
-  dependencies: Vector[String],
+  dependencies: Option[Vector[String]],
   dependents: Option[Vector[String]]
 ) derives CanEqual

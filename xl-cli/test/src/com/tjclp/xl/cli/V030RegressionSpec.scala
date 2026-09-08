@@ -474,10 +474,11 @@ class V030RegressionSpec extends CatsEffectSuite:
       ref"A1",
       CellValue.Text("test"),
       style,
-      hidden = false,
+      hidden = Some(false),
       mergedInto = None
     )
-    val output = Format.cellInfo(CellDetail(record, None, None, Vector.empty, Some(Vector.empty)))
+    val output =
+      Format.cellInfo(CellDetail(record, None, None, Some(Vector.empty), Some(Vector.empty)))
 
     // Extract the Style section if present
     val lines = output.split("\n")

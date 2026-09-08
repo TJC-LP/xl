@@ -401,11 +401,12 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
                 OoxmlComments.fromXml(elem) match
                   case Left(err) => Left(s"Failed to parse comments: $err")
                   case Right(ooxmlComments) =>
-                    // Convert OOXML comments to domain comments
-                    Right(ooxmlComments.comments.map { c =>
-                      val author = ooxmlComments.authors.lift(c.authorId)
-                      c.ref -> Comment(c.text, author)
-                    }.toMap)
+                    // The in-memory reader's conversion, so the two paths agree on the text: the
+                    // author prefix XL writes is stripped and an empty author is unauthored
+                    XlsxReader
+                      .convertToDomainComments(ooxmlComments, commentPath)
+                      .left
+                      .map(err => s"Failed to parse comments: ${err.message}")
 
   // Helper: Extract single cell using SAX parser with early-abort
   private def extractCellSync(

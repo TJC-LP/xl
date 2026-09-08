@@ -12,7 +12,7 @@ import org.scalacheck.Prop.forAll
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.{Cell, CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, Comment}
 import com.tjclp.xl.cli.{FilterFormat, ViewFormat}
 import com.tjclp.xl.cli.contract.{Outcome, OutputMode, Render, Rendered}
 import com.tjclp.xl.styles.CellStyle
@@ -21,15 +21,18 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 /**
  * W2.4's acceptance law: for every read verb, the loaded workbook and the streaming reader produce
  * equal payloads when the book uses only the capabilities both sources share
- * ([[Capability.streaming]]: values, styles, cached formulas, comments). The generated books hold
- * text, numbers, booleans, errors and empties under a few number formats — no formulas (the `graph`
- * capability), no hidden lines, merges or hyperlinks — written to a file and read back through both
- * strategies; every query runs in both output modes and the rendered stdout, stderr and exit code
- * must agree.
+ * ([[Capability.streaming]]: values, styles, formulas, comments). The generated books exercise
+ * every one of those: text, numbers, booleans, errors and empties under a few number formats,
+ * cached and uncached formulas, comments (authored and not, on occupied and on empty cells) and
+ * styled-but-empty cells — no hidden lines, merges or hyperlinks — written to a file and read back
+ * through both strategies; every query runs in both output modes and the rendered stdout, stderr
+ * and exit code must agree.
  *
- * `cell` is the one verb whose payload names a capability the streaming reader lacks: `dependents`
- * (`Dependents: (not available in streaming mode)` / `"dependents": null`). The law compares the
- * rest of the payload and asserts that the difference is exactly that field.
+ * The payload fields that BELONG to a capability the streaming reader lacks are the only allowed
+ * difference, and they must say so rather than guess: `cell`'s `Dependencies`/`Dependents` (the
+ * `graph` capability) print `(not available in streaming mode)` / `null`, and the typed record's
+ * `hidden` (the `hidden` capability) is `null` where the loaded workbook says `false`. The law
+ * projects exactly those fields out and compares the rest byte for byte.
  */
 class SourceParitySpec extends FunSuite with ScalaCheckSuite:
 
@@ -43,7 +46,8 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       6 -> Gen.identifier.map(_.take(8)),
       1 -> Gen.const("a,b \"c\" | d"),
       1 -> Gen.const("Total"),
-      1 -> Gen.const("x y")
+      1 -> Gen.const("x y"),
+      1 -> Gen.const("")
     )
 
   private val genNumber: Gen[BigDecimal] =
@@ -54,6 +58,15 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       1 -> Gen.const(BigDecimal("0.125"))
     )
 
+  /** Formula cells as a file carries them: with a cached number, text or boolean, or uncached. */
+  private val genFormula: Gen[CellValue] =
+    Gen.frequency(
+      3 -> Gen.const(CellValue.Formula("SUM(A1:A2)", Some(CellValue.Number(BigDecimal("12.5"))))),
+      2 -> Gen.const(CellValue.Formula("A1&\"x\"", Some(CellValue.Text("Totalx")))),
+      1 -> Gen.const(CellValue.Formula("A1>0", Some(CellValue.Bool(true)))),
+      2 -> Gen.const(CellValue.Formula("B2*2", None))
+    )
+
   private val genValue: Gen[Option[CellValue]] =
     Gen.frequency(
       4 -> genText.map(t => Some(CellValue.Text(t))),
@@ -62,6 +75,7 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       1 -> Gen
         .oneOf(CellError.Div0, CellError.NA, CellError.Ref)
         .map(e => Some(CellValue.Error(e))),
+      2 -> genFormula.map(Some(_)),
       3 -> Gen.const(None)
     )
 
@@ -74,26 +88,42 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       1 -> Gen.const(Some(NumFmt.Custom("0.0")))
     )
 
-  /** A sheet: up to 6 rows by 4 columns, a header row of words first. */
+  private val genComment: Gen[Comment] =
+    for
+      text <- Gen.oneOf("input", "check this", "two\nlines")
+      author <- Gen.option(Gen.oneOf("qa", "Ana Lee"))
+    yield Comment.plainText(text, author)
+
+  /**
+   * A sheet: up to 6 rows by 4 columns, a header row of words first. A position with no value but a
+   * number format becomes a styled-but-empty cell; up to two comments land anywhere in the grid or
+   * on the row below it (an empty cell).
+   */
   private def genSheet(name: String): Gen[Sheet] =
     for
       rows <- Gen.choose(1, 6)
       cols <- Gen.choose(1, 4)
       headers <- Gen.listOfN(cols, Gen.identifier.map(_.take(6)).suchThat(_.nonEmpty))
       cells <- Gen.listOfN(rows * cols, Gen.zip(genValue, genNumFmt))
+      commentCount <- Gen.choose(0, 2)
+      comments <- Gen.listOfN(
+        commentCount,
+        Gen.zip(Gen.choose(0, cols - 1), Gen.choose(0, rows + 1), genComment)
+      )
     yield
       val blank: Sheet = Sheet(SheetName.unsafe(name))
       val withHeaders = headers.zipWithIndex.foldLeft(blank) { case (s, (h, col)) =>
         s.put(Cell(ARef.from0(col, 0), CellValue.Text(h)))
       }
-      cells.zipWithIndex.foldLeft(withHeaders) { case (s, ((value, numFmt), i)) =>
+      val withCells = cells.zipWithIndex.foldLeft(withHeaders) { case (s, ((value, numFmt), i)) =>
         val ref = ARef.from0(i % cols, 1 + i / cols)
-        value.fold(s) { v =>
-          val put: Sheet = s.put(Cell(ref, v))
-          numFmt.fold(put)(fmt =>
-            put.styleAt(ref.toA1, CellStyle.default.withNumFmt(fmt)).getOrElse(put)
-          )
-        }
+        val put: Sheet = value.fold(s)(v => s.put(Cell(ref, v)))
+        numFmt.fold(put)(fmt =>
+          put.styleAt(ref.toA1, CellStyle.default.withNumFmt(fmt)).getOrElse(put)
+        )
+      }
+      comments.foldLeft(withCells) { case (s, (col, row, comment)) =>
+        s.comment(ARef.from0(col, row), comment)
       }
 
   private val genBook: Gen[Workbook] =
@@ -117,6 +147,7 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
     val name = Some(sheet.name.value)
     val someText = sheet.cells.values.map(_.value).collectFirst { case CellValue.Text(s) => s }
     val refs = sheet.cells.keys.toVector.sortBy(r => (r.row.index0, r.col.index0)).take(4)
+    val commented = sheet.comments.keys.toVector.sortBy(r => (r.row.index0, r.col.index0))
     val views = Vector(
       ReadTestKit.view(None),
       ReadTestKit.view(None, ViewFormat.Csv, showLabels = true),
@@ -129,12 +160,15 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       ReadTestKit.view(None, ViewFormat.Json, offset = 1, maxCols = 2),
       ReadTestKit.view(None, offset = 1, maxCols = 2),
       ReadTestKit.view(Some("B2"), ViewFormat.Json),
-      ReadTestKit.view(None, showFormulas = true)
+      ReadTestKit.view(None, showFormulas = true),
+      ReadTestKit.view(None, ViewFormat.Csv, showFormulas = true)
     ).map(q => (name, q: ReadQuery))
     val searches = Vector(
       (None, ReadQuery.Search("\\d", 50, None)),
       (None, ReadQuery.Search("\\d", 2, None)),
       (name, ReadQuery.Search("TRUE|FALSE", 0, None)),
+      (None, ReadQuery.Search("^$", 50, None)),
+      (None, ReadQuery.Search("SUM|\\*", 50, None)),
       (None, ReadQuery.Search(java.util.regex.Pattern.quote(someText.getOrElse("Total")), 50, None))
     )
     val stats = Vector((name, ReadQuery.Stats("A1:E8")), (name, ReadQuery.Stats("B2:B3")))
@@ -144,21 +178,38 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       (name, ReadTestKit.filter("B >= 0 OR C = TRUE", format = FilterFormat.Json, limit = 2)),
       (name, ReadTestKit.filter("A IS EMPTY", columns = Some("A:B")))
     )
-    val cells = (refs :+ ARef.from0(7, 7)).map(r => (name, ReadQuery.Cell(r.toA1, noStyle = false)))
+    val cells = (refs ++ commented :+ ARef.from0(7, 7)).distinct.map { r =>
+      (name, ReadQuery.Cell(r.toA1, noStyle = false))
+    }
     views ++ searches ++ stats ++ filters ++ cells
 
   private def rendered(outcome: Outcome, mode: OutputMode): (Int, Rendered) =
     (outcome.exitCode.code, Render(mode)(outcome, "test"))
 
-  /** `cell`'s payload with the `dependents` capability projected out, in either mode. */
-  private def withoutDependents(text: String, mode: OutputMode): String = mode match
-    case OutputMode.Text => text.linesIterator.filterNot(_.startsWith("Dependents:")).mkString("\n")
-    case OutputMode.Json =>
-      val parsed = ujson.read(text)
-      parsed("data") match
-        case obj: ujson.Obj => obj.value.remove("dependents")
-        case _ => ()
-      ujson.write(parsed)
+  /** The fields of the capabilities the streaming reader lacks, projected out of a payload. */
+  private def sharedOnly(text: String, mode: OutputMode, query: ReadQuery): String =
+    (query, mode) match
+      case (_: ReadQuery.Cell, OutputMode.Text) =>
+        text.linesIterator
+          .filterNot(l => l.startsWith("Dependencies:") || l.startsWith("Dependents:"))
+          .mkString("\n")
+      case (_: ReadQuery.Cell, OutputMode.Json) =>
+        val parsed = ujson.read(text)
+        parsed("data") match
+          case obj: ujson.Obj =>
+            obj.value.remove("dependencies")
+            obj.value.remove("dependents")
+            obj.value.remove("hidden")
+          case _ => ()
+        ujson.write(parsed)
+      case (_: ReadQuery.Search, OutputMode.Json) =>
+        val parsed = ujson.read(text)
+        parsed("data")("matches").arr.foreach {
+          case obj: ujson.Obj => obj.value.remove("hidden")
+          case _ => ()
+        }
+        ujson.write(parsed)
+      case _ => text
 
   property("in-memory and streaming sources produce equal payloads for every read verb") {
     forAll(genBook) { (wb: Workbook) =>
@@ -176,24 +227,32 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
             val label = s"$query with -s $flag in $mode"
             assertEquals(streamExit, memoryExit, s"exit codes differ for $label")
             assertEquals(streamOut.stderr, memoryOut.stderr, s"stderr differs for $label")
-            query match
-              case _: ReadQuery.Cell if memory.ok =>
-                // the one declared difference: the streaming reader cannot know the dependents
-                assertEquals(
-                  withoutDependents(streamOut.stdout, mode),
-                  withoutDependents(memoryOut.stdout, mode),
-                  s"cell payload differs beyond dependents for $label"
-                )
-                mode match
-                  case OutputMode.Text =>
-                    assert(
-                      streamOut.stdout.contains("Dependents: (not available in streaming mode)")
-                    )
-                    assert(memoryOut.stdout.contains("Dependents: (none)"), memoryOut.stdout)
-                  case OutputMode.Json =>
-                    assertEquals(ujson.read(streamOut.stdout)("data")("dependents"), ujson.Null)
-              case _ =>
-                assertEquals(streamOut.stdout, memoryOut.stdout, s"stdout differs for $label")
+            assertEquals(
+              sharedOnly(streamOut.stdout, mode, query),
+              sharedOnly(memoryOut.stdout, mode, query),
+              s"stdout differs beyond the graph and hidden fields for $label"
+            )
+            // The projected fields must be honest: the streaming reader says it cannot know
+            (query, mode) match
+              case (_: ReadQuery.Cell, OutputMode.Text) if memory.ok =>
+                assert(streamOut.stdout.contains("Dependencies: (not available in streaming mode)"))
+                assert(streamOut.stdout.contains("Dependents: (not available in streaming mode)"))
+                assert(!memoryOut.stdout.contains("not available"), memoryOut.stdout)
+              case (_: ReadQuery.Cell, OutputMode.Json) if memory.ok =>
+                val stream = ujson.read(streamOut.stdout)("data")
+                val loadedData = ujson.read(memoryOut.stdout)("data")
+                assertEquals(stream("dependencies"), ujson.Null)
+                assertEquals(stream("dependents"), ujson.Null)
+                assertEquals(stream("hidden"), ujson.Null)
+                assertEquals(loadedData("hidden"), ujson.Bool(false))
+                assert(loadedData("dependents").arrOpt.isDefined, loadedData("dependents"))
+                assert(loadedData("dependencies").arrOpt.isDefined, loadedData("dependencies"))
+              case (_: ReadQuery.Search, OutputMode.Json) if memory.ok =>
+                val stream = ujson.read(streamOut.stdout)("data")("matches").arr
+                val loadedData = ujson.read(memoryOut.stdout)("data")("matches").arr
+                stream.foreach(m => assertEquals(m("hidden"), ujson.Null))
+                loadedData.foreach(m => assertEquals(m("hidden"), ujson.Bool(false)))
+              case _ => ()
           }
         }
       }.unsafeRunSync()
@@ -227,10 +286,10 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
   test("the capability table names what each source answers") {
     assertEquals(Capability.inMemory, Capability.all.toSet)
     assert(Capability.streaming.subsetOf(Capability.inMemory))
-    assert(!Capability.streaming.contains(Capability.Eval))
-    assert(!Capability.streaming.contains(Capability.Render))
-    assert(!Capability.streaming.contains(Capability.Hidden))
-    assert(!Capability.streaming.contains(Capability.Graph))
+    assertEquals(
+      Capability.streaming,
+      Set(Capability.Values, Capability.Styles, Capability.Formulas, Capability.Comments)
+    )
     assertEquals(SheetSource.inMemory(Workbook.empty).capabilities, Capability.inMemory)
     val rows = Capability.json.arr.toVector
     assertEquals(rows.map(_("name").str), Capability.all.map(_.name))

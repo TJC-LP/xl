@@ -218,6 +218,23 @@ class ViewTruncationSpec extends CatsEffectSuite:
       }
   }
 
+  test("view json: --header-row below 1 is a usage error, not a silent fallback to letters") {
+    val wb = Workbook(Vector(Sheet("Data").put(ARef.from0(0, 0), CellValue.Text("Col"))))
+    Vector(0, -3).foldLeft(IO.unit) { (acc, row) =>
+      acc *> ReadTestKit
+        .inMemory(
+          wb,
+          Some("Data"),
+          ReadTestKit.view(Some("A1:A2"), ViewFormat.Json, headerRow = Some(row))
+        )
+        .map { outcome =>
+          assertEquals(outcome.exitCode.code, 2, outcome.toString)
+          assertEquals(outcome.error.map(_.code), Some("USAGE"))
+          assert(outcome.error.exists(_.message.contains("--header-row must be 1 or more")))
+        }
+    }
+  }
+
   // ========== view: html ==========
 
   test("view html: clipped output appends HTML comment trailer and warns") {

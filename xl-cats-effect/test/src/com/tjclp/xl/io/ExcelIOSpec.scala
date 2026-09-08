@@ -12,7 +12,7 @@ import scala.util.Using
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.{CellError, CellValue, Comment}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.ooxml.{SstPolicy, WriterConfig, XlsxReader, XlsxWriter}
@@ -946,6 +946,32 @@ class ExcelIOSpec extends CatsEffectSuite:
           assertEquals(details.ref, ARef.from0(2, 4))
         }
     }
+  }
+
+  tempDir.test(
+    "streamCellDetails: comments convert exactly as the in-memory reader converts them"
+  ) { dir =>
+    val path = dir.resolve("cell-comments.xlsx")
+    val excel = ExcelIO.instance[IO]
+    val wb = Workbook(
+      Sheet("Notes")
+        .put(ref"A1", CellValue.Number(BigDecimal(5)))
+        .comment(ref"A1", Comment.plainText("input", Some("qa")))
+        .comment(ref"B2", Comment.plainText("no author", None))
+    )
+    for
+      _ <- excel.write(wb, path)
+      loaded <- excel.read(path)
+      a1 <- excel.streamCellDetails(path, "Notes", ref"A1")
+      b2 <- excel.streamCellDetails(path, "Notes", ref"B2")
+    yield
+      val sheet = loaded.sheets.headOption.getOrElse(fail("sheet missing"))
+      // the writer's bold "qa:" + newline prefix is stripped on both paths (GH-290 shape)
+      assertEquals(a1.comment, sheet.getComment(ref"A1"))
+      assertEquals(a1.comment.map(_.text.toPlainText), Some("input"))
+      assertEquals(a1.comment.flatMap(_.author), Some("qa"))
+      assertEquals(b2.comment, sheet.getComment(ref"B2"))
+      assertEquals(b2.comment.flatMap(_.author), None)
   }
 
   tempDir.test("readStream: cellStyles populated from styled workbook") { dir =>

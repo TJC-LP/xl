@@ -16,8 +16,8 @@ import com.tjclp.xl.ooxml.style.WorkbookStyles
  * The `--stream` strategy: the SAX row reader over one worksheet at a time, `styles.xml` loaded
  * once for number formats, `workbook.xml` for the sheet list and dimensions. O(1) memory in the
  * worksheet; [[Capability.streaming]] only — the reader never parses row/column properties, merges,
- * hyperlinks or other sheets' formulas, so `hidden`, `merges`, `hyperlinks`, `graph`, `eval` and
- * `render` are refused in band.
+ * hyperlinks or other sheets' formulas, so `eval` and `render` are refused in band and the fields
+ * of `hidden`, `merges`, `hyperlinks` and `graph` are reported unknown (`null`), never guessed.
  */
 final class StreamingSource(path: Path, excel: ExcelIO[IO]) extends SheetSource:
 
@@ -70,10 +70,12 @@ final class StreamingSource(path: Path, excel: ExcelIO[IO]) extends SheetSource:
     excel.streamCellDetails(path, sheet.value, ref).map { details =>
       val style = if withStyle then details.style else None
       CellDetail(
-        CellRecord.of(sheet, ref, details.value, style, hidden = false, mergedInto = None),
+        CellRecord.of(sheet, ref, details.value, style, hidden = None, mergedInto = None),
         details.comment,
         hyperlink = None,
-        dependencies = details.dependencies,
+        // No graph without the workbook: the reader's token list is not the precedent set (a range
+        // token plus its endpoints is neither the cells it covers nor exact), so say so instead
+        dependencies = None,
         dependents = None
       )
     }
@@ -138,7 +140,7 @@ object StreamingSource:
         ARef.from0(col, row.rowIndex - 1),
         value,
         row.cellStyles.get(col).flatMap(styles.styleAt),
-        hidden = false,
+        hidden = None,
         mergedInto = None
       )
     }
@@ -157,7 +159,7 @@ object StreamingSource:
     val lastRow = window.end.row.index0
     val cols = (window.start.col.index0 to window.end.col.index0).toVector
     def emptyRow(row: Int): Vector[CellRecord] =
-      cols.map(col => CellRecord.empty(sheet, ARef.from0(col, row), hidden = false, None))
+      cols.map(col => CellRecord.empty(sheet, ARef.from0(col, row), hidden = None, None))
     def denseRow(row: RowData, rowIdx: Int): Vector[CellRecord] =
       cols.map { col =>
         val ref = ARef.from0(col, rowIdx)
@@ -168,10 +170,10 @@ object StreamingSource:
               ref,
               value,
               row.cellStyles.get(col).flatMap(styles.styleAt),
-              hidden = false,
+              hidden = None,
               mergedInto = None
             )
-          case None => CellRecord.empty(sheet, ref, hidden = false, None)
+          case None => CellRecord.empty(sheet, ref, hidden = None, None)
       }
     def gap(from: Int, until: Int): Pull[IO, Vector[CellRecord], Unit] =
       if from >= until then Pull.done
