@@ -15,9 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against it: `--help`, `sheets`, `view --json`, `schema --json` and `lint` for exit codes and
   envelope shape, plus one version everywhere `xl` prints one. The release workflow runs the same
   script against every native binary with the tag as the expected version; it also runs locally
-  (`scripts/smoke-cli-contract.sh - xl`). `ContractSpec` pins that
-  `docs/reference/generated/error-codes.md` publishes exactly `ErrorCode.all` and `WarningCode.all`
-  with their exits and that every golden failure carries a code.
+  (`scripts/smoke-cli-contract.sh - xl`). `ContractSpec` reads
+  `docs/reference/generated/error-codes.md` back as table rows and holds them to `schema --json`'s
+  tables, and holds every code the golden corpus records to the published table and its exit.
 - **The xl-agent grader reads `--json` envelopes only**: `sheets --json` for the first sheet
   (no more `Sheet1` guess on a failed run) and `view --json --eval` for the graded cells, so a
   failure surfaces its `error.code` instead of a swallowed non-zero exit. The skill zip is locked to

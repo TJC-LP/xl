@@ -1,9 +1,11 @@
 package com.tjclp.xl.cli.contract
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.util.regex.Pattern
 
 import scala.annotation.tailrec
+import scala.jdk.CollectionConverters.*
 
 import com.tjclp.xl.cli.BuildInfo
 
@@ -106,6 +108,23 @@ object Golden:
       )
 
   val corpusDir: Path = repoRoot.resolve("xl-cli/test/resources/golden")
+
+  /**
+   * Every `<name>.golden` under [[corpusDir]], sorted by path; empty when the directory is absent,
+   * so a missing corpus is a suite's own assertion rather than a `NoSuchFileException`.
+   */
+  def caseFiles: Vector[Path] =
+    if !Files.isDirectory(corpusDir) then Vector.empty
+    else
+      val listing = Files.list(corpusDir)
+      try
+        listing.iterator.asScala.filter(_.toString.endsWith(".golden")).toVector.sortBy(_.toString)
+      finally listing.close()
+
+  /** One corpus file parsed as a [[GoldenCase]] named after the file. */
+  def readCase(file: Path): Either[String, GoldenCase] =
+    val name = file.getFileName.toString.stripSuffix(".golden")
+    GoldenCase.parse(name, Files.readString(file, StandardCharsets.UTF_8))
 
   /**
    * Make output byte-stable across machines and runs: the fixture directory becomes `<DIR>`, any
