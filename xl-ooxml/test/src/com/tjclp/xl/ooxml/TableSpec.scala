@@ -5,10 +5,12 @@ import scala.xml.*
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.codec.CellCodec.given
+import com.tjclp.xl.codec.rowSyntax.*
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.tables.{TableSpec, TableColumn, TableAutoFilter, TableStyle}
 import com.tjclp.xl.cells.CellValue
 import java.nio.file.{Files, Path}
+import java.time.LocalDate
 
 /**
  * Tests for OOXML Table parsing and serialization.
@@ -1230,4 +1232,45 @@ class TableSpec extends FunSuite:
     assertEquals(reparsed.autoFilterUid, Some(autoFilterUid), "AutoFilter UID should be preserved")
     assertEquals(reparsed.columns(0).uid, Some(columnUids(0)), "Column 1 UID should be preserved")
     assertEquals(reparsed.columns(1).uid, Some(columnUids(1)), "Column 2 UID should be preserved")
+  }
+
+  // ========================================
+  // Category F: RowCodec tables through the file (GH-590)
+  // ========================================
+
+  final case class Order(
+    id: Int,
+    customer: String,
+    qty: Int,
+    price: BigDecimal,
+    shipped: Option[LocalDate]
+  ) derives RowCodec
+
+  test("GH-590: putTable → write → read → readRowsByHeader round-trips records and the table") {
+    val orders = Vector(
+      Order(1, "Acme", 3, BigDecimal("9.99"), Some(LocalDate.of(2026, 1, 15))),
+      Order(2, "Globex", 1, BigDecimal("120.00"), None)
+    )
+    val placed = Sheet("Orders")
+      .putTable(ref"B2", orders, "Orders")
+      .fold(err => fail(s"putTable failed: $err"), identity)
+
+    val bytes =
+      XlsxWriter.writeToBytes(Workbook(Vector(placed.sheet))).getOrElse(fail("Write failed"))
+    val reread = XlsxReader.readFromBytes(bytes).getOrElse(fail("Read failed"))
+    val sheet = reread.sheets.headOption.getOrElse(fail("Expected sheet"))
+
+    val table = sheet.getTable("Orders").getOrElse(fail("Table 'Orders' did not survive the file"))
+    assertEquals(table.range.toA1, "B2:F4")
+    assertEquals(table.displayName, "Orders")
+    assertEquals(table.columns.map(_.name), RowCodec[Order].fields)
+    assertEquals(sheet.columnHeaders(Row.from1(2)).map(_._2), RowCodec[Order].fields)
+    assertEquals(
+      sheet.readRowsByHeader[Order](Row.from1(2)),
+      Right(orders): Either[RowCodecError, Vector[Order]]
+    )
+    assertEquals(
+      sheet.readRows[Order](table.dataRange),
+      Right(orders): Either[RowCodecError, Vector[Order]]
+    )
   }

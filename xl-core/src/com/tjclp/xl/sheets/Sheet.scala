@@ -484,15 +484,6 @@ final case class Sheet(
   ): Sheet | XLResult[Sheet] =
     ${ com.tjclp.xl.macros.PutLiteral.putStyledImpl('{ this }, 'ref, 'value, 'style, 'cw) }
 
-  // Merge existing style with codec-inferred style
-  // Preserves existing properties; codec NumFmt overrides only when existing is General
-  // Rationale: If user explicitly set Currency format, keep it. If just Bold (General), apply type-appropriate format.
-  private def mergeStyles(existing: CellStyle, codec: CellStyle): CellStyle =
-    import com.tjclp.xl.styles.numfmt.NumFmt
-    if existing.numFmt == NumFmt.General && codec.numFmt != NumFmt.General then
-      existing.copy(numFmt = codec.numFmt)
-    else existing
-
   // Internal helper for single-cell put with CellWriter type class
   // Uses the CellWriter[CellWritable] instance which handles all supported types via pattern matching
   // Returns Sheet directly (infallible) since CellWriter.write cannot fail
@@ -509,7 +500,7 @@ final case class Sheet(
     styleOpt match
       case Some(codecStyle) =>
         val mergedStyle = existingCell.flatMap(_.styleId).flatMap(styleRegistry.get) match
-          case Some(existingStyle) => mergeStyles(existingStyle, codecStyle)
+          case Some(existingStyle) => Sheet.mergeStyles(existingStyle, codecStyle)
           case None => codecStyle
         val (newRegistry, styleId) = styleRegistry.register(mergedStyle)
         copy(
@@ -581,7 +572,7 @@ final case class Sheet(
       builtCells += updatedCell
       styleOpt.foreach { codecStyle =>
         val mergedStyle = existingCell.flatMap(_.styleId).flatMap(this.styleRegistry.get) match
-          case Some(existingStyle) => mergeStyles(existingStyle, codecStyle)
+          case Some(existingStyle) => Sheet.mergeStyles(existingStyle, codecStyle)
           case None => codecStyle
         val (newRegistry, styleId) = registry.register(mergedStyle)
         registry = newRegistry
@@ -613,7 +604,7 @@ final case class Sheet(
       builtCells += updatedCell
       styleOpt.foreach { codecStyle =>
         val mergedStyle = existingCell.flatMap(_.styleId).flatMap(this.styleRegistry.get) match
-          case Some(existingStyle) => mergeStyles(existingStyle, codecStyle)
+          case Some(existingStyle) => Sheet.mergeStyles(existingStyle, codecStyle)
           case None => codecStyle
         val (newRegistry, styleId) = registry.register(mergedStyle)
         registry = newRegistry
@@ -1302,6 +1293,17 @@ final case class Sheet(
     }
 
 object Sheet:
+  /**
+   * The one style-merge policy for codec-inferred formats (GH-590 shares it with `rowSyntax`): the
+   * existing style wins, except that a codec `NumFmt` fills in a `General` one. If the user set
+   * Currency explicitly, keep it; if the cell is merely bold, apply the type-appropriate format.
+   */
+  private[xl] def mergeStyles(existing: CellStyle, codec: CellStyle): CellStyle =
+    import com.tjclp.xl.styles.numfmt.NumFmt
+    if existing.numFmt == NumFmt.General && codec.numFmt != NumFmt.General then
+      existing.copy(numFmt = codec.numFmt)
+    else existing
+
   // ----- Shared parsing for the runtime twins (GH-465) -----
   // One parser for putAt/styleAt/mergeAt/commentAt: RefType.parse (the parser behind
   // RefType.parseToXLError) understands every A1 spelling including `Sheet!A1`, so a qualified ref

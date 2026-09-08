@@ -505,6 +505,81 @@ it when "is this a formula?" matters more than its result (auditing hand-entered
 a cache that may be stale). The same see-through rule is available for hand-written matches as
 `cell.effectiveValue` (and `cell.isUncachedFormula`).
 
+## Records: `derives RowCodec` (since 0.21.0)
+
+A case class is a row. Derive a `RowCodec` and the sheet reads and writes records directly —
+field order is column order, field names are the header row, `Option[T]` fields are empty
+cells — no per-cell `readTyped` loops:
+
+```scala
+//> using scala 3.9.0
+//> using dep com.tjclp::xl:0.21.0
+import com.tjclp.xl.scripting.{*, given}
+import java.time.LocalDate
+
+final case class Order(id: Int, customer: String, qty: Int, price: BigDecimal, shipped: Option[LocalDate])
+  derives RowCodec
+
+val orders = Vector(
+  Order(1, "Acme", 3, BigDecimal("9.99"), Some(LocalDate.of(2026, 1, 15))),
+  Order(2, "Globex", 1, BigDecimal("120.00"), None)
+)
+
+// Write: a header row of field names at A1, one row per record below it
+val placed = Sheet("Orders").putRowsWithHeader(ref"A1", orders).unsafe
+val headerRange = placed.headerRange                       // Some(A1:E1)
+val dataRange = placed.dataRange                           // Some(A2:E3); None when `orders` is empty
+val styled = placed.sheet.style(ref"A1:E1", CellStyle.default.bold)
+
+// Read back — by header (column order free, extra columns ignored) or by position
+val byHeader: Either[RowCodecError, Vector[Order]] = styled.readRowsByHeader[Order](Row.from1(1))
+val byRange: Either[RowCodecError, Vector[Order]] = styled.readRows[Order](ref"A2:E3")
+
+// An Excel table over header + records, named and columned after the record
+val table = Sheet("Orders").putTable(ref"A1", orders, "Orders").unsafe
+Excel.write(Workbook(table.sheet), "/tmp/orders.xlsx")
+println(s"${byHeader.map(_.size)} records; table ${table.sheet.getTable("Orders").map(_.range.toA1)}")
+```
+
+The rules, all of them:
+
+- **Field types**: the nine codec types (String, Int, Long, Double, BigDecimal, Boolean,
+  LocalDate, LocalDateTime, RichText) and `Option` of each. A field of any other type is a compile
+  error naming the missing `CellCodec`; add a `given CellCodec[T]` and it flows into records too.
+  A record needs at least one field.
+- **Writing**: `putRows(at, records)` writes records only (append under a header you styled
+  yourself); `putRowsWithHeader(at, records)` writes the field names at `at` and records below;
+  `putTable(at, records, name)` adds an Excel table over header + records (`name`: letters, digits,
+  `_`; it doubles as the display name; with no records the table keeps Excel's one blank data
+  row). All three return `XLResult[RowsPlaced]` — `sheet`, `headerRange`, `dataRange`, `range`
+  (header ∪ data), `count` — and are `OutOfBounds` when the block would run past column XFD or
+  row 1048576. Codec format hints (Decimal, Date, DateTime) register as styles and merge into an
+  existing cell style exactly as `put` does (the existing style wins; only a General number
+  format is filled in); a `None` field leaves its cell empty and never creates one. Only the
+  records' cells are written: rewriting a shorter block over a longer one leaves the rows below
+  it in place, so clear the old block before regenerating a table in place.
+- **Reading by position**: `readRows[A](range)` decodes one record per row of `range`, whose
+  width must equal the record's (`RowCodecError.Width` otherwise). Every row is a record: a blank
+  row is `Missing` unless every field is an `Option`.
+- **Reading by header**: `readRowsByHeader[A](headerRow)` finds each field's column through
+  `sheet.columnOf(field, headerRow)` — an exact header match wins, otherwise the match ignoring
+  case, whitespace, `_` and `-` (`"Order ID"`, `order_id`, `orderId` agree), leftmost on ties —
+  then reads the contiguous block under the header and stops at the first row whose record cells
+  are all empty (Excel's current region), so a totals row after a blank line is not a record.
+  `sheet.columnHeaders(row)` lists `(Column, text)` pairs for discovery.
+- **Errors** (`Either[RowCodecError, Vector[A]]`, first failing cell in row-major order):
+  `Field(row, column, field, cause)` for a value the field's codec rejected, `Missing(row, column,
+  field)` for a required field on an empty cell, `HeaderNotFound(header, headerRow, available)`,
+  `Width(expected, actual)`. `.message` is one line, cell first (`C2 (qty): expected Int, got
+  Text(three)`); `.toXLError` bridges into `XLResult`.
+- **Formulas** read through their cached value, like every typed read (GH-477): a recalculated
+  or Excel-saved formula decodes as its result, an uncached one is a `Field` error naming the
+  formula. An error cell (`#N/A`, `#DIV/0!`, …) is a `Field` error too, even under an `Option`
+  field — only an empty cell is `None` — so a stray `#N/A` fails the whole read at that cell.
+- **Law** (pinned in `RowCodecSpec` over generators): `readRows(putRows(at, rows).dataRange) ==
+  Right(rows)` and `readRowsByHeader(putRowsWithHeader(at, rows).headerRow) == Right(rows)` for
+  every codec type, required and optional.
+
 ## Smart value detection
 
 `FormattedParsers.detect` (available everywhere) turns a raw string into a value + number
