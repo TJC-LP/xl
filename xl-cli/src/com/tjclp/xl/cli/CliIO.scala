@@ -17,7 +17,12 @@ import cats.syntax.all.*
  * them with a `System.setErr` bracket. The read commands' notices (truncation, hidden lines, a
  * failed `--eval`) go through the run's warning sink instead.
  */
-final case class CliIO(out: String => IO[Unit], err: String => IO[Unit], stdin: IO[String])
+final case class CliIO(
+  out: String => IO[Unit],
+  err: String => IO[Unit],
+  stdin: IO[String],
+  outFailed: IO[Boolean] = IO.pure(false)
+)
 
 object CliIO:
 
@@ -25,12 +30,15 @@ object CliIO:
    * The process streams. Each write resolves `System.out` / `System.err` at execution time (which
    * is what `IO.println` does), so a test that swaps the JVM streams with `System.setOut` observes
    * the program's output — InPlaceSpec and the harness rely on that. `stdin` drains standard input
-   * to a String exactly as `batch -` always has.
+   * to a String exactly as `batch -` always has. `outFailed` is `System.out`'s sticky error flag: a
+   * `PrintStream` swallows the `IOException` of a closed pipe, so a run that streams rows (GH-635)
+   * asks it after each write whether the reader is still there (`xl … | head`).
    */
   val system: CliIO = CliIO(
     out = line => IO.println(line),
     err = line => IO.blocking(System.err.println(line)),
-    stdin = IO.blocking(scala.io.Source.stdin.mkString)
+    stdin = IO.blocking(scala.io.Source.stdin.mkString),
+    outFailed = IO.blocking(System.out.checkError())
   )
 
   /**

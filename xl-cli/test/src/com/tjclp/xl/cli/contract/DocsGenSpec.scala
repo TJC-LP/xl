@@ -80,6 +80,7 @@ object DocsGen:
       Vector(
         code(v("path").arr.map(str).mkString(" ")),
         if needsCell.isEmpty then "—" else needsCell.mkString(" "),
+        str(v("stream")),
         v("exit").arr.map(e => e.num.toInt.toString).mkString(" "),
         v("batchTwin").strOpt.fold("—")(code),
         str(v("since")),
@@ -92,8 +93,10 @@ object DocsGen:
       "anywhere on the command line, before or after the verb. `needs` reads: `-f` an input\n" +
       "workbook; `-s` ONE sheet (a sheet-qualified ref names it, else `-s`, else the only sheet\n" +
       "of a single-sheet book, else `SHEET_REQUIRED`); `-o`/`-i` an output (or in-place edit);\n" +
-      "`--stream` that the verb runs in O(1) memory under `--stream` (other write verbs accept\n" +
-      "the flag but load the workbook and only write through the streaming writer). `exit` lists\n" +
+      "`--stream` that the verb runs in O(1) memory under `--stream`. `stream` says what the flag\n" +
+      "does to the verb: `o1` (constant memory), `backend` (accepted; the workbook is loaded and\n" +
+      "only the write goes through the streaming writer, under a `STREAM_BACKEND_ONLY` warning)\n" +
+      "or `refused` (`UNSUPPORTED_IN_STREAM`, exit 2, before any read). `exit` lists\n" +
       "the exit codes the\n" +
       "verb can end with (see [exit-codes.md](exit-codes.md)); `batch twin` is the batch op that\n" +
       "makes the same edit; `since` is the release the verb is documented from. Run\n" +
@@ -101,7 +104,7 @@ object DocsGen:
       "## Global flags\n\n" +
       table(Vector("flag", "short", "takes a value", "meaning"), globals) +
       "\n## Verbs\n\n" +
-      table(Vector("verb", "needs", "exit", "batch twin", "since", "summary"), verbs)
+      table(Vector("verb", "needs", "stream", "exit", "batch twin", "since", "summary"), verbs)
 
   def batchOps(schema: ujson.Value): String =
     val ops = schema("batchOps")

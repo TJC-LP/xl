@@ -10,6 +10,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Warning}
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
 import com.tjclp.xl.workbooks.Workbook
 
 /**
@@ -96,8 +97,17 @@ object SheetSource:
   /** Every capability: the loaded workbook answers everything. */
   def inMemory(wb: Workbook): SheetSource = InMemorySource(wb)
 
-  /** The streaming reader over `path`: [[Capability.streaming]], O(1) memory in the worksheet. */
-  def streaming(path: Path, excel: ExcelIO[IO]): SheetSource = StreamingSource(path, excel)
+  /**
+   * The streaming reader over `path`: [[Capability.streaming]], O(1) memory in the worksheet. Its
+   * shared parts — `workbook.xml`, the shared-string table under `config`'s limits, `styles.xml` —
+   * are read at most once per source (GH-640), which is why the source is built in `IO`.
+   */
+  def streaming(
+    path: Path,
+    excel: ExcelIO[IO],
+    config: ReaderConfig = ReaderConfig.default
+  ): IO[SheetSource] =
+    StreamingSource(path, excel, config).widen
 
   /** A `--stream` refusal (exit 2), naming the in-memory alternative as the hint. */
   def unsupported(message: String, alternative: String): CliException =

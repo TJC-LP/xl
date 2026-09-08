@@ -1,0 +1,10 @@
+## args
+-f
+<DIR>/simple.xlsx
+--stream
+lint
+## exit
+0
+## stdout
+<DIR>/simple.xlsx: clean (no findings)
+## stderr

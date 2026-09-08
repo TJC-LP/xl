@@ -16,12 +16,35 @@ final case class ExitCodeDoc(code: Int, meaning: String) derives CanEqual
 /**
  * What a verb requires: `-f` an input workbook; `sheet` — it works on ONE sheet, so THE sheet rule
  * applies (a qualified ref, else `-s`, else the only sheet of a single-sheet book); `output` — a
- * write, so `-o` or `-i`; `streaming` — it runs in O(1) memory under `--stream` (the other write
- * verbs accept the flag, load the workbook in memory and only write through the streaming writer;
- * `Main.streamingVerbs` is the set, pinned by SchemaSpec).
+ * write, so `-o` or `-i`; `streaming` — it runs in O(1) memory under `--stream`
+ * ([[StreamSupport.O1]]; the other write verbs accept the flag, load the workbook in memory and
+ * only write through the streaming writer; `Main.streamingVerbs` is the set, pinned by SchemaSpec).
  */
 final case class Needs(file: Boolean, sheet: Boolean, output: Boolean, streaming: Boolean)
     derives CanEqual
+
+/**
+ * What `--stream` does to a verb (GH-638), the one table the runtime refuses from and `xl schema`
+ * publishes as each verb's `stream`.
+ */
+enum StreamSupport derives CanEqual:
+  /** Runs in O(1) memory: the streaming reader or writer, or a metadata-only path. */
+  case O1
+
+  /**
+   * Accepted: the workbook is loaded in memory and only the write goes through the streaming
+   * writer, under a `STREAM_BACKEND_ONLY` warning.
+   */
+  case BackendOnly
+
+  /** Refused before any read (`UNSUPPORTED_IN_STREAM`, exit 2), for the reason given. */
+  case Refused(reason: String)
+
+  /** The name `xl schema --json` publishes: `o1`, `backend`, `refused`. */
+  def name: String = this match
+    case O1 => "o1"
+    case BackendOnly => "backend"
+    case Refused(_) => "refused"
 
 /**
  * One verb of the contract (ADR-017 §2.13). `path` is the subcommand path (`["sheets", "hide"]`),
@@ -40,6 +63,9 @@ final case class VerbDoc(
 
   /** The envelope's `verb`: the path joined by a space. */
   def verb: String = path.mkString(" ")
+
+  /** What `--stream` does to this verb ([[Schema.streamSupport]]). */
+  def stream: StreamSupport = Schema.streamSupport(this)
 
 /**
  * The machine-readable contract `xl schema --json` publishes (ADR-017 §2.13): the exit-code table,
@@ -100,8 +126,9 @@ object Schema:
       "--stream",
       None,
       "O(1)-memory streaming for large files: search, stats, bounds, view, cell, filter, " +
-        "describe, sheets; put, putf, style and the streamable batch ops (other write verbs " +
-        "accept the flag but load the workbook)"
+        "describe, sheets, names, lint; put, putf, style and the streamable batch ops (other " +
+        "write verbs accept the flag but load the workbook; each verb's `stream` says which — " +
+        "o1, backend, refused)"
     ),
     GlobalDoc(
       "--no-recalc",
@@ -187,7 +214,7 @@ object Schema:
         "content-type coverage, over-max refs, data-table integrity, <f> canon, external refs, " +
         "defined names, calc chain (read-only)",
       sheet = false,
-      streaming = false,
+      streaming = true,
       "0.15.0",
       gated
     ),
@@ -237,7 +264,7 @@ object Schema:
       "names",
       "List defined names (named ranges)",
       sheet = false,
-      streaming = false,
+      streaming = true,
       "0.2.0",
       plain
     ),
@@ -741,10 +768,63 @@ object Schema:
         "output" -> ujson.Bool(verb.needs.output),
         "streaming" -> ujson.Bool(verb.needs.streaming)
       ),
+      "stream" -> ujson.Str(verb.stream.name),
       "exit" -> ujson.Arr.from(verb.exit.map(e => ujson.Num(e))),
       "batchTwin" -> optStr(verb.batchTwin),
       "since" -> ujson.Str(verb.since)
     )
+
+  // ---------------------------------------------------------------------------------------------
+  // --stream per verb (GH-638)
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * The verbs that refuse `--stream`, with the reason the refusal names. Every verb not here runs
+   * in O(1) memory (`needs.streaming`) or accepts the flag and loads the workbook (the other
+   * writes).
+   */
+  private val streamRefusals: Map[String, String] = Map(
+    "rasterizers" -> "it reads no workbook",
+    "functions" -> "it reads no workbook",
+    "schema" -> "it reads no workbook",
+    "new" -> "it writes a new file and reads none",
+    "diff" -> "the two workbooks are compared in memory",
+    "eval" -> "formula evaluation needs the loaded workbook",
+    "evala" -> "formula evaluation needs the loaded workbook",
+    "audit" -> "the analysis needs the whole workbook",
+    "deps" -> "the graph needs the whole workbook"
+  )
+
+  /**
+   * What `--stream` does to a verb: O(1) when it claims it, refused when the table says, else
+   * backend-only.
+   */
+  def streamSupport(verb: VerbDoc): StreamSupport =
+    if verb.needs.streaming then StreamSupport.O1
+    else streamRefusals.get(verb.verb).fold(StreamSupport.BackendOnly)(StreamSupport.Refused(_))
+
+  /**
+   * The `UNSUPPORTED_IN_STREAM` refusal (exit 2) for a verb head — `audit`, `sheets`, `name` —
+   * every form of which refuses `--stream`; `None` for a head with a form that takes it (a verb's
+   * own flag may still be refused after parsing: `describe --full`, `sheets --stats`,
+   * `view --eval`). The text is the refusal every such verb has always given: `<verb> is not
+   * supported with --stream (<reason>)`, and the in-memory alternative as the hint.
+   */
+  def streamRefusal(head: String): Option[CliError] =
+    val forms = verbs.filter(_.path.headOption.contains(head))
+    val reasons = forms.map(_.stream).collect { case StreamSupport.Refused(reason) => reason }
+    Option.when(forms.nonEmpty && reasons.size == forms.size)(reasons).flatMap(_.headOption).map {
+      reason =>
+        CliError(
+          ErrorCode.UNSUPPORTED_IN_STREAM,
+          s"$head is not supported with --stream ($reason)",
+          hint = Some(
+            if forms.exists(_.needs.file) then
+              "omit --stream; use --max-size <MB> to load a large file in memory"
+            else "omit --stream"
+          )
+        )
+    }
 
   /**
    * `{version, exitCodes, errorCodes, warningCodes, globals, verbs, capabilities, batchOps,

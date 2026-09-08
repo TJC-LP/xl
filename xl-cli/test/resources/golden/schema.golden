@@ -18,13 +18,13 @@ functions       -                     0 2 3    -               0.4.2   List the 
 schema          -                     0 2 3    -               0.20.0  Print the CLI contract: verbs, globals, exit and error codes, batch ops, functions (--json)
 new             -                     0 2 3    -               0.1.0   Create a blank xlsx file (--sheet <name> repeatable)
 diff            -f                    0 1 2 3  -               0.11.3  Compare two workbooks (-g <file2>) and report cell, style and structure differences
-lint            -f                    0 1 2 3  -               0.15.0  Validate the raw package against the Excel-repair classes: child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, <f> canon, external refs, defined names, calc chain (read-only)
+lint            -f --stream           0 1 2 3  -               0.15.0  Validate the raw package against the Excel-repair classes: child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, <f> canon, external refs, defined names, calc chain (read-only)
 eval            -s                    0 2 3    -               0.4.2   Evaluate a formula without modifying the sheet (--with overrides; no -f for constants)
 evala           -f -s                 0 2 3    -               0.9.0   Evaluate an array formula and display, or spill (--at), the result grid
 sheets          -f --stream           0 2 3    -               0.1.0   List sheets with visibility state and dimension (--stats loads the book for counts)
 sheets hide     -f -o|-i              0 2 3    -               0.9.2   Hide a sheet from the sheet tabs (--very for VBA-only)
 sheets show     -f -o|-i              0 2 3    -               0.9.2   Show a hidden sheet
-names           -f                    0 2 3    -               0.2.0   List defined names (named ranges)
+names           -f --stream           0 2 3    -               0.2.0   List defined names (named ranges)
 bounds          -f -s --stream        0 2 3    -               0.9.0   Show the used range (instant from the dimension element; --scan for an accurate scan)
 view            -f -s --stream        0 1 2 3  -               0.1.0   View a range as markdown, json, csv, html, svg, png, jpeg, webp or pdf (--eval, --formulas)
 cell            -f -s --stream        0 2 3    -               0.1.0   Get one cell's value, style, comment and direct dependencies

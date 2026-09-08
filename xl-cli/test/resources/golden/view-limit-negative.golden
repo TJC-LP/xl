@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+view
+--limit
+-1
+## exit
+2
+## stdout
+## stderr
+Error: --limit must be 0 or more (got -1)
+  code: USAGE

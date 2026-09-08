@@ -17,6 +17,7 @@ import com.tjclp.xl.cli.contract.{
   Outcome,
   OutputMode,
   Payload,
+  StreamedBody,
   Warning,
   WarningCode
 }
@@ -57,7 +58,8 @@ object Reads:
       case q: ReadQuery.Filter => filter(q, source, sheetFlag, mode))
 
   /**
-   * [[run]] as a complete [[Outcome]]: the payload with the warnings the run raised, or the failure
+   * [[run]] as a complete [[Outcome]]: the payload — a streamed table gathered into the text it
+   * composes ([[Payload.materialise]]) — with the warnings the run raised, or the failure
    * classified like every other verb's ([[CliError.fromThrowable]]). What the parity law compares.
    */
   def outcome(
@@ -67,15 +69,18 @@ object Reads:
     mode: OutputMode
   ): IO[Outcome] =
     Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
-      run(query, source, sheetFlag, mode, w => warnings.update(_ :+ w)).attempt.flatMap { attempt =>
-        warnings.get.map { collected =>
-          attempt match
-            case Right(payload) => Outcome.ok(query.verb, payload, collected)
-            case Left(signal: CliSignal) =>
-              Outcome.signal(query.verb, signal.payload, signal.error, collected)
-            case Left(err) => Outcome.failed(query.verb, CliError.fromThrowable(err), collected)
+      run(query, source, sheetFlag, mode, w => warnings.update(_ :+ w))
+        .flatMap(Payload.materialise(_))
+        .attempt
+        .flatMap { attempt =>
+          warnings.get.map { collected =>
+            attempt match
+              case Right(payload) => Outcome.ok(query.verb, payload, collected)
+              case Left(signal: CliSignal) =>
+                Outcome.signal(query.verb, signal.payload, signal.error, collected)
+              case Left(err) => Outcome.failed(query.verb, CliError.fromThrowable(err), collected)
+          }
         }
-      }
     }
 
   // --- Refusals ---------------------------------------------------------------------------------
@@ -155,6 +160,10 @@ object Reads:
       _ <- IO
         .raiseError(usage(s"--header-row must be 1 or more (got ${q.headerRow.getOrElse(0)})"))
         .whenA(q.headerRow.exists(_ < 1))
+      // The counts: 0 means no limit, below 0 means nothing (GH-635 — -1 used to read as 0)
+      _ <- IO.raiseError(usage(s"--limit must be 0 or more (got ${q.limit})")).whenA(q.limit < 0)
+      _ <- IO.raiseError(usage("--offset must be 0 or more")).whenA(q.offset < 0)
+      _ <- IO.raiseError(usage("--max-cols must be 0 or more")).whenA(q.maxCols < 0)
       parsed <- q.range.traverse(r => lift(Resolve.ref(r)))
       context = (q.range, parsed) match
         case (Some(refStr), Some((_, target))) => Resolve.unqualified("view", refStr, target)
@@ -212,8 +221,6 @@ object Reads:
     val totalRows = range.height
     val totalCols = range.width
     for
-      _ <- IO.raiseError(usage("--offset must be 0 or more")).whenA(q.offset < 0)
-      _ <- IO.raiseError(usage("--max-cols must be 0 or more")).whenA(q.maxCols < 0)
       _ <- IO
         .raiseError(
           usage(s"--offset ${q.offset} skips every row of ${range.toA1} ($totalRows rows)")
@@ -242,39 +249,17 @@ object Reads:
       _ <- warn(Warning(WarningCode.FLAG_IGNORED, RendererCommon.streamingSkipHiddenNotice))
         .whenA(q.skipHidden && !source.capabilities.contains(Capability.Hidden))
       payload <- q.format match
-        case ViewFormat.Markdown =>
-          gridFor(q, source, sheet, window, warn).map { grid =>
-            val table = Markdown.render(grid, q.showFormulas, q.skipEmpty, q.skipHidden)
-            val hiddenNote = RendererCommon.hiddenNotice(grid, q.skipHidden)
-            Payload.text((table +: notices.map(_.message)).appendedAll(hiddenNote).mkString("\n"))
-          }
-        case ViewFormat.Json =>
-          gridFor(q, source, sheet, window, warn).flatMap { grid =>
-            headerRecords(q.headerRow, grid, source, sheet).map { header =>
-              jsonPayload(
-                mode,
-                JsonRenderer.render(
-                  grid,
-                  header,
-                  q.skipEmpty,
-                  Option.when(rowsClipped)(totalRows),
-                  Option.when(colsClipped)(totalCols),
-                  q.skipHidden
-                )
-              )
-            }
-          }
-        case ViewFormat.Csv =>
-          gridFor(q, source, sheet, window, warn).flatMap { grid =>
-            val csv =
-              CsvRenderer.render(grid, q.showFormulas, q.showLabels, q.skipEmpty, q.skipHidden)
-            val hiddenWarning =
-              RendererCommon
-                .hiddenNotice(grid, q.skipHidden)
-                .map(Warning(WarningCode.HIDDEN_OMITTED, _))
-            // CSV stdout must stay machine-parseable: notices are warnings only
-            (notices ++ hiddenWarning).traverse_(warn).as(Payload.text(csv))
-          }
+        case ViewFormat.Markdown | ViewFormat.Json | ViewFormat.Csv =>
+          table(
+            q,
+            source,
+            sheet,
+            window,
+            notices,
+            Option.when(rowsClipped)(totalRows),
+            Option.when(colsClipped)(totalCols),
+            warn
+          )
         case ViewFormat.Html =>
           source.render(sheet, window, renderSpec(q), warn).flatMap { html =>
             // In-band marker as trailing HTML comments (comments after the root element are valid
@@ -294,35 +279,106 @@ object Reads:
           }
     yield payload
 
-  /** The window's records, evaluated first under `--eval`. */
-  private def gridFor(
+  /**
+   * The three table formats, written row by row (GH-635): the window's rows stream from the source
+   * — the loaded sheet's from memory, the streaming reader's from the file — through the renderer
+   * into a [[Payload.Streamed]], so no window is ever held. Markdown, and csv under `--skip-empty`,
+   * first fold the rows once for what every row must know about the others (the column widths, the
+   * empty columns — [[ColumnFacts]], O(columns) memory), then stream them a second time; under
+   * `--stream` that is two reads of the window. `--eval` evaluates the window first (the loaded
+   * workbook only) and streams the evaluated grid. Every notice — truncation, hidden lines, an
+   * ignored flag — is decided here, before the first row: markdown appends them after its table,
+   * csv raises them as warnings so stdout stays machine-parseable, json carries them as fields.
+   */
+  private def table(
     q: ReadQuery.View,
     source: SheetSource,
     sheet: SheetName,
     window: CellRange,
+    notices: Vector[Warning],
+    truncatedTotalRows: Option[Int],
+    truncatedTotalCols: Option[Int],
     warn: Warning => IO[Unit]
-  ): IO[RecordGrid] =
-    if q.evalFormulas then source.evaluated(sheet, window, q.strict, warn)
-    else source.grid(sheet, window)
+  ): IO[Payload] =
+    for
+      evaluated <-
+        if q.evalFormulas then source.evaluated(sheet, window, q.strict, warn).map(Some(_))
+        else IO.pure(None)
+      hidden <- evaluated.fold(source.hiddenLines(sheet, window))(g =>
+        IO.pure((g.hiddenRows, g.hiddenCols))
+      )
+      shape = RecordWindow(sheet, window, hidden._1, hidden._2)
+      rows = evaluated.fold(source.rows(sheet, window))(g => Stream.emits(g.rows).covary[IO])
+      hiddenNote = RendererCommon.hiddenNotice(shape, q.skipHidden)
+      payload <- q.format match
+        case ViewFormat.Markdown =>
+          ColumnFacts
+            .of(shape, rows, Markdown.cellText(q.showFormulas), q.skipEmpty, q.skipHidden)
+            .compile
+            .lastOrError
+            .map { facts =>
+              val cols = Markdown.columns(shape, facts, q.skipEmpty, q.skipHidden)
+              val widths = Markdown.columnWidths(cols, facts)
+              val body =
+                Markdown.lines(shape, rows, cols, widths, q.showFormulas, q.skipEmpty, q.skipHidden)
+              // The table's own trailing newline, then the notices, as the text always read
+              val after = ("" +: notices.map(_.message)).appendedAll(hiddenNote)
+              Payload.Streamed(StreamedBody.Lines(Markdown.header(cols, widths), body, after))
+            }
+        case ViewFormat.Csv =>
+          val facts =
+            if CsvRenderer.needsFacts(q.skipEmpty) then
+              ColumnFacts
+                .of(shape, rows, _.text(q.showFormulas), q.skipEmpty, q.skipHidden)
+                .compile
+                .lastOrError
+            else IO.pure(ColumnFacts.empty)
+          facts.flatMap { facts =>
+            val cols = CsvRenderer.columns(shape, facts, q.skipEmpty, q.skipHidden)
+            val body = CsvRenderer
+              .lines(shape, rows, cols, q.showFormulas, q.showLabels, q.skipEmpty, q.skipHidden)
+            val hiddenWarning = hiddenNote.map(Warning(WarningCode.HIDDEN_OMITTED, _))
+            // CSV stdout must stay machine-parseable: notices are warnings only
+            (notices ++ hiddenWarning)
+              .traverse_(warn)
+              .as(
+                Payload.Streamed(
+                  StreamedBody.Lines(CsvRenderer.header(cols, q.showLabels), body, Vector.empty)
+                )
+              )
+          }
+        case _ =>
+          headerRecords(q.headerRow, evaluated, source, sheet, window).map { header =>
+            Payload.Streamed(
+              StreamedBody.JsonArray(
+                JsonRenderer.head(shape, header.isDefined, truncatedTotalRows, truncatedTotalCols),
+                JsonRenderer.elements(shape, rows, header, q.skipEmpty, q.skipHidden),
+                JsonRenderer.tail
+              )
+            )
+          }
+    yield payload
 
   /**
-   * The `--header-row` records for the JSON `records` mode: the grid's own row when the header lies
-   * inside the window, else the header row read over the window's columns.
+   * The `--header-row` records for the JSON `records` mode: the evaluated grid's own row when
+   * `--eval` computed it and the header lies inside the window (so a formula header shows its
+   * value), else the header row read over the window's columns — one row, from either source.
    */
   private def headerRecords(
     headerRow: Option[Int],
-    grid: RecordGrid,
+    evaluated: Option[RecordGrid],
     source: SheetSource,
-    sheet: SheetName
+    sheet: SheetName,
+    window: CellRange
   ): IO[Option[(Int, Vector[CellRecord])]] =
     headerRow.traverse { rowNum =>
       val idx = rowNum - 1
-      grid.rows.lift(idx - grid.range.start.row.index0) match
+      evaluated.flatMap(_.rows.lift(idx - window.start.row.index0)) match
         case Some(records) => IO.pure((idx, records))
         case None =>
           val headerRange = CellRange(
-            ARef.from0(grid.range.start.col.index0, idx),
-            ARef.from0(grid.range.end.col.index0, idx)
+            ARef.from0(window.start.col.index0, idx),
+            ARef.from0(window.end.col.index0, idx)
           )
           source
             .rows(sheet, headerRange)

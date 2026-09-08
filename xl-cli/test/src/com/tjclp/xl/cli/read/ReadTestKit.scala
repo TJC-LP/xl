@@ -76,7 +76,7 @@ object ReadTestKit:
     query: ReadQuery,
     mode: OutputMode = OutputMode.Text
   ): IO[Outcome] =
-    Reads.outcome(query, SheetSource.streaming(path, excel), sheet, mode)
+    SheetSource.streaming(path, excel).flatMap(Reads.outcome(query, _, sheet, mode))
 
   /** What text mode prints on stdout for the outcome. */
   def stdout(outcome: Outcome): String = Render.text(outcome).stdout
@@ -87,6 +87,8 @@ object ReadTestKit:
       case Some(Payload.Text(text, _, _)) => text
       case Some(Payload.Raw(json)) => json
       case Some(Payload.Json(value)) => ujson.write(value, indent = 2)
+      case Some(Payload.Streamed(_)) =>
+        throw new AssertionError("a streamed payload reached the test unmaterialised")
       case None =>
         throw new AssertionError(s"read failed: ${outcome.error.fold("?")(_.message)}")
 

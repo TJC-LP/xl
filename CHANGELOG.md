@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--stream view --limit 0` streams** (#635): the three table formats are written row by row
+  from either source. `view`'s csv, json and markdown are now a `Payload.Streamed` — the lines
+  before the rows, one line per row as the reader produces it, the lines after — and the runner
+  writes them 256 lines at a time; the bytes are those of the gathered table (a property law holds
+  every generated window, in text mode and inside the `--json` envelope, where the JSON document is
+  spliced element by element in `ujson`'s layout). Markdown, and csv under `--skip-empty`, read the
+  window twice — once for the column widths and the empty columns (O(columns) memory), once to
+  render — instead of holding it. On the 1,000,000 × 41 dogfood book, `--stream view --limit 0
+  --format csv | head -c 1000` answers in about a second and the full dump runs in constant memory
+  where it used to run for 57 minutes and 13.8 GB and print nothing. `view --limit -1` (and
+  `--offset`/`--max-cols` below 0) is a `USAGE` error before any read, where `-1` used to read as
+  "no limit". A failure while the rows stream stops the output where it is and is reported as the
+  run's failure on stderr with its exit code; a reader that closes stdout (`xl … | head`) ends the
+  run quietly with exit 0. Under `--json`, csv and markdown ride as `data.text` — one string — so
+  they are gathered, within a budget of an eighth of the heap, past which the run fails typed as
+  `RESOURCE_LIMIT` with the hint to `--format json` (which streams inside the envelope) or to drop
+  `--json`; a failure while a `--json --format json` document streams leaves it unterminated on
+  stdout, the exit code and stderr carrying the failure.
+- **Every verb's `--stream` answer comes from one table** (#638): `xl schema --json` publishes a
+  `stream` field per verb — `o1` (constant memory), `backend` (accepted; the workbook is loaded and
+  only the write goes through the streaming writer), `refused` (`UNSUPPORTED_IN_STREAM`, exit 2,
+  before any read) — and `Cli.run` refuses from that table before the parser runs, so `--stream
+  diff`, `eval`, `evala`, `audit`, `deps`, `new`, `functions`, `rasterizers` and `schema` all say
+  `<verb> is not supported with --stream (<reason>)` where `names` and `lint` answered `USAGE:
+  Unexpected argument`. `--stream sheets --stats` is refused the same way (it used to fall into the
+  in-memory load and fail its size limit); `--stream names` runs (the verb reads `workbook.xml`
+  alone) and `--stream lint` runs the SAX lint (`WorkbookLint.lintStream`, the same findings). The
+  reader's size limit is `SECURITY_ERROR` (exit 3) with its `re-run with --max-size 0 or --stream`
+  hint and the file in `error.location`, no longer `IO_READ` with a message that said "security".
+- **Streaming `cell` shares the shared-string table** (#640): the streaming source parses
+  `workbook.xml`, `styles.xml` and `sharedStrings.xml` at most once per run (memoised) and hands the
+  table to every read — the row streams, the second pass of a markdown table, the header row of
+  `--header-row`, and `cell`, which used to parse the table again through a DOM (`cell B2` on the
+  dogfood book cost 3.4 s and 880 MB against `view B2:B2`'s 1.1 s and 300 MB). The table is held to
+  the reader's ZIP-bomb limits under `--stream` — inflation stops one byte past `--max-size`, and
+  the compression ratio is checked as the bytes pass (`ZipEntryGuard`) — as `SECURITY_ERROR` with
+  the hint that the flag bounds this one part; `--max-size 0` lifts it. Library: `ExcelIO` gains
+  `loadSharedStrings(path, config)` and the `readSheetStream`/`readSheetStreamRange`/
+  `streamCellDetails` overloads that take a loaded table; `streamCellDetails` without one now parses
+  the table with the SAX reader the row streams use.
+
+### Changed
+
+- `xl schema --json`'s verbs carry a `stream` field (`o1` | `backend` | `refused`) after `needs`;
+  `docs/reference/generated/cli-verbs.md` gains the column. `names` and `lint` claim
+  `needs.streaming` (`xl schema`'s NEEDS column shows `--stream` for them) and `xl --help` lists
+  `--stream` for `names`, `lint` and the standalone `batch` forms (accepted and inert on a dry run).
+- Under `--stream`, `--max-size` (default 100 MB, `0` unlimited) bounds the shared-string table,
+  the one part a streaming read holds in memory; a table past it is `SECURITY_ERROR`, where it was
+  read without limit.
+
+
 ## [0.21.0] - 2026-09-08
 
 Agent-first Wave 2a (ADR-017): the `Edit` algebra — one operation vocabulary for every batch op and

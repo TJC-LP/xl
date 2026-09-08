@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (6,790)
+./mill __.test             # Run all tests (6,821)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -228,7 +228,7 @@ xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                   # Array arithmetic
 --rasterizer <name>   # Force a specific backend: batik, cairosvg, rsvg-convert, resvg, imagemagick
 
 # Large file handling (100k+ rows)
---stream              # O(1) memory streaming: search, stats, bounds, view, cell, describe, sheets; put, putf, style, batch
+--stream              # O(1) memory streaming: search, stats, bounds, view, cell, filter, describe, sheets, names, lint; put, putf, style, batch
 --max-size 0          # Disable security limits for in-memory load (lifts the limit, not the heap)
 --max-size 500        # Set custom limit in MB
 ```
@@ -249,7 +249,7 @@ xl -f huge.xlsx --max-size 500 -s Sheet1 cell A1   # 500MB limit
 xl -Xmx32g -f huge.xlsx --max-size 0 audit         # Raise the native image's 8 GB heap cap (-Xmx before -f to be safe)
 ```
 
-**Streaming limitations**: `--stream` covers the reads (`search`, `stats`, `bounds`, `view` in markdown/csv/json, `cell`, `describe`, `sheets`) and the writes (`put`, `putf`, `style`, and `batch` for streamable ops); it never recalculates. An in-memory load (`--max-size`) is needed only for `--eval`, `put --csv`, `--strict` on a write, the html/svg/png/jpeg/webp/pdf renders (they need styles), and the whole-book verbs `audit`, `deps`, `filter` and `describe --full`.
+**Streaming limitations**: `--stream` covers the reads (`search`, `stats`, `bounds`, `view` in markdown/csv/json — `--limit 0` streams the whole sheet row by row — `cell`, `filter`, `describe`, `sheets`, `names`, `lint`) and the writes (`put`, `putf`, `style`, and `batch` for streamable ops); it never recalculates. Every verb's answer to the flag is published as `stream` (`o1` | `backend` | `refused`) in `xl schema --json`; the refused ones (`audit`, `deps`, `diff`, `eval`, `evala`, `new`, `functions`, `rasterizers`, `schema`, plus `describe --full`, `sheets --stats`, `view --eval`, the styled renders) fail `UNSUPPORTED_IN_STREAM` before any read. Under `--stream`, `--max-size` bounds the shared-string table (the one part held in memory; default 100 MB, `0` unlimited).
 
 **`--max-size` lifts the security limit, not the heap** (#636): the native binary is built with an 8 GB heap ceiling (`-R:MaxHeapSize=8g` in `xl-cli/package.mill`), raised by `-Xmx<size>` (consumed anywhere on the command line; put it before `-f` to be safe: `xl -Xmx64g -f …`; JAR: `java -Xmx64g -jar`); `--max-size` below 0 is a usage error. Measured on 1M-row books, an in-memory load needs 16–20× its worksheet XML for dense cells (346 MB loads in 6 GB, not 5), 33–41× for wide text rows (the dogfood book: 1.09 GB of XML, 36–45 GB of heap) and 2–3× the `sharedStrings.xml` bytes for long text — so stream large files. With `--max-size` lifted, `MemoryGuard` (xl-cli) sizes the load from the zip's central directory before parsing: a lower estimate (`14 × sheet XML + 2 × SST`) above the heap is refused as `RESOURCE_LIMIT` (exit 3); an upper estimate (`30 × sheet + 3 × SST`) above it proceeds under a `MEMORY_PRESSURE` warning; a load, recalculation, `view --eval` evaluation, render or serialisation that then exhausts the heap is `RESOURCE_LIMIT` too, with the `--stream`/`-Xmx` hint — never a raw `OutOfMemoryError` (residuals: an OOM raised first on another fiber, e.g. `recalc --parallel`, can still be fatal; non-heap OOMs carry the heap wording).
 
@@ -416,7 +416,7 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**6,790 tests** by module: xl-evaluator (2417), xl-core (1551), xl-ooxml (1119), xl-cli (1340), xl-cats-effect (167), xl-agent (145), xl prelude probes (51). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**6,821 tests** by module: xl-evaluator (2417), xl-core (1551), xl-ooxml (1119), xl-cli (1366), xl-cats-effect (172), xl-agent (145), xl prelude probes (51). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 

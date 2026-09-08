@@ -264,7 +264,7 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
         checks.traverse_ { case (flag, query, mode) =>
           (
             Reads.outcome(query, SheetSource.inMemory(loaded), flag, mode),
-            Reads.outcome(query, SheetSource.streaming(path, excel), flag, mode)
+            SheetSource.streaming(path, excel).flatMap(Reads.outcome(query, _, flag, mode))
           ).mapN { (memory, streaming) =>
             val (memoryExit, memoryOut) = rendered(memory, mode)
             val (streamExit, streamOut) = rendered(streaming, mode)

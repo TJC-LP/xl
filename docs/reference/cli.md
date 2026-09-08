@@ -40,7 +40,7 @@ export PATH="$HOME/.local/bin:$PATH"
 -s, --sheet <name>    # Sheet to operate on (a qualified ref wins; a single-sheet book needs neither)
 -o, --output <path>   # Output file for mutations
 -i, --in-place        # Edit file in place (same as -o matching -f)
---stream              # O(1) memory streaming for large files (search/stats/bounds/filter, a bounded view window, writes; `view --limit 0` materialises the whole sheet — #635)
+--stream              # O(1) memory streaming for large files (search/stats/bounds/filter/view/cell/describe/sheets/names/lint, writes; `xl schema --json` publishes each verb's `stream`: o1, backend, refused)
 --max-size <MB>       # Max uncompressed size for in-memory load (default 100, 0 = unlimited; the heap still bounds what fits — see below)
 --backend <name>      # XML backend: scalaxml (default) or saxstax (faster)
 --no-recalc           # Write verbs: apply the edit, recalculate nothing (alias --preserve-caches)
@@ -311,6 +311,9 @@ xl -f model.xlsx -o out.xlsx name add Tax 'Sheet1!$A$1'      # Add or replace
 xl -f model.xlsx -o out.xlsx name rm Tax                     # Remove
 ```
 
+`names` reads `workbook.xml` alone, so it takes `--stream` (the same read, any file size; since
+0.21.1). `name add|rm` load the workbook and write through the streaming writer under the flag.
+
 ---
 
 ### `xl bounds [--scan]`
@@ -342,7 +345,7 @@ Without a range, the sheet's used range; `--offset` and `--limit` page through t
 | `--formulas` | flag | No | false | Show formulas instead of values |
 | `--eval` | flag | No | false | Evaluate formulas (compute live values) |
 | `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
-| `--limit` | int | No | 50 | Max rows to display (0 = no limit). Under `--stream`, `--limit 0` is the one read that is NOT constant-memory: the whole sheet is materialised before the first row is rendered ([#635](https://github.com/TJC-LP/xl/issues/635)) — page a very large sheet with `--limit`/`--offset` or a range instead. When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (under `--stream` too, since 0.21.0); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
+| `--limit` | int | No | 50 | Max rows to display (0 = no limit; below 0 is a usage error). `--limit 0` streams: the rows are written as the source produces them — for csv and json from the first row, for markdown (and csv with `--skip-empty`) after one pass over the window for the column widths — so a whole-sheet dump runs in constant memory under `--stream` (since 0.21.1, [#635](https://github.com/TJC-LP/xl/issues/635)); under `--json`, csv and markdown ride as one `data.text` string and are gathered within a heap budget (`RESOURCE_LIMIT` past it — use `--format json`, which streams inside the envelope). When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (under `--stream` too, since 0.21.0); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
 | `--offset` | int | No | 0 | Rows to skip from the top of the range before `--limit` applies; the trailer then reads "… showing rows X–Y of N". An offset past the last row is a usage error |
 | `--max-cols` | int | No | 0 | Max columns to display, from the left (0 = all); json adds `totalCols` when clipped, the other formats report "… showing X of Y columns" like the row notice |
 | `--skip-empty` | flag | No | false | Skip empty cells (JSON) or empty rows/columns (tabular) |
@@ -1689,7 +1692,12 @@ xl lint deliverable.xlsx                         # Positional file form
 xl -f deliverable.xlsx lint                      # Flag form (equivalent)
 xl -f deliverable.xlsx lint --format json        # Stable schema for pipelines
 xl -f deliverable.xlsx lint && echo "safe to send"
+xl -f huge.xlsx --stream lint                    # SAX-scan the sheet parts: O(1) in the row count
 ```
+
+`--stream lint` (since 0.21.1) runs the streaming lint: the worksheet and table parts are
+SAX-scanned instead of parsed, so a million-row book lints in constant memory; the findings are
+identical (pinned by the lint parity suite).
 
 **What it flags** (the complete `LintCategory` roster — a test pins this list against
 `LintCategory.slug`, so it cannot drift):
@@ -1803,7 +1811,7 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 |---|---|---|---|
 | `0` | ok | | as requested |
 | `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | `-o`: yes; `-i`: no |
-| `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, `--stream` with an unsupported verb or flag | no |
+| `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, `--limit` below 0, `--stream` with a verb or flag that refuses it (`UNSUPPORTED_IN_STREAM`; `xl schema --json` publishes each verb's `stream`) | no |
 | `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit, a workbook that does not fit in memory (`RESOURCE_LIMIT`) | no |
 
 Two rows worth spelling out:

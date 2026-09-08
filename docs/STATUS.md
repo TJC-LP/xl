@@ -227,7 +227,7 @@
 
 ### Test Coverage
 
-**6,790 test cases** (verified via `./mill __.test`, 2026-09-08, after the 0.21.0 dogfood fixes #606, #608/#609, #612, #637, the #636 memory guard and the Wave 25 A1 shims): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**6,821 test cases** (verified via `./mill __.test`, 2026-09-08, after the 0.21.1 streaming fixes #635, #638, #640 on top of the 0.21.0 dogfood fixes #606, #608/#609, #612, #637, the #636 memory guard and the Wave 25 A1 shims): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|

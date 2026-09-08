@@ -1,0 +1,27 @@
+## args
+-f
+<DIR>/simple.xlsx
+--stream
+--json
+sheets
+--stats
+## exit
+2
+## stdout
+{
+  "ok": false,
+  "exitCode": 2,
+  "verb": "sheets",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "UNSUPPORTED_IN_STREAM",
+    "message": "sheets --stats is not supported with --stream (the counts need the whole workbook)",
+    "hint": "omit --stats for the metadata-only listing, or omit --stream; use --max-size <MB> for a large file",
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr
+Error: sheets --stats is not supported with --stream (the counts need the whole workbook)

@@ -173,6 +173,18 @@ object Argv:
           case _ => scan(tail)
     scan(args.takeWhile(_ != "--"))
 
+  /** Whether `--stream` is among the flags before any `--` (the rule of [[wantsJson]]). */
+  def wantsStream(args: List[String]): Boolean =
+    @tailrec
+    def scan(tokens: List[String]): Boolean = tokens match
+      case Nil => false
+      case "--stream" :: _ => true
+      case token :: tail =>
+        globalOf(token) match
+          case Some((_, true)) => scan(tail.drop(1))
+          case _ => scan(tail)
+    scan(args.takeWhile(_ != "--"))
+
   /**
    * The verb the command line is heading for: the first token that is neither a global, a global's
    * value, nor a flag of any kind (`--help`, `--version`, an unknown `--frobnicate` — decline

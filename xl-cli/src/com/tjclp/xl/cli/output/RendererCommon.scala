@@ -1,7 +1,7 @@
 package com.tjclp.xl.cli.output
 
 import com.tjclp.xl.cells.FormulaKind
-import com.tjclp.xl.cli.read.RecordGrid
+import com.tjclp.xl.cli.read.RecordWindow
 
 /**
  * Shared utilities for the table renderers (Markdown, JSON, CSV): the notices they emit and the
@@ -78,9 +78,9 @@ object RendererCommon:
    * Rendered as a trailer line after markdown tables, on stderr for machine-parseable formats
    * (CSV), and as structured fields in JSON.
    */
-  def hiddenNotice(grid: RecordGrid, skipHidden: Boolean): Option[String] =
-    val rows = grid.hiddenRowNumbers.map(_.toString)
-    val cols = grid.hiddenColLetters
+  def hiddenNotice(window: RecordWindow, skipHidden: Boolean): Option[String] =
+    val rows = window.hiddenRowNumbers.map(_.toString)
+    val cols = window.hiddenColLetters
     if rows.isEmpty && cols.isEmpty then None
     else
       val parts = List(
