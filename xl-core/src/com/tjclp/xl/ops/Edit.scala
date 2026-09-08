@@ -219,7 +219,13 @@ object Edit:
   /** The edit-local checks that need no workbook: counts, spans, the guards the model throws on. */
   def validate(edit: Edit)(using FormulaSupport): XLResult[Unit] = EditInterpreter.validate(edit)
 
-  /** The [[Planned]] row of every edit — what [[applyAll]] would touch — without the workbook. */
+  /**
+   * The [[Planned]] rows of [[applyAll]] — the sheet THE rule gave each edit and the ranges whose
+   * content it changed — with the edited workbook discarded. This is a semantic dry-run, not a
+   * static one: the edits are applied in full, so `plan` fails exactly where `applyAll` fails
+   * (`SheetNotFound`, a refused shift, a torn data table) and costs what `applyAll` costs. A static
+   * check that needs no workbook is [[validate]].
+   */
   def plan(wb: Workbook, edits: Vector[Edit], scope: Scope)(using
     FormulaSupport
   ): XLResult[Vector[Planned]] =

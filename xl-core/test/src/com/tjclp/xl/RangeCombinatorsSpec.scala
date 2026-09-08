@@ -41,7 +41,7 @@ class RangeCombinatorsSpec extends FunSuite:
 
     result match
       case Left(XLError.ValueCountMismatch(expected, actual, context)) =>
-        assertEquals(expected, 4)
+        assertEquals(expected, 4L)
         assertEquals(actual, 3)
         assertEquals(context, "range A1:B2")
       case other =>

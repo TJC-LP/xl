@@ -82,8 +82,12 @@ enum XLError derives CanEqual:
   /** Security error (ZIP bomb, formula injection, size limits) */
   case SecurityError(reason: String)
 
-  /** Number of supplied values mismatched expectation */
-  case ValueCountMismatch(expected: Int, actual: Int, context: String)
+  /**
+   * Number of supplied values mismatched expectation. `expected` is a `Long`: a range's cell count
+   * (`CellRange.cellCount`) exceeds `Int.MaxValue` from `A1:XFD131072` on, and the message must
+   * report it rather than its truncation.
+   */
+  case ValueCountMismatch(expected: Long, actual: Int, context: String)
 
   /** Unsupported type in batch put operation */
   case UnsupportedType(ref: String, typeName: String)

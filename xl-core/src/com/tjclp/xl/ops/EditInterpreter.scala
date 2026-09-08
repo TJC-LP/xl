@@ -14,8 +14,9 @@ import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 /**
  * The one interpreter of [[Edit]] (ADR-017 §2.12): `validate` is the edit-local check that needs no
  * workbook, `applyAll` the fail-fast, all-or-nothing left fold that gives every surface — batch
- * JSON, the CLI verbs, `wb.edit(...)` — the same meaning, `plan` its row list, `lower` the bridge
- * to the law-tested `Patch` kernel. Reached through the `Edit` companion.
+ * JSON, the CLI verbs, `wb.edit(...)` — the same meaning, `plan` the same fold keeping only its row
+ * list (a semantic dry-run: it applies and discards), `lower` the bridge to the law-tested `Patch`
+ * kernel. Reached through the `Edit` companion.
  *
  * Invariants kept here: every sheet goes back through `Workbook.put` (invariant 1, so
  * `modifiedSheets` is right); THE sheet rule resolves each target (a qualifier, then the scope's
@@ -108,7 +109,7 @@ private[xl] object EditInterpreter:
   private def countMatch(name: String, at: Area, actual: Int): XLResult[Unit] =
     val expected = at.range.cellCount
     if expected == actual.toLong then Right(())
-    else Left(XLError.ValueCountMismatch(expected.toInt, actual, s"$name ${at.range.toA1}"))
+    else Left(XLError.ValueCountMismatch(expected, actual, s"$name ${at.range.toA1}"))
 
   private def positiveCount(name: String, count: Int): XLResult[Unit] =
     if count >= 1 then Right(()) else refuse(s"$name: count must be at least 1, got $count")

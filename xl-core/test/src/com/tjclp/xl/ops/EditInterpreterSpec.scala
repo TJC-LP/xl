@@ -140,6 +140,22 @@ class EditInterpreterSpec extends FunSuite:
     )
   }
 
+  test("put-values over the whole grid reports the true cell count, past Int.MaxValue") {
+    // XFD1048576 is the last cell: 16,384 columns x 1,048,576 rows = 2^34 cells, whose `.toInt` is 0
+    val whole = area("A1:XFD1048576")
+    val expected = 16384L * 1048576L
+    assertEquals(whole.range.cellCount, expected)
+    val edit = Edit.PutValues(whole, Vector(num(1)), None)
+    val cause = XLError.ValueCountMismatch(expected, 1, "put-values A1:XFD1048576")
+    assertEquals(Edit.validate(edit), Left(cause))
+    assertEquals(failure(Workbook(baseData), edit), XLError.EditFailed(1, "put-values", cause))
+    assertEquals(
+      cause.message,
+      "Expected 17179869184 values for put-values A1:XFD1048576 but received 1"
+    )
+    assertEquals(cause.hint, Some("provide exactly 17179869184 values, or 1 to fill the range"))
+  }
+
   test("put-formula stores the text uncached (leading = dropped); an empty formula is refused") {
     val s = sheetAfter(Workbook(baseData), Edit.PutFormula(loc("G1"), "=SUM(B2:B4)", None))
     assertEquals(s(a1("G1")).value, CellValue.Formula("SUM(B2:B4)", None))
@@ -731,6 +747,28 @@ class EditInterpreterSpec extends FunSuite:
       Map(data -> Vector(rng("A1")), other -> Vector(rng("C3:D4")))
     )
     assert(!applied.structural)
+  }
+
+  test("plan is a semantic dry-run: it fails exactly where applyAll fails, at the same index") {
+    val edits = Vector(
+      Edit.Put(loc("A1"), num(1), None),
+      Edit.Copy(area("A1:B2"), loc("Nope!C3"), valuesOnly = true),
+      Edit.Put(loc("A2"), num(2), None)
+    )
+    val planned = Edit.plan(baseWorkbook, edits, Scope.of(data))
+    assertEquals(
+      planned,
+      Left(XLError.EditFailed(2, "copy", XLError.SheetNotFound("Nope")))
+    )
+    assertEquals(planned, Edit.applyAll(baseWorkbook, edits, Scope.of(data)).map(_.planned))
+    // and a refusal the static check cannot see (the text-only support refuses the shift) is
+    // still a plan failure — plan applies, it does not merely validate
+    val drag = Vector(Edit.DragFormula(area("G1:G2"), "=A1*2", a1("G1"), None))
+    assert(Edit.validate(drag(0)).isRight)
+    assertEquals(
+      Edit.plan(baseWorkbook, drag, Scope.of(data)).left.map(_.root.code),
+      Left("UNSUPPORTED_CAPABILITY")
+    )
   }
 
   test(
