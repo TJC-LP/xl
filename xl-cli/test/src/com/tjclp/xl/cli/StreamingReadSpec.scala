@@ -208,7 +208,7 @@ class StreamingReadSpec extends CatsEffectSuite:
         loaded <- ReadTestKit.excel.read(path)
         streamed <- SheetSource
           .streaming(path, ReadTestKit.excel)
-          .usedRange(SheetName.unsafe("Data"))
+          .flatMap(_.usedRange(SheetName.unsafe("Data")))
         _ = assertEquals(streamed.map(_.toA1), Some("A1:D5"))
         _ = assertEquals(streamed, loaded.sheets.headOption.flatMap(InMemorySource.dimension))
         markdown <- agree(loaded, path, "Data", ReadTestKit.view(None))
@@ -247,7 +247,7 @@ class StreamingReadSpec extends CatsEffectSuite:
           Vector(Some("A1:A1"), Some("C3:C3"))
         )
         loaded <- ReadTestKit.excel.read(path)
-        source = SheetSource.streaming(path, ReadTestKit.excel)
+        source <- SheetSource.streaming(path, ReadTestKit.excel)
         blank <- source.usedRange(SheetName.unsafe("Blank"))
         _ = assertEquals(blank, None)
         oneUsed <- source.usedRange(SheetName.unsafe("One"))

@@ -1988,6 +1988,7 @@ EXAMPLES:
         Payload.Text(renderWithTarget(text, outputOpt, displayOpt), saved, written)
       case json: Payload.Json => json
       case raw: Payload.Raw => raw
+      case streamed: Payload.Streamed => streamed // a read's table names no staging file
 
   /**
    * GH-496: an in-place run whose exit code is non-success never commits its temp file, so the
@@ -2042,13 +2043,61 @@ EXAMPLES:
   /**
    * Print an outcome in the run's mode ([[contract.Render]]): the result on stdout (nothing at all
    * when there is none), the diagnostics and warnings — or the one-line `Error:` under `--json` —
-   * on stderr, then the exit code.
+   * on stderr, then the exit code. A streamed table ([[contract.Payload.Streamed]]) is written as
+   * its rows arrive ([[emitStreamed]]).
    */
   private[cli] def emit(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
-    val rendered = Render(mode)(outcome, BuildInfo.version)
-    val out = if rendered.stdout.isEmpty then IO.unit else io.out(rendered.stdout)
-    val err = if rendered.stderr.isEmpty then IO.unit else io.err(rendered.stderr)
-    (out *> err).as(outcome.exitCode)
+    outcome.payload match
+      case Some(Payload.Streamed(_)) => emitStreamed(outcome, mode, io)
+      case _ =>
+        val rendered = Render(mode)(outcome, BuildInfo.version)
+        val out = if rendered.stdout.isEmpty then IO.unit else io.out(rendered.stdout)
+        val err = if rendered.stderr.isEmpty then IO.unit else io.err(rendered.stderr)
+        (out *> err).as(outcome.exitCode)
+
+  /** How many fragments of a streamed table — rows, mostly — one write to stdout carries. */
+  private val fragmentsPerWrite: Int = 256
+
+  /**
+   * A streamed table (GH-635): the fragments [[contract.Render.stream]] produces, written
+   * [[fragmentsPerWrite]] at a time through `io.write` — the same bytes as one print of the
+   * gathered text — then the stderr of the outcome and its exit code. Nothing is produced before
+   * the first row has been read, so a source that fails before it has one (the shared-string
+   * table's limit, a worksheet the parser rejects at once) has written nothing and is reported as
+   * every other failure is, the `--json` envelope included; a failure after bytes went out stops
+   * the output where it is and puts the diagnostics on stderr with the exit code (under `--json`
+   * the envelope on stdout is left unterminated — the exit code and stderr carry the failure). When
+   * stdout's reader has gone (`xl … | head`, [[CliIO.StdoutClosed]]) the run ends quietly with exit
+   * 0, as a tool killed by SIGPIPE would; any other write failure ([[CliIO.StdoutFailed]]: no
+   * space, an I/O error) is `IO_WRITE`, exit 3.
+   */
+  private def emitStreamed(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
+    Ref.of[IO, Boolean](false).flatMap { written =>
+      val writes = Render
+        .stream(mode)(outcome, BuildInfo.version)
+        .chunkN(fragmentsPerWrite)
+        .evalMap(chunk => io.write(chunk.toVector.mkString) *> written.set(true))
+        .compile
+        .drain
+      writes.attempt.flatMap {
+        case Right(()) => report(outcome, mode, io)
+        case Left(CliIO.StdoutClosed) => IO.pure(ExitCodes.ok)
+        case Left(failure) =>
+          val failed =
+            Outcome.failed(outcome.verb, CliError.fromThrowable(failure), outcome.warnings)
+          written.get.flatMap {
+            // nothing went out: the ordinary failure, the envelope under --json
+            case false => emit(failed, mode, io)
+            // bytes went out: stdout stays as written, stderr says what happened
+            case true => report(failed, mode, io)
+          }
+      }
+    }
+
+  /** The stderr of an outcome whose stdout is already written, then its exit code. */
+  private def report(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
+    val stderr = Render.stderr(mode)(outcome)
+    (if stderr.isEmpty then IO.unit else io.err(stderr)).as(outcome.exitCode)
 
   /**
    * An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s and whose in-memory
@@ -2600,9 +2649,13 @@ EXAMPLES:
     file: Path,
     format: LintFormat,
     io: CliIO = CliIO.system,
-    mode: OutputMode = OutputMode.Text
+    mode: OutputMode = OutputMode.Text,
+    stream: Boolean = false
   ): IO[ExitCode] =
-    IO.blocking(WorkbookLint.lint(file)).flatMap {
+    // GH-638: --stream SAX-scans the sheet-class parts instead of parsing them (the same findings,
+    // pinned by the lint parity suite), so a million-row book lints in O(1) memory
+    val lint = if stream then WorkbookLint.lintStream(file) else WorkbookLint.lint(file)
+    IO.blocking(lint).flatMap {
       case Right(findings) =>
         val output = format match
           case LintFormat.Text => LintCommands.renderText(file.toString, findings)
@@ -2688,6 +2741,14 @@ EXAMPLES:
       // Sheets list: quick mode (metadata only, instant) by default, --stats loads the workbook
       case CliCommand.Sheets(SheetsAction.List(stats)) =>
         (stats, mode) match
+          // GH-638: the counts need the loaded book — refused like describe --full, before any read
+          case (true, _) if stream =>
+            IO.raiseError(
+              unsupportedInStream(
+                "sheets --stats is not supported with --stream (the counts need the whole workbook)",
+                "omit --stats for the metadata-only listing, or omit --stream; use --max-size <MB> for a large file"
+              )
+            )
           case (true, OutputMode.Text) =>
             readWorkbook(excel, filePath, readerConfig)
               .flatMap(WorkbookCommands.sheets)
@@ -2775,36 +2836,21 @@ EXAMPLES:
           ) *> readWorkbook(excel, filePath, readerConfig)
             .map(wb => InspectCommands.describe(wb, mode))
 
-      // Audit and deps (ADR-017 §2.10) analyze the loaded workbook: never under --stream
+      // Audit and deps (ADR-017 §2.10) analyze the loaded workbook: never under --stream — the
+      // refusal comes from the verb table before the parser runs (Cli.run, Schema.streamRefusal)
       case CliCommand.Audit(failOnFindings) =>
-        if stream then
-          IO.raiseError(
-            unsupportedInStream(
-              "audit is not supported with --stream (the analysis needs the whole workbook)",
-              "omit --stream; use --max-size <MB> to load a large file in memory"
-            )
-          )
-        else
-          for
-            wb <- readWorkbook(excel, filePath, readerConfig)
-            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-            payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
-          yield payload
+        for
+          wb <- readWorkbook(excel, filePath, readerConfig)
+          sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
+          payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
+        yield payload
 
       case CliCommand.Deps(refStr, direction, depth) =>
-        if stream then
-          IO.raiseError(
-            unsupportedInStream(
-              "deps is not supported with --stream (the graph needs the whole workbook)",
-              "omit --stream; use --max-size <MB> to load a large file in memory"
-            )
-          )
-        else
-          for
-            wb <- readWorkbook(excel, filePath, readerConfig)
-            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-            payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, mode)
-          yield payload
+        for
+          wb <- readWorkbook(excel, filePath, readerConfig)
+          sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
+          payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, mode)
+        yield payload
 
       // Other commands: regular execution path
       case _ =>
@@ -2824,9 +2870,13 @@ EXAMPLES:
 
         (stream, readQuery) match
           case (true, Some(query)) =>
+            // The streaming source shares its parsed parts across the run's reads and holds the
+            // shared-string table to --max-size (GH-640)
             streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
               missingInputGuard(filePath)(
-                Reads.run(query, SheetSource.streaming(filePath, excel), sheetNameOpt, mode, warn)
+                SheetSource
+                  .streaming(filePath, excel, readerConfig)
+                  .flatMap(Reads.run(query, _, sheetNameOpt, mode, warn))
               )
           case _ if stream && isStreamingWriteCmd =>
             // GH-496: a streaming write never recalculates, so --strict could only ever report
@@ -2880,10 +2930,11 @@ EXAMPLES:
    * The verbs that run in O(1) memory under `--stream`: the record-based reads
    * ([[com.tjclp.xl.cli.read.Reads]] over the streaming source: search, stats, view, cell, filter),
    * `bounds` and the metadata fast paths of `runResult` (`describe` without `--full`, `sheets`
-   * without `--stats`), and the writes [[executeStreamingWrite]] dispatches (put, putf, style,
-   * batch). Every other write verb accepts the flag, loads the workbook in memory and only writes
-   * through the streaming writer. `Schema.verbs`' `needs.streaming` column is pinned to this set by
-   * SchemaSpec; extend both when a dispatch arm is added.
+   * without `--stats`, `names`), `lint`'s SAX scan (`WorkbookLint.lintStream`), and the writes
+   * [[executeStreamingWrite]] dispatches (put, putf, style, batch). Every other write verb accepts
+   * the flag, loads the workbook in memory and only writes through the streaming writer; the verbs
+   * that refuse the flag are named in `Schema.streamRefusals`. `Schema.verbs`' `needs.streaming`
+   * column is pinned to this set by SchemaSpec; extend both when a dispatch arm is added.
    */
   private[cli] val streamingVerbs: Set[String] = Set(
     "search",
@@ -2894,6 +2945,8 @@ EXAMPLES:
     "filter",
     "describe",
     "sheets",
+    "names",
+    "lint",
     "put",
     "putf",
     "style",
@@ -3122,10 +3175,12 @@ EXAMPLES:
         case Some(query) =>
           Reads
             .run(query, SheetSource.inMemory(wb), sheetOpt.map(_.name.value), mode, warn)
+            .flatMap(Payload.materialise(_))
             .map {
               case Payload.Text(text, _, _) => text
               case Payload.Raw(json) => json
               case Payload.Json(value) => ujson.write(value, indent = 2)
+              case Payload.Streamed(_) => "" // gathered above: unreachable
             }
         case None =>
           IO.raiseError(

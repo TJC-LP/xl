@@ -247,19 +247,26 @@ xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.pn
 ### Large files (100k+ rows)
 
 `--stream` runs in O(1) memory for the reads `search`, `stats`, `bounds`, `view`
-(markdown/csv/json, a bounded window — `view --limit 0` materialises the whole sheet first, so page
-with `--limit`/`--offset` or a range; #635), `cell`, `describe` (the metadata card) and `sheets` (the listing), and for
-the writes `put`, `putf`, `style` and `batch` — the last for streamable ops only (`xl batch
---schema` marks each op `x-streamable`; `batch --help` marks the others `[not with --stream]`).
-Every other write verb accepts the flag but loads the workbook in memory and only writes through
-the streaming writer, so it saves no memory. Refused up front with `UNSUPPORTED_IN_STREAM`
-(exit 2): `audit`, `deps`, `describe --full`, `filter`, `view --eval`, `put --csv`, `--strict` on a
-streamed write, and a batch op the streaming writer cannot apply or whose `sheet`/qualified ref
-names a sheet other than the streamed one (refused by index before any byte is written; a
-streamed `style` merges as in memory, and an op that fails to apply is `BATCH_OP_FAILED` with its
-index). `view --format html|svg|png|jpeg|webp|pdf` needs the styles and is not
-available under `--stream`; `names`, `diff`, `lint`, `eval`, `evala` and `new` do not take the
-flag at all (usage error). Streaming never recalculates. For everything else, load in memory
+(markdown/csv/json; `view --limit 0` streams the whole sheet row by row — csv and json from the
+first row, markdown after one pass for the column widths — so dump a big sheet with `--format csv`
+or `json`), `cell`, `filter`, `describe` (the metadata card), `sheets` (the listing), `names` and
+`lint` (the SAX lint, same findings), and for the writes `put`, `putf`, `style` and `batch` — the
+last for streamable ops only (`xl batch --schema` marks each op `x-streamable`; `batch --help`
+marks the others `[not with --stream]`). Every other write verb accepts the flag but loads the
+workbook in memory and only writes through the streaming writer, so it saves no memory. Refused up
+front with `UNSUPPORTED_IN_STREAM` (exit 2, before any read): `audit`, `deps`, `diff`, `eval`,
+`evala`, `new`, `functions`, `rasterizers`, `schema`, `describe --full`, `sheets --stats`,
+`view --eval`, `put --csv`, `--strict` on a streamed write, and a batch op the streaming writer
+cannot apply or whose `sheet`/qualified ref names a sheet other than the streamed one (refused by
+index before any byte is written; a streamed `style` merges as in memory, and an op that fails to
+apply is `BATCH_OP_FAILED` with its index). `view --format html|svg|png|jpeg|webp|pdf` needs the
+styles and is not available under `--stream`. `xl schema --json` publishes each verb's answer as
+`stream`: `o1`, `backend` or `refused`. Under `--stream`, `--max-size` bounds the shared-string
+table — the one part a streaming read holds in memory (default 100 MB; `SECURITY_ERROR` past it,
+`0` lifts it). Under `--json` the table streams too (csv/markdown as `data.text`, json spliced into
+`data`): a failure before the first row is a normal `ok: false` envelope, one after the first byte
+leaves the envelope unterminated — branch on the exit code (3) and stderr, never on stdout parsing
+alone. Streaming never recalculates. For everything else, load in memory
 with `--max-size 0` (lifts the 100 MB security limit) or `--max-size 500`. That lifts the limit,
 not the heap: the native binary's heap is capped at 8 GB unless `-Xmx<size>` is passed — put it
 before `-f` to be safe (`xl -Xmx64g -f big.xlsx …`; the JAR takes `java -Xmx64g -jar`), and an in-memory load

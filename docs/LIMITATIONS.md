@@ -657,15 +657,15 @@ excel.readStreamByIndex(path, 2)  // Sheet 2 (separate call)
 
 ---
 
-### 30. Unbounded `--stream view` Materialises Its Window (#635)
-**Status**: Known gap — tracked as [#635](https://github.com/TJC-LP/xl/issues/635)
-**Impact**: `xl --stream view` with `--limit 0` (the whole sheet) is not constant-memory on very large sheets
+### 30. Unbounded `--stream view` Streams (#635, resolved in 0.21.1)
+**Status**: Resolved — `--stream view --limit 0` writes its rows as the reader produces them, for csv, json (bare and inside the `--json` envelope) and markdown, in constant memory; the bytes are those of the gathered table (a property law holds every generated window in both output modes). On the 1,000,000 × 41 dogfood book the csv dump used to run 57 minutes and 13.8 GB and print nothing.
 
-**Why**: the table renderers (markdown, csv, json) consume the window as a whole — the streaming `SheetSource` materialises the rows of the window, with their hidden lines, before the first byte is rendered — so with no limit the window is the entire sheet. On a 1,000,000-row sheet the run took 57 minutes and 13.8 GB and had emitted nothing when it was stopped.
-
-**What is O(1)**: a bounded `view` window (the default `--limit`, an explicit range, `--offset`/`--max-cols` paging), and `search`, `stats`, `bounds`, `filter` and `describe` under `--stream`, which fold row by row and keep only the matching rows or running aggregates.
-
-**Workaround**: page a large sheet (`view --limit N --offset M`, or `view A1:H1000`) instead of `--limit 0`; export a whole sheet through `--stream search`/`filter --format csv`; or load in memory with `-Xmx` sized to the book (see `docs/reference/cli.md`).
+**What remains, by design**:
+- **Two reads for markdown, and for csv under `--skip-empty`**: the column widths and the empty columns are facts about every row, so the window is folded once (O(columns) memory) and streamed a second time. Under `--stream` that is two passes over the worksheet — the shared-string table and the styles are parsed once and shared. Prefer csv or json for a whole-sheet dump.
+- **`--json` streams too**: a JSON document is spliced into `data` element by element, and a csv or markdown table's `data.text` is escaped line by line as `ujson` escapes one string — nothing is gathered, whatever the window.
+- **Nothing is written before the first row has been read**, so a source that fails before it has one (the shared-string table over `--max-size`, a worksheet the parser rejects at once) fails as every other run does — the diagnostics on stderr, the `ok: false` envelope under `--json`. **A failure after the first byte** (a worksheet rejected mid-sheet, past the 1,024-row chunk the reader delivers first) stops the output where it is and is reported on stderr with exit 3; under `--json` the envelope on stdout is left unterminated — the exit code and stderr carry the failure, and a consumer that parses stdout sees the truncation as a parse failure, never as a result.
+- **A reader that closes stdout** (`xl … | head`) ends the run quietly with exit 0, as a tool killed by SIGPIPE would; a stdout that fails for another reason (no space left, an I/O error on the file it is redirected to) is `IO_WRITE`, exit 3 — the streamed bytes go through a stream of xl's own on the descriptor, so the two are told apart (a `PrintStream` would have left one sticky flag).
+- `--stream cell` shares the table with `view` (#640), and every verb's `--stream` answer is published as `stream` in `xl schema --json` (#638).
 
 ---
 

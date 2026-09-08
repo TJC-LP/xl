@@ -188,7 +188,11 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
       ReadTestKit.view(None, offset = 1, maxCols = 2),
       ReadTestKit.view(Some("B2"), ViewFormat.Json),
       ReadTestKit.view(None, showFormulas = true),
-      ReadTestKit.view(None, ViewFormat.Csv, showFormulas = true)
+      ReadTestKit.view(None, ViewFormat.Csv, showFormulas = true),
+      // GH-635: no limit — the streamed window, gathered, is the in-memory table
+      ReadTestKit.view(None, limit = 0),
+      ReadTestKit.view(None, ViewFormat.Csv, limit = 0, showLabels = true),
+      ReadTestKit.view(None, ViewFormat.Json, limit = 0, skipEmpty = true)
     ).map(q => (name, q: ReadQuery))
     val searches = Vector(
       (None, ReadQuery.Search("\\d", 50, None, exactTotal = false)),
@@ -264,7 +268,7 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
         checks.traverse_ { case (flag, query, mode) =>
           (
             Reads.outcome(query, SheetSource.inMemory(loaded), flag, mode),
-            Reads.outcome(query, SheetSource.streaming(path, excel), flag, mode)
+            SheetSource.streaming(path, excel).flatMap(Reads.outcome(query, _, flag, mode))
           ).mapN { (memory, streaming) =>
             val (memoryExit, memoryOut) = rendered(memory, mode)
             val (streamExit, streamOut) = rendered(streaming, mode)

@@ -1,0 +1,123 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+--stream
+--json
+view
+--limit
+0
+--format
+json
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "view",
+  "version": "<VERSION>",
+  "data": {
+    "sheet": "Data",
+    "range": "A1:C4",
+    "rows": [
+      {
+        "row": 1,
+        "cells": [
+          {
+            "ref": "A1",
+            "type": "text",
+            "value": "Hello",
+            "formatted": "Hello"
+          },
+          {
+            "ref": "B1",
+            "type": "number",
+            "value": 10,
+            "formatted": "10"
+          },
+          {
+            "ref": "C1",
+            "type": "number",
+            "value": 45306,
+            "formatted": "1/15/24"
+          }
+        ]
+      },
+      {
+        "row": 2,
+        "cells": [
+          {
+            "ref": "A2",
+            "type": "text",
+            "value": "World",
+            "formatted": "World"
+          },
+          {
+            "ref": "B2",
+            "type": "number",
+            "value": 20,
+            "formatted": "20"
+          },
+          {
+            "ref": "C2",
+            "type": "number",
+            "value": 45473,
+            "formatted": "6/30/24"
+          }
+        ]
+      },
+      {
+        "row": 3,
+        "cells": [
+          {
+            "ref": "A3",
+            "type": "text",
+            "value": "Total",
+            "formatted": "Total"
+          },
+          {
+            "ref": "B3",
+            "type": "number",
+            "value": 12.5,
+            "formatted": "12.50"
+          },
+          {
+            "ref": "C3",
+            "type": "empty",
+            "value": null,
+            "formatted": ""
+          }
+        ]
+      },
+      {
+        "row": 4,
+        "cells": [
+          {
+            "ref": "A4",
+            "type": "empty",
+            "value": null,
+            "formatted": ""
+          },
+          {
+            "ref": "B4",
+            "type": "formula",
+            "formula": "=SUM(B1:B3)",
+            "value": 42.5,
+            "formatted": "42.5"
+          },
+          {
+            "ref": "C4",
+            "type": "empty",
+            "value": null,
+            "formatted": ""
+          }
+        ]
+      }
+    ]
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

@@ -1,8 +1,11 @@
 package com.tjclp.xl.cli.output
 
+import fs2.Stream
+
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.read.{CellRecord, InMemorySource, RecordGrid}
+import com.tjclp.xl.cli.contract.StreamedBody
+import com.tjclp.xl.cli.read.{CellRecord, InMemorySource, RecordGrid, RecordWindow}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -11,9 +14,13 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  * JSON renderer for xl CLI output.
  *
  * Produces structured JSON suitable for LLM consumption with cell references, types, raw values,
- * and formatted values. Consumes a [[RecordGrid]] — the same rows whether they came from a loaded
- * sheet or the streaming reader — and writes text rather than a JSON tree so every number lexeme is
- * exactly the record's ([[CellRecord.rawJson]]).
+ * and formatted values — the same rows whether they came from a loaded sheet or the streaming
+ * reader — and writes text rather than a JSON tree so every number lexeme is exactly the record's
+ * ([[CellRecord.rawJson]]). The document streams (GH-635): [[head]] is its text up to the `rows`
+ * (or `records`) array's opening bracket, [[elements]] one array element per drawn row as the rows
+ * arrive, [[tail]] the text from the closing bracket on; [[render]] is their composition over a
+ * grid held in memory ([[StreamedBody.jsonArray]], the layout `view --format json` has always
+ * printed).
  */
 object JsonRenderer:
 
@@ -116,18 +123,13 @@ object JsonRenderer:
     truncatedTotalCols: Option[Int],
     skipHidden: Boolean
   ): String =
-    header match
-      case Some((headerRowIdx, records)) =>
-        renderAsRecords(
-          grid,
-          headerRowIdx,
-          records,
-          skipEmpty,
-          truncatedTotalRows,
-          truncatedTotalCols,
-          skipHidden
-        )
-      case None => renderAsRows(grid, skipEmpty, truncatedTotalRows, truncatedTotalCols, skipHidden)
+    val window = grid.window
+    val body = elements(window, Stream.emits(grid.rows), header, skipEmpty, skipHidden).toList
+    StreamedBody.jsonArray(
+      head(window, header.isDefined, truncatedTotalRows, truncatedTotalCols),
+      body.toVector,
+      tail
+    )
 
   /**
    * An empty sheet viewed without a range: nothing to address, so `range` is `null` and the rows
@@ -141,110 +143,118 @@ object JsonRenderer:
        |  "$body": []
        |}""".stripMargin
 
-  /** Render range as array of records with header row values as keys. */
-  private def renderAsRecords(
-    grid: RecordGrid,
-    headerRowIdx: Int,
-    headerRecords: Vector[CellRecord],
-    skipEmpty: Boolean,
+  /**
+   * The document up to and including the array's opening bracket: `{`, `sheet`, `range`, the
+   * truncation fields when `--limit`/`--max-cols` clipped the window (GH-351), the hidden-line
+   * fields when the window holds hidden lines (GH-474), then `"rows": [` — `"records": [` under
+   * `--header-row`.
+   */
+  def head(
+    window: RecordWindow,
+    records: Boolean,
     truncatedTotalRows: Option[Int],
-    truncatedTotalCols: Option[Int],
-    skipHidden: Boolean
+    truncatedTotalCols: Option[Int]
   ): String =
-    // GH-474: hidden columns render unless --skip-hidden asked for the visible-only view
-    val visibleCols = grid.renderedCols(skipHidden)
-    val firstCol = grid.range.start.col.index0
+    val sb = new StringBuilder
+    sb.append("{\n")
+    sb.append(s"""  "sheet": ${Escape.json(window.sheet.value)},\n""")
+    sb.append(s"""  "range": "${window.range.toA1}",\n""")
+    appendTruncationFields(sb, truncatedTotalRows, truncatedTotalCols)
+    appendHiddenFields(sb, window)
+    sb.append(if records then """  "records": [""" else """  "rows": [""")
+    sb.toString
 
-    // Header names: the header cell's display text, the column letter when it is blank
-    val headers: Map[Int, String] = visibleCols.flatMap { colIdx =>
+  /** The document from the array's closing bracket on. */
+  val tail: String = "]\n}"
+
+  /**
+   * One array element per drawn row, as JSON text on its own line — `{"row": n, "cells": [...]}`,
+   * or under `header` the `{name: value}` record keyed by the header row's texts (the header row
+   * itself is never a record). GH-474: hidden rows render unless `skipHidden`; `skipEmpty` drops
+   * empty cells, and a row left with none.
+   */
+  def elements[F[_]](
+    window: RecordWindow,
+    rows: Stream[F, Vector[CellRecord]],
+    header: Option[(Int, Vector[CellRecord])],
+    skipEmpty: Boolean,
+    skipHidden: Boolean
+  ): Stream[F, String] =
+    val visibleCols = window.renderedCols(skipHidden)
+    val firstRow = window.range.start.row.index0
+    header match
+      case Some((headerRowIdx, headerRecords)) =>
+        val names = headerNames(window, visibleCols, headerRecords)
+        rows.zipWithIndex.map { (row, i) =>
+          val rowIdx = firstRow + i.toInt
+          if rowIdx == headerRowIdx || !window.isRendered(rowIdx, skipHidden) then None
+          else recordElement(window, row, visibleCols, names, skipEmpty)
+        }.unNone
+      case None =>
+        rows.zipWithIndex.map { (row, i) =>
+          val rowIdx = firstRow + i.toInt
+          if !window.isRendered(rowIdx, skipHidden) then None
+          else rowElement(window, row, rowIdx, visibleCols, skipEmpty)
+        }.unNone
+
+  /** `{"row": n, "cells": [...]}`, or None when `skipEmpty` leaves the row without a cell. */
+  private def rowElement(
+    window: RecordWindow,
+    row: Vector[CellRecord],
+    rowIdx: Int,
+    visibleCols: Vector[Int],
+    skipEmpty: Boolean
+  ): Option[String] =
+    val cellJsons = visibleCols.flatMap { colIdx =>
+      window.cell(row, colIdx) match
+        case Some(record) if skipEmpty && record.isEmpty => None
+        case Some(record) => Some(record.toJson(legacyKeys = true))
+        case None =>
+          if skipEmpty then None
+          else
+            Some(
+              CellRecord
+                .empty(window.sheet, ARef.from0(colIdx, rowIdx), hidden = None, None)
+                .toJson(legacyKeys = true)
+            )
+    }
+    // Skip entire row if all cells are empty (when skipEmpty is true)
+    if skipEmpty && cellJsons.isEmpty then None
+    else Some(s"""    {"row": ${rowIdx + 1}, "cells": [${cellJsons.mkString(", ")}]}""")
+
+  /** `{name: value, ...}` keyed by the header texts, or None when `skipEmpty` leaves no field. */
+  private def recordElement(
+    window: RecordWindow,
+    row: Vector[CellRecord],
+    visibleCols: Vector[Int],
+    names: Map[Int, String],
+    skipEmpty: Boolean
+  ): Option[String] =
+    val fields = visibleCols.flatMap { colIdx =>
+      val headerName = names.getOrElse(colIdx, Column.from0(colIdx).toLetter)
+      window.cell(row, colIdx) match
+        case Some(record) if skipEmpty && record.isEmpty => None
+        case Some(record) => Some(s"${Escape.json(headerName)}: ${record.rawJson}")
+        case None => if skipEmpty then None else Some(s"${Escape.json(headerName)}: null")
+    }
+    // Skip entire record if all fields are empty
+    if skipEmpty && fields.isEmpty then None
+    else Some(s"    {${fields.mkString(", ")}}")
+
+  /** Header names by column: the header cell's display text, the column letter when it is blank. */
+  private def headerNames(
+    window: RecordWindow,
+    visibleCols: Vector[Int],
+    headerRecords: Vector[CellRecord]
+  ): Map[Int, String] =
+    val firstCol = window.range.start.col.index0
+    visibleCols.flatMap { colIdx =>
       headerRecords.lift(colIdx - firstCol).map { record =>
         val headerName = headerText(record)
         val name = if headerName.trim.isEmpty then Column.from0(colIdx).toLetter else headerName
         colIdx -> name
       }
     }.toMap
-
-    // GH-474: hidden rows render unless --skip-hidden; the header row itself is never a record
-    val dataRows = grid.renderedRows(skipHidden).filterNot(_ == headerRowIdx)
-
-    val sb = new StringBuilder
-    sb.append("{\n")
-    sb.append(s"""  "sheet": ${Escape.json(grid.sheet.value)},\n""")
-    sb.append(s"""  "range": "${grid.range.toA1}",\n""")
-    appendTruncationFields(sb, truncatedTotalRows, truncatedTotalCols)
-    appendHiddenFields(sb, grid)
-    sb.append("""  "records": [""")
-
-    val recordJsons = dataRows.flatMap { rowIdx =>
-      val fields = visibleCols.flatMap { colIdx =>
-        val headerName = headers.getOrElse(colIdx, Column.from0(colIdx).toLetter)
-        grid.at(rowIdx, colIdx) match
-          case Some(record) if skipEmpty && record.isEmpty => None
-          case Some(record) => Some(s"${Escape.json(headerName)}: ${record.rawJson}")
-          case None => if skipEmpty then None else Some(s"${Escape.json(headerName)}: null")
-      }
-      // Skip entire record if all fields are empty
-      if skipEmpty && fields.isEmpty then None
-      else Some(s"    {${fields.mkString(", ")}}")
-    }
-
-    if recordJsons.nonEmpty then
-      sb.append("\n")
-      sb.append(recordJsons.mkString(",\n"))
-      sb.append("\n  ")
-
-    sb.append("]\n")
-    sb.append("}")
-    sb.toString
-
-  /** Original row-based rendering. */
-  private def renderAsRows(
-    grid: RecordGrid,
-    skipEmpty: Boolean,
-    truncatedTotalRows: Option[Int],
-    truncatedTotalCols: Option[Int],
-    skipHidden: Boolean
-  ): String =
-    // GH-474: hidden rows/cols render unless --skip-hidden (same as Markdown renderer)
-    val visibleCols = grid.renderedCols(skipHidden)
-    val visibleRows = grid.renderedRows(skipHidden)
-
-    val sb = new StringBuilder
-    sb.append("{\n")
-    sb.append(s"""  "sheet": ${Escape.json(grid.sheet.value)},\n""")
-    sb.append(s"""  "range": "${grid.range.toA1}",\n""")
-    appendTruncationFields(sb, truncatedTotalRows, truncatedTotalCols)
-    appendHiddenFields(sb, grid)
-    sb.append("""  "rows": [""")
-
-    val rowJsons = visibleRows.flatMap { rowIdx =>
-      val rowNum = rowIdx + 1
-      val cellJsons = visibleCols.flatMap { colIdx =>
-        grid.at(rowIdx, colIdx) match
-          case Some(record) if skipEmpty && record.isEmpty => None
-          case Some(record) => Some(record.toJson(legacyKeys = true))
-          case None =>
-            if skipEmpty then None
-            else
-              Some(
-                CellRecord
-                  .empty(grid.sheet, ARef.from0(colIdx, rowIdx), hidden = None, None)
-                  .toJson(legacyKeys = true)
-              )
-      }
-      // Skip entire row if all cells are empty (when skipEmpty is true)
-      if skipEmpty && cellJsons.isEmpty then None
-      else Some(s"""    {"row": $rowNum, "cells": [${cellJsons.mkString(", ")}]}""")
-    }
-
-    if rowJsons.nonEmpty then
-      sb.append("\n")
-      sb.append(rowJsons.mkString(",\n"))
-      sb.append("\n  ")
-
-    sb.append("]\n")
-    sb.append("}")
-    sb.toString
 
   /**
    * Append `"truncated": true` / `"totalRows": N` fields when --limit clipped output (GH-351), and
@@ -266,9 +276,9 @@ object JsonRenderer:
    * were rendered; omitted entirely when the range holds no hidden lines, keeping the payload
    * byte-identical to previous releases for ordinary ranges.
    */
-  private def appendHiddenFields(sb: StringBuilder, grid: RecordGrid): Unit =
-    val rows = grid.hiddenRowNumbers
-    val cols = grid.hiddenColLetters
+  private def appendHiddenFields(sb: StringBuilder, window: RecordWindow): Unit =
+    val rows = window.hiddenRowNumbers
+    val cols = window.hiddenColLetters
     if rows.nonEmpty then sb.append(s"""  "hiddenRows": [${rows.mkString(", ")}],\n""")
     if cols.nonEmpty then
       sb.append(s"""  "hiddenCols": [${cols.map(c => s"\"$c\"").mkString(", ")}],\n""")

@@ -11,6 +11,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.contract.{Outcome, OutputMode, Warning}
 import com.tjclp.xl.io.{ExcelIO, RowData}
+import com.tjclp.xl.ooxml.SharedStrings
 import com.tjclp.xl.ooxml.style.WorkbookStyles
 
 /**
@@ -43,8 +44,8 @@ class SearchScanSpec extends CatsEffectSuite:
 
   /**
    * What the query asked for: the records pulled across the source boundary, the sheets `occupied`
-   * was called for, and — streaming only — the worksheet streams the reader constructed and the
-   * styles loads it ran (one per opened sheet).
+   * was called for, and — streaming only — the worksheet streams the reader constructed (one per
+   * opened sheet) and the styles loads it ran (one per source: the parts are memoised, GH-640).
    */
   private final case class Scan(
     outcome: Outcome,
@@ -96,6 +97,13 @@ class SearchScanSpec extends CatsEffectSuite:
       extends ExcelIO[IO](_ => IO.unit):
     override def readSheetStream(path: Path, sheetName: String): Stream[IO, RowData] =
       Stream.exec(streamed.update(_ :+ sheetName)) ++ super.readSheetStream(path, sheetName)
+    // The streaming source streams with the table it loaded once (GH-640)
+    override def readSheetStream(
+      path: Path,
+      sheetName: String,
+      sst: Option[SharedStrings]
+    ): Stream[IO, RowData] =
+      Stream.exec(streamed.update(_ :+ sheetName)) ++ super.readSheetStream(path, sheetName, sst)
     override def loadStyles(path: Path): IO[WorkbookStyles] =
       stylesLoads.update(_ + 1) *> super.loadStyles(path)
 
@@ -103,7 +111,7 @@ class SearchScanSpec extends CatsEffectSuite:
    * Run `q` over `source` (built from a probed `ExcelIO` by [[streaming]]) and collect the counts.
    */
   private def scan(
-    source: (Ref[IO, Vector[String]], Ref[IO, Int]) => SheetSource,
+    source: (Ref[IO, Vector[String]], Ref[IO, Int]) => IO[SheetSource],
     sheet: Option[String],
     q: ReadQuery.Search,
     mode: OutputMode
@@ -113,7 +121,8 @@ class SearchScanSpec extends CatsEffectSuite:
       opened <- Ref.of[IO, Vector[SheetName]](Vector.empty)
       streamed <- Ref.of[IO, Vector[String]](Vector.empty)
       stylesLoads <- Ref.of[IO, Int](0)
-      outcome <- Reads.outcome(q, Spy(source(streamed, stylesLoads), pulled, opened), sheet, mode)
+      built <- source(streamed, stylesLoads)
+      outcome <- Reads.outcome(q, Spy(built, pulled, opened), sheet, mode)
       n <- pulled.get
       sheets <- opened.get
       constructed <- streamed.get
@@ -126,7 +135,7 @@ class SearchScanSpec extends CatsEffectSuite:
     q: ReadQuery.Search,
     mode: OutputMode = OutputMode.Json
   ): IO[Scan] =
-    scan((_, _) => SheetSource.inMemory(wb), sheet, q, mode)
+    scan((_, _) => IO.pure(SheetSource.inMemory(wb)), sheet, q, mode)
 
   private def streaming(
     wb: Workbook,
@@ -225,7 +234,8 @@ class SearchScanSpec extends CatsEffectSuite:
       assertEquals(payload("totalExact"), ujson.Bool(true))
       assertEquals(s.opened, Vector(SheetName.unsafe("Data"), SheetName.unsafe("More")))
       assertEquals(s.streamed, Vector("Data", "More"))
-      assertEquals(s.stylesLoads, 2)
+      // one source, one styles load: the parts are memoised across the run's reads (GH-640)
+      assertEquals(s.stylesLoads, 1)
       assertEquals(s.pulled, 150)
     }
   }

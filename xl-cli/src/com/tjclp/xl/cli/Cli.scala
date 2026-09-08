@@ -13,7 +13,8 @@ import com.tjclp.xl.cli.contract.{
   ExitCodes,
   Outcome,
   OutputMode,
-  Payload
+  Payload,
+  Schema
 }
 import com.tjclp.xl.text.Suggest
 
@@ -68,12 +69,12 @@ object Cli:
 
   /** The verb tree. Options and handlers live in [[Main]]; this is the wiring between them. */
   def program(io: CliIO): Opts[IO[ExitCode]] =
-    // Workbook-level: only --file (no --sheet)
-    // Note: --stream not supported for workbook-level commands (need full metadata)
+    // Workbook-level: only --file (no --sheet). `names` reads workbook.xml alone, so --stream is
+    // the same O(1) read (GH-638)
     val workbookSubcmds = namesCmd
-    val workbookOpts = (fileOpt, maxSizeOpt, jsonOpt, workbookSubcmds).mapN {
-      (file, maxSize, mode, cmd) =>
-        Main.run(file, None, None, None, None, maxSize, false, cmd, io, mode)
+    val workbookOpts = (fileOpt, maxSizeOpt, streamOpt, jsonOpt, workbookSubcmds).mapN {
+      (file, maxSize, stream, mode, cmd) =>
+        Main.run(file, None, None, None, None, maxSize, stream, cmd, io, mode)
     }
 
     // Sheets command: --file required, --output optional (required for hide/show, not for list)
@@ -186,13 +187,15 @@ object Cli:
     }
 
     // Lint: raw-zip structural validation (GH-397, no output file); custom exit codes.
-    // The file arrives via -f or positionally (GH-422); exactly one form must be used.
-    val lintOpts = (fileOpt.orNone, jsonOpt, lintCmd).mapN {
-      case (flagFile, mode, (cmd, positional)) =>
+    // The file arrives via -f or positionally (GH-422); exactly one form must be used. --stream
+    // SAX-scans the sheet parts instead of parsing them (the same findings, GH-638)
+    val lintOpts = (fileOpt.orNone, streamOpt, jsonOpt, lintCmd).mapN {
+      case (flagFile, stream, mode, (cmd, positional)) =>
         cmd match
           case CliCommand.Lint(format) =>
             resolveLintFile(flagFile, positional) match
-              case Right(file) => runLint(file, CliCommand.lintFormat(format, mode), io, mode)
+              case Right(file) =>
+                runLint(file, CliCommand.lintFormat(format, mode), io, mode, stream)
               case Left(msg) => emit(Outcome.failed("lint", CliError.usage(msg, None)), mode, io)
           case other => internal("lint", s"Unexpected lint command: $other", io, mode)
     }
@@ -205,9 +208,11 @@ object Cli:
     // JSON Schema — need no --file or --output. Same shape as the other standalone runners: a bad
     // source (invalid JSON, missing file) is a diagnostic on stderr with the code's exit, never an
     // escaped exception (which IOApp would print as a trace with exit 1).
+    // (--stream is accepted and changes nothing: a dry run reads no workbook, and the document it
+    // validates is the one the streaming batch applies)
     val batchDryRunOpts =
-      (jsonOpt, Opts.subcommand("batch", batchHelp)(batchStandaloneArgs)).mapN { (mode, form) =>
-        batchStandaloneOutcome(form, io, mode).flatMap(emit(_, mode, io))
+      (streamOpt, jsonOpt, Opts.subcommand("batch", batchHelp)(batchStandaloneArgs)).mapN {
+        (_, mode, form) => batchStandaloneOutcome(form, io, mode).flatMap(emit(_, mode, io))
       }
 
     // The contract itself (ADR-017 §2.13): `xl schema [--json]`, no file required
@@ -235,8 +240,45 @@ object Cli:
    * thunk and re-raises it typed ([[MemoryGuard]], GH-636); every other `Error` stays fatal.
    */
   def run(args: List[String], io: CliIO): IO[ExitCode] =
-    val argv = Argv.hoist(args)
+    val hoisted = Argv.hoist(args)
+    // --help answers for the verb whatever --stream would have said (GH-638): the flag is dropped
+    // so a parser that never takes it still renders its help
+    val argv = if hoisted.contains("--help") then hoisted.filterNot(_ == "--stream") else hoisted
     val mode = if Argv.wantsJson(argv) then OutputMode.Json else OutputMode.Text
+    // GH-620: `--help` anywhere before `--` is a request for the verb's help, whatever else rides
+    // along: decline refuses `--help` behind an option or positional it did not expect (`--json
+    // --help`, `-f a.xlsx --help`, `view A1:B2 --help`), so the candidates of Argv.helpCandidates
+    // are tried in order and the first clean help wins; a positional workbook path gets the -f hint
+    def parse(verb: Option[String]): IO[ExitCode] =
+      val attempt = (args: List[String]) => command(io).parse(args, sys.env)
+      val parsed =
+        if argv.takeWhile(_ != "--").contains("--help") then
+          val attempts = Argv.helpCandidates(argv).map(attempt)
+          attempts
+            .collectFirst { case left @ Left(help) if help.errors.isEmpty => left }
+            .getOrElse(attempts.headOption.getOrElse(attempt(argv)))
+        else attempt(argv)
+      IO(parsed)
+        .flatMap {
+          case Right(handler) => handler
+          case Left(help) if help.errors.nonEmpty =>
+            val hint = Argv.misplacedFile(argv, help.errors) match
+              case Some(path) =>
+                s"did you mean -f $path? xl takes the file as -f/--file; " +
+                  "the positional argument is the range or verb argument"
+              case None => s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage"
+            val error = CliError.usage(
+              help.errors.headOption.fold("invalid command line") { first =>
+                if verb.isEmpty then compact(first) else first
+              },
+              Some(hint)
+            )
+            usageFailure(verb.getOrElse(""), error, mode, io)
+          case Left(help) => showHelp(verb.getOrElse(""), help.toString, mode, io)
+        }
+        .handleErrorWith { escaped =>
+          emit(Outcome.failed(verb.getOrElse(""), CliError.fromThrowable(escaped)), mode, io)
+        }
     Argv.verbOf(argv) match
       case Some(word) if !Argv.verbs.contains(word) =>
         val error = CliError(
@@ -246,40 +288,14 @@ object Cli:
           candidates = Suggest.closest(word, Argv.verbs)
         )
         usageFailure("", error, mode, io)
-      case verb =>
-        // `--help` anywhere before `--` is a request for the verb's help, whatever else rides
-        // along: decline refuses `--help` behind an option or positional it did not expect
-        // (`--json --help`, `-f a.xlsx --help`, `view A1:B2 --help`), so the candidates of
-        // Argv.helpCandidates are tried in order and the first clean help wins
-        val parse = (args: List[String]) => command(io).parse(args, sys.env)
-        val parsed =
-          if argv.takeWhile(_ != "--").contains("--help") then
-            val attempts = Argv.helpCandidates(argv).map(parse)
-            attempts
-              .collectFirst { case left @ Left(help) if help.errors.isEmpty => left }
-              .getOrElse(attempts.headOption.getOrElse(parse(argv)))
-          else parse(argv)
-        IO(parsed)
-          .flatMap {
-            case Right(handler) => handler
-            case Left(help) if help.errors.nonEmpty =>
-              val hint = Argv.misplacedFile(argv, help.errors) match
-                case Some(path) =>
-                  s"did you mean -f $path? xl takes the file as -f/--file; " +
-                    "the positional argument is the range or verb argument"
-                case None => s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage"
-              val error = CliError.usage(
-                help.errors.headOption.fold("invalid command line") { first =>
-                  if verb.isEmpty then compact(first) else first
-                },
-                Some(hint)
-              )
-              usageFailure(verb.getOrElse(""), error, mode, io)
-            case Left(help) => showHelp(verb.getOrElse(""), help.toString, mode, io)
-          }
-          .handleErrorWith { escaped =>
-            emit(Outcome.failed(verb.getOrElse(""), CliError.fromThrowable(escaped)), mode, io)
-          }
+      // GH-638: a verb that refuses --stream is refused here, before the parser and before any
+      // read, from the table `xl schema` publishes (a verb's own flags — describe --full, sheets
+      // --stats, view --eval — are refused by their handlers once parsed)
+      case Some(word) if Argv.wantsStream(argv) =>
+        Schema.streamRefusal(word) match
+          case Some(error) => emit(Outcome.failed(word, error), mode, io)
+          case None => parse(Some(word))
+      case verb => parse(verb)
 
   /**
    * decline's first error, minus the one dump it embeds: with no verb at all it lists every

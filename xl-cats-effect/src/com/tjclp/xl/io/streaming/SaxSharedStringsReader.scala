@@ -30,6 +30,9 @@ object SaxSharedStringsReader:
       Right(handler.result())
     catch
       case err: ParseFailure => Left(err.getMessage)
+      // GH-640: a stream that refused to be read further (a ZIP-bomb limit) is not a malformed
+      // table — the refusal is the caller's to classify, so it passes through as raised
+      case limit: ZipEntryGuard.LimitExceeded => throw limit
       case err: Exception =>
         Left(Option(err.getMessage).getOrElse(err.getClass.getSimpleName))
 

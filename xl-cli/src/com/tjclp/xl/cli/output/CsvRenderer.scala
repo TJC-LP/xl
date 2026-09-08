@@ -1,13 +1,20 @@
 package com.tjclp.xl.cli.output
 
+import fs2.Stream
+
 import com.tjclp.xl.addressing.{CellRange, Column}
-import com.tjclp.xl.cli.read.{InMemorySource, RecordGrid}
+import com.tjclp.xl.cli.read.{CellRecord, ColumnFacts, InMemorySource, RecordGrid, RecordWindow}
 import com.tjclp.xl.sheets.Sheet
 
 /**
  * CSV renderer for xl CLI output.
  *
- * Produces RFC 4180-compliant CSV output with optional row/column labels, from a [[RecordGrid]].
+ * Produces RFC 4180-compliant CSV output with optional row/column labels. The rows stream past a
+ * [[RecordWindow]] one at a time (GH-635): [[header]] is the line before them, [[lines]] one line
+ * per drawn row, and nothing follows — so a streamed `view` never holds its window. Only
+ * `--skip-empty` needs to see every row before the first is written (the empty columns are pruned
+ * across the whole window); that is one [[ColumnFacts]] pass. [[render]] is the same lines over a
+ * grid held in memory, joined.
  */
 object CsvRenderer:
 
@@ -51,38 +58,65 @@ object CsvRenderer:
     skipEmpty: Boolean,
     skipHidden: Boolean
   ): String =
-    // GH-474: hidden rows/columns render unless --skip-hidden asked for the visible-only view
-    val visibleCols = grid.renderedCols(skipHidden)
-    val visibleRows = grid.renderedRows(skipHidden)
+    val window = grid.window
+    val rows = Stream.emits(grid.rows)
+    val facts =
+      if needsFacts(skipEmpty) then
+        ColumnFacts
+          .of(window, rows, _.text(showFormulas), skipEmpty, skipHidden)
+          .toList
+          .headOption
+          .getOrElse(ColumnFacts.empty)
+      else ColumnFacts.empty
+    val cols = columns(window, facts, skipEmpty, skipHidden)
+    val body = lines(window, rows, cols, showFormulas, showLabels, skipEmpty, skipHidden).toList
+    (header(cols, showLabels) ++ body).mkString("\n")
 
-    // Filter empty columns/rows if skipEmpty is true
-    val nonEmptyCols =
-      if skipEmpty then grid.nonEmptyCols(visibleCols, visibleRows) else visibleCols
-    val nonEmptyRows =
-      if skipEmpty then grid.nonEmptyRows(visibleRows, nonEmptyCols) else visibleRows
+  /**
+   * Whether the renderer must see every row before it writes the first: only under `--skip-empty`,
+   * whose column pruning is a fact about the whole window.
+   */
+  def needsFacts(skipEmpty: Boolean): Boolean = skipEmpty
 
-    val sb = new StringBuilder
+  /**
+   * The columns drawn: the shown ones ([[RecordWindow.renderedCols]]), minus — under `skipEmpty` —
+   * those no drawn row fills.
+   */
+  def columns(
+    window: RecordWindow,
+    facts: ColumnFacts,
+    skipEmpty: Boolean,
+    skipHidden: Boolean
+  ): Vector[Int] =
+    val shown = window.renderedCols(skipHidden)
+    if skipEmpty then facts.nonEmptyAmong(shown) else shown
 
-    // Header row with column letters (if showLabels)
-    if showLabels then
-      sb.append(",") // Empty cell for row number column
-      sb.append(nonEmptyCols.map(colIdx => Column.from0(colIdx).toLetter).mkString(","))
-      sb.append("\n")
+  /** The lines before the rows: the column-letter header row under `showLabels`, else none. */
+  def header(cols: Vector[Int], showLabels: Boolean): Vector[String] =
+    if showLabels then Vector("," + cols.map(colIdx => Column.from0(colIdx).toLetter).mkString(","))
+    else Vector.empty
 
-    // Data rows
-    val lastRowIdx = nonEmptyRows.lastOption
-    nonEmptyRows.foreach { rowIdx =>
-      if showLabels then
-        sb.append((rowIdx + 1).toString)
-        sb.append(",")
-
-      val cellValues = nonEmptyCols.map { colIdx =>
-        grid.at(rowIdx, colIdx).fold("")(record => Escape.csv(record.text(showFormulas)))
+  /**
+   * One CSV line per drawn row of the window ([[RecordWindow.isDrawn]] over `cols`), in order: the
+   * row number first under `showLabels`, then the escaped display text of every drawn column.
+   */
+  def lines[F[_]](
+    window: RecordWindow,
+    rows: Stream[F, Vector[CellRecord]],
+    cols: Vector[Int],
+    showFormulas: Boolean,
+    showLabels: Boolean,
+    skipEmpty: Boolean,
+    skipHidden: Boolean
+  ): Stream[F, String] =
+    val firstRow = window.range.start.row.index0
+    rows.zipWithIndex.map { (row, i) =>
+      val rowIdx = firstRow + i.toInt
+      Option.when(window.isDrawn(row, rowIdx, cols, skipEmpty, skipHidden)) {
+        val label = if showLabels then s"${rowIdx + 1}," else ""
+        val cells = cols.map { colIdx =>
+          window.cell(row, colIdx).fold("")(record => Escape.csv(record.text(showFormulas)))
+        }
+        label + cells.mkString(",")
       }
-      sb.append(cellValues.mkString(","))
-
-      // Add newline (except after last row)
-      if !lastRowIdx.contains(rowIdx) then sb.append("\n")
-    }
-
-    sb.toString
+    }.unNone

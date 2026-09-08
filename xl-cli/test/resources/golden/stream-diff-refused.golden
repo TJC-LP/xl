@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/simple.xlsx
+--stream
+diff
+-g
+<DIR>/changed.xlsx
+## exit
+2
+## stdout
+## stderr
+Error: diff is not supported with --stream (the two workbooks are compared in memory)
+  code: UNSUPPORTED_IN_STREAM
+  hint: omit --stream; use --max-size <MB> to load a large file in memory

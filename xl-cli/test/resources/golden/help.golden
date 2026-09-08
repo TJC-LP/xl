@@ -9,11 +9,11 @@ Usage:
     xl [--json] schema
     xl [--json] new
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--json] diff
-    xl [--file <path>] [--json] lint
+    xl [--file <path>] [--stream] [--json] lint
     xl [--file <path>] [--sheet <string>] [--max-size <integer>] [--json] eval
     xl [--file <path>] [--sheet <string>] [--max-size <integer>] [--json] evala
     xl --file <path> [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--json] sheets
-    xl --file <path> [--max-size <integer>] [--json] names
+    xl --file <path> [--max-size <integer>] [--stream] [--json] names
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] bounds
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] view
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] cell
@@ -23,7 +23,7 @@ Usage:
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] describe
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] audit
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] deps
-    xl [--json] batch
+    xl [--stream] [--json] batch
     xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] put
     xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] putf
     xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--json] style
@@ -91,14 +91,14 @@ Options and flags:
         Sheet to select (required for sheet-level operations)
     --max-size <integer>
         Max uncompressed size in MB for in-memory load (default: 100, 0 = unlimited). Use for large files when --stream is not supported.
+    --stream
+        Use O(1) memory streaming for large files (100k+ rows). Supports: search, stats, bounds, view (markdown/csv/json). 7-8x faster than in-memory.
     --output <path>, -o <path>
         Output file (required)
     --in-place, -i
         Edit file in-place (same as -o matching -f)
     --backend <string>
         XML backend: scalaxml (default, stable) or saxstax (faster)
-    --stream
-        Use O(1) memory streaming for large files (100k+ rows). Supports: search, stats, bounds, view (markdown/csv/json). 7-8x faster than in-memory.
     --no-recalc
         Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) leave every formula the edit invalidated UNCACHED rather than re-stamp a stale number, and report both counts. Use when the caches come from another engine.
     --preserve-caches

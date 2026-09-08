@@ -1,0 +1,19 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+--stream
+view
+--limit
+0
+## exit
+0
+## stdout
+|   | A     | B     | C       |
+|---|-------|-------|---------|
+| 1 | Hello | 10    | 1/15/24 |
+| 2 | World | 20    | 6/30/24 |
+| 3 | Total | 12.50 |         |
+| 4 |       | 42.5  |         |
+## stderr

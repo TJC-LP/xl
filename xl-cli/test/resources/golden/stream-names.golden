@@ -1,0 +1,10 @@
+## args
+-f
+<DIR>/named.xlsx
+--stream
+names
+## exit
+0
+## stdout
+Total  Data!$B$4
+## stderr

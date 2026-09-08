@@ -1,0 +1,24 @@
+## args
+--stream
+--json
+schema
+## exit
+2
+## stdout
+{
+  "ok": false,
+  "exitCode": 2,
+  "verb": "schema",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "UNSUPPORTED_IN_STREAM",
+    "message": "schema is not supported with --stream (it reads no workbook)",
+    "hint": "omit --stream",
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr
+Error: schema is not supported with --stream (it reads no workbook)

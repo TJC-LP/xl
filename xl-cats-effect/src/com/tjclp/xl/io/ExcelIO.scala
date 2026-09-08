@@ -26,7 +26,12 @@ import com.tjclp.xl.ooxml.{
 }
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
 import com.tjclp.xl.ooxml.style.WorkbookStyles
-import com.tjclp.xl.io.streaming.{SaxSharedStringsReader, SaxSingleCellReader, StreamingCellDetails}
+import com.tjclp.xl.io.streaming.{
+  SaxSharedStringsReader,
+  SaxSingleCellReader,
+  StreamingCellDetails,
+  ZipEntryGuard
+}
 import fs2.data.xml
 
 /**
@@ -196,6 +201,32 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       }
 
   /**
+   * [[readSheetStream]] with the shared-string table already loaded ([[loadSharedStrings]]; `None`
+   * for a file without one), so several reads of one file parse the table once (GH-640).
+   */
+  def readSheetStream(
+    path: Path,
+    sheetName: String,
+    sst: Option[SharedStrings]
+  ): Stream[F, RowData] =
+    Stream
+      .bracket(Sync[F].delay(new ZipFile(path.toFile)))(zipFile => Sync[F].delay(zipFile.close()))
+      .flatMap(zipFile => readStreamByName(zipFile, sheetName, None, Sync[F].pure(sst)))
+
+  /**
+   * [[readSheetStreamRange]] with the shared-string table already loaded (see [[readSheetStream]]).
+   */
+  def readSheetStreamRange(
+    path: Path,
+    sheetName: String,
+    range: CellRange,
+    sst: Option[SharedStrings]
+  ): Stream[F, RowData] =
+    Stream
+      .bracket(Sync[F].delay(new ZipFile(path.toFile)))(zipFile => Sync[F].delay(zipFile.close()))
+      .flatMap(zipFile => readStreamByName(zipFile, sheetName, Some(range), Sync[F].pure(sst)))
+
+  /**
    * Stream rows from sheet by index (1-based) with constant memory.
    *
    * The shared-formula ordering constraint documented on `readStream` also applies.
@@ -260,12 +291,32 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       }
 
   /**
+   * The workbook's shared-string table, parsed once through the streaming reader's SAX parser and
+   * held to the reader's ZIP-bomb limits (GH-640) — `None` when the file has none. Inflation stops
+   * one byte past `config.maxUncompressedSize` and the inflated/compressed ratio is held to
+   * `config.maxCompressionRatio` (0 disables either, as in [[XlsxReader.ReaderConfig]]); a breach
+   * fails with an [[XLException]] carrying `XLError.SecurityError`. The table is the one part a
+   * streaming read holds in memory and its parse is most of a small read's cost, so load it once
+   * and hand it to [[readSheetStreamRange]], [[readSheetStream]] and [[streamCellDetails]] when
+   * several reads share one file.
+   */
+  def loadSharedStrings(
+    path: Path,
+    config: XlsxReader.ReaderConfig
+  ): F[Option[SharedStrings]] =
+    Resource
+      .make(Sync[F].blocking(new ZipFile(path.toFile)))(zf => Sync[F].blocking(zf.close()))
+      .use(zipFile => Sync[F].blocking(loadSharedStringsSaxSync(zipFile, config)).rethrow)
+
+  /**
    * Read single cell details using streaming with O(1) worksheet memory.
    *
-   * Pre-loads styles.xml (~200KB-1.5MB), sharedStrings.xml (~500KB-2MB), and comments (~10-100KB),
-   * then streams worksheet until target cell is found (early-abort optimization).
+   * Pre-loads styles.xml (~200KB-1.5MB), sharedStrings.xml (through the same SAX parser as the row
+   * streams — a million-string table is tens of MB, GH-640) and comments (~10-100KB), then streams
+   * the worksheet until the target cell is found (early-abort optimization).
    *
-   * Time: O(position of cell in file) Memory: ~3MB max regardless of worksheet size
+   * Time: O(position of cell in file). Memory: the table plus the styles, whatever the worksheet's
+   * size.
    *
    * @param path
    *   Path to XLSX file
@@ -281,10 +332,32 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     sheetName: String,
     targetRef: ARef
   ): F[StreamingCellDetails] =
+    streamCellDetailsWith(path, sheetName, targetRef, None)
+
+  /**
+   * [[streamCellDetails]] with the shared-string table ([[loadSharedStrings]]) and the styles
+   * ([[loadStyles]]) already loaded, so a caller reading several cells of one file parses them once
+   * (GH-640).
+   */
+  def streamCellDetails(
+    path: Path,
+    sheetName: String,
+    targetRef: ARef,
+    sst: Option[SharedStrings],
+    styles: WorkbookStyles
+  ): F[StreamingCellDetails] =
+    streamCellDetailsWith(path, sheetName, targetRef, Some((sst, styles)))
+
+  private def streamCellDetailsWith(
+    path: Path,
+    sheetName: String,
+    targetRef: ARef,
+    preloaded: Option[(Option[SharedStrings], WorkbookStyles)]
+  ): F[StreamingCellDetails] =
     Sync[F]
-      .delay {
+      .blocking {
         val zipFile = new ZipFile(path.toFile)
-        try streamCellDetailsSync(zipFile, sheetName, targetRef)
+        try streamCellDetailsSync(zipFile, sheetName, targetRef, preloaded)
         finally zipFile.close()
       }
       .flatMap {
@@ -296,17 +369,23 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   private def streamCellDetailsSync(
     zipFile: ZipFile,
     sheetName: String,
-    targetRef: ARef
+    targetRef: ARef,
+    preloaded: Option[(Option[SharedStrings], WorkbookStyles)]
   ): Either[String, StreamingCellDetails] =
     for
       // 1. Resolve worksheet path from workbook metadata
       worksheetPath <- resolveWorksheetPathByNameSync(zipFile, sheetName)
 
-      // 2. Load styles.xml (0.2-1.5MB)
-      styles <- loadStylesSync(zipFile)
+      // 2. Load styles.xml (0.2-1.5MB), unless the caller holds them
+      styles <- preloaded.fold(loadStylesSync(zipFile))(p => Right(p._2))
 
-      // 3. Load sharedStrings.xml (0.5-2MB)
-      sst <- loadSharedStringsSync(zipFile)
+      // 3. Load sharedStrings.xml through the SAX reader, unless the caller holds it. The
+      // library's own entry point applies no limit, like the row streams; a caller with a limit to
+      // enforce loads the table through `loadSharedStrings` and passes it in
+      sst <- preloaded.fold(
+        loadSharedStringsSaxSync(zipFile, XlsxReader.ReaderConfig.permissive).left
+          .map(_.getMessage)
+      )(p => Right(p._1))
 
       // 4. Load comments for this sheet (10-100KB)
       comments <- loadCommentsSync(zipFile, worksheetPath)
@@ -351,19 +430,26 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
           case Left(err) => Left(s"Failed to parse styles.xml: ${err.message}")
           case Right(elem) => WorkbookStyles.fromXml(elem)
 
-  // Helper: Load sharedStrings.xml
-  private def loadSharedStringsSync(zipFile: ZipFile): Either[String, Option[SharedStrings]] =
-    val sstEntry = Option(zipFile.getEntry("xl/sharedStrings.xml"))
-    sstEntry match
+  /**
+   * `xl/sharedStrings.xml` through the SAX table reader under `config`'s entry limits
+   * ([[ZipEntryGuard]]): the one parse every streaming read shares (GH-640 — the single-cell read
+   * used to parse the part as a DOM, three times the memory of the table itself). A limit breach is
+   * an [[XLException]] carrying the `SecurityError`; a malformed table keeps the row streams' text.
+   */
+  private def loadSharedStringsSaxSync(
+    zipFile: ZipFile,
+    config: XlsxReader.ReaderConfig
+  ): Either[Throwable, Option[SharedStrings]] =
+    Option(zipFile.getEntry("xl/sharedStrings.xml")) match
       case None => Right(None)
       case Some(entry) =>
-        val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
-        XmlSecurity.parseSafe(xml, "xl/sharedStrings.xml") match
-          case Left(err) => Left(s"Failed to parse sharedStrings.xml: ${err.message}")
-          case Right(elem) =>
-            SharedStrings.fromXml(elem) match
-              case Right(sst) => Right(Some(sst))
-              case Left(err) => Left(s"Failed to parse shared strings: $err")
+        val stream = ZipEntryGuard.open(zipFile, entry, config)
+        try
+          SaxSharedStringsReader.parse(stream) match
+            case Right(sst) => Right(Some(sst))
+            case Left(err) => Left(new Exception(s"Failed to parse shared strings: $err"))
+        catch case limit: ZipEntryGuard.LimitExceeded => Left(new XLException(limit.error))
+        finally stream.close()
 
   // Helper: Load comments for specific sheet
   private def loadCommentsSync(
@@ -449,13 +535,22 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         )
       )
       .flatMap { worksheetPath =>
-        readWorksheetStream(zipFile, worksheetPath, range)
+        readWorksheetStream(zipFile, worksheetPath, range, loadSharedStringsForStream(zipFile))
       }
 
   private def readStreamByName(
     zipFile: ZipFile,
     sheetName: String,
     range: Option[CellRange]
+  ): Stream[F, RowData] =
+    readStreamByName(zipFile, sheetName, range, loadSharedStringsForStream(zipFile))
+
+  /** The row stream of a named sheet, its shared-string table supplied by `sst`. */
+  private def readStreamByName(
+    zipFile: ZipFile,
+    sheetName: String,
+    range: Option[CellRange],
+    sst: F[Option[SharedStrings]]
   ): Stream[F, RowData] =
     Stream
       .eval(
@@ -464,16 +559,17 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         )
       )
       .flatMap { worksheetPath =>
-        readWorksheetStream(zipFile, worksheetPath, range)
+        readWorksheetStream(zipFile, worksheetPath, range, sst)
       }
 
   private def readWorksheetStream(
     zipFile: ZipFile,
     worksheetPath: String,
-    range: Option[CellRange]
+    range: Option[CellRange],
+    sst: F[Option[SharedStrings]]
   ): Stream[F, RowData] =
     Stream
-      .eval(loadSharedStringsForStream(zipFile))
+      .eval(sst)
       .flatMap { sst =>
         // Stream specified worksheet
         val wsEntry = Option(zipFile.getEntry(worksheetPath))
@@ -494,25 +590,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
             )
       }
 
+  /** The table for a row stream that loads its own: the SAX parse, no entry limit (as always). */
   private def loadSharedStringsForStream(zipFile: ZipFile): F[Option[SharedStrings]] =
-    Option(zipFile.getEntry("xl/sharedStrings.xml")) match
-      case None => Sync[F].pure(None)
-      case Some(entry) =>
-        Resource
-          .make(Sync[F].blocking(zipFile.getInputStream(entry)))(stream =>
-            Sync[F].blocking(stream.close())
-          )
-          .use { stream =>
-            Sync[F]
-              .blocking(SaxSharedStringsReader.parse(stream))
-              .flatMap(result =>
-                Sync[F].fromEither(
-                  result
-                    .leftMap(err => new Exception(s"Failed to parse shared strings: $err"))
-                    .map(Some(_))
-                )
-              )
-          }
+    Sync[F]
+      .blocking(loadSharedStringsSaxSync(zipFile, XlsxReader.ReaderConfig.permissive))
+      .rethrow
 
   private final case class WorksheetRef(
     name: String,
