@@ -1,0 +1,15 @@
+## args
+-f
+<DIR>/qualified.xlsx
+cell
+Summary!G9
+## exit
+0
+## stdout
+Cell: G9
+Type: formula
+Formula: ='On-Premise'!G9*2
+Cached: 10
+Dependencies: 'On-Premise'!G9
+Dependents: (none)
+## stderr
