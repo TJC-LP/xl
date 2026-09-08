@@ -1502,23 +1502,25 @@ object XlsxWriter:
           .flatMap(SharedStrings.fromXml(_).toOption)
 
   /**
-   * Parse preserved styles.xml to extract namespace metadata and differential formats.
+   * Parse preserved styles.xml to extract namespace metadata, differential formats and the
+   * unmodeled passthrough sections (GH-610: named styles, palette, extLst).
    *
    * Critical for preserving Excel extension namespaces (x14ac, x16r2, xr, mc:Ignorable) and
    * differential formats used by conditional formatting.
    */
   private def parsePreservedStylesMetadata(
     source: SourceContent
-  ): (Option[MetaData], NamespaceBinding, Option[Elem]) =
+  ): (Option[MetaData], NamespaceBinding, Option[Elem], PreservedStyleParts) =
+    val none = (None, TopScope, None, PreservedStyleParts.empty)
     Try(withSourceZip(source)(zip => readZipEntry(zip, "xl/styles.xml"))) match
-      case Failure(_) => (None, TopScope, None)
-      case Success(None) => (None, TopScope, None)
+      case Failure(_) => none
+      case Success(None) => none
       case Success(Some(xmlString)) =>
         XmlSecurity.parseSafe(xmlString, "xl/styles.xml").toOption match
           case Some(elem) =>
             val dxfs = (elem \ "dxfs").headOption.collect { case e: Elem => e }
-            (Some(elem.attributes), elem.scope, dxfs)
-          case None => (None, TopScope, None)
+            (Some(elem.attributes), elem.scope, dxfs, PreservedStyleParts.fromXml(elem))
+          case None => none
 
   /**
    * Conditional-formatting write plan (GH-136).
@@ -1868,10 +1870,11 @@ object XlsxWriter:
     val (styleIndex, sheetRemappings) =
       StyleIndex.fromWorkbook(workbook, sheetsRequiringRemapping = sheetsToRegenerate)
 
-    // Parse preserved styles metadata (namespaces and dxfs) if source available
-    val (preservedStylesAttrs, preservedStylesScope, preservedDxfs) = sourceContext match
-      case Some(ctx) => parsePreservedStylesMetadata(ctx.content)
-      case None => (None, TopScope, None)
+    // Parse preserved styles metadata (namespaces, dxfs, named styles, palette) if source available
+    val (preservedStylesAttrs, preservedStylesScope, preservedDxfs, preservedStyleParts) =
+      sourceContext match
+        case Some(ctx) => parsePreservedStylesMetadata(ctx.content)
+        case None => (None, TopScope, None, PreservedStyleParts.empty)
 
     // GH-136: parse each regenerated sheet's preserved worksheet ONCE — the cf pre-pass and the
     // sheet loop below both consume this cache (no double parse of large worksheets).
@@ -1898,8 +1901,13 @@ object XlsxWriter:
     // dirty/fresh → DataValidationCodec emission)
     val dvPlan = planDvWrites(workbook, sheetsToRegenerate, preservedWorksheets)
 
-    val styles =
-      OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, cfPlan.mergedDxfs)
+    val styles = OoxmlStyles(
+      styleIndex,
+      preservedStylesAttrs,
+      preservedStylesScope,
+      cfPlan.mergedDxfs,
+      preservedStyleParts
+    )
 
     // GH-387: a scratch write (no source theme to copy) whose emitted artifacts reference theme
     // colors must ship a theme part — the <color theme="N"/> records in styles.xml/dxfs/rich-text

@@ -24,6 +24,13 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  *   the Normal (xfId-0 cellStyleXf) font, but only when it lives in font slot 0 — Excel's own
  *   layout, and the only slot the GH-425 defaultFont write path targets. An exotic Normal at a
  *   non-zero slot yields None (it still rides through surgical preservation).
+ * @param xfIds
+ *   per cellXf, the `xfId` of the named-style master it derives from (GH-610), parallel to
+ *   `cellStyles`; absent or malformed attributes read as 0 (Normal). Not part of [[CellStyle]] — it
+ *   is a table-position fact, carried by [[StyleIndex]] on the write side.
+ * @param preserved
+ *   the unmodeled styles-part sections (`cellStyleXfs`, `cellStyles`, `tableStyles`, `colors`,
+ *   `extLst`) for verbatim passthrough (GH-610)
  */
 final case class WorkbookStyles(
   cellStyles: Vector[CellStyle],
@@ -32,9 +39,14 @@ final case class WorkbookStyles(
   borders: Vector[Border],
   customNumFmts: Vector[(Int, NumFmt)],
   dxfs: Vector[Elem] = Vector.empty,
-  normalFont: Option[Font] = None
+  normalFont: Option[Font] = None,
+  xfIds: Vector[Int] = Vector.empty,
+  preserved: PreservedStyleParts = PreservedStyleParts.empty
 ):
   def styleAt(index: Int): Option[CellStyle] = cellStyles.lift(index)
+
+  /** The named-style master (`xfId`) cellXf `index` derives from; 0 (Normal) when unrecorded. */
+  def xfIdAt(index: Int): Int = xfIds.lift(index).getOrElse(0)
 
 object WorkbookStyles:
   val default: WorkbookStyles = WorkbookStyles(
@@ -62,9 +74,23 @@ object WorkbookStyles:
         borders = borders,
         customNumFmts = numFmts.toVector.sortBy(_._1),
         dxfs = dxfs,
-        normalFont = parseNormalFont(elem, fonts)
+        normalFont = parseNormalFont(elem, fonts),
+        xfIds = parseXfIds(elem),
+        preserved = PreservedStyleParts.fromXml(elem)
       )
     )
+
+  /**
+   * The `xfId` of every cellXf in table order (GH-610). Lenient-total: a missing, non-numeric or
+   * negative attribute reads as 0 — the Normal master, which every styles.xml has.
+   */
+  private def parseXfIds(root: Elem): Vector[Int] =
+    (root \ "cellXfs").headOption match
+      case Some(cellXfsElem: Elem) =>
+        getChildren(cellXfsElem, "xf").map { xf =>
+          xf.attribute("xfId").flatMap(_.text.toIntOption).filter(_ >= 0).getOrElse(0)
+        }.toVector
+      case _ => Vector.empty
 
   /**
    * The Normal font (GH-425): the first cellStyleXfs xf's fontId resolved against the font table,

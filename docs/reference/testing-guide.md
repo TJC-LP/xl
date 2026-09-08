@@ -226,7 +226,7 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of the #606 blind-reader fix and the #636 memory guard (2026-09-08), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored; four subprocess smokes skip when openpyxl is absent or the sandbox runs as root.
+As of the #610 named-style preservation and #611 text-escaping fixes (2026-09-08), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is ignored; four subprocess smokes skip when openpyxl is absent or the sandbox runs as root.
 
 | Module | Tests |
 |--------|-------|
