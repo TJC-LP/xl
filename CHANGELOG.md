@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The CLI contract is a CI gate** (#592). A `contract` job runs the golden runner, the
+  generated-docs drift check and the new `ContractSpec` explicitly, so a golden diff fails with the
+  unified diff in the log, then builds the assembly JAR and smokes `--help`, `sheets`,
+  `view --json`, `schema --json` and `lint` for exit codes and envelope shape; the release workflow
+  smokes the native binary the same way and asserts `--version` equals the tag. `ContractSpec` pins
+  that `docs/reference/generated/error-codes.md` publishes exactly `ErrorCode.all` and
+  `WarningCode.all` with their exits and that every golden failure carries a code.
+- **The xl-agent grader reads `sheets --json`** instead of scraping the markdown table (no more
+  `Sheet1` guess on a failed run), and locks the skill zip to the binary's release
+  (`FileManager.lockSkillToBinary`). The grading host needs an `xl` that accepts the global `--json`
+  (0.20.0 or later).
+
+
 ## [0.20.0] "Contract" - 2026-09-07
 
 The agent-first CLI and scripting contract (ADR-017, wave 1): one sheet rule, one error
