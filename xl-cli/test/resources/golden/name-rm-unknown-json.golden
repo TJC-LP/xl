@@ -1,0 +1,31 @@
+## args
+-f
+<DIR>/named.xlsx
+-o
+<DIR>/name-rm-unknown-json.xlsx
+--json
+name
+rm
+Totl
+## exit
+3
+## stdout
+{
+  "ok": false,
+  "exitCode": 3,
+  "verb": "name rm",
+  "version": "<VERSION>",
+  "data": null,
+  "warnings": [],
+  "error": {
+    "code": "NAME_NOT_FOUND",
+    "message": "Named range 'Totl' not found. Available: Total",
+    "hint": "list defined names with `xl -f <file> names`",
+    "candidates": [
+      "Total"
+    ],
+    "location": null
+  }
+}
+## stderr
+Error: Named range 'Totl' not found. Available: Total

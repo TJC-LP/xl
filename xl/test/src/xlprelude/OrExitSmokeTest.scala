@@ -18,6 +18,17 @@ object OrExitSmokeMain:
     val sheet: Sheet = orExit(Left(failure))
     println(s"unreachable: ${sheet.name.value}")
 
+/**
+ * GH-615: the documented script shape — `Excel.readSheet` on a misspelled sheet, unwrapped by
+ * `orExit` — against a real file: the candidates come from the workbook the reader loaded.
+ */
+object OrExitReadSheetMain:
+  def main(args: Array[String]): Unit =
+    val path = args.headOption.getOrElse(sys.error("path required"))
+    Excel.write(Workbook(Sheet("Data").put(ref"A1", 1), Sheet("Summary").put(ref"A1", 2)), path)
+    val sheet: Sheet = orExit(Excel.readSheet(path, "Sumary"))
+    println(s"unreachable: ${sheet.name.value}")
+
 class OrExitSmokeTest extends FunSuite:
 
   test("orExit on Left prints exitMessage to stderr, nothing to stdout, and exits 1"):
@@ -44,6 +55,41 @@ class OrExitSmokeTest extends FunSuite:
           |  hint: list sheets with `xl -f <file> sheets`""".stripMargin
       )
     finally
+      Files.deleteIfExists(out)
+      Files.deleteIfExists(err)
+      Files.deleteIfExists(dir)
+
+  test("GH-615: orExit(Excel.readSheet(path, misspelled)) prints did-you-mean from the file"):
+    val java = Paths.get(System.getProperty("java.home"), "bin", "java").toString
+    val classpath = System.getProperty("java.class.path")
+    val dir = Files.createTempDirectory("xl-orexit-readsheet")
+    val book = dir.resolve("book.xlsx")
+    val out = dir.resolve("stdout.txt")
+    val err = dir.resolve("stderr.txt")
+    try
+      val process =
+        new ProcessBuilder(java, "-cp", classpath, "xlprelude.OrExitReadSheetMain", book.toString)
+          .redirectOutput(out.toFile)
+          .redirectError(err.toFile)
+          .start()
+      val status = process.waitFor()
+      // the JVM's own sun.misc.Unsafe deprecation notice (scala.runtime.LazyVals) is not ours
+      val stderr = Files
+        .readString(err, UTF_8)
+        .linesIterator
+        .filterNot(_.startsWith("WARNING:"))
+        .mkString("\n")
+      assertEquals(status, 1, stderr)
+      assertEquals(Files.readString(out, UTF_8), "")
+      assertEquals(
+        stderr.stripTrailing,
+        """Error: Sheet not found: 'Sumary'. Available: Data, Summary
+          |  code: SHEET_NOT_FOUND
+          |  did you mean: Summary
+          |  hint: list sheets with `xl -f <file> sheets`""".stripMargin
+      )
+    finally
+      Files.deleteIfExists(book)
       Files.deleteIfExists(out)
       Files.deleteIfExists(err)
       Files.deleteIfExists(dir)

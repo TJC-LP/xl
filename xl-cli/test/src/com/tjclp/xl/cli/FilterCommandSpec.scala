@@ -164,7 +164,12 @@ class FilterCommandSpec extends CatsEffectSuite:
   test("filter: json output has row numbers and typed cells") {
     run("B > 100", format = FilterFormat.Json).map { out =>
       val json = ujson.read(out)
-      val rows = json.arr.toVector
+      // GH-639: the document carries the match total and the clip beside the rows
+      assertEquals(json("matched").num.toInt, 2)
+      assertEquals(json("shown").num.toInt, 2)
+      assertEquals(json("truncated").bool, false)
+      assertEquals(json("limit").num.toInt, 50)
+      val rows = json("rows").arr.toVector
       assertEquals(rows.length, 2)
       assertEquals(rows.head("row").num.toInt, 2)
       assertEquals(rows.head("cells")("A").str, "Widget")
@@ -185,8 +190,8 @@ class FilterCommandSpec extends CatsEffectSuite:
   test("filter: json keys use header names with --header") {
     run("Price > 100", format = FilterFormat.Json, header = true).map { out =>
       val json = ujson.read(out)
-      assertEquals(json.arr.head("cells")("Price").num, 150.0)
-      assertEquals(json.arr.head("cells")("Item").str, "Widget")
+      assertEquals(json("rows").arr.head("cells")("Price").num, 150.0)
+      assertEquals(json("rows").arr.head("cells")("Item").str, "Widget")
     }
   }
 
@@ -198,7 +203,10 @@ class FilterCommandSpec extends CatsEffectSuite:
     yield
       assert(md.toLowerCase.contains("no rows"), md)
       assertEquals(csv, "row,A,B,C")
-      assertEquals(ujson.read(json).arr.toVector, Vector.empty[ujson.Value])
+      val doc = ujson.read(json)
+      assertEquals(doc("rows").arr.toVector, Vector.empty[ujson.Value])
+      assertEquals(doc("matched").num.toInt, 0)
+      assertEquals(doc("truncated").bool, false)
   }
 
   test("filter: empty sheet yields no matches rather than an error") {
@@ -259,12 +267,12 @@ class FilterCommandSpec extends CatsEffectSuite:
         book = Workbook(Vector(offsetSheet))
       ).map(ReadTestKit.text)
     yield
-      val rows = ujson.read(json).arr.toVector
+      val rows = ujson.read(json)("rows").arr.toVector
       assertEquals(rows.map(_("row").num.toInt), Vector(2, 3, 4, 5))
       rows.foreach(r => assertEquals(r("cells")("Z"), ujson.Null))
       assert(md.linesIterator.exists(_.matches("[|]\\s*2\\s*[|]\\s*[|]\\s*Widget\\s*[|]")), md)
       assertEquals(csv.linesIterator.toVector, Vector("row,Z", "2,", "3,", "4,", "5,"))
-      val leftRows = ujson.read(left).arr.toVector
+      val leftRows = ujson.read(left)("rows").arr.toVector
       assertEquals(leftRows.map(_("row").num.toInt), Vector(2, 3))
       leftRows.foreach(r => assertEquals(r("cells")("A"), ujson.Null))
   }
@@ -273,8 +281,8 @@ class FilterCommandSpec extends CatsEffectSuite:
     val query = ReadTestKit.filter("B > 0", columns = Some("Z"), format = FilterFormat.Json)
     def rowsOf(outcome: Outcome): Vector[Int] =
       val data = ujson.read(Render.json(outcome, "test").stdout)("data")
-      assert(data.arrOpt.isDefined, s"filter's data is not an array: $data")
-      data.arr.toVector.map(_("row").num.toInt)
+      assert(data("rows").arrOpt.isDefined, s"filter's data carries no rows array: $data")
+      data("rows").arr.toVector.map(_("row").num.toInt)
     ReadTestKit.withTempWorkbook(wb) { path =>
       for
         memory <- ReadTestKit.inMemory(wb, Some("Data"), query, OutputMode.Json)
@@ -309,20 +317,49 @@ class FilterCommandSpec extends CatsEffectSuite:
       .map(ReadTestKit.text)
       .map { out =>
         assertEquals(out.split("\"Total\"", -1).length - 1, 1, out)
-        val cells = ujson.read(out).arr.head("cells").obj
+        val cells = ujson.read(out)("rows").arr.head("cells").obj
         assertEquals(cells.keys.toList, List("Total", "Other"))
         assertEquals(cells("Total").num, 3.0)
       }
   }
 
-  test("filter: --limit 0 shows no rows and reports the match count alone") {
+  test("GH-639: --limit 0 is no limit, as for view and search") {
     for
       md <- run("B > 0", limit = 0)
-      csv <- run("B > 0", limit = 0, format = FilterFormat.Csv)
+      csv <- outcome("B > 0", limit = 0, format = FilterFormat.Csv)
       json <- run("B > 0", limit = 0, format = FilterFormat.Json)
     yield
-      assert(md.contains("Matched 4 row(s); showing first 0 (--limit)."), md)
-      assert(!md.contains("Widget"), md)
-      assertEquals(csv, "row,A,B,C")
-      assertEquals(ujson.read(json).arr.toVector, Vector.empty[ujson.Value])
+      assert(md.contains("4 row(s) matched."), md)
+      assert(md.contains("Doohickey"), md)
+      assertEquals(ReadTestKit.text(csv).linesIterator.size, 5, ReadTestKit.text(csv))
+      assertEquals(csv.warnings, Vector.empty)
+      val doc = ujson.read(json)
+      assertEquals(doc("rows").arr.size, 4)
+      assertEquals(doc("matched").num.toInt, 4)
+      assertEquals(doc("truncated").bool, false)
+      assertEquals(doc("limit"), ujson.Null)
+  }
+
+  test("GH-639: a clipped result says so in every format — footer, fields, TRUNCATED warning") {
+    for
+      md <- run("B > 0", limit = 2)
+      csv <- outcome("B > 0", limit = 2, format = FilterFormat.Csv)
+      json <- outcome("B > 0", limit = 2, format = FilterFormat.Json)
+    yield
+      assert(md.contains("Matched 4 row(s); showing first 2 (--limit)."), md)
+      // CSV stdout stays parseable: the clip is a warning, as `view --format csv` does
+      assertEquals(ReadTestKit.text(csv).linesIterator.size, 3, ReadTestKit.text(csv))
+      assertEquals(csv.warnings.map(_.code), Vector("TRUNCATED"))
+      assertEquals(
+        csv.warnings.map(_.message),
+        Vector("… showing 2 of 4 matching rows (use --limit to raise; --limit 0 = no limit)")
+      )
+      // JSON carries the clip in its own fields and raises no warning
+      val doc = ujson.read(ReadTestKit.text(json))
+      assertEquals(doc("matched").num.toInt, 4)
+      assertEquals(doc("shown").num.toInt, 2)
+      assertEquals(doc("truncated").bool, true)
+      assertEquals(doc("limit").num.toInt, 2)
+      assertEquals(doc("rows").arr.map(_("row").num.toInt).toVector, Vector(2, 3))
+      assertEquals(json.warnings, Vector.empty)
   }

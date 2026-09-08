@@ -1,0 +1,16 @@
+## args
+-f
+<DIR>/named.xlsx
+-o
+<DIR>/name-rm-unknown.xlsx
+name
+rm
+Totl
+## exit
+3
+## stdout
+## stderr
+Error: Named range 'Totl' not found. Available: Total
+  code: NAME_NOT_FOUND
+  did you mean: Total
+  hint: list defined names with `xl -f <file> names`

@@ -201,7 +201,7 @@ object ParseError:
       case UnknownFunction(name, pos, suggestions) =>
         val suggest =
           if suggestions.isEmpty then ""
-          else s" Did you mean: ${suggestions.mkString(", ")}?"
+          else s". Did you mean: ${suggestions.mkString(", ")}?"
         s"Unknown function '$name' at position $pos$suggest"
       case InvalidArguments(func, pos, expected, actual) =>
         s"Invalid arguments for $func at position $pos: expected $expected, got $actual"

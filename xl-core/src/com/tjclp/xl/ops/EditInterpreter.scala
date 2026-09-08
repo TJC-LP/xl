@@ -33,7 +33,13 @@ private[xl] object EditInterpreter:
   /** Excel's ceiling on a row height, in points. */
   private val MaxRowHeight: Double = 409.0
 
-  private def refuse(message: String): XLResult[Unit] = Left(XLError.Other(message))
+  /**
+   * A validation refusal: `INVALID_ARGUMENT` naming the edit and the reason (GH-617), so a script
+   * or the CLI envelope can branch on the code; the batch position rides on the `EditFailed` that
+   * wraps it.
+   */
+  private def refuse(op: String, reason: String): XLResult[Unit] =
+    Left(XLError.InvalidArgument(op, reason))
 
   // ===== validate =====
 
@@ -52,19 +58,19 @@ private[xl] object EditInterpreter:
       case Edit.Copy(source, target, _) => copyTarget(source, target).map(_ => ())
       case Edit.Sort(at, keys, _) => SheetEdits.validateSortKeys(at.range, keys)
       case Edit.Clear(_, what) =>
-        if what.isEmpty then refuse(s"$name: nothing to clear (contents, styles or comments)")
+        if what.isEmpty then refuse(name, "nothing to clear (contents, styles or comments)")
         else Right(())
       case Edit.Style(_, overlay, mode) =>
         if overlay.isEmpty && mode == StyleMode.Merge then
-          refuse(s"$name: at least one property is required (an empty merge changes nothing)")
+          refuse(name, "at least one property is required (an empty merge changes nothing)")
         else overlay.validate
       case Edit.Merge(_) | Edit.Unmerge(_) => Right(())
       case Edit.ColWidth(_, _, width) =>
         if width >= 0 && width <= MaxColumnWidth then Right(())
-        else refuse(s"$name: width must be 0-${MaxColumnWidth.toInt} character units, got $width")
+        else refuse(name, s"width must be 0-${MaxColumnWidth.toInt} character units, got $width")
       case Edit.RowHeight(_, _, height) =>
         if height >= 0 && height <= MaxRowHeight then Right(())
-        else refuse(s"$name: height must be 0-${MaxRowHeight.toInt} points, got $height")
+        else refuse(name, s"height must be 0-${MaxRowHeight.toInt} points, got $height")
       case Edit.HideCols(_, _) | Edit.ShowCols(_, _) | Edit.HideRows(_, _) | Edit.ShowRows(_, _) =>
         Right(())
       case Edit.GroupRows(_, _, level, _) => SheetEdits.validateLevel(level)
@@ -73,11 +79,11 @@ private[xl] object EditInterpreter:
       case Edit.SetComment(_, _) | Edit.RemoveComment(_) => Right(())
       case Edit.Hyperlink(_, target) =>
         if target.exists(_.trim.isEmpty) then
-          refuse(s"$name: target cannot be empty (omit it to clear the link)")
+          refuse(name, "target cannot be empty (omit it to clear the link)")
         else Right(())
       case Edit.AddConditionalFormat(_, ranges, rules) =>
         if ranges.isEmpty || rules.isEmpty then
-          refuse(s"$name: at least one range and one rule are required")
+          refuse(name, "at least one range and one rule are required")
         else Right(())
       case Edit.AddChart(_, _, _) | Edit.AddImage(_, _, _) => Right(())
       case Edit.Freeze(_) | Edit.Unfreeze(_) => Right(())
@@ -92,19 +98,19 @@ private[xl] object EditInterpreter:
       case Edit.DeleteCols(_, _, count) => positiveCount(name, count)
       case Edit.AddSheet(_, after, before) =>
         if after.isDefined && before.isDefined then
-          refuse(s"$name: after and before are mutually exclusive")
+          refuse(name, "after and before are mutually exclusive")
         else Right(())
       case Edit.RemoveSheet(_) | Edit.RenameSheet(_, _) | Edit.CopySheet(_, _) => Right(())
       case Edit.MoveSheet(_, toIndex, after, before) =>
         if Vector(toIndex, after, before).count(_.isDefined) == 1 then Right(())
-        else refuse(s"$name: exactly one of to, after or before is required")
+        else refuse(name, "exactly one of to, after or before is required")
       case Edit.HideSheet(_, _) | Edit.ShowSheet(_) => Right(())
       case Edit.DefineName(defined, refersTo, _) =>
-        if defined.trim.isEmpty then refuse(s"$name: name cannot be empty")
-        else if refersTo.trim.isEmpty then refuse(s"$name: refersTo cannot be empty")
+        if defined.trim.isEmpty then refuse(name, "name cannot be empty")
+        else if refersTo.trim.isEmpty then refuse(name, "refersTo cannot be empty")
         else Right(())
       case Edit.RemoveName(defined, _) =>
-        if defined.trim.isEmpty then refuse(s"$name: name cannot be empty") else Right(())
+        if defined.trim.isEmpty then refuse(name, "name cannot be empty") else Right(())
 
   private def countMatch(name: String, at: Area, actual: Int): XLResult[Unit] =
     val expected = at.range.cellCount
@@ -112,7 +118,7 @@ private[xl] object EditInterpreter:
     else Left(XLError.ValueCountMismatch(expected, actual, s"$name ${at.range.toA1}"))
 
   private def positiveCount(name: String, count: Int): XLResult[Unit] =
-    if count >= 1 then Right(()) else refuse(s"$name: count must be at least 1, got $count")
+    if count >= 1 then Right(()) else refuse(name, s"count must be at least 1, got $count")
 
   private def each[A](as: Vector[A])(f: A => XLResult[Unit]): XLResult[Unit] =
     as.foldLeft[XLResult[Unit]](Right(()))((acc, a) => acc.flatMap(_ => f(a)))
@@ -167,12 +173,15 @@ private[xl] object EditInterpreter:
   // ===== THE sheet rule =====
 
   private def findSheet(wb: Workbook, name: SheetName): XLResult[Sheet] =
-    wb.sheets.find(_.name == name).toRight(XLError.SheetNotFound(name.value))
+    wb.sheets.find(_.name == name).toRight(XLError.SheetNotFound(name.value, sheetNames(wb)))
 
   private def indexOf(wb: Workbook, name: SheetName): XLResult[Int] =
     wb.sheets.indexWhere(_.name == name) match
-      case -1 => Left(XLError.SheetNotFound(name.value))
+      case -1 => Left(XLError.SheetNotFound(name.value, sheetNames(wb)))
       case i => Right(i)
+
+  /** The names a `SheetNotFound` offers as candidates (GH-615). */
+  private def sheetNames(wb: Workbook): Vector[String] = wb.sheets.map(_.name.value)
 
   /** A qualifier wins, then the scope's default, then the only sheet, else `SheetRequired`. */
   private def resolve(
@@ -377,10 +386,10 @@ private[xl] object EditInterpreter:
           val rest = wb.sheets.map(_.name).filterNot(_ == sheetName)
           def relativeTo(anchor: SheetName, offset: Int): XLResult[Int] =
             if anchor == sheetName then
-              Left(XLError.Other(s"$name: cannot move a sheet relative to itself"))
+              Left(XLError.InvalidArgument(name, "cannot move a sheet relative to itself"))
             else
               rest.indexOf(anchor) match
-                case -1 => Left(XLError.SheetNotFound(anchor.value))
+                case -1 => Left(XLError.SheetNotFound(anchor.value, sheetNames(wb)))
                 case i => Right(i + offset)
           val position: XLResult[Int] = (toIndex, after, before) match
             case (Some(i), _, _) =>
@@ -388,7 +397,8 @@ private[xl] object EditInterpreter:
               else Left(XLError.OutOfBounds(s"$name[$i]", s"Valid range: 0 to ${rest.size}"))
             case (_, Some(anchor), _) => relativeTo(anchor, 1)
             case (_, _, Some(anchor)) => relativeTo(anchor, 0)
-            case _ => Left(XLError.Other(s"$name: exactly one of to, after or before is required"))
+            case _ =>
+              Left(XLError.InvalidArgument(name, "exactly one of to, after or before is required"))
           workbookLevel(
             for
               _ <- indexOf(wb, sheetName)
@@ -423,7 +433,8 @@ private[xl] object EditInterpreter:
               wb.metadata.definedNames.partition(d =>
                 d.name == defined && d.localSheetId == localId
               )
-            if matching.isEmpty then Left(XLError.Other(s"Named range '$defined' not found"))
+            if matching.isEmpty then
+              Left(XLError.NameNotFound(defined, wb.metadata.definedNames.map(_.name).distinct))
             else Right(withDefinedNames(wb, others))
           })
     }

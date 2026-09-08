@@ -36,6 +36,42 @@ object Argv:
     "--strict" -> false
   )
 
+  /** The workbook extensions `xl` opens: a positional token ending in one was meant for `-f`. */
+  private val workbookExtensions: Vector[String] =
+    Vector(".xlsx", ".xlsm", ".xltx", ".xltm", ".xls")
+
+  /** Verbs whose own positional IS a file (`new <output>`, `lint [file]`). */
+  private val fileVerbs: Set[String] = Set("new", "lint")
+
+  /** Verb options that take a file value: their token is not a misplaced `-f`. */
+  private val fileOptions: Set[String] = Set("-g", "--file2")
+
+  /**
+   * GH-619: the workbook path a wrong command line passed positionally — the most frequent way an
+   * agent opens (`xl view input.xlsx A1:B4`). Defined only when no `-f`/`--file` was given, the
+   * verb does not take a file of its own, and a token that is not a flag, not the value of a global
+   * or of a file option, and not behind `--` ends in a workbook extension. The usage error's hint
+   * then says "did you mean -f <path>?" instead of pointing at `--help`.
+   */
+  def positionalFile(args: List[String]): Option[String] =
+    val hasFile = args.exists(a => a == "-f" || a == "--file" || a.startsWith("--file="))
+    if hasFile || verbOf(args).exists(fileVerbs.contains) then None
+    else
+      @tailrec
+      def scan(rest: List[String]): Option[String] = rest match
+        case Nil => None
+        case "--" :: _ => None
+        case flag :: _ :: tail
+            if flag.startsWith("-") && (globals.getOrElse(flag, false) || fileOptions(flag)) =>
+          scan(tail)
+        case token :: tail =>
+          if !token.startsWith("-") && looksLikeWorkbook(token) then Some(token) else scan(tail)
+      scan(args)
+
+  private def looksLikeWorkbook(token: String): Boolean =
+    val lower = token.toLowerCase(java.util.Locale.ROOT)
+    workbookExtensions.exists(ext => lower.endsWith(ext) && lower.length > ext.length)
+
   /**
    * Flags a verb owns under a global's name: for that verb they are the verb's own and are not
    * hoisted. `--strict` after `view` gates `--eval` (Main's `strictOpt`); `--sheet`/`--backend`

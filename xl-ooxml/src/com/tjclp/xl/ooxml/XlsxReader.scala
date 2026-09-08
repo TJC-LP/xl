@@ -253,7 +253,10 @@ object XlsxReader:
         )
       finally
         digestStream.close()
-    catch case e: Exception => Left(XLError.IOError(s"Failed to read XLSX: ${e.getMessage}"))
+    catch
+      case e: java.nio.file.NoSuchFileException =>
+        Left(XLError.IOError(s"no such file: ${Option(e.getFile).getOrElse(inputPath.toString)}"))
+      case e: Exception => Left(XLError.IOError(s"Failed to read XLSX: ${e.getMessage}"))
 
   /**
    * Read workbook from byte array.

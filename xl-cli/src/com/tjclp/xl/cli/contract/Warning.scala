@@ -34,6 +34,13 @@ object WarningCode:
    */
   val MEMORY_PRESSURE: String = "MEMORY_PRESSURE"
 
+  /**
+   * GH-641: `stats` over a range holding no numbers. The run succeeds with zero-count statistics —
+   * an empty result is a result, as for `search` and `filter` — and this names the likely mistake
+   * (a text column) out of band.
+   */
+  val NO_NUMERIC_VALUES: String = "NO_NUMERIC_VALUES"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -45,5 +52,6 @@ object WarningCode:
     SHEET_AUTOSELECTED,
     FLAG_IGNORED,
     EVAL_FAILED,
-    MEMORY_PRESSURE
+    MEMORY_PRESSURE,
+    NO_NUMERIC_VALUES
   )

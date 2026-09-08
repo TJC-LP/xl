@@ -418,7 +418,7 @@ private[xl] object SheetEdits:
 
   def validateLevel(level: Int): XLResult[Unit] =
     if level >= 1 && level <= 7 then Right(())
-    else Left(XLError.Other(s"Outline level must be 1-7, got: $level"))
+    else Left(XLError.InvalidArgument("outline", s"level must be 1-7, got: $level"))
 
   /**
    * Apply `f` to the row's properties, keeping the entry even when the result is all-default: an
@@ -531,7 +531,8 @@ private[xl] object SheetEdits:
   /** Excel accepts a zoom of 10-400 percent. */
   def validateZoom(zoom: Option[Int]): XLResult[Unit] =
     zoom.filter(z => z < 10 || z > 400) match
-      case Some(z) => Left(XLError.Other(s"Zoom scale must be 10-400, got: $z"))
+      case Some(z) =>
+        Left(XLError.InvalidArgument("sheet-view", s"zoom scale must be 10-400, got: $z"))
       case None => Right(())
 
   /** Merge view options into the sheet's current view; unspecified fields are preserved. */

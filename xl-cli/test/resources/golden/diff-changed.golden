@@ -11,8 +11,9 @@ Comparing <DIR>/simple.xlsx vs <DIR>/changed.xlsx
 
 ## Data
 
-Changed (1):
+Changed (2):
   B1: 10 -> 11
+  B4: =SUM(B1:B3) cached 42.5 -> 43.5 [cache]
 
-Summary: 1 changed, 0 added, 0 removed cell(s) across 1 sheet(s)
+Summary: 2 changed, 0 added, 0 removed cell(s) across 1 sheet(s)
 ## stderr

@@ -270,11 +270,11 @@ class SheetEditsSpec extends FunSuite:
     assert(ungrouped.getRowProperties(Row.from1(3)).hidden) // like Excel, ungroup does not unhide
     assertEquals(
       Sheet(name).groupRows(RowSpan.single(Row.from1(1)), 8, collapsed = false),
-      Left(XLError.Other("Outline level must be 1-7, got: 8"))
+      Left(XLError.InvalidArgument("outline", "level must be 1-7, got: 8"))
     )
     assertEquals(
       Sheet(name).groupCols(ColSpan.single(Column.from0(0)), 0, collapsed = false),
-      Left(XLError.Other("Outline level must be 1-7, got: 0"))
+      Left(XLError.InvalidArgument("outline", "level must be 1-7, got: 0"))
     )
   }
 
@@ -289,7 +289,7 @@ class SheetEditsSpec extends FunSuite:
     )
     assertEquals(
       Sheet(name).mergeSheetView(None, Some(401), None),
-      Left(XLError.Other("Zoom scale must be 10-400, got: 401"))
+      Left(XLError.InvalidArgument("sheet-view", "zoom scale must be 10-400, got: 401"))
     )
     val setUp = ok(Sheet(name).mergePageSetup(Some("landscape"), None, Some(1), Some(0), None))
     val setUpAgain = ok(setUp.mergePageSetup(None, Some(80), None, None, Some(false)))

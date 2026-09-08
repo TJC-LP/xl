@@ -359,13 +359,57 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
       verbHelpAfterGlobals <- CliHarness.run("-f", file("simple.xlsx"), "view", "--help")
     yield
       assertEquals(help.exit, 0)
-      assert(help.stderr.startsWith("Usage:"), help.stderr)
+      assert(help.stdout.startsWith("Usage:"), help.stdout)
       assertEquals(verbHelp.exit, 0)
-      assert(verbHelp.stderr.contains("Write value(s) to cell or range."), verbHelp.stderr)
+      assert(verbHelp.stdout.contains("Write value(s) to cell or range."), verbHelp.stdout)
+      assertEquals(verbHelp.stderr, "")
       assertEquals(version.exit, 0)
       assert(version.stdout.trim.nonEmpty)
       assertEquals(verbHelpAfterGlobals.exit, 0)
-      assert(verbHelpAfterGlobals.stderr.contains("View a range"), verbHelpAfterGlobals.stderr)
+      assert(verbHelpAfterGlobals.stdout.contains("View a range"), verbHelpAfterGlobals.stdout)
+  }
+
+  test("GH-619: positionalFile names the workbook an agent passed without -f") {
+    assertEquals(Argv.positionalFile(List("view", "input.xlsx", "A1:B4")), Some("input.xlsx"))
+    assertEquals(Argv.positionalFile(List("view", "A1:B4", "in.XLSM")), Some("in.XLSM"))
+    assertEquals(Argv.positionalFile(List("-s", "Data", "view", "in.xlsx")), Some("in.xlsx"))
+    // the value of -f/--file, -o or -g is not a misplaced -f
+    assertEquals(Argv.positionalFile(List("-f", "in.xlsx", "view", "A1")), None)
+    assertEquals(Argv.positionalFile(List("--file=in.xlsx", "view", "A1")), None)
+    assertEquals(Argv.positionalFile(List("-o", "out.xlsx", "put", "A1", "1")), None)
+    assertEquals(Argv.positionalFile(List("diff", "-g", "b.xlsx")), None)
+    // verbs whose own positional is a file, tokens behind --, flags, and non-workbook names
+    assertEquals(Argv.positionalFile(List("lint", "book.xlsx")), None)
+    assertEquals(Argv.positionalFile(List("new", "book.xlsx")), None)
+    assertEquals(Argv.positionalFile(List("search", "--", "report.xlsx")), None)
+    assertEquals(Argv.positionalFile(List("view", "--eval", "A1", "data.csv")), None)
+    assertEquals(Argv.positionalFile(List("view", ".xlsx")), None)
+    assertEquals(Argv.positionalFile(Nil), None)
+  }
+
+  test("GH-619: a positional workbook gets the -f hint in text and --json usage errors") {
+    for
+      text <- CliHarness.run("view", "input.xlsx", "A1:B4")
+      json <- CliHarness.run("--json", "view", "input.xlsx", "A1:B4")
+      plain <- CliHarness.run("-f", file("simple.xlsx"), "view", "A1:B4", "extra")
+    yield
+      assertEquals(text.exit, 2)
+      assertEquals(text.stdout, "")
+      assert(text.stderr.startsWith("Error: Unexpected argument: A1:B4"), text.stderr)
+      assert(
+        text.stderr.contains(
+          "  hint: did you mean -f input.xlsx? xl takes the file as -f/--file; " +
+            "the positional argument is the range or verb argument"
+        ),
+        text.stderr
+      )
+      assertEquals(json.exit, 2)
+      val error = ujson.read(json.stdout)("error")
+      assertEquals(error("code"), ujson.Str("USAGE"))
+      assert(error("hint").str.startsWith("did you mean -f input.xlsx?"), error("hint").str)
+      // with -f given, the usual --help hint stands
+      assertEquals(plain.exit, 2)
+      assert(plain.stderr.contains("  hint: run `xl view --help` for the usage"), plain.stderr)
   }
 
   test("`search -- --json` searches for the text `--json`; `search --json` is a usage error") {

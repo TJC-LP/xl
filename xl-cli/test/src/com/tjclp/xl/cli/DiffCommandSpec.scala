@@ -67,11 +67,75 @@ class DiffCommandSpec extends CatsEffectSuite:
     assertEquals(change.after.formula, Some("=SUM(C2:C4)*1.1"))
   }
 
-  test("diff: identical formula with different cached value is not a change") {
+  test("GH-607: identical formula with a different cached value is one change of kind cache") {
     val a = Sheet("S").put(ref"C1", CellValue.Formula("=A1", Some(CellValue.Number(1))))
     val b = Sheet("S").put(ref"C1", CellValue.Formula("=A1", Some(CellValue.Number(2))))
     val diff = DiffCommands.computeDiff(wb(a), wb(b), None).toOption.get
-    assert(diff.identical, "Cached values are derived; formula text is the comparison key")
+    assert(!diff.identical)
+    val changed = diff.sheets.head.changed
+    assertEquals(changed.length, 1)
+    assertEquals(changed.head.kind, DiffCommands.ChangeKind.Cache)
+    assertEquals(changed.head.before, DiffCommands.CellSnapshot("1", Some("=A1")))
+    assertEquals(changed.head.after, DiffCommands.CellSnapshot("2", Some("=A1")))
+    assert(!changed.head.styleChanged)
+  }
+
+  test("GH-607: a cache present on one side only is a change of kind cache") {
+    val cached = Sheet("S").put(ref"C1", CellValue.Formula("=A1", Some(CellValue.Number(1))))
+    val stripped = Sheet("S").put(ref"C1", CellValue.Formula("=A1", None))
+    val diff = DiffCommands.computeDiff(wb(cached), wb(stripped), None).toOption.get
+    val change = diff.sheets.head.changed.head
+    assertEquals(change.kind, DiffCommands.ChangeKind.Cache)
+    assertEquals(change.before.value, "1")
+    assertEquals(change.after.value, "")
+    // and the other way round
+    val back = DiffCommands.computeDiff(wb(stripped), wb(cached), None).toOption.get
+    assertEquals(back.sheets.head.changed.head.kind, DiffCommands.ChangeKind.Cache)
+  }
+
+  test("GH-607: identical formulas with identical caches are identical") {
+    val a =
+      Sheet("S").put(ref"C1", CellValue.Formula("=A1", Some(CellValue.Number(BigDecimal("2.5")))))
+    val b =
+      Sheet("S").put(ref"C1", CellValue.Formula("A1", Some(CellValue.Number(BigDecimal("2.50")))))
+    assert(DiffCommands.computeDiff(wb(a), wb(b), None).toOption.get.identical)
+  }
+
+  test("GH-607: --formulas-only keeps the text-only rule; a text change is kind formula") {
+    val a = Sheet("S").put(ref"C1", CellValue.Formula("=A1", Some(CellValue.Number(1))))
+    val b = Sheet("S").put(ref"C1", CellValue.Formula("=A1", Some(CellValue.Number(2))))
+    assert(DiffCommands.computeDiff(wb(a), wb(b), None, formulasOnly = true).toOption.get.identical)
+    val c = Sheet("S").put(ref"C1", CellValue.Formula("=A1*2", Some(CellValue.Number(1))))
+    val textChange = DiffCommands.computeDiff(wb(a), wb(c), None, formulasOnly = true).toOption.get
+    assertEquals(textChange.sheets.head.changed.head.kind, DiffCommands.ChangeKind.Formula)
+    // a constant replaced by a formula is a formula change too; a constant by a constant, a value
+    val d = Sheet("S").put(ref"C1", CellValue.Number(1))
+    assertEquals(
+      DiffCommands.computeDiff(wb(d), wb(a), None).toOption.get.sheets.head.changed.head.kind,
+      DiffCommands.ChangeKind.Formula
+    )
+    val e = Sheet("S").put(ref"C1", CellValue.Number(2))
+    assertEquals(
+      DiffCommands.computeDiff(wb(d), wb(e), None).toOption.get.sheets.head.changed.head.kind,
+      DiffCommands.ChangeKind.Value
+    )
+  }
+
+  test("GH-607: a cache change renders as `formula cached before -> after [cache]` and kind json") {
+    val a = Sheet("S").put(
+      ref"B4",
+      CellValue.Formula("SUM(B1:B3)", Some(CellValue.Number(BigDecimal("42.5"))))
+    )
+    val b = Sheet("S").put(ref"B4", CellValue.Formula("SUM(B1:B3)", None))
+    val diff = DiffCommands.computeDiff(wb(a), wb(b), None).toOption.get
+    val md = DiffCommands.renderMarkdown(diff, "a.xlsx", "b.xlsx")
+    assert(md.contains("  B4: =SUM(B1:B3) cached 42.5 -> (none) [cache]"), md)
+    val json = ujson.read(DiffCommands.renderJson(diff))
+    val change = json("sheets").arr.head("changed").arr.head
+    assertEquals(change("kind").str, "cache")
+    assertEquals(change("before")("value").str, "42.5")
+    assertEquals(change("after")("value").str, "")
+    assertEquals(change("styleChanged").bool, false)
   }
 
   test("diff: style-only change sets styleChanged with equal values") {
@@ -82,6 +146,7 @@ class DiffCommandSpec extends CatsEffectSuite:
     val change = diff.sheets.head.changed.head
     assert(change.styleChanged, "Resolved style differs")
     assertEquals(change.before.value, change.after.value)
+    assertEquals(change.kind, DiffCommands.ChangeKind.Style)
   }
 
   test("diff: added and removed cells are reported") {
@@ -222,6 +287,7 @@ class DiffCommandSpec extends CatsEffectSuite:
     assertEquals(change("before")("value").str, "Revenue")
     assertEquals(change("after")("value").str, "Total")
     assertEquals(change("styleChanged").bool, true)
+    assertEquals(change("kind").str, "value")
     val added = sheet("added").arr.head
     assertEquals(added("ref").str, "D5")
     assertEquals(added("value").str, "New")

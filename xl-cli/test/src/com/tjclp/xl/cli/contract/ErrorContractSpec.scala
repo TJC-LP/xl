@@ -196,7 +196,8 @@ class ErrorContractSpec extends CatsEffectSuite:
       unreadable <- CliHarness.run("-f", file("simple.xlsx"), "diff", "-g", file("missing.xlsx"))
     yield
       assertEquals(differs.exit, 1)
-      assert(differs.stdout.contains("Summary: 1 changed"), differs.stdout)
+      // B1 changed and B4's cache followed it (GH-607)
+      assert(differs.stdout.contains("Summary: 2 changed"), differs.stdout)
       assertEquals(differs.stderr, "")
       assertEquals(unreadable.exit, 3, unreadable.stderr)
       assertEquals(unreadable.stdout, "")
@@ -226,12 +227,7 @@ class ErrorContractSpec extends CatsEffectSuite:
       assertEquals(corrupt.stdout, "")
       assert(corrupt.stderr.startsWith("Error: "), corrupt.stderr)
       assert(corrupt.stderr.contains("  code: "), corrupt.stderr)
-      assertFailure(
-        missing,
-        3,
-        s"IO error: Failed to open file: ${file("missing.xlsx")}",
-        "IO_READ"
-      )
+      assertFailure(missing, 3, s"No such file: ${file("missing.xlsx")}", "IO_READ")
   }
 
   test("a missing input file is IO_READ (exit 3) on every verb: sheets, names, view, cell, lint") {
@@ -242,13 +238,45 @@ class ErrorContractSpec extends CatsEffectSuite:
       view <- CliHarness.run("-f", missing, "-s", "Data", "view", "A1:B2")
       cell <- CliHarness.run("-f", missing, "cell", "Data!A1")
       lint <- CliHarness.run("lint", missing)
-    yield List("sheets" -> sheets, "names" -> names, "view" -> view, "cell" -> cell, "lint" -> lint)
-      .foreach { (verb, run) =>
+      diff <- CliHarness.run("-f", missing, "diff", "-g", file("simple.xlsx"))
+      streamed <- CliHarness.run("-f", missing, "--stream", "-s", "Data", "view", "A1:B2")
+      json <- CliHarness.run("-f", missing, "--json", "-s", "Data", "view", "A1:B2")
+    yield
+      List(
+        "sheets" -> sheets,
+        "names" -> names,
+        "view" -> view,
+        "cell" -> cell,
+        "lint" -> lint,
+        "diff" -> diff,
+        "--stream view" -> streamed
+      ).foreach { (verb, run) =>
         assertEquals(run.exit, 3, s"$verb exit\n${run.stderr}")
         assertEquals(run.stdout, "", s"$verb stdout must be empty")
-        assert(run.stderr.startsWith("Error: "), s"$verb: ${run.stderr}")
+        // GH-621: one prefix, the cause, a hint — never "Failed to read XLSX: IO error: Failed …"
+        assert(run.stderr.startsWith(s"Error: No such file: $missing\n"), s"$verb: ${run.stderr}")
         assert(run.stderr.contains("  code: IO_READ"), s"$verb: ${run.stderr}")
+        assert(
+          run.stderr.contains("  hint: check the path; the previous write may have failed"),
+          s"$verb: ${run.stderr}"
+        )
+        assert(!run.stderr.contains("Failed to read XLSX"), s"$verb: ${run.stderr}")
       }
+      val error = ujson.read(json.stdout)("error")
+      assertEquals(error("code"), ujson.Str("IO_READ"))
+      assertEquals(error("message"), ujson.Str(s"No such file: $missing"))
+      assertEquals(error("hint"), ujson.Str("check the path; the previous write may have failed"))
+      assertEquals(error("location")("file"), ujson.Str(missing))
+  }
+
+  test("GH-621: a corrupt input keeps the reader's own message, never re-prefixed") {
+    CliHarness.run("-f", file("corrupt.xlsx"), "-s", "Data", "view", "A1").map { run =>
+      assertEquals(run.exit, 3, run.stderr)
+      assert(run.stderr.startsWith("Error: "), run.stderr)
+      assert(!run.stderr.contains("Failed to read XLSX: "), run.stderr)
+      assert(!run.stderr.contains("No such file"), run.stderr)
+      assert(run.stderr.contains("  code: IO_READ"), run.stderr)
+    }
   }
 
   test(
@@ -549,15 +577,15 @@ class ErrorContractSpec extends CatsEffectSuite:
       assert(badSheet.stderr.contains("  code: "), badSheet.stderr)
   }
 
-  test("--help still exits 0 (on stderr) and --version prints the version on stdout") {
+  test("--help exits 0 on stdout (GH-620) and --version prints the version on stdout") {
     for
       help <- CliHarness.run("--help")
       version <- CliHarness.run("--version")
     yield
       assertEquals(help.exit, 0)
-      assertEquals(help.stdout, "")
-      assert(help.stderr.startsWith("Usage:"), help.stderr)
-      assert(help.stderr.contains("Exit codes:"), "the exit-code table is part of --help")
+      assertEquals(help.stderr, "")
+      assert(help.stdout.startsWith("Usage:"), help.stdout)
+      assert(help.stdout.contains("Exit codes:"), "the exit-code table is part of --help")
       assertEquals(version.exit, 0)
       assertEquals(version.stdout, s"${BuildInfo.version}\n")
       assertEquals(version.stderr, "")

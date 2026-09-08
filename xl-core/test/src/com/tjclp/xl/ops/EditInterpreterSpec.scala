@@ -80,7 +80,7 @@ class EditInterpreterSpec extends FunSuite:
   test("sheet rule: an unknown sheet is SheetNotFound at the failing index") {
     assertEquals(
       failure(baseWorkbook, Edit.Merge(area("A1:B2")), Edit.Merge(area("Nope!A1:B2"))),
-      XLError.EditFailed(2, "merge", XLError.SheetNotFound("Nope"))
+      XLError.EditFailed(2, "merge", XLError.SheetNotFound("Nope", Vector("Data", "Other")))
     )
   }
 
@@ -218,7 +218,7 @@ class EditInterpreterSpec extends FunSuite:
     assert(r.exists(_.structural))
     assertEquals(
       failure(baseWorkbook, Edit.InsertRows(None, Row.from0(1), 0)).root,
-      XLError.Other("insert-rows: count must be at least 1, got 0")
+      XLError.InvalidArgument("insert-rows", "count must be at least 1, got 0")
     )
   }
 
@@ -371,7 +371,7 @@ class EditInterpreterSpec extends FunSuite:
     assertEquals(comments(a1("A2")).value, CellValue.Text("apple"))
     assertEquals(
       failure(Workbook(baseData), Edit.Clear(area("A1"), ClearWhat(false, false, false))).root,
-      XLError.Other("clear: nothing to clear (contents, styles or comments)")
+      XLError.InvalidArgument("clear", "nothing to clear (contents, styles or comments)")
     )
   }
 
@@ -399,7 +399,7 @@ class EditInterpreterSpec extends FunSuite:
         Workbook(baseData),
         Edit.Style(area("A1"), StyleOverlay(fontSize = Some(-1)), StyleMode.Merge)
       ).root,
-      XLError.Other("style: font size must be positive, got: -1.0")
+      XLError.InvalidArgument("style", "font size must be positive, got: -1.0")
     )
   }
 
@@ -435,11 +435,11 @@ class EditInterpreterSpec extends FunSuite:
         Workbook(baseData),
         Edit.GroupCols(None, ColSpan.single(Column.from0(0)), 9, collapsed = false)
       ).root,
-      XLError.Other("Outline level must be 1-7, got: 9")
+      XLError.InvalidArgument("outline", "level must be 1-7, got: 9")
     )
     assertEquals(
       failure(Workbook(baseData), Edit.ColWidth(None, ColSpan.single(Column.from0(0)), 300.0)).root,
-      XLError.Other("col-width: width must be 0-255 character units, got 300.0")
+      XLError.InvalidArgument("col-width", "width must be 0-255 character units, got 300.0")
     )
   }
 
@@ -475,7 +475,7 @@ class EditInterpreterSpec extends FunSuite:
     assertEquals(cleared(a1("A1")).hyperlink, None)
     assertEquals(
       failure(Workbook(baseData), Edit.Hyperlink(loc("A1"), Some(""))).root,
-      XLError.Other("hyperlink: target cannot be empty (omit it to clear the link)")
+      XLError.InvalidArgument("hyperlink", "target cannot be empty (omit it to clear the link)")
     )
   }
 
@@ -492,7 +492,10 @@ class EditInterpreterSpec extends FunSuite:
     assertEquals(s.conditionalFormats.size, 1)
     assertEquals(
       failure(Workbook(baseData), Edit.AddConditionalFormat(None, Vector.empty, Vector(rule))).root,
-      XLError.Other("add-conditional-format: at least one range and one rule are required")
+      XLError.InvalidArgument(
+        "add-conditional-format",
+        "at least one range and one rule are required"
+      )
     )
   }
 
@@ -549,7 +552,7 @@ class EditInterpreterSpec extends FunSuite:
     assertEquals(cleared.autoFilter, Some(AutoFilterState.Remove))
     assertEquals(
       failure(Workbook(baseData), Edit.SetSheetView(None, None, Some(5), None)).root,
-      XLError.Other("Zoom scale must be 10-400, got: 5")
+      XLError.InvalidArgument("sheet-view", "zoom scale must be 10-400, got: 5")
     )
     assertEquals(
       failure(
@@ -586,11 +589,11 @@ class EditInterpreterSpec extends FunSuite:
     )
     assertEquals(
       failure(baseWorkbook, Edit.AddSheet(newName, Some(missing), None)).root,
-      XLError.SheetNotFound("Nope")
+      XLError.SheetNotFound("Nope", Vector("Data", "Other"))
     )
     assertEquals(
       failure(baseWorkbook, Edit.AddSheet(newName, Some(data), Some(other))).root,
-      XLError.Other("add-sheet: after and before are mutually exclusive")
+      XLError.InvalidArgument("add-sheet", "after and before are mutually exclusive")
     )
   }
 
@@ -621,7 +624,7 @@ class EditInterpreterSpec extends FunSuite:
     )
     assertEquals(
       failure(baseWorkbook, Edit.MoveSheet(other, None, None, None)).root,
-      XLError.Other("move-sheet: exactly one of to, after or before is required")
+      XLError.InvalidArgument("move-sheet", "exactly one of to, after or before is required")
     )
     val copied = apply(baseWorkbook, Edit.CopySheet(data, SheetName.unsafe("Data2")))
     assertEquals(copied.flatMap(_(SheetName.unsafe("Data2"))).map(_.cells), Right(baseData.cells))
@@ -668,11 +671,11 @@ class EditInterpreterSpec extends FunSuite:
     assert(removed.metadata.definedNames.isEmpty)
     assertEquals(
       failure(baseWorkbook, Edit.RemoveName("Rate", None)).root,
-      XLError.Other("Named range 'Rate' not found")
+      XLError.NameNotFound("Rate", Vector("Total"))
     )
     assertEquals(
       failure(baseWorkbook, Edit.DefineName("", "1", None)).root,
-      XLError.Other("define-name: name cannot be empty")
+      XLError.InvalidArgument("define-name", "name cannot be empty")
     )
   }
 
@@ -707,7 +710,7 @@ class EditInterpreterSpec extends FunSuite:
     assertEquals(edited.map(_.mergedRanges.contains(rng("Z1:Z2"))), Right(true))
     assertEquals(
       baseData.edit(Edit.Put(loc("Other!A1"), num(1), None)),
-      Left(XLError.EditFailed(1, "put", XLError.SheetNotFound("Other")))
+      Left(XLError.EditFailed(1, "put", XLError.SheetNotFound("Other", Vector("Data"))))
     )
     val renamed = SheetName.unsafe("Renamed")
     assertEquals(
@@ -758,7 +761,7 @@ class EditInterpreterSpec extends FunSuite:
     val planned = Edit.plan(baseWorkbook, edits, Scope.of(data))
     assertEquals(
       planned,
-      Left(XLError.EditFailed(2, "copy", XLError.SheetNotFound("Nope")))
+      Left(XLError.EditFailed(2, "copy", XLError.SheetNotFound("Nope", Vector("Data", "Other"))))
     )
     assertEquals(planned, Edit.applyAll(baseWorkbook, edits, Scope.of(data)).map(_.planned))
     // and a refusal the static check cannot see (the text-only support refuses the shift) is

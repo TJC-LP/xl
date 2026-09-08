@@ -228,9 +228,24 @@ class FormulaRecordCliSpec extends FunSuite:
 
     assert(!diff(normal, arrayC1).identical, "Normal and array records must differ")
     assert(!diff(arrayC1, arrayC1C2).identical, "array ref payloads must differ")
+    // GH-607: a cache that differs under the same formula is a difference of its own kind
+    val cacheOnly = diff(arrayC1, arrayC1DifferentCache)
+    assert(!cacheOnly.identical, "a differing cache is reported")
+    assertEquals(
+      cacheOnly.sheets.flatMap(_.changed.map(_.kind)),
+      Vector(DiffCommands.ChangeKind.Cache)
+    )
     assert(
-      diff(arrayC1, arrayC1DifferentCache).identical,
-      "derived caches must remain outside formula identity"
+      DiffCommands
+        .computeDiff(
+          Workbook(Sheet("S").put(aref("C1"), arrayC1)),
+          Workbook(Sheet("S").put(aref("C1"), arrayC1DifferentCache)),
+          None,
+          formulasOnly = true
+        )
+        .fold(fail(_), identity)
+        .identical,
+      "--formulas-only keeps derived caches outside formula identity"
     )
   }
 

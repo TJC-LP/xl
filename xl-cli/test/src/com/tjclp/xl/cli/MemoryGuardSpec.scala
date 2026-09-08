@@ -574,6 +574,8 @@ class MemoryGuardSpec extends CatsEffectSuite:
     yield (guarded, library) match
       case (Left(g), Left(l)) =>
         assertEquals(g.getMessage, l.getMessage)
-        assert(g.getMessage.startsWith("Failed to read XLSX: "), g.getMessage)
+        // GH-621: the XLError's own message, never re-prefixed with "Failed to read XLSX: "
+        assert(!g.getMessage.startsWith("Failed to read XLSX: "), g.getMessage)
+        assert(g.getMessage.nonEmpty)
       case other => fail(s"both reads must fail the same way, got $other")
   }

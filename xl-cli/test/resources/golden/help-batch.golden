@@ -4,7 +4,6 @@ batch
 ## exit
 0
 ## stdout
-## stderr
 Usage:
     xl batch --dry-run [<operations>]
     xl batch --schema
@@ -84,3 +83,4 @@ Options and flags:
         Validate batch JSON and show summary without writing
     --schema
         Print the JSON Schema of the batch document (every op, field and alias) and exit
+## stderr

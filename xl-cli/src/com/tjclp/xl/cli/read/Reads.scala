@@ -22,7 +22,6 @@ import com.tjclp.xl.cli.contract.{
 }
 import com.tjclp.xl.cli.helpers.{FilterPredicate, Resolve}
 import com.tjclp.xl.cli.output.{CsvRenderer, Escape, Format, JsonRenderer, Markdown, RendererCommon}
-import com.tjclp.xl.error.XLError
 
 /**
  * The read verbs as one function (W2.4): `ReadQuery => SheetSource => IO[Payload]`, with
@@ -53,8 +52,8 @@ object Reads:
       case q: ReadQuery.View => view(q, source, sheetFlag, mode, warn)
       case q: ReadQuery.Cell => cell(q, source, sheetFlag, mode)
       case q: ReadQuery.Search => search(q, source, sheetFlag, mode)
-      case q: ReadQuery.Stats => stats(q, source, sheetFlag, mode)
-      case q: ReadQuery.Filter => filter(q, source, sheetFlag, mode))
+      case q: ReadQuery.Stats => stats(q, source, sheetFlag, mode, warn)
+      case q: ReadQuery.Filter => filter(q, source, sheetFlag, mode, warn))
 
   /**
    * [[run]] as a complete [[Outcome]]: the payload with the warnings the run raised, or the failure
@@ -475,11 +474,18 @@ object Reads:
     def add(n: BigDecimal): StatsAcc =
       StatsAcc(count + 1, sum + n, Some(min.fold(n)(_ min n)), Some(max.fold(n)(_ max n)))
 
+  /**
+   * `stats <range>`: count, sum, min, max and mean of the numeric records. A range holding no
+   * numbers is a legitimate result (GH-641) — zero-count statistics with `min`/`max`/`mean` absent
+   * (`n/a` in text, `null` in JSON), exit 0 — flagged `NO_NUMERIC_VALUES` out of band. Whole-column
+   * spans (`AM:AM`) are accepted like `view`'s and folded in one pass ([[Resolve.ref]]).
+   */
   private def stats(
     q: ReadQuery.Stats,
     source: SheetSource,
     sheetFlag: Option[String],
-    mode: OutputMode
+    mode: OutputMode,
+    warn: Warning => IO[Unit]
   ): IO[Payload] =
     for
       parsed <- lift(Resolve.ref(q.ref))
@@ -491,6 +497,7 @@ object Reads:
         Resolve.unqualified("stats", q.ref, target)
       )
       range = target.toEither.fold(ref => CellRange(ref, ref), identity)
+      label = Resolve.rangeLabel(range)
       acc <- source
         .rows(sheet, range)
         .flatMap(Stream.emits)
@@ -500,44 +507,41 @@ object Reads:
         }
         .compile
         .fold(StatsAcc(0, BigDecimal(0), None, None))(_.add(_))
-      _ <- IO
-        .raiseError(
-          CliException(
-            CliError.fromXLError(XLError.Other(s"No numeric values in range ${range.toA1}"), None)
-          )
-        )
+      _ <- warn(Warning(WarningCode.NO_NUMERIC_VALUES, s"No numeric values in range $label"))
         .whenA(acc.count == 0)
     yield
       val count = acc.count
       val sum = acc.sum
-      val min = acc.min.getOrElse(BigDecimal(0))
-      val max = acc.max.getOrElse(BigDecimal(0))
-      val mean = sum / BigDecimal(count)
+      val mean = Option.when(count > 0)(sum / BigDecimal(count))
       mode match
         case OutputMode.Text =>
+          def cell(v: Option[BigDecimal]): String = v.fold("n/a")(n => f"$n%.2f")
           Payload.text(
-            f"count: $count, sum: $sum%.2f, min: $min%.2f, max: $max%.2f, mean: $mean%.2f"
+            f"count: $count, sum: $sum%.2f, min: ${cell(acc.min)}, max: ${cell(acc.max)}, " +
+              s"mean: ${cell(mean)}"
           )
         case OutputMode.Json =>
+          def lexeme(v: Option[BigDecimal]): String = v.fold("null")(CellRecord.numberLexeme)
           Payload.Raw(
-            s"""{"sheet": ${Escape.json(
-                sheet.value
-              )}, "range": "${range.toA1}", "count": $count, """ +
-              s""""sum": ${CellRecord.numberLexeme(sum)}, "min": ${CellRecord.numberLexeme(
-                  min
-                )}, """ +
-              s""""max": ${CellRecord.numberLexeme(max)}, "mean": ${CellRecord.numberLexeme(
-                  mean
-                )}}"""
+            s"""{"sheet": ${Escape.json(sheet.value)}, "range": "$label", "count": $count, """ +
+              s""""sum": ${CellRecord.numberLexeme(sum)}, "min": ${lexeme(acc.min)}, """ +
+              s""""max": ${lexeme(acc.max)}, "mean": ${lexeme(mean)}}"""
           )
 
   // --- filter -----------------------------------------------------------------------------------
 
+  /**
+   * `filter --where`: the matching rows of the used range. `--limit` caps the rows shown, `0` means
+   * no limit (GH-639, as for `view` and `search`); the match total always travels with the result —
+   * in the markdown footer, as the JSON document's `matched`/`shown`/`truncated`/`limit` fields,
+   * and for CSV (whose stdout must stay parseable) as a `TRUNCATED` warning when rows were clipped.
+   */
   private def filter(
     q: ReadQuery.Filter,
     source: SheetSource,
     sheetFlag: Option[String],
-    mode: OutputMode
+    mode: OutputMode,
+    warn: Warning => IO[Unit]
   ): IO[Payload] =
     for
       sheet <- resolveSheet(source, sheetFlag, None, "filter")
@@ -549,16 +553,20 @@ object Reads:
       )
       used <- source.usedRange(sheet)
       text <- used match
-        case None => IO.pure(filterNoData(q.format, Vector.empty))
-        case Some(range) => runFilter(q, source, sheet, range, pred)
+        case None => IO.pure(filterNoData(q, Vector.empty))
+        case Some(range) => runFilter(q, source, sheet, range, pred, warn)
     yield if q.format == FilterFormat.Json then jsonPayload(mode, text) else Payload.text(text)
+
+  /** The row cap `--limit` denotes: `None` for `0` (no limit). */
+  private def filterCap(limit: Int): Option[Int] = Option.when(limit > 0)(limit)
 
   private def runFilter(
     q: ReadQuery.Filter,
     source: SheetSource,
     sheet: SheetName,
     range: CellRange,
-    pred: FilterPredicate.Pred
+    pred: FilterPredicate.Pred,
+    warn: Warning => IO[Unit]
   ): IO[String] =
     val firstCol = range.start.col.index0
     val usedCols = (firstCol to range.end.col.index0).toVector
@@ -602,8 +610,8 @@ object Reads:
       // One pass over the used range: keep the first --limit matching rows, count them all. A row's
       // number is its position in the dense window, never recovered from the cells kept for it: a
       // --columns token outside the used range selects no cell, and the row is still a match.
-      // `--limit 0` keeps none and reports the count alone, as filter always has (`view` and
-      // `search` read 0 as no limit)
+      // `--limit 0` keeps every match (GH-639: no limit, as `view` and `search` read it)
+      cap = filterCap(q.limit)
       scanned <- source
         .rows(sheet, range)
         .zipWithIndex
@@ -614,7 +622,7 @@ object Reads:
         }
         .compile
         .fold((Vector.empty[FilterRow], 0)) { case ((kept, total), (rowIdx, row)) =>
-          val keep = kept.size < math.max(0, q.limit)
+          val keep = cap.forall(kept.size < _)
           val cells = selectedCols.map(col => row.lift(col - firstCol))
           (if keep then kept :+ FilterRow(rowIdx + 1, cells) else kept, total + 1)
         }
@@ -630,10 +638,19 @@ object Reads:
             .getOrElse(letter)
         else letter
       }
+      truncated = total > shown.size
+      // CSV stdout must stay machine-parseable: the clip is a warning, as `view --format csv` does;
+      // markdown carries it in its footer and JSON in its own fields
+      _ <- warn(
+        Warning(
+          WarningCode.TRUNCATED,
+          RendererCommon.truncationNotice(shown.size, total, "matching rows")
+        )
+      ).whenA(truncated && q.format == FilterFormat.Csv)
       text <- q.format match
         case FilterFormat.Markdown => IO.pure(filterMarkdown(shown, total, labels))
         case FilterFormat.Csv => IO.pure(filterCsv(shown, labels))
-        case FilterFormat.Json => filterJson(shown, labels)
+        case FilterFormat.Json => filterJson(shown, total, cap, labels)
     yield text
 
   /**
@@ -674,11 +691,11 @@ object Reads:
             else Left(s"Duplicate column(s) in --columns: ${repeated.mkString(", ")}")
           }
 
-  private def filterNoData(format: FilterFormat, labels: Vector[String]): String =
-    format match
+  private def filterNoData(q: ReadQuery.Filter, labels: Vector[String]): String =
+    q.format match
       case FilterFormat.Markdown => "No rows matched."
       case FilterFormat.Csv => ("row" +: labels).mkString(",")
-      case FilterFormat.Json => "[]"
+      case FilterFormat.Json => filterJsonDocument(Vector.empty, 0, filterCap(q.limit))
 
   private def filterMarkdown(
     shown: Vector[FilterRow],
@@ -723,13 +740,21 @@ object Reads:
     (header +: lines).mkString("\n")
 
   /**
-   * `[{"row": n, "cells": {label: value}}]`, every number lexeme exact; an uncached formula shows
-   * its expression as a string, as it always has; a column outside the used range is `null`. Two
-   * selected columns under one header name share a key, which keeps the first's position and the
-   * last's value — `ujson.Obj` semantics, as before. The text is re-emitted through `ujson`: a
-   * lexeme this renderer got wrong is its defect (`INTERNAL`), never malformed stdout.
+   * `{"matched": N, "shown": M, "truncated": bool, "limit": n|null, "rows": [{"row": n, "cells":
+   * {label: value}}]}` (GH-639: the match total and the clip travel with the rows, as `view`'s
+   * `totalRows`/`truncated` and `search`'s `count`/`total` do), every number lexeme exact; an
+   * uncached formula shows its expression as a string, as it always has; a column outside the used
+   * range is `null`. Two selected columns under one header name share a key, which keeps the
+   * first's position and the last's value — `ujson.Obj` semantics, as before. The text is
+   * re-emitted through `ujson`: a lexeme this renderer got wrong is its defect (`INTERNAL`), never
+   * malformed stdout.
    */
-  private def filterJson(shown: Vector[FilterRow], labels: Vector[String]): IO[String] =
+  private def filterJson(
+    shown: Vector[FilterRow],
+    matched: Int,
+    cap: Option[Int],
+    labels: Vector[String]
+  ): IO[String] =
     def valueJson(record: CellRecord): String = record.formula match
       case Some(f) if !f.cached => Escape.json(f.text)
       case _ => record.rawJson
@@ -739,12 +764,16 @@ object Reads:
       })
       s"""{"row": ${row.number}, "cells": {${fields.map((k, v) => s"$k: $v").mkString(", ")}}}"""
     }
-    val text = rows.mkString("[", ", ", "]")
-    IO(ujson.reformat(text, indent = 2)).adaptError { case e =>
+    IO(ujson.reformat(filterJsonDocument(rows, matched, cap), indent = 2)).adaptError { case e =>
       CliException(
         CliError(ErrorCode.INTERNAL, s"filter produced malformed JSON: ${CliError.messageOf(e)}")
       )
     }
+
+  /** The filter document around already-rendered row objects. */
+  private def filterJsonDocument(rows: Vector[String], matched: Int, cap: Option[Int]): String =
+    s"""{"matched": $matched, "shown": ${rows.size}, "truncated": ${matched > rows.size}, """ +
+      s""""limit": ${cap.fold("null")(_.toString)}, "rows": ${rows.mkString("[", ", ", "]")}}"""
 
   /** A repeated key keeps its first position and takes its last value (`ujson.Obj` on update). */
   private def uniqueKeys(fields: Vector[(String, String)]): Vector[(String, String)] =

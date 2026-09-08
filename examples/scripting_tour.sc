@@ -101,9 +101,9 @@ val checkedOut = "/tmp/scripting-tour-checked.xlsx"
 val checked = Excel.writeChecked(Workbook(stamped), checkedOut)
 println(s"  ✓ ${checked.summary}") // "Recalculated 3 formulas" — the same line `xl recalc` prints
 
-// One sheet straight from disk (a typo throws an XLException naming the candidate sheets), and
-// the workbook's shape without loading a cell.
-val salesOnDisk = Excel.readSheet(checkedOut, "Sales")
+// One sheet straight from disk — an XLResult since 0.21.1, so orExit unwraps it and a typo prints
+// the candidate sheets as `did you mean:` — and the workbook's shape without loading a cell.
+val salesOnDisk = orExit(Excel.readSheet(checkedOut, "Sales"))
 println(s"  ✓ D2 on disk: ${salesOnDisk.readTypedOr[BigDecimal](ref"D2", BigDecimal(0))}")
 val meta = Excel.readMetadata(checkedOut)
 println(s"  ✓ Sheets: ${meta.sheets.map(_.name.value).mkString(", ")}")

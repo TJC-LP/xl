@@ -774,15 +774,19 @@ xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                  # Array arithmetic 
 
 ### `xl stats <range>`
 
-Calculate statistics (count, sum, min, max, average, ...) for numeric values in a range. Supports `--stream` for large files.
+Calculate statistics (count, sum, min, max, average, ...) for numeric values in a range. Supports `--stream` for large files. Whole-column (`AM:AM`, `B:D`) and whole-row (`3:3`) spans are accepted, bare or sheet-qualified, and folded in one pass (0.21.1).
 
 ```bash
 xl -f data.xlsx -s Sheet1 stats B2:B10000
+xl -f data.xlsx -s Sheet1 stats B:B                 # the whole column
 xl -f huge.xlsx --stream stats A1:E100000
 ```
 
 `--json`: `{sheet, range, count, sum, min, max, mean}` with every number an exact lexeme (never
-rounded through a `Double`); the text form keeps its two-decimal rendering.
+rounded through a `Double`); the text form keeps its two-decimal rendering. A range holding no
+numbers is a result, not a failure (0.21.1): `count: 0, sum: 0.00, min: n/a, max: n/a, mean: n/a`
+(`null` for the three in JSON), exit 0, with a `NO_NUMERIC_VALUES` warning on stderr — or in the
+envelope's `warnings[]` — naming the range.
 
 ---
 
@@ -795,7 +799,7 @@ Show rows of the used range matching a predicate. Read-only (no `-o`); phase 1 o
 |-----|------|----------|---------|-------------|
 | `--where` | string | Yes | — | Filter predicate (grammar below) |
 | `--columns` | string | No | all used | Output columns, e.g. `A,C:E`. A column outside the used range is blank (`null` in JSON); a repeated column is a `USAGE` error |
-| `--limit` | int | No | 50 | Max matching rows to display; `0` shows none and reports the match count alone |
+| `--limit` | int | No | 50 | Max matching rows to display; `0` = no limit, as for `view` and `search` (0.21.1; earlier `0` showed none) |
 | `--format` | string | No | markdown | `markdown`, `csv`, or `json` |
 | `--header` | flag | No | false | First used row holds column names (excluded from matching) |
 
@@ -821,7 +825,7 @@ xl -f data.xlsx -s Sheet1 filter --where "A LIKE 'Widget%'" --columns A,C:E --fo
 xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
 ```
 
-**Output**: matching rows keep their original row numbers, present whatever `--columns` selects. Markdown adds a `Row` column and a match-count footer; CSV starts with a `row,<labels>` header line; JSON is an array of `{"row": n, "cells": {<label>: <typed value>}}` objects (labels are header names with `--header`, letters otherwise; two selected columns under one header name share the key, which keeps the first's position and the last's value).
+**Output**: matching rows keep their original row numbers, present whatever `--columns` selects. Markdown adds a `Row` column and a footer — `N row(s) matched.`, or `Matched N row(s); showing first M (--limit).` when clipped; CSV starts with a `row,<labels>` header line and, when clipped, raises a `TRUNCATED` warning on stderr (`warnings[]` under `--json`) so stdout stays parseable; JSON (0.21.1) is one document, `{"matched": N, "shown": M, "truncated": bool, "limit": n|null, "rows": [{"row": n, "cells": {<label>: <typed value>}}]}` — `limit` is `null` under `--limit 0` — where labels are header names with `--header`, letters otherwise (two selected columns under one header name share the key, which keeps the first's position and the last's value). Before 0.21.1 the JSON form was the bare `rows` array.
 
 **Streaming**: `--stream` scans the used range in O(1) memory, keeping only the matching rows
 (since 0.21.0). The rows and cells are those the in-memory run renders over the same window; the
@@ -1634,13 +1638,14 @@ Compare two workbooks and report differences. The first file comes from the glob
 |-----|------|----------|---------|-------------|
 | `-g, --file2` | path | Yes | — | Second file to compare against |
 | `--format` | string | No | markdown | `markdown` (human) or `json` (stable schema) |
+| `--formulas-only` | flag | No | false | Compare formula cells by text alone, ignoring cached values (the rule before 0.21.1) |
 
 **Exit codes**: `0` identical, `1` differences found, `3` error (unreadable file, sheet filter
 matching neither workbook, ...) — the error goes to stderr with a `code:` line (see
 [Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
 
 **What is compared** (per sheet, refs in A1, row-major order):
-- **Changed cells** — value, formula text, and resolved style (`styleChanged` boolean). Formula cells compare by formula text; cached values are derived and ignored. Styles compare resolved formatting (style id lookup), so equal formatting under different ids is not a difference.
+- **Changed cells** — value, formula text, cached formula value and resolved style (`styleChanged` boolean), each change tagged with its `kind`: `value` (a constant changed), `formula` (the text or record kind changed, or a constant became a formula), `cache` (same formula, a cached value that differs or is present on one side only — what a recalculation, a `--no-recalc` edit or a cache-stripping writer produces; 0.21.1) or `style` (only the formatting). `--formulas-only` ignores caches. Styles compare resolved formatting (style id lookup), so equal formatting under different ids is not a difference. Markdown renders a cache change as `B4: =SUM(B1:B3) cached 42.5 -> 43.5 [cache]` (`(none)` for a missing cache).
 - **Added / removed cells** — a cell with Empty value, default style, and no hyperlink counts as absent.
 - **Sheets added / removed** (by name).
 - **Merged ranges, comments, hyperlinks** — separate added/removed/changed deltas per sheet.
@@ -1649,6 +1654,8 @@ matching neither workbook, ...) — the error goes to stderr with a `code:` line
 xl -f old.xlsx diff -g new.xlsx                      # Markdown report
 xl -f old.xlsx -s Sheet1 diff -g new.xlsx            # One sheet only
 xl -f old.xlsx diff -g new.xlsx --format json        # Machine-readable
+xl -f old.xlsx diff -g new.xlsx --formulas-only      # Ignore cached values
+xl -f model.xlsx diff -g recalc.xlsx --format json | jq '[.sheets[].changed[] | select(.kind == "cache")]'
 xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
 ```
 
@@ -1665,7 +1672,13 @@ xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
     "changed": [{"ref": "A5",
                  "before": {"value": "Revenue", "formula": null},
                  "after":  {"value": "Total Revenue", "formula": null},
-                 "styleChanged": false}],
+                 "styleChanged": false,
+                 "kind": "value"},
+                {"ref": "B4",
+                 "before": {"value": "42.5", "formula": "=SUM(B1:B3)"},
+                 "after":  {"value": "43.5", "formula": "=SUM(B1:B3)"},
+                 "styleChanged": false,
+                 "kind": "cache"}],
     "mergesAdded": [], "mergesRemoved": [],
     "commentsAdded": [], "commentsRemoved": [], "commentsChanged": [],
     "hyperlinksAdded": [], "hyperlinksRemoved": [], "hyperlinksChanged": []
@@ -1791,7 +1804,8 @@ Warnings are `Warning[<CODE>]: <message>` lines on stderr and never change the e
 instance `Warning[READER_WARNING]: MissingStylesXml` when the input has no `xl/styles.xml`.
 
 `code` is either the domain error's code (the SCREAMING_SNAKE of the `XLError` case: `SHEET_NOT_FOUND`,
-`INVALID_CELL_REF`, `FORMULA_ERROR`, `SECURITY_ERROR`, `SHEET_REQUIRED`, `IO_ERROR`, ...) or one of the
+`NAME_NOT_FOUND`, `INVALID_ARGUMENT`, `INVALID_CELL_REF`, `FORMULA_ERROR`, `SECURITY_ERROR`,
+`SHEET_REQUIRED`, `IO_ERROR`, ...) or one of the
 CLI-only codes: `USAGE`, `UNKNOWN_VERB`, `OUTPUT_REQUIRED`, `UNSUPPORTED_IN_STREAM`,
 `BATCH_JSON_INVALID`, `BATCH_OP_UNKNOWN`, `BATCH_OP_INVALID`, `BATCH_OP_FAILED`,
 `RASTERIZER_UNAVAILABLE`, `IO_READ`, `IO_WRITE`, `RESOURCE_LIMIT`, `RECALC_GATE`,
@@ -1813,9 +1827,17 @@ Two rows worth spelling out:
   stdout — the same code the write verbs' `--strict` uses. Without `--strict` the view renders the
   cached values and the failure is a stderr warning, exit `0`.
 - A missing or unreadable input file is `code: IO_READ`, exit `3`, on every verb — `sheets`,
-  `names`, `view`, `cell`, `diff`, `lint` alike.
+  `names`, `view`, `cell`, `diff`, `lint` alike. A file that does not exist is the one message
+  `No such file: <path>` with the hint `check the path; the previous write may have failed`
+  (0.21.1); any other read failure keeps the reader's own message, its prefix once.
+- A workbook path passed positionally (`xl view input.xlsx A1:B4`) is a `USAGE` error whose hint
+  says `did you mean -f input.xlsx? …` (0.21.1): the file is never positional.
+- An unknown defined name (`name rm Nope`) is `NAME_NOT_FOUND` with the nearest names as
+  `did you mean` candidates, like `SHEET_NOT_FOUND` for sheets (0.21.1).
 
-The same table is printed by `xl --help`. (Earlier releases exited `1` for usage and failures too,
+The same table is printed by `xl --help`. Help is a result (0.21.1): `xl --help` and
+`xl <verb> --help` print to **stdout**, exit 0 — `xl put --help | head` works — and under `--json`
+yield the `ok: true` envelope with the text as `data.usage`. (Before 0.21.1 help went to stderr.) (Earlier releases exited `1` for usage and failures too,
 `2` for `diff`/`lint` runtime errors, and printed errors on stdout.)
 
 ### Output contract (`--json`)

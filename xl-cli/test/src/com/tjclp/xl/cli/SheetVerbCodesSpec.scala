@@ -12,8 +12,8 @@ import com.tjclp.xl.cli.contract.{CliHarness, CliRun, EnvelopeSchema, TestFixtur
  * code the contract reserves for defects (ADR-017 §2.3). One harness run per code: `USAGE` (exit 2)
  * for a `move-sheet` with no position, `SHEET_NOT_FOUND` (with did-you-mean candidates) for an
  * unknown sheet on `add-sheet --after`, `remove-sheet`, `copy-sheet`, `sheets hide` and `sheets
- * show`, `INVALID_SHEET_NAME` for a name Excel rejects, `OTHER` for an unknown named range. Every
- * refusal leaves no output file behind.
+ * show`, `INVALID_SHEET_NAME` for a name Excel rejects, `NAME_NOT_FOUND` for an unknown named
+ * range. Every refusal leaves no output file behind.
  */
 class SheetVerbCodesSpec extends CatsEffectSuite:
 
@@ -89,11 +89,27 @@ class SheetVerbCodesSpec extends CatsEffectSuite:
     }
   }
 
-  test("name rm of an unknown named range is OTHER") {
-    refused("name-rm", "name", "rm", "Nope").map { (run, error) =>
+  test("GH-626: name rm of an unknown named range is NAME_NOT_FOUND with did-you-mean candidates") {
+    val out = fixtures().resolve("name-rm.xlsx")
+    CliHarness
+      .run("-f", file("named.xlsx"), "-o", out.toString, "--json", "name", "rm", "Totl")
+      .map { run =>
+        assertEquals(run.exit, 3, run.stderr)
+        val error = ujson.read(run.stdout)("error")
+        assertEquals(error("code"), ujson.Str("NAME_NOT_FOUND"))
+        assertEquals(error("message"), ujson.Str("Named range 'Totl' not found. Available: Total"))
+        assertEquals(error("candidates"), ujson.Arr(ujson.Str("Total")))
+        assertEquals(error("hint"), ujson.Str("list defined names with `xl -f <file> names`"))
+        assert(!Files.exists(out), "nothing may be written when the name is unknown")
+      }
+  }
+
+  test("name rm on a book with no defined names is NAME_NOT_FOUND without candidates") {
+    refused("name-rm-none", "name", "rm", "Nope").map { (run, error) =>
       assertEquals(run.exit, 3, run.stderr)
-      assertEquals(error("code"), ujson.Str("OTHER"))
+      assertEquals(error("code"), ujson.Str("NAME_NOT_FOUND"))
       assertEquals(error("message"), ujson.Str("Named range 'Nope' not found"))
+      assertEquals(error("candidates"), ujson.Arr())
     }
   }
 

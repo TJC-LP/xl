@@ -354,7 +354,7 @@ ${"=" * 60}
       |  --tasks-file <path>    Custom tasks JSON file
       |
       |Output:
-      |  --output <dir>         Output directory (default: results/)
+      |  --output <dir>         Output directory (default: results/<timestamp>/)
       |  --stream               Real-time streaming output
       |
       |Execution:

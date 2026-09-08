@@ -41,10 +41,10 @@ class CliHarnessSpec extends CatsEffectSuite:
       assertEquals(version.exit, 0)
       assertEquals(version.stdout, s"${BuildInfo.version}\n")
       assertEquals(version.stderr, "")
-      // decline-effect's contract, kept as-is in this cluster: help renders on stderr, exit 0
+      // GH-620: help is a result — stdout, exit 0 — so `xl --help | head` shows it
       assertEquals(help.exit, 0)
-      assertEquals(help.stdout, "")
-      assert(help.stderr.startsWith("Usage:"), s"help must render on stderr, got:\n${help.stderr}")
+      assertEquals(help.stderr, "")
+      assert(help.stdout.startsWith("Usage:"), s"help must render on stdout, got:\n${help.stdout}")
   }
 
   test("stdin is delivered to `batch -`") {
@@ -133,12 +133,12 @@ class CliHarnessSpec extends CatsEffectSuite:
         val sequential = if args == helpArgs then help else frob
         assertEquals(run, sequential, s"concurrent run of $args differs from its sequential result")
       }
-      // Nothing crosses channels or runs: each stderr carries exactly its own block
-      assertEquals(help.stdout, "")
+      // Nothing crosses channels or runs: each channel carries exactly its own block
+      assertEquals(help.stderr, "")
       assertEquals(frob.stdout, "")
-      assertEquals(occurrences(help.stderr, "Usage:"), 1)
+      assertEquals(occurrences(help.stdout, "Usage:"), 1)
       assertEquals(occurrences(frob.stderr, "usage: xl"), 1)
-      assert(!help.stderr.contains("unknown verb"), help.stderr)
+      assert(!help.stdout.contains("unknown verb"), help.stdout)
       assertEquals(occurrences(frob.stderr, "unknown verb 'frob'"), 1)
   }
 

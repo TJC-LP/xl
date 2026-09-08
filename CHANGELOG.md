@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The 0.21.0 dogfood's CLI contract nits, one PR (#607, #615, #617, #619, #620, #621, #622, #626,
+#639, #641, #644). Entries led with **Breaking:** change the meaning of an existing shape.
+
+### Added
+
+- **`XLError.NameNotFound(name, available)` / `NAME_NOT_FOUND`** (#626): a defined name that does
+  not exist is a typed error, exit 3, carrying every defined name — the nearest become the
+  `did you mean` candidates by the same edit-distance rule as `SHEET_NOT_FOUND`, the message lists
+  them all, and the hint points at `xl -f <file> names`. Raised by `xl name rm`, by
+  `Edit.RemoveName` (so a batch position rides on the `EditFailed` that wraps it) and registered in
+  `xl schema --json` and `generated/error-codes.md`. `name rm Nope` used to be `OTHER`.
+- **`XLError.InvalidArgument(op, reason)` / `INVALID_ARGUMENT`** (#617): every `Edit.validate`
+  refusal that needed no workbook — a column width past 255, a row height past 409, an empty style
+  merge, a count below one, `clear` with nothing to clear, an empty hyperlink target, a conditional
+  format with no range or rule, `move-sheet` with no or two positions, an empty defined name, a
+  negative font size or indent, an outline level outside 1-7, a zoom outside 10-400 — is this
+  typed error instead of `XLError.Other`, so a script or the envelope can branch on the code; the
+  message keeps its `<op>: <reason>` text and `EditFailed` supplies `opIndex`.
+- **`diff` compares cached values** (#607): a formula cell whose text is unchanged but whose
+  cached value differs, or is present on one side only, is a difference of kind `cache` — what a
+  recalculation, a `--no-recalc` edit or a cache-stripping writer produces, and what a workbook
+  that lost 273 caches was invisibly missing. Every changed cell now carries `kind`: `value`,
+  `formula`, `cache` or `style` (`styleChanged` is kept beside it); markdown renders a cache change
+  as `B4: =SUM(B1:B3) cached 42.5 -> 43.5 [cache]` (`(none)` for a missing cache).
+  `--formulas-only` keeps the text-only comparison. Goldens: `diff-changed*` gain `B4`'s cache
+  change, `diff-*-json` the `kind` field.
+- **`--help` is a result** (#620): `xl --help` and `xl <verb> --help` print to stdout, exit 0 —
+  `xl put --help | head` works and an agent capturing stdout sees it — and under `--json` yield the
+  `ok: true` envelope with the text as `data.usage` (`xl --json --help` included; decline used to
+  refuse the flag order). Help went to stderr before.
+- **`stats` accepts whole-column and whole-row spans** (#641): `stats AM:AM`, `stats B:D`,
+  `stats 3:3`, bare or sheet-qualified (`'Q1 Data'!B:B`), fold the full height in one pass under
+  both engines and are labelled as spelled (`"range": "B:B"`); `view` takes the same forms. They
+  used to be `INVALID_REFERENCE: missing row digits`.
+- **`NO_NUMERIC_VALUES` warning** (#641): `stats` over a range with no numbers is a legitimate
+  result — `count: 0, sum: 0.00, min: n/a, max: n/a, mean: n/a` (`null` for the three in JSON),
+  exit 0 — flagged out of band, as `search` and `filter` treat an empty result. It used to fail
+  `OTHER`, exit 3.
+- **`filter --format json` carries the match total** (#639): `matched`, `shown`, `truncated` and
+  `limit` (`null` under `--limit 0`) beside `rows`, as `view` carries `totalRows`/`truncated` and
+  `search` `count`/`total`; `--format csv` raises the same `TRUNCATED` warning `view --format csv`
+  does when `--limit` clipped the rows (stderr, or `warnings[]` under `--json`), so stdout stays
+  parseable; markdown keeps its `Matched N row(s); showing first M (--limit).` footer.
+- **`xl-agent` traces record the sandbox exit status** (#622): `ToolResult.exitCode` carries the
+  bash tool's `return_code` instead of `null`, so error-recovery statistics (how many `USAGE`
+  errors, how many turns to recover) need no stdout regex; `UnifiedRunner --help` names the real
+  `--output` default, `results/<timestamp>/`.
+
+### Fixed
+
+- **A positional workbook path gets the right hint** (#619): `xl view input.xlsx A1:B4` — how 8 of
+  9 benchmark cases opened — is still `USAGE`, exit 2, but the hint now reads `did you mean -f
+  input.xlsx? xl takes the file as -f/--file; the positional argument is the range or verb
+  argument` instead of pointing at `--help`. Fires only when no `-f`/`--file` was given, the verb
+  does not take a file of its own (`new`, `lint`) and a non-flag token ends in a workbook
+  extension.
+- **One diagnostic for a missing input** (#621): every verb reports a file that does not exist as
+  `No such file: <path>`, `code: IO_READ`, with the hint `check the path; the previous write may
+  have failed` and the path in `error.location` — `lint` included (it said `IO error: Failed to
+  open file: …`). The message was `Failed to read XLSX: IO error: Failed to read XLSX: <path>`
+  with `hint: null`: `XlsxReader` now names the cause (`no such file: <path>`) and `ExcelIO.read`
+  and the CLI's guarded reader raise the `XLException` the documentation always promised instead
+  of re-prefixing the error's message, so every other read failure keeps the reader's own text,
+  prefixed once.
+- **`Workbook.apply`/`update`/`remove`/`delete`/`rename`/`setSheetState` name the candidates**
+  (#615): their `SheetNotFound` carries the workbook's sheet names, so `orExit(wb("Sumary"))`
+  prints `did you mean: Summary` like `Excel.readSheet` and `xl -s` do (the six sites used to build
+  it without `available`); `Edit`'s own lookups (`add-sheet --after`, `copy-sheet`, `move-sheet`,
+  every sheet-scoped edit) do the same.
+- **Breaking: `Excel.readSheet(path, name)` returns `XLResult[Sheet]`** (#615) like the rest of the
+  sync surface, so `orExit(Excel.readSheet(path, name))` is the documented script shape: a missing
+  sheet is `Left(SheetNotFound(name, available))`, a missing, corrupt or over-limit file `Left` of
+  the reader's `IOError`/`ParseError`/`SecurityError`. 0.21.0 returned `Sheet` and threw
+  `XLException`; add `.unsafe` or `orExit(...)` to a 0.21.0 call site.
+- **Breaking: `filter --limit 0` means no limit** (#639), as it does for `view` and `search`; it
+  used to show no rows and report the count alone. `filter --format json` is now one document
+  (`{matched, shown, truncated, limit, rows}`) where it was the bare `rows` array — under `--json`
+  read `.data.rows` instead of `.data`.
+- **Markdown row labels line up past row 9** (#641): the label column is as wide as the widest row
+  number in the window (`| 10 |` under `| 9  |`), in both engines; it was hard-wired to two
+  characters, so `| 10|` drifted.
+- **`rename-sheet` refusals keep the sentence break** (#644): `ParseError.describe` renders
+  `Unknown function 'SINGLE' at position 3. Did you mean: SIGN?` wherever the diagnostic is
+  embedded; the full stop before `Did you mean` was missing.
+- **`Option[T]` record fields and empty-string cells** (#617, documented): a cell holding `""` —
+  SheetJS writes `<v></v>` text cells for "blank" — decodes as `Some("")` for `Option[String]`
+  (a `TypeMismatch` for `Option[Int]`), because Excel distinguishes `""` from blank (`ISBLANK`
+  FALSE, `COUNTA` counts it); normalise with `.filter(_.nonEmpty)` or clear such cells first.
+  Noted in `docs/LIMITATIONS.md`, the scripting reference and the skill's API page.
+
 ## [0.21.0] - 2026-09-08
 
 Agent-first Wave 2a (ADR-017): the `Edit` algebra — one operation vocabulary for every batch op and
