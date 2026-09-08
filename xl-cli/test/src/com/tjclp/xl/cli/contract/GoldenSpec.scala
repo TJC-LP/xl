@@ -3,8 +3,6 @@ package com.tjclp.xl.cli.contract
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
-import scala.jdk.CollectionConverters.*
-
 import cats.effect.{IO, Resource}
 import munit.CatsEffectSuite
 
@@ -37,13 +35,7 @@ class GoldenSpec extends CatsEffectSuite:
 
   override def munitFixtures = List(fixtures)
 
-  private val cases: Vector[Path] =
-    if !Files.isDirectory(Golden.corpusDir) then Vector.empty
-    else
-      val listing = Files.list(Golden.corpusDir)
-      try
-        listing.iterator.asScala.filter(_.toString.endsWith(".golden")).toVector.sortBy(_.toString)
-      finally listing.close()
+  private val cases: Vector[Path] = Golden.caseFiles
 
   test("the corpus is present") {
     assert(cases.nonEmpty, s"no *.golden files under ${Golden.corpusDir}")
@@ -53,9 +45,7 @@ class GoldenSpec extends CatsEffectSuite:
     val name = file.getFileName.toString.stripSuffix(".golden")
     test(s"golden: $name") {
       val dir = fixtures()
-      val recorded = GoldenCase
-        .parse(name, Files.readString(file, StandardCharsets.UTF_8))
-        .fold(msg => fail(msg), identity)
+      val recorded = Golden.readCase(file).fold(msg => fail(msg), identity)
       val args = recorded.args.map(_.replace("<DIR>", dir.toString))
       CliHarness.run(args, recorded.stdin.getOrElse("")).flatMap { run =>
         val observed = recorded.observed(

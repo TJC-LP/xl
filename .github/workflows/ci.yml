@@ -14,6 +14,7 @@ jobs:
   # /release-prep removes it when the release ships (a marker left behind fails the gate).
   plugin-version:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +52,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
       - uses: actions/checkout@v4
@@ -92,6 +94,7 @@ jobs:
 
   examples:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -125,3 +128,63 @@ jobs:
       # This is the anti-rot guarantee for examples and the xl-scripting skill snippets.
       - name: Verify examples
         run: ./scripts/test-examples.sh
+
+  # The agent-visible contract of `xl` as its own check (GH-592). The golden corpus, the generated
+  # reference pages and the code vocabulary run explicitly, so a golden diff fails THIS job with the
+  # unified diff in its log instead of somewhere inside the full suite; then the assembly JAR is
+  # driven the way an agent drives it by scripts/smoke-cli-contract.sh — `--help`, `sheets`,
+  # `view --json`, `schema --json`, `lint`, and two failures whose envelopes must carry the error
+  # code — against the checked-in fixtures. release.yml runs the same script against every native
+  # binary. Deliberately no `needs: build`: a golden diff also fails `build`'s full suite, and a
+  # dependent job would be skipped instead of showing the diff. The cost is a second compile of the
+  # xl-cli dependency graph in parallel with `build`, hence the timeout.
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: coursier/setup-action@v1
+        with:
+          jvm: temurin:25
+
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: ${{ runner.os }}-coursier-${{ hashFiles('**/build.mill', '**/.scalafmt.conf', '**/.scalafix.conf') }}
+          restore-keys: |
+            ${{ runner.os }}-coursier-
+
+      - name: Cache Mill
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.mill
+          key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
+          restore-keys: |
+            ${{ runner.os }}-mill-
+
+      # A failing golden prints `golden '<name>' differs from the recorded contract` followed by the
+      # unified diff (--- expected / +++ actual); re-record deliberately with XL_UPDATE_GOLDEN=1 and
+      # add a CHANGELOG line. DocsGenSpec does the same for docs/reference/generated/*.md
+      # (XL_UPDATE_DOCS=1); ContractSpec holds the code tables against the vocabulary and the corpus.
+      - name: Golden corpus, generated reference, code vocabulary
+        run: >-
+          ./mill -i xl-cli.test.testOnly
+          com.tjclp.xl.cli.contract.GoldenSpec
+          com.tjclp.xl.cli.contract.DocsGenSpec
+          com.tjclp.xl.cli.contract.ContractSpec
+
+      - name: Build CLI JAR
+        run: ./mill -i xl-cli.assembly
+
+      # `-`: the expected version is the artifact's own. With PUBLISH_VERSION unset that is build.mill's
+      # fallback, and the script holds every other place the JAR prints a version to what --version
+      # printed — the property the contract cares about, without a second source to drift from.
+      - name: Smoke test CLI JAR
+        run: scripts/smoke-cli-contract.sh - java -jar out/xl-cli/assembly.dest/out.jar

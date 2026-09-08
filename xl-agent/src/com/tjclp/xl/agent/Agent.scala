@@ -194,9 +194,11 @@ object Agent:
     for
       client <- AnthropicClientIO.fromEnv
 
-      // Resolve binary and skill paths (version-agnostic, auto-downloads latest release)
-      binaryPath <- Resource.eval(FileManager.resolveBinaryPath(config.xlBinaryPath))
-      skillPath <- Resource.eval(FileManager.resolveSkillPath(config.xlSkillPath))
+      // Resolve the binary (newest present, else the latest release) and the skill of the same
+      // release (GH-592)
+      (binaryPath, skillPath) <- Resource.eval(
+        FileManager.resolveReleaseAssets(config.xlBinaryPath, config.xlSkillPath)
+      )
 
       // Upload binary file
       binaryFile <- Resource.make(client.uploadFile(binaryPath))(f =>

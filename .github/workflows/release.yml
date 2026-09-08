@@ -38,6 +38,7 @@ jobs:
             platform: windows-amd64
             extension: ".exe"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     # Only run on the main repository, not forks
     if: github.repository == 'TJC-LP/xl'
 
@@ -164,6 +165,18 @@ jobs:
             exit 1
           fi
 
+      # GH-592: the native binary answers the agent-visible contract the same way the JAR does in
+      # ci.yml's `contract` job (one script, so the release copy can never fall behind CI) and
+      # reports the tag's version everywhere it prints one. The tag reaches bash through `env:`,
+      # never by interpolating `${{ }}` into the script body. `bash` explicitly: Git Bash on the
+      # Windows runner does not honour the checkout's executable bit.
+      - name: Smoke test native binary contract (GH-592)
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          EXT: ${{ matrix.extension }}
+        run: bash scripts/smoke-cli-contract.sh "$VERSION" "out/xl-cli/nativeImage.dest/native-executable$EXT"
+
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
         run: mv out/xl-cli/nativeImage.dest/native-executable xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}
@@ -173,9 +186,19 @@ jobs:
         run: mv out/xl-cli/nativeImage.dest/native-executable.exe xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}.exe
         shell: bash
 
-      - name: Smoke test binary
-        run: ./xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}${{ matrix.extension }} --version
+      - name: Smoke test renamed binary
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+          EXT: ${{ matrix.extension }}
+        run: |
+          OUT=$("./xl-$VERSION-$PLATFORM$EXT" --version)
+          OUT=${OUT//$'\r'/}
+          [ "$OUT" = "$VERSION" ] || {
+            echo "::error::renamed binary reports version '$OUT', expected $VERSION"
+            exit 1
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -187,6 +210,7 @@ jobs:
   release:
     name: Publish to Maven Central
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: build-native
     # Only run on the main repository, not forks
     if: github.repository == 'TJC-LP/xl'

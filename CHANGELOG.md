@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The CLI contract is a CI gate** (#592). A `contract` job runs the golden runner, the
+  generated-docs drift check and the new `ContractSpec` explicitly, so a golden diff fails with the
+  unified diff in the log, then builds the assembly JAR and runs `scripts/smoke-cli-contract.sh`
+  against it: `--help`, `sheets`, `view --json`, `schema --json` and `lint` for exit codes and
+  envelope shape, plus one version everywhere `xl` prints one. The release workflow runs the same
+  script against every native binary with the tag as the expected version; it also runs locally
+  (`scripts/smoke-cli-contract.sh - xl`). `ContractSpec` reads
+  `docs/reference/generated/error-codes.md` back as table rows and holds them to `schema --json`'s
+  tables, and holds every code the golden corpus records to the published table and its exit.
+- **The xl-agent grader reads `--json` envelopes only**: `sheets --json` for the first sheet
+  (no more `Sheet1` guess on a failed run) and `view --json --eval` for the graded cells, so a
+  failure surfaces its `error.code` instead of a swallowed non-zero exit. The skill zip is locked to
+  the binary's release (`FileManager.lockSkillToBinary`), pre-release tags included
+  (`xl-0.21.0-RC1-linux-amd64` pairs with `xl-skill-0.21.0-RC1.zip`); a versioned binary with no
+  zip of its release present fails instead of falling back to the highest zip. The grading host
+  needs an `xl` that accepts the global `--json` (0.20.0 or later).
+
+
 ## [0.20.0] "Contract" - 2026-09-07
 
 The agent-first CLI and scripting contract (ADR-017, wave 1): one sheet rule, one error
