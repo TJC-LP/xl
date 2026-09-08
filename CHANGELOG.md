@@ -108,19 +108,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   box from both sources (`filter`'s window can widen by formatted empty cells); streaming
   `view --format csv` emits every row of the window. `filter` errors are `USAGE` (exit 2) or
   `INVALID_REFERENCE` instead of `INTERNAL`; `--header-row 0` or negative is `USAGE`.
-- **Column letters are parsed ASCII-only** (#542). `Column.parse` and `ARef.parse` fold case with
-  an ASCII-only uppercase (`AsciiCase.upper`) instead of `toUpperCase(Locale.ROOT)`: `ı` (U+0131)
-  and `ſ` (U+017F), whose full-Unicode uppercase lands in A–Z, are now rejected like every other
-  non-ASCII letter. Defined-name folding (evaluator, lint) keeps the full-Unicode fold on purpose.
+- **Breaking: column letters are parsed ASCII-only** (#542). `Column.parse` and `ARef.parse` fold
+  case with an ASCII-only uppercase (`AsciiCase.upper`) instead of `toUpperCase(Locale.ROOT)`:
+  `ı` (U+0131) and `ſ` (U+017F), whose full-Unicode uppercase lands in A–Z, are now rejected like
+  every other non-ASCII letter. Defined-name folding (evaluator, lint) keeps the full-Unicode fold
+  on purpose.
+- **Breaking: `RenderUtils.toAwtFont` is removed** (#542). The public method had no consumers;
+  AWT font construction now lives in `render.TextMeasure` (`private[xl]`), the one file in xl-core
+  that may import `java.awt`.
 - **Platform shims** (ADR-016 Wave 25 A1, #542): `java.security`, `java.awt` and `java.util.zip`
   are each isolated behind one file, ready for the Scala Native / Scala.js source split.
   `com.tjclp.xl.platform.Sha256` (MessageDigest-backed, NIST KATs) replaces the direct digests in
   `SourceFingerprint`, `SourceContext`, `ImageData`, `XlsxReader` and `XlsxWriter` — output is
   byte-identical; `render.TextMeasure` (`private[xl]`) holds the AWT font metrics and the headless
-  guard, `RenderUtils.measureTextWidth` delegates to it and the public `RenderUtils.toAwtFont` is
-  removed (it had no consumers); `FormatCodeParser` formats month and weekday names from hardcoded
-  English tables instead of `TextStyle.getDisplayName(…, Locale.US)` (same text, pinned
-  exhaustively); `PartManifestBuilder.recordZipMetadata` takes plain size/compressedSize/crc/method
+  guard and `RenderUtils.measureTextWidth` delegates to it (`toAwtFont` moved with it, see above);
+  `FormatCodeParser` formats month and weekday names from hardcoded English tables instead of
+  `TextStyle.getDisplayName(…, Locale.US)` (same text, pinned exhaustively);
+  `PartManifestBuilder.recordZipMetadata` takes plain size/compressedSize/crc/method
   fields instead of a `ZipEntry` (xl-core's last `java.util.zip` import, `-1` still means unknown);
   `escapeCss` strips null bytes with a platform-robust filter; `RasterizerChain.defaultChain` heads
   with `PlatformRasterizers.bundled` (Batik on the JVM), chain order unchanged.
