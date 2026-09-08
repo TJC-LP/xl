@@ -1,7 +1,5 @@
 package com.tjclp.xl.addressing
 
-import java.util.Locale
-
 /**
  * Column index with zero-based internal representation. Opaque type for zero-overhead wrapping.
  */
@@ -19,7 +17,7 @@ object Column:
 
   /** Create a Column from Excel letter notation (A, B, AA, etc.) */
   def fromLetter(input: String): Either[String, Column] =
-    val normalized = input.toUpperCase(Locale.ROOT)
+    val normalized = AsciiCase.upper(input)
     if normalized.isEmpty then Left("Column letter cannot be empty")
     else if !normalized.forall(c => c >= 'A' && c <= 'Z') then
       Left(s"Invalid column letter: $input")
@@ -38,7 +36,7 @@ object Column:
    * [[fromLetter]].
    */
   def parse(input: String): Either[String, Column] =
-    val normalized = input.toUpperCase(Locale.ROOT)
+    val normalized = AsciiCase.upper(input)
     val (letters, rest) = normalized.span(c => c >= 'A' && c <= 'Z')
     if letters.isEmpty then Left(s"No column letters in: $input")
     else if !rest.forall(c => c >= '0' && c <= '9') then Left(s"Invalid column: $input")
