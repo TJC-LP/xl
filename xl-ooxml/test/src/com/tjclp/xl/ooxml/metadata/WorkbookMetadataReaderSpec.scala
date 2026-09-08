@@ -10,7 +10,8 @@ import munit.FunSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.ooxml.{TestFixtures, XlsxWriter}
+import com.tjclp.xl.error.XLError
+import com.tjclp.xl.ooxml.{TestFixtures, XlsxReader, XlsxWriter}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
 
@@ -182,6 +183,36 @@ class WorkbookMetadataReaderSpec extends FunSuite:
     val path = Path.of("/nonexistent/path/to/file.xlsx")
     val result = WorkbookMetadataReader.read(path)
     assert(result.isLeft, "Expected error for non-existent file")
+  }
+
+  test("read: refuses a workbook.xml that inflates past the compression-ratio limit (ZIP bomb)") {
+    val source = createTempWorkbook(Vector(Sheet("Data")))
+    val bomb = Files.createTempFile("metadata-bomb-", ".xlsx")
+    // 2 MB of trailing whitespace is legal XML and deflates to a few KB: ~1000:1 against the
+    // default 100:1 cap. readPart must stop at the cap instead of inflating the entry first.
+    rewriteZip(source, bomb) { (name, bytes) =>
+      if name == "xl/workbook.xml" then bytes ++ Array.fill[Byte](2_000_000)(' '.toByte) else bytes
+    }
+    WorkbookMetadataReader.read(bomb) match
+      case Left(XLError.SecurityError(reason)) =>
+        assert(reason.contains("ZIP bomb"), reason)
+        assert(reason.contains("xl/workbook.xml"), reason)
+      case other => fail(s"expected SecurityError, got $other")
+    // the same package under permissive limits reads fine — the bytes are valid
+    assertEquals(
+      WorkbookMetadataReader.read(bomb, XlsxReader.ReaderConfig.permissive).map(_.sheets.size),
+      Right(1)
+    )
+  }
+
+  test("read: the uncompressed-size cap refuses an over-limit part; the default reads it") {
+    val path = createTempWorkbook(Vector(Sheet("Data"), Sheet("Summary")))
+    val tight = XlsxReader.ReaderConfig(maxUncompressedSize = 64L, maxCompressionRatio = 0)
+    WorkbookMetadataReader.read(path, tight) match
+      case Left(XLError.SecurityError(reason)) =>
+        assert(reason.contains("exceeds limit (64 bytes)"), reason)
+      case other => fail(s"expected SecurityError, got $other")
+    assertEquals(WorkbookMetadataReader.read(path).map(_.sheets.size), Right(2))
   }
 
   test("read: extracts date1904 flag from workbookPr (GH-243)") {
