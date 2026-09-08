@@ -572,15 +572,19 @@ val headerStyle = style"font-weight: bold; background: #CCCCCC; border: all thin
 
 ---
 
-#### 26. Named Cell Styles Not Preserved (#610)
-**Status**: Known gap — tracked as [#610](https://github.com/TJC-LP/xl/issues/610)
-**Impact**: Every write rewrites `styles.xml` with a single `Normal` cell style
+#### 26. Named Cell Styles: Preserved, Not Yet Modeled (#610)
+**Status**: Preservation fixed in 0.21.1 ([#610](https://github.com/TJC-LP/xl/issues/610)); no typed named-style model yet
+**Impact**: A workbook's Cell Styles gallery, recent-colours palette and styles `extLst` survive every write; named styles cannot be authored from xl
 
-**Current**: the writer emits one `cellStyleXfs` entry and one `cellStyles` entry (`Normal`), so the workbook's named styles (`cellStyles`/`cellStyleXfs` — an Excel model's 74 named styles come out as 1), its recent-colours palette (`mruColors`) and the styles-level `extLst` are dropped, and every cell's `xfId` becomes 0. This happens on every write — in-memory and `--stream`, a fresh book and a surgical write of one read from disk.
+**Fixed in 0.21.1**: a source workbook's `cellStyleXfs`, `cellStyles`, `tableStyles`, `colors` (`mruColors`/`indexedColors`) and styles-level `extLst` ride through every write of the in-memory writer verbatim — byte-identical on the default DOM backend, attribute-sorted on the StAX backend — the same opaque-passthrough contract as `dxfs`. Every `cellXf` keeps the `xfId` of the named style it derives from: the reader registers a source's cellXfs positionally in each sheet's `StyleRegistry`, so two xfs that differ only in `xfId` ("Comma 2" applied vs the same formatting typed by hand) stay two xfs through a regenerating write. A style xl authors is appended with `xfId="0"` (`Normal` + direct formatting). An xl-authored workbook, or one written after its `sourceContext` is dropped, still emits exactly one `Normal`. `--stream put`/`putf`/`style` patch the source `styles.xml` in place and never dropped these sections.
 
-**Not affected**: cell formatting. Font, fill, border, number format and alignment live in `cellXfs` and round-trip unchanged; what is lost is the *name* a cell's format was derived from (the Cell Styles gallery — `Heading 1`, `Input`, a house style) and Excel's recent-colours list.
+**Remaining**:
+- No typed `NamedStyle` model: a named style cannot be created, renamed, modified or applied from the API or CLI, and a cell xl restyles becomes direct formatting on `Normal` even when its source xf derived from a named style (the API cannot tell — `CellStyle` carries no `xfId`).
+- cellXf-level flags are not modeled: `applyFont`/`applyFill`/`applyBorder`/`applyNumberFormat`/`applyProtection`, `quotePrefix` and `<protection>` are dropped from regenerated `cellXfs` (only `applyAlignment` is written). Excel renders from the xf's own ids, so cells look the same; "Modify style → update cells" propagation may differ for those flags.
+- Regenerated `cellXfs` re-derive `fontId`/`fillId`/`borderId` by value, so an xf that referenced one of two byte-identical duplicate fonts may point at the other equal entry; `x14ac:knownFonts` on `<fonts>` is dropped.
+- The streaming writer of an in-memory workbook (`ExcelIO.writeStream`) is a fresh write and emits one `Normal`.
 
-**Mitigation**: none inside xl today; re-apply named styles in Excel after the write if the gallery matters.
+**Mitigation**: author and modify named styles in Excel; xl preserves them.
 
 ---
 

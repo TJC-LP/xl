@@ -1167,16 +1167,24 @@ object XlsxReader:
   private def buildStyleRegistry(
     styles: WorkbookStyles
   ): (StyleRegistry, Map[Int, StyleId]) =
-    // Start with EMPTY registry (not default) to preserve exact source styles
-    // This prevents adding an extra "default" style when source style 0 differs from CellStyle.default
-    val emptyRegistry = StyleRegistry(Vector.empty, Map.empty)
-
-    // Use foldLeft to accumulate registry and mapping without var
-    styles.cellStyles.zipWithIndex.foldLeft((emptyRegistry, Map.empty[Int, StyleId])) {
-      case ((reg, map), (style, idx)) =>
-        val (nextRegistry, styleId) = reg.register(style)
-        (nextRegistry, map + (idx -> styleId))
+    // The registry starts from the source table, not StyleRegistry.default, so source style 0
+    // stays slot 0 even when it differs from CellStyle.default.
+    //
+    // GH-610: the source cellXfs are registered POSITIONALLY — cellXf i is registry slot i,
+    // canonical-key twins included — so every cell keeps the exact xf its `s=` named, and with
+    // it the xfId of the named style that xf derives from, through a regenerating write
+    // (StyleIndex.fromWorkbookWithSource maps such slots back to themselves). Twins are real in
+    // Excel-authored books: "Comma 2" applied and the same formatting typed by hand are two xfs
+    // that differ only in xfId. The key index points at the first twin, which is what `register`
+    // hands a NEW use of that formatting — xl-authored styles land on the first match as before.
+    val cellXfs = styles.cellStyles
+    val keyIndex = cellXfs.zipWithIndex.foldLeft(Map.empty[String, StyleId]) {
+      case (acc, (style, idx)) =>
+        val key = style.canonicalKey
+        if acc.contains(key) then acc else acc + (key -> StyleId(idx))
     }
+    val mapping = cellXfs.indices.map(idx => idx -> StyleId(idx)).toMap
+    (StyleRegistry(cellXfs, keyIndex), mapping)
 
   /**
    * Parse column properties from <cols> XML element.
