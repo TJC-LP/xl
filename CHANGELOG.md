@@ -54,6 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the CLI handlers into the library; the CLI verbs forward to them. `autoFit`/`autoFitAll`
   measure every column from one pass over the cells (O(cells + columns), not O(cells x columns)),
   width for width what the per-column scan produced.
+- **`RowCodec` records** (#590): `final case class Order(...) derives RowCodec` reads and writes case
+  classes as rows. `sheet.readRows[A](range)`, `readRowsByHeader[A](headerRow)` (any column order,
+  extra columns ignored, stops at the first blank row), `headers`, `column`, `putRows`,
+  `putRowsWithHeader` and `putTable` live on `Sheet` through `rowSyntax` and the scripting prelude;
+  `Option[T]` fields are empty cells; every read sees a formula's cached value; errors are
+  `RowCodecError.Field(row, column, field, cause)`, `Missing`, `HeaderNotFound` or `Width`. A record
+  with no fields or a field without a `CellCodec` is a compile error naming the type. ADR-008
+  amended: primitives are hand-written codecs, rows are derived.
 
 ### Changed
 
