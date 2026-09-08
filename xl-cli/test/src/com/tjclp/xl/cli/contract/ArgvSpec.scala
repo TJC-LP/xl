@@ -387,12 +387,71 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
     assertEquals(Argv.positionalFile(Nil), None)
   }
 
+  test("GH-619: misplacedFile needs the parser's evidence, not just a workbook-looking token") {
+    val view = List("view", "input.xlsx", "A1:B4")
+    // the displaced range is the unexpected argument: the workbook sat in the range's slot
+    assertEquals(Argv.misplacedFile(view, List("Unexpected argument: A1:B4")), Some("input.xlsx"))
+    // decline named the token itself
+    assertEquals(
+      Argv.misplacedFile(List("sheets", "book.xlsx"), List("Unexpected argument: book.xlsx")),
+      Some("book.xlsx")
+    )
+    // the missing --file, with the token where the first positional goes
+    assertEquals(
+      Argv.misplacedFile(List("put", "in.xlsx", "A1", "5"), List("Missing expected flag --file!")),
+      Some("in.xlsx")
+    )
+    // a workbook-looking VALUE in a later slot is data: no hint on the missing --file
+    assertEquals(
+      Argv.misplacedFile(List("put", "A1", "report.xlsx"), List("Missing expected flag --file!")),
+      None
+    )
+    // a failure about something else keeps the --help hint
+    assertEquals(
+      Argv.misplacedFile(List("view", "input.xlsx", "--limit", "x"), List("Invalid integer: x")),
+      None
+    )
+    assertEquals(Argv.misplacedFile(view, Nil), None)
+  }
+
+  test("GH-620: --help behind globals is the verb's help; withoutGlobals strips them") {
+    assertEquals(
+      Argv.helpCandidates(List("-f", "a.xlsx", "view", "A1:B2", "--help", "--json")),
+      Vector(
+        List("view", "A1:B2", "--help"),
+        List("view", "--help"),
+        List("--help")
+      )
+    )
+    assertEquals(Argv.withoutGlobals(List("--json", "view", "--help")), List("view", "--help"))
+    assertEquals(Argv.withoutGlobals(List("-f", "a.xlsx", "--help")), List("--help"))
+    assertEquals(
+      Argv.withoutGlobals(List("-f", "a.xlsx", "name", "add", "--help", "--", "-f")),
+      List("name", "add", "--help", "--", "-f")
+    )
+    for
+      behindFile <- CliHarness.run("-f", file("simple.xlsx"), "--help")
+      subVerb <- CliHarness.run("-f", file("simple.xlsx"), "-o", "x.xlsx", "name", "add", "--help")
+      afterArgs <- CliHarness.run("-f", file("simple.xlsx"), "view", "A1:B2", "--help", "--json")
+    yield
+      assertEquals(behindFile.exit, 0, behindFile.stderr)
+      assert(behindFile.stdout.startsWith("Usage:"), behindFile.stdout)
+      assertEquals(subVerb.exit, 0, subVerb.stderr)
+      assert(subVerb.stdout.contains("Add or replace a named range"), subVerb.stdout)
+      assertEquals(afterArgs.exit, 0, afterArgs.stderr)
+      assert(ujson.read(afterArgs.stdout)("data")("usage").str.contains("View a range"))
+  }
+
   test("GH-619: a positional workbook gets the -f hint in text and --json usage errors") {
     for
       text <- CliHarness.run("view", "input.xlsx", "A1:B4")
       json <- CliHarness.run("--json", "view", "input.xlsx", "A1:B4")
       plain <- CliHarness.run("-f", file("simple.xlsx"), "view", "A1:B4", "extra")
+      value <- CliHarness.run("put", "A1", "report.xlsx")
     yield
+      // a workbook-looking value with the file merely missing keeps the plain hint
+      assertEquals(value.exit, 2)
+      assert(value.stderr.contains("  hint: run `xl put --help` for the usage"), value.stderr)
       assertEquals(text.exit, 2)
       assertEquals(text.stdout, "")
       assert(text.stderr.startsWith("Error: Unexpected argument: A1:B4"), text.stderr)

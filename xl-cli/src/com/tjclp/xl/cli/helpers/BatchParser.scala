@@ -16,6 +16,7 @@ import com.tjclp.xl.formula.{
   ParseError,
   SheetEvaluator
 }
+import com.tjclp.xl.sheets.SheetEdits
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.text.Suggest
@@ -1682,6 +1683,13 @@ object BatchParser:
   ): IO[Workbook] =
     for
       col <- IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e)))
+      // GH-617: the guard Edit.validate applies, typed
+      _ <- IO.fromEither(
+        SheetEdits
+          .validateColumnWidth("colwidth", width)
+          .left
+          .map(err => CliException(CliError.fromXLError(err, None)))
+      )
       sheetName <- sheetFor(wb, defaultSheetName, "colwidth")
       result <- updateSheet(wb, sheetName) { sheet =>
         val props = sheet.getColumnProperties(col).copy(width = Some(width))
@@ -1698,6 +1706,12 @@ object BatchParser:
   ): IO[Workbook] =
     for
       row <- IO.pure(Row.from1(rowNum))
+      _ <- IO.fromEither(
+        SheetEdits
+          .validateRowHeight("rowheight", height)
+          .left
+          .map(err => CliException(CliError.fromXLError(err, None)))
+      )
       sheetName <- sheetFor(wb, defaultSheetName, "rowheight")
       result <- updateSheet(wb, sheetName) { sheet =>
         val props = sheet.getRowProperties(row).copy(height = Some(height))
@@ -2144,15 +2158,20 @@ object BatchParser:
     wb: Workbook,
     defaultSheetName: Option[SheetName],
     opName: String
-  )(f: Sheet => Either[String, Sheet]): IO[Workbook] =
+  )(f: Sheet => XLResult[Sheet]): IO[Workbook] =
     sheetFor(wb, defaultSheetName, opName).flatMap(updateNamedSheetE(wb, _)(f))
 
-  /** Update a named sheet with a validated (Either-returning) transform. */
+  /**
+   * Update a named sheet with a validated (XLResult-returning) transform; its typed refusal
+   * (GH-617: `INVALID_ARGUMENT` for a value or flag the applier refuses) rides under
+   * `BATCH_OP_FAILED` with its own text, hint and candidates.
+   */
   private def updateNamedSheetE(
     wb: Workbook,
     sheetName: SheetName
-  )(f: Sheet => Either[String, Sheet]): IO[Workbook] =
+  )(f: Sheet => XLResult[Sheet]): IO[Workbook] =
     wb.sheets.find(_.name == sheetName) match
       case None => IO.raiseError(sheetNotFound(wb, sheetName))
       case Some(sheet) =>
-        IO.fromEither(f(sheet).left.map(msg => new Exception(msg))).map(wb.put)
+        IO.fromEither(f(sheet).left.map(err => CliException(CliError.fromXLError(err, None))))
+          .map(wb.put)

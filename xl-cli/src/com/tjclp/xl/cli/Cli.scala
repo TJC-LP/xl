@@ -247,18 +247,23 @@ object Cli:
         )
         usageFailure("", error, mode, io)
       case verb =>
-        // `--help` is the one request the mode flag must not reach decline with: at the top level
-        // it reads `--json --help` as "Unexpected option: --help". The mode is already known, so
-        // the flag is dropped from what decline sees when help is being asked for.
+        // `--help` anywhere before `--` is a request for the verb's help, whatever else rides
+        // along: decline refuses `--help` behind an option or positional it did not expect
+        // (`--json --help`, `-f a.xlsx --help`, `view A1:B2 --help`), so the candidates of
+        // Argv.helpCandidates are tried in order and the first clean help wins
+        val parse = (args: List[String]) => command(io).parse(args, sys.env)
         val parsed =
-          if mode == OutputMode.Json && argv.takeWhile(_ != "--").contains("--help") then
-            argv.filterNot(_ == "--json")
-          else argv
-        IO(command(io).parse(parsed, sys.env))
+          if argv.takeWhile(_ != "--").contains("--help") then
+            val attempts = Argv.helpCandidates(argv).map(parse)
+            attempts
+              .collectFirst { case left @ Left(help) if help.errors.isEmpty => left }
+              .getOrElse(attempts.headOption.getOrElse(parse(argv)))
+          else parse(argv)
+        IO(parsed)
           .flatMap {
             case Right(handler) => handler
             case Left(help) if help.errors.nonEmpty =>
-              val hint = Argv.positionalFile(argv) match
+              val hint = Argv.misplacedFile(argv, help.errors) match
                 case Some(path) =>
                   s"did you mean -f $path? xl takes the file as -f/--file; " +
                     "the positional argument is the range or verb argument"

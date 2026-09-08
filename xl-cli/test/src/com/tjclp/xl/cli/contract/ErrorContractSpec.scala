@@ -240,6 +240,18 @@ class ErrorContractSpec extends CatsEffectSuite:
       lint <- CliHarness.run("lint", missing)
       diff <- CliHarness.run("-f", missing, "diff", "-g", file("simple.xlsx"))
       streamed <- CliHarness.run("-f", missing, "--stream", "-s", "Data", "view", "A1:B2")
+      streamPut <- CliHarness.run(
+        "-f",
+        missing,
+        "--stream",
+        "-s",
+        "Data",
+        "-o",
+        fixtures().resolve("stream-missing-out.xlsx").toString,
+        "put",
+        "A1",
+        "1"
+      )
       json <- CliHarness.run("-f", missing, "--json", "-s", "Data", "view", "A1:B2")
     yield
       List(
@@ -249,7 +261,8 @@ class ErrorContractSpec extends CatsEffectSuite:
         "cell" -> cell,
         "lint" -> lint,
         "diff" -> diff,
-        "--stream view" -> streamed
+        "--stream view" -> streamed,
+        "--stream put" -> streamPut
       ).foreach { (verb, run) =>
         assertEquals(run.exit, 3, s"$verb exit\n${run.stderr}")
         assertEquals(run.stdout, "", s"$verb stdout must be empty")
@@ -267,6 +280,59 @@ class ErrorContractSpec extends CatsEffectSuite:
       assertEquals(error("message"), ujson.Str(s"No such file: $missing"))
       assertEquals(error("hint"), ujson.Str("check the path; the previous write may have failed"))
       assertEquals(error("location")("file"), ujson.Str(missing))
+  }
+
+  test("GH-617: a refused argument is INVALID_ARGUMENT (exit 3) on the verbs and in batch") {
+    val out = (tag: String) => fixtures().resolve(s"invalid-arg-$tag.xlsx").toString
+    val base = List("-f", file("simple.xlsx"), "-s", "Data", "--json")
+    def code(run: CliRun): (Int, ujson.Value) = (run.exit, ujson.read(run.stdout)("error"))
+    for
+      level <- CliHarness.run(
+        base ++ List("-o", out("level"), "group-rows", "1:3", "--level", "9"),
+        ""
+      )
+      zoom <- CliHarness.run(base ++ List("-o", out("zoom"), "sheet-view", "--zoom", "5"), "")
+      width <- CliHarness.run(base ++ List("-o", out("width"), "col", "A", "--width", "300"), "")
+      height <- CliHarness.run(base ++ List("-o", out("height"), "row", "1", "--height", "500"), "")
+      grammar <- CliHarness.run(base ++ List("-o", out("grammar"), "sheet-view"), "")
+      batch <- CliHarness.run(
+        base ++ List("-o", out("batch"), "batch", "-"),
+        """[{"op":"colwidth","col":"A","width":300}]"""
+      )
+    yield
+      val (levelExit, levelErr) = code(level)
+      assertEquals(levelExit, 3, level.stderr)
+      assertEquals(levelErr("code"), ujson.Str("INVALID_ARGUMENT"))
+      assertEquals(levelErr("message"), ujson.Str("outline: level must be 1-7, got: 9"))
+      val (zoomExit, zoomErr) = code(zoom)
+      assertEquals(zoomExit, 3)
+      assertEquals(zoomErr("code"), ujson.Str("INVALID_ARGUMENT"))
+      assertEquals(zoomErr("message"), ujson.Str("sheet-view: zoom scale must be 10-400, got: 5"))
+      val (widthExit, widthErr) = code(width)
+      assertEquals(widthExit, 3)
+      assertEquals(widthErr("code"), ujson.Str("INVALID_ARGUMENT"))
+      assertEquals(
+        widthErr("message"),
+        ujson.Str("col: width must be 0-255 character units, got 300.0")
+      )
+      assert(!Files.exists(fixtures().resolve("invalid-arg-width.xlsx")), "nothing written")
+      val (heightExit, heightErr) = code(height)
+      assertEquals(heightExit, 3)
+      assertEquals(heightErr("code"), ujson.Str("INVALID_ARGUMENT"))
+      assertEquals(heightErr("message"), ujson.Str("row: height must be 0-409 points, got 500.0"))
+      val (grammarExit, grammarErr) = code(grammar)
+      assertEquals(grammarExit, 3)
+      assertEquals(grammarErr("code"), ujson.Str("INVALID_ARGUMENT"))
+      assert(grammarErr("message").str.startsWith("sheet-view: at least one of"), grammar.stdout)
+      // batch reports the op position under BATCH_OP_FAILED with the guard's own text
+      val (batchExit, batchErr) = code(batch)
+      assertEquals(batchExit, 3, batch.stderr)
+      assertEquals(batchErr("code"), ujson.Str("BATCH_OP_FAILED"))
+      assert(
+        batchErr("message").str.contains("width must be 0-255 character units, got 300.0"),
+        batchErr("message").str
+      )
+      assertEquals(batchErr("location")("opIndex"), ujson.Num(1))
   }
 
   test("GH-621: a corrupt input keeps the reader's own message, never re-prefixed") {

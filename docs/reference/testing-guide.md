@@ -233,11 +233,11 @@ As of the 0.21.1 contract cleanup (#607, #615, #617, #619, #620, #621, #622, #62
 | xl-evaluator | 2418 |
 | xl-core | 1553 |
 | xl-ooxml | 1119 |
-| xl-cli | 1373 |
+| xl-cli | 1379 |
 | xl-cats-effect | 169 |
 | xl-agent | 146 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 52 |
-| **Total** | **6,830** |
+| **Total** | **6,836** |
 
 ## Test Quality Metrics
 

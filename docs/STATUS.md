@@ -227,14 +227,14 @@
 
 ### Test Coverage
 
-**6,830 test cases** (verified via `./mill __.test`, 2026-09-08, after the 0.21.1 contract cleanup #607/#615/#617/#619/#620/#621/#622/#626/#639/#641/#644, the 0.21.0 dogfood fixes #606, #608/#609, #612, #637, the #636 memory guard and the Wave 25 A1 shims): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**6,836 test cases** (verified via `./mill __.test`, 2026-09-08, after the 0.21.1 contract cleanup #607/#615/#617/#619/#620/#621/#622/#626/#639/#641/#644, the 0.21.0 dogfood fixes #606, #608/#609, #612, #637, the #636 memory guard and the Wave 25 A1 shims): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
 | xl-evaluator | 2418 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1553 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1119 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1373 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636), contract goldens (help on stdout, typed name/argument codes, diff cache kinds, filter/stats shapes) |
+| xl-cli | 1379 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636), contract goldens (help on stdout, typed name/argument codes, diff cache kinds, filter/stats shapes) |
 | xl-cats-effect | 169 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 146 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 52 | external-consumer probes (`xl/test/src/xlprelude/`) |

@@ -75,6 +75,19 @@ class StatsSpec extends CatsEffectSuite:
       assertEquals(rowDoc("count").num.toInt, 2)
   }
 
+  test("GH-641: a whole-column span folds the used rows only, labelled as spelled") {
+    // 3 used rows: the fold sees rows 1-3 of B, and the label is still the span asked for
+    val tall = Sheet("T").put(ref"B2", CellValue.Number(1)).put(ref"B3", CellValue.Number(2))
+    ReadTestKit
+      .inMemory(Workbook(Vector(tall)), Some("T"), ReadQuery.Stats("B:B"), OutputMode.Json)
+      .map { outcome =>
+        val doc = ujson.read(ReadTestKit.text(outcome))
+        assertEquals(doc("range").str, "B:B")
+        assertEquals(doc("count").num.toInt, 2)
+        assertEquals(doc("sum").num.toInt, 3)
+      }
+  }
+
   test("GH-641: a malformed ref is still INVALID_REFERENCE with the parser's text") {
     ReadTestKit.inMemory(wb, Some("Data"), ReadQuery.Stats("B1:")).map { outcome =>
       assertEquals(outcome.error.map(_.code), Some("INVALID_REFERENCE"))

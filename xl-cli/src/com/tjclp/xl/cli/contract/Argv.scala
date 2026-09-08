@@ -68,6 +68,57 @@ object Argv:
           if !token.startsWith("-") && looksLikeWorkbook(token) then Some(token) else scan(tail)
       scan(args)
 
+  /**
+   * The [[positionalFile]] the parser's errors corroborate: decline reported the missing `--file`
+   * (or the workbook token sits where the verb's first positional goes, so it displaced the real
+   * argument) or an unexpected argument — the token itself, or one that came after it. A failure
+   * about something else (`Invalid integer: x`) gets the plain `--help` hint.
+   */
+  def misplacedFile(args: List[String], errors: List[String]): Option[String] =
+    positionalFile(args).filter { token =>
+      val scanned = args.takeWhile(_ != "--")
+      val tokenAt = scanned.indexOf(token)
+      val firstPositional = verbOf(scanned).flatMap { verb =>
+        scanned.drop(scanned.indexOf(verb) + 1).find(t => !t.startsWith("-"))
+      }
+      val missingFile = errors.exists(_.startsWith("Missing expected flag --file"))
+      val unexpected = errors.filter(_.startsWith("Unexpected argument: "))
+      val namesToken = unexpected.contains(s"Unexpected argument: $token")
+      val displaced = unexpected.exists { e =>
+        scanned.indexOf(e.stripPrefix("Unexpected argument: ")) > tokenAt
+      }
+      namesToken || (firstPositional.contains(token) && (missingFile || displaced))
+    }
+
+  /**
+   * The command line without its globals (and their values), before any `--`: what decline should
+   * see when help is asked for, since the globals a program adds (`--json`, `-f`) are already read
+   * here and decline refuses `--help` behind an option it did not expect (GH-620).
+   */
+  def withoutGlobals(args: List[String]): List[String] =
+    val (scanned, rest) = args.span(_ != "--")
+    @tailrec
+    def strip(tokens: List[String], kept: Vector[String]): Vector[String] = tokens match
+      case Nil => kept
+      case token :: tail =>
+        globalOf(token) match
+          case Some((_, true)) => strip(tail.drop(1), kept)
+          case Some((_, false)) => strip(tail, kept)
+          case None => strip(tail, kept :+ token)
+    strip(scanned, Vector.empty).toList ++ rest
+
+  /**
+   * The command lines to try, in order, when `--help` was asked for (GH-620): the line without its
+   * globals, then the verb path shortened from the right one word at a time — `view A1:B2 --help`,
+   * `view --help`, `--help` — because decline honours `--help` only before a positional it did not
+   * expect. The runner takes the first that parses to a help text without errors.
+   */
+  def helpCandidates(args: List[String]): Vector[List[String]] =
+    val stripped = withoutGlobals(args).takeWhile(_ != "--")
+    val words = stripped.filterNot(_.startsWith("-"))
+    val prefixes = (words.length to 0 by -1).map(n => words.take(n) :+ "--help")
+    (stripped +: prefixes.toVector).distinct
+
   private def looksLikeWorkbook(token: String): Boolean =
     val lower = token.toLowerCase(java.util.Locale.ROOT)
     workbookExtensions.exists(ext => lower.endsWith(ext) && lower.length > ext.length)

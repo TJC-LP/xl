@@ -161,12 +161,38 @@ object Reads:
       sheet <- resolveSheet(source, sheetFlag, parsed.flatMap(_._1), context)
       base <- parsed match
         case Some((_, Resolve.Target.Cell(ref))) => IO.pure(Some(CellRange(ref, ref)))
-        case Some((_, Resolve.Target.Range(range))) => IO.pure(Some(range))
+        case Some((_, Resolve.Target.Range(range))) => clampSpan(source, sheet, range).map(Some(_))
         case None => source.usedRange(sheet) // no range given: the used range
       payload <- base match
         case Some(range) => viewWindow(q, source, sheet, range, mode, warn)
         case None => viewEmptySheet(q, source, sheet, mode, warn)
     yield payload
+
+  /**
+   * A whole-column (`B:B`) or whole-row (`3:3`) span clamped to the sheet's used range on the axis
+   * it left open (GH-641): the rows of the used range for a column span, its columns for a row span
+   * — so `view B:B` renders the column's used rows (and `totalRows` counts them), not the
+   * 1,048,576-row axis; the columns (rows) named stay exactly as asked, so `view Z:Z` on a sheet
+   * used through C shows an empty column Z over the used rows. An empty sheet clamps to row 1 (or
+   * column A). Any other range is returned unchanged.
+   */
+  private def clampSpan(source: SheetSource, sheet: SheetName, range: CellRange): IO[CellRange] =
+    if !range.isFullColumn && !range.isFullRow then IO.pure(range)
+    else
+      source.usedRange(sheet).map { used =>
+        if range.isFullColumn then
+          val (top, bottom) = used.fold((0, 0))(u => (u.start.row.index0, u.end.row.index0))
+          CellRange(
+            ARef.from0(range.start.col.index0, top),
+            ARef.from0(range.end.col.index0, bottom)
+          )
+        else
+          val (left, right) = used.fold((0, 0))(u => (u.start.col.index0, u.end.col.index0))
+          CellRange(
+            ARef.from0(left, range.start.row.index0),
+            ARef.from0(right, range.end.row.index0)
+          )
+      }
 
   /** `view` with no range on an empty sheet: nothing to address. */
   private def viewEmptySheet(
@@ -478,7 +504,8 @@ object Reads:
    * `stats <range>`: count, sum, min, max and mean of the numeric records. A range holding no
    * numbers is a legitimate result (GH-641) — zero-count statistics with `min`/`max`/`mean` absent
    * (`n/a` in text, `null` in JSON), exit 0 — flagged `NO_NUMERIC_VALUES` out of band. Whole-column
-   * spans (`AM:AM`) are accepted like `view`'s and folded in one pass ([[Resolve.ref]]).
+   * spans (`AM:AM`) are accepted like `view`'s ([[Resolve.ref]]), labelled as spelled and folded
+   * over the used rows only ([[clampSpan]]).
    */
   private def stats(
     q: ReadQuery.Stats,
@@ -496,8 +523,10 @@ object Reads:
         qualifier,
         Resolve.unqualified("stats", q.ref, target)
       )
-      range = target.toEither.fold(ref => CellRange(ref, ref), identity)
-      label = Resolve.rangeLabel(range)
+      spelled = target.toEither.fold(ref => CellRange(ref, ref), identity)
+      // the label is the span as asked (`B:B`); the scan covers its used rows only (GH-641)
+      label = Resolve.rangeLabel(spelled)
+      range <- clampSpan(source, sheet, spelled)
       acc <- source
         .rows(sheet, range)
         .flatMap(Stream.emits)

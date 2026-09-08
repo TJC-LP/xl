@@ -23,12 +23,22 @@ The 0.21.0 dogfood's CLI contract nits, one PR (#607, #615, #617, #619, #620, #6
   merge, a count below one, `clear` with nothing to clear, an empty hyperlink target, a conditional
   format with no range or rule, `move-sheet` with no or two positions, an empty defined name, a
   negative font size or indent, an outline level outside 1-7, a zoom outside 10-400 — is this
-  typed error instead of `XLError.Other`, so a script or the envelope can branch on the code; the
-  message keeps its `<op>: <reason>` text and `EditFailed` supplies `opIndex`.
-- **`diff` compares cached values** (#607): a formula cell whose text is unchanged but whose
-  cached value differs, or is present on one side only, is a difference of kind `cache` — what a
-  recalculation, a `--no-recalc` edit or a cache-stripping writer produces, and what a workbook
-  that lost 273 caches was invisibly missing. Every changed cell now carries `kind`: `value`,
+  typed error instead of `XLError.Other`, so a script or the envelope can branch on the code, and
+  `EditFailed` supplies `opIndex`. The CLI verbs and batch ops report the same code: `group-rows
+  --level 9`, `sheet-view --zoom 5`, `page-setup`, `tab-color`, `autofilter`, `header-footer` and
+  their flag-grammar refusals (`GroupingOps`/`AppearanceOps` now return the domain error instead
+  of prose the handlers re-wrapped as `OTHER`), and `col --width 300` / `row --height 500` / batch
+  `colwidth`/`rowheight` are refused by the guard `Edit.validate` uses
+  (`SheetEdits.validateColumnWidth`/`validateRowHeight`) where they used to write a width Excel
+  repairs. Messages read `<op>: <reason>`; the outline-level and zoom texts changed from `Outline
+  level must be 1-7, got: 9` / `Zoom scale must be 10-400, got: 5` to `outline: level must be 1-7,
+  got: 9` / `sheet-view: zoom scale must be 10-400, got: 5`.
+- **Breaking: `diff` compares cached values** (#607): a formula cell whose text is unchanged but
+  whose cached value differs, or is present on one side only, is a difference of kind `cache` —
+  what a recalculation, a `--no-recalc` edit or a cache-stripping writer produces, and what a
+  workbook that lost 273 caches was invisibly missing. Two books whose formulas agree but whose
+  caches do not now exit 1 (`DIFFERENCES_FOUND`) where they exited 0; pass `--formulas-only` for
+  the old verdict. Every changed cell now carries `kind`: `value`,
   `formula`, `cache` or `style` (`styleChanged` is kept beside it); markdown renders a cache change
   as `B4: =SUM(B1:B3) cached 42.5 -> 43.5 [cache]` (`(none)` for a missing cache).
   `--formulas-only` keeps the text-only comparison. Goldens: `diff-changed*` gain `B4`'s cache
@@ -37,14 +47,17 @@ The 0.21.0 dogfood's CLI contract nits, one PR (#607, #615, #617, #619, #620, #6
   `xl put --help | head` works and an agent capturing stdout sees it — and under `--json` yield the
   `ok: true` envelope with the text as `data.usage` (`xl --json --help` included; decline used to
   refuse the flag order). Help went to stderr before.
-- **`stats` accepts whole-column and whole-row spans** (#641): `stats AM:AM`, `stats B:D`,
-  `stats 3:3`, bare or sheet-qualified (`'Q1 Data'!B:B`), fold the full height in one pass under
-  both engines and are labelled as spelled (`"range": "B:B"`); `view` takes the same forms. They
-  used to be `INVALID_REFERENCE: missing row digits`.
-- **`NO_NUMERIC_VALUES` warning** (#641): `stats` over a range with no numbers is a legitimate
-  result — `count: 0, sum: 0.00, min: n/a, max: n/a, mean: n/a` (`null` for the three in JSON),
-  exit 0 — flagged out of band, as `search` and `filter` treat an empty result. It used to fail
-  `OTHER`, exit 3.
+- **`stats` and `view` accept whole-column and whole-row spans** (#641): `stats AM:AM`,
+  `stats B:D`, `view 3:3`, bare or sheet-qualified (`'Q1 Data'!B:B`), are clamped to the sheet's
+  used range on the open axis — the used rows of a column span, the used columns of a row span —
+  so they fold or render what the sheet holds (`totalRows` counts the used rows), never the
+  1,048,576-row axis, under both engines; `stats` labels the result as spelled (`"range": "B:B"`),
+  `view`'s JSON `range` is the window rendered, as for every range. They used to be
+  `INVALID_REFERENCE: missing row digits`.
+- **Breaking: `stats` over a range with no numbers is a result, exit 0** (#641): `count: 0, sum:
+  0.00, min: n/a, max: n/a, mean: n/a` (`null` for the three in JSON) with a new
+  `NO_NUMERIC_VALUES` warning out of band, as `search` and `filter` treat an empty result. It used
+  to fail `OTHER`, exit 3 — a script that branched on that exit now reads `count` (or the warning).
 - **`filter --format json` carries the match total** (#639): `matched`, `shown`, `truncated` and
   `limit` (`null` under `--limit 0`) beside `rows`, as `view` carries `totalRows`/`truncated` and
   `search` `count`/`total`; `--format csv` raises the same `TRUNCATED` warning `view --format csv`
@@ -63,14 +76,17 @@ The 0.21.0 dogfood's CLI contract nits, one PR (#607, #615, #617, #619, #620, #6
   argument` instead of pointing at `--help`. Fires only when no `-f`/`--file` was given, the verb
   does not take a file of its own (`new`, `lint`) and a non-flag token ends in a workbook
   extension.
-- **One diagnostic for a missing input** (#621): every verb reports a file that does not exist as
-  `No such file: <path>`, `code: IO_READ`, with the hint `check the path; the previous write may
-  have failed` and the path in `error.location` — `lint` included (it said `IO error: Failed to
-  open file: …`). The message was `Failed to read XLSX: IO error: Failed to read XLSX: <path>`
-  with `hint: null`: `XlsxReader` now names the cause (`no such file: <path>`) and `ExcelIO.read`
-  and the CLI's guarded reader raise the `XLException` the documentation always promised instead
-  of re-prefixing the error's message, so every other read failure keeps the reader's own text,
-  prefixed once.
+- **One diagnostic for a missing input** (#621): every verb — the in-memory reads and writes,
+  `lint`, `diff`, and the `--stream` reads and writes (`put`, `putf`, `style`, `batch`) — reports a
+  file that does not exist as `No such file: <path>`, `code: IO_READ`, with the hint `check the
+  path; the previous write may have failed` and the path in `error.location`. The message was
+  `Failed to read XLSX: IO error: Failed to read XLSX: <path>` with `hint: null` (or `IO error:
+  Failed to open file: …` from the metadata and lint openers): `XlsxReader`,
+  `WorkbookMetadataReader` and `WorkbookLint` now name the cause alone (`no such file: <path>`, or
+  the exception's own message — `IOError.message` supplies the one `IO error: ` prefix), and
+  `ExcelIO.read`/`readMetadata`/`readDimension` and the CLI's guarded reader raise the
+  `XLException` the documentation always promised instead of re-prefixing the error's message.
+  Any other failure while opening an input keeps the library's text; a defect stays `INTERNAL`.
 - **`Workbook.apply`/`update`/`remove`/`delete`/`rename`/`setSheetState` name the candidates**
   (#615): their `SheetNotFound` carries the workbook's sheet names, so `orExit(wb("Sumary"))`
   prints `did you mean: Summary` like `Excel.readSheet` and `xl -s` do (the six sites used to build

@@ -1,5 +1,6 @@
 package com.tjclp.xl.cli
 
+import java.io.IOException
 import java.nio.file.{
   AccessDeniedException,
   AtomicMoveNotSupportedException,
@@ -2121,36 +2122,49 @@ EXAMPLES:
    * already raised below passes through unchanged. Every read of the input — full workbook,
    * metadata quick path, lint's raw zip — goes through this so one condition (missing or unreadable
    * file) has one code. A file that does not exist is the one message and hint of [[missingInput]]
-   * on every verb (GH-621); any other failure keeps the library's own message — an `XLException`'s
-   * error message as is, so the reader's prefix appears once.
+   * on every verb (GH-621); an `XLException` or `IOException` keeps the library's own message — the
+   * reader's prefix once. Anything else is NOT a read failure and falls through untouched to
+   * `CliError.fromThrowable`: a defect stays `INTERNAL`, as ADR-017 reserves it.
    */
   private def classifyRead[A](path: Path)(read: IO[A]): IO[A] =
-    read.handleErrorWith {
-      // a failure classified below — unless it is an IO_READ raised by a path that could not see
-      // whether the file exists (the streaming source), which takes the one missing-input shape
-      case cli: CliException if cli.error.code != ErrorCode.IO_READ => IO.raiseError(cli)
-      case other =>
-        IO.blocking(Files.exists(path)).flatMap { exists =>
-          val error =
-            if !exists then missingInput(path)
-            else
-              other match
-                case cli: CliException => cli.error
-                case x: XLException =>
-                  CliError(
-                    ErrorCode.IO_READ,
-                    x.error.message,
-                    location = Some(Location.file(path.toString)),
-                    cause = Some(x.error)
-                  )
-                case _ =>
-                  CliError(
-                    ErrorCode.IO_READ,
-                    CliError.messageOf(other),
-                    location = Some(Location.file(path.toString))
-                  )
-          IO.raiseError(CliException(error))
-        }
+    missingInputGuard(path)(read).handleErrorWith {
+      case x: XLException =>
+        IO.raiseError(
+          CliException(
+            CliError(
+              ErrorCode.IO_READ,
+              x.error.message,
+              location = Some(Location.file(path.toString)),
+              cause = Some(x.error)
+            )
+          )
+        )
+      case io: IOException =>
+        IO.raiseError(
+          CliException(
+            CliError(
+              ErrorCode.IO_READ,
+              CliError.messageOf(io),
+              location = Some(Location.file(path.toString))
+            )
+          )
+        )
+      case other => IO.raiseError(other)
+    }
+
+  /**
+   * The one thing every path that opens `path` agrees on (GH-621): when it fails and the file does
+   * not exist, the failure is [[missingInput]] — whatever the path raised (the streaming reader and
+   * writer classify their own `IO_READ` from metadata they could not open, a `CliException` this
+   * guard alone may replace). Any failure on an existing file passes through untouched, so a write
+   * that fails on the OUTPUT side is never mistaken for an unreadable input.
+   */
+  private def missingInputGuard[A](path: Path)(run: IO[A]): IO[A] =
+    run.handleErrorWith { failure =>
+      IO.blocking(Files.exists(path)).flatMap { exists =>
+        if !exists then IO.raiseError(CliException(missingInput(path)))
+        else IO.raiseError(failure)
+      }
     }
 
   /**
@@ -2811,7 +2825,7 @@ EXAMPLES:
         (stream, readQuery) match
           case (true, Some(query)) =>
             streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
-              classifyRead(filePath)(
+              missingInputGuard(filePath)(
                 Reads.run(query, SheetSource.streaming(filePath, excel), sheetNameOpt, mode, warn)
               )
           case _ if stream && isStreamingWriteCmd =>
@@ -2826,9 +2840,12 @@ EXAMPLES:
                 )
               )
             else
-              streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
-                executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io, warn)
-                  .map(Payload.text)
+              // GH-621: a missing input is the one IO_READ diagnostic here too (the streaming
+              // writer reads workbook.xml first and reports its own IO_READ without the hint)
+              missingInputGuard(filePath)(
+                streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
+                  executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io, warn)
+              ).map(Payload.text)
           case _ =>
             // --stream accepted but with no O(1) path for this verb: the workbook is loaded in
             // memory and only the write goes through the streaming backend — say so

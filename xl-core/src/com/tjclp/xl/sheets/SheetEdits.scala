@@ -420,6 +420,35 @@ private[xl] object SheetEdits:
     if level >= 1 && level <= 7 then Right(())
     else Left(XLError.InvalidArgument("outline", s"level must be 1-7, got: $level"))
 
+  /** Excel's ceiling on a column width, in character units. */
+  val MaxColumnWidth: Double = 255.0
+
+  /** Excel's ceiling on a row height, in points. */
+  val MaxRowHeight: Double = 409.0
+
+  /**
+   * The column-width guard (GH-617), `INVALID_ARGUMENT` naming `op` — shared by `Edit.validate`
+   * (`col-width`) and the CLI's `col --width` / batch `colwidth`, so no path writes a width Excel
+   * repairs.
+   */
+  def validateColumnWidth(op: String, width: Double): XLResult[Unit] =
+    if width >= 0 && width <= MaxColumnWidth then Right(())
+    else
+      Left(
+        XLError.InvalidArgument(
+          op,
+          s"width must be 0-${MaxColumnWidth.toInt} character units, got $width"
+        )
+      )
+
+  /** The row-height guard (GH-617), the twin of [[validateColumnWidth]]. */
+  def validateRowHeight(op: String, height: Double): XLResult[Unit] =
+    if height >= 0 && height <= MaxRowHeight then Right(())
+    else
+      Left(
+        XLError.InvalidArgument(op, s"height must be 0-${MaxRowHeight.toInt} points, got $height")
+      )
+
   /**
    * Apply `f` to the row's properties, keeping the entry even when the result is all-default: an
    * explicit entry is authoritative on write (actively clearing preserved source attributes),

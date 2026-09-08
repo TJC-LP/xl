@@ -27,12 +27,6 @@ import com.tjclp.xl.workbooks.{DefinedName, Workbook}
  */
 private[xl] object EditInterpreter:
 
-  /** Excel's ceiling on a column width, in character units. */
-  private val MaxColumnWidth: Double = 255.0
-
-  /** Excel's ceiling on a row height, in points. */
-  private val MaxRowHeight: Double = 409.0
-
   /**
    * A validation refusal: `INVALID_ARGUMENT` naming the edit and the reason (GH-617), so a script
    * or the CLI envelope can branch on the code; the batch position rides on the `EditFailed` that
@@ -65,12 +59,8 @@ private[xl] object EditInterpreter:
           refuse(name, "at least one property is required (an empty merge changes nothing)")
         else overlay.validate
       case Edit.Merge(_) | Edit.Unmerge(_) => Right(())
-      case Edit.ColWidth(_, _, width) =>
-        if width >= 0 && width <= MaxColumnWidth then Right(())
-        else refuse(name, s"width must be 0-${MaxColumnWidth.toInt} character units, got $width")
-      case Edit.RowHeight(_, _, height) =>
-        if height >= 0 && height <= MaxRowHeight then Right(())
-        else refuse(name, s"height must be 0-${MaxRowHeight.toInt} points, got $height")
+      case Edit.ColWidth(_, _, width) => SheetEdits.validateColumnWidth(name, width)
+      case Edit.RowHeight(_, _, height) => SheetEdits.validateRowHeight(name, height)
       case Edit.HideCols(_, _) | Edit.ShowCols(_, _) | Edit.HideRows(_, _) | Edit.ShowRows(_, _) =>
         Right(())
       case Edit.GroupRows(_, _, level, _) => SheetEdits.validateLevel(level)
@@ -626,9 +616,9 @@ private[xl] object EditInterpreter:
       )
     case Edit.Merge(at) => Some(Patch.Merge(at.range))
     case Edit.Unmerge(at) => Some(Patch.Unmerge(at.range))
-    case Edit.ColWidth(_, cols, width) if width >= 0 && width <= MaxColumnWidth =>
+    case Edit.ColWidth(_, cols, width) if width >= 0 && width <= SheetEdits.MaxColumnWidth =>
       Some(columnPatch(existing, cols)(_.copy(width = Some(width))))
-    case Edit.RowHeight(_, rows, height) if height >= 0 && height <= MaxRowHeight =>
+    case Edit.RowHeight(_, rows, height) if height >= 0 && height <= SheetEdits.MaxRowHeight =>
       Some(rowPatch(existing, rows)(_.copy(height = Some(height))))
     case Edit.HideCols(_, cols) => Some(columnPatch(existing, cols)(_.copy(hidden = true)))
     case Edit.ShowCols(_, cols) => Some(columnPatch(existing, cols)(_.copy(hidden = false)))

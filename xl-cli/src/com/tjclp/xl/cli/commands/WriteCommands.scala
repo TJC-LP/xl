@@ -40,7 +40,7 @@ import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ops.Edit
-import com.tjclp.xl.sheets.styleSyntax
+import com.tjclp.xl.sheets.{styleSyntax, SheetEdits}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.cli.{
@@ -72,9 +72,6 @@ object WriteCommands:
   /** A domain error as raised, with its own code. */
   private def domain(error: XLError): CliException =
     CliException(CliError.fromXLError(error, None))
-
-  /** A domain validation that failed with prose alone: `OTHER` (exit 3), a data condition. */
-  private def refused(message: String): CliException = domain(XLError.Other(message))
 
   /**
    * A ref of the wrong shape (a range where one cell is needed, a bad column): `INVALID_REFERENCE`.
@@ -830,20 +827,24 @@ object WriteCommands:
   ): IO[String] =
     SheetResolver.requireSheet(wb, sheetOpt, "row").flatMap { sheet =>
       val rowRef = Row.from1(rowNum)
-      val currentProps = sheet.getRowProperties(rowRef)
-      val newProps = currentProps.copy(
-        height = height.orElse(currentProps.height),
-        hidden = if hide then true else if show then false else currentProps.hidden
-      )
-      val updatedSheet = sheet.setRowProperties(rowRef, newProps)
-      val updatedWb = wb.put(updatedSheet)
-      writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
-        val changes = List(
-          height.map(h => s"height=$h"),
-          if hide then Some("hidden=true") else None,
-          if show then Some("hidden=false") else None
-        ).flatten
-        s"Row $rowNum: ${changes.mkString(", ")}\n${Format.saveSuffix(outputPath, stream)}"
+      // GH-617: the same guard Edit.validate applies — a height Excel repairs is refused typed
+      val guarded = height.fold[XLResult[Unit]](Right(()))(SheetEdits.validateRowHeight("row", _))
+      IO.fromEither(guarded.left.map(domain)) *> IO.defer {
+        val currentProps = sheet.getRowProperties(rowRef)
+        val newProps = currentProps.copy(
+          height = height.orElse(currentProps.height),
+          hidden = if hide then true else if show then false else currentProps.hidden
+        )
+        val updatedSheet = sheet.setRowProperties(rowRef, newProps)
+        val updatedWb = wb.put(updatedSheet)
+        writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
+          val changes = List(
+            height.map(h => s"height=$h"),
+            if hide then Some("hidden=true") else None,
+            if show then Some("hidden=false") else None
+          ).flatten
+          s"Row $rowNum: ${changes.mkString(", ")}\n${Format.saveSuffix(outputPath, stream)}"
+        }
       }
     }
 
@@ -867,10 +868,13 @@ object WriteCommands:
     stream: Boolean = false
   ): IO[String] =
     SheetResolver.requireSheet(wb, sheetOpt, "col").flatMap { sheet =>
+      // GH-617: the same guard Edit.validate applies — a width Excel repairs is refused typed
+      val guarded = width.fold[XLResult[Unit]](Right(()))(SheetEdits.validateColumnWidth("col", _))
       // Try parsing as column range (A:F) first, then single column (A)
-      parseColumnSpec(colStr) match
-        case Left(err) => IO.raiseError(invalidRef(err))
-        case Right(columns) =>
+      (guarded.left.map(domain), parseColumnSpec(colStr)) match
+        case (Left(err), _) => IO.raiseError(err)
+        case (_, Left(err)) => IO.raiseError(invalidRef(err))
+        case (Right(_), Right(columns)) =>
           val (updatedSheet, results) = columns.foldLeft((sheet, List.empty[String])) {
             case ((s, msgs), colRef) =>
               val currentProps = s.getColumnProperties(colRef)
@@ -1736,10 +1740,12 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean
-  )(f: Sheet => Either[String, Sheet])(message: Sheet => String): IO[String] =
+  )(f: Sheet => XLResult[Sheet])(message: Sheet => String): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, context)
-      updatedSheet <- IO.fromEither(f(sheet).left.map(refused))
+      // GH-617: the applier's own typed error (INVALID_ARGUMENT for a value or flag the grammar
+      // refuses) reaches the envelope as is — never re-wrapped as OTHER
+      updatedSheet <- IO.fromEither(f(sheet).left.map(domain))
       _ <- writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
     yield s"${message(sheet)}\n${Format.saveSuffix(outputPath, stream)}"
 
@@ -1816,7 +1822,7 @@ object WriteCommands:
           SheetResolver.requireSheet(wb, sheetOpt, "autofilter").map(s => (s, None))
       (sheet, rangeOpt) = resolved
       updatedSheet <- IO.fromEither(
-        AppearanceOps.applyAutoFilter(sheet, rangeOpt, clear).left.map(refused)
+        AppearanceOps.applyAutoFilter(sheet, rangeOpt, clear).left.map(domain)
       )
       _ <- writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
       message = rangeOpt match
@@ -1924,10 +1930,19 @@ object WriteCommands:
       range = refOrRange match
         case Left(ref) => CellRange(ref, ref)
         case Right(r) => r
+      // GH-617: a rule or style spec the parser refuses is INVALID_ARGUMENT naming the verb
       dxf <- IO.fromEither(
-        CfRuleParser.buildDxf(bold, italic, underline, strike, bg, fg).left.map(refused)
+        CfRuleParser
+          .buildDxf(bold, italic, underline, strike, bg, fg)
+          .left
+          .map(reason => domain(XLError.InvalidArgument("cf add", reason)))
       )
-      rule <- IO.fromEither(CfRuleParser.parse(ruleStr, dxf).left.map(refused))
+      rule <- IO.fromEither(
+        CfRuleParser
+          .parse(ruleStr, dxf)
+          .left
+          .map(reason => domain(XLError.InvalidArgument("cf add", reason)))
+      )
       updatedSheet = sheet.conditionalFormat(range, rule)
       priority = updatedSheet.typedConditionalFormats.lastOption
         .flatMap(_.rules.lastOption)
