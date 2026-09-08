@@ -2032,37 +2032,49 @@ EXAMPLES:
         val err = if rendered.stderr.isEmpty then IO.unit else io.err(rendered.stderr)
         (out *> err).as(outcome.exitCode)
 
-  /** How many lines of a streamed table one write to stdout carries. */
-  private val linesPerWrite: Int = 256
+  /** How many fragments of a streamed table — rows, mostly — one write to stdout carries. */
+  private val fragmentsPerWrite: Int = 256
 
   /**
-   * A streamed table (GH-635): the lines [[contract.Render.lines]] produces, written
-   * [[linesPerWrite]] at a time — the same bytes as one write of the gathered text — then the
-   * stderr of the outcome and its exit code. A failure while the rows are read (the reader, a table
-   * over its budget) stops the output where it is and is reported as the run's failure: the
-   * diagnostics on stderr, its exit code (under `--json` the envelope on stdout is left
-   * unterminated; the exit code and stderr carry the failure). When stdout stops taking the lines —
-   * the reader closed the pipe, `xl … | head` — the run stops writing and exits 0 in silence, as a
-   * tool killed by SIGPIPE would.
+   * A streamed table (GH-635): the fragments [[contract.Render.stream]] produces, written
+   * [[fragmentsPerWrite]] at a time through `io.write` — the same bytes as one print of the
+   * gathered text — then the stderr of the outcome and its exit code. Nothing is produced before
+   * the first row has been read, so a source that fails before it has one (the shared-string
+   * table's limit, a worksheet the parser rejects at once) has written nothing and is reported as
+   * every other failure is, the `--json` envelope included; a failure after bytes went out stops
+   * the output where it is and puts the diagnostics on stderr with the exit code (under `--json`
+   * the envelope on stdout is left unterminated — the exit code and stderr carry the failure). When
+   * stdout's reader has gone (`xl … | head`, [[CliIO.StdoutClosed]]) the run ends quietly with exit
+   * 0, as a tool killed by SIGPIPE would; any other write failure ([[CliIO.StdoutFailed]]: no
+   * space, an I/O error) is `IO_WRITE`, exit 3.
    */
   private def emitStreamed(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
-    val writes = Render
-      .lines(mode)(outcome, BuildInfo.version)
-      .chunkN(linesPerWrite)
-      .evalMap(chunk => io.out(chunk.toVector.mkString("\n")) *> io.outFailed)
-      .takeWhile(failed => !failed, takeFailure = true)
-      .compile
-      .last
-    writes.attempt.flatMap {
-      case Right(Some(true)) => IO.pure(ExitCodes.ok)
-      case Right(_) =>
-        val stderr = Render.stderr(mode)(outcome)
-        (if stderr.isEmpty then IO.unit else io.err(stderr)).as(outcome.exitCode)
-      case Left(failure) =>
-        val failed = Outcome.failed(outcome.verb, CliError.fromThrowable(failure), outcome.warnings)
-        val stderr = Render.stderr(mode)(failed)
-        (if stderr.isEmpty then IO.unit else io.err(stderr)).as(failed.exitCode)
+    Ref.of[IO, Boolean](false).flatMap { written =>
+      val writes = Render
+        .stream(mode)(outcome, BuildInfo.version)
+        .chunkN(fragmentsPerWrite)
+        .evalMap(chunk => io.write(chunk.toVector.mkString) *> written.set(true))
+        .compile
+        .drain
+      writes.attempt.flatMap {
+        case Right(()) => report(outcome, mode, io)
+        case Left(CliIO.StdoutClosed) => IO.pure(ExitCodes.ok)
+        case Left(failure) =>
+          val failed =
+            Outcome.failed(outcome.verb, CliError.fromThrowable(failure), outcome.warnings)
+          written.get.flatMap {
+            // nothing went out: the ordinary failure, the envelope under --json
+            case false => emit(failed, mode, io)
+            // bytes went out: stdout stays as written, stderr says what happened
+            case true => report(failed, mode, io)
+          }
+      }
     }
+
+  /** The stderr of an outcome whose stdout is already written, then its exit code. */
+  private def report(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
+    val stderr = Render.stderr(mode)(outcome)
+    (if stderr.isEmpty then IO.unit else io.err(stderr)).as(outcome.exitCode)
 
   /**
    * An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s and whose in-memory

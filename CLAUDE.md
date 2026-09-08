@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (6,821)
+./mill __.test             # Run all tests (6,828)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -416,7 +416,7 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**6,821 tests** by module: xl-evaluator (2417), xl-core (1551), xl-ooxml (1119), xl-cli (1366), xl-cats-effect (172), xl-agent (145), xl prelude probes (51). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**6,828 tests** by module: xl-evaluator (2417), xl-core (1551), xl-ooxml (1119), xl-cli (1373), xl-cats-effect (172), xl-agent (145), xl prelude probes (51). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 

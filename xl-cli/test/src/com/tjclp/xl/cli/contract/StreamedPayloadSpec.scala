@@ -189,27 +189,30 @@ class StreamedPayloadSpec extends ScalaCheckSuite:
       .render(t.grid, header, t.skipEmpty, t.truncatedRows, t.truncatedCols, t.skipHidden)
     (streamed, whole)
 
-  private def streamedLines(payload: Payload, warnings: Vector[Warning], mode: OutputMode): String =
+  /** Every byte [[Render.stream]] produces, joined: what `emit` writes for the outcome. */
+  private def streamedBytes(payload: Payload, warnings: Vector[Warning], mode: OutputMode): String =
     Render
-      .lines(mode)(Outcome.ok("view", payload, warnings), version)
+      .stream(mode)(Outcome.ok("view", payload, warnings), version)
       .compile
       .toVector
       .unsafeRunSync()
-      .mkString("\n")
+      .mkString
 
+  /** What `emit` prints for a gathered payload: its stdout and the newline, or nothing at all. */
   private def wholeStdout(payload: Payload, warnings: Vector[Warning], mode: OutputMode): String =
-    Render(mode)(Outcome.ok("view", payload, warnings), version).stdout
+    val stdout = Render(mode)(Outcome.ok("view", payload, warnings), version).stdout
+    if stdout.isEmpty then "" else stdout + "\n"
 
   // --- The law -----------------------------------------------------------------------------------
 
-  property("markdown: the streamed lines are the whole table, in both modes, stderr agreeing") {
+  property("markdown: the streamed bytes are the whole table, in both modes, stderr agreeing") {
     forAll(genTable) { (t: Table) =>
       val (streamed, text) = markdown(t)
       val gathered = Payload.materialise(streamed).unsafeRunSync()
       assertEquals(gathered, Payload.text(text))
       Vector(OutputMode.Text, OutputMode.Json).foreach { mode =>
         assertEquals(
-          streamedLines(streamed, t.warnings, mode),
+          streamedBytes(streamed, t.warnings, mode),
           wholeStdout(gathered, t.warnings, mode)
         )
         assertEquals(
@@ -221,16 +224,17 @@ class StreamedPayloadSpec extends ScalaCheckSuite:
     }
   }
 
-  property("csv: the streamed lines are the whole table, in both modes") {
+  property("csv: the streamed bytes are the whole table, in both modes (data.text streams)") {
     forAll(genTable) { (t: Table) =>
       val (streamed, text) = csv(t)
       val gathered = Payload.materialise(streamed).unsafeRunSync()
       assertEquals(gathered, Payload.text(text))
       Vector(OutputMode.Text, OutputMode.Json).foreach { mode =>
-        assertEquals(
-          streamedLines(streamed, t.warnings, mode),
-          wholeStdout(gathered, t.warnings, mode)
-        )
+        val bytes = streamedBytes(streamed, t.warnings, mode)
+        assertEquals(bytes, wholeStdout(gathered, t.warnings, mode), s"$mode")
+        // data.text, escaped line by line as it streams, reads back as the table
+        if mode == OutputMode.Json then
+          assertEquals(ujson.read(bytes)("data")("text"), ujson.Str(text))
       }
       Prop.passed
     }
@@ -246,7 +250,7 @@ class StreamedPayloadSpec extends ScalaCheckSuite:
       // the document is valid JSON whatever the rows held
       assert(ujson.read(text).obj.contains("sheet"), text)
       Vector(OutputMode.Text, OutputMode.Json).foreach { mode =>
-        val lines = streamedLines(streamed, t.warnings, mode)
+        val lines = streamedBytes(streamed, t.warnings, mode)
         assertEquals(lines, wholeStdout(gathered, t.warnings, mode), s"$mode")
         if mode == OutputMode.Json then EnvelopeSchema.assertValid(ujson.read(lines))
       }
@@ -254,53 +258,85 @@ class StreamedPayloadSpec extends ScalaCheckSuite:
     }
   }
 
-  test("a materialised payload is one element of lines, and an empty stdout is one empty line") {
+  test("a gathered payload is one fragment with its newline; an empty stdout is no bytes at all") {
     val text = Outcome.ok("put", Payload.text("Put: A1 = 1\nSaved: out.xlsx"))
     assertEquals(
-      Render.lines(OutputMode.Text)(text, version).compile.toVector.unsafeRunSync(),
-      Vector("Put: A1 = 1\nSaved: out.xlsx")
+      Render.stream(OutputMode.Text)(text, version).compile.toVector.unsafeRunSync(),
+      Vector("Put: A1 = 1\nSaved: out.xlsx\n")
     )
+    // no lines: nothing, as 0.21.0 printed nothing for the empty text
     val empty = Payload.Streamed(StreamedBody.Lines(Vector.empty, Stream.empty, Vector.empty))
     assertEquals(
       Render
-        .lines(OutputMode.Text)(Outcome.ok("view", empty), version)
+        .stream(OutputMode.Text)(Outcome.ok("view", empty), version)
         .compile
-        .toVector
+        .string
         .unsafeRunSync(),
-      Vector("")
+      ""
     )
     assertEquals(Payload.materialise(empty).unsafeRunSync(), Payload.text(""))
+    // one empty line is the empty text too; two empty lines are a newline
+    val oneEmpty = Payload.Streamed(StreamedBody.Lines(Vector.empty, Stream.emit(""), Vector.empty))
+    assertEquals(
+      Render
+        .stream(OutputMode.Text)(Outcome.ok("view", oneEmpty), version)
+        .compile
+        .string
+        .unsafeRunSync(),
+      ""
+    )
+    val twoEmpty =
+      Payload.Streamed(StreamedBody.Lines(Vector.empty, Stream.emits(Vector("", "")), Vector.empty))
+    assertEquals(
+      Render
+        .stream(OutputMode.Text)(Outcome.ok("view", twoEmpty), version)
+        .compile
+        .string
+        .unsafeRunSync(),
+      "\n\n"
+    )
+    // under --json the empty table is still an envelope with data.text ""
+    val envelope = Render
+      .stream(OutputMode.Json)(Outcome.ok("view", empty), version)
+      .compile
+      .string
+      .unsafeRunSync()
+    assertEquals(ujson.read(envelope)("data")("text"), ujson.Str(""))
     val nothing = Outcome.failed("view", CliError("SHEET_NOT_FOUND", "Sheet not found: X"))
     assertEquals(
-      Render.lines(OutputMode.Text)(nothing, version).compile.toVector.unsafeRunSync(),
-      Vector("")
+      Render.stream(OutputMode.Text)(nothing, version).compile.toVector.unsafeRunSync(),
+      Vector.empty
     )
   }
 
-  test("a streamed table past the text budget is RESOURCE_LIMIT, never a heap that ran out") {
-    val rows = Stream.emits(Vector.fill(100)("x" * 100)).covary[IO]
-    val body = Payload.Streamed(StreamedBody.Lines(Vector.empty, rows, Vector.empty))
-    val refused = Payload.materialise(body, budget = 1000L).attempt.unsafeRunSync()
-    refused match
-      case Left(e: CliException) =>
-        assertEquals(e.error.code, ErrorCode.RESOURCE_LIMIT)
-        assert(e.error.message.contains("cannot be held as one string"), e.error.message)
-        assert(e.error.hint.exists(_.contains("--format json")), e.error.hint.toString)
-      case other => fail(s"expected RESOURCE_LIMIT, got $other")
-    val fits = Payload.materialise(body, budget = 100L * 101L + 1L).unsafeRunSync()
-    assertEquals(fits, Payload.text(Vector.fill(100)("x" * 100).mkString("\n")))
-    // the JSON document streams inside the envelope and is never budgeted
-    val doc = Payload.Streamed(
-      StreamedBody.JsonArray(
-        "{\n  \"rows\": [",
-        rows.map(r => s"""    {"row": 1, "cells": ["$r"]}"""),
-        "]\n}"
-      )
+  test("nothing is produced before the first row: a source that fails at once yields no fragment") {
+    val failing = Stream.raiseError[IO](new IllegalStateException("no table"))
+    val csvBody = Payload.Streamed(StreamedBody.Lines(Vector(",A,B"), failing, Vector.empty))
+    val jsonBody = Payload.Streamed(StreamedBody.JsonArray("{\n  \"rows\": [", failing, "]\n}"))
+    Vector(csvBody, jsonBody).foreach { body =>
+      Vector(OutputMode.Text, OutputMode.Json).foreach { mode =>
+        val produced = Render
+          .stream(mode)(Outcome.ok("view", body), version)
+          .attempt
+          .compile
+          .toVector
+          .unsafeRunSync()
+        assertEquals(produced.collect { case Right(fragment) => fragment }, Vector.empty, s"$mode")
+        assert(produced.exists(_.isLeft), s"the failure surfaces in $mode")
+      }
+    }
+  }
+
+  test("a 600-row table streams as the whole, in both modes (past one write of 256 fragments)") {
+    val rows = (1 to 600).toVector.map(i => s"row $i,\"q\"\"uote\",$i.5")
+    val body = Payload.Streamed(
+      StreamedBody.Lines(Vector(",A,B,C"), Stream.emits(rows).covary[IO], Vector.empty)
     )
-    val lines = Render
-      .lines(OutputMode.Json)(Outcome.ok("view", doc), version)
-      .compile
-      .toVector
-      .unsafeRunSync()
-    assert(lines.size > 100, lines.size.toString)
+    val gathered = Payload.text((",A,B,C" +: rows).mkString("\n"))
+    Vector(OutputMode.Text, OutputMode.Json).foreach { mode =>
+      assertEquals(
+        streamedBytes(body, Vector.empty, mode),
+        wholeStdout(gathered, Vector.empty, mode)
+      )
+    }
   }

@@ -34,9 +34,9 @@ final case class Rendered(stdout: String, stderr: String) derives CanEqual
  * a log still sees it; a signal (findings, a failed gate) keeps its report as `data` and prints
  * nothing on stderr, exactly as text mode does for the same run.
  *
- * [[lines]] is the stdout of either mode written as it is produced (GH-635): one element for a
- * materialised payload, a line at a time for a [[Payload.Streamed]] — the same bytes as [[apply]]
- * would print once the rows were all in.
+ * [[stream]] is the stdout of either mode written as it is produced (GH-635): the bytes `emit`
+ * prints, a fragment at a time for a [[Payload.Streamed]] — the same bytes as [[apply]] would print
+ * once the rows were all in.
  */
 object Render:
 
@@ -49,7 +49,7 @@ object Render:
       case Payload.Text(text, _, _) => text
       case Payload.Json(value) => ujson.write(value, indent = 2)
       case Payload.Raw(json) => json
-      // The rows are not in hand: [[lines]] writes them; nothing else may ask for this text
+      // The rows are not in hand: [[stream]] writes them; nothing else may ask for this text
       case Payload.Streamed(_) => ""
     }
     Rendered(stdout, stderr(OutputMode.Text)(outcome))
@@ -79,97 +79,120 @@ object Render:
       errorWithoutPayload(outcome).fold("")(e => s"Error: ${e.message}")
 
   /**
-   * The lines this run writes on stdout in `mode`, in order (GH-635). A materialised payload is one
-   * element, [[apply]]'s stdout; a [[Payload.Streamed]] arrives line by line — in text mode the
-   * table itself (a csv or markdown line per row; the JSON document in the layout `view --format
-   * json` prints), under `--json` the envelope with the JSON document spliced element by element in
-   * the layout `ujson` gives a [[Payload.Raw]] ([[spliced]]) — so a consumer reads the same bytes
-   * whether the rows were streamed or gathered. A text table under `--json` is `data.text`, one
-   * string, so it is gathered first ([[Payload.materialise]], within its budget). Never empty: an
-   * empty stdout is one empty line, as printing the empty text always produced.
+   * The bytes this run writes on stdout in `mode`, as text fragments in order (GH-635): exactly
+   * what `emit` prints for the outcome — [[apply]]'s stdout followed by the newline `println` adds,
+   * or nothing at all when that stdout is empty — produced as the rows arrive for a
+   * [[Payload.Streamed]]. In text mode that is the table itself (csv and markdown lines, the JSON
+   * document in the layout `view --format json` prints); under `--json` the envelope, with a JSON
+   * document spliced element by element in the layout `ujson` gives a [[Payload.Raw]] ([[spliced]])
+   * and a text table's `data.text` escaped line by line as `ujson` escapes one string — so a
+   * consumer reads the same bytes whether the rows were streamed or gathered, and nothing is ever
+   * gathered. Nothing is produced before the first row has been read: a source that fails before it
+   * has one (the table's ZIP-bomb limit, a worksheet the parser rejects at once) fails before the
+   * first byte, and the runner reports it as any other failure.
    */
-  def lines(mode: OutputMode)(outcome: Outcome, version: String): Stream[IO, String] =
-    val produced: Stream[IO, String] = outcome.payload match
+  def stream(mode: OutputMode)(outcome: Outcome, version: String): Stream[IO, String] =
+    outcome.payload match
       case Some(Payload.Streamed(body)) =>
         mode match
-          case OutputMode.Text => textLines(body)
-          case OutputMode.Json => envelopeLines(outcome, version, body)
-      case _ => Stream.emit(apply(mode)(outcome, version).stdout)
-    produced.pull.uncons1.flatMap {
-      case None => Pull.output1("")
-      case Some((first, rest)) => Pull.output1(first) >> rest.pull.echo
-    }.stream
+          case OutputMode.Text => textFragments(body)
+          case OutputMode.Json => envelopeFragments(outcome, version, body)
+      case _ =>
+        val stdout = apply(mode)(outcome, version).stdout
+        if stdout.isEmpty then Stream.empty else Stream.emit(stdout + "\n")
 
-  /** The text form of a streamed body, line by line. */
-  private def textLines(body: StreamedBody): Stream[IO, String] = body match
+  /** The escaped newline: what `ujson` writes for a line break inside a string. */
+  private val escapedNewline: String = "\\n"
+
+  /** `text` as `ujson` writes it inside a JSON string: the escaped characters, quotes excluded. */
+  private def escaped(text: String): String =
+    val quoted = ujson.write(ujson.Str(text))
+    quoted.substring(1, quoted.length - 1)
+
+  /**
+   * The text form of a streamed body: the table, then the newline `println` adds — nothing at all
+   * for a table whose text is empty (as printing the empty text never printed).
+   */
+  private def textFragments(body: StreamedBody): Stream[IO, String] = body match
     case StreamedBody.Lines(before, rows, after) =>
-      Stream.emits(before) ++ rows ++ Stream.emits(after)
-    case StreamedBody.JsonArray(head, rows, tail) =>
-      // The layout of StreamedBody.jsonArray, a line at a time: the head's lines (the last of them
-      // ends with the `[`), each element with a comma unless it is the last, the indented `]`
+      // StreamedBody.lines, a row at a time; the first fragment waits for the first row, and a text
+      // that turns out empty (no lines, or one empty line) is no bytes
+      def whole(lines: Vector[String]): Pull[IO, String, Unit] =
+        val text = lines.mkString("\n")
+        if text.isEmpty then Pull.done else Pull.output1(text + "\n")
       rows.pull.uncons1.flatMap {
-        case None => Pull.output(split(head + tail))
+        case None => whole(before ++ after)
         case Some((first, rest)) =>
-          Pull.output(split(head)) >>
-            (Stream.emit(first) ++ rest).zipWithNext
-              .map { (element, next) => if next.isDefined then element + "," else element }
-              .pull
-              .echo >>
-            Pull.output(split("  " + tail))
+          rest.pull.uncons1.flatMap {
+            case None => whole((before :+ first) ++ after)
+            case Some((second, more)) =>
+              Pull.output1((before :+ first).mkString("\n")) >>
+                Pull.output1("\n" + second) >>
+                more.map("\n" + _).pull.echo >>
+                Pull.output1(after.map("\n" + _).mkString + "\n")
+          }
+      }.stream
+    case StreamedBody.JsonArray(head, rows, tail) =>
+      // StreamedBody.jsonArray, an element at a time
+      rows.pull.uncons1.flatMap {
+        case None => Pull.output1(head + tail + "\n")
+        case Some((first, rest)) =>
+          Pull.output1(head + "\n" + first) >>
+            rest.map(",\n" + _).pull.echo >>
+            Pull.output1("\n  " + tail + "\n")
       }.stream
 
   /**
-   * The envelope with a streamed body as `data`, a line at a time. A [[StreamedBody.Lines]] is
-   * `data.text` — gathered, then rendered as one piece. A [[StreamedBody.JsonArray]] is the spliced
-   * document ([[spliced]]) piecewise: the document with no elements is re-laid-out by `ujson` with
-   * a marker in the array's slot, each element is re-laid-out on its own and indented to the
-   * array's depth, and the envelope's shell is split at its own marker — every piece shifted by the
-   * slot's depth exactly as [[spliced]] shifts the whole block. The pieces are cut into lines as
-   * they go ([[splitLines]]), so a line that spans two pieces (`"data": {`) comes out whole.
+   * The envelope with a streamed body as `data`, a fragment at a time, the newline `println` adds
+   * last. A [[StreamedBody.Lines]] is `data.text`: the envelope's shell is rendered around a marker
+   * where the text goes and split there, and the lines are written escaped as `ujson` escapes a
+   * string — character by character, so the pieces spell what one write of the whole would — with
+   * the escaped newline between them. A [[StreamedBody.JsonArray]] is the spliced document
+   * ([[spliced]]) piecewise: the document with no elements is re-laid-out by `ujson` with a marker
+   * in the array's slot, each element is re-laid-out on its own and indented to the array's depth,
+   * and every piece is shifted by the slot's depth exactly as [[spliced]] shifts the whole block.
+   * Either way the first fragment waits for the first row.
    */
-  private def envelopeLines(
+  private def envelopeFragments(
     outcome: Outcome,
     version: String,
     body: StreamedBody
   ): Stream[IO, String] =
     body match
-      case StreamedBody.Lines(_, _, _) =>
-        Stream.eval(Payload.materialise(Payload.Streamed(body))).map { gathered =>
-          json(outcome.copy(payload = Some(gathered)), version).stdout
-        }
+      case StreamedBody.Lines(before, rows, after) =>
+        val (shellHead, shellTail) = textShell(outcome, version)
+        rows.pull.uncons1.flatMap {
+          case None =>
+            val text = (before ++ after).map(escaped).mkString(escapedNewline)
+            Pull.output1(shellHead + "\"" + text + "\"" + shellTail + "\n")
+          case Some((first, rest)) =>
+            Pull.output1(
+              shellHead + "\"" + (before :+ first).map(escaped).mkString(escapedNewline)
+            ) >>
+              rest.map(row => escapedNewline + escaped(row)).pull.echo >>
+              Pull.output1(
+                after.map(line => escapedNewline + escaped(line)).mkString + "\"" + shellTail +
+                  "\n"
+              )
+        }.stream
       case StreamedBody.JsonArray(head, rows, tail) =>
         val (shellHead, shellTail) = shell(outcome, version)
         val (dataHead, dataTail) = emptyDocument(head + tail)
         def shift(s: String): String = s.replace("\n", "\n  ")
-        val pieces: Stream[IO, String] =
-          rows.pull.uncons1.flatMap {
-            case None => Pull.output1(shellHead + shift(dataHead + "[]" + dataTail) + shellTail)
-            case Some((first, rest)) =>
-              Pull.output1(shellHead + shift(dataHead) + "[") >>
-                (Stream.emit(first) ++ rest).zipWithNext
-                  .map { (element, next) =>
-                    val laidOut = ujson.reformat(element, indent = 2).replace("\n", "\n    ")
-                    shift("\n    " + laidOut) + (if next.isDefined then "," else "")
-                  }
-                  .pull
-                  .echo >>
-                Pull.output1(shift("\n  ]" + dataTail) + shellTail)
-          }.stream
-        splitLines(pieces)
-
-  /** A string's lines, an empty string being one empty line. */
-  private def split(text: String): Chunk[String] = Chunk.from(text.split("\n", -1).toVector)
-
-  /** Text pieces cut into lines at every `\n`, a line spanning pieces coming out whole. */
-  private def splitLines(pieces: Stream[IO, String]): Stream[IO, String] =
-    def go(carry: String, s: Stream[IO, String]): Pull[IO, String, Unit] =
-      s.pull.uncons1.flatMap {
-        case None => Pull.output1(carry)
-        case Some((piece, rest)) =>
-          val parts = (carry + piece).split("\n", -1).toVector
-          Pull.output(Chunk.from(parts.dropRight(1))) >> go(parts.lastOption.getOrElse(""), rest)
-      }
-    go("", pieces).stream
+        rows.pull.uncons1.flatMap {
+          case None =>
+            Pull.output1(shellHead + shift(dataHead + "[]" + dataTail) + shellTail + "\n")
+          case Some((first, rest)) =>
+            Pull.output1(shellHead + shift(dataHead) + "[") >>
+              (Stream.emit(first) ++ rest).zipWithNext
+                .map { (element, next) =>
+                  val laidOut = ujson.reformat(element, indent = 2).replace("\n", "\n    ")
+                  shift("\n    " + laidOut) + (if next.isDefined then "," else "")
+                }
+                .pull
+                .echo >>
+              Pull.output1(shift("\n  ]" + dataTail) + shellTail + "\n")
+        }.stream
 
   /** The error a channel reports as such: a failure's; a signal's report is its payload. */
   private def errorWithoutPayload(outcome: Outcome): Option[CliError] =
@@ -197,6 +220,14 @@ object Render:
   /** The envelope's text around its `data` slot: what precedes the slot and what follows it. */
   private def shell(outcome: Outcome, version: String): (String, String) =
     splitAtMarker(ujson.write(envelope(outcome, version, ujson.Str(marker)), indent = 2))
+
+  /**
+   * The envelope's text around the `data.text` of a read's prose payload (`{text, saved: null,
+   * written: false}`): what precedes the string's opening quote and what follows its closing one.
+   */
+  private def textShell(outcome: Outcome, version: String): (String, String) =
+    val data = Payload.toJson(Payload.Text(marker, None, false))
+    splitAtMarker(ujson.write(envelope(outcome, version, data), indent = 2))
 
   /**
    * A JSON object's text, laid out by `ujson`, around the value of its LAST member: the document

@@ -135,6 +135,20 @@ class SchemaSpec extends CatsEffectSuite:
       byVerb.get("audit"),
       Some(StreamSupport.Refused("the analysis needs the whole workbook"))
     )
+    // the flags an O(1) verb's own handler refuses under --stream, as the table publishes them
+    val refusedWith = Schema.verbs.map(v => v.verb -> v.refusedWith).toMap
+    assertEquals(
+      refusedWith.get("view"),
+      Some(Vector("--eval", "--format html/svg/png/jpeg/webp/pdf"))
+    )
+    assertEquals(refusedWith.get("sheets"), Some(Vector("--stats")))
+    assertEquals(refusedWith.get("describe"), Some(Vector("--full")))
+    assertEquals(refusedWith.get("put"), Some(Vector("--csv", "--strict")))
+    assertEquals(refusedWith.get("batch"), Some(Vector("--strict")))
+    assertEquals(refusedWith.get("search"), Some(Vector.empty))
+    Schema.verbs.filter(_.refusedWith.nonEmpty).foreach { v =>
+      assertEquals(v.stream, StreamSupport.O1, s"${v.verb} refuses flags but is not o1")
+    }
   }
 
   test("streamRefusal: a head every form of which refuses --stream, with the alternative as hint") {
@@ -247,11 +261,13 @@ class SchemaSpec extends CatsEffectSuite:
     json("verbs").arr.foreach { v =>
       assertEquals(
         v.obj.keys.toList,
-        List("path", "summary", "needs", "stream", "exit", "batchTwin", "since")
+        List("path", "summary", "needs", "stream", "refusedWith", "exit", "batchTwin", "since")
       )
       assertEquals(v("needs").obj.keys.toList, List("file", "sheet", "output", "streaming"))
       assert(Set("o1", "backend", "refused").contains(v("stream").str), v("stream").str)
       assertEquals(v("stream").str == "o1", v("needs")("streaming").bool, v("path").toString)
+      // only an O(1) verb has flags of its own to refuse under --stream
+      if v("stream").str != "o1" then assertEquals(v("refusedWith").arr.size, 0, v("path").toString)
     }
     assertEquals(json("functions"), FunctionDoc.toJson(FunctionDoc.all))
   }

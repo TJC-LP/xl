@@ -5,8 +5,9 @@ import java.nio.file.NoSuchFileException
 import scala.util.control.NoStackTrace
 
 import cats.effect.ExitCode
+import org.xml.sax.SAXParseException
 
-import com.tjclp.xl.cli.{MemoryGuard, StrictFailure}
+import com.tjclp.xl.cli.{CliIO, MemoryGuard, StrictFailure}
 import com.tjclp.xl.cli.raster.RasterError
 import com.tjclp.xl.error.{XLError, XLException}
 
@@ -72,10 +73,13 @@ object CliError:
    * message; a `NoSuchFileException` is `IO_READ`; an `OutOfMemoryError` is the `RESOURCE_LIMIT`
    * failure [[com.tjclp.xl.cli.MemoryGuard.exhausted]] (GH-636 — the classification of a heap that
    * ran out; note that cats-effect halts on a fatal error before any handler runs, so the error
-   * only ever arrives here after `MemoryGuard.blocking` caught it inside its thunk); everything
-   * else — every other `Error` included — is `INTERNAL` with its message (falling back to
-   * `toString` when the message is null — an un-migrated `new Exception(msg)` still yields a
-   * well-formed diagnostic).
+   * only ever arrives here after `MemoryGuard.blocking` caught it inside its thunk); a
+   * `SAXParseException` — a part the streaming reader could not parse — is `IO_READ` with the
+   * parser's message and position, as the loaded reader's `ParseError` is (GH-635; the streaming
+   * source adds the file and sheet); a stdout that refused a streamed table's bytes
+   * ([[com.tjclp.xl.cli.CliIO.StdoutFailed]]) is `IO_WRITE`; everything else — every other `Error`
+   * included — is `INTERNAL` with its message (falling back to `toString` when the message is null
+   * — an un-migrated `new Exception(msg)` still yields a well-formed diagnostic).
    */
   def fromThrowable(t: Throwable): CliError = t match
     case e: CliException => e.error
@@ -88,7 +92,18 @@ object CliError:
     case n: NoSuchFileException =>
       CliError(ErrorCode.IO_READ, s"No such file: ${Option(n.getFile).getOrElse(messageOf(n))}")
     case _: OutOfMemoryError => MemoryGuard.exhausted
+    case sax: SAXParseException => CliError(ErrorCode.IO_READ, parseFailure(sax))
+    case out: CliIO.StdoutFailed =>
+      CliError(
+        ErrorCode.IO_WRITE,
+        messageOf(out),
+        hint = Some("check the device or file stdout is redirected to")
+      )
     case other => CliError(ErrorCode.INTERNAL, messageOf(other))
+
+  /** A SAX parser's rejection with its position: `Parse error: <message> (line L, column C)`. */
+  def parseFailure(sax: SAXParseException): String =
+    s"Parse error: ${messageOf(sax)} (line ${sax.getLineNumber}, column ${sax.getColumnNumber})"
 
   /** The command line is wrong (exit 2). */
   def usage(message: String, hint: Option[String]): CliError =

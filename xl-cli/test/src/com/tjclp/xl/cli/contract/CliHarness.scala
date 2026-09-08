@@ -41,7 +41,9 @@ object CliHarness:
         (outBuf, errBuf) =>
           val out = new PrintStream(outBuf, true, StandardCharsets.UTF_8)
           val err = new PrintStream(errBuf, true, StandardCharsets.UTF_8)
-          val io = CliIO.system.copy(stdin = IO.pure(stdin))
+          // the streamed tables' `write` goes to the descriptor in production; here to the buffer
+          val io =
+            CliIO.system.copy(stdin = IO.pure(stdin), write = text => IO.blocking(out.print(text)))
           redirected(out, err)(Cli.run(args, io)).map { code =>
             CliRun(
               code.code,

@@ -5,6 +5,7 @@ import java.nio.file.Path
 import cats.effect.IO
 import cats.syntax.all.*
 import fs2.{Chunk, Pull, Stream}
+import org.xml.sax.SAXParseException
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning}
@@ -57,14 +58,17 @@ final class StreamingSource private (
     }
 
   def rows(sheet: SheetName, window: CellRange): Stream[IO, Vector[CellRecord]] =
-    Stream.eval((sharedStrings, styles).tupled).flatMap { (table, st) =>
-      StreamingSource.dense(
-        excel.readSheetStreamRange(path, sheet.value, window, table),
-        sheet,
-        window,
-        st
-      )
-    }
+    Stream
+      .eval((sharedStrings, styles).tupled)
+      .flatMap { (table, st) =>
+        StreamingSource.dense(
+          excel.readSheetStreamRange(path, sheet.value, window, table),
+          sheet,
+          window,
+          st
+        )
+      }
+      .handleErrorWith(e => Stream.raiseError[IO](located(sheet)(e)))
 
   def hiddenLines(sheet: SheetName, window: CellRange): IO[(Set[Int], Set[Int])] =
     IO.pure((Set.empty, Set.empty))
@@ -83,26 +87,30 @@ final class StreamingSource private (
     )
 
   def occupied(sheet: SheetName): Stream[IO, CellRecord] =
-    Stream.eval((sharedStrings, styles).tupled).flatMap { (table, st) =>
-      excel.readSheetStream(path, sheet.value, table).flatMap { row =>
-        Stream.emits(StreamingSource.records(row, sheet, st))
+    Stream
+      .eval((sharedStrings, styles).tupled)
+      .flatMap { (table, st) =>
+        excel.readSheetStream(path, sheet.value, table).flatMap { row =>
+          Stream.emits(StreamingSource.records(row, sheet, st))
+        }
       }
-    }
+      .handleErrorWith(e => Stream.raiseError[IO](located(sheet)(e)))
 
   def detail(sheet: SheetName, ref: ARef, withStyle: Boolean): IO[CellDetail] =
     (sharedStrings, styles).tupled.flatMap { (table, st) =>
-      excel.streamCellDetails(path, sheet.value, ref, table, st).map { details =>
-        val style = if withStyle then details.style else None
-        CellDetail(
-          CellRecord.of(sheet, ref, details.value, style, hidden = None, mergedInto = None),
-          details.comment,
-          hyperlink = None,
-          // No graph without the workbook: the reader's token list is not the precedent set (a
-          // range token plus its endpoints is neither the cells it covers nor exact), so say so
-          // instead
-          dependencies = None,
-          dependents = None
-        )
+      excel.streamCellDetails(path, sheet.value, ref, table, st).adaptError(located(sheet)).map {
+        details =>
+          val style = if withStyle then details.style else None
+          CellDetail(
+            CellRecord.of(sheet, ref, details.value, style, hidden = None, mergedInto = None),
+            details.comment,
+            hyperlink = None,
+            // No graph without the workbook: the reader's token list is not the precedent set (a
+            // range token plus its endpoints is neither the cells it covers nor exact), so say so
+            // instead
+            dependencies = None,
+            dependents = None
+          )
       }
     }
 
@@ -113,6 +121,23 @@ final class StreamingSource private (
     warn: Warning => IO[Unit]
   ): IO[String] =
     IO.raiseError(StreamingSource.renderUnsupported(spec))
+
+  /**
+   * A worksheet the parser rejects, from any read of `sheet`: `IO_READ` with the parser's message
+   * and position, the file and the sheet in `location` — what the loaded reader reports for the
+   * same part (GH-635). Every other failure passes as raised.
+   */
+  private def located(sheet: SheetName): PartialFunction[Throwable, Throwable] =
+    case sax: SAXParseException =>
+      CliException(
+        CliError(
+          ErrorCode.IO_READ,
+          s"Parse error at worksheet '${sheet.value}': ${CliError.messageOf(sax)} " +
+            s"(line ${sax.getLineNumber}, column ${sax.getColumnNumber})",
+          location = Some(Location(Some(path.toString), Some(sheet.value), None, None))
+        )
+      )
+    case other => other
 
   /** The bounding box of every non-empty streamed cell; `None` when the sheet has none. */
   private def scanBounds(sheet: SheetName): IO[Option[CellRange]] =
@@ -131,6 +156,7 @@ final class StreamingSource private (
             })
         }
         .map(_.map { case (r1, r2, c1, c2) => CellRange(ARef.from0(c1, r1), ARef.from0(c2, r2)) })
+        .adaptError(located(sheet))
     }
 
 object StreamingSource:

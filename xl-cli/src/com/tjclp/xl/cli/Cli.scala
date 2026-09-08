@@ -227,8 +227,28 @@ object Cli:
    * thunk and re-raises it typed ([[MemoryGuard]], GH-636); every other `Error` stays fatal.
    */
   def run(args: List[String], io: CliIO): IO[ExitCode] =
-    val argv = Argv.hoist(args)
+    val hoisted = Argv.hoist(args)
+    // --help answers for the verb whatever --stream would have said (GH-638): the flag is dropped
+    // so a parser that never takes it still renders its help
+    val argv = if hoisted.contains("--help") then hoisted.filterNot(_ == "--stream") else hoisted
     val mode = if Argv.wantsJson(argv) then OutputMode.Json else OutputMode.Text
+    def parse(verb: Option[String]): IO[ExitCode] =
+      IO(command(io).parse(argv, sys.env))
+        .flatMap {
+          case Right(handler) => handler
+          case Left(help) if help.errors.nonEmpty =>
+            val error = CliError.usage(
+              help.errors.headOption.fold("invalid command line") { first =>
+                if verb.isEmpty then compact(first) else first
+              },
+              Some(s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage")
+            )
+            usageFailure(verb.getOrElse(""), error, mode, io)
+          case Left(help) => io.err(help.toString).as(ExitCodes.ok)
+        }
+        .handleErrorWith { escaped =>
+          emit(Outcome.failed(verb.getOrElse(""), CliError.fromThrowable(escaped)), mode, io)
+        }
     Argv.verbOf(argv) match
       case Some(word) if !Argv.verbs.contains(word) =>
         val error = CliError(
@@ -240,30 +260,12 @@ object Cli:
         usageFailure("", error, mode, io)
       // GH-638: a verb that refuses --stream is refused here, before the parser and before any
       // read, from the table `xl schema` publishes (a verb's own flags — describe --full, sheets
-      // --stats, view --eval — are refused by their handlers once parsed); --help still helps
-      case Some(word)
-          if Argv.wantsStream(argv) && !argv.contains("--help") &&
-            Schema.streamRefusal(word).isDefined =>
-        Schema
-          .streamRefusal(word)
-          .fold(IO.pure(ExitCodes.usage))(error => emit(Outcome.failed(word, error), mode, io))
-      case verb =>
-        IO(command(io).parse(argv, sys.env))
-          .flatMap {
-            case Right(handler) => handler
-            case Left(help) if help.errors.nonEmpty =>
-              val error = CliError.usage(
-                help.errors.headOption.fold("invalid command line") { first =>
-                  if verb.isEmpty then compact(first) else first
-                },
-                Some(s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage")
-              )
-              usageFailure(verb.getOrElse(""), error, mode, io)
-            case Left(help) => io.err(help.toString).as(ExitCodes.ok)
-          }
-          .handleErrorWith { escaped =>
-            emit(Outcome.failed(verb.getOrElse(""), CliError.fromThrowable(escaped)), mode, io)
-          }
+      // --stats, view --eval — are refused by their handlers once parsed)
+      case Some(word) if Argv.wantsStream(argv) =>
+        Schema.streamRefusal(word) match
+          case Some(error) => emit(Outcome.failed(word, error), mode, io)
+          case None => parse(Some(word))
+      case verb => parse(verb)
 
   /**
    * decline's first error, minus the one dump it embeds: with no verb at all it lists every

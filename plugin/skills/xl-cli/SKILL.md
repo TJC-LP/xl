@@ -263,9 +263,10 @@ apply is `BATCH_OP_FAILED` with its index). `view --format html|svg|png|jpeg|web
 styles and is not available under `--stream`. `xl schema --json` publishes each verb's answer as
 `stream`: `o1`, `backend` or `refused`. Under `--stream`, `--max-size` bounds the shared-string
 table — the one part a streaming read holds in memory (default 100 MB; `SECURITY_ERROR` past it,
-`0` lifts it). Under `--json`, `view --format csv|markdown` is one `data.text` string and is
-gathered (a heap-budget `RESOURCE_LIMIT` past it); `--json --format json` streams inside the
-envelope. Streaming never recalculates. For everything else, load in memory
+`0` lifts it). Under `--json` the table streams too (csv/markdown as `data.text`, json spliced into
+`data`): a failure before the first row is a normal `ok: false` envelope, one after the first byte
+leaves the envelope unterminated — branch on the exit code (3) and stderr, never on stdout parsing
+alone. Streaming never recalculates. For everything else, load in memory
 with `--max-size 0` (lifts the 100 MB security limit) or `--max-size 500`. That lifts the limit,
 not the heap: the native binary's heap is capped at 8 GB unless `-Xmx<size>` is passed — put it
 before `-f` to be safe (`xl -Xmx64g -f big.xlsx …`; the JAR takes `java -Xmx64g -jar`), and an in-memory load

@@ -77,10 +77,14 @@ object DocsGen:
         Option.when(flag(needs("output")))("`-o`/`-i`"),
         Option.when(flag(needs("streaming")))("`--stream`")
       ).flatten
+      val refused = v("refusedWith").arr.toVector.map(r => code(str(r)))
+      val streamCell =
+        if refused.isEmpty then code(str(v("stream")))
+        else s"${code(str(v("stream")))} (refuses ${refused.mkString(", ")})"
       Vector(
         code(v("path").arr.map(str).mkString(" ")),
         if needsCell.isEmpty then "—" else needsCell.mkString(" "),
-        str(v("stream")),
+        streamCell,
         v("exit").arr.map(e => e.num.toInt.toString).mkString(" "),
         v("batchTwin").strOpt.fold("—")(code),
         str(v("since")),
@@ -96,7 +100,9 @@ object DocsGen:
       "`--stream` that the verb runs in O(1) memory under `--stream`. `stream` says what the flag\n" +
       "does to the verb: `o1` (constant memory), `backend` (accepted; the workbook is loaded and\n" +
       "only the write goes through the streaming writer, under a `STREAM_BACKEND_ONLY` warning)\n" +
-      "or `refused` (`UNSUPPORTED_IN_STREAM`, exit 2, before any read). `exit` lists\n" +
+      "or `refused` (`UNSUPPORTED_IN_STREAM`, exit 2, before any read); an `o1` verb's own flags\n" +
+      "that `--stream` refuses once parsed follow in parentheses (`batch`'s ops are marked\n" +
+      "`x-streamable` in [batch-ops.md](batch-ops.md)). `exit` lists\n" +
       "the exit codes the\n" +
       "verb can end with (see [exit-codes.md](exit-codes.md)); `batch twin` is the batch op that\n" +
       "makes the same edit; `since` is the release the verb is documented from. Run\n" +

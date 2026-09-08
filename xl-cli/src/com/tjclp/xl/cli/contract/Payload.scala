@@ -3,8 +3,6 @@ package com.tjclp.xl.cli.contract
 import cats.effect.IO
 import fs2.Stream
 
-import com.tjclp.xl.cli.MemoryGuard
-
 /**
  * What a verb produced (ADR-017 §2.4): the `data` of the `--json` envelope, and the bytes text mode
  * prints on stdout.
@@ -38,12 +36,14 @@ enum Payload derives CanEqual:
   /**
    * A table written row by row (GH-635): what `view` yields for csv, json and markdown from either
    * source, so a read never holds its window — the loaded workbook's rows stream from memory, the
-   * streaming reader's from the file, one row at a time. Text mode writes the rows as they arrive
-   * ([[Render.lines]]); [[Payload.materialise]] is the same bytes as one [[Text]] or [[Raw]], which
-   * is how the parity law and the `--json` envelope's `data.text` see it. Every warning of a
+   * streaming reader's from the file, one row at a time. Both modes write the rows as they arrive
+   * ([[Render.stream]]: the table itself, or the envelope with the document spliced element by
+   * element and a text table's `data.text` escaped line by line); [[Payload.materialise]] is the
+   * same bytes as one [[Text]] or [[Raw]], which is how the parity law sees it. Every warning of a
    * streamed read is raised before its first row, so the outcome that carries the payload is
-   * complete when it is built; a failure while the rows are read stops the output where it is and
-   * is reported as the run's failure, on stderr, after whatever was written.
+   * complete when it is built; nothing is written before the first row has been read, so a source
+   * that fails before it has one fails as any other run does, and a failure after that stops the
+   * output where it is and is reported on stderr with its exit code.
    */
   case Streamed(body: StreamedBody)
 
@@ -83,54 +83,22 @@ object Payload:
   def text(text: String): Payload = Payload.Text(text, None, false)
 
   /**
-   * How much rendered text a materialised table may hold: an eighth of the heap in characters (a
-   * `String` of that many chars is a quarter of it, with the builder that made it). Under `--json`
-   * a csv or markdown table is `data.text`, one string, and this is what bounds it — a whole-sheet
-   * dump belongs to `--format json`, which streams inside the envelope, or to text mode.
-   */
-  val textBudget: Long = MemoryGuard.maxHeapBytes / 8
-
-  /**
    * A [[Payload.Streamed]] as the [[Text]] or [[Raw]] payload its rows compose ([[StreamedBody]]);
-   * every other payload unchanged. `budget` caps the characters gathered: a table past it fails
-   * typed as `RESOURCE_LIMIT`, never as a heap that ran out.
+   * every other payload unchanged. For the parity law and the tests: the runner never gathers a
+   * streamed table.
    */
-  def materialise(payload: Payload, budget: Long = textBudget): IO[Payload] = payload match
+  def materialise(payload: Payload): IO[Payload] = payload match
     case Streamed(StreamedBody.Lines(before, rows, after)) =>
-      gather(rows, budget).map(rs => Payload.text(StreamedBody.lines(before, rs, after)))
+      rows.compile.toVector.map(rs => Payload.text(StreamedBody.lines(before, rs, after)))
     case Streamed(StreamedBody.JsonArray(head, rows, tail)) =>
-      gather(rows, budget).map(rs => Payload.Raw(StreamedBody.jsonArray(head, rs, tail)))
+      rows.compile.toVector.map(rs => Payload.Raw(StreamedBody.jsonArray(head, rs, tail)))
     case other => IO.pure(other)
-
-  /** The rows, as long as their characters stay within `budget`. */
-  private def gather(rows: Stream[IO, String], budget: Long): IO[Vector[String]] =
-    rows
-      .evalMapAccumulate(0L) { (chars, row) =>
-        val total = chars + row.length.toLong + 1L
-        if total > budget then IO.raiseError(CliException(overBudget(budget)))
-        else IO.pure((total, row))
-      }
-      .map(_._2)
-      .compile
-      .toVector
-
-  /** The typed refusal of a table too large to be one string ([[textBudget]]). */
-  def overBudget(budget: Long): CliError =
-    CliError(
-      ErrorCode.RESOURCE_LIMIT,
-      s"the rendered table exceeds ${MemoryGuard.human(budget)} of text and cannot be held as " +
-        "one string",
-      hint = Some(
-        "use --format json, which streams inside the --json envelope; drop --json to stream csv " +
-          "or markdown; or page with --limit/--offset"
-      )
-    )
 
   /**
    * The envelope's `data` as a ujson tree — for callers that inspect it, not for rendering: a
    * [[Payload.Raw]] read this way loses number precision, which is why [[Render.json]] splices its
-   * text instead. A [[Payload.Streamed]] has no tree until it is materialised ([[materialise]]);
-   * [[Render]] never asks for one.
+   * text instead. A [[Payload.Streamed]] has no tree until it is materialised ([[materialise]]) and
+   * [[Render]] never asks for one: reaching this with one is a defect, reported as such.
    */
   def toJson(payload: Payload): ujson.Value = payload match
     case Text(text, saved, written) =>
@@ -141,7 +109,10 @@ object Payload:
       )
     case Json(value) => value
     case Raw(json) => ujson.read(json)
-    case Streamed(_) => ujson.Null
+    case Streamed(_) =>
+      throw new IllegalStateException(
+        "a streamed payload has no JSON tree until it is materialised (Payload.materialise)"
+      )
 
   /**
    * Record what the staging step actually did: a committed run names its target; a run that

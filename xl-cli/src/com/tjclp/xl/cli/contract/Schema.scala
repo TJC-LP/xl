@@ -67,6 +67,11 @@ final case class VerbDoc(
   /** What `--stream` does to this verb ([[Schema.streamSupport]]). */
   def stream: StreamSupport = Schema.streamSupport(this)
 
+  /**
+   * The verb's own flags `--stream` refuses once parsed ([[Schema.refusedWith]]); empty otherwise.
+   */
+  def refusedWith: Vector[String] = Schema.refusedWith(this)
+
 /**
  * The machine-readable contract `xl schema --json` publishes (ADR-017 §2.13): the exit-code table,
  * every error and warning code, the global flags, the verb table, the batch document's JSON Schema,
@@ -769,6 +774,7 @@ object Schema:
         "streaming" -> ujson.Bool(verb.needs.streaming)
       ),
       "stream" -> ujson.Str(verb.stream.name),
+      "refusedWith" -> ujson.Arr.from(verb.refusedWith.map(ujson.Str.apply)),
       "exit" -> ujson.Arr.from(verb.exit.map(e => ujson.Num(e))),
       "batchTwin" -> optStr(verb.batchTwin),
       "since" -> ujson.Str(verb.since)
@@ -802,6 +808,27 @@ object Schema:
   def streamSupport(verb: VerbDoc): StreamSupport =
     if verb.needs.streaming then StreamSupport.O1
     else streamRefusals.get(verb.verb).fold(StreamSupport.BackendOnly)(StreamSupport.Refused(_))
+
+  /**
+   * The flags of an O(1) verb that `--stream` refuses once the verb has parsed them — each an
+   * `UNSUPPORTED_IN_STREAM` from the verb's own handler, with the in-memory alternative as the
+   * hint. (`batch`'s ops are marked `x-streamable` in its own schema, `xl batch --schema`.)
+   */
+  private val streamRefusedFlags: Map[String, Vector[String]] = Map(
+    "view" -> Vector("--eval", "--format html/svg/png/jpeg/webp/pdf"),
+    "sheets" -> Vector("--stats"),
+    "describe" -> Vector("--full"),
+    "put" -> Vector("--csv", "--strict"),
+    "putf" -> Vector("--strict"),
+    "style" -> Vector("--strict"),
+    "batch" -> Vector("--strict")
+  )
+
+  /**
+   * The verb's own flags `--stream` refuses ([[streamRefusedFlags]]); empty for every other verb.
+   */
+  def refusedWith(verb: VerbDoc): Vector[String] =
+    streamRefusedFlags.getOrElse(verb.verb, Vector.empty)
 
   /**
    * The `UNSUPPORTED_IN_STREAM` refusal (exit 2) for a verb head — `audit`, `sheets`, `name` —
@@ -870,13 +897,20 @@ object Schema:
     ).flatten
     if parts.isEmpty then "-" else parts.mkString(" ")
 
+  /** The STREAM cell: the verb's answer to `--stream`, and the flags it still refuses under it. */
+  private def streamCell(verb: VerbDoc): String =
+    val refused = verb.refusedWith
+    if refused.isEmpty then verb.stream.name
+    else s"${verb.stream.name} (not ${refused.mkString(", ")})"
+
   /** What `xl schema` prints: the verb table as text, with the globals and exit codes above it. */
   def verbTable(version: String): String =
-    val headers = Vector("VERB", "NEEDS", "EXIT", "BATCH TWIN", "SINCE", "SUMMARY")
+    val headers = Vector("VERB", "NEEDS", "STREAM", "EXIT", "BATCH TWIN", "SINCE", "SUMMARY")
     val rows = verbs.map { v =>
       Vector(
         v.verb,
         needsCell(v.needs),
+        streamCell(v),
         v.exit.mkString(" "),
         v.batchTwin.getOrElse("-"),
         v.since,
@@ -901,5 +935,8 @@ object Schema:
       s"Globals (accepted anywhere on the command line): $globalsLine",
       "NEEDS: -f an input workbook; -s ONE sheet (a qualified ref, else -s, else the only sheet " +
         "of a single-sheet book); -o|-i an output; --stream runs in O(1) memory.",
+      "STREAM: o1 runs in O(1) memory under --stream (not …: the verb's own flags it refuses " +
+        "there); backend loads the workbook and only writes through the streaming writer; " +
+        "refused is UNSUPPORTED_IN_STREAM (exit 2) before any read.",
       "Exit codes:"
     ) ++ exitLines ++ Vector("", line(headers)) ++ rows.map(line)).mkString("\n")
