@@ -51,7 +51,31 @@ the plan and are filed as GitHub issues at release time.
 Gate: full compilation and tests, all-source formatting, example compile/run checks, packaged
 skill/doc snippet compilation, and the golden corpus.
 
-### Unreleased — wave 26: Calculation integrity (stack under review)
+### Unreleased — wave 28a: Agent-first Wave 2, part a (stacked PRs under review)
+
+Wave 2 of ADR-017 puts the `Edit` algebra underneath the Wave 1 contract. Part a is the algebra
+itself plus the items that do not depend on it, run as six worktree clusters with adversarial
+review and landed as a stack of PRs (each PR's base is the one before it):
+
+| # | Cluster | Issue | PR | Result |
+|---|---------|-------|----|--------|
+| 1 | ci-harness-smoke | [#592](https://github.com/TJC-LP/xl/issues/592) | [#594](https://github.com/TJC-LP/xl/pull/594) | Golden runner, `DocsGenSpec` and `ContractSpec` as a CI job; JAR and native smoke; the xl-agent grader reads `sheets --json`. |
+| 2 | xlfn-remainder | [#588](https://github.com/TJC-LP/xl/issues/588), [#577](https://github.com/TJC-LP/xl/issues/577) | [#597](https://github.com/TJC-LP/xl/pull/597) | `_xlfn.` storage form for CF/DV/defined-name formulas; `xlfn-missing` lint; `FunctionFlags.volatile`. |
+| 3 | edit-algebra | [#582](https://github.com/TJC-LP/xl/issues/582) | [#598](https://github.com/TJC-LP/xl/pull/598) | `enum Edit` (52 cases), `EditSchema`, refusing `FormulaSupport`, `EvalFormulaSupport`, the seven laws, `wb.edit`/`sheet.edit`; CLI edit semantics moved into `Sheet`. |
+| 4 | row-codec | [#590](https://github.com/TJC-LP/xl/issues/590) | [#599](https://github.com/TJC-LP/xl/pull/599) | `derives RowCodec`; `readRows`/`readRowsByHeader`/`putRows`/`putTable`; ADR-008 amended. |
+| 5 | cell-record-source | [#585](https://github.com/TJC-LP/xl/issues/585) | [#600](https://github.com/TJC-LP/xl/pull/600) | `CellRecord` + `SheetSource` (in-memory / streaming) behind every read verb; typed `--json` payloads; the source-parity law. |
+| 6 | scripting-completions | [#589](https://github.com/TJC-LP/xl/issues/589) | [#601](https://github.com/TJC-LP/xl/pull/601) | `Excel.writeChecked`/`readSheet`/`readMetadata`/`modifyR`, `orExit`, `Sheet.collapseRows/Cols`. |
+
+Part b — [#583](https://github.com/TJC-LP/xl/issues/583) batch on the algebra,
+[#584](https://github.com/TJC-LP/xl/issues/584) registry-driven `Main`,
+[#586](https://github.com/TJC-LP/xl/issues/586) streaming writes over the algebra,
+[#587](https://github.com/TJC-LP/xl/issues/587) `Recalc.afterEdits`,
+[#591](https://github.com/TJC-LP/xl/issues/591) `Written` payload — stacks on top of part a. Review
+follow-ups filed: [#593](https://github.com/TJC-LP/xl/issues/593) (writer heals bare `_xlfn.` text
+on every write), [#595](https://github.com/TJC-LP/xl/issues/595) (table uid determinism),
+[#596](https://github.com/TJC-LP/xl/issues/596) (descending sort puts blanks first).
+
+### v0.20.0 — wave 26: Calculation integrity (Released 2026-09-07, in 0.20.0)
 
 Four stacked changes close the stale/unevaluated-value and hidden-diagnostic family:
 
