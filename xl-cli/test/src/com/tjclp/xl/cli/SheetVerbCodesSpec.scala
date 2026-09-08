@@ -73,7 +73,8 @@ class SheetVerbCodesSpec extends CatsEffectSuite:
     yield
       assertEquals(json.exit, 3, json.stderr)
       assertEquals(error("code"), ujson.Str("SHEET_NOT_FOUND"))
-      assertEquals(error("message"), ujson.Str("Sheet 'Dat' not found. Available: Data, Summary"))
+      // the CLI's one SHEET_NOT_FOUND text (Resolve's), not a verb-specific spelling
+      assertEquals(error("message"), ujson.Str("Sheet not found: Dat. Available: Data, Summary"))
       assertEquals(error("candidates").arr.map(_.str).toVector, Vector("Data"))
       assertEquals(text.exit, 3, text.stderr)
       assert(text.stderr.contains("  code: SHEET_NOT_FOUND\n"), text.stderr)
@@ -111,7 +112,7 @@ class SheetVerbCodesSpec extends CatsEffectSuite:
         assertEquals(error("code"), ujson.Str("SHEET_NOT_FOUND"), tag)
         assertEquals(
           error("message"),
-          ujson.Str("Sheet 'Nope' not found. Available: Data, Summary"),
+          ujson.Str("Sheet not found: Nope. Available: Data, Summary"),
           tag
         )
         assertEquals(error("hint"), ujson.Str("list sheets with `xl -f <file> sheets`"), tag)

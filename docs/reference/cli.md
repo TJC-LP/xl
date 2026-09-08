@@ -474,8 +474,10 @@ occupied cells — and `Dependents` the formulas that read the cell, by name or 
 contains it (an empty cell inside a summed range still names the sum). Empty cells inside a range
 and ranges over a sheet the workbook does not have are not listed (since 0.20.0; before, `SUM(A:A)`
 listed 1,048,576 entries). Same-sheet refs are unqualified; cross-sheet ones carry the sheet
-quoted as a formula would spell it (`'On-Premise'!G9`, `Sheet2!A1`), the same rendering `deps`
-uses, so the text pastes into `putf`/`eval`. For more than one hop, use `deps`. Under `--stream` the graph is not built and both lines say so:
+quoted as a formula would spell it (`'On-Premise'!G9`, `Sheet2!A1`), the same rendering `deps` and
+`search` use, so the text pastes into `putf`/`eval`; both lists are ordered by sheet, then row, then
+column. For more than one hop, use `deps`. Under `--stream` the graph is not built and both lines
+say so:
 `Dependencies: (not available in streaming mode)` / `Dependents: (not available in streaming mode)`
 (before 0.21.0 streaming listed the formula's reference tokens — `B1, B1:B3, B3` for
 `=SUM(B1:B3)` — which was neither the precedent set nor exact; drop `--stream` for the graph).
@@ -1349,7 +1351,9 @@ document — **[`generated/batch-ops.md`](generated/batch-ops.md)** lists every 
 fields, types, required flags, aliases, example, streamability and CLI twin, and
 `xl batch --schema` prints the same as a JSON Schema. An unknown `op` is `BATCH_OP_UNKNOWN`
 (exit 2) with a `did you mean`; an op that fails to apply is `BATCH_OP_FAILED` with
-`location.opIndex` (1-based).
+`location.opIndex` (1-based) and the op's `sheet` — or, when the cause names a cell (a
+`rename-sheet` that cannot rewrite `Summary!I23`), that cell's `sheet` and `ref` — plus the cause's
+own `hint`.
 
 **Rules every op follows**:
 

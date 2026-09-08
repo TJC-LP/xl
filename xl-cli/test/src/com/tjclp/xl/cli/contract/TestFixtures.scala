@@ -134,12 +134,13 @@ object TestFixtures:
    * `Summary!G9` reads `'On-Premise'!G9`, so `cell` and `deps` must both print the quoted
    * qualifier; `Summary!I23` mentions `'M&A'` inside a call to a function the parser does not know
    * (`ZZZNOTAFUNC`, a stable parse failure), so `rename-sheet M&A …` must refuse with a typed code,
-   * the cell's location and the parser's own diagnostic. Caches authored explicitly.
+   * the cell's location and the parser's own diagnostic; `On-Premise!A1` holds the text `Servers`,
+   * so `search Servers` prints a quoted qualifier too. Caches authored explicitly.
    */
   def qualifiedBook(): Workbook =
     def cached(expr: String, value: Int): CellValue =
       CellValue.Formula(expr, Some(CellValue.Number(BigDecimal(value))))
-    val onPremise = Sheet("On-Premise").put(ref"G9", 5)
+    val onPremise = Sheet("On-Premise").put(ref"A1", "Servers").put(ref"G9", 5)
     val deals = Sheet("M&A").put(ref"I12", 7)
     val summary = Sheet("Summary")
       .put(ref"G9", cached("'On-Premise'!G9*2", 10))

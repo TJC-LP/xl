@@ -1117,21 +1117,26 @@ object BatchParser:
 
   /**
    * `BATCH_OP_FAILED`: `Object N (op): <cause>`, keeping the cause's hint, candidates and domain
-   * `cause`. `location` is the cause's own when it named one (the cell a `rename-sheet` could not
-   * rewrite, GH-608), else the op's sheet; `opIndex` is always the op's. Shared with the streaming
-   * writer so an apply-time failure carries the same code, prefix and `location.opIndex` on both
-   * paths (ADR-017 invariant 2).
+   * `cause`. `location` merges the two: `opIndex` is always the op's, `sheet` the cause's when it
+   * named one else the op's, `ref`/`file` the cause's (the cell a `rename-sheet` could not rewrite,
+   * GH-608). Shared with the streaming writer so an apply-time failure carries the same code,
+   * prefix and `location.opIndex` on both paths (ADR-017 invariant 2).
    */
   def opFailed(scoped: ScopedOp, cause: Throwable): CliException =
     val inner = CliError.fromThrowable(cause)
-    val at = inner.location.getOrElse(Location(None, scoped.sheet.map(_.value), None, None))
+    val at = inner.location.getOrElse(Location.none)
     CliException(
       CliError(
         ErrorCode.BATCH_OP_FAILED,
         s"Object ${scoped.index} (${OpRegistry.nameOf(scoped.op)}): ${inner.message}",
         hint = inner.hint,
         candidates = inner.candidates,
-        location = Some(at.copy(opIndex = Some(scoped.index))),
+        location = Some(
+          at.copy(
+            sheet = at.sheet.orElse(scoped.sheet.map(_.value)),
+            opIndex = Some(scoped.index)
+          )
+        ),
         cause = inner.cause
       )
     )
@@ -2109,20 +2114,18 @@ object BatchParser:
         IO.pure((sheetName, CellRange(ref, ref)))
     }
 
-  /** `SHEET_NOT_FOUND` with the historical text and did-you-mean candidates. */
+  /** `SHEET_NOT_FOUND` with the CLI's one text and did-you-mean candidates. */
   private def sheetNotFound(wb: Workbook, sheetName: SheetName): CliException =
     sheetNotFound(wb.sheetNames.map(_.value).toVector, sheetName)
 
   /**
    * The same from the workbook's sheet names alone, for the streaming writer, which knows them from
-   * `workbook.xml` and must refuse a missing sheet with the very text the in-memory batch reports.
+   * `workbook.xml` and must refuse a missing sheet with the very text the in-memory batch reports —
+   * `Resolve.sheetNotFound`'s `Sheet not found: X. Available: …`, the text every verb carries
+   * (GH-608 unified the sheet verbs and the batch ops on it).
    */
   def sheetNotFound(names: Vector[String], sheetName: SheetName): CliException =
-    CliException(
-      CliError
-        .fromXLError(XLError.SheetNotFound(sheetName.value, names), None)
-        .copy(message = s"Sheet '${sheetName.value}' not found. Available: ${names.mkString(", ")}")
-    )
+    CliException(Resolve.sheetNotFound(names, sheetName.value))
 
   /** Update a sheet in the workbook, raising error if sheet not found. */
   private def updateSheet(wb: Workbook, sheetName: SheetName)(

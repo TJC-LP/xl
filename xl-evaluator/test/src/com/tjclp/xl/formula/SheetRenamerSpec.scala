@@ -376,6 +376,39 @@ class SheetRenamerSpec extends ScalaCheckSuite:
     )
   }
 
+  test("renameLocated names a conditional-format and a data-validation site (GH-608)") {
+    val Sheet2 = SheetName.unsafe("Sheet2")
+    val cf = Workbook(
+      Sheet("Sheet1").put(ref"A1", num(1)),
+      Sheet("Sheet2")
+        .conditionalFormat(ref"A1:A9", CfRule.Expression("ZZZNOTAFUNC(Sheet1!A1)", None, 1))
+    )
+    SheetRenamer.renameLocated(cf, Sheet1, Data) match
+      case Left(SheetRenamer.Refusal(site, XLError.FormulaError(formula, reason))) =>
+        assertEquals(site, Some(SheetRenamer.Site.ConditionalFormat(Sheet2)))
+        assertEquals(formula, "ZZZNOTAFUNC(Sheet1!A1)")
+        assert(reason.startsWith("Sheet2!conditional format: "), reason)
+        assert(reason.contains("Unknown function 'ZZZNOTAFUNC'"), reason)
+      case other => fail(s"expected a located FormulaError refusal, got $other")
+    val dv = Workbook(
+      Sheet("Sheet1").put(ref"A1", num(1)),
+      Sheet("Sheet2")
+        .withDataValidation(ref"B1:B9", DataValidation.custom("ZZZNOTAFUNC(Sheet1!A1)"))
+    )
+    SheetRenamer.renameLocated(dv, Sheet1, Data) match
+      case Left(SheetRenamer.Refusal(site, XLError.FormulaError(formula, reason))) =>
+        assertEquals(site, Some(SheetRenamer.Site.DataValidation(Sheet2)))
+        assertEquals(formula, "ZZZNOTAFUNC(Sheet1!A1)")
+        assert(reason.startsWith("Sheet2!data validation: "), reason)
+        assert(reason.contains("Unknown function 'ZZZNOTAFUNC'"), reason)
+      case other => fail(s"expected a located FormulaError refusal, got $other")
+    assertEquals(
+      SheetRenamer.Site.ConditionalFormat(Q1Data).describe,
+      "'Q1 Data'!conditional format"
+    )
+    assertEquals(SheetRenamer.Site.DataValidation(Q1Data).describe, "'Q1 Data'!data validation")
+  }
+
   test("the usual Workbook.rename refusals still apply") {
     assertEquals(
       SheetRenamer.rename(repro, SheetName.unsafe("Nope"), Data),

@@ -578,7 +578,11 @@ class InspectCommandsSpec extends CatsEffectSuite:
         "G9"
       )
       plain <- CliHarness.run("-f", file("linked.xlsx"), "--json", "cell", "Sheet1!A1")
+      search <- CliHarness.run("-f", file("qualified.xlsx"), "search", "Servers")
     yield
+      // `search` spells its Ref column through the same printer
+      assertEquals(search.exit, 0, search.stderr)
+      assert(search.stdout.contains("| 'On-Premise'!A1 |"), search.stdout)
       assertEquals(text.exit, 0, text.stderr)
       assert(
         text.stdout.endsWith("Dependencies: 'On-Premise'!G9\nDependents: (none)\n"),

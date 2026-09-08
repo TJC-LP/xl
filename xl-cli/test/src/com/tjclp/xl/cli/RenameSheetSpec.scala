@@ -8,11 +8,13 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cf.CfRule
 import com.tjclp.xl.cli.commands.{SheetCommands, WriteCommands}
 import com.tjclp.xl.cli.contract.{CliException, CliHarness, EnvelopeSchema, Location, TestFixtures}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.sheets.DataValidation
 
 /**
  * GH-559: `rename-sheet` (the verb and the batch op) must rewrite every `Sheet!ref` in other
@@ -286,6 +288,65 @@ class RenameSheetSpec extends CatsEffectSuite:
           )
         case other => fail(s"expected a BATCH_OP_FAILED CliException, got: $other")
       assert(!Files.exists(out), "nothing may be written when the batch is refused")
+  }
+
+  test(
+    "rename-sheet refusal on a conditional format or data validation locates the sheet, no ref"
+  ) {
+    // GH-608: `location.sheet` names the sheet whose rule mentions the renamed sheet; `location.ref`
+    // is null (a rule is not a cell) — the branch an agent takes on the envelope depends on it.
+    def book(summary: Sheet): Workbook = Workbook(Sheet("M&A").put(ref"I12", num(7)), summary)
+    val cfBook = book(
+      Sheet("Summary")
+        .conditionalFormat(ref"A1:A3", CfRule.Expression("ZZZNOTAFUNC('M&A'!I12)", None, 1))
+    )
+    val dvBook = book(
+      Sheet("Summary")
+        .withDataValidation(ref"B1:B3", DataValidation.custom("ZZZNOTAFUNC('M&A'!I12)"))
+    )
+    def refusal(tag: String, wb: Workbook): IO[(ujson.Value, java.nio.file.Path)] =
+      val in = tmp(s"$tag-in")
+      val out = tmp(s"$tag-out")
+      Files.deleteIfExists(out)
+      for
+        _ <- excel.write(wb, in)
+        run <- CliHarness.run(
+          "-f",
+          in.toString,
+          "-o",
+          out.toString,
+          "--json",
+          "rename-sheet",
+          "M&A",
+          "MandA"
+        )
+      yield
+        assertEquals(run.exit, 3, run.stderr)
+        val envelope = ujson.read(run.stdout)
+        EnvelopeSchema.assertValid(envelope)
+        (envelope("error"), out)
+    for
+      (cf, cfOut) <- refusal("cf", cfBook)
+      (dv, dvOut) <- refusal("dv", dvBook)
+    yield
+      for (error, kind) <- Vector((cf, "conditional format"), (dv, "data validation")) do
+        assertEquals(error("code"), ujson.Str("FORMULA_ERROR"), kind)
+        assertEquals(error("location")("sheet"), ujson.Str("Summary"), kind)
+        assertEquals(error("location")("ref"), ujson.Null, kind)
+        assert(error("message").str.contains(s"Summary!$kind: "), error("message").str)
+        assert(
+          error("message").str.contains("Unknown function 'ZZZNOTAFUNC'"),
+          error("message").str
+        )
+        assert(!error("message").str.contains("UnknownFunction("), error("message").str)
+        assertEquals(
+          error("hint"),
+          ujson.Str(
+            s"fix or remove the $kind on sheet Summary that names the renamed sheet before renaming"
+          ),
+          kind
+        )
+      assert(!Files.exists(cfOut) && !Files.exists(dvOut), "nothing may be written on a refusal")
   }
 
   test("batch rename-sheet: rewrites dependents in the FILE without recalculating") {

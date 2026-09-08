@@ -217,7 +217,9 @@ object ParseError:
         posOpt.fold(msg)(pos => s"$msg at position $pos")
 
   /**
-   * Format error with visual pointer to error location.
+   * Format error with visual pointer to error location: the formula, a caret under the offending
+   * position, then [[describe]] (GH-608; before, the third line was the `XLError` message, which
+   * repeated the formula: `Formula error in '<formula>': <reason>`).
    *
    * Example output:
    * {{{
@@ -241,7 +243,7 @@ object ParseError:
       case NestingTooDeep(_, _) => None
       case GenericError(_, pos) => pos
 
-    val message = toXLError(error, formula).message
+    val message = describe(error)
 
     position match
       case Some(pos) if pos >= 0 && pos < formula.length =>

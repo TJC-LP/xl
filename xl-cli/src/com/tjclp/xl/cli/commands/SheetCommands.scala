@@ -8,6 +8,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.cli.contract.{CliError, CliException, Location}
+import com.tjclp.xl.cli.helpers.Resolve
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formula.eval.SheetRenamer
 import com.tjclp.xl.io.ExcelIO
@@ -19,11 +20,13 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
  * Commands for add, remove, rename, move, copy sheet operations. All methods accept a `stream`
  * parameter to use the SAX/StAX workbook writer.
  *
- * Every refusal here is typed (ADR-017 §2.3): a domain error keeps its own `XLError.code`, a wrong
- * flag combination is `USAGE`, and nothing falls through to `INTERNAL` — that code is reserved for
- * defects (GH-608). The verbs' historical message texts are kept. The `private[cli]` helpers are
- * shared with the batch `add-sheet`/`rename-sheet` ops (`BatchParser`), so an op fails with the
- * same code, hint and location as the verb, wrapped by `BATCH_OP_FAILED`.
+ * Every refusal raised in THIS object is typed (ADR-017 §2.3): a domain error keeps its own
+ * `XLError.code`, a wrong flag combination is `USAGE`, and none of them falls through to
+ * `INTERNAL`, the code reserved for defects (GH-608). Other command objects (`BatchParser`'s
+ * remaining ops, `StreamingWriteCommands`, `ImportCommands`, …) still raise plain exceptions;
+ * converting them is the follow-up. The `private[cli]` helpers are shared with the batch
+ * `add-sheet`/`rename-sheet` ops (`BatchParser`), so an op fails with the same code, hint and
+ * location as the verb, wrapped by `BATCH_OP_FAILED`.
  */
 object SheetCommands:
 
@@ -47,15 +50,18 @@ object SheetCommands:
     )
 
   /**
-   * `SHEET_NOT_FOUND` (exit 3) with the verb's message, plus the domain hint and the nearest names
-   * as candidates.
+   * `SHEET_NOT_FOUND` (exit 3): the CLI's ONE text for an unknown sheet (`Resolve.sheetNotFound`,
+   * `Sheet not found: X. Available: …`, the one every read verb and the goldens carry), with the
+   * domain hint and the nearest names as candidates.
    */
   private[cli] def sheetNotFound(name: String, wb: Workbook): CliException =
-    val available = wb.sheetNames.map(_.value).toVector
-    domain(
-      XLError.SheetNotFound(name, available),
-      s"Sheet '$name' not found. Available: ${available.mkString(", ")}"
-    )
+    CliException(Resolve.sheetNotFound(wb.sheetNames.map(_.value).toVector, name))
+
+  /**
+   * The one wording of a `move-sheet` with no position: the parser's `USAGE` and the guard here.
+   */
+  private[cli] val MoveSheetPositionRequired: String =
+    "move-sheet requires --to, --after, or --before option"
 
   /**
    * Whether the book already has a sheet called `name` the way Excel compares sheet names —
@@ -90,12 +96,14 @@ object SheetCommands:
       case Site.DataValidation(sheet) => Some(Location(None, Some(sheet.value), None, None))
       case Site.Name(_) => None
     }
+    // sheet names are spelled as a formula would (quoted only when needed), like `Site.describe`
+    def on(sheet: SheetName): String = s"on sheet ${SheetName.quoteForFormula(sheet.value)}"
     val hint = site.map {
       case s: Site.Cell => s"fix or replace the formula at ${s.describe} before renaming"
       case Site.ConditionalFormat(sheet) =>
-        s"fix or remove the conditional format on '${sheet.value}' that names the sheet before renaming"
+        s"fix or remove the conditional format ${on(sheet)} that names the renamed sheet before renaming"
       case Site.DataValidation(sheet) =>
-        s"fix or remove the data validation on '${sheet.value}' that names the sheet before renaming"
+        s"fix or remove the data validation ${on(sheet)} that names the renamed sheet before renaming"
       case Site.Name(name) => s"fix or remove the defined name '$name' before renaming"
     }
     val base = CliError.fromXLError(error, location)
@@ -113,8 +121,10 @@ object SheetCommands:
       newSheetName <- sheetName(newName)
       updated <- IO.fromEither(
         SheetRenamer.renameLocated(wb, oldSheetName, newSheetName).left.map {
-          case SheetRenamer.Refusal(_, XLError.SheetNotFound(_, _)) => sheetNotFound(oldName, wb)
-          case SheetRenamer.Refusal(_, XLError.DuplicateSheet(_)) =>
+          // `site = None` MEANS workbook-level: only `Workbook.rename`'s own refusals arrive without
+          // one. Pinning `None` keeps a located refusal (whatever its error) at its site.
+          case SheetRenamer.Refusal(None, XLError.SheetNotFound(_, _)) => sheetNotFound(oldName, wb)
+          case SheetRenamer.Refusal(None, XLError.DuplicateSheet(_)) =>
             duplicateSheet(newName, s"Sheet '$newName' already exists")
           case SheetRenamer.Refusal(site, error) => unrewritable(site, error)
         }
@@ -286,7 +296,8 @@ object SheetCommands:
             _ <- IO.raiseError(sheetNotFound(before, wb)).whenA(beforeIdx < 0)
           yield beforeIdx
         case (None, None, None) =>
-          IO.raiseError(usage("move-sheet requires --to, --after, or --before option"))
+          // unreachable from the CLI (the parser validates first, GH-608); the library-API guard
+          IO.raiseError(usage(MoveSheetPositionRequired))
       // Build new order: remove sheet from current position, insert at target
       currentNames = wb.sheetNames.toVector
       withoutSheet = currentNames.patch(currentIdx, Nil, 1)

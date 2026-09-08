@@ -428,8 +428,12 @@ object Reads:
           val sheetDesc = targets match
             case Vector(single) => single.value
             case many => s"${many.size} sheets"
+          // the qualifier as a formula spells it (`'On-Premise'!A1`), the printer `cell`, `deps`
+          // and FormulaPrinter share (`SheetName.quoteForFormula`, GH-609)
           val table = Markdown.renderSearchResultsWithRef(
-            shown.map(r => (s"${r.sheet.value}!${r.ref.toA1}", r.searchText))
+            shown.map(r =>
+              (s"${SheetName.quoteForFormula(r.sheet.value)}!${r.ref.toA1}", r.searchText)
+            )
           )
           val base = s"Found $total matches in $sheetDesc:\n\n$table"
           if shown.size < total then
