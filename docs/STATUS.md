@@ -227,7 +227,7 @@
 | xl-cli | 1249 | command parsing, batch ops, view/eval/export, streaming mode |
 | xl-cats-effect | 167 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 135 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 27 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 49 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
