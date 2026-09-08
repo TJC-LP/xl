@@ -132,12 +132,15 @@ jobs:
   # The agent-visible contract of `xl` as its own check (GH-592). The golden corpus, the generated
   # reference pages and the code vocabulary run explicitly, so a golden diff fails THIS job with the
   # unified diff in its log instead of somewhere inside the full suite; then the assembly JAR is
-  # driven the way an agent drives it — `--help`, `sheets`, `view --json`, `schema --json`, `lint`,
-  # and two failures whose envelopes must carry the error code — against the checked-in fixtures.
-  # release.yml runs the same smoke against every native binary.
+  # driven the way an agent drives it by scripts/smoke-cli-contract.sh — `--help`, `sheets`,
+  # `view --json`, `schema --json`, `lint`, and two failures whose envelopes must carry the error
+  # code — against the checked-in fixtures. release.yml runs the same script against every native
+  # binary. Deliberately no `needs: build`: a golden diff also fails `build`'s full suite, and a
+  # dependent job would be skipped instead of showing the diff. The cost is a second compile of the
+  # xl-cli dependency graph in parallel with `build`, hence the timeout.
   contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -180,67 +183,8 @@ jobs:
       - name: Build CLI JAR
         run: ./mill -i xl-cli.assembly
 
+      # `-`: the expected version is the artifact's own. With PUBLISH_VERSION unset that is build.mill's
+      # fallback, and the script holds every other place the JAR prints a version to what --version
+      # printed — the property the contract cares about, without a second source to drift from.
       - name: Smoke test CLI JAR
-        run: |
-          set -euo pipefail
-          XL=(java -jar out/xl-cli/assembly.dest/out.jar)
-          FIXTURE=xl-ooxml/test/resources/fixtures/small-values.xlsx
-          VERSION=$(sed -n 's/.*getOrElse("PUBLISH_VERSION", *"\([^"]*\)").*/\1/p' build.mill)
-          test -n "$VERSION" || { echo "::error::no PUBLISH_VERSION fallback found in build.mill"; exit 1; }
-          ERR=$(mktemp)
-
-          # run <expected exit> <args...>: stdout in $OUT (CRs stripped), stderr in the $ERR file;
-          # any other exit code fails the step with both channels shown.
-          run() {
-            local want=$1; shift
-            set +e
-            OUT=$("${XL[@]}" "$@" 2>"$ERR"); local status=$?
-            set -e
-            OUT=${OUT//$'\r'/}
-            if [ "$status" -ne "$want" ]; then
-              echo "::error::xl $* exited $status, expected $want"
-              echo "--- stdout"; echo "$OUT"; echo "--- stderr"; cat "$ERR"
-              exit 1
-            fi
-          }
-          # check <what> <jq filter>: the filter must hold of $OUT.
-          check() {
-            local what=$1 filter=$2
-            if ! echo "$OUT" | jq -e "$filter" >/dev/null; then
-              echo "::error::$what: jq '$filter' does not hold of:"; echo "$OUT"; exit 1
-            fi
-          }
-
-          run 0 --version
-          [ "$OUT" = "$VERSION" ] || { echo "::error::--version printed '$OUT'; build.mill says $VERSION"; exit 1; }
-
-          run 0 --help
-          [ -z "$OUT" ] || { echo "::error::--help wrote to stdout; the contract puts usage on stderr"; echo "$OUT"; exit 1; }
-          grep -q '^Usage:' "$ERR" || { echo "::error::--help did not print usage on stderr"; cat "$ERR"; exit 1; }
-
-          run 0 -f "$FIXTURE" sheets
-          grep -q 'Values' <<<"$OUT" || { echo "::error::sheets did not list the Values sheet"; echo "$OUT"; exit 1; }
-
-          run 0 -f "$FIXTURE" --json sheets
-          check "sheets --json" ".ok == true and .verb == \"sheets\" and .version == \"$VERSION\" and .data[0].name == \"Values\" and .error == null"
-
-          run 0 -f "$FIXTURE" --json view A1:C4
-          check "view --json" '.ok == true and .verb == "view" and .data.sheet == "Values" and (.data.rows | length) == 4 and .data.rows[0].cells[1].value == 42'
-
-          run 0 --json schema
-          check "schema --json" ".ok == true and .verb == \"schema\" and .data.version == \"$VERSION\" and (.data.verbs | length) > 0 and ([.data.errorCodes[].code] | index(\"SHEET_REQUIRED\")) != null and (.data.warningCodes | index(\"TRUNCATED\")) != null and (.data.exitCodes | map(.code)) == [0, 1, 2, 3]"
-
-          run 0 -f "$FIXTURE" lint
-          grep -q 'clean' <<<"$OUT" || { echo "::error::lint did not report the fixture clean"; echo "$OUT"; exit 1; }
-
-          run 0 -f "$FIXTURE" --json lint
-          check "lint --json" '.ok == true and .verb == "lint" and .data.clean == true'
-
-          # Failures are envelopes too: the code, never the message, is the contract.
-          run 3 -f does-not-exist.xlsx --json sheets
-          check "missing-file envelope" '.ok == false and .exitCode == 3 and .error.code == "IO_READ"'
-
-          run 2 -f "$FIXTURE" --json nonsense-verb
-          check "unknown-verb envelope" '.ok == false and .exitCode == 2 and .error.code == "UNKNOWN_VERB"'
-
-          echo "JAR smoke: every verb answered as the contract says"
+        run: scripts/smoke-cli-contract.sh - java -jar out/xl-cli/assembly.dest/out.jar
