@@ -69,10 +69,14 @@ Excel.write(updated, "output.xlsx")
   0.21.0) is the same for an `XLResult`-returning transform — `_.update("Data", …)` needs no
   `.unsafe` inside the lambda, and a `Left` throws *before* anything is written (the file stays
   byte-identical, no scratch file is left behind).
-- `Excel.readSheet(path, name)` (since 0.21.0) reads one sheet; a missing name throws an
-  `XLException` whose `error` is `SheetNotFound` and whose message names the nearest sheet names
-  and every available sheet. `Excel.readMetadata(path)` (since 0.21.0) returns `LightMetadata` —
-  sheet names, visibility, dimensions, defined names, the date system — without loading a cell.
+- `Excel.readSheet(path, name)` (since 0.21.0) is `Excel.read` plus the lookup — the whole
+  workbook is loaded, then one sheet is selected (stream one sheet of a large file with
+  `ExcelIO.readSheetStream`). A missing name throws an `XLException` whose `error` is
+  `SheetNotFound(name, available)`: its message lists every available sheet and its `candidates`
+  name the nearest, so `orExit` prints a `did you mean:` line exactly as `xl -s` does.
+  `Excel.readMetadata(path)` (since 0.21.0) returns `LightMetadata` — sheet names, visibility,
+  dimensions, defined names, the date system — without loading a cell, under the same ZIP-bomb
+  limits as `Excel.read`.
 - `Excel.write` also accepts an `XLResult[Workbook]` directly.
 
 > **Formulas are written with whatever cache they carry — never `Excel.write` a freshly built
@@ -623,27 +627,36 @@ into existing borders at apply time, preserving each cell's font/fill/format.
 
 A collapsed Excel group is two things at once — the member rows/columns are hidden AND the summary
 row/column after the span carries the `collapsed` marker that draws the "+" button. `collapseRows`
-/ `collapseCols` compose both (what `xl group-rows --collapsed` does), make ungrouped members a
-level-1 group, and keep an existing outline level; `expandRows` / `expandCols` unhide the members
-and clear the marker, keeping the level ([#465](https://github.com/TJC-LP/xl/issues/465)):
+/ `collapseCols` compose both — the very fold behind `xl group-rows --collapsed` (`Sheet.groupRows`),
+so on an ungrouped sheet `collapseRows(span)` equals `groupRows(span, 1, collapsed = true)` — make
+ungrouped members a level-1 group, and keep a member's existing outline level; `expandRows` /
+`expandCols` unhide the members and clear the marker, keeping the level, and leave rows/columns that
+never had properties untouched ([#465](https://github.com/TJC-LP/xl/issues/465)).
+
+Spans carry their axis: take a `(Row, Row)` / `(Column, Column)` pair or a `RowSpan` / `ColSpan`
+(`RowSpan.parse("2:3")`, `ColSpan.parse("E:H")` — each refuses the other axis at parse time). The
+`CellRange` overloads return `XLResult[Sheet]` and accept only a full-row range for the row forms
+and a full-column range for the column forms: `sheet.collapseRows("E:H".asRange …)` is an
+`InvalidReference`, never a million hidden rows.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 
 // Whole-row/column spans are runtime strings (the ref macro takes A1 / A1:B2 shapes) — parse them.
-val cols = orExit("E:H".asRange)
+val cols = orExit(ColSpan.parse("E:H"))
 val detail = Sheet("Detail")
   .put(ref"A1", "Region").put(ref"A2", "North").put(ref"A3", "South").put(ref"A4", "Total")
   .put(ref"B2", 10).put(ref"B3", 20).put(ref"B4", fx"=SUM(B2:B3)")
   .collapseRows(Row.from1(2), Row.from1(3)) // rows 2-3 hidden at level 1, row 4 marked collapsed
   .collapseCols(cols)                       // E:H hidden at level 1, column I marked collapsed
 
-val rows = orExit("2:3".asRange)
+val rows = orExit(RowSpan.parse("2:3"))
 val reopened = detail.expandRows(rows).expandCols(cols)
+val byRange: XLResult[Sheet] = detail.expandRows(orExit("2:3".asRange)) // full-row CellRange: Right
 Excel.writeChecked(Workbook(detail), "/tmp/outline.xlsx")
-println(s"rows hidden: ${detail.rowProperties.count(_._2.hidden)}, reopened: ${reopened.rowProperties.count(_._2.hidden)}")
+println(s"rows hidden: ${detail.rowProperties.count(_._2.hidden)}, reopened: ${reopened.rowProperties.count(_._2.hidden)}, byRange: ${byRange.isRight}")
 ```
 
 ## Print and view setup
@@ -696,13 +709,19 @@ total APIs (literal refs, `upsert`, range fill, `readTypedOr`, `recalculate`) so
 nothing to unwrap.
 
 `orExit(result)` (since 0.21.0) is the script-shaped alternative: the value on `Right`, or the
-error's `error:` / `code:` / `hint:` / `did you mean:` lines on stderr and exit status 1 — the
-same envelope `xl` prints, so a failing script reads like a failing CLI call. `exitMessage(err)`
-is the text it prints, for scripts that report and continue.
+error on stderr and exit status 1, rendered by `XLError.renderDiagnostic` — the one renderer the
+CLI's own `Diagnostics` uses, so a failing script prints the same bytes as a failing `xl` call:
+`Error: <message>`, then indented `code: <CODE>`, `did you mean: …` (when the error has
+candidates) and `hint: …` (when it has one). `exitMessage(err)` is that text, for scripts that
+report and continue.
 
 ```scala
 val wb = orExit(Workbook.named("Data", "Summary")) // DuplicateSheet on a repeat → printed, exit 1
 val sales = orExit(wb("Sales"))                    // SheetNotFound → printed with its hint, exit 1
+// Error: Sheet not found: 'Sumary'. Available: Data, Summary     ← Excel.readSheet's error via orExit
+//   code: SHEET_NOT_FOUND
+//   did you mean: Summary
+//   hint: list sheets with `xl -f <file> sheets`
 ```
 
 ## `Excel` vs `ExcelIO`

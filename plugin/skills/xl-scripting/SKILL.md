@@ -60,8 +60,8 @@ val wb  = Excel.read("in.xlsx")                    // Workbook
 Excel.write(wb, "out.xlsx")                        // also accepts XLResult[Workbook]; NEVER for a freshly built model — see writeChecked
 Excel.modify("file.xlsx")(_.upsert("Log", identity)) // atomic in-place read→transform→write
 Excel.modifyR("file.xlsx")(_.update("Log", f))     // 0.21.0: XLResult-returning transform; a Left throws BEFORE any write
-Excel.readSheet("in.xlsx", "Summary")              // 0.21.0: Sheet; a typo throws naming "did you mean" + the available sheets
-Excel.readMetadata("in.xlsx")                      // 0.21.0: LightMetadata (sheet names/dimensions/defined names), no cells loaded
+Excel.readSheet("in.xlsx", "Summary")              // 0.21.0: Sheet — loads the WHOLE workbook, then picks one; a typo throws SheetNotFound(name, available) with "did you mean" candidates
+Excel.readMetadata("in.xlsx")                      // 0.21.0: LightMetadata (sheet names/dimensions/defined names), no cells loaded, ZIP-bomb guarded
 
 // Sheets in a workbook
 wb.sheets                                          // Vector[Sheet]
@@ -80,8 +80,9 @@ sheet.putAt(cellStr, "Title")                      // 0.20.0: RUNTIME string →
 sheet.put(ref"B1", 42)                             // Int/Long/Double/BigDecimal/Boolean/LocalDate(Time)/RichText
 sheet.put(ref"C1", "$1,234.56".toFormatted)        // smart detection → Currency format
 sheet.style(ref"A1:D1", CellStyle.default.bold)    // Sheet
-sheet.collapseRows(Row.from1(5), Row.from1(8))     // 0.21.0: hide 5:8 + mark row 9 collapsed (level-1 group if ungrouped); also any CellRange
-"E:H".asRange.map(sheet.collapseCols)              // 0.21.0: column form; whole-row/column spans are runtime strings (ref"" takes A1/A1:B2 only)
+sheet.collapseRows(Row.from1(5), Row.from1(8))     // 0.21.0: hide 5:8 + mark row 9 collapsed (level-1 group if ungrouped); also takes a RowSpan
+sheet.collapseCols(orExit(ColSpan.parse("E:H")))   // 0.21.0: column form; spans are runtime strings (ref"" takes A1/A1:B2 only) and carry their axis
+sheet.collapseRows(orExit("5:8".asRange))          // 0.21.0: CellRange form is XLResult[Sheet]: full rows only — "E:H" here is InvalidReference, not 1M hidden rows
 
 // Patch DSL (compose pure values, apply once)
 val patch = (ref"A1" := "Report") ++ ref"A1:C1".merge ++ ref"A1".styled(CellStyle.default.bold)
@@ -107,7 +108,7 @@ Excel.writeRecalculated(wb, "out.xlsx")            // 0.13.0: recompute EVERY fo
 
 // Errors: XLResult[A] = Either[XLError, A]; unwrap ONCE at the edge
 wb.update("Sales", f).unsafe                       // throws structured XLException if Left
-orExit(wb.update("Sales", f))                      // 0.21.0: or print "error:/code:/hint:/did you mean:" to stderr and exit 1
+orExit(wb.update("Sales", f))                      // 0.21.0: or print "Error: …" + indented "code:/did you mean:/hint:" (the CLI's exact envelope) to stderr, exit 1
 ```
 
 ## Essential Patterns
@@ -127,7 +128,7 @@ val updated = wb
 Excel.write(updated, "output.xlsx")
 ```
 
-`Excel.modify("file.xlsx")(f)` does the same in place with atomic file replacement. Since 0.21.0 `Excel.modifyR("file.xlsx")(f)` takes an `XLResult`-returning transform — `_.update("Data", …)` needs no `.unsafe` inside the lambda, and a `Left` throws *before* anything is written, leaving the file byte-identical. `Excel.readSheet(path, name)` (0.21.0) reads one sheet, throwing an `XLException` whose message names the nearest sheet names and every available sheet on a typo; `Excel.readMetadata(path)` (0.21.0) lists sheets, dimensions and defined names without loading a cell — decide what to read (or stream) before reading it.
+`Excel.modify("file.xlsx")(f)` does the same in place with atomic file replacement. Since 0.21.0 `Excel.modifyR("file.xlsx")(f)` takes an `XLResult`-returning transform — `_.update("Data", …)` needs no `.unsafe` inside the lambda, and a `Left` throws *before* anything is written, leaving the file byte-identical. `Excel.readSheet(path, name)` (0.21.0) is `Excel.read` plus the lookup — the whole workbook is loaded, then one sheet is selected — throwing an `XLException(SheetNotFound(name, available))` on a typo whose message lists every available sheet and whose `candidates` name the nearest (`orExit` prints them as `did you mean:`); `Excel.readMetadata(path)` (0.21.0) lists sheets, dimensions and defined names without loading a cell — decide what to read (or stream) before reading it.
 
 ### Compile-time literals vs runtime refs
 
@@ -372,7 +373,7 @@ result match
   case Left(err) => println(s"failed: ${err.message}"); sys.exit(1)
 ```
 
-Or lean on totality so there is nothing to unwrap: literal refs, `upsert`, range fill, `readTypedOr`, `recalculate` are all total. `.unsafe` throws a structured `XLException` (wraps the `XLError`) — fine for scripts where fail-fast is correct. `orExit(result)` (0.21.0) is the script-shaped form of the `match` above: the value on `Right`, or `error: …` / `code: …` / `hint: …` / `did you mean: …` on stderr and exit status 1 — the same envelope `xl` prints, so a failing script reads like a failing CLI call:
+Or lean on totality so there is nothing to unwrap: literal refs, `upsert`, range fill, `readTypedOr`, `recalculate` are all total. `.unsafe` throws a structured `XLException` (wraps the `XLError`) — fine for scripts where fail-fast is correct. `orExit(result)` (0.21.0) is the script-shaped form of the `match` above: the value on `Right`, or the error on stderr and exit status 1 as `Error: <message>` followed by indented `code: <CODE>`, `did you mean: …` (when the error has candidates) and `hint: …` (when it has one) — `XLError.renderDiagnostic`, the very renderer behind the CLI's `Diagnostics`, so a failing script prints the same bytes as a failing `xl` call (`exitMessage(err)` is that text):
 
 ```scala
 val wb = orExit(Workbook.named("Data", "Summary"))   // DuplicateSheet on a repeat → printed, exit 1
@@ -407,7 +408,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.20.0
+//> using dep com.tjclp::xl:0.21.0
 import com.tjclp.xl.scripting.{*, given}
 
 val data = List(("North", 125000.50), ("South", 98000.25), ("West", 143500.00))

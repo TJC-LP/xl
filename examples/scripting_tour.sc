@@ -108,8 +108,16 @@ println(s"  ✓ D2 on disk: ${salesOnDisk.readTypedOr[BigDecimal](ref"D2", BigDe
 val meta = Excel.readMetadata(checkedOut)
 println(s"  ✓ Sheets: ${meta.sheets.map(_.name.value).mkString(", ")}")
 
-// orExit: the value, or "error:/code:/hint:" on stderr and exit 1 — how a script fails like `xl`
+// orExit: the value, or the CLI's own "Error: … / code: / did you mean: / hint:" block on stderr
+// and exit 1 — how a script fails exactly like `xl`
 val audited = orExit(salesOnDisk.putAt("F3", "audited"))
 println(s"  ✓ orExit unwrapped a ${audited.cells.size}-cell sheet")
+
+// Outline groups: collapse hides the members AND marks the summary row/column after them (the "+"
+// button). Spans carry their axis — RowSpan.parse refuses "E:H", ColSpan.parse refuses "2:3".
+val outlined = audited
+  .collapseRows(orExit(RowSpan.parse("2:3")))
+  .collapseCols(orExit(ColSpan.parse("E:F")))
+println(s"  ✓ collapsed ${outlined.rowProperties.count(_._2.hidden)} rows, row 4 marked: ${outlined.getRowProperties(Row.from1(4)).collapsed}")
 
 println("\n✨ One import. Compile-time refs. Total loops. Either at the edges.")
