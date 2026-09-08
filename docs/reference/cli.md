@@ -720,8 +720,8 @@ Show rows of the used range matching a predicate. Read-only (no `-o`); phase 1 o
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `--where` | string | Yes | — | Filter predicate (grammar below) |
-| `--columns` | string | No | all used | Output columns, e.g. `A,C:E` |
-| `--limit` | int | No | 50 | Max matching rows to display |
+| `--columns` | string | No | all used | Output columns, e.g. `A,C:E`. A column outside the used range is blank (`null` in JSON); a repeated column is a `USAGE` error |
+| `--limit` | int | No | 50 | Max matching rows to display; `0` shows none and reports the match count alone |
 | `--format` | string | No | markdown | `markdown`, `csv`, or `json` |
 | `--header` | flag | No | false | First used row holds column names (excluded from matching) |
 
@@ -747,10 +747,12 @@ xl -f data.xlsx -s Sheet1 filter --where "A LIKE 'Widget%'" --columns A,C:E --fo
 xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
 ```
 
-**Output**: matching rows keep their original row numbers. Markdown adds a `Row` column and a match-count footer; CSV starts with a `row,<labels>` header line; JSON is an array of `{"row": n, "cells": {<label>: <typed value>}}` objects (labels are header names with `--header`, letters otherwise).
+**Output**: matching rows keep their original row numbers, present whatever `--columns` selects. Markdown adds a `Row` column and a match-count footer; CSV starts with a `row,<labels>` header line; JSON is an array of `{"row": n, "cells": {<label>: <typed value>}}` objects (labels are header names with `--header`, letters otherwise; two selected columns under one header name share the key, which keeps the first's position and the last's value).
 
 **Streaming**: `--stream` scans the used range in O(1) memory, keeping only the matching rows
-(since 0.21.0; the output is identical to the in-memory run). No date literals in predicates yet.
+(since 0.21.0). The rows and cells are those the in-memory run renders over the same window; the
+window is each source's own used range, which can differ for a file another producer wrote — see
+**One projection, two sources** above. No date literals in predicates yet.
 
 ---
 
