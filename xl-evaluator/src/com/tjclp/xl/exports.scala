@@ -71,6 +71,8 @@ object formulaExports:
   // arguments (the wildcard-export landmine above).
   export formula.eval.{IterativeMode, RecalcOptions, SheetRenamer, StructuralEditor}
   export formula.printer.{FormulaOps, FormulaShifter}
+  // ADR-017 §2.12 (W2.1): the evaluator-backed FormulaSupport behind wb.edit / sheet.edit.
+  export formula.eval.EvalFormulaSupport
   // Explicit type + val pair (an exported companion loses its type alias for external consumers).
   type QualifiedRef = formula.graph.DependencyGraph.QualifiedRef
   val QualifiedRef: formula.graph.DependencyGraph.QualifiedRef.type =
@@ -90,3 +92,12 @@ object formulaExports:
 
 // Make available at com.tjclp.xl.*
 export formulaExports.*
+
+/**
+ * The `given FormulaSupport` of `import com.tjclp.xl.{*, given}` once xl-evaluator is on the
+ * classpath (ADR-017 §2.12): `wb.edit` / `sheet.edit` shift, restructure and rename through the
+ * evaluator. xl-core deliberately has no default — a formula-blind interpreter would write `#REF!`
+ * — so the choice is made here, explicitly, rather than through a low-priority trait (which does
+ * not survive export forwarding).
+ */
+given ops.FormulaSupport = formula.eval.EvalFormulaSupport
