@@ -12,15 +12,24 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
   // extractARef is inherited from FunctionSpecsBase (shared with OFFSET).
 
   private def extractCellRange(expr: TExpr[?]): Option[CellRange] = expr match
-    case TExpr.RangeRef(range) => Some(range)
-    case TExpr.SheetRange(_, range) => Some(range)
+    case TExpr.RangeRef(range, _) => Some(range)
+    case TExpr.SheetRange(_, range, _) => Some(range)
+    case _ => None
+
+  /**
+   * GH-612: the error an error-literal argument names — `ROW(#REF!)`, `ROWS(#REF!)` are that error,
+   * not a host failure. Takes `TExpr[?]` so the `TExpr[Nothing]` case is not judged unreachable
+   * against a `TExpr[Any]` argument.
+   */
+  private def errorLiteral(expr: TExpr[?]): Option[CellError] = expr match
+    case TExpr.ErrorLit(error) => Some(error)
     case _ => None
 
   /** The sheet a reference expression is qualified with, if any (CELL reads the qualifier). */
   private def extractSheetName(expr: TExpr[?]): Option[SheetName] = expr match
     case TExpr.SheetPolyRef(sheet, _, _) => Some(sheet)
     case TExpr.SheetRef(sheet, _, _, _) => Some(sheet)
-    case TExpr.SheetRange(sheet, _) => Some(sheet)
+    case TExpr.SheetRange(sheet, _, _) => Some(sheet)
     case _ => None
 
   @annotation.tailrec
@@ -61,15 +70,18 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     ) { (exprOpt, ctx) =>
       exprOpt match
         case Some(expr) =>
-          extractARef(expr) match
-            case Some(aref) => Right(BigDecimal(aref.row.index0 + 1))
-            case None =>
-              Left(
-                EvalError.EvalFailed(
-                  "ROW requires a cell reference",
-                  Some(s"ROW($expr)")
+          // GH-612: ROW(#REF!) is #REF!, the error value the argument names
+          errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
+            extractARef(expr) match
+              case Some(aref) => Right(BigDecimal(aref.row.index0 + 1))
+              case None =>
+                Left(
+                  EvalError.EvalFailed(
+                    "ROW requires a cell reference",
+                    Some(s"ROW($expr)")
+                  )
                 )
-              )
+          }
         case None =>
           // Zero-argument form: ROW() returns row of current cell
           ctx.currentCell match
@@ -91,15 +103,17 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     ) { (exprOpt, ctx) =>
       exprOpt match
         case Some(expr) =>
-          extractARef(expr) match
-            case Some(aref) => Right(BigDecimal(aref.col.index0 + 1))
-            case None =>
-              Left(
-                EvalError.EvalFailed(
-                  "COLUMN requires a cell reference",
-                  Some(s"COLUMN($expr)")
+          errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
+            extractARef(expr) match
+              case Some(aref) => Right(BigDecimal(aref.col.index0 + 1))
+              case None =>
+                Left(
+                  EvalError.EvalFailed(
+                    "COLUMN requires a cell reference",
+                    Some(s"COLUMN($expr)")
+                  )
                 )
-              )
+          }
         case None =>
           // Zero-argument form: COLUMN() returns column of current cell
           ctx.currentCell match
@@ -119,17 +133,20 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
       Arity.one,
       flags = FunctionFlags(returnsNumeric = true)
     ) { (expr, ctx) =>
-      extractCellRange(expr) match
-        case Some(range) =>
-          val rowCount = range.rowEnd.index0 - range.rowStart.index0 + 1
-          Right(BigDecimal(rowCount))
-        case None =>
-          Left(
-            EvalError.EvalFailed(
-              "ROWS requires a range argument",
-              Some(s"ROWS($expr)")
+      // GH-612: ROWS(#REF!) is #REF!, the error value the argument names
+      errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
+        extractCellRange(expr) match
+          case Some(range) =>
+            val rowCount = range.rowEnd.index0 - range.rowStart.index0 + 1
+            Right(BigDecimal(rowCount))
+          case None =>
+            Left(
+              EvalError.EvalFailed(
+                "ROWS requires a range argument",
+                Some(s"ROWS($expr)")
+              )
             )
-          )
+      }
     }
 
   val columns: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
@@ -138,17 +155,19 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
       Arity.one,
       flags = FunctionFlags(returnsNumeric = true)
     ) { (expr, ctx) =>
-      extractCellRange(expr) match
-        case Some(range) =>
-          val colCount = range.colEnd.index0 - range.colStart.index0 + 1
-          Right(BigDecimal(colCount))
-        case None =>
-          Left(
-            EvalError.EvalFailed(
-              "COLUMNS requires a range argument",
-              Some(s"COLUMNS($expr)")
+      errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
+        extractCellRange(expr) match
+          case Some(range) =>
+            val colCount = range.colEnd.index0 - range.colStart.index0 + 1
+            Right(BigDecimal(colCount))
+          case None =>
+            Left(
+              EvalError.EvalFailed(
+                "COLUMNS requires a range argument",
+                Some(s"COLUMNS($expr)")
+              )
             )
-          )
+      }
     }
 
   val address: FunctionSpec[String] { type Args = AddressArgs } =

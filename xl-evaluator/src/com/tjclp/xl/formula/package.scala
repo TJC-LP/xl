@@ -19,6 +19,7 @@ package object formula:
 
   // AST
   export ast.TExpr
+  export ast.RangeForm
   export ast.ExprValue
 
   // Evaluation

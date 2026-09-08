@@ -139,6 +139,17 @@ class ScriptingPreludeTest extends FunSuite:
     val clock = Clock.system
     assert(clock != null || true)
 
+  test("GH-612: RangeForm resolves and whole-column references survive shift and print"):
+    assertEquals(FormulaOps.shift("=COUNTIF($A:$A,B1)", 0, 2), Right("=COUNTIF($A:$A,B3)"))
+    assertEquals(FormulaOps.shift("=SUM(1:1)", 3, 0), Right("=SUM(1:1)"))
+    assertEquals(FormulaOps.shift("=A1", 0, -1), Right("=#REF!"))
+    FormulaParser.parse("=E:E") match
+      case Right(TExpr.RangeRef(range, form)) =>
+        assert(range.isFullColumn)
+        assertEquals(form, RangeForm.Columns)
+        assertEquals(FormulaPrinter.print(TExpr.RangeRef(range)), "=E1:E1048576")
+      case other => fail(s"expected a whole-column RangeRef, got $other")
+
   test("display interpolator resolves with given Sheet"):
     val sheet = Sheet("Disp").put(ref"A1", 100)
     given Sheet = sheet

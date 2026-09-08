@@ -395,3 +395,33 @@ class AddressingSpec extends ScalaCheckSuite:
     val constrained = emptyUsedRange.flatMap(fullCol.intersect).getOrElse(CellRange.empty)
     assertEquals(constrained.cells.toList, Nil)
   }
+
+  // ==================== GH-612: anchors on whole-column / whole-row text ====================
+
+  test("GH-612: a $ on a whole-row part anchors the ROW; on a whole-column part the COLUMN") {
+    import com.tjclp.xl.addressing.Anchor
+    val rows = CellRange.parse("$3:$10").toOption.get
+    assert(rows.isFullRow)
+    assertEquals(rows.startAnchor, Anchor.AbsRow)
+    assertEquals(rows.endAnchor, Anchor.AbsRow)
+    val mixedRows = CellRange.parse("$3:10").toOption.get
+    assertEquals(mixedRows.startAnchor, Anchor.AbsRow)
+    assertEquals(mixedRows.endAnchor, Anchor.Relative)
+    val cols = CellRange.parse("$A:$C").toOption.get
+    assert(cols.isFullColumn)
+    assertEquals(cols.startAnchor, Anchor.AbsCol)
+    assertEquals(cols.endAnchor, Anchor.AbsCol)
+  }
+
+  test("GH-612: spellsWholeColumn / spellsWholeRow are the split parse makes") {
+    assert(CellRange.spellsWholeColumn("A"))
+    assert(CellRange.spellsWholeColumn("$XFD"))
+    assert(!CellRange.spellsWholeColumn("A1"))
+    assert(!CellRange.spellsWholeColumn("3"))
+    assert(!CellRange.spellsWholeColumn(""))
+    assert(CellRange.spellsWholeRow("3"))
+    assert(CellRange.spellsWholeRow("$10"))
+    assert(!CellRange.spellsWholeRow("A"))
+    assert(!CellRange.spellsWholeRow("$A$1"))
+    assert(!CellRange.spellsWholeRow(""))
+  }

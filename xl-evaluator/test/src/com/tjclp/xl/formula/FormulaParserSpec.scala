@@ -1,8 +1,8 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.CellRange
-import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.addressing.{ARef, Column}
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.Evaluator
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.Sheet
@@ -990,7 +990,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=SUM(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "SUM" =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range, _)) :: Nil)
+          if spec.name == "SUM" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
       case other => fail(s"Expected Call(SUM) with List(Left(Local range)), got $other")
@@ -1001,7 +1002,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=COUNT(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil)
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range, _)) :: Nil)
           if spec.name == "COUNT" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
@@ -1013,7 +1014,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AVERAGE(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil)
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range, _)) :: Nil)
           if spec.name == "AVERAGE" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
@@ -1345,7 +1346,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MIN(A1:A10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "MIN" =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range, _)) :: Nil)
+          if spec.name == "MIN" =>
         assertEquals(range.toA1, "A1:A10")
       case other => fail(s"Expected Call(MIN), got $other")
     }
@@ -1355,7 +1357,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MAX(B2:B20)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "MAX" =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range, _)) :: Nil)
+          if spec.name == "MAX" =>
         assertEquals(range.toA1, "B2:B20")
       case other => fail(s"Expected Call(MAX), got $other")
     }
@@ -2118,4 +2121,202 @@ class FormulaParserSpec extends ScalaCheckSuite:
     FormulaParser.parse("=IF(A1,1,0)") match
       case Right(expr) => assertEquals(FormulaPrinter.print(expr), "=IF(A1, 1, 0)")
       case Left(err) => fail(s"=IF(A1,1,0) should parse: $err")
+  }
+
+  // ==================== GH-612: full-column / full-row reference forms ====================
+  //
+  // `A:A`, `$A:$A`, `A:C`, `1:1`, `$3:$10` are Excel's whole-column / whole-row forms. They
+  // address the same cells as `A1:A1048576` / `A1:XFD1` but are a different SYNTAX that Excel
+  // keeps through every rewrite, so the AST carries the form (`RangeForm`) and the printer
+  // reproduces it byte-for-byte; an explicit corner range stays an explicit corner range.
+
+  private val genColumnLetters: Gen[String] =
+    Gen
+      .frequency(8 -> Gen.choose(0, 30), 2 -> Gen.choose(0, Column.MaxIndex0))
+      .map(i => Column.from0(i).toLetter)
+
+  private val genRowNumber: Gen[String] =
+    Gen
+      .frequency(
+        8 -> Gen.choose(1, 40),
+        2 -> Gen.choose(1, com.tjclp.xl.addressing.Row.MaxIndex0 + 1)
+      )
+      .map(_.toString)
+
+  private val genDollar: Gen[String] = Gen.oneOf("", "$")
+
+  /** Two column letters in grid order (the parser normalizes, so the source must already be). */
+  private val genFullColumnText: Gen[String] =
+    for
+      a <- genColumnLetters
+      b <- genColumnLetters
+      d1 <- genDollar
+      d2 <- genDollar
+    yield
+      val (lo, hi) =
+        if Column.fromLetter(a).exists(x => Column.fromLetter(b).exists(y => x.index0 <= y.index0))
+        then (a, b)
+        else (b, a)
+      s"$d1$lo:$d2$hi"
+
+  private val genFullRowText: Gen[String] =
+    for
+      a <- genRowNumber
+      b <- genRowNumber
+      d1 <- genDollar
+      d2 <- genDollar
+    yield
+      val (lo, hi) = if a.toInt <= b.toInt then (a, b) else (b, a)
+      s"$d1$lo:$d2$hi"
+
+  private val genBoundedRangeText: Gen[String] =
+    for
+      c1 <- Gen.choose(0, 30)
+      c2 <- Gen.choose(0, 30)
+      r1 <- Gen.choose(1, 40)
+      r2 <- Gen.choose(1, 40)
+      d1 <- genDollar
+      d2 <- genDollar
+      d3 <- genDollar
+      d4 <- genDollar
+    yield
+      val (cLo, cHi) = (math.min(c1, c2), math.max(c1, c2))
+      val (rLo, rHi) = (math.min(r1, r2), math.max(r1, r2))
+      s"$d1${Column.from0(cLo).toLetter}$d2$rLo:$d3${Column.from0(cHi).toLetter}$d4$rHi"
+
+  private val genRangeText: Gen[String] =
+    Gen.oneOf(genFullColumnText, genFullRowText, genBoundedRangeText)
+
+  private val genSheetQualifier: Gen[String] =
+    Gen.oneOf("", "Sheet1!", "'Q1 Data'!", "[2]Book1!")
+
+  property("GH-612: parse ∘ print = id for full-column, full-row and bounded range forms") {
+    forAllNoShrink(genSheetQualifier, genRangeText, Gen.choose(0, 2)) { (sheet, range, shape) =>
+      val source = shape match
+        case 0 => s"=$sheet$range"
+        case 1 => s"=SUM($sheet$range)"
+        case _ => s"=COUNTIF($sheet$range, 1)"
+      FormulaParser.parse(source) match
+        case Right(expr) =>
+          assertEquals(FormulaPrinter.print(expr), source)
+          true
+        case Left(err) => fail(s"$source should parse: $err")
+    }
+  }
+
+  test("GH-612: whole-column and whole-row forms print back exactly as written") {
+    List(
+      "=SUM(A:A)",
+      "=COUNTIF($A:$A, B1)",
+      "=SUM(A:C)",
+      "=SUM($A:C)",
+      "=SUM(A:$C)",
+      "=SUM(1:1)",
+      "=SUM($3:$10)",
+      "=SUM($3:10)",
+      "=SUM(Sheet1!A:A)",
+      "='Q1 Data'!$A:$A",
+      "=SUM(Sheet1!1:1)",
+      "=A:A",
+      "=1:1",
+      "=SUM([2]Book1!A:A)"
+    ).foreach(assertPreserved)
+  }
+
+  test("GH-612: a corner range over every row or column canonicalises to A:A / 1:1 like Excel") {
+    // Excel rewrites a typed A1:A1048576 to A:A at entry, so the corner spelling only reaches xl
+    // from other producers or a putf — and is treated exactly as Excel would have treated it
+    def assertCanonical(source: String, expected: String): Unit =
+      FormulaParser.parse(source) match
+        case Right(expr) => assertEquals(FormulaPrinter.print(expr), expected)
+        case Left(err) => fail(s"$source should parse: $err")
+    assertCanonical("=SUM(A1:A1048576)", "=SUM(A:A)")
+    assertCanonical("=SUM($A$1:$A$1048576)", "=SUM($A:$A)")
+    assertCanonical("=SUM(A$1:C$1048576)", "=SUM(A:C)")
+    assertCanonical("=SUM(A1:XFD1)", "=SUM(1:1)")
+    assertCanonical("=SUM($A$3:$XFD$10)", "=SUM($3:$10)")
+    assertCanonical("=SUM(A1:XFD1048576)", "=SUM(1:1048576)")
+    assertCanonical("=Sheet1!A1:A1048576", "=Sheet1!A:A")
+    // one row or one column short of the edge is still a corner range
+    assertPreserved("=SUM(A2:A1048576)")
+    assertPreserved("=SUM(A1:XFC1)")
+  }
+
+  test("GH-612: the parser records the form it consumed on the range node") {
+    FormulaParser.parse("=A:A") match
+      case Right(TExpr.RangeRef(range, form)) =>
+        assert(range.isFullColumn)
+        assertEquals(form, RangeForm.Columns)
+      case other => fail(s"expected RangeRef, got $other")
+    FormulaParser.parse("=$3:$10") match
+      case Right(TExpr.RangeRef(range, form)) =>
+        assert(range.isFullRow)
+        assertEquals(form, RangeForm.Rows)
+        assertEquals(range.startAnchor, com.tjclp.xl.Anchor.AbsRow)
+        assertEquals(range.endAnchor, com.tjclp.xl.Anchor.AbsRow)
+      case other => fail(s"expected RangeRef, got $other")
+    FormulaParser.parse("=A1:A1048576") match
+      case Right(TExpr.RangeRef(range, form)) =>
+        assert(range.isFullColumn)
+        assertEquals(form, RangeForm.Columns) // Excel's entry canonicalisation
+      case other => fail(s"expected RangeRef, got $other")
+    FormulaParser.parse("=A2:A1048576") match
+      case Right(TExpr.RangeRef(_, form)) => assertEquals(form, RangeForm.Cells)
+      case other => fail(s"expected RangeRef, got $other")
+    FormulaParser.parse("=Sheet1!A:C") match
+      case Right(TExpr.SheetRange(_, _, form)) => assertEquals(form, RangeForm.Columns)
+      case other => fail(s"expected SheetRange, got $other")
+    FormulaParser.parse("=SUM(A:A)") match
+      case Right(TExpr.Call(_, Left(TExpr.RangeLocation.Local(_, form)) :: Nil)) =>
+        assertEquals(form, RangeForm.Columns)
+      case other => fail(s"expected SUM over a Local location, got $other")
+  }
+
+  test("GH-612: error literals parse, print and round-trip in every position") {
+    CellError.values.foreach { err =>
+      val source = s"=${err.toExcel}"
+      FormulaParser.parse(source) match
+        case Right(TExpr.ErrorLit(parsed)) => assertEquals(parsed, err)
+        case other => fail(s"$source should parse to ErrorLit, got $other")
+      assertPreserved(source)
+    }
+    assertPreserved("=IF(A1, #N/A, 1)")
+    assertPreserved("=#REF!+B2")
+    assertPreserved("=SUM(#REF!)")
+    assertPreserved("=IFERROR(#DIV/0!, 0)")
+    // range-typed slots carry the error as RangeLocation.Error — what Excel writes after a delete
+    assertPreserved("=COUNTIF(#REF!, B1)")
+    assertPreserved("=VLOOKUP(A1, #REF!, 2, FALSE)")
+    assertPreserved("=SUMPRODUCT(#REF!, B1:B3)")
+    FormulaParser.parse("=COUNTIF(#REF!,1)") match
+      case Right(TExpr.Call(_, (TExpr.RangeLocation.Error(error), _))) =>
+        assertEquals(error, CellError.Ref)
+      case other => fail(s"expected COUNTIF over a RangeLocation.Error, got $other")
+    FormulaParser.parse("=SUM(#N/A)") match
+      case Right(TExpr.Call(_, Left(TExpr.RangeLocation.Error(error)) :: Nil)) =>
+        assertEquals(error, CellError.NA)
+      case other => fail(s"expected SUM over a RangeLocation.Error, got $other")
+  }
+
+  test(
+    "GH-612: error literals parse case-insensitively and print upper-cased; unknown codes fail whole"
+  ) {
+    def assertCanonical(source: String, expected: String): Unit =
+      FormulaParser.parse(source) match
+        case Right(expr) => assertEquals(FormulaPrinter.print(expr), expected)
+        case Left(err) => fail(s"$source should parse: $err")
+    assertCanonical("=#ref!", "=#REF!")
+    assertCanonical("=#n/a", "=#N/A")
+    assertCanonical("=#Div/0!", "=#DIV/0!")
+    assertCanonical("=#name?", "=#NAME?")
+    // the code is matched, not scanned: #N/A followed by a division re-parses as written
+    assertPreserved("=#N/A/2")
+    assertPreserved("=1/#N/A")
+    assertPreserved("=IF(#N/A/2, 1, 0)")
+    FormulaParser.parse("=#GETTING_DATA") match
+      case Left(err) => assert(err.toString.contains("#GETTING_DATA"), err.toString)
+      case Right(expr) => fail(s"#GETTING_DATA is not a CellError, got $expr")
+    FormulaParser.parse("=#SPILL!") match
+      case Left(err) => assert(err.toString.contains("#SPILL!"), err.toString)
+      case Right(expr) => fail(s"#SPILL! is not a CellError, got $expr")
   }
