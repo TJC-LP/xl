@@ -74,6 +74,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--columns` token (`USAGE`). A property law over generated books pins that both
   sources produce byte-equal payloads for every read verb on shared capabilities (values, cached
   formulas, comments, styled-but-empty cells, openpyxl-style package-absolute rels targets).
+- **Scripting completions** (#589): `Excel.writeChecked(wb, path[, RecalcOptions]): RecalcResult`
+  computes only the uncached formulas (`recalculateUncached`), writes, and returns the result —
+  the write for a freshly built model; `writeRecalculated` gains a `RecalcOptions` overload and
+  `Excel.write` keeps its 0.19 semantics. `Excel.readSheet(path, name)` (an `XLException` whose
+  `SheetNotFound(name, available)` — the case gains an `available` field — lists the sheets and
+  offers the nearest as `candidates`), `Excel.readMetadata(path): LightMetadata` (its inflated parts
+  held to the reader's ZIP-bomb limits), `Excel.modifyR(path)(f: Workbook => XLResult[Workbook])`
+  (a `Left` aborts before any scratch file). The prelude adds `orExit(result)` / `exitMessage(err)`,
+  which print `XLError.renderDiagnostic` — the one renderer the CLI's `Diagnostics` now delegates to
+  (`Error: …`, indented `code:`, `did you mean:`, `hint:`) — and exit 1. `Sheet.collapseRows` /
+  `collapseCols` and `expandRows`/`expandCols` (`(first, last)`, `RowSpan`/`ColSpan`, and
+  `XLResult` `CellRange` forms that refuse a range of the other axis) compose hidden members with
+  the collapsed summary marker through the same fold as `groupRows`/`ungroupRows` (#465, second
+  half); an expand over rows/columns without properties is a no-op. Docs, examples and the
+  xl-scripting skill write fresh models with `writeChecked` or `writeRecalculated`, never plain
+  `write`.
 
 ### Changed
 

@@ -135,7 +135,7 @@ object SheetCommands:
     for
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
       updatedWb <- IO.fromEither(wb.remove(sheetName).left.map {
-        case XLError.SheetNotFound(_) =>
+        case XLError.SheetNotFound(_, _) =>
           new Exception(
             s"Sheet '$name' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
           )
@@ -167,7 +167,7 @@ object SheetCommands:
       oldSheetName <- IO.fromEither(SheetName(oldName).left.map(e => new Exception(e)))
       newSheetName <- IO.fromEither(SheetName(newName).left.map(e => new Exception(e)))
       updatedWb <- IO.fromEither(SheetRenamer.rename(wb, oldSheetName, newSheetName).left.map {
-        case XLError.SheetNotFound(_) =>
+        case XLError.SheetNotFound(_, _) =>
           new Exception(
             s"Sheet '$oldName' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
           )
@@ -315,7 +315,7 @@ object SheetCommands:
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
       state = if veryHide then Some("veryHidden") else Some("hidden")
       updatedWb <- IO.fromEither(wb.setSheetState(sheetName, state).left.map {
-        case XLError.SheetNotFound(_) =>
+        case XLError.SheetNotFound(_, _) =>
           new Exception(
             s"Sheet '$name' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
           )
@@ -370,7 +370,7 @@ object SheetCommands:
     for
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
       updatedWb <- IO.fromEither(wb.setSheetState(sheetName, None).left.map {
-        case XLError.SheetNotFound(_) =>
+        case XLError.SheetNotFound(_, _) =>
           new Exception(
             s"Sheet '$name' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
           )

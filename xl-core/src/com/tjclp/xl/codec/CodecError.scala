@@ -9,6 +9,15 @@ import com.tjclp.xl.error.XLError
  *
  * These errors are specific to cell-level encoding/decoding and can be converted to XLError when
  * needed.
+ *
+ * There is deliberately no `UncachedFormula` case (GH-589 revisited the GH-477 decision): typed
+ * reads decode through `Cell.effectiveValue`, so a formula with no cached value surfaces as
+ * `TypeMismatch(expected, Formula(_, None, _))` — `Cell.isUncachedFormula` and
+ * `Sheet.readTypedStrict` make the distinction without a new error shape, and every exhaustive
+ * `CodecError` match stays closed (in the evaluator: `EvalError.toXLError`,
+ * `SheetEvaluator.evalErrorToXLError`; the CLI renders `XLError` and has no `CodecError` site).
+ * Adding the case means changing those evaluator sites in the same commit; the recalculating writes
+ * (`Excel.writeChecked` / `writeRecalculated`) remove the condition at the source instead.
  */
 enum CodecError:
   /** Type mismatch when reading a cell */

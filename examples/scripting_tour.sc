@@ -93,4 +93,31 @@ val placed = Sheet("Orders").putTable(ref"A1", orders, "Orders").unsafe // heade
 val back = placed.sheet.readRowsByHeader[Order](Row.from1(1))            // Either[RowCodecError, Vector[Order]]
 println(s"  ✓ Records: wrote ${placed.count} rows over ${placed.range.map(_.toA1).getOrElse("-")}, read back ${back.map(_.size).getOrElse(-1)}")
 
+// ========== 9. Writing a model: writeChecked fills in the uncached formulas ==========
+// `stamped` still holds the fx"" cells exactly as authored — no cached values. Excel.write would
+// ship them blank to every cached-value consumer (openpyxl data_only, pandas, previewers, Excel
+// before its first recalc); writeChecked computes exactly those cells, writes, and reports.
+val checkedOut = "/tmp/scripting-tour-checked.xlsx"
+val checked = Excel.writeChecked(Workbook(stamped), checkedOut)
+println(s"  ✓ ${checked.summary}") // "Recalculated 3 formulas" — the same line `xl recalc` prints
+
+// One sheet straight from disk (a typo throws an XLException naming the candidate sheets), and
+// the workbook's shape without loading a cell.
+val salesOnDisk = Excel.readSheet(checkedOut, "Sales")
+println(s"  ✓ D2 on disk: ${salesOnDisk.readTypedOr[BigDecimal](ref"D2", BigDecimal(0))}")
+val meta = Excel.readMetadata(checkedOut)
+println(s"  ✓ Sheets: ${meta.sheets.map(_.name.value).mkString(", ")}")
+
+// orExit: the value, or the CLI's own "Error: … / code: / did you mean: / hint:" block on stderr
+// and exit 1 — how a script fails exactly like `xl`
+val audited = orExit(salesOnDisk.putAt("F3", "audited"))
+println(s"  ✓ orExit unwrapped a ${audited.cells.size}-cell sheet")
+
+// Outline groups: collapse hides the members AND marks the summary row/column after them (the "+"
+// button). Spans carry their axis — RowSpan.parse refuses "E:H", ColSpan.parse refuses "2:3".
+val outlined = audited
+  .collapseRows(orExit(RowSpan.parse("2:3")))
+  .collapseCols(orExit(ColSpan.parse("E:F")))
+println(s"  ✓ collapsed ${outlined.rowProperties.count(_._2.hidden)} rows, row 4 marked: ${outlined.getRowProperties(Row.from1(4)).collapsed}")
+
 println("\n✨ One import. Compile-time refs. Total loops. Either at the edges.")

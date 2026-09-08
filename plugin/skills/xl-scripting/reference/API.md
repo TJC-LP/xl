@@ -98,6 +98,10 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.freezeAt(ref"A3")` | `Sheet` | freeze rows above + cols left; `freezeAt(anchor, scrolledTo)` sets the pane scroll target (0.13.0) |
 | `sheet.withTabColor(color)` | `Sheet` | sheet tab color (rgb or theme; 0.13.0). `unfreeze` removes freeze panes |
 | `sheet.withDataValidation(range, DataValidation.list("\"Yes,No\""))` | `Sheet` | list dropdown (0.13.0); also `DataValidation.listOf("Yes", "No")` and a `Vector[CellRange]` overload |
+| `sheet.collapseRows(first: Row, last: Row)` / `collapseRows(rows: RowSpan)` | `Sheet` | 0.21.0 ([#465](https://github.com/TJC-LP/xl/issues/465)): hide the member rows AND mark the row after the span `collapsed` (Excel's "+" button) — the same fold as `groupRows(span, 1, collapsed = true)` / `group-rows --collapsed`; members without an outline level become a level-1 group, an existing level is kept; total (either order, no summary past the last row). Full-row spans are runtime strings: `sheet.collapseRows(orExit(RowSpan.parse("5:8")))` |
+| `sheet.collapseRows(range: CellRange)` | `XLResult[Sheet]` | 0.21.0: full-row ranges only (`"5:8".asRange`); a column range or cell range is `InvalidReference`, never projected onto the row axis |
+| `sheet.collapseCols(first: Column, last: Column)` / `collapseCols(cols: ColSpan)` / `collapseCols(range: CellRange): XLResult[Sheet]` | `Sheet` | 0.21.0: the column forms — `ColSpan.parse("E:H")` for a letter span (the `ref` macro takes `A1` / `A1:B2` shapes only; whole-row/column spans are runtime strings); the `CellRange` form takes full columns only |
+| `sheet.expandRows(…)` / `sheet.expandCols(…)` | `Sheet` / `XLResult[Sheet]` | 0.21.0: the inverses — members unhidden, marker cleared, outline level kept; rows/columns without properties stay untouched (same overloads and axis rules) |
 
 Codec types for `put`/`readTyped*`: String, Int, Long, Double, BigDecimal, Boolean, LocalDate (→ Date format), LocalDateTime (→ DateTime format), RichText.
 
@@ -273,9 +277,13 @@ SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AV
 | Method | Notes |
 |--------|-------|
 | `Excel.read(path: String): Workbook` | throws `XLException`/IO errors at this edge |
-| `Excel.write(wb, path: String): Unit` | also accepts `XLResult[Workbook]` |
-| `Excel.writeRecalculated(wb, path: String): RecalcResult` | 0.13.0: recalc + write (even on partial failure) + return the result; overloads add `Clock`, `Clock`+`Rng`, or accept `XLResult[Workbook]` |
+| `Excel.readSheet(path, name: String): Sheet` | 0.21.0: one sheet by exact name — `Excel.read` plus the lookup, so the whole workbook is loaded (stream one sheet of a large file with `ExcelIO.readSheetStream`); a missing name throws `XLException(SheetNotFound(name, available))`: the message lists the available sheets, `error.candidates` the nearest ("did you mean") |
+| `Excel.readMetadata(path): LightMetadata` | 0.21.0: `sheets` (`SheetInfo`: name, sheetId, state, dimension), `definedNames`, `date1904` — no cells loaded, instant on any file size, the inflated parts held to `Excel.read`'s ZIP-bomb limits; `XLException` on an unreadable or over-limit package |
+| `Excel.write(wb, path: String): Unit` | also accepts `XLResult[Workbook]`; writes formulas with whatever cache they carry — never for a freshly built model |
+| `Excel.writeChecked(wb, path: String): RecalcResult` | 0.21.0: compute ONLY the uncached formulas (`recalculateUncached`), write, return the result — every existing cache is written byte for byte; overloads take `RecalcOptions` or accept `XLResult[Workbook]` |
+| `Excel.writeRecalculated(wb, path: String): RecalcResult` | 0.13.0: recalc EVERY formula + write (even on partial failure) + return the result; overloads add `Clock`, `Clock`+`Rng`, `RecalcOptions` (0.21.0), or accept `XLResult[Workbook]` |
 | `Excel.modify(path)(f: Workbook => Workbook): Unit` | atomic in-place replacement |
+| `Excel.modifyR(path)(f: Workbook => XLResult[Workbook]): Unit` | 0.21.0: the same replacement for a fallible transform; `Left` throws `XLException` BEFORE any write (file byte-identical, no scratch file) |
 
 ### Streaming (`ExcelIO`) — 100k+ rows, O(1) memory
 
@@ -308,6 +316,9 @@ sheet.displayCell(ref"A1")          // String
 ```scala
 XLResult[A]                  // = Either[XLError, A]
 err.message                  // human-readable
+err.code; err.hint; err.candidates   // 0.20.0: stable SCREAMING_SNAKE code, next step, "did you mean"
 result.unsafe                // throws XLException(err) — the one sanctioned unwrap (prelude)
 result.getOrElse(fallback)
+orExit(result)               // 0.21.0: the value, or print exitMessage(err) to stderr and exit 1
+exitMessage(err)             // 0.21.0: err.renderDiagnostic — "Error: …\n  code: …" then "  did you mean: …" / "  hint: …" when present; the CLI's exact envelope
 ```

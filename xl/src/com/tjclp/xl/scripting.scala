@@ -48,9 +48,10 @@ object scripting:
   export com.tjclp.xl.io.ExcelIO
   export com.tjclp.xl.io.RowData // streaming row type (readStream/writeStream)
 
-  // Recalculating write (GH-360): Excel.writeRecalculated — recalculate, write, return the
-  // RecalcResult. Defined in this aggregate module (the only one seeing both the evaluator and
-  // the sync facade) as extensions on Excel.type; the wildcard export puts them in scope here.
+  // Recalculating writes (GH-360 writeRecalculated, GH-589 writeChecked): recalculate (all, or
+  // only the uncached cells), write, return the RecalcResult. Defined in this aggregate module
+  // (the only one seeing both the evaluator and the sync facade) as extensions on Excel.type; the
+  // wildcard export puts them in scope here.
   export com.tjclp.xl.io.ExcelRecalc.*
 
   // The one sanctioned unwrap: .unsafe / .getOrElse on XLResult
@@ -60,6 +61,36 @@ object scripting:
   // explicitly — wildcard exports skip givens, and a LowPriority default would not survive the
   // export hop (see the display-strategy note above). `Edit` and its targets come through api.*.
   given com.tjclp.xl.ops.FormulaSupport = com.tjclp.xl.formula.eval.EvalFormulaSupport
+
+  // ===== GH-589 (W2.8) scripting completions — one block, integrate as a unit =====
+  // Lightweight metadata returned by Excel.readMetadata: xl-ooxml types, not part of the core api.
+  export com.tjclp.xl.ooxml.metadata.{LightMetadata, SheetInfo}
+
+  /**
+   * Unwrap an `XLResult` at the script edge or end the run: on `Left` the [[exitMessage]] goes to
+   * stderr and the process exits with status 1. The script-shaped twin of `.unsafe` — a failed step
+   * reports the error's code, candidates and hint instead of a stack trace, in the CLI's own
+   * envelope.
+   *
+   * {{{
+   * val wb = orExit(Workbook.named("Data", "Summary"))
+   * val sheet = orExit(wb("Summary"))
+   * }}}
+   */
+  def orExit[A](result: com.tjclp.xl.error.XLResult[A]): A = result match
+    case Right(value) => value
+    case Left(err) =>
+      System.err.println(exitMessage(err))
+      sys.exit(1)
+
+  /**
+   * What [[orExit]] prints: `Error: <message>`, then indented `code: <CODE>`, `did you mean: …`
+   * (when the error has candidates) and `hint: …` (when it has one) — `XLError.renderDiagnostic`,
+   * the very renderer behind the CLI's `Diagnostics.render`, so a script and `xl` print the same
+   * bytes for the same error (ADR-017 §2.3/§2.7).
+   */
+  def exitMessage(err: com.tjclp.xl.error.XLError): String = err.renderDiagnostic
+  // ===== end GH-589 block =====
 
   // Script-only sugar: total smart detection of currency/percent/date/number/boolean from raw
   // strings ("$1,234.56".toFormatted → Currency). Kept out of the pure core import — heuristics

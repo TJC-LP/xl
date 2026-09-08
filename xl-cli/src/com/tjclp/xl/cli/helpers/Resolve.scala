@@ -6,7 +6,6 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
 import com.tjclp.xl.cli.contract.{CliError, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.ooxml.metadata.LightMetadata
-import com.tjclp.xl.text.Suggest
 
 /**
  * THE sheet rule (ADR-017 §2.5), stated once and used by every verb, batch op and streaming path:
@@ -245,14 +244,15 @@ object Resolve:
           s"Available sheets: ${names.mkString(", ")}"
       )
 
-  /** `SHEET_NOT_FOUND` with the text the CLI has always printed and the nearest names. */
+  /**
+   * `SHEET_NOT_FOUND` with the text the CLI has always printed; the nearest names are the domain
+   * error's own `candidates` (`SheetNotFound(name, available)`, GH-589), so `xl` and a script's
+   * `orExit` offer the same "did you mean".
+   */
   def sheetNotFound(names: Vector[String], name: String): CliError =
     CliError
-      .fromXLError(XLError.SheetNotFound(name), None)
-      .copy(
-        message = s"Sheet not found: $name. Available: ${names.mkString(", ")}",
-        candidates = Suggest.closest(name, names)
-      )
+      .fromXLError(XLError.SheetNotFound(name, names), None)
+      .copy(message = s"Sheet not found: $name. Available: ${names.mkString(", ")}")
 
   /**
    * A ref of the wrong shape for the verb — a range where one cell is needed, a column that is not

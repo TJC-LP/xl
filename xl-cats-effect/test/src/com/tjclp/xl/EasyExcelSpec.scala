@@ -3,7 +3,9 @@ package com.tjclp.xl
 import cats.effect.IO
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CellCodec.given // For CellWriter given instances
+import com.tjclp.xl.error.{XLError, XLException}
 import com.tjclp.xl.io.Excel
+import com.tjclp.xl.ooxml.metadata.LightMetadata
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.unsafe.* // For .unsafe extension
@@ -202,4 +204,100 @@ class EasyExcelSpec extends CatsEffectSuite:
     } finally {
       Files.deleteIfExists(tempFile)
     }
+  }
+
+  // ========== GH-589: sync-facade completions (readSheet / readMetadata / modifyR) ==========
+
+  private def withTempXlsx[A](prefix: String)(body: java.nio.file.Path => A): A =
+    val tempFile = Files.createTempFile(prefix, ".xlsx")
+    try body(tempFile)
+    finally Files.deleteIfExists(tempFile)
+
+  private val twoSheets: Workbook = Workbook.empty
+    .put(Sheet("Data").put("A1", 1).unsafe)
+    .put(Sheet("Summary").put("A1", "total").unsafe)
+    .remove("Sheet1")
+    .unsafe
+
+  test("readSheet returns the named sheet") {
+    withTempXlsx("test-readsheet") { tempFile =>
+      Excel.write(twoSheets, tempFile.toString)
+      val summary = Excel.readSheet(tempFile.toString, "Summary")
+      assertEquals(summary.name.value, "Summary")
+      assertEquals(summary.cell("A1").map(_.value), Some(CellValue.Text("total")))
+    }
+  }
+
+  test("readSheet on a missing sheet throws XLException(SheetNotFound) naming the candidates") {
+    withTempXlsx("test-readsheet-missing") { tempFile =>
+      Excel.write(twoSheets, tempFile.toString)
+      val ex = intercept[XLException] {
+        Excel.readSheet(tempFile.toString, "Sumary")
+      }
+      assertEquals(ex.error, XLError.SheetNotFound("Sumary", Vector("Data", "Summary")))
+      assertEquals(ex.error.code, "SHEET_NOT_FOUND")
+      // the candidates are the error's, not prose in the message
+      assertEquals(ex.error.candidates, Vector("Summary"))
+      assertEquals(ex.getMessage, "Sheet not found: 'Sumary'. Available: Data, Summary")
+      assertEquals(ex.getMessage, ex.error.message)
+      assert(
+        ex.error.renderDiagnostic.contains("  did you mean: Summary"),
+        ex.error.renderDiagnostic
+      )
+    }
+  }
+
+  test("readSheet with no near miss still lists the available sheets") {
+    withTempXlsx("test-readsheet-far") { tempFile =>
+      Excel.write(twoSheets, tempFile.toString)
+      val ex = intercept[XLException] {
+        Excel.readSheet(tempFile.toString, "Zebra")
+      }
+      assertEquals(ex.error, XLError.SheetNotFound("Zebra", Vector("Data", "Summary")))
+      assertEquals(ex.error.candidates, Vector.empty)
+      assertEquals(ex.getMessage, "Sheet not found: 'Zebra'. Available: Data, Summary")
+    }
+  }
+
+  test("readMetadata lists sheets without loading cells") {
+    withTempXlsx("test-readmetadata") { tempFile =>
+      Excel.write(twoSheets, tempFile.toString)
+      val meta: LightMetadata = Excel.readMetadata(tempFile.toString)
+      assertEquals(meta.sheets.map(_.name.value), Vector("Data", "Summary"))
+      assertEquals(meta.definedNames, Vector.empty)
+    }
+  }
+
+  test("modifyR writes the Right workbook in place") {
+    withTempXlsx("test-modifyr") { tempFile =>
+      Excel.write(twoSheets, tempFile.toString)
+      Excel.modifyR(tempFile.toString)(_.update("Data", _.put("B1", "changed").unsafe))
+      val loaded = Excel.read(tempFile.toString)
+      assertEquals(
+        loaded.get("Data").flatMap(_.cell("B1")).map(_.value),
+        Some(CellValue.Text("changed"))
+      )
+    }
+  }
+
+  test("modifyR on Left throws XLException and leaves the file byte-identical") {
+    // Own directory: the scratch-file scan below must see only this test's files.
+    val dir = Files.createTempDirectory("test-modifyr-left")
+    val tempFile = dir.resolve("target.xlsx")
+    try
+      Excel.write(twoSheets, tempFile.toString)
+      val before = Files.readAllBytes(tempFile).toVector
+      val ex = intercept[XLException] {
+        Excel.modifyR(tempFile.toString)(_.update("NoSuchSheet", identity))
+      }
+      assertEquals(ex.error, XLError.SheetNotFound("NoSuchSheet"))
+      assertEquals(Files.readAllBytes(tempFile).toVector, before)
+      // No scratch file was left behind next to the target
+      val siblings = Files.list(dir)
+      try
+        assertEquals(siblings.map(_.getFileName.toString).toList, java.util.List.of("target.xlsx"))
+      finally siblings.close()
+    finally
+      Files.deleteIfExists(tempFile)
+      Files.deleteIfExists(dir)
   }

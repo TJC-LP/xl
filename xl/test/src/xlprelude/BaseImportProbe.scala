@@ -52,3 +52,23 @@ object BaseImportProbe:
   val cfSheet: Sheet = Sheet(SheetName.unsafe("CF")).conditionalFormat(ref"A1:A9", cfRule, cfScale)
   val cfBlocks: Vector[ConditionalFormat.Rules] = cfSheet.typedConditionalFormats
   val cfText: CfTextOp = CfTextOp.Contains
+
+  // GH-589: the recalculating writes reach the base import (package-level ExcelRecalc export), so
+  // a model built here has the cache-completing write and not only Excel.write. Never invoked.
+  val checkedWrite: Workbook => RecalcResult = wb => Excel.writeChecked(wb, "/tmp/never-run.xlsx")
+  val recalculatedWrite: (Workbook, RecalcOptions) => RecalcResult =
+    (wb, opts) => Excel.writeRecalculated(wb, "/tmp/never-run.xlsx", opts)
+
+  // GH-465 / GH-589: outline collapse composes hidden members + the collapsed summary marker
+  // (whole-row/column spans are runtime strings — the ref macro takes A1 / A1:B2 shapes only —
+  // and ColSpan/RowSpan carry the axis; the CellRange overload is XLResult and refuses the other)
+  val colSpan: XLResult[ColSpan] = ColSpan.parse("E:H")
+  val colRange: Either[String, CellRange] = CellRange.parse("E:H")
+  val collapsed: Sheet =
+    cfSheet.collapseRows(Row.from1(2), Row.from1(4)).collapseCols(Column.from0(4), Column.from0(7))
+  val reopened: Sheet =
+    colSpan
+      .fold(_ => collapsed, span => collapsed.expandCols(span))
+      .expandRows(Row.from1(2), Row.from1(4))
+  val viaRange: XLResult[Sheet] =
+    colRange.left.map(XLError.InvalidReference(_)).flatMap(r => collapsed.expandCols(r))

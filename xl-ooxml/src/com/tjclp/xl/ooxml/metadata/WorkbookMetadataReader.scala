@@ -2,12 +2,13 @@ package com.tjclp.xl.ooxml.metadata
 
 import java.io.InputStream
 import java.nio.file.Path
-import java.util.zip.ZipFile
+import java.util.zip.{ZipEntry, ZipFile}
 
 import scala.xml.*
 
 import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
 import com.tjclp.xl.ooxml.{FormulaStorage, Relationships, XmlSecurity}
 import com.tjclp.xl.workbooks.DefinedName
 
@@ -71,23 +72,33 @@ object WorkbookMetadataReader:
    * Read lightweight metadata from XLSX file.
    *
    * Parses workbook.xml for sheets/names, and each worksheet for dimension element. Stops parsing
-   * worksheets at <sheetData> for O(1) memory per sheet.
+   * worksheets at <sheetData> for O(1) memory per sheet. The parts it inflates in memory
+   * (`workbook.xml`, its rels) are held to [[ReaderConfig.default]]'s ZIP-bomb limits, exactly as
+   * `XlsxReader` holds every entry; see the overload for other limits.
    *
    * @param path
    *   Path to XLSX file
    * @return
    *   LightMetadata with sheet info and defined names
    */
-  def read(path: Path): XLResult[LightMetadata] =
+  def read(path: Path): XLResult[LightMetadata] = read(path, ReaderConfig.default)
+
+  /**
+   * [[read]] under explicit limits: `maxUncompressedSize` caps each inflated part and
+   * `maxCompressionRatio` its compression ratio (GH-589 — `Excel.readMetadata` is a public entry
+   * point that may face untrusted input). Worksheet `<dimension>` reads stream through SAX and stop
+   * at the first `<dimension>`/`<sheetData>`, so they never inflate a part in memory.
+   */
+  def read(path: Path, config: ReaderConfig): XLResult[LightMetadata] =
     openZipFile(path).flatMap { zipFile =>
       try
         for
           // Parse workbook.xml
-          wbXml <- readPart(zipFile, "xl/workbook.xml")
+          wbXml <- readPart(zipFile, "xl/workbook.xml", config)
           wbElem <- XmlSecurity.parseSafe(wbXml, "xl/workbook.xml")
 
           // Parse workbook.xml.rels to map rId -> sheet path
-          wbRels <- readPartOpt(zipFile, "xl/_rels/workbook.xml.rels")
+          wbRels <- readPartOpt(zipFile, "xl/_rels/workbook.xml.rels", config)
           rIdMap = parseRelationships(wbRels)
 
           // Parse sheets from workbook.xml
@@ -133,7 +144,7 @@ object WorkbookMetadataReader:
     openZipFile(path).flatMap { zipFile =>
       try
         for
-          wbXml <- readPart(zipFile, "xl/workbook.xml")
+          wbXml <- readPart(zipFile, "xl/workbook.xml", ReaderConfig.default)
           wbElem <- XmlSecurity.parseSafe(wbXml, "xl/workbook.xml")
           sheetRefs <- parseSheetRefs(wbElem)
         yield sheetRefs.map { ref =>
@@ -154,7 +165,7 @@ object WorkbookMetadataReader:
     openZipFile(path).flatMap { zipFile =>
       try
         for
-          wbXml <- readPart(zipFile, "xl/workbook.xml")
+          wbXml <- readPart(zipFile, "xl/workbook.xml", ReaderConfig.default)
           wbElem <- XmlSecurity.parseSafe(wbXml, "xl/workbook.xml")
         yield parseDefinedNames(wbElem)
       finally zipFile.close()
@@ -179,21 +190,59 @@ object WorkbookMetadataReader:
     state: Option[String]
   )
 
-  private def readPart(zipFile: ZipFile, entryName: String): XLResult[String] =
+  private def readPart(
+    zipFile: ZipFile,
+    entryName: String,
+    config: ReaderConfig
+  ): XLResult[String] =
     Option(zipFile.getEntry(entryName)) match
       case None => Left(XLError.ParseError(entryName, s"Missing required part: $entryName"))
-      case Some(entry) =>
-        val is = zipFile.getInputStream(entry)
-        try Right(new String(is.readAllBytes(), "UTF-8"))
-        finally is.close()
+      case Some(entry) => readEntry(zipFile, entry, config).map(new String(_, "UTF-8"))
 
-  private def readPartOpt(zipFile: ZipFile, entryName: String): XLResult[Option[String]] =
+  private def readPartOpt(
+    zipFile: ZipFile,
+    entryName: String,
+    config: ReaderConfig
+  ): XLResult[Option[String]] =
     Option(zipFile.getEntry(entryName)) match
       case None => Right(None)
-      case Some(entry) =>
-        val is = zipFile.getInputStream(entry)
-        try Right(Some(new String(is.readAllBytes(), "UTF-8")))
-        finally is.close()
+      case Some(entry) => readEntry(zipFile, entry, config).map(b => Some(new String(b, "UTF-8")))
+
+  /**
+   * One entry's bytes under the reader's ZIP-bomb limits (the checks `XlsxReader` applies to every
+   * entry, GH-589): inflation stops one byte past `maxUncompressedSize` instead of materialising
+   * the whole entry first, and the uncompressed/compressed ratio is held to `maxCompressionRatio`.
+   * A limit of 0 disables that check, as in [[ReaderConfig]].
+   */
+  private def readEntry(
+    zipFile: ZipFile,
+    entry: ZipEntry,
+    config: ReaderConfig
+  ): XLResult[Array[Byte]] =
+    val is = zipFile.getInputStream(entry)
+    try
+      val cap =
+        if config.maxUncompressedSize > 0 then
+          math.min(config.maxUncompressedSize, (Int.MaxValue - 1).toLong).toInt
+        else Int.MaxValue - 1
+      val bytes = is.readNBytes(cap + 1)
+      val compressed = entry.getCompressedSize
+      val ratio = if compressed > 0 then bytes.length.toDouble / compressed.toDouble else 0.0
+      if bytes.length > cap then
+        Left(
+          XLError.SecurityError(
+            s"Uncompressed size of '${entry.getName}' exceeds limit (${config.maxUncompressedSize} bytes)"
+          )
+        )
+      else if config.maxCompressionRatio > 0 && compressed > 0 && ratio > config.maxCompressionRatio
+      then
+        Left(
+          XLError.SecurityError(
+            f"Compression ratio ($ratio%.1f:1) for '${entry.getName}' exceeds limit (${config.maxCompressionRatio}:1) - possible ZIP bomb"
+          )
+        )
+      else Right(bytes)
+    finally is.close()
 
   private def parseRelationships(xmlOpt: Option[String]): Map[String, String] =
     xmlOpt match
