@@ -9,19 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`RESOURCE_LIMIT`** (#636): a CLI error code (exit 3) for a workbook that does not fit in
-  memory. Every in-memory load now runs under `MemoryGuard` (xl-cli): an `OutOfMemoryError` raised
-  while parsing — fatal to cats-effect, which halted the binary with a raw stack trace, exit 1 and
-  no `--json` envelope — is caught inside the load's own thunk (the only place the runtime lets it
-  be caught) and reported as `RESOURCE_LIMIT`, the heap size in the message and `use --stream for
-  constant-memory reads, or raise the heap with -Xmx<size> (native image: xl -Xmx64g …)` as the
-  hint. When `--max-size` lifts the default, a load whose estimated footprint — 30× the worksheet
-  and shared-string XML, sized from the zip's central directory without inflating anything —
-  exceeds 70% of the heap is refused before a byte is parsed, same code and hint, the file in
-  `error.location` (the 0.21.0 dogfood book: 1.09 GB of sheet XML needed 36–45 GB of heap, so the
-  estimate brackets the observed need). `-Xmx` is the override: the estimate is measured against
-  the heap the process actually has. The code is in `xl schema --json`, `generated/error-codes.md`
-  and the `--max-size` global's doc; every other `Error` keeps its `INTERNAL` classification.
+- **`RESOURCE_LIMIT` and `MEMORY_PRESSURE`** (#636): a CLI error code (exit 3) for a workbook
+  that does not fit in memory, and a warning for one that may not. Every in-memory load now runs
+  under `MemoryGuard` (xl-cli): an `OutOfMemoryError` raised while parsing — fatal to cats-effect,
+  which halted the binary with a raw stack trace, exit 1 and no `--json` envelope — is caught
+  inside the load's own thunk (the only place the runtime lets it be caught) and reported as
+  `RESOURCE_LIMIT`, the heap size in the message and `use --stream for constant-memory reads, or
+  raise the heap with -Xmx<size> (native image: xl -Xmx64g …)` as the hint. When `--max-size` lifts
+  the default, the load is sized before a byte is parsed from the zip's central directory, in two
+  bands calibrated on measured 1,000,000-row loads (dense cells need 16–20× their worksheet XML,
+  the dogfood's wide text rows 33–41×, long text 2–3× its `sharedStrings.xml` bytes): a lower
+  estimate of `14 × worksheet XML + 2 × shared-string XML` above the heap is hopeless and refused
+  with the same code, hint and the file in `error.location` (the dogfood book's 1.09 GB of sheet
+  XML on the native image's 8 GB); an upper estimate of `30 × sheet + 3 × strings` above the heap
+  proceeds under `Warning[MEMORY_PRESSURE]` (or `warnings[]` in the envelope) carrying both
+  figures; below both the load is silent. No measured shape is refused at a heap it loads in.
+  `-Xmx` is the override: both estimates are measured against the heap the process actually has.
+  The codes are in `xl schema --json`, `generated/error-codes.md` and the `--max-size` global's
+  doc; every other `Error` keeps its `INTERNAL` classification.
 - **The CLI contract is a CI gate** (#592). A `contract` job runs the golden runner, the
   generated-docs drift check and the new `ContractSpec` explicitly, so a golden diff fails with the
   unified diff in the log, then builds the assembly JAR and runs `scripts/smoke-cli-contract.sh`
@@ -154,7 +159,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xl -f nyc1m.xlsx --max-size 0 view A1:H20` ran for three minutes, then exited 1 with a stack
   trace on stderr and — under `--json` — an empty stdout and no envelope, two ADR-017 violations,
   because the native image's baked 8 GB heap could never hold the book. It is now `RESOURCE_LIMIT`,
-  exit 3, envelope emitted, refused up front when the estimate says it cannot fit (see Added). The
+  exit 3, envelope emitted — refused up front when even the lower estimate cannot fit, warned
+  (`MEMORY_PRESSURE`) when only the upper one cannot (see Added). The
   docs called `--max-size 0` "unlimited": `docs/reference/cli.md`, `CLAUDE.md` and the xl-cli skill
   now say it lifts the security limit only, that the native binary's heap is capped at 8 GB unless
   `-Xmx<size>` is passed as the first argument (`xl -Xmx64g …`; the JAR takes `java -Xmx64g -jar`),

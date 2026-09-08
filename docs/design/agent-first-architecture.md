@@ -221,7 +221,7 @@ object ExitCodes:
 final case class Warning(code: String, message: String, location: Option[Location] = None)
 object WarningCode:
   val READER_WARNING, TRUNCATED, HIDDEN_OMITTED, UNKNOWN_PROPERTY, FORMAT_HINT_IGNORED,
-      STREAM_BACKEND_ONLY, RECALC_ERRORS, SHEET_AUTOSELECTED, FLAG_IGNORED: String
+      STREAM_BACKEND_ONLY, RECALC_ERRORS, SHEET_AUTOSELECTED, FLAG_IGNORED, EVAL_FAILED, MEMORY_PRESSURE: String
 
 object Diagnostics:
   def render(err: CliError): String            // text form, see below

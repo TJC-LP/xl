@@ -11,7 +11,7 @@ import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.cli.contract.{CliException, ErrorCode, Location}
+import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.XlsxReader
@@ -21,8 +21,9 @@ import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
  * GH-636: the in-memory load under the memory guard. An `OutOfMemoryError` is fatal to cats-effect
  * (the runtime halts the process with a stack trace and exit 1 — it never reaches
  * `handleErrorWith`), so the guard catches it INSIDE the thunk that raised it and re-raises the
- * typed `RESOURCE_LIMIT` failure; and before a load whose `--max-size` lifted the default, it
- * estimates the footprint from the worksheet part sizes and refuses what cannot fit.
+ * typed `RESOURCE_LIMIT` failure; and before a load whose `--max-size` lifted the default, it sizes
+ * the worksheet XML and answers in two bands — refuse what cannot fit even at the measured
+ * lower-bound ratio, warn (`MEMORY_PRESSURE`) about what may not fit at the upper-bound one.
  */
 class MemoryGuardSpec extends CatsEffectSuite:
 
@@ -123,33 +124,159 @@ class MemoryGuardSpec extends CatsEffectSuite:
     assert(!MemoryGuard.raised(default.copy(maxUncompressedSize = default.maxUncompressedSize)))
   }
 
-  test("decide: 30x the worksheet XML above 70% of the heap refuses; at or below proceeds") {
-    val path = Path.of("nyc1m.xlsx")
-    val xml = 1_090_000_000L // the dogfood book: 1.09 GB of sheet XML needed 36-45 GB of heap
-    val eightGb = 8L << 30
-    val refused = MemoryGuard.decide(path, xml, eightGb)
-    refused match
-      case Left(err) =>
-        assertEquals(err.code, ErrorCode.RESOURCE_LIMIT)
-        assertEquals(err.hint, Some(MemoryGuard.hint))
-        assertEquals(err.location, Some(Location.file("nyc1m.xlsx")))
-        assert(err.message.contains("nyc1m.xlsx"), err.message)
-        assert(err.message.contains(MemoryGuard.human(xml)), err.message)
-        assert(err.message.contains(MemoryGuard.human(xml * MemoryGuard.multiplier)), err.message)
-        assert(err.message.contains(MemoryGuard.human(eightGb)), err.message)
-        assertEquals(err.exitCode.code, 3)
-      case Right(()) => fail("1.09 GB of sheet XML must be refused on an 8 GB heap")
-    // 64 GB: 32.7 GB estimated against a 44.8 GB budget passes (the documented -Xmx64g override)
-    assertEquals(MemoryGuard.decide(path, xml, 64L << 30), Right(()))
-    // exactly at the budget passes; one byte over refuses
-    val budget = (eightGb * MemoryGuard.budget).toLong
-    val atBudget = budget / MemoryGuard.multiplier
-    assertEquals(MemoryGuard.decide(path, atBudget, eightGb), Right(()))
-    assert(MemoryGuard.decide(path, atBudget + 1, eightGb).isLeft)
-    // an unbounded heap (Runtime.maxMemory reports Long.MaxValue) never refuses
-    assertEquals(MemoryGuard.decide(path, xml, Long.MaxValue), Right(()))
-    // nothing to load never refuses
-    assertEquals(MemoryGuard.decide(path, 0L, 1L), Right(()))
+  private val nycPath = Path.of("nyc1m.xlsx")
+
+  private def refusal(v: MemoryGuard.Verdict): CliError = v match
+    case MemoryGuard.Verdict.Refuse(err) => err
+    case other => fail(s"expected a refusal, got $other")
+
+  private def warning(v: MemoryGuard.Verdict): Warning = v match
+    case MemoryGuard.Verdict.Warn(w) => w
+    case other => fail(s"expected a warning, got $other")
+
+  test("the bands are ordered: each lower coefficient is the measured floor, below its upper") {
+    assert(MemoryGuard.sheetLower >= 1 && MemoryGuard.sheetLower < MemoryGuard.sheetUpper)
+    assert(MemoryGuard.sstLower >= 1 && MemoryGuard.sstLower < MemoryGuard.sstUpper)
+    assertEquals(MemoryGuard.sheetUpper, 30, "the dogfood book's 33–41× of sheet XML, rounded down")
+    assert(MemoryGuard.sstLower < MemoryGuard.sheetLower, "a string costs far less than a cell")
+  }
+
+  test("decide: lower bound over the heap refuses; upper bound over it warns; below both admits") {
+    val xml = 100L << 20 // 100 MB of worksheet XML, no shared strings
+    val lower = xml * MemoryGuard.sheetLower
+    val upper = xml * MemoryGuard.sheetUpper
+    // one byte short of the lower bound: hopeless, refused
+    val err = refusal(MemoryGuard.decide(nycPath, xml, lower - 1))
+    assertEquals(err.code, ErrorCode.RESOURCE_LIMIT)
+    assertEquals(err.hint, Some(MemoryGuard.hint))
+    assertEquals(err.location, Some(Location.file("nyc1m.xlsx")))
+    assert(err.message.contains("does not fit"), err.message)
+    assert(err.message.contains(MemoryGuard.human(xml)), err.message)
+    assert(err.message.contains(MemoryGuard.human(lower)), err.message)
+    assert(err.message.contains(MemoryGuard.human(lower - 1)), err.message)
+    assertEquals(err.exitCode.code, 3)
+    // exactly the lower bound: not hopeless, but the upper bound is over — a warning
+    val warn = warning(MemoryGuard.decide(nycPath, xml, lower))
+    assertEquals(warn.code, WarningCode.MEMORY_PRESSURE)
+    assertEquals(warn.location, Some(Location.file("nyc1m.xlsx")))
+    assert(warn.message.contains("may not fit"), warn.message)
+    assert(warn.message.contains(MemoryGuard.human(lower)), warn.message)
+    assert(warn.message.contains(MemoryGuard.human(upper)), warn.message)
+    assert(warn.message.contains("RESOURCE_LIMIT") && warn.message.contains(MemoryGuard.hint))
+    // one byte short of the upper bound still warns; at the upper bound the load is silent
+    assertEquals(
+      warning(MemoryGuard.decide(nycPath, xml, upper - 1)).code,
+      WarningCode.MEMORY_PRESSURE
+    )
+    assertEquals(MemoryGuard.decide(nycPath, xml, upper), MemoryGuard.Verdict.Admit)
+    // an unbounded heap (Runtime.maxMemory reports Long.MaxValue) and nothing to load never refuse
+    assertEquals(MemoryGuard.decide(nycPath, xml, Long.MaxValue), MemoryGuard.Verdict.Admit)
+    assertEquals(MemoryGuard.decide(nycPath, 0L, 1L), MemoryGuard.Verdict.Admit)
+  }
+
+  // --- the measured shapes (bytes from each book's central directory) -------------------------
+
+  private val GiB = 1L << 30
+  private val MiB = 1L << 20
+  import MemoryGuard.{Footprint, Verdict}
+
+  /** (a) 1,000,000 x 8 decimals: loads at 6144m under G1 (8192m ParallelGC), fails at 5120m. */
+  private val numeric = Footprint(sheetBytes = 362_929_341L, sstBytes = 154L)
+
+  /** (c) 1,000,000 x 8 short integers: loads at 8192m, fails at 6144m (ParallelGC). */
+  private val ints = Footprint(sheetBytes = 324_120_309L, sstBytes = 154L)
+
+  /** (b) 1,000,000 x 8 with 4 distinct-text columns: loads at 8192m, fails at 7168m. */
+  private val text = Footprint(sheetBytes = 358_853_715L, sstBytes = 111_555_755L)
+
+  /** (d) 1,000,000 x 1 distinct 300-char text: loads at 1792m, fails at 1536m (both collectors). */
+  private val longText = Footprint(sheetBytes = 62_666_927L, sstBytes = 317_889_067L)
+
+  /** nyc1m, the 0.21.0 dogfood: 1.09 GB of sheet XML, needed 36–45 GB of heap. */
+  private val nyc1m = Footprint(sheetBytes = 1_090_000_000L, sstBytes = 0L)
+
+  private def verdictOf(v: Verdict): String = v match
+    case Verdict.Admit => "admit"
+    case Verdict.Warn(_) => "warn"
+    case Verdict.Refuse(_) => "refuse"
+
+  private def assertVerdict(fp: Footprint, heap: Long, expected: String, why: String): Unit =
+    assertEquals(
+      verdictOf(MemoryGuard.decide(nyc1m0, fp, heap)),
+      expected,
+      s"$why at ${MemoryGuard.human(heap)}"
+    )
+
+  private val nyc1m0 = Path.of("book.xlsx")
+
+  test(
+    "manifest (a) numeric 1M x 8: never refused where it loads; warned on 8 GB; silent on 16 GB"
+  ) {
+    assertVerdict(numeric, 4 * GiB, "refuse", "fails at 4g under both collectors")
+    assertVerdict(
+      numeric,
+      6 * GiB,
+      "warn",
+      "loads at 6144m under G1 — a refusal here would be false"
+    )
+    assertVerdict(numeric, 8 * GiB, "warn", "the native image's default heap, where it loads today")
+    assertVerdict(numeric, 16 * GiB, "admit", "twice the upper estimate's need")
+  }
+
+  test("manifest (c) short integers 1M x 8: the same bands as the decimals") {
+    assertVerdict(ints, 4 * GiB, "refuse", "fails at 4g")
+    assertVerdict(ints, 8 * GiB, "warn", "loads at 8192m")
+    assertVerdict(ints, 16 * GiB, "admit", "")
+  }
+
+  test(
+    "manifest (b) text 1M x 8, 4 distinct-text columns: SST bytes are charged at the string rate"
+  ) {
+    assertVerdict(text, 4 * GiB, "refuse", "fails at 4g")
+    assertVerdict(text, 8 * GiB, "warn", "loads at 8192m")
+    assertVerdict(text, 16 * GiB, "admit", "")
+    val warn = warning(MemoryGuard.decide(nyc1m0, text, 8 * GiB))
+    assert(warn.message.contains("shared strings"), warn.message)
+    assert(warn.message.contains(MemoryGuard.human(text.sstBytes)), warn.message)
+  }
+
+  test(
+    "manifest (d) long text: 380 MB of XML that loads in 1792m is never refused on a 2 GB heap"
+  ) {
+    assertVerdict(longText, 1 * GiB, "refuse", "fails at 1g")
+    assertVerdict(longText, 1792 * MiB, "warn", "the smallest heap it loads in")
+    assertVerdict(longText, 2 * GiB, "warn", "")
+    assertVerdict(longText, 4 * GiB, "admit", "")
+    // a single sheet-XML multiplier could not do this: 380 MB × 14 would refuse on a 4 GB heap
+    assert(longText.total * MemoryGuard.sheetLower > 4 * GiB, "the split model is load-bearing")
+  }
+
+  test(
+    "manifest nyc1m (1.09 GB of sheet XML, needed 36–45 GB): refused on 8 GB, warned on 16, silent on 64"
+  ) {
+    val refused = refusal(MemoryGuard.decide(nyc1m0, nyc1m, 8 * GiB))
+    assert(refused.message.contains("does not fit"), refused.message)
+    assert(!refused.message.contains("shared strings"), refused.message)
+    assertVerdict(nyc1m, 16 * GiB, "warn", "the lower estimate fits, the upper does not")
+    assertVerdict(nyc1m, 64 * GiB, "admit", "the documented -Xmx64g override")
+  }
+
+  test("footprint: worksheet and shared-string bytes are split; total is footprintBytes") {
+    fixture("book.xlsx").flatMap { path =>
+      val expectedSst = IO.blocking {
+        val zip = new ZipFile(path.toFile)
+        try Option(zip.getEntry("xl/sharedStrings.xml")).fold(0L)(_.getSize)
+        finally zip.close()
+      }
+      (MemoryGuard.footprint(path), MemoryGuard.footprintBytes(path), expectedSst).mapN {
+        (fp, total, sst) =>
+          assert(fp.sheetBytes > 0L, "the fixture has worksheet XML")
+          assertEquals(fp.sstBytes, sst, "the shared-string bytes are the part's own size")
+          assertEquals(fp.total, total)
+      } *> MemoryGuard.footprint(Path.of("/nonexistent.xlsx")).map { missing =>
+        assertEquals(missing, MemoryGuard.Footprint.empty)
+      }
+    }
   }
 
   test("human: binary units with one decimal, the way -Xmx counts") {
@@ -202,19 +329,36 @@ class MemoryGuardSpec extends CatsEffectSuite:
       assertEquals(missing, 0L)
   }
 
-  test("admit: inactive at the default limit, refuses a lifted load that cannot fit, else passes") {
+  test("admit: inactive at the default limit; a lifted load is refused, warned or passed by band") {
     fixture("book.xlsx").flatMap { path =>
-      for
-        default <- MemoryGuard.admit(path, ReaderConfig.default, heap = 1L).attempt
-        tiny <- MemoryGuard.admit(path, ReaderConfig.permissive, heap = 1L).attempt
-        unbounded <- MemoryGuard.admit(path, ReaderConfig.permissive, heap = Long.MaxValue).attempt
-        real <- MemoryGuard.admit(path, ReaderConfig.permissive).attempt
-      yield
-        assertEquals(default, Right(()), "the default limit never arms the pre-load guard")
-        val e = resourceLimit(tiny)
-        assertEquals(e.error.location, Some(Location.file(path.toString)))
-        assertEquals(unbounded, Right(()))
-        assertEquals(real, Right(()), "a few KB of XML fits any real heap")
+      MemoryGuard.footprint(path).flatMap { fp =>
+        val doubtful = (fp.atLeast + fp.upTo) / 2 // between the bands: the load may not fit
+        for
+          seen <- IO.ref(Vector.empty[Warning])
+          sink = (w: Warning) => seen.update(_ :+ w)
+          default <- MemoryGuard.admit(path, ReaderConfig.default, heap = 1L, warn = sink).attempt
+          tiny <- MemoryGuard.admit(path, ReaderConfig.permissive, heap = 1L, warn = sink).attempt
+          afterRefusal <- seen.get
+          warned <- MemoryGuard
+            .admit(path, ReaderConfig.permissive, heap = doubtful, warn = sink)
+            .attempt
+          afterWarning <- seen.get
+          unbounded <- MemoryGuard
+            .admit(path, ReaderConfig.permissive, heap = Long.MaxValue, warn = sink)
+            .attempt
+          real <- MemoryGuard.admit(path, ReaderConfig.permissive, warn = sink).attempt
+          afterAll <- seen.get
+        yield
+          assertEquals(default, Right(()), "the default limit never arms the pre-load guard")
+          val e = resourceLimit(tiny)
+          assertEquals(e.error.location, Some(Location.file(path.toString)))
+          assertEquals(afterRefusal, Vector.empty, "a refusal is not also a warning")
+          assertEquals(warned, Right(()), "a doubtful load proceeds")
+          assertEquals(afterWarning.map(_.code), Vector(WarningCode.MEMORY_PRESSURE))
+          assertEquals(unbounded, Right(()))
+          assertEquals(real, Right(()), "a few KB of XML fits any real heap")
+          assertEquals(afterAll.size, 1, "silent admissions warn nothing")
+      }
     }
   }
 
@@ -243,6 +387,29 @@ class MemoryGuardSpec extends CatsEffectSuite:
         val e = resourceLimit(lifted)
         assert(e.error.message.contains(path.toString), e.error.message)
         assertEquals(default, Left(parsed), "at the default limit the parser runs")
+    }
+  }
+
+  test(
+    "excel: a lifted load that MAY not fit proceeds under MEMORY_PRESSURE, sent to the warn sink"
+  ) {
+    fixture("book.xlsx").flatMap { path =>
+      MemoryGuard.footprint(path).flatMap { fp =>
+        val doubtful = (fp.atLeast + fp.upTo) / 2 // between the bands: the load may not fit
+        for
+          seen <- IO.ref(Vector.empty[Warning])
+          guarded = MemoryGuard.excel(
+            _ => IO.unit,
+            warn = w => seen.update(_ :+ w),
+            heap = doubtful
+          )
+          wb <- guarded.readWith(path, ReaderConfig.permissive)
+          warnings <- seen.get
+        yield
+          assertEquals(wb.sheets.map(_.name.value), Vector("Data", "Other"), "the load ran")
+          assertEquals(warnings.map(_.code), Vector(WarningCode.MEMORY_PRESSURE))
+          assertEquals(warnings.headOption.flatMap(_.location), Some(Location.file(path.toString)))
+      }
     }
   }
 

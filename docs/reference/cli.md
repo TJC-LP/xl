@@ -101,12 +101,19 @@ xl batch --schema                                  # JSON Schema of the batch do
 > the reader refusing large uncompressed content; what fits is bounded by the process heap. The
 > native binary is built with an 8 GB ceiling (`-R:MaxHeapSize=8g`), raised only by passing
 > `-Xmx<size>` as the first argument (`xl -Xmx64g -f big.xlsx --max-size 0 audit`; the JAR takes the
-> JVM's own `java -Xmx64g -jar xl.jar …`). An in-memory load needs roughly 30–40× the uncompressed
-> worksheet XML — a million-row book is tens of GB — so large files belong to `--stream`. When
-> `--max-size` is lifted, a load whose estimate (30× the worksheet and shared-string XML) exceeds
-> 70% of the heap is refused before anything is parsed, and a load that does exhaust the heap is
-> reported the same way: `code: RESOURCE_LIMIT`, exit 3, with the `--stream`/`-Xmx` hint — never a
-> raw `java.lang.OutOfMemoryError` with exit 1 and, under `--json`, no envelope.
+> JVM's own `java -Xmx64g -jar xl.jar …`). An in-memory load needs many times its uncompressed XML.
+> Measured with the reader on 1,000,000-row books (smallest heap that loads): dense numeric or
+> short-text cells need 16–20× their worksheet XML (346 MB of sheet XML loads in 6 GB, not in 5);
+> the wide text rows of the 0.21.0 dogfood book needed 33–41× (1.09 GB of sheet XML, 36–45 GB of
+> heap); long text costs only 2–3× the bytes of `sharedStrings.xml` (380 MB of mostly strings loads
+> in 1.75 GB). Large files belong to `--stream`. When `--max-size` is lifted, the load is sized from
+> the zip's central directory before anything is parsed, in two bands: a *lower* estimate of
+> `14 × worksheet XML + 2 × shared-string XML` already above the heap is hopeless and is refused
+> (`code: RESOURCE_LIMIT`, exit 3, the file in `error.location`); an *upper* estimate of
+> `30 × worksheet + 3 × strings` above the heap proceeds under a `Warning[MEMORY_PRESSURE]`
+> carrying both figures and the hint; below both the load is silent. A load that does exhaust the
+> heap is reported the same way — `code: RESOURCE_LIMIT`, exit 3, with the `--stream`/`-Xmx`
+> hint — never a raw `java.lang.OutOfMemoryError` with exit 1 and, under `--json`, no envelope.
 
 > **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
 > (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`/`--sheet` (for a batch op, its `sheet` key

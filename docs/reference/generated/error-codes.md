@@ -77,3 +77,4 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `SHEET_AUTOSELECTED` |
 | `FLAG_IGNORED` |
 | `EVAL_FAILED` |
+| `MEMORY_PRESSURE` |

@@ -27,6 +27,13 @@ object WarningCode:
   /** `view --eval` without `--strict` could not evaluate the range; cached values were rendered. */
   val EVAL_FAILED: String = "EVAL_FAILED"
 
+  /**
+   * GH-636: an in-memory load under a lifted `--max-size` whose estimated footprint may exceed the
+   * heap — the upper-bound estimate does, the lower-bound one does not. The load proceeds; if it
+   * exhausts the heap it fails typed (`RESOURCE_LIMIT`) with the same `--stream`/`-Xmx` hint.
+   */
+  val MEMORY_PRESSURE: String = "MEMORY_PRESSURE"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -37,5 +44,6 @@ object WarningCode:
     RECALC_ERRORS,
     SHEET_AUTOSELECTED,
     FLAG_IGNORED,
-    EVAL_FAILED
+    EVAL_FAILED,
+    MEMORY_PRESSURE
   )

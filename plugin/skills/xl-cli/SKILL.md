@@ -262,10 +262,13 @@ flag at all (usage error). Streaming never recalculates. For everything else, lo
 with `--max-size 0` (lifts the 100 MB security limit) or `--max-size 500`. That lifts the limit,
 not the heap: the native binary's heap is capped at 8 GB unless `-Xmx<size>` is the first
 argument (`xl -Xmx64g -f big.xlsx …`; the JAR takes `java -Xmx64g -jar`), and an in-memory load
-needs roughly 30–40× the uncompressed worksheet XML — a million-row book is tens of GB, so stream
-it. With `--max-size` lifted, a load estimated not to fit is refused before parsing, and a load
-that exhausts the heap is reported, both as `RESOURCE_LIMIT` (exit 3) with the `--stream`/`-Xmx`
-hint — never a raw `OutOfMemoryError`.
+needs 16–20× its worksheet XML for dense cells (a million rows × 8 numbers, 346 MB of XML, loads
+in 6 GB and not in 5), 33–41× for wide text rows, 2–3× the `sharedStrings.xml` bytes for long
+text — so stream large files. With `--max-size` lifted, the load is sized before parsing: one
+that cannot fit even at the lower estimate (`14 × sheet XML + 2 × SST`) is refused as
+`RESOURCE_LIMIT` (exit 3); one that may not fit (upper estimate `30 × sheet + 3 × SST` above the
+heap) proceeds under a `MEMORY_PRESSURE` warning; one that then exhausts the heap fails as
+`RESOURCE_LIMIT` with the `--stream`/`-Xmx` hint — never a raw `OutOfMemoryError`.
 
 ```bash
 xl -f huge.xlsx --stream search "pattern" --limit 10

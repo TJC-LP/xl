@@ -2003,13 +2003,16 @@ EXAMPLES:
 
   /**
    * An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s and whose in-memory
-   * load runs under the [[MemoryGuard]] (GH-636): refused up front when a lifted `--max-size`
-   * cannot fit the heap, `RESOURCE_LIMIT` rather than a fatal `OutOfMemoryError` when it does not.
+   * load runs under the [[MemoryGuard]] (GH-636): a lifted `--max-size` that cannot fit the heap is
+   * refused up front, one that may not fit is announced as `MEMORY_PRESSURE` in the same sink, and
+   * a load that exhausts the heap is `RESOURCE_LIMIT` rather than a fatal `OutOfMemoryError`.
    */
   private def readerCollecting(warnings: Ref[IO, Vector[Warning]]): ExcelIO[IO] =
-    MemoryGuard.excel { warning =>
-      warnings.update(_ :+ Warning(WarningCode.READER_WARNING, warning.toString))
-    }
+    MemoryGuard.excel(
+      handler =
+        warning => warnings.update(_ :+ Warning(WarningCode.READER_WARNING, warning.toString)),
+      warn = warning => warnings.update(_ :+ warning)
+    )
 
   /**
    * THE sheet rule's steps 2–3 for the run's default sheet, before dispatch ([[Resolve.default]],
@@ -2393,8 +2396,24 @@ EXAMPLES:
     io: CliIO = CliIO.system,
     mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
-    val excel = MemoryGuard.excel(_ => IO.unit) // two loads, each under the memory guard
     val readerConfig = buildReaderConfig(maxSizeOpt)
+    Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
+      // Two loads, each under the memory guard; its MEMORY_PRESSURE rides on the outcome
+      val excel = MemoryGuard.excel(_ => IO.unit, warn = w => warnings.update(_ :+ w))
+      runDiffWith(excel, warnings, fileA, fileB, sheetFilter, readerConfig, format, io, mode)
+    }
+
+  private def runDiffWith(
+    excel: ExcelIO[IO],
+    warnings: Ref[IO, Vector[Warning]],
+    fileA: Path,
+    fileB: Path,
+    sheetFilter: Option[String],
+    readerConfig: ReaderConfig,
+    format: DiffFormat,
+    io: CliIO,
+    mode: OutputMode
+  ): IO[ExitCode] =
     (for
       wbA <- readWorkbook(excel, fileA, readerConfig)
       wbB <- readWorkbook(excel, fileB, readerConfig)
@@ -2415,23 +2434,27 @@ EXAMPLES:
         case DiffFormat.Markdown =>
           DiffCommands.renderMarkdown(diff, fileA.toString, fileB.toString)
         case DiffFormat.Json => DiffCommands.renderJson(diff)
-    yield (output, diff.identical)).attempt.flatMap {
-      case Right((output, identical)) =>
-        // The JSON report rides as text (Payload.Raw): its numbers are never re-parsed
-        val payload = (format, mode) match
-          case (DiffFormat.Json, OutputMode.Json) => Payload.Raw(output)
-          case _ => Payload.text(output)
-        val outcome =
-          if identical then Outcome.ok("diff", payload)
-          else
-            Outcome.signal(
-              "diff",
-              payload,
-              CliError(ErrorCode.DIFFERENCES_FOUND, s"Differences found: $fileA vs $fileB")
-            )
-        emit(outcome, mode, io)
-      case Left(err) =>
-        emit(Outcome.failed("diff", CliError.fromThrowable(err)), mode, io)
+    yield (output, diff.identical)).attempt.flatMap { attempt =>
+      warnings.get.flatMap { collected =>
+        attempt match
+          case Right((output, identical)) =>
+            // The JSON report rides as text (Payload.Raw): its numbers are never re-parsed
+            val payload = (format, mode) match
+              case (DiffFormat.Json, OutputMode.Json) => Payload.Raw(output)
+              case _ => Payload.text(output)
+            val outcome =
+              if identical then Outcome.ok("diff", payload, collected)
+              else
+                Outcome.signal(
+                  "diff",
+                  payload,
+                  CliError(ErrorCode.DIFFERENCES_FOUND, s"Differences found: $fileA vs $fileB"),
+                  collected
+                )
+            emit(outcome, mode, io)
+          case Left(err) =>
+            emit(Outcome.failed("diff", CliError.fromThrowable(err), collected), mode, io)
+      }
     }
 
   /**
