@@ -164,8 +164,7 @@ object RasterizerChain:
    * that breaks in hard-to-diagnose ways (GH-83/GH-86). It remains available as an explicit opt-in
    * via `--rasterizer imagemagick`.
    */
-  def defaultChain: List[Rasterizer] = List(
-    BatikRasterizer,
+  def defaultChain: List[Rasterizer] = PlatformRasterizers.bundled ::: List(
     CairoSvg,
     RsvgConvert,
     Resvg

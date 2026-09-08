@@ -1,8 +1,6 @@
 package com.tjclp.xl.display
 
 import java.time.LocalDateTime
-import java.time.format.TextStyle
-import java.util.Locale
 
 import scala.collection.mutable.ArrayBuffer
 import scala.util.boundary, boundary.break
@@ -1040,6 +1038,33 @@ object FormatCodeParser:
 
     positions.toSet
 
+  // English month/weekday tables, indexed by getMonthValue - 1 / DayOfWeek.getValue - 1
+  // (Monday-first). Hardcoded rather than TextStyle.getDisplayName(…, Locale.US): the locale was
+  // already pinned to US English, and locale data diverges across platforms (Scala Native renders
+  // these differently, ADR-016). FormatCodeParserSpec pins every entry at all reachable widths.
+  private val MonthsShort: Vector[String] =
+    Vector("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+  private val MonthsFull: Vector[String] = Vector(
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December"
+  )
+  private val MonthsNarrow: Vector[String] =
+    Vector("J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D")
+  private val WeekdaysShort: Vector[String] =
+    Vector("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+  private val WeekdaysFull: Vector[String] =
+    Vector("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
   /**
    * Render a single date/time token.
    *
@@ -1075,12 +1100,12 @@ object FormatCodeParser:
         if isMinute then f"${dt.getMinute}%02d"
         else f"${dt.getMonthValue}%02d"
       case FormatToken.DatePart("mmm") =>
-        dt.getMonth.getDisplayName(TextStyle.SHORT, Locale.US)
+        MonthsShort(dt.getMonthValue - 1)
       case FormatToken.DatePart("mmmm") =>
-        dt.getMonth.getDisplayName(TextStyle.FULL, Locale.US)
+        MonthsFull(dt.getMonthValue - 1)
       case FormatToken.DatePart("mmmmm") =>
         // First letter only (J, F, M, A, ...)
-        dt.getMonth.getDisplayName(TextStyle.NARROW, Locale.US)
+        MonthsNarrow(dt.getMonthValue - 1)
 
       // Day
       case FormatToken.DatePart("d") =>
@@ -1088,9 +1113,9 @@ object FormatCodeParser:
       case FormatToken.DatePart("dd") =>
         f"${dt.getDayOfMonth}%02d"
       case FormatToken.DatePart("ddd") =>
-        dt.getDayOfWeek.getDisplayName(TextStyle.SHORT, Locale.US)
+        WeekdaysShort(dt.getDayOfWeek.getValue - 1)
       case FormatToken.DatePart("dddd") =>
-        dt.getDayOfWeek.getDisplayName(TextStyle.FULL, Locale.US)
+        WeekdaysFull(dt.getDayOfWeek.getValue - 1)
 
       // Hour: 12-hour clock only when the section carries AM/PM (ECMA-376 §18.8.31)
       case FormatToken.DatePart("h") =>

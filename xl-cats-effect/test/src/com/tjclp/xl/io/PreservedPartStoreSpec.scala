@@ -46,9 +46,16 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
     tempZipWithSize(Map("xl/charts/chart1.xml" -> data)).use { case (source, actualSize) =>
       // Create manifest with correct size
       val builder = new PartManifestBuilder()
-      val entry = new ZipEntry("xl/charts/chart1.xml")
-      entry.setSize(actualSize)
-      val manifest = builder.+=(entry).recordUnparsed("xl/charts/chart1.xml").build()
+      val manifest = builder
+        .recordZipMetadata(
+          "xl/charts/chart1.xml",
+          size = actualSize,
+          compressedSize = -1L,
+          crc = -1L,
+          method = -1
+        )
+        .recordUnparsed("xl/charts/chart1.xml")
+        .build()
 
       val store = PreservedPartStore.fromPath(source, manifest)
       store.open.use { handle =>
@@ -65,9 +72,16 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
     tempZipWithSize(Map("xl/charts/chart1.xml" -> data)).use { case (source, actualSize) =>
       // Create manifest with WRONG size (off by 10 bytes)
       val builder = new PartManifestBuilder()
-      val entry = new ZipEntry("xl/charts/chart1.xml")
-      entry.setSize(actualSize + 10) // Intentionally wrong
-      val manifest = builder.+=(entry).recordUnparsed("xl/charts/chart1.xml").build()
+      val manifest = builder
+        .recordZipMetadata(
+          "xl/charts/chart1.xml",
+          size = actualSize + 10, // Intentionally wrong
+          compressedSize = -1L,
+          crc = -1L,
+          method = -1
+        )
+        .recordUnparsed("xl/charts/chart1.xml")
+        .build()
 
       val store = PreservedPartStore.fromPath(source, manifest)
       store.open.use { handle =>

@@ -7,7 +7,6 @@ import com.tjclp.xl.ooxml.PartManifest
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 
 import java.nio.file.{Files, Path}
-import java.security.MessageDigest
 import scala.collection.immutable.ArraySeq
 
 /**
