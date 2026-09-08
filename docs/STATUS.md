@@ -1,12 +1,22 @@
 # XL Project Status
 
-**Last Updated**: 2026-09-07 (0.20.0)
+**Last Updated**: 2026-09-08 (0.21.0)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.21.0** (2026-09-08) — agent-first Wave 2a (ADR-017) plus the dogfood fixes it surfaced:
+- ✅ **The `Edit` algebra** (#582) — `com.tjclp.xl.ops.Edit`, 49 cases, one vocabulary for every batch op and mutating verb; `Edit.applyAll` (all-or-nothing), `Edit.plan` (semantic dry-run), `Edit.validate`, `Edit.lower`/`Patch.toEdits`, `EditSchema`; a refusing `FormulaSupport.textOnly` and xl-evaluator's `EvalFormulaSupport`; `wb.edit`/`sheet.edit` in the prelude; seven laws as ScalaCheck properties; the CLI's fill/copy/sort/clear/autofit/group kernels moved into `Sheet`
+- ✅ **`RowCodec` records** (#590) — `final case class Order(...) derives RowCodec`; `readRows`/`readRowsByHeader`/`columnHeaders`/`columnOf`/`putRows`/`putRowsWithHeader`/`putTable`; typed `RowCodecError`; ADR-008 amended
+- ✅ **`CellRecord` + `SheetSource`** (#585) — one cell projection behind every read verb from two strategies (loaded workbook, O(1) streaming); typed `--json` for `search`/`stats`/`cell`/`filter`; `view` without a range shows the used range; `filter --stream`; a property law pins byte-equal payloads from both sources
+- ✅ **Scripting completions** (#589) — `Excel.writeChecked` (compute only the uncached formulas, write, return the `RecalcResult`), `readSheet`, `readMetadata`, `modifyR`, `orExit`/`exitMessage` (the CLI's `renderDiagnostic`), `Sheet.collapseRows/Cols` + `expandRows/Cols`
+- ✅ **Contract as a CI gate** (#592) — golden runner, generated-docs drift and `ContractSpec` as a job, `scripts/smoke-cli-contract.sh` against the assembly JAR and every native binary; the xl-agent grader reads `--json` envelopes only and locks the skill zip to the binary's release
+- ✅ **`_xlfn.` remainder** (#577, #588) — CF/DV/defined-name formulas through `FormulaStorage`; `xlfn-missing` lint; `FunctionFlags.volatile`
+- ✅ **Dogfood fixes** — an edit no longer withdraws caches of unparseable formulas it cannot reach (`ReferenceScan`/`DependencyGraph.editCone`, #606); whole-column/row forms (`RangeForm`) survive print, drag and structural edits, error literals parse (`TExpr.ErrorLit`), off-grid drags write `#REF!` (#612); typed `RESOURCE_LIMIT`/`MEMORY_PRESSURE` under `MemoryGuard` instead of a raw `OutOfMemoryError` (#636); `--stream search` stops at `--limit` with `totalExact` and `--total` (#637); typed, located `rename-sheet` refusals (`FORMULA_ERROR`, `SheetRenamer.renameLocated`) and quoted sheet qualifiers in `cell` (#608, #609)
+- ✅ **Platform shims** (ADR-016 Wave 25 A1, #542) — `java.security`/`java.awt`/`java.util.zip` each behind one file (`platform.Sha256`, `render.TextMeasure`), byte-identical output; ASCII-only column letters; the native `xl` reports its build version via `BuildInfo`; ADR-016 itself deferred with re-entry triggers
 
 **New in 0.20.0 "Contract"** (2026-09-07) — the agent-first CLI and scripting contract (ADR-017 wave 1) on top of the Excel-parity and calculation-integrity waves:
 - ✅ **One CLI contract** — a 0/1/2/3 exit table (ok / findings / usage / failed), errors and `Warning[CODE]:` notices on stderr, one seven-key `--json` envelope for every verb, one sheet rule (`Resolve`) on every path, globals anywhere on the command line, a registry behind all 32 batch ops, and `xl schema`/`batch --schema`/`functions --json` publishing the surface; 86 goldens pin what an agent sees

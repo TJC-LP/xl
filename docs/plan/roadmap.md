@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-09-07
+**Last Updated**: 2026-09-08
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 6,613 tests passing; one existing performance comparison ignored.
+**Current Status**: Production-ready with **115 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 6,790 tests passing; one existing performance comparison ignored.
 
-**Current Version**: **0.20.0** "Contract" (agent-first CLI and scripting contract, Excel-parity and calculation-integrity waves — released 2026-09-07)
+**Current Version**: **0.21.0** (agent-first Wave 2a — the `Edit` algebra, `RowCodec`, `CellRecord`/`SheetSource`, `writeChecked`/`orExit` — plus the dogfood fixes #606/#608/#609/#612/#636/#637 and the Wave 25 A1 platform shims — released 2026-09-08)
 
 ---
 
@@ -51,7 +51,7 @@ the plan and are filed as GitHub issues at release time.
 Gate: full compilation and tests, all-source formatting, example compile/run checks, packaged
 skill/doc snippet compilation, and the golden corpus.
 
-### Unreleased — wave 28a: Agent-first Wave 2, part a (stacked PRs under review)
+### v0.21.0 — wave 28a: Agent-first Wave 2, part a (Released 2026-09-08)
 
 Wave 2 of ADR-017 puts the `Edit` algebra underneath the Wave 1 contract. Part a is the algebra
 itself plus the items that do not depend on it, run as six worktree clusters with adversarial
@@ -61,10 +61,20 @@ review and landed as a stack of PRs (each PR's base is the one before it):
 |---|---------|-------|----|--------|
 | 1 | ci-harness-smoke | [#592](https://github.com/TJC-LP/xl/issues/592) | [#594](https://github.com/TJC-LP/xl/pull/594) | Golden runner, `DocsGenSpec` and `ContractSpec` as a CI job; JAR and native smoke; the xl-agent grader reads `sheets --json`. |
 | 2 | xlfn-remainder | [#588](https://github.com/TJC-LP/xl/issues/588), [#577](https://github.com/TJC-LP/xl/issues/577) | [#597](https://github.com/TJC-LP/xl/pull/597) | `_xlfn.` storage form for CF/DV/defined-name formulas; `xlfn-missing` lint; `FunctionFlags.volatile`. |
-| 3 | edit-algebra | [#582](https://github.com/TJC-LP/xl/issues/582) | [#598](https://github.com/TJC-LP/xl/pull/598) | `enum Edit` (52 cases), `EditSchema`, refusing `FormulaSupport`, `EvalFormulaSupport`, the seven laws, `wb.edit`/`sheet.edit`; CLI edit semantics moved into `Sheet`. |
+| 3 | edit-algebra | [#582](https://github.com/TJC-LP/xl/issues/582) | [#598](https://github.com/TJC-LP/xl/pull/598) | `enum Edit` (49 cases), `EditSchema`, refusing `FormulaSupport`, `EvalFormulaSupport`, the seven laws, `wb.edit`/`sheet.edit`; CLI edit semantics moved into `Sheet`. |
 | 4 | row-codec | [#590](https://github.com/TJC-LP/xl/issues/590) | [#599](https://github.com/TJC-LP/xl/pull/599) | `derives RowCodec`; `readRows`/`readRowsByHeader`/`putRows`/`putTable`; ADR-008 amended. |
 | 5 | cell-record-source | [#585](https://github.com/TJC-LP/xl/issues/585) | [#600](https://github.com/TJC-LP/xl/pull/600) | `CellRecord` + `SheetSource` (in-memory / streaming) behind every read verb; typed `--json` payloads; the source-parity law. |
 | 6 | scripting-completions | [#589](https://github.com/TJC-LP/xl/issues/589) | [#601](https://github.com/TJC-LP/xl/pull/601) | `Excel.writeChecked`/`readSheet`/`readMetadata`/`modifyR`, `orExit`, `Sheet.collapseRows/Cols`. |
+
+Released as 0.21.0 together with the fixes the dogfood surfaced on a million-row book and a real
+financial model — [#606](https://github.com/TJC-LP/xl/issues/606) (blind readers bounded by their
+text; caches outside the edit cone kept), [#608](https://github.com/TJC-LP/xl/issues/608)/[#609](https://github.com/TJC-LP/xl/issues/609)
+(typed, located `rename-sheet` refusals; quoted qualifiers in `cell`),
+[#612](https://github.com/TJC-LP/xl/issues/612) (whole-column/row `RangeForm`, error literals,
+`#REF!` on off-grid drags), [#636](https://github.com/TJC-LP/xl/issues/636)
+(`RESOURCE_LIMIT`/`MEMORY_PRESSURE`), [#637](https://github.com/TJC-LP/xl/issues/637) (`search`
+stops at `--limit`) — and the ADR-016 Wave 25 A1 platform shims
+([#542](https://github.com/TJC-LP/xl/issues/542)).
 
 Part b — [#583](https://github.com/TJC-LP/xl/issues/583) batch on the algebra,
 [#584](https://github.com/TJC-LP/xl/issues/584) registry-driven `Main`,

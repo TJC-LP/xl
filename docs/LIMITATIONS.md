@@ -572,6 +572,18 @@ val headerStyle = style"font-weight: bold; background: #CCCCCC; border: all thin
 
 ---
 
+#### 26. Named Cell Styles Not Preserved (#610)
+**Status**: Known gap — tracked as [#610](https://github.com/TJC-LP/xl/issues/610)
+**Impact**: Every write rewrites `styles.xml` with a single `Normal` cell style
+
+**Current**: the writer emits one `cellStyleXfs` entry and one `cellStyles` entry (`Normal`), so the workbook's named styles (`cellStyles`/`cellStyleXfs` — an Excel model's 74 named styles come out as 1), its recent-colours palette (`mruColors`) and the styles-level `extLst` are dropped, and every cell's `xfId` becomes 0. This happens on every write — in-memory and `--stream`, a fresh book and a surgical write of one read from disk.
+
+**Not affected**: cell formatting. Font, fill, border, number format and alignment live in `cellXfs` and round-trip unchanged; what is lost is the *name* a cell's format was derived from (the Cell Styles gallery — `Heading 1`, `Input`, a house style) and Excel's recent-colours list.
+
+**Mitigation**: none inside xl today; re-apply named styles in Excel after the write if the gallery matters.
+
+---
+
 ## Architecture Limitations
 
 ### 27. No Streaming for Multi-Sheet Write (Requires Sequential)
@@ -633,6 +645,18 @@ excel.readStreamByIndex(path, 2)  // Sheet 2 (separate call)
 **Workaround**: For parallel processing, use `excel.read()` to materialize full workbook
 
 **Verdict**: ACCEPTED LIMITATION (streaming guarantee more valuable)
+
+---
+
+### 30. Unbounded `--stream view` Materialises Its Window (#635)
+**Status**: Known gap — tracked as [#635](https://github.com/TJC-LP/xl/issues/635)
+**Impact**: `xl --stream view` with `--limit 0` (the whole sheet) is not constant-memory on very large sheets
+
+**Why**: the table renderers (markdown, csv, json) consume the window as a whole — the streaming `SheetSource` materialises the rows of the window, with their hidden lines, before the first byte is rendered — so with no limit the window is the entire sheet. On a 1,000,000-row sheet the run took 57 minutes and 13.8 GB and had emitted nothing when it was stopped.
+
+**What is O(1)**: a bounded `view` window (the default `--limit`, an explicit range, `--offset`/`--max-cols` paging), and `search`, `stats`, `bounds`, `filter` and `describe` under `--stream`, which fold row by row and keep only the matching rows or running aggregates.
+
+**Workaround**: page a large sheet (`view --limit N --offset M`, or `view A1:H1000`) instead of `--limit 0`; export a whole sheet through `--stream search`/`filter --format csv`; or load in memory with `-Xmx` sized to the book (see `docs/reference/cli.md`).
 
 ---
 
@@ -802,6 +826,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 - Tested: 100k rows (completes in ~3s)
 - Projected: 1M rows (~30s)
 - Memory: O(1) constant (~50-100MB regardless of size)
+- CLI: every `--stream` read is O(1) except `view --limit 0`, which materialises the whole sheet before rendering (§30, #635)
 
 **In-Memory API**: ~500k rows before OOM (8GB heap)
 
