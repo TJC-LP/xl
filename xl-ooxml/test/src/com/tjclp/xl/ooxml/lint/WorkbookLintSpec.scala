@@ -1490,16 +1490,24 @@ class WorkbookLintSpec extends FunSuite:
     assert(f.message.contains("#NAME?"), f.toString)
   }
 
-  test("GH-588: the remediation names the slots xl regenerates, not a blanket re-write") {
-    // A write that leaves the slot untouched copies the bare text through (LIMITATIONS.md), so a
-    // message promising that "re-writing the affected part" heals it sends an agent into a loop.
+  test("GH-588: the remediation states the regeneration condition, not an identical re-author") {
+    // A CF block, DV container or name table is regenerated only when its model no longer equals
+    // the source, and bare text parses to the same model as prefixed text — so an IDENTICAL
+    // re-author (`xl name add` with the same formula) copies the bare text through and lints the
+    // same (FutureFunctionPrefixSpec pins the writer). A message promising that "re-writing the
+    // affected part" or re-authoring the same rule heals it sends an agent into a loop.
     val cf = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> bareCfIfsSheetXml)).head
     val dn = lintOf(baseParts + ("xl/workbook.xml" -> bareNameWorkbookXml)).head
     Vector(cf, dn).foreach { f =>
       assert(!f.message.contains("re-writing the affected part"), f.toString)
+      assert(
+        !f.message.contains("re-author the rule, validation or name with xl to heal it"),
+        f.toString
+      )
       assert(f.message.contains("regenerates the slot"), f.toString)
-      assert(f.message.contains("re-author"), f.toString)
-      assert(f.message.contains("untouched"), f.toString)
+      assert(f.message.contains("no longer equals the source"), f.toString)
+      assert(f.message.contains("same text"), f.toString)
+      assert(f.message.contains("not under --stream"), f.toString)
     }
   }
 

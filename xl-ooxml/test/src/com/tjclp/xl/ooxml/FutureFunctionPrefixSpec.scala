@@ -157,10 +157,13 @@ class FutureFunctionPrefixSpec extends FunSuite:
    * a list DV, a bounded DV pair, and a workbook-scoped defined name.
    */
   private def gh577Workbook: Workbook =
-    val sheet = Sheet("Data")
-      .put(ref"A1" -> "a")
-      .put(ref"B1" -> 1)
-      .put(ref"C1" -> "a")
+    val sheet = gh577Slots(Sheet("Data").put(ref"A1" -> "a").put(ref"B1" -> 1).put(ref"C1" -> "a"))
+    Workbook(Vector(sheet))
+      .withDefinedName("Best", "MAXIFS(Data!$B$1:$B$3,Data!$A$1:$A$3,Data!$C$1)")
+
+  /** Author the GH-577 CF blocks and DV entries (bare spelling) onto `sheet`, in document order. */
+  private def gh577Slots(sheet: Sheet): Sheet =
+    sheet
       .conditionalFormat(
         ref"A1:A3",
         CfRule.Expression("IFS(A1=1,1,TRUE,0)", Some(Dxf.fill(red)), 1),
@@ -194,8 +197,6 @@ class FutureFunctionPrefixSpec extends FunSuite:
           )
         )
       )
-    Workbook(Vector(sheet))
-      .withDefinedName("Best", "MAXIFS(Data!$B$1:$B$3,Data!$A$1:$A$3,Data!$C$1)")
 
   /** The enum case widens to `DataValidation`; `withDataValidation` wants the `Rules` case. */
   private def dv(kind: DvKind): DataValidation.Rules = DataValidation.Rules(Vector.empty, kind)
@@ -319,6 +320,10 @@ class FutureFunctionPrefixSpec extends FunSuite:
     assert(wbXml.contains("<definedName name=\"Other\">Data!$A$1</definedName>"), wbXml)
   }
 
+  /** The file a bare-writing producer (openpyxl) emits: every storage prefix stripped by hand. */
+  private def stripPrefixes(xml: String): String =
+    xml.replace("_xlfn._xlws.", "").replace("_xlfn.", "")
+
   /** Copy `source` to a new zip, rewriting the text of every `.xml` entry through `patch`. */
   private def patchedZip(source: Path, label: String)(patch: String => String): Path =
     val out = tempXlsx(label)
@@ -343,7 +348,7 @@ class FutureFunctionPrefixSpec extends FunSuite:
   test("GH-577: third-party bare text reads bare, and a write that regenerates the slot heals it") {
     val written = writeGh577(XmlBackend.ScalaXml, "cfdv-bare-src")
     // strip every storage prefix by hand — the file a bare-writing producer (openpyxl) emits
-    val bare = patchedZip(written, "cfdv-bare")(_.replace("_xlfn._xlws.", "").replace("_xlfn.", ""))
+    val bare = patchedZip(written, "cfdv-bare")(stripPrefixes)
     assert(!entryText(bare, "xl/worksheets/sheet1.xml").contains("_xlfn."))
     assert(!entryText(bare, "xl/workbook.xml").contains("_xlfn."))
     val wb = XlsxReader.read(bare).fold(err => fail(s"read failed: $err"), identity)
@@ -364,6 +369,38 @@ class FutureFunctionPrefixSpec extends FunSuite:
       .fold(err => fail(s"write failed: $err"), identity)
     assertFragments(entryText(healed, "xl/worksheets/sheet1.xml"), gh577SheetFragments)
     assert(entryText(healed, "xl/workbook.xml").contains(gh577NameFragment))
+  }
+
+  test("GH-588: an IDENTICAL re-author of bare CF / DV / name text is copied through bare") {
+    // The writer regenerates a CF block, DV container or name table only when its parsed model no
+    // longer equals the source (planCfWrites / planDvWrites / reconcileDefinedNames), and bare text
+    // parses to the same model as prefixed text. So re-entering the SAME rules, validations and
+    // name (`xl name add Best '<same formula>'`, an identical withDefinedName) regenerates nothing:
+    // the bare source bytes ride through and `xl lint` reports the identical finding. Only a
+    // CHANGED re-author heals — the GH-577 test above. This pins what the xlfn-missing remediation
+    // text and docs/reference/cli.md promise.
+    val written = writeGh577(XmlBackend.ScalaXml, "cfdv-same-src")
+    val bare = patchedZip(written, "cfdv-same")(stripPrefixes)
+    val wb = XlsxReader.read(bare).fold(err => fail(s"read failed: $err"), identity)
+    val source = wb.sheets(0)
+    // re-author every CF block and DV entry from empty with the same text; the cell edit forces
+    // the worksheet itself to regenerate, so the CF/DV gates decide, not a verbatim worksheet copy
+    val reauthored = gh577Slots(
+      source.copy(conditionalFormats = Vector.empty, dataValidations = Vector.empty)
+    ).put(ref"G1" -> 2)
+    assertEquals(reauthored.conditionalFormats, source.conditionalFormats)
+    assertEquals(reauthored.dataValidations, source.dataValidations)
+    val same = wb.put(reauthored).withDefinedName("Best", bareName)
+    assertEquals(same.metadata.definedNames, wb.metadata.definedNames)
+    val out = tempXlsx("cfdv-same-out")
+    XlsxWriter.write(same, out).fold(err => fail(s"write failed: $err"), identity)
+    val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+    assert(sheetXml.contains("r=\"G1\""), sheetXml) // the worksheet WAS regenerated ...
+    assertFragments(sheetXml, gh577SheetFragments.map(stripPrefixes)) // ... yet the slots stay bare
+    assert(!sheetXml.contains("_xlfn."), sheetXml)
+    val wbXml = entryText(out, "xl/workbook.xml")
+    assert(wbXml.contains(stripPrefixes(gh577NameFragment)), wbXml)
+    assert(!wbXml.contains("_xlfn."), wbXml)
   }
 
   test("GH-577: a prefix on an unknown function in a CF rule or a name survives verbatim") {

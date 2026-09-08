@@ -1183,10 +1183,12 @@ object WorkbookLint:
           s"${facts.count} $noun(s) call post-2007 function(s) without Excel's _xlfn. storage " +
             s"prefix (${facts.functions.toVector.sorted.mkString(", ")}; $sites) — Excel and " +
             "LibreOffice treat the bare name as undefined and show #NAME? on the first " +
-            "recalculation; xl writes the prefix only where it regenerates the slot, so " +
-            "re-author the rule, validation or name with xl to heal it (a cell heals on any " +
-            "in-memory edit of its sheet, not under --stream) — a write that leaves the slot " +
-            "untouched copies the bare text through"
+            "recalculation; xl writes the prefix only where it regenerates the slot, and a CF " +
+            "block, DV container or name table is regenerated only when its model no longer " +
+            "equals the source — add or change a rule, validation or name in that part to heal " +
+            "it (re-entering the same text, e.g. `xl name add` with the same formula, compares " +
+            "equal and is copied through bare); a cell heals on any in-memory edit of its " +
+            "sheet, not under --stream"
         )
       )
 

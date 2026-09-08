@@ -173,6 +173,10 @@ Subcommands:
           - xl/calcChain.xml entries naming a cell that holds no formula or a
             sheet id the workbook does not declare (Excel repairs the file on
             open; drop the part with its Override and Relationship, or rebuild it)
+          - post-2007 functions (IFS, XLOOKUP, MAXIFS, ...) stored without Excel's
+            _xlfn. prefix in <f>, a CF <formula>, a DV <formula1>/<formula2> or a
+            <definedName> (the openpyxl class: a silent #NAME? on the first
+            recalculation; xl heals a slot only when it regenerates it)
 
         USAGE:
           xl lint report.xlsx
@@ -183,7 +187,7 @@ Subcommands:
           child-order | unresolved-rel-id | wrong-rel-type | missing-part |
           missing-content-type | ref-out-of-bounds | data-table-torn |
           data-table-unseeded | formula-leading-equals | external-ref-dangling |
-          defined-name-invalid | calc-chain-stale
+          defined-name-invalid | calc-chain-stale | xlfn-missing
 
         EXIT CODES:
           0 = no findings (package structure is clean)
