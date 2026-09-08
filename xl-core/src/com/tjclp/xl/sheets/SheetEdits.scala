@@ -367,10 +367,25 @@ private[xl] object SheetEdits:
    * is used for that cell.
    */
   def autoFitWidth(sheet: Sheet, col: Column): Double =
-    val cellsInColumn = sheet.cells.filter((ref, _) => ref.col == col)
+    fitWidth(sheet, sheet.cells.valuesIterator.filter(_.ref.col == col).toVector)
+
+  /**
+   * [[autoFitWidth]] for every column of `columns`, in order, from ONE pass over the sheet's cells:
+   * the cells are grouped by column once and each width is computed from its group, so fitting
+   * every column of a wide sheet is O(cells + columns) rather than O(cells x columns). A column
+   * without cells gets [[DefaultColumnWidth]]; a repeated column is reported each time.
+   */
+  def autoFitWidths(sheet: Sheet, columns: Iterable[Column]): Vector[(Column, Double)] =
+    val byColumn: Map[Column, Vector[Cell]] = sheet.cells.valuesIterator.toVector.groupBy(_.ref.col)
+    columns.iterator
+      .map(col => col -> fitWidth(sheet, byColumn.getOrElse(col, Vector.empty)))
+      .toVector
+
+  /** The width the cells of one column need; [[DefaultColumnWidth]] when there are none. */
+  private def fitWidth(sheet: Sheet, cellsInColumn: Vector[Cell]): Double =
     if cellsInColumn.isEmpty then DefaultColumnWidth
     else
-      val maxWidth = cellsInColumn.values.map(cellWidth(_, sheet)).maxOption.getOrElse(0.0)
+      val maxWidth = cellsInColumn.map(cellWidth(_, sheet)).maxOption.getOrElse(0.0)
       val rounded = BigDecimal(maxWidth).setScale(2, BigDecimal.RoundingMode.HALF_UP).toDouble
       math.max(rounded, MinAutoFitWidth)
 
@@ -389,13 +404,14 @@ private[xl] object SheetEdits:
     val boldFactor = if styleOpt.exists(_.font.bold) then 1.1 else 1.0
     text.length * boldFactor * 0.90 + 1.5
 
-  /** Set every column's width to its [[autoFitWidth]]. */
+  /**
+   * Set every column's width to its [[autoFitWidth]], measured in one pass ([[autoFitWidths]]).
+   * Widths are read from the input sheet: setting a column's properties changes neither the cells
+   * nor the style registry, so this equals the per-column fold cell for cell.
+   */
   def autoFit(sheet: Sheet, columns: Iterable[Column]): Sheet =
-    columns.foldLeft(sheet) { (s, col) =>
-      s.setColumnProperties(
-        col,
-        s.getColumnProperties(col).copy(width = Some(autoFitWidth(s, col)))
-      )
+    autoFitWidths(sheet, columns).foldLeft(sheet) { case (s, (col, width)) =>
+      s.setColumnProperties(col, s.getColumnProperties(col).copy(width = Some(width)))
     }
 
   // ===== Row/column outline grouping (GH-421) =====

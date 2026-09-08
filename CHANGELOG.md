@@ -51,7 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   laws hold as ScalaCheck properties: identity, fold, idempotence class, lowering coherence, desugar
   coherence, determinism, all-or-nothing.
 - **`Sheet.fill`/`copy`/`sort`/`clear`/`autofit`/group/appearance methods**: the semantics moved
-  from the CLI handlers into the library; the CLI verbs forward to them.
+  from the CLI handlers into the library; the CLI verbs forward to them. `autoFit`/`autoFitAll`
+  measure every column from one pass over the cells (O(cells + columns), not O(cells x columns)),
+  width for width what the per-column scan produced.
 
 ### Changed
 

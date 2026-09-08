@@ -663,12 +663,12 @@ private[xl] object EditInterpreter:
       )(_.columns)
       Some(
         Patch.Batch(
-          targets.map(c =>
-            Patch.SetColumnProperties(
-              c,
-              existing.getColumnProperties(c).copy(width = Some(existing.autoFitWidth(c)))
+          SheetEdits
+            .autoFitWidths(existing, targets)
+            .map((c, width) =>
+              Patch
+                .SetColumnProperties(c, existing.getColumnProperties(c).copy(width = Some(width)))
             )
-          )
         )
       )
     case Edit.SetComment(at, comment) => Some(Patch.SetComment(at.ref, comment))
