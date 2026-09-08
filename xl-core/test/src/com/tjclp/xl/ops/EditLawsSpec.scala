@@ -1,6 +1,6 @@
 package com.tjclp.xl.ops
 
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.sheets.Sheet
@@ -113,10 +113,11 @@ class EditLawsSpec extends ScalaCheckSuite:
         case (Some(p), Right(applied)) =>
           assertEquals(applied.workbook(data), Right(Patch.applyPatch(baseData, p)), s"edit: $e")
         case (Some(_), Left(XLError.EditFailed(_, _, cause))) =>
-          // `lower` refuses what `validate` refuses, so a lowerable edit fails only when it names
-          // a sheet the one-sheet book lacks or its formula text is rejected by the support.
+          // `lower` refuses what `validate` refuses and honours the qualifier (an edit aimed at a
+          // sheet other than `existing` lowers to None), so a lowerable edit fails only when the
+          // text-only support rejects its formula text.
           cause match
-            case XLError.SheetNotFound(_) | XLError.FormulaError(_, _) => ()
+            case XLError.FormulaError(_, _) => ()
             case unexpected =>
               fail(s"lowerable edit $e failed for an unexpected reason: $unexpected")
         case (None, _) => fail("genLocalEdit only yields lowerable edits")
@@ -129,6 +130,19 @@ class EditLawsSpec extends ScalaCheckSuite:
     val samples = (1 to 500).flatMap(_ => genLocalEdit.sample)
     val applied = samples.count(e => run(Workbook(baseData), Vector(e), Scope.of(data)).isRight)
     assert(applied > samples.size / 2, s"only $applied of ${samples.size} lowerable edits applied")
+  }
+
+  test("lowering coherence pins the Clear→unmerge branch: a contents clear over a merged range") {
+    val range = CellRange.parse("E4:E5").fold(e => fail(e), identity)
+    val merged = CellRange.parse("E5:F6").fold(e => fail(e), identity)
+    assert(baseData.mergedRanges.contains(merged), "fixture: baseData merges E5:F6")
+    val e = Edit.Clear(Area(None, range), ClearWhat.contents)
+    val viaPatch = Edit.lower(e, baseData).map(Patch.applyPatch(baseData, _))
+    val viaEdit = sheetOf(run(Workbook(baseData), Vector(e), Scope.of(data)), data).toOption
+    assert(viaPatch.isDefined, "a contents clear lowers")
+    assertEquals(viaPatch, viaEdit)
+    assert(viaPatch.exists(s => !s.mergedRanges.contains(merged)), "the patch side unmerges")
+    assert(viaEdit.exists(s => !s.mergedRanges.contains(merged)), "the edit side unmerges")
   }
 
   property("desugar coherence: Patch.toEdits(p, sheet) applied equals Patch.applyPatch(sheet, p)") {

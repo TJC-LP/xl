@@ -30,11 +30,13 @@ final case class EditField(
  * The metadata row of one [[Edit]] case — the `OpSpec` shape of ADR-017 §2.6 without the JSON
  * example (xl-core is JSON-free; the batch codec of Wave 2.2 owns examples). `name` is the kebab
  * form of the case; `batchOp` the Wave 1 batch op the case is a form of (`put-values` → `put`);
- * `cliVerb` the verb that lowers to it. `idempotent` declares the class the idempotence law
- * (EditLawsSpec) asserts `apply(e) == apply(e, e)` for, over the law generators' domain — a `fill`
- * whose target extends the source rather than preceding it; the interpreter has no evaluator, so an
- * edit whose second pass would read a cache the first pass dropped (`sort` by a formula column) is
- * declared outside the class rather than asserted on a lucky fixture.
+ * `cliVerb` the verb that lowers to it. `idempotent` is a general claim about the case, not about a
+ * fixture: for EVERY instance the interpreter accepts, applying it twice gives the workbook that
+ * applying it once gives, so a retrying agent may replay it. The idempotence law (EditLawsSpec)
+ * asserts `apply(e) == apply(e, e)` over the declared class; a case with even one accepted instance
+ * that breaks it — `fill` onto a target that precedes its source, `sort` by a formula column whose
+ * cache the first pass drops — is declared outside the class rather than asserted on a lucky
+ * fixture.
  */
 final case class EditSpec(
   name: String,
@@ -228,7 +230,11 @@ object EditSchema:
     since = "0.9.6",
     cliVerb = Some("fill"),
     cellMutating = true,
-    needsFormula = true
+    needsFormula = true,
+    // A fill whose target overlaps and precedes its source reads its own earlier writes (A2:A3 →
+    // A1:A6 rewrites A2 before A3 is copied from it); the CLI accepts such targets, so the flag
+    // cannot be claimed.
+    idempotent = false
   )
 
   private val copy = spec(

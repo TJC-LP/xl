@@ -58,7 +58,18 @@ object EditGenerators:
     Gen.frequency(3 -> Gen.const(None), 3 -> Gen.const(Some(data)), 1 -> Gen.const(Some(other)))
 
   val genGridRef: Gen[ARef] = Generators.genGridRef
-  val genGridRange: Gen[CellRange] = Generators.genGridRange
+
+  /** Grid ranges, one in four inside E4:G7 so the branches over the fixture's E5:F6 merge fire. */
+  val genGridRange: Gen[CellRange] =
+    Gen.frequency(
+      3 -> Generators.genGridRange,
+      1 -> (for
+        c1 <- Gen.choose(4, 6)
+        r1 <- Gen.choose(3, 6)
+        c2 <- Gen.choose(4, 6)
+        r2 <- Gen.choose(3, 6)
+      yield CellRange(cell(c1, r1), cell(c2, r2)))
+    )
   val genLoc: Gen[Loc] = for s <- genSheetOpt; r <- genGridRef yield Loc(s, r)
   val genArea: Gen[Area] = for s <- genSheetOpt; r <- genGridRange yield Area(s, r)
 

@@ -733,6 +733,38 @@ class EditInterpreterSpec extends FunSuite:
     assert(!applied.structural)
   }
 
+  test(
+    "fill is not idempotent when the target overlaps and precedes its source, and the schema says so"
+  ) {
+    val fill = Edit.Fill(area("A2:A3"), rng("A1:A6"), Edit.FillDir.Down)
+    assert(!EditSchema.specOf(fill).idempotent)
+    val s = Sheet(data).put(a1("A2"), num(2)).put(a1("A3"), num(3))
+    val once = sheetAfter(Workbook(s), fill)
+    val twice = sheetAfter(Workbook(s), fill, fill)
+    // The fill reads its own earlier writes: A1 takes A2, then A2 takes A3, so the second pass
+    // copies the rewritten A2 into A1.
+    assertEquals(once(a1("A1")).value, num(2))
+    assertEquals(twice(a1("A1")).value, num(3))
+    assertNotEquals(twice.cells, once.cells)
+  }
+
+  // ========== lower ==========
+
+  test("Edit.lower honors the sheet qualifier: an edit aimed at another sheet lowers to None") {
+    assertEquals(Edit.lower(Edit.Put(loc("Other!A1"), num(1), None), baseData), None)
+    assert(Edit.lower(Edit.Put(loc("Data!A1"), num(1), None), baseData).isDefined)
+    assert(Edit.lower(Edit.Put(loc("A1"), num(1), None), baseData).isDefined)
+    // the span families carry the qualifier in `sheet` rather than in a Loc/Area
+    val cols = ColSpan.single(Column.from0(0))
+    assertEquals(Edit.lower(Edit.HideCols(Some(other), cols), baseData), None)
+    assert(Edit.lower(Edit.HideCols(Some(data), cols), baseData).isDefined)
+    assertEquals(Edit.lower(Edit.Merge(area("Other!A1:B2")), baseData), None)
+    assertEquals(
+      Edit.lower(Edit.SetComment(loc("Other!A1"), Comment.plainText("x", None)), baseData),
+      None
+    )
+  }
+
   test("Edit.validate alone reports the edit-local refusals without a workbook") {
     assert(Edit.validate(Edit.Put(loc("A1"), num(1), None)).isRight)
     assert(Edit.validate(Edit.MoveSheet(data, Some(0), Some(other), None)).isLeft)

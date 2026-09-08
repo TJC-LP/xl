@@ -156,8 +156,13 @@ enum Edit derives CanEqual:
   case RenameSheet(from: SheetName, to: SheetName)
 
   /**
-   * Move a sheet to `toIndex` (its final 0-based position among the sheets; the last position is
-   * `sheetCount - 1`), or after/before a named one — exactly one of the three.
+   * Move a sheet to `toIndex` — its FINAL 0-based position among the sheets, `0` to
+   * `sheetCount - 1`, refused outside that range — or after/before a named one; exactly one of the
+   * three. This is NOT the contract of the live `xl move-sheet --to N` (`SheetCommands.moveSheet`),
+   * whose `N` indexes the order BEFORE the sheet is removed and is clamped: on `[A, B, C]`,
+   * `A --to 2` gives `[B, A, C]` and `--to 3` gives `[B, C, A]`, where this case gives `[B, C, A]`
+   * for `2` and refuses `3`. W2.2 (#583) must translate at the verb boundary or change the verb
+   * with a CHANGELOG "Changed" line.
    */
   case MoveSheet(
     name: SheetName,

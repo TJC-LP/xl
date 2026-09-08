@@ -495,12 +495,71 @@ private[xl] object EditInterpreter:
   /**
    * The Sheet-local subset as a `Patch` over `existing` (the sheet before the edit), or `None` when
    * the edit needs the formula support, another sheet, the workbook, or a state the kernel has no
-   * case for (comments removed, panes, views, print setup). Total: an edit whose guards would fail
-   * lowers to `None` rather than to a patch the kernel would throw on. Coherence law
-   * (EditLawsSpec): `lower(e, s) == Some(p)` and `e` applying to `s` imply the result is
+   * case for (comments removed, panes, views, print setup). "Another sheet" is decided by the
+   * edit's own qualifier: an edit that names a sheet other than `existing.name` lowers to `None`,
+   * so a caller can never apply `Other!A1` onto `Data` through the kernel. Total: an edit whose
+   * guards would fail lowers to `None` rather than to a patch the kernel would throw on. Coherence
+   * law (EditLawsSpec): `lower(e, s) == Some(p)` and `e` applying to `s` imply the result is
    * `Patch.applyPatch(s, p)`.
    */
-  def lower(edit: Edit, existing: Sheet): Option[Patch] = edit match
+  def lower(edit: Edit, existing: Sheet): Option[Patch] =
+    if qualifierOf(edit).exists(_ != existing.name) then None
+    else lowerOnto(edit, existing)
+
+  /**
+   * The sheet an edit names for itself, or `None` for "the scope's default" and for the
+   * workbook-level cases. The field differs per family: `Loc`/`Area` targets carry `sheet`, `Fill`
+   * names it on its source, `Copy` on its target (where the write lands), the span and
+   * sheet-setting families on `sheet`.
+   */
+  private def qualifierOf(edit: Edit): Option[SheetName] = edit match
+    case Edit.Put(at, _, _) => at.sheet
+    case Edit.PutValues(at, _, _) => at.sheet
+    case Edit.PutFormula(at, _, _) => at.sheet
+    case Edit.PutFormulas(at, _, _) => at.sheet
+    case Edit.DragFormula(at, _, _, _) => at.sheet
+    case Edit.Fill(source, _, _) => source.sheet
+    case Edit.Copy(_, target, _) => target.sheet
+    case Edit.Sort(at, _, _) => at.sheet
+    case Edit.Clear(at, _) => at.sheet
+    case Edit.Style(at, _, _) => at.sheet
+    case Edit.Merge(at) => at.sheet
+    case Edit.Unmerge(at) => at.sheet
+    case Edit.ColWidth(sheet, _, _) => sheet
+    case Edit.RowHeight(sheet, _, _) => sheet
+    case Edit.HideCols(sheet, _) => sheet
+    case Edit.ShowCols(sheet, _) => sheet
+    case Edit.HideRows(sheet, _) => sheet
+    case Edit.ShowRows(sheet, _) => sheet
+    case Edit.GroupRows(sheet, _, _, _) => sheet
+    case Edit.GroupCols(sheet, _, _, _) => sheet
+    case Edit.UngroupRows(sheet, _) => sheet
+    case Edit.UngroupCols(sheet, _) => sheet
+    case Edit.AutoFit(sheet, _) => sheet
+    case Edit.SetComment(at, _) => at.sheet
+    case Edit.RemoveComment(at) => at.sheet
+    case Edit.Hyperlink(at, _) => at.sheet
+    case Edit.AddConditionalFormat(sheet, _, _) => sheet
+    case Edit.AddChart(sheet, _, _) => sheet
+    case Edit.AddImage(sheet, _, _) => sheet
+    case Edit.Freeze(at) => at.sheet
+    case Edit.Unfreeze(sheet) => sheet
+    case Edit.SetSheetView(sheet, _, _, _) => sheet
+    case Edit.SetTabColor(sheet, _) => sheet
+    case Edit.SetAutoFilter(sheet, _) => sheet
+    case Edit.SetPageSetup(sheet, _, _, _, _, _) => sheet
+    case Edit.SetHeaderFooter(sheet, _, _, _, _, _, _, _, _) => sheet
+    case Edit.InsertRows(sheet, _, _) => sheet
+    case Edit.DeleteRows(sheet, _, _) => sheet
+    case Edit.InsertCols(sheet, _, _) => sheet
+    case Edit.DeleteCols(sheet, _, _) => sheet
+    case Edit.AddSheet(_, _, _) | Edit.RemoveSheet(_) | Edit.RenameSheet(_, _) |
+        Edit.MoveSheet(_, _, _, _) | Edit.CopySheet(_, _) | Edit.HideSheet(_, _) |
+        Edit.ShowSheet(_) | Edit.DefineName(_, _, _) | Edit.RemoveName(_, _) =>
+      None
+
+  /** [[lower]] once the qualifier is known to be `existing` (or absent). */
+  private def lowerOnto(edit: Edit, existing: Sheet): Option[Patch] = edit match
     case Edit.Put(at, value, format) => Some(putPatch(existing, at.ref, value, format))
     case Edit.PutValues(at, values, format) if at.range.cellCount == values.size.toLong =>
       Some(
