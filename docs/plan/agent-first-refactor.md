@@ -915,6 +915,8 @@ laws unchanged; `EditSchema.all.size == number of cases`; no `FillDirection/Sort
 exported from `api`; every Wave 1 golden unchanged; an `EditPreludeProbe` outside `com.tjclp.xl`.
 Size honestly: four clusters (model+schema, interpreter+laws, formula support, prelude).
 
+**Status**: implemented — stack 3/6, PR #598 (`4e81e783`…`f43eedfe`); adversarial review approved after one rework (sheet-qualifier gate in `Edit.lower`, `fill` non-idempotent, MoveSheet contract recorded on #583, Clear→unmerge pinned).
+
 **W2.2 Batch on the algebra: twins, verb lowering, `--print-batch`** · xl-cli · Scope: `EditJson`
 codec (`decode(encode(e)) == Right(e)`, all errors collected with op indexes, aliases from
 `EditSchema`, `sheet`/qualified-ref conflict rule); `BatchParser` becomes the adapter (`BatchOp.toEdit`,
@@ -932,6 +934,8 @@ Acceptance: `BatchParitySpec` — every JSON literal in the existing batch specs
 every example; `WriteCommands`/`BatchParser` shrink by ≥ 1,500 lines. Closes #462, GH-463's CLI
 half.
 
+**Status**: queued for wave 28b (issue #583); note the `Edit.MoveSheet` vs `move-sheet --to` index contract recorded there.
+
 **W2.3 Registry-driven `Main` with `Needs` validation** · xl-cli · Scope: `CommandSpec(path,
 summary, help, needs: CliCommand => Needs, exit, batchTwin, since, opts)`, `Registry.all` (one per
 verb), one dispatch group `(globalOptsAll, Registry.verbOpts).mapN(dispatch)` replacing the eleven
@@ -947,6 +951,8 @@ has a spec, every spec's `--help` parses, `needs` are consistent; every Wave 1 g
 except the two decline-error shapes and the `view -o x` message; `MainSpec`/`InPlaceSpec`/
 `LintCommandSpec` argv tests green.
 
+**Status**: queued for wave 28b (issue #584).
+
 **W2.4 `CellRecord` and `SheetSource`: one projection, streaming as a strategy** · xl-cli,
 xl-cats-effect · Scope: `CellRecord(ref, sheet, kind, value, formatted, formula: Option[FormulaInfo],
 hidden, mergedInto, style)` with `toJson(legacyKeys = true)` byte-identical to today's
@@ -960,6 +966,8 @@ for every read verb, in-memory and streaming produce equal payloads when the boo
 capabilities; unsupported combinations are in-band `UNSUPPORTED_IN_STREAM`; `filter --stream`
 works; the nine scalar textualisers and three JSON/CSV escapers are gone.
 
+**Status**: implemented — stack 5/6, PR #600 (`4a79811b`…`b9cbc423`); two review rounds (source-parity law widened to every shared capability, O(1) merge index, `WorkbookMetadataReader` absolute-Target fix, single-cell `<dimension>` re-derived, used-range contract documented).
+
 **W2.5 Streaming writes over the algebra** · xl-cli, xl-cats-effect · Scope: `StreamingWriteCommands`
 consumes `Vector[Edit]`, declares support from `EditSchema.streamable`, refuses by index before
 opening the zip (already the batch behaviour from Wave 1; now also the verb path: `--stream putf
@@ -969,6 +977,8 @@ deletes the `*Sync` style clones (`StreamingWriteCommands.scala:968-1081`) in fa
 `StyleOverlay`, resolves sheets through `Resolve.sheetName`. Acceptance: property `stream(edits) ≡
 memory(edits)` on the streamable subset for generated edits (cell XML equality); `StreamingWriteSpec`
 green; no divergence sentence left in `docs/reference/cli.md`.
+
+**Status**: queued for wave 28b (issue #586).
 
 **W2.6 `Recalc.afterEdits` promotion** · xl-evaluator, xl-cli, xl · Scope: `RecalcPolicy(scope:
 Cone | Whole | None, strict: Boolean)` and `Recalc.afterEdits(before: Workbook, applied: Applied,
@@ -985,12 +995,16 @@ the same policy; `RecalcResult.summary` is the only summary text; the `@targetNa
 ≥ 350 lines; `xl recalc`, batch tails, `view --eval` and `writeRecalculated` are projections of one
 function.
 
+**Status**: queued for wave 28b (issue #587).
+
 **W2.7 `_xlfn.` prefixes (#556) — only after PR #576 lands** · xl-evaluator, xl-ooxml · Scope:
 the writer prefixes the post-2007 function set in `<f>` (a table on `FunctionFlags`, e.g.
 `since2010`), the parser strips `_xlfn.`/`_xlws.` on read, `FormulaPrinter` round-trips, lint
 `xlfn-missing`; also `FunctionFlags.volatile` for `WorkbookAudit` (touches `FunctionSpecs*` — run
 `./mill clean xl-evaluator.compile`). Acceptance: the issue's repro opens in Excel without
 `#NAME?`; parse∘print identity on the fixture corpus; `WorkbookAudit.volatile` uses the flag.
+
+**Status**: implemented as the post-#576 remainder — stack 2/6, PR #597 (`398f6f5d`…`37bf81c5`, issue #588 closing #577): CF/DV/defined-name prefixes, `xlfn-missing` lint, `FunctionFlags.volatile`; the writer-side heal on every write is #593.
 
 **W2.8 Scripting completions without a default flip** · xl-cats-effect, xl, xl-core · Scope:
 additive `Excel.writeChecked(wb, path, options: RecalcOptions): RecalcResult` (recalculates
@@ -1004,6 +1018,8 @@ half); `CodecError.UncachedFormula` considered again with the exhaustive-match s
 for every name; `scripts/test-examples.sh` and `verify-skill-snippets.sh --local` green; no
 `Excel.write` call in docs/examples writes a formula without a cache.
 
+**Status**: implemented — stack 6/6, PR #601 (`7fab5abb`…`c5cbfd25`); `CodecError.UncachedFormula` deliberately not added (rationale on the enum).
+
 **W2.9 `RowCodec` records** · xl-core, xl · Scope: `trait RowCodec[A]` with `RowCodec.derived` via
 `Mirror.ProductOf`, `Option[T]` fields as empty cells, `RowCodecError.Field(row, column, field,
 cause)`, `Sheet.readRows[A](range)`, `readRowsByHeader[A](headerRow)`, `headers(row)`,
@@ -1014,6 +1030,8 @@ landmine is exactly what it tests; fallback is a non-inline `RowCodec.of[A](code
 round-trip law `readRows(putRows(at, rows).range) == Right(rows)` over generators; ADR-008 amended
 ("primitives hand-written, row codecs derived").
 
+**Status**: implemented — stack 4/6, PR #599 (`9c9eebd2`); the prelude derivation probe was written first and stayed green, so no `RowCodec.of` fallback; follow-ups: table uid determinism (#595), header renaming, lenient reads.
+
 **W2.10 Warnings never silent; `Written` payload** · xl-cli · Scope: write handlers gain `*Report`
 twins returning `WriteReport(text, saved, changes: Vector[{sheet, target, before, after}], recalc,
 warnings)` beside the `IO[String]` entry points; `Payload.Written`; the 12 handler-level
@@ -1022,6 +1040,8 @@ warnings)` beside the `IO[String]` entry points; `Payload.Written`; the 12 handl
 `data.changes[0].before/after`; the `--strict` exit-1 payload carries `recalc.errors`; no
 `System.err.println` remains under `xl-cli/src`; the `CliHarness` `setErr` bracket is removed.
 
+**Status**: queued for wave 28b (issue #591).
+
 **W2.11 Harness and goldens in CI; JAR smoke** · CI, xl-agent · Scope: `ci.yml` runs the golden
 runner explicitly and a JAR smoke (`--help`, `sheets`, `view --json`, `schema --json`, `lint`) on
 every PR with `timeout-minutes`; `release.yml` smokes the native binary the same way; the xl-agent
@@ -1029,6 +1049,8 @@ grader reads `sheets --json` instead of scraping the markdown table (`Evaluator.
 locks the skill to the binary version; `ContractSpec` enumerates every error/warning code against
 the generated tables. Acceptance: a golden diff fails CI with the unified diff in the log; the
 grader has no markdown parsing left.
+
+**Status**: implemented — stack 1/6, PR #594 (`b696839a`); review approved, golden-break proof reproduced independently.
 
 ## Wave 3 — self-describing, packaged, one vocabulary (GitHub-issue-ready)
 
