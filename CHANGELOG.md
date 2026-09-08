@@ -112,6 +112,37 @@ The 0.21.0 dogfood's CLI contract nits, one PR (#607, #615, #617, #619, #620, #6
   (a `TypeMismatch` for `Option[Int]`), because Excel distinguishes `""` from blank (`ISBLANK`
   FALSE, `COUNTA` counts it); normalise with `.filter(_.nonEmpty)` or clear such cells first.
   Noted in `docs/LIMITATIONS.md`, the scripting reference and the skill's API page.
+- **Named cell styles, the recent-colours palette and the styles `extLst` survive every write**
+  (#610): a source workbook's `cellStyleXfs`, `cellStyles`, `tableStyles`, `colors` and
+  styles-level `extLst` now ride through the in-memory writer verbatim — the same
+  opaque-passthrough contract as `dxfs`, byte-identical on the default DOM backend — and every
+  `cellXf` keeps the `xfId` of the named style it derives from. Both serializer backends emit them
+  in CT_Stylesheet order (`numFmts … cellStyles, dxfs, tableStyles, colors, extLst`); the
+  `fontId`/`fillId`/`borderId` references inside a preserved `cellStyleXfs` follow the component
+  tables should those move. `WorkbookStyles` gains `xfIds` and `preserved: PreservedStyleParts`,
+  `StyleIndex` a per-cellXf `xfIds` vector, `OoxmlStyles` a fifth `preserved` field. The reader now
+  registers a source's cellXfs positionally in each sheet's `StyleRegistry` (`s="8"` is registry
+  slot 8, canonical-key twins included) and the surgical `StyleIndex` maps such slots back to
+  themselves instead of folding them onto the first equal xf: an xf that differs only in `xfId`
+  ("Comma 2" applied vs the same formatting typed by hand) is a different xf to Excel. A NEW use of
+  twin formatting shares the direct twin (`xfId="0"`) when one exists, so hand formatting never
+  lands on a named style. Because slots are positional, every source `<xf>` of `cellXfs` is emitted
+  verbatim too (`applyFont`/`applyFill`/`applyBorder`/`applyNumberFormat`, `quotePrefix`,
+  `<protection>` and attribute order intact); only the xfs xl adds are regenerated, and those now
+  point at the FIRST of equal table entries (a `toMap` kept the last duplicate font). An empty
+  `<cellStyleXfs count="0"/>` or an out-of-range `xfId` in the source is repaired to `Normal` — xl
+  introduces no dangling reference. Styles xl authors still get `xfId="0"`; xl-authored workbooks
+  and scratch writes still emit exactly one `Normal`, so no golden changed. On the dogfood model,
+  `put` keeps 74/74 `cellStyleXfs`/`cellStyles`, `mruColors`, `extLst`, all 593 `cellXfs`
+  byte-verbatim with their `xfId`s (was 1/1, all 0), and `styles.xml` goes 109,665 → 105,818 bytes
+  (was 70,193; the rest is unmodeled font attributes and two equal-parsing fills). New fixture
+  `named-styles-excel.xlsx`.
+- **`"` is written verbatim in element text** (#611): `XmlUtil.compact` serializes text nodes
+  escaping only `&`, `<` and `>` (attribute values keep `&quot;`), as the StAX backend and Excel
+  already did. Defined-name array constants, formula string literals, shared strings and
+  data-validation list formulas shrink accordingly (`{"detail",#N/A,FALSE,"mfg"}` no longer becomes
+  `{&quot;detail&quot;,…}`); the reader accepts both spellings. `DataValidationPreservationSpec`
+  re-pinned to the literal form; no CLI golden changed.
 
 ## [0.21.0] - 2026-09-08
 

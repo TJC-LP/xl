@@ -164,9 +164,73 @@ object XmlUtil:
 
   /** Compact XML without indentation (newline after declaration for Excel compatibility) */
   def compact(node: Node): String =
-    // Use toString instead of PrettyPrinter to preserve all whitespace (including newlines)
-    // PrettyPrinter normalizes whitespace in text nodes, which corrupts comments with newlines
-    s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${node.toString}"""
+    // Serialized node-by-node (never PrettyPrinter, which normalizes whitespace in text nodes and
+    // corrupts comments with newlines) with scala.xml's own tag/attribute/scope rendering, but
+    // text content that keeps '"' verbatim (GH-611)
+    val sb = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")
+    serialize(node, TopScope, sb).toString
+
+  /**
+   * Serialize a node exactly as scala.xml's `Node.toString` does — same empty-tag minimization,
+   * same attribute quoting (a `"` in an attribute value stays `&quot;`), same namespace-declaration
+   * placement, same "space-joined atoms" rule — except that TEXT content escapes only what XML
+   * requires: `&`, `<` and `>`. scala.xml also escapes `"` in text, which nothing needs and Excel
+   * never writes; on a model with array constants in defined names (`{"detail",#N/A,FALSE,"mfg"}`),
+   * string literals in formulas and quotes in shared strings that inflated parts and made diffs
+   * against Excel's own bytes noisy (GH-611). The StAX backend already wrote `"` verbatim; both
+   * backends now agree. XML-illegal control characters are dropped, as before (GH-237 parity).
+   */
+  def serialize(node: Node, pscope: NamespaceBinding, sb: StringBuilder): StringBuilder =
+    node match
+      case t: Text => escapeText(t.data, sb)
+      case pc: PCData => pc.buildString(sb)
+      case u: Unparsed => u.buildString(sb)
+      case a: Atom[?] => escapeText(a.data.toString, sb)
+      case s: SpecialNode => s.buildString(sb) // Comment, EntityRef, ProcInstr
+      case g: Group =>
+        g.nodes.foreach(serialize(_, g.scope, sb))
+        sb
+      case el: Elem =>
+        sb.append('<')
+        el.nameToString(sb)
+        if el.attributes ne null then el.attributes.buildString(sb)
+        el.scope.buildString(sb, pscope)
+        if el.child.isEmpty && el.minimizeEmpty then sb.append("/>")
+        else
+          sb.append('>')
+          serializeChildren(el.child, el.scope, sb)
+          sb.append("</")
+          el.nameToString(sb)
+          sb.append('>')
+      case other => sb.append(other.toString)
+
+  /** scala.xml's `sequenceToXML`: a run made only of non-Text atoms is space-joined. */
+  private def serializeChildren(
+    children: Seq[Node],
+    pscope: NamespaceBinding,
+    sb: StringBuilder
+  ): Unit =
+    if children.isEmpty then ()
+    else if children.forall { case _: Text => false; case c => c.isAtom } then
+      children.zipWithIndex.foreach { case (c, i) =>
+        if i > 0 then sb.append(' ')
+        serialize(c, pscope, sb)
+      }
+    else children.foreach(serialize(_, pscope, sb))
+
+  /**
+   * Text-content escape (GH-611): `&`, `<`, `>` only — `"` and `'` verbatim. Characters below
+   * U+0020 other than tab/LF/CR are XML 1.0-illegal and dropped, matching scala.xml's `escape`.
+   */
+  def escapeText(text: String, sb: StringBuilder): StringBuilder =
+    text.iterator.foldLeft(sb) { (acc, c) =>
+      c match
+        case '&' => acc.append("&amp;")
+        case '<' => acc.append("&lt;")
+        case '>' => acc.append("&gt;")
+        case c if c >= ' ' || c == '\n' || c == '\r' || c == '\t' => acc.append(c)
+        case _ => acc
+    }
 
   /** Get required attribute value */
   def getAttr(elem: Elem, name: String): Either[String, String] =
