@@ -74,6 +74,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--columns` token (`USAGE`). A property law over generated books pins that both
   sources produce byte-equal payloads for every read verb on shared capabilities (values, cached
   formulas, comments, styled-but-empty cells, openpyxl-style package-absolute rels targets).
+- **Scripting completions** (#589): `Excel.writeChecked(wb, path[, RecalcOptions]): RecalcResult`
+  computes only the uncached formulas (`recalculateUncached`), writes, and returns the result —
+  the write for a freshly built model; `writeRecalculated` gains a `RecalcOptions` overload and
+  `Excel.write` keeps its 0.19 semantics. `Excel.readSheet(path, name)` (an `XLException` naming
+  the candidate sheets), `Excel.readMetadata(path): LightMetadata`, `Excel.modifyR(path)(f:
+  Workbook => XLResult[Workbook])` (a `Left` aborts before any scratch file). The prelude adds
+  `orExit(result)` / `exitMessage(err)`, which print the CLI's `error:`/`code:`/`hint:`/`did you
+  mean:` block and exit 1. `Sheet.collapseRows`/`collapseCols` and `expandRows`/`expandCols`
+  (Row/Column and range forms) compose hidden members with the collapsed summary marker (#465,
+  second half). Docs, examples and the xl-scripting skill write fresh models with `writeChecked`
+  or `writeRecalculated`, never plain `write`.
 
 ### Changed
 
