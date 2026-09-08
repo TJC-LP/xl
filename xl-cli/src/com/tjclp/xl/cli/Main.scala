@@ -881,9 +881,19 @@ EXAMPLES:
     (refArg, noStyleOpt).mapN(CliCommand.Cell.apply)
   }
 
+  // GH-637: the scan stops one match past --limit unless the exact total is asked for
+  private val exactTotalOpt =
+    Opts
+      .flag(
+        "total",
+        "Scan every cell for the exact match total (default: stop at --limit and report the " +
+          "total as a lower bound)"
+      )
+      .orFalse
+
   val searchCmd: Opts[CliCommand] =
     Opts.subcommand("search", "Search for cells (all sheets by default)") {
-      (patternArg, limitOpt, sheetsFilterOpt).mapN(CliCommand.Search.apply)
+      (patternArg, limitOpt, sheetsFilterOpt, exactTotalOpt).mapN(CliCommand.Search.apply)
     }
 
   val statsCmd: Opts[CliCommand] =

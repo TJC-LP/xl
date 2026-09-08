@@ -50,6 +50,14 @@ object RendererCommon:
   def pagingNotice(first: Int, last: Int, total: Int): String =
     s"… showing rows $first–$last of $total (use --offset/--limit to page; --limit 0 = no limit)"
 
+  /**
+   * The notice of a `search` whose scan stopped at `--limit` (GH-637): one more match was seen, so
+   * more exist, and the exact total is a `--total` (or `--limit 0`) away.
+   */
+  def searchStoppedNotice(shown: Int): String =
+    s"… showing first $shown matches; more exist (use --limit to raise; --limit 0 = no limit; " +
+      "--total for the exact count)"
+
   /** The notice for a window whose columns `--max-cols` clipped. */
   def columnNotice(shown: Int, total: Int): String =
     s"… showing $shown of $total columns (use --max-cols to raise; --max-cols 0 = no limit)"

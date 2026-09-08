@@ -28,7 +28,7 @@ names           -f                    0 2 3    -               0.2.0   List defi
 bounds          -f -s --stream        0 2 3    -               0.9.0   Show the used range (instant from the dimension element; --scan for an accurate scan)
 view            -f -s --stream        0 1 2 3  -               0.1.0   View a range as markdown, json, csv, html, svg, png, jpeg, webp or pdf (--eval, --formulas)
 cell            -f -s --stream        0 2 3    -               0.1.0   Get one cell's value, style, comment and direct dependencies
-search          -f --stream           0 2 3    -               0.1.0   Search cells by regex (all sheets unless -s)
+search          -f --stream           0 2 3    -               0.1.0   Search cells by regex (all sheets unless -s; the scan stops at --limit, --total counts every match)
 stats           -f -s --stream        0 2 3    -               0.2.0   Statistics for the numeric values in a range
 filter          -f -s --stream        0 2 3    -               0.11.3  Filter rows of the used range with a --where predicate (read-only)
 describe        -f --stream           0 2 3    -               0.20.0  Orient in a workbook: sheets, defined names, date system (--full adds per-sheet counts)

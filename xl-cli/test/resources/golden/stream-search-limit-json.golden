@@ -1,0 +1,53 @@
+## args
+-f
+<DIR>/simple.xlsx
+--stream
+--json
+search
+\d
+--limit
+2
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "search",
+  "version": "<VERSION>",
+  "data": {
+    "pattern": "\\d",
+    "sheets": [
+      "Data",
+      "Summary"
+    ],
+    "count": 2,
+    "total": 3,
+    "totalExact": false,
+    "matches": [
+      {
+        "ref": "B1",
+        "sheet": "Data",
+        "kind": "number",
+        "value": 10,
+        "formatted": "10",
+        "formula": null,
+        "hidden": null,
+        "mergedInto": null
+      },
+      {
+        "ref": "C1",
+        "sheet": "Data",
+        "kind": "number",
+        "value": 45306,
+        "formatted": "1/15/24",
+        "formula": null,
+        "hidden": null,
+        "mergedInto": null
+      }
+    ]
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

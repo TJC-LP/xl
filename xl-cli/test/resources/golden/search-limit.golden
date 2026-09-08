@@ -1,0 +1,19 @@
+## args
+-f
+<DIR>/simple.xlsx
+search
+\d
+--limit
+2
+## exit
+0
+## stdout
+Found at least 3 matches in 2 sheets:
+
+| Ref     | Value |
+|---------|-------|
+| Data!B1 | 10    |
+| Data!C1 | 45306 |
+
+… showing first 2 matches; more exist (use --limit to raise; --limit 0 = no limit; --total for the exact count)
+## stderr

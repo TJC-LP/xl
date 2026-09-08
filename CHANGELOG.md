@@ -93,6 +93,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`search` stops scanning at `--limit` and says so** (#637). The payload gains `totalExact`:
+  `true` when the scan read every cell (`--total`, `--limit 0`, or a hit list that fit within the
+  limit) and `total` is the exact count; `false` when the scan stopped at `--limit`, and `total`
+  is then a lower bound (`limit + 1`: one more match was seen, so more exist). Text mode reads
+  `Found at least 11 matches in Data:` with a `… showing first 10 matches; more exist (…; --total
+  for the exact count)` trailer in that case, and keeps `Found 100 matches` / `… showing 10 of 100
+  matches` when the total is exact. The new `search --total` flag opts into the full scan. Same
+  contract from both sources; the `search-json` golden gains the field.
 - `fill --no-recalc` caches uncached formulas on source rows inside the target and evaluates them
   against the fully filled sheet (previously source rows were skipped and evaluated against the
   partially filled sheet). Group/ungroup validation reports a malformed span before an invalid
@@ -102,7 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Under `--stream`, `cell` prints `Dependencies:` and `Dependents:` as `(not available in
   streaming mode)` (`null` in `--json`) instead of a regex-derived token list, typed records carry
   `hidden: null` where the source cannot see hidden lines (was an affirmative `false`), and
-  `search` scans the whole sheet so its total is true. In-memory `search` returns hits in row-major
+  `search` reports the same total from both sources. In-memory `search` returns hits in row-major
   order and no longer matches styled-but-empty cells (they are not occupied, so `search '^$'`
   agrees with `--stream`). `view` without a range and `filter` address the worksheet's stored-cell
   box from both sources (`filter`'s window can widen by formatted empty cells); streaming
@@ -131,6 +139,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--stream search --limit N` scanned the whole sheet** (#637, a regression against 0.19.3:
+  1.5 s became 56 s on a million-row sheet with 30k matches). The unreleased candidate kept
+  reading after the limit to report the exact total; the scan now stops one match past `--limit`
+  (the streamed sheet's SAX parser is interrupted there and a sheet after the one that filled the
+  limit is never opened) and reports the total as a lower bound; `--total` restores the full scan.
 - **`_xlfn.` storage prefix on conditional-formatting, data-validation and defined-name formulas**
   (#577). `CfCodec`, `DataValidationCodec` and the workbook's defined names now go through
   `FormulaStorage` like cell formulas: an Excel-authored `_xlfn.IFS(` in a rule reads bare and

@@ -357,7 +357,8 @@ you need hidden lines elided or flagged.
 render the same `CellRecord`s whether the cells come from the loaded workbook or from the
 streaming reader, so `--stream` changes what a verb *can* answer, never how it prints: streaming
 `view --format json` is the same `{sheet, range, rows}` document as in memory (it used to be a bare
-array of strings), streaming `search` reports the true total and the same trailer, and `filter`
+array of strings), streaming `search` reports the same total, `totalExact` and trailer as the
+in-memory one (both stop scanning at `--limit`; `--total` for the exact count), and `filter`
 streams. What each source can answer is the `capabilities` table of `xl schema --json`
 (`values`, `styles`, `formulas`, `comments` from both; `hidden`, `merges`, `hyperlinks`, `graph`,
 `eval`, `render` from the loaded workbook only). A query needing more than `--stream` has is
@@ -658,13 +659,17 @@ its formatted display.
 |-----|------|----------|---------|-------------|
 | `pattern` | string | Yes | — | Search pattern (supports regex) |
 | `--sheets` | string | No | all | Comma-separated list of sheets to search |
-| `--limit` | int | No | 50 | Max results (0 = no limit). Reports the true total ("Found Y matches") and appends a "… showing X of Y matches" trailer when the hit list is clipped — under `--stream` too |
+| `--limit` | int | No | 50 | Max results (0 = no limit). The scan stops one match past the limit (since 0.21.0, #637): a clipped hit list reads "Found at least Y matches" with a "… showing first X matches; more exist" trailer, and the rest of the sheet is never read — a bounded read on a million-row sheet, in memory and under `--stream` alike. A hit list that fits is exact ("Found Y matches") |
+| `--total` | flag | No | off | Scan every cell for the exact total: "Found Y matches" and a "… showing X of Y matches" trailer when clipped (what `--limit 0` also gives, listing everything) |
 
-`--json`: `{pattern, sheets, count, total, matches: [{ref, sheet, kind, value, formatted, formula,
-hidden, mergedInto}]}` — `count` the matches listed, `total` every match, each match the typed
-cell record (`value` an exact JSON lexeme, `formula` an object or `null`, `hidden` a boolean or
-`null` under `--stream`). Matches are the occupied cells in row-major order; a cell that carries a
-style but no value is not occupied (it matches nothing, from either source).
+`--json`: `{pattern, sheets, count, total, totalExact, matches: [{ref, sheet, kind, value,
+formatted, formula, hidden, mergedInto}]}` — `count` the matches listed, `total` the matches the
+scan counted, `totalExact` whether the scan read every cell (`true` with `--total`, `--limit 0` or
+a hit list that fit; `false` when it stopped at `--limit`, and `total` is then a lower bound —
+`limit + 1`, since one more match was seen), each match the typed cell record (`value` an exact
+JSON lexeme, `formula` an object or `null`, `hidden` a boolean or `null` under `--stream`).
+Matches are the occupied cells in row-major order; a cell that carries a style but no value is not
+occupied (it matches nothing, from either source).
 
 **Output**:
 ```markdown
@@ -1802,8 +1807,8 @@ otherwise:
   calcPr}`; `deps` → `{ref, formula, value, direction, depth, precedents, dependents}`.
 - The record-based reads are typed too (since 0.21.0): `cell` → the cell record with `style`,
   `comment`, `hyperlink`, `dependencies`, `dependents`; `search` → `{pattern, sheets, count,
-  total, matches}`; `stats` → `{sheet, range, count, sum, min, max, mean}` — every number an
-  exact lexeme.
+  total, totalExact, matches}`; `stats` → `{sheet, range, count, sum, min, max, mean}` — every
+  number an exact lexeme.
 - Every other verb (`view` in a text format, and all writes) yields
   `{"text": <what text mode prints>, "saved": <path or null>, "written": <bool>}`. `saved` is the
   user-visible output path once the write was committed; it is `null` (and `written` is `false`)
