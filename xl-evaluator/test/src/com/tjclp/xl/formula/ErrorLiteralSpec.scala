@@ -52,6 +52,13 @@ class ErrorLiteralSpec extends FunSuite:
     assertEquals(eval("=#n/a+1"), CellValue.Error(CellError.NA))
   }
 
+  test("#N/A does not swallow an operator that follows it: #N/A/2 is #N/A divided by 2") {
+    assertEquals(eval("=#N/A/2"), CellValue.Error(CellError.NA))
+    assertEquals(eval("=1/#N/A"), CellValue.Error(CellError.NA))
+    assertEquals(eval("=IFERROR(#N/A/2,7)"), CellValue.Number(BigDecimal(7)))
+    assertEquals(eval("=#NAME?*2"), CellValue.Error(CellError.Name))
+  }
+
   test("IFERROR and ISERROR see an error literal as an error value") {
     assertEquals(eval("=IFERROR(#DIV/0!,0)"), CellValue.Number(BigDecimal(0)))
     assertEquals(eval("=ISERROR(#VALUE!)"), CellValue.Bool(true))

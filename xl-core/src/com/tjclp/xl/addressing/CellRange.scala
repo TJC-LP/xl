@@ -270,6 +270,16 @@ object CellRange:
     s.nonEmpty && s.forall(c => c.isDigit)
 
   /**
+   * GH-612: whether one side of a `start:end` spelling (`$` anchor allowed) names a whole COLUMN —
+   * `A`, `$XFD` — the split [[parse]] makes before synthesizing the range's corners, exposed so the
+   * formula layer classifies range text with the very same predicate.
+   */
+  def spellsWholeColumn(part: String): Boolean = isColumnOnly(Anchor.parse(part)._1)
+
+  /** GH-612: the whole-ROW twin of [[spellsWholeColumn]] — `3`, `$10`. */
+  def spellsWholeRow(part: String): Boolean = isRowOnly(Anchor.parse(part)._1)
+
+  /**
    * Parse full column range like A:C or $A:$C. Returns range spanning all rows (0 to MaxIndex0) for
    * the specified columns.
    */

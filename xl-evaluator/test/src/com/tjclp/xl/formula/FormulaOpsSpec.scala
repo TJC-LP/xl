@@ -173,6 +173,8 @@ class FormulaOpsSpec extends FunSuite:
     assertEquals(shifted("=SUM($E:$E)", 3, 3), "=SUM($E:$E)")
     assertEquals(shifted("=SUM($A:C)", 1, 1), "=SUM($A:D)")
     assertEquals(shifted("=SUM(Sheet1!A:A)", 2, 9), "=SUM(Sheet1!C:C)")
+    assertEquals(shifted("=SUM([2]Book1!A:A)", 1, 4), "=SUM([2]Book1!B:B)")
+    assertEquals(shifted("=[2]Book1!A:A", 1, 0), "=[2]Book1!B:B")
     assertEquals(shifted("=A:A", 1, 1), "=B:B")
   }
 

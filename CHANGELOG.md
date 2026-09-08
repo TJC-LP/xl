@@ -101,12 +101,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Formula AST range nodes carry their form** (#612): `TExpr.RangeRef`, `SheetRange`,
+- **Breaking: formula AST range nodes carry their form** (#612). `TExpr.RangeRef`, `SheetRange`,
   `ExternalRange` and `RangeLocation.Local`/`CrossSheet`/`External` gained a trailing
-  `form: RangeForm = RangeForm.Cells` field, and `RangeLocation` gained an `Error(CellError)` case.
-  Constructors are source-compatible; positional pattern matches need one more `_`, and exhaustive
-  matches on `RangeLocation` need the new arm. `FormulaShifter.shift`/`FormulaOps.shift` no longer
-  clamp an off-grid reference at A1 (it becomes `#REF!`).
+  `form: RangeForm = RangeForm.Cells` field (their `unapply`, `copy` and constructor signatures
+  changed), `TExpr` gained an `ErrorLit` case and `RangeLocation` an `Error(CellError)` case.
+  Constructor calls are source-compatible; a positional pattern match on any of the six nodes needs
+  one more `_`, an exhaustive match on `TExpr` or `RangeLocation` needs the new arm, and an
+  already-compiled downstream artifact must be rebuilt against this `xl-evaluator`. A hand-built
+  node whose form does not fit its range (`Columns` on `A1:B2`) prints and shifts as the corner
+  range it addresses.
+- **Breaking: a fill-drag no longer clamps at the sheet edge** (#612). `FormulaShifter.shift`,
+  `FormulaOps.shift`, `Edit.DragFormula`/`Edit.Fill`, `putf <range>` and batch `putf … from` write
+  `#REF!` for a reference the drag would carry off the grid (`=A1` from B2 to B1 is `=#REF!`,
+  `SUM(A1:A2)` is `SUM(#REF!)`) where they used to clamp at A1 or emit a row/column that does not
+  exist — an error value in the file instead of a silently different cell.
 - `fill --no-recalc` caches uncached formulas on source rows inside the target and evaluates them
   against the fully filled sheet (previously source rows were skipped and evaluated against the
   partially filled sheet). Group/ungroup validation reports a malformed span before an invalid

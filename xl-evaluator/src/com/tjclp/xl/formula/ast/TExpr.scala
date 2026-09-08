@@ -143,7 +143,10 @@ enum TExpr[A] derives CanEqual:
    * @param form
    *   GH-612: the surface form the range was written in — `A:A` ([[RangeForm.Columns]]) and `1:1`
    *   ([[RangeForm.Rows]]) address the same cells as their corner spellings but print back as
-   *   written and move only along their own axis when dragged or restructured.
+   *   written and move only along their own axis when dragged or restructured. Precondition:
+   *   `Columns` on a range spanning every row, `Rows` on one spanning every column (what the parser
+   *   builds; `parse ∘ print = id` is stated for parser-built nodes). An inconsistent hand-built
+   *   pairing is treated as the corner range it addresses (`RangeForm.actualFor`), never widened.
    */
   case RangeRef(range: CellRange, form: RangeForm = RangeForm.Cells) extends TExpr[Nothing]
 

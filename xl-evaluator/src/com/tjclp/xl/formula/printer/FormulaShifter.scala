@@ -36,7 +36,9 @@ import TExpr.RangeLocation
  * Laws:
  *   - Identity: shift(expr, 0, 0) == expr
  *   - Commutativity: shift(shift(expr, c1, r1), c2, r2) == shift(expr, c1+c2, r1+r2) while every
- *     reference stays on the grid
+ *     reference stays on the grid and no relative corner overtakes an anchored one (the normalised
+ *     print of a crossed range swaps the `$`, which is not invertible — Excel has the same
+ *     asymmetry; pinned in RangeFormSpec)
  *   - Anchor preservation: Anchor of shifted ref equals original anchor
  */
 object FormulaShifter:
@@ -271,7 +273,9 @@ object FormulaShifter:
     colDelta: Int,
     rowDelta: Int
   ): Option[CellRange] =
-    val (cd, rd) = form match
+    // `actualFor`: a hand-built `Columns` form on a range that does not span every row is a corner
+    // range and moves on both axes — the same guard the printer applies
+    val (cd, rd) = form.actualFor(range) match
       case RangeForm.Cells => (colDelta, rowDelta)
       case RangeForm.Columns => (colDelta, 0)
       case RangeForm.Rows => (0, rowDelta)
@@ -594,7 +598,7 @@ object FormulaShifter:
     at: Int,
     delta: Int
   ): Option[CellRange] =
-    val spansEditedAxis = form match
+    val spansEditedAxis = form.actualFor(range) match
       case RangeForm.Columns => isRow
       case RangeForm.Rows => !isRow
       case RangeForm.Cells => false

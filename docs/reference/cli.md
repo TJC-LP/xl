@@ -804,6 +804,8 @@ Write formula(s) to a cell or range with Excel-style dragging.
 
 **Anchor modes** (`$` controls shifting when dragging): `$A$1` absolute, `$A1` column-absolute, `A$1` row-absolute, `A1` fully relative.
 
+**Edge and whole-axis rules** (since 0.21.0, [#612](https://github.com/TJC-LP/xl/issues/612)): a whole-column reference (`$A:$A`, `E:E`) drags only along columns and a whole-row reference (`1:1`) only along rows, exactly as Excel; a reference the drag would carry off the grid — before row 1 / column A or past row 1048576 / column XFD — is written as `#REF!` (per reference: `=A1+B3` copied up one row is `=#REF!+B2`, `SUM(A1:A2)` becomes `SUM(#REF!)`), never a clamped or non-existent address.
+
 **Examples**:
 ```bash
 xl -f input.xlsx -s S1 -o output.xlsx putf C5 "=B5*1.1"

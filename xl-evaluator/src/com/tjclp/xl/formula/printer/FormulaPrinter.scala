@@ -289,7 +289,9 @@ object FormulaPrinter:
    * default `Cells` prints its corners.
    */
   private def formatRange(range: CellRange, form: RangeForm): String =
-    form match
+    // `actualFor`: a hand-built inconsistent pairing (Columns on a range that does not span every
+    // row) prints its corners, never a widened A:B
+    form.actualFor(range) match
       case RangeForm.Cells => formatRange(range)
       case RangeForm.Columns =>
         def col(c: Column, anchor: Anchor): String =

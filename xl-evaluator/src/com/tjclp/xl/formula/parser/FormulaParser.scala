@@ -1303,27 +1303,38 @@ object FormulaParser:
         Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
 
   /**
-   * GH-612: parse an Excel error literal: `#` followed by the code's letters/digits/`/`/`_` and its
-   * closing `!` or `?` (`#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`), case-insensitively (`#ref!` is
-   * `#REF!`, as Excel upper-cases it at entry). The whole token is read before it is judged, so an
-   * unknown code (`#GETTING_DATA`) is reported whole; anything `CellError.parse` does not recognize
-   * is a parse error — never a silent literal.
+   * The Excel error codes, longest first, so a prefix match never stops short (`#N/A` vs `#NAME?`).
+   */
+  private val errorCodesLongestFirst: List[(String, CellError)] =
+    CellError.values.toList.map(e => (e.toExcel, e)).sortBy(-_._1.length)
+
+  /**
+   * GH-612: parse an Excel error literal (`#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`, …) by matching the
+   * known codes case-insensitively at the cursor (`#ref!` is `#REF!`, as Excel upper-cases it at
+   * entry). Matching the codes rather than scanning a character class keeps `#N/A` — the one code
+   * with no `!`/`?` terminator — from swallowing what follows it: `#N/A/2` is `#N/A` divided by 2,
+   * as Excel reads it. When no code matches, the whole `#`-token (letters, digits, `/`, `_` and a
+   * closing `!`/`?`) is reported, so `#GETTING_DATA` fails as itself — never a silent literal.
    */
   private def parseErrorLiteral(state: ParserState): ParseResult[TExpr[?]] =
     val startPos = state.pos
-    @tailrec
-    def readBody(s: ParserState): ParserState =
-      s.currentChar match
-        case Some(c) if c.isLetterOrDigit || c == '/' || c == '_' => readBody(s.advance())
-        case _ => s
-    val afterBody = readBody(state.advance())
-    val afterTerminator = afterBody.currentChar match
-      case Some('!' | '?') => afterBody.advance()
-      case _ => afterBody
-    val text = state.input.substring(startPos, afterTerminator.pos)
-    CellError.parse(text.toUpperCase) match
-      case Right(error) => Right((TExpr.ErrorLit(error), afterTerminator))
-      case Left(_) =>
+    val matched = errorCodesLongestFirst.collectFirst {
+      case (code, error) if state.input.regionMatches(true, startPos, code, 0, code.length) =>
+        (code, error)
+    }
+    matched match
+      case Some((code, error)) => Right((TExpr.ErrorLit(error), state.advance(code.length)))
+      case None =>
+        @tailrec
+        def readBody(s: ParserState): ParserState =
+          s.currentChar match
+            case Some(c) if c.isLetterOrDigit || c == '/' || c == '_' => readBody(s.advance())
+            case _ => s
+        val afterBody = readBody(state.advance())
+        val afterTerminator = afterBody.currentChar match
+          case Some('!' | '?') => afterBody.advance()
+          case _ => afterBody
+        val text = state.input.substring(startPos, afterTerminator.pos)
         Left(ParseError.UnexpectedChar('#', startPos, s"unknown error literal '$text'"))
 
   /**

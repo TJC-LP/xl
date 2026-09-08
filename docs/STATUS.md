@@ -217,12 +217,12 @@
 
 ### Test Coverage
 
-**6,649 test cases** (verified via `./mill __.test`, 2026-09-08, after the #612 whole-column reference fix): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**6,656 test cases** (verified via `./mill __.test`, 2026-09-08, after the #612 whole-column reference fix): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2367 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1536 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-evaluator | 2373 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1537 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1119 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1264 | command parsing, batch ops, view/eval/export, streaming mode |
 | xl-cats-effect | 167 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |

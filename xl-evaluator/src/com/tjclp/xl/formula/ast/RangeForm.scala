@@ -11,6 +11,13 @@ import com.tjclp.xl.CellRange
  * along rows, and both print back as they were written. `CellRange` stays purely positional (its
  * corners are the cells addressed); the form rides on the formula AST's range nodes beside the
  * range, defaulting to [[RangeForm.Cells]] so a range built from two corners is a corner range.
+ *
+ * The pairing is a precondition the type does not enforce: `Columns` belongs on a range that spans
+ * every row and `Rows` on one that spans every column (the parser only ever builds such pairs, and
+ * `parse ∘ print = id` is stated for parser-built nodes). A node built by hand with an inconsistent
+ * pairing is TREATED AS THE CORNER RANGE IT ADDRESSES — the printer and both shifters go through
+ * [[RangeForm.actualFor]], so `RangeRef(CellRange(A1, B2), Columns)` prints `A1:B2`, never a
+ * silently widened `A:B`.
  */
 enum RangeForm derives CanEqual:
   /** `A1:B2` — two corner cells; both axes are coordinates. */
@@ -38,13 +45,27 @@ object RangeForm:
       case Cells if range.isFullColumn => Columns
       case form => form
 
-  /** The form SPELLED by the text alone: the parser's classification of the syntax it consumed. */
+  /**
+   * The form SPELLED by the text alone — the parser's classification of the syntax it consumed,
+   * made with the very predicates `CellRange.parse` uses to decide which corners to synthesize, so
+   * the two can never disagree.
+   */
   private def ofText(rangeText: String): RangeForm =
     rangeText.split(':') match
       case Array(start, end) =>
-        val s = start.stripPrefix("$")
-        val e = end.stripPrefix("$")
-        if s.nonEmpty && e.nonEmpty && s.forall(_.isLetter) && e.forall(_.isLetter) then Columns
-        else if s.nonEmpty && e.nonEmpty && s.forall(_.isDigit) && e.forall(_.isDigit) then Rows
+        if CellRange.spellsWholeColumn(start) && CellRange.spellsWholeColumn(end) then Columns
+        else if CellRange.spellsWholeRow(start) && CellRange.spellsWholeRow(end) then Rows
         else Cells
       case _ => Cells
+
+  extension (form: RangeForm)
+    /**
+     * The form the printer and the shifters honour for `range`: `Columns` only when the range
+     * really spans every row, `Rows` only when it spans every column, `Cells` otherwise. This is
+     * what keeps a hand-built inconsistent node truthful — it prints and moves as the corner range
+     * it addresses instead of being widened to a whole column or row.
+     */
+    def actualFor(range: CellRange): RangeForm = form match
+      case Columns if !range.isFullColumn => Cells
+      case Rows if !range.isFullRow => Cells
+      case consistent => consistent

@@ -2309,6 +2309,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertCanonical("=#n/a", "=#N/A")
     assertCanonical("=#Div/0!", "=#DIV/0!")
     assertCanonical("=#name?", "=#NAME?")
+    // the code is matched, not scanned: #N/A followed by a division re-parses as written
+    assertPreserved("=#N/A/2")
+    assertPreserved("=1/#N/A")
+    assertPreserved("=IF(#N/A/2, 1, 0)")
     FormulaParser.parse("=#GETTING_DATA") match
       case Left(err) => assert(err.toString.contains("#GETTING_DATA"), err.toString)
       case Right(expr) => fail(s"#GETTING_DATA is not a CellError, got $expr")

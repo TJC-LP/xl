@@ -412,3 +412,16 @@ class AddressingSpec extends ScalaCheckSuite:
     assertEquals(cols.startAnchor, Anchor.AbsCol)
     assertEquals(cols.endAnchor, Anchor.AbsCol)
   }
+
+  test("GH-612: spellsWholeColumn / spellsWholeRow are the split parse makes") {
+    assert(CellRange.spellsWholeColumn("A"))
+    assert(CellRange.spellsWholeColumn("$XFD"))
+    assert(!CellRange.spellsWholeColumn("A1"))
+    assert(!CellRange.spellsWholeColumn("3"))
+    assert(!CellRange.spellsWholeColumn(""))
+    assert(CellRange.spellsWholeRow("3"))
+    assert(CellRange.spellsWholeRow("$10"))
+    assert(!CellRange.spellsWholeRow("A"))
+    assert(!CellRange.spellsWholeRow("$A$1"))
+    assert(!CellRange.spellsWholeRow(""))
+  }
