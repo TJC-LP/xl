@@ -217,16 +217,16 @@
 
 ### Test Coverage
 
-**6,326 test cases** (verified via `./mill __.test`, 2026-09-07, agent-first wave 1 merged with the Excel-parity wave): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**6,554 test cases** (verified via `./mill __.test`, 2026-09-08, top of the wave-28a stack): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2196 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1293 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1080 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 754 | command parsing, batch ops, view/eval/export, streaming mode |
-| xl-cats-effect | 160 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
-| xl-agent | 122 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
+| xl-evaluator | 2326 | parser, evaluator, 108-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1513 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1115 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1249 | command parsing, batch ops, view/eval/export, streaming mode |
+| xl-cats-effect | 167 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-agent | 135 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 27 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
