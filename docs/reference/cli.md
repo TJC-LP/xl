@@ -92,6 +92,11 @@ xl batch --schema                                  # JSON Schema of the batch do
 > any other wrong command line exits 2 with a one-line usage, the parser's error and
 > `run \`xl <verb> --help\``.
 
+> **The file is always `-f <path>`, never positional.** The first non-flag token on the command
+> line is the verb, so `xl data.xlsx view A1:B4` takes `data.xlsx` for a verb and fails
+> `UNKNOWN_VERB` (exit 2). A verb's positional arguments are its own — the range, the ref, the
+> formula, `copy`'s source and target, `delete-rows`' row and count.
+
 > **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
 > (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`/`--sheet` (for a batch op, its `sheet` key
 > comes first); otherwise the only sheet of a single-sheet book (under `--json` a
@@ -209,6 +214,19 @@ These warnings also fail `--strict`.
 
 The categories are a hand-written orientation; the complete, CI-gated verb list is the generated
 [`generated/cli-verbs.md`](generated/cli-verbs.md).
+
+Argument shapes that are easy to guess wrong (the file is always `-f`; these are the verb's own
+positionals):
+
+| Verb | Shape | Batch twin |
+|------|-------|------------|
+| `insert-rows` / `delete-rows` | `<at-row> [count]` — a 1-based row and a count (default 1): `delete-rows 7 5` deletes rows 7-11. There is **no** `7:11` form | — |
+| `insert-cols` / `delete-cols` | `<at-col> [count]` — a letter and a count; the column verbs also take an inclusive `C:E`, which overrides the count | — |
+| `group-rows` / `group-cols` | `<10:20>` / `<E:H>` `[--level n] [--collapsed]` (`ungroup-rows`/`ungroup-cols` take the span alone) | `group-rows`, `group-cols` |
+| `copy` | `<source> <target> [--values-only]` — relative references shift like Excel; the target is a cell (expanded to the source's size) or a range | `copy` (`source`, `target`, `valuesOnly`; each side may be sheet-qualified) |
+| `fill` | `<source> <target> [--right]` — Excel Ctrl+D / Ctrl+R | — |
+| `sort` | `<range> --by <col> [--then-by <col>] [--desc] [--numeric] [--header]` | — |
+| `clear` | `<range> [--all \| --styles \| --comments]` — contents by default | `clear` |
 
 ### Command Summary
 
@@ -1009,12 +1027,15 @@ xl -f input.xlsx -s S1 -o output.xlsx autofit --columns A:F
 
 ### `xl copy <source> <target> [--values-only]`
 
-Copy a range to another location with Excel-style formula adjustment (`$` anchors preserved). `--values-only` copies values without adjusting formulas.
+Copy a range to another location with Excel-style formula adjustment (`$` anchors preserved). `--values-only` copies values without adjusting formulas. The target is a single cell (expanded to the source's size) or a range; either side may be sheet-qualified.
 
 ```bash
 xl -f input.xlsx -s S1 -o output.xlsx copy A1:C10 E1
 xl -f input.xlsx -s S1 -o output.xlsx copy A1:C10 E1 --values-only
+xl -f input.xlsx -o output.xlsx copy "Data!A1:C10" "Summary!A1"       # across sheets
 ```
+
+Batch twin: `{"op": "copy", "source": "A1:C10", "target": "E1", "valuesOnly": false}` (`values-only` is an accepted spelling).
 
 ---
 

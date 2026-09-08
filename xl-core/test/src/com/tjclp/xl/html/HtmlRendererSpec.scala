@@ -290,6 +290,16 @@ class HtmlRendererSpec extends FunSuite:
     assert(html.contains("\\D "), "Carriage return should be escaped as \\D")
   }
 
+  test("escapeCss: strips null bytes and applies the other escapes (direct pin)") {
+    // Direct pin alongside the toHtml test: Scala Native's String.replace diverges on the
+    // "\u0000" pattern (ADR-016 spike), so null-byte removal must not go through String.replace.
+    import com.tjclp.xl.render.RenderUtils
+    assertEquals(RenderUtils.escapeCss("Ari\u0000al"), "Arial")
+    assertEquals(RenderUtils.escapeCss("\u0000"), "")
+    assertEquals(RenderUtils.escapeCss("a\\b\u0000c"), "a\\\\bc")
+    assertEquals(RenderUtils.escapeCss("q'\"\n\r\u0000"), "q\\'\\\"\\A \\D ")
+  }
+
   test("toHtml: CSS removes null bytes from font names") {
     val fontWithNull = Font("Ari\u0000al", 11.0)
     val style = CellStyle.default.withFont(fontWithNull)
