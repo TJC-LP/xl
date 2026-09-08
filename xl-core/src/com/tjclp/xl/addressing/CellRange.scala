@@ -315,9 +315,17 @@ object CellRange:
       new CellRange(
         ARef(Column.from0(0), minRow),
         ARef(Column.from0(Column.MaxIndex0), maxRow),
-        startAnchor,
-        endAnchor
+        rowAnchor(startAnchor),
+        rowAnchor(endAnchor)
       )
+
+  /**
+   * GH-612: `Anchor.parse` reads a leading `$` as a COLUMN anchor because a cell reference starts
+   * with its column; on a digits-only whole-row part (`$3`) the `$` anchors the ROW.
+   */
+  private def rowAnchor(anchor: Anchor): Anchor = anchor match
+    case Anchor.AbsCol => Anchor.AbsRow
+    case other => other
 
   /**
    * Parse range from A1:B2 notation, preserving anchors.

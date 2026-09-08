@@ -395,3 +395,20 @@ class AddressingSpec extends ScalaCheckSuite:
     val constrained = emptyUsedRange.flatMap(fullCol.intersect).getOrElse(CellRange.empty)
     assertEquals(constrained.cells.toList, Nil)
   }
+
+  // ==================== GH-612: anchors on whole-column / whole-row text ====================
+
+  test("GH-612: a $ on a whole-row part anchors the ROW; on a whole-column part the COLUMN") {
+    import com.tjclp.xl.addressing.Anchor
+    val rows = CellRange.parse("$3:$10").toOption.get
+    assert(rows.isFullRow)
+    assertEquals(rows.startAnchor, Anchor.AbsRow)
+    assertEquals(rows.endAnchor, Anchor.AbsRow)
+    val mixedRows = CellRange.parse("$3:10").toOption.get
+    assertEquals(mixedRows.startAnchor, Anchor.AbsRow)
+    assertEquals(mixedRows.endAnchor, Anchor.Relative)
+    val cols = CellRange.parse("$A:$C").toOption.get
+    assert(cols.isFullColumn)
+    assertEquals(cols.startAnchor, Anchor.AbsCol)
+    assertEquals(cols.endAnchor, Anchor.AbsCol)
+  }

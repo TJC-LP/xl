@@ -1,12 +1,12 @@
 package com.tjclp.xl.formula.parser
 
-import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, FunctionRegistry}
 import com.tjclp.xl.formula.{Arity}
 
 import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.RefParser
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.codec
 import com.tjclp.xl.ooxml.FormulaStorage
 
@@ -607,6 +607,9 @@ object FormulaParser:
       case Some('[') =>
         // GH-353: external-workbook reference (e.g., [2]Book1!A1, [2]Consolidation.xlsx!D5:D9)
         parseExternalRef(s)
+      case Some('#') =>
+        // GH-612: error literal (#REF!, #N/A, #DIV/0!, …)
+        parseErrorLiteral(s)
       case Some(c) =>
         Left(ParseError.UnexpectedChar(c, s.pos, "expected expression"))
 
@@ -656,15 +659,18 @@ object FormulaParser:
     afterDigits.currentChar match
       case Some(':') =>
         val afterColon = afterDigits.advance()
-        afterColon.currentChar match
+        // GH-612: the end row may carry its own anchor (3:$10)
+        val afterEndAnchor =
+          if afterColon.currentChar.contains('$') then afterColon.advance() else afterColon
+        afterEndAnchor.currentChar match
           case Some(c) if c.isDigit =>
             // This is a row range like 1:5
-            val afterSecondDigits = readDigits(afterColon)
+            val afterSecondDigits = readDigits(afterEndAnchor)
             val rangeStr = state.input.substring(startPos, afterSecondDigits.pos)
             CellRange.parse(rangeStr) match
               case Right(range) =>
-                // Create RangeRef for range arguments
-                Right((TExpr.RangeRef(range), afterSecondDigits))
+                // GH-612: digits on both sides is Excel's whole-row form
+                Right((TExpr.RangeRef(range, RangeForm.Rows), afterSecondDigits))
               case Left(err) =>
                 Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
           case _ =>
@@ -1100,7 +1106,8 @@ object FormulaParser:
           // Range reference: Sheet1!A1:B10
           CellRange.parse(refPart) match
             case Right(range) =>
-              Right((TExpr.SheetRange(sheetName, range), s2))
+              // GH-612: keep the whole-column / whole-row form the text spelled
+              Right((TExpr.SheetRange(sheetName, range, RangeForm.ofText(refPart)), s2))
             case Left(err) =>
               Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
         else
@@ -1225,7 +1232,7 @@ object FormulaParser:
       // External range reference: [2]Book1!A1:B2
       CellRange.parse(refPart) match
         case Right(range) =>
-          Right((TExpr.ExternalRange(index, name, range), s2))
+          Right((TExpr.ExternalRange(index, name, range, RangeForm.ofText(refPart)), s2))
         case Left(err) =>
           Left(ParseError.InvalidCellRef(s"$prefix!$refPart", startPos, err))
     else
@@ -1287,10 +1294,33 @@ object FormulaParser:
 
     CellRange.parse(rangeStr) match
       case Right(range) =>
-        // Create RangeRef for range arguments
-        Right((TExpr.RangeRef(range), s3))
+        // GH-612: the form is the syntax consumed — A:C is whole columns, A1:C10 corners — so a
+        // whole-column reference prints back as written and drags only along columns
+        Right((TExpr.RangeRef(range, RangeForm.ofText(rangeStr)), s3))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
+
+  /**
+   * GH-612: parse an Excel error literal: `#` followed by the code's letters/digits/`/` and its
+   * closing `!` or `?` (`#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`). Anything `CellError.parse` does not
+   * recognize is a parse error — never a silent literal.
+   */
+  private def parseErrorLiteral(state: ParserState): ParseResult[TExpr[?]] =
+    val startPos = state.pos
+    @tailrec
+    def readBody(s: ParserState): ParserState =
+      s.currentChar match
+        case Some(c) if c.isLetterOrDigit || c == '/' => readBody(s.advance())
+        case _ => s
+    val afterBody = readBody(state.advance())
+    val afterTerminator = afterBody.currentChar match
+      case Some('!' | '?') => afterBody.advance()
+      case _ => afterBody
+    val text = state.input.substring(startPos, afterTerminator.pos)
+    CellError.parse(text) match
+      case Right(error) => Right((TExpr.ErrorLit(error), afterTerminator))
+      case Left(_) =>
+        Left(ParseError.UnexpectedChar('#', startPos, s"unknown error literal '$text'"))
 
   /**
    * Suggest similar function names for unknown functions.

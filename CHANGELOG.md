@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Error literals in formulas** (#612): `#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`, `#NULL!`, `#NUM!`
+  and `#VALUE!` parse to the new `TExpr.ErrorLit`, print back verbatim, evaluate to the error value
+  they name (`=IF(x, #N/A, 1)`, `=IFERROR(#DIV/0!, 0)`) and contribute no dependency edges. This is
+  what a drag writes for an off-grid reference and what Excel writes after a delete; such formulas
+  used to be unparseable.
+- **`RangeForm`** is exported from `com.tjclp.xl` beside `TExpr`. `TExpr.RangeRef`, `SheetRange`,
+  `ExternalRange` and `RangeLocation.Local`/`CrossSheet`/`External` gained a trailing
+  `form: RangeForm = RangeForm.Cells` field: constructors are source-compatible, positional pattern
+  matches need one more `_`.
 - **The CLI contract is a CI gate** (#592). A `contract` job runs the golden runner, the
   generated-docs drift check and the new `ContractSpec` explicitly, so a golden diff fails with the
   unified diff in the log, then builds the assembly JAR and runs `scripts/smoke-cli-contract.sh`
@@ -111,6 +120,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Whole-column and whole-row references keep their form through every rewrite** (#612).
+  `A:A`, `$A:$A`, `A:C`, `1:1`, `$3:$10` used to be parsed into corner ranges and printed back as
+  `$A1:$A1048576`, so a `putf` drag, a batch `putf … from`, `Edit.DragFormula`/`Edit.Fill`,
+  `FormulaOps.shift` and every structural insert/delete produced addresses that do not exist
+  (`$A2:$A1048577`, `SUM(B1:XFE1)`) — LibreOffice opened the book and silently computed garbage.
+  The AST now carries the form (`RangeForm.{Cells, Columns, Rows}` on `TExpr.RangeRef`,
+  `SheetRange`, `ExternalRange` and the `RangeLocation` cases): the printer reproduces the text as
+  written (an explicit `A1:A1048576` stays explicit), a fill-drag moves a whole-column reference
+  only along columns and a whole-row reference only along rows (`$` anchors as for cells), and a
+  structural edit on the other axis leaves it untouched (`E:E` survives a row insert; inserting a
+  column before E makes it `F:F`; deleting column E voids it; deleting a column inside `A:C`
+  narrows it to `A:B`). A `$` on a whole-row part (`$3:$10`) now anchors the row, and a bare row
+  range may anchor only its end (`3:$10`).
+- **A fill-drag that would carry a reference off the grid writes `#REF!`** instead of clamping at
+  A1 or emitting a row/column that does not exist (#612): `=A1` copied from B2 to B1 is `=#REF!`,
+  `=A1+B3` copied up one is `=#REF!+B2`, `=A1048576` dragged down is `=#REF!` — per reference, the
+  rest of the formula intact, as Excel writes it. A range in a range-typed argument slot that falls
+  off the grid voids the enclosing call (`SUM(A1:A2)` → `#REF!`, the value Excel's `SUM(#REF!)`
+  evaluates to).
 - **`_xlfn.` storage prefix on conditional-formatting, data-validation and defined-name formulas**
   (#577). `CfCodec`, `DataValidationCodec` and the workbook's defined names now go through
   `FormulaStorage` like cell formulas: an Excel-authored `_xlfn.IFS(` in a rule reads bare and

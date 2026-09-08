@@ -477,7 +477,7 @@ package com.tjclp.xl.formula.printer
 object FormulaOps:                     // string in, string out — the six CLI parse→shift→print copies collapse onto it in Wave 2
   def renameSheet(text: String, from: SheetName, to: SheetName): XLResult[String]
   def mentionsSheet(text: String, sheet: SheetName): Boolean
-  def shift(text: String, colDelta: Int, rowDelta: Int): XLResult[String]   // pins today's clamp at the sheet edge (FormulaShifter.scala:207-213)
+  def shift(text: String, colDelta: Int, rowDelta: Int): XLResult[String]   // #612: off-grid references become #REF!; A:A / 1:1 move along their own axis only
 
 package com.tjclp.xl.formula.eval
 object SheetRenamer:
@@ -831,8 +831,10 @@ __.test`, `scripts/test-examples.sh`, `scripts/verify-skill-snippets.sh --local`
    `SheetSource` wave to keep one "Changed" entry per release.
 5. **`FunctionFlags.volatile`.** `WorkbookAudit` uses a name set in Wave 1; adding the flag
    touches `FunctionSpecs*` (Zinc/macro gotcha) and is a Wave 2 chore.
-6. **Drag edge policy.** `FormulaShifter.shift` clamps at A1; `Left(OutOfBounds)` would change
-   `putf` drag at the sheet edge. Pinned as-is until a maintainer decides.
+6. **Drag edge policy.** Decided in #612: `FormulaShifter.shift` writes `#REF!` for a reference
+   that would leave the grid (per reference, as Excel does) instead of clamping at A1; the
+   whole-column / whole-row forms (`A:A`, `1:1`) carry a `RangeForm` and move along their own
+   axis only.
 7. **`recalc` as a batch directive vs an op** in the Wave 2 codec — decide after field use.
 8. **`Excel`/`Excel[F]` homonym** (sync object and F-polymorphic trait share a name): rename or
    alias in 1.0.

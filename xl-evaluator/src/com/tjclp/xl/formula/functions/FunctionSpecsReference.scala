@@ -12,15 +12,15 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
   // extractARef is inherited from FunctionSpecsBase (shared with OFFSET).
 
   private def extractCellRange(expr: TExpr[?]): Option[CellRange] = expr match
-    case TExpr.RangeRef(range) => Some(range)
-    case TExpr.SheetRange(_, range) => Some(range)
+    case TExpr.RangeRef(range, _) => Some(range)
+    case TExpr.SheetRange(_, range, _) => Some(range)
     case _ => None
 
   /** The sheet a reference expression is qualified with, if any (CELL reads the qualifier). */
   private def extractSheetName(expr: TExpr[?]): Option[SheetName] = expr match
     case TExpr.SheetPolyRef(sheet, _, _) => Some(sheet)
     case TExpr.SheetRef(sheet, _, _, _) => Some(sheet)
-    case TExpr.SheetRange(sheet, _) => Some(sheet)
+    case TExpr.SheetRange(sheet, _, _) => Some(sheet)
     case _ => None
 
   @annotation.tailrec

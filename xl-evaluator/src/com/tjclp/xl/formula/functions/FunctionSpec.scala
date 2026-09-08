@@ -227,14 +227,14 @@ object ArgSpec:
       fnName: String
     ): Either[ParseError, (TExpr.RangeLocation, List[TExpr[?]])] =
       args match
-        case TExpr.RangeRef(range) :: tail =>
-          Right((TExpr.RangeLocation.Local(range), tail))
-        case TExpr.SheetRange(sheet, range) :: tail =>
-          Right((TExpr.RangeLocation.CrossSheet(sheet, range), tail))
+        case TExpr.RangeRef(range, form) :: tail =>
+          Right((TExpr.RangeLocation.Local(range, form), tail))
+        case TExpr.SheetRange(sheet, range, form) :: tail =>
+          Right((TExpr.RangeLocation.CrossSheet(sheet, range, form), tail))
         // GH-353: external-workbook ranges parse (SUMIF([2]Book1!A1:A9, …)); the location can
         // never resolve at evaluation time, but the cell's Excel-written cache pins its value
-        case TExpr.ExternalRange(index, name, range) :: tail =>
-          Right((TExpr.RangeLocation.External(index, name, range), tail))
+        case TExpr.ExternalRange(index, name, range, form) :: tail =>
+          Right((TExpr.RangeLocation.External(index, name, range, form), tail))
         // GH-394: defined names are accepted in range-typed argument positions —
         // =VLOOKUP(x, named_table, 2), =SUMIF(rev_range, ">1"), =SUMIF(Model!rev_range, …).
         // The target range resolves at evaluation (Evaluator.resolveRangeLocation); a name
@@ -274,7 +274,7 @@ object ArgSpec:
       fnName: String
     ): Either[ParseError, (CellRange, List[TExpr[?]])] =
       args match
-        case TExpr.RangeRef(range) :: tail =>
+        case TExpr.RangeRef(range, _) :: tail =>
           Right((range, tail))
         // GH-353: this slot requires a LOCAL literal range — name the unsupported construct
         // instead of the generic arity message
@@ -421,13 +421,13 @@ object ArgSpec:
       fnName: String
     ): Either[ParseError, (NumericArg, List[TExpr[?]])] =
       args match
-        case TExpr.RangeRef(range) :: tail =>
-          Right((Left(TExpr.RangeLocation.Local(range)), tail))
-        case TExpr.SheetRange(sheet, range) :: tail =>
-          Right((Left(TExpr.RangeLocation.CrossSheet(sheet, range)), tail))
+        case TExpr.RangeRef(range, form) :: tail =>
+          Right((Left(TExpr.RangeLocation.Local(range, form)), tail))
+        case TExpr.SheetRange(sheet, range, form) :: tail =>
+          Right((Left(TExpr.RangeLocation.CrossSheet(sheet, range, form)), tail))
         // GH-353: external-workbook ranges take the range branch (like the other two shapes)
-        case TExpr.ExternalRange(index, name, range) :: tail =>
-          Right((Left(TExpr.RangeLocation.External(index, name, range)), tail))
+        case TExpr.ExternalRange(index, name, range, form) :: tail =>
+          Right((Left(TExpr.RangeLocation.External(index, name, range, form)), tail))
         case head :: tail =>
           Right((Right(TExpr.asNumericExpr(head)), tail))
         case Nil =>
@@ -467,13 +467,13 @@ object ArgSpec:
       fnName: String
     ): Either[ParseError, (SumProductArg, List[TExpr[?]])] =
       args match
-        case TExpr.RangeRef(range) :: tail =>
-          Right((Left(TExpr.RangeLocation.Local(range)), tail))
-        case TExpr.SheetRange(sheet, range) :: tail =>
-          Right((Left(TExpr.RangeLocation.CrossSheet(sheet, range)), tail))
+        case TExpr.RangeRef(range, form) :: tail =>
+          Right((Left(TExpr.RangeLocation.Local(range, form)), tail))
+        case TExpr.SheetRange(sheet, range, form) :: tail =>
+          Right((Left(TExpr.RangeLocation.CrossSheet(sheet, range, form)), tail))
         // GH-353: external-workbook ranges take the range branch (like the other two shapes)
-        case TExpr.ExternalRange(index, name, range) :: tail =>
-          Right((Left(TExpr.RangeLocation.External(index, name, range)), tail))
+        case TExpr.ExternalRange(index, name, range, form) :: tail =>
+          Right((Left(TExpr.RangeLocation.External(index, name, range, form)), tail))
         case head :: tail =>
           Right((Right(head.asInstanceOf[TExpr[Any]]), tail))
         case Nil =>
