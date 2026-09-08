@@ -1,6 +1,7 @@
 package com.tjclp.xl.cli
 
 import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipFile
 
 import scala.jdk.CollectionConverters.*
@@ -11,7 +12,7 @@ import cats.syntax.all.*
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.io.ExcelIO
-import com.tjclp.xl.ooxml.XlsxReader
+import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader, XlsxWriter}
 import com.tjclp.xl.ooxml.XlsxReader.{ReadResult, ReaderConfig}
 import com.tjclp.xl.workbooks.Workbook
 
@@ -20,10 +21,10 @@ import com.tjclp.xl.workbooks.Workbook
  *
  * `--max-size` lifts the reader's security limit on the uncompressed size; it does not make the
  * workbook fit. The native image bakes an 8 GB heap ceiling (`-R:MaxHeapSize=8g` in
- * `xl-cli/package.mill`, raised only by `-Xmx` as the first argument) and a JVM has whatever `-Xmx`
- * it was given, while an in-memory load of a million-row book of wide text rows needs tens of GB.
- * Left alone, the load ends in a raw `java.lang.OutOfMemoryError` on stderr, exit 1 and — under
- * `--json` — no envelope: two contract violations (ADR-017 §2.3).
+ * `xl-cli/package.mill`, raised by passing `-Xmx<size>` on the command line) and a JVM has whatever
+ * `-Xmx` it was given, while an in-memory load of a million-row book of wide text rows needs tens
+ * of GB. Left alone, the load ends in a raw `java.lang.OutOfMemoryError` on stderr, exit 1 and —
+ * under `--json` — no envelope: two contract violations (ADR-017 §2.3).
  *
  * Three answers, one code:
  *   - [[blocking]] runs a thunk and turns an `OutOfMemoryError` raised inside it into the typed
@@ -44,11 +45,19 @@ import com.tjclp.xl.workbooks.Workbook
  *     with `-Xmx`, so the lower band is the floor of every measured shape; `-Xmx` is the override
  *     either way: the estimates are compared with the heap the process actually has.
  *
- * Only memory exhaustion is classified this way; any other `Error` keeps its `INTERNAL`
- * classification (and, being fatal to the runtime, its halt). [[excel]] is the `ExcelIO` the CLI
- * loads workbooks through: `readWith` (and so `read`) runs [[admit]] then the reader under
- * [[blocking]], with the library's own warning routing and error text (pinned equal by
- * MemoryGuardSpec). Streaming reads never load a workbook and are untouched.
+ * The catch covers every stage that builds a large structure, each inside its own thunk: the load
+ * ([[excel]]'s `readWith`), the recalculation after an edit and `recalc` itself (WriteCommands),
+ * the evaluation behind `view --eval` and the html/svg/raster renders (InMemorySource), and the
+ * serialisation ([[excel]]'s `writeWith`, which `writeWorkbookStream` and `write` go through; every
+ * command writes through the one [[writer]]). Residuals, stated so the promise is exact: an
+ * `OutOfMemoryError` raised first on ANOTHER cats-effect thread — a `--parallel` recalculation
+ * fiber, a timer — is still fatal to the runtime; a non-heap `OutOfMemoryError` (Metaspace, "unable
+ * to create native thread") is reported with the heap wording; and a central directory that lies
+ * about its sizes only bypasses the estimate — the load then lands in the typed catch. Only memory
+ * exhaustion is classified this way; any other `Error` keeps its `INTERNAL` classification (and,
+ * being fatal to the runtime, its halt). Streaming reads never load a workbook and are untouched.
+ * [[excel]] keeps the library's own warning routing and error texts (pinned equal by
+ * MemoryGuardSpec).
  */
 object MemoryGuard:
 
@@ -122,9 +131,45 @@ object MemoryGuard:
       catch case _: OutOfMemoryError => refused
     }.rethrow
 
-  /** `--max-size` lifted the default (0 = unlimited, or above the default 100 MB). */
+  /**
+   * Test seams (`private[cli]`): the heap an input is sized against, keyed by file so a suite's
+   * fixture never touches another run; and a fault raised before a guarded stage runs, keyed by
+   * `(Some(file), stage)` — or `(None, stage)` for a stage whose file the test cannot know, such as
+   * a write's recalculation (the commands see the staging path, not `-o`). Production finds them
+   * empty.
+   */
+  private[cli] object Seams:
+    val heap: AtomicReference[Map[Path, Long]] = new AtomicReference(Map.empty)
+    val faults: AtomicReference[Map[(Option[Path], String), Throwable]] =
+      new AtomicReference(Map.empty)
+
+    /** The fault pinned for this file and stage, or for the stage alone. */
+    def faultFor(path: Path, stage: String): Option[Throwable] =
+      val pinned = faults.get
+      pinned.get((Some(path), stage)).orElse(pinned.get((None, stage)))
+
+  /** The heap `path` is sized against: the process's, unless a test pinned one for that file. */
+  private[cli] def heapFor(path: Path): Long = Seams.heap.get.getOrElse(path, maxHeapBytes)
+
+  /**
+   * [[blocking]] for a named stage of one file's processing — `load`, `recalc`, `write` — where a
+   * test can inject a fault ([[Seams]]).
+   */
+  def blocking[A](path: Path, stage: String)(thunk: => A): IO[A] =
+    val refused: Either[Throwable, A] = refusal
+    IO.blocking {
+      try
+        Seams.faultFor(path, stage).foreach(fault => throw fault)
+        Right(thunk)
+      catch case _: OutOfMemoryError => refused
+    }.rethrow
+
+  /**
+   * `--max-size` lifted the default: 0 = unlimited, above the default 100 MB, or a negative value
+   * (the parser refuses one, but the reader treats `<= 0` as no limit, so the guard does too).
+   */
   def raised(config: ReaderConfig): Boolean =
-    config.maxUncompressedSize == 0L ||
+    config.maxUncompressedSize <= 0L ||
       config.maxUncompressedSize > ReaderConfig.default.maxUncompressedSize
 
   /** The uncompressed bytes that drive the footprint: worksheet XML and the shared-string table. */
@@ -181,30 +226,37 @@ object MemoryGuard:
 
   /** The verdict for a [[Footprint]] against a heap of `heap` bytes. */
   def decide(path: Path, fp: Footprint, heap: Long): Verdict =
+    decide(path.toString, Location.file(path.toString), fp, heap)
+
+  /** [[decide]] for a load named by `label` (one file, or `diff`'s two) at `location`. */
+  def decide(label: String, location: Location, fp: Footprint, heap: Long): Verdict =
     val atLeast = fp.atLeast
     val upTo = fp.upTo
     // Name the shared-string share only when it is material (an empty table is ~150 bytes)
-    def xml = s"${human(fp.total)} of worksheet XML" +
-      (if fp.sstBytes >= (1L << 20) then s" (${human(fp.sstBytes)} of it shared strings)" else "")
+    def xml =
+      if fp.sstBytes >= (1L << 20) then
+        s"${human(fp.total)} of worksheet and shared-string XML (${human(fp.sstBytes)} of it " +
+          "shared strings)"
+      else s"${human(fp.total)} of worksheet XML"
     if heap == Long.MaxValue || fp.total <= 0L then Verdict.Admit
     else if atLeast > heap then
       Verdict.Refuse(
         CliError(
           ErrorCode.RESOURCE_LIMIT,
-          s"$path does not fit in memory: $xml needs at least ${human(atLeast)} of heap " +
+          s"$label does not fit in memory: $xml needs at least ${human(atLeast)} of heap " +
             s"(${sheetLower}× the sheet XML, ${sstLower}× the strings; up to ${human(upTo)} for " +
             s"wide text rows), more than the ${human(heap)} heap",
           hint = Some(hint),
-          location = Some(Location.file(path.toString))
+          location = Some(location)
         )
       )
     else if upTo > heap then
       Verdict.Warn(
         Warning(
           WarningCode.MEMORY_PRESSURE,
-          s"$path may not fit in memory: $xml needs an estimated ${human(atLeast)}–${human(upTo)} " +
+          s"$label may not fit in memory: $xml needs an estimated ${human(atLeast)}–${human(upTo)} " +
             s"of heap against the ${human(heap)} heap; if the load fails with RESOURCE_LIMIT, $hint",
-          Some(Location.file(path.toString))
+          Some(location)
         )
       )
     else Verdict.Admit
@@ -226,13 +278,32 @@ object MemoryGuard:
     warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[Unit] =
     if !raised(config) then IO.unit
+    else footprint(path).flatMap(fp => act(decide(path, fp, heap), warn))
+
+  /**
+   * [[admit]] for files loaded TOGETHER (`diff`): one verdict on the sum of their footprints, since
+   * both books are resident at once; the message names every file.
+   */
+  def admitAll(
+    paths: Vector[Path],
+    config: ReaderConfig,
+    heap: Long,
+    warn: Warning => IO[Unit]
+  ): IO[Unit] =
+    if !raised(config) || paths.isEmpty then IO.unit
     else
-      footprint(path).flatMap { fp =>
-        decide(path, fp, heap) match
-          case Verdict.Admit => IO.unit
-          case Verdict.Warn(warning) => warn(warning)
-          case Verdict.Refuse(error) => IO.raiseError(CliException(error))
+      paths.traverse(footprint).flatMap { fps =>
+        val sum = fps.foldLeft(Footprint.empty) { (a, b) =>
+          Footprint(a.sheetBytes + b.sheetBytes, a.sstBytes + b.sstBytes)
+        }
+        val label = paths.mkString(" + ")
+        act(decide(label, Location.file(paths.mkString(", ")), sum, heap), warn)
       }
+
+  private def act(verdict: Verdict, warn: Warning => IO[Unit]): IO[Unit] = verdict match
+    case Verdict.Admit => IO.unit
+    case Verdict.Warn(warning) => warn(warning)
+    case Verdict.Refuse(error) => IO.raiseError(CliException(error))
 
   /**
    * The `ExcelIO` the CLI loads workbooks through: `readWith` runs [[admit]] (its warning to
@@ -245,14 +316,30 @@ object MemoryGuard:
     handler: XlsxReader.Warning => IO[Unit],
     warn: Warning => IO[Unit] = _ => IO.unit,
     parse: (Path, ReaderConfig) => XLResult[ReadResult] = XlsxReader.readWithWarnings(_, _),
-    heap: Long = maxHeapBytes
+    heap: Long = maxHeapBytes,
+    admitLoads: Boolean = true
   ): ExcelIO[IO] =
     new ExcelIO[IO](handler):
       override def readWith(path: Path, config: ReaderConfig): IO[Workbook] =
-        admit(path, config, heap, warn) *> blocking(parse(path, config)).flatMap {
-          case Right(result) => result.warnings.traverse_(handler).as(result.workbook)
-          case Left(err) => IO.raiseError(new Exception(s"Failed to read XLSX: ${err.message}"))
+        (if admitLoads then admit(path, config, heap, warn) else IO.unit) *>
+          blocking(path, "load")(parse(path, config)).flatMap {
+            case Right(result) => result.warnings.traverse_(handler).as(result.workbook)
+            case Left(err) => IO.raiseError(new Exception(s"Failed to read XLSX: ${err.message}"))
+          }
+
+      // Serialisation builds every part's XML; `writeWorkbookStream` and `write` route through
+      // here, so one override covers the three. Same failure text as `ExcelIO.writeWith`.
+      override def writeWith(wb: Workbook, path: Path, config: WriterConfig): IO[Unit] =
+        blocking(path, "write")(XlsxWriter.writeWith(wb, path, config)).flatMap {
+          case Right(_) => IO.unit
+          case Left(err) => IO.raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
         }
+
+  /**
+   * The one `ExcelIO` every command writes through (no reader handlers: the commands receive their
+   * workbook already loaded), so serialisation is under the guard wherever it happens.
+   */
+  val writer: ExcelIO[IO] = excel(_ => IO.unit)
 
   /** Binary units with one decimal (`8.0 GB`, `512.0 MB`), the way `-Xmx` counts. */
   def human(bytes: Long): String =

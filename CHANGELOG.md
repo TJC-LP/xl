@@ -23,10 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the same code, hint and the file in `error.location` (the dogfood book's 1.09 GB of sheet
   XML on the native image's 8 GB); an upper estimate of `30 × sheet + 3 × strings` above the heap
   proceeds under `Warning[MEMORY_PRESSURE]` (or `warnings[]` in the envelope) carrying both
-  figures; below both the load is silent. No measured shape is refused at a heap it loads in.
-  `-Xmx` is the override: both estimates are measured against the heap the process actually has.
-  The codes are in `xl schema --json`, `generated/error-codes.md` and the `--max-size` global's
-  doc; every other `Error` keeps its `INTERNAL` classification.
+  figures; below both the load is silent; `diff` sizes its two books together. No measured shape
+  is refused at a heap it loads in. `-Xmx` is the override: both estimates are measured against
+  the heap the process actually has. The catch covers every stage that builds a large structure —
+  the load, the recalculation after an edit and `recalc`, `view --eval`'s evaluation, the
+  html/svg/raster renders and the serialisation (every command writes through one guarded
+  `ExcelIO`); an `OutOfMemoryError` raised first on another fiber (`recalc --parallel`) can still
+  be fatal, and a non-heap one is reported with the heap wording. `--max-size` below 0 — which the
+  reader would have read as "no limit" — is a usage error (exit 2). The codes are in `xl schema
+  --json`, `generated/error-codes.md` and the `--max-size` global's doc; every other `Error` keeps
+  its `INTERNAL` classification.
 - **Error literals in formulas** (#612): `#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`, `#NULL!`, `#NUM!`
   and `#VALUE!` parse (case-insensitively, as Excel upper-cases them at entry) to the new
   `TExpr.ErrorLit`, print back verbatim, evaluate to the error value they name (`=IF(x, #N/A, 1)`,
@@ -197,8 +203,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`MEMORY_PRESSURE`) when only the upper one cannot (see Added). The
   docs called `--max-size 0` "unlimited": `docs/reference/cli.md`, `CLAUDE.md` and the xl-cli skill
   now say it lifts the security limit only, that the native binary's heap is capped at 8 GB unless
-  `-Xmx<size>` is passed as the first argument (`xl -Xmx64g …`; the JAR takes `java -Xmx64g -jar`),
-  and that a million-row book needs tens of GB in memory — use `--stream`.
+  `-Xmx<size>` is passed (anywhere on the command line; before `-f` to be safe: `xl -Xmx64g -f …`;
+  the JAR takes `java -Xmx64g -jar`), and that a million-row book needs tens of GB in memory — use
+  `--stream`.
 - **`--stream search --limit N` scanned the whole sheet** (#637, a regression against 0.19.3:
   1.5 s became 56 s on a million-row sheet with 30k matches). The unreleased candidate kept
   reading after the limit to report the exact total; the scan now stops one match past `--limit`

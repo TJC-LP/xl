@@ -260,21 +260,22 @@ index). `view --format html|svg|png|jpeg|webp|pdf` needs the styles and is not
 available under `--stream`; `names`, `diff`, `lint`, `eval`, `evala` and `new` do not take the
 flag at all (usage error). Streaming never recalculates. For everything else, load in memory
 with `--max-size 0` (lifts the 100 MB security limit) or `--max-size 500`. That lifts the limit,
-not the heap: the native binary's heap is capped at 8 GB unless `-Xmx<size>` is the first
-argument (`xl -Xmx64g -f big.xlsx …`; the JAR takes `java -Xmx64g -jar`), and an in-memory load
+not the heap: the native binary's heap is capped at 8 GB unless `-Xmx<size>` is passed — put it
+before `-f` to be safe (`xl -Xmx64g -f big.xlsx …`; the JAR takes `java -Xmx64g -jar`), and an in-memory load
 needs 16–20× its worksheet XML for dense cells (a million rows × 8 numbers, 346 MB of XML, loads
 in 6 GB and not in 5), 33–41× for wide text rows, 2–3× the `sharedStrings.xml` bytes for long
 text — so stream large files. With `--max-size` lifted, the load is sized before parsing: one
 that cannot fit even at the lower estimate (`14 × sheet XML + 2 × SST`) is refused as
 `RESOURCE_LIMIT` (exit 3); one that may not fit (upper estimate `30 × sheet + 3 × SST` above the
-heap) proceeds under a `MEMORY_PRESSURE` warning; one that then exhausts the heap fails as
-`RESOURCE_LIMIT` with the `--stream`/`-Xmx` hint — never a raw `OutOfMemoryError`.
+heap) proceeds under a `MEMORY_PRESSURE` warning; one that then exhausts the heap — loading,
+recalculating, evaluating, rendering or serialising — fails as `RESOURCE_LIMIT` with the
+`--stream`/`-Xmx` hint, never a raw `OutOfMemoryError`. `--max-size` below 0 is a usage error.
 
 ```bash
 xl -f huge.xlsx --stream search "pattern" --limit 10
 xl -f huge.xlsx -o out.xlsx --stream putf A2 "=B2*1.1"
 xl -f huge.xlsx --max-size 0 sheets
-xl -Xmx32g -f huge.xlsx --max-size 0 audit          # native image: -Xmx must come first
+xl -Xmx32g -f huge.xlsx --max-size 0 audit          # native image: -Xmx anywhere; before -f to be safe
 ```
 
 ### Cache posture and strict pipelines

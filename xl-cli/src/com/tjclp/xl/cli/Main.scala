@@ -205,6 +205,15 @@ object Main extends IOApp:
         "max-size",
         "Max uncompressed size in MB for in-memory load (default: 100, 0 = unlimited). Use for large files when --stream is not supported."
       )
+      // A negative value would read as "no limit" (the reader tests `> 0`) while looking like a
+      // typo: refuse it as usage (GH-636)
+      .mapValidated { mb =>
+        if mb < 0 then
+          cats.data.Validated.invalidNel(
+            s"--max-size must be 0 or more (MB; 0 = unlimited), got $mb"
+          )
+        else cats.data.Validated.valid(mb)
+      }
       .orNone
 
   private[cli] val streamOpt: Opts[Boolean] =
@@ -2024,11 +2033,12 @@ EXAMPLES:
    * refused up front, one that may not fit is announced as `MEMORY_PRESSURE` in the same sink, and
    * a load that exhausts the heap is `RESOURCE_LIMIT` rather than a fatal `OutOfMemoryError`.
    */
-  private def readerCollecting(warnings: Ref[IO, Vector[Warning]]): ExcelIO[IO] =
+  private def readerCollecting(warnings: Ref[IO, Vector[Warning]], heap: Long): ExcelIO[IO] =
     MemoryGuard.excel(
       handler =
         warning => warnings.update(_ :+ Warning(WarningCode.READER_WARNING, warning.toString)),
-      warn = warning => warnings.update(_ :+ warning)
+      warn = warning => warnings.update(_ :+ warning),
+      heap = heap
     )
 
   /**
@@ -2366,7 +2376,8 @@ EXAMPLES:
   ): IO[ExitCode] =
     val readerConfig = buildReaderConfig(maxSizeOpt)
     Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
-      val excel = readerCollecting(warnings)
+      val excel =
+        readerCollecting(warnings, filePathOpt.fold(MemoryGuard.maxHeapBytes)(MemoryGuard.heapFor))
       val workbookIO: IO[Workbook] = filePathOpt match
         case Some(filePath) => readWorkbook(excel, filePath, readerConfig)
         case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
@@ -2415,8 +2426,11 @@ EXAMPLES:
   ): IO[ExitCode] =
     val readerConfig = buildReaderConfig(maxSizeOpt)
     Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
-      // Two loads, each under the memory guard; its MEMORY_PRESSURE rides on the outcome
-      val excel = MemoryGuard.excel(_ => IO.unit, warn = w => warnings.update(_ :+ w))
+      // Both books are resident at once: ONE verdict on the sum of their footprints (in
+      // runDiffWith, under its attempt), then two loads under the guard with no per-file sizing;
+      // a MEMORY_PRESSURE rides on the outcome
+      val excel =
+        MemoryGuard.excel(_ => IO.unit, warn = w => warnings.update(_ :+ w), admitLoads = false)
       runDiffWith(excel, warnings, fileA, fileB, sheetFilter, readerConfig, format, io, mode)
     }
 
@@ -2432,6 +2446,12 @@ EXAMPLES:
     mode: OutputMode
   ): IO[ExitCode] =
     (for
+      _ <- MemoryGuard.admitAll(
+        Vector(fileA, fileB),
+        readerConfig,
+        MemoryGuard.heapFor(fileA),
+        w => warnings.update(_ :+ w)
+      )
       wbA <- readWorkbook(excel, fileA, readerConfig)
       wbB <- readWorkbook(excel, fileB, readerConfig)
       diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter) match
@@ -2545,7 +2565,7 @@ EXAMPLES:
         IO.fromEither(Resolve.validSheetName(n).left.map(CliException(_)))
       )
       wb = Workbook(names.map(Sheet(_)).toVector)
-      _ <- classifyWrite(outPath)(ExcelIO.instance[IO].writeWith(wb, outPath, config))
+      _ <- classifyWrite(outPath)(MemoryGuard.writer.writeWith(wb, outPath, config))
     yield
       val sheetList = names.map(_.value).mkString(", ")
       s"Created ${outPath.toAbsolutePath} with ${names.size} sheet(s): $sheetList"
@@ -2580,7 +2600,7 @@ EXAMPLES:
     warnings: Ref[IO, Vector[Warning]],
     mode: OutputMode
   ): IO[Payload] =
-    val excel = readerCollecting(warnings)
+    val excel = readerCollecting(warnings, MemoryGuard.heapFor(filePath))
     val readerConfig = buildReaderConfig(maxSizeOpt)
     val warn: Warning => IO[Unit] = warning => warnings.update(_ :+ warning)
     // Handle metadata-only commands (instant for any file size)

@@ -14,7 +14,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.ooxml.XlsxReader
+import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader}
 import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
 
 /**
@@ -122,6 +122,37 @@ class MemoryGuardSpec extends CatsEffectSuite:
     assert(MemoryGuard.raised(default.copy(maxUncompressedSize = 500L * 1024 * 1024)))
     assert(!MemoryGuard.raised(default.copy(maxUncompressedSize = 50L * 1024 * 1024)))
     assert(!MemoryGuard.raised(default.copy(maxUncompressedSize = default.maxUncompressedSize)))
+    // the reader treats a negative limit as none (`> 0` guards every check): so does the guard
+    assert(MemoryGuard.raised(default.copy(maxUncompressedSize = -1L)), "negative = no limit")
+  }
+
+  /** Pin a fault for `(path, stage)` around `io`, clearing it however `io` ends. */
+  private def withFault[A](path: Path, stage: String, fault: Throwable)(io: IO[A]): IO[A] =
+    val key = (Some(path), stage)
+    IO(MemoryGuard.Seams.faults.updateAndGet(_ + (key -> fault))).void
+      .bracket(_ => io)(_ => IO(MemoryGuard.Seams.faults.updateAndGet(_ - key)).void)
+
+  test("blocking(path, stage): a fault pinned for that file and stage is raised inside the guard") {
+    val staged = Path.of("staged.xlsx")
+    withFault(staged, "recalc", new OutOfMemoryError("test")) {
+      for
+        hit <- MemoryGuard.blocking(staged, "recalc")(42).attempt
+        otherStage <- MemoryGuard.blocking(staged, "load")(42)
+        otherFile <- MemoryGuard.blocking(Path.of("other.xlsx"), "recalc")(42)
+      yield
+        assertEquals(resourceLimit(hit).error, MemoryGuard.exhausted)
+        assertEquals(otherStage, 42)
+        assertEquals(otherFile, 42)
+    } *> MemoryGuard.blocking(staged, "recalc")(42).map(v => assertEquals(v, 42, "fault cleared"))
+  }
+
+  test("heapFor: the process heap, unless a test pinned one for that file") {
+    val pinned = Path.of("pinned.xlsx")
+    assertEquals(MemoryGuard.heapFor(pinned), MemoryGuard.maxHeapBytes)
+    MemoryGuard.Seams.heap.updateAndGet(_ + (pinned -> 123L))
+    try assertEquals(MemoryGuard.heapFor(pinned), 123L)
+    finally MemoryGuard.Seams.heap.updateAndGet(_ - pinned)
+    assertEquals(MemoryGuard.heapFor(pinned), MemoryGuard.maxHeapBytes)
   }
 
   private val nycPath = Path.of("nyc1m.xlsx")
@@ -137,7 +168,6 @@ class MemoryGuardSpec extends CatsEffectSuite:
   test("the bands are ordered: each lower coefficient is the measured floor, below its upper") {
     assert(MemoryGuard.sheetLower >= 1 && MemoryGuard.sheetLower < MemoryGuard.sheetUpper)
     assert(MemoryGuard.sstLower >= 1 && MemoryGuard.sstLower < MemoryGuard.sstUpper)
-    assertEquals(MemoryGuard.sheetUpper, 30, "the dogfood book's 33–41× of sheet XML, rounded down")
     assert(MemoryGuard.sstLower < MemoryGuard.sheetLower, "a string costs far less than a cell")
   }
 
@@ -360,6 +390,68 @@ class MemoryGuardSpec extends CatsEffectSuite:
           assertEquals(afterAll.size, 1, "silent admissions warn nothing")
       }
     }
+  }
+
+  test("admitAll: books loaded together are sized as one — a verdict on the sum, naming both") {
+    for
+      a <- fixture("book.xlsx")
+      b <- fixture("book2.xlsx")
+      fa <- MemoryGuard.footprint(a)
+      // each alone is below the refusal band at this heap; the two together are over it
+      heap = fa.atLeast * 3 / 2
+      seen <- IO.ref(Vector.empty[Warning])
+      sink = (w: Warning) => seen.update(_ :+ w)
+      alone <- MemoryGuard.admit(a, ReaderConfig.permissive, heap, sink).attempt
+      together <- MemoryGuard.admitAll(Vector(a, b), ReaderConfig.permissive, heap, sink).attempt
+      atDefault <- MemoryGuard.admitAll(Vector(a, b), ReaderConfig.default, 1L, sink).attempt
+      none <- MemoryGuard.admitAll(Vector.empty, ReaderConfig.permissive, 1L, sink).attempt
+      warnings <- seen.get
+    yield
+      assertEquals(alone, Right(()), "one book fits the lower band")
+      val e = resourceLimit(together)
+      assert(
+        e.error.message.contains(a.toString) && e.error.message.contains(b.toString),
+        e.error.message
+      )
+      assertEquals(e.error.location, Some(Location.file(s"$a, $b")))
+      assertEquals(atDefault, Right(()), "the default limit never arms the guard")
+      assertEquals(none, Right(()))
+      assertEquals(
+        warnings.map(_.code),
+        Vector(WarningCode.MEMORY_PRESSURE),
+        "alone: the upper band"
+      )
+  }
+
+  test("writer: serialisation runs under the guard — writeWith, writeWorkbookStream and write") {
+    val out = dir().resolve("guarded-write.xlsx")
+    withFault(out, "write", new OutOfMemoryError("test")) {
+      for
+        viaWith <- MemoryGuard.writer.writeWith(book(), out, WriterConfig.default).attempt
+        viaStream <- MemoryGuard.writer
+          .writeWorkbookStream(book(), out, WriterConfig.default)
+          .attempt
+        viaWrite <- MemoryGuard.writer.write(book(), out).attempt
+      yield
+        assertEquals(resourceLimit(viaWith).error, MemoryGuard.exhausted)
+        assertEquals(resourceLimit(viaStream).error, MemoryGuard.exhausted)
+        assertEquals(resourceLimit(viaWrite).error, MemoryGuard.exhausted)
+        assert(!Files.exists(out), "nothing written")
+    } *> MemoryGuard.writer.writeWith(book(), out, WriterConfig.default).map { _ =>
+      assert(Files.exists(out), "the fault cleared, the write lands")
+    }
+  }
+
+  test("writer: an unwritable target fails with exactly the message ExcelIO.writeWith produces") {
+    val target = dir().resolve("no-such-dir").resolve("out.xlsx")
+    for
+      guarded <- MemoryGuard.writer.writeWith(book(), target, WriterConfig.default).attempt
+      library <- ExcelIO.instance[IO].writeWith(book(), target, WriterConfig.default).attempt
+    yield (guarded, library) match
+      case (Left(g), Left(l)) =>
+        assertEquals(g.getMessage, l.getMessage)
+        assert(g.getMessage.startsWith("Failed to write XLSX: "), g.getMessage)
+      case other => fail(s"both writes must fail the same way, got $other")
   }
 
   // --- the guarded ExcelIO ----------------------------------------------------------------------

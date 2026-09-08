@@ -20,6 +20,7 @@ import com.tjclp.xl.cli.helpers.{
   ValueParser
 }
 import com.tjclp.xl.cli.output.Format
+import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.contract.{CliError, CliException, Diagnostics, Warning, WarningCode}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{
@@ -122,7 +123,8 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean
   ): IO[Unit] =
-    val excel = ExcelIO.instance[IO]
+    // GH-636: the one guarded instance, so serialisation exhausting the heap is RESOURCE_LIMIT
+    val excel = MemoryGuard.writer
     if stream then excel.writeWorkbookStream(wb, outputPath, config)
     else excel.writeWith(wb, outputPath, config)
 
@@ -144,7 +146,8 @@ object WriteCommands:
     val calculation: IO[Option[RecalcResult]] =
       if policy.noRecalc then IO.pure(None)
       else
-        IO.delay {
+        // GH-636: the recalculation builds the graph and every result at once — under the guard
+        MemoryGuard.blocking(outputPath, "recalc") {
           val result =
             if wb.metadata.calcPr.exists(_.iterativeCalculation) then
               val full = recalcHonoringCalcPr(wb).result
@@ -1418,19 +1421,23 @@ object WriteCommands:
             .applyScoped(wb, sheetOpt, result.scoped, !policy.noRecalc)
             .flatMap { updatedWb =>
               val mutating = result.scoped.map(_.op).exists(isCellMutating)
-              val recalcOpt =
-                if mutating && !policy.noRecalc then Some(scopedRecalc(wb, updatedWb)) else None
-              val finalWb = recalcOpt.fold(updatedWb)(_._1)
-              writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
-                val ops = result.ops
-                val summary = BatchParser.formatScopedSummary(result.scoped)
-                val recalcLine = recalcOpt match
-                  case Some((_, r)) => s"${formatRecalcSummary(r)}\n"
-                  case None if mutating => s"$noRecalcNote\n"
-                  case None => ""
-                val rendered =
-                  s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
-                strictGate(policy, rendered, recalcOpt.map(_._2), Vector.empty, warn)
+              val recalculation: IO[Option[(Workbook, RecalcResult)]] =
+                if mutating && !policy.noRecalc then
+                  MemoryGuard.blocking(outputPath, "recalc")(Some(scopedRecalc(wb, updatedWb)))
+                else IO.pure(None)
+              recalculation.flatMap { recalcOpt =>
+                val finalWb = recalcOpt.fold(updatedWb)(_._1)
+                writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+                  val ops = result.ops
+                  val summary = BatchParser.formatScopedSummary(result.scoped)
+                  val recalcLine = recalcOpt match
+                    case Some((_, r)) => s"${formatRecalcSummary(r)}\n"
+                    case None if mutating => s"$noRecalcNote\n"
+                    case None => ""
+                  val rendered =
+                    s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
+                  strictGate(policy, rendered, recalcOpt.map(_._2), Vector.empty, warn)
+                }
               }
             }
       }
@@ -1470,8 +1477,9 @@ object WriteCommands:
     warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     // Keep the expensive pure recalculation inside the returned IO. In particular, constructing an
-    // IO value must not print the iterative fallback advisory or start consuming CPU.
-    IO.delay(recalcHonoringCalcPr(wb, parallel)).flatMap { run =>
+    // IO value must not print the iterative fallback advisory or start consuming CPU. Under the
+    // memory guard (GH-636): a heap the whole-book recalculation exhausts is RESOURCE_LIMIT.
+    MemoryGuard.blocking(outputPath, "recalc")(recalcHonoringCalcPr(wb, parallel)).flatMap { run =>
       val result = run.result
       val prepared: IO[(Workbook, Vector[SeedTableWarning])] =
         if !seedTables then IO.pure((result.workbook, Vector.empty))
@@ -2011,18 +2019,22 @@ object WriteCommands:
     policy: WritePolicy,
     warn: Warning => IO[Unit]
   ): IO[String] =
-    val recalcOpt = if policy.noRecalc then None else Some(scopedRecalc(before, edited))
-    val (finalWb, recalcLine) = recalcOpt match
-      case Some((wb, result)) => (wb, formatRecalcSummary(result))
-      case None => (edited, countCachePreservation(edited).note)
-    writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
-      strictGate(
-        policy,
-        s"$message\n$recalcLine\n${Format.saveSuffix(outputPath, stream)}",
-        recalcOpt.map(_._2),
-        Vector.empty,
-        warn
-      )
+    val recalculation: IO[Option[(Workbook, RecalcResult)]] =
+      if policy.noRecalc then IO.pure(None)
+      else MemoryGuard.blocking(outputPath, "recalc")(Some(scopedRecalc(before, edited)))
+    recalculation.flatMap { recalcOpt =>
+      val (finalWb, recalcLine) = recalcOpt match
+        case Some((wb, result)) => (wb, formatRecalcSummary(result))
+        case None => (edited, countCachePreservation(edited).note)
+      writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+        strictGate(
+          policy,
+          s"$message\n$recalcLine\n${Format.saveSuffix(outputPath, stream)}",
+          recalcOpt.map(_._2),
+          Vector.empty,
+          warn
+        )
+      }
     }
 
   def insertRows(

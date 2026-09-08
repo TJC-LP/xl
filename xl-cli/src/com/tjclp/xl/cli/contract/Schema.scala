@@ -88,9 +88,10 @@ object Schema:
       "--max-size",
       None,
       "Max uncompressed size in MB for an in-memory load (default 100, 0 = unlimited); lifts the " +
-        "security limit only — the heap (native image: 8 GB unless -Xmx is the first argument) " +
-        "still bounds what fits: a load estimated not to fit is refused with RESOURCE_LIMIT, one " +
-        "that may not fit proceeds under a MEMORY_PRESSURE warning"
+        "security limit only — the heap (native image: 8 GB unless -Xmx<size> is passed; put it " +
+        "before -f to be safe) still bounds what fits: a load estimated not to fit is refused with " +
+        "RESOURCE_LIMIT, one that may not fit proceeds under a MEMORY_PRESSURE warning; below 0 " +
+        "is a usage error"
     ),
     GlobalDoc("--output", Some("-o"), "Output file for a write"),
     GlobalDoc("--in-place", Some("-i"), "Edit the input file in place (instead of -o)"),

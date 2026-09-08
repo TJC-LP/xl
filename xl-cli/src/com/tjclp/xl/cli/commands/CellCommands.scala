@@ -6,8 +6,8 @@ import cats.effect.IO
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.cli.helpers.SheetResolver
+import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.output.Format
-import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
 
 /**
@@ -25,7 +25,7 @@ object CellCommands:
     config: WriterConfig,
     stream: Boolean
   ): IO[Unit] =
-    val excel = ExcelIO.instance[IO]
+    val excel = MemoryGuard.writer
     if stream then excel.writeWorkbookStream(wb, outputPath, config)
     else excel.writeWith(wb, outputPath, config)
 
