@@ -126,8 +126,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recalculateAfterEdit` and the CLI's cone-scoped writes use: roots, their transitive dependents,
   then a fixpoint adding every bounded reader whose areas contain a dirty cell. A reader inside the
   cone is still evaluated, withdrawn and reported; one outside keeps the cache the file carried and
-  its worksheet part rides verbatim. Structural edits are unchanged: `StructuralEditor` keeps every
-  unresolved reader stale, since a shift rewrites reference text.
+  its worksheet part rides verbatim. On the batch and structural path — a whole-book recalculation
+  with cone-scoped cache writes — a failure on a cell outside the cone whose cache the written file
+  kept is no longer reported in the summary or counted by `RECALC_ERRORS`; failures inside the cone
+  (every authored formula included) and on cells the file leaves uncached still are, and still fail
+  `--strict`. Structural edits themselves are unchanged: `StructuralEditor` keeps every unresolved
+  reader stale, since a shift rewrites reference text.
 - **`_xlfn.` storage prefix on conditional-formatting, data-validation and defined-name formulas**
   (#577). `CfCodec`, `DataValidationCodec` and the workbook's defined names now go through
   `FormulaStorage` like cell formulas: an Excel-authored `_xlfn.IFS(` in a rule reads bare and

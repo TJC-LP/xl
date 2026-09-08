@@ -185,9 +185,10 @@ With `-i` the temp file is discarded and the input is left byte-identical; the s
 together with `--stream` (streaming writes never recalculate, so the gate could never fire). Verbs
 that perform no recalculation, such as presentation-only verbs, have no calculation outcome to
 gate. `put`, `putf`, `fill`, and `copy` include authored formulas and affected dependents in their
-reported outcomes. Structural and batch writes retain workbook-level errors even when the failing
-cell is outside the cache-write cone. Use `--strict` without `--no-recalc` when the command must
-validate calculation results.
+reported outcomes. Structural and batch writes recalculate the whole book but report a failure only
+for a cell inside the cache-write cone or one the written file leaves uncached; a formula outside
+the cone whose cache was kept is never reported as "left uncached" (#606). Use `--strict` without
+`--no-recalc` when the command must validate calculation results.
 
 For `recalc --tables`, unsupported dynamic source cones produce a named skip warning; failed
 source/axis/member evaluations report unseeded counts and retain unresolved-precedent diagnostics.

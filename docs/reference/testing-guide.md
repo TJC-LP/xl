@@ -233,11 +233,11 @@ As of the #606 blind-reader fix (2026-09-08), from the full-suite JUnit reports;
 | xl-evaluator | 2371 |
 | xl-core | 1533 |
 | xl-ooxml | 1119 |
-| xl-cli | 1262 |
+| xl-cli | 1264 |
 | xl-cats-effect | 167 |
 | xl-agent | 145 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 50 |
-| **Total** | **6,647** |
+| **Total** | **6,649** |
 
 ## Test Quality Metrics
 

@@ -149,7 +149,8 @@ object WriteCommands:
             if wb.metadata.calcPr.exists(_.iterativeCalculation) then
               val full = recalcHonoringCalcPr(wb).result
               val cone = dirtyCone(wb, Map(sheetName -> modifiedRefs))
-              scopeToCone(full, cone).copy(workbook = applyConeCaches(wb, full.workbook, cone))
+              val written = applyConeCaches(wb, full.workbook, cone)
+              scopeToCone(full, cone, written).copy(workbook = written)
             else
               DependentRecalculation.recalculateAfterEdit(wb, sheetName, modifiedRefs, Clock.system)
           Some(result)
@@ -1245,20 +1246,39 @@ object WriteCommands:
       }
     }
 
-  /** Scope computed-value counts to the write while retaining workbook-level diagnostics. */
+  /**
+   * Scope a whole-book recalculation to the cone that is written back.
+   *
+   * Computed values and the convergence verdict come from the cone alone. A failure is kept when
+   * its cell is in the cone — every formula the edit authored or dirtied, so the #572 guarantee
+   * holds: an authored formula that does not parse or evaluate is reported and fails `--strict` —
+   * or when the WRITTEN workbook leaves the cell without a cache, which is exactly what the
+   * diagnostic claims (the book carries a formula xl cannot compute and nothing gave it a value). A
+   * failure on a cell outside the cone whose cache the written workbook kept is dropped (GH-606):
+   * `applyConeCaches` never applied that failure, the cache — Excel's, usually — is untouched, and
+   * "could not be evaluated and left uncached" would be false. This is what keeps a batch `put` on
+   * a formula-free cover sheet from listing the 273 unparseable formulas of a model whose caches it
+   * preserved, and makes the batch and structural verbs report the same cells the targeted `put`
+   * path does for a kept cache.
+   */
   private def scopeToCone(
     result: RecalcResult,
-    cone: Map[SheetName, Set[ARef]]
+    cone: Map[SheetName, Set[ARef]],
+    written: Workbook
   ): RecalcResult =
-    val cycles = result.cycles.filter { report =>
-      report.members.exists((sheet, ref) => cone.getOrElse(sheet, Set.empty[ARef]).contains(ref))
-    }
+    def inCone(sheet: SheetName, ref: ARef): Boolean =
+      cone.getOrElse(sheet, Set.empty[ARef]).contains(ref)
+    def leftUncached(sheet: SheetName, ref: ARef): Boolean =
+      written(sheet).toOption.flatMap(_.cells.get(ref)).map(_.value) match
+        case Some(CellValue.Formula(_, None, _)) => true
+        case _ => false
+    val cycles = result.cycles.filter(_.members.exists(inCone))
     result.copy(
       evaluated = result.evaluated.map { (name, cells) =>
         val scope = cone.getOrElse(name, Set.empty[ARef])
         name -> cells.filter((r, _) => scope.contains(r))
       },
-      errors = result.errors,
+      errors = result.errors.filter(e => inCone(e.sheet, e.ref) || leftUncached(e.sheet, e.ref)),
       converged = cycles.forall(_.converged),
       iterationsUsed = cycles.map(_.rounds).maxOption.getOrElse(0),
       cycles = cycles
@@ -1269,8 +1289,9 @@ object WriteCommands:
    *
    * Ordering and cycle isolation stay whole-book (one topological order over the qualified graph,
    * Excel's own model — a cone cell's precedents are recomputed before it), but only the cone's
-   * caches are written back. Errors remain visible even outside the cone: an unresolved dependency
-   * cannot be safely assigned to it. Returns the workbook to write and the result for the summary.
+   * caches are written back. Failures are reported for the cone and for any cell the written book
+   * leaves uncached; a failure on a kept cache outside the cone is not (see [[scopeToCone]]).
+   * Returns the workbook to write and the result for the summary.
    *
    * Known limitations: the evaluation itself is still whole-book, so the SAVING is fidelity, not
    * time; a cone cell recomputes off freshly evaluated precedents rather than off any preserved
@@ -1282,7 +1303,8 @@ object WriteCommands:
   private def scopedRecalc(before: Workbook, edited: Workbook): (Workbook, RecalcResult) =
     val result = recalcHonoringCalcPr(edited).result
     val cone = dirtyCone(edited, changedRefs(before, edited))
-    (applyConeCaches(edited, result.workbook, cone), scopeToCone(result, cone))
+    val written = applyConeCaches(edited, result.workbook, cone)
+    (written, scopeToCone(result, cone, written))
 
   /**
    * GH-496: the `--strict` gate. The write has already happened; this only decides the exit code.

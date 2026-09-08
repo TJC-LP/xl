@@ -1695,6 +1695,78 @@ class BatchRecalcSpec extends FunSuite:
       Files.deleteIfExists(ops)
   }
 
+  test("GH-606: a strict batch put outside every blind reader's reach reports no errors") {
+    // The batch path recalculates the whole book, so the blind formulas fail in that pass; their
+    // caches are kept (outside the cone), and a failure on a kept cache must not be reported,
+    // must not warn, and must not fail --strict: the summary may never say "left uncached" about
+    // a cache the file still carries.
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val out = tempXlsx()
+    val ops = writeOps("""[{"op":"put","ref":"Cover!B16","value":"dogfood"}]""")
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    try
+      val summary = WriteCommands
+        .batch(
+          wb,
+          None,
+          ops.toString,
+          out,
+          config,
+          policy = WritePolicy(strict = true),
+          warn = w => IO(warnings += w)
+        )
+        .unsafeRunSync()
+      assert(summary.contains("Recalculated 0 formulas"), summary)
+      assert(!summary.contains("error"), s"a kept cache is not a failure: $summary")
+      assertEquals(warnings.toList, Nil, "no RECALC_ERRORS for caches the write preserved")
+      val written = readBack(out)
+      assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, Some(CellValue.Number(7)))
+      assertEquals(formulaOn(written, "Summary", ref"B2").cachedValue, Some(CellValue.Number(8)))
+      assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, Some(CellValue.Number(9)))
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet2.xml")
+      assertVerbatim(out, srcFile, "xl/worksheets/sheet3.xml")
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(out)
+      Files.deleteIfExists(ops)
+  }
+
+  test("GH-606: a batch that authors an unparseable formula is reported and fails --strict") {
+    // The authored cell is a seed, hence in the cone: the #572 guarantee is untouched, while the
+    // blind formulas elsewhere still ride through cached and unreported.
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val ops = writeOps("""[{"op":"putf","ref":"Cover!B16","formula":"=ZZZNOTAFUNC(A1)"}]""")
+    val advisoryOut = tempXlsx()
+    val strictOut = tempXlsx()
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    try
+      val advisory = WriteCommands
+        .batch(wb, None, ops.toString, advisoryOut, config, warn = w => IO(warnings += w))
+        .unsafeRunSync()
+      assert(advisory.contains("1 error"), advisory)
+      assert(advisory.contains("Cover!B16"), advisory)
+      assertEquals(warnings.map(_.code).toList, List(WarningCode.RECALC_ERRORS))
+
+      val strict = strictFailure(
+        WriteCommands
+          .batch(wb, None, ops.toString, strictOut, config, policy = WritePolicy(strict = true))
+      )
+      assert(strict.contains("Cover!B16"), strict)
+      assert(strict.contains("1 formula evaluation error"), strict)
+      val written = readBack(strictOut)
+      assertEquals(formulaOn(written, "Cover", ref"B16").cachedValue, None)
+      assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, Some(CellValue.Number(7)))
+      assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, Some(CellValue.Number(9)))
+      assertVerbatim(strictOut, srcFile, "xl/worksheets/sheet2.xml")
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(advisoryOut)
+      Files.deleteIfExists(strictOut)
+      Files.deleteIfExists(ops)
+  }
+
   test("GH-468: the unconditional preservation claim still holds for the NON-structural verbs") {
     val wb = splicedCacheWorkbook()
     val out = tempXlsx()
