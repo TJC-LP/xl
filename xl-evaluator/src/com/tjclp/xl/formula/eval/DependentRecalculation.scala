@@ -32,7 +32,10 @@ object DependentRecalculation:
 
   /**
    * GH-504/GH-508: evaluate authored formulas as well as affected dependents and retain outcomes.
-   * Unknown readers join the roots because a missing graph edge cannot prove independence.
+   * The affected set is `DependencyGraph.editCone`: the edit, its transitive dependents, every
+   * dynamic reader, and — GH-606 — an unresolved reader only when its textual reach
+   * (`ReferenceScan`) contains a dirty cell, or is unbounded. A missing graph edge cannot prove
+   * independence, but the formula's text often can; readers it cannot bound stay always-dirty.
    * Unaffected formulas retain their caches and do not consume clock or randomness capabilities.
    */
   private[xl] def recalculateAfterEdit(
@@ -47,9 +50,8 @@ object DependentRecalculation:
       val (graph, dependents) = DependencyGraph.fromWorkbookFormulaGraph(wb)
       val index = DependencyGraph.fromWorkbookDependencyIndex(wb)
       val dynamic = DependencyGraph.dynamicCells(wb)
-      val roots = modifiedRefs.map(QualifiedRef(sheetName, _)) ++ dynamic ++
-        DependencyGraph.unresolvedReaders(wb)
-      val affected = (roots ++ index.transitiveDependents(roots)).intersect(graph.keySet)
+      val seeds = modifiedRefs.map(QualifiedRef(sheetName, _))
+      val affected = DependencyGraph.editCone(wb, seeds, index, dynamic).intersect(graph.keySet)
       val affectedGraph = graph.filter((ref, _) => affected.contains(ref))
       val allCyclic = DependencyGraph.qualifiedCyclicNodes(graph)
       val cyclic = allCyclic.intersect(affected)

@@ -85,15 +85,23 @@ class AfterEditRecalculationSpec extends FunSuite:
     assertEquals(cached(result.workbook, "Data", ref"A5"), Some(num(5)))
   }
 
-  test("GH-508: unresolved named readers are evaluated and invalidated after a single-cell edit") {
+  test("GH-508/GH-606: an unresolved named reader is invalidated only by edits inside its reach") {
+    // `Multi` is a union the parser rejects, so the graph has no edge for B2. GH-606 bounds the
+    // reader by the TEXT of the definition (Other!A1:A3 and Other!A8:A10): an edit on Data cannot
+    // change what it reads and leaves the cache alone; an edit inside an area withdraws it.
     val wb = Workbook(
       Sheet("Data").put(ref"A1", num(2)),
       Sheet("Other").put(ref"B2", CellValue.Formula("SUM(Multi)", Some(num(33))))
     )
       .withDefinedName("Multi", "Other!$A$1:$A$3,Other!$A$8:$A$10")
-    val result = DependentRecalculation.recalculateAfterEdit(wb, data, Set(ref"A1"), Clock.system)
-    assertEquals(cached(result.workbook, "Other", ref"B2"), None)
-    assert(result.errors.exists(error => error.sheet.value == "Other" && error.ref == ref"B2"))
+    val unrelated =
+      DependentRecalculation.recalculateAfterEdit(wb, data, Set(ref"A1"), Clock.system)
+    assertEquals(cached(unrelated.workbook, "Other", ref"B2"), Some(num(33)))
+    assertEquals(unrelated.errors, Vector.empty)
+    val inside = DependentRecalculation
+      .recalculateAfterEdit(wb, SheetName.unsafe("Other"), Set(ref"A9"), Clock.system)
+    assertEquals(cached(inside.workbook, "Other", ref"B2"), None)
+    assert(inside.errors.exists(error => error.sheet.value == "Other" && error.ref == ref"B2"))
   }
 
   test("GH-504: an empty edit preserves the workbook without reading the clock") {

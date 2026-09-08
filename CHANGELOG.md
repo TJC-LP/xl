@@ -93,6 +93,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`--strict` on `batch` and the structural verbs no longer fails for a recalculation failure on a
+  cell outside the edit's cone whose cache the written file kept** (#606). The whole-book pass
+  behind those verbs still runs, but a failure it never applied to the output is not a condition of
+  the write; a script that relied on `--strict` to reject a book full of cached-but-unevaluable
+  formulas will now pass, as it always did for `put`/`putf`/`fill`/`copy`. Failures inside the cone
+  (every authored formula) and on cells the file leaves uncached still fail it.
 - `fill --no-recalc` caches uncached formulas on source rows inside the target and evaluates them
   against the fully filled sheet (previously source rows were skipped and evaluated against the
   partially filled sheet). Group/ungroup validation reports a malformed span before an invalid
@@ -131,6 +137,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An edit no longer withdraws the caches of unparseable formulas it cannot reach** (#606). A
+  formula the parser rejects (an omitted argument such as `RATE(n,,pv,fv,)`, `SINGLE`, a name whose
+  definition is a union) has no graph edges, and the after-edit recalculation treated every one of
+  them as dirty on every edit — evaluated, failed, cache withdrawn: a `put` of a text value on a
+  formula-free cover sheet printed `Recalculated 0 formulas; 273 errors`, stripped 273 caches Excel
+  had written and rewrote 11 of 16 worksheet parts. `ReferenceScan` now bounds such a reader by its
+  TEXT: string and error literals, numbers, operators and function names contribute nothing; cells,
+  ranges, whole rows/columns, sheet qualifiers, 3-D spans and defined names (resolved with the
+  evaluator's sheet-scoped shadowing, recursing textually through definitions the parser rejects)
+  contribute their areas; a call to a name the registry does not know (an Excel 365 `LAMBDA`
+  stored as a defined name, `MyFunc(1)`) reads through that definition; anything the scanner cannot
+  classify — a structured or external reference, a missing name, a dynamic call, `ANCHORARRAY`,
+  `SUMIF`/`AVERAGEIF` (whose reads exceed their argument text), a colon after a name or a call —
+  leaves the reader `Unbounded` and always dirty, as before. `DependencyGraph.editCone` is the one cone both
+  `recalculateAfterEdit` and the CLI's cone-scoped writes use: roots, their transitive dependents,
+  then a fixpoint adding every bounded reader whose areas contain a dirty cell. A reader inside the
+  cone is still evaluated, withdrawn and reported; one outside keeps the cache the file carried and
+  its worksheet part rides verbatim. On the batch and structural path — a whole-book recalculation
+  with cone-scoped cache writes — a failure on a cell outside the cone whose cache the written file
+  kept is no longer reported in the summary or counted by `RECALC_ERRORS`; failures inside the cone
+  (every authored formula included) and on cells the file leaves uncached still are, and still fail
+  `--strict`. Structural edits themselves are unchanged: `StructuralEditor` keeps every unresolved
+  reader stale, since a shift rewrites reference text.
 - **`rename-sheet` refusals are typed, located and human-readable** (#608). A dependent formula
   that mentions the sheet but cannot be parsed still refuses the whole rename before anything is
   written, but now as `FORMULA_ERROR` (exit 3) — `INTERNAL` stays reserved for defects — with
