@@ -1,11 +1,11 @@
 package com.tjclp.xl.formula.functions
 
-import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
+import com.tjclp.xl.formula.ast.{ExprValue, RangeForm, TExpr}
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
-import com.tjclp.xl.CellRange
+import com.tjclp.xl.{Anchor, CellRange}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.Sheet
@@ -247,8 +247,34 @@ object ArgSpec:
         // off-grid drag; the slot carries the error and evaluation yields it
         case TExpr.ErrorLit(error) :: tail =>
           Right((TExpr.RangeLocation.Error(error), tail))
+        // GH-631: a single cell where a range is expected — SUMIF(A1:A10, ">0", C1),
+        // COUNTIF(A1, "x") — is the 1×1 range it addresses, as Excel reads it; RangeForm.Cell
+        // keeps the spelling so it prints back as `C1`
+        case TExpr.PolyRef(at, anchor) :: tail =>
+          Right((TExpr.RangeLocation.Local(singleCell(at, anchor), RangeForm.Cell), tail))
+        case TExpr.Ref(at, anchor, _) :: tail =>
+          Right((TExpr.RangeLocation.Local(singleCell(at, anchor), RangeForm.Cell), tail))
+        case TExpr.SheetPolyRef(sheet, at, anchor) :: tail =>
+          Right(
+            (TExpr.RangeLocation.CrossSheet(sheet, singleCell(at, anchor), RangeForm.Cell), tail)
+          )
+        case TExpr.SheetRef(sheet, at, anchor, _) :: tail =>
+          Right(
+            (TExpr.RangeLocation.CrossSheet(sheet, singleCell(at, anchor), RangeForm.Cell), tail)
+          )
+        case TExpr.ExternalRef(index, name, at, anchor) :: tail =>
+          Right(
+            (
+              TExpr.RangeLocation.External(index, name, singleCell(at, anchor), RangeForm.Cell),
+              tail
+            )
+          )
         case _ =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
+
+    /** The 1×1 range a cell reference addresses, its anchor on both corners. */
+    private def singleCell(at: ARef, anchor: Anchor): CellRange =
+      CellRange(at, at, anchor, anchor)
 
     def toValues(args: TExpr.RangeLocation): List[ArgValue] =
       List(ArgValue.Range(args))

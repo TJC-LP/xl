@@ -105,3 +105,51 @@ class AggregateErrorPolicySpec extends FunSuite:
       .put(ref"B2", num(4))
     assertErrorValue(sheet, "=SUMPRODUCT(A1:A2,B1:B2)", CellError.Div0)
   }
+
+  // ===== GH-630: an error VALUE as a direct argument — Excel's COUNT/COUNTA/COUNTBLANK rules =====
+  // Confirmed against LibreOffice: COUNT(#REF!)=0, COUNT(1,#N/A,2)=2, COUNTA(#REF!)=1,
+  // COUNTA(1,#N/A,2)=3, COUNT(1/0)=0, COUNTA(1/0)=1, COUNTBLANK(#REF!) is an error, SUM(1,#N/A)=#N/A.
+
+  private val withNa = Sheet("Test")
+    .put(ref"A1", CellValue.Formula("NA()", Some(CellValue.Error(CellError.NA))))
+    .put(ref"A3", num(7))
+
+  test("GH-630: COUNT ignores error arguments — literals, computed errors and error cells alike") {
+    assertEquals(withError.evaluateFormula("=COUNT(#REF!)"), Right(num(0)))
+    assertEquals(withError.evaluateFormula("=COUNT(1,#N/A,2)"), Right(num(2)))
+    assertEquals(withError.evaluateFormula("=COUNT(1/0)"), Right(num(0)))
+    assertEquals(withError.evaluateFormula("=COUNT(A2)"), Right(num(0)))
+    assertEquals(withError.evaluateFormula("=COUNT(A1:A3)"), Right(num(2)))
+    assertEquals(withNa.evaluateFormula("=COUNT(A1:A3)"), Right(num(1)))
+    assertEquals(withNa.evaluateFormula("=COUNT(A1)"), Right(num(0)))
+  }
+
+  test("GH-630: COUNTA counts error arguments as non-empty") {
+    assertEquals(withError.evaluateFormula("=COUNTA(#REF!)"), Right(num(1)))
+    assertEquals(withError.evaluateFormula("=COUNTA(1,#N/A,2)"), Right(num(3)))
+    assertEquals(withError.evaluateFormula("=COUNTA(1/0)"), Right(num(1)))
+    assertEquals(withNa.evaluateFormula("=COUNTA(A1:A3)"), Right(num(2)))
+    assertEquals(withNa.evaluateFormula("=COUNTA(A1)"), Right(num(1)))
+  }
+
+  test("GH-630: COUNTBLANK neither counts nor swallows an error; its range argument must exist") {
+    assertEquals(withNa.evaluateFormula("=COUNTBLANK(A1:A3)"), Right(num(1)))
+    assertEquals(
+      withError.evaluateFormula("=COUNTBLANK(#REF!)"),
+      Right(CellValue.Error(CellError.Ref))
+    )
+  }
+
+  test("GH-630: every other aggregate still propagates an error argument") {
+    assertErrorValue(withError, "=SUM(1,#N/A)", CellError.NA)
+    assertErrorValue(withError, "=SUM(1,1/0)", CellError.Div0)
+    assertErrorValue(withError, "=AVERAGE(#REF!,1)", CellError.Ref)
+    assertErrorValue(withError, "=MAX(1,#NUM!)", CellError.Num)
+    assertErrorValue(withNa, "=MAX(A1:A3)", CellError.NA)
+    assertErrorValue(withError, "=MIN(#SPILL!)", CellError.Spill)
+  }
+
+  test("GH-630: a host failure inside COUNT stays loud — only Excel error VALUES are skipped") {
+    val circular = Sheet("Test").put(ref"B1", CellValue.Formula("COUNT(B1)", None))
+    assert(circular.evaluateCell(ref"B1").isLeft)
+  }

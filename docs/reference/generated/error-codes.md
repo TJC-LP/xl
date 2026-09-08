@@ -78,3 +78,4 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `FLAG_IGNORED` |
 | `EVAL_FAILED` |
 | `MEMORY_PRESSURE` |
+| `OFF_GRID_REF` |

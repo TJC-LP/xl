@@ -55,6 +55,68 @@ class StrictWriteIntegritySpec extends FunSuite:
     }
   }
 
+  test("GH-628: strict putf fails when a drag writes #REF! for an off-grid reference") {
+    withOutput { out =>
+      val wb = plain
+      val summary = failure(
+        WriteCommands.putFormula(
+          wb,
+          Some(wb.sheets.head),
+          "A20:C20",
+          List("=XFC1+1"),
+          out,
+          config,
+          policy = strict
+        )
+      )
+      assert(summary.contains("STRICT FAILURE"), summary)
+      assert(
+        summary.contains("1 formula gained #REF! for a reference dragged off the grid"),
+        summary
+      )
+      // the file is written either way, the #REF! cached as the error value it is
+      assertEquals(cached(read(out), "Data", ref"C20"), Some(CellValue.Error(CellError.Ref)))
+    }
+  }
+
+  test("GH-628: strict copy and batch drag fail on an off-grid #REF!; a clean drag passes") {
+    withOutput { out =>
+      val wb = plain.put(plain.sheets.head.put(ref"B3", CellValue.Formula("A2*2", None)))
+      val copySummary = failure(
+        WriteCommands.copyRange(
+          wb,
+          Some(wb.sheets.head),
+          "B3",
+          "B1",
+          valuesOnly = false,
+          out,
+          config,
+          policy = strict
+        )
+      )
+      assert(copySummary.contains("gained #REF!"), copySummary)
+      val ops = java.nio.file.Files.createTempFile("strict-off-grid", ".json")
+      try
+        java.nio.file.Files.writeString(
+          ops,
+          """[{"op":"putf","ref":"C1:C3","value":"=B3+A2","from":"C3"}]"""
+        )
+        val batchSummary = failure(
+          WriteCommands.batch(wb, Some(wb.sheets.head), ops.toString, out, config, policy = strict)
+        )
+        assert(batchSummary.contains("gained #REF!"), batchSummary)
+        java.nio.file.Files.writeString(
+          ops,
+          """[{"op":"putf","ref":"C1:C3","value":"=B1+A1","from":"C1"}]"""
+        )
+        val clean = WriteCommands
+          .batch(wb, Some(wb.sheets.head), ops.toString, out, config, policy = strict)
+          .unsafeRunSync()
+        assert(!clean.contains("STRICT FAILURE"), clean)
+      finally java.nio.file.Files.deleteIfExists(ops)
+    }
+  }
+
   test("GH-504: default putf reports a failed authored formula and writes it without a cache") {
     withOutput { out =>
       val wb = plain

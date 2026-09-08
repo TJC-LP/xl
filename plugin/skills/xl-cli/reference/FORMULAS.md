@@ -39,6 +39,7 @@ it are hand-written semantics worth knowing.
 | `DAY` | 1 | date | — |
 | `EDATE` | 2 | date, integer | date |
 | `EOMONTH` | 2 | date, integer | date |
+| `ERROR.TYPE` | 1 | cell | — |
 | `EXP` | 1 | number | — |
 | `FILTER` | 2–3 | range, range, optional value | — |
 | `FIND` | 2–3 | text, text, optional integer | — |

@@ -230,14 +230,14 @@ As of the #606 blind-reader fix and the #636 memory guard (2026-09-08), from the
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 2417 |
-| xl-core | 1551 |
-| xl-ooxml | 1119 |
-| xl-cli | 1340 |
-| xl-cats-effect | 167 |
+| xl-evaluator | 2441 |
+| xl-core | 1558 |
+| xl-ooxml | 1120 |
+| xl-cli | 1347 |
+| xl-cats-effect | 168 |
 | xl-agent | 145 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 51 |
-| **Total** | **6,790** |
+| **Total** | **6,830** |
 
 ## Test Quality Metrics
 

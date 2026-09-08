@@ -31,6 +31,14 @@ object EvalFormulaSupport extends FormulaSupport:
   def shift(formula: String, colDelta: Int, rowDelta: Int): XLResult[String] =
     FormulaOps.shift(formula, colDelta, rowDelta)
 
+  /** GH-628: the shifter knows which references it voided; report them. */
+  override def shiftReporting(
+    formula: String,
+    colDelta: Int,
+    rowDelta: Int
+  ): XLResult[FormulaSupport.Shifted] =
+    FormulaOps.shiftReporting(formula, colDelta, rowDelta)
+
   /** The editor no-ops on a sheet the book lacks; the seam refuses instead. */
   private def onSheet(wb: Workbook, sheet: SheetName)(
     edit: => XLResult[Workbook]

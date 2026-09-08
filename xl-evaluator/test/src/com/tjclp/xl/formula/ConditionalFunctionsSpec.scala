@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.cells.CellError
 import munit.FunSuite
 import com.tjclp.xl.*
 import com.tjclp.xl.unsafe.*
@@ -589,8 +590,8 @@ class ConditionalFunctionsSpec extends FunSuite:
 
   // ===== Shape Validation Tests (P1 Fix) =====
 
-  test("SUMIF: shape mismatch error (same count, different dimensions)") {
-    // A1:A3 is 3×1, B1:D1 is 1×3 - same cell count but different shape
+  test("GH-631: SUMIF sizes a differently shaped sum_range to range from its upper-left cell") {
+    // A1:A3 is 3×1, B1:D1 is 1×3 — Excel reads B1:B3 (B1's shape made A1:A3's), never an error
     val sheet = sheetWith(
       ref"A1" -> "X",
       ref"A2" -> "Y",
@@ -601,10 +602,7 @@ class ConditionalFunctionsSpec extends FunSuite:
     )
 
     val result = sheet.evaluateFormula("=SUMIF(A1:A3, \"X\", B1:D1)")
-    assert(result.isLeft, "Should fail with shape mismatch")
-    result.left.foreach { err =>
-      assert(err.toString.contains("dimensions"), s"Error should mention dimensions: $err")
-    }
+    assertEquals(result, Right(CellValue.Number(BigDecimal(10)))) // B1 for A1; B3 (blank) for A3
   }
 
   test("SUMIFS: shape mismatch error in criteria range") {
@@ -618,8 +616,9 @@ class ConditionalFunctionsSpec extends FunSuite:
       ref"D1" -> "X"
     )
 
+    // GH-631: the *IFS family never resizes — Excel's #VALUE!, as an error VALUE (IFERROR-catchable)
     val result = sheet.evaluateFormula("=SUMIFS(A1:A3, B1:D1, \"X\")")
-    assert(result.isLeft, "Should fail with shape mismatch")
+    assertEquals(result, Right(CellValue.Error(CellError.Value)))
   }
 
   test("COUNTIFS: shape mismatch error between criteria ranges") {
@@ -633,7 +632,7 @@ class ConditionalFunctionsSpec extends FunSuite:
     )
 
     val result = sheet.evaluateFormula("=COUNTIFS(A1:A3, \"X\", B1:D1, \">0\")")
-    assert(result.isLeft, "Should fail with shape mismatch")
+    assertEquals(result, Right(CellValue.Error(CellError.Value)))
   }
 
   test("SUMIF: matching shapes work correctly") {
@@ -893,7 +892,7 @@ class ConditionalFunctionsSpec extends FunSuite:
 
   // ===== AVERAGEIF/AVERAGEIFS Shape Validation Tests =====
 
-  test("AVERAGEIF: shape mismatch error (same count, different dimensions)") {
+  test("GH-631: AVERAGEIF sizes a differently shaped average_range like SUMIF") {
     val sheet = sheetWith(
       ref"A1" -> "X",
       ref"A2" -> "Y",
@@ -903,11 +902,9 @@ class ConditionalFunctionsSpec extends FunSuite:
       ref"D1" -> 30
     )
 
+    // B1:B3 is read: B1 = 10 for A1, B3 blank for A3 (not a numeric cell, so not averaged)
     val result = sheet.evaluateFormula("=AVERAGEIF(A1:A3, \"X\", B1:D1)")
-    assert(result.isLeft, "Should fail with shape mismatch")
-    result.left.foreach { err =>
-      assert(err.toString.contains("dimensions"), s"Error should mention dimensions: $err")
-    }
+    assertEquals(result, Right(CellValue.Number(BigDecimal(10))))
   }
 
   test("AVERAGEIFS: shape mismatch error in criteria range") {
@@ -921,7 +918,7 @@ class ConditionalFunctionsSpec extends FunSuite:
     )
 
     val result = sheet.evaluateFormula("=AVERAGEIFS(A1:A3, B1:D1, \"X\")")
-    assert(result.isLeft, "Should fail with shape mismatch")
+    assertEquals(result, Right(CellValue.Error(CellError.Value)))
   }
 
   test("AVERAGEIF: matching shapes work correctly") {

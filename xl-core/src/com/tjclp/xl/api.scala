@@ -101,6 +101,7 @@ object api:
     FormatHint,
     FormulaSupport,
     Loc,
+    OffGridRef,
     Planned,
     RowSpan,
     Scope as EditScope,

@@ -79,15 +79,7 @@ object Generators:
 
   /** Generate cell error */
   val genCellError: Gen[CellError] =
-    Gen.oneOf(
-      CellError.Div0,
-      CellError.NA,
-      CellError.Name,
-      CellError.Null,
-      CellError.Num,
-      CellError.Ref,
-      CellError.Value
-    )
+    Gen.oneOf(CellError.values.toIndexedSeq)
 
   /** Generate cell value */
   val genCellValue: Gen[CellValue] =

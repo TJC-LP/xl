@@ -486,16 +486,9 @@ object SaxStreamingReader:
           CellValue.Bool(value == "1" || value.equalsIgnoreCase("true"))
 
         case Some("e") =>
-          val errorOpt = value match
-            case "#DIV/0!" => Some(CellError.Div0)
-            case "#N/A" => Some(CellError.NA)
-            case "#NAME?" => Some(CellError.Name)
-            case "#NULL!" => Some(CellError.Null)
-            case "#NUM!" => Some(CellError.Num)
-            case "#REF!" => Some(CellError.Ref)
-            case "#VALUE!" => Some(CellError.Value)
-            case _ => None
-          errorOpt.map(CellValue.Error(_)).getOrElse(CellValue.Empty)
+          // GH-630: every error code the model knows (the classic seven and the modern
+          // #SPILL!/#CALC!/... family) — one table, in CellError, so a new code lands here too
+          CellError.parse(value).fold(_ => CellValue.Empty, CellValue.Error(_))
 
         case Some("str") =>
           CellValue.Text(XmlUtil.decodeXstring(value))

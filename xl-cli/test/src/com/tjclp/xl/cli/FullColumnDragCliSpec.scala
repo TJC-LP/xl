@@ -6,6 +6,7 @@ import java.util.zip.ZipFile
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cli.commands.{StreamingWriteCommands, WriteCommands}
+import com.tjclp.xl.cli.contract.{Location, Warning, WarningCode}
 import com.tjclp.xl.cli.helpers.BatchParser
 import com.tjclp.xl.cli.helpers.BatchParser.BatchOp
 import com.tjclp.xl.io.ExcelIO
@@ -129,5 +130,146 @@ class FullColumnDragCliSpec extends FunSuite:
           assertEquals(formulaAt(wb, ref"Z3")._1, "COUNTIF($A:$A,B3)")
         finally Files.deleteIfExists(json)
       }
+    }
+  }
+
+  // ===== GH-628: a drag that writes #REF! for an off-grid reference is reported =====
+
+  private def offGrid(warnings: Iterable[Warning]): Vector[Warning] =
+    warnings.toVector.filter(_.code == WarningCode.OFF_GRID_REF)
+
+  test("GH-628: putf over a range warns OFF_GRID_REF for the cells a drag pushed off the grid") {
+    withTemp { out =>
+      val warnings = scala.collection.mutable.ListBuffer[Warning]()
+      // dragged right from A1, XFC1 reaches XFD1 in B1 and leaves the grid in C1
+      WriteCommands
+        .putFormula(
+          fixture,
+          fixture.sheets.headOption,
+          "A20:C20",
+          List("=XFC1+1"),
+          out,
+          config,
+          warn = w => IO(warnings += w)
+        )
+        .unsafeRunSync()
+      val wb = read(out)
+      assertEquals(formulaAt(wb, ref"B20")._1, "XFD1+1")
+      assertEquals(formulaAt(wb, ref"C20"), ("#REF!+1", Some(CellValue.Error(CellError.Ref))))
+      val hits = offGrid(warnings)
+      assertEquals(hits.size, 1)
+      val warning = hits.headOption.getOrElse(fail("expected the warning"))
+      assert(warning.message.contains("1 formula gained #REF!"), warning.message)
+      assert(warning.message.contains("Data!C20 (XFC1)"), warning.message)
+      assert(warning.message.contains("--strict"), warning.message)
+      assertEquals(warning.location, Some(Location(None, Some("Data"), Some("C20"), None)))
+    }
+  }
+
+  test("GH-628: a clean drag warns nothing, even when the formula already contains #REF!") {
+    withTemp { out =>
+      val warnings = scala.collection.mutable.ListBuffer[Warning]()
+      WriteCommands
+        .putFormula(
+          fixture,
+          fixture.sheets.headOption,
+          "Z1:Z3",
+          List("=COUNTIF($A:$A,B1)+#REF!"),
+          out,
+          config,
+          warn = w => IO(warnings += w)
+        )
+        .unsafeRunSync()
+      assertEquals(offGrid(warnings), Vector.empty)
+    }
+  }
+
+  test("GH-628: batch putf with 'from' warns OFF_GRID_REF and lists the source reference") {
+    withTemp { out =>
+      val warnings = scala.collection.mutable.ListBuffer[Warning]()
+      val json = Files.createTempFile("off-grid", ".json")
+      try
+        Files.writeString(json, """[{"op":"putf","ref":"Z1:Z3","value":"=B3+A2","from":"Z3"}]""")
+        WriteCommands
+          .batch(
+            fixture,
+            fixture.sheets.headOption,
+            json.toString,
+            out,
+            config,
+            warn = w => IO(warnings += w)
+          )
+          .unsafeRunSync()
+        assertEquals(formulaAt(read(out), ref"Z1")._1, "B1+#REF!")
+        val hits = offGrid(warnings)
+        assertEquals(hits.size, 1)
+        assert(hits.exists(_.message.contains("Data!Z1 (A2)")), hits.map(_.message).toString)
+      finally Files.deleteIfExists(json)
+    }
+  }
+
+  test("GH-628: the streaming batch drag warns OFF_GRID_REF too") {
+    withTemp { source =>
+      withTemp { out =>
+        ExcelIO.instance[IO].write(fixture, source).unsafeRunSync()
+        val warnings = scala.collection.mutable.ListBuffer[Warning]()
+        val json = Files.createTempFile("off-grid-stream", ".json")
+        try
+          Files.writeString(json, """[{"op":"putf","ref":"Z1:Z3","value":"=B3+A2","from":"Z3"}]""")
+          StreamingWriteCommands
+            .batch(source, out, Some("Data"), json.toString, warn = w => IO(warnings += w))
+            .unsafeRunSync()
+          assertEquals(formulaAt(read(out), ref"Z1")._1, "B1+#REF!")
+          val hits = offGrid(warnings)
+          assertEquals(hits.size, 1)
+          assert(hits.exists(_.message.contains("Data!Z1 (A2)")), hits.map(_.message).toString)
+        finally Files.deleteIfExists(json)
+      }
+    }
+  }
+
+  test("GH-628: fill and copy report the cells their displacement pushed off the grid") {
+    withTemp { out =>
+      // fill down from row 2 through rows 1-3: row 1 is a displacement of -1, so B1 leaves the grid
+      val filled = scala.collection.mutable.ListBuffer[Warning]()
+      val source = Workbook(Sheet("Data").put(ref"A2", CellValue.Formula("B1*2", None)))
+      WriteCommands
+        .fill(
+          source,
+          source.sheets.headOption,
+          "A2",
+          "A1:A3",
+          FillDirection.Down,
+          out,
+          config,
+          warn = w => IO(filled += w)
+        )
+        .unsafeRunSync()
+      val filledWb = read(out)
+      assertEquals(formulaAt(filledWb, ref"A1")._1, "#REF!*2")
+      assertEquals(formulaAt(filledWb, ref"A3")._1, "B2*2")
+      assert(offGrid(filled).exists(_.message.contains("Data!A1 (B1)")), filled.toString)
+
+      // copy Z13 to AB1: the relative B13 in COUNTIF($A:$A,B13) has no row 1 counterpart
+      val copied = scala.collection.mutable.ListBuffer[Warning]()
+      val book = fixture.put(
+        fixture.sheets.headOption
+          .getOrElse(fail("fixture"))
+          .put(ref"Z13", CellValue.Formula("COUNTIF($A:$A,B12)", None))
+      )
+      WriteCommands
+        .copyRange(
+          book,
+          book.sheets.headOption,
+          "Z13",
+          "AB1",
+          valuesOnly = false,
+          out,
+          config,
+          warn = w => IO(copied += w)
+        )
+        .unsafeRunSync()
+      assertEquals(formulaAt(read(out), ref"AB1")._1, "COUNTIF($A:$A,#REF!)")
+      assert(offGrid(copied).exists(_.message.contains("Data!AB1 (B12)")), copied.toString)
     }
   }

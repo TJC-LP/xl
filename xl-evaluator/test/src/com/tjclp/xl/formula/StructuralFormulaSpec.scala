@@ -41,11 +41,57 @@ class StructuralFormulaSpec extends FunSuite:
     assert(!s2.contains(ref"B5"))
   }
 
-  test("delete rows: ref into the deleted band becomes #REF!") {
+  test("delete rows: ref into the deleted band becomes the #REF! literal") {
     val s = new Sheet(name = S).put(ref"B1", formulaCell("=A3"))
     val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 2, count = 1)
-    // A3 = row index 2 = the deleted row
-    assertEquals(sheetNamed(r, "S")(ref"B1").value, CellValue.Error(CellError.Ref))
+    // A3 = row index 2 = the deleted row; GH-629: the formula stays a formula, as Excel writes it
+    assertEquals(sheetNamed(r, "S")(ref"B1").value, formulaCell("#REF!"))
+  }
+
+  // ===== GH-629: a deleted reference is #REF! IN PLACE; the rest of the formula survives =====
+
+  test("GH-629: delete-rows rewrites the deleted reference, not the whole formula") {
+    val s = new Sheet(name = S)
+      .put(ref"C5", CellValue.Formula("A1+B3", Some(CellValue.Number(BigDecimal(7)))))
+    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    // row 1 deleted: A1 is gone, B3 moves up to B2, the cell itself moves to C4; cache withdrawn
+    assertEquals(sheetNamed(r, "S")(ref"C4").value, CellValue.Formula("#REF!+B2", None))
+  }
+
+  test("GH-629: delete-cols rewrites a deleted argument inside a call") {
+    val s = new Sheet(name = S).put(ref"Z1", formulaCell("COUNTIF($A:$A,B1)"))
+    val r = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 1, count = 1)
+    assertEquals(sheetNamed(r, "S")(ref"Y1").value, formulaCell("COUNTIF($A:$A,#REF!)"))
+  }
+
+  test("GH-629: a deleted range in a range slot is SUM(#REF!); other arguments survive") {
+    val s = new Sheet(name = S).put(ref"D1", formulaCell("SUM(A1:A2)+SUM(B1:B2)"))
+    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 0, count = 2)
+    // both ranges lie entirely in the deleted band; the cell moves up two rows... no: it is on
+    // row 1, which is deleted — so pin the shape on a formula outside the band instead
+    val s2 = new Sheet(name = S).put(ref"D5", formulaCell("SUM(A1:A2)+SUM(B3:B4)"))
+    val r2 = StructuralEditor.deleteRows(Workbook(Vector(s2)), S, at = 0, count = 2)
+    assertEquals(sheetNamed(r2, "S")(ref"D3").value, formulaCell("SUM(#REF!)+SUM(B1:B2)"))
+    assert(!sheetNamed(r, "S").contains(ref"D1"))
+  }
+
+  test("GH-629: a deleted cross-sheet reference is #REF! in the reader's formula") {
+    val data = new Sheet(name = SheetName.unsafe("Data")).put(ref"A1", CellValue.Number(1))
+    val report = new Sheet(name = SheetName.unsafe("Report"))
+      .put(ref"B1", CellValue.Formula("Data!A1*2", Some(CellValue.Number(BigDecimal(2)))))
+    val r =
+      StructuralEditor.deleteRows(Workbook(Vector(data, report)), SheetName.unsafe("Data"), 0, 1)
+    assertEquals(sheetNamed(r, "Report")(ref"B1").value, CellValue.Formula("#REF!*2", None))
+  }
+
+  test("GH-629: the rewritten formula evaluates to the #REF! error value") {
+    val s = new Sheet(name = S)
+      .put(ref"B1", CellValue.Number(5))
+      .put(ref"C5", formulaCell("A1+B3"))
+    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    val edited = sheetNamed(r, "S")
+    assertEquals(edited.evaluateFormula("=#REF!+B2"), Right(CellValue.Error(CellError.Ref)))
+    assertEquals(edited.evaluateCell(ref"C4"), Right(CellValue.Error(CellError.Ref)))
   }
 
   test("delete rows: refs after the band shift up") {
@@ -74,11 +120,11 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(sheetNamed(r, "S")(ref"A1").value, formulaCell("D1"))
   }
 
-  test("delete columns: ref into the deleted band becomes #REF!") {
+  test("delete columns: ref into the deleted band becomes the #REF! literal") {
     val s = new Sheet(name = S).put(ref"A1", formulaCell("=C1"))
     val r = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 2, count = 1)
     // C1 = col index 2 = the deleted column
-    assertEquals(sheetNamed(r, "S")(ref"A1").value, CellValue.Error(CellError.Ref))
+    assertEquals(sheetNamed(r, "S")(ref"A1").value, formulaCell("#REF!"))
   }
 
   test("cross-sheet references to the edited sheet are rewritten") {
@@ -106,10 +152,11 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"B1", formulaCell("A1048576"))
       .put(ref"C1", formulaCell("XFD1"))
     val rows = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
-    // the formula cell itself moved to B2; its ref had no home past the edge
-    assertEquals(sheetNamed(rows, "S")(ref"B2").value, CellValue.Error(CellError.Ref))
+    // the formula cell itself moved to B2; its ref had no home past the edge (GH-629: the
+    // reference is the #REF! literal; the formula stays a formula)
+    assertEquals(sheetNamed(rows, "S")(ref"B2").value, formulaCell("#REF!"))
     val cols = StructuralEditor.insertColumns(Workbook(Vector(s)), S, at = 0, count = 1)
-    assertEquals(sheetNamed(cols, "S")(ref"D1").value, CellValue.Error(CellError.Ref))
+    assertEquals(sheetNamed(cols, "S")(ref"D1").value, formulaCell("#REF!"))
   }
 
   test("GH-428: a range end clamps at the edge; a range start pushed past it voids the formula") {
@@ -120,8 +167,8 @@ class StructuralFormulaSpec extends FunSuite:
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"B1").value, formulaCell("SUM(A12:A1048576)")) // end pinned at the max
     val voided = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 10)
-    // the formula cell itself moved to C11; its range START passed the edge -> #REF!
-    assertEquals(sheetNamed(voided, "S")(ref"C11").value, CellValue.Error(CellError.Ref))
+    // the formula cell itself moved to C11; its range START passed the edge -> SUM(#REF!)
+    assertEquals(sheetNamed(voided, "S")(ref"C11").value, formulaCell("SUM(#REF!)"))
   }
 
   // ===== GH-427: equals-free rewrite + structural cache invalidation =====
@@ -218,7 +265,7 @@ class StructuralFormulaSpec extends FunSuite:
     val s = new Sheet(name = S)
       .put(ref"B1", CellValue.Formula("A3", Some(CellValue.Number(BigDecimal(7)))))
     val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 2, count = 1)
-    assertEquals(sheetNamed(r, "S")(ref"B1").value, CellValue.Error(CellError.Ref))
+    assertEquals(sheetNamed(r, "S")(ref"B1").value, CellValue.Formula("#REF!", None))
   }
 
   // ===== GH-274: INDIRECT and structural edits =====
@@ -443,12 +490,12 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(si(ref"A1").value, formulaCell("SUM(F:F)"))
     assertEquals(si(ref"A2").value, formulaCell("SUM(A:D)"))
     assertEquals(si(ref"A3").value, formulaCell("SUM($F:$F)"))
-    // delete column E entirely: #REF!; A:C untouched
+    // delete column E entirely: SUM(#REF!); A:C untouched
     val deletedE = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 4, count = 1)
     val se = sheetNamed(deletedE, "S")
-    assertEquals(se(ref"A1").value, CellValue.Error(CellError.Ref))
+    assertEquals(se(ref"A1").value, formulaCell("SUM(#REF!)"))
     assertEquals(se(ref"A2").value, formulaCell("SUM(A:C)"))
-    assertEquals(se(ref"A3").value, CellValue.Error(CellError.Ref))
+    assertEquals(se(ref"A3").value, formulaCell("SUM(#REF!)"))
     // delete column B inside A:C: narrows to A:B; E:E moves left to D:D
     val deletedB = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 1, count = 1)
     val sb = sheetNamed(deletedB, "S")
@@ -470,7 +517,7 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(sc(ref"C1").value, formulaCell("SUM($3:$10)"))
     val deletedRow3 = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 2, count = 1)
     val sd = sheetNamed(deletedRow3, "S")
-    assertEquals(sd(ref"A1").value, CellValue.Error(CellError.Ref))
+    assertEquals(sd(ref"A1").value, formulaCell("SUM(#REF!)"))
     assertEquals(sd(ref"B1").value, formulaCell("SUM($3:$9)"))
     val deletedInside = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 4, count = 2)
     assertEquals(sheetNamed(deletedInside, "S")(ref"B1").value, formulaCell("SUM($3:$8)"))

@@ -215,6 +215,28 @@ class BatchPutSpec extends FunSuite:
       case other => fail(s"Expected Formula, got $other")
   }
 
+  test("GH-613: autofit after putf in one batch sizes to the value, not the formula text") {
+    val wb = Workbook(
+      Sheet("Test")
+        .put(ARef.from0(1, 0), CellValue.Number(BigDecimal(1)))
+        .put(ARef.from0(1, 1), CellValue.Number(BigDecimal(2)))
+    )
+    val ops = Vector(
+      BatchOp.PutFormula("A1", "=SUM(B1:B2)+COUNTIF(B1:B2,\">0\")", None),
+      BatchOp.AutoFit(Some("A"))
+    )
+    val fitted = BatchParser.applyBatchOperations(wb, wb.sheets.headOption, ops).unsafeRunSync()
+    val width = fitted.sheets.headOption
+      .flatMap(_.getColumnProperties(com.tjclp.xl.addressing.Column.from0(0)).width)
+      .getOrElse(fail("expected a width"))
+    // the value is 5 — one digit — so the width is the floor, never the 30-odd characters of text
+    val valueWidth = Sheet("Test")
+      .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(5)))
+      .autoFitWidth(com.tjclp.xl.addressing.Column.from0(0))
+    assertEquals(width, valueWidth)
+    assert(width < 10.0, s"width $width")
+  }
+
   test("putf: formula dragging mode preserves $ anchors") {
     val wb = Workbook(
       Sheet("Test")

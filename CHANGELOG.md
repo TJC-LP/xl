@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`OFF_GRID_REF` warning** (#628): a `putf` range drag, a batch `putf … from`, `fill`, `copy`
+  or a streaming batch drag that writes `#REF!` for a reference the shift carried off the grid
+  (before row 1 or column A, past XFD1048576) now says so — `Warning[OFF_GRID_REF]: 2 formulas
+  gained #REF! for a reference dragged off the grid: Data!Z1 (A2), Data!Z2 (A1) …` on stderr, in
+  `warnings[]` under `--json`, located at the first such cell — and `--strict` fails on it
+  (`STRICT FAILURE (--strict): 2 formulas gained #REF! for a reference dragged off the grid`).
+  Excel writes the `#REF!` silently and so did xl: `copy Z13 AB1` producing
+  `=COUNTIF($A:$A,#REF!)` exited 0 with "Recalculated 4 formulas (4 error values)" because a
+  `#REF!` is a successful evaluation of an error value, not an evaluation failure. The shifter
+  reports which references it voided (`FormulaShifter.shiftReporting` /
+  `shiftStructuralReporting`, `FormulaOps.shiftReporting`, `FormulaSupport.shiftReporting` with
+  `Sheet.fillReporting` / `copyRangeReporting` returning `OffGridRef`s in xl-core), so a `#REF!` the
+  author typed is never mistaken for one. The code is in `xl schema --json` and
+  `generated/error-codes.md`.
+- **The modern error values and `ERROR.TYPE`** (#630): `CellError` gains `#SPILL!`, `#CALC!`,
+  `#FIELD!`, `#CONNECT!`, `#BLOCKED!`, `#UNKNOWN!` and `#GETTING_DATA` — what Excel 365 writes into
+  `t="e"` cells and accepts as formula literals. They parse (case-insensitively, `#GETTING_DATA`
+  matched whole), print, evaluate to the error they name, round-trip through the writer and every
+  reader (the three streaming readers used a hard-coded table of seven and read a `#SPILL!` cell as
+  empty), and `CellError.parse` is case-insensitive. `ERROR.TYPE(error_val)` joins the registry
+  with Microsoft's numbers (`#NULL!` 1 … `#N/A` 7, `#GETTING_DATA` 8, `#SPILL!` 9, `#CONNECT!` 10,
+  `#BLOCKED!` 11, `#UNKNOWN!` 12, `#FIELD!` 13, `#CALC!` 14; `#N/A` for a non-error), also exposed
+  as `CellError.errorTypeNumber`.
+- **A single cell in a range slot** (#631): `SUMIF(A1:A10, ">0", C1)`, `COUNTIF(A1, "x")`,
+  `VLOOKUP(x, A1, 1)` parse — Excel accepts a cell wherever a range is expected and reads it as
+  the 1×1 range it addresses; xl refused with `InvalidArguments(SUMIF,0,range,1 arguments)`. The
+  new `RangeForm.Cell` keeps the spelling, so the formula prints back as `C1`, never `C1:C1`, and
+  drags like the cell it is.
+
+### Fixed
+
+- **Breaking: a structural delete rewrites the deleted reference, not the whole formula**
+  (#629): `delete-rows 1` on `=A1+B3` now writes `=#REF!+B2` and `delete-cols B` on
+  `=COUNTIF($A:$A,B1)` writes `=COUNTIF($A:$A,#REF!)` — the error literal in place, the rest of the
+  formula intact, exactly as Excel does and as the drag path has written since #612. Before, the
+  whole cell became the constant `#REF!` (`CellValue.Error(Ref)`) and the formula was lost. The
+  cache is withdrawn as before and the recalculation caches the `#REF!` error value; a reference an
+  insert pushes past the sheet edge (GH-428) becomes `#REF!` the same way, and a fully-deleted
+  conditional-format, data-validation or defined-name reference still degrades to `#REF!` text.
+  `FormulaShifter.shiftStructural` is total (`TExpr[A]`, no longer `Option`); the deprecated
+  bare-`CellRange` argument slot, which has no error form, is the one place a deleted range still
+  voids its whole call.
+- **Breaking: `COUNT`, `COUNTA` and `COUNTBLANK` with error arguments follow Excel** (#630):
+  `COUNT(#REF!)` is 0 and `COUNT(1,#N/A,2)` is 2 (an error is not a number, in a direct argument
+  as in a range), `COUNTA(#REF!)` is 1 (an error is not empty), `COUNT(1/0)` is 0 and
+  `COUNTA(1/0)` is 1; `COUNTBLANK(#REF!)` is `#REF!` (its argument must be a range). All four used
+  to return the error. `SUM`, `AVERAGE`, `MIN`, `MAX` and the rest still propagate it
+  (`SUM(1,#N/A)` is `#N/A`); host failures (a cycle) stay loud. Confirmed against LibreOffice.
+- **`SUMIF` and `AVERAGEIF` size their third argument to their first** (#631): the cells summed
+  start at `sum_range`'s upper-left cell and take `range`'s shape — `SUMIF(A1:A3,">1",C1)` is 50
+  with C1:C3 = 10,20,30, `…,C2)` is 30, `…,C1:D5)` is 50, `AVERAGEIF(A1:A3,">1",C1)` is 25
+  (LibreOffice agrees) — where xl failed with `range and sum_range must have same dimensions`. A
+  pairing past the grid edge contributes nothing. Dependency extraction records the RESIZED area
+  (`CriteriaRangeResize`, one statement of the rule for evaluation and the graph), so an edit to
+  C3 dirties `SUMIF(A1:A3,">1",C1)` and refreshes its cache instead of leaving it stale — the
+  class #606 addressed for blind readers, here for a formula xl parses. The `*IFS` family never
+  resizes: a shape mismatch is now Excel's `#VALUE!` error VALUE (`IFERROR`-catchable, cached)
+  where it was a host failure that left the cell uncached.
+- **AutoFit measures display values, never uncached formula text** (#613): `Edit.AutoFit` /
+  `Sheet.autoFitWidth` sized a column to `=COUNTIF('Deal Pipeline'!$E$2:$E$1000,A2)` — 44
+  characters — when the formula had no cache yet, which the natural script order (`wb.edit(…
+  AutoFit …)` then `Excel.writeChecked`) always hits because caches are computed at write time. A
+  formula cell is now measured by its cached value and an uncached one contributes nothing
+  (documented on `AutoFit` and `autoFitWidth`). The CLI's `autofit`, `col --auto-fit` and the batch
+  `autofit` op measure with every uncached formula in the fitted columns evaluated first, so an
+  `autofit` after a `putf` in the same batch sizes to the value the formula will show.
+
 ## [0.21.0] - 2026-09-08
 
 Agent-first Wave 2a (ADR-017): the `Edit` algebra — one operation vocabulary for every batch op and
