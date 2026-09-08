@@ -232,12 +232,12 @@ As of the #610 named-style preservation and #611 text-escaping fixes (2026-09-08
 |--------|-------|
 | xl-evaluator | 2417 |
 | xl-core | 1551 |
-| xl-ooxml | 1147 |
+| xl-ooxml | 1151 |
 | xl-cli | 1340 |
 | xl-cats-effect | 167 |
 | xl-agent | 145 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 51 |
-| **Total** | **6,818** |
+| **Total** | **6,822** |
 
 ## Test Quality Metrics
 

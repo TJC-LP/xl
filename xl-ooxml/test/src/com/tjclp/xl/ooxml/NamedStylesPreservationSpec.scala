@@ -13,6 +13,8 @@ import com.tjclp.xl.ooxml.style.{OoxmlStyles, StyleIndex, WorkbookStyles}
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.sheets.styleSyntax.*
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.units.StyleId
 import munit.FunSuite
@@ -38,7 +40,8 @@ class NamedStylesPreservationSpec extends FunSuite:
 
   private val fixture = "named-styles-excel.xlsx"
   private val sourceXfIds = Vector(0, 1, 2, 3, 4, 5, 6, 7, 0, 6)
-  private val passthrough = List("cellStyleXfs", "cellStyles", "tableStyles", "colors", "extLst")
+  private val passthrough =
+    List("cellStyleXfs", "cellXfs", "cellStyles", "tableStyles", "colors", "extLst")
   private val backends = List(
     "ScalaXml" -> WriterConfig(backend = XmlBackend.ScalaXml),
     "SaxStax" -> WriterConfig(backend = XmlBackend.SaxStax)
@@ -179,8 +182,32 @@ class NamedStylesPreservationSpec extends FunSuite:
     val twin6 = sheet.styleRegistry.get(StyleId(6)).getOrElse(fail("slot 6"))
     val twin8 = sheet.styleRegistry.get(StyleId(8)).getOrElse(fail("slot 8"))
     assertEquals(twin6, twin8, "equal styles in two slots")
-    // a NEW use of that formatting lands on the first twin, as `register` always did
-    assertEquals(sheet.styleRegistry.indexOf(twin8), Some(StyleId(6)))
+    // a NEW use of that formatting shares the DIRECT twin (xfId 0), not the "Comma 2" one
+    assertEquals(sheet.styleRegistry.indexOf(twin8), Some(StyleId(8)))
+  }
+
+  test("a new use of twin formatting shares the direct twin on every path (review item 1)") {
+    val (_, wb) = readFixture()
+    val sheet = wb.sheets.headOption.getOrElse(fail("no sheet"))
+    val comma2 = sheet.styleRegistry.get(StyleId(6)).getOrElse(fail("slot 6"))
+    // same sheet: the registry hands out slot 8
+    val sameSheet =
+      sheet.put(ref"C1", CellValue.Number(BigDecimal(1))).withCellStyle(ref"C1", comma2)
+    assertEquals(sameSheet(ref"C1").styleId, Some(StyleId(8)))
+    // a NEW sheet has its own registry (slot 1); the surgical StyleIndex must land it on 8, not 6
+    val fresh =
+      Sheet("Fresh").put(ref"A1", CellValue.Number(BigDecimal(2))).withCellStyle(ref"A1", comma2)
+    val edited = wb.put(sameSheet).put(fresh)
+    val (index, remappings) =
+      StyleIndex.fromWorkbook(edited, sheetsRequiringRemapping = Set(0, 1))
+    assertEquals(index.styleToIndex.get(comma2.canonicalKey), Some(StyleId(8)))
+    assertEquals(remappings.getOrElse(1, Map.empty).get(1), Some(8), "fresh sheet slot 1 -> xf 8")
+    // (the fresh sheet's slot 0, CellStyle.default, is a genuinely new xf on this source — the
+    // fixture's Normal carries a theme colour — so exactly one xf is appended, none for the twin)
+    assertEquals(index.cellStyles.size, 11, "only the fresh registry's default was appended")
+    val out = writeTemp(edited, WriterConfig.default, "direct-twin")
+    assertEquals(styleAttr(entryText(out, "xl/worksheets/sheet1.xml"), "C1"), Some("8"))
+    assertEquals(styleAttr(entryText(out, "xl/worksheets/sheet2.xml"), "A1"), Some("8"))
   }
 
   // ---------------------------------------------------------------- writer: both backends
@@ -198,6 +225,12 @@ class NamedStylesPreservationSpec extends FunSuite:
       assertEquals(count(styles, "cellStyles"), 8, styles)
       assertEquals(count(styles, "cellXfs"), 10, styles)
       assertEquals(xfIdsOf(section(styles, "cellXfs")), sourceXfIds, styles)
+      // source cellXfs ride through verbatim: apply* flags and quotePrefix-class attributes intact
+      assertEquals(
+        """applyFont="1"""".r.findAllIn(section(styles, "cellXfs")).size,
+        """applyFont="1"""".r.findAllIn(section(source, "cellXfs")).size,
+        "applyFont flags dropped"
+      )
 
       // CT_Stylesheet order, every section present exactly once
       val sections = List("numFmts", "fonts", "fills", "borders") ++
@@ -246,6 +279,16 @@ class NamedStylesPreservationSpec extends FunSuite:
       assertEquals(count(styles, "cellStyleXfs"), 8, styles)
       assertEquals(count(styles, "cellStyles"), 8, styles)
       assertEquals(count(styles, "fonts"), 9, "source fonts + Arial")
+      if name == "ScalaXml" then
+        // the ten source records are a byte-verbatim prefix; only xl's xf is regenerated
+        val (_, sourceSrc) = (wb, entryText(TestFixtures.copyToTemp(fixture), "xl/styles.xml"))
+        val sourceRecords = section(sourceSrc, "cellXfs").stripSuffix("</cellXfs>")
+        assert(
+          section(styles, "cellXfs").startsWith(
+            sourceRecords.replace("count=\"10\"", "count=\"11\"")
+          ),
+          section(styles, "cellXfs")
+        )
       val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
       assertEquals(styleAttr(sheetXml, "A2"), Some("10"), sheetXml)
       assertEquals(styleAttr(sheetXml, "A9"), Some("8"), sheetXml)
@@ -299,6 +342,20 @@ class NamedStylesPreservationSpec extends FunSuite:
     val remap = remappings.getOrElse(0, fail("sheet 0 has no remapping"))
     sourceXfIds.indices.foreach(i => assertEquals(remap.get(i), Some(i), s"slot $i"))
     assertEquals(remap.get(10), Some(10))
+  }
+
+  test("an appended style reuses the FIRST of two equal source fonts (review item 3)") {
+    // fixture fonts 0 and 3 parse equal (Calibri 11, theme 1 — they differ only in `scheme`);
+    // cellXf 0 references font 0, cellXf 6 ("Comma 2") references font 3
+    val (_, wb) = readFixture()
+    val sheet = wb.sheets.headOption.getOrElse(fail("no sheet"))
+    val font0 = sheet.styleRegistry.get(StyleId(0)).getOrElse(fail("slot 0")).font
+    assertEquals(sheet.styleRegistry.get(StyleId(6)).map(_.font), Some(font0), "fixture premise")
+    val navy = CellStyle.default.withFont(font0).withFill(Fill.Solid(Color.Rgb(0xff003366)))
+    val out = writeTemp(wb.put(sheet.withCellStyle(ref"A2", navy)), WriterConfig.default, "font0")
+    val styles = entryText(out, "xl/styles.xml")
+    val appended = XmlUtil.getChildren(child(parse(styles), "cellXfs"), "xf").lift(10)
+    assertEquals(appended.map(_ \@ "fontId"), Some("0"), styles)
   }
 
   test("StyleIndex (fresh): no xfIds, so every cellXf resolves to Normal") {
@@ -380,6 +437,80 @@ class NamedStylesPreservationSpec extends FunSuite:
     assertEquals(count(styles, "cellStyles"), 1, styles)
     assertEquals(xfIdsOf(section(styles, "cellXfs")), Vector(0, 0), "xfId 5 would dangle")
     assertEquals(styleAttr(entryText(out, "xl/worksheets/sheet1.xml"), "A1"), Some("1"))
+  }
+
+  test("empty masters (<cellStyleXfs count=\"0\"/>) are repaired to one Normal, xfIds to 0") {
+    val stylesXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+        |<fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+        |<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+        |<cellStyleXfs count="0"/>
+        |<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="1" applyNumberFormat="1"/></cellXfs>
+        |<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+        |</styleSheet>""".stripMargin
+    val sheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+        |<row r="1"><c r="A1" s="1"><v>0.5</v></c></row>
+        |</sheetData></worksheet>""".stripMargin
+    val parts = WorkbookStyles
+      .fromXml(parse(stylesXml))
+      .fold(e => fail(s"styles parse failed: $e"), identity)
+      .preserved
+    assertEquals(parts.masterCount, 0)
+    assert(!parts.hasNamedStyles, "an empty masters table is not a named-style table")
+    val wb = XlsxReader
+      .readFromBytes(rawXlsx(stylesXml, sheetXml))
+      .fold(e => fail(s"read failed: ${e.message}"), identity)
+    val sheet = wb.sheets.headOption.getOrElse(fail("no sheet"))
+    val out = writeTemp(
+      wb.put(sheet.put(ref"B1", CellValue.Text("dirty"))),
+      WriterConfig.default,
+      "empty-masters"
+    )
+    val styles = entryText(out, "xl/styles.xml")
+    assertEquals(count(styles, "cellStyleXfs"), 1, styles)
+    assert(styles.contains("""<cellStyleXfs count="1"><xf"""), styles)
+    assertEquals(count(styles, "cellStyles"), 1, styles)
+    assertEquals(xfIdsOf(section(styles, "cellXfs")), Vector(0, 0), styles)
+    // the source record itself rode through (its flag survives), only its xfId was repaired
+    assert(section(styles, "cellXfs").contains("""applyNumberFormat="1""""), styles)
+  }
+
+  test("an out-of-range xfId in a source with masters is repaired to 0; in-range ones stay") {
+    val stylesXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+        |<fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+        |<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+        |<cellStyleXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+        |<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="1"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="7"/></cellXfs>
+        |<cellStyles count="2"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="Pct" xfId="1"/></cellStyles>
+        |</styleSheet>""".stripMargin
+    val sheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+        |<row r="1"><c r="A1" s="1"><v>0.5</v></c><c r="B1" s="2"><v>0.25</v></c></row>
+        |</sheetData></worksheet>""".stripMargin
+    val wb = XlsxReader
+      .readFromBytes(rawXlsx(stylesXml, sheetXml))
+      .fold(e => fail(s"read failed: ${e.message}"), identity)
+    val sheet = wb.sheets.headOption.getOrElse(fail("no sheet"))
+    val out = writeTemp(
+      wb.put(sheet.put(ref"C1", CellValue.Text("dirty"))),
+      WriterConfig.default,
+      "oor-xfid"
+    )
+    val styles = entryText(out, "xl/styles.xml")
+    assertEquals(count(styles, "cellStyleXfs"), 2, styles)
+    assertEquals(count(styles, "cellStyles"), 2, styles)
+    assertEquals(xfIdsOf(section(styles, "cellXfs")), Vector(0, 1, 0), "7 dangles past 2 masters")
+    val sheetOut = entryText(out, "xl/worksheets/sheet1.xml")
+    assertEquals(styleAttr(sheetOut, "A1"), Some("1"))
+    assertEquals(styleAttr(sheetOut, "B1"), Some("2"))
   }
 
   private def rawXlsx(stylesXml: String, sheetXml: String): Array[Byte] =

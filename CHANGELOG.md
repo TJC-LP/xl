@@ -21,10 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registers a source's cellXfs positionally in each sheet's `StyleRegistry` (`s="8"` is registry
   slot 8, canonical-key twins included) and the surgical `StyleIndex` maps such slots back to
   themselves instead of folding them onto the first equal xf: an xf that differs only in `xfId`
-  ("Comma 2" applied vs the same formatting typed by hand) is a different xf to Excel. Styles xl
-  authors still get `xfId="0"`; xl-authored workbooks and scratch writes still emit exactly one
-  `Normal`, so no golden changed. On the dogfood model, `put` keeps 74/74 `cellStyleXfs`/`cellStyles`,
-  `mruColors`, `extLst` and all 593 `xfId`s (was 1/1, all 0). New fixture `named-styles-excel.xlsx`.
+  ("Comma 2" applied vs the same formatting typed by hand) is a different xf to Excel. A NEW use of
+  twin formatting shares the direct twin (`xfId="0"`) when one exists, so hand formatting never
+  lands on a named style. Because slots are positional, every source `<xf>` of `cellXfs` is emitted
+  verbatim too (`applyFont`/`applyFill`/`applyBorder`/`applyNumberFormat`, `quotePrefix`,
+  `<protection>` and attribute order intact); only the xfs xl adds are regenerated, and those now
+  point at the FIRST of equal table entries (a `toMap` kept the last duplicate font). An empty
+  `<cellStyleXfs count="0"/>` or an out-of-range `xfId` in the source is repaired to `Normal` — xl
+  introduces no dangling reference. Styles xl authors still get `xfId="0"`; xl-authored workbooks
+  and scratch writes still emit exactly one `Normal`, so no golden changed. On the dogfood model,
+  `put` keeps 74/74 `cellStyleXfs`/`cellStyles`, `mruColors`, `extLst`, all 593 `cellXfs`
+  byte-verbatim with their `xfId`s (was 1/1, all 0), and `styles.xml` goes 109,665 → 105,818 bytes
+  (was 70,193; the rest is unmodeled font attributes and two equal-parsing fills). New fixture
+  `named-styles-excel.xlsx`.
 - **`"` is written verbatim in element text** (#611): `XmlUtil.compact` serializes text nodes
   escaping only `&`, `<` and `>` (attribute values keep `&quot;`), as the StAX backend and Excel
   already did. Defined-name array constants, formula string literals, shared strings and

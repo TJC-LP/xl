@@ -1175,13 +1175,19 @@ object XlsxReader:
     // it the xfId of the named style that xf derives from, through a regenerating write
     // (StyleIndex.fromWorkbookWithSource maps such slots back to themselves). Twins are real in
     // Excel-authored books: "Comma 2" applied and the same formatting typed by hand are two xfs
-    // that differ only in xfId. The key index points at the first twin, which is what `register`
-    // hands a NEW use of that formatting — xl-authored styles land on the first match as before.
+    // that differ only in xfId. The key index — what `register` hands a NEW use of that
+    // formatting — points at the DIRECT twin (xfId 0) when there is one, else the first: sharing
+    // a named-style twin would make Excel show a hand-formatted cell as "Comma 2" and restyle it
+    // on "Modify Comma 2".
     val cellXfs = styles.cellStyles
     val keyIndex = cellXfs.zipWithIndex.foldLeft(Map.empty[String, StyleId]) {
       case (acc, (style, idx)) =>
         val key = style.canonicalKey
-        if acc.contains(key) then acc else acc + (key -> StyleId(idx))
+        acc.get(key) match
+          case None => acc + (key -> StyleId(idx))
+          case Some(cur) if styles.xfIdAt(cur.value) != 0 && styles.xfIdAt(idx) == 0 =>
+            acc + (key -> StyleId(idx))
+          case Some(_) => acc
     }
     val mapping = cellXfs.indices.map(idx => idx -> StyleId(idx)).toMap
     (StyleRegistry(cellXfs, keyIndex), mapping)

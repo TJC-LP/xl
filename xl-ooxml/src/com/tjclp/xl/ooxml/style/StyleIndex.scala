@@ -289,6 +289,13 @@ object StyleIndex:
     var nextIdx = originalStyles.size
     var additionalStyles = mutable.Map[String, Int]() // Track styles added after original
 
+    // GH-610 (review): when several source xfs share a canonical key, a NEW use of that
+    // formatting shares the DIRECT one (xfId 0) if there is one — sharing a named-style twin
+    // would make Excel show the cell as, say, "Comma 2" and "Modify Comma 2" would restyle it.
+    // Otherwise the first twin, as before.
+    def preferredSlot(indices: List[Int]): Int =
+      indices.find(i => originalWorkbookStyles.xfIdAt(i) == 0).getOrElse(indices.head)
+
     // Step 3: Build mutable component collections starting from original
     // These will grow if new styles introduce new fonts/fills/borders/numFmts
     val fontsBuilder = mutable.ArrayBuffer.from(originalWorkbookStyles.fonts)
@@ -349,9 +356,9 @@ object StyleIndex:
             // First, check if this key exists in original styles
             unifiedIndex.get(key) match
               case Some(indices) =>
-                // Style exists in original - use FIRST matching index
+                // Style exists in original - share the direct twin, else the FIRST matching index
                 // This preserves original layout and avoids adding duplicates
-                remapping(localIdx) = indices.head
+                remapping(localIdx) = preferredSlot(indices)
               case None =>
                 // Not in original - check if we've already added it
                 additionalStyles.get(key) match
@@ -400,8 +407,9 @@ object StyleIndex:
     val customNumFmts = numFmtsBuilder.toVector
 
     // Convert unifiedIndex back to Map[String, StyleId] for StyleIndex
-    // Use first index from each canonicalKey's list (preserves original layout)
-    val styleToIndexMap = unifiedIndex.view.mapValues(indices => StyleId(indices.head)).toMap
+    // Direct twin, else first index from each canonicalKey's list (preserves original layout)
+    val styleToIndexMap =
+      unifiedIndex.view.mapValues(indices => StyleId(preferredSlot(indices))).toMap
 
     // GH-610: the preserved cellXfs keep the named-style master they derive from; every style
     // xl appended is direct formatting on Normal (xfId 0).
