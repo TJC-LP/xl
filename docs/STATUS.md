@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2026-09-08 (0.21.1)
+**Last Updated**: 2026-09-08 (0.22.0)
 
 ## Current State
 
@@ -8,7 +8,7 @@
 
 ### What Works (Production-Ready)
 
-**New in 0.21.1** (2026-09-08) — the 0.21.0 dogfood's follow-through (#646, #647, #648, #650); twelve **Breaking:** entries, each a behaviour fix toward Excel or the contract:
+**New in 0.22.0** (2026-09-08) — the 0.21.0 dogfood's follow-through (#646, #647, #648, #650); twelve **Breaking:** entries, each a behaviour fix toward Excel or the contract:
 - ✅ **Named cell styles survive every write** (#610) — `cellStyleXfs`, `cellStyles`, `tableStyles`, `colors` and the styles `extLst` ride through the in-memory writer verbatim (`PreservedStyleParts`), every `cellXf` keeps its `xfId`, source cellXfs are registered positionally; `"` written verbatim in element text (#611)
 - ✅ **Unbounded `--stream view` streams** (#635) — csv/json/markdown as a `Payload.Streamed`, row by row, inside the `--json` envelope too; the 1M × 41 dogfood dump completes in a 384 MB heap. `xl schema --json` publishes each verb's `stream` (`o1`/`backend`/`refused`) and `refusedWith` (#638); the shared-string table is a value (`ExcelIO.loadSharedStrings`) parsed once per run and shared with `cell` (#640)
 - ✅ **Formula semantics per Excel** — a structural delete writes `#REF!` for the deleted reference alone (#629); `COUNT`/`COUNTA`/`COUNTBLANK` error semantics (#630); the seven modern error values (`#SPILL!` … `#GETTING_DATA`) as `CellError` cases plus `ERROR.TYPE` (#630); a single cell in a range slot as `RangeForm.Cell` and `SUMIF`/`AVERAGEIF` sizing `sum_range` to `range` (#631); `OFF_GRID_REF` warning, `--strict`-gated, for references dragged off the grid (#628); AutoFit measures cached values, never formula text (#613)
@@ -233,7 +233,7 @@
 
 ### Test Coverage
 
-**6,952 test cases** (verified via `./mill __.test`, 2026-09-08, the 0.21.1 release): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**6,952 test cases** (verified via `./mill __.test`, 2026-09-08, the 0.22.0 release): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
 
 | Module | Tests | Covers |
 |--------|-------|--------|

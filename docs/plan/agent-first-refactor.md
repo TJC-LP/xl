@@ -1010,7 +1010,7 @@ the writer prefixes the post-2007 function set in `<f>` (a table on `FunctionFla
 additive `Excel.writeChecked(wb, path, options: RecalcOptions): RecalcResult` (recalculates
 uncached cells via `recalculateUncached` and writes; `Excel.write` keeps 0.19 semantics),
 `Excel.readSheet(path, sheet): XLResult[Sheet]` (0.21.0 shipped `Sheet` throwing an `XLException`;
-0.21.1 returns the `Left(SheetNotFound(name, available))` instead, GH-615), `Excel.readMetadata(path):
+0.22.0 returns the `Left(SheetNotFound(name, available))` instead, GH-615), `Excel.readMetadata(path):
 LightMetadata`, `Excel.modifyR(path)(f: Workbook => XLResult[Workbook]): Unit`, `orExit[A](r:
 XLResult[A]): A`; the `ExcelRecalc` overloads stay; `Sheet.collapseRows/collapseCols` (#465's second
 half); `CodecError.UncachedFormula` considered again with the exhaustive-match sites

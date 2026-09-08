@@ -312,7 +312,7 @@ xl -f model.xlsx -o out.xlsx name rm Tax                     # Remove
 ```
 
 `names` reads `workbook.xml` alone, so it takes `--stream` (the same read, any file size; since
-0.21.1). `name add|rm` load the workbook and write through the streaming writer under the flag.
+0.22.0). `name add|rm` load the workbook and write through the streaming writer under the flag.
 
 ---
 
@@ -340,12 +340,12 @@ Without a range, the sheet's used range; `--offset` and `--limit` page through t
 **Arguments**:
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `range` | string | No | used range | Cell range (e.g., "A1:D20"), or a whole-column/whole-row span (`B:B`, `A:C`, `3:3`; bare or sheet-qualified, 0.21.1) clamped to the sheet's used range on the open axis — `view B:B` renders column B over the used rows, `totalRows` counting those rows, never the 1,048,576-row axis; absent, the sheet's used range. From the loaded workbook that is the bounding box of every stored cell, styled-but-empty ones included (the `<dimension>` the library's writer records); `--stream` trusts the worksheet's `<dimension>` as written — a stale one, or openpyxl's merged-extent one, can differ from the stored-cell box — and when the file has no readable `<dimension>`, or it names a single cell (Excel's `A1` on an empty sheet), uses the bounding box of the non-empty cells. An empty sheet renders `(empty sheet)`, `""` for csv, `{"sheet", "range": null, "rows": []}` for json from both sources |
+| `range` | string | No | used range | Cell range (e.g., "A1:D20"), or a whole-column/whole-row span (`B:B`, `A:C`, `3:3`; bare or sheet-qualified, 0.22.0) clamped to the sheet's used range on the open axis — `view B:B` renders column B over the used rows, `totalRows` counting those rows, never the 1,048,576-row axis; absent, the sheet's used range. From the loaded workbook that is the bounding box of every stored cell, styled-but-empty ones included (the `<dimension>` the library's writer records); `--stream` trusts the worksheet's `<dimension>` as written — a stale one, or openpyxl's merged-extent one, can differ from the stored-cell box — and when the file has no readable `<dimension>`, or it names a single cell (Excel's `A1` on an empty sheet), uses the bounding box of the non-empty cells. An empty sheet renders `(empty sheet)`, `""` for csv, `{"sheet", "range": null, "rows": []}` for json from both sources |
 | `--format` | string | No | markdown | Output format: markdown, json, csv, html, svg, png, jpeg, webp, pdf |
 | `--formulas` | flag | No | false | Show formulas instead of values |
 | `--eval` | flag | No | false | Evaluate formulas (compute live values) |
 | `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
-| `--limit` | int | No | 50 | Max rows to display (0 = no limit; below 0 is a usage error). `--limit 0` streams: the rows are written as the source produces them — for csv and json from the first row, for markdown (and csv with `--skip-empty`) after one pass over the window for the column widths — so a whole-sheet dump runs in constant memory under `--stream` (since 0.21.1, [#635](https://github.com/TJC-LP/xl/issues/635)); under `--json` the table streams too (csv and markdown as `data.text`, escaped line by line; json spliced into `data`). A failure before the first row is the ordinary failure envelope; one after bytes went out leaves the envelope unterminated, the exit code and stderr carrying it. When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (under `--stream` too, since 0.21.0); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
+| `--limit` | int | No | 50 | Max rows to display (0 = no limit; below 0 is a usage error). `--limit 0` streams: the rows are written as the source produces them — for csv and json from the first row, for markdown (and csv with `--skip-empty`) after one pass over the window for the column widths — so a whole-sheet dump runs in constant memory under `--stream` (since 0.22.0, [#635](https://github.com/TJC-LP/xl/issues/635)); under `--json` the table streams too (csv and markdown as `data.text`, escaped line by line; json spliced into `data`). A failure before the first row is the ordinary failure envelope; one after bytes went out leaves the envelope unterminated, the exit code and stderr carrying it. When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (under `--stream` too, since 0.21.0); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
 | `--offset` | int | No | 0 | Rows to skip from the top of the range before `--limit` applies; the trailer then reads "… showing rows X–Y of N". An offset past the last row is a usage error |
 | `--max-cols` | int | No | 0 | Max columns to display, from the left (0 = all); json adds `totalCols` when clipped, the other formats report "… showing X of Y columns" like the row notice |
 | `--skip-empty` | flag | No | false | Skip empty cells (JSON) or empty rows/columns (tabular) |
@@ -777,7 +777,7 @@ xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                  # Array arithmetic 
 
 ### `xl stats <range>`
 
-Calculate statistics (count, sum, min, max, average, ...) for numeric values in a range. Supports `--stream` for large files. Whole-column (`AM:AM`, `B:D`) and whole-row (`3:3`) spans are accepted, bare or sheet-qualified, and folded in one pass (0.21.1).
+Calculate statistics (count, sum, min, max, average, ...) for numeric values in a range. Supports `--stream` for large files. Whole-column (`AM:AM`, `B:D`) and whole-row (`3:3`) spans are accepted, bare or sheet-qualified, and folded in one pass (0.22.0).
 
 ```bash
 xl -f data.xlsx -s Sheet1 stats B2:B10000
@@ -787,7 +787,7 @@ xl -f huge.xlsx --stream stats A1:E100000
 
 `--json`: `{sheet, range, count, sum, min, max, mean}` with every number an exact lexeme (never
 rounded through a `Double`); the text form keeps its two-decimal rendering. A range holding no
-numbers is a result, not a failure (0.21.1): `count: 0, sum: 0.00, min: n/a, max: n/a, mean: n/a`
+numbers is a result, not a failure (0.22.0): `count: 0, sum: 0.00, min: n/a, max: n/a, mean: n/a`
 (`null` for the three in JSON), exit 0, with a `NO_NUMERIC_VALUES` warning on stderr — or in the
 envelope's `warnings[]` — naming the range.
 
@@ -802,7 +802,7 @@ Show rows of the used range matching a predicate. Read-only (no `-o`); phase 1 o
 |-----|------|----------|---------|-------------|
 | `--where` | string | Yes | — | Filter predicate (grammar below) |
 | `--columns` | string | No | all used | Output columns, e.g. `A,C:E`. A column outside the used range is blank (`null` in JSON); a repeated column is a `USAGE` error |
-| `--limit` | int | No | 50 | Max matching rows to display; `0` = no limit, as for `view` and `search` (0.21.1; earlier `0` showed none) |
+| `--limit` | int | No | 50 | Max matching rows to display; `0` = no limit, as for `view` and `search` (0.22.0; earlier `0` showed none) |
 | `--format` | string | No | markdown | `markdown`, `csv`, or `json` |
 | `--header` | flag | No | false | First used row holds column names (excluded from matching) |
 
@@ -828,7 +828,7 @@ xl -f data.xlsx -s Sheet1 filter --where "A LIKE 'Widget%'" --columns A,C:E --fo
 xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
 ```
 
-**Output**: matching rows keep their original row numbers, present whatever `--columns` selects. Markdown adds a `Row` column and a footer — `N row(s) matched.`, or `Matched N row(s); showing first M (--limit).` when clipped; CSV starts with a `row,<labels>` header line and, when clipped, raises a `TRUNCATED` warning on stderr (`warnings[]` under `--json`) so stdout stays parseable; JSON (0.21.1) is one document, `{"matched": N, "shown": M, "truncated": bool, "limit": n|null, "rows": [{"row": n, "cells": {<label>: <typed value>}}]}` — `limit` is `null` under `--limit 0` — where labels are header names with `--header`, letters otherwise (two selected columns under one header name share the key, which keeps the first's position and the last's value). Before 0.21.1 the JSON form was the bare `rows` array.
+**Output**: matching rows keep their original row numbers, present whatever `--columns` selects. Markdown adds a `Row` column and a footer — `N row(s) matched.`, or `Matched N row(s); showing first M (--limit).` when clipped; CSV starts with a `row,<labels>` header line and, when clipped, raises a `TRUNCATED` warning on stderr (`warnings[]` under `--json`) so stdout stays parseable; JSON (0.22.0) is one document, `{"matched": N, "shown": M, "truncated": bool, "limit": n|null, "rows": [{"row": n, "cells": {<label>: <typed value>}}]}` — `limit` is `null` under `--limit 0` — where labels are header names with `--header`, letters otherwise (two selected columns under one header name share the key, which keeps the first's position and the last's value). Before 0.22.0 the JSON form was the bare `rows` array.
 
 **Streaming**: `--stream` scans the used range in O(1) memory, keeping only the matching rows
 (since 0.21.0). The rows and cells are those the in-memory run renders over the same window; the
@@ -1644,14 +1644,14 @@ Compare two workbooks and report differences. The first file comes from the glob
 |-----|------|----------|---------|-------------|
 | `-g, --file2` | path | Yes | — | Second file to compare against |
 | `--format` | string | No | markdown | `markdown` (human) or `json` (stable schema) |
-| `--formulas-only` | flag | No | false | Compare formula cells by text alone, ignoring cached values (the rule before 0.21.1) |
+| `--formulas-only` | flag | No | false | Compare formula cells by text alone, ignoring cached values (the rule before 0.22.0) |
 
 **Exit codes**: `0` identical, `1` differences found, `3` error (unreadable file, sheet filter
 matching neither workbook, ...) — the error goes to stderr with a `code:` line (see
 [Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
 
 **What is compared** (per sheet, refs in A1, row-major order):
-- **Changed cells** — value, formula text, cached formula value and resolved style (`styleChanged` boolean), each change tagged with its `kind`: `value` (a constant changed), `formula` (the text or record kind changed, or a constant became a formula), `cache` (same formula, a cached value that differs or is present on one side only — what a recalculation, a `--no-recalc` edit or a cache-stripping writer produces; 0.21.1) or `style` (only the formatting). `--formulas-only` ignores caches. Styles compare resolved formatting (style id lookup), so equal formatting under different ids is not a difference. Markdown renders a cache change as `B4: =SUM(B1:B3) cached 42.5 -> 43.5 [cache]` (`(none)` for a missing cache).
+- **Changed cells** — value, formula text, cached formula value and resolved style (`styleChanged` boolean), each change tagged with its `kind`: `value` (a constant changed), `formula` (the text or record kind changed, or a constant became a formula), `cache` (same formula, a cached value that differs or is present on one side only — what a recalculation, a `--no-recalc` edit or a cache-stripping writer produces; 0.22.0) or `style` (only the formatting). `--formulas-only` ignores caches. Styles compare resolved formatting (style id lookup), so equal formatting under different ids is not a difference. Markdown renders a cache change as `B4: =SUM(B1:B3) cached 42.5 -> 43.5 [cache]` (`(none)` for a missing cache).
 - **Added / removed cells** — a cell with Empty value, default style, and no hyperlink counts as absent.
 - **Sheets added / removed** (by name).
 - **Merged ranges, comments, hyperlinks** — separate added/removed/changed deltas per sheet.
@@ -1711,7 +1711,7 @@ xl -f deliverable.xlsx lint && echo "safe to send"
 xl -f huge.xlsx --stream lint                    # SAX-scan the sheet parts: O(1) in the row count
 ```
 
-`--stream lint` (since 0.21.1) runs the streaming lint: the worksheet and table parts are
+`--stream lint` (since 0.22.0) runs the streaming lint: the worksheet and table parts are
 SAX-scanned instead of parsed, so a million-row book lints in constant memory; the findings are
 identical (pinned by the lint parity suite).
 
@@ -1840,15 +1840,15 @@ Two rows worth spelling out:
 - A missing or unreadable input file is `code: IO_READ`, exit `3`, on every verb — `sheets`,
   `names`, `view`, `cell`, `diff`, `lint` alike. A file that does not exist is the one message
   `No such file: <path>` with the hint `check the path; the previous write may have failed`
-  (0.21.1); any other read failure keeps the reader's own message, its prefix once.
+  (0.22.0); any other read failure keeps the reader's own message, its prefix once.
 - A workbook path passed positionally (`xl view input.xlsx A1:B4`) is a `USAGE` error whose hint
-  says `did you mean -f input.xlsx? …` (0.21.1): the file is never positional.
+  says `did you mean -f input.xlsx? …` (0.22.0): the file is never positional.
 - An unknown defined name (`name rm Nope`) is `NAME_NOT_FOUND` with the nearest names as
-  `did you mean` candidates, like `SHEET_NOT_FOUND` for sheets (0.21.1).
+  `did you mean` candidates, like `SHEET_NOT_FOUND` for sheets (0.22.0).
 
-The same table is printed by `xl --help`. Help is a result (0.21.1): `xl --help` and
+The same table is printed by `xl --help`. Help is a result (0.22.0): `xl --help` and
 `xl <verb> --help` print to **stdout**, exit 0 — `xl put --help | head` works — and under `--json`
-yield the `ok: true` envelope with the text as `data.usage`. (Before 0.21.1 help went to stderr.) (Earlier releases exited `1` for usage and failures too,
+yield the `ok: true` envelope with the text as `data.usage`. (Before 0.22.0 help went to stderr.) (Earlier releases exited `1` for usage and failures too,
 `2` for `diff`/`lint` runtime errors, and printed errors on stdout.)
 
 ### Output contract (`--json`)

@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **116 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 6,952 tests passing; one existing performance comparison ignored.
 
-**Current Version**: **0.21.1** (the 0.21.0 dogfood's follow-through — named styles preserved on every write (#610), constant-memory `--stream view` and per-verb `--stream` capabilities (#635/#638/#640), formula semantics per Excel (#628–#631, #613), the CLI contract cleanup (#607/#615/#617/#619–#622/#626/#639/#641/#644) — released 2026-09-08)
+**Current Version**: **0.22.0** (the 0.21.0 dogfood's follow-through — named styles preserved on every write (#610), constant-memory `--stream view` and per-verb `--stream` capabilities (#635/#638/#640), formula semantics per Excel (#628–#631, #613), the CLI contract cleanup (#607/#615/#617/#619–#622/#626/#639/#641/#644) — released 2026-09-08)
 
 ---
 
@@ -85,7 +85,7 @@ follow-ups filed: [#593](https://github.com/TJC-LP/xl/issues/593) (writer heals 
 on every write), [#595](https://github.com/TJC-LP/xl/issues/595) (table uid determinism),
 [#596](https://github.com/TJC-LP/xl/issues/596) (descending sort puts blanks first).
 
-### v0.21.1 — the 0.21.0 dogfood's follow-through (Released 2026-09-08)
+### v0.22.0 — the 0.21.0 dogfood's follow-through (Released 2026-09-08)
 
 Four PRs on top of 0.21.0 — twelve **Breaking:** entries,
 each a behaviour fix toward Excel or the contract:
