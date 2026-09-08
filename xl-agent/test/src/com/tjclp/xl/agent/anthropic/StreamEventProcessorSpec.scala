@@ -85,6 +85,46 @@ class StreamEventProcessorSpec extends CatsEffectSuite:
   private def messageStop: BetaRawMessageStreamEvent =
     BetaRawMessageStreamEvent.ofMessageStop(BetaRawMessageStopEvent.builder().build())
 
+  /** A `content_block_start` carrying the sandbox's result for one bash command. */
+  private def bashResult(
+    stdout: String,
+    stderr: String,
+    returnCode: Long
+  ): BetaRawMessageStreamEvent =
+    val result = BetaBashCodeExecutionResultBlock
+      .builder()
+      .stdout(stdout)
+      .stderr(stderr)
+      .returnCode(returnCode)
+      .content(java.util.List.of[BetaBashCodeExecutionOutputBlock]())
+      .build()
+    val block = BetaBashCodeExecutionToolResultBlock
+      .builder()
+      .toolUseId("srvtoolu_bash")
+      .content(result)
+      .build()
+    BetaRawMessageStreamEvent.ofContentBlockStart(
+      BetaRawContentBlockStartEvent
+        .builder()
+        .index(1L)
+        .contentBlock(
+          BetaRawContentBlockStartEvent.ContentBlock.ofBashCodeExecutionToolResult(block)
+        )
+        .build()
+    )
+
+  test("GH-622: a bash tool result records the sandbox command's exit status") {
+    for
+      (processor, seen, _) <- newProcessor
+      _ <- processor.process(bashResult("Error: Unexpected argument: input.xlsx", "", 2L))
+      _ <- processor.process(bashResult("ok", "", 0L))
+      events <- seen.get
+    yield
+      val results = events.collect { case r: AgentEvent.ToolResult => r }
+      assertEquals(results.map(_.exitCode), Vector(Some(2), Some(0)))
+      assertEquals(results.map(_.stdout), Vector("Error: Unexpected argument: input.xlsx", "ok"))
+  }
+
   private def newProcessor
     : IO[(StreamEventProcessor, Ref[IO, Vector[AgentEvent]], Queue[IO, AgentEvent])] =
     for

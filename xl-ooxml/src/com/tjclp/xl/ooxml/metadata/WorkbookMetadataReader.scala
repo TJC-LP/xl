@@ -65,8 +65,10 @@ object WorkbookMetadataReader:
     catch
       case e: java.util.zip.ZipException =>
         Left(XLError.ParseError(path.toString, s"Invalid ZIP file: ${e.getMessage}"))
+      case e: java.nio.file.NoSuchFileException =>
+        Left(XLError.IOError(s"no such file: ${Option(e.getFile).getOrElse(path.toString)}"))
       case e: java.io.IOException =>
-        Left(XLError.IOError(s"Failed to open file: ${e.getMessage}"))
+        Left(XLError.IOError(Option(e.getMessage).getOrElse(e.toString)))
 
   /**
    * Read lightweight metadata from XLSX file.

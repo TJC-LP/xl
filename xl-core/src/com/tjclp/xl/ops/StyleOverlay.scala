@@ -98,7 +98,7 @@ final case class StyleOverlay(
    * ST_TextRotation (0-180 or 255).
    */
   def validate: XLResult[Unit] =
-    def refuse(reason: String): XLResult[Unit] = Left(XLError.Other(s"style: $reason"))
+    def refuse(reason: String): XLResult[Unit] = Left(XLError.InvalidArgument("style", reason))
     if fontSize.exists(_ <= 0) then
       refuse(s"font size must be positive, got: ${fontSize.getOrElse(0.0)}")
     else if fontName.exists(_.isEmpty) then refuse("font name cannot be empty")

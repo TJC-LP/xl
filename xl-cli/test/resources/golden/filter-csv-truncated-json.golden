@@ -1,0 +1,35 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+--json
+filter
+--where
+B > 0
+--limit
+2
+--format
+csv
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "filter",
+  "version": "<VERSION>",
+  "data": {
+    "text": "row,A,B,C\n1,Hello,10,1/15/24\n2,World,20,6/30/24",
+    "saved": null,
+    "written": false
+  },
+  "warnings": [
+    {
+      "code": "TRUNCATED",
+      "message": "… showing 2 of 4 matching rows (use --limit to raise; --limit 0 = no limit)"
+    }
+  ],
+  "error": null
+}
+## stderr

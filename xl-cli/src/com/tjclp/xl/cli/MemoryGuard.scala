@@ -10,7 +10,7 @@ import cats.effect.IO
 import cats.syntax.all.*
 
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
-import com.tjclp.xl.error.XLResult
+import com.tjclp.xl.error.{XLException, XLResult}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader, XlsxWriter}
 import com.tjclp.xl.ooxml.XlsxReader.{ReadResult, ReaderConfig}
@@ -310,9 +310,9 @@ object MemoryGuard:
   /**
    * The `ExcelIO` the CLI loads workbooks through: `readWith` runs [[admit]] (its warning to
    * `warn`), then `parse` under [[blocking]], then the library's own routing — every reader warning
-   * to `handler`, a reader failure as `Failed to read XLSX: <message>` (the text `ExcelIO.readWith`
-   * produces, so `classifyRead`'s `IO_READ` stays byte-identical). `parse` and `heap` are injection
-   * points for the tests; production callers pass the two sinks.
+   * to `handler`, a reader failure as the `XLException` `ExcelIO.readWith` raises (GH-621: the
+   * error's own message, one prefix — `classifyRead` projects it to `IO_READ`). `parse` and `heap`
+   * are injection points for the tests; production callers pass the two sinks.
    */
   def excel(
     handler: XlsxReader.Warning => IO[Unit],
@@ -326,7 +326,7 @@ object MemoryGuard:
         (if admitLoads then admit(path, config, heap, warn) else IO.unit) *>
           blocking(path, "load")(parse(path, config)).flatMap {
             case Right(result) => result.warnings.traverse_(handler).as(result.workbook)
-            case Left(err) => IO.raiseError(new Exception(s"Failed to read XLSX: ${err.message}"))
+            case Left(err) => IO.raiseError(XLException(err))
           }
 
       // Serialisation builds every part's XML; `writeWorkbookStream` and `write` route through

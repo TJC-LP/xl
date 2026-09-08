@@ -370,7 +370,7 @@ class ViewTruncationSpec extends CatsEffectSuite:
         .streaming(path, Some("Data"), ReadTestKit.view(Some("A1:A100"), limit = 0))
         .map(ReadTestKit.text)
         .map { out =>
-          assert(out.contains("| 100|"), "row 100 should be rendered with --limit 0")
+          assert(out.contains("| 100 |"), "row 100 should be rendered with --limit 0")
           assert(!out.contains("… showing"), s"unexpected trailer:\n$out")
         }
     }

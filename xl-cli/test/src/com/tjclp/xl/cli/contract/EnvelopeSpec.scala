@@ -605,6 +605,29 @@ class EnvelopeSpec extends CatsEffectSuite:
       assertEquals(envelope(noArgs)("error")("code"), ujson.Str("USAGE"))
   }
 
+  test("GH-620: `--help` is a result — stdout in text mode, `data.usage` under --json") {
+    for
+      text <- CliHarness.run("delete-rows", "--help")
+      json <- CliHarness.run("--json", "delete-rows", "--help")
+      top <- CliHarness.run("--json", "--help")
+    yield
+      assertEquals(text.exit, 0)
+      assertEquals(text.stderr, "")
+      assert(text.stdout.startsWith("Usage:"), text.stdout)
+      assertEquals(json.exit, 0)
+      assertEquals(json.stderr, "")
+      val e = envelope(json)
+      assertEquals(e("ok"), ujson.True)
+      assertEquals(e("verb"), ujson.Str("delete-rows"))
+      assertEquals(e("error"), ujson.Null)
+      assertEquals(e("data")("usage"), ujson.Str(text.stdout.stripSuffix("\n")))
+      assert(e("data")("usage").str.startsWith("Usage:"), e("data")("usage").str)
+      val t = envelope(top)
+      assertEquals(t("ok"), ujson.True)
+      assertEquals(t("verb"), ujson.Str(""))
+      assert(t("data")("usage").str.contains("Exit codes:"), t("data")("usage").str)
+  }
+
   test("`--` ends the --json scan: a literal --json after it keeps the text-mode usage error") {
     CliHarness.run("-f", file("simple.xlsx"), "search", "--", "--json", "extra").map { run =>
       assertEquals(run.exit, 2)

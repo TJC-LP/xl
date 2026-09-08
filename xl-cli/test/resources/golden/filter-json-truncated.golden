@@ -1,0 +1,40 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+filter
+--where
+B > 0
+--limit
+2
+--format
+json
+## exit
+0
+## stdout
+{
+  "matched": 4,
+  "shown": 2,
+  "truncated": true,
+  "limit": 2,
+  "rows": [
+    {
+      "row": 1,
+      "cells": {
+        "A": "Hello",
+        "B": 10,
+        "C": 45306
+      }
+    },
+    {
+      "row": 2,
+      "cells": {
+        "A": "World",
+        "B": 20,
+        "C": 45473
+      }
+    }
+  ]
+}
+## stderr

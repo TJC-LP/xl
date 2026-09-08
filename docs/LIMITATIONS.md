@@ -572,6 +572,11 @@ val headerStyle = style"font-weight: bold; background: #CCCCCC; border: all thin
 
 ---
 
+#### 26a. `Option[T]` Record Fields See Empty-String Cells as Present (#617)
+**Status**: By design; documented
+**Impact**: `derives RowCodec` decodes an `Option[String]` field as `None` only for an absent or `CellValue.Empty` cell. A cell holding the empty string — SheetJS and some exporters write `<v></v>` text cells for "blank" — is `Some("")` (and a `TypeMismatch` for `Option[Int]`), so a "sparse" column written that way is never `None`. Excel itself distinguishes `""` from blank (`ISBLANK` is FALSE, `COUNTA` counts it), so the codec does too.
+**Workaround**: normalise with `.filter(_.nonEmpty)` after the read, or clear such cells (`clear --all` on the range) before reading.
+
 #### 26. Named Cell Styles: Preserved, Not Yet Modeled (#610)
 **Status**: Preservation fixed in 0.21.1 ([#610](https://github.com/TJC-LP/xl/issues/610)); no typed named-style model yet
 **Impact**: A workbook's Cell Styles gallery, recent-colours palette and styles `extLst` survive every write; named styles cannot be authored from xl

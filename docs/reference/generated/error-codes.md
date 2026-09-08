@@ -62,6 +62,8 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `EDIT_FAILED` | 3 |
 | `UNSUPPORTED_CAPABILITY` | 3 |
 | `SHEET_REQUIRED` | 3 |
+| `NAME_NOT_FOUND` | 3 |
+| `INVALID_ARGUMENT` | 3 |
 
 ## Warning codes
 
@@ -78,4 +80,5 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `FLAG_IGNORED` |
 | `EVAL_FAILED` |
 | `MEMORY_PRESSURE` |
+| `NO_NUMERIC_VALUES` |
 | `OFF_GRID_REF` |

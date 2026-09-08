@@ -73,8 +73,12 @@ object Markdown:
       math.max(header.length, math.max(maxContent, 3)) // Minimum width 3
     }
 
+    // GH-641: the row-label column is as wide as the widest row number shown, so `| 10 |` lines
+    // up under `| 9  |` instead of drifting once the window passes row 9
+    val labelWidth = nonEmptyRows.map(row => (row + 1).toString.length).maxOption.getOrElse(1)
+
     // Header row with column letters
-    sb.append("|   |")
+    sb.append(s"| ${" " * labelWidth} |")
     colWidths.zip(nonEmptyCols).foreach { case (width, col) =>
       val header = Column.from0(col).toLetter
       sb.append(s" ${header.padTo(width, ' ')} |")
@@ -82,7 +86,7 @@ object Markdown:
     sb.append("\n")
 
     // Separator row
-    sb.append("|---|")
+    sb.append(s"|${"-" * (labelWidth + 2)}|")
     colWidths.foreach { (width: Int) =>
       sb.append("-" * (width + 2))
       sb.append("|")
@@ -92,7 +96,7 @@ object Markdown:
     // Data rows with row numbers (only visible rows)
     for row <- nonEmptyRows do
       val rowNum = (row + 1).toString
-      sb.append(s"| ${rowNum.padTo(2, ' ')}|")
+      sb.append(s"| ${rowNum.padTo(labelWidth, ' ')} |")
       colWidths.zip(nonEmptyCols).foreach { case (width, col) =>
         val escaped = Escape.markdown(text(row, col))
         sb.append(s" ${escaped.padTo(width, ' ')} |")

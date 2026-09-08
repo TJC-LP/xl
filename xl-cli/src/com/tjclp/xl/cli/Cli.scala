@@ -12,7 +12,8 @@ import com.tjclp.xl.cli.contract.{
   ErrorCode,
   ExitCodes,
   Outcome,
-  OutputMode
+  OutputMode,
+  Payload
 }
 import com.tjclp.xl.text.Suggest
 
@@ -25,17 +26,20 @@ import com.tjclp.xl.text.Suggest
  * (`CliHarness` under xl-cli/test) drive the real parser and the real handlers in-process and pin
  * exit code, stdout and stderr byte for byte.
  *
- * Help and version behaviour reproduce decline-effect's `CommandIOApp`, which this replaced because
- * its `run` is final and prints through an ambient console:
- *   - `--help` renders the help on STDERR and exits 0
+ * Help and version behaviour replace decline-effect's `CommandIOApp`, whose `run` is final and
+ * prints through an ambient console:
+ *   - `--help` (top-level or `xl <verb> --help`) is a RESULT: the help text on stdout, exit 0 —
+ *     `xl put --help | head` works and an agent capturing stdout sees it (GH-620). Under `--json`
+ *     it is the `ok:true` envelope with `data.usage` holding the same text
  *   - an unknown verb is `UNKNOWN_VERB` (exit 2) with the nearest verb names as "did you mean"
  *   - any other parse failure is `USAGE` (exit 2): the first parser error with the verb's `--help`
- *     as the hint, then the one-line [[usage]] — never the full subcommand dump (ADR-017 §2.2).
- *     With `--json` among the arguments both render the `ok:false` envelope instead (§2.4), so a
- *     program never has to parse help text out of a failed call
+ *     as the hint — or, when a workbook path was passed positionally (`xl view input.xlsx A1:B4`,
+ *     the most frequent agent mistake, GH-619), `did you mean -f <path>?` — then the one-line
+ *     [[usage]], never the full subcommand dump (ADR-017 §2.2). With `--json` among the arguments
+ *     both render the `ok:false` envelope instead (§2.4), so a program never has to parse help text
+ *     out of a failed call
  *   - `--version` / `-v` prints the version on stdout and exits 0
  *
- * Help landing on stderr even when asked for is the current, pinned contract (golden `help`).
  * Command errors go to stderr as `Error: <message>` plus a `code:` line ([[contract.Diagnostics]]);
  * stdout is empty on every failure. Under the global `--json` every result — success or failure —
  * is one envelope on stdout ([[contract.Render.json]]). Nothing escapes as a stack trace: a failure
@@ -167,8 +171,17 @@ object Cli:
     val diffOpts = (fileOpt, sheetOpt, maxSizeOpt, jsonOpt, diffCmd).mapN {
       (file, sheet, maxSize, mode, cmd) =>
         cmd match
-          case CliCommand.Diff(file2, format) =>
-            runDiff(file, file2, sheet, maxSize, CliCommand.diffFormat(format, mode), io, mode)
+          case CliCommand.Diff(file2, format, formulasOnly) =>
+            runDiff(
+              file,
+              file2,
+              sheet,
+              maxSize,
+              CliCommand.diffFormat(format, mode),
+              formulasOnly,
+              io,
+              mode
+            )
           case other => internal("diff", s"Unexpected diff command: $other", io, mode)
     }
 
@@ -234,18 +247,35 @@ object Cli:
         )
         usageFailure("", error, mode, io)
       case verb =>
-        IO(command(io).parse(argv, sys.env))
+        // `--help` anywhere before `--` is a request for the verb's help, whatever else rides
+        // along: decline refuses `--help` behind an option or positional it did not expect
+        // (`--json --help`, `-f a.xlsx --help`, `view A1:B2 --help`), so the candidates of
+        // Argv.helpCandidates are tried in order and the first clean help wins
+        val parse = (args: List[String]) => command(io).parse(args, sys.env)
+        val parsed =
+          if argv.takeWhile(_ != "--").contains("--help") then
+            val attempts = Argv.helpCandidates(argv).map(parse)
+            attempts
+              .collectFirst { case left @ Left(help) if help.errors.isEmpty => left }
+              .getOrElse(attempts.headOption.getOrElse(parse(argv)))
+          else parse(argv)
+        IO(parsed)
           .flatMap {
             case Right(handler) => handler
             case Left(help) if help.errors.nonEmpty =>
+              val hint = Argv.misplacedFile(argv, help.errors) match
+                case Some(path) =>
+                  s"did you mean -f $path? xl takes the file as -f/--file; " +
+                    "the positional argument is the range or verb argument"
+                case None => s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage"
               val error = CliError.usage(
                 help.errors.headOption.fold("invalid command line") { first =>
                   if verb.isEmpty then compact(first) else first
                 },
-                Some(s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage")
+                Some(hint)
               )
               usageFailure(verb.getOrElse(""), error, mode, io)
-            case Left(help) => io.err(help.toString).as(ExitCodes.ok)
+            case Left(help) => showHelp(verb.getOrElse(""), help.toString, mode, io)
           }
           .handleErrorWith { escaped =>
             emit(Outcome.failed(verb.getOrElse(""), CliError.fromThrowable(escaped)), mode, io)
@@ -276,6 +306,17 @@ object Cli:
       case OutputMode.Json => emit(Outcome.failed(verb, error), mode, io)
       case OutputMode.Text =>
         io.err(s"${Diagnostics.render(error)}\n$usage").as(error.exitCode)
+
+  /**
+   * `--help` as a result (GH-620): the text on stdout in text mode; under `--json` the `ok:true`
+   * envelope whose `data.usage` is that text, so a program asks for and reads a verb's usage the
+   * way it reads every other result.
+   */
+  private def showHelp(verb: String, text: String, mode: OutputMode, io: CliIO): IO[ExitCode] =
+    mode match
+      case OutputMode.Json =>
+        emit(Outcome.ok(verb, Payload.Json(ujson.Obj("usage" -> ujson.Str(text)))), mode, io)
+      case OutputMode.Text => io.out(text).as(ExitCodes.ok)
 
   /** A dispatch arm the parser cannot reach: a defect, reported like any other failure (exit 3). */
   private def internal(verb: String, message: String, io: CliIO, mode: OutputMode): IO[ExitCode] =

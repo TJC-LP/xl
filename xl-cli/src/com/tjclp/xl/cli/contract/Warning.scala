@@ -35,6 +35,13 @@ object WarningCode:
   val MEMORY_PRESSURE: String = "MEMORY_PRESSURE"
 
   /**
+   * GH-641: `stats` over a range holding no numbers. The run succeeds with zero-count statistics —
+   * an empty result is a result, as for `search` and `filter` — and this names the likely mistake
+   * (a text column) out of band.
+   */
+  val NO_NUMERIC_VALUES: String = "NO_NUMERIC_VALUES"
+
+  /**
    * GH-628: a `putf` drag, batch `putf … from`, `fill` or `copy` wrote `#REF!` for a reference the
    * shift carried off the grid (before row 1 or column A, past XFD1048576). Excel writes the
    * `#REF!` silently; for an agent it is almost always a mistake, so every such cell is listed —
@@ -54,5 +61,6 @@ object WarningCode:
     FLAG_IGNORED,
     EVAL_FAILED,
     MEMORY_PRESSURE,
+    NO_NUMERIC_VALUES,
     OFF_GRID_REF
   )

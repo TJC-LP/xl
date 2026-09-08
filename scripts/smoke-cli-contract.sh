@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Smoke the agent-visible contract of a PACKAGED xl — the assembly JAR in ci.yml, every native
 # binary in release.yml, or a local install — the way an agent drives it: `--version`, `--help`,
-# `sheets`, `view --json`, `schema --json`, `lint`, and two failures whose envelopes must carry the
-# error code (GH-592). The golden corpus (GoldenSpec) proves the in-process harness; this proves the
+# `sheets`, `view --json`, `schema --json`, `lint`, `<verb> --help` under --json (GH-620), and two
+# failures whose envelopes must carry the error code (GH-592). The golden corpus (GoldenSpec) proves the in-process harness; this proves the
 # artifact an agent actually runs: assembly resource merging, native-image reflection, the version
 # baked in at build time.
 #
@@ -51,6 +51,9 @@ run() {
     exit 1
   fi
 }
+# xl's own stderr: the JVM's `WARNING: … sun.misc.Unsafe …` deprecation notice (scala.runtime.LazyVals
+# under a JAR on JDK 24+) is the runtime's, not the contract's; the native binary prints none.
+xl_stderr() { grep -v '^WARNING:' "$ERR" || true; }
 # check <what> <jq filter>: the filter must hold of $OUT; `$version` inside it is the expected version.
 check() {
   local what=$1 filter=$2
@@ -68,9 +71,15 @@ else
   [ "$OUT" = "$VERSION" ] || { echo "::error::--version printed '$OUT'; expected $VERSION"; exit 1; }
 fi
 
+# GH-620: help is a RESULT — stdout, exit 0, nothing on stderr — so `xl --help | head` works and
+# an agent capturing stdout sees it; under --json it is the ok:true envelope with data.usage.
 run 0 --help
-[ -z "$OUT" ] || { echo "::error::--help wrote to stdout; the contract puts usage on stderr"; echo "$OUT"; exit 1; }
-grep -q '^Usage:' "$ERR" || { echo "::error::--help did not print usage on stderr"; cat "$ERR"; exit 1; }
+grep -q '^Usage:' <<<"$OUT" || { echo "::error::--help did not print usage on stdout"; echo "$OUT"; exit 1; }
+[ -z "$(xl_stderr)" ] || { echo "::error::--help wrote to stderr; the contract puts usage on stdout"; cat "$ERR"; exit 1; }
+
+run 0 --json view --help
+check "view --help --json" '.ok == true and .exitCode == 0 and .verb == "view" and .error == null and (.data.usage | type) == "string" and (.data.usage | length) > 0 and (.data.usage | startswith("Usage:"))'
+[ -z "$(xl_stderr)" ] || { echo "::error::--json view --help wrote to stderr"; cat "$ERR"; exit 1; }
 
 run 0 -f "$FIXTURE" sheets
 grep -q 'Values' <<<"$OUT" || { echo "::error::sheets did not list the Values sheet"; echo "$OUT"; exit 1; }

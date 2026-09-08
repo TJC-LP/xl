@@ -1122,6 +1122,19 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
+  test("GH-644: describe separates the position from the suggestion with a full stop") {
+    // The diagnostic reads as one sentence then another wherever it is embedded (eval, putf, the
+    // sheet renamer's "Cannot rewrite ...: <diagnostic>"), never "at position 3 Did you mean"
+    assertEquals(
+      ParseError.describe(ParseError.UnknownFunction("SINGLE", 3, List("SIGN"))),
+      "Unknown function 'SINGLE' at position 3. Did you mean: SIGN?"
+    )
+    assertEquals(
+      ParseError.describe(ParseError.UnknownFunction("ZZZNOTAFUNC", 3, Nil)),
+      "Unknown function 'ZZZNOTAFUNC' at position 3"
+    )
+  }
+
   test("error: invalid cell reference") {
     // GH-384: a bare out-of-grid token (ZZZ9999999) is a LEGAL Excel defined name — Excel's
     // name rules only reject IN-grid collisions — so it now parses as NameRef and fails at

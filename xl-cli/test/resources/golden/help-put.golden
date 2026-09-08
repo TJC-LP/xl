@@ -4,7 +4,6 @@ put
 ## exit
 0
 ## stdout
-## stderr
 Usage:
     xl put --value <string> [--csv] [--no-detect] <ref>
     xl put [--csv] [--no-detect] <ref> <value>...
@@ -47,3 +46,4 @@ Options and flags:
         Split a single comma-separated value across the target range (count must match)
     --no-detect
         Preserve put values as text instead of detecting currency, percent, dates, or numbers
+## stderr

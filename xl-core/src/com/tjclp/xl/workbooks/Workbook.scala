@@ -28,7 +28,7 @@ final case class Workbook(
   def apply(name: SheetName): XLResult[Sheet] =
     sheets
       .find(_.name == name)
-      .toRight(XLError.SheetNotFound(name.value))
+      .toRight(XLError.SheetNotFound(name.value, sheetNameValues))
 
   /**
    * Get sheet by name string.
@@ -139,7 +139,7 @@ final case class Workbook(
   /** Remove sheet by name (preferred method) */
   def remove(name: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == name) match
-      case -1 => Left(XLError.SheetNotFound(name.value))
+      case -1 => Left(XLError.SheetNotFound(name.value, sheetNameValues))
       case index => removeAt(index)
 
   /**
@@ -194,7 +194,7 @@ final case class Workbook(
    */
   def rename(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == oldName) match
-      case -1 => Left(XLError.SheetNotFound(oldName.value))
+      case -1 => Left(XLError.SheetNotFound(oldName.value, sheetNameValues))
       case index =>
         if hasSheetNamed(newName, except = Some(oldName)) then
           Left(XLError.DuplicateSheet(newName.value))
@@ -238,7 +238,7 @@ final case class Workbook(
    */
   def update(name: SheetName, f: Sheet => Sheet): XLResult[Workbook] =
     sheets.indexWhere(_.name == name) match
-      case -1 => Left(XLError.SheetNotFound(name.value))
+      case -1 => Left(XLError.SheetNotFound(name.value, sheetNameValues))
       case idx => updateAt(idx, f)
 
   /**
@@ -296,7 +296,7 @@ final case class Workbook(
   /** Delete sheet by name while tracking modification state. */
   def delete(name: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == name) match
-      case -1 => Left(XLError.SheetNotFound(name.value))
+      case -1 => Left(XLError.SheetNotFound(name.value, sheetNameValues))
       case idx => removeAt(idx)
 
   /**
@@ -417,6 +417,12 @@ final case class Workbook(
   /** Get sheet names */
   def sheetNames: Seq[SheetName] = sheets.map(_.name)
 
+  /**
+   * The sheet names as spelled, for every `SheetNotFound` this workbook raises (GH-615): the
+   * nearest become the error's `candidates` ("did you mean"), the message lists them all.
+   */
+  private def sheetNameValues: Vector[String] = sheets.map(_.name.value)
+
   /** Number of sheets */
   def sheetCount: Int = sheets.size
 
@@ -442,7 +448,7 @@ final case class Workbook(
    *   Updated workbook or error if sheet not found, invalid state, or last visible sheet
    */
   def setSheetState(name: SheetName, state: Option[String]): XLResult[Workbook] =
-    if !sheets.exists(_.name == name) then Left(XLError.SheetNotFound(name.value))
+    if !sheets.exists(_.name == name) then Left(XLError.SheetNotFound(name.value, sheetNameValues))
     else
       state match
         case Some(s) if s != "hidden" && s != "veryHidden" =>

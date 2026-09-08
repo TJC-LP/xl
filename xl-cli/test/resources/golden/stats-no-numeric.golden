@@ -1,0 +1,11 @@
+## args
+-f
+<DIR>/simple.xlsx
+stats
+Data!A1:A3
+## exit
+0
+## stdout
+count: 0, sum: 0.00, min: n/a, max: n/a, mean: n/a
+## stderr
+Warning[NO_NUMERIC_VALUES]: No numeric values in range A1:A3

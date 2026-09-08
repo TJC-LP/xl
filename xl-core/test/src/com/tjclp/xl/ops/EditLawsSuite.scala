@@ -115,7 +115,10 @@ abstract class EditLawsSuite(support: FormulaSupport, label: String) extends Sca
             case Left(XLError.EditFailed(index, op, cause)) =>
               assertEquals(index, good.size + 1)
               assertEquals(op, "remove-sheet")
-              assertEquals(cause, XLError.SheetNotFound(missing.value))
+              // GH-615: the candidates are whatever sheets the prefix left; the name is fixed
+              cause match
+                case XLError.SheetNotFound(name, _) => assertEquals(name, missing.value)
+                case other => fail(s"expected SheetNotFound, got $other")
             case other => fail(s"expected EditFailed at ${good.size + 1}, got $other")
         case Left(XLError.EditFailed(index, _, _)) =>
           // The prefix already fails: the failure is reported at the SAME index with `bad` appended

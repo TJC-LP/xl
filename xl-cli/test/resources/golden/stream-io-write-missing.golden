@@ -1,0 +1,18 @@
+## args
+-f
+<DIR>/missing.xlsx
+--stream
+-s
+Data
+-o
+<DIR>/stream-io-write-missing-out.xlsx
+put
+A1
+1
+## exit
+3
+## stdout
+## stderr
+Error: No such file: <DIR>/missing.xlsx
+  code: IO_READ
+  hint: check the path; the previous write may have failed

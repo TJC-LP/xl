@@ -60,7 +60,7 @@ val wb  = Excel.read("in.xlsx")                    // Workbook
 Excel.write(wb, "out.xlsx")                        // also accepts XLResult[Workbook]; NEVER for a freshly built model — see writeChecked
 Excel.modify("file.xlsx")(_.upsert("Log", identity)) // atomic in-place read→transform→write
 Excel.modifyR("file.xlsx")(_.update("Log", f))     // 0.21.0: XLResult-returning transform; a Left throws BEFORE any write
-Excel.readSheet("in.xlsx", "Summary")              // 0.21.0: Sheet — loads the WHOLE workbook, then picks one; a typo throws SheetNotFound(name, available) with "did you mean" candidates
+orExit(Excel.readSheet("in.xlsx", "Summary"))      // 0.21.1: XLResult[Sheet] — loads the WHOLE workbook, then picks one; a typo is Left(SheetNotFound(name, available)) with "did you mean" candidates (0.21.0 returned Sheet and threw)
 Excel.readMetadata("in.xlsx")                      // 0.21.0: LightMetadata (sheet names/dimensions/defined names), no cells loaded, ZIP-bomb guarded
 
 // Sheets in a workbook
@@ -136,7 +136,7 @@ val updated = wb
 Excel.write(updated, "output.xlsx")
 ```
 
-`Excel.modify("file.xlsx")(f)` does the same in place with atomic file replacement. Since 0.21.0 `Excel.modifyR("file.xlsx")(f)` takes an `XLResult`-returning transform — `_.update("Data", …)` needs no `.unsafe` inside the lambda, and a `Left` throws *before* anything is written, leaving the file byte-identical. `Excel.readSheet(path, name)` (0.21.0) is `Excel.read` plus the lookup — the whole workbook is loaded, then one sheet is selected — throwing an `XLException(SheetNotFound(name, available))` on a typo whose message lists every available sheet and whose `candidates` name the nearest (`orExit` prints them as `did you mean:`); `Excel.readMetadata(path)` (0.21.0) lists sheets, dimensions and defined names without loading a cell — decide what to read (or stream) before reading it.
+`Excel.modify("file.xlsx")(f)` does the same in place with atomic file replacement. Since 0.21.0 `Excel.modifyR("file.xlsx")(f)` takes an `XLResult`-returning transform — `_.update("Data", …)` needs no `.unsafe` inside the lambda, and a `Left` throws *before* anything is written, leaving the file byte-identical. `Excel.readSheet(path, name)` (0.21.0) is `Excel.read` plus the lookup — the whole workbook is loaded, then one sheet is selected; since 0.21.1 it returns `XLResult[Sheet]` (0.21.0 returned `Sheet` and threw), so `orExit(Excel.readSheet(path, name))` unwraps it: a typo is `Left(SheetNotFound(name, available))` whose message lists every available sheet and whose `candidates` name the nearest (`orExit` prints them as `did you mean:`), and a missing or corrupt file is `Left` of the reader's `IOError`/`ParseError`; `wb(name)`/`wb.update`/`wb.remove` carry the same candidates (0.21.1); `Excel.readMetadata(path)` (0.21.0) lists sheets, dimensions and defined names without loading a cell — decide what to read (or stream) before reading it.
 
 ### Compile-time literals vs runtime refs
 

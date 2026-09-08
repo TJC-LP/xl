@@ -277,12 +277,12 @@ class SchemaSpec extends CatsEffectSuite:
       assertEquals(run.exit, 0)
       OpRegistry.all.foreach { spec =>
         assert(
-          run.stderr.linesIterator.exists(_.trim.startsWith(spec.name + " ")),
+          run.stdout.linesIterator.exists(_.trim.startsWith(spec.name + " ")),
           s"batch --help does not list ${spec.name}"
         )
-        assert(run.stderr.contains(ujson.write(spec.example)), s"no example for ${spec.name}")
+        assert(run.stdout.contains(ujson.write(spec.example)), s"no example for ${spec.name}")
       }
-      assert(run.stderr.contains("--schema"), "the help mentions batch --schema")
+      assert(run.stdout.contains("--schema"), "the help mentions batch --schema")
     }
   }
 

@@ -372,28 +372,35 @@ object Excel:
 
   /**
    * Read one sheet by name (Easy Mode, GH-589): `Excel.read(path)` followed by the lookup a script
-   * would otherwise spell as `wb(name).unsafe` — the WHOLE workbook is loaded, then one sheet is
-   * selected (for a large file, `ExcelIO.readSheetStream` reads one sheet in constant memory). The
-   * failure is better than the lookup's: the error carries every available sheet, so its message
-   * lists them and its `candidates` ("did you mean") name the nearest — `orExit` prints both, the
-   * way `xl -s` does. Exact-name lookup, like `Workbook.apply(SheetName)` and the CLI's `-s`. The
-   * returned sheet is detached from its workbook: a cross-sheet formula needs `read` and
-   * `wb.evaluateFormula`.
+   * would otherwise spell as `wb(name)` — the WHOLE workbook is loaded, then one sheet is selected
+   * (for a large file, `ExcelIO.readSheetStream` reads one sheet in constant memory). Returns the
+   * `XLResult` the rest of the sync surface returns (GH-615), so `orExit(Excel.readSheet(path,
+   * name))` is the script shape: a `Left(SheetNotFound(sheet, available))` carries every available
+   * sheet — its message lists them and its `candidates` ("did you mean") name the nearest, which
+   * `orExit` prints the way `xl -s` does — and a read that fails with a domain error (`IOError`,
+   * `ParseError`, `SecurityError`: a missing, corrupt or over-limit file) is `Left` of that error
+   * rather than the exception `read` throws. Exact-name lookup, like `Workbook.apply(SheetName)`
+   * and the CLI's `-s`. The returned sheet is detached from its workbook: a cross-sheet formula
+   * needs `read` and `wb.evaluateFormula`.
    *
    * @param path
    *   File path (string)
    * @param sheet
    *   Sheet name as spelled on the tab
-   * @throws XLException
-   *   `SheetNotFound(sheet, available)` (code `SHEET_NOT_FOUND`, `candidates` = the nearest of
-   *   `available`), or the parse failure `read` would throw
+   * @return
+   *   the sheet, or `SheetNotFound(sheet, available)` (code `SHEET_NOT_FOUND`), or the read's own
+   *   domain error
    * @throws java.io.IOException
-   *   if file cannot be read
+   *   if the file cannot be read for a reason the reader did not classify
    */
-  def readSheet(path: String, sheet: String): Sheet =
-    val wb = read(path)
-    wb.sheets.find(_.name.value == sheet).getOrElse {
-      throw XLException(XLError.SheetNotFound(sheet, wb.sheets.map(_.name.value)))
+  def readSheet(path: String, sheet: String): XLResult[Sheet] =
+    val loaded: XLResult[Workbook] =
+      try Right(read(path))
+      catch case e: XLException => Left(e.error)
+    loaded.flatMap { wb =>
+      wb.sheets
+        .find(_.name.value == sheet)
+        .toRight(XLError.SheetNotFound(sheet, wb.sheets.map(_.name.value)))
     }
 
   /**

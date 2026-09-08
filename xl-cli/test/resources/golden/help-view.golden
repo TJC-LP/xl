@@ -4,7 +4,6 @@ view
 ## exit
 0
 ## stdout
-## stderr
 Usage: xl view [--formulas] [--eval] [--strict] [--limit <integer>] [--offset <integer>] [--max-cols <integer>] [--format <string>] [--print-scale] [--gridlines] [--show-labels] [--dpi <integer>] [--quality <integer>] [--raster-output <path>] [--skip-empty] [--header-row <integer>] [--rasterizer <string>] [--skip-hidden] [<range>]
 
 View a range in multiple formats (table, JSON, image, PDF).
@@ -91,3 +90,4 @@ Options and flags:
         Force specific rasterizer: batik, cairosvg, rsvg-convert, resvg, imagemagick
     --skip-hidden
         Omit hidden rows/columns (default: render them, marked) — markdown/json/csv only
+## stderr

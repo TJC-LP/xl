@@ -29,7 +29,21 @@ json
             "value": "11",
             "formula": null
           },
-          "styleChanged": false
+          "styleChanged": false,
+          "kind": "value"
+        },
+        {
+          "ref": "B4",
+          "before": {
+            "value": "42.5",
+            "formula": "=SUM(B1:B3)"
+          },
+          "after": {
+            "value": "43.5",
+            "formula": "=SUM(B1:B3)"
+          },
+          "styleChanged": false,
+          "kind": "cache"
         }
       ],
       "mergesAdded": [],

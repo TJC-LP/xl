@@ -1,5 +1,6 @@
 package com.tjclp.xl.cli
 
+import java.io.IOException
 import java.nio.file.{
   AccessDeniedException,
   AtomicMoveNotSupportedException,
@@ -21,6 +22,7 @@ import com.monovore.decline.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.error.XLException
 import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.cli.commands.{
@@ -612,26 +614,31 @@ USAGE:
   xl -f old.xlsx diff -g new.xlsx --format json      # Stable JSON schema
 
 COMPARES (per sheet, refs in A1):
-  - Changed cells: value, formula text, resolved style (styleChanged flag)
+  - Changed cells: value, formula text, cached formula value, resolved style — each change
+    carries its kind: value | formula | cache | style (styleChanged flag kept)
   - Added / removed cells
   - Sheets added / removed
   - Merged-range, comment, and hyperlink deltas
 
 NOTES:
-  - Formula cells compare by formula text (cached values are derived, ignored)
+  - A formula cell whose text is unchanged but whose cached value differs, or is present on
+    one side only, is a difference of kind "cache": what a recalculation, a --no-recalc edit
+    or a cache-stripping writer produces. --formulas-only ignores caches (text-only rule).
   - Styles compare RESOLVED formatting, not raw style ids
   - Both files load in memory (--max-size applies to each)
 
 EXIT CODES (diff-tool convention):
   0 = files are identical
   1 = differences found
-  2 = error (unreadable file, bad sheet filter, ...)
+  3 = error (unreadable file, bad sheet filter, ...)
 
 Docs: docs/reference/cli.md (diff section)
 
 EXAMPLES:
   xl -f v1.xlsx diff -g v2.xlsx
   xl -f v1.xlsx diff -g v2.xlsx --format json | jq '.sheets[0].changed'
+  xl -f model.xlsx diff -g recalc.xlsx --format json | jq '[.sheets[].changed[] | select(.kind == "cache")]'
+  xl -f v1.xlsx diff -g v2.xlsx --formulas-only         # text-only formula comparison
   xl -f v1.xlsx diff -g v2.xlsx && echo "no changes\""""
 
   // --- Diff command (GH-137) ---
@@ -651,9 +658,17 @@ EXAMPLES:
       }
       .orNone
 
+  private val formulasOnlyOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "formulas-only",
+        "Compare formula cells by text only, ignoring cached values (the pre-0.21.1 rule)"
+      )
+      .orFalse
+
   val diffCmd: Opts[CliCommand] =
     Opts.subcommand("diff", diffHelp) {
-      (file2Opt, diffFormatOpt).mapN(CliCommand.Diff.apply)
+      (file2Opt, diffFormatOpt, formulasOnlyOpt).mapN(CliCommand.Diff.apply)
     }
 
   // --- Lint command (GH-397) ---
@@ -945,7 +960,7 @@ OPTIONS:
   --where <pred>      Filter predicate (required)
   --columns <spec>    Output columns, e.g. A,C:E (default: all used columns); a column
                       outside the used range is blank (null in json); a repeat is an error
-  --limit <n>         Max rows to display (default: 50; 0 shows none, reports the count)
+  --limit <n>         Max matching rows to display (default: 50; 0 = no limit, as for view)
   --format <fmt>      markdown (default), csv, json
   --header            First used row holds column names (excluded from matching)
 
@@ -959,14 +974,22 @@ Docs: docs/reference/cli.md (filter section)
 EXAMPLES:
   xl -f sales.xlsx -s Q1 filter --where "Revenue > 10000 AND Region = 'EMEA'" --header
   xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
-  xl -f data.xlsx -s Sheet1 filter --where "A IS NOT EMPTY" --columns A:C --limit 200"""
+  xl -f data.xlsx -s Sheet1 filter --where "A IS NOT EMPTY" --columns A:C --limit 200
+
+OUTPUT:
+  markdown  a table plus "Matched N row(s); showing first M (--limit)." when clipped
+  csv       "row,<labels>" then one line per row; a clipped result adds a TRUNCATED warning
+            on stderr (or warnings[] under --json), so stdout stays parseable
+  json      {"matched": N, "shown": M, "truncated": bool, "limit": n|null, "rows": [...]}"""
 
   private val whereOpt =
     Opts.option[String]("where", "Filter predicate (e.g. \"B > 100 AND C = 'x'\")")
   private val filterColumnsOpt =
     Opts.option[String]("columns", "Columns to output, e.g. A,C:E (default: all used)").orNone
   private val filterLimitOpt =
-    Opts.option[Int]("limit", "Maximum matching rows to display").withDefault(50)
+    Opts
+      .option[Int]("limit", "Maximum matching rows to display (0 = no limit)")
+      .withDefault(50)
   private val filterFormatOpt: Opts[Option[FilterFormat]] =
     Opts
       .option[String]("format", "Output format: markdown (default; json under --json), csv, json")
@@ -2095,23 +2118,66 @@ EXAMPLES:
     else IO.unit
 
   /**
-   * Classify a failure while reading the input at `path` as `IO_READ` (exit 3), keeping the message
-   * verbatim; a `CliException` already raised below passes through unchanged. Every read of the
-   * input — full workbook, metadata quick path, lint's raw zip — goes through this so one condition
-   * (missing or unreadable file) has one code.
+   * Classify a failure while reading the input at `path` as `IO_READ` (exit 3); a `CliException`
+   * already raised below passes through unchanged. Every read of the input — full workbook,
+   * metadata quick path, lint's raw zip — goes through this so one condition (missing or unreadable
+   * file) has one code. A file that does not exist is the one message and hint of [[missingInput]]
+   * on every verb (GH-621); an `XLException` or `IOException` keeps the library's own message — the
+   * reader's prefix once. Anything else is NOT a read failure and falls through untouched to
+   * `CliError.fromThrowable`: a defect stays `INTERNAL`, as ADR-017 reserves it.
    */
   private def classifyRead[A](path: Path)(read: IO[A]): IO[A] =
-    read.adaptError {
-      case cli: CliException => cli
-      case other =>
-        CliException(
-          CliError(
-            ErrorCode.IO_READ,
-            CliError.messageOf(other),
-            location = Some(Location.file(path.toString))
+    missingInputGuard(path)(read).handleErrorWith {
+      case x: XLException =>
+        IO.raiseError(
+          CliException(
+            CliError(
+              ErrorCode.IO_READ,
+              x.error.message,
+              location = Some(Location.file(path.toString)),
+              cause = Some(x.error)
+            )
           )
         )
+      case io: IOException =>
+        IO.raiseError(
+          CliException(
+            CliError(
+              ErrorCode.IO_READ,
+              CliError.messageOf(io),
+              location = Some(Location.file(path.toString))
+            )
+          )
+        )
+      case other => IO.raiseError(other)
     }
+
+  /**
+   * The one thing every path that opens `path` agrees on (GH-621): when it fails and the file does
+   * not exist, the failure is [[missingInput]] — whatever the path raised (the streaming reader and
+   * writer classify their own `IO_READ` from metadata they could not open, a `CliException` this
+   * guard alone may replace). Any failure on an existing file passes through untouched, so a write
+   * that fails on the OUTPUT side is never mistaken for an unreadable input.
+   */
+  private def missingInputGuard[A](path: Path)(run: IO[A]): IO[A] =
+    run.handleErrorWith { failure =>
+      IO.blocking(Files.exists(path)).flatMap { exists =>
+        if !exists then IO.raiseError(CliException(missingInput(path)))
+        else IO.raiseError(failure)
+      }
+    }
+
+  /**
+   * The `IO_READ` of an input that does not exist (GH-621): the cause named once, and the next step
+   * an agent most often needs — the file it expected was never written.
+   */
+  private[cli] def missingInput(path: Path): CliError =
+    CliError(
+      ErrorCode.IO_READ,
+      s"No such file: $path",
+      hint = Some("check the path; the previous write may have failed"),
+      location = Some(Location.file(path.toString))
+    )
 
   /**
    * Read the input through `excel` under [[classifyRead]]. Every in-memory load of the CLI goes
@@ -2421,6 +2487,7 @@ EXAMPLES:
     sheetFilter: Option[String],
     maxSizeOpt: Option[Long],
     format: DiffFormat,
+    formulasOnly: Boolean = false,
     io: CliIO = CliIO.system,
     mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
@@ -2431,7 +2498,18 @@ EXAMPLES:
       // a MEMORY_PRESSURE rides on the outcome
       val excel =
         MemoryGuard.excel(_ => IO.unit, warn = w => warnings.update(_ :+ w), admitLoads = false)
-      runDiffWith(excel, warnings, fileA, fileB, sheetFilter, readerConfig, format, io, mode)
+      runDiffWith(
+        excel,
+        warnings,
+        fileA,
+        fileB,
+        sheetFilter,
+        readerConfig,
+        format,
+        formulasOnly,
+        io,
+        mode
+      )
     }
 
   private def runDiffWith(
@@ -2442,6 +2520,7 @@ EXAMPLES:
     sheetFilter: Option[String],
     readerConfig: ReaderConfig,
     format: DiffFormat,
+    formulasOnly: Boolean,
     io: CliIO,
     mode: OutputMode
   ): IO[ExitCode] =
@@ -2454,7 +2533,7 @@ EXAMPLES:
       )
       wbA <- readWorkbook(excel, fileA, readerConfig)
       wbB <- readWorkbook(excel, fileB, readerConfig)
-      diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter) match
+      diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter, formulasOnly) match
         case Right(d) => IO.pure(d)
         // The only refusal: a -s filter naming a sheet neither workbook has — SHEET_NOT_FOUND
         // with the nearest names from both books, keeping the diff's own message
@@ -2543,6 +2622,7 @@ EXAMPLES:
       case Left(err) =>
         val at = Some(Location.file(file.toString))
         val error = err match
+          case XLError.IOError(_) if !Files.exists(file) => missingInput(file)
           case XLError.IOError(_) | XLError.ParseError(_, _) =>
             CliError(ErrorCode.IO_READ, err.message, location = at, cause = Some(err))
           case other => CliError.fromXLError(other, at)
@@ -2745,7 +2825,9 @@ EXAMPLES:
         (stream, readQuery) match
           case (true, Some(query)) =>
             streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
-              Reads.run(query, SheetSource.streaming(filePath, excel), sheetNameOpt, mode, warn)
+              missingInputGuard(filePath)(
+                Reads.run(query, SheetSource.streaming(filePath, excel), sheetNameOpt, mode, warn)
+              )
           case _ if stream && isStreamingWriteCmd =>
             // GH-496: a streaming write never recalculates, so --strict could only ever report
             // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
@@ -2758,9 +2840,12 @@ EXAMPLES:
                 )
               )
             else
-              streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
-                executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io, warn)
-                  .map(Payload.text)
+              // GH-621: a missing input is the one IO_READ diagnostic here too (the streaming
+              // writer reads workbook.xml first and reports its own IO_READ without the hint)
+              missingInputGuard(filePath)(
+                streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
+                  executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io, warn)
+              ).map(Payload.text)
           case _ =>
             // --stream accepted but with no O(1) path for this verb: the workbook is loaded in
             // memory and only the write goes through the streaming backend — say so
@@ -3445,7 +3530,7 @@ EXAMPLES:
       IO.raiseError(new Exception("Internal: deps is dispatched in execute"))
 
     // Diff has its own runner (two input files, custom exit codes) — never reaches here
-    case CliCommand.Diff(_, _) =>
+    case CliCommand.Diff(_, _, _) =>
       IO.raiseError(new Exception("Internal: diff is dispatched via runDiff"))
 
     // Lint has its own runner (raw-zip inspection, custom exit codes) — never reaches here

@@ -1,0 +1,63 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+--json
+filter
+--where
+B > 0
+--limit
+0
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "filter",
+  "version": "<VERSION>",
+  "data": {
+    "matched": 4,
+    "shown": 4,
+    "truncated": false,
+    "limit": null,
+    "rows": [
+      {
+        "row": 1,
+        "cells": {
+          "A": "Hello",
+          "B": 10,
+          "C": 45306
+        }
+      },
+      {
+        "row": 2,
+        "cells": {
+          "A": "World",
+          "B": 20,
+          "C": 45473
+        }
+      },
+      {
+        "row": 3,
+        "cells": {
+          "A": "Total",
+          "B": 12.5,
+          "C": null
+        }
+      },
+      {
+        "row": 4,
+        "cells": {
+          "A": null,
+          "B": 42.5,
+          "C": null
+        }
+      }
+    ]
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

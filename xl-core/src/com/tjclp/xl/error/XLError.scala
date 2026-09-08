@@ -126,6 +126,21 @@ enum XLError derives CanEqual:
   /** A sheet-scoped operation ran without a sheet; `available` lists the workbook's sheet names. */
   case SheetRequired(context: String, available: Vector[String])
 
+  /**
+   * Defined name not found (GH-626). `available` lists the workbook's defined names when the caller
+   * has them: the nearest become [[XLError.candidates]] ("did you mean") by the same edit-distance
+   * rule as [[SheetNotFound]], and the message names them all.
+   */
+  case NameNotFound(name: String, available: Vector[String] = Vector.empty)
+
+  /**
+   * An operation's argument is out of range or malformed — a validation refusal that needs no
+   * workbook (a column width past Excel's ceiling, an empty style merge, a count below one,
+   * GH-617). `op` names the operation (`col-width`, `style`), `reason` says what was wrong. Code
+   * `INVALID_ARGUMENT`; the batch position comes from the [[EditFailed]] that wraps it.
+   */
+  case InvalidArgument(op: String, reason: String)
+
 object XLError:
   extension (error: XLError)
     /** Get human-readable error message */
@@ -171,6 +186,10 @@ object XLError:
       case SheetRequired(context, available) =>
         s"$context requires a sheet: pass -s <name> or qualify the ref (Sheet!A1). Available: ${available
             .mkString(", ")}"
+      case NameNotFound(name, available) =>
+        if available.isEmpty then s"Named range '$name' not found"
+        else s"Named range '$name' not found. Available: ${available.mkString(", ")}"
+      case InvalidArgument(op, reason) => s"$op: $reason"
 
     /**
      * Stable machine-readable code: the SCREAMING_SNAKE of the case name (`SheetNotFound` →
@@ -184,6 +203,7 @@ object XLError:
     /** A one-line next step for the cases that have an obvious one; `None` otherwise. */
     def hint: Option[String] = error match
       case SheetNotFound(_, _) => Some("list sheets with `xl -f <file> sheets`")
+      case NameNotFound(_, _) => Some("list defined names with `xl -f <file> names`")
       case SheetRequired(_, _) => Some("use -s <name> or a qualified ref like 'Name'!A1")
       case ValueCountMismatch(expected, _, _) =>
         Some(s"provide exactly $expected values, or 1 to fill the range")
@@ -196,11 +216,13 @@ object XLError:
 
     /**
      * Names to offer as "did you mean": the available sheets of a [[SheetRequired]], the nearest of
-     * the available sheets of a [[SheetNotFound]] (`Suggest.closest`, as the CLI has always done).
+     * the available sheets of a [[SheetNotFound]] (`Suggest.closest`, as the CLI has always done)
+     * and, by the same rule, the nearest of the available names of a [[NameNotFound]].
      */
     def candidates: Vector[String] = error match
       case SheetRequired(_, available) => available
       case SheetNotFound(name, available) => Suggest.closest(name, available)
+      case NameNotFound(name, available) => Suggest.closest(name, available)
       case EditFailed(_, _, cause) => cause.candidates
       case _ => Vector.empty
 

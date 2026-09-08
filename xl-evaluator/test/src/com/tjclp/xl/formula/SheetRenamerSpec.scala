@@ -369,7 +369,9 @@ class SheetRenamerSpec extends ScalaCheckSuite:
     // workbook-level refusals have no site
     assertEquals(
       SheetRenamer.renameLocated(wb, SheetName.unsafe("Nope"), Data),
-      Left(SheetRenamer.Refusal(None, XLError.SheetNotFound("Nope"))): Either[
+      Left(
+        SheetRenamer.Refusal(None, XLError.SheetNotFound("Nope", Vector("Sheet1", "Sheet2")))
+      ): Either[
         SheetRenamer.Refusal,
         Workbook
       ]
@@ -412,7 +414,7 @@ class SheetRenamerSpec extends ScalaCheckSuite:
   test("the usual Workbook.rename refusals still apply") {
     assertEquals(
       SheetRenamer.rename(repro, SheetName.unsafe("Nope"), Data),
-      Left(XLError.SheetNotFound("Nope")): XLResult[Workbook]
+      Left(XLError.SheetNotFound("Nope", Vector("Sheet1", "Sheet2"))): XLResult[Workbook]
     )
     assertEquals(
       SheetRenamer.rename(repro, Sheet1, SheetName.unsafe("Sheet2")),
@@ -443,7 +445,7 @@ class SheetRenamerSpec extends ScalaCheckSuite:
     val broken = repro.put(sheetNamed(repro, "Sheet2").put(ref"F1", f("Sheet1!A1+", None)))
     assertEquals(
       SheetRenamer.rename(broken, SheetName.unsafe("Nope"), Data),
-      Left(XLError.SheetNotFound("Nope")): XLResult[Workbook]
+      Left(XLError.SheetNotFound("Nope", Vector("Sheet1", "Sheet2"))): XLResult[Workbook]
     )
     assertEquals(
       SheetRenamer.rename(broken, Sheet1, SheetName.unsafe("Sheet2")),

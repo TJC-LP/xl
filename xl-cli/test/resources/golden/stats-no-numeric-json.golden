@@ -1,0 +1,32 @@
+## args
+-f
+<DIR>/simple.xlsx
+--json
+stats
+Data!A1:A3
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "stats",
+  "version": "<VERSION>",
+  "data": {
+    "sheet": "Data",
+    "range": "A1:A3",
+    "count": 0,
+    "sum": 0,
+    "min": null,
+    "max": null,
+    "mean": null
+  },
+  "warnings": [
+    {
+      "code": "NO_NUMERIC_VALUES",
+      "message": "No numeric values in range A1:A3"
+    }
+  ],
+  "error": null
+}
+## stderr
