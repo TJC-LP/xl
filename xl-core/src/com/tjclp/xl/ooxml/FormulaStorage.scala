@@ -24,6 +24,8 @@ import java.util.Locale
  *   - [[bareFunctionName]] — the parser's rule: any `_xlfn.` / `_xlws.` prefix is dropped before
  *     the registry lookup, so inherited formulas parse whether or not the reader canonicalized
  *     them.
+ *   - [[bareFutureCalls]] — the lint's rule (`xlfn-missing`, GH-577): the calls in a stored formula
+ *     that [[toStored]] would still prefix, observed by the same scanner.
  *
  * The scanner is grammar-light on purpose: it skips string literals (`"..."` with `""` escapes),
  * quoted sheet names (`'...'` with `''` escapes), bracketed structured/external references
@@ -258,7 +260,37 @@ object FormulaStorage:
     val bare = expr.stripPrefix("=")
     // Fast path: without a '(' there is no call and no LET/LAMBDA scope — nothing to prefix
     if bare.indexOf('(') < 0 then bare
-    else rewriteCalls(bare)(storedCall, storedParam)
+    else rewriteCalls(bare)(storedCall, (token, _) => storedParam(token))
+
+  /**
+   * GH-577: the upper-case bare names of the calls in a stored formula whose spelling [[toStored]]
+   * would change — a [[FutureFunctions]] call without `_xlfn.` (or with `_xlws.` alone, which Excel
+   * does not resolve), and a LET / LAMBDA whose parameters lack `_xlpm.` (the openpyxl-style
+   * `_xlfn.LET(x,1,x+1)`) — distinct, in order of first appearance. This runs the SAME scanner as
+   * [[toStored]] with recording callbacks in place of the rewriting ones, so
+   * `bareFutureCalls(text).isEmpty` holds exactly when `toStored(text)` returns `text` (minus a
+   * leading '=') unchanged: a lint built on it cannot disagree with the writer. Excel and
+   * LibreOffice show `#NAME?` for a bare future function on the first recalculation and report a
+   * LET / LAMBDA without `_xlpm.` as unreadable content on open.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def bareFutureCalls(text: String): Vector[String] =
+    // Same fast path as toStored: without a '(' there is nothing the writer would prefix
+    if text.indexOf('(') < 0 then Vector.empty
+    else
+      var found = Vector.empty[String]
+      def record(name: String): Unit = if !found.contains(name) then found = found :+ name
+      rewriteCalls(text)(
+        token =>
+          if storedCall(token) != token then
+            record(bareFunctionName(token).toUpperCase(Locale.ROOT))
+          token
+        ,
+        (token, isLet) =>
+          if storedParam(token) != token then record(if isLet then "LET" else "LAMBDA")
+          token
+      )
+      found
 
   /**
    * The model form of a stored formula: `_xlfn.` / `_xlfn._xlws.` stripped from calls to functions
@@ -269,7 +301,7 @@ object FormulaStorage:
   def fromStored(text: String): String =
     // Fast path: every storage prefix starts with "_xl"; a formula without it is already bare
     if !containsStoragePrefix(text) then text
-    else rewriteCalls(text)(modelCall, modelParam)
+    else rewriteCalls(text)(modelCall, (token, _) => modelParam(token))
 
   private def storedCall(token: String): String =
     if startsWithIgnoreCase(token, XlfnPrefix) then token
@@ -367,15 +399,18 @@ object FormulaStorage:
   /**
    * Copy `text`, applying `onCall` to every identifier token that is directly followed (modulo
    * whitespace) by `(` — i.e. every function call — and `onParam` to every LET/LAMBDA parameter (a
-   * declaration at a parameter position, or a later reference to a declared name), outside string
-   * literals, quoted sheet names, bracketed references, array constants and error literals. Inside
-   * brackets nothing is interpreted except the `'` escape (`Table1['[Total]`), which keeps the
-   * bracket depth honest; quote handling there would swallow the rest of the formula.
+   * declaration at a parameter position, or a later reference to a declared name; the second
+   * argument is true inside a LET, false inside a LAMBDA), outside string literals, quoted sheet
+   * names, bracketed references, array constants and error literals. Inside brackets nothing is
+   * interpreted except the `'` escape (`Table1['[Total]`), which keeps the bracket depth honest;
+   * quote handling there would swallow the rest of the formula. Every other byte is copied in
+   * place, so the result equals `text` exactly when both callbacks are identities on every token
+   * they see — the property [[bareFutureCalls]] relies on.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def rewriteCalls(text: String)(
     onCall: String => String,
-    onParam: String => String
+    onParam: (String, Boolean) => String
   ): String =
     val n = text.length
     val sb = new java.lang.StringBuilder(n + 16)
@@ -411,7 +446,7 @@ object FormulaStorage:
             if end > 0 then
               val token = text.substring(i + 1, end - 1).trim
               head.names += bareParameterName(token).toUpperCase(Locale.ROOT)
-              sb.append('[').append(onParam(token)).append(']')
+              sb.append('[').append(onParam(token, head.isLet)).append(']')
               i = end
             else
               bracketDepth += 1
@@ -480,14 +515,15 @@ object FormulaStorage:
               !partOfRange && head.depth == parenDepth && next == ',' &&
               (!head.isLet || head.argIndex % 2 == 0)
             case Nil => false
-          if declares then
-            scopes match
-              case head :: _ => head.names += key
-              case Nil => ()
-            sb.append(onParam(token))
-          else if !partOfRange && scopes.exists(_.names.contains(key)) then
-            sb.append(onParam(token))
-          else sb.append(token)
+          scopes match
+            case head :: _ if declares =>
+              head.names += key
+              sb.append(onParam(token, head.isLet))
+            case _ =>
+              // A reference resolves to the innermost scope declaring the name
+              scopes.find(_.names.contains(key)) match
+                case Some(scope) if !partOfRange => sb.append(onParam(token, scope.isLet))
+                case _ => sb.append(token)
         else sb.append(text, i, end)
         i = end
       else

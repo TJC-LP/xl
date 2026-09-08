@@ -1456,26 +1456,37 @@ class WorkbookLintSpec extends FunSuite:
       """<definedName name="Fine">_xlfn.MAXIFS(Sheet1!$B$1:$B$3,Sheet1!$A$1:$A$3,1)</definedName>"""
   )
 
-  test("GH-588: bareFutureFunctions names every unprefixed post-2007 call and nothing else") {
-    assertEquals(WorkbookLint.bareFutureFunctions("IFS(A1=1,1,TRUE,0)"), Vector("IFS"))
-    assertEquals(WorkbookLint.bareFutureFunctions("_xlfn.IFS(A1=1,1,TRUE,0)"), Vector.empty)
-    assertEquals(WorkbookLint.bareFutureFunctions("_XLFN.ifs(A1)"), Vector.empty)
-    assertEquals(WorkbookLint.bareFutureFunctions("_xlfn._xlws.FILTER(A1:A3,B1:B3)"), Vector.empty)
-    // `_xlws.` alone is not a prefix Excel resolves — the `_xlfn.` in front of it is missing
-    assertEquals(WorkbookLint.bareFutureFunctions("_xlws.FILTER(A1:A3,B1:B3)"), Vector("FILTER"))
-    assertEquals(WorkbookLint.bareFutureFunctions("xlookup(A1,A1:A3,B1:B3)"), Vector("XLOOKUP"))
-    assertEquals(WorkbookLint.bareFutureFunctions("SUMIFS(A1:A3,B1:B3,1)"), Vector.empty)
-    assertEquals(WorkbookLint.bareFutureFunctions("\"IFS(\"&SUM(A1)"), Vector.empty)
-    assertEquals(WorkbookLint.bareFutureFunctions("'IFS('!A1+'it''s IFS('!B1"), Vector.empty)
-    assertEquals(WorkbookLint.bareFutureFunctions("SUM(Table1[IFS(])"), Vector.empty)
-    assertEquals(WorkbookLint.bareFutureFunctions("XIFS(1)+MY.IFS(1)+IFS2(1)"), Vector.empty)
-    assertEquals(
-      WorkbookLint.bareFutureFunctions("IFS(1,XLOOKUP(1,A:A,B:B),IFS(2,CONCAT(1)))"),
-      Vector("IFS", "XLOOKUP", "CONCAT")
-    )
-    assertEquals(WorkbookLint.bareFutureFunctions("LET(x,1,x+1)"), Vector("LET"))
-    assertEquals(WorkbookLint.bareFutureFunctions(""), Vector.empty)
-    assertEquals(WorkbookLint.bareFutureFunctions("A1*2"), Vector.empty)
+  /**
+   * The openpyxl class the lint exists for: `_xlfn.` present on LET, `_xlpm.` absent from its
+   * parameters — Excel reports the book as unreadable content on open.
+   */
+  private val halfPrefixedLetSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><f>_xlfn.LET(x,1,x+1)</f><v>2</v></c></row>
+  </sheetData>"""
+  )
+
+  /** A part whose ROOT is a formula-text label: never a site (it has no parent to name one). */
+  private val rootFormulaSheetXml = "<f>IFS(1,1)</f>"
+
+  test("GH-588: the lint's rule is the writer's — an _xlfn.LET with bare parameters is flagged") {
+    // FormulaStorage.bareFutureCalls runs toStored's scanner with recording callbacks, so the
+    // half-prefixed LET (which toStored completes to _xlfn.LET(_xlpm.x,1,_xlpm.x+1)) is a finding
+    // here exactly because the writer would change it; FormulaStorageSpec pins the invariant.
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> halfPrefixedLetSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.XlfnMissing))
+    val f = findings.head
+    assertEquals(f.locator, """<c r="A1"><f>""")
+    assert(f.message.contains("1 formula(s)"), f.toString)
+    assert(f.message.contains("(LET; A1)"), f.toString)
+    assert(f.message.contains("_xlpm."), f.toString)
+  }
+
+  test("GH-588: a part whose root element is formula text records no site in either mode") {
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> rootFormulaSheetXml)
+    val dom = lintOf(parts)
+    assert(!dom.exists(_.category == LintCategory.XlfnMissing), dom.toString)
+    assertEquals(lintStreamOf(parts), dom)
   }
 
   test("GH-588: a hand-built bare IFS in a CF rule is flagged as XlfnMissing on the sheet part") {
@@ -1495,7 +1506,9 @@ class WorkbookLintSpec extends FunSuite:
     // the source, and bare text parses to the same model as prefixed text — so an IDENTICAL
     // re-author (`xl name add` with the same formula) copies the bare text through and lints the
     // same (FutureFunctionPrefixSpec pins the writer). A message promising that "re-writing the
-    // affected part" or re-authoring the same rule heals it sends an agent into a loop.
+    // affected part" or re-authoring the same rule heals it sends an agent into a loop. The
+    // finding states the condition in one clause and points at the lint docs for the slot-by-slot
+    // semantics (cli.md, LIMITATIONS.md), which is where GH-593 will edit them.
     val cf = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> bareCfIfsSheetXml)).head
     val dn = lintOf(baseParts + ("xl/workbook.xml" -> bareNameWorkbookXml)).head
     Vector(cf, dn).foreach { f =>
@@ -1504,10 +1517,13 @@ class WorkbookLintSpec extends FunSuite:
         !f.message.contains("re-author the rule, validation or name with xl to heal it"),
         f.toString
       )
-      assert(f.message.contains("regenerates the slot"), f.toString)
-      assert(f.message.contains("no longer equals the source"), f.toString)
-      assert(f.message.contains("same text"), f.toString)
-      assert(f.message.contains("not under --stream"), f.toString)
+      assert(f.message.contains("only when xl regenerates it"), f.toString)
+      assert(f.message.contains("re-authoring identical text does not"), f.toString)
+      assert(f.message.contains("docs/reference/cli.md"), f.toString)
+      // CLI-level detail (verbs, --stream) lives in the docs, not in a library finding
+      assert(!f.message.contains("--stream"), f.toString)
+      assert(!f.message.contains("name add"), f.toString)
+      assert(f.message.length <= 320, s"${f.message.length} chars: ${f.message}")
     }
   }
 
@@ -1682,6 +1698,11 @@ class WorkbookLintSpec extends FunSuite:
     "prefixed xlfn everywhere" ->
       (baseParts + ("xl/worksheets/sheet1.xml" -> prefixedXlfnSheetXml)),
     "bare xlfn defined name" -> (baseParts + ("xl/workbook.xml" -> bareNameWorkbookXml)),
+    "half-prefixed LET cell" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> halfPrefixedLetSheetXml)),
+    // the root element is never a formula-text site, in either scanner
+    "root-level formula element" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> rootFormulaSheetXml)),
     // GH-529: suffix-less Microsoft externalLinkPath variants resolve clean in both modes
     "ms xlStartup external" ->
       (externalParts +

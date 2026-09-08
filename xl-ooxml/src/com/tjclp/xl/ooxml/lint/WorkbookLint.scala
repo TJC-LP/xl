@@ -79,10 +79,12 @@ enum LintCategory derives CanEqual:
   case CalcChainStale
 
   /**
-   * A post-2007 function stored bare — `IFS(` instead of `_xlfn.IFS(` — in a cell `<f>`, a
-   * conditional-formatting `<formula>` / cfvo, a data-validation `<formula1>`/`<formula2>` or a
-   * `<definedName>`: an undefined name to Excel and LibreOffice, `#NAME?` on the first
-   * recalculation even though the cached value was right (GH-556, GH-577).
+   * A post-2007 function stored bare — `IFS(` instead of `_xlfn.IFS(` — or a LET / LAMBDA whose
+   * parameters lack `_xlpm.` in a cell `<f>`, a conditional-formatting `<formula>` / cfvo, a
+   * data-validation `<formula1>`/`<formula2>` or a `<definedName>`: an undefined name to Excel and
+   * LibreOffice, `#NAME?` on the first recalculation even though the cached value was right
+   * (GH-556, GH-577). The rule is [[FormulaStorage.bareFutureCalls]] — whatever the writer would
+   * still prefix.
    */
   case XlfnMissing
 
@@ -147,11 +149,13 @@ final case class Finding(
  *     index the SOURCE book's table, so a sheet adopted verbatim carries danglers and Excel repairs
  *     the file by removing every such formula (plus calcChain). One finding per part per dangling
  *     ordinal
- *   - post-2007 functions stored bare (GH-577) — `IFS(` where Excel stores `_xlfn.IFS(` — in a cell
- *     `<f>` (or x14's `<xm:f>`), a CF `<formula>`, a DV `<formula1>`/`<formula2>` or a
- *     `<definedName>`: not a repair class but a silent `#NAME?` on the first recalculation, which
- *     no cached value reveals. Aggregated to ONE finding per part (first-5 site sample, total
- *     count, the bare names) like the leading-'=' check
+ *   - post-2007 functions stored bare (GH-577) — `IFS(` where Excel stores `_xlfn.IFS(`, or a LET /
+ *     LAMBDA without `_xlpm.` on its parameters — in a cell `<f>` (or x14's `<xm:f>`), a CF
+ *     `<formula>`, a DV `<formula1>`/`<formula2>` or a `<definedName>`: not a repair class but a
+ *     silent `#NAME?` on the first recalculation, which no cached value reveals. The rule is the
+ *     writer's own (`FormulaStorage.bareFutureCalls`: whatever `toStored` would still change).
+ *     Aggregated to ONE finding per part (first-5 site sample, total count, the bare names) like
+ *     the leading-'=' check
  *
  * Lint runs on the RAW ZIP PARTS, never on the parsed domain model — a full read would
  * repair/normalize the very structure lint inspects (the reader silently falls back on unresolved
@@ -824,36 +828,36 @@ object WorkbookLint:
     )
     val extRefs = cellObs.foldLeft(ExternalRefFacts.empty)(_.add(_))
     val chain = cellObs.foldLeft(ChainSheetFacts.empty)(_.add(_, chainCandidates))
-    val xlfn = xlfnSitesOf(root).foldLeft(XlfnFacts.empty) { case (acc, (site, locator, text)) =>
-      acc.add(site, locator, bareFutureFunctions(text))
-    }
     SheetScan(
       root.label,
       mainChildLabelsOf(root),
       captures,
       bounds,
       formulaEq,
-      xlfnFindings(part, xlfn, "formula"),
+      xlfnFindings(part, xlfnFactsOf(root), "formula"),
       extRefs,
       dataTables,
       chain
     )
 
   /**
-   * Every formula-text element of a part in document order, as (sample name, locator, text): an
-   * element in [[formulaTextLabels]] with no element children. One WITH element children (x14's
-   * `<x14:formula1><xm:f>…</xm:f></x14:formula1>`) is a container — the inner element is the site.
-   * The SAX scanner observes exactly the same set (parity-pinned).
+   * The bare-call facts of a part, folded over its formula-text elements in document order: an
+   * element in [[formulaTextLabels]] with no element children and a parent (the root of a part is
+   * never a site). One WITH element children (x14's `<x14:formula1><xm:f>…</xm:f></x14:formula1>`)
+   * is a container — the inner element is the site. Each site's text is reduced to its bare names
+   * on the spot, so the walk never holds more than one formula's text (like the sibling `CellObs`
+   * scanners, which fold derived facts). The SAX scanner observes exactly the same set
+   * (parity-pinned).
    */
-  private def xlfnSitesOf(root: Elem): Vector[(String, String, String)] =
-    def walk(e: Elem, parent: Option[Elem]): Vector[(String, String, String)] =
+  private def xlfnFactsOf(root: Elem): XlfnFacts =
+    def walk(acc: XlfnFacts, e: Elem, parent: Option[Elem]): XlfnFacts =
       val children = e.child.toVector.collect { case c: Elem => c }
       parent match
         case Some(p) if formulaTextLabels.contains(e.label) && children.isEmpty =>
           val (site, locator) = xlfnSite(e.label, p.label, XmlUtil.getAttrOpt(p, "r"))
-          Vector((site, locator, e.text))
-        case _ => children.flatMap(walk(_, Some(e)))
-    walk(root, None)
+          acc.add(site, locator, FormulaStorage.bareFutureCalls(e.text))
+        case _ => children.foldLeft(acc)(walk(_, _, Some(e)))
+    walk(XlfnFacts.empty, root, None)
 
   /** One `<c>` element's data-table facts (DOM side of the parity pair). */
   private def domCellObs(cell: Elem): CellObs =
@@ -994,14 +998,16 @@ object WorkbookLint:
         }
         // GH-577: a child element inside an open formula-text element makes it a container (the
         // DOM scanner skips elements with element children); a nested formula-text element opens
-        // its own capture in its place.
+        // its own capture in its place. The root element is never a site (the DOM walk needs a
+        // parent to name one), so a part whose root is `<f>` records nothing in either mode.
         xlfnCapture.foreach(_.sawChild = true)
         if label == "c" then cellR = Option(atts.getValue("", "r"))
-        if formulaTextLabels.contains(label) then
-          val parentLabel = parents.headOption.getOrElse("")
-          val (site, locator) =
-            xlfnSite(label, parentLabel, if parentLabel == "c" then cellR else None)
-          xlfnCapture = Some(new XlfnCapture(depth, site, locator))
+        parents match
+          case parentLabel :: _ if formulaTextLabels.contains(label) =>
+            val (site, locator) =
+              xlfnSite(label, parentLabel, if parentLabel == "c" then cellR else None)
+            xlfnCapture = Some(new XlfnCapture(depth, site, locator))
+          case _ => ()
         parents = label :: parents
         depth += 1
 
@@ -1016,7 +1022,8 @@ object WorkbookLint:
         xlfnCapture match
           case Some(open) if open.depth == depth =>
             if !open.sawChild then
-              xlfn = xlfn.add(open.site, open.locator, bareFutureFunctions(open.text.toString))
+              xlfn = xlfn
+                .add(open.site, open.locator, FormulaStorage.bareFutureCalls(open.text.toString))
             xlfnCapture = None
           case _ => ()
         if label == "c" then cellR = None
@@ -1140,8 +1147,8 @@ object WorkbookLint:
   /**
    * Accumulated bare-call facts for ONE part (GH-577): the count of offending formula-text sites,
    * the first [[xlfnSampleSize]] of them in document order, the first site's locator, and the
-   * distinct bare names seen (bounded by [[FormulaStorage.FutureFunctions]], never by the cell
-   * count). Folded identically by both scanners for parity.
+   * distinct bare names seen (bounded by [[FormulaStorage.FutureFunctions]] plus LET / LAMBDA,
+   * never by the cell count). Folded identically by both scanners for parity.
    */
   private final case class XlfnFacts(
     sample: Vector[String],
@@ -1180,15 +1187,11 @@ object WorkbookLint:
           part,
           LintCategory.XlfnMissing,
           facts.firstLocator.getOrElse(""),
-          s"${facts.count} $noun(s) call post-2007 function(s) without Excel's _xlfn. storage " +
-            s"prefix (${facts.functions.toVector.sorted.mkString(", ")}; $sites) — Excel and " +
-            "LibreOffice treat the bare name as undefined and show #NAME? on the first " +
-            "recalculation; xl writes the prefix only where it regenerates the slot, and a CF " +
-            "block, DV container or name table is regenerated only when its model no longer " +
-            "equals the source — add or change a rule, validation or name in that part to heal " +
-            "it (re-entering the same text, e.g. `xl name add` with the same formula, compares " +
-            "equal and is copied through bare); a cell heals on any in-memory edit of its " +
-            "sheet, not under --stream"
+          s"${facts.count} $noun(s) call post-2007 function(s) without Excel's _xlfn. (or " +
+            s"_xlpm.) storage prefix (${facts.functions.toVector.sorted.mkString(", ")}; " +
+            s"$sites) — Excel shows #NAME? on the first recalculation; a write heals the slot " +
+            "only when xl regenerates it (re-authoring identical text does not), see xl lint " +
+            "in docs/reference/cli.md"
         )
       )
 
@@ -1200,7 +1203,7 @@ object WorkbookLint:
         acc.add(
           s""""$name"""",
           s"""<definedName name="$name">""",
-          bareFutureFunctions(dn.text)
+          FormulaStorage.bareFutureCalls(dn.text)
         )
     }
     xlfnFindings(workbookPart, facts, "defined name")
@@ -1599,67 +1602,6 @@ object WorkbookLint:
           case c => loop(i + 1, Some(c), acc)
 
     loop(0, None, Set.empty)
-
-  /**
-   * Upper-case names of the post-2007 functions a stored formula calls WITHOUT Excel's `_xlfn.`
-   * prefix (GH-577), distinct, in order of first appearance. A call is an identifier token directly
-   * followed (modulo whitespace) by `(`; the token is bare when its name (after any `_xlfn.` /
-   * `_xlws.` prefixes) is in [[FormulaStorage.FutureFunctions]] and it does not start with `_xlfn.`
-   * — so `_xlws.FILTER(` counts (Excel resolves only `_xlfn._xlws.FILTER`). Precision rules,
-   * false-positive-averse by construction: double-quoted string literals (`""` escape), quoted
-   * sheet names (`''` escape) and bracketed text (structured references, external ordinals,
-   * nesting-aware) are skipped; a token starting with a digit is never a call; membership is
-   * case-insensitive (`xlookup(` is bare).
-   */
-  private[lint] def bareFutureFunctions(formula: String): Vector[String] =
-    val n = formula.length
-
-    def isTokenChar(c: Char): Boolean = c.isLetterOrDigit || c == '_' || c == '.'
-
-    @annotation.tailrec
-    def skipQuoted(i: Int, quote: Char): Int = // i is the first index after the opening quote
-      if i >= n then n
-      else if formula(i) == quote then
-        if i + 1 < n && formula(i + 1) == quote then skipQuoted(i + 2, quote) else i + 1
-      else skipQuoted(i + 1, quote)
-
-    @annotation.tailrec
-    def skipBracket(i: Int, open: Int): Int = // i is the first index after an opening '['
-      if i >= n then n
-      else
-        formula(i) match
-          case '[' => skipBracket(i + 1, open + 1)
-          case ']' => if open == 1 then i + 1 else skipBracket(i + 1, open - 1)
-          case _ => skipBracket(i + 1, open)
-
-    @annotation.tailrec
-    def tokenEnd(i: Int): Int = if i < n && isTokenChar(formula(i)) then tokenEnd(i + 1) else i
-
-    @annotation.tailrec
-    def skipSpaces(i: Int): Int = if i < n && formula(i).isWhitespace then skipSpaces(i + 1) else i
-
-    def bareCall(token: String): Option[String] =
-      val name = FormulaStorage.bareFunctionName(token).toUpperCase(java.util.Locale.ROOT)
-      val prefixed = token.regionMatches(true, 0, FormulaStorage.XlfnPrefix, 0, 6)
-      Option.when(!prefixed && FormulaStorage.FutureFunctions.contains(name))(name)
-
-    @annotation.tailrec
-    def loop(i: Int, acc: Vector[String]): Vector[String] =
-      if i >= n then acc
-      else
-        formula(i) match
-          case '"' => loop(skipQuoted(i + 1, '"'), acc)
-          case '\'' => loop(skipQuoted(i + 1, '\''), acc)
-          case '[' => loop(skipBracket(i + 1, 1), acc)
-          case c if isTokenChar(c) =>
-            val end = tokenEnd(i)
-            val isCall = (c.isLetter || c == '_') && skipSpaces(end) < n &&
-              formula(skipSpaces(end)) == '('
-            val found = if isCall then bareCall(formula.substring(i, end)) else None
-            loop(end, found.filterNot(acc.contains).fold(acc)(acc :+ _))
-          case _ => loop(i + 1, acc)
-
-    loop(0, Vector.empty)
 
   /**
    * Accumulated facts for one data-table record, keyed by the record's own `ref`. Every field is a
