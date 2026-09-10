@@ -294,8 +294,13 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
 
   val xlookup: FunctionSpec[CellValue] { type Args = XLookupArgs } =
     FunctionSpec.simple[CellValue, XLookupArgs]("XLOOKUP", Arity.Range(3, 6)) { (args, ctx) =>
-      val (lookupValue, lookupLoc, returnLoc, ifNotFoundOpt, matchModeOpt, searchModeOpt) =
+      val (lookupValue, lookupLoc, returnLoc, ifNotFoundSlot, matchModeSlot, searchModeSlot) =
         args
+      // GH-654: XLOOKUP reads an empty optional slot as omitted — `XLOOKUP(x,a,b,,0)` is #N/A
+      // when nothing matches, not a blank result (Excel and LibreOffice agree)
+      val ifNotFoundOpt = unlessOmitted(ifNotFoundSlot)
+      val matchModeOpt = unlessOmitted(matchModeSlot)
+      val searchModeOpt = unlessOmitted(searchModeSlot)
       val matchModeExpr = matchModeOpt.getOrElse(TExpr.Lit(0))
       val searchModeExpr = searchModeOpt.getOrElse(TExpr.Lit(1))
       // GH-394: resolve locations first (Name locations have no static range), then validate

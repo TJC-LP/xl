@@ -33,6 +33,9 @@ trait TExprCoercions:
         _: TExpr.Gte[?] =>
       true
     case _: TExpr.ToInt | _: TExpr.DateToSerial | _: TExpr.DateTimeToSerial => true
+    // GH-603: an omitted argument evaluates to Empty and coerces per target like a blank cell
+    // (0 / "" / FALSE / the blank date) — `LEFT("abc",)` is "", `RATE(10,,-100,150)` reads pmt 0
+    case TExpr.Missing => true
     case _ => false
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))

@@ -192,6 +192,7 @@ object FormulaFormatting:
         // Literals: no references
         case TExpr.Lit(_) => Vector.empty
         case TExpr.ErrorLit(_) => Vector.empty
+        case TExpr.Missing => Vector.empty
 
     loop(expr)
 

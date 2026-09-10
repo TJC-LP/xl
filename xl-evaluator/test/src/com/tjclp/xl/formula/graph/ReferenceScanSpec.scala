@@ -179,7 +179,7 @@ class ReferenceScanSpec extends ScalaCheckSuite:
     assertEquals(reach("=MyFunc(1)"), Reach.Unbounded)
     assertEquals(reach("=ZZZNOTAFUNC(Twice())"), areas("Sheet2" -> "A1"))
     assertEquals(
-      reach("=ZZZNOTAFUNC(SINGLE(A1),RRI(3,B1,B2))"),
+      reach("=ZZZNOTAFUNC(ZZZALSONOTAFUNC(A1),ZZZNORTHIS(3,B1,B2))"),
       areas("Sheet1" -> "A1", "Sheet1" -> "B1", "Sheet1" -> "B2"),
       "an unknown function that is no name reads only its arguments"
     )

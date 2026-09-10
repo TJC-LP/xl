@@ -1,12 +1,13 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.sheets.Sheet
 
 trait FunctionSpecsReference extends FunctionSpecsBase:
   // extractARef is inherited from FunctionSpecsBase (shared with OFFSET).
@@ -284,4 +285,105 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
               )
             )
       }
+    }
+
+  // ===== GH-604: SINGLE — the implicit-intersection operator `@` =====
+
+  /** A defined-name argument, as the range location it may denote. */
+  private def nameLocation(expr: TExpr[?]): Option[TExpr.RangeLocation] = expr match
+    case TExpr.NameRef(name) => Some(TExpr.RangeLocation.Name(name, None))
+    case TExpr.SheetNameRef(sheet, name) => Some(TExpr.RangeLocation.Name(name, Some(sheet)))
+    case _ => None
+
+  /**
+   * Excel's implicit intersection of `range` with the formula's own cell: a single cell is itself;
+   * a one-row range yields the cell in the formula's column, a one-column range the cell in the
+   * formula's row; anything else — a 2-D range, or a vector the formula's row/column does not cross
+   * — is `#VALUE!`.
+   */
+  private def intersectionCell(range: CellRange, current: Option[ARef]): Either[EvalError, ARef] =
+    if range.width == 1 && range.height == 1 then Right(range.start)
+    else
+      current match
+        case None =>
+          Left(
+            EvalError.EvalFailed(
+              s"@${range.toA1} (implicit intersection) needs the formula's cell position",
+              Some("@range")
+            )
+          )
+        case Some(cell) =>
+          val col = cell.col.index0
+          val row = cell.row.index0
+          if range.height == 1 && col >= range.colStart.index0 && col <= range.colEnd.index0 then
+            Right(ARef.from0(col, range.rowStart.index0))
+          else if range.width == 1 && row >= range.rowStart.index0 && row <= range.rowEnd.index0
+          then Right(ARef.from0(range.colStart.index0, row))
+          else
+            Left(
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"@${range.toA1}: no cell in the formula's row or column (${cell.toA1})")
+              )
+            )
+
+  /**
+   * Shapes that print as one primary — everything the `@` operand slot re-parses unparenthesized.
+   */
+  private def isPrimaryShape(expr: TExpr[?]): Boolean = expr match
+    case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+        _: TExpr.Percent | _: TExpr.Concat | _: TExpr.UnaryPlus[?] | _: TExpr.Eq[?] |
+        _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] | _: TExpr.Gt[?] | _: TExpr.Gte[?] =>
+      false
+    case TExpr.Coerced(inner, _) => isPrimaryShape(inner)
+    case TExpr.ToInt(inner) => isPrimaryShape(inner)
+    case TExpr.DateToSerial(inner) => isPrimaryShape(inner)
+    case TExpr.DateTimeToSerial(inner) => isPrimaryShape(inner)
+    case _ => true
+
+  private def renderIntersectionOperand(arg: ArgSpec.SumProductArg, printer: ArgPrinter): String =
+    arg match
+      case Left(location) => printer.location(location)
+      case Right(expr) =>
+        val text = printer.expr(expr)
+        if isPrimaryShape(expr) then text else s"($text)"
+
+  /**
+   * SINGLE(x) — GH-604: the stored form (`_xlfn.SINGLE`) of Excel 365's implicit-intersection
+   * operator, spelled `@x` in the formula bar and in this model (the parser accepts both, the
+   * printer emits `@x`, `FormulaStorage` maps the two at the `<f>` boundary).
+   *
+   * Semantics: a scalar or a single cell is itself; a range intersects with the formula's cell (see
+   * [[intersectionCell]]) — the cell in the formula's row for a column vector, in its column for a
+   * row vector, `#VALUE!` otherwise; a defined name bound to a range intersects the same way; an
+   * array VALUE (a call result, not a reference) collapses to its top-left element.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  val single: FunctionSpec[CellValue] { type Args = ArgSpec.SumProductArg } =
+    FunctionSpec.simple[CellValue, ArgSpec.SumProductArg](
+      "SINGLE",
+      Arity.one,
+      renderFn = Some((arg, printer) => s"@${renderIntersectionOperand(arg, printer)}")
+    ) { (arg, ctx) =>
+      def intersect(targetSheet: Sheet, range: CellRange): Either[EvalError, CellValue] =
+        intersectionCell(range, ctx.currentCell).flatMap(rangeCellReader(targetSheet, ctx))
+      def resolved(location: TExpr.RangeLocation): Option[(Sheet, CellRange)] =
+        Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).toOption
+      arg match
+        case Left(location) =>
+          Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap {
+            case (targetSheet, range) => intersect(targetSheet, range)
+          }
+        case Right(expr) =>
+          nameLocation(expr).flatMap(resolved) match
+            case Some((targetSheet, range)) => intersect(targetSheet, range)
+            case None =>
+              val value = expr match
+                case _: TExpr.PolyRef | _: TExpr.SheetPolyRef | _: TExpr.UnaryPlus[?] =>
+                  TExpr.asResolvedValueExpr(expr)
+                case other => other
+              ctx.evalArrayExpr(value.asInstanceOf[TExpr[Any]]).map {
+                case ar: ArrayResult => if ar.isEmpty then CellValue.Empty else ar(0, 0)
+                case scalar => ArrayArithmetic.anyToCellValue(scalar)
+              }
     }

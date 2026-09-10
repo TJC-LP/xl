@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, ArrayArithmetic}
+import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -22,8 +22,21 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         coerceToBigDecimal(ExprValue.Cell(cached))
       case _ => BigDecimal(0)
 
-  val index: FunctionSpec[CellValue] { type Args = IndexArgs } =
-    FunctionSpec.simple[CellValue, IndexArgs]("INDEX", Arity.Range(2, 3)) { (args, ctx) =>
+  /**
+   * INDEX(array, row_num, [column_num])
+   *
+   * GH-654: a reference-returning function, typed `ArrayResult` like OFFSET and INDIRECT. The
+   * selected cell is a 1×1 result that collapses in scalar positions; Excel's 0 — or the omitted
+   * slot, `INDEX(rng,,2)` (GH-603) — selects the whole row or column (`SUM(INDEX(A1:B2,,2))` is
+   * B1+B2, `INDEX(rng,0,0)` the whole array), spilling standalone and folding under aggregates. The
+   * two-argument form on a one-row array reads its argument as column_num, on a one-column array as
+   * row_num, and on a 2-D array as row_num with the whole row selected (collapsing to that row's
+   * first cell in a scalar position — the value it always returned there). A whole-axis selection
+   * is bounded to the sheet's used range (as INDIRECT bounds "A:A"), so its cost follows the data
+   * rather than the reference; a position outside the array is a descriptive `#REF!`.
+   */
+  val index: FunctionSpec[ArrayResult] { type Args = IndexArgs } =
+    FunctionSpec.simple[ArrayResult, IndexArgs]("INDEX", Arity.Range(2, 3)) { (args, ctx) =>
       val (array, rowNumExpr, colNumOpt) = args
       for
         rowNum <- ctx.evalExpr(rowNumExpr)
@@ -35,46 +48,65 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         result <- {
           val startCol = arrayRange.colStart.index0
           val startRow = arrayRange.rowStart.index0
-          val numCols = arrayRange.colEnd.index0 - startCol + 1
-          val numRows = arrayRange.rowEnd.index0 - startRow + 1
+          val numCols = arrayRange.width
+          val numRows = arrayRange.height
+          val call = s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})"
 
-          // Excel INDEX behavior for 2-arg form:
-          // - Single-row array: second arg is col_num
-          // - Single-column array: second arg is row_num
-          // - Multi-dimensional: second arg is row_num, col defaults to 1
-          val (rowIdx, colIdx) = colNum match
-            case Some(c) =>
-              // 3-arg form: explicit row and column
-              (rowNum.toInt - 1, c.toInt - 1)
-            case None =>
-              // 2-arg form: interpretation depends on array shape
-              if numRows == 1 then
-                // Single-row array: second arg is column number
-                (0, rowNum.toInt - 1)
-              else if numCols == 1 then
-                // Single-column array: second arg is row number
-                (rowNum.toInt - 1, 0)
-              else
-                // Multi-dimensional array: second arg is row, column defaults to 1
-                (rowNum.toInt - 1, 0)
+          // Excel's two-argument form: the single position reads along a vector's long axis; on
+          // a 2-D array it is row_num and the whole row is selected (column_num 0)
+          val (rowPos, colPos): (Int, Int) = colNum match
+            case Some(c) => (rowNum.toInt, c.toInt)
+            case None if numRows == 1 => (1, rowNum.toInt)
+            case None => (rowNum.toInt, 0)
 
-          if rowIdx < 0 || rowIdx >= numRows then
-            Left(
-              EvalError.EvalFailed(
-                s"INDEX: row_num ${rowIdx + 1} is out of bounds (array has $numRows rows, valid range: 1-$numRows) (#REF!)",
-                Some(s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})")
+          // None = the whole axis (Excel's 0), Some(i) = one 0-based line of it
+          def axis(
+            pos: Int,
+            size: Int,
+            label: String,
+            noun: String
+          ): Either[EvalError, Option[Int]] =
+            if pos == 0 then Right(None)
+            else if pos < 0 || pos > size then
+              Left(
+                EvalError.EvalFailed(
+                  s"INDEX: $label $pos is out of bounds (array has $size $noun, valid range: 1-$size) (#REF!)",
+                  Some(call)
+                )
               )
-            )
-          else if colIdx < 0 || colIdx >= numCols then
-            Left(
-              EvalError.EvalFailed(
-                s"INDEX: col_num ${colIdx + 1} is out of bounds (array has $numCols columns, valid range: 1-$numCols) (#REF!)",
-                Some(s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})")
-              )
-            )
-          else
-            val targetRef = ARef.from0(startCol + colIdx, startRow + rowIdx)
-            Right(targetSheet(targetRef).value)
+            else Right(Some(pos - 1))
+
+          // the 0-based inclusive span an axis selection covers; a whole axis is bounded to the
+          // used range (None when the two do not meet), so `INDEX($A$1:$A$100000,0)` costs the
+          // data, not the reference — cells past the used range are blank either way
+          def span(
+            sel: Option[Int],
+            start: Int,
+            size: Int,
+            used: Option[(Int, Int)]
+          ): Option[(Int, Int)] =
+            sel match
+              case Some(i) => Some((start + i, start + i))
+              case None =>
+                used
+                  .map { case (lo, hi) => (math.max(lo, start), math.min(hi, start + size - 1)) }
+                  .filter { case (lo, hi) => lo <= hi }
+
+          for
+            rowSel <- axis(rowPos, numRows, "row_num", "rows")
+            colSel <- axis(colPos, numCols, "col_num", "columns")
+            values <-
+              val used = targetSheet.usedRange
+              val rowSpan =
+                span(rowSel, startRow, numRows, used.map(u => (u.rowStart.index0, u.rowEnd.index0)))
+              val colSpan =
+                span(colSel, startCol, numCols, used.map(u => (u.colStart.index0, u.colEnd.index0)))
+              (rowSpan, colSpan) match
+                case (Some((r0, r1)), Some((c0, c1))) =>
+                  val selected = CellRange(ARef.from0(c0, r0), ARef.from0(c1, r1))
+                  extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
+                case _ => Right(ArrayResult.empty)
+          yield values
         }
       yield result
     }

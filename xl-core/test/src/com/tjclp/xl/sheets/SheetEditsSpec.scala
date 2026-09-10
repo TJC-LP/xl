@@ -216,8 +216,8 @@ class SheetEditsSpec extends FunSuite:
     assertEquals(byName.getCellStyle(a1("A5")).map(_.font.bold), Some(true))
     assertEquals(byName.getComment(a1("A5")).map(_.text.toPlainText), Some("note"))
     assertEquals(byName.getComment(a1("A2")), None)
-    // an empty key cell (fig has no quantity) sorts last when ascending; the direction flips the
-    // whole comparator, so it sorts FIRST when descending — the CLI's rule, moved as it was
+    // an empty key cell (fig has no quantity) sorts last in BOTH directions (GH-596): Excel
+    // excludes blanks from the ordering and appends them, whichever way the values run
     val ascending =
       ok(s.sort(rng("A2:B5"), Vector(Edit.SortKeySpec.ascending(Column.from0(1))), false))
     assertEquals(
@@ -229,9 +229,9 @@ class SheetEditsSpec extends FunSuite:
       ok(s.sort(rng("A2:B5"), Vector(Edit.SortKeySpec.descending(Column.from0(1))), false))
     assertEquals(
       (2 to 5).map(r => descending(a1(s"B$r")).value),
-      CellValue.Empty +: Vector(7, 5, 3).map(num)
+      Vector(7, 5, 3).map(num) :+ CellValue.Empty
     )
-    assertEquals(descending(a1("A2")).value, CellValue.Text("fig"))
+    assertEquals(descending(a1("A5")).value, CellValue.Text("fig"))
   }
 
   test(

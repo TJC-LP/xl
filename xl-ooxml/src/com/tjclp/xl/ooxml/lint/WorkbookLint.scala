@@ -1184,16 +1184,32 @@ object WorkbookLint:
         if facts.count > facts.sample.size then
           s"first ${facts.sample.size}: ${facts.sample.mkString(", ")}, …"
         else facts.sample.mkString(", ")
+      // GH-654: a bare `@` is its own fact — the file holds `@x` where Excel stores
+      // `_xlfn.SINGLE(x)`, and Excel repairs such a formula away on open rather than showing
+      // #NAME? — so the message names the token in the file, not a call that is not there
+      val calls = facts.functions.toVector.filterNot(_ == "@").sorted
+      val bareAt = facts.functions.contains("@")
+      val names = calls ++ Option.when(bareAt)("@ → _xlfn.SINGLE")
+      val what =
+        if calls.isEmpty then
+          s"store implicit intersection as a bare @ where Excel writes _xlfn.SINGLE ($sites)"
+        else
+          val alsoAt = if bareAt then " or store implicit intersection as a bare @" else ""
+          "call post-2007 function(s) without Excel's _xlfn. (or _xlpm.) storage prefix" +
+            s"$alsoAt (${names.mkString(", ")}; $sites)"
+      val consequence =
+        if calls.isEmpty then "Excel repairs the bare @ away on open"
+        else if bareAt then
+          "Excel shows #NAME? on the first recalculation and repairs a bare @ away on open"
+        else "Excel shows #NAME? on the first recalculation"
       Vector(
         Finding(
           part,
           LintCategory.XlfnMissing,
           facts.firstLocator.getOrElse(""),
-          s"${facts.count} $noun(s) call post-2007 function(s) without Excel's _xlfn. (or " +
-            s"_xlpm.) storage prefix (${facts.functions.toVector.sorted.mkString(", ")}; " +
-            s"$sites) — Excel shows #NAME? on the first recalculation; a write heals the slot " +
-            "only when xl regenerates it (re-authoring identical text does not), see xl lint " +
-            "in docs/reference/cli.md"
+          s"${facts.count} $noun(s) $what — $consequence; a write heals the slot only when xl " +
+            "regenerates it (re-authoring identical text does not), see xl lint in " +
+            "docs/reference/cli.md"
         )
       )
 

@@ -258,29 +258,36 @@ object FormulaStorage:
    */
   def toStored(expr: String): String =
     val bare = expr.stripPrefix("=")
-    // Fast path: without a '(' there is no call and no LET/LAMBDA scope — nothing to prefix
-    if bare.indexOf('(') < 0 then bare
-    else rewriteCalls(bare)(storedCall, (token, _) => storedParam(token))
+    // Fast path: without a '(' there is no call and no LET/LAMBDA scope, and without an '@' no
+    // implicit intersection (GH-604) — nothing to prefix
+    if bare.indexOf('(') < 0 && bare.indexOf('@') < 0 then bare
+    else
+      rewriteCalls(wrapIntersections(bare, () => ()))(storedCall, (token, _) => storedParam(token))
 
   /**
    * GH-577: the upper-case bare names of the calls in a stored formula whose spelling [[toStored]]
    * would change — a [[FutureFunctions]] call without `_xlfn.` (or with `_xlws.` alone, which Excel
-   * does not resolve), and a LET / LAMBDA whose parameters lack `_xlpm.` (the openpyxl-style
-   * `_xlfn.LET(x,1,x+1)`) — distinct, in order of first appearance. This runs the SAME scanner as
-   * [[toStored]] with recording callbacks in place of the rewriting ones, so
-   * `bareFutureCalls(text).isEmpty` holds exactly when `toStored(text)` returns `text` (minus a
-   * leading '=') unchanged: a lint built on it cannot disagree with the writer. Excel and
-   * LibreOffice show `#NAME?` for a bare future function on the first recalculation and report a
-   * LET / LAMBDA without `_xlpm.` as unreadable content on open.
+   * does not resolve), a LET / LAMBDA whose parameters lack `_xlpm.` (the openpyxl-style
+   * `_xlfn.LET(x,1,x+1)`), and the token `@` for an implicit intersection stored bare (GH-604) —
+   * distinct, in order of first appearance. This runs the SAME scanner as [[toStored]] with
+   * recording callbacks in place of the rewriting ones, so `bareFutureCalls(text).isEmpty` holds
+   * exactly when `toStored(text)` returns `text` (minus a leading '=') unchanged: a lint built on
+   * it cannot disagree with the writer. Excel and LibreOffice show `#NAME?` for a bare future
+   * function on the first recalculation and report a LET / LAMBDA without `_xlpm.` as unreadable
+   * content on open.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def bareFutureCalls(text: String): Vector[String] =
-    // Same fast path as toStored: without a '(' there is nothing the writer would prefix
-    if text.indexOf('(') < 0 then Vector.empty
+    // Same fast path as toStored: without a '(' or an '@' there is nothing the writer would change
+    if text.indexOf('(') < 0 && text.indexOf('@') < 0 then Vector.empty
     else
       var found = Vector.empty[String]
       def record(name: String): Unit = if !found.contains(name) then found = found :+ name
-      rewriteCalls(text)(
+      // GH-604/GH-654: a bare `@x` in a file (Excel stores `_xlfn.SINGLE(x)`) is recorded as the
+      // token the file holds, `@` — the lint names what the user can find, not a call that is
+      // not there
+      val wrapped = wrapIntersections(text, () => record("@"))
+      rewriteCalls(wrapped)(
         token =>
           if storedCall(token) != token then
             record(bareFunctionName(token).toUpperCase(Locale.ROOT))
@@ -298,10 +305,258 @@ object FormulaStorage:
    * function, or a `_xlpm.` outside a recognized parameter position, is kept verbatim (the writer
    * would not restore it), so `fromStored` then `toStored` reproduces the file's text.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def fromStored(text: String): String =
     // Fast path: every storage prefix starts with "_xl"; a formula without it is already bare
     if !containsStoragePrefix(text) then text
-    else rewriteCalls(text)(modelCall, (token, _) => modelParam(token))
+    else
+      // GH-654: the unwrap pass runs only when the call scan met a SINGLE — every other prefixed
+      // formula (a 1M-row book of _xlfn.XLOOKUP cells on the SAX read path) pays one scan, not two
+      var sawSingle = false
+      val bare = rewriteCalls(text)(
+        token =>
+          if !sawSingle && bareFunctionName(token).equalsIgnoreCase("SINGLE") then sawSingle = true
+          modelCall(token)
+        ,
+        (token, _) => modelParam(token)
+      )
+      if sawSingle then unwrapIntersections(bare) else bare
+
+  // ===== GH-604: the implicit-intersection operator =====
+  //
+  // Excel 365 stores `@x` (implicit intersection — the formula bar's spelling) as
+  // `_xlfn.SINGLE(x)`. The model keeps the formula-bar form: [[toStored]] wraps every `@` operand
+  // in `_xlfn.SINGLE(...)` and [[fromStored]] unwraps every one-argument `SINGLE(...)` call back to
+  // `@`. The operand of `@` is one primary, exactly what the parser's `@` arm accepts: a reference
+  // or name (optionally sheet-qualified, quoted or external), a function call, a structured
+  // reference, a string / number / boolean / error literal, another `@`, or a parenthesized
+  // expression, optionally after whitespace — so `@acq`, `@'M&A'!I12:I40`, `@INDEX(rng,,2)`,
+  // `@"x"`, `@@A1:A3` and `@(A1:A3*2)` all wrap, and the parens of the last are the call's own:
+  // `_xlfn.SINGLE(A1:A3*2)`. Both directions rescan the operand, so a nested `@` / `SINGLE(`
+  // inside it (`@INDEX(@A1:A3,1)`) is rewritten too (GH-654). An `@` inside a structured reference
+  // (`Table1[@Col]`), a string, or one with no operand after it is copied verbatim.
+
+  /**
+   * Wrap every `@operand` as `_xlfn.SINGLE(operand)`, calling `onWrap` once per rewrite. The
+   * operand is rescanned rather than copied, so a nested `@` wraps too; whitespace between `@` and
+   * its operand is dropped (`@ A1` stores as `_xlfn.SINGLE(A1)`, the parser's own reading).
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def wrapIntersections(text: String, onWrap: () => Unit): String =
+    if text.indexOf('@') < 0 then text
+    else
+      val n = text.length
+      val sb = new java.lang.StringBuilder(n + 16)
+      var i = 0
+      var bracketDepth = 0
+      // indices at which a wrapping `)` is due — innermost operand first (nested ends never cross)
+      var pendingClose: List[Int] = Nil
+      def closeDue(): Unit =
+        while pendingClose.headOption.contains(i) do
+          sb.append(')')
+          pendingClose = pendingClose.drop(1)
+      while i < n do
+        closeDue()
+        val c = text.charAt(i)
+        if bracketDepth == 0 && (c == '"' || c == '\'') then
+          val end = closingQuote(text, i, c)
+          sb.append(text, i, end)
+          i = end
+        else if bracketDepth > 0 && c == '\'' then
+          val end = math.min(i + 2, n)
+          sb.append(text, i, end)
+          i = end
+        else if c == '[' then
+          bracketDepth += 1
+          sb.append(c)
+          i += 1
+        else if c == ']' then
+          if bracketDepth > 0 then bracketDepth -= 1
+          sb.append(c)
+          i += 1
+        else if bracketDepth == 0 && c == '@' then
+          val start = skipSpaces(text, i + 1)
+          val end = intersectionOperandEnd(text, start)
+          if end > start then
+            onWrap()
+            sb.append(XlfnPrefix).append("SINGLE(")
+            if text.charAt(start) == '(' then
+              // `@(expr)` — the parens become the call's own: skip the '(' and let the ')' at
+              // end - 1 close the call as the scan reaches it
+              i = start + 1
+            else
+              pendingClose = end :: pendingClose
+              i = start
+          else
+            sb.append(c)
+            i += 1
+        else
+          sb.append(c)
+          i += 1
+      // every wrap opened is closed here at the latest — balanced output is a property of this
+      // loop, not of the operand scanner (closeDue() has already fired for i == n)
+      while pendingClose.nonEmpty do
+        sb.append(')')
+        pendingClose = pendingClose.drop(1)
+      sb.toString
+
+  /**
+   * Rewrite every one-argument `SINGLE(x)` call (any storage prefix already stripped) to `@x`. The
+   * argument is rescanned rather than copied, so a nested `SINGLE(` unwraps too.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def unwrapIntersections(text: String): String =
+    val n = text.length
+    val sb = new java.lang.StringBuilder(n)
+    var i = 0
+    var bracketDepth = 0
+    // indices of the `)` closing an unwrapped call whose operand needs no parens — dropped as the
+    // scan reaches them (innermost first; two calls never close on the same character)
+    var dropClose: List[Int] = Nil
+    while i < n do
+      val c = text.charAt(i)
+      if dropClose.headOption.contains(i) then
+        dropClose = dropClose.drop(1)
+        i += 1
+      else if bracketDepth == 0 && (c == '"' || c == '\'') then
+        val end = closingQuote(text, i, c)
+        sb.append(text, i, end)
+        i = end
+      else if bracketDepth > 0 && c == '\'' then
+        val end = math.min(i + 2, n)
+        sb.append(text, i, end)
+        i = end
+      else if c == '[' then
+        bracketDepth += 1
+        sb.append(c)
+        i += 1
+      else if c == ']' then
+        if bracketDepth > 0 then bracketDepth -= 1
+        sb.append(c)
+        i += 1
+      else if bracketDepth == 0 && isIdentStart(c) && (i == 0 || !isIdentChar(text.charAt(i - 1)))
+        && text.regionMatches(true, i, "SINGLE(", 0, 7)
+      then
+        val open = i + 6
+        val close = closingParen(text, open)
+        val inner = if close < 0 then "" else text.substring(open + 1, close - 1)
+        if close > 0 && singleArgument(inner) then
+          val simple = inner.nonEmpty && intersectionOperandEnd(inner, 0) == inner.length &&
+            inner.charAt(0) != '('
+          sb.append('@')
+          // the operand is rescanned from open + 1: a simple operand sheds the call's parens (the
+          // `)` at close - 1 is dropped on arrival), any other keeps them as its grouping
+          if simple then dropClose = (close - 1) :: dropClose else sb.append('(')
+          i = open + 1
+        else
+          sb.append(text, i, open + 1)
+          i = open + 1
+      else
+        sb.append(c)
+        i += 1
+    sb.toString
+
+  /**
+   * Index just past the operand of an `@` starting at `start`: a parenthesized expression, a string
+   * or error literal, another `@` and its operand, or a reference / name / number (quoted-sheet,
+   * unquoted-sheet or external-workbook qualified) optionally followed by a call's argument list or
+   * a structured reference's brackets. `start` when nothing operand-shaped follows.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def intersectionOperandEnd(text: String, start: Int): Int =
+    val n = text.length
+    if start >= n then start
+    else
+      val c = text.charAt(start)
+      def orStart(end: Int): Int = if end < 0 then start else end
+      if c == '(' then orStart(closingParen(text, start))
+      else if c == '"' then closingQuote(text, start, '"')
+      else if c == '#' then
+        val end = errorLiteralEnd(text, start)
+        if end > start + 1 then end else start
+      else if c == '@' then
+        // GH-654: `@@A1:A3` — the outer operand ends where the inner one does
+        val innerStart = skipSpaces(text, start + 1)
+        val end = intersectionOperandEnd(text, innerStart)
+        if end > innerStart then end else start
+      else
+        // qualifier: 'quoted sheet'! or [n]Sheet!
+        val afterQualifier =
+          if c == '\'' then
+            val q = closingQuote(text, start, '\'')
+            if q < n && text.charAt(q) == '!' then q + 1 else q
+          else if c == '[' then closingBracket(text, start)
+          else start
+        if afterQualifier < 0 then start
+        else
+          // the reference / name body (Sheet1!A1:B2, $A$1, name.part, A:A)
+          var i = afterQualifier
+          while i < n && (isIdentChar(text.charAt(i)) || text.charAt(i) == '!' ||
+              text.charAt(i) == ':')
+          do i += 1
+          if i == start then start
+          else if i < n && text.charAt(i) == '(' then orStart(closingParen(text, i))
+          else if i < n && text.charAt(i) == '[' then orStart(closingBracket(text, i))
+          else i
+
+  /** True when `inner` (a call's argument text) holds exactly one argument: no top-level comma. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def singleArgument(inner: String): Boolean =
+    val n = inner.length
+    var i = 0
+    var depth = 0
+    var bracketDepth = 0
+    var single = true
+    while single && i < n do
+      val c = inner.charAt(i)
+      if bracketDepth == 0 && (c == '"' || c == '\'') then i = closingQuote(inner, i, c)
+      else
+        if c == '[' then bracketDepth += 1
+        else if c == ']' then { if bracketDepth > 0 then bracketDepth -= 1 }
+        else if bracketDepth == 0 && (c == '(' || c == '{') then depth += 1
+        else if bracketDepth == 0 && (c == ')' || c == '}') then depth -= 1
+        else if bracketDepth == 0 && depth == 0 && c == ',' then single = false
+        i += 1
+    single
+
+  /**
+   * Index just past the `)` matching the `(` at `open` (strings and quoted names skipped); -1 when
+   * unbalanced.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def closingParen(text: String, open: Int): Int =
+    val n = text.length
+    var i = open + 1
+    var depth = 1
+    var bracketDepth = 0
+    while depth > 0 && i < n do
+      val c = text.charAt(i)
+      if bracketDepth == 0 && (c == '"' || c == '\'') then i = closingQuote(text, i, c)
+      else
+        if c == '[' then bracketDepth += 1
+        else if c == ']' then { if bracketDepth > 0 then bracketDepth -= 1 }
+        else if bracketDepth == 0 && c == '(' then depth += 1
+        else if bracketDepth == 0 && c == ')' then depth -= 1
+        i += 1
+    if depth == 0 then i else -1
+
+  /**
+   * Index just past the `]` matching the `[` at `open` (`'`-escaped specials skipped); -1 when
+   * unbalanced.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def closingBracket(text: String, open: Int): Int =
+    val n = text.length
+    var i = open + 1
+    var depth = 1
+    while depth > 0 && i < n do
+      val c = text.charAt(i)
+      if c == '\'' then i += 2
+      else
+        if c == '[' then depth += 1
+        else if c == ']' then depth -= 1
+        i += 1
+    if depth == 0 then math.min(i, n) else -1
 
   private def storedCall(token: String): String =
     if startsWithIgnoreCase(token, XlfnPrefix) then token
@@ -530,6 +785,13 @@ object FormulaStorage:
         sb.append(c)
         i += 1
     sb.toString
+
+  /** Index of the first non-whitespace character at or after `start` (`n` when none). */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def skipSpaces(text: String, start: Int): Int =
+    var i = start
+    while i < text.length && text.charAt(i).isWhitespace do i += 1
+    i
 
   /** Index just past the quote closing the literal that opens at `start` (or `n` if unclosed). */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))

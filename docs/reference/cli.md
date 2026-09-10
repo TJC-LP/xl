@@ -1748,8 +1748,10 @@ identical (pinned by the lint parity suite).
   (Excel rebuilds it on save), or rebuild it. Both xl writers, in-memory and `--stream`, drop
   the source chain on every write that rewrites a worksheet, so xl output never carries one
 - **`xlfn-missing`** — a post-2007 function stored bare (`IFS(`, `XLOOKUP(`, `MAXIFS(`, … where
-  Excel stores `_xlfn.IFS(`), or a `LET`/`LAMBDA` whose parameters lack `_xlpm.` (openpyxl's
-  `_xlfn.LET(x,1,x+1)`, which Excel reports as unreadable content on open), in a cell `<f>`, a
+  Excel stores `_xlfn.IFS(`), a `LET`/`LAMBDA` whose parameters lack `_xlpm.` (openpyxl's
+  `_xlfn.LET(x,1,x+1)`, which Excel reports as unreadable content on open), or an implicit
+  intersection stored as a bare `@` where Excel writes `_xlfn.SINGLE(...)` (reported as the token
+  `@`; Excel repairs such a formula away on open rather than showing `#NAME?`), in a cell `<f>`, a
   conditional-formatting `<formula>`, a data-validation `<formula1>`/`<formula2>` or a
   `<definedName>`: not a repair class but a silent `#NAME?` on the first recalculation, which no
   cached value reveals (the openpyxl class of producer). The rule is the writer's own —

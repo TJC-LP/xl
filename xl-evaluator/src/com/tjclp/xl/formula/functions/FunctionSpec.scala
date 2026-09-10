@@ -125,6 +125,15 @@ trait ArgSpec[A]:
       case ArgValue.Cells(range) => printer.cellRange(range)
     }
 
+  /**
+   * GH-603: the rendered argument SLOTS in declaration order — `None` for an ABSENT optional
+   * argument (fewer arguments than slots, or an empty range slot), `Some("")` for a slot written
+   * empty (`TExpr.Missing`), so `PMT(r,n,pv,,1)` and `VLOOKUP(x,rng,2,)` keep their commas.
+   * [[render]] drops absent slots; [[FunctionSpec.render]] trims the trailing absent ones.
+   */
+  def renderSlots(args: A, printer: ArgPrinter): List[Option[String]] =
+    render(args, printer).map(Some(_))
+
 trait FunctionSpec[A]:
   type Args
   def name: String
@@ -134,10 +143,27 @@ trait FunctionSpec[A]:
   def flags: FunctionFlags = FunctionFlags()
 
   def render(args: Args, printer: ArgPrinter): String =
-    val rendered = argSpec.render(args, printer)
-    s"${name}(${rendered.mkString(printer.separator)})"
+    s"${name}(${FunctionSpec.joinSlots(argSpec.renderSlots(args, printer), printer.separator)})"
 
 object FunctionSpec:
+  /**
+   * GH-603: join rendered argument slots. An absent optional argument (`None`) keeps its comma when
+   * a later slot is present and is dropped when it trails. A slot the formula wrote EMPTY
+   * (`TExpr.Missing`, rendered "") always keeps its comma, trailing or not: `LEFT("abc",)` must
+   * re-parse with two arguments and `VLOOKUP(x,rng,2,)` must stay an exact match (GH-654). With the
+   * human-facing ", " separator an empty slot contributes a bare "," so the text reads `pv,, 1`
+   * rather than `pv, , 1`.
+   */
+  def joinSlots(slots: List[Option[String]], separator: String): String =
+    val trimmed = slots.reverse.dropWhile(_.isEmpty).reverse
+    val sb = new StringBuilder
+    trimmed.zipWithIndex.foreach { case (slot, i) =>
+      val text = slot.getOrElse("")
+      if i > 0 then sb.append(if text.isEmpty then separator.trim else separator)
+      sb.append(text)
+    }
+    sb.toString
+
   final case class Simple[A, A0](
     name: String,
     arity: Arity,
@@ -343,11 +369,29 @@ object ArgSpec:
     ): Either[ParseError, (Option[A], List[TExpr[?]])] =
       args match
         case Nil => Right((None, Nil))
+        // GH-603/GH-654: an EMPTY optional slot is a present blank VALUE where the slot can hold
+        // one — Excel's `VLOOKUP(x,rng,2,)` is an exact match (range_lookup FALSE), `MATCH(x,rng,)`
+        // exact (match_type 0), `LOG(10,)` has base 0 — and absent where it cannot (a range slot:
+        // `SUMIF(rng,crit,)` sums `rng`). The dynamic-array functions that read the empty slot as
+        // omitted opt out at evaluation (FunctionSpecsBase.unlessOmitted). Keeping the slot
+        // present also keeps the formula's text: the trailing `,)` reprints, so a structural edit
+        // can never turn Excel's exact match into an approximate one.
+        case TExpr.Missing :: rest =>
+          inner.parse(args, pos, fnName) match
+            case Right((value, rest2)) => Right((Some(value), rest2))
+            case Left(_) => Right((None, rest))
         case _ =>
           inner.parse(args, pos, fnName).map { case (value, rest) => (Some(value), rest) }
 
     def toValues(args: Option[A]): List[ArgValue] =
       args.toList.flatMap(inner.toValues)
+
+    override def renderSlots(args: Option[A], printer: ArgPrinter): List[Option[String]] =
+      args match
+        // one absent marker per slot the inner spec would render, so the comma count matches
+        // whether or not the argument is present (every inner spec is single-slot today)
+        case None => List.fill(inner.describeParts.size)(None)
+        case Some(value) => inner.renderSlots(value, printer)
 
     def map(
       args: Option[A]
@@ -381,6 +425,9 @@ object ArgSpec:
 
     def toValues(args: List[A]): List[ArgValue] =
       args.flatMap(inner.toValues)
+
+    override def renderSlots(args: List[A], printer: ArgPrinter): List[Option[String]] =
+      args.flatMap(inner.renderSlots(_, printer))
 
     def map(
       args: List[A]
@@ -428,6 +475,9 @@ object ArgSpec:
 
     def toValues(args: H *: T): List[ArgValue] =
       head.toValues(args.head) ++ tail.toValues(args.tail)
+
+    override def renderSlots(args: H *: T, printer: ArgPrinter): List[Option[String]] =
+      head.renderSlots(args.head, printer) ++ tail.renderSlots(args.tail, printer)
 
     def map(
       args: H *: T

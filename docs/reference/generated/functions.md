@@ -3,7 +3,7 @@
 
 # Formula functions
 
-116 functions in the evaluator's registry, plus `LET` — a parser-level special form
+118 functions in the evaluator's registry, plus `LET` — a parser-level special form
 (lexical bindings) that the registry does not hold. `args` is the accepted argument count
 (`n+` = at least n, no upper bound); `arguments` names each slot as the parser describes it
 (`optional …` may be omitted, `…...` repeats). `flags`: `date`/`time` — the result is a date
@@ -39,7 +39,7 @@ RANDBETWEEN), which `xl audit` reports. Run `xl functions --json` for this table
 | `EOMONTH` | 2 | date, integer | date |
 | `ERROR.TYPE` | 1 | cell | — |
 | `EXP` | 1 | number | — |
-| `FILTER` | 2–3 | range, range, optional value | — |
+| `FILTER` | 2–3 | range, array or range, optional value | — |
 | `FIND` | 2–3 | text, text, optional integer | — |
 | `FLOOR` | 2 | number, number | — |
 | `FV` | 3–5 | number, number, number, optional number, optional number | — |
@@ -100,9 +100,11 @@ RANDBETWEEN), which `xl audit` reports. Run `xl functions --json` for this table
 | `ROUNDUP` | 2 | number, number | — |
 | `ROW` | 0–1 | optional value | — |
 | `ROWS` | 1 | value | — |
+| `RRI` | 3 | number, number, number | — |
 | `SEARCH` | 2–3 | text, text, optional integer | — |
 | `SEQUENCE` | 1–4 | integer, optional integer, optional number, optional number | — |
 | `SIGN` | 1 | number | — |
+| `SINGLE` | 1 | array or range | — |
 | `SMALL` | 2 | range, integer | — |
 | `SORT` | 1–3 | range, optional integer, optional integer | — |
 | `SQRT` | 1 | number | — |
