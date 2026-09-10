@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.ast
 
 import com.tjclp.xl.formula.functions.FunctionSpecs
-import com.tjclp.xl.formula.eval.EvalError
+import com.tjclp.xl.formula.eval.{ArrayResult, EvalError}
 import com.tjclp.xl.formula.functions.EvalContext
 
 import com.tjclp.xl.CellRange
@@ -86,14 +86,17 @@ trait TExprLookupOps:
     )
 
   /**
-   * INDEX: get value at position in array.
+   * INDEX: the cell at a position in an array — or, with a 0 position, the whole row / column /
+   * array (GH-654). Typed `ArrayResult` like OFFSET: a 1×1 result collapses to its value in scalar
+   * positions, a whole-axis selection folds under aggregates and spills standalone.
    *
    * @param array
    *   The range to index into
    * @param rowNum
-   *   1-based row position
+   *   1-based row position; 0 selects every row
    * @param colNum
-   *   Optional 1-based column position (defaults to 1 for single-column ranges)
+   *   Optional 1-based column position (defaults to 1 for single-column ranges); 0 selects every
+   *   column
    *
    * Example: TExpr.index(range, TExpr.Lit(2), Some(TExpr.Lit(3)))
    */
@@ -101,7 +104,7 @@ trait TExprLookupOps:
     array: CellRange,
     rowNum: TExpr[BigDecimal],
     colNum: Option[TExpr[BigDecimal]] = None
-  ): TExpr[CellValue] =
+  ): TExpr[ArrayResult] =
     Call(FunctionSpecs.index, (RangeLocation.Local(array), rowNum, colNum))
 
   /**

@@ -5,8 +5,10 @@ import munit.FunSuite
 /**
  * GH-604: the storage form of the implicit-intersection operator. Excel 365 stores `@x` as
  * `_xlfn.SINGLE(x)`; the model keeps the formula-bar spelling. `toStored` wraps every `@` operand,
- * `fromStored` unwraps every one-argument `SINGLE(...)`, and the lint sees a bare `@` as the SINGLE
- * call the writer would spell out. GH-603: omitted-argument commas pass through untouched.
+ * `fromStored` unwraps every one-argument `SINGLE(...)`, and the lint records a bare `@` as the
+ * token the file holds (GH-654). Both directions rescan the operand, so nested `@` / `SINGLE(`
+ * rewrite too; whitespace after `@` and literal operands wrap like references (GH-654). GH-603:
+ * omitted-argument commas pass through untouched.
  */
 class FormulaStorageIntersectionSpec extends FunSuite:
 
@@ -69,13 +71,42 @@ class FormulaStorageIntersectionSpec extends FunSuite:
     assertEquals(toStored("@+1"), "@+1")
   }
 
-  test("the lint reports a bare @ as SINGLE; the stored form is clean") {
-    assertEquals(bareFutureCalls("@acq"), Vector("SINGLE"))
+  test("the lint reports a bare @ as the token @; the stored form is clean") {
+    assertEquals(bareFutureCalls("@acq"), Vector("@"))
     assertEquals(bareFutureCalls("_xlfn.SINGLE(acq)"), Vector.empty)
     // a bare-writing producer's SINGLE(x) is prefixed like any other future function
     assertEquals(toStored("SINGLE(acq)"), "_xlfn.SINGLE(acq)")
     assertEquals(bareFutureCalls("SINGLE(acq)"), Vector("SINGLE"))
-    assertEquals(bareFutureCalls("@acq+IFS(A1,1)"), Vector("SINGLE", "IFS"))
+    assertEquals(bareFutureCalls("@acq+IFS(A1,1)"), Vector("@", "IFS"))
+  }
+
+  test("GH-654: whitespace after @ is dropped and literal operands wrap like references") {
+    assertEquals(toStored("=@ A1:A3"), "_xlfn.SINGLE(A1:A3)")
+    assertEquals(toStored("IF(@ acq=1,1,0)"), "IF(_xlfn.SINGLE(acq)=1,1,0)")
+    pinLintInvariant("@ A1:A3")
+    roundTrip("@\"abc\"", "_xlfn.SINGLE(\"abc\")")
+    roundTrip("@1.5*2", "_xlfn.SINGLE(1.5)*2")
+    roundTrip("@TRUE", "_xlfn.SINGLE(TRUE)")
+    roundTrip("@#REF!", "_xlfn.SINGLE(#REF!)")
+    // `@("abc")` prints back from the model as `@"abc"`; the stored form is the same call
+    assertEquals(toStored("@(\"abc\")"), "_xlfn.SINGLE(\"abc\")")
+  }
+
+  test("GH-654: a nested @ wraps, a nested SINGLE unwraps — the operand is rescanned") {
+    roundTrip("@@A1:A3", "_xlfn.SINGLE(_xlfn.SINGLE(A1:A3))")
+    roundTrip("@INDEX(@A1:A3,1)", "_xlfn.SINGLE(INDEX(_xlfn.SINGLE(A1:A3),1))")
+    roundTrip("@(@A1:A3*2)", "_xlfn.SINGLE(_xlfn.SINGLE(A1:A3)*2)")
+    roundTrip("SUM(@A1:A3,@B1:B3)", "SUM(_xlfn.SINGLE(A1:A3),_xlfn.SINGLE(B1:B3))")
+    roundTrip(
+      "@XLOOKUP(@A1:A3,B:B,C:C)",
+      "_xlfn.SINGLE(_xlfn.XLOOKUP(_xlfn.SINGLE(A1:A3),B:B,C:C))"
+    )
+    assertEquals(fromStored("_xlfn.SINGLE(_xlfn.SINGLE(A1:A3))"), "@@A1:A3")
+    // a stored formula with prefixes but no SINGLE takes the single-pass route unchanged
+    assertEquals(
+      fromStored("_xlfn.XLOOKUP(1,A:A,B:B)+_xlfn._xlws.FILTER(A:A,B:B)"),
+      "XLOOKUP(1,A:A,B:B)+FILTER(A:A,B:B)"
+    )
   }
 
   test("only a one-argument SINGLE unwraps to @; the model form SINGLE(x) reads back as @x") {

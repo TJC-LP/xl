@@ -126,9 +126,10 @@ trait ArgSpec[A]:
     }
 
   /**
-   * GH-603: the rendered argument SLOTS in declaration order — `None` for an absent optional
-   * argument, so an omitted slot followed by a present one keeps its comma (`PMT(r,n,pv,,1)`).
-   * [[render]] drops absent slots; [[FunctionSpec.render]] trims the trailing ones.
+   * GH-603: the rendered argument SLOTS in declaration order — `None` for an ABSENT optional
+   * argument (fewer arguments than slots, or an empty range slot), `Some("")` for a slot written
+   * empty (`TExpr.Missing`), so `PMT(r,n,pv,,1)` and `VLOOKUP(x,rng,2,)` keep their commas.
+   * [[render]] drops absent slots; [[FunctionSpec.render]] trims the trailing absent ones.
    */
   def renderSlots(args: A, printer: ArgPrinter): List[Option[String]] =
     render(args, printer).map(Some(_))
@@ -147,11 +148,11 @@ trait FunctionSpec[A]:
 object FunctionSpec:
   /**
    * GH-603: join rendered argument slots. An absent optional argument (`None`) keeps its comma when
-   * a later slot is present and is dropped when it trails: `RATE(10,,-100,150,)` renders
-   * `RATE(10,,-100,150)`, `PMT(r,n,pv,,1)` keeps its empty fourth slot. An omitted REQUIRED
-   * argument (`TExpr.Missing`, rendered "") always keeps its slot — `LEFT("abc",)` must re-parse
-   * with two arguments. With the human-facing ", " separator an empty slot contributes a bare ","
-   * so the text reads `pv,, 1` rather than `pv, , 1`.
+   * a later slot is present and is dropped when it trails. A slot the formula wrote EMPTY
+   * (`TExpr.Missing`, rendered "") always keeps its comma, trailing or not: `LEFT("abc",)` must
+   * re-parse with two arguments and `VLOOKUP(x,rng,2,)` must stay an exact match (GH-654). With the
+   * human-facing ", " separator an empty slot contributes a bare "," so the text reads `pv,, 1`
+   * rather than `pv, , 1`.
    */
   def joinSlots(slots: List[Option[String]], separator: String): String =
     val trimmed = slots.reverse.dropWhile(_.isEmpty).reverse
@@ -368,8 +369,17 @@ object ArgSpec:
     ): Either[ParseError, (Option[A], List[TExpr[?]])] =
       args match
         case Nil => Right((None, Nil))
-        // GH-603: an omitted optional argument is absent — the function's own default applies
-        case TExpr.Missing :: rest => Right((None, rest))
+        // GH-603/GH-654: an EMPTY optional slot is a present blank VALUE where the slot can hold
+        // one — Excel's `VLOOKUP(x,rng,2,)` is an exact match (range_lookup FALSE), `MATCH(x,rng,)`
+        // exact (match_type 0), `LOG(10,)` has base 0 — and absent where it cannot (a range slot:
+        // `SUMIF(rng,crit,)` sums `rng`). The dynamic-array functions that read the empty slot as
+        // omitted opt out at evaluation (FunctionSpecsBase.unlessOmitted). Keeping the slot
+        // present also keeps the formula's text: the trailing `,)` reprints, so a structural edit
+        // can never turn Excel's exact match into an approximate one.
+        case TExpr.Missing :: rest =>
+          inner.parse(args, pos, fnName) match
+            case Right((value, rest2)) => Right((Some(value), rest2))
+            case Left(_) => Right((None, rest))
         case _ =>
           inner.parse(args, pos, fnName).map { case (value, rest) => (Some(value), rest) }
 

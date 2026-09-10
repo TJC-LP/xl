@@ -1482,6 +1482,25 @@ class WorkbookLintSpec extends FunSuite:
     assert(f.message.contains("_xlpm."), f.toString)
   }
 
+  test("GH-654: a bare @ is reported as the token in the file, not as a SINGLE call") {
+    val bareAtSheetXml = worksheetWith(
+      """<sheetData>
+    <row r="1"><c r="B1"><f>@acq</f><v>1</v></c><c r="C1"><f>_xlfn.SINGLE(acq)</f><v>1</v></c></row>
+  </sheetData>"""
+    )
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> bareAtSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.XlfnMissing))
+    val f = findings.head
+    assertEquals(f.locator, """<c r="B1"><f>""")
+    assert(f.message.contains("1 formula(s)"), f.toString)
+    assert(f.message.contains("bare @"), f.toString)
+    assert(f.message.contains("_xlfn.SINGLE"), f.toString)
+    assert(f.message.contains("(B1)"), f.toString)
+    assert(f.message.contains("repairs"), f.toString)
+    assert(!f.message.contains("#NAME?"), s"no call is missing a prefix here: ${f.message}")
+    assert(!f.message.contains("(SINGLE"), s"the formula holds no SINGLE call: ${f.message}")
+  }
+
   test("GH-588: a part whose root element is formula text records no site in either mode") {
     val parts = baseParts + ("xl/worksheets/sheet1.xml" -> rootFormulaSheetXml)
     val dom = lintOf(parts)

@@ -819,8 +819,8 @@ private class EvaluatorImpl(
       case TExpr.ErrorLit(error) =>
         Left(EvalError.ErrorValue(error))
 
-      // GH-603: an omitted argument is a blank — typed positions coerce it through Coerced (0, "",
-      // FALSE), Any positions read it as 0 in FunctionSpecsBase.evalAny (IF(TRUE,,5) is 0)
+      // GH-603: an omitted argument is a blank — every argument slot that holds a value wraps it
+      // in Coerced at parse time (0, "", FALSE per target; value slots read 0: IF(TRUE,,5) is 0)
       case TExpr.Missing =>
         Right(CellValue.Empty).asInstanceOf[Either[EvalError, A]]
 

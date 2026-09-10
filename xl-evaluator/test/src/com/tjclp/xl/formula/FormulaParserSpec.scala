@@ -1116,6 +1116,19 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
+  test("GH-654: a sign may precede the paren-less NOT keyword (=-NOT x, =+NOT x)") {
+    FormulaParser.parse("=-NOT TRUE") match
+      case Right(TExpr.Sub(TExpr.Lit(zero: BigDecimal), _)) => assertEquals(zero, BigDecimal(0))
+      case other => fail(s"Expected Sub(0, NOT(TRUE)), got $other")
+    FormulaParser.parse("=+NOT A1") match
+      case Right(TExpr.UnaryPlus(TExpr.Call(spec, _))) => assertEquals(spec.name, "NOT")
+      case other => fail(s"Expected UnaryPlus(NOT(A1)), got $other")
+    // controls: the keyword's other spellings still parse, and a name starting with NOT is a name
+    assert(FormulaParser.parse("=NOT -1").isRight)
+    assert(FormulaParser.parse("=-NOT(TRUE)").isRight)
+    assert(FormulaParser.parse("=-NOTES").isRight)
+  }
+
   test("parse nested parentheses") {
     val result = FormulaParser.parse("=((1+2)*3)")
     assert(result.isRight)

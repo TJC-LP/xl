@@ -181,15 +181,16 @@ enum TExpr[A] derives CanEqual:
    * `INDEX(rng,,2)`.
    *
    * Excel lets a formula leave an argument empty between commas or before the closing paren. The
-   * parser emits this node for every such slot; each argument spec decides what it means: an
-   * optional slot reads it as absent (`ArgSpec.option` yields None, so the function's own default
-   * applies — RATE's guess stays 10%, VLOOKUP's range_lookup stays TRUE), a required typed slot
-   * coerces it like a blank cell (0 / "" / FALSE / the blank date), an Any position reads it as 0
-   * (`IF(TRUE,,5)` is 0, as in Excel), and a range slot refuses it. Prints as the empty slot:
-   * `A(1,,3)` round-trips; a trailing omitted OPTIONAL slot is absent after reprint
-   * (`RATE(a,,b,c,)` reprints as `RATE(a,,b,c)` — same value). Typed `Nothing` like [[ErrorLit]] so
-   * it can stand in any argument position; evaluates to `CellValue.Empty`; contributes no
-   * dependency edges.
+   * parser emits this node for every such slot and it evaluates to `CellValue.Empty`, Excel's
+   * blank: a typed slot coerces it like a blank cell (0 / "" / FALSE / the blank date), a value
+   * slot reads it as 0 (`IF(TRUE,,5)` is 0), a range slot refuses it, and an optional slot holds it
+   * as a PRESENT blank rather than an absent argument (GH-654) — `VLOOKUP(x,rng,2,)` is an exact
+   * match, `MATCH(x,rng,)` too, `INDEX(rng,,2)` selects the whole column, `RATE(a,,b,c,,)` iterates
+   * from a guess of 0. The dynamic-array and reference functions (OFFSET, SEQUENCE, SORT, UNIQUE,
+   * FILTER, XLOOKUP) read the empty slot as omitted, as Excel does
+   * (`FunctionSpecsBase.unlessOmitted`). Prints as the empty slot, trailing ones included, so
+   * `A(1,,3)` and `VLOOKUP(x,rng,2,)` round-trip byte-for-byte. Typed `Nothing` like [[ErrorLit]]
+   * so it can stand in any argument position; contributes no dependency edges.
    */
   case Missing extends TExpr[Nothing]
 

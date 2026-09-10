@@ -15,13 +15,18 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
 
 - **Omitted arguments** (#603): a formula may leave an argument slot empty, as Excel does —
   `RATE($G$8-$D$8,,-D9,G9,)`, `IF(cond,,x)`, `PMT(r,n,pv,,1)`, `INDEX(rng,,2)`. The parser emits
-  an explicit `TExpr.Missing` for each empty slot; an optional slot reads it as absent, so the
-  function's own default applies (RATE's guess stays 10%, VLOOKUP's range_lookup stays TRUE); a
-  required typed slot coerces it like a blank cell (`LEFT("abc",)` is `""`, `SUM(1,,2)` is 3); an
-  Any position reads it as 0 (`IF(TRUE,,5)` is 0). Printing keeps interior empty slots
-  (`PMT(r, n, pv,, 1)`) and drops trailing omitted optional ones (`RATE(10,,-100,150,)` reprints as
-  `RATE(10,, -100, 150)`, the same tree); `F()` is still the zero-argument call. `xl audit` no longer
-  lists these cells as unparseable (172 of one model's 209).
+  an explicit `TExpr.Missing` for each empty slot, Excel's blank: a typed slot coerces it like a
+  blank cell (`LEFT("abc",)` is `""`, `SUM(1,,2)` is 3, `PMT(r,n,pv,,1)` reads fv 0), a value slot
+  reads it as 0 (`IF(TRUE,,5)` is 0, on the array route too), and an optional slot holds it as a
+  *present* blank — `VLOOKUP(x,rng,2,)` is the exact match every model spells that way,
+  `MATCH(x,rng,)` too, `RATE(…,,)` iterates from a guess of 0, `INDEX(rng,,2)` selects the whole
+  column. The dynamic-array and reference functions read the empty slot as omitted, as Excel does
+  (`OFFSET(A1,0,0,,2)` keeps the anchor's height, `SEQUENCE(3,,5)` is 5,6,7, `SORT(rng,,-1)`
+  sorts by its first column, `XLOOKUP(x,a,b,,0)` is `#N/A` on no match). Every slot prints back
+  empty, trailing ones included (`RATE(10,, -100, 150,)`), so a drag or structural edit never
+  turns an exact match into an approximate one; `F()` is still the zero-argument call. Semantics
+  verified against LibreOffice's recalculation. `xl audit` no longer lists these cells as
+  unparseable (172 of one model's 209).
 - **`@` — implicit intersection** (#604): Excel 365 stores the `@` operator as `_xlfn.SINGLE(x)`,
   which the registry did not know, so every `@name` an Excel user typed failed to parse. `SINGLE`
   joins the registry: a single cell or scalar is itself, a column vector yields the cell in the
@@ -29,9 +34,12 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
   cross is `#VALUE!`; a defined name bound to a range intersects the same way; an array value
   collapses to its top-left element. The parser accepts `@x` (one primary operand: `@A1:A3*2` is
   `(@A1:A3)*2`) and `SINGLE(x)`; the printer emits `@x`; `FormulaStorage` maps `@x` ↔
-  `_xlfn.SINGLE(x)` at the `<f>` boundary (`@(A1:A3*2)` ↔ `_xlfn.SINGLE(A1:A3*2)`, `Table1[@Col]`
-  and strings untouched), and `xl lint`'s `xlfn-missing` reports a bare `@` in a file as the
-  `SINGLE` the writer would spell out. `ANCHORARRAY` (`x#`, the spill reference) is not yet modeled.
+  `_xlfn.SINGLE(x)` at the `<f>` boundary for every operand the parser accepts — a reference,
+  name, call, literal, parenthesized expression or nested `@` (`@(A1:A3*2)` ↔
+  `_xlfn.SINGLE(A1:A3*2)`, `@INDEX(@A1:A3,1)` ↔ `_xlfn.SINGLE(INDEX(_xlfn.SINGLE(A1:A3),1))`;
+  `Table1[@Col]` and strings untouched) — and `xl lint`'s `xlfn-missing` reports a bare `@` in a
+  file as the token it is (Excel repairs it away on open), beside any prefix-less calls.
+  `ANCHORARRAY` (`x#`, the spill reference) is not yet modeled.
 - **`RRI(nper, pv, fv)`** (#605): the equivalent interest rate for the growth of an investment —
   `(fv/pv)^(1/nper) - 1`, the CAGR idiom; `#NUM!` when nper ≤ 0, pv = 0 or the ratio is negative.
   118 functions.
@@ -44,18 +52,27 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
   keeps its grouping. The printer follows: a signed base prints flat (`-2^3`, `+2^3` — the former
   `(-2)^3` re-parses to the same tree and reprints flat) and a negated power keeps its parens
   (`-(2^3)`, `+(2^3)`).
-- **Breaking: `sort --desc` and `Sheet.sort` descending keep blank keys last** (#596): Excel
-  excludes blanks from the ordering and appends them in both directions; the comparator used to
-  treat a blank as the minimum and reverse it to the top. Ascending is unchanged.
+- **Breaking: `sort --desc`, `Sheet.sort` and `SORT(…,-1)` keep blank keys last** (#596): Excel
+  excludes blanks from the ordering and appends them in both directions; the CLI/library comparator
+  treated a blank as the minimum and reversed it to the top, and the `SORT` function reversed its
+  ascending result (blanks first, ties reversed). Both now flip only the comparison between two
+  non-blank keys; ties keep their source order. Ascending is unchanged.
+- **Breaking: `INDEX` is a reference-returning function, typed `ArrayResult`** like OFFSET and
+  INDIRECT: `FunctionSpecs.index` is a `FunctionSpec[ArrayResult]` and `TExpr.index` returns
+  `TExpr[ArrayResult]`. A 1×1 selection collapses to its value in scalar positions as before; a 0
+  or empty position selects the whole row or column (`SUM(INDEX(A1:B2,,2))` is B1+B2,
+  `INDEX(rng,0,0)` the whole array), spilling standalone and folding under aggregates — it was a
+  `#REF!`. The two-argument form on a 2-D array selects the whole row (its first cell in a scalar
+  position, the value it always returned there).
 
 ### Fixed
 
 - **`FILTER` accepts an array-valued `include`** (#580): `=FILTER(B1:B3,B1:B3>1)`,
   `=SUM(FILTER(B1:B3,A1:A3<>"a"))` and `(A1:A3="x")*(B1:B3>0)` were "expected range" at parse
-  time — only a range of precomputed flags was accepted. The include is now a range or any
-  array-valued expression, evaluated elementwise like SUMPRODUCT's; a one-row include as wide as
-  the array filters columns; a shape matching neither rows nor columns is `#VALUE!` (it used to
-  truncate silently).
+  time — only a range of precomputed flags was accepted. The include is now a range, a single
+  cell or any array-valued expression, evaluated elementwise like SUMPRODUCT's; a one-row include
+  as wide as the array filters columns; a shape matching neither rows nor columns is `#VALUE!` (it
+  used to truncate silently).
 
 ## [0.22.0] - 2026-09-08
 

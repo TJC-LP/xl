@@ -235,6 +235,35 @@ class ArrayFunctionsSpec extends FunSuite:
     assertEquals(s(ref"E3").value, CellValue.Number(1))
   }
 
+  test("GH-596/GH-654: SORT descending keeps blank keys last and ties in source order") {
+    // F1 = 7, F2 blank, F3 = 5, F4 = 3 — the shape `xl sort --desc` orders 7,5,3,blank
+    val sheet = Sheet("Test")
+      .put(ref"F1", CellValue.Number(7))
+      .put(ref"F3", CellValue.Number(5))
+      .put(ref"F4", CellValue.Number(3))
+    val (desc, _) = sheet.evaluateArrayFormula("=SORT(F1:F4,1,-1)", ref"H1").toOption.get
+    assertEquals(desc(ref"H1").value, CellValue.Number(7))
+    assertEquals(desc(ref"H2").value, CellValue.Number(5))
+    assertEquals(desc(ref"H3").value, CellValue.Number(3))
+    assertEquals(desc(ref"H4").value, CellValue.Empty, "the blank is last, not first")
+    val (asc, _) = sheet.evaluateArrayFormula("=SORT(F1:F4)", ref"H1").toOption.get
+    assertEquals(asc(ref"H1").value, CellValue.Number(3))
+    assertEquals(asc(ref"H4").value, CellValue.Empty, "the blank is last ascending too")
+    // ties: equal keys keep their source order in both directions (a reversed ascending sort
+    // reversed them)
+    val tied = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"B1", CellValue.Text("first"))
+      .put(ref"A2", CellValue.Number(1))
+      .put(ref"B2", CellValue.Text("second"))
+      .put(ref"A3", CellValue.Number(2))
+      .put(ref"B3", CellValue.Text("third"))
+    val (t, _) = tied.evaluateArrayFormula("=SORT(A1:B3,1,-1)", ref"E1").toOption.get
+    assertEquals(t(ref"F1").value, CellValue.Text("third"))
+    assertEquals(t(ref"F2").value, CellValue.Text("first"))
+    assertEquals(t(ref"F3").value, CellValue.Text("second"))
+  }
+
   test("UNIQUE returns distinct rows in first-seen order") {
     val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Number(1))
@@ -365,6 +394,31 @@ class ArrayFunctionsSpec extends FunSuite:
     Evaluator.arrayInstance.eval(expr, filterSheet) match
       case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
       case other => fail(s"expected #VALUE!, got $other")
+  }
+
+  test("GH-654: FILTER's include may be a single cell — a bare reference, not just a range") {
+    // D1 = TRUE keeps the one-row array whole; D1 = FALSE empties it
+    val row = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"B1", CellValue.Number(10))
+      .put(ref"C1", CellValue.Number(7))
+      .put(ref"D1", CellValue.Bool(true))
+    val (s, range) = row.evaluateArrayFormula("=FILTER(A1:C1,D1)", ref"E3").toOption.get
+    assertEquals(range.width, 3)
+    assertEquals(s(ref"E3").value, CellValue.Number(1))
+    assertEquals(s(ref"G3").value, CellValue.Number(7))
+    assertEquals(row.evaluateFormula("=SUM(FILTER(A1:C1,D1))"), Right(CellValue.Number(18)))
+    assertEquals(row.evaluateFormula("=SUM(FILTER(A1:A1,D1))"), Right(CellValue.Number(1)))
+    assertEquals(
+      row.evaluateFormula("=SUM(FILTER(A1:C1,D1))"),
+      row.evaluateFormula("=SUM(FILTER(A1:C1,D1:D1))"),
+      "the bare cell and the 1×1 range are the same include"
+    )
+    val off = row.put(ref"D1", CellValue.Bool(false))
+    assertEquals(
+      off.evaluateFormula("=FILTER(A1:C1,D1,\"none\")"),
+      Right(CellValue.Text("none"))
+    )
   }
 
   test("GH-580: FILTER with an array condition prints back and round-trips") {

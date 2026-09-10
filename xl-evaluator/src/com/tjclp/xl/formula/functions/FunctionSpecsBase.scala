@@ -40,6 +40,17 @@ trait FunctionSpecsBase:
       fnName: String
     ): Either[ParseError, (TExpr[Any], List[TExpr[?]])] =
       args match
+        // GH-603/GH-654: an omitted argument in a value position is Excel's blank, read as 0 on
+        // EVERY evaluation route — `IF(TRUE,,5)` is 0 and so is the TRUE branch of the spilled
+        // `IF(A1:A2>1,,5)` — so the slot coerces here rather than in one evaluator entry point.
+        // The printer sees through Coerced, so the slot still prints empty.
+        case TExpr.Missing :: tail =>
+          Right(
+            (
+              TExpr.Coerced[Any](TExpr.Missing.asInstanceOf[TExpr[Any]], BindingCoercion.Numeric),
+              tail
+            )
+          )
         case head :: tail => Right((head.asInstanceOf[TExpr[Any]], tail))
         case Nil =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, "0 arguments"))
@@ -168,9 +179,6 @@ trait FunctionSpecsBase:
     val resolved = expr match
       case _: TExpr.PolyRef | _: TExpr.SheetPolyRef | _: TExpr.UnaryPlus[?] =>
         TExpr.asResolvedValueExpr(expr)
-      // GH-603: an omitted argument in an Any position reads as 0, exactly like a reference to a
-      // blank cell does here (decodeResolvedValue) — Excel's `=IF(TRUE,,5)` shows 0
-      case TExpr.Missing => TExpr.Lit(CellValue.Number(BigDecimal(0)))
       case other => other
     ctx.evalExpr[Any](resolved.asInstanceOf[TExpr[Any]])
 
@@ -200,6 +208,27 @@ trait FunctionSpecsBase:
         ctx.evalArrayExpr(TExpr.asResolvedValueExpr(expr).asInstanceOf[TExpr[Any]])
       case other =>
         ctx.evalArrayExpr(other.asInstanceOf[TExpr[Any]])
+
+  /**
+   * GH-603/GH-654: whether an argument slot was left EMPTY in the source (`SORT(rng,,-1)`): the
+   * parser's `TExpr.Missing`, possibly under the coercion a typed slot wrapped it in.
+   */
+  protected def isEmptySlot(expr: TExpr[?]): Boolean = expr match
+    case TExpr.Missing => true
+    case TExpr.Coerced(inner, _) => isEmptySlot(inner)
+    case _ => false
+
+  /**
+   * GH-654: the dynamic-array and reference functions read an empty optional slot as OMITTED —
+   * Excel tests the argument's presence there, not its value — so `OFFSET(A1,0,0,,2)` keeps the
+   * anchor's height, `SEQUENCE(3,,5)` is 5,6,7, `SORT(rng,,-1)` sorts by its first column and
+   * `XLOOKUP(x,a,b,,0)` is `#N/A` when nothing matches (an explicit 0 in each of those slots is an
+   * error). Classic functions read the same slot as a blank VALUE (see `ArgSpec.option`):
+   * `VLOOKUP(x,rng,2,)` is an exact match, `MATCH(x,rng,)` too, `LOG(10,)` has base 0. Both rules
+   * verified against LibreOffice's recalculation.
+   */
+  protected def unlessOmitted[A](arg: Option[TExpr[A]]): Option[TExpr[A]] =
+    arg.filterNot(isEmptySlot)
 
   protected def rangeCellReader(
     targetSheet: com.tjclp.xl.sheets.Sheet,

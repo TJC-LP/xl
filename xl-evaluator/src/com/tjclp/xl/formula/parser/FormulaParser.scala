@@ -528,6 +528,9 @@ object FormulaParser:
             (TExpr.UnaryPlus(expr), s3.copy(depth = s.depth))
           }
         }
+      // GH-654: a sign may precede the lenient paren-less NOT keyword (`=-NOT x` parsed before
+      // GH-578 moved the signs down here) — it is a prefix-level operand, not a primary
+      case Some('N') | Some('n') if isKeywordAt(s, "NOT") => parseUnary(s)
       case _ => parsePostfix(s)
 
   /**

@@ -55,7 +55,10 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       Arity.Range(3, 5),
       flags = FunctionFlags(dynamicDeps = true)
     ) { (args, ctx) =>
-      val (refExpr, rowsExpr, colsExpr, hOpt, wOpt) = args
+      val (refExpr, rowsExpr, colsExpr, hSlot, wSlot) = args
+      // GH-654: `OFFSET(A1,0,0,,2)` — an empty height/width is omitted (an explicit 0 is #REF!)
+      val hOpt = unlessOmitted(hSlot)
+      val wOpt = unlessOmitted(wSlot)
       extractARef(refExpr) match
         case None =>
           Left(EvalError.EvalFailed("OFFSET requires a cell reference", Some("OFFSET(...)")))
@@ -194,7 +197,11 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    */
   val sequence: FunctionSpec[ArrayResult] { type Args = SequenceArgs } =
     FunctionSpec.simple[ArrayResult, SequenceArgs]("SEQUENCE", Arity.Range(1, 4)) { (args, ctx) =>
-      val (rowsExpr, colsOpt, startOpt, stepOpt) = args
+      val (rowsExpr, colsSlot, startSlot, stepSlot) = args
+      // GH-654: `SEQUENCE(3,,5)` is 5,6,7 — an empty slot is omitted (an explicit 0 is an error)
+      val colsOpt = unlessOmitted(colsSlot)
+      val startOpt = unlessOmitted(startSlot)
+      val stepOpt = unlessOmitted(stepSlot)
       for
         nRows <- ctx.evalExpr(rowsExpr)
         nCols <- colsOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
@@ -219,11 +226,16 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    * SORT(array, [sort_index], [sort_order])
    *
    * Sorts the rows of a range by a 1-based column index (default 1). sort_order 1 = ascending
-   * (default), -1 = descending. Sort key: numbers < text (case-insensitive) < booleans.
+   * (default), -1 = descending. Sort key: numbers < text (case-insensitive) < booleans < errors;
+   * blank keys come LAST in both directions and ties keep their source order, as in Excel and in
+   * `Sheet.sort` (GH-596). An empty slot is an omitted one: `SORT(rng,,-1)` sorts by the first
+   * column (GH-654).
    */
   val sortFn: FunctionSpec[ArrayResult] { type Args = SortArgs } =
     FunctionSpec.simple[ArrayResult, SortArgs]("SORT", Arity.Range(1, 3)) { (args, ctx) =>
-      val (location, idxOpt, orderOpt) = args
+      val (location, idxSlot, orderSlot) = args
+      val idxOpt = unlessOmitted(idxSlot)
+      val orderOpt = unlessOmitted(orderSlot)
       for
         sortIndex <- idxOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
         sortOrder <- orderOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
@@ -237,8 +249,15 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
           else if colIdx < 0 || colIdx >= width then
             Left(EvalError.EvalFailed(s"SORT: sort_index $sortIndex is outside 1..$width", None))
           else
-            val asc = matrix.sortBy(row => cellSortKey(row(colIdx)))
-            Right(ArrayResult(if sortOrder < 0 then asc.reverse else asc))
+            // GH-596/GH-654: reversing the ascending result put blanks FIRST and reversed ties;
+            // the comparator flips only the comparison between two non-blank keys (sortWith is
+            // stable, so equal keys keep their source order either way)
+            val descending = sortOrder < 0
+            Right(
+              ArrayResult(
+                matrix.sortWith((a, b) => compareSortCells(a(colIdx), b(colIdx), descending) < 0)
+              )
+            )
       yield result
     }
 
@@ -251,7 +270,10 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    */
   val unique: FunctionSpec[ArrayResult] { type Args = UniqueArgs } =
     FunctionSpec.simple[ArrayResult, UniqueArgs]("UNIQUE", Arity.Range(1, 3)) { (args, ctx) =>
-      val (location, byColOpt, onceOpt) = args
+      val (location, byColSlot, onceSlot) = args
+      // GH-654: `UNIQUE(rng,,TRUE)` — an empty slot is omitted, like SORT's and FILTER's
+      val byColOpt = unlessOmitted(byColSlot)
+      val onceOpt = unlessOmitted(onceSlot)
       for
         byCol <- byColOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
         exactlyOnce <- onceOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
@@ -289,7 +311,10 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    */
   val filterFn: FunctionSpec[ArrayResult] { type Args = FilterArgs } =
     FunctionSpec.simple[ArrayResult, FilterArgs]("FILTER", Arity.Range(2, 3)) { (args, ctx) =>
-      val (arrayLoc, includeArg, ifEmptyOpt) = args
+      val (arrayLoc, includeArg, ifEmptySlot) = args
+      // GH-654: `FILTER(a,i,)` — an empty if_empty is omitted (Excel errors on no match, it does
+      // not return a blank)
+      val ifEmptyOpt = unlessOmitted(ifEmptySlot)
       def ifEmpty: Either[EvalError, ArrayResult] =
         ifEmptyOpt match
           case Some(expr) => evalValue(ctx, expr).map(v => ArrayResult.single(toCellValue(v)))
@@ -304,7 +329,9 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
               case (includeSheet, includeRange) =>
                 extractRangeAsMatrixEval(includeRange, includeSheet, ctx)
             }
-          case Right(expr) => ctx.evalArrayExpr(expr).map(toCellArray(_).values)
+          // GH-654: a bare cell (`=FILTER(A1:C1,D1)`) arrives as an unresolved PolyRef —
+          // evalMaybeArrayArg resolves it to its 1×1 value like every other array-aware slot
+          case Right(expr) => evalMaybeArrayArg(ctx, expr).map(toCellArray(_).values)
         result <-
           val rows = matrix.size
           val cols = matrix.headOption.map(_.size).getOrElse(0)
@@ -339,6 +366,29 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       case CellValue.Bool(b) => (2, if b then BigDecimal(1) else BigDecimal(0), "")
       case CellValue.Formula(_, Some(c), _) => cellSortKey(c)
       case _ => (3, BigDecimal(0), "")
+
+  /** GH-596: a blank key is excluded from the ordering and appended, in both directions. */
+  private def isBlankSortValue(cv: CellValue): Boolean =
+    cv match
+      case CellValue.Empty => true
+      case CellValue.Formula(_, Some(c), _) => isBlankSortValue(c)
+      case _ => false
+
+  private val sortKeyOrdering: Ordering[(Int, BigDecimal, String)] =
+    Ordering.Tuple3[Int, BigDecimal, String]
+
+  /**
+   * SORT's key comparison: blanks last whatever the direction, the direction applied only between
+   * two non-blank keys (the rule `Sheet.sort` follows, GH-596).
+   */
+  private def compareSortCells(a: CellValue, b: CellValue, descending: Boolean): Int =
+    (isBlankSortValue(a), isBlankSortValue(b)) match
+      case (true, true) => 0
+      case (true, false) => 1
+      case (false, true) => -1
+      case (false, false) =>
+        val cmp = sortKeyOrdering.compare(cellSortKey(a), cellSortKey(b))
+        if descending then -cmp else cmp
 
   /** Canonical equality key for UNIQUE (case-insensitive text, normalized numbers). */
   private def cellKey(cv: CellValue): String =
