@@ -32,8 +32,8 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
    * two-argument form on a one-row array reads its argument as column_num, on a one-column array as
    * row_num, and on a 2-D array as row_num with the whole row selected (collapsing to that row's
    * first cell in a scalar position — the value it always returned there). A whole-axis selection
-   * over a whole-column/row array is bounded to the sheet's used range (as INDIRECT bounds "A:A");
-   * a position outside the array is a descriptive `#REF!`.
+   * is bounded to the sheet's used range (as INDIRECT bounds "A:A"), so its cost follows the data
+   * rather than the reference; a position outside the array is a descriptive `#REF!`.
    */
   val index: FunctionSpec[ArrayResult] { type Args = IndexArgs } =
     FunctionSpec.simple[ArrayResult, IndexArgs]("INDEX", Arity.Range(2, 3)) { (args, ctx) =>
@@ -76,42 +76,31 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
               )
             else Right(Some(pos - 1))
 
-          // the 0-based inclusive span an axis selection covers; a whole axis of a whole-column or
-          // whole-row array is bounded to the used range (None when the two do not meet)
+          // the 0-based inclusive span an axis selection covers; a whole axis is bounded to the
+          // used range (None when the two do not meet), so `INDEX($A$1:$A$100000,0)` costs the
+          // data, not the reference — cells past the used range are blank either way
           def span(
             sel: Option[Int],
             start: Int,
             size: Int,
-            wholeSheetAxis: Boolean,
             used: Option[(Int, Int)]
           ): Option[(Int, Int)] =
             sel match
               case Some(i) => Some((start + i, start + i))
-              case None if wholeSheetAxis =>
+              case None =>
                 used
                   .map { case (lo, hi) => (math.max(lo, start), math.min(hi, start + size - 1)) }
                   .filter { case (lo, hi) => lo <= hi }
-              case None => Some((start, start + size - 1))
 
           for
             rowSel <- axis(rowPos, numRows, "row_num", "rows")
             colSel <- axis(colPos, numCols, "col_num", "columns")
             values <-
               val used = targetSheet.usedRange
-              val rowSpan = span(
-                rowSel,
-                startRow,
-                numRows,
-                arrayRange.isFullColumn,
-                used.map(u => (u.rowStart.index0, u.rowEnd.index0))
-              )
-              val colSpan = span(
-                colSel,
-                startCol,
-                numCols,
-                arrayRange.isFullRow,
-                used.map(u => (u.colStart.index0, u.colEnd.index0))
-              )
+              val rowSpan =
+                span(rowSel, startRow, numRows, used.map(u => (u.rowStart.index0, u.rowEnd.index0)))
+              val colSpan =
+                span(colSel, startCol, numCols, used.map(u => (u.colStart.index0, u.colEnd.index0)))
               (rowSpan, colSpan) match
                 case (Some((r0, r1)), Some((c0, c1))) =>
                   val selected = CellRange(ARef.from0(c0, r0), ARef.from0(c1, r1))

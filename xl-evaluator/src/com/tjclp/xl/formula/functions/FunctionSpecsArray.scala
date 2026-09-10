@@ -306,8 +306,9 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    * either a range of precomputed flags or any array-valued expression — the canonical Excel
    * spelling `B1:B3>1`, `(A1:A3="x")*(B1:B3>0)`, a call returning an array — evaluated elementwise
    * through the same machinery as SUMPRODUCT. An `include` whose shape matches neither the rows nor
-   * the columns of `array` is `#VALUE!`, as in Excel. Returns `if_empty` (or #N/A) when nothing
-   * matches.
+   * the columns of `array` is `#VALUE!`, as in Excel. When both match — a one-row array with a 1×1
+   * include (`FILTER(A1:C1,D1)`) — the row rule wins and the flag keeps or drops the whole row; the
+   * branch order below is that choice. Returns `if_empty` (or #N/A) when nothing matches.
    */
   val filterFn: FunctionSpec[ArrayResult] { type Args = FilterArgs } =
     FunctionSpec.simple[ArrayResult, FilterArgs]("FILTER", Arity.Range(2, 3)) { (args, ctx) =>

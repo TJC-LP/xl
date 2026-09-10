@@ -72,7 +72,9 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
   time — only a range of precomputed flags was accepted. The include is now a range, a single
   cell or any array-valued expression, evaluated elementwise like SUMPRODUCT's; a one-row include
   as wide as the array filters columns; a shape matching neither rows nor columns is `#VALUE!` (it
-  used to truncate silently).
+  used to truncate silently). **Breaking** for code building the call programmatically:
+  `FunctionSpecsBase.FilterArgs`' second member is an `ArgSpec.SumProductArg` (range or
+  expression), no longer a bare `TExpr.RangeLocation`.
 
 ## [0.22.0] - 2026-09-08
 

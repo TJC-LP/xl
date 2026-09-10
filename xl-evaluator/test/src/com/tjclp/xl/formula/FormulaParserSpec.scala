@@ -2166,6 +2166,51 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
+  /**
+   * GH-578/GH-654: random expressions over the operators whose precedence moved — `^`, unary minus,
+   * unary plus — mixed with the four arithmetic operators and postfix percent, built as ASTs (not
+   * parenthesized sources) so the PRINTER chooses every paren.
+   */
+  private def genSignedPowExpr(depth: Int): Gen[TExpr[BigDecimal]] =
+    val leaf: Gen[TExpr[BigDecimal]] = Gen.oneOf(
+      Gen.choose(1, 99).map(n => TExpr.Lit(BigDecimal(n))),
+      genCellRef
+    )
+    if depth <= 0 then leaf
+    else
+      Gen.frequency(
+        2 -> leaf,
+        3 -> (for
+          l <- genSignedPowExpr(depth - 1)
+          r <- genSignedPowExpr(depth - 1)
+          op <- Gen.oneOf[(TExpr[BigDecimal], TExpr[BigDecimal]) => TExpr[BigDecimal]](
+            TExpr.Add.apply,
+            TExpr.Sub.apply,
+            TExpr.Mul.apply,
+            TExpr.Div.apply,
+            TExpr.Pow.apply
+          )
+        yield op(l, r)),
+        2 -> genSignedPowExpr(depth - 1).map(e => TExpr.Sub(TExpr.Lit(BigDecimal(0)), e)),
+        1 -> genSignedPowExpr(depth - 1).map(e => TExpr.UnaryPlus(e)),
+        1 -> genSignedPowExpr(depth - 1).map(e => TExpr.Percent(e))
+      )
+
+  property("GH-578: print ∘ parse ∘ print = print for signed operands and powers") {
+    forAll(genSignedPowExpr(4)) { expr =>
+      val printed = FormulaPrinter.print(expr)
+      FormulaParser.parse(printed) match
+        case Right(reparsed) =>
+          assertEquals(FormulaPrinter.print(reparsed), printed, s"not a fixpoint: $printed")
+          assertEquals(
+            FormulaPrinter.printWithTypes(reparsed),
+            FormulaPrinter.printWithTypes(expr),
+            s"shape changed across the round-trip of $printed"
+          )
+        case Left(err) => fail(s"printed form '$printed' should parse: $err")
+    }
+  }
+
   test("GH-484: printFileForm emits Excel's bare-comma argument separators") {
     FormulaParser.parse("=IF(A1,1,0)") match
       case Right(expr) => assertEquals(FormulaPrinter.printFileForm(expr), "IF(A1,1,0)")

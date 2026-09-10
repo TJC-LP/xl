@@ -388,7 +388,9 @@ object ArgSpec:
 
     override def renderSlots(args: Option[A], printer: ArgPrinter): List[Option[String]] =
       args match
-        case None => List(None)
+        // one absent marker per slot the inner spec would render, so the comma count matches
+        // whether or not the argument is present (every inner spec is single-slot today)
+        case None => List.fill(inner.describeParts.size)(None)
         case Some(value) => inner.renderSlots(value, printer)
 
     def map(

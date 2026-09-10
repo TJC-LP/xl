@@ -393,7 +393,11 @@ object FormulaStorage:
         else
           sb.append(c)
           i += 1
-      closeDue()
+      // every wrap opened is closed here at the latest — balanced output is a property of this
+      // loop, not of the operand scanner (closeDue() has already fired for i == n)
+      while pendingClose.nonEmpty do
+        sb.append(')')
+        pendingClose = pendingClose.drop(1)
       sb.toString
 
   /**
