@@ -1184,24 +1184,42 @@ object WorkbookLint:
         if facts.count > facts.sample.size then
           s"first ${facts.sample.size}: ${facts.sample.mkString(", ")}, …"
         else facts.sample.mkString(", ")
-      // GH-654: a bare `@` is its own fact — the file holds `@x` where Excel stores
-      // `_xlfn.SINGLE(x)`, and Excel repairs such a formula away on open rather than showing
-      // #NAME? — so the message names the token in the file, not a call that is not there
-      val calls = facts.functions.toVector.filterNot(_ == "@").sorted
-      val bareAt = facts.functions.contains("@")
-      val names = calls ++ Option.when(bareAt)("@ → _xlfn.SINGLE")
+      // GH-654/GH-655: a bare `@` or `x#` is its own fact — the file holds the formula-bar
+      // spelling where Excel stores `_xlfn.SINGLE(x)` / `_xlfn.ANCHORARRAY(x)`, and Excel repairs
+      // such a formula away on open rather than showing #NAME? — so the message names the token in
+      // the file, not a call that is not there
+      val bareOperators = Vector(
+        Option.when(facts.functions.contains("@"))(
+          ("a bare @", "_xlfn.SINGLE", "implicit intersection")
+        ),
+        Option.when(facts.functions.contains("#"))(
+          ("a bare x#", "_xlfn.ANCHORARRAY", "a spill reference")
+        )
+      ).flatten
+      val calls = facts.functions.toVector.filterNot(t => t == "@" || t == "#").sorted
+      val names = calls ++ bareOperators.map { case (bare, stored, _) =>
+        s"${bare.stripPrefix("a bare ")} → $stored"
+      }
       val what =
         if calls.isEmpty then
-          s"store implicit intersection as a bare @ where Excel writes _xlfn.SINGLE ($sites)"
+          val stores = bareOperators
+            .map { case (bare, stored, meaning) =>
+              s"store $meaning as $bare where Excel writes $stored"
+            }
+            .mkString(" and ")
+          s"$stores ($sites)"
         else
-          val alsoAt = if bareAt then " or store implicit intersection as a bare @" else ""
+          val also = bareOperators.map { case (bare, _, meaning) =>
+            s" or store $meaning as $bare"
+          }.mkString
           "call post-2007 function(s) without Excel's _xlfn. (or _xlpm.) storage prefix" +
-            s"$alsoAt (${names.mkString(", ")}; $sites)"
-      val consequence =
-        if calls.isEmpty then "Excel repairs the bare @ away on open"
-        else if bareAt then
-          "Excel shows #NAME? on the first recalculation and repairs a bare @ away on open"
-        else "Excel shows #NAME? on the first recalculation"
+            s"$also (${names.mkString(", ")}; $sites)"
+      val consequence = Vector(
+        Option.when(calls.nonEmpty)("Excel shows #NAME? on the first recalculation"),
+        Option.when(bareOperators.nonEmpty)(
+          s"Excel repairs ${bareOperators.map(_._1).mkString(" and ")} away on open"
+        )
+      ).flatten.mkString(" and ")
       Vector(
         Finding(
           part,

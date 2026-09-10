@@ -494,9 +494,37 @@ object FormulaParser:
               case Left(err) => Left(err)
               case Right(sd) =>
                 loop(TExpr.Percent(TExpr.asNumericOrRangeExpr(acc)), sd.advance())
+          // GH-655: the spill reference `x#` — the formula-bar spelling of `_xlfn.ANCHORARRAY(x)`,
+          // postfix on one cell reference or name (never on a range, a value or a call)
+          case Some('#') if FunctionSpecs.isSpillAnchorShape(acc) =>
+            parseSpillSuffix(acc, s2) match
+              case Left(err) => Left(err)
+              case Right((spill, s3)) => loop(spill, s3)
           case _ => Right((acc, s2))
       loop(first, s1)
     }
+
+  /**
+   * GH-655: wrap `operand` — a cell reference or a name whose next character is `#` — in the
+   * ANCHORARRAY call the spill reference denotes, consuming the `#`. The parser's postfix loop and
+   * the `@` operand slot share it, so `@A1#` reads as `@(A1#)`.
+   */
+  private def parseSpillSuffix(operand: TExpr[?], state: ParserState): ParseResult[TExpr[?]] =
+    descend(state).flatMap { sd =>
+      FunctionSpecs.anchorArray.argSpec
+        .parse(List(operand), state.pos, FunctionSpecs.anchorArray.name)
+        .map { case (parsed, _) =>
+          (TExpr.Call(FunctionSpecs.anchorArray, parsed), sd.advance().copy(depth = state.depth))
+        }
+    }
+
+  /**
+   * The `#`-suffixed form of a primary when one follows an anchor-shaped operand, else the primary.
+   */
+  private def withSpillSuffix(primary: TExpr[?], state: ParserState): ParseResult[TExpr[?]] =
+    if state.currentChar.contains('#') && FunctionSpecs.isSpillAnchorShape(primary) then
+      parseSpillSuffix(primary, state)
+    else Right((primary, state))
 
   /**
    * Parse a signed operand of '^' — either side, GH-578 — allowing unary minus and plus: -2^2 is
@@ -603,13 +631,16 @@ object FormulaParser:
         // The operand is one primary (a reference, name, call, or parenthesized expression), so
         // `@A1:A10%` is (@A1:A10)% and `@A1^2` is (@A1)^2, as in Excel.
         descend(s).flatMap { sd =>
-          parsePrimary(skipWhitespace(sd.advance())).flatMap { case (operand, s2) =>
-            FunctionSpecs.single.argSpec
-              .parse(List(operand), s.pos, FunctionSpecs.single.name)
-              .map { case (parsed, _) =>
-                (TExpr.Call(FunctionSpecs.single, parsed), s2.copy(depth = s.depth))
-              }
-          }
+          // GH-655: the operand may carry the spill suffix — `@A1#` is `@(A1#)`
+          parsePrimary(skipWhitespace(sd.advance()))
+            .flatMap { case (primary, s2) => withSpillSuffix(primary, s2) }
+            .flatMap { case (operand, s2) =>
+              FunctionSpecs.single.argSpec
+                .parse(List(operand), s.pos, FunctionSpecs.single.name)
+                .map { case (parsed, _) =>
+                  (TExpr.Call(FunctionSpecs.single, parsed), s2.copy(depth = s.depth))
+                }
+            }
         }
       case Some(c) =>
         Left(ParseError.UnexpectedChar(c, s.pos, "expected expression"))

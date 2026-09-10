@@ -19,6 +19,7 @@ class FutureFunctionRegistrySpec extends FunSuite:
     assertEquals(
       prefixed,
       Set(
+        "ANCHORARRAY",
         "FILTER",
         "IFNA",
         "IFS",

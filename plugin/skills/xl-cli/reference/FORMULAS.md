@@ -19,6 +19,7 @@ it are hand-written semantics worth knowing.
 | --- | --- | --- | --- |
 | `ABS` | 1 | number | — |
 | `ADDRESS` | 2–5 | number, number, optional number, optional boolean, optional text | — |
+| `ANCHORARRAY` | 1 | array or range | dynamic deps |
 | `AND` | 1+ | boolean... | — |
 | `AVERAGE` | 1+ | number or range... | — |
 | `AVERAGEIF` | 2–3 | range, value, optional range | — |

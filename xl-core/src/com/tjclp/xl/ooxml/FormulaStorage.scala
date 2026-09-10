@@ -258,35 +258,36 @@ object FormulaStorage:
    */
   def toStored(expr: String): String =
     val bare = expr.stripPrefix("=")
-    // Fast path: without a '(' there is no call and no LET/LAMBDA scope, and without an '@' no
-    // implicit intersection (GH-604) — nothing to prefix
-    if bare.indexOf('(') < 0 && bare.indexOf('@') < 0 then bare
-    else
-      rewriteCalls(wrapIntersections(bare, () => ()))(storedCall, (token, _) => storedParam(token))
+    // Fast path: without a '(' there is no call and no LET/LAMBDA scope, without an '@' no
+    // implicit intersection (GH-604) and without a '#' no spill reference (GH-655) — nothing to
+    // prefix
+    if bare.indexOf('(') < 0 && bare.indexOf('@') < 0 && bare.indexOf('#') < 0 then bare
+    else rewriteCalls(wrapOperators(bare, _ => ()))(storedCall, (token, _) => storedParam(token))
 
   /**
    * GH-577: the upper-case bare names of the calls in a stored formula whose spelling [[toStored]]
    * would change — a [[FutureFunctions]] call without `_xlfn.` (or with `_xlws.` alone, which Excel
    * does not resolve), a LET / LAMBDA whose parameters lack `_xlpm.` (the openpyxl-style
-   * `_xlfn.LET(x,1,x+1)`), and the token `@` for an implicit intersection stored bare (GH-604) —
-   * distinct, in order of first appearance. This runs the SAME scanner as [[toStored]] with
-   * recording callbacks in place of the rewriting ones, so `bareFutureCalls(text).isEmpty` holds
-   * exactly when `toStored(text)` returns `text` (minus a leading '=') unchanged: a lint built on
-   * it cannot disagree with the writer. Excel and LibreOffice show `#NAME?` for a bare future
-   * function on the first recalculation and report a LET / LAMBDA without `_xlpm.` as unreadable
-   * content on open.
+   * `_xlfn.LET(x,1,x+1)`), the token `@` for an implicit intersection stored bare (GH-604) and the
+   * token `#` for a spill reference stored bare (GH-655) — distinct, in order of first appearance.
+   * This runs the SAME scanner as [[toStored]] with recording callbacks in place of the rewriting
+   * ones, so `bareFutureCalls(text).isEmpty` holds exactly when `toStored(text)` returns `text`
+   * (minus a leading '=') unchanged: a lint built on it cannot disagree with the writer. Excel and
+   * LibreOffice show `#NAME?` for a bare future function on the first recalculation and report a
+   * LET / LAMBDA without `_xlpm.` as unreadable content on open.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def bareFutureCalls(text: String): Vector[String] =
-    // Same fast path as toStored: without a '(' or an '@' there is nothing the writer would change
-    if text.indexOf('(') < 0 && text.indexOf('@') < 0 then Vector.empty
+    // Same fast path as toStored: without a '(', an '@' or a '#' there is nothing the writer
+    // would change
+    if text.indexOf('(') < 0 && text.indexOf('@') < 0 && text.indexOf('#') < 0 then Vector.empty
     else
       var found = Vector.empty[String]
       def record(name: String): Unit = if !found.contains(name) then found = found :+ name
-      // GH-604/GH-654: a bare `@x` in a file (Excel stores `_xlfn.SINGLE(x)`) is recorded as the
-      // token the file holds, `@` — the lint names what the user can find, not a call that is
-      // not there
-      val wrapped = wrapIntersections(text, () => record("@"))
+      // GH-604/GH-654/GH-655: a bare `@x` (Excel stores `_xlfn.SINGLE(x)`) or `x#` (Excel stores
+      // `_xlfn.ANCHORARRAY(x)`) in a file is recorded as the token the file holds, `@` or `#` —
+      // the lint names what the user can find, not a call that is not there
+      val wrapped = wrapOperators(text, record)
       rewriteCalls(wrapped)(
         token =>
           if storedCall(token) != token then
@@ -310,40 +311,51 @@ object FormulaStorage:
     // Fast path: every storage prefix starts with "_xl"; a formula without it is already bare
     if !containsStoragePrefix(text) then text
     else
-      // GH-654: the unwrap pass runs only when the call scan met a SINGLE — every other prefixed
-      // formula (a 1M-row book of _xlfn.XLOOKUP cells on the SAX read path) pays one scan, not two
-      var sawSingle = false
+      // GH-654: the unwrap pass runs only when the call scan met a SINGLE or an ANCHORARRAY — every
+      // other prefixed formula (a 1M-row book of _xlfn.XLOOKUP cells on the SAX read path) pays
+      // one scan, not two
+      var sawOperatorCall = false
       val bare = rewriteCalls(text)(
         token =>
-          if !sawSingle && bareFunctionName(token).equalsIgnoreCase("SINGLE") then sawSingle = true
+          if !sawOperatorCall then
+            val name = bareFunctionName(token)
+            if name.equalsIgnoreCase("SINGLE") || name.equalsIgnoreCase("ANCHORARRAY") then
+              sawOperatorCall = true
           modelCall(token)
         ,
         (token, _) => modelParam(token)
       )
-      if sawSingle then unwrapIntersections(bare) else bare
+      if sawOperatorCall then unwrapOperators(bare) else bare
 
-  // ===== GH-604: the implicit-intersection operator =====
+  // ===== GH-604 / GH-655: the implicit-intersection and spill-reference operators =====
   //
   // Excel 365 stores `@x` (implicit intersection — the formula bar's spelling) as
-  // `_xlfn.SINGLE(x)`. The model keeps the formula-bar form: [[toStored]] wraps every `@` operand
-  // in `_xlfn.SINGLE(...)` and [[fromStored]] unwraps every one-argument `SINGLE(...)` call back to
-  // `@`. The operand of `@` is one primary, exactly what the parser's `@` arm accepts: a reference
+  // `_xlfn.SINGLE(x)` and the spill reference `x#` as `_xlfn.ANCHORARRAY(x)`. The model keeps the
+  // formula-bar form: [[toStored]] wraps every `@` operand in `_xlfn.SINGLE(...)` and every
+  // `reference#` in `_xlfn.ANCHORARRAY(...)`; [[fromStored]] unwraps every one-argument
+  // `SINGLE(...)` call back to `@` and every `ANCHORARRAY(reference)` back to `reference#`. The
+  // operand of `#` is one reference token — a cell (`$`-anchored, sheet- or workbook-qualified) or
+  // a name. The operand of `@` is one primary, exactly what the parser's `@` arm accepts: a reference
   // or name (optionally sheet-qualified, quoted or external), a function call, a structured
   // reference, a string / number / boolean / error literal, another `@`, or a parenthesized
   // expression, optionally after whitespace — so `@acq`, `@'M&A'!I12:I40`, `@INDEX(rng,,2)`,
-  // `@"x"`, `@@A1:A3` and `@(A1:A3*2)` all wrap, and the parens of the last are the call's own:
-  // `_xlfn.SINGLE(A1:A3*2)`. Both directions rescan the operand, so a nested `@` / `SINGLE(`
-  // inside it (`@INDEX(@A1:A3,1)`) is rewritten too (GH-654). An `@` inside a structured reference
-  // (`Table1[@Col]`), a string, or one with no operand after it is copied verbatim.
+  // `@"x"`, `@@A1:A3`, `@A1#` and `@(A1:A3*2)` all wrap, and the parens of the last are the call's
+  // own: `_xlfn.SINGLE(A1:A3*2)`. Both directions rescan an `@` operand, so a nested `@` / `#` /
+  // `SINGLE(` / `ANCHORARRAY(` inside it (`@INDEX(@A1:A3,1)`, `@A1#`) is rewritten too (GH-654).
+  // An `@` or `#` inside a structured reference (`Table1[@Col]`, `Table1[#All]`), a string, an
+  // error literal (`#REF!`), or an `@` with no operand after it is copied verbatim.
 
   /**
-   * Wrap every `@operand` as `_xlfn.SINGLE(operand)`, calling `onWrap` once per rewrite. The
-   * operand is rescanned rather than copied, so a nested `@` wraps too; whitespace between `@` and
-   * its operand is dropped (`@ A1` stores as `_xlfn.SINGLE(A1)`, the parser's own reading).
+   * Wrap the two operator spellings Excel stores as calls: `@operand` as `_xlfn.SINGLE(operand)`
+   * and `reference#` as `_xlfn.ANCHORARRAY(reference)`, calling `onWrap` with the operator token
+   * (`"@"` / `"#"`) once per rewrite. An `@` operand is rescanned rather than copied, so a nested
+   * `@` or `#` inside it wraps too; whitespace between `@` and its operand is dropped (`@ A1`
+   * stores as `_xlfn.SINGLE(A1)`, the parser's own reading). A `#` applies to the reference token
+   * just before it, copied verbatim inside the call.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  private def wrapIntersections(text: String, onWrap: () => Unit): String =
-    if text.indexOf('@') < 0 then text
+  private def wrapOperators(text: String, onWrap: String => Unit): String =
+    if text.indexOf('@') < 0 && text.indexOf('#') < 0 then text
     else
       val n = text.length
       val sb = new java.lang.StringBuilder(n + 16)
@@ -358,7 +370,15 @@ object FormulaStorage:
       while i < n do
         closeDue()
         val c = text.charAt(i)
-        if bracketDepth == 0 && (c == '"' || c == '\'') then
+        // a reference token followed by '#': `A1#`, `$A$1#`, `Sheet1!A1#`, `'My Sheet'!A1#`,
+        // `[1]Book!A1#`, `name#`
+        val spillEnd =
+          if bracketDepth == 0 && atTokenStart(text, i) then spillOperandEnd(text, i) else -1
+        if spillEnd > i && spillEnd < n && text.charAt(spillEnd) == '#' then
+          onWrap("#")
+          sb.append(XlfnPrefix).append("ANCHORARRAY(").append(text, i, spillEnd).append(')')
+          i = spillEnd + 1
+        else if bracketDepth == 0 && (c == '"' || c == '\'') then
           val end = closingQuote(text, i, c)
           sb.append(text, i, end)
           i = end
@@ -378,7 +398,7 @@ object FormulaStorage:
           val start = skipSpaces(text, i + 1)
           val end = intersectionOperandEnd(text, start)
           if end > start then
-            onWrap()
+            onWrap("@")
             sb.append(XlfnPrefix).append("SINGLE(")
             if text.charAt(start) == '(' then
               // `@(expr)` — the parens become the call's own: skip the '(' and let the ')' at
@@ -401,11 +421,50 @@ object FormulaStorage:
       sb.toString
 
   /**
-   * Rewrite every one-argument `SINGLE(x)` call (any storage prefix already stripped) to `@x`. The
-   * argument is rescanned rather than copied, so a nested `SINGLE(` unwraps too.
+   * True when `i` begins a reference / name token: an identifier start, `$`, a quoted sheet name or
+   * an external-workbook bracket, not preceded by another token character (so the `A1` of
+   * `Sheet1!A1` is not a start — that token began at `Sheet1`).
+   */
+  private def atTokenStart(text: String, i: Int): Boolean =
+    val c = text.charAt(i)
+    (isIdentStart(c) || c == '$' || c == '\'' || c == '[') &&
+    (i == 0 || {
+      val p = text.charAt(i - 1)
+      !isIdentChar(p) && p != '!' && p != '\'' && p != ']'
+    })
+
+  /**
+   * Index just past the reference / name token at `start`: an optional qualifier (`'quoted'!`,
+   * `[n]`), then a body of identifier characters and `!` (`Sheet1!$A$1`, `Sales.Total`); `start`
+   * when nothing reference-shaped is there. Unlike [[intersectionOperandEnd]] it admits no call, no
+   * structured reference and no `:` — the operand of `#` is one cell or one name.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  private def unwrapIntersections(text: String): String =
+  private def spillOperandEnd(text: String, start: Int): Int =
+    val n = text.length
+    if start >= n then start
+    else
+      val c = text.charAt(start)
+      val afterQualifier =
+        if c == '\'' then
+          val q = closingQuote(text, start, '\'')
+          if q < n && text.charAt(q) == '!' then q + 1 else -1
+        else if c == '[' then closingBracket(text, start)
+        else start
+      if afterQualifier < 0 then start
+      else
+        var i = afterQualifier
+        while i < n && (isIdentChar(text.charAt(i)) || text.charAt(i) == '!') do i += 1
+        if i == afterQualifier then start else i
+
+  /**
+   * Rewrite every one-argument `SINGLE(x)` call (any storage prefix already stripped) to `@x`, and
+   * every `ANCHORARRAY(reference)` to `reference#`. A `SINGLE` argument is rescanned rather than
+   * copied, so a nested `SINGLE(` / `ANCHORARRAY(` unwraps too; an `ANCHORARRAY` argument is one
+   * reference token and is copied verbatim (a call with any other argument keeps its spelling).
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def unwrapOperators(text: String): String =
     val n = text.length
     val sb = new java.lang.StringBuilder(n)
     var i = 0
@@ -448,6 +507,21 @@ object FormulaStorage:
           // `)` at close - 1 is dropped on arrival), any other keeps them as its grouping
           if simple then dropClose = (close - 1) :: dropClose else sb.append('(')
           i = open + 1
+        else
+          sb.append(text, i, open + 1)
+          i = open + 1
+      else if bracketDepth == 0 && isIdentStart(c) && (i == 0 || !isIdentChar(text.charAt(i - 1)))
+        && text.regionMatches(true, i, "ANCHORARRAY(", 0, 12)
+      then
+        // GH-655: `ANCHORARRAY(reference)` → `reference#`; any other argument keeps the call
+        val open = i + 11
+        val close = closingParen(text, open)
+        val inner = if close < 0 then "" else text.substring(open + 1, close - 1)
+        if close > 0 && inner.nonEmpty && singleArgument(inner) &&
+          spillOperandEnd(inner, 0) == inner.length
+        then
+          sb.append(inner).append('#')
+          i = close
         else
           sb.append(text, i, open + 1)
           i = open + 1
@@ -497,6 +571,8 @@ object FormulaStorage:
           if i == start then start
           else if i < n && text.charAt(i) == '(' then orStart(closingParen(text, i))
           else if i < n && text.charAt(i) == '[' then orStart(closingBracket(text, i))
+          // GH-655: `@A1#` — the spill suffix belongs to the operand
+          else if i < n && text.charAt(i) == '#' then i + 1
           else i
 
   /** True when `inner` (a call's argument text) holds exactly one argument: no top-level comma. */

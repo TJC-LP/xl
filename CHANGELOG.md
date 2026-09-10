@@ -39,10 +39,22 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
   `_xlfn.SINGLE(A1:A3*2)`, `@INDEX(@A1:A3,1)` ↔ `_xlfn.SINGLE(INDEX(_xlfn.SINGLE(A1:A3),1))`;
   `Table1[@Col]` and strings untouched) — and `xl lint`'s `xlfn-missing` reports a bare `@` in a
   file as the token it is (Excel repairs it away on open), beside any prefix-less calls.
-  `ANCHORARRAY` (`x#`, the spill reference) is not yet modeled.
+  `ANCHORARRAY` (`x#`, the spill reference) followed in #655, below.
+- **`x#` — the spill reference** (#655): Excel 365 stores `A1#` as `_xlfn.ANCHORARRAY(A1)`; the
+  model keeps the formula-bar spelling. `ANCHORARRAY` joins the registry as a reference-returning
+  function (typed `ArrayResult` like OFFSET): the value is the whole array the anchor cell's
+  formula spills — the file's `<f t="array" ref>` span read through its cached cells when Excel
+  wrote one, so a spill from a function xl does not evaluate (`SORTBY`, `TAKE`) still reads; else
+  the anchor's formula evaluated as an array at its own position. A constant, a scalar formula or
+  a spilled non-anchor cell is `#REF!`, as in Excel; so is a range before the `#`. The parser
+  accepts `x#` on a cell reference or a defined name (qualified, anchored or external) and
+  `ANCHORARRAY(x)`; the printer emits `x#`; `FormulaStorage` maps `x#` ↔ `_xlfn.ANCHORARRAY(x)`
+  at every formula-text boundary, nesting under `@` (`@A1#` ↔
+  `_xlfn.SINGLE(_xlfn.ANCHORARRAY(A1))`); `xl lint`'s `xlfn-missing` reports a bare `x#` as its
+  own fact. Readers of a spill are dynamic-dependency cells (the static graph sees the anchor, not
+  its extent) and recalculate last. 119 functions.
 - **`RRI(nper, pv, fv)`** (#605): the equivalent interest rate for the growth of an investment —
   `(fv/pv)^(1/nper) - 1`, the CAGR idiom; `#NUM!` when nper ≤ 0, pv = 0 or the ratio is negative.
-  118 functions.
 
 ### Changed
 
@@ -67,6 +79,9 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
 
 ### Fixed
 
+- **`ROWS` and `COLUMNS` count any array** (#655): `ROWS(A1#)`, `ROWS(SEQUENCE(3))` and
+  `COLUMNS(A1:C1*2)` count the array's rows or columns, as in Excel; a scalar argument is 1. Only a
+  literal range was accepted ("requires a range argument").
 - **`FILTER` accepts an array-valued `include`** (#580): `=FILTER(B1:B3,B1:B3>1)`,
   `=SUM(FILTER(B1:B3,A1:A3<>"a"))` and `(A1:A3="x")*(B1:B3>0)` were "expected range" at parse
   time — only a range of precomputed flags was accepted. The include is now a range, a single

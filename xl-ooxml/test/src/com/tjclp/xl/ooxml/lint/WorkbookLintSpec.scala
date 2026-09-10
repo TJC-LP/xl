@@ -1501,6 +1501,24 @@ class WorkbookLintSpec extends FunSuite:
     assert(!f.message.contains("(SINGLE"), s"the formula holds no SINGLE call: ${f.message}")
   }
 
+  test("GH-655: a bare spill reference x# is reported as the token in the file") {
+    val bareSpillSheetXml = worksheetWith(
+      """<sheetData>
+    <row r="1"><c r="B1"><f>SUM(A1#)</f><v>6</v></c><c r="C1"><f>SUM(_xlfn.ANCHORARRAY(A1))</f><v>6</v></c></row>
+  </sheetData>"""
+    )
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> bareSpillSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.XlfnMissing))
+    val f = findings.head
+    assertEquals(f.locator, """<c r="B1"><f>""")
+    assert(f.message.contains("bare x#"), f.toString)
+    assert(f.message.contains("_xlfn.ANCHORARRAY"), f.toString)
+    assert(f.message.contains("(B1)"), f.toString)
+    assert(f.message.contains("repairs"), f.toString)
+    assert(!f.message.contains("#NAME?"), f.toString)
+    assert(!f.message.contains("(ANCHORARRAY"), f.toString)
+  }
+
   test("GH-588: a part whose root element is formula text records no site in either mode") {
     val parts = baseParts + ("xl/worksheets/sheet1.xml" -> rootFormulaSheetXml)
     val dom = lintOf(parts)
