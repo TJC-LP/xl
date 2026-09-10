@@ -204,3 +204,37 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
         }
       yield result
     }
+
+  /**
+   * RRI(nper, pv, fv) — the equivalent interest rate for the growth of an investment (GH-605):
+   * `(fv / pv) ^ (1 / nper) - 1`, the CAGR idiom. An Excel 2013 function, stored as `_xlfn.RRI`.
+   *
+   * Excel's error rules: `#NUM!` when nper ≤ 0, when pv is 0 (the ratio is undefined), or when the
+   * ratio is negative (no real root). `RRI(n, pv, 0)` is -1 (the investment vanished).
+   */
+  val rri: FunctionSpec[BigDecimal] { type Args = RriArgs } =
+    FunctionSpec.simple[BigDecimal, RriArgs](
+      "RRI",
+      Arity.three,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (nperExpr, pvExpr, fvExpr) = args
+      def num(detail: String): Either[EvalError, BigDecimal] =
+        Left(EvalError.ErrorValue(CellError.Num, Some(s"RRI: $detail")))
+      for
+        nper <- ctx.evalExpr(nperExpr).map(_.toDouble)
+        pv <- ctx.evalExpr(pvExpr).map(_.toDouble)
+        fv <- ctx.evalExpr(fvExpr).map(_.toDouble)
+        result <-
+          if nper <= 0.0 then num("nper must be positive")
+          else if pv == 0.0 then num("pv must be non-zero")
+          else
+            val ratio = fv / pv
+            if ratio < 0.0 then num("fv and pv must have the same sign")
+            else
+              // GH-388: BigDecimal(Double) throws on a non-finite double (pow overflow)
+              NumericGuard.contained("RRI", "RRI(nper, pv, fv)") {
+                Right(BigDecimal(math.pow(ratio, 1.0 / nper) - 1.0))
+              }
+      yield result
+    }

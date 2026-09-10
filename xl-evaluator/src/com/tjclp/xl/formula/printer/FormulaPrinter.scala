@@ -72,10 +72,12 @@ object FormulaPrinter:
     val AddSub = 5
     val MulDiv = 6
     val Pow = 7
+    // GH-578: unary minus and plus bind TIGHTER than '^' (Excel: -2^2 is 4), so a signed base or
+    // exponent prints flat (-2^2, 2^-1) while a negated power keeps its parens (-(2^2)).
     val Unary = 8
     // GH-480: the RIGHT operand of '^' prints one level tighter than Pow so a right-nested power
     // keeps its parens (2^(3^2)). Pinned to Unary on purpose: a unary-signed exponent then prints
-    // flat (2^-1, 2^+2), exactly what parsePowExponent accepts, so those round-trip byte-for-byte.
+    // flat (2^-1, 2^+2), exactly what parseSigned accepts, so those round-trip byte-for-byte.
     val PowExponent = Unary
     // GH-355: postfix % binds tighter than ^ AND tighter than unary minus (-2% = -(2%))
     val Percent = 9
@@ -123,6 +125,9 @@ object FormulaPrinter:
       // GH-612: an error literal prints as its Excel code (#REF!, #N/A, …)
       case TExpr.ErrorLit(error) => error.toExcel
 
+      // GH-603: an omitted argument is the empty slot (FunctionSpec.joinSlots keeps its comma)
+      case TExpr.Missing => ""
+
       // Arithmetic operators.
       //
       // GH-455: left-associative operators print their RIGHT operand one level tighter, so a
@@ -157,19 +162,19 @@ object FormulaPrinter:
       case TExpr.Pow(x, y) =>
         // GH-480: '^' is LEFT-associative in Excel (=2^3^2 is (2^3)^2 = 64), so like the other
         // left-associative operators the RIGHT operand prints one level tighter: Pow(2, Pow(3, 2))
-        // keeps its grouping as 2^(3^2) while Pow(Pow(2, 3), 2) prints flat as 2^3^2. A unary-signed
-        // base still needs parens ((-2)^3) because -2^3 re-parses as -(2^3).
-        val base = printPowBase(x, sep)
+        // keeps its grouping as 2^(3^2) while Pow(Pow(2, 3), 2) prints flat as 2^3^2. GH-578: a
+        // signed base prints flat too (-2^3) — the parser reads the sign as part of the base.
+        val base = printExpr(x, Precedence.Pow, sep)
         val exponent = printExpr(y, Precedence.PowExponent, sep)
         val result = s"$base^$exponent"
         parenthesizeIf(result, precedence > Precedence.Pow)
 
-      // GH-374: unary plus is preserved byte-for-byte. The operand prints at Pow context — the
-      // loosest level the parser's unary-plus operand slot accepts without parens — so `=+2^3`
-      // and `=+-2` replicate their source exactly (parseUnary recurses through unary chains into
-      // parsePow).
+      // GH-374: unary plus is preserved byte-for-byte. The operand prints at Unary context — the
+      // loosest level the parser's sign-operand slot accepts without parens (GH-578: signs bind
+      // tighter than '^') — so `=+-2` and `=+2%` replicate their source exactly while a wrapped
+      // power keeps its grouping: UnaryPlus(Pow(2, 3)) prints +(2^3), never +2^3 (which is (+2)^3).
       case TExpr.UnaryPlus(e) =>
-        val result = s"+${printExpr(e, Precedence.Pow, sep)}"
+        val result = s"+${printExpr(e, Precedence.Unary, sep)}"
         parenthesizeIf(result, precedence > Precedence.Unary)
 
       // GH-355: postfix percent is preserved (never rewritten to /100). The operand prints at
@@ -358,25 +363,6 @@ object FormulaPrinter:
   private def parenthesizeIf(s: String, condition: Boolean): String =
     if condition then s"($s)" else s
 
-  private def printPowBase(expr: TExpr[?], sep: String): String =
-    val rendered = printExpr(expr, Precedence.Pow, sep)
-    if needsPowBaseParens(expr) then s"($rendered)" else rendered
-
-  private def needsPowBaseParens(expr: TExpr[?]): Boolean =
-    unwrapTransparent(expr) match
-      // GH-480: a Pow BASE prints flat — left association makes (2^3)^2 and 2^3^2 the same tree
-      case TExpr.Sub(TExpr.Lit(n: BigDecimal), _) if n == BigDecimal(0) => true
-      // GH-374: a bare `+2^3` re-parses as +(2^3), so a UnaryPlus BASE needs parens: (+2)^3
-      case TExpr.UnaryPlus(_) => true
-      case _ => false
-
-  private def unwrapTransparent(expr: TExpr[?]): TExpr[?] =
-    expr match
-      case TExpr.ToInt(inner) => unwrapTransparent(inner)
-      case TExpr.DateToSerial(inner) => unwrapTransparent(inner)
-      case TExpr.DateTimeToSerial(inner) => unwrapTransparent(inner)
-      case other => other
-
   /**
    * Escape string literal for Excel (double quotes).
    */
@@ -474,6 +460,7 @@ object FormulaPrinter:
       case TExpr.ExternalRange(index, name, range, form) =>
         s"ExternalRange([$index]$name, ${formatRange(range, form)})"
       case TExpr.ErrorLit(error) => s"ErrorLit(${error.toExcel})"
+      case TExpr.Missing => "Missing"
       case TExpr.Add(x, y) =>
         s"Add(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Sub(x, y) =>

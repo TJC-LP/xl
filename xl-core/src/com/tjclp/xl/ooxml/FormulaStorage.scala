@@ -258,9 +258,11 @@ object FormulaStorage:
    */
   def toStored(expr: String): String =
     val bare = expr.stripPrefix("=")
-    // Fast path: without a '(' there is no call and no LET/LAMBDA scope — nothing to prefix
-    if bare.indexOf('(') < 0 then bare
-    else rewriteCalls(bare)(storedCall, (token, _) => storedParam(token))
+    // Fast path: without a '(' there is no call and no LET/LAMBDA scope, and without an '@' no
+    // implicit intersection (GH-604) — nothing to prefix
+    if bare.indexOf('(') < 0 && bare.indexOf('@') < 0 then bare
+    else
+      rewriteCalls(wrapIntersections(bare, () => ()))(storedCall, (token, _) => storedParam(token))
 
   /**
    * GH-577: the upper-case bare names of the calls in a stored formula whose spelling [[toStored]]
@@ -275,12 +277,14 @@ object FormulaStorage:
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def bareFutureCalls(text: String): Vector[String] =
-    // Same fast path as toStored: without a '(' there is nothing the writer would prefix
-    if text.indexOf('(') < 0 then Vector.empty
+    // Same fast path as toStored: without a '(' or an '@' there is nothing the writer would change
+    if text.indexOf('(') < 0 && text.indexOf('@') < 0 then Vector.empty
     else
       var found = Vector.empty[String]
       def record(name: String): Unit = if !found.contains(name) then found = found :+ name
-      rewriteCalls(text)(
+      // GH-604: a bare `@x` in a file is the SINGLE call the writer would spell out
+      val wrapped = wrapIntersections(text, () => record("SINGLE"))
+      rewriteCalls(wrapped)(
         token =>
           if storedCall(token) != token then
             record(bareFunctionName(token).toUpperCase(Locale.ROOT))
@@ -301,7 +305,202 @@ object FormulaStorage:
   def fromStored(text: String): String =
     // Fast path: every storage prefix starts with "_xl"; a formula without it is already bare
     if !containsStoragePrefix(text) then text
-    else rewriteCalls(text)(modelCall, (token, _) => modelParam(token))
+    else unwrapIntersections(rewriteCalls(text)(modelCall, (token, _) => modelParam(token)))
+
+  // ===== GH-604: the implicit-intersection operator =====
+  //
+  // Excel 365 stores `@x` (implicit intersection — the formula bar's spelling) as
+  // `_xlfn.SINGLE(x)`. The model keeps the formula-bar form: [[toStored]] wraps every `@` operand
+  // in `_xlfn.SINGLE(...)` and [[fromStored]] unwraps every one-argument `SINGLE(...)` call back to
+  // `@`. The operand of `@` is one primary: a reference or name (optionally sheet-qualified, quoted
+  // or external), a function call, a structured reference, or a parenthesized expression — so
+  // `@acq`, `@'M&A'!I12:I40`, `@INDEX(rng,,2)` and `@(A1:A3*2)` all wrap, and the parens of the
+  // last are the call's own: `_xlfn.SINGLE(A1:A3*2)`. An `@` inside a structured reference
+  // (`Table1[@Col]`), a string, or one with no operand after it is copied verbatim.
+
+  /** Wrap every `@operand` as `_xlfn.SINGLE(operand)`, calling `onWrap` once per rewrite. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def wrapIntersections(text: String, onWrap: () => Unit): String =
+    if text.indexOf('@') < 0 then text
+    else
+      val n = text.length
+      val sb = new java.lang.StringBuilder(n + 16)
+      var i = 0
+      var bracketDepth = 0
+      while i < n do
+        val c = text.charAt(i)
+        if bracketDepth == 0 && (c == '"' || c == '\'') then
+          val end = closingQuote(text, i, c)
+          sb.append(text, i, end)
+          i = end
+        else if bracketDepth > 0 && c == '\'' then
+          val end = math.min(i + 2, n)
+          sb.append(text, i, end)
+          i = end
+        else if c == '[' then
+          bracketDepth += 1
+          sb.append(c)
+          i += 1
+        else if c == ']' then
+          if bracketDepth > 0 then bracketDepth -= 1
+          sb.append(c)
+          i += 1
+        else if bracketDepth == 0 && c == '@' then
+          val end = intersectionOperandEnd(text, i + 1)
+          if end > i + 1 then
+            val operand = text.substring(i + 1, end)
+            // `@(expr)` — the parens become the call's own
+            val inner =
+              if operand.charAt(0) == '(' then operand.substring(1, operand.length - 1)
+              else operand
+            onWrap()
+            sb.append(XlfnPrefix).append("SINGLE(").append(inner).append(')')
+            i = end
+          else
+            sb.append(c)
+            i += 1
+        else
+          sb.append(c)
+          i += 1
+      sb.toString
+
+  /** Rewrite every one-argument `SINGLE(x)` call (any storage prefix already stripped) to `@x`. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def unwrapIntersections(text: String): String =
+    val n = text.length
+    val sb = new java.lang.StringBuilder(n)
+    var i = 0
+    var bracketDepth = 0
+    while i < n do
+      val c = text.charAt(i)
+      if bracketDepth == 0 && (c == '"' || c == '\'') then
+        val end = closingQuote(text, i, c)
+        sb.append(text, i, end)
+        i = end
+      else if bracketDepth > 0 && c == '\'' then
+        val end = math.min(i + 2, n)
+        sb.append(text, i, end)
+        i = end
+      else if c == '[' then
+        bracketDepth += 1
+        sb.append(c)
+        i += 1
+      else if c == ']' then
+        if bracketDepth > 0 then bracketDepth -= 1
+        sb.append(c)
+        i += 1
+      else if bracketDepth == 0 && isIdentStart(c) && (i == 0 || !isIdentChar(text.charAt(i - 1)))
+        && text.regionMatches(true, i, "SINGLE(", 0, 7)
+      then
+        val open = i + 6
+        val close = closingParen(text, open)
+        val inner = if close < 0 then "" else text.substring(open + 1, close - 1)
+        if close > 0 && singleArgument(inner) then
+          val simple = inner.nonEmpty && intersectionOperandEnd(inner, 0) == inner.length &&
+            inner.charAt(0) != '('
+          sb.append('@')
+          if simple then sb.append(inner) else sb.append('(').append(inner).append(')')
+          i = close
+        else
+          sb.append(text, i, open + 1)
+          i = open + 1
+      else
+        sb.append(c)
+        i += 1
+    sb.toString
+
+  /**
+   * Index just past the operand of an `@` starting at `start`: a parenthesized expression, or a
+   * reference / name (quoted-sheet, unquoted-sheet or external-workbook qualified) optionally
+   * followed by a call's argument list or a structured reference's brackets. `start` when nothing
+   * operand-shaped follows.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def intersectionOperandEnd(text: String, start: Int): Int =
+    val n = text.length
+    if start >= n then start
+    else
+      val c = text.charAt(start)
+      def orStart(end: Int): Int = if end < 0 then start else end
+      if c == '(' then orStart(closingParen(text, start))
+      else
+        // qualifier: 'quoted sheet'! or [n]Sheet!
+        val afterQualifier =
+          if c == '\'' then
+            val q = closingQuote(text, start, '\'')
+            if q < n && text.charAt(q) == '!' then q + 1 else q
+          else if c == '[' then closingBracket(text, start)
+          else start
+        if afterQualifier < 0 then start
+        else
+          // the reference / name body (Sheet1!A1:B2, $A$1, name.part, A:A)
+          var i = afterQualifier
+          while i < n && (isIdentChar(text.charAt(i)) || text.charAt(i) == '!' ||
+              text.charAt(i) == ':')
+          do i += 1
+          if i == start then start
+          else if i < n && text.charAt(i) == '(' then orStart(closingParen(text, i))
+          else if i < n && text.charAt(i) == '[' then orStart(closingBracket(text, i))
+          else i
+
+  /** True when `inner` (a call's argument text) holds exactly one argument: no top-level comma. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def singleArgument(inner: String): Boolean =
+    val n = inner.length
+    var i = 0
+    var depth = 0
+    var bracketDepth = 0
+    var single = true
+    while single && i < n do
+      val c = inner.charAt(i)
+      if bracketDepth == 0 && (c == '"' || c == '\'') then i = closingQuote(inner, i, c)
+      else
+        if c == '[' then bracketDepth += 1
+        else if c == ']' then { if bracketDepth > 0 then bracketDepth -= 1 }
+        else if bracketDepth == 0 && (c == '(' || c == '{') then depth += 1
+        else if bracketDepth == 0 && (c == ')' || c == '}') then depth -= 1
+        else if bracketDepth == 0 && depth == 0 && c == ',' then single = false
+        i += 1
+    single
+
+  /**
+   * Index just past the `)` matching the `(` at `open` (strings and quoted names skipped); -1 when
+   * unbalanced.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def closingParen(text: String, open: Int): Int =
+    val n = text.length
+    var i = open + 1
+    var depth = 1
+    var bracketDepth = 0
+    while depth > 0 && i < n do
+      val c = text.charAt(i)
+      if bracketDepth == 0 && (c == '"' || c == '\'') then i = closingQuote(text, i, c)
+      else
+        if c == '[' then bracketDepth += 1
+        else if c == ']' then { if bracketDepth > 0 then bracketDepth -= 1 }
+        else if bracketDepth == 0 && c == '(' then depth += 1
+        else if bracketDepth == 0 && c == ')' then depth -= 1
+        i += 1
+    if depth == 0 then i else -1
+
+  /**
+   * Index just past the `]` matching the `[` at `open` (`'`-escaped specials skipped); -1 when
+   * unbalanced.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def closingBracket(text: String, open: Int): Int =
+    val n = text.length
+    var i = open + 1
+    var depth = 1
+    while depth > 0 && i < n do
+      val c = text.charAt(i)
+      if c == '\'' then i += 2
+      else
+        if c == '[' then depth += 1
+        else if c == ']' then depth -= 1
+        i += 1
+    if depth == 0 then math.min(i, n) else -1
 
   private def storedCall(token: String): String =
     if startsWithIgnoreCase(token, XlfnPrefix) then token

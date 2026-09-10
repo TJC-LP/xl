@@ -237,7 +237,7 @@
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2447 | parser, evaluator, 116-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 2447 | parser, evaluator, 118-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1560 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1152 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1420 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |

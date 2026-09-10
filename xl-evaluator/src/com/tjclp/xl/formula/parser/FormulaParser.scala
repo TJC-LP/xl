@@ -445,12 +445,14 @@ object FormulaParser:
    *
    * GH-480: Excel folds chained '^' from the left like every other binary operator: 2^3^2 = (2^3)^2 =
    * 64, not 2^(3^2) = 512 (the mathematical convention this parser used to follow, which silently
-   * changed the value of Excel-authored chained-pow formulas). Excel precedence: ^ binds tighter
-   * than unary minus, so -2^2 = -(2^2) = -4; the exponent itself may carry a unary sign (2^-1 =
-   * 0.5), and that signed exponent is one operand of the left fold (2^-3^2 = (2^-3)^2).
+   * changed the value of Excel-authored chained-pow formulas). GH-578: Excel's negation binds
+   * TIGHTER than '^' (Microsoft's precedence table lists negation above percent and
+   * exponentiation), so both the base and the exponent are signed operands: -2^2 = (-2)^2 = 4, 2^-1 =
+   * 0.5, and a signed exponent is one operand of the left fold (2^-3^2 = (2^-3)^2). Binary
+   * subtraction is unaffected: 0-2^2 = -4.
    */
   private def parsePow(state: ParserState): ParseResult[TExpr[?]] =
-    parsePostfix(state).flatMap { case (first, s1) =>
+    parseSigned(state).flatMap { case (first, s1) =>
       @tailrec
       def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
         val s2 = skipWhitespace(s)
@@ -461,7 +463,7 @@ object FormulaParser:
               case Left(err) => Left(err)
               case Right(sd) =>
                 val s3 = skipWhitespace(sd.advance())
-                parsePowExponent(s3) match
+                parseSigned(s3) match
                   case Right((right, s4)) =>
                     loop(
                       TExpr.Pow(TExpr.asNumericExpr(acc), TExpr.asNumericExpr(right)),
@@ -497,18 +499,22 @@ object FormulaParser:
     }
 
   /**
-   * Parse the exponent of a power expression, allowing unary minus and plus. This handles cases
-   * like 2^-1 = 0.5 while keeping -2^2 = -(2^2) = -4. Unary plus wraps in TExpr.UnaryPlus so
-   * `=2^+2` prints back byte-identically (GH-271 acceptance, GH-374 preservation). GH-480: the
-   * exponent is a single postfix operand — a following '^' belongs to the enclosing left fold.
+   * Parse a signed operand of '^' — either side, GH-578 — allowing unary minus and plus: -2^2 is
+   * (-2)^2 = 4 like Excel, 2^-1 = 0.5, 2^-3^2 = (2^-3)^2. Unary minus is `0 - x` (the shape the
+   * printer renders as `-x`); unary plus wraps in TExpr.UnaryPlus so `=+A1` and `=2^+2` print back
+   * byte-identically (GH-271 acceptance, GH-374 preservation). Chained signs nest, each counting
+   * against the depth budget (GH-56 recursion guard). Postfix percent binds tighter still (-2% is
+   * -(2%), GH-355). GH-480: the operand is a single postfix term — a following '^' belongs to the
+   * enclosing left fold.
    */
-  private def parsePowExponent(state: ParserState): ParseResult[TExpr[?]] =
+  private def parseSigned(state: ParserState): ParseResult[TExpr[?]] =
     val s = skipWhitespace(state)
     s.currentChar match
       case Some('-') =>
         descend(s).flatMap { sd =>
           val s2 = skipWhitespace(sd.advance())
-          parsePowExponent(s2).map { case (expr, s3) =>
+          parseSigned(s2).map { case (expr, s3) =>
+            // Unary minus: 0 - expr (asNumericExpr converts PolyRef)
             (
               TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)),
               s3.copy(depth = s.depth)
@@ -518,44 +524,23 @@ object FormulaParser:
       case Some('+') =>
         descend(s).flatMap { sd =>
           val s2 = skipWhitespace(sd.advance())
-          parsePowExponent(s2).map { case (expr, s3) =>
+          parseSigned(s2).map { case (expr, s3) =>
             (TExpr.UnaryPlus(expr), s3.copy(depth = s.depth))
           }
         }
       case _ => parsePostfix(s)
 
   /**
-   * Parse unary operators: -, +, NOT
+   * Parse the prefix-operator level: NOT (xl's lenient keyword form of the NOT function).
    *
-   * Excel precedence: unary minus has lower precedence than ^, so -2^2 = -(2^2) = -4
-   *
-   * Unary plus (GH-271: =+A1, the pervasive banker idiom) is semantically the identity, but since
-   * GH-374 it parses to an explicit TExpr.UnaryPlus node so the printer preserves the source text
-   * byte-for-byte (replicated model formulas must match their source). Chained pluses nest.
+   * The arithmetic signs are NOT parsed here: since GH-578 unary minus and plus bind tighter than
+   * '^' (Excel's precedence table), so [[parsePow]] parses them on both of its operands via
+   * [[parseSigned]]. Only the NOT keyword sits between multiplication and exponentiation.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseUnary(state: ParserState): ParseResult[TExpr[?]] =
     val s = skipWhitespace(state)
     s.currentChar match
-      case Some('-') =>
-        descend(s).flatMap { sd =>
-          val s2 = skipWhitespace(sd.advance())
-          parseUnary(s2).map { case (expr, s3) =>
-            // Unary minus: 0 - expr
-            (
-              TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), // Convert PolyRef
-              s3.copy(depth = s.depth)
-            )
-          }
-        }
-      case Some('+') =>
-        // descend: each chained '+' counts against the depth budget (GH-56 recursion guard)
-        descend(s).flatMap { sd =>
-          val s2 = skipWhitespace(sd.advance())
-          parseUnary(s2).map { case (expr, s3) =>
-            (TExpr.UnaryPlus(expr), s3.copy(depth = s.depth))
-          }
-        }
       case Some('N') | Some('n') if isKeywordAt(s, "NOT") =>
         descend(s).flatMap { sd =>
           val s2 = skipWhitespace(sd.advance(3))
@@ -610,6 +595,19 @@ object FormulaParser:
       case Some('#') =>
         // GH-612: error literal (#REF!, #N/A, #DIV/0!, …)
         parseErrorLiteral(s)
+      case Some('@') =>
+        // GH-604: implicit intersection — `@x` is the formula-bar spelling of `_xlfn.SINGLE(x)`.
+        // The operand is one primary (a reference, name, call, or parenthesized expression), so
+        // `@A1:A10%` is (@A1:A10)% and `@A1^2` is (@A1)^2, as in Excel.
+        descend(s).flatMap { sd =>
+          parsePrimary(skipWhitespace(sd.advance())).flatMap { case (operand, s2) =>
+            FunctionSpecs.single.argSpec
+              .parse(List(operand), s.pos, FunctionSpecs.single.name)
+              .map { case (parsed, _) =>
+                (TExpr.Call(FunctionSpecs.single, parsed), s2.copy(depth = s.depth))
+              }
+          }
+        }
       case Some(c) =>
         Left(ParseError.UnexpectedChar(c, s.pos, "expected expression"))
 
@@ -800,23 +798,31 @@ object FormulaParser:
     // Skip opening '('
     val s2 = skipWhitespace(state.advance())
 
-    // Parse arguments (comma-separated)
-    def parseArgs(s: ParserState, args: List[TExpr[?]]): ParseResult[List[TExpr[?]]] =
+    // Parse arguments (comma-separated). GH-603: an empty slot — nothing between two commas, or
+    // between a comma and the closing paren — is an omitted argument (TExpr.Missing); `F()` alone
+    // stays the zero-argument call.
+    def parseArgs(
+      s: ParserState,
+      args: List[TExpr[?]],
+      afterComma: Boolean
+    ): ParseResult[List[TExpr[?]]] =
       val s1 = skipWhitespace(s)
       s1.currentChar match
-        case Some(')') => Right((args.reverse, s1.advance()))
+        case Some(')') if !afterComma => Right((args.reverse, s1.advance()))
+        case Some(')') => Right(((TExpr.Missing :: args).reverse, s1.advance()))
+        case Some(',') => parseArgs(skipWhitespace(s1.advance()), TExpr.Missing :: args, true)
         case _ =>
           parseExpr(s1).flatMap { case (arg, s2) =>
             val s3 = skipWhitespace(s2)
             s3.currentChar match
-              case Some(',') => parseArgs(skipWhitespace(s3.advance()), arg :: args)
+              case Some(',') => parseArgs(skipWhitespace(s3.advance()), arg :: args, true)
               case Some(')') => Right(((arg :: args).reverse, s3.advance()))
               case Some(c) =>
                 Left(ParseError.UnexpectedChar(c, s3.pos, "expected ',' or ')'"))
               case None => Left(ParseError.UnexpectedEOF(s3.pos, "expected ',' or ')'"))
           }
 
-    parseArgs(s2, Nil).flatMap { case (args, finalState) =>
+    parseArgs(s2, Nil, afterComma = false).flatMap { case (args, finalState) =>
       FunctionRegistry.lookup(name) match
         case Some(spec) =>
           spec.arity

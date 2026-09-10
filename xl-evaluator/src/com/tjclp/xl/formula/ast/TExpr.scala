@@ -176,6 +176,23 @@ enum TExpr[A] derives CanEqual:
    */
   case ErrorLit(error: CellError) extends TExpr[Nothing]
 
+  /**
+   * GH-603: an omitted argument — the empty slot in `RATE(nper,,pv,fv,)`, `IF(cond,,x)`,
+   * `INDEX(rng,,2)`.
+   *
+   * Excel lets a formula leave an argument empty between commas or before the closing paren. The
+   * parser emits this node for every such slot; each argument spec decides what it means: an
+   * optional slot reads it as absent (`ArgSpec.option` yields None, so the function's own default
+   * applies — RATE's guess stays 10%, VLOOKUP's range_lookup stays TRUE), a required typed slot
+   * coerces it like a blank cell (0 / "" / FALSE / the blank date), an Any position reads it as 0
+   * (`IF(TRUE,,5)` is 0, as in Excel), and a range slot refuses it. Prints as the empty slot:
+   * `A(1,,3)` round-trips; a trailing omitted OPTIONAL slot is absent after reprint
+   * (`RATE(a,,b,c,)` reprints as `RATE(a,,b,c)` — same value). Typed `Nothing` like [[ErrorLit]] so
+   * it can stand in any argument position; evaluates to `CellValue.Empty`; contributes no
+   * dependency edges.
+   */
+  case Missing extends TExpr[Nothing]
+
   // Arithmetic operators (form commutative semiring over BigDecimal)
 
   /**

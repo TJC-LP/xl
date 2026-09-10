@@ -348,11 +348,16 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertPreserved("=B1*+A1")
   }
 
-  test("GH-374: parenthesized unary plus as pow base round-trips ((+2)^3)") {
+  test("GH-374/GH-578: a unary-plus pow base prints flat ((+2)^3 is +2^3, the same tree)") {
+    // GH-578: signs bind tighter than '^', so `+2^3` IS (+2)^3 and the explicit parens are
+    // redundant — the printer drops them and the text re-parses to the same tree
     FormulaParser.parse("=(+2)^3") match
       case Right(expr) =>
-        assertEquals(FormulaPrinter.print(expr), "=(+2)^3")
-        assertEquals(FormulaParser.parse(FormulaPrinter.print(expr)), Right(expr))
+        assertEquals(FormulaPrinter.print(expr), "=+2^3")
+        assertEquals(FormulaParser.parse("=+2^3"), Right(expr))
+        expr match
+          case TExpr.Pow(TExpr.UnaryPlus(_), _) => ()
+          case other => fail(s"Expected Pow(UnaryPlus(2), 3), got $other")
       case Left(err) => fail(s"=(+2)^3 should parse: $err")
   }
 
@@ -840,16 +845,32 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("parse exponentiation: unary minus precedence (Excel-compatible)") {
-    // Excel parses -2^2 as -(2^2) = -4, not (-2)^2 = 4
-    // Our parser matches Excel behavior: ^ binds tighter than unary minus
+  test("GH-578: parse exponentiation: unary minus binds tighter than '^' (Excel: -2^2 is 4)") {
+    // Microsoft's precedence table lists negation above exponentiation: -2^2 is (-2)^2 = 4.
+    // Binary subtraction is unaffected (0-2^2 = -4) and explicit grouping is honoured (-(2^2)).
     val result = FormulaParser.parse("=-2^2")
     assert(result.isRight, s"Expected success, got $result")
     result.foreach {
-      case TExpr.Sub(TExpr.Lit(zero: BigDecimal), TExpr.Pow(_, _)) =>
+      case TExpr.Pow(TExpr.Sub(TExpr.Lit(zero: BigDecimal), TExpr.Lit(_)), TExpr.Lit(_)) =>
         assertEquals(zero, BigDecimal(0))
-      case other => fail(s"Expected Sub(0, Pow(2, 2)), got $other")
+      case other => fail(s"Expected Pow(Sub(0, 2), 2), got $other")
     }
+    val sheet = Sheet("Test")
+    def value(f: String) = FormulaParser.parse(f).flatMap(Evaluator.eval(_, sheet))
+    assertEquals(value("=-2^2"), Right(BigDecimal(4)))
+    assertEquals(value("=-2^3"), Right(BigDecimal(-8)))
+    assertEquals(value("=-(2^2)"), Right(BigDecimal(-4)))
+    assertEquals(value("=0-2^2"), Right(BigDecimal(-4)))
+    assertEquals(value("=1-2^2"), Right(BigDecimal(-3)))
+    assertEquals(value("=-2^-2"), Right(BigDecimal(0.25)))
+    assertEquals(value("=--2^2"), Right(BigDecimal(4)))
+    assertEquals(value("=2*-3^2"), Right(BigDecimal(18)))
+    // a Gaussian's exponent: -x^2/2 with x = 2 is (-2)^2/2 = 2 in Excel
+    val withCell = Sheet("Test").put(ARef.parse("A1").toOption.get, CellValue.Number(2))
+    assertEquals(
+      FormulaParser.parse("=-A1^2/2").flatMap(Evaluator.eval(_, withCell)),
+      Right(BigDecimal(2))
+    )
   }
 
   test("parse exponentiation: with parentheses") {
@@ -944,7 +965,22 @@ class FormulaParserSpec extends ScalaCheckSuite:
   test("GH-480: print exponentiation: chained powers round-trip byte-for-byte") {
     // Left-nested prints flat; right-nested keeps its grouping parens; parse∘print = id on both,
     // and the printed text re-parses to the SAME tree (reprint canonicalization is value-safe).
-    val cases = List("=2^3^2", "=2^(3^2)", "=2^-3^2", "=(-2)^3", "=2^-1", "=2^3%")
+    // GH-578: a signed base prints flat (-2^3, +2^3) and a negated power keeps its parens
+    val cases = List(
+      "=2^3^2",
+      "=2^(3^2)",
+      "=2^-3^2",
+      "=-2^3",
+      "=-(2^3)",
+      "=+2^3",
+      "=+(2^3)",
+      "=-2^-2",
+      "=--2^2",
+      "=2^-1",
+      "=2^3%",
+      "=-2%",
+      "=(-2)%"
+    )
     cases.foreach { formula =>
       val parsed = FormulaParser.parse(formula)
       assert(parsed.isRight, s"$formula: $parsed")
@@ -1265,14 +1301,21 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertEquals(result, "=1+2")
   }
 
-  test("print exponentiation: parenthesize negative base") {
-    val expr = TExpr.Pow(
+  test("GH-578: print exponentiation: a negative base prints flat, a negated power parenthesizes") {
+    val negBase = TExpr.Pow(
       TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.Lit(BigDecimal(2))),
       TExpr.Lit(BigDecimal(2))
     )
-    val result = FormulaPrinter.print(expr)
-    assertEquals(result, "=(-2)^2")
-    assertEquals(FormulaParser.parse(result), Right(expr))
+    assertEquals(FormulaPrinter.print(negBase), "=-2^2")
+    assertEquals(FormulaParser.parse("=-2^2"), Right(negBase))
+    val negPow = TExpr.Sub(
+      TExpr.Lit(BigDecimal(0)),
+      TExpr.Pow(TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(2)))
+    )
+    assertEquals(FormulaPrinter.print(negPow), "=-(2^2)")
+    assertEquals(FormulaParser.parse("=-(2^2)"), Right(negPow))
+    // the pre-GH-578 spelling of a negative base re-parses to the same tree and reprints flat
+    assertEquals(FormulaParser.parse("=(-2)^2"), Right(negBase))
   }
 
   test("GH-480: print exponentiation: a nested base prints flat (left association)") {
@@ -1741,7 +1784,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("ISNA"))
     // GH-630 the error-code number
     assert(functions.contains("ERROR.TYPE"))
-    assertEquals(functions.length, 116)
+    // GH-605 RRI (the CAGR idiom) and GH-604 SINGLE (the stored form of the `@` operator)
+    assert(functions.contains("RRI"))
+    assert(functions.contains("SINGLE"))
+    assertEquals(functions.length, 118)
   }
 
   // ==================== INDIRECT Parsing Tests (GH-274) ====================

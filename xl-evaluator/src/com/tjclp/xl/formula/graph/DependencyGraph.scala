@@ -221,6 +221,7 @@ object DependencyGraph:
       case TExpr.Lit(_) => false
 
       case TExpr.ErrorLit(_) => false
+      case TExpr.Missing => false
 
   /**
    * GH-274: Check whether an expression contains a dynamic-reference function call.
@@ -679,6 +680,7 @@ object DependencyGraph:
       case TExpr.Lit(_) => false
 
       case TExpr.ErrorLit(_) => false
+      case TExpr.Missing => false
 
   /**
    * Extract all cell references from TExpr.
@@ -775,6 +777,7 @@ object DependencyGraph:
       case TExpr.Lit(_) => Set.empty
 
       case TExpr.ErrorLit(_) => Set.empty
+      case TExpr.Missing => Set.empty
       case TExpr.DateToSerial(dateExpr) => extractDependencies(dateExpr)
       case TExpr.DateTimeToSerial(dtExpr) => extractDependencies(dtExpr)
 
@@ -898,6 +901,7 @@ object DependencyGraph:
       case TExpr.Lit(_) => Set.empty
 
       case TExpr.ErrorLit(_) => Set.empty
+      case TExpr.Missing => Set.empty
       case TExpr.DateToSerial(dateExpr) => recurse(dateExpr)
       case TExpr.DateTimeToSerial(dtExpr) => recurse(dtExpr)
 
@@ -2043,6 +2047,7 @@ object DependencyGraph:
         case TExpr.Lit(_) => Set.empty
 
         case TExpr.ErrorLit(_) => Set.empty
+        case TExpr.Missing => Set.empty
         case TExpr.DateToSerial(dateExpr) => go(dateExpr)
         case TExpr.DateTimeToSerial(dtExpr) => go(dtExpr)
 

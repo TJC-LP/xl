@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Formula parity with Excel-authored models — the 0.21.0 dogfood's parser gaps (#603, #604, #605)
+and the evaluator bugs beside them (#578, #580, #596): one real projection model's 209
+"unparseable" formulas now parse and evaluate.
+
+### Added
+
+- **Omitted arguments** (#603): a formula may leave an argument slot empty, as Excel does —
+  `RATE($G$8-$D$8,,-D9,G9,)`, `IF(cond,,x)`, `PMT(r,n,pv,,1)`, `INDEX(rng,,2)`. The parser emits
+  an explicit `TExpr.Missing` for each empty slot; an optional slot reads it as absent, so the
+  function's own default applies (RATE's guess stays 10%, VLOOKUP's range_lookup stays TRUE); a
+  required typed slot coerces it like a blank cell (`LEFT("abc",)` is `""`, `SUM(1,,2)` is 3); an
+  Any position reads it as 0 (`IF(TRUE,,5)` is 0). Printing keeps interior empty slots
+  (`PMT(r, n, pv,, 1)`) and drops trailing omitted optional ones (`RATE(10,,-100,150,)` reprints as
+  `RATE(10,, -100, 150)`, the same tree); `F()` is still the zero-argument call. `xl audit` no longer
+  lists these cells as unparseable (172 of one model's 209).
+- **`@` — implicit intersection** (#604): Excel 365 stores the `@` operator as `_xlfn.SINGLE(x)`,
+  which the registry did not know, so every `@name` an Excel user typed failed to parse. `SINGLE`
+  joins the registry: a single cell or scalar is itself, a column vector yields the cell in the
+  formula's row, a row vector the cell in its column, a 2-D range or a vector the formula does not
+  cross is `#VALUE!`; a defined name bound to a range intersects the same way; an array value
+  collapses to its top-left element. The parser accepts `@x` (one primary operand: `@A1:A3*2` is
+  `(@A1:A3)*2`) and `SINGLE(x)`; the printer emits `@x`; `FormulaStorage` maps `@x` ↔
+  `_xlfn.SINGLE(x)` at the `<f>` boundary (`@(A1:A3*2)` ↔ `_xlfn.SINGLE(A1:A3*2)`, `Table1[@Col]`
+  and strings untouched), and `xl lint`'s `xlfn-missing` reports a bare `@` in a file as the
+  `SINGLE` the writer would spell out. `ANCHORARRAY` (`x#`, the spill reference) is not yet modeled.
+- **`RRI(nper, pv, fv)`** (#605): the equivalent interest rate for the growth of an investment —
+  `(fv/pv)^(1/nper) - 1`, the CAGR idiom; `#NUM!` when nper ≤ 0, pv = 0 or the ratio is negative.
+  118 functions.
+
+### Changed
+
+- **Breaking: unary minus binds tighter than `^`** (#578): `=-2^2` is 4, as in Excel (Microsoft's
+  precedence table lists negation above exponentiation) — it was -4. `=-A1^2/2`, the Gaussian
+  exponent, now carries Excel's sign; `=0-2^2` (binary subtraction) is still -4 and `=-(2^2)`
+  keeps its grouping. The printer follows: a signed base prints flat (`-2^3`, `+2^3` — the former
+  `(-2)^3` re-parses to the same tree and reprints flat) and a negated power keeps its parens
+  (`-(2^3)`, `+(2^3)`).
+- **Breaking: `sort --desc` and `Sheet.sort` descending keep blank keys last** (#596): Excel
+  excludes blanks from the ordering and appends them in both directions; the comparator used to
+  treat a blank as the minimum and reverse it to the top. Ascending is unchanged.
+
+### Fixed
+
+- **`FILTER` accepts an array-valued `include`** (#580): `=FILTER(B1:B3,B1:B3>1)`,
+  `=SUM(FILTER(B1:B3,A1:A3<>"a"))` and `(A1:A3="x")*(B1:B3>0)` were "expected range" at parse
+  time — only a range of precomputed flags was accepted. The include is now a range or any
+  array-valued expression, evaluated elementwise like SUMPRODUCT's; a one-row include as wide as
+  the array filters columns; a shape matching neither rows nor columns is `#VALUE!` (it used to
+  truncate silently).
+
 ## [0.22.0] - 2026-09-08
 
 The 0.21.0 dogfood's follow-through, four PRs (#646, #647, #648, #650): named cell styles, the

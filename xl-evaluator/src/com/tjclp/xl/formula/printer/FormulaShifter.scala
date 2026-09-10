@@ -190,8 +190,9 @@ object FormulaShifter:
 
       // Literals - unchanged
       case lit: Lit[?] => lit.asInstanceOf[TExpr[A]]
-      // GH-612: an error literal has no coordinates
+      // GH-612: an error literal has no coordinates; GH-603: neither has an omitted argument
       case err: ErrorLit => err.asInstanceOf[TExpr[A]]
+      case Missing => expr
 
       // Arithmetic operators
       case Add(x, y) => Add(go(x), go(y)).asInstanceOf[TExpr[A]]
@@ -434,7 +435,7 @@ object FormulaShifter:
       case DateTimeToSerial(inner) => go(inner)
       case Coerced(inner, _) => go(inner)
       case Let(bindings, body) => bindings.exists((_, value) => go(value)) || go(body)
-      case Lit(_) | ErrorLit(_) | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_, _) |
+      case Lit(_) | ErrorLit(_) | Missing | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_, _) |
           ExternalRef(_, _, _, _) | ExternalRange(_, _, _, _) | BindingRef(_) | NameRef(_) |
           SheetNameRef(_, _) | CoercedBindingRef(_, _) =>
         false
@@ -492,7 +493,7 @@ object FormulaShifter:
       case DateTimeToSerial(inner) => go(inner)
       case Coerced(inner, _) => go(inner)
       case Let(bindings, body) => bindings.exists((_, value) => go(value)) || go(body)
-      case Lit(_) | ErrorLit(_) | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_, _) |
+      case Lit(_) | ErrorLit(_) | Missing | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_, _) |
           SheetRef(_, _, _, _) | SheetPolyRef(_, _, _) | SheetRange(_, _, _) |
           ExternalRef(_, _, _, _) | ExternalRange(_, _, _, _) | BindingRef(_) | NameRef(_) |
           CoercedBindingRef(_, _) =>
@@ -538,7 +539,7 @@ object FormulaShifter:
       case SheetNameRef(sheet, name) => SheetNameRef(target(sheet), name).asInstanceOf[TExpr[A]]
       // Nothing to rename: local refs, literals, identifiers, external-workbook refs
       case _: Ref[?] | _: PolyRef | _: RangeRef | _: ExternalRef | _: ExternalRange | _: Lit[?] |
-          _: ErrorLit | _: BindingRef | _: NameRef | _: CoercedBindingRef[?] =>
+          _: ErrorLit | Missing | _: BindingRef | _: NameRef | _: CoercedBindingRef[?] =>
         expr
       case Add(x, y) => Add(go(x), go(y)).asInstanceOf[TExpr[A]]
       case Sub(x, y) => Sub(go(x), go(y)).asInstanceOf[TExpr[A]]
@@ -805,8 +806,9 @@ object FormulaShifter:
       // never move or void them
       case _: ExternalRef | _: ExternalRange => expr
       case lit: Lit[?] => lit.asInstanceOf[TExpr[A]]
-      // GH-612: an error literal has no coordinates
+      // GH-612: an error literal has no coordinates; GH-603: neither has an omitted argument
       case _: ErrorLit => expr
+      case Missing => expr
       case Add(x, y) => Add(go(x), go(y)).asInstanceOf[TExpr[A]]
       case Sub(x, y) => Sub(go(x), go(y)).asInstanceOf[TExpr[A]]
       case Mul(x, y) => Mul(go(x), go(y)).asInstanceOf[TExpr[A]]

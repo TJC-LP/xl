@@ -279,27 +279,55 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
   /**
    * FILTER(array, include, [if_empty])
    *
-   * Keeps the rows of `array` whose corresponding entry in the single-column `include` range is
-   * truthy (TRUE or a non-zero number). Returns `if_empty` (or #N/A) when nothing matches.
+   * Keeps the rows of `array` whose corresponding entry in `include` is truthy (TRUE or a non-zero
+   * number); a one-row `include` as wide as `array` keeps columns instead. GH-580: `include` is
+   * either a range of precomputed flags or any array-valued expression — the canonical Excel
+   * spelling `B1:B3>1`, `(A1:A3="x")*(B1:B3>0)`, a call returning an array — evaluated elementwise
+   * through the same machinery as SUMPRODUCT. An `include` whose shape matches neither the rows nor
+   * the columns of `array` is `#VALUE!`, as in Excel. Returns `if_empty` (or #N/A) when nothing
+   * matches.
    */
   val filterFn: FunctionSpec[ArrayResult] { type Args = FilterArgs } =
     FunctionSpec.simple[ArrayResult, FilterArgs]("FILTER", Arity.Range(2, 3)) { (args, ctx) =>
-      val (arrayLoc, includeLoc, ifEmptyOpt) = args
+      val (arrayLoc, includeArg, ifEmptyOpt) = args
+      def ifEmpty: Either[EvalError, ArrayResult] =
+        ifEmptyOpt match
+          case Some(expr) => evalValue(ctx, expr).map(v => ArrayResult.single(toCellValue(v)))
+          case None => Right(ArrayResult.single(CellValue.Error(CellError.NA)))
       for
         resolvedArray <- Evaluator.resolveRangeLocation(arrayLoc, ctx.sheet, ctx.workbook)
-        resolvedInclude <- Evaluator.resolveRangeLocation(includeLoc, ctx.sheet, ctx.workbook)
         (arraySheet, arrayRange) = resolvedArray
-        (includeSheet, includeRange) = resolvedInclude
         matrix <- extractRangeAsMatrixEval(arrayRange, arraySheet, ctx)
-        include <- extractRangeAsMatrixEval(includeRange, includeSheet, ctx)
+        include <- includeArg match
+          case Left(includeLoc) =>
+            Evaluator.resolveRangeLocation(includeLoc, ctx.sheet, ctx.workbook).flatMap {
+              case (includeSheet, includeRange) =>
+                extractRangeAsMatrixEval(includeRange, includeSheet, ctx)
+            }
+          case Right(expr) => ctx.evalArrayExpr(expr).map(toCellArray(_).values)
         result <-
-          val flags = include.map(row => row.headOption.exists(isTruthy))
-          val kept = matrix.zip(flags).collect { case (row, true) => row }
-          if kept.nonEmpty then Right(ArrayResult(kept))
+          val rows = matrix.size
+          val cols = matrix.headOption.map(_.size).getOrElse(0)
+          val includeRows = include.size
+          val includeCols = include.headOption.map(_.size).getOrElse(0)
+          if includeRows == rows && includeCols == 1 then
+            val flags = include.map(row => row.headOption.exists(isTruthy))
+            val kept = matrix.zip(flags).collect { case (row, true) => row }
+            if kept.nonEmpty then Right(ArrayResult(kept)) else ifEmpty
+          else if includeRows == 1 && includeCols == cols then
+            val flags = include.headOption.getOrElse(Vector.empty).map(isTruthy)
+            if flags.exists(identity) then
+              Right(ArrayResult(matrix.map(row => row.zip(flags).collect { case (v, true) => v })))
+            else ifEmpty
           else
-            ifEmptyOpt match
-              case Some(expr) => evalValue(ctx, expr).map(v => ArrayResult.single(toCellValue(v)))
-              case None => Right(ArrayResult.single(CellValue.Error(CellError.NA)))
+            Left(
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(
+                  s"FILTER: include is ${includeRows}x$includeCols but array is ${rows}x$cols"
+                )
+              )
+            )
       yield result
     }
 

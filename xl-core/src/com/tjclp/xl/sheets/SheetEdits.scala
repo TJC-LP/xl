@@ -262,6 +262,10 @@ private[xl] object SheetEdits:
           case (SortValue.Str(s), SortValue.Num(n)) =>
             if mode == Edit.SortMode.Numeric then 1 else s.compare(n.toString)
 
+  /** An absent key cell or an empty one: Excel excludes blanks from the ordering (GH-596). */
+  private def isBlankKey(v: Option[SortValue]): Boolean =
+    v.forall(_ == SortValue.Empty)
+
   private def rowComparator(
     keys: Vector[Edit.SortKeySpec]
   ): (Map[Int, Cell], Map[Int, Cell]) => Int =
@@ -272,7 +276,12 @@ private[xl] object SheetEdits:
           val valueA = rowA.get(colIdx).map(c => sortableValue(c.value, key.mode))
           val valueB = rowB.get(colIdx).map(c => sortableValue(c.value, key.mode))
           val cmp = compareSortValues(valueA, valueB, key.mode)
-          if key.direction == Edit.SortDir.Descending then -cmp else cmp
+          // GH-596: blanks sort LAST in both directions — Excel appends them after the ordered
+          // values rather than treating them as the minimum, so the direction flips only the
+          // comparison between two non-blank keys.
+          if key.direction == Edit.SortDir.Descending && !isBlankKey(valueA) && !isBlankKey(valueB)
+          then -cmp
+          else cmp
         }
         .find(_ != 0)
         .getOrElse(0)

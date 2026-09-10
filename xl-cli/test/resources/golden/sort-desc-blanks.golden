@@ -1,0 +1,18 @@
+## args
+-f
+<DIR>/gaps.xlsx
+-s
+Data
+-o
+<DIR>/sort-desc-blanks.xlsx
+sort
+A1:A3
+--by
+A
+--desc
+## exit
+0
+## stdout
+Sorted A1:A3 by A desc
+Saved: <DIR>/sort-desc-blanks.xlsx
+## stderr

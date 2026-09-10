@@ -3,7 +3,7 @@ package com.tjclp.xl.formula
 import munit.FunSuite
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.ArrayResult
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.patch.Patch
@@ -300,4 +300,75 @@ class ArrayFunctionsSpec extends FunSuite:
     assertEquals(s(ref"F1").value, CellValue.Number(2))
     assertEquals(s(ref"E2").value, CellValue.Number(3))
     assertEquals(s(ref"F2").value, CellValue.Number(4))
+  }
+
+  // ===== GH-580: FILTER's include argument is any array-valued expression =====
+
+  private val filterSheet = Sheet("Test")
+    .put(ref"A1", CellValue.Text("a"))
+    .put(ref"A2", CellValue.Text("b"))
+    .put(ref"A3", CellValue.Text("a"))
+    .put(ref"B1", CellValue.Number(1))
+    .put(ref"B2", CellValue.Number(2))
+    .put(ref"B3", CellValue.Number(3))
+
+  test("GH-580: FILTER accepts a comparison over a range as include (=FILTER(B1:B3,B1:B3>1))") {
+    val (s, range) =
+      filterSheet.evaluateArrayFormula("=FILTER(B1:B3,B1:B3>1)", ref"E1").toOption.get
+    assertEquals(range.height, 2)
+    assertEquals(s(ref"E1").value, CellValue.Number(2))
+    assertEquals(s(ref"E2").value, CellValue.Number(3))
+  }
+
+  test("GH-580: FILTER include may be a text comparison or a product of conditions") {
+    val (s1, r1) =
+      filterSheet.evaluateArrayFormula("=FILTER(B1:B3,A1:A3<>\"a\")", ref"E1").toOption.get
+    assertEquals(r1.height, 1)
+    assertEquals(s1(ref"E1").value, CellValue.Number(2))
+    val (s2, r2) = filterSheet
+      .evaluateArrayFormula("=FILTER(B1:B3,(A1:A3=\"a\")*(B1:B3>1))", ref"E1")
+      .toOption
+      .get
+    assertEquals(r2.height, 1)
+    assertEquals(s2(ref"E1").value, CellValue.Number(3))
+  }
+
+  test("GH-580: SUM over a FILTER with an array condition evaluates in a scalar formula") {
+    assertEquals(
+      filterSheet.evaluateFormula("=SUM(FILTER(B1:B3,A1:A3<>\"a\"))"),
+      Right(CellValue.Number(2))
+    )
+    assertEquals(
+      filterSheet.evaluateFormula("=SUM(FILTER(B1:B3,A1:A3=\"a\"))"),
+      Right(CellValue.Number(4))
+    )
+  }
+
+  test("GH-580: a one-row include as wide as the array filters columns") {
+    val wide = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"B1", CellValue.Number(5))
+      .put(ref"C1", CellValue.Number(2))
+      .put(ref"A2", CellValue.Number(10))
+      .put(ref"B2", CellValue.Number(50))
+      .put(ref"C2", CellValue.Number(20))
+    val (s, range) = wide.evaluateArrayFormula("=FILTER(A1:C2,A1:C1>1)", ref"E1").toOption.get
+    assertEquals((range.height, range.width), (2, 2))
+    assertEquals(s(ref"E1").value, CellValue.Number(5))
+    assertEquals(s(ref"F1").value, CellValue.Number(2))
+    assertEquals(s(ref"E2").value, CellValue.Number(50))
+    assertEquals(s(ref"F2").value, CellValue.Number(20))
+  }
+
+  test("GH-580: an include whose shape matches neither rows nor columns is #VALUE!") {
+    val expr = FormulaParser.parse("=FILTER(B1:B3,B1:B2>1)").toOption.get
+    Evaluator.arrayInstance.eval(expr, filterSheet) match
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
+  }
+
+  test("GH-580: FILTER with an array condition prints back and round-trips") {
+    val parsed = FormulaParser.parse("=FILTER(B1:B3,B1:B3>1)")
+    assertEquals(parsed.map(FormulaPrinter.print(_)), Right("=FILTER(B1:B3, B1:B3>1)"))
+    assertEquals(parsed.map(FormulaPrinter.print(_)).flatMap(FormulaParser.parse), parsed)
   }

@@ -99,7 +99,8 @@ trait FunctionSpecsBase:
     (TExpr[Int], Option[TExpr[Int]], Option[TExpr[BigDecimal]], Option[TExpr[BigDecimal]])
   type SortArgs = (TExpr.RangeLocation, Option[TExpr[Int]], Option[TExpr[Int]])
   type UniqueArgs = (TExpr.RangeLocation, Option[TExpr[Boolean]], Option[TExpr[Boolean]])
-  type FilterArgs = (TExpr.RangeLocation, TExpr.RangeLocation, Option[TExpr[Any]])
+  // GH-580: `include` is a range OR an array-valued expression (B1:B3>1, (A1:A3="x")*(B1:B3>0))
+  type FilterArgs = (TExpr.RangeLocation, ArgSpec.SumProductArg, Option[TExpr[Any]])
   // GH-122 OFFSET: anchor ref + row/col offsets + optional height/width
   type OffsetArgs = (AnyExpr, TExpr[Int], TExpr[Int], Option[TExpr[Int]], Option[TExpr[Int]])
   // GH-274 INDIRECT: ref_text + optional a1 flag (FALSE = R1C1, documented-unsupported)
@@ -155,6 +156,8 @@ trait FunctionSpecsBase:
     Option[TExpr[BigDecimal]],
     Option[TExpr[BigDecimal]]
   )
+  // GH-605 RRI: nper, pv, fv — three required numbers
+  type RriArgs = (TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal])
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   protected def evalAny(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
@@ -165,6 +168,9 @@ trait FunctionSpecsBase:
     val resolved = expr match
       case _: TExpr.PolyRef | _: TExpr.SheetPolyRef | _: TExpr.UnaryPlus[?] =>
         TExpr.asResolvedValueExpr(expr)
+      // GH-603: an omitted argument in an Any position reads as 0, exactly like a reference to a
+      // blank cell does here (decodeResolvedValue) — Excel's `=IF(TRUE,,5)` shows 0
+      case TExpr.Missing => TExpr.Lit(CellValue.Number(BigDecimal(0)))
       case other => other
     ctx.evalExpr[Any](resolved.asInstanceOf[TExpr[Any]])
 
