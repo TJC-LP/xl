@@ -58,6 +58,15 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
 
 ### Changed
 
+- **The skills are drop-in vendorable.** Installation moved out of both `SKILL.md` bodies into
+  `plugin/skills/<skill>/reference/INSTALL.md` (the xl-cli page also carries the rasterizer
+  install; the xl-scripting page adds the offline warm-cache recipe and the Scala-version rule),
+  so a host that pre-installs `xl` or scala-cli loads no install text. Both `SKILL.md` files now
+  tell the agent to read `reference/LOCAL.md` first when it exists — a file the upstream tree
+  never contains, where a deployment puts the binary's path, its pre-warmed cache, output
+  directories and house rules. A downstream copy of a skill directory is therefore the release
+  tag's tree byte for byte plus that one local page; `plugin/README.md` states the contract. The
+  release zips pick up `INSTALL.md` with the rest of `reference/`.
 - **Breaking: unary minus binds tighter than `^`** (#578): `=-2^2` is 4, as in Excel (Microsoft's
   precedence table lists negation above exponentiation) — it was -4. `=-A1^2/2`, the Gaussian
   exponent, now carries Excel's sign; `=0-2^2` (binary subtraction) is still -4 and `=-(2^2)`
