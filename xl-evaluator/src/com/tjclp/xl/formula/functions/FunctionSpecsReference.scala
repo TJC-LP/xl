@@ -6,7 +6,7 @@ import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.sheets.Sheet
 
 trait FunctionSpecsReference extends FunctionSpecsBase:
@@ -141,12 +141,12 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
             val rowCount = range.rowEnd.index0 - range.rowStart.index0 + 1
             Right(BigDecimal(rowCount))
           case None =>
-            Left(
-              EvalError.EvalFailed(
-                "ROWS requires a range argument",
-                Some(s"ROWS($expr)")
-              )
-            )
+            // GH-655: an array-valued argument — a spill reference, a call, range arithmetic —
+            // counts the array's rows, as in Excel (ROWS(A1#), ROWS(SEQUENCE(3))); a scalar is 1
+            evalMaybeArrayArg(ctx, expr).map {
+              case ar: ArrayResult => BigDecimal(ar.rows)
+              case _ => BigDecimal(1)
+            }
       }
     }
 
@@ -162,12 +162,12 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
             val colCount = range.colEnd.index0 - range.colStart.index0 + 1
             Right(BigDecimal(colCount))
           case None =>
-            Left(
-              EvalError.EvalFailed(
-                "COLUMNS requires a range argument",
-                Some(s"COLUMNS($expr)")
-              )
-            )
+            // GH-655: an array-valued argument counts the array's columns, as in Excel; a scalar
+            // is 1
+            evalMaybeArrayArg(ctx, expr).map {
+              case ar: ArrayResult => BigDecimal(ar.cols)
+              case _ => BigDecimal(1)
+            }
       }
     }
 
@@ -386,4 +386,124 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
                 case ar: ArrayResult => if ar.isEmpty then CellValue.Empty else ar(0, 0)
                 case scalar => ArrayArithmetic.anyToCellValue(scalar)
               }
+    }
+
+  // ===== GH-655: ANCHORARRAY — the spill reference `x#` =====
+
+  /**
+   * The shapes the spill operator `#` applies to: one cell reference or one defined name, qualified
+   * or not. The parser's postfix arm and the printer share this rule so `x#` re-parses whenever it
+   * prints.
+   */
+  def isSpillAnchorShape(expr: TExpr[?]): Boolean = expr match
+    case _: TExpr.PolyRef | _: TExpr.SheetPolyRef | _: TExpr.Ref[?] | _: TExpr.SheetRef[?] |
+        _: TExpr.ExternalRef | _: TExpr.NameRef | _: TExpr.SheetNameRef =>
+      true
+    case _ => false
+
+  /** The anchor an `x#` operand names, as a range location: one cell, or a name (bound to one). */
+  private def anchorLocation(arg: ArgSpec.SumProductArg): Option[TExpr.RangeLocation] =
+    arg match
+      case Left(location) => Some(location)
+      case Right(expr) => anchorOf(expr)
+
+  // the scrutinee is a TExpr[?]: constructor patterns on the Nothing-typed reference cases are
+  // unreachable against a TExpr[Any] (invariant GADT), so the widening is load-bearing
+  private def anchorOf(expr: TExpr[?]): Option[TExpr.RangeLocation] =
+    expr match
+      case TExpr.PolyRef(at, _) => Some(TExpr.RangeLocation.Local(CellRange(at, at)))
+      case TExpr.Ref(at, _, _) => Some(TExpr.RangeLocation.Local(CellRange(at, at)))
+      case TExpr.SheetPolyRef(sheet, at, _) =>
+        Some(TExpr.RangeLocation.CrossSheet(sheet, CellRange(at, at)))
+      case TExpr.SheetRef(sheet, at, _, _) =>
+        Some(TExpr.RangeLocation.CrossSheet(sheet, CellRange(at, at)))
+      case other => nameLocation(other)
+
+  /**
+   * The array the cell at `anchor` spills. The file's `<f t="array" ref>` record is Excel's own
+   * extent and is read through its cached cells when it has a cache — so a spill from a function xl
+   * does not evaluate still reads; an uncached array record, or a plain formula, is evaluated as an
+   * array at the anchor's position (a scalar result means the cell is not a spill anchor); a
+   * constant, a blank and a spilled non-anchor cell are `#REF!`, as in Excel.
+   */
+  private def spillOf(
+    anchorSheet: Sheet,
+    anchor: ARef,
+    ctx: EvalContext
+  ): Either[EvalError, ArrayResult] =
+    def notAnchor: Either[EvalError, ArrayResult] =
+      Left(
+        EvalError.ErrorValue(
+          CellError.Ref,
+          Some(s"${anchor.toA1}#: not the anchor of a spilled array")
+        )
+      )
+    def evaluated(text: String): Either[EvalError, ArrayResult] =
+      Evaluator
+        .evalSpillFormula(
+          text,
+          anchorSheet,
+          ctx.clock,
+          ctx.workbook,
+          ctx.depth,
+          ctx.rng,
+          ctx.memo.getOrElse(new Evaluator.EvalMemo),
+          ctx.workbookPath,
+          ctx.aggregateMemo,
+          anchor
+        )
+        .flatMap {
+          case ar: ArrayResult => Right(ar)
+          case _ => notAnchor
+        }
+    anchorSheet(anchor).value match
+      case CellValue.Formula(text, cached, FormulaKind.ArrayFormula(ref, _, _)) =>
+        if cached.isDefined then extractRangeAsMatrixEval(ref, anchorSheet, ctx).map(ArrayResult(_))
+        else evaluated(text)
+      case CellValue.Formula(text, _, _: FormulaKind.Normal) => evaluated(text)
+      case _ => notAnchor
+
+  private def renderSpillReference(arg: ArgSpec.SumProductArg, printer: ArgPrinter): String =
+    arg match
+      case Right(expr) if isSpillAnchorShape(expr) => s"${printer.expr(expr)}#"
+      // not a shape `#` can follow (a range, a value): the call spelling, which re-parses
+      case Left(location) => s"ANCHORARRAY(${printer.location(location)})"
+      case Right(expr) => s"ANCHORARRAY(${printer.expr(expr)})"
+
+  /**
+   * ANCHORARRAY(x) — GH-655: the stored form (`_xlfn.ANCHORARRAY`) of Excel 365's spill reference,
+   * spelled `x#` in the formula bar and in this model (the parser accepts both, the printer emits
+   * `x#`, `FormulaStorage` maps the two at every formula-text boundary). `x` is one cell — a
+   * reference or a defined name bound to a cell — and the value is the whole array that cell's
+   * formula spills (see [[spillOf]]). Reference-returning like OFFSET, so it collapses in scalar
+   * positions, folds under aggregates and spills standalone. `dynamicDeps`: the static graph sees
+   * the anchor cell, never its spill, so readers are deferred to the end of recalculation order.
+   */
+  val anchorArray: FunctionSpec[ArrayResult] { type Args = ArgSpec.SumProductArg } =
+    FunctionSpec.simple[ArrayResult, ArgSpec.SumProductArg](
+      "ANCHORARRAY",
+      Arity.one,
+      flags = FunctionFlags(dynamicDeps = true),
+      renderFn = Some((arg, printer) => renderSpillReference(arg, printer))
+    ) { (arg, ctx) =>
+      anchorLocation(arg) match
+        case None =>
+          Left(
+            EvalError.ErrorValue(
+              CellError.Ref,
+              Some("the spill operator # takes a cell reference or a name")
+            )
+          )
+        case Some(location) =>
+          Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap {
+            case (targetSheet, range) =>
+              if range.width == 1 && range.height == 1 then spillOf(targetSheet, range.start, ctx)
+              else
+                Left(
+                  EvalError.ErrorValue(
+                    CellError.Ref,
+                    Some(s"${range.toA1}#: the spill operator takes one cell, a spill's anchor")
+                  )
+                )
+          }
     }

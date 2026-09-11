@@ -3,7 +3,7 @@
 
 # Formula functions
 
-118 functions in the evaluator's registry, plus `LET` — a parser-level special form
+119 functions in the evaluator's registry, plus `LET` — a parser-level special form
 (lexical bindings) that the registry does not hold. `args` is the accepted argument count
 (`n+` = at least n, no upper bound); `arguments` names each slot as the parser describes it
 (`optional …` may be omitted, `…...` repeats). `flags`: `date`/`time` — the result is a date
@@ -17,6 +17,7 @@ RANDBETWEEN), which `xl audit` reports. Run `xl functions --json` for this table
 | --- | --- | --- | --- |
 | `ABS` | 1 | number | — |
 | `ADDRESS` | 2–5 | number, number, optional number, optional boolean, optional text | — |
+| `ANCHORARRAY` | 1 | array or range | dynamic deps |
 | `AND` | 1+ | boolean... | — |
 | `AVERAGE` | 1+ | number or range... | — |
 | `AVERAGEIF` | 2–3 | range, value, optional range | — |

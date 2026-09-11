@@ -459,6 +459,53 @@ object Evaluator:
                 case None => Left(evalError)
 
   /**
+   * GH-655: evaluate a spill anchor's formula text as an ARRAY at the anchor's own position on its
+   * sheet — the value of the spill reference `anchor#` when the file carries no cached spill. The
+   * result is the raw evaluation (an ArrayResult for an array-valued formula, a scalar otherwise);
+   * the caller decides what a scalar means. The depth guard, memo, rng and workbook path thread
+   * exactly as in [[evalCrossSheetFormula]]; LET bindings do not cross the formula boundary.
+   */
+  private[formula] def evalSpillFormula(
+    formulaStr: String,
+    targetSheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    depth: Int,
+    rng: Rng,
+    memo: EvalMemo,
+    workbookPath: Option[String],
+    aggregateMemo: Option[AggregateMemo],
+    anchor: ARef
+  ): Either[EvalError, Any] =
+    if depth > MaxCrossSheetRecursionDepth then
+      Left(
+        EvalError.EvalFailed(
+          s"Spill reference recursion depth exceeded (max: $MaxCrossSheetRecursionDepth). " +
+            s"Possible circular reference through ${anchor.toA1}#.",
+          None
+        )
+      )
+    else
+      FormulaParser.parse(formulaStr) match
+        case Left(parseErr) =>
+          Left(
+            EvalError.EvalFailed(
+              s"${anchor.toA1}#: the anchor's formula does not parse: " +
+                ParseError.toXLError(parseErr, formulaStr).message,
+              None
+            )
+          )
+        case Right(expr) =>
+          new EvaluatorWithDepth(
+            depth + 1,
+            allowArrayResults = true,
+            rng = rng,
+            memo = Some(memo),
+            workbookPath = workbookPath,
+            aggregateMemo = aggregateMemo
+          ).eval(expr, targetSheet, clock, workbook, Some(anchor))
+
+  /**
    * GH-346: per-pass memo for recursively evaluated uncached formula cells.
    *
    * Recursive evaluation of a `CellValue.Formula(_, None)` reference re-derived the referenced cell
