@@ -13,54 +13,14 @@ The binary documents itself and is the reference: `xl <verb> --help` for a verb'
 `xl schema` for every verb, `xl batch --schema` for every batch op and field, `xl functions --json`
 for every formula function. This skill is the map; those are the territory.
 
-## Installation
+## Environment
 
-Check if installed: `which xl || echo "not installed"`; then `xl --version` (must print `0.22.0`
-or later).
-
-**Release download** — the latest published native binary (no JDK required):
-
-**macOS/Linux (recommended):**
-```bash
-# Auto-detect platform and install latest release
-REPO="TJC-LP/xl"
-LATEST=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
-VERSION=${LATEST#v}
-case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64)  BINARY="xl-$VERSION-linux-amd64" ;;
-  Linux-aarch64) BINARY="xl-$VERSION-linux-arm64" ;;
-  Darwin-x86_64) BINARY="xl-$VERSION-darwin-amd64" ;;
-  Darwin-arm64)  BINARY="xl-$VERSION-darwin-arm64" ;;
-  *) echo "Unsupported: $(uname -s)-$(uname -m)" && exit 1 ;;
-esac
-mkdir -p ~/.local/bin
-curl -fsSL "https://github.com/$REPO/releases/download/$LATEST/$BINARY" -o ~/.local/bin/xl || {
-  echo "Error: no $BINARY published for $LATEST — use the JAR distribution xl-cli-$VERSION.tar.gz instead" >&2
-  exit 1
-}
-chmod +x ~/.local/bin/xl
-echo "Installed xl $VERSION to ~/.local/bin/xl"
-xl --version
-```
-
-**Alternative using GitHub CLI:**
-```bash
-# If gh is installed (simpler, handles auth for private repos)
-gh release download --repo TJC-LP/xl --pattern "xl-*-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -D /tmp
-mv /tmp/xl-* ~/.local/bin/xl && chmod +x ~/.local/bin/xl
-```
-
-**Windows (PowerShell):**
-```powershell
-$repo = "TJC-LP/xl"
-$latest = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
-$version = $latest -replace '^v', ''
-$url = "https://github.com/$repo/releases/download/$latest/xl-$version-windows-amd64.exe"
-Invoke-WebRequest -Uri $url -OutFile "$env:LOCALAPPDATA\xl.exe"
-Write-Host "Installed xl $version"
-```
-
-Ensure `~/.local/bin` is in your PATH: `export PATH="$HOME/.local/bin:$PATH"`
+- `xl --version` must print `0.22.0` or later. Not installed, or older: follow
+  [reference/INSTALL.md](reference/INSTALL.md) (native binaries for macOS, Linux and Windows, the
+  JAR fallback, the rasterizer for image export).
+- A deployment that vendors this skill may place a `reference/LOCAL.md` beside this file: where
+  the binary and its rasterizer live, where outputs go, house rules layered on top of this skill.
+  When that file exists, read it before the first command; it wins over the general advice here.
 
 ---
 

@@ -24,13 +24,12 @@ The stateless CLI re-reads and re-writes the file on every invocation; a script 
 
 ## Setup
 
-Check: `which scala-cli || echo "not installed"`
+`scala-cli --version` must work. Not installed: [reference/INSTALL.md](reference/INSTALL.md) (one
+command per OS, no JDK prerequisite, the offline warm-cache recipe). A deployment that vendors this
+skill may place a `reference/LOCAL.md` beside this file (a pre-warmed cache, the flags to run
+with, where outputs go); when it exists, read it before the first script.
 
-**macOS:** `brew install Virtuslab/scala-cli/scala-cli`
-**Linux:** `curl -sSLf https://scala-cli.virtuslab.org/get | sh`
-**Windows:** `winget install virtuslab.scalacli`
-
-No JDK prerequisite — scala-cli auto-provisions a JVM via coursier. The first run downloads dependencies (~30-60s); subsequent runs are cached.
+The first run downloads dependencies (~30-60s); subsequent runs are cached.
 
 ## Script Skeleton & Version
 
