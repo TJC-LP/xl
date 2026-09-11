@@ -200,7 +200,8 @@ enum DvErrorStyle derives CanEqual:
  *
  * Defaults equal the OOXML schema defaults, so absent attributes parse to [[DvMessages.default]]
  * and the default emits no attributes. Text fields are free-form (no length `require`s — totality
- * over cleverness); multiline text round-trips through `_x000A_` attribute escapes.
+ * over cleverness); multiline text is written as Excel writes it (`prompt="l1&#10;l2"`) and
+ * round-trips.
  */
 final case class DvMessages(
   showInputMessage: Boolean = false,

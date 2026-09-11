@@ -79,6 +79,21 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
 
 ### Fixed
 
+- **Line breaks and tabs in attribute values survive a write** (#649): both writers now spell TAB,
+  LF and CR inside an attribute value as the character references `&#9;`, `&#10;` and `&#13;`,
+  as Excel does (`prompt="line 1&#10;line 2"`). They were written raw — by scala.xml and the JDK
+  StAX writer alike — and XML attribute-value normalization turned each into a space on the next
+  parse, so a data-validation prompt or error message with a line break came back as `l1 l2`: from
+  an Excel-authored entry that rode `DataValidation.Preserved` (the parse had resolved Excel's
+  `&#10;`, the payload re-serialized it raw), and from any preserved fragment or defined-name
+  `comment` carrying one. A typed validation's prompt used to reach the file as `_x000A_`
+  (GH-429); it is now Excel's `&#10;`, and both spellings still read. The `SaxStax` backend no
+  longer sits on `javax.xml.stream` (whose `writeAttribute` escapes unconditionally and cannot be
+  handed a reference): `StaxSaxWriter` writes its bytes directly, in the format the JDK writer
+  produced, escaping through the same `XmlUtil` routines as the DOM backend, so the two agree byte
+  for byte on text and attributes. **Breaking** for code constructing it: `new StaxSaxWriter(…)`
+  takes a `java.io.Writer`, not an `XMLStreamWriter`; `StaxSaxWriter.create(OutputStream)` is
+  unchanged.
 - **`ROWS` and `COLUMNS` count any array** (#655): `ROWS(A1#)`, `ROWS(SEQUENCE(3))` and
   `COLUMNS(A1:C1*2)` count the array's rows or columns, as in Excel; a scalar argument is 1. Only a
   literal range was accepted ("requires a range argument").

@@ -232,12 +232,12 @@ As of the #655 PR (2026-09-10), from the full-suite JUnit reports; macros are pa
 |--------|-------|
 | xl-evaluator | 2492 |
 | xl-core | 1575 |
-| xl-ooxml | 1154 |
+| xl-ooxml | 1170 |
 | xl-cli | 1422 |
 | xl-cats-effect | 175 |
 | xl-agent | 146 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 52 |
-| **Total** | **7,016** |
+| **Total** | **7,032** |
 
 ## Test Quality Metrics
 
