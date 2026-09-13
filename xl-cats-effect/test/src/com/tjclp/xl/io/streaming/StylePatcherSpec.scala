@@ -3,6 +3,8 @@ package com.tjclp.xl.io.streaming
 import munit.FunSuite
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.fill.{Fill, PatternType}
+import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -124,4 +126,69 @@ class StylePatcherSpec extends FunSuite:
     StylePatcher.getStyle(declared, 0) match
       case Right(Some(style)) => assertEquals(style.numFmt, NumFmt.Custom("0.0%"))
       case other => fail(s"expected declared code to win, got $other")
+  }
+
+  // ===== GH-566: texture fills through the streaming style path (`--stream style`) =====
+
+  /**
+   * openpyxl's fgColor-only `mediumGray` (fill 2, xf 1) and a two-colour `lightUp` hatch (fill 3,
+   * xf 2) — the fills the streaming codec used to read back as solid/none and re-emit lowercase.
+   */
+  private val textureStylesXml: String =
+    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      |<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      |<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      |<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="mediumGray"><fgColor rgb="FF808080"/></patternFill></fill><fill><patternFill patternType="lightUp"><fgColor rgb="FF0000FF"/><bgColor rgb="FFFFFF00"/></patternFill></fill></fills>
+      |<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+      |<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      |<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/></cellXfs>
+      |</styleSheet>""".stripMargin.replaceAll("\n", "")
+
+  private def styleOf(stylesXml: String, xfId: Int): CellStyle =
+    StylePatcher.getStyle(stylesXml, xfId) match
+      case Right(Some(style)) => style
+      case other => fail(s"getStyle($xfId) gave $other")
+
+  /** The `<patternFill>` of the fill the given xf points at. */
+  private def patternFillOf(stylesXml: String, xfId: Int): scala.xml.Node =
+    XmlSecurity.parseSafe(stylesXml, "styles.xml") match
+      case Right(root) =>
+        val xf = (root \ "cellXfs" \ "xf").lift(xfId).getOrElse(fail(s"no xf $xfId"))
+        val fillId = (xf \ "@fillId").text.toIntOption.getOrElse(fail(s"xf $xfId has no fillId"))
+        val fill = (root \ "fills" \ "fill").lift(fillId).getOrElse(fail(s"no fill $fillId"))
+        (fill \ "patternFill").headOption.getOrElse(fail(s"fill $fillId has no patternFill"))
+      case Left(e) => fail(s"parse failed: ${e.message}")
+
+  test("GH-566: getStyle keeps a fgColor-only mediumGray texture as a pattern fill") {
+    styleOf(textureStylesXml, 1).fill match
+      case Fill.Pattern(_, _, PatternType.MediumGray) => ()
+      case other => fail(s"streaming reader corrupted the texture: $other")
+    styleOf(textureStylesXml, 2).fill match
+      case Fill.Pattern(_, _, PatternType.LightUp) => ()
+      case other => fail(s"streaming reader corrupted the two-colour texture: $other")
+  }
+
+  test("GH-566: a streamed bold overlay on textured cells keeps camelCase tokens and colours") {
+    val bold = CellStyle.default.withFont(Font("Calibri", 11.0, bold = true))
+    val mergedGray = StylePatcher.mergeStyles(styleOf(textureStylesXml, 1), bold)
+    val (afterGray, grayXf) = StylePatcher.addStyle(textureStylesXml, mergedGray) match
+      case Right(r) => r
+      case Left(e) => fail(s"addStyle failed: ${e.message}")
+    val gray = patternFillOf(afterGray, grayXf)
+    assertEquals((gray \ "@patternType").text, "mediumGray", afterGray)
+    assertEquals((gray \ "fgColor" \ "@rgb").text, "FF808080", afterGray)
+    assert((gray \ "bgColor").isEmpty, s"an absent bgColor must stay absent: $afterGray")
+    assert(!afterGray.contains("mediumgray"), s"schema-invalid lowercase token: $afterGray")
+
+    val mergedUp = StylePatcher.mergeStyles(styleOf(afterGray, 2), bold)
+    val (afterUp, upXf) = StylePatcher.addStyle(afterGray, mergedUp) match
+      case Right(r) => r
+      case Left(e) => fail(s"addStyle failed: ${e.message}")
+    val up = patternFillOf(afterUp, upXf)
+    assertEquals((up \ "@patternType").text, "lightUp", afterUp)
+    assertEquals((up \ "fgColor" \ "@rgb").text, "FF0000FF", afterUp)
+    assertEquals((up \ "bgColor" \ "@rgb").text, "FFFFFF00", afterUp)
+    assert(!afterUp.contains("lightup"), s"schema-invalid lowercase token: $afterUp")
+    // the overlay itself landed
+    assert(styleOf(afterUp, upXf).font.bold)
   }

@@ -412,9 +412,10 @@ object SvgRenderer:
       style.fill match
         case Fill.Solid(color) => colorToFillAttrsWithOpacity(color, theme)
         case Fill.Pattern(_, bgColor, _) =>
-          // For pattern fills, use the background color as the cell fill
-          // (Pattern rendering with foreground is not yet supported in SVG)
-          colorToFillAttrsWithOpacity(bgColor, theme)
+          // For pattern fills, use the background color as the cell fill (pattern rendering with
+          // the foreground is not yet supported in SVG); an automatic background is the window
+          // colour, rendered like Fill.None (GH-566)
+          bgColor.map(colorToFillAttrsWithOpacity(_, theme)).getOrElse("""fill="#FFFFFF"""")
         case Fill.None => """fill="#FFFFFF""""
     }
 

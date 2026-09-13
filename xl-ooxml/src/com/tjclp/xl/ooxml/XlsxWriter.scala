@@ -1921,7 +1921,7 @@ object XlsxWriter:
           case Color.Rgb(_) => false
         def fillHasTheme(f: Fill): Boolean = f match
           case Fill.Solid(c) => isThemeColor(c)
-          case Fill.Pattern(fg, bg, _) => isThemeColor(fg) || isThemeColor(bg)
+          case Fill.Pattern(fg, bg, _) => fg.exists(isThemeColor) || bg.exists(isThemeColor)
           case Fill.None => false
         def borderHasTheme(b: Border): Boolean =
           Seq(b.left, b.right, b.top, b.bottom).exists(_.color.exists(isThemeColor))

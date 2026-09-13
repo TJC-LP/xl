@@ -231,7 +231,9 @@ object Generators:
   //     (GH-404), so they round-trip as themselves and MUST be generated
   //   - degenerate style states the writer cannot represent are avoided:
   //     BorderSide(None, Some(color)) drops its color, Fill.Pattern with
-  //     pattern None/Solid collapses to Fill.None/Fill.Solid
+  //     pattern None/Solid collapses to Fill.None/Fill.Solid; each texture
+  //     colour is independently present or automatic (absent child), which
+  //     both backends round-trip (GH-566)
   //   - generated PageSetup/HeaderFooter always carry at least one visible
   //     (non-default) field; an all-default PageSetup serializes to nothing
   //     and reads back as None by design
@@ -317,8 +319,8 @@ object Generators:
       4 -> Gen.const(Fill.None),
       4 -> genColor.map(Fill.Solid.apply),
       2 -> (for
-        fg <- genColor
-        bg <- genColor
+        fg <- Gen.option(genColor)
+        bg <- Gen.option(genColor)
         pattern <- Gen.oneOf(texturePatterns)
       yield Fill.Pattern(fg, bg, pattern))
     )

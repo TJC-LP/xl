@@ -902,7 +902,7 @@ class SvgRendererSpec extends FunSuite:
   test("toSvg: pattern fill uses background color") {
     import com.tjclp.xl.styles.fill.PatternType
     // Create a LightGray pattern fill with light gray background
-    val patternFill = Fill.Pattern(
+    val patternFill = Fill.pattern(
       foreground = Color.fromRgb(0, 0, 0), // Black foreground
       background = Color.fromRgb(200, 200, 200), // Light gray background
       pattern = PatternType.LightGray
@@ -923,10 +923,24 @@ class SvgRendererSpec extends FunSuite:
     )
   }
 
+  test("toSvg: GH-566 pattern fill with an automatic background renders like no fill (white)") {
+    import com.tjclp.xl.styles.fill.PatternType
+    // openpyxl's `PatternFill(patternType="mediumGray", fgColor=...)`: foreground only, the
+    // background is Excel's automatic window colour
+    val fgOnly = Fill.Pattern(Some(Color.fromRgb(128, 128, 128)), None, PatternType.MediumGray)
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Hatched")
+      .unsafe
+      .withCellStyle(ref"A1", CellStyle.default.withFill(fgOnly))
+    val svg = sheet.toSvg(ref"A1:A1")
+    assert(svg.contains("""fill="#FFFFFF""""), s"automatic background must render white: $svg")
+    assert(!svg.contains("""fill="#808080""""), s"the foreground is not the cell fill: $svg")
+  }
+
   test("toSvg: pattern fill does not render as white") {
     import com.tjclp.xl.styles.fill.PatternType
     // Create a pattern fill with a distinct background color
-    val patternFill = Fill.Pattern(
+    val patternFill = Fill.pattern(
       foreground = Color.fromRgb(0, 0, 0),
       background = Color.fromRgb(0, 128, 255), // Blue background
       pattern = PatternType.Gray125
