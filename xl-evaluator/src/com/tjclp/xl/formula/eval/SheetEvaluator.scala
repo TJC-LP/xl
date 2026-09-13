@@ -509,23 +509,43 @@ object SheetEvaluator:
     workbook: Option[Workbook],
     currentCell: Option[ARef]
   ): XLResult[CellValue] =
-    for
-      expr <- FormulaParser
-        .parse(formula)
-        .left
-        .map(parseError =>
-          XLError.FormulaError(
-            formula,
-            s"Parse error: $parseError"
-          )
+    parseFormula(formula).flatMap(expr =>
+      evaluateParsedWith(sheet, formula, expr, evaluator, clock, workbook, currentCell)
+    )
+
+  /** The parse half of [[evaluateFormulaWith]]: a parse failure is the `Parse error:` XLError. */
+  private[eval] def parseFormula(formula: String): XLResult[TExpr[?]] =
+    FormulaParser
+      .parse(formula)
+      .left
+      .map(parseError =>
+        XLError.FormulaError(
+          formula,
+          s"Parse error: $parseError"
         )
-      result <- evaluator.eval(expr, sheet, clock, workbook, currentCell) match
-        case scala.util.Right(value) => scala.util.Right(EvalResult.toCellValue(value))
-        case scala.util.Left(evalError) =>
-          EvalError.toErrorValue(evalError) match
-            case Some(code) => scala.util.Right(CellValue.Error(code))
-            case None => scala.util.Left(evalErrorToXLError(evalError, Some(formula)))
-    yield result
+      )
+
+  /**
+   * The evaluate half of [[evaluateFormulaWith]] for an ALREADY PARSED formula — GH-537: an
+   * iterative fixpoint parses each member once and evaluates its `TExpr` every round. `formulaText`
+   * is the source text the diagnostics quote; it must be the text `expr` was parsed from. The
+   * GH-344 boundary promotion lives here and nowhere else.
+   */
+  private[eval] def evaluateParsedWith(
+    sheet: Sheet,
+    formulaText: String,
+    expr: TExpr[?],
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): XLResult[CellValue] =
+    evaluator.eval(expr, sheet, clock, workbook, currentCell) match
+      case scala.util.Right(value) => scala.util.Right(EvalResult.toCellValue(value))
+      case scala.util.Left(evalError) =>
+        EvalError.toErrorValue(evalError) match
+          case Some(code) => scala.util.Right(CellValue.Error(code))
+          case None => scala.util.Left(evalErrorToXLError(evalError, Some(formulaText)))
 
   /** Shared dependency-ordered evaluation, optionally with an explicit rng (GH-115). */
   private def evaluateWithDependencyCheckImpl(

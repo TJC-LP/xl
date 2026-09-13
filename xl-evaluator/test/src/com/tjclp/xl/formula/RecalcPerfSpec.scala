@@ -220,3 +220,26 @@ class RecalcPerfSpec extends FunSuite:
       elapsedMs < BudgetMs,
       s"transitiveDependents took ${elapsedMs}ms (budget ${BudgetMs}ms)"
     )
+
+  /**
+   * GH-537 tripwire: a cycle member that fails every round (a host failure, not an error value)
+   * used to pin its component at `maxIter` — `converged` demanded a `Right` from every member, so
+   * the loop replayed an identical round 100,000 times. Once a round reproduces the previous one
+   * exactly, every further round is a deterministic replay (pinned clock, no fresh randomness): the
+   * engine must stop there and report the component as stalled, in a handful of rounds.
+   */
+  test("GH-537: a permanently failing member stalls its component instead of burning maxIter"):
+    val wb = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(ARef.from0(0, 0), formula("=B1*0.5+10"))
+        .put(ARef.from0(1, 0), formula("=A1*0.5+Nowhere!A1"))
+    )
+    val t0 = System.nanoTime()
+    val result = wb.recalculate(IterativeCalc(100000, BigDecimal("1E-9")))
+    val elapsedMs = (System.nanoTime() - t0) / 1000000L
+    assert(!result.converged, "a failing member never converges")
+    assert(
+      result.cycles.forall(c => c.stalled && c.rounds <= 3),
+      s"expected an early stall, got ${result.cycles.map(_.render)}"
+    )
+    assert(elapsedMs < BudgetMs, s"stalled fixpoint took ${elapsedMs}ms (budget ${BudgetMs}ms)")

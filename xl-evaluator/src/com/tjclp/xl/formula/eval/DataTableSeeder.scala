@@ -864,9 +864,18 @@ object DataTableSeeder:
           // GH-469/GH-492: the seeder stays COLD-seeded (Map.empty) on purpose — under what-if
           // substitution the loaded caches are stale by construction, the same argument `stripSet`
           // already makes above. `recalculate`'s warm start is deliberately not inherited here.
+          // The plain `Evaluator.instance` is exactly what the public `evaluateCell` path used
+          // (system rng, no memo): seeding keeps its one-shot evaluation profile.
           val outcome =
-            WorkbookEvaluator
-              .jacobiFixpoint(wb, upstream.sheets, members, iterative, clock, None, Map.empty)
+            WorkbookEvaluator.jacobiFixpoint(
+              wb,
+              upstream.sheets,
+              members,
+              iterative,
+              clock,
+              () => Evaluator.instance,
+              Map.empty
+            )
           val results = outcome.results
           val converged = outcome.converged
           val sourceQ = QualifiedRef(sheet.name, sourceRef)

@@ -346,3 +346,96 @@ class IterativeRecalcSpec extends FunSuite:
     assertEquals(iterative.workbook, default.workbook)
     assertEquals(iterative.errors, default.errors)
   }
+
+  // ===== GH-537: a permanently failing member stalls its component at stationarity =====
+
+  /**
+   * A1/B1 cycle whose B1 fails EVERY round: a reference to a sheet that does not exist is a host
+   * failure (never an Excel error value), and the graph keeps B1 cyclic through its `A1` edge.
+   * Round 1 moves A1 from the 0 seed to 10; round 2 replays round 1 exactly — and so would every
+   * further round, the clock being pinned and the formulas deterministic.
+   */
+  private def failingMemberCycle: Workbook =
+    Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, formula("=B1*0.5+10"))
+        .put(b1, formula("=A1*0.5+Nowhere!A1"))
+    )
+
+  test("GH-537: a member that fails every round stalls the component at stationarity") {
+    val result = failingMemberCycle.recalculate(IterativeCalc(400, BigDecimal("0.001")))
+    val scc = result.cycles.headOption.getOrElse(fail("one cyclic component expected"))
+    assert(!result.converged, "a failing member can never converge")
+    assert(scc.stalled, s"the component must report stalled: ${scc.render}")
+    assertEquals(scc.rounds, 2, "round 2 is the first exact replay of round 1")
+    assertEquals(result.iterationsUsed, 2)
+    // The failing member is the host failure; GH-563 then invalidates its dependents (here A1,
+    // the other member of the cycle) exactly as it does after a failed acyclic cell.
+    assertEquals(result.errors.map(_.ref), Vector(b1, a1), result.errors.map(_.render).toString)
+    assert(
+      result.errors.headOption.exists(_.error.message.contains("Nowhere")),
+      result.errors.map(_.render).toString
+    )
+    assert(
+      result.errors.lift(1).exists(_.error.message.contains("Blocked by an upstream")),
+      result.errors.map(_.render).toString
+    )
+    assert(scc.render.contains("stalled after 2 round(s)"), scc.render)
+    assert(!scc.render.contains("exhausted"), scc.render)
+  }
+
+  test("GH-537: a member drawing fresh randomness never replays — the failing cycle exhausts") {
+    // A1 changes every round (a live RAND draw), so no round is an exact replay of the previous
+    // one: the loop must run to maxIter and report exhaustion, not a stall.
+    val wb = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, formula("=B1*0+RAND()"))
+        .put(b1, formula("=A1*0.5+Nowhere!A1"))
+    )
+    val result = wb.recalculate(IterativeCalc(20, BigDecimal("0.001")))
+    val scc = result.cycles.headOption.getOrElse(fail("one cyclic component expected"))
+    assert(!result.converged)
+    assert(!scc.stalled, scc.render)
+    assertEquals(scc.rounds, 20)
+    assert(scc.render.contains("exhausted 20 round(s)"), scc.render)
+    assert(result.summary.contains("exhausted 20 round(s)"), result.summary)
+  }
+
+  test("GH-537: the summary names a stall as a stall, never as exhaustion") {
+    val stalled = failingMemberCycle.recalculate(IterativeCalc(400, BigDecimal("0.001")))
+    assert(
+      stalled.summary.contains(
+        "WARNING: iterative calculation stalled after 2 round(s): a cyclic member fails every round"
+      ),
+      stalled.summary
+    )
+    assert(!stalled.summary.contains("exhausted"), stalled.summary)
+    // One stalled and one genuinely oscillating component: exhaustion stays the headline.
+    val mixed = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, formula("=B1*0.5+10"))
+        .put(b1, formula("=A1*0.5+Nowhere!A1"))
+        .put(c1, formula("=1-D1"))
+        .put(d1, formula("=C1"))
+    ).recalculate(IterativeCalc(10, BigDecimal("0.001")))
+    assertEquals(mixed.cycles.map(_.stalled), Vector(true, false))
+    assertEquals(mixed.iterationsUsed, 10)
+    assert(mixed.summary.contains("exhausted 10 round(s) without converging"), mixed.summary)
+    assert(!mixed.summary.contains("stalled"), mixed.summary)
+  }
+
+  test("GH-537: a cached external-ref member is a constant inside its cycle (pinned cache)") {
+    // GH-353: the closed-workbook cache IS the value. Parsing each member once per fixpoint must
+    // keep the pinned short-circuit: A1 never evaluates, B1 settles on half of it.
+    val wb = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, CellValue.Formula("=[2]Book!A1*B1", Some(num(7))))
+        .put(b1, formula("=A1*0.5"))
+    )
+    val result = wb.recalculate(IterativeCalc(100, BigDecimal("0.001")))
+    assert(result.isClean, result.errors.map(_.render).toString)
+    assert(result.converged)
+    assertEquals(cachedNum(result.workbook, "S", a1), Some(BigDecimal(7)))
+    assertEquals(cachedNum(result.workbook, "S", b1), Some(BigDecimal("3.5")))
+    assertEquals(result.cycles.map(_.rounds), Vector(2))
+  }

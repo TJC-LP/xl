@@ -99,19 +99,32 @@ object IterativeCalc:
  * @param converged
  *   true iff every member's |Δ| dropped below `maxChange` within `maxIter` rounds
  * @param rounds
- *   rounds actually run for THIS component — `maxIter` on exhaustion, else the converging round
+ *   rounds actually run for THIS component — `maxIter` on exhaustion, the converging round on
+ *   convergence, the first replayed round on a stall
  * @param maxDelta
  *   the largest |Δ| among numeric members in the final round (None when no member was numeric) —
  *   the residual a caller can size an exhaustion against
+ * @param stalled
+ *   GH-537: true iff the fixpoint stopped early because a round reproduced the previous one EXACTLY
+ *   while some member still failed to evaluate. Evaluation is deterministic given the overlay (the
+ *   clock is pinned, and a member drawing fresh randomness never replays), so every further round
+ *   would have been the same replay: the loop stops there instead of burning `maxIter`. A stalled
+ *   component is never `converged` — the failing member is reported as a [[CellEvalError]] — and
+ *   `rounds` is then strictly below `maxIter`. Exhaustion proper (values still moving at `maxIter`)
+ *   reports `stalled = false`.
  */
 final case class SccReport(
   members: Vector[(SheetName, ARef)],
   converged: Boolean,
   rounds: Int,
-  maxDelta: Option[BigDecimal]
+  maxDelta: Option[BigDecimal],
+  stalled: Boolean = false
 ) derives CanEqual:
 
-  /** e.g. `'Debt'!B7, 'Debt'!B8 (+3 more): exhausted 400 round(s), max |Δ| = 3.9` */
+  /**
+   * e.g. `'Debt'!B7, 'Debt'!B8 (+3 more): exhausted 400 round(s), max |Δ| = 3.9` or
+   * `'Debt'!B7, 'Debt'!B8: stalled after 2 round(s): a member fails every round`
+   */
   def render: String =
     val shown = members
       .take(2)
@@ -119,7 +132,9 @@ final case class SccReport(
       .mkString(", ")
     val more = if members.sizeIs > 2 then s" (+${members.size - 2} more)" else ""
     val verdict =
-      if converged then s"converged in $rounds round(s)" else s"exhausted $rounds round(s)"
+      if converged then s"converged in $rounds round(s)"
+      else if stalled then s"stalled after $rounds round(s): a member fails every round"
+      else s"exhausted $rounds round(s)"
     val delta = maxDelta.fold("")(d => s", max |Δ| = $d")
     s"$shown$more: $verdict$delta"
 
@@ -175,6 +190,9 @@ final case class SccReport(
  * @param iterationsUsed
  *   GH-454/GH-492: `cycles.map(_.rounds).max` — the rounds run by the WORST component (0 when no
  *   iteration happened). Equals `maxIter` when any component exhausted; otherwise in (0, maxIter].
+ *   GH-537: a component that STALLED (a member failing every round, see [[SccReport.stalled]])
+ *   stops below `maxIter`, so `converged = false` with `iterationsUsed < maxIter` is possible — and
+ *   means every unconverged component stalled rather than oscillated.
  * @param cycles
  *   GH-492: one [[SccReport]] per cyclic component actually iterated, sorted by the component's
  *   canonical key (its minimum member under (sheet name, A1)). Empty on non-iterative and acyclic
@@ -244,7 +262,12 @@ final case class RecalcResult(
    * Recalculated 12 formulas (1 error value)
    * Recalculated 11 formulas; 1 error (Sales!B2: Formula error in 'NOSUCHFN(A1)': ...)
    * Recalculated 40 formulas; converged in 7 iterative round(s)
+   * Recalculated 40 formulas; 2 errors (...); WARNING: iterative calculation stalled after 2 round(s): a cyclic member fails every round
    * }}}
+   *
+   * GH-537: when every unconverged component STALLED (see [[SccReport.stalled]]) the warning names
+   * the stall — the failing member is among the errors listed on the same line. If any component
+   * genuinely oscillated to `maxIter`, exhaustion stays the headline.
    */
   def summary: String =
     val formulaCount = evaluated.valuesIterator.map(_.size).sum
@@ -255,7 +278,10 @@ final case class RecalcResult(
       else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
     val convergence =
       if !converged then
-        s"; WARNING: iterative calculation exhausted $iterationsUsed round(s) without converging (last values kept)"
+        if cycles.exists(c => !c.converged && !c.stalled) then
+          s"; WARNING: iterative calculation exhausted $iterationsUsed round(s) without converging (last values kept)"
+        else
+          s"; WARNING: iterative calculation stalled after $iterationsUsed round(s): a cyclic member fails every round"
       else if iterationsUsed > 0 then s"; converged in $iterationsUsed iterative round(s)"
       else ""
     if isClean then s"Recalculated $formulaCount $formulasLabel$errorValues$convergence"

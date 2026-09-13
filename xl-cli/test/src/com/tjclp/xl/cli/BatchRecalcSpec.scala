@@ -812,6 +812,27 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-537: a stalled iterative component renders the stall, not exhaustion") {
+    // B1 fails every round (a missing sheet is a host failure); round 2 replays round 1 exactly,
+    // so the fixpoint stops at stationarity instead of burning the declared 400 rounds — and the
+    // CLI summary (RecalcResult.summary verbatim) must say so.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1", CellValue.Formula("B1*0.5+10"))
+        .put(ref"B1", CellValue.Formula("A1*0.5+Nowhere!A1"))
+    ).withCalcPr(com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(400), None))
+    val out = tempXlsx()
+    val summary = WriteCommands.recalc(wb, out, config).unsafeRunSync()
+    assert(
+      summary.contains(
+        "WARNING: iterative calculation stalled after 2 round(s): a cyclic member fails every round"
+      ),
+      s"summary: $summary"
+    )
+    assert(!summary.contains("exhausted"), s"summary: $summary")
+    Files.deleteIfExists(out)
+  }
+
   test("recalc command reports formula errors without failing (exit stays clean)") {
     val wb = Workbook(
       Sheet("Data")

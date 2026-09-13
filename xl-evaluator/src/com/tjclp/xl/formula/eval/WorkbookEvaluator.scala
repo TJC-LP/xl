@@ -822,6 +822,10 @@ object WorkbookEvaluator:
           val seed =
             if iterative.seedFromCaches then warmSeed(baseSheets, members)
             else Map.empty[QualifiedRef, CellValue]
+          // GH-537: a FRESH aggregate memo per round. Inside one round every member is overlaid
+          // CACHED (Formula(expr, Some(previous))) and results apply only at round end, so a
+          // range touching members is fixed for the round and its aggregate may be shared by the
+          // members that read it — but never across rounds, where the same range changes.
           val outcome =
             jacobiFixpoint(
               wb,
@@ -829,9 +833,12 @@ object WorkbookEvaluator:
               members,
               iterative,
               pinnedClock,
-              rngOpt,
-              seed,
-              Some(generationEvaluator)
+              () =>
+                Evaluator.recalculationInstance(
+                  rngOpt.getOrElse(Rng.system),
+                  new Evaluator.AggregateMemo
+                ),
+              seed
             )
           val folded = members.foldLeft((baseSheets, acc0, errs0)) {
             case ((sheets, acc, errs), (q, idx, _)) =>
@@ -851,7 +858,8 @@ object WorkbookEvaluator:
             members = members.map((q, _, _) => (q.sheet, q.ref)).toVector,
             converged = outcome.converged,
             rounds = outcome.rounds,
-            maxDelta = outcome.maxDelta
+            maxDelta = outcome.maxDelta,
+            stalled = outcome.stalled
           )
           (folded, report)
 
@@ -995,21 +1003,40 @@ object WorkbookEvaluator:
     results: Map[QualifiedRef, Either[XLError, CellValue]],
     converged: Boolean,
     rounds: Int,
-    maxDelta: Option[BigDecimal]
+    maxDelta: Option[BigDecimal],
+    stalled: Boolean
   )
 
   /**
    * The shared Jacobi fixpoint engine (GH-373/GH-453/GH-454/GH-492): iterate `members` against
-   * `baseSheets` until every member's |Δ| < `maxChange` (strict) or `maxIter` rounds.
+   * `baseSheets` until every member's |Δ| < `maxChange` (strict), the loop stalls, or `maxIter`
+   * rounds.
    *
    * Each member is `(qualified ref, index of its sheet in baseSheets, formula text)`. Members seed
    * from `seed`, falling back to 0 for anything absent (`Map.empty` therefore reproduces the
    * original all-zero seeding exactly); each round overlays every member's cell with
    * `Formula(expr, Some(previousValue))` so every reference to a member — including self-references
-   * — reads the previous round's value while `evaluateCell` re-evaluates the formula text. Callers
-   * pin the clock BEFORE calling (one fixpoint is one volatile generation). A member that throws
-   * holds its previous value for later rounds (GH-388 degradation) and reports its Left only from
-   * the final round.
+   * — reads the previous round's value while the member's formula re-evaluates. Callers pin the
+   * clock BEFORE calling (one fixpoint is one volatile generation). A member that throws holds its
+   * previous value for later rounds (GH-388 degradation) and reports its Left only from the final
+   * round.
+   *
+   * GH-537 — the per-round costs and the exit:
+   *   - Member text never changes across rounds, so each member is PARSED ONCE here and its `TExpr`
+   *     evaluated per round ([[SheetEvaluator.evaluateParsedWith]]); a parse failure is the same
+   *     `Parse error:` XLError the acyclic path reports.
+   *   - A member whose overlay is a PINNED cache (GH-353: a cached closed-workbook formula) never
+   *     evaluates — its `Some(previous)` overlay IS its value every round, i.e. it is the constant
+   *     `seed(q)`; that is decided once, not re-derived per round.
+   *   - `roundEvaluator` is called once per round: a FRESH aggregate memo is sound within a round
+   *     (every member is overlaid cached, results apply at round end, so a range over members is
+   *     fixed for the round) and unsound across rounds (the same range changes).
+   *   - Once a round reproduces the previous one EXACTLY without converging, some member failed (an
+   *     all-`Right` replay has |Δ| = 0 and converges). Evaluation is a pure function of the overlay
+   *     — the clock is pinned, the memo is per round, and a member drawing fresh randomness never
+   *     replays — so every further round would be that same replay: the loop stops and reports
+   *     `stalled` instead of burning `maxIter` (the 126k-name field book spent ~20 s of every
+   *     recalculation replaying 400 identical rounds).
    *
    * Non-convergence KEEPS the last values with no error — Excel's semantics, and the reason
    * exhaustion surfaces through [[FixpointOutcome]] rather than as a [[CellEvalError]].
@@ -1023,14 +1050,20 @@ object WorkbookEvaluator:
     members: List[(QualifiedRef, Int, String)],
     iterative: IterativeCalc,
     pinnedClock: Clock,
-    rngOpt: Option[Rng],
-    seedValues: Map[QualifiedRef, CellValue],
-    generationEvaluator: Option[Evaluator] = None
+    roundEvaluator: () => Evaluator,
+    seedValues: Map[QualifiedRef, CellValue]
   ): FixpointOutcome =
     val zero: CellValue = CellValue.Number(BigDecimal(0))
     val seed: Map[QualifiedRef, CellValue] =
       members.map((q, _, _) => q -> seedValues.getOrElse(q, zero)).toMap
     val maxRounds = math.max(1, iterative.maxIter)
+    val parsed: Map[QualifiedRef, XLResult[TExpr[?]]] =
+      members.map((q, _, text) => q -> SheetEvaluator.parseFormula(text)).toMap
+    // Pinned-ness depends on the text and on a cache being present — both fixed for the fixpoint.
+    val pinnedConstant: Map[QualifiedRef, CellValue] =
+      members.flatMap { (q, _, text) =>
+        SheetEvaluator.pinnedCache(CellValue.Formula(text, Some(seed(q)))).map(q -> _)
+      }.toMap
 
     // Convergence: numeric values compare by |Δ| < maxChange (strict, per Excel); non-numeric
     // results converge only on exact equality — GH-344: an error VALUE arriving as a member's
@@ -1047,51 +1080,64 @@ object WorkbookEvaluator:
         case (CellValue.Number(a), CellValue.Number(b)) => Some((a - b).abs)
         case _ => None
 
+    /** One member against the round's overlay — GH-388 total: a throw is this member's Left. */
+    def evaluateMember(
+      q: QualifiedRef,
+      idx: Int,
+      text: String,
+      sheets: Vector[Sheet],
+      tempWb: Workbook,
+      evaluator: Evaluator
+    ): Either[XLError, CellValue] =
+      pinnedConstant.get(q) match
+        case Some(constant) => Right(constant)
+        case None =>
+          try
+            parsed(q).flatMap(expr =>
+              SheetEvaluator.evaluateParsedWith(
+                sheets(idx),
+                text,
+                expr,
+                evaluator,
+                pinnedClock,
+                Some(tempWb),
+                Some(q.ref)
+              )
+            )
+          catch
+            case NonFatal(e) =>
+              Left(XLError.FormulaError(text, s"Evaluation threw ${e.getClass.getName}"))
+
     @annotation.tailrec
     def loop(round: Int, prev: Map[QualifiedRef, CellValue]): FixpointOutcome =
-      val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, expr)) =>
-        sheets.updated(idx, sheets(idx).put(q.ref, CellValue.Formula(expr, prev.get(q))))
+      val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, text)) =>
+        sheets.updated(idx, sheets(idx).put(q.ref, CellValue.Formula(text, prev.get(q))))
       }
       val tempWb = wb.copy(sheets = overlaid)
+      val evaluator = roundEvaluator()
       val results: Map[QualifiedRef, Either[XLError, CellValue]] =
-        members.map { (q, idx, expr) =>
-          val tempSheet = overlaid(idx)
-          val evaluatedCell =
-            try
-              generationEvaluator match
-                case Some(evaluator) =>
-                  SheetEvaluator.evaluateCellWithEvaluator(
-                    tempSheet,
-                    q.ref,
-                    evaluator,
-                    pinnedClock,
-                    Some(tempWb)
-                  )
-                case None =>
-                  rngOpt match
-                    case Some(rng) => tempSheet.evaluateCell(q.ref, pinnedClock, rng, Some(tempWb))
-                    case None => tempSheet.evaluateCell(q.ref, pinnedClock, Some(tempWb))
-            catch
-              case NonFatal(e) =>
-                Left(XLError.FormulaError(expr, s"Evaluation threw ${e.getClass.getName}"))
-          q -> evaluatedCell
+        members.map { (q, idx, text) =>
+          q -> evaluateMember(q, idx, text, overlaid, tempWb, evaluator)
         }.toMap
       val converged = members.forall { (q, _, _) =>
         results(q) match
           case Right(next) => changeBelowThreshold(prev.getOrElse(q, zero), next)
           case Left(_) => false
       }
-      if converged || round >= maxRounds then
+      // A throwing/failing member holds its previous value for the next round so the rest of the
+      // core keeps converging (GH-388 degradation, not unwinding).
+      val next = members.map { (q, _, _) =>
+        q -> results(q).getOrElse(prev.getOrElse(q, zero))
+      }.toMap
+      // GH-537: an exact replay that did not converge has a failing member (the Left guard keeps
+      // the verdict literal even for a degenerate maxChange <= 0, where an all-Right exact replay
+      // never satisfies the strict |Δ| < maxChange and legitimately runs to maxIter).
+      val stalled = !converged && next == prev && results.valuesIterator.exists(_.isLeft)
+      if converged || stalled || round >= maxRounds then
         val maxDelta = members.flatMap { (q, _, _) =>
           results(q).toOption.flatMap(next => numericDelta(prev.getOrElse(q, zero), next))
         }.maxOption
-        FixpointOutcome(results, converged, round, maxDelta)
-      else
-        // A throwing/failing member holds its previous value for the next round so the rest of
-        // the core keeps converging (GH-388 degradation, not unwinding).
-        val next = members.map { (q, _, _) =>
-          q -> results(q).getOrElse(prev.getOrElse(q, zero))
-        }.toMap
-        loop(round + 1, next)
+        FixpointOutcome(results, converged, round, maxDelta, stalled)
+      else loop(round + 1, next)
 
     loop(1, seed)
