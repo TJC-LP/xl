@@ -742,7 +742,10 @@ object FormulaParser:
             case _ => s // Invalid: E not followed by sign or digit
         case _ => s
 
-    val s2 = loop(state, hasDecimal = state.currentChar.contains('.'), hasExponent = false)
+    // GH-653: the loop consumes the decimal point itself, so a leading-dot fraction (`.5`, Excel's
+    // own spelling of a fraction below one) reads as `.5` and not as the empty literal — seeding
+    // `hasDecimal` from the first character left nothing consumed and reported Invalid number ''
+    val s2 = loop(state, hasDecimal = false, hasExponent = false)
     val numStr = state.input.substring(startPos, s2.pos)
 
     try
