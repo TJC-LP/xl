@@ -460,30 +460,35 @@ object TableConversions:
   /**
    * Convert domain TableSpec to OOXML representation.
    *
+   * The revision uids (`xr:uid` on the table and its autoFilter, `xr3:uid` on each column) are
+   * optional metadata Excel stamps on its own saves; the domain model does not carry them. They
+   * ride through from `source` — the file's part for this table, columns matched by name — and are
+   * OMITTED without one (openpyxl and LibreOffice write none; Excel accepts and re-stamps). A fresh
+   * random UUID per write made two writes of one workbook differ in every table part (GH-595).
+   *
    * @param spec
    *   Domain table specification
    * @param id
    *   Table ID (1-indexed, unique within workbook)
+   * @param source
+   *   The source file's OOXML table of the same name, if the write has one
    * @return
    *   OOXML table
    */
-  def toOoxml(spec: TableSpec, id: Long): OoxmlTable =
-    import java.util.UUID
-
-    // Generate UIDs for Excel revision tracking
-    val tableUid = Some(s"{${UUID.randomUUID().toString.toUpperCase}}")
-    val autoFilterUid =
-      spec.autoFilter.filter(_.enabled).map(_ => s"{${UUID.randomUUID().toString.toUpperCase}}")
+  def toOoxml(spec: TableSpec, id: Long, source: Option[OoxmlTable] = None): OoxmlTable =
+    val autoFilterEnabled = spec.autoFilter.exists(_.enabled)
+    val tableUid = source.flatMap(_.tableUid)
+    val autoFilterUid = if autoFilterEnabled then source.flatMap(_.autoFilterUid) else None
 
     val columns = spec.columns.map { col =>
       OoxmlTableColumn(
         id = col.id,
         name = col.name,
-        uid = Some(s"{${UUID.randomUUID().toString.toUpperCase}}") // xr3:uid for each column
+        uid = source.flatMap(_.columns.find(_.name == col.name)).flatMap(_.uid)
       )
     }
 
-    val autoFilterRange = spec.autoFilter.filter(_.enabled).map(_ => spec.range)
+    val autoFilterRange = Option.when(autoFilterEnabled)(spec.range)
 
     val styleInfo = styleToStyleInfo(spec.style)
 

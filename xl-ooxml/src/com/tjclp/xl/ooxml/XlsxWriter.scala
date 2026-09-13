@@ -2089,6 +2089,25 @@ object XlsxWriter:
     // Build table data
     val (tablesBySheet, totalTableCount, tableIdMap) = buildTablesData(workbook)
 
+    // GH-595: the source's table parts by name, resolved through each sheet's identity-keyed
+    // rels (the reader's own route) — their revision uids ride through the regenerated parts.
+    // Table parts are known parts (never verbatim-copied) and tiny, so one pass per write.
+    val sourceTablesByName: Map[String, OoxmlTable] = sourceContext match
+      case Some(ctx) if totalTableCount > 0 =>
+        withSourceZip(ctx.content) { z =>
+          workbook.sheets.indices
+            .flatMap(sourceSheetRelsPath(ctx, _))
+            .filter(ctx.partManifest.contains)
+            .flatMap(relsPath => parseOptionalEntry(z, relsPath)(Relationships.fromXml).toList)
+            .flatMap(_.relationships)
+            .filter(_.`type` == XmlUtil.relTypeTable)
+            .flatMap(rel => normalizeSheetRelTarget(rel.target))
+            .flatMap(path => parseOptionalEntry(z, path)(OoxmlTable.fromXml))
+            .map(table => table.name -> table)
+            .toMap
+        }
+      case _ => Map.empty
+
     // GH-221: drawing-layer plan — snapshot-equality dirty test, media dedup, first-drawing wiring
     val drawingPlan = planDrawingWrites(workbook, sourceContext, sheetsToRegenerate)
 
@@ -2530,9 +2549,11 @@ object XlsxWriter:
           }
       }
 
-      // Write table files for all sheets (always regenerated from domain model)
+      // Write table files for all sheets (always regenerated from domain model; GH-595: the
+      // source part of the same name lends its revision uids, so a re-write is byte-stable)
       tablesBySheet.values.flatten.foreach { case (tableSpec, tableId) =>
-        val ooxmlTable = TableConversions.toOoxml(tableSpec, tableId)
+        val ooxmlTable =
+          TableConversions.toOoxml(tableSpec, tableId, sourceTablesByName.get(tableSpec.name))
         writePart(zip, s"xl/tables/table$tableId.xml", ooxmlTable, config)
       }
 

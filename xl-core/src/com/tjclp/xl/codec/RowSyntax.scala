@@ -9,7 +9,7 @@ import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
-import com.tjclp.xl.tables.TableSpec
+import com.tjclp.xl.tables.{TableAutoFilter, TableSpec}
 
 /**
  * Where a block of records landed (GH-590): the result of `putRows`, `putRowsWithHeader` and
@@ -128,9 +128,10 @@ object rowSyntax:
 
     /**
      * [[putRowsWithHeader]] plus an Excel table named `name` over header and records, its columns
-     * named after the fields. With no records the table keeps the one blank data row Excel itself
-     * insists on. `name` follows Excel's rules (letters, digits, `_`; unique per workbook — the
-     * sheet-level check rejects a name this sheet already uses) and doubles as the display name.
+     * named after the fields and filter buttons on the header row (what Excel's own Format as Table
+     * does). With no records the table keeps the one blank data row Excel itself insists on. `name`
+     * follows Excel's rules (letters, digits, `_`; unique per workbook — the sheet-level check
+     * rejects a name this sheet already uses) and doubles as the display name.
      */
     def putTable[A](at: ARef, rows: Iterable[A], name: String)(using
       codec: RowCodec[A]
@@ -150,7 +151,8 @@ object rowSyntax:
           placed <- place(sheet, at, records, header = true, codec)
           tableRange = CellRange(at, ARef(at.col + codec.width - 1, at.row + tableRows - 1))
           spec <- TableSpec.fromColumnNames(name, name, tableRange, codec.fields)
-        yield placed.copy(sheet = placed.sheet.withTable(spec))
+          filtered = spec.copy(autoFilter = Some(TableAutoFilter(enabled = true)))
+        yield placed.copy(sheet = placed.sheet.withTable(filtered))
 
   // ========== Internals ==========
 

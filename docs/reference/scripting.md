@@ -721,9 +721,9 @@ The rules, all of them:
   A record needs at least one field.
 - **Writing**: `putRows(at, records)` writes records only (append under a header you styled
   yourself); `putRowsWithHeader(at, records)` writes the field names at `at` and records below;
-  `putTable(at, records, name)` adds an Excel table over header + records (`name`: letters, digits,
-  `_`; it doubles as the display name; with no records the table keeps Excel's one blank data
-  row). All three return `XLResult[RowsPlaced]` — `sheet`, `headerRange`, `dataRange`, `range`
+  `putTable(at, records, name)` adds an Excel table over header + records, with filter buttons on
+  the header row as Excel's own Format as Table does (`name`: letters, digits, `_`; it doubles as
+  the display name; with no records the table keeps Excel's one blank data row). All three return `XLResult[RowsPlaced]` — `sheet`, `headerRange`, `dataRange`, `range`
   (header ∪ data), `count` — and are `OutOfBounds` when the block would run past column XFD or
   row 1048576. Codec format hints (Decimal, Date, DateTime) register as styles and merge into an
   existing cell style exactly as `put` does (the existing style wins; only a General number

@@ -578,7 +578,8 @@ class RowCodecSpec extends ScalaCheckSuite:
     assertEquals(table.range.toA1, "B2:F4")
     assertEquals(table.displayName, "Orders")
     assertEquals(table.columns.map(_.name), RowCodec[Order].fields)
-    assertEquals(table.autoFilter, None)
+    // GH-595: filter buttons, as Excel's own Format-as-Table puts them
+    assertEquals(table.autoFilter, Some(com.tjclp.xl.tables.TableAutoFilter(enabled = true)))
     assertEquals(placed.sheet.readRows[Order](table.dataRange), Right(rows))
   }
 
