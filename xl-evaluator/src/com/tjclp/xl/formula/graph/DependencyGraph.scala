@@ -591,20 +591,29 @@ object DependencyGraph:
             dynamic
 
     // Sheet-independent names are classified once (from any sheet — the first will do);
-    // dependent names once per sheet, as before. Tokens are the pre-filter's upper form.
-    val independentTokens: Set[String] =
+    // dependent names once per sheet, as before. A group is dynamic when its verdict is true from
+    // any sheet.
+    val dynamicKeys: Set[String] =
       workbook.sheets.headOption.fold(Set.empty[String]) { first =>
         independentNames.iterator.collect {
-          case (_, name) if nameIsDynamic(name, first.name, first.name, Set.empty) => upper(name)
+          case (key, name) if nameIsDynamic(name, first.name, first.name, Set.empty) => key
         }.toSet
-      }
-    val dependentTokens: Set[String] =
-      workbook.sheets.iterator.flatMap { sheet =>
-        dependentNames.iterator.collect {
-          case (_, name) if nameIsDynamic(name, sheet.name, sheet.name, Set.empty) => upper(name)
+      } ++
+        workbook.sheets.iterator.flatMap { sheet =>
+          dependentNames.iterator.collect {
+            case (key, name) if nameIsDynamic(name, sheet.name, sheet.name, Set.empty) => key
+          }
         }
-      }.toSet
-    val candidateTokens = dynamicFunctions ++ independentTokens ++ dependentTokens
+    // Tokens are the pre-filter's upper form of EVERY declared spelling of a dynamic group, not
+    // only the first: `toUpperCase` is not the resolution relation (the Kelvin sign U+212A
+    // upper-cases to itself yet resolves as `k`), so with `K` declared first a reader spelled `k`
+    // would otherwise slip past the substring test — pre-GH-537 every spelling had its own token.
+    val nameTokens: Set[String] =
+      definedNames.iterator
+        .filter(dn => dynamicKeys.contains(resolutionKey(dn.name)))
+        .map(dn => upper(dn.name))
+        .toSet
+    val candidateTokens = dynamicFunctions ++ nameTokens
 
     if candidateTokens.isEmpty then Set.empty
     else

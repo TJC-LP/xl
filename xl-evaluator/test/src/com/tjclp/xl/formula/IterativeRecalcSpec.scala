@@ -400,6 +400,24 @@ class IterativeRecalcSpec extends FunSuite:
     assert(!scc.render.contains("exhausted"), scc.render)
   }
 
+  test("GH-537: a stall on the last budgeted round is still a stall — rounds can equal maxIter") {
+    // Round 2 is the first exact replay AND the budget's last round: the stall verdict wins and
+    // `rounds == maxIter` is a legitimate shape (`rounds <= maxIter`, not strictly below). With a
+    // budget of ONE round no replay can be observed yet — that is exhaustion, not a stall.
+    val result = failingMemberCycle.recalculate(IterativeCalc(2, BigDecimal("0.001")))
+    val scc = result.cycles.headOption.getOrElse(fail("one cyclic component expected"))
+    assert(!result.converged)
+    assert(scc.stalled, scc.render)
+    assertEquals(scc.rounds, 2)
+    assertEquals(result.iterationsUsed, 2)
+    assert(scc.render.contains("stalled after 2 round(s)"), scc.render)
+    val single = failingMemberCycle.recalculate(IterativeCalc(1, BigDecimal("0.001")))
+    val onlyRound = single.cycles.headOption.getOrElse(fail("one cyclic component expected"))
+    assert(!onlyRound.stalled, onlyRound.render)
+    assertEquals(onlyRound.rounds, 1)
+    assert(onlyRound.render.contains("exhausted 1 round(s)"), onlyRound.render)
+  }
+
   test("GH-537: a member drawing fresh randomness never replays — the failing cycle exhausts") {
     // A1 changes every round (a live RAND draw), so no round is an exact replay of the previous
     // one: the loop must run to maxIter and report exhaustion, not a stall.

@@ -144,8 +144,9 @@ object IterativeCalc:
  *   clock is pinned, and a member drawing fresh randomness never replays), so every further round
  *   would have been the same replay: the loop stops there instead of burning `maxIter`. A stalled
  *   component is never `converged` — the failing member is reported as a [[CellEvalError]] — and
- *   `rounds` is then strictly below `maxIter`. Exhaustion proper (values still moving at `maxIter`)
- *   reports `stalled = false`.
+ *   `rounds` ≤ `maxIter`: below it whenever the replay arrives before the budget runs out, equal
+ *   when the first replay lands on the last budgeted round. Exhaustion proper (values still moving
+ *   at `maxIter`) reports `stalled = false`.
  */
 final case class SccReport(
   members: Vector[(SheetName, ARef)],
@@ -225,8 +226,8 @@ final case class SccReport(
  * @param iterationsUsed
  *   GH-454/GH-492: `cycles.map(_.rounds).max` — the rounds run by the WORST component (0 when no
  *   iteration happened). Equals `maxIter` when any component exhausted; otherwise in (0, maxIter].
- *   GH-537: a component that STALLED (a member failing every round, see [[SccReport.stalled]])
- *   stops below `maxIter`, so `converged = false` with `iterationsUsed < maxIter` is possible — and
+ *   GH-537: a component that STALLED (a member failing every round, see [[SccReport.stalled]]) can
+ *   stop below `maxIter`, so `converged = false` with `iterationsUsed < maxIter` is possible — and
  *   means every unconverged component stalled rather than oscillated.
  * @param cycles
  *   GH-492: one [[SccReport]] per cyclic component actually iterated, sorted by the component's

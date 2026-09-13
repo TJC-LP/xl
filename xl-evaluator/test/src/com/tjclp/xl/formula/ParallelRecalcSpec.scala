@@ -412,3 +412,26 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
     assertEquals(result.evaluated(calcName)(outerReader), num(7))
     assertEquals(result.evaluated(otherName)(outerReader), num(41))
     assertEquals(result.evaluated(otherName)(constReader), num(43))
+
+  test("GH-537: every declared spelling of a dynamic name pre-filters its readers in"):
+    // `String.toUpperCase` and `equalsIgnoreCase` part on the Kelvin sign U+212A: it upper-cases to
+    // ITSELF yet resolves as `k`, so `K` and `k` are one name to every reader while their upper
+    // forms differ. A reader spelled `k` must be classified whichever spelling was declared first —
+    // every declared spelling contributes its own substring token, not only the first per group.
+    val s = SheetName.unsafe("S")
+    val reader = ARef.from0(2, 0)
+    val sheet = Sheet(s).put(ARef.from0(0, 0), num(1)).put(reader, formula("=k*2"))
+    val base = Workbook(sheet)
+    val kelvinFirst = Vector(DefinedName("K", "INDIRECT(\"A1\")"), DefinedName("k", "42"))
+    def withNames(names: Vector[DefinedName]): Workbook =
+      base.copy(metadata = base.metadata.copy(definedNames = names))
+    // `k` is declared second, so lookup resolves it to the Kelvin-spelt (dynamic) definition.
+    assertEquals(DependencyGraph.dynamicCells(withNames(kelvinFirst)), Set(QualifiedRef(s, reader)))
+    assertEquals(
+      DependencyGraph.dynamicCells(withNames(kelvinFirst.reverse)),
+      Set.empty[QualifiedRef],
+      "declared first, the static `k` definition wins the lookup and no reader is dynamic"
+    )
+    val result = withNames(kelvinFirst).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(result.evaluated(s)(reader), num(2))
