@@ -254,7 +254,10 @@ object Render:
    */
   private def spliced(outcome: Outcome, version: String, raw: String): String =
     val (before, after) = shell(outcome, version)
-    val block = Try(ujson.reformat(raw, indent = 2)).getOrElse(ujson.write(ujson.Str(raw)))
+    // Text a renderer of ours produced that is not JSON is a defect; the envelope still keeps its
+    // contract — `data` is always an object (GH-618) — by carrying it as the prose shape.
+    val block = Try(ujson.reformat(raw, indent = 2))
+      .getOrElse(ujson.write(Payload.toJson(Payload.text(raw)), indent = 2))
     before + block.replace("\n", "\n  ") + after
 
   /** `{code, message, hint, candidates, location}` — every key present, absent ones `null`. */

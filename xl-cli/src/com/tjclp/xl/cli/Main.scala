@@ -2289,7 +2289,7 @@ EXAMPLES:
     val payload = mode match
       case OutputMode.Text => Payload.text(formatFunctionList())
       // Typed rows (ADR-017 §2.13): every registry function plus LET, the special form
-      case OutputMode.Json => Payload.Json(FunctionDoc.toJson(FunctionDoc.all))
+      case OutputMode.Json => Payload.Json(FunctionDoc.payload(FunctionDoc.all))
     emit(Outcome.ok("functions", payload), mode, io)
 
   /** `xl schema`: the verb table as text; `--json`: the whole contract ([[Schema.json]]). */

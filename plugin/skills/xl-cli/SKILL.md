@@ -58,7 +58,10 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
    stderr carries one `Error: <message>` line. For `view`, `filter`, `diff` and `lint`, `--json`
    alone selects the verb's JSON payload as `data` (no `--format json` needed; an explicit text
    `--format` rides inside as `data.text`); prose verbs yield `data.text` plus
-   `data.saved`/`data.written`.
+   `data.saved`/`data.written`. `data` is always an object, never a bare array: a listing verb
+   keys its array by the noun — `sheets` → `data.sheets[]`, `names` → `data.names[]`,
+   `functions` → `data.functions[]` — and `sheets`' elements are exactly `describe`'s
+   `data.sheets[]` (`{name, index, state, dimension}`).
 5. **Exit codes** (branch on these and on `error.code`, never on message text):
 
    | exit | meaning | file written? |
@@ -79,6 +82,7 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
 xl -f model.xlsx --json describe                   # what is in this file?
 xl -f model.xlsx --json audit --fail-on-findings   # anything already broken? (exit 1 if so)
 xl -f model.xlsx -s Data --json view A1:D20 | jq '.data.rows'   # --json alone selects the JSON payload
+xl -f model.xlsx --json sheets | jq -r '.data.sheets[].name'     # list verbs key their array by the noun
 xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/null || echo "batch failed"
 ```
 

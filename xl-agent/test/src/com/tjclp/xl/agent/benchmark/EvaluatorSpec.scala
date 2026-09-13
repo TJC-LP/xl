@@ -6,8 +6,9 @@ import com.tjclp.xl.agent.error.AgentError
 import java.nio.file.Path
 
 /**
- * The grader reads `--json` envelopes only (GH-592): the first sheet is `sheets`' `data[0].name`,
- * the graded cells are `view --eval`'s `data.rows[].cells[]`, a failed envelope surfaces its
+ * The grader reads `--json` envelopes only (GH-592): the first sheet is `sheets`'
+ * `data.sheets[0].name` (GH-618: `data` is always an object; a listing verb keys its array by the
+ * noun), the graded cells are `view --eval`'s `data.rows[].cells[]`, a failed envelope surfaces its
  * `error.code`, and the text the CLI prints without `--json` is a parse error — nothing here
  * scrapes markdown.
  */
@@ -24,24 +25,36 @@ class EvaluatorSpec extends FunSuite:
        |  "ok": $ok,
        |  "exitCode": $exit,
        |  "verb": "$verb",
-       |  "version": "0.20.0",
+       |  "version": "0.23.0",
        |  "data": $data,
        |  "warnings": [],
        |  "error": $error
        |}""".stripMargin
 
   private val twoSheets = envelope(
-    """[
+    """{"sheets": [
       |    {"name": "Data", "index": 1, "state": "visible", "dimension": "A1:C4"},
       |    {"name": "Summary", "index": 2, "state": "visible", "dimension": null}
-      |  ]""".stripMargin,
+      |  ]}""".stripMargin,
     "null",
     ok = true,
     exit = 0
   )
 
-  test("firstSheet is data[0].name of a successful envelope") {
+  test("firstSheet is data.sheets[0].name of a successful envelope") {
     assertEquals(Evaluator.firstSheet(twoSheets), Right("Data"))
+  }
+
+  test("GH-618: the bare array 0.20.0-0.22.0 printed is a parse error, never a guessed sheet") {
+    val bare = envelope(
+      """[{"name": "Data", "index": 1, "state": "visible", "dimension": "A1:C4"}]""",
+      "null",
+      ok = true,
+      exit = 0
+    )
+    Evaluator.firstSheet(bare) match
+      case Left(AgentError.ParseError(_, _)) => ()
+      case other => fail(s"expected ParseError, got $other")
   }
 
   test("a failed envelope surfaces error.code and the message, never a guessed sheet") {
@@ -60,7 +73,7 @@ class EvaluatorSpec extends FunSuite:
   }
 
   test("a workbook with no sheets is an evaluation failure, not a default 'Sheet1'") {
-    val none = envelope("[]", "null", ok = true, exit = 0)
+    val none = envelope("""{"sheets": []}""", "null", ok = true, exit = 0)
     Evaluator.firstSheet(none) match
       case Left(AgentError.EvaluationFailed(cause)) => assert(cause.contains("no sheets"), cause)
       case other => fail(s"expected EvaluationFailed, got $other")
@@ -79,7 +92,7 @@ class EvaluatorSpec extends FunSuite:
 
   test("a sheet entry without a name is a parse error, not an empty sheet name") {
     val nameless = envelope(
-      """[{"index": 1, "state": "visible", "dimension": null}]""",
+      """{"sheets": [{"index": 1, "state": "visible", "dimension": null}]}""",
       "null",
       ok = true,
       exit = 0

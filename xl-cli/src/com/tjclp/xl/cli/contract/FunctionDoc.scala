@@ -82,5 +82,13 @@ object FunctionDoc:
   lazy val all: Vector[FunctionDoc] =
     FunctionRegistry.all.map(of).sortBy(_.name).toVector :+ let
 
-  /** The `functions` payload: one object per row, in [[all]]'s order. */
+  /**
+   * The rows as JSON: one object per row, in [[all]]'s order — `xl schema --json`'s `functions`.
+   */
   def toJson(docs: Vector[FunctionDoc]): ujson.Arr = ujson.Arr.from(docs.map(_.toJson))
+
+  /**
+   * `functions --json`'s `data`: `{functions: [...]}` — the same rows keyed by the noun, because
+   * the envelope's `data` is always an object (GH-618).
+   */
+  def payload(docs: Vector[FunctionDoc]): ujson.Obj = ujson.Obj("functions" -> toJson(docs))

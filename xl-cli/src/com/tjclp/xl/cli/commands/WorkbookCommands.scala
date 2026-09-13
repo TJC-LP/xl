@@ -33,21 +33,21 @@ object WorkbookCommands:
     IO.pure(Markdown.renderSheetList(sheetStats))
 
   /**
-   * The full listing as data (`sheets --stats --json`): `[{name, index, state, dimension, cells,
-   * formulas}]`, `index` 1-based in workbook order, `state` one of `visible`/`hidden`/`veryHidden`,
-   * `dimension` the used range or `null` for an empty sheet.
+   * The full listing as data (`sheets --stats --json`): `{sheets: [{name, index, state, dimension,
+   * cells, formulas}]}`, `index` 1-based in workbook order, `state` one of
+   * `visible`/`hidden`/`veryHidden`, `dimension` the used range or `null` for an empty sheet.
+   *
+   * GH-618: `data` is always an object and a listing verb keys its array by the noun; the element
+   * is [[InspectCommands.sheetHeader]], the one `describe --json` carries, plus the two counts.
    */
   def sheetsData(wb: Workbook): ujson.Value =
-    ujson.Arr.from(wb.sheets.zipWithIndex.map { (s, idx) =>
-      ujson.Obj(
-        "name" -> ujson.Str(s.name.value),
-        "index" -> ujson.Num(idx + 1),
-        "state" -> ujson.Str(wb.getSheetState(s.name).getOrElse("visible")),
-        "dimension" -> s.usedRange.fold[ujson.Value](ujson.Null)(r => ujson.Str(r.toA1)),
-        "cells" -> ujson.Num(s.cells.size),
-        "formulas" -> ujson.Num(s.cells.values.count(_.isFormula))
-      )
-    })
+    ujson.Obj("sheets" -> ujson.Arr.from(wb.sheets.zipWithIndex.map { (s, idx) =>
+      val obj =
+        InspectCommands.sheetHeader(s.name.value, idx + 1, wb.getSheetState(s.name), s.usedRange)
+      obj("cells") = ujson.Num(s.cells.size)
+      obj("formulas") = ujson.Num(s.cells.values.count(_.isFormula))
+      obj
+    }))
 
   /**
    * List all sheets with dimensions only (quick mode - no cell data).
@@ -58,17 +58,16 @@ object WorkbookCommands:
   def sheetsQuick(filePath: Path): IO[String] =
     sheetInfos(filePath).map(Markdown.renderSheetListQuick)
 
-  /** The quick listing as data (`sheets --json`): `[{name, index, state, dimension}]`. */
+  /**
+   * The quick listing as data (`sheets --json`, with or without `--stream`):
+   * `{sheets: [{name, index, state, dimension}]}` — every element [[InspectCommands.sheetHeader]],
+   * so it equals `describe --json`'s `data.sheets` for the same file (GH-618).
+   */
   def sheetsQuickData(filePath: Path): IO[ujson.Value] =
     sheetInfos(filePath).map { infos =>
-      ujson.Arr.from(infos.zipWithIndex.map { (info, idx) =>
-        ujson.Obj(
-          "name" -> ujson.Str(info.name.value),
-          "index" -> ujson.Num(idx + 1),
-          "state" -> ujson.Str(info.state.getOrElse("visible")),
-          "dimension" -> info.dimension.fold[ujson.Value](ujson.Null)(r => ujson.Str(r.toA1))
-        )
-      })
+      ujson.Obj("sheets" -> ujson.Arr.from(infos.zipWithIndex.map { (info, idx) =>
+        InspectCommands.sheetHeader(info.name.value, idx + 1, info.state, info.dimension)
+      }))
     }
 
   /**
@@ -163,23 +162,15 @@ object WorkbookCommands:
         IO.pure(lines.mkString("\n"))
 
   /**
-   * Defined names as data (`names --json`): `[{name, refersTo, scope, hidden}]`, every name
-   * including hidden ones (the text listing omits those), `scope` the sheet name for a sheet-scoped
-   * name and `null` for a workbook-scoped one.
+   * Defined names as data (`names --json`, with or without `--stream`): `{names: [{name, refersTo,
+   * scope, hidden}]}`, every name including hidden ones (the text listing omits those), `scope` the
+   * sheet name for a sheet-scoped name and `null` for a workbook-scoped one. The array is
+   * [[InspectCommands.namesJson]], what `describe --json` carries as `definedNames` (GH-618).
    */
   def namesData(filePath: Path): IO[ujson.Value] =
     excel.readMetadata(filePath).map { meta =>
-      ujson.Arr.from(meta.definedNames.map { dn =>
-        val scope = dn.localSheetId.fold[ujson.Value](ujson.Null) { idx =>
-          ujson.Str(meta.sheets.lift(idx).map(_.name.value).getOrElse(s"sheet $idx"))
-        }
-        ujson.Obj(
-          "name" -> ujson.Str(dn.name),
-          "refersTo" -> ujson.Str(dn.formula),
-          "scope" -> scope,
-          "hidden" -> ujson.Bool(dn.hidden)
-        )
-      })
+      val scope: Int => Option[String] = idx => meta.sheets.lift(idx).map(_.name.value)
+      ujson.Obj("names" -> InspectCommands.namesJson(meta.definedNames, scope))
     }
 
   /**

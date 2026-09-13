@@ -363,8 +363,9 @@ class SchemaSpec extends CatsEffectSuite:
       assertEquals(run.exit, 0, run.stderr)
       val e = envelope(run)
       assertEquals(e("verb"), ujson.Str("functions"))
-      assertEquals(e("data"), FunctionDoc.toJson(FunctionDoc.all))
-      val rows = e("data").arr
+      // GH-618: the envelope keys the rows by the noun; `xl schema --json` carries the same array
+      assertEquals(e("data"), ujson.Obj("functions" -> FunctionDoc.toJson(FunctionDoc.all)))
+      val rows = e("data")("functions").arr
       assertEquals(rows.size, FunctionDoc.all.size)
       assertEquals(rows.count(_("specialForm") == ujson.True), 1)
       assertEquals(rows.lastOption.map(_("name")), Some(ujson.Str("LET")))

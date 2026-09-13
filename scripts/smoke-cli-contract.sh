@@ -84,8 +84,12 @@ check "view --help --json" '.ok == true and .exitCode == 0 and .verb == "view" a
 run 0 -f "$FIXTURE" sheets
 grep -q 'Values' <<<"$OUT" || { echo "::error::sheets did not list the Values sheet"; echo "$OUT"; exit 1; }
 
+# GH-618: data is always an object; a listing verb keys its array by the noun (never `.data[0]`).
 run 0 -f "$FIXTURE" --json sheets
-check "sheets --json" '.ok == true and .verb == "sheets" and .version == $version and .data[0].name == "Values" and .error == null'
+check "sheets --json" '.ok == true and .verb == "sheets" and .version == $version and (.data | type) == "object" and .data.sheets[0].name == "Values" and .error == null'
+
+run 0 --json functions
+check "functions --json" '.ok == true and .verb == "functions" and (.data | type) == "object" and (.data.functions | length) > 100 and ([.data.functions[].name] | index("SUM")) != null'
 
 run 0 -f "$FIXTURE" --json view A1:C4
 check "view --json" '.ok == true and .verb == "view" and .data.sheet == "Values" and (.data.rows | length) == 4 and .data.rows[0].cells[1].value == 42'
