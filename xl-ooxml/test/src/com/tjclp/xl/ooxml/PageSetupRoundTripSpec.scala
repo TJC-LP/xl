@@ -291,6 +291,79 @@ class PageSetupRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  /**
+   * GH-462 (rework): a print name the read could NOT lift — multi-area, column-span, hidden — stays
+   * in the metadata verbatim, so a later `withPageSetup` edit of the same field is the newer
+   * intent: the writer emits the derived name, once, and drops the verbatim one (the pre-GH-462
+   * rule). Only a liftable metadata entry — one authored after the read — wins over the derived
+   * twin.
+   */
+  private def verbatimYieldsToEdit(
+    tag: String,
+    verbatim: DefinedName,
+    edit: PageSetup,
+    expectedFormula: String
+  ): Unit =
+    val base = Workbook(Sheet("Sheet1").put(ref"A1" -> 1))
+    val wb0 = base.copy(metadata = base.metadata.copy(definedNames = Vector(verbatim)))
+    val src = Files.createTempFile(s"verbatim-$tag-src", ".xlsx")
+    XlsxWriter.write(wb0, src).fold(e => fail(s"seed write failed: $e"), identity)
+    val read = XlsxReader.read(src).fold(e => fail(s"seed read failed: $e"), identity)
+    assertEquals(read.metadata.definedNames, Vector(verbatim), "fixture sanity: left verbatim")
+    assert(
+      read.sheets(0).pageSetup.forall(ps => ps.printArea.isEmpty && ps.repeatRows.isEmpty),
+      "fixture sanity: nothing lifted"
+    )
+
+    val edited =
+      read.updateAt(0, _.withPageSetup(edit)).fold(e => fail(s"edit failed: $e"), identity)
+    val out = Files.createTempFile(s"verbatim-$tag-out", ".xlsx")
+    XlsxWriter.write(edited, out).fold(e => fail(s"write failed: $e"), identity)
+    val workbookXml = zipEntryString(out, "xl/workbook.xml")
+    assertEquals(
+      java.util.regex.Pattern.quote(verbatim.name).r.findAllIn(workbookXml).size,
+      1,
+      s"exactly one ${verbatim.name} for the sheet: $workbookXml"
+    )
+    assert(workbookXml.contains(expectedFormula), s"edited field missing: $workbookXml")
+    assert(!workbookXml.contains(verbatim.formula), s"stale verbatim name lingering: $workbookXml")
+
+    val reread = XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
+    assertEquals(sheetSetup(reread).printArea, edit.printArea)
+    assertEquals(sheetSetup(reread).repeatRows, edit.repeatRows)
+    assertEquals(reread.metadata.definedNames, Vector.empty, "the derived name lifts on reread")
+    Files.deleteIfExists(src)
+    Files.deleteIfExists(out)
+
+  test("GH-462: a verbatim multi-area Print_Area yields to a later withPageSetup(printArea) edit") {
+    verbatimYieldsToEdit(
+      "multi",
+      DefinedName("_xlnm.Print_Area", "Sheet1!$A$1:$B$2,Sheet1!$D$1:$E$2", localSheetId = Some(0)),
+      PageSetup(printArea = Some(ref"C1:C3")),
+      "Sheet1!$C$1:$C$3"
+    )
+  }
+
+  test("GH-462: a hidden Print_Area (verbatim on read) yields to a later withPageSetup edit") {
+    verbatimYieldsToEdit(
+      "hidden",
+      DefinedName("_xlnm.Print_Area", "Sheet1!$A$1:$B$2", localSheetId = Some(0), hidden = true),
+      PageSetup(printArea = Some(ref"C1:C3")),
+      "Sheet1!$C$1:$C$3"
+    )
+  }
+
+  test(
+    "GH-462: a column-span Print_Titles (verbatim) yields to a later withPageSetup(repeatRows)"
+  ) {
+    verbatimYieldsToEdit(
+      "titles",
+      DefinedName("_xlnm.Print_Titles", "Sheet1!$A:$B", localSheetId = Some(0)),
+      PageSetup(repeatRows = Some((1, 2))),
+      "Sheet1!$1:$2"
+    )
+  }
+
   test("GH-259: unmodelable Print_Titles (column span) stays in metadata.definedNames verbatim") {
     val colTitles =
       DefinedName("_xlnm.Print_Titles", "Sheet1!$A:$B", localSheetId = Some(0))

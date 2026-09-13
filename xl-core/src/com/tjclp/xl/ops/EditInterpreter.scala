@@ -9,7 +9,7 @@ import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.sheets.{Sheet, SheetEdits}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
 import com.tjclp.xl.styles.CellStyle
-import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 
 /**
  * The one interpreter of [[Edit]] (ADR-017 §2.12): `validate` is the edit-local check that needs no
@@ -419,9 +419,10 @@ private[xl] object EditInterpreter:
 
         case Edit.RemoveName(defined, nameScope) =>
           workbookLevel(localSheetId(wb, nameScope).flatMap { localId =>
-            val inScope = wb.metadata.definedNames.filter(_.localSheetId == localId)
-            if !inScope.exists(_.matches(defined, localId)) then
-              Left(XLError.NameNotFound(defined, inScope.map(_.name).distinct))
+            // GH-462: a sheet scope's entries include a print name the read lifted into PageSetup.
+            val inScope = wb.definedNamesIn(localId)
+            if !inScope.exists(DefinedName.sameName(_, defined)) then
+              Left(XLError.NameNotFound(defined, inScope))
             else
               nameScope.fold[XLResult[Workbook]](Right(wb.removeDefinedName(defined)))(s =>
                 wb.removeDefinedName(defined, s)

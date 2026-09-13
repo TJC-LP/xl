@@ -7,6 +7,7 @@ import cats.implicits.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.XLError
+import com.tjclp.xl.workbooks.DefinedName
 import com.tjclp.xl.cli.contract.{CliError, CliException, Location}
 import com.tjclp.xl.cli.helpers.Resolve
 import com.tjclp.xl.cli.MemoryGuard
@@ -435,11 +436,12 @@ object SheetCommands:
       localId <- scope.fold[XLResult[Option[Int]]](Right(None))(s =>
         wb.localSheetIdOf(s).map(Some(_))
       )
-      inScope = wb.metadata.definedNames.filter(_.localSheetId == localId)
+      // GH-462: a sheet scope's entries include a print name the read lifted into its PageSetup.
+      inScope = wb.definedNamesIn(localId)
       _ <- Either.cond(
-        inScope.exists(_.matches(name, localId)),
+        inScope.exists(DefinedName.sameName(_, name)),
         (),
-        XLError.NameNotFound(name, inScope.map(_.name).distinct)
+        XLError.NameNotFound(name, inScope)
       )
       updated <- scope.fold[XLResult[Workbook]](Right(wb.removeDefinedName(name)))(s =>
         wb.removeDefinedName(name, s)

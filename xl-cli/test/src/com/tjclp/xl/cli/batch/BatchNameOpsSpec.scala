@@ -83,6 +83,37 @@ class BatchNameOpsSpec extends CatsEffectSuite:
       assertEquals(afterRm, Vector(("Total", "Data!$B$4", ujson.Null)))
   }
 
+  test("remove-name with scope removes a Print_Area the read lifted into page setup") {
+    // GH-462: after a read the print area lives in pageSetup.printArea, not in the table; the
+    // twin of `name rm -s` must still remove it from the file `define-name` produced.
+    val added = fresh("name-ops-print-add.xlsx")
+    val removed = fresh("name-ops-print-rm.xlsx")
+    for
+      add <- batch(
+        named,
+        added,
+        """[{"op":"define-name","name":"_xlnm.Print_Area","refersTo":"Data!$A$1:$B$2","scope":"Data"}]"""
+      )
+      afterAdd <- names(added)
+      rm <- batch(
+        added.toString,
+        removed,
+        """[{"op":"remove-name","name":"_xlnm.print_area","scope":"data"}]"""
+      )
+      afterRm <- names(removed)
+    yield
+      assertEquals(add.exit, 0, add.stderr)
+      assertEquals(
+        afterAdd,
+        Vector(
+          ("Total", "Data!$B$4", ujson.Null),
+          ("_xlnm.Print_Area", "Data!$A$1:$B$2", ujson.Str("Data"))
+        )
+      )
+      assertEquals(rm.exit, 0, rm.stderr)
+      assertEquals(afterRm, Vector(("Total", "Data!$B$4", ujson.Null)))
+  }
+
   test("remove-name of an unknown name fails at the op index with the verb's did-you-mean") {
     val out = fresh("name-ops-missing.xlsx")
     val json =

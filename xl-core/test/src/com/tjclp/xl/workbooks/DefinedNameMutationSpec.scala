@@ -4,9 +4,10 @@ import munit.ScalaCheckSuite
 import org.scalacheck.Gen
 import org.scalacheck.Prop.*
 
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.error.XLError
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.macros.ref
+import com.tjclp.xl.sheets.{PageSetup, Sheet}
 
 /**
  * GH-538: the mutation API matches defined names the way resolution does — case-insensitively
@@ -155,6 +156,51 @@ class DefinedNameMutationSpec extends ScalaCheckSuite:
     assertEquals(
       right(wb.removeDefinedName("Nope", other)).metadata.definedNames,
       wb.metadata.definedNames
+    )
+  }
+
+  // GH-462: after a read a sheet's `_xlnm.Print_Area` / `_xlnm.Print_Titles` live in its PageSetup
+  // (the reader lifts them out of the table), so this is the post-read shape of a book with both.
+  private val lifted: Workbook = Workbook(
+    Vector(
+      Sheet(model).withPageSetup(
+        PageSetup(printArea = Some(ref"A1:B2"), repeatRows = Some((1, 2)))
+      ),
+      Sheet(other)
+    )
+  )
+
+  private def printFields(wb: Workbook): (Option[CellRange], Option[(Int, Int)]) =
+    val setup = wb.sheets(0).pageSetup
+    (setup.flatMap(_.printArea), setup.flatMap(_.repeatRows))
+
+  test("GH-462: removeDefinedName of a lifted print name clears the PageSetup field it lives in") {
+    val noArea = right(lifted.removeDefinedName("_xlnm.print_area", model))
+    assertEquals(printFields(noArea), (None, Some((1, 2))))
+    assertEquals(noArea.metadata.definedNames, Vector.empty)
+    assertEquals(
+      printFields(right(noArea.removeDefinedName("_XLNM.PRINT_TITLES", model))),
+      (None, None)
+    )
+    // the other sheet's scope, the workbook scope and every other identifier leave it alone
+    val untouched = lifted.sheets(0).pageSetup
+    assertEquals(
+      right(lifted.removeDefinedName("_xlnm.Print_Area", other)).sheets(0).pageSetup,
+      untouched
+    )
+    assertEquals(lifted.removeDefinedName("_xlnm.Print_Area").sheets(0).pageSetup, untouched)
+    assertEquals(right(lifted.removeDefinedName("Nope", model)).sheets(0).pageSetup, untouched)
+  }
+
+  test(
+    "GH-462: withDefinedName of a print name clears the lifted field — the entry is the one truth"
+  ) {
+    val wb = right(lifted.withDefinedName("_xlnm.Print_Area", "Model!$C$1:$D$2", model))
+    assertEquals(table(wb), Vector(("_xlnm.Print_Area", "Model!$C$1:$D$2", Some(0))))
+    assertEquals(printFields(wb), (None, Some((1, 2))))
+    assertEquals(
+      printFields(right(lifted.withDefinedName("Local", "1", model))),
+      printFields(lifted)
     )
   }
 

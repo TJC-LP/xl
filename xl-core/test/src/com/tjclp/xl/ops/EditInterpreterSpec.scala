@@ -6,7 +6,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.sheets.{AutoFilterState, FreezePane, Sheet}
+import com.tjclp.xl.sheets.{AutoFilterState, FreezePane, PageSetup, Sheet}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.color.Color
@@ -713,6 +713,28 @@ class EditInterpreterSpec extends FunSuite:
     assertEquals(
       failure(baseWorkbook, Edit.DefineName("Local", "1", Some(missing))).root,
       XLError.SheetNotFound(missing.value, Vector("Data", "Other"))
+    )
+  }
+
+  test(
+    "GH-462: remove-name of a print name the read lifted into PageSetup succeeds and clears it"
+  ) {
+    // After a read a sheet's `_xlnm.Print_Area` lives in pageSetup.printArea, not in the table.
+    val lifted = baseWorkbook
+      .updateAt(0, _.withPageSetup(PageSetup(printArea = Some(rng("A1:B2")))))
+      .fold(e => fail(e.message), identity)
+    val removed = apply(lifted, Edit.RemoveName("_xlnm.print_area", Some(data)))
+      .fold(e => fail(e.message), identity)
+    assertEquals(removed.sheets(0).pageSetup.flatMap(_.printArea), None)
+    // It IS an entry of that scope: the existence check sees it and it is offered as a candidate.
+    assertEquals(
+      failure(lifted, Edit.RemoveName("Nope", Some(data))).root,
+      XLError.NameNotFound("Nope", Vector("_xlnm.Print_Area"))
+    )
+    // Sheet-scoped only: the workbook scope neither sees nor removes it.
+    assertEquals(
+      failure(lifted, Edit.RemoveName("_xlnm.Print_Area", None)).root,
+      XLError.NameNotFound("_xlnm.Print_Area", Vector("Total"))
     )
   }
 

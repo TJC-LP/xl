@@ -324,6 +324,12 @@ xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20
 xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Titles 'Sheet1!$1:$2'
 ```
 
+A sheet's `_xlnm.Print_Area` / `_xlnm.Print_Titles` read from a file live in its page setup (the
+fields the scripting `PageSetup` sets; `names` still lists them from `workbook.xml`): `name add -s`
+replaces them and `name rm -s` clears them, so `-s Sheet1 name rm _xlnm.Print_Area` is the inverse
+of the `name add` above on its own output. `-s` names the sheet exactly as spelled, like every
+verb's `-s`; the batch twins' `scope` key matches it case-insensitively.
+
 Names are case-insensitive identifiers, as in Excel: `name add case …` replaces an existing `CASE`
 (every same-scope spelling, so a table that held case-colliding duplicates holds one afterwards),
 `name rm total` removes `Total`, and `NAME_NOT_FOUND`'s candidates are the names in that scope.

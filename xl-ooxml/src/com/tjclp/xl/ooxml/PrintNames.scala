@@ -20,11 +20,11 @@ import com.tjclp.xl.workbooks.DefinedName
  */
 private[ooxml] object PrintNames:
 
-  /** Defined name Excel uses for a sheet's print area. */
-  val PrintArea = "_xlnm.Print_Area"
+  /** Defined name Excel uses for a sheet's print area (the core constant, GH-462). */
+  val PrintArea: String = DefinedName.PrintArea
 
   /** Defined name Excel uses for a sheet's repeated print titles (rows and/or columns). */
-  val PrintTitles = "_xlnm.Print_Titles"
+  val PrintTitles: String = DefinedName.PrintTitles
 
   private val AbsRangeRe = """^\$([A-Za-z]{1,3})\$([0-9]+):\$([A-Za-z]{1,3})\$([0-9]+)$""".r
   private val AbsCellRe = """^\$([A-Za-z]{1,3})\$([0-9]+)$""".r
@@ -114,22 +114,36 @@ private[ooxml] object PrintNames:
 
   /**
    * Defined names to serialize for a workbook: the metadata names followed by the PageSetup-derived
-   * print names, minus any derived name whose identifier (case-insensitively, GH-538) and sheet a
-   * metadata entry already carries. Metadata wins (GH-462): the read side lifts every modelable
-   * print name out of the metadata, so a metadata twin of a derived name only exists when it was
+   * print names, one entry per (identifier, sheet) as Excel requires. Where a metadata print name
+   * and a derived one meet (identifier matched case-insensitively, GH-538), the LIFTABLE metadata
+   * entry wins: the shape `extract` lifts (not hidden, no comment, a formula `parsePrintArea` /
+   * `parsePrintTitles` accepts for its sheet) only exists beside a derived twin when it was
    * authored after the read (`wb.withDefinedName("_xlnm.Print_Area", …, sheet)`, `xl name add -s`)
-   * — an explicit, later intent the stale derived name must not shadow — or when a script set both.
+   * — an explicit, later intent the stale derived name must not shadow (GH-462). A verbatim one —
+   * multi-area, column-span, hidden, commented: what the read could not lift — yields to the
+   * derived twin, which only a later `withPageSetup` edit can have put there, and is dropped.
    */
   def effective(wb: Workbook): Vector[DefinedName] =
     val names = wb.metadata.definedNames
-    // One pass over the table (10^5 entries on bank-authored books), not one per derived name.
-    val printNames = names.filter(dn =>
-      dn.localSheetId.isDefined &&
-        (DefinedName.sameName(dn.name, PrintArea) || DefinedName.sameName(dn.name, PrintTitles))
-    )
-    names ++ fromSheets(wb.sheets).filterNot(d =>
-      printNames.exists(_.matches(d.name, d.localSheetId))
-    )
+    val derived = fromSheets(wb.sheets)
+    if derived.isEmpty then names
+    else
+      def isPrint(dn: DefinedName): Boolean =
+        dn.localSheetId.isDefined &&
+          (DefinedName.sameName(dn.name, PrintArea) || DefinedName.sameName(dn.name, PrintTitles))
+      def liftable(dn: DefinedName): Boolean =
+        !dn.hidden && dn.comment.isEmpty &&
+          dn.localSheetId.flatMap(wb.sheets.lift).exists { sheet =>
+            if DefinedName.sameName(dn.name, PrintArea) then
+              parsePrintArea(dn.formula, sheet.name).isDefined
+            else parsePrintTitles(dn.formula, sheet.name).isDefined
+          }
+      // One pass over the table (10^5 entries on bank-authored books), not one per derived name.
+      val (authored, verbatim) = names.filter(isPrint).partition(liftable)
+      val shadowed =
+        verbatim.filter(dn => derived.exists(_.matches(dn.name, dn.localSheetId))).toSet
+      names.filterNot(shadowed.contains) ++
+        derived.filterNot(d => authored.exists(_.matches(d.name, d.localSheetId)))
 
   /**
    * Read side: lift modelable sheet-scoped print names into each Sheet's PageSetup and drop them

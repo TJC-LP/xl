@@ -496,11 +496,14 @@ final case class Workbook(
    * `_xlnm.Print_Area` / `_xlnm.Print_Titles`. `localSheetId` is the sheet's current position and
    * follows it across sheet-order edits (GH-434). The sheet is matched case-insensitively, like
    * every sheet lookup; `Left(SheetNotFound)` lists the sheets when there is none. The
-   * workbook-scoped entry of the same identifier is untouched.
+   * workbook-scoped entry of the same identifier is untouched. Writing `_xlnm.Print_Area` /
+   * `_xlnm.Print_Titles` also clears the field a read lifted into the sheet's PageSetup, so the
+   * entry is the sheet's one print name afterwards.
    */
   def withDefinedName(name: String, refersTo: String, scope: SheetName): XLResult[Workbook] =
-    localSheetIdOf(scope).map(idx =>
+    localSheetIdOf(scope).flatMap(idx =>
       defineName(DefinedName(name = name, formula = refersTo, localSheetId = Some(idx)))
+        .clearLiftedPrintField(name, idx)
     )
 
   /**
@@ -562,10 +565,14 @@ final case class Workbook(
   /**
    * Remove the defined name `name` scoped to `scope` (GH-462); the workbook-scoped entry of the
    * same identifier is untouched. `Left(SheetNotFound)` for an unknown sheet; an absent name is not
-   * an error, as for the workbook-scoped form.
+   * an error, as for the workbook-scoped form. Removing `_xlnm.Print_Area` / `_xlnm.Print_Titles`
+   * also clears the field a read lifted into the sheet's PageSetup — where the name lives after any
+   * read, the table holding no entry for it.
    */
   def removeDefinedName(name: String, scope: SheetName): XLResult[Workbook] =
-    localSheetIdOf(scope).map(idx => dropDefinedNames(name, Some(idx)))
+    localSheetIdOf(scope).flatMap(idx =>
+      dropDefinedNames(name, Some(idx)).clearLiftedPrintField(name, idx)
+    )
 
   /**
    * The `localSheetId` a name scoped to `scope` carries: the sheet's position, the sheet matched
@@ -576,6 +583,38 @@ final case class Workbook(
     sheets.indexWhere(_.name.value.equalsIgnoreCase(scope.value)) match
       case -1 => Left(XLError.SheetNotFound(scope.value, sheetNameValues))
       case idx => Right(idx)
+
+  /**
+   * The identifiers `removeDefinedName` can remove in `scope` (a `localSheetId`; None = workbook),
+   * GH-462: the table's same-scope entries plus, for a sheet scope, the print names a read lifted
+   * out of the table into that sheet's PageSetup — `_xlnm.Print_Area` while `printArea` is set,
+   * `_xlnm.Print_Titles` while `repeatRows` is. The one existence check (and `NameNotFound`
+   * candidate list) of the Edit algebra and the CLI.
+   */
+  private[xl] def definedNamesIn(scope: Option[Int]): Vector[String] =
+    val table = metadata.definedNames.collect { case dn if dn.localSheetId == scope => dn.name }
+    val lifted = scope.flatMap(sheets.lift).flatMap(_.pageSetup).toList.flatMap { setup =>
+      setup.printArea.map(_ => DefinedName.PrintArea).toList ++
+        setup.repeatRows.map(_ => DefinedName.PrintTitles).toList
+    }
+    (table ++ lifted).distinct
+
+  /**
+   * After a read a sheet's `_xlnm.Print_Area` / `_xlnm.Print_Titles` live in its PageSetup
+   * (`printArea` / `repeatRows`: the reader lifts them out of the table), so a scoped write or
+   * remove of either identifier also clears that field — the table entry, or nothing, is then the
+   * single in-memory truth and what the writer emits (GH-462). Identity for every other identifier;
+   * a tracked update, so a surgical write regenerates the sheet.
+   */
+  private def clearLiftedPrintField(name: String, idx: Int): XLResult[Workbook] =
+    val setup = sheets.lift(idx).flatMap(_.pageSetup)
+    val cleared =
+      if DefinedName.sameName(name, DefinedName.PrintArea) then
+        setup.filter(_.printArea.isDefined).map(_.copy(printArea = None))
+      else if DefinedName.sameName(name, DefinedName.PrintTitles) then
+        setup.filter(_.repeatRows.isDefined).map(_.copy(repeatRows = None))
+      else None
+    cleared.fold[XLResult[Workbook]](Right(this))(ps => updateAt(idx, _.withPageSetup(ps)))
 
   /** Replace the whole same-scope class of `dn.name` (GH-538) with `dn`, appended. */
   private def defineName(dn: DefinedName): Workbook =
