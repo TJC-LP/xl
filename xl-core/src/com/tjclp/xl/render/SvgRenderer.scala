@@ -338,11 +338,12 @@ object SvgRenderer:
                         // clip's left edge for exactly that band.
                         //
                         // The clamp must NOT fire once the text is wider than the cell: Excel
-                        // right-anchors an overflowing right-aligned value and cuts its head,
-                        // and only numbers and dates are hashed above — Text, Bool and Error
-                        // reach here at full width, and pulling their anchor right would show
-                        // the head and push the tail out of the cell (it would also contradict
-                        // the RichText branch, which left-shifts by the run width).
+                        // right-anchors an overflowing right-aligned value and cuts its head.
+                        // Only Text reaches here at full width — Numeric, Bool and Error hash
+                        // above (GH-459, GH-500), and Bool and Error are centred anyway — and
+                        // pulling its anchor right would show the head and push the tail out
+                        // of the cell (it would also contradict the RichText branch, which
+                        // left-shifts by the run width).
                         //
                         // Precision note: the clamp lands the left edge exactly on the clip
                         // edge, so it relies on the rasterizer laying the string out no wider
@@ -803,14 +804,13 @@ object SvgRenderer:
    */
   private def textAlignment(cell: Cell, sheet: Sheet, cellX: Int, cellWidth: Int): (Int, String) =
     val style = cell.styleId.flatMap(sheet.styleRegistry.get)
-    val align = style.map(_.align.horizontal).getOrElse(HAlign.General)
     val indent = style.map(_.align.indent).getOrElse(0)
     val indentPx = indent * IndentPxPerLevel
+    val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
 
-    // For General alignment, use content-based alignment
-    val effectiveAlign = align match
-      case HAlign.General => contentBasedAlignment(cell.value)
-      case other => other
+    // General resolves from the rendered kind, the same way the hash and colspan decisions do:
+    // errors centre like logicals, a number under a text-only format is text (GH-500, GH-501)
+    val effectiveAlign = resolveHAlign(style, renderedContent(cell.value, numFmt))
 
     effectiveAlign match
       case HAlign.Center | HAlign.CenterContinuous =>
