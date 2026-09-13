@@ -123,8 +123,8 @@ object api:
 
   // Codec types
   export codec.{CellCodec, CellReader, CellWriter, CodecError}
-  // Records as rows (GH-590)
-  export codec.{FieldCodec, RowCodec, RowCodecError, RowsPlaced}
+  // Records as rows (GH-590); `@header` renames a field's header (GH-614)
+  export codec.{FieldCodec, RowCodec, RowCodecError, RowsPlaced, header}
 
   // Style types - core (Dxf/DxfFont: differential formats for conditional formatting, GH-136)
   export styles.{CellStyle, StyleRegistry, Dxf, DxfFont}

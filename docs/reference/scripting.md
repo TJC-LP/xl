@@ -680,8 +680,9 @@ a cache that may be stale). The same see-through rule is available for hand-writ
 ## Records: `derives RowCodec` (since 0.21.0)
 
 A case class is a row. Derive a `RowCodec` and the sheet reads and writes records directly —
-field order is column order, field names are the header row, `Option[T]` fields are empty
-cells — no per-cell `readTyped` loops:
+field order is column order, field names are the header row (or the `@header` text when the
+sheet's header is not something an identifier can spell), `Option[T]` fields are empty cells — no
+per-cell `readTyped` loops:
 
 ```scala
 //> using scala 3.9.0
@@ -689,15 +690,20 @@ cells — no per-cell `readTyped` loops:
 import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
 
-final case class Order(id: Int, customer: String, qty: Int, price: BigDecimal, shipped: Option[LocalDate])
-  derives RowCodec
+final case class Order(
+  id: Int,
+  customer: String,
+  qty: Int,
+  @header("Unit Price ($)") price: BigDecimal, // the column's header; the field stays `price`
+  shipped: Option[LocalDate]
+) derives RowCodec
 
 val orders = Vector(
   Order(1, "Acme", 3, BigDecimal("9.99"), Some(LocalDate.of(2026, 1, 15))),
   Order(2, "Globex", 1, BigDecimal("120.00"), None)
 )
 
-// Write: a header row of field names at A1, one row per record below it
+// Write: the header row at A1 (id, customer, qty, Unit Price ($), shipped), one row per record below
 val placed = Sheet("Orders").putRowsWithHeader(ref"A1", orders).unsafe
 val headerRange = placed.headerRange                       // Some(A1:E1)
 val dataRange = placed.dataRange                           // Some(A2:E3); None when `orders` is empty
@@ -744,6 +750,19 @@ The rules, all of them:
   then reads the contiguous block under the header and stops at the first row whose record cells
   are all empty (Excel's current region), so a totals row after a blank line is not a record.
   `sheet.columnHeaders(row)` lists `(Column, text)` pairs for discovery.
+- **Header names** (#614): a field's header is its name unless `@header("Rev ($M)")` says
+  otherwise — real trackers have punctuation no identifier reaches (`columnOf("rev")` is `None`
+  against `Rev ($M)`, since matching only ignores case, whitespace, `_` and `-`). The annotation
+  takes a non-blank string literal, two fields may not end up with the same header (both are
+  compile errors), and `RowCodec[A].headers` lists the result beside `RowCodec[A].fields`:
+  `putRowsWithHeader`/`putTable` write the headers, `readRowsByHeader` matches them (exact, then
+  normalised — `@header("Rev ($M)")` also finds `rev ($m)`), and errors keep the field name
+  (`Field(row, column, "rev", …)`; only `HeaderNotFound` carries the header text). For a header
+  known only at runtime, `codec.withHeaders(Map("rev" -> "Rev ($M)"))` is `XLResult[RowCodec[A]]`
+  (an unknown field, a blank header or two fields sharing one → `InvalidArgument`) and layers on
+  the annotation. Spell such a given with `derived`:
+  `given RowCodec[Deal] = orExit(RowCodec.derived[Deal].withHeaders(Map("ebitda" -> "EBITDA ($M)")))`
+  — `RowCodec[Deal].withHeaders(…)` there would summon the very given it defines.
 - **Errors** (`Either[RowCodecError, Vector[A]]`, first failing cell in row-major order):
   `Field(row, column, field, cause)` for a value the field's codec rejected, `Missing(row, column,
   field)` for a required field on an empty cell, `HeaderNotFound(header, headerRow, available)`,

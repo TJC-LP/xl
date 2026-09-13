@@ -26,7 +26,8 @@ Everything below is in scope after `import com.tjclp.xl.scripting.{*, given}`.
 | `XLResult[A]` | `Either[XLError, A]` — every fallible operation |
 | `XLError` | Structured error enum (`SheetNotFound`, `InvalidCellRef`, `FormulaError`, ...) with `.message`; 0.22.0 adds `InvalidArgument(op, reason)` (`INVALID_ARGUMENT` — every workbook-free `Edit.validate` refusal, #617) and `NameNotFound(name, available)` (`NAME_NOT_FOUND`, with `did you mean` candidates like `SheetNotFound`, #626) |
 | `RecalcResult` | `(workbook, evaluated, errors)` from `wb.recalculate()` |
-| `RowCodec[A]` | one record ↔ one row of cells: `fields` (header names, column order), `read(cells)`, `write(a)`; `final case class Order(...) derives RowCodec` (0.21.0) |
+| `RowCodec[A]` | one record ↔ one row of cells: `fields` (field names, column order — what errors carry), `headers` (the header row: the field names unless `@header("Rev ($M)")` on the field or `withHeaders(Map("rev" -> "Rev ($M)"))` renamed one, #614), `read(cells)`, `write(a)`; `final case class Order(...) derives RowCodec` (0.21.0). `withHeaders` is `XLResult[RowCodec[A]]` — an unknown field, a blank or a duplicate header is `InvalidArgument`; as a given spell it `RowCodec.derived[Order].withHeaders(…)`, never `RowCodec[Order].withHeaders(…)` (summons itself) |
+| `@header(name)` | annotation on a record field: its header text when the sheet's header is not an identifier (`@header("Portfolio Co.") portfolioCo: String`); a non-blank string literal, distinct per record — both compile errors (#614) |
 | `RowCodecError` | `Field(row, column, field, cause)` \| `Missing(row, column, field)` \| `HeaderNotFound(header, headerRow, available)` \| `Width(expected, actual)` — `.message`, `.toXLError` (0.21.0) |
 | `RowsPlaced` | `(sheet, headerRange, dataRange)` + `range` (header ∪ data) and `count` — what `putRows`/`putRowsWithHeader`/`putTable` return (0.21.0) |
 | `CellEvalError` | `(sheet, ref, error)` with `.render` → `"Sales!B2: ..."` |
@@ -98,12 +99,12 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.readTypedOpt[A](ref)` | `Option[A]` | total, flat; 0.20.0: cached formula → `Some`, uncached → `None` (≤0.19.3: any formula → `None`) |
 | `sheet.readTypedStrict[A](ref)` | `Either[CodecError, Option[A]]` | 0.20.0: like `readTyped`, but ANY formula cell is `Left(TypeMismatch(expected, formula))`, cached or not (GH-477) |
 | `sheet.readRows[A](range)` | `Either[RowCodecError, Vector[A]]` | one record per row of `range`, positional (`fields(i)` ↔ column i); range width must equal the record's, else `Width`; a blank row is `Missing` unless every field is `Option` (0.21.0, needs `RowCodec[A]`) |
-| `sheet.readRowsByHeader[A](headerRow)` | `Either[RowCodecError, Vector[A]]` | fields matched to header text via `columnOf` (exact, then case/space/`_`/`-`-insensitive), any column order, extra columns ignored; reads the contiguous block under the header, stops at the first blank row (0.21.0) |
+| `sheet.readRowsByHeader[A](headerRow)` | `Either[RowCodecError, Vector[A]]` | each field's `RowCodec.headers` entry (its name, or its `@header`/`withHeaders` text) matched to header text via `columnOf` (exact, then case/space/`_`/`-`-insensitive), any column order, extra columns ignored; reads the contiguous block under the header, stops at the first blank row (0.21.0; renamed headers #614) |
 | `sheet.columnHeaders(row)` | `Vector[(Column, String)]` | header texts in `row`, left to right, verbatim (numbers/rich text as text; blanks skipped) (0.21.0) |
-| `sheet.columnOf(header, headerRow)` | `Option[Column]` | the column headed `header`: exact match, else case/whitespace/`_`/`-`-insensitive, leftmost wins (0.21.0) |
+| `sheet.columnOf(header, headerRow)` | `Option[Column]` | the column headed `header`: exact match, else case/whitespace/`_`/`-`-insensitive, leftmost wins (0.21.0); punctuation is never dropped — `Rev ($M)` is reached by `"Rev ($M)"` or `"rev ($m)"`, not by `"rev"` (hence `@header`, #614) |
 | `sheet.putRows(at, records)` | `XLResult[RowsPlaced]` | one row per record from `at`, no header; `None` fields stay empty; codec formats register like `put`; only the records' cells are written (clear a longer old block first); `OutOfBounds` past XFD/1048576 (0.21.0) |
-| `sheet.putRowsWithHeader(at, records)` | `XLResult[RowsPlaced]` | field names as a header row at `at`, records below (0.21.0) |
-| `sheet.putTable(at, records, name)` | `XLResult[RowsPlaced]` | `putRowsWithHeader` + an Excel table named/columned after the record; `name` = display name, letters/digits/`_`, unique on the sheet; no records → header + one blank data row (0.21.0) |
+| `sheet.putRowsWithHeader(at, records)` | `XLResult[RowsPlaced]` | `RowCodec.headers` (field names, or their `@header`/`withHeaders` text) as a header row at `at`, records below (0.21.0) |
+| `sheet.putTable(at, records, name)` | `XLResult[RowsPlaced]` | `putRowsWithHeader` + an Excel table named after `name`, its columns after `RowCodec.headers`; `name` = display name, letters/digits/`_`, unique on the sheet; no records → header + one blank data row (0.21.0) |
 | `sheet.comment(ref, Comment.plainText("note", Some("author")))` | `Sheet` | |
 | `sheet.toHtml(ref"A1:B10")` | `String` | inline-CSS HTML table |
 | `sheet.usedRange` | `Option[CellRange]` | |
@@ -130,6 +131,12 @@ val placed = sheet.putRowsWithHeader(ref"A1", orders).unsafe // RowsPlaced(sheet
 placed.sheet.readRowsByHeader[Order](Row.from1(1))          // Either[RowCodecError, Vector[Order]]
 placed.sheet.readRows[Order](ref"A2:E4")                    // positional, exact width
 sheet.putTable(ref"A1", orders, "Orders")                   // + Excel table "Orders"
+
+// Headers no identifier can spell (#614): @header per field, or withHeaders at runtime
+final case class Deal(@header("Portfolio Co.") portfolioCo: String, @header("Rev ($M)") rev: BigDecimal, ebitda: Option[BigDecimal])
+  derives RowCodec                                        // fields: portfolioCo, rev, ebitda; headers: Portfolio Co., Rev ($M), ebitda
+given RowCodec[Deal] = orExit(RowCodec.derived[Deal].withHeaders(Map("ebitda" -> "EBITDA ($M)"))) // layers on @header; `derived`, not `RowCodec[Deal]`
+sheet.readRowsByHeader[Deal](Row.from1(1))                  // binds Rev ($M) / EBITDA ($M) / Portfolio Co.; errors still say "rev"
 ```
 
 Field types: the nine codec types and `Option` of each (an empty cell); any other type is a compile error until you add a `given CellCodec[T]`. `Option[T]` is `None` only for a cell that is absent or `CellValue.Empty`: a cell holding the empty string — SheetJS and some exporters write `<v></v>` text cells for "blank" — decodes as `Some("")` for `Option[String]` (and is a `TypeMismatch` for `Option[Int]`), because Excel itself distinguishes `""` from blank (`ISBLANK` is FALSE, `COUNTA` counts it). Normalise with `.filter(_.nonEmpty)` or clear such cells before reading (#617). Reads see cached formula values (GH-477). Errors name the cell: `RowCodecError.Field(row, column, "qty", TypeMismatch("Int", Text("three")))` → `.message` `C2 (qty): expected Int, got Text(three)`. Full rules: `docs/reference/scripting.md` → "Records".

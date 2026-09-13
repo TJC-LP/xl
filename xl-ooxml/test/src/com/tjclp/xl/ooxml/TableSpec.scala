@@ -1274,3 +1274,41 @@ class TableSpec extends FunSuite:
       Right(orders): Either[RowCodecError, Vector[Order]]
     )
   }
+
+  /** GH-614: headers an identifier cannot spell — table columns and header cells in the file. */
+  final case class Deal(
+    @header("Portfolio Co.") portfolioCo: String,
+    @header("Rev ($M)") rev: BigDecimal,
+    @header("EBITDA ($M)") ebitda: Option[BigDecimal]
+  ) derives RowCodec
+
+  test("GH-614: putTable with @header → write → read → readRowsByHeader keeps punctuated headers") {
+    val deals = Vector(
+      Deal("Acme", BigDecimal("12.5"), Some(BigDecimal("3.25"))),
+      Deal("Globex", BigDecimal("40"), None)
+    )
+    val headers = Vector("Portfolio Co.", "Rev ($M)", "EBITDA ($M)")
+    assertEquals(RowCodec[Deal].headers, headers)
+    assertEquals(RowCodec[Deal].fields, Vector("portfolioCo", "rev", "ebitda"))
+    val placed = Sheet("Deals")
+      .putTable(ref"B2", deals, "Deals")
+      .fold(err => fail(s"putTable failed: $err"), identity)
+
+    val bytes =
+      XlsxWriter.writeToBytes(Workbook(Vector(placed.sheet))).getOrElse(fail("Write failed"))
+    val reread = XlsxReader.readFromBytes(bytes).getOrElse(fail("Read failed"))
+    val sheet = reread.sheets.headOption.getOrElse(fail("Expected sheet"))
+
+    val table = sheet.getTable("Deals").getOrElse(fail("Table 'Deals' did not survive the file"))
+    assertEquals(table.range.toA1, "B2:D4")
+    assertEquals(table.columns.map(_.name), headers)
+    assertEquals(sheet.columnHeaders(Row.from1(2)).map(_._2), headers)
+    assertEquals(
+      sheet.readRowsByHeader[Deal](Row.from1(2)),
+      Right(deals): Either[RowCodecError, Vector[Deal]]
+    )
+    assertEquals(
+      sheet.readRows[Deal](table.dataRange),
+      Right(deals): Either[RowCodecError, Vector[Deal]]
+    )
+  }
