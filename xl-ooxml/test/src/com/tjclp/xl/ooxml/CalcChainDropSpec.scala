@@ -30,11 +30,7 @@ class CalcChainDropSpec extends FunSuite:
     (in, XlsxReader.read(in).fold(err => fail(err.message), identity))
 
   private def writeToBytes(wb: Workbook, config: WriterConfig = WriterConfig.default): Array[Byte] =
-    val out = Files.createTempFile("xl-calcchain-", ".xlsx")
-    try
-      XlsxWriter.writeWith(wb, out, config).fold(err => fail(err.message), identity)
-      Files.readAllBytes(out)
-    finally Files.deleteIfExists(out)
+    XlsxWriter.writeToBytes(wb, config).fold(err => fail(err.message), identity)
 
   private def assertNoChain(output: Map[String, Array[Byte]]): Unit =
     assert(!output.contains(calcChain), output.keys.toVector.sorted.mkString(", "))

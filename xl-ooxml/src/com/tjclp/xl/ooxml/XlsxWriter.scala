@@ -86,7 +86,7 @@ object XlsxWriter:
    * Internal dispatch: Choose write strategy based on SourceContext.
    *
    * Strategy selection:
-   *   1. SourceContext + clean + file target → verbatim copy (fastest)
+   *   1. SourceContext + clean → verbatim copy (fastest), whatever the target
    *   2. File target with source → atomic temp file + rename (prevents corruption)
    *   3. All other cases → unified write (surgical if source available, else full regeneration)
    *
@@ -118,13 +118,8 @@ object XlsxWriter:
 
       normalized.sourceContext match
         case Some(ctx) if ctx.isClean && !escapeFormulas =>
-          // Clean workbook + file target → verbatim copy (ultra-fast)
-          target match
-            case OutputPath(path) =>
-              copyVerbatim(ctx, path)
-            case OutputStreamTarget(_) =>
-              // Can't copy to stream, use unified write (will copy all parts)
-              unifiedWrite(normalized, normalized.sourceContext, target, config)
+          // Clean workbook → verbatim copy (ultra-fast), to a file or a stream alike (GH-516)
+          copyVerbatim(ctx, target)
 
         case Some(ctx) =>
           // Surgical mode with source: use atomic temp file to prevent corruption
@@ -217,18 +212,22 @@ object XlsxWriter:
     config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
 
   /**
-   * Copy the source archive verbatim to destination (for clean workbooks).
+   * Copy the source archive verbatim to the target (for clean workbooks).
    *
    * Fast path optimization: When a workbook has no modifications, just copy the source archive
    * byte-for-byte instead of regenerating all XML. This is 10-11x faster than full regeneration.
    *
    * Handles edge case where source file == dest (no-op). In-memory sources (GH-412) verify the same
-   * fingerprint before writing — a defense against contexts built over aliased arrays.
+   * fingerprint before writing — a defense against contexts built over aliased arrays. A stream
+   * target (GH-516: [[writeToBytes]]) receives the same bytes, so a clean read-back workbook
+   * serialised to bytes is byte-identical to its source; the stream is the caller's and stays open.
+   * On a fingerprint mismatch a file target is deleted; a stream target has already received the
+   * bytes and the failure is the caller's signal to discard them.
    */
-  private def copyVerbatim(ctx: SourceContext, dest: Path): Unit =
+  private def copyVerbatim(ctx: SourceContext, target: OutputTarget): Unit =
     ctx.content match
       case SourceContent.OnDisk(source) =>
-        if source != dest then
+        if !target.asPathOption.contains(source) then
           val fingerprint = ctx.fingerprint
           val currentSize = Files.size(source)
           if currentSize != fingerprint.size then
@@ -240,7 +239,9 @@ object XlsxWriter:
 
           val bytesCopied = usingOrThrow(Using.Manager { use =>
             val in = use(Files.newInputStream(source))
-            val out = use(Files.newOutputStream(dest))
+            val out = target match
+              case OutputPath(dest) => use(Files.newOutputStream(dest))
+              case OutputStreamTarget(stream) => stream
             val buffer = new Array[Byte](8192)
 
             def loop(total: Long): Long =
@@ -256,7 +257,7 @@ object XlsxWriter:
 
           val computedDigest = digest.digest()
           if !fingerprint.matches(bytesCopied, computedDigest) then
-            Files.deleteIfExists(dest)
+            target.asPathOption.foreach(Files.deleteIfExists)
             throw new IllegalStateException(
               "Source file changed since read; refusing to copy verbatim"
             )
@@ -266,7 +267,9 @@ object XlsxWriter:
           throw new IllegalStateException(
             "Source bytes changed since read; refusing to copy verbatim"
           )
-        Files.write(dest, arr)
+        target match
+          case OutputPath(dest) => Files.write(dest, arr)
+          case OutputStreamTarget(stream) => stream.write(arr)
 
   /**
    * Canonical comment author: trimmed, whitespace-only → unauthored (GH-290).
@@ -2506,15 +2509,23 @@ object XlsxWriter:
 
     finally zip.close()
 
-  /** Write workbook to bytes (for testing) */
+  /**
+   * Serialise the workbook to XLSX bytes with the default configuration.
+   *
+   * In memory end to end (GH-516): the archive is assembled straight into the returned array
+   * through the same strategy dispatch as [[writeWith]] — no scratch file, so a small, read-only or
+   * slow `java.io.tmpdir` cannot fail it; the price is that the whole zip lives in heap (a
+   * `ByteArrayOutputStream`, so at most 2 GB). A clean read-back workbook yields its source bytes
+   * verbatim: `writeToBytes(readFromBytes(bytes))` is byte-identical to `bytes`.
+   */
   def writeToBytes(workbook: Workbook): XLResult[Array[Byte]] =
-    try
-      val baos = new ByteArrayOutputStream()
-      val tempPath = Files.createTempFile("xl-", ".xlsx")
-      try
-        write(workbook, tempPath).map { _ =>
-          Files.readAllBytes(tempPath)
-        }
-      finally
-        Files.deleteIfExists(tempPath)
-    catch case e: Exception => Left(XLError.IOError(s"Failed to write bytes: ${e.getMessage}"))
+    writeToBytes(workbook, WriterConfig())
+
+  /**
+   * [[writeToBytes]] with a custom configuration — an overload rather than a default argument, so
+   * the one-argument signature consumers compiled against keeps its erasure (xl-ooxml is
+   * published).
+   */
+  def writeToBytes(workbook: Workbook, config: WriterConfig): XLResult[Array[Byte]] =
+    val out = new ByteArrayOutputStream()
+    writeToTarget(workbook, OutputStreamTarget(out), config).map(_ => out.toByteArray)
