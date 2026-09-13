@@ -338,3 +338,77 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
       thread.isAlive && thread.getName.startsWith("xl-recalc-worker-")
     }
     assertEquals(liveWorkers.toVector, Vector.empty)
+
+  // ===== GH-537: dynamicCells classifies sheet-independent names once, dedups by case =====
+
+  test("GH-537: case-variant duplicate names classify identically, whichever spelling is read"):
+    // Name resolution is case-insensitive, so `Hop`/`HOP` are ONE name to every reader; the
+    // classification must agree with that (one verdict, not one per spelling) and the static
+    // `case`/`CASE` fossils must not make their readers dynamic.
+    val dyn = SheetName.unsafe("Dyn")
+    val hopReader = ARef.from0(5, 0)
+    val caseReader = ARef.from0(6, 0)
+    val sheet = Sheet(dyn)
+      .put(ARef.from0(0, 0), num(1))
+      .put(hopReader, formula("=hop"))
+      .put(caseReader, formula("=Case*2"))
+    val base = Workbook(sheet)
+    val wb = base.copy(
+      metadata = base.metadata.copy(
+        definedNames = Vector(
+          DefinedName("Hop", "INDIRECT(\"A1\")"),
+          DefinedName("HOP", "INDIRECT(\"A1\")"),
+          DefinedName("case", "42"),
+          DefinedName("CASE", "42")
+        )
+      )
+    )
+    assertEquals(DependencyGraph.dynamicCells(wb), Set(QualifiedRef(dyn, hopReader)))
+    val result = wb.recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(result.evaluated(dyn)(hopReader), num(1))
+    assertEquals(result.evaluated(dyn)(caseReader), num(84))
+
+  test("GH-537: name-free workbook names classify once; a name nesting a shadowed name per sheet"):
+    // `Inner` and `Const` have name-free definitions and no sheet-scoped variant, so their verdict
+    // cannot depend on the reading sheet (dynamic everywhere / nowhere). `Outer = Driver` nests an
+    // unqualified name that Calc shadows with a dynamic local, so its verdict IS per sheet — the
+    // exclusion must stay conservative and keep classifying it from each reader's sheet.
+    val calcName = SheetName.unsafe("Calc")
+    val otherName = SheetName.unsafe("Other")
+    val innerReader = ARef.from0(10, 0)
+    val constReader = ARef.from0(11, 0)
+    val outerReader = ARef.from0(12, 0)
+    def readers(s: Sheet): Sheet =
+      s.put(innerReader, formula("=Inner"))
+        .put(constReader, formula("=Const+1"))
+        .put(outerReader, formula("=Outer"))
+    val calc = readers(Sheet(calcName).put(ARef.from0(0, 0), num(7)))
+    val other = readers(Sheet(otherName).put(ARef.from0(0, 0), num(9)))
+    val base = Workbook(calc, other)
+    val wb = base.copy(
+      metadata = base.metadata.copy(
+        definedNames = Vector(
+          DefinedName("Inner", "INDIRECT(\"A1\")"),
+          DefinedName("Const", "42"),
+          DefinedName("Driver", "41"),
+          DefinedName("Outer", "Driver"),
+          DefinedName("Driver", "OFFSET(A1, 0, 0)", localSheetId = Some(0))
+        )
+      )
+    )
+    assertEquals(
+      DependencyGraph.dynamicCells(wb),
+      Set(
+        QualifiedRef(calcName, innerReader),
+        QualifiedRef(otherName, innerReader),
+        QualifiedRef(calcName, outerReader)
+      )
+    )
+    val result = wb.recalculateParallel(8)
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(result.evaluated(calcName)(innerReader), num(7))
+    assertEquals(result.evaluated(otherName)(innerReader), num(9))
+    assertEquals(result.evaluated(calcName)(outerReader), num(7))
+    assertEquals(result.evaluated(otherName)(outerReader), num(41))
+    assertEquals(result.evaluated(otherName)(constReader), num(43))

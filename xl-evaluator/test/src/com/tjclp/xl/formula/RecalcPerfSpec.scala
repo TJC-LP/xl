@@ -6,7 +6,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.eval.IterativeCalc
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 import munit.FunSuite
 
 /**
@@ -243,3 +243,30 @@ class RecalcPerfSpec extends FunSuite:
       s"expected an early stall, got ${result.cycles.map(_.render)}"
     )
     assert(elapsedMs < BudgetMs, s"stalled fixpoint took ${elapsedMs}ms (budget ${BudgetMs}ms)")
+
+  /**
+   * GH-537 tripwire: `dynamicCells(workbook)` classified every defined name once PER SHEET and
+   * parsed its definition on every visit — sheets × names work (34× on a 96k-name field book) for
+   * names whose verdict cannot depend on the reading sheet at all. A name with no sheet-scoped
+   * variant and a name-free definition is classified once, and a parse memo keyed on the definition
+   * text bounds parsing by the number of DISTINCT definitions, not sheets × names.
+   */
+  private val NameSheets = 40
+  private val StaticNames = 5000
+
+  test("GH-537: dynamicCells on 40 sheets x 5,000 static workbook names stays inside the budget"):
+    val sheets = (1 to NameSheets).map { s =>
+      Sheet(SheetName.unsafe(s"S$s"))
+        .put(ARef.from0(0, 0), num(BigDecimal(1)))
+        .put(ARef.from0(1, 0), formula("=name1*2+name4999"))
+    }.toVector
+    val names = (1 to StaticNames).map { i =>
+      DefinedName(s"name$i", s"S1!$$A$$$i:$$A$$${i + 9}*1.05+SUM(S1!$$B$$1:$$B$$50)")
+    }.toVector
+    val base = Workbook(sheets)
+    val wb = base.copy(metadata = base.metadata.copy(definedNames = names))
+    val t0 = System.nanoTime()
+    val dynamic = DependencyGraph.dynamicCells(wb)
+    val elapsedMs = (System.nanoTime() - t0) / 1000000L
+    assertEquals(dynamic, Set.empty[DependencyGraph.QualifiedRef])
+    assert(elapsedMs < BudgetMs, s"dynamicCells took ${elapsedMs}ms (budget ${BudgetMs}ms)")
