@@ -77,9 +77,7 @@ final case class Relationships(
    * longer emitted) are removed. Deterministic for a given input.
    */
   def withDocProps(hasCore: Boolean, hasApp: Boolean): Relationships =
-    def nextId(rels: Seq[Relationship]): String =
-      val maxNum = rels.flatMap(r => r.id.stripPrefix("rId").toIntOption).maxOption.getOrElse(0)
-      s"rId${maxNum + 1}"
+    def nextId(rels: Seq[Relationship]): String = s"rId${Relationships.maxNumericId(rels) + 1}"
     def ensure(
       rels: Seq[Relationship],
       present: Boolean,
@@ -97,6 +95,14 @@ final case class Relationships(
 
 object Relationships extends XmlReadable[Relationships]:
   val empty: Relationships = Relationships(Seq.empty)
+
+  /**
+   * The highest `rId<n>` among `rels` (0 when none is numeric). Fresh ids are allocated past it so
+   * they can collide neither with a kept numeric id nor with a foreign alphanumeric one
+   * (`comments`, `anysvml`, `rIdHL1`).
+   */
+  def maxNumericId(rels: Seq[Relationship]): Int =
+    rels.flatMap(_.id.stripPrefix("rId").toIntOption).maxOption.getOrElse(0)
 
   /** Create root .rels file pointing to workbook */
   def root(workbookPath: String = "xl/workbook.xml"): Relationships =
@@ -205,10 +211,7 @@ object Relationships extends XmlReadable[Relationships]:
         .filter(_.`type` == relTypeWorksheet)
         .map(rel => resolveWorkbookTarget(rel.target) -> rel)
         .toMap
-    val maxNumericId: Int = preserved.relationships
-      .flatMap(_.id.stripPrefix("rId").toIntOption)
-      .maxOption
-      .getOrElse(0)
+    val maxNumericId: Int = Relationships.maxNumericId(preserved.relationships)
 
     // Per sheet: keep the matched rel verbatim when its target already names the output part
     // (byte-stable for untouched dialects), re-target it when the sheet moved, or allocate fresh.

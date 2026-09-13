@@ -379,15 +379,28 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
         )
 
   /**
-   * Keep the preserved `<definedNames>` bytes when the model agrees with them; regenerate the
-   * element from the model otherwise (the GH-259 reconcile, shared by both writer branches).
+   * Keep the preserved `<definedNames>` bytes when the model agrees with them AND every name is
+   * already in Excel's storage form; regenerate the element from the model otherwise (the GH-259
+   * reconcile, shared by both writer branches). Bare `IFS(` parses to the same model as
+   * `_xlfn.IFS(`, so the model comparison alone let a bare-writing producer's text ride through
+   * every write (GH-593); the storage-form check uses the lint's own rule so the two agree.
    */
   def reconcileDefinedNames(
     preservedElem: Option[Elem],
     expected: Vector[DefinedName]
   ): Option[Elem] =
-    if parseDefinedNames(preservedElem).toSet == expected.toSet then preservedElem
+    if parseDefinedNames(preservedElem).toSet == expected.toSet &&
+      !preservedElem.exists(definedNamesNeedHealing)
+    then preservedElem
     else buildDefinedNames(expected)
+
+  /**
+   * GH-593: does any `<definedName>` body in the raw element still lack its storage prefix
+   * ([[FormulaStorage.bareFutureCalls]] non-empty — exactly the text [[buildDefinedNames]] would
+   * spell differently)? Total; false on every Excel-authored table.
+   */
+  def definedNamesNeedHealing(elem: Elem): Boolean =
+    (elem \ "definedName").exists(dn => FormulaStorage.bareFutureCalls(dn.text).nonEmpty)
 
   /**
    * Reconcile the date1904 declaration with the model (model wins, GH-243) while every other

@@ -1225,8 +1225,8 @@ object WorkbookLint:
           part,
           LintCategory.XlfnMissing,
           facts.firstLocator.getOrElse(""),
-          s"${facts.count} $noun(s) $what — $consequence; a write heals the slot only when xl " +
-            "regenerates it (re-authoring identical text does not), see xl lint in " +
+          s"${facts.count} $noun(s) $what — $consequence; any in-memory write regenerating the " +
+            "worksheet (CF/DV) or workbook.xml (names) heals it, see xl lint in " +
             "docs/reference/cli.md"
         )
       )

@@ -14,6 +14,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cf.{CfOperator, CfPoint, CfRule, Cfvo, ConditionalFormat}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.ooxml.lint.{Finding, LintCategory, WorkbookLint}
 import com.tjclp.xl.ooxml.metadata.WorkbookMetadataReader
 import com.tjclp.xl.ooxml.worksheet.OoxmlCell
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
@@ -371,16 +372,39 @@ class FutureFunctionPrefixSpec extends FunSuite:
     assert(entryText(healed, "xl/workbook.xml").contains(gh577NameFragment))
   }
 
-  test("GH-588: an IDENTICAL re-author of bare CF / DV / name text is copied through bare") {
-    // The writer regenerates a CF block, DV container or name table only when its parsed model no
-    // longer equals the source (planCfWrites / planDvWrites / reconcileDefinedNames), and bare text
-    // parses to the same model as prefixed text. So re-entering the SAME rules, validations and
-    // name (`xl name add Best '<same formula>'`, an identical withDefinedName) regenerates nothing:
-    // the bare source bytes ride through and `xl lint` reports the identical finding. Only a
-    // CHANGED re-author heals — the GH-577 test above. This pins what the xlfn-missing remediation
-    // text and docs/reference/cli.md promise.
+  /** The `xlfn-missing` findings of a written file (the lint's rule is the writer's own). */
+  private def xlfnFindings(path: Path): Vector[Finding] =
+    WorkbookLint
+      .lint(path)
+      .fold(err => fail(s"lint must not error: ${err.message}"), identity)
+      .filter(_.category == LintCategory.XlfnMissing)
+
+  /** The substring from the first `open` to the end of the last `close` (empty when absent). */
+  private def slice(xml: String, open: String, close: String): String =
+    val start = xml.indexOf(open)
+    val end = xml.lastIndexOf(close)
+    if start < 0 || end < 0 then "" else xml.substring(start, end + close.length)
+
+  /** Every `dxfId="n"` on the sheet must index into the styles part's `<dxfs count="N">`. */
+  private def assertDxfRefsResolve(out: Path): Unit =
+    val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+    val dxfCount = """<dxfs count="(\d+)"""".r
+      .findFirstMatchIn(entryText(out, "xl/styles.xml"))
+      .map(_.group(1).toInt)
+      .getOrElse(0)
+    val refs = """dxfId="(\d+)"""".r.findAllMatchIn(sheetXml).map(_.group(1).toInt).toVector
+    assert(refs.nonEmpty, s"the dxf-bearing rule must keep its dxfId: $sheetXml")
+    refs.foreach(id => assert(id < dxfCount, s"dxfId=$id out of range (count $dxfCount)"))
+
+  test("GH-593: an IDENTICAL re-author of bare CF / DV / name text is healed") {
+    // The clean-compare gates (planCfWrites / planDvWrites / reconcileDefinedNames) compare models,
+    // and bare text parses to the same model as prefixed text — so an identical re-author used to
+    // copy the bare source bytes through (the GH-588 pin). The gates are now storage-form aware
+    // through FormulaStorage.bareFutureCalls, the lint's own rule: a slot whose source text the
+    // writer would still prefix is dirty by construction, and a write heals it.
     val written = writeGh577(XmlBackend.ScalaXml, "cfdv-same-src")
     val bare = patchedZip(written, "cfdv-same")(stripPrefixes)
+    assert(xlfnFindings(bare).nonEmpty, "the fixture must lint dirty")
     val wb = XlsxReader.read(bare).fold(err => fail(s"read failed: $err"), identity)
     val source = wb.sheets(0)
     // re-author every CF block and DV entry from empty with the same text; the cell edit forces
@@ -395,12 +419,128 @@ class FutureFunctionPrefixSpec extends FunSuite:
     val out = tempXlsx("cfdv-same-out")
     XlsxWriter.write(same, out).fold(err => fail(s"write failed: $err"), identity)
     val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
-    assert(sheetXml.contains("r=\"G1\""), sheetXml) // the worksheet WAS regenerated ...
-    assertFragments(sheetXml, gh577SheetFragments.map(stripPrefixes)) // ... yet the slots stay bare
-    assert(!sheetXml.contains("_xlfn."), sheetXml)
-    val wbXml = entryText(out, "xl/workbook.xml")
-    assert(wbXml.contains(stripPrefixes(gh577NameFragment)), wbXml)
-    assert(!wbXml.contains("_xlfn."), wbXml)
+    assert(sheetXml.contains("r=\"G1\""), sheetXml)
+    assertFragments(sheetXml, gh577SheetFragments)
+    assert(entryText(out, "xl/workbook.xml").contains(gh577NameFragment))
+    assertEquals(xlfnFindings(out), Vector.empty)
+  }
+
+  test("GH-593: a bare source with NO re-author but a cell edit heals CF, DV and definedNames") {
+    val written = writeGh577(XmlBackend.ScalaXml, "cfdv-edit-src")
+    val bare = patchedZip(written, "cfdv-edit")(stripPrefixes)
+    val wb = XlsxReader.read(bare).fold(err => fail(s"read failed: $err"), identity)
+    // the model is untouched; only a cell changes, so the worksheet regenerates and the gates
+    // decide on storage form alone (workbook.xml is regenerated on every non-clean write)
+    val out = tempXlsx("cfdv-edit-out")
+    XlsxWriter
+      .write(wb.put(wb.sheets(0).put(ref"G1" -> 2)), out)
+      .fold(err => fail(s"write failed: $err"), identity)
+    val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+    assertFragments(sheetXml, gh577SheetFragments)
+    assert(entryText(out, "xl/workbook.xml").contains(gh577NameFragment))
+    assertEquals(xlfnFindings(out), Vector.empty)
+    // healing takes the dirty path, which re-plans the dxf table: the refs must still resolve and
+    // the model must read back unchanged (rule text, dxf, validations, names)
+    assertDxfRefsResolve(out)
+    val reread = XlsxReader.read(out).fold(err => fail(s"read failed: $err"), identity)
+    assertEquals(reread.sheets(0).conditionalFormats, wb.sheets(0).conditionalFormats)
+    assertEquals(reread.sheets(0).dataValidations, wb.sheets(0).dataValidations)
+    assertEquals(reread.metadata.definedNames, wb.metadata.definedNames)
+    // and the healed file is now CLEAN for the gates: a further edit keeps the slots byte-stable
+    val again = tempXlsx("cfdv-edit-again")
+    XlsxWriter
+      .write(reread.put(reread.sheets(0).put(ref"G2" -> 3)), again)
+      .fold(err => fail(s"write failed: $err"), identity)
+    val againXml = entryText(again, "xl/worksheets/sheet1.xml")
+    assertEquals(
+      slice(againXml, "<conditionalFormatting", "</conditionalFormatting>"),
+      slice(sheetXml, "<conditionalFormatting", "</conditionalFormatting>")
+    )
+    assertEquals(
+      slice(againXml, "<dataValidations", "</dataValidations>"),
+      slice(sheetXml, "<dataValidations", "</dataValidations>")
+    )
+  }
+
+  test("GH-593: Excel-authored (prefixed) CF / DV / name parts stay byte-identical over an edit") {
+    val src = writeGh577(XmlBackend.ScalaXml, "cfdv-prefixed-src")
+    val srcSheet = entryText(src, "xl/worksheets/sheet1.xml")
+    val srcWorkbook = entryText(src, "xl/workbook.xml")
+    assertEquals(xlfnFindings(src), Vector.empty)
+    val wb = XlsxReader.read(src).fold(err => fail(s"read failed: $err"), identity)
+    val out = tempXlsx("cfdv-prefixed-out")
+    XlsxWriter
+      .write(wb.put(wb.sheets(0).put(ref"G1" -> 2)), out)
+      .fold(err => fail(s"write failed: $err"), identity)
+    val outSheet = entryText(out, "xl/worksheets/sheet1.xml")
+    assert(outSheet.contains("r=\"G1\""), outSheet) // regenerated ...
+    // ... with the gates CLEAN: the source slots ride through byte for byte
+    Vector(
+      ("<conditionalFormatting", "</conditionalFormatting>"),
+      ("<dataValidations", "</dataValidations>")
+    ).foreach { case (open, close) =>
+      val expected = slice(srcSheet, open, close)
+      assert(expected.nonEmpty, s"$open missing from the source: $srcSheet")
+      assertEquals(slice(outSheet, open, close), expected)
+    }
+    val names = slice(srcWorkbook, "<definedNames>", "</definedNames>")
+    assert(names.nonEmpty, srcWorkbook)
+    assertEquals(
+      slice(entryText(out, "xl/workbook.xml"), "<definedNames>", "</definedNames>"),
+      names
+    )
+  }
+
+  test("GH-593: an untouched worksheet and a Preserved (unmodeled) rule keep bare text") {
+    // The documented residuals: a worksheet the write does not regenerate rides verbatim, and a
+    // CfRule.Preserved payload (here a timePeriod rule, outside the typed subset) is re-emitted
+    // as captured — the gate fires on its bare <formula>, the block regenerates, the typed rules
+    // heal, the preserved rule's text does not. definedNames heal on every non-clean write.
+    val written = tempXlsx("cfdv-residual-src")
+    val twoSheets = gh577Workbook.put(Sheet("Other").put(ref"A1" -> 1))
+    XlsxWriter
+      .writeWith(twoSheets, written, WriterConfig(backend = XmlBackend.ScalaXml))
+      .fold(err => fail(s"write failed: $err"), identity)
+    val preservedRule =
+      "<cfRule type=\"timePeriod\" timePeriod=\"today\" priority=\"9\">" +
+        "<formula>IFS(FLOOR(A1,1)=TODAY(),TRUE,FALSE)</formula></cfRule>"
+    val blockOpen = "<conditionalFormatting sqref=\"A1:A3\">"
+    val bare = patchedZip(written, "cfdv-residual") { xml =>
+      stripPrefixes(xml).replace(blockOpen, blockOpen + preservedRule)
+    }
+    val bareSheet1 = entryText(bare, "xl/worksheets/sheet1.xml")
+    assert(bareSheet1.contains(preservedRule), bareSheet1)
+    val wb = XlsxReader.read(bare).fold(err => fail(s"read failed: $err"), identity)
+    assert(
+      wb.sheets(0).conditionalFormats.exists {
+        case ConditionalFormat.Rules(_, rules, _) =>
+          rules.exists { case _: CfRule.Preserved => true; case _ => false }
+        case _ => false
+      },
+      wb.sheets(0).conditionalFormats.toString
+    )
+    // 1. edit only the OTHER sheet: sheet1 is copied verbatim (bare), the names still heal
+    val untouched = tempXlsx("cfdv-residual-untouched")
+    XlsxWriter
+      .write(wb.put(wb.sheets(1).put(ref"A2" -> 2)), untouched)
+      .fold(err => fail(s"write failed: $err"), identity)
+    assertEquals(entryText(untouched, "xl/worksheets/sheet1.xml"), bareSheet1)
+    assert(entryText(untouched, "xl/workbook.xml").contains(gh577NameFragment))
+    assert(xlfnFindings(untouched).exists(_.part == "xl/worksheets/sheet1.xml"))
+    // 2. edit sheet1: the typed rules heal, the Preserved rule's bare text is re-emitted as is
+    val edited = tempXlsx("cfdv-residual-edited")
+    XlsxWriter
+      .write(wb.put(wb.sheets(0).put(ref"G1" -> 2)), edited)
+      .fold(err => fail(s"write failed: $err"), identity)
+    val editedSheet1 = entryText(edited, "xl/worksheets/sheet1.xml")
+    assertFragments(editedSheet1, gh577SheetFragments)
+    assert(
+      editedSheet1.contains("<formula>IFS(FLOOR(A1,1)=TODAY(),TRUE,FALSE)</formula>"),
+      editedSheet1
+    )
+    val residual = xlfnFindings(edited)
+    assertEquals(residual.map(_.part), Vector("xl/worksheets/sheet1.xml"))
+    assert(residual.forall(_.message.contains("1 formula(s)")), residual.toString)
   }
 
   test("GH-577: a prefix on an unknown function in a CF rule or a name survives verbatim") {

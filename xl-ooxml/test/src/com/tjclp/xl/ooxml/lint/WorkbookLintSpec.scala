@@ -1538,24 +1538,25 @@ class WorkbookLintSpec extends FunSuite:
     assert(f.message.contains("#NAME?"), f.toString)
   }
 
-  test("GH-588: the remediation states the regeneration condition, not an identical re-author") {
-    // A CF block, DV container or name table is regenerated only when its model no longer equals
-    // the source, and bare text parses to the same model as prefixed text — so an IDENTICAL
-    // re-author (`xl name add` with the same formula) copies the bare text through and lints the
-    // same (FutureFunctionPrefixSpec pins the writer). A message promising that "re-writing the
-    // affected part" or re-authoring the same rule heals it sends an agent into a loop. The
-    // finding states the condition in one clause and points at the lint docs for the slot-by-slot
-    // semantics (cli.md, LIMITATIONS.md), which is where GH-593 will edit them.
+  test(
+    "GH-593: the remediation states the healing condition — regenerate the part, not re-author"
+  ) {
+    // GH-588 pinned the old condition ("only when xl regenerates it; re-authoring identical text
+    // does not"): the CF / DV / name gates compared models, and bare text parses to the same model
+    // as prefixed text. GH-593 made the gates storage-form aware (FutureFunctionPrefixSpec pins
+    // the writer), so the honest condition is now: any in-memory write that regenerates the
+    // worksheet (CF/DV) or workbook.xml (names) heals the slot. The finding states that in one
+    // clause and points at the lint docs, which carry the residuals (an unmodeled preserved rule,
+    // an x14 <xm:f>, an untouched worksheet, a --stream write) slot by slot (cli.md,
+    // LIMITATIONS.md).
     val cf = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> bareCfIfsSheetXml)).head
     val dn = lintOf(baseParts + ("xl/workbook.xml" -> bareNameWorkbookXml)).head
     Vector(cf, dn).foreach { f =>
       assert(!f.message.contains("re-writing the affected part"), f.toString)
-      assert(
-        !f.message.contains("re-author the rule, validation or name with xl to heal it"),
-        f.toString
-      )
-      assert(f.message.contains("only when xl regenerates it"), f.toString)
-      assert(f.message.contains("re-authoring identical text does not"), f.toString)
+      assert(!f.message.contains("re-authoring identical text does not"), f.toString)
+      assert(!f.message.contains("only when xl regenerates it"), f.toString)
+      assert(f.message.contains("any in-memory write regenerating the worksheet"), f.toString)
+      assert(f.message.contains("workbook.xml (names) heals it"), f.toString)
       assert(f.message.contains("docs/reference/cli.md"), f.toString)
       // CLI-level detail (verbs, --stream) lives in the docs, not in a library finding
       assert(!f.message.contains("--stream"), f.toString)

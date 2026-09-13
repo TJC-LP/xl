@@ -34,6 +34,17 @@ class TableSpec extends FunSuite:
       .sorted(java.util.Comparator.reverseOrder())
       .forEach(Files.delete)
 
+  /** The bytes of one entry of an in-memory xlsx (fails the test when absent). */
+  private def zipEntry(bytes: Array[Byte], name: String): Array[Byte] =
+    val zis = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))
+    try
+      LazyList
+        .continually(zis.getNextEntry)
+        .takeWhile(_ != null)
+        .collectFirst { case e if e.getName == name => zis.readAllBytes() }
+        .getOrElse(fail(s"zip entry $name not found"))
+    finally zis.close()
+
   // ========================================
   // Category A: XML Parsing (10 tests)
   // ========================================
@@ -900,6 +911,41 @@ class TableSpec extends FunSuite:
     assertEquals(rereadSheet(ref"B2").value, CellValue.Number(BigDecimal(100)))
   }
 
+  test("GH-557: fresh workbook (no source) with comments and a table emits self-consistent rels") {
+    val table = TableSpec.unsafeFromColumnNames(
+      name = "Data",
+      displayName = "Data",
+      range = CellRange(ref"A1", ref"C10"),
+      columnNames = Vector("Name", "Value", "Status")
+    )
+    val sheet = Sheet("Sheet1")
+      .withTable(table)
+      .put(ref"A1", CellValue.Text("Name"))
+      .put(ref"B1", CellValue.Text("Value"))
+      .put(ref"C1", CellValue.Text("Status"))
+      .put(ref"E1", CellValue.Text("note"))
+      .comment(ref"E1", com.tjclp.xl.cells.Comment.plainText("c", Some("tester")))
+    val bytes = XlsxWriter.writeToBytes(Workbook(Vector(sheet))).getOrElse(fail("Write failed"))
+    // rId1 comments / rId2 vmlDrawing / rId3 table — and the sheet names exactly those
+    val findings = com.tjclp.xl.ooxml.lint.WorkbookLint
+      .lintBytes(bytes)
+      .getOrElse(fail("lint must not error"))
+      .filter(f =>
+        Set(
+          com.tjclp.xl.ooxml.lint.LintCategory.UnresolvedRelId,
+          com.tjclp.xl.ooxml.lint.LintCategory.WrongRelType
+        ).contains(f.category)
+      )
+    assert(findings.isEmpty, findings.mkString("\n"))
+    val sheetXml = new String(zipEntry(bytes, "xl/worksheets/sheet1.xml"), "UTF-8")
+    assert(sheetXml.contains("""<legacyDrawing r:id="rId2"/>"""), sheetXml)
+    assert(sheetXml.contains("""<tablePart r:id="rId3"/>"""), sheetXml)
+    val reread = XlsxReader.readFromBytes(bytes).getOrElse(fail("Read failed"))
+    val rereadSheet = reread.sheets.headOption.getOrElse(fail("Expected at least one sheet"))
+    assert(rereadSheet.getTable("Data").isDefined)
+    assertEquals(rereadSheet.comments.size, 1)
+  }
+
   test("ContentTypes includes table overrides when tables present") {
     val table = TableSpec.unsafeFromColumnNames(
       name = "Table1",
@@ -1272,5 +1318,124 @@ class TableSpec extends FunSuite:
     assertEquals(
       sheet.readRows[Order](table.dataRange),
       Right(orders): Either[RowCodecError, Vector[Order]]
+    )
+    // GH-595: Excel's Format-as-Table puts filter buttons on the header row — so does putTable
+    assertEquals(table.autoFilter, Some(TableAutoFilter(enabled = true)))
+    val tableXml = new String(zipEntry(bytes, "xl/tables/table1.xml"), "UTF-8")
+    assert(tableXml.contains("""<autoFilter ref="B2:F4"/>"""), tableXml)
+  }
+
+  // ========================================
+  // Category G: deterministic table parts (GH-595)
+  // ========================================
+
+  private def filteredTable(
+    name: String,
+    range: CellRange,
+    columnNames: Vector[String]
+  ): com.tjclp.xl.tables.TableSpec =
+    TableSpec
+      .create(
+        name = name,
+        displayName = name,
+        range = range,
+        columns = columnNames.zipWithIndex.map { case (n, i) => TableColumn(i.toLong + 1, n) },
+        autoFilter = Some(TableAutoFilter(enabled = true))
+      )
+      .fold(err => fail(s"table: $err"), identity)
+
+  /** `bytes` with the entry `name` replaced by `content` (a zip-level surgery, order kept). */
+  private def replaceEntry(bytes: Array[Byte], name: String, content: String): Array[Byte] =
+    val in = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))
+    val baos = new java.io.ByteArrayOutputStream()
+    val out = new java.util.zip.ZipOutputStream(baos)
+    try
+      LazyList.continually(in.getNextEntry).takeWhile(_ != null).foreach { entry =>
+        val data =
+          if entry.getName == name then content.getBytes("UTF-8") else in.readAllBytes()
+        out.putNextEntry(new java.util.zip.ZipEntry(entry.getName))
+        out.write(data)
+        out.closeEntry()
+      }
+    finally
+      out.close()
+      in.close()
+    baos.toByteArray
+
+  test("GH-595: writing a workbook with an autoFiltered table twice is byte-identical") {
+    val sheet = Sheet("Data")
+      .put(ref"A1", CellValue.Text("Name"))
+      .put(ref"B1", CellValue.Text("Val"))
+      .put(ref"A2", CellValue.Text("x"))
+      .put(ref"B2", CellValue.Number(1))
+      .withTable(filteredTable("Filtered", CellRange(ref"A1", ref"B3"), Vector("Name", "Val")))
+    val wb = Workbook(Vector(sheet))
+    val first = XlsxWriter.writeToBytes(wb).getOrElse(fail("Write failed"))
+    val second = XlsxWriter.writeToBytes(wb).getOrElse(fail("Write failed"))
+    val tableXml = new String(zipEntry(first, "xl/tables/table1.xml"), "UTF-8")
+    assertEquals(new String(zipEntry(second, "xl/tables/table1.xml"), "UTF-8"), tableXml)
+    assert(tableXml.contains("""<autoFilter ref="A1:B3"/>"""), tableXml)
+    // no source part → no revision uid is fabricated (Excel stamps its own on the next save)
+    assert(!tableXml.contains("xr:uid"), tableXml)
+    assert(!tableXml.contains("xr3:uid"), tableXml)
+    // the namespace declarations Excel expects stay (attribute-order tests pin them)
+    assert(tableXml.contains("""mc:Ignorable="xr xr3""""), tableXml)
+    assert(java.util.Arrays.equals(first, second), "the whole archive must be byte-identical")
+  }
+
+  test("GH-595: an Excel-authored table keeps its xr:uid / autoFilter / column uids over an edit") {
+    val tableUid = "{5A4C3C1E-1111-4000-8000-000000000001}"
+    val autoFilterUid = "{5A4C3C1E-2222-4000-8000-000000000002}"
+    val columnUids =
+      Vector("{5A4C3C1E-3333-4000-8000-000000000003}", "{5A4C3C1E-4444-4000-8000-000000000004}")
+    val spec = filteredTable("Excel1", CellRange(ref"A1", ref"B10"), Vector("Col1", "Col2"))
+    val sheet = Sheet("Data")
+      .put(ref"A1", CellValue.Text("Col1"))
+      .put(ref"B1", CellValue.Text("Col2"))
+      .withTable(spec)
+    val fresh = XlsxWriter.writeToBytes(Workbook(Vector(sheet))).getOrElse(fail("Write failed"))
+    // the part as Excel writes it: every revision uid stamped
+    val excelTable = OoxmlTable(
+      id = 1L,
+      name = "Excel1",
+      displayName = "Excel1",
+      ref = CellRange(ref"A1", ref"B10"),
+      headerRowCount = 1,
+      totalsRowCount = 0,
+      tableUid = Some(tableUid),
+      columns = Vector(
+        OoxmlTableColumn(1, "Col1", Some(columnUids(0))),
+        OoxmlTableColumn(2, "Col2", Some(columnUids(1)))
+      ),
+      autoFilter = Some(CellRange(ref"A1", ref"B10")),
+      autoFilterUid = Some(autoFilterUid),
+      styleInfo = Some(OoxmlTableStyleInfo("TableStyleMedium2", false, false, true, false))
+    )
+    val source =
+      replaceEntry(fresh, "xl/tables/table1.xml", XmlUtil.compact(OoxmlTable.toXml(excelTable)))
+    val srcTable = OoxmlTable
+      .fromXml(XML.loadString(new String(zipEntry(source, "xl/tables/table1.xml"), "UTF-8")))
+      .fold(err => fail(s"source table: $err"), identity)
+    assertEquals(srcTable.tableUid, Some(tableUid))
+    val wb = XlsxReader.readFromBytes(source).getOrElse(fail("Read failed"))
+    val edited = wb.put(wb.sheets(0).put(ref"A2", CellValue.Text("edited")))
+    val out = XlsxWriter.writeToBytes(edited).getOrElse(fail("Write failed"))
+    val outTable = OoxmlTable
+      .fromXml(XML.loadString(new String(zipEntry(out, "xl/tables/table1.xml"), "UTF-8")))
+      .fold(err => fail(s"output table: $err"), identity)
+    assertEquals(outTable.tableUid, Some(tableUid), "table xr:uid must survive")
+    assertEquals(outTable.autoFilterUid, Some(autoFilterUid), "autoFilter xr:uid must survive")
+    assertEquals(
+      outTable.columns.map(_.uid),
+      columnUids.map(Some(_)),
+      "column xr3:uid must survive"
+    )
+    assertEquals(outTable.columns.map(_.name), Vector("Col1", "Col2"))
+    // and the edit landed
+    val reread = XlsxReader.readFromBytes(out).getOrElse(fail("Read failed"))
+    assertEquals(reread.sheets(0)(ref"A2").value, CellValue.Text("edited"))
+    assertEquals(
+      reread.sheets(0).getTable("Excel1").map(_.autoFilter),
+      Some(Some(TableAutoFilter(true)))
     )
   }

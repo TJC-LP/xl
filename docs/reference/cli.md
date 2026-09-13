@@ -1759,14 +1759,15 @@ identical (pinned by the lint parity suite).
   `FormulaStorage.bareFutureCalls` runs the same scanner as the storage mapping, so the lint flags
   exactly the text xl's writer would still prefix. One finding per part with the bare names (a
   half-prefixed `LET` is listed as `LET`), the first five sites and the total count.
-  xl's own writers emit the prefix for every slot they regenerate, but a slot a write leaves
-  untouched is copied verbatim, and a CF block, DV container or name table is regenerated only
-  when its parsed model no longer equals the source. To heal one, add or change a rule, validation
-  or name in that part; re-entering the same formula compares equal to the source (bare and
-  prefixed text parse to the same model) and is copied through bare — `xl name add` with the same
-  text does not heal, `cf add` appends a rule and therefore does. A cell heals on any in-memory
-  edit of its sheet; an untouched worksheet and every cell a `--stream` write does not patch are
-  copied verbatim. See [LIMITATIONS.md](../LIMITATIONS.md)
+  xl's own writers emit the prefix for every slot they regenerate, and the writer's clean-compare
+  gates treat bare text as dirty (the same `bareFutureCalls` rule), so any in-memory write that
+  regenerates the worksheet heals its cells, CF blocks and DV container, and any in-memory write
+  at all heals `<definedName>` bodies (`workbook.xml` is regenerated on every non-clean write) —
+  a `put` on the sheet is enough, no rule, validation or name needs re-authoring. Not healed: a
+  slot inside an unmodeled rule or validation (an `iconSet`/`timePeriod` rule, an entry with
+  foreign attributes — re-emitted verbatim as captured), an x14 `<xm:f>`, an untouched worksheet
+  (copied verbatim), and every slot a `--stream` write does not patch. See
+  [LIMITATIONS.md](../LIMITATIONS.md)
 
 **Exit codes**: `0` no findings · `1` findings reported · `3` error (unreadable file, malformed
 core part) · `2` usage (no file, or a file given both ways) — errors go to stderr with a `code:`
