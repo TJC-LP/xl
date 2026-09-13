@@ -34,6 +34,17 @@ class TableSpec extends FunSuite:
       .sorted(java.util.Comparator.reverseOrder())
       .forEach(Files.delete)
 
+  /** The bytes of one entry of an in-memory xlsx (fails the test when absent). */
+  private def zipEntry(bytes: Array[Byte], name: String): Array[Byte] =
+    val zis = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))
+    try
+      LazyList
+        .continually(zis.getNextEntry)
+        .takeWhile(_ != null)
+        .collectFirst { case e if e.getName == name => zis.readAllBytes() }
+        .getOrElse(fail(s"zip entry $name not found"))
+    finally zis.close()
+
   // ========================================
   // Category A: XML Parsing (10 tests)
   // ========================================
@@ -898,6 +909,41 @@ class TableSpec extends FunSuite:
     // Cells preserved
     assertEquals(rereadSheet(ref"A1").value, CellValue.Text("Name"))
     assertEquals(rereadSheet(ref"B2").value, CellValue.Number(BigDecimal(100)))
+  }
+
+  test("GH-557: fresh workbook (no source) with comments and a table emits self-consistent rels") {
+    val table = TableSpec.unsafeFromColumnNames(
+      name = "Data",
+      displayName = "Data",
+      range = CellRange(ref"A1", ref"C10"),
+      columnNames = Vector("Name", "Value", "Status")
+    )
+    val sheet = Sheet("Sheet1")
+      .withTable(table)
+      .put(ref"A1", CellValue.Text("Name"))
+      .put(ref"B1", CellValue.Text("Value"))
+      .put(ref"C1", CellValue.Text("Status"))
+      .put(ref"E1", CellValue.Text("note"))
+      .comment(ref"E1", com.tjclp.xl.cells.Comment.plainText("c", Some("tester")))
+    val bytes = XlsxWriter.writeToBytes(Workbook(Vector(sheet))).getOrElse(fail("Write failed"))
+    // rId1 comments / rId2 vmlDrawing / rId3 table — and the sheet names exactly those
+    val findings = com.tjclp.xl.ooxml.lint.WorkbookLint
+      .lintBytes(bytes)
+      .getOrElse(fail("lint must not error"))
+      .filter(f =>
+        Set(
+          com.tjclp.xl.ooxml.lint.LintCategory.UnresolvedRelId,
+          com.tjclp.xl.ooxml.lint.LintCategory.WrongRelType
+        ).contains(f.category)
+      )
+    assert(findings.isEmpty, findings.mkString("\n"))
+    val sheetXml = new String(zipEntry(bytes, "xl/worksheets/sheet1.xml"), "UTF-8")
+    assert(sheetXml.contains("""<legacyDrawing r:id="rId2"/>"""), sheetXml)
+    assert(sheetXml.contains("""<tablePart r:id="rId3"/>"""), sheetXml)
+    val reread = XlsxReader.readFromBytes(bytes).getOrElse(fail("Read failed"))
+    val rereadSheet = reread.sheets.headOption.getOrElse(fail("Expected at least one sheet"))
+    assert(rereadSheet.getTable("Data").isDefined)
+    assertEquals(rereadSheet.comments.size, 1)
   }
 
   test("ContentTypes includes table overrides when tables present") {
