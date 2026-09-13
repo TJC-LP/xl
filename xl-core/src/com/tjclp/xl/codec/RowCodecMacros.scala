@@ -7,15 +7,18 @@ object RowCodecMacros:
 
   /**
    * One entry per field of `A` in declaration order: `Some(text)` for a field annotated
-   * `@header(text)`, `None` otherwise — aligned with `MirroredElemLabels`. Compilation aborts for a
-   * `@header` whose argument is not a string literal or is blank, and when two fields end up with
-   * the same header (a field's default header being its name).
+   * `@header(text)`, `None` otherwise — aligned with `MirroredElemLabels`. `A` is dealiased first,
+   * as `Mirror.ProductOf` does, so a codec derived through a type alias sees the class's
+   * annotations. Compilation aborts for a `@header` whose argument is not a string literal or is
+   * blank, and when two fields end up with the same header (a field's default header being its
+   * name).
    */
   inline def headerOverrides[A]: List[Option[String]] = ${ headerOverridesImpl[A] }
 
   private def headerOverridesImpl[A: Type](using Quotes): Expr[List[Option[String]]] =
     import quotes.reflect.*
-    val record = TypeRepr.of[A].typeSymbol
+    // Dealiased like Mirror.ProductOf: `type DealAlias = Deal` must read Deal's constructor
+    val record = TypeRepr.of[A].dealias.typeSymbol
     val annotationClass = TypeRepr.of[header].typeSymbol
     // The clause Mirror.ProductOf reads: the first parameter clause holding terms — a generic
     // record's leading type-parameter clause is skipped, later clauses are not fields.

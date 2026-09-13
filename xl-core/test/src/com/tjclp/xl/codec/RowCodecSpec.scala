@@ -90,6 +90,9 @@ class RowCodecSpec extends ScalaCheckSuite:
   final case class DealPlain(portfolioCo: String, rev: BigDecimal, ebitda: Option[BigDecimal])
       derives RowCodec
 
+  /** [[Deal]] behind a type alias: the annotations live on the class, not on the alias symbol. */
+  type DealAlias = Deal
+
   private val row1 = Row.from1(1)
 
   private val genOrder: Gen[Order] =
@@ -646,6 +649,18 @@ class RowCodecSpec extends ScalaCheckSuite:
     assertEquals(RowCodec[Deal].width, 3)
     assertEquals(RowCodec[DealPlain].headers, Vector("portfolioCo", "rev", "ebitda"))
     assertEquals(RowCodec[Order].headers, RowCodec[Order].fields)
+  }
+
+  test("derived through a type alias keeps @header") {
+    // Mirror.ProductOf dealiases; the annotation read must too, or the alias derives field names
+    val viaAlias = RowCodec.derived[DealAlias]
+    assertEquals(viaAlias.headers, RowCodec[Deal].headers)
+    assertEquals(viaAlias.fields, RowCodec[Deal].fields)
+    // Without the dealias the alias codec derives field names and the tracker is HeaderNotFound
+    assertEquals(
+      trackerSheet.readRowsByHeader[Deal](row1)(using viaAlias),
+      Right(trackerDeals): Either[RowCodecError, Vector[Deal]]
+    )
   }
 
   property(

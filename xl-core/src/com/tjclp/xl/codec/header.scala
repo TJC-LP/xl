@@ -5,11 +5,11 @@ import scala.annotation.StaticAnnotation
 /**
  * The header text of a record field (GH-614): what `putRowsWithHeader`/`putTable` write above the
  * column and what `readRowsByHeader` matches, when the sheet's header is not the field's name —
- * `Rev ($M)`, `Portfolio Co.`, anything an identifier cannot spell. The field keeps its name in
+ * `Coupon (%)`, `Portfolio Co.`, anything an identifier cannot spell. The field keeps its name in
  * [[RowCodec.fields]] and in every [[RowCodecError]].
  *
  * {{{
- * final case class Deal(@header("Portfolio Co.") portfolioCo: String, @header("Rev ($M)") rev: BigDecimal)
+ * final case class Deal(@header("Portfolio Co.") portfolioCo: String, @header("Rev (USD m)") rev: BigDecimal)
  *   derives RowCodec
  * }}}
  *

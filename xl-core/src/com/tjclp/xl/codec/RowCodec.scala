@@ -25,7 +25,7 @@ import com.tjclp.xl.styles.CellStyle
  * sheet.putRowsWithHeader(ref"A1", orders)   // header row + one row per record
  * sheet.readRowsByHeader[Order](Row.from1(1)) // Either[RowCodecError, Vector[Order]]
  *
- * final case class Deal(@header("Portfolio Co.") portfolioCo: String, @header("Rev ($M)") rev: BigDecimal)
+ * final case class Deal(@header("Portfolio Co.") portfolioCo: String, @header("Rev (USD m)") rev: BigDecimal)
  *   derives RowCodec                          // headers no identifier can spell
  * }}}
  *
@@ -61,7 +61,7 @@ trait RowCodec[A]:
    * This codec with some headers renamed — the runtime twin of `@header`, for a header known only
    * when the script runs. `overrides` maps a field name (as spelled in `fields`, exactly) to its
    * header and layers on the current [[headers]], so it composes with the annotation and with an
-   * earlier `withHeaders`. Refused as [[XLError.InvalidArgument]] (`RowCodec.withHeaders`): a key
+   * earlier `withHeaders`. Refused as `XLError.InvalidArgument` (`RowCodec.withHeaders`): a key
    * that is not a field, a blank header, or two fields left with the same header — that would bind
    * both to one column on read and fail `putTable` late.
    *
