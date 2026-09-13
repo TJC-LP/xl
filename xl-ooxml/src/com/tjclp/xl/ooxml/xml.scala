@@ -193,7 +193,7 @@ object XmlUtil:
       case el: Elem =>
         sb.append('<')
         el.nameToString(sb)
-        if el.attributes ne null then el.attributes.buildString(sb)
+        serializeAttributes(el.attributes, sb)
         el.scope.buildString(sb, pscope)
         if el.child.isEmpty && el.minimizeEmpty then sb.append("/>")
         else
@@ -203,6 +203,26 @@ object XmlUtil:
           el.nameToString(sb)
           sb.append('>')
       case other => sb.append(other.toString)
+
+  /**
+   * The attributes of an element as scala.xml's `MetaData.buildString` renders them —
+   * ` key="value"` per attribute in list order, a prefixed key as `pre:key`, a null-valued (absent)
+   * attribute skipped — except that the value goes through [[escapeAttr]] (GH-649): scala.xml's
+   * `Utility.escape` leaves TAB/LF/CR raw in attribute values, which attribute-value normalization
+   * turns into spaces on the next parse. An attribute value is a node sequence: text and atoms are
+   * escaped, entity references and other special nodes render themselves, comments are stripped.
+   */
+  private def serializeAttributes(md: MetaData, sb: StringBuilder): Unit =
+    md.iterator.foreach { m =>
+      sb.append(' ').append(m.prefixedKey).append("=\"")
+      m.value.foreach {
+        case _: Comment => ()
+        case a: Atom[?] => escapeAttr(a.data.toString, sb)
+        case s: SpecialNode => s.buildString(sb)
+        case other => escapeAttr(other.text, sb)
+      }
+      sb.append('"')
+    }
 
   /** scala.xml's `sequenceToXML`: a run made only of non-Text atoms is space-joined. */
   private def serializeChildren(
@@ -222,15 +242,66 @@ object XmlUtil:
    * Text-content escape (GH-611): `&`, `<`, `>` only — `"` and `'` verbatim. Characters below
    * U+0020 other than tab/LF/CR are XML 1.0-illegal and dropped, matching scala.xml's `escape`.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def escapeText(text: String, sb: StringBuilder): StringBuilder =
-    text.iterator.foldLeft(sb) { (acc, c) =>
-      c match
-        case '&' => acc.append("&amp;")
-        case '<' => acc.append("&lt;")
-        case '>' => acc.append("&gt;")
-        case c if c >= ' ' || c == '\n' || c == '\r' || c == '\t' => acc.append(c)
-        case _ => acc
-    }
+    var i = 0
+    var clean = true
+    while clean && i < text.length do
+      val c = text.charAt(i)
+      clean = (c >= ' ' && c != '&' && c != '<' && c != '>') || c == '\n' || c == '\r' || c == '\t'
+      i += 1
+    if clean then sb.append(text)
+    else
+      var j = 0
+      while j < text.length do
+        text.charAt(j) match
+          case '&' => sb.append("&amp;")
+          case '<' => sb.append("&lt;")
+          case '>' => sb.append("&gt;")
+          case c if c >= ' ' || c == '\n' || c == '\r' || c == '\t' => sb.append(c)
+          case _ => ()
+        j += 1
+      sb
+
+  /**
+   * Attribute-value escape (GH-649): `&`, `<`, `>` and `"` as the predefined entities, and TAB, LF
+   * and CR as the character references `&#9;`, `&#10;`, `&#13;`. XML 1.0 §3.3.3 attribute-value
+   * normalization turns the raw characters into spaces on every re-parse, so a raw newline in a
+   * data-validation prompt, a defined-name comment or a table column name came back as `l1 l2`;
+   * Excel and openpyxl write the references. `'` stays verbatim; other characters below U+0020 are
+   * XML 1.0-illegal and dropped (GH-237 parity with [[escapeText]]). Both writers — the scala-xml
+   * [[serialize]] and the StAX backend's tag writer — spell attribute values through here, so their
+   * bytes agree by construction. The fast path appends the value untouched when nothing needs
+   * escaping: attribute values are the hot path of the cell emitters (`r`, `s`, `t`).
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def escapeAttr(value: String, sb: StringBuilder): StringBuilder =
+    var i = 0
+    var clean = true
+    while clean && i < value.length do
+      val c = value.charAt(i)
+      clean = c >= ' ' && c != '&' && c != '<' && c != '>' && c != '"'
+      i += 1
+    if clean then sb.append(value)
+    else
+      var j = 0
+      while j < value.length do
+        value.charAt(j) match
+          case '&' => sb.append("&amp;")
+          case '<' => sb.append("&lt;")
+          case '>' => sb.append("&gt;")
+          case '"' => sb.append("&quot;")
+          case '\t' => sb.append("&#9;")
+          case '\n' => sb.append("&#10;")
+          case '\r' => sb.append("&#13;")
+          case c if c >= ' ' => sb.append(c)
+          case _ => ()
+        j += 1
+      sb
+
+  /** [[escapeAttr]] into a fresh string. */
+  def escapeAttr(value: String): String =
+    escapeAttr(value, new StringBuilder(value.length + 16)).toString
 
   /** Get required attribute value */
   def getAttr(elem: Elem, name: String): Either[String, String] =
@@ -375,6 +446,27 @@ object XmlUtil:
         else if c == '_' && isXstringEscapeAt(s, j) then sb.append("_x005F_")
         else sb.append(c)
         j += 1
+      sb.toString
+
+  /**
+   * The ST_Xstring guard alone (GH-649): a LITERAL `_xHHHH_` in attribute text protects its leading
+   * underscore as `_x005F_` so [[decodeXstring]] hands it back unchanged, while TAB/LF/CR are left
+   * to the writers' attribute escaping ([[escapeAttr]]: `&#9;`/`&#10;`/`&#13;`, the spelling Excel
+   * and openpyxl use) instead of the GH-429 `_x0009_`/`_x000A_`/`_x000D_` of [[escapeXstringAttr]],
+   * which the reader keeps decoding for files written that way.
+   *
+   * Law: `decodeXstring(protectXstringLiterals(s)) == s`. Fast path returns the input unchanged.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def protectXstringLiterals(s: String): String =
+    if s.indexOf("_x") < 0 then s
+    else
+      val sb = new java.lang.StringBuilder(s.length + 8)
+      var i = 0
+      while i < s.length do
+        val c = s.charAt(i)
+        if c == '_' && isXstringEscapeAt(s, i) then sb.append("_x005F_") else sb.append(c)
+        i += 1
       sb.toString
 
   /**

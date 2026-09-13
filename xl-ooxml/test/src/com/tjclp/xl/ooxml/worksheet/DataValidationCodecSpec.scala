@@ -30,7 +30,11 @@ class DataValidationCodecSpec extends ScalaCheckSuite:
     XmlSecurity.parseSafe(s, "test").fold(e => fail(s"parse failed: ${e.message}"), identity)
 
   private def roundTrip(dvs: Vector[DataValidation]): Vector[DataValidation] =
-    DataValidationCodec.parseAll(DataValidationCodec.toElem(dvs, None).map(e => xml(e.toString)))
+    // through the writer's real serialization (XmlUtil.compact), not scala.xml's toString — the
+    // attribute escaping that keeps a multiline prompt (GH-649) lives there
+    DataValidationCodec.parseAll(
+      DataValidationCodec.toElem(dvs, None).map(e => xml(XmlUtil.compact(e)))
+    )
 
   private def typedList(
     range: String,
@@ -157,7 +161,7 @@ class DataValidationCodecSpec extends ScalaCheckSuite:
     }
   }
 
-  test("GH-429: a multiline prompt round-trips through _x000A_ (attr normalization survives)") {
+  test("GH-649: a multiline prompt is written with character references and round-trips") {
     val dv = DataValidation.Rules(
       Vector(ref"A1:A2": CellRange),
       DvKind.List("\"a,b\""),
@@ -168,9 +172,50 @@ class DataValidationCodecSpec extends ScalaCheckSuite:
       )
     )
     val emitted = DataValidationCodec.toElem(Vector(dv), None).getOrElse(fail("no container"))
-    assert(emitted.toString.contains("_x000A_"), emitted.toString)
-    assert(emitted.toString.contains("_x0009_"), emitted.toString)
+    val wire = XmlUtil.compact(emitted)
+    // Excel's and openpyxl's spelling of a line break in an attribute — not GH-429's `_x000A_`
+    assert(wire.contains("""prompt="line1&#10;line2&#9;and tab""""), wire)
+    assert(!wire.contains("_x000A_") && !wire.contains("_x0009_"), wire)
     assertEquals(roundTrip(Vector(dv)), Vector[DataValidation](dv))
+  }
+
+  test("GH-649: prompts written by 0.16-0.22 in the GH-429 `_x000A_` spelling still decode") {
+    val container = xml(
+      """<dataValidations count="1"><dataValidation type="list" showInputMessage="1" promptTitle="Two_x000A_lines" prompt="line1_x000A_line2_x0009_tab_x000D_cr" sqref="A1"><formula1>"a,b"</formula1></dataValidation></dataValidations>"""
+    )
+    DataValidationCodec.parseAll(Some(container)) match
+      case Vector(r: DataValidation.Rules) =>
+        assertEquals(r.messages.prompt, Some("line1\nline2\ttab\rcr"))
+        assertEquals(r.messages.promptTitle, Some("Two\nlines"))
+      case other => fail(s"expected one typed rule: $other")
+  }
+
+  test("GH-649: a literal _xHHHH_ in a prompt is protected as _x005F_ and decodes back") {
+    val dv = DataValidation.Rules(
+      Vector(ref"A1:A1": CellRange),
+      DvKind.List("\"a\""),
+      messages = DvMessages(showInputMessage = true, prompt = Some("code _x000A_ literal"))
+    )
+    val wire =
+      XmlUtil.compact(DataValidationCodec.toElem(Vector(dv), None).getOrElse(fail("no container")))
+    assert(wire.contains("_x005F_x000A_"), wire)
+    assertEquals(roundTrip(Vector(dv)), Vector[DataValidation](dv))
+  }
+
+  property("GH-649: decodeXstring . protectXstringLiterals = id") {
+    forAll { (s: String) =>
+      XmlUtil.decodeXstring(XmlUtil.protectXstringLiterals(s)) == s
+    }
+  }
+
+  property("GH-649: protectXstringLiterals leaves TAB/LF/CR to the attribute writer") {
+    forAll(genDvText) { s =>
+      val p = XmlUtil.protectXstringLiterals(s)
+      XmlUtil.decodeXstring(p) == s &&
+      p.count(_ == '\n') == s.count(_ == '\n') &&
+      p.count(_ == '\t') == s.count(_ == '\t') &&
+      p.count(_ == '\r') == s.count(_ == '\r')
+    }
   }
 
   property("GH-429: decodeXstring . escapeXstringAttr = id") {

@@ -511,6 +511,28 @@ class TableSpec extends FunSuite:
     assertEquals(reparsed.columns.map(_.name), table.columns.map(_.name))
   }
 
+  test("GH-649: round-trip through the bytes: a column header with a line break (Alt+Enter)") {
+    val table = OoxmlTable(
+      id = 7L,
+      name = "Table7",
+      displayName = "Multiline",
+      ref = CellRange(ref"A1", ref"B10"),
+      headerRowCount = 1,
+      totalsRowCount = 0,
+      columns = Vector(OoxmlTableColumn(1, "Line1\nLine2"), OoxmlTableColumn(2, "Tab\tbed")),
+      autoFilter = None,
+      styleInfo = None
+    )
+    // the in-memory Elem keeps the newline trivially; the serialized bytes are where it was lost
+    val bytes = XmlUtil.compact(OoxmlTable.toXml(table))
+    assert(bytes.contains("""name="Line1&#10;Line2""""), bytes)
+    assert(bytes.contains("""name="Tab&#9;bed""""), bytes)
+    val reparsed = OoxmlTable
+      .fromXml(XmlSecurity.parseSafe(bytes, "table1.xml").fold(e => fail(e.message), identity))
+      .fold(err => fail(s"Expected Right: $err"), identity)
+    assertEquals(reparsed.columns.map(_.name), Vector("Line1\nLine2", "Tab\tbed"))
+  }
+
   test("round-trip: large table (1000 columns)") {
     val columns = (1 to 1000).map { i =>
       OoxmlTableColumn(i.toLong, s"Column$i")
