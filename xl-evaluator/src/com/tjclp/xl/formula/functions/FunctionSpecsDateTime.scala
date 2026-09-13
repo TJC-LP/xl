@@ -282,24 +282,13 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     }
 
   val yearfrac: FunctionSpec[BigDecimal] { type Args = DatePairOptBasis } =
+    // GH-653: rendered by the default slot printer like every other function. The earlier custom
+    // renderFn dropped an explicit basis 0 (`YEARFRAC(a, b, 0)` reprinted as `YEARFRAC(a, b)`, so
+    // parse ∘ print was not the identity and a drag rewrote the user's text) and spelled an empty
+    // slot as `a, )` instead of `a,)`.
     FunctionSpec.simple[BigDecimal, DatePairOptBasis](
       "YEARFRAC",
       Arity.Range(2, 3),
-      renderFn = Some { (args, printer) =>
-        val (startDateExpr, endDateExpr, basisOpt) = args
-        val rendered = basisOpt match
-          case None =>
-            List(printer.expr(startDateExpr), printer.expr(endDateExpr))
-          case Some(TExpr.Lit(0)) =>
-            List(printer.expr(startDateExpr), printer.expr(endDateExpr))
-          case Some(basisExpr) =>
-            List(
-              printer.expr(startDateExpr),
-              printer.expr(endDateExpr),
-              printer.expr(basisExpr)
-            )
-        s"YEARFRAC(${rendered.mkString(printer.separator)})"
-      },
       flags = FunctionFlags(returnsNumeric = true)
     ) { (args, ctx) =>
       val (startDateExpr, endDateExpr, basisOpt) = args
