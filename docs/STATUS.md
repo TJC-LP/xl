@@ -298,7 +298,7 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
 - ⚠️ Print settings, page setup — odd + even/first header/footer, margins, print area, repeat rows (#259, #266), and `fitToPage` tri-state (#284); shipped across 0.11.0–0.12.1
 - ✅ Conditional formatting (0.12.1, #136): typed `Sheet.conditionalFormat` rules (cellIs/expression/colorScale/dataBar/top10/text) + `Dxf` differential formats; library API (no CLI yet) — see LIMITATIONS §10
 - ❌ Data validation (preserved through edits, but no authoring API yet)
-- ✅ Named ranges (authoring shipped in 0.10.0: `DefinedName` serialization + CLI `name add/rm`)
+- ✅ Named ranges (authoring shipped in 0.10.0: `DefinedName` serialization + CLI `name add/rm`; sheet-scoped via `withDefinedName(name, refersTo, scope)` / `-s`, case-insensitive replace and remove — #462, #538)
 
 ### Streaming I/O Limitations
 

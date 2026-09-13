@@ -1091,6 +1091,7 @@ object WriteCommands:
           _: BatchParser.BatchOp.ColShow | _: BatchParser.BatchOp.RowHide |
           _: BatchParser.BatchOp.RowShow | _: BatchParser.BatchOp.AutoFit |
           _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
+          _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName |
           _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
           _: BatchParser.BatchOp.Hyperlink | _: BatchParser.BatchOp.AddChart |
           _: BatchParser.BatchOp.SetSheetView | _: BatchParser.BatchOp.SetTabColor |

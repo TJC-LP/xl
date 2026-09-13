@@ -364,7 +364,7 @@ class BatchPutSpec extends FunSuite:
     val error = parseError("""[{"op":"frobnicate","ref":"A1"}]""")
     assertEquals(error.code, ErrorCode.BATCH_OP_UNKNOWN)
     assert(!error.message.contains("Did you mean"), error.message)
-    assert(error.message.endsWith("page-setup, header-footer, cf"), error.message)
+    assert(error.message.endsWith("header-footer, cf, define-name, remove-name"), error.message)
     assertEquals(error.candidates, Vector.empty)
   }
 

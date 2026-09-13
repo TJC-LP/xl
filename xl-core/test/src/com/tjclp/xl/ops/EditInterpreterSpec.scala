@@ -679,6 +679,43 @@ class EditInterpreterSpec extends FunSuite:
     )
   }
 
+  test(
+    "GH-538/GH-462: define-name replaces case-variants within its scope; remove-name matches " +
+      "case-insensitively and offers same-scope candidates"
+  ) {
+    val wb = apply(
+      baseWorkbook,
+      Edit.DefineName("Rate", "0.08", Some(other)),
+      Edit.DefineName("RATE", "0.09", Some(other)),
+      Edit.DefineName("rate", "0.10", None)
+    ).fold(e => fail(e.message), identity)
+    assertEquals(
+      wb.metadata.definedNames.map(n => (n.name, n.formula, n.localSheetId)),
+      Vector(("Total", "Data!$B$2:$B$4", None), ("RATE", "0.09", Some(1)), ("rate", "0.10", None))
+    )
+    val removed = apply(wb, Edit.RemoveName("total", None), Edit.RemoveName("Rate", Some(other)))
+      .fold(e => fail(e.message), identity)
+    assertEquals(removed.metadata.definedNames.map(_.name), Vector("rate"))
+    // Only the scoped Rate exists: the workbook-scoped removal is refused, and its candidates are
+    // the workbook-scoped names — never the scoped entry this edit cannot remove.
+    val scopedOnly = apply(baseWorkbook, Edit.DefineName("Rate", "0.08", Some(other)))
+      .fold(e => fail(e.message), identity)
+    assertEquals(
+      failure(scopedOnly, Edit.RemoveName("Rate", None)).root,
+      XLError.NameNotFound("Rate", Vector("Total"))
+    )
+    // The scope itself is matched case-insensitively (the Workbook rule, shared with the CLI).
+    assertEquals(
+      apply(baseWorkbook, Edit.DefineName("Local", "1", Some(SheetName.unsafe("OTHER"))))
+        .map(_.metadata.definedNames.map(_.localSheetId)),
+      Right(Vector(None, Some(1)))
+    )
+    assertEquals(
+      failure(baseWorkbook, Edit.DefineName("Local", "1", Some(missing))).root,
+      XLError.SheetNotFound(missing.value, Vector("Data", "Other"))
+    )
+  }
+
   // ========== the entry points: wb.edit / sheet.edit ==========
 
   test(

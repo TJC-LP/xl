@@ -272,12 +272,12 @@ class SchemaSpec extends CatsEffectSuite:
     assertEquals(json("functions"), FunctionDoc.toJson(FunctionDoc.all))
   }
 
-  test("batchOps is OpRegistry.jsonSchema with one oneOf entry per op (32)") {
+  test("batchOps is OpRegistry.jsonSchema with one oneOf entry per op (34)") {
     val json = Schema.json(version)
     assertEquals(json("batchOps"), OpRegistry.jsonSchema(version))
     val oneOf = json("batchOps")("items")("oneOf").arr
     assertEquals(oneOf.size, OpRegistry.all.size)
-    assertEquals(oneOf.size, 32)
+    assertEquals(oneOf.size, 34)
     assertEquals(oneOf.map(_("title").str).toVector, OpRegistry.all.map(_.name))
   }
 
@@ -331,7 +331,7 @@ class SchemaSpec extends CatsEffectSuite:
       assertEquals(schema, OpRegistry.jsonSchema(version))
       assertEquals(schema("$schema"), ujson.Str("https://json-schema.org/draft/2020-12/schema"))
       assertEquals(schema("type"), ujson.Str("array"))
-      assertEquals(schema("items")("oneOf").arr.size, 32)
+      assertEquals(schema("items")("oneOf").arr.size, 34)
       assertEquals(
         bare.stdout,
         ujson.write(schema, indent = 2) + "\n",

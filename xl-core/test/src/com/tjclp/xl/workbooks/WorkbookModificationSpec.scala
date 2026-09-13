@@ -43,6 +43,20 @@ class WorkbookModificationSpec extends FunSuite:
     assertEquals(tracker.deletedSheets, Set(1))
   }
 
+  test("GH-462: the scoped withDefinedName / removeDefinedName mark metadata modified") {
+    val other = SheetName.unsafe("Other")
+    val wb = workbook.copy(sheets = Vector(baseSheet, Sheet("Other")))
+    def modifiedMetadata(result: XLResult[Workbook]): Boolean =
+      result
+        .fold(err => fail(s"scoped name edit failed: $err"), identity)
+        .sourceContext
+        .fold(fail("Missing source context"))(identity)
+        .modificationTracker
+        .modifiedMetadata
+    assert(modifiedMetadata(wb.withDefinedName("Local", "Other!$A$1", other)))
+    assert(modifiedMetadata(wb.removeDefinedName("Local", other)))
+  }
+
   test("reorder marks reorder flag without marking sheets modified") {
     val sheet2 = Sheet("Sheet2")
     val wb = workbook.copy(sheets = Vector(baseSheet, sheet2))

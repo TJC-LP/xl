@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
 
+import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.*
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
@@ -248,6 +249,44 @@ class PageSetupRoundTripSpec extends FunSuite:
 
     val reread = XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
     assertEquals(sheetSetup(reread).printArea, Some(ref"C1:D2"))
+    Files.deleteIfExists(src)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-462: a Print_Area authored as a scoped name after a read wins over the lifted one") {
+    // Reading lifts the file's Print_Area into PageSetup; `xl name add -s Sheet1 _xlnm.Print_Area`
+    // then authors an explicit metadata entry for the same sheet. The explicit, later intent must
+    // be what the writer emits — once — not the stale derived twin.
+    val wb0 = Workbook(
+      Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(PageSetup(printArea = Some(ref"A1:B2")))
+    )
+    val src = Files.createTempFile("pagesetup-name-src", ".xlsx")
+    XlsxWriter.write(wb0, src).fold(e => fail(s"seed write failed: $e"), identity)
+
+    val authored = for
+      wb <- XlsxReader.read(src)
+      updated <- wb.withDefinedName(
+        "_xlnm.Print_Area",
+        "Sheet1!$C$1:$D$2",
+        SheetName.unsafe("Sheet1")
+      )
+    yield updated
+    val wb1 = authored.fold(e => fail(s"name add failed: $e"), identity)
+
+    val out = Files.createTempFile("pagesetup-name-out", ".xlsx")
+    XlsxWriter.write(wb1, out).fold(e => fail(s"write failed: $e"), identity)
+    val workbookXml = zipEntryString(out, "xl/workbook.xml")
+    assert(workbookXml.contains("Sheet1!$C$1:$D$2"), s"authored area missing: $workbookXml")
+    assert(!workbookXml.contains("Sheet1!$A$1:$B$2"), s"stale lifted area lingering: $workbookXml")
+    assertEquals(
+      "_xlnm.Print_Area".r.findAllIn(workbookXml).size,
+      1,
+      s"exactly one Print_Area for the sheet: $workbookXml"
+    )
+
+    val reread = XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
+    assertEquals(sheetSetup(reread).printArea, Some(ref"C1:D2"))
+    assertEquals(reread.metadata.definedNames, Vector.empty, "lifted on read, no duplicate")
     Files.deleteIfExists(src)
     Files.deleteIfExists(out)
   }

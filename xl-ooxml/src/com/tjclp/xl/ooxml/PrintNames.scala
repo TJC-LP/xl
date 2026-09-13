@@ -113,15 +113,23 @@ private[ooxml] object PrintNames:
     }
 
   /**
-   * Defined names to serialize for a workbook: the metadata names (with any print name shadowed by
-   * a PageSetup-derived one removed) followed by the derived print names.
+   * Defined names to serialize for a workbook: the metadata names followed by the PageSetup-derived
+   * print names, minus any derived name whose identifier (case-insensitively, GH-538) and sheet a
+   * metadata entry already carries. Metadata wins (GH-462): the read side lifts every modelable
+   * print name out of the metadata, so a metadata twin of a derived name only exists when it was
+   * authored after the read (`wb.withDefinedName("_xlnm.Print_Area", …, sheet)`, `xl name add -s`)
+   * — an explicit, later intent the stale derived name must not shadow — or when a script set both.
    */
   def effective(wb: Workbook): Vector[DefinedName] =
-    val derived = fromSheets(wb.sheets)
-    val derivedKeys = derived.map(dn => (dn.name, dn.localSheetId)).toSet
-    wb.metadata.definedNames.filterNot(dn =>
-      derivedKeys.contains((dn.name, dn.localSheetId))
-    ) ++ derived
+    val names = wb.metadata.definedNames
+    // One pass over the table (10^5 entries on bank-authored books), not one per derived name.
+    val printNames = names.filter(dn =>
+      dn.localSheetId.isDefined &&
+        (DefinedName.sameName(dn.name, PrintArea) || DefinedName.sameName(dn.name, PrintTitles))
+    )
+    names ++ fromSheets(wb.sheets).filterNot(d =>
+      printNames.exists(_.matches(d.name, d.localSheetId))
+    )
 
   /**
    * Read side: lift modelable sheet-scoped print names into each Sheet's PageSetup and drop them
@@ -137,10 +145,10 @@ private[ooxml] object PrintNames:
   ): (Vector[Sheet], Vector[DefinedName]) =
     if names.isEmpty then (sheets, names)
     else
+      // Case-insensitive, as Excel reads the identifier: a foreign writer's `_XLNM.PRINT_AREA` IS
+      // the sheet's print area, and re-deriving it spells it canonically.
       def candidate(name: String, idx: Int): Option[DefinedName] =
-        names.find(dn =>
-          dn.name == name && dn.localSheetId.contains(idx) && !dn.hidden && dn.comment.isEmpty
-        )
+        names.find(dn => dn.matches(name, Some(idx)) && !dn.hidden && dn.comment.isEmpty)
 
       val parsed = sheets.zipWithIndex.map { case (sheet, idx) =>
         val area = candidate(PrintArea, idx)

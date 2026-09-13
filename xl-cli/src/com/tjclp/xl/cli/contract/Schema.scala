@@ -600,7 +600,7 @@ object Schema:
     ),
     write(
       "name add",
-      "Add or replace a workbook-scoped named range",
+      "Add or replace a named range (workbook-scoped; -s scopes it to that sheet)",
       sheet = false,
       None,
       "0.10.0",
@@ -609,7 +609,7 @@ object Schema:
     ),
     write(
       "name rm",
-      "Remove a named range",
+      "Remove a named range (workbook-scoped; -s the sheet-scoped one)",
       sheet = false,
       None,
       "0.10.0",

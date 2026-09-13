@@ -276,13 +276,14 @@ object EditGenerators:
     for src <- genExistingSheet; tgt <- genNewSheet yield Edit.CopySheet(src, tgt),
     for n <- genExistingSheet; v <- Gen.oneOf(true, false) yield Edit.HideSheet(n, v),
     genExistingSheet.map(Edit.ShowSheet.apply),
+    // Case variants so the laws see GH-538 collisions (a write replaces `Total` with `total`).
     for
-      n <- Gen.oneOf("Total", "Rate")
+      n <- Gen.oneOf("Total", "total", "Rate", "RATE")
       r <- Gen.oneOf("Data!$A$1", "0.08", "Other!$A$1:$B$1")
       s <- Gen.frequency(2 -> Gen.const(None), 1 -> genExistingSheet.map(Some(_)))
     yield Edit.DefineName(n, r, s),
     for
-      n <- Gen.oneOf("Total", "Rate")
+      n <- Gen.oneOf("Total", "total", "Rate", "RATE")
       s <- Gen.frequency(2 -> Gen.const(None), 1 -> genExistingSheet.map(Some(_)))
     yield Edit.RemoveName(n, s)
   )

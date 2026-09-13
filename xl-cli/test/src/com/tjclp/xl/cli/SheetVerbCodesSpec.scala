@@ -135,3 +135,112 @@ class SheetVerbCodesSpec extends CatsEffectSuite:
       }
     }
   }
+
+  // ===== GH-462 / GH-538: `-s` is the scope of `name add|rm`; names match case-insensitively =====
+
+  /** `names --json` of a written file: `[{name, refersTo, scope, hidden}]`. */
+  private def namesJson(path: java.nio.file.Path): IO[Vector[(String, ujson.Value)]] =
+    CliHarness.run("-f", path.toString, "--json", "names").map { run =>
+      assertEquals(run.exit, 0, run.stderr)
+      ujson.read(run.stdout)("data").arr.map(n => (n("name").str, n("scope"))).toVector
+    }
+
+  test("GH-538: name rm matches case-insensitively — `name rm total` removes Total") {
+    val out = fixtures().resolve("name-rm-case.xlsx")
+    for
+      run <- CliHarness.run("-f", file("named.xlsx"), "-o", out.toString, "name", "rm", "total")
+      names <- namesJson(out)
+    yield
+      assertEquals(run.exit, 0, run.stderr)
+      assert(run.stdout.contains("Removed named range 'total'\n"), run.stdout)
+      assertEquals(names, Vector.empty)
+  }
+
+  test("GH-462: name add -s scopes the name to that sheet; name rm -s removes only that one") {
+    val added = fixtures().resolve("name-add-scoped.xlsx")
+    val removed = fixtures().resolve("name-rm-scoped.xlsx")
+    for
+      add <- CliHarness.run(
+        List("-f", file("named.xlsx"), "-s", "Data", "-o", added.toString) ++
+          List("name", "add", "Local", "Data!$A$1"),
+        ""
+      )
+      afterAdd <- namesJson(added)
+      rm <- CliHarness.run(
+        List("-f", added.toString, "-s", "Data", "-o", removed.toString, "name", "rm", "local"),
+        ""
+      )
+      afterRm <- namesJson(removed)
+    yield
+      assertEquals(add.exit, 0, add.stderr)
+      assert(
+        add.stdout.contains("Added named range 'Local' -> Data!$A$1 (scope: Data)\n"),
+        add.stdout
+      )
+      assertEquals(afterAdd, Vector("Total" -> ujson.Null, "Local" -> ujson.Str("Data")))
+      assertEquals(rm.exit, 0, rm.stderr)
+      assert(rm.stdout.contains("Removed named range 'local' (scope: Data)\n"), rm.stdout)
+      assertEquals(afterRm, Vector("Total" -> ujson.Null))
+  }
+
+  test("GH-462: name rm without -s of a name that exists only sheet-scoped is NAME_NOT_FOUND") {
+    val added = fixtures().resolve("name-scoped-only.xlsx")
+    val out = fixtures().resolve("name-rm-scoped-only.xlsx")
+    for
+      _ <- CliHarness.run(
+        List("-f", file("named.xlsx"), "-s", "Data", "-o", added.toString) ++
+          List("name", "add", "Local", "Data!$A$1"),
+        ""
+      )
+      run <- CliHarness.run(
+        "-f",
+        added.toString,
+        "-o",
+        out.toString,
+        "--json",
+        "name",
+        "rm",
+        "Local"
+      )
+    yield
+      assertEquals(run.exit, 3, run.stderr)
+      val error = ujson.read(run.stdout)("error")
+      assertEquals(error("code"), ujson.Str("NAME_NOT_FOUND"))
+      // the names THIS form can remove — the workbook-scoped ones — never the scoped entry
+      assertEquals(error("message"), ujson.Str("Named range 'Local' not found. Available: Total"))
+      assert(!Files.exists(out), "nothing may be written when the name is unknown in that scope")
+  }
+
+  test("GH-462: name rm -s of an unknown sheet is SHEET_NOT_FOUND before any write") {
+    val out = fixtures().resolve("name-rm-nope.xlsx")
+    CliHarness
+      .run(
+        List("-f", file("named.xlsx"), "-s", "Nope", "-o", out.toString, "--json") ++
+          List("name", "rm", "Total"),
+        ""
+      )
+      .map { run =>
+        assertEquals(run.exit, 3, run.stderr)
+        val error = ujson.read(run.stdout)("error")
+        assertEquals(error("code"), ujson.Str("SHEET_NOT_FOUND"))
+        assertEquals(error("message"), ujson.Str("Sheet not found: Nope. Available: Data, Summary"))
+        assert(!Files.exists(out), "nothing may be written when the scope is unknown")
+      }
+  }
+
+  test(
+    "GH-462: without -s, name add on a single-sheet book stays workbook-scoped (no auto-select)"
+  ) {
+    val out = fixtures().resolve("name-add-single.xlsx")
+    for
+      run <- CliHarness.run(
+        List("-f", file("single.xlsx"), "-o", out.toString, "name", "add", "Solo", "Sheet1!$A$1"),
+        ""
+      )
+      names <- namesJson(out)
+    yield
+      assertEquals(run.exit, 0, run.stderr)
+      assert(run.stdout.contains("Added named range 'Solo' -> Sheet1!$A$1\n"), run.stdout)
+      assert(!run.stdout.contains("scope"), run.stdout)
+      assertEquals(names, Vector("Solo" -> ujson.Null))
+  }

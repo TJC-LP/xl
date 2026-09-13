@@ -757,7 +757,7 @@ object EditSchema:
     ),
     "Remove a defined name.",
     since = "0.10.0",
-    cliVerb = Some("name remove"),
+    cliVerb = Some("name rm"),
     sheetScoped = false,
     structural = true,
     idempotent = false

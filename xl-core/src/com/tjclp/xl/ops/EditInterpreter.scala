@@ -9,7 +9,7 @@ import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.sheets.{Sheet, SheetEdits}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
 import com.tjclp.xl.styles.CellStyle
-import com.tjclp.xl.workbooks.{DefinedName, Workbook}
+import com.tjclp.xl.workbooks.Workbook
 
 /**
  * The one interpreter of [[Edit]] (ADR-017 §2.12): `validate` is the edit-local check that needs no
@@ -408,24 +408,24 @@ private[xl] object EditInterpreter:
           )
         case Edit.ShowSheet(sheetName) => workbookLevel(wb.setSheetState(sheetName, None))
 
+        // Workbook owns the one matching rule (GH-538: case-insensitive, whole class) and the one
+        // scope lookup (case-insensitive sheet name); this arm only adds the algebra's refusal.
         case Edit.DefineName(defined, refersTo, nameScope) =>
-          workbookLevel(localSheetId(wb, nameScope).map { localId =>
-            val others =
-              wb.metadata.definedNames.filterNot(d =>
-                d.name == defined && d.localSheetId == localId
-              )
-            withDefinedNames(wb, others :+ DefinedName(defined, refersTo, localSheetId = localId))
-          })
+          workbookLevel(
+            nameScope.fold[XLResult[Workbook]](Right(wb.withDefinedName(defined, refersTo)))(s =>
+              wb.withDefinedName(defined, refersTo, s)
+            )
+          )
 
         case Edit.RemoveName(defined, nameScope) =>
           workbookLevel(localSheetId(wb, nameScope).flatMap { localId =>
-            val (matching, others) =
-              wb.metadata.definedNames.partition(d =>
-                d.name == defined && d.localSheetId == localId
+            val inScope = wb.metadata.definedNames.filter(_.localSheetId == localId)
+            if !inScope.exists(_.matches(defined, localId)) then
+              Left(XLError.NameNotFound(defined, inScope.map(_.name).distinct))
+            else
+              nameScope.fold[XLResult[Workbook]](Right(wb.removeDefinedName(defined)))(s =>
+                wb.removeDefinedName(defined, s)
               )
-            if matching.isEmpty then
-              Left(XLError.NameNotFound(defined, wb.metadata.definedNames.map(_.name).distinct))
-            else Right(withDefinedNames(wb, others))
           })
     }
 
@@ -484,13 +484,7 @@ private[xl] object EditInterpreter:
     rows.rows.foldLeft(sheet)((s, r) => s.setRowProperties(r, f(s.getRowProperties(r))))
 
   private def localSheetId(wb: Workbook, scope: Option[SheetName]): XLResult[Option[Int]] =
-    scope.fold[XLResult[Option[Int]]](Right(None))(s => indexOf(wb, s).map(Some(_)))
-
-  private def withDefinedNames(wb: Workbook, names: Vector[DefinedName]): Workbook =
-    wb.copy(
-      metadata = wb.metadata.copy(definedNames = names),
-      sourceContext = wb.sourceContext.map(_.markMetadataModified)
-    )
+    scope.fold[XLResult[Option[Int]]](Right(None))(s => wb.localSheetIdOf(s).map(Some(_)))
 
   // ===== lower =====
 
