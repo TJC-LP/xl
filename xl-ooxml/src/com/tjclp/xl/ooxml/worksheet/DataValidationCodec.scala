@@ -109,6 +109,20 @@ object DataValidationCodec:
       dvs.child.collect { case e: Elem => e }.map(parseEntry(_, dvs.scope))
     }
 
+  /**
+   * GH-593: does any `<formula1>` / `<formula2>` in the source container still lack its storage
+   * prefix? The storage-form half of the writer's CLEAN gate (the CfCodec contract), built on the
+   * lint's rule ([[FormulaStorage.bareFutureCalls]]) so gate and lint agree by construction. Total;
+   * false on every Excel-authored container.
+   */
+  def needsStorageHealing(container: Elem): Boolean =
+    container.child.collect { case e: Elem => e }.exists { entry =>
+      entry.child.collect { case e: Elem => e }.exists { child =>
+        (child.label == "formula1" || child.label == "formula2") &&
+        FormulaStorage.bareFutureCalls(XmlUtil.getTextPreservingWhitespace(child)).nonEmpty
+      }
+    }
+
   /** Per-entry typed parse with the widened whitelist; falls back to Preserved. */
   private def parseEntry(entry: Elem, containerScope: NamespaceBinding): DataValidation =
     val typed: Option[DataValidation.Rules] =

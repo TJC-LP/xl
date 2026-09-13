@@ -180,7 +180,9 @@ Subcommands:
           - post-2007 functions (IFS, XLOOKUP, MAXIFS, ...) stored without Excel's
             _xlfn. prefix in <f>, a CF <formula>, a DV <formula1>/<formula2> or a
             <definedName> (the openpyxl class: a silent #NAME? on the first
-            recalculation; xl heals a slot only when it regenerates it)
+            recalculation; any in-memory write that regenerates the worksheet
+            (CF/DV) or workbook.xml (names) heals the slot — unmodeled preserved
+            rules and --stream writes do not)
 
         USAGE:
           xl lint report.xlsx

@@ -1651,9 +1651,13 @@ object XlsxWriter:
         .map { case (idx, sheet) =>
           val sourceCf: Option[Seq[Elem]] =
             preservedWorksheets.get(idx).flatMap(_.toOption).flatten.map(_.conditionalFormatting)
+          // GH-593: CLEAN needs the model to agree AND the source text to be in storage form —
+          // bare `IFS(` parses to the same model as `_xlfn.IFS(`, so the model alone let a
+          // bare-writing producer's text ride through every write
           sourceCf match
             case Some(srcElems)
-                if CfCodec.parseAll(srcElems, sourceDxfChildren) == sheet.conditionalFormats =>
+                if CfCodec.parseAll(srcElems, sourceDxfChildren) == sheet.conditionalFormats &&
+                  !CfCodec.needsStorageHealing(srcElems) =>
               idx -> Left(srcElems)
             case _ if sheet.conditionalFormats.isEmpty => idx -> Left(Seq.empty)
             case _ => idx -> Right(sheet)
@@ -1728,8 +1732,11 @@ object XlsxWriter:
       .map { case (idx, sheet) =>
         val sourceDv: Option[Elem] =
           preservedWorksheets.get(idx).flatMap(_.toOption).flatten.flatMap(_.dataValidations)
+        // GH-593: CLEAN needs the model to agree AND the source text to be in storage form
         sourceDv match
-          case Some(src) if DataValidationCodec.parseAll(Some(src)) == sheet.dataValidations =>
+          case Some(src)
+              if DataValidationCodec.parseAll(Some(src)) == sheet.dataValidations &&
+                !DataValidationCodec.needsStorageHealing(src) =>
             idx -> Some(src)
           case _ if sheet.dataValidations.isEmpty => idx -> None
           case _ => idx -> DataValidationCodec.toElem(sheet.dataValidations, sourceDv)
