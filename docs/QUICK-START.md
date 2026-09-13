@@ -271,9 +271,9 @@ val sheet = Sheet("Finance").unsafe
     ref"A2" -> BigDecimal("1000000"),
     ref"A3" -> BigDecimal("1500000"),
     ref"B1" -> "Total",
-    ref"B2" -> CellValue.Formula("=SUM(A2:A3)"),  // Formula cell
+    ref"B2" -> fx"=SUM(A2:A3)",  // Formula cell (stored as the bare "SUM(A2:A3)")
     ref"C1" -> "Average",
-    ref"C2" -> CellValue.Formula("=AVERAGE(A2:A3)")
+    ref"C2" -> fx"=AVERAGE(A2:A3)"
   )
   .unsafe
 

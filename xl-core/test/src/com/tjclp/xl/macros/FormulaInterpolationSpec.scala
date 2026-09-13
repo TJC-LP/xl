@@ -28,7 +28,7 @@ class FormulaInterpolationSpec extends FunSuite:
       case other => fail(s"Expected Formula, got $other")
   }
 
-  test("GH-479: the literal with and without the leading '=' is the same value (idempotent)") {
+  test("GH-479: the literal with and without the leading '=' is the same value (both shapes)") {
     assertEquals(fx"SUM(A1:A2)", fx"=SUM(A1:A2)")
     assertEquals(fx"=SUM(A1:A2)", CellValue.Formula("SUM(A1:A2)"))
   }

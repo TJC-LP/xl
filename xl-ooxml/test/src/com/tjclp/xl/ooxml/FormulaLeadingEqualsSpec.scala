@@ -112,6 +112,16 @@ class FormulaLeadingEqualsSpec extends FunSuite:
     assertEquals(readBack(authored, "fx-strict"), authored)
   }
 
+  test(
+    "GH-479: a doubled '=' is the documented exception: fx strips once, the writer heals the rest"
+  ) {
+    // `==B4*2` is not a formula; the canonical entry removes ONE '=' and the `<f>` boundary the
+    // other, so this is the one fx-authored shape that does not read back equal — by design.
+    val authored = fx"==B4*2"
+    assertEquals(authored, CellValue.Formula("=B4*2", None))
+    assertEquals(readBack(authored, "fx-doubled"), CellValue.Formula("B4*2", None))
+  }
+
   test("GH-479: a CellValue.formula-authored cell (display form in) reads back EQUAL (strict)") {
     val authored =
       CellValue.formula("=B4*2").fold(err => fail(s"formula refused: ${err.message}"), identity)

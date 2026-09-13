@@ -23,10 +23,15 @@ class CellValueSpec extends ScalaCheckSuite:
     }
   }
 
-  property("canonicalFormulaText is idempotent") {
-    forAll { (s: String) =>
-      val once = CellValue.canonicalFormulaText(s)
+  property("canonicalFormulaText is idempotent on the display and bare forms") {
+    // A formula has two shapes, `=A1` and `A1`; each is a fixed point once canonical. A doubled '='
+    // is deliberately NOT one (pinned below), so this law is stated over the two shapes, not all
+    // strings.
+    forAll(genBare) { (s: String) =>
+      val once = CellValue.canonicalFormulaText("=" + s)
+      assertEquals(once, s)
       assertEquals(CellValue.canonicalFormulaText(once), once)
+      assertEquals(CellValue.canonicalFormulaText(s), s)
     }
   }
 
@@ -41,6 +46,12 @@ class CellValueSpec extends ScalaCheckSuite:
     assertEquals(CellValue.canonicalFormulaText("=+SUM(A1:B2)"), "+SUM(A1:B2)")
     assertEquals(CellValue.canonicalFormulaText("=IF(A1=1,2,3)"), "IF(A1=1,2,3)")
     assertEquals(CellValue.canonicalFormulaText("==A1"), "=A1")
+    // A doubled '=' is not a fixed point BY DESIGN: one strip per entry; every writer heals the rest
+    // at the `<f>` boundary (FormulaLeadingEqualsSpec pins that read-back as "A1").
+    assertNotEquals(
+      CellValue.canonicalFormulaText(CellValue.canonicalFormulaText("==A1")),
+      CellValue.canonicalFormulaText("==A1")
+    )
     assertEquals(CellValue.canonicalFormulaText(" =A1 "), " =A1 ")
     assertEquals(CellValue.canonicalFormulaText("="), "")
     assertEquals(CellValue.canonicalFormulaText(""), "")

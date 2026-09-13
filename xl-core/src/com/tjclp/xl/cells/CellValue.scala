@@ -73,8 +73,12 @@ object CellValue:
   /**
    * The model's canonical formula text (GH-479): exactly one leading '=' removed and nothing else —
    * a leading '+' (Excel's alternate prefix) stays, an interior '=' is untouched and no whitespace
-   * is trimmed. Pure, total and idempotent; the single definition every canonical entry shares
-   * (`fx`, `FormulaParser.parse`, [[formula]], `putFormulaInheriting`, the edit interpreter).
+   * is trimmed. Pure and total. Idempotent on the two shapes a formula has — the display form `=A1`
+   * and the bare form `A1` both map to `A1` — but NOT a fixed point for a doubled prefix: `==A1` is
+   * not a formula, is stripped once per entry (to `=A1`), and every writer strips the remainder at
+   * the `<f>` boundary, so such a value reads back as `A1`. The single definition every canonical
+   * entry shares (`fx`, `FormulaParser.parse`, [[formula]], `putFormulaInheriting`, the edit
+   * interpreter).
    */
   def canonicalFormulaText(expression: String): String = expression.stripPrefix("=")
 
