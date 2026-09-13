@@ -60,6 +60,21 @@ class FormulaOpsSpec extends FunSuite:
     assert(FormulaOps.mentionsSheet("IF(A1=\"x\",Sheet1!A1,0)", Sheet1))
   }
 
+  test("GH-653: a double quote inside a quoted sheet name is not a string-literal boundary") {
+    val final1 = SheetName.unsafe("Q1 \"Final\"")
+    assert(FormulaOps.mentionsSheet("='Q1 \"Final\"'!A1", final1))
+    assert(FormulaOps.mentionsSheet("=SUM('Q1 \"Final\"'!A1:A9)+\"x\"", final1))
+    assert(FormulaOps.mentionsSheet("=\"it's\"&Sheet1!A1", Sheet1))
+    assert(!FormulaOps.mentionsSheet("=\"'Q1 \"\"Final\"\"'!A1\"", final1))
+    // the rename that used to leave the reference stale
+    assertEquals(
+      FormulaOps.renameSheet("='Q1 \"Final\"'!A1", final1, SheetName.unsafe("Final")),
+      Right("=Final!A1"): XLResult[String]
+    )
+    // and the 3-D span that used to slip past the gate
+    assert(FormulaOps.renameSheet("='Q1 \"Final\":Q3'!A1", final1, Sheet1).isLeft)
+  }
+
   test("mentionsSheet is not fooled by longer names, external refs or defined names") {
     assert(!FormulaOps.mentionsSheet("MySheet1!A1", Sheet1))
     assert(!FormulaOps.mentionsSheet("Sheet10!A1", Sheet1))
