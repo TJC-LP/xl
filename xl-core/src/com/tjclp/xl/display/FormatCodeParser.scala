@@ -543,6 +543,14 @@ object FormatCodeParser:
       all.lastOption.exists(_.pattern.tokens.contains(FormatToken.TextPlaceholder))
     if trailingAt then all.dropRight(1) else all
 
+  /**
+   * True when the code has no numeric section — a lone `@` text format. Excel renders a number
+   * under such a code as General text and lays the cell out as text: left-aligned, overflowing into
+   * empty neighbours, never `####`. A 4-section code whose last arm is `@` keeps all four sections
+   * and is NOT text-only (GH-501).
+   */
+  def isTextOnly(format: FormatCode): Boolean = numericSections(format).isEmpty
+
   private def compareCondition(section: FormatSection): Option[Condition.Compare] =
     section.conditions.collectFirst { case c: Condition.Compare => c }
 

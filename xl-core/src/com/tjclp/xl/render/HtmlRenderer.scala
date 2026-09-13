@@ -355,13 +355,6 @@ $headerRow$tableRows
    * Generates CSS properties for font, fill, borders, alignment, etc. Returns empty string if cell
    * has no style.
    */
-  /** Determine default horizontal alignment based on cell value type (Excel's General behavior) */
-  private def contentBasedAlignment(value: CellValue): HAlign = value match
-    case CellValue.Number(_) | CellValue.DateTime(_) => HAlign.Right
-    case CellValue.Bool(_) => HAlign.Center
-    case CellValue.Formula(_, Some(cached), _) => contentBasedAlignment(cached)
-    case _ => HAlign.Left
-
   private def cellStyleToInlineCss(cell: Cell, sheet: Sheet, theme: ThemePalette): String =
     val styleOpt = cell.styleId.flatMap(sheet.styleRegistry.get)
     val css = scala.collection.mutable.ArrayBuffer[String]()
@@ -389,11 +382,10 @@ $headerRow$tableRows
       borderSideToCss(style.border.left, "border-left", theme).foreach(css += _)
     }
 
-    // Alignment - always emit to ensure proper alignment
-    // Use explicit alignment from style if set, otherwise use content-based default (General behavior)
-    val effectiveHAlign = styleOpt.map(_.align.horizontal).getOrElse(HAlign.General) match
-      case HAlign.General => contentBasedAlignment(cell.value)
-      case explicit => explicit
+    // Alignment - always emit to ensure proper alignment. The style's explicit alignment wins;
+    // General resolves from the rendered kind exactly as SvgRenderer anchors it (GH-500, GH-501).
+    val numFmt = styleOpt.map(_.numFmt).getOrElse(NumFmt.General)
+    val effectiveHAlign = resolveHAlign(styleOpt, renderedContent(cell.value, numFmt))
 
     effectiveHAlign match
       case HAlign.Left => css += "text-align: left"
