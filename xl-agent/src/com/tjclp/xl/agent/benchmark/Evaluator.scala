@@ -101,13 +101,15 @@ object Evaluator:
     yield data
 
   /**
-   * The first sheet of a `sheets --json` envelope: `data[0].name`. There is no default sheet: a
-   * guess would grade the wrong range silently.
+   * The first sheet of a `sheets --json` envelope: `data.sheets[0].name` (GH-618: `data` is always
+   * an object; a listing verb keys its array by the noun, so the bare array 0.20.0–0.22.0 printed
+   * is a parse error here). There is no default sheet: a guess would grade the wrong range
+   * silently.
    */
   def firstSheet(envelope: String): Either[AgentError, String] =
     def parseError(cause: String): AgentError = AgentError.ParseError(envelope.take(200), cause)
     envelopeData("sheets", envelope).flatMap { data =>
-      data.as[Vector[Json]].leftMap(e => parseError(e.getMessage)).flatMap {
+      data.hcursor.get[Vector[Json]]("sheets").leftMap(e => parseError(e.getMessage)).flatMap {
         case first +: _ =>
           first.hcursor.get[String]("name").leftMap(e => parseError(e.getMessage))
         case _ => Left(AgentError.EvaluationFailed("xl sheets: the workbook has no sheets"))

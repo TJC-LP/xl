@@ -295,36 +295,61 @@ class EnvelopeSpec extends CatsEffectSuite:
   // Typed payloads
   // ---------------------------------------------------------------------------------------------
 
-  test("sheets --json: typed [{name, index, state, dimension}]") {
+  // GH-618: `data` is always an object; a listing verb keys its array by the noun, so
+  // `sheets --json` is `{sheets: [...]}` exactly as `describe --json` carries it.
+  test("sheets --json: typed {sheets: [{name, index, state, dimension}]}") {
     CliHarness.run("-f", file("simple.xlsx"), "--json", "sheets").map { run =>
       assertEquals(run.exit, 0, run.stderr)
       val e = envelope(run)
       assertEquals(e("verb"), ujson.Str("sheets"))
       assertEquals(
         e("data"),
-        ujson.Arr(
-          ujson.Obj(
-            "name" -> ujson.Str("Data"),
-            "index" -> ujson.Num(1),
-            "state" -> ujson.Str("visible"),
-            "dimension" -> ujson.Str("A1:C4")
-          ),
-          ujson.Obj(
-            "name" -> ujson.Str("Summary"),
-            "index" -> ujson.Num(2),
-            "state" -> ujson.Str("visible"),
-            "dimension" -> ujson.Null
+        ujson.Obj(
+          "sheets" -> ujson.Arr(
+            ujson.Obj(
+              "name" -> ujson.Str("Data"),
+              "index" -> ujson.Num(1),
+              "state" -> ujson.Str("visible"),
+              "dimension" -> ujson.Str("A1:C4")
+            ),
+            ujson.Obj(
+              "name" -> ujson.Str("Summary"),
+              "index" -> ujson.Num(2),
+              "state" -> ujson.Str("visible"),
+              "dimension" -> ujson.Null
+            )
           )
         )
       )
     }
   }
 
-  test("sheets --stats --json: the full listing adds cells and formulas") {
+  test("GH-618: sheets --json elements are describe --json's data.sheets, in memory and --stream") {
+    for
+      sheets <- CliHarness.run("-f", file("simple.xlsx"), "--json", "sheets")
+      streamed <- CliHarness.run("-f", file("simple.xlsx"), "--stream", "--json", "sheets")
+      describe <- CliHarness.run("-f", file("simple.xlsx"), "--json", "describe")
+      hidden <- CliHarness.run("-f", file("linked.xlsx"), "--json", "sheets")
+      hiddenDescribe <- CliHarness.run("-f", file("linked.xlsx"), "--json", "describe")
+    yield
+      Vector(sheets, streamed, describe, hidden, hiddenDescribe).foreach(r =>
+        assertEquals(r.exit, 0, r.stderr)
+      )
+      assertEquals(envelope(sheets)("data")("sheets"), envelope(describe)("data")("sheets"))
+      assertEquals(envelope(streamed)("data"), envelope(sheets)("data"))
+      assertEquals(envelope(hidden)("data")("sheets"), envelope(hiddenDescribe)("data")("sheets"))
+      assertEquals(
+        envelope(hidden)("data")("sheets").arr.map(_("state")).toVector,
+        Vector(ujson.Str("visible"), ujson.Str("visible"), ujson.Str("hidden"))
+      )
+  }
+
+  test("sheets --stats --json: {sheets: [...]} with cells and formulas added to each element") {
     CliHarness.run("-f", file("simple.xlsx"), "--json", "sheets", "--stats").map { run =>
       assertEquals(run.exit, 0, run.stderr)
       val e = envelope(run)
-      val data = e("data").arr
+      assertEquals(e("data").obj.keySet, Set("sheets"))
+      val data = e("data")("sheets").arr
       assertEquals(data.size, 2)
       assertEquals(data(0)("name"), ujson.Str("Data"))
       assertEquals(data(0)("index"), ujson.Num(1))
@@ -337,25 +362,32 @@ class EnvelopeSpec extends CatsEffectSuite:
     }
   }
 
-  test("names --json: typed [{name, refersTo, scope, hidden}]; [] when there are none") {
+  test("names --json: typed {names: [{name, refersTo, scope, hidden}]}; {names: []} without any") {
     for
       named <- CliHarness.run("-f", file("named.xlsx"), "--json", "names")
+      streamed <- CliHarness.run("-f", file("named.xlsx"), "--stream", "--json", "names")
+      describe <- CliHarness.run("-f", file("named.xlsx"), "--json", "describe")
       none <- CliHarness.run("-f", file("simple.xlsx"), "--json", "names")
     yield
       assertEquals(named.exit, 0, named.stderr)
       assertEquals(
         envelope(named)("data"),
-        ujson.Arr(
-          ujson.Obj(
-            "name" -> ujson.Str("Total"),
-            "refersTo" -> ujson.Str("Data!$B$4"),
-            "scope" -> ujson.Null,
-            "hidden" -> ujson.False
+        ujson.Obj(
+          "names" -> ujson.Arr(
+            ujson.Obj(
+              "name" -> ujson.Str("Total"),
+              "refersTo" -> ujson.Str("Data!$B$4"),
+              "scope" -> ujson.Null,
+              "hidden" -> ujson.False
+            )
           )
         )
       )
+      // GH-618: the elements are describe's definedNames, and --stream emits the same object
+      assertEquals(envelope(named)("data")("names"), envelope(describe)("data")("definedNames"))
+      assertEquals(envelope(streamed)("data"), envelope(named)("data"))
       assertEquals(none.exit, 0, none.stderr)
-      assertEquals(envelope(none)("data"), ujson.Arr())
+      assertEquals(envelope(none)("data"), ujson.Obj("names" -> ujson.Arr()))
   }
 
   test("bounds --json: typed {sheet, range, dimension}") {
@@ -418,12 +450,13 @@ class EnvelopeSpec extends CatsEffectSuite:
       }
   }
 
-  test("functions --json: typed [{name}]") {
+  test("functions --json: typed {functions: [{name, …}]}") {
     CliHarness.run("--json", "functions").map { run =>
       assertEquals(run.exit, 0, run.stderr)
       val e = envelope(run)
       assertEquals(e("verb"), ujson.Str("functions"))
-      val names = e("data").arr.map(_("name").str)
+      assertEquals(e("data").obj.keySet, Set("functions"))
+      val names = e("data")("functions").arr.map(_("name").str)
       assert(names.contains("SUM"), names.mkString(", "))
       assert(names.size > 100, names.size.toString)
     }

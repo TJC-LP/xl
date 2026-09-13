@@ -307,6 +307,11 @@ payload forever** (`{sheet, range, rows}` for `view`; the existing shapes for `f
 (`view` emits `truncated`/`totalRows`; `search` emits `count`/`total`/`totalExact` and no
 warning) and, where the payload format cannot carry it (`view` csv/svg/html), as a `TRUNCATED`
 warning; the envelope itself does not grow an eighth key. `schema --json` publishes the envelope's JSON Schema.
+`data` is always a JSON object (GH-618; the schema types it `object | null`): a listing verb keys
+its array by the noun — `sheets` → `{sheets: [...]}`, `names` → `{names: [...]}`, `functions` →
+`{functions: [...]}` — so the element an agent read under `describe --json` (`data.sheets[i]`) is
+the element `sheets --json` yields, built by the same function. 0.20.0–0.22.0 printed bare arrays
+for those three verbs.
 
 ### 2.5 `Resolve` — ONE sheet rule
 
@@ -638,7 +643,7 @@ same remedy CLAUDE.md records for the `FunctionSpecs` macro.
 `xl schema --json` → `{version, exitCodes[], errorCodes[], warningCodes[], globals[], verbs[{path,
 summary, needs, exit, batchTwin, since}], batchOps: <OpRegistry.jsonSchema>, functions:
 <FunctionDoc list>}`; `xl batch --schema` prints `batchOps` alone; `xl functions --json` prints
-`functions` alone (115 registry functions + `LET` flagged `specialForm: true`). Wave 1's verb list
+`{functions: <the same list>}` (115 registry functions + `LET` flagged `specialForm: true`). Wave 1's verb list
 is a table asserted equal to the subcommand names decline renders in `xl --help`; Wave 2 derives
 it from the `CommandSpec` registry that also builds `Main.main`.
 `docs/reference/generated/{cli-verbs,batch-ops,functions,exit-codes,error-codes}.md` are rendered

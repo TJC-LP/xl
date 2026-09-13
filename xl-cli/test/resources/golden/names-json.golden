@@ -11,14 +11,16 @@ names
   "exitCode": 0,
   "verb": "names",
   "version": "<VERSION>",
-  "data": [
-    {
-      "name": "Total",
-      "refersTo": "Data!$B$4",
-      "scope": null,
-      "hidden": false
-    }
-  ],
+  "data": {
+    "names": [
+      {
+        "name": "Total",
+        "refersTo": "Data!$B$4",
+        "scope": null,
+        "hidden": false
+      }
+    ]
+  },
   "warnings": [],
   "error": null
 }

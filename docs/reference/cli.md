@@ -319,6 +319,12 @@ Sheet operations. With no subcommand, defaults to `list`.
 | 3 | P&L         | A1:N120  | 978   | 76       |
 ```
 
+**JSON** (`--json`): `data` = `{sheets: [{name, index, state, dimension}]}` — the same elements
+`describe --json` carries as `data.sheets` (`index` 1-based in workbook order, `state` one of
+`visible`/`hidden`/`veryHidden`, `dimension` the used range or `null` for an empty sheet);
+`--stats` adds `cells` and `formulas` to each element. `--stream sheets` emits the same object
+(`--stats` is refused under it).
+
 ---
 
 ### `xl names` / `xl name add|rm`
@@ -333,6 +339,11 @@ xl -f model.xlsx -o out.xlsx name rm Tax                     # Remove
 
 `names` reads `workbook.xml` alone, so it takes `--stream` (the same read, any file size; since
 0.22.0). `name add|rm` load the workbook and write through the streaming writer under the flag.
+
+**JSON** (`--json`): `data` = `{names: [{name, refersTo, scope, hidden}]}` — every name, hidden
+ones included (the text listing omits those), `scope` the sheet name of a sheet-scoped name and
+`null` for a workbook-scoped one; the same elements `describe --json` carries as `definedNames`;
+`{names: []}` when the book has none.
 
 ---
 
@@ -468,9 +479,10 @@ When no backend is available, raster exports fail with an error naming the probe
 ### `xl functions [--json]`
 
 List every formula function the evaluator supports (no `-f` needed). Text mode prints the names in
-columns with the count; `--json` prints typed rows — `{name, minArgs, maxArgs, args, returnsDate,
-returnsTime, dynamicDeps, volatile, specialForm}`, `maxArgs` `null` for a variadic function — for
-every registry function plus `LET`, the parser-level special form (`specialForm: true`).
+columns with the count; `--json` yields `data.functions`, typed rows — `{name, minArgs, maxArgs,
+args, returnsDate, returnsTime, dynamicDeps, volatile, specialForm}`, `maxArgs` `null` for a
+variadic function — for every registry function plus `LET`, the parser-level special form
+(`specialForm: true`).
 `dynamicDeps` and `volatile` are the evaluator's recalculation flags: the cells a call reads are
 decided at evaluation time (INDIRECT, OFFSET); the value can change between two recalculations with
 no input changing (TODAY, NOW, RAND, RANDBETWEEN — what `xl audit` lists under `volatile`). The
@@ -479,8 +491,8 @@ rows.
 
 ```bash
 xl functions                                  # names in columns, "Supported Excel Functions (N total)"
-xl --json functions | jq '.data[] | select(.dynamicDeps) | .name'   # INDIRECT, OFFSET
-xl --json functions | jq '.data[] | select(.volatile) | .name'      # NOW, RAND, RANDBETWEEN, TODAY
+xl --json functions | jq '.data.functions[] | select(.dynamicDeps) | .name'   # INDIRECT, OFFSET
+xl --json functions | jq '.data.functions[] | select(.volatile) | .name'      # NOW, RAND, RANDBETWEEN, TODAY
 ```
 
 ---
@@ -504,7 +516,7 @@ summary, preceded by the global flags and the exit-code table.
 | `globals` | `[{name, short, takesValue, doc}]` — the global flags (`--file`/`-f`, ...) |
 | `verbs` | `[{path, summary, needs: {file, sheet, output, streaming}, exit, batchTwin, since}]` — `path` is the subcommand path (`["sheets", "hide"]`), joined by a space it is the envelope's `verb` |
 | `batchOps` | the batch document's JSON Schema — what `xl batch --schema` prints alone |
-| `functions` | the `xl functions --json` rows |
+| `functions` | the rows `xl functions --json` yields as `data.functions` |
 | `envelope` | the JSON Schema of the `--json` envelope itself |
 
 ```bash
@@ -1940,11 +1952,15 @@ with the same seven keys every time:
 | `exitCode` | the process exit code, from the table above (`0`/`1`/`2`/`3`) |
 | `verb` | the subcommand path, e.g. `"view"`, `"sheets hide"`, `"cf add"` (best-effort for a usage error raised before dispatch) |
 | `version` | the `xl` version that produced the envelope |
-| `data` | the verb's payload (below); `null` on a failure |
+| `data` | the verb's payload (below) — always a JSON object; `null` on a failure |
 | `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict`, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `READER_WARNING`); `location` when known |
 | `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
 
-**What `data` holds.** `--json` selects a verb's JSON payload where it has one and wraps the text
+**What `data` holds.** `data` is always a JSON object (`null` on a failure). A listing verb keys
+its array by the noun — `sheets` → `{sheets: [...]}`, `names` → `{names: [...]}`, `functions` →
+`{functions: [...]}` — so `.data.sheets[0].name` reads the same after `describe` and after
+`sheets`, and `.data[0]` is never right (0.20.0–0.22.0 printed bare arrays for these three verbs;
+see the CHANGELOG). `--json` selects a verb's JSON payload where it has one and wraps the text
 otherwise:
 
 - `--format json` keeps printing the bare payload without `--json` — the shapes of `view`
@@ -1952,12 +1968,14 @@ otherwise:
   explicit `--format`, that same payload is `data`: `xl --json view A1:C3` yields `data` equal to
   what `view --format json` prints bare (`--format json --json` spells the same thing out). An
   explicit text `--format` (markdown, csv, html, …) under `--json` rides inside as `data.text`.
-- Typed verbs build `data` directly: `sheets` → `[{name, index, state, dimension}]` (`--stats` adds
-  `cells`, `formulas`); `names` → `[{name, refersTo, scope, hidden}]`; `bounds` →
+- Typed verbs build `data` directly: `sheets` → `{sheets: [{name, index, state, dimension}]}`
+  (`--stats` adds `cells`, `formulas` to each element; the elements are `describe`'s
+  `data.sheets`); `names` → `{names: [{name, refersTo, scope, hidden}]}`; `bounds` →
   `{sheet, range, dimension}`; `eval` → `{formula, result: {type, value, formatted}, overrides}`;
   `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
-  `functions` → `[{name, minArgs, maxArgs, args, returnsDate, returnsTime, dynamicDeps,
-  volatile, specialForm}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
+  `functions` → `{functions: [{name, minArgs, maxArgs, args, returnsDate, returnsTime,
+  dynamicDeps, volatile, specialForm}]}`; `rasterizers` → `{backends: [{name, status, note}],
+  anyAvailable}`;
   `batch --dry-run` → `{ops: [{index, op, summary}]}` (`index` is the op's 1-based position,
   the index a `BATCH_OP_FAILED` reports; parse warnings ride in the envelope's `warnings[]`); `batch --schema` → the batch document's JSON
   Schema; `schema` → `{version, exitCodes, errorCodes, warningCodes, globals, verbs,
@@ -1991,7 +2009,7 @@ verb-owned flag before the verb, `-i` with `-o`) also produces the envelope — 
 ```bash
 xl -f book.xlsx -s Data --json view A1:C3 | jq '.data.rows'   # --json alone selects the JSON payload
 xl -f book.xlsx -s Data -o out.xlsx --json put A1 42 | jq -e '.ok' >/dev/null || echo "put failed"
-xl -f book.xlsx --json sheets | jq -r '.data[].name'
+xl -f book.xlsx --json sheets | jq -r '.data.sheets[].name'   # data is an object; the array is keyed by the noun
 ```
 
 The envelope's JSON Schema is `xl-cli/resources/schema/envelope.schema.json` — shipped in the
