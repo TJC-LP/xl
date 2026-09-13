@@ -29,6 +29,8 @@ object XmlUtil:
   val nsPackageRels = "http://schemas.openxmlformats.org/package/2006/relationships"
   val nsContentTypes = "http://schemas.openxmlformats.org/package/2006/content-types"
   val nsX14ac = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+  // Markup Compatibility (ECMA-376 Part 3): the namespace of mc:Ignorable / mc:AlternateContent
+  val nsMarkupCompatibility = "http://schemas.openxmlformats.org/markup-compatibility/2006"
   // DrawingML namespaces (GH-221)
   val nsSpreadsheetDrawing =
     "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
