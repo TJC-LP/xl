@@ -80,25 +80,55 @@ class FixpointEngineSpec extends FunSuite:
     assertEquals(cold.rounds, 1)
   }
 
-  test("GH-537: the round evaluator factory is invoked exactly once per round") {
-    var calls = 0
+  test("GH-537/GH-482: the factory runs once per Jacobi round, once per Gauss–Seidel evaluation") {
+    // A memo is sound only while its overlay is fixed: a whole round under Jacobi, a single
+    // member evaluation under Gauss–Seidel (members change mid-round).
     val sheet = Sheet(s)
       .put(a1, CellValue.Formula("=B1*0.5+10", None))
       .put(b1, CellValue.Formula("=A1*0.5+20", None))
     val wb = Workbook(sheet)
-    val outcome = WorkbookEvaluator.jacobiFixpoint(
-      wb,
-      wb.sheets,
-      List((q(a1), 0, "=B1*0.5+10"), (q(b1), 0, "=A1*0.5+20")),
-      IterativeCalc(100, BigDecimal("1E-9")),
-      Clock.system,
-      () =>
-        calls += 1
-        Evaluator.instance
-      ,
-      Map.empty
+    val members = List((q(a1), 0, "=B1*0.5+10"), (q(b1), 0, "=A1*0.5+20"))
+    def run(scheme: IterationScheme): (Int, WorkbookEvaluator.FixpointOutcome) =
+      var calls = 0
+      val outcome = WorkbookEvaluator.jacobiFixpoint(
+        wb,
+        wb.sheets,
+        members,
+        IterativeCalc(100, BigDecimal("1E-9"), scheme = scheme),
+        Clock.system,
+        () =>
+          calls += 1
+          Evaluator.instance
+        ,
+        Map.empty
+      )
+      (calls, outcome)
+    val (jacobiCalls, jacobi) = run(IterationScheme.Jacobi)
+    assert(jacobi.converged, "a contraction converges")
+    assert(jacobi.rounds > 1, s"the fixture must take several rounds, took ${jacobi.rounds}")
+    assertEquals(jacobiCalls, jacobi.rounds, "one fresh evaluator (and memo) per Jacobi round")
+    val (gsCalls, gs) = run(IterationScheme.GaussSeidel)
+    assert(gs.converged)
+    assertEquals(gsCalls, gs.rounds * members.size, "one fresh evaluator per member evaluation")
+    assert(gs.rounds <= jacobi.rounds, s"G-S ${gs.rounds} rounds vs Jacobi ${jacobi.rounds}")
+  }
+
+  test("GH-482: a Gauss–Seidel sweep publishes each value to the members after it") {
+    // A1 = B1+1, B1 = A1 swept (A1, B1) from 0: round r leaves (r, r); Jacobi's B1 reads the
+    // previous A1 and round 3 leaves (2, 1).
+    val sheet = Sheet(s)
+      .put(a1, CellValue.Formula("=B1+1", None))
+      .put(b1, CellValue.Formula("=A1", None))
+    val members = List((q(a1), 0, "=B1+1"), (q(b1), 0, "=A1"))
+    val gs = run(sheet, members, iterative = IterativeCalc(3, BigDecimal("0.001")))
+    assertEquals(gs.results(q(a1)), Right(num(3)))
+    assertEquals(gs.results(q(b1)), Right(num(3)))
+    assert(!gs.converged && gs.rounds == 3)
+    val jacobi = run(
+      sheet,
+      members,
+      iterative = IterativeCalc(3, BigDecimal("0.001"), scheme = IterationScheme.Jacobi)
     )
-    assert(outcome.converged, "a contraction converges")
-    assert(outcome.rounds > 1, s"the fixture must take several rounds, took ${outcome.rounds}")
-    assertEquals(calls, outcome.rounds, "one fresh evaluator (and memo) per round, never fewer")
+    assertEquals(jacobi.results(q(a1)), Right(num(2)))
+    assertEquals(jacobi.results(q(b1)), Right(num(1)))
   }

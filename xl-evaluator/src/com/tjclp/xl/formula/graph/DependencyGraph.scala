@@ -1788,6 +1788,68 @@ object DependencyGraph:
       drain(initial, degree0, Vector.empty).map(comps)
 
   /**
+   * GH-482: the order in which ONE cyclic component's members evaluate inside a Gauss–Seidel round
+   * — Kahn's algorithm on the subgraph the component induces, with a (sheet name, A1)-ordered
+   * frontier, CUTTING at the smallest-key remaining node whenever the frontier runs dry (inside a
+   * strongly-connected component it is dry from the start: every member reads another). The edges
+   * into a cut node from members not yet emitted are the round's back edges — the reads that see
+   * the PREVIOUS round's value; every other read sees a value already refreshed this round.
+   * Self-edges are back edges by definition and never block.
+   *
+   * A pure function of the graph's VALUE (the discipline of [[qualifiedSccOrder]]): the same
+   * component yields the same order whatever the insertion order of `members`, `dependencies` or
+   * their sets. Laws (DependencyGraphSpec): a permutation of `members`; determinism under shuffle;
+   * on an acyclic member set it IS the key-ordered Kahn order (no cut happens).
+   *
+   * `dependencies` is the workbook graph (`u -> the cells u reads`); edges leaving the component
+   * are ignored. Runs in O((V + E) log V).
+   */
+  def withinComponentOrder(
+    members: Vector[QualifiedRef],
+    dependencies: Map[QualifiedRef, Set[QualifiedRef]]
+  ): Vector[QualifiedRef] =
+    val byKey: Ordering[QualifiedRef] = Ordering.by(q => (q.sheet.value, q.ref.toA1))
+    val memberSet = members.toSet
+    val precedentsOf: Map[QualifiedRef, Set[QualifiedRef]] =
+      members.iterator.map { q =>
+        q -> dependencies.getOrElse(q, Set.empty).filter(p => p != q && memberSet.contains(p))
+      }.toMap
+    val dependentsOf: Map[QualifiedRef, Set[QualifiedRef]] =
+      precedentsOf.iterator
+        .flatMap((u, ps) => ps.iterator.map(p => p -> u))
+        .foldLeft(Map.empty[QualifiedRef, Set[QualifiedRef]]) { case (acc, (p, u)) =>
+          acc.updated(p, acc.getOrElse(p, Set.empty) + u)
+        }
+    val emptyFrontier = scala.collection.immutable.TreeSet.empty[QualifiedRef](using byKey)
+    val degree0: Map[QualifiedRef, Int] = precedentsOf.view.mapValues(_.size).toMap
+    val initialFrontier = emptyFrontier ++ members.filter(q => degree0.getOrElse(q, 0) == 0)
+
+    @tailrec
+    def drain(
+      frontier: scala.collection.immutable.TreeSet[QualifiedRef],
+      remaining: scala.collection.immutable.TreeSet[QualifiedRef],
+      degree: Map[QualifiedRef, Int],
+      acc: Vector[QualifiedRef]
+    ): Vector[QualifiedRef] =
+      // Kahn's next node or — the frontier dry with members remaining — the smallest remaining
+      // key: the CUT, whose not-yet-emitted precedents become this round's back edges.
+      frontier.headOption.orElse(remaining.headOption) match
+        case None => acc
+        case Some(node) =>
+          val stillRemaining = remaining - node
+          val (nextDegree, newlyReady) =
+            dependentsOf.getOrElse(node, Set.empty).foldLeft((degree, emptyFrontier)) {
+              case ((d, ready), dependent) =>
+                val left = d.getOrElse(dependent, 0) - 1
+                // a dependent already emitted by a cut must not re-enter the frontier
+                val readyNow = left == 0 && stillRemaining.contains(dependent)
+                (d.updated(dependent, left), if readyNow then ready + dependent else ready)
+            }
+          drain((frontier - node) ++ newlyReady, stillRemaining, nextDegree, acc :+ node)
+
+    drain(initialFrontier, emptyFrontier ++ members, degree0, Vector.empty)
+
+  /**
    * GH-346: transitive dependents over the workbook-level reverse edges (excludes the starting
    * refs) — the qualified analog of `transitiveDependents`.
    */

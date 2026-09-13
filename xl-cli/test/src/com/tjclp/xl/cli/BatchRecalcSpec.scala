@@ -796,10 +796,12 @@ class BatchRecalcSpec extends FunSuite:
   }
 
   test("GH-454: exhausted iterative declaration renders the non-convergence WARNING") {
+    // GH-482: a self-referencing oscillator exhausts under any sweep (a two-cell `1-B2`/`1-B1`
+    // pair now converges to (1, 0) under the default Gauss–Seidel sweep, as it does in Excel).
     val wb = Workbook(
       Sheet("Data")
-        .put(ref"B1", CellValue.Formula("1-B2"))
-        .put(ref"B2", CellValue.Formula("1-B1"))
+        .put(ref"B1", CellValue.Formula("1-B1"))
+        .put(ref"B2", CellValue.Formula("B1*2"))
     ).withCalcPr(com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(5), None))
     val out = tempXlsx()
     val summary = WriteCommands.recalc(wb, out, config).unsafeRunSync()
@@ -1827,10 +1829,11 @@ class BatchRecalcSpec extends FunSuite:
   }
 
   test("GH-496: --strict promotes the GH-454 non-convergence WARNING") {
+    // GH-482: a self-referencing oscillator exhausts under any sweep (see the GH-454 test).
     val wb = Workbook(
       Sheet("Data")
-        .put(ref"B1", CellValue.Formula("1-B2"))
-        .put(ref"B2", CellValue.Formula("1-B1"))
+        .put(ref"B1", CellValue.Formula("1-B1"))
+        .put(ref"B2", CellValue.Formula("B1*2"))
     ).withCalcPr(com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(5), None))
     val out = tempXlsx()
 
@@ -1877,13 +1880,15 @@ class BatchRecalcSpec extends FunSuite:
   test("--strict scopes iterative convergence metadata to a batch edit's dirty cone") {
     val wb = Workbook(
       Sheet("Data")
-        // This cycle converges in six rounds after the A1 edit and belongs to the dirty cone.
+        // This cycle converges in four rounds after the A1 edit (GH-482: the Gauss–Seidel sweep;
+        // Jacobi took six) and belongs to the dirty cone.
         .put(ref"A1" -> 0, ref"C1" -> 100)
         .put(ref"B1", CellValue.Formula("C1+B2"))
         .put(ref"B2", CellValue.Formula("$A$1*(C1+B1)/2"))
-        // This independent cycle oscillates until the 20-round budget is exhausted.
-        .put(ref"D1", CellValue.Formula("1-D2"))
-        .put(ref"D2", CellValue.Formula("1-D1"))
+        // This independent self-referencing oscillator exhausts the 20-round budget under any
+        // sweep; it lies outside the cone.
+        .put(ref"D1", CellValue.Formula("1-D1"))
+        .put(ref"D2", CellValue.Formula("D1*2"))
     ).withCalcPr(
       com.tjclp.xl.workbooks.CalcPr(
         iterativeCalculation = true,
@@ -1899,7 +1904,7 @@ class BatchRecalcSpec extends FunSuite:
       .unsafeRunSync()
 
     assert(summary.contains("Recalculated 2 formulas"), s"summary: $summary")
-    assert(summary.contains("converged in 6 iterative round(s)"), s"summary: $summary")
+    assert(summary.contains("converged in 4 iterative round(s)"), s"summary: $summary")
     assert(!summary.contains("exhausted 20 round(s)"), s"summary: $summary")
     assert(!summary.contains("STRICT FAILURE"), s"summary: $summary")
     Files.deleteIfExists(out)
@@ -1907,11 +1912,13 @@ class BatchRecalcSpec extends FunSuite:
   }
 
   test("--strict retains non-convergence from an SCC inside the batch dirty cone") {
+    // GH-482: `$A$1-B1` oscillates 1/0 under any sweep once A1 is 1; B2 rides in the cone as its
+    // dependent (the former `$A$1-B2`/`$A$1-B1` pair converges to (1, 0) under Gauss–Seidel).
     val wb = Workbook(
       Sheet("Data")
         .put(ref"A1" -> 0)
-        .put(ref"B1", CellValue.Formula("$A$1-B2"))
-        .put(ref"B2", CellValue.Formula("$A$1-B1"))
+        .put(ref"B1", CellValue.Formula("$A$1-B1"))
+        .put(ref"B2", CellValue.Formula("B1*2"))
     ).withCalcPr(
       com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(5), None)
     )

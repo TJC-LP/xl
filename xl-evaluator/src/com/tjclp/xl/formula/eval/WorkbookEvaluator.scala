@@ -827,10 +827,18 @@ object WorkbookEvaluator:
           state: PassState
         ): (PassState, SccReport) =
           val (baseSheets, acc0, errs0) = state
-          val members: List[(QualifiedRef, Int, String)] =
-            component.toList.flatMap(q =>
-              sheetIndex.get(q.sheet).map(idx => (q, idx, formulaText(q)))
-            )
+          def withText(order: Vector[QualifiedRef]): List[(QualifiedRef, Int, String)] =
+            order.toList.flatMap(q => sheetIndex.get(q.sheet).map(idx => (q, idx, formulaText(q))))
+          // `component` is the canonical (sheet, A1) listing: the report, the fold and the error
+          // order keep it. GH-482: a Gauss–Seidel round SWEEPS the members in the graph's
+          // within-component order instead, publishing each value to the members after it;
+          // Jacobi keeps the canonical sweep so 0.22.x trajectories (seeded-Rng draw order
+          // included) reproduce bit for bit.
+          val members = withText(component)
+          val sweep = iterative.scheme match
+            case IterationScheme.GaussSeidel =>
+              withText(DependencyGraph.withinComponentOrder(component, deps))
+            case IterationScheme.Jacobi => members
           // GH-469: Excel seeds iterative calculation from the CURRENT cell values. Read them off
           // the THREADED sheets, not the original workbook: a member whose cache the dynamic
           // bucket stripped correctly seeds 0, and no member can be read after being written
@@ -838,15 +846,17 @@ object WorkbookEvaluator:
           val seed =
             if iterative.seedFromCaches then warmSeed(baseSheets, members)
             else Map.empty[QualifiedRef, CellValue]
-          // GH-537: a FRESH aggregate memo per round. Inside one round every member is overlaid
-          // CACHED (Formula(expr, Some(previous))) and results apply only at round end, so a
-          // range touching members is fixed for the round and its aggregate may be shared by the
-          // members that read it — but never across rounds, where the same range changes.
+          // GH-537: a FRESH aggregate memo per evaluation region. Under Jacobi that is one round —
+          // every member is overlaid CACHED (Formula(expr, Some(previous))) and results apply only
+          // at round end, so a range touching members is fixed for the round and its aggregate may
+          // be shared by the members that read it; never across rounds, where the same range
+          // changes. Under Gauss–Seidel members change mid-round, so the engine asks for a fresh
+          // evaluator per member evaluation instead.
           val outcome =
             jacobiFixpoint(
               wb,
               baseSheets,
-              members,
+              sweep,
               iterative,
               pinnedClock,
               () =>
@@ -1024,18 +1034,25 @@ object WorkbookEvaluator:
   )
 
   /**
-   * The shared Jacobi fixpoint engine (GH-373/GH-453/GH-454/GH-492): iterate `members` against
+   * The shared fixpoint engine (GH-373/GH-453/GH-454/GH-492/GH-482): iterate `members` against
    * `baseSheets` until every member's |Δ| < `maxChange` (strict), the loop stalls, or `maxIter`
-   * rounds.
+   * rounds. (The name predates GH-482; the scheme is `iterative.scheme`.)
    *
-   * Each member is `(qualified ref, index of its sheet in baseSheets, formula text)`. Members seed
-   * from `seed`, falling back to 0 for anything absent (`Map.empty` therefore reproduces the
-   * original all-zero seeding exactly); each round overlays every member's cell with
-   * `Formula(expr, Some(previousValue))` so every reference to a member — including self-references
-   * — reads the previous round's value while the member's formula re-evaluates. Callers pin the
-   * clock BEFORE calling (one fixpoint is one volatile generation). A member that throws holds its
-   * previous value for later rounds (GH-388 degradation) and reports its Left only from the final
-   * round.
+   * Each member is `(qualified ref, index of its sheet in baseSheets, formula text)`, in the order
+   * the caller wants them SWEPT. Members seed from `seed`, falling back to 0 for anything absent
+   * (`Map.empty` therefore reproduces the original all-zero seeding exactly); each round overlays
+   * every member's cell with `Formula(expr, Some(previousValue))` so every reference to a member —
+   * including self-references — reads the previous round's value while the member's formula
+   * re-evaluates. Callers pin the clock BEFORE calling (one fixpoint is one volatile generation). A
+   * member that throws holds its previous value for later rounds (GH-388 degradation) and reports
+   * its Left only from the final round.
+   *
+   * GH-482 — the scheme. Under [[IterationScheme.Jacobi]] every member reads that fixed overlay and
+   * the sweep order is immaterial to the values. Under [[IterationScheme.GaussSeidel]] (the
+   * default) the members are swept in list order and each `Right` is published into the overlay
+   * before the next member evaluates — Excel's sequential sweep — so the order IS observable; the
+   * callers pass `DependencyGraph.withinComponentOrder`, a pure function of the graph. Convergence
+   * (`|Δ|` against the round's start) and the stationarity exit are scheme-independent.
    *
    * GH-537 — the per-round costs and the exit:
    *   - Member text never changes across rounds, so each member is PARSED ONCE here and its `TExpr`
@@ -1044,9 +1061,10 @@ object WorkbookEvaluator:
    *   - A member whose overlay is a PINNED cache (GH-353: a cached closed-workbook formula) never
    *     evaluates — its `Some(previous)` overlay IS its value every round, i.e. it is the constant
    *     `seed(q)`; that is decided once, not re-derived per round.
-   *   - `roundEvaluator` is called once per round: a FRESH aggregate memo is sound within a round
-   *     (every member is overlaid cached, results apply at round end, so a range over members is
-   *     fixed for the round) and unsound across rounds (the same range changes).
+   *   - `roundEvaluator` is called once per Jacobi round: a FRESH aggregate memo is sound within a
+   *     round (every member is overlaid cached, results apply at round end, so a range over members
+   *     is fixed for the round) and unsound across rounds (the same range changes). A Gauss–Seidel
+   *     sweep changes the overlay mid-round, so it calls the factory once per member evaluation.
    *   - Once a round reproduces the previous one EXACTLY without converging, some member failed (an
    *     all-`Right` replay has |Δ| = 0 and converges). Evaluation is a pure function of the overlay
    *     — the clock is pinned, the memo is per round, and a member drawing fresh randomness never
@@ -1129,12 +1147,34 @@ object WorkbookEvaluator:
       val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, text)) =>
         sheets.updated(idx, sheets(idx).put(q.ref, CellValue.Formula(text, prev.get(q))))
       }
-      val tempWb = wb.copy(sheets = overlaid)
-      val evaluator = roundEvaluator()
-      val results: Map[QualifiedRef, Either[XLError, CellValue]] =
-        members.map { (q, idx, text) =>
-          q -> evaluateMember(q, idx, text, overlaid, tempWb, evaluator)
-        }.toMap
+      val results: Map[QualifiedRef, Either[XLError, CellValue]] = iterative.scheme match
+        case IterationScheme.Jacobi =>
+          // Every member reads the round's FIXED overlay: one evaluator (one memo) per round.
+          val tempWb = wb.copy(sheets = overlaid)
+          val evaluator = roundEvaluator()
+          members.map { (q, idx, text) =>
+            q -> evaluateMember(q, idx, text, overlaid, tempWb, evaluator)
+          }.toMap
+        case IterationScheme.GaussSeidel =>
+          // GH-482: sweep in `members` order (the caller's within-component order), publishing
+          // each Right into the overlay before the next member reads it; a Left leaves the
+          // previous value in place. The overlay changes mid-round, so every evaluation gets a
+          // fresh evaluator — a memo shared across members would hand back stale aggregates.
+          val (_, swept) =
+            members.foldLeft((overlaid, Map.empty[QualifiedRef, Either[XLError, CellValue]])) {
+              case ((sheets, acc), (q, idx, text)) =>
+                val result =
+                  evaluateMember(q, idx, text, sheets, wb.copy(sheets = sheets), roundEvaluator())
+                val published = result match
+                  case Right(value) =>
+                    sheets.updated(
+                      idx,
+                      sheets(idx).put(q.ref, CellValue.Formula(text, Some(value)))
+                    )
+                  case Left(_) => sheets
+                (published, acc.updated(q, result))
+            }
+          swept
       val converged = members.forall { (q, _, _) =>
         results(q) match
           case Right(next) => changeBelowThreshold(prev.getOrElse(q, zero), next)
