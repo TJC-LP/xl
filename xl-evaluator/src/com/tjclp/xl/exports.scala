@@ -70,7 +70,13 @@ object formulaExports:
   // structural editor + string-level formula rewriting the CLI and scripts share. The objects are
   // exported, never their `.*` members: StructuralEditor's extension block carries default
   // arguments (the wildcard-export landmine above).
-  export formula.eval.{IterativeMode, RecalcOptions, SheetRenamer, StructuralEditor}
+  export formula.eval.{
+    IterativeMode,
+    RecalcOptions,
+    SheetRenamer,
+    StructuralCachePolicy,
+    StructuralEditor
+  }
   export formula.printer.{FormulaOps, FormulaShifter}
   // ADR-017 §2.12 (W2.1): the evaluator-backed FormulaSupport behind wb.edit / sheet.edit.
   export formula.eval.EvalFormulaSupport

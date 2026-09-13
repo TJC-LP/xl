@@ -100,7 +100,7 @@ Options and flags:
     --backend <string>
         XML backend: scalaxml (default, stable) or saxstax (faster)
     --no-recalc
-        Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) leave every formula the edit invalidated UNCACHED rather than re-stamp a stale number, and report both counts. Use when the caches come from another engine.
+        Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) carry every pre-edit cache forward with its formula and mark the workbook fullCalcOnLoad, so Excel/LibreOffice recompute on open while cache-only readers see the pre-edit numbers (only caches behind unresolvable names are withdrawn, and counted). Use when the caches come from another engine.
     --preserve-caches
         Alias for --no-recalc
     --strict

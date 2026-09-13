@@ -138,8 +138,8 @@ object Schema:
     GlobalDoc(
       "--no-recalc",
       None,
-      "Write verbs: apply the edit and recalculate nothing; structural edits leave the formulas " +
-        "they invalidated uncached"
+      "Write verbs: apply the edit and recalculate nothing; structural edits carry every pre-edit " +
+        "cache forward and mark the workbook fullCalcOnLoad"
     ),
     GlobalDoc("--preserve-caches", None, "Alias for --no-recalc"),
     GlobalDoc(
