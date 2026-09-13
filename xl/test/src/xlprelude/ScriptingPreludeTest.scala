@@ -600,8 +600,8 @@ class ScriptingPreludeTest extends FunSuite:
       .sheets
       .find(_.name.value == "Sheet2")
       .map(_(ref"A1").value)
-    // fx literals keep their display-form leading '='; the rewrite keeps the caller's convention.
-    assertEquals(rewritten, Some(CellValue.Formula("=Data!A1*2", None)))
+    // GH-479: fx literals store the bare expression; the rewrite keeps that canonical shape.
+    assertEquals(rewritten, Some(CellValue.Formula("Data!A1*2", None)))
     assertEquals(
       FormulaOps.renameSheet("=Sheet1!A1*2", sheet1, data),
       Right("=Data!A1*2"): XLResult[String]

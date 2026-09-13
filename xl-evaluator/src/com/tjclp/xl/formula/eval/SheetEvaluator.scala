@@ -475,8 +475,9 @@ object SheetEvaluator:
       .left
       .map(parseError => XLError.FormulaError(formula, s"Parse error: $parseError"))
       .map { expr =>
-        val normalized = if formula.startsWith("=") then formula else s"=$formula"
-        val withFormula = sheet.put(ref, CellValue.Formula(normalized))
+        // GH-479: store the model's canonical bare text whichever shape the caller passed
+        val withFormula =
+          sheet.put(ref, CellValue.Formula(CellValue.canonicalFormulaText(formula)))
         val currentStyle =
           withFormula.cells.get(ref).flatMap(_.styleId).flatMap(withFormula.styleRegistry.get)
         // Excel parity: inherit only into a General-formatted target (formats are inferred

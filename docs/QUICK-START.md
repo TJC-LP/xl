@@ -295,8 +295,8 @@ val allResults = sheet.evaluateWithDependencyCheck()
 // Handle circular references safely
 val cyclicSheet = Sheet("Cyclic").unsafe
   .put(
-    ref"A1" -> CellValue.Formula("=B1"),
-    ref"B1" -> CellValue.Formula("=A1")  // Circular reference!
+    ref"A1" -> fx"=B1",
+    ref"B1" -> fx"=A1"  // Circular reference!
   )
   .unsafe
 

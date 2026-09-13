@@ -301,9 +301,9 @@ object WorkbookEquivalence:
   ): Option[String] =
     (expected, actual) match
       case (CellValue.Formula(expExpr, _, _), CellValue.Formula(actExpr, _, _)) =>
-        // GH-456: the writer canonicalizes away the display form's leading '=', so the
-        // round-trip law holds modulo that normalization (the model tolerates both shapes)
-        Option.when(expExpr.stripPrefix("=") != actExpr.stripPrefix("="))(
+        // GH-479: the model's expression is the bare storage text, so the comparison is exact —
+        // a leading '=' on either side is a real mismatch the law must be able to catch
+        Option.when(expExpr != actExpr)(
           s"$sheet!${ref.toA1}: formula text mismatch: expected '$expExpr', actual '$actExpr'"
         )
       case (CellValue.Number(exp), CellValue.Number(act)) =>
