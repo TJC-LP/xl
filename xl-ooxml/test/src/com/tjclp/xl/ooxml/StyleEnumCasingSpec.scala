@@ -82,7 +82,7 @@ class StyleEnumCasingSpec extends FunSuite:
     }
     val fills: Vector[Fill] =
       Vector(Fill.None, Fill.Solid(Color.Rgb(0xffff0000))) ++
-        texturePatterns.map(p => Fill.Pattern(Color.Rgb(0xff000000), Color.Rgb(0xffffffff), p))
+        texturePatterns.map(p => Fill.pattern(Color.Rgb(0xff000000), Color.Rgb(0xffffffff), p))
     val index = StyleIndex(
       fonts = Vector(Font.default),
       fills = fills,
@@ -181,8 +181,92 @@ class StyleEnumCasingSpec extends FunSuite:
         )
         assertEquals(
           parsed.fills(0),
-          Fill.Pattern(Color.Rgb(0xff000000), Color.Rgb(0xffffffff), PatternType.LightUp),
+          Fill.pattern(Color.Rgb(0xff000000), Color.Rgb(0xffffffff), PatternType.LightUp),
           s"reader should accept pattern token '$patternToken'"
         )
     }
+  }
+
+  // ===== GH-566: the enum owns the token table; colours are optional on every texture =====
+
+  test("GH-566: PatternType.token is the ECMA-376 table and fromToken inverts it in any casing") {
+    patternTokens.foreach { case (pattern, token) =>
+      assertEquals(PatternType.token(pattern), token)
+      assertEquals(PatternType.fromToken(token), Some(pattern))
+      assertEquals(PatternType.fromToken(token.toLowerCase), Some(pattern))
+      assertEquals(PatternType.fromToken(token.toUpperCase), Some(pattern))
+    }
+    assertEquals(PatternType.fromToken("hatched"), None)
+    assertEquals(PatternType.fromToken(""), None)
+  }
+
+  /** The three partial-colour shapes of a texture: fgColor only, bgColor only, neither. */
+  private val partialColourFills: Vector[Fill] =
+    texturePatterns.flatMap { p =>
+      Vector(
+        Fill.Pattern(Some(Color.Rgb(0xff808080)), None, p),
+        Fill.Pattern(None, Some(Color.Rgb(0xffffff00)), p),
+        Fill.Pattern(None, None, p)
+      )
+    }
+
+  test("GH-566: the reader keeps a texture whichever colour children are present") {
+    def fillXml(fill: Fill): String = fill match
+      case Fill.Pattern(fg, bg, p) =>
+        // the two literal colours partialColourFills is built from
+        val fgX = fg.map(_ => """<fgColor rgb="FF808080"/>""").getOrElse("")
+        val bgX = bg.map(_ => """<bgColor rgb="FFFFFF00"/>""").getOrElse("")
+        s"""<fill><patternFill patternType="${PatternType.token(
+            p
+          )}">$fgX$bgX</patternFill></fill>"""
+      case other => fail(s"not a texture: $other")
+    val stylesXml =
+      s"""<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+         |  <fonts count="1"><font><name val="Calibri"/><sz val="11.0"/></font></fonts>
+         |  <fills count="${partialColourFills.size}">${partialColourFills.map(fillXml).mkString}</fills>
+         |  <borders count="1"><border><left/><right/><top/><bottom/></border></borders>
+         |  <cellXfs count="1"><xf borderId="0" fillId="0" fontId="0" numFmtId="0" xfId="0"/></cellXfs>
+         |</styleSheet>""".stripMargin
+    val parsed = WorkbookStyles
+      .fromXml(XmlSecurity.parseSafe(stylesXml, "styles.xml").fold(e => fail(e.message), identity))
+      .fold(msg => fail(s"styles parse failed: $msg"), identity)
+    assertEquals(parsed.fills, partialColourFills)
+  }
+
+  test("GH-566: both writers emit only the colour children a texture carries (DOM == SAX)") {
+    val index = StyleIndex(
+      fonts = Vector(Font.default),
+      fills = partialColourFills,
+      borders = Vector(Border.none),
+      numFmts = Vector.empty,
+      cellStyles = Vector(CellStyle.default),
+      styleToIndex = Map(CellStyle.default.canonicalKey -> StyleId(0))
+    )
+    val styles = OoxmlStyles(index)
+    val dom = XmlUtil.compact(styles.toXml)
+    val baos = new ByteArrayOutputStream()
+    styles.writeSax(StaxSaxWriter.create(baos))
+    // StAX renders a childless element as <e></e>; compare in the minimized form
+    val sax = """<([A-Za-z][\w:.-]*)([^<>]*)></\1>""".r
+      .replaceAllIn(baos.toString("UTF-8"), m => s"<${m.group(1)}${m.group(2)}/>")
+    texturePatterns.foreach { p =>
+      val token = PatternType.token(p)
+      val fgOnly = s"""<patternFill patternType="$token"><fgColor rgb="FF808080"/></patternFill>"""
+      val bgOnly = s"""<patternFill patternType="$token"><bgColor rgb="FFFFFF00"/></patternFill>"""
+      // the bare form: gray125 is the writer's own placeholder and is emitted once, up front
+      val bare = s"""<patternFill patternType="$token"/>"""
+      List("DOM" -> dom, "SAX" -> sax).foreach { case (backend, xml) =>
+        assert(xml.contains(fgOnly), s"$backend lost the fgColor-only $token: $xml")
+        assert(xml.contains(bgOnly), s"$backend lost the bgColor-only $token: $xml")
+        assert(xml.contains(bare), s"$backend lost the colourless $token: $xml")
+      }
+    }
+    // the colourless gray125 IS the mandatory placeholder: declared once (the fgColor-only and
+    // bgColor-only gray125 variants are distinct fills and stay), so the table grows by exactly
+    // the `none` leader
+    val bareGray125 = java.util.regex.Pattern.quote("""<patternFill patternType="gray125"/>""").r
+    assertEquals(bareGray125.findAllIn(dom).size, 1, dom)
+    assertEquals(bareGray125.findAllIn(sax).size, 1, sax)
+    assert(dom.contains(s"""<fills count="${partialColourFills.size + 1}">"""), dom)
+    assert(sax.contains(s"""<fills count="${partialColourFills.size + 1}">"""), sax)
   }

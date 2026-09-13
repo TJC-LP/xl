@@ -420,17 +420,21 @@ object StylePatcher:
         )
         Elem(null, "fill", Null, TopScope, minimizeEmpty = false, pfElem)
       case Fill.Pattern(fgColor, bgColor, patternType) =>
+        // GH-566: colour children only when present (absent = Excel's automatic colour), and the
+        // canonical camelCase ST_PatternType token — `toString.toLowerCase` wrote schema-invalid
+        // `darkhorizontal`-style tokens on the streaming path
         val pf = scala.collection.mutable.ListBuffer[Elem]()
-        fgColor match
+        fgColor.foreach {
           case Color.Rgb(argb) => pf += <fgColor rgb={f"$argb%08X"}/>
           case Color.Theme(slot, tint) =>
             pf += <fgColor theme={slot.ordinal.toString} tint={tint.toString}/>
-        bgColor match
+        }
+        bgColor.foreach {
           case Color.Rgb(argb) => pf += <bgColor rgb={f"$argb%08X"}/>
           case Color.Theme(slot, tint) =>
             pf += <bgColor theme={slot.ordinal.toString} tint={tint.toString}/>
-        val ptStr = patternType.toString.toLowerCase(Locale.ROOT)
-        val pfAttrs = new UnprefixedAttribute("patternType", ptStr, Null)
+        }
+        val pfAttrs = new UnprefixedAttribute("patternType", PatternType.token(patternType), Null)
         val pfElem =
           Elem(null, "patternFill", pfAttrs, TopScope, minimizeEmpty = pf.isEmpty, pf.toSeq*)
         <fill>{pfElem}</fill>
@@ -528,20 +532,19 @@ object StylePatcher:
         val pf = (f \ "patternFill")
         if pf.isEmpty then None
         else
-          val patternTypeStr = (pf \ "@patternType").text
-          patternTypeStr match
-            case "none" | "" => Some(Fill.None)
-            case "solid" =>
+          // GH-566: every ST_PatternType token in any casing (the DOM StyleParser's leniency); a
+          // texture keeps whichever colours are present — an absent one is Excel's automatic
+          // colour, not a reason to read the fill back as solid or none
+          PatternType.fromToken((pf \ "@patternType").text) match
+            case None | Some(PatternType.None) => Some(Fill.None)
+            case Some(PatternType.Solid) =>
               extractColor(pf \ "fgColor") match
                 case Some(fg) => Some(Fill.Solid(fg))
                 case None => Some(Fill.None)
-            case other =>
-              val patternType = other match
-                case "gray125" => PatternType.Gray125
-                case _ => PatternType.Solid
-              (extractColor(pf \ "fgColor"), extractColor(pf \ "bgColor")) match
-                case (Some(fg), Some(bg)) => Some(Fill.Pattern(fg, bg, patternType))
-                case _ => Some(Fill.None)
+            case Some(texture) =>
+              Some(
+                Fill.Pattern(extractColor(pf \ "fgColor"), extractColor(pf \ "bgColor"), texture)
+              )
       }
       .getOrElse(Fill.None)
 

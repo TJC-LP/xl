@@ -54,6 +54,26 @@ class DefinedNameRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-649: a Name Manager comment with a line break round-trips on both backends") {
+    val base = Workbook(Sheet("Sheet1").put(ref"A1" -> 1))
+    val comment = "Line one\nLine two\ttabbed"
+    val wb0 = base.copy(metadata =
+      base.metadata.copy(definedNames =
+        Vector(DefinedName("Rate", "0.08", comment = Some(comment)))
+      )
+    )
+    List(
+      "dom" -> com.tjclp.xl.ooxml.writer.WriterConfig.scalaXml,
+      "sax" -> com.tjclp.xl.ooxml.writer.WriterConfig.saxStax
+    ).foreach { case (label, config) =>
+      val out = Files.createTempFile(s"named-comment-$label", ".xlsx")
+      out.toFile.deleteOnExit()
+      XlsxWriter.writeWith(wb0, out, config).fold(e => fail(s"$label write failed: $e"), identity)
+      val reread = XlsxReader.read(out).fold(e => fail(s"$label reread failed: $e"), identity)
+      assertEquals(reread.metadata.definedNames.headOption.flatMap(_.comment), Some(comment), label)
+    }
+  }
+
   test("GH-236: removeDefinedName drops the name on write") {
     val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1))
       .withDefinedName("Temp", "Sheet1!$A$1")

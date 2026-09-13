@@ -87,8 +87,8 @@ class StyleSpec extends ScalaCheckSuite:
     Gen.const(Fill.None),
     genColor.map(Fill.Solid.apply),
     for
-      fg <- genColor
-      bg <- genColor
+      fg <- Gen.option(genColor)
+      bg <- Gen.option(genColor)
       pattern <- genPatternType
     yield Fill.Pattern(fg, bg, pattern)
   )

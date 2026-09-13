@@ -352,7 +352,8 @@ object WorkbookEquivalence:
       fill = style.fill match
         case Fill.None => Fill.None
         case Fill.Solid(c) => Fill.Solid(normalizeColor(c))
-        case Fill.Pattern(fg, bg, p) => Fill.Pattern(normalizeColor(fg), normalizeColor(bg), p),
+        case Fill.Pattern(fg, bg, p) =>
+          Fill.Pattern(fg.map(normalizeColor), bg.map(normalizeColor), p),
       border = Border(
         left = normalizeSide(style.border.left),
         right = normalizeSide(style.border.right),

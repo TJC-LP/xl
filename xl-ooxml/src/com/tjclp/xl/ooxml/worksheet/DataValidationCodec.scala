@@ -155,7 +155,11 @@ object DataValidationCodec:
       case None => Some(false)
       case Some(v) => CfCodec.parseBool(v)
 
-  /** Text attrs decode `_xHHHH_` escapes (attribute-value normalization eats raw LF/TAB/CR). */
+  /**
+   * Text attrs decode `_xHHHH_` escapes: the parser has already resolved `&#10;`-style references
+   * (Excel's spelling, ours since GH-649), and files written 0.16-0.22 carry the GH-429 `_x000A_`
+   * spelling instead.
+   */
   private def textAttr(entry: Elem, name: String): Option[String] =
     entry.attribute(name).map(n => XmlUtil.decodeXstring(n.text))
 
@@ -216,8 +220,10 @@ object DataValidationCodec:
    * container attributes ride through a dirty write; `count` is always restamped.
    *
    * Attributes emit in Excel's stamp order with schema-default values omitted (incl. `type` for
-   * AnyValue); message text goes through [[XmlUtil.escapeXstringAttr]] so multiline prompts survive
-   * attribute-value normalization.
+   * AnyValue). Message text only protects literal `_xHHHH_` runs
+   * ([[XmlUtil.protectXstringLiterals]]); its line breaks and tabs are the writers' business — both
+   * backends escape TAB/LF/CR in every attribute value as `&#9;`/`&#10;`/`&#13;` (GH-649), the
+   * spelling Excel and openpyxl use, where GH-429 wrote `_x000A_` on this path alone.
    */
   def toElem(dvs: Vector[DataValidation], base: Option[Elem]): Option[Elem] =
     val children: Vector[Elem] = dvs.flatMap {
@@ -240,10 +246,10 @@ object DataValidationCodec:
           Option.when(!rules.showDropdown)("showDropDown" -> "1"),
           Option.when(m.showInputMessage)("showInputMessage" -> "1"),
           Option.when(m.showErrorMessage)("showErrorMessage" -> "1"),
-          m.errorTitle.map(t => "errorTitle" -> XmlUtil.escapeXstringAttr(t)),
-          m.error.map(t => "error" -> XmlUtil.escapeXstringAttr(t)),
-          m.promptTitle.map(t => "promptTitle" -> XmlUtil.escapeXstringAttr(t)),
-          m.prompt.map(t => "prompt" -> XmlUtil.escapeXstringAttr(t)),
+          m.errorTitle.map(t => "errorTitle" -> XmlUtil.protectXstringLiterals(t)),
+          m.error.map(t => "error" -> XmlUtil.protectXstringLiterals(t)),
+          m.promptTitle.map(t => "promptTitle" -> XmlUtil.protectXstringLiterals(t)),
+          m.prompt.map(t => "prompt" -> XmlUtil.protectXstringLiterals(t)),
           Some("sqref" -> rules.ranges.map(_.toA1).mkString(" "))
         ).flatten
         val formulaElems =
