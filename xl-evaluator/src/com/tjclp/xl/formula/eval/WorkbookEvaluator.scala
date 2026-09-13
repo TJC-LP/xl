@@ -430,29 +430,45 @@ object WorkbookEvaluator:
     case CellValue.Formula(_, None, _) => true
     case _ => false
 
+  /**
+   * GH-537 test seam: `recalculate` with the generation's aggregate memo supplied by the caller, so
+   * a spec can read `memo.stats` after the run. Behaviour is exactly `recalculateImpl`'s — the memo
+   * is the one every Straight segment of the walk (or the whole non-iterative pass) shares.
+   */
+  private[formula] def recalculateWithGenerationMemo(
+    wb: Workbook,
+    clock: Clock,
+    rng: Rng,
+    iterativeOpt: Option[IterativeCalc],
+    generationMemo: Evaluator.AggregateMemo
+  ): RecalcResult =
+    recalculateImpl(wb, clock, Some(rng), iterativeOpt, generationMemo = generationMemo)
+
   private def recalculateImpl(
     wb: Workbook,
     clock: Clock,
     rngOpt: Option[Rng],
     iterativeOpt: Option[IterativeCalc],
-    parallelism: Int = 1
+    parallelism: Int = 1,
+    generationMemo: Evaluator.AggregateMemo = new Evaluator.AggregateMemo
   ): RecalcResult =
     // One recalculate call is one volatile calculation generation. The lazy snapshot preserves
     // the old no-volatile fast path (the supplied clock is never touched), while ensuring an
     // arbitrary Clock is never invoked concurrently by wave workers.
     val calculationClock = pinnedCalculationClock(clock)
-    // One narrowly scoped cache capability per non-iterative generation. The evaluator itself is
-    // immutable and AggregateMemo is thread-safe, so one instance can serve sequential cells and
-    // parallel wave workers. Iterative rounds deliberately change ranges and stay memo-free.
-    val generationEvaluator = iterativeOpt match
-      // A fixpoint intentionally revisits and changes the same ranges over multiple rounds, so a
-      // one-pass generation cache is inapplicable there.
-      case Some(_) => Evaluator.instance(rngOpt.getOrElse(Rng.system))
-      case None =>
-        Evaluator.recalculationInstance(
-          rngOpt.getOrElse(Rng.system),
-          new Evaluator.AggregateMemo
-        )
+    // One narrowly scoped cache capability per generation. The evaluator itself is immutable and
+    // AggregateMemo is thread-safe, so one instance can serve sequential cells and parallel wave
+    // workers. GH-537: it also serves every acyclic Straight segment of the iterative condensation
+    // walk — the one-pass invariant holds there because a reader of a range touching cyclic cell C
+    // has a graph edge to C and is ordered after C's component has finalized; successful members
+    // are written as plain values (cacheable and final), failed members are stripped to uncached
+    // formulas (`cacheable` refuses the range), and the deferred dynamic bucket's caches are
+    // stripped up front so a range over a not-yet-evaluated bucket cell bypasses too. The rounds
+    // INSIDE a fixpoint change the same ranges repeatedly and never see this memo: fixpointStep
+    // hands the engine a fresh one per round. As with wave placement (GH-520), a dependence the
+    // graph cannot see (GH-468's blind-name class) is invisible to this argument as well.
+    val generationEvaluator =
+      Evaluator.recalculationInstance(rngOpt.getOrElse(Rng.system), generationMemo)
     // Whole-book ordering needs only formula-to-formula edges. Constant cells are read during
     // evaluation but can never participate in a cycle or constrain formula order; excluding them
     // avoids O(formulas × range-size) graph construction and every downstream traversal.
