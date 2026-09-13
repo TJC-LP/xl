@@ -31,6 +31,17 @@ object OrExitReadSheetMain:
 
 class OrExitSmokeTest extends FunSuite:
 
+  /**
+   * The child JVM with the parent's environment minus JAVA_TOOL_OPTIONS: a JVM that picks that
+   * variable up announces it on stderr ("Picked up JAVA_TOOL_OPTIONS: ..."), and these tests
+   * compare the child's stderr byte for byte. Proxied sandboxes inject it to reach the network,
+   * which the child never does.
+   */
+  private def childJvm(command: String*): ProcessBuilder =
+    val builder = new ProcessBuilder(command*)
+    builder.environment().remove("JAVA_TOOL_OPTIONS")
+    builder
+
   test("orExit on Left prints exitMessage to stderr, nothing to stdout, and exits 1"):
     val java = Paths.get(System.getProperty("java.home"), "bin", "java").toString
     val classpath = System.getProperty("java.class.path")
@@ -38,7 +49,7 @@ class OrExitSmokeTest extends FunSuite:
     val out = dir.resolve("stdout.txt")
     val err = dir.resolve("stderr.txt")
     try
-      val process = new ProcessBuilder(java, "-cp", classpath, "xlprelude.OrExitSmokeMain")
+      val process = childJvm(java, "-cp", classpath, "xlprelude.OrExitSmokeMain")
         .redirectOutput(out.toFile)
         .redirectError(err.toFile)
         .start()
@@ -68,7 +79,7 @@ class OrExitSmokeTest extends FunSuite:
     val err = dir.resolve("stderr.txt")
     try
       val process =
-        new ProcessBuilder(java, "-cp", classpath, "xlprelude.OrExitReadSheetMain", book.toString)
+        childJvm(java, "-cp", classpath, "xlprelude.OrExitReadSheetMain", book.toString)
           .redirectOutput(out.toFile)
           .redirectError(err.toFile)
           .start()
