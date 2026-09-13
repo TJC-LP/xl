@@ -2224,7 +2224,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
       case Left(err) => fail(s"LET formula should parse: $err")
   }
 
-  test("GH-484: printFileForm keeps bare commas in custom-rendered YEARFRAC") {
+  test("GH-484: printFileForm keeps bare commas in YEARFRAC with an explicit basis") {
     FormulaParser.parse("=YEARFRAC(A1,B1,1)") match
       case Right(expr) => assertEquals(FormulaPrinter.printFileForm(expr), "YEARFRAC(A1,B1,1)")
       case Left(err) => fail(s"YEARFRAC should parse: $err")
