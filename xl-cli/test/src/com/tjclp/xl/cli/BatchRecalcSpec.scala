@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import cats.effect.{IO, unsafe}
-import com.tjclp.xl.{CellRange, Workbook, Sheet, given}
+import com.tjclp.xl.{CalcMode, CalcPr, CellRange, Workbook, Sheet, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
@@ -1067,13 +1067,31 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  /** GH-509: the honesty marker a `--no-recalc` STRUCTURAL write must leave in the file. */
+  private def assertFullCalcOnLoad(out: Path, written: Workbook): Unit =
+    assertEquals(
+      written.metadata.calcPr.flatMap(_.fullCalcOnLoad),
+      Some(true),
+      s"a --no-recalc structural write must mark the book fullCalcOnLoad: ${written.metadata.calcPr}"
+    )
+    assert(
+      workbookXml(out).contains("fullCalcOnLoad=\"1\""),
+      s"workbook.xml must carry fullCalcOnLoad=\"1\": ${workbookXml(out)}"
+    )
+
+  private def workbookXml(out: Path): String =
+    new String(zipEntryBytes(out, "xl/workbook.xml"), StandardCharsets.UTF_8)
+
+  private val carryLine = "workbook marked for full recalculation on load (fullCalcOnLoad)"
+
+  private def withdrawnLine(n: Int): String =
+    s"$n cache(s) behind unresolvable names withdrawn"
+
   test("GH-503: --no-recalc keeps the caches an insert below them cannot have changed") {
-    // The CLI still never RE-ASSERTS a cache (round 3): it only declines to invalidate one the
-    // edit provably did not touch. Inserting at row 20 on a sheet whose data stops at row 6 moves
-    // nothing C1/S1/Other!B1 read, and rewrites none of their text — their values are unchanged,
-    // so their (externally authored, deliberately poisoned) 777s ride through, which is exactly
-    // what --no-recalc is for. C30 MOVED to C31, so it drops: a relocated cell is in the cone
-    // whether or not its formula is position-sensitive.
+    // Inserting at row 20 on a sheet whose data stops at row 6 moves nothing C1/S1/Other!B1 read,
+    // and rewrites none of their text — their (externally authored, deliberately poisoned) 777s
+    // ride through, which is exactly what --no-recalc is for. C30 MOVED to C31; under GH-509 its
+    // cache moves with it, and the file says so with fullCalcOnLoad.
     val wb = structuralPoisonWorkbook()
     val out = tempXlsx()
 
@@ -1087,15 +1105,17 @@ class BatchRecalcSpec extends FunSuite:
     assertEquals(formulaOn(written, "Data", ref"C1").cachedValue, poisoned)
     assertEquals(formulaOn(written, "Data", ref"S1").cachedValue, poisoned)
     assertEquals(formulaOn(written, "Other", ref"B1").cachedValue, poisoned)
-    assertEquals(formulaOn(written, "Data", ref"C31").cachedValue, None)
-    assert(summary.contains("3 cached value(s) preserved"), s"summary: $summary")
-    assert(summary.contains("1 formula(s)"), s"summary: $summary")
+    assertEquals(formulaOn(written, "Data", ref"C31").cachedValue, poisoned)
+    assert(summary.contains("4 cached value(s) carried forward"), s"summary: $summary")
+    assert(summary.contains(carryLine), s"summary: $summary")
+    assert(!summary.contains("withdrawn"), s"nothing here is blind: $summary")
+    assertFullCalcOnLoad(out, written)
     Files.deleteIfExists(out)
   }
 
   test("GH-503: --no-recalc keeps the same caches across a delete below or beside them") {
-    // The delete twins of the insert case. Deleting row 20 relocates C30 (-> C29, dropped) and
-    // touches nothing else; deleting column AA touches nothing at all, so every cache survives.
+    // The delete twins of the insert case. Deleting row 20 relocates C30 (-> C29, cache carried)
+    // and touches nothing else; deleting column AA touches nothing at all.
     val wb = structuralPoisonWorkbook()
     val rowsOut = tempXlsx()
     val colsOut = tempXlsx()
@@ -1111,20 +1131,23 @@ class BatchRecalcSpec extends FunSuite:
     val rows = readBack(rowsOut)
     assertEquals(formulaOn(rows, "Data", ref"C1").cachedValue, poisoned)
     assertEquals(formulaOn(rows, "Other", ref"B1").cachedValue, poisoned)
-    assertEquals(formulaOn(rows, "Data", ref"C29").cachedValue, None, "C30 relocated, so it drops")
+    assertEquals(formulaOn(rows, "Data", ref"C29").cachedValue, poisoned, "C30 relocated, carried")
+    assertFullCalcOnLoad(rowsOut, rows)
     val cols = readBack(colsOut)
     assertEquals(formulaOn(cols, "Data", ref"C1").cachedValue, poisoned)
     assertEquals(formulaOn(cols, "Other", ref"B1").cachedValue, poisoned)
     assertEquals(formulaOn(cols, "Data", ref"C30").cachedValue, poisoned)
-    assert(colsSummary.contains("none dropped"), s"a column edit beside the data: $colsSummary")
+    assert(colsSummary.contains("4 cached value(s) carried forward"), s"summary: $colsSummary")
+    assert(!colsSummary.contains("none dropped"), s"old wording must be gone: $colsSummary")
+    // an edit beside the data marks the book too: the marker is per write, not per drop
+    assertFullCalcOnLoad(colsOut, cols)
     Files.deleteIfExists(rowsOut)
     Files.deleteIfExists(colsOut)
   }
 
   test("GH-468: --no-recalc still rides an INDEPENDENT sheet's caches through verbatim") {
-    // The preserved count is not vacuous: StructuralEditor only invalidates formulas that
-    // transitively READ the edited sheet, so a self-contained sheet keeps its externally-authored
-    // caches byte for byte — the actual #468 guarantee, now the only one claimed.
+    // A self-contained sheet keeps its externally-authored caches byte for byte; Data!F10's
+    // pre-existing gap is not a withdrawal and is not reported as one.
     val wb = Workbook(
       Sheet("Data").put(ref"D10" -> 7).put(ref"F10", CellValue.Formula("D10*2", None)),
       Sheet("Other")
@@ -1137,15 +1160,19 @@ class BatchRecalcSpec extends FunSuite:
       .insertRows(wb, wb.sheets.headOption, 5, 1, out, config, false, preserveCaches)
       .unsafeRunSync()
 
-    assertCachedOn(readBack(out), "Other", ref"B1", 888.0)
-    assert(summary.contains("1 cached value(s) preserved"), s"summary: $summary")
+    val written = readBack(out)
+    assertCachedOn(written, "Other", ref"B1", 888.0)
+    assertEquals(formulaOn(written, "Data", ref"F11").cachedValue, None, "the gap stays a gap")
+    assert(summary.contains("1 cached value(s) carried forward"), s"summary: $summary")
+    assert(!summary.contains("withdrawn"), s"a pre-existing gap is not a withdrawal: $summary")
+    assertFullCalcOnLoad(out, written)
     Files.deleteIfExists(out)
   }
 
-  test("GH-468: --no-recalc never restores a cache onto a formula the edit REWROTE") {
-    // The safety condition: a shifted formula's cached value belongs to the old text. F10's
-    // `D10*2` becomes `D11*2` at F11 — restoring 999 there would invent a value no engine ever
-    // computed, so the cell must stay uncached (Excel's own "dirty" state).
+  test("GH-509: --no-recalc carries the cache of a formula the edit REWROTE under fullCalcOnLoad") {
+    // F10's `D10*2` becomes `D11*2` at F11 and keeps its 999: the cache is the number the file
+    // already had, and the fullCalcOnLoad marker tells every recalculating reader to recompute
+    // before showing it. (Before GH-509 the cell was written without a <v>.)
     val wb = Workbook(
       Sheet("Data")
         .put(ref"D10" -> 7)
@@ -1158,9 +1185,10 @@ class BatchRecalcSpec extends FunSuite:
       .unsafeRunSync()
 
     val written = readBack(out)
-    written.sheets.head.cells.get(ref"F11").map(_.value) match
-      case Some(CellValue.Formula("D11*2", None, _)) => ()
-      case other => fail(s"a rewritten formula must stay uncached, got $other")
+    val moved = formulaOn(written, "Data", ref"F11")
+    assertEquals(moved.expression, "D11*2")
+    assertEquals(moved.cachedValue, Some(CellValue.Number(BigDecimal(999))))
+    assertFullCalcOnLoad(out, written)
     Files.deleteIfExists(out)
   }
 
@@ -1170,9 +1198,10 @@ class BatchRecalcSpec extends FunSuite:
       case Some(f: CellValue.Formula) => f
       case other => fail(s"expected a formula at $sheet!${at.toA1}, got $other")
 
-  test("GH-468: --no-recalc never carries a POSITION-DEPENDENT cache across a row shift") {
-    // `=ROW()` at C30 caches 30. An insert above it moves the cell to C31 without touching its
-    // text, so the byte-identity check alone would happily re-cache 30 where the truth is 31.
+  test("GH-509: --no-recalc carries a POSITION-DEPENDENT cache across a row shift") {
+    // `=ROW()` at C30 caches 30 and lands at C31, where the truth is 31. The cache rides along
+    // anyway: Excel and LibreOffice recompute it on open because of fullCalcOnLoad, and a
+    // cache-only reader gets the same 30 the source file carried. (Before GH-509: uncached.)
     val wb = Workbook(
       Sheet("Data")
         .put(ref"C30", CellValue.Formula("ROW()", Some(CellValue.Number(BigDecimal(30)))))
@@ -1183,14 +1212,16 @@ class BatchRecalcSpec extends FunSuite:
       .insertRows(wb, wb.sheets.headOption, 20, 1, out, config, false, preserveCaches)
       .unsafeRunSync()
 
-    val moved = formulaOn(readBack(out), "Data", ref"C31")
+    val written = readBack(out)
+    val moved = formulaOn(written, "Data", ref"C31")
     assertEquals(moved.expression, "ROW()")
-    assertEquals(moved.cachedValue, None, s"a relocated =ROW() must not keep its old cache: $moved")
+    assertEquals(moved.cachedValue, Some(CellValue.Number(BigDecimal(30))))
+    assertFullCalcOnLoad(out, written)
     Files.deleteIfExists(out)
   }
 
-  test("GH-468: --no-recalc never carries a POSITION-DEPENDENT cache across a column shift") {
-    // `=COLUMN()` at D30 caches 4; two inserted columns land it at F30, where the truth is 6.
+  test("GH-509: --no-recalc carries a POSITION-DEPENDENT cache across a column shift") {
+    // `=COLUMN()` at D30 caches 4; two inserted columns land it at F30 with the 4 still attached.
     val wb = Workbook(
       Sheet("Data")
         .put(ref"D30", CellValue.Formula("COLUMN()", Some(CellValue.Number(BigDecimal(4)))))
@@ -1201,15 +1232,17 @@ class BatchRecalcSpec extends FunSuite:
       .insertColumns(wb, wb.sheets.headOption, "A", 2, out, config, false, preserveCaches)
       .unsafeRunSync()
 
-    val moved = formulaOn(readBack(out), "Data", ref"F30")
+    val written = readBack(out)
+    val moved = formulaOn(written, "Data", ref"F30")
     assertEquals(moved.expression, "COLUMN()")
-    assertEquals(moved.cachedValue, None, s"a relocated =COLUMN() must not keep its cache: $moved")
+    assertEquals(moved.cachedValue, Some(CellValue.Number(BigDecimal(4))))
+    assertFullCalcOnLoad(out, written)
     Files.deleteIfExists(out)
   }
 
-  test("GH-468: --no-recalc never restores a DYNAMIC-reference cache (its target may have moved)") {
+  test("GH-509: --no-recalc carries a DYNAMIC-reference cache under fullCalcOnLoad") {
     // F1 = INDIRECT("A30")*2 caches 10 off A30 = 5. The insert moves that content to A31 without
-    // rewriting the string literal, so the formula now reads a blank: 10 is provably wrong.
+    // rewriting the string literal; the pre-edit 10 is carried and the marker owns the truth.
     val wb = Workbook(
       Sheet("Data")
         .put(ref"A30" -> 5)
@@ -1224,12 +1257,10 @@ class BatchRecalcSpec extends FunSuite:
       .insertRows(wb, wb.sheets.headOption, 20, 1, out, config, false, preserveCaches)
       .unsafeRunSync()
 
-    val dynamic = formulaOn(readBack(out), "Data", ref"F1")
-    assertEquals(
-      dynamic.cachedValue,
-      None,
-      s"a dynamic reference must never keep a pre-edit cache: $dynamic"
-    )
+    val written = readBack(out)
+    val dynamic = formulaOn(written, "Data", ref"F1")
+    assertEquals(dynamic.cachedValue, Some(CellValue.Number(BigDecimal(10))))
+    assertFullCalcOnLoad(out, written)
     Files.deleteIfExists(out)
   }
 
@@ -1245,12 +1276,14 @@ class BatchRecalcSpec extends FunSuite:
     }
     Workbook(block.put(ref"D1", CellValue.Formula("SUM(A1:A10)", Some(poisoned))))
 
-  test("GH-468: --no-recalc through a contiguous block reports what it could NOT preserve") {
-    // The dominant real shape: an edit INSIDE a contiguous block. GH-503 splits it exactly where
-    // the dependency graph does — B1:B4 read A1:A4, all above the cut, so nothing they read moved
-    // and their caches ride through; B5:B10 relocate to B6:B11 with their references rewritten;
-    // D1's SUM(A1:A10) becomes SUM(A1:A11), a different question. The summary must count both
-    // halves rather than claim total preservation.
+  test(
+    "GH-509: --no-recalc inside a contiguous block carries every cache and marks fullCalcOnLoad"
+  ) {
+    // The dominant real shape: an edit INSIDE a contiguous block. Under GH-503 alone this kept 4
+    // of 11 caches (B1:B4, above the cut) and wrote B6:B11 and D1 without a <v>. Now every
+    // pre-edit cache rides with its formula — B5:B10 relocate to B6:B11 with rewritten text, D1
+    // becomes SUM(A1:A11) — and the file itself says the numbers are pre-edit: fullCalcOnLoad="1"
+    // in workbook.xml, visible through `describe --full`.
     val wb = contiguousBlockWorkbook()
     val out = tempXlsx()
 
@@ -1262,31 +1295,189 @@ class BatchRecalcSpec extends FunSuite:
     val poisoned = Some(CellValue.Number(BigDecimal(777)))
     (1 to 4).foreach { i =>
       val cell = formulaOn(written, "Data", ARef.from0(1, i - 1))
+      assertEquals(cell.expression, s"A$i*2")
       assertEquals(cell.cachedValue, poisoned, s"B$i reads A$i, above the cut: $cell")
     }
-    // B5:B10 shifted to B6:B11 and their references were rewritten: no cache may be invented.
     (6 to 11).foreach { i =>
       val cell = formulaOn(written, "Data", ARef.from0(1, i - 1))
-      assertEquals(cell.cachedValue, None, s"B$i must stay uncached, got $cell")
+      assertEquals(cell.expression, s"A$i*2", s"B$i must carry rewritten text")
+      assertEquals(cell.cachedValue, poisoned, s"B$i must carry its pre-edit cache: $cell")
     }
-    // D1 = SUM(A1:A10) became SUM(A1:A11): the old total answered a different question.
-    assertEquals(formulaOn(written, "Data", ref"D1").cachedValue, None)
+    val total = formulaOn(written, "Data", ref"D1")
+    assertEquals(total.expression, "SUM(A1:A11)")
+    assertEquals(total.cachedValue, poisoned)
+    assertFullCalcOnLoad(out, written)
     assert(summary.contains("Recalculation skipped (--no-recalc)"), s"summary: $summary")
-    assert(summary.contains("4 cached value(s) preserved"), s"summary: $summary")
-    assert(summary.contains("7 formula(s)"), s"summary: $summary")
+    assert(summary.contains("11 cached value(s) carried forward"), s"summary: $summary")
+    assert(summary.contains(carryLine), s"summary: $summary")
+    assert(!summary.contains("left uncached"), s"old wording must be gone: $summary")
+    assert(!summary.contains("none dropped"), s"old wording must be gone: $summary")
+    assert(!summary.contains("withdrawn"), s"nothing here is blind: $summary")
     assert(
       !summary.contains("every existing cached value preserved"),
-      s"the structural arm must not claim total preservation: $summary"
+      s"the structural arm keeps its own wording: $summary"
     )
+    // The marker is observable without reading workbook.xml.
+    val describe =
+      CliHarness.run("-f", out.toString, "--json", "describe", "--full").unsafeRunSync()
+    assertEquals(describe.exit, 0, describe.stderr)
+    assertEquals(ujson.read(describe.stdout)("data")("calcPr")("fullCalcOnLoad"), ujson.True)
     Files.deleteIfExists(out)
   }
 
-  test("GH-468: --no-recalc never restores a STATIC DEPENDENT of a dynamic cell") {
-    // Round-3 escape class (1). F1 = INDIRECT("A30")*2 is correctly refused a cache (its target
-    // moved), but G1 = F1+1 keeps text `F1+1`, does not move, and holds no dynamic reference — so
-    // every local guard passes while the value it caches was derived from the very cache xl just
-    // threw away as untrustworthy. The file would be internally inconsistent AND wrong: the
-    // default path writes F1 = 0, G1 = 1.
+  test("GH-509: the DEFAULT structural path still recalculates and never sets fullCalcOnLoad") {
+    // The carrying policy is reachable only through --no-recalc. Without the flag the same edit
+    // refreshes its cone (the poisoned 777s are gone) and the scratch book keeps no calcPr at all.
+    val wb = contiguousBlockWorkbook()
+    val out = tempXlsx()
+
+    val summary =
+      WriteCommands.insertRows(wb, wb.sheets.headOption, 5, 1, out, config).unsafeRunSync()
+
+    val written = readBack(out)
+    assertCachedOn(written, "Data", ref"B1", 2.0)
+    assert(written.sheets.head.cells.get(ref"B5").isEmpty, "the inserted row 5 is blank")
+    assertCachedOn(written, "Data", ref"B6", 10.0) // the old B5, now A6*2 over the moved 5
+    assertCachedOn(written, "Data", ref"B11", 20.0)
+    assertCachedOn(written, "Data", ref"D1", 55.0)
+    assertEquals(written.metadata.calcPr, None)
+    assert(!workbookXml(out).contains("fullCalcOnLoad"), workbookXml(out))
+    assert(!summary.contains("--no-recalc"), s"summary: $summary")
+    assert(!summary.contains("fullCalcOnLoad"), s"summary: $summary")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-509: a non-structural --no-recalc write never sets fullCalcOnLoad") {
+    // put/putf/fill/copy/batch move no cell and rewrite no formula, so their blanket claim is
+    // true as it stands and the file needs no marker.
+    val wb = splicedCacheWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .put(wb, wb.sheets.headOption, "A1", List("6"), out, config, policy = preserveCaches)
+      .unsafeRunSync()
+
+    assert(summary.contains("every existing cached value preserved"), s"summary: $summary")
+    assert(!summary.contains("fullCalcOnLoad"), s"summary: $summary")
+    val written = readBack(out)
+    assertEquals(written.metadata.calcPr.flatMap(_.fullCalcOnLoad), None)
+    assert(!workbookXml(out).contains("fullCalcOnLoad"), workbookXml(out))
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-509: --strict with --no-recalc on a structural verb exits clean") {
+    // No recalculation ran, so there is nothing for the strict gate to promote.
+    val wb = contiguousBlockWorkbook()
+    val out = tempXlsx()
+
+    val summary = WriteCommands
+      .insertRows(
+        wb,
+        wb.sheets.headOption,
+        5,
+        1,
+        out,
+        config,
+        false,
+        WritePolicy(noRecalc = true, strict = true)
+      )
+      .unsafeRunSync()
+
+    assert(summary.contains(carryLine), s"summary: $summary")
+    assert(!summary.contains("STRICT"), s"summary: $summary")
+    assertFullCalcOnLoad(out, readBack(out))
+    Files.deleteIfExists(out)
+  }
+
+  /**
+   * A source-backed book carrying the TJC house `<calcPr>` plus an attribute xl does not model
+   * (`refMode`), so the GH-509 overlay has something to lose.
+   */
+  private def houseCalcPr: CalcPr = CalcPr(
+    iterativeCalculation = true,
+    maxIterations = Some(100),
+    calcMode = Some(CalcMode.AutoNoTable),
+    calcId = Some(191029)
+  )
+
+  private def houseCalcPrSource(): Path =
+    val source = tempXlsx()
+    ExcelIO
+      .instance[IO]
+      .write(contiguousBlockWorkbook().withCalcPr(houseCalcPr), source)
+      .unsafeRunSync()
+    rewriteZipEntry(source, "xl/workbook.xml") { bytes =>
+      val xml = new String(bytes, StandardCharsets.UTF_8)
+      assert(xml.contains("<calcPr "), s"premise: the scratch write emits a calcPr: $xml")
+      xml.replace("<calcPr ", "<calcPr refMode=\"A1\" ").getBytes(StandardCharsets.UTF_8)
+    }
+    source
+
+  private val houseAttrs = List(
+    "calcId=\"191029\"",
+    "calcMode=\"autoNoTable\"",
+    "iterate=\"1\"",
+    "iterateCount=\"100\"",
+    "refMode=\"A1\"",
+    "fullCalcOnLoad=\"1\""
+  )
+
+  test("GH-509: the marker overlays a preserved <calcPr> without losing its attributes") {
+    val source = houseCalcPrSource()
+    val out = tempXlsx()
+    try
+      val wb = readBack(source)
+      assertEquals(wb.metadata.calcPr, Some(houseCalcPr), "premise: the house calcPr round-trips")
+      assert(wb.sourceContext.isDefined, "premise: the write must be source-backed")
+
+      val summary = WriteCommands
+        .insertRows(wb, wb.sheets.headOption, 5, 1, out, config, false, preserveCaches)
+        .unsafeRunSync()
+
+      val written = readBack(out)
+      assertEquals(written.metadata.calcPr, Some(houseCalcPr.copy(fullCalcOnLoad = Some(true))))
+      val xml = workbookXml(out)
+      houseAttrs.foreach(attr => assert(xml.contains(attr), s"$attr missing from $xml"))
+      assertEquals("fullCalcOnLoad=".r.findAllIn(xml).size, 1, s"one marker, no duplicate: $xml")
+      assert(summary.contains("11 cached value(s) carried forward"), s"summary: $summary")
+      // the iterate triple is 'model is truth' on write: it must have been carried, not defaulted
+      assertEquals(written.metadata.calcPr.map(_.iterativeCalculation), Some(true))
+    finally
+      Files.deleteIfExists(source)
+      Files.deleteIfExists(out)
+  }
+
+  test("GH-509: --stream structural --no-recalc carries the marker too") {
+    // The streaming write is the same XlsxWriter behind the SAX backend, which re-sorts calcPr
+    // attributes itself: every preserved attribute and the marker must survive that path too.
+    val source = houseCalcPrSource()
+    val out = tempXlsx()
+    try
+      val wb = readBack(source)
+      val summary = WriteCommands
+        .deleteRows(wb, wb.sheets.headOption, 5, 1, out, config, true, preserveCaches)
+        .unsafeRunSync()
+
+      val written = readBack(out)
+      assertEquals(written.metadata.calcPr, Some(houseCalcPr.copy(fullCalcOnLoad = Some(true))))
+      val xml = workbookXml(out)
+      houseAttrs.foreach(attr => assert(xml.contains(attr), s"$attr missing from $xml"))
+      assertEquals(formulaOn(written, "Data", ref"D1").expression, "SUM(A1:A9)")
+      assertEquals(
+        formulaOn(written, "Data", ref"D1").cachedValue,
+        Some(CellValue.Number(BigDecimal(777)))
+      )
+      // B5's formula cell was deleted with its row: 10 cached formulas remain, none withdrawn
+      assert(summary.contains("10 cached value(s) carried forward"), s"summary: $summary")
+      assert(!summary.contains("withdrawn"), s"a deleted cell is not a withdrawal: $summary")
+    finally
+      Files.deleteIfExists(source)
+      Files.deleteIfExists(out)
+  }
+
+  test("GH-509: --no-recalc carries a STATIC DEPENDENT of a dynamic cell with the cell itself") {
+    // F1 = INDIRECT("A30")*2 and G1 = F1+1 both keep their pre-edit numbers: the file stays
+    // internally consistent (10 and 11 belong together) and the marker forces the recompute.
     val wb = Workbook(
       Sheet("Data")
         .put(ref"A30" -> 5)
@@ -1300,14 +1491,11 @@ class BatchRecalcSpec extends FunSuite:
       .unsafeRunSync()
 
     val written = readBack(out)
-    assertEquals(formulaOn(written, "Data", ref"F1").cachedValue, None)
+    assertEquals(formulaOn(written, "Data", ref"F1").cachedValue, Some(CellValue.Number(10)))
     val dependent = formulaOn(written, "Data", ref"G1")
     assertEquals(dependent.expression, "F1+1")
-    assertEquals(
-      dependent.cachedValue,
-      None,
-      s"a static dependent of a dynamic cell must not keep its cache: $dependent"
-    )
+    assertEquals(dependent.cachedValue, Some(CellValue.Number(11)))
+    assertFullCalcOnLoad(out, written)
     Files.deleteIfExists(out)
   }
 
@@ -1321,10 +1509,10 @@ class BatchRecalcSpec extends FunSuite:
       Sheet("Other").put(ref"B2", CellValue.Formula("SUM(MyRange)", Some(CellValue.Number(55))))
     ).withDefinedName("MyRange", "Data!$A$1:$A$10")
 
-  test("GH-468: --no-recalc never restores a cache reached through a REWRITTEN defined name") {
-    // Round-3 escape class (2), a mainstream deal-model shape. Deleting Data row 3 shrinks the
-    // name to Data!$A$1:$A$9, so SUM(MyRange) is 52, not 55 — yet the formula text is unchanged,
-    // the cell did not move and it holds no INDIRECT/OFFSET, so every local guard passes.
+  test("GH-509: --no-recalc carries a cache reached through a REWRITTEN defined name") {
+    // A mainstream deal-model shape. Deleting Data row 3 shrinks the name to Data!$A$1:$A$9, so
+    // SUM(MyRange) is 52 on recompute — the carried 55 is the pre-edit number, and the marker is
+    // what makes carrying it honest. The name itself still shrinks with the edit.
     val wb = definedRangeWorkbook()
     val out = tempXlsx()
 
@@ -1349,29 +1537,26 @@ class BatchRecalcSpec extends FunSuite:
     )
     val summed = formulaOn(written, "Other", ref"B2")
     assertEquals(summed.expression, "SUM(MyRange)")
-    assertEquals(
-      summed.cachedValue,
-      None,
-      s"a cache reached through a rewritten name must be dropped: $summed"
-    )
-    assert(
-      !summary.contains("none dropped"),
-      s"the invalidated cache must be counted, not certified: $summary"
-    )
+    assertEquals(summed.cachedValue, Some(CellValue.Number(55)))
+    assert(summary.contains("1 cached value(s) carried forward"), s"summary: $summary")
+    assert(!summary.contains("withdrawn"), s"a resolvable name is not blind: $summary")
+    assertFullCalcOnLoad(out, written)
     Files.deleteIfExists(out)
   }
 
-  test("GH-468: --no-recalc never restores a cache reached through a #REF!-ed defined name") {
-    // Round-3 escape class (2), worse variant: the name's whole target is deleted, so MyName
-    // degrades to #REF! and `=MyName*3` cannot have an answer at all. The default path leaves B2
-    // uncached and reports the error; --no-recalc must not certify the stale 15.
+  test("GH-509: --no-recalc carries a cache reached through a name the edit degrades to #REF!") {
+    // The name's whole target is deleted, so MyName degrades to #REF! and `=MyName*3` has no
+    // answer any more. The default path leaves B2 uncached and reports the error; --no-recalc
+    // carries the pre-edit 15 under fullCalcOnLoad — a recalculating reader shows #REF!, a
+    // cache-only reader sees what the source file said. The PRE-edit name resolved, so this is
+    // not the GH-507 blind case.
     val wb = Workbook(
       Sheet("Data").put(ref"A30" -> 5),
       Sheet("Other").put(ref"B2", CellValue.Formula("MyName*3", Some(CellValue.Number(15))))
     ).withDefinedName("MyName", "Data!$A$30")
     val out = tempXlsx()
 
-    WriteCommands
+    val summary = WriteCommands
       .deleteRows(
         wb,
         wb.sheets.find(_.name.value == "Data"),
@@ -1385,12 +1570,15 @@ class BatchRecalcSpec extends FunSuite:
       .unsafeRunSync()
 
     val written = readBack(out)
-    val broken = formulaOn(written, "Other", ref"B2")
     assertEquals(
-      broken.cachedValue,
-      None,
-      s"a cache reached through a #REF!-ed name must be dropped: $broken"
+      written.metadata.definedNames.find(_.name == "MyName").map(_.formula),
+      Some("#REF!")
     )
+    val broken = formulaOn(written, "Other", ref"B2")
+    assertEquals(broken.expression, "MyName*3")
+    assertEquals(broken.cachedValue, Some(CellValue.Number(15)))
+    assert(!summary.contains("withdrawn"), s"summary: $summary")
+    assertFullCalcOnLoad(out, written)
     Files.deleteIfExists(out)
   }
 
@@ -1449,7 +1637,9 @@ class BatchRecalcSpec extends FunSuite:
       None,
       s"a cache behind an ALIAS of an unparseable name must not ride through: $summed"
     )
-    assert(!summary.contains("none dropped"), s"it must be counted, not certified: $summary")
+    assert(summary.contains(withdrawnLine(1)), s"the strip must be counted: $summary")
+    assert(summary.contains("0 cached value(s) carried forward"), s"summary: $summary")
+    assertFullCalcOnLoad(out, readBack(out))
     Files.deleteIfExists(out)
   }
 
@@ -1485,7 +1675,8 @@ class BatchRecalcSpec extends FunSuite:
       None,
       s"a cache behind a name the graph cannot parse must not ride through: $summed"
     )
-    assert(!summary.contains("none dropped"), s"it must be counted, not certified: $summary")
+    assert(summary.contains(withdrawnLine(1)), s"the strip must be counted: $summary")
+    assertFullCalcOnLoad(out, readBack(out))
     Files.deleteIfExists(out)
   }
 
@@ -1531,7 +1722,7 @@ class BatchRecalcSpec extends FunSuite:
       .withDefinedName("Blindfold", "0.08")
     val out = tempXlsx()
 
-    WriteCommands
+    val summary = WriteCommands
       .deleteRows(
         wb,
         wb.sheets.find(_.name.value == "Data"),
@@ -1545,6 +1736,10 @@ class BatchRecalcSpec extends FunSuite:
       .unsafeRunSync()
 
     val written = readBack(out)
+    // GH-509: the three unrelated caches are carried, the one blind cache is counted as withdrawn
+    assert(summary.contains("3 cached value(s) carried forward"), s"summary: $summary")
+    assert(summary.contains(withdrawnLine(1)), s"summary: $summary")
+    assertFullCalcOnLoad(out, written)
     assertEquals(formulaOn(written, "Other", ref"B2").cachedValue, None, "case-insensitive match")
     assertEquals(
       formulaOn(written, "Other", ref"B3").cachedValue,

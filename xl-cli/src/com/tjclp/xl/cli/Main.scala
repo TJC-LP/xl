@@ -82,7 +82,8 @@ import com.tjclp.xl.cli.output.Format
  *   - `-o, --output` — Output file for mutations (required for put/putf)
  *   - `--no-recalc` / `--preserve-caches` — write verbs only (GH-468): apply the edit and
  *     recalculate nothing. Non-structural verbs keep every cached formula value in the file; the
- *     structural verbs leave the caches their edit invalidated uncached (see [[WritePolicy]])
+ *     structural verbs carry every pre-edit cache forward and mark the book `fullCalcOnLoad`
+ *     (GH-509, see [[WritePolicy]])
  *   - `--strict` — write verbs only (GH-496): exit 1 when the write's recalculation reports formula
  *     errors, non-convergence, or data-table seed warnings
  *   - `--json` — every verb (ADR-017 §2.4): print the result, success or failure, as one JSON
@@ -238,7 +239,7 @@ object Main extends IOApp:
       Opts
         .flag(
           "no-recalc",
-          "Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) leave every formula the edit invalidated UNCACHED rather than re-stamp a stale number, and report both counts. Use when the caches come from another engine."
+          "Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) carry every pre-edit cache forward with its formula and mark the workbook fullCalcOnLoad, so Excel/LibreOffice recompute on open while cache-only readers see the pre-edit numbers (only caches behind unresolvable names are withdrawn, and counted). Use when the caches come from another engine."
         )
         .orFalse,
       Opts.flag("preserve-caches", "Alias for --no-recalc").orFalse

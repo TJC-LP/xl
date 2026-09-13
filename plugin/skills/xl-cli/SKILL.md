@@ -252,8 +252,9 @@ Writes recalculate the edit's dependency cone and report formula errors advisori
 `--strict` turns those reports into exit 1 (`RECALC_GATE`): with `-o` the file is still written,
 with `-i` the input is left untouched. `--no-recalc` (`--preserve-caches`) applies the edit and
 recalculates nothing — for books whose numbers come from another engine; structural edits then
-leave the formulas they invalidated uncached rather than re-stamp stale numbers. `recalc`
-refreshes every cached value (`--tables` also seeds data-table interiors).
+carry every pre-edit cache forward and mark the workbook `fullCalcOnLoad`, so Excel recomputes on
+open while cache-only readers see the pre-edit numbers (only caches behind unresolvable names are
+withdrawn). `recalc` refreshes every cached value (`--tables` also seeds data-table interiors).
 
 ---
 

@@ -157,35 +157,39 @@ How completely caches survive depends on the verb:
 - **Non-structural** (`put`, `putf`, `fill`, `copy`, `batch`): explicitly written cells take their
   new content; existing formula caches elsewhere are preserved, including dependents.
 - **Structural** (`insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`): a structural edit
-  moves cells, rewrites formula text and rewrites defined names, so xl invalidates the cache of
-  every formula the edit could have changed and writes those cells **without a `<v>`**. It never
-  re-asserts a pre-edit cache: whether a formula the edit *did* reach still has its old answer
-  cannot be decided without recalculating, which is precisely what the flag refuses. (A formula
-  reached through a shrunk defined name, or a static dependent of an `INDIRECT` cell, keeps its text
-  byte-identical while its answer changes underneath it.)
-
-  A cache survives only when the edit provably could not have changed it: the formula's text is
-  byte-identical after the rewrite, it did not relocate, and nothing it transitively reads was moved
-  or removed. So an edit *below* or *beside* your data preserves everything, while an edit *inside*
-  a block preserves the rows above the cut and drops the rest. The summary counts both halves:
+  moves cells, rewrites formula text and rewrites defined names, and no local test can decide
+  which pre-edit cache still holds (a formula reached through a shrunk defined name, or a static
+  dependent of an `INDIRECT` cell, keeps its text byte-identical while its answer changes
+  underneath it). So xl does not decide: it **carries every pre-edit cache forward** with its
+  formula — rewritten, relocated or not — and writes **`<calcPr fullCalcOnLoad="1"/>`** into
+  `workbook.xml`. Excel and LibreOffice honor that marker by recomputing the book on open, so
+  they never display a stale `<v>`; a cache-only reader (`openpyxl` with `data_only=True`, `xl
+  view` without `--eval`) sees the numbers the source file had — the same ones it would have read
+  before the edit — and the file itself carries the "recalculate me" flag rather than a silent gap.
+  The marker is set on every `--no-recalc` structural write, including an edit beside the data,
+  and it overlays the book's existing `<calcPr>` (a declared `iterate` triple, `calcMode`, `calcId`
+  and unmodeled attributes survive). The summary says so:
 
   ```
-  Recalculation skipped (--no-recalc): 4 cached value(s) preserved, 7 formula(s) invalidated by
-  the edit left uncached (recalculate externally)
+  Recalculation skipped (--no-recalc): 11 cached value(s) carried forward; workbook marked for
+  full recalculation on load (fullCalcOnLoad)
   ```
 
-  One consequence worth knowing: **volatile formulas** (`TODAY()`, `NOW()`, `RAND()`) above the cut
-  keep their cached values too. The flag means "do not recalculate", and a volatile is no exception
-  — Excel refreshes them on open regardless.
+  The one exception is a cache no reader can justify: a formula whose reference the static graph
+  cannot resolve — a defined name whose definition the parser rejects (a multi-area union), an
+  alias of one, an unparseable formula — and every formula that depends on it. Those caches are
+  withdrawn on both the default and the `--no-recalc` path (name resolution respects sheet-local
+  shadowing), and the summary appends `, N cache(s) behind unresolvable names withdrawn` when any
+  were. An unsupported reference rewrite that could change a defined name's meaning is refused
+  before the edit; top-level unions remain supported for rewriting even though the evaluator
+  cannot compute them.
 
-  Reopening the file in Excel, or a later `xl recalc`, fills those back in. A missing `<v>` is a
-  visible gap that any recalculation repairs; a wrong one is silent and permanent, which is why xl
-  never **re-asserts** a cache the edit invalidated. Unresolved named readers, aliases, and their
-  dependents are invalidated on both default and `--no-recalc` paths. Name resolution respects
-  sheet-local shadowing. An unsupported reference rewrite that could change a defined name's
-  meaning is refused before the edit; top-level unions remain supported for rewriting even though
-  the evaluator cannot compute them. **If you need every formula cached after a structural edit,
-  do not pass `--no-recalc`.**
+  Two things worth knowing. `fullCalcOnLoad` recomputes ordinary formulas; under
+  `calcMode="autoNoTable"` Excel still leaves **data-table** interiors as they are (their caches
+  ride through under every posture, so nothing is lost there). And the marker is sticky: Excel
+  clears it on its own save, but a later `xl recalc` recomputes the values and leaves the
+  attribute in place. `describe --full` shows whether a book carries it. **If you need every
+  formula freshly computed after a structural edit, do not pass `--no-recalc`.**
 
 ```bash
 xl -f external-model.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
