@@ -123,6 +123,22 @@ xl batch --schema                                  # JSON Schema of the batch do
 > non-heap `OutOfMemoryError` (Metaspace, "unable to create native thread") is reported with the
 > heap wording.
 
+> **Where a streamed write spills.** The two-pass streaming writer (the CSV import into a new
+> workbook: `import --stream --new-sheet`) buys its up-front `<dimension>` by spilling the worksheet
+> body to a scratch file, deleted when the write ends. It lands in `java.io.tmpdir` unless
+> `XL_SPILL_DIR` names another directory — trimmed, blank is the default, and it must already exist
+> and be writable; a container's small tmpfs is the reason to move it. The variable is read once per
+> process and consulted only by that write (every other write goes to its destination's directory
+> and never spills); the library stays deterministic — `ExcelIO.instance` never reads the
+> environment (see the performance guide for `withSpillDir`). A value that is not a path is a usage
+> error naming `XL_SPILL_DIR` (exit 2) before the CSV is opened; a scratch file that cannot be
+> created or filled fails the write as `IO_WRITE` (exit 3) — `cannot write <output>: …` naming the
+> configured directory, `error.location.file` the output. Note that `import` requires `-f` today and
+> the reader refuses a book with no sheets, so the O(1) CSV import — and with it this setting — is
+> reached from the command line once `import --new-sheet` accepts no input file (the registry-driven
+> CLI, #584), which also brings the `--spill-dir` flag; the native binary and the JAR wrapper read
+> the variable alike.
+
 > **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
 > (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`/`--sheet` (for a batch op, its `sheet` key
 > comes first); otherwise the only sheet of a single-sheet book (under `--json` a

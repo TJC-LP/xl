@@ -32,61 +32,18 @@ import com.tjclp.xl.cli.contract.{
   Warning
 }
 import com.tjclp.xl.cli.MemoryGuard
-import com.tjclp.xl.cli.helpers.{
-  BatchParser,
-  Resolve,
-  StreamingCsvParser,
-  StyleBuilder,
-  ValueParser
-}
+import com.tjclp.xl.cli.helpers.{BatchParser, Resolve, StyleBuilder, ValueParser}
 import org.xml.sax.{Attributes, SAXException}
 import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
 import scala.xml.Elem
 
 /**
- * Streaming write command handlers.
- *
- * Provides two modes:
- *   1. True streaming (CSV import): End-to-end O(1) memory
- *   2. SAX/StAX workbook write: In-memory workbook → lower-allocation full OOXML writer
+ * Streaming write command handlers: the SAX/StAX workbook write (in-memory workbook → the
+ * lower-allocation full OOXML writer) and the ZIP-transforming edits. The one end-to-end streaming
+ * write, the CSV import into a new workbook, lives in [[ImportCommands]].
  */
 object StreamingWriteCommands:
-
-  /**
-   * True streaming CSV import to new XLSX file.
-   *
-   * Streams CSV rows directly to XLSX with O(1) memory throughout. Creates a fresh file with a
-   * single sheet - no styles to preserve.
-   *
-   * Uses writeStreamWithAutoDetect for automatic dimension detection (two-pass approach for
-   * accurate bounds).
-   *
-   * @param csvPath
-   *   Path to CSV file
-   * @param outputPath
-   *   Output XLSX file path
-   * @param sheetName
-   *   Name for the new sheet
-   * @param options
-   *   CSV parsing options
-   * @return
-   *   Success message with file info
-   */
-  def importCsvStream(
-    csvPath: Path,
-    outputPath: Path,
-    sheetName: String,
-    options: StreamingCsvParser.Options
-  ): IO[String] =
-    val excel = MemoryGuard.writer
-
-    StreamingCsvParser
-      .streamCsv(csvPath, options)
-      .through(excel.writeStreamWithAutoDetect(outputPath, sheetName))
-      .compile
-      .drain
-      .map(_ => s"Streamed: ${csvPath.getFileName} → $outputPath (sheet: $sheetName)")
 
   /**
    * Hybrid streaming workbook write.
