@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.CellRange
-import com.tjclp.xl.addressing.{ARef, Column}
+import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.Evaluator
 import com.tjclp.xl.macros.ref
@@ -2248,78 +2248,26 @@ class FormulaParserSpec extends ScalaCheckSuite:
   // address the same cells as `A1:A1048576` / `A1:XFD1` but are a different SYNTAX that Excel
   // keeps through every rewrite, so the AST carries the form (`RangeForm`) and the printer
   // reproduces it byte-for-byte; an explicit corner range stays an explicit corner range.
+  //
+  // The range-text generators live in FormulaTextGens (GH-653 hoisted them so FormulaGrammarSpec
+  // shares them); this pin keeps the four qualifier shapes the fix was verified against, the
+  // grammar spec generalises the qualifier to the whole quoting boundary.
 
-  private val genColumnLetters: Gen[String] =
-    Gen
-      .frequency(8 -> Gen.choose(0, 30), 2 -> Gen.choose(0, Column.MaxIndex0))
-      .map(i => Column.from0(i).toLetter)
-
-  private val genRowNumber: Gen[String] =
-    Gen
-      .frequency(
-        8 -> Gen.choose(1, 40),
-        2 -> Gen.choose(1, com.tjclp.xl.addressing.Row.MaxIndex0 + 1)
-      )
-      .map(_.toString)
-
-  private val genDollar: Gen[String] = Gen.oneOf("", "$")
-
-  /** Two column letters in grid order (the parser normalizes, so the source must already be). */
-  private val genFullColumnText: Gen[String] =
-    for
-      a <- genColumnLetters
-      b <- genColumnLetters
-      d1 <- genDollar
-      d2 <- genDollar
-    yield
-      val (lo, hi) =
-        if Column.fromLetter(a).exists(x => Column.fromLetter(b).exists(y => x.index0 <= y.index0))
-        then (a, b)
-        else (b, a)
-      s"$d1$lo:$d2$hi"
-
-  private val genFullRowText: Gen[String] =
-    for
-      a <- genRowNumber
-      b <- genRowNumber
-      d1 <- genDollar
-      d2 <- genDollar
-    yield
-      val (lo, hi) = if a.toInt <= b.toInt then (a, b) else (b, a)
-      s"$d1$lo:$d2$hi"
-
-  private val genBoundedRangeText: Gen[String] =
-    for
-      c1 <- Gen.choose(0, 30)
-      c2 <- Gen.choose(0, 30)
-      r1 <- Gen.choose(1, 40)
-      r2 <- Gen.choose(1, 40)
-      d1 <- genDollar
-      d2 <- genDollar
-      d3 <- genDollar
-      d4 <- genDollar
-    yield
-      val (cLo, cHi) = (math.min(c1, c2), math.max(c1, c2))
-      val (rLo, rHi) = (math.min(r1, r2), math.max(r1, r2))
-      s"$d1${Column.from0(cLo).toLetter}$d2$rLo:$d3${Column.from0(cHi).toLetter}$d4$rHi"
-
-  private val genRangeText: Gen[String] =
-    Gen.oneOf(genFullColumnText, genFullRowText, genBoundedRangeText)
-
-  private val genSheetQualifier: Gen[String] =
+  private val genFourQualifiers: Gen[String] =
     Gen.oneOf("", "Sheet1!", "'Q1 Data'!", "[2]Book1!")
 
   property("GH-612: parse ∘ print = id for full-column, full-row and bounded range forms") {
-    forAllNoShrink(genSheetQualifier, genRangeText, Gen.choose(0, 2)) { (sheet, range, shape) =>
-      val source = shape match
-        case 0 => s"=$sheet$range"
-        case 1 => s"=SUM($sheet$range)"
-        case _ => s"=COUNTIF($sheet$range, 1)"
-      FormulaParser.parse(source) match
-        case Right(expr) =>
-          assertEquals(FormulaPrinter.print(expr), source)
-          true
-        case Left(err) => fail(s"$source should parse: $err")
+    forAllNoShrink(genFourQualifiers, FormulaTextGens.genRangeText, Gen.choose(0, 2)) {
+      (sheet, range, shape) =>
+        val source = shape match
+          case 0 => s"=$sheet$range"
+          case 1 => s"=SUM($sheet$range)"
+          case _ => s"=COUNTIF($sheet$range, 1)"
+        FormulaParser.parse(source) match
+          case Right(expr) =>
+            assertEquals(FormulaPrinter.print(expr), source)
+            true
+          case Left(err) => fail(s"$source should parse: $err")
     }
   }
 
