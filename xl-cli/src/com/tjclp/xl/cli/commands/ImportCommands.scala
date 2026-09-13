@@ -210,7 +210,9 @@ ${Format.saveSuffix(outputPath, stream)}"""
    * True streaming CSV import - O(1) memory for entire operation.
    *
    * Only available when creating a new workbook (no existing sheets to preserve). Uses
-   * StreamingCsvParser + writeStreamWithAutoDetect for end-to-end streaming.
+   * StreamingCsvParser + writeStreamWithAutoDetect for end-to-end streaming. The CLI's ONE spilling
+   * write: the two-pass writer's scratch file goes where `MemoryGuard.writer` says (`XL_SPILL_DIR`,
+   * GH-517), and a failure of the spill or the archive is classified there as `IO_WRITE`.
    */
   private def importToNewSheetStreaming(
     csvPath: Path,
