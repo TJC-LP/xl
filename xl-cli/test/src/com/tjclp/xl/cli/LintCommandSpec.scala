@@ -140,6 +140,75 @@ class LintCommandSpec extends CatsEffectSuite:
       assertEquals(parsed("findings").arr.map(_("category").str).toSet, Set("data-table-torn"))
   }
 
+  /**
+   * GH-460 addendum: openpyxl's serialization of `value=""` — a childless `<c t="inlineStr"/>`. A
+   * valid package otherwise, so the ONLY finding is the new class.
+   */
+  private def emptyInlineStrZip(): Path =
+    val parts = Map(
+      "[Content_Types].xml" ->
+        """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>""",
+      "_rels/.rels" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="$nsRel/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>""",
+      "xl/workbook.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="$nsMain" xmlns:r="$nsRel">
+  <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""",
+      "xl/_rels/workbook.xml.rels" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="$nsRel/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>""",
+      "xl/worksheets/sheet1.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="$nsMain"><sheetData><row r="1"><c r="A1" t="inlineStr"/><c r="B1" t="inlineStr"><is><t>text</t></is></c></row></sheetData></worksheet>"""
+    )
+    val baos = ByteArrayOutputStream()
+    val zos = ZipOutputStream(baos)
+    parts.foreach { case (name, content) =>
+      zos.putNextEntry(ZipEntry(name))
+      zos.write(content.getBytes(StandardCharsets.UTF_8))
+      zos.closeEntry()
+    }
+    zos.close()
+    val path = Files.createTempFile("lint-cli-empty-inline", ".xlsx")
+    Files.write(path, baos.toByteArray)
+    path
+
+  test(
+    "lint: openpyxl-style empty inlineStr book exits 1 with empty-inline-str, and reads (GH-460)"
+  ) {
+    for
+      path <- IO(emptyInlineStrZip())
+      code <- Main.runLint(path, LintFormat.Text)
+      findings <- IO(WorkbookLint.lint(path).fold(err => fail(s"lint errored: $err"), identity))
+      read <- ExcelIO.instance[IO].read(path).attempt
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(code, ExitCode(1))
+      val text = LintCommands.renderText(path.toString, findings)
+      assert(text.contains("[empty-inline-str]"), text)
+      assert(text.contains("""<c r="A1" t="inlineStr"/>"""), text)
+      val parsed = ujson.read(LintCommands.renderJson(path.toString, findings))
+      assertEquals(parsed("clean").bool, false)
+      assertEquals(
+        parsed("findings").arr.map(_("category").str).toSet,
+        Set("empty-inline-str")
+      )
+      // the addendum's other half: the in-memory reader now opens the book lint flags
+      assert(read.isRight, s"xl read must tolerate a childless inlineStr, got $read")
+  }
+
   test("lint: unreadable file exits 3 (a failure, not usage — ADR-017)") {
     for code <- Main.runLint(Paths.get("/nonexistent/no-such-file.xlsx"), LintFormat.Text)
     yield assertEquals(code, ExitCode(3))

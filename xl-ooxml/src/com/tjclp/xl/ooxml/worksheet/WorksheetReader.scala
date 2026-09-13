@@ -358,12 +358,16 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
         // Check for rich text (<is><r>) vs simple text (<is><t>)
         (elem \ "is").headOption match
           case None =>
-            // Fallback: "str" type may have text in <v> element (preserving whitespace)
+            // Fallback: "str" type may have text in <v> element (preserving whitespace).
+            // GH-460: a childless <c t="inlineStr"/> is openpyxl's serialization of value="" —
+            // off-spec (an inlineStr's value lives in <is>), but Excel, openpyxl and xl's
+            // streaming readers all treat it as a blank cell, so the in-memory path does too (the
+            // style index survives on the cell; `xl lint` reports the shape as `empty-inline-str`).
             (elem \ "v").headOption
               .collect { case e: Elem => e }
               .map(e => decodeXstring(getTextPreservingWhitespace(e))) match
               case Some(text) => Right(CellValue.Text(text))
-              case None => Left(s"$cellType cell missing <is> element and <v> element")
+              case None => Right(CellValue.Empty)
           case Some(isElem: Elem) =>
             val rElems = getChildren(isElem, "r")
 
@@ -371,12 +375,15 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
               // Rich text: parse runs with formatting
               parseTextRuns(rElems).map(CellValue.RichText.apply)
             else
-              // Simple text: extract from <t> (preserving whitespace, decoding _xHHHH_ — GH-288)
+              // Simple text: extract from <t> (preserving whitespace, decoding _xHHHH_ — GH-288).
+              // GH-460: an <is/> with neither <t> nor <r> is an inline string that is present but
+              // empty — the empty string, exactly like <is><t></t></is> and like the streaming
+              // reader reads it; only the childless cell above is blank.
               (isElem \ "t").headOption
                 .collect { case e: Elem => e }
                 .map(e => decodeXstring(getTextPreservingWhitespace(e))) match
                 case Some(text) => Right(CellValue.Text(text))
-                case None => Left(s"$cellType <is> missing <t> element and has no <r> runs")
+                case None => Right(CellValue.Text(""))
           case _ => Left(s"$cellType <is> is not an Elem")
 
       case "s" =>

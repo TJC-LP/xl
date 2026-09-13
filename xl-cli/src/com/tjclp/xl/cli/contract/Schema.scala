@@ -217,7 +217,8 @@ object Schema:
       "lint",
       "Validate the raw package against the Excel-repair classes: child order, r:id resolution, " +
         "content-type coverage, over-max refs, data-table integrity, <f> canon, external refs, " +
-        "defined names, calc chain (read-only)",
+        "defined names, calc chain, empty inline strings, mc:Ignorable prefixes, dxf ids, " +
+        "package reachability, shared-string orphans (read-only)",
       sheet = false,
       streaming = true,
       "0.15.0",

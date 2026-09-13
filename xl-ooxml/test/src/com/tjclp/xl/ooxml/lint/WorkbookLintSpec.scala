@@ -302,8 +302,13 @@ class WorkbookLintSpec extends FunSuite:
   test("worksheet-typed rel whose target part is missing is flagged as MissingPart") {
     val corrupted = workbookRelsXml.replace("worksheets/sheet1.xml", "worksheets/sheet9.xml")
     val findings = lintOf(baseParts + ("xl/_rels/workbook.xml.rels" -> corrupted))
-    assertEquals(findings.map(_.category), Vector(LintCategory.MissingPart))
+    // GH-460: the re-pointed rel also strands the present sheet1.xml — no relationship reaches it
+    assertEquals(
+      findings.map(_.category),
+      Vector(LintCategory.MissingPart, LintCategory.UnreferencedPart)
+    )
     assert(findings.head.message.contains("sheet9.xml"), findings.head.toString)
+    assertEquals(findings(1).part, "xl/worksheets/sheet1.xml")
   }
 
   test("worksheet-typed rel pointing at non-worksheet content is flagged as WrongRelType") {
@@ -1660,6 +1665,577 @@ class WorkbookLintSpec extends FunSuite:
     }
   }
 
+  // ===== GH-460: empty inline strings (openpyxl's serialization of value="") =====
+
+  private val emptyInlineSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1">
+      <c r="A1" s="0" t="inlineStr"/>
+      <c r="B1" t="inlineStr"><is/></c>
+      <c r="C1" t="str"/>
+      <c r="D1" t="inlineStr"><is><t>ok</t></is></c>
+      <c r="E1" t="str"><v>x</v></c>
+      <c r="F1" t="str"><f>D1</f></c>
+      <c r="G1" t="inlineStr"><is><r><t>rich</t></r></is></c>
+      <c r="H1" t="inlineStr"><v>legacy</v></c>
+    </row>
+  </sheetData>"""
+  )
+
+  private val textfulInlineSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1">
+      <c r="D1" t="inlineStr"><is><t>ok</t></is></c>
+      <c r="E1" t="str"><v>x</v></c>
+      <c r="F1" t="str"><f>D1</f></c>
+      <c r="G1" t="inlineStr"><is><r><t>rich</t></r></is></c>
+      <c r="H1" t="inlineStr"><v>legacy</v></c>
+      <c r="I1"/>
+      <c r="J1" s="0"/>
+    </row>
+  </sheetData>"""
+  )
+
+  private val manyEmptyInlineSheetXml = worksheetWith(
+    "<sheetData><row r=\"1\">" +
+      (0 until 7).map(i => s"""<c r="${('A' + i).toChar}1" t="inlineStr"/>""").mkString +
+      "</row></sheetData>"
+  )
+
+  test("GH-460: <c t=\"inlineStr\"/> with no <is> is flagged as EmptyInlineStr, once per part") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> emptyInlineSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.EmptyInlineStr))
+    val f = findings.head
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    assertEquals(f.locator, """<c r="A1" t="inlineStr"/>""")
+    assert(f.message.startsWith("2 "), f.message)
+    assert(f.message.contains("A1, C1"), f.message)
+    assert(f.message.contains("openpyxl"), f.message)
+    // shapes that carry text (D1, E1, G1, H1), a value-less formula (F1) and an <is/> that is
+    // present but empty (B1 — the empty STRING to every reader) are not the class
+    Vector("B1", "D1", "E1", "F1", "G1", "H1").foreach { r =>
+      assert(!f.message.contains(r), f.message)
+    }
+  }
+
+  test("GH-460: the empty-inline sample is bounded to the first 5 cells plus a total count") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> manyEmptyInlineSheetXml))
+    assertEquals(findings.size, 1)
+    assert(findings.head.message.startsWith("7 "), findings.head.message)
+    assert(findings.head.message.contains("first 5: A1, B1, C1, D1, E1, …"), findings.head.message)
+  }
+
+  test("GH-460: inline strings that carry text, value-less formulas and typeless cells are clean") {
+    assertEquals(
+      lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> textfulInlineSheetXml)),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("GH-460: streaming mode flags empty inline strings identically") {
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> emptyInlineSheetXml)
+    assertEquals(lintStreamOf(parts), lintOf(parts))
+    assertEquals(lintStreamOf(parts).map(_.category), Vector(LintCategory.EmptyInlineStr))
+  }
+
+  test("GH-460 addendum: the shape lint flags is the shape the in-memory reader now opens") {
+    // Before: lint passed the file clean while XlsxReader failed every read verb on it.
+    val bytes = zipBytes(baseParts + ("xl/worksheets/sheet1.xml" -> emptyInlineSheetXml))
+    assertEquals(
+      WorkbookLint.lintBytes(bytes).map(_.map(_.category)),
+      Right(Vector(LintCategory.EmptyInlineStr))
+    )
+    val wb = XlsxReader
+      .readFromBytes(bytes)
+      .fold(err => fail(s"the reader must tolerate a childless inlineStr: $err"), identity)
+    val sheet = wb.sheets.headOption.getOrElse(fail("no sheet"))
+    Vector(ref"A1", ref"C1").foreach(r => assertEquals(sheet(r).value, CellValue.Empty))
+    // an <is/> is an inline string that is present but empty — the empty string, as streaming reads it
+    assertEquals(sheet(ref"B1").value, CellValue.Text(""))
+    assertEquals(sheet(ref"D1").value, CellValue.Text("ok"))
+    assertEquals(sheet(ref"E1").value, CellValue.Text("x"))
+    assertEquals(sheet(ref"H1").value, CellValue.Text("legacy"))
+  }
+
+  // ===== GH-460: mc:Ignorable naming undeclared prefixes (the ElementTree re-prefix class) =====
+
+  private val nsMc = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+  private val nsX14ac = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+  private val nsXr = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+
+  private def worksheetRoot(rootAttrs: String, body: String = "<sheetData/>"): String =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="$nsMain" $rootAttrs>
+  $body
+</worksheet>"""
+
+  /** ElementTree kept the Ignorable VALUE but re-prefixed its declaration: x14ac and xr dangle. */
+  private val undeclaredIgnorableSheetXml =
+    worksheetRoot(s"""xmlns:mc="$nsMc" xmlns:ns1="$nsX14ac" mc:Ignorable="x14ac xr"""")
+
+  private val declaredIgnorableSheetXml = worksheetRoot(
+    s"""xmlns:mc="$nsMc" xmlns:x14ac="$nsX14ac" xmlns:xr="$nsXr" mc:Ignorable="x14ac xr""""
+  )
+
+  /** sheetPr: x14ac declared locally, xr on the root (clean); ext: x14ac lives on a SIBLING. */
+  private val nestedIgnorableSheetXml = worksheetRoot(
+    s"""xmlns:mc="$nsMc" xmlns:xr="$nsXr"""",
+    s"""<sheetPr xmlns:x14ac="$nsX14ac" mc:Ignorable="x14ac xr"/>
+  <sheetData/>
+  <extLst><ext uri="{1}" mc:Ignorable="x14ac"/></extLst>"""
+  )
+
+  private val elementTreeRootSheetXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<ns0:worksheet xmlns:ns0="$nsMain"><ns0:sheetData/></ns0:worksheet>"""
+
+  private val unboundPrefixSheetXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<ns0:worksheet><ns0:sheetData/></ns0:worksheet>"""
+
+  private val undeclaredIgnorableWorkbookXml = workbookXml.replace(
+    s"""<workbook xmlns="$nsMain" xmlns:r="$nsRel">""",
+    s"""<workbook xmlns="$nsMain" xmlns:r="$nsRel" xmlns:mc="$nsMc" mc:Ignorable="x15">"""
+  )
+
+  private val undeclaredIgnorableTableXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<table xmlns="$nsMain" xmlns:mc="$nsMc" mc:Ignorable="xr xr3" id="1" name="T1" displayName="T1" ref="A1:C3"/>"""
+
+  private val undeclaredIgnorableTableParts: Map[String, String] =
+    overMaxTableParts + ("xl/tables/table1.xml" -> undeclaredIgnorableTableXml)
+
+  test("GH-460: mc:Ignorable naming a prefix declared on no ancestor is flagged") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> undeclaredIgnorableSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.IgnorableUndeclared))
+    val f = findings.head
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    assertEquals(f.locator, """<worksheet mc:Ignorable="x14ac xr">""")
+    assert(f.message.contains("x14ac, xr"), f.message)
+    assert(f.message.contains("ElementTree"), f.message)
+  }
+
+  test("GH-460: mc:Ignorable whose prefixes are all declared is clean") {
+    assertEquals(
+      lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> declaredIgnorableSheetXml)),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("GH-460: a prefix declared on an ancestor resolves; one declared on a sibling does not") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> nestedIgnorableSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.IgnorableUndeclared))
+    assertEquals(findings.head.locator, """<ext mc:Ignorable="x14ac">""")
+    assert(findings.head.message.contains("x14ac"), findings.head.message)
+    assert(!findings.head.message.contains("xr"), findings.head.message)
+  }
+
+  test("GH-460: an ns0-prefixed root (ElementTree re-serialization signature) is flagged") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> elementTreeRootSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.IgnorableUndeclared))
+    assertEquals(findings.head.locator, "<ns0:worksheet>")
+    assert(findings.head.message.contains("ElementTree"), findings.head.message)
+  }
+
+  test("GH-460: an UNBOUND element prefix is a well-formedness error — Left in both modes") {
+    val bytes = zipBytes(baseParts + ("xl/worksheets/sheet1.xml" -> unboundPrefixSheetXml))
+    assert(WorkbookLint.lintBytes(bytes).isLeft)
+    assert(WorkbookLint.lintStreamBytes(bytes).isLeft)
+  }
+
+  test("GH-460: undeclared mc:Ignorable prefixes on workbook.xml and table parts are flagged") {
+    val wb = lintOf(baseParts + ("xl/workbook.xml" -> undeclaredIgnorableWorkbookXml))
+    assertEquals(
+      wb.map(f => (f.part, f.category)),
+      Vector(("xl/workbook.xml", LintCategory.IgnorableUndeclared))
+    )
+    assertEquals(wb.head.locator, """<workbook mc:Ignorable="x15">""")
+    val table = lintOf(undeclaredIgnorableTableParts)
+    assertEquals(
+      table.map(f => (f.part, f.category)),
+      Vector(("xl/tables/table1.xml", LintCategory.IgnorableUndeclared))
+    )
+    assert(table.head.message.contains("xr, xr3"), table.head.message)
+  }
+
+  test("GH-460: streaming mode flags undeclared mc:Ignorable prefixes identically") {
+    Vector(undeclaredIgnorableSheetXml, nestedIgnorableSheetXml, elementTreeRootSheetXml).foreach {
+      sheet =>
+        val parts = baseParts + ("xl/worksheets/sheet1.xml" -> sheet)
+        assertEquals(lintStreamOf(parts), lintOf(parts))
+        assertEquals(lintStreamOf(parts).size, 1)
+    }
+    assertEquals(
+      lintStreamOf(undeclaredIgnorableTableParts),
+      lintOf(undeclaredIgnorableTableParts)
+    )
+  }
+
+  // ===== GH-460: dxfId past the <dxfs> table =====
+
+  private def stylesWithDxfs(dxfsXml: String): String =
+    stylesXml.replace("</styleSheet>", s"  $dxfsXml\n</styleSheet>")
+
+  private def cfSheetXml(dxfId: Int): String = worksheetWith(
+    s"""<sheetData/>
+  <conditionalFormatting sqref="A1:A5"><cfRule type="cellIs" dxfId="$dxfId" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"""
+  )
+
+  private val oneDxfStylesXml =
+    stylesWithDxfs("""<dxfs count="1"><dxf><font><b/></font></dxf></dxfs>""")
+
+  private val danglingDxfParts: Map[String, String] = baseParts ++ Map(
+    "xl/styles.xml" -> oneDxfStylesXml,
+    "xl/worksheets/sheet1.xml" -> cfSheetXml(1)
+  )
+
+  private val inRangeDxfParts: Map[String, String] = baseParts ++ Map(
+    "xl/styles.xml" -> oneDxfStylesXml,
+    "xl/worksheets/sheet1.xml" -> cfSheetXml(0)
+  )
+
+  private val dxfTableXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<table xmlns="$nsMain" id="1" name="T1" displayName="T1" ref="A1:C3" headerRowDxfId="0" dataDxfId="3">
+  <tableColumns count="1"><tableColumn id="1" name="A" dataDxfId="7"/></tableColumns>
+</table>"""
+
+  private val dxfTableParts: Map[String, String] = overMaxTableParts ++ Map(
+    "xl/styles.xml" -> oneDxfStylesXml,
+    "xl/tables/table1.xml" -> dxfTableXml
+  )
+
+  test("GH-460: cfRule dxfId >= the <dxfs> child count is flagged as DxfIdOutOfRange") {
+    val findings = lintOf(danglingDxfParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.DxfIdOutOfRange))
+    val f = findings.head
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    assertEquals(f.locator, """<cfRule dxfId="1">""")
+    assert(f.message.contains("holds 1 <dxf>"), f.message)
+  }
+
+  test("GH-460: the <dxfs count> attribute is not trusted — actual <dxf> children are") {
+    val liedCount = stylesWithDxfs("""<dxfs count="5"><dxf><font><b/></font></dxf></dxfs>""")
+    val findings = lintOf(danglingDxfParts + ("xl/styles.xml" -> liedCount))
+    assertEquals(findings.map(_.category), Vector(LintCategory.DxfIdOutOfRange))
+    assert(findings.head.message.contains("holds 1 <dxf>"), findings.head.message)
+  }
+
+  test("GH-460: a dxfId within the table is clean; no <dxfs> at all with a dxfId is flagged") {
+    assertEquals(lintOf(inRangeDxfParts), Vector.empty[Finding])
+    val noDxfs = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> cfSheetXml(0)))
+    assertEquals(noDxfs.map(_.category), Vector(LintCategory.DxfIdOutOfRange))
+    assert(noDxfs.head.message.contains("has no <dxfs>"), noDxfs.head.message)
+    val noStyles =
+      lintOf(baseParts - "xl/styles.xml" + ("xl/worksheets/sheet1.xml" -> cfSheetXml(0)))
+    assertEquals(noStyles.map(_.category), Vector(LintCategory.DxfIdOutOfRange))
+    assert(noStyles.head.message.contains("no styles part"), noStyles.head.message)
+  }
+
+  test("GH-460: table-part dataDxfId / headerRowDxfId index the same <dxfs> table") {
+    val findings = lintOf(dxfTableParts)
+    assertEquals(
+      findings.map(f => (f.part, f.category, f.locator)),
+      Vector(
+        ("xl/tables/table1.xml", LintCategory.DxfIdOutOfRange, """<table dataDxfId="3">"""),
+        ("xl/tables/table1.xml", LintCategory.DxfIdOutOfRange, """<tableColumn dataDxfId="7">""")
+      )
+    )
+  }
+
+  test("GH-460: streaming mode flags out-of-range dxfIds identically") {
+    Vector(danglingDxfParts, inRangeDxfParts, dxfTableParts).foreach { parts =>
+      assertEquals(lintStreamOf(parts), lintOf(parts))
+    }
+    assertEquals(lintStreamOf(dxfTableParts).size, 2)
+  }
+
+  // ===== GH-460: package reachability =====
+
+  private val orphanMediaParts: Map[String, String] =
+    baseParts + ("xl/media/image9.png" -> "not really a png")
+
+  private val drawingRelsSheetRelsXml =
+    """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>"""
+
+  private val drawingRelsXml =
+    """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/a.png" TargetMode="External"/>
+</Relationships>"""
+
+  private val drawingXml =
+    """<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>"""
+
+  /** sheet rels → drawing → drawing rels → media: a two-hop closure, no <drawing r:id> needed. */
+  private val multiHopParts: Map[String, String] = baseParts ++ Map(
+    "xl/worksheets/_rels/sheet1.xml.rels" -> drawingRelsSheetRelsXml,
+    "xl/drawings/drawing1.xml" -> drawingXml,
+    "xl/drawings/_rels/drawing1.xml.rels" -> drawingRelsXml,
+    "xl/media/image1.png" -> "png bytes"
+  )
+
+  private val malformedDrawingRelsParts: Map[String, String] =
+    multiHopParts + ("xl/drawings/_rels/drawing1.xml.rels" -> "<Relationships><Relationship>")
+
+  test("GH-460: a zip entry reachable from no .rels is flagged as UnreferencedPart") {
+    val findings = lintOf(orphanMediaParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.UnreferencedPart))
+    val f = findings.head
+    assertEquals(f.part, "xl/media/image9.png")
+    assertEquals(f.locator, """<Relationship Target="/xl/media/image9.png">""")
+    assert(f.message.contains("no relationship"), f.message)
+  }
+
+  test("GH-460: parts reached through drawing → media rels are referenced (multi-hop closure)") {
+    assertEquals(lintOf(multiHopParts), Vector.empty[Finding])
+  }
+
+  test("GH-460: *.rels, [Content_Types].xml and [trash]/ entries are never findings") {
+    val parts = baseParts ++ Map(
+      "[trash]/0000.dat" -> "excel leftovers",
+      "xl/_rels/gone.xml.rels" -> rootRelsXml
+    )
+    assertEquals(lintOf(parts), Vector.empty[Finding])
+  }
+
+  test("GH-460: a malformed .rels inside the closure is one finding, never a Left or a flood") {
+    val findings = lintOf(malformedDrawingRelsParts)
+    assertEquals(
+      findings.map(f => (f.part, f.category)),
+      Vector(("xl/drawings/_rels/drawing1.xml.rels", LintCategory.UnreferencedPart))
+    )
+    assert(findings.head.message.contains("not well-formed"), findings.head.message)
+    assertEquals(lintStreamOf(malformedDrawingRelsParts), findings)
+  }
+
+  test("GH-460: streaming mode reports unreferenced parts identically") {
+    assertEquals(lintStreamOf(orphanMediaParts), lintOf(orphanMediaParts))
+    assertEquals(lintStreamOf(orphanMediaParts).size, 1)
+    assertEquals(lintStreamOf(multiHopParts), Vector.empty[Finding])
+  }
+
+  // ===== GH-567: shared-string entries referenced by no cell =====
+
+  private def sstXml(entries: String*): String =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="$nsMain" count="${entries.size}" uniqueCount="${entries.size}">${entries
+        .map(t => s"<si><t>$t</t></si>")
+        .mkString}</sst>"""
+
+  private def sstSheetXml(indices: Int*): String = worksheetWith(
+    "<sheetData><row r=\"1\">" +
+      indices.zipWithIndex.map { (idx, i) =>
+        s"""<c r="${('A' + i).toChar}1" t="s"><v>$idx</v></c>"""
+      }.mkString +
+      "</row></sheetData>"
+  )
+
+  private val orphanSstParts: Map[String, String] = baseParts ++ Map(
+    "xl/sharedStrings.xml" -> sstXml("alpha", "secret counterparty", "gamma"),
+    "xl/worksheets/sheet1.xml" -> sstSheetXml(0, 2)
+  )
+
+  private val unionSstParts: Map[String, String] = withSecondSheet(
+    "worksheet",
+    "worksheets/sheet2.xml",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
+    sstSheetXml(1, 2)
+  ) ++ Map(
+    "xl/sharedStrings.xml" -> sstXml("alpha", "beta", "gamma"),
+    "xl/worksheets/sheet1.xml" -> sstSheetXml(0)
+  )
+
+  private val pastTableSstParts: Map[String, String] = baseParts ++ Map(
+    "xl/sharedStrings.xml" -> sstXml("alpha", "beta", "gamma"),
+    "xl/worksheets/sheet1.xml" -> sstSheetXml(0, 1, 2, 7)
+  )
+
+  private val noSstPartParts: Map[String, String] =
+    baseParts - "xl/sharedStrings.xml" + ("xl/worksheets/sheet1.xml" -> sstSheetXml(0))
+
+  private val malformedSstParts: Map[String, String] =
+    orphanMediaParts + ("xl/sharedStrings.xml" -> "<sst><si>")
+
+  test("GH-567: entries referenced by no t=\"s\" cell are flagged once on xl/sharedStrings.xml") {
+    val findings = lintOf(orphanSstParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.SharedStringOrphan))
+    val f = findings.head
+    assertEquals(f.part, "xl/sharedStrings.xml")
+    assertEquals(f.locator, "<si> #1")
+    assert(f.message.startsWith("1 of 3 shared string"), f.message)
+    assert(f.message.contains("index: 1"), f.message)
+    // scrubbed text must never reappear in a lint log: indices only
+    assert(!f.message.contains("secret"), f.message)
+    assert(!f.message.contains("counterparty"), f.message)
+  }
+
+  test("GH-567: references are unioned across sheets — every entry used somewhere is clean") {
+    assertEquals(lintOf(unionSstParts), Vector.empty[Finding])
+  }
+
+  test("GH-567: a t=\"s\" index past the <si> count is reported on the sheet part") {
+    val findings = lintOf(pastTableSstParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.SharedStringOrphan))
+    val f = findings.head
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    assertEquals(f.locator, """<c r="D1" t="s"><v>7</v>""")
+    assert(f.message.contains("D1 → 7"), f.message)
+    assert(f.message.contains("holds 3 <si>"), f.message)
+    assert(f.message.contains("#REF!"), f.message)
+  }
+
+  test("GH-567: a t=\"s\" cell in a book with no shared-string part is the same class") {
+    val findings = lintOf(noSstPartParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.SharedStringOrphan))
+    assertEquals(findings.head.part, "xl/worksheets/sheet1.xml")
+    assert(findings.head.message.contains("no shared-string part"), findings.head.message)
+    // ... and a book with neither the part nor any t="s" cell has nothing to report
+    assertEquals(lintOf(baseParts - "xl/sharedStrings.xml"), Vector.empty[Finding])
+  }
+
+  test("GH-567: the orphan sample is bounded to 5 indices; named-styles-excel.xlsx carries 8") {
+    // The committed derivative of a stripped Excel model: 10 <si>, 2 referenced — exactly the
+    // scrubbing scenario of #567 (the text of the 8 unreferenced entries rides in the package).
+    val path = TestFixtures.copyToTemp("named-styles-excel.xlsx")
+    val findings = WorkbookLint.lint(path).fold(err => fail(err.message), identity)
+    val orphans = findings.filter(_.category == LintCategory.SharedStringOrphan)
+    assertEquals(orphans.size, 1, findings.mkString("\n"))
+    assertEquals(orphans.head.part, "xl/sharedStrings.xml")
+    assert(orphans.head.message.startsWith("8 of 10 shared string"), orphans.head.message)
+    assert(
+      orphans.head.message.contains("first 5 indices: 1, 3, 4, 5, 6, …"),
+      orphans.head.message
+    )
+    assertEquals(WorkbookLint.lintStream(path), Right(findings))
+  }
+
+  test("GH-567: a shared-string part that is not well-formed is one finding, other rules run") {
+    val findings = lintOf(malformedSstParts)
+    assertEquals(
+      findings.map(f => (f.part, f.category)),
+      Vector(
+        ("xl/sharedStrings.xml", LintCategory.SharedStringOrphan),
+        ("xl/media/image9.png", LintCategory.UnreferencedPart)
+      )
+    )
+    assert(findings(0).message.contains("not well-formed"), findings(0).message)
+    assertEquals(lintStreamOf(malformedSstParts), findings)
+  }
+
+  test("GH-567: streaming mode reports identical shared-string findings") {
+    Vector(orphanSstParts, unionSstParts, pastTableSstParts, noSstPartParts).foreach { parts =>
+      assertEquals(lintStreamOf(parts), lintOf(parts))
+    }
+    assertEquals(lintStreamOf(orphanSstParts).size, 1)
+  }
+
+  test("GH-567: a fresh SST-dialect write by xl lints clean (every entry is referenced)") {
+    // >10 text cells with duplicates → SstPolicy.Auto emits a shared-string table
+    val cells = (1 to 12).map { i =>
+      com.tjclp.xl.addressing.ARef.parse(s"A$i").fold(fail(_), identity) -> s"v${i % 3}"
+    }
+    val sheet = cells.foldLeft(Sheet("Data")) { case (s, (r, v)) => s.put(r -> v) }
+    val bytes =
+      XlsxWriter.writeToBytes(Workbook(Vector(sheet))).fold(e => fail(e.message), identity)
+    assert(
+      new String(bytes, StandardCharsets.ISO_8859_1).contains("sharedStrings.xml"),
+      "the write must have chosen the SST dialect for this test to mean anything"
+    )
+    assertEquals(WorkbookLint.lintBytes(bytes), Right(Vector.empty[Finding]))
+    assertEquals(WorkbookLint.lintStreamBytes(bytes), Right(Vector.empty[Finding]))
+  }
+
+  test("GH-567 carve-out: replacing text in a foreign SST book leaves an orphan the lint reports") {
+    // The documented outcome of the lint-only decision: xl appends the new string and re-points
+    // the cell, but never prunes a preserved table — the replaced text stays in the package and
+    // `shared-string-orphan` is the ONE finding on xl's own output. (No SST compaction this wave.)
+    val source = baseParts ++ Map(
+      "xl/sharedStrings.xml" -> sstXml("plain", "other"),
+      "xl/worksheets/sheet1.xml" -> sstSheetXml(0, 1)
+    )
+    assertEquals(lintOf(source), Vector.empty[Finding])
+    val edited = for
+      wb <- XlsxReader.readFromBytes(zipBytes(source))
+      sheet <- wb("Sheet1")
+      out <- XlsxWriter.writeToBytes(wb.put(sheet.put(ref"A1" -> "REPLACED")))
+    yield out
+    val bytes = edited.fold(err => fail(s"read/modify/write failed: $err"), identity)
+    val sst = readZipEntry(bytes, "xl/sharedStrings.xml")
+    assert(sst.contains("<t>plain</t>"), sst) // the replaced text is still in the package
+    assert(sst.contains("""uniqueCount="3""""), sst)
+    val findings = WorkbookLint.lintBytes(bytes).fold(err => fail(err.message), identity)
+    assertEquals(
+      findings.map(_.category),
+      Vector(LintCategory.SharedStringOrphan),
+      findings.toString
+    )
+    assertEquals(findings.head.part, "xl/sharedStrings.xml")
+    assert(findings.head.message.startsWith("1 of 3 shared string"), findings.head.message)
+    assert(findings.head.message.contains("index: 0"), findings.head.message)
+  }
+
+  private def readZipEntry(bytes: Array[Byte], entry: String): String =
+    val zip = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))
+    try
+      Iterator
+        .continually(zip.getNextEntry)
+        .takeWhile(_ != null)
+        .find(_.getName == entry)
+        .map(_ => new String(zip.readAllBytes(), StandardCharsets.UTF_8))
+        .getOrElse(fail(s"missing $entry"))
+    finally zip.close()
+
+  // ===== GH-460 / GH-567: the committed corpus and xl's own edits of it =====
+
+  private val newCategories: Set[LintCategory] = Set(
+    LintCategory.EmptyInlineStr,
+    LintCategory.IgnorableUndeclared,
+    LintCategory.DxfIdOutOfRange,
+    LintCategory.UnreferencedPart,
+    LintCategory.SharedStringOrphan
+  )
+
+  test("GH-460/567: over the committed corpus, only named-styles-excel trips a new rule") {
+    // false-positive guard: every well-formed fixture (openpyxl, LibreOffice, Excel, derived)
+    TestFixtures.all.foreach { name =>
+      val path = TestFixtures.copyToTemp(name)
+      val findings = WorkbookLint.lint(path).fold(err => fail(s"$name: ${err.message}"), identity)
+      val fresh = findings.filter(f => newCategories.contains(f.category))
+      val expected =
+        if name == "named-styles-excel.xlsx" then Vector(LintCategory.SharedStringOrphan)
+        else Vector.empty[LintCategory]
+      assertEquals(fresh.map(_.category), expected, s"$name: ${fresh.mkString("\n")}")
+      assertEquals(WorkbookLint.lintStream(path), Right(findings), name)
+    }
+  }
+
+  test("GH-460: a regenerated Excel-authored sheet keeps its mc:Ignorable prefixes declared") {
+    // Excel roots carry mc:Ignorable="x14ac xr xr2 xr3": the writer must re-declare every one on
+    // the regenerated root, or the new rule would flag xl's own output. SharedStringOrphan is
+    // excluded here because the FOREIGN source already carries 8 orphans (see the fixture test).
+    val path = TestFixtures.copyToTemp("named-styles-excel.xlsx")
+    val edited = for
+      wb <- XlsxReader.read(path)
+      sheet <- wb.sheets.headOption.toRight(
+        com.tjclp.xl.error.XLError.ParseError(path.toString, "no sheet")
+      )
+      out <- XlsxWriter.writeToBytes(wb.put(sheet.put(ref"Z1" -> "edited")))
+    yield out
+    val bytes = edited.fold(err => fail(s"read/modify/write failed: $err"), identity)
+    val findings = WorkbookLint.lintBytes(bytes).fold(err => fail(err.message), identity)
+    assertEquals(
+      findings.filter(f => newCategories.contains(f.category)).map(_.category),
+      Vector(LintCategory.SharedStringOrphan),
+      findings.mkString("\n")
+    )
+  }
+
   private def lintStreamOf(parts: Map[String, String]): Vector[Finding] =
     WorkbookLint
       .lintStreamBytes(zipBytes(parts))
@@ -1748,7 +2324,37 @@ class WorkbookLintSpec extends FunSuite:
     // GH-458: Microsoft xlExternalLinkPath variants resolve clean in both modes
     "ms xlPathMissing external" ->
       (externalParts +
-        ("xl/externalLinks/_rels/externalLink1.xml.rels" -> msVariantRelsXml("xlPathMissing")))
+        ("xl/externalLinks/_rels/externalLink1.xml.rels" -> msVariantRelsXml("xlPathMissing"))),
+    // GH-460: <c t=...>/<is>/<v> observation (empty inline strings) must agree between scanners
+    "empty inline strings" -> (baseParts + ("xl/worksheets/sheet1.xml" -> emptyInlineSheetXml)),
+    "many empty inline strings" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> manyEmptyInlineSheetXml)),
+    "textful inline strings" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> textfulInlineSheetXml)),
+    // GH-460: mc:Ignorable prefix resolution (DOM scope chain vs SAX prefix-mapping stack)
+    "undeclared mc:Ignorable" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> undeclaredIgnorableSheetXml)),
+    "declared mc:Ignorable" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> declaredIgnorableSheetXml)),
+    "nested mc:Ignorable" -> (baseParts + ("xl/worksheets/sheet1.xml" -> nestedIgnorableSheetXml)),
+    "ns0-prefixed root" -> (baseParts + ("xl/worksheets/sheet1.xml" -> elementTreeRootSheetXml)),
+    "undeclared mc:Ignorable workbook" ->
+      (baseParts + ("xl/workbook.xml" -> undeclaredIgnorableWorkbookXml)),
+    "undeclared mc:Ignorable table" -> undeclaredIgnorableTableParts,
+    // GH-460: dxfId attribute capture on sheet-class and table parts
+    "dangling cfRule dxfId" -> danglingDxfParts,
+    "in-range cfRule dxfId" -> inRangeDxfParts,
+    "dangling table dxfIds" -> dxfTableParts,
+    // GH-460: package reachability is mode-independent but must agree
+    "orphan media part" -> orphanMediaParts,
+    "multi-hop rels closure" -> multiHopParts,
+    "malformed drawing rels" -> malformedDrawingRelsParts,
+    // GH-567: t="s" <v> index capture (SAX buffers <v> text only for t="s" cells)
+    "orphan shared strings" -> orphanSstParts,
+    "unioned shared strings" -> unionSstParts,
+    "past-table shared-string index" -> pastTableSstParts,
+    "t=s without a shared-string part" -> noSstPartParts,
+    "malformed shared strings" -> malformedSstParts
   )
 
   test("GH-413: lintStreamBytes agrees with lintBytes on every fixture (SAX/DOM parity)") {

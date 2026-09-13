@@ -289,6 +289,18 @@ the emitted indices — formatted 100k+ row files no longer require the in-memor
   default streaming output dialect from inline strings to SST as of GH-223)
 - RichText cells stay `inlineStr` even in SST mode (mixed dialects are valid OOXML)
 - Merged-cell emission from streaming writers (phase 3 of GH-223) is still future work
+- **A preserved table is never pruned on write (#567)**: the unified writer appends new strings
+  to the source's `xl/sharedStrings.xml` and re-points the edited cells — entries are never removed
+  or reordered, so untouched sheets keep their `t="s"` indices and their byte-preservation. A text
+  replacement, a sheet removal, a `--stream put` (which writes `inlineStr` and copies the table
+  verbatim), or an edit of one sheet in a multi-sheet inline-string book (the fresh table is built
+  from every sheet while the untouched sheets stay `inlineStr`) therefore leaves `<si>` entries no
+  cell references: a counterparty name scrubbed from every cell still rides in the package.
+  `xl lint` reports the class as `shared-string-orphan` (count + first five indices, never the
+  text); to drop the entries, write the workbook fresh — `XlsxWriter.write(Workbook(wb.sheets),
+  out)` has no source and rebuilds the table from the cells (every sheet is regenerated, so
+  untouched sheets lose byte-preservation). An opt-in on-write compaction
+  (`WriterConfig.compactSharedStrings`) is a follow-up; there is no CLI compaction yet
 
 ---
 
@@ -584,6 +596,20 @@ val headerStyle = style"font-weight: bold; background: #CCCCCC; border: all thin
 **Status**: By design; documented
 **Impact**: `derives RowCodec` decodes an `Option[String]` field as `None` only for an absent or `CellValue.Empty` cell. A cell holding the empty string — SheetJS and some exporters write `<v></v>` text cells for "blank" — is `Some("")` (and a `TypeMismatch` for `Option[Int]`), so a "sparse" column written that way is never `None`. Excel itself distinguishes `""` from blank (`ISBLANK` is FALSE, `COUNTA` counts it), so the codec does too.
 **Workaround**: normalise with `.filter(_.nonEmpty)` after the read, or clear such cells (`clear --all` on the range) before reading.
+
+#### 26b. Childless `inlineStr` Cells Read as Blank (#460)
+
+**Impact**: openpyxl serializes `value=""` as a childless `<c t="inlineStr"/>` — out of schema
+(CT_Cell wants an `<is>` with content or a `<v>`). Excel, openpyxl and xl's streaming readers treat
+the cell as blank; the in-memory reader used to fail the whole workbook read with `inlineStr cell
+missing <is> element and <v> element` while `xl lint` passed the same file. Since #460 the
+in-memory reader reads such a cell (and a childless `<c t="str"/>`) as `CellValue.Empty`, keeping
+its style index, and `xl lint` reports the shape as `empty-inline-str`. An `<is/>` that is present
+but has no `<t>`/`<r>` is different: it is an inline string that is empty — `CellValue.Text("")`,
+like `<is><t></t></is>` and exactly what the streaming reader returns (Excel distinguishes `""`
+from blank, see #617 above) — so it is neither a read failure nor a finding. A write that
+regenerates the sheet emits the blank without a `t` attribute (the writer derives `t` from the
+value), healing the shape; an untouched sheet is copied verbatim.
 
 #### 26. Named Cell Styles: Preserved, Not Yet Modeled (#610)
 **Status**: Preservation fixed in 0.22.0 ([#610](https://github.com/TJC-LP/xl/issues/610)); no typed named-style model yet

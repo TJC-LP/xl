@@ -1768,14 +1768,55 @@ identical (pinned by the lint parity suite).
   foreign attributes — re-emitted verbatim as captured), an x14 `<xm:f>`, an untouched worksheet
   (copied verbatim), and every slot a `--stream` write does not patch. See
   [LIMITATIONS.md](../LIMITATIONS.md)
+- **`empty-inline-str`** — a `t="inlineStr"` / `t="str"` cell with neither an `<is>` nor a
+  `<v>` (openpyxl's serialization of `value=""`): off-spec, so strict readers reject the sheet —
+  xl's own in-memory reader did too before #460; it now reads the cell as blank (the style index
+  survives), and any write that regenerates the sheet emits the blank without a `t`. Not the
+  class: a formula cell without a cached `<v>`, and an `<is/>` that is present but empty (the
+  empty string to every reader, like `<is><t></t></is>`). One finding per part (first five cells
+  + total)
+- **`mc-ignorable-undeclared`** — an `mc:Ignorable` list naming a prefix declared on neither the
+  element nor an ancestor (checked on `xl/workbook.xml`, every sheet-class and table part, and
+  `xl/styles.xml`), or a root element binding the main namespace to a generated `ns0`-style
+  prefix: the ElementTree re-serialization class — the declarations are re-prefixed away while the
+  Ignorable list keeps the old names, and Excel opens the part blank. An UNBOUND element prefix is
+  a well-formedness error and exits `3` with the parser's message instead
+- **`dxf-id-out-of-range`** — a `dxfId`-family attribute (`<cfRule dxfId>`, `<sortCondition
+  dxfId>`, table `dataDxfId` / `headerRowDxfId` / `totalsRowDxfId` and the border variants)
+  indexing past the `<dxfs>` table of `xl/styles.xml`, counted by its actual `<dxf>` children —
+  never the `count` attribute — so a writer that carried conditional formatting across a fresh
+  write without its differential formats is caught; Excel repairs the file and the formatting is
+  lost. Sheet-class and table parts only (`<tableStyleElement>` and pivot styling are not scanned)
+- **`unreferenced-part`** — a zip entry no relationship reaches from `_rels/.rels` through the
+  chain of `.rels` parts (drawings → charts → media included): dead weight a producer left behind,
+  or a forgotten Relationship. `.rels` parts, `[Content_Types].xml` and Excel's own `[trash]/`
+  leftovers are never findings; a `.rels` inside the chain that is not well-formed is one finding
+  on that rels instead of a flood. Not a repair class — Excel ignores such parts, but their bytes
+  travel with every copy of the file
+- **`shared-string-orphan`** — an `xl/sharedStrings.xml` entry no `t="s"` cell references (ONE
+  finding with the orphan count and the first five INDICES — never the text, so scrubbed content
+  cannot resurface in a lint log), or a `t="s"` index past the table (the reader shows `#REF!`,
+  Excel repairs). The orphan half is a hygiene/privacy signal, not a repair class: a counterparty
+  name scrubbed from every cell still rides in the package. xl's fresh writes lint clean; a
+  surgical edit of a foreign SST book that replaces or removes text appends the new string and
+  leaves the old entry behind — xl never prunes a preserved table — which this finding now
+  reports (see the carve-out below). Under `--stream` the table is SAX-counted and the
+  references are a bit set of its size: O(1) in the row count, O(uniqueCount) bits in the table
 
 **Exit codes**: `0` no findings · `1` findings reported · `3` error (unreadable file, malformed
 core part) · `2` usage (no file, or a file given both ways) — errors go to stderr with a `code:`
 line (see [Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
 
-`xl lint` is read-only — it never repairs or rewrites the file. xl's own output always
-lints clean; use it as a pre-send self-check in agent pipelines that splice or post-process
-workbooks.
+`xl lint` is read-only — it never repairs or rewrites the file. xl's own fresh writes always
+lint clean; use it as a pre-send self-check in agent pipelines that splice or post-process
+workbooks. One documented carve-out (#567): a surgical edit of a foreign shared-string book that
+replaces or removes text — or that introduces a shared-string table into a multi-sheet
+inline-string book while copying an untouched sheet verbatim — leaves entries no cell references
+in `xl/sharedStrings.xml` (xl appends and re-points, it never prunes a preserved table), so that
+output reports `shared-string-orphan` until the table is rebuilt: from the library, a fresh write
+of `Workbook(wb.sheets)` (no source, every sheet regenerated) rebuilds it from the cells; there is
+no CLI compaction yet. Gate on the categories you care about (`--format json` →
+`.findings[].category`).
 
 ---
 

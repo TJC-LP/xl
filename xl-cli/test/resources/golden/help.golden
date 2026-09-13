@@ -180,9 +180,21 @@ Subcommands:
           - post-2007 functions (IFS, XLOOKUP, MAXIFS, ...) stored without Excel's
             _xlfn. prefix in <f>, a CF <formula>, a DV <formula1>/<formula2> or a
             <definedName> (the openpyxl class: a silent #NAME? on the first
-            recalculation; any in-memory write that regenerates the worksheet
-            (CF/DV) or workbook.xml (names) heals the slot — unmodeled preserved
-            rules and --stream writes do not)
+            recalculation; xl heals a slot only when it regenerates it)
+          - inlineStr/str cells with neither an <is> nor a <v> (openpyxl's value="";
+            strict readers reject the sheet — xl reads the cell as blank and a
+            regenerating write heals the shape)
+          - mc:Ignorable lists naming a prefix no ancestor declares, or an ns0-style
+            root prefix (the ElementTree re-serialization class: Excel opens the
+            part blank)
+          - dxfId / dataDxfId / headerRowDxfId ... past the <dxfs> table of
+            xl/styles.xml (actual <dxf> children, not the count attribute)
+          - zip entries no relationship reaches from _rels/.rels (dead weight, or a
+            forgotten Relationship; never a repair, but the bytes travel)
+          - shared-string entries no t="s" cell references (count + first five
+            INDICES, never the text) and t="s" indices past the table (#REF!);
+            xl never prunes a preserved table, so a text-replacing edit of a
+            foreign shared-string book reports this until the table is rebuilt
 
         USAGE:
           xl lint report.xlsx
@@ -193,7 +205,9 @@ Subcommands:
           child-order | unresolved-rel-id | wrong-rel-type | missing-part |
           missing-content-type | ref-out-of-bounds | data-table-torn |
           data-table-unseeded | formula-leading-equals | external-ref-dangling |
-          defined-name-invalid | calc-chain-stale | xlfn-missing
+          defined-name-invalid | calc-chain-stale | xlfn-missing | empty-inline-str |
+          mc-ignorable-undeclared | dxf-id-out-of-range | unreferenced-part |
+          shared-string-orphan
 
         EXIT CODES:
           0 = no findings (package structure is clean)

@@ -3,6 +3,7 @@ package com.tjclp.xl.ooxml
 import munit.FunSuite
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.api.Workbook
 import java.io.ByteArrayOutputStream
@@ -418,6 +419,92 @@ class XlsxReaderErrorSpec extends FunSuite:
     val workbook = XlsxReader.readFromBytes(bytes).getOrElse(fail("Workbook should parse"))
     val sheet = workbook("Sheet1").getOrElse(fail("Expected Sheet1"))
     assertEquals(sheet(ref"A1").value, CellValue.Error(CellError.Ref))
+  }
+
+  // ===== GH-460 addendum: openpyxl's serialization of value="" is a childless <c t="inlineStr"/> =====
+
+  /** Two cellXfs so s="1" resolves to a NON-default style the domain cell must keep. */
+  private val twoXfStylesXml = minimalStylesXml.replace(
+    """<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>""",
+    """<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="2" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/></cellXfs>"""
+  )
+
+  private val emptyInlineStrWorksheetXml =
+    """<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" s="1" t="inlineStr"/>
+      <c r="B1" t="inlineStr"><is/></c>
+      <c r="C1" t="str"/>
+      <c r="D1" t="inlineStr"><is><t>Hello</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>"""
+
+  private val emptyInlineStrBytes: Array[Byte] = buildWorkbook(overrides =
+    Map(
+      "xl/worksheets/sheet1.xml" -> emptyInlineStrWorksheetXml,
+      "xl/styles.xml" -> twoXfStylesXml,
+      // the base content types leave styles.xml unregistered; the round-trip lint below needs a
+      // package that is clean apart from the shape under test
+      "[Content_Types].xml" -> contentTypesXml.replace(
+        "</Types>",
+        """  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>"""
+      )
+    )
+  )
+
+  test("GH-460: a childless <c t=\"inlineStr\"/> reads as Empty and keeps its style index") {
+    // Excel and openpyxl treat the cell as blank; before this fix the whole read failed with
+    // "inlineStr cell missing <is> element and <v> element" while `xl lint` passed the file.
+    val wb = XlsxReader
+      .readFromBytes(emptyInlineStrBytes)
+      .fold(err => fail(s"a childless inlineStr must read as blank, got $err"), identity)
+    val sheet = wb.sheets(0)
+    assertEquals(sheet(ref"A1").value, CellValue.Empty)
+    assert(sheet.cells.contains(ref"A1"), "the styled blank cell must survive as a cell")
+    assert(sheet(ref"A1").styleId.isDefined, s"style index s=\"1\" dropped: ${sheet(ref"A1")}")
+    assertEquals(sheet(ref"D1").value, CellValue.Text("Hello"))
+  }
+
+  test("GH-460: a childless <c t=\"str\"/> is blank too; an <is/> is the empty STRING") {
+    // <is/> is an inline string that is present but empty — the same "" as <is><t></t></is>,
+    // and what the streaming reader already returns (Excel distinguishes "" from blank, #617).
+    val wb = XlsxReader
+      .readFromBytes(emptyInlineStrBytes)
+      .fold(err => fail(s"read failed: $err"), identity)
+    assertEquals(wb.sheets(0)(ref"B1").value, CellValue.Text(""))
+    assertEquals(wb.sheets(0)(ref"C1").value, CellValue.Empty)
+  }
+
+  test("GH-460: a regenerated sheet re-emits the blank without t=\"inlineStr\" and lints clean") {
+    // The writer derives `t` from the CellValue (Empty → none), so any write that regenerates
+    // the sheet heals the shape; an edit on the same sheet forces the regeneration.
+    val out = for
+      wb <- XlsxReader.readFromBytes(emptyInlineStrBytes)
+      sheet <- wb("Sheet1")
+      bytes <- XlsxWriter.writeToBytes(wb.put(sheet.put(ref"E1" -> "edited")))
+    yield bytes
+    val bytes = out.fold(err => fail(s"round-trip failed: $err"), identity)
+    val zip = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))
+    val sheetXml =
+      try
+        Iterator
+          .continually(zip.getNextEntry)
+          .takeWhile(_ != null)
+          .find(_.getName == "xl/worksheets/sheet1.xml")
+          .map(_ => new String(zip.readAllBytes(), StandardCharsets.UTF_8))
+          .getOrElse(fail("no sheet1.xml in the output"))
+      finally zip.close()
+    assert(!sheetXml.contains("""<c r="A1" s="1" t="inlineStr"/>"""), sheetXml)
+    assert(!sheetXml.contains("<is/>"), sheetXml)
+    assertEquals(
+      com.tjclp.xl.ooxml.lint.WorkbookLint.lintBytes(bytes).map(_.map(_.category)),
+      Right(Vector.empty[com.tjclp.xl.ooxml.lint.LintCategory]),
+      sheetXml
+    )
   }
 
   private def buildWorkbook(
