@@ -37,7 +37,7 @@ The canonical header for every script (this is the single source of truth — re
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -124,7 +124,7 @@ orExit(wb.update("Sales", f))                      // 0.21.0: or print "Error: �
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -255,7 +255,7 @@ A `Patch` is sheet-local and formula-blind. `Edit` is the operation vocabulary b
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -385,7 +385,7 @@ Native Excel `TABLE()` two-variable data tables (0.18.0) — the house sensitivi
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 val model = Sheet("Sensitivity")
@@ -439,7 +439,7 @@ val sales = orExit(wb("Sales"))                      // SheetNotFound → printe
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -461,7 +461,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 val data = List(("North", 125000.50), ("South", 98000.25), ("West", 143500.00))
@@ -488,7 +488,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

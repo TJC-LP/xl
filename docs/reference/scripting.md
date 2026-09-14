@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -207,7 +207,7 @@ cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 val region = Seq("North", "East").mkString(" ")                     // runtime name
@@ -372,7 +372,7 @@ the batch schema).
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -406,7 +406,7 @@ println(s"wrote ${edited.sheets.size} sheets; clean: ${result.isClean}")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -452,7 +452,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -699,7 +699,7 @@ per-cell `readTyped` loops:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
 
@@ -815,6 +815,7 @@ CellStyle.default.withNumFmt(NumFmt.Custom("0.0x")) // any Excel format code
 CellStyle.default.bordered                          // thin border, all sides
 CellStyle.default.borderTop(BorderStyle.Thin)       // per-side: borderBottom/borderLeft/borderRight, color overloads
 ref"B3:F9".outlined(BorderStyle.Medium)             // outline the range edges only (banker box)
+CellStyle.default.withFill(Fill.pattern(Color.fromRgb(0xDD, 0xDD, 0xDD), Color.fromRgb(0xFF, 0xFF, 0xFF), PatternType.LightGray)) // 0.23.0: textured fill; Fill.Pattern takes Option[Color]s (None = automatic)
 ```
 
 `range.outlined` is edge-correct (corners get both sides, interior cells untouched) and merges
@@ -838,7 +839,7 @@ and a full-column range for the column forms: `sheet.collapseRows("E:H".asRange 
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 
 // Whole-row/column spans are runtime strings (the ref macro takes A1 / A1:B2 shapes) — parse them.
@@ -864,7 +865,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -890,6 +891,19 @@ println("wrote print-ready report")
 
 Header/footer strings use Excel's codes: `&P` page number, `&N` total pages, `&D` date, `&F`
 file name, `&A` sheet name, with `&L`/`&C`/`&R` section markers.
+
+### Defined names (since 0.23.0)
+
+`wb.withDefinedName("Tax", "Inputs!$B$2")` defines or replaces a workbook-global name;
+`wb.withDefinedName("Tax", "Inputs!$B$3", SheetName.unsafe("Inputs"))` is the sheet-local form
+(`XLResult`, `Left(SheetNotFound)` for a missing sheet). Matching is case-insensitive like Excel,
+so `withDefinedName("tax", …)` beside `TAX` replaces it instead of appending a shadowed duplicate;
+`wb.removeDefinedName(name)` / `removeDefinedName(name, scope)` are the inverses.
+`_xlnm.Print_Area` and `_xlnm.Print_Titles` on a sheet are the same thing as its
+`PageSetup.printArea` / `repeatRows` — whichever you set last wins, on both writer backends.
+`DefinedName` (`wb.metadata.definedNames`, `DefinedName.sameName`, `DefinedName.PrintArea`) is
+part of the prelude export. A formula that reads a redefined name keeps its cached value until
+you `recalculate` — the CLI's `name add|rm` and batch `define-name`/`remove-name` do that for you.
 
 ## The `.unsafe` boundary
 
@@ -935,7 +949,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.22.0
+//> using dep com.tjclp::xl:0.23.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

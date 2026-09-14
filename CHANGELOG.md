@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-14
+
 Formula parity with Excel-authored models — the 0.21.0 dogfood's parser gaps (#603, #604, #605)
 and the evaluator bugs beside them (#578, #580, #596): one real projection model's 209
 "unparseable" formulas now parse and evaluate.
@@ -18,6 +20,13 @@ recalculation (#537, #482), defined names (#538, #462), `--no-recalc` (#509), th
 (#479), records (#614), the writer's scratch files (#516, #517), the `--json` contract (#618) and
 the grammar-complete formula generator (#653). #519 (SIGTERM) had already shipped in #521 and
 #465 (underline builder, outline collapse) in 0.20.0/0.21.0; both close without code.
+
+Before release the wave itself was adversarially reviewed (eighteen reviewers, every finding
+attacked by three skeptics): 51 findings held and all are fixed here — three regressions (`xl
+lint` failing on xl's own edits, `--no-recalc` showing stale numbers in LibreOffice, a
+lexicographic cycle sweep), the Breaking labels the wave had omitted, and a dozen older defects
+the review surfaced (table part numbering, totals rows, streaming theme colours, non-text
+overflow in renders, `name add|rm` caches, RowCodec header collisions, `NOT (A1)`).
 
 ### Added
 

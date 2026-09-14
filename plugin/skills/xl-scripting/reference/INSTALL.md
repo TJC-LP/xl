@@ -21,7 +21,7 @@ runs are cached.
 Warm the cache once while the network is available, then run offline:
 
 ```bash
-printf '//> using scala 3.9.0\n//> using dep com.tjclp::xl:0.22.0\nimport com.tjclp.xl.scripting.{*, given}\nval _ = Sheet("warm").put(ref"A1", 1)\n' > /tmp/warm.sc
+printf '//> using scala 3.9.0\n//> using dep com.tjclp::xl:0.23.0\nimport com.tjclp.xl.scripting.{*, given}\nval _ = Sheet("warm").put(ref"A1", 1)\n' > /tmp/warm.sc
 scala-cli compile --server=false /tmp/warm.sc          # downloads everything the pins need
 scala-cli --power run --server=false --offline script.sc   # no network from here on
 ```

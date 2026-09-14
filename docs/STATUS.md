@@ -1,12 +1,24 @@
 # XL Project Status
 
-**Last Updated**: 2026-09-08 (0.22.0)
+**Last Updated**: 2026-09-14 (0.23.0)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.23.0** (2026-09-14) — wave 29: every open issue triaged into twelve shared-logic clusters, then adversarially reviewed (51 findings fixed before release); thirteen **Breaking:** entries:
+- ✅ **OOXML fidelity** (#557, #595, #593, #566, #649) — sheet rels planned before emission and table parts keep their source numbers; totals rows survive a write; `Fill.Pattern` with `Option[Color]` so every texture round-trips; TAB/LF/CR in attributes as `&#9;`/`&#10;`/`&#13;` on both writers (the StAX backend is an xl-owned tag writer)
+- ✅ **`xl lint` coverage and tiers** (#460, #567) — `empty-inline-str`, `mc-ignorable-undeclared`, `dxf-id-out-of-range`, `unreferenced-part`, `shared-string-orphan`; `repair` findings exit 1, `hygiene` exit 0 unless `--strict`; Excel 4.0 macrosheets scanned
+- ✅ **Iterative recalculation** (#537, #482) — Gauss–Seidel within a cycle by default in row-major grid order (Excel's iteration model; `IterationScheme.Jacobi` opt-in), parse-once fixpoints, `AggregateMemo`, stalled-component exit with one verdict string for the summary and `--strict`
+- ✅ **Render** (#500, #501, #502) — one `renderedContent` resolver per cell; non-text that does not fit is `####` under every alignment; General alignment and measured overflow
+- ✅ **Defined names** (#538, #462) — case-insensitive mutation, scoped `withDefinedName`/`removeDefinedName`, `xl name add|rm -s`, batch `define-name`/`remove-name`, all recalculating their readers; `DefinedName` exported to the prelude
+- ✅ **`--no-recalc` structural writes** (#509) — `StructuralCachePolicy`; the CLI keeps only provably unaffected caches and marks `fullCalcOnLoad` (LibreOffice ignores the marker, verified by `LibreOfficeOracleSpec`)
+- ✅ **Formula model** (#479) — the bare expression is canonical at every entry (trim, one `=`, trim); `CellValue.formula` is total
+- ✅ **Records** (#614) — `@header`, `RowCodec.withHeaders`/`headers`/`headerKey`; duplicate headers refused under the matcher's key
+- ✅ **CLI contract** (#618, #516, #517) — `--json` `data` is always an object; `writeToBytes` in memory; `XL_SPILL_DIR` for the streaming writer and the resvg scratch
+- ✅ **Grammar generator** (#653 item 4) — `FormulaGrammarSpec` over the grammar Excel writes; `.5` literals, `NOT(`/`NOT (` binding, `YEARFRAC` basis 0, quotes in sheet names fixed
 
 **New in 0.22.0** (2026-09-08) — the 0.21.0 dogfood's follow-through (#646, #647, #648, #650); twelve **Breaking:** entries, each a behaviour fix toward Excel or the contract:
 - ✅ **Named cell styles survive every write** (#610) — `cellStyleXfs`, `cellStyles`, `tableStyles`, `colors` and the styles `extLst` ride through the in-memory writer verbatim (`PreservedStyleParts`), every `cellXf` keeps its `xfId`, source cellXfs are registered positionally; `"` written verbatim in element text (#611)
