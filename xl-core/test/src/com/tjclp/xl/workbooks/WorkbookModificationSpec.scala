@@ -10,7 +10,7 @@ import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.PartManifest
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{PageSetup, Sheet}
 import munit.FunSuite
 
 class WorkbookModificationSpec extends FunSuite:
@@ -41,6 +41,40 @@ class WorkbookModificationSpec extends FunSuite:
     val tracker =
       updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assertEquals(tracker.deletedSheets, Set(1))
+  }
+
+  test("GH-462: the scoped withDefinedName / removeDefinedName mark metadata modified") {
+    val other = SheetName.unsafe("Other")
+    val wb = workbook.copy(sheets = Vector(baseSheet, Sheet("Other")))
+    def modifiedMetadata(result: XLResult[Workbook]): Boolean =
+      result
+        .fold(err => fail(s"scoped name edit failed: $err"), identity)
+        .sourceContext
+        .fold(fail("Missing source context"))(identity)
+        .modificationTracker
+        .modifiedMetadata
+    assert(modifiedMetadata(wb.withDefinedName("Local", "Other!$A$1", other)))
+    assert(modifiedMetadata(wb.removeDefinedName("Local", other)))
+  }
+
+  test("GH-462: clearing a print field the read lifted into PageSetup is a tracked sheet update") {
+    val sheet1 = SheetName.unsafe("Sheet1")
+    val lifted = workbook.copy(sheets =
+      Vector(baseSheet.withPageSetup(PageSetup(printArea = Some(ref"A1:B2"))))
+    )
+    def tracker(result: XLResult[Workbook]) =
+      result
+        .fold(err => fail(s"scoped print-name edit failed: $err"), identity)
+        .sourceContext
+        .fold(fail("Missing source context"))(identity)
+        .modificationTracker
+    val removed = tracker(lifted.removeDefinedName("_xlnm.Print_Area", sheet1))
+    assertEquals(removed.modifiedSheets, Set(0))
+    assert(removed.modifiedMetadata)
+    val authored = tracker(lifted.withDefinedName("_xlnm.Print_Area", "Sheet1!$C$1:$D$2", sheet1))
+    assertEquals(authored.modifiedSheets, Set(0))
+    // no lifted field to clear: the metadata edit alone, no sheet touched
+    assertEquals(tracker(lifted.removeDefinedName("Local", sheet1)).modifiedSheets, Set.empty)
   }
 
   test("reorder marks reorder flag without marking sheets modified") {

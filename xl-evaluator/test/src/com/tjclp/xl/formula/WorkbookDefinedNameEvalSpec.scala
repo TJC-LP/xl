@@ -52,6 +52,16 @@ class WorkbookDefinedNameEvalSpec extends FunSuite:
     assertEquals(wb.evaluateFormula("=CASE", "Model"), Right(num(2)))
   }
 
+  test("GH-538: redefining a name in another case is the write the evaluator sees (=case → B3)") {
+    val sheet = model.put(ARef.from0(1, 2), num(3)) // Model!B3 = 3
+    val wb = Workbook(sheet)
+      .withDefinedName("CASE", "Model!$B$2")
+      .withDefinedName("case", "Model!$B$3")
+    assertEquals(wb.metadata.definedNames.map(_.name), Vector("case"))
+    assertEquals(wb.evaluateFormula("=case", "Model"), Right(num(3)))
+    assertEquals(wb.evaluateFormula("=CASE", "Model"), Right(num(3)))
+  }
+
   test("GH-384: names compose in arithmetic (=entry_mult*ltm_ebitda)") {
     val wb = Workbook(model)
       .withDefinedName("entry_mult", "Model!$A$1") // 10

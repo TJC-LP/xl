@@ -105,7 +105,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Style, merge, comments, hyperlinks | `style`, `merge`/`unmerge`, `comment`/`remove-comment` — or `batch` ops | styles merge unless `--replace` |
 | Copy, fill, sort or clear a block | `copy <source> <target> [--values-only]`, `fill <source> <target> [--right]`, `sort <range> --by <col>`, `clear <range> [--all\|--styles\|--comments]` — or the batch ops `copy` and `clear` | `copy` shifts relative references like Excel; the target is a cell (expanded to the source's size) or a range, and either side may be sheet-qualified: `{"op":"copy","source":"Data!A1:B2","target":"Summary!A1","valuesOnly":false}`. `fill` and `sort` have no batch twin |
 | Rows and columns | `row <n>`, `col <letter>`, `autofit [--columns A:F]`, `group-rows <10:20>`/`group-cols <E:H>` (`--level n`, `--collapsed`), `insert-rows <at-row> [count]`/`delete-rows <at-row> [count]`, `insert-cols <at-col\|C:E> [count]`/`delete-cols <at-col\|C:E> [count]` | `at-row` is one 1-based row and `count` defaults to 1: `delete-rows 7 5` deletes rows 7-11 — there is **no** `7:11` form (only the column verbs take `C:E`). Structural edits rewrite formulas on every sheet, `#REF!` on loss; they have no batch twin |
-| Sheets | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide\|show`, `name add\|rm` | `rename-sheet` rewrites every reference to the sheet |
+| Sheets | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide\|show`, `name add\|rm` | `rename-sheet` rewrites every reference to the sheet. `name add\|rm` are workbook-scoped unless `-s` names the scope sheet: `-s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20'` sets that sheet's print area; names match case-insensitively (`case` replaces `CASE`) |
 | Deliverable finish | `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `autofilter`, `freeze`, `cf add`, `chart add`, `add-image` | every one but `add-image` has a batch twin |
 | Import data | `import <csv>`, `import-md <table.md\|->` | `--new-sheet`, type detection |
 | Refresh cached values | `recalc` (`--tables`, `--parallel n`) | `--strict` exits 1 on formula errors |
@@ -158,9 +158,10 @@ Batch essentials (the complete, generated field list is one command away: `xl ba
   `FORMAT_HINT_IGNORED` warning that names it and lists the known names (the cell stays General).
 - **`values`** writes a row-major array over a range; `putf` with a single `value` over a range
   drags it from `from` (Excel `$` anchoring); `putf` `values` writes each formula as-is.
-- **`sheet`** on any op (except `add-sheet`/`rename-sheet`) names the sheet for its unqualified
-  refs, so a batch can touch several sheets and never needs shell quoting for sheet names with
-  spaces. A qualified ref (`"Summary!B2"`) wins over it.
+- **`sheet`** on any op (except `add-sheet`/`rename-sheet`/`define-name`/`remove-name`) names the
+  sheet for its unqualified refs, so a batch can touch several sheets and never needs shell quoting
+  for sheet names with spaces. A qualified ref (`"Summary!B2"`) wins over it. A defined name's
+  sheet is its `scope` key: `{"op":"define-name","name":"Local","refersTo":"Data!$A$1","scope":"Data"}`.
 - **Property names** are accepted in camelCase or kebab-case; `format`/`numFormat`,
   `from`/`anchor`, `target`/`url`, `align`/`halign` and `value`/`formula` (on `putf`) are aliases.
   An unknown property is an `UNKNOWN_PROPERTY` warning, not an error.

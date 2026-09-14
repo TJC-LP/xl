@@ -25,3 +25,30 @@ final case class DefinedName(
   hidden: Boolean = false,
   comment: Option[String] = None
 )
+
+object DefinedName:
+
+  /**
+   * Excel's name for a sheet's print area: sheet-scoped, and after a read its typed home is
+   * `PageSetup.printArea` (the reader lifts the modelable form out of the table, GH-259).
+   */
+  val PrintArea: String = "_xlnm.Print_Area"
+
+  /**
+   * Excel's name for a sheet's repeated print titles: sheet-scoped; a pure row span is lifted into
+   * `PageSetup.repeatRows` on read, column titles stay in the table verbatim.
+   */
+  val PrintTitles: String = "_xlnm.Print_Titles"
+
+  /**
+   * Excel's identifier relation for defined names: `String.equalsIgnoreCase`, the relation
+   * [[DefinedNameIndex]] hashes for resolution. The one rule every mutation path matches by
+   * (GH-538), so that a write is the entry the evaluator then resolves. Deliberately narrower than
+   * the lint's NFKC/kana fold: mutation is aligned with resolution, not with the linter.
+   */
+  def sameName(a: String, b: String): Boolean = a.equalsIgnoreCase(b)
+
+  extension (dn: DefinedName)
+    /** Whether `dn` is the entry `name` denotes in `scope` (a `localSheetId`; None = workbook). */
+    def matches(name: String, scope: Option[Int]): Boolean =
+      sameName(dn.name, name) && dn.localSheetId == scope

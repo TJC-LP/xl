@@ -116,6 +116,11 @@ object BatchParser:
     case AutoFit(columns: Option[String])
     case AddSheet(name: String, after: Option[String])
     case RenameSheet(from: String, to: String)
+    // Defined names (GH-462): the twins of `name add` / `name rm`. `scope` is the sheet the name
+    // is local to — EditSchema's define-name / remove-name field shape, so the #583 collapse onto
+    // `Edit.DefineName` / `Edit.RemoveName` is mechanical.
+    case DefineName(name: String, refersTo: String, scope: Option[String])
+    case RemoveName(name: String, scope: Option[String])
     case Freeze(ref: String)
     case Unfreeze
     case CopyRange(source: String, target: String, valuesOnly: Boolean)
@@ -246,6 +251,10 @@ object BatchParser:
       case BatchOp.AutoFit(cols) => s"  AUTOFIT ${cols.getOrElse("all")}"
       case BatchOp.AddSheet(name, _) => s"  ADD-SHEET $name"
       case BatchOp.RenameSheet(from, to) => s"  RENAME-SHEET $from -> $to"
+      case BatchOp.DefineName(name, refersTo, scope) =>
+        s"  DEFINE-NAME $name -> $refersTo${scope.fold("")(s => s" (scope: $s)")}"
+      case BatchOp.RemoveName(name, scope) =>
+        s"  REMOVE-NAME $name${scope.fold("")(s => s" (scope: $s)")}"
       case BatchOp.Freeze(ref) => s"  FREEZE $ref"
       case BatchOp.Unfreeze => "  UNFREEZE"
       case BatchOp.CopyRange(src, tgt, vo) =>
@@ -347,6 +356,9 @@ object BatchParser:
    *   - `autofit`: {"op": "autofit", "columns": "A:F"}
    *   - `add-sheet`: {"op": "add-sheet", "name": "New Sheet", "after": "Sheet1"}
    *   - `rename-sheet`: {"op": "rename-sheet", "from": "Old", "to": "New"}
+   *   - `define-name`: {"op": "define-name", "name": "Tax", "refersTo": "Sheet1!$A$1", "scope":
+   *     "Sheet1"} (GH-462; `scope` optional — the twin of `name add`, `-s` = scope)
+   *   - `remove-name`: {"op": "remove-name", "name": "Tax", "scope": "Sheet1"} (`scope` optional)
    *   - `freeze`: {"op": "freeze", "ref": "B2"}
    *   - `unfreeze`: {"op": "unfreeze"}
    *   - `autofilter`: {"op": "autofilter", "range": "A1:M29"} (or {"op": "autofilter", "clear":
@@ -535,6 +547,19 @@ object BatchParser:
             val from = requireString(objMap, "from", idx)
             val to = requireString(objMap, "to", idx)
             BatchOp.RenameSheet(from, to)
+
+          case "define-name" =>
+            BatchOp.DefineName(
+              requireString(objMap, "name", idx),
+              requireString(objMap, "refersTo", idx),
+              objMap.get("scope").flatMap(_.strOpt)
+            )
+
+          case "remove-name" =>
+            BatchOp.RemoveName(
+              requireString(objMap, "name", idx),
+              objMap.get("scope").flatMap(_.strOpt)
+            )
 
           case "freeze" =>
             val ref = requireString(objMap, "ref", idx)
@@ -1191,7 +1216,8 @@ object BatchParser:
    * `autofit`, …) — needs a sheet: its `sheet` key, else the batch default, else the only sheet of
    * a single-sheet book, else `SHEET_REQUIRED` at its index. An op whose target ref is qualified
    * (or does not parse — the applier reports that) needs none; `copy` and `chart` resolve their own
-   * sides; `add-sheet` and `rename-sheet` take none.
+   * sides; `add-sheet`, `rename-sheet`, `define-name` and `remove-name` take none (a name's `scope`
+   * is its own key, not a `sheet`).
    */
   private def opSheet(
     wb: Workbook,
@@ -1201,7 +1227,7 @@ object BatchParser:
     val merged = scoped.sheet.orElse(default)
     scoped.op match
       case _: BatchOp.CopyRange | _: BatchOp.AddChart | _: BatchOp.AddSheet |
-          _: BatchOp.RenameSheet =>
+          _: BatchOp.RenameSheet | _: BatchOp.DefineName | _: BatchOp.RemoveName =>
         Right(merged)
       case op =>
         val refs = OpRegistry.targetRefs(op)
@@ -1334,6 +1360,14 @@ object BatchParser:
 
       case BatchOp.RenameSheet(from, to) =>
         applyRenameSheet(currentWb, from, to)
+
+      case BatchOp.DefineName(name, refersTo, scope) =>
+        nameScope(scope).flatMap(s =>
+          IO.fromEither(SheetCommands.defineName(currentWb, s, name, refersTo))
+        )
+
+      case BatchOp.RemoveName(name, scope) =>
+        nameScope(scope).flatMap(s => IO.fromEither(SheetCommands.removeName(currentWb, s, name)))
 
       case BatchOp.Freeze(refStr) =>
         // Accept either bare ref ("B2") or qualified ref ("Sheet2!B2").
@@ -1973,6 +2007,15 @@ object BatchParser:
         .left
         .map(err => s"Invalid autofit columns '$spec': $err")
         .map(col => List(col))
+
+  /**
+   * A `define-name` / `remove-name` op's `scope` as a validated sheet name (`INVALID_SHEET_NAME`,
+   * the verb's); None is the workbook scope. The mutation itself is `SheetCommands.defineName` /
+   * `removeName` — the op fails with the same code, hint and candidates as `name add|rm -s`
+   * (GH-462); the caller adds the op index.
+   */
+  private def nameScope(scope: Option[String]): IO[Option[SheetName]] =
+    scope.fold(IO.pure(Option.empty[SheetName]))(s => SheetCommands.sheetName(s).map(Some(_)))
 
   /**
    * Add a new sheet to the workbook. Refusals are the verb's (`SheetCommands`, GH-608):

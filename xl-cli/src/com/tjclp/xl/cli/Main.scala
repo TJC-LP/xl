@@ -872,18 +872,23 @@ EXAMPLES:
     Opts(CliCommand.Names)
   }
 
-  val nameCmd: Opts[CliCommand] = Opts.subcommand("name", "Manage named ranges: add, rm") {
-    val nameArg = Opts.argument[String]("name")
-    val refArg = Opts.argument[String]("refers-to")
-    val addSub =
-      Opts.subcommand("add", "Add or replace a named range (e.g. name add Tax 'Sheet1!$A$1')") {
-        (nameArg, refArg).mapN(NameAction.Add.apply)
+  val nameCmd: Opts[CliCommand] =
+    Opts.subcommand("name", "Manage named ranges: add, rm (-s scopes the name to that sheet)") {
+      val nameArg = Opts.argument[String]("name")
+      val refArg = Opts.argument[String]("refers-to")
+      val addSub =
+        Opts.subcommand(
+          "add",
+          "Add or replace a named range, workbook-scoped unless -s names its sheet " +
+            "(e.g. name add Tax 'Sheet1!$A$1'; -s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20')"
+        ) {
+          (nameArg, refArg).mapN(NameAction.Add.apply)
+        }
+      val rmSub = Opts.subcommand("rm", "Remove a named range (workbook-scoped; -s the sheet's)") {
+        nameArg.map(NameAction.Remove.apply)
       }
-    val rmSub = Opts.subcommand("rm", "Remove a named range") {
-      nameArg.map(NameAction.Remove.apply)
+      (addSub orElse rmSub).map(CliCommand.Name.apply)
     }
-    (addSub orElse rmSub).map(CliCommand.Name.apply)
-  }
 
   val boundsCmd: Opts[CliCommand] = Opts.subcommand(
     "bounds",
@@ -3381,13 +3386,15 @@ EXAMPLES:
 
     case CliCommand.Name(action) =>
       action match
+        // GH-462: `-s` is the name's scope (takesSheet is false, so a single-sheet book without
+        // -s still writes a workbook-scoped name — no auto-select)
         case NameAction.Add(nm, refersTo) =>
           requireOutput("name add", outputOpt, backendOpt, stream)(
-            SheetCommands.nameAdd(wb, nm, refersTo, _, _, _)
+            SheetCommands.nameAdd(wb, sheetOpt.map(_.name), nm, refersTo, _, _, _)
           )
         case NameAction.Remove(nm) =>
           requireOutput("name rm", outputOpt, backendOpt, stream)(
-            SheetCommands.nameRemove(wb, nm, _, _, _)
+            SheetCommands.nameRemove(wb, sheetOpt.map(_.name), nm, _, _, _)
           )
 
     case CliCommand.MoveSheet(name, toIndexOpt, afterOpt, beforeOpt) =>

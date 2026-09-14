@@ -333,9 +333,33 @@ List and manage defined names (named ranges).
 
 ```bash
 xl -f model.xlsx names                                       # List all defined names
-xl -f model.xlsx -o out.xlsx name add Tax 'Sheet1!$A$1'      # Add or replace
+xl -f model.xlsx -o out.xlsx name add Tax 'Sheet1!$A$1'      # Add or replace (workbook-scoped)
 xl -f model.xlsx -o out.xlsx name rm Tax                     # Remove
+xl -f model.xlsx -o out.xlsx -s Sheet1 name add Local 'Sheet1!$B$2'   # Sheet-scoped (localSheetId)
+xl -f model.xlsx -o out.xlsx -s Sheet1 name rm Local                  # Remove the sheet-scoped one
 ```
+
+`-s` is the name's **scope**, not a sheet for refs: without it `name add|rm` author and remove
+workbook-scoped names (a single-sheet book is not auto-selected); with it they author and remove
+the name scoped to that sheet — `localSheetId` in `workbook.xml`, following the sheet across
+reorders. Excel's per-sheet print chrome is authored this way (the same result as the scripting
+`PageSetup(printArea = …, repeatRows = …)`):
+
+```bash
+xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20'
+xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Titles 'Sheet1!$1:$2'
+```
+
+A sheet's `_xlnm.Print_Area` / `_xlnm.Print_Titles` read from a file live in its page setup (the
+fields the scripting `PageSetup` sets; `names` still lists them from `workbook.xml`): `name add -s`
+replaces them and `name rm -s` clears them, so `-s Sheet1 name rm _xlnm.Print_Area` is the inverse
+of the `name add` above on its own output. `-s` names the sheet exactly as spelled, like every
+verb's `-s`; the batch twins' `scope` key matches it case-insensitively.
+
+Names are case-insensitive identifiers, as in Excel: `name add case …` replaces an existing `CASE`
+(every same-scope spelling, so a table that held case-colliding duplicates holds one afterwards),
+`name rm total` removes `Total`, and `NAME_NOT_FOUND`'s candidates are the names in that scope.
+`names` shows a sheet-scoped name's sheet in parentheses (`"scope"` in `--json`).
 
 `names` reads `workbook.xml` alone, so it takes `--stream` (the same read, any file size; since
 0.22.0). `name add|rm` load the workbook and write through the streaming writer under the flag.
@@ -1475,8 +1499,9 @@ own `hint`.
 
 **Rules every op follows**:
 
-- **The `sheet` key.** Every op except `add-sheet`/`rename-sheet` accepts `"sheet"`: the sheet
-  for its unqualified refs. THE sheet rule applies per op — a sheet-qualified ref
+- **The `sheet` key.** Every op except `add-sheet`/`rename-sheet`/`define-name`/`remove-name`
+  accepts `"sheet"`: the sheet for its unqualified refs (a name's `scope` is its own key, the
+  verb's `-s`). THE sheet rule applies per op — a sheet-qualified ref
   (`"Summary!A1"`) wins, then the op's `sheet`, then `-s`/`--sheet`, then the only sheet of a
   single-sheet book, else `SHEET_REQUIRED`. A `rename-sheet` of the batch's default sheet
   retargets the ops that follow it.

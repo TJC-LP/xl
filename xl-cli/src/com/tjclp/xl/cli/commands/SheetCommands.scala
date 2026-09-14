@@ -7,6 +7,7 @@ import cats.implicits.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.XLError
+import com.tjclp.xl.workbooks.DefinedName
 import com.tjclp.xl.cli.contract.{CliError, CliException, Location}
 import com.tjclp.xl.cli.helpers.Resolve
 import com.tjclp.xl.cli.MemoryGuard
@@ -366,37 +367,96 @@ object SheetCommands:
       stateDesc = if veryHide then "very hidden" else "hidden"
     yield s"Sheet '$name' is now $stateDesc\n${Format.saveSuffix(outputPath, stream)}"
 
-  /** Add or replace a workbook-scoped named range, then write (GH-236). */
+  /**
+   * Add or replace a named range, then write (GH-236): workbook-scoped, or scoped to `scope` when
+   * `-s` names a sheet (GH-462 — the form Excel uses for a sheet's `_xlnm.Print_Area` /
+   * `_xlnm.Print_Titles`). The identifier is matched case-insensitively, as Excel and the evaluator
+   * match names (GH-538): `case` replaces `CASE`.
+   */
   def nameAdd(
     wb: Workbook,
+    scope: Option[SheetName],
     name: String,
     refersTo: String,
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false
   ): IO[String] =
-    val updated = wb.withDefinedName(name, refersTo)
-    writeWorkbook(updated, outputPath, config, stream)
-      .as(s"Added named range '$name' -> $refersTo\n${Format.saveSuffix(outputPath, stream)}")
+    for
+      updated <- IO.fromEither(defineName(wb, scope, name, refersTo))
+      _ <- writeWorkbook(updated, outputPath, config, stream)
+    yield s"Added named range '$name' -> $refersTo${scopeSuffix(scope)}\n" +
+      Format.saveSuffix(outputPath, stream)
 
-  /** Remove a workbook-scoped named range, then write (GH-236). */
+  /**
+   * Remove a named range, then write (GH-236): the workbook-scoped one, or the one scoped to
+   * `scope` when `-s` names a sheet (GH-462); matched case-insensitively (GH-538).
+   */
   def nameRemove(
     wb: Workbook,
+    scope: Option[SheetName],
     name: String,
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false
   ): IO[String] =
-    if !wb.metadata.definedNames.exists(d => d.name == name && d.localSheetId.isEmpty) then
-      // GH-626: `NAME_NOT_FOUND` (exit 3) carrying the names this verb can remove — the
-      // workbook-scoped ones — so the nearest become the "did you mean" candidates, as
-      // SHEET_NOT_FOUND has always done for sheets
-      val removable = wb.metadata.definedNames.filter(_.localSheetId.isEmpty).map(_.name).distinct
-      IO.raiseError(domain(XLError.NameNotFound(name, removable)))
-    else
-      val updated = wb.removeDefinedName(name)
-      writeWorkbook(updated, outputPath, config, stream)
-        .as(s"Removed named range '$name'\n${Format.saveSuffix(outputPath, stream)}")
+    for
+      updated <- IO.fromEither(removeName(wb, scope, name))
+      _ <- writeWorkbook(updated, outputPath, config, stream)
+    yield s"Removed named range '$name'${scopeSuffix(scope)}\n${Format.saveSuffix(outputPath, stream)}"
+
+  /**
+   * The mutation behind `name add` and the batch `define-name`: `SHEET_NOT_FOUND` (with the sheets
+   * as candidates) for an unknown scope; otherwise total.
+   */
+  private[cli] def defineName(
+    wb: Workbook,
+    scope: Option[SheetName],
+    name: String,
+    refersTo: String
+  ): Either[CliException, Workbook] =
+    scope
+      .fold[XLResult[Workbook]](Right(wb.withDefinedName(name, refersTo)))(s =>
+        wb.withDefinedName(name, refersTo, s)
+      )
+      .left
+      .map(nameFailure(wb))
+
+  /**
+   * The mutation behind `name rm` and the batch `remove-name`. GH-626: `NAME_NOT_FOUND` (exit 3)
+   * carrying the names this form can remove — those in the same scope — so the nearest become the
+   * "did you mean" candidates, as SHEET_NOT_FOUND has always done for sheets.
+   */
+  private[cli] def removeName(
+    wb: Workbook,
+    scope: Option[SheetName],
+    name: String
+  ): Either[CliException, Workbook] =
+    val removed = for
+      localId <- scope.fold[XLResult[Option[Int]]](Right(None))(s =>
+        wb.localSheetIdOf(s).map(Some(_))
+      )
+      // GH-462: a sheet scope's entries include a print name the read lifted into its PageSetup.
+      inScope = wb.definedNamesIn(localId)
+      _ <- Either.cond(
+        inScope.exists(DefinedName.sameName(_, name)),
+        (),
+        XLError.NameNotFound(name, inScope)
+      )
+      updated <- scope.fold[XLResult[Workbook]](Right(wb.removeDefinedName(name)))(s =>
+        wb.removeDefinedName(name, s)
+      )
+    yield updated
+    removed.left.map(nameFailure(wb))
+
+  /** The unscoped wording stays byte-identical; a scope appends its sheet. */
+  private def scopeSuffix(scope: Option[SheetName]): String =
+    scope.fold("")(s => s" (scope: ${s.value})")
+
+  /** A defined-name mutation's refusal as the verb's typed error. */
+  private def nameFailure(wb: Workbook)(error: XLError): CliException = error match
+    case XLError.SheetNotFound(missing, _) => sheetNotFound(missing, wb)
+    case e => domain(e)
 
   /**
    * Show a hidden sheet (make it visible).

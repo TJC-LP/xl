@@ -493,6 +493,53 @@ object OpRegistry:
     )
   )
 
+  // GH-462: the twins of `name add` / `name rm`. Field shape is EditSchema's define-name /
+  // remove-name (name, refersTo, scope) so the #583 collapse onto Edit.DefineName is mechanical.
+  private val defineName = OpSpec(
+    name = "define-name",
+    aliases = Vector.empty,
+    fields = Vector(
+      req("name", Str, "The defined name"),
+      req("refersTo", Str, "The reference or formula it points to, e.g. Sheet1!$A$1:$A$10"),
+      opt("scope", Sheet, "Scope the name to this sheet (default: workbook) — the verb's -s")
+    ),
+    oneOf = Vector.empty,
+    sheetScoped = false,
+    cellMutating = false,
+    structural = true,
+    needsFormula = false,
+    streamable = false,
+    cliVerb = Some("name add"),
+    since = "0.23.0",
+    doc =
+      "Add or replace a defined name (named range), workbook-scoped or local to \"scope\"; the identifier is matched case-insensitively, so it replaces every same-scope spelling.",
+    example = ujson.Obj(
+      "op" -> ujson.Str("define-name"),
+      "name" -> ujson.Str("Tax"),
+      "refersTo" -> ujson.Str("Sheet1!$A$1")
+    )
+  )
+
+  private val removeName = OpSpec(
+    name = "remove-name",
+    aliases = Vector.empty,
+    fields = Vector(
+      req("name", Str, "The defined name"),
+      opt("scope", Sheet, "The sheet the name is scoped to (default: workbook) — the verb's -s")
+    ),
+    oneOf = Vector.empty,
+    sheetScoped = false,
+    cellMutating = false,
+    structural = true,
+    needsFormula = false,
+    streamable = false,
+    cliVerb = Some("name rm"),
+    since = "0.23.0",
+    doc =
+      "Remove a defined name, the workbook-scoped one or the one local to \"scope\" (matched case-insensitively); NAME_NOT_FOUND with the names in that scope as candidates when absent.",
+    example = ujson.Obj("op" -> ujson.Str("remove-name"), "name" -> ujson.Str("Tax"))
+  )
+
   private val freeze =
     refOnly(
       "freeze",
@@ -774,7 +821,9 @@ object OpRegistry:
     autofilter,
     pageSetup,
     headerFooter,
-    cf
+    cf,
+    defineName,
+    removeName
   )
 
   private val byNormalizedName: Map[String, OpSpec] =
@@ -810,6 +859,8 @@ object OpRegistry:
     case _: BatchOp.AutoFit => autofit
     case _: BatchOp.AddSheet => addSheet
     case _: BatchOp.RenameSheet => renameSheet
+    case _: BatchOp.DefineName => defineName
+    case _: BatchOp.RemoveName => removeName
     case _: BatchOp.Freeze => freeze
     case BatchOp.Unfreeze => unfreeze
     case _: BatchOp.CopyRange => copy
@@ -993,7 +1044,8 @@ object OpRegistry:
     }
     (Vector("OPERATIONS:") ++ rows ++ Vector(
       "",
-      "Every op except add-sheet/rename-sheet accepts \"sheet\": the sheet for its unqualified refs",
-      "(a sheet-qualified ref wins, then \"sheet\", then -s/--sheet). Property names are accepted in",
+      "Every op except add-sheet/rename-sheet/define-name/remove-name accepts \"sheet\": the sheet for",
+      "its unqualified refs (a sheet-qualified ref wins, then \"sheet\", then -s/--sheet); a name's",
+      "\"scope\" is its own key. Property names are accepted in",
       "camelCase or kebab-case. put/putf \"format\" is explicit and replaces the cell's number format."
     )).mkString("\n")
