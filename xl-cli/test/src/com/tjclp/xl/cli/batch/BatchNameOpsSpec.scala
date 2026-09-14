@@ -11,7 +11,7 @@ import com.tjclp.xl.cli.contract.{CliHarness, CliRun, TestFixtures}
  * GH-462: `define-name` / `remove-name`, the batch twins of `name add` / `name rm` (`scope` is the
  * verb's `-s`). The field shape is EditSchema's (`name`, `refersTo`, `scope`); refusals are the
  * verb's, at the op index; matching is case-insensitive (GH-538); a `sheet` key is not a scope; the
- * ops neither stream nor recalculate.
+ * ops do not stream, and changed definitions recalculate their formula readers.
  */
 class BatchNameOpsSpec extends CatsEffectSuite:
 

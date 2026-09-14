@@ -114,36 +114,23 @@ private[ooxml] object PrintNames:
 
   /**
    * Defined names to serialize for a workbook: the metadata names followed by the PageSetup-derived
-   * print names, one entry per (identifier, sheet) as Excel requires. Where a metadata print name
-   * and a derived one meet (identifier matched case-insensitively, GH-538), the LIFTABLE metadata
-   * entry wins: the shape `extract` lifts (not hidden, no comment, a formula `parsePrintArea` /
-   * `parsePrintTitles` accepts for its sheet) only exists beside a derived twin when it was
-   * authored after the read (`wb.withDefinedName("_xlnm.Print_Area", …, sheet)`, `xl name add -s`)
-   * — an explicit, later intent the stale derived name must not shadow (GH-462). A verbatim one —
-   * multi-area, column-span, hidden, commented: what the read could not lift — yields to the
-   * derived twin, which only a later `withPageSetup` edit can have put there, and is dropped.
+   * print names, one entry per (identifier, sheet) as Excel requires. A PageSetup field overrides
+   * the same sheet's metadata name, matched case-insensitively (GH-538). `withDefinedName` clears
+   * the corresponding PageSetup field, so a later name edit wins too; when both are present, a
+   * later `withPageSetup` restored the field. Formula shape cannot determine edit order (GH-462).
    */
   def effective(wb: Workbook): Vector[DefinedName] =
     val names = wb.metadata.definedNames
     val derived = fromSheets(wb.sheets)
     if derived.isEmpty then names
     else
-      def isPrint(dn: DefinedName): Boolean =
-        dn.localSheetId.isDefined &&
-          (DefinedName.sameName(dn.name, PrintArea) || DefinedName.sameName(dn.name, PrintTitles))
-      def liftable(dn: DefinedName): Boolean =
-        !dn.hidden && dn.comment.isEmpty &&
-          dn.localSheetId.flatMap(wb.sheets.lift).exists { sheet =>
-            if DefinedName.sameName(dn.name, PrintArea) then
-              parsePrintArea(dn.formula, sheet.name).isDefined
-            else parsePrintTitles(dn.formula, sheet.name).isDefined
-          }
+      def overridden(dn: DefinedName): Boolean =
+        dn.localSheetId.flatMap(wb.sheets.lift).flatMap(_.pageSetup).exists { setup =>
+          (DefinedName.sameName(dn.name, PrintArea) && setup.printArea.isDefined) ||
+          (DefinedName.sameName(dn.name, PrintTitles) && setup.repeatRows.isDefined)
+        }
       // One pass over the table (10^5 entries on bank-authored books), not one per derived name.
-      val (authored, verbatim) = names.filter(isPrint).partition(liftable)
-      val shadowed =
-        verbatim.filter(dn => derived.exists(_.matches(dn.name, dn.localSheetId))).toSet
-      names.filterNot(shadowed.contains) ++
-        derived.filterNot(d => authored.exists(_.matches(d.name, d.localSheetId)))
+      names.filterNot(overridden) ++ derived
 
   /**
    * Read side: lift modelable sheet-scoped print names into each Sheet's PageSetup and drop them

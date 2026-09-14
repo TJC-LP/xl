@@ -43,6 +43,7 @@ import com.tjclp.xl.formula.{
 import com.tjclp.xl.formula.eval.DependentRecalculation
 import com.tjclp.xl.formula.eval.EvalFormulaSupport
 import com.tjclp.xl.formula.eval.{StructuralCachePolicy, StructuralEditor}
+import com.tjclp.xl.formula.graph.NameChanges
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
@@ -1064,10 +1065,12 @@ object WriteCommands:
    * Rule: recalculate whenever any op writes, clears, or copies cell content — such an op can
    * invalidate cached formula values anywhere in the workbook (cross-sheet dependents included),
    * and `BatchParser` stores batch formulas uncached (`Formula(expr, None)`). Ops that only touch
-   * presentation or metadata (styles, comments, widths, visibility, merges, freeze panes, sheet
-   * management, hyperlinks) leave every existing cached value correct — `rename-sheet` (GH-559)
-   * rewrites referencing formulas and names without changing a value — so a batch made exclusively
-   * of them skips the recalculation and preserves the input's caches as-is.
+   * presentation or non-formula metadata (styles, comments, widths, visibility, merges, freeze
+   * panes, sheet management, hyperlinks) leave every existing cached value correct — `rename-sheet`
+   * (GH-559) rewrites referencing formulas and names without changing a value — so a batch made
+   * exclusively of them skips the recalculation and preserves the input's caches as-is.
+   * Defined-name edits are checked separately in `batch`: they invalidate readers without writing
+   * any cell content.
    *
    * The match is deliberately exhaustive (no wildcard): a future `BatchOp` must be consciously
    * classified here or the match fails loudly — in practice as a MatchError in the batch specs (the
@@ -1332,7 +1335,14 @@ object WriteCommands:
    */
   private def scopedRecalc(before: Workbook, edited: Workbook): (Workbook, RecalcResult) =
     val result = recalcHonoringCalcPr(edited).result
-    val cone = dirtyCone(edited, changedRefs(before, edited))
+    val changed = changedRefs(before, edited)
+    // A name's binding can change while every cell retains its text and cache. Seed its readers
+    // explicitly before closing the cell graph, including readers of removed names and aliases.
+    val nameReaders = NameChanges.readers(before, edited).groupMap(_.sheet)(_.ref)
+    val seeds = (changed.keySet ++ nameReaders.keySet).iterator.map { sheet =>
+      sheet -> (changed.getOrElse(sheet, Set.empty) ++ nameReaders.getOrElse(sheet, Set.empty))
+    }.toMap
+    val cone = dirtyCone(edited, seeds)
     val written = applyConeCaches(edited, result.workbook, cone)
     (written, scopeToCone(result, cone, written))
 
@@ -1398,9 +1408,9 @@ object WriteCommands:
   /**
    * Apply multiple operations atomically (JSON from stdin or file).
    *
-   * Ends with one recalculation when any op mutates cell content (GH-352), so batch putf carries
-   * cached values (`<v>`) exactly like single-op putf. Formula errors do not abort the write: the
-   * workbook is written regardless and errors surface in the summary.
+   * Ends with one recalculation when an op mutates cell content or defined names, so batch putf
+   * carries cached values (`<v>`) exactly like single-op putf. Formula errors do not abort the
+   * write: the workbook is written regardless and errors surface in the summary.
    *
    * GH-468: that recalculation is scoped to the edit's dirty dependency cone — a cached value no op
    * can have invalidated is never rewritten, so a book whose caches come from another engine
@@ -1434,7 +1444,11 @@ object WriteCommands:
           BatchParser
             .applyScopedReporting(wb, sheetOpt, result.scoped, !policy.noRecalc)
             .flatMap { (updatedWb, offGrid) =>
-              val mutating = result.scoped.map(_.op).exists(isCellMutating)
+              val changesNames = result.ops.exists {
+                case _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName => true
+                case _ => false
+              } && wb.metadata.definedNames != updatedWb.metadata.definedNames
+              val mutating = result.scoped.map(_.op).exists(isCellMutating) || changesNames
               val recalculation: IO[Option[(Workbook, RecalcResult)]] =
                 if mutating && !policy.noRecalc then
                   MemoryGuard.blocking(outputPath, "recalc")(Some(scopedRecalc(wb, updatedWb)))

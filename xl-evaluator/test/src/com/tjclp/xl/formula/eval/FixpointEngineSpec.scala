@@ -12,7 +12,8 @@ import munit.FunSuite
  * GH-537: the fixpoint engine's per-round contract, pinned at the `private[eval]` seam the two
  * callers (`recalculate(IterativeCalc)` and the data-table seeder) share. Members are parsed once
  * per fixpoint and evaluated per round; a member that fails every round stalls the loop at the
- * first exact replay; a pinned (cached closed-workbook) member is a constant.
+ * first exact replay that consumes no randomness; a pinned (cached closed-workbook) member is a
+ * constant.
  */
 class FixpointEngineSpec extends FunSuite:
 
@@ -27,7 +28,8 @@ class FixpointEngineSpec extends FunSuite:
     sheet: Sheet,
     members: List[(QualifiedRef, Int, String)],
     seed: Map[QualifiedRef, CellValue] = Map.empty,
-    iterative: IterativeCalc = tolerance
+    iterative: IterativeCalc = tolerance,
+    rng: Rng = Rng.system
   ): WorkbookEvaluator.FixpointOutcome =
     val wb = Workbook(sheet)
     WorkbookEvaluator.jacobiFixpoint(
@@ -36,7 +38,8 @@ class FixpointEngineSpec extends FunSuite:
       members,
       iterative,
       Clock.system,
-      () => Evaluator.instance,
+      rng,
+      roundRng => Evaluator.instance(roundRng),
       seed
     )
 
@@ -96,9 +99,10 @@ class FixpointEngineSpec extends FunSuite:
         members,
         IterativeCalc(100, BigDecimal("1E-9"), scheme = scheme),
         Clock.system,
-        () =>
+        Rng.system,
+        rng =>
           calls += 1
-          Evaluator.instance
+          Evaluator.instance(rng)
         ,
         Map.empty
       )
@@ -131,4 +135,55 @@ class FixpointEngineSpec extends FunSuite:
     )
     assertEquals(jacobi.results(q(a1)), Right(num(2)))
     assertEquals(jacobi.results(q(b1)), Right(num(1)))
+  }
+
+  Vector(IterationScheme.Jacobi, IterationScheme.GaussSeidel).foreach { scheme =>
+    test(s"GH-537: a draw in a dynamically resolved formula prevents a false stall under $scheme") {
+      var draws = 0
+      val rng = new Rng:
+        def nextDouble(): Double =
+          draws += 1
+          if draws == 1 then 0.1 else 0.9
+      val aText = "B1*0+INDIRECT(\"C1\")"
+      val bText = "IF(A1=0,Nowhere!A1,A1)"
+      val sheet = Sheet(s)
+        .put(a1, CellValue.Formula(aText))
+        .put(b1, CellValue.Formula(bText))
+        .put(ARef.from0(2, 0), CellValue.Formula("RANDBETWEEN(0,1)"))
+      // C1 is outside the component and uncached: INDIRECT recursively evaluates it on every
+      // visit. A text/AST scan of the component cannot see its use of randomness.
+      val outcome = run(
+        sheet,
+        List((q(a1), 0, aText), (q(b1), 0, bText)),
+        iterative = tolerance.copy(scheme = scheme),
+        rng = rng
+      )
+      assert(outcome.converged)
+      assert(!outcome.stalled)
+      assertEquals(outcome.results(q(a1)), Right(num(1)))
+      assertEquals(outcome.results(q(b1)), Right(num(1)))
+      assert(draws > 1)
+    }
+
+    test(s"GH-537: a random draw that throws cannot certify a permanent failure under $scheme") {
+      var attempts = 0
+      val rng = new Rng:
+        def nextDouble(): Double =
+          attempts += 1
+          if attempts == 1 then throw new IllegalStateException("transient random source failure")
+          else 0.0
+      val text = "A1*0+RAND()"
+      val sheet = Sheet(s).put(a1, CellValue.Formula(text))
+      val outcome = run(
+        sheet,
+        List((q(a1), 0, text)),
+        iterative = tolerance.copy(scheme = scheme),
+        rng = rng
+      )
+      assert(outcome.converged)
+      assert(!outcome.stalled)
+      assertEquals(outcome.rounds, 2)
+      assertEquals(attempts, 2)
+      assertEquals(outcome.results(q(a1)), Right(num(0)))
+    }
   }

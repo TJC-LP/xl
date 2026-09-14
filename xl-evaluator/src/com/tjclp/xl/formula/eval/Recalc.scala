@@ -55,12 +55,13 @@ enum IterationScheme derives CanEqual:
  * with `<calcPr iterate="1">`. Passing an `IterativeCalc` to `recalculate` fixpoints each cyclic
  * component: members seed from their cached numbers (0 when uncached), every round re-evaluates the
  * members, and the loop stops when every member's |Δ| < `maxChange`, after `maxIter` rounds, or
- * (GH-537) as soon as a round replays the previous one exactly because a member fails every round.
- * Non-convergence keeps the last values with NO error — Excel's semantics, and the deliberate
- * inversion of the default path's circular-reference errors. Within a component the members read
- * each other per [[IterationScheme]] — Gauss–Seidel by default (GH-482: Excel's iterative
- * calculation is a sequential sweep using the latest values, NOT a Jacobi round as 0.13.0–0.22.x
- * assumed); between components the condensation walk is Gauss–Seidel by construction (GH-492).
+ * (GH-537) as soon as a round consumes no randomness and replays the previous one exactly while a
+ * member still fails to evaluate. Non-convergence keeps the last values with NO error — Excel's
+ * semantics, and the deliberate inversion of the default path's circular-reference errors. Within a
+ * component the members read each other per [[IterationScheme]] — Gauss–Seidel by default (GH-482:
+ * Excel's iterative calculation is a sequential sweep using the latest values, NOT a Jacobi round
+ * as 0.13.0–0.22.x assumed); between components the condensation walk is Gauss–Seidel by
+ * construction (GH-492).
  *
  * Deliberately NOT auto-derived from `wb.metadata.calcPr` — iteration is opt-in so the default
  * `recalculate()` stays byte-identical. Bridge explicitly when honoring a file's settings:
@@ -140,13 +141,14 @@ object IterativeCalc:
  *   the residual a caller can size an exhaustion against
  * @param stalled
  *   GH-537: true iff the fixpoint stopped early because a round reproduced the previous one EXACTLY
- *   while some member still failed to evaluate. Evaluation is deterministic given the overlay (the
- *   clock is pinned, and a member drawing fresh randomness never replays), so every further round
- *   would have been the same replay: the loop stops there instead of burning `maxIter`. A stalled
- *   component is never `converged` — the failing member is reported as a [[CellEvalError]] — and
- *   `rounds` ≤ `maxIter`: below it whenever the replay arrives before the budget runs out, equal
- *   when the first replay lands on the last budgeted round. Exhaustion proper (values still moving
- *   at `maxIter`) reports `stalled = false`.
+ *   while some member still failed to evaluate and no randomness was consumed. With the clock
+ *   pinned and the random sequence untouched, every further round would have been the same replay:
+ *   the loop stops there instead of burning `maxIter`. Equal values after a random draw do not
+ *   prove stationarity (RANDBETWEEN can repeat), so those rounds cannot stall. A stalled component
+ *   is never `converged` — the failing member is reported as a [[CellEvalError]] — and `rounds` ≤
+ *   `maxIter`: below it whenever the replay arrives before the budget runs out, equal when the
+ *   first replay lands on the last budgeted round. Exhaustion proper (values still moving at
+ *   `maxIter`) reports `stalled = false`.
  */
 final case class SccReport(
   members: Vector[(SheetName, ARef)],

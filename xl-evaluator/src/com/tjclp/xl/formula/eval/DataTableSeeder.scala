@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.eval
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.formula.Clock
+import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.ArgValue
 import com.tjclp.xl.formula.graph.DependencyGraph
@@ -879,7 +879,8 @@ object DataTableSeeder:
               members,
               iterative,
               clock,
-              () => Evaluator.instance,
+              Rng.system,
+              rng => Evaluator.instance(rng),
               Map.empty
             )
           val results = outcome.results

@@ -123,6 +123,23 @@ private[xl] object ReferenceScan:
   def reach(workbook: Workbook, sheet: SheetName, text: String): Reach =
     Scanner(workbook).reach(text, Context(Some(sheet), sheet, Set.empty))
 
+  /**
+   * Whether unsupported formula text may use a matching name. Reuse the reference lexer and its
+   * scope rules: ordinary cells/literals are harmless, a matching name or unknown syntax is not.
+   * The caller resolves aliases and memoizes names, including names removed from the current table.
+   */
+  private[graph] def mayReferenceName(
+    workbook: Workbook,
+    sheet: SheetName,
+    text: String,
+    matches: (String, SheetName, SheetName) => Boolean
+  ): Boolean =
+    val resolve = (name: String, lookup: SheetName, fallback: SheetName) =>
+      if matches(name, lookup, fallback) then Reach.Unbounded else Reach.Areas(Set.empty)
+    Scanner(workbook, Some(resolve)).reach(text, Context(Some(sheet), sheet, Set.empty)) match
+      case Reach.Unbounded => true
+      case Reach.Areas(_) => false
+
   /** The reach of every reader, each scanned once against its own sheet with one shared memo. */
   def reaches(workbook: Workbook, readers: Set[QualifiedRef]): Map[QualifiedRef, Reach] =
     val scanner = Scanner(workbook)
@@ -179,7 +196,10 @@ private[xl] object ReferenceScan:
     visiting: Set[(SheetName, SheetName, String)]
   )
 
-  private final class Scanner(workbook: Workbook):
+  private final class Scanner(
+    workbook: Workbook,
+    nameOverride: Option[(String, SheetName, SheetName) => Reach] = None
+  ):
     private type NameKey = (SheetName, SheetName, String)
 
     private val order: Vector[SheetName] = workbook.sheets.map(_.name)
@@ -288,7 +308,8 @@ private[xl] object ReferenceScan:
               // its definition; an unknown function that is no name reads only its arguments
               val lookupFrom = context.ambient.getOrElse(context.fallback)
               val reach =
-                if definedAt(function, lookupFrom) then resolveName(function, lookupFrom, context)
+                if nameOverride.isDefined || definedAt(function, lookupFrom) then
+                  resolveName(function, lookupFrom, context)
                 else Reach.Areas(Set.empty)
               Some((reach, end))
         else if isCell(bare) then
@@ -362,6 +383,11 @@ private[xl] object ReferenceScan:
         .exists(position => Evaluator.lookupDefinedNameAt(workbook, Some(position), name).isDefined)
 
     private def resolveName(name: String, lookupFrom: SheetName, context: Context): Reach =
+      nameOverride match
+        case Some(resolve) => resolve(name, lookupFrom, context.fallback)
+        case None => resolveDefinition(name, lookupFrom, context)
+
+    private def resolveDefinition(name: String, lookupFrom: SheetName, context: Context): Reach =
       val key: NameKey = (lookupFrom, context.fallback, name.toUpperCase(Locale.ROOT))
       names.get(key) match
         case Some(known) => known

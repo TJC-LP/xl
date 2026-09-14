@@ -101,7 +101,7 @@
 
 **New in 0.13.0** (2026-07-16):
 - ✅ **Defined-name resolution** (#384) — `=IF(case=2,…)`, `=entry_mult*ltm_ebitda` evaluate; sheet-scoped shadowing, name-chains with cycle guard, dependency-graph edges; was 926/1,571 probe rejections on a real LBO
-- ✅ **Opt-in iterative recalculation** (#373) — `recalculate(IterativeCalc(maxIter, maxChange))` fixpoints declared cycles (circular debt schedules verify; since #482 a Gauss–Seidel sweep within each cycle — Excel's sequential recalculation — with `IterationScheme.Jacobi` as the opt-in previous-round scheme; #537 stops a cycle whose member fails every round at the first replayed round, `SccReport.stalled`); calcPr authoring for scratch workbooks
+- ✅ **Opt-in iterative recalculation** (#373) — `recalculate(IterativeCalc(maxIter, maxChange))` fixpoints declared cycles (circular debt schedules verify; since #482 a Gauss–Seidel sweep within each cycle — Excel's sequential recalculation — with `IterationScheme.Jacobi` as the opt-in previous-round scheme; #537 stops a cycle whose member fails every round at the first replayed round that consumes no randomness, `SccReport.stalled`); calcPr authoring for scratch workbooks
 - ✅ **Coercion parity** (#385) + **MROUND** (#386) — serial Numbers in date positions, blanks as 0 in scalar numeric contexts (aggregates still skip); 108 registry functions
 - ✅ **Parser parity** (#355, #374) — percent postfix operator with Excel precedence and byte-identical round-trip; leading unary plus preserved through print
 - ✅ **Appearance round-trip** (#372, #382, #358) — freeze panes read into the model (incl. scrolled panes), `tabSelected`, `Sheet.tabColor`; CLI: `sheet-view`, `tab-color` (theme syntax), `page-setup`, `header-footer`
@@ -233,14 +233,14 @@
 
 ### Test Coverage
 
-**7,290 test cases** (verified via `./mill __.test`, 2026-09-14, wave 29): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**7,317 test cases** (verified via `./mill __.test`, 2026-09-14, wave 29 review fixes): zero failures; the existing style-performance comparison is skipped. The subprocess smokes ran successfully in this verification.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2549 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 2561 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1659 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1246 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1454 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-ooxml | 1250 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1465 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 179 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 56 | external-consumer probes (`xl/test/src/xlprelude/`) |

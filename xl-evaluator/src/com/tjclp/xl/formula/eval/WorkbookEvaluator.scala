@@ -859,9 +859,10 @@ object WorkbookEvaluator:
               sweep,
               iterative,
               pinnedClock,
-              () =>
+              rngOpt.getOrElse(Rng.system),
+              rng =>
                 Evaluator.recalculationInstance(
-                  rngOpt.getOrElse(Rng.system),
+                  rng,
                   new Evaluator.AggregateMemo
                 ),
               seed
@@ -1065,12 +1066,14 @@ object WorkbookEvaluator:
    *     round (every member is overlaid cached, results apply at round end, so a range over members
    *     is fixed for the round) and unsound across rounds (the same range changes). A Gauss–Seidel
    *     sweep changes the overlay mid-round, so it calls the factory once per member evaluation.
-   *   - Once a round reproduces the previous one EXACTLY without converging, some member failed (an
-   *     all-`Right` replay has |Δ| = 0 and converges). Evaluation is a pure function of the overlay
-   *     — the clock is pinned, the memo is per round, and a member drawing fresh randomness never
-   *     replays — so every further round would be that same replay: the loop stops and reports
-   *     `stalled` instead of burning `maxIter` (the 126k-name field book spent ~20 s of every
-   *     recalculation replaying 400 identical rounds).
+   *     Every factory call receives the round's tracked `Rng`, preserving one underlying sequence.
+   *   - A round that reproduces the previous one EXACTLY without converging can stop only if it
+   *     consumed no randomness. RAND can be rounded and RANDBETWEEN can repeat, so equal cell
+   *     values do not prove a random round will replay. Tracking draws at the existing `Rng`
+   *     boundary also covers defined names, dynamic references and recursively evaluated cells,
+   *     including a draw that throws. Without a draw, evaluation is fixed by the unchanged overlay
+   *     and pinned clock; a failed member will fail again, so the loop reports `stalled` instead of
+   *     burning `maxIter`.
    *
    * Non-convergence KEEPS the last values with no error — Excel's semantics, and the reason
    * exhaustion surfaces through [[FixpointOutcome]] rather than as a [[CellEvalError]].
@@ -1078,13 +1081,15 @@ object WorkbookEvaluator:
    * Used by both `recalculate(IterativeCalc)` (one call per cyclic condensation node) and the
    * data-table seeder's circular what-if substitution.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private[eval] def jacobiFixpoint(
     wb: Workbook,
     baseSheets: Vector[Sheet],
     members: List[(QualifiedRef, Int, String)],
     iterative: IterativeCalc,
     pinnedClock: Clock,
-    roundEvaluator: () => Evaluator,
+    rng: Rng,
+    roundEvaluator: Rng => Evaluator,
     seedValues: Map[QualifiedRef, CellValue]
   ): FixpointOutcome =
     val zero: CellValue = CellValue.Number(BigDecimal(0))
@@ -1144,6 +1149,14 @@ object WorkbookEvaluator:
 
     @annotation.tailrec
     def loop(round: Int, prev: Map[QualifiedRef, CellValue]): FixpointOutcome =
+      // Evaluation-local observation of the existing effect capability: all evaluators in this
+      // round share this wrapper, and the underlying sequence continues across rounds. Mark the
+      // attempt before delegating because a custom Rng may advance its state and then throw.
+      var drewRandomness = false
+      val roundRng = new Rng:
+        def nextDouble(): Double =
+          drewRandomness = true
+          rng.nextDouble()
       val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, text)) =>
         sheets.updated(idx, sheets(idx).put(q.ref, CellValue.Formula(text, prev.get(q))))
       }
@@ -1151,7 +1164,7 @@ object WorkbookEvaluator:
         case IterationScheme.Jacobi =>
           // Every member reads the round's FIXED overlay: one evaluator (one memo) per round.
           val tempWb = wb.copy(sheets = overlaid)
-          val evaluator = roundEvaluator()
+          val evaluator = roundEvaluator(roundRng)
           members.map { (q, idx, text) =>
             q -> evaluateMember(q, idx, text, overlaid, tempWb, evaluator)
           }.toMap
@@ -1164,7 +1177,14 @@ object WorkbookEvaluator:
             members.foldLeft((overlaid, Map.empty[QualifiedRef, Either[XLError, CellValue]])) {
               case ((sheets, acc), (q, idx, text)) =>
                 val result =
-                  evaluateMember(q, idx, text, sheets, wb.copy(sheets = sheets), roundEvaluator())
+                  evaluateMember(
+                    q,
+                    idx,
+                    text,
+                    sheets,
+                    wb.copy(sheets = sheets),
+                    roundEvaluator(roundRng)
+                  )
                 val published = result match
                   case Right(value) =>
                     sheets.updated(
@@ -1188,7 +1208,8 @@ object WorkbookEvaluator:
       // GH-537: an exact replay that did not converge has a failing member (the Left guard keeps
       // the verdict literal even for a degenerate maxChange <= 0, where an all-Right exact replay
       // never satisfies the strict |Δ| < maxChange and legitimately runs to maxIter).
-      val stalled = !converged && next == prev && results.valuesIterator.exists(_.isLeft)
+      val stalled =
+        !converged && !drewRandomness && next == prev && results.valuesIterator.exists(_.isLeft)
       if converged || stalled || round >= maxRounds then
         val maxDelta = members.flatMap { (q, _, _) =>
           results(q).toOption.flatMap(next => numericDelta(prev.getOrElse(q, zero), next))

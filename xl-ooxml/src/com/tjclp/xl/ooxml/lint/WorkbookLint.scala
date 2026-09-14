@@ -947,6 +947,8 @@ object WorkbookLint:
     )
     val extRefs = cellObs.foldLeft(ExternalRefFacts.empty)(_.add(_))
     val chain = cellObs.foldLeft(ChainSheetFacts.empty)(_.add(_, chainCandidates))
+    val sstRefs = new SstRefBuilder(ctx.sst)
+    cellObs.foreach(sstRefs.add)
     SheetScan(
       root.label,
       mainChildLabelsOf(root),
@@ -960,7 +962,7 @@ object WorkbookLint:
       emptyInlineFindings(part, cellObs.foldLeft(EmptyInlineFacts.empty)(_.add(_))),
       ignorableFindingsOf(part, root),
       dxfs,
-      cellObs.foldLeft(SstRefFacts.empty)(_.add(_, ctx.sst))
+      sstRefs.result()
     )
 
   /**
@@ -1045,7 +1047,7 @@ object WorkbookLint:
       private var dataTables: Vector[RecordFacts] = Vector.empty
       private var chain: ChainSheetFacts = ChainSheetFacts.empty
       private var emptyInline: EmptyInlineFacts = EmptyInlineFacts.empty
-      private var sstRefs: SstRefFacts = SstRefFacts.empty
+      private val sstRefs = new SstRefBuilder(ctx.sst)
       private var cell: Option[CellObs] = None
       // GH-567: the current t="s" cell's FIRST <v> text, buffered like the formula text below —
       // a shared-string index is at most a handful of digits, so the mode stays O(1) in rows
@@ -1079,7 +1081,7 @@ object WorkbookLint:
             emptyInlineFindings(part, emptyInline),
             ignorable.result(),
             dxfs.result(),
-            sstRefs
+            sstRefs.result()
           )
         )
 
@@ -1219,7 +1221,7 @@ object WorkbookLint:
             extRefs = extRefs.add(obs)
             chain = chain.add(obs, chainCandidates)
             emptyInline = emptyInline.add(obs)
-            sstRefs = sstRefs.add(obs, ctx.sst)
+            sstRefs.add(obs)
           }
           cell = None
 
@@ -2390,7 +2392,7 @@ object WorkbookLint:
         depth -= 1
 
   /**
-   * Per-part shared-string reference facts (GH-567), folded identically by both scanners: the
+   * Per-part shared-string reference facts (GH-567), collected identically by both scanners: the
    * indices referenced by `t="s"` cells (a bit set bounded by the TABLE size, never the row count —
    * an index past the table is counted, not stored), plus the first [[offenderSampleSize]]
    * past-the-table cells with their index and the total. Unioned at workbook level for the orphan
@@ -2400,22 +2402,31 @@ object WorkbookLint:
     referenced: BitSet,
     pastSample: Vector[(Option[ARef], Int)],
     pastCount: Long
-  ):
-    def add(obs: CellObs, table: Option[SstTableFacts]): SstRefFacts =
+  )
+
+  /**
+   * Scan-local accumulator: building the bit set copies its backing words only at capacity growth,
+   * not for each new index. Repeated immutable `BitSet + index` made a scan of U distinct strings
+   * allocate O(U²) bytes. Neither scanner publishes the builder; the completed scan carries only
+   * its immutable result. Invalid indices never enter the builder, so even Int.MaxValue cannot
+   * enlarge its storage beyond the shared-string table.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private final class SstRefBuilder(table: Option[SstTableFacts]):
+    private val referenced = BitSet.newBuilder
+    private val pastSample = Vector.newBuilder[(Option[ARef], Int)]
+    private var pastCount = 0L
+
+    def add(obs: CellObs): Unit =
       (obs.sstIndex, table) match
         case (Some(idx), Some(t)) if idx >= 0 && idx < t.count =>
-          copy(referenced = referenced + idx)
+          referenced += idx
         case (Some(idx), Some(_)) =>
-          SstRefFacts(
-            referenced,
-            if pastSample.sizeIs < offenderSampleSize then pastSample :+ (obs.ref, idx)
-            else pastSample,
-            pastCount + 1
-          )
-        case _ => this
+          if pastCount < offenderSampleSize then pastSample += ((obs.ref, idx))
+          pastCount += 1
+        case _ => ()
 
-  private object SstRefFacts:
-    val empty: SstRefFacts = SstRefFacts(BitSet.empty, Vector.empty, 0L)
+    def result(): SstRefFacts = SstRefFacts(referenced.result(), pastSample.result(), pastCount)
 
   /**
    * GH-567, per sheet part: `t="s"` indices the table does not hold. The reader maps such a cell to

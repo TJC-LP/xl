@@ -8,6 +8,7 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.*
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 import com.tjclp.xl.workbooks.DefinedName
@@ -253,50 +254,102 @@ class PageSetupRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
-  test("GH-462: a Print_Area authored as a scoped name after a read wins over the lifted one") {
-    // Reading lifts the file's Print_Area into PageSetup; `xl name add -s Sheet1 _xlnm.Print_Area`
-    // then authors an explicit metadata entry for the same sheet. The explicit, later intent must
-    // be what the writer emits — once — not the stale derived twin.
-    val wb0 = Workbook(
-      Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(PageSetup(printArea = Some(ref"A1:B2")))
-    )
-    val src = Files.createTempFile("pagesetup-name-src", ".xlsx")
-    XlsxWriter.write(wb0, src).fold(e => fail(s"seed write failed: $e"), identity)
-
-    val authored = for
-      wb <- XlsxReader.read(src)
-      updated <- wb.withDefinedName(
-        "_xlnm.Print_Area",
-        "Sheet1!$C$1:$D$2",
-        SheetName.unsafe("Sheet1")
+  private def assertPrintEditRoundTrip(
+    wb: Workbook,
+    config: WriterConfig,
+    expected: PageSetup,
+    areaFormula: String,
+    titlesFormula: String
+  ): Unit =
+    val out = Files.createTempFile("pagesetup-edit-order", ".xlsx")
+    try
+      XlsxWriter.writeWith(wb, out, config).fold(e => fail(s"write failed: $e"), identity)
+      val workbookXml = XmlSecurity
+        .parseSafe(zipEntryString(out, "xl/workbook.xml"), "xl/workbook.xml")
+        .fold(e => fail(s"parse failed: $e"), identity)
+      val names = (workbookXml \ "definedNames" \ "definedName").map { dn =>
+        (dn \@ "name", dn \@ "localSheetId", dn.text)
+      }.toVector
+      assertEquals(
+        names,
+        Vector(
+          (DefinedName.PrintArea, "0", areaFormula),
+          (DefinedName.PrintTitles, "0", titlesFormula)
+        ),
+        "exactly one entry per print field, with the most recent edit"
       )
-    yield updated
-    val wb1 = authored.fold(e => fail(s"name add failed: $e"), identity)
+      val reread = XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
+      assertEquals(sheetSetup(reread).printArea, expected.printArea)
+      assertEquals(sheetSetup(reread).repeatRows, expected.repeatRows)
+      assertEquals(reread.metadata.definedNames, Vector.empty, "both names lift on reread")
+    finally Files.deleteIfExists(out)
 
-    val out = Files.createTempFile("pagesetup-name-out", ".xlsx")
-    XlsxWriter.write(wb1, out).fold(e => fail(s"write failed: $e"), identity)
-    val workbookXml = zipEntryString(out, "xl/workbook.xml")
-    assert(workbookXml.contains("Sheet1!$C$1:$D$2"), s"authored area missing: $workbookXml")
-    assert(!workbookXml.contains("Sheet1!$A$1:$B$2"), s"stale lifted area lingering: $workbookXml")
-    assertEquals(
-      "_xlnm.Print_Area".r.findAllIn(workbookXml).size,
-      1,
-      s"exactly one Print_Area for the sheet: $workbookXml"
-    )
+  List("ScalaXml" -> WriterConfig(), "SaxStax" -> WriterConfig.saxStax).foreach {
+    (backend, config) =>
+      test(s"GH-462: scoped print names override earlier PageSetup edits ($backend)") {
+        val original = Workbook(
+          Sheet("Sheet1")
+            .put(ref"A1" -> 1)
+            .withPageSetup(PageSetup(printArea = Some(ref"A1:B2"), repeatRows = Some((1, 2))))
+        )
+        val (read, src) = writeRead(original)
+        try
+          val authored = for
+            area <- read.withDefinedName(
+              DefinedName.PrintArea,
+              "Sheet1!$C$1:$D$4",
+              SheetName.unsafe("Sheet1")
+            )
+            titles <- area.withDefinedName(
+              DefinedName.PrintTitles,
+              "Sheet1!$3:$4",
+              SheetName.unsafe("Sheet1")
+            )
+          yield titles
+          val edited = authored.fold(e => fail(s"name edit failed: $e"), identity)
+          assertPrintEditRoundTrip(
+            edited,
+            config,
+            PageSetup(printArea = Some(ref"C1:D4"), repeatRows = Some((3, 4))),
+            "Sheet1!$C$1:$D$4",
+            "Sheet1!$3:$4"
+          )
+        finally Files.deleteIfExists(src)
+      }
 
-    val reread = XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
-    assertEquals(sheetSetup(reread).printArea, Some(ref"C1:D2"))
-    assertEquals(reread.metadata.definedNames, Vector.empty, "lifted on read, no duplicate")
-    Files.deleteIfExists(src)
-    Files.deleteIfExists(out)
+      test(s"GH-462: PageSetup edits override earlier scoped print names ($backend)") {
+        val original = Workbook(Sheet("Sheet1").put(ref"A1" -> 1))
+        val edited = for
+          area <- original.withDefinedName(
+            DefinedName.PrintArea,
+            "Sheet1!$A$1:$B$2",
+            SheetName.unsafe("Sheet1")
+          )
+          titles <- area.withDefinedName(
+            DefinedName.PrintTitles,
+            "Sheet1!$1:$2",
+            SheetName.unsafe("Sheet1")
+          )
+          updated <- titles.updateAt(
+            0,
+            _.withPageSetup(PageSetup(printArea = Some(ref"C1:D4"), repeatRows = Some((3, 4))))
+          )
+        yield updated
+        assertPrintEditRoundTrip(
+          edited.fold(e => fail(s"print edit failed: $e"), identity),
+          config,
+          PageSetup(printArea = Some(ref"C1:D4"), repeatRows = Some((3, 4))),
+          "Sheet1!$C$1:$D$4",
+          "Sheet1!$3:$4"
+        )
+      }
   }
 
   /**
    * GH-462 (rework): a print name the read could NOT lift — multi-area, column-span, hidden — stays
    * in the metadata verbatim, so a later `withPageSetup` edit of the same field is the newer
    * intent: the writer emits the derived name, once, and drops the verbatim one (the pre-GH-462
-   * rule). Only a liftable metadata entry — one authored after the read — wins over the derived
-   * twin.
+   * rule). The same precedence applies to names authored in the current session.
    */
   private def verbatimYieldsToEdit(
     tag: String,

@@ -1515,6 +1515,10 @@ own `hint`.
   leaves an existing format alone.
 - **`rename-sheet` rewrites references**: every formula, defined name, conditional-formatting
   rule and chart series that named the old sheet now names the new one, on every sheet.
+- **Defined-name edits recalculate their readers**: `define-name` and `remove-name` refresh
+  affected formula caches, including aliases, named ranges, local scope and cross-sheet
+  dependents. Unrelated caches are preserved; `--no-recalc` keeps the pre-edit caches. A reader
+  that cannot be evaluated after the name change is reported and left uncached.
 - **Under `--stream`** the streamable ops (see the table) are applied with identical semantics —
   `style` merges, `format` replaces, a `put` with both `value` and `values` is refused — and an
   op's `sheet` or a qualified ref may name the streamed worksheet; any other op, or one whose

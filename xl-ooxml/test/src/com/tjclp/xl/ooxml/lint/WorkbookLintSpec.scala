@@ -2135,6 +2135,42 @@ class WorkbookLintSpec extends FunSuite:
     assertEquals(lintStreamOf(orphanSstParts).size, 1)
   }
 
+  test("shared-string accumulation handles sparse words, duplicates and bounded invalid samples") {
+    val count = 4097
+    def sheet(indices: Seq[Int]): String = worksheetWith(
+      "<sheetData>" + indices.zipWithIndex.map { (idx, row) =>
+        s"""<row r="${row + 1}"><c r="A${row + 1}" t="s"><v>$idx</v></c></row>"""
+      }.mkString + "</sheetData>"
+    )
+    // Visit the highest word first, repeat indices across words/sheets, and leave one orphan.
+    // Invalid indices must be sampled before they can allocate storage (especially Int.MaxValue).
+    val first = (0 until count by 2).reverse ++ Vector(0, 64, 128, 256, 4096) ++
+      Vector(-1, count, Int.MaxValue, 5000, 6000, 7000)
+    val second = (1 until count - 2 by 2) ++ Vector(64, 128, 4096)
+    val parts = withSecondSheet(
+      "worksheet",
+      "worksheets/sheet2.xml",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
+      sheet(second)
+    ) ++ Map(
+      "xl/sharedStrings.xml" -> sstXml((0 until count).map(i => s"value-$i")*),
+      "xl/worksheets/sheet1.xml" -> sheet(first)
+    )
+    val findings = lintOf(parts)
+    assertEquals(lintStreamOf(parts), findings)
+    assertEquals(findings.size, 2)
+    val invalid =
+      findings.find(_.part == "xl/worksheets/sheet1.xml").getOrElse(fail("no invalid indices"))
+    assertEquals(invalid.category, LintCategory.SharedStringOrphan)
+    assert(invalid.message.startsWith("6 cell(s)"), invalid.message)
+    assert(invalid.message.contains(Int.MaxValue.toString), invalid.message)
+    assert(!invalid.message.contains("7000"), invalid.message)
+    val orphan = findings.find(_.part == "xl/sharedStrings.xml").getOrElse(fail("no orphan"))
+    assertEquals(orphan.category, LintCategory.SharedStringOrphan)
+    assert(orphan.message.startsWith("1 of 4097 shared string"), orphan.message)
+    assert(orphan.message.contains("index: 4095"), orphan.message)
+  }
+
   test("GH-567: a fresh SST-dialect write by xl lints clean (every entry is referenced)") {
     // >10 text cells with duplicates → SstPolicy.Auto emits a shared-string table
     val cells = (1 to 12).map { i =>

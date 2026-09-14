@@ -173,8 +173,9 @@ the grammar-complete formula generator (#653). #519 (SIGTERM) had already shippe
   independent. `IterativeCalc(…, scheme = IterationScheme.Jacobi)` reproduces the 0.13.0–0.22.x
   trajectories.
 - **A cyclic member that fails every round stalls its component instead of burning `maxIter`**
-  (#537): once a round replays the previous one exactly with a member still failing, the fixpoint
-  stops and reports `SccReport.stalled = true` (`converged = false`, the member in `errors`);
+  (#537): once a round consumes no randomness and replays the previous one exactly with a member
+  still failing, the fixpoint stops and reports `SccReport.stalled = true` (`converged = false`,
+  the member in `errors`);
   `RecalcResult.summary` and the CLI say "WARNING: iterative calculation stalled after N
   round(s): a cyclic member fails every round" when every unconverged component stalled. The
   CLI's `formatRecalcSummary` delegates to `RecalcResult.summary`.
@@ -184,10 +185,9 @@ the grammar-complete formula generator (#653). #519 (SIGTERM) had already shippe
   the relation `DefinedNameIndex` hashes): a write replaces every same-scope spelling with one
   entry in the caller's spelling, a remove drops them all, and `NAME_NOT_FOUND` candidates are the
   names in that scope. Previously `withDefinedName("case", …)` beside `CASE` appended a shadowed
-  duplicate the evaluator never saw. `PrintNames.effective`: a liftable metadata
-  `_xlnm.Print_Area` / `_xlnm.Print_Titles` (parseable, not hidden, no comment — the shape a
-  post-read author produces) wins over the PageSetup-derived twin; a verbatim entry yields to a
-  later `withPageSetup` edit as before (#462).
+  duplicate the evaluator never saw. Print-name edits follow call order: a scoped
+  `_xlnm.Print_Area` / `_xlnm.Print_Titles` write clears the corresponding PageSetup field, and
+  a later `withPageSetup` edit overrides the earlier metadata entry (#462).
 - **`--no-recalc` structural writes carry every pre-edit cache forward and mark the book
   `fullCalcOnLoad`** (#509, refs #468, #503, #507): `insert-rows`, `insert-cols`, `delete-rows`,
   `delete-cols` keep each formula's cached value — rewritten, relocated or not — and write
@@ -220,6 +220,17 @@ the grammar-complete formula generator (#653). #519 (SIGTERM) had already shippe
   `object | null`. The xl-agent grader and the CI/release smoke read the new paths.
 
 ### Fixed
+
+- **Batch defined-name edits refresh affected formula caches** (#659 review): `define-name` and
+  `remove-name` invalidate readers through aliases, named ranges, local shadows and cross-sheet
+  references, then recalculate their dependent cone. Unrelated caches stay intact; `--no-recalc`
+  preserves the original caches. Unsupported readers of changed names are reported and left
+  uncached instead of carrying stale values.
+- **Iterative stall detection observes RNG consumption** (#659 review): repeated `RANDBETWEEN`
+  values or rounded `RAND` values no longer terminate a recoverable cycle. Tracking attempted
+  draws also covers names, dynamic references and a custom RNG that throws.
+- **Later PageSetup edits override earlier scoped print names** (#659 review), for both print
+  areas and repeated rows on both XML backends. The reverse edit order remains supported.
 
 - **`ROWS` and `COLUMNS` count any array** (#655): `ROWS(A1#)`, `ROWS(SEQUENCE(3))` and
   `COLUMNS(A1:C1*2)` count the array's rows or columns, as in Excel; a scalar argument is 1. Only a
@@ -288,6 +299,11 @@ the grammar-complete formula generator (#653). #519 (SIGTERM) had already shippe
 - `EditSchema`'s `remove-name` named its CLI twin `name remove`; the verb is `name rm` (#462).
 
 ### Performance
+
+- **Shared-string lint accumulation is linear in distinct indices** (#659 review): both scanners
+  build one bit set per sheet and publish an immutable snapshot, avoiding a backing-array copy
+  per cell. A streaming lint probe with 200k distinct strings allocated 229 MB versus 2.74 GB
+  before the fix (about 92% less cumulative allocation).
 
 - **Iterative recalculation** (#537): each cycle member's formula is parsed once per fixpoint and
   its `TExpr` evaluated per round (previously re-parsed every round); the generation

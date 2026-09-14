@@ -5,7 +5,7 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.{IterationScheme, IterativeCalc}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.workbooks.{CalcPr, Workbook}
+import com.tjclp.xl.workbooks.{CalcPr, DefinedName, Workbook}
 import munit.FunSuite
 
 /**
@@ -418,9 +418,9 @@ class IterativeRecalcSpec extends FunSuite:
     assert(onlyRound.render.contains("exhausted 1 round(s)"), onlyRound.render)
   }
 
-  test("GH-537: a member drawing fresh randomness never replays — the failing cycle exhausts") {
-    // A1 changes every round (a live RAND draw), so no round is an exact replay of the previous
-    // one: the loop must run to maxIter and report exhaustion, not a stall.
+  test("GH-537: a member drawing randomness keeps a failing cycle running to its budget") {
+    // Every round consumes randomness: even if two values match, that does not certify that the
+    // next round will replay. The loop must run to maxIter and report exhaustion, not a stall.
     val wb = Workbook(
       Sheet(SheetName.unsafe("S"))
         .put(a1, formula("=B1*0+RAND()"))
@@ -433,6 +433,65 @@ class IterativeRecalcSpec extends FunSuite:
     assertEquals(scc.rounds, 20)
     assert(scc.render.contains("exhausted 20 round(s)"), scc.render)
     assert(result.summary.contains("exhausted 20 round(s)"), result.summary)
+  }
+
+  Vector(IterationScheme.Jacobi, IterationScheme.GaussSeidel).foreach { scheme =>
+    Vector("RANDBETWEEN(0,1)", "ROUND(RAND(),0)", "randomChoice").foreach { random =>
+      test(s"GH-537: repeated $random values can recover a failed cycle under $scheme") {
+        var draws = 0
+        val rng = new Rng:
+          def nextDouble(): Double =
+            draws += 1
+            if draws == 1 then 0.1 else 0.9
+        val base = Workbook(
+          Sheet(SheetName.unsafe("S"))
+            .put(a1, formula(s"B1*0+$random"))
+            .put(b1, formula("IF(A1=0,Nowhere!A1,A1)"))
+        )
+        // A workbook name reaches a sheet-scoped name: tracking must follow actual evaluation,
+        // including name resolution, rather than scanning only the cycle's formula text.
+        val wb = base.copy(metadata =
+          base.metadata.copy(definedNames =
+            Vector(
+              DefinedName("randomChoice", "randomSource"),
+              DefinedName("randomSource", "RANDBETWEEN(0,1)", Some(0))
+            )
+          )
+        )
+        val result = wb.recalculate(
+          Clock.system,
+          rng,
+          IterativeCalc(10, BigDecimal("0.001"), scheme = scheme)
+        )
+        assert(result.isClean, s"draws=$draws ${result.summary}")
+        assert(result.converged, result.summary)
+        assert(draws > 1, "the first draw repeats the zero seed but later draws heal B1")
+        assertEquals(cachedNum(result.workbook, "S", a1), Some(BigDecimal(1)))
+        assertEquals(cachedNum(result.workbook, "S", b1), Some(BigDecimal(1)))
+        assert(result.cycles.forall(!_.stalled))
+      }
+    }
+
+    test(s"GH-537: a deterministic replay can stall after an earlier random round under $scheme") {
+      var draws = 0
+      val rng = new Rng:
+        def nextDouble(): Double =
+          draws += 1
+          0.5
+      val wb = Workbook(
+        Sheet(SheetName.unsafe("S"))
+          .put(a1, formula("IF(A1=0,RAND()+1,A1)+B1*0"))
+          .put(b1, formula("A1*0+Nowhere!A1"))
+      )
+      val result = wb.recalculate(
+        Clock.system,
+        rng,
+        IterativeCalc(10, BigDecimal("0.001"), scheme = scheme)
+      )
+      assertEquals(draws, 1, "only round 1 reaches RAND")
+      assertEquals(result.cycles.map(_.rounds), Vector(2))
+      assert(result.cycles.forall(_.stalled), result.summary)
+    }
   }
 
   test("GH-537: the summary names a stall as a stall, never as exhaustion") {
