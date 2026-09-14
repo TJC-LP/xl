@@ -297,6 +297,23 @@ class AttributeEscapingSpec extends ScalaCheckSuite:
     assertEquals(stax(w => w.endElement()), "")
   }
 
+  test("an attribute or xmlns written with no open start tag is dropped, never thrown (total)") {
+    // The JDK writer threw IllegalStateException here; xl's emitters never reach it, and the
+    // document must stay well-formed either way — pinned so the choice is visible, not accidental.
+    val s = stax { w =>
+      w.startDocument()
+      w.startElement("p")
+      w.writeCharacters("x") // closes the start tag: attributes are no longer possible
+      w.writeAttribute("late", "v")
+      w.writeAttribute("xmlns:z", "urn:z")
+      w.endElement()
+      w.writeAttribute("after", "v")
+      w.endDocument()
+    }
+    assertEquals(s, s"$staxDecl<p>x</p>")
+    assertEquals(stax(w => w.writeAttribute("orphan", "v")), "")
+  }
+
   test("UTF-8: 2-, 3- and 4-byte sequences (emoji) are raw; a lone surrogate becomes '?'") {
     val out = new ByteArrayOutputStream()
     val w = StaxSaxWriter.create(out)

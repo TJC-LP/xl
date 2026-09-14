@@ -5,9 +5,18 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 # XL CLI - Excel Operations
 
-**Requires xl >= 0.22.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
+**Requires xl >= 0.23.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
 `xl batch --schema`, `describe`, `audit`, `deps`, the 0/1/2/3 exit table and globals-anywhere; every
-statement in this skill assumes 0.22.0 or later.
+statement in this skill assumes 0.23.0 or later.
+
+<!-- unreleased-contract -->
+> **0.23.0 has not shipped yet.** This skill documents its contract; until the release, install
+> from source (`make install`, or `make install-jar` without GraalVM). The last release, 0.22.0,
+> lacks: `--json` `data` as an object for `sheets`/`names`/`functions` (it printed bare arrays,
+> so the `.data.sheets[]` jq paths below fail), the `lint` rules `empty-inline-str`,
+> `mc-ignorable-undeclared`, `dxf-id-out-of-range`, `unreferenced-part` and `shared-string-orphan`,
+> `xl name add|rm -s` and the batch ops `define-name`/`remove-name`, `--no-recalc` structural
+> writes that carry caches forward, and `XL_SPILL_DIR`.
 
 The binary documents itself and is the reference: `xl <verb> --help` for a verb's flags,
 `xl schema` for every verb, `xl batch --schema` for every batch op and field, `xl functions --json`
@@ -15,7 +24,8 @@ for every formula function. This skill is the map; those are the territory.
 
 ## Environment
 
-- `xl --version` must print `0.22.0` or later. Not installed, or older: follow
+- `xl --version` must print `0.23.0` or later (from source until it ships, see above). Not
+  installed, or older: follow
   [reference/INSTALL.md](reference/INSTALL.md) (native binaries for macOS, Linux and Windows, the
   JAR fallback, the rasterizer for image export).
 - A deployment that vendors this skill may place a `reference/LOCAL.md` beside this file: where

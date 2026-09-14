@@ -85,7 +85,9 @@ the grammar-complete formula generator (#653). #519 (SIGTERM) had already shippe
   `xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20'`; removing
   a scoped print name the read lifted into `PageSetup` clears that page-setup field too. Batch
   twins `define-name` (`name`, `refersTo`, `scope`) and `remove-name` (`name`, `scope`) —
-  EditSchema's field shape; a `sheet` key is not a scope; non-streamable; no recalculation.
+  EditSchema's field shape; a `sheet` key is not a scope; non-streamable; like every other batch
+  op they recalculate the changed name's dependents (or keep the caches under `--no-recalc`, see
+  Fixed).
 - **`@header` and `RowCodec.withHeaders`** (#614): a record field's header text when the sheet's
   header is not something an identifier can spell (`@header("Rev ($M)") rev: BigDecimal`).
   `RowCodec.headers` — the header row `putRowsWithHeader`/`putTable` write and `readRowsByHeader`
@@ -158,10 +160,17 @@ the grammar-complete formula generator (#653). #519 (SIGTERM) had already shippe
   characters, and an empty element immediately followed by its parent's end tag now nests
   correctly. Data-validation prompt/error text is written with `&#10;`-style character references
   (Excel's and openpyxl's spelling) instead of the `_x000A_` Xstring escape; files written with
-  the previous spelling still decode on read.
+  the previous spelling still decode on read. **Breaking** for code that constructed the writer
+  itself: `new StaxSaxWriter(xmlStreamWriter)` is gone (the constructor is private and no longer
+  takes a `javax.xml.stream.XMLStreamWriter`); use `StaxSaxWriter.create(outputStream)`, which is
+  unchanged. Writing an attribute or namespace declaration when no start tag is open is dropped
+  rather than thrown (the JDK writer threw `IllegalStateException`); no xl emitter does this.
 - **Breaking (binary): `SccReport` gains `stalled: Boolean = false`; `IterativeCalc` gains
-  `scheme: IterationScheme = IterationScheme.GaussSeidel`** (#537, #482) — source-compatible via
-  defaults, binary-incompatible for `xl-evaluator` consumers compiled against 0.22.x.
+  `scheme: IterationScheme = IterationScheme.GaussSeidel`** (#537, #482) — construction and
+  `copy` stay source-compatible through the defaults, but extractor patterns over all fields
+  (`case SccReport(m, c, r, d) =>`, `case IterativeCalc(a, b, c) =>`) no longer compile and must
+  add the new field (or match on `SccReport(m, c, r, d, _)`); binary-incompatible for
+  `xl-evaluator` consumers compiled against 0.22.x.
 - **Within-cycle iteration is Gauss–Seidel by default** (#482): a cyclic component's members
   evaluate in `DependencyGraph.withinComponentOrder` (Kahn on the component's induced subgraph,
   cutting at the smallest (sheet, A1) key when stuck — a pure function of the graph) and each
@@ -201,15 +210,20 @@ the grammar-complete formula generator (#653). #519 (SIGTERM) had already shippe
   (fullCalcOnLoad)`, plus `, M cache(s) behind unresolvable names withdrawn` when M > 0.
   Non-structural `--no-recalc` writes are unchanged and never set the marker. `fullCalcOnLoad`
   recomputes ordinary formulas, not data-table interiors under `calcMode="autoNoTable"`.
-- **Formula model canonical** (#479): `fx"=…"`, the core `FormulaParser.parse` and
+- **Breaking: the formula model is canonical and `CellValue.formula` returns `XLResult[Formula]`**
+  (#479): `fx"=…"`, the core `FormulaParser.parse` and
   `Sheet.putFormulaInheriting` store the bare expression (`fx"=SUM(A1:B10)"` is
   `CellValue.Formula("SUM(A1:B10)")`), the shape the OOXML readers, the CLI and the edit
   interpreter always produced — so an authored formula cell compares equal to its own read-back,
   and the test-side `WorkbookEquivalence` is strict again (undoing the #478 modulo-prefix
   weakening). `CellValue.canonicalFormulaText` is the single strip every entry shares: exactly one
-  leading `=` removed, nothing else. `CellValue.formula` is total (`XLResult[Formula]`) instead
-  of throwing; `fx"="` fails to compile. A raw `CellValue.Formula("=…")` stays constructible and
-  tolerated but is no longer the canonical shape.
+  leading `=` removed, nothing else. `CellValue.formula(text)` is total — it returns
+  `XLResult[Formula]` (`Left(XLError.InvalidFormula)` for an empty expression) instead of a
+  `Formula` that threw — so 0.22 code such as `sheet.put(ref"A1" -> CellValue.formula("=A1*2"))`
+  fails to compile (`Found: XLResult[Formula], Required: CellValue`); migrate to `fx"=A1*2"`, to
+  `CellValue.Formula("A1*2")`, or unwrap the result. `fx"="` fails to compile. A raw
+  `CellValue.Formula("=…")` stays constructible and tolerated but is no longer the canonical shape:
+  it no longer compares equal to its own read-back.
 - **Breaking for `--json` consumers of `sheets`, `names` and `functions`: `data` is always a JSON
   object** (#618): a listing verb keys its array by the noun — `sheets --json` →
   `{"sheets": [...]}` (also `--stats` and `--stream`), `names --json` → `{"names": [...]}`,
