@@ -33,12 +33,12 @@ class BatchNameOpsSpec extends CatsEffectSuite:
       json
     )
 
-  /** `names --json` of a written file as `(name, refersTo, scope)`. */
+  /** `names --json` of a written file as `(name, refersTo, scope)` — `data.names` (GH-618). */
   private def names(path: Path): IO[Vector[(String, String, ujson.Value)]] =
     CliHarness.run("-f", path.toString, "--json", "names").map { run =>
       assertEquals(run.exit, 0, run.stderr)
       ujson
-        .read(run.stdout)("data")
+        .read(run.stdout)("data")("names")
         .arr
         .map(n => (n("name").str, n("refersTo").str, n("scope")))
         .toVector

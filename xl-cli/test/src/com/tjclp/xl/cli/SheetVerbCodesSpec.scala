@@ -139,11 +139,11 @@ class SheetVerbCodesSpec extends CatsEffectSuite:
 
   // ===== GH-462 / GH-538: `-s` is the scope of `name add|rm`; names match case-insensitively =====
 
-  /** `names --json` of a written file: `[{name, refersTo, scope, hidden}]`. */
+  /** `names --json` of a written file: `{names: [{name, refersTo, scope, hidden}]}` (GH-618). */
   private def namesJson(path: java.nio.file.Path): IO[Vector[(String, ujson.Value)]] =
     CliHarness.run("-f", path.toString, "--json", "names").map { run =>
       assertEquals(run.exit, 0, run.stderr)
-      ujson.read(run.stdout)("data").arr.map(n => (n("name").str, n("scope"))).toVector
+      ujson.read(run.stdout)("data")("names").arr.map(n => (n("name").str, n("scope"))).toVector
     }
 
   test("GH-538: name rm matches case-insensitively — `name rm total` removes Total") {

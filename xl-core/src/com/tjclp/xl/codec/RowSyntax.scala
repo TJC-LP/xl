@@ -134,8 +134,8 @@ object rowSyntax:
      * [[putRowsWithHeader]] plus an Excel table named `name` over header and records, its columns
      * named after the headers, with filter buttons on the header row (what Excel's own Format as
      * Table does). With no records the table keeps the one blank data row Excel itself insists on.
-     * `name` follows Excel's rules (letters, digits, `_`; unique per workbook — the sheet-level check
-     * rejects a name this sheet already uses) and doubles as the display name.
+     * `name` follows Excel's rules (letters, digits, `_`; unique per workbook — the sheet-level
+     * check rejects a name this sheet already uses) and doubles as the display name.
      */
     def putTable[A](at: ARef, rows: Iterable[A], name: String)(using
       codec: RowCodec[A]
