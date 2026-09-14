@@ -117,6 +117,58 @@ class FixpointEngineSpec extends FunSuite:
     assert(gs.rounds <= jacobi.rounds, s"G-S ${gs.rounds} rounds vs Jacobi ${jacobi.rounds}")
   }
 
+  test(
+    "GH-537: every distinct member text is parsed exactly once per fixpoint, whatever the rounds"
+  ) {
+    // The claim is "parse once per fixpoint", so count PARSES through the engine's parse seam —
+    // not evaluator-factory calls, which say nothing about parsing. A1/B1 share no text and C1
+    // repeats B1's text: three members, two distinct texts, two parses over many rounds.
+    val c1 = ARef.from0(2, 0)
+    val sheet = Sheet(s)
+      .put(a1, CellValue.Formula("=B1*0.5+10", None))
+      .put(b1, CellValue.Formula("=A1*0.5+20", None))
+      .put(c1, CellValue.Formula("=A1*0.5+20", None))
+    val wb = Workbook(sheet)
+    val members =
+      List((q(a1), 0, "=B1*0.5+10"), (q(b1), 0, "=A1*0.5+20"), (q(c1), 0, "=A1*0.5+20"))
+    def run(scheme: IterationScheme): (List[String], WorkbookEvaluator.FixpointOutcome) =
+      var parses = List.empty[String]
+      val outcome = WorkbookEvaluator.jacobiFixpoint(
+        wb,
+        wb.sheets,
+        members,
+        IterativeCalc(100, BigDecimal("1E-9"), scheme = scheme),
+        Clock.system,
+        Rng.system,
+        rng => Evaluator.instance(rng),
+        Map.empty,
+        parse = text =>
+          parses = parses :+ text
+          SheetEvaluator.parseFormula(text)
+      )
+      (parses, outcome)
+    val (jacobiParses, jacobi) = run(IterationScheme.Jacobi)
+    assert(jacobi.converged && jacobi.rounds > 1, s"took ${jacobi.rounds} rounds")
+    assertEquals(jacobiParses.sorted, List("=A1*0.5+20", "=B1*0.5+10"))
+    val (gsParses, gs) = run(IterationScheme.GaussSeidel)
+    assert(gs.converged && gs.rounds > 1, s"took ${gs.rounds} rounds")
+    assertEquals(gsParses.sorted, List("=A1*0.5+20", "=B1*0.5+10"))
+    // The injected parser IS the parser: its verdict reaches the member's result.
+    val rejected = WorkbookEvaluator.jacobiFixpoint(
+      wb,
+      wb.sheets,
+      members,
+      IterativeCalc(5, BigDecimal("0.001")),
+      Clock.system,
+      Rng.system,
+      rng => Evaluator.instance(rng),
+      Map.empty,
+      parse = text => Left(com.tjclp.xl.error.XLError.FormulaError(text, "injected"))
+    )
+    assert(rejected.stalled, "every member fails every round")
+    assert(rejected.results(q(a1)).swap.exists(_.message.contains("injected")))
+  }
+
   test("GH-482: a Gauss–Seidel sweep publishes each value to the members after it") {
     // A1 = B1+1, B1 = A1 swept (A1, B1) from 0: round r leaves (r, r); Jacobi's B1 reads the
     // previous A1 and round 3 leaves (2, 1).

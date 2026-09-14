@@ -2111,6 +2111,27 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-537: --strict names a stalled cycle as stalled, in the summary's own words") {
+    // The summary (RecalcResult.summary) says "stalled after 2 round(s)"; the strict reason on the
+    // line below it must not contradict it with "exhausted 2 round(s)" — one verdict per book.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1", CellValue.Formula("B1*0.5+10"))
+        .put(ref"B1", CellValue.Formula("A1*0.5+Nowhere!A1"))
+    ).withCalcPr(com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(400), None))
+    val out = tempXlsx()
+    val failed = strictFailure(WriteCommands.recalc(wb, out, config, policy = strictPolicy))
+    val verdict =
+      "iterative calculation stalled after 2 round(s): a cyclic member fails every round"
+    assert(failed.contains(s"WARNING: $verdict"), s"summary: $failed")
+    assert(
+      failed.contains(s"STRICT FAILURE (--strict): 2 formula evaluation error(s); $verdict"),
+      s"summary: $failed"
+    )
+    assert(!failed.contains("exhausted"), s"summary: $failed")
+    Files.deleteIfExists(out)
+  }
+
   test("GH-496: --strict promotes the GH-453 seed warnings of recalc --tables") {
     val out = tempXlsx()
     val failed = strictFailure(

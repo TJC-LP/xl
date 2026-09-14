@@ -517,6 +517,51 @@ class IterativeRecalcSpec extends FunSuite:
     assert(!mixed.summary.contains("stalled"), mixed.summary)
   }
 
+  test("GH-537: the stall verdict names the STALLED component's rounds, not the longest run") {
+    // A1/B1 stalls at round 2; C1/D1 is a contraction (error shrinks 4x per sweep) that converges
+    // only after many rounds at 1E-9. `iterationsUsed` is the worst component's rounds, but the
+    // stall the summary reports happened at round 2 — and the strict reason must agree with it.
+    val mixed = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, formula("=B1*0.5+10"))
+        .put(b1, formula("=A1*0.5+Nowhere!A1"))
+        .put(c1, formula("=D1*0.5+10"))
+        .put(d1, formula("=C1*0.5+20"))
+    ).recalculate(IterativeCalc(400, BigDecimal("1E-9")))
+    assertEquals(
+      mixed.cycles.map(c => (c.stalled, c.converged)),
+      Vector((true, false), (false, true))
+    )
+    val healthy = mixed.cycles.lift(1).getOrElse(fail("two components expected"))
+    assert(healthy.rounds > 2, s"the fixture must converge late, took ${healthy.rounds}")
+    assertEquals(mixed.iterationsUsed, healthy.rounds)
+    val verdict = "stalled after 2 round(s): a cyclic member fails every round"
+    assertEquals(mixed.unconvergedVerdict, Some(verdict))
+    assert(mixed.summary.contains(s"WARNING: iterative calculation $verdict"), mixed.summary)
+    assert(!mixed.summary.contains(s"${healthy.rounds} round"), mixed.summary)
+    // Per component, each report renders its own rounds.
+    assertEquals(
+      mixed.cycles.map(_.verdict),
+      Vector(
+        "stalled after 2 round(s): a member fails every round",
+        s"converged in ${healthy.rounds} round(s)"
+      )
+    )
+    // Exhaustion keeps its own number: the budget, not the stall's round.
+    val exhausted = Workbook(
+      Sheet(SheetName.unsafe("S")).put(c1, formula("=1-D1")).put(d1, formula("=C1"))
+    ).recalculate(IterativeCalc(10, BigDecimal("0.001")))
+    assertEquals(
+      exhausted.unconvergedVerdict,
+      Some("exhausted 10 round(s) without converging (last values kept)")
+    )
+    // A converged run has no verdict to gate on.
+    assertEquals(
+      convergentPair.recalculate(IterativeCalc(100, BigDecimal("0.001"))).unconvergedVerdict,
+      None
+    )
+  }
+
   test("GH-537: a cached external-ref member is a constant inside its cycle (pinned cache)") {
     // GH-353: the closed-workbook cache IS the value. Parsing each member once per fixpoint must
     // keep the pinned short-circuit: A1 never evaluates, B1 settles on half of it.
@@ -540,10 +585,12 @@ class IterativeRecalcSpec extends FunSuite:
   private def jacobi(maxIter: Int, maxChange: BigDecimal): IterativeCalc =
     IterativeCalc(maxIter, maxChange, scheme = IterationScheme.Jacobi)
 
-  test("GH-482: the chain A1 = B1+1, B1 = A1 counts to 100 in 100 rounds, as Excel does") {
-    // Excel evaluates the circular chain sequentially with the latest values: A1 steps once per
-    // iteration and B1 copies it, so 100 iterations from empty cells give 100/100. Jacobi hands
-    // B1 the PREVIOUS A1, so the pair advances one unit every two rounds — ~50/50.
+  test("GH-482: the chain A1 = B1+1, B1 = A1 counts to 100 in 100 rounds under the sweep") {
+    // A sequential sweep with the latest values (Excel's iteration model, in Excel's documented
+    // left-to-right, top-to-bottom order — xl has not been checked against Excel itself on this
+    // shape): A1 steps once per iteration and B1 copies it, so 100 iterations from empty cells
+    // give 100/100. Jacobi hands B1 the PREVIOUS A1, so the pair advances one unit every two
+    // rounds — ~50/50.
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(a1, formula("=B1+1"))
       .put(b1, formula("=A1"))
@@ -554,6 +601,62 @@ class IterativeRecalcSpec extends FunSuite:
     val old = Workbook(sheet).recalculate(jacobi(100, BigDecimal("0.001")))
     assertEquals(cachedNum(old.workbook, "S", a1), Some(BigDecimal(50)))
     assertEquals(cachedNum(old.workbook, "S", b1), Some(BigDecimal(50)))
+  }
+
+  /**
+   * The two-cell counter `x = y+1`, `y = x` from empty cells: sweeping x first leaves (n, n) after
+   * n rounds, sweeping y first leaves (n, n-1) — the trailing cell is one round old. So the kept
+   * values of this non-convergent cycle expose the within-component order directly.
+   */
+  private def counter(sheetOf: (SheetName, SheetName), x: ARef, y: ARef): Workbook =
+    val (sx, sy) = sheetOf
+    val yText = s"=${SheetName.quoteForFormula(sy.value)}!${y.toA1}+1"
+    val xText = s"=${SheetName.quoteForFormula(sx.value)}!${x.toA1}"
+    if sx == sy then Workbook(Sheet(sx).put(x, formula(yText)).put(y, formula(xText)))
+    else Workbook(Sheet(sx).put(x, formula(yText)), Sheet(sy).put(y, formula(xText)))
+
+  private def counted(wb: Workbook, sheet: SheetName, ref: ARef): Option[BigDecimal] =
+    cachedNum(wb.recalculate(IterativeCalc(100, BigDecimal("0.001"))).workbook, sheet.value, ref)
+
+  test("GH-482: the sweep order is the grid's, so A2/A10 and Z1/AA1 count exactly like A1/B1") {
+    // An isomorphic model must not change its kept values because a row has two digits or a
+    // column two letters: the A1 STRING order ("A10" < "A2", "AA1" < "Z1") swept the trailing
+    // cell first and left 100/99; the grid order sweeps the top-left cell first — 100/100.
+    val s = SheetName.unsafe("S")
+    val a2 = ARef.from0(0, 1)
+    val a10 = ARef.from0(0, 9)
+    val rows = counter((s, s), a2, a10)
+    assertEquals(counted(rows, s, a2), Some(BigDecimal(100)))
+    assertEquals(counted(rows, s, a10), Some(BigDecimal(100)))
+    val z1 = ARef.from0(25, 0)
+    val aa1 = ARef.from0(26, 0)
+    val cols = counter((s, s), z1, aa1)
+    assertEquals(counted(cols, s, z1), Some(BigDecimal(100)))
+    assertEquals(counted(cols, s, aa1), Some(BigDecimal(100)))
+    // Row before column: B2 (row 2) is swept before A10 (row 10) although "A10" < "B2".
+    val b2 = ARef.from0(1, 1)
+    val rowMajor = counter((s, s), b2, a10)
+    assertEquals(counted(rowMajor, s, b2), Some(BigDecimal(100)))
+    assertEquals(counted(rowMajor, s, a10), Some(BigDecimal(100)))
+    // The control the CHANGELOG example rests on.
+    val classic = counter((s, s), a1, b1)
+    assertEquals(counted(classic, s, a1), Some(BigDecimal(100)))
+    assertEquals(counted(classic, s, b1), Some(BigDecimal(100)))
+  }
+
+  test("GH-482: a cross-sheet cycle sweeps sheet order first, then row-major within the sheet") {
+    // T!A1 = S!A10+1 and S!A10 = T!A1: sheet S sorts before T, so S!A10 is swept first even
+    // though T!A1 sits on row 1 — it copies the PREVIOUS T!A1 and trails by a round (99/100).
+    // Swap the roles (S!A10 = T!A1+1) and the counter cell is swept first: 100/100.
+    val sS = SheetName.unsafe("S")
+    val sT = SheetName.unsafe("T")
+    val a10 = ARef.from0(0, 9)
+    val trailing = counter((sT, sS), a1, a10)
+    assertEquals(counted(trailing, sT, a1), Some(BigDecimal(100)))
+    assertEquals(counted(trailing, sS, a10), Some(BigDecimal(99)))
+    val leading = counter((sS, sT), a10, a1)
+    assertEquals(counted(leading, sS, a10), Some(BigDecimal(100)))
+    assertEquals(counted(leading, sT, a1), Some(BigDecimal(100)))
   }
 
   test("GH-482: fromCalcPr selects Gauss–Seidel, and so does the constructor default") {

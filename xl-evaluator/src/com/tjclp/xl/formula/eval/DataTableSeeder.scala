@@ -732,9 +732,10 @@ object DataTableSeeder:
     // hence the pinned inputs.) The reduced set may even be acyclic after pinning; the fixpoint
     // still converges (a Jacobi sweep settles in <= |members|+1 rounds, a Gauss–Seidel sweep in
     // its Kahn order in one). GH-482: the sweep order is the graph's within-component order
-    // under Gauss–Seidel and the canonical (sheet, A1) listing under Jacobi — as in recalculate.
+    // under Gauss–Seidel and the canonical grid listing (sheet name, row, column) under Jacobi —
+    // as in recalculate.
     val canonical: Vector[QualifiedRef] =
-      (relevantCore -- inputQ).toVector.sortBy(q => (q.sheet.value, q.ref.toA1))
+      (relevantCore -- inputQ).toVector.sortBy(QualifiedRef.gridKey)
     val sweep: Vector[QualifiedRef] = iterative.scheme match
       case IterationScheme.GaussSeidel => DependencyGraph.withinComponentOrder(canonical, ctx.deps)
       case IterationScheme.Jacobi => canonical

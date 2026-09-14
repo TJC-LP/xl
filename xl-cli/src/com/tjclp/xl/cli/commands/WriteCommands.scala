@@ -1407,9 +1407,12 @@ object WriteCommands:
    * GH-496: the `--strict` gate. The write has already happened; this only decides the exit code.
    *
    * Advisory by default (the summary is returned as-is, exit 0). Under `--strict` a recalculation
-   * that reported formula errors, exhausted its iteration budget, or produced data-table seed
-   * warnings raises [[StrictFailure]] — the runner prints the same summary plus the reason and
-   * exits 1. Excel error VALUES (#DIV/0!, #N/A) are data conditions, not failures, and never gate.
+   * that reported formula errors, left a cyclic component unconverged (exhausted its budget or
+   * stalled, GH-537), or produced data-table seed warnings raises [[StrictFailure]] — the runner
+   * prints the same summary plus the reason and exits 1. The iterative reason is
+   * `RecalcResult.unconvergedVerdict`, the very text the summary's WARNING carries, so the two
+   * lines never disagree. Excel error VALUES (#DIV/0!, #N/A) are data conditions, not failures, and
+   * never gate.
    */
   private def strictGate(
     policy: WritePolicy,
@@ -1422,9 +1425,7 @@ object WriteCommands:
     val recalcReasons = recalc.toList.flatMap { r =>
       List(
         Option.when(r.errors.nonEmpty)(s"${r.errors.size} formula evaluation error(s)"),
-        Option.when(!r.converged)(
-          s"iterative calculation exhausted ${r.iterationsUsed} round(s) without converging"
-        )
+        r.unconvergedVerdict.map(verdict => s"iterative calculation $verdict")
       ).flatten
     }
     // GH-628: a #REF! written for a reference dragged off the grid is a successful evaluation of

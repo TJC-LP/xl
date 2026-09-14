@@ -473,9 +473,30 @@ object DependencyGraph:
    * names that nest another name (which an unqualified reference resolves from the reader's sheet,
    * where a sheet-scoped variant may shadow it) keep the per-sheet classification.
    */
+  def dynamicCells(workbook: Workbook): Set[QualifiedRef] = dynamicCellsTraced(workbook).cells
+
+  /**
+   * GH-537: [[dynamicCells]] with the work it performed — the structural pin RecalcPerfSpec asserts
+   * (parses and classifications linear in the NAMES, not sheets × names), since no wall-clock
+   * budget can distinguish the two algorithms on a fixture that runs in under a second either way.
+   *
+   * @param parses
+   *   `FormulaParser.parse` calls: one per distinct definition or candidate cell text (memo misses)
+   * @param classifications
+   *   defined-name classifications (`classify`): one per sheet-independent name, one per (sheet,
+   *   name) for names that nest another name
+   */
+  private[formula] final case class DynamicCellsTrace(
+    cells: Set[QualifiedRef],
+    parses: Int,
+    classifications: Int
+  )
+
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def dynamicCells(workbook: Workbook): Set[QualifiedRef] =
+  private[formula] def dynamicCellsTraced(workbook: Workbook): DynamicCellsTrace =
     type NameKey = (SheetName, SheetName, String)
+    var parses = 0
+    var classifications = 0
 
     val dynamicFunctions = FunctionRegistry.dynamicFunctionNames
     // Token form for the cheap substring pre-filter over cell text (function names are upper).
@@ -495,7 +516,12 @@ object DependencyGraph:
     // workbook-scoped name read from 40 sheets is parsed once, not 40 times.
     val parsed = scala.collection.mutable.HashMap.empty[String, Option[TExpr[?]]]
     def parse(text: String): Option[TExpr[?]] =
-      parsed.getOrElseUpdate(text, FormulaParser.parse(text).toOption)
+      parsed.getOrElseUpdate(
+        text, {
+          parses += 1
+          FormulaParser.parse(text).toOption
+        }
+      )
     // Positions computed once: this function makes sheets × names lookups, so the per-lookup
     // O(sheets) indexWhere inside lookupDefinedName would add an O(sheets² × names) term.
     // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
@@ -554,6 +580,7 @@ object DependencyGraph:
       fallbackSheet: SheetName,
       visiting: Set[NameKey]
     ): Boolean =
+      classifications += 1
       (for
         definedName <- Evaluator.lookupDefinedNameAt(workbook, sheetPosition.get(lookupFrom), name)
         target <- parse(definedName.formula)
@@ -615,20 +642,22 @@ object DependencyGraph:
         .toSet
     val candidateTokens = dynamicFunctions ++ nameTokens
 
-    if candidateTokens.isEmpty then Set.empty
-    else
-      workbook.sheets.iterator.flatMap { sheet =>
-        sheet.cells.iterator.flatMap { case (ref, cell) =>
-          cell.value match
-            case CellValue.Formula(expression, _, _)
-                if candidateTokens.exists(upper(expression).contains) =>
-              parse(expression) match
-                case Some(expr) if expressionIsDynamic(expr, sheet.name, Set.empty) =>
-                  Some(QualifiedRef(sheet.name, ref))
-                case _ => None
-            case _ => None
-        }
-      }.toSet
+    val cells =
+      if candidateTokens.isEmpty then Set.empty[QualifiedRef]
+      else
+        workbook.sheets.iterator.flatMap { sheet =>
+          sheet.cells.iterator.flatMap { case (ref, cell) =>
+            cell.value match
+              case CellValue.Formula(expression, _, _)
+                  if candidateTokens.exists(upper(expression).contains) =>
+                parse(expression) match
+                  case Some(expr) if expressionIsDynamic(expr, sheet.name, Set.empty) =>
+                    Some(QualifiedRef(sheet.name, ref))
+                  case _ => None
+              case _ => None
+          }
+        }.toSet
+    DynamicCellsTrace(cells, parses, classifications)
 
   /**
    * GH-274: A dynamic cell set closed under "depends on me": the cells themselves plus every
@@ -1425,6 +1454,25 @@ object DependencyGraph:
     // unambiguously in diagnostics ('A1'!B2, not A1!B2)
     override def toString: String = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}"
 
+  object QualifiedRef:
+    /**
+     * The GRID order: sheet name, then row, then column — row-major within a sheet, Excel's
+     * documented left-to-right, top-to-bottom sweep. Every positional ordering in this graph
+     * (component listings, the condensation's tie-break, the Gauss–Seidel cut) keys on it.
+     *
+     * Never the A1 TEXT: `"A10" < "A2"` and `"AA1" < "B1"` as strings, so a text key would sweep
+     * row 10 before row 2 and column AA before column B — and, under Gauss–Seidel, hand isomorphic
+     * models different kept values by the digit count of a row number.
+     */
+    def gridKey(q: QualifiedRef): (String, Int, Int) =
+      (q.sheet.value, q.ref.row.index0, q.ref.col.index0)
+
+    /**
+     * [[gridKey]] as an `Ordering` — [[QualifiedGraph.byPosition]], the one order every layer and
+     * every CLI listing already uses.
+     */
+    val gridOrdering: Ordering[QualifiedRef] = QualifiedGraph.byPosition
+
   /**
    * Build dependency graph from Workbook (cross-sheet aware).
    *
@@ -1700,22 +1748,22 @@ object DependencyGraph:
   /**
    * GH-492: one node of the SCC condensation of the workbook-level graph.
    *
-   * `members` is sorted by (sheet.value, ref.toA1) — the deterministic member order the Jacobi
-   * fixpoint needs (values are order-independent under Jacobi, but error vectors, report members
-   * and seeded-RNG draw order are not). `cyclic` is true for a multi-node component or a
-   * self-looping singleton, matching [[qualifiedCyclicNodes]] exactly.
+   * `members` is sorted by [[QualifiedRef.gridKey]] (sheet name, row, column) — the deterministic
+   * member order the Jacobi fixpoint needs (values are order-independent under Jacobi, but error
+   * vectors, report members and seeded-RNG draw order are not). `cyclic` is true for a multi-node
+   * component or a self-looping singleton, matching [[qualifiedCyclicNodes]] exactly.
    *
    * No `derives CanEqual`: [[QualifiedRef]] does not derive it.
    */
   final case class Scc(members: Vector[QualifiedRef], cyclic: Boolean):
-    /** Canonical key: the minimum member under (sheet.value, ref.toA1). Unique across nodes. */
-    private[xl] def key: (String, String) =
-      members.headOption.fold(("", ""))(q => (q.sheet.value, q.ref.toA1))
+    /** Canonical key: the minimum member under [[QualifiedRef.gridKey]]. Unique across nodes. */
+    private[xl] def key: (String, Int, Int) =
+      members.headOption.fold(("", 0, 0))(QualifiedRef.gridKey)
 
   /**
-   * GH-492: the SCC condensation of the workbook-level graph, in the LEXICOGRAPHICALLY-MINIMUM
-   * dependency-first topological order — every precedent component strictly precedes the components
-   * that read it, ties broken by [[Scc.key]].
+   * GH-492: the SCC condensation of the workbook-level graph, in the KEY-MINIMUM dependency-first
+   * topological order — every precedent component strictly precedes the components that read it,
+   * ties broken by [[Scc.key]] (the grid order of each component's top-left member).
    *
    * This is what lets one iterative recalculation reach the workbook's GLOBAL fixpoint: walking the
    * condensation once (acyclic components evaluate, cyclic components fixpoint) guarantees every
@@ -1744,7 +1792,7 @@ object DependencyGraph:
         case _ => true
       val kept = scc.filter(dependencies.contains)
       if kept.nonEmpty then
-        collected = collected :+ Scc(kept.toVector.sortBy(q => (q.sheet.value, q.ref.toA1)), cyclic)
+        collected = collected :+ Scc(kept.toVector.sortBy(QualifiedRef.gridKey), cyclic)
     }
     val comps = collected
     if comps.isEmpty then Vector.empty
@@ -1798,12 +1846,18 @@ object DependencyGraph:
 
   /**
    * GH-482: the order in which ONE cyclic component's members evaluate inside a Gauss–Seidel round
-   * — Kahn's algorithm on the subgraph the component induces, with a (sheet name, A1)-ordered
-   * frontier, CUTTING at the smallest-key remaining node whenever the frontier runs dry (inside a
-   * strongly-connected component it is dry from the start: every member reads another). The edges
-   * into a cut node from members not yet emitted are the round's back edges — the reads that see
-   * the PREVIOUS round's value; every other read sees a value already refreshed this round.
-   * Self-edges are back edges by definition and never block.
+   * — Kahn's algorithm on the subgraph the component induces, with a grid-ordered frontier
+   * ([[QualifiedRef.gridKey]]: sheet name, then row, then column), CUTTING at the top-left
+   * remaining node whenever the frontier runs dry (inside a strongly-connected component it is dry
+   * from the start: every member reads another). The edges into a cut node from members not yet
+   * emitted are the round's back edges — the reads that see the PREVIOUS round's value; every other
+   * read sees a value already refreshed this round. Self-edges are back edges by definition and
+   * never block.
+   *
+   * The cut is positional — Excel's documented sweep runs left to right, top to bottom — never the
+   * A1 text: a text key would cut at A10 before A2 and at AA1 before B1, so the kept values of a
+   * non-convergent cycle would flip on the digit count of a row number. Whether Excel's own calc
+   * chain lands on the same member for a given book has not been verified against Excel here.
    *
    * A pure function of the graph's VALUE (the discipline of [[qualifiedSccOrder]]): the same
    * component yields the same order whatever the insertion order of `members`, `dependencies` or
@@ -1817,7 +1871,7 @@ object DependencyGraph:
     members: Vector[QualifiedRef],
     dependencies: Map[QualifiedRef, Set[QualifiedRef]]
   ): Vector[QualifiedRef] =
-    val byKey: Ordering[QualifiedRef] = Ordering.by(q => (q.sheet.value, q.ref.toA1))
+    val byKey: Ordering[QualifiedRef] = QualifiedRef.gridOrdering
     val memberSet = members.toSet
     val precedentsOf: Map[QualifiedRef, Set[QualifiedRef]] =
       members.iterator.map { q =>
@@ -1840,8 +1894,8 @@ object DependencyGraph:
       degree: Map[QualifiedRef, Int],
       acc: Vector[QualifiedRef]
     ): Vector[QualifiedRef] =
-      // Kahn's next node or — the frontier dry with members remaining — the smallest remaining
-      // key: the CUT, whose not-yet-emitted precedents become this round's back edges.
+      // Kahn's next node or — the frontier dry with members remaining — the top-left remaining
+      // member: the CUT, whose not-yet-emitted precedents become this round's back edges.
       frontier.headOption.orElse(remaining.headOption) match
         case None => acc
         case Some(node) =>
