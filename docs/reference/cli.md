@@ -354,7 +354,15 @@ A sheet's `_xlnm.Print_Area` / `_xlnm.Print_Titles` read from a file live in its
 fields the scripting `PageSetup` sets; `names` still lists them from `workbook.xml`): `name add -s`
 replaces them and `name rm -s` clears them, so `-s Sheet1 name rm _xlnm.Print_Area` is the inverse
 of the `name add` above on its own output. `-s` names the sheet exactly as spelled, like every
-verb's `-s`; the batch twins' `scope` key matches it case-insensitively.
+verb's `-s`; so does the batch twins' `scope` key (`SHEET_NOT_FOUND` with the sheet as a
+candidate for a case variant — one rule for every sheet key).
+
+`name add|rm` are writes like `putf`: a changed binding recalculates the formulas that read the
+name (through aliases, named ranges, local shadows and cross-sheet references) and the summary
+carries the same `Recalculated N formula(s)` line the batch twins print, so the file never caches
+a value its own name table contradicts; a reader `name rm` leaves unevaluable (`#NAME?`) is left
+uncached and reported (`RECALC_ERRORS`; exit 1 under `--strict`). `--no-recalc` keeps every cache
+and says so. Their batch twins are `define-name` / `remove-name`.
 
 Names are case-insensitive identifiers, as in Excel: `name add case …` replaces an existing `CASE`
 (every same-scope spelling, so a table that held case-colliding duplicates holds one afterwards),
@@ -1518,7 +1526,9 @@ own `hint`.
 - **Defined-name edits recalculate their readers**: `define-name` and `remove-name` refresh
   affected formula caches, including aliases, named ranges, local scope and cross-sheet
   dependents. Unrelated caches are preserved; `--no-recalc` keeps the pre-edit caches. A reader
-  that cannot be evaluated after the name change is reported and left uncached.
+  that cannot be evaluated after the name change is reported and left uncached. The verbs
+  `name add` / `name rm` write through the same tail. A `scope` names the sheet exactly as
+  spelled, like `-s` and every op's `sheet` key.
 - **Under `--stream`** the streamable ops (see the table) are applied with identical semantics —
   `style` merges, `format` replaces, a `put` with both `value` and `values` is refused — and an
   op's `sheet` or a qualified ref may name the streamed worksheet; any other op, or one whose

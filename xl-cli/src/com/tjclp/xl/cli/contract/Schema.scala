@@ -599,23 +599,27 @@ object Schema:
       streaming = false,
       gated
     ),
+    // GH-462: the twins are the batch ops that declare `cliVerb = Some("name add" | "name rm")`
+    // (SchemaSpec pins both directions). `sheet = false`: -s is the name's optional scope, not THE
+    // sheet rule — a single-sheet book without it writes a workbook-scoped name. `gated`: the write
+    // recalculates the name's readers, so --strict can exit 1 (#659 review).
     write(
       "name add",
       "Add or replace a named range (workbook-scoped; -s scopes it to that sheet)",
       sheet = false,
-      None,
+      Some("define-name"),
       "0.10.0",
       streaming = false,
-      plain
+      gated
     ),
     write(
       "name rm",
       "Remove a named range (workbook-scoped; -s the sheet-scoped one)",
       sheet = false,
-      None,
+      Some("remove-name"),
       "0.10.0",
       streaming = false,
-      plain
+      gated
     ),
     write(
       "insert-rows",

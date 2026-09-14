@@ -88,8 +88,8 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `freeze` | `-f` `-s` `-o`/`-i` | `backend` | 0 2 3 | `freeze` | 0.10.0 | Freeze panes at a cell (rows above and columns left are locked) |
 | `unfreeze` | `-f` `-s` `-o`/`-i` | `backend` | 0 2 3 | `unfreeze` | 0.10.0 | Remove freeze panes |
 | `copy` | `-f` `-s` `-o`/`-i` | `backend` | 0 1 2 3 | `copy` | 0.10.0 | Copy a range to another location with formula adjustment (--values-only) |
-| `name add` | `-f` `-o`/`-i` | `backend` | 0 2 3 | — | 0.10.0 | Add or replace a named range (workbook-scoped; -s scopes it to that sheet) |
-| `name rm` | `-f` `-o`/`-i` | `backend` | 0 2 3 | — | 0.10.0 | Remove a named range (workbook-scoped; -s the sheet-scoped one) |
+| `name add` | `-f` `-o`/`-i` | `backend` | 0 1 2 3 | `define-name` | 0.10.0 | Add or replace a named range (workbook-scoped; -s scopes it to that sheet) |
+| `name rm` | `-f` `-o`/`-i` | `backend` | 0 1 2 3 | `remove-name` | 0.10.0 | Remove a named range (workbook-scoped; -s the sheet-scoped one) |
 | `insert-rows` | `-f` `-s` `-o`/`-i` | `backend` | 0 1 2 3 | — | 0.10.0 | Insert rows; shifts cells and rewrites formulas |
 | `delete-rows` | `-f` `-s` `-o`/`-i` | `backend` | 0 1 2 3 | — | 0.10.0 | Delete rows; shifts cells and rewrites formulas (#REF! on loss) |
 | `insert-cols` | `-f` `-s` `-o`/`-i` | `backend` | 0 1 2 3 | — | 0.10.0 | Insert columns; shifts cells and rewrites formulas |
