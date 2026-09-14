@@ -141,7 +141,10 @@ object DataValidationCodec:
       case None => Some(false)
       case Some(v) => CfCodec.parseBool(v)
 
-  /** Text attrs decode `_xHHHH_` escapes (attribute-value normalization eats raw LF/TAB/CR). */
+  /**
+   * Text attrs decode `_xHHHH_` escapes: Excel writes line breaks as `&#10;` (which the parser has
+   * already resolved here), xl before GH-649 wrote `_x000A_`; both read back as the newline.
+   */
   private def textAttr(entry: Elem, name: String): Option[String] =
     entry.attribute(name).map(n => XmlUtil.decodeXstring(n.text))
 
@@ -202,8 +205,9 @@ object DataValidationCodec:
    * container attributes ride through a dirty write; `count` is always restamped.
    *
    * Attributes emit in Excel's stamp order with schema-default values omitted (incl. `type` for
-   * AnyValue); message text goes through [[XmlUtil.escapeXstringAttr]] so multiline prompts survive
-   * attribute-value normalization.
+   * AnyValue); message text goes through [[XmlUtil.escapeXstringAttr]] so a literal `_xHHHH_`
+   * decodes back to itself, while its line breaks and tabs reach the file as `&#10;`/`&#9;`
+   * character references from the writers (GH-649) — Excel's own spelling.
    */
   def toElem(dvs: Vector[DataValidation], base: Option[Elem]): Option[Elem] =
     val children: Vector[Elem] = dvs.flatMap {

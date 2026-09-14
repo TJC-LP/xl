@@ -223,8 +223,10 @@ Today:
 **Status update**: this decision now applies to the row-stream *write* path only
 (`StreamingXmlWriter`). The streaming *read* path was later rebuilt on a plain SAX parser
 (`SaxStreamingReader`) for 3–4x throughput — see
-[performance-investigation.md](performance-investigation.md). The SAX→StAX transform writers
-(`ZipTransformer`/`StreamingTransform`) likewise use `javax.xml` wrapped in `Sync[F]`.
+[performance-investigation.md](performance-investigation.md). The SAX transform writers
+(`ZipTransformer`/`StreamingTransform`) likewise parse with `javax.xml` SAX wrapped in `Sync[F]`
+and emit through `StaxSaxWriter`, which writes its bytes directly (since GH-649: the JDK
+`XMLStreamWriter` cannot spell a line break in an attribute value as `&#10;`).
 
 **Pros**:
 - True streaming (no tree building)

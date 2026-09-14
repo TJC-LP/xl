@@ -29,8 +29,12 @@ class DataValidationCodecSpec extends ScalaCheckSuite:
   private def xml(s: String): Elem =
     XmlSecurity.parseSafe(s, "test").fold(e => fail(s"parse failed: ${e.message}"), identity)
 
+  // through the bytes the writer emits (XmlUtil.compact), never scala.xml's toString: the latter
+  // writes a newline in an attribute value raw, which the parse then normalizes to a space (GH-649)
   private def roundTrip(dvs: Vector[DataValidation]): Vector[DataValidation] =
-    DataValidationCodec.parseAll(DataValidationCodec.toElem(dvs, None).map(e => xml(e.toString)))
+    DataValidationCodec.parseAll(
+      DataValidationCodec.toElem(dvs, None).map(e => xml(XmlUtil.compact(e)))
+    )
 
   private def typedList(
     range: String,
@@ -157,7 +161,7 @@ class DataValidationCodecSpec extends ScalaCheckSuite:
     }
   }
 
-  test("GH-429: a multiline prompt round-trips through _x000A_ (attr normalization survives)") {
+  test("GH-429/GH-649: a multiline prompt is written as Excel writes it (&#10;) and round-trips") {
     val dv = DataValidation.Rules(
       Vector(ref"A1:A2": CellRange),
       DvKind.List("\"a,b\""),
@@ -168,8 +172,31 @@ class DataValidationCodecSpec extends ScalaCheckSuite:
       )
     )
     val emitted = DataValidationCodec.toElem(Vector(dv), None).getOrElse(fail("no container"))
-    assert(emitted.toString.contains("_x000A_"), emitted.toString)
-    assert(emitted.toString.contains("_x0009_"), emitted.toString)
+    val bytes = XmlUtil.compact(emitted)
+    assert(bytes.contains("prompt=\"line1&#10;line2&#9;and tab\""), bytes)
+    assert(!bytes.contains("_x000A_"), bytes)
+    assertEquals(roundTrip(Vector(dv)), Vector[DataValidation](dv))
+  }
+
+  test("GH-649: a prompt xl wrote before GH-649 (_x000A_) still reads back as the newline") {
+    val container = xml(
+      """<dataValidations count="1">
+        |<dataValidation type="list" showInputMessage="1" prompt="l1_x000A_l2" sqref="A1"><formula1>"a"</formula1></dataValidation>
+        |</dataValidations>""".stripMargin
+    )
+    DataValidationCodec.parseAll(Some(container)) match
+      case Vector(r: DataValidation.Rules) => assertEquals(r.messages.prompt, Some("l1\nl2"))
+      case other => fail(s"expected one typed entry: $other")
+  }
+
+  test("GH-649: a literal _x000A_ in prompt text is protected and decodes to itself") {
+    val dv = DataValidation.Rules(
+      Vector(ref"A1:A1": CellRange),
+      DvKind.AnyValue,
+      messages = DvMessages(showInputMessage = true, prompt = Some("literal _x000A_ here"))
+    )
+    val bytes = XmlUtil.compact(DataValidationCodec.toElem(Vector(dv), None).getOrElse(fail("")))
+    assert(bytes.contains("prompt=\"literal _x005F_x000A_ here\""), bytes)
     assertEquals(roundTrip(Vector(dv)), Vector[DataValidation](dv))
   }
 
