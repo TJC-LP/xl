@@ -316,7 +316,7 @@ Header/footer strings support Excel codes — `&P` page, `&N` total pages, `&D` 
 |--------|---------|-------|
 | `wb.evaluateFormula(formula, onSheet[, clock])` | `XLResult[CellValue]` | cross-sheet context automatic; onSheet: String or SheetName |
 | `wb.recalculate([clock][, rng])` | `RecalcResult` | total whole-workbook recalc, per-cell errors, cycle isolation; `rng` (0.11.2+) seeds RAND — `Rng.seeded(42L)` for reproducible scripts |
-| `wb.recalculate(IterativeCalc(maxIter, maxChange))` | `RecalcResult` | 0.13.0: opt-in Jacobi fixpoint for declared cycles (also `(clock, iterative)` / `(clock, rng, iterative)`); `IterativeCalc.fromCalcPr(cp)` bridges a file's `<calcPr>` |
+| `wb.recalculate(IterativeCalc(maxIter, maxChange[, seedFromCaches][, scheme]))` | `RecalcResult` | 0.13.0: opt-in fixpoint for declared cycles (also `(clock, iterative)` / `(clock, rng, iterative)`); `IterativeCalc.fromCalcPr(cp)` bridges a file's `<calcPr>`. `scheme` (0.23.0): `IterationScheme.GaussSeidel` (default — Excel's sequential sweep within a cycle) or `IterationScheme.Jacobi` (previous-round reads, the pre-0.23 trajectories). `result.cycles` carries `SccReport(members, converged, rounds, maxDelta, stalled)` |
 | `wb.withCachedFormulas([clock])` | `Workbook` | = `recalculate(clock).workbook` |
 | `sheet.evaluateFormula(formula[, clock][, rng][, workbook])` | `XLResult[CellValue]` | pass `Some(wb)` iff formula references other sheets |
 | `sheet.putFormulaInheriting(ref, formula[, workbook])` | `XLResult[Sheet]` | 0.11.2+: puts the formula AND inherits the referenced cells' number format into a General target (Excel's entry behavior) |

@@ -7,7 +7,14 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.ast.TExpr
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, RecalcResult, SheetEvaluator}
+import com.tjclp.xl.formula.eval.{
+  EvalError,
+  Evaluator,
+  IterativeCalc,
+  RecalcResult,
+  SheetEvaluator,
+  WorkbookEvaluator
+}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -259,3 +266,42 @@ class AggregateMemoSpec extends FunSuite:
     finally
       pool.shutdownNow()
       pool.awaitTermination(5, TimeUnit.SECONDS)
+
+  test("GH-537: an iterative recalculation shares one generation memo across Straight segments"):
+    // {B2, B3, B4} is a cyclic component; 32 readers of SUM(B2:B4) sit downstream and evaluate in
+    // the Straight segment AFTER the fixpoint. Pre-fix the whole iterative walk was memo-free.
+    // Now: one fill, 31 hits, no bypass — and the fill happened after the members finalized (every
+    // reader equals the sum of the converged member values). The fixpoint's own per-round memos
+    // are separate instances, so nothing inside the rounds shows up in these stats.
+    val readers = 32
+    val sheet = (1 to readers).foldLeft(
+      Sheet(dataName)
+        .put(ref"A1", num(1000))
+        .put(ref"A2", CellValue.Number(BigDecimal("0.08")))
+        .put(ref"A3", num(50))
+        .put(ref"B1", formula("=A1"))
+        .put(ref"B2", formula("=(B1+B4)/2*A2"))
+        .put(ref"B3", formula("=A3-B2"))
+        .put(ref"B4", formula("=B1-B3"))
+    )((s, i) => s.put(ARef.from0(3, i - 1), formula("=SUM(B2:B4)")))
+    val memo = new Evaluator.AggregateMemo
+    val result = WorkbookEvaluator.recalculateWithGenerationMemo(
+      Workbook(sheet),
+      Clock.system,
+      Rng.system,
+      Some(IterativeCalc(400, BigDecimal("1E-12"))),
+      memo
+    )
+    assert(result.isClean && result.converged, s"${result.errors} / ${result.cycles.map(_.render)}")
+    val evaluated = result.evaluated(dataName)
+    val members = Vector(ref"B2", ref"B3", ref"B4")
+      .flatMap(evaluated.get)
+      .collect { case CellValue.Number(v) => v }
+    assertEquals(members.size, 3)
+    (1 to readers).foreach { i =>
+      assertEquals(evaluated.get(ARef.from0(3, i - 1)), Some(CellValue.Number(members.sum)))
+    }
+    assertEquals(
+      memo.stats,
+      Evaluator.AggregateMemoStats(hits = readers - 1, fills = 1, bypasses = 0, entries = 1)
+    )

@@ -53,6 +53,8 @@ object formulaExports:
   export formula.eval.{CellEvalError, IterativeCalc, RecalcResult}
   // GH-492: per-strongly-connected-component fixpoint verdicts on RecalcResult.cycles
   export formula.eval.SccReport
+  // GH-482: within-component iteration scheme (IterativeCalc.scheme): GaussSeidel | Jacobi
+  export formula.eval.IterationScheme
 
   // GH-419: explicit data-table cache seeding (autoNoTable books never recompute tables on open)
   export formula.eval.DataTableSeeder

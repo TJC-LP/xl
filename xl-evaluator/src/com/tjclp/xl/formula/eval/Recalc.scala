@@ -30,14 +30,37 @@ final case class CellEvalError(
   def render: String = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}: ${error.message}"
 
 /**
+ * GH-482: how the members of ONE cyclic component read each other within an iterative round.
+ */
+enum IterationScheme derives CanEqual:
+  /**
+   * Every member reads the PREVIOUS round's values, so member order is immaterial to the values.
+   * The scheme of 0.13.0–0.22.x; keep it to reproduce those trajectories bit for bit.
+   */
+  case Jacobi
+
+  /**
+   * Members evaluate in [[com.tjclp.xl.formula.graph.DependencyGraph.withinComponentOrder]] and
+   * each published value is read by the members after it — Excel's sequential sweep over the
+   * circular chain (`A1 = B1+1`, `B1 = A1` reaches 100/100 after 100 iterations; a self-referencing
+   * counter steps once per iteration), which Jacobi does not reproduce (~50/50). Typically far
+   * fewer rounds on banker-book cycles (average-balance idioms). The default since 0.23.0.
+   */
+  case GaussSeidel
+
+/**
  * GH-373: opt-in bounded iterative calculation for circular workbooks.
  *
  * Professional models are routinely circular by design (interest on average debt balances) and ship
- * with `<calcPr iterate="1">`. Passing an `IterativeCalc` to `recalculate` fixpoints cycle members
- * with Jacobi iteration (every member reads PREVIOUS-iteration values, matching Excel): members
- * seed to 0, iterate until every member's |Δ| < `maxChange` or `maxIter` rounds, and
- * non-convergence keeps the last values with NO error — Excel's semantics, and the deliberate
- * inversion of the default path's circular-reference errors.
+ * with `<calcPr iterate="1">`. Passing an `IterativeCalc` to `recalculate` fixpoints each cyclic
+ * component: members seed from their cached numbers (0 when uncached), every round re-evaluates the
+ * members, and the loop stops when every member's |Δ| < `maxChange`, after `maxIter` rounds, or
+ * (GH-537) as soon as a round replays the previous one exactly because a member fails every round.
+ * Non-convergence keeps the last values with NO error — Excel's semantics, and the deliberate
+ * inversion of the default path's circular-reference errors. Within a component the members read
+ * each other per [[IterationScheme]] — Gauss–Seidel by default (GH-482: Excel's iterative
+ * calculation is a sequential sweep using the latest values, NOT a Jacobi round as 0.13.0–0.22.x
+ * assumed); between components the condensation walk is Gauss–Seidel by construction (GH-492).
  *
  * Deliberately NOT auto-derived from `wb.metadata.calcPr` — iteration is opt-in so the default
  * `recalculate()` stays byte-identical. Bridge explicitly when honoring a file's settings:
@@ -72,18 +95,28 @@ final case class CellEvalError(
  *   or text cache unchanged (`#DIV/0! * 0.5 + 10` is `#DIV/0!`), so seeding one would wedge an
  *   otherwise healthy cycle at its poison and report `converged = true`; every non-numeric shape
  *   therefore falls back to 0 and heals exactly as it did before GH-469.
+ * @param scheme
+ *   GH-482: how a component's members read each other within a round — [[IterationScheme]].
+ *   Gauss–Seidel (the default, Excel's sweep) makes the evaluation ORDER observable: members are
+ *   swept in [[com.tjclp.xl.formula.graph.DependencyGraph.withinComponentOrder]], a pure function
+ *   of the graph, so results are still deterministic and insertion-order independent; a seeded
+ *   [[com.tjclp.xl.formula.Rng]] is repeatable. Values land inside the same `maxChange` ball on a
+ *   different trajectory and round counts change; `IterationScheme.Jacobi` reproduces the
+ *   0.13.0–0.22.x trajectories.
  */
 final case class IterativeCalc(
   maxIter: Int,
   maxChange: BigDecimal,
-  seedFromCaches: Boolean = true
+  seedFromCaches: Boolean = true,
+  scheme: IterationScheme = IterationScheme.GaussSeidel
 ) derives CanEqual
 
 object IterativeCalc:
   /**
    * Lift a workbook's modeled `<calcPr>` into iteration settings, applying Excel's defaults (100,
-   * 0.001) for absent attributes. Callers gate on `calcPr.iterativeCalculation` themselves — see
-   * the bridge example on [[IterativeCalc]].
+   * 0.001) for absent attributes and the default scheme ([[IterationScheme.GaussSeidel]], what
+   * Excel does with the file). Callers gate on `calcPr.iterativeCalculation` themselves — see the
+   * bridge example on [[IterativeCalc]].
    */
   def fromCalcPr(cp: CalcPr): IterativeCalc =
     IterativeCalc(cp.maxIterations.getOrElse(100), cp.maxChange.getOrElse(BigDecimal("0.001")))
@@ -91,27 +124,42 @@ object IterativeCalc:
 /**
  * GH-492: one cyclic strongly-connected component's fixpoint verdict.
  *
- * Members are the component's cells sorted by (sheet name, A1) — the same order the Jacobi loop
- * iterates them in. Uses `(SheetName, ARef)` rather than the graph package's `QualifiedRef`: the
- * latter does not derive `CanEqual`, and the public result type stays free of a graph dependency
- * (the same shape [[CellEvalError]] already uses).
+ * Members are the component's cells sorted by (sheet name, A1) — the canonical listing. The order a
+ * Gauss–Seidel round EVALUATES them in is `DependencyGraph.withinComponentOrder` (GH-482), a pure
+ * function of the graph. Uses `(SheetName, ARef)` rather than the graph package's `QualifiedRef`:
+ * the latter does not derive `CanEqual`, and the public result type stays free of a graph
+ * dependency (the same shape [[CellEvalError]] already uses).
  *
  * @param converged
  *   true iff every member's |Δ| dropped below `maxChange` within `maxIter` rounds
  * @param rounds
- *   rounds actually run for THIS component — `maxIter` on exhaustion, else the converging round
+ *   rounds actually run for THIS component — `maxIter` on exhaustion, the converging round on
+ *   convergence, the first replayed round on a stall
  * @param maxDelta
  *   the largest |Δ| among numeric members in the final round (None when no member was numeric) —
  *   the residual a caller can size an exhaustion against
+ * @param stalled
+ *   GH-537: true iff the fixpoint stopped early because a round reproduced the previous one EXACTLY
+ *   while some member still failed to evaluate. Evaluation is deterministic given the overlay (the
+ *   clock is pinned, and a member drawing fresh randomness never replays), so every further round
+ *   would have been the same replay: the loop stops there instead of burning `maxIter`. A stalled
+ *   component is never `converged` — the failing member is reported as a [[CellEvalError]] — and
+ *   `rounds` ≤ `maxIter`: below it whenever the replay arrives before the budget runs out, equal
+ *   when the first replay lands on the last budgeted round. Exhaustion proper (values still moving
+ *   at `maxIter`) reports `stalled = false`.
  */
 final case class SccReport(
   members: Vector[(SheetName, ARef)],
   converged: Boolean,
   rounds: Int,
-  maxDelta: Option[BigDecimal]
+  maxDelta: Option[BigDecimal],
+  stalled: Boolean = false
 ) derives CanEqual:
 
-  /** e.g. `'Debt'!B7, 'Debt'!B8 (+3 more): exhausted 400 round(s), max |Δ| = 3.9` */
+  /**
+   * e.g. `'Debt'!B7, 'Debt'!B8 (+3 more): exhausted 400 round(s), max |Δ| = 3.9` or
+   * `'Debt'!B7, 'Debt'!B8: stalled after 2 round(s): a member fails every round`
+   */
   def render: String =
     val shown = members
       .take(2)
@@ -119,7 +167,9 @@ final case class SccReport(
       .mkString(", ")
     val more = if members.sizeIs > 2 then s" (+${members.size - 2} more)" else ""
     val verdict =
-      if converged then s"converged in $rounds round(s)" else s"exhausted $rounds round(s)"
+      if converged then s"converged in $rounds round(s)"
+      else if stalled then s"stalled after $rounds round(s): a member fails every round"
+      else s"exhausted $rounds round(s)"
     val delta = maxDelta.fold("")(d => s", max |Δ| = $d")
     s"$shown$more: $verdict$delta"
 
@@ -145,10 +195,11 @@ final case class SccReport(
  *   sheets, cycle participants, and cells blocked by a cycle
  * @param converged
  *   GH-454/GH-492: `cycles.forall(_.converged)` — false iff some cyclic component exhausted
- *   `maxIter` rounds without every member's |Δ| dropping below `maxChange`. The last-round values
- *   are still kept (Excel semantics) but callers can gate instead of mistaking exhaustion for
- *   stationarity. Non-iterative runs (default `recalculate()`, or iterative settings on an acyclic
- *   workbook) report true vacuously.
+ *   `maxIter` rounds without every member's |Δ| dropping below `maxChange`, or stalled (GH-537: a
+ *   member failed every round, see [[SccReport.stalled]]). The last-round values are still kept
+ *   (Excel semantics) but callers can gate instead of mistaking exhaustion for stationarity.
+ *   Non-iterative runs (default `recalculate()`, or iterative settings on an acyclic workbook)
+ *   report true vacuously.
  *
  * '''GH-492 — what `converged = true` now certifies.''' An iterative recalculation walks the SCC
  * condensation of the workbook graph ONCE in dependency-first order: a run of acyclic components
@@ -175,6 +226,9 @@ final case class SccReport(
  * @param iterationsUsed
  *   GH-454/GH-492: `cycles.map(_.rounds).max` — the rounds run by the WORST component (0 when no
  *   iteration happened). Equals `maxIter` when any component exhausted; otherwise in (0, maxIter].
+ *   GH-537: a component that STALLED (a member failing every round, see [[SccReport.stalled]]) can
+ *   stop below `maxIter`, so `converged = false` with `iterationsUsed < maxIter` is possible — and
+ *   means every unconverged component stalled rather than oscillated.
  * @param cycles
  *   GH-492: one [[SccReport]] per cyclic component actually iterated, sorted by the component's
  *   canonical key (its minimum member under (sheet name, A1)). Empty on non-iterative and acyclic
@@ -244,7 +298,12 @@ final case class RecalcResult(
    * Recalculated 12 formulas (1 error value)
    * Recalculated 11 formulas; 1 error (Sales!B2: Formula error in 'NOSUCHFN(A1)': ...)
    * Recalculated 40 formulas; converged in 7 iterative round(s)
+   * Recalculated 40 formulas; 2 errors (...); WARNING: iterative calculation stalled after 2 round(s): a cyclic member fails every round
    * }}}
+   *
+   * GH-537: when every unconverged component STALLED (see [[SccReport.stalled]]) the warning names
+   * the stall — the failing member is among the errors listed on the same line. If any component
+   * genuinely oscillated to `maxIter`, exhaustion stays the headline.
    */
   def summary: String =
     val formulaCount = evaluated.valuesIterator.map(_.size).sum
@@ -255,7 +314,10 @@ final case class RecalcResult(
       else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
     val convergence =
       if !converged then
-        s"; WARNING: iterative calculation exhausted $iterationsUsed round(s) without converging (last values kept)"
+        if cycles.exists(c => !c.converged && !c.stalled) then
+          s"; WARNING: iterative calculation exhausted $iterationsUsed round(s) without converging (last values kept)"
+        else
+          s"; WARNING: iterative calculation stalled after $iterationsUsed round(s): a cyclic member fails every round"
       else if iterationsUsed > 0 then s"; converged in $iterationsUsed iterative round(s)"
       else ""
     if isClean then s"Recalculated $formulaCount $formulasLabel$errorValues$convergence"

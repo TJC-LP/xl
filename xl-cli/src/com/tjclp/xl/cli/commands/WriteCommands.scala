@@ -1386,30 +1386,13 @@ object WriteCommands:
    * One-line recalculation summary: formula count plus the first few failing refs (GH-352). Formula
    * errors are data conditions — they are reported, never thrown. GH-344: formulas that COMPUTE an
    * Excel error value (#DIV/0!, ...) evaluate cleanly and cache; their count appears as a
-   * parenthetical (only when > 0), separate from could-not-evaluate host failures.
+   * parenthetical (only when > 0), separate from could-not-evaluate host failures. GH-454/GH-537:
+   * the iterative verdict (converged / exhausted / stalled) rides along.
+   *
+   * This IS `RecalcResult.summary` (ADR-017 §2.8 promises scripts and the CLI report the same
+   * line); the text lives in xl-evaluator so the two can never drift.
    */
-  private def formatRecalcSummary(result: RecalcResult): String =
-    val formulaCount = result.evaluated.valuesIterator.map(_.size).sum
-    val formulasLabel = if formulaCount == 1 then "formula" else "formulas"
-    val errorValueCount = result.excelErrors.size
-    val errorValues =
-      if errorValueCount == 0 then ""
-      else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
-    // GH-454: surface the iterative-calculation verdict — maxIter exhaustion keeps the last
-    // values (Excel semantics, no error) so the summary is the only place it becomes visible.
-    val convergence =
-      if !result.converged then
-        s"; WARNING: iterative calculation exhausted ${result.iterationsUsed} round(s) without converging (last values kept)"
-      else if result.iterationsUsed > 0 then
-        s"; converged in ${result.iterationsUsed} iterative round(s)"
-      else ""
-    if result.isClean then s"Recalculated $formulaCount $formulasLabel$errorValues$convergence"
-    else
-      val maxShown = 3
-      val shown = result.errors.take(maxShown).map(_.render).mkString("; ")
-      val ellipsis = if result.errors.size > maxShown then "; ..." else ""
-      val errorsLabel = if result.errors.size == 1 then "error" else "errors"
-      s"Recalculated $formulaCount $formulasLabel$errorValues; ${result.errors.size} $errorsLabel ($shown$ellipsis)$convergence"
+  private def formatRecalcSummary(result: RecalcResult): String = result.summary
 
   /**
    * Apply multiple operations atomically (JSON from stdin or file).

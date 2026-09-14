@@ -3,7 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
-import com.tjclp.xl.formula.eval.IterativeCalc
+import com.tjclp.xl.formula.eval.{IterationScheme, IterativeCalc}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{CalcPr, Workbook}
 import munit.FunSuite
@@ -11,13 +11,14 @@ import munit.FunSuite
 /**
  * GH-373b: opt-in bounded iterative recalculation for circular workbooks.
  *
- * `recalculate(IterativeCalc(maxIter, maxChange))` fixpoints cycle members with Jacobi iteration
- * (every member reads PREVIOUS-iteration values) instead of erroring: members seed to 0 (Excel's
- * uninitialized semantics), iterate until every |Δ| < maxChange or maxIter, and non-convergence
- * KEEPS the last values with NO error (Excel semantics — the deliberate inversion vs the default
- * path). Dependents of a cycle are NOT pre-marked blocked — they evaluate off the converged values.
- * The default `recalculate()` is byte-identical to before (opt-in only; the CalcPr metadata is
- * deliberately NOT auto-honored — bridge explicitly via
+ * `recalculate(IterativeCalc(maxIter, maxChange))` fixpoints cycle members — a Gauss–Seidel sweep
+ * in the graph's within-component order by default (GH-482), `IterationScheme.Jacobi` for
+ * previous-round reads — instead of erroring: members seed to 0 (Excel's uninitialized semantics;
+ * GH-469 warm-starts from cached numbers), iterate until every |Δ| < maxChange or maxIter, and
+ * non-convergence KEEPS the last values with NO error (Excel semantics — the deliberate inversion
+ * vs the default path). Dependents of a cycle are NOT pre-marked blocked — they evaluate off the
+ * converged values. The default `recalculate()` is byte-identical to before (opt-in only; the
+ * CalcPr metadata is deliberately NOT auto-honored — bridge explicitly via
  * `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)`).
  */
 class IterativeRecalcSpec extends FunSuite:
@@ -62,7 +63,9 @@ class IterativeRecalcSpec extends FunSuite:
   }
 
   test("GH-373: non-convergent oscillator hits maxIter, keeps last values, NO circular error") {
-    // A1 = 1-B1, B1 = A1 oscillates with period 4 from the (0,0) seed; s10 = (1,1).
+    // A1 = 1-B1, B1 = A1. GH-482: the default Gauss–Seidel sweep evaluates A1 then B1 within a
+    // round, so from the (0,0) seed the rounds alternate (1,1)/(0,0) and round 10 lands on (0,0);
+    // Jacobi (every member reads the previous round) has period 4 and lands on (1,1).
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(a1, formula("=1-B1"))
       .put(b1, formula("=A1"))
@@ -71,8 +74,12 @@ class IterativeRecalcSpec extends FunSuite:
       result.errors.isEmpty,
       s"non-convergence must NOT error (Excel semantics), got: ${result.errors.map(_.render)}"
     )
-    assertEquals(cachedNum(result.workbook, "S", a1), Some(BigDecimal(1)))
-    assertEquals(cachedNum(result.workbook, "S", b1), Some(BigDecimal(1)))
+    assertEquals(cachedNum(result.workbook, "S", a1), Some(BigDecimal(0)))
+    assertEquals(cachedNum(result.workbook, "S", b1), Some(BigDecimal(0)))
+    val jacobi = Workbook(sheet)
+      .recalculate(IterativeCalc(10, BigDecimal("0.001"), scheme = IterationScheme.Jacobi))
+    assertEquals(cachedNum(jacobi.workbook, "S", a1), Some(BigDecimal(1)))
+    assertEquals(cachedNum(jacobi.workbook, "S", b1), Some(BigDecimal(1)))
   }
 
   test("GH-373: loose vs tight maxChange trade precision (loose stops far from the fixpoint)") {
@@ -80,8 +87,17 @@ class IterativeRecalcSpec extends FunSuite:
     val tight = convergentPair.recalculate(IterativeCalc(100, BigDecimal("0.0001")))
     val looseB = cachedNum(loose.workbook, "S", b1).getOrElse(fail("loose B1 must cache"))
     val tightB = cachedNum(tight.workbook, "S", b1).getOrElse(fail("tight B1 must cache"))
-    assert((looseB - fixpointB).abs > BigDecimal("0.1"), s"loose stopped too precisely: $looseB")
-    assert((tightB - fixpointB).abs < BigDecimal("0.001"), s"tight not precise enough: $tightB")
+    // GH-482: a Gauss–Seidel sweep lands closer than Jacobi did for the same loose tolerance
+    // (105.25 vs the 105.263… fixpoint); the trade-off itself is what this pins.
+    val looseResidual = (looseB - fixpointB).abs
+    val tightResidual = (tightB - fixpointB).abs
+    assert(looseResidual > BigDecimal("0.005"), s"loose stopped too precisely: $looseB")
+    assert(tightResidual < BigDecimal("0.001"), s"tight not precise enough: $tightB")
+    assert(
+      looseResidual > tightResidual,
+      s"loose ($looseB) must stop farther out than tight ($tightB)"
+    )
+    assert(loose.iterationsUsed < tight.iterationsUsed, "the loose run must also stop sooner")
   }
 
   test("GH-373: default recalculate() is unchanged — cycles error exactly as before") {
@@ -345,4 +361,214 @@ class IterativeRecalcSpec extends FunSuite:
     val default = Workbook(sheet).recalculate()
     assertEquals(iterative.workbook, default.workbook)
     assertEquals(iterative.errors, default.errors)
+  }
+
+  // ===== GH-537: a permanently failing member stalls its component at stationarity =====
+
+  /**
+   * A1/B1 cycle whose B1 fails EVERY round: a reference to a sheet that does not exist is a host
+   * failure (never an Excel error value), and the graph keeps B1 cyclic through its `A1` edge.
+   * Round 1 moves A1 from the 0 seed to 10; round 2 replays round 1 exactly — and so would every
+   * further round, the clock being pinned and the formulas deterministic.
+   */
+  private def failingMemberCycle: Workbook =
+    Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, formula("=B1*0.5+10"))
+        .put(b1, formula("=A1*0.5+Nowhere!A1"))
+    )
+
+  test("GH-537: a member that fails every round stalls the component at stationarity") {
+    val result = failingMemberCycle.recalculate(IterativeCalc(400, BigDecimal("0.001")))
+    val scc = result.cycles.headOption.getOrElse(fail("one cyclic component expected"))
+    assert(!result.converged, "a failing member can never converge")
+    assert(scc.stalled, s"the component must report stalled: ${scc.render}")
+    assertEquals(scc.rounds, 2, "round 2 is the first exact replay of round 1")
+    assertEquals(result.iterationsUsed, 2)
+    // The failing member is the host failure; GH-563 then invalidates its dependents (here A1,
+    // the other member of the cycle) exactly as it does after a failed acyclic cell.
+    assertEquals(result.errors.map(_.ref), Vector(b1, a1), result.errors.map(_.render).toString)
+    assert(
+      result.errors.headOption.exists(_.error.message.contains("Nowhere")),
+      result.errors.map(_.render).toString
+    )
+    assert(
+      result.errors.lift(1).exists(_.error.message.contains("Blocked by an upstream")),
+      result.errors.map(_.render).toString
+    )
+    assert(scc.render.contains("stalled after 2 round(s)"), scc.render)
+    assert(!scc.render.contains("exhausted"), scc.render)
+  }
+
+  test("GH-537: a stall on the last budgeted round is still a stall — rounds can equal maxIter") {
+    // Round 2 is the first exact replay AND the budget's last round: the stall verdict wins and
+    // `rounds == maxIter` is a legitimate shape (`rounds <= maxIter`, not strictly below). With a
+    // budget of ONE round no replay can be observed yet — that is exhaustion, not a stall.
+    val result = failingMemberCycle.recalculate(IterativeCalc(2, BigDecimal("0.001")))
+    val scc = result.cycles.headOption.getOrElse(fail("one cyclic component expected"))
+    assert(!result.converged)
+    assert(scc.stalled, scc.render)
+    assertEquals(scc.rounds, 2)
+    assertEquals(result.iterationsUsed, 2)
+    assert(scc.render.contains("stalled after 2 round(s)"), scc.render)
+    val single = failingMemberCycle.recalculate(IterativeCalc(1, BigDecimal("0.001")))
+    val onlyRound = single.cycles.headOption.getOrElse(fail("one cyclic component expected"))
+    assert(!onlyRound.stalled, onlyRound.render)
+    assertEquals(onlyRound.rounds, 1)
+    assert(onlyRound.render.contains("exhausted 1 round(s)"), onlyRound.render)
+  }
+
+  test("GH-537: a member drawing fresh randomness never replays — the failing cycle exhausts") {
+    // A1 changes every round (a live RAND draw), so no round is an exact replay of the previous
+    // one: the loop must run to maxIter and report exhaustion, not a stall.
+    val wb = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, formula("=B1*0+RAND()"))
+        .put(b1, formula("=A1*0.5+Nowhere!A1"))
+    )
+    val result = wb.recalculate(IterativeCalc(20, BigDecimal("0.001")))
+    val scc = result.cycles.headOption.getOrElse(fail("one cyclic component expected"))
+    assert(!result.converged)
+    assert(!scc.stalled, scc.render)
+    assertEquals(scc.rounds, 20)
+    assert(scc.render.contains("exhausted 20 round(s)"), scc.render)
+    assert(result.summary.contains("exhausted 20 round(s)"), result.summary)
+  }
+
+  test("GH-537: the summary names a stall as a stall, never as exhaustion") {
+    val stalled = failingMemberCycle.recalculate(IterativeCalc(400, BigDecimal("0.001")))
+    assert(
+      stalled.summary.contains(
+        "WARNING: iterative calculation stalled after 2 round(s): a cyclic member fails every round"
+      ),
+      stalled.summary
+    )
+    assert(!stalled.summary.contains("exhausted"), stalled.summary)
+    // One stalled and one genuinely oscillating component: exhaustion stays the headline.
+    val mixed = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, formula("=B1*0.5+10"))
+        .put(b1, formula("=A1*0.5+Nowhere!A1"))
+        .put(c1, formula("=1-D1"))
+        .put(d1, formula("=C1"))
+    ).recalculate(IterativeCalc(10, BigDecimal("0.001")))
+    assertEquals(mixed.cycles.map(_.stalled), Vector(true, false))
+    assertEquals(mixed.iterationsUsed, 10)
+    assert(mixed.summary.contains("exhausted 10 round(s) without converging"), mixed.summary)
+    assert(!mixed.summary.contains("stalled"), mixed.summary)
+  }
+
+  test("GH-537: a cached external-ref member is a constant inside its cycle (pinned cache)") {
+    // GH-353: the closed-workbook cache IS the value. Parsing each member once per fixpoint must
+    // keep the pinned short-circuit: A1 never evaluates, B1 settles on half of it.
+    val wb = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, CellValue.Formula("=[2]Book!A1*B1", Some(num(7))))
+        .put(b1, formula("=A1*0.5"))
+    )
+    val result = wb.recalculate(IterativeCalc(100, BigDecimal("0.001")))
+    assert(result.isClean, result.errors.map(_.render).toString)
+    assert(result.converged)
+    assertEquals(cachedNum(result.workbook, "S", a1), Some(BigDecimal(7)))
+    assertEquals(cachedNum(result.workbook, "S", b1), Some(BigDecimal("3.5")))
+    assertEquals(result.cycles.map(_.rounds), Vector(2))
+  }
+
+  // ===== GH-482: Gauss–Seidel within a component (Excel's sequential sweep) is the default =====
+
+  private def gaussSeidel(maxIter: Int, maxChange: BigDecimal): IterativeCalc =
+    IterativeCalc(maxIter, maxChange, scheme = IterationScheme.GaussSeidel)
+  private def jacobi(maxIter: Int, maxChange: BigDecimal): IterativeCalc =
+    IterativeCalc(maxIter, maxChange, scheme = IterationScheme.Jacobi)
+
+  test("GH-482: the chain A1 = B1+1, B1 = A1 counts to 100 in 100 rounds, as Excel does") {
+    // Excel evaluates the circular chain sequentially with the latest values: A1 steps once per
+    // iteration and B1 copies it, so 100 iterations from empty cells give 100/100. Jacobi hands
+    // B1 the PREVIOUS A1, so the pair advances one unit every two rounds — ~50/50.
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(a1, formula("=B1+1"))
+      .put(b1, formula("=A1"))
+    val excel = Workbook(sheet).recalculate(IterativeCalc(100, BigDecimal("0.001")))
+    assertEquals(cachedNum(excel.workbook, "S", a1), Some(BigDecimal(100)))
+    assertEquals(cachedNum(excel.workbook, "S", b1), Some(BigDecimal(100)))
+    assert(!excel.converged && excel.iterationsUsed == 100, excel.cycles.map(_.render).toString)
+    val old = Workbook(sheet).recalculate(jacobi(100, BigDecimal("0.001")))
+    assertEquals(cachedNum(old.workbook, "S", a1), Some(BigDecimal(50)))
+    assertEquals(cachedNum(old.workbook, "S", b1), Some(BigDecimal(50)))
+  }
+
+  test("GH-482: fromCalcPr selects Gauss–Seidel, and so does the constructor default") {
+    assertEquals(
+      IterativeCalc.fromCalcPr(CalcPr(iterativeCalculation = true)).scheme,
+      IterationScheme.GaussSeidel
+    )
+    assertEquals(IterativeCalc(100, BigDecimal("0.001")).scheme, IterationScheme.GaussSeidel)
+    assertEquals(jacobi(100, BigDecimal("0.001")).scheme, IterationScheme.Jacobi)
+  }
+
+  /** The banker's average-balance idiom: interest on the average of opening and closing balance. */
+  private def averageBalance: Workbook =
+    Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(ARef.from0(0, 0), num(1000)) // A1 opening
+        .put(ARef.from0(0, 1), CellValue.Number(BigDecimal("0.08"))) // A2 rate
+        .put(ARef.from0(0, 2), num(50)) // A3 cash
+        .put(ARef.from0(1, 0), formula("=A1")) // B1 beg
+        .put(ARef.from0(1, 1), formula("=(B1+B4)/2*A2")) // B2 interest
+        .put(ARef.from0(1, 2), formula("=A3-B2")) // B3 pay
+        .put(ARef.from0(1, 3), formula("=B1-B3")) // B4 end
+    )
+
+  test("GH-482: the average-balance idiom converges in strictly fewer rounds under Gauss–Seidel") {
+    val tolerance = BigDecimal("1E-9")
+    val gs = averageBalance.recalculate(gaussSeidel(400, tolerance))
+    val jac = averageBalance.recalculate(jacobi(400, tolerance))
+    assert(
+      gs.converged && jac.converged,
+      s"${gs.cycles.map(_.render)} / ${jac.cycles.map(_.render)}"
+    )
+    val gsRounds = gs.cycles.map(_.rounds).sum
+    val jacRounds = jac.cycles.map(_.rounds).sum
+    assert(gsRounds < jacRounds, s"Gauss–Seidel took $gsRounds rounds, Jacobi $jacRounds")
+    // Same fixpoint: B4 (1 - r/2) = B1 (1 + r/2) - cash
+    val analytic = (BigDecimal(1000) * BigDecimal("1.04") - BigDecimal(50)) / BigDecimal("0.96")
+    val b4 = ARef.from0(1, 3)
+    val gsEnd = cachedNum(gs.workbook, "S", b4).getOrElse(fail("B4 (G-S) must cache"))
+    val jacEnd = cachedNum(jac.workbook, "S", b4).getOrElse(fail("B4 (Jacobi) must cache"))
+    assert((gsEnd - analytic).abs < BigDecimal("1E-6"), s"G-S B4=$gsEnd, expected ~$analytic")
+    assert((gsEnd - jacEnd).abs < BigDecimal("1E-6"), s"schemes disagree: $gsEnd vs $jacEnd")
+  }
+
+  test("GH-482: on every pinned convergent fixture Gauss–Seidel needs no more rounds than Jacobi") {
+    val tolerance = BigDecimal("1E-9")
+    val sumOverCoMembers = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(a1, formula("=SUM(B1:C1)*0.5+10"))
+        .put(b1, formula("=A1*0.5"))
+        .put(c1, formula("=A1*0.25"))
+    )
+    Vector(
+      "convergentPair" -> convergentPair,
+      "poisoned caches" -> Workbook(
+        Sheet(SheetName.unsafe("S"))
+          .put(a1, CellValue.Formula("=B1*0.1", Some(num(-5000))))
+          .put(b1, CellValue.Formula("=100+A1/2", Some(num(9999))))
+      ),
+      "sum over co-members" -> sumOverCoMembers,
+      "average balance" -> averageBalance
+    ).foreach { (label, wb) =>
+      val gs = wb.recalculate(gaussSeidel(400, tolerance))
+      val jac = wb.recalculate(jacobi(400, tolerance))
+      assert(gs.converged && jac.converged, s"$label: ${gs.cycles} / ${jac.cycles}")
+      assert(
+        gs.iterationsUsed <= jac.iterationsUsed,
+        s"$label: Gauss–Seidel ${gs.iterationsUsed} rounds > Jacobi ${jac.iterationsUsed}"
+      )
+      gs.evaluated(SheetName.unsafe("S")).foreach { (ref, value) =>
+        (value, jac.evaluated(SheetName.unsafe("S")).get(ref)) match
+          case (CellValue.Number(g), Some(CellValue.Number(j))) =>
+            assert((g - j).abs < BigDecimal("1E-6"), s"$label ${ref.toA1}: $g vs $j")
+          case (g, j) => fail(s"$label ${ref.toA1}: non-numeric fixpoint $g / $j")
+      }
+    }
   }

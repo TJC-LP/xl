@@ -1112,3 +1112,121 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     val comps = DependencyGraph.qualifiedSccOrder(deps)
     assertEquals(comps.flatMap(_.members), Vector(a1))
   }
+
+  // ===== GH-482: within-component evaluation order (withinComponentOrder) =====
+
+  private def keyOf(q: DependencyGraph.QualifiedRef): (String, String) = (q.sheet.value, q.ref.toA1)
+
+  property("GH-482 permutation: withinComponentOrder is a permutation of the component") {
+    forAll(sccGraphGen) { deps =>
+      DependencyGraph.qualifiedSccOrder(deps).filter(_.cyclic).forall { c =>
+        DependencyGraph.withinComponentOrder(c.members, deps).sortBy(keyOf) == c.members
+      } :| s"not a permutation of some component of $deps"
+    }
+  }
+
+  property("GH-482 determinism: the order depends on the graph VALUE, not on build order") {
+    forAll(sccGraphGen, Gen.choose(0L, 1000000L)) { (deps, seed) =>
+      val rnd = new scala.util.Random(seed)
+      val rebuilt =
+        rnd
+          .shuffle(deps.toVector)
+          .map((k, vs) => k -> rnd.shuffle(vs.toVector).toSet)
+          .toMap
+      DependencyGraph.qualifiedSccOrder(deps).filter(_.cyclic).forall { c =>
+        DependencyGraph.withinComponentOrder(c.members, deps) ==
+          DependencyGraph.withinComponentOrder(rnd.shuffle(c.members), rebuilt)
+      } :| s"nondeterministic within-component order for $deps"
+    }
+  }
+
+  /** Acyclic graphs over `sccUniverse`: a node reads only nodes of a lower index. */
+  private val dagGen: Gen[Map[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]]] =
+    Gen
+      .sequence[List[Set[Int]], Set[Int]](
+        sccUniverse.indices.toList.map(i => Gen.someOf(0 until i).map(_.toSet))
+      )
+      .map { picks =>
+        sccUniverse.zipWithIndex.map((q, i) => q -> picks(i).map(sccUniverse)).toMap
+      }
+
+  /** Kahn with the smallest-key ready node first — the order a cut-free run must reproduce. */
+  private def referenceKahn(
+    nodes: Vector[DependencyGraph.QualifiedRef],
+    deps: Map[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]]
+  ): Vector[DependencyGraph.QualifiedRef] =
+    val members = nodes.toSet
+    @annotation.tailrec
+    def go(
+      remaining: Set[DependencyGraph.QualifiedRef],
+      emitted: Vector[DependencyGraph.QualifiedRef]
+    ): Vector[DependencyGraph.QualifiedRef] =
+      val ready = remaining.filter { q =>
+        deps.getOrElse(q, Set.empty).filter(members).forall(p => p == q || emitted.contains(p))
+      }
+      ready.minByOption(keyOf) match
+        case None => emitted
+        case Some(next) => go(remaining - next, emitted :+ next)
+    go(members, Vector.empty)
+
+  property("GH-482 DAG: on an acyclic member set the order IS the key-ordered Kahn order") {
+    forAll(dagGen) { deps =>
+      val order = DependencyGraph.withinComponentOrder(sccUniverse, deps)
+      (order == referenceKahn(sccUniverse, deps)) :| s"$order vs Kahn for $deps"
+    }
+  }
+
+  test("GH-482: the classic chain A1 = B1+1, B1 = A1 evaluates A1 first") {
+    // Cut at the smallest key (A1), then B1 (which reads A1) is ready: Excel's counter reaches
+    // 100/100 in 100 iterations only if A1 is evaluated before B1 within a round.
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    val deps = Map(q("A1") -> Set(q("B1")), q("B1") -> Set(q("A1")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A1"), q("B1")), deps).map(_.ref.toA1),
+      Vector("A1", "B1")
+    )
+  }
+
+  test("GH-482: the average-balance idiom orders interest, payment, ending balance") {
+    // B2 = (B1+B4)/2*A2 reads B4; B3 = A3-B2 reads B2; B4 = B1-B3 reads B3. Cutting the
+    // smallest key (B2) leaves a chain B2 -> B3 -> B4: one sweep propagates the whole schedule.
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    val deps = Map(q("B2") -> Set(q("B4")), q("B3") -> Set(q("B2")), q("B4") -> Set(q("B3")))
+    assertEquals(
+      DependencyGraph
+        .withinComponentOrder(Vector(q("B4"), q("B2"), q("B3")), deps)
+        .map(_.ref.toA1),
+      Vector("B2", "B3", "B4")
+    )
+  }
+
+  test("GH-482: a self-edge is a back edge, never a blocker; precedents still go first") {
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    // A1 reads itself and B1; B1 reads A1 — the cycle. B1 < A1 would be Kahn's pick only if it
+    // were ready, and it is not (it reads A1): the cut lands on A1, then B1 follows.
+    val deps = Map(q("A1") -> Set(q("A1"), q("B1")), q("B1") -> Set(q("A1")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A1"), q("B1")), deps).map(_.ref.toA1),
+      Vector("A1", "B1")
+    )
+    // With B1 reading nothing in-component, B1 is ready first and A1's self-edge is ignored.
+    val chain =
+      Map(q("A1") -> Set(q("A1"), q("B1")), q("B1") -> Set.empty[DependencyGraph.QualifiedRef])
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A1"), q("B1")), chain).map(_.ref.toA1),
+      Vector("B1", "A1")
+    )
+  }
+
+  test("GH-482: the three-cycle B2 -> A1 -> C3 -> B2 cuts at A1 and follows the chain") {
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    val deps = Map(q("B2") -> Set(q("A1")), q("A1") -> Set(q("C3")), q("C3") -> Set(q("B2")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A1"), q("B2"), q("C3")), deps).map(_.ref.toA1),
+      Vector("A1", "B2", "C3")
+    )
+  }

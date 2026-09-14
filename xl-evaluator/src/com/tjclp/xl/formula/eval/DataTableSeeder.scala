@@ -640,8 +640,8 @@ object DataTableSeeder:
       )
 
   /**
-   * GH-453: per-axis-combination Jacobi fixpoint for a table whose source formula depends on the
-   * cyclic core. The REAL workbook is never touched — everything happens on temp sheets:
+   * GH-453: per-axis-combination fixpoint for a table whose source formula depends on the cyclic
+   * core. The REAL workbook is never touched — everything happens on temp sheets:
    *
    *   1. temp sheets strip exactly `stripSet` — the cells BETWEEN the what-if inputs / cycle and
    *      the source formula (their loaded caches are stale under the substitution); cycle members
@@ -650,9 +650,10 @@ object DataTableSeeder:
    *   2. per interior cell: axis values evaluate against the group's base sheet exactly like the
    *      acyclic path, overlay into the input cells on the temp sheets, the pre-cycle cone resolves
    *      (GH-493/GH-494), the relevant cycle members fixpoint via
-   *      [[WorkbookEvaluator.jacobiFixpoint]] (previous-round reads, 0-seeded, strict
-   *      |Δ| < maxChange, the run's pinned clock), converged values fold in as plain values, the
-   *      post-cycle cone resolves off them, and the source formula evaluates last;
+   *      [[WorkbookEvaluator.jacobiFixpoint]] (the run's [[IterationScheme]] — the Gauss–Seidel
+   *      sweep by default, previous-round reads under Jacobi — 0-seeded, strict |Δ| < maxChange,
+   *      the run's pinned clock), converged values fold in as plain values, the post-cycle cone
+   *      resolves off them, and the source formula evaluates last;
    *   3. a Left anywhere stays tolerant — that cell is left untouched and seeding continues, but
    *      the table reports ONE [[SeedTableWarning.Skipped]] counting the unseeded cells (a
    *      fully-skipped table must never read as a clean run).
@@ -726,21 +727,26 @@ object DataTableSeeder:
     cone: WhatIfCone
   ): (Sheet, Vector[SeedTableWarning]) =
     // The what-if substitution PINS the input cells (Excel semantics): a cycle running
-    // through an input is broken there, so the inputs are never Jacobi members — they stay
+    // through an input is broken there, so the inputs are never fixpoint members — they stay
     // the plain axis values overlaid in step (2). (stripSet already excludes relevantCore,
-    // hence the pinned inputs.) The reduced set may even be acyclic after pinning;
-    // jacobiFixpoint still converges (prev-round reads settle in <= |members|+1 rounds).
+    // hence the pinned inputs.) The reduced set may even be acyclic after pinning; the fixpoint
+    // still converges (a Jacobi sweep settles in <= |members|+1 rounds, a Gauss–Seidel sweep in
+    // its Kahn order in one). GH-482: the sweep order is the graph's within-component order
+    // under Gauss–Seidel and the canonical (sheet, A1) listing under Jacobi — as in recalculate.
+    val canonical: Vector[QualifiedRef] =
+      (relevantCore -- inputQ).toVector.sortBy(q => (q.sheet.value, q.ref.toA1))
+    val sweep: Vector[QualifiedRef] = iterative.scheme match
+      case IterationScheme.GaussSeidel => DependencyGraph.withinComponentOrder(canonical, ctx.deps)
+      case IterationScheme.Jacobi => canonical
     val members: List[(QualifiedRef, Int, String)] =
-      (relevantCore -- inputQ).toList
-        .flatMap { q =>
-          sheetIndex.get(q.sheet).map { idx =>
-            val expr = wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-              case Some(CellValue.Formula(e, _, _)) => e
-              case _ => q.ref.toA1
-            (q, idx, expr)
-          }
+      sweep.toList.flatMap { q =>
+        sheetIndex.get(q.sheet).map { idx =>
+          val expr = wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
+            case Some(CellValue.Formula(e, _, _)) => e
+            case _ => q.ref.toA1
+          (q, idx, expr)
         }
-        .sortBy((q, _, _) => (q.sheet.value, q.ref.toA1))
+      }
     val probes = guardProbes(sheet, kind)
     // The clock arrives pinned from seedWorkbook: one seeding run is one volatile
     // generation, like one recalculation (GH-373) — axis values, member fixpoints, cone
@@ -864,9 +870,18 @@ object DataTableSeeder:
           // GH-469/GH-492: the seeder stays COLD-seeded (Map.empty) on purpose — under what-if
           // substitution the loaded caches are stale by construction, the same argument `stripSet`
           // already makes above. `recalculate`'s warm start is deliberately not inherited here.
+          // The plain `Evaluator.instance` is exactly what the public `evaluateCell` path used
+          // (system rng, no memo): seeding keeps its one-shot evaluation profile.
           val outcome =
-            WorkbookEvaluator
-              .jacobiFixpoint(wb, upstream.sheets, members, iterative, clock, None, Map.empty)
+            WorkbookEvaluator.jacobiFixpoint(
+              wb,
+              upstream.sheets,
+              members,
+              iterative,
+              clock,
+              () => Evaluator.instance,
+              Map.empty
+            )
           val results = outcome.results
           val converged = outcome.converged
           val sourceQ = QualifiedRef(sheet.name, sourceRef)

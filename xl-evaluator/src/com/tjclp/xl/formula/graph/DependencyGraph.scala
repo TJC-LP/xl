@@ -465,18 +465,72 @@ object DependencyGraph:
    * names whose parseable chains actually reach a dynamic function join the cheap substring
    * pre-filter used for cell formulas. This matters for financial models with tens of thousands of
    * formulas referring to a static scenario name such as `Case`.
+   *
+   * GH-537: the work is linear in the names, not sheets × names. Each definition parses once per
+   * distinct text; case-variant spellings of one name (`case`/`CASE` — one name to every reader)
+   * classify once; and a name with no sheet-scoped variant whose definition mentions no other name
+   * is classified ONCE for the workbook — its verdict cannot depend on the reading sheet. Only
+   * names that nest another name (which an unqualified reference resolves from the reader's sheet,
+   * where a sheet-scoped variant may shadow it) keep the per-sheet classification.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def dynamicCells(workbook: Workbook): Set[QualifiedRef] =
     type NameKey = (SheetName, SheetName, String)
 
     val dynamicFunctions = FunctionRegistry.dynamicFunctionNames
-    val memo = scala.collection.mutable.HashMap.empty[NameKey, Boolean]
+    // Token form for the cheap substring pre-filter over cell text (function names are upper).
+    def upper(text: String): String = text.toUpperCase(java.util.Locale.ROOT)
+    // The RESOLUTION relation: two spellings are one name to every reader exactly when
+    // `DefinedNameIndex` resolves them as one, i.e. under `String.equalsIgnoreCase` — per code
+    // point `toLowerCase(toUpperCase(cp))`. `String.toUpperCase` is not that relation (it would
+    // split a Kelvin-sign `K` from `k`), so shadowing and dedup are keyed on this form.
+    def resolutionKey(name: String): String =
+      val folded = new java.lang.StringBuilder(name.length)
+      name
+        .codePoints()
+        .forEach(cp => folded.appendCodePoint(Character.toLowerCase(Character.toUpperCase(cp))))
+      folded.toString
+    // GH-537: definitions and candidate cell formulas parse once per distinct TEXT (the memo
+    // `unresolvedReaders` keeps); the per-(sheet, name) verdict is memoized separately, so a
+    // workbook-scoped name read from 40 sheets is parsed once, not 40 times.
+    val parsed = scala.collection.mutable.HashMap.empty[String, Option[TExpr[?]]]
+    def parse(text: String): Option[TExpr[?]] =
+      parsed.getOrElseUpdate(text, FormulaParser.parse(text).toOption)
     // Positions computed once: this function makes sheets × names lookups, so the per-lookup
     // O(sheets) indexWhere inside lookupDefinedName would add an O(sheets² × names) term.
     // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
     val sheetPosition: Map[SheetName, Int] =
       workbook.sheets.zipWithIndex.reverseIterator.map((s, i) => s.name -> i).toMap
+
+    // GH-537: one classification per resolution key — `case` and `CASE` are one name to every
+    // reader — under the first-declared spelling.
+    val definedNames = workbook.metadata.definedNames
+    val distinctNames: Vector[(String, String)] =
+      definedNames.iterator.map(dn => (resolutionKey(dn.name), dn.name)).distinctBy(_._1).toVector
+    // GH-537: a name is SHEET-INDEPENDENT when no sheet-scoped variant can shadow it on any sheet
+    // and its workbook-scoped definition mentions no other name: lookup then returns the same
+    // definition from every sheet and classification never consults the reading sheet, so ONE
+    // verdict serves the whole workbook (a definition that fails to parse is not dynamic anywhere
+    // and qualifies too). Anything nesting a name stays per sheet, conservatively: an unqualified
+    // nested name resolves from the READER's sheet (`definingSheet` falls back to it) and may be
+    // shadowed there — the GH-520 fixture (`Outer = Driver`, Calc's local `Driver` dynamic).
+    val sheetScopedKeys: Set[String] =
+      definedNames.iterator
+        .filter(_.localSheetId.isDefined)
+        .map(dn => resolutionKey(dn.name))
+        .toSet
+    def mentionsName(expr: TExpr[?]): Boolean =
+      referencesMatching(expr, (_, _) => true, includeDynamicCalls = false)
+    def sheetIndependent(key: String, name: String): Boolean =
+      !sheetScopedKeys.contains(key) &&
+        Evaluator
+          .lookupDefinedNameAt(workbook, None, name)
+          .forall(dn => parse(dn.formula).forall(target => !mentionsName(target)))
+    val (independentNames, dependentNames) =
+      distinctNames.partition((key, name) => sheetIndependent(key, name))
+    val independentKeys: Set[String] = independentNames.iterator.map(_._1).toSet
+    val globalVerdict = scala.collection.mutable.HashMap.empty[String, Boolean]
+    val memo = scala.collection.mutable.HashMap.empty[NameKey, Boolean]
 
     def expressionIsDynamic(
       expr: TExpr[?],
@@ -494,44 +548,72 @@ object DependencyGraph:
           )
       )
 
+    def classify(
+      name: String,
+      lookupFrom: SheetName,
+      fallbackSheet: SheetName,
+      visiting: Set[NameKey]
+    ): Boolean =
+      (for
+        definedName <- Evaluator.lookupDefinedNameAt(workbook, sheetPosition.get(lookupFrom), name)
+        target <- parse(definedName.formula)
+      yield
+        val definingSheet =
+          Evaluator
+            .definedNameScope(workbook, definedName)
+            .map(_.name)
+            .getOrElse(fallbackSheet)
+        expressionIsDynamic(target, definingSheet, visiting)
+      ).getOrElse(false)
+
     def nameIsDynamic(
       name: String,
       lookupFrom: SheetName,
       fallbackSheet: SheetName,
       visiting: Set[NameKey]
     ): Boolean =
-      val key = (lookupFrom, fallbackSheet, name.toUpperCase(java.util.Locale.ROOT))
-      memo.get(key) match
-        case Some(dynamic) => dynamic
-        case None if visiting.contains(key) => false
-        case None =>
-          val dynamic =
-            (for
-              definedName <- Evaluator.lookupDefinedNameAt(
-                workbook,
-                sheetPosition.get(lookupFrom),
-                name
-              )
-              target <- FormulaParser.parse(definedName.formula).toOption
-            yield
-              val definingSheet =
-                Evaluator
-                  .definedNameScope(workbook, definedName)
-                  .map(_.name)
-                  .getOrElse(fallbackSheet)
-              expressionIsDynamic(target, definingSheet, visiting + key)
-            ).getOrElse(false)
-          memo(key) = dynamic
-          dynamic
+      val nameKey = resolutionKey(name)
+      val key = (lookupFrom, fallbackSheet, nameKey)
+      if independentKeys.contains(nameKey) then
+        // Sheet-invariant by construction (see above); its definition nests no name, so the
+        // classification cannot re-enter and `visiting` is moot.
+        globalVerdict.getOrElseUpdate(
+          nameKey,
+          classify(name, lookupFrom, fallbackSheet, Set.empty)
+        )
+      else
+        memo.get(key) match
+          case Some(dynamic) => dynamic
+          case None if visiting.contains(key) => false
+          case None =>
+            val dynamic = classify(name, lookupFrom, fallbackSheet, visiting + key)
+            memo(key) = dynamic
+            dynamic
 
-    val definedNameIds = workbook.metadata.definedNames.iterator.map(_.name).toSet
-    val dynamicNameTokens = workbook.sheets.iterator.flatMap { sheet =>
-      definedNameIds.iterator.collect {
-        case name if nameIsDynamic(name, sheet.name, sheet.name, Set.empty) =>
-          name.toUpperCase(java.util.Locale.ROOT)
-      }
-    }.toSet
-    val candidateTokens = dynamicFunctions ++ dynamicNameTokens
+    // Sheet-independent names are classified once (from any sheet — the first will do);
+    // dependent names once per sheet, as before. A group is dynamic when its verdict is true from
+    // any sheet.
+    val dynamicKeys: Set[String] =
+      workbook.sheets.headOption.fold(Set.empty[String]) { first =>
+        independentNames.iterator.collect {
+          case (key, name) if nameIsDynamic(name, first.name, first.name, Set.empty) => key
+        }.toSet
+      } ++
+        workbook.sheets.iterator.flatMap { sheet =>
+          dependentNames.iterator.collect {
+            case (key, name) if nameIsDynamic(name, sheet.name, sheet.name, Set.empty) => key
+          }
+        }
+    // Tokens are the pre-filter's upper form of EVERY declared spelling of a dynamic group, not
+    // only the first: `toUpperCase` is not the resolution relation (the Kelvin sign U+212A
+    // upper-cases to itself yet resolves as `k`), so with `K` declared first a reader spelled `k`
+    // would otherwise slip past the substring test — pre-GH-537 every spelling had its own token.
+    val nameTokens: Set[String] =
+      definedNames.iterator
+        .filter(dn => dynamicKeys.contains(resolutionKey(dn.name)))
+        .map(dn => upper(dn.name))
+        .toSet
+    val candidateTokens = dynamicFunctions ++ nameTokens
 
     if candidateTokens.isEmpty then Set.empty
     else
@@ -539,11 +621,9 @@ object DependencyGraph:
         sheet.cells.iterator.flatMap { case (ref, cell) =>
           cell.value match
             case CellValue.Formula(expression, _, _)
-                if candidateTokens.exists(
-                  expression.toUpperCase(java.util.Locale.ROOT).contains
-                ) =>
-              FormulaParser.parse(expression) match
-                case scala.util.Right(expr) if expressionIsDynamic(expr, sheet.name, Set.empty) =>
+                if candidateTokens.exists(upper(expression).contains) =>
+              parse(expression) match
+                case Some(expr) if expressionIsDynamic(expr, sheet.name, Set.empty) =>
                   Some(QualifiedRef(sheet.name, ref))
                 case _ => None
             case _ => None
@@ -1715,6 +1795,68 @@ object DependencyGraph:
             drain((frontier - i) ++ newlyReady, nextDegree, acc :+ i)
 
       drain(initial, degree0, Vector.empty).map(comps)
+
+  /**
+   * GH-482: the order in which ONE cyclic component's members evaluate inside a Gauss–Seidel round
+   * — Kahn's algorithm on the subgraph the component induces, with a (sheet name, A1)-ordered
+   * frontier, CUTTING at the smallest-key remaining node whenever the frontier runs dry (inside a
+   * strongly-connected component it is dry from the start: every member reads another). The edges
+   * into a cut node from members not yet emitted are the round's back edges — the reads that see
+   * the PREVIOUS round's value; every other read sees a value already refreshed this round.
+   * Self-edges are back edges by definition and never block.
+   *
+   * A pure function of the graph's VALUE (the discipline of [[qualifiedSccOrder]]): the same
+   * component yields the same order whatever the insertion order of `members`, `dependencies` or
+   * their sets. Laws (DependencyGraphSpec): a permutation of `members`; determinism under shuffle;
+   * on an acyclic member set it IS the key-ordered Kahn order (no cut happens).
+   *
+   * `dependencies` is the workbook graph (`u -> the cells u reads`); edges leaving the component
+   * are ignored. Runs in O((V + E) log V).
+   */
+  def withinComponentOrder(
+    members: Vector[QualifiedRef],
+    dependencies: Map[QualifiedRef, Set[QualifiedRef]]
+  ): Vector[QualifiedRef] =
+    val byKey: Ordering[QualifiedRef] = Ordering.by(q => (q.sheet.value, q.ref.toA1))
+    val memberSet = members.toSet
+    val precedentsOf: Map[QualifiedRef, Set[QualifiedRef]] =
+      members.iterator.map { q =>
+        q -> dependencies.getOrElse(q, Set.empty).filter(p => p != q && memberSet.contains(p))
+      }.toMap
+    val dependentsOf: Map[QualifiedRef, Set[QualifiedRef]] =
+      precedentsOf.iterator
+        .flatMap((u, ps) => ps.iterator.map(p => p -> u))
+        .foldLeft(Map.empty[QualifiedRef, Set[QualifiedRef]]) { case (acc, (p, u)) =>
+          acc.updated(p, acc.getOrElse(p, Set.empty) + u)
+        }
+    val emptyFrontier = scala.collection.immutable.TreeSet.empty[QualifiedRef](using byKey)
+    val degree0: Map[QualifiedRef, Int] = precedentsOf.view.mapValues(_.size).toMap
+    val initialFrontier = emptyFrontier ++ members.filter(q => degree0.getOrElse(q, 0) == 0)
+
+    @tailrec
+    def drain(
+      frontier: scala.collection.immutable.TreeSet[QualifiedRef],
+      remaining: scala.collection.immutable.TreeSet[QualifiedRef],
+      degree: Map[QualifiedRef, Int],
+      acc: Vector[QualifiedRef]
+    ): Vector[QualifiedRef] =
+      // Kahn's next node or — the frontier dry with members remaining — the smallest remaining
+      // key: the CUT, whose not-yet-emitted precedents become this round's back edges.
+      frontier.headOption.orElse(remaining.headOption) match
+        case None => acc
+        case Some(node) =>
+          val stillRemaining = remaining - node
+          val (nextDegree, newlyReady) =
+            dependentsOf.getOrElse(node, Set.empty).foldLeft((degree, emptyFrontier)) {
+              case ((d, ready), dependent) =>
+                val left = d.getOrElse(dependent, 0) - 1
+                // a dependent already emitted by a cut must not re-enter the frontier
+                val readyNow = left == 0 && stillRemaining.contains(dependent)
+                (d.updated(dependent, left), if readyNow then ready + dependent else ready)
+            }
+          drain((frontier - node) ++ newlyReady, stillRemaining, nextDegree, acc :+ node)
+
+    drain(initialFrontier, emptyFrontier ++ members, degree0, Vector.empty)
 
   /**
    * GH-346: transitive dependents over the workbook-level reverse edges (excludes the starting

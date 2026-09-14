@@ -436,3 +436,76 @@ class GlobalFixpointSpec extends FunSuite:
       s"data-table records must never be fixpoint members: ${r.cycles.map(_.render)}"
     )
   }
+
+  // ================= GH-537: the aggregate memo under iteration =================
+
+  /**
+   * The year-1 schedule SCC {B2, B3, B4} with 32 `=SUM(B2:B4)` readers downstream of it and one
+   * `=SUM(A1:A3)` reader upstream (a range the cycle never touches). Every reader has a graph edge
+   * to each member it sums, so the condensation walk evaluates all 32 AFTER the fixpoint — the memo
+   * entry for B2:B4 is filled from FINAL member values and shared by the other 31.
+   */
+  private def sccWithAggregateReaders: Workbook =
+    val readers = (1 to 32).foldLeft(
+      Sheet(SheetName.unsafe("M"))
+        .put(aref("A1"), num(BigDecimal(1000)))
+        .put(aref("A2"), num(BigDecimal("0.08")))
+        .put(aref("A3"), num(BigDecimal(50)))
+        .put(aref("B1"), formula("=A1"))
+        .put(aref("B2"), formula("=(B1+B4)/2*A2"))
+        .put(aref("B3"), formula("=A3-B2"))
+        .put(aref("B4"), formula("=B1-B3"))
+        .put(aref("C1"), formula("=SUM(A1:A3)"))
+    )((s, i) => s.put(aref(s"D$i"), formula("=SUM(B2:B4)")))
+    Workbook(readers)
+
+  test("GH-537: aggregate readers downstream of a cycle cache the FINAL fixpoint sum, exactly") {
+    val r = sccWithAggregateReaders.recalculate(Tight)
+    assert(r.isClean && r.converged, s"${r.errors.map(_.render)} / ${r.cycles.map(_.render)}")
+    val members = n(r.workbook, "M", "B2") + n(r.workbook, "M", "B3") + n(r.workbook, "M", "B4")
+    (1 to 32).foreach { i =>
+      assertEquals(n(r.workbook, "M", s"D$i"), members, s"D$i must sum the converged members")
+    }
+    // The upstream reader sits in the first Straight segment and never sees the cycle.
+    assertEquals(n(r.workbook, "M", "C1"), BigDecimal("1050.08"))
+  }
+
+  test("GH-537: a member aggregating its co-members reaches the analytic fixpoint (no leak)") {
+    // B1 = SUM(B2:B3)*0.5+10 with B2 = B1/2, B3 = B1/4: B1 = 0.375*B1 + 10, so B1 = 16, B2 = 8,
+    // B3 = 4. A memo entry for B2:B3 that survived from round 1 (both members still at the 0
+    // seed) would pin SUM(B2:B3) at 0 and "converge" the cycle at the wrong point (10, 5, 2.5).
+    val s = Sheet(SheetName.unsafe("S"))
+      .put(aref("B1"), formula("=SUM(B2:B3)*0.5+10"))
+      .put(aref("B2"), formula("=B1*0.5"))
+      .put(aref("B3"), formula("=B1*0.25"))
+      .put(aref("D1"), formula("=SUM(B2:B3)")) // downstream readers of the same range
+      .put(aref("E1"), formula("=SUM(B2:B3)+1"))
+    val r = Workbook(s).recalculate(Tight)
+    assert(r.isClean && r.converged, s"${r.errors.map(_.render)} / ${r.cycles.map(_.render)}")
+    assertClose(n(r.workbook, "S", "B1"), BigDecimal(16), "B1")
+    assertClose(n(r.workbook, "S", "B2"), BigDecimal(8), "B2")
+    assertClose(n(r.workbook, "S", "B3"), BigDecimal(4), "B3")
+    assertEquals(n(r.workbook, "S", "D1"), n(r.workbook, "S", "B2") + n(r.workbook, "S", "B3"))
+    assertEquals(n(r.workbook, "S", "E1"), n(r.workbook, "S", "D1") + 1)
+  }
+
+  test("GH-537: aggregate readers around the deferred dynamic bucket read fresh values") {
+    // Z1 is dynamic (deferred) and sums an EAGER component: it reads the finalized members.
+    // The {B5, C5} component contains INDIRECT, so it defers WITH its static reader D5 — which
+    // still evaluates after the fixpoint (dependent-closure) and sums fresh, not stale, values.
+    val s = Sheet(SheetName.unsafe("S"))
+      .put(aref("A1"), num(BigDecimal(5)))
+      .put(aref("B1"), formula("=SUM(B2:B3)*0.5+10"))
+      .put(aref("B2"), formula("=B1*0.5"))
+      .put(aref("B3"), formula("=B1*0.25"))
+      .put(aref("Z1"), CellValue.Formula("=SUM(INDIRECT(\"B1:B3\"))", Some(num(BigDecimal(-1)))))
+      .put(aref("B5"), CellValue.Formula("=C5*0.5+INDIRECT(\"A1\")", Some(num(BigDecimal(-1)))))
+      .put(aref("C5"), CellValue.Formula("=B5*0.5", Some(num(BigDecimal(-1)))))
+      .put(aref("D5"), CellValue.Formula("=SUM(B5:C5)", Some(num(BigDecimal(-1)))))
+    val r = Workbook(s).recalculate(Tight)
+    assert(r.isClean && r.converged, s"${r.errors.map(_.render)} / ${r.cycles.map(_.render)}")
+    assertClose(n(r.workbook, "S", "Z1"), BigDecimal(28), "Z1 = 16 + 8 + 4")
+    // B5 = 0.5*C5 + 5, C5 = 0.5*B5  =>  B5 = 20/3, C5 = 10/3, D5 = 10
+    assertClose(n(r.workbook, "S", "B5"), BigDecimal("6.6666666667"), "B5")
+    assertClose(n(r.workbook, "S", "D5"), BigDecimal(10), "D5")
+  }
