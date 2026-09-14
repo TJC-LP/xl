@@ -829,8 +829,8 @@ object WorkbookEvaluator:
           val (baseSheets, acc0, errs0) = state
           def withText(order: Vector[QualifiedRef]): List[(QualifiedRef, Int, String)] =
             order.toList.flatMap(q => sheetIndex.get(q.sheet).map(idx => (q, idx, formulaText(q))))
-          // `component` is the canonical (sheet, A1) listing: the report, the fold and the error
-          // order keep it. GH-482: a Gauss–Seidel round SWEEPS the members in the graph's
+          // `component` is the canonical grid listing (sheet name, row, column): the report, the
+          // fold and the error order keep it. GH-482: a Gauss–Seidel round SWEEPS the members in the graph's
           // within-component order instead, publishing each value to the members after it;
           // Jacobi keeps the canonical sweep so 0.22.x trajectories (seeded-Rng draw order
           // included) reproduce bit for bit.
@@ -1056,9 +1056,10 @@ object WorkbookEvaluator:
    * (`|Δ|` against the round's start) and the stationarity exit are scheme-independent.
    *
    * GH-537 — the per-round costs and the exit:
-   *   - Member text never changes across rounds, so each member is PARSED ONCE here and its `TExpr`
-   *     evaluated per round ([[SheetEvaluator.evaluateParsedWith]]); a parse failure is the same
-   *     `Parse error:` XLError the acyclic path reports.
+   *   - Member text never changes across rounds, so each DISTINCT member text is PARSED ONCE here
+   *     (through `parse`, [[SheetEvaluator.parseFormula]] unless a test injects a counting seam)
+   *     and its `TExpr` evaluated per round ([[SheetEvaluator.evaluateParsedWith]]); a parse
+   *     failure is the same `Parse error:` XLError the acyclic path reports.
    *   - A member whose overlay is a PINNED cache (GH-353: a cached closed-workbook formula) never
    *     evaluates — its `Some(previous)` overlay IS its value every round, i.e. it is the constant
    *     `seed(q)`; that is decided once, not re-derived per round.
@@ -1090,14 +1091,18 @@ object WorkbookEvaluator:
     pinnedClock: Clock,
     rng: Rng,
     roundEvaluator: Rng => Evaluator,
-    seedValues: Map[QualifiedRef, CellValue]
+    seedValues: Map[QualifiedRef, CellValue],
+    parse: String => XLResult[TExpr[?]] = SheetEvaluator.parseFormula
   ): FixpointOutcome =
     val zero: CellValue = CellValue.Number(BigDecimal(0))
     val seed: Map[QualifiedRef, CellValue] =
       members.map((q, _, _) => q -> seedValues.getOrElse(q, zero)).toMap
     val maxRounds = math.max(1, iterative.maxIter)
+    // GH-537: one parse per DISTINCT text per fixpoint (FixpointEngineSpec counts them).
+    val parsedText: Map[String, XLResult[TExpr[?]]] =
+      members.iterator.map(_._3).distinct.map(text => text -> parse(text)).toMap
     val parsed: Map[QualifiedRef, XLResult[TExpr[?]]] =
-      members.map((q, _, text) => q -> SheetEvaluator.parseFormula(text)).toMap
+      members.map((q, _, text) => q -> parsedText(text)).toMap
     // Pinned-ness depends on the text and on a cache being present — both fixed for the fixpoint.
     val pinnedConstant: Map[QualifiedRef, CellValue] =
       members.flatMap { (q, _, text) =>

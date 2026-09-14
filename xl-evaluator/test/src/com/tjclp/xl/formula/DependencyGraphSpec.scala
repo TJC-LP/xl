@@ -1015,10 +1015,17 @@ class DependencyGraphSpec extends ScalaCheckSuite:
 
   // ===== GH-492: SCC condensation order (qualifiedSccOrder) =====
 
+  // A1, A10 and AA1 on two sheets: the row 9/10 and column Z/AA boundaries where the A1 STRING
+  // order ("A10" < "A2", "AA1" < "B1") and the grid order disagree, so every law below is
+  // exercised across them.
   private val sccUniverse: Vector[DependencyGraph.QualifiedRef] =
     (0 until 6).toVector.map { i =>
       val sheet = if i < 3 then SheetName.unsafe("S1") else SheetName.unsafe("S2")
-      DependencyGraph.QualifiedRef(sheet, ARef.from0(0, i % 3))
+      val ref = i % 3 match
+        case 0 => ARef.from0(0, 0) // A1
+        case 1 => ARef.from0(0, 9) // A10
+        case _ => ARef.from0(26, 0) // AA1
+      DependencyGraph.QualifiedRef(sheet, ref)
     }
 
   private val sccGraphGen
@@ -1077,7 +1084,7 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     }
   }
 
-  test("GH-492: members inside a component are sorted by (sheet name, A1)") {
+  test("GH-492: members inside a component are sorted by (sheet name, row, column)") {
     val s = SheetName.unsafe("S")
     val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
     // B2 -> A1 -> C3 -> B2: one three-member cycle
@@ -1090,6 +1097,21 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     assertEquals(comps.size, 1)
     assertEquals(comps.map(_.members.map(_.ref.toA1)), Vector(Vector("A1", "B2", "C3")))
     assert(comps.forall(_.cyclic))
+  }
+
+  test("GH-482: the member listing is row-major on the grid, not lexicographic on the A1 text") {
+    // "A10" < "AA1" < "B2" as strings; on the grid AA1 (row 1) precedes B2 (row 2) precedes A10.
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    val deps = Map(q("B2") -> Set(q("A10")), q("A10") -> Set(q("AA1")), q("AA1") -> Set(q("B2")))
+    val comps = DependencyGraph.qualifiedSccOrder(deps)
+    assertEquals(comps.map(_.members.map(_.ref.toA1)), Vector(Vector("AA1", "B2", "A10")))
+    // Two independent components order by their top-left member the same way.
+    val two = Map(q("A10") -> Set(q("A10")), q("B2") -> Set(q("B2")))
+    assertEquals(
+      DependencyGraph.qualifiedSccOrder(two).map(_.members.map(_.ref.toA1)),
+      Vector(Vector("B2"), Vector("A10"))
+    )
   }
 
   test("GH-492: a self-loop singleton is cyclic; a plain singleton is not") {
@@ -1115,7 +1137,11 @@ class DependencyGraphSpec extends ScalaCheckSuite:
 
   // ===== GH-482: within-component evaluation order (withinComponentOrder) =====
 
-  private def keyOf(q: DependencyGraph.QualifiedRef): (String, String) = (q.sheet.value, q.ref.toA1)
+  /**
+   * The grid order: sheet name, then row, then column — Excel's left-to-right, top-to-bottom sweep.
+   */
+  private def keyOf(q: DependencyGraph.QualifiedRef): (String, Int, Int) =
+    (q.sheet.value, q.ref.row.index0, q.ref.col.index0)
 
   property("GH-482 permutation: withinComponentOrder is a permutation of the component") {
     forAll(sccGraphGen) { deps =>
@@ -1176,8 +1202,48 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     }
   }
 
+  test("GH-482: the cut is the TOP-LEFT remaining member — row 10 never precedes row 2") {
+    // Same two-cell counter shifted across the row 9/10 and column Z/AA boundaries: the A1
+    // STRING order would cut at A10 ("A10" < "B2") and at AA1 ("AA1" < "Z1"), handing the
+    // trailing cell a round-old value; the grid order cuts at B2 (row 2) and Z1 (column Z).
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    val rows = Map(q("B2") -> Set(q("A10")), q("A10") -> Set(q("B2")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A10"), q("B2")), rows).map(_.ref.toA1),
+      Vector("B2", "A10")
+    )
+    val cols = Map(q("Z1") -> Set(q("AA1")), q("AA1") -> Set(q("Z1")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("AA1"), q("Z1")), cols).map(_.ref.toA1),
+      Vector("Z1", "AA1")
+    )
+    // Within one column the lower row precedes, whatever its digit count.
+    val same = Map(q("A2") -> Set(q("A10")), q("A10") -> Set(q("A2")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A10"), q("A2")), same).map(_.ref.toA1),
+      Vector("A2", "A10")
+    )
+  }
+
+  test("GH-482: a cross-sheet cycle sweeps sheet order first, then row-major within a sheet") {
+    // T!A1 reads S!A10, S!A10 reads S!B2, S!B2 reads T!A1. T!A1 sits on row 1, but sheet name
+    // orders first: the cut lands on sheet S at its top-left member B2 (the A1 STRING order would
+    // cut at A10), then Kahn follows the chain — A10 reads B2, T!A1 reads A10.
+    val sS = SheetName.unsafe("S")
+    val sT = SheetName.unsafe("T")
+    val sA10 = DependencyGraph.QualifiedRef(sS, parseRef("A10"))
+    val sB2 = DependencyGraph.QualifiedRef(sS, parseRef("B2"))
+    val tA1 = DependencyGraph.QualifiedRef(sT, parseRef("A1"))
+    val deps = Map(tA1 -> Set(sA10), sA10 -> Set(sB2), sB2 -> Set(tA1))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(tA1, sA10, sB2), deps),
+      Vector(sB2, sA10, tA1)
+    )
+  }
+
   test("GH-482: the classic chain A1 = B1+1, B1 = A1 evaluates A1 first") {
-    // Cut at the smallest key (A1), then B1 (which reads A1) is ready: Excel's counter reaches
+    // Cut at the top-left member (A1), then B1 (which reads A1) is ready: the counter reaches
     // 100/100 in 100 iterations only if A1 is evaluated before B1 within a round.
     val s = SheetName.unsafe("S")
     val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))

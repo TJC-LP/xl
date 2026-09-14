@@ -41,10 +41,15 @@ enum IterationScheme derives CanEqual:
 
   /**
    * Members evaluate in [[com.tjclp.xl.formula.graph.DependencyGraph.withinComponentOrder]] and
-   * each published value is read by the members after it — Excel's sequential sweep over the
-   * circular chain (`A1 = B1+1`, `B1 = A1` reaches 100/100 after 100 iterations; a self-referencing
-   * counter steps once per iteration), which Jacobi does not reproduce (~50/50). Typically far
-   * fewer rounds on banker-book cycles (average-balance idioms). The default since 0.23.0.
+   * each published value is read by the members after it — a sequential sweep with the latest
+   * values, Excel's iteration model, in Excel's documented sweep order (left to right, top to
+   * bottom; the cut is the component's top-left member). Under it the circular chain `A1 = B1+1`,
+   * `B1 = A1` reaches 100/100 after 100 iterations and a self-referencing counter steps once per
+   * iteration, which Jacobi does not reproduce (~50/50). Typically far fewer rounds on banker-book
+   * cycles (average-balance idioms). The default since 0.23.0.
+   *
+   * The sweep order is xl's deterministic graph order, not a calc chain read from the file: that it
+   * lands where Excel's own chain does on a given book has not been verified against Excel.
    */
   case GaussSeidel
 
@@ -125,11 +130,12 @@ object IterativeCalc:
 /**
  * GH-492: one cyclic strongly-connected component's fixpoint verdict.
  *
- * Members are the component's cells sorted by (sheet name, A1) — the canonical listing. The order a
- * Gauss–Seidel round EVALUATES them in is `DependencyGraph.withinComponentOrder` (GH-482), a pure
- * function of the graph. Uses `(SheetName, ARef)` rather than the graph package's `QualifiedRef`:
- * the latter does not derive `CanEqual`, and the public result type stays free of a graph
- * dependency (the same shape [[CellEvalError]] already uses).
+ * Members are the component's cells sorted by (sheet name, row, column) — the canonical grid
+ * listing. The order a Gauss–Seidel round EVALUATES them in is
+ * `DependencyGraph.withinComponentOrder` (GH-482), a pure function of the graph. Uses
+ * `(SheetName, ARef)` rather than the graph package's `QualifiedRef`: the latter does not derive
+ * `CanEqual`, and the public result type stays free of a graph dependency (the same shape
+ * [[CellEvalError]] already uses).
  *
  * @param converged
  *   true iff every member's |Δ| dropped below `maxChange` within `maxIter` rounds
@@ -168,12 +174,18 @@ final case class SccReport(
       .map((s, r) => s"${SheetName.quoteForFormula(s.value)}!${r.toA1}")
       .mkString(", ")
     val more = if members.sizeIs > 2 then s" (+${members.size - 2} more)" else ""
-    val verdict =
-      if converged then s"converged in $rounds round(s)"
-      else if stalled then s"stalled after $rounds round(s): a member fails every round"
-      else s"exhausted $rounds round(s)"
     val delta = maxDelta.fold("")(d => s", max |Δ| = $d")
     s"$shown$more: $verdict$delta"
+
+  /**
+   * THIS component's verdict with ITS rounds — `converged in 7 round(s)`, `stalled after 2
+   * round(s): a member fails every round`, `exhausted 400 round(s)`. GH-537: a stalled component
+   * reports the round its replay was detected on, never another component's count.
+   */
+  def verdict: String =
+    if converged then s"converged in $rounds round(s)"
+    else if stalled then s"stalled after $rounds round(s): a member fails every round"
+    else s"exhausted $rounds round(s)"
 
 /**
  * Result of a total, whole-workbook recalculation (`wb.recalculate()`).
@@ -233,8 +245,8 @@ final case class SccReport(
  *   means every unconverged component stalled rather than oscillated.
  * @param cycles
  *   GH-492: one [[SccReport]] per cyclic component actually iterated, sorted by the component's
- *   canonical key (its minimum member under (sheet name, A1)). Empty on non-iterative and acyclic
- *   runs. Future diagnostics extend [[SccReport]], not this class.
+ *   canonical key (its top-left member: sheet name, row, column). Empty on non-iterative and
+ *   acyclic runs. Future diagnostics extend [[SccReport]], not this class.
  */
 final case class RecalcResult(
   workbook: Workbook,
@@ -247,6 +259,35 @@ final case class RecalcResult(
 
   /** GH-492: the cyclic components that exhausted their budget — the offenders to name. */
   def unconverged: Vector[SccReport] = cycles.filterNot(_.converged)
+
+  /**
+   * GH-537: the ONE iterative verdict a caller gates on, `None` when every component converged (or
+   * nothing iterated). The `xl` CLI prints it after `WARNING: iterative calculation ` in the
+   * summary and again as the `--strict` reason, so the two can never contradict each other.
+   *
+   * Each number is taken from the components it describes, never from [[iterationsUsed]] (the worst
+   * component overall, converged ones included):
+   *   - any component EXHAUSTED its budget (values still moving at `maxIter`) →
+   *     `exhausted 400 round(s) without converging (last values kept)` — the exhausted components'
+   *     rounds, i.e. the budget; exhaustion stays the headline even beside a stall (the stalled
+   *     component still says so in its own [[SccReport.verdict]])
+   *   - otherwise every unconverged component STALLED →
+   *     `stalled after 2 round(s): a cyclic member fails every round` — the round the stall was
+   *     detected on; `2–5` when several components stalled on different rounds
+   */
+  def unconvergedVerdict: Option[String] =
+    val (stalled, exhausted) = unconverged.partition(_.stalled)
+    exhausted.map(_.rounds).maxOption match
+      case Some(budget) =>
+        Some(s"exhausted $budget round(s) without converging (last values kept)")
+      case None =>
+        val rounds = stalled.map(_.rounds)
+        (rounds.minOption, rounds.maxOption) match
+          case (Some(lo), Some(hi)) if lo == hi =>
+            Some(s"stalled after $hi round(s): a cyclic member fails every round")
+          case (Some(lo), Some(hi)) =>
+            Some(s"stalled after $lo–$hi round(s): a cyclic member fails every round")
+          case _ => None
 
   /**
    * GH-492: no cell failed to evaluate AND every cyclic component reached its fixpoint — the single
@@ -304,8 +345,10 @@ final case class RecalcResult(
    * }}}
    *
    * GH-537: when every unconverged component STALLED (see [[SccReport.stalled]]) the warning names
-   * the stall — the failing member is among the errors listed on the same line. If any component
-   * genuinely oscillated to `maxIter`, exhaustion stays the headline.
+   * the stall — the failing member is among the errors listed on the same line — with the round the
+   * stall was detected on, not the longest run of some converged component. If any component
+   * genuinely oscillated to `maxIter`, exhaustion stays the headline. The text after `iterative
+   * calculation ` is [[unconvergedVerdict]], the same string the `--strict` reason carries.
    */
   def summary: String =
     val formulaCount = evaluated.valuesIterator.map(_.size).sum
@@ -314,14 +357,10 @@ final case class RecalcResult(
     val errorValues =
       if errorValueCount == 0 then ""
       else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
-    val convergence =
-      if !converged then
-        if cycles.exists(c => !c.converged && !c.stalled) then
-          s"; WARNING: iterative calculation exhausted $iterationsUsed round(s) without converging (last values kept)"
-        else
-          s"; WARNING: iterative calculation stalled after $iterationsUsed round(s): a cyclic member fails every round"
-      else if iterationsUsed > 0 then s"; converged in $iterationsUsed iterative round(s)"
-      else ""
+    val convergence = unconvergedVerdict match
+      case Some(verdict) => s"; WARNING: iterative calculation $verdict"
+      case None if iterationsUsed > 0 => s"; converged in $iterationsUsed iterative round(s)"
+      case None => ""
     if isClean then s"Recalculated $formulaCount $formulasLabel$errorValues$convergence"
     else
       val maxShown = 3
@@ -379,8 +418,11 @@ object RecalcResult:
           val toClear = invalidBySheet.getOrElse(name, Set.empty)
           name -> cells.filterNot((ref, _) => toClear.contains(ref))
         }
+    // The components' canonical (grid) key: the same order `DependencyGraph.Scc` lists them in.
     val cycles =
-      cycleReports.sortBy(r => r.members.headOption.fold(("", ""))((s, ref) => (s.value, ref.toA1)))
+      cycleReports.sortBy(r =>
+        r.members.headOption.fold(("", 0, 0))((s, ref) => (s.value, ref.row.index0, ref.col.index0))
+      )
     val converged = cycles.forall(_.converged)
     val iterationsUsed = cycles.map(_.rounds).maxOption.getOrElse(0)
 
