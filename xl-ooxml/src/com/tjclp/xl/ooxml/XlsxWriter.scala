@@ -2642,9 +2642,17 @@ object XlsxWriter:
    *
    * In memory end to end (GH-516): the archive is assembled straight into the returned array
    * through the same strategy dispatch as [[writeWith]] — no scratch file, so a small, read-only or
-   * slow `java.io.tmpdir` cannot fail it; the price is that the whole zip lives in heap (a
-   * `ByteArrayOutputStream`, so at most 2 GB). A clean read-back workbook yields its source bytes
+   * slow `java.io.tmpdir` cannot fail it. A clean read-back workbook yields its source bytes
    * verbatim: `writeToBytes(readFromBytes(bytes))` is byte-identical to `bytes`.
+   *
+   * Memory profile: the whole zip lives in heap (so the archive is capped at 2 GB), in ONE array
+   * sized from the source archive when the workbook has one (`sourceContext.fingerprint.size` —
+   * exact for a clean book's verbatim copy, a close estimate for an edited one) and handed back
+   * without a copy when that size was exact. Transient heap is therefore ~1x the archive for a
+   * clean book, ≤ ~2x for an edited one whose output fits the estimate (the buffer plus one trimmed
+   * copy), and ≤ ~3x when the output outgrows it or there is no source to size from (a fresh
+   * workbook): the buffer then doubles like a default `ByteArrayOutputStream`, whose unsized
+   * profile was 2–3x for every write.
    */
   def writeToBytes(workbook: Workbook): XLResult[Array[Byte]] =
     writeToBytes(workbook, WriterConfig())
@@ -2655,5 +2663,27 @@ object XlsxWriter:
    * published).
    */
   def writeToBytes(workbook: Workbook, config: WriterConfig): XLResult[Array[Byte]] =
-    val out = new ByteArrayOutputStream()
-    writeToTarget(workbook, OutputStreamTarget(out), config).map(_ => out.toByteArray)
+    val out = new SizedByteSink(archiveSizeEstimate(workbook))
+    writeToTarget(workbook, OutputStreamTarget(out), config).map(_ => out.result())
+
+  /** A fresh workbook has no source to size its archive from; start where a small book ends. */
+  private val DefaultArchiveCapacity = 64 * 1024
+
+  /**
+   * The capacity [[writeToBytes]] pre-sizes its array to: the source archive's size when there is
+   * one (bounded to what one array can hold), else [[DefaultArchiveCapacity]].
+   */
+  private def archiveSizeEstimate(workbook: Workbook): Int =
+    workbook.sourceContext
+      .map(ctx => math.min(ctx.fingerprint.size, (Int.MaxValue - 8).toLong).toInt)
+      .filter(_ > 0)
+      .getOrElse(DefaultArchiveCapacity)
+
+  /**
+   * The in-memory target of [[writeToBytes]]: a `ByteArrayOutputStream` pre-sized from an estimate
+   * of the archive, read back WITHOUT the `toByteArray` copy when the estimate was exact (the
+   * verbatim copy of a clean book) — one array of the archive's size, nothing else.
+   */
+  private[ooxml] final class SizedByteSink(capacity: Int) extends ByteArrayOutputStream(capacity):
+    /** The bytes written: the buffer itself when exactly full, else one trimmed copy. */
+    def result(): Array[Byte] = if count == buf.length then buf else toByteArray
