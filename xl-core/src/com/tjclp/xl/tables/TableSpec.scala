@@ -4,17 +4,69 @@ import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.error.{XLError, XLResult}
 
 /**
+ * The aggregate a table column's totals-row cell computes — Excel's totals-row dropdown (ECMA-376
+ * `ST_TotalsRowFunction`, §18.18.86). `Custom` carries the formula Excel stores as the column's
+ * `<totalsRowFormula>` (without the leading `=`).
+ *
+ * @since 0.23.0
+ */
+enum TotalsRowFunction derives CanEqual:
+  case Sum, Min, Max, Average, Count, CountNums, StdDev, Var
+  case Custom(formula: String)
+
+object TotalsRowFunction:
+  /** The `ST_TotalsRowFunction` token Excel writes as `totalsRowFunction`. */
+  def token(function: TotalsRowFunction): String = function match
+    case Sum => "sum"
+    case Min => "min"
+    case Max => "max"
+    case Average => "average"
+    case Count => "count"
+    case CountNums => "countNums"
+    case StdDev => "stdDev"
+    case Var => "var"
+    case Custom(_) => "custom"
+
+  /**
+   * The function a `totalsRowFunction` token names, with the column's `<totalsRowFormula>` for
+   * `custom`; `none`, an unknown token, or `custom` without its formula is `None` (no aggregate).
+   */
+  def fromToken(token: String, formula: Option[String]): Option[TotalsRowFunction] = token match
+    case "sum" => Some(Sum)
+    case "min" => Some(Min)
+    case "max" => Some(Max)
+    case "average" => Some(Average)
+    case "count" => Some(Count)
+    case "countNums" => Some(CountNums)
+    case "stdDev" => Some(StdDev)
+    case "var" => Some(Var)
+    case "custom" => formula.map(Custom.apply)
+    case _ => None
+
+/**
  * Column definition within an Excel table.
  *
- * Each column has a unique ID (1-indexed) and a display name shown in the header row.
+ * Each column has a unique ID (1-indexed), a display name shown in the header row and, when the
+ * table shows a totals row, what its totals-row cell holds: a label (Excel writes "Total" in the
+ * first column) or an aggregate (`SUBTOTAL` in Excel; the [[TotalsRowFunction]] the dropdown
+ * offers) — both optional, an unlabelled cell without an aggregate is empty.
  *
  * @param id
  *   Column identifier (1-indexed, unique within table)
  * @param name
  *   Column display name (shown in header)
+ * @param totalsRowLabel
+ *   The text of this column's totals-row cell (`totalsRowLabel`)
+ * @param totalsRowFunction
+ *   The aggregate this column's totals-row cell computes (`totalsRowFunction`)
  * @since 0.5.0
  */
-final case class TableColumn(id: Long, name: String) derives CanEqual
+final case class TableColumn(
+  id: Long,
+  name: String,
+  totalsRowLabel: Option[String] = None,
+  totalsRowFunction: Option[TotalsRowFunction] = None
+) derives CanEqual
 
 /**
  * AutoFilter configuration for Excel tables.
