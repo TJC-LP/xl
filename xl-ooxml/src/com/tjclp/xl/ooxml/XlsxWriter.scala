@@ -378,17 +378,25 @@ object XlsxWriter:
   /**
    * Build per-sheet table data for serialization.
    *
-   * Assigns global table IDs sequentially across all sheets (1-indexed). Tables are sorted by name
-   * within each sheet for deterministic output.
+   * Table part identity is keyed to the SOURCE (GH-557): a table the source file holds keeps the
+   * part number its source part had (`sourcePartNumbers`, table name → N of `xl/tables/tableN.xml`,
+   * resolved through each sheet's rels), and only a table the source lacks is numbered — past the
+   * highest number in use (the source's, a vanished table's included, and the kept ones), in (sheet
+   * order, name) order. Renumbering every part by sheet order on each write moved a table an
+   * UNTOUCHED sibling sheet's verbatim rels still named by its old number: two sheets resolved to
+   * one part and the other table was orphaned (Excel repaired the file). Excel itself numbers table
+   * parts in creation order, so source numbering out of sheet order is the common case. A fresh
+   * workbook (no source) numbers sequentially, 1-indexed, tables sorted by name per sheet.
    *
    * Returns:
-   *   - Map[Int, Seq[(TableSpec, Long)]]: sheet index (0-based) → tables with global IDs
-   *   - Int: total table count (for content types registration)
-   *   - Map[String, Long]: table name → global table ID (for relationship targeting)
+   *   - Map[Int, Seq[(TableSpec, Long)]]: sheet index (0-based) → tables with their part numbers
+   *   - Seq[Long]: every part number this write emits, ascending (content types registration)
+   *   - Map[String, Long]: table name → part number
    */
   private def buildTablesData(
-    workbook: Workbook
-  ): (Map[Int, Seq[(TableSpec, Long)]], Int, Map[String, Long]) =
+    workbook: Workbook,
+    sourcePartNumbers: Map[String, Long]
+  ): (Map[Int, Seq[(TableSpec, Long)]], Seq[Long], Map[String, Long]) =
     // Flatten all tables from all sheets with their sheet indices
     // Sort by name within each sheet for deterministic ordering
     val allTablesWithIndices: Seq[(TableSpec, Int)] = workbook.sheets.zipWithIndex.flatMap {
@@ -396,10 +404,22 @@ object XlsxWriter:
         sheet.tables.values.toSeq.sortBy(_.name).map(table => (table, sheetIdx))
     }
 
-    // Assign sequential global IDs (1-indexed: table1.xml, table2.xml, etc.)
-    val tablesWithIds: Seq[(TableSpec, Int, Long)] = allTablesWithIndices.zipWithIndex.map {
-      case ((table, sheetIdx), globalIdx) => (table, sheetIdx, (globalIdx + 1).toLong)
-    }
+    // A table the source holds keeps its source part number (first claimant wins should two
+    // source sheets name one part — a corrupt input); the others are numbered afterwards.
+    val (kept, keptNumbers) = allTablesWithIndices
+      .foldLeft((Vector.empty[(TableSpec, Int, Option[Long])], Set.empty[Long])) {
+        case ((acc, taken), (table, sheetIdx)) =>
+          sourcePartNumbers.get(table.name).filterNot(taken.contains) match
+            case Some(n) => (acc :+ ((table, sheetIdx, Some(n))), taken + n)
+            case None => (acc :+ ((table, sheetIdx, None)), taken)
+      }
+    val highestInUse = (sourcePartNumbers.values ++ keptNumbers).maxOption.getOrElse(0L)
+    val (tablesWithIds, _) = kept
+      .foldLeft((Vector.empty[(TableSpec, Int, Long)], highestInUse)) {
+        case ((acc, next), (table, sheetIdx, Some(n))) => (acc :+ ((table, sheetIdx, n)), next)
+        case ((acc, next), (table, sheetIdx, None)) =>
+          (acc :+ ((table, sheetIdx, next + 1)), next + 1)
+      }
 
     // Group by sheet index for per-sheet processing
     val tablesBySheet: Map[Int, Seq[(TableSpec, Long)]] = tablesWithIds
@@ -407,15 +427,22 @@ object XlsxWriter:
         (table, tableId)
       }
 
-    // Total table count for content types
-    val totalTableCount = tablesWithIds.size
+    val tableIds: Seq[Long] = tablesWithIds.map(_._3).sorted
 
-    // Table name → global ID mapping for lookups
+    // Table name → part number mapping for lookups
     val tableIdMap: Map[String, Long] = tablesWithIds.map { case (table, _, tableId) =>
       table.name -> tableId
     }.toMap
 
-    (tablesBySheet, totalTableCount, tableIdMap)
+    (tablesBySheet, tableIds, tableIdMap)
+
+  private val tablePartPath = """xl/tables/table(\d+)\.xml""".r
+
+  /** The N of a table part path `xl/tables/tableN.xml`; None for any other spelling. */
+  private def tablePartNumber(path: String): Option[Long] =
+    path match
+      case tablePartPath(n) => n.toLongOption
+      case _ => None
 
   /**
    * The sheet-level relationships of a regenerated worksheet, planned BEFORE the worksheet is
@@ -2096,14 +2123,14 @@ object XlsxWriter:
                 .map(cp => vmlPathForSheet(Some(ctx), sourceRels, idx, cp))
         }
 
-    // Build table data
-    val (tablesBySheet, totalTableCount, tableIdMap) = buildTablesData(workbook)
-
-    // GH-595: the source's table parts by name, resolved through each sheet's identity-keyed
-    // rels (the reader's own route) — their revision uids ride through the regenerated parts.
-    // Table parts are known parts (never verbatim-copied) and tiny, so one pass per write.
-    val sourceTablesByName: Map[String, OoxmlTable] = sourceContext match
-      case Some(ctx) if totalTableCount > 0 =>
+    // GH-557/GH-595: the source's table parts by table name — (part path, parsed part) —
+    // resolved through each sheet's identity-keyed rels (the reader's own route). Each table keeps
+    // its source PART NUMBER (an untouched sibling sheet's verbatim rels still name it) and lends
+    // its revision uids to the regenerated part. Table parts are known parts (never
+    // verbatim-copied) and tiny, so one pass per write that has any.
+    val sourceTableParts: Map[String, (String, OoxmlTable)] = sourceContext match
+      case Some(ctx)
+          if ctx.partManifest.entries.keysIterator.exists(tablePartNumber(_).isDefined) =>
         withSourceZip(ctx.content) { z =>
           workbook.sheets.indices
             .flatMap(sourceSheetRelsPath(ctx, _))
@@ -2112,11 +2139,26 @@ object XlsxWriter:
             .flatMap(_.relationships)
             .filter(_.`type` == XmlUtil.relTypeTable)
             .flatMap(rel => normalizeSheetRelTarget(rel.target))
-            .flatMap(path => parseOptionalEntry(z, path)(OoxmlTable.fromXml))
-            .map(table => table.name -> table)
+            .distinct
+            .flatMap(path => parseOptionalEntry(z, path)(OoxmlTable.fromXml).map(_ -> path))
+            .map { case (table, path) => table.name -> (path, table) }
             .toMap
         }
       case _ => Map.empty
+    val sourceTablePartNumbers: Map[String, Long] = sourceTableParts.flatMap {
+      case (name, (path, _)) => tablePartNumber(path).map(name -> _)
+    }
+    val sourceTablesByName: Map[String, OoxmlTable] = sourceTableParts.map {
+      case (name, (_, table)) => name -> table
+    }
+
+    // Build table data: source-keyed part numbers, fresh ones past the highest in use
+    val (tablesBySheet, tableIds, tableIdMap) = buildTablesData(workbook, sourceTablePartNumbers)
+
+    // A source table part this write does not emit (its table vanished) leaves the package
+    // registration too: the part is never verbatim-copied, so a kept Override would name nothing.
+    val staleTableParts: Set[String] =
+      sourceTableParts.values.map(_._1).toSet -- tableIds.map(id => s"xl/tables/table$id.xml")
 
     // GH-221: drawing-layer plan — snapshot-equality dirty test, media dedup, first-drawing wiring
     val drawingPlan = planDrawingWrites(workbook, sourceContext, sheetsToRegenerate)
@@ -2275,7 +2317,7 @@ object XlsxWriter:
         // GH-221: source drawing overrides/media defaults are already in the preserved types;
         // register only fresh parts and the media extensions this write touches (idempotent).
         withSst
-          .withTableOverrides(totalTableCount)
+          .withTableOverrides(tableIds)
           .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
           .withDrawingOverrides(drawingPlan.freshPartPaths)
           .withChartOverrides(drawingPlan.freshChartPaths)
@@ -2295,7 +2337,7 @@ object XlsxWriter:
             hasSharedStrings = sharedStringsInOutput
           )
           .withEmittedCommentParts(commentPathBySheet.values.toSet, vmlPathBySheet.values.toSet)
-          .withTableOverrides(totalTableCount)
+          .withTableOverrides(tableIds)
           .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
           .withDrawingOverrides(drawingPlan.allPartPaths)
           .withChartOverrides(drawingPlan.allChartPartPaths)
@@ -2324,7 +2366,8 @@ object XlsxWriter:
     // re-registrations (withDrawingOverrides/withChartOverrides register every MANIFEST part) and
     // non-writer-owned classes reconcile keeps (chart colors/style).
     // GH-555: the calcChain Override leaves with the part.
-    val contentTypes = reconciledContentTypes.withoutParts(removalOrphans ++ droppedCalcChain)
+    val contentTypes =
+      reconciledContentTypes.withoutParts(removalOrphans ++ droppedCalcChain ++ staleTableParts)
 
     // GH-320: ungated like the content types (GH-314) — a metadata-modified write must keep the
     // preserved package-level rels (docProps/custom.xml and friends ride the verbatim copy loop).

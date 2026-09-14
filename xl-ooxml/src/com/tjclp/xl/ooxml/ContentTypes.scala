@@ -75,11 +75,17 @@ case class ContentTypes(
       val partNames = paths.map(p => s"/$p")
       copy(overrides = overrides.filterNot((partName, _) => partNames.contains(partName)))
 
+  /** Register table parts `table1.xml`..`table<tableCount>.xml` (a fresh book's numbering). */
   def withTableOverrides(tableCount: Int): ContentTypes =
-    if tableCount == 0 then this
-    else
-      val overridesToAdd = ContentTypes.tableOverrides(tableCount)
-      copy(overrides = overrides ++ overridesToAdd)
+    withTableOverrides((1 to tableCount).map(_.toLong))
+
+  /**
+   * Register the table parts this write emits, by part number — not necessarily contiguous: a table
+   * the source holds keeps its source part number (GH-557). Idempotent.
+   */
+  def withTableOverrides(tableIds: Seq[Long]): ContentTypes =
+    if tableIds.isEmpty then this
+    else copy(overrides = overrides ++ ContentTypes.tableOverrides(tableIds))
 
   /**
    * Register the generated default theme part (GH-387) — only when the write actually emits it (a
@@ -321,10 +327,8 @@ object ContentTypes extends XmlReadable[ContentTypes]:
       s"/xl/drawings/vmlDrawing$idx.vml" -> ctVmlDrawing
     }
 
-  private def tableOverrides(tableCount: Int): Seq[(String, String)] =
-    (1 to tableCount).map { idx =>
-      s"/xl/tables/table$idx.xml" -> ctTable
-    }
+  private def tableOverrides(tableIds: Seq[Long]): Seq[(String, String)] =
+    tableIds.map(id => s"/xl/tables/table$id.xml" -> ctTable)
 
   /** File extension of a zip part path ("xl/drawings/vmlDrawing2.vml" -> "vml"). */
   private[ooxml] def extensionOf(path: String): Option[String] =

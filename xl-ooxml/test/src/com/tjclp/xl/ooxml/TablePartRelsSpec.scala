@@ -14,6 +14,7 @@ import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.lint.{Finding, LintCategory, WorkbookLint}
+import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.tables.TableSpec
 
 /**
@@ -38,9 +39,11 @@ class TablePartRelsSpec extends FunSuite:
     p.toFile.deleteOnExit()
     p
 
-  private def write(wb: Workbook, label: String): Path =
+  private def write(wb: Workbook, label: String, config: WriterConfig = WriterConfig()): Path =
     val out = tempXlsx(label)
-    XlsxWriter.write(wb, out).fold(err => fail(s"$label write failed: ${err.message}"), _ => ())
+    XlsxWriter
+      .writeWith(wb, out, config)
+      .fold(err => fail(s"$label write failed: ${err.message}"), _ => ())
     out
 
   private def read(path: Path): Workbook =
@@ -218,11 +221,15 @@ class TablePartRelsSpec extends FunSuite:
     assertEquals(read(out).sheets(0).tables.keySet, Set("Budget1"))
   }
 
-  test("GH-557: two sheets whose source table parts are numbered opposite to sheet order") {
+  /**
+   * Two sheets whose table parts are numbered OPPOSITE to sheet order — Excel numbers table parts
+   * in creation order, so a Sheet2 table created first is `table1.xml`: Alpha (sheet1) holds T_A in
+   * `xl/tables/table2.xml`, Beta (sheet2) holds T_B in `xl/tables/table1.xml`.
+   */
+  private def swappedTwoSheet(label: String): Path =
     val wb0 = Workbook(Vector(tableSheet(Sheet("Alpha"), "T_A"), tableSheet(Sheet("Beta"), "T_B")))
-    val fresh = write(wb0, "swap-fresh")
-    // xl numbers table parts by sheet order: Alpha → table1.xml, Beta → table2.xml. Swap them —
-    // another producer (or a later Excel save) may number them the other way round.
+    val fresh = write(wb0, s"$label-fresh")
+    // xl numbers a fresh book's table parts by sheet order: Alpha → table1.xml, Beta → table2.xml
     val t1 = entryText(fresh, "xl/tables/table1.xml")
     val t2 = entryText(fresh, "xl/tables/table2.xml")
     assert(t1.contains("""name="T_A""""), t1)
@@ -230,7 +237,7 @@ class TablePartRelsSpec extends FunSuite:
     // swap the parts; the table's own id follows its file name (the tableColumn ids stay)
     def withTableId(xml: String, id: Int): String =
       """(<table\s[^>]*?\sid=")\d+(")""".r.replaceAllIn(xml, m => s"${m.group(1)}$id${m.group(2)}")
-    val src = surgery(fresh, "swap") {
+    val src = surgery(fresh, label) {
       case ("xl/tables/table1.xml", _) => withTableId(t2, 1)
       case ("xl/tables/table2.xml", _) => withTableId(t1, 2)
       case ("xl/worksheets/_rels/sheet1.xml.rels", xml) =>
@@ -240,15 +247,23 @@ class TablePartRelsSpec extends FunSuite:
       case (_, xml) => xml
     }
     assertRelsResolve(src)
-    val wb = read(src)
-    assertEquals(wb.sheets(0).tables.keySet, Set("T_A"))
-    assertEquals(wb.sheets(1).tables.keySet, Set("T_B"))
-    val edited = wb
-      .put(wb.sheets(0).put(ref"B2" -> 99))
-      .put(wb.sheets(1).put(ref"B2" -> 99))
-    val out = write(edited, "swap-out")
-    assertRelsResolve(out)
-    Vector((1, "T_A"), (2, "T_B")).foreach { case (n, tableName) =>
+    assert(entryText(src, "xl/tables/table2.xml").contains("""name="T_A""""))
+    assert(entryText(src, "xl/tables/table1.xml").contains("""name="T_B""""))
+    src
+
+  /** The package-level findings a mis-numbered table part produces. */
+  private val partFindings =
+    relFindings + LintCategory.UnreferencedPart
+
+  private def assertPartsClean(path: Path): Unit =
+    val bad = lintOf(path).filter(f => partFindings.contains(f.category))
+    assert(bad.isEmpty, bad.mkString("\n"))
+
+  /**
+   * Each sheet's `<tablePart r:id>` resolves, through the EMITTED rels, to a part naming ITS table.
+   */
+  private def assertEachSheetOwnsItsTable(out: Path, expected: Seq[(Int, String)]): Unit =
+    expected.foreach { case (n, tableName) =>
       val sheetXml = entryText(out, s"xl/worksheets/sheet$n.xml")
       val sheetRels = rels(out, s"xl/worksheets/_rels/sheet$n.xml.rels")
       val tableRels = sheetRels.findAllByType(XmlUtil.relTypeTable)
@@ -264,6 +279,113 @@ class TablePartRelsSpec extends FunSuite:
         s"sheet$n's tablePart must name ITS table ($tableName): $target holds $tableXml"
       )
     }
+
+  /**
+   * The swapped book with ONE sheet edited: the sibling rides verbatim — its rels still name the
+   * SOURCE part number — so the write must keep every source table in its source part (byte
+   * stability) and number only new tables past the max. Renumbering by sheet order pointed both
+   * sheets at one part and orphaned the other (`unreferenced-part`, Excel repair).
+   */
+  private def singleSheetEditKeepsBothTables(editIdx: Int, backend: XmlBackend): Unit =
+    val label = s"swap-one-$editIdx-$backend"
+    val src = swappedTwoSheet(label)
+    val srcSiblingRels =
+      entryText(src, s"xl/worksheets/_rels/sheet${2 - editIdx}.xml.rels")
+    val wb = read(src)
+    val edited = wb.put(wb.sheets(editIdx).put(ref"B2" -> 99))
+    val out = write(edited, s"$label-out", WriterConfig(backend = backend))
+    assertPartsClean(out)
+    assertEachSheetOwnsItsTable(out, Vector((1, "T_A"), (2, "T_B")))
+    // the parts keep their source numbers: T_A stays in table2.xml, T_B in table1.xml
+    assert(entryText(out, "xl/tables/table2.xml").contains("""name="T_A""""))
+    assert(entryText(out, "xl/tables/table1.xml").contains("""name="T_B""""))
+    // the untouched sibling's rels ride verbatim
+    assertEquals(
+      entryText(out, s"xl/worksheets/_rels/sheet${2 - editIdx}.xml.rels"),
+      srcSiblingRels
+    )
+    val reread = read(out)
+    assertEquals(reread.sheets(0).tables.keySet, Set("T_A"))
+    assertEquals(reread.sheets(1).tables.keySet, Set("T_B"))
+    assertEquals(reread.sheets(editIdx)(ref"B2").value, CellValue.Number(99))
+
+  test("GH-557: swapped numbering, ONE sheet edited — each sheet keeps its own table (ScalaXml)") {
+    singleSheetEditKeepsBothTables(editIdx = 0, XmlBackend.ScalaXml)
+    singleSheetEditKeepsBothTables(editIdx = 1, XmlBackend.ScalaXml)
+  }
+
+  test("GH-557: swapped numbering, ONE sheet edited — each sheet keeps its own table (SaxStax)") {
+    singleSheetEditKeepsBothTables(editIdx = 0, XmlBackend.SaxStax)
+    singleSheetEditKeepsBothTables(editIdx = 1, XmlBackend.SaxStax)
+  }
+
+  test(
+    "GH-557: a NEW table on a sheet whose kept rels hold printerSettings gets a fresh id past the max"
+  ) {
+    val fresh = write(Workbook(Vector(tableSheet(Sheet("Budget"), "Budget1"))), "printer2-fresh")
+    val printerRel =
+      s"""<Relationship Id="rId1" Type="$relTypePrinterSettings" Target="../printerSettings/printerSettings1.bin"/>"""
+    val src =
+      surgery(fresh, "printer2", Map(printerSettingsPart -> Array[Byte](0, 1, 2, 3))) {
+        case ("xl/worksheets/sheet1.xml", xml) =>
+          xml.replace("""r:id="rId1"""", """r:id="rId2"""")
+        case ("xl/worksheets/_rels/sheet1.xml.rels", xml) =>
+          xml
+            .replace("""Id="rId1"""", """Id="rId2"""")
+            .replace("<Relationship ", printerRel + "<Relationship ")
+        case ("[Content_Types].xml", xml) =>
+          xml.replace("<Override ", printerSettingsDefault + "<Override ")
+        case (_, xml) => xml
+      }
+    assertRelsResolve(src)
+    val wb = read(src)
+    val second = TableSpec
+      .fromColumnNames("T2", "T2", ref"D1:E6", Vector("K", "V"))
+      .fold(e => fail(s"table: $e"), identity)
+    val withSecond = (1 to 5)
+      .foldLeft(wb.sheets(0).put(ref"D1" -> "K").put(ref"E1" -> "V")) { (s, i) =>
+        s.put(ARef.from0(3, i), CellValue.Text(s"k$i")).put(ARef.from0(4, i), CellValue.Number(i))
+      }
+      .withTable(second)
+    val out = write(wb.put(withSecond), "printer2-out")
+    assertPartsClean(out)
+    val sheetRels = rels(out, "xl/worksheets/_rels/sheet1.xml.rels")
+    val ids = sheetRels.relationships.map(_.id)
+    assertEquals(ids.distinct.size, ids.size, s"duplicate rel ids: $sheetRels")
+    // the printerSettings rel keeps rId1; the source table keeps rId2; the new table is allocated
+    // PAST the highest numeric id (rId3), never a positional rId1 that would shadow the printer rel
+    assertEquals(
+      sheetRels.findById("rId1").map(_.`type`),
+      Some(relTypePrinterSettings),
+      sheetRels.toString
+    )
+    assertEquals(tablePartIds(entryText(out, "xl/worksheets/sheet1.xml")), Vector("rId2", "rId3"))
+    assertEquals(
+      sheetRels.findById("rId2").map(_.target),
+      Some("../tables/table1.xml"),
+      sheetRels.toString
+    )
+    assertEquals(
+      sheetRels.findById("rId3").map(_.target),
+      Some("../tables/table2.xml"),
+      sheetRels.toString
+    )
+    assert(entryText(out, "xl/tables/table1.xml").contains("""name="Budget1""""))
+    assert(entryText(out, "xl/tables/table2.xml").contains("""name="T2""""))
+    assertEquals(read(out).sheets(0).tables.keySet, Set("Budget1", "T2"))
+  }
+
+  test("GH-557: two sheets whose source table parts are numbered opposite to sheet order") {
+    val src = swappedTwoSheet("swap")
+    val wb = read(src)
+    assertEquals(wb.sheets(0).tables.keySet, Set("T_A"))
+    assertEquals(wb.sheets(1).tables.keySet, Set("T_B"))
+    val edited = wb
+      .put(wb.sheets(0).put(ref"B2" -> 99))
+      .put(wb.sheets(1).put(ref"B2" -> 99))
+    val out = write(edited, "swap-out")
+    assertPartsClean(out)
+    assertEachSheetOwnsItsTable(out, Vector((1, "T_A"), (2, "T_B")))
     val reread = read(out)
     assertEquals(reread.sheets(0).tables.keySet, Set("T_A"))
     assertEquals(reread.sheets(1).tables.keySet, Set("T_B"))
