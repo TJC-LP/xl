@@ -2,8 +2,12 @@ package com.tjclp.xl.ooxml.style
 
 import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 
-/** Color resolution helpers for OOXML style parsing */
-private[ooxml] object ColorHelpers:
+/**
+ * Color resolution helpers for OOXML style parsing — the ONE theme-index mapping every writer and
+ * reader of a `<color theme="N"/>` shares (the DOM/SAX styles serializers, comments, dxf, and the
+ * streaming `StylePatcher` in xl-cats-effect, hence `private[xl]`).
+ */
+private[xl] object ColorHelpers:
 
   // OOXML theme color indices (ECMA-376 Part 1, 18.8.3):
   // 0=lt1, 1=dk1, 2=lt2, 3=dk2, 4-9=accent1-6, 10=hlink, 11=folHlink

@@ -707,9 +707,10 @@ object OoxmlStyles:
    * Excel's textual form for a theme tint (GH-448): omitted entirely when 0, otherwise up to 17
    * significant digits of the exact binary value in plain notation (`0.79998168889431442`), never
    * Java's shortest-round-trip form (`0.7999816888943144`). Both parse to the same Double; only the
-   * Excel form is byte-identical to Excel-authored files.
+   * Excel form is byte-identical to Excel-authored files. Shared with the streaming `StylePatcher`
+   * (xl-cats-effect), hence `private[xl]`.
    */
-  private[ooxml] def tintToken(tint: Double): Option[String] =
+  private[xl] def tintToken(tint: Double): Option[String] =
     if tint == 0.0 then None
     else
       Some(

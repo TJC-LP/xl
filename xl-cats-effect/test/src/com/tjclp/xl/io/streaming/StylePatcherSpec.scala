@@ -1,8 +1,18 @@
 package com.tjclp.xl.io.streaming
 
+import java.io.ByteArrayInputStream
+import java.nio.charset.StandardCharsets
+import java.util.zip.ZipInputStream
+
 import munit.FunSuite
-import com.tjclp.xl.ooxml.XmlSecurity
+import com.tjclp.xl.api.*
+import com.tjclp.xl.sheets.syntax.withCellStyle
+import com.tjclp.xl.codec.CellCodec.given
+import com.tjclp.xl.macros.ref
+import com.tjclp.xl.ooxml.{XlsxWriter, XmlSecurity}
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+import com.tjclp.xl.styles.color.{Color, ThemeSlot}
 import com.tjclp.xl.styles.fill.{Fill, PatternType}
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -191,4 +201,141 @@ class StylePatcherSpec extends FunSuite:
     assert(!afterUp.contains("lightup"), s"schema-invalid lowercase token: $afterUp")
     // the overlay itself landed
     assert(styleOf(afterUp, upXf).font.bold)
+  }
+
+  // ===== Theme colours: the OOXML theme index, agreeing with the DOM writer for every slot =====
+
+  /**
+   * ECMA-376 §18.8.3 theme indices: 0=lt1, 1=dk1, 2=lt2, 3=dk2, 4..9=accent1..6 — the FIRST four
+   * are the inverse of the ThemeSlot declaration order (Dark1, Light1, Dark2, Light2), so writing
+   * `slot.ordinal` swapped Dark1/Light1 and Dark2/Light2 on the streaming path (`--stream style`)
+   * while the DOM/SAX writers were right: a requested Dark1 fill rendered as Light1 (white).
+   */
+  private val ecmaThemeIndex: Map[ThemeSlot, Int] = Map(
+    ThemeSlot.Light1 -> 0,
+    ThemeSlot.Dark1 -> 1,
+    ThemeSlot.Light2 -> 2,
+    ThemeSlot.Dark2 -> 3,
+    ThemeSlot.Accent1 -> 4,
+    ThemeSlot.Accent2 -> 5,
+    ThemeSlot.Accent3 -> 6,
+    ThemeSlot.Accent4 -> 7,
+    ThemeSlot.Accent5 -> 8,
+    ThemeSlot.Accent6 -> 9
+  )
+
+  /** A style using `color` in the font, a solid fill, a textured fill's background and a border. */
+  private def themedStyle(color: Color): CellStyle =
+    CellStyle.default
+      .withFont(Font("Calibri", 11.0, color = Some(color)))
+      .withFill(Fill.Solid(color))
+      .withBorder(Border(left = BorderSide(BorderStyle.Thin, Some(color))))
+
+  private def parse(stylesXml: String): scala.xml.Elem =
+    XmlSecurity.parseSafe(stylesXml, "styles.xml") match
+      case Right(root) => root
+      case Left(e) => fail(s"parse failed: ${e.message}")
+
+  /** Every colour element of `label` under `section` that names a theme, as its attribute map. */
+  private def themeColours(
+    root: scala.xml.Elem,
+    section: String,
+    label: String
+  ): Set[Map[String, String]] =
+    (root \ section \\ label)
+      .filter(c => (c \ "@theme").nonEmpty)
+      .map(_.attributes.asAttrMap)
+      .toSet
+
+  /** The DOM writer's styles.xml for one cell carrying `style`. */
+  private def domStylesXml(style: CellStyle): scala.xml.Elem =
+    val wb = Workbook(Vector(Sheet("S").put(ref"A1", "x").withCellStyle(ref"A1", style)))
+    val bytes = XlsxWriter.writeToBytes(wb).fold(e => fail(e.message), identity)
+    val zin = new ZipInputStream(new ByteArrayInputStream(bytes))
+    try
+      val xml = Iterator
+        .continually(Option(zin.getNextEntry))
+        .takeWhile(_.isDefined)
+        .flatten
+        .collectFirst {
+          case e if e.getName == "xl/styles.xml" =>
+            new String(zin.readAllBytes(), StandardCharsets.UTF_8)
+        }
+        .getOrElse(fail("no styles.xml"))
+      parse(xml)
+    finally zin.close()
+
+  test("theme colours stream by OOXML theme index (Dark1 = theme=\"1\"), never by enum ordinal") {
+    ThemeSlot.values.foreach { slot =>
+      val (updated, _) =
+        StylePatcher.addStyle(minimalStylesXml, themedStyle(Color.Theme(slot, 0.0))) match
+          case Right(r) => r
+          case Left(e) => fail(s"addStyle failed for $slot: ${e.message}")
+      val root = parse(updated)
+      val expected = Set(Map("theme" -> ecmaThemeIndex(slot).toString))
+      assertEquals(themeColours(root, "fills", "fgColor"), expected, s"$slot fill: $updated")
+      assertEquals(themeColours(root, "fonts", "color"), expected, s"$slot font: $updated")
+      assertEquals(themeColours(root, "borders", "color"), expected, s"$slot border: $updated")
+      assert(
+        !updated.contains("tint=\"0.0\""),
+        s"a zero tint is omitted, as the DOM writer does: $updated"
+      )
+    }
+  }
+
+  test("theme colours: the streaming and DOM writers spell the same CellStyle identically") {
+    ThemeSlot.values.foreach { slot =>
+      val style = themedStyle(Color.Theme(slot, 0.0))
+      val streamed = StylePatcher.addStyle(minimalStylesXml, style) match
+        case Right((xml, _)) => parse(xml)
+        case Left(e) => fail(s"addStyle failed for $slot: ${e.message}")
+      val dom = domStylesXml(style)
+      Seq(("fills", "fgColor"), ("fonts", "color"), ("borders", "color")).foreach {
+        case (section, label) =>
+          assertEquals(
+            themeColours(streamed, section, label),
+            themeColours(dom, section, label),
+            s"$slot: $section/$label differ between --stream and the DOM writer"
+          )
+      }
+    }
+  }
+
+  test("theme colours: a tint streams in Excel's form and the two writers agree") {
+    val style = themedStyle(Color.Theme(ThemeSlot.Accent1, 0.7999816888943144))
+    val streamed = StylePatcher.addStyle(minimalStylesXml, style) match
+      case Right((xml, _)) => parse(xml)
+      case Left(e) => fail(s"addStyle failed: ${e.message}")
+    assertEquals(
+      themeColours(streamed, "fills", "fgColor"),
+      Set(Map("theme" -> "4", "tint" -> "0.79998168889431442"))
+    )
+    assertEquals(
+      themeColours(streamed, "fills", "fgColor"),
+      themeColours(domStylesXml(style), "fills", "fgColor")
+    )
+  }
+
+  test(
+    "theme colours: getStyle reads <fgColor theme=\"1\"/> back as Dark1 (the DOM parser's slot)"
+  ) {
+    ThemeSlot.values.foreach { slot =>
+      val style = themedStyle(Color.Theme(slot, 0.0))
+      val (updated, xfId) = StylePatcher.addStyle(minimalStylesXml, style) match
+        case Right(r) => r
+        case Left(e) => fail(s"addStyle failed for $slot: ${e.message}")
+      assertEquals(styleOf(updated, xfId).fill, style.fill, s"$slot did not round-trip")
+      assertEquals(styleOf(updated, xfId).font.color, Some(Color.Theme(slot, 0.0)))
+    }
+    // and an Excel-authored index resolves through the same table: theme="1" is dk1
+    val excelDark1 = minimalStylesXml
+      .replace(
+        """<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>""",
+        """<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor theme="1"/></patternFill></fill></fills>"""
+      )
+      .replace(
+        """<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>""",
+        """<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0" applyFill="1"/></cellXfs>"""
+      )
+    assertEquals(styleOf(excelDark1, 1).fill, Fill.Solid(Color.Theme(ThemeSlot.Dark1, 0.0)))
   }
