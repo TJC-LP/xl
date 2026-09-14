@@ -233,13 +233,13 @@
 
 ### Test Coverage
 
-**7,317 test cases** (verified via `./mill __.test`, 2026-09-14, wave 29 review fixes): zero failures; the existing style-performance comparison is skipped. The subprocess smokes ran successfully in this verification.
+**7,324 test cases** (verified via `./mill __.test`, 2026-09-14, wave 29 merged with main incl. #658): zero failures; the existing style-performance comparison is skipped. The subprocess smokes ran successfully in this verification.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
 | xl-evaluator | 2561 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1659 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1250 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-ooxml | 1257 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1465 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 179 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |

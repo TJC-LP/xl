@@ -175,12 +175,19 @@ object XmlUtil:
   /**
    * Serialize a node exactly as scala.xml's `Node.toString` does — same empty-tag minimization,
    * same attribute quoting (a `"` in an attribute value stays `&quot;`), same namespace-declaration
-   * placement, same "space-joined atoms" rule — except that TEXT content escapes only what XML
-   * requires: `&`, `<` and `>`. scala.xml also escapes `"` in text, which nothing needs and Excel
-   * never writes; on a model with array constants in defined names (`{"detail",#N/A,FALSE,"mfg"}`),
-   * string literals in formulas and quotes in shared strings that inflated parts and made diffs
-   * against Excel's own bytes noisy (GH-611). The StAX backend already wrote `"` verbatim; both
-   * backends now agree. XML-illegal control characters are dropped, as before (GH-237 parity).
+   * placement, same "space-joined atoms" rule — with two escaping differences:
+   *
+   *   - TEXT content escapes only what XML requires: `&`, `<` and `>`. scala.xml also escapes `"`
+   *     in text, which nothing needs and Excel never writes; on a model with array constants in
+   *     defined names (`{"detail",#N/A,FALSE,"mfg"}`), string literals in formulas and quotes in
+   *     shared strings that inflated parts and made diffs against Excel's own bytes noisy (GH-611).
+   *   - ATTRIBUTE values escape TAB, LF and CR as the character references `&#9;`, `&#10;` and
+   *     `&#13;` ([[escapeAttr]], GH-649). scala.xml writes them raw, and XML attribute-value
+   *     normalization (XML 1.0 §3.3.3) turns a raw one into a space on the next parse — a
+   *     data-validation prompt with a line break came back as `l1 l2`. Excel writes the references.
+   *
+   * The StAX backend agrees on both ([[StaxSaxWriter]]). XML-illegal control characters are
+   * dropped, as before (GH-237 parity).
    */
   def serialize(node: Node, pscope: NamespaceBinding, sb: StringBuilder): StringBuilder =
     node match
@@ -195,7 +202,7 @@ object XmlUtil:
       case el: Elem =>
         sb.append('<')
         el.nameToString(sb)
-        serializeAttributes(el.attributes, sb)
+        if el.attributes ne null then serializeAttributes(el.attributes, sb)
         el.scope.buildString(sb, pscope)
         if el.child.isEmpty && el.minimizeEmpty then sb.append("/>")
         else
@@ -205,26 +212,6 @@ object XmlUtil:
           el.nameToString(sb)
           sb.append('>')
       case other => sb.append(other.toString)
-
-  /**
-   * The attributes of an element as scala.xml's `MetaData.buildString` renders them —
-   * ` key="value"` per attribute in list order, a prefixed key as `pre:key`, a null-valued (absent)
-   * attribute skipped — except that the value goes through [[escapeAttr]] (GH-649): scala.xml's
-   * `Utility.escape` leaves TAB/LF/CR raw in attribute values, which attribute-value normalization
-   * turns into spaces on the next parse. An attribute value is a node sequence: text and atoms are
-   * escaped, entity references and other special nodes render themselves, comments are stripped.
-   */
-  private def serializeAttributes(md: MetaData, sb: StringBuilder): Unit =
-    md.iterator.foreach { m =>
-      sb.append(' ').append(m.prefixedKey).append("=\"")
-      m.value.foreach {
-        case _: Comment => ()
-        case a: Atom[?] => escapeAttr(a.data.toString, sb)
-        case s: SpecialNode => s.buildString(sb)
-        case other => escapeAttr(other.text, sb)
-      }
-      sb.append('"')
-    }
 
   /** scala.xml's `sequenceToXML`: a run made only of non-Text atoms is space-joined. */
   private def serializeChildren(
@@ -239,6 +226,31 @@ object XmlUtil:
         serialize(c, pscope, sb)
       }
     else children.foreach(serialize(_, pscope, sb))
+
+  /**
+   * scala.xml's `MetaData.buildString` — ` key="value"` per attribute, `pre:key` when prefixed, in
+   * chain order, a null-valued attribute contributing its space only — with the value escaped by
+   * [[escapeAttr]]. Always double-quoted: `"` is escaped, so scala.xml's single-quote fallback can
+   * never fire.
+   */
+  @annotation.tailrec
+  private def serializeAttributes(md: MetaData, sb: StringBuilder): Unit =
+    md match
+      case Null => ()
+      case a: Attribute =>
+        sb.append(' ')
+        if a.value ne null then
+          if a.isPrefixed then sb.append(a.pre).append(':')
+          sb.append(a.key).append('=').append('"')
+          a.value.foreach {
+            case t: Text => escapeAttr(t.data, sb)
+            case at: Atom[?] => escapeAttr(at.data.toString, sb)
+            case other => sb.append(other.toString)
+          }
+          sb.append('"')
+        serializeAttributes(a.next, sb)
+      case other =>
+        other.buildString(sb)
 
   /**
    * Text-content escape (GH-611): `&`, `<`, `>` only — `"` and `'` verbatim. Characters below
@@ -304,6 +316,9 @@ object XmlUtil:
   /** [[escapeAttr]] into a fresh string. */
   def escapeAttr(value: String): String =
     escapeAttr(value, new StringBuilder(value.length + 16)).toString
+
+  /** [[escapeText]] into a fresh string. */
+  def escapeText(text: String): String = escapeText(text, new StringBuilder(text.length)).toString
 
   /** Get required attribute value */
   def getAttr(elem: Elem, name: String): Either[String, String] =
@@ -420,10 +435,12 @@ object XmlUtil:
    * ST_Xstring escape for ATTRIBUTE values (GH-429): prompt/error message attributes on
    * `<dataValidation>`.
    *
-   * Attribute-value normalization (XML 1.0 §3.3.3) turns raw TAB/LF/CR into spaces on re-parse — a
-   * raw newline in an attr value survives serialization but comes back as a space — so all three
-   * must be escaped for fidelity, not just CR as in element content ([[escapeXstring]]). Literal
-   * `_xHHHH_` patterns protect their leading underscore as `_x005F_`.
+   * Only literal `_xHHHH_` patterns need protecting here, their leading underscore as `_x005F_`, so
+   * that [[decodeXstring]] on read is unambiguous. TAB, LF and CR stay raw in the value: attribute
+   * values cross the writers as `&#9;`/`&#10;`/`&#13;` character references ([[escapeAttr]],
+   * GH-649) — the spelling Excel itself writes — where before GH-649 this escape spelled them
+   * `_x0009_`/`_x000A_`/`_x000D_` because the writers emitted them raw and attribute-value
+   * normalization turned them into spaces. Both spellings still decode on read.
    *
    * Law: `decodeXstring(escapeXstringAttr(s)) == s`.
    */
@@ -432,9 +449,7 @@ object XmlUtil:
     var needs = false
     var i = 0
     while !needs && i < s.length do
-      val c = s.charAt(i)
-      if c == '\r' || c == '\n' || c == '\t' || (c == '_' && isXstringEscapeAt(s, i)) then
-        needs = true
+      if s.charAt(i) == '_' && isXstringEscapeAt(s, i) then needs = true
       i += 1
     if !needs then s
     else
@@ -442,33 +457,9 @@ object XmlUtil:
       var j = 0
       while j < s.length do
         val c = s.charAt(j)
-        if c == '\r' then sb.append("_x000D_")
-        else if c == '\n' then sb.append("_x000A_")
-        else if c == '\t' then sb.append("_x0009_")
-        else if c == '_' && isXstringEscapeAt(s, j) then sb.append("_x005F_")
+        if c == '_' && isXstringEscapeAt(s, j) then sb.append("_x005F_")
         else sb.append(c)
         j += 1
-      sb.toString
-
-  /**
-   * The ST_Xstring guard alone (GH-649): a LITERAL `_xHHHH_` in attribute text protects its leading
-   * underscore as `_x005F_` so [[decodeXstring]] hands it back unchanged, while TAB/LF/CR are left
-   * to the writers' attribute escaping ([[escapeAttr]]: `&#9;`/`&#10;`/`&#13;`, the spelling Excel
-   * and openpyxl use) instead of the GH-429 `_x0009_`/`_x000A_`/`_x000D_` of [[escapeXstringAttr]],
-   * which the reader keeps decoding for files written that way.
-   *
-   * Law: `decodeXstring(protectXstringLiterals(s)) == s`. Fast path returns the input unchanged.
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  def protectXstringLiterals(s: String): String =
-    if s.indexOf("_x") < 0 then s
-    else
-      val sb = new java.lang.StringBuilder(s.length + 8)
-      var i = 0
-      while i < s.length do
-        val c = s.charAt(i)
-        if c == '_' && isXstringEscapeAt(s, i) then sb.append("_x005F_") else sb.append(c)
-        i += 1
       sb.toString
 
   /**
