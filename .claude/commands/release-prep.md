@@ -92,7 +92,8 @@ move the `## [Unreleased]` content under a new `## [$ARGUMENTS] - <YYYY-MM-DD>` 
 empty `## [Unreleased]` section) and include it in the release commit. The extraction below reads
 release notes from that heading, so a missing heading produces an empty tag message.
 
-After committing, create an **annotated tag** with release notes from CHANGELOG.md:
+After the release PR is squash-merged (see Push), create an **annotated tag** on the merge commit
+with release notes from CHANGELOG.md:
 
 ```bash
 # Step 1: Extract and preview release notes (run separately to avoid zsh parse issues)
@@ -112,16 +113,31 @@ git cat-file -t "v0.5.0-RC1"
 
 **Important**: Do NOT use `git tag v$ARGUMENTS` (without `-a`) - this creates a lightweight tag with no release notes, causing GitHub releases to show the commit message instead.
 
-### Push
+### Push — through a pull request, then tag the MERGE commit
 
-Push the commit and tag to trigger the release workflow:
+`main` only accepts pull requests (repository rule GH013: "Changes must be made through a pull
+request"), and merges are squash merges, so the release commit's SHA changes on merge. Every
+release tag must sit on `main`, so **never tag before the merge** (a tag pushed early points at a
+commit that is not on `main` and starts the Release workflow from it — 0.23.0 had to cancel that
+run and delete the tag):
 
 ```bash
-git push origin main
+# 1. Land the release commit through a PR (title = the commit subject)
+git checkout -b release-$VERSION
+git push -u origin release-$VERSION
+gh pr create --base main --head release-$VERSION --title "chore(release): Bump version to $VERSION" --body "..."
+gh pr checks <PR> --watch
+gh pr merge <PR> --squash --delete-branch --subject "chore(release): Bump version to $VERSION (#<PR>)"
+
+# 2. Tag the squash commit on main (annotated, notes from the CHANGELOG heading — see Tagging)
+git fetch origin && git checkout -B main origin/main
+git tag -a "v$VERSION" -F <notes-file>
+git cat-file -t "v$VERSION"          # must print "tag"
+git branch -r --contains "v$VERSION" # must list origin/main
 git push origin "v$VERSION"
 ```
 
-The release workflow will:
+The tag push triggers the release workflow, which will:
 1. Build native binaries for all platforms
 2. Publish to Maven Central
 3. Create GitHub Release with the tag message as release notes
