@@ -57,7 +57,7 @@ object ValueParser:
    * `sheet.dataTable` in a script; there is no batch op for data tables.
    */
   def dataTableFormulaError(formula: String): Option[String] =
-    val stripped = formula.trim.stripPrefix("=").trim
+    val stripped = CellValue.canonicalFormulaText(formula)
     Option.when(stripped.toUpperCase.startsWith("TABLE("))(
       s"'$formula' is a data-table record display text, not a writable formula " +
         "(Excel would show #NAME?). Author the table with " +

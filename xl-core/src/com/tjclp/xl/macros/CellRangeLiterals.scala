@@ -13,9 +13,10 @@ import scala.quoted.*
  * }}}
  *
  * GH-479: every path — compile-time literal, all-literal interpolation, runtime interpolation —
- * stores the model's canonical bare expression ([[CellValue.canonicalFormulaText]]: the display
- * form's single leading '=' removed, nothing else), so an fx-authored cell compares equal to its
- * OOXML read-back.
+ * stores the model's canonical bare expression ([[CellValue.canonicalFormulaText]]: surrounding
+ * whitespace trimmed, the display form's single leading '=' removed, trimmed again; interior spaces
+ * kept), so an fx-authored cell compares equal to its OOXML read-back. A literal that is empty once
+ * canonical (`fx""`, `fx"="`, a blank) fails to compile.
  *
  * Note: For cell and range references, use the unified `ref` macro instead.
  */

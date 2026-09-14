@@ -208,6 +208,18 @@ class FormulaFormattingSpec extends FunSuite:
       case Left(err) => fail(s"putFormulaInheriting failed: $err")
   }
 
+  test("GH-479: putFormulaInheriting stores the one canonical text for a padded formula") {
+    val sheet = base
+      .put(ref"B2", 1000000, currency)
+      .put(ref"B3", 600000, currency)
+    // trim, one leading '=' off, trim — the same rule as fx, FormulaParser.parse and the CLI
+    sheet.putFormulaInheriting(ref"B4", " = B2 - B3 ") match
+      case Right(updated) =>
+        assertEquals(updated.cells.get(ref"B4").map(_.value), Some(CellValue.Formula("B2 - B3")))
+        assertEquals(numFmtOf(updated, ref"B4"), Some(NumFmt.Currency))
+      case Left(err) => fail(s"putFormulaInheriting failed: $err")
+  }
+
   test("putFormulaInheriting leaves style untouched when categories are mixed") {
     val sheet = base
       .put(ref"B2", 100, currency)

@@ -1542,7 +1542,7 @@ object BatchParser:
     formulaStr: String,
     format: Option[NumFmt]
   ): IO[Workbook] =
-    val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+    val formula = CellValue.canonicalFormulaText(formulaStr)
     val value = CellValue.Formula(formula, None)
 
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
@@ -1575,7 +1575,7 @@ object BatchParser:
     fromRef: String,
     format: Option[NumFmt]
   ): IO[(Workbook, Vector[OffGridHit])] =
-    val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+    val formula = CellValue.canonicalFormulaText(formulaStr)
     val fullFormula = s"=$formula"
 
     for
@@ -1645,7 +1645,7 @@ object BatchParser:
       // Apply formulas
       result <- updateSheet(wb, sheetName) { sheet =>
         range.cellsRowMajor.zip(formulas.iterator).foldLeft(sheet) { case (s, (ref, formulaStr)) =>
-          val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+          val formula = CellValue.canonicalFormulaText(formulaStr)
           val cachedValue =
             SheetEvaluator.evaluateFormula(s)(s"=$formula", workbook = Some(wb)).toOption
           applyNumFmt(s.put(ref, CellValue.Formula(formula, cachedValue)), ref, format)

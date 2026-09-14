@@ -1,6 +1,7 @@
 package com.tjclp.xl.ops
 
 import com.tjclp.xl.addressing.{Column, Row, SheetName}
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.workbooks.Workbook
 
@@ -72,7 +73,7 @@ object FormulaSupport:
    */
   val textOnly: FormulaSupport = new FormulaSupport:
     def validate(formula: String): XLResult[Unit] =
-      if formula.trim.stripPrefix("=").trim.isEmpty then
+      if CellValue.canonicalFormulaText(formula).isEmpty then
         Left(XLError.FormulaError(formula, "empty formula"))
       else Right(())
 

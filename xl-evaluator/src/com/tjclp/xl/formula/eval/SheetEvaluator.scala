@@ -470,14 +470,15 @@ object SheetEvaluator:
     formula: String,
     workbook: Option[Workbook]
   ): XLResult[Sheet] =
+    // GH-479: the model's one canonical rule (trim, one leading '=' off, trim) is applied first, so
+    // a padded `" = B2 - B3 "` parses and is stored exactly as fx / the CLI would store it
+    val canonical = CellValue.canonicalFormulaText(formula)
     FormulaParser
-      .parse(formula)
+      .parse(canonical)
       .left
       .map(parseError => XLError.FormulaError(formula, s"Parse error: $parseError"))
       .map { expr =>
-        // GH-479: store the model's canonical bare text whichever shape the caller passed
-        val withFormula =
-          sheet.put(ref, CellValue.Formula(CellValue.canonicalFormulaText(formula)))
+        val withFormula = sheet.put(ref, CellValue.Formula(canonical))
         val currentStyle =
           withFormula.cells.get(ref).flatMap(_.styleId).flatMap(withFormula.styleRegistry.get)
         // Excel parity: inherit only into a General-formatted target (formats are inferred

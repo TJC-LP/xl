@@ -558,7 +558,7 @@ object WriteCommands:
     policy: WritePolicy,
     warn: Warning => IO[Unit]
   ): IO[String] =
-    val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+    val formula = CellValue.canonicalFormulaText(formulaStr)
     val fullFormula = s"=$formula"
     for
       parsedExpr <- IO.fromEither(
@@ -607,7 +607,7 @@ object WriteCommands:
     policy: WritePolicy,
     warn: Warning => IO[Unit]
   ): IO[String] =
-    val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+    val formula = CellValue.canonicalFormulaText(formulaStr)
     val fullFormula = s"=$formula"
     for
       parsedExpr <- IO.fromEither(
@@ -652,7 +652,7 @@ object WriteCommands:
           // Parse and apply each formula (using iterator to avoid toList)
           updates <- range.cellsRowMajor.zip(formulas.iterator).toList.traverse {
             (ref, formulaStr) =>
-              val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+              val formula = CellValue.canonicalFormulaText(formulaStr)
               val fullFormula = s"=$formula"
               IO.fromEither(
                 FormulaParser

@@ -71,16 +71,19 @@ object CellValue:
     case _ => Text(value.toString)
 
   /**
-   * The model's canonical formula text (GH-479): exactly one leading '=' removed and nothing else —
-   * a leading '+' (Excel's alternate prefix) stays, an interior '=' is untouched and no whitespace
-   * is trimmed. Pure and total. Idempotent on the two shapes a formula has — the display form `=A1`
-   * and the bare form `A1` both map to `A1` — but NOT a fixed point for a doubled prefix: `==A1` is
-   * not a formula, is stripped once per entry (to `=A1`), and every writer strips the remainder at
-   * the `<f>` boundary, so such a value reads back as `A1`. The single definition every canonical
-   * entry shares (`fx`, `FormulaParser.parse`, [[formula]], `putFormulaInheriting`, the edit
-   * interpreter).
+   * The model's canonical formula text (GH-479): surrounding whitespace trimmed, exactly one
+   * leading '=' removed, trimmed again — and nothing interior changes: a leading '+' (Excel's
+   * alternate prefix) stays, an interior '=' and interior spaces are untouched. So `" = SUM(A1) "`
+   * and `"=SUM(A1)"` are the same formula, `"SUM( A1 , B1 )"` keeps its spaces, and a blank or a
+   * lone `=` (padded or not) is empty. Pure and total. Idempotent on the two shapes a formula has —
+   * the display form `=A1` and the bare form `A1` both map to `A1` — but NOT a fixed point for a
+   * doubled prefix: `==A1` is not a formula, is stripped once per entry (to `=A1`), and every
+   * writer strips the remainder at the `<f>` boundary, so such a value reads back as `A1`. The
+   * single definition every canonical entry shares (`fx`, `FormulaParser.parse`, [[formula]],
+   * `putFormulaInheriting`, the edit interpreter, the CLI's `putf` and batch `putf`).
    */
-  def canonicalFormulaText(expression: String): String = expression.stripPrefix("=")
+  def canonicalFormulaText(expression: String): String =
+    expression.trim.stripPrefix("=").trim
 
   /**
    * Validated, canonicalizing constructor for Formula values (GH-479).
@@ -125,10 +128,14 @@ object CellValue:
    * construction is total. This is the substrate #419's authoring sugar builds on.
    *
    * @param cachedValue
-   *   Optional cached result value; a data table record caches scalars, never a Formula.
+   *   Optional cached result value; a data table record caches scalars, never a Formula. The
+   *   invariant [[formula]] refuses with a Left is kept here totally: a Formula offered as the
+   *   cache is dropped, so the record is the cache-less record every writer would emit for it
+   *   anyway.
    */
   def dataTable(kind: FormulaKind.DataTable, cachedValue: Option[CellValue] = None): Formula =
-    Formula(FormulaKind.displayExpression(kind), cachedValue, kind)
+    val scalarCache = cachedValue.filterNot { case _: Formula => true; case _ => false }
+    Formula(FormulaKind.displayExpression(kind), scalarCache, kind)
 
   // Excel epoch for the 1900 date system: December 30, 1899 (not Jan 1, 1900, to account for
   // Excel's 1900 leap-year bug). Epoch for the 1904 date system (legacy Mac Excel): January 1,

@@ -159,7 +159,8 @@ class EditInterpreterSpec extends FunSuite:
   test("put-formula stores the text uncached (leading = dropped); an empty formula is refused") {
     val s = sheetAfter(Workbook(baseData), Edit.PutFormula(loc("G1"), "=SUM(B2:B4)", None))
     assertEquals(s(a1("G1")).value, CellValue.Formula("SUM(B2:B4)", None))
-    // GH-479: the shared canonical strip keeps this path's trim semantics (trim, strip, trim)
+    // GH-479: the shared canonical rule IS trim, strip, trim — the same text fx / FormulaParser /
+    // the CLI store (FormulaInterpolationSpec pins the other entries on the same input)
     val padded =
       sheetAfter(Workbook(baseData), Edit.PutFormula(loc("G1"), " = SUM(B2:B4) ", None))
     assertEquals(padded(a1("G1")).value, CellValue.Formula("SUM(B2:B4)", None))
