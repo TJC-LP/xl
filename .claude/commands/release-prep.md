@@ -1,127 +1,168 @@
 # Release Preparation
 
-Prepare the codebase for release version: $ARGUMENTS
+Prepare and cut release version: $ARGUMENTS
 
-## Instructions
+If `$ARGUMENTS` is empty, do not guess silently: read the fallback in `build.mill`
+(`sys.env.getOrElse("PUBLISH_VERSION", "<current>")`) — that is the LAST release — and propose the
+next version from the `## [Unreleased]` section of `CHANGELOG.md` (any `**Breaking` entry → bump
+the minor while we are pre-1.0; otherwise the patch). State the version you are using in your
+first message and proceed. Below, `NEW` is that version and `OLD` the `build.mill` fallback.
 
-Update all version references from current SNAPSHOT/version to the new release version.
+The work order matters: **branch → bump → verify → commit → PR → squash-merge → tag the merge
+commit → push the tag**. `main` only accepts pull requests (repository rule GH013) and merges are
+squash merges, so the release commit's SHA changes on merge and the tag can only be created
+afterwards. Every release tag sits on `main`.
 
-### Files to Update
+## 1. Branch
 
-> **Line numbers drift between releases.** Always re-confirm with grep before editing — the
-> authoritative list of every version location is:
+```bash
+git checkout main && git pull --ff-only origin main
+git checkout -b release-NEW
+```
+
+## 2. Bump every version location
+
+> **Line numbers drift between releases.** The authoritative list is the grep, not this file:
 > ```bash
-> grep -rln "<OLD_VERSION>" --include="*.scala" --include="*.mill" --include="*.json" --include="*.md" . \
->   | grep -v "out/" | grep -v ".scala-build" | grep -v CHANGELOG.md
+> grep -rn "OLD" --include="*.scala" --include="*.mill" --include="*.json" --include="*.md" . \
+>   | grep -v "out/" | grep -v ".scala-build" | grep -v CHANGELOG.md | grep -v docs/RELEASING.md
 > ```
+> Two kinds of hit come back. **Pins** (dependency coordinates, version fields, the skill floor)
+> all move to `NEW`. **History** ("since 0.22.0", "0.20.0–0.22.0 printed bare arrays", "the rule
+> before 0.22.0") stays as it is — it describes a past release. Read each hit before editing.
 
-1. **`build.mill`** (line 17)
-   - Find: `val version: String = sys.env.getOrElse("PUBLISH_VERSION", "...")`
-   - Update the fallback version string
+The dependency coordinates are one find-and-replace across the tree (excluding `CHANGELOG.md` and
+`docs/RELEASING.md`): `com.tjclp::xl:OLD`, `com.tjclp::xl-core:OLD` … `xl-evaluator:OLD`, and
+sbt's `"com.tjclp" %% "xl" % "OLD"`. That covers `README.md`, `docs/QUICK-START.md`,
+`docs/reference/scripting.md`, `examples/project.scala`, `examples/README.md`,
+`plugin/skills/xl-scripting/SKILL.md`, `plugin/skills/xl-scripting/reference/RECIPES.md` (its
+recipe headers are intentionally byte-identical), `plugin/skills/xl-scripting/reference/INSTALL.md`
+(inside a `printf`) and the scaladoc of `xl/src/com/tjclp/xl/scripting.scala`. The release
+workflow **fails the release** if the xl-scripting pins do not match the tag.
 
-2. **`xl-core/src/com/tjclp/xl/workbooks/WorkbookMetadata.scala`** (line 19)
-   - Update `appVersion` default value: `appVersion: Option[String] = Some("...")`
+Then the individual fields:
 
-3. **`plugin/.claude-plugin/plugin.json`** (the `"version"` field)
-   - Update the plugin marketplace version. **Do not skip this** — it has drifted in past
-     releases (was stale at 0.7.0) because it was missing from this list.
+1. **`build.mill`** — `val version: String = sys.env.getOrElse("PUBLISH_VERSION", "NEW")`.
+2. **`xl-core/src/com/tjclp/xl/workbooks/WorkbookMetadata.scala`** — `appVersion: Option[String] = Some("NEW")`.
+3. **`plugin/.claude-plugin/plugin.json`** — `"version": "NEW"`. **Do not skip** — it drifted to
+   0.7.0 once because it was missing from this list; CI's `plugin-version` gate now compares it
+   with `build.mill`.
+4. **`xl-cli/src/com/tjclp/xl/cli/contract/Render.scala`** — the example envelope in the scaladoc
+   (`"version": "OLD"`), so the documented sample matches what the binary prints.
+5. **`plugin/skills/xl-cli/SKILL.md`** — the `**Requires xl >= …**` line (and the
+   `xl --version must print …` bullet under Environment) becomes `NEW`. If the skill carries the
+   `<!-- unreleased-contract -->` marker with its blockquote ("X has not shipped yet … install from
+   source … the last release lacks …"), **remove both** now: this release ships that contract. A
+   marker left behind, or a `Requires` version that differs from `plugin.json` without the marker,
+   fails CI's `plugin-version` gate. The install snippets auto-detect the latest release and need
+   no edit.
+6. **`CHANGELOG.md`** — insert `## [NEW] - <YYYY-MM-DD>` directly under `## [Unreleased]` so every
+   entry moves under the new heading and `[Unreleased]` is left empty. The tag message is
+   extracted from this heading (step 7): a missing heading gives an empty GitHub release. If the
+   release deserves a one-paragraph summary above its `### Added`, write it here.
+7. **`docs/STATUS.md`** — `**Last Updated**: <date> (NEW)`, a `**New in NEW** (<date>)` paragraph
+   with the release's headline bullets above the previous release's paragraph, and the test-count
+   line/table if they are stale (`./mill __.test` in step 3 gives the numbers).
+8. **`docs/plan/roadmap.md`** — `**Current Version**: **NEW** (…)` and the release's section
+   heading `(Unreleased)` → `(Released <date>)`.
 
-4. **`examples/project.scala`** (line 5)
-   - Update the umbrella `//> using dep com.tjclp::xl:...` line (single dependency, not 4)
+Skip **`docs/RELEASING.md`** (example version strings) and the historical headings in
+`CHANGELOG.md`.
 
-5. **`README.md`**
-   - Update `//> using dep` line (~line 11)
-   - Update `ivyDeps` line (~line 58) and the commented per-module `ivy"..."` examples (~lines 61-64)
+## 3. Verify (all on the release branch; every `./mill` call gets a 600000 ms timeout)
 
-6. **`docs/QUICK-START.md`**
-   - Update Mill `ivyDeps` (~line 15), sbt `libraryDependencies` (~line 22), and `//> using dep` (~line 27)
-
-7. **`examples/README.md`** (~line 144)
-   - Update the `com.tjclp::xl:...` reference in prose
-
-8. **`plugin/skills/xl-scripting/SKILL.md` + `plugin/skills/xl-scripting/reference/RECIPES.md`**
-   - Update every `//> using dep com.tjclp::xl:...` line (the recipe headers are intentionally
-     byte-identical, so a single find-replace covers all of them). The release workflow has a
-     gate that **fails the release** if these pins don't match the tag.
-   - After bumping, run `./scripts/verify-skill-snippets.sh --local` — this also catches "new
-     version breaks documented patterns" before tagging.
-
-9. **`plugin/skills/xl-cli/SKILL.md`** (the `**Requires xl >= …**` line and the marker under it)
-   - Bump `Requires xl >= <version>` to the release version.
-   - If the skill documents a contract that had not shipped yet, it carries the literal marker
-     `<!-- unreleased-contract -->` followed by a blockquote pointing at the from-source install
-     (`make install-jar`) and listing what the last release lacks. Remove the marker **and** that
-     blockquote when the release that carries the contract ships; a marker left behind, or a
-     `Requires` version that differs from `plugin.json` without the marker, fails CI's
-     `plugin-version` gate.
-   - The install snippets themselves auto-detect the latest release from the GitHub API and need
-     no edit.
-
-### Files to SKIP
-
-- **`docs/RELEASING.md`** - Contains example version strings for documentation
-- **`CHANGELOG.md`** - Historical version headings; managed separately during release notes
-
-### Verification Steps
-
-After updating all files:
-
-1. Run `./mill __.compile` to verify compilation
-2. Run `./mill __.test` to verify tests pass
-3. Run `./scripts/test-examples.sh` (version drift guard + examples against the local build)
-4. Run `./scripts/verify-skill-snippets.sh --local` (xl-scripting skill snippets compile)
-5. Run this to verify no SNAPSHOT refs remain:
+1. `./mill __.compile`
+2. `./mill __.test` — note the per-module counts for STATUS/CLAUDE.md/testing-guide if they moved
+3. `./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources`
+4. `./scripts/test-examples.sh` — version-drift guard plus the examples against the local build
+5. `./scripts/verify-skill-snippets.sh --local` — the xl-scripting snippets compile against `NEW`
+6. No SNAPSHOT references:
    ```bash
    grep -r "SNAPSHOT" --include="*.scala" --include="*.mill" --include="*.md" . | grep -v RELEASING.md | grep -v ".scala-build" | grep -v "out/" | grep -v ".claude/commands"
    ```
-6. Confirm new release features are documented in `plugin/skills/xl-scripting/reference/API.md`
-   and `docs/reference/scripting.md` — cross-check the release's CHANGELOG entries against both
-   files before tagging (doc drift here ships to every skill user).
+7. **Doc drift into the skills.** Every public API the release's CHANGELOG names must appear in
+   `plugin/skills/xl-scripting/reference/API.md` and `docs/reference/scripting.md`; drift here
+   ships to every skill user. Make it mechanical: pull the backticked identifiers out of the new
+   heading's `### Added` / `### Changed` entries (`withDefinedName`, `StructuralCachePolicy`,
+   `Fill.pattern`, `TotalsRowFunction`, …) and `grep -c` each in both files; anything at 0 that a
+   script author would call gets a table row or a sentence — a row in the right table with the
+   version and issue link is the house style (`| \`wb.withDefinedName(…)\` | \`Workbook\` | 0.23.0
+   ([#538](…)): … |`). 0.23.0 found five such gaps at this step.
+8. The `plugin-version` gate's inputs agree: `jq -r .version plugin/.claude-plugin/plugin.json`,
+   `grep -oE 'Requires xl >= [0-9.]+' plugin/skills/xl-cli/SKILL.md`, and no
+   `unreleased-contract` marker.
 
-### Commit
+## 4. Commit
 
-When complete, stage and commit with message:
+Stage the touched paths explicitly (never `git add -A`) and commit:
+
 ```
-chore(release): Bump version to $ARGUMENTS
+chore(release): Bump version to NEW
 ```
 
-### Tagging
+with a body saying what moved (pins, CHANGELOG heading, STATUS/roadmap, any skill-doc additions)
+and which gates ran.
 
-**Step 0 — CHANGELOG heading**: Before tagging, add the new version heading to CHANGELOG.md —
-move the `## [Unreleased]` content under a new `## [$ARGUMENTS] - <YYYY-MM-DD>` entry (leaving an
-empty `## [Unreleased]` section) and include it in the release commit. The extraction below reads
-release notes from that heading, so a missing heading produces an empty tag message.
-
-After committing, create an **annotated tag** with release notes from CHANGELOG.md:
+## 5. Pull request and squash merge
 
 ```bash
-# Step 1: Extract and preview release notes (run separately to avoid zsh parse issues)
-awk '/^## \[0.5.0-RC1\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md | sed '/^$/d' | head -50
-
-# Step 2: Create annotated tag with heredoc (replace version and paste notes)
-git tag -a "v0.5.0-RC1" -m "$(cat <<'EOF'
-<paste release notes here>
-EOF
-)"
-
-# Step 3: Verify it's annotated (should print "tag", not "commit")
-git cat-file -t "v0.5.0-RC1"
+git push -u origin release-NEW
+gh pr create --base main --head release-NEW --title "chore(release): Bump version to NEW" --body "<what moved, gates>"
+gh pr checks <PR> --watch --fail-fast
+gh pr merge <PR> --squash --delete-branch --subject "chore(release): Bump version to NEW (#<PR>)"
 ```
 
-**Note**: The awk command with `$VERSION` variable substitution causes zsh parse errors. Use literal version strings in each command instead of variable chaining.
+Do **not** `git push origin main` (GH013 rejects it) and do **not** create the tag yet.
 
-**Important**: Do NOT use `git tag v$ARGUMENTS` (without `-a`) - this creates a lightweight tag with no release notes, causing GitHub releases to show the commit message instead.
-
-### Push
-
-Push the commit and tag to trigger the release workflow:
+## 6. Realign `main`
 
 ```bash
-git push origin main
-git push origin "v$VERSION"
+git fetch origin && git checkout -B main origin/main   # the squash commit; your local release commit is gone from main by design
+git log --oneline -1                                   # chore(release): Bump version to NEW (#<PR>)
 ```
 
-The release workflow will:
-1. Build native binaries for all platforms
-2. Publish to Maven Central
-3. Create GitHub Release with the tag message as release notes
+## 7. Tag the merge commit (annotated, release notes from the CHANGELOG heading)
+
+```bash
+# Extract the notes (literal version — a $VERSION inside the awk pattern trips zsh)
+awk '/^## \[NEW\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md | sed '/^$/d' > /tmp/notes-NEW.md
+wc -l /tmp/notes-NEW.md                                # non-zero, or the heading is wrong
+{ printf 'xl NEW — <one-line theme>\n\n'; cat /tmp/notes-NEW.md; } > /tmp/tag-NEW.md
+
+git tag -a "vNEW" -F /tmp/tag-NEW.md
+git cat-file -t "vNEW"                                 # must print "tag" (annotated), never "commit"
+git branch -r --contains "vNEW"                        # must list origin/main
+git push origin "vNEW"
+```
+
+Never `git tag vNEW` without `-a`: a lightweight tag has no message and the GitHub release shows
+the commit message instead of the notes.
+
+## 8. Watch the release
+
+```bash
+gh run list --limit 3                                  # "Release" on vNEW should be in_progress
+gh run watch <run-id> --exit-status --interval 30      # ~25 min: five native builds, then publish
+gh release view vNEW --json name,isDraft,assets --jq '{name,isDraft,assets:[.assets[].name]}'
+```
+
+Expected assets: `xl-NEW-{darwin-amd64,darwin-arm64,linux-amd64,linux-arm64}`,
+`xl-NEW-windows-amd64.exe`, `xl-cli-NEW.tar.gz`, `xl-scripting-skill-NEW.zip`, `xl-skill-NEW.zip`.
+Locally, `make install` rebuilds the native CLI at the released version.
+
+## Recovery: a tag was pushed before the merge
+
+The tag points at a commit that never reaches `main`, and the Release workflow is already
+running from it. Before it publishes to Maven Central (irreversible — a second publish of the same
+version is rejected, so the real release would then fail):
+
+```bash
+gh run list --limit 3                                  # find the Release run on vNEW
+gh run cancel <run-id>
+git push origin :refs/tags/vNEW                        # delete the remote tag
+git tag -d vNEW                                        # and the local one
+```
+
+Then continue from step 5. The cancelled run's "Publish to Maven Central" job shows as `fail`
+in `gh pr checks` afterwards; `gh run view <run-id> --json jobs` must say `cancelled` for it, with
+no `startedAt` before the cancel. (0.23.0 went through exactly this.)
