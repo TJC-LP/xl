@@ -30,7 +30,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `--in-place` | `-i` | no | Edit the input file in place (instead of -o) |
 | `--backend` | — | yes | XML writer backend: scalaxml (default) or saxstax (faster) |
 | `--stream` | — | no | O(1)-memory streaming for large files: search, stats, bounds, view, cell, filter, describe, sheets, names, lint; put, putf, style and the streamable batch ops (other write verbs accept the flag but load the workbook; each verb's `stream` says which — o1, backend, refused) |
-| `--no-recalc` | — | no | Write verbs: apply the edit and recalculate nothing; structural edits carry every pre-edit cache forward and mark the workbook fullCalcOnLoad |
+| `--no-recalc` | — | no | Write verbs: apply the edit and recalculate nothing; structural edits keep only the caches the edit provably left unchanged, leave the rest uncached and mark the workbook fullCalcOnLoad (Excel recomputes on open; LibreOffice and cache-only readers display what is cached) |
 | `--preserve-caches` | — | no | Alias for --no-recalc |
 | `--strict` | — | no | Write verbs: exit 1 when the recalculation reports formula errors, non-convergence or data-table seed warnings (after `view` it is view's own --eval gate) |
 

@@ -424,6 +424,51 @@ class StructuralFormulaSpec extends FunSuite:
     assertEquals(d(ref"E31").value, CellValue.Formula("A1*2", cachedNum(777)))
   }
 
+  test(
+    "GH-509 review: PreserveUntouched withdraws every reader of a deleted band — direct, #REF!-ed, transitive and cross-sheet — and keeps the rest"
+  ) {
+    // The LibreOffice reproduction from the #509 review: A1=5, A2=10, B1=SUM(A1:A2), B2=ROW()*10,
+    // C1=B1+B2, delete row 2. The truth is B1=5 and C1=#REF!; the pre-edit 15 and 35 must not
+    // survive under the policy the CLI's --no-recalc uses, because LibreOffice (default "never
+    // recalculate on load") and every cache-only reader display a carried <v> as-is. The
+    // withdrawal must be transitive and cross the sheet boundary (Other!A1 reads C1 two hops
+    // away) and must spare what the edit provably left alone (D1 and Other!A2 read only A1,
+    // above the cut, with unchanged text and address).
+    val s = new Sheet(name = S)
+      .put(ref"A1", CellValue.Number(BigDecimal(5)))
+      .put(ref"A2", CellValue.Number(BigDecimal(10)))
+      .put(ref"B1", CellValue.Formula("SUM(A1:A2)", cachedNum(15))) // range the band shortens
+      .put(ref"B2", CellValue.Formula("ROW()*10", cachedNum(20))) // deleted with its row
+      .put(ref"C1", CellValue.Formula("B1+B2", cachedNum(35))) // reads a deleted cell -> #REF!
+      .put(ref"D1", CellValue.Formula("A1*2", cachedNum(10))) // reads above the cut only
+    val other = Sheet("Other")
+      .put(ref"A1", CellValue.Formula("S!C1*2", cachedNum(70))) // two-hop, cross-sheet
+      .put(ref"A2", CellValue.Formula("S!D1+1", cachedNum(11))) // reads a provably unchanged cell
+    val r = StructuralEditor.deleteRows(
+      Workbook(s, other),
+      S,
+      at = 1,
+      count = 1,
+      policy = StructuralCachePolicy.PreserveUntouched
+    )
+    val edited = sheetNamed(r, "S")
+    assertEquals(edited(ref"B1").value, CellValue.Formula("SUM(A1:A1)", None))
+    assertEquals(edited(ref"C1").value, CellValue.Formula("B1+#REF!", None))
+    assertEquals(edited(ref"D1").value, CellValue.Formula("A1*2", cachedNum(10)))
+    assert(edited.cells.get(ref"B2").isEmpty, "row 2 is gone")
+    val o = sheetNamed(r, "Other")
+    assertEquals(o(ref"A1").value, CellValue.Formula("S!C1*2", None))
+    assertEquals(o(ref"A2").value, CellValue.Formula("S!D1+1", cachedNum(11)))
+    // and CarryForward — the library-only policy — is exactly what LibreOffice cannot be trusted
+    // with: it keeps the 15 and the 35 by design, for a caller who controls the reader.
+    val carried = sheetNamed(
+      StructuralEditor.deleteRows(Workbook(s, other), S, at = 1, count = 1, policy = carry),
+      "S"
+    )
+    assertEquals(carried(ref"B1").value, CellValue.Formula("SUM(A1:A1)", cachedNum(15)))
+    assertEquals(carried(ref"C1").value, CellValue.Formula("B1+#REF!", cachedNum(35)))
+  }
+
   test("deleting a row invalidates the old cached result of a shrinking SUM range") {
     val s = new Sheet(name = S)
       .put(ref"A1", CellValue.Number(BigDecimal(1)))
