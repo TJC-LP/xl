@@ -230,14 +230,14 @@ As of the wave 29 review fixes (2026-09-14), from the full-suite JUnit reports; 
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 2561 |
-| xl-core | 1659 |
-| xl-ooxml | 1257 |
-| xl-cli | 1465 |
-| xl-cats-effect | 179 |
+| xl-evaluator | 2572 |
+| xl-core | 1682 |
+| xl-ooxml | 1276 |
+| xl-cli | 1489 |
+| xl-cats-effect | 183 |
 | xl-agent | 147 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 56 |
-| **Total** | **7,324** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 58 |
+| **Total** | **7,407** |
 
 ## Test Quality Metrics
 

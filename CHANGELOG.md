@@ -268,6 +268,21 @@ the grammar-complete formula generator (#653). #519 (SIGTERM) had already shippe
 - **Breaking: a record whose field names collide under `RowCodec.headerKey`** (`unitPrice` /
   `unit_price`, `rev` / `Rev`) **no longer derives a `RowCodec`**, even for positional `putRows` /
   `readRows` (#614, PR #659 review); rename a field or give one an `@header`. See Fixed.
+- **`XlsxWriter.writeToBytes` heap** (#516 follow-up, PR #659 review): the array is sized from the
+  source archive (exact for a clean book, returned without a copy) instead of a doubling
+  `ByteArrayOutputStream` plus a final copy: ~1x the archive in transient heap for a clean book,
+  ≤ ~2x edited, ≤ ~3x only for a fresh book or an outgrown estimate (was 2–3x for every write).
+  The tmpdir-independence claim is pinned from a child JVM whose `java.io.tmpdir` does not exist.
+- **Breaking (binary): `TableColumn` and `OoxmlTableColumn` gain defaulted fields**
+  (`totalsRowLabel`, `totalsRowFunction`; `totalsRowFormula` on the OOXML column) — constructor
+  calls compile unchanged, `case TableColumn(id, name)` extractor patterns need the new arity,
+  binary-incompatible for 0.22.x consumers. `TableConversions.toOoxml(spec, id)` is kept as a
+  two-argument overload (the wave's defaulted third parameter had removed the 0.22.x JVM method —
+  `NoSuchMethodError`); `toOoxml(spec, id, source)` no longer has a default.
+- **Breaking: `totalsRowCount` is authoritative on read** (`OoxmlTable.fromXml` /
+  `TableConversions.fromOoxml`): a part carrying `totalsRowShown="1"` and no count — Excel's
+  hidden-totals form, and xl ≤ 0.22's own output for a totals table — now reads as no totals row,
+  matching what Excel displays.
 - **Breaking for `--json` consumers of `sheets`, `names` and `functions`: `data` is always a JSON
   object** (#618): a listing verb keys its array by the noun — `sheets --json` →
   `{"sheets": [...]}` (also `--stats` and `--stream`), `names --json` → `{"names": [...]}`,
@@ -354,6 +369,29 @@ the grammar-complete formula generator (#653). #519 (SIGTERM) had already shippe
   the text as `NOT(A1^2)`. Whitespace between `NOT` and its paren now selects the call, as
   `SUM (A1)` already did for every other function; `NOT (A1)#` is rejected like `NOT(A1)#`. The
   grammar generator now spells every registry function with whitespace before the paren too.
+- **Table parts keep their source numbers** (#557, PR #659 review): the writer renumbered every
+  `xl/tables/tableN.xml` by sheet order on each write while an untouched sibling sheet's rels rode
+  verbatim naming the old number, so a book whose parts were numbered out of sheet order (Excel
+  numbers them in creation order) came out with two sheets pointing at one table and the other
+  orphaned (`unreferenced-part`, Excel repair). A table the source holds now keeps its part number;
+  only new tables are numbered, past the highest in use; `[Content_Types].xml` registers the
+  emitted numbers and drops a vanished table's Override.
+- **Totals rows survive a write** (#595 follow-up, PR #659 review): a table with a totals row was
+  written with only `totalsRowShown="1"` (the "ever shown" flag), no `totalsRowCount`, no column
+  `totalsRowLabel`/`totalsRowFunction`, and an autoFilter spanning the totals row — Excel showed no
+  totals row. xl now writes `totalsRowCount="1"`, the column totals attributes (and
+  `<totalsRowFormula>` for `custom`), and the autoFilter over header + data rows, as Excel does;
+  `TableColumn` gains `totalsRowLabel` and `totalsRowFunction` (`TotalsRowFunction`). Reading
+  follows Excel too: `totalsRowShown="1"` without a count is a table whose totals row is hidden.
+- **`--stream style` theme colours** (#566 follow-up, #448, PR #659 review): the streaming style
+  codec wrote theme colours by enum ordinal, so `theme:dark1` landed as `theme="0"` (Light1) and
+  Dark2/Light2 swapped; it now shares the DOM writer's index mapping and tint form (a zero tint is
+  omitted).
+- **`render --rasterizer resvg` honours `XL_SPILL_DIR`** (#517 follow-up, PR #659 review): resvg's
+  scratch SVG lands in the spill directory when set (else `java.io.tmpdir`); a directory that
+  cannot take it fails the render as `IO_WRITE` with a hint naming the directory and the lever,
+  not `INTERNAL` with a bare path. `docs/reference/cli.md` no longer claims every other write
+  avoids `java.io.tmpdir`.
 
 - **`ROWS` and `COLUMNS` count any array** (#655): `ROWS(A1#)`, `ROWS(SEQUENCE(3))` and
   `COLUMNS(A1:C1*2)` count the array's rows or columns, as in Excel; a scalar argument is 1. Only a

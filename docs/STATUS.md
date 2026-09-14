@@ -59,7 +59,7 @@
 **New in 0.19.0** (2026-08-03):
 - ✅ **Column/row default styles** (#445) — `<col style=>` / `<row s= customFormat="1">` emit on both writer backends (StyleIndex-remapped like cell styleIds) AND parse back, so read→modify→write keeps source column styles; `Sheet.withColumnStyle`/`withRowStyle` author the sheet-wide-body-font-without-Normal mechanism
 - ✅ **Sheet view modes** (#446) — `SheetView.view` (normal/pageBreakPreview/pageLayout) + `zoomScaleNormal`/`zoomScaleSheetLayoutView`/`topLeftCell`, set-or-remove with foreign values riding preservation
-- ✅ **Excel-canonical XML forms** (#448) — integral `sz`, 17-sig-digit plain tints (`tint="0"` omitted), bare gray125, derived `outlineLevelRow/Col` summary attrs; **theme-index swap fixed** — SAX path + comments wrote Dark2 as Light2 via `slot.ordinal`
+- ✅ **Excel-canonical XML forms** (#448) — integral `sz`, 17-sig-digit plain tints (`tint="0"` omitted), bare gray125, derived `outlineLevelRow/Col` summary attrs; **theme-index swap fixed** — SAX path + comments wrote Dark2 as Light2 via `slot.ordinal`; the streaming `--stream style` codec had the same ordinal swap until the #659 review (Dark1/Light1, Dark2/Light2), now on the shared index table
 - ✅ **DateTime arithmetic** (#449) — `=end-start` day counts, `=date+30` offsets, and MIN/MAX/COUNT/SUM over date columns evaluate via `dateTimeToExcelSerial` (the writer's conversion); result is a serial Number, booleans stay skipped in aggregates
 - ✅ **Data-table lints + `xl recalc --tables`** (#442) — `data-table-torn` (5 tear classes incl. del-flagged records) + `data-table-unseeded` (autoNoTable doctrine), DOM/SAX finding-identical, O(1) streaming; `recalc --tables` seeds after recalculation, default pinned-cache path byte-identical
 - ✅ **ca/aca + del1/del2 fidelity** (#435) — plain-formula calc flags on `FormulaKind.Normal(aca, ca)` survive every path (source-breaking: `FormulaKind.Normal()`); input-deleting structural edits keep the record del-flagged with caches intact
@@ -233,17 +233,17 @@
 
 ### Test Coverage
 
-**7,324 test cases** (verified via `./mill __.test`, 2026-09-14, wave 29 merged with main incl. #658): zero failures; the existing style-performance comparison is skipped. The subprocess smokes ran successfully in this verification.
+**7,407 test cases** (verified via `./mill __.test`, 2026-09-14, wave 29 after the adversarial-review fix round): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2561 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1659 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1257 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1465 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 179 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-evaluator | 2572 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1682 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1276 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1489 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cats-effect | 183 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 56 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 58 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
