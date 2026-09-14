@@ -115,8 +115,9 @@ val excel = ExcelIO.instance[IO].withSpillDir(fastVolume)  // must already exist
 ```
 
 The `xl` CLI reads the same setting from the `XL_SPILL_DIR` environment variable — once, at its
-one write interpreter — for its two-pass CSV import (`docs/reference/cli.md`, "Where a streamed
-write spills"); the library itself never reads the environment.
+one write interpreter — for its two-pass CSV import and for the resvg rasterizer's scratch SVG
+(`docs/reference/cli.md`, "Where a streamed write spills"); the library itself never reads the
+environment.
 
 Constant-memory holds either way — the spill is disk, not heap — but a 1M-row write moves real
 bytes through it, so on a container with a tiny `/tmp` this is the difference between working and
