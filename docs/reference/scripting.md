@@ -116,9 +116,13 @@ val m = money"$$1,234.56"    // Formatted(Number, Currency)
 ```
 
 `fx` takes the display form and stores the model's canonical text: `fx"=SUM(A1:B10)"` is
-`CellValue.Formula("SUM(A1:B10)")` — exactly one leading `=` removed, nothing else (a leading `+`
-and interior `=` stay). Display (`displayCell`, the `excel` interpolator) adds the `=` back, and a
-cell written and read back compares equal to the literal you authored.
+`CellValue.Formula("SUM(A1:B10)")` — surrounding whitespace trimmed, exactly one leading `=`
+removed, trimmed again; nothing interior changes (a leading `+`, interior `=` and interior spaces
+stay). The same rule applies at every entry (`FormulaParser.parse`, `CellValue.formula`,
+`putFormulaInheriting`, `Edit.PutFormula`, `xl putf`), so `" = SUM(A1:B10) "` interpolated at
+runtime is the same value. Display (`displayCell`, the `excel` interpolator) adds the `=` back,
+and a cell written and read back compares equal to the literal you authored. `fx""`, `fx"="` and
+a blank literal fail to compile.
 
 `$` is the interpolation character inside every interpolated literal, so Excel's absolute
 anchors need `$$`: write `fx"=SUM($$A$$1:B10)"` to get `=SUM($A$1:B10)`. Same for

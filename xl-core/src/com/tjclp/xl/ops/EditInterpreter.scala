@@ -433,10 +433,10 @@ private[xl] object EditInterpreter:
   // ===== shared steps =====
 
   /**
-   * The formula text as stored: the model's canonical strip (GH-479), no surrounding whitespace.
+   * The formula text as stored: the model's one canonical rule (GH-479) — trim, one leading '='
+   * off, trim — shared with fx, `FormulaParser.parse` and the CLI.
    */
-  private def formulaText(formula: String): String =
-    CellValue.canonicalFormulaText(formula.trim).trim
+  private def formulaText(formula: String): String = CellValue.canonicalFormulaText(formula)
 
   /**
    * `Sheet.put` plus the hint's style step, mirroring `Sheet.putSingle`: the hint resolves against

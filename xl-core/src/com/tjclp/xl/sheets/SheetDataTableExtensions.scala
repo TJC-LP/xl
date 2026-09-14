@@ -294,7 +294,8 @@ private[sheets] object DataTableAuthoring:
       case None => Right(())
 
   // V8: seeds are optional; when present they must be interior-shaped plain values. Validated
-  // BEFORE construction so CellValue.formula's require can never throw.
+  // BEFORE construction: a Formula seed is refused here with a named error, rather than reaching
+  // CellValue.dataTable (which keeps the scalar-cache invariant by dropping a Formula cache).
   private def validSeeds(interior: CellRange, seeds: Seq[Seq[CellValue]]): XLResult[Unit] =
     val context = s"data table interior ${interior.toA1}"
     if seeds.isEmpty then Right(())

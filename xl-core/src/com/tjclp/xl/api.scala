@@ -109,8 +109,9 @@ object api:
     StyleOverlay
   }
 
-  // Workbook types
-  export workbooks.{Workbook, WorkbookMetadata, CalcPr, CalcMode}
+  // Workbook types. DefinedName is a plain case class + companion (PrintArea, PrintTitles,
+  // sameName, the `matches` extension) — not opaque, so the term forwarder is safe (GH-462/GH-538).
+  export workbooks.{Workbook, WorkbookMetadata, CalcPr, CalcMode, DefinedName}
 
   // Context types (for surgical modification)
   export context.{SourceContext, SourceFingerprint}

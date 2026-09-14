@@ -237,14 +237,12 @@ object StreamingWriteCommands:
       // Build formula map
       valueMap <- (refOrRange, formulas) match
         case (Left(ref), List(singleFormula)) =>
-          val formula =
-            if singleFormula.startsWith("=") then singleFormula.drop(1) else singleFormula
+          val formula = CellValue.canonicalFormulaText(singleFormula)
           IO.pure(Map(ref -> CellValue.Formula(formula, None)))
 
         case (Right(range), List(singleFormula)) =>
           // Fill pattern: all cells get same formula (NO dragging in streaming mode)
-          val formula =
-            if singleFormula.startsWith("=") then singleFormula.drop(1) else singleFormula
+          val formula = CellValue.canonicalFormulaText(singleFormula)
           IO.pure(range.cells.map(ref => ref -> CellValue.Formula(formula, None)).toMap)
 
         case (Right(range), multipleFormulas) if multipleFormulas.length == range.cellCount.toInt =>
@@ -252,7 +250,7 @@ object StreamingWriteCommands:
           val pairs = range.cellsRowMajor
             .zip(multipleFormulas.iterator)
             .map { (ref, f) =>
-              val formula = if f.startsWith("=") then f.drop(1) else f
+              val formula = CellValue.canonicalFormulaText(f)
               ref -> CellValue.Formula(formula, None)
             }
             .toMap
@@ -722,7 +720,7 @@ object StreamingWriteCommands:
             val ref = ARef.parse(refStr) match
               case Right(r) => r
               case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
-            val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
+            val formulaText = CellValue.canonicalFormulaText(formula)
             val formulaValue = CellValue.Formula(formulaText, None)
             formatOpt match
               case Some(numFmt) =>
@@ -743,7 +741,7 @@ object StreamingWriteCommands:
             val range = CellRange.parse(rangeStr) match
               case Right(r) => r
               case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-            val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
+            val formulaText = CellValue.canonicalFormulaText(formula)
             val fullFormula = s"=$formulaText"
 
             // Parse formula for shifting
@@ -785,7 +783,7 @@ object StreamingWriteCommands:
               )
             // GH-356: the explicit format lands on each cell's own xf (font kept, numFmt replaced)
             cells.zip(formulas).foreach { case (ref, formula) =>
-              val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
+              val formulaText = CellValue.canonicalFormulaText(formula)
               val formulaValue = CellValue.Formula(formulaText, None)
               cellPatches(ref) = formatOpt match
                 case Some(numFmt) =>

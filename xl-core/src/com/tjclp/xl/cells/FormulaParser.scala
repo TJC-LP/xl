@@ -24,10 +24,11 @@ object FormulaParser:
    * Accepts:
    *   - Any string with balanced parentheses
    *   - With or without leading '=' (both are valid); the result stores the model's canonical BARE
-   *     text ([[CellValue.canonicalFormulaText]], GH-479) — exactly one leading '=' removed
+   *     text ([[CellValue.canonicalFormulaText]], GH-479) — surrounding whitespace trimmed, exactly
+   *     one leading '=' removed, trimmed again; interior spaces are kept
    *
    * Rejects (the error carries the ORIGINAL input):
-   *   - Empty string, or a lone "=" (empty once canonical)
+   *   - Empty or blank string, or a lone "=" (empty once canonical)
    *   - Unbalanced parentheses
    */
   def parse(s: String): Either[XLError, CellValue] =

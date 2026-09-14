@@ -339,6 +339,42 @@ class StreamingWriteSpec extends FunSuite:
     finally Files.deleteIfExists(outputPath)
   }
 
+  test("GH-479: --stream putf canonicalises a padded formula (trim, one '=' off, trim)") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    try
+      val source = Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
+        .put(ARef.from0(0, 1), CellValue.Number(BigDecimal(2)))
+      ExcelIO.instance[IO].write(Workbook(source), sourcePath).unsafeRunSync()
+
+      def written(col: Int, row: Int): Option[String] =
+        ExcelIO
+          .instance[IO]
+          .read(outputPath)
+          .unsafeRunSync()
+          .sheets
+          .head
+          .cells
+          .get(ARef.from0(col, row))
+          .map(_.value)
+          .collect { case CellValue.Formula(expr, _, _) => expr }
+
+      StreamingWriteCommands
+        .putFormula(sourcePath, outputPath, Some("Test"), "B1", List(" = SUM( A1:A2 ) "))
+        .unsafeRunSync()
+      assertEquals(written(1, 0), Some("SUM( A1:A2 )"))
+
+      StreamingWriteCommands
+        .putFormula(sourcePath, outputPath, Some("Test"), "C1:C2", List(" =A1*2 ", "\t=A2*2\n"))
+        .unsafeRunSync()
+      assertEquals(written(2, 0), Some("A1*2"))
+      assertEquals(written(2, 1), Some("A2*2"))
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+  }
+
   // ========== Style Preservation in Streaming Mode ==========
 
   test("streaming put: style preserved") {

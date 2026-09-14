@@ -92,9 +92,9 @@ object DependencyGraph:
    * Example:
    * {{{
    * val sheet = Sheet.empty
-   *   .put(ref"A1", CellValue.Formula("=B1+C1"))
+   *   .put(ref"A1", fx"=B1+C1")
    *   .put(ref"B1", CellValue.Number(10))
-   *   .put(ref"C1", CellValue.Formula("=D1*2"))
+   *   .put(ref"C1", fx"=D1*2")
    *
    * val graph = DependencyGraph.fromSheet(sheet)
    * // graph.dependencies = Map(A1 -> Set(B1, C1), C1 -> Set(D1))
