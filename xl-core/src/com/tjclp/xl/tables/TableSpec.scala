@@ -1,5 +1,7 @@
 package com.tjclp.xl.tables
 
+import java.util.Locale
+
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.error.{XLError, XLResult}
 
@@ -196,10 +198,20 @@ object TableSpec:
     else if columns.isEmpty then
       Left(XLError.InvalidTableColumns("Table must have at least one column"))
     else
-      val duplicateNames = columns.groupBy(_.name).filter(_._2.size > 1).keys
+      // Excel compares table column names case-insensitively (structured references are), so
+      // `Rev` and `rev` are one name to it and a table carrying both is repaired on open.
+      val duplicateNames = columns
+        .groupBy(_.name.toLowerCase(Locale.ROOT))
+        .values
+        .collect { case dupes if dupes.sizeIs > 1 => dupes.map(_.name).distinct.mkString(" / ") }
+        .toVector
+        .sorted
       if duplicateNames.nonEmpty then
         Left(
-          XLError.InvalidTableColumns(s"Duplicate column names: ${duplicateNames.mkString(", ")}")
+          XLError.InvalidTableColumns(
+            s"Duplicate column names (Excel compares them case-insensitively): " +
+              duplicateNames.mkString(", ")
+          )
         )
       else if columns.size != range.width then
         Left(

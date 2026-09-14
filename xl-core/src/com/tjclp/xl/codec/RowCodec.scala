@@ -1,5 +1,7 @@
 package com.tjclp.xl.codec
 
+import java.util.Locale
+
 import scala.annotation.tailrec
 import scala.compiletime.{constValueTuple, erasedValue, error, summonInline}
 import scala.deriving.Mirror
@@ -62,7 +64,8 @@ trait RowCodec[A]:
    * when the script runs. `overrides` maps a field name (as spelled in `fields`, exactly) to its
    * header and layers on the current [[headers]], so it composes with the annotation and with an
    * earlier `withHeaders`. Refused as `XLError.InvalidArgument` (`RowCodec.withHeaders`): a key
-   * that is not a field, a blank header, or two fields left with the same header — that would bind
+   * that is not a field, a blank header, or two fields left with the same header under
+   * [[RowCodec.headerKey]] (`REV` beside `rev`, `Unit Price` beside `unit_price`) — that would bind
    * both to one column on read and fail `putTable` late.
    *
    * Spell the given with `derived`, never with the summon: `given RowCodec[Order] =
@@ -77,6 +80,16 @@ trait RowCodec[A]:
 
 object RowCodec:
   def apply[A](using rc: RowCodec[A]): RowCodec[A] = rc
+
+  /**
+   * The key `readRowsByHeader` and `columnOf` match a header under when no header is exactly equal:
+   * whitespace, `_` and `-` removed, lower-cased — `Unit Price`, `unit_price` and `UNIT-PRICE` are
+   * one key; punctuation stays, so `Rev ($M)` and `rev` are two. Two headers of one codec may not
+   * share a key, or two fields would read one column: `derived` refuses the record at compile time
+   * and [[withHeaders]] as `InvalidArgument` (GH-614).
+   */
+  def headerKey(header: String): String =
+    header.filterNot(c => c.isWhitespace || c == '_' || c == '-').toLowerCase(Locale.ROOT)
 
   /**
    * Derive a codec for a case class from its `Mirror`: one [[FieldCodec]] per field, resolved at
@@ -160,21 +173,38 @@ object RowCodec:
       Left(XLError.InvalidArgument(WithHeaders, s"blank header for field ${listed(blank)}"))
     else
       val headers = fields.zip(codec.headers).map((field, text) => overrides.getOrElse(field, text))
-      val shared =
-        fields.zip(headers).groupMap(_._2)(_._1).filter(_._2.size > 1).toVector.sortBy(_._1)
+      // Keyed as readRowsByHeader matches, not on exact text: `REV` and `rev` would bind one
+      // column to two fields just as `rev` and `rev` would
+      val shared = sharedHeaders(fields.zip(headers))
       if shared.nonEmpty then
-        Left(
-          XLError.InvalidArgument(
-            WithHeaders,
-            shared
-              .map((text, names) => s"fields ${listed(names)} share header '$text'")
-              .mkString("; ")
-          )
-        )
+        Left(XLError.InvalidArgument(WithHeaders, shared.map(sharedHeaderMessage).mkString("; ")))
       else Right(Renamed(codec, headers))
 
+  /**
+   * The groups of `(field, header)` pairs whose headers share a [[headerKey]], each in field order,
+   * groups ordered by their first header — the collisions `derived` and [[withHeaders]] refuse.
+   */
+  private[codec] def sharedHeaders(
+    fieldHeaders: Seq[(String, String)]
+  ): Vector[Vector[(String, String)]] =
+    fieldHeaders
+      .groupMap((_, text) => headerKey(text))(identity)
+      .values
+      .collect { case group if group.sizeIs > 1 => group.toVector }
+      .toVector
+      .sortBy(_.headOption.map(_._2))
+
+  /** `fields 'a' and 'b' share header 'x'`, or name both headers when they differ only by key. */
+  private[codec] def sharedHeaderMessage(group: Vector[(String, String)]): String =
+    val names = listed(group.map(_._1))
+    group.map(_._2).distinct match
+      case Vector(one) => s"fields $names share header '$one'"
+      case several =>
+        s"fields $names have headers ${listed(several)}, which readRowsByHeader cannot tell " +
+          "apart (case, whitespace, '_' and '-' are ignored)"
+
   /** `'a'`, `'a' and 'b'`, `'a', 'b' and 'c'`. */
-  private def listed(names: Vector[String]): String =
+  private[codec] def listed(names: Vector[String]): String =
     val quoted = names.map(n => s"'$n'")
     if quoted.size <= 1 then quoted.mkString
     else s"${quoted.dropRight(1).mkString(", ")} and ${quoted.takeRight(1).mkString}"

@@ -310,9 +310,9 @@ with `.message` and `.toXLError` — `field` is the Scala name even under a rena
 `RowCodec[Product].headers` are the header texts, `.fields` the names; header matching ignores
 case, whitespace, `_` and `-` but never punctuation, so `Rev ($M)` needs `@header`. A header known
 only at runtime is `RowCodec.derived[Product].withHeaders(Map("price" -> "Unit Price ($)"))` —
-`XLResult[RowCodec[Product]]`, refusing an unknown field, a blank or a duplicate header; as a
-`given`, spell it with `derived`, never `RowCodec[Product].withHeaders(…)` (that summons the given
-being defined). Per-cell reads remain for ad-hoc shapes:
+`XLResult[RowCodec[Product]]`, refusing an unknown field, a blank header or two headers the
+matcher cannot tell apart; as a `given`, spell it with `derived`, never
+`RowCodec[Product].withHeaders(…)` (that summons the given being defined). Per-cell reads remain for ad-hoc shapes:
 
 ```scala
 final case class Product(name: String, units: Int, price: BigDecimal)
