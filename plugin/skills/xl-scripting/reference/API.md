@@ -54,7 +54,7 @@ Invalid literals **fail compilation**. Runtime-interpolated forms return `Either
 | `ref"A1"` | `ARef` | `ref"XFD1048576"` |
 | `ref"A1:B10"` | `CellRange` | `ref"A:A"` rejected at compile time if malformed |
 | `ref"A$i"` / `ref"$s"` | `Either[XLError, RefType]` | runtime validation |
-| `fx"=SUM(A1:B10)"` | `CellValue.Formula` | parens/syntax checked |
+| `fx"=SUM(A1:B10)"` | `CellValue.Formula("SUM(A1:B10)")` | parens/syntax checked; stores the bare expression (one leading `=` removed), display adds it back |
 | `fx"=B$i*2"` | `Either[XLError, CellValue]` | runtime validation |
 | `money"$$1,234.56"` | `Formatted(Number, Currency)` | `$$` escapes `$` |
 | `percent"45.5%"` | `Formatted(Number(0.455), Percent)` | stored as fraction |

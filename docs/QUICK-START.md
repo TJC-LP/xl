@@ -271,9 +271,9 @@ val sheet = Sheet("Finance").unsafe
     ref"A2" -> BigDecimal("1000000"),
     ref"A3" -> BigDecimal("1500000"),
     ref"B1" -> "Total",
-    ref"B2" -> CellValue.Formula("=SUM(A2:A3)"),  // Formula cell
+    ref"B2" -> fx"=SUM(A2:A3)",  // Formula cell (stored as the bare "SUM(A2:A3)")
     ref"C1" -> "Average",
-    ref"C2" -> CellValue.Formula("=AVERAGE(A2:A3)")
+    ref"C2" -> fx"=AVERAGE(A2:A3)"
   )
   .unsafe
 
@@ -295,8 +295,8 @@ val allResults = sheet.evaluateWithDependencyCheck()
 // Handle circular references safely
 val cyclicSheet = Sheet("Cyclic").unsafe
   .put(
-    ref"A1" -> CellValue.Formula("=B1"),
-    ref"B1" -> CellValue.Formula("=A1")  // Circular reference!
+    ref"A1" -> fx"=B1",
+    ref"B1" -> fx"=A1"  // Circular reference!
   )
   .unsafe
 

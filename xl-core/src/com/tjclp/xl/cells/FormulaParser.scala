@@ -23,14 +23,16 @@ object FormulaParser:
    *
    * Accepts:
    *   - Any string with balanced parentheses
-   *   - With or without leading '=' (both are valid)
+   *   - With or without leading '=' (both are valid); the result stores the model's canonical BARE
+   *     text ([[CellValue.canonicalFormulaText]], GH-479) — exactly one leading '=' removed
    *
-   * Rejects:
-   *   - Empty string
+   * Rejects (the error carries the ORIGINAL input):
+   *   - Empty string, or a lone "=" (empty once canonical)
    *   - Unbalanced parentheses
    */
   def parse(s: String): Either[XLError, CellValue] =
-    if s.isEmpty then Left(XLError.FormulaError(s, "Formula cannot be empty"))
+    val canonical = CellValue.canonicalFormulaText(s)
+    if canonical.isEmpty then Left(XLError.FormulaError(s, "Formula cannot be empty"))
     else if s.length > ExcelCellLimit then
       Left(
         XLError.FormulaError(
@@ -39,7 +41,7 @@ object FormulaParser:
         )
       )
     else if !validateParentheses(s) then Left(XLError.FormulaError(s, "Unbalanced parentheses"))
-    else Right(CellValue.Formula(s))
+    else Right(CellValue.Formula(canonical))
 
   /**
    * Check parentheses are balanced, respecting string literals.

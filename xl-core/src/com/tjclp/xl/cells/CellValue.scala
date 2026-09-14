@@ -1,6 +1,7 @@
 package com.tjclp.xl.cells
 
 import java.time.LocalDateTime
+import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.richtext.{RichText => Rt}
 
 /** Cell value types supported by Excel */
@@ -24,9 +25,15 @@ enum CellValue:
    * Formula expression with optional cached result value.
    *
    * @param expression
-   *   The formula string (e.g., "=A1+B1"). Must be non-empty. For a [[FormulaKind.DataTable]]-kind
-   *   formula this is the derived `TABLE(...)` display text — the OOXML record carries no formula
-   *   text.
+   *   The formula text in the model's canonical (storage) form: the BARE expression, e.g. "A1+B1" —
+   *   the display form's leading '=' is not part of it (GH-479). Every canonical entry produces
+   *   this shape ([[CellValue.formula]], the `fx` literal, `FormulaParser.parse`,
+   *   `putFormulaInheriting`, the edit interpreter, the CLI and the OOXML readers), so a cell
+   *   written and read back compares EQUAL to the authored value. A raw `Formula("=A1+B1")` stays
+   *   constructible and is tolerated — display and evaluation accept both shapes and every writer
+   *   strips the '=' at the `<f>` boundary — but it is not canonical and does not compare equal to
+   *   its own read-back. Must be non-empty. For a [[FormulaKind.DataTable]]-kind formula this is
+   *   the derived `TABLE(...)` display text — the OOXML record carries no formula text.
    * @param cachedValue
    *   Optional cached result value from Excel (preserved during roundtrip). This is the last
    *   calculated value stored in the XLSX file. Can be Number, Text, Bool, Error, or Empty. Must
@@ -35,7 +42,8 @@ enum CellValue:
    *   OOXML CT_CellFormula record kind (GH-430): plain formulas are [[FormulaKind.Normal]];
    *   `t="array"` / `t="dataTable"` records ride here so they survive sheet regeneration.
    * @note
-   *   Use `CellValue.formula()` for validated construction.
+   *   Use [[CellValue.formula]] for validated, canonicalizing construction and
+   *   [[CellValue.canonicalFormulaText]] for the strip itself.
    */
   case Formula(
     expression: String,
@@ -63,44 +71,64 @@ object CellValue:
     case _ => Text(value.toString)
 
   /**
-   * Validated constructor for Formula values.
+   * The model's canonical formula text (GH-479): exactly one leading '=' removed and nothing else —
+   * a leading '+' (Excel's alternate prefix) stays, an interior '=' is untouched and no whitespace
+   * is trimmed. Pure and total. Idempotent on the two shapes a formula has — the display form `=A1`
+   * and the bare form `A1` both map to `A1` — but NOT a fixed point for a doubled prefix: `==A1` is
+   * not a formula, is stripped once per entry (to `=A1`), and every writer strips the remainder at
+   * the `<f>` boundary, so such a value reads back as `A1`. The single definition every canonical
+   * entry shares (`fx`, `FormulaParser.parse`, [[formula]], `putFormulaInheriting`, the edit
+   * interpreter).
+   */
+  def canonicalFormulaText(expression: String): String = expression.stripPrefix("=")
+
+  /**
+   * Validated, canonicalizing constructor for Formula values (GH-479).
    *
    * @param expression
-   *   The formula string (e.g., "=A1+B1"). Must be non-empty.
+   *   The formula text in either shape ("=A1+B1" or "A1+B1"); stored as its
+   *   [[canonicalFormulaText]].
    * @param cachedValue
    *   Optional cached result value. Must not be a Formula.
    * @param kind
    *   OOXML record kind. A [[FormulaKind.DataTable]] kind requires the derived `TABLE(...)` display
    *   text as `expression` (see [[dataTable]] which synthesizes it).
-   * @throws IllegalArgumentException
-   *   if expression is empty, cachedValue contains a Formula, or a DataTable kind carries an
-   *   expression that is not its derived display text
+   * @return
+   *   the Formula, or a Left [[XLError.FormulaError]] naming the original text when the canonical
+   *   expression is empty (so "" and a lone "="), the cached value is a Formula, or a DataTable
+   *   kind carries an expression that is not its derived display text
    */
   def formula(
     expression: String,
     cachedValue: Option[CellValue] = None,
     kind: FormulaKind = FormulaKind.Normal()
-  ): Formula =
-    require(expression.nonEmpty, "Formula expression cannot be empty")
-    require(
-      !cachedValue.exists { case _: Formula => true; case _ => false },
-      "Cached value cannot be a Formula"
-    )
-    kind match
-      case dt: FormulaKind.DataTable =>
-        require(
-          expression == FormulaKind.displayExpression(dt),
-          "DataTable formula expression must be the derived TABLE(...) display text"
-        )
-      case _ => ()
-    Formula(expression, cachedValue, kind)
+  ): XLResult[Formula] =
+    val canonical = canonicalFormulaText(expression)
+    if canonical.isEmpty then
+      Left(XLError.FormulaError(expression, "Formula expression cannot be empty"))
+    else if cachedValue.exists { case _: Formula => true; case _ => false } then
+      Left(XLError.FormulaError(expression, "Cached value cannot be a Formula"))
+    else
+      kind match
+        case dt: FormulaKind.DataTable if canonical != FormulaKind.displayExpression(dt) =>
+          Left(
+            XLError.FormulaError(
+              expression,
+              "DataTable formula expression must be the derived TABLE(...) display text"
+            )
+          )
+        case _ => Right(Formula(canonical, cachedValue, kind))
 
   /**
    * Smart constructor for a data table record cell (GH-430): synthesizes the derived `TABLE(...)`
-   * display expression from the record. This is the substrate #419's authoring sugar builds on.
+   * display expression from the record — always non-empty and already canonical, so the
+   * construction is total. This is the substrate #419's authoring sugar builds on.
+   *
+   * @param cachedValue
+   *   Optional cached result value; a data table record caches scalars, never a Formula.
    */
   def dataTable(kind: FormulaKind.DataTable, cachedValue: Option[CellValue] = None): Formula =
-    formula(FormulaKind.displayExpression(kind), cachedValue, kind)
+    Formula(FormulaKind.displayExpression(kind), cachedValue, kind)
 
   // Excel epoch for the 1900 date system: December 30, 1899 (not Jan 1, 1900, to account for
   // Excel's 1900 leap-year bug). Epoch for the 1904 date system (legacy Mac Excel): January 1,

@@ -552,7 +552,9 @@ object Generators:
   /**
    * Formula cell value with optional cached value (cached values are write-only metadata) and an
    * optional non-Normal record kind (GH-430). A DataTable kind forces its derived display
-   * expression, so the kind draws the expression too.
+   * expression, so the kind draws the expression too. The expression enters through the model's
+   * canonical strip (GH-479) — the "=A1*2" arm of genFormulaExpr exercises it — so the strict
+   * round-trip law compares the bare text the readers produce.
    */
   val genFormulaCellValue: Gen[CellValue] =
     for
@@ -561,7 +563,7 @@ object Generators:
       cached <- genFormulaCache
     yield kind match
       case dt: FormulaKind.DataTable => CellValue.dataTable(dt, cached)
-      case other => CellValue.Formula(expr, cached, other)
+      case other => CellValue.Formula(CellValue.canonicalFormulaText(expr), cached, other)
 
   /** Cell values for round-trip testing (all OOXML-representable variants) */
   val genRichCellValue: Gen[CellValue] =
