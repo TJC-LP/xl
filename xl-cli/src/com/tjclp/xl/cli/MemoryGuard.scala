@@ -411,18 +411,25 @@ object MemoryGuard:
       case source: SourceFailure => source.cause
       case cli: CliException => cli
       case other =>
-        val where = spill.fold(
-          s"the default temp directory java.io.tmpdir ($SpillDirVar=<dir> redirects the scratch file)"
-        )(dir => s"$SpillDirVar ($dir)")
         CliException(
           CliError(
             ErrorCode.IO_WRITE,
             s"cannot write $target: ${CliError.messageOf(other)}",
-            hint =
-              Some(s"check that the output directory and $where exist, are writable and have room"),
+            hint = Some(
+              s"check that the output directory and ${spillWhere(spill)} exist, are writable and have room"
+            ),
             location = Some(Location.file(target.toString))
           )
         )
+
+  /**
+   * Where a scratch file lands, for a diagnostic: the configured `XL_SPILL_DIR`, or the default
+   * `java.io.tmpdir` with the lever that moves it.
+   */
+  def spillWhere(spill: Option[Path]): String =
+    spill.fold(
+      s"the default temp directory java.io.tmpdir ($SpillDirVar=<dir> redirects the scratch file)"
+    )(dir => s"$SpillDirVar ($dir)")
 
   /**
    * The spill directory from `XL_SPILL_DIR` (GH-517): trimmed; unset or blank is `None` — the JVM's
@@ -447,8 +454,9 @@ object MemoryGuard:
   /**
    * `XL_SPILL_DIR`, read once per process — the application layer's one ambient read, so the
    * library stays deterministic (`ExcelIO.instance` never consults the environment). Consulted by
-   * the spilling writes only (the two-pass CSV import into a new workbook,
-   * `ImportCommands.importToNewSheetStreaming`); every other write never spills.
+   * the spilling writes (the two-pass CSV import into a new workbook,
+   * `ImportCommands.importToNewSheetStreaming`) and by the one render backend that needs a scratch
+   * file (`Resvg.scratchSvg`: resvg takes file paths only); every other write never spills.
    */
   val spill: Either[CliError, Option[Path]] = spillDirFrom(sys.env.get)
 

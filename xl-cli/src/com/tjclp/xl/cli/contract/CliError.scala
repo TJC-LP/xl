@@ -70,16 +70,19 @@ object CliError:
    * the `RECALC_GATE` (exit 1) carrying the summary as its message; an `XLException` projects its
    * `XLError`; a raster export with no backend to run it (none installed, or the `--rasterizer`
    * asked for is missing) is `RASTERIZER_UNAVAILABLE` with the chain's own install hints as the
-   * message; a `NoSuchFileException` is `IO_READ`; an `OutOfMemoryError` is the `RESOURCE_LIMIT`
-   * failure [[com.tjclp.xl.cli.MemoryGuard.exhausted]] (GH-636 — the classification of a heap that
-   * ran out; note that cats-effect halts on a fatal error before any handler runs, so the error
-   * only ever arrives here after `MemoryGuard.blocking` caught it inside its thunk); a
-   * `SAXParseException` — a part the streaming reader could not parse — is `IO_READ` with the
-   * parser's message and position, as the loaded reader's `ParseError` is (GH-635; the streaming
-   * source adds the file and sheet); a stdout that refused a streamed table's bytes
-   * ([[com.tjclp.xl.cli.CliIO.StdoutFailed]]) is `IO_WRITE`; everything else — every other `Error`
-   * included — is `INTERNAL` with its message (falling back to `toString` when the message is null
-   * — an un-migrated `new Exception(msg)` still yields a well-formed diagnostic).
+   * message; a raster backend whose scratch SVG could not be created (resvg, in `XL_SPILL_DIR` or
+   * `java.io.tmpdir`) is `IO_WRITE` with a hint naming the directory and the lever, in the shape of
+   * the streaming writer's spill failure; a `NoSuchFileException` is `IO_READ`; an
+   * `OutOfMemoryError` is the `RESOURCE_LIMIT` failure [[com.tjclp.xl.cli.MemoryGuard.exhausted]]
+   * (GH-636 — the classification of a heap that ran out; note that cats-effect halts on a fatal
+   * error before any handler runs, so the error only ever arrives here after `MemoryGuard.blocking`
+   * caught it inside its thunk); a `SAXParseException` — a part the streaming reader could not
+   * parse — is `IO_READ` with the parser's message and position, as the loaded reader's
+   * `ParseError` is (GH-635; the streaming source adds the file and sheet); a stdout that refused a
+   * streamed table's bytes ([[com.tjclp.xl.cli.CliIO.StdoutFailed]]) is `IO_WRITE`; everything else
+   * — every other `Error` included — is `INTERNAL` with its message (falling back to `toString`
+   * when the message is null — an un-migrated `new Exception(msg)` still yields a well-formed
+   * diagnostic).
    */
   def fromThrowable(t: Throwable): CliError = t match
     case e: CliException => e.error
@@ -89,6 +92,14 @@ object CliError:
     case r: RasterError.NoRasterizerAvailable =>
       CliError(ErrorCode.RASTERIZER_UNAVAILABLE, r.message)
     case r: RasterError.RasterizerNotFound => CliError(ErrorCode.RASTERIZER_UNAVAILABLE, r.message)
+    case s: RasterError.ScratchFileFailed =>
+      CliError(
+        ErrorCode.IO_WRITE,
+        s"cannot write the ${s.rasterizer} scratch SVG: ${messageOf(s.cause)}",
+        hint = Some(
+          s"check that ${MemoryGuard.spillWhere(s.spillDir)} exists, is writable and has room"
+        )
+      )
     case n: NoSuchFileException =>
       CliError(ErrorCode.IO_READ, s"No such file: ${Option(n.getFile).getOrElse(messageOf(n))}")
     case _: OutOfMemoryError => MemoryGuard.exhausted
