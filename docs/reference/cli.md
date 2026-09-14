@@ -1757,7 +1757,7 @@ xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
 
 ---
 
-### `xl lint [<file>] [--format text|json]`
+### `xl lint [<file>] [--format text|json] [--strict]`
 
 Validate the raw package structure against the Excel-repair classes — the defects Excel
 repairs loudly (repair dialog, content stripped) but every lenient reader, xl's own
@@ -1768,13 +1768,22 @@ model, so nothing gets normalized before it's checked.
 xl lint deliverable.xlsx                         # Positional file form
 xl -f deliverable.xlsx lint                      # Flag form (equivalent)
 xl -f deliverable.xlsx lint --format json        # Stable schema for pipelines
-xl -f deliverable.xlsx lint && echo "safe to send"
+xl -f deliverable.xlsx lint && echo "safe to send"      # exit 0 = no repair findings
+xl -f deliverable.xlsx lint --strict && echo "spotless" # exit 0 = no finding of any tier
 xl -f huge.xlsx --stream lint                    # SAX-scan the sheet parts: O(1) in the row count
 ```
 
 `--stream lint` (since 0.22.0) runs the streaming lint: the worksheet and table parts are
 SAX-scanned instead of parsed, so a million-row book lints in constant memory; the findings are
 identical (pinned by the lint parity suite).
+
+**Severity**: every finding carries a tier, `repair` or `hygiene` (`--format json`:
+`.findings[].severity`; text: hygiene lines are tagged `(hygiene)` and the header counts both).
+`repair` is the class the lint exists for — Excel repairs or refuses the file, or a reader misreads
+a value — and fails the gate. `hygiene` is a valid file that opens intact everywhere but carries
+dead weight or a privacy hazard: `unreferenced-part`, and the orphan half of
+`shared-string-orphan`. Hygiene findings are reported (with a `LINT_HYGIENE` warning) but exit `0`
+unless `--strict` (the global flag, accepted before or after the verb) promotes them to the gate.
 
 **What it flags** (the complete `LintCategory` roster — a test pins this list against
 `LintCategory.slug`, so it cannot drift):
@@ -1838,10 +1847,14 @@ identical (pinned by the lint parity suite).
   + total)
 - **`mc-ignorable-undeclared`** — an `mc:Ignorable` list naming a prefix declared on neither the
   element nor an ancestor (checked on `xl/workbook.xml`, every sheet-class and table part, and
-  `xl/styles.xml`), or a root element binding the main namespace to a generated `ns0`-style
-  prefix: the ElementTree re-serialization class — the declarations are re-prefixed away while the
-  Ignorable list keeps the old names, and Excel opens the part blank. An UNBOUND element prefix is
-  a well-formedness error and exits `3` with the parser's message instead
+  `xl/styles.xml`): the ElementTree re-serialization class — the declarations are re-prefixed away
+  while the Ignorable list keeps the old names, and Excel opens the part blank. Also a root element
+  binding the main namespace to a generated `ns0`-style prefix, the signature of the same
+  round-trip: on its own a compatibility smell, not a repair — Excel and LibreOffice open a
+  namespace-correct prefixed root with every cell intact (verified against both) — but no
+  mainstream producer writes it and prefix-naive tooling (regexes, XPath on the default-namespace
+  spelling) misreads it. An UNBOUND element prefix is a well-formedness error and exits `3` with
+  the parser's message instead
 - **`dxf-id-out-of-range`** — a `dxfId`-family attribute (`<cfRule dxfId>`, `<sortCondition
   dxfId>`, table `dataDxfId` / `headerRowDxfId` / `totalsRowDxfId` and the border variants)
   indexing past the `<dxfs>` table of `xl/styles.xml`, counted by its actual `<dxf>` children —
@@ -1853,31 +1866,37 @@ identical (pinned by the lint parity suite).
   or a forgotten Relationship. `.rels` parts, `[Content_Types].xml` and Excel's own `[trash]/`
   leftovers are never findings; a `.rels` inside the chain that is not well-formed is one finding
   on that rels instead of a flood. Not a repair class — Excel ignores such parts, but their bytes
-  travel with every copy of the file
+  travel with every copy of the file. Severity `hygiene`
 - **`shared-string-orphan`** — an `xl/sharedStrings.xml` entry no `t="s"` cell references (ONE
   finding with the orphan count and the first five INDICES — never the text, so scrubbed content
   cannot resurface in a lint log), or a `t="s"` index past the table (the reader shows `#REF!`,
-  Excel repairs). The orphan half is a hygiene/privacy signal, not a repair class: a counterparty
-  name scrubbed from every cell still rides in the package. xl's fresh writes lint clean; a
-  surgical edit of a foreign SST book that replaces or removes text appends the new string and
-  leaves the old entry behind — xl never prunes a preserved table — which this finding now
-  reports (see the carve-out below). Under `--stream` the table is SAX-counted and the
-  references are a bit set of its size: O(1) in the row count, O(uniqueCount) bits in the table
+  Excel repairs — severity `repair`). The orphan half is severity `hygiene`: a privacy signal, not
+  a repair class — a counterparty name scrubbed from every cell still rides in the package. xl's
+  fresh writes lint clean; a surgical edit of a foreign SST book that replaces or removes text
+  appends the new string and leaves the old entry behind — xl never prunes a preserved table —
+  which this finding reports without failing the gate (see the carve-out below). Under `--stream`
+  the table is SAX-counted and the references are a bit set of its size: O(1) in the row count,
+  O(uniqueCount) bits in the table. Cells on Excel 4.0 macro sheets (`xl/macrosheets/`, rel type
+  `xlMacrosheet`) count as references like any worksheet's
 
-**Exit codes**: `0` no findings · `1` findings reported · `3` error (unreadable file, malformed
-core part) · `2` usage (no file, or a file given both ways) — errors go to stderr with a `code:`
-line (see [Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
+**Exit codes**: `0` no repair findings (hygiene findings, if any, are listed and a `LINT_HYGIENE`
+warning counts them) · `1` repair findings reported — or, under `--strict`, any finding at all ·
+`3` error (unreadable file, malformed core part) · `2` usage (no file, or a file given both ways)
+— errors go to stderr with a `code:` line (see
+[Errors, warnings and exit codes](#errors-warnings-and-exit-codes)). In `--format json`, `clean`
+stays "no findings at all"; the exit code is the gate.
 
 `xl lint` is read-only — it never repairs or rewrites the file. xl's own fresh writes always
-lint clean; use it as a pre-send self-check in agent pipelines that splice or post-process
-workbooks. One documented carve-out (#567): a surgical edit of a foreign shared-string book that
-replaces or removes text — or that introduces a shared-string table into a multi-sheet
-inline-string book while copying an untouched sheet verbatim — leaves entries no cell references
-in `xl/sharedStrings.xml` (xl appends and re-points, it never prunes a preserved table), so that
-output reports `shared-string-orphan` until the table is rebuilt: from the library, a fresh write
-of `Workbook(wb.sheets)` (no source, every sheet regenerated) rebuilds it from the cells; there is
-no CLI compaction yet. Gate on the categories you care about (`--format json` →
-`.findings[].category`).
+lint clean, and xl's own edits never introduce a repair finding; use it as a pre-send self-check
+in agent pipelines that splice or post-process workbooks. One documented carve-out (#567): a
+surgical edit of a foreign shared-string book that replaces or removes text — or that introduces
+a shared-string table into a multi-sheet inline-string book while copying an untouched sheet
+verbatim — leaves entries no cell references in `xl/sharedStrings.xml` (xl appends and re-points,
+it never prunes a preserved table), so that output reports `shared-string-orphan` — a hygiene
+finding, exit `0` — until the table is rebuilt: from the library, a fresh write of
+`Workbook(wb.sheets)` (no source, every sheet regenerated) rebuilds it from the cells; there is
+no CLI compaction yet. `--strict` makes that finding fail the gate; `--format json` exposes
+`.findings[].category` and `.findings[].severity` for a finer filter.
 
 ---
 

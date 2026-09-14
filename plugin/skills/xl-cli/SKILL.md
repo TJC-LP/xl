@@ -109,7 +109,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Deliverable finish | `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `autofilter`, `freeze`, `cf add`, `chart add`, `add-image` | every one but `add-image` has a batch twin |
 | Import data | `import <csv>`, `import-md <table.md\|->` | `--new-sheet`, type detection |
 | Refresh cached values | `recalc` (`--tables`, `--parallel n`) | `--strict` exits 1 on formula errors |
-| Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / findings |
+| Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / repair findings; `lint --strict` fails on hygiene findings (shared-string orphans, unreferenced parts) too |
 | New workbook | `new out.xlsx --sheet Data --sheet Summary` | |
 | What can the binary do? | `schema`, `functions`, `rasterizers`, `batch --schema` | no `-f` |
 
@@ -290,7 +290,9 @@ withdrawn). `recalc` refreshes every cached value (`--tables` also seeds data-ta
 - **PNG/PDF on the native binary needs an external rasterizer** — `xl rasterizers` tells you.
 - **A file that will not read** fails with `IO_READ` (exit 3) and a message naming the construct.
   Rebuild it with openpyxl, then xl works on the rebuilt file — and report the message upstream.
-- **Formula caches**: `xl lint` catches structure Excel would repair; `xl audit` catches numbers
+- **Formula caches**: `xl lint` catches structure Excel would repair (exit 1; its hygiene tier —
+  a valid file carrying dead weight, e.g. a shared-string entry a `put` orphaned — is listed at
+  exit 0 unless `--strict`); `xl audit` catches numbers
   that are wrong or uncached; `xl recalc` fills caches for readers that never recalculate
   (pandas, `openpyxl data_only=True`, previewers).
 
