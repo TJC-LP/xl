@@ -583,6 +583,23 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(uncached.evaluated, full.evaluated)
     assertEquals(uncached.workbook, full.workbook)
 
+  test("GH-482/GH-537: IterationScheme and SccReport.stalled resolve through the prelude"):
+    val gaussSeidel: IterationScheme = IterationScheme.GaussSeidel
+    val jacobi: IterativeCalc =
+      IterativeCalc(100, BigDecimal("0.001"), scheme = IterationScheme.Jacobi)
+    assertEquals(IterativeCalc(100, BigDecimal("0.001")).scheme, gaussSeidel)
+    assert(jacobi.scheme != gaussSeidel)
+    // A1 = B1+1, B1 = A1: the Gauss–Seidel sweep counts to 100 (Excel's answer); no stall.
+    val wb = Workbook(Sheet("S").put(ref"A1", fx"=B1+1").put(ref"B1", fx"=A1"))
+    val result: RecalcResult = wb.recalculate(IterativeCalc(100, BigDecimal("0.001")))
+    val report: SccReport = result.cycles.headOption.getOrElse(fail("one cyclic component"))
+    assertEquals(report.stalled, false)
+    assertEquals(report.rounds, 100)
+    assertEquals(result.evaluated(SheetName.unsafe("S")).get(ref"A1"), Some(CellValue.Number(100)))
+    val stalled =
+      SccReport(Vector.empty, converged = false, rounds = 2, maxDelta = None, stalled = true)
+    assert(stalled.render.contains("stalled after 2 round(s)"))
+
   test(
     "GH-559: SheetRenamer, FormulaOps, FormulaShifter, StructuralEditor and QualifiedRef resolve"
   ):
@@ -600,8 +617,8 @@ class ScriptingPreludeTest extends FunSuite:
       .sheets
       .find(_.name.value == "Sheet2")
       .map(_(ref"A1").value)
-    // fx literals keep their display-form leading '='; the rewrite keeps the caller's convention.
-    assertEquals(rewritten, Some(CellValue.Formula("=Data!A1*2", None)))
+    // GH-479: fx literals store the bare expression; the rewrite keeps that canonical shape.
+    assertEquals(rewritten, Some(CellValue.Formula("Data!A1*2", None)))
     assertEquals(
       FormulaOps.renameSheet("=Sheet1!A1*2", sheet1, data),
       Right("=Data!A1*2"): XLResult[String]

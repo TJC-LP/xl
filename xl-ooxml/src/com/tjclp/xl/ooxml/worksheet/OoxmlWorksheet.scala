@@ -412,7 +412,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     escapeFormulas: Boolean = false,
     drawingRef: Option[Elem] = None,
     condFmt: Option[Seq[Elem]] = None,
-    dataValidations: Option[Option[Elem]] = None
+    dataValidations: Option[Option[Elem]] = None,
+    legacyDrawingRelId: String = "rId2"
   ): OoxmlWorksheet =
     // GH-558: the domain `sheet.rowProperties` is authoritative for every row attribute the reader
     // models (s/customFormat, ht/customHeight, hidden, outlineLevel, collapsed). A structural edit
@@ -520,7 +521,9 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     val allRows =
       (rowsWithCells ++ preservedRowsWithoutDomainCells ++ emptyRowsFromDomain).sortBy(_.rowIndex)
 
-    // Generate legacyDrawing element if sheet has comments but no preserved legacyDrawing
+    // Generate legacyDrawing element if sheet has comments but no preserved legacyDrawing. The
+    // r:id is the one the writer's sheet-rels plan carries for the VML part (GH-557): "rId2" on a
+    // fresh rels part, the appended or kept vmlDrawing rel's id behind preserved rels.
     val legacyDrawingElem =
       if sheet.comments.nonEmpty then
         preservedMetadata.flatMap(_.legacyDrawing).orElse {
@@ -529,7 +532,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
             Elem(
               prefix = null,
               label = "legacyDrawing",
-              attributes = new PrefixedAttribute("r", "id", "rId2", Null),
+              attributes = new PrefixedAttribute("r", "id", legacyDrawingRelId, Null),
               scope = NamespaceBinding("r", nsRelationships, TopScope),
               minimizeEmpty = true
             )

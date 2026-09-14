@@ -9,6 +9,7 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.XlsxReader
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -429,6 +430,42 @@ class StreamingParitySpec extends CatsEffectSuite:
             Some("kanji"),
             "streaming must exclude phonetic <rPh> runs like the in-memory reader (GH-305)"
           )
+        }
+      }
+    }
+  }
+
+  test("GH-460: streaming and in-memory readers agree on a childless inlineStr cell (blank)") {
+    // openpyxl serializes value="" as <c t="inlineStr"/>. The SAX row reader always read it as
+    // blank (and skipped it); the in-memory WorksheetReader used to fail the whole sheet. Both
+    // paths must now agree: the childless cell is Empty (excluded from the value map), an <is/>
+    // that is present but empty is the empty STRING on both paths, and the text cell reads.
+    val sheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <sheetData>
+        |    <row r="1">
+        |      <c r="A1" t="inlineStr"/>
+        |      <c r="B1" t="inlineStr"><is/></c>
+        |      <c r="C1" t="inlineStr"><is><t>kept</t></is></c>
+        |    </row>
+        |  </sheetData>
+        |</worksheet>
+        |""".stripMargin
+    rawXlsx("empty-inline-str", sheetXml).flatMap { path =>
+      loadInMemory("empty-inline-str", path).flatMap { wb =>
+        val sheet = wb.sheets(0)
+        assertEquals(sheet(ref"A1").value, CellValue.Empty, "in-memory: childless inlineStr")
+        assertEquals(
+          sheet(ref"B1").value,
+          CellValue.Text(""),
+          "in-memory: <is/> is the empty string"
+        )
+        val expected = inMemoryValues(sheet)
+        assertEquals(expected.keySet, Set((1, 1), (1, 2)))
+        streamedValues(path, "Sheet1").map { streamed =>
+          assertEquals(streamed, expected, "streaming must yield the same non-blank cells")
+          assertEquals(streamed.get((1, 2)).flatMap(plainTextOf), Some("kept"))
         }
       }
     }

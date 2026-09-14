@@ -1015,10 +1015,17 @@ class DependencyGraphSpec extends ScalaCheckSuite:
 
   // ===== GH-492: SCC condensation order (qualifiedSccOrder) =====
 
+  // A1, A10 and AA1 on two sheets: the row 9/10 and column Z/AA boundaries where the A1 STRING
+  // order ("A10" < "A2", "AA1" < "B1") and the grid order disagree, so every law below is
+  // exercised across them.
   private val sccUniverse: Vector[DependencyGraph.QualifiedRef] =
     (0 until 6).toVector.map { i =>
       val sheet = if i < 3 then SheetName.unsafe("S1") else SheetName.unsafe("S2")
-      DependencyGraph.QualifiedRef(sheet, ARef.from0(0, i % 3))
+      val ref = i % 3 match
+        case 0 => ARef.from0(0, 0) // A1
+        case 1 => ARef.from0(0, 9) // A10
+        case _ => ARef.from0(26, 0) // AA1
+      DependencyGraph.QualifiedRef(sheet, ref)
     }
 
   private val sccGraphGen
@@ -1077,7 +1084,7 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     }
   }
 
-  test("GH-492: members inside a component are sorted by (sheet name, A1)") {
+  test("GH-492: members inside a component are sorted by (sheet name, row, column)") {
     val s = SheetName.unsafe("S")
     val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
     // B2 -> A1 -> C3 -> B2: one three-member cycle
@@ -1090,6 +1097,21 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     assertEquals(comps.size, 1)
     assertEquals(comps.map(_.members.map(_.ref.toA1)), Vector(Vector("A1", "B2", "C3")))
     assert(comps.forall(_.cyclic))
+  }
+
+  test("GH-482: the member listing is row-major on the grid, not lexicographic on the A1 text") {
+    // "A10" < "AA1" < "B2" as strings; on the grid AA1 (row 1) precedes B2 (row 2) precedes A10.
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    val deps = Map(q("B2") -> Set(q("A10")), q("A10") -> Set(q("AA1")), q("AA1") -> Set(q("B2")))
+    val comps = DependencyGraph.qualifiedSccOrder(deps)
+    assertEquals(comps.map(_.members.map(_.ref.toA1)), Vector(Vector("AA1", "B2", "A10")))
+    // Two independent components order by their top-left member the same way.
+    val two = Map(q("A10") -> Set(q("A10")), q("B2") -> Set(q("B2")))
+    assertEquals(
+      DependencyGraph.qualifiedSccOrder(two).map(_.members.map(_.ref.toA1)),
+      Vector(Vector("B2"), Vector("A10"))
+    )
   }
 
   test("GH-492: a self-loop singleton is cyclic; a plain singleton is not") {
@@ -1111,4 +1133,166 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     val deps = Map(a1 -> Set(z9))
     val comps = DependencyGraph.qualifiedSccOrder(deps)
     assertEquals(comps.flatMap(_.members), Vector(a1))
+  }
+
+  // ===== GH-482: within-component evaluation order (withinComponentOrder) =====
+
+  /**
+   * The grid order: sheet name, then row, then column — Excel's left-to-right, top-to-bottom sweep.
+   */
+  private def keyOf(q: DependencyGraph.QualifiedRef): (String, Int, Int) =
+    (q.sheet.value, q.ref.row.index0, q.ref.col.index0)
+
+  property("GH-482 permutation: withinComponentOrder is a permutation of the component") {
+    forAll(sccGraphGen) { deps =>
+      DependencyGraph.qualifiedSccOrder(deps).filter(_.cyclic).forall { c =>
+        DependencyGraph.withinComponentOrder(c.members, deps).sortBy(keyOf) == c.members
+      } :| s"not a permutation of some component of $deps"
+    }
+  }
+
+  property("GH-482 determinism: the order depends on the graph VALUE, not on build order") {
+    forAll(sccGraphGen, Gen.choose(0L, 1000000L)) { (deps, seed) =>
+      val rnd = new scala.util.Random(seed)
+      val rebuilt =
+        rnd
+          .shuffle(deps.toVector)
+          .map((k, vs) => k -> rnd.shuffle(vs.toVector).toSet)
+          .toMap
+      DependencyGraph.qualifiedSccOrder(deps).filter(_.cyclic).forall { c =>
+        DependencyGraph.withinComponentOrder(c.members, deps) ==
+          DependencyGraph.withinComponentOrder(rnd.shuffle(c.members), rebuilt)
+      } :| s"nondeterministic within-component order for $deps"
+    }
+  }
+
+  /** Acyclic graphs over `sccUniverse`: a node reads only nodes of a lower index. */
+  private val dagGen: Gen[Map[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]]] =
+    Gen
+      .sequence[List[Set[Int]], Set[Int]](
+        sccUniverse.indices.toList.map(i => Gen.someOf(0 until i).map(_.toSet))
+      )
+      .map { picks =>
+        sccUniverse.zipWithIndex.map((q, i) => q -> picks(i).map(sccUniverse)).toMap
+      }
+
+  /** Kahn with the smallest-key ready node first — the order a cut-free run must reproduce. */
+  private def referenceKahn(
+    nodes: Vector[DependencyGraph.QualifiedRef],
+    deps: Map[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]]
+  ): Vector[DependencyGraph.QualifiedRef] =
+    val members = nodes.toSet
+    @annotation.tailrec
+    def go(
+      remaining: Set[DependencyGraph.QualifiedRef],
+      emitted: Vector[DependencyGraph.QualifiedRef]
+    ): Vector[DependencyGraph.QualifiedRef] =
+      val ready = remaining.filter { q =>
+        deps.getOrElse(q, Set.empty).filter(members).forall(p => p == q || emitted.contains(p))
+      }
+      ready.minByOption(keyOf) match
+        case None => emitted
+        case Some(next) => go(remaining - next, emitted :+ next)
+    go(members, Vector.empty)
+
+  property("GH-482 DAG: on an acyclic member set the order IS the key-ordered Kahn order") {
+    forAll(dagGen) { deps =>
+      val order = DependencyGraph.withinComponentOrder(sccUniverse, deps)
+      (order == referenceKahn(sccUniverse, deps)) :| s"$order vs Kahn for $deps"
+    }
+  }
+
+  test("GH-482: the cut is the TOP-LEFT remaining member — row 10 never precedes row 2") {
+    // Same two-cell counter shifted across the row 9/10 and column Z/AA boundaries: the A1
+    // STRING order would cut at A10 ("A10" < "B2") and at AA1 ("AA1" < "Z1"), handing the
+    // trailing cell a round-old value; the grid order cuts at B2 (row 2) and Z1 (column Z).
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    val rows = Map(q("B2") -> Set(q("A10")), q("A10") -> Set(q("B2")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A10"), q("B2")), rows).map(_.ref.toA1),
+      Vector("B2", "A10")
+    )
+    val cols = Map(q("Z1") -> Set(q("AA1")), q("AA1") -> Set(q("Z1")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("AA1"), q("Z1")), cols).map(_.ref.toA1),
+      Vector("Z1", "AA1")
+    )
+    // Within one column the lower row precedes, whatever its digit count.
+    val same = Map(q("A2") -> Set(q("A10")), q("A10") -> Set(q("A2")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A10"), q("A2")), same).map(_.ref.toA1),
+      Vector("A2", "A10")
+    )
+  }
+
+  test("GH-482: a cross-sheet cycle sweeps sheet order first, then row-major within a sheet") {
+    // T!A1 reads S!A10, S!A10 reads S!B2, S!B2 reads T!A1. T!A1 sits on row 1, but sheet name
+    // orders first: the cut lands on sheet S at its top-left member B2 (the A1 STRING order would
+    // cut at A10), then Kahn follows the chain — A10 reads B2, T!A1 reads A10.
+    val sS = SheetName.unsafe("S")
+    val sT = SheetName.unsafe("T")
+    val sA10 = DependencyGraph.QualifiedRef(sS, parseRef("A10"))
+    val sB2 = DependencyGraph.QualifiedRef(sS, parseRef("B2"))
+    val tA1 = DependencyGraph.QualifiedRef(sT, parseRef("A1"))
+    val deps = Map(tA1 -> Set(sA10), sA10 -> Set(sB2), sB2 -> Set(tA1))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(tA1, sA10, sB2), deps),
+      Vector(sB2, sA10, tA1)
+    )
+  }
+
+  test("GH-482: the classic chain A1 = B1+1, B1 = A1 evaluates A1 first") {
+    // Cut at the top-left member (A1), then B1 (which reads A1) is ready: the counter reaches
+    // 100/100 in 100 iterations only if A1 is evaluated before B1 within a round.
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    val deps = Map(q("A1") -> Set(q("B1")), q("B1") -> Set(q("A1")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A1"), q("B1")), deps).map(_.ref.toA1),
+      Vector("A1", "B1")
+    )
+  }
+
+  test("GH-482: the average-balance idiom orders interest, payment, ending balance") {
+    // B2 = (B1+B4)/2*A2 reads B4; B3 = A3-B2 reads B2; B4 = B1-B3 reads B3. Cutting the
+    // smallest key (B2) leaves a chain B2 -> B3 -> B4: one sweep propagates the whole schedule.
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    val deps = Map(q("B2") -> Set(q("B4")), q("B3") -> Set(q("B2")), q("B4") -> Set(q("B3")))
+    assertEquals(
+      DependencyGraph
+        .withinComponentOrder(Vector(q("B4"), q("B2"), q("B3")), deps)
+        .map(_.ref.toA1),
+      Vector("B2", "B3", "B4")
+    )
+  }
+
+  test("GH-482: a self-edge is a back edge, never a blocker; precedents still go first") {
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    // A1 reads itself and B1; B1 reads A1 — the cycle. B1 < A1 would be Kahn's pick only if it
+    // were ready, and it is not (it reads A1): the cut lands on A1, then B1 follows.
+    val deps = Map(q("A1") -> Set(q("A1"), q("B1")), q("B1") -> Set(q("A1")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A1"), q("B1")), deps).map(_.ref.toA1),
+      Vector("A1", "B1")
+    )
+    // With B1 reading nothing in-component, B1 is ready first and A1's self-edge is ignored.
+    val chain =
+      Map(q("A1") -> Set(q("A1"), q("B1")), q("B1") -> Set.empty[DependencyGraph.QualifiedRef])
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A1"), q("B1")), chain).map(_.ref.toA1),
+      Vector("B1", "A1")
+    )
+  }
+
+  test("GH-482: the three-cycle B2 -> A1 -> C3 -> B2 cuts at A1 and follows the chain") {
+    val s = SheetName.unsafe("S")
+    val q = (r: String) => DependencyGraph.QualifiedRef(s, parseRef(r))
+    val deps = Map(q("B2") -> Set(q("A1")), q("A1") -> Set(q("C3")), q("C3") -> Set(q("B2")))
+    assertEquals(
+      DependencyGraph.withinComponentOrder(Vector(q("A1"), q("B2"), q("C3")), deps).map(_.ref.toA1),
+      Vector("A1", "B2", "C3")
+    )
   }

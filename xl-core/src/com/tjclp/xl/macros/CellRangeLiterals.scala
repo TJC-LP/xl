@@ -9,8 +9,14 @@ import scala.quoted.*
  *
  * Usage:
  * {{{
- * fx"=SUM(A1:A10)" // CellValue.Formula validated at compile time
+ * fx"=SUM(A1:A10)" // CellValue.Formula("SUM(A1:A10)"), validated at compile time
  * }}}
+ *
+ * GH-479: every path — compile-time literal, all-literal interpolation, runtime interpolation —
+ * stores the model's canonical bare expression ([[CellValue.canonicalFormulaText]]: surrounding
+ * whitespace trimmed, the display form's single leading '=' removed, trimmed again; interior spaces
+ * kept), so an fx-authored cell compares equal to its OOXML read-back. A literal that is empty once
+ * canonical (`fx""`, `fx"="`, a blank) fails to compile.
  *
  * Note: For cell and range references, use the unified `ref` macro instead.
  */
@@ -28,9 +34,11 @@ object CellRangeLiterals:
   private def fxImpl0(sc: Expr[StringContext])(using Quotes): Expr[CellValue] =
     import quotes.reflect.report
     val s = literal(sc)
+    // GH-479: the stored expression is the canonical bare text (one leading '=' removed)
+    val canonical = CellValue.canonicalFormulaText(s)
 
-    // Minimal validation: no empty formulas, basic character check
-    if s.isEmpty then report.errorAndAbort("Formula literal cannot be empty")
+    // Minimal validation: no empty formulas (a lone "=" is empty once canonical)
+    if canonical.isEmpty then report.errorAndAbort("Formula literal cannot be empty")
 
     // Check for balanced parentheses (simple validation)
     var depth = 0
@@ -40,8 +48,8 @@ object CellRangeLiterals:
       if depth < 0 then report.errorAndAbort(s"Formula literal has unbalanced parentheses: '$s'")
     if depth != 0 then report.errorAndAbort(s"Formula literal has unbalanced parentheses: '$s'")
 
-    // Emit CellValue.Formula with the validated string
-    '{ CellValue.Formula(${ Expr(s) }) }
+    // Emit CellValue.Formula with the validated, canonical string
+    '{ CellValue.Formula(${ Expr(canonical) }) }
 
   private def errorNoInterpolation(sc: Expr[StringContext], args: Expr[Seq[Any]], kind: String)(
     using Quotes

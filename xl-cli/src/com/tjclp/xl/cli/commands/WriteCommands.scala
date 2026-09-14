@@ -42,7 +42,8 @@ import com.tjclp.xl.formula.{
 }
 import com.tjclp.xl.formula.eval.DependentRecalculation
 import com.tjclp.xl.formula.eval.EvalFormulaSupport
-import com.tjclp.xl.formula.eval.StructuralEditor
+import com.tjclp.xl.formula.eval.{StructuralCachePolicy, StructuralEditor}
+import com.tjclp.xl.formula.graph.NameChanges
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
@@ -557,7 +558,7 @@ object WriteCommands:
     policy: WritePolicy,
     warn: Warning => IO[Unit]
   ): IO[String] =
-    val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+    val formula = CellValue.canonicalFormulaText(formulaStr)
     val fullFormula = s"=$formula"
     for
       parsedExpr <- IO.fromEither(
@@ -606,7 +607,7 @@ object WriteCommands:
     policy: WritePolicy,
     warn: Warning => IO[Unit]
   ): IO[String] =
-    val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+    val formula = CellValue.canonicalFormulaText(formulaStr)
     val fullFormula = s"=$formula"
     for
       parsedExpr <- IO.fromEither(
@@ -651,7 +652,7 @@ object WriteCommands:
           // Parse and apply each formula (using iterator to avoid toList)
           updates <- range.cellsRowMajor.zip(formulas.iterator).toList.traverse {
             (ref, formulaStr) =>
-              val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+              val formula = CellValue.canonicalFormulaText(formulaStr)
               val fullFormula = s"=$formula"
               IO.fromEither(
                 FormulaParser
@@ -1064,10 +1065,12 @@ object WriteCommands:
    * Rule: recalculate whenever any op writes, clears, or copies cell content — such an op can
    * invalidate cached formula values anywhere in the workbook (cross-sheet dependents included),
    * and `BatchParser` stores batch formulas uncached (`Formula(expr, None)`). Ops that only touch
-   * presentation or metadata (styles, comments, widths, visibility, merges, freeze panes, sheet
-   * management, hyperlinks) leave every existing cached value correct — `rename-sheet` (GH-559)
-   * rewrites referencing formulas and names without changing a value — so a batch made exclusively
-   * of them skips the recalculation and preserves the input's caches as-is.
+   * presentation or non-formula metadata (styles, comments, widths, visibility, merges, freeze
+   * panes, sheet management, hyperlinks) leave every existing cached value correct — `rename-sheet`
+   * (GH-559) rewrites referencing formulas and names without changing a value — so a batch made
+   * exclusively of them skips the recalculation and preserves the input's caches as-is.
+   * Defined-name edits are checked separately in `batch`: they invalidate readers without writing
+   * any cell content.
    *
    * The match is deliberately exhaustive (no wildcard): a future `BatchOp` must be consciously
    * classified here or the match fails loudly — in practice as a MatchError in the batch specs (the
@@ -1091,6 +1094,7 @@ object WriteCommands:
           _: BatchParser.BatchOp.ColShow | _: BatchParser.BatchOp.RowHide |
           _: BatchParser.BatchOp.RowShow | _: BatchParser.BatchOp.AutoFit |
           _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
+          _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName |
           _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
           _: BatchParser.BatchOp.Hyperlink | _: BatchParser.BatchOp.AddChart |
           _: BatchParser.BatchOp.SetSheetView | _: BatchParser.BatchOp.SetTabColor |
@@ -1107,8 +1111,8 @@ object WriteCommands:
    *
    * Unconditional on this path because it is unconditionally true: put/putf/fill/copy/batch change
    * cell contents without moving or rewriting any formula, so skipping the recalculation leaves
-   * every cached value in the file byte-identical. The structural verbs cannot claim that — see
-   * `CachePreservation.note`, which counts instead.
+   * every cached value in the file byte-identical, and the file needs no marker. The structural
+   * verbs cannot claim that — see `StructuralCaches.note` and [[writeStructural]] (GH-509).
    */
   private val noRecalcNote: String =
     "Recalculation skipped (--no-recalc): every existing cached value preserved"
@@ -1208,76 +1212,73 @@ object WriteCommands:
     }
 
   /**
-   * What a `--no-recalc` structural write actually leaves in the file: formula cells that still
-   * carry a `<v>`, and formula cells the edit left without one. Every formula cell in the written
-   * workbook falls in exactly one bucket, so the summary describes the output completely.
+   * What a `--no-recalc` structural write leaves in the file (GH-509): `preserved` formula cells
+   * still carry their pre-edit `<v>` — the edit provably could not have changed them — and
+   * `withdrawn` had one and lost it: the edit rewrote their text, moved them, or removed or moved
+   * something they read (transitively, across sheets), or the static graph cannot say what they
+   * read (a dynamic reference, a GH-507 blind name). Those are written without a `<v>`.
    */
-  private final case class CachePreservation(preserved: Int, uncached: Int):
-    def combine(other: CachePreservation): CachePreservation =
-      CachePreservation(preserved + other.preserved, uncached + other.uncached)
-
-    /** The `--no-recalc` summary line for the structural verbs: counted, never a blanket claim. */
+  private final case class StructuralCaches(preserved: Int, withdrawn: Int):
+    /**
+     * The `--no-recalc` summary line for the structural verbs. The marker clause is unconditional:
+     * every such write sets `fullCalcOnLoad`. It promises what Excel promises for the flag —
+     * ordinary formulas recompute on open; data-table interiors do not under
+     * `calcMode="autoNoTable"` — so it says "full recalculation", not "every number is fresh".
+     */
     def note: String =
-      val head = s"Recalculation skipped (--no-recalc): $preserved cached value(s) preserved"
-      if uncached == 0 then s"$head, none dropped"
-      else
-        s"$head, $uncached formula(s) invalidated by the edit left uncached (recalculate " +
-          "externally)"
-
-  private object CachePreservation:
-    val empty: CachePreservation = CachePreservation(0, 0)
+      val fate =
+        if withdrawn == 0 then "none withdrawn"
+        else s"$withdrawn withdrawn (the edit could have changed them; written without <v>)"
+      s"Recalculation skipped (--no-recalc): $preserved cached value(s) preserved, $fate; " +
+        "workbook marked for full recalculation on load (fullCalcOnLoad)"
 
   /**
-   * GH-468: what a structural edit did to the book's cached values, for the `--no-recalc` summary.
-   *
-   * A pure count over the WRITTEN workbook — nothing is put back. `StructuralEditor` invalidates
-   * `cachedValue` on every formula that transitively reads the edited sheet (its GH-455 `stale`
-   * predicate, wider than the shift itself — GH-503); those cells are written without a `<v>` and
-   * counted as `uncached`. Formulas it left alone — the independent ones, typically on sheets that
-   * never read the edited one — ride verbatim and are counted as `preserved`.
-   *
-   * WHY NOTHING IS RESTORED (round 3 of #468). Earlier revisions tried to carry the pre-edit caches
-   * of invalidated formulas forward under a local safety predicate (text unchanged / cell did not
-   * move / no `INDIRECT`-`OFFSET`). Three review rounds each found another dependency path where
-   * the formula TEXT is unchanged but what it resolves to is not, and each added guard was still
-   * local. The dirty-cone test that `scopedRecalc` uses does not rescue it either, in either form:
-   *
-   *   - Seeded with `changedRefs`, the cone is sound but VACUOUS. `changedRefs` compares whole cell
-   *     values, and dropping a `cachedValue` IS a difference, so every candidate for restoration is
-   *     by construction one of the cone's own seeds. The predicate can never fire.
-   *   - Seeded on semantic change only (ignoring the cache strip) the cone preserves again but is
-   *     UNSOUND, and the counter-example is small: `MyName -> Data!$A$30` with
-   *     `Other!B2 = MyName*3` cached 15, then `delete-rows 30 1`. The name degrades to `#REF!`,
-   *     which `FormulaParser` cannot parse, so `TExpr.NameRef` contributes no graph edge and B2 has
-   *     no precedents at all — no seed can reach it, while its own text and position are untouched.
-   *     The cone hands back 15 for a formula that now has no answer.
-   *
-   * That failure mode is not specific to defined names: any reference the static graph cannot
-   * resolve (a `#REF!`-ed name, an unparseable structured reference, an external link) breaks the
-   * closure the same way, and a dynamic reference is invisible to it by definition. There is no
-   * sound local test, and the only complete one is a recalculation — which is exactly what the flag
-   * refuses. (The VALUE-edit cone can afford more: `DependencyGraph.editCone` bounds such a reader
-   * by the cells its text spells, GH-606, because a value edit never rewrites that text.) So
-   * `--no-recalc` leaves the edit's invalidated formulas uncached and says how many: a missing
-   * `<v>` is recoverable by any recalculation, a wrong one is not, and a `data_only=True` reader
-   * cannot tell a stale number from a fresh one.
-   *
-   * WHAT `preserved` DOES AND DOES NOT CERTIFY. It counts caches `StructuralEditor` did not
-   * invalidate, i.e. ones the PRE-EDIT dependency graph showed no path from to the edited sheet. It
-   * is not a proof of correctness: that graph misses any reference it cannot parse (GH-507).
-   * StructuralEditor also invalidates unresolved readers and their dependents (GH-507), and refuses
-   * reference rewrites whose semantics cannot be preserved. GH-509 is the design that would let a
-   * `--no-recalc` structural write keep its caches honestly, by marking the book `fullCalcOnLoad`.
+   * The cells a DELETE removes from the edited sheet — `at0`-based, `count` wide on the edited
+   * axis; an insert removes none. A formula that leaves the file with its row is not a withdrawn
+   * cache.
    */
-  private def countCachePreservation(edited: Workbook): CachePreservation =
-    edited.sheets.foldLeft(CachePreservation.empty) { (tally, sheet) =>
-      sheet.cells.foldLeft(tally) { case (seen, (_, cell)) =>
-        cell.value match
-          case CellValue.Formula(_, Some(_), _) => seen.combine(CachePreservation(1, 0))
-          case CellValue.Formula(_, None, _) => seen.combine(CachePreservation(0, 1))
-          case _ => seen
+  private final case class RemovedBand(sheet: SheetName, isRow: Boolean, at0: Int, count: Int):
+    def removes(sheetName: SheetName, ref: ARef): Boolean =
+      sheetName == sheet && {
+        val index = if isRow then ref.row.index0 else ref.col.index0
+        index >= at0 && index < at0 + count
       }
-    }
+
+  /**
+   * GH-509: the `--no-recalc` tally, without a second dependency graph.
+   *
+   * A formula cell keeps or loses its `<v>` wherever it lands (a data-table record rides its cache
+   * under every policy), so the withdrawn count is the number of cached formula cells the pre-edit
+   * book had, minus those a delete band removed outright — a cell that leaves the file with its row
+   * is not a withdrawal — minus the cached formula cells the written book has. `preserved` counts
+   * the written book directly. Data-table records are left out of the difference (an orphaned
+   * record can degrade to a constant, GH-435, which is not a withdrawal) and counted only as
+   * preserved.
+   */
+  private def tallyStructuralCaches(
+    before: Workbook,
+    edited: Workbook,
+    removed: Option[RemovedBand]
+  ): StructuralCaches =
+    def cachedCells(wb: Workbook, keep: (SheetName, ARef) => Boolean): Int =
+      wb.sheets.iterator.map { sheet =>
+        sheet.cells.iterator.count { case (ref, cell) =>
+          cell.value match
+            case CellValue.Formula(_, Some(_), _: FormulaKind.DataTable) => false
+            case CellValue.Formula(_, Some(_), _) => keep(sheet.name, ref)
+            case _ => false
+        }
+      }.sum
+    val preserved = edited.sheets.iterator.map { sheet =>
+      sheet.cells.iterator.count { case (_, cell) =>
+        cell.value match
+          case CellValue.Formula(_, Some(_), _) => true
+          case _ => false
+      }
+    }.sum
+    val cachedBefore = cachedCells(before, (name, ref) => !removed.exists(_.removes(name, ref)))
+    val cachedAfter = cachedCells(edited, (_, _) => true)
+    StructuralCaches(preserved, cachedBefore - cachedAfter)
 
   /**
    * Scope a whole-book recalculation to the cone that is written back.
@@ -1335,17 +1336,83 @@ object WriteCommands:
    */
   private def scopedRecalc(before: Workbook, edited: Workbook): (Workbook, RecalcResult) =
     val result = recalcHonoringCalcPr(edited).result
-    val cone = dirtyCone(edited, changedRefs(before, edited))
+    val changed = changedRefs(before, edited)
+    // A name's binding can change while every cell retains its text and cache. Seed its readers
+    // explicitly before closing the cell graph, including readers of removed names and aliases.
+    val nameReaders = NameChanges.readers(before, edited).groupMap(_.sheet)(_.ref)
+    val seeds = (changed.keySet ++ nameReaders.keySet).iterator.map { sheet =>
+      sheet -> (changed.getOrElse(sheet, Set.empty) ++ nameReaders.getOrElse(sheet, Set.empty))
+    }.toMap
+    val cone = dirtyCone(edited, seeds)
     val written = applyConeCaches(edited, result.workbook, cone)
     (written, scopeToCone(result, cone, written))
+
+  /**
+   * Whether an edit changed the defined-name table — the reason a name edit recalculates. As a set:
+   * `withDefinedName` re-appends a replaced entry, and a binding restated verbatim moves in the
+   * table without changing what any reader sees.
+   */
+  private[cli] def changesNames(before: Workbook, edited: Workbook): Boolean =
+    before.metadata.definedNames.toSet != edited.metadata.definedNames.toSet
+
+  /**
+   * The trailing refresh of a non-structural edit that may have changed what formulas read — cell
+   * contents, or the defined-name table (`mutating` says so) — shared by `batch` and the `name
+   * add|rm` verbs (#659 review: the verbs and their twins `define-name`/`remove-name` must leave
+   * the same caches). Returns the workbook to write, the result for [[strictGate]], and the summary
+   * line: the recalculation summary; the `--no-recalc` note when a refresh was suppressed; none
+   * when nothing changed.
+   */
+  private def refreshDependents(
+    before: Workbook,
+    edited: Workbook,
+    mutating: Boolean,
+    outputPath: Path,
+    policy: WritePolicy
+  ): IO[(Workbook, Option[RecalcResult], Option[String])] =
+    if mutating && !policy.noRecalc then
+      MemoryGuard.blocking(outputPath, "recalc")(scopedRecalc(before, edited)).map {
+        (written, result) => (written, Some(result), Some(formatRecalcSummary(result)))
+      }
+    else IO.pure((edited, None, Option.when(mutating)(noRecalcNote)))
+
+  /**
+   * GH-462 / #659 review: the write tail of `name add` and `name rm`, the same as the batch
+   * `define-name` / `remove-name` tail — when the edit changed the defined-name table, its readers
+   * (through aliases, named ranges, local shadows and cross-sheet references) are recalculated and
+   * the summary carries the same `Recalculated N formula(s)` line the batch op prints; under
+   * `--no-recalc` every cache is kept and the note says so; `--strict` gates on the same reasons.
+   * `message` is the verb's own first line.
+   */
+  def writeAfterNameEdit(
+    before: Workbook,
+    edited: Workbook,
+    message: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
+  ): IO[String] =
+    refreshDependents(before, edited, changesNames(before, edited), outputPath, policy).flatMap {
+      (finalWb, recalcOpt, refreshLine) =>
+        writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+          val recalcLine = refreshLine.fold("")(line => s"$line\n")
+          val rendered = s"$message\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
+          strictGate(policy, rendered, recalcOpt, Vector.empty, warn)
+        }
+    }
 
   /**
    * GH-496: the `--strict` gate. The write has already happened; this only decides the exit code.
    *
    * Advisory by default (the summary is returned as-is, exit 0). Under `--strict` a recalculation
-   * that reported formula errors, exhausted its iteration budget, or produced data-table seed
-   * warnings raises [[StrictFailure]] — the runner prints the same summary plus the reason and
-   * exits 1. Excel error VALUES (#DIV/0!, #N/A) are data conditions, not failures, and never gate.
+   * that reported formula errors, left a cyclic component unconverged (exhausted its budget or
+   * stalled, GH-537), or produced data-table seed warnings raises [[StrictFailure]] — the runner
+   * prints the same summary plus the reason and exits 1. The iterative reason is
+   * `RecalcResult.unconvergedVerdict`, the very text the summary's WARNING carries, so the two
+   * lines never disagree. Excel error VALUES (#DIV/0!, #N/A) are data conditions, not failures, and
+   * never gate.
    */
   private def strictGate(
     policy: WritePolicy,
@@ -1358,9 +1425,7 @@ object WriteCommands:
     val recalcReasons = recalc.toList.flatMap { r =>
       List(
         Option.when(r.errors.nonEmpty)(s"${r.errors.size} formula evaluation error(s)"),
-        Option.when(!r.converged)(
-          s"iterative calculation exhausted ${r.iterationsUsed} round(s) without converging"
-        )
+        r.unconvergedVerdict.map(verdict => s"iterative calculation $verdict")
       ).flatten
     }
     // GH-628: a #REF! written for a reference dragged off the grid is a successful evaluation of
@@ -1390,37 +1455,20 @@ object WriteCommands:
    * One-line recalculation summary: formula count plus the first few failing refs (GH-352). Formula
    * errors are data conditions — they are reported, never thrown. GH-344: formulas that COMPUTE an
    * Excel error value (#DIV/0!, ...) evaluate cleanly and cache; their count appears as a
-   * parenthetical (only when > 0), separate from could-not-evaluate host failures.
+   * parenthetical (only when > 0), separate from could-not-evaluate host failures. GH-454/GH-537:
+   * the iterative verdict (converged / exhausted / stalled) rides along.
+   *
+   * This IS `RecalcResult.summary` (ADR-017 §2.8 promises scripts and the CLI report the same
+   * line); the text lives in xl-evaluator so the two can never drift.
    */
-  private def formatRecalcSummary(result: RecalcResult): String =
-    val formulaCount = result.evaluated.valuesIterator.map(_.size).sum
-    val formulasLabel = if formulaCount == 1 then "formula" else "formulas"
-    val errorValueCount = result.excelErrors.size
-    val errorValues =
-      if errorValueCount == 0 then ""
-      else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
-    // GH-454: surface the iterative-calculation verdict — maxIter exhaustion keeps the last
-    // values (Excel semantics, no error) so the summary is the only place it becomes visible.
-    val convergence =
-      if !result.converged then
-        s"; WARNING: iterative calculation exhausted ${result.iterationsUsed} round(s) without converging (last values kept)"
-      else if result.iterationsUsed > 0 then
-        s"; converged in ${result.iterationsUsed} iterative round(s)"
-      else ""
-    if result.isClean then s"Recalculated $formulaCount $formulasLabel$errorValues$convergence"
-    else
-      val maxShown = 3
-      val shown = result.errors.take(maxShown).map(_.render).mkString("; ")
-      val ellipsis = if result.errors.size > maxShown then "; ..." else ""
-      val errorsLabel = if result.errors.size == 1 then "error" else "errors"
-      s"Recalculated $formulaCount $formulasLabel$errorValues; ${result.errors.size} $errorsLabel ($shown$ellipsis)$convergence"
+  private def formatRecalcSummary(result: RecalcResult): String = result.summary
 
   /**
    * Apply multiple operations atomically (JSON from stdin or file).
    *
-   * Ends with one recalculation when any op mutates cell content (GH-352), so batch putf carries
-   * cached values (`<v>`) exactly like single-op putf. Formula errors do not abort the write: the
-   * workbook is written regardless and errors surface in the summary.
+   * Ends with one recalculation when an op mutates cell content or defined names, so batch putf
+   * carries cached values (`<v>`) exactly like single-op putf. Formula errors do not abort the
+   * write: the workbook is written regardless and errors surface in the summary.
    *
    * GH-468: that recalculation is scoped to the edit's dirty dependency cone — a cached value no op
    * can have invalidated is never rewritten, so a book whose caches come from another engine
@@ -1454,24 +1502,21 @@ object WriteCommands:
           BatchParser
             .applyScopedReporting(wb, sheetOpt, result.scoped, !policy.noRecalc)
             .flatMap { (updatedWb, offGrid) =>
-              val mutating = result.scoped.map(_.op).exists(isCellMutating)
-              val recalculation: IO[Option[(Workbook, RecalcResult)]] =
-                if mutating && !policy.noRecalc then
-                  MemoryGuard.blocking(outputPath, "recalc")(Some(scopedRecalc(wb, updatedWb)))
-                else IO.pure(None)
-              recalculation.flatMap { recalcOpt =>
-                val finalWb = recalcOpt.fold(updatedWb)(_._1)
-                writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
-                  val ops = result.ops
-                  val summary = BatchParser.formatScopedSummary(result.scoped)
-                  val recalcLine = recalcOpt match
-                    case Some((_, r)) => s"${formatRecalcSummary(r)}\n"
-                    case None if mutating => s"$noRecalcNote\n"
-                    case None => ""
-                  val rendered =
-                    s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
-                  strictGate(policy, rendered, recalcOpt.map(_._2), Vector.empty, warn, offGrid)
-                }
+              val nameEdit = result.ops.exists {
+                case _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName => true
+                case _ => false
+              } && changesNames(wb, updatedWb)
+              val mutating = result.scoped.map(_.op).exists(isCellMutating) || nameEdit
+              refreshDependents(wb, updatedWb, mutating, outputPath, policy).flatMap {
+                (finalWb, recalcOpt, refreshLine) =>
+                  writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+                    val ops = result.ops
+                    val summary = BatchParser.formatScopedSummary(result.scoped)
+                    val recalcLine = refreshLine.fold("")(line => s"$line\n")
+                    val rendered =
+                      s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
+                    strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid)
+                  }
               }
             }
       }
@@ -2044,21 +2089,49 @@ object WriteCommands:
     else singleColIndex(trimmed).map(idx => (idx, fallbackCount))
 
   /**
+   * The cache posture the four structural verbs hand `StructuralEditor`: a recalculating write
+   * invalidates what it will refresh; `--no-recalc` keeps only the caches the edit provably left
+   * unchanged (`PreserveUntouched`, GH-503) and [[writeStructural]] marks the book `fullCalcOnLoad`
+   * so Excel recomputes the rest on open.
+   *
+   * Never `CarryForward` here. GH-509's first cut carried every pre-edit cache under the marker, on
+   * the premise that every recalculating reader honors it. Excel does; LibreOffice does not — its
+   * shipped default for xlsx is "never recalculate on load", so it displays a carried `<v>` as-is
+   * and computes only cells without one (verified: `--no-recalc delete-rows` on A1=5, A2=10,
+   * B1=SUM(A1:A2), B2=ROW()*10, C1=B1+B2 displayed 5,15,35 where the truth is 5,5,#REF!; the same
+   * file with the two caches withdrawn displays 5,5,#REF!). A withdrawn cache is a blank every
+   * reader can fill in; a carried stale one is a wrong number two of the three reader classes show.
+   * `CarryForward` stays a library policy for an embedder that controls the reader; the CLI, which
+   * cannot know who opens the file, does not offer it.
+   */
+  private def structuralCachePolicy(policy: WritePolicy): StructuralCachePolicy =
+    if policy.noRecalc then StructuralCachePolicy.PreserveUntouched
+    else StructuralCachePolicy.Invalidate
+
+  /**
    * Shared tail of the four structural verbs: cone-scoped recalculation — or, under `--no-recalc`,
-   * the edit written exactly as `StructuralEditor` produced it — then the write and the `--strict`
-   * gate over what the recalculation reported.
+   * the edit as `StructuralEditor` produced it under `PreserveUntouched`, with the workbook marked
+   * `fullCalcOnLoad` — then the write and the `--strict` gate over what the recalculation reported.
    *
-   * The `--no-recalc` line here is COUNTED, not the blanket non-structural note: a structural edit
-   * rewrites formula text, moves cells and rewrites defined names, so the caches it invalidated are
-   * reported as dropped rather than quietly re-asserted (see [[countCachePreservation]] for why no
-   * local predicate can soundly re-assert them).
-   *
-   * StructuralEditor invalidates both known dependents and readers whose dependencies cannot be
-   * resolved, so default and --no-recalc writes share the same invalidation policy (GH-507).
+   * GH-509: a structural edit rewrites formula text, moves cells and rewrites defined names. The
+   * pre-edit dependency graph says which caches the edit could have changed — every formula whose
+   * text it rewrote or whose cell it moved, every reader (through a point, a range, a resolvable
+   * defined name) of a cell it moved or removed and everything downstream of those across sheets,
+   * every dynamic reference, every reader it cannot resolve (GH-507) — and `--no-recalc` writes
+   * exactly those without a `<v>` while keeping the rest. Then it sets `<calcPr
+   * fullCalcOnLoad="1"/>`: Excel recomputes the whole book on open, so even a cache the graph could
+   * not fault is refreshed there; LibreOffice, which ignores the marker at its default settings,
+   * computes the uncached cells and displays the kept ones; a cache-only reader (openpyxl
+   * `data_only`, `xl view`) sees a blank where the edit reached and never a stale number. The
+   * marker is set on EVERY `--no-recalc` structural write, an edit beside the data included — it is
+   * a statement about the write, not a count of drops — and it is built on the book's own calcPr so
+   * a declared iterate triple, calcMode or calcId survives the overlay. The non-structural verbs
+   * never set it: they move nothing, so their blanket claim is true as it stands.
    */
   private def writeStructural(
     before: Workbook,
     edited: Workbook,
+    removed: Option[RemovedBand],
     message: String,
     outputPath: Path,
     config: WriterConfig,
@@ -2072,7 +2145,9 @@ object WriteCommands:
     recalculation.flatMap { recalcOpt =>
       val (finalWb, recalcLine) = recalcOpt match
         case Some((wb, result)) => (wb, formatRecalcSummary(result))
-        case None => (edited, countCachePreservation(edited).note)
+        case None =>
+          val calcPr = edited.metadata.calcPr.getOrElse(CalcPr()).copy(fullCalcOnLoad = Some(true))
+          (edited.withCalcPr(calcPr), tallyStructuralCaches(before, edited, removed).note)
       writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
         strictGate(
           policy,
@@ -2099,10 +2174,12 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      edited = StructuralEditor.insertRows(wb, sheet.name, at - 1, count, policy.noRecalc)
+      edited =
+        StructuralEditor.insertRows(wb, sheet.name, at - 1, count, structuralCachePolicy(policy))
       result <- writeStructural(
         wb,
         edited,
+        removed = None,
         s"Inserted $count row(s) before row $at on '${sheet.name.value}'",
         outputPath,
         config,
@@ -2127,10 +2204,12 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      edited = StructuralEditor.deleteRows(wb, sheet.name, at - 1, count, policy.noRecalc)
+      edited =
+        StructuralEditor.deleteRows(wb, sheet.name, at - 1, count, structuralCachePolicy(policy))
       result <- writeStructural(
         wb,
         edited,
+        removed = Some(RemovedBand(sheet.name, isRow = true, at - 1, count)),
         s"Deleted $count row(s) from row $at on '${sheet.name.value}'",
         outputPath,
         config,
@@ -2156,10 +2235,12 @@ object WriteCommands:
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      edited = StructuralEditor.insertColumns(wb, sheet.name, at0, n, policy.noRecalc)
+      edited =
+        StructuralEditor.insertColumns(wb, sheet.name, at0, n, structuralCachePolicy(policy))
       result <- writeStructural(
         wb,
         edited,
+        removed = None,
         s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'",
         outputPath,
         config,
@@ -2185,10 +2266,12 @@ object WriteCommands:
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      edited = StructuralEditor.deleteColumns(wb, sheet.name, at0, n, policy.noRecalc)
+      edited =
+        StructuralEditor.deleteColumns(wb, sheet.name, at0, n, structuralCachePolicy(policy))
       result <- writeStructural(
         wb,
         edited,
+        removed = Some(RemovedBand(sheet.name, isRow = false, at0, n)),
         s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'",
         outputPath,
         config,

@@ -902,7 +902,7 @@ class SvgRendererSpec extends FunSuite:
   test("toSvg: pattern fill uses background color") {
     import com.tjclp.xl.styles.fill.PatternType
     // Create a LightGray pattern fill with light gray background
-    val patternFill = Fill.Pattern(
+    val patternFill = Fill.pattern(
       foreground = Color.fromRgb(0, 0, 0), // Black foreground
       background = Color.fromRgb(200, 200, 200), // Light gray background
       pattern = PatternType.LightGray
@@ -923,10 +923,24 @@ class SvgRendererSpec extends FunSuite:
     )
   }
 
+  test("toSvg: GH-566 pattern fill with an automatic background renders like no fill (white)") {
+    import com.tjclp.xl.styles.fill.PatternType
+    // openpyxl's `PatternFill(patternType="mediumGray", fgColor=...)`: foreground only, the
+    // background is Excel's automatic window colour
+    val fgOnly = Fill.Pattern(Some(Color.fromRgb(128, 128, 128)), None, PatternType.MediumGray)
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Hatched")
+      .unsafe
+      .withCellStyle(ref"A1", CellStyle.default.withFill(fgOnly))
+    val svg = sheet.toSvg(ref"A1:A1")
+    assert(svg.contains("""fill="#FFFFFF""""), s"automatic background must render white: $svg")
+    assert(!svg.contains("""fill="#808080""""), s"the foreground is not the cell fill: $svg")
+  }
+
   test("toSvg: pattern fill does not render as white") {
     import com.tjclp.xl.styles.fill.PatternType
     // Create a pattern fill with a distinct background color
-    val patternFill = Fill.Pattern(
+    val patternFill = Fill.pattern(
       foreground = Color.fromRgb(0, 0, 0),
       background = Color.fromRgb(0, 128, 255), // Blue background
       pattern = PatternType.Gray125
@@ -1397,7 +1411,7 @@ class SvgRendererSpec extends FunSuite:
     assert(svg.contains("1234567.9"), s"Wrapped number keeps its digits, got: $svg")
   }
 
-  test("toSvg: overflowing text is not hashed (only numbers and dates hash)") {
+  test("toSvg: overflowing text is not hashed (text never hashes)") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Sales Report Total")
       .put(ref"B1" -> "x")
@@ -1568,7 +1582,7 @@ class SvgRendererSpec extends FunSuite:
     )
     val (clipX, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
 
-    assertEquals(text, long, "Text is never hashed — only numbers and dates are")
+    assertEquals(text, long, "Text is never hashed — only numbers, dates, logicals and errors are")
     assertEquals(anchor, "end")
     assertEquals(
       textX,
@@ -1676,4 +1690,284 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:B1")
     assertEquals(svgHashRuns(svg), Nil, s"A number with room to spare must not hash: $svg")
     assert(svg.contains(">42</text>"), s"Fitting number should render its digits: $svg")
+  }
+
+  // ========== Effective rendered content: kind + formatted text (GH-500/501/502) ==========
+
+  import com.tjclp.xl.cells.CellError
+
+  /** An Excel column width whose pixel width lies strictly between two measured texts. */
+  private def columnBetween(
+    narrowText: String,
+    wideText: String,
+    font: com.tjclp.xl.styles.font.Font
+  ): (Double, Int) =
+    val narrow = RenderUtils.measureTextWidth(narrowText, Some(font))
+    val wide = RenderUtils.measureTextWidth(wideText, Some(font))
+    val excelWidth = ((narrow + wide) / 2 - 5) / 8.0
+    val px = RenderUtils.excelColWidthToPixels(excelWidth)
+    assert(
+      narrow <= px && px < wide,
+      s"Precondition: '$narrowText' ($narrow px) fits and '$wideText' ($wide px) does not in $px px"
+    )
+    (excelWidth, px)
+
+  test("toSvg: TRUE too wide for its column renders #### (GH-500)") {
+    // 21px column, "TRUE" measures ~36px, B1 blocks overflow: Excel shows #### for a logical
+    // that does not fit, exactly as for a number.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> true)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(2.0)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    assert(svgHashRuns(svg).nonEmpty, s"An overflowing TRUE must hash like a number: $svg")
+    assert(!svg.contains("TRUE"), s"No fragment of the logical may render: $svg")
+  }
+
+  test("toSvg: #DIV/0! too wide for its column renders #### and is centred (GH-500)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Error(CellError.Div0))
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(3.0))) // 29px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (_, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    assert(text.nonEmpty && text.forall(_ == '#'), s"Expected a # run, got '$text': $svg")
+    assertEquals(anchor, "middle", "Excel centres error values under General alignment")
+    assert(!svg.contains("#DIV"), s"No fragment of the error code may render: $svg")
+  }
+
+  test("toSvg: centred #### marker fits inside the cell (GH-500)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> false)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(3.0))) // 29px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (textX, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    val (clipX, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+    assertEquals(anchor, "middle")
+    assert(text.nonEmpty && text.forall(_ == '#'), s"Expected a # run, got '$text': $svg")
+    val markerW = RenderUtils.measureTextWidth(text, None)
+    assert(
+      markerW <= clipWidth - 2 * RenderUtils.CellPaddingX,
+      s"The marker must fit the padded inner width, got $markerW px in $clipWidth px: $svg"
+    )
+    assert(
+      textX - markerW / 2 >= clipX && textX + markerW / 2 <= clipX + clipWidth,
+      s"The centred marker must lie inside its clip, got x=$textX w=$markerW: $svg"
+    )
+  }
+
+  test("toSvg: Bool and Error that fit are never hashed (GH-500)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> true)
+      .put(ref"A2", CellValue.Error(CellError.NA))
+      .put(ref"B1" -> "x")
+      .put(ref"B2" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0))) // 101px
+
+    val svg = sheet.toSvg(ref"A1:B2")
+    assertEquals(svgHashRuns(svg), Nil, s"Values with room to spare must not hash: $svg")
+    assert(svg.contains(">TRUE</text>"), s"The logical should render in full: $svg")
+    assert(svg.contains(">#N/A</text>"), s"The error code should render in full: $svg")
+  }
+
+  test("toSvg/toHtml: Bool and Error #### markers are identical in both renderers (GH-500)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> true)
+      .put(ref"A2", CellValue.Error(CellError.Value))
+      .put(ref"B1" -> "x")
+      .put(ref"B2" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(3.0)))
+
+    val svgRuns = svgHashRuns(sheet.toSvg(ref"A1:B2"))
+    val htmlRuns = """<td[^>]*>(#+)</td>""".r
+      .findAllMatchIn(sheet.toHtml(ref"A1:B2"))
+      .map(_.group(1))
+      .toList
+
+    assertEquals(svgRuns.size, 2, "SVG should hash both the logical and the error")
+    assertEquals(svgRuns, htmlRuns, "SVG and HTML must agree on the markers")
+  }
+
+  test("toSvg: number under the @ text format is left-aligned, overflows, never hashes (GH-501)") {
+    // Excel treats an @-formatted number as text: General digits, text alignment, and it bleeds
+    // into the empty neighbour instead of showing ####.
+    List(NumFmt.Text, NumFmt.Custom("@")).foreach { fmt =>
+      val textFmt = CellStyle.default.withNumFmt(fmt)
+      val sheet = Sheet("Test")
+        .put(ref"A1" -> 1234567.9)
+        .unsafe
+        .withCellStyle(ref"A1", textFmt)
+        .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // 37px
+
+      val svg = sheet.toSvg(ref"A1:B1")
+      val (_, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(
+        fail(s"$fmt: no <text> emitted for A1: $svg")
+      )
+      val (_, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"$fmt: no clipPath: $svg"))
+      assertEquals(text, "1234567.9", s"$fmt: the digits render, never ####: $svg")
+      assertEquals(anchor, "start", s"$fmt: an @-formatted number takes text alignment")
+      assert(clipWidth > 37, s"$fmt: the clip must expand over the empty B1, got $clipWidth: $svg")
+    }
+  }
+
+  test("toSvg: accounting code with a trailing _(@_) section stays numeric (GH-501)") {
+    // Four sections keep the @ section as the TEXT arm of a numeric format; the number is
+    // right-aligned and hashes like any other.
+    val acct = CellStyle.default.withNumFmt(
+      NumFmt.Custom("_(* #,##0.00_);_(* (#,##0.00);_(* \"-\"??_);_(@_)")
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", acct)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // 37px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (_, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    assertEquals(anchor, "end")
+    assert(text.nonEmpty && text.forall(_ == '#'), s"Expected a # run, got '$text': $svg")
+    assertEquals(svgClipRect(svg, "A1").map(_._2), Some(37), "A numeric cell never spans")
+  }
+
+  test(
+    "toSvg: left-aligned number rounded by its format claims no span it does not need (GH-502)"
+  ) {
+    // 0.123456789 renders as "0.12" under 0.00: sized from the RAW digits the cell stole the
+    // empty B1 and C1 for a tail it never draws.
+    val leftDecimal =
+      CellStyle.default.withNumFmt(NumFmt.Decimal).withAlign(Align(horizontal = HAlign.Left))
+    val (colWidth, colPx) = columnBetween("0.12", "0.123456789", leftDecimal.font)
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 0.123456789)
+      .unsafe
+      .withCellStyle(ref"A1", leftDecimal)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
+
+    val svg = sheet.toSvg(ref"A1:C1")
+    val (_, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+    assertEquals(clipWidth, colPx, s"The clip must stay within A1's own column: $svg")
+    assertEquals(svgTextUnderClip(svg, "A1").map(_._3), Some("0.12"))
+  }
+
+  test("toSvg: left-aligned currency is measured as its formatted text, not its digits (GH-502)") {
+    // "1234.5" fits the column, "$1,234.50" does not: sized from the raw digits the cell was
+    // judged to fit and drew a sheared "$1,234.5". Measured as drawn it does not fit, and a
+    // number never borrows the empty B1 whatever its alignment: Excel hashes it (GH-500).
+    val leftCurrency =
+      CellStyle.default.withNumFmt(NumFmt.Currency).withAlign(Align(horizontal = HAlign.Left))
+    val (colWidth, colPx) = columnBetween("1234.5", "$1,234.50", leftCurrency.font)
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234.5)
+      .unsafe
+      .withCellStyle(ref"A1", leftCurrency)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (_, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    val (_, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+    assert(text.nonEmpty && text.forall(_ == '#'), s"Expected a # run, got '$text': $svg")
+    assertEquals(anchor, "start", "The explicit alignment is kept")
+    assertEquals(clipWidth, colPx, s"A number never spans into the empty B1: $svg")
+    assert(!svg.contains("1,234"), s"No fragment of the number may render: $svg")
+  }
+
+  test("toSvg: left-aligned error is measured as its Excel code, not the enum name (GH-502)") {
+    // "Div0" (the enum case name) fits the column, "#DIV/0!" (what is drawn) does not: sized
+    // from the enum name the cell was judged to fit and clipped the code to a fragment. An
+    // error never spans into the empty B1: Excel hashes it (GH-500).
+    val left = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val (colWidth, colPx) = columnBetween("Div0", "#DIV/0!", left.font)
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Error(CellError.Div0))
+      .unsafe
+      .withCellStyle(ref"A1", left)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
+
+    val svg = sheet.toSvg(ref"A1:B1")
+    val (_, _, text) = svgTextUnderClip(svg, "A1").getOrElse(
+      fail(s"No <text> emitted for A1: $svg")
+    )
+    val (_, clipWidth) = svgClipRect(svg, "A1").getOrElse(fail(s"No clipPath for A1: $svg"))
+    assert(text.nonEmpty && text.forall(_ == '#'), s"Expected a # run, got '$text': $svg")
+    assertEquals(clipWidth, colPx, s"An error never spans into the empty B1: $svg")
+    assert(!svg.contains("#DIV"), s"No fragment of the error code may render: $svg")
+  }
+
+  test("toSvg: a too-wide number hashes in its own column under any alignment (GH-500)") {
+    // Excel never lets a number overflow into a neighbour, empty or not: it hashes it whether
+    // General (right), explicitly Left or Center aligned. Only text spills.
+    val left = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val center = CellStyle.default.withAlign(Align(horizontal = HAlign.Center))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"A2" -> 1234567.9)
+      .put(ref"A3" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", left)
+      .withCellStyle(ref"A2", center)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(3.0))) // 29px
+
+    val svg = sheet.toSvg(ref"A1:B3")
+    assertEquals(svgHashRuns(svg).size, 3, s"All three numbers must hash: $svg")
+    assert(!svg.contains("1234567"), s"No digits may render: $svg")
+    List(("A1", "start"), ("A2", "middle"), ("A3", "end")).foreach { (a1, expectedAnchor) =>
+      val (textX, anchor, text) =
+        svgTextUnderClip(svg, a1).getOrElse(fail(s"No <text> for $a1: $svg"))
+      val (clipX, clipWidth) = svgClipRect(svg, a1).getOrElse(fail(s"No clipPath for $a1: $svg"))
+      assert(text.forall(_ == '#'), s"$a1 must hash, got '$text'")
+      assertEquals(anchor, expectedAnchor, s"$a1 keeps its alignment")
+      assertEquals(clipWidth, 29, s"$a1 never spans into the empty B: $svg")
+      assert(textX >= clipX && textX <= clipX + clipWidth, s"$a1 anchor lies in its own column")
+    }
+  }
+
+  test(
+    "toSvg: TRUE and #N/A that fit stay in their own cell, centred, beside an empty B (GH-500)"
+  ) {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> true)
+      .put(ref"A2", CellValue.Error(CellError.NA))
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0))) // 101px
+
+    val svg = sheet.toSvg(ref"A1:B2")
+    assertEquals(svgHashRuns(svg), Nil, s"Values with room to spare must not hash: $svg")
+    List(("A1", "TRUE"), ("A2", "#N/A")).foreach { (a1, expected) =>
+      val (textX, anchor, text) =
+        svgTextUnderClip(svg, a1).getOrElse(fail(s"No <text> for $a1: $svg"))
+      val (clipX, clipWidth) = svgClipRect(svg, a1).getOrElse(fail(s"No clipPath for $a1: $svg"))
+      assertEquals(text, expected)
+      assertEquals(anchor, "middle", s"$a1 centres under General alignment")
+      assertEquals(clipWidth, 101, s"$a1 never spans into the empty B: $svg")
+      assertEquals(textX, clipX + clipWidth / 2, s"$a1 is centred in its OWN cell, not over A:B")
+    }
+  }
+
+  test("toSvg: TRUE and #DIV/0! too wide for their column hash beside an EMPTY B (GH-500)") {
+    // The occupied-neighbour case is covered above; Excel hashes these with B empty too — it
+    // never draws a logical or an error across the cell boundary.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> true)
+      .put(ref"A2", CellValue.Error(CellError.Div0))
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(3.0))) // 29px
+
+    val svg = sheet.toSvg(ref"A1:B2")
+    assertEquals(svgHashRuns(svg).size, 2, s"Both the logical and the error must hash: $svg")
+    assert(!svg.contains("TRUE") && !svg.contains("#DIV"), s"No fragment may render: $svg")
+    List("A1", "A2").foreach { a1 =>
+      val (_, anchor, _) = svgTextUnderClip(svg, a1).getOrElse(fail(s"No <text> for $a1: $svg"))
+      assertEquals(anchor, "middle", s"$a1's marker is centred")
+      assertEquals(svgClipRect(svg, a1).map(_._2), Some(29), s"$a1 never spans into B: $svg")
+    }
   }

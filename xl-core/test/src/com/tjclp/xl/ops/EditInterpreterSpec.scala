@@ -6,7 +6,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.sheets.{AutoFilterState, FreezePane, Sheet}
+import com.tjclp.xl.sheets.{AutoFilterState, FreezePane, PageSetup, Sheet}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.color.Color
@@ -159,6 +159,11 @@ class EditInterpreterSpec extends FunSuite:
   test("put-formula stores the text uncached (leading = dropped); an empty formula is refused") {
     val s = sheetAfter(Workbook(baseData), Edit.PutFormula(loc("G1"), "=SUM(B2:B4)", None))
     assertEquals(s(a1("G1")).value, CellValue.Formula("SUM(B2:B4)", None))
+    // GH-479: the shared canonical rule IS trim, strip, trim — the same text fx / FormulaParser /
+    // the CLI store (FormulaInterpolationSpec pins the other entries on the same input)
+    val padded =
+      sheetAfter(Workbook(baseData), Edit.PutFormula(loc("G1"), " = SUM(B2:B4) ", None))
+    assertEquals(padded(a1("G1")).value, CellValue.Formula("SUM(B2:B4)", None))
     assert(failure(Workbook(baseData), Edit.PutFormula(loc("G1"), "= ", None)).root match
       case XLError.FormulaError(_, _) => true
       case _ => false)
@@ -676,6 +681,65 @@ class EditInterpreterSpec extends FunSuite:
     assertEquals(
       failure(baseWorkbook, Edit.DefineName("", "1", None)).root,
       XLError.InvalidArgument("define-name", "name cannot be empty")
+    )
+  }
+
+  test(
+    "GH-538/GH-462: define-name replaces case-variants within its scope; remove-name matches " +
+      "case-insensitively and offers same-scope candidates"
+  ) {
+    val wb = apply(
+      baseWorkbook,
+      Edit.DefineName("Rate", "0.08", Some(other)),
+      Edit.DefineName("RATE", "0.09", Some(other)),
+      Edit.DefineName("rate", "0.10", None)
+    ).fold(e => fail(e.message), identity)
+    assertEquals(
+      wb.metadata.definedNames.map(n => (n.name, n.formula, n.localSheetId)),
+      Vector(("Total", "Data!$B$2:$B$4", None), ("RATE", "0.09", Some(1)), ("rate", "0.10", None))
+    )
+    val removed = apply(wb, Edit.RemoveName("total", None), Edit.RemoveName("Rate", Some(other)))
+      .fold(e => fail(e.message), identity)
+    assertEquals(removed.metadata.definedNames.map(_.name), Vector("rate"))
+    // Only the scoped Rate exists: the workbook-scoped removal is refused, and its candidates are
+    // the workbook-scoped names — never the scoped entry this edit cannot remove.
+    val scopedOnly = apply(baseWorkbook, Edit.DefineName("Rate", "0.08", Some(other)))
+      .fold(e => fail(e.message), identity)
+    assertEquals(
+      failure(scopedOnly, Edit.RemoveName("Rate", None)).root,
+      XLError.NameNotFound("Rate", Vector("Total"))
+    )
+    // The scope itself is matched case-insensitively (the Workbook rule, shared with the CLI).
+    assertEquals(
+      apply(baseWorkbook, Edit.DefineName("Local", "1", Some(SheetName.unsafe("OTHER"))))
+        .map(_.metadata.definedNames.map(_.localSheetId)),
+      Right(Vector(None, Some(1)))
+    )
+    assertEquals(
+      failure(baseWorkbook, Edit.DefineName("Local", "1", Some(missing))).root,
+      XLError.SheetNotFound(missing.value, Vector("Data", "Other"))
+    )
+  }
+
+  test(
+    "GH-462: remove-name of a print name the read lifted into PageSetup succeeds and clears it"
+  ) {
+    // After a read a sheet's `_xlnm.Print_Area` lives in pageSetup.printArea, not in the table.
+    val lifted = baseWorkbook
+      .updateAt(0, _.withPageSetup(PageSetup(printArea = Some(rng("A1:B2")))))
+      .fold(e => fail(e.message), identity)
+    val removed = apply(lifted, Edit.RemoveName("_xlnm.print_area", Some(data)))
+      .fold(e => fail(e.message), identity)
+    assertEquals(removed.sheets(0).pageSetup.flatMap(_.printArea), None)
+    // It IS an entry of that scope: the existence check sees it and it is offered as a candidate.
+    assertEquals(
+      failure(lifted, Edit.RemoveName("Nope", Some(data))).root,
+      XLError.NameNotFound("Nope", Vector("_xlnm.Print_Area"))
+    )
+    // Sheet-scoped only: the workbook scope neither sees nor removes it.
+    assertEquals(
+      failure(lifted, Edit.RemoveName("_xlnm.Print_Area", None)).root,
+      XLError.NameNotFound("_xlnm.Print_Area", Vector("Total"))
     )
   }
 

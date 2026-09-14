@@ -1,11 +1,11 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
-import com.tjclp.xl.formula.eval.StructuralEditor
+import com.tjclp.xl.formula.eval.{StructuralCachePolicy, StructuralEditor}
 import munit.FunSuite
 
 /**
@@ -236,6 +236,237 @@ class StructuralFormulaSpec extends FunSuite:
     val r = StructuralEditor
       .deleteRows(Workbook(Vector(s)), S, at = 1, count = 1, preserveUntouchedCaches = true)
     assertEquals(sheetNamed(r, "S")(ref"C1").value, CellValue.Formula("SUM(A1:A2)", None))
+  }
+
+  // ===== GH-509: CarryForward — every pre-edit cache rides through (the caller marks the
+  // book fullCalcOnLoad); only the GH-507 blind closure is still withdrawn =====
+
+  private val carry = StructuralCachePolicy.CarryForward
+
+  private def cachedNum(n: Int): Option[CellValue] = Some(CellValue.Number(BigDecimal(n)))
+
+  test("GH-509: CarryForward keeps the cache of a rewritten, a relocated and a dynamic formula") {
+    val s = new Sheet(name = S)
+      .put(ref"A25", CellValue.Number(BigDecimal(5)))
+      .put(ref"C1", CellValue.Formula("A25*2", cachedNum(777))) // reference rewritten by the shift
+      .put(ref"C30", CellValue.Formula("ROW()", cachedNum(30))) // relocated, position-sensitive
+      .put(ref"F1", CellValue.Formula("INDIRECT(\"A25\")*2", cachedNum(10))) // dynamic reference
+      .put(
+        ref"G1",
+        CellValue.Formula("F1+1", cachedNum(11))
+      ) // static dependent of the dynamic cell
+    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 20, count = 1, policy = carry)
+    val s2 = sheetNamed(r, "S")
+    assertEquals(s2(ref"C1").value, CellValue.Formula("A26*2", cachedNum(777)))
+    assertEquals(s2(ref"C31").value, CellValue.Formula("ROW()", cachedNum(30)))
+    assertEquals(s2(ref"F1").value, CellValue.Formula("INDIRECT(\"A25\")*2", cachedNum(10)))
+    assertEquals(s2(ref"G1").value, CellValue.Formula("F1+1", cachedNum(11)))
+  }
+
+  test("GH-509: CarryForward drops nothing a resolvable pre-edit book cached, on every axis") {
+    // Two sheets, every reference shape the editor rewrites or relocates: local refs above and
+    // below the cut, a range the edit shrinks or grows, cross-sheet readers of the edited sheet,
+    // a reader through a defined name, a position-sensitive formula and a pre-existing gap. Rows
+    // 5-6 and column C hold no formula, so the delete bands remove data but never a formula cell,
+    // and the multiset of cached values must be identical before and after each of the four
+    // edits — the edit moves caches, never drops them.
+    val data = (1 to 10)
+      .foldLeft(Sheet("Data")) { (sh, i) =>
+        val withInput = sh.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+        if i == 5 || i == 6 then withInput
+        else withInput.put(ARef.from0(1, i - 1), CellValue.Formula(s"A$i*2", cachedNum(700 + i)))
+      }
+      .put(ref"D1", CellValue.Formula("SUM(A1:A10)", cachedNum(55)))
+      .put(ref"D2", CellValue.Formula("SUM(B1:B10)", None)) // a gap the file already had
+      .put(ref"E3", CellValue.Formula("ROW()+COLUMN()", cachedNum(8)))
+    val other = Sheet("Other")
+      .put(ref"B1", CellValue.Formula("Data!A7*2", cachedNum(14)))
+      .put(ref"B2", CellValue.Formula("SUM(Data!A1:A10)", cachedNum(55)))
+      .put(ref"B3", CellValue.Formula("SUM(MyRange)", cachedNum(55)))
+      .put(ref"B4", CellValue.Formula("B1+B2", cachedNum(69)))
+    val wb = Workbook(data, other).withDefinedName("MyRange", "Data!$A$1:$A$10")
+    val target = SheetName.unsafe("Data")
+    def caches(w: Workbook): Seq[Option[CellValue]] =
+      w.sheets
+        .flatMap(_.cells.values.map(_.value))
+        .collect { case CellValue.Formula(_, cached, _) => cached }
+        .sortBy(_.toString)
+    val expected = caches(wb)
+    assertEquals(expected.size, 15, "premise: the fixture carries 15 formula cells")
+    val edits = List(
+      "insert rows" -> StructuralEditor.insertRows(wb, target, at = 4, count = 2, policy = carry),
+      "delete rows" -> StructuralEditor.deleteRows(wb, target, at = 4, count = 2, policy = carry),
+      "insert cols" -> StructuralEditor
+        .insertColumns(wb, target, at = 0, count = 1, policy = carry),
+      "delete cols" -> StructuralEditor.deleteColumns(wb, target, at = 2, count = 1, policy = carry)
+    )
+    edits.foreach { case (label, edited) =>
+      assertEquals(caches(edited), expected, s"$label changed the multiset of cached values")
+    }
+    // Sanity: the edits really did rewrite text and relocate cells — the caches moved WITH them.
+    val inserted = sheetNamed(edits(0)._2, "Data")
+    assertEquals(inserted(ref"D1").value, CellValue.Formula("SUM(A1:A12)", cachedNum(55)))
+    assertEquals(inserted(ref"B12").value, CellValue.Formula("A12*2", cachedNum(710)))
+    assertEquals(inserted(ref"E3").value, CellValue.Formula("ROW()+COLUMN()", cachedNum(8)))
+    assertEquals(
+      sheetNamed(edits(0)._2, "Other")(ref"B1").value,
+      CellValue.Formula("Data!A9*2", cachedNum(14))
+    )
+    val deleted = sheetNamed(edits(1)._2, "Data")
+    assertEquals(deleted(ref"D1").value, CellValue.Formula("SUM(A1:A8)", cachedNum(55)))
+    assertEquals(deleted(ref"B5").value, CellValue.Formula("A5*2", cachedNum(707)))
+    assertEquals(
+      sheetNamed(edits(1)._2, "Other")(ref"B3").value,
+      CellValue.Formula("SUM(MyRange)", cachedNum(55))
+    )
+    assertEquals(
+      edits(1)._2.metadata.definedNames.find(_.name == "MyRange").map(_.formula),
+      Some("Data!$A$1:$A$8"),
+      "the name still shrinks with the edit"
+    )
+  }
+
+  test("GH-509: the Boolean bridge maps to Invalidate / PreserveUntouched byte-identically") {
+    val s = new Sheet(name = S)
+      .put(ref"A1", CellValue.Number(BigDecimal(2)))
+      .put(ref"A25", CellValue.Number(BigDecimal(5)))
+      .put(ref"B2", CellValue.Formula("A1*3", cachedNum(6))) // untouched: kept only under the flag
+      .put(ref"C1", CellValue.Formula("A25*2", cachedNum(10))) // rewritten: dropped under both
+      .put(ref"C30", CellValue.Formula("ROW()", cachedNum(30))) // relocated: dropped under both
+    val wb = Workbook(Vector(s))
+    assertEquals(
+      StructuralEditor.insertRows(wb, S, at = 20, count = 1),
+      StructuralEditor.insertRows(
+        wb,
+        S,
+        at = 20,
+        count = 1,
+        policy = StructuralCachePolicy.Invalidate
+      )
+    )
+    assertEquals(
+      StructuralEditor.insertRows(wb, S, at = 20, count = 1, preserveUntouchedCaches = true),
+      StructuralEditor.insertRows(
+        wb,
+        S,
+        at = 20,
+        count = 1,
+        policy = StructuralCachePolicy.PreserveUntouched
+      )
+    )
+    assertEquals(
+      StructuralEditor
+        .deleteColumnsChecked(wb, S, at = 20, count = 1, preserveUntouchedCaches = true),
+      StructuralEditor
+        .deleteColumnsChecked(
+          wb,
+          S,
+          at = 20,
+          count = 1,
+          policy = StructuralCachePolicy.PreserveUntouched
+        )
+    )
+    // and the two older policies still differ from CarryForward exactly where GH-503 says
+    val kept = sheetNamed(StructuralEditor.insertRows(wb, S, 20, 1, carry), "S")
+    assertEquals(kept(ref"C1").value, CellValue.Formula("A26*2", cachedNum(10)))
+    assertEquals(kept(ref"C31").value, CellValue.Formula("ROW()", cachedNum(30)))
+    val narrowed = sheetNamed(StructuralEditor.insertRows(wb, S, 20, 1, true), "S")
+    assertEquals(narrowed(ref"B2").value, CellValue.Formula("A1*3", cachedNum(6)))
+    assertEquals(narrowed(ref"C1").value, CellValue.Formula("A26*2", None))
+    assertEquals(narrowed(ref"C31").value, CellValue.Formula("ROW()", None))
+  }
+
+  test(
+    "GH-509: CarryForward still withdraws a reader behind an unparseable name and its dependents"
+  ) {
+    // The GH-507 closure is the one exception to the carry: a cache the static graph cannot
+    // justify at all is withdrawn under every policy, so default and --no-recalc agree on it.
+    // `Outer -> Blind` parses, but resolving it needs Blind's union definition, which does not.
+    val data = (1 to 10).foldLeft(Sheet("Data")) { (sh, i) =>
+      sh.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+    }
+    val other = Sheet("Other")
+      .put(ref"B2", CellValue.Formula("SUM(Outer)", cachedNum(33))) // blind through the alias
+      .put(ref"B3", CellValue.Formula("B2*2", cachedNum(66))) // dependent of a blind reader
+      .put(ref"B4", CellValue.Formula("ZZZNOTAFUNC(B5)", cachedNum(9))) // itself unparseable
+      .put(ref"B5", CellValue.Formula("1+1", cachedNum(2))) // independent, resolvable
+      .put(ref"B6", CellValue.Formula("SUM(Data!A1:A10)", cachedNum(55))) // resolvable reader
+    val wb = Workbook(data, other)
+      .withDefinedName("Blind", "Data!$A$1:$A$3,Data!$A$8:$A$10")
+      .withDefinedName("Outer", "Blind")
+    val r =
+      StructuralEditor.deleteRows(wb, SheetName.unsafe("Data"), at = 1, count = 1, policy = carry)
+    val o = sheetNamed(r, "Other")
+    assertEquals(o(ref"B2").value, CellValue.Formula("SUM(Outer)", None))
+    assertEquals(o(ref"B3").value, CellValue.Formula("B2*2", None))
+    assertEquals(o(ref"B4").value, CellValue.Formula("ZZZNOTAFUNC(B5)", None))
+    assertEquals(o(ref"B5").value, CellValue.Formula("1+1", cachedNum(2)))
+    assertEquals(o(ref"B6").value, CellValue.Formula("SUM(Data!A1:A9)", cachedNum(55)))
+  }
+
+  test("GH-509: CarryForward keys the blind closure on PRE-edit addresses of relocated cells") {
+    // A blind reader ON the edited sheet, below the cut, moves with the insert. The closure is
+    // built from the pre-edit book, so its membership must be tested against where the cell WAS,
+    // not where it landed — otherwise every relocated blind reader would slip through.
+    val data = (1 to 10)
+      .foldLeft(Sheet("Data")) { (sh, i) =>
+        sh.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+      }
+      .put(ref"C30", CellValue.Formula("SUM(Blind)", cachedNum(33))) // blind, relocates to C31
+      .put(ref"D30", CellValue.Formula("C30*2", cachedNum(66))) // its dependent, relocates too
+      .put(ref"E30", CellValue.Formula("A1*2", cachedNum(777))) // resolvable, relocates, carried
+    val wb = Workbook(data).withDefinedName("Blind", "Data!$A$1:$A$3,Data!$A$8:$A$10")
+    val r =
+      StructuralEditor.insertRows(wb, SheetName.unsafe("Data"), at = 5, count = 1, policy = carry)
+    val d = sheetNamed(r, "Data")
+    assertEquals(d(ref"C31").value, CellValue.Formula("SUM(Blind)", None))
+    assertEquals(d(ref"D31").value, CellValue.Formula("C31*2", None))
+    assertEquals(d(ref"E31").value, CellValue.Formula("A1*2", cachedNum(777)))
+  }
+
+  test(
+    "GH-509 review: PreserveUntouched withdraws every reader of a deleted band — direct, #REF!-ed, transitive and cross-sheet — and keeps the rest"
+  ) {
+    // The LibreOffice reproduction from the #509 review: A1=5, A2=10, B1=SUM(A1:A2), B2=ROW()*10,
+    // C1=B1+B2, delete row 2. The truth is B1=5 and C1=#REF!; the pre-edit 15 and 35 must not
+    // survive under the policy the CLI's --no-recalc uses, because LibreOffice (default "never
+    // recalculate on load") and every cache-only reader display a carried <v> as-is. The
+    // withdrawal must be transitive and cross the sheet boundary (Other!A1 reads C1 two hops
+    // away) and must spare what the edit provably left alone (D1 and Other!A2 read only A1,
+    // above the cut, with unchanged text and address).
+    val s = new Sheet(name = S)
+      .put(ref"A1", CellValue.Number(BigDecimal(5)))
+      .put(ref"A2", CellValue.Number(BigDecimal(10)))
+      .put(ref"B1", CellValue.Formula("SUM(A1:A2)", cachedNum(15))) // range the band shortens
+      .put(ref"B2", CellValue.Formula("ROW()*10", cachedNum(20))) // deleted with its row
+      .put(ref"C1", CellValue.Formula("B1+B2", cachedNum(35))) // reads a deleted cell -> #REF!
+      .put(ref"D1", CellValue.Formula("A1*2", cachedNum(10))) // reads above the cut only
+    val other = Sheet("Other")
+      .put(ref"A1", CellValue.Formula("S!C1*2", cachedNum(70))) // two-hop, cross-sheet
+      .put(ref"A2", CellValue.Formula("S!D1+1", cachedNum(11))) // reads a provably unchanged cell
+    val r = StructuralEditor.deleteRows(
+      Workbook(s, other),
+      S,
+      at = 1,
+      count = 1,
+      policy = StructuralCachePolicy.PreserveUntouched
+    )
+    val edited = sheetNamed(r, "S")
+    assertEquals(edited(ref"B1").value, CellValue.Formula("SUM(A1:A1)", None))
+    assertEquals(edited(ref"C1").value, CellValue.Formula("B1+#REF!", None))
+    assertEquals(edited(ref"D1").value, CellValue.Formula("A1*2", cachedNum(10)))
+    assert(edited.cells.get(ref"B2").isEmpty, "row 2 is gone")
+    val o = sheetNamed(r, "Other")
+    assertEquals(o(ref"A1").value, CellValue.Formula("S!C1*2", None))
+    assertEquals(o(ref"A2").value, CellValue.Formula("S!D1+1", cachedNum(11)))
+    // and CarryForward — the library-only policy — is exactly what LibreOffice cannot be trusted
+    // with: it keeps the 15 and the 35 by design, for a caller who controls the reader.
+    val carried = sheetNamed(
+      StructuralEditor.deleteRows(Workbook(s, other), S, at = 1, count = 1, policy = carry),
+      "S"
+    )
+    assertEquals(carried(ref"B1").value, CellValue.Formula("SUM(A1:A1)", cachedNum(15)))
+    assertEquals(carried(ref"C1").value, CellValue.Formula("B1+#REF!", cachedNum(35)))
   }
 
   test("deleting a row invalidates the old cached result of a shrinking SUM range") {

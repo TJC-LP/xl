@@ -5,9 +5,18 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 # XL CLI - Excel Operations
 
-**Requires xl >= 0.22.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
+**Requires xl >= 0.23.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
 `xl batch --schema`, `describe`, `audit`, `deps`, the 0/1/2/3 exit table and globals-anywhere; every
-statement in this skill assumes 0.22.0 or later.
+statement in this skill assumes 0.23.0 or later.
+
+<!-- unreleased-contract -->
+> **0.23.0 has not shipped yet.** This skill documents its contract; until the release, install
+> from source (`make install`, or `make install-jar` without GraalVM). The last release, 0.22.0,
+> lacks: `--json` `data` as an object for `sheets`/`names`/`functions` (it printed bare arrays,
+> so the `.data.sheets[]` jq paths below fail), the `lint` rules `empty-inline-str`,
+> `mc-ignorable-undeclared`, `dxf-id-out-of-range`, `unreferenced-part` and `shared-string-orphan`,
+> `xl name add|rm -s` and the batch ops `define-name`/`remove-name`, `--no-recalc` structural
+> writes that carry caches forward, and `XL_SPILL_DIR`.
 
 The binary documents itself and is the reference: `xl <verb> --help` for a verb's flags,
 `xl schema` for every verb, `xl batch --schema` for every batch op and field, `xl functions --json`
@@ -15,7 +24,8 @@ for every formula function. This skill is the map; those are the territory.
 
 ## Environment
 
-- `xl --version` must print `0.22.0` or later. Not installed, or older: follow
+- `xl --version` must print `0.23.0` or later (from source until it ships, see above). Not
+  installed, or older: follow
   [reference/INSTALL.md](reference/INSTALL.md) (native binaries for macOS, Linux and Windows, the
   JAR fallback, the rasterizer for image export).
 - A deployment that vendors this skill may place a `reference/LOCAL.md` beside this file: where
@@ -58,7 +68,10 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
    stderr carries one `Error: <message>` line. For `view`, `filter`, `diff` and `lint`, `--json`
    alone selects the verb's JSON payload as `data` (no `--format json` needed; an explicit text
    `--format` rides inside as `data.text`); prose verbs yield `data.text` plus
-   `data.saved`/`data.written`.
+   `data.saved`/`data.written`. `data` is always an object, never a bare array: a listing verb
+   keys its array by the noun — `sheets` → `data.sheets[]`, `names` → `data.names[]`,
+   `functions` → `data.functions[]` — and `sheets`' elements are exactly `describe`'s
+   `data.sheets[]` (`{name, index, state, dimension}`).
 5. **Exit codes** (branch on these and on `error.code`, never on message text):
 
    | exit | meaning | file written? |
@@ -79,6 +92,7 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
 xl -f model.xlsx --json describe                   # what is in this file?
 xl -f model.xlsx --json audit --fail-on-findings   # anything already broken? (exit 1 if so)
 xl -f model.xlsx -s Data --json view A1:D20 | jq '.data.rows'   # --json alone selects the JSON payload
+xl -f model.xlsx --json sheets | jq -r '.data.sheets[].name'     # list verbs key their array by the noun
 xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/null || echo "batch failed"
 ```
 
@@ -101,11 +115,11 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Style, merge, comments, hyperlinks | `style`, `merge`/`unmerge`, `comment`/`remove-comment` — or `batch` ops | styles merge unless `--replace` |
 | Copy, fill, sort or clear a block | `copy <source> <target> [--values-only]`, `fill <source> <target> [--right]`, `sort <range> --by <col>`, `clear <range> [--all\|--styles\|--comments]` — or the batch ops `copy` and `clear` | `copy` shifts relative references like Excel; the target is a cell (expanded to the source's size) or a range, and either side may be sheet-qualified: `{"op":"copy","source":"Data!A1:B2","target":"Summary!A1","valuesOnly":false}`. `fill` and `sort` have no batch twin |
 | Rows and columns | `row <n>`, `col <letter>`, `autofit [--columns A:F]`, `group-rows <10:20>`/`group-cols <E:H>` (`--level n`, `--collapsed`), `insert-rows <at-row> [count]`/`delete-rows <at-row> [count]`, `insert-cols <at-col\|C:E> [count]`/`delete-cols <at-col\|C:E> [count]` | `at-row` is one 1-based row and `count` defaults to 1: `delete-rows 7 5` deletes rows 7-11 — there is **no** `7:11` form (only the column verbs take `C:E`). Structural edits rewrite formulas on every sheet, `#REF!` on loss; they have no batch twin |
-| Sheets | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide\|show`, `name add\|rm` | `rename-sheet` rewrites every reference to the sheet |
+| Sheets | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide\|show`, `name add\|rm` | `rename-sheet` rewrites every reference to the sheet. `name add\|rm` are workbook-scoped unless `-s` names the scope sheet: `-s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20'` sets that sheet's print area; names match case-insensitively (`case` replaces `CASE`) |
 | Deliverable finish | `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `autofilter`, `freeze`, `cf add`, `chart add`, `add-image` | every one but `add-image` has a batch twin |
 | Import data | `import <csv>`, `import-md <table.md\|->` | `--new-sheet`, type detection |
 | Refresh cached values | `recalc` (`--tables`, `--parallel n`) | `--strict` exits 1 on formula errors |
-| Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / findings |
+| Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / repair findings; `lint --strict` fails on hygiene findings (shared-string orphans, unreferenced parts) too |
 | New workbook | `new out.xlsx --sheet Data --sheet Summary` | |
 | What can the binary do? | `schema`, `functions`, `rasterizers`, `batch --schema` | no `-f` |
 
@@ -154,9 +168,10 @@ Batch essentials (the complete, generated field list is one command away: `xl ba
   `FORMAT_HINT_IGNORED` warning that names it and lists the known names (the cell stays General).
 - **`values`** writes a row-major array over a range; `putf` with a single `value` over a range
   drags it from `from` (Excel `$` anchoring); `putf` `values` writes each formula as-is.
-- **`sheet`** on any op (except `add-sheet`/`rename-sheet`) names the sheet for its unqualified
-  refs, so a batch can touch several sheets and never needs shell quoting for sheet names with
-  spaces. A qualified ref (`"Summary!B2"`) wins over it.
+- **`sheet`** on any op (except `add-sheet`/`rename-sheet`/`define-name`/`remove-name`) names the
+  sheet for its unqualified refs, so a batch can touch several sheets and never needs shell quoting
+  for sheet names with spaces. A qualified ref (`"Summary!B2"`) wins over it. A defined name's
+  sheet is its `scope` key: `{"op":"define-name","name":"Local","refersTo":"Data!$A$1","scope":"Data"}`.
 - **Property names** are accepted in camelCase or kebab-case; `format`/`numFormat`,
   `from`/`anchor`, `target`/`url`, `align`/`halign` and `value`/`formula` (on `putf`) are aliases.
   An unknown property is an `UNKNOWN_PROPERTY` warning, not an error.
@@ -252,8 +267,12 @@ Writes recalculate the edit's dependency cone and report formula errors advisori
 `--strict` turns those reports into exit 1 (`RECALC_GATE`): with `-o` the file is still written,
 with `-i` the input is left untouched. `--no-recalc` (`--preserve-caches`) applies the edit and
 recalculates nothing — for books whose numbers come from another engine; structural edits then
-leave the formulas they invalidated uncached rather than re-stamp stale numbers. `recalc`
-refreshes every cached value (`--tables` also seeds data-table interiors).
+keep only the caches the edit provably left unchanged, write every formula it could have changed
+without a `<v>` (the summary counts both), and mark the workbook `fullCalcOnLoad`: Excel recomputes
+the whole book on open; LibreOffice (which ignores the marker by default) computes the uncached
+cells; cache-only readers (openpyxl `data_only`, `xl view` without `--eval`) see a blank there,
+never a stale number. `recalc` refreshes every cached value (`--tables` also seeds data-table
+interiors).
 
 ---
 
@@ -284,7 +303,9 @@ refreshes every cached value (`--tables` also seeds data-table interiors).
 - **PNG/PDF on the native binary needs an external rasterizer** — `xl rasterizers` tells you.
 - **A file that will not read** fails with `IO_READ` (exit 3) and a message naming the construct.
   Rebuild it with openpyxl, then xl works on the rebuilt file — and report the message upstream.
-- **Formula caches**: `xl lint` catches structure Excel would repair; `xl audit` catches numbers
+- **Formula caches**: `xl lint` catches structure Excel would repair (exit 1; its hygiene tier —
+  a valid file carrying dead weight, e.g. a shared-string entry a `put` orphaned — is listed at
+  exit 0 unless `--strict`); `xl audit` catches numbers
   that are wrong or uncached; `xl recalc` fills caches for readers that never recalculate
   (pandas, `openpyxl data_only=True`, previewers).
 

@@ -10,7 +10,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **119 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 7,016 tests passing; one existing performance comparison ignored.
+**Current Status**: Production-ready with **119 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 7,290 tests passing; one existing performance comparison ignored.
 
 **Current Version**: **0.22.0** (the 0.21.0 dogfood's follow-through — named styles preserved on every write (#610), constant-memory `--stream view` and per-verb `--stream` capabilities (#635/#638/#640), formula semantics per Excel (#628–#631, #613), the CLI contract cleanup (#607/#615/#617/#619–#622/#626/#639/#641/#644) — released 2026-09-08)
 
@@ -22,6 +22,48 @@ The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four 
 executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
+
+### v0.23.0 — wave 29: the shared-logic triage of the open backlog (Unreleased)
+
+Every open issue (34 on 2026-09-13) was triaged into classes that share logic — a code path, a
+helper or a root cause — rather than a module. Twelve worktree-isolated TDD clusters ran in one
+cloud session on `.claude/workflows/issue-wave.js` (the sandbox variant: JVM Mill launcher, issue
+texts from disk, two agents at a time on four cores), each adversarially reviewed with revert-and-
+rerun refutation and mutation probes; four clusters took one rework round. The exploration pass
+found two issues already shipped — [#519](https://github.com/TJC-LP/xl/issues/519) (SIGTERM, PR
+#521) and [#465](https://github.com/TJC-LP/xl/issues/465) (0.20.0/0.21.0) — which close without
+code.
+
+| Cluster | Issues | Shared logic | Result |
+|---------|--------|--------------|--------|
+| writer-preserve | [#557](https://github.com/TJC-LP/xl/issues/557), [#595](https://github.com/TJC-LP/xl/issues/595), [#593](https://github.com/TJC-LP/xl/issues/593) | XlsxWriter's regenerate-vs-preserve seam | Sheet rels planned before the worksheet is emitted; table uids preserved or omitted, never fabricated; storage-form-aware clean gates heal bare `_xlfn.` text |
+| lint-rules | [#460](https://github.com/TJC-LP/xl/issues/460), [#567](https://github.com/TJC-LP/xl/issues/567) | one CellObs/SheetScan substrate, DOM + SAX parity | `empty-inline-str`, `mc-ignorable-undeclared`, `dxf-id-out-of-range`, `unreferenced-part`, `shared-string-orphan`; the reader tolerates a childless `inlineStr`; #460 item 5 and SST compaction deferred |
+| styles-xml | [#566](https://github.com/TJC-LP/xl/issues/566), [#649](https://github.com/TJC-LP/xl/issues/649) | styles/XML serialization fidelity | `Fill.Pattern` with optional colours; attribute character references on both writers (xl-owned StAX tag writer) |
+| iterative-recalc | [#537](https://github.com/TJC-LP/xl/issues/537), [#482](https://github.com/TJC-LP/xl/issues/482) | `jacobiFixpoint` and `dynamicCells` | Parse-once, memo on straight segments, stalled-component exit, sheets×names → names; within-SCC Gauss–Seidel by default in row-major grid order (Excel's iteration model; unverified against Excel's calc chain), Jacobi opt-in |
+| render-overflow | [#500](https://github.com/TJC-LP/xl/issues/500), [#501](https://github.com/TJC-LP/xl/issues/501), [#502](https://github.com/TJC-LP/xl/issues/502) | RenderUtils decisions keyed off the raw value | One `renderedContent(value, numFmt)` resolver behind the `####` gate, alignment and colspan |
+| names-scope-case | [#538](https://github.com/TJC-LP/xl/issues/538), [#462](https://github.com/TJC-LP/xl/issues/462) | the defined-name mutation predicate | `DefinedName.sameName`/`matches`; scoped `withDefinedName`/`removeDefinedName`; `xl name add\|rm -s`; batch `define-name`/`remove-name` |
+| no-recalc-fullcalc | [#509](https://github.com/TJC-LP/xl/issues/509) | StructuralEditor cache posture | `StructuralCachePolicy { Invalidate, PreserveUntouched, CarryForward }`; `--no-recalc` structural writes keep the provably unchanged caches (`PreserveUntouched`), withdraw the rest and set `fullCalcOnLoad="1"` (`CarryForward` is library-only: LibreOffice ignores the marker) |
+| formula-canonical | [#479](https://github.com/TJC-LP/xl/issues/479) | `CellValue.Formula` construction entries | Bare expression canonical via `canonicalFormulaText`; strict `WorkbookEquivalence` restored; total `CellValue.formula` |
+| row-codec-headers | [#614](https://github.com/TJC-LP/xl/issues/614) | RowCodec derivation | `@header` + `RowCodec.withHeaders`/`headers` |
+| spill-and-bytes | [#516](https://github.com/TJC-LP/xl/issues/516), [#517](https://github.com/TJC-LP/xl/issues/517) | scratch files in `java.io.tmpdir` | `writeToBytes` in memory; `XL_SPILL_DIR` at the CLI's write interpreter (`--spill-dir` waits for #584; the CLI's only spilling path is currently unreachable from a shell — recorded on #517) |
+| grammar-generator | [#653](https://github.com/TJC-LP/xl/issues/653) item 4 | the parser's self-referential generators | `FormulaGrammarSpec` over the grammar Excel writes; four parser/printer defects found and fixed (`.5`, `NOT(`, `YEARFRAC` basis 0, `"` in a quoted sheet name) |
+| json-shape | [#618](https://github.com/TJC-LP/xl/issues/618) | the `--json` envelope's `data` | `data` is always an object; `sheets`/`names`/`functions` key their arrays by the noun (breaking) |
+
+**Deferred, each with a design brief from the same exploration pass**: [#497](https://github.com/TJC-LP/xl/issues/497)
+(CF in the render path — a precomputed `CfOverlay` in xl-core, a `CfEvaluator` in xl-evaluator,
+wired by the CLI; its own wave), [#634](https://github.com/TJC-LP/xl/issues/634) (streaming as the
+default read engine — a pure `Engine.choose` rule once `Hidden` is a streaming capability),
+[#526](https://github.com/TJC-LP/xl/issues/526) (`Workbook.adopt(sheet, from, Refuse | BreakLinks)`
+with the `[N]` scanner promoted to xl-core; `Merge` later), the ADR-017 Wave 2b stack
+[#583](https://github.com/TJC-LP/xl/issues/583)/[#584](https://github.com/TJC-LP/xl/issues/584)/[#586](https://github.com/TJC-LP/xl/issues/586)/[#587](https://github.com/TJC-LP/xl/issues/587)/[#591](https://github.com/TJC-LP/xl/issues/591)
+(a dependency chain, not a cluster: #587's evaluator half ∥ #583's codec → #583's CLI wiring →
+#587's CLI wiring → {#586, #591} → #584 last), [#505](https://github.com/TJC-LP/xl/issues/505)
+(Batik lays text out wider than AWT measures — needs another measurement engine),
+[#485](https://github.com/TJC-LP/xl/issues/485) (native smoke in CI),
+[#540](https://github.com/TJC-LP/xl/issues/540) (EvalPort interop — a maintainer decision),
+[#653](https://github.com/TJC-LP/xl/issues/653) items 1–3 (foreign corpus, per-part byte laws,
+LibreOffice oracle), #460 item 5 (`_xlnm._FilterDatabase` sync) and #567's on-write SST
+compaction.
 
 ### v0.20.0 "Contract" — wave 27: Agent-first contract (Released 2026-09-07)
 

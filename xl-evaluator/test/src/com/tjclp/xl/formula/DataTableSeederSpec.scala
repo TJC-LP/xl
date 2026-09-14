@@ -400,12 +400,12 @@ class DataTableSeederSpec extends FunSuite:
   }
 
   test("GH-453: non-convergent cycle seeds last-round values and reports NotConverged") {
-    // B1/B2 oscillate with period 2 from the (0,0) seed: rounds alternate (1,1)/(0,0);
-    // round 5 lands on (1,1) — deterministic last-round values, per Excel.
+    // B1 = 1-B1 oscillates with period 2 from the 0 seed under ANY scheme (a single member reads
+    // only its own previous value): rounds alternate 1/0; round 5 lands on 1 — deterministic
+    // last-round values, per Excel.
     val sheet = Sheet("S")
       .put(ref"A1", num(0))
-      .put(ref"B1", CellValue.Formula("1-B2"))
-      .put(ref"B2", CellValue.Formula("1-B1"))
+      .put(ref"B1", CellValue.Formula("1-B1"))
       .put(ref"F9", CellValue.Formula("B1"))
       .put(ref"E10", num(1))
       .put(ref"E11", num(2))
@@ -419,6 +419,46 @@ class DataTableSeederSpec extends FunSuite:
     }
     assertEquals(
       report.warnings,
+      Vector(SeedTableWarning.NotConverged(SheetName.unsafe("S"), range("F10:F12"), 3, 5))
+    )
+  }
+
+  test("GH-482: the B1/B2 oscillator converges under the Gauss–Seidel sweep; Jacobi still warns") {
+    // B1 = 1-B2, B2 = 1-B1: swept B1 then B2 with the latest values, round 1 gives (1, 0) and
+    // round 2 repeats it — a fixpoint (Excel finds the same one). Under Jacobi the pair reads the
+    // previous round and alternates (1,1)/(0,0) forever: round 5 lands on (1,1) with a warning.
+    val sheet = Sheet("S")
+      .put(ref"A1", num(0))
+      .put(ref"B1", CellValue.Formula("1-B2"))
+      .put(ref"B2", CellValue.Formula("1-B1"))
+      .put(ref"F9", CellValue.Formula("B1"))
+      .put(ref"E10", num(1))
+      .put(ref"E11", num(2))
+      .put(ref"E12", num(3))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+    val wb = Workbook(sheet).withCalcPr(CalcPr(iterativeCalculation = true, Some(5), None))
+    val gs = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    interiorRefs.foreach { r =>
+      assertEquals(interiorNum(sheetNamed(gs.workbook, "S"), r), Some(BigDecimal(1)), r.toA1)
+    }
+    assertEquals(gs.warnings, Vector.empty)
+    val jacobi = wb
+      .seedDataTablesReport(
+        Clock.system,
+        Some(
+          com.tjclp.xl.formula.eval.IterativeCalc(
+            5,
+            BigDecimal("0.001"),
+            scheme = com.tjclp.xl.formula.eval.IterationScheme.Jacobi
+          )
+        )
+      )
+      .fold(err => fail(s"report failed: $err"), identity)
+    interiorRefs.foreach { r =>
+      assertEquals(interiorNum(sheetNamed(jacobi.workbook, "S"), r), Some(BigDecimal(1)), r.toA1)
+    }
+    assertEquals(
+      jacobi.warnings,
       Vector(SeedTableWarning.NotConverged(SheetName.unsafe("S"), range("F10:F12"), 3, 5))
     )
   }

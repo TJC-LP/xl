@@ -19,7 +19,10 @@ enum Payload derives CanEqual:
   /**
    * Typed verbs whose data holds only strings, booleans and small integers (`sheets`, `names`,
    * `bounds`, `functions`, `rasterizers`, `batch --dry-run`, `describe`, `audit`, `deps`) build
-   * ujson directly.
+   * ujson directly. The value is always a JSON object (GH-618): a listing verb keys its array by
+   * the noun — `sheets` → `{sheets: [...]}`, `names` → `{names: [...]}`, `functions` →
+   * `{functions: [...]}` — so `data` is never a bare array and `sheets --json`'s elements are the
+   * `data.sheets` elements of `describe --json`.
    */
   case Json(value: ujson.Value)
 

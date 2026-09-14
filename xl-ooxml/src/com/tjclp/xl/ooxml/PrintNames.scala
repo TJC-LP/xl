@@ -20,11 +20,11 @@ import com.tjclp.xl.workbooks.DefinedName
  */
 private[ooxml] object PrintNames:
 
-  /** Defined name Excel uses for a sheet's print area. */
-  val PrintArea = "_xlnm.Print_Area"
+  /** Defined name Excel uses for a sheet's print area (the core constant, GH-462). */
+  val PrintArea: String = DefinedName.PrintArea
 
   /** Defined name Excel uses for a sheet's repeated print titles (rows and/or columns). */
-  val PrintTitles = "_xlnm.Print_Titles"
+  val PrintTitles: String = DefinedName.PrintTitles
 
   private val AbsRangeRe = """^\$([A-Za-z]{1,3})\$([0-9]+):\$([A-Za-z]{1,3})\$([0-9]+)$""".r
   private val AbsCellRe = """^\$([A-Za-z]{1,3})\$([0-9]+)$""".r
@@ -113,15 +113,24 @@ private[ooxml] object PrintNames:
     }
 
   /**
-   * Defined names to serialize for a workbook: the metadata names (with any print name shadowed by
-   * a PageSetup-derived one removed) followed by the derived print names.
+   * Defined names to serialize for a workbook: the metadata names followed by the PageSetup-derived
+   * print names, one entry per (identifier, sheet) as Excel requires. A PageSetup field overrides
+   * the same sheet's metadata name, matched case-insensitively (GH-538). `withDefinedName` clears
+   * the corresponding PageSetup field, so a later name edit wins too; when both are present, a
+   * later `withPageSetup` restored the field. Formula shape cannot determine edit order (GH-462).
    */
   def effective(wb: Workbook): Vector[DefinedName] =
+    val names = wb.metadata.definedNames
     val derived = fromSheets(wb.sheets)
-    val derivedKeys = derived.map(dn => (dn.name, dn.localSheetId)).toSet
-    wb.metadata.definedNames.filterNot(dn =>
-      derivedKeys.contains((dn.name, dn.localSheetId))
-    ) ++ derived
+    if derived.isEmpty then names
+    else
+      def overridden(dn: DefinedName): Boolean =
+        dn.localSheetId.flatMap(wb.sheets.lift).flatMap(_.pageSetup).exists { setup =>
+          (DefinedName.sameName(dn.name, PrintArea) && setup.printArea.isDefined) ||
+          (DefinedName.sameName(dn.name, PrintTitles) && setup.repeatRows.isDefined)
+        }
+      // One pass over the table (10^5 entries on bank-authored books), not one per derived name.
+      names.filterNot(overridden) ++ derived
 
   /**
    * Read side: lift modelable sheet-scoped print names into each Sheet's PageSetup and drop them
@@ -137,10 +146,10 @@ private[ooxml] object PrintNames:
   ): (Vector[Sheet], Vector[DefinedName]) =
     if names.isEmpty then (sheets, names)
     else
+      // Case-insensitive, as Excel reads the identifier: a foreign writer's `_XLNM.PRINT_AREA` IS
+      // the sheet's print area, and re-deriving it spells it canonically.
       def candidate(name: String, idx: Int): Option[DefinedName] =
-        names.find(dn =>
-          dn.name == name && dn.localSheetId.contains(idx) && !dn.hidden && dn.comment.isEmpty
-        )
+        names.find(dn => dn.matches(name, Some(idx)) && !dn.hidden && dn.comment.isEmpty)
 
       val parsed = sheets.zipWithIndex.map { case (sheet, idx) =>
         val area = candidate(PrintArea, idx)

@@ -109,6 +109,20 @@ object DataValidationCodec:
       dvs.child.collect { case e: Elem => e }.map(parseEntry(_, dvs.scope))
     }
 
+  /**
+   * GH-593: does any `<formula1>` / `<formula2>` in the source container still lack its storage
+   * prefix? The storage-form half of the writer's CLEAN gate (the CfCodec contract), built on the
+   * lint's rule ([[FormulaStorage.bareFutureCalls]]) so gate and lint agree by construction. Total;
+   * false on every Excel-authored container.
+   */
+  def needsStorageHealing(container: Elem): Boolean =
+    container.child.collect { case e: Elem => e }.exists { entry =>
+      entry.child.collect { case e: Elem => e }.exists { child =>
+        (child.label == "formula1" || child.label == "formula2") &&
+        FormulaStorage.bareFutureCalls(XmlUtil.getTextPreservingWhitespace(child)).nonEmpty
+      }
+    }
+
   /** Per-entry typed parse with the widened whitelist; falls back to Preserved. */
   private def parseEntry(entry: Elem, containerScope: NamespaceBinding): DataValidation =
     val typed: Option[DataValidation.Rules] =
@@ -142,8 +156,9 @@ object DataValidationCodec:
       case Some(v) => CfCodec.parseBool(v)
 
   /**
-   * Text attrs decode `_xHHHH_` escapes: Excel writes line breaks as `&#10;` (which the parser has
-   * already resolved here), xl before GH-649 wrote `_x000A_`; both read back as the newline.
+   * Text attrs decode `_xHHHH_` escapes: the parser has already resolved `&#10;`-style references
+   * (Excel's spelling, ours since GH-649), and files written 0.16-0.22 carry the GH-429 `_x000A_`
+   * spelling instead.
    */
   private def textAttr(entry: Elem, name: String): Option[String] =
     entry.attribute(name).map(n => XmlUtil.decodeXstring(n.text))
@@ -205,9 +220,10 @@ object DataValidationCodec:
    * container attributes ride through a dirty write; `count` is always restamped.
    *
    * Attributes emit in Excel's stamp order with schema-default values omitted (incl. `type` for
-   * AnyValue); message text goes through [[XmlUtil.escapeXstringAttr]] so a literal `_xHHHH_`
-   * decodes back to itself, while its line breaks and tabs reach the file as `&#10;`/`&#9;`
-   * character references from the writers (GH-649) — Excel's own spelling.
+   * AnyValue). Message text only protects literal `_xHHHH_` runs ([[XmlUtil.escapeXstringAttr]]);
+   * its line breaks and tabs are the writers' business — both backends escape TAB/LF/CR in every
+   * attribute value as `&#9;`/`&#10;`/`&#13;` (GH-649), the spelling Excel and openpyxl use, where
+   * GH-429 wrote `_x000A_` on this path alone.
    */
   def toElem(dvs: Vector[DataValidation], base: Option[Elem]): Option[Elem] =
     val children: Vector[Elem] = dvs.flatMap {

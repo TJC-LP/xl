@@ -51,7 +51,9 @@ class OpRegistrySpec extends FunSuite:
     "autofilter",
     "page-setup",
     "header-footer",
-    "cf"
+    "cf",
+    "define-name",
+    "remove-name"
   )
 
   /** One value per `BatchOp` case; `caseLabels` proves the vector covers the whole enum. */
@@ -86,6 +88,8 @@ class OpRegistrySpec extends FunSuite:
     BatchOp.AutoFit(None),
     BatchOp.AddSheet("New", None),
     BatchOp.RenameSheet("Old", "New"),
+    BatchOp.DefineName("Tax", "Sheet1!$A$1", Some("Sheet1")),
+    BatchOp.RemoveName("Tax", None),
     BatchOp.Freeze("B2"),
     BatchOp.Unfreeze,
     BatchOp.CopyRange("A1", "B1", valuesOnly = false),
@@ -130,10 +134,10 @@ class OpRegistrySpec extends FunSuite:
   test("the sample covers every BatchOp case exactly once") {
     assertEquals(sample.map(label).toSet, caseLabels)
     assertEquals(sample.size, caseLabels.size)
-    assertEquals(caseLabels.size, 35)
+    assertEquals(caseLabels.size, 37)
   }
 
-  test("the registry holds the 32 op names in the historical order") {
+  test("the registry holds the 34 op names in the historical order") {
     assertEquals(OpRegistry.all.map(_.name), historicalOrder)
   }
 
@@ -185,7 +189,7 @@ class OpRegistrySpec extends FunSuite:
     assertEquals(OpRegistry.find("putf").map(_.streamable), Some(true))
   }
 
-  test("the 21 ops needing the whole workbook are the non-streamable ones") {
+  test("the 23 ops needing the whole workbook are the non-streamable ones") {
     val expected = Set(
       "comment",
       "remove-comment",
@@ -198,6 +202,8 @@ class OpRegistrySpec extends FunSuite:
       "autofit",
       "add-sheet",
       "rename-sheet",
+      "define-name",
+      "remove-name",
       "freeze",
       "unfreeze",
       "copy",
@@ -210,13 +216,13 @@ class OpRegistrySpec extends FunSuite:
       "cf"
     )
     assertEquals(OpRegistry.all.filterNot(_.streamable).map(_.name).toSet, expected)
-    assertEquals(expected.size, 21)
+    assertEquals(expected.size, 23)
   }
 
-  test("every op is sheet-scoped except add-sheet and rename-sheet") {
+  test("every op is sheet-scoped except add-sheet, rename-sheet, define-name and remove-name") {
     assertEquals(
       OpRegistry.all.filterNot(_.sheetScoped).map(_.name).toSet,
-      Set("add-sheet", "rename-sheet")
+      Set("add-sheet", "rename-sheet", "define-name", "remove-name")
     )
   }
 
@@ -249,7 +255,7 @@ class OpRegistrySpec extends FunSuite:
     assertEquals(schema("type").str, "array")
     assert(schema("$id").str.contains("1.2.3"))
     val branches = schema("items")("oneOf").arr
-    assertEquals(branches.size, 32)
+    assertEquals(branches.size, 34)
     assertEquals(branches.map(_("properties")("op")("const").str).toVector, historicalOrder)
     branches.foreach { b =>
       assert(b.obj.contains("x-streamable"), b("title").str)

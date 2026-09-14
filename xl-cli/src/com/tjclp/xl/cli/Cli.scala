@@ -188,14 +188,15 @@ object Cli:
 
     // Lint: raw-zip structural validation (GH-397, no output file); custom exit codes.
     // The file arrives via -f or positionally (GH-422); exactly one form must be used. --stream
-    // SAX-scans the sheet parts instead of parsing them (the same findings, GH-638)
-    val lintOpts = (fileOpt.orNone, streamOpt, jsonOpt, lintCmd).mapN {
-      case (flagFile, stream, mode, (cmd, positional)) =>
+    // SAX-scans the sheet parts instead of parsing them (the same findings, GH-638). --strict is
+    // the global flag (Argv hoists it in front of the verb): hygiene findings fail the gate too
+    val lintOpts = (fileOpt.orNone, streamOpt, strictGlobalOpt, jsonOpt, lintCmd).mapN {
+      case (flagFile, stream, strict, mode, (cmd, positional)) =>
         cmd match
           case CliCommand.Lint(format) =>
             resolveLintFile(flagFile, positional) match
               case Right(file) =>
-                runLint(file, CliCommand.lintFormat(format, mode), io, mode, stream)
+                runLint(file, CliCommand.lintFormat(format, mode), io, mode, stream, strict)
               case Left(msg) => emit(Outcome.failed("lint", CliError.usage(msg, None)), mode, io)
           case other => internal("lint", s"Unexpected lint command: $other", io, mode)
     }

@@ -14,6 +14,45 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.printer.{FormulaOps, FormulaPrinter, FormulaShifter}
 
 /**
+ * What a structural edit does to the cached values (`<v>`) of the formulas it reaches.
+ *
+ * The edit itself is identical under every policy — cells shift, references are rewritten, defined
+ * names shrink or degrade; only the fate of the PRE-edit caches differs. Excel keeps no cache
+ * across a structural edit because it recalculates at once; a file written without that
+ * recalculation has to decide what a cache-reading (`data_only`) consumer will see.
+ */
+enum StructuralCachePolicy derives CanEqual:
+  /**
+   * Withdraw the cache of every formula the edit could have changed: rewritten text, a relocated
+   * cell, the transitive dependents of anything moved or removed, every dynamic reference and every
+   * reader the static graph cannot resolve (GH-455, GH-507). The recalculating default — the caller
+   * refreshes the dirty cone next, so a withdrawn cache is a gap for a moment, never a wrong
+   * number.
+   */
+  case Invalidate
+
+  /**
+   * GH-503: [[Invalidate]], except that a formula whose printed text, record kind and address are
+   * all unchanged and which lies outside the edit's dirty cone keeps its cache — the edit provably
+   * could not have changed its answer.
+   */
+  case PreserveUntouched
+
+  /**
+   * GH-509: carry every pre-edit cache forward with its formula — rewritten, relocated or not — so
+   * the file keeps the numbers it had. The one exception is the GH-507 blind closure — readers the
+   * static graph cannot resolve, and their transitive dependents — which stays withdrawn under
+   * every policy, so the default and the carrying path agree on caches no reader can justify.
+   *
+   * A LIBRARY policy for a caller who controls the reader. Only Excel honors a `fullCalcOnLoad`
+   * marker set alongside it; LibreOffice at its shipped default ("never recalculate on load" for
+   * xlsx) displays a carried `<v>` as-is — verified: a deleted row under this policy showed the
+   * pre-edit `SUM` there — and so does every cache-only reader (openpyxl `data_only`, pandas). The
+   * xl CLI's `--no-recalc` therefore uses [[PreserveUntouched]], never this.
+   */
+  case CarryForward
+
+/**
  * GH-128 / GH-129: workbook-level structural editing (insert/delete rows & columns) WITH formula
  * rewriting.
  *
@@ -33,6 +72,9 @@ object StructuralEditor:
   /**
    * Insert `count` rows at 0-based row index `at` on `sheet`. Throws a typed `XLException` when the
    * edit is refused ([[insertRowsChecked]] is the total form) — the workbook is left untouched.
+   *
+   * `preserveUntouchedCaches` is the GH-503 Boolean spelling of [[StructuralCachePolicy]]: `true`
+   * is `PreserveUntouched`, `false` is `Invalidate`; the `policy` overloads take the full enum.
    */
   def insertRows(
     wb: Workbook,
@@ -41,7 +83,17 @@ object StructuralEditor:
     count: Int,
     preserveUntouchedCaches: Boolean = false
   ): Workbook =
-    orThrow(insertRowsChecked(wb, sheet, at, count, preserveUntouchedCaches))
+    insertRows(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
+
+  /** [[insertRows]] under an explicit cache policy. */
+  def insertRows(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    policy: StructuralCachePolicy
+  ): Workbook =
+    orThrow(insertRowsChecked(wb, sheet, at, count, policy))
 
   /** Delete `count` rows starting at 0-based row index `at` on `sheet`. Throws when refused. */
   def deleteRows(
@@ -51,7 +103,17 @@ object StructuralEditor:
     count: Int,
     preserveUntouchedCaches: Boolean = false
   ): Workbook =
-    orThrow(deleteRowsChecked(wb, sheet, at, count, preserveUntouchedCaches))
+    deleteRows(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
+
+  /** [[deleteRows]] under an explicit cache policy. */
+  def deleteRows(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    policy: StructuralCachePolicy
+  ): Workbook =
+    orThrow(deleteRowsChecked(wb, sheet, at, count, policy))
 
   /**
    * Insert `count` columns at 0-based column index `at` on `sheet`. Throws a typed `XLException`
@@ -64,7 +126,17 @@ object StructuralEditor:
     count: Int,
     preserveUntouchedCaches: Boolean = false
   ): Workbook =
-    orThrow(insertColumnsChecked(wb, sheet, at, count, preserveUntouchedCaches))
+    insertColumns(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
+
+  /** [[insertColumns]] under an explicit cache policy. */
+  def insertColumns(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    policy: StructuralCachePolicy
+  ): Workbook =
+    orThrow(insertColumnsChecked(wb, sheet, at, count, policy))
 
   /** Delete `count` columns starting at 0-based column index `at`. Throws when refused. */
   def deleteColumns(
@@ -74,7 +146,17 @@ object StructuralEditor:
     count: Int,
     preserveUntouchedCaches: Boolean = false
   ): Workbook =
-    orThrow(deleteColumnsChecked(wb, sheet, at, count, preserveUntouchedCaches))
+    deleteColumns(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
+
+  /** [[deleteColumns]] under an explicit cache policy. */
+  def deleteColumns(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    policy: StructuralCachePolicy
+  ): Workbook =
+    orThrow(deleteColumnsChecked(wb, sheet, at, count, policy))
 
   /**
    * Total form of [[insertRows]]: `Left` when the edit is refused (GH-472 out-of-bounds shift,
@@ -89,7 +171,17 @@ object StructuralEditor:
     count: Int,
     preserveUntouchedCaches: Boolean = false
   ): XLResult[Workbook] =
-    edit(wb, sheet, isRow = true, at = at, delta = count, preserveUntouchedCaches)
+    insertRowsChecked(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
+
+  /** [[insertRowsChecked]] under an explicit cache policy. */
+  def insertRowsChecked(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    policy: StructuralCachePolicy
+  ): XLResult[Workbook] =
+    edit(wb, sheet, isRow = true, at = at, delta = count, policy)
 
   /** Total form of [[deleteRows]]. */
   def deleteRowsChecked(
@@ -99,7 +191,17 @@ object StructuralEditor:
     count: Int,
     preserveUntouchedCaches: Boolean = false
   ): XLResult[Workbook] =
-    edit(wb, sheet, isRow = true, at = at, delta = -count, preserveUntouchedCaches)
+    deleteRowsChecked(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
+
+  /** [[deleteRowsChecked]] under an explicit cache policy. */
+  def deleteRowsChecked(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    policy: StructuralCachePolicy
+  ): XLResult[Workbook] =
+    edit(wb, sheet, isRow = true, at = at, delta = -count, policy)
 
   /** Total form of [[insertColumns]]. */
   def insertColumnsChecked(
@@ -109,7 +211,17 @@ object StructuralEditor:
     count: Int,
     preserveUntouchedCaches: Boolean = false
   ): XLResult[Workbook] =
-    edit(wb, sheet, isRow = false, at = at, delta = count, preserveUntouchedCaches)
+    insertColumnsChecked(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
+
+  /** [[insertColumnsChecked]] under an explicit cache policy. */
+  def insertColumnsChecked(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    policy: StructuralCachePolicy
+  ): XLResult[Workbook] =
+    edit(wb, sheet, isRow = false, at = at, delta = count, policy)
 
   /** Total form of [[deleteColumns]]. */
   def deleteColumnsChecked(
@@ -119,7 +231,21 @@ object StructuralEditor:
     count: Int,
     preserveUntouchedCaches: Boolean = false
   ): XLResult[Workbook] =
-    edit(wb, sheet, isRow = false, at = at, delta = -count, preserveUntouchedCaches)
+    deleteColumnsChecked(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
+
+  /** [[deleteColumnsChecked]] under an explicit cache policy. */
+  def deleteColumnsChecked(
+    wb: Workbook,
+    sheet: SheetName,
+    at: Int,
+    count: Int,
+    policy: StructuralCachePolicy
+  ): XLResult[Workbook] =
+    edit(wb, sheet, isRow = false, at = at, delta = -count, policy)
+
+  private def policyOf(preserveUntouchedCaches: Boolean): StructuralCachePolicy =
+    if preserveUntouchedCaches then StructuralCachePolicy.PreserveUntouched
+    else StructuralCachePolicy.Invalidate
 
   private def orThrow(result: XLResult[Workbook]): Workbook =
     result.fold(err => throw XLException(err), identity)
@@ -130,13 +256,13 @@ object StructuralEditor:
     isRow: Boolean,
     at: Int,
     delta: Int,
-    preserveUntouchedCaches: Boolean
+    policy: StructuralCachePolicy
   ): XLResult[Workbook] =
     for
       _ <- boundsRefusal(wb, target, isRow, at, delta)
       _ <- dataTableRefusal(wb, target, isRow, at, delta)
       _ <- definedNameRefusal(wb, target, delta)
-    yield applyEdit(wb, target, isRow, at, delta, preserveUntouchedCaches)
+    yield applyEdit(wb, target, isRow, at, delta, policy)
 
   /**
    * An unknown reference expression must not survive an edit with silently changed meaning. The
@@ -300,15 +426,18 @@ object StructuralEditor:
     isRow: Boolean,
     at: Int,
     delta: Int,
-    preserveUntouchedCaches: Boolean
+    policy: StructuralCachePolicy
   ): Workbook =
     val editedName = target.value
+    val preserveUntouchedCaches = policy == StructuralCachePolicy.PreserveUntouched
+    // One PRE-edit graph build per edit at most, shared by whichever closure the policy needs and
+    // forced lazily, only when a formula would otherwise keep its cache.
+    lazy val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(wb)
     // GH-455 follow-up: the non-participation fast path below keeps formula TEXT byte-identical,
     // but a cached VALUE can be stale even when the text never names the edited sheet —
     // Sheet2!Y ==X*2 over Sheet2!X =='Sheet1'!A1 reads Sheet1 two hops away. Invalidate the cache
     // of every formula transitively dependent (cross-sheet, through any chain) on a cell the edit
-    // actually TOUCHED. One PRE-edit graph build per edit, forced lazily and only when a formula
-    // would otherwise keep its cache (the CLI path recalculates after).
+    // actually TOUCHED (the CLI path recalculates after).
     //
     // GH-503: the seed set is the cells the edit MOVED OR REMOVED — those at or past `at` on the
     // edited axis — not every cell of the edited sheet. Seeding on the whole sheet made an insert
@@ -318,7 +447,6 @@ object StructuralEditor:
     // reads it can have changed. Cells whose own text the shift rewrote are handled separately (a
     // rewritten reference always drops its cache below); this set is about the ones that do not.
     lazy val staleCaches: Set[QualifiedRef] =
-      val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(wb)
       val axisIndex0: ARef => Int = r => if isRow then r.row.index0 else r.col.index0
       // The narrowing is gated too, not just the cache-carrying decision below: `staleCaches` also
       // feeds `keepNonParticipant`, which runs on EVERY path. A cross-sheet reader that reaches the
@@ -349,6 +477,18 @@ object StructuralEditor:
       // edit rewrites reference TEXT, which a reader the parser rejects cannot receive.
       val roots = pointSeeds ++ rangeReaders ++ dynamic ++ DependencyGraph.unresolvedReaders(wb)
       roots ++ dependencyIndex.transitiveDependents(roots)
+    // GH-509: under CarryForward (library-only; the CLI never asks for it, see the enum's doc) the
+    // only caches withdrawn are the GH-507 blind closure — readers the static graph cannot resolve
+    // and their transitive dependents — so the default and the carrying path agree on caches no
+    // reader can justify. No graph is built at all when the book has no blind reader.
+    lazy val blindCaches: Set[QualifiedRef] =
+      val blind = DependencyGraph.unresolvedReaders(wb)
+      if blind.isEmpty then blind else blind ++ dependencyIndex.transitiveDependents(blind)
+    // Explicit lambdas: eta-expanding `.contains` would evaluate the lazy receiver here and now.
+    val withdrawn: QualifiedRef => Boolean = policy match
+      case StructuralCachePolicy.CarryForward => q => blindCaches.contains(q)
+      case StructuralCachePolicy.Invalidate | StructuralCachePolicy.PreserveUntouched =>
+        q => staleCaches.contains(q)
     val updatedSheets = wb.sheets.map { s =>
       // 1. Pure cell/merge/property shift — only on the edited sheet. Its own typed charts
       //    (anchors + same-sheet data refs) are handled INSIDE the shift (GH-222).
@@ -372,8 +512,8 @@ object StructuralEditor:
         isRow,
         at,
         delta,
-        stale = r => staleCaches.contains(QualifiedRef(s.name, r)),
-        preserveUntouchedCaches = preserveUntouchedCaches
+        stale = r => withdrawn(QualifiedRef(s.name, r)),
+        policy
       )
     }
     // GH-473: general defined names (workbook- AND sheet-scoped) are the same rewrite plane as
@@ -398,6 +538,11 @@ object StructuralEditor:
       if namesChanged then wb.metadata.copy(definedNames = updatedNames) else wb.metadata
     wb.copy(sheets = updatedSheets, metadata = updatedMetadata, sourceContext = updatedContext)
 
+  /**
+   * `stale` is the policy's withdrawal set, keyed on PRE-edit addresses (it is built from the
+   * pre-edit book): every cache the edit's dirty cone reaches under `Invalidate` /
+   * `PreserveUntouched`, only the GH-507 blind closure under `CarryForward`.
+   */
   private def rewriteFormulas(
     sheet: Sheet,
     shiftLocal: Boolean,
@@ -406,7 +551,7 @@ object StructuralEditor:
     at: Int,
     delta: Int,
     stale: ARef => Boolean,
-    preserveUntouchedCaches: Boolean
+    policy: StructuralCachePolicy
   ): Sheet =
     // GH-455 follow-up: a non-participating formula keeps its TEXT byte-identical, but a cached
     // value that transitively reads the edited sheet is stale and must drop (the writer would
@@ -414,6 +559,20 @@ object StructuralEditor:
     def keepNonParticipant(ref: ARef, cell: Cell, f: CellValue.Formula): Cell =
       if f.cachedValue.isDefined && stale(ref) then cell.copy(value = f.copy(cachedValue = None))
       else cell
+    // `ref` below is the POST-shift address while `stale` is keyed on PRE-edit ones, so on the
+    // edited sheet a cell that MOVED would miss its own entry. Anything at or past the post-edit
+    // cut moved (an insert's [at, at+delta) band is newly blank) — by exactly `delta`, so the
+    // pre-edit address is recoverable for the one policy that asks about a relocated cell.
+    val movedCut = if delta >= 0 then at + delta else at
+    def movedByEdit(ref: ARef): Boolean =
+      shiftLocal && (if isRow then ref.row.index0 else ref.col.index0) >= movedCut
+    def preEditRef(ref: ARef): ARef =
+      if !movedByEdit(ref) then ref
+      else if isRow then ARef.from0(ref.col.index0, ref.row.index0 - delta)
+      else ARef.from0(ref.col.index0 - delta, ref.row.index0)
+    // GH-509: CarryForward keeps a cache wherever the blind closure does not withdraw it.
+    def carriedForward(ref: ARef, f: CellValue.Formula): Option[CellValue] =
+      if stale(preEditRef(ref)) then None else f.cachedValue
     val updatedCells = sheet.cells.map { case (ref, cell) =>
       cell.value match
         // GH-430: a data-table record's payload (ref/r1/r2) is LOCAL sheet geometry — it moves
@@ -486,22 +645,30 @@ object StructuralEditor:
                 // file, and any doubt puts the cell in the cone.
                 val newStr = FormulaPrinter.printFileForm(shiftedExpr)
                 val newKind = shiftedArrayKind(kind, shiftLocal, isRow, at, delta)
-                // `ref` is the POST-shift address while `stale` is keyed on PRE-edit ones, so
-                // on the edited sheet a cell that MOVED would miss its own seed. Anything at
-                // or past the post-edit cut moved (an insert's [at, at+delta) band is newly
-                // blank), which is exactly the position-sensitive case — `=ROW()` keeps its
-                // text and changes its answer.
-                val movedCut = if delta >= 0 then at + delta else at
-                val moved =
-                  shiftLocal && (if isRow then ref.row.index0 else ref.col.index0) >= movedCut
-                val untouched =
-                  preserveUntouchedCaches &&
-                    newStr == formulaStr && newKind == kind && !moved && !stale(ref)
-                val carried = if untouched then f.cachedValue else None
+                // A relocated cell is the position-sensitive case — `=ROW()` keeps its text and
+                // changes its answer — so PreserveUntouched treats a move as a change.
+                //
+                // GH-509: CarryForward keeps the cache regardless of text or position, for a
+                // caller whose reader is Excel (which recomputes under fullCalcOnLoad) or who
+                // accepts that LibreOffice and cache-only readers display the pre-edit number.
+                val carried = policy match
+                  case StructuralCachePolicy.Invalidate => None
+                  case StructuralCachePolicy.PreserveUntouched =>
+                    val untouched =
+                      newStr == formulaStr && newKind == kind && !movedByEdit(ref) && !stale(ref)
+                    if untouched then f.cachedValue else None
+                  case StructuralCachePolicy.CarryForward => carriedForward(ref, f)
                 (ref, cell.copy(value = CellValue.Formula(newStr, carried, newKind)))
               // Preserve unparseable text rather than guessing at a rewrite, but invalidate its
               // cache too: the edit may have moved the cell or changed a dynamically-read value.
-              case Left(_) => (ref, cell.copy(value = f.copy(cachedValue = None)))
+              // Under CarryForward the same cell is a GH-507 blind reader (the parser rejected
+              // it), so the closure withdraws it — unless its cache is a pinned external one.
+              case Left(_) =>
+                val carried = policy match
+                  case StructuralCachePolicy.CarryForward => carriedForward(ref, f)
+                  case StructuralCachePolicy.Invalidate | StructuralCachePolicy.PreserveUntouched =>
+                    None
+                (ref, cell.copy(value = f.copy(cachedValue = carried)))
         case _ => (ref, cell)
     }
     sheet.copy(

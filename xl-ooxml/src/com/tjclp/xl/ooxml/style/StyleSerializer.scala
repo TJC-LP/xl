@@ -116,8 +116,9 @@ final case class OoxmlStyles(
      * REQUIRES: None ENSURES:
      *   - Vector contains exactly 2 fills
      *   - Index 0: Fill.None (patternType="none")
-     *   - Index 1: Fill.Pattern with Gray125 pattern
-     *   - Gray125 uses black foreground (0xFF000000) and silver background (0xFFC0C0C0)
+     *   - Index 1: the bare gray125 placeholder, Fill.Pattern(None, None, Gray125) — both colours
+     *     automatic, exactly as Excel writes it; a source table's own bare gray125 parses to the
+     *     same value and deduplicates against it (GH-566)
      * DETERMINISTIC: Yes (immutable constant) ERROR CASES: None (compile-time constant)
      */
     val defaultFills = Vector(Fill.None, OoxmlStyles.defaultGray125)
@@ -407,17 +408,16 @@ final case class OoxmlStyles(
           )
         )
 
-      case fill @ Fill.Pattern(fg, bg, patternType) =>
-        // GH-448: the mandatory gray125 placeholder serializes bare, exactly as Excel writes it
-        if fill == OoxmlStyles.defaultGray125 then
-          elem("fill")(elem("patternFill", "patternType" -> "gray125")())
-        else
-          elem("fill")(
-            elem("patternFill", "patternType" -> OoxmlStyles.patternTypeToken(patternType))(
-              colorToXml(fg).copy(label = "fgColor"), // Use colorToXml to preserve theme colors
-              colorToXml(bg).copy(label = "bgColor") // Use colorToXml to preserve theme colors
-            )
+      case Fill.Pattern(fg, bg, patternType) =>
+        // GH-566: a colour child emits only when present — an absent child is Excel's automatic
+        // colour, so the mandatory gray125 placeholder (both automatic) comes out bare, exactly as
+        // Excel writes it (GH-448). colorToXml preserves theme colours.
+        elem("fill")(
+          elem("patternFill", "patternType" -> OoxmlStyles.patternTypeToken(patternType))(
+            (fg.map(c => colorToXml(c).copy(label = "fgColor")).toList ++
+              bg.map(c => colorToXml(c).copy(label = "bgColor")).toList)*
           )
+        )
 
   private def borderToXml(border: Border): Elem =
     elem("border")(
@@ -578,18 +578,21 @@ final case class OoxmlStyles(
         writeColorAttributes(writer, color)
         writer.endElement()
         writer.endElement()
-      case fill @ Fill.Pattern(fg, bg, patternType) =>
+      case Fill.Pattern(fg, bg, patternType) =>
         writer.startElement("patternFill")
-        // GH-448: the mandatory gray125 placeholder serializes bare, exactly as Excel writes it
-        if fill == OoxmlStyles.defaultGray125 then writer.writeAttribute("patternType", "gray125")
-        else
-          writer.writeAttribute("patternType", OoxmlStyles.patternTypeToken(patternType))
+        // GH-566: colour children only when present (absent = Excel's automatic colour); the
+        // mandatory gray125 placeholder therefore comes out bare, as Excel writes it (GH-448)
+        writer.writeAttribute("patternType", OoxmlStyles.patternTypeToken(patternType))
+        fg.foreach { c =>
           writer.startElement("fgColor")
-          writeColorAttributes(writer, fg)
+          writeColorAttributes(writer, c)
           writer.endElement()
+        }
+        bg.foreach { c =>
           writer.startElement("bgColor")
-          writeColorAttributes(writer, bg)
+          writeColorAttributes(writer, c)
           writer.endElement()
+        }
         writer.endElement()
     writer.endElement()
 
@@ -704,9 +707,10 @@ object OoxmlStyles:
    * Excel's textual form for a theme tint (GH-448): omitted entirely when 0, otherwise up to 17
    * significant digits of the exact binary value in plain notation (`0.79998168889431442`), never
    * Java's shortest-round-trip form (`0.7999816888943144`). Both parse to the same Double; only the
-   * Excel form is byte-identical to Excel-authored files.
+   * Excel form is byte-identical to Excel-authored files. Shared with the streaming `StylePatcher`
+   * (xl-cats-effect), hence `private[xl]`.
    */
-  private[ooxml] def tintToken(tint: Double): Option[String] =
+  private[xl] def tintToken(tint: Double): Option[String] =
     if tint == 0.0 then None
     else
       Some(
@@ -717,15 +721,13 @@ object OoxmlStyles:
       )
 
   /**
-   * The mandatory fills[1] placeholder (ECMA-376 §18.8.21). Excel writes it BARE (`<patternFill
-   * patternType="gray125"/>`); the explicit black/silver colors here are the model-side identity
-   * only and are not serialized for this exact instance (GH-448).
+   * The mandatory fills[1] placeholder (ECMA-376 §18.8.21): a gray125 texture with both colours
+   * automatic, which serializes BARE (`<patternFill patternType="gray125"/>`) exactly as Excel
+   * writes it (GH-448). A source table's own bare gray125 parses to this same value and so
+   * deduplicates against the leader instead of growing the table (GH-566).
    */
-  private[ooxml] val defaultGray125: Fill = Fill.Pattern(
-    foreground = Color.Rgb(0xff000000),
-    background = Color.Rgb(0xffc0c0c0),
-    pattern = PatternType.Gray125
-  )
+  private[ooxml] val defaultGray125: Fill =
+    Fill.Pattern(foreground = None, background = None, pattern = PatternType.Gray125)
 
   /**
    * Canonical ST_BorderStyle token (ECMA-376 Part 1, §18.18.3) for each border style. Explicit
@@ -750,29 +752,10 @@ object OoxmlStyles:
     case BorderStyle.MediumDashDotDot => "mediumDashDotDot"
 
   /**
-   * Canonical ST_PatternType token (ECMA-376 Part 1, §18.18.55) for each pattern type. Explicit
-   * total mapping for the same reason as [[borderStyleToken]] (GH-287).
+   * Canonical ST_PatternType token (ECMA-376 Part 1, §18.18.55). The table lives on the enum
+   * ([[PatternType.token]]) so the streaming style codec spells it identically (GH-566).
    */
-  private[ooxml] def patternTypeToken(pattern: PatternType): String = pattern match
-    case PatternType.None => "none"
-    case PatternType.Solid => "solid"
-    case PatternType.Gray125 => "gray125"
-    case PatternType.Gray0625 => "gray0625"
-    case PatternType.DarkGray => "darkGray"
-    case PatternType.MediumGray => "mediumGray"
-    case PatternType.LightGray => "lightGray"
-    case PatternType.DarkHorizontal => "darkHorizontal"
-    case PatternType.DarkVertical => "darkVertical"
-    case PatternType.DarkDown => "darkDown"
-    case PatternType.DarkUp => "darkUp"
-    case PatternType.DarkGrid => "darkGrid"
-    case PatternType.DarkTrellis => "darkTrellis"
-    case PatternType.LightHorizontal => "lightHorizontal"
-    case PatternType.LightVertical => "lightVertical"
-    case PatternType.LightDown => "lightDown"
-    case PatternType.LightUp => "lightUp"
-    case PatternType.LightGrid => "lightGrid"
-    case PatternType.LightTrellis => "lightTrellis"
+  private[ooxml] def patternTypeToken(pattern: PatternType): String = PatternType.token(pattern)
 
   /** Create minimal styles (default only) */
   def minimal: OoxmlStyles =

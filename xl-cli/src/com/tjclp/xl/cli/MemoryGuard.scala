@@ -5,13 +5,16 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipFile
 
 import scala.jdk.CollectionConverters.*
+import scala.util.Try
+import scala.util.control.NoStackTrace
 
 import cats.effect.IO
 import cats.syntax.all.*
+import fs2.{Pipe, Stream}
 
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.error.{XLError, XLException, XLResult}
-import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.io.{ExcelIO, RowData}
 import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader, XlsxWriter}
 import com.tjclp.xl.ooxml.XlsxReader.{ReadResult, ReaderConfig}
 import com.tjclp.xl.workbooks.Workbook
@@ -322,7 +325,8 @@ object MemoryGuard:
     warn: Warning => IO[Unit] = _ => IO.unit,
     parse: (Path, ReaderConfig) => XLResult[ReadResult] = XlsxReader.readWithWarnings(_, _),
     heap: Long = maxHeapBytes,
-    admitLoads: Boolean = true
+    admitLoads: Boolean = true,
+    spill: Either[CliError, Option[Path]] = Right(None)
   ): ExcelIO[IO] =
     new ExcelIO[IO](handler):
       override def readWith(path: Path, config: ReaderConfig): IO[Workbook] =
@@ -344,11 +348,124 @@ object MemoryGuard:
           case Left(err) => IO.raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
         }
 
+      // GH-517: the spill directory is an override, never `withSpillDir` — that rebuilds a PLAIN
+      // ExcelIO and would silently drop the two guards above. A malformed setting is not a
+      // directory; the spilling writes below refuse it before they consult this.
+      override def spillDir: Option[Path] = spill.getOrElse(None)
+
+      // The two spilling writers, and only they, answer for the setting: a malformed value is the
+      // usage error before a row is pulled or a byte written; a failure of the write itself — the
+      // scratch file, the archive — is IO_WRITE naming the target (the library's message names the
+      // configured directory); a failure of the caller's own rows keeps its classification.
+      private val gate: IO[Unit] = IO.fromEither(spill.leftMap(CliException(_))).void
+
+      override def writeStreamWithAutoDetect(
+        path: Path,
+        sheetName: String,
+        sheetIndex: Int,
+        config: WriterConfig
+      ): Pipe[IO, RowData, Unit] =
+        rows =>
+          Stream.exec(gate) ++
+            super
+              .writeStreamWithAutoDetect(path, sheetName, sheetIndex, config)(
+                SourceFailure.tag(rows)
+              )
+              .handleErrorWith(e => Stream.raiseError[IO](writeFailure(path, spillDir, e)))
+
+      override def writeStreamsSeqWithAutoDetect(
+        path: Path,
+        sheets: Seq[(String, Stream[IO, RowData])],
+        config: WriterConfig
+      ): IO[Unit] =
+        gate *> super
+          .writeStreamsSeqWithAutoDetect(
+            path,
+            sheets.map { case (name, rows) => name -> SourceFailure.tag(rows) },
+            config
+          )
+          .adaptError { case e => writeFailure(path, spillDir, e) }
+
+  /** The environment variable that redirects the streaming scratch file (GH-517). */
+  val SpillDirVar: String = "XL_SPILL_DIR"
+
+  /**
+   * A failure of the rows a spilling write consumes, tagged on the way in so that it is not
+   * classified as the write's on the way out ([[writeFailure]] unwraps it).
+   */
+  private final class SourceFailure(val cause: Throwable) extends Exception(cause) with NoStackTrace
+
+  private object SourceFailure:
+    def tag(rows: Stream[IO, RowData]): Stream[IO, RowData] =
+      rows.handleErrorWith(e => Stream.raiseError[IO](new SourceFailure(e)))
+
+  /**
+   * The classification of what a spilling write raised (GH-517): the caller's own row failure,
+   * unwrapped; a typed failure, as is; anything else — the scratch file that could not be created
+   * or filled, the archive that could not be assembled — `IO_WRITE` naming `target`, with the
+   * cause's message (the library's names the configured spill directory) and a hint naming the
+   * lever, in the shape of the CLI's other write failures.
+   */
+  private def writeFailure(target: Path, spill: Option[Path], failure: Throwable): Throwable =
+    failure match
+      case source: SourceFailure => source.cause
+      case cli: CliException => cli
+      case other =>
+        CliException(
+          CliError(
+            ErrorCode.IO_WRITE,
+            s"cannot write $target: ${CliError.messageOf(other)}",
+            hint = Some(
+              s"check that the output directory and ${spillWhere(spill)} exist, are writable and have room"
+            ),
+            location = Some(Location.file(target.toString))
+          )
+        )
+
+  /**
+   * Where a scratch file lands, for a diagnostic: the configured `XL_SPILL_DIR`, or the default
+   * `java.io.tmpdir` with the lever that moves it.
+   */
+  def spillWhere(spill: Option[Path]): String =
+    spill.fold(
+      s"the default temp directory java.io.tmpdir ($SpillDirVar=<dir> redirects the scratch file)"
+    )(dir => s"$SpillDirVar ($dir)")
+
+  /**
+   * The spill directory from `XL_SPILL_DIR` (GH-517): trimmed; unset or blank is `None` — the JVM's
+   * `java.io.tmpdir`, the library's default; a value that is not a path is a usage error (exit 2)
+   * naming the variable. `env` is injectable so the parse is unit-testable without the process
+   * environment (as `NativeImage.detect` reads its properties).
+   */
+  private[cli] def spillDirFrom(env: String => Option[String]): Either[CliError, Option[Path]] =
+    env(SpillDirVar).map(_.trim).filter(_.nonEmpty) match
+      case None => Right(None)
+      case Some(raw) =>
+        Try(Path.of(raw)).toEither match
+          case Right(dir) => Right(Some(dir))
+          case Left(e) =>
+            Left(
+              CliError.usage(
+                s"$SpillDirVar is not a path: '$raw' (${CliError.messageOf(e)})",
+                Some(s"unset $SpillDirVar or point it at an existing, writable directory")
+              )
+            )
+
+  /**
+   * `XL_SPILL_DIR`, read once per process — the application layer's one ambient read, so the
+   * library stays deterministic (`ExcelIO.instance` never consults the environment). Consulted by
+   * the spilling writes (the two-pass CSV import into a new workbook,
+   * `ImportCommands.importToNewSheetStreaming`) and by the one render backend that needs a scratch
+   * file (`Resvg.scratchSvg`: resvg takes file paths only); every other write never spills.
+   */
+  val spill: Either[CliError, Option[Path]] = spillDirFrom(sys.env.get)
+
   /**
    * The one `ExcelIO` every command writes through (no reader handlers: the commands receive their
-   * workbook already loaded), so serialisation is under the guard wherever it happens.
+   * workbook already loaded), so serialisation is under the guard wherever it happens — and the
+   * spill goes where `XL_SPILL_DIR` points.
    */
-  val writer: ExcelIO[IO] = excel(_ => IO.unit)
+  val writer: ExcelIO[IO] = excel(_ => IO.unit, spill = spill)
 
   /** Binary units with one decimal (`8.0 GB`, `512.0 MB`), the way `-Xmx` counts. */
   def human(bytes: Long): String =

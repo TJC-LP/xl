@@ -224,6 +224,23 @@ object FormulaParser:
     }
 
   /**
+   * GH-653: the paren-less prefix form `NOT x` is taken only when the first non-whitespace
+   * character after the word is not '(' (or the input ends). `NOT(` — and `NOT (`, whitespace
+   * before the paren, which [[parseFunctionOrRef]] accepts for every function name — is the
+   * function CALL, whose closing paren ends it, so a postfix after it binds to the call as in
+   * Excel: `NOT(A1)^2` is `(NOT(A1))^2`, `NOT(A1)%` is `(NOT(A1))%` and `NOT(A1)#` is an error.
+   * Read as the keyword with a parenthesized operand, the postfix bound INSIDE (`NOT(A1^2)`,
+   * `NOT(A1%)`, `NOT(A1#)`) — a different value (found by the grammar generator; the whitespace
+   * spelling by the PR #659 review).
+   */
+  private def isNotKeywordAt(s: ParserState): Boolean =
+    isKeywordAt(s, "NOT") && {
+      val rem = s.remaining
+      val next = rem.indexWhere(!_.isWhitespace, 3)
+      next < 0 || rem.charAt(next) != '('
+    }
+
+  /**
    * Parse logical OR (lowest precedence).
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -558,7 +575,7 @@ object FormulaParser:
         }
       // GH-654: a sign may precede the lenient paren-less NOT keyword (`=-NOT x` parsed before
       // GH-578 moved the signs down here) — it is a prefix-level operand, not a primary
-      case Some('N') | Some('n') if isKeywordAt(s, "NOT") => parseUnary(s)
+      case Some('N') | Some('n') if isNotKeywordAt(s) => parseUnary(s)
       case _ => parsePostfix(s)
 
   /**
@@ -572,7 +589,7 @@ object FormulaParser:
   private def parseUnary(state: ParserState): ParseResult[TExpr[?]] =
     val s = skipWhitespace(state)
     s.currentChar match
-      case Some('N') | Some('n') if isKeywordAt(s, "NOT") =>
+      case Some('N') | Some('n') if isNotKeywordAt(s) =>
         descend(s).flatMap { sd =>
           val s2 = skipWhitespace(sd.advance(3))
           parseUnary(s2).map { case (expr, s3) =>
@@ -742,7 +759,10 @@ object FormulaParser:
             case _ => s // Invalid: E not followed by sign or digit
         case _ => s
 
-    val s2 = loop(state, hasDecimal = state.currentChar.contains('.'), hasExponent = false)
+    // GH-653: the loop consumes the decimal point itself, so a leading-dot fraction (`.5`, Excel's
+    // own spelling of a fraction below one) reads as `.5` and not as the empty literal — seeding
+    // `hasDecimal` from the first character left nothing consumed and reported Invalid number ''
+    val s2 = loop(state, hasDecimal = false, hasExponent = false)
     val numStr = state.input.substring(startPos, s2.pos)
 
     try

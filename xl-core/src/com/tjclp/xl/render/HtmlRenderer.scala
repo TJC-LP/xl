@@ -2,7 +2,6 @@ package com.tjclp.xl.render
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
@@ -10,7 +9,6 @@ import com.tjclp.xl.styles.border.{BorderStyle, BorderSide}
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.{Font, Underline}
-import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.CellStyle
 
 /** Renders Excel sheets to HTML tables with inline CSS styling */
@@ -50,6 +48,30 @@ object HtmlRenderer:
     theme: ThemePalette = ThemePalette.office,
     applyPrintScale: Boolean = false,
     showLabels: Boolean = false
+  ): String =
+    toHtmlResolving(ResolvedCell(_, _))(
+      sheet,
+      range,
+      includeStyles,
+      includeComments,
+      theme,
+      applyPrintScale,
+      showLabels
+    )
+
+  /**
+   * [[toHtml]] with the per-cell resolver injected. Each rendered cell is resolved exactly once
+   * (`RenderUtilsSpec` counts through this seam): every overflow, alignment, hash and text decision
+   * reads the one [[ResolvedCell]], so a Custom format code is parsed once per cell.
+   */
+  private[render] def toHtmlResolving(resolve: (Cell, Sheet) => ResolvedCell)(
+    sheet: Sheet,
+    range: CellRange,
+    includeStyles: Boolean,
+    includeComments: Boolean,
+    theme: ThemePalette,
+    applyPrintScale: Boolean,
+    showLabels: Boolean
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -173,6 +195,11 @@ object HtmlRenderer:
                     else Some(s"<td$mergeAttrs></td>")
 
                   case Some(cell) =>
+                    // Style and rendered content, resolved ONCE: the span, alignment, hash and
+                    // body below all read them, and resolving re-formats the value and
+                    // re-parses a Custom code.
+                    val resolved = resolve(cell, sheet)
+
                     // Calculate overflow colspan (only if no merge colspan)
                     val overflowColspan =
                       if mergeColspan > 1 then 1 // Merged cells take priority
@@ -182,7 +209,7 @@ object HtmlRenderer:
                           if widthIdx >= 0 && widthIdx < colWidths.length then colWidths(widthIdx)
                           else DefaultColumnWidthPx
                         calculateOverflowColspan(
-                          cell,
+                          resolved,
                           ref,
                           cellWidth,
                           colWidths,
@@ -203,10 +230,8 @@ object HtmlRenderer:
                         (if mergeRowspan > 1 then s""" rowspan="$mergeRowspan"""" else "")
 
                     val style =
-                      if includeStyles then cellStyleToInlineCss(cell, sheet, theme) else ""
-                    val cellStyle = cell.styleId.flatMap(sheet.styleRegistry.get)
-                    // Extract NumFmt from cell's style for proper value formatting
-                    val numFmt = cellStyle.map(_.numFmt).getOrElse(NumFmt.General)
+                      if includeStyles then cellStyleToInlineCss(resolved, theme) else ""
+                    val cellStyle = resolved.style
                     // Calculate cell width (sum of column widths for colspan)
                     val cellWidthPx = (0 until effectiveColspan).map { i =>
                       val widthIdx = colIdx - startCol + i
@@ -215,8 +240,8 @@ object HtmlRenderer:
                     }.sum
                     // Excel's #### marker: a clipped numeral reads as a different, plausible
                     // number (GH-459). Must agree with SvgRenderer.
-                    val content = hashOverflowText(cell.value, cellStyle, cellWidthPx)
-                      .getOrElse(cellValueToHtml(cell.value, numFmt, theme))
+                    val content = hashOverflowText(resolved.content, cellStyle, cellWidthPx)
+                      .getOrElse(cellValueToHtml(resolved, theme))
                     // Add default white background if no fill is specified (only when includeStyles)
                     // Add overflow: hidden only when not spanning (colspan=1)
                     // And white-space: nowrap if not explicitly wrapping (Excel default)
@@ -296,25 +321,16 @@ $headerRow$tableRows
    *   - Formula: Shows cached value formatted, or raw formula if no cache
    *   - Error: Excel error code
    */
-  private def cellValueToHtml(value: CellValue, numFmt: NumFmt, theme: ThemePalette): String =
-    value match
+  private def cellValueToHtml(cell: ResolvedCell, theme: ThemePalette): String =
+    cell.cell.value match
       case CellValue.RichText(richText) =>
         // Rich text has its own formatting, don't apply NumFmt
         richText.runs.map(run => runToHtml(run, theme)).mkString
 
-      case CellValue.Empty => ""
-
-      case CellValue.Formula(_, Some(cached), _) =>
-        // Show cached result formatted with NumFmt (matches Excel display)
-        escapeHtml(NumFmtFormatter.formatValue(cached, numFmt))
-
-      case CellValue.Formula(expr, None, _) =>
-        // No cached value, show raw formula
-        escapeHtml(s"=$expr")
-
-      case other =>
-        // Use NumFmtFormatter for Text, Number, Bool, DateTime, Error
-        escapeHtml(NumFmtFormatter.formatValue(other, numFmt))
+      case _ =>
+        // The resolved content: a cached formula's value formatted with the NumFmt (matches
+        // Excel display), an uncached formula's source, the formatted text of everything else
+        escapeHtml(cell.content.text)
 
   /**
    * Convert a TextRun to HTML with formatting.
@@ -355,15 +371,8 @@ $headerRow$tableRows
    * Generates CSS properties for font, fill, borders, alignment, etc. Returns empty string if cell
    * has no style.
    */
-  /** Determine default horizontal alignment based on cell value type (Excel's General behavior) */
-  private def contentBasedAlignment(value: CellValue): HAlign = value match
-    case CellValue.Number(_) | CellValue.DateTime(_) => HAlign.Right
-    case CellValue.Bool(_) => HAlign.Center
-    case CellValue.Formula(_, Some(cached), _) => contentBasedAlignment(cached)
-    case _ => HAlign.Left
-
-  private def cellStyleToInlineCss(cell: Cell, sheet: Sheet, theme: ThemePalette): String =
-    val styleOpt = cell.styleId.flatMap(sheet.styleRegistry.get)
+  private def cellStyleToInlineCss(cell: ResolvedCell, theme: ThemePalette): String =
+    val styleOpt = cell.style
     val css = scala.collection.mutable.ArrayBuffer[String]()
 
     styleOpt.foreach { style =>
@@ -389,13 +398,9 @@ $headerRow$tableRows
       borderSideToCss(style.border.left, "border-left", theme).foreach(css += _)
     }
 
-    // Alignment - always emit to ensure proper alignment
-    // Use explicit alignment from style if set, otherwise use content-based default (General behavior)
-    val effectiveHAlign = styleOpt.map(_.align.horizontal).getOrElse(HAlign.General) match
-      case HAlign.General => contentBasedAlignment(cell.value)
-      case explicit => explicit
-
-    effectiveHAlign match
+    // Alignment - always emit to ensure proper alignment. The style's explicit alignment wins;
+    // General resolves from the rendered kind exactly as SvgRenderer anchors it (GH-500, GH-501).
+    cell.align match
       case HAlign.Left => css += "text-align: left"
       case HAlign.Center => css += "text-align: center"
       case HAlign.Right => css += "text-align: right"

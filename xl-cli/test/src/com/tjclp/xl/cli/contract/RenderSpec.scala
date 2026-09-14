@@ -156,10 +156,11 @@ class RenderSpec extends FunSuite:
     assertEquals(rendered.stderr, "")
   }
 
-  test("json: a Raw payload that is not JSON still yields a well-formed envelope (as a string)") {
+  test("json: a Raw payload that is not JSON still yields a conforming envelope, as prose data") {
     val rendered = Render.json(Outcome.ok("view", Payload.Raw("not json {")), version)
-    val e = envelope(rendered)
-    assertEquals(e("data"), ujson.Str("not json {"))
+    val e = envelope(rendered) // validates: data is an object even on this defect path (GH-618)
+    assertEquals(e("data"), Payload.toJson(Payload.text("not json {")))
+    assertEquals(e("data")("text"), ujson.Str("not json {"))
   }
 
   test("text: a Raw payload prints its text verbatim") {
@@ -212,7 +213,8 @@ class RenderSpec extends FunSuite:
   }
 
   test("json: the envelope is the whole of stdout — one indented document, no trailer") {
-    val rendered = Render.json(Outcome.ok("sheets", Payload.Json(ujson.Arr())), version)
+    val rendered =
+      Render.json(Outcome.ok("sheets", Payload.Json(ujson.Obj("sheets" -> ujson.Arr()))), version)
     assertEquals(rendered.stdout, ujson.write(ujson.read(rendered.stdout), indent = 2))
     assert(rendered.stdout.startsWith("{\n  \"ok\": true"), rendered.stdout)
   }

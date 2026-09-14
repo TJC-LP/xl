@@ -17,7 +17,10 @@ enum RowCodecError derives CanEqual:
   /** `field` is not an `Option`, but its cell at (`row`, `column`) is empty. */
   case Missing(row: Row, column: Column, field: String)
 
-  /** No cell in `headerRow` carries `header`; `available` lists the headers that are there. */
+  /**
+   * No cell in `headerRow` carries `header` — the field's [[RowCodec.headers]] entry, so its
+   * `@header`/`withHeaders` text when it has one; `available` lists the headers that are there.
+   */
   case HeaderNotFound(header: String, headerRow: Row, available: Vector[String])
 
   /** A record spans `expected` cells; `actual` were supplied (a range of the wrong width). */

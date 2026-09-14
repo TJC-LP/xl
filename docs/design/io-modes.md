@@ -240,7 +240,7 @@ and emit through `StaxSaxWriter`, which writes its bytes directly (since GH-649:
 - Harder to debug (can't inspect tree)
 
 **Alternative Considered**: Use javax.xml.stream.XMLStreamWriter
-**Rejected Because**: Imperative, side-effecting, not fs2-compatible (later adopted, behind `Sync[F]`, where raw throughput won)
+**Rejected Because**: Imperative, side-effecting, not fs2-compatible (later adopted, behind `Sync[F]`, where raw throughput won; replaced again in GH-649 by xl's own `XmlTagWriter` inside `StaxSaxWriter` — the JDK writer emits TAB/LF/CR raw in attribute values and cannot emit the `&#10;` character references attribute-value normalization needs, so both backends now share `XmlUtil.escapeText`/`escapeAttr` byte for byte)
 
 ---
 

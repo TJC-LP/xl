@@ -5,21 +5,27 @@ import XmlUtil.*
 import SaxSupport.*
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.error.XLError
+import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.tables.{
   TableSpec,
   TableColumn as DomainTableColumn,
   TableAutoFilter,
-  TableStyle
+  TableStyle,
+  TotalsRowFunction
 }
 
 /**
  * OOXML table column in xl/tables/tableN.xml.
  *
- * Each column has a unique ID and display name.
+ * Each column has a unique ID and display name, and — when the table shows a totals row — what its
+ * totals-row cell holds: a label, or an aggregate (`totalsRowFunction`, with `<totalsRowFormula>`
+ * for `custom`).
  *
  * OOXML structure:
  * {{{
- * <tableColumn id="1" name="Product"/>
+ * <tableColumn id="1" name="Product" totalsRowLabel="Total"/>
+ * <tableColumn id="2" name="Amount" totalsRowFunction="sum"/>
+ * <tableColumn id="3" name="Tax" totalsRowFunction="custom"><totalsRowFormula>SUM(Table1[Tax])*0.2</totalsRowFormula></tableColumn>
  * }}}
  *
  * @param id
@@ -28,13 +34,22 @@ import com.tjclp.xl.tables.{
  *   Column display name
  * @param otherAttrs
  *   Unknown attributes for forwards compatibility
+ * @param totalsRowLabel
+ *   `totalsRowLabel`: the totals-row cell's text
+ * @param totalsRowFunction
+ *   `totalsRowFunction`: the `ST_TotalsRowFunction` token of the totals-row aggregate
+ * @param totalsRowFormula
+ *   the `<totalsRowFormula>` child a `custom` aggregate carries (no leading `=`)
  */
 final case class OoxmlTableColumn(
   id: Long,
   name: String,
   uid: Option[String] = None, // xr3:uid for Excel 2016+ revision tracking
   dataDxfId: Option[Int] = None, // Optional data formatting ID
-  otherAttrs: Map[String, String] = Map.empty
+  otherAttrs: Map[String, String] = Map.empty,
+  totalsRowLabel: Option[String] = None,
+  totalsRowFunction: Option[String] = None,
+  totalsRowFormula: Option[String] = None
 )
 
 /**
@@ -69,7 +84,12 @@ final case class OoxmlTableColumn(
  * @param headerRowCount
  *   Number of header rows (typically 1)
  * @param totalsRowCount
- *   Number of totals rows (0 = no totals)
+ *   Number of totals rows (0 = no totals) — the attribute that says whether the table SHOWS a
+ *   totals row (`totalsRowCount`, default 0)
+ * @param totalsRowShown
+ *   `totalsRowShown` (default true per ECMA-376 §18.5.1.2): whether a totals row has EVER been
+ *   shown for this table — Excel writes `totalsRowShown="0"` on a table that never had one and
+ *   omits it otherwise; it does not say whether one is shown now (that is `totalsRowCount`)
  * @param columns
  *   Column definitions
  * @param autoFilter
@@ -167,12 +187,13 @@ object OoxmlTable extends XmlReadable[OoxmlTable]:
       yield
         val headerCount = getAttrOpt(elem, "headerRowCount").flatMap(_.toIntOption).getOrElse(1)
 
-        // Excel uses totalsRowShown, older files may have totalsRowCount
-        // Prefer totalsRowShown if present, fall back to totalsRowCount
-        val totalsShown = getAttrOpt(elem, "totalsRowShown").exists(v => v == "1" || v == "true")
-        val totalsCount =
-          if totalsShown then 1
-          else getAttrOpt(elem, "totalsRowCount").flatMap(_.toIntOption).getOrElse(0)
+        // `totalsRowCount` (default 0) is the totals row shown NOW; `totalsRowShown` (default
+        // true) only records that one has ever been shown — a table Excel saved with its totals
+        // row hidden carries totalsRowShown="1" and no count, and shows NO totals row. Reading
+        // the flag as the count promoted the last data row of such a table to a totals row.
+        val totalsCount = getAttrOpt(elem, "totalsRowCount").flatMap(_.toIntOption).getOrElse(0)
+        val totalsShown =
+          getAttrOpt(elem, "totalsRowShown").fold(true)(v => v == "1" || v == "true")
 
         // Parse table UID (use asAttrMap for prefixed attributes)
         val tableUid = elem.attributes.asAttrMap.get("xr:uid")
@@ -226,7 +247,7 @@ object OoxmlTable extends XmlReadable[OoxmlTable]:
           ref = range,
           headerRowCount = headerCount,
           totalsRowCount = totalsCount,
-          totalsRowShown = totalsShown || totalsCount > 0, // Derive from count if shown not present
+          totalsRowShown = totalsShown,
           columns = columns,
           autoFilter = autoFilterRange,
           autoFilterUid = autoFilterUid,
@@ -249,11 +270,24 @@ object OoxmlTable extends XmlReadable[OoxmlTable]:
     val name = getAttrOpt(elem, "name").getOrElse("")
     val uid = elem.attributes.asAttrMap.get("xr3:uid") // Use asAttrMap for prefixed attrs
     val dataDxfId = getAttrOpt(elem, "dataDxfId").flatMap(_.toIntOption)
+    val totalsRowLabel = getAttrOpt(elem, "totalsRowLabel")
+    val totalsRowFunction = getAttrOpt(elem, "totalsRowFunction")
+    val totalsRowFormula =
+      (elem \ "totalsRowFormula").headOption.map(_.text).filter(_.nonEmpty)
 
-    val known = Set("id", "name", "xr3:uid", "dataDxfId")
+    val known = Set("id", "name", "xr3:uid", "dataDxfId", "totalsRowLabel", "totalsRowFunction")
     val attrs = elem.attributes.asAttrMap.filterNot { case (k, _) => known.contains(k) }
 
-    OoxmlTableColumn(id, name, uid, dataDxfId, attrs)
+    OoxmlTableColumn(
+      id = id,
+      name = name,
+      uid = uid,
+      dataDxfId = dataDxfId,
+      otherAttrs = attrs,
+      totalsRowLabel = totalsRowLabel,
+      totalsRowFunction = totalsRowFunction,
+      totalsRowFormula = totalsRowFormula
+    )
 
   /**
    * Parse table style info from XML.
@@ -306,12 +340,9 @@ object OoxmlTable extends XmlReadable[OoxmlTable]:
     // CRITICAL: Excel requires xmlns declarations FIRST in attribute list
     // Scala XML NamespaceBinding serializes namespaces LAST, so we must treat xmlns as regular attributes
 
-    // Derive totalsRowShown from either the explicit flag or totalsRowCount
-    val showTotals = table.totalsRowShown || table.totalsRowCount > 0
-
     // Build attributes in REVERSE order (linked list serializes backwards)
-    // Excel expects: xmlns, xmlns:mc, mc:Ignorable, xmlns:xr, xmlns:xr3, id, xr:uid, name, displayName, ref, totalsRowShown
-    // So build in reverse: totalsRowShown → ref → displayName → name → xr:uid → id → xmlns:xr3 → xmlns:xr → mc:Ignorable → xmlns:mc → xmlns
+    // Excel expects: xmlns, xmlns:mc, mc:Ignorable, xmlns:xr, xmlns:xr3, id, xr:uid, name, displayName, ref, totalsRowCount|totalsRowShown
+    // So build in reverse: totals → ref → displayName → name → xr:uid → id → xmlns:xr3 → xmlns:xr → mc:Ignorable → xmlns:mc → xmlns
 
     // Start with other attributes
     val attrs1 = table.otherAttrs.foldLeft(scala.xml.Null: scala.xml.MetaData) {
@@ -321,8 +352,15 @@ object OoxmlTable extends XmlReadable[OoxmlTable]:
 
     // Regular attributes (in reverse of target order)
     // NOTE: displayName validation enforced in TableSpec.create smart constructor
+    // Excel's shape: a shown totals row is `totalsRowCount="N"` (totalsRowShown then defaults to
+    // true and is omitted); a table that never had one is `totalsRowShown="0"`; one that had and
+    // hid it carries neither. Writing only totalsRowShown="1" declared NO totals row (count 0).
     val attrs2 =
-      new scala.xml.UnprefixedAttribute("totalsRowShown", if showTotals then "1" else "0", attrs1)
+      if table.totalsRowCount > 0 then
+        new scala.xml.UnprefixedAttribute("totalsRowCount", table.totalsRowCount.toString, attrs1)
+      else if !table.totalsRowShown then
+        new scala.xml.UnprefixedAttribute("totalsRowShown", "0", attrs1)
+      else attrs1
     val attrs3 = new scala.xml.UnprefixedAttribute("ref", table.ref.toA1, attrs2)
     val attrs4 = new scala.xml.UnprefixedAttribute("displayName", table.displayName, attrs3)
     val attrs5 = new scala.xml.UnprefixedAttribute("name", table.name, attrs4)
@@ -389,8 +427,8 @@ object OoxmlTable extends XmlReadable[OoxmlTable]:
    */
   private def encodeColumn(col: OoxmlTableColumn): Elem =
     // Build attributes in reverse order (linked list serializes backwards)
-    // Excel expects: id, xr3:uid, name, dataDxfId
-    // Build order: dataDxfId, name, xr3:uid, id
+    // Excel expects (schema order): id, xr3:uid, name, totalsRowFunction, totalsRowLabel, dataDxfId
+    // Build order: dataDxfId, totalsRowLabel, totalsRowFunction, name, xr3:uid, id
 
     val attrs1 = col.otherAttrs.foldLeft(scala.xml.Null: scala.xml.MetaData) { case (acc, (k, v)) =>
       new scala.xml.UnprefixedAttribute(k, v, acc)
@@ -400,7 +438,15 @@ object OoxmlTable extends XmlReadable[OoxmlTable]:
       case Some(id) => new scala.xml.UnprefixedAttribute("dataDxfId", id.toString, attrs1)
       case None => attrs1
 
-    val attrs3 = new scala.xml.UnprefixedAttribute("name", col.name, attrs2)
+    val attrs2b = col.totalsRowLabel match
+      case Some(label) => new scala.xml.UnprefixedAttribute("totalsRowLabel", label, attrs2)
+      case None => attrs2
+
+    val attrs2c = col.totalsRowFunction match
+      case Some(fn) => new scala.xml.UnprefixedAttribute("totalsRowFunction", fn, attrs2b)
+      case None => attrs2b
+
+    val attrs3 = new scala.xml.UnprefixedAttribute("name", col.name, attrs2c)
 
     val attrs4 = col.uid match
       case Some(uid) => new scala.xml.PrefixedAttribute("xr3", "uid", uid, attrs3)
@@ -408,7 +454,26 @@ object OoxmlTable extends XmlReadable[OoxmlTable]:
 
     val finalAttrs = new scala.xml.UnprefixedAttribute("id", col.id.toString, attrs4)
 
-    scala.xml.Elem(null, "tableColumn", finalAttrs, scala.xml.TopScope, minimizeEmpty = true)
+    // a `custom` aggregate's formula is the column's one child (calculatedColumnFormula is not
+    // modelled; the CLI has no verb that writes one)
+    val children = col.totalsRowFormula.toList.map(formula =>
+      scala.xml.Elem(
+        null,
+        "totalsRowFormula",
+        scala.xml.Null,
+        scala.xml.TopScope,
+        minimizeEmpty = false,
+        scala.xml.Text(formula)
+      )
+    )
+    scala.xml.Elem(
+      null,
+      "tableColumn",
+      finalAttrs,
+      scala.xml.TopScope,
+      minimizeEmpty = children.isEmpty,
+      children*
+    )
 
   /**
    * Serialize table style info to XML.
@@ -460,35 +525,54 @@ object TableConversions:
   /**
    * Convert domain TableSpec to OOXML representation.
    *
+   * The revision uids (`xr:uid` on the table and its autoFilter, `xr3:uid` on each column) are
+   * optional metadata Excel stamps on its own saves; the domain model does not carry them. They
+   * ride through from `source` — the file's part for this table, columns matched by name — and are
+   * OMITTED without one (openpyxl and LibreOffice write none; Excel accepts and re-stamps). A fresh
+   * random UUID per write made two writes of one workbook differ in every table part (GH-595).
+   *
+   * The totals row is written the way Excel writes it: `totalsRowCount="1"` on the table, the
+   * columns' `totalsRowLabel` / `totalsRowFunction` (+ `<totalsRowFormula>` for `custom`), and the
+   * autoFilter over the header and data rows ONLY — Excel excludes the totals row from the filter
+   * range (`TableSpec.dataRange` already does).
+   *
    * @param spec
    *   Domain table specification
    * @param id
    *   Table ID (1-indexed, unique within workbook)
+   * @param source
+   *   The source file's OOXML table of the same name, if the write has one
    * @return
    *   OOXML table
    */
-  def toOoxml(spec: TableSpec, id: Long): OoxmlTable =
-    import java.util.UUID
-
-    // Generate UIDs for Excel revision tracking
-    val tableUid = Some(s"{${UUID.randomUUID().toString.toUpperCase}}")
-    val autoFilterUid =
-      spec.autoFilter.filter(_.enabled).map(_ => s"{${UUID.randomUUID().toString.toUpperCase}}")
+  def toOoxml(spec: TableSpec, id: Long, source: Option[OoxmlTable]): OoxmlTable =
+    val autoFilterEnabled = spec.autoFilter.exists(_.enabled)
+    val tableUid = source.flatMap(_.tableUid)
+    val autoFilterUid = if autoFilterEnabled then source.flatMap(_.autoFilterUid) else None
 
     val columns = spec.columns.map { col =>
       OoxmlTableColumn(
         id = col.id,
         name = col.name,
-        uid = Some(s"{${UUID.randomUUID().toString.toUpperCase}}") // xr3:uid for each column
+        uid = source.flatMap(_.columns.find(_.name == col.name)).flatMap(_.uid),
+        totalsRowLabel = col.totalsRowLabel,
+        totalsRowFunction = col.totalsRowFunction.map(TotalsRowFunction.token),
+        totalsRowFormula = col.totalsRowFunction.collect { case TotalsRowFunction.Custom(f) => f }
       )
     }
 
-    val autoFilterRange = spec.autoFilter.filter(_.enabled).map(_ => spec.range)
-
-    val styleInfo = styleToStyleInfo(spec.style)
-
     val headerCount = if spec.showHeaderRow then 1 else 0
     val totalsCount = if spec.showTotalsRow then 1 else 0
+
+    // header + data rows: the totals row is outside the filter range (a one-row table cannot
+    // shrink; CellRange would swap the ends)
+    val filterRange =
+      if totalsCount > 0 && spec.range.height > totalsCount then
+        CellRange(spec.range.start, ARef(spec.range.end.col, spec.range.end.row - totalsCount))
+      else spec.range
+    val autoFilterRange = Option.when(autoFilterEnabled)(filterRange)
+
+    val styleInfo = styleToStyleInfo(spec.style)
 
     OoxmlTable(
       id = id,
@@ -497,13 +581,22 @@ object TableConversions:
       ref = spec.range,
       headerRowCount = headerCount,
       totalsRowCount = totalsCount,
-      totalsRowShown = spec.showTotalsRow,
+      // "ever shown": now, or per the source part (a table whose totals Excel hid keeps its flag)
+      totalsRowShown = spec.showTotalsRow || source.exists(_.totalsRowShown),
       columns = columns,
       autoFilter = autoFilterRange,
       autoFilterUid = autoFilterUid,
       styleInfo = Some(styleInfo),
       tableUid = tableUid
     )
+
+  /**
+   * [[toOoxml]] without a source part — an overload rather than a default argument on the
+   * three-parameter form, so the two-parameter JVM method consumers compiled against xl-ooxml
+   * 0.22.x keeps its erasure (`toOoxml(TableSpec, long)`; a defaulted parameter replaces it with
+   * the three-parameter descriptor and a `NoSuchMethodError` at link time).
+   */
+  def toOoxml(spec: TableSpec, id: Long): OoxmlTable = toOoxml(spec, id, None)
 
   /**
    * Convert OOXML table to domain TableSpec.
@@ -515,7 +608,13 @@ object TableConversions:
    */
   def fromOoxml(ooxml: OoxmlTable): TableSpec =
     val columns = ooxml.columns.map { col =>
-      DomainTableColumn(col.id, col.name)
+      DomainTableColumn(
+        col.id,
+        col.name,
+        totalsRowLabel = col.totalsRowLabel,
+        totalsRowFunction =
+          col.totalsRowFunction.flatMap(TotalsRowFunction.fromToken(_, col.totalsRowFormula))
+      )
     }
 
     val autoFilter = ooxml.autoFilter.map(_ => TableAutoFilter(enabled = true))
@@ -528,7 +627,8 @@ object TableConversions:
       range = ooxml.ref,
       columns = columns,
       showHeaderRow = ooxml.headerRowCount > 0,
-      showTotalsRow = ooxml.totalsRowShown || ooxml.totalsRowCount > 0, // Check both attributes
+      // the count says whether a totals row is shown; totalsRowShown only that one ever was
+      showTotalsRow = ooxml.totalsRowCount > 0,
       autoFilter = autoFilter,
       style = style
     )

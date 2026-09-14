@@ -30,9 +30,9 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `--in-place` | `-i` | no | Edit the input file in place (instead of -o) |
 | `--backend` | — | yes | XML writer backend: scalaxml (default) or saxstax (faster) |
 | `--stream` | — | no | O(1)-memory streaming for large files: search, stats, bounds, view, cell, filter, describe, sheets, names, lint; put, putf, style and the streamable batch ops (other write verbs accept the flag but load the workbook; each verb's `stream` says which — o1, backend, refused) |
-| `--no-recalc` | — | no | Write verbs: apply the edit and recalculate nothing; structural edits leave the formulas they invalidated uncached |
+| `--no-recalc` | — | no | Write verbs: apply the edit and recalculate nothing; structural edits keep only the caches the edit provably left unchanged, leave the rest uncached and mark the workbook fullCalcOnLoad (Excel recomputes on open; LibreOffice and cache-only readers display what is cached) |
 | `--preserve-caches` | — | no | Alias for --no-recalc |
-| `--strict` | — | no | Write verbs: exit 1 when the recalculation reports formula errors, non-convergence or data-table seed warnings (after `view` it is view's own --eval gate) |
+| `--strict` | — | no | Write verbs: exit 1 when the recalculation reports formula errors, non-convergence or data-table seed warnings; lint: exit 1 on hygiene findings too, not only repairs (after `view` it is view's own --eval gate) |
 
 ## Verbs
 
@@ -43,7 +43,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `schema` | — | `refused` | 0 2 3 | — | 0.20.0 | Print the CLI contract: verbs, globals, exit and error codes, batch ops, functions (--json) |
 | `new` | — | `refused` | 0 2 3 | — | 0.1.0 | Create a blank xlsx file (--sheet <name> repeatable) |
 | `diff` | `-f` | `refused` | 0 1 2 3 | — | 0.11.3 | Compare two workbooks (-g <file2>) and report cell, style and structure differences |
-| `lint` | `-f` `--stream` | `o1` | 0 1 2 3 | — | 0.15.0 | Validate the raw package against the Excel-repair classes: child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, <f> canon, external refs, defined names, calc chain (read-only) |
+| `lint` | `-f` `--stream` | `o1` | 0 1 2 3 | — | 0.15.0 | Validate the raw package against the Excel-repair classes: child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, <f> canon, external refs, defined names, calc chain, empty inline strings, mc:Ignorable prefixes, dxf ids, package reachability, shared-string orphans (read-only) |
 | `eval` | `-s` | `refused` | 0 2 3 | — | 0.4.2 | Evaluate a formula without modifying the sheet (--with overrides; no -f for constants) |
 | `evala` | `-f` `-s` | `refused` | 0 2 3 | — | 0.9.0 | Evaluate an array formula and display, or spill (--at), the result grid |
 | `sheets` | `-f` `--stream` | `o1` (refuses `--stats`) | 0 2 3 | — | 0.1.0 | List sheets with visibility state and dimension (--stats loads the book for counts) |
@@ -88,8 +88,8 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `freeze` | `-f` `-s` `-o`/`-i` | `backend` | 0 2 3 | `freeze` | 0.10.0 | Freeze panes at a cell (rows above and columns left are locked) |
 | `unfreeze` | `-f` `-s` `-o`/`-i` | `backend` | 0 2 3 | `unfreeze` | 0.10.0 | Remove freeze panes |
 | `copy` | `-f` `-s` `-o`/`-i` | `backend` | 0 1 2 3 | `copy` | 0.10.0 | Copy a range to another location with formula adjustment (--values-only) |
-| `name add` | `-f` `-o`/`-i` | `backend` | 0 2 3 | — | 0.10.0 | Add or replace a workbook-scoped named range |
-| `name rm` | `-f` `-o`/`-i` | `backend` | 0 2 3 | — | 0.10.0 | Remove a named range |
+| `name add` | `-f` `-o`/`-i` | `backend` | 0 1 2 3 | `define-name` | 0.10.0 | Add or replace a named range (workbook-scoped; -s scopes it to that sheet) |
+| `name rm` | `-f` `-o`/`-i` | `backend` | 0 1 2 3 | `remove-name` | 0.10.0 | Remove a named range (workbook-scoped; -s the sheet-scoped one) |
 | `insert-rows` | `-f` `-s` `-o`/`-i` | `backend` | 0 1 2 3 | — | 0.10.0 | Insert rows; shifts cells and rewrites formulas |
 | `delete-rows` | `-f` `-s` `-o`/`-i` | `backend` | 0 1 2 3 | — | 0.10.0 | Delete rows; shifts cells and rewrites formulas (#REF! on loss) |
 | `insert-cols` | `-f` `-s` `-o`/`-i` | `backend` | 0 1 2 3 | — | 0.10.0 | Insert columns; shifts cells and rewrites formulas |

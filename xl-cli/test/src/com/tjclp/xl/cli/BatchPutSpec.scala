@@ -215,6 +215,75 @@ class BatchPutSpec extends FunSuite:
       case other => fail(s"Expected Formula, got $other")
   }
 
+  test("GH-479: putf canonicalises a padded formula (trim, one '=' off, trim) in every mode") {
+    val wb = Workbook(
+      Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("10")))
+        .put(ARef.from0(1, 0), CellValue.Number(BigDecimal("20")))
+    )
+    // the stored `<f>` text (the writes recalculate, so the cache is not under test here)
+    def written(col: Int, row: Int): Option[String] =
+      ExcelIO
+        .instance[IO]
+        .read(outputPath)
+        .unsafeRunSync()
+        .sheets
+        .head
+        .cells
+        .get(ARef.from0(col, row))
+        .map(_.value)
+        .collect { case CellValue.Formula(expr, _, _) => expr }
+
+    // single cell, explicit formulas over a range, and a dragged range — one rule for all three
+    WriteCommands
+      .putFormula(wb, Some(wb.sheets.head), "C1", List(" = SUM( A1:A2 ) "), outputPath, config)
+      .unsafeRunSync()
+    assertEquals(written(2, 0), Some("SUM( A1:A2 )"))
+
+    WriteCommands
+      .putFormula(
+        wb,
+        Some(wb.sheets.head),
+        "D1:D2",
+        List(" =A1*2 ", "\t=A2*2\n"),
+        outputPath,
+        config
+      )
+      .unsafeRunSync()
+    assertEquals(written(3, 0), Some("A1*2"))
+    assertEquals(written(3, 1), Some("A2*2"))
+
+    WriteCommands
+      .putFormula(wb, Some(wb.sheets.head), "E1:E2", List(" =A1*3 "), outputPath, config)
+      .unsafeRunSync()
+    assertEquals(written(4, 0), Some("A1*3"))
+    assertEquals(written(4, 1), Some("A2*3"))
+  }
+
+  test("GH-479: batch putf ops canonicalise a padded formula the same way") {
+    val wb = Workbook(
+      Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
+        .put(ARef.from0(1, 0), CellValue.Number(BigDecimal(2)))
+    )
+    val ops = Vector(
+      BatchOp.PutFormula("B1", " = SUM( A1:A2 ) ", None),
+      BatchOp.PutFormulas("C1:C2", Vector(" =A1*2 ", "\t=A2*2\n"), None),
+      BatchOp.PutFormulaDragging("D1:D2", " =A1*3 ", "D1", None)
+    )
+    val out = BatchParser.applyBatchOperations(wb, wb.sheets.headOption, ops).unsafeRunSync()
+    val sheet = out.sheets.head
+    def formulaAt(col: Int, row: Int): Option[String] =
+      sheet.cells.get(ARef.from0(col, row)).map(_.value).collect {
+        case CellValue.Formula(expr, _, _) => expr
+      }
+    assertEquals(formulaAt(1, 0), Some("SUM( A1:A2 )"))
+    assertEquals(formulaAt(2, 0), Some("A1*2"))
+    assertEquals(formulaAt(2, 1), Some("A2*2"))
+    assertEquals(formulaAt(3, 0), Some("A1*3"))
+    assertEquals(formulaAt(3, 1), Some("A2*3"))
+  }
+
   test("GH-613: autofit after putf in one batch sizes to the value, not the formula text") {
     val wb = Workbook(
       Sheet("Test")
@@ -364,7 +433,7 @@ class BatchPutSpec extends FunSuite:
     val error = parseError("""[{"op":"frobnicate","ref":"A1"}]""")
     assertEquals(error.code, ErrorCode.BATCH_OP_UNKNOWN)
     assert(!error.message.contains("Did you mean"), error.message)
-    assert(error.message.endsWith("page-setup, header-footer, cf"), error.message)
+    assert(error.message.endsWith("header-footer, cf, define-name, remove-name"), error.message)
     assertEquals(error.candidates, Vector.empty)
   }
 

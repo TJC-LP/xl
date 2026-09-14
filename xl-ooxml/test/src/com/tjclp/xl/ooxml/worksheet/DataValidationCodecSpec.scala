@@ -174,7 +174,7 @@ class DataValidationCodecSpec extends ScalaCheckSuite:
     val emitted = DataValidationCodec.toElem(Vector(dv), None).getOrElse(fail("no container"))
     val bytes = XmlUtil.compact(emitted)
     assert(bytes.contains("prompt=\"line1&#10;line2&#9;and tab\""), bytes)
-    assert(!bytes.contains("_x000A_"), bytes)
+    assert(!bytes.contains("_x000A_") && !bytes.contains("_x0009_"), bytes)
     assertEquals(roundTrip(Vector(dv)), Vector[DataValidation](dv))
   }
 
@@ -198,6 +198,27 @@ class DataValidationCodecSpec extends ScalaCheckSuite:
     val bytes = XmlUtil.compact(DataValidationCodec.toElem(Vector(dv), None).getOrElse(fail("")))
     assert(bytes.contains("prompt=\"literal _x005F_x000A_ here\""), bytes)
     assertEquals(roundTrip(Vector(dv)), Vector[DataValidation](dv))
+  }
+
+  test("GH-649: prompts written by 0.16-0.22 in the GH-429 `_x000A_` spelling still decode") {
+    val container = xml(
+      """<dataValidations count="1"><dataValidation type="list" showInputMessage="1" promptTitle="Two_x000A_lines" prompt="line1_x000A_line2_x0009_tab_x000D_cr" sqref="A1"><formula1>"a,b"</formula1></dataValidation></dataValidations>"""
+    )
+    DataValidationCodec.parseAll(Some(container)) match
+      case Vector(r: DataValidation.Rules) =>
+        assertEquals(r.messages.prompt, Some("line1\nline2\ttab\rcr"))
+        assertEquals(r.messages.promptTitle, Some("Two\nlines"))
+      case other => fail(s"expected one typed rule: $other")
+  }
+
+  property("GH-649: escapeXstringAttr leaves TAB/LF/CR to the attribute writer") {
+    forAll(genDvText) { s =>
+      val p = XmlUtil.escapeXstringAttr(s)
+      XmlUtil.decodeXstring(p) == s &&
+      p.count(_ == '\n') == s.count(_ == '\n') &&
+      p.count(_ == '\t') == s.count(_ == '\t') &&
+      p.count(_ == '\r') == s.count(_ == '\r')
+    }
   }
 
   property("GH-429: decodeXstring . escapeXstringAttr = id") {

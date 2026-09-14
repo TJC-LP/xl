@@ -1015,3 +1015,22 @@ class FormatCodeParserSpec extends FunSuite:
       val dt = java.time.LocalDateTime.of(2024, 1, 1, 0, 0, 0).plusDays(offset.toLong)
       assertEquals(FormatCodeParser.applyDateFormat(dt, code), expected(offset))
   }
+
+  // ========== isTextOnly (GH-501) ==========
+
+  test("isTextOnly: a lone @ has no numeric section") {
+    val code = FormatCodeParser.parse("@").toOption.get
+    assert(FormatCodeParser.isTextOnly(code), "@ formats numbers as General text")
+  }
+
+  test("isTextOnly: any code with a numeric section is not text-only") {
+    List(
+      "0.00",
+      "General",
+      "0;0;\"val: \"@", // the trailing @ is the text arm of a numeric code (GH-285)
+      "_(* #,##0.00_);_(* (#,##0.00);_(* \"-\"??_);_(@_)" // 4 sections keep all 4
+    ).foreach { code =>
+      val fmt = FormatCodeParser.parse(code).toOption.get
+      assert(!FormatCodeParser.isTextOnly(fmt), s"'$code' routes numbers through a section")
+    }
+  }

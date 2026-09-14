@@ -49,6 +49,12 @@ object WarningCode:
    */
   val OFF_GRID_REF: String = "OFF_GRID_REF"
 
+  /**
+   * PR #659 review: `lint` found hygiene-tier findings only (shared-string orphans, unreferenced
+   * parts) — the file opens intact, the exit is 0, and `--strict` would have made it 1.
+   */
+  val LINT_HYGIENE: String = "LINT_HYGIENE"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -62,5 +68,6 @@ object WarningCode:
     EVAL_FAILED,
     MEMORY_PRESSURE,
     NO_NUMERIC_VALUES,
-    OFF_GRID_REF
+    OFF_GRID_REF,
+    LINT_HYGIENE
   )

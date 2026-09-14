@@ -49,9 +49,12 @@ OPERATIONS:
   page-setup      {"op":"page-setup","orientation":"landscape","fitToWidth":1,"fitToHeight":0}  [not with --stream]
   header-footer   {"op":"header-footer","oddFooter":"&LConfidential&RPage &P of &N"}  [not with --stream]
   cf              {"op":"cf","range":"A1:A10","rule":"cellIs:greaterThan:100","bold":true,"bg":"#FFC7CE","fg":"#9C0006"}  [not with --stream]
+  define-name     {"op":"define-name","name":"Tax","refersTo":"Sheet1!$A$1"}  [not with --stream]
+  remove-name     {"op":"remove-name","name":"Tax"}  [not with --stream]
 
-Every op except add-sheet/rename-sheet accepts "sheet": the sheet for its unqualified refs
-(a sheet-qualified ref wins, then "sheet", then -s/--sheet). Property names are accepted in
+Every op except add-sheet/rename-sheet/define-name/remove-name accepts "sheet": the sheet for
+its unqualified refs (a sheet-qualified ref wins, then "sheet", then -s/--sheet); a name's
+"scope" is its own key. Property names are accepted in
 camelCase or kebab-case. put/putf "format" is explicit and replaces the cell's number format.
 
 STYLE PROPERTIES (style op):

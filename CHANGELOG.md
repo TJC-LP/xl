@@ -11,6 +11,14 @@ Formula parity with Excel-authored models — the 0.21.0 dogfood's parser gaps (
 and the evaluator bugs beside them (#578, #580, #596): one real projection model's 209
 "unparseable" formulas now parse and evaluate.
 
+Wave 29 — the 2026-09-13 triage of every open issue, run as twelve worktree-isolated clusters of
+issues that share logic, each adversarially reviewed: OOXML fidelity (#557, #595, #593, #566,
+#649), `xl lint` coverage (#460, #567), render overflow (#500, #501, #502), iterative
+recalculation (#537, #482), defined names (#538, #462), `--no-recalc` (#509), the formula model
+(#479), records (#614), the writer's scratch files (#516, #517), the `--json` contract (#618) and
+the grammar-complete formula generator (#653). #519 (SIGTERM) had already shipped in #521 and
+#465 (underline builder, outline collapse) in 0.20.0/0.21.0; both close without code.
+
 ### Added
 
 - **Omitted arguments** (#603): a formula may leave an argument slot empty, as Excel does —
@@ -55,9 +63,84 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
   its extent) and recalculate last. 119 functions.
 - **`RRI(nper, pv, fv)`** (#605): the equivalent interest rate for the growth of an investment —
   `(fv/pv)^(1/nper) - 1`, the CAGR idiom; `#NUM!` when nper ≤ 0, pv = 0 or the ratio is negative.
+- **`xl lint` gains five raw-zip rules** (#460, #567), each folded identically by the DOM and
+  `--stream` SAX scanners: `empty-inline-str` (a `t="inlineStr"`/`t="str"` cell with neither
+  `<is>` nor `<v>` — openpyxl's `value=""`; one finding per part), `mc-ignorable-undeclared` (an
+  `mc:Ignorable` prefix no ancestor declares, or an `ns0`-prefixed main-namespace root — the
+  ElementTree re-serialization class), `dxf-id-out-of-range` (`dxfId`-family attributes past the
+  actual `<dxf>` children of `xl/styles.xml`), `unreferenced-part` (a zip entry the rels closure
+  from `_rels/.rels` never reaches; `.rels`, `[Content_Types].xml` and `[trash]/` excluded) and
+  `shared-string-orphan` (`<si>` entries no `t="s"` cell references — count and first five
+  indices, never the text — plus `t="s"` indices past the table). Documented carve-out: a
+  surgical edit of a foreign shared-string book that replaces text leaves the old entry in
+  `xl/sharedStrings.xml` (xl never prunes a preserved table), which `shared-string-orphan` now
+  reports; `#460` item 5 (`_xlnm._FilterDatabase` vs `<autoFilter>`) and on-write SST compaction
+  are follow-ups. `XmlUtil.nsMarkupCompatibility` added.
+- **Sheet-scoped defined names outside the Edit algebra** (#462): `Workbook.withDefinedName(name,
+  refersTo, scope: SheetName)` and `removeDefinedName(name, scope)` (`XLResult`; `SheetNotFound`
+  with candidates; the sheet matched case-insensitively). `xl name add|rm` honour `-s` as the
+  name's scope (`localSheetId`, following the sheet across reorders; a single-sheet book without
+  `-s` still writes a workbook-scoped name; scoped output appends ` (scope: <Sheet>)`), so
+  `_xlnm.Print_Area` / `_xlnm.Print_Titles` are authorable from the CLI:
+  `xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20'`; removing
+  a scoped print name the read lifted into `PageSetup` clears that page-setup field too. Batch
+  twins `define-name` (`name`, `refersTo`, `scope`) and `remove-name` (`name`, `scope`) —
+  EditSchema's field shape; a `sheet` key is not a scope; `scope` names the sheet exactly as
+  spelled, like `-s`; non-streamable; a changed binding recalculates its readers (see Fixed).
+- **`@header` and `RowCodec.withHeaders`** (#614): a record field's header text when the sheet's
+  header is not something an identifier can spell (`@header("Rev ($M)") rev: BigDecimal`).
+  `RowCodec.headers` — the header row `putRowsWithHeader`/`putTable` write and `readRowsByHeader`
+  matches, the field names by default — sits beside `fields`, which stay the names every
+  `RowCodecError` carries. The annotation is read off the constructor (through type aliases) when
+  the codec is derived; a non-literal argument, a blank, or two fields ending up with the same
+  header is a compile error naming both fields. `codec.withHeaders(Map("rev" -> "Rev ($M)"))`
+  is the total runtime twin (`InvalidArgument` on an unknown field, a blank or a duplicate) and
+  layers on the annotation. Exported from `com.tjclp.xl` and the scripting prelude. Spell the
+  given `RowCodec.derived[A].withHeaders(…)`, never `RowCodec[A].withHeaders(…)`.
+- **`StructuralEditor.StructuralCachePolicy`** (#509): `Invalidate | PreserveUntouched |
+  CarryForward`, with a `policy` overload of every `insertRows/deleteRows/insertColumns/
+  deleteColumns` (+ `*Checked`); the `preserveUntouchedCaches: Boolean` signatures are unchanged
+  and delegate (`true` → `PreserveUntouched`, `false` → `Invalidate`, byte-identical).
+- **CLI: `XL_SPILL_DIR`** (#517) redirects the two-pass streaming writer's scratch file (the CSV
+  import into a new workbook) away from `java.io.tmpdir`; read once per process at the CLI's
+  write interpreter (an override of `ExcelIO.spillDir` that keeps the heap guard), trimmed,
+  blank = default; a value that is not a path is a usage error (exit 2) naming the variable
+  before a row is read, and a scratch file that cannot be created or filled fails the write as
+  `IO_WRITE` naming the configured directory instead of `INTERNAL`. The library stays
+  deterministic (no environment read in `ExcelIO`); a `--spill-dir` flag waits for the
+  registry-driven CLI (#584). The dead `StreamingWriteCommands.importCsvStream` is removed.
+- **Grammar-complete formula round-trip generator** (#653, item 4): `FormulaGrammarSpec`
+  generates formula text over the grammar Excel writes — sheet qualifiers on both sides of the
+  quoting boundary, external `[n]Name` qualifiers, refs and ranges in every spelling under every
+  qualifier, error literals, defined names, the spill reference `x#`, `@` on every primary,
+  escaped string literals, every registry function at every legal arity with any subset of slots
+  left empty, `_xlfn.`/`_xlfn._xlws.` spellings, LET and a recursive mixer — and holds it to
+  `parse ∘ print ∘ parse = parse`, print-as-fixpoint and byte-identity where the spelling is
+  canonical; the grammar the parser rejects (3-D spans, array constants, structured references,
+  union, intersection, LAMBDA) is pinned as total: a `Left` with a position, byte-identical
+  ride-through at the `FormulaStorage` boundary, and a refusal from `FormulaOps.shift`/
+  `renameSheet`. The weekly law-fuzz job runs `xl-evaluator.test` with a random seed.
+- **Review-round API** (PR #659 review): `SccReport.verdict` and `RecalcResult.unconvergedVerdict`
+  (#537); `DependencyGraph.QualifiedRef.gridKey` / `gridOrdering` (#482); `RowCodec.headerKey`
+  (the normalised key header matching and the duplicate-header guards share, #614); `LintSeverity`
+  and `Finding.severity`; `DefinedName` exported from `com.tjclp.xl` and the scripting prelude —
+  the type of `wb.metadata.definedNames` and its companion (`DefinedName.PrintArea`,
+  `PrintTitles`, `sameName`, the `matches` extension) resolve through `import com.tjclp.xl.{*,
+  given}` / `com.tjclp.xl.scripting.{*, given}` alone, gated by `DefinedNamePreludeProbe` (#462,
+  #538).
 
 ### Changed
 
+- **`xl lint` gates on severity** (PR #659 review): every finding carries a tier — `repair` (Excel
+  repairs or refuses the file, or a reader misreads a value) or `hygiene` (a valid file carrying
+  dead weight, a privacy hazard or a compatibility smell: `unreferenced-part`, the orphan half of
+  `shared-string-orphan`, the generated-prefix root of `mc-ignorable-undeclared`). Repair findings
+  exit 1; hygiene findings are listed, tagged `(hygiene)`, counted in the header, published as
+  `severity` in `--format json`, raise a `LINT_HYGIENE` warning and exit 0 — `lint --strict` (the
+  global flag, before or after the verb) promotes them. `xl lint && send` therefore passes again
+  on xl's own `put`/`clear`/`--stream put` of a shared-string book, whose orphaned entry the
+  writer leaves behind by design. `Finding` gains `severity: LintSeverity` (defaulted to
+  `Repair`); `LintSeverity` and `WarningCode.LINT_HYGIENE` added.
 - **The skills are drop-in vendorable.** Installation moved out of both `SKILL.md` bodies into
   `plugin/skills/<skill>/reference/INSTALL.md` (the xl-cli page also carries the rasterizer
   install; the xl-scripting page adds the offline warm-cache recipe and the Scala-version rule),
@@ -85,24 +168,231 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
   `INDEX(rng,0,0)` the whole array), spilling standalone and folding under aggregates — it was a
   `#REF!`. The two-argument form on a 2-D array selects the whole row (its first cell in a scalar
   position, the value it always returned there).
+- **Breaking: `Fill.Pattern` carries `foreground: Option[Color]` and `background: Option[Color]`**
+  (`None` = Excel's automatic colour) instead of two mandatory colours; wrap existing arguments in
+  `Some(...)` or use the new `Fill.pattern(fg, bg, patternType)`. `PatternType.token`/`fromToken`
+  expose the canonical ST_PatternType table (#566).
+- **The StAX writer backend is xl-owned** (#649): `StaxSaxWriter` is a UTF-8 tag writer rather
+  than the JDK `XMLStreamWriter`; bytes are unchanged except for the newly escaped attribute
+  characters, and an empty element immediately followed by its parent's end tag now nests
+  correctly. Data-validation prompt/error text is written with `&#10;`-style character references
+  (Excel's and openpyxl's spelling) instead of the `_x000A_` Xstring escape; files written with
+  the previous spelling still decode on read. **Breaking** for code that constructed the writer
+  itself: `new StaxSaxWriter(xmlStreamWriter)` is gone (the constructor is private and no longer
+  takes a `javax.xml.stream.XMLStreamWriter`); use `StaxSaxWriter.create(outputStream)`, which is
+  unchanged. Writing an attribute or namespace declaration when no start tag is open is dropped
+  rather than thrown (the JDK writer threw `IllegalStateException`); no xl emitter does this.
+- **Breaking: `SccReport` gains `stalled: Boolean = false`; `IterativeCalc` gains
+  `scheme: IterationScheme = IterationScheme.GaussSeidel`** (#537, #482) — constructors and named
+  access compile unchanged thanks to the defaults, but positional pattern matches on the full
+  constructor break: `case SccReport(members, converged, rounds, maxDelta)` and
+  `case IterativeCalc(maxIter, maxChange, seed)` no longer compile ("wrong number of argument
+  patterns") and need the new field, exactly as the #612 entry warned for `Comment`.
+  Binary-incompatible for `xl-evaluator` consumers compiled against 0.22.x.
+- **Within-cycle iteration is Gauss–Seidel by default** (#482): a cyclic component's members
+  evaluate in `DependencyGraph.withinComponentOrder` (Kahn on the component's induced subgraph,
+  cutting at the top-left remaining member — sheet name, then row, then column — when stuck; a
+  pure function of the graph) and each value is published before the next member reads it — a
+  sequential sweep with the latest values, Excel's iteration model, in Excel's documented
+  left-to-right, top-to-bottom order (`A1 = B1+1`, `B1 = A1` reaches 100/100 after 100
+  iterations in xl; the previous Jacobi round gave ~50/50). The sweep order is xl's graph order,
+  not a calc chain read from the file, and has not been verified against Excel itself. The order
+  is observable: round counts change, a non-convergent cycle keeps different last values, and
+  convergent cycles reach the same fixpoint within `maxChange`, typically in fewer rounds; results
+  stay deterministic and insertion-order independent. `IterativeCalc(…, scheme =
+  IterationScheme.Jacobi)` reproduces the 0.13.0–0.22.x trajectories.
+- **A cyclic member that fails every round stalls its component instead of burning `maxIter`**
+  (#537): once a round consumes no randomness and replays the previous one exactly with a member
+  still failing, the fixpoint stops and reports `SccReport.stalled = true` (`converged = false`,
+  the member in `errors`);
+  `RecalcResult.summary` and the CLI say "WARNING: iterative calculation stalled after N
+  round(s): a cyclic member fails every round" when every unconverged component stalled. The
+  CLI's `formatRecalcSummary` delegates to `RecalcResult.summary`.
+- **Breaking: defined-name mutation is case-insensitive, like resolution and Excel** (#538):
+  `Workbook.withDefinedName` / `removeDefinedName`, `Edit.DefineName` / `Edit.RemoveName` and
+  `xl name add|rm` match the identifier with `String.equalsIgnoreCase` (`DefinedName.sameName`,
+  the relation `DefinedNameIndex` hashes): a write replaces every same-scope spelling with one
+  entry in the caller's spelling, a remove drops them all, and `NAME_NOT_FOUND` candidates are the
+  names in that scope. Previously `withDefinedName("case", …)` beside `CASE` appended a shadowed
+  duplicate the evaluator never saw. Print-name edits follow call order: a scoped
+  `_xlnm.Print_Area` / `_xlnm.Print_Titles` write clears the corresponding PageSetup field, and
+  a later `withPageSetup` edit overrides the earlier metadata entry (#462).
+- **`--no-recalc` structural writes keep only the caches the edit provably left unchanged and mark
+  the book `fullCalcOnLoad`** (#509, refs #468, #503, #507): `insert-rows`, `insert-cols`,
+  `delete-rows` and `delete-cols` under `--no-recalc` keep a pre-edit `<v>` only where the
+  formula's text, record kind and address are unchanged and it lies outside the edit's dirty cone
+  (every reader of a moved or removed cell — point, range or resolvable defined name — and
+  everything downstream across sheets, every dynamic reference, every reader the static graph
+  cannot resolve); every other formula is written WITHOUT a `<v>`, and `workbook.xml` gets
+  `<calcPr fullCalcOnLoad="1"/>`, overlaying the book's own calcPr (iterate triple, calcMode,
+  calcId and unmodeled attributes survive). Excel recomputes the whole book on open. LibreOffice
+  does **not** honor the marker at its shipped default ("never recalculate on load" for xlsx): it
+  displays a present `<v>` and computes only uncached cells — which is why the dirty cone is
+  withdrawn rather than carried (a first cut of this change carried every cache and LibreOffice
+  displayed the pre-edit numbers; verified with `soffice --headless --convert-to csv`, now pinned by
+  `LibreOfficeOracleSpec`, skipped when `soffice` is absent). Cache-only readers (openpyxl
+  `data_only`, pandas, `xl view`) see a blank there, never a stale number. Summary:
+  `Recalculation skipped (--no-recalc): N cached value(s) preserved, M withdrawn (the edit could
+  have changed them; written without <v>); workbook marked for full recalculation on load
+  (fullCalcOnLoad)`. Non-structural `--no-recalc` writes are unchanged and never set the marker.
+  The library's `StructuralCachePolicy.CarryForward` (keep every pre-edit cache) remains available
+  to embedders who control the reader; the CLI does not offer it.
+- **Breaking: the formula model is canonical and `CellValue.formula` returns `XLResult[Formula]`**
+  (#479): `fx"=…"`, the core `FormulaParser.parse` and
+  `Sheet.putFormulaInheriting` store the bare expression (`fx"=SUM(A1:B10)"` is
+  `CellValue.Formula("SUM(A1:B10)")`), the shape the OOXML readers, the CLI and the edit
+  interpreter always produced — so an authored formula cell compares equal to its own read-back,
+  and the test-side `WorkbookEquivalence` is strict again (undoing the #478 modulo-prefix
+  weakening). `CellValue.canonicalFormulaText` is the single rule every entry shares (trim, one
+  leading `=` off, trim — see the next entry). `CellValue.formula(text)` is total — it returns
+  `XLResult[Formula]` (`Left(XLError.InvalidFormula)` for an empty expression) instead of a
+  `Formula` that threw — so 0.22 code such as `sheet.put(ref"A1" -> CellValue.formula("=A1*2"))`
+  fails to compile (`Found: XLResult[Formula], Required: CellValue`); migrate to `fx"=A1*2"`, to
+  `CellValue.Formula("A1*2")`, or unwrap the result. `fx"="` fails to compile. A raw
+  `CellValue.Formula("=…")` stays constructible and tolerated but is no longer the canonical shape:
+  it no longer compares equal to its own read-back.
+- **One canonical formula rule at every entry** (#479 follow-up, PR #659 review):
+  `CellValue.canonicalFormulaText` is trim, one leading `=` off, trim — interior spaces, a leading
+  `+` and an interior `=` stay — and every entry shares it: `fx` (all three paths), the core
+  `FormulaParser.parse`, `CellValue.formula`, `Sheet.putFormulaInheriting` (a padded
+  `" = B2 - B3 "` parses and stores as `B2 - B3` instead of failing), `Edit.PutFormula`, and
+  `xl putf` / batch `putf` / `--stream putf`, which had their own strip. Before, the runtime `fx`
+  path kept the `=` of `" =SUM(A1) "` (`<f> =SUM(A1) </f>`) while `Edit.PutFormula` stored
+  `SUM(A1)`. A blank or padded lone `=` is empty: `fx"   "` and `fx" = "` fail to compile like
+  `fx"="` (now pinned with `compileErrors`), and the runtime entries return `Left` naming the
+  original text.
+- **`CellValue.dataTable` keeps its scalar-cache invariant** (PR #659 review): a `Formula` offered
+  as the cached value is dropped (the record is the cache-less record every writer would emit for
+  it), restoring the check `CellValue.formula` still refuses with a `Left`; #479 had made the
+  constructor total by bypassing that check.
+- **Breaking: a record whose field names collide under `RowCodec.headerKey`** (`unitPrice` /
+  `unit_price`, `rev` / `Rev`) **no longer derives a `RowCodec`**, even for positional `putRows` /
+  `readRows` (#614, PR #659 review); rename a field or give one an `@header`. See Fixed.
+- **`XlsxWriter.writeToBytes` heap** (#516 follow-up, PR #659 review): the array is sized from the
+  source archive (exact for a clean book, returned without a copy) instead of a doubling
+  `ByteArrayOutputStream` plus a final copy: ~1x the archive in transient heap for a clean book,
+  ≤ ~2x edited, ≤ ~3x only for a fresh book or an outgrown estimate (was 2–3x for every write).
+  The tmpdir-independence claim is pinned from a child JVM whose `java.io.tmpdir` does not exist.
+- **Breaking (binary): `TableColumn` and `OoxmlTableColumn` gain defaulted fields**
+  (`totalsRowLabel`, `totalsRowFunction`; `totalsRowFormula` on the OOXML column) — constructor
+  calls compile unchanged, `case TableColumn(id, name)` extractor patterns need the new arity,
+  binary-incompatible for 0.22.x consumers. `TableConversions.toOoxml(spec, id)` is kept as a
+  two-argument overload (the wave's defaulted third parameter had removed the 0.22.x JVM method —
+  `NoSuchMethodError`); `toOoxml(spec, id, source)` no longer has a default.
+- **Breaking: `totalsRowCount` is authoritative on read** (`OoxmlTable.fromXml` /
+  `TableConversions.fromOoxml`): a part carrying `totalsRowShown="1"` and no count — Excel's
+  hidden-totals form, and xl ≤ 0.22's own output for a totals table — now reads as no totals row,
+  matching what Excel displays.
+- **Breaking for `--json` consumers of `sheets`, `names` and `functions`: `data` is always a JSON
+  object** (#618): a listing verb keys its array by the noun — `sheets --json` →
+  `{"sheets": [...]}` (also `--stats` and `--stream`), `names --json` → `{"names": [...]}`,
+  `functions --json` → `{"functions": [...]}`. 0.20.0–0.22.0 printed bare arrays; migrate jq
+  paths `.data[]` → `.data.sheets[]` / `.data.names[]` / `.data.functions[]`. `sheets`' elements
+  are built by the same function as `describe --json`'s `data.sheets` (and `names`' as its
+  `definedNames`), so the two verbs cannot drift; the envelope schema types `data` as
+  `object | null`. The xl-agent grader and the CI/release smoke read the new paths.
 
 ### Fixed
 
-- **Line breaks and tabs in attribute values survive a write** (#649): both writers now spell TAB,
-  LF and CR inside an attribute value as the character references `&#9;`, `&#10;` and `&#13;`,
-  as Excel does (`prompt="line 1&#10;line 2"`). They were written raw — by scala.xml and the JDK
-  StAX writer alike — and XML attribute-value normalization turned each into a space on the next
-  parse, so a data-validation prompt or error message with a line break came back as `l1 l2`: from
-  an Excel-authored entry that rode `DataValidation.Preserved` (the parse had resolved Excel's
-  `&#10;`, the payload re-serialized it raw), and from any preserved fragment or defined-name
-  `comment` carrying one. A typed validation's prompt used to reach the file as `_x000A_`
-  (GH-429); it is now Excel's `&#10;`, and both spellings still read. The `SaxStax` backend no
-  longer sits on `javax.xml.stream` (whose `writeAttribute` escapes unconditionally and cannot be
-  handed a reference): `StaxSaxWriter` writes its bytes directly, in the format the JDK writer
-  produced, escaping through the same `XmlUtil` routines as the DOM backend, so the two agree byte
-  for byte on text and attributes. **Breaking** for code constructing it: `new StaxSaxWriter(…)`
-  takes a `java.io.Writer`, not an `XMLStreamWriter`; `StaxSaxWriter.create(OutputStream)` is
-  unchanged.
+- **Defined-name edits refresh affected formula caches** (#659 review): the batch `define-name` /
+  `remove-name` AND the verbs `xl name add` / `xl name rm` share one write tail — readers are
+  invalidated through aliases, named ranges, local shadows and cross-sheet references, then their
+  dependent cone is recalculated; the verbs print the batch op's `Recalculated N formula(s)` line
+  and honour `--no-recalc` (every cache kept, the note printed) and `--strict` (exit 1 on
+  recalculation errors; `xl schema` lists exit 1 for both). A file written by `name add|rm` no
+  longer caches a value its own name table contradicts. Unrelated caches stay intact; a reader
+  `name rm` leaves unevaluable is left uncached and reported.
+- **`xl schema` publishes the batch twins of `name add` / `name rm`** (#659 review): `batchTwin`
+  is `define-name` / `remove-name` (was `null`); SchemaSpec now checks the twin relation in both
+  directions so an op's `cliVerb` can no longer point at a verb that disowns it.
+- **Batch `scope` names the sheet exactly as spelled** (#659 review): `define-name` /
+  `remove-name` refuse a case variant of a sheet name with the same `SHEET_NOT_FOUND` text and
+  did-you-mean candidates as `-s` and every op's `sheet` key, instead of matching it
+  case-insensitively — one rule for every sheet key in the CLI.
+- **Iterative stall detection observes RNG consumption** (#659 review): repeated `RANDBETWEEN`
+  values or rounded `RAND` values no longer terminate a recoverable cycle. Tracking attempted
+  draws also covers names, dynamic references and a custom RNG that throws.
+- **Later PageSetup edits override earlier scoped print names** (#659 review), for both print
+  areas and repeated rows on both XML backends. The reverse edit order remains supported.
+- **Cycle members are ordered on the grid, never on the A1 text** (#482, PR #659 review): the
+  Gauss–Seidel cut, component listings (`SccReport.members`, `DependencyGraph.Scc`) and the
+  data-table seeder keyed on the A1 string, so `"A10" < "A2"` and `"AA1" < "B1"` swept row 10
+  before row 2 and column AA before column B — isomorphic models kept different values by the
+  digit count of a row number (A2 = A10+1, A10 = A2 gave 100/99; A2/A9 gave 100/100). Every
+  positional order is now `QualifiedRef.gridKey` (sheet name, row, column —
+  `QualifiedGraph.byPosition`, the order every CLI listing already used); member listings of
+  components spanning those boundaries change accordingly, and a seeded-RNG Jacobi draw order
+  follows the listing.
+- **One iterative verdict for the summary and `--strict`** (#537, PR #659 review): the `--strict`
+  reason said "exhausted N round(s)" for a cycle that STALLED, under a summary saying "stalled",
+  and the summary's stall count was the longest run of ANY component, converged ones included.
+  `RecalcResult.unconvergedVerdict` is the single string both carry — `exhausted <budget> round(s)
+  without converging (last values kept)` when any component exhausted, else `stalled after <round>
+  round(s): a cyclic member fails every round` from the stalled components' own rounds (`2–5` when
+  they differ); `SccReport.verdict` renders each component's own count.
+- **Excel 4.0 macro sheets are a lint sheet kind** (PR #659 review): a `<sheet>` whose
+  relationship is `xlMacrosheet` (`xl/macrosheets/sheetN.xml`, root `<xm:macrosheet>`) is scanned
+  like a worksheet in both modes — its `t="s"` cells feed the shared-string union (no false
+  `shared-string-orphan`), its child order is checked against CT_Macrosheet, and the rel is no
+  longer reported as `wrong-rel-type` on a file Excel writes itself. `XmlUtil.relTypeMacrosheet`
+  added.
+- **The `ns0`-prefixed-root lint no longer claims Excel opens the part blank** (PR #659 review):
+  Excel and LibreOffice open a namespace-correct prefixed root with every cell intact (verified);
+  the finding, its scaladoc, `lint --help` and `docs/reference/cli.md` now describe it as the
+  signature of the ElementTree round-trip that strips `mc:Ignorable` declarations and a spelling
+  prefix-naive tooling misreads, at severity `hygiene`. The undeclared-`mc:Ignorable` half keeps
+  its blank-tab wording and its `repair` tier.
+- **Lint's dxfId probes run only on dxf-bearing elements** (PR #659 review): both scanners look
+  for the seven `dxfId`-family attributes on `cfRule`, `sortCondition`, `table` and `tableColumn`
+  alone, so the `<row>/<c>/<v>/<f>` path of a million-row `--stream lint` does no attribute
+  lookups for the rule (~10% of raw SAX time before). A `dxfId` on a cell is not a finding.
+- **Render: non-text that does not fit is `####` under every alignment, empty neighbour or not**
+  (#500, #502, #459, PR #659 review): a number, date, logical or error that does not fit its
+  column renders `####` inside that column — Excel never lets non-text overflow. A centred
+  `#DIV/0!` or `TRUE` was drawn across the empty cell to its right and a left/centre-aligned
+  number bled into it; only text spills now.
+- **Render: each cell's style and content are resolved once** (PR #659 review): `ResolvedCell`
+  carries the resolution through every overflow, alignment, hash and text decision instead of
+  re-formatting the value and re-parsing a Custom format code up to five times per rendered cell;
+  output bytes unchanged.
+- **`RowCodec` duplicate-header guards use the matcher's key** (#614, PR #659 review): the
+  compile-time check for `derives` and the runtime check for `withHeaders` now key on
+  `RowCodec.headerKey` (case, whitespace, `_` and `-` ignored), the key `readRowsByHeader` matches
+  by, so `@header("Unit Price")` beside `unit_price`, or `rev` beside `Rev`, is refused naming
+  both fields and headers instead of silently binding two fields to one column; `TableSpec.create`
+  (hence `putTable`) refuses column names that differ only by case, as Excel does for structured
+  references.
+- **`NOT (A1)^2` with whitespace before the paren is the function call** (#653 follow-up, PR #659
+  review): the GH-653 fix reclassified only `NOT(` as a call; `NOT (`, `NOT  (` and `-NOT (` still
+  took the lenient paren-less keyword path, so a postfix after the closing paren bound inside
+  (`NOT (A1)^2` evaluated `FALSE` where Excel gives `0`) and every drag, shift or rename reprinted
+  the text as `NOT(A1^2)`. Whitespace between `NOT` and its paren now selects the call, as
+  `SUM (A1)` already did for every other function; `NOT (A1)#` is rejected like `NOT(A1)#`. The
+  grammar generator now spells every registry function with whitespace before the paren too.
+- **Table parts keep their source numbers** (#557, PR #659 review): the writer renumbered every
+  `xl/tables/tableN.xml` by sheet order on each write while an untouched sibling sheet's rels rode
+  verbatim naming the old number, so a book whose parts were numbered out of sheet order (Excel
+  numbers them in creation order) came out with two sheets pointing at one table and the other
+  orphaned (`unreferenced-part`, Excel repair). A table the source holds now keeps its part number;
+  only new tables are numbered, past the highest in use; `[Content_Types].xml` registers the
+  emitted numbers and drops a vanished table's Override.
+- **Totals rows survive a write** (#595 follow-up, PR #659 review): a table with a totals row was
+  written with only `totalsRowShown="1"` (the "ever shown" flag), no `totalsRowCount`, no column
+  `totalsRowLabel`/`totalsRowFunction`, and an autoFilter spanning the totals row — Excel showed no
+  totals row. xl now writes `totalsRowCount="1"`, the column totals attributes (and
+  `<totalsRowFormula>` for `custom`), and the autoFilter over header + data rows, as Excel does;
+  `TableColumn` gains `totalsRowLabel` and `totalsRowFunction` (`TotalsRowFunction`). Reading
+  follows Excel too: `totalsRowShown="1"` without a count is a table whose totals row is hidden.
+- **`--stream style` theme colours** (#566 follow-up, #448, PR #659 review): the streaming style
+  codec wrote theme colours by enum ordinal, so `theme:dark1` landed as `theme="0"` (Light1) and
+  Dark2/Light2 swapped; it now shares the DOM writer's index mapping and tint form (a zero tint is
+  omitted).
+- **`render --rasterizer resvg` honours `XL_SPILL_DIR`** (#517 follow-up, PR #659 review): resvg's
+  scratch SVG lands in the spill directory when set (else `java.io.tmpdir`); a directory that
+  cannot take it fails the render as `IO_WRITE` with a hint naming the directory and the lever,
+  not `INTERNAL` with a bare path. `docs/reference/cli.md` no longer claims every other write
+  avoids `java.io.tmpdir`.
+
 - **`ROWS` and `COLUMNS` count any array** (#655): `ROWS(A1#)`, `ROWS(SEQUENCE(3))` and
   `COLUMNS(A1:C1*2)` count the array's rows or columns, as in Excel; a scalar argument is 1. Only a
   literal range was accepted ("requires a range argument").
@@ -114,6 +404,76 @@ and the evaluator bugs beside them (#578, #580, #596): one real projection model
   used to truncate silently). **Breaking** for code building the call programmatically:
   `FunctionSpecsBase.FilterArgs`' second member is an `ArgSpec.SumProductArg` (range or
   expression), no longer a bare `TExpr.RangeLocation`.
+- **Rewriting a sheet that carries a table together with a legacy comment, printer settings or
+  foreign (openpyxl / Excel) sheet rels no longer re-points `<tablePart r:id>`** (or a generated
+  `<legacyDrawing r:id>`) to an id the preserved `.rels` part does not carry (#557): the writer
+  plans the sheet rels before emitting the worksheet, reuses a preserved table rel whose target
+  is the emitted part, drops stale ones and allocates fresh ids past the highest numeric id, so
+  `xl lint` stays free of `unresolved-rel-id`/`wrong-rel-type` and Excel no longer repairs the
+  file.
+- **Table parts are deterministic** (#595): `xr:uid` / autoFilter `xr:uid` / column `xr3:uid`
+  ride through from the source file's part (matched by table name) and are omitted on a fresh
+  table instead of a random UUID per write, so two writes of one workbook are byte-identical and
+  an Excel-authored table keeps its uids; `putTable` enables the table's autoFilter (filter
+  buttons), matching Excel's Format as Table.
+- **The writer's CF / data-validation / defined-name clean gates are storage-form aware** (#593):
+  a bare post-2007 call (`IFS(`, `XLOOKUP(`, …) in a third-party file is healed to Excel's
+  `_xlfn.` form by any in-memory write that regenerates the worksheet (CF/DV) or `workbook.xml`
+  (names — every non-clean write), including an identical re-author; Excel-authored parts stay
+  byte-identical. The `xlfn-missing` finding, the `xl lint` help, `docs/reference/cli.md` and
+  `docs/LIMITATIONS.md` state the condition and its residuals (unmodeled preserved rules, x14
+  `<xm:f>`, untouched worksheets, `--stream` writes).
+- **Non-solid pattern fills survive read and write** (#566): `StyleParser` no longer collapses a
+  texture whose `fgColor` or `bgColor` is absent, `auto="1"` or Excel's system index 64/65 to no
+  fill, both serializers emit only the colour children a texture carries, a source table's bare
+  `gray125` deduplicates against the writer's placeholder, and `--stream style` keeps textures
+  instead of rewriting them as solid with lowercased tokens.
+- **Attribute values containing TAB/LF/CR are written as `&#9;`/`&#10;`/`&#13;` on both XML
+  backends** (#649), so data-validation prompts and errors (typed, Preserved and through
+  `--stream put/putf/style`), defined-name comments and table column headers with line breaks
+  round-trip instead of coming back as spaces.
+- **The in-memory reader no longer fails the whole workbook on a childless `<c t="inlineStr"/>`
+  / `<c t="str"/>`** (openpyxl's `value=""`) (#460): the cell reads as blank with its style index
+  kept, matching Excel, openpyxl and xl's streaming readers; an `<is/>` without text reads as the
+  empty string on both paths.
+- **Render overflow decisions follow the formatted content, not the raw value** (#500, #501,
+  #502): `RenderUtils.renderedContent(value, numFmt)` resolves the kind (`Numeric | Text | Bool |
+  Error | Empty`) and text a cell actually draws, and the `####` gate, General alignment and
+  overflow colspan all read it. Logicals and error values that do not fit render `####` instead
+  of clipping, and errors are centred like logicals under General alignment (#500); a number or
+  date under a text-only format (`@`, or a custom code with no numeric section —
+  `FormatCodeParser.isTextOnly`) lays out as text: left-aligned, overflowing, never hashed (#501);
+  overflow spans are sized from the formatted text, so a rounding format no longer claims empty
+  neighbours and a widening one (`$1,234.50`, `#DIV/0!`) gets the span it needs (#502).
+  `RenderUtils.alignmentFor(kind)` / `resolveHAlign(style, content)` are the single alignment
+  resolution for both renderers. #505 (the Batik/AWT measurement gap) stays open.
+- **`XlsxWriter.writeToBytes` serialises in memory** (#516) instead of round-tripping through a
+  scratch file in `java.io.tmpdir`; a new `writeToBytes(workbook, config: WriterConfig)` overload
+  honours a custom configuration, and `copyVerbatim` targets a stream as well as a file, so a
+  clean read-back workbook still yields its source bytes verbatim.
+- **Parser and printer defects the grammar generator exposed** (#653): a leading-dot fraction
+  (`=.5`, `=A1+.5`) was rejected as `Invalid number ''` and now parses (reprinting as `0.5`);
+  `NOT(` took the lenient keyword path so `=NOT(A1)%` read as `NOT(A1%)` — it is now the function
+  call; `=YEARFRAC(A1, B1, 0)` dropped its explicit basis on every reprint, drag, insert and
+  rename; a `"` inside a quoted sheet name (`'Q1 "Final"'!A1`) broke `FormulaOps.mentionsSheet`
+  and let a rename leave the reference stale.
+- `EditSchema`'s `remove-name` named its CLI twin `name remove`; the verb is `name rm` (#462).
+
+### Performance
+
+- **Shared-string lint accumulation is linear in distinct indices** (#659 review): both scanners
+  build one bit set per sheet and publish an immutable snapshot, avoiding a backing-array copy
+  per cell. A streaming lint probe with 200k distinct strings allocated 229 MB versus 2.74 GB
+  before the fix (about 92% less cumulative allocation).
+
+- **Iterative recalculation** (#537): each cycle member's formula is parsed once per fixpoint and
+  its `TExpr` evaluated per round (previously re-parsed every round); the generation
+  `AggregateMemo` serves every acyclic segment of the iterative condensation walk (previously
+  disabled for the whole walk) with a fresh memo per round inside a fixpoint;
+  `DependencyGraph.dynamicCells` parses each name definition once per distinct text, dedups
+  case-variant names under the resolution relation and classifies sheet-independent names once
+  for the workbook instead of once per sheet — linear in the names, not sheets × names (40 sheets
+  × 5,000 names: 2.27 s → 0.6 s). The non-iterative path is unchanged.
 
 ## [0.22.0] - 2026-09-08
 

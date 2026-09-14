@@ -142,6 +142,16 @@ object RasterError:
     def message: String =
       s"$rasterizer conversion failed (exit $exitCode): $stderr"
 
+  /**
+   * A backend that takes file paths only (resvg) could not create its scratch SVG: in `spillDir`
+   * (the CLI's `XL_SPILL_DIR`) when set, else the JVM's `java.io.tmpdir`. The CLI classifies it as
+   * `IO_WRITE` naming the directory and the lever (`CliError.fromThrowable`), not `INTERNAL`.
+   */
+  case class ScratchFileFailed(rasterizer: String, spillDir: Option[Path], cause: Throwable)
+      extends RasterError:
+    def message: String =
+      s"$rasterizer could not write its scratch SVG: ${Option(cause.getMessage).getOrElse(cause.toString)}"
+
 /**
  * Manages the fallback chain of rasterizers.
  */

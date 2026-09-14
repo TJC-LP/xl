@@ -1,0 +1,18 @@
+## args
+-f
+<DIR>/named.xlsx
+-s
+Data
+-o
+<DIR>/name-add-scoped.xlsx
+name
+add
+Local
+Data!$A$1
+## exit
+0
+## stdout
+Added named range 'Local' -> Data!$A$1 (scope: Data)
+Recalculated 0 formulas
+Saved: <DIR>/name-add-scoped.xlsx
+## stderr

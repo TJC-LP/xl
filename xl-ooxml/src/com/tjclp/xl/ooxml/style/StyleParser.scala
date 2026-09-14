@@ -182,19 +182,19 @@ object WorkbookStyles:
               (patternElem \ "fgColor").headOption.collect { case e: Elem => e }.flatMap(parseColor)
             fg.map(Fill.Solid.apply).getOrElse(Fill.None)
           case other =>
+            // GH-566: fgColor and bgColor are both optional (CT_PatternFill). openpyxl writes the
+            // foreground only; Excel writes indexed 64/65 or auto="1" for its automatic colours,
+            // which parseColor reports as None — the texture is kept, never collapsed to no fill.
             val fg =
               (patternElem \ "fgColor").headOption.collect { case e: Elem => e }.flatMap(parseColor)
             val bg =
               (patternElem \ "bgColor").headOption.collect { case e: Elem => e }.flatMap(parseColor)
-            (fg, bg) match
-              case (Some(fgColor), Some(bgColor)) => Fill.Pattern(fgColor, bgColor, other)
-              case _ => Fill.None
+            Fill.Pattern(fg, bg, other)
       case Some(_) => Fill.None
       case None => Fill.None
 
   private def parsePatternType(value: String): Option[PatternType] =
-    val normalized = value.toLowerCase
-    PatternType.values.find(_.toString.toLowerCase == normalized)
+    PatternType.fromToken(value)
 
   private def parseBorders(root: Elem): Vector[Border] =
     (root \ "borders").headOption match

@@ -22,10 +22,6 @@ class EditPreludeProbe extends FunSuite:
   private val Other = SheetName.unsafe("Other")
 
   private def num(n: Int): CellValue = CellValue.Number(BigDecimal(n))
-  // fx"=A1*2" stores its text verbatim; compare the reference shape without the leading '='
-  private def formulaText(v: CellValue): String = v match
-    case CellValue.Formula(expr, _, _) => expr.stripPrefix("=")
-    case other => other.toString
 
   private val book: Workbook = Workbook(
     Sheet(Data).put(ref"A1", 10).put(ref"A2", 20).put(ref"B1", fx"=A1*2"),
@@ -53,7 +49,8 @@ class EditPreludeProbe extends FunSuite:
     )
     val sheet = book.editIn(Data)(edits*).flatMap(_(Data)).unsafe
     assertEquals(sheet(ref"A1").value, num(20))
-    assertEquals(formulaText(sheet(ref"B2").value), "A2*2")
+    // GH-479: fx-authored formulas are canonical (bare), so the filled cell compares EXACTLY
+    assertEquals(sheet(ref"B2").value, CellValue.Formula("A2*2", None))
     assertEquals(
       sheet(ref"C1").styleId.flatMap(sheet.styleRegistry.get).map(_.numFmt),
       Some(NumFmt.Date)
@@ -74,8 +71,11 @@ class EditPreludeProbe extends FunSuite:
       Edit.RenameSheet(Data, renamedName)
     )
     val renamed = r.flatMap(_(renamedName)).unsafe
-    assertEquals(formulaText(renamed(ref"E3").value), "A3*3")
-    assertEquals(formulaText(r.flatMap(_(Other)).unsafe(ref"A1").value), "Renamed!A2+1")
+    assertEquals(renamed(ref"E3").value, CellValue.Formula("A3*3", None))
+    assertEquals(
+      r.flatMap(_(Other)).unsafe(ref"A1").value,
+      CellValue.Formula("Renamed!A2+1", None)
+    )
     // an explicit text-only support refuses the same drag with the capability it lacks
     val drag = Edit.DragFormula(Area(Some(Data), ref"E1:E2"), "=A1*3", ref"E1", None)
     assert(book.edit(drag)(using FormulaSupport.textOnly).isLeft)

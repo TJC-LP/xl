@@ -202,8 +202,20 @@ class FormulaFormattingSpec extends FunSuite:
     sheet.putFormulaInheriting(ref"B4", "=B2-B3") match
       case Right(updated) =>
         updated.cells.get(ref"B4").map(_.value) match
-          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "=B2-B3")
+          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "B2-B3")
           case other => fail(s"Expected formula cell at B4, got $other")
+        assertEquals(numFmtOf(updated, ref"B4"), Some(NumFmt.Currency))
+      case Left(err) => fail(s"putFormulaInheriting failed: $err")
+  }
+
+  test("GH-479: putFormulaInheriting stores the one canonical text for a padded formula") {
+    val sheet = base
+      .put(ref"B2", 1000000, currency)
+      .put(ref"B3", 600000, currency)
+    // trim, one leading '=' off, trim — the same rule as fx, FormulaParser.parse and the CLI
+    sheet.putFormulaInheriting(ref"B4", " = B2 - B3 ") match
+      case Right(updated) =>
+        assertEquals(updated.cells.get(ref"B4").map(_.value), Some(CellValue.Formula("B2 - B3")))
         assertEquals(numFmtOf(updated, ref"B4"), Some(NumFmt.Currency))
       case Left(err) => fail(s"putFormulaInheriting failed: $err")
   }
@@ -216,7 +228,7 @@ class FormulaFormattingSpec extends FunSuite:
       case Right(updated) =>
         assertEquals(numFmtOf(updated, ref"B4"), None)
         updated.cells.get(ref"B4").map(_.value) match
-          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "=B2*B3")
+          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "B2*B3")
           case other => fail(s"Expected formula cell at B4, got $other")
       case Left(err) => fail(s"putFormulaInheriting failed: $err")
   }
@@ -246,15 +258,33 @@ class FormulaFormattingSpec extends FunSuite:
     assert(result.isLeft, s"Expected parse failure, got $result")
   }
 
-  test("putFormulaInheriting normalizes a missing leading equals sign") {
+  test("putFormulaInheriting accepts a formula without the leading equals sign") {
     val sheet = base.put(ref"B2", 100, currency)
     sheet.putFormulaInheriting(ref"B4", "B2*2") match
       case Right(updated) =>
         updated.cells.get(ref"B4").map(_.value) match
-          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "=B2*2")
+          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "B2*2")
           case other => fail(s"Expected formula cell at B4, got $other")
         assertEquals(numFmtOf(updated, ref"B4"), Some(NumFmt.Currency))
       case Left(err) => fail(s"putFormulaInheriting failed: $err")
+  }
+
+  test("GH-479: putFormulaInheriting stores the BARE expression for both input shapes, evaluable") {
+    val sheet = base.put(ref"B2", 100, currency)
+    for input <- List("=B2*2", "B2*2") do
+      sheet.putFormulaInheriting(ref"B4", input) match
+        case Right(updated) =>
+          assertEquals(
+            updated.cells.get(ref"B4").map(_.value),
+            Some(CellValue.Formula("B2*2", None)),
+            s"input '$input'"
+          )
+          assertEquals(
+            updated.evaluateCell(ref"B4"),
+            Right(CellValue.Number(BigDecimal(200))): XLResult[CellValue],
+            s"input '$input'"
+          )
+        case Left(err) => fail(s"putFormulaInheriting('$input') failed: $err")
   }
 
   test("putFormulaInheriting workbook overload inherits across sheets") {
@@ -271,7 +301,7 @@ class FormulaFormattingSpec extends FunSuite:
     summary.putFormulaInheriting(ref"A1", "=Data!B2*2") match
       case Right(updated) =>
         updated.cells.get(ref"A1").map(_.value) match
-          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "=Data!B2*2")
+          case Some(CellValue.Formula(expr, _, _)) => assertEquals(expr, "Data!B2*2")
           case other => fail(s"Expected formula cell at A1, got $other")
         assertEquals(numFmtOf(updated, ref"A1"), None)
       case Left(err) => fail(s"putFormulaInheriting failed: $err")

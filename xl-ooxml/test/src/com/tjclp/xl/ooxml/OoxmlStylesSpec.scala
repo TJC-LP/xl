@@ -6,7 +6,7 @@ import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
 
 import munit.FunSuite
-import com.tjclp.xl.api.Workbook
+import com.tjclp.xl.api.{Sheet, Workbook}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.macros.ref
@@ -466,4 +466,181 @@ class OoxmlStylesSpec extends FunSuite:
       .map(_.font)
       .getOrElse(fail("B1 lost its style"))
     assertEquals(b1Font, houseFont)
+  }
+
+  // ===== GH-566: non-solid pattern fills (ST_PatternType textures) survive read and write =====
+
+  /**
+   * A styles part in the two texture dialects the reader used to drop: openpyxl 3.1.5's
+   * `PatternFill(patternType="mediumGray", fgColor="FF808080")` writes NO bgColor (fill 2), and a
+   * two-colour `lightUp` hatch (fill 3). xf 1 / xf 2 point at them.
+   */
+  private val textureStylesXml: String =
+    """<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      |  <fonts count="1"><font><name val="Calibri"/><sz val="11"/></font></fonts>
+      |  <fills count="4">
+      |    <fill><patternFill patternType="none"/></fill>
+      |    <fill><patternFill patternType="gray125"/></fill>
+      |    <fill><patternFill patternType="mediumGray"><fgColor rgb="FF808080"/></patternFill></fill>
+      |    <fill><patternFill patternType="lightUp"><fgColor rgb="FF0000FF"/><bgColor rgb="FFFFFF00"/></patternFill></fill>
+      |  </fills>
+      |  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+      |  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      |  <cellXfs count="3">
+      |    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+      |    <xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0" applyFill="1"/>
+      |    <xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>
+      |  </cellXfs>
+      |</styleSheet>""".stripMargin
+
+  /** Minimal package around [[textureStylesXml]]: A1 hatched mediumGray, A2 lightUp, B1 = 1. */
+  private def textureFixture(): Path =
+    val path = Files.createTempFile("xl-gh566-", ".xlsx")
+    path.toFile.deleteOnExit()
+    val zip = new java.util.zip.ZipOutputStream(Files.newOutputStream(path))
+    def entry(name: String, content: String): Unit =
+      zip.putNextEntry(new java.util.zip.ZipEntry(name))
+      zip.write(content.getBytes(StandardCharsets.UTF_8))
+      zip.closeEntry()
+    try
+      entry(
+        "[Content_Types].xml",
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+          |<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+          |<Default Extension="xml" ContentType="application/xml"/>
+          |<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+          |<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+          |<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+          |</Types>""".stripMargin
+      )
+      entry(
+        "_rels/.rels",
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          |<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+          |</Relationships>""".stripMargin
+      )
+      entry(
+        "xl/workbook.xml",
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          |<sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets>
+          |</workbook>""".stripMargin
+      )
+      entry(
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          |<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+          |<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+          |</Relationships>""".stripMargin
+      )
+      entry("xl/styles.xml", textureStylesXml)
+      entry(
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+          |<row r="1"><c r="A1" s="1" t="inlineStr"><is><t>hatched</t></is></c><c r="B1"><v>1</v></c></row>
+          |<row r="2"><c r="A2" s="2" t="inlineStr"><is><t>hatched too</t></is></c></row>
+          |</sheetData></worksheet>""".stripMargin
+      )
+    finally zip.close()
+    path
+
+  private def zipEntryText(path: Path, name: String): String =
+    val zip = new ZipFile(path.toFile)
+    try
+      Option(zip.getEntry(name)) match
+        case Some(e) => new String(zip.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8)
+        case None => fail(s"zip entry $name not found in $path")
+    finally zip.close()
+
+  private def fillOf(sheet: Sheet, at: com.tjclp.xl.addressing.ARef): Fill =
+    sheet(at).styleId
+      .flatMap(sheet.styleRegistry.get)
+      .map(_.fill)
+      .getOrElse(fail(s"${at.toA1} lost its style"))
+
+  test("GH-566: the reader keeps openpyxl's fgColor-only mediumGray texture as a pattern fill") {
+    val parsed = parseStyles(textureStylesXml)
+    assertEquals(
+      parsed.fills(2),
+      Fill.Pattern(Some(Color.Rgb(0xff808080)), None, PatternType.MediumGray),
+      "fgColor-only texture: foreground kept, background automatic"
+    )
+    assertEquals(
+      parsed.fills(3),
+      Fill.pattern(Color.Rgb(0xff0000ff), Color.Rgb(0xffffff00), PatternType.LightUp)
+    )
+    // the source's bare gray125 IS the writer's mandatory placeholder
+    assertEquals(parsed.fills(1), OoxmlStyles.defaultGray125)
+    assertEquals(parsed.fills(1), Fill.Pattern(None, None, PatternType.Gray125))
+  }
+
+  test("GH-566: Excel's automatic pattern colours (indexed 64/65, auto) keep the texture") {
+    val excelDialect = textureStylesXml.replace(
+      """<fill><patternFill patternType="mediumGray"><fgColor rgb="FF808080"/></patternFill></fill>""",
+      """<fill><patternFill patternType="darkGray"><fgColor indexed="64"/><bgColor indexed="65"/></patternFill></fill>"""
+    )
+    assertEquals(
+      parseStyles(excelDialect).fills(2),
+      Fill.Pattern(None, None, PatternType.DarkGray),
+      "system indices 64/65 are the automatic colours"
+    )
+    val autoDialect = textureStylesXml.replace(
+      """<fill><patternFill patternType="mediumGray"><fgColor rgb="FF808080"/></patternFill></fill>""",
+      """<fill><patternFill patternType="darkTrellis"><fgColor auto="1"/></patternFill></fill>"""
+    )
+    assertEquals(
+      parseStyles(autoDialect).fills(2),
+      Fill.Pattern(None, None, PatternType.DarkTrellis),
+      "auto=\"1\" is the automatic colour"
+    )
+  }
+
+  List(
+    "ScalaXml" -> com.tjclp.xl.ooxml.writer.WriterConfig.scalaXml,
+    "SaxStax" -> com.tjclp.xl.ooxml.writer.WriterConfig.saxStax
+  ).foreach { case (backend, config) =>
+    test(
+      s"GH-566 field repro ($backend): `put B1 2` keeps mediumGray/lightUp fills and their xfs"
+    ) {
+      val in = textureFixture()
+      val wb = XlsxReader.read(in).fold(e => fail(s"read failed: ${e.message}"), identity)
+      val edited = wb
+        .update(wb.sheets(0).name, _.put(ref"B1", CellValue.Number(BigDecimal(2))))
+        .fold(e => fail(s"update failed: $e"), identity)
+      val out = Files.createTempFile(s"xl-gh566-out-$backend-", ".xlsx")
+      out.toFile.deleteOnExit()
+      XlsxWriter
+        .writeWith(edited, out, config)
+        .fold(e => fail(s"write failed: ${e.message}"), identity)
+
+      // StAX renders a childless element as <e></e>; compare in the minimized form
+      val styles = """<([A-Za-z][\w:.-]*)([^<>]*)></\1>""".r
+        .replaceAllIn(zipEntryText(out, "xl/styles.xml"), m => s"<${m.group(1)}${m.group(2)}/>")
+      assert(styles.contains("""patternType="mediumGray""""), s"mediumGray dropped:\n$styles")
+      assert(styles.contains("""patternType="lightUp""""), s"lightUp dropped:\n$styles")
+      assert(styles.contains("""<fgColor rgb="FF808080"/>"""), s"mediumGray fgColor lost:\n$styles")
+      assert(!styles.contains("mediumgray") && !styles.contains("lightup"), s"lowercase:\n$styles")
+      // the source's four fills (none, gray125, mediumGray, lightUp): the bare gray125 is the
+      // writer's own placeholder and the textures are kept — nothing dropped, nothing duplicated
+      assert(styles.contains("""<fills count="4">"""), s"fills count drifted:\n$styles")
+      assertEquals("patternType=\"gray125\"".r.findAllIn(styles).size, 1, styles)
+
+      val back = XlsxReader.read(out).fold(e => fail(s"re-read failed: ${e.message}"), identity)
+      val sheet = back.sheets(0)
+      assertEquals(
+        fillOf(sheet, ref"A1"),
+        Fill.Pattern(Some(Color.Rgb(0xff808080)), None, PatternType.MediumGray),
+        "A1's xf must still point at the mediumGray fill"
+      )
+      assertEquals(
+        fillOf(sheet, ref"A2"),
+        Fill.pattern(Color.Rgb(0xff0000ff), Color.Rgb(0xffffff00), PatternType.LightUp),
+        "A2's xf must still point at the lightUp fill"
+      )
+      assertEquals(sheet(ref"B1").value, CellValue.Number(BigDecimal(2)))
+    }
   }

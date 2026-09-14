@@ -229,6 +229,62 @@ class DataValidationPreservationSpec extends FunSuite:
     assertEquals(back.lastOption, updated.sheets(0).dataValidations.lastOption)
   }
 
+  private val bothBackends = List("dom" -> WriterConfig.scalaXml, "sax" -> WriterConfig.saxStax)
+
+  test("(a) GH-649: a Preserved validation's &#10; prompt survives a dirty write, both backends") {
+    // the foreign attr (imeMode) forces Preserved; the messages carry Excel's character references
+    val multilineForeign =
+      """<dataValidations count="1">
+    <dataValidation type="list" allowBlank="1" showInputMessage="1" promptTitle="Two&#10;lines" prompt="l1&#10;l2&#9;tab" imeMode="hiragana" sqref="D2:D9"><formula1>"a,b"</formula1></dataValidation>
+  </dataValidations>"""
+    bothBackends.foreach { case (label, config) =>
+      val (_, wb) = readDvFixture(multilineForeign)
+      assert(
+        wb.sheets(0).dataValidations(0).isInstanceOf[com.tjclp.xl.sheets.DataValidation.Preserved],
+        s"$label: imeMode must force Preserved"
+      )
+      // authoring a second validation dirties the slot: the Preserved payload is re-emitted from
+      // its captured string (CfCodec.preservedXml -> XmlUtil.compact -> parsePreserved)
+      val updated = wb
+        .update(
+          wb.sheets(0).name,
+          _.withDataValidation(ref"B2:B9", DataValidation.listOf("x", "y"))
+        )
+        .fold(err => fail(s"$label: update failed: $err"), identity)
+      val out = writeTo(updated, s"preserved-newline-$label", config)
+      val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+      assert(sheetXml.contains("""prompt="l1&#10;l2&#9;tab""""), s"$label: $sheetXml")
+      assert(sheetXml.contains("""promptTitle="Two&#10;lines""""), s"$label: $sheetXml")
+      val ws = XmlSecurity.parseSafe(sheetXml, "ws").fold(e => fail(e.message), identity)
+      val dv = (ws \ "dataValidations" \ "dataValidation")
+        .find(e => (e \@ "imeMode") == "hiragana")
+        .getOrElse(fail(s"$label: preserved entry lost"))
+      assertEquals(dv \@ "prompt", "l1\nl2\ttab", label)
+      assertEquals(dv \@ "promptTitle", "Two\nlines", label)
+    }
+  }
+
+  test("(e) GH-649: a typed multiline prompt is written as &#10; on both backends and reads back") {
+    val dv = com.tjclp.xl.sheets.DataValidation.Rules(
+      Vector(ref"B2:B4": CellRange),
+      com.tjclp.xl.sheets.DvKind.List("\"a,b\""),
+      messages = com.tjclp.xl.sheets.DvMessages(
+        showInputMessage = true,
+        promptTitle = Some("Two\nlines"),
+        prompt = Some("l1\nl2\ttab")
+      )
+    )
+    val wb = Workbook(Vector(Sheet(SheetName.unsafe("Case")).withDataValidation(ref"B2:B4", dv)))
+    bothBackends.foreach { case (label, config) =>
+      val out = writeTo(wb, s"typed-newline-$label", config)
+      val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+      assert(sheetXml.contains("""prompt="l1&#10;l2&#9;tab""""), s"$label: $sheetXml")
+      assert(sheetXml.contains("""promptTitle="Two&#10;lines""""), s"$label: $sheetXml")
+      assert(!sheetXml.contains("_x000A_"), s"$label: the GH-429 spelling must be gone: $sheetXml")
+      assertEquals(reread(out).sheets(0).dataValidations, wb.sheets(0).dataValidations, label)
+    }
+  }
+
   test("(a) GH-429: the Excel-typical decimal entry now parses TYPED and stays CLEAN-stable") {
     val (in, wb) = readDvFixture(excelTypicalDv)
     wb.sheets(0).dataValidations match

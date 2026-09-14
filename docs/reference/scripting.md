@@ -115,6 +115,15 @@ val f = fx"=SUM(A1:B10)"     // CellValue.Formula (syntax/parens checked at comp
 val m = money"$$1,234.56"    // Formatted(Number, Currency)
 ```
 
+`fx` takes the display form and stores the model's canonical text: `fx"=SUM(A1:B10)"` is
+`CellValue.Formula("SUM(A1:B10)")` — surrounding whitespace trimmed, exactly one leading `=`
+removed, trimmed again; nothing interior changes (a leading `+`, interior `=` and interior spaces
+stay). The same rule applies at every entry (`FormulaParser.parse`, `CellValue.formula`,
+`putFormulaInheriting`, `Edit.PutFormula`, `xl putf`), so `" = SUM(A1:B10) "` interpolated at
+runtime is the same value. Display (`displayCell`, the `excel` interpolator) adds the `=` back,
+and a cell written and read back compares equal to the literal you authored. `fx""`, `fx"="` and
+a blank literal fail to compile.
+
 `$` is the interpolation character inside every interpolated literal, so Excel's absolute
 anchors need `$$`: write `fx"=SUM($$A$$1:B10)"` to get `=SUM($A$1:B10)`. Same for
 `money"$$1,234.56"`.
@@ -497,9 +506,9 @@ For Excel-style format inheritance on formula entry, use the opt-in
 | `excelErrors` | (0.14.0) `Vector[(SheetName, ARef, CellError)]` — cells whose cached result is an Excel error value, sorted; inspect when you want to surface `#DIV/0!`s without treating them as host failures |
 | `isClean` | `true` when `errors.isEmpty` — a workbook full of cached `#DIV/0!`s is "clean" (the recalculation succeeded; the errors are data) |
 | `toEither` | `Right(workbook)` when clean, `Left(errors)` otherwise — for fail-hard pipelines |
-| `converged` | (0.20.0) `cycles.forall(_.converged)` — `false` iff some cyclic component exhausted `maxIter` without every member's \|Δ\| dropping below `maxChange`. The last-round values are kept (Excel semantics, `errors` stays empty), so gate on this after any large circular perturbation. Non-iterative runs report `true` |
-| `iterationsUsed` | (0.20.0) rounds run by the WORST component: `0` when no iteration happened, `maxIter` when any component exhausted, otherwise the round it converged on |
-| `cycles` | (0.20.0) `Vector[SccReport]` — one verdict per cyclic strongly-connected component actually iterated (`members`, `converged`, `rounds`, `maxDelta`, plus `render`), sorted by the component's minimum member. Empty on non-iterative and acyclic runs |
+| `converged` | (0.20.0) `cycles.forall(_.converged)` — `false` iff some cyclic component exhausted `maxIter` without every member's \|Δ\| dropping below `maxChange`, or stalled (below). The last-round values are kept (Excel semantics, `errors` stays empty for exhaustion), so gate on this after any large circular perturbation. Non-iterative runs report `true` |
+| `iterationsUsed` | (0.20.0) rounds run by the WORST component: `0` when no iteration happened, `maxIter` when any component exhausted, otherwise the round it converged on — or, for a *stalled* component (GH-537), the first round that consumed no randomness and replayed the previous one, so `converged = false` with `iterationsUsed < maxIter` is possible |
+| `cycles` | (0.20.0) `Vector[SccReport]` — one verdict per cyclic strongly-connected component actually iterated (`members`, `converged`, `rounds`, `maxDelta`, `stalled`, plus `render`), sorted by the component's minimum member. `stalled` (GH-537) means a member failed every round (a host failure, listed in `errors`) and the loop stopped at the first exact replay that consumed no randomness instead of burning `maxIter`. Empty on non-iterative and acyclic runs |
 | `unconverged` | (0.20.0) `cycles.filterNot(_.converged)` — the offenders to name in a report |
 | `certified` | (0.20.0) `errors.isEmpty && converged` — the single gate meaning "this workbook is at its global fixpoint" |
 
@@ -578,10 +587,14 @@ and friends) is reachable from the prelude too.
 
 Since 0.13.0, **circular models are opt-in** rather than always errors: pass an `IterativeCalc` to
 fixpoint declared cycles instead —
-`wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` runs Jacobi
-iteration (each member reads previous-iteration values until every |Δ| < `maxChange`
-or `maxIter` rounds; non-convergence keeps the last values with no error, per Excel). Plain
-`recalculate()` still isolates cycles. Honor a file's own settings with
+`wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` sweeps each
+cyclic component until every |Δ| < `maxChange` or `maxIter` rounds (non-convergence keeps the
+last values with no error, per Excel; a member that fails every round stalls the loop early,
+GH-537). The sweep is Gauss–Seidel by default (GH-482, Excel's iteration model — a sequential
+sweep in row-major order, not verified against Excel's own calc chain: members
+evaluate in `DependencyGraph.withinComponentOrder` and each value is read by the members after
+it); `IterativeCalc(…, scheme = IterationScheme.Jacobi)` reads previous-round values instead and
+reproduces the 0.13.0–0.22.x trajectories. Plain `recalculate()` still isolates cycles. Honor a file's own settings with
 `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)`, and author them
 on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100),
 maxChange = Some(BigDecimal("0.001"))))` (emits `<calcPr iterate iterateCount iterateDelta/>`).
@@ -680,8 +693,9 @@ a cache that may be stale). The same see-through rule is available for hand-writ
 ## Records: `derives RowCodec` (since 0.21.0)
 
 A case class is a row. Derive a `RowCodec` and the sheet reads and writes records directly —
-field order is column order, field names are the header row, `Option[T]` fields are empty
-cells — no per-cell `readTyped` loops:
+field order is column order, field names are the header row (or the `@header` text when the
+sheet's header is not something an identifier can spell), `Option[T]` fields are empty cells — no
+per-cell `readTyped` loops:
 
 ```scala
 //> using scala 3.9.0
@@ -689,15 +703,20 @@ cells — no per-cell `readTyped` loops:
 import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
 
-final case class Order(id: Int, customer: String, qty: Int, price: BigDecimal, shipped: Option[LocalDate])
-  derives RowCodec
+final case class Order(
+  id: Int,
+  customer: String,
+  qty: Int,
+  @header("Unit Price ($)") price: BigDecimal, // the column's header; the field stays `price`
+  shipped: Option[LocalDate]
+) derives RowCodec
 
 val orders = Vector(
   Order(1, "Acme", 3, BigDecimal("9.99"), Some(LocalDate.of(2026, 1, 15))),
   Order(2, "Globex", 1, BigDecimal("120.00"), None)
 )
 
-// Write: a header row of field names at A1, one row per record below it
+// Write: the header row at A1 (id, customer, qty, Unit Price ($), shipped), one row per record below
 val placed = Sheet("Orders").putRowsWithHeader(ref"A1", orders).unsafe
 val headerRange = placed.headerRange                       // Some(A1:E1)
 val dataRange = placed.dataRange                           // Some(A2:E3); None when `orders` is empty
@@ -721,9 +740,9 @@ The rules, all of them:
   A record needs at least one field.
 - **Writing**: `putRows(at, records)` writes records only (append under a header you styled
   yourself); `putRowsWithHeader(at, records)` writes the field names at `at` and records below;
-  `putTable(at, records, name)` adds an Excel table over header + records (`name`: letters, digits,
-  `_`; it doubles as the display name; with no records the table keeps Excel's one blank data
-  row). All three return `XLResult[RowsPlaced]` — `sheet`, `headerRange`, `dataRange`, `range`
+  `putTable(at, records, name)` adds an Excel table over header + records, with filter buttons on
+  the header row as Excel's own Format as Table does (`name`: letters, digits, `_`; it doubles as
+  the display name; with no records the table keeps Excel's one blank data row). All three return `XLResult[RowsPlaced]` — `sheet`, `headerRange`, `dataRange`, `range`
   (header ∪ data), `count` — and are `OutOfBounds` when the block would run past column XFD or
   row 1048576. Codec format hints (Decimal, Date, DateTime) register as styles and merge into an
   existing cell style exactly as `put` does (the existing style wins; only a General number
@@ -744,6 +763,21 @@ The rules, all of them:
   then reads the contiguous block under the header and stops at the first row whose record cells
   are all empty (Excel's current region), so a totals row after a blank line is not a record.
   `sheet.columnHeaders(row)` lists `(Column, text)` pairs for discovery.
+- **Header names** (#614): a field's header is its name unless `@header("Rev ($M)")` says
+  otherwise — real trackers have punctuation no identifier reaches (`columnOf("rev")` is `None`
+  against `Rev ($M)`, since matching only ignores case, whitespace, `_` and `-`). The annotation
+  takes a non-blank string literal, two fields may not end up with headers the matcher cannot tell
+  apart — `RowCodec.headerKey` ignores case, whitespace, `_` and `-`, so `@header("Unit Price")`
+  beside a field `unit_price` collides (both are compile errors), and `RowCodec[A].headers` lists
+  the result beside `RowCodec[A].fields`:
+  `putRowsWithHeader`/`putTable` write the headers, `readRowsByHeader` matches them (exact, then
+  normalised — `@header("Rev ($M)")` also finds `rev ($m)`), and errors keep the field name
+  (`Field(row, column, "rev", …)`; only `HeaderNotFound` carries the header text). For a header
+  known only at runtime, `codec.withHeaders(Map("rev" -> "Rev ($M)"))` is `XLResult[RowCodec[A]]`
+  (an unknown field, a blank header or two fields whose headers share a `headerKey` → `InvalidArgument`) and layers on
+  the annotation. Spell such a given with `derived`:
+  `given RowCodec[Deal] = orExit(RowCodec.derived[Deal].withHeaders(Map("ebitda" -> "EBITDA ($M)")))`
+  — `RowCodec[Deal].withHeaders(…)` there would summon the very given it defines.
 - **Errors** (`Either[RowCodecError, Vector[A]]`, first failing cell in row-major order):
   `Field(row, column, field, cause)` for a value the field's codec rejected, `Missing(row, column,
   field)` for a required field on an empty cell, `HeaderNotFound(header, headerRow, available)`,

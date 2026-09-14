@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Path, Paths}
 import java.util.zip.{ZipFile, ZipInputStream}
 
+import scala.collection.immutable.BitSet
 import scala.xml.Elem
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
@@ -88,6 +89,42 @@ enum LintCategory derives CanEqual:
    */
   case XlfnMissing
 
+  /**
+   * A `t="inlineStr"` / `t="str"` cell with neither an `<is>` nor a `<v>` — openpyxl's
+   * serialization of `value=""`; off-spec, so strict readers reject the sheet (GH-460).
+   */
+  case EmptyInlineStr
+
+  /**
+   * An `mc:Ignorable` list naming a prefix declared on neither the element nor an ancestor — the
+   * ElementTree re-serialization class Excel opens as a blank tab (GH-460) — or a root element
+   * binding the main namespace to a generated `nsN` prefix, the signature of the same round-trip.
+   * The prefixed root alone is a compatibility smell, not a repair: Excel and LibreOffice open a
+   * namespace-correct prefixed root with every cell intact (verified), but no mainstream producer
+   * writes it and prefix-naive tooling (regexes, XPath on the default-namespace spelling) misreads
+   * it.
+   */
+  case IgnorableUndeclared
+
+  /**
+   * A `dxfId`-family attribute (cfRule, table, tableColumn, sortCondition) indexing past the
+   * `<dxfs>` table of xl/styles.xml — Excel repairs the file and the formatting is lost (GH-460).
+   */
+  case DxfIdOutOfRange
+
+  /**
+   * A zip entry no relationship reaches from `_rels/.rels` — dead weight a producer left behind
+   * (GH-460). Not a repair class: Excel ignores it, but the bytes travel with every copy.
+   */
+  case UnreferencedPart
+
+  /**
+   * A shared-string entry no `t="s"` cell references — its text still rides in the package, the
+   * scrubbing hazard of GH-567 — or a `t="s"` index past the table (the reader shows #REF!). The
+   * orphan half is a hygiene/privacy signal, not a repair class.
+   */
+  case SharedStringOrphan
+
   /** Stable kebab-case identifier used in CLI text and JSON output. */
   def slug: String = this match
     case LintCategory.ChildOrder => "child-order"
@@ -103,6 +140,29 @@ enum LintCategory derives CanEqual:
     case LintCategory.DefinedNameInvalid => "defined-name-invalid"
     case LintCategory.CalcChainStale => "calc-chain-stale"
     case LintCategory.XlfnMissing => "xlfn-missing"
+    case LintCategory.EmptyInlineStr => "empty-inline-str"
+    case LintCategory.IgnorableUndeclared => "mc-ignorable-undeclared"
+    case LintCategory.DxfIdOutOfRange => "dxf-id-out-of-range"
+    case LintCategory.UnreferencedPart => "unreferenced-part"
+    case LintCategory.SharedStringOrphan => "shared-string-orphan"
+
+/**
+ * How much a finding matters to the recipient of the file (PR #659 review).
+ *
+ *   - [[Repair]]: Excel repairs or refuses the file, or a reader misreads a value — the class `xl
+ *     lint` exists for. Fails the lint gate (exit 1).
+ *   - [[Hygiene]]: the file is valid and opens intact everywhere; the finding is dead weight or a
+ *     privacy hazard the package still carries (an unreferenced part, a shared-string entry no cell
+ *     references). Reported, but the gate passes unless the caller asks for strictness.
+ */
+enum LintSeverity derives CanEqual:
+  case Repair
+  case Hygiene
+
+  /** Stable lower-case identifier used in CLI text and JSON output. */
+  def slug: String = this match
+    case LintSeverity.Repair => "repair"
+    case LintSeverity.Hygiene => "hygiene"
 
 /**
  * A single structural lint finding.
@@ -116,12 +176,15 @@ enum LintCategory derives CanEqual:
  *   so the finding can be located and acted on without re-deriving it
  * @param message
  *   human-readable explanation naming expected vs actual
+ * @param severity
+ *   the tier (see [[LintSeverity]]); a rule that does not say otherwise reports a repair
  */
 final case class Finding(
   part: String,
   category: LintCategory,
   locator: String,
-  message: String
+  message: String,
+  severity: LintSeverity = LintSeverity.Repair
 ) derives CanEqual
 
 /**
@@ -156,6 +219,30 @@ final case class Finding(
  *     writer's own (`FormulaStorage.bareFutureCalls`: whatever `toStored` would still change).
  *     Aggregated to ONE finding per part (first-5 site sample, total count, the bare names) like
  *     the leading-'=' check
+ *   - string-typed cells with nothing to read (GH-460) — `<c t="inlineStr"/>` / `<c t="str"/>` with
+ *     neither an `<is>` nor a `<v>`: openpyxl's serialization of `value=""`, off-spec, rejected by
+ *     strict readers (and by xl's own in-memory reader before GH-460; an `<is/>` without text is
+ *     the empty STRING to every reader and is not the class). ONE finding per part (first-5 sample
+ *     + count)
+ *   - `mc:Ignorable` lists naming a prefix no ancestor declares (GH-460) — the ElementTree
+ *     re-serialization class: the declarations are re-prefixed to `nsN`, the Ignorable list keeps
+ *     the old names, and Excel opens the part blank. A root that binds the main namespace to a
+ *     generated `nsN` prefix is reported as the signature of the same round-trip — on its own a
+ *     compatibility smell, not a repair: Excel and LibreOffice open a namespace-correct prefixed
+ *     root intact. An UNBOUND element prefix is a well-formedness error and stays a `Left`, like
+ *     any malformed part
+ *   - `dxfId`-family attributes indexing past the `<dxfs>` table (GH-460) — `<cfRule dxfId>`,
+ *     `<sortCondition dxfId>`, table `dataDxfId` / `headerRowDxfId` / `totalsRowDxfId` (+ border
+ *     variants), on sheet-class and table parts; the count is the actual `<dxf>` children of
+ *     xl/styles.xml, never its `count` attribute (Excel does the same)
+ *   - zip entries no relationship reaches (GH-460) — the closure from `_rels/.rels` over every
+ *     `.rels` in the package, complemented against the entry list (`.rels`, [Content_Types].xml and
+ *     Excel's own `[trash]/` leftovers are never findings); one finding per orphan part
+ *   - shared-string entries no `t="s"` cell references (GH-567) — ONE finding on the SST part with
+ *     the orphan count and first-5 INDICES (never the text: scrubbed content must not reappear in a
+ *     lint log), plus `t="s"` indices past the table (the reader shows #REF!). xl's fresh writes
+ *     lint clean; a surgical edit of a foreign SST book that replaces text leaves the old entry
+ *     behind, which this finding reports (no compaction on write)
  *
  * Lint runs on the RAW ZIP PARTS, never on the parsed domain model — a full read would
  * repair/normalize the very structure lint inspects (the reader silently falls back on unresolved
@@ -175,6 +262,9 @@ object WorkbookLint:
   private val workbookRelsPart = "xl/_rels/workbook.xml.rels"
   private val rootRelsPart = "_rels/.rels"
   private val contentTypesPart = "[Content_Types].xml"
+  // The conventional locations the reader and writer use when no relationship names the part
+  private val sharedStringsPart = "xl/sharedStrings.xml"
+  private val stylesPart = "xl/styles.xml"
 
   /** Access to package parts by zip entry name. */
   private trait PartSource:
@@ -182,7 +272,13 @@ object WorkbookLint:
     def read(name: String): XLResult[Option[String]]
     def openStream(name: String): XLResult[Option[InputStream]]
 
+    /** Every non-directory entry name in the package — the reachability check's universe. */
+    def entryNames: Vector[String]
+
   private final class ZipFilePartSource(zip: ZipFile) extends PartSource:
+    def entryNames: Vector[String] =
+      import scala.jdk.CollectionConverters.*
+      zip.entries().asScala.filterNot(_.isDirectory).map(_.getName).toVector
     def has(name: String): Boolean = Option(zip.getEntry(name)).isDefined
     def read(name: String): XLResult[Option[String]] =
       Option(zip.getEntry(name)) match
@@ -206,6 +302,7 @@ object WorkbookLint:
 
   private final class MapPartSource(names: Set[String], parts: Map[String, String])
       extends PartSource:
+    def entryNames: Vector[String] = names.toVector
     def has(name: String): Boolean = names.contains(name)
     def read(name: String): XLResult[Option[String]] = Right(parts.get(name))
     def openStream(name: String): XLResult[Option[InputStream]] =
@@ -295,19 +392,24 @@ object WorkbookLint:
       wbRels <- readRelationships(parts, workbookRelsPart)
       rootRels <- readRelationships(parts, rootRelsPart)
       chain <- calcChainFacts(wbElem, wbRels, parts)
+      // GH-460 / GH-567: the two bounded tables the per-cell scans index into, read once before
+      // the sheets (the calcChain pattern: absent → a zero-sized table, malformed → one finding)
+      sst <- sharedStringFacts(wbRels, parts)
+      styles <- stylesFacts(wbRels, parts)
       sheetResult <- lintSheets(
         wbElem,
         wbRels,
         parts,
         streaming,
         autoNoTableOf(wbElem),
-        chain.candidatesByPath(parts)
+        chain.candidatesByPath(parts),
+        ScanContext(Set.empty, sst.table, styles.dxfTable)
       )
       externalResult <- lintExternalLinks(wbElem, wbRels, parts)
       referenced =
         presentInternalTargets(rootRels, "", rootRelsPart, parts) ++
           presentInternalTargets(wbRels, "xl", workbookRelsPart, parts) ++
-          sheetResult._2 ++ externalResult._2
+          sheetResult.referenced ++ externalResult._2
       ctFindings <- checkContentTypes(parts, referenced)
     yield checkChildOrder(
       workbookPart,
@@ -316,11 +418,16 @@ object WorkbookLint:
       "CT_Workbook"
     ) ++
       checkRelRefs(workbookPart, workbookRelRefs(wbElem), wbRels, workbookRelsPart, parts, "xl") ++
+      ignorableFindingsOf(workbookPart, wbElem) ++
       definedNameExternalRefFindings(wbElem) ++
       definedNameValidityFindings(wbElem) ++
       definedNameXlfnFindings(wbElem) ++
-      sheetResult._1 ++ externalResult._1 ++ calcChainFindings(chain, sheetResult._3, parts) ++
-      ctFindings
+      sheetResult.findings ++ externalResult._1 ++
+      calcChainFindings(chain, sheetResult.facts.view.mapValues(_.chain).toMap, parts) ++
+      styles.findings ++
+      sharedStringFindings(sst, sheetResult.facts.values.map(_.sst)) ++
+      ctFindings ++
+      reachabilityFindings(parts, rootRels)
 
   /**
    * True when the book declares `calcMode="autoNoTable"` — the house dialect in which Excel never
@@ -441,9 +548,55 @@ object WorkbookLint:
     Vector(drawingSpec, legacyDrawingSpec, legacyDrawingHFSpec)
   )
 
-  private val sheetKinds: Vector[SheetKind] = Vector(worksheetKind, chartsheetKind, dialogsheetKind)
+  /**
+   * CT_Macrosheet child sequence (Excel 2006 main schema, `xm` namespace): the Excel 4.0 macro
+   * sheet Excel writes to `xl/macrosheets/sheetN.xml` under an `<xm:macrosheet>` root whose
+   * children are main-namespace elements. A `<sheet>` may target one (rel type `xlMacrosheet`) and
+   * its cells hold `t="s"` strings like any worksheet, so it is scanned as a sheet kind of its own
+   * (PR #659 review) — before, the rel read as wrong-typed and its shared strings as orphans.
+   */
+  private val macrosheetCanonicalOrder: Vector[String] = Vector(
+    "sheetPr",
+    "dimension",
+    "sheetViews",
+    "sheetFormatPr",
+    "cols",
+    "sheetData",
+    "sheetProtection",
+    "autoFilter",
+    "sortState",
+    "dataConsolidate",
+    "customSheetViews",
+    "phoneticPr",
+    "conditionalFormatting",
+    "printOptions",
+    "pageMargins",
+    "pageSetup",
+    "headerFooter",
+    "rowBreaks",
+    "colBreaks",
+    "customProperties",
+    "drawing",
+    "legacyDrawing",
+    "legacyDrawingHF",
+    "drawingHF",
+    "picture",
+    "oleObjects",
+    "extLst"
+  )
 
-  /** A `<sheet>` may target a worksheet, chartsheet, or dialogsheet part. */
+  private val macrosheetKind = SheetKind(
+    XmlUtil.relTypeMacrosheet,
+    "macrosheet",
+    "CT_Macrosheet",
+    macrosheetCanonicalOrder,
+    Vector(drawingSpec, legacyDrawingSpec, legacyDrawingHFSpec, pictureSpec)
+  )
+
+  private val sheetKinds: Vector[SheetKind] =
+    Vector(worksheetKind, chartsheetKind, dialogsheetKind, macrosheetKind)
+
+  /** A `<sheet>` may target a worksheet, chartsheet, dialogsheet or macrosheet part. */
   private val sheetRelTypes: Set[String] = sheetKinds.map(_.relType).toSet
 
   /**
@@ -459,8 +612,9 @@ object WorkbookLint:
     parts: PartSource,
     streaming: Boolean,
     autoNoTable: Boolean,
-    chainCandidates: Map[String, Set[String]]
-  ): XLResult[(Vector[Finding], Vector[(String, String)], Map[String, ChainSheetFacts])] =
+    chainCandidates: Map[String, Set[String]],
+    base: ScanContext
+  ): XLResult[SheetsResult] =
     val declaredExternalRefs = externalReferenceCount(wbElem)
     val targets: Vector[(String, SheetKind)] = nestedElems(wbElem, "sheets", "sheet")
       .flatMap { e =>
@@ -475,18 +629,20 @@ object WorkbookLint:
 
     targets
       .foldLeft[XLResult[
-        (Vector[Finding], Vector[(String, String)], Set[String], Map[String, ChainSheetFacts])
+        (Vector[Finding], Vector[(String, String)], Set[String], Map[String, SheetFacts])
       ]](
         Right((Vector.empty, Vector.empty, Set.empty, Map.empty))
       ) { case (acc, (path, kind)) =>
+        val ctx = base.copy(chainCandidates = chainCandidates.getOrElse(path, Set.empty))
         for
           found <- acc
-          scan <- scanPart(parts, path, streaming, chainCandidates.getOrElse(path, Set.empty))
+          scan <- scanPart(parts, path, streaming, ctx)
           relsPath = siblingRelsPath(path)
           rels <- readRelationships(parts, relsPath)
           rootMatches = scan.rootLabel == kind.expectedRoot
           tableResult <-
-            if rootMatches then scanTableParts(parts, rels, parentDir(path), streaming, found._3)
+            if rootMatches then
+              scanTableParts(parts, rels, parentDir(path), streaming, found._3, base)
             else Right((Vector.empty[Finding], found._3))
         yield
           // A sheet-typed rel pointing at other CONTENT (root is <styleSheet>, ...) is the zip-patch
@@ -512,28 +668,42 @@ object WorkbookLint:
                   parentDir(path)
                 ) ++
                 scan.boundsFindings ++ scan.formulaFindings ++ scan.xlfnFindings ++
+                scan.emptyInlineFindings ++ scan.ignorableFindings ++ scan.dxfFindings ++
+                sstIndexFindings(path, scan.sstRefs, base.sst) ++
                 externalRefFindings(path, scan.externalRefs, declaredExternalRefs) ++
                 dataTableFindings(path, scan.dataTables, autoNoTable) ++ tableResult._1
           (
             found._1 ++ findings,
             found._2 ++ presentInternalTargets(rels, parentDir(path), relsPath, parts),
             tableResult._2,
-            found._4 + (path -> scan.chain)
+            found._4 + (path -> SheetFacts(scan.chain, scan.sstRefs))
           )
       }
-      .map(acc => (acc._1, acc._2, acc._4))
+      .map(acc => SheetsResult(acc._1, acc._2, acc._4))
+
+  /** What [[lintSheets]] hands back: findings, rel targets seen, and per-part facts. */
+  private final case class SheetsResult(
+    findings: Vector[Finding],
+    referenced: Vector[(String, String)],
+    facts: Map[String, SheetFacts]
+  )
+
+  /** The per-sheet facts consumed at workbook level (calc chain, shared-string references). */
+  private final case class SheetFacts(chain: ChainSheetFacts, sst: SstRefFacts)
 
   /**
-   * Scan referenced table parts for out-of-bounds refs (`<table ref>`, nested autoFilter). Parts in
-   * `alreadyScanned` are skipped — a table shared by two sheets' rels is reported once — and the
-   * returned set carries every target scanned so far.
+   * Scan referenced table parts for out-of-bounds refs (`<table ref>`, nested autoFilter), dangling
+   * dxfIds and undeclared `mc:Ignorable` prefixes. Parts in `alreadyScanned` are skipped — a table
+   * shared by two sheets' rels is reported once — and the returned set carries every target scanned
+   * so far.
    */
   private def scanTableParts(
     parts: PartSource,
     rels: Relationships,
     baseDir: String,
     streaming: Boolean,
-    alreadyScanned: Set[String]
+    alreadyScanned: Set[String],
+    ctx: ScanContext
   ): XLResult[(Vector[Finding], Set[String])] =
     val targets = rels.relationships.toVector
       .filter(r => r.`type` == XmlUtil.relTypeTable && !r.targetMode.contains("External"))
@@ -546,8 +716,11 @@ object WorkbookLint:
     ) { (acc, target) =>
       for
         found <- acc
-        scan <- scanPart(parts, target, streaming)
-      yield (found._1 ++ scan.boundsFindings, found._2 + target)
+        scan <- scanPart(parts, target, streaming, ctx)
+      yield (
+        found._1 ++ scan.boundsFindings ++ scan.ignorableFindings ++ scan.dxfFindings,
+        found._2 + target
+      )
     }
 
   // ===== externalLink parts (GH-413 item 2) =====
@@ -771,24 +944,36 @@ object WorkbookLint:
     xlfnFindings: Vector[Finding],
     externalRefs: ExternalRefFacts,
     dataTables: Vector[RecordFacts],
-    chain: ChainSheetFacts
+    chain: ChainSheetFacts,
+    emptyInlineFindings: Vector[Finding],
+    ignorableFindings: Vector[Finding],
+    dxfFindings: Vector[Finding],
+    sstRefs: SstRefFacts
   )
 
   /**
-   * `chainCandidates`: the calcChain entries attributed to this part (upper-case A1), so the scan
-   * can confirm which of them are formula cells without a second pass (GH-555).
+   * What a part scan needs from the workbook level: the calcChain entries attributed to this part
+   * (upper-case A1, so the scan can confirm which are formula cells without a second pass —
+   * GH-555), the shared-string table size (GH-567) and the `<dxfs>` size (GH-460); `None` for a
+   * table means it was unreadable, and the rule that indexes it stays silent.
    */
+  private final case class ScanContext(
+    chainCandidates: Set[String],
+    sst: Option[SstTableFacts],
+    dxf: Option[DxfTableFacts]
+  )
+
   private def scanPart(
     parts: PartSource,
     path: String,
     streaming: Boolean,
-    chainCandidates: Set[String] = Set.empty
+    ctx: ScanContext
   ): XLResult[SheetScan] =
     if streaming then
       parts.openStream(path).flatMap {
         case None => Left(XLError.ParseError(path, s"Missing part: $path"))
         case Some(stream) =>
-          try SheetStreamScanner.scan(path, stream, chainCandidates)
+          try SheetStreamScanner.scan(path, stream, ctx)
           finally stream.close()
       }
     else
@@ -796,10 +981,11 @@ object WorkbookLint:
         xmlOpt <- parts.read(path)
         xml <- xmlOpt.toRight(XLError.ParseError(path, s"Missing part: $path"))
         elem <- XmlSecurity.parseSafe(xml, path)
-      yield scanElem(path, elem, chainCandidates)
+      yield scanElem(path, elem, ctx)
 
   /** DOM scanner: same observation rules as [[SheetStreamScanner]] (parity-pinned). */
-  private def scanElem(part: String, root: Elem, chainCandidates: Set[String]): SheetScan =
+  private def scanElem(part: String, root: Elem, ctx: ScanContext): SheetScan =
+    val chainCandidates = ctx.chainCandidates
     val children = root.child.toVector.collect { case e: Elem => e }
     val captures = children.flatMap { e =>
       val own =
@@ -813,13 +999,17 @@ object WorkbookLint:
         case _ => Vector.empty
       own ++ nested
     }
-    val bounds = root.descendant_or_self.toVector
-      .collect { case e: Elem => e }
-      .flatMap { e =>
-        refAttrNames.flatMap { attr =>
-          XmlUtil.getAttrOpt(e, attr).toList.flatMap(refBoundsFindings(part, e.label, attr, _))
-        }
+    val everyElem = root.descendant_or_self.toVector.collect { case e: Elem => e }
+    val bounds = everyElem.flatMap { e =>
+      refAttrNames.flatMap { attr =>
+        XmlUtil.getAttrOpt(e, attr).toList.flatMap(refBoundsFindings(part, e.label, attr, _))
       }
+    }
+    val dxfs = everyElem.filter(e => dxfBearingLabels.contains(e.label)).flatMap { e =>
+      dxfAttrNames.flatMap { attr =>
+        XmlUtil.getAttrOpt(e, attr).flatMap(dxfFinding(part, e.label, attr, _, ctx.dxf))
+      }
+    }
     val cellObs = nestedElems(root, "sheetData", "row")
       .flatMap(childElems(_, "c"))
       .map(domCellObs)
@@ -830,6 +1020,8 @@ object WorkbookLint:
     )
     val extRefs = cellObs.foldLeft(ExternalRefFacts.empty)(_.add(_))
     val chain = cellObs.foldLeft(ChainSheetFacts.empty)(_.add(_, chainCandidates))
+    val sstRefs = new SstRefBuilder(ctx.sst)
+    cellObs.foreach(sstRefs.add)
     SheetScan(
       root.label,
       mainChildLabelsOf(root),
@@ -839,7 +1031,11 @@ object WorkbookLint:
       xlfnFindings(part, xlfnFactsOf(root), "formula"),
       extRefs,
       dataTables,
-      chain
+      chain,
+      emptyInlineFindings(part, cellObs.foldLeft(EmptyInlineFacts.empty)(_.add(_))),
+      ignorableFindingsOf(part, root),
+      dxfs,
+      sstRefs.result()
     )
 
   /**
@@ -861,16 +1057,22 @@ object WorkbookLint:
         case _ => children.foldLeft(acc)(walk(_, _, Some(e)))
     walk(XlfnFacts.empty, root, None)
 
-  /** One `<c>` element's data-table facts (DOM side of the parity pair). */
+  /** One `<c>` element's per-cell facts (DOM side of the parity pair). */
   private def domCellObs(cell: Elem): CellObs =
     val formula = childElems(cell, "f").headOption
     val formulaText = formula.map(_.text)
+    val cellType = XmlUtil.getAttrOpt(cell, "t")
+    val firstV = childElems(cell, "v").headOption
+    val firstIs = childElems(cell, "is").headOption
     CellObs(
       ref = XmlUtil.getAttrOpt(cell, "r").flatMap(ARef.parse(_).toOption),
+      cellType = cellType,
       record =
         formula.flatMap(f => dataTableKindOf(XmlUtil.getAttrOpt(f, "t"), XmlUtil.getAttrOpt(f, _))),
       hasFormula = formula.isDefined,
-      hasValue = childElems(cell, "v").nonEmpty || childElems(cell, "is").nonEmpty,
+      hasV = firstV.isDefined,
+      hasIs = firstIs.isDefined,
+      sstIndex = if cellType.contains("s") then firstV.flatMap(_.text.toIntOption) else None,
       leadingEquals = formulaText.exists(_.startsWith("=")),
       extOrdinals = formulaText.fold(Set.empty[Int])(externalOrdinals),
       arrayRef =
@@ -888,11 +1090,11 @@ object WorkbookLint:
     import org.xml.sax.{Attributes, InputSource, SAXException}
     import org.xml.sax.helpers.DefaultHandler
 
-    def scan(part: String, stream: InputStream, chainCandidates: Set[String]): XLResult[SheetScan] =
+    def scan(part: String, stream: InputStream, ctx: ScanContext): XLResult[SheetScan] =
       try
         // GH-350: shared XXE hardening + benign-doctype strip, matching the parseSafe path
         val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
-        val handler = new ScanHandler(part, chainCandidates)
+        val handler = new ScanHandler(part, ctx)
         parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
         handler.result.toRight(XLError.ParseError(part, "Empty document (no root element)"))
       catch
@@ -902,8 +1104,8 @@ object WorkbookLint:
           Left(XLError.IOError(s"Failed to read $part: ${e.getMessage}"))
 
     @SuppressWarnings(Array("org.wartremover.warts.Var"))
-    private final class ScanHandler(part: String, chainCandidates: Set[String])
-        extends DefaultHandler:
+    private final class ScanHandler(part: String, ctx: ScanContext) extends DefaultHandler:
+      private val chainCandidates = ctx.chainCandidates
       private var rootLabel: Option[String] = None
       private var depth = 0
       private var parents: List[String] = Nil
@@ -911,11 +1113,21 @@ object WorkbookLint:
       private val labels = Vector.newBuilder[(String, Int)]
       private val captures = Vector.newBuilder[CapturedRef]
       private val bounds = Vector.newBuilder[Finding]
+      private val dxfs = Vector.newBuilder[Finding]
+      private val ignorable = Vector.newBuilder[Finding]
       private var leadingEq: LeadingEqualsFacts = LeadingEqualsFacts.empty
       private var extRefs: ExternalRefFacts = ExternalRefFacts.empty
       private var dataTables: Vector[RecordFacts] = Vector.empty
       private var chain: ChainSheetFacts = ChainSheetFacts.empty
+      private var emptyInline: EmptyInlineFacts = EmptyInlineFacts.empty
+      private val sstRefs = new SstRefBuilder(ctx.sst)
       private var cell: Option[CellObs] = None
+      // GH-567: the current t="s" cell's FIRST <v> text, buffered like the formula text below —
+      // a shared-string index is at most a handful of digits, so the mode stays O(1) in rows
+      private var sstIndexText: Option[java.lang.StringBuilder] = None
+      // GH-460: prefix → the URIs bound to it by the open elements (innermost first), maintained
+      // from the parser's prefix-mapping events — the SAX side of the DOM scope chain
+      private var prefixScopes: Map[String, List[String]] = Map.empty
       // Accumulates the current cell's FIRST <f> text across characters() chunks; the formula's
       // end-element finalizes leadingEquals (GH-456) and extOrdinals (GH-525) from the full text,
       // matching the DOM scanner's Elem.text. Bounded by Excel's formula-length limit, so the
@@ -938,9 +1150,21 @@ object WorkbookLint:
             xlfnFindings(part, xlfn, "formula"),
             extRefs,
             dataTables,
-            chain
+            chain,
+            emptyInlineFindings(part, emptyInline),
+            ignorable.result(),
+            dxfs.result(),
+            sstRefs.result()
           )
         )
+
+      override def startPrefixMapping(prefix: String, uri: String): Unit =
+        prefixScopes = prefixScopes.updated(prefix, uri :: prefixScopes.getOrElse(prefix, Nil))
+
+      override def endPrefixMapping(prefix: String): Unit =
+        prefixScopes = prefixScopes.get(prefix).map(_.drop(1)) match
+          case Some(rest) if rest.nonEmpty => prefixScopes.updated(prefix, rest)
+          case _ => prefixScopes - prefix
 
       override def startElement(
         uri: String,
@@ -949,6 +1173,16 @@ object WorkbookLint:
         atts: Attributes
       ): Unit =
         val label = if localName.nonEmpty then localName else qName
+        // GH-460: a root whose main namespace hangs off a generated prefix (`ns0:worksheet`)
+        if depth == 0 && uri == XmlUtil.nsSpreadsheetML then
+          generatedPrefixOf(qName).foreach(_ => ignorable += rootPrefixFinding(part, qName))
+        // GH-460: every mc:Ignorable token must be a prefix some open element declared; the DOM
+        // walk asks the element's scope chain, this asks the prefix-mapping stack — same answer
+        Option(atts.getValue(XmlUtil.nsMarkupCompatibility, "Ignorable")).foreach { value =>
+          val undeclared =
+            ignorableTokens(value).filterNot(tok => prefixScopes.get(tok).exists(_.nonEmpty))
+          if undeclared.nonEmpty then ignorable += ignorableFinding(part, label, value, undeclared)
+        }
         if depth == 0 then rootLabel = Some(label)
         else if depth == 1 then
           topPos += 1
@@ -965,9 +1199,12 @@ object WorkbookLint:
           cell = Some(
             CellObs(
               ref = Option(atts.getValue("", "r")).flatMap(ARef.parse(_).toOption),
+              cellType = Option(atts.getValue("", "t")),
               record = None,
               hasFormula = false,
-              hasValue = false,
+              hasV = false,
+              hasIs = false,
+              sstIndex = None,
               leadingEquals = false,
               extOrdinals = Set.empty,
               arrayRef = None
@@ -977,6 +1214,9 @@ object WorkbookLint:
           // GH-456: only the cell's first <f> is observed, matching domCellObs's headOption
           if label == "f" && cell.exists(!_.hasFormula) then
             formulaText = Some(new java.lang.StringBuilder)
+          // GH-567: the first <v> of a t="s" cell carries the shared-string index
+          if label == "v" && cell.exists(c => c.cellType.contains("s") && !c.hasV) then
+            sstIndexText = Some(new java.lang.StringBuilder)
           cell = cell.map { open =>
             if label == "f" && !open.hasFormula then
               open.copy(
@@ -990,7 +1230,8 @@ object WorkbookLint:
                   name => Option(atts.getValue("", name))
                 )
               )
-            else if label == "v" || label == "is" then open.copy(hasValue = true)
+            else if label == "v" then open.copy(hasV = true)
+            else if label == "is" then open.copy(hasIs = true)
             else open
           }
         refAttrNames.foreach { attr =>
@@ -998,6 +1239,14 @@ object WorkbookLint:
             bounds ++= refBoundsFindings(part, label, attr, value)
           }
         }
+        // PR #659 review: probe the dxf attributes only where the schema puts one, so the hot cell
+        // path (<row>/<c>/<v>/<f> of a million-row sheet) does no attribute lookups here
+        if dxfBearingLabels.contains(label) then
+          dxfAttrNames.foreach { attr =>
+            Option(atts.getValue("", attr)).foreach { value =>
+              dxfs ++= dxfFinding(part, label, attr, value, ctx.dxf)
+            }
+          }
         // GH-577: a child element inside an open formula-text element makes it a container (the
         // DOM scanner skips elements with element children); a nested formula-text element opens
         // its own capture in its place. The root element is never a site (the DOM walk needs a
@@ -1015,6 +1264,7 @@ object WorkbookLint:
 
       override def characters(ch: Array[Char], start: Int, length: Int): Unit =
         formulaText.foreach(_.append(ch, start, length))
+        sstIndexText.foreach(_.append(ch, start, length))
         xlfnCapture.foreach(_.text.append(ch, start, length))
 
       override def endElement(uri: String, localName: String, qName: String): Unit =
@@ -1037,12 +1287,17 @@ object WorkbookLint:
             )
           }
           formulaText = None
+        if label == "v" then
+          sstIndexText.foreach(sb => cell = cell.map(_.copy(sstIndex = sb.toString.toIntOption)))
+          sstIndexText = None
         if depth == 3 && label == "c" then
           cell.foreach { obs =>
             dataTables = observeCell(dataTables, obs)
             leadingEq = leadingEq.add(obs)
             extRefs = extRefs.add(obs)
             chain = chain.add(obs, chainCandidates)
+            emptyInline = emptyInline.add(obs)
+            sstRefs.add(obs)
           }
           cell = None
 
@@ -1052,18 +1307,32 @@ object WorkbookLint:
   // ===== Data-table record integrity (GH-442) =====
 
   /**
-   * One `<c>` element's data-table-relevant facts, produced identically by both scanners and folded
-   * in DOCUMENT ORDER so each mode sees the same record state at every cell.
+   * One `<c>` element's facts, produced identically by both scanners and folded in DOCUMENT ORDER
+   * so each mode sees the same record state at every cell: the data-table record (GH-442), the
+   * first `<f>`'s text-derived facts (GH-456, GH-525, GH-555), the `t` type with the presence of a
+   * `<v>` / `<is>` (GH-460), and the shared-string index of a `t="s"` cell (GH-567).
    */
   private final case class CellObs(
     ref: Option[ARef],
+    cellType: Option[String],
     record: Option[FormulaKind.DataTable],
     hasFormula: Boolean,
-    hasValue: Boolean,
+    hasV: Boolean,
+    hasIs: Boolean,
+    sstIndex: Option[Int],
     leadingEquals: Boolean,
     extOrdinals: Set[Int],
     arrayRef: Option[CellRange]
-  )
+  ):
+    def hasValue: Boolean = hasV || hasIs
+
+    /**
+     * GH-460: a string-typed cell with nothing to read — no `<is>` and no `<v>`. An `<is/>` with no
+     * text is NOT the class: it is an inline string that is present but empty, the empty string to
+     * every reader. A formula cell is never the class (its `<v>` is legitimately optional).
+     */
+    def emptyInline: Boolean =
+      cellType.exists(t => t == "inlineStr" || t == "str") && !hasFormula && !hasV && !hasIs
 
   /** Sample size for the aggregated leading-'=' finding: the first N offending cells (GH-456). */
   private val leadingEqualsSampleSize = 5
@@ -1225,8 +1494,8 @@ object WorkbookLint:
           part,
           LintCategory.XlfnMissing,
           facts.firstLocator.getOrElse(""),
-          s"${facts.count} $noun(s) $what — $consequence; a write heals the slot only when xl " +
-            "regenerates it (re-authoring identical text does not), see xl lint in " +
+          s"${facts.count} $noun(s) $what — $consequence; any in-memory write regenerating the " +
+            "worksheet (CF/DV) or workbook.xml (names) heals it, see xl lint in " +
             "docs/reference/cli.md"
         )
       )
@@ -1834,6 +2103,497 @@ object WorkbookLint:
       if n < 0 then acc
       else loop(n / 26 - 1, ('A' + (n % 26).toInt).toChar :: acc)
     loop(col0, Nil).mkString
+
+  // ===== GH-460: string-typed cells with nothing to read (openpyxl's value="") =====
+
+  /** Sample size shared by the GH-460 / GH-567 aggregated findings: the first N offenders. */
+  private val offenderSampleSize = 5
+
+  /** `first N: a, b, …` when the count exceeds the sample, else the whole sample. */
+  private def sampled(shown: Vector[String], count: Long): String =
+    if count > shown.size then s"first ${shown.size}: ${shown.mkString(", ")}, …"
+    else shown.mkString(", ")
+
+  /**
+   * Accumulated empty-inline facts for ONE part (GH-460): the offender count plus the first
+   * [[offenderSampleSize]] cells (ref and `t`) in document order — bounded by construction, like
+   * [[LeadingEqualsFacts]]. Folded identically by both scanners for parity.
+   */
+  private final case class EmptyInlineFacts(sample: Vector[(Option[ARef], String)], count: Long):
+    def add(obs: CellObs): EmptyInlineFacts =
+      if !obs.emptyInline then this
+      else
+        EmptyInlineFacts(
+          if sample.sizeIs < offenderSampleSize then
+            sample :+ (obs.ref, obs.cellType.getOrElse("inlineStr"))
+          else sample,
+          count + 1
+        )
+
+  private object EmptyInlineFacts:
+    val empty: EmptyInlineFacts = EmptyInlineFacts(Vector.empty, 0L)
+
+  /**
+   * GH-460: ONE finding per part for the `t="inlineStr"` / `t="str"` cells that carry neither an
+   * `<is>` nor a `<v>` — the shape openpyxl writes for `value=""`. Off-spec (an inlineStr's value
+   * lives in `<is>`), so strict readers reject the sheet; xl's in-memory reader used to be one of
+   * them and now reads the cell as blank, and any write that regenerates the sheet emits the blank
+   * without a `t`, healing the shape.
+   */
+  private def emptyInlineFindings(part: String, facts: EmptyInlineFacts): Vector[Finding] =
+    if facts.count == 0L then Vector.empty
+    else
+      val shown = facts.sample.map((r, _) => r.fold("<c>")(_.toA1))
+      val locator = facts.sample.headOption match
+        case Some((Some(r), t)) => s"""<c r="${r.toA1}" t="$t"/>"""
+        case Some((None, t)) => s"""<c t="$t"/>"""
+        case None => """<c t="inlineStr"/>"""
+      Vector(
+        Finding(
+          part,
+          LintCategory.EmptyInlineStr,
+          locator,
+          s"${facts.count} inlineStr/str cell(s) carry neither an <is> nor a <v> " +
+            s"(${sampled(shown, facts.count)}) — openpyxl writes this for value=\"\"; off-spec, " +
+            "so strict readers reject the sheet; xl reads such a cell as blank, and a write " +
+            "that regenerates the sheet heals the shape"
+        )
+      )
+
+  // ===== GH-460: mc:Ignorable prefixes declared on no ancestor =====
+
+  /**
+   * A serializer-generated prefix (`ns0`, `ns12`): ElementTree's default when none is registered.
+   */
+  private val generatedPrefix = "ns\\d+".r
+
+  /** The `nsN` prefix of a qualified name, if that is what it carries. */
+  private def generatedPrefixOf(qName: String): Option[String] =
+    val idx = qName.indexOf(':')
+    Option.when(idx > 0)(qName.substring(0, idx)).filter(generatedPrefix.matches)
+
+  private def ignorableTokens(value: String): Vector[String] =
+    value.split("\\s+").toVector.filter(_.nonEmpty).distinct
+
+  /**
+   * DOM side of the check (parity-pinned with the SAX prefix stack): every element carrying
+   * `mc:Ignorable` must find each listed prefix in its scope chain, and a root binding the main
+   * namespace to a generated prefix is the same signature. Used for workbook.xml and styles.xml
+   * (always DOM) and by [[scanElem]] for sheet-class and table parts.
+   */
+  private def ignorableFindingsOf(part: String, root: Elem): Vector[Finding] =
+    val rootFinding = Option(root.prefix)
+      .filter { p =>
+        generatedPrefix.matches(p) && Option(root.namespace).contains(XmlUtil.nsSpreadsheetML)
+      }
+      .map(p => rootPrefixFinding(part, s"$p:${root.label}"))
+      .toList
+    val undeclared = root.descendant_or_self.toVector.collect { case e: Elem => e }.flatMap { e =>
+      e.attribute(XmlUtil.nsMarkupCompatibility, "Ignorable").map(_.text).toList.flatMap { value =>
+        val missing = ignorableTokens(value).filter(tok => Option(e.scope.getURI(tok)).isEmpty)
+        Option.when(missing.nonEmpty)(ignorableFinding(part, e.label, value, missing))
+      }
+    }
+    rootFinding.toVector ++ undeclared
+
+  private def ignorableFinding(
+    part: String,
+    label: String,
+    value: String,
+    undeclared: Vector[String]
+  ): Finding =
+    Finding(
+      part,
+      LintCategory.IgnorableUndeclared,
+      s"""<$label mc:Ignorable="$value">""",
+      s"mc:Ignorable names prefix(es) declared on neither <$label> nor an ancestor " +
+        s"(${undeclared.mkString(", ")}) — the ElementTree re-serialization class: the " +
+        "declarations were re-prefixed away while the Ignorable list kept the old names; Excel " +
+        "cannot apply the compatibility rule and opens the part blank (the blank-tab class); " +
+        "declare each prefix on the element or drop it from the list"
+    )
+
+  private def rootPrefixFinding(part: String, qName: String): Finding =
+    Finding(
+      part,
+      LintCategory.IgnorableUndeclared,
+      s"<$qName>",
+      s"root element <$qName> binds the main SpreadsheetML namespace to a generated prefix — " +
+        "the ElementTree re-serialization signature (no register_namespace), the same " +
+        "round-trip that strips the declarations mc:Ignorable relies on. Excel and LibreOffice " +
+        "open a namespace-correct prefixed root intact (no repair), but no mainstream producer " +
+        "writes it and prefix-naive tooling misreads it; re-serialize with the default namespace " +
+        "Excel writes",
+      // a valid file every consumer opens intact: hygiene, not repair (the undeclared-Ignorable
+      // half above, which blanks the tab, stays a repair)
+      LintSeverity.Hygiene
+    )
+
+  // ===== GH-460: dxfId-family attributes past the <dxfs> table =====
+
+  /**
+   * The elements the schema gives a dxf attribute — `<cfRule dxfId>`, `<sortCondition dxfId>`,
+   * `<table …DxfId>`, `<tableColumn …DxfId>`. Both scanners probe [[dxfAttrNames]] on these only: a
+   * sheet's cells never carry one, and a lookup per cell element is measurable on a million-row
+   * sheet (PR #659 review).
+   */
+  private val dxfBearingLabels: Set[String] = Set("cfRule", "sortCondition", "table", "tableColumn")
+
+  /** Attributes indexing xl/styles.xml `<dxfs>`: CF rules, sort conditions, table styling. */
+  private val dxfAttrNames = Vector(
+    "dxfId",
+    "dataDxfId",
+    "headerRowDxfId",
+    "totalsRowDxfId",
+    "headerRowBorderDxfId",
+    "totalsRowBorderDxfId",
+    "tableBorderDxfId"
+  )
+
+  /** The `<dxfs>` table as read: its actual `<dxf>` child count and a phrase describing it. */
+  private final case class DxfTableFacts(count: Int, phrase: String)
+
+  /**
+   * xl/styles.xml as read for the dxfId rule (and the mc:Ignorable walk of its elements): the table
+   * when the part is absent (zero entries) or well-formed; `None` — with one finding — when it is
+   * not well-formed, so the rule stays silent rather than guessing (never a `Left`: the reader
+   * reports styles.xml parse errors on its own).
+   */
+  private final case class StylesFacts(
+    path: String,
+    dxfTable: Option[DxfTableFacts],
+    findings: Vector[Finding]
+  )
+
+  private def stylesFacts(wbRels: Relationships, parts: PartSource): XLResult[StylesFacts] =
+    val path = wbRels
+      .findByType(XmlUtil.relTypeStyles)
+      .map(rel => Relationships.resolveWorkbookTarget(rel.target))
+      .filter(parts.has)
+      .getOrElse(stylesPart)
+    parts.read(path).map {
+      case None =>
+        StylesFacts(path, Some(DxfTableFacts(0, "the package has no styles part")), Vector.empty)
+      case Some(xml) =>
+        XmlSecurity.parseSafe(xml, path) match
+          case Left(err) =>
+            StylesFacts(
+              path,
+              None,
+              Vector(
+                Finding(
+                  path,
+                  LintCategory.DxfIdOutOfRange,
+                  "<styleSheet>",
+                  s"$path is not well-formed XML (${err.message}) — dxfId references could not " +
+                    "be checked, and no reader can open the styles"
+                )
+              )
+            )
+          case Right(root) =>
+            val dxfs = childElems(root, "dxfs")
+            val count = dxfs.flatMap(childElems(_, "dxf")).size
+            val phrase =
+              if dxfs.isEmpty then s"$path has no <dxfs> table"
+              else s"$path <dxfs> holds $count <dxf> ${entryWord(count)}"
+            StylesFacts(path, Some(DxfTableFacts(count, phrase)), ignorableFindingsOf(path, root))
+    }
+
+  /**
+   * GH-460: a dxfId-family attribute whose value is not a valid index into the `<dxfs>` table — the
+   * class a writer produces when it carries conditional formatting across a fresh write without
+   * carrying the differential formats. Excel repairs the file on open and the rule's formatting is
+   * lost. Unknown table (malformed styles.xml) → no finding.
+   */
+  private def dxfFinding(
+    part: String,
+    elemLabel: String,
+    attrName: String,
+    value: String,
+    table: Option[DxfTableFacts]
+  ): Option[Finding] =
+    for
+      t <- table
+      id <- value.trim.toIntOption
+      if id < 0 || id >= t.count
+    yield
+      val valid = if t.count == 0 then "none" else s"0..${t.count - 1}"
+      Finding(
+        part,
+        LintCategory.DxfIdOutOfRange,
+        s"""<$elemLabel $attrName="$value">""",
+        s"""$attrName="$value" on <$elemLabel> indexes past the differential-format table — """ +
+          s"${t.phrase} (valid ids: $valid); Excel repairs the file on open and the formatting " +
+          "is lost"
+      )
+
+  // ===== GH-460: package reachability =====
+
+  /**
+   * Every zip entry must be reachable from `_rels/.rels` through the chain of `.rels` parts — the
+   * closure the writer's own removal GC walks, made generic over every rels in the package and
+   * complemented against the entry list. `.rels` parts, [Content_Types].xml and Excel's own
+   * `[trash]/` leftovers are never findings. A `.rels` in the closure that is not well-formed is
+   * ONE finding on that rels (its targets cannot be resolved), and the orphan report is withheld
+   * rather than flooding with everything behind it; a malformed root/workbook/sheet rels is a
+   * `Left` before this runs, as it always was.
+   */
+  private def reachabilityFindings(parts: PartSource, rootRels: Relationships): Vector[Finding] =
+    def internalTargets(rels: Relationships, baseDir: String): List[String] =
+      rels.relationships.toList
+        .filterNot(_.targetMode.contains("External"))
+        .map(rel => resolveTarget(baseDir, rel.target))
+
+    def brokenRels(relsPath: String, detail: String): Finding =
+      Finding(
+        relsPath,
+        LintCategory.UnreferencedPart,
+        "<Relationships>",
+        s"$relsPath is not well-formed XML ($detail) — its targets cannot be resolved, so " +
+          "package reachability was not checked; Excel cannot open the file"
+      )
+
+    @annotation.tailrec
+    def closure(
+      frontier: List[String],
+      reached: Set[String],
+      broken: Vector[Finding]
+    ): (Set[String], Vector[Finding]) =
+      frontier match
+        case Nil => (reached, broken)
+        case part :: rest if reached.contains(part) => closure(rest, reached, broken)
+        case part :: rest =>
+          val relsPath = siblingRelsPath(part)
+          val parsed = parts.read(relsPath).flatMap {
+            case None => Right(Relationships.empty)
+            case Some(xml) =>
+              XmlSecurity
+                .parseSafe(xml, relsPath)
+                .flatMap(e => Relationships.fromXml(e).left.map(XLError.ParseError(relsPath, _)))
+          }
+          parsed match
+            case Right(rels) =>
+              closure(internalTargets(rels, parentDir(part)) ++ rest, reached + part, broken)
+            case Left(err) =>
+              closure(rest, reached + part, broken :+ brokenRels(relsPath, err.message))
+
+    val (reached, broken) = closure(internalTargets(rootRels, ""), Set.empty, Vector.empty)
+    if broken.nonEmpty then broken
+    else
+      parts.entryNames.sorted
+        .filterNot { name =>
+          reached.contains(name) || name.endsWith(".rels") || name == contentTypesPart ||
+          name.startsWith("[trash]/")
+        }
+        .map { orphan =>
+          Finding(
+            orphan,
+            LintCategory.UnreferencedPart,
+            s"""<Relationship Target="/$orphan">""",
+            s"""part "$orphan" is present in the package but reachable from no relationship — """ +
+              "dead weight a producer left behind (or a forgotten Relationship); Excel ignores " +
+              "it, and its bytes travel with every copy of the file",
+            LintSeverity.Hygiene
+          )
+        }
+
+  // ===== GH-567: shared-string entries referenced by no cell =====
+
+  /** The shared-string table as counted: its `<si>` entries and a phrase describing it. */
+  private final case class SstTableFacts(count: Int, phrase: String)
+
+  /**
+   * xl/sharedStrings.xml as read once before the sheets: the part path, whether it is present, its
+   * table (zero entries when absent; `None` when not well-formed, which is one finding), and the
+   * unreadable detail. Counting is a SAX pass in BOTH lint modes — the table is the one part
+   * `--stream` already holds in memory elsewhere, and lint needs only its size.
+   */
+  private final case class SstFacts(
+    path: String,
+    present: Boolean,
+    table: Option[SstTableFacts],
+    unreadable: Option[String]
+  )
+
+  private def sharedStringFacts(wbRels: Relationships, parts: PartSource): XLResult[SstFacts] =
+    val path = wbRels
+      .findByType(XmlUtil.relTypeSharedStrings)
+      .map(rel => Relationships.resolveWorkbookTarget(rel.target))
+      .filter(parts.has)
+      .getOrElse(sharedStringsPart)
+    val absent = SstFacts(
+      path,
+      present = false,
+      Some(SstTableFacts(0, "the package has no shared-string part")),
+      None
+    )
+    if !parts.has(path) then Right(absent)
+    else
+      parts.openStream(path).flatMap {
+        case None => Right(absent)
+        case Some(stream) =>
+          val counted =
+            try SharedStringCounter.count(path, stream)
+            finally stream.close()
+          counted.map {
+            case Right(count) =>
+              SstFacts(
+                path,
+                present = true,
+                Some(SstTableFacts(count, s"$path holds $count <si> ${entryWord(count)}")),
+                None
+              )
+            case Left(detail) => SstFacts(path, present = true, None, Some(detail))
+          }
+      }
+
+  /** SAX count of the `<si>` children of `<sst>`; O(1) memory in the table size. */
+  private object SharedStringCounter:
+    import org.xml.sax.{Attributes, InputSource, SAXException}
+    import org.xml.sax.helpers.DefaultHandler
+
+    /** `Right(Right(n))` counted, `Right(Left(detail))` not well-formed, `Left` an I/O failure. */
+    def count(part: String, stream: InputStream): XLResult[Either[String, Int]] =
+      try
+        val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
+        val handler = new Counter
+        parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
+        Right(Right(handler.total))
+      catch
+        case e: SAXException => Right(Left(s"Malformed XML: ${e.getMessage}"))
+        case e: java.io.IOException =>
+          Left(XLError.IOError(s"Failed to read $part: ${e.getMessage}"))
+
+    @SuppressWarnings(Array("org.wartremover.warts.Var"))
+    private final class Counter extends DefaultHandler:
+      private var depth = 0
+      private var count = 0
+      def total: Int = count
+      override def startElement(
+        uri: String,
+        localName: String,
+        qName: String,
+        atts: Attributes
+      ): Unit =
+        val label = if localName.nonEmpty then localName else qName
+        if depth == 1 && label == "si" then count += 1
+        depth += 1
+      override def endElement(uri: String, localName: String, qName: String): Unit =
+        depth -= 1
+
+  /**
+   * Per-part shared-string reference facts (GH-567), collected identically by both scanners: the
+   * indices referenced by `t="s"` cells (a bit set bounded by the TABLE size, never the row count —
+   * an index past the table is counted, not stored), plus the first [[offenderSampleSize]]
+   * past-the-table cells with their index and the total. Unioned at workbook level for the orphan
+   * report. With an unreadable table nothing is recorded.
+   */
+  private final case class SstRefFacts(
+    referenced: BitSet,
+    pastSample: Vector[(Option[ARef], Int)],
+    pastCount: Long
+  )
+
+  /**
+   * Scan-local accumulator: building the bit set copies its backing words only at capacity growth,
+   * not for each new index. Repeated immutable `BitSet + index` made a scan of U distinct strings
+   * allocate O(U²) bytes. Neither scanner publishes the builder; the completed scan carries only
+   * its immutable result. Invalid indices never enter the builder, so even Int.MaxValue cannot
+   * enlarge its storage beyond the shared-string table.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private final class SstRefBuilder(table: Option[SstTableFacts]):
+    private val referenced = BitSet.newBuilder
+    private val pastSample = Vector.newBuilder[(Option[ARef], Int)]
+    private var pastCount = 0L
+
+    def add(obs: CellObs): Unit =
+      (obs.sstIndex, table) match
+        case (Some(idx), Some(t)) if idx >= 0 && idx < t.count =>
+          referenced += idx
+        case (Some(idx), Some(_)) =>
+          if pastCount < offenderSampleSize then pastSample += ((obs.ref, idx))
+          pastCount += 1
+        case _ => ()
+
+    def result(): SstRefFacts = SstRefFacts(referenced.result(), pastSample.result(), pastCount)
+
+  /**
+   * GH-567, per sheet part: `t="s"` indices the table does not hold. The reader maps such a cell to
+   * #REF! and Excel repairs the file. ONE finding per part.
+   */
+  private def sstIndexFindings(
+    part: String,
+    facts: SstRefFacts,
+    table: Option[SstTableFacts]
+  ): Vector[Finding] =
+    table match
+      case Some(t) if facts.pastCount > 0L =>
+        val shown = facts.pastSample.map((r, idx) => s"${r.fold("<c>")(_.toA1)} → $idx")
+        val (firstRef, firstIdx) = facts.pastSample.headOption.getOrElse((None, 0))
+        Vector(
+          Finding(
+            part,
+            LintCategory.SharedStringOrphan,
+            s"""<c r="${firstRef.fold("")(_.toA1)}" t="s"><v>$firstIdx</v>""",
+            s"${facts.pastCount} cell(s) reference a shared-string index past the table " +
+              s"(${sampled(shown, facts.pastCount)}) — ${t.phrase}; xl reads such a cell as " +
+              "#REF! and Excel repairs the file"
+          )
+        )
+      case _ => Vector.empty
+
+  /**
+   * GH-567, at workbook level: the table's entries no scanned sheet references, as ONE finding on
+   * the shared-string part carrying the orphan count and the first [[offenderSampleSize]] INDICES —
+   * never the text: a value scrubbed from every cell must not resurface in a lint log. A table that
+   * is not well-formed is one finding of the same category instead (nothing else about it can be
+   * checked). Not a repair class: Excel ignores orphans; the point is that the package still
+   * carries them.
+   */
+  private def sharedStringFindings(
+    sst: SstFacts,
+    perSheet: Iterable[SstRefFacts]
+  ): Vector[Finding] =
+    val unreadable = sst.unreadable.toList.toVector.map { detail =>
+      Finding(
+        sst.path,
+        LintCategory.SharedStringOrphan,
+        "<sst>",
+        s"${sst.path} is not well-formed XML ($detail) — every t=\"s\" cell is unreadable, and " +
+          "the shared-string checks did not run"
+      )
+    }
+    val orphans = sst.table.filter(_ => sst.present).toList.toVector.flatMap { t =>
+      val referenced = perSheet.foldLeft(BitSet.empty)(_ | _.referenced)
+      // the bit set only ever holds indices below the count, so its size is the exact usage
+      val orphanCount = t.count - referenced.size
+      if orphanCount <= 0 then Vector.empty
+      else
+        val sample =
+          (0 until t.count).iterator
+            .filterNot(referenced.contains)
+            .take(offenderSampleSize)
+            .toVector
+        val where =
+          if orphanCount == 1 then s"index: ${sample.mkString}"
+          else if orphanCount > sample.size then
+            s"first ${sample.size} indices: ${sample.mkString(", ")}, …"
+          else s"indices: ${sample.mkString(", ")}"
+        Vector(
+          Finding(
+            sst.path,
+            LintCategory.SharedStringOrphan,
+            s"<si> #${sample.headOption.getOrElse(0)}",
+            s"$orphanCount of ${t.count} shared string(s) are referenced by no cell ($where) — " +
+              "the text still rides in the package for every recipient (a value scrubbed from " +
+              "the cells survives here); xl never prunes a preserved table on write, see " +
+              "docs/LIMITATIONS.md for the rebuild",
+            LintSeverity.Hygiene
+          )
+        )
+    }
+    unreadable ++ orphans
 
   // ===== r:id resolution checks =====
 

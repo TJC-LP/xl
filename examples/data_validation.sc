@@ -39,11 +39,11 @@ val dataSheet = Sheet("Data")
   .put(ref"A5", CellValue.Number(BigDecimal(-5)))   // Invalid! Negative
 
   // Validation formulas
-  .put(ref"B1", CellValue.Formula("=IF(AND(A1>=0, A1<=100), \"Valid\", \"INVALID\")"))
-  .put(ref"B2", CellValue.Formula("=IF(AND(A2>=0, A2<=100), \"Valid\", \"INVALID\")"))
-  .put(ref"B3", CellValue.Formula("=IF(AND(A3>=0, A3<=100), \"Valid\", \"INVALID\")"))
-  .put(ref"B4", CellValue.Formula("=IF(AND(A4>=0, A4<=100), \"Valid\", \"INVALID\")"))
-  .put(ref"B5", CellValue.Formula("=IF(AND(A5>=0, A5<=100), \"Valid\", \"INVALID\")"))
+  .put(ref"B1", fx"=IF(AND(A1>=0, A1<=100), \"Valid\", \"INVALID\")")
+  .put(ref"B2", fx"=IF(AND(A2>=0, A2<=100), \"Valid\", \"INVALID\")")
+  .put(ref"B3", fx"=IF(AND(A3>=0, A3<=100), \"Valid\", \"INVALID\")")
+  .put(ref"B4", fx"=IF(AND(A4>=0, A4<=100), \"Valid\", \"INVALID\")")
+  .put(ref"B5", fx"=IF(AND(A5>=0, A5<=100), \"Valid\", \"INVALID\")")
 
   // Statistics
   .put(ref"C1", fx"=MIN(A1:A5)")
@@ -92,7 +92,7 @@ val incompleteSheet = Sheet("Incomplete")
   .put(ref"B2", fx"=COUNT(A1:A5)")
 
   // Validation
-  .put(ref"B3", CellValue.Formula("=IF(B2=B1, \"Complete\", \"MISSING DATA\")"))
+  .put(ref"B3", fx"=IF(B2=B1, \"Complete\", \"MISSING DATA\")")
 
 println("Data completeness check:")
 println("  Expected rows: 5")
@@ -130,10 +130,10 @@ val textSheet = Sheet("Text")
   .put(ref"B4", fx"=UPPER(A4)")
 
   // Length validation (minimum 10 characters)
-  .put(ref"C1", CellValue.Formula("=IF(LEN(A1)>=10, \"Valid\", \"TOO SHORT\")"))
-  .put(ref"C2", CellValue.Formula("=IF(LEN(A2)>=10, \"Valid\", \"TOO SHORT\")"))
-  .put(ref"C3", CellValue.Formula("=IF(LEN(A3)>=10, \"Valid\", \"TOO SHORT\")"))
-  .put(ref"C4", CellValue.Formula("=IF(LEN(A4)>=10, \"Valid\", \"TOO SHORT\")"))
+  .put(ref"C1", fx"=IF(LEN(A1)>=10, \"Valid\", \"TOO SHORT\")")
+  .put(ref"C2", fx"=IF(LEN(A2)>=10, \"Valid\", \"TOO SHORT\")")
+  .put(ref"C3", fx"=IF(LEN(A3)>=10, \"Valid\", \"TOO SHORT\")")
+  .put(ref"C4", fx"=IF(LEN(A4)>=10, \"Valid\", \"TOO SHORT\")")
 
 println("Text normalization results:")
 val textResults = textSheet.evaluateWithDependencyCheck() match

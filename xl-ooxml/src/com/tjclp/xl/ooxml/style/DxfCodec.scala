@@ -260,8 +260,8 @@ object DxfCodec:
     case Fill.Pattern(fg, bg, pattern) =>
       elem("fill")(
         elem("patternFill", "patternType" -> OoxmlStyles.patternTypeToken(pattern))(
-          colorToXml(fg).copy(label = "fgColor"),
-          colorToXml(bg).copy(label = "bgColor")
+          (fg.map(c => colorToXml(c).copy(label = "fgColor")).toList ++
+            bg.map(c => colorToXml(c).copy(label = "bgColor")).toList)*
         )
       )
 

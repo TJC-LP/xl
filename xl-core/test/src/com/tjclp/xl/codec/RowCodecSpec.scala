@@ -15,6 +15,7 @@ import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.styleSyntax.*
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.tables.TableSpec
 
 /** GH-590 (W2.9): records as rows — derived `RowCodec`, the Sheet entry points, and their laws. */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
@@ -79,6 +80,20 @@ class RowCodecSpec extends ScalaCheckSuite:
     f23: Option[Long]
   ) derives RowCodec
 
+  /** GH-614: headers an identifier cannot spell, as a SheetJS-authored tracker writes them. */
+  final case class Deal(
+    @header("Portfolio Co.") portfolioCo: String,
+    @header("Rev ($M)") rev: BigDecimal,
+    ebitda: Option[BigDecimal]
+  ) derives RowCodec
+
+  /** The unannotated twin of [[Deal]]: its headers are its field names. */
+  final case class DealPlain(portfolioCo: String, rev: BigDecimal, ebitda: Option[BigDecimal])
+      derives RowCodec
+
+  /** [[Deal]] behind a type alias: the annotations live on the class, not on the alias symbol. */
+  type DealAlias = Deal
+
   private val row1 = Row.from1(1)
 
   private val genOrder: Gen[Order] =
@@ -89,6 +104,15 @@ class RowCodecSpec extends ScalaCheckSuite:
       price <- Gen.choose(0L, 10_000_000L).map(cents => BigDecimal(cents) / 100)
       note <- Gen.option(Gen.alphaNumStr)
     yield Order(id, customer, qty, price, note)
+
+  private val genDeal: Gen[Deal] =
+    for
+      portfolioCo <- Gen.alphaNumStr
+      rev <- Gen.choose(0L, 10_000_000L).map(cents => BigDecimal(cents) / 100)
+      ebitda <- Gen.option(
+        Gen.choose(-1_000_000L, 1_000_000L).map(cents => BigDecimal(cents) / 100)
+      )
+    yield Deal(portfolioCo, rev, ebitda)
 
   private val genLocalDate: Gen[LocalDate] =
     Gen.choose(0L, 60000L).map(LocalDate.of(1905, 1, 1).plusDays)
@@ -578,7 +602,8 @@ class RowCodecSpec extends ScalaCheckSuite:
     assertEquals(table.range.toA1, "B2:F4")
     assertEquals(table.displayName, "Orders")
     assertEquals(table.columns.map(_.name), RowCodec[Order].fields)
-    assertEquals(table.autoFilter, None)
+    // GH-595: filter buttons, as Excel's own Format-as-Table puts them
+    assertEquals(table.autoFilter, Some(com.tjclp.xl.tables.TableAutoFilter(enabled = true)))
     assertEquals(placed.sheet.readRows[Order](table.dataRange), Right(rows))
   }
 
@@ -597,6 +622,316 @@ class RowCodecSpec extends ScalaCheckSuite:
     once.putTable(ref"H1", rows, "Orders") match
       case Left(XLError.InvalidTableName("Orders", _)) => ()
       case other => fail(s"expected a duplicate-name InvalidTableName, got $other")
+  }
+
+  // ========== Header overrides (GH-614) ==========
+
+  /** The issue's tracker: a header row no field name reaches, in a column order of its own. */
+  private val trackerSheet = Sheet("Tracker")
+    .put(ref"A1", "Rev ($M)")
+    .put(ref"B1", "EBITDA")
+    .put(ref"C1", "Portfolio Co.")
+    .put(ref"A2", BigDecimal("12.5"))
+    .put(ref"B2", BigDecimal("3.25"))
+    .put(ref"C2", "Acme")
+    .put(ref"A3", BigDecimal("40"))
+    .put(ref"C3", "Globex")
+
+  private val trackerDeals = Vector(
+    Deal("Acme", BigDecimal("12.5"), Some(BigDecimal("3.25"))),
+    Deal("Globex", BigDecimal("40"), None)
+  )
+
+  /** Not a literal: what `@header` must refuse. */
+  private def runtimeHeader: String = "Rev"
+
+  test("derived: @header renames the header, not the field; without it headers == fields") {
+    assertEquals(RowCodec[Deal].fields, Vector("portfolioCo", "rev", "ebitda"))
+    assertEquals(RowCodec[Deal].headers, Vector("Portfolio Co.", "Rev ($M)", "ebitda"))
+    assertEquals(RowCodec[Deal].width, 3)
+    assertEquals(RowCodec[DealPlain].headers, Vector("portfolioCo", "rev", "ebitda"))
+    assertEquals(RowCodec[Order].headers, RowCodec[Order].fields)
+  }
+
+  test("derived through a type alias keeps @header") {
+    // Mirror.ProductOf dealiases; the annotation read must too, or the alias derives field names
+    val viaAlias = RowCodec.derived[DealAlias]
+    assertEquals(viaAlias.headers, RowCodec[Deal].headers)
+    assertEquals(viaAlias.fields, RowCodec[Deal].fields)
+    // Without the dealias the alias codec derives field names and the tracker is HeaderNotFound
+    assertEquals(
+      trackerSheet.readRowsByHeader[Deal](row1)(using viaAlias),
+      Right(trackerDeals): Either[RowCodecError, Vector[Deal]]
+    )
+  }
+
+  property(
+    "law: readRowsByHeader(putRowsWithHeader(at, rows).headerRow) == Right(rows) with @header"
+  ) {
+    forAll(genAnchor, Gen.nonEmptyListOf(genDeal)) { (at, rowsList) =>
+      val rows = rowsList.toVector
+      val placed = right(Sheet("Law").putRowsWithHeader(at, rows))
+      (placed.sheet.columnHeaders(at.row).map(_._2) ?= RowCodec[Deal].headers) &&
+      (placed.sheet.readRowsByHeader[Deal](at.row) ?= Right(rows))
+    }
+  }
+
+  test("readRowsByHeader: the issue's header row decodes with @header, is HeaderNotFound without") {
+    // The repro: normalisation keeps punctuation, so no field name reaches these headers
+    assertEquals(trackerSheet.columnOf("rev", row1), None)
+    assertEquals(trackerSheet.columnOf("portfolioCo", row1), None)
+    assertEquals(trackerSheet.columnOf("Rev ($M)", row1), Some(Column.from0(0)))
+    assertEquals(trackerSheet.columnOf("rev ($m)", row1), Some(Column.from0(0)))
+    assertEquals(
+      trackerSheet.readRowsByHeader[DealPlain](row1),
+      Left(
+        RowCodecError.HeaderNotFound(
+          "portfolioCo",
+          row1,
+          Vector("Rev ($M)", "EBITDA", "Portfolio Co.")
+        )
+      ): Either[RowCodecError, Vector[DealPlain]]
+    )
+    // The override text is what is matched — exact, then normalised (`EBITDA` agrees with `ebitda`)
+    assertEquals(
+      trackerSheet.readRowsByHeader[Deal](row1),
+      Right(trackerDeals): Either[RowCodecError, Vector[Deal]]
+    )
+  }
+
+  test("readRowsByHeader: errors keep the field name; HeaderNotFound carries the header text") {
+    assertEquals(
+      trackerSheet.put(ref"A3", "n/a").readRowsByHeader[Deal](row1),
+      Left(
+        RowCodecError.Field(
+          Row.from1(3),
+          Column.from0(0),
+          "rev",
+          CodecError.TypeMismatch("BigDecimal", CellValue.Text("n/a"))
+        )
+      ): Either[RowCodecError, Vector[Deal]]
+    )
+    val noRev = Sheet("NoRev").put(ref"A1", "Portfolio Co.").put(ref"B1", "EBITDA")
+    assertEquals(
+      noRev.readRowsByHeader[Deal](row1),
+      Left(
+        RowCodecError.HeaderNotFound("Rev ($M)", row1, Vector("Portfolio Co.", "EBITDA"))
+      ): Either[RowCodecError, Vector[Deal]]
+    )
+  }
+
+  test("putTable: table columns are named after the headers and both reads round-trip") {
+    val placed = right(Sheet("T").putTable(ref"B2", trackerDeals, "Deals"))
+    val table = placed.sheet.getTable("Deals").get
+    assertEquals(table.columns.map(_.name), Vector("Portfolio Co.", "Rev ($M)", "ebitda"))
+    assertEquals(table.columns.map(_.name), RowCodec[Deal].headers)
+    assertEquals(placed.sheet.readRows[Deal](table.dataRange), Right(trackerDeals))
+    assertEquals(placed.sheet.readRowsByHeader[Deal](Row.from1(2)), Right(trackerDeals))
+  }
+
+  test("putRows/readRows are positional: headers play no part and no header cell is written") {
+    val placed = right(Sheet("Pos").putRows(ref"A1", trackerDeals))
+    assertEquals(placed.headerRange, None)
+    assertEquals(placed.sheet.cells.size, 5) // Globex has no ebitda
+    assertEquals(placed.dataRange.map(placed.sheet.readRows[Deal]), Some(Right(trackerDeals)))
+    // The unannotated twin reads the very same cells: only position matters here
+    assertEquals(
+      placed.dataRange.map(placed.sheet.readRows[DealPlain]),
+      Some(Right(trackerDeals.map(d => DealPlain(d.portfolioCo, d.rev, d.ebitda))))
+    )
+  }
+
+  test("withHeaders: renames headers, keeps fields, delegates read and write") {
+    val base = RowCodec[Order]
+    val renamed = right(RowCodec.derived[Order].withHeaders(Map("price" -> "Unit Price ($)")))
+    assertEquals(renamed.headers, Vector("id", "customer", "qty", "Unit Price ($)", "note"))
+    assertEquals(renamed.fields, base.fields)
+    assertEquals(renamed.width, 5)
+    val order = Order(7, "Acme", 2, BigDecimal("1.50"), Some("rush"))
+    assertEquals(renamed.write(order), base.write(order))
+    val cells =
+      right(Sheet("W").putRows(ref"A1", Vector(order))).sheet.cells.values.toVector
+        .sortBy(_.col.index0)
+    assertEquals(renamed.read(cells), base.read(cells))
+    assertEquals(renamed.read(cells), Right(order): Either[RowCodecError, Order])
+    // The empty map is the identity
+    assertEquals(right(base.withHeaders(Map.empty)).headers, base.headers)
+  }
+
+  test("withHeaders: as the given, the header row and the header match use the new text") {
+    // `RowCodec[Order]` here would summon the given defined on the next line: spell it `derived`
+    val base = RowCodec.derived[Order]
+    given RowCodec[Order] = right(base.withHeaders(Map("price" -> "Unit Price ($)")))
+    val order = Order(7, "Acme", 2, BigDecimal("1.50"), Some("rush"))
+    val placed = right(Sheet("Renamed").putRowsWithHeader(ref"A1", Vector(order)))
+    assertEquals(
+      placed.sheet.cells.get(ref"D1").map(_.value),
+      Some(CellValue.Text("Unit Price ($)"))
+    )
+    assertEquals(
+      placed.sheet.readRowsByHeader[Order](row1),
+      Right(Vector(order)): Either[RowCodecError, Vector[Order]]
+    )
+    // The plain codec no longer finds its `price` column under that header
+    assertEquals(
+      placed.sheet.readRowsByHeader[Order](row1)(using base),
+      Left(
+        RowCodecError.HeaderNotFound("price", row1, RowCodec[Order].headers)
+      ): Either[RowCodecError, Vector[Order]]
+    )
+  }
+
+  test("withHeaders: unknown field, blank header and duplicate headers are InvalidArgument") {
+    def refused(overrides: Map[String, String]): String =
+      RowCodec.derived[Order].withHeaders(overrides) match
+        case Left(XLError.InvalidArgument("RowCodec.withHeaders", reason)) => reason
+        case other => fail(s"expected InvalidArgument, got $other")
+    val unknown = refused(Map("nope" -> "x"))
+    assert(unknown.contains("'nope'"), unknown)
+    assert(unknown.contains("id, customer, qty, price, note"), unknown)
+    assert(refused(Map("id" -> "  ")).contains("blank"))
+    val collides = refused(Map("id" -> "customer"))
+    assert(collides.contains("'id'") && collides.contains("'customer'"), collides)
+    val twice = refused(Map("id" -> "Same", "qty" -> "Same"))
+    assert(twice.contains("'id'") && twice.contains("'qty'") && twice.contains("'Same'"), twice)
+    // Keys are Scala field names, matched exactly
+    assert(RowCodec.derived[Order].withHeaders(Map("Id" -> "x")).isLeft)
+  }
+
+  test("withHeaders layers on @header: annotated headers stay, the override fills the rest") {
+    val codec = right(RowCodec.derived[Deal].withHeaders(Map("ebitda" -> "EBITDA ($M)")))
+    assertEquals(codec.headers, Vector("Portfolio Co.", "Rev ($M)", "EBITDA ($M)"))
+    assertEquals(codec.fields, Vector("portfolioCo", "rev", "ebitda"))
+    // A second layer sees the first; a rename onto an annotated header is refused
+    assertEquals(
+      right(codec.withHeaders(Map("rev" -> "Revenue"))).headers,
+      Vector("Portfolio Co.", "Revenue", "EBITDA ($M)")
+    )
+    assert(RowCodec.derived[Deal].withHeaders(Map("ebitda" -> "Rev ($M)")).isLeft)
+    // The issue's row, verbatim: only the layered codec reads it
+    val sheet = trackerSheet.put(ref"B1", "EBITDA ($M)")
+    assertEquals(
+      sheet.readRowsByHeader[Deal](row1),
+      Left(
+        RowCodecError.HeaderNotFound(
+          "ebitda",
+          row1,
+          Vector("Rev ($M)", "EBITDA ($M)", "Portfolio Co.")
+        )
+      ): Either[RowCodecError, Vector[Deal]]
+    )
+    // A local given is in scope for its whole block, hence the nested one
+    locally {
+      given RowCodec[Deal] = codec
+      assertEquals(
+        sheet.readRowsByHeader[Deal](row1),
+        Right(trackerDeals): Either[RowCodecError, Vector[Deal]]
+      )
+    }
+  }
+
+  test("derived: a blank, duplicate or non-literal @header does not compile") {
+    val blank = compileErrors("""final case class B(@header("") a: Int) derives RowCodec""")
+    assert(blank.contains("blank"), blank)
+    val twice =
+      compileErrors(
+        """final case class D(@header("X") a: Int, @header("X") b: Int) derives RowCodec"""
+      )
+    assert(twice.contains("'a'") && twice.contains("'b'") && twice.contains("'X'"), twice)
+    val collides =
+      compileErrors("""final case class E(@header("x") a: Int, x: Int) derives RowCodec""")
+    assert(collides.contains("'a'") && collides.contains("'x'"), collides)
+    val dynamic =
+      compileErrors("final case class F(@header(runtimeHeader) a: Int) derives RowCodec")
+    assert(dynamic.contains("literal"), dynamic)
+  }
+
+  test("derived: headers the reader cannot tell apart do not compile, @header or not (GH-614)") {
+    // readRowsByHeader matches a header ignoring case, whitespace, `_` and `-`, so two such
+    // headers would bind ONE column to two fields (Col(5, 5) for a sheet headed `Unit Price`
+    // alone): the duplicate guard is keyed on the matcher's own key, not on exact text.
+    val spaced = compileErrors(
+      """final case class G(@header("Unit Price") unitPrice: Int, unit_price: Int) derives RowCodec"""
+    )
+    assert(spaced.contains("'unitPrice'") && spaced.contains("'unit_price'"), spaced)
+    assert(spaced.contains("'Unit Price'"), spaced)
+    val cased =
+      compileErrors("""final case class H(@header("Rev") rev0: Int, rev: Int) derives RowCodec""")
+    assert(cased.contains("'rev0'") && cased.contains("'rev'") && cased.contains("'Rev'"), cased)
+    val plain =
+      compileErrors("""final case class P(unitPrice: Int, unit_price: Int) derives RowCodec""")
+    assert(plain.contains("'unitPrice'") && plain.contains("'unit_price'"), plain)
+    // Punctuation is never dropped by the matcher, so these are distinct headers
+    final case class Fine(@header("Rev ($M)") revM: Int, rev: Int) derives RowCodec
+    assertEquals(RowCodec[Fine].headers, Vector("Rev ($M)", "rev"))
+  }
+
+  test("RowCodec.headerKey is the matcher's key: case, whitespace, '_' and '-' are ignored") {
+    assertEquals(RowCodec.headerKey("Unit Price"), "unitprice")
+    assertEquals(RowCodec.headerKey("unit_price"), RowCodec.headerKey("UNIT-PRICE"))
+    assertNotEquals(RowCodec.headerKey("Rev ($M)"), RowCodec.headerKey("rev"))
+    // What columnOf finds by key, the codec must refuse as a duplicate
+    val sheet = Sheet("S").put(ref"A1", "Unit Price")
+    assertEquals(sheet.columnOf("unit_price", Row.from1(1)), Some(ref"A1".col))
+  }
+
+  test("withHeaders: headers the reader cannot tell apart are InvalidArgument (GH-614)") {
+    def refused(overrides: Map[String, String]): String =
+      RowCodec.derived[Order].withHeaders(overrides) match
+        case Left(XLError.InvalidArgument("RowCodec.withHeaders", reason)) => reason
+        case other => fail(s"expected InvalidArgument, got $other")
+    val cased = refused(Map("id" -> "CUSTOMER"))
+    assert(cased.contains("'id'") && cased.contains("'customer'"), cased)
+    assert(cased.contains("'CUSTOMER'") && cased.contains("'customer'"), cased)
+    val spaced = refused(Map("id" -> "Cust omer"))
+    assert(spaced.contains("'id'") && spaced.contains("'customer'"), spaced)
+    val dashed = refused(Map("id" -> "Q-T-Y", "note" -> "q_t_y"))
+    assert(dashed.contains("'id'") && dashed.contains("'qty'") && dashed.contains("'note'"), dashed)
+    // Punctuation still distinguishes
+    assert(RowCodec.derived[Order].withHeaders(Map("id" -> "Customer ($)")).isRight)
+  }
+
+  test(
+    "putTable: column names Excel considers duplicates (case-insensitive) are refused (GH-614)"
+  ) {
+    // Excel table column names are unique case-insensitively (structured references are); a
+    // table carrying `Rev` and `rev` is repaired on open. Reachable only from a hand-written
+    // codec now that derived/withHeaders refuse the pair.
+    val codec = new RowCodec[(Int, Int)]:
+      def fields: Vector[String] = Vector("a", "b")
+      override def headers: Vector[String] = Vector("Rev", "rev")
+      def read(cells: Vector[Cell]): Either[RowCodecError, (Int, Int)] = Right((0, 0))
+      def write(a: (Int, Int)): Vector[(CellValue, Option[CellStyle])] =
+        Vector(
+          (CellValue.Number(BigDecimal(a._1)), None),
+          (CellValue.Number(BigDecimal(a._2)), None)
+        )
+    locally {
+      given RowCodec[(Int, Int)] = codec
+      Sheet("T").putTable(ref"A1", Vector((1, 2)), "T1") match
+        case Left(XLError.InvalidTableColumns(reason)) =>
+          assert(reason.contains("Rev") && reason.contains("rev"), reason)
+        case other => fail(s"expected InvalidTableColumns, got $other")
+    }
+    val range = CellRange(ref"A1", ref"B2")
+    TableSpec.fromColumnNames("T1", "T1", range, Vector("Rev", "rev")) match
+      case Left(XLError.InvalidTableColumns(reason)) => assert(reason.contains("Rev"), reason)
+      case other => fail(s"expected InvalidTableColumns, got $other")
+    assert(TableSpec.fromColumnNames("T1", "T1", range, Vector("Rev", "Rev ($M)")).isRight)
+  }
+
+  test("a hand-written codec has headers == fields by default; withHeaders renames them") {
+    val codec = new RowCodec[Int]:
+      def fields: Vector[String] = Vector("a", "b")
+      def read(cells: Vector[Cell]): Either[RowCodecError, Int] = Right(0)
+      def write(a: Int): Vector[(CellValue, Option[CellStyle])] =
+        Vector.fill(2)((CellValue.Number(BigDecimal(a)), None))
+    assertEquals(codec.headers, Vector("a", "b"))
+    val renamed = right(codec.withHeaders(Map("a" -> "A ($)")))
+    assertEquals(renamed.headers, Vector("A ($)", "b"))
+    assertEquals(renamed.fields, Vector("a", "b"))
+    assertEquals(renamed.width, 2)
+    assertEquals(renamed.write(3), codec.write(3))
   }
 
   // ========== Errors ==========

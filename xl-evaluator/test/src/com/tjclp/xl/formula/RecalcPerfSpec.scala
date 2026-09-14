@@ -6,7 +6,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.eval.IterativeCalc
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 import munit.FunSuite
 
 /**
@@ -220,3 +220,63 @@ class RecalcPerfSpec extends FunSuite:
       elapsedMs < BudgetMs,
       s"transitiveDependents took ${elapsedMs}ms (budget ${BudgetMs}ms)"
     )
+
+  /**
+   * GH-537 tripwire: a cycle member that fails every round (a host failure, not an error value)
+   * used to pin its component at `maxIter` — `converged` demanded a `Right` from every member, so
+   * the loop replayed an identical round 100,000 times. Once a round reproduces the previous one
+   * exactly, every further round is a deterministic replay (pinned clock, no fresh randomness): the
+   * engine must stop there and report the component as stalled, in a handful of rounds.
+   */
+  test("GH-537: a permanently failing member stalls its component instead of burning maxIter"):
+    val wb = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(ARef.from0(0, 0), formula("=B1*0.5+10"))
+        .put(ARef.from0(1, 0), formula("=A1*0.5+Nowhere!A1"))
+    )
+    val t0 = System.nanoTime()
+    val result = wb.recalculate(IterativeCalc(100000, BigDecimal("1E-9")))
+    val elapsedMs = (System.nanoTime() - t0) / 1000000L
+    assert(!result.converged, "a failing member never converges")
+    assert(
+      result.cycles.forall(c => c.stalled && c.rounds <= 3),
+      s"expected an early stall, got ${result.cycles.map(_.render)}"
+    )
+    assert(elapsedMs < BudgetMs, s"stalled fixpoint took ${elapsedMs}ms (budget ${BudgetMs}ms)")
+
+  /**
+   * GH-537 tripwire: `dynamicCells(workbook)` classified every defined name once PER SHEET and
+   * parsed its definition on every visit — sheets × names work (34× on a 96k-name field book) for
+   * names whose verdict cannot depend on the reading sheet at all. A name with no sheet-scoped
+   * variant and a name-free definition is classified once, and a parse memo keyed on the definition
+   * text bounds parsing by the number of DISTINCT definitions, not sheets × names.
+   *
+   * The pin is STRUCTURAL: the pre-fix algorithm ran this fixture in well under a second, so no
+   * wall-clock budget can tell the two apart. `dynamicCellsTraced` counts the parses and the name
+   * classifications the run performs; they must be linear in the names, not in sheets × names.
+   */
+  private val NameSheets = 40
+  private val StaticNames = 5000
+
+  test(
+    "GH-537: dynamicCells on 40 sheets x 5,000 static names parses and classifies each name once"
+  ):
+    val sheets = (1 to NameSheets).map { s =>
+      Sheet(SheetName.unsafe(s"S$s"))
+        .put(ARef.from0(0, 0), num(BigDecimal(1)))
+        .put(ARef.from0(1, 0), formula("=name1*2+name4999"))
+    }.toVector
+    val names = (1 to StaticNames).map { i =>
+      DefinedName(s"name$i", s"S1!$$A$$$i:$$A$$${i + 9}*1.05+SUM(S1!$$B$$1:$$B$$50)")
+    }.toVector
+    val base = Workbook(sheets)
+    val wb = base.copy(metadata = base.metadata.copy(definedNames = names))
+    val trace = DependencyGraph.dynamicCellsTraced(wb)
+    assertEquals(trace.cells, Set.empty[DependencyGraph.QualifiedRef])
+    assertEquals(DependencyGraph.dynamicCells(wb), trace.cells)
+    // One parse per distinct definition and one classification per name — the cell formulas are
+    // never parsed, since no name is dynamic and the candidate pre-filter skips them. The
+    // sheets × names algorithm did 200,000 of each.
+    assertEquals(trace.parses, StaticNames, "parses must not scale with the sheet count")
+    assertEquals(trace.classifications, StaticNames, "classifications must not scale with sheets")
+    assert(trace.parses < NameSheets * StaticNames / 10, s"${trace.parses} parses: sheets x names")

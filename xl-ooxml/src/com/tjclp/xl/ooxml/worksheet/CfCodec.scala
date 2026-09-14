@@ -76,6 +76,29 @@ object CfCodec:
     blocks.toVector.map(parseBlock(_, dxfs))
 
   /**
+   * GH-593: does any formula text in these source blocks — a `<formula>` under a `<cfRule>`, a
+   * `<cfvo type="formula">` val — still lack its storage prefix? The writer's CLEAN gate compares
+   * models, and bare `IFS(` parses to the same model as `_xlfn.IFS(`; this is the storage-form half
+   * of that gate, built on the lint's rule ([[FormulaStorage.bareFutureCalls]]) so gate and lint
+   * agree by construction. Total; false on every Excel-authored block, so those ride verbatim.
+   */
+  def needsStorageHealing(blocks: Seq[Elem]): Boolean =
+    def bare(text: String): Boolean = FormulaStorage.bareFutureCalls(text).nonEmpty
+    def elems(e: Elem): Vector[Elem] = childElems(e).getOrElse(Vector.empty)
+    def bareFormula(rule: Elem): Boolean = elems(rule).exists { child =>
+      child.label == "formula" && bare(XmlUtil.getTextPreservingWhitespace(child))
+    }
+    def bareCfvo(rule: Elem): Boolean = (rule \\ "cfvo").exists { cfvo =>
+      val attrs = cfvo.attributes.asAttrMap
+      attrs.get("type").contains("formula") && attrs
+        .get("val")
+        .exists(v => bare(v.stripPrefix("=")))
+    }
+    blocks.exists(block =>
+      elems(block).exists(rule => rule.label == "cfRule" && (bareFormula(rule) || bareCfvo(rule)))
+    )
+
+  /**
    * Scope-self-contained canonical capture (the DrawingReader.Preserved pattern). `inheritedScope`
    * supplies bindings the reader's BLOCK-level rebind severed from the element's own chain:
    * WorksheetReader hoists used prefixes onto the block root and cleans descendant scopes, so a

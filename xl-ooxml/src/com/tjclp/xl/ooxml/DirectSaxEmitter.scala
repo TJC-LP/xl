@@ -63,6 +63,8 @@ object DirectSaxEmitter:
    *   Optional tableParts XML element
    * @param escapeFormulas
    *   If true, escape text values starting with =, +, -, @ to prevent formula injection
+   * @param legacyDrawingRelId
+   *   The r:id of the sheet's vmlDrawing relationship, as planned by the writer (GH-557)
    */
   def emitWorksheet(
     writer: SaxWriter,
@@ -70,7 +72,8 @@ object DirectSaxEmitter:
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int],
     tablePartsXml: Option[scala.xml.Elem] = None,
-    escapeFormulas: Boolean = false
+    escapeFormulas: Boolean = false,
+    legacyDrawingRelId: String = "rId2"
   ): Unit =
     writer.startDocument()
     writer.startElement("worksheet")
@@ -125,7 +128,7 @@ object DirectSaxEmitter:
       mergeHeaderFooterElem(None, sheet.pageSetup).foreach(writer.writeElem)
 
       // Emit legacyDrawing if comments are present
-      emitLegacyDrawing(writer, sheet)
+      emitLegacyDrawing(writer, sheet, legacyDrawingRelId)
 
       // Emit tableParts if provided
       tablePartsXml.foreach(writer.writeElem)
@@ -582,10 +585,10 @@ object DirectSaxEmitter:
   /**
    * Emit legacyDrawing element for comments.
    */
-  private def emitLegacyDrawing(writer: SaxWriter, sheet: Sheet): Unit =
+  private def emitLegacyDrawing(writer: SaxWriter, sheet: Sheet, relId: String): Unit =
     if sheet.comments.nonEmpty then
       writer.startElement("legacyDrawing")
-      writer.writeAttribute("r:id", "rId2")
+      writer.writeAttribute("r:id", relId)
       writer.endElement()
 
   /**

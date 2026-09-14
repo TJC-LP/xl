@@ -2,7 +2,7 @@ package com.tjclp.xl.render
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.display.NumFmtFormatter
+import com.tjclp.xl.display.{FormatCodeParser, NumFmtFormatter}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
@@ -11,6 +11,53 @@ import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 import scala.util.boundary, boundary.break
+
+/**
+ * What a cell lays out as once its number format is applied.
+ *
+ * The three overflow decisions — whether a too-wide value hashes, how General alignment anchors it,
+ * and how wide it is when sizing an overflow span — are taken from this kind and its text, never
+ * from the raw `CellValue`: the renderers draw the formatted text, so deciding from the raw value
+ * measures one string and rules on another (GH-500, GH-501, GH-502).
+ */
+enum RenderedKind derives CanEqual:
+  /** A number or date under a numeric format: right-aligned, `####` when too wide. */
+  case Numeric
+
+  /** Text, rich text, an uncached formula's source, or a number under a text-only format. */
+  case Text
+
+  /** `TRUE` / `FALSE`: centred, `####` when too wide. */
+  case Bool
+
+  /** An Excel error code such as `#DIV/0!`: centred like a logical, `####` when too wide. */
+  case Error
+
+  /** Nothing to draw. */
+  case Empty
+
+/** The effective rendered content of a cell: its [[RenderedKind]] and the text it draws. */
+final case class RenderedContent(kind: RenderedKind, text: String)
+
+/**
+ * A cell with its style and [[RenderedContent]] resolved — once, at the top of a renderer's
+ * per-cell path. Every decision that follows (overflow span, anchor, `####`, the text itself) reads
+ * these, and resolving re-formats the value and re-parses a Custom format code, so the renderers
+ * thread this through instead of resolving at each decision.
+ */
+final case class ResolvedCell(cell: Cell, style: Option[CellStyle], content: RenderedContent):
+  /** The cell's number format: the style's, or General. */
+  def numFmt: NumFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
+
+  /** The alignment the renderers anchor by (see [[RenderUtils.resolveHAlign]]). */
+  def align: HAlign = RenderUtils.resolveHAlign(style, content)
+
+object ResolvedCell:
+  /** Resolve `cell` against `sheet`'s style registry. */
+  def apply(cell: Cell, sheet: Sheet): ResolvedCell =
+    val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+    val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
+    ResolvedCell(cell, style, RenderUtils.renderedContent(cell.value, numFmt))
 
 /**
  * Shared utilities for rendering.
@@ -75,19 +122,30 @@ object RenderUtils:
     val boldFactor = if font.exists(_.bold) then 1.1 else 1.0
     (text.length * baseCharWidth * sizeFactor * boldFactor).toInt
 
-  /** Measure text width for a CellValue, handling rich text runs. */
-  def measureCellValueWidth(value: CellValue, font: Option[Font]): Int = value match
-    case CellValue.RichText(rt) =>
-      rt.runs.map(run => measureTextWidth(run.text, run.font.orElse(font))).sum
-    case CellValue.Formula(_, Some(cached), _) =>
-      measureCellValueWidth(cached, font)
-    case CellValue.Empty => 0
-    case CellValue.Text(s) => measureTextWidth(s, font)
-    case CellValue.Number(n) => measureTextWidth(n.toString, font)
-    case CellValue.Bool(b) => measureTextWidth(if b then "TRUE" else "FALSE", font)
-    case CellValue.DateTime(dt) => measureTextWidth(dt.toString, font)
-    case CellValue.Error(e) => measureTextWidth(e.toString, font)
-    case _ => 0
+  /**
+   * Measure the width of what a value draws under a number format. Rich text sums its runs (each
+   * carries its own font); everything else measures its formatted text — `$1,234.50` rather than
+   * `1234.5`, `0.12` rather than `0.123456789`, `#DIV/0!` rather than the enum case name — because
+   * that is the string the renderers emit (GH-502).
+   */
+  def measureCellValueWidth(value: CellValue, numFmt: NumFmt, font: Option[Font]): Int =
+    measureContentWidth(value, renderedContent(value, numFmt), font)
+
+  /** [[measureCellValueWidth]] with the content already resolved (`content` is `value`'s). */
+  private def measureContentWidth(
+    value: CellValue,
+    content: RenderedContent,
+    font: Option[Font]
+  ): Int =
+    value match
+      case CellValue.RichText(rt) =>
+        rt.runs.map(run => measureTextWidth(run.text, run.font.orElse(font))).sum
+      case CellValue.Formula(_, Some(cached), _) => measureContentWidth(cached, content, font)
+      case _ => measureTextWidth(content.text, font)
+
+  /** [[measureCellValueWidth]] under the General number format. */
+  def measureCellValueWidth(value: CellValue, font: Option[Font]): Int =
+    measureCellValueWidth(value, NumFmt.General, font)
 
   // ========== Text Overflow Calculation ==========
 
@@ -133,13 +191,16 @@ object RenderUtils:
   /**
    * Calculate overflow colspan for a cell with text that exceeds its width.
    *
-   * For left-aligned/general cells, counts empty cells to the right until:
+   * Only TEXT overflows. A number, date, logical or error never borrows a neighbour, however empty
+   * and whatever the cell's alignment: Excel confines it to its own column and shows `####` when it
+   * does not fit (GH-459, GH-500). For left/centre-aligned text, counts empty cells to the right
+   * until:
    *   - A non-empty cell is reached
    *   - The accumulated width covers the text overflow
    *   - The range boundary is reached
    *
    * @param cell
-   *   The cell to check for overflow
+   *   The cell to check for overflow, with its style and rendered content resolved
    * @param cellRef
    *   The cell reference
    * @param cellWidth
@@ -156,7 +217,7 @@ object RenderUtils:
    *   The colspan (1 if no overflow, >1 if overflowing into adjacent cells)
    */
   def calculateOverflowColspan(
-    cell: com.tjclp.xl.cells.Cell,
+    cell: ResolvedCell,
     cellRef: ARef,
     cellWidth: Int,
     colWidths: IndexedSeq[Int],
@@ -167,25 +228,29 @@ object RenderUtils:
     import scala.util.boundary, boundary.break
 
     boundary:
-      val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+      val style = cell.style
 
       // If wrapText is true, text wraps instead of overflowing
       if style.exists(_.align.wrapText) then break(1)
 
+      // A kind that hashes never spans: Excel draws a too-wide number, date, logical or error
+      // as #### inside its own column, empty neighbour or not, Left/Center alignment or not.
+      // Gating here — before the alignment match — is what lets hashOverflowText see the
+      // cell's OWN width instead of an already widened span (GH-500).
+      if hashesOnOverflow(cell.content.kind) then break(1)
+
       val font = style.map(_.font)
-      val textWidth = measureCellValueWidth(cell.value, font)
+      // Size the span from what the renderers DRAW — the formatted text — never the raw value:
+      // a rounding format must not claim neighbours for digits it never shows, and a widening
+      // one must get the room its text needs (GH-502).
+      val textWidth = measureContentWidth(cell.cell.value, cell.content, font)
 
       // If text fits within cell, no overflow needed
       if textWidth <= cellWidth then break(1)
 
-      // Determine overflow direction based on alignment. General resolves through
-      // contentBasedAlignment — the same resolution the renderers use when they anchor the
-      // text — so a General-aligned number takes the right-aligned (clip, then hash) path
-      // instead of bleeding its digits across empty neighbours (GH-459).
-      val align = style.map(_.align.horizontal).getOrElse(HAlign.General) match
-        case HAlign.General => contentBasedAlignment(cell.value)
-        case other => other
-      align match
+      // Determine overflow direction based on alignment: the same resolution the renderers use
+      // when they anchor the text.
+      cell.align match
         case HAlign.Left | HAlign.General =>
           // Overflow to the right (General alignment for text behaves like Left)
           countEmptyToRight(cellRef, cellWidth, colWidths, sheet, startCol, endCol, textWidth)
@@ -199,6 +264,26 @@ object RenderUtils:
           1
         case _ =>
           1
+
+  /** [[calculateOverflowColspan]] resolving `cell`'s style and content against `sheet` first. */
+  def calculateOverflowColspan(
+    cell: Cell,
+    cellRef: ARef,
+    cellWidth: Int,
+    colWidths: IndexedSeq[Int],
+    sheet: Sheet,
+    startCol: Int,
+    endCol: Int
+  ): Int =
+    calculateOverflowColspan(
+      ResolvedCell(cell, sheet),
+      cellRef,
+      cellWidth,
+      colWidths,
+      sheet,
+      startCol,
+      endCol
+    )
 
   /**
    * Count how many adjacent empty cells to the right can accommodate text overflow.
@@ -242,13 +327,13 @@ object RenderUtils:
   // ========== Numeric Overflow Marker (####) ==========
 
   /**
-   * Values Excel replaces with `#` when they do not fit: numbers and dates. Text is never hashed —
-   * it bleeds into empty neighbours or clips, which loses no information the reader can misread.
+   * Kinds Excel replaces with `#` when they do not fit: numbers and dates (GH-459), logicals and
+   * errors (GH-500). Text is never hashed — it bleeds into empty neighbours or clips, which loses
+   * no information the reader can misread — and a number under a text-only format IS text (GH-501).
    */
-  private def hashesOnOverflow(value: CellValue): Boolean = value match
-    case CellValue.Number(_) | CellValue.DateTime(_) => true
-    case CellValue.Formula(_, Some(cached), _) => hashesOnOverflow(cached)
-    case _ => false
+  private def hashesOnOverflow(kind: RenderedKind): Boolean = kind match
+    case RenderedKind.Numeric | RenderedKind.Bool | RenderedKind.Error => true
+    case RenderedKind.Text | RenderedKind.Empty => false
 
   /**
    * The pixel box a cell's text actually occupies inside its clip, given the alignment the
@@ -265,11 +350,8 @@ object RenderUtils:
    * cells: HTML's geometry differs (no horizontal padding on data cells, `padding-left` for indent)
    * but the decision must not.
    */
-  private def textBoxWidth(value: CellValue, style: Option[CellStyle], cellWidth: Int): Int =
+  private def textBoxWidth(align: HAlign, style: Option[CellStyle], cellWidth: Int): Int =
     val indentPx = style.map(_.align.indent).getOrElse(0) * IndentPxPerLevel
-    val align = style.map(_.align.horizontal).getOrElse(HAlign.General) match
-      case HAlign.General => contentBasedAlignment(value)
-      case other => other
     val box = align match
       case HAlign.Right => cellWidth
       case HAlign.Center | HAlign.CenterContinuous => cellWidth - indentPx
@@ -277,21 +359,22 @@ object RenderUtils:
     math.max(0, box)
 
   /**
-   * Excel's `####` overflow marker for a numeric or date cell whose formatted text is wider than
-   * the space it renders in.
+   * Excel's `####` overflow marker for a numeric, date, logical or error cell whose formatted text
+   * is wider than the space it renders in.
    *
    * Clipping a numeral is not a cosmetic defect: shearing the leading digits off `1,234,567.9`
    * leaves `4,567.9`, a different number that still looks like a real one (GH-459). Excel refuses
    * to show a partial numeral and fills the column with `#` instead. The cut is just as misleading
    * from the other end: a left-aligned or indented number whose tail runs past the clip renders
    * `1234567.9` as `1234`, so the fit is tested against the cell's real text box (`textBoxWidth`),
-   * not against the whole column.
+   * not against the whole column. `TRUE` and `#DIV/0!` get the same treatment (GH-500): Excel
+   * hashes them too, and a clipped `#DIV/0!` is a fragment no reader can place.
    *
-   * The decision is taken from the value and its style rather than from renderer-local text, so SVG
-   * and HTML hash the same cells with the same marker.
+   * The decision is taken from the value's rendered content and its style rather than from
+   * renderer-local text, so SVG and HTML hash the same cells with the same marker.
    *
-   * @param value
-   *   the cell's value — only numbers, dates, and formulas cached to one hash
+   * @param content
+   *   the cell's rendered content — hashed when its kind is Numeric, Bool or Error
    * @param style
    *   the cell's resolved style: number format, font, alignment, indent and wrapText
    * @param availableWidth
@@ -300,17 +383,16 @@ object RenderUtils:
    *   the `#` run to render in place of the text, or None to render the text unchanged
    */
   def hashOverflowText(
-    value: CellValue,
+    content: RenderedContent,
     style: Option[CellStyle],
     availableWidth: Int
   ): Option[String] =
     val wrapText = style.exists(_.align.wrapText)
-    if wrapText || availableWidth <= 0 || !hashesOnOverflow(value) then None
+    if wrapText || availableWidth <= 0 || !hashesOnOverflow(content.kind) then None
     else
       val font = style.map(_.font)
-      val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
-      val text = cellValueToText(value, numFmt)
-      val box = textBoxWidth(value, style, availableWidth)
+      val text = content.text
+      val box = textBoxWidth(resolveHAlign(style, content), style, availableWidth)
       if text.isEmpty || measureTextWidth(text, font) <= box then None
       else
         // The marker must itself fit where the text would have gone: bounded by the cell's
@@ -320,6 +402,15 @@ object RenderUtils:
         // At least one '#': a column too narrow for even one marker must still refuse to
         // show digits.
         Some("#" * math.max(1, innerWidth / hashWidth))
+
+  /** [[hashOverflowText]] resolving `value`'s content under `style`'s number format first. */
+  def hashOverflowText(
+    value: CellValue,
+    style: Option[CellStyle],
+    availableWidth: Int
+  ): Option[String] =
+    val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
+    hashOverflowText(renderedContent(value, numFmt), style, availableWidth)
 
   // ========== Escaping ==========
 
@@ -387,12 +478,59 @@ object RenderUtils:
 
   // ========== Common Rendering Logic ==========
 
-  /** Determine default horizontal alignment based on cell value type (Excel's General behavior). */
-  def contentBasedAlignment(value: CellValue): HAlign = value match
-    case CellValue.Number(_) | CellValue.DateTime(_) => HAlign.Right
-    case CellValue.Bool(_) => HAlign.Center
-    case CellValue.Formula(_, Some(cached), _) => contentBasedAlignment(cached)
-    case _ => HAlign.Left
+  /**
+   * Resolve the effective rendered content of a value under a number format — the one input to
+   * every overflow decision and the text both renderers draw (`cellValueToText` is this `.text`).
+   *
+   * A formula resolves through its cached value, or to its source when uncached. A number or date
+   * under a text-only format (`@`, or a Custom code with no numeric section) is Text: Excel shows
+   * its General digits but lays the cell out as text — left-aligned, overflowing into empty
+   * neighbours, never `####` (GH-501). A 4-section code whose last arm is `@` is still Numeric.
+   */
+  def renderedContent(value: CellValue, numFmt: NumFmt): RenderedContent = value match
+    case CellValue.RichText(rt) => RenderedContent(RenderedKind.Text, rt.toPlainText)
+    case CellValue.Empty => RenderedContent(RenderedKind.Empty, "")
+    case CellValue.Formula(_, Some(cached), _) => renderedContent(cached, numFmt)
+    case CellValue.Formula(expr, None, _) => RenderedContent(RenderedKind.Text, s"=$expr")
+    case CellValue.Text(_) =>
+      RenderedContent(RenderedKind.Text, NumFmtFormatter.formatValue(value, numFmt))
+    case CellValue.Bool(_) =>
+      RenderedContent(RenderedKind.Bool, NumFmtFormatter.formatValue(value, numFmt))
+    case CellValue.Error(_) =>
+      RenderedContent(RenderedKind.Error, NumFmtFormatter.formatValue(value, numFmt))
+    case CellValue.Number(_) | CellValue.DateTime(_) =>
+      val kind = if isTextOnlyFormat(numFmt) then RenderedKind.Text else RenderedKind.Numeric
+      RenderedContent(kind, NumFmtFormatter.formatValue(value, numFmt))
+
+  /** `@`, or a Custom code with no numeric section: Excel lays a number out as text under it. */
+  private def isTextOnlyFormat(numFmt: NumFmt): Boolean = numFmt match
+    case NumFmt.Text => true
+    case NumFmt.Custom(code) => FormatCodeParser.parse(code).exists(FormatCodeParser.isTextOnly)
+    case _ => false
+
+  /**
+   * Excel's General alignment by rendered kind: numbers and dates right, logicals AND errors
+   * centred, text left. Errors used to fall to Left, which is where `#DIV/0!` was anchored and
+   * clipped (GH-500).
+   */
+  def alignmentFor(kind: RenderedKind): HAlign = kind match
+    case RenderedKind.Numeric => HAlign.Right
+    case RenderedKind.Bool | RenderedKind.Error => HAlign.Center
+    case RenderedKind.Text | RenderedKind.Empty => HAlign.Left
+
+  /**
+   * The horizontal alignment the renderers anchor by: the style's explicit alignment, or General
+   * resolved from the rendered content. Both renderers and every overflow decision go through here,
+   * so a cell cannot be anchored one way and hashed or spanned another.
+   */
+  def resolveHAlign(style: Option[CellStyle], content: RenderedContent): HAlign =
+    style.map(_.align.horizontal).getOrElse(HAlign.General) match
+      case HAlign.General => alignmentFor(content.kind)
+      case explicit => explicit
+
+  /** General alignment of a value under the General number format (see [[alignmentFor]]). */
+  def contentBasedAlignment(value: CellValue): HAlign =
+    alignmentFor(renderedContent(value, NumFmt.General).kind)
 
   /** Calculate column widths for a range, respecting sheet properties. */
   def calculateColumnWidths(
@@ -446,13 +584,9 @@ object RenderUtils:
         )
       (baseHeight * scaleFactor).toInt
 
-  /** Get cell value as plain text with formatting. */
-  def cellValueToText(value: CellValue, numFmt: NumFmt): String = value match
-    case CellValue.RichText(rt) => rt.toPlainText
-    case CellValue.Empty => ""
-    case CellValue.Formula(_, Some(cached), _) => NumFmtFormatter.formatValue(cached, numFmt)
-    case CellValue.Formula(expr, None, _) => s"=$expr"
-    case other => NumFmtFormatter.formatValue(other, numFmt)
+  /** Get cell value as plain text with formatting: the text of [[renderedContent]]. */
+  def cellValueToText(value: CellValue, numFmt: NumFmt): String =
+    renderedContent(value, numFmt).text
 
 /**
  * Base trait for cell renderers.

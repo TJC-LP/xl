@@ -54,6 +54,26 @@ class DefinedNameRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-649: a Name Manager comment with a line break round-trips on both backends") {
+    val base = Workbook(Sheet("Sheet1").put(ref"A1" -> 1))
+    val comment = "Line one\nLine two\ttabbed"
+    val wb0 = base.copy(metadata =
+      base.metadata.copy(definedNames =
+        Vector(DefinedName("Rate", "0.08", comment = Some(comment)))
+      )
+    )
+    List(
+      "dom" -> com.tjclp.xl.ooxml.writer.WriterConfig.scalaXml,
+      "sax" -> com.tjclp.xl.ooxml.writer.WriterConfig.saxStax
+    ).foreach { case (label, config) =>
+      val out = Files.createTempFile(s"named-comment-$label", ".xlsx")
+      out.toFile.deleteOnExit()
+      XlsxWriter.writeWith(wb0, out, config).fold(e => fail(s"$label write failed: $e"), identity)
+      val reread = XlsxReader.read(out).fold(e => fail(s"$label reread failed: $e"), identity)
+      assertEquals(reread.metadata.definedNames.headOption.flatMap(_.comment), Some(comment), label)
+    }
+  }
+
   test("GH-236: removeDefinedName drops the name on write") {
     val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1))
       .withDefinedName("Temp", "Sheet1!$A$1")
@@ -62,6 +82,40 @@ class DefinedNameRoundTripSpec extends FunSuite:
     XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
     val reread = XlsxReader.read(out).fold(e => fail(s"read failed: $e"), identity)
     assertEquals(reread.metadata.definedNames, Vector.empty)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-462: a name authored with the scoped overload round-trips its localSheetId") {
+    val wb = Workbook(Sheet("Cover").put(ref"A1" -> 1), Sheet("Data").put(ref"B2" -> 2))
+      .withDefinedName("DataLocal", "Data!$B$2", SheetName.unsafe("Data"))
+      .fold(e => fail(e.message), identity)
+    val out = Files.createTempFile("named-scoped-overload", ".xlsx")
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+    val reread = XlsxReader.read(out).fold(e => fail(s"read failed: $e"), identity)
+    assertEquals(
+      reread.metadata.definedNames.map(dn => (dn.name, dn.formula, dn.localSheetId)),
+      Vector(("DataLocal", "Data!$B$2", Some(1)))
+    )
+    Files.deleteIfExists(out)
+  }
+
+  test(
+    "GH-462: a foreign writer's `_XLNM.PRINT_AREA` is lifted into PageSetup case-insensitively"
+  ) {
+    // Excel names are case-insensitive identifiers: this IS the sheet's print area to Excel, so
+    // the read side lifts it like the canonical spelling and the writer re-derives it canonically.
+    val base = Workbook(Sheet("Sheet1").put(ref"A1" -> 1))
+    val wb = base.copy(metadata =
+      base.metadata.copy(definedNames =
+        Vector(DefinedName("_XLNM.PRINT_AREA", "Sheet1!$A$1:$B$2", localSheetId = Some(0)))
+      )
+    )
+    val out = Files.createTempFile("named-print-area-upper", ".xlsx")
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+    val reread = XlsxReader.read(out).fold(e => fail(s"read failed: $e"), identity)
+    val sheet = reread("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet.pageSetup.flatMap(_.printArea), Some(ref"A1:B2"))
+    assertEquals(reread.metadata.definedNames, Vector.empty, "lifted, not left verbatim")
     Files.deleteIfExists(out)
   }
 

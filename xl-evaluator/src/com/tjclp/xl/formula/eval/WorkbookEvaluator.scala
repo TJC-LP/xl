@@ -430,29 +430,45 @@ object WorkbookEvaluator:
     case CellValue.Formula(_, None, _) => true
     case _ => false
 
+  /**
+   * GH-537 test seam: `recalculate` with the generation's aggregate memo supplied by the caller, so
+   * a spec can read `memo.stats` after the run. Behaviour is exactly `recalculateImpl`'s — the memo
+   * is the one every Straight segment of the walk (or the whole non-iterative pass) shares.
+   */
+  private[formula] def recalculateWithGenerationMemo(
+    wb: Workbook,
+    clock: Clock,
+    rng: Rng,
+    iterativeOpt: Option[IterativeCalc],
+    generationMemo: Evaluator.AggregateMemo
+  ): RecalcResult =
+    recalculateImpl(wb, clock, Some(rng), iterativeOpt, generationMemo = generationMemo)
+
   private def recalculateImpl(
     wb: Workbook,
     clock: Clock,
     rngOpt: Option[Rng],
     iterativeOpt: Option[IterativeCalc],
-    parallelism: Int = 1
+    parallelism: Int = 1,
+    generationMemo: Evaluator.AggregateMemo = new Evaluator.AggregateMemo
   ): RecalcResult =
     // One recalculate call is one volatile calculation generation. The lazy snapshot preserves
     // the old no-volatile fast path (the supplied clock is never touched), while ensuring an
     // arbitrary Clock is never invoked concurrently by wave workers.
     val calculationClock = pinnedCalculationClock(clock)
-    // One narrowly scoped cache capability per non-iterative generation. The evaluator itself is
-    // immutable and AggregateMemo is thread-safe, so one instance can serve sequential cells and
-    // parallel wave workers. Iterative rounds deliberately change ranges and stay memo-free.
-    val generationEvaluator = iterativeOpt match
-      // A fixpoint intentionally revisits and changes the same ranges over multiple rounds, so a
-      // one-pass generation cache is inapplicable there.
-      case Some(_) => Evaluator.instance(rngOpt.getOrElse(Rng.system))
-      case None =>
-        Evaluator.recalculationInstance(
-          rngOpt.getOrElse(Rng.system),
-          new Evaluator.AggregateMemo
-        )
+    // One narrowly scoped cache capability per generation. The evaluator itself is immutable and
+    // AggregateMemo is thread-safe, so one instance can serve sequential cells and parallel wave
+    // workers. GH-537: it also serves every acyclic Straight segment of the iterative condensation
+    // walk — the one-pass invariant holds there because a reader of a range touching cyclic cell C
+    // has a graph edge to C and is ordered after C's component has finalized; successful members
+    // are written as plain values (cacheable and final), failed members are stripped to uncached
+    // formulas (`cacheable` refuses the range), and the deferred dynamic bucket's caches are
+    // stripped up front so a range over a not-yet-evaluated bucket cell bypasses too. The rounds
+    // INSIDE a fixpoint change the same ranges repeatedly and never see this memo: fixpointStep
+    // hands the engine a fresh one per round. As with wave placement (GH-520), a dependence the
+    // graph cannot see (GH-468's blind-name class) is invisible to this argument as well.
+    val generationEvaluator =
+      Evaluator.recalculationInstance(rngOpt.getOrElse(Rng.system), generationMemo)
     // Whole-book ordering needs only formula-to-formula edges. Constant cells are read during
     // evaluation but can never participate in a cycle or constrain formula order; excluding them
     // avoids O(formulas × range-size) graph construction and every downstream traversal.
@@ -811,10 +827,18 @@ object WorkbookEvaluator:
           state: PassState
         ): (PassState, SccReport) =
           val (baseSheets, acc0, errs0) = state
-          val members: List[(QualifiedRef, Int, String)] =
-            component.toList.flatMap(q =>
-              sheetIndex.get(q.sheet).map(idx => (q, idx, formulaText(q)))
-            )
+          def withText(order: Vector[QualifiedRef]): List[(QualifiedRef, Int, String)] =
+            order.toList.flatMap(q => sheetIndex.get(q.sheet).map(idx => (q, idx, formulaText(q))))
+          // `component` is the canonical grid listing (sheet name, row, column): the report, the
+          // fold and the error order keep it. GH-482: a Gauss–Seidel round SWEEPS the members in the graph's
+          // within-component order instead, publishing each value to the members after it;
+          // Jacobi keeps the canonical sweep so 0.22.x trajectories (seeded-Rng draw order
+          // included) reproduce bit for bit.
+          val members = withText(component)
+          val sweep = iterative.scheme match
+            case IterationScheme.GaussSeidel =>
+              withText(DependencyGraph.withinComponentOrder(component, deps))
+            case IterationScheme.Jacobi => members
           // GH-469: Excel seeds iterative calculation from the CURRENT cell values. Read them off
           // the THREADED sheets, not the original workbook: a member whose cache the dynamic
           // bucket stripped correctly seeds 0, and no member can be read after being written
@@ -822,16 +846,26 @@ object WorkbookEvaluator:
           val seed =
             if iterative.seedFromCaches then warmSeed(baseSheets, members)
             else Map.empty[QualifiedRef, CellValue]
+          // GH-537: a FRESH aggregate memo per evaluation region. Under Jacobi that is one round —
+          // every member is overlaid CACHED (Formula(expr, Some(previous))) and results apply only
+          // at round end, so a range touching members is fixed for the round and its aggregate may
+          // be shared by the members that read it; never across rounds, where the same range
+          // changes. Under Gauss–Seidel members change mid-round, so the engine asks for a fresh
+          // evaluator per member evaluation instead.
           val outcome =
             jacobiFixpoint(
               wb,
               baseSheets,
-              members,
+              sweep,
               iterative,
               pinnedClock,
-              rngOpt,
-              seed,
-              Some(generationEvaluator)
+              rngOpt.getOrElse(Rng.system),
+              rng =>
+                Evaluator.recalculationInstance(
+                  rng,
+                  new Evaluator.AggregateMemo
+                ),
+              seed
             )
           val folded = members.foldLeft((baseSheets, acc0, errs0)) {
             case ((sheets, acc, errs), (q, idx, _)) =>
@@ -851,7 +885,8 @@ object WorkbookEvaluator:
             members = members.map((q, _, _) => (q.sheet, q.ref)).toVector,
             converged = outcome.converged,
             rounds = outcome.rounds,
-            maxDelta = outcome.maxDelta
+            maxDelta = outcome.maxDelta,
+            stalled = outcome.stalled
           )
           (folded, report)
 
@@ -995,21 +1030,51 @@ object WorkbookEvaluator:
     results: Map[QualifiedRef, Either[XLError, CellValue]],
     converged: Boolean,
     rounds: Int,
-    maxDelta: Option[BigDecimal]
+    maxDelta: Option[BigDecimal],
+    stalled: Boolean
   )
 
   /**
-   * The shared Jacobi fixpoint engine (GH-373/GH-453/GH-454/GH-492): iterate `members` against
-   * `baseSheets` until every member's |Δ| < `maxChange` (strict) or `maxIter` rounds.
+   * The shared fixpoint engine (GH-373/GH-453/GH-454/GH-492/GH-482): iterate `members` against
+   * `baseSheets` until every member's |Δ| < `maxChange` (strict), the loop stalls, or `maxIter`
+   * rounds. (The name predates GH-482; the scheme is `iterative.scheme`.)
    *
-   * Each member is `(qualified ref, index of its sheet in baseSheets, formula text)`. Members seed
-   * from `seed`, falling back to 0 for anything absent (`Map.empty` therefore reproduces the
-   * original all-zero seeding exactly); each round overlays every member's cell with
-   * `Formula(expr, Some(previousValue))` so every reference to a member — including self-references
-   * — reads the previous round's value while `evaluateCell` re-evaluates the formula text. Callers
-   * pin the clock BEFORE calling (one fixpoint is one volatile generation). A member that throws
-   * holds its previous value for later rounds (GH-388 degradation) and reports its Left only from
-   * the final round.
+   * Each member is `(qualified ref, index of its sheet in baseSheets, formula text)`, in the order
+   * the caller wants them SWEPT. Members seed from `seed`, falling back to 0 for anything absent
+   * (`Map.empty` therefore reproduces the original all-zero seeding exactly); each round overlays
+   * every member's cell with `Formula(expr, Some(previousValue))` so every reference to a member —
+   * including self-references — reads the previous round's value while the member's formula
+   * re-evaluates. Callers pin the clock BEFORE calling (one fixpoint is one volatile generation). A
+   * member that throws holds its previous value for later rounds (GH-388 degradation) and reports
+   * its Left only from the final round.
+   *
+   * GH-482 — the scheme. Under [[IterationScheme.Jacobi]] every member reads that fixed overlay and
+   * the sweep order is immaterial to the values. Under [[IterationScheme.GaussSeidel]] (the
+   * default) the members are swept in list order and each `Right` is published into the overlay
+   * before the next member evaluates — Excel's sequential sweep — so the order IS observable; the
+   * callers pass `DependencyGraph.withinComponentOrder`, a pure function of the graph. Convergence
+   * (`|Δ|` against the round's start) and the stationarity exit are scheme-independent.
+   *
+   * GH-537 — the per-round costs and the exit:
+   *   - Member text never changes across rounds, so each DISTINCT member text is PARSED ONCE here
+   *     (through `parse`, [[SheetEvaluator.parseFormula]] unless a test injects a counting seam)
+   *     and its `TExpr` evaluated per round ([[SheetEvaluator.evaluateParsedWith]]); a parse
+   *     failure is the same `Parse error:` XLError the acyclic path reports.
+   *   - A member whose overlay is a PINNED cache (GH-353: a cached closed-workbook formula) never
+   *     evaluates — its `Some(previous)` overlay IS its value every round, i.e. it is the constant
+   *     `seed(q)`; that is decided once, not re-derived per round.
+   *   - `roundEvaluator` is called once per Jacobi round: a FRESH aggregate memo is sound within a
+   *     round (every member is overlaid cached, results apply at round end, so a range over members
+   *     is fixed for the round) and unsound across rounds (the same range changes). A Gauss–Seidel
+   *     sweep changes the overlay mid-round, so it calls the factory once per member evaluation.
+   *     Every factory call receives the round's tracked `Rng`, preserving one underlying sequence.
+   *   - A round that reproduces the previous one EXACTLY without converging can stop only if it
+   *     consumed no randomness. RAND can be rounded and RANDBETWEEN can repeat, so equal cell
+   *     values do not prove a random round will replay. Tracking draws at the existing `Rng`
+   *     boundary also covers defined names, dynamic references and recursively evaluated cells,
+   *     including a draw that throws. Without a draw, evaluation is fixed by the unchanged overlay
+   *     and pinned clock; a failed member will fail again, so the loop reports `stalled` instead of
+   *     burning `maxIter`.
    *
    * Non-convergence KEEPS the last values with no error — Excel's semantics, and the reason
    * exhaustion surfaces through [[FixpointOutcome]] rather than as a [[CellEvalError]].
@@ -1017,20 +1082,32 @@ object WorkbookEvaluator:
    * Used by both `recalculate(IterativeCalc)` (one call per cyclic condensation node) and the
    * data-table seeder's circular what-if substitution.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private[eval] def jacobiFixpoint(
     wb: Workbook,
     baseSheets: Vector[Sheet],
     members: List[(QualifiedRef, Int, String)],
     iterative: IterativeCalc,
     pinnedClock: Clock,
-    rngOpt: Option[Rng],
+    rng: Rng,
+    roundEvaluator: Rng => Evaluator,
     seedValues: Map[QualifiedRef, CellValue],
-    generationEvaluator: Option[Evaluator] = None
+    parse: String => XLResult[TExpr[?]] = SheetEvaluator.parseFormula
   ): FixpointOutcome =
     val zero: CellValue = CellValue.Number(BigDecimal(0))
     val seed: Map[QualifiedRef, CellValue] =
       members.map((q, _, _) => q -> seedValues.getOrElse(q, zero)).toMap
     val maxRounds = math.max(1, iterative.maxIter)
+    // GH-537: one parse per DISTINCT text per fixpoint (FixpointEngineSpec counts them).
+    val parsedText: Map[String, XLResult[TExpr[?]]] =
+      members.iterator.map(_._3).distinct.map(text => text -> parse(text)).toMap
+    val parsed: Map[QualifiedRef, XLResult[TExpr[?]]] =
+      members.map((q, _, text) => q -> parsedText(text)).toMap
+    // Pinned-ness depends on the text and on a cache being present — both fixed for the fixpoint.
+    val pinnedConstant: Map[QualifiedRef, CellValue] =
+      members.flatMap { (q, _, text) =>
+        SheetEvaluator.pinnedCache(CellValue.Formula(text, Some(seed(q)))).map(q -> _)
+      }.toMap
 
     // Convergence: numeric values compare by |Δ| < maxChange (strict, per Excel); non-numeric
     // results converge only on exact equality — GH-344: an error VALUE arriving as a member's
@@ -1047,51 +1124,102 @@ object WorkbookEvaluator:
         case (CellValue.Number(a), CellValue.Number(b)) => Some((a - b).abs)
         case _ => None
 
+    /** One member against the round's overlay — GH-388 total: a throw is this member's Left. */
+    def evaluateMember(
+      q: QualifiedRef,
+      idx: Int,
+      text: String,
+      sheets: Vector[Sheet],
+      tempWb: Workbook,
+      evaluator: Evaluator
+    ): Either[XLError, CellValue] =
+      pinnedConstant.get(q) match
+        case Some(constant) => Right(constant)
+        case None =>
+          try
+            parsed(q).flatMap(expr =>
+              SheetEvaluator.evaluateParsedWith(
+                sheets(idx),
+                text,
+                expr,
+                evaluator,
+                pinnedClock,
+                Some(tempWb),
+                Some(q.ref)
+              )
+            )
+          catch
+            case NonFatal(e) =>
+              Left(XLError.FormulaError(text, s"Evaluation threw ${e.getClass.getName}"))
+
     @annotation.tailrec
     def loop(round: Int, prev: Map[QualifiedRef, CellValue]): FixpointOutcome =
-      val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, expr)) =>
-        sheets.updated(idx, sheets(idx).put(q.ref, CellValue.Formula(expr, prev.get(q))))
+      // Evaluation-local observation of the existing effect capability: all evaluators in this
+      // round share this wrapper, and the underlying sequence continues across rounds. Mark the
+      // attempt before delegating because a custom Rng may advance its state and then throw.
+      var drewRandomness = false
+      val roundRng = new Rng:
+        def nextDouble(): Double =
+          drewRandomness = true
+          rng.nextDouble()
+      val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, text)) =>
+        sheets.updated(idx, sheets(idx).put(q.ref, CellValue.Formula(text, prev.get(q))))
       }
-      val tempWb = wb.copy(sheets = overlaid)
-      val results: Map[QualifiedRef, Either[XLError, CellValue]] =
-        members.map { (q, idx, expr) =>
-          val tempSheet = overlaid(idx)
-          val evaluatedCell =
-            try
-              generationEvaluator match
-                case Some(evaluator) =>
-                  SheetEvaluator.evaluateCellWithEvaluator(
-                    tempSheet,
-                    q.ref,
-                    evaluator,
-                    pinnedClock,
-                    Some(tempWb)
+      val results: Map[QualifiedRef, Either[XLError, CellValue]] = iterative.scheme match
+        case IterationScheme.Jacobi =>
+          // Every member reads the round's FIXED overlay: one evaluator (one memo) per round.
+          val tempWb = wb.copy(sheets = overlaid)
+          val evaluator = roundEvaluator(roundRng)
+          members.map { (q, idx, text) =>
+            q -> evaluateMember(q, idx, text, overlaid, tempWb, evaluator)
+          }.toMap
+        case IterationScheme.GaussSeidel =>
+          // GH-482: sweep in `members` order (the caller's within-component order), publishing
+          // each Right into the overlay before the next member reads it; a Left leaves the
+          // previous value in place. The overlay changes mid-round, so every evaluation gets a
+          // fresh evaluator — a memo shared across members would hand back stale aggregates.
+          val (_, swept) =
+            members.foldLeft((overlaid, Map.empty[QualifiedRef, Either[XLError, CellValue]])) {
+              case ((sheets, acc), (q, idx, text)) =>
+                val result =
+                  evaluateMember(
+                    q,
+                    idx,
+                    text,
+                    sheets,
+                    wb.copy(sheets = sheets),
+                    roundEvaluator(roundRng)
                   )
-                case None =>
-                  rngOpt match
-                    case Some(rng) => tempSheet.evaluateCell(q.ref, pinnedClock, rng, Some(tempWb))
-                    case None => tempSheet.evaluateCell(q.ref, pinnedClock, Some(tempWb))
-            catch
-              case NonFatal(e) =>
-                Left(XLError.FormulaError(expr, s"Evaluation threw ${e.getClass.getName}"))
-          q -> evaluatedCell
-        }.toMap
+                val published = result match
+                  case Right(value) =>
+                    sheets.updated(
+                      idx,
+                      sheets(idx).put(q.ref, CellValue.Formula(text, Some(value)))
+                    )
+                  case Left(_) => sheets
+                (published, acc.updated(q, result))
+            }
+          swept
       val converged = members.forall { (q, _, _) =>
         results(q) match
           case Right(next) => changeBelowThreshold(prev.getOrElse(q, zero), next)
           case Left(_) => false
       }
-      if converged || round >= maxRounds then
+      // A throwing/failing member holds its previous value for the next round so the rest of the
+      // core keeps converging (GH-388 degradation, not unwinding).
+      val next = members.map { (q, _, _) =>
+        q -> results(q).getOrElse(prev.getOrElse(q, zero))
+      }.toMap
+      // GH-537: an exact replay that did not converge has a failing member (the Left guard keeps
+      // the verdict literal even for a degenerate maxChange <= 0, where an all-Right exact replay
+      // never satisfies the strict |Δ| < maxChange and legitimately runs to maxIter).
+      val stalled =
+        !converged && !drewRandomness && next == prev && results.valuesIterator.exists(_.isLeft)
+      if converged || stalled || round >= maxRounds then
         val maxDelta = members.flatMap { (q, _, _) =>
           results(q).toOption.flatMap(next => numericDelta(prev.getOrElse(q, zero), next))
         }.maxOption
-        FixpointOutcome(results, converged, round, maxDelta)
-      else
-        // A throwing/failing member holds its previous value for the next round so the rest of
-        // the core keeps converging (GH-388 degradation, not unwinding).
-        val next = members.map { (q, _, _) =>
-          q -> results(q).getOrElse(prev.getOrElse(q, zero))
-        }.toMap
-        loop(round + 1, next)
+        FixpointOutcome(results, converged, round, maxDelta, stalled)
+      else loop(round + 1, next)
 
     loop(1, seed)

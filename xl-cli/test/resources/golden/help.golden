@@ -9,7 +9,7 @@ Usage:
     xl [--json] schema
     xl [--json] new
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--json] diff
-    xl [--file <path>] [--stream] [--json] lint
+    xl [--file <path>] [--stream] [--strict] [--json] lint
     xl [--file <path>] [--sheet <string>] [--max-size <integer>] [--json] eval
     xl [--file <path>] [--sheet <string>] [--max-size <integer>] [--json] evala
     xl --file <path> [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--json] sheets
@@ -93,6 +93,8 @@ Options and flags:
         Max uncompressed size in MB for in-memory load (default: 100, 0 = unlimited). Use for large files when --stream is not supported.
     --stream
         Use O(1) memory streaming for large files (100k+ rows). Supports: search, stats, bounds, view (markdown/csv/json). 7-8x faster than in-memory.
+    --strict
+        Writes: exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0); with -o the output is written, with -i a strict failure leaves the input unchanged. lint: exit 1 on hygiene findings too (default: repair findings only).
     --output <path>, -o <path>
         Output file (required)
     --in-place, -i
@@ -100,11 +102,9 @@ Options and flags:
     --backend <string>
         XML backend: scalaxml (default, stable) or saxstax (faster)
     --no-recalc
-        Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) leave every formula the edit invalidated UNCACHED rather than re-stamp a stale number, and report both counts. Use when the caches come from another engine.
+        Apply the edit without recalculating. put/putf/fill/copy/batch keep every cached value in the file; the structural verbs (insert/delete rows/cols) keep only the caches the edit provably left unchanged, write every formula it could have changed without a <v> (counted), and mark the workbook fullCalcOnLoad: Excel recomputes the whole book on open; LibreOffice (which ignores the marker by default) computes the uncached cells; cache-only readers (openpyxl data_only, xl view) see a blank there, never a stale number. Use when the caches come from another engine.
     --preserve-caches
         Alias for --no-recalc
-    --strict
-        Exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0). With -o the output is written; with -i a strict failure leaves the input unchanged.
 
 Subcommands:
     rasterizers
@@ -180,28 +180,57 @@ Subcommands:
           - post-2007 functions (IFS, XLOOKUP, MAXIFS, ...) stored without Excel's
             _xlfn. prefix in <f>, a CF <formula>, a DV <formula1>/<formula2> or a
             <definedName> (the openpyxl class: a silent #NAME? on the first
-            recalculation; xl heals a slot only when it regenerates it)
+            recalculation; any in-memory write that regenerates the worksheet
+            (CF/DV) or workbook.xml (names) heals the slot — unmodeled preserved
+            rules and --stream writes do not)
+          - inlineStr/str cells with neither an <is> nor a <v> (openpyxl's value="";
+            strict readers reject the sheet — xl reads the cell as blank and a
+            regenerating write heals the shape)
+          - mc:Ignorable lists naming a prefix no ancestor declares (the ElementTree
+            re-serialization class: Excel opens the part blank), or an ns0-style
+            root prefix — the same round-trip's signature; on its own Excel opens
+            the part intact, but prefix-naive tooling misreads it
+          - dxfId / dataDxfId / headerRowDxfId ... past the <dxfs> table of
+            xl/styles.xml (actual <dxf> children, not the count attribute)
+          - zip entries no relationship reaches from _rels/.rels (dead weight, or a
+            forgotten Relationship; never a repair, but the bytes travel) [hygiene]
+          - shared-string entries no t="s" cell references (count + first five
+            INDICES, never the text) [hygiene] and t="s" indices past the table
+            (#REF!); xl never prunes a preserved table, so a text-replacing edit of
+            a foreign shared-string book reports the orphan until the table is
+            rebuilt
 
         USAGE:
           xl lint report.xlsx
           xl -f report.xlsx lint                     # Equivalent flag form
           xl lint report.xlsx --format json          # Stable machine-readable schema
+          xl lint report.xlsx --strict               # Hygiene findings fail the gate too
 
         FINDING CATEGORIES:
           child-order | unresolved-rel-id | wrong-rel-type | missing-part |
           missing-content-type | ref-out-of-bounds | data-table-torn |
           data-table-unseeded | formula-leading-equals | external-ref-dangling |
-          defined-name-invalid | calc-chain-stale | xlfn-missing
+          defined-name-invalid | calc-chain-stale | xlfn-missing | empty-inline-str |
+          mc-ignorable-undeclared | dxf-id-out-of-range | unreferenced-part |
+          shared-string-orphan
+
+        SEVERITY (every finding carries one; --format json: "severity"):
+          repair  = Excel repairs or refuses the file, or a reader misreads a value
+          hygiene = the file is valid and opens intact; dead weight or a privacy
+                    hazard the package still carries (unreferenced-part, the orphan
+                    half of shared-string-orphan)
 
         EXIT CODES:
-          0 = no findings (package structure is clean)
-          1 = findings reported
-          2 = error (unreadable file, missing/malformed core part, ...)
+          0 = no repair findings (hygiene findings, if any, are still listed)
+          1 = repair findings reported — or, with --strict, any finding at all
+          2 = usage (no file, or a file given both ways)
+          3 = error (unreadable file, missing/malformed core part, ...)
 
         Docs: xl lint is read-only; it never repairs or rewrites the file.
 
         EXAMPLES:
-          xl lint deliverable.xlsx && echo "safe to send"
+          xl lint deliverable.xlsx && echo "safe to send"        # repair-clean
+          xl lint deliverable.xlsx --strict && echo "spotless"   # no finding of any tier
           xl lint deliverable.xlsx --format json | jq '.findings'
     eval
         Evaluate formula without modifying sheet
@@ -398,9 +427,12 @@ Subcommands:
           page-setup      {"op":"page-setup","orientation":"landscape","fitToWidth":1,"fitToHeight":0}  [not with --stream]
           header-footer   {"op":"header-footer","oddFooter":"&LConfidential&RPage &P of &N"}  [not with --stream]
           cf              {"op":"cf","range":"A1:A10","rule":"cellIs:greaterThan:100","bold":true,"bg":"#FFC7CE","fg":"#9C0006"}  [not with --stream]
+          define-name     {"op":"define-name","name":"Tax","refersTo":"Sheet1!$A$1"}  [not with --stream]
+          remove-name     {"op":"remove-name","name":"Tax"}  [not with --stream]
 
-        Every op except add-sheet/rename-sheet accepts "sheet": the sheet for its unqualified refs
-        (a sheet-qualified ref wins, then "sheet", then -s/--sheet). Property names are accepted in
+        Every op except add-sheet/rename-sheet/define-name/remove-name accepts "sheet": the sheet for
+        its unqualified refs (a sheet-qualified ref wins, then "sheet", then -s/--sheet); a name's
+        "scope" is its own key. Property names are accepted in
         camelCase or kebab-case. put/putf "format" is explicit and replaces the cell's number format.
 
         STYLE PROPERTIES (style op):
@@ -576,9 +608,12 @@ Subcommands:
           page-setup      {"op":"page-setup","orientation":"landscape","fitToWidth":1,"fitToHeight":0}  [not with --stream]
           header-footer   {"op":"header-footer","oddFooter":"&LConfidential&RPage &P of &N"}  [not with --stream]
           cf              {"op":"cf","range":"A1:A10","rule":"cellIs:greaterThan:100","bold":true,"bg":"#FFC7CE","fg":"#9C0006"}  [not with --stream]
+          define-name     {"op":"define-name","name":"Tax","refersTo":"Sheet1!$A$1"}  [not with --stream]
+          remove-name     {"op":"remove-name","name":"Tax"}  [not with --stream]
 
-        Every op except add-sheet/rename-sheet accepts "sheet": the sheet for its unqualified refs
-        (a sheet-qualified ref wins, then "sheet", then -s/--sheet). Property names are accepted in
+        Every op except add-sheet/rename-sheet/define-name/remove-name accepts "sheet": the sheet for
+        its unqualified refs (a sheet-qualified ref wins, then "sheet", then -s/--sheet); a name's
+        "scope" is its own key. Property names are accepted in
         camelCase or kebab-case. put/putf "format" is explicit and replaces the cell's number format.
 
         STYLE PROPERTIES (style op):
@@ -743,7 +778,7 @@ Subcommands:
     copy
         Copy range to another location (with formula adjustment)
     name
-        Manage named ranges: add, rm
+        Manage named ranges: add, rm (-s scopes the name to that sheet)
     insert-rows
         Insert rows (shifts cells & rewrites formulas)
     delete-rows

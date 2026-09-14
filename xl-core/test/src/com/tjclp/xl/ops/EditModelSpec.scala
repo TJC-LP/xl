@@ -102,7 +102,7 @@ class EditModelSpec extends ScalaCheckSuite:
       "copy-sheet",
       "add-image",
       "name add",
-      "name remove",
+      "name rm",
       "sheets hide",
       "sheets show"
     )

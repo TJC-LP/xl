@@ -1,19 +1,20 @@
 package com.tjclp.xl.cli
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, NoSuchFileException, Path}
 import java.util.zip.{ZipEntry, ZipFile, ZipInputStream, ZipOutputStream}
 
 import scala.jdk.CollectionConverters.*
 
-import cats.effect.{IO, Resource}
+import cats.effect.{IO, Ref, Resource}
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
+import fs2.Stream
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
-import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.io.{ExcelIO, RowData}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader}
 import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
@@ -578,4 +579,173 @@ class MemoryGuardSpec extends CatsEffectSuite:
         assert(!g.getMessage.startsWith("Failed to read XLSX: "), g.getMessage)
         assert(g.getMessage.nonEmpty)
       case other => fail(s"both reads must fail the same way, got $other")
+  }
+
+  // --- GH-517: the spill directory --------------------------------------------------------------
+
+  private def rows(n: Int): Stream[IO, RowData] =
+    Stream.range(1, n + 1).map(i => RowData(i, Map(0 -> CellValue.Number(BigDecimal(i)))))
+
+  /** The `xl-stream-*` scratch files the two-pass writer spills into `directory`. */
+  private def scratchFiles(directory: Path): IO[Vector[String]] = IO.blocking {
+    val listing = Files.list(directory)
+    try
+      listing.iterator.asScala
+        .map(_.getFileName.toString)
+        .filter(_.startsWith("xl-stream-"))
+        .toVector
+    finally listing.close()
+  }
+
+  private def cliError(attempt: Either[Throwable, Any]): CliError = attempt match
+    case Left(e: CliException) => e.error
+    case other => fail(s"expected a typed failure, got $other")
+
+  test(
+    "spillDirFrom: unset or blank is None, a value is a trimmed path, a non-path is USAGE naming XL_SPILL_DIR"
+  ) {
+    assertEquals(MemoryGuard.spillDirFrom(_ => None), Right(None))
+    assertEquals(MemoryGuard.spillDirFrom(_ => Some("   ")), Right(None))
+    assertEquals(
+      MemoryGuard.spillDirFrom(v => Option.when(v == MemoryGuard.SpillDirVar)(" /big/scratch ")),
+      Right(Some(Path.of("/big/scratch")))
+    )
+    MemoryGuard.spillDirFrom(_ => Some("bad\u0000dir")) match
+      case Left(err) =>
+        assertEquals(err.code, ErrorCode.USAGE)
+        assert(err.message.contains(MemoryGuard.SpillDirVar), err.message)
+        assert(err.hint.exists(_.contains(MemoryGuard.SpillDirVar)), err.hint)
+      case Right(other) => fail(s"a NUL byte is not a path: $other")
+  }
+
+  test(
+    "writer: spills where XL_SPILL_DIR points (None when unset), by an override on the guarded interpreter"
+  ) {
+    val fromEnv =
+      sys.env.get(MemoryGuard.SpillDirVar).map(_.trim).filter(_.nonEmpty).map(Path.of(_))
+    assertEquals(MemoryGuard.writer.spillDir, fromEnv)
+    assertEquals(MemoryGuard.excel(_ => IO.unit).spillDir, None)
+    assertEquals(MemoryGuard.excel(_ => IO.unit, spill = Right(Some(dir()))).spillDir, Some(dir()))
+  }
+
+  test(
+    "excel(spill = dir): the two-pass write spills into dir and cleans up; writeWith still runs under the guard"
+  ) {
+    val spillDir = dir().resolve("spill")
+    val out = dir().resolve("spilled.xlsx")
+    val guarded = MemoryGuard.excel(_ => IO.unit, spill = Right(Some(spillDir)))
+    for
+      _ <- IO.blocking(Files.createDirectories(spillDir))
+      seen <- Ref.of[IO, Vector[String]](Vector.empty)
+      _ <- rows(3)
+        .evalTap(_ => scratchFiles(spillDir).flatMap(names => seen.update(_ ++ names)))
+        .through(guarded.writeStreamWithAutoDetect(out, "Data"))
+        .compile
+        .drain
+      during <- seen.get
+      after <- scratchFiles(spillDir)
+      read <- ExcelIO.instance[IO].read(out)
+      guardedOom <- withFault(out, "write", new OutOfMemoryError("test"))(
+        guarded.writeWith(book(), out, WriterConfig.default).attempt
+      )
+      // The trap the override avoids: withSpillDir rebuilds a PLAIN ExcelIO, so the same fault
+      // pinned for this file never fires — the heap guard is gone
+      unguarded <- withFault(out, "write", new OutOfMemoryError("test"))(
+        guarded.withSpillDir(spillDir).writeWith(book(), out, WriterConfig.default).attempt
+      )
+    yield
+      assert(
+        during.nonEmpty,
+        "the scratch file lived in the configured directory while rows streamed"
+      )
+      assertEquals(after, Vector.empty, "deleted when the write ended")
+      assertEquals(read.sheets(0)(ref"A3").value, CellValue.Number(BigDecimal(3)))
+      assertEquals(resourceLimit(guardedOom).error, MemoryGuard.exhausted, "the guard survives")
+      assertEquals(unguarded, Right(()), "withSpillDir would have dropped the guard")
+  }
+
+  test(
+    "excel(spill = missing): the two-pass write is IO_WRITE naming the configured spill directory, not INTERNAL"
+  ) {
+    val missing = dir().resolve("no-such-spill")
+    val out = dir().resolve("unspilled.xlsx")
+    val guarded = MemoryGuard.excel(_ => IO.unit, spill = Right(Some(missing)))
+    for
+      viaGuard <- rows(2)
+        .through(guarded.writeStreamWithAutoDetect(out, "Data"))
+        .compile
+        .drain
+        .attempt
+      viaSeq <- guarded.writeStreamsSeqWithAutoDetect(out, Seq("Data" -> rows(2))).attempt
+      viaLibrary <- rows(2)
+        .through(ExcelIO.instance[IO].withSpillDir(missing).writeStreamWithAutoDetect(out, "Data"))
+        .compile
+        .drain
+        .attempt
+    yield
+      Vector(viaGuard, viaSeq).foreach { attempt =>
+        val err = cliError(attempt)
+        assertEquals(err.code, ErrorCode.IO_WRITE)
+        assert(err.message.startsWith(s"cannot write $out: "), err.message)
+        assert(err.message.contains(s"the configured spill directory ($missing)"), err.message)
+        assert(
+          err.hint.exists(h => h.contains(MemoryGuard.SpillDirVar) && h.contains(missing.toString)),
+          err.hint
+        )
+        assertEquals(err.location, Some(Location.file(out.toString)))
+      }
+      assert(!Files.exists(out), "nothing written")
+      // The same failure straight from the library is what the CLI used to report
+      viaLibrary match
+        case Left(e) => assertEquals(CliError.fromThrowable(e).code, ErrorCode.INTERNAL)
+        case Right(_) => fail("a missing spill directory must fail the write")
+  }
+
+  test(
+    "excel(spill = Left): a malformed XL_SPILL_DIR fails the two-pass write as USAGE before a row is pulled or anything is written"
+  ) {
+    val usage = MemoryGuard
+      .spillDirFrom(_ => Some("bad\u0000dir"))
+      .swap
+      .getOrElse(fail("a NUL byte is a path?"))
+    val out = dir().resolve("never.xlsx")
+    val guarded = MemoryGuard.excel(_ => IO.unit, spill = Left(usage))
+    for
+      pulled <- Ref.of[IO, Boolean](false)
+      viaPipe <- rows(2)
+        .evalTap(_ => pulled.set(true))
+        .through(guarded.writeStreamWithAutoDetect(out, "Data"))
+        .compile
+        .drain
+        .attempt
+      wasPulled <- pulled.get
+      viaSeq <- guarded.writeStreamsSeqWithAutoDetect(out, Seq("Data" -> rows(2))).attempt
+      plain <- guarded.writeWith(book(), out, WriterConfig.default).attempt
+    yield
+      assertEquals(cliError(viaPipe), usage)
+      assertEquals(cliError(viaSeq), usage)
+      assert(!wasPulled, "refused before the source was opened")
+      assertEquals(guarded.spillDir, None, "the malformed value is never used as a directory")
+      assertEquals(plain, Right(()), "a write that does not spill does not consult the setting")
+  }
+
+  test("excel: a failure of the row stream keeps its own classification — it is not the write's") {
+    val out = dir().resolve("source-failed.xlsx")
+    val guarded = MemoryGuard.excel(_ => IO.unit, spill = Right(Some(dir())))
+    val missingCsv = new NoSuchFileException("rows.csv")
+    for
+      attempt <- (rows(1) ++ Stream.raiseError[IO](missingCsv))
+        .through(guarded.writeStreamWithAutoDetect(out, "Data"))
+        .compile
+        .drain
+        .attempt
+      leftovers <- scratchFiles(dir())
+    yield
+      attempt match
+        case Left(e) =>
+          assert(e eq missingCsv, s"the source's own failure, unwrapped: $e")
+          assertEquals(CliError.fromThrowable(e).code, ErrorCode.IO_READ)
+        case Right(_) => fail("the source failed; so must the write")
+      assertEquals(leftovers, Vector.empty, "the spill is released")
+      assert(!Files.exists(out), "nothing written")
   }

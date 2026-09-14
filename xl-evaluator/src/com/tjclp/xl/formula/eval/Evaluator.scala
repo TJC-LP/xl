@@ -573,13 +573,21 @@ object Evaluator:
   /**
    * One calculation generation's memo for a single raw-range aggregate.
    *
-   * A memo instance belongs to exactly one non-iterative workbook recalculation generation. Keys
+   * A memo instance belongs to exactly one ONE-PASS region of a workbook recalculation. Keys
    * therefore use the logical sheet name rather than retaining every immutable `Sheet` snapshot:
    * the formula graph guarantees that every formula cell in an explicit range is evaluated before
-   * its aggregate consumer, after which that range cannot change again in the one-pass generation.
-   * This is what lets same-sheet sequential consumers reuse a result even though each cache write
-   * creates a new `Sheet` object. Iterative recalculation never receives this capability. Range
-   * anchors are intentionally absent because they affect formula dragging, never values read.
+   * its aggregate consumer, after which that range cannot change again in the one-pass region. This
+   * is what lets same-sheet sequential consumers reuse a result even though each cache write
+   * creates a new `Sheet` object. Range anchors are intentionally absent because they affect
+   * formula dragging, never values read.
+   *
+   * GH-537: the one-pass regions are (a) a non-iterative generation as a whole, (b) every acyclic
+   * `Straight` segment of an iterative condensation walk — a reader of a range touching cyclic cell
+   * C has a graph edge to C, so it is ordered after C's component has finalized, and members that
+   * failed are stripped to uncached formulas, which `cacheable` refuses — and (c) ONE Jacobi round
+   * inside a fixpoint, where every member is overlaid cached and results apply at round end. A memo
+   * must never outlive its region: the fixpoint engine takes a fresh one per round, and a
+   * Gauss–Seidel sweep (members changing mid-round) takes none.
    *
    * A per-key entry synchronizes the first eligible fold. This gives parallel waves single-flight
    * behavior instead of allowing every cold reader to scan the same range before a TrieMap

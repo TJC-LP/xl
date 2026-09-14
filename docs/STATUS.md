@@ -59,7 +59,7 @@
 **New in 0.19.0** (2026-08-03):
 - ✅ **Column/row default styles** (#445) — `<col style=>` / `<row s= customFormat="1">` emit on both writer backends (StyleIndex-remapped like cell styleIds) AND parse back, so read→modify→write keeps source column styles; `Sheet.withColumnStyle`/`withRowStyle` author the sheet-wide-body-font-without-Normal mechanism
 - ✅ **Sheet view modes** (#446) — `SheetView.view` (normal/pageBreakPreview/pageLayout) + `zoomScaleNormal`/`zoomScaleSheetLayoutView`/`topLeftCell`, set-or-remove with foreign values riding preservation
-- ✅ **Excel-canonical XML forms** (#448) — integral `sz`, 17-sig-digit plain tints (`tint="0"` omitted), bare gray125, derived `outlineLevelRow/Col` summary attrs; **theme-index swap fixed** — SAX path + comments wrote Dark2 as Light2 via `slot.ordinal`
+- ✅ **Excel-canonical XML forms** (#448) — integral `sz`, 17-sig-digit plain tints (`tint="0"` omitted), bare gray125, derived `outlineLevelRow/Col` summary attrs; **theme-index swap fixed** — SAX path + comments wrote Dark2 as Light2 via `slot.ordinal`; the streaming `--stream style` codec had the same ordinal swap until the #659 review (Dark1/Light1, Dark2/Light2), now on the shared index table
 - ✅ **DateTime arithmetic** (#449) — `=end-start` day counts, `=date+30` offsets, and MIN/MAX/COUNT/SUM over date columns evaluate via `dateTimeToExcelSerial` (the writer's conversion); result is a serial Number, booleans stay skipped in aggregates
 - ✅ **Data-table lints + `xl recalc --tables`** (#442) — `data-table-torn` (5 tear classes incl. del-flagged records) + `data-table-unseeded` (autoNoTable doctrine), DOM/SAX finding-identical, O(1) streaming; `recalc --tables` seeds after recalculation, default pinned-cache path byte-identical
 - ✅ **ca/aca + del1/del2 fidelity** (#435) — plain-formula calc flags on `FormulaKind.Normal(aca, ca)` survive every path (source-breaking: `FormulaKind.Normal()`); input-deleting structural edits keep the record del-flagged with caches intact
@@ -101,7 +101,7 @@
 
 **New in 0.13.0** (2026-07-16):
 - ✅ **Defined-name resolution** (#384) — `=IF(case=2,…)`, `=entry_mult*ltm_ebitda` evaluate; sheet-scoped shadowing, name-chains with cycle guard, dependency-graph edges; was 926/1,571 probe rejections on a real LBO
-- ✅ **Opt-in iterative recalculation** (#373) — `recalculate(IterativeCalc(maxIter, maxChange))` Jacobi-fixpoints declared cycles (circular debt schedules verify); calcPr authoring for scratch workbooks
+- ✅ **Opt-in iterative recalculation** (#373) — `recalculate(IterativeCalc(maxIter, maxChange))` fixpoints declared cycles (circular debt schedules verify; since #482 a Gauss–Seidel sweep within each cycle in row-major grid order — Excel's iteration model, not verified against Excel's calc chain — with `IterationScheme.Jacobi` as the opt-in previous-round scheme; #537 stops a cycle whose member fails every round at the first replayed round that consumes no randomness, `SccReport.stalled`); calcPr authoring for scratch workbooks
 - ✅ **Coercion parity** (#385) + **MROUND** (#386) — serial Numbers in date positions, blanks as 0 in scalar numeric contexts (aggregates still skip); 108 registry functions
 - ✅ **Parser parity** (#355, #374) — percent postfix operator with Excel precedence and byte-identical round-trip; leading unary plus preserved through print
 - ✅ **Appearance round-trip** (#372, #382, #358) — freeze panes read into the model (incl. scrolled panes), `tabSelected`, `Sheet.tabColor`; CLI: `sheet-view`, `tab-color` (theme syntax), `page-setup`, `header-footer`
@@ -233,17 +233,17 @@
 
 ### Test Coverage
 
-**7,032 test cases** (verified via `./mill __.test`, 2026-09-11, PR for #649): all passed; the style-performance comparison stays ignored, and four subprocess smokes (openpyxl, unwritable-directory) skip where the sandbox lacks the tool or runs as root.
+**7,407 test cases** (verified via `./mill __.test`, 2026-09-14, wave 29 after the adversarial-review fix round): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2492 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1575 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1170 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1422 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 175 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
-| xl-agent | 146 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 52 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl-evaluator | 2572 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1682 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1276 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1489 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cats-effect | 183 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
+| xl (prelude) | 58 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
@@ -298,7 +298,7 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
 - ⚠️ Print settings, page setup — odd + even/first header/footer, margins, print area, repeat rows (#259, #266), and `fitToPage` tri-state (#284); shipped across 0.11.0–0.12.1
 - ✅ Conditional formatting (0.12.1, #136): typed `Sheet.conditionalFormat` rules (cellIs/expression/colorScale/dataBar/top10/text) + `Dxf` differential formats; library API (no CLI yet) — see LIMITATIONS §10
 - ❌ Data validation (preserved through edits, but no authoring API yet)
-- ✅ Named ranges (authoring shipped in 0.10.0: `DefinedName` serialization + CLI `name add/rm`)
+- ✅ Named ranges (authoring shipped in 0.10.0: `DefinedName` serialization + CLI `name add/rm`; sheet-scoped via `withDefinedName(name, refersTo, scope)` / `-s`, case-insensitive replace and remove — #462, #538)
 
 ### Streaming I/O Limitations
 

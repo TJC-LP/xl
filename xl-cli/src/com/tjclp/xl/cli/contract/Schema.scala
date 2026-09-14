@@ -138,15 +138,18 @@ object Schema:
     GlobalDoc(
       "--no-recalc",
       None,
-      "Write verbs: apply the edit and recalculate nothing; structural edits leave the formulas " +
-        "they invalidated uncached"
+      "Write verbs: apply the edit and recalculate nothing; structural edits keep only the caches " +
+        "the edit provably left unchanged, leave the rest uncached and mark the workbook " +
+        "fullCalcOnLoad (Excel recomputes on open; LibreOffice and cache-only readers display " +
+        "what is cached)"
     ),
     GlobalDoc("--preserve-caches", None, "Alias for --no-recalc"),
     GlobalDoc(
       "--strict",
       None,
       "Write verbs: exit 1 when the recalculation reports formula errors, non-convergence or " +
-        "data-table seed warnings (after `view` it is view's own --eval gate)"
+        "data-table seed warnings; lint: exit 1 on hygiene findings too, not only repairs " +
+        "(after `view` it is view's own --eval gate)"
     )
   )
 
@@ -217,7 +220,8 @@ object Schema:
       "lint",
       "Validate the raw package against the Excel-repair classes: child order, r:id resolution, " +
         "content-type coverage, over-max refs, data-table integrity, <f> canon, external refs, " +
-        "defined names, calc chain (read-only)",
+        "defined names, calc chain, empty inline strings, mc:Ignorable prefixes, dxf ids, " +
+        "package reachability, shared-string orphans (read-only)",
       sheet = false,
       streaming = true,
       "0.15.0",
@@ -598,23 +602,27 @@ object Schema:
       streaming = false,
       gated
     ),
+    // GH-462: the twins are the batch ops that declare `cliVerb = Some("name add" | "name rm")`
+    // (SchemaSpec pins both directions). `sheet = false`: -s is the name's optional scope, not THE
+    // sheet rule — a single-sheet book without it writes a workbook-scoped name. `gated`: the write
+    // recalculates the name's readers, so --strict can exit 1 (#659 review).
     write(
       "name add",
-      "Add or replace a workbook-scoped named range",
+      "Add or replace a named range (workbook-scoped; -s scopes it to that sheet)",
       sheet = false,
-      None,
+      Some("define-name"),
       "0.10.0",
       streaming = false,
-      plain
+      gated
     ),
     write(
       "name rm",
-      "Remove a named range",
+      "Remove a named range (workbook-scoped; -s the sheet-scoped one)",
       sheet = false,
-      None,
+      Some("remove-name"),
       "0.10.0",
       streaming = false,
-      plain
+      gated
     ),
     write(
       "insert-rows",

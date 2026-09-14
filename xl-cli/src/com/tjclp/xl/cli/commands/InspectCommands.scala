@@ -158,8 +158,12 @@ object InspectCommands:
     )
     counted.flatten.mkString(", ")
 
-  /** `{name, index, state, dimension}` — the `sheets --json` shape. */
-  private def sheetHeader(
+  /**
+   * `{name, index, state, dimension}` — one element of `describe --json`'s `data.sheets` and of
+   * `sheets --json`'s (GH-618: [[WorkbookCommands]] builds its listing through this function, so
+   * the two verbs cannot drift apart).
+   */
+  private[commands] def sheetHeader(
     name: String,
     index: Int,
     state: Option[String],
@@ -194,8 +198,14 @@ object InspectCommands:
     obj("hiddenCols") = ujson.Num(s.hiddenCols)
     obj
 
-  /** `[{name, refersTo, scope, hidden}]` — the `names --json` shape, hidden names included. */
-  private def namesJson(names: Vector[DefinedName], scope: Int => Option[String]): ujson.Arr =
+  /**
+   * `[{name, refersTo, scope, hidden}]`, hidden names included — `describe --json`'s
+   * `data.definedNames` and the array `names --json` keys as `data.names` (GH-618).
+   */
+  private[commands] def namesJson(
+    names: Vector[DefinedName],
+    scope: Int => Option[String]
+  ): ujson.Arr =
     ujson.Arr.from(names.map { dn =>
       ujson.Obj(
         "name" -> ujson.Str(dn.name),

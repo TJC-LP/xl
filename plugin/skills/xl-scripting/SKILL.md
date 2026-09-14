@@ -291,11 +291,12 @@ println(s"clean: ${result.isClean}")
 ### Typed extraction
 
 Records first (0.21.0): a case class that `derives RowCodec` reads and writes whole rows — field
-order is column order, field names are the header row, `Option[T]` fields are empty cells.
+order is column order, field names are the header row (`@header("Unit Price ($)")` on a field
+when the sheet's header is not an identifier, #614), `Option[T]` fields are empty cells.
 
 ```scala
-final case class Product(name: String, units: Int, price: BigDecimal, note: Option[String])
-  derives RowCodec
+final case class Product(name: String, units: Int, @header("Unit Price ($)") price: BigDecimal, note: Option[String])
+  derives RowCodec                                             // headers: name, units, Unit Price ($), note
 
 val products = sheet.readRowsByHeader[Product](Row.from1(1)) // Either[RowCodecError, Vector[Product]]
 val placed = Sheet("Out").putRowsWithHeader(ref"A1", products.unsafe).unsafe // header + rows
@@ -305,7 +306,13 @@ Sheet("Out").putTable(ref"A1", products.unsafe, "Products")  // + an Excel table
 
 `readRows[Product](range)` is the positional twin (range width must equal the record's); errors
 are `RowCodecError.Field(row, column, field, cause)` / `Missing` / `HeaderNotFound` / `Width`
-with `.message` and `.toXLError`. Per-cell reads remain for ad-hoc shapes:
+with `.message` and `.toXLError` — `field` is the Scala name even under a renamed header.
+`RowCodec[Product].headers` are the header texts, `.fields` the names; header matching ignores
+case, whitespace, `_` and `-` but never punctuation, so `Rev ($M)` needs `@header`. A header known
+only at runtime is `RowCodec.derived[Product].withHeaders(Map("price" -> "Unit Price ($)"))` —
+`XLResult[RowCodec[Product]]`, refusing an unknown field, a blank header or two headers the
+matcher cannot tell apart; as a `given`, spell it with `derived`, never
+`RowCodec[Product].withHeaders(…)` (that summons the given being defined). Per-cell reads remain for ad-hoc shapes:
 
 ```scala
 final case class Product(name: String, units: Int, price: BigDecimal)
@@ -356,7 +363,7 @@ if !result.isClean then
 
 **Defined names resolve** (0.13.0): `fx"=IF(case=2,rev,cost)"`, `fx"=entry_mult*ltm_ebitda"`, `fx"=SUM(rev_range)"` evaluate against workbook- and sheet-scoped defined names (sheet-scoped shadows global), contribute dependency edges so recalc orders name-gated families correctly, and round-trip byte-faithfully; an unresolvable name is a clean per-cell error.
 
-**Circular models are opt-in** (0.13.0): professional schedules (interest on average debt) ship circular by design. `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` Jacobi-fixpoints declared cycles instead of erroring; plain `recalculate()` still isolates cycles as errors. Honor a file's own `<calcPr>` with `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr).fold(wb.recalculate())(wb.recalculate)`, and author it on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))`.
+**Circular models are opt-in** (0.13.0): professional schedules (interest on average debt) ship circular by design. `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` fixpoints declared cycles instead of erroring — a Gauss–Seidel sweep in dependency order within each cycle, Excel's sequential recalculation (`scheme = IterationScheme.Jacobi` reproduces the pre-0.23 previous-round semantics); a member that fails every round stalls its cycle early (`SccReport.stalled`) rather than burning `maxIter`; plain `recalculate()` still isolates cycles as errors. Honor a file's own `<calcPr>` with `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr).fold(wb.recalculate())(wb.recalculate)`, and author it on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))`.
 
 **One options record** (since 0.20.0): every recalculation knob lives on `RecalcOptions`, and `RecalcOptions()` reproduces `recalculate()` exactly, so there is one thing to learn:
 

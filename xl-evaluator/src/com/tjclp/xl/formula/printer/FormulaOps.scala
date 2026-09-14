@@ -56,10 +56,24 @@ object FormulaOps:
    * the structural refusal (`StructuralEditor`) and the renamer share; the AST decides the rest.
    */
   def mentionsSheet(text: String, sheet: SheetName): Boolean =
-    val qualifier = qualifierPattern(sheet)
-    text.split("\"", -1).iterator.zipWithIndex.exists { (part, index) =>
-      index % 2 == 0 && qualifier.matcher(part).find()
-    }
+    qualifierPattern(sheet).matcher(maskStringLiterals(text)).find()
+
+  /**
+   * `text` with the contents of its string literals blanked (same length, quotes kept), so the
+   * qualifier scan never matches inside one. A `"` inside a single-quoted sheet name is part of the
+   * name, not a literal boundary (GH-653: splitting the text on `"` cut `'Q1 "Final"'!A1` in half
+   * and a rename of that sheet silently left the reference stale); a `'` inside a string literal
+   * likewise opens no quoted name.
+   */
+  private def maskStringLiterals(text: String): String =
+    val (masked, _, _) =
+      text.foldLeft((new StringBuilder(text.length), false, false)) {
+        case ((sb, inString, inQuotedName), c) =>
+          if inString then (sb.append(if c == '"' then c else ' '), c != '"', inQuotedName)
+          else if inQuotedName then (sb.append(c), inString, c != '\'')
+          else (sb.append(c), c == '"', c == '\'')
+      }
+    masked.toString
 
   /**
    * Shift every relative reference by (`colDelta`, `rowDelta`) the way a fill-drag does — anchors

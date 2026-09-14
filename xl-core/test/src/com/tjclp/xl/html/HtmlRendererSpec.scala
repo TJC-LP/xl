@@ -853,7 +853,7 @@ class HtmlRendererSpec extends FunSuite:
     assert(html.contains("1234567.9"), s"Wrapped number keeps its digits, got: $html")
   }
 
-  test("toHtml: overflowing text is not hashed (only numbers and dates hash)") {
+  test("toHtml: overflowing text is not hashed (text never hashes)") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Sales Report Total")
       .put(ref"B1" -> "x")
@@ -970,4 +970,211 @@ class HtmlRendererSpec extends FunSuite:
       .toList
     assert(htmlRuns.nonEmpty, "HTML should hash the indented number")
     assertEquals(svgRuns, htmlRuns, "SVG and HTML must agree on the marker")
+  }
+
+  // ========== Effective rendered content: kind + formatted text (GH-500/501/502) ==========
+
+  import com.tjclp.xl.cells.CellError
+  import com.tjclp.xl.render.RenderUtils
+  import com.tjclp.xl.styles.numfmt.NumFmt
+
+  /** An Excel column width whose pixel width lies strictly between two measured texts. */
+  private def columnBetween(narrowText: String, wideText: String, font: Font): Double =
+    val narrow = RenderUtils.measureTextWidth(narrowText, Some(font))
+    val wide = RenderUtils.measureTextWidth(wideText, Some(font))
+    val excelWidth = ((narrow + wide) / 2 - 5) / 8.0
+    val px = RenderUtils.excelColWidthToPixels(excelWidth)
+    assert(
+      narrow <= px && px < wide,
+      s"Precondition: '$narrowText' ($narrow px) fits and '$wideText' ($wide px) does not in $px px"
+    )
+    excelWidth
+
+  /** The opening `<td …>` tag of the first data cell whose body is exactly `body`. */
+  private def htmlCellTag(html: String, body: String): Option[String] =
+    s"""<td[^>]*>${java.util.regex.Pattern.quote(body)}</td>""".r.findFirstIn(html)
+
+  test("toHtml: TRUE too wide for its column renders #### (GH-500)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> true)
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(2.0))) // 21px
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assert(htmlHashRuns(html).nonEmpty, s"An overflowing TRUE must hash like a number: $html")
+    assert(!html.contains("TRUE"), s"No fragment of the logical may render: $html")
+  }
+
+  test("toHtml: #DIV/0! too wide for its column renders #### and is centred (GH-500)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Error(CellError.Div0))
+      .put(ref"B1" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(3.0))) // 29px
+
+    val html = sheet.toHtml(ref"A1:B1")
+    val marker = htmlHashRuns(html).headOption.getOrElse(fail(s"Error must hash: $html"))
+    val td = htmlCellTag(html, marker).getOrElse(fail(s"No hashed <td>: $html"))
+    assert(td.contains("text-align: center"), s"Excel centres errors under General: $td")
+    assert(!html.contains("#DIV"), s"No fragment of the error code may render: $html")
+  }
+
+  test("toHtml: Bool and Error that fit are never hashed and centred (GH-500)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> true)
+      .put(ref"A2", CellValue.Error(CellError.NA))
+      .put(ref"B1" -> "x")
+      .put(ref"B2" -> "x")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0))) // 101px
+
+    val html = sheet.toHtml(ref"A1:B2")
+    assertEquals(htmlHashRuns(html), Nil, s"Values with room to spare must not hash: $html")
+    val boolTd = htmlCellTag(html, "TRUE").getOrElse(fail(s"TRUE should render: $html"))
+    val errTd = htmlCellTag(html, "#N/A").getOrElse(fail(s"#N/A should render: $html"))
+    assert(boolTd.contains("text-align: center"), s"Logicals centre: $boolTd")
+    assert(errTd.contains("text-align: center"), s"Errors centre like logicals: $errTd")
+  }
+
+  test("toHtml: number under the @ text format is left-aligned, spans, never hashes (GH-501)") {
+    List(NumFmt.Text, NumFmt.Custom("@")).foreach { fmt =>
+      val textFmt = CellStyle.default.withNumFmt(fmt)
+      val sheet = Sheet("Test")
+        .put(ref"A1" -> 1234567.9)
+        .unsafe
+        .withCellStyle(ref"A1", textFmt)
+        .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // 37px
+
+      val html = sheet.toHtml(ref"A1:B1")
+      assertEquals(htmlHashRuns(html), Nil, s"$fmt: an @-formatted number never hashes: $html")
+      val td = htmlCellTag(html, "1234567.9").getOrElse(fail(s"$fmt: digits should render: $html"))
+      assert(td.contains("colspan=\"2\""), s"$fmt: it overflows into the empty B1: $td")
+      assert(td.contains("text-align: left"), s"$fmt: it takes text alignment: $td")
+    }
+  }
+
+  test("toHtml: accounting code with a trailing _(@_) section stays numeric (GH-501)") {
+    val acct = CellStyle.default.withNumFmt(
+      NumFmt.Custom("_(* #,##0.00_);_(* (#,##0.00);_(* \"-\"??_);_(@_)")
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", acct)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // 37px
+
+    val html = sheet.toHtml(ref"A1:B1")
+    val marker = htmlHashRuns(html).headOption.getOrElse(fail(s"Must hash: $html"))
+    val td = htmlCellTag(html, marker).getOrElse(fail(s"No hashed <td>: $html"))
+    assert(td.contains("text-align: right"), s"Stays right-aligned: $td")
+    assert(!html.contains("colspan"), s"A numeric cell never spans: $html")
+  }
+
+  test("toHtml: left-aligned number rounded by its format claims no colspan (GH-502)") {
+    val leftDecimal =
+      CellStyle.default.withNumFmt(NumFmt.Decimal).withAlign(Align(horizontal = HAlign.Left))
+    val colWidth = columnBetween("0.12", "0.123456789", leftDecimal.font)
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 0.123456789)
+      .unsafe
+      .withCellStyle(ref"A1", leftDecimal)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
+
+    val html = sheet.toHtml(ref"A1:C1")
+    assert(!html.contains("colspan"), s"'0.12' fits its own column, no span: $html")
+    assert(htmlCellTag(html, "0.12").isDefined, s"The rounded value renders: $html")
+  }
+
+  test("toHtml: left-aligned currency is measured as its formatted text, not its digits (GH-502)") {
+    // "1234.5" fits the column, "$1,234.50" does not: sized from the raw digits the cell was
+    // judged to fit and drew a sheared "$1,234.5". Measured as drawn it does not fit, and a
+    // number never borrows the empty B1 whatever its alignment: Excel hashes it (GH-500).
+    val leftCurrency =
+      CellStyle.default.withNumFmt(NumFmt.Currency).withAlign(Align(horizontal = HAlign.Left))
+    val colWidth = columnBetween("1234.5", "$1,234.50", leftCurrency.font)
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234.5)
+      .unsafe
+      .withCellStyle(ref"A1", leftCurrency)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
+
+    val html = sheet.toHtml(ref"A1:B1")
+    val marker = htmlHashRuns(html).headOption.getOrElse(fail(s"Formatted text must hash: $html"))
+    val td = htmlCellTag(html, marker).getOrElse(fail(s"No hashed <td>: $html"))
+    assert(!html.contains("colspan"), s"A number never spans into B1: $html")
+    assert(td.contains("text-align: left"), s"The explicit alignment is kept: $td")
+    assert(!html.contains("1,234"), s"No fragment of the number may render: $html")
+  }
+
+  test("toHtml: left-aligned error is measured as its Excel code, not the enum name (GH-502)") {
+    // "Div0" (the enum case name) fits the column, "#DIV/0!" (what is drawn) does not: sized
+    // from the enum name the cell was judged to fit and clipped the code to a fragment. An
+    // error never spans into the empty B1: Excel hashes it (GH-500).
+    val left = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val colWidth = columnBetween("Div0", "#DIV/0!", left.font)
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Error(CellError.Div0))
+      .unsafe
+      .withCellStyle(ref"A1", left)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assert(htmlHashRuns(html).nonEmpty, s"The error code does not fit and must hash: $html")
+    assert(!html.contains("colspan"), s"An error never spans into B1: $html")
+    assert(!html.contains("#DIV"), s"No fragment of the error code may render: $html")
+  }
+
+  test("toHtml: a too-wide number hashes in its own column under any alignment (GH-500)") {
+    // Excel never lets a number overflow into a neighbour, empty or not: it hashes it whether
+    // General (right), explicitly Left or Center aligned. Only text spills.
+    val left = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val center = CellStyle.default.withAlign(Align(horizontal = HAlign.Center))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> 1234567.9)
+      .put(ref"A2" -> 1234567.9)
+      .put(ref"A3" -> 1234567.9)
+      .unsafe
+      .withCellStyle(ref"A1", left)
+      .withCellStyle(ref"A2", center)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(3.0))) // 29px
+
+    val html = sheet.toHtml(ref"A1:B3")
+    assertEquals(htmlHashRuns(html).size, 3, s"All three numbers must hash: $html")
+    assert(!html.contains("colspan"), s"A hashed number never spans into the empty B: $html")
+    assert(!html.contains("1234567"), s"No digits may render: $html")
+    val tds = """<td[^>]*>#+</td>""".r.findAllIn(html).toList
+    assert(tds(0).contains("text-align: left"), s"A1 keeps its explicit alignment: ${tds(0)}")
+    assert(tds(1).contains("text-align: center"), s"A2 keeps its explicit alignment: ${tds(1)}")
+    assert(tds(2).contains("text-align: right"), s"A3 is General, so right: ${tds(2)}")
+  }
+
+  test(
+    "toHtml: TRUE and #N/A that fit stay in their own cell, centred, beside an empty B (GH-500)"
+  ) {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> true)
+      .put(ref"A2", CellValue.Error(CellError.NA))
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0))) // 101px
+
+    val html = sheet.toHtml(ref"A1:B2")
+    assertEquals(htmlHashRuns(html), Nil, s"Values with room to spare must not hash: $html")
+    assert(!html.contains("colspan"), s"A logical or error never spans into B: $html")
+    val boolTd = htmlCellTag(html, "TRUE").getOrElse(fail(s"TRUE should render: $html"))
+    val errTd = htmlCellTag(html, "#N/A").getOrElse(fail(s"#N/A should render: $html"))
+    assert(boolTd.contains("text-align: center"), s"Logicals centre in their own cell: $boolTd")
+    assert(errTd.contains("text-align: center"), s"Errors centre in their own cell: $errTd")
+  }
+
+  test("toHtml: TRUE and #DIV/0! too wide for their column hash beside an EMPTY B (GH-500)") {
+    // The occupied-neighbour case is covered above; Excel hashes these with B empty too — it
+    // never draws a logical or an error across the cell boundary.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> true)
+      .put(ref"A2", CellValue.Error(CellError.Div0))
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(3.0))) // 29px
+
+    val html = sheet.toHtml(ref"A1:B2")
+    assertEquals(htmlHashRuns(html).size, 2, s"Both the logical and the error must hash: $html")
+    assert(!html.contains("colspan"), s"Neither may span into the empty B: $html")
+    assert(!html.contains("TRUE") && !html.contains("#DIV"), s"No fragment may render: $html")
+    val tds = """<td[^>]*>#+</td>""".r.findAllIn(html).toList
+    assert(tds.forall(_.contains("text-align: center")), s"Both markers are centred: $tds")
   }

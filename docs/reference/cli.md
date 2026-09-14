@@ -123,6 +123,26 @@ xl batch --schema                                  # JSON Schema of the batch do
 > non-heap `OutOfMemoryError` (Metaspace, "unable to create native thread") is reported with the
 > heap wording.
 
+> **Where a streamed write spills.** The two-pass streaming writer (the CSV import into a new
+> workbook: `import --stream --new-sheet`) buys its up-front `<dimension>` by spilling the worksheet
+> body to a scratch file, deleted when the write ends. It lands in `java.io.tmpdir` unless
+> `XL_SPILL_DIR` names another directory — trimmed, blank is the default, and it must already exist
+> and be writable; a container's small tmpfs is the reason to move it. The variable is read once per
+> process and consulted by that write and by one render backend — `--rasterizer resvg` takes file
+> paths only, so its scratch SVG lands in the same directory (`java.io.tmpdir` unless `XL_SPILL_DIR`
+> is set; the other backends pipe the SVG and write nothing); every other write goes to its
+> destination's directory and never spills. The library stays deterministic — `ExcelIO.instance`
+> never reads the environment (see the performance guide for `withSpillDir`). A value that is not a
+> path is a usage error naming `XL_SPILL_DIR` (exit 2) before the CSV is opened; a scratch file that
+> cannot be created or filled fails the write as `IO_WRITE` (exit 3) — `cannot write <output>: …`
+> naming the configured directory, `error.location.file` the output — and a resvg render whose
+> scratch SVG cannot be created fails the same way (`cannot write the resvg scratch SVG: …`, the
+> hint naming the directory and the lever). Note that `import` requires `-f` today and
+> the reader refuses a book with no sheets, so the O(1) CSV import — and with it this setting — is
+> reached from the command line once `import --new-sheet` accepts no input file (the registry-driven
+> CLI, #584), which also brings the `--spill-dir` flag; the native binary and the JAR wrapper read
+> the variable alike.
+
 > **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
 > (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`/`--sheet` (for a batch op, its `sheet` key
 > comes first); otherwise the only sheet of a single-sheet book (under `--json` a
@@ -157,35 +177,54 @@ How completely caches survive depends on the verb:
 - **Non-structural** (`put`, `putf`, `fill`, `copy`, `batch`): explicitly written cells take their
   new content; existing formula caches elsewhere are preserved, including dependents.
 - **Structural** (`insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`): a structural edit
-  moves cells, rewrites formula text and rewrites defined names, so xl invalidates the cache of
-  every formula the edit could have changed and writes those cells **without a `<v>`**. It never
-  re-asserts a pre-edit cache: whether a formula the edit *did* reach still has its old answer
-  cannot be decided without recalculating, which is precisely what the flag refuses. (A formula
-  reached through a shrunk defined name, or a static dependent of an `INDIRECT` cell, keeps its text
-  byte-identical while its answer changes underneath it.)
+  moves cells, rewrites formula text and rewrites defined names. xl keeps a pre-edit cache only
+  where the edit **provably** could not have changed it — the formula's text, record kind and
+  address are unchanged and it lies outside the edit's dirty cone — and writes every other formula
+  **without a `<v>`**: a formula whose text the edit rewrote or whose cell it moved (`=ROW()`
+  keeps its text and changes its answer), every reader of a moved or removed cell (through a point
+  reference, a range the band cuts, or a defined name the edit shrinks or degrades to `#REF!`)
+  and everything downstream of those across sheets, every dynamic reference (`INDIRECT`,
+  `OFFSET`) and its dependents, and every formula the static graph cannot resolve — a defined name
+  whose definition the parser rejects (a multi-area union), an alias of one, an unparseable
+  formula — with its dependents (name resolution respects sheet-local shadowing). Then it writes
+  **`<calcPr fullCalcOnLoad="1"/>`** into `workbook.xml`, overlaying the book's existing
+  `<calcPr>` (a declared `iterate` triple, `calcMode`, `calcId` and unmodeled attributes survive).
+  The marker is set on every `--no-recalc` structural write, including an edit beside the data.
 
-  A cache survives only when the edit provably could not have changed it: the formula's text is
-  byte-identical after the rewrite, it did not relocate, and nothing it transitively reads was moved
-  or removed. So an edit *below* or *beside* your data preserves everything, while an edit *inside*
-  a block preserves the rows above the cut and drops the rest. The summary counts both halves:
+  What each reader then shows:
+
+  - **Excel** honors `fullCalcOnLoad` and recomputes the whole book on open, so it displays fresh
+    numbers everywhere — including any cache the graph could not fault.
+  - **LibreOffice** does **not** honor the marker at its shipped default (Tools ▸ Options ▸ Calc ▸
+    Formula ▸ *Recalculation on File Load* is "Never recalculate" for Excel 2007+ files): it
+    displays whatever `<v>` a cell carries and computes only the cells without one. This is why
+    the dirty cone is withdrawn rather than carried: a blank LibreOffice fills in, a stale number
+    it would display. (Verified with `soffice --headless --convert-to csv`: a carried `SUM` cache
+    over a deleted row was shown as the pre-edit total, with or without the marker.)
+  - **Cache-only readers** (`openpyxl` with `data_only=True`, pandas, `xl view` without `--eval`)
+    see a blank where the edit reached and the source file's numbers elsewhere — never a stale
+    number.
+
+  The summary counts both sides:
 
   ```
-  Recalculation skipped (--no-recalc): 4 cached value(s) preserved, 7 formula(s) invalidated by
-  the edit left uncached (recalculate externally)
+  Recalculation skipped (--no-recalc): 4 cached value(s) preserved, 7 withdrawn (the edit could
+  have changed them; written without <v>); workbook marked for full recalculation on load
+  (fullCalcOnLoad)
   ```
 
-  One consequence worth knowing: **volatile formulas** (`TODAY()`, `NOW()`, `RAND()`) above the cut
-  keep their cached values too. The flag means "do not recalculate", and a volatile is no exception
-  — Excel refreshes them on open regardless.
+  An unsupported reference rewrite that could change a defined name's meaning is refused before
+  the edit; top-level unions remain supported for rewriting even though the evaluator cannot
+  compute them.
 
-  Reopening the file in Excel, or a later `xl recalc`, fills those back in. A missing `<v>` is a
-  visible gap that any recalculation repairs; a wrong one is silent and permanent, which is why xl
-  never **re-asserts** a cache the edit invalidated. Unresolved named readers, aliases, and their
-  dependents are invalidated on both default and `--no-recalc` paths. Name resolution respects
-  sheet-local shadowing. An unsupported reference rewrite that could change a defined name's
-  meaning is refused before the edit; top-level unions remain supported for rewriting even though
-  the evaluator cannot compute them. **If you need every formula cached after a structural edit,
-  do not pass `--no-recalc`.**
+  Two things worth knowing. `fullCalcOnLoad` recomputes ordinary formulas; under
+  `calcMode="autoNoTable"` Excel still leaves **data-table** interiors as they are (their caches
+  ride through under every posture, so nothing is lost there). And the marker is sticky: Excel
+  clears it on its own save, but a later `xl recalc` recomputes the values and leaves the
+  attribute in place. `describe --full` shows whether a book carries it. **If you need every
+  formula freshly computed after a structural edit, do not pass `--no-recalc`.** The library's
+  `StructuralCachePolicy.CarryForward` (keep every pre-edit cache) is not offered by the CLI: it
+  is honest only for a caller who knows the reader is Excel.
 
 ```bash
 xl -f external-model.xlsx -s Data -o out.xlsx --no-recalc put B5 1000
@@ -299,6 +338,12 @@ Sheet operations. With no subcommand, defaults to `list`.
 | 3 | P&L         | A1:N120  | 978   | 76       |
 ```
 
+**JSON** (`--json`): `data` = `{sheets: [{name, index, state, dimension}]}` — the same elements
+`describe --json` carries as `data.sheets` (`index` 1-based in workbook order, `state` one of
+`visible`/`hidden`/`veryHidden`, `dimension` the used range or `null` for an empty sheet);
+`--stats` adds `cells` and `formulas` to each element. `--stream sheets` emits the same object
+(`--stats` is refused under it).
+
 ---
 
 ### `xl names` / `xl name add|rm`
@@ -307,12 +352,49 @@ List and manage defined names (named ranges).
 
 ```bash
 xl -f model.xlsx names                                       # List all defined names
-xl -f model.xlsx -o out.xlsx name add Tax 'Sheet1!$A$1'      # Add or replace
+xl -f model.xlsx -o out.xlsx name add Tax 'Sheet1!$A$1'      # Add or replace (workbook-scoped)
 xl -f model.xlsx -o out.xlsx name rm Tax                     # Remove
+xl -f model.xlsx -o out.xlsx -s Sheet1 name add Local 'Sheet1!$B$2'   # Sheet-scoped (localSheetId)
+xl -f model.xlsx -o out.xlsx -s Sheet1 name rm Local                  # Remove the sheet-scoped one
 ```
+
+`-s` is the name's **scope**, not a sheet for refs: without it `name add|rm` author and remove
+workbook-scoped names (a single-sheet book is not auto-selected); with it they author and remove
+the name scoped to that sheet — `localSheetId` in `workbook.xml`, following the sheet across
+reorders. Excel's per-sheet print chrome is authored this way (the same result as the scripting
+`PageSetup(printArea = …, repeatRows = …)`):
+
+```bash
+xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20'
+xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Titles 'Sheet1!$1:$2'
+```
+
+A sheet's `_xlnm.Print_Area` / `_xlnm.Print_Titles` read from a file live in its page setup (the
+fields the scripting `PageSetup` sets; `names` still lists them from `workbook.xml`): `name add -s`
+replaces them and `name rm -s` clears them, so `-s Sheet1 name rm _xlnm.Print_Area` is the inverse
+of the `name add` above on its own output. `-s` names the sheet exactly as spelled, like every
+verb's `-s`; so does the batch twins' `scope` key (`SHEET_NOT_FOUND` with the sheet as a
+candidate for a case variant — one rule for every sheet key).
+
+`name add|rm` are writes like `putf`: a changed binding recalculates the formulas that read the
+name (through aliases, named ranges, local shadows and cross-sheet references) and the summary
+carries the same `Recalculated N formula(s)` line the batch twins print, so the file never caches
+a value its own name table contradicts; a reader `name rm` leaves unevaluable (`#NAME?`) is left
+uncached and reported (`RECALC_ERRORS`; exit 1 under `--strict`). `--no-recalc` keeps every cache
+and says so. Their batch twins are `define-name` / `remove-name`.
+
+Names are case-insensitive identifiers, as in Excel: `name add case …` replaces an existing `CASE`
+(every same-scope spelling, so a table that held case-colliding duplicates holds one afterwards),
+`name rm total` removes `Total`, and `NAME_NOT_FOUND`'s candidates are the names in that scope.
+`names` shows a sheet-scoped name's sheet in parentheses (`"scope"` in `--json`).
 
 `names` reads `workbook.xml` alone, so it takes `--stream` (the same read, any file size; since
 0.22.0). `name add|rm` load the workbook and write through the streaming writer under the flag.
+
+**JSON** (`--json`): `data` = `{names: [{name, refersTo, scope, hidden}]}` — every name, hidden
+ones included (the text listing omits those), `scope` the sheet name of a sheet-scoped name and
+`null` for a workbook-scoped one; the same elements `describe --json` carries as `definedNames`;
+`{names: []}` when the book has none.
 
 ---
 
@@ -448,9 +530,10 @@ When no backend is available, raster exports fail with an error naming the probe
 ### `xl functions [--json]`
 
 List every formula function the evaluator supports (no `-f` needed). Text mode prints the names in
-columns with the count; `--json` prints typed rows — `{name, minArgs, maxArgs, args, returnsDate,
-returnsTime, dynamicDeps, volatile, specialForm}`, `maxArgs` `null` for a variadic function — for
-every registry function plus `LET`, the parser-level special form (`specialForm: true`).
+columns with the count; `--json` yields `data.functions`, typed rows — `{name, minArgs, maxArgs,
+args, returnsDate, returnsTime, dynamicDeps, volatile, specialForm}`, `maxArgs` `null` for a
+variadic function — for every registry function plus `LET`, the parser-level special form
+(`specialForm: true`).
 `dynamicDeps` and `volatile` are the evaluator's recalculation flags: the cells a call reads are
 decided at evaluation time (INDIRECT, OFFSET); the value can change between two recalculations with
 no input changing (TODAY, NOW, RAND, RANDBETWEEN — what `xl audit` lists under `volatile`). The
@@ -459,8 +542,8 @@ rows.
 
 ```bash
 xl functions                                  # names in columns, "Supported Excel Functions (N total)"
-xl --json functions | jq '.data[] | select(.dynamicDeps) | .name'   # INDIRECT, OFFSET
-xl --json functions | jq '.data[] | select(.volatile) | .name'      # NOW, RAND, RANDBETWEEN, TODAY
+xl --json functions | jq '.data.functions[] | select(.dynamicDeps) | .name'   # INDIRECT, OFFSET
+xl --json functions | jq '.data.functions[] | select(.volatile) | .name'      # NOW, RAND, RANDBETWEEN, TODAY
 ```
 
 ---
@@ -484,7 +567,7 @@ summary, preceded by the global flags and the exit-code table.
 | `globals` | `[{name, short, takesValue, doc}]` — the global flags (`--file`/`-f`, ...) |
 | `verbs` | `[{path, summary, needs: {file, sheet, output, streaming}, exit, batchTwin, since}]` — `path` is the subcommand path (`["sheets", "hide"]`), joined by a space it is the envelope's `verb` |
 | `batchOps` | the batch document's JSON Schema — what `xl batch --schema` prints alone |
-| `functions` | the `xl functions --json` rows |
+| `functions` | the rows `xl functions --json` yields as `data.functions` |
 | `envelope` | the JSON Schema of the `--json` envelope itself |
 
 ```bash
@@ -1443,8 +1526,9 @@ own `hint`.
 
 **Rules every op follows**:
 
-- **The `sheet` key.** Every op except `add-sheet`/`rename-sheet` accepts `"sheet"`: the sheet
-  for its unqualified refs. THE sheet rule applies per op — a sheet-qualified ref
+- **The `sheet` key.** Every op except `add-sheet`/`rename-sheet`/`define-name`/`remove-name`
+  accepts `"sheet"`: the sheet for its unqualified refs (a name's `scope` is its own key, the
+  verb's `-s`). THE sheet rule applies per op — a sheet-qualified ref
   (`"Summary!A1"`) wins, then the op's `sheet`, then `-s`/`--sheet`, then the only sheet of a
   single-sheet book, else `SHEET_REQUIRED`. A `rename-sheet` of the batch's default sheet
   retargets the ops that follow it.
@@ -1458,6 +1542,12 @@ own `hint`.
   leaves an existing format alone.
 - **`rename-sheet` rewrites references**: every formula, defined name, conditional-formatting
   rule and chart series that named the old sheet now names the new one, on every sheet.
+- **Defined-name edits recalculate their readers**: `define-name` and `remove-name` refresh
+  affected formula caches, including aliases, named ranges, local scope and cross-sheet
+  dependents. Unrelated caches are preserved; `--no-recalc` keeps the pre-edit caches. A reader
+  that cannot be evaluated after the name change is reported and left uncached. The verbs
+  `name add` / `name rm` write through the same tail. A `scope` names the sheet exactly as
+  spelled, like `-s` and every op's `sheet` key.
 - **Under `--stream`** the streamable ops (see the table) are applied with identical semantics —
   `style` merges, `format` replaces, a `put` with both `value` and `values` is refused — and an
   op's `sheet` or a qualified ref may name the streamed worksheet; any other op, or one whose
@@ -1696,7 +1786,7 @@ xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
 
 ---
 
-### `xl lint [<file>] [--format text|json]`
+### `xl lint [<file>] [--format text|json] [--strict]`
 
 Validate the raw package structure against the Excel-repair classes — the defects Excel
 repairs loudly (repair dialog, content stripped) but every lenient reader, xl's own
@@ -1707,13 +1797,22 @@ model, so nothing gets normalized before it's checked.
 xl lint deliverable.xlsx                         # Positional file form
 xl -f deliverable.xlsx lint                      # Flag form (equivalent)
 xl -f deliverable.xlsx lint --format json        # Stable schema for pipelines
-xl -f deliverable.xlsx lint && echo "safe to send"
+xl -f deliverable.xlsx lint && echo "safe to send"      # exit 0 = no repair findings
+xl -f deliverable.xlsx lint --strict && echo "spotless" # exit 0 = no finding of any tier
 xl -f huge.xlsx --stream lint                    # SAX-scan the sheet parts: O(1) in the row count
 ```
 
 `--stream lint` (since 0.22.0) runs the streaming lint: the worksheet and table parts are
 SAX-scanned instead of parsed, so a million-row book lints in constant memory; the findings are
 identical (pinned by the lint parity suite).
+
+**Severity**: every finding carries a tier, `repair` or `hygiene` (`--format json`:
+`.findings[].severity`; text: hygiene lines are tagged `(hygiene)` and the header counts both).
+`repair` is the class the lint exists for — Excel repairs or refuses the file, or a reader misreads
+a value — and fails the gate. `hygiene` is a valid file that opens intact everywhere but carries
+dead weight or a privacy hazard: `unreferenced-part`, and the orphan half of
+`shared-string-orphan`. Hygiene findings are reported (with a `LINT_HYGIENE` warning) but exit `0`
+unless `--strict` (the global flag, accepted before or after the verb) promotes them to the gate.
 
 **What it flags** (the complete `LintCategory` roster — a test pins this list against
 `LintCategory.slug`, so it cannot drift):
@@ -1759,22 +1858,75 @@ identical (pinned by the lint parity suite).
   `FormulaStorage.bareFutureCalls` runs the same scanner as the storage mapping, so the lint flags
   exactly the text xl's writer would still prefix. One finding per part with the bare names (a
   half-prefixed `LET` is listed as `LET`), the first five sites and the total count.
-  xl's own writers emit the prefix for every slot they regenerate, but a slot a write leaves
-  untouched is copied verbatim, and a CF block, DV container or name table is regenerated only
-  when its parsed model no longer equals the source. To heal one, add or change a rule, validation
-  or name in that part; re-entering the same formula compares equal to the source (bare and
-  prefixed text parse to the same model) and is copied through bare — `xl name add` with the same
-  text does not heal, `cf add` appends a rule and therefore does. A cell heals on any in-memory
-  edit of its sheet; an untouched worksheet and every cell a `--stream` write does not patch are
-  copied verbatim. See [LIMITATIONS.md](../LIMITATIONS.md)
+  xl's own writers emit the prefix for every slot they regenerate, and the writer's clean-compare
+  gates treat bare text as dirty (the same `bareFutureCalls` rule), so any in-memory write that
+  regenerates the worksheet heals its cells, CF blocks and DV container, and any in-memory write
+  at all heals `<definedName>` bodies (`workbook.xml` is regenerated on every non-clean write) —
+  a `put` on the sheet is enough, no rule, validation or name needs re-authoring. Not healed: a
+  slot inside an unmodeled rule or validation (an `iconSet`/`timePeriod` rule, an entry with
+  foreign attributes — re-emitted verbatim as captured), an x14 `<xm:f>`, an untouched worksheet
+  (copied verbatim), and every slot a `--stream` write does not patch. See
+  [LIMITATIONS.md](../LIMITATIONS.md)
+- **`empty-inline-str`** — a `t="inlineStr"` / `t="str"` cell with neither an `<is>` nor a
+  `<v>` (openpyxl's serialization of `value=""`): off-spec, so strict readers reject the sheet —
+  xl's own in-memory reader did too before #460; it now reads the cell as blank (the style index
+  survives), and any write that regenerates the sheet emits the blank without a `t`. Not the
+  class: a formula cell without a cached `<v>`, and an `<is/>` that is present but empty (the
+  empty string to every reader, like `<is><t></t></is>`). One finding per part (first five cells
+  + total)
+- **`mc-ignorable-undeclared`** — an `mc:Ignorable` list naming a prefix declared on neither the
+  element nor an ancestor (checked on `xl/workbook.xml`, every sheet-class and table part, and
+  `xl/styles.xml`): the ElementTree re-serialization class — the declarations are re-prefixed away
+  while the Ignorable list keeps the old names, and Excel opens the part blank. Also a root element
+  binding the main namespace to a generated `ns0`-style prefix, the signature of the same
+  round-trip: on its own a compatibility smell at severity `hygiene`, not a repair — Excel and
+  LibreOffice open a namespace-correct prefixed root with every cell intact (verified against
+  both) — but no
+  mainstream producer writes it and prefix-naive tooling (regexes, XPath on the default-namespace
+  spelling) misreads it. An UNBOUND element prefix is a well-formedness error and exits `3` with
+  the parser's message instead
+- **`dxf-id-out-of-range`** — a `dxfId`-family attribute (`<cfRule dxfId>`, `<sortCondition
+  dxfId>`, table `dataDxfId` / `headerRowDxfId` / `totalsRowDxfId` and the border variants)
+  indexing past the `<dxfs>` table of `xl/styles.xml`, counted by its actual `<dxf>` children —
+  never the `count` attribute — so a writer that carried conditional formatting across a fresh
+  write without its differential formats is caught; Excel repairs the file and the formatting is
+  lost. Sheet-class and table parts only (`<tableStyleElement>` and pivot styling are not scanned)
+- **`unreferenced-part`** — a zip entry no relationship reaches from `_rels/.rels` through the
+  chain of `.rels` parts (drawings → charts → media included): dead weight a producer left behind,
+  or a forgotten Relationship. `.rels` parts, `[Content_Types].xml` and Excel's own `[trash]/`
+  leftovers are never findings; a `.rels` inside the chain that is not well-formed is one finding
+  on that rels instead of a flood. Not a repair class — Excel ignores such parts, but their bytes
+  travel with every copy of the file. Severity `hygiene`
+- **`shared-string-orphan`** — an `xl/sharedStrings.xml` entry no `t="s"` cell references (ONE
+  finding with the orphan count and the first five INDICES — never the text, so scrubbed content
+  cannot resurface in a lint log), or a `t="s"` index past the table (the reader shows `#REF!`,
+  Excel repairs — severity `repair`). The orphan half is severity `hygiene`: a privacy signal, not
+  a repair class — a counterparty name scrubbed from every cell still rides in the package. xl's
+  fresh writes lint clean; a surgical edit of a foreign SST book that replaces or removes text
+  appends the new string and leaves the old entry behind — xl never prunes a preserved table —
+  which this finding reports without failing the gate (see the carve-out below). Under `--stream`
+  the table is SAX-counted and the references are a bit set of its size: O(1) in the row count,
+  O(uniqueCount) bits in the table. Cells on Excel 4.0 macro sheets (`xl/macrosheets/`, rel type
+  `xlMacrosheet`) count as references like any worksheet's
 
-**Exit codes**: `0` no findings · `1` findings reported · `3` error (unreadable file, malformed
-core part) · `2` usage (no file, or a file given both ways) — errors go to stderr with a `code:`
-line (see [Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
+**Exit codes**: `0` no repair findings (hygiene findings, if any, are listed and a `LINT_HYGIENE`
+warning counts them) · `1` repair findings reported — or, under `--strict`, any finding at all ·
+`3` error (unreadable file, malformed core part) · `2` usage (no file, or a file given both ways)
+— errors go to stderr with a `code:` line (see
+[Errors, warnings and exit codes](#errors-warnings-and-exit-codes)). In `--format json`, `clean`
+stays "no findings at all"; the exit code is the gate.
 
-`xl lint` is read-only — it never repairs or rewrites the file. xl's own output always
-lints clean; use it as a pre-send self-check in agent pipelines that splice or post-process
-workbooks.
+`xl lint` is read-only — it never repairs or rewrites the file. xl's own fresh writes always
+lint clean, and xl's own edits never introduce a repair finding; use it as a pre-send self-check
+in agent pipelines that splice or post-process workbooks. One documented carve-out (#567): a
+surgical edit of a foreign shared-string book that replaces or removes text — or that introduces
+a shared-string table into a multi-sheet inline-string book while copying an untouched sheet
+verbatim — leaves entries no cell references in `xl/sharedStrings.xml` (xl appends and re-points,
+it never prunes a preserved table), so that output reports `shared-string-orphan` — a hygiene
+finding, exit `0` — until the table is rebuilt: from the library, a fresh write of
+`Workbook(wb.sheets)` (no source, every sheet regenerated) rebuilds it from the cells; there is
+no CLI compaction yet. `--strict` makes that finding fail the gate; `--format json` exposes
+`.findings[].category` and `.findings[].severity` for a finer filter.
 
 ---
 
@@ -1878,11 +2030,15 @@ with the same seven keys every time:
 | `exitCode` | the process exit code, from the table above (`0`/`1`/`2`/`3`) |
 | `verb` | the subcommand path, e.g. `"view"`, `"sheets hide"`, `"cf add"` (best-effort for a usage error raised before dispatch) |
 | `version` | the `xl` version that produced the envelope |
-| `data` | the verb's payload (below); `null` on a failure |
+| `data` | the verb's payload (below) — always a JSON object; `null` on a failure |
 | `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict`, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `READER_WARNING`); `location` when known |
 | `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
 
-**What `data` holds.** `--json` selects a verb's JSON payload where it has one and wraps the text
+**What `data` holds.** `data` is always a JSON object (`null` on a failure). A listing verb keys
+its array by the noun — `sheets` → `{sheets: [...]}`, `names` → `{names: [...]}`, `functions` →
+`{functions: [...]}` — so `.data.sheets[0].name` reads the same after `describe` and after
+`sheets`, and `.data[0]` is never right (0.20.0–0.22.0 printed bare arrays for these three verbs;
+see the CHANGELOG). `--json` selects a verb's JSON payload where it has one and wraps the text
 otherwise:
 
 - `--format json` keeps printing the bare payload without `--json` — the shapes of `view`
@@ -1890,12 +2046,14 @@ otherwise:
   explicit `--format`, that same payload is `data`: `xl --json view A1:C3` yields `data` equal to
   what `view --format json` prints bare (`--format json --json` spells the same thing out). An
   explicit text `--format` (markdown, csv, html, …) under `--json` rides inside as `data.text`.
-- Typed verbs build `data` directly: `sheets` → `[{name, index, state, dimension}]` (`--stats` adds
-  `cells`, `formulas`); `names` → `[{name, refersTo, scope, hidden}]`; `bounds` →
+- Typed verbs build `data` directly: `sheets` → `{sheets: [{name, index, state, dimension}]}`
+  (`--stats` adds `cells`, `formulas` to each element; the elements are `describe`'s
+  `data.sheets`); `names` → `{names: [{name, refersTo, scope, hidden}]}`; `bounds` →
   `{sheet, range, dimension}`; `eval` → `{formula, result: {type, value, formatted}, overrides}`;
   `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
-  `functions` → `[{name, minArgs, maxArgs, args, returnsDate, returnsTime, dynamicDeps,
-  volatile, specialForm}]`; `rasterizers` → `{backends: [{name, status, note}], anyAvailable}`;
+  `functions` → `{functions: [{name, minArgs, maxArgs, args, returnsDate, returnsTime,
+  dynamicDeps, volatile, specialForm}]}`; `rasterizers` → `{backends: [{name, status, note}],
+  anyAvailable}`;
   `batch --dry-run` → `{ops: [{index, op, summary}]}` (`index` is the op's 1-based position,
   the index a `BATCH_OP_FAILED` reports; parse warnings ride in the envelope's `warnings[]`); `batch --schema` → the batch document's JSON
   Schema; `schema` → `{version, exitCodes, errorCodes, warningCodes, globals, verbs,
@@ -1929,7 +2087,7 @@ verb-owned flag before the verb, `-i` with `-o`) also produces the envelope — 
 ```bash
 xl -f book.xlsx -s Data --json view A1:C3 | jq '.data.rows'   # --json alone selects the JSON payload
 xl -f book.xlsx -s Data -o out.xlsx --json put A1 42 | jq -e '.ok' >/dev/null || echo "put failed"
-xl -f book.xlsx --json sheets | jq -r '.data[].name'
+xl -f book.xlsx --json sheets | jq -r '.data.sheets[].name'   # data is an object; the array is keyed by the noun
 ```
 
 The envelope's JSON Schema is `xl-cli/resources/schema/envelope.schema.json` — shipped in the

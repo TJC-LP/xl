@@ -53,6 +53,8 @@ object formulaExports:
   export formula.eval.{CellEvalError, IterativeCalc, RecalcResult}
   // GH-492: per-strongly-connected-component fixpoint verdicts on RecalcResult.cycles
   export formula.eval.SccReport
+  // GH-482: within-component iteration scheme (IterativeCalc.scheme): GaussSeidel | Jacobi
+  export formula.eval.IterationScheme
 
   // GH-419: explicit data-table cache seeding (autoNoTable books never recompute tables on open)
   export formula.eval.DataTableSeeder
@@ -70,7 +72,13 @@ object formulaExports:
   // structural editor + string-level formula rewriting the CLI and scripts share. The objects are
   // exported, never their `.*` members: StructuralEditor's extension block carries default
   // arguments (the wildcard-export landmine above).
-  export formula.eval.{IterativeMode, RecalcOptions, SheetRenamer, StructuralEditor}
+  export formula.eval.{
+    IterativeMode,
+    RecalcOptions,
+    SheetRenamer,
+    StructuralCachePolicy,
+    StructuralEditor
+  }
   export formula.printer.{FormulaOps, FormulaShifter}
   // ADR-017 §2.12 (W2.1): the evaluator-backed FormulaSupport behind wb.edit / sheet.edit.
   export formula.eval.EvalFormulaSupport

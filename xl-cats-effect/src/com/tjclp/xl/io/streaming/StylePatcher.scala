@@ -9,6 +9,7 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.ooxml.{XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.style.{ColorHelpers, OoxmlStyles}
 import com.tjclp.xl.error.XLResult
 import java.util.Locale
 
@@ -385,6 +386,22 @@ object StylePatcher:
       Elem(null, "xf", allAttrs, TopScope, minimizeEmpty = false, alignmentToXml(align))
     else Elem(null, "xf", allAttrs, TopScope, minimizeEmpty = true)
 
+  /**
+   * A colour child (`<color>`, `<fgColor>`, `<bgColor>`) spelled as the DOM/SAX serializers spell
+   * it: `rgb` as 8 upper-case hex digits; a theme colour by its OOXML theme INDEX
+   * (`ColorHelpers.themeSlotToIndex` — ECMA-376 §18.8.3 orders lt1, dk1, lt2, dk2, so Dark1 is
+   * `theme="1"`, NOT `slot.ordinal`, which wrote Dark1/Light1 and Dark2/Light2 swapped on the
+   * streaming path only), with the tint in Excel's form and omitted when zero (GH-448).
+   */
+  private def colorElem(label: String, color: Color): Elem =
+    val attrs: MetaData = color match
+      case Color.Rgb(argb) => new UnprefixedAttribute("rgb", f"$argb%08X", Null)
+      case Color.Theme(slot, tint) =>
+        val tintAttr: MetaData =
+          OoxmlStyles.tintToken(tint).fold(Null)(t => new UnprefixedAttribute("tint", t, Null))
+        new UnprefixedAttribute("theme", ColorHelpers.themeSlotToIndex(slot).toString, tintAttr)
+    Elem(null, label, attrs, TopScope, minimizeEmpty = true)
+
   private def fontToXml(font: Font): Elem =
     val children = scala.collection.mutable.ListBuffer[Elem]()
     if font.bold then children += <b/>
@@ -394,11 +411,7 @@ object StylePatcher:
       case Underline.Single => children += <u/>
       case other => children += <u val={Underline.token(other)}/>
     children += <sz val={font.sizePt.toString}/>
-    font.color.foreach {
-      case Color.Rgb(argb) => children += <color rgb={f"$argb%08X"}/>
-      case Color.Theme(slot, tint) =>
-        children += <color theme={slot.ordinal.toString} tint={tint.toString}/>
-    }
+    font.color.foreach(color => children += colorElem("color", color))
     children += <name val={font.name}/>
     Elem(null, "font", Null, TopScope, minimizeEmpty = false, children.toSeq*)
 
@@ -406,31 +419,23 @@ object StylePatcher:
     fill match
       case Fill.None => <fill><patternFill patternType="none"/></fill>
       case Fill.Solid(color) =>
-        val colorElem: Elem = color match
-          case Color.Rgb(argb) => <fgColor rgb={f"$argb%08X"}/>
-          case Color.Theme(slot, tint) =>
-            <fgColor theme={slot.ordinal.toString} tint={tint.toString}/>
         val pfElem = Elem(
           null,
           "patternFill",
           new UnprefixedAttribute("patternType", "solid", Null),
           TopScope,
           minimizeEmpty = false,
-          colorElem
+          colorElem("fgColor", color)
         )
         Elem(null, "fill", Null, TopScope, minimizeEmpty = false, pfElem)
       case Fill.Pattern(fgColor, bgColor, patternType) =>
+        // GH-566: colour children only when present (absent = Excel's automatic colour), and the
+        // canonical camelCase ST_PatternType token — `toString.toLowerCase` wrote schema-invalid
+        // `darkhorizontal`-style tokens on the streaming path
         val pf = scala.collection.mutable.ListBuffer[Elem]()
-        fgColor match
-          case Color.Rgb(argb) => pf += <fgColor rgb={f"$argb%08X"}/>
-          case Color.Theme(slot, tint) =>
-            pf += <fgColor theme={slot.ordinal.toString} tint={tint.toString}/>
-        bgColor match
-          case Color.Rgb(argb) => pf += <bgColor rgb={f"$argb%08X"}/>
-          case Color.Theme(slot, tint) =>
-            pf += <bgColor theme={slot.ordinal.toString} tint={tint.toString}/>
-        val ptStr = patternType.toString.toLowerCase(Locale.ROOT)
-        val pfAttrs = new UnprefixedAttribute("patternType", ptStr, Null)
+        fgColor.foreach(color => pf += colorElem("fgColor", color))
+        bgColor.foreach(color => pf += colorElem("bgColor", color))
+        val pfAttrs = new UnprefixedAttribute("patternType", PatternType.token(patternType), Null)
         val pfElem =
           Elem(null, "patternFill", pfAttrs, TopScope, minimizeEmpty = pf.isEmpty, pf.toSeq*)
         <fill>{pfElem}</fill>
@@ -441,12 +446,15 @@ object StylePatcher:
       else
         val styleStr = side.style.toString.toLowerCase(Locale.ROOT)
         val styleAttr = new UnprefixedAttribute("style", styleStr, Null)
-        val colorElem = side.color.map {
-          case Color.Rgb(argb) => <color rgb={f"$argb%08X"}/>
-          case Color.Theme(slot, tint) =>
-            <color theme={slot.ordinal.toString} tint={tint.toString}/>
-        }
-        Elem(null, label, styleAttr, TopScope, minimizeEmpty = colorElem.isEmpty, colorElem.toList*)
+        val colorChild = side.color.map(colorElem("color", _))
+        Elem(
+          null,
+          label,
+          styleAttr,
+          TopScope,
+          minimizeEmpty = colorChild.isEmpty,
+          colorChild.toList*
+        )
 
     val sides = Seq(
       sideToXml("left", border.left),
@@ -528,20 +536,19 @@ object StylePatcher:
         val pf = (f \ "patternFill")
         if pf.isEmpty then None
         else
-          val patternTypeStr = (pf \ "@patternType").text
-          patternTypeStr match
-            case "none" | "" => Some(Fill.None)
-            case "solid" =>
+          // GH-566: every ST_PatternType token in any casing (the DOM StyleParser's leniency); a
+          // texture keeps whichever colours are present — an absent one is Excel's automatic
+          // colour, not a reason to read the fill back as solid or none
+          PatternType.fromToken((pf \ "@patternType").text) match
+            case None | Some(PatternType.None) => Some(Fill.None)
+            case Some(PatternType.Solid) =>
               extractColor(pf \ "fgColor") match
                 case Some(fg) => Some(Fill.Solid(fg))
                 case None => Some(Fill.None)
-            case other =>
-              val patternType = other match
-                case "gray125" => PatternType.Gray125
-                case _ => PatternType.Solid
-              (extractColor(pf \ "fgColor"), extractColor(pf \ "bgColor")) match
-                case (Some(fg), Some(bg)) => Some(Fill.Pattern(fg, bg, patternType))
-                case _ => Some(Fill.None)
+            case Some(texture) =>
+              Some(
+                Fill.Pattern(extractColor(pf \ "fgColor"), extractColor(pf \ "bgColor"), texture)
+              )
       }
       .getOrElse(Fill.None)
 
@@ -622,9 +629,9 @@ object StylePatcher:
           Some(Color.Rgb(argb))
         catch case _: Exception => None
       else if theme.nonEmpty then
-        theme.toIntOption.flatMap { t =>
-          import com.tjclp.xl.styles.color.ThemeSlot
-          ThemeSlot.values.lift(t).map(slot => Color.Theme(slot, tint))
-        }
+        // the OOXML theme index → slot (the inverse of colorElem's mapping; the DOM parser's own)
+        theme.toIntOption
+          .flatMap(ColorHelpers.themeSlotFromIndex)
+          .map(slot => Color.Theme(slot, tint))
       else None
     }
