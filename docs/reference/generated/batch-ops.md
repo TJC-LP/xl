@@ -49,8 +49,8 @@ a property answers to. An op the streaming writer cannot apply is refused by ind
 | `page-setup` | — | no | no | yes | `page-setup` | 0.13.0 | Print setup: orientation, scale, fit-to pages. |
 | `header-footer` | — | no | no | yes | `header-footer` | 0.13.0 | Print headers and footers. |
 | `cf` | — | no | no | yes | `cf add` | 0.13.0 | Add a conditional-formatting rule; priorities are assigned in order. |
-| `define-name` | — | no | no | no | `name add` | 0.23.0 | Add or replace a defined name (named range), workbook-scoped or local to "scope"; the identifier is matched case-insensitively, so it replaces every same-scope spelling. |
-| `remove-name` | — | no | no | no | `name rm` | 0.23.0 | Remove a defined name, the workbook-scoped one or the one local to "scope" (matched case-insensitively); NAME_NOT_FOUND with the names in that scope as candidates when absent. |
+| `define-name` | — | no | no | no | `name add` | 0.23.0 | Add or replace a defined name (named range), workbook-scoped or local to "scope"; the identifier is matched case-insensitively, so it replaces every same-scope spelling. Readers of the changed name are recalculated (--no-recalc keeps their caches). |
+| `remove-name` | — | no | no | no | `name rm` | 0.23.0 | Remove a defined name, the workbook-scoped one or the one local to "scope" (matched case-insensitively); NAME_NOT_FOUND with the names in that scope as candidates when absent. Its readers are recalculated (--no-recalc keeps their caches). |
 
 ## Properties
 
@@ -577,7 +577,7 @@ Add a conditional-formatting rule; priorities are assigned in order.
 
 ### `define-name`
 
-Add or replace a defined name (named range), workbook-scoped or local to "scope"; the identifier is matched case-insensitively, so it replaces every same-scope spelling.
+Add or replace a defined name (named range), workbook-scoped or local to "scope"; the identifier is matched case-insensitively, so it replaces every same-scope spelling. Readers of the changed name are recalculated (--no-recalc keeps their caches).
 
 ```json
 {"op":"define-name","name":"Tax","refersTo":"Sheet1!$A$1"}
@@ -588,11 +588,11 @@ Add or replace a defined name (named range), workbook-scoped or local to "scope"
 | `op` | const "define-name" | yes | — | — |
 | `name` | string | yes | — | The defined name |
 | `refersTo` | string | yes | `refers-to` | The reference or formula it points to, e.g. Sheet1!$A$1:$A$10 |
-| `scope` | string | no | — | Scope the name to this sheet (default: workbook) — the verb's -s |
+| `scope` | string | no | — | Scope the name to this sheet, spelled exactly as the book does (default: workbook) — the verb's -s |
 
 ### `remove-name`
 
-Remove a defined name, the workbook-scoped one or the one local to "scope" (matched case-insensitively); NAME_NOT_FOUND with the names in that scope as candidates when absent.
+Remove a defined name, the workbook-scoped one or the one local to "scope" (matched case-insensitively); NAME_NOT_FOUND with the names in that scope as candidates when absent. Its readers are recalculated (--no-recalc keeps their caches).
 
 ```json
 {"op":"remove-name","name":"Tax"}
@@ -602,4 +602,4 @@ Remove a defined name, the workbook-scoped one or the one local to "scope" (matc
 | --- | --- | --- | --- | --- |
 | `op` | const "remove-name" | yes | — | — |
 | `name` | string | yes | — | The defined name |
-| `scope` | string | no | — | The sheet the name is scoped to (default: workbook) — the verb's -s |
+| `scope` | string | no | — | The sheet the name is scoped to, spelled exactly as the book does (default: workbook) — the verb's -s |

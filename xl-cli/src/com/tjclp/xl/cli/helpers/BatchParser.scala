@@ -1362,12 +1362,14 @@ object BatchParser:
         applyRenameSheet(currentWb, from, to)
 
       case BatchOp.DefineName(name, refersTo, scope) =>
-        nameScope(scope).flatMap(s =>
+        nameScope(currentWb, scope).flatMap(s =>
           IO.fromEither(SheetCommands.defineName(currentWb, s, name, refersTo))
         )
 
       case BatchOp.RemoveName(name, scope) =>
-        nameScope(scope).flatMap(s => IO.fromEither(SheetCommands.removeName(currentWb, s, name)))
+        nameScope(currentWb, scope).flatMap(s =>
+          IO.fromEither(SheetCommands.removeName(currentWb, s, name))
+        )
 
       case BatchOp.Freeze(refStr) =>
         // Accept either bare ref ("B2") or qualified ref ("Sheet2!B2").
@@ -2009,13 +2011,20 @@ object BatchParser:
         .map(col => List(col))
 
   /**
-   * A `define-name` / `remove-name` op's `scope` as a validated sheet name (`INVALID_SHEET_NAME`,
-   * the verb's); None is the workbook scope. The mutation itself is `SheetCommands.defineName` /
-   * `removeName` — the op fails with the same code, hint and candidates as `name add|rm -s`
-   * (GH-462); the caller adds the op index.
+   * A `define-name` / `remove-name` op's `scope` — the verb's `-s` — as the sheet it names:
+   * `INVALID_SHEET_NAME` (the verb's) for a name Excel rejects, `SHEET_NOT_FOUND` with the CLI's
+   * one text and did-you-mean candidates for a sheet the book lacks — exactly as spelled, the rule
+   * of `-s` and of every op's `sheet` key (#659 review: `scope` was the one sheet key that matched
+   * case-insensitively). None is the workbook scope. The mutation itself is
+   * `SheetCommands.defineName` / `removeName` (GH-462); the caller adds the op index.
    */
-  private def nameScope(scope: Option[String]): IO[Option[SheetName]] =
-    scope.fold(IO.pure(Option.empty[SheetName]))(s => SheetCommands.sheetName(s).map(Some(_)))
+  private def nameScope(wb: Workbook, scope: Option[String]): IO[Option[SheetName]] =
+    scope.fold(IO.pure(Option.empty[SheetName])) { s =>
+      SheetCommands.sheetName(s).flatMap { name =>
+        if wb.sheets.exists(_.name == name) then IO.pure(Some(name))
+        else IO.raiseError(sheetNotFound(wb, name))
+      }
+    }
 
   /**
    * Add a new sheet to the workbook. Refusals are the verb's (`SheetCommands`, GH-608):

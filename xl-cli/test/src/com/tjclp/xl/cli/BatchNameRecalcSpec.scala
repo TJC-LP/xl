@@ -98,7 +98,7 @@ class BatchNameRecalcSpec extends FunSuite:
       .withDefinedName("Tax", "0.1")
       .withDefinedName("Tax", "0.2", SheetName.unsafe("Data"))
       .fold(e => fail(e.message), identity)
-    val (result, _) = run(wb, """[{"op":"remove-name","name":"tAX","scope":"data"}]""")
+    val (result, _) = run(wb, """[{"op":"remove-name","name":"tAX","scope":"Data"}]""")
     assertEquals(result.sheets(0)(ref"A1").effectiveValue, CellValue.Number(10))
   }
 
