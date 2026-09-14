@@ -1129,6 +1129,48 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(FormulaParser.parse("=-NOTES").isRight)
   }
 
+  test("GH-653: whitespace between NOT and its paren is still the function call (=NOT (A1)^2)") {
+    // `SUM (A1)` is a call — the parser skips whitespace before the paren for every function
+    // name — and Excel strips the space from `NOT (A1)`. Read as the keyword with a parenthesized
+    // operand, a postfix after the closing paren bound INSIDE: `NOT (A1)^2` became `NOT(A1^2)`,
+    // a different value, and a drag reprinted the user's text that way.
+    def tree(source: String): TExpr[?] = FormulaParser.parse(source) match
+      case Right(expr) => expr
+      case Left(err) => fail(s"'$source' should parse: $err")
+    def printed(source: String): String = FormulaPrinter.print(tree(source))
+    assertEquals(printed("=NOT (A1)^2"), "=NOT(A1)^2")
+    assertEquals(tree("=NOT (A1)^2"), tree("=NOT(A1)^2"))
+    assertEquals(printed("=NOT  (A1)"), "=NOT(A1)")
+    assertEquals(tree("=NOT  (A1)"), tree("=NOT(A1)"))
+    assertEquals(printed("=NOT(A1)^2"), "=NOT(A1)^2")
+    assertEquals(printed("=NOT (A1)%"), "=NOT(A1)%")
+    assertEquals(printed("=-NOT (A1)"), "=-NOT(A1)")
+    assertEquals(tree("=-NOT (A1)"), tree("=-NOT(A1)"))
+    assertEquals(printed("=not (TRUE)*2"), "=NOT(TRUE)*2")
+    // the printed form is a fixpoint of print
+    List("=NOT (A1)^2", "=NOT  (A1)", "=NOT(A1)^2", "=-NOT (A1)", "=NOT (A1)%").foreach { s =>
+      val once = printed(s)
+      assertEquals(printed(once), once, s"source '$s'")
+    }
+    // the call's closing paren ends it, so a spill marker after it is an error as for NOT(A1)#
+    assert(FormulaParser.parse("=NOT (A1)#").isLeft)
+    // the paren-less keyword form is unchanged: its operand is one power term
+    assertEquals(printed("=NOT A1^2"), "=NOT(A1^2)")
+    assertEquals(printed("=NOT -1"), "=NOT(-1)")
+    // evaluation: (NOT(TRUE))^2 = 0, where NOT(TRUE^2) would be FALSE
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Bool(true))
+    val squared = for
+      expr <- FormulaParser.parse("=NOT (A1)^2")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(squared, Right(BigDecimal(0)))
+    val plain = for
+      expr <- FormulaParser.parse("=NOT (A1)")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(plain, Right(false))
+  }
+
   test("parse nested parentheses") {
     val result = FormulaParser.parse("=((1+2)*3)")
     assert(result.isRight)

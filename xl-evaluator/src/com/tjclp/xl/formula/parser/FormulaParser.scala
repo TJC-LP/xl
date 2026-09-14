@@ -224,17 +224,20 @@ object FormulaParser:
     }
 
   /**
-   * GH-653: the paren-less prefix form `NOT x` is taken only when whitespace (or the end) follows
-   * the word. `NOT(` is the function CALL, whose closing paren ends it, so a postfix after it binds
-   * to the call as in Excel: `NOT(A1)^2` is `(NOT(A1))^2`, `NOT(A1)%` is `(NOT(A1))%` and
-   * `NOT(A1)#` is an error. Read as the keyword with a parenthesized operand, the postfix bound
-   * INSIDE (`NOT(A1^2)`, `NOT(A1%)`, `NOT(A1#)`) — a different value (found by the grammar
-   * generator).
+   * GH-653: the paren-less prefix form `NOT x` is taken only when the first non-whitespace
+   * character after the word is not '(' (or the input ends). `NOT(` — and `NOT (`, whitespace
+   * before the paren, which [[parseFunctionOrRef]] accepts for every function name — is the
+   * function CALL, whose closing paren ends it, so a postfix after it binds to the call as in
+   * Excel: `NOT(A1)^2` is `(NOT(A1))^2`, `NOT(A1)%` is `(NOT(A1))%` and `NOT(A1)#` is an error.
+   * Read as the keyword with a parenthesized operand, the postfix bound INSIDE (`NOT(A1^2)`,
+   * `NOT(A1%)`, `NOT(A1#)`) — a different value (found by the grammar generator; the whitespace
+   * spelling by the PR #659 review).
    */
   private def isNotKeywordAt(s: ParserState): Boolean =
     isKeywordAt(s, "NOT") && {
       val rem = s.remaining
-      rem.length == 3 || rem.charAt(3).isWhitespace
+      val next = rem.indexWhere(!_.isWhitespace, 3)
+      next < 0 || rem.charAt(next) != '('
     }
 
   /**

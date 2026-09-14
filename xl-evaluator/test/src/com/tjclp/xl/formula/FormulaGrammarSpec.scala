@@ -345,11 +345,16 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
       FormulaStorage.XlfnPrefix + FormulaStorage.XlwsPrefix
     else FormulaStorage.XlfnPrefix
 
-  /** The spellings of a function name the parser accepts: as declared, lower-case, stored. */
+  /**
+   * The spellings of a function name the parser accepts: as declared, lower-case, stored, and with
+   * whitespace before the paren (`SUM (A1)` is the call — the arm that caught `NOT (A1)^2` taking
+   * the keyword path).
+   */
   private val genNameSpelling: Gen[String => String] =
     Gen.frequency[String => String](
       6 -> Gen.const(identity),
       2 -> Gen.const(_.toLowerCase),
+      1 -> Gen.oneOf(" ", "  ").map(space => (name: String) => name + space),
       1 -> Gen.const(name =>
         if FormulaStorage.FutureFunctions.contains(name) then storedPrefix(name) + name else name
       )
@@ -910,11 +915,19 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     assertPrintsAs("=not(TRUE)*2", "=NOT(TRUE)*2")
     assertPrintsAs("=-NOT(TRUE)", "=-NOT(TRUE)")
     assertRejected("NOT(A1)#")
+    // whitespace between the name and the paren is still the call, as for every other function
+    // (`SUM (A1)`): Excel strips the space, so `NOT (A1)^2` is `(NOT(A1))^2` there too
+    assertPrintsAs("=NOT (A1)^2", "=NOT(A1)^2")
+    assertPrintsAs("=NOT  (A1)%", "=NOT(A1)%")
+    assertPrintsAs("=-not (A1)", "=-NOT(A1)")
+    assertEquals(parsed("=NOT (A1)^2"), parsed("=NOT(A1)^2"))
+    assertRejected("NOT (A1)#")
     // the paren-less keyword form is xl's lenient prefix operator: its operand is one power term
     assertPrintsAs("=NOT A1^2", "=NOT(A1^2)")
     assertPrintsAs("=NOT A1", "=NOT(A1)")
     assertPrintsAs("=-NOT TRUE", "=-NOT(TRUE)")
-    List("=NOT(A1)^2", "=NOT(A1)%", "=NOT A1^2", "=not(TRUE)*2").foreach(assertRoundTrips)
+    List("=NOT(A1)^2", "=NOT(A1)%", "=NOT (A1)^2", "=NOT A1^2", "=not(TRUE)*2")
+      .foreach(assertRoundTrips)
   }
 
   test("GH-653: the rejected grammar's canonical examples name their failure") {

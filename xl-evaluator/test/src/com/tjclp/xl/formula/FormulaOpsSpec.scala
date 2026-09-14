@@ -60,6 +60,12 @@ class FormulaOpsSpec extends FunSuite:
     assert(FormulaOps.mentionsSheet("IF(A1=\"x\",Sheet1!A1,0)", Sheet1))
   }
 
+  test("GH-653: a drag keeps `NOT (A1)^2` the call — reprinted NOT(A2)^2, never NOT(A2^2)") {
+    assertEquals(FormulaOps.shift("=NOT (A1)^2", 0, 1), Right("=NOT(A2)^2"): XLResult[String])
+    assertEquals(FormulaOps.shift("=NOT (A1)%", 0, 1), Right("=NOT(A2)%"): XLResult[String])
+    assertEquals(FormulaOps.shift("=NOT(A1)^2", 0, 1), Right("=NOT(A2)^2"): XLResult[String])
+  }
+
   test("GH-653: a double quote inside a quoted sheet name is not a string-literal boundary") {
     val final1 = SheetName.unsafe("Q1 \"Final\"")
     assert(FormulaOps.mentionsSheet("='Q1 \"Final\"'!A1", final1))
