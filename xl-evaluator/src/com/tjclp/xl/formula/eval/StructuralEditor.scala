@@ -40,12 +40,15 @@ enum StructuralCachePolicy derives CanEqual:
 
   /**
    * GH-509: carry every pre-edit cache forward with its formula — rewritten, relocated or not — so
-   * the file keeps the numbers it had. Honest only when the caller also marks the workbook
-   * `fullCalcOnLoad`: a recalculating reader then recomputes on open and never observes a stale
-   * `<v>`, while a cache-reading consumer sees the pre-edit numbers, as it would have in the source
-   * file. The one exception is the GH-507 blind closure — readers the static graph cannot resolve,
-   * and their transitive dependents — which stays withdrawn under every policy, so the default and
-   * the carrying path agree on caches no reader can justify.
+   * the file keeps the numbers it had. The one exception is the GH-507 blind closure — readers the
+   * static graph cannot resolve, and their transitive dependents — which stays withdrawn under
+   * every policy, so the default and the carrying path agree on caches no reader can justify.
+   *
+   * A LIBRARY policy for a caller who controls the reader. Only Excel honors a `fullCalcOnLoad`
+   * marker set alongside it; LibreOffice at its shipped default ("never recalculate on load" for
+   * xlsx) displays a carried `<v>` as-is — verified: a deleted row under this policy showed the
+   * pre-edit `SUM` there — and so does every cache-only reader (openpyxl `data_only`, pandas). The
+   * xl CLI's `--no-recalc` therefore uses [[PreserveUntouched]], never this.
    */
   case CarryForward
 
@@ -474,10 +477,10 @@ object StructuralEditor:
       // edit rewrites reference TEXT, which a reader the parser rejects cannot receive.
       val roots = pointSeeds ++ rangeReaders ++ dynamic ++ DependencyGraph.unresolvedReaders(wb)
       roots ++ dependencyIndex.transitiveDependents(roots)
-    // GH-509: under CarryForward the only caches withdrawn are the GH-507 blind closure — readers
-    // the static graph cannot resolve and their transitive dependents — so the default and the
-    // carrying path agree on caches no reader can justify. No graph is built at all when the book
-    // has no blind reader, the common case.
+    // GH-509: under CarryForward (library-only; the CLI never asks for it, see the enum's doc) the
+    // only caches withdrawn are the GH-507 blind closure — readers the static graph cannot resolve
+    // and their transitive dependents — so the default and the carrying path agree on caches no
+    // reader can justify. No graph is built at all when the book has no blind reader.
     lazy val blindCaches: Set[QualifiedRef] =
       val blind = DependencyGraph.unresolvedReaders(wb)
       if blind.isEmpty then blind else blind ++ dependencyIndex.transitiveDependents(blind)
@@ -645,9 +648,9 @@ object StructuralEditor:
                 // A relocated cell is the position-sensitive case — `=ROW()` keeps its text and
                 // changes its answer — so PreserveUntouched treats a move as a change.
                 //
-                // GH-509: CarryForward keeps the cache regardless of text or position; the file
-                // is marked fullCalcOnLoad by the caller, so a recalculating reader never sees
-                // it and a cache-reading one sees the pre-edit number it would have seen anyway.
+                // GH-509: CarryForward keeps the cache regardless of text or position, for a
+                // caller whose reader is Excel (which recomputes under fullCalcOnLoad) or who
+                // accepts that LibreOffice and cache-only readers display the pre-edit number.
                 val carried = policy match
                   case StructuralCachePolicy.Invalidate => None
                   case StructuralCachePolicy.PreserveUntouched =>

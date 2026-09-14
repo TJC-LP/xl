@@ -267,9 +267,12 @@ Writes recalculate the edit's dependency cone and report formula errors advisori
 `--strict` turns those reports into exit 1 (`RECALC_GATE`): with `-o` the file is still written,
 with `-i` the input is left untouched. `--no-recalc` (`--preserve-caches`) applies the edit and
 recalculates nothing — for books whose numbers come from another engine; structural edits then
-carry every pre-edit cache forward and mark the workbook `fullCalcOnLoad`, so Excel recomputes on
-open while cache-only readers see the pre-edit numbers (only caches behind unresolvable names are
-withdrawn). `recalc` refreshes every cached value (`--tables` also seeds data-table interiors).
+keep only the caches the edit provably left unchanged, write every formula it could have changed
+without a `<v>` (the summary counts both), and mark the workbook `fullCalcOnLoad`: Excel recomputes
+the whole book on open; LibreOffice (which ignores the marker by default) computes the uncached
+cells; cache-only readers (openpyxl `data_only`, `xl view` without `--eval`) see a blank there,
+never a stale number. `recalc` refreshes every cached value (`--tables` also seeds data-table
+interiors).
 
 ---
 

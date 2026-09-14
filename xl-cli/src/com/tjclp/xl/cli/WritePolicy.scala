@@ -13,13 +13,17 @@ import scala.util.control.NoStackTrace
  *   style, ...) leaves every cached formula value in the file verbatim: it moves no cell and
  *   rewrites no formula, so no untouched formula can have changed answer, and the file needs no
  *   marker. A STRUCTURAL write (insert / delete rows or columns) shifts cells, rewrites formula
- *   text and rewrites defined names, and no local test can tell which pre-edit cache still holds —
- *   so (GH-509) it carries every pre-edit cache forward with its formula, rewritten or relocated or
- *   not, and writes `<calcPr fullCalcOnLoad="1"/>`: Excel and LibreOffice recompute the book on
- *   open and never show a stale `<v>`, while a cache-only reader sees the numbers the source file
- *   had. The one exception is the GH-507 blind closure (readers no static graph can resolve, and
- *   their dependents), withdrawn on both paths and counted in the summary. Without the flag a write
- *   still only refreshes its dirty dependency cone, never the whole book.
+ *   text and rewrites defined names, so (GH-503, GH-509) it keeps only the caches the edit provably
+ *   left unchanged — text, record kind and address identical, and outside the edit's dirty cone
+ *   (every reader of a moved or removed cell and everything downstream of it across sheets, every
+ *   dynamic reference, every reader the static graph cannot resolve, GH-507) — writes every other
+ *   formula WITHOUT a `<v>`, counts both, and writes `<calcPr fullCalcOnLoad="1"/>`. Excel
+ *   recomputes the whole book on open. LibreOffice does NOT honor the marker at its shipped default
+ *   ("never recalculate on load" for xlsx): it displays whatever `<v>` is present and computes only
+ *   the cells without one, which is why the dirty cone is withdrawn rather than carried — a blank
+ *   it fills in, a stale number it would show. A cache-only reader (openpyxl `data_only`, pandas,
+ *   `xl view` without `--eval`) sees a blank there too, never a pre-edit number. Without the flag a
+ *   write still only refreshes its dirty dependency cone, never the whole book.
  * @param strict
  *   GH-496: promote a write's advisory conditions — formula-evaluation errors, iterative
  *   non-convergence, data-table seed warnings — from "printed in the summary, exit 0" to exit 1.

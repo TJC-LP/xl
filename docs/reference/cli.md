@@ -173,39 +173,54 @@ How completely caches survive depends on the verb:
 - **Non-structural** (`put`, `putf`, `fill`, `copy`, `batch`): explicitly written cells take their
   new content; existing formula caches elsewhere are preserved, including dependents.
 - **Structural** (`insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`): a structural edit
-  moves cells, rewrites formula text and rewrites defined names, and no local test can decide
-  which pre-edit cache still holds (a formula reached through a shrunk defined name, or a static
-  dependent of an `INDIRECT` cell, keeps its text byte-identical while its answer changes
-  underneath it). So xl does not decide: it **carries every pre-edit cache forward** with its
-  formula — rewritten, relocated or not — and writes **`<calcPr fullCalcOnLoad="1"/>`** into
-  `workbook.xml`. Excel and LibreOffice honor that marker by recomputing the book on open, so
-  they never display a stale `<v>`; a cache-only reader (`openpyxl` with `data_only=True`, `xl
-  view` without `--eval`) sees the numbers the source file had — the same ones it would have read
-  before the edit — and the file itself carries the "recalculate me" flag rather than a silent gap.
-  The marker is set on every `--no-recalc` structural write, including an edit beside the data,
-  and it overlays the book's existing `<calcPr>` (a declared `iterate` triple, `calcMode`, `calcId`
-  and unmodeled attributes survive). The summary says so:
+  moves cells, rewrites formula text and rewrites defined names. xl keeps a pre-edit cache only
+  where the edit **provably** could not have changed it — the formula's text, record kind and
+  address are unchanged and it lies outside the edit's dirty cone — and writes every other formula
+  **without a `<v>`**: a formula whose text the edit rewrote or whose cell it moved (`=ROW()`
+  keeps its text and changes its answer), every reader of a moved or removed cell (through a point
+  reference, a range the band cuts, or a defined name the edit shrinks or degrades to `#REF!`)
+  and everything downstream of those across sheets, every dynamic reference (`INDIRECT`,
+  `OFFSET`) and its dependents, and every formula the static graph cannot resolve — a defined name
+  whose definition the parser rejects (a multi-area union), an alias of one, an unparseable
+  formula — with its dependents (name resolution respects sheet-local shadowing). Then it writes
+  **`<calcPr fullCalcOnLoad="1"/>`** into `workbook.xml`, overlaying the book's existing
+  `<calcPr>` (a declared `iterate` triple, `calcMode`, `calcId` and unmodeled attributes survive).
+  The marker is set on every `--no-recalc` structural write, including an edit beside the data.
+
+  What each reader then shows:
+
+  - **Excel** honors `fullCalcOnLoad` and recomputes the whole book on open, so it displays fresh
+    numbers everywhere — including any cache the graph could not fault.
+  - **LibreOffice** does **not** honor the marker at its shipped default (Tools ▸ Options ▸ Calc ▸
+    Formula ▸ *Recalculation on File Load* is "Never recalculate" for Excel 2007+ files): it
+    displays whatever `<v>` a cell carries and computes only the cells without one. This is why
+    the dirty cone is withdrawn rather than carried: a blank LibreOffice fills in, a stale number
+    it would display. (Verified with `soffice --headless --convert-to csv`: a carried `SUM` cache
+    over a deleted row was shown as the pre-edit total, with or without the marker.)
+  - **Cache-only readers** (`openpyxl` with `data_only=True`, pandas, `xl view` without `--eval`)
+    see a blank where the edit reached and the source file's numbers elsewhere — never a stale
+    number.
+
+  The summary counts both sides:
 
   ```
-  Recalculation skipped (--no-recalc): 11 cached value(s) carried forward; workbook marked for
-  full recalculation on load (fullCalcOnLoad)
+  Recalculation skipped (--no-recalc): 4 cached value(s) preserved, 7 withdrawn (the edit could
+  have changed them; written without <v>); workbook marked for full recalculation on load
+  (fullCalcOnLoad)
   ```
 
-  The one exception is a cache no reader can justify: a formula whose reference the static graph
-  cannot resolve — a defined name whose definition the parser rejects (a multi-area union), an
-  alias of one, an unparseable formula — and every formula that depends on it. Those caches are
-  withdrawn on both the default and the `--no-recalc` path (name resolution respects sheet-local
-  shadowing), and the summary appends `, N cache(s) behind unresolvable names withdrawn` when any
-  were. An unsupported reference rewrite that could change a defined name's meaning is refused
-  before the edit; top-level unions remain supported for rewriting even though the evaluator
-  cannot compute them.
+  An unsupported reference rewrite that could change a defined name's meaning is refused before
+  the edit; top-level unions remain supported for rewriting even though the evaluator cannot
+  compute them.
 
   Two things worth knowing. `fullCalcOnLoad` recomputes ordinary formulas; under
   `calcMode="autoNoTable"` Excel still leaves **data-table** interiors as they are (their caches
   ride through under every posture, so nothing is lost there). And the marker is sticky: Excel
   clears it on its own save, but a later `xl recalc` recomputes the values and leaves the
   attribute in place. `describe --full` shows whether a book carries it. **If you need every
-  formula freshly computed after a structural edit, do not pass `--no-recalc`.**
+  formula freshly computed after a structural edit, do not pass `--no-recalc`.** The library's
+  `StructuralCachePolicy.CarryForward` (keep every pre-edit cache) is not offered by the CLI: it
+  is honest only for a caller who knows the reader is Excel.
 
 ```bash
 xl -f external-model.xlsx -s Data -o out.xlsx --no-recalc put B5 1000

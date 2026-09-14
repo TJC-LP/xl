@@ -138,8 +138,10 @@ object Schema:
     GlobalDoc(
       "--no-recalc",
       None,
-      "Write verbs: apply the edit and recalculate nothing; structural edits carry every pre-edit " +
-        "cache forward and mark the workbook fullCalcOnLoad"
+      "Write verbs: apply the edit and recalculate nothing; structural edits keep only the caches " +
+        "the edit provably left unchanged, leave the rest uncached and mark the workbook " +
+        "fullCalcOnLoad (Excel recomputes on open; LibreOffice and cache-only readers display " +
+        "what is cached)"
     ),
     GlobalDoc("--preserve-caches", None, "Alias for --no-recalc"),
     GlobalDoc(
