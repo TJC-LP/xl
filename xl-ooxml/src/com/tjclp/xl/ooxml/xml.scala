@@ -98,6 +98,10 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet"
   val relTypeDialogsheet =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet"
+
+  /** Excel 4.0 (XLM) macro sheet — `xl/macrosheets/sheetN.xml`, root `<xm:macrosheet>`. */
+  val relTypeMacrosheet =
+    "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet"
   val relTypePivotCacheDefinition =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition"
 

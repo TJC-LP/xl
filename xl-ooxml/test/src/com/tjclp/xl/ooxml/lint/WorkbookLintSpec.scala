@@ -1835,6 +1835,10 @@ class WorkbookLintSpec extends FunSuite:
     assertEquals(findings.map(_.category), Vector(LintCategory.IgnorableUndeclared))
     assertEquals(findings.head.locator, "<ns0:worksheet>")
     assert(findings.head.message.contains("ElementTree"), findings.head.message)
+    // PR #659 review: Excel and LibreOffice open a namespace-correct prefixed root with every cell
+    // intact (verified against both) — the message must say so, never that the part opens blank
+    assert(!findings.head.message.contains("blank"), findings.head.message)
+    assert(findings.head.message.contains("intact"), findings.head.message)
   }
 
   test("GH-460: an UNBOUND element prefix is a well-formedness error — Left in both modes") {
@@ -2272,6 +2276,143 @@ class WorkbookLintSpec extends FunSuite:
     )
   }
 
+  // ===== Severity tiers (PR #659 review): repair vs hygiene =====
+
+  test("severity: orphan shared strings and unreferenced parts are hygiene, the rest repair") {
+    assertEquals(lintOf(orphanSstParts).map(_.severity), Vector(LintSeverity.Hygiene))
+    assertEquals(lintOf(orphanMediaParts).map(_.severity), Vector(LintSeverity.Hygiene))
+    // the past-the-table half of the shared-string rule is a repair (Excel repairs, xl reads #REF!)
+    assertEquals(lintOf(pastTableSstParts).map(_.severity), Vector(LintSeverity.Repair))
+    assertEquals(lintOf(danglingDxfParts).map(_.severity), Vector(LintSeverity.Repair))
+    assertEquals(
+      lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> elementTreeRootSheetXml)).map(_.severity),
+      Vector(LintSeverity.Repair)
+    )
+    // the streaming scanner assigns the same tier
+    assertEquals(lintStreamOf(orphanSstParts).map(_.severity), Vector(LintSeverity.Hygiene))
+    assertEquals(lintStreamOf(pastTableSstParts).map(_.severity), Vector(LintSeverity.Repair))
+  }
+
+  test("severity: slugs are the stable spellings the CLI publishes") {
+    assertEquals(LintSeverity.Repair.slug, "repair")
+    assertEquals(LintSeverity.Hygiene.slug, "hygiene")
+    // a Finding built without a tier is a repair — the conservative default for every rule that
+    // does not say otherwise
+    assertEquals(Finding("p", LintCategory.ChildOrder, "<x>", "m").severity, LintSeverity.Repair)
+  }
+
+  // ===== Macro sheets (Excel 4.0 XLM, PR #659 review): a sheet kind of their own =====
+
+  private val nsXm = "http://schemas.microsoft.com/office/excel/2006/main"
+  private val relTypeMacrosheet =
+    "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet"
+  private val macrosheetCt = "application/vnd.ms-excel.macrosheet+xml"
+
+  /** As Excel writes it: an `xm:macrosheet` root whose children are main-namespace elements. */
+  private val macrosheetXml =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+<xm:macrosheet xmlns="$nsMain" xmlns:r="$nsRel" xmlns:xm="$nsXm">
+  <sheetPr codeName="Macro1"/>
+  <dimension ref="A1"/>
+  <sheetViews><sheetView workbookViewId="0"/></sheetViews>
+  <sheetFormatPr defaultRowHeight="15"/>
+  <sheetData><row r="1"><c r="A1" t="s"><v>1</v></c></row></sheetData>
+  <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+</xm:macrosheet>"""
+
+  /** Sheet1 references SST entry 0; the macrosheet is the ONLY reference to entry 1. */
+  private def macrosheetPartsWith(sheetXml: String): Map[String, String] = baseParts ++ Map(
+    "[Content_Types].xml" -> contentTypesXml.replace(
+      "</Types>",
+      s"""  <Override PartName="/xl/macrosheets/sheet1.xml" ContentType="$macrosheetCt"/>\n</Types>"""
+    ),
+    "xl/workbook.xml" -> workbookXml.replace(
+      "</sheets>",
+      "  <sheet name=\"Macro1\" sheetId=\"2\" r:id=\"rId5\"/>\n  </sheets>"
+    ),
+    "xl/_rels/workbook.xml.rels" -> workbookRelsXml.replace(
+      "</Relationships>",
+      s"""  <Relationship Id="rId5" Type="$relTypeMacrosheet" Target="macrosheets/sheet1.xml"/>\n</Relationships>"""
+    ),
+    "xl/sharedStrings.xml" -> sstXml("alpha", "macro only"),
+    "xl/worksheets/sheet1.xml" -> sstSheetXml(0),
+    "xl/macrosheets/sheet1.xml" -> sheetXml
+  )
+
+  private val macrosheetParts: Map[String, String] = macrosheetPartsWith(macrosheetXml)
+
+  private val misorderedMacrosheetXml = macrosheetXml
+    .replace("  <dimension ref=\"A1\"/>\n", "")
+    .replace("</sheetData>\n", "</sheetData>\n  <dimension ref=\"A1\"/>\n")
+
+  test(
+    "macrosheet: an xlMacrosheet <sheet> is a sheet kind — its t=\"s\" cells count, no finding"
+  ) {
+    // Before the kind existed the workbook-level check called the rel wrong-typed ("expected
+    // worksheet") and the SST rule reported entry 1 as an orphan — on a book Excel writes itself.
+    assertEquals(lintOf(macrosheetParts), Vector.empty[Finding])
+    assertEquals(lintStreamOf(macrosheetParts), Vector.empty[Finding])
+  }
+
+  test("macrosheet: child order is checked against CT_Macrosheet in both modes") {
+    val parts = macrosheetPartsWith(misorderedMacrosheetXml)
+    val findings = lintOf(parts)
+    assertEquals(
+      findings.map(f => (f.part, f.category)),
+      Vector(("xl/macrosheets/sheet1.xml", LintCategory.ChildOrder))
+    )
+    assert(findings.head.message.contains("CT_Macrosheet"), findings.head.message)
+    assertEquals(lintStreamOf(parts), findings)
+  }
+
+  test("macrosheet: a sheet rel of a genuinely foreign type is still wrong-rel-type") {
+    val parts = macrosheetParts + ("xl/_rels/workbook.xml.rels" -> workbookRelsXml.replace(
+      "</Relationships>",
+      s"""  <Relationship Id="rId5" Type="$nsRel/styles" Target="macrosheets/sheet1.xml"/>\n</Relationships>"""
+    ))
+    assert(
+      lintOf(parts).exists(f =>
+        f.part == "xl/workbook.xml" && f.category == LintCategory.WrongRelType
+      ),
+      lintOf(parts).toString
+    )
+  }
+
+  // ===== GH-460 / PR #659 review: dxfId is read only where the schema puts one =====
+
+  private val cellDxfSheetXml = worksheetWith(
+    """<sheetData><row r="1"><c r="A1" dxfId="99"><v>1</v></c></row></sheetData>"""
+  )
+
+  private val cellDxfParts: Map[String, String] = baseParts ++ Map(
+    "xl/styles.xml" -> oneDxfStylesXml,
+    "xl/worksheets/sheet1.xml" -> cellDxfSheetXml
+  )
+
+  private val sortConditionDxfSheetXml = worksheetWith(
+    """<sheetData/>
+  <autoFilter ref="A1:A5"><sortState ref="A2:A5"><sortCondition ref="A2:A5" dxfId="4"/></sortState></autoFilter>"""
+  )
+
+  private val sortConditionDxfParts: Map[String, String] = baseParts ++ Map(
+    "xl/styles.xml" -> oneDxfStylesXml,
+    "xl/worksheets/sheet1.xml" -> sortConditionDxfSheetXml
+  )
+
+  test("GH-460: a dxfId on an element that cannot carry one (a cell) is not a finding") {
+    // The scanners probe the dxf attributes only on cfRule / sortCondition / table / tableColumn,
+    // so the million <c>/<v>/<f> of a large sheet cost no attribute lookups (PR #659 review)
+    assertEquals(lintOf(cellDxfParts), Vector.empty[Finding])
+    assertEquals(lintStreamOf(cellDxfParts), Vector.empty[Finding])
+  }
+
+  test("GH-460: sortCondition dxfId past the table is flagged in both modes") {
+    val findings = lintOf(sortConditionDxfParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.DxfIdOutOfRange))
+    assert(findings.head.locator.contains("sortCondition"), findings.head.locator)
+    assertEquals(lintStreamOf(sortConditionDxfParts), findings)
+  }
+
   private def lintStreamOf(parts: Map[String, String]): Vector[Finding] =
     WorkbookLint
       .lintStreamBytes(zipBytes(parts))
@@ -2381,6 +2522,11 @@ class WorkbookLintSpec extends FunSuite:
     "dangling cfRule dxfId" -> danglingDxfParts,
     "in-range cfRule dxfId" -> inRangeDxfParts,
     "dangling table dxfIds" -> dxfTableParts,
+    "dxfId on a cell (not a dxf bearer)" -> cellDxfParts,
+    "dangling sortCondition dxfId" -> sortConditionDxfParts,
+    // PR #659 review: XLM macro sheets are a sheet kind (t="s" cells feed the SST union)
+    "clean macrosheet" -> macrosheetParts,
+    "misordered macrosheet" -> macrosheetPartsWith(misorderedMacrosheetXml),
     // GH-460: package reachability is mode-independent but must agree
     "orphan media part" -> orphanMediaParts,
     "multi-hop rels closure" -> multiHopParts,

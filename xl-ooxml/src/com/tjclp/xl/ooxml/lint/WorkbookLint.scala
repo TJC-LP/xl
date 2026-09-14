@@ -96,9 +96,13 @@ enum LintCategory derives CanEqual:
   case EmptyInlineStr
 
   /**
-   * An `mc:Ignorable` list naming a prefix declared on neither the element nor an ancestor, or a
-   * root element binding the main namespace to a generated `nsN` prefix — the ElementTree
-   * re-serialization class Excel opens as a blank tab (GH-460).
+   * An `mc:Ignorable` list naming a prefix declared on neither the element nor an ancestor — the
+   * ElementTree re-serialization class Excel opens as a blank tab (GH-460) — or a root element
+   * binding the main namespace to a generated `nsN` prefix, the signature of the same round-trip.
+   * The prefixed root alone is a compatibility smell, not a repair: Excel and LibreOffice open a
+   * namespace-correct prefixed root with every cell intact (verified), but no mainstream producer
+   * writes it and prefix-naive tooling (regexes, XPath on the default-namespace spelling) misreads
+   * it.
    */
   case IgnorableUndeclared
 
@@ -143,6 +147,24 @@ enum LintCategory derives CanEqual:
     case LintCategory.SharedStringOrphan => "shared-string-orphan"
 
 /**
+ * How much a finding matters to the recipient of the file (PR #659 review).
+ *
+ *   - [[Repair]]: Excel repairs or refuses the file, or a reader misreads a value — the class `xl
+ *     lint` exists for. Fails the lint gate (exit 1).
+ *   - [[Hygiene]]: the file is valid and opens intact everywhere; the finding is dead weight or a
+ *     privacy hazard the package still carries (an unreferenced part, a shared-string entry no cell
+ *     references). Reported, but the gate passes unless the caller asks for strictness.
+ */
+enum LintSeverity derives CanEqual:
+  case Repair
+  case Hygiene
+
+  /** Stable lower-case identifier used in CLI text and JSON output. */
+  def slug: String = this match
+    case LintSeverity.Repair => "repair"
+    case LintSeverity.Hygiene => "hygiene"
+
+/**
  * A single structural lint finding.
  *
  * @param part
@@ -154,12 +176,15 @@ enum LintCategory derives CanEqual:
  *   so the finding can be located and acted on without re-deriving it
  * @param message
  *   human-readable explanation naming expected vs actual
+ * @param severity
+ *   the tier (see [[LintSeverity]]); a rule that does not say otherwise reports a repair
  */
 final case class Finding(
   part: String,
   category: LintCategory,
   locator: String,
-  message: String
+  message: String,
+  severity: LintSeverity = LintSeverity.Repair
 ) derives CanEqual
 
 /**
@@ -202,8 +227,10 @@ final case class Finding(
  *   - `mc:Ignorable` lists naming a prefix no ancestor declares (GH-460) — the ElementTree
  *     re-serialization class: the declarations are re-prefixed to `nsN`, the Ignorable list keeps
  *     the old names, and Excel opens the part blank. A root that binds the main namespace to a
- *     generated `nsN` prefix is reported as the same signature. An UNBOUND element prefix is a
- *     well-formedness error and stays a `Left`, like any malformed part
+ *     generated `nsN` prefix is reported as the signature of the same round-trip — on its own a
+ *     compatibility smell, not a repair: Excel and LibreOffice open a namespace-correct prefixed
+ *     root intact. An UNBOUND element prefix is a well-formedness error and stays a `Left`, like
+ *     any malformed part
  *   - `dxfId`-family attributes indexing past the `<dxfs>` table (GH-460) — `<cfRule dxfId>`,
  *     `<sortCondition dxfId>`, table `dataDxfId` / `headerRowDxfId` / `totalsRowDxfId` (+ border
  *     variants), on sheet-class and table parts; the count is the actual `<dxf>` children of
@@ -521,9 +548,55 @@ object WorkbookLint:
     Vector(drawingSpec, legacyDrawingSpec, legacyDrawingHFSpec)
   )
 
-  private val sheetKinds: Vector[SheetKind] = Vector(worksheetKind, chartsheetKind, dialogsheetKind)
+  /**
+   * CT_Macrosheet child sequence (Excel 2006 main schema, `xm` namespace): the Excel 4.0 macro
+   * sheet Excel writes to `xl/macrosheets/sheetN.xml` under an `<xm:macrosheet>` root whose
+   * children are main-namespace elements. A `<sheet>` may target one (rel type `xlMacrosheet`) and
+   * its cells hold `t="s"` strings like any worksheet, so it is scanned as a sheet kind of its own
+   * (PR #659 review) — before, the rel read as wrong-typed and its shared strings as orphans.
+   */
+  private val macrosheetCanonicalOrder: Vector[String] = Vector(
+    "sheetPr",
+    "dimension",
+    "sheetViews",
+    "sheetFormatPr",
+    "cols",
+    "sheetData",
+    "sheetProtection",
+    "autoFilter",
+    "sortState",
+    "dataConsolidate",
+    "customSheetViews",
+    "phoneticPr",
+    "conditionalFormatting",
+    "printOptions",
+    "pageMargins",
+    "pageSetup",
+    "headerFooter",
+    "rowBreaks",
+    "colBreaks",
+    "customProperties",
+    "drawing",
+    "legacyDrawing",
+    "legacyDrawingHF",
+    "drawingHF",
+    "picture",
+    "oleObjects",
+    "extLst"
+  )
 
-  /** A `<sheet>` may target a worksheet, chartsheet, or dialogsheet part. */
+  private val macrosheetKind = SheetKind(
+    XmlUtil.relTypeMacrosheet,
+    "macrosheet",
+    "CT_Macrosheet",
+    macrosheetCanonicalOrder,
+    Vector(drawingSpec, legacyDrawingSpec, legacyDrawingHFSpec, pictureSpec)
+  )
+
+  private val sheetKinds: Vector[SheetKind] =
+    Vector(worksheetKind, chartsheetKind, dialogsheetKind, macrosheetKind)
+
+  /** A `<sheet>` may target a worksheet, chartsheet, dialogsheet or macrosheet part. */
   private val sheetRelTypes: Set[String] = sheetKinds.map(_.relType).toSet
 
   /**
@@ -932,7 +1005,7 @@ object WorkbookLint:
         XmlUtil.getAttrOpt(e, attr).toList.flatMap(refBoundsFindings(part, e.label, attr, _))
       }
     }
-    val dxfs = everyElem.flatMap { e =>
+    val dxfs = everyElem.filter(e => dxfBearingLabels.contains(e.label)).flatMap { e =>
       dxfAttrNames.flatMap { attr =>
         XmlUtil.getAttrOpt(e, attr).flatMap(dxfFinding(part, e.label, attr, _, ctx.dxf))
       }
@@ -1166,11 +1239,14 @@ object WorkbookLint:
             bounds ++= refBoundsFindings(part, label, attr, value)
           }
         }
-        dxfAttrNames.foreach { attr =>
-          Option(atts.getValue("", attr)).foreach { value =>
-            dxfs ++= dxfFinding(part, label, attr, value, ctx.dxf)
+        // PR #659 review: probe the dxf attributes only where the schema puts one, so the hot cell
+        // path (<row>/<c>/<v>/<f> of a million-row sheet) does no attribute lookups here
+        if dxfBearingLabels.contains(label) then
+          dxfAttrNames.foreach { attr =>
+            Option(atts.getValue("", attr)).foreach { value =>
+              dxfs ++= dxfFinding(part, label, attr, value, ctx.dxf)
+            }
           }
-        }
         // GH-577: a child element inside an open formula-text element makes it a container (the
         // DOM scanner skips elements with element children); a nested formula-text element opens
         // its own capture in its place. The root element is never a site (the DOM walk needs a
@@ -2144,11 +2220,21 @@ object WorkbookLint:
       s"<$qName>",
       s"root element <$qName> binds the main SpreadsheetML namespace to a generated prefix — " +
         "the ElementTree re-serialization signature (no register_namespace), the same " +
-        "round-trip that strips the declarations mc:Ignorable relies on; re-serialize with the " +
-        "default namespace Excel writes"
+        "round-trip that strips the declarations mc:Ignorable relies on. Excel and LibreOffice " +
+        "open a namespace-correct prefixed root intact (no repair), but no mainstream producer " +
+        "writes it and prefix-naive tooling misreads it; re-serialize with the default namespace " +
+        "Excel writes"
     )
 
   // ===== GH-460: dxfId-family attributes past the <dxfs> table =====
+
+  /**
+   * The elements the schema gives a dxf attribute — `<cfRule dxfId>`, `<sortCondition dxfId>`,
+   * `<table …DxfId>`, `<tableColumn …DxfId>`. Both scanners probe [[dxfAttrNames]] on these only: a
+   * sheet's cells never carry one, and a lookup per cell element is measurable on a million-row
+   * sheet (PR #659 review).
+   */
+  private val dxfBearingLabels: Set[String] = Set("cfRule", "sortCondition", "table", "tableColumn")
 
   /** Attributes indexing xl/styles.xml `<dxfs>`: CF rules, sort conditions, table styling. */
   private val dxfAttrNames = Vector(
@@ -2303,7 +2389,8 @@ object WorkbookLint:
             s"""<Relationship Target="/$orphan">""",
             s"""part "$orphan" is present in the package but reachable from no relationship — """ +
               "dead weight a producer left behind (or a forgotten Relationship); Excel ignores " +
-              "it, and its bytes travel with every copy of the file"
+              "it, and its bytes travel with every copy of the file",
+            LintSeverity.Hygiene
           )
         }
 
@@ -2498,7 +2585,8 @@ object WorkbookLint:
             s"$orphanCount of ${t.count} shared string(s) are referenced by no cell ($where) — " +
               "the text still rides in the package for every recipient (a value scrubbed from " +
               "the cells survives here); xl never prunes a preserved table on write, see " +
-              "docs/LIMITATIONS.md for the rebuild"
+              "docs/LIMITATIONS.md for the rebuild",
+            LintSeverity.Hygiene
           )
         )
     }
