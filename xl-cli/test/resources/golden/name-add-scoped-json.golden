@@ -19,7 +19,7 @@ Data!$A$1
   "verb": "name add",
   "version": "<VERSION>",
   "data": {
-    "text": "Added named range 'Local' -> Data!$A$1 (scope: Data)\nSaved: <DIR>/name-add-scoped-json.xlsx",
+    "text": "Added named range 'Local' -> Data!$A$1 (scope: Data)\nRecalculated 0 formulas\nSaved: <DIR>/name-add-scoped-json.xlsx",
     "saved": "<DIR>/name-add-scoped-json.xlsx",
     "written": true
   },

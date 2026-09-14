@@ -62,10 +62,25 @@ class SchemaSpec extends CatsEffectSuite:
         )
       }
     }
-    // and the other direction: every op that names a CLI verb has that verb in the table
-    OpRegistry.all.flatMap(_.cliVerb).foreach { cliVerb =>
-      assert(Schema.verbs.exists(_.path.mkString(" ") == cliVerb), s"no verb '$cliVerb'")
+    // and the other direction: every op that names a CLI verb has that verb in the table, and the
+    // verb publishes a twin — this op, or (col-hide/col-show/colwidth → `col`) a sibling op that
+    // names the same verb, which the check above has already tied back to it. `name add` with a
+    // null batchTwin while define-name's cliVerb is "name add" (#659 review) fails here.
+    OpRegistry.all.flatMap(op => op.cliVerb.map(_ -> op.name)).foreach { (cliVerb, opName) =>
+      val verb = Schema.verbs.find(_.path.mkString(" ") == cliVerb)
+      assert(verb.isDefined, s"no verb '$cliVerb'")
+      val twin = verb.flatMap(_.batchTwin)
+      assert(twin.isDefined, s"$cliVerb publishes no batchTwin although $opName names it")
+      assert(
+        twin.contains(opName) ||
+          twin.flatMap(OpRegistry.find).flatMap(_.cliVerb).contains(cliVerb),
+        s"$cliVerb's twin $twin is neither $opName nor an op that names $cliVerb"
+      )
     }
+    assertEquals(
+      Schema.verbs.filter(_.path.headOption.contains("name")).flatMap(_.batchTwin),
+      Vector("define-name", "remove-name")
+    )
   }
 
   test("every verb can exit 0, 2 and 3; exit 1 only for gates and findings") {

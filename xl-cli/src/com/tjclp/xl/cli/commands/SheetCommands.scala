@@ -8,9 +8,9 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.workbooks.DefinedName
-import com.tjclp.xl.cli.contract.{CliError, CliException, Location}
+import com.tjclp.xl.cli.contract.{CliError, CliException, Diagnostics, Location, Warning}
 import com.tjclp.xl.cli.helpers.Resolve
-import com.tjclp.xl.cli.MemoryGuard
+import com.tjclp.xl.cli.{CliIO, MemoryGuard, WritePolicy}
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formula.eval.SheetRenamer
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -371,7 +371,9 @@ object SheetCommands:
    * Add or replace a named range, then write (GH-236): workbook-scoped, or scoped to `scope` when
    * `-s` names a sheet (GH-462 — the form Excel uses for a sheet's `_xlnm.Print_Area` /
    * `_xlnm.Print_Titles`). The identifier is matched case-insensitively, as Excel and the evaluator
-   * match names (GH-538): `case` replaces `CASE`.
+   * match names (GH-538): `case` replaces `CASE`. The write is the batch `define-name`'s
+   * ([[WriteCommands.writeAfterNameEdit]]): a changed binding recalculates its readers so the file
+   * never caches a value its own name table contradicts; `--no-recalc` keeps every cache.
    */
   def nameAdd(
     wb: Workbook,
@@ -380,17 +382,28 @@ object SheetCommands:
     refersTo: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] =
-    for
-      updated <- IO.fromEither(defineName(wb, scope, name, refersTo))
-      _ <- writeWorkbook(updated, outputPath, config, stream)
-    yield s"Added named range '$name' -> $refersTo${scopeSuffix(scope)}\n" +
-      Format.saveSuffix(outputPath, stream)
+    IO.fromEither(defineName(wb, scope, name, refersTo)).flatMap { updated =>
+      WriteCommands.writeAfterNameEdit(
+        wb,
+        updated,
+        s"Added named range '$name' -> $refersTo${scopeSuffix(scope)}",
+        outputPath,
+        config,
+        stream,
+        policy,
+        warn
+      )
+    }
 
   /**
    * Remove a named range, then write (GH-236): the workbook-scoped one, or the one scoped to
-   * `scope` when `-s` names a sheet (GH-462); matched case-insensitively (GH-538).
+   * `scope` when `-s` names a sheet (GH-462); matched case-insensitively (GH-538). The write is the
+   * batch `remove-name`'s ([[WriteCommands.writeAfterNameEdit]]): the readers of the removed name
+   * are recalculated (a reader that now fails is left uncached and reported), unless `--no-recalc`.
    */
   def nameRemove(
     wb: Workbook,
@@ -398,12 +411,22 @@ object SheetCommands:
     name: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] =
-    for
-      updated <- IO.fromEither(removeName(wb, scope, name))
-      _ <- writeWorkbook(updated, outputPath, config, stream)
-    yield s"Removed named range '$name'${scopeSuffix(scope)}\n${Format.saveSuffix(outputPath, stream)}"
+    IO.fromEither(removeName(wb, scope, name)).flatMap { updated =>
+      WriteCommands.writeAfterNameEdit(
+        wb,
+        updated,
+        s"Removed named range '$name'${scopeSuffix(scope)}",
+        outputPath,
+        config,
+        stream,
+        policy,
+        warn
+      )
+    }
 
   /**
    * The mutation behind `name add` and the batch `define-name`: `SHEET_NOT_FOUND` (with the sheets

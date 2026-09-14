@@ -13,5 +13,6 @@ Data!$A$1
 0
 ## stdout
 Added named range 'Local' -> Data!$A$1 (scope: Data)
+Recalculated 0 formulas
 Saved: <DIR>/name-add-scoped.xlsx
 ## stderr

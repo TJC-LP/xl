@@ -3387,14 +3387,15 @@ EXAMPLES:
     case CliCommand.Name(action) =>
       action match
         // GH-462: `-s` is the name's scope (takesSheet is false, so a single-sheet book without
-        // -s still writes a workbook-scoped name — no auto-select)
+        // -s still writes a workbook-scoped name — no auto-select). The write policy is the batch
+        // twin's: readers of the changed name are recalculated unless --no-recalc (#659 review).
         case NameAction.Add(nm, refersTo) =>
           requireOutput("name add", outputOpt, backendOpt, stream)(
-            SheetCommands.nameAdd(wb, sheetOpt.map(_.name), nm, refersTo, _, _, _)
+            SheetCommands.nameAdd(wb, sheetOpt.map(_.name), nm, refersTo, _, _, _, policy, warn)
           )
         case NameAction.Remove(nm) =>
           requireOutput("name rm", outputOpt, backendOpt, stream)(
-            SheetCommands.nameRemove(wb, sheetOpt.map(_.name), nm, _, _, _)
+            SheetCommands.nameRemove(wb, sheetOpt.map(_.name), nm, _, _, _, policy, warn)
           )
 
     case CliCommand.MoveSheet(name, toIndexOpt, afterOpt, beforeOpt) =>

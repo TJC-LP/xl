@@ -1347,6 +1347,62 @@ object WriteCommands:
     (written, scopeToCone(result, cone, written))
 
   /**
+   * Whether an edit changed the defined-name table — the reason a name edit recalculates. As a set:
+   * `withDefinedName` re-appends a replaced entry, and a binding restated verbatim moves in the
+   * table without changing what any reader sees.
+   */
+  private[cli] def changesNames(before: Workbook, edited: Workbook): Boolean =
+    before.metadata.definedNames.toSet != edited.metadata.definedNames.toSet
+
+  /**
+   * The trailing refresh of a non-structural edit that may have changed what formulas read — cell
+   * contents, or the defined-name table (`mutating` says so) — shared by `batch` and the `name
+   * add|rm` verbs (#659 review: the verbs and their twins `define-name`/`remove-name` must leave
+   * the same caches). Returns the workbook to write, the result for [[strictGate]], and the summary
+   * line: the recalculation summary; the `--no-recalc` note when a refresh was suppressed; none
+   * when nothing changed.
+   */
+  private def refreshDependents(
+    before: Workbook,
+    edited: Workbook,
+    mutating: Boolean,
+    outputPath: Path,
+    policy: WritePolicy
+  ): IO[(Workbook, Option[RecalcResult], Option[String])] =
+    if mutating && !policy.noRecalc then
+      MemoryGuard.blocking(outputPath, "recalc")(scopedRecalc(before, edited)).map {
+        (written, result) => (written, Some(result), Some(formatRecalcSummary(result)))
+      }
+    else IO.pure((edited, None, Option.when(mutating)(noRecalcNote)))
+
+  /**
+   * GH-462 / #659 review: the write tail of `name add` and `name rm`, the same as the batch
+   * `define-name` / `remove-name` tail — when the edit changed the defined-name table, its readers
+   * (through aliases, named ranges, local shadows and cross-sheet references) are recalculated and
+   * the summary carries the same `Recalculated N formula(s)` line the batch op prints; under
+   * `--no-recalc` every cache is kept and the note says so; `--strict` gates on the same reasons.
+   * `message` is the verb's own first line.
+   */
+  def writeAfterNameEdit(
+    before: Workbook,
+    edited: Workbook,
+    message: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
+  ): IO[String] =
+    refreshDependents(before, edited, changesNames(before, edited), outputPath, policy).flatMap {
+      (finalWb, recalcOpt, refreshLine) =>
+        writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+          val recalcLine = refreshLine.fold("")(line => s"$line\n")
+          val rendered = s"$message\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
+          strictGate(policy, rendered, recalcOpt, Vector.empty, warn)
+        }
+    }
+
+  /**
    * GH-496: the `--strict` gate. The write has already happened; this only decides the exit code.
    *
    * Advisory by default (the summary is returned as-is, exit 0). Under `--strict` a recalculation
@@ -1444,28 +1500,21 @@ object WriteCommands:
           BatchParser
             .applyScopedReporting(wb, sheetOpt, result.scoped, !policy.noRecalc)
             .flatMap { (updatedWb, offGrid) =>
-              val changesNames = result.ops.exists {
+              val nameEdit = result.ops.exists {
                 case _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName => true
                 case _ => false
-              } && wb.metadata.definedNames != updatedWb.metadata.definedNames
-              val mutating = result.scoped.map(_.op).exists(isCellMutating) || changesNames
-              val recalculation: IO[Option[(Workbook, RecalcResult)]] =
-                if mutating && !policy.noRecalc then
-                  MemoryGuard.blocking(outputPath, "recalc")(Some(scopedRecalc(wb, updatedWb)))
-                else IO.pure(None)
-              recalculation.flatMap { recalcOpt =>
-                val finalWb = recalcOpt.fold(updatedWb)(_._1)
-                writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
-                  val ops = result.ops
-                  val summary = BatchParser.formatScopedSummary(result.scoped)
-                  val recalcLine = recalcOpt match
-                    case Some((_, r)) => s"${formatRecalcSummary(r)}\n"
-                    case None if mutating => s"$noRecalcNote\n"
-                    case None => ""
-                  val rendered =
-                    s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
-                  strictGate(policy, rendered, recalcOpt.map(_._2), Vector.empty, warn, offGrid)
-                }
+              } && changesNames(wb, updatedWb)
+              val mutating = result.scoped.map(_.op).exists(isCellMutating) || nameEdit
+              refreshDependents(wb, updatedWb, mutating, outputPath, policy).flatMap {
+                (finalWb, recalcOpt, refreshLine) =>
+                  writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+                    val ops = result.ops
+                    val summary = BatchParser.formatScopedSummary(result.scoped)
+                    val recalcLine = refreshLine.fold("")(line => s"$line\n")
+                    val rendered =
+                      s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
+                    strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid)
+                  }
               }
             }
       }

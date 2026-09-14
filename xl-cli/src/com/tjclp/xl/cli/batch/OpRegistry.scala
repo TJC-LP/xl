@@ -501,7 +501,11 @@ object OpRegistry:
     fields = Vector(
       req("name", Str, "The defined name"),
       req("refersTo", Str, "The reference or formula it points to, e.g. Sheet1!$A$1:$A$10"),
-      opt("scope", Sheet, "Scope the name to this sheet (default: workbook) — the verb's -s")
+      opt(
+        "scope",
+        Sheet,
+        "Scope the name to this sheet, spelled exactly as the book does (default: workbook) — the verb's -s"
+      )
     ),
     oneOf = Vector.empty,
     sheetScoped = false,
@@ -512,7 +516,7 @@ object OpRegistry:
     cliVerb = Some("name add"),
     since = "0.23.0",
     doc =
-      "Add or replace a defined name (named range), workbook-scoped or local to \"scope\"; the identifier is matched case-insensitively, so it replaces every same-scope spelling.",
+      "Add or replace a defined name (named range), workbook-scoped or local to \"scope\"; the identifier is matched case-insensitively, so it replaces every same-scope spelling. Readers of the changed name are recalculated (--no-recalc keeps their caches).",
     example = ujson.Obj(
       "op" -> ujson.Str("define-name"),
       "name" -> ujson.Str("Tax"),
@@ -525,7 +529,11 @@ object OpRegistry:
     aliases = Vector.empty,
     fields = Vector(
       req("name", Str, "The defined name"),
-      opt("scope", Sheet, "The sheet the name is scoped to (default: workbook) — the verb's -s")
+      opt(
+        "scope",
+        Sheet,
+        "The sheet the name is scoped to, spelled exactly as the book does (default: workbook) — the verb's -s"
+      )
     ),
     oneOf = Vector.empty,
     sheetScoped = false,
@@ -536,7 +544,7 @@ object OpRegistry:
     cliVerb = Some("name rm"),
     since = "0.23.0",
     doc =
-      "Remove a defined name, the workbook-scoped one or the one local to \"scope\" (matched case-insensitively); NAME_NOT_FOUND with the names in that scope as candidates when absent.",
+      "Remove a defined name, the workbook-scoped one or the one local to \"scope\" (matched case-insensitively); NAME_NOT_FOUND with the names in that scope as candidates when absent. Its readers are recalculated (--no-recalc keeps their caches).",
     example = ujson.Obj("op" -> ujson.Str("remove-name"), "name" -> ujson.Str("Tax"))
   )
 
