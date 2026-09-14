@@ -2223,7 +2223,10 @@ object WorkbookLint:
         "round-trip that strips the declarations mc:Ignorable relies on. Excel and LibreOffice " +
         "open a namespace-correct prefixed root intact (no repair), but no mainstream producer " +
         "writes it and prefix-naive tooling misreads it; re-serialize with the default namespace " +
-        "Excel writes"
+        "Excel writes",
+      // a valid file every consumer opens intact: hygiene, not repair (the undeclared-Ignorable
+      // half above, which blanks the tab, stays a repair)
+      LintSeverity.Hygiene
     )
 
   // ===== GH-460: dxfId-family attributes past the <dxfs> table =====

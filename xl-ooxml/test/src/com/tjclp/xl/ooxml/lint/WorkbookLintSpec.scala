@@ -2284,9 +2284,10 @@ class WorkbookLintSpec extends FunSuite:
     // the past-the-table half of the shared-string rule is a repair (Excel repairs, xl reads #REF!)
     assertEquals(lintOf(pastTableSstParts).map(_.severity), Vector(LintSeverity.Repair))
     assertEquals(lintOf(danglingDxfParts).map(_.severity), Vector(LintSeverity.Repair))
+    // a generated-prefix root opens intact in Excel and LibreOffice: hygiene, not repair
     assertEquals(
       lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> elementTreeRootSheetXml)).map(_.severity),
-      Vector(LintSeverity.Repair)
+      Vector(LintSeverity.Hygiene)
     )
     // the streaming scanner assigns the same tier
     assertEquals(lintStreamOf(orphanSstParts).map(_.severity), Vector(LintSeverity.Hygiene))

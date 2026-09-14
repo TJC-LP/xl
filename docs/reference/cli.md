@@ -1875,8 +1875,9 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
   `xl/styles.xml`): the ElementTree re-serialization class — the declarations are re-prefixed away
   while the Ignorable list keeps the old names, and Excel opens the part blank. Also a root element
   binding the main namespace to a generated `ns0`-style prefix, the signature of the same
-  round-trip: on its own a compatibility smell, not a repair — Excel and LibreOffice open a
-  namespace-correct prefixed root with every cell intact (verified against both) — but no
+  round-trip: on its own a compatibility smell at severity `hygiene`, not a repair — Excel and
+  LibreOffice open a namespace-correct prefixed root with every cell intact (verified against
+  both) — but no
   mainstream producer writes it and prefix-naive tooling (regexes, XPath on the default-namespace
   spelling) misreads it. An UNBOUND element prefix is a well-formedness error and exits `3` with
   the parser's message instead
