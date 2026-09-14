@@ -40,6 +40,26 @@ enum RenderedKind derives CanEqual:
 final case class RenderedContent(kind: RenderedKind, text: String)
 
 /**
+ * A cell with its style and [[RenderedContent]] resolved — once, at the top of a renderer's
+ * per-cell path. Every decision that follows (overflow span, anchor, `####`, the text itself) reads
+ * these, and resolving re-formats the value and re-parses a Custom format code, so the renderers
+ * thread this through instead of resolving at each decision.
+ */
+final case class ResolvedCell(cell: Cell, style: Option[CellStyle], content: RenderedContent):
+  /** The cell's number format: the style's, or General. */
+  def numFmt: NumFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
+
+  /** The alignment the renderers anchor by (see [[RenderUtils.resolveHAlign]]). */
+  def align: HAlign = RenderUtils.resolveHAlign(style, content)
+
+object ResolvedCell:
+  /** Resolve `cell` against `sheet`'s style registry. */
+  def apply(cell: Cell, sheet: Sheet): ResolvedCell =
+    val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+    val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
+    ResolvedCell(cell, style, RenderUtils.renderedContent(cell.value, numFmt))
+
+/**
  * Shared utilities for rendering.
  *
  * Contains common constants, unit conversions, font measurement, escaping, and color resolution
@@ -109,11 +129,19 @@ object RenderUtils:
    * that is the string the renderers emit (GH-502).
    */
   def measureCellValueWidth(value: CellValue, numFmt: NumFmt, font: Option[Font]): Int =
+    measureContentWidth(value, renderedContent(value, numFmt), font)
+
+  /** [[measureCellValueWidth]] with the content already resolved (`content` is `value`'s). */
+  private def measureContentWidth(
+    value: CellValue,
+    content: RenderedContent,
+    font: Option[Font]
+  ): Int =
     value match
       case CellValue.RichText(rt) =>
         rt.runs.map(run => measureTextWidth(run.text, run.font.orElse(font))).sum
-      case CellValue.Formula(_, Some(cached), _) => measureCellValueWidth(cached, numFmt, font)
-      case other => measureTextWidth(renderedContent(other, numFmt).text, font)
+      case CellValue.Formula(_, Some(cached), _) => measureContentWidth(cached, content, font)
+      case _ => measureTextWidth(content.text, font)
 
   /** [[measureCellValueWidth]] under the General number format. */
   def measureCellValueWidth(value: CellValue, font: Option[Font]): Int =
@@ -163,13 +191,16 @@ object RenderUtils:
   /**
    * Calculate overflow colspan for a cell with text that exceeds its width.
    *
-   * For left-aligned/general cells, counts empty cells to the right until:
+   * Only TEXT overflows. A number, date, logical or error never borrows a neighbour, however empty
+   * and whatever the cell's alignment: Excel confines it to its own column and shows `####` when it
+   * does not fit (GH-459, GH-500). For left/centre-aligned text, counts empty cells to the right
+   * until:
    *   - A non-empty cell is reached
    *   - The accumulated width covers the text overflow
    *   - The range boundary is reached
    *
    * @param cell
-   *   The cell to check for overflow
+   *   The cell to check for overflow, with its style and rendered content resolved
    * @param cellRef
    *   The cell reference
    * @param cellWidth
@@ -186,7 +217,7 @@ object RenderUtils:
    *   The colspan (1 if no overflow, >1 if overflowing into adjacent cells)
    */
   def calculateOverflowColspan(
-    cell: com.tjclp.xl.cells.Cell,
+    cell: ResolvedCell,
     cellRef: ARef,
     cellWidth: Int,
     colWidths: IndexedSeq[Int],
@@ -197,27 +228,29 @@ object RenderUtils:
     import scala.util.boundary, boundary.break
 
     boundary:
-      val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+      val style = cell.style
 
       // If wrapText is true, text wraps instead of overflowing
       if style.exists(_.align.wrapText) then break(1)
 
+      // A kind that hashes never spans: Excel draws a too-wide number, date, logical or error
+      // as #### inside its own column, empty neighbour or not, Left/Center alignment or not.
+      // Gating here — before the alignment match — is what lets hashOverflowText see the
+      // cell's OWN width instead of an already widened span (GH-500).
+      if hashesOnOverflow(cell.content.kind) then break(1)
+
       val font = style.map(_.font)
-      val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
       // Size the span from what the renderers DRAW — the formatted text — never the raw value:
       // a rounding format must not claim neighbours for digits it never shows, and a widening
-      // one (currency, an error's Excel code) must get the room its text needs (GH-502).
-      val textWidth = measureCellValueWidth(cell.value, numFmt, font)
+      // one must get the room its text needs (GH-502).
+      val textWidth = measureContentWidth(cell.cell.value, cell.content, font)
 
       // If text fits within cell, no overflow needed
       if textWidth <= cellWidth then break(1)
 
-      // Determine overflow direction based on alignment. General resolves through the rendered
-      // kind — the same resolution the renderers use when they anchor the text — so a
-      // General-aligned number takes the right-aligned (clip, then hash) path instead of
-      // bleeding its digits across empty neighbours (GH-459).
-      val align = resolveHAlign(style, renderedContent(cell.value, numFmt))
-      align match
+      // Determine overflow direction based on alignment: the same resolution the renderers use
+      // when they anchor the text.
+      cell.align match
         case HAlign.Left | HAlign.General =>
           // Overflow to the right (General alignment for text behaves like Left)
           countEmptyToRight(cellRef, cellWidth, colWidths, sheet, startCol, endCol, textWidth)
@@ -231,6 +264,26 @@ object RenderUtils:
           1
         case _ =>
           1
+
+  /** [[calculateOverflowColspan]] resolving `cell`'s style and content against `sheet` first. */
+  def calculateOverflowColspan(
+    cell: Cell,
+    cellRef: ARef,
+    cellWidth: Int,
+    colWidths: IndexedSeq[Int],
+    sheet: Sheet,
+    startCol: Int,
+    endCol: Int
+  ): Int =
+    calculateOverflowColspan(
+      ResolvedCell(cell, sheet),
+      cellRef,
+      cellWidth,
+      colWidths,
+      sheet,
+      startCol,
+      endCol
+    )
 
   /**
    * Count how many adjacent empty cells to the right can accommodate text overflow.
@@ -320,8 +373,8 @@ object RenderUtils:
    * The decision is taken from the value's rendered content and its style rather than from
    * renderer-local text, so SVG and HTML hash the same cells with the same marker.
    *
-   * @param value
-   *   the cell's value — hashed when its rendered kind is Numeric, Bool or Error
+   * @param content
+   *   the cell's rendered content — hashed when its kind is Numeric, Bool or Error
    * @param style
    *   the cell's resolved style: number format, font, alignment, indent and wrapText
    * @param availableWidth
@@ -330,13 +383,11 @@ object RenderUtils:
    *   the `#` run to render in place of the text, or None to render the text unchanged
    */
   def hashOverflowText(
-    value: CellValue,
+    content: RenderedContent,
     style: Option[CellStyle],
     availableWidth: Int
   ): Option[String] =
     val wrapText = style.exists(_.align.wrapText)
-    val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
-    val content = renderedContent(value, numFmt)
     if wrapText || availableWidth <= 0 || !hashesOnOverflow(content.kind) then None
     else
       val font = style.map(_.font)
@@ -351,6 +402,15 @@ object RenderUtils:
         // At least one '#': a column too narrow for even one marker must still refuse to
         // show digits.
         Some("#" * math.max(1, innerWidth / hashWidth))
+
+  /** [[hashOverflowText]] resolving `value`'s content under `style`'s number format first. */
+  def hashOverflowText(
+    value: CellValue,
+    style: Option[CellStyle],
+    availableWidth: Int
+  ): Option[String] =
+    val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
+    hashOverflowText(renderedContent(value, numFmt), style, availableWidth)
 
   // ========== Escaping ==========
 
