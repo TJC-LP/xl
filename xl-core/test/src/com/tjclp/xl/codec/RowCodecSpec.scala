@@ -15,6 +15,7 @@ import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.styleSyntax.*
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.tables.TableSpec
 
 /** GH-590 (W2.9): records as rows — derived `RowCodec`, the Sheet entry points, and their laws. */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
@@ -843,6 +844,80 @@ class RowCodecSpec extends ScalaCheckSuite:
     val dynamic =
       compileErrors("final case class F(@header(runtimeHeader) a: Int) derives RowCodec")
     assert(dynamic.contains("literal"), dynamic)
+  }
+
+  test("derived: headers the reader cannot tell apart do not compile, @header or not (GH-614)") {
+    // readRowsByHeader matches a header ignoring case, whitespace, `_` and `-`, so two such
+    // headers would bind ONE column to two fields (Col(5, 5) for a sheet headed `Unit Price`
+    // alone): the duplicate guard is keyed on the matcher's own key, not on exact text.
+    val spaced = compileErrors(
+      """final case class G(@header("Unit Price") unitPrice: Int, unit_price: Int) derives RowCodec"""
+    )
+    assert(spaced.contains("'unitPrice'") && spaced.contains("'unit_price'"), spaced)
+    assert(spaced.contains("'Unit Price'"), spaced)
+    val cased =
+      compileErrors("""final case class H(@header("Rev") rev0: Int, rev: Int) derives RowCodec""")
+    assert(cased.contains("'rev0'") && cased.contains("'rev'") && cased.contains("'Rev'"), cased)
+    val plain =
+      compileErrors("""final case class P(unitPrice: Int, unit_price: Int) derives RowCodec""")
+    assert(plain.contains("'unitPrice'") && plain.contains("'unit_price'"), plain)
+    // Punctuation is never dropped by the matcher, so these are distinct headers
+    final case class Fine(@header("Rev ($M)") revM: Int, rev: Int) derives RowCodec
+    assertEquals(RowCodec[Fine].headers, Vector("Rev ($M)", "rev"))
+  }
+
+  test("RowCodec.headerKey is the matcher's key: case, whitespace, '_' and '-' are ignored") {
+    assertEquals(RowCodec.headerKey("Unit Price"), "unitprice")
+    assertEquals(RowCodec.headerKey("unit_price"), RowCodec.headerKey("UNIT-PRICE"))
+    assertNotEquals(RowCodec.headerKey("Rev ($M)"), RowCodec.headerKey("rev"))
+    // What columnOf finds by key, the codec must refuse as a duplicate
+    val sheet = Sheet("S").put(ref"A1", "Unit Price")
+    assertEquals(sheet.columnOf("unit_price", Row.from1(1)), Some(ref"A1".col))
+  }
+
+  test("withHeaders: headers the reader cannot tell apart are InvalidArgument (GH-614)") {
+    def refused(overrides: Map[String, String]): String =
+      RowCodec.derived[Order].withHeaders(overrides) match
+        case Left(XLError.InvalidArgument("RowCodec.withHeaders", reason)) => reason
+        case other => fail(s"expected InvalidArgument, got $other")
+    val cased = refused(Map("id" -> "CUSTOMER"))
+    assert(cased.contains("'id'") && cased.contains("'customer'"), cased)
+    assert(cased.contains("'CUSTOMER'") && cased.contains("'customer'"), cased)
+    val spaced = refused(Map("id" -> "Cust omer"))
+    assert(spaced.contains("'id'") && spaced.contains("'customer'"), spaced)
+    val dashed = refused(Map("id" -> "Q-T-Y", "note" -> "q_t_y"))
+    assert(dashed.contains("'id'") && dashed.contains("'qty'") && dashed.contains("'note'"), dashed)
+    // Punctuation still distinguishes
+    assert(RowCodec.derived[Order].withHeaders(Map("id" -> "Customer ($)")).isRight)
+  }
+
+  test(
+    "putTable: column names Excel considers duplicates (case-insensitive) are refused (GH-614)"
+  ) {
+    // Excel table column names are unique case-insensitively (structured references are); a
+    // table carrying `Rev` and `rev` is repaired on open. Reachable only from a hand-written
+    // codec now that derived/withHeaders refuse the pair.
+    val codec = new RowCodec[(Int, Int)]:
+      def fields: Vector[String] = Vector("a", "b")
+      override def headers: Vector[String] = Vector("Rev", "rev")
+      def read(cells: Vector[Cell]): Either[RowCodecError, (Int, Int)] = Right((0, 0))
+      def write(a: (Int, Int)): Vector[(CellValue, Option[CellStyle])] =
+        Vector(
+          (CellValue.Number(BigDecimal(a._1)), None),
+          (CellValue.Number(BigDecimal(a._2)), None)
+        )
+    locally {
+      given RowCodec[(Int, Int)] = codec
+      Sheet("T").putTable(ref"A1", Vector((1, 2)), "T1") match
+        case Left(XLError.InvalidTableColumns(reason)) =>
+          assert(reason.contains("Rev") && reason.contains("rev"), reason)
+        case other => fail(s"expected InvalidTableColumns, got $other")
+    }
+    val range = CellRange(ref"A1", ref"B2")
+    TableSpec.fromColumnNames("T1", "T1", range, Vector("Rev", "rev")) match
+      case Left(XLError.InvalidTableColumns(reason)) => assert(reason.contains("Rev"), reason)
+      case other => fail(s"expected InvalidTableColumns, got $other")
+    assert(TableSpec.fromColumnNames("T1", "T1", range, Vector("Rev", "Rev ($M)")).isRight)
   }
 
   test("a hand-written codec has headers == fields by default; withHeaders renames them") {

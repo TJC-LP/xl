@@ -46,17 +46,15 @@ object RowCodecMacros:
       (param.name, text)
     }
 
-    overrides
-      .map((name, text) => (name, text.getOrElse(name)))
-      .groupMap(_._2)(_._1)
-      .toList
-      .sortBy(_._1)
-      .collectFirst { case (text, names) if names.sizeIs > 1 => (text, names) }
-      .foreach { (text, names) =>
-        val quoted = names.map(n => s"'$n'")
-        val listed = s"${quoted.dropRight(1).mkString(", ")} and ${quoted.takeRight(1).mkString}"
+    // Duplicates are judged the way readRowsByHeader matches (RowCodec.headerKey: case,
+    // whitespace, `_` and `-` ignored), not on exact text: `Unit Price` beside `unit_price`
+    // would bind one column to two fields just as `x` beside `x` would.
+    RowCodec
+      .sharedHeaders(overrides.map((name, text) => (name, text.getOrElse(name))))
+      .headOption
+      .foreach { group =>
         report.errorAndAbort(
-          s"RowCodec.derived: fields $listed of ${record.name} both have header '$text'"
+          s"RowCodec.derived: ${RowCodec.sharedHeaderMessage(group)} (record ${record.name})"
         )
       }
 

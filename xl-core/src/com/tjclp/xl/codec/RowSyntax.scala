@@ -1,7 +1,5 @@
 package com.tjclp.xl.codec
 
-import java.util.Locale
-
 import scala.annotation.tailrec
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
@@ -192,12 +190,9 @@ object rowSyntax:
 
   private def columnIn(present: Vector[(Column, String)], header: String): Option[Column] =
     present.collectFirst { case (col, text) if text == header => col }.orElse {
-      val key = normalize(header)
-      present.collectFirst { case (col, text) if normalize(text) == key => col }
+      val key = RowCodec.headerKey(header)
+      present.collectFirst { case (col, text) if RowCodec.headerKey(text) == key => col }
     }
-
-  private def normalize(header: String): String =
-    header.filterNot(c => c.isWhitespace || c == '_' || c == '-').toLowerCase(Locale.ROOT)
 
   private def headerText(value: CellValue): Option[String] = value match
     case CellValue.Text(s) if s.trim.nonEmpty => Some(s)

@@ -9,7 +9,6 @@ import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.{Font, Underline}
-import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Renders Excel sheets to SVG images with styled cells.
@@ -47,6 +46,28 @@ object SvgRenderer:
     theme: ThemePalette = ThemePalette.office,
     showLabels: Boolean = false,
     showGridlines: Boolean = false
+  ): String =
+    toSvgResolving(ResolvedCell(_, _))(
+      sheet,
+      range,
+      includeStyles,
+      theme,
+      showLabels,
+      showGridlines
+    )
+
+  /**
+   * [[toSvg]] with the per-cell resolver injected. Each rendered cell is resolved exactly once
+   * (`RenderUtilsSpec` counts through this seam): every overflow, anchor, hash and text decision
+   * reads the one [[ResolvedCell]], so a Custom format code is parsed once per cell.
+   */
+  private[render] def toSvgResolving(resolve: (Cell, Sheet) => ResolvedCell)(
+    sheet: Sheet,
+    range: CellRange,
+    includeStyles: Boolean,
+    theme: ThemePalette,
+    showLabels: Boolean,
+    showGridlines: Boolean
   ): String =
     // GH-258: the sheet's own view settings win when they disable gridlines (templates that are
     // gridline-free in Excel must stay gridline-free in exports).
@@ -172,6 +193,9 @@ object SvgRenderer:
           // Skip interior cells of merged regions (they're covered by the anchor cell's rect)
           if !isInteriorMergeCell then
             val cellOpt = sheet.cells.get(ref)
+            // Style and rendered content, resolved ONCE: the span, anchor, text and hash below
+            // all read them, and resolving re-formats the value and re-parses a Custom code.
+            val resolvedOpt = cellOpt.map(resolve(_, sheet))
 
             // Calculate effective dimensions (expanded for merged cells)
             val (mergeWidth, mergeHeight) = mergeRange match
@@ -187,9 +211,9 @@ object SvgRenderer:
                 (width, rowHeight)
 
             // Calculate overflow colspan (only if no merge)
-            val overflowColspan = cellOpt match
-              case Some(cell) if mergeRange.isEmpty =>
-                calculateOverflowColspan(cell, ref, width, colWidths, sheet, startCol, endCol)
+            val overflowColspan = resolvedOpt match
+              case Some(resolved) if mergeRange.isEmpty =>
+                calculateOverflowColspan(resolved, ref, width, colWidths, sheet, startCol, endCol)
               case _ => 1
 
             // Mark subsequent columns to skip due to overflow
@@ -250,13 +274,10 @@ object SvgRenderer:
             // Collect text for third pass (skip hidden rows/cols)
             // Apply clip-path to prevent text overflow beyond effective width
             if effectiveHeight > 0 && effectiveWidth > 0 then
-              cellOpt.foreach { cell =>
-                val (textX, anchor) = textAlignment(cell, sheet, xPos, effectiveWidth)
+              resolvedOpt.foreach { resolved =>
+                val cell = resolved.cell
+                val (textX, anchor) = textAlignment(resolved, xPos, effectiveWidth)
                 val textY = textYPosition(cell, sheet, y, effectiveHeight)
-                val numFmt = cell.styleId
-                  .flatMap(sheet.styleRegistry.get)
-                  .map(_.numFmt)
-                  .getOrElse(NumFmt.General)
 
                 // Apply clip-path to constrain text within cell boundaries
                 val clipAttr = s""" clip-path="url(#$clipId)""""
@@ -264,7 +285,7 @@ object SvgRenderer:
                 cell.value match
                   case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
                     // Get cell's base font for inheritance by unstyled runs
-                    val baseFont = cell.styleId.flatMap(sheet.styleRegistry.get).map(_.font)
+                    val baseFont = resolved.style.map(_.font)
 
                     // Inter-run gap to account for AWT vs SVG font metric differences
                     // SVG renders slightly wider than AWT measures, so add extra spacing
@@ -295,20 +316,20 @@ object SvgRenderer:
                     }
                     textBuffer.append("</text>\n")
 
-                  case other =>
-                    val formatted = cellValueToText(other, numFmt)
+                  case _ =>
+                    val formatted = resolved.content.text
                     if formatted.nonEmpty then
                       // includeStyles=false still needs explicit font attrs now that the
                       // .cell-text CSS rule no longer declares them (GH-255 cascade fix)
                       val textStyle =
                         if includeStyles then cellTextStyle(cell, sheet, theme)
                         else """ fill="#000000" font-size="15px" font-family="Calibri""""
-                      val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+                      val style = resolved.style
                       val shouldWrap = style.exists(_.align.wrapText)
 
                       // Excel's #### marker: a clipped numeral reads as a different, plausible
                       // number (GH-459)
-                      val text = hashOverflowText(other, style, effectiveWidth)
+                      val text = hashOverflowText(resolved.content, style, effectiveWidth)
                         .getOrElse(formatted)
 
                       if shouldWrap then
@@ -803,17 +824,13 @@ object SvgRenderer:
    *
    * Indentation adds IndentPxPerLevel pixels per level (Excel uses ~3 characters per level).
    */
-  private def textAlignment(cell: Cell, sheet: Sheet, cellX: Int, cellWidth: Int): (Int, String) =
-    val style = cell.styleId.flatMap(sheet.styleRegistry.get)
-    val indent = style.map(_.align.indent).getOrElse(0)
+  private def textAlignment(cell: ResolvedCell, cellX: Int, cellWidth: Int): (Int, String) =
+    val indent = cell.style.map(_.align.indent).getOrElse(0)
     val indentPx = indent * IndentPxPerLevel
-    val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
 
     // General resolves from the rendered kind, the same way the hash and colspan decisions do:
     // errors centre like logicals, a number under a text-only format is text (GH-500, GH-501)
-    val effectiveAlign = resolveHAlign(style, renderedContent(cell.value, numFmt))
-
-    effectiveAlign match
+    cell.align match
       case HAlign.Center | HAlign.CenterContinuous =>
         // Center alignment: indent shifts content slightly right
         (cellX + cellWidth / 2 + indentPx / 2, "middle")

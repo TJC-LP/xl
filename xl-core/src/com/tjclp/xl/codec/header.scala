@@ -14,7 +14,9 @@ import scala.annotation.StaticAnnotation
  * }}}
  *
  * `name` must be a string literal, non-blank, and distinct from every other header of the record
- * (an annotated one or a plain field name) — each is checked when the codec is derived, as a
+ * (an annotated one or a plain field name) the way `readRowsByHeader` tells headers apart — by
+ * [[RowCodec.headerKey]], which ignores case, whitespace, `_` and `-`, so `@header("Unit Price")`
+ * beside a field `unit_price` is a duplicate. Each is checked when the codec is derived, as a
  * compile error. The runtime twin, for a header known only at runtime, is [[RowCodec.withHeaders]].
  */
 final class header(val name: String) extends StaticAnnotation

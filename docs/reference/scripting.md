@@ -761,13 +761,15 @@ The rules, all of them:
 - **Header names** (#614): a field's header is its name unless `@header("Rev ($M)")` says
   otherwise — real trackers have punctuation no identifier reaches (`columnOf("rev")` is `None`
   against `Rev ($M)`, since matching only ignores case, whitespace, `_` and `-`). The annotation
-  takes a non-blank string literal, two fields may not end up with the same header (both are
-  compile errors), and `RowCodec[A].headers` lists the result beside `RowCodec[A].fields`:
+  takes a non-blank string literal, two fields may not end up with headers the matcher cannot tell
+  apart — `RowCodec.headerKey` ignores case, whitespace, `_` and `-`, so `@header("Unit Price")`
+  beside a field `unit_price` collides (both are compile errors), and `RowCodec[A].headers` lists
+  the result beside `RowCodec[A].fields`:
   `putRowsWithHeader`/`putTable` write the headers, `readRowsByHeader` matches them (exact, then
   normalised — `@header("Rev ($M)")` also finds `rev ($m)`), and errors keep the field name
   (`Field(row, column, "rev", …)`; only `HeaderNotFound` carries the header text). For a header
   known only at runtime, `codec.withHeaders(Map("rev" -> "Rev ($M)"))` is `XLResult[RowCodec[A]]`
-  (an unknown field, a blank header or two fields sharing one → `InvalidArgument`) and layers on
+  (an unknown field, a blank header or two fields whose headers share a `headerKey` → `InvalidArgument`) and layers on
   the annotation. Spell such a given with `derived`:
   `given RowCodec[Deal] = orExit(RowCodec.derived[Deal].withHeaders(Map("ebitda" -> "EBITDA ($M)")))`
   — `RowCodec[Deal].withHeaders(…)` there would summon the very given it defines.
