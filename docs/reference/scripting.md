@@ -590,7 +590,8 @@ fixpoint declared cycles instead —
 `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` sweeps each
 cyclic component until every |Δ| < `maxChange` or `maxIter` rounds (non-convergence keeps the
 last values with no error, per Excel; a member that fails every round stalls the loop early,
-GH-537). The sweep is Gauss–Seidel by default (GH-482, Excel's sequential recalculation: members
+GH-537). The sweep is Gauss–Seidel by default (GH-482, Excel's iteration model — a sequential
+sweep in row-major order, not verified against Excel's own calc chain: members
 evaluate in `DependencyGraph.withinComponentOrder` and each value is read by the members after
 it); `IterativeCalc(…, scheme = IterationScheme.Jacobi)` reads previous-round values instead and
 reproduces the 0.13.0–0.22.x trajectories. Plain `recalculate()` still isolates cycles. Honor a file's own settings with
