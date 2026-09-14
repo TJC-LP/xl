@@ -209,6 +209,155 @@ class LintCommandSpec extends CatsEffectSuite:
       assert(read.isRight, s"xl read must tolerate a childless inlineStr, got $read")
   }
 
+  // ========== Severity tiers (PR #659 review): hygiene findings do not fail the gate ==========
+
+  /**
+   * An Excel-shaped book: the string lives in xl/sharedStrings.xml (`t="s"`), as every
+   * Excel/LibreOffice/openpyxl-authored file stores text. Lints clean.
+   */
+  private def sstZip(): Path =
+    val parts = Map(
+      "[Content_Types].xml" ->
+        """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>""",
+      "_rels/.rels" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="$nsRel/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>""",
+      "xl/workbook.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="$nsMain" xmlns:r="$nsRel">
+  <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""",
+      "xl/_rels/workbook.xml.rels" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="$nsRel/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="$nsRel/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>""",
+      "xl/sharedStrings.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="$nsMain" count="2" uniqueCount="2"><si><t>plain</t></si><si><t>other</t></si></sst>""",
+      "xl/worksheets/sheet1.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="$nsMain"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row></sheetData></worksheet>"""
+    )
+    val baos = ByteArrayOutputStream()
+    val zos = ZipOutputStream(baos)
+    parts.foreach { case (name, content) =>
+      zos.putNextEntry(ZipEntry(name))
+      zos.write(content.getBytes(StandardCharsets.UTF_8))
+      zos.closeEntry()
+    }
+    zos.close()
+    val path = Files.createTempFile("lint-cli-sst", ".xlsx")
+    Files.write(path, baos.toByteArray)
+    path
+
+  /**
+   * The skeptics' reproduction: `put A1 42` on an SST book writes a new file whose shared-string
+   * table still carries the replaced text (the writer never prunes a preserved table), so the ONE
+   * finding on xl's own output is `shared-string-orphan` — a hygiene finding.
+   */
+  private def sstBookEditedByPut(): IO[Path] =
+    for
+      source <- IO(sstZip())
+      out <- IO(Files.createTempFile("lint-cli-sst-put", ".xlsx"))
+      excel = ExcelIO.instance[IO]
+      wb <- excel.read(source)
+      sheet <- IO.fromEither(wb("Sheet1").left.map(e => new Exception(e.message)))
+      _ <- excel.write(wb.put(sheet.put(ref"A1" -> 42)), out)
+      _ <- IO(Files.deleteIfExists(source))
+    yield out
+
+  test("lint: an SST book edited by put exits 0 — the orphan is a hygiene finding (PR #659)") {
+    for
+      path <- sstBookEditedByPut()
+      code <- Main.runLint(path, LintFormat.Json)
+      findings <- IO(WorkbookLint.lint(path).fold(err => fail(s"lint errored: $err"), identity))
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(code, ExitCode.Success)
+      val parsed = ujson.read(LintCommands.renderJson(path.toString, findings))
+      assertEquals(parsed("clean").bool, false) // "clean" stays "no findings at all"
+      assertEquals(
+        parsed("findings").arr.map(f => (f("category").str, f("severity").str)).toList,
+        List(("shared-string-orphan", "hygiene"))
+      )
+      val text = LintCommands.renderText(path.toString, findings)
+      assert(text.contains("(0 repair, 1 hygiene)"), text)
+      assert(text.contains("[shared-string-orphan] (hygiene)"), text)
+      assert(text.contains("pass --strict"), text)
+      // under --strict the trailer explaining the exit 0 is gone
+      assert(!LintCommands.renderText(path.toString, findings, strict = true).contains("exit 0"))
+  }
+
+  test("lint --strict: the same book exits 1 (hygiene promoted to the gate)") {
+    for
+      path <- sstBookEditedByPut()
+      code <- Main.runLint(path, LintFormat.Text, strict = true)
+      _ <- IO(Files.deleteIfExists(path))
+    yield assertEquals(code, ExitCode(1))
+  }
+
+  test("lint: the pristine SST book lints clean, exit 0 in both gates") {
+    for
+      path <- IO(sstZip())
+      lenient <- Main.runLint(path, LintFormat.Text)
+      strict <- Main.runLint(path, LintFormat.Text, strict = true)
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(lenient, ExitCode.Success)
+      assertEquals(strict, ExitCode.Success)
+  }
+
+  test("lint: a repair finding exits 1 with or without --strict") {
+    for
+      path <- IO(incidentZip())
+      lenient <- Main.runLint(path, LintFormat.Text)
+      strict <- Main.runLint(path, LintFormat.Text, strict = true)
+      findings <- IO(WorkbookLint.lint(path).fold(err => fail(s"lint errored: $err"), identity))
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(lenient, ExitCode(1))
+      assertEquals(strict, ExitCode(1))
+      val severities = ujson
+        .read(LintCommands.renderJson(path.toString, findings))("findings")
+        .arr
+        .map(_("severity").str)
+        .toSet
+      assertEquals(severities, Set("repair"))
+      // a repair-only report has no tier breakdown and no hygiene tag
+      val text = LintCommands.renderText(path.toString, findings)
+      assert(!text.contains("hygiene"), text)
+  }
+
+  test("lint: --strict is the global flag — accepted before and after the verb, end to end") {
+    for
+      path <- sstBookEditedByPut()
+      after <- contract.CliHarness.run("lint", path.toString, "--strict")
+      before <- contract.CliHarness.run("--strict", "lint", path.toString)
+      lenient <- contract.CliHarness.run("--json", "lint", path.toString)
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(after.exit, 1, after.toString)
+      assertEquals(before.exit, 1, before.toString)
+      assert(after.stdout.contains("[shared-string-orphan] (hygiene)"), after.stdout)
+      // the lenient envelope: ok, exit 0, the finding in data, and the LINT_HYGIENE warning
+      assertEquals(lenient.exit, 0, lenient.toString)
+      val envelope = ujson.read(lenient.stdout)
+      assertEquals(envelope("ok").bool, true)
+      assertEquals(envelope("data")("findings").arr.map(_("severity").str).toList, List("hygiene"))
+      assertEquals(envelope("warnings").arr.map(_("code").str).toList, List("LINT_HYGIENE"))
+  }
+
   test("lint: unreadable file exits 3 (a failure, not usage — ADR-017)") {
     for code <- Main.runLint(Paths.get("/nonexistent/no-such-file.xlsx"), LintFormat.Text)
     yield assertEquals(code, ExitCode(3))

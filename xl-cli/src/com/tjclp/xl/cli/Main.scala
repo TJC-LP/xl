@@ -41,7 +41,7 @@ import com.tjclp.xl.cli.commands.{
   WriteCommands
 }
 import com.tjclp.xl.cli.read.{ReadQuery, Reads, SheetSource}
-import com.tjclp.xl.ooxml.lint.WorkbookLint
+import com.tjclp.xl.ooxml.lint.{LintSeverity, WorkbookLint}
 import com.tjclp.xl.cli.raster.{
   BatikRasterizer,
   CairoSvg,
@@ -245,18 +245,23 @@ object Main extends IOApp:
       Opts.flag("preserve-caches", "Alias for --no-recalc").orFalse
     ).mapN(_ || _)
 
-  /** GH-496: promote a write's advisory recalculation warnings to exit 1 (CI gate). */
-  private val strictWriteOpt: Opts[Boolean] =
+  /**
+   * The global `--strict`: GH-496 promotes a write's advisory recalculation warnings to exit 1 (CI
+   * gate); for `lint` it promotes the hygiene tier (shared-string orphans, unreferenced parts) to
+   * the exit-1 gate the repair findings already fail (PR #659 review). One `Opts` instance shared
+   * by both parsers so `xl --help` lists the flag once.
+   */
+  private[cli] val strictGlobalOpt: Opts[Boolean] =
     Opts
       .flag(
         "strict",
-        "Exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0). With -o the output is written; with -i a strict failure leaves the input unchanged."
+        "Writes: exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0); with -o the output is written, with -i a strict failure leaves the input unchanged. lint: exit 1 on hygiene findings too (default: repair findings only)."
       )
       .orFalse
 
   /** Cross-cutting write posture (GH-468/GH-496), parsed before the verb like -f/-o/--stream. */
   private[cli] val writePolicyOpt: Opts[WritePolicy] =
-    (noRecalcOpt, strictWriteOpt).mapN(WritePolicy.apply)
+    (noRecalcOpt, strictGlobalOpt).mapN(WritePolicy.apply)
 
   /**
    * Global `--json` (ADR-017 §2.4): the result — success or failure — as one JSON envelope on
@@ -710,22 +715,25 @@ lenient reader accepts silently:
   - inlineStr/str cells with neither an <is> nor a <v> (openpyxl's value="";
     strict readers reject the sheet — xl reads the cell as blank and a
     regenerating write heals the shape)
-  - mc:Ignorable lists naming a prefix no ancestor declares, or an ns0-style
-    root prefix (the ElementTree re-serialization class: Excel opens the
-    part blank)
+  - mc:Ignorable lists naming a prefix no ancestor declares (the ElementTree
+    re-serialization class: Excel opens the part blank), or an ns0-style
+    root prefix — the same round-trip's signature; on its own Excel opens
+    the part intact, but prefix-naive tooling misreads it
   - dxfId / dataDxfId / headerRowDxfId ... past the <dxfs> table of
     xl/styles.xml (actual <dxf> children, not the count attribute)
   - zip entries no relationship reaches from _rels/.rels (dead weight, or a
-    forgotten Relationship; never a repair, but the bytes travel)
+    forgotten Relationship; never a repair, but the bytes travel) [hygiene]
   - shared-string entries no t="s" cell references (count + first five
-    INDICES, never the text) and t="s" indices past the table (#REF!);
-    xl never prunes a preserved table, so a text-replacing edit of a
-    foreign shared-string book reports this until the table is rebuilt
+    INDICES, never the text) [hygiene] and t="s" indices past the table
+    (#REF!); xl never prunes a preserved table, so a text-replacing edit of
+    a foreign shared-string book reports the orphan until the table is
+    rebuilt
 
 USAGE:
   xl lint report.xlsx
   xl -f report.xlsx lint                     # Equivalent flag form
   xl lint report.xlsx --format json          # Stable machine-readable schema
+  xl lint report.xlsx --strict               # Hygiene findings fail the gate too
 
 FINDING CATEGORIES:
   child-order | unresolved-rel-id | wrong-rel-type | missing-part |
@@ -735,15 +743,23 @@ FINDING CATEGORIES:
   mc-ignorable-undeclared | dxf-id-out-of-range | unreferenced-part |
   shared-string-orphan
 
+SEVERITY (every finding carries one; --format json: "severity"):
+  repair  = Excel repairs or refuses the file, or a reader misreads a value
+  hygiene = the file is valid and opens intact; dead weight or a privacy
+            hazard the package still carries (unreferenced-part, the orphan
+            half of shared-string-orphan)
+
 EXIT CODES:
-  0 = no findings (package structure is clean)
-  1 = findings reported
-  2 = error (unreadable file, missing/malformed core part, ...)
+  0 = no repair findings (hygiene findings, if any, are still listed)
+  1 = repair findings reported — or, with --strict, any finding at all
+  2 = usage (no file, or a file given both ways)
+  3 = error (unreadable file, missing/malformed core part, ...)
 
 Docs: xl lint is read-only; it never repairs or rewrites the file.
 
 EXAMPLES:
-  xl lint deliverable.xlsx && echo "safe to send"
+  xl lint deliverable.xlsx && echo "safe to send"        # repair-clean
+  xl lint deliverable.xlsx --strict && echo "spotless"   # no finding of any tier
   xl lint deliverable.xlsx --format json | jq '.findings'"""
 
   private val lintFormatOpt: Opts[Option[LintFormat]] =
@@ -2663,18 +2679,25 @@ EXAMPLES:
         Left("lint requires a file: xl lint <file> (or xl -f <file> lint)")
 
   /**
-   * Run the lint command with its exit codes: 0 = clean, 1 = findings (a result, not a failure), 3 =
-   * error reported on stderr — an unreadable input (missing file, not a zip, missing/malformed core
-   * part) as `IO_READ`, the same code every other verb gives that condition. Opens the zip directly
-   * — NOT ExcelIO.read — because a full parse would repair/normalize the very structure lint
-   * inspects (GH-397).
+   * Run the lint command with its exit codes: 0 = no repair findings (hygiene findings are listed,
+   * and a `LINT_HYGIENE` warning says how many), 1 = repair findings — or, under `--strict`, any
+   * finding (a result, not a failure), 3 = error reported on stderr — an unreadable input (missing
+   * file, not a zip, missing/malformed core part) as `IO_READ`, the same code every other verb
+   * gives that condition. Opens the zip directly — NOT ExcelIO.read — because a full parse would
+   * repair/normalize the very structure lint inspects (GH-397).
+   *
+   * The tier split (PR #659 review): `shared-string-orphan`'s orphan half and `unreferenced-part`
+   * report a valid file that opens intact everywhere, and xl's own `put`/`clear`/`--stream put` of
+   * any shared-string book leaves an orphan by design (the writer never prunes a preserved table),
+   * so gating on them would fail the documented `xl lint && send` check on xl's own output.
    */
   private[cli] def runLint(
     file: Path,
     format: LintFormat,
     io: CliIO = CliIO.system,
     mode: OutputMode = OutputMode.Text,
-    stream: Boolean = false
+    stream: Boolean = false,
+    strict: Boolean = false
   ): IO[ExitCode] =
     // GH-638: --stream SAX-scans the sheet-class parts instead of parsing them (the same findings,
     // pinned by the lint parity suite), so a million-row book lints in O(1) memory
@@ -2682,18 +2705,34 @@ EXAMPLES:
     IO.blocking(lint).flatMap {
       case Right(findings) =>
         val output = format match
-          case LintFormat.Text => LintCommands.renderText(file.toString, findings)
+          case LintFormat.Text => LintCommands.renderText(file.toString, findings, strict)
           case LintFormat.Json => LintCommands.renderJson(file.toString, findings)
         val payload = (format, mode) match
           case (LintFormat.Json, OutputMode.Json) => Payload.Raw(output)
           case _ => Payload.text(output)
+        val gating = LintCommands.gating(findings, strict)
+        val hygiene = findings.count(_.severity == LintSeverity.Hygiene)
         val outcome =
-          if findings.isEmpty then Outcome.ok("lint", payload)
+          if gating.isEmpty then
+            val warnings =
+              if hygiene == 0 then Vector.empty
+              else
+                Vector(
+                  Warning(
+                    WarningCode.LINT_HYGIENE,
+                    s"$hygiene hygiene finding(s) listed; the file opens intact (pass --strict " +
+                      "to exit 1 on them)"
+                  )
+                )
+            Outcome.ok("lint", payload, warnings)
           else
+            val tiers =
+              if hygiene == 0 then ""
+              else s" (${findings.size - hygiene} repair, $hygiene hygiene)"
             Outcome.signal(
               "lint",
               payload,
-              CliError(ErrorCode.LINT_FINDINGS, s"$file: ${findings.size} finding(s)")
+              CliError(ErrorCode.LINT_FINDINGS, s"$file: ${findings.size} finding(s)$tiers")
             )
         emit(outcome, mode, io)
       case Left(err) =>

@@ -298,7 +298,8 @@ the emitted indices — formatted 100k+ row files no longer require the in-memor
   from every sheet while the untouched sheets stay `inlineStr`) therefore leaves `<si>` entries no
   cell references: a counterparty name scrubbed from every cell still rides in the package.
   `xl lint` reports the class as `shared-string-orphan` (count + first five indices, never the
-  text); to drop the entries, write the workbook fresh — `XlsxWriter.write(Workbook(wb.sheets),
+  text) at severity `hygiene` — listed, exit 0, a `LINT_HYGIENE` warning; `lint --strict` makes it
+  exit 1; to drop the entries, write the workbook fresh — `XlsxWriter.write(Workbook(wb.sheets),
   out)` has no source and rebuilds the table from the cells (every sheet is regenerated, so
   untouched sheets lose byte-preservation). An opt-in on-write compaction
   (`WriterConfig.compactSharedStrings`) is a follow-up; there is no CLI compaction yet
