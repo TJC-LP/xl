@@ -291,11 +291,12 @@ println(s"clean: ${result.isClean}")
 ### Typed extraction
 
 Records first (0.21.0): a case class that `derives RowCodec` reads and writes whole rows — field
-order is column order, field names are the header row, `Option[T]` fields are empty cells.
+order is column order, field names are the header row (`@header("Unit Price ($)")` on a field
+when the sheet's header is not an identifier, #614), `Option[T]` fields are empty cells.
 
 ```scala
-final case class Product(name: String, units: Int, price: BigDecimal, note: Option[String])
-  derives RowCodec
+final case class Product(name: String, units: Int, @header("Unit Price ($)") price: BigDecimal, note: Option[String])
+  derives RowCodec                                             // headers: name, units, Unit Price ($), note
 
 val products = sheet.readRowsByHeader[Product](Row.from1(1)) // Either[RowCodecError, Vector[Product]]
 val placed = Sheet("Out").putRowsWithHeader(ref"A1", products.unsafe).unsafe // header + rows
@@ -305,7 +306,13 @@ Sheet("Out").putTable(ref"A1", products.unsafe, "Products")  // + an Excel table
 
 `readRows[Product](range)` is the positional twin (range width must equal the record's); errors
 are `RowCodecError.Field(row, column, field, cause)` / `Missing` / `HeaderNotFound` / `Width`
-with `.message` and `.toXLError`. Per-cell reads remain for ad-hoc shapes:
+with `.message` and `.toXLError` — `field` is the Scala name even under a renamed header.
+`RowCodec[Product].headers` are the header texts, `.fields` the names; header matching ignores
+case, whitespace, `_` and `-` but never punctuation, so `Rev ($M)` needs `@header`. A header known
+only at runtime is `RowCodec.derived[Product].withHeaders(Map("price" -> "Unit Price ($)"))` —
+`XLResult[RowCodec[Product]]`, refusing an unknown field, a blank or a duplicate header; as a
+`given`, spell it with `derived`, never `RowCodec[Product].withHeaders(…)` (that summons the given
+being defined). Per-cell reads remain for ad-hoc shapes:
 
 ```scala
 final case class Product(name: String, units: Int, price: BigDecimal)

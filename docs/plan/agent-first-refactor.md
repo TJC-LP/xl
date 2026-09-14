@@ -1031,7 +1031,7 @@ landmine is exactly what it tests; fallback is a non-inline `RowCodec.of[A](code
 round-trip law `readRows(putRows(at, rows).range) == Right(rows)` over generators; ADR-008 amended
 ("primitives hand-written, row codecs derived").
 
-**Status**: implemented — stack 4/6, PR #599 (`9c9eebd2`); the prelude derivation probe was written first and stayed green, so no `RowCodec.of` fallback; follow-ups: table uid determinism (#595), header renaming, lenient reads.
+**Status**: implemented — stack 4/6, PR #599 (`9c9eebd2`); the prelude derivation probe was written first and stayed green, so no `RowCodec.of` fallback; follow-ups: table uid determinism (#595), header renaming (done — #614: `@header` on a field plus `RowCodec.withHeaders`, `RowCodec.headers` beside `fields`; the prelude probe gates the annotation-through-alias hop), lenient reads.
 
 **W2.10 Warnings never silent; `Written` payload** · xl-cli · Scope: write handlers gain `*Report`
 twins returning `WriteReport(text, saved, changes: Vector[{sheet, target, before, after}], recalc,

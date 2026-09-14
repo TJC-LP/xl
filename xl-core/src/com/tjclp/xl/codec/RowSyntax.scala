@@ -41,8 +41,8 @@ final case class RowsPlaced(
  *
  * Positional entry points (`readRows`, `putRows`) align `fields(i)` with the i-th column of the
  * range; header-driven ones (`readRowsByHeader`, `putRowsWithHeader`, `putTable`) go through a
- * header row of field names, matched by [[rowSyntax.columnOf]]. Reads see a formula's cached value
- * (GH-477).
+ * header row of [[RowCodec.headers]] — the field names unless `@header` or `withHeaders` renamed
+ * one (GH-614) — matched by [[rowSyntax.columnOf]]. Reads see a formula's cached value (GH-477).
  */
 object rowSyntax:
   extension (sheet: Sheet)
@@ -61,16 +61,17 @@ object rowSyntax:
 
     /**
      * Decode the records under `headerRow`: each field is read from the column whose header matches
-     * its name ([[columnOf]]), so column order is free and extra columns are ignored. Reads the
-     * contiguous block below the header — Excel's current region — and stops at the first row whose
-     * record cells are all empty; `Right(Vector.empty)` when nothing follows the header. A field
-     * with no header is a [[RowCodecError.HeaderNotFound]] listing the headers present.
+     * its [[RowCodec.headers]] entry ([[columnOf]]), so column order is free and extra columns are
+     * ignored. Reads the contiguous block below the header — Excel's current region — and stops at
+     * the first row whose record cells are all empty; `Right(Vector.empty)` when nothing follows
+     * the header. A field with no header is a [[RowCodecError.HeaderNotFound]] naming the header
+     * sought and listing the headers present.
      */
     def readRowsByHeader[A](headerRow: Row)(using
       codec: RowCodec[A]
     ): Either[RowCodecError, Vector[A]] =
       val present = columnHeaders(headerRow)
-      resolveColumns(codec.fields, present, headerRow).flatMap { columns =>
+      resolveColumns(codec.headers, present, headerRow).flatMap { columns =>
         val firstRow = headerRow.index0 + 1
         val colSet = columns.toSet
         val lastRow = sheet.cells.valuesIterator
@@ -120,7 +121,10 @@ object rowSyntax:
     def putRows[A](at: ARef, rows: Iterable[A])(using codec: RowCodec[A]): XLResult[RowsPlaced] =
       place(sheet, at, rows, header = false, codec)
 
-    /** [[putRows]] with the field names written as a header row at `at`; records start below. */
+    /**
+     * [[putRows]] with the codec's [[RowCodec.headers]] written as a header row at `at`; records
+     * start below.
+     */
     def putRowsWithHeader[A](at: ARef, rows: Iterable[A])(using
       codec: RowCodec[A]
     ): XLResult[RowsPlaced] =
@@ -128,9 +132,9 @@ object rowSyntax:
 
     /**
      * [[putRowsWithHeader]] plus an Excel table named `name` over header and records, its columns
-     * named after the fields and filter buttons on the header row (what Excel's own Format as Table
-     * does). With no records the table keeps the one blank data row Excel itself insists on. `name`
-     * follows Excel's rules (letters, digits, `_`; unique per workbook — the sheet-level check
+     * named after the headers, with filter buttons on the header row (what Excel's own Format as
+     * Table does). With no records the table keeps the one blank data row Excel itself insists on.
+     * `name` follows Excel's rules (letters, digits, `_`; unique per workbook — the sheet-level check
      * rejects a name this sheet already uses) and doubles as the display name.
      */
     def putTable[A](at: ARef, rows: Iterable[A], name: String)(using
@@ -150,7 +154,7 @@ object rowSyntax:
           _ <- checkBounds(at, codec.width, tableRows)
           placed <- place(sheet, at, records, header = true, codec)
           tableRange = CellRange(at, ARef(at.col + codec.width - 1, at.row + tableRows - 1))
-          spec <- TableSpec.fromColumnNames(name, name, tableRange, codec.fields)
+          spec <- TableSpec.fromColumnNames(name, name, tableRange, codec.headers)
           filtered = spec.copy(autoFilter = Some(TableAutoFilter(enabled = true)))
         yield placed.copy(sheet = placed.sheet.withTable(filtered))
 
@@ -173,16 +177,17 @@ object rowSyntax:
     loop(firstRow, Vector.empty)
 
   private def resolveColumns(
-    fields: Vector[String],
+    headers: Vector[String],
     present: Vector[(Column, String)],
     headerRow: Row
   ): Either[RowCodecError, Vector[Column]] =
     @tailrec def loop(i: Int, acc: Vector[Column]): Either[RowCodecError, Vector[Column]] =
-      if i == fields.size then Right(acc)
+      if i == headers.size then Right(acc)
       else
-        columnIn(present, fields(i)) match
+        columnIn(present, headers(i)) match
           case Some(col) => loop(i + 1, acc :+ col)
-          case None => Left(RowCodecError.HeaderNotFound(fields(i), headerRow, present.map(_._2)))
+          case None =>
+            Left(RowCodecError.HeaderNotFound(headers(i), headerRow, present.map(_._2)))
     loop(0, Vector.empty)
 
   private def columnIn(present: Vector[(Column, String)], header: String): Option[Column] =
@@ -240,8 +245,8 @@ object rowSyntax:
       val start: WriteState = (sheet.cells, sheet.styleRegistry)
       val afterHeader =
         if header then
-          codec.fields.zipWithIndex.foldLeft(start) { case (state, (field, j)) =>
-            writeCell(state, ARef(at.col + j, at.row), CellValue.Text(field), None)
+          codec.headers.zipWithIndex.foldLeft(start) { case (state, (text, j)) =>
+            writeCell(state, ARef(at.col + j, at.row), CellValue.Text(text), None)
           }
         else start
       val records = rows.iterator
