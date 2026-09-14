@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **119 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 7,290 tests passing; one existing performance comparison ignored.
 
-**Current Version**: **0.22.0** (the 0.21.0 dogfood's follow-through — named styles preserved on every write (#610), constant-memory `--stream view` and per-verb `--stream` capabilities (#635/#638/#640), formula semantics per Excel (#628–#631, #613), the CLI contract cleanup (#607/#615/#617/#619–#622/#626/#639/#641/#644) — released 2026-09-08)
+**Current Version**: **0.23.0** (wave 29 — twelve shared-logic clusters over the open backlog, adversarially reviewed before release: OOXML fidelity (#557/#595/#593/#566/#649), lint coverage and severity tiers (#460/#567), Gauss–Seidel iteration (#482/#537), render overflow (#500–#502), defined names (#538/#462), `--no-recalc` cache policy (#509), the canonical formula model (#479), `@header` records (#614), `--json` object shapes (#618), `writeToBytes`/`XL_SPILL_DIR` (#516/#517), the grammar generator (#653))
 
 ---
 
@@ -23,7 +23,7 @@ executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (ba
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
 
-### v0.23.0 — wave 29: the shared-logic triage of the open backlog (Unreleased)
+### v0.23.0 — wave 29: the shared-logic triage of the open backlog (Released 2026-09-14)
 
 Every open issue (34 on 2026-09-13) was triaged into classes that share logic — a code path, a
 helper or a root cause — rather than a module. Twelve worktree-isolated TDD clusters ran in one

@@ -55,7 +55,7 @@ Invalid literals **fail compilation**. Runtime-interpolated forms return `Either
 | `ref"A1"` | `ARef` | `ref"XFD1048576"` |
 | `ref"A1:B10"` | `CellRange` | `ref"A:A"` rejected at compile time if malformed |
 | `ref"A$i"` / `ref"$s"` | `Either[XLError, RefType]` | runtime validation |
-| `fx"=SUM(A1:B10)"` | `CellValue.Formula("SUM(A1:B10)")` | parens/syntax checked; stores the bare expression (one leading `=` removed), display adds it back |
+| `fx"=SUM(A1:B10)"` | `CellValue.Formula("SUM(A1:B10)")` | parens/syntax checked; stores the bare expression — `CellValue.canonicalFormulaText`: trim, one leading `=` off, trim (0.23.0: the same rule at every entry, `putf` included) — display adds the `=` back; `fx""`, `fx"="`, `fx"   "` fail to compile |
 | `fx"=B$i*2"` | `Either[XLError, CellValue]` | runtime validation |
 | `money"$$1,234.56"` | `Formatted(Number, Currency)` | `$$` escapes `$` |
 | `percent"45.5%"` | `Formatted(Number(0.455), Percent)` | stored as fraction |
@@ -105,6 +105,7 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.putRows(at, records)` | `XLResult[RowsPlaced]` | one row per record from `at`, no header; `None` fields stay empty; codec formats register like `put`; only the records' cells are written (clear a longer old block first); `OutOfBounds` past XFD/1048576 (0.21.0) |
 | `sheet.putRowsWithHeader(at, records)` | `XLResult[RowsPlaced]` | `RowCodec.headers` (field names, or their `@header`/`withHeaders` text) as a header row at `at`, records below (0.21.0) |
 | `sheet.putTable(at, records, name)` | `XLResult[RowsPlaced]` | `putRowsWithHeader` + an Excel table named after `name`, its columns after `RowCodec.headers`; `name` = display name, letters/digits/`_`, unique on the sheet; no records → header + one blank data row (0.21.0) |
+| `TableSpec.create(name, displayName, range, columns: Vector[TableColumn], showTotalsRow = …)` / `TableColumn(id, name, totalsRowLabel = None, totalsRowFunction = None)` / `TotalsRowFunction.{Sum, Min, Max, Average, Count, CountNums, StdDev, Var, Custom(formula)}` | `XLResult[TableSpec]` | 0.23.0: a totals row survives a write (`totalsRowCount`, per-column label/function, autoFilter over header + data rows, as Excel writes it); column names must be unique case-insensitively (`Rev`/`rev` is `InvalidTableColumns`), and `putTable` enables the autoFilter ([#595](https://github.com/TJC-LP/xl/issues/595)) |
 | `sheet.comment(ref, Comment.plainText("note", Some("author")))` | `Sheet` | |
 | `sheet.toHtml(ref"A1:B10")` | `String` | inline-CSS HTML table |
 | `sheet.usedRange` | `Option[CellRange]` | |
@@ -160,6 +161,10 @@ Typed reads see through a formula's cached value (since 0.20.0; GH-477): `Formul
 | `SheetRenamer.rename(wb, from, to)` | `XLResult[Workbook]` | 0.20.0 ([#559](https://github.com/TJC-LP/xl/issues/559)): `wb.rename` plus the reference rewrite in every cell formula, defined name, CF and DV formula, caches preserved; `Left(FormulaError)` naming the first text that mentions `from` but cannot be parsed, workbook untouched |
 | `SheetRenamer.renameLocated(wb, from, to)` | `Either[SheetRenamer.Refusal, Workbook]` | 0.21.0 ([#608](https://github.com/TJC-LP/xl/issues/608)): `rename` with WHERE it refused — `Refusal(site: Option[Site], error: XLError)`; `Site.Cell(sheet, ref)` \| `ConditionalFormat(sheet)` \| `DataValidation(sheet)` \| `Name(name)`, `site.describe` spells `Summary!I23`; `site` is `None` for `Workbook.rename`'s own `SheetNotFound`/`DuplicateSheet` |
 | `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))` | `Workbook` | author `<calcPr>` iterative calc (0.13.0); `wb.metadata.calcPr` reads it back |
+| `wb.withDefinedName(name, refersTo)` / `wb.withDefinedName(name, refersTo, scope: SheetName)` | `Workbook` / `XLResult[Workbook]` | 0.23.0 ([#538](https://github.com/TJC-LP/xl/issues/538), [#462](https://github.com/TJC-LP/xl/issues/462)): define or REPLACE a workbook-global name / a sheet-local one (`Left(SheetNotFound)` for a missing sheet). Matching is case-insensitive like Excel — `withDefinedName("rate", …)` beside `RATE` replaces it. `_xlnm.Print_Area` / `_xlnm.Print_Titles` on a sheet sync with its `PageSetup.printArea` / `repeatRows`; the later edit wins |
+| `wb.removeDefinedName(name)` / `wb.removeDefinedName(name, scope)` | `Workbook` / `XLResult[Workbook]` | 0.23.0: remove every name of that spelling (any case) at workbook scope / the sheet-local one; a scoped print name's removal clears the `PageSetup` field it was lifted into |
+| `wb.metadata.definedNames` / `DefinedName(name, refersTo, localSheetId, comment, …)` / `DefinedName.sameName(a, b)` / `DefinedName.PrintArea`, `PrintTitles` | `Vector[DefinedName]` | 0.23.0: `DefinedName` is exported from the prelude; `sameName` is the case-insensitive equality every mutation uses |
+| `StructuralEditor.insertRows / deleteRows / insertColumns / deleteColumns(…, policy: StructuralCachePolicy)` (+ `*Checked`) | `XLResult[Workbook]` | 0.23.0 ([#509](https://github.com/TJC-LP/xl/issues/509)): what happens to formula caches under a structural edit without a recalculation — `Invalidate` (drop the dirty cone), `PreserveUntouched` (keep only caches the edit provably left unchanged; the CLI's `--no-recalc` rule), `CarryForward` (keep every pre-edit cache — cache-only readers and LibreOffice then show pre-edit numbers, so only for embedders who control the reader). The `preserveUntouchedCaches: Boolean` overloads are unchanged |
 | `wb.edit(edits: Edit*)` | `XLResult[Workbook]` | 0.21.0: apply `Edit`s in order under no default sheet — fail-fast, all-or-nothing, `Left(EditFailed(index, op, cause))` names the 1-based failing edit; a `None` target resolves only on a single-sheet book (else `SheetRequired`) — see Edit algebra |
 | `wb.editIn(sheet: SheetName)(edits: Edit*)` | `XLResult[Workbook]` | 0.21.0: `edit` with `sheet` as the default for every unqualified target (the CLI's `-s`) |
 
@@ -251,7 +256,10 @@ CellStyle.default
   .borderBottom(BorderStyle.Medium, Color.fromRgb(0, 0, 128))  // color overloads on each side
   .currency / .percent / .decimal / .dateFormat / .dateTime   // numFmt shortcuts
   .withNumFmt(NumFmt.Percent)
+  .withFill(Fill.pattern(Color.fromRgb(0xDD, 0xDD, 0xDD), Color.fromRgb(0xFF, 0xFF, 0xFF), PatternType.LightGray))
 ```
+
+Fills (0.23.0, [#566](https://github.com/TJC-LP/xl/issues/566)): `Fill.Pattern(foreground: Option[Color], background: Option[Color], pattern: PatternType)` — `None` is Excel's automatic colour, so every texture round-trips on both writer backends and under `--stream style`; `Fill.pattern(fg, bg, patternType)` wraps two concrete colours; `PatternType.token` / `fromToken` are the ST_PatternType table. `Fill.Solid(color)` is unchanged.
 
 Per-side border builders merge into the existing border — only the named side is replaced, so
 they compose: `.borderTop(BorderStyle.Thin).borderBottom(BorderStyle.Medium)`. Indentation lives
