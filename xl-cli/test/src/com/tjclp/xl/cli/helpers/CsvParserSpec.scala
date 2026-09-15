@@ -1,12 +1,16 @@
 package com.tjclp.xl.cli.helpers
 
 import munit.FunSuite
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
 import java.nio.file.{Files, Path}
+import java.time.LocalDate
 
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formatted.Formatted
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Tests for CSV parsing and type inference.
@@ -23,6 +27,10 @@ class CsvParserSpec extends FunSuite:
     Files.writeString(tempFile, content)
     tempFile
 
+  /** The parsed values without their number formats: the shape the typing assertions compare. */
+  def values(parsed: IO[Vector[(ARef, Formatted)]]): Vector[(ARef, CellValue)] =
+    parsed.unsafeRunSync().map((ref, formatted) => (ref, formatted.value))
+
   // Default imports all rows (skipHeader=false)
   val defaultOptions = CsvParser.ImportOptions()
   // For tests that expect header row to be skipped
@@ -32,7 +40,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: type inference detects Number column") {
     val csvFile = createTempCsv("Value\n100\n200\n300")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     // All values should be Number type (header row skipped)
     assertEquals(result(0)._2, CellValue.Number(BigDecimal("100")))
@@ -42,7 +50,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: type inference detects Boolean column") {
     val csvFile = createTempCsv("Active\ntrue\nfalse\nTRUE")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     assertEquals(result(0)._2, CellValue.Bool(true))
     assertEquals(result(1)._2, CellValue.Bool(false))
@@ -51,7 +59,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: type inference detects Date column") {
     val csvFile = createTempCsv("Date\n2024-01-15\n2024-02-20")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     result.foreach { case (_, value) =>
       value match
@@ -60,9 +68,30 @@ class CsvParserSpec extends FunSuite:
     }
   }
 
+  test("GH-667: a Date column's dates carry NumFmt.Date, every other value General") {
+    val csvFile = createTempCsv("Name,When,Amount\nAlpha,2026-01-15,1200.5\nBeta,2026-02-01,")
+    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), defaultOptions).unsafeRunSync()
+
+    // the date format `put "2026-01-15"` gives the same text
+    assertEquals(
+      result(4)._2,
+      Formatted(CellValue.DateTime(LocalDate.of(2026, 1, 15).atStartOfDay()), NumFmt.Date)
+    )
+    assertEquals(
+      result(7)._2,
+      Formatted(CellValue.DateTime(LocalDate.of(2026, 2, 1).atStartOfDay()), NumFmt.Date)
+    )
+    // the header of a date column falls back to text with no format; numbers, text and blanks
+    // are General, so their cells are written unstyled
+    assertEquals(result(1)._2, Formatted(CellValue.Text("When"), NumFmt.General))
+    assertEquals(result(3)._2, Formatted(CellValue.Text("Alpha"), NumFmt.General))
+    assertEquals(result(5)._2, Formatted(CellValue.Number(BigDecimal("1200.5")), NumFmt.General))
+    assertEquals(result(8)._2, Formatted(CellValue.Empty, NumFmt.General))
+  }
+
   test("parseCsv: mixed types use majority detection with individual fallback") {
     val csvFile = createTempCsv("Value\n100\nN/A\n200")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     // Column typed as Number (majority 2/3 >= 80% threshold), individual cells that can't parse fall back to Text
     assertEquals(result(0)._2, CellValue.Number(BigDecimal(100)))
@@ -72,7 +101,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: empty column defaults to Text") {
     val csvFile = createTempCsv("Name,Notes\nAlice,\nBob,")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     // Column B (Notes) is all empty, should default to Text type (no error)
     assertEquals(result(0), (ARef.from0(0, 0), CellValue.Text("Alice")))
@@ -85,7 +114,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: default imports all rows including header") {
     val csvFile = createTempCsv("Name,Age\nAlice,30\nBob,25")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), defaultOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), defaultOptions))
 
     assertEquals(result.length, 6) // 3 rows × 2 columns (header + 2 data rows)
     // Check structure - header row should be included
@@ -96,7 +125,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: skip header mode") {
     val csvFile = createTempCsv("Name,Age\nAlice,30\nBob,25")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     assertEquals(result.length, 4) // 2 rows × 2 columns (header skipped)
     assertEquals(result(0), (ARef.from0(0, 0), CellValue.Text("Alice")))
@@ -106,7 +135,7 @@ class CsvParserSpec extends FunSuite:
     // Default mode imports all rows including header
     // Type inference uses majority-based detection, so header text doesn't affect numeric columns
     val csvFile = createTempCsv("Name,Amount\nAlice,100\nBob,200\nCharlie,300")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), defaultOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), defaultOptions))
 
     assertEquals(result.length, 8) // 4 rows × 2 columns (header + 3 data rows)
 
@@ -124,7 +153,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: import at offset position (B5)") {
     val csvFile = createTempCsv("Name\nAlice")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(1, 4), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(1, 4), skipHeaderOptions))
 
     // Should start at B5 (col=1, row=4) with header skipped
     assertEquals(result.length, 1)
@@ -135,7 +164,7 @@ class CsvParserSpec extends FunSuite:
   test("parseCsv: custom delimiter (semicolon)") {
     val csvFile = createTempCsv("Name;Age\nAlice;30")
     val options = skipHeaderOptions.copy(delimiter = ';')
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), options).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), options))
 
     assertEquals(result.length, 2)
     assertEquals(result(0), (ARef.from0(0, 0), CellValue.Text("Alice")))
@@ -144,21 +173,21 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: empty CSV file") {
     val csvFile = createTempCsv("")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), defaultOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), defaultOptions))
 
     assertEquals(result, Vector.empty)
   }
 
   test("parseCsv: header-only file with skip-header") {
     val csvFile = createTempCsv("Name,Age,City")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     assertEquals(result, Vector.empty) // No data rows after header is skipped
   }
 
   test("parseCsv: header-only file with default (includes header)") {
     val csvFile = createTempCsv("Name,Age,City")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), defaultOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), defaultOptions))
 
     assertEquals(result.length, 3) // Header row included as data
     assertEquals(result(0)._2, CellValue.Text("Name"))
@@ -169,7 +198,7 @@ class CsvParserSpec extends FunSuite:
   test("parseCsv: no type inference mode") {
     val csvFile = createTempCsv("ZIP\n01234\n98765")
     val options = skipHeaderOptions.copy(inferTypes = false)
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), options).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), options))
 
     // All values should be Text (header skipped)
     assertEquals(result(0)._2, CellValue.Text("01234"))
@@ -227,7 +256,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: handles empty cells in middle of row") {
     val csvFile = createTempCsv("A,B,C\n1,,3\n4,5,")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     // Row 1: 1, Empty, 3 (header skipped)
     assertEquals(result(0), (ARef.from0(0, 0), CellValue.Number(BigDecimal("1"))))
@@ -242,7 +271,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: type inference with decimals") {
     val csvFile = createTempCsv("Price\n29.99\n49.99\n39.99")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     assertEquals(result.length, 3)
     assertEquals(result(0)._2, CellValue.Number(BigDecimal("29.99")))
@@ -252,7 +281,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: Boolean case-insensitive") {
     val csvFile = createTempCsv("Active\nTRUE\nfalse\nTrue")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     assertEquals(result(0)._2, CellValue.Bool(true))
     assertEquals(result(1)._2, CellValue.Bool(false))
@@ -261,7 +290,7 @@ class CsvParserSpec extends FunSuite:
 
   test("parseCsv: type inference with negative numbers") {
     val csvFile = createTempCsv("Value\n-100\n-200.50\n300")
-    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions).unsafeRunSync()
+    val result = values(CsvParser.parseCsv(csvFile, ARef.from0(0, 0), skipHeaderOptions))
 
     assertEquals(result(0)._2, CellValue.Number(BigDecimal("-100")))
     assertEquals(result(1)._2, CellValue.Number(BigDecimal("-200.50")))

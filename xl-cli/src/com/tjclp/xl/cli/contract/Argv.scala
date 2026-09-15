@@ -90,6 +90,43 @@ object Argv:
       namesToken || (firstPositional.contains(token) && (missingFile || displaced))
     }
 
+  /** The output globals a verb that never writes refuses, each with the pair the error names. */
+  private val outputGlobals: Map[String, String] = Map(
+    "-o" -> "-o/--output",
+    "--output" -> "-o/--output",
+    "-i" -> "-i/--in-place",
+    "--in-place" -> "-i/--in-place"
+  )
+
+  /**
+   * GH-667: the known verb that never writes, given an output global — as `(verb, flag pair)`. A
+   * verb never writes when every form of it in [[Schema.verbs]] has `needs.output == false` and it
+   * is not `new`, whose output file is its positional. decline cannot say so itself: once `-o` is
+   * consumed only the parsers that take it survive, none of which knows a read-only verb, so its
+   * first error is "Unexpected argument: view" — the verb, not the flag. The flag is read as
+   * decline reads it ([[wantsJson]]'s rule): a token that is the VALUE of another global is data,
+   * and nothing behind `--` counts. `None` for a write verb, a verb with a writing form (`sheets
+   * hide`), an unknown verb (UNKNOWN_VERB's business) or a command line without an output flag.
+   */
+  def outputOnReadOnlyVerb(args: List[String]): Option[(String, String)] =
+    @tailrec
+    def outputFlag(tokens: List[String]): Option[String] = tokens match
+      case Nil => None
+      case token :: tail =>
+        globalOf(token) match
+          case Some((name, takesValue)) =>
+            outputGlobals.get(name) match
+              case Some(pair) => Some(pair)
+              case None => outputFlag(if takesValue then tail.drop(1) else tail)
+          case None => outputFlag(tail)
+    def neverWrites(verb: String): Boolean =
+      val forms = Schema.verbs.filter(_.path.headOption.contains(verb))
+      verb != "new" && forms.nonEmpty && forms.forall(!_.needs.output)
+    for
+      verb <- verbOf(args).filter(neverWrites)
+      flag <- outputFlag(args.takeWhile(_ != "--"))
+    yield (verb, flag)
+
   /**
    * The command line without its globals (and their values), before any `--`: what decline should
    * see when help is asked for, since the globals a program adds (`--json`, `-f`) are already read

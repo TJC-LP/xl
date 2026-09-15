@@ -263,17 +263,28 @@ object Cli:
         .flatMap {
           case Right(handler) => handler
           case Left(help) if help.errors.nonEmpty =>
-            val hint = Argv.misplacedFile(argv, help.errors) match
-              case Some(path) =>
-                s"did you mean -f $path? xl takes the file as -f/--file; " +
-                  "the positional argument is the range or verb argument"
-              case None => s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage"
-            val error = CliError.usage(
-              help.errors.headOption.fold("invalid command line") { first =>
-                if verb.isEmpty then compact(first) else first
-              },
-              Some(hint)
-            )
+            // GH-667: an output flag on a verb that never writes is the one mistake decline
+            // cannot name (its first error is the verb, not the flag — Argv.outputOnReadOnlyVerb);
+            // everything else is decline's first error, with the -f hint when a workbook path sat
+            // in a positional slot
+            val error = Argv.outputOnReadOnlyVerb(argv) match
+              case Some((word, flag)) =>
+                CliError.usage(
+                  s"$word is read-only and does not take $flag",
+                  Some(s"drop $flag; $word writes no file. Run `xl $word --help` for the usage")
+                )
+              case None =>
+                val hint = Argv.misplacedFile(argv, help.errors) match
+                  case Some(path) =>
+                    s"did you mean -f $path? xl takes the file as -f/--file; " +
+                      "the positional argument is the range or verb argument"
+                  case None => s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage"
+                CliError.usage(
+                  help.errors.headOption.fold("invalid command line") { first =>
+                    if verb.isEmpty then compact(first) else first
+                  },
+                  Some(hint)
+                )
             usageFailure(verb.getOrElse(""), error, mode, io)
           case Left(help) => showHelp(verb.getOrElse(""), help.toString, mode, io)
         }

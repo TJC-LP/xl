@@ -17,8 +17,11 @@ import com.tjclp.xl.workbooks.DefinedName
  * Print_Area (`Sheet1!$A$1:$D$20`) and a pure row span for Print_Titles (`Sheet1!$1:$3`).
  * Multi-range areas, column-only titles, and hidden/commented names stay in
  * `WorkbookMetadata.definedNames` verbatim, so nothing is lost on rewrite.
+ *
+ * Library-internal, but visible beyond xl-ooxml: [[effective]] is also the defined-name table
+ * `xl describe --full` lists (GH-667), so a loaded book reports the print names its read lifted.
  */
-private[ooxml] object PrintNames:
+private[xl] object PrintNames:
 
   /** Defined name Excel uses for a sheet's print area (the core constant, GH-462). */
   val PrintArea: String = DefinedName.PrintArea
