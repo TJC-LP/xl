@@ -72,13 +72,18 @@ xl -f data.xlsx view A1:E20 --format jpeg --raster-output chart.jpg --quality 85
 
 ## Rasterizer Fallback Chain
 
-The CLI automatically tries rasterizers in order until one succeeds:
+The CLI automatically tries these four rasterizers in order until one succeeds; a backend that is
+available but fails the conversion falls through to the next:
 
 1. **Batik** (built-in) - Works in JVM mode, not in native image
 2. **cairosvg** - Python, very portable (`pip install cairosvg`)
-3. **rsvg-convert** - Fast C/Rust binary (`apt install librsvg2-bin`)
+3. **rsvg-convert** - Fast C/Rust binary (`apt install librsvg2-bin`); since 0.23.1 the SVG is
+   piped on stdin with no `-` positional, which librsvg 2.40-2.54 reject as a file named `-` (#664)
 4. **resvg** - Best quality Rust (`cargo install resvg`)
-5. **ImageMagick** - Widely available, last resort
+
+ImageMagick is never tried automatically (its SVG delegate configuration is fragile); opt in with
+`--rasterizer imagemagick` — the only backend for webp, and the fallback for png/jpeg when the
+chain fails.
 
 **Format Support**:
 - PNG: All rasterizers
