@@ -642,14 +642,32 @@ class LintCommandSpec extends CatsEffectSuite:
   }
 
   test("GH-663: the certain classes are all findings — unterminated string, wrong closer, limits") {
-    val texts = Vector("\"abc", "(A1]", "A1+", "SUM((A1)")
+    // the two limit arms of the oracle: 9001 chars (Excel's 8192) and 130-deep nesting (the
+    // parser's 128) — and a finding for either must stay one readable line, not echo the formula
+    val tooLong = "1+" * 4500 + "1"
+    val tooDeep = "SUM(" * 130 + "1" + ")" * 130
+    val texts = Vector("\"abc", "(A1]", "A1+", "SUM((A1)", tooLong, tooDeep)
     for
       paths <- IO(texts.map(formulaZip))
       findings <- IO(paths.map(unparseableFindings(_)))
+      streamed <- IO(paths.map(unparseableFindings(_, stream = true)))
       _ <- IO(paths.foreach(Files.deleteIfExists))
-    yield texts.zip(findings).foreach { (text, found) =>
-      assertEquals(found.size, 1, s"'$text' should be exactly one finding: $found")
-    }
+    yield
+      assertEquals(streamed, findings)
+      texts.zip(findings).foreach { (text, found) =>
+        assertEquals(found.size, 1, s"'${text.take(40)}' should be exactly one finding: $found")
+        assert(
+          found.head.message.length < 400,
+          s"finding must stay one readable line (${found.head.message.length}): ${found.head}"
+        )
+      }
+      assert(
+        findings(4).head.message.contains("Formula too long: 9001 characters (max 8192)"),
+        findings(4)
+      )
+      assert(findings(4).head.message.contains(s"<f>${tooLong.take(80)}…</f>"), findings(4))
+      assert(findings(5).head.message.contains("Formula nesting too deep"), findings(5))
+      assert(findings(5).head.message.contains(s"<f>${tooDeep.take(80)}…</f>"), findings(5))
   }
 
   test("GH-663: every real-file fixture in the repo lints free of formula-unparseable") {

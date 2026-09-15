@@ -2723,6 +2723,39 @@ class WorkbookLintSpec extends FunSuite:
     )
   }
 
+  test("GH-663: the quoted text of the first offending cell is capped at 80 chars with '…'") {
+    // A FormulaTooLong rejection is >8192 chars BY DEFINITION; the finding must stay one readable
+    // line, so only a sample of the stored text is quoted — the diagnostic carries the length.
+    val longText = "1+" * 4500 + "1"
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> worksheetWith(
+      s"""<sheetData>
+    <row r="1"><c r="A1"><f>$longText</f><v>4501</v></c></row>
+  </sheetData>"""
+    ))
+    val bytes = zipBytes(parts)
+    val tooLong: WorkbookLint.FormulaCheck = text =>
+      if text.length > 8192 then Some(s"Formula too long: ${text.length} characters (max 8192)")
+      else None
+    val dom = WorkbookLint.lintBytes(bytes, tooLong).fold(e => fail(s"$e"), identity)
+    val sax = WorkbookLint.lintStreamBytes(bytes, tooLong).fold(e => fail(s"$e"), identity)
+    assertEquals(sax, dom)
+    assertEquals(dom.map(_.category), Vector(LintCategory.FormulaUnparseable))
+    val f = dom.head
+    assert(f.message.contains(s"<f>${longText.take(80)}…</f>"), s"quote the first 80 chars: $f")
+    assert(!f.message.contains(longText.take(81)), s"must not quote past the cap: $f")
+    assert(f.message.contains("Formula too long: 9001 characters"), s"keep the diagnostic: $f")
+    assert(f.message.length < 400, s"message must stay one readable line (${f.message.length}): $f")
+    // a text at or under the cap is quoted whole, with no ellipsis
+    val short = "SUM(A1:A2"
+    val shortParts = baseParts + ("xl/worksheets/sheet1.xml" -> unparseableSheetXml)
+    val shortF = WorkbookLint
+      .lintBytes(zipBytes(shortParts), parenCheck)
+      .fold(e => fail(s"$e"), identity)
+      .head
+    assert(shortF.message.contains(s"<f>$short</f>"), s"short text is quoted whole: $shortF")
+    assert(!shortF.message.contains("…</f>"), s"no ellipsis under the cap: $shortF")
+  }
+
   test("GH-663: the slug is formula-unparseable") {
     assertEquals(LintCategory.FormulaUnparseable.slug, "formula-unparseable")
   }

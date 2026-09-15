@@ -1460,6 +1460,13 @@ object WorkbookLint:
   private val unparseableSampleSize = 5
 
   /**
+   * Cap on the stored `<f>` text quoted into the finding. A FormulaTooLong rejection is >8192 chars
+   * by definition and a deep nest is a page of parens; the finding stays one readable line and the
+   * diagnostic carries the length.
+   */
+  private val unparseableTextSample = 80
+
+  /**
    * Accumulated oracle rejections for ONE sheet part: the total count plus the first
    * [[unparseableSampleSize]] offending cells in document order, bounded by construction like
    * [[LeadingEqualsFacts]]; folded identically by both scanners for parity.
@@ -1484,13 +1491,17 @@ object WorkbookLint:
   /**
    * GH-663: `<f>` text the oracle rejects — `SUM(A1:A2` — the class Excel repairs on open by
    * dropping the formula. ONE finding per part with the first [[unparseableSampleSize]] cell refs,
-   * the total count, and the first site's stored text with its diagnostic; the locator names the
-   * first offending cell.
+   * the total count, and the first site's stored text (capped at [[unparseableTextSample]] chars)
+   * with its diagnostic; the locator names the first offending cell.
    */
   private def formulaUnparseableFindings(part: String, facts: UnparseableFacts): Vector[Finding] =
     facts.sample.headOption match
       case None => Vector.empty
       case Some((firstRef, first)) =>
+        val shownText =
+          if first.text.length > unparseableTextSample then
+            first.text.take(unparseableTextSample) + "…"
+          else first.text
         val shown = facts.sample.map(_._1.fold("<f>")(_.toA1))
         val cells =
           if facts.count > shown.size then s"first ${shown.size}: ${shown.mkString(", ")}, …"
@@ -1501,7 +1512,7 @@ object WorkbookLint:
             part,
             LintCategory.FormulaUnparseable,
             firstRef.fold("<f>")(r => s"""<c r="${r.toA1}"><f>"""),
-            s"${facts.count} formula(s) do not parse ($cells) — $firstSite <f>${first.text}</f>: " +
+            s"${facts.count} formula(s) do not parse ($cells) — $firstSite <f>$shownText</f>: " +
               s"${first.message}; Excel shows the repair prompt on open and drops the formula"
           )
         )

@@ -19,9 +19,11 @@ object LintCommands:
    * `TRUE()`, which the parser refuses as an unexpected '('; add-in names such as `BDP(…)` are
    * `#NAME?` on recalculation, not a repair; an argument count the registry's arity model refuses
    * opens intact), so only the classes the parser is certain of are findings: text that ends before
-   * the expression does (`SUM(A1:A2`, an unterminated string), a delimiter that closes the wrong
-   * opener, and Excel's own hard limits (8192 characters, nesting depth). Every other refusal stays
-   * `xl audit`'s to list under "Unparseable formulas".
+   * the expression does (`SUM(A1:A2`, an unterminated string), a `]` or `}` closing a `(`, Excel's
+   * 8192-character limit, and the parser's 128-level nesting limit (Excel's is 64). Every other
+   * refusal stays `xl audit`'s to list under "Unparseable formulas" — including an extra or wrong
+   * closer after a complete expression (`SUM(A1:A2))`, `SUM(A1:A2]`), which surfaces as an
+   * unexpected character.
    */
   val formulaCheck: WorkbookLint.FormulaCheck = text =>
     FormulaParser.parse(s"=$text") match
