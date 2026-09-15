@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.0
+//> using dep com.tjclp::xl:0.23.1
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.0
+//> using dep com.tjclp::xl:0.23.1
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -127,6 +127,17 @@ a blank literal fail to compile.
 `$` is the interpolation character inside every interpolated literal, so Excel's absolute
 anchors need `$$`: write `fx"=SUM($$A$$1:B10)"` to get `=SUM($A$1:B10)`. Same for
 `money"$$1,234.56"`.
+
+### Numbers become text by Excel's General rule (since 0.23.1)
+
+`&`, CONCATENATE, a number in a text-typed argument and `TEXT(x,"General")` render at most 15
+significant digits with trailing zeros stripped, plain while the unsigned form fits 20 characters
+and in `E` notation past it — `="Total "&B8` on a SUM of 1070 is `Total 1070`, `=1/3&""` is
+`0.333333333333333`, `=1E20&""` is `1E+20` ([#665](https://github.com/TJC-LP/xl/issues/665)).
+Before 0.23.1 the stored scale leaked (`Total 1070.0`). The rule is one function,
+`NumFmtFormatter.generalText`, overflow-safe across the whole `BigDecimal` scale range; a date
+in a text position is still its serial (#561), and `TEXT` with an explicit format is unchanged.
+Cell *display* General (`displayCell`) is the column-width rule and a different function.
 
 With runtime interpolation, validation moves to runtime and the macros return `Either`:
 
@@ -207,7 +218,7 @@ cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.0
+//> using dep com.tjclp::xl:0.23.1
 import com.tjclp.xl.scripting.{*, given}
 
 val region = Seq("North", "East").mkString(" ")                     // runtime name
@@ -372,7 +383,7 @@ the batch schema).
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.0
+//> using dep com.tjclp::xl:0.23.1
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -406,7 +417,7 @@ println(s"wrote ${edited.sheets.size} sheets; clean: ${result.isClean}")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.0
+//> using dep com.tjclp::xl:0.23.1
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -452,7 +463,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.0
+//> using dep com.tjclp::xl:0.23.1
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -699,7 +710,7 @@ per-cell `readTyped` loops:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.0
+//> using dep com.tjclp::xl:0.23.1
 import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
 
@@ -839,7 +850,7 @@ and a full-column range for the column forms: `sheet.collapseRows("E:H".asRange 
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.0
+//> using dep com.tjclp::xl:0.23.1
 import com.tjclp.xl.scripting.{*, given}
 
 // Whole-row/column spans are runtime strings (the ref macro takes A1 / A1:B2 shapes) — parse them.
@@ -865,7 +876,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.0
+//> using dep com.tjclp::xl:0.23.1
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -949,7 +960,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.0
+//> using dep com.tjclp::xl:0.23.1
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
