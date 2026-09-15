@@ -100,7 +100,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Find text or a number | `search <regex>` | all sheets unless `-s`; `--limit` stops the scan (`total` is then a lower bound, `totalExact: false`); `--total` for the exact count |
 | Rows matching a predicate | `filter --where "B > 100 AND D = TRUE"` | `--header` uses row 1 names; `--columns A,C:E` |
 | Used range, numeric summary | `bounds`, `stats <range>` | |
-| What-if without writing | `eval "=…" --with "A1=5"`, `evala` (arrays, `--at` to spill) | no `-f` for constants |
+| What-if without writing | `eval "=…" --with "A1=5"`, `evala "=…"` (arrays; `--at B2` anchors the displayed spill at B2) | no `-f` for constants. Both are reads: `evala --at` writes nothing, and `-o` beside it is `USAGE` (`evala is read-only and does not take -o/--output`) — to land an array, `putf` it |
 | Write values / formulas | `put`, `putf` — or a `batch` | one formula over a range drags with `$` anchoring |
 | Style, merge, comments, hyperlinks | `style`, `merge`/`unmerge`, `comment`/`remove-comment` — or `batch` ops | styles merge unless `--replace` |
 | Copy, fill, sort or clear a block | `copy <source> <target> [--values-only]`, `fill <source> <target> [--right]`, `sort <range> --by <col>`, `clear <range> [--all\|--styles\|--comments]` — or the batch ops `copy` and `clear` | `copy` shifts relative references like Excel; the target is a cell (expanded to the source's size) or a range, and either side may be sheet-qualified: `{"op":"copy","source":"Data!A1:B2","target":"Summary!A1","valuesOnly":false}`. `fill` and `sort` have no batch twin |
@@ -156,8 +156,11 @@ Batch essentials (the complete, generated field list is one command away: `xl ba
   `"$#,##0;($#,##0)"`), and it **replaces** the cell's number format. A detected format only
   applies to a General cell. A string that is neither a name nor code-shaped is ignored with a
   `FORMAT_HINT_IGNORED` warning that names it and lists the known names (the cell stays General).
-- **`values`** writes a row-major array over a range; `putf` with a single `value` over a range
-  drags it from `from` (Excel `$` anchoring); `putf` `values` writes each formula as-is.
+- **`values`** writes a **flat** row-major array over a range — `"ref":"A1:B2","values":[1,2,3,4]`
+  fills A1, B1, A2, B2, and the length must equal the cell count. Nested rows
+  (`[[2021],[2022]]`) are `BATCH_OP_INVALID`: each element must be a string, number, boolean or
+  `null`. `putf` with a single `value` over a range drags it from `from` (Excel `$` anchoring);
+  `putf` `values` writes each formula as-is.
 - **`sheet`** on any op (except `add-sheet`/`rename-sheet`/`define-name`/`remove-name`) names the
   sheet for its unqualified refs, so a batch can touch several sheets and never needs shell quoting
   for sheet names with spaces. A qualified ref (`"Summary!B2"`) wins over it. A defined name's
@@ -203,7 +206,12 @@ edit into a batch heredoc (`<<'EOF'`), where nothing needs escaping.
 CSS (fonts, fills, number formats) with no rasterizer; `svg` is pure vector, no backend either;
 `png`/`jpeg`/`webp`/`pdf` need `--raster-output <path>` and a rasterizer — `xl rasterizers` lists
 what is available (the native binary needs one external tool: `pip install cairosvg` or
-`apt install librsvg2-bin`). Add `--eval` when formula cells should show computed values.
+`apt install librsvg2-bin`; the chain tries them in that order and falls through to the next on a
+failure). Since 0.23.1 the rsvg-convert backend pipes the SVG with no `-` positional, which
+librsvg 2.5x (Debian/Ubuntu) rejected as a filename ([#664](https://github.com/TJC-LP/xl/issues/664));
+on an older `xl`, or when every backend fails, `--rasterizer imagemagick` renders png/jpeg/webp
+(ImageMagick is never tried automatically) and `soffice --headless --convert-to pdf file.xlsx`
+is the whole-sheet PDF fallback. Add `--eval` when formula cells should show computed values.
 
 ```bash
 xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.png --show-labels --eval
@@ -291,6 +299,8 @@ interiors).
 - **`--strict` after `view`** is view's `--eval` gate (exit 1 on evaluation failure, nothing
   rendered); everywhere else it is the write gate.
 - **PNG/PDF on the native binary needs an external rasterizer** — `xl rasterizers` tells you.
+  `RASTERIZER_UNAVAILABLE` (exit 3) while a backend shows `available` means that backend failed
+  to run: retry with `--rasterizer imagemagick` (png/jpeg/webp) and report the stderr.
 - **A file that will not read** fails with `IO_READ` (exit 3) and a message naming the construct.
   Rebuild it with openpyxl, then xl works on the rebuilt file — and report the message upstream.
 - **Formula caches**: `xl lint` catches structure Excel would repair (exit 1; its hygiene tier —

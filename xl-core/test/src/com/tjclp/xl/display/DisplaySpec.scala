@@ -200,6 +200,36 @@ class DisplaySpec extends ScalaCheckSuite:
     }
   }
 
+  test("formatValue - General keyword inside a custom code renders the value (GH-666)") {
+    // Weaver dogfood: `General"A"` on 2021 showed "GeneralA"; Excel shows "2021A".
+    val n = CellValue.Number(BigDecimal(2021))
+    assertEquals(NumFmtFormatter.formatValue(n, NumFmt.Custom("General\"A\"")), "2021A")
+    assertEquals(NumFmtFormatter.formatValue(n, NumFmt.Custom("General\"E\"")), "2021E")
+    assertEquals(NumFmtFormatter.formatValue(n, NumFmt.Custom("\"FY\"General")), "FY2021")
+    // The whole-code path (GH-404) is unchanged
+    assertEquals(NumFmtFormatter.formatValue(n, NumFmt.Custom("General")), "2021")
+    assertEquals(NumFmtFormatter.formatValue(n, NumFmt.Custom("general")), "2021")
+  }
+
+  test("formatValue - thousands-scaling commas divide by 1000 each (GH-666)") {
+    // Weaver dogfood: `$#,##0.0,,"mm"` on 1,500,000 showed "$1,500,000.0mm"; Excel/LO "$1.5mm".
+    val mm = NumFmt.Custom("$#,##0.0,,\"mm\"")
+    assertEquals(NumFmtFormatter.formatValue(CellValue.Number(BigDecimal(1500000)), mm), "$1.5mm")
+    val k = NumFmt.Custom("#,##0.0,\"k\"")
+    assertEquals(NumFmtFormatter.formatValue(CellValue.Number(BigDecimal(1234567)), k), "1,234.6k")
+    val plain = NumFmt.Custom("#,##0,")
+    assertEquals(NumFmtFormatter.formatValue(CellValue.Number(BigDecimal(1234567)), plain), "1,235")
+  }
+
+  test("formatValue - GH-666 codes are display-only: the stored format code is byte-identical") {
+    List("General\"A\"", "\"FY\"General", "$#,##0.0,,\"mm\"", "#,##0,", "#,##0.0,\"k\"", "0.0,,")
+      .foreach { code =>
+        val fmt = NumFmt.parse(code)
+        assertEquals(fmt, NumFmt.Custom(code))
+        assertEquals(NumFmt.formatCode(fmt), code)
+      }
+  }
+
   test("formatValue - ThousandsSeparator format") {
     val value = CellValue.Number(BigDecimal("1234567"))
     val result = NumFmtFormatter.formatValue(value, NumFmt.ThousandsSeparator)

@@ -209,10 +209,10 @@ Subcommands:
         FINDING CATEGORIES:
           child-order | unresolved-rel-id | wrong-rel-type | missing-part |
           missing-content-type | ref-out-of-bounds | data-table-torn |
-          data-table-unseeded | formula-leading-equals | external-ref-dangling |
-          defined-name-invalid | calc-chain-stale | xlfn-missing | empty-inline-str |
-          mc-ignorable-undeclared | dxf-id-out-of-range | unreferenced-part |
-          shared-string-orphan
+          data-table-unseeded | formula-leading-equals | formula-unparseable |
+          external-ref-dangling | defined-name-invalid | calc-chain-stale |
+          xlfn-missing | empty-inline-str | mc-ignorable-undeclared |
+          dxf-id-out-of-range | unreferenced-part | shared-string-orphan
 
         SEVERITY (every finding carries one; --format json: "severity"):
           repair  = Excel repairs or refuses the file, or a reader misreads a value

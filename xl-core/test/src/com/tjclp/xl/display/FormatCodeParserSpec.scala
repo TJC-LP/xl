@@ -257,9 +257,10 @@ class FormatCodeParserSpec extends FunSuite:
   }
 
   test("real format: thousands with scaling #,##0,") {
-    // Trailing comma scales by 1000
-    val result = FormatCodeParser.parse("#,##0,")
-    assert(result.isRight, "Should parse thousands scaling format")
+    // Trailing comma scales by 1000; the interior comma still groups (GH-666)
+    val code = FormatCodeParser.parse("#,##0,").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("1234567"), code)._1, "1,235")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("1234567890"), code)._1, "1,234,568")
   }
 
   test("real format: mixed positive/negative/zero") {
@@ -1033,4 +1034,153 @@ class FormatCodeParserSpec extends FunSuite:
       val fmt = FormatCodeParser.parse(code).toOption.get
       assert(!FormatCodeParser.isTextOnly(fmt), s"'$code' routes numbers through a section")
     }
+  }
+
+  // ========== General keyword inside a section (GH-666) ==========
+  // ECMA-376 §18.8.30: `General` is a keyword wherever it appears in a section, not seven
+  // literal letters. Excel renders `General"A"` on 2021 as `2021A` (the FY-suffix idiom).
+
+  test("parse: General keyword lexes as FormatToken.General, case-insensitively (GH-666)") {
+    List("General\"A\"", "general\"A\"", "GENERAL\"A\"").foreach { code =>
+      val fmt = FormatCodeParser.parse(code).toOption.get
+      assertEquals(
+        fmt.positive.pattern.tokens,
+        Vector(FormatToken.General, FormatToken.Literal("A")),
+        s"'$code' should lex General as one token"
+      )
+    }
+  }
+
+  test("applyFormat: General\"A\" on 2021 renders 2021A, not GeneralA (GH-666)") {
+    val code = FormatCodeParser.parse("General\"A\"").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(2021), code)._1, "2021A")
+    val e = FormatCodeParser.parse("General\"E\"").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(2021), e)._1, "2021E")
+  }
+
+  test("applyFormat: \"FY\"General and General\" units\" wrap the General rendering (GH-666)") {
+    val fy = FormatCodeParser.parse("\"FY\"General").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(2021), fy)._1, "FY2021")
+    val units = FormatCodeParser.parse("General\" units\"").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("12.5"), units)._1, "12.5 units")
+    // General inside a section keeps General's own rules: no forced decimals, trailing zeros gone
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("1234.50"), units)._1, "1234.5 units")
+  }
+
+  test("applyFormat: General inside a single section keeps the default leading minus (GH-666)") {
+    // Same mechanism as `"FY"0` on -2021 → -FY2021: the pattern renders |x|, applyFormat signs
+    val suffix = FormatCodeParser.parse("General\"A\"").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-2021), suffix)._1, "-2021A")
+    val prefix = FormatCodeParser.parse("\"FY\"General").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-2021), prefix)._1, "-FY2021")
+    // Multi-section: the negative section owns its sign
+    val paren = FormatCodeParser.parse("General;(General)").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-2021), paren)._1, "(2021)")
+  }
+
+  test("parse: a quoted \"General\" and an escaped \\G stay literal text (GH-666)") {
+    val quoted = FormatCodeParser.parse("\"General\"0").toOption.get
+    assertEquals(
+      quoted.positive.pattern.tokens,
+      Vector(FormatToken.Literal("General"), FormatToken.Digit('0'))
+    )
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(5), quoted)._1, "General5")
+    val escaped = FormatCodeParser.parse("\\General0").toOption.get
+    assert(
+      !escaped.positive.pattern.tokens.contains(FormatToken.General),
+      s"escaped G must not start the keyword: ${escaped.positive.pattern.tokens}"
+    )
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(5), escaped)._1, "General5")
+  }
+
+  test("parse: date sections are untouched by the General keyword lexer (GH-666)") {
+    val dt = java.time.LocalDateTime.of(2021, 3, 4, 13, 5, 6)
+    List(
+      "mmm d, yyyy" -> "Mar 4, 2021",
+      "m/d/yy" -> "3/4/21",
+      "dddd, mmmm d" -> "Thursday, March 4",
+      "h:mm:ss AM/PM" -> "1:05:06 PM"
+    ).foreach { case (code, expected) =>
+      val fmt = FormatCodeParser.parse(code).toOption.get
+      assert(!fmt.positive.pattern.tokens.contains(FormatToken.General), s"'$code' lexed General")
+      assertEquals(FormatCodeParser.applyDateFormat(dt, fmt), expected, code)
+    }
+  }
+
+  test("parse: whole-code General is one General token and renders like General (GH-666)") {
+    val fmt = FormatCodeParser.parse("General").toOption.get
+    assertEquals(fmt.positive.pattern.tokens, Vector(FormatToken.General))
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("1234.5"), fmt)._1, "1234.5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("-0.156"), fmt)._1, "-0.156")
+    assert(!FormatCodeParser.isTextOnly(fmt))
+  }
+
+  test("applyTextFormat: General in the text section echoes the text (GH-666)") {
+    val fmt = FormatCodeParser.parse("0;-0;0;General").toOption.get
+    assertEquals(FormatCodeParser.applyTextFormat("abc", fmt), "abc")
+  }
+
+  // ========== Thousands-scaling commas (GH-666) ==========
+  // Commas after the last digit placeholder of a section divide by 1000 each (Excel/LO:
+  // `$#,##0.0,,"mm"` on 1,500,000 is `$1.5mm`); commas between digits keep grouping.
+
+  test("parse: trailing commas lex as Scale, interior commas stay Thousands (GH-666)") {
+    val fmt = FormatCodeParser.parse("#,##0.0,,\"mm\"").toOption.get
+    val tokens = fmt.positive.pattern.tokens
+    assertEquals(tokens.count(_ == FormatToken.Scale), 2)
+    assertEquals(tokens.count(_ == FormatToken.Thousands), 1)
+    assert(fmt.positive.pattern.hasThousands, "interior comma still groups")
+    val bare = FormatCodeParser.parse("0,").toOption.get
+    assertEquals(bare.positive.pattern.tokens, Vector(FormatToken.Digit('0'), FormatToken.Scale))
+    assert(!bare.positive.pattern.hasThousands, "a lone scaling comma is not grouping")
+  }
+
+  test("applyFormat: $#,##0.0,,\"mm\" on 1,500,000 renders $1.5mm (GH-666)") {
+    val code = FormatCodeParser.parse("$#,##0.0,,\"mm\"").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(1500000), code)._1, "$1.5mm")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(1234567890), code)._1, "$1,234.6mm")
+  }
+
+  test("applyFormat: #,##0.0,\"k\" scales by one thousand then rounds and groups (GH-666)") {
+    val code = FormatCodeParser.parse("#,##0.0,\"k\"").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(1234567), code)._1, "1,234.6k")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(999950), code)._1, "1,000.0k")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(0), code)._1, "0.0k")
+  }
+
+  test("applyFormat: 0, drops grouping and scales; 0.0,, on negatives keeps the sign (GH-666)") {
+    val thousands = FormatCodeParser.parse("0,").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(1234567), thousands)._1, "1235")
+    val millions = FormatCodeParser.parse("0.0,,").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-1500000), millions)._1, "-1.5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-1500000000), millions)._1, "-1500.0")
+  }
+
+  test("applyFormat: scaled multi-section code routes by the raw value, like Excel (GH-666)") {
+    // Excel picks the section from the stored value (SSF choose_fmt): only a true zero fires
+    // the dash section; 400 under a millions scale rounds to 0.0 in the positive section — the
+    // same rule that makes Excel display "-0.00" for -0.001 under 0.00.
+    val code = FormatCodeParser.parse("0.0,,;(0.0,,);\"-\"").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(0), code)._1, "-")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(1500000), code)._1, "1.5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-1500000), code)._1, "(1.5)")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(400), code)._1, "0.0")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-400), code)._1, "(0.0)")
+  }
+
+  test(
+    "applyFormat: scaling commas before %, padding, section end; percent alone unscaled (GH-666)"
+  ) {
+    val pct = FormatCodeParser.parse("0.0,%").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(1234), pct)._1, "123.4%")
+    val padded = FormatCodeParser.parse("#,##0,_);(#,##0,)").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(1234567), padded)._1, "1,235 ")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-1234567), padded)._1, "(1,235)")
+    val plainPct = FormatCodeParser.parse("0.0%").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("0.155"), plainPct)._1, "15.5%")
+    val grouped = FormatCodeParser.parse("#,##0.00").toOption.get
+    assertEquals(
+      FormatCodeParser.applyFormat(BigDecimal("1234567.891"), grouped)._1,
+      "1,234,567.89"
+    )
   }

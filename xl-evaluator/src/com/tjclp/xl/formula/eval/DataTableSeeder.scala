@@ -1237,11 +1237,10 @@ object DataTableSeeder:
   /**
    * Whether an `IFERROR`/`IFNA` protected expression selects that guard's fallback.
    *
-   * The `IFNA` arm is LATENT: no `FunctionSpec` named IFNA exists yet, so `IFNA(...)` never parses
-   * into a `TExpr.Call` and this branch is currently unreachable (GH-511 — a corner using it seeds
-   * nothing at all, silently). It is kept because it is the correct rule the day IFNA lands: IFNA
-   * accepts only `#N/A`, where IFERROR accepts every error, so treating them alike would invent a
-   * fired-guard warning for a grid whose error merely propagated.
+   * The `IFNA` arm fires on `#N/A` only (IFNA landed in GH-511; since GH-662 a
+   * VLOOKUP/HLOOKUP/MATCH miss is that `#N/A` too, so a guarded lookup corner banks its fallback
+   * and reports the fired guard), where IFERROR accepts every error: treating them alike would
+   * invent a fired-guard warning for a grid whose `#DIV/0!` merely propagated through IFNA.
    */
   private def errorGuardFires(
     name: String,

@@ -2579,3 +2579,183 @@ class WorkbookLintSpec extends FunSuite:
       WorkbookLint.lintStreamBytes("not a zip at all".getBytes(StandardCharsets.UTF_8)).isLeft
     )
   }
+
+  // ===== GH-663: <f> text the formula oracle rejects =====
+
+  /**
+   * The stand-in for the CLI's parser: xl-ooxml cannot see xl-evaluator, so the rule takes the
+   * oracle as a parameter. Unbalanced parentheses are the class the field incident carried.
+   */
+  private val parenCheck: WorkbookLint.FormulaCheck = text =>
+    if text.count(_ == '(') != text.count(_ == ')') then Some(s"unbalanced parentheses in '$text'")
+    else None
+
+  private val rejectAll: WorkbookLint.FormulaCheck = text => Some(s"rejected '$text'")
+
+  private val unparseableSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>A1*2</f><v>2</v></c></row>
+    <row r="3"><c r="A3"><f>SUM(A1:A2</f><v>3</v></c></row>
+  </sheetData>"""
+  )
+
+  /** Seven rejected formulas in document order A1, B1, C1, A2, B2, C2, A3. */
+  private val manyUnparseableSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><f>SUM(1</f></c><c r="B1"><f>SUM(2</f></c><c r="C1"><f>SUM(3</f></c></row>
+    <row r="2"><c r="A2"><f>SUM(4</f></c><c r="B2"><f>SUM(5</f></c><c r="C2"><f>SUM(6</f></c></row>
+    <row r="3"><c r="A3"><f>SUM(7</f></c></row>
+  </sheetData>"""
+  )
+
+  /**
+   * The shapes the rule must never judge: a shared-formula dependent (empty `<f>`), an array
+   * formula (ordinary text, judged like any other), a leading-'=' formula (judged WITHOUT the '='
+   * so GH-456 stays the only finding), and a data-table record (its text is display, GH-430).
+   */
+  private val formulaShapesSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1"><c r="A1"><v>1</v></c><c r="B1"><f t="shared" ref="B1:B2" si="0">A1*2</f><v>2</v></c></row>
+    <row r="2"><c r="A2"><v>2</v></c><c r="B2"><f t="shared" si="0"/><v>4</v></c></row>
+    <row r="3"><c r="C3"><f t="array" ref="C3:C4">A1:A2*2</f><v>2</v></c></row>
+    <row r="4"><c r="D4"><f>=A1*2</f><v>2</v></c></row>
+  </sheetData>"""
+  )
+
+  private def unparseableOf(findings: Vector[Finding]): Vector[Finding] =
+    findings.filter(_.category == LintCategory.FormulaUnparseable)
+
+  test("GH-663: <f> text the oracle rejects is a repair-tier FormulaUnparseable finding") {
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> unparseableSheetXml)
+    val findings = WorkbookLint
+      .lintBytes(zipBytes(parts), parenCheck)
+      .fold(err => fail(s"lint must not error: $err"), identity)
+    assertEquals(findings.map(_.category), Vector(LintCategory.FormulaUnparseable))
+    val f = findings.head
+    assertEquals(f.severity, LintSeverity.Repair)
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    assert(f.locator.contains("A3"), s"locator should carry the offending cell: $f")
+    assert(f.message.contains("1 formula(s)"), s"message should carry the total count: $f")
+    assert(f.message.contains("A3"), s"message should name the offending cell: $f")
+    assert(f.message.contains("SUM(A1:A2"), s"message should quote the stored text: $f")
+    assert(
+      f.message.contains("unbalanced parentheses in 'SUM(A1:A2'"),
+      s"message should carry the oracle's diagnostic: $f"
+    )
+    assert(f.message.contains("repair"), s"message should say Excel repairs the file: $f")
+  }
+
+  test("GH-663: rejected formulas aggregate to ONE finding per part (first 5 + total count)") {
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> manyUnparseableSheetXml)
+    val findings = WorkbookLint
+      .lintBytes(zipBytes(parts), parenCheck)
+      .fold(err => fail(s"lint must not error: $err"), identity)
+    assertEquals(findings.map(_.category), Vector(LintCategory.FormulaUnparseable))
+    val f = findings.head
+    assert(f.locator.contains("A1"), s"locator should carry the first offending cell: $f")
+    assert(f.message.contains("7 formula(s)"), s"message should carry the total count: $f")
+    assert(
+      f.message.contains("first 5: A1, B1, C1, A2, B2"),
+      s"message should sample the first 5 offending cells in document order: $f"
+    )
+    assert(!f.message.contains("C2"), s"message must not carry cells past the sample: $f")
+    assert(!f.message.contains("A3"), s"message must not carry cells past the sample: $f")
+  }
+
+  test("GH-663: without an oracle the rule is off — the default entry points stay unchanged") {
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> unparseableSheetXml)
+    assertEquals(lintOf(parts), Vector.empty[Finding])
+    assertEquals(lintStreamOf(parts), Vector.empty[Finding])
+  }
+
+  test("GH-663: streaming mode flags the rejected formula identically") {
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> manyUnparseableSheetXml)
+    val bytes = zipBytes(parts)
+    val dom = WorkbookLint.lintBytes(bytes, parenCheck).fold(e => fail(s"$e"), identity)
+    val sax = WorkbookLint.lintStreamBytes(bytes, parenCheck).fold(e => fail(s"$e"), identity)
+    assertEquals(sax, dom)
+    assertEquals(sax.map(_.category), Vector(LintCategory.FormulaUnparseable))
+  }
+
+  test("GH-663: shared dependents and data-table records are never judged; '=' is stripped first") {
+    // An oracle that rejects everything it is shown: whatever survives was never shown to it.
+    val shapes = baseParts + ("xl/worksheets/sheet1.xml" -> formulaShapesSheetXml)
+    val shown = Vector.newBuilder[String]
+    val recording: WorkbookLint.FormulaCheck = text =>
+      shown += text
+      None
+    val bytes = zipBytes(shapes)
+    val judged = WorkbookLint.lintBytes(bytes, recording).fold(e => fail(s"$e"), identity)
+    assertEquals(judged.map(_.category), Vector(LintCategory.FormulaLeadingEquals))
+    // the shared master, the array formula and the '='-stripped display form; NOT the empty
+    // dependent
+    assertEquals(shown.result(), Vector("A1*2", "A1:A2*2", "A1*2"))
+    val streamShown = Vector.newBuilder[String]
+    val streamRecording: WorkbookLint.FormulaCheck = text =>
+      streamShown += text
+      None
+    WorkbookLint.lintStreamBytes(bytes, streamRecording).fold(e => fail(s"$e"), identity)
+    assertEquals(streamShown.result(), Vector("A1*2", "A1:A2*2", "A1*2"))
+
+    // A data-table record's text is display, never formula text (GH-430): the oracle is not asked
+    // even when the record carries LibreOffice's `TABLE(…)` spelling; the corner formula still is
+    val recordWithText = dtRecord.stripSuffix("/>") + ">TABLE(B1,B2)</f>"
+    val dtShown = Vector.newBuilder[String]
+    val dtRecording: WorkbookLint.FormulaCheck = text =>
+      dtShown += text
+      if text.contains("TABLE") then Some("display text") else None
+    val dt = zipBytes(dtParts(seededDataTableSheetXml.replace(dtRecord, recordWithText)))
+    assertEquals(
+      unparseableOf(WorkbookLint.lintBytes(dt, dtRecording).fold(e => fail(s"$e"), identity)),
+      Vector.empty[Finding]
+    )
+    assertEquals(dtShown.result(), Vector("B1*B2"))
+    assertEquals(
+      unparseableOf(WorkbookLint.lintStreamBytes(dt, dtRecording).fold(e => fail(s"$e"), identity)),
+      Vector.empty[Finding]
+    )
+    assertEquals(dtShown.result(), Vector("B1*B2", "B1*B2"))
+    // and an oracle that rejects everything still never sees the record
+    assertEquals(
+      unparseableOf(WorkbookLint.lintBytes(dt, rejectAll).fold(e => fail(s"$e"), identity))
+        .map(_.locator),
+      Vector("""<c r="C4"><f>""")
+    )
+  }
+
+  test("GH-663: the quoted text of the first offending cell is capped at 80 chars with '…'") {
+    // A FormulaTooLong rejection is >8192 chars BY DEFINITION; the finding must stay one readable
+    // line, so only a sample of the stored text is quoted — the diagnostic carries the length.
+    val longText = "1+" * 4500 + "1"
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> worksheetWith(
+      s"""<sheetData>
+    <row r="1"><c r="A1"><f>$longText</f><v>4501</v></c></row>
+  </sheetData>"""
+    ))
+    val bytes = zipBytes(parts)
+    val tooLong: WorkbookLint.FormulaCheck = text =>
+      if text.length > 8192 then Some(s"Formula too long: ${text.length} characters (max 8192)")
+      else None
+    val dom = WorkbookLint.lintBytes(bytes, tooLong).fold(e => fail(s"$e"), identity)
+    val sax = WorkbookLint.lintStreamBytes(bytes, tooLong).fold(e => fail(s"$e"), identity)
+    assertEquals(sax, dom)
+    assertEquals(dom.map(_.category), Vector(LintCategory.FormulaUnparseable))
+    val f = dom.head
+    assert(f.message.contains(s"<f>${longText.take(80)}…</f>"), s"quote the first 80 chars: $f")
+    assert(!f.message.contains(longText.take(81)), s"must not quote past the cap: $f")
+    assert(f.message.contains("Formula too long: 9001 characters"), s"keep the diagnostic: $f")
+    assert(f.message.length < 400, s"message must stay one readable line (${f.message.length}): $f")
+    // a text at or under the cap is quoted whole, with no ellipsis
+    val short = "SUM(A1:A2"
+    val shortParts = baseParts + ("xl/worksheets/sheet1.xml" -> unparseableSheetXml)
+    val shortF = WorkbookLint
+      .lintBytes(zipBytes(shortParts), parenCheck)
+      .fold(e => fail(s"$e"), identity)
+      .head
+    assert(shortF.message.contains(s"<f>$short</f>"), s"short text is quoted whole: $shortF")
+    assert(!shortF.message.contains("…</f>"), s"no ellipsis under the cap: $shortF")
+  }
+
+  test("GH-663: the slug is formula-unparseable") {
+    assertEquals(LintCategory.FormulaUnparseable.slug, "formula-unparseable")
+  }

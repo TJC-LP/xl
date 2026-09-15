@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.XLResult
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.ast.BindingCoercion
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.formula.functions.ArgValue
@@ -60,14 +60,13 @@ class OmittedArgumentSpec extends FunSuite:
     assertEquals(number("=PMT(0.05,10,1000,,1)"), number("=PMT(0.05,10,1000,0,1)"))
     assert(number("=PMT(0.05,10,1000,,1)") != number("=PMT(0.05,10,1000,1)"))
     // VLOOKUP's range_lookup: the empty slot is FALSE — the `,)` idiom every model uses for an
-    // exact match — so 2.5 finds nothing where the approximate match returned 10
-    val vlookup = value("=VLOOKUP(2.5,A1:B2,2,)")
-    assert(vlookup.swap.exists(_.toString.contains("exact match not found")), vlookup.toString)
+    // exact match — so 2.5 finds nothing (GH-662: the miss is #N/A) where the approximate match
+    // returned 10
+    assertEquals(value("=VLOOKUP(2.5,A1:B2,2,)"), Right(CellValue.Error(CellError.NA)))
     assertEquals(number("=VLOOKUP(2.5,A1:B2,2)"), BigDecimal(10), "the absent slot is TRUE")
     assertEquals(number("=VLOOKUP(2,A1:B2,2,)"), BigDecimal(10))
     // MATCH's match_type: the empty slot is 0 (exact), not the default 1
-    val matched = value("=MATCH(2.5,A1:A2,)")
-    assert(matched.swap.exists(_.toString.contains("no match")), matched.toString)
+    assertEquals(value("=MATCH(2.5,A1:A2,)"), Right(CellValue.Error(CellError.NA)))
     assertEquals(number("=MATCH(2.5,A1:A2)"), BigDecimal(1), "the absent slot is 1")
     assertEquals(number("=MATCH(3,A1:A2,)"), BigDecimal(2))
     // RATE's guess is 0 rather than 10% — Newton still reaches the same root

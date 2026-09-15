@@ -194,6 +194,26 @@ object StreamingWriteCommands:
       s"$desc (streaming)\nCells modified: ${result.cellCount}\nSaved (streaming): $outputPath"
 
   /**
+   * GH-663: the `putf` verb's parser gate under `--stream` — the canonical (bare) formula text when
+   * it parses, else the same `FORMULA_ERROR` (exit 3, caret diagnostic, `xl eval` hint) the
+   * in-memory verb raises, so a `<f>` the parser rejects is never patched into the sheet (PR #679
+   * review: this arm was the one xl writer without the gate).
+   */
+  private def parsedFormulaText(text: String): IO[String] =
+    val formula = CellValue.canonicalFormulaText(text)
+    val fullFormula = s"=$formula"
+    FormulaParser.parse(fullFormula) match
+      case Right(_) => IO.pure(formula)
+      case Left(e) =>
+        IO.raiseError(
+          CliException(
+            CliError
+              .fromXLError(ParseError.toXLError(e, fullFormula), None)
+              .copy(message = ParseError.formatWithContext(e, fullFormula))
+          )
+        )
+
+  /**
    * Streaming putf: write formulas to cells with O(1) memory.
    *
    * Uses SAX→StAX transform pipeline to modify only target cells. Note: Formula dragging is NOT
@@ -234,27 +254,28 @@ object StreamingWriteCommands:
         unqualifiedContext("putf", refStr, refOrRange)
       )
 
-      // Build formula map
+      // Build formula map — every formula through the verb's parser gate first (GH-663: the
+      // in-memory verb and every batch shape refuse an unparseable formula; this arm did not)
       valueMap <- (refOrRange, formulas) match
         case (Left(ref), List(singleFormula)) =>
-          val formula = CellValue.canonicalFormulaText(singleFormula)
-          IO.pure(Map(ref -> CellValue.Formula(formula, None)))
+          parsedFormulaText(singleFormula).map(formula =>
+            Map(ref -> CellValue.Formula(formula, None))
+          )
 
         case (Right(range), List(singleFormula)) =>
           // Fill pattern: all cells get same formula (NO dragging in streaming mode)
-          val formula = CellValue.canonicalFormulaText(singleFormula)
-          IO.pure(range.cells.map(ref => ref -> CellValue.Formula(formula, None)).toMap)
+          parsedFormulaText(singleFormula).map { formula =>
+            range.cells.map(ref => ref -> CellValue.Formula(formula, None)).toMap
+          }
 
         case (Right(range), multipleFormulas) if multipleFormulas.length == range.cellCount.toInt =>
           // Batch formulas
-          val pairs = range.cellsRowMajor
-            .zip(multipleFormulas.iterator)
-            .map { (ref, f) =>
-              val formula = CellValue.canonicalFormulaText(f)
-              ref -> CellValue.Formula(formula, None)
-            }
-            .toMap
-          IO.pure(pairs)
+          multipleFormulas.traverse(parsedFormulaText).map { texts =>
+            range.cellsRowMajor
+              .zip(texts.iterator)
+              .map((ref, formula) => ref -> CellValue.Formula(formula, None))
+              .toMap
+          }
 
         case (Right(range), multipleFormulas) =>
           IO.raiseError(

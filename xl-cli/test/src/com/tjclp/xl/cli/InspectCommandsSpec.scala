@@ -4,7 +4,9 @@ import cats.effect.{IO, Resource}
 import cats.syntax.all.*
 import munit.CatsEffectSuite
 
+import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cli.contract.{Argv, CliHarness, CliRun, EnvelopeSchema, TestFixtures}
+import com.tjclp.xl.io.ExcelIO
 
 /**
  * The inspection verbs of ADR-017 §2.10 through the in-process harness: `describe [--full]`,
@@ -158,6 +160,44 @@ class InspectCommandsSpec extends CatsEffectSuite:
     yield
       assertEquals(withSheet.stdout, plain.stdout)
       assertEquals(full.exit, 0, full.stderr)
+  }
+
+  test(
+    "GH-667: describe --full lists the sheet-scoped print name the reader lifts into PageSetup"
+  ) {
+    // the dogfood's ops1.json shape: a workbook-scoped name plus `_xlnm.Print_Area` scoped to Data.
+    // The full read lifts a modelable Print_Area out of the table into Sheet.pageSetup (GH-259), so
+    // --full must re-derive it or the name the light card and `names` both list goes missing
+    val path = fixtures().resolve("scoped-names.xlsx")
+    val book = TestFixtures
+      .simpleBook()
+      .withDefinedName("TotalRev", "Data!$B$4")
+      .withDefinedName("_xlnm.Print_Area", "Data!$A$1:$B$4", SheetName.unsafe("Data"))
+    def scopedNames(run: CliRun): Vector[(String, ujson.Value)] =
+      data(run)("definedNames").arr.toVector.map(n => (n("name").str, n("scope")))
+    for
+      wb <- book.fold(e => IO.raiseError(new Exception(e.toString)), IO.pure)
+      _ <- ExcelIO.instance[IO].write(wb, path)
+      light <- CliHarness.run("-f", path.toString, "describe")
+      full <- CliHarness.run("-f", path.toString, "describe", "--full")
+      lightJson <- CliHarness.run("-f", path.toString, "--json", "describe")
+      fullJson <- CliHarness.run("-f", path.toString, "--json", "describe", "--full")
+      listed <- CliHarness.run("-f", path.toString, "names")
+    yield
+      val line = "_xlnm.Print_Area  Data!$A$1:$B$4  (Data)"
+      assertEquals(light.exit, 0, light.stderr)
+      assert(light.stdout.contains("Defined names (2):"), light.stdout)
+      assert(light.stdout.contains(line), light.stdout)
+      assertEquals(full.exit, 0, full.stderr)
+      assert(full.stdout.contains("Defined names (2):"), full.stdout)
+      assert(full.stdout.contains(line), full.stdout)
+      assertEquals(
+        scopedNames(fullJson),
+        Vector(("TotalRev", ujson.Null), ("_xlnm.Print_Area", ujson.Str("Data")))
+      )
+      assertEquals(scopedNames(fullJson), scopedNames(lightJson))
+      assertEquals(listed.exit, 0, listed.stderr)
+      assert(listed.stdout.contains("_xlnm.Print_Area  Data!$A$1:$B$4 (Data)"), listed.stdout)
   }
 
   test("describe refuses an unknown -s: SHEET_NOT_FOUND with candidates, exit 3") {

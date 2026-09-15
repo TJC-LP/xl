@@ -280,7 +280,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         if formatStr.isEmpty then ""
         else
           val cv = exprValueForTextFn(exprValue)
-          NumFmtFormatter.formatValue(cv, NumFmt.Custom(formatStr))
+          // GH-665: TEXT(x,"General") is the width-independent text conversion (15 significant
+          // digits, the 20-character plain/E switch) — the rule `&` applies — not the
+          // column-width cell-display General that formatValue renders for a General numFmt
+          if NumFmtFormatter.isGeneralCode(formatStr) then NumFmtFormatter.generalText(cv)
+          else NumFmtFormatter.formatValue(cv, NumFmt.Custom(formatStr))
     }
 
   /**

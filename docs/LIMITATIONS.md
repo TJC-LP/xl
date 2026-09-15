@@ -245,6 +245,8 @@ Since 0.20.0 (GH-492) the pass walks the **SCC condensation** in dependency-firs
 - Fresh (uncached) books are bit-identical to 0.19.x on this axis: there is nothing to warm-start from.
 - `DataTableSeeder`'s circular what-if fixpoints stay **cold-seeded** on purpose: under what-if substitution the loaded caches are stale by construction.
 
+**Number → text conversion (GH-665)**: `&`, CONCATENATE, text-typed arguments, numeric literals in text positions and `TEXT(x,"General")` render Excel's width-independent General text — 15 significant digits, trailing zeros stripped, plain while the unsigned form fits in 20 characters (`1E19` → `10000000000000000000`, `0.000123456789012346`), E notation beyond (`1E+20`, `1.23456789012346E-05`), two-digit minimum exponent. The stored value keeps its full BigDecimal precision (DECIMAL128 `1/3` stays 34 digits in the cell, in `Raw:` output and in `--json`); only the text rendering rounds. LibreOffice's `&` conversion differs above roughly 1E15 (it switches to E notation earlier and pads exponents to three digits), so it is an oracle only for the plain range; xl follows Excel's 20-character rule. The width-dependent cell-display General (`xl view`, `displayCell`) is a separate rule and unchanged.
+
 **No workarounds needed** - formula system is complete and production-ready!
 
 ---

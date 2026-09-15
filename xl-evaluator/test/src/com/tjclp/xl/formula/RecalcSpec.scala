@@ -2,7 +2,9 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.eval.WorkbookAudit
+import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
@@ -334,3 +336,31 @@ class RecalcSpec extends FunSuite:
     val result = Workbook(sheet).recalculate()
     assert(result.isClean, result.errors.map(_.render).mkString("; "))
     assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(28)))
+
+  test("GH-662: a lookup miss recalculates as a cached #N/A — guarded cells cache their fallback"):
+    // The dogfood book: A3:A7 years keyed to B3:B7; B18 unguarded miss, B19 the ISNA idiom, B20
+    // IFNA over MATCH. Before GH-662 B18/B20 were host failures (uncached, in `errors`) and B19
+    // cached the WRONG branch (1).
+    val years = Vector(2021, 2022, 2023, 2024, 2025)
+    val values = Vector(190, 202, 214, 226, 238)
+    val data = years.indices.foldLeft(Sheet(SheetName.unsafe("S"))) { (s, i) =>
+      s.put(ARef.from0(0, 2 + i), num(years(i))).put(ARef.from0(1, 2 + i), num(values(i)))
+    }
+    val sheet = data
+      .put(ref"B18", formula("=VLOOKUP(2030,A3:B7,2,FALSE)"))
+      .put(ref"B19", formula("=IF(ISNA(VLOOKUP(2030,A3:B7,2,FALSE)),0,1)"))
+      .put(ref"B20", formula("=IFNA(MATCH(2030,A3:A7,0),0)"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.errors.isEmpty, result.errors.map(_.render).mkString("; "))
+    assertEquals(result.excelErrors, Vector((SheetName.unsafe("S"), ref"B18", CellError.NA)))
+    assertEquals(cached(result.workbook, "S", ref"B18"), Some(CellValue.Error(CellError.NA)))
+    assertEquals(cached(result.workbook, "S", ref"B19"), Some(num(0)))
+    assertEquals(cached(result.workbook, "S", ref"B20"), Some(num(0)))
+    assertEquals(result.summary, "Recalculated 3 formulas (1 error value)")
+    // and the audit of the recalculated book lists the miss as an error cell, nothing uncached
+    val audit = WorkbookAudit.of(result.workbook)
+    assertEquals(
+      audit.errorCells,
+      Vector((QualifiedRef(SheetName.unsafe("S"), ref"B18"), CellError.NA))
+    )
+    assertEquals(audit.uncachedFormulas, Vector.empty)

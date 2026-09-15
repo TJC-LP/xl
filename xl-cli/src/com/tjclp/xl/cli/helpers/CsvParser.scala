@@ -9,6 +9,8 @@ import cats.effect.IO
 import com.github.tototoshi.csv.{CSVReader, DefaultCSVFormat}
 import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formatted.Formatted
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * CSV parser for importing CSV files into Excel workbooks.
@@ -16,6 +18,8 @@ import com.tjclp.xl.cells.CellValue
  * Features:
  *   - RFC 4180 compliant via scala-csv
  *   - Column-based type inference (Number, Boolean, Date, Text)
+ *   - The number format a type carries: a Date column's cells are `NumFmt.Date`, the format `put`
+ *     gives the same text (GH-667); every other value is `General`
  *   - Configurable delimiter, encoding, header detection
  *   - Helpful error messages with row/column indices
  */
@@ -35,12 +39,12 @@ object CsvParser:
     case Number, Boolean, Date, Text
 
   /**
-   * Parse CSV file and return (ARef, CellValue) tuples for batch put.
+   * Parse CSV file and return (ARef, Formatted) tuples for batch put.
    *
    * Algorithm:
    *   1. Read all CSV rows
    *   2. Infer column types from first N rows (if enabled)
-   *   3. Map each (row, col) to (ARef + offset, CellValue)
+   *   3. Map each (row, col) to (ARef + offset, typed value with its number format)
    *   4. Return flat vector suitable for Sheet.put(updates*)
    *
    * @param csvPath
@@ -50,13 +54,14 @@ object CsvParser:
    * @param options
    *   Import configuration
    * @return
-   *   Vector of (ARef, CellValue) tuples
+   *   Vector of (ARef, Formatted) tuples: the value and the format its type carries (`General`
+   *   unless the column is a Date column, whose dates are `NumFmt.Date`)
    */
   def parseCsv(
     csvPath: Path,
     startRef: ARef,
     options: ImportOptions
-  ): IO[Vector[(ARef, CellValue)]] =
+  ): IO[Vector[(ARef, Formatted)]] =
     IO {
       // Custom CSV format with configured delimiter
       implicit val csvFormat: DefaultCSVFormat = new DefaultCSVFormat {
@@ -98,8 +103,8 @@ object CsvParser:
                   s"rows=$csvRows, end=${endRow + 1} (max: 1048576)"
               )
 
-            // Map each CSV cell to (ARef, CellValue)
-            val updates = scala.collection.mutable.ArrayBuffer[(ARef, CellValue)]()
+            // Map each CSV cell to (ARef, Formatted)
+            val updates = scala.collection.mutable.ArrayBuffer[(ARef, Formatted)]()
 
             dataRows.zipWithIndex.foreach { (dataRow, rowIdx) =>
               dataRow.zipWithIndex.foreach { (value, colIdx) =>
@@ -167,35 +172,41 @@ object CsvParser:
    * @param colType
    *   Inferred column type
    * @return
-   *   Typed CellValue (Empty for blank strings)
+   *   Typed value with its number format (Empty, General for blank strings). A whole-day date is
+   *   `NumFmt.Date`, what `put` gives the same text (GH-667); a value that fails its column's type
+   *   falls back to text
    */
-  private def parseValue(value: String, colType: ColumnType): CellValue =
+  private def parseValue(value: String, colType: ColumnType): Formatted =
     // Empty strings become Empty cells
-    if value.trim.isEmpty then CellValue.Empty
+    if value.trim.isEmpty then general(CellValue.Empty)
     else
       colType match
         case ColumnType.Number =>
           // Try parsing as BigDecimal
-          Try(BigDecimal(value.trim))
-            .map(CellValue.Number.apply)
-            .getOrElse(CellValue.Text(value)) // Fallback to text if parse fails
+          general(
+            Try(BigDecimal(value.trim))
+              .map(CellValue.Number.apply)
+              .getOrElse(CellValue.Text(value)) // Fallback to text if parse fails
+          )
 
         case ColumnType.Boolean =>
           // Case-insensitive true/false
-          value.trim.toLowerCase match
+          general(value.trim.toLowerCase match
             case "true" => CellValue.Bool(true)
             case "false" => CellValue.Bool(false)
             case _ => CellValue.Text(value) // Fallback
+          )
 
         case ColumnType.Date =>
           // Try parsing as LocalDate (ISO 8601: YYYY-MM-DD), convert to LocalDateTime at midnight
           Try(LocalDate.parse(value.trim, DateTimeFormatter.ISO_LOCAL_DATE))
-            .map(_.atStartOfDay()) // Convert LocalDate to LocalDateTime
-            .map(CellValue.DateTime.apply)
-            .getOrElse(CellValue.Text(value)) // Fallback
+            .map(date => Formatted(CellValue.DateTime(date.atStartOfDay()), NumFmt.Date))
+            .getOrElse(general(CellValue.Text(value))) // Fallback
 
         case ColumnType.Text =>
-          CellValue.Text(value)
+          general(CellValue.Text(value))
+
+  private def general(value: CellValue): Formatted = Formatted(value, NumFmt.General)
 
   // ========== Type Detection Helpers ==========
 

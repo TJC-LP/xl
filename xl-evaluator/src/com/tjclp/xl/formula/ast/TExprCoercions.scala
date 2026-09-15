@@ -57,7 +57,10 @@ trait TExprCoercions:
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[String](name, BindingCoercion.Text)
     case TExpr.Lit(value: String) => TExpr.Lit(value)
-    case TExpr.Lit(value: BigDecimal) => TExpr.Lit(value.toString)
+    // GH-665: a numeric literal in a text position renders as Excel's General text at evaluation
+    // time (=2.50&"" is "2.5", =LEN(2.50) is 3) and SURVIVES in the AST, so the printer emits
+    // `=2.50&""` back rather than the folded `="2.50"&""`
+    case TExpr.Lit(_: BigDecimal) => coerced[String](expr, BindingCoercion.Text)
     case TExpr.Lit(value: Boolean) => TExpr.Lit(if value then "TRUE" else "FALSE")
     // GH-561: a date in a text position is its Excel serial, not ISO text
     case TExpr.Lit(value: java.time.LocalDate) => TExpr.Lit(ScalarCoercion.dateSerialText(value))

@@ -50,9 +50,11 @@ class LookupBlankDateCoercionSpec extends FunSuite:
   }
 
   test("GH-467: MATCH exact over blanks still misses cleanly (#N/A), blanks match nothing") {
-    blanky.evaluateFormula("=MATCH(25, A1:A5, 0)") match
-      case Left(error) => assert(error.toString.contains("#N/A"), s"expected #N/A, got $error")
-      case other => fail(s"Expected #N/A error, got $other")
+    // GH-662: the miss is the #N/A error VALUE at the boundary
+    assertEquals(
+      blanky.evaluateFormula("=MATCH(25, A1:A5, 0)"),
+      Right(CellValue.Error(CellError.NA))
+    )
   }
 
   test("GH-467: XLOOKUP exact over blanks returns the positionally aligned value") {

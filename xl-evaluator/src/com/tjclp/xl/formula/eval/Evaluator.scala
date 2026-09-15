@@ -1446,19 +1446,24 @@ private class EvaluatorImpl(
 
   /**
    * Total text coercion for '&' operands, mirroring the decodeAsString conventions (Number →
-   * toString, Bool → TRUE/FALSE, DateTime → ISO, Empty → "").
+   * General text via ScalarCoercion.numberText (GH-665: 2.0 → "2", never the stored scale), Bool →
+   * TRUE/FALSE, DateTime → Excel serial (GH-561), Empty → "").
    */
   private def concatText(value: Any): String = value match
     case s: String => s
     case b: Boolean => if b then "TRUE" else "FALSE"
-    case bd: BigDecimal => bd.toString
+    case bd: BigDecimal => ScalarCoercion.numberText(bd)
     case i: Int => i.toString
+    // anyToCellValue admits Long/Double runtime values into Any positions — render them as numbers
+    case l: Long => ScalarCoercion.numberText(BigDecimal(l))
+    // BigDecimal(NaN) and BigDecimal(±Infinity) throw; a non-finite Double falls to the catch-all
+    case d: Double if d.isFinite => ScalarCoercion.numberText(BigDecimal(d))
     // GH-561: `&` on a date yields its Excel serial ("46023"), never ISO text — dates are
     // numbers; only TEXT() formats them (the `">="&DATE(y,m,d)` criteria idiom depends on it)
     case ld: java.time.LocalDate => ScalarCoercion.dateSerialText(ld)
     case ldt: java.time.LocalDateTime => ScalarCoercion.dateSerialText(ldt)
     case CellValue.Text(s) => s
-    case CellValue.Number(n) => n.toString
+    case CellValue.Number(n) => ScalarCoercion.numberText(n)
     case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
     case CellValue.DateTime(dt) => ScalarCoercion.dateSerialText(dt)
     case CellValue.Empty => ""
@@ -1620,7 +1625,7 @@ private class EvaluatorImpl(
         Right(ArrayArithmetic.ArrayOperand.Scalar(if b then BigDecimal(1) else BigDecimal(0)))
       case i: Int => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(i)))
       case l: Long => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(l)))
-      case d: Double => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(d)))
+      case d: Double if d.isFinite => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(d)))
       // GH-193: date values coerce to their Excel serial in arithmetic (dates ARE numbers),
       // e.g. a LET binding holding TODAY() used as `d+1`.
       case ld: java.time.LocalDate =>

@@ -1,0 +1,21 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+-o
+<DIR>/batch-stream-putf-bad.xlsx
+--stream
+batch
+-
+## stdin
+[{"op":"put","ref":"A9","value":1},{"op":"putf","ref":"A3","value":"=SUM(A1:A2"}]
+## exit
+2
+## stdout
+## stderr
+Error: Object 2 (putf): the formula does not parse
+=SUM(A1:A2
+         ^
+Unexpected end of formula at position 9: expected ',' or ')'
+  code: BATCH_OP_INVALID

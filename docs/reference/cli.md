@@ -1494,7 +1494,7 @@ Apply multiple operations atomically from JSON input.
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
 | `file` | string | No (default `-`) | JSON file path or `-` for stdin |
-| `--dry-run` | flag | No | Validate JSON and show a summary without writing (works without `-f`/`-o`) |
+| `--dry-run` | flag | No | Validate JSON and show a summary without writing (works without `-f`/`-o`); a `putf` formula the parser rejects fails here too (`BATCH_OP_INVALID`, exit 2, the verb's caret diagnostic) |
 | `--schema` | flag | No | Print the document's JSON Schema (draft 2020-12) and exit — every op, field, alias and example; works without `-f`/`-o` |
 
 **The document**: a JSON array of operations, applied in order, atomically — nothing is written
@@ -1832,6 +1832,29 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
   book: Excel does not recompute data tables on open, so the grid opens BLANK
 - **`formula-leading-equals`** — `<f>` text stored with the display form's leading `=`
   (non-spec; strict readers like openpyxl misread it — re-writing the file with xl heals it)
+- **`formula-unparseable`** — a cell `<f>` whose text the formula parser is certain no Excel
+  dialect accepts: the text itself ends early (an open `(`, `{` or `[` as in `SUM(A1:A2`, an
+  unterminated string or quoted sheet name, a trailing operator as in `A1+` or `A1:`), a `]` or
+  `}` closes a `(` (`(A1]`), or it exceeds Excel's 8192-character limit —
+  Excel shows the repair prompt on open and drops the formula. Nesting is not judged: the
+  parser's 128-level depth budget counts every chained operator segment, so a flat 130-term
+  `B2+B3+…` chain Excel opens intact fails it while a 100-deep nest passes (it bounds the parser,
+  not Excel's 64-level rule; the parser side is #680). One finding per part
+  with the first five cells, the total count, and the first cell's text (first 80 characters)
+  with the parser's reason. The rule is deliberately narrower than "the evaluator cannot parse
+  it": an unknown function name (an add-in's `BDP(…)`, LibreOffice's `TRUE()`) or an argument
+  count the registry's arity model refuses opens intact (`#NAME?` / `#VALUE!` at worst), so those
+  stay `xl audit`'s to list under "Unparseable formulas" — as do an extra closer (`SUM(A1:A2))`)
+  and a wrong closer after a complete expression (`SUM(A1:A2]`), which the parser reports as an
+  unexpected character even though Excel repairs both, and a `,` or space inside parentheses
+  (`SUM((A1,A2))`, `(A1:B2 B1:C2)`: Excel's union and intersection reference operators, which the
+  parser does not implement — valid Excel, evaluated by LibreOffice, never a repair), and a
+  complete text the parser cannot finish (`NOT`, a legal defined name the parser reads as its
+  prefix operator): truncation is judged from the text, never from the diagnostic class alone.
+  Shared-formula dependents (empty `<f>`) and data-table records are never judged. xl's own
+  writers cannot produce the class: `putf` (in memory and under `--stream`) and every batch
+  `putf` shape (`value`, `values`, `from`) parse the formula before writing, `--dry-run` included
+  (`BATCH_OP_INVALID`, exit 2, with the verb's caret diagnostic)
 - **`external-ref-dangling`** — a formula or defined name references external workbook `[N]`
   with no N-th `<externalReference>` entry in workbook.xml (the cross-workbook sheet-transplant
   class: ordinals index the SOURCE book's table) — Excel repairs the file by removing every

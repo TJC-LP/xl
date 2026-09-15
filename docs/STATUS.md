@@ -245,14 +245,14 @@
 
 ### Test Coverage
 
-**7,407 test cases** (verified via `./mill __.test`, 2026-09-14, wave 29 after the adversarial-review fix round): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
+**7,520 test cases** (verified via `./mill __.test`, 2026-09-15, wave 30 integrated): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2572 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1682 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1276 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1489 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-evaluator | 2610 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1718 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1283 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1521 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 183 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 58 | external-consumer probes (`xl/test/src/xlprelude/`) |

@@ -12,7 +12,7 @@ import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import java.time.LocalDate
 
 trait FunctionSpecsBase:
@@ -327,6 +327,26 @@ trait FunctionSpecsBase:
       case TExpr.RangeRef(range, _) => Some(range.start)
       case TExpr.SheetRange(_, range, _) => Some(range.start)
       case _ => None
+
+  /**
+   * GH-662: the typed `#N/A` a lookup raises when nothing matches. Left channel per the GH-344
+   * charter (RANK's not-found precedent), so IFNA/ISNA/ERROR.TYPE see the code and an unguarded
+   * miss promotes to a cached `#N/A` at the CellValue boundary; the context is the human diagnostic
+   * and is dropped, by design, at that boundary. LOOKUP/XMATCH must raise through this when added.
+   */
+  protected def lookupNotFound(context: String): EvalError =
+    EvalError.ErrorValue(CellError.NA, Some(context))
+
+  /** One rendering of a lookup value for text matching and diagnostics (VLOOKUP/HLOOKUP/MATCH). */
+  protected def renderLookupValue(value: ExprValue): String = value match
+    case ExprValue.Text(s) => s
+    // #665: the one number → text rule, so a diagnostic never says `999.0` where `&` says `999`
+    case ExprValue.Number(n) => com.tjclp.xl.formula.eval.ScalarCoercion.numberText(n)
+    case ExprValue.Bool(b) => b.toString
+    case ExprValue.Date(d) => d.toString
+    case ExprValue.DateTime(dt) => dt.toString
+    case ExprValue.Cell(cv) => cv.toString
+    case ExprValue.Opaque(other) => other.toString
 
   /**
    * GH-467: normalize a lookup value for MATCH/XLOOKUP comparison. Cell-ref lookup values arrive as

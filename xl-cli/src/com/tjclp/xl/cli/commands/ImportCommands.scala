@@ -136,11 +136,11 @@ object ImportCommands:
     stream: Boolean
   ): IO[String] =
     for
-      // Parse CSV into (ARef, CellValue) tuples
+      // Parse CSV into (ARef, Formatted) tuples
       updates <- CsvParser.parseCsv(csvPath, startRef, options)
 
       // Apply batch put to sheet (O(N) with style deduplication)
-      updatedSheet = sheet.put(updates*)
+      updatedSheet = sheet.put(typedCells(updates)*)
 
       // Replace sheet in workbook
       updatedWb = wb.put(updatedSheet)
@@ -191,7 +191,7 @@ ${Format.saveSuffix(outputPath, stream)}"""
             IO.raiseError(new Exception(s"Invalid sheet name '$sheetName': $err"))
 
         // Create new sheet with CSV data
-        newSheet = Sheet(sheetNameValidated).put(updates*)
+        newSheet = Sheet(sheetNameValidated).put(typedCells(updates)*)
 
         // Add sheet to workbook
         updatedWb = wb.put(newSheet)
@@ -205,6 +205,19 @@ ${Format.saveSuffix(outputPath, stream)}"""
         cellCount = updates.size
       yield s"""Imported: ${csvPath.getFileName} → new sheet '$sheetName' (${rowCount} rows, ${colCount} cols, ${cellCount} cells)
 ${Format.saveSuffix(outputPath, stream)}"""
+
+  /**
+   * The parsed cells as `Sheet.put` takes them: a `General` value goes in bare, so an unformatted
+   * cell is written unstyled as it always was; a typed one carries its format — a Date column's
+   * `NumFmt.Date` (GH-667), the format `put` gives the same text — which the bulk put registers
+   * once per cell instead of a style pass per cell afterwards.
+   */
+  private def typedCells(
+    updates: Vector[(ARef, Formatted)]
+  ): Vector[(ARef, CellValue | Formatted)] =
+    updates.map { (ref, formatted) =>
+      if formatted.numFmt == NumFmt.General then (ref, formatted.value) else (ref, formatted)
+    }
 
   /**
    * True streaming CSV import - O(1) memory for entire operation.

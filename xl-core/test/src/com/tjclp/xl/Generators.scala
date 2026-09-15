@@ -472,6 +472,40 @@ object Generators:
       )
     )
 
+  /**
+   * Wide-magnitude BigDecimals for the number → text laws (GH-665): unscaled values of 1..40 digits
+   * at scales in [-30, 60], both signs, plus every zero shape and the absurd magnitudes a
+   * length-bounded renderer must never expand.
+   */
+  val genWideBigDecimal: Gen[BigDecimal] =
+    val genUnscaled: Gen[BigInt] =
+      for
+        len <- Gen.choose(1, 40)
+        first <- Gen.choose(1, 9)
+        rest <- Gen.listOfN(len - 1, Gen.choose(0, 9))
+      yield BigInt((first :: rest).mkString)
+    val genScaled: Gen[BigDecimal] =
+      for
+        unscaled <- genUnscaled
+        scale <- Gen.choose(-30, 60)
+        negate <- Gen.oneOf(true, false)
+      yield
+        val magnitude = BigDecimal(new java.math.BigDecimal(unscaled.bigInteger, scale))
+        if negate then -magnitude else magnitude
+    Gen.frequency(
+      8 -> genScaled,
+      1 -> genRoundTripNumber,
+      1 -> Gen.oneOf(
+        BigDecimal(0),
+        BigDecimal("-0.0"),
+        BigDecimal("0E-10"),
+        BigDecimal("0E+10"),
+        BigDecimal("1E+1000000"),
+        BigDecimal("1E-1000000"),
+        BigDecimal("-1E+1000000")
+      )
+    )
+
   /** DateTime within Excel's representable era, whole seconds */
   val genExcelDateTime: Gen[LocalDateTime] =
     for

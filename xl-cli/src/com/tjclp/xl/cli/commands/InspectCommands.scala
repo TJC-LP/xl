@@ -8,6 +8,7 @@ import com.tjclp.xl.cli.{Depth, Direction}
 import com.tjclp.xl.cli.contract.{CliError, CliException, CliSignal, ErrorCode, OutputMode, Payload}
 import com.tjclp.xl.cli.helpers.{Resolve, SheetResolver}
 import com.tjclp.xl.cli.output.RendererCommon
+import com.tjclp.xl.ooxml.PrintNames
 import com.tjclp.xl.ooxml.metadata.LightMetadata
 import com.tjclp.xl.sheets.FreezePane
 import com.tjclp.xl.styles.color.Color
@@ -52,16 +53,23 @@ object InspectCommands:
         }
         Payload.text(describeText(lines, meta.definedNames, scope, meta.date1904, None))
 
-  /** `describe --full`: the loaded book's [[WorkbookSummary]] — the light card plus every count. */
+  /**
+   * `describe --full`: the loaded book's [[WorkbookSummary]] — the light card plus every count. The
+   * defined names are the book's effective table ([[PrintNames.effective]]): the read lifted each
+   * sheet's modelable `_xlnm.Print_Area` / `_xlnm.Print_Titles` out of `metadata.definedNames` into
+   * its PageSetup (GH-259), so the loaded table alone omits the sheet-scoped names the light card
+   * and `names` read verbatim from workbook.xml (GH-667).
+   */
   def describe(wb: Workbook, mode: OutputMode): Payload =
     val summary = WorkbookSummary.of(wb)
+    val definedNames = PrintNames.effective(wb)
     val scope: Int => Option[String] = idx => wb.sheets.lift(idx).map(_.name.value)
     mode match
       case OutputMode.Json =>
         Payload.Json(
           ujson.Obj(
             "sheets" -> ujson.Arr.from(summary.sheets.map(sheetJson)),
-            "definedNames" -> namesJson(summary.definedNames, scope),
+            "definedNames" -> namesJson(definedNames, scope),
             "date1904" -> ujson.Bool(summary.date1904),
             "calcPr" -> calcPrJson(summary.calcPr)
           )
@@ -71,7 +79,7 @@ object InspectCommands:
           SheetLine(s.index, s.name.value, s.state, s.dimension, Some(facets(s)))
         }
         Payload.text(
-          describeText(lines, summary.definedNames, scope, summary.date1904, Some(summary.calcPr))
+          describeText(lines, definedNames, scope, summary.date1904, Some(summary.calcPr))
         )
 
   /** One sheet as text mode prints it; `facets` is the `--full` count line. */

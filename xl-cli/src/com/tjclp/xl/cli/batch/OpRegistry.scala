@@ -115,7 +115,10 @@ object OpRegistry:
     streamable = true,
     cliVerb = Some("putf"),
     since = "0.1.0",
-    doc = "Write a formula: one cell, dragged across a range from an anchor, or explicit per cell.",
+    doc =
+      "Write a formula: one cell, dragged across a range from an anchor, or explicit per cell. " +
+        "Every formula must parse (the putf verb's gate): an unparseable one is BATCH_OP_INVALID " +
+        "before anything is written, --dry-run included.",
     example = ujson.Obj(
       "op" -> ujson.Str("putf"),
       "ref" -> ujson.Str("B2:B10"),

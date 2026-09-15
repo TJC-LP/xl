@@ -8,10 +8,11 @@ import java.nio.file.{Files, Path}
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{CalcMode, CalcPr, CellRange, Workbook, Sheet, given}
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.cli.commands.WriteCommands
-import com.tjclp.xl.cli.contract.{CliHarness, Warning, WarningCode}
+import com.tjclp.xl.cli.contract.{CliException, CliHarness, ErrorCode, Warning, WarningCode}
 import com.tjclp.xl.formula.FormulaParser
+import com.tjclp.xl.formula.eval.WorkbookAudit
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -150,6 +151,30 @@ class BatchRecalcSpec extends FunSuite:
     assertCachedNumber(cachedFormulaValue(readBack(out), 2, 0), 10.0)
     Files.deleteIfExists(out)
     Files.deleteIfExists(ops)
+  }
+
+  test("GH-665: a `&` label over a scaled number caches Excel's General text, not the scale") {
+    // A batch-JSON `1070` lands as <v>1070.0</v>; the label must cache "Total 1070" (Excel), not
+    // "Total 1070.0" (BigDecimal.toString) — cache readers and `view` never recompute it.
+    val wb = Workbook(Sheet("Data").put(ref"B1", CellValue.Number(BigDecimal("1070.0"))))
+    val out = tempXlsx()
+    WriteCommands
+      .putFormula(wb, wb.sheets.headOption, "C1", List("=\"Total \"&B1"), out, config)
+      .unsafeRunSync()
+
+    assertEquals(cachedFormulaValue(readBack(out), 2, 0), Some(CellValue.Text("Total 1070")))
+    val sheetXml =
+      new String(zipEntryBytes(out, "xl/worksheets/sheet1.xml"), StandardCharsets.UTF_8)
+    assert(sheetXml.contains("<v>Total 1070</v>"), s"cached text in the part: $sheetXml")
+    // B1 itself still stores <v>1070.0</v> (the value writer keeps every digit); only the label's
+    // cached TEXT must not carry the scale
+    assert(!sheetXml.contains("Total 1070.0"), s"the scale leaked into the cached text: $sheetXml")
+
+    val view = CliHarness.run("-f", out.toString, "view", "C1", "--eval").unsafeRunSync()
+    assertEquals(view.exit, 0, view.stderr)
+    assert(view.stdout.contains("Total 1070"), s"view --eval: ${view.stdout}")
+    assert(!view.stdout.contains("1070.0"), s"view --eval shows the scale: ${view.stdout}")
+    Files.deleteIfExists(out)
   }
 
   test("batch putf and single-op putf converge on the same cached value") {
@@ -2024,12 +2049,14 @@ class BatchRecalcSpec extends FunSuite:
       Files.deleteIfExists(ops)
   }
 
-  test("GH-606: a batch that authors an unparseable formula is reported and fails --strict") {
+  test("GH-606: a batch that authors a formula that cannot evaluate is reported, fails --strict") {
     // The authored cell is a seed, hence in the cone: the #572 guarantee is untouched, while the
-    // blind formulas elsewhere still ride through cached and unreported.
+    // blind formulas elsewhere still ride through cached and unreported. The formula parses (an
+    // undefined name is a legal reference) and fails only at evaluation — GH-663 refuses an
+    // UNPARSEABLE one before any write, see the next test.
     val srcFile = blindModelOnDisk()
     val wb = readBack(srcFile)
-    val ops = writeOps("""[{"op":"putf","ref":"Cover!B16","formula":"=ZZZNOTAFUNC(A1)"}]""")
+    val ops = writeOps("""[{"op":"putf","ref":"Cover!B16","formula":"=NoSuchName*2"}]""")
     val advisoryOut = tempXlsx()
     val strictOut = tempXlsx()
     val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
@@ -2052,6 +2079,52 @@ class BatchRecalcSpec extends FunSuite:
       assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, Some(CellValue.Number(7)))
       assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, Some(CellValue.Number(9)))
       assertVerbatim(strictOut, srcFile, "xl/worksheets/sheet2.xml")
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(advisoryOut)
+      Files.deleteIfExists(strictOut)
+      Files.deleteIfExists(ops)
+  }
+
+  test("GH-663: a batch that authors an UNPARSEABLE formula is refused before any write") {
+    // Before #663 this document was applied (exit 0, one RECALC_ERRORS warning, the text in the
+    // sheet XML) and --strict exited 1 but still wrote the file. Now the document is refused as
+    // the verb refuses the same text, advisory and strict alike, and no output exists.
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val ops = writeOps("""[{"op":"putf","ref":"Cover!B16","formula":"=ZZZNOTAFUNC(A1)"}]""")
+    val advisoryOut = tempXlsx()
+    val strictOut = tempXlsx()
+    Files.deleteIfExists(advisoryOut)
+    Files.deleteIfExists(strictOut)
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    def refused(io: IO[String]): CliException =
+      io.attempt.unsafeRunSync() match
+        case Left(e: CliException) => e
+        case Left(other) => fail(s"expected the batch to be refused, got $other")
+        case Right(summary) => fail(s"expected the batch to be refused, got: $summary")
+    try
+      val advisory = refused(
+        WriteCommands
+          .batch(wb, None, ops.toString, advisoryOut, config, warn = w => IO(warnings += w))
+      )
+      assertEquals(advisory.error.code, ErrorCode.BATCH_OP_INVALID)
+      assert(
+        advisory.error.message
+          .startsWith("Object 1 (putf): the formula does not parse\n=ZZZNOTAFUNC(A1)\n"),
+        advisory
+      )
+      assert(advisory.error.message.contains("Unknown function 'ZZZNOTAFUNC'"), advisory)
+      assertEquals(advisory.error.location.flatMap(_.opIndex), Some(1))
+      assertEquals(warnings.toList, Nil, "a refusal carries no RECALC_ERRORS warning")
+      assert(!Files.exists(advisoryOut), "a refused batch must not write")
+
+      val strict = refused(
+        WriteCommands
+          .batch(wb, None, ops.toString, strictOut, config, policy = WritePolicy(strict = true))
+      )
+      assertEquals(strict.error.code, ErrorCode.BATCH_OP_INVALID)
+      assert(!Files.exists(strictOut), "a refused strict batch must not write either")
     finally
       Files.deleteIfExists(srcFile)
       Files.deleteIfExists(advisoryOut)
@@ -2239,4 +2312,39 @@ class BatchRecalcSpec extends FunSuite:
     assert(summary.contains("Saved:"), s"exit must stay clean: $summary")
     Files.deleteIfExists(out)
     Files.deleteIfExists(ops)
+  }
+
+  test("GH-662: the dogfood batch — IFNA/ISNA-guarded lookup misses cache 0, the bare miss #N/A") {
+    // The issue's repro plus an unguarded B20. Before: B18 uncached with RECALC_ERRORS, B19 cached 1.
+    val wb = Workbook(Sheet("Data"))
+    val ops = writeOps(
+      """[{"op":"put","ref":"A3:A7","values":[2021,2022,2023,2024,2025]},
+        | {"op":"put","ref":"B3:B7","values":[190,202,214,226,238]},
+        | {"op":"putf","ref":"B18","value":"=IFNA(VLOOKUP(2030,A3:B7,2,FALSE),0)"},
+        | {"op":"putf","ref":"B19","value":"=IF(ISNA(VLOOKUP(2030,A3:B7,2,FALSE)),0,1)"},
+        | {"op":"putf","ref":"B20","value":"=VLOOKUP(2030,A3:B7,2,FALSE)"}]""".stripMargin
+    )
+    val out = tempXlsx()
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    try
+      val summary = WriteCommands
+        .batch(wb, wb.sheets.headOption, ops.toString, out, config, warn = w => IO(warnings += w))
+        .unsafeRunSync()
+      assert(summary.contains("Recalculated 3 formulas (1 error value)"), s"summary: $summary")
+      assert(!summary.contains("not found"), s"the miss is a value, not a failure: $summary")
+      assertEquals(warnings.toList, Nil, "no RECALC_ERRORS: every formula computed a value")
+
+      val written = readBack(out)
+      assertEquals(formulaOn(written, "Data", ref"B18").cachedValue, Some(CellValue.Number(0)))
+      assertEquals(formulaOn(written, "Data", ref"B19").cachedValue, Some(CellValue.Number(0)))
+      assertEquals(
+        formulaOn(written, "Data", ref"B20").cachedValue,
+        Some(CellValue.Error(CellError.NA))
+      )
+      val audit = WorkbookAudit.of(written)
+      assertEquals(audit.errorCells.map(_._1.ref.toA1), Vector("B20"))
+      assertEquals(audit.uncachedFormulas, Vector.empty)
+    finally
+      Files.deleteIfExists(out)
+      Files.deleteIfExists(ops)
   }

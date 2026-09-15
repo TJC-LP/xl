@@ -5,7 +5,10 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 
+import scala.jdk.CollectionConverters.*
+
 import cats.effect.{ExitCode, IO}
+import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{CellRange, Sheet, Workbook, given}
@@ -533,4 +536,316 @@ class LintCommandSpec extends CatsEffectSuite:
         assert(msg.contains("lint requires a file"), msg)
         assert(msg.contains("-f"), msg)
       case Right(p) => fail(s"Expected rejection when no file is given, got $p")
+  }
+
+  // ========== GH-663: formula-unparseable through the real parser ==========
+
+  /** A structurally clean one-sheet package whose A3 holds the given `<f>` text. */
+  private def formulaZip(fText: String): Path =
+    val parts = Map(
+      "[Content_Types].xml" ->
+        """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>""",
+      "_rels/.rels" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="$nsRel/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>""",
+      "xl/workbook.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="$nsMain" xmlns:r="$nsRel">
+  <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""",
+      "xl/_rels/workbook.xml.rels" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="$nsRel/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>""",
+      "xl/worksheets/sheet1.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="$nsMain"><sheetData>
+  <row r="1"><c r="A1"><v>1</v></c></row>
+  <row r="2"><c r="A2"><v>2</v></c></row>
+  <row r="3"><c r="A3"><f>${fText.replace("&", "&amp;").replace("<", "&lt;")}</f><v>3</v></c></row>
+</sheetData></worksheet>"""
+    )
+    val baos = ByteArrayOutputStream()
+    val zos = ZipOutputStream(baos)
+    parts.foreach { case (name, content) =>
+      zos.putNextEntry(ZipEntry(name))
+      zos.write(content.getBytes(StandardCharsets.UTF_8))
+      zos.closeEntry()
+    }
+    zos.close()
+    val path = Files.createTempFile("lint-cli-formula", ".xlsx")
+    Files.write(path, baos.toByteArray)
+    path
+
+  private def unparseableFindings(path: Path, stream: Boolean = false) =
+    val lint =
+      if stream then WorkbookLint.lintStream(path, LintCommands.formulaCheck)
+      else WorkbookLint.lint(path, LintCommands.formulaCheck)
+    lint
+      .fold(e => fail(s"lint errored: $e"), identity)
+      .filter(_.category == LintCategory.FormulaUnparseable)
+
+  test(
+    "GH-663: `<f>SUM(A1:A2</f>` exits 1 with formula-unparseable carrying the parser's message"
+  ) {
+    for
+      path <- IO(formulaZip("SUM(A1:A2"))
+      code <- Main.runLint(path, LintFormat.Text)
+      codeStream <- Main.runLint(path, LintFormat.Text, stream = true)
+      findings <- IO(unparseableFindings(path))
+      streamed <- IO(unparseableFindings(path, stream = true))
+      text = LintCommands.renderText(path.toString, findings)
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(code, ExitCode(1))
+      assertEquals(codeStream, ExitCode(1))
+      assertEquals(findings.size, 1, findings.mkString("\n"))
+      assertEquals(streamed, findings)
+      assert(text.contains("[formula-unparseable]"), text)
+      assert(text.contains("A3"), text)
+      assert(text.contains("<f>SUM(A1:A2</f>: Unexpected end of formula at position"), text)
+  }
+
+  test("GH-663: an unknown function is #NAME? on recalculation, not a repair — lint stays clean") {
+    for
+      path <- IO(formulaZip("FOOBAR(1)"))
+      code <- Main.runLint(path, LintFormat.Text)
+      findings <- IO(unparseableFindings(path))
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(code, ExitCode.Success)
+      assertEquals(findings, Vector.empty)
+  }
+
+  test("GH-663: formulas Excel opens that xl's parser refuses are not repairs either") {
+    // the parser's grammar is narrower than Excel's: LibreOffice writes `TRUE()` (an unexpected
+    // '(' to the parser), and the arity model is the registry's — a known name with an odd argument
+    // count opens intact (at worst #VALUE!). Neither may fail the ship gate. Nor may Excel's union
+    // ',' and intersection ' ' reference operators, which the parser does not implement: after a
+    // parenthesized expression it reports any character but ')' as an UnbalancedDelimiter, yet
+    // LibreOffice evaluates every one of these (SUM((A1,A2)) = 3, AREAS((A1,B1)) = 2, ...). Nor may
+    // the parser's 128-level depth budget, which counts every chained operator segment as a level
+    // (GH-56): a flat 130-term chain Excel opens intact fails it as NestingTooDeep while a
+    // 130-deep SUM nest — past Excel's own 64 — is refused the same way; neither is a certain
+    // repair (PR #679 review; the parser side is its own issue).
+    val flatChain = (2 to 131).map(i => s"B$i").mkString("+")
+    val flatConcat = (1 to 130).map(i => s"A$i").mkString("&")
+    val deepNest = "SUM(" * 130 + "1" + ")" * 130
+    // Nor may a complete text the parser merely cannot finish: `NOT` is a legal defined name Excel
+    // resolves, but the parser reads the word as its prefix operator and reports UnexpectedEOF —
+    // the oracle judges truncation from the text, not from the diagnostic class (PR #679 review).
+    val texts = Vector(
+      "NOT",
+      "not",
+      "NOT ",
+      flatChain,
+      flatConcat,
+      deepNest,
+      "SUM()",
+      "TRUE()",
+      "FALSE()",
+      "SUM((A1,A2))",
+      "SUM((A1:A2,B1:B2))",
+      "INDEX((A1:B2,A1:C2),1,1,2)",
+      "AREAS((A1,B1))",
+      "(A1:B2 B1:C2)",
+      "SUM((A1:B2 B1:C2))"
+    )
+    for
+      paths <- IO(texts.map(formulaZip))
+      findings <- IO(paths.flatMap(unparseableFindings(_)))
+      streamed <- IO(paths.flatMap(unparseableFindings(_, stream = true)))
+      codes <- paths.traverse(Main.runLint(_, LintFormat.Text))
+      codesStream <- paths.traverse(Main.runLint(_, LintFormat.Text, stream = true))
+      _ <- IO(paths.foreach(Files.deleteIfExists))
+    yield
+      assertEquals(findings, Vector.empty)
+      assertEquals(streamed, findings)
+      assertEquals(codes, Vector.fill(texts.size)(ExitCode.Success))
+      assertEquals(codesStream, codes)
+  }
+
+  test("GH-663: the certain classes are all findings — unterminated string, wrong closer, limits") {
+    // the limit arm of the oracle: 9001 chars (Excel's 8192) — and its finding must stay one
+    // readable line, not echo the formula. The parser's depth budget is NOT an arm (see the
+    // "not repairs either" test: it refuses flat chains Excel opens).
+    val tooLong = "1+" * 4500 + "1"
+    // (`A1:` is an InvalidCellRef to the parser, not an EOF, so it is audit's, not lint's)
+    val texts = Vector("\"abc", "(A1]", "(A1}", "A1+", "SUM((A1)", tooLong, "'Sheet 1")
+    for
+      paths <- IO(texts.map(formulaZip))
+      findings <- IO(paths.map(unparseableFindings(_)))
+      streamed <- IO(paths.map(unparseableFindings(_, stream = true)))
+      _ <- IO(paths.foreach(Files.deleteIfExists))
+    yield
+      assertEquals(streamed, findings)
+      texts.zip(findings).foreach { (text, found) =>
+        assertEquals(found.size, 1, s"'${text.take(40)}' should be exactly one finding: $found")
+        assert(
+          found.head.message.length < 400,
+          s"finding must stay one readable line (${found.head.message.length}): ${found.head}"
+        )
+      }
+      assert(findings(1).head.message.contains("']'"), findings(1))
+      assert(findings(2).head.message.contains("'}'"), findings(2))
+      assert(
+        findings(5).head.message.contains("Formula too long: 9001 characters (max 8192)"),
+        findings(5)
+      )
+      assert(findings(5).head.message.contains(s"<f>${tooLong.take(80)}…</f>"), findings(5))
+  }
+
+  test("PR #679 review: certainTruncation reads the text, not the parser's diagnostic") {
+    val truncated = Vector(
+      "SUM(A1:A2",
+      "\"abc",
+      "A1+",
+      "A1:",
+      "Sheet1!",
+      "IF(A1,\"x\",",
+      "{1,2",
+      "Table1[Col",
+      "'Rev (Q1",
+      "\"a\"\"b",
+      "SUM((A1)",
+      "A1&",
+      "A1=",
+      "A1<"
+    )
+    val complete = Vector(
+      "NOT",
+      "NOT ",
+      "TotalRev",
+      "\"a(b\"",
+      "'P&L (adj)'!A1",
+      "\"a\"\"b\"",
+      "SUM(A1:A2)",
+      "A1%",
+      "A1#",
+      "{1,2;3,4}",
+      "''",
+      "\"\"",
+      "SUM((A1,A2))",
+      "(A1:B2 B1:C2)"
+    )
+    truncated.foreach(t => assert(LintCommands.certainTruncation(t), s"should be truncated: $t"))
+    complete.foreach(t => assert(!LintCommands.certainTruncation(t), s"should be complete: $t"))
+  }
+
+  test("PR #679 review: the #669 grammar gaps and error literals are never formula-unparseable") {
+    // pinned so a future parser change cannot promote one into a repair-tier claim about a file
+    // Excel opens. Only the parser-backed category is asserted: on this minimal fixture the
+    // storage-form rules still speak (xlfn-missing for a bare x#, @ or LAMBDA; external-ref-dangling
+    // for [1]), which is their job, not this oracle's.
+    val texts = Vector(
+      "SUM(Table1[Amount])",
+      "(Table1[Amount])",
+      "Table1[[#This Row],[Amount]]",
+      "SUM({1,2,3})",
+      "{1,2}+A1",
+      "(A1:A3={1;2;3})",
+      "SUM([1]Sheet1!A1)",
+      "([1]Sheet1!A1)",
+      "SUM(Sheet1:Sheet3!A1)",
+      "A1#",
+      "(A1#)",
+      "@A1",
+      "#REF!",
+      "#DIV/0!",
+      "LAMBDA(x,x+1)(2)"
+    )
+    for
+      paths <- IO(texts.map(formulaZip))
+      findings <- IO(paths.flatMap(unparseableFindings(_)))
+      streamed <- IO(paths.flatMap(unparseableFindings(_, stream = true)))
+      _ <- IO(paths.foreach(Files.deleteIfExists))
+    yield
+      assertEquals(findings, Vector.empty)
+      assertEquals(streamed, findings)
+  }
+
+  test("PR #679 review: the prefiltered oracle answers exactly as the parse-backed one") {
+    val corpus = Vector(
+      "SUM(A1:A2",
+      "\"abc",
+      "A1+",
+      "'Sheet 1",
+      "(A1]",
+      "(A1}",
+      "SUM((A1)",
+      "1+" * 4500 + "1",
+      "SUM(" * 130 + "1" + ")" * 130,
+      "NOT",
+      "TotalRev",
+      "SUM(A1:A2)",
+      "SUM((A1,A2))",
+      "(A1:B2 B1:C2)",
+      "TRUE()",
+      "SUM()",
+      "A1:",
+      "Sheet1!",
+      "#REF!",
+      "\"a]b\"",
+      "\"a}b\"",
+      "A1]",
+      "SUM(A1:A2]",
+      "{1,2;3,4}",
+      "Table1[Col]",
+      "IF(A1,\"x\",",
+      ""
+    )
+    corpus.foreach { t =>
+      assertEquals(
+        LintCommands.formulaCheck(t),
+        LintCommands.formulaCheckSlow(t),
+        s"'${t.take(40)}'"
+      )
+    }
+  }
+
+  test("GH-663: every real-file fixture in the repo lints free of formula-unparseable") {
+    val fixtures = repoRoot.resolve("xl-ooxml/test/resources/fixtures")
+    val books = Files.list(fixtures)
+    val paths =
+      try books.toList.asScala.toVector.filter(_.toString.endsWith(".xlsx")).sorted
+      finally books.close()
+    assert(paths.nonEmpty, s"no fixtures under $fixtures")
+    val flagged = paths.flatMap { p =>
+      WorkbookLint.lint(p, LintCommands.formulaCheck) match
+        case Right(findings) =>
+          findings.filter(_.category == LintCategory.FormulaUnparseable).map(f => s"$p: $f")
+        case Left(_) => Vector.empty // the deliberately malformed fixture cannot be linted at all
+    }
+    assertEquals(flagged, Vector.empty[String], flagged.mkString("\n"))
+  }
+
+  test("GH-663: a book xl writes from parsed formulas lints clean") {
+    for
+      path <- IO(Files.createTempFile("lint-cli-formulas", ".xlsx"))
+      wb = Workbook(
+        Vector(
+          Sheet("Data")
+            .put(ref"A1" -> 1, ref"A2" -> 2)
+            .put(ref"A3", CellValue.Formula("SUM(A1:A2)"))
+            .put(ref"B1", CellValue.Formula("IF(A1>1,\"big\",\"small\")"))
+            .put(ref"B2", CellValue.Formula("_xlfn.XLOOKUP(1,A1:A2,A1:A2)"))
+            .put(ref"B3", CellValue.Formula("'Data'!A1+Data!A2"))
+        )
+      )
+      _ <- ExcelIO.instance[IO].write(wb, path)
+      code <- Main.runLint(path, LintFormat.Text)
+      findings <- IO(unparseableFindings(path))
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(code, ExitCode.Success)
+      assertEquals(findings, Vector.empty)
   }

@@ -161,10 +161,11 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
           positionOpt match
             case Some(pos) => Right(BigDecimal(pos))
             case None =>
+              // GH-662: the typed #N/A (Left channel: MATCH is a FunctionSpec[BigDecimal]), with
+              // the real call rendered as its diagnostic context
               Left(
-                EvalError.EvalFailed(
-                  "MATCH: no match found for lookup value (#N/A)",
-                  Some("MATCH(lookup_value, lookup_array, [match_type])")
+                lookupNotFound(
+                  s"MATCH: no match found for lookup value: MATCH(${renderLookupValue(lookup)}, ${lookupArray.toA1}, $matchTypeInt)"
                 )
               )
         }

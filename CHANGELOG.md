@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Wave 30 — the 2026-09-15 dogfood of 0.23.0 (103 probes across the CLI, the scripting library and
+the tjc-modeling template lane; every recorded 0.19.x quirk re-tested as fixed) filed seven
+issues, run as six worktree-isolated clusters, each adversarially reviewed with the LibreOffice
+oracle: the typed `#N/A` on legacy lookups (#662), the batch `putf` parse gate and the
+`formula-unparseable` lint rule (#663), the rsvg-convert adapter (#664), Excel's number → text rule
+(#665), `General` and scaling commas inside custom formats (#666), three CLI polish items (#667)
+and the skill drift the dogfood read (#668).
+
+### Added
+
+- **`xl lint` gains `formula-unparseable`** (#663): a repair-tier finding for a `<f>` whose text
+  the parser refuses in the classes Excel certainly repairs — a text that ends early by its own
+  shape (an open `(`, an unterminated string or sheet name, a trailing operator), a `]` or `}`
+  closing a `(`, more than 8192 characters. A complete text the parser cannot finish (`NOT`, a
+  legal defined name read as its prefix operator) is not a finding. Nesting is not judged: the parser's
+  128-level depth budget counts every chained operator segment, so a flat 130-term `B2+B3+…`
+  chain Excel opens intact fails it while a 100-deep nest passes (PR #679 review; the parser
+  side is #680). One finding per sheet names the
+  cells and quotes the first offending formula (capped at 80 characters); the DOM and SAX
+  scanners fold identically. Shapes the parser does not yet accept but Excel opens — `TRUE()`
+  as a call, an extra closer after a complete expression, a `,` or space inside parentheses
+  (Excel's union and intersection reference operators) — are left to `xl audit`. Only the CLI
+  wires the rule; the one-argument `WorkbookLint.lint(path)` library entry cannot see the
+  parser and does not carry it (#674). A first cut flagged Excel's union and intersection
+  operators as repairs; the adversarial re-review caught it with the LibreOffice oracle and the
+  rule was narrowed before release.
+- **`General` inside a custom number format** (#666): the keyword renders the value in General
+  form wherever it sits in a section — `General"A"` on 2021 is `2021A` (the FY-suffix idiom),
+  `"FY"General` is `FY2021`, `General" units"` on 12.5 is `12.5 units`, `General;(General)`
+  parenthesises negatives — where it used to print the word. Quoted `"General"` and `\G`
+  escapes stay literal; the whole-code `General` path (ECMA-376 §18.8.30) is unchanged.
+- **Thousands-scaling commas** (#666): a comma after the last digit placeholder of a section
+  divides by 1000, once per comma, before rounding and grouping — `$#,##0.0,,"mm"` on 1,500,000
+  is `$1.5mm` (the IC-exhibit idiom), `#,##0,` on 1,234,567 is `1,235`, `0.0,%` still applies
+  the percent first. Commas between digits keep grouping. Display only: stored format codes are
+  byte-identical. `FormatCodeParser.FormatToken` gains `Scale` and `General`;
+  `FormatPattern.hasThousands` is now true only for grouping commas.
+- **`-o` on a read-only verb is a usage error that names the flag** (#667): `xl -f f.xlsx view
+  A1:B2 -o out.xlsx` says `view is read-only and does not take -o/--output` with the hint to
+  drop it (exit 2, `USAGE`, the same in the `--json` envelope; `-i/--in-place` likewise), where
+  decline used to report `Unexpected argument: view`. Read-only is read from the verb registry
+  (`Needs.output` false on every form of the verb); `new`, whose output is its positional, is
+  excluded.
+
+### Changed
+
+- **Breaking: a VLOOKUP, HLOOKUP or MATCH miss is the typed `#N/A`** (#662): the three legacy
+  lookups raised a host failure ("VLOOKUP exact match not found") where XLOOKUP returns the error
+  value, so `IFNA(VLOOKUP(miss),0)` left its cell uncached and `ISNA(VLOOKUP(miss))` answered
+  FALSE — `=IF(ISNA(VLOOKUP(2030,A3:B7,2,FALSE)),0,1)` cached 1 where Excel shows 0, with no
+  warning and nothing in `xl audit`. Exact and approximate misses now raise `#N/A` on the error
+  channel with the diagnostic kept as context; IFNA, ISNA, ISERR, IFERROR, ISERROR, ERROR.TYPE
+  and an IF condition all see it; an unguarded miss caches `#N/A` (the cell is no longer
+  "uncached" to audit, and `recalc` counts it as an error value rather than a RECALC_ERRORS
+  warning); `xl eval` prints `#N/A (error)` at exit 0. An index below 1 is `#VALUE!` and one past
+  the table `#REF!`, as in Excel, in place of the former host failure. The lookup-miss law
+  (legacy miss ≡ XLOOKUP miss ≡ `NA()`) is pinned in `ErrorValueLawsSpec`; LibreOffice displays
+  the recalculated book identically.
+- **Breaking: batch `putf` parses every formula before writing** (#663): the single-cell,
+  `values[]` and `from`-dragging shapes, in memory and under `--stream`, and `--dry-run`, refuse
+  a formula the parser rejects with `BATCH_OP_INVALID` (exit 2), the 1-based op index and the
+  same caret diagnostic the `putf` verb prints; an unknown function is refused with its
+  "Did you mean" suggestion, as the verb does; no output file is created. The `--stream putf`
+  verb, which had no gate at all, now raises the in-memory verb's `FORMULA_ERROR`. `=SUM(A1:A2` used to
+  reach the file at exit 0 with `xl lint` clean and Excel's repair prompt waiting. The gate is the
+  evaluator's parser, so the shapes it does not yet accept — `TRUE()`/`FALSE()` as calls, array
+  constants, structured references, the union and intersection reference operators — are now
+  refused in batch as they always were in the verb (#669 tracks the parser).
+- **Breaking: a number becomes text by Excel's General rule** (#665): `&`, CONCATENATE,
+  text-typed function arguments, a numeric literal in a text position and `TEXT(x,"General")`
+  render at most 15 significant digits with trailing zeros stripped, plain while the unsigned form
+  fits 20 characters and in `E` notation past it (`1E19` is `10000000000000000000`, `1E20` is
+  `1E+20`, `1/3` is `0.333333333333333`), where `BigDecimal.toString` carried the stored scale —
+  `="Total "&B8` shipped `Total 1070.0`, `=A1&""` on a `<v>2.0</v>` cell `2.0`, `=1/3&""` 34
+  digits, and `=(A1&A2)+1` failed on `2.03.0` where Excel returns 25. Dates still concatenate as
+  their serial (#561); `TEXT` with an explicit format is unchanged; `=2.50&""` re-prints
+  byte-identically (the literal is no longer folded to a string). One rule,
+  `NumFmtFormatter.generalText` (now public beside `isGeneralCode`), backs every site; LibreOffice
+  agrees on the plain range (its own `&` conversion diverges from Excel in `E` notation, noted in
+  `docs/LIMITATIONS.md`).
+- **`describe --full` lists the lifted print names** (#667): the reader lifts a modelable
+  sheet-scoped `_xlnm.Print_Area` / `_xlnm.Print_Titles` into the sheet's page setup, so the
+  loaded name table `describe --full` printed (text and `--json`) omitted them while the
+  metadata-only `describe` and `names` listed them. Both forms now list the effective table a
+  write emits; `PrintNames` is `private[xl]` for it.
+- **Skills** (#668): the xl-cli skill's rasterizer text names the four-backend automatic chain
+  (ImageMagick is opt-in only, the sole webp backend), `evala --at` is described as positioning
+  the displayed grid (the verb writes no file), batch `values` is a flat row-major array; the
+  xl-scripting quick reference carries the real shapes (`seedDataTablesReport()` returns a
+  `DataTableSeedReport`, `editIn`/`EditScope.of` take a `SheetName`, `Edit.Put` takes a `Loc` and
+  a format), the post-solve checklist names `excelErrors`, and `certified` is dated to 0.19.2.
+
+### Fixed
+
+- **`view --format png` on the default rasterizer chain** (#664): the rsvg-convert adapter passed
+  a bare `-` as the input file; librsvg 2.40 through 2.54 reject it (`Error opening file …/-`),
+  so the chain fell through to `RASTERIZER_UNAVAILABLE` on Debian images although
+  `xl rasterizers` listed the binary. The SVG is now piped on stdin with no positional, which every
+  librsvg reads; verified on 2.40.20, 2.54.7 and 2.61.3.
+- **`import` CSV date columns carry a date format** (#667): a column detected as ISO dates was
+  typed as dates but written with no number format, so the serial (`46037`) showed where
+  `put "2026-01-15"` shows the date; import now attaches the same `Date` format detection picks,
+  for the positioned import and `--new-sheet` alike. The O(1) `--stream --new-sheet` path into a
+  new workbook still writes no styles (#675).
+
 ## [0.23.0] - 2026-09-14
 
 Formula parity with Excel-authored models — the 0.21.0 dogfood's parser gaps (#603, #604, #605)

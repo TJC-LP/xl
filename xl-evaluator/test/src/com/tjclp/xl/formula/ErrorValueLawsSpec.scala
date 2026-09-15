@@ -299,3 +299,64 @@ class ErrorValueLawsSpec extends ScalaCheckSuite:
       )
     }
   }
+
+  // ===== GH-662: the lookup-miss law — every miss IS NA(), on whichever channel it travels =====
+
+  /** A3:A7 = 2021..2025, B3:B7 = 190..238; D1:H1 / D2:H2 the same, transposed; C3:C7 descending. */
+  private val lookupSheet: Sheet =
+    val years = Vector(2021, 2022, 2023, 2024, 2025)
+    val values = Vector(190, 202, 214, 226, 238)
+    years.indices.foldLeft(Sheet("Test")) { (s, i) =>
+      s.put(ARef.from0(0, 2 + i), num(years(i)))
+        .put(ARef.from0(1, 2 + i), num(values(i)))
+        .put(ARef.from0(2, 2 + i), num(years(4 - i)))
+        .put(ARef.from0(3 + i, 0), num(years(i)))
+        .put(ARef.from0(3 + i, 1), num(values(i)))
+    }
+
+  /** Legacy-lookup misses: Left-channel `ErrorValue(NA)` producers (exact and approximate). */
+  private val lookupMisses: List[String] = List(
+    "VLOOKUP(2030,A3:B7,2,FALSE)",
+    "VLOOKUP(2000,A3:B7,2,TRUE)",
+    "HLOOKUP(2030,D1:H2,2,FALSE)",
+    "HLOOKUP(2000,D1:H2,2,TRUE)",
+    "MATCH(2030,A3:A7,0)",
+    "MATCH(2000,A3:A7,1)",
+    "MATCH(3000,C3:C7,-1)",
+    "INDEX(B3:B7,MATCH(2030,A3:A7,0))"
+  )
+
+  /** The value-channel `#N/A` producers a miss must be indistinguishable from. */
+  private val naValues: List[String] = List("NA()", "XLOOKUP(2030,A3:A7,B3:B7)")
+
+  private val naGuards: List[String => String] = List(
+    p => s"IFNA($p,42)",
+    p => s"ISNA($p)",
+    p => s"ISERR($p)",
+    p => s"ISERROR($p)",
+    p => s"IFERROR($p,42)",
+    p => s"ERROR.TYPE($p)",
+    p => s"IF(ISNA($p),0,1)",
+    p => s"$p+1",
+    p => s"LET(v,$p,IFNA(v,42))"
+  )
+
+  test("GH-662 lookup-miss law: G(miss) == G(NA()) == G(XLOOKUP miss) for every guard G") {
+    lookupMisses.foreach { miss =>
+      assertEquals(
+        lookupSheet.evaluateFormula(s"=$miss"),
+        Right(CellValue.Error(CellError.NA)),
+        s"L1 membership: $miss"
+      )
+      naGuards.foreach { g =>
+        val observed = lookupSheet.evaluateFormula(s"=${g(miss)}")
+        naValues.foreach { na =>
+          assertEquals(
+            observed,
+            lookupSheet.evaluateFormula(s"=${g(na)}"),
+            s"${g(miss)} vs ${g(na)}"
+          )
+        }
+      }
+    }
+  }

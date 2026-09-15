@@ -110,8 +110,20 @@ object FormatCodeParser:
     /** Thousands separator (when in digit sequence) */
     case Thousands
 
+    /**
+     * Scaling comma: a comma after the last digit placeholder of a section divides the value by
+     * 1000 (`#,##0,` shows thousands, `0.0,,` millions; ECMA-376 §18.8.31, GH-666).
+     */
+    case Scale
+
     /** Percent symbol - multiplies value by 100 */
     case Percent
+
+    /**
+     * The `General` keyword inside a section (ECMA-376 §18.8.30): renders the value in General
+     * style in place, so `General"A"` on 2021 is `2021A` (GH-666).
+     */
+    case General
 
     /** Literal text (from "text" or escaped chars) */
     case Literal(text: String)
@@ -283,7 +295,6 @@ object FormatCodeParser:
    */
   private def parsePattern(pattern: String): FormatPattern =
     val tokens = ArrayBuffer[FormatToken]()
-    var hasThousands = false
     var hasPercent = false
     var i = 0
 
@@ -299,9 +310,8 @@ object FormatCodeParser:
           i += 1
 
         case ',' =>
-          // Thousands separator (when between digits)
-          // Also can mean scale by 1000 at end of number
-          hasThousands = true
+          // Lexed as grouping; the post-pass below reclassifies commas that trail the last
+          // digit placeholder as FormatToken.Scale (÷1000 each, GH-666)
           tokens += FormatToken.Thousands
           i += 1
 
@@ -357,6 +367,12 @@ object FormatCodeParser:
             // Other bracket content (already processed as condition) - skip
             i = endBracket + 1
           else i += 1
+
+        case 'G' | 'g' if pattern.regionMatches(true, i, "General", 0, 7) =>
+          // ECMA-376 §18.8.30: the General keyword is a token wherever it appears in a section
+          // (`General"A"`, `"FY"General`); quoted or escaped letters never reach here (GH-666)
+          tokens += FormatToken.General
+          i += 7
 
         case 'y' | 'Y' =>
           // Date year: y, yy, yyy, yyyy
@@ -453,7 +469,32 @@ object FormatCodeParser:
           tokens += FormatToken.Literal(c.toString)
           i += 1
 
-    FormatPattern(tokens.toVector, hasThousands, hasPercent)
+    val classified = classifyScalingCommas(tokens.toVector)
+    val hasThousands = classified.contains(FormatToken.Thousands)
+    FormatPattern(classified, hasThousands, hasPercent)
+
+  /**
+   * Reclassify the commas that scale rather than group (ECMA-376 §18.8.31, GH-666): a comma
+   * directly after a digit placeholder (or after another scaling comma) with no digit placeholder
+   * anywhere later in the section divides the value by 1000. `#,##0,` keeps its grouping comma and
+   * gains one scale; `0.0,,"mm"` scales twice; `mmm d, yyyy` has no digit placeholders and its
+   * comma stays a literal comma for the date renderer.
+   */
+  private def classifyScalingCommas(tokens: Vector[FormatToken]): Vector[FormatToken] =
+    val lastDigit = tokens.lastIndexWhere {
+      case FormatToken.Digit(_) => true
+      case _ => false
+    }
+    if lastDigit < 0 then tokens
+    else
+      tokens.zipWithIndex.foldLeft(Vector.empty[FormatToken]) { case (acc, (token, idx)) =>
+        val scales = token == FormatToken.Thousands && idx > lastDigit &&
+          acc.lastOption.exists {
+            case FormatToken.Digit(_) | FormatToken.Scale => true
+            case _ => false
+          }
+        acc :+ (if scales then FormatToken.Scale else token)
+      }
 
   /** Characters that may appear in a fraction numerator/denominator run. */
   private def isFractionChar(c: Char): Boolean =
@@ -589,11 +630,16 @@ object FormatCodeParser:
           case _ => applyNumericPattern(value, pattern)
 
   private def applyNumericPattern(value: BigDecimal, pattern: FormatPattern): String =
-    // Handle percent: multiply by 100
-    val adjustedValue = if pattern.hasPercent then value * 100 else value
+    val tokens = pattern.tokens
+    // Percent multiplies by 100; each scaling comma divides by 1000 (exact: a decimal-point
+    // move, so the rounding below sees the true scaled value, GH-666)
+    val percentValue = if pattern.hasPercent then value * 100 else value
+    val scaleCommas = tokens.count(_ == FormatToken.Scale)
+    val adjustedValue =
+      if scaleCommas > 0 then BigDecimal(percentValue.underlying.movePointLeft(3 * scaleCommas))
+      else percentValue
 
     // Count decimal places from pattern
-    val tokens = pattern.tokens
     val decimalIdx = tokens.indexWhere(_ == FormatToken.Decimal)
     val hasDecimal = decimalIdx >= 0
 
@@ -645,7 +691,8 @@ object FormatCodeParser:
 
     for token <- tokens do
       token match
-        case FormatToken.Digit(_) | FormatToken.Decimal | FormatToken.Thousands =>
+        case FormatToken.Digit(_) | FormatToken.Decimal | FormatToken.Thousands |
+            FormatToken.Scale =>
           if !numberEmitted then
             // Emit the formatted number
             result ++= paddedInt
@@ -654,6 +701,11 @@ object FormatCodeParser:
               result ++= decStr
             numberEmitted = true
           // Skip additional digit/decimal tokens
+
+        case FormatToken.General =>
+          // The keyword renders |x| in General style in place; applyFormat owns the sign, as
+          // for digit patterns (GH-666)
+          result ++= NumFmtFormatter.generalDisplay(adjustedValue.abs)
 
         case FormatToken.Percent =>
           result += '%'
@@ -761,7 +813,7 @@ object FormatCodeParser:
     tokens.foreach {
       case _: FormatToken.Exponent =>
         result ++= s"${exp.letter}$expSign$paddedExp"
-      case FormatToken.Digit(_) | FormatToken.Decimal | FormatToken.Thousands =>
+      case FormatToken.Digit(_) | FormatToken.Decimal | FormatToken.Thousands | FormatToken.Scale =>
         if !numberEmitted then
           result ++= mantissaStr
           numberEmitted = true
@@ -959,7 +1011,7 @@ object FormatCodeParser:
     textSection match
       case Some(section) =>
         section.pattern.tokens.map {
-          case FormatToken.TextPlaceholder => text
+          case FormatToken.TextPlaceholder | FormatToken.General => text
           case FormatToken.Literal(s) => s
           case _ => ""
         }.mkString
@@ -1164,7 +1216,7 @@ object FormatCodeParser:
         text
       case FormatToken.Spacer(_) =>
         " "
-      case FormatToken.Thousands =>
+      case FormatToken.Thousands | FormatToken.Scale =>
         // In date context, comma is a literal (not thousands separator)
         ","
       case _ =>

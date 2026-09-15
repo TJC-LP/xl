@@ -496,3 +496,104 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
       assertEquals(cell.exit, 0, cell.stderr)
       assert(cell.stdout.contains("-5"), cell.stdout)
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // GH-667: an output flag on a verb that never writes
+  // ---------------------------------------------------------------------------------------------
+
+  test("GH-667: outputOnReadOnlyVerb names the verb and the flag, from the registry's Needs") {
+    // the four verbs the dogfood hit, the flag in every spelling and position
+    assertEquals(
+      Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "view", "A1:B2", "-o", "out.xlsx")),
+      Some(("view", "-o/--output"))
+    )
+    assertEquals(
+      Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "-s", "Data", "-o", "o.xlsx", "eval", "=1")),
+      Some(("eval", "-o/--output"))
+    )
+    assertEquals(
+      Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "--output=o.xlsx", "evala", "=A1:B2")),
+      Some(("evala", "-o/--output"))
+    )
+    assertEquals(
+      Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "describe", "--full", "-i")),
+      Some(("describe", "-i/--in-place"))
+    )
+    assertEquals(
+      Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "--in-place", "names")),
+      Some(("names", "-i/--in-place"))
+    )
+    // a write verb, a verb with a writing form (`sheets hide`), no output flag at all
+    assertEquals(
+      Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "-o", "o.xlsx", "put", "A1", "1")),
+      None
+    )
+    assertEquals(Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "-o", "o.xlsx", "sheets")), None)
+    assertEquals(Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "view", "A1:B2")), None)
+    // `-o` as a global's VALUE is data, and behind `--` it is the verb's argument
+    assertEquals(Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "-s", "-o", "view", "A1")), None)
+    assertEquals(Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "search", "--", "-o")), None)
+    // an unknown verb is UNKNOWN_VERB's business
+    assertEquals(
+      Argv.outputOnReadOnlyVerb(List("-f", "f.xlsx", "-o", "o.xlsx", "viwe", "A1")),
+      None
+    )
+    assertEquals(Argv.outputOnReadOnlyVerb(Nil), None)
+  }
+
+  test("GH-667: -o on a read-only verb is a usage error naming the flag, not the verb") {
+    val out = file("never-written.xlsx")
+    for
+      view <- CliHarness.run("-f", file("simple.xlsx"), "view", "A1:B2", "-o", out)
+      eval <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "-o", out, "eval", "=1+1")
+      evala <- CliHarness.run(
+        "-f",
+        file("simple.xlsx"),
+        "-s",
+        "Data",
+        "evala",
+        "=A1:B2",
+        "--at",
+        "J3",
+        "-o",
+        out
+      )
+      describe <- CliHarness.run("-f", file("simple.xlsx"), "--output", out, "describe")
+      inPlace <- CliHarness.run("-f", file("simple.xlsx"), "-i", "view", "A1")
+      json <- CliHarness.run("--json", "-f", file("simple.xlsx"), "-o", out, "view", "A1")
+    yield
+      val runs = Vector("view" -> view, "eval" -> eval, "evala" -> evala, "describe" -> describe)
+      runs.foreach { (verb, run) =>
+        assertEquals(run.exit, 2, s"$verb: ${run.stderr}")
+        assertEquals(run.stdout, "", verb)
+        assert(
+          run.stderr.startsWith(s"Error: $verb is read-only and does not take -o/--output\n"),
+          s"$verb: ${run.stderr}"
+        )
+        assert(!run.stderr.contains("Unexpected argument"), s"$verb: ${run.stderr}")
+        assert(run.stderr.contains("  code: USAGE"), s"$verb: ${run.stderr}")
+        assert(run.stderr.contains("  hint: drop -o/--output"), s"$verb: ${run.stderr}")
+        assert(run.stderr.contains(s"`xl $verb --help`"), s"$verb: ${run.stderr}")
+        assert(
+          run.stderr.endsWith("usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …\n"),
+          s"$verb: ${run.stderr}"
+        )
+        assert(run.stderr.linesIterator.size < 10, s"$verb: ${run.stderr}")
+      }
+      assert(!Files.exists(Path.of(out)), "a read-only verb writes nothing")
+      assertEquals(inPlace.exit, 2, inPlace.stderr)
+      assert(
+        inPlace.stderr.startsWith("Error: view is read-only and does not take -i/--in-place\n"),
+        inPlace.stderr
+      )
+      assertEquals(json.exit, 2, json.stdout)
+      val envelope = ujson.read(json.stdout)
+      assertEquals(envelope("ok"), ujson.False)
+      assertEquals(envelope("verb"), ujson.Str("view"))
+      assertEquals(envelope("error")("code"), ujson.Str("USAGE"))
+      assertEquals(
+        envelope("error")("message"),
+        ujson.Str("view is read-only and does not take -o/--output")
+      )
+      assert(envelope("error")("hint").str.startsWith("drop -o/--output"), json.stdout)
+  }

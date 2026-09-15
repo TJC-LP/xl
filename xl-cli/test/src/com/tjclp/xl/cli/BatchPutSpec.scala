@@ -12,6 +12,7 @@ import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, ExitCodes, WarningCode}
 import com.tjclp.xl.cli.helpers.BatchParser
 import com.tjclp.xl.cli.helpers.BatchParser.BatchOp
+import com.tjclp.xl.formula.{FormulaParser, ParseError}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.sheets.syntax.*
@@ -583,4 +584,75 @@ class BatchPutSpec extends FunSuite:
     val badRow = parseError("""[{"op":"rowheight","row":"two","height":9}]""")
     assertEquals(badRow.code, ErrorCode.BATCH_OP_INVALID)
     assert(badRow.message.contains("'row'"), badRow.message)
+  }
+
+  // ========== GH-663: every putf shape parses its formula at parse time ==========
+
+  private val unterminated = "=SUM(A1:A2"
+
+  test("GH-663: batch putf refuses an unparseable formula in every shape, at parse time") {
+    val single = parseError(
+      s"""[{"op":"merge","range":"C1:D1"},{"op":"putf","ref":"A3","value":"$unterminated"}]"""
+    )
+    assertEquals(single.code, ErrorCode.BATCH_OP_INVALID)
+    assertEquals(single.exitCode, ExitCodes.usage)
+    assertEquals(single.location.flatMap(_.opIndex), Some(2))
+    assert(
+      single.message.startsWith(s"Object 2 (putf): the formula does not parse\n$unterminated\n"),
+      single.message
+    )
+    assert(single.message.contains("Unexpected end of formula at position"), single.message)
+
+    val dragged =
+      parseError(s"""[{"op":"putf","ref":"A3:A5","value":"$unterminated","from":"A3"}]""")
+    assertEquals(dragged.code, ErrorCode.BATCH_OP_INVALID)
+    assertEquals(dragged.location.flatMap(_.opIndex), Some(1))
+    assert(
+      dragged.message.startsWith(s"Object 1 (putf): the formula does not parse\n$unterminated\n"),
+      dragged.message
+    )
+
+    val listed =
+      parseError(s"""[{"op":"putf","ref":"A3:A4","values":["=A1*2","$unterminated"]}]""")
+    assertEquals(listed.code, ErrorCode.BATCH_OP_INVALID)
+    assertEquals(listed.location.flatMap(_.opIndex), Some(1))
+    assert(
+      listed.message
+        .startsWith(s"Object 1 (putf) values[1]: the formula does not parse\n$unterminated\n"),
+      listed.message
+    )
+    assert(listed.message.contains("Unexpected end of formula"), listed.message)
+
+    // the `formula` alias walks the same gate
+    val aliased = parseError(s"""[{"op":"putf","ref":"A3","formula":"$unterminated"}]""")
+    assertEquals(aliased.code, ErrorCode.BATCH_OP_INVALID)
+  }
+
+  test("GH-663: batch putf refuses an unknown function with the verb's caret and suggestion") {
+    val error = parseError("""[{"op":"putf","ref":"A3","value":"=FOOBAR(1)"}]""")
+    assertEquals(error.code, ErrorCode.BATCH_OP_INVALID)
+    // the verb's own rendering: formula, caret, reason (ParseError.formatWithContext)
+    val full = "=FOOBAR(1)"
+    val parseFailure = FormulaParser.parse(full).swap.getOrElse(fail("the parser accepted FOOBAR"))
+    val verb = ParseError.formatWithContext(parseFailure, full).split("\n").toList
+    assertEquals(verb.size, 3, verb)
+    // …verbatim on its own lines under the op heading: the renderer prefixes only the first line
+    // with `Error: `, so an indented or shifted caret would land under the wrong character
+    // (PR #679 review)
+    assertEquals(
+      error.message.split("\n").toList,
+      "Object 1 (putf): the formula does not parse" :: verb
+    )
+    assert(verb(2).startsWith("Unknown function 'FOOBAR' at position"), verb(2))
+    assert(verb(2).contains("Did you mean: FLOOR"), verb(2))
+    assertEquals(error.candidates, Vector("FLOOR"))
+  }
+
+  test("GH-663: a parseable putf in every shape still passes, leading '=' optional") {
+    val ok = parseOk(
+      """[{"op":"putf","ref":"A3","value":"SUM(A1:A2)"},
+         {"op":"putf","ref":"B1:B2","value":"=A1*2","from":"B1"},
+         {"op":"putf","ref":"C1:C2","values":["=A1","A2"]}]"""
+    )
+    assertEquals(ok.ops.size, 3)
   }

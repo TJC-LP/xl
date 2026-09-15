@@ -1,8 +1,9 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{ARef, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
@@ -238,4 +239,137 @@ class LoudParityGapsSpec extends FunSuite:
       text.evaluateFormula("""=VALUE("(500)")"""),
       Right(CellValue.Number(BigDecimal(-500)))
     )
+  }
+
+  // ========== GH-662: legacy lookup misses are the typed #N/A ==========
+
+  /**
+   * A3:A7 = 2021..2025 keyed to B3:B7 = 190..238 (VLOOKUP/MATCH); D1:H1 = 2021..2025 over D2:H2 =
+   * 190..238 (HLOOKUP); C3:C7 = 2025..2021, the descending keys MATCH -1 wants.
+   */
+  private val lookups: Sheet =
+    val years = Vector(2021, 2022, 2023, 2024, 2025)
+    val values = Vector(190, 202, 214, 226, 238)
+    years.indices.foldLeft(Sheet("L")) { (s, i) =>
+      s.put(ARef.from0(0, 2 + i), num(years(i)))
+        .put(ARef.from0(1, 2 + i), num(values(i)))
+        .put(ARef.from0(2, 2 + i), num(years(4 - i)))
+        .put(ARef.from0(3 + i, 0), num(years(i)))
+        .put(ARef.from0(3 + i, 1), num(values(i)))
+    }
+
+  /** Every legacy-lookup miss shape: exact and approximate, both axes, MATCH through INDEX. */
+  private val misses: List[String] = List(
+    "VLOOKUP(2030,A3:B7,2,FALSE)",
+    "VLOOKUP(2000,A3:B7,2,TRUE)",
+    "HLOOKUP(2030,D1:H2,2,FALSE)",
+    "HLOOKUP(2000,D1:H2,2,TRUE)",
+    "MATCH(2030,A3:A7,0)",
+    "MATCH(2000,A3:A7,1)",
+    "MATCH(3000,C3:C7,-1)",
+    "INDEX(B3:B7,MATCH(2030,A3:A7,0))"
+  )
+
+  private val na: XLResult[CellValue] = Right(CellValue.Error(CellError.NA))
+
+  private def lookupCase(formula: String, expected: XLResult[CellValue]): Unit =
+    assertEquals(lookups.evaluateFormula(s"=$formula"), expected, formula)
+
+  test("GH-662: a bare lookup miss is the cached #N/A, not a host failure") {
+    misses.foreach(p => lookupCase(p, na))
+  }
+
+  test("GH-662: IFNA sees every lookup miss") {
+    misses.foreach(p => lookupCase(s"IFNA($p,0)", Right(num(0))))
+  }
+
+  test("GH-662: ISNA is TRUE over every lookup miss") {
+    misses.foreach(p => lookupCase(s"ISNA($p)", Right(CellValue.Bool(true))))
+  }
+
+  test("GH-662: ISERR is FALSE over a lookup miss — it is #N/A, the one code ISERR excludes") {
+    misses.foreach(p => lookupCase(s"ISERR($p)", Right(CellValue.Bool(false))))
+  }
+
+  test("GH-662: IFERROR and ISERROR keep trapping the miss") {
+    misses.foreach { p =>
+      lookupCase(s"IFERROR($p,0)", Right(num(0)))
+      lookupCase(s"ISERROR($p)", Right(CellValue.Bool(true)))
+    }
+  }
+
+  test("GH-662: ERROR.TYPE of a lookup miss is 7") {
+    misses.foreach(p => lookupCase(s"ERROR.TYPE($p)", Right(num(7))))
+  }
+
+  test("GH-662: the dogfood cell — IF(ISNA(miss),0,1) is 0, never a cached 1") {
+    misses.foreach(p => lookupCase(s"IF(ISNA($p),0,1)", Right(num(0))))
+  }
+
+  test("GH-662: an unguarded miss absorbs through arithmetic and aggregates as #N/A") {
+    misses.foreach { p =>
+      lookupCase(s"$p+1", na)
+      lookupCase(s"SUM($p)", na)
+    }
+  }
+
+  test("GH-662: LET binds the miss as the #N/A value, so IFNA over the binding fires") {
+    misses.foreach(p => lookupCase(s"LET(v,$p,IFNA(v,0))", Right(num(0))))
+  }
+
+  test("GH-662: a miss in an IF condition stays fatal and promotes at the boundary") {
+    lookupCase("IF(VLOOKUP(2030,A3:B7,2,FALSE)>0,1,2)", na)
+  }
+
+  test("GH-662: hits are untouched") {
+    lookupCase("VLOOKUP(2023,A3:B7,2,FALSE)", Right(num(214)))
+    lookupCase("HLOOKUP(2023,D1:H2,2,FALSE)", Right(num(214)))
+    lookupCase("MATCH(2023,A3:A7,0)", Right(num(3)))
+    lookupCase("INDEX(B3:B7,MATCH(2023,A3:A7,0))", Right(num(214)))
+  }
+
+  test("GH-662: the miss travels the Left channel with the diagnostic as its context") {
+    def leftOf(formula: String): EvalError =
+      FormulaParser.parse(formula) match
+        case Right(expr) =>
+          Evaluator.instance.eval(expr, lookups) match
+            case Left(err) => err
+            case Right(v) => fail(s"$formula: expected a Left, got $v")
+        case Left(err) => fail(s"$formula: $err")
+    leftOf("=VLOOKUP(2030,A3:B7,2,FALSE)") match
+      case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
+        assertEquals(ctx, "VLOOKUP exact match not found: VLOOKUP(2030, A3:B7, 2, false)")
+      case other => fail(s"expected ErrorValue(NA, ctx), got $other")
+    leftOf("=VLOOKUP(2000,A3:B7,2,TRUE)") match
+      case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
+        assertEquals(ctx, "VLOOKUP approximate match not found: VLOOKUP(2000, A3:B7, 2, true)")
+      case other => fail(s"expected ErrorValue(NA, ctx), got $other")
+    leftOf("=HLOOKUP(2030,D1:H2,2,FALSE)") match
+      case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
+        assertEquals(ctx, "HLOOKUP exact match not found: HLOOKUP(2030, D1:H2, 2, false)")
+      case other => fail(s"expected ErrorValue(NA, ctx), got $other")
+    leftOf("=MATCH(2030,A3:A7,0)") match
+      case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
+        assert(ctx.contains("no match found"), ctx)
+        assert(ctx.contains("MATCH(2030, A3:A7, 0)"), ctx)
+      case other => fail(s"expected ErrorValue(NA, ctx), got $other")
+  }
+
+  test("GH-662: array carriage — a miss inside a broadcast IF is #N/A per element, not #VALUE!") {
+    val (out, spilled) = lookups
+      .evaluateArrayFormula("=IF(A3:A4>0,VLOOKUP(2030,A3:B7,2,FALSE),0)", ARef.from0(9, 0))
+      .fold(e => fail(e.toString), identity)
+    assertEquals(spilled.height, 2)
+    spilled.cells.foreach { r =>
+      assertEquals(out(r).value, CellValue.Error(CellError.NA), r.toA1)
+    }
+  }
+
+  test("GH-662: a bare miss as an array formula spills a 1×1 #N/A at the origin") {
+    val origin = ARef.from0(9, 5)
+    val (out, spilled) = lookups
+      .evaluateArrayFormula("=VLOOKUP(2030,A3:B7,2,FALSE)", origin)
+      .fold(e => fail(e.toString), identity)
+    assertEquals(spilled, CellRange(origin, origin))
+    assertEquals(out(origin).value, CellValue.Error(CellError.NA))
   }

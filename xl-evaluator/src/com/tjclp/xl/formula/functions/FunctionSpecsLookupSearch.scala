@@ -109,11 +109,21 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         resolved <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
         (targetSheet, tableRange) = resolved
         result <-
-          if colIndex < 1 || colIndex > tableRange.width then
+          // GH-662: Excel's codes — an index below 1 is #VALUE!, one beyond the table is #REF!
+          if colIndex < 1 then
             Left(
-              EvalError.EvalFailed(
-                s"VLOOKUP: col_index_num $colIndex is outside 1..${tableRange.width}",
-                Some(s"VLOOKUP(…, ${table.toA1})")
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"VLOOKUP: col_index_num $colIndex is below 1: VLOOKUP(…, ${table.toA1})")
+              )
+            )
+          else if colIndex > tableRange.width then
+            Left(
+              EvalError.ErrorValue(
+                CellError.Ref,
+                Some(
+                  s"VLOOKUP: col_index_num $colIndex exceeds the table width ${tableRange.width}: VLOOKUP(…, ${table.toA1})"
+                )
               )
             )
           else
@@ -121,15 +131,6 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             val keyCol0 = tableRange.colStart.index0
             val rowStart0 = tableRange.rowStart.index0
             val resultCol0 = keyCol0 + (colIndex - 1)
-
-            def renderValue(value: ExprValue): String = value match
-              case ExprValue.Text(s) => s
-              case ExprValue.Number(n) => n.toString
-              case ExprValue.Bool(b) => b.toString
-              case ExprValue.Date(d) => d.toString
-              case ExprValue.DateTime(dt) => dt.toString
-              case ExprValue.Cell(cv) => cv.toString
-              case ExprValue.Opaque(other) => other.toString
 
             // GH-488: one lookup plane for MATCH/XLOOKUP/VLOOKUP/HLOOKUP — the inline copy this
             // replaces lacked the DateTime→serial case, so a date key over a date column missed.
@@ -161,7 +162,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                     .map(_._1)
                 }
               else if isTextLookup then
-                val lookupText = renderValue(normalizedLookup).toLowerCase
+                val lookupText = renderLookupValue(normalizedLookup).toLowerCase
                 rowIndices.find { i =>
                   val keyRef = ARef.from0(keyCol0, rowStart0 + i)
                   extractTextForMatch(targetSheet(keyRef).value)
@@ -183,28 +184,16 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                 val resultRef = ARef.from0(resultCol0, rowStart0 + rowIndex)
                 Right(targetSheet(resultRef).value)
               case None =>
+                // GH-662: a miss is Excel's #N/A — IFNA/ISNA-visible, cached when unguarded —
+                // with the diagnostic kept as the error's context for putf/eval error text
+                val mode = if rangeMatch then "approximate" else "exact"
                 Left(
-                  EvalError.EvalFailed(
-                    if rangeMatch then "VLOOKUP approximate match not found"
-                    else "VLOOKUP exact match not found",
-                    Some(
-                      s"VLOOKUP(${renderValue(normalizedLookup)}, ${table.toA1}, $colIndex, $rangeMatch)"
-                    )
+                  lookupNotFound(
+                    s"VLOOKUP $mode match not found: VLOOKUP(${renderLookupValue(normalizedLookup)}, ${table.toA1}, $colIndex, $rangeMatch)"
                   )
                 )
       yield result
     }
-
-  /** Render an ExprValue to text for HLOOKUP text matching / diagnostics. */
-  private def exprValueToText(value: ExprValue): String =
-    value match
-      case ExprValue.Text(s) => s
-      case ExprValue.Number(n) => n.toString
-      case ExprValue.Bool(b) => b.toString
-      case ExprValue.Date(d) => d.toString
-      case ExprValue.DateTime(dt) => dt.toString
-      case ExprValue.Cell(cv) => cv.toString
-      case ExprValue.Opaque(other) => other.toString
 
   /**
    * HLOOKUP(lookup, table, row_index_num, [range_lookup])
@@ -223,11 +212,21 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         resolved <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
         (targetSheet, tableRange) = resolved
         result <-
-          if rowIndex < 1 || rowIndex > tableRange.height then
+          // GH-662: Excel's codes, as VLOOKUP above
+          if rowIndex < 1 then
             Left(
-              EvalError.EvalFailed(
-                s"HLOOKUP: row_index_num $rowIndex is outside 1..${tableRange.height}",
-                Some(s"HLOOKUP(…, ${table.toA1})")
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"HLOOKUP: row_index_num $rowIndex is below 1: HLOOKUP(…, ${table.toA1})")
+              )
+            )
+          else if rowIndex > tableRange.height then
+            Left(
+              EvalError.ErrorValue(
+                CellError.Ref,
+                Some(
+                  s"HLOOKUP: row_index_num $rowIndex exceeds the table height ${tableRange.height}: HLOOKUP(…, ${table.toA1})"
+                )
               )
             )
           else
@@ -260,7 +259,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                   keyedCols.filter(_._2 <= lookup).sortBy(_._2).lastOption.map(_._1)
                 }
               else if isTextLookup then
-                val lookupText = exprValueToText(normalizedLookup).toLowerCase
+                val lookupText = renderLookupValue(normalizedLookup).toLowerCase
                 colIndices.find { i =>
                   val keyRef = ARef.from0(colStart0 + i, keyRow0)
                   extractTextForMatch(targetSheet(keyRef).value).exists(_.toLowerCase == lookupText)
@@ -280,13 +279,11 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
               case Some(colIdx) =>
                 Right(targetSheet(ARef.from0(colStart0 + colIdx, resultRow0)).value)
               case None =>
+                // GH-662: the typed #N/A, as VLOOKUP above
+                val mode = if rangeMatch then "approximate" else "exact"
                 Left(
-                  EvalError.EvalFailed(
-                    if rangeMatch then "HLOOKUP approximate match not found"
-                    else "HLOOKUP exact match not found",
-                    Some(
-                      s"HLOOKUP(${exprValueToText(normalizedLookup)}, ${table.toA1}, $rowIndex, $rangeMatch)"
-                    )
+                  lookupNotFound(
+                    s"HLOOKUP $mode match not found: HLOOKUP(${renderLookupValue(normalizedLookup)}, ${table.toA1}, $rowIndex, $rangeMatch)"
                   )
                 )
       yield result

@@ -3,6 +3,7 @@ package com.tjclp.xl.formula.eval
 import com.tjclp.xl.formula.ast.BindingCoercion
 
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.display.NumFmtFormatter
 import scala.math.BigDecimal
 
 /**
@@ -15,7 +16,8 @@ import scala.math.BigDecimal
  * Each target mirrors the conventions of the corresponding cell decoder (decodeAsString,
  * decodeAsInt, decodeBool, decodeNumeric, decodeAsDate) plus Excel's value coercions where the
  * decoders are stricter than Excel:
- *   - number → text renders via toString (the decodeAsString/concatText convention)
+ *   - number → text renders via numberText (Excel's General text conversion, GH-665 — the
+ *     decodeAsString/concatText convention)
  *   - number → boolean is zero/non-zero (Excel: 0 = FALSE, anything else = TRUE)
  *   - numeric text → number/integer parses ("3" coerces, "abc" is a clean error — Excel #VALUE!)
  *   - fractional → integer TRUNCATES toward zero (Excel truncates months/days/num_chars)
@@ -65,11 +67,17 @@ private[formula] object ScalarCoercion:
    * workbook's date system.
    */
   def dateSerialText(dt: java.time.LocalDateTime): String =
-    BigDecimal(CellValue.dateTimeToExcelSerial(dt))
-      .round(new java.math.MathContext(15))
-      .bigDecimal
-      .stripTrailingZeros
-      .toPlainString
+    numberText(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
+
+  /**
+   * GH-665: the evaluator's single number → text conversion — Excel's width-independent General
+   * text (15 significant digits, trailing zeros stripped, plain up to 20 characters then E
+   * notation), never `BigDecimal.toString`, which carries the stored scale (`<v>2.0</v>` would read
+   * "2.0", `SUM` of scaled cells "1070.0", `1/3` 34 digits). Every implicit coercion (`&`,
+   * CONCATENATE, text-typed arguments, numeric literals in text positions) routes through here; the
+   * rule itself lives in xl-core so TEXT(x,"General") shares it.
+   */
+  def numberText(n: BigDecimal): String = NumFmtFormatter.generalText(n)
 
   /** GH-561: see the LocalDateTime overload — a date-only value is its whole-day serial. */
   def dateSerialText(ld: java.time.LocalDate): String = dateSerialText(ld.atStartOfDay())
@@ -134,8 +142,11 @@ private[formula] object ScalarCoercion:
 
   private def coerceText(label: String, value: Any): Either[EvalError, Any] = value match
     case s: String => Right(s)
-    case bd: BigDecimal => Right(bd.toString)
+    case bd: BigDecimal => Right(numberText(bd))
     case i: Int => Right(i.toString)
+    // the same table concatText keeps: Long/Double runtime values are numbers under the one rule
+    case l: Long => Right(numberText(BigDecimal(l)))
+    case d: Double if d.isFinite => Right(numberText(BigDecimal(d)))
     case b: Boolean => Right(if b then "TRUE" else "FALSE")
     // GH-561: dates render as their Excel serial in text positions
     case ld: java.time.LocalDate => Right(dateSerialText(ld))
