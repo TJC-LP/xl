@@ -122,15 +122,6 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             val rowStart0 = tableRange.rowStart.index0
             val resultCol0 = keyCol0 + (colIndex - 1)
 
-            def renderValue(value: ExprValue): String = value match
-              case ExprValue.Text(s) => s
-              case ExprValue.Number(n) => n.toString
-              case ExprValue.Bool(b) => b.toString
-              case ExprValue.Date(d) => d.toString
-              case ExprValue.DateTime(dt) => dt.toString
-              case ExprValue.Cell(cv) => cv.toString
-              case ExprValue.Opaque(other) => other.toString
-
             // GH-488: one lookup plane for MATCH/XLOOKUP/VLOOKUP/HLOOKUP — the inline copy this
             // replaces lacked the DateTime→serial case, so a date key over a date column missed.
             val normalizedLookup: ExprValue = normalizeLookupValue(lookupValue)
@@ -161,7 +152,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                     .map(_._1)
                 }
               else if isTextLookup then
-                val lookupText = renderValue(normalizedLookup).toLowerCase
+                val lookupText = renderLookupValue(normalizedLookup).toLowerCase
                 rowIndices.find { i =>
                   val keyRef = ARef.from0(keyCol0, rowStart0 + i)
                   extractTextForMatch(targetSheet(keyRef).value)
@@ -183,28 +174,16 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                 val resultRef = ARef.from0(resultCol0, rowStart0 + rowIndex)
                 Right(targetSheet(resultRef).value)
               case None =>
+                // GH-662: a miss is Excel's #N/A — IFNA/ISNA-visible, cached when unguarded —
+                // with the diagnostic kept as the error's context for putf/eval error text
+                val mode = if rangeMatch then "approximate" else "exact"
                 Left(
-                  EvalError.EvalFailed(
-                    if rangeMatch then "VLOOKUP approximate match not found"
-                    else "VLOOKUP exact match not found",
-                    Some(
-                      s"VLOOKUP(${renderValue(normalizedLookup)}, ${table.toA1}, $colIndex, $rangeMatch)"
-                    )
+                  lookupNotFound(
+                    s"VLOOKUP $mode match not found: VLOOKUP(${renderLookupValue(normalizedLookup)}, ${table.toA1}, $colIndex, $rangeMatch)"
                   )
                 )
       yield result
     }
-
-  /** Render an ExprValue to text for HLOOKUP text matching / diagnostics. */
-  private def exprValueToText(value: ExprValue): String =
-    value match
-      case ExprValue.Text(s) => s
-      case ExprValue.Number(n) => n.toString
-      case ExprValue.Bool(b) => b.toString
-      case ExprValue.Date(d) => d.toString
-      case ExprValue.DateTime(dt) => dt.toString
-      case ExprValue.Cell(cv) => cv.toString
-      case ExprValue.Opaque(other) => other.toString
 
   /**
    * HLOOKUP(lookup, table, row_index_num, [range_lookup])
@@ -260,7 +239,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                   keyedCols.filter(_._2 <= lookup).sortBy(_._2).lastOption.map(_._1)
                 }
               else if isTextLookup then
-                val lookupText = exprValueToText(normalizedLookup).toLowerCase
+                val lookupText = renderLookupValue(normalizedLookup).toLowerCase
                 colIndices.find { i =>
                   val keyRef = ARef.from0(colStart0 + i, keyRow0)
                   extractTextForMatch(targetSheet(keyRef).value).exists(_.toLowerCase == lookupText)
@@ -280,13 +259,11 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
               case Some(colIdx) =>
                 Right(targetSheet(ARef.from0(colStart0 + colIdx, resultRow0)).value)
               case None =>
+                // GH-662: the typed #N/A, as VLOOKUP above
+                val mode = if rangeMatch then "approximate" else "exact"
                 Left(
-                  EvalError.EvalFailed(
-                    if rangeMatch then "HLOOKUP approximate match not found"
-                    else "HLOOKUP exact match not found",
-                    Some(
-                      s"HLOOKUP(${exprValueToText(normalizedLookup)}, ${table.toA1}, $rowIndex, $rangeMatch)"
-                    )
+                  lookupNotFound(
+                    s"HLOOKUP $mode match not found: HLOOKUP(${renderLookupValue(normalizedLookup)}, ${table.toA1}, $rowIndex, $rangeMatch)"
                   )
                 )
       yield result

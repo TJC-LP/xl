@@ -2,7 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
 import com.tjclp.xl.workbooks.Workbook
@@ -569,10 +569,13 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
       TExpr.Lit(false) // Exact match
     )
 
+    // GH-662: the miss is the typed #N/A on the Left channel; the diagnostic is its context
     val err = evalErr(expr, sheet)
     err match
-      case EvalError.EvalFailed(reason, _) => assert(reason.contains("exact match not found"))
-      case other => fail(s"Expected EvalFailed, got $other")
+      case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
+        assert(ctx.contains("exact match not found"), ctx)
+        assert(ctx.contains("VLOOKUP(999, A1:B1, 2, false)"), ctx)
+      case other => fail(s"Expected ErrorValue(NA, ctx), got $other")
   }
 
   test("VLOOKUP: approximate match not found") {
@@ -591,8 +594,10 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val err = evalErr(expr, sheet)
     err match
-      case EvalError.EvalFailed(reason, _) => assert(reason.contains("approximate match not found"))
-      case other => fail(s"Expected EvalFailed, got $other")
+      case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
+        assert(ctx.contains("approximate match not found"), ctx)
+        assert(ctx.contains("VLOOKUP(50, A1:B1, 2, true)"), ctx)
+      case other => fail(s"Expected ErrorValue(NA, ctx), got $other")
   }
 
   test("VLOOKUP: ignores non-numeric keys for numeric lookup") {

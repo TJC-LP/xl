@@ -2,7 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
 import munit.ScalaCheckSuite
@@ -943,9 +943,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
       ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)), // A2
       ARef.from0(0, 2) -> CellValue.Number(BigDecimal(30)) // A3
     )
-    sheet.evaluateFormula("=MATCH(25, A1:A3, 0)") match
-      case Left(error) => assert(error.toString.contains("#N/A"))
-      case other => fail(s"Expected #N/A error, got $other")
+    // GH-662: the miss is Excel's #N/A VALUE at the boundary, no longer a host failure
+    assertEquals(
+      sheet.evaluateFormula("=MATCH(25, A1:A3, 0)"),
+      Right(CellValue.Error(CellError.NA))
+    )
   }
 
   test("MATCH: approximate match (match_type=1) finds largest <= lookup") {
