@@ -689,7 +689,11 @@ class TypeCoercionSpec extends FunSuite:
       "=IF(SUM(A1:A2), 1, 2)",
       "=LEFT(\"hello\", SUM(A1:A2))",
       "=YEAR(NOW())",
-      "=SQRT(LEFT(\"16ab\", 2))"
+      "=SQRT(LEFT(\"16ab\", 2))",
+      // GH-665: numeric literals in text positions are Coerced, not folded to quoted strings
+      "=2.50&\"\"",
+      "=2&3",
+      "=A1&2.50"
     )
     formulas.foreach { f =>
       FormulaParser.parse(f) match

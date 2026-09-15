@@ -153,6 +153,30 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(ops)
   }
 
+  test("GH-665: a `&` label over a scaled number caches Excel's General text, not the scale") {
+    // A batch-JSON `1070` lands as <v>1070.0</v>; the label must cache "Total 1070" (Excel), not
+    // "Total 1070.0" (BigDecimal.toString) — cache readers and `view` never recompute it.
+    val wb = Workbook(Sheet("Data").put(ref"B1", CellValue.Number(BigDecimal("1070.0"))))
+    val out = tempXlsx()
+    WriteCommands
+      .putFormula(wb, wb.sheets.headOption, "C1", List("=\"Total \"&B1"), out, config)
+      .unsafeRunSync()
+
+    assertEquals(cachedFormulaValue(readBack(out), 2, 0), Some(CellValue.Text("Total 1070")))
+    val sheetXml =
+      new String(zipEntryBytes(out, "xl/worksheets/sheet1.xml"), StandardCharsets.UTF_8)
+    assert(sheetXml.contains("<v>Total 1070</v>"), s"cached text in the part: $sheetXml")
+    // B1 itself still stores <v>1070.0</v> (the value writer keeps every digit); only the label's
+    // cached TEXT must not carry the scale
+    assert(!sheetXml.contains("Total 1070.0"), s"the scale leaked into the cached text: $sheetXml")
+
+    val view = CliHarness.run("-f", out.toString, "view", "C1", "--eval").unsafeRunSync()
+    assertEquals(view.exit, 0, view.stderr)
+    assert(view.stdout.contains("Total 1070"), s"view --eval: ${view.stdout}")
+    assert(!view.stdout.contains("1070.0"), s"view --eval shows the scale: ${view.stdout}")
+    Files.deleteIfExists(out)
+  }
+
   test("batch putf and single-op putf converge on the same cached value") {
     val wb = Workbook(Sheet("Data").put(ARef.from0(0, 0), CellValue.Number(BigDecimal(5))))
 

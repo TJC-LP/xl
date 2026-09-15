@@ -15,6 +15,8 @@ import com.tjclp.xl.{Sheet, Workbook, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
+import com.tjclp.xl.formula.eval.SheetEvaluator.*
+import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.WriterConfig
 
@@ -166,6 +168,50 @@ class LibreOfficeOracleSpec extends FunSuite:
       assertEquals(cellB(18), "#N/A", "B18: the unguarded miss displays as #N/A")
       assertEquals(cellB(19), "0", "B19: IF(ISNA(miss),0,1) displays 0")
       assertEquals(cellB(20), "0", "B20: IFNA(MATCH(miss),0) displays 0")
+    finally
+      Files.walk(workDir).iterator().asScala.toList.reverse.foreach(p => Files.deleteIfExists(p))
+  }
+
+  /**
+   * GH-665: LibreOffice computes the number → text conversion of `&` for the formulas xl leaves
+   * UNCACHED, so its CSV is the oracle for the plain range only. LibreOffice's own conversion
+   * (`rtl_math_StringFormat_Automatic`) pads exponents to three digits and switches to E notation
+   * near 1E16, unlike Excel's 20-character rule, so the threshold rows (`1E20`, `1E-16`, `0.00001`)
+   * are deliberately NOT asserted here — they are pinned against Excel-verified POI rows in
+   * xl-core's GeneralTextSpec.
+   */
+  test("GH-665: LibreOffice agrees with xl's `&` number → text on the plain range") {
+    assume(soffice.isDefined, "soffice not on PATH - skipping LibreOffice oracle test")
+    val workDir = Files.createTempDirectory("xl-lo-oracle-665")
+    val book = workDir.resolve("number-text.xlsx")
+    try
+      val wb = Workbook(
+        Sheet("Sheet1")
+          .put(ref"A1", CellValue.Number(BigDecimal("2.0")))
+          .put(ref"A2", CellValue.Number(BigDecimal("3.0")))
+          .put(ref"A3", CellValue.Number(BigDecimal("5.00")))
+          .put(ref"B1", CellValue.Formula("A1&\"\"", None))
+          .put(ref"B2", CellValue.Formula("A1*(A2+A3)&\" x\"", None))
+          .put(ref"B3", CellValue.Formula("1/3&\"\"", None))
+          .put(ref"B4", CellValue.Formula("2.50&\"\"", None))
+      )
+      ExcelIO.instance[IO].write(wb, book).unsafeRunSync()
+
+      val expected = List("2", "16 x", "0.333333333333333", "2.5")
+      val xlValues = List("=A1&\"\"", "=A1*(A2+A3)&\" x\"", "=1/3&\"\"", "=2.50&\"\"").map { f =>
+        wb.sheets.headOption.map(_.evaluateFormula(f)) match
+          case Some(Right(CellValue.Text(t))) => t
+          case other => fail(s"premise: $f evaluates to text in xl, got $other")
+      }
+      assertEquals(xlValues, expected, "premise: xl renders the plain range as Excel does")
+
+      val csv = libreOfficeCsv(workDir, book)("number-text")
+      val loColumnB = csv.linesIterator.toList.map(_.split(",", -1).lift(1).getOrElse(""))
+      assertEquals(
+        loColumnB,
+        expected,
+        s"LibreOffice must render the plain range exactly as xl does; csv:\n$csv"
+      )
     finally
       Files.walk(workDir).iterator().asScala.toList.reverse.foreach(p => Files.deleteIfExists(p))
   }

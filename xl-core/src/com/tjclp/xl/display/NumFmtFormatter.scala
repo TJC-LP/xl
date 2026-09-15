@@ -95,10 +95,85 @@ object NumFmtFormatter:
           case None => formatGeneral(n) // unreachable: the map covers every such variant
 
   /** ECMA-376 §18.8.30: the whole-code "General" keyword, matched case-insensitively. */
-  private def isGeneralCode(code: String): Boolean = code.equalsIgnoreCase("General")
+  def isGeneralCode(code: String): Boolean = code.equalsIgnoreCase("General")
+
+  /** Significant digits Excel keeps when a number becomes text (GH-665). */
+  val GeneralTextDigits: Int = 15
 
   /**
-   * Format in General style (Excel's default number format).
+   * Longest unsigned plain (non-E) rendering Excel's text conversion produces (GH-665): up to 20
+   * integer digits, or `0.` plus leading zeros plus significant digits within 20 characters;
+   * anything longer switches to E notation. The sign is never counted.
+   */
+  val GeneralTextMaxLength: Int = 20
+
+  /**
+   * Excel's width-independent number → text conversion (GH-665): the rule behind `&`, CONCATENATE,
+   * text-typed function arguments, TEXT(x,"General") and the formula bar. NOT the column-width
+   * cell-display General ([[formatGeneral]], what a cell shows on screen).
+   *
+   * The rule (Excel-verified via Apache POI's NumberToTextConverter):
+   *   - zero of any scale or sign is "0"
+   *   - round to [[GeneralTextDigits]] significant digits (HALF_UP), strip trailing zeros
+   *   - |n| ≥ 1: plain while the integer part has at most [[GeneralTextMaxLength]] digits
+   *     (`1E19` → `10000000000000000000`, `1E20` → `1E+20`)
+   *   - |n| < 1: plain while `0.` + leading zeros + significant digits fits in
+   *     [[GeneralTextMaxLength]] characters (`0.000123456789012346` stays plain at exactly 20;
+   *     `0.000012345678901234568` → `1.23456789012346E-05`; `1E-16` → `0.0000000000000001`)
+   *   - E form: mantissa with the decimal point only when more than one digit remains, exponent
+   *     signed and zero-padded to at least two digits (`1E+20`, `9.5367431640625E-07`, `1E-100`)
+   *
+   * Output grammar: `-?[0-9]+(\.[0-9]+)?(E[+-][0-9]{2,})?`, bounded length (`1E+1000000` renders as
+   * itself, never as a million zeros). Pure BigDecimal arithmetic: no Double, no Locale. Note that
+   * LibreOffice's `&` conversion diverges (three-digit exponents, E notation from about 1E16), so
+   * it is an oracle only for the plain range.
+   */
+  def generalText(n: BigDecimal): String =
+    if n.signum == 0 then "0"
+    else
+      val rounded = n.bigDecimal
+        .round(new java.math.MathContext(GeneralTextDigits, java.math.RoundingMode.HALF_UP))
+        .stripTrailingZeros
+      val a = rounded.abs
+      val digits = a.unscaledValue.toString
+      val sig = digits.length
+      val exp = a.precision - a.scale - 1 // adjusted exponent: 1234.5 → 3, 0.0012 → -3
+      val plain =
+        if exp >= 0 then exp <= GeneralTextMaxLength - 1
+        else 2 + (-exp - 1) + sig <= GeneralTextMaxLength
+      val body =
+        if plain then a.toPlainString
+        else
+          val mantissa =
+            if sig == 1 then digits else digits.substring(0, 1) + "." + digits.substring(1)
+          val absExp = math.abs(exp)
+          val expDigits = if absExp < 10 then s"0$absExp" else absExp.toString
+          val expSign = if exp < 0 then "-" else "+"
+          s"${mantissa}E$expSign$expDigits"
+      if rounded.signum < 0 then "-" + body else body
+
+  /**
+   * Whole-value form of [[generalText]] (GH-665): Number → the rule; DateTime → its Excel serial
+   * through the rule (GH-561: dates are numbers in text positions); Bool → TRUE/FALSE; Text →
+   * itself; RichText → plain text; Empty → ""; Error → its Excel code; Formula → its cached value
+   * through this same table, "" when uncached.
+   */
+  def generalText(value: CellValue): String =
+    value match
+      case CellValue.Number(n) => generalText(n)
+      case CellValue.DateTime(dt) => generalText(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
+      case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
+      case CellValue.Text(s) => s
+      case CellValue.RichText(rt) => rt.toPlainText
+      case CellValue.Empty => ""
+      case CellValue.Error(err) => formatError(err)
+      case CellValue.Formula(_, Some(cached), _) => generalText(cached)
+      case CellValue.Formula(_, None, _) => ""
+
+  /**
+   * Format in General style for CELL DISPLAY (Excel's default number format as a column-width
+   * approximation). Width-dependent: this is what a cell shows on screen, not what a number becomes
+   * as text — text conversion (`&`, CONCATENATE, TEXT(x,"General")) is [[generalText]].
    *
    * Rules:
    *   - Integers: No decimal point
