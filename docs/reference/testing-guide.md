@@ -226,7 +226,7 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of the wave 29 review fixes (2026-09-14), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; the subprocess smokes ran successfully in this verification.
+As of wave 30 (2026-09-15), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; the subprocess smokes ran successfully in this verification.
 
 | Module | Tests |
 |--------|-------|

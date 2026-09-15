@@ -144,6 +144,9 @@ private[formula] object ScalarCoercion:
     case s: String => Right(s)
     case bd: BigDecimal => Right(numberText(bd))
     case i: Int => Right(i.toString)
+    // the same table concatText keeps: Long/Double runtime values are numbers under the one rule
+    case l: Long => Right(numberText(BigDecimal(l)))
+    case d: Double if d.isFinite => Right(numberText(BigDecimal(d)))
     case b: Boolean => Right(if b then "TRUE" else "FALSE")
     // GH-561: dates render as their Excel serial in text positions
     case ld: java.time.LocalDate => Right(dateSerialText(ld))
