@@ -171,6 +171,13 @@ object NumFmtFormatter:
       case CellValue.Formula(_, None, _) => ""
 
   /**
+   * The `General` keyword token inside a custom section (GH-666) renders through the CELL DISPLAY
+   * General ([[formatGeneral]]), so `General"A"` and the whole-code path share one definition. Not
+   * [[generalText]], which is the text-conversion rule (`&`, CONCATENATE).
+   */
+  private[display] def generalDisplay(n: BigDecimal): String = formatGeneral(n)
+
+  /**
    * Format in General style for CELL DISPLAY (Excel's default number format as a column-width
    * approximation). Width-dependent: this is what a cell shows on screen, not what a number becomes
    * as text — text conversion (`&`, CONCATENATE, TEXT(x,"General")) is [[generalText]].
