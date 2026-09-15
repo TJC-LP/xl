@@ -543,17 +543,29 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
       ARef.from0(1, 0) -> CellValue.Number(BigDecimal("10"))
     )
 
-    val expr = TExpr.vlookup(
-      TExpr.Lit(BigDecimal("100")),
-      CellRange.parse("A1:B1").getOrElse(fail("Invalid range")),
-      TExpr.Lit(5), // Out of range (only 2 columns)
-      TExpr.Lit(false)
+    val table = CellRange.parse("A1:B1").getOrElse(fail("Invalid range"))
+    // GH-662: Excel's codes — beyond the table is #REF!, below 1 is #VALUE!
+    val beyond = TExpr.vlookup(TExpr.Lit(BigDecimal("100")), table, TExpr.Lit(5), TExpr.Lit(false))
+    evalErr(beyond, sheet) match
+      case EvalError.ErrorValue(CellError.Ref, Some(ctx)) => assert(ctx.contains("5"), ctx)
+      case other => fail(s"Expected ErrorValue(Ref, ctx), got $other")
+    val below = TExpr.vlookup(TExpr.Lit(BigDecimal("100")), table, TExpr.Lit(0), TExpr.Lit(false))
+    evalErr(below, sheet) match
+      case EvalError.ErrorValue(CellError.Value, Some(ctx)) => assert(ctx.contains("0"), ctx)
+      case other => fail(s"Expected ErrorValue(Value, ctx), got $other")
+    // and at the boundary they are cached error values, catchable by IFERROR
+    assertEquals(
+      sheet.evaluateFormula("=VLOOKUP(100,A1:B1,5,FALSE)"),
+      Right(CellValue.Error(CellError.Ref))
     )
-
-    val err = evalErr(expr, sheet)
-    err match
-      case EvalError.EvalFailed(reason, _) => assert(reason.contains("outside"))
-      case other => fail(s"Expected EvalFailed, got $other")
+    assertEquals(
+      sheet.evaluateFormula("=HLOOKUP(100,A1:B1,0,FALSE)"),
+      Right(CellValue.Error(CellError.Value))
+    )
+    assertEquals(
+      sheet.evaluateFormula("=HLOOKUP(100,A1:B1,3,FALSE)"),
+      Right(CellValue.Error(CellError.Ref))
+    )
   }
 
   test("VLOOKUP: exact match not found") {

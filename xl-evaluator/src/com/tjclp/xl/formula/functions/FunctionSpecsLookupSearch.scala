@@ -109,11 +109,21 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         resolved <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
         (targetSheet, tableRange) = resolved
         result <-
-          if colIndex < 1 || colIndex > tableRange.width then
+          // GH-662: Excel's codes — an index below 1 is #VALUE!, one beyond the table is #REF!
+          if colIndex < 1 then
             Left(
-              EvalError.EvalFailed(
-                s"VLOOKUP: col_index_num $colIndex is outside 1..${tableRange.width}",
-                Some(s"VLOOKUP(…, ${table.toA1})")
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"VLOOKUP: col_index_num $colIndex is below 1: VLOOKUP(…, ${table.toA1})")
+              )
+            )
+          else if colIndex > tableRange.width then
+            Left(
+              EvalError.ErrorValue(
+                CellError.Ref,
+                Some(
+                  s"VLOOKUP: col_index_num $colIndex exceeds the table width ${tableRange.width}: VLOOKUP(…, ${table.toA1})"
+                )
               )
             )
           else
@@ -202,11 +212,21 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         resolved <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
         (targetSheet, tableRange) = resolved
         result <-
-          if rowIndex < 1 || rowIndex > tableRange.height then
+          // GH-662: Excel's codes, as VLOOKUP above
+          if rowIndex < 1 then
             Left(
-              EvalError.EvalFailed(
-                s"HLOOKUP: row_index_num $rowIndex is outside 1..${tableRange.height}",
-                Some(s"HLOOKUP(…, ${table.toA1})")
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"HLOOKUP: row_index_num $rowIndex is below 1: HLOOKUP(…, ${table.toA1})")
+              )
+            )
+          else if rowIndex > tableRange.height then
+            Left(
+              EvalError.ErrorValue(
+                CellError.Ref,
+                Some(
+                  s"HLOOKUP: row_index_num $rowIndex exceeds the table height ${tableRange.height}: HLOOKUP(…, ${table.toA1})"
+                )
               )
             )
           else
