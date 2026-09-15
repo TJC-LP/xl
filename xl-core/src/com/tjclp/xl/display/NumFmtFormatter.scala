@@ -137,17 +137,21 @@ object NumFmtFormatter:
       val a = rounded.abs
       val digits = a.unscaledValue.toString
       val sig = digits.length
-      val exp = a.precision - a.scale - 1 // adjusted exponent: 1234.5 → 3, 0.0012 → -3
+      // adjusted exponent: 1234.5 → 3, 0.0012 → -3. In Long: a scale near Int.MaxValue
+      // (`1E-2147483647`) overflowed the Int length sum below to a negative, chose the plain form
+      // and asked toPlainString for two billion zeros (PR #679 review) — every step is Long and
+      // toPlainString is reached only once the length is proven to fit.
+      val exp: Long = a.precision.toLong - a.scale.toLong - 1L
       val plain =
-        if exp >= 0 then exp <= GeneralTextMaxLength - 1
-        else 2 + (-exp - 1) + sig <= GeneralTextMaxLength
+        if exp >= 0 then exp <= GeneralTextMaxLength - 1L
+        else 2L + (-exp - 1L) + sig.toLong <= GeneralTextMaxLength.toLong
       val body =
         if plain then a.toPlainString
         else
           val mantissa =
             if sig == 1 then digits else digits.substring(0, 1) + "." + digits.substring(1)
           val absExp = math.abs(exp)
-          val expDigits = if absExp < 10 then s"0$absExp" else absExp.toString
+          val expDigits = if absExp < 10L then s"0$absExp" else absExp.toString
           val expSign = if exp < 0 then "-" else "+"
           s"${mantissa}E$expSign$expDigits"
       if rounded.signum < 0 then "-" + body else body

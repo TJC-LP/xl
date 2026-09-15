@@ -1833,8 +1833,9 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
 - **`formula-leading-equals`** — `<f>` text stored with the display form's leading `=`
   (non-spec; strict readers like openpyxl misread it — re-writing the file with xl heals it)
 - **`formula-unparseable`** — a cell `<f>` whose text the formula parser is certain no Excel
-  dialect accepts: it ends before the expression does (`SUM(A1:A2`, `A1+`, an unterminated
-  string), a `]` or `}` closes a `(` (`(A1]`), or it exceeds Excel's 8192-character limit —
+  dialect accepts: the text itself ends early (an open `(`, `{` or `[` as in `SUM(A1:A2`, an
+  unterminated string or quoted sheet name, a trailing operator as in `A1+` or `A1:`), a `]` or
+  `}` closes a `(` (`(A1]`), or it exceeds Excel's 8192-character limit —
   Excel shows the repair prompt on open and drops the formula. Nesting is not judged: the
   parser's 128-level depth budget counts every chained operator segment, so a flat 130-term
   `B2+B3+…` chain Excel opens intact fails it while a 100-deep nest passes (it bounds the parser,
@@ -1847,7 +1848,9 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
   and a wrong closer after a complete expression (`SUM(A1:A2]`), which the parser reports as an
   unexpected character even though Excel repairs both, and a `,` or space inside parentheses
   (`SUM((A1,A2))`, `(A1:B2 B1:C2)`: Excel's union and intersection reference operators, which the
-  parser does not implement — valid Excel, evaluated by LibreOffice, never a repair).
+  parser does not implement — valid Excel, evaluated by LibreOffice, never a repair), and a
+  complete text the parser cannot finish (`NOT`, a legal defined name the parser reads as its
+  prefix operator): truncation is judged from the text, never from the diagnostic class alone.
   Shared-formula dependents (empty `<f>`) and data-table records are never judged. xl's own
   writers cannot produce the class: `putf` and every batch `putf` shape (`value`, `values`,
   `from`) parse the formula before writing, `--dry-run` included

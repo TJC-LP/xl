@@ -106,6 +106,22 @@ class GeneralTextSpec extends ScalaCheckSuite:
     pin("46023" -> "46023", "46023.5" -> "46023.5", "2958465.99999999" -> "2958465.99999999")
   }
 
+  test("extreme scales stay in E form: no Int overflow chooses the plain form (PR #679 review)") {
+    // scale = Int.MaxValue: the Int sum `2 + (-exp - 1) + sig` wrapped negative, passed the
+    // `<= 20` test and toPlainString tried to build two billion zeros (OutOfMemoryError)
+    pin(
+      "1E-2147483647" -> "1E-2147483647",
+      "-1E-2147483647" -> "-1E-2147483647",
+      "123E-2147483647" -> "1.23E-2147483645",
+      "1E+2147483647" -> "1E+2147483647",
+      "1.5E+2147483646" -> "1.5E+2147483646"
+    )
+    // scale = Int.MinValue: 1E+2147483648 cannot even be spelled as a literal
+    val minScale = BigDecimal(new java.math.BigDecimal(java.math.BigInteger.ONE, Int.MinValue))
+    assertEquals(NumFmtFormatter.generalText(minScale), "1E+2147483648")
+    assertEquals(NumFmtFormatter.generalText(-minScale), "-1E+2147483648")
+  }
+
   test("absurd magnitude stays bounded: E form, never a million zeros") {
     pin(
       "1E-100" -> "1E-100",

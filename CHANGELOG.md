@@ -18,8 +18,10 @@ and the skill drift the dogfood read (#668).
 ### Added
 
 - **`xl lint` gains `formula-unparseable`** (#663): a repair-tier finding for a `<f>` whose text
-  the parser refuses in the classes Excel certainly repairs — an unterminated string or formula,
-  a `]` or `}` closing a `(`, more than 8192 characters. Nesting is not judged: the parser's
+  the parser refuses in the classes Excel certainly repairs — a text that ends early by its own
+  shape (an open `(`, an unterminated string or sheet name, a trailing operator), a `]` or `}`
+  closing a `(`, more than 8192 characters. A complete text the parser cannot finish (`NOT`, a
+  legal defined name read as its prefix operator) is not a finding. Nesting is not judged: the parser's
   128-level depth budget counts every chained operator segment, so a flat 130-term `B2+B3+…`
   chain Excel opens intact fails it while a 100-deep nest passes (PR #679 review; the parser
   side is #680). One finding per sheet names the

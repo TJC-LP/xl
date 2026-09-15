@@ -30,16 +30,61 @@ object LintCommands:
    * operators, which the parser does not implement). The parser reports ANY character but `)` after
    * a parenthesized expression as an `UnbalancedDelimiter`, so that class is a finding only when
    * the character is a `]` or `}`; a `,`, a space or a reference character there is a grammar gap,
-   * not a certain repair.
+   * not a certain repair. Likewise an `UnexpectedEOF` is a finding only when the TEXT shows the
+   * truncation — an open `(`, `{` or `[`, an unterminated `"…"` or `'…'`, a trailing operator
+   * (`A1+`, `A1:`, `Sheet1!`): the parser also reports it for a complete text its grammar cannot
+   * finish, such as the bare word `NOT` (a legal defined name Excel resolves, read here as the
+   * prefix operator awaiting its operand; PR #679 review) — a grammar gap, not a repair.
    */
   val formulaCheck: WorkbookLint.FormulaCheck = text =>
     FormulaParser.parse(s"=$text") match
       case Right(_) => None
-      case Left(err @ (_: ParseError.UnexpectedEOF | _: ParseError.FormulaTooLong)) =>
+      case Left(err: ParseError.UnexpectedEOF) if certainTruncation(text) =>
         Some(ParseError.describe(err))
+      case Left(err: ParseError.FormulaTooLong) => Some(ParseError.describe(err))
       case Left(err @ ParseError.UnbalancedDelimiter(_, ']' | '}', _)) =>
         Some(ParseError.describe(err))
       case Left(_) => None
+
+  /** The scan state of [[certainTruncation]]: which quote is open, how many groups, last token. */
+  private final case class TruncationScan(
+    quote: Option[Char],
+    quoteJustClosed: Boolean,
+    depth: Int,
+    last: Char
+  )
+
+  /**
+   * Does the formula TEXT itself show that it ends early? True when a `(`, `{` or `[` is still
+   * open, a `"…"` string or `'…'` sheet name is unterminated (`""` and `''` are the escapes), or
+   * the last non-blank character outside quotes is one Excel never ends a formula with — a binary
+   * operator, a range or sheet separator, an argument comma or an open paren. A complete text the
+   * parser merely cannot finish (`NOT`, a name spelled like its prefix operator) is not a
+   * truncation.
+   */
+  private[cli] def certainTruncation(text: String): Boolean =
+    val end = text.foldLeft(TruncationScan(None, false, 0, ' ')) { (st, c) =>
+      st.quote match
+        case Some(q) =>
+          if c == q then st.copy(quote = None, quoteJustClosed = true) else st
+        case None =>
+          if st.quoteJustClosed && c == st.last && (c == '"' || c == '\'') then
+            // the closing quote was the first half of an escaped pair: still inside the literal
+            st.copy(quote = Some(c), quoteJustClosed = false)
+          else
+            val base = st.copy(quoteJustClosed = false)
+            c match
+              case '"' | '\'' => base.copy(quote = Some(c), last = c)
+              case '(' | '{' | '[' => base.copy(depth = base.depth + 1, last = c)
+              case ')' | '}' | ']' => base.copy(depth = base.depth - 1, last = c)
+              case ' ' | '\t' | '\n' | '\r' => base
+              case other => base.copy(last = other)
+    }
+    end.quote.isDefined || end.depth > 0 || TrailingOperators.contains(end.last)
+
+  /** A formula cannot end on one of these outside quotes; `(` is covered by the depth count too. */
+  private val TrailingOperators: Set[Char] =
+    Set('+', '-', '*', '/', '^', '&', '=', '<', '>', ',', ':', '!', '(')
 
   /** The findings that fail the gate: every repair, plus the hygiene tier under `--strict`. */
   def gating(findings: Vector[Finding], strict: Boolean): Vector[Finding] =

@@ -640,7 +640,13 @@ class LintCommandSpec extends CatsEffectSuite:
     val flatChain = (2 to 131).map(i => s"B$i").mkString("+")
     val flatConcat = (1 to 130).map(i => s"A$i").mkString("&")
     val deepNest = "SUM(" * 130 + "1" + ")" * 130
+    // Nor may a complete text the parser merely cannot finish: `NOT` is a legal defined name Excel
+    // resolves, but the parser reads the word as its prefix operator and reports UnexpectedEOF —
+    // the oracle judges truncation from the text, not from the diagnostic class (PR #679 review).
     val texts = Vector(
+      "NOT",
+      "not",
+      "NOT ",
       flatChain,
       flatConcat,
       deepNest,
@@ -673,7 +679,8 @@ class LintCommandSpec extends CatsEffectSuite:
     // readable line, not echo the formula. The parser's depth budget is NOT an arm (see the
     // "not repairs either" test: it refuses flat chains Excel opens).
     val tooLong = "1+" * 4500 + "1"
-    val texts = Vector("\"abc", "(A1]", "(A1}", "A1+", "SUM((A1)", tooLong)
+    // (`A1:` is an InvalidCellRef to the parser, not an EOF, so it is audit's, not lint's)
+    val texts = Vector("\"abc", "(A1]", "(A1}", "A1+", "SUM((A1)", tooLong, "'Sheet 1")
     for
       paths <- IO(texts.map(formulaZip))
       findings <- IO(paths.map(unparseableFindings(_)))
@@ -695,6 +702,43 @@ class LintCommandSpec extends CatsEffectSuite:
         findings(5)
       )
       assert(findings(5).head.message.contains(s"<f>${tooLong.take(80)}…</f>"), findings(5))
+  }
+
+  test("PR #679 review: certainTruncation reads the text, not the parser's diagnostic") {
+    val truncated = Vector(
+      "SUM(A1:A2",
+      "\"abc",
+      "A1+",
+      "A1:",
+      "Sheet1!",
+      "IF(A1,\"x\",",
+      "{1,2",
+      "Table1[Col",
+      "'Rev (Q1",
+      "\"a\"\"b",
+      "SUM((A1)",
+      "A1&",
+      "A1=",
+      "A1<"
+    )
+    val complete = Vector(
+      "NOT",
+      "NOT ",
+      "TotalRev",
+      "\"a(b\"",
+      "'P&L (adj)'!A1",
+      "\"a\"\"b\"",
+      "SUM(A1:A2)",
+      "A1%",
+      "A1#",
+      "{1,2;3,4}",
+      "''",
+      "\"\"",
+      "SUM((A1,A2))",
+      "(A1:B2 B1:C2)"
+    )
+    truncated.foreach(t => assert(LintCommands.certainTruncation(t), s"should be truncated: $t"))
+    complete.foreach(t => assert(!LintCommands.certainTruncation(t), s"should be complete: $t"))
   }
 
   test("GH-663: every real-file fixture in the repo lints free of formula-unparseable") {
