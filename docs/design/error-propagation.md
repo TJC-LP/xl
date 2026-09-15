@@ -67,6 +67,12 @@ host failures keep the loud `LET binding 'x': …` wrap.
   domains, MOD zero divisor, LARGE/SMALL/PERCENTILE/QUARTILE domains, RANK not-found,
   RANDBETWEEN inverted bounds, RATE/IRR/XIRR non-convergence.
 - SUMPRODUCT dimension mismatch → `ErrorValue(Value)` (exact-dimension enforcement, Excel).
+- Lookup misses (GH-662): VLOOKUP/HLOOKUP/MATCH, exact and approximate, raise `#N/A` through
+  `FunctionSpecsBase.lookupNotFound` (Left channel, forced by MATCH's `FunctionSpec[BigDecimal]`;
+  the diagnostic is the error's context and is dropped at the CellValue boundary). XLOOKUP and
+  `NA()` stay on the value channel; the lookup-miss law below pins the two as indistinguishable.
+  VLOOKUP/HLOOKUP index below 1 → `#VALUE!`, beyond the table → `#REF!`. LOOKUP/XMATCH, when
+  added, must raise through `lookupNotFound`.
 
 ## Broadcast totality (item 4b)
 
@@ -110,9 +116,11 @@ until the named follow-ups land.
 ## Named follow-ups (deliberately out of scope)
 
 `TypeMismatch → #VALUE!` boundary demotion (`="abc"+1`); `#NAME?` for unknown functions (needs
-a structural case); lookup no-match → `ErrorValue(NA)` migration; CriteriaMatcher
-error-criteria semantics; AND/OR raw-range text/blank skip parity (GH-338); parser
-error-literal tokens (`=#N/A`); `AGGREGATE()`/`NA()`/`ERROR.TYPE`; xl-agent items 7–9 of #344.
+a structural case); CriteriaMatcher error-criteria semantics; AND/OR raw-range text/blank skip
+parity (GH-338); parser error-literal tokens (`=#N/A`); `AGGREGATE()`; xl-agent items 7–9 of
+#344; lookup/text error-code parity (an error-typed `lookup_value` propagating its own code,
+`FIND` miss → `#VALUE!`, MATCH match_type sign coercion, migrating XLOOKUP/`NA()` to the Left
+channel).
 
 ## Laws (ErrorValueLawsSpec)
 
@@ -124,3 +132,7 @@ error-literal tokens (`=#N/A`); `AGGREGATE()`/`NA()`/`ERROR.TYPE`; xl-agent item
 - **L4**: `Aggregate(id, r) ≡ Call(spec, r)`, including error policy.
 - **L5 broadcast totality**: never Left; beyond-extent positions are exactly the `#N/A` pads.
 - **L6**: `decodeBool ≡ coerceBool ≡ conditionTruthy` on text inputs.
+- **Lookup-miss law (GH-662)**: ∀ misses m of VLOOKUP/HLOOKUP/MATCH/INDEX∘MATCH, exact and
+  approximate, and ∀ guards G ∈ {IFNA, ISNA, ISERR, ISERROR, IFERROR, ERROR.TYPE, IF∘ISNA, `+1`,
+  LET∘IFNA}: `G(m) = G(NA()) = G(XLOOKUP miss)`; and `m` itself is `Right(Error(NA))` at the
+  boundary.

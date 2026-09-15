@@ -157,7 +157,8 @@ unless `order` is non-zero; `PERCENTILE` takes `p` in `[0, 1]` with inclusive in
 trailing default. `CHOOSE` is 1-based; an index out of range is `#VALUE!`. `IFNA` catches only
 `#N/A`; `IFERROR` catches every error. `ISERR` is TRUE for every error except `#N/A`; `ISERROR`
 includes it. `ISBLANK` is FALSE for a cell holding an empty string. `N` converts to a number
-(TRUE → 1, text → 0), `NA()` yields `#N/A`.
+(TRUE → 1, text → 0), `NA()` yields `#N/A`. A `VLOOKUP`/`HLOOKUP`/`MATCH`/`XLOOKUP` miss is
+`#N/A`: guard with `IFNA`; an unguarded miss is cached as `#N/A` and listed by `xl audit`.
 
 **Text.** `TRIM` strips ASCII spaces and collapses internal runs. `MID`/`FIND`/`SEARCH` are 1-indexed;
 `FIND` is case-sensitive, `SEARCH` is not and accepts wildcards. `SUBSTITUTE` replaces every
