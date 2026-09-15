@@ -1,12 +1,22 @@
 # XL Project Status
 
-**Last Updated**: 2026-09-14 (0.23.0)
+**Last Updated**: 2026-09-15 (0.23.1)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.23.1** (2026-09-15) — wave 30: the 0.23.0 dogfood (103 probes over the CLI, the scripting library and the tjc-modeling template lane; every recorded 0.19.x quirk re-tested as fixed) filed seven issues, run as six adversarially reviewed clusters, then six automated review rounds on the PR; three **Breaking:** entries:
+- ✅ **Typed `#N/A` on legacy lookups** (#662) — a VLOOKUP, HLOOKUP or MATCH miss is the error value XLOOKUP already returned, so IFNA, ISNA, ISERR, IFERROR, ISERROR, ERROR.TYPE and an IF condition all see it; `=IF(ISNA(VLOOKUP(miss)),0,1)` caches 0; an unguarded miss caches `#N/A`; index below 1 is `#VALUE!`, past the table `#REF!`
+- ✅ **Batch `putf` parses before writing** (#663) — every shape, in memory, under `--stream` and `--dry-run`, and the `--stream putf` verb; `BATCH_OP_INVALID` with the verb's caret diagnostic; `xl lint` gains repair-tier `formula-unparseable`, judged from the text (an open delimiter, an unterminated string, a trailing operator) so grammar gaps the parser has not learned (#669, #680) are never findings, with a findings-preserving prefilter
+- ✅ **rsvg-convert on stdin** (#664) — no `-` positional; the default PNG chain works on librsvg 2.40 through 2.61
+- ✅ **Excel's General text rule** (#665) — `&`, CONCATENATE, text-typed arguments and `TEXT(x,"General")` render 15 significant digits with trailing zeros stripped and a 20-character plain/E switch (`NumFmtFormatter.generalText`, overflow-safe across the whole scale range); `="Total "&B8` is `Total 1070`
+- ✅ **`General` and scaling commas in custom formats** (#666) — `General"A"` renders `2021A`; `$#,##0.0,,"mm"` renders `$1.5mm`; display only
+- ✅ **CLI polish** (#667) — CSV `import` dates carry the date format; `-o` on a read-only verb names the flag; `describe --full` lists the lifted print names
+- ✅ **Skill drift** (#668) — the xl-cli and xl-scripting skills match the 0.23 binary and library
+- Follow-ups filed from the reviews: #669–#678, #680, #681
 
 **New in 0.23.0** (2026-09-14) — wave 29: every open issue triaged into twelve shared-logic clusters, then adversarially reviewed (51 findings fixed before release); thirteen **Breaking:** entries:
 - ✅ **OOXML fidelity** (#557, #595, #593, #566, #649) — sheet rels planned before emission and table parts keep their source numbers; totals rows survive a write; `Fill.Pattern` with `Option[Color]` so every texture round-trips; TAB/LF/CR in attributes as `&#9;`/`&#10;`/`&#13;` on both writers (the StAX backend is an xl-owned tag writer)
@@ -245,14 +255,14 @@
 
 ### Test Coverage
 
-**7,520 test cases** (verified via `./mill __.test`, 2026-09-15, wave 30 integrated): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
+**7,524 test cases** (verified via `./mill __.test`, 2026-09-15, 0.23.1 release gate): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
 | xl-evaluator | 2610 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1718 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-core | 1719 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1283 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1521 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cli | 1524 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 183 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 58 | external-consumer probes (`xl/test/src/xlprelude/`) |

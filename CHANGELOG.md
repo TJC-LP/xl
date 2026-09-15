@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-09-15
+
 Wave 30 — the 2026-09-15 dogfood of 0.23.0 (103 probes across the CLI, the scripting library and
 the tjc-modeling template lane; every recorded 0.19.x quirk re-tested as fixed) filed seven
 issues, run as six worktree-isolated clusters, each adversarially reviewed with the LibreOffice

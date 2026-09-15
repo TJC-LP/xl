@@ -394,7 +394,16 @@ sheet.displayCell(ref"A1").toString // String ("$1,234.56"); .formatted is the s
 s"A1 = ${sheet.displayCell(ref"A1")}"            // interpolation renders it via toString
 sheet.displayCell(ref"A1").toString.padTo(12, ' ') // String methods need the unwrap first (.padTo on the wrapper does not compile)
 sheet.displayFormula(ref"A1")       // String: the formula text ("=SUM(A1:A3)"), or the formatted value for a non-formula cell
+NumFmtFormatter.generalText(BigDecimal("1070.0")) // "1070" — Excel's number → text rule (0.23.1, #665): 15 significant
+                                                  // digits, trailing zeros stripped, plain up to 20 characters then E form;
+                                                  // what `&`, CONCATENATE, text arguments and TEXT(x,"General") produce.
+                                                  // Cell DISPLAY General (displayCell) is the column-width rule, a different function.
 ```
+
+Custom number formats (0.23.1, [#666](https://github.com/TJC-LP/xl/issues/666)): the `General`
+keyword inside a section renders the value (`General"A"` on 2021 displays `2021A`), and commas after
+the last digit placeholder scale by 1000 each (`$#,##0.0,,"mm"` on 1,500,000 displays `$1.5mm`).
+Display only — the stored format code is untouched.
 
 ## Errors
 

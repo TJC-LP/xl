@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **119 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 7,290 tests passing; one existing performance comparison ignored.
 
-**Current Version**: **0.23.0** (wave 29 — twelve shared-logic clusters over the open backlog, adversarially reviewed before release: OOXML fidelity (#557/#595/#593/#566/#649), lint coverage and severity tiers (#460/#567), Gauss–Seidel iteration (#482/#537), render overflow (#500–#502), defined names (#538/#462), `--no-recalc` cache policy (#509), the canonical formula model (#479), `@header` records (#614), `--json` object shapes (#618), `writeToBytes`/`XL_SPILL_DIR` (#516/#517), the grammar generator (#653))
+**Current Version**: **0.23.1** (wave 30 — the 0.23.0 dogfood's seven issues as six adversarially reviewed clusters: typed `#N/A` on legacy lookups (#662), the batch `putf` parse gate and `formula-unparseable` lint (#663), rsvg-convert on stdin (#664), Excel's General text rule (#665), `General` and scaling commas in custom formats (#666), CLI polish (#667), skill drift (#668); follow-ups #669–#681)
 
 ---
 
@@ -22,6 +22,20 @@ The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four 
 executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
+
+### v0.23.1 — wave 30: the 0.23.0 dogfood (Released 2026-09-15)
+
+Weaver and finagent dogfooded 0.23.0 on 2026-09-15 (103 probes; every recorded 0.19.x quirk
+re-tested as fixed; the circular Crestline build reproduces its 2026-08-06 targets to six decimals
+under Gauss–Seidel). Seven issues (#662–#668) ran as six worktree-isolated TDD clusters on
+`.claude/workflows/issue-wave.js` with a three-lens design panel on the two semantics issues and an
+adversarial reviewer per cluster (LibreOffice oracle); the PR then took six automated review rounds,
+which found a flat-chain false positive in the new lint rule, a misplaced caret, an un-gated
+`--stream putf` verb, an Int overflow on extreme scales and a legal name (`NOT`) read as an
+operator — all fixed before release. Follow-ups: #669 (parser grammar gaps), #670 (lookup error
+codes), #671, #672, #673, #674, #675, #676, #677 (`--strict` still writes), #678, #680 (the parser's
+depth budget counts flat chains), #681. Open decision carried forward: whether the batch `putf`
+gate should narrow to the lint rule's certain classes or gain a per-op `unchecked` escape hatch.
 
 ### v0.23.0 — wave 29: the shared-logic triage of the open backlog (Released 2026-09-14)
 

@@ -25,7 +25,7 @@ class EvaluatorSpec extends FunSuite:
        |  "ok": $ok,
        |  "exitCode": $exit,
        |  "verb": "$verb",
-       |  "version": "0.23.0",
+       |  "version": "0.23.1",
        |  "data": $data,
        |  "warnings": [],
        |  "error": $error
