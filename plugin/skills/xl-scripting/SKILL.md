@@ -60,7 +60,8 @@ Excel.write(wb, "out.xlsx")                        // also accepts XLResult[Work
 Excel.modify("file.xlsx")(_.upsert("Log", identity)) // atomic in-place read→transform→write
 Excel.modifyR("file.xlsx")(_.update("Log", f))     // 0.21.0: XLResult-returning transform; a Left throws BEFORE any write
 orExit(Excel.readSheet("in.xlsx", "Summary"))      // 0.22.0: XLResult[Sheet] — loads the WHOLE workbook, then picks one; a typo is Left(SheetNotFound(name, available)) with "did you mean" candidates (0.21.0 returned Sheet and threw)
-Excel.readMetadata("in.xlsx")                      // 0.21.0: LightMetadata (sheet names/dimensions/defined names), no cells loaded, ZIP-bomb guarded
+Excel.readMetadata("in.xlsx")                      // 0.21.0: LightMetadata(sheets: Vector[SheetInfo], definedNames, date1904), no cells loaded, ZIP-bomb guarded
+Excel.readMetadata("in.xlsx").sheets.map(_.name)   // the sheet names: SheetInfo(name, sheetId, state, dimension) — there is no `sheetNames`
 
 // Sheets in a workbook
 wb.sheets                                          // Vector[Sheet]
@@ -92,11 +93,13 @@ ref"A2".tryDown(3)                                 // 0.20.0: bounded → Some(A
 ref"A1:D10".rows                                   // 0.20.0: lazy one-row slices; row(i)/column(i) are Option
 
 // Edit algebra (0.21.0): the batch/CLI operation vocabulary as values; one interpreter (Edit.applyAll) over the kernels the CLI verbs call
+val sales = SheetName.unsafe("Sales")              // editIn / EditScope.of / Loc take a SheetName, never a Sheet; runtime text: orExit(name.asSheetName)
 wb.editIn(sales)(edits*)                           // XLResult[Workbook]; `sales` is the sheet for every target with sheet = None (the CLI's -s)
 wb.edit(Edit.put(Loc(Some(sales), ref"A1"), 1))    // no default sheet: qualify with Some(...), or a single-sheet book — else SheetRequired
+Edit.Put(Loc(None, ref"A1"), CellValue.Number(1), None) // the raw case: (at: Loc, value: CellValue, format: Option[FormatHint]) — Edit.put lifts both for you
 sheet.edit(Edit.Merge(Area(None, ref"A1:C1")))     // XLResult[Sheet]; fail-fast, all-or-nothing
 Edit.DragFormula(Area(None, ref"D2:D9"), "=B2*C2", ref"D2", None) // fill-down; also Fill/Copy/Sort/Clear/InsertRows/DeleteRows/AddSheet/RenameSheet/...
-Edit.plan(wb, edits, EditScope.of(sales))          // XLResult[Vector[Planned]]: semantic dry-run; Edit.validate(e) is the static check
+Edit.plan(wb, Vector(e1, e2), EditScope.of(sales)) // XLResult[Vector[Planned]]: semantic dry-run over a Vector[Edit] under an EditScope; Edit.validate(e) is the static check
 err.opIndex                                        // Some(n): 1-based position of the failing edit (EditFailed); err.code/hint are the cause's
 
 // Typed reads (since 0.20.0 a formula cell reads as its cached value — GH-477)
@@ -109,7 +112,8 @@ sheet.readTypedStrict[BigDecimal](ref"C1")         // 0.20.0: any formula cell �
 sheet.put(ref"D2", fx"=B2*C2")                     // compile-time validated literal
 wb.evaluateFormula("=SUM(Sales!A1:A9)", "Summary") // XLResult[CellValue], cross-sheet aware
 val r = wb.recalculate()                           // RecalcResult: total, per-cell errors
-r.isClean; r.errors.map(_.render); r.workbook      // inspect, then write r.workbook
+r.certified; r.errors.map(_.render); r.workbook    // certified = no host error AND every cycle converged; then write r.workbook
+r.excelErrors.isEmpty                              // 0.14.0: #DIV/0!/#REF!/… are VALUES, not errors — certified stays true; gate on this too
 Excel.writeChecked(wb, "out.xlsx")                 // 0.21.0: cache ONLY the uncached formulas + write + RecalcResult — THE write for a built model
 Excel.writeRecalculated(wb, "out.xlsx")            // 0.13.0: recompute EVERY formula + write + RecalcResult; both take a RecalcOptions (0.21.0)
 
@@ -363,7 +367,7 @@ if !result.isClean then
 
 **Defined names resolve** (0.13.0): `fx"=IF(case=2,rev,cost)"`, `fx"=entry_mult*ltm_ebitda"`, `fx"=SUM(rev_range)"` evaluate against workbook- and sheet-scoped defined names (sheet-scoped shadows global), contribute dependency edges so recalc orders name-gated families correctly, and round-trip byte-faithfully; an unresolvable name is a clean per-cell error.
 
-**Circular models are opt-in** (0.13.0): professional schedules (interest on average debt) ship circular by design. `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` fixpoints declared cycles instead of erroring — a Gauss–Seidel sweep in dependency order within each cycle, Excel's sequential recalculation (`scheme = IterationScheme.Jacobi` reproduces the pre-0.23 previous-round semantics); a member that fails every round stalls its cycle early (`SccReport.stalled`) rather than burning `maxIter`; plain `recalculate()` still isolates cycles as errors. Honor a file's own `<calcPr>` with `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr).fold(wb.recalculate())(wb.recalculate)`, and author it on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))`.
+**Circular models are opt-in** (0.13.0): professional schedules (interest on average debt) ship circular by design. `wb.recalculate(IterativeCalc(maxIter = 100, maxChange = BigDecimal("0.001")))` fixpoints declared cycles instead of erroring — a Gauss–Seidel sweep in dependency order within each cycle, Excel's sequential recalculation (`scheme = IterationScheme.Jacobi` reproduces the pre-0.23 previous-round semantics); a member that *evaluates* but fails every round (a `#REF!` to a missing sheet, say) stalls its cycle early (`SccReport.stalled`, `converged = false`, so `certified = false`; `r.unconvergedVerdict` names the round) rather than burning `maxIter`. A member that fails to **parse** is a different class: it has no dependency edges, so the cycle it belonged to is never detected — `r.cycles` does not list it — and it surfaces as a host error in `r.errors` (`certified = false`), not as `stalled`. Plain `recalculate()` still isolates cycles as errors. Honor a file's own `<calcPr>` with `wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr).fold(wb.recalculate())(wb.recalculate)`, and author it on scratch builds with `wb.withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100), maxChange = Some(BigDecimal("0.001"))))`.
 
 **One options record** (since 0.20.0): every recalculation knob lives on `RecalcOptions`, and `RecalcOptions()` reproduces `recalculate()` exactly, so there is one thing to learn:
 
@@ -402,9 +406,15 @@ val authored = model.dataTable(ref"D5:F6", rowInput = ref"B1", colInput = ref"B2
 // Plain calcMode="auto" books self-heal on open; calc levers stay on Workbook.withCalcPr.
 val seeded = Workbook(authored).seedDataTables().unsafe
 
+// The reporting form is XLResult[DataTableSeedReport] — a case class (.workbook, .warnings), not a
+// tuple: warnings name the tables skipped as circular, the axis cells that did not converge, the
+// cones that could not be resolved and the IFERROR-style guards whose fallback got seeded.
+val report = orExit(Workbook(authored).seedDataTablesReport())
+report.warnings.foreach(w => println(s"warning: $w"))
+
 // writeRecalculated, NOT write: seedDataTables caches the record cell and the interior, never the
 // CORNER formula (C4) — Excel.write would ship an uncached corner that previews as blank.
-Excel.writeRecalculated(seeded, "sensitivity.xlsx")
+Excel.writeRecalculated(report.workbook, "sensitivity.xlsx")
 ```
 
 1-D shapes: `sheet.dataTableRow(interior, rowInput)` (axis above, source formulas in the column left — one per interior row) and `sheet.dataTableCol(interior, colInput)` (axis left, source formulas in the row above — one per interior column; multi-result-column tables are legal). All three take optional row-major `seeds` to ship byte-exact caches without evaluating; the corner absorbs a pre-existing plain scalar as its cache, so `fillBy`-then-`dataTable` composes. Authoring refuses to tear existing tables, overwrite real formulas, or accept inputs inside the table block — each with a structured `XLError`.
