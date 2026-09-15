@@ -1,0 +1,15 @@
+## args
+batch
+--dry-run
+-
+## stdin
+[{"op":"putf","ref":"A3","value":"=FOOBAR(1)"}]
+## exit
+2
+## stdout
+## stderr
+Error: Object 1 (putf): =FOOBAR(1)
+                 ^
+Unknown function 'FOOBAR' at position 0. Did you mean: FLOOR?
+  code: BATCH_OP_INVALID
+  did you mean: FLOOR

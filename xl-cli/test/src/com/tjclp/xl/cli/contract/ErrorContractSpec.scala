@@ -656,3 +656,50 @@ class ErrorContractSpec extends CatsEffectSuite:
       assertEquals(version.stdout, s"${BuildInfo.version}\n")
       assertEquals(version.stderr, "")
   }
+
+  test(
+    "GH-663: batch putf with an unparseable formula is BATCH_OP_INVALID (exit 2) before any write, identically in memory, under --stream and --dry-run"
+  ) {
+    val ops =
+      """[{"op":"put","ref":"A9","value":1},{"op":"putf","ref":"A3","value":"=SUM(A1:A2"}]"""
+    val out = (tag: String) => fixtures().resolve(s"putf-gate-$tag.xlsx")
+    val base = List("-f", file("simple.xlsx"), "-s", "Data", "--json")
+    for
+      memory <- CliHarness.run(base ++ List("-o", out("memory").toString, "batch", "-"), ops)
+      stream <- CliHarness.run(
+        base ++ List("-o", out("stream").toString, "--stream", "batch", "-"),
+        ops
+      )
+      dry <- CliHarness.run(List("--json", "batch", "--dry-run", "-"), ops)
+      verb <- CliHarness.run(
+        base ++ List("-o", out("verb").toString, "putf", "A3", "=SUM(A1:A2"),
+        ""
+      )
+    yield
+      def error(run: CliRun): ujson.Value = ujson.read(run.stdout)("error")
+      for run <- List(memory, stream, dry) do
+        assertEquals(run.exit, 2, run.stdout)
+        assertEquals(error(run)("code"), ujson.Str("BATCH_OP_INVALID"))
+        assertEquals(error(run)("location")("opIndex"), ujson.Num(2))
+        assert(
+          error(run)("message").str.startsWith("Object 2 (putf): =SUM(A1:A2\n"),
+          error(run)("message").str
+        )
+      // the three surfaces print the one diagnostic
+      assertEquals(error(stream)("message"), error(memory)("message"))
+      assertEquals(error(dry)("message"), error(memory)("message"))
+      // …and it is the verb's own parser text, exit code aside (FORMULA_ERROR is the verb's): the
+      // op prefix in front of the formula line, the caret line shifted by the same width
+      assertEquals(verb.exit, 3, verb.stdout)
+      val verbMessage = error(verb)("message").str
+      val prefix = "Object 2 (putf): "
+      val unshifted = error(memory)("message").str.split("\n", -1).toList match
+        case formula :: caret :: rest =>
+          (formula.stripPrefix(prefix) :: caret.stripPrefix(" " * prefix.length) :: rest)
+            .mkString("\n")
+        case other => other.mkString("\n")
+      assertEquals(unshifted, verbMessage)
+      assert(!Files.exists(out("memory")), "the in-memory batch must not write on a refusal")
+      assert(!Files.exists(out("stream")), "the streaming batch must not write on a refusal")
+      assert(!Files.exists(out("verb")), "the verb must not write on a refusal")
+  }

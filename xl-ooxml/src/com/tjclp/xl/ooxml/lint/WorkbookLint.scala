@@ -61,6 +61,14 @@ enum LintCategory derives CanEqual:
   case FormulaLeadingEquals
 
   /**
+   * A cell `<f>` whose text the formula oracle (the CLI passes the evaluator's parser) rejects —
+   * `SUM(A1:A2` — so Excel shows the repair prompt on open and drops the formula (GH-663). Judged
+   * only when the caller supplies a [[WorkbookLint.FormulaCheck]]: xl-ooxml itself carries no
+   * parser.
+   */
+  case FormulaUnparseable
+
+  /**
    * A formula or defined name references external workbook `[N]` with no N-th `<externalReference>`
    * entry in workbook.xml — Excel repairs the file by removing every such formula (GH-525).
    */
@@ -136,6 +144,7 @@ enum LintCategory derives CanEqual:
     case LintCategory.DataTableTorn => "data-table-torn"
     case LintCategory.DataTableUnseeded => "data-table-unseeded"
     case LintCategory.FormulaLeadingEquals => "formula-leading-equals"
+    case LintCategory.FormulaUnparseable => "formula-unparseable"
     case LintCategory.ExternalRefDangling => "external-ref-dangling"
     case LintCategory.DefinedNameInvalid => "defined-name-invalid"
     case LintCategory.CalcChainStale => "calc-chain-stale"
@@ -308,25 +317,47 @@ object WorkbookLint:
     def openStream(name: String): XLResult[Option[InputStream]] =
       Right(parts.get(name).map(s => ByteArrayInputStream(s.getBytes(StandardCharsets.UTF_8))))
 
+  /**
+   * GH-663: the formula-syntax oracle behind [[LintCategory.FormulaUnparseable]] — given a cell
+   * `<f>`'s stored text (file form, any leading '=' already removed), the diagnostic when the text
+   * does not parse, `None` when it does. xl-ooxml has no formula parser (that is xl-evaluator's),
+   * so the caller supplies one; the CLI passes the evaluator's. [[noFormulaCheck]] disables the
+   * rule, and the oracle is never shown an empty `<f>` (a shared-formula dependent) or a data-table
+   * record's text.
+   */
+  type FormulaCheck = String => Option[String]
+
+  /** The oracle that accepts every formula: the rule is off (the default). */
+  val noFormulaCheck: FormulaCheck = _ => None
+
   /** Lint an XLSX file on disk. Only the structural parts are read (workbook, worksheets, rels). */
-  def lint(path: Path): XLResult[Vector[Finding]] =
+  def lint(path: Path): XLResult[Vector[Finding]] = lint(path, noFormulaCheck)
+
+  /** [[lint]] with a formula oracle for the `formula-unparseable` rule (GH-663). */
+  def lint(path: Path, formulaCheck: FormulaCheck): XLResult[Vector[Finding]] =
     openZipFile(path).flatMap { zip =>
-      try lintSource(ZipFilePartSource(zip), streaming = false)
+      try lintSource(ZipFilePartSource(zip), streaming = false, formulaCheck)
       finally zip.close()
     }
 
   /** Lint an XLSX package from raw bytes. */
-  def lintBytes(bytes: Array[Byte]): XLResult[Vector[Finding]] =
-    readEntries(bytes).flatMap(lintSource(_, streaming = false))
+  def lintBytes(bytes: Array[Byte]): XLResult[Vector[Finding]] = lintBytes(bytes, noFormulaCheck)
+
+  /** [[lintBytes]] with a formula oracle for the `formula-unparseable` rule (GH-663). */
+  def lintBytes(bytes: Array[Byte], formulaCheck: FormulaCheck): XLResult[Vector[Finding]] =
+    readEntries(bytes).flatMap(lintSource(_, streaming = false, formulaCheck))
 
   /**
    * Streaming lint (GH-413 item 4): sheet-class and table parts are SAX-scanned instead of
    * DOM-parsed, so memory stays O(1) in the row count — use for 100k+-row files. Findings are
    * identical to [[lint]] (pinned by the parity suite).
    */
-  def lintStream(path: Path): XLResult[Vector[Finding]] =
+  def lintStream(path: Path): XLResult[Vector[Finding]] = lintStream(path, noFormulaCheck)
+
+  /** [[lintStream]] with a formula oracle for the `formula-unparseable` rule (GH-663). */
+  def lintStream(path: Path, formulaCheck: FormulaCheck): XLResult[Vector[Finding]] =
     openZipFile(path).flatMap { zip =>
-      try lintSource(ZipFilePartSource(zip), streaming = true)
+      try lintSource(ZipFilePartSource(zip), streaming = true, formulaCheck)
       finally zip.close()
     }
 
@@ -335,7 +366,11 @@ object WorkbookLint:
    * already in memory, so this mode saves only the DOM allocation, not the input buffer.
    */
   def lintStreamBytes(bytes: Array[Byte]): XLResult[Vector[Finding]] =
-    readEntries(bytes).flatMap(lintSource(_, streaming = true))
+    lintStreamBytes(bytes, noFormulaCheck)
+
+  /** [[lintStreamBytes]] with a formula oracle for the `formula-unparseable` rule (GH-663). */
+  def lintStreamBytes(bytes: Array[Byte], formulaCheck: FormulaCheck): XLResult[Vector[Finding]] =
+    readEntries(bytes).flatMap(lintSource(_, streaming = true, formulaCheck))
 
   /** Safely open a ZIP file, converting exceptions to XLResult errors (metadata-reader pattern). */
   private def openZipFile(path: Path): XLResult[ZipFile] =
@@ -377,7 +412,11 @@ object WorkbookLint:
 
   // ===== Pipeline =====
 
-  private def lintSource(parts: PartSource, streaming: Boolean): XLResult[Vector[Finding]] =
+  private def lintSource(
+    parts: PartSource,
+    streaming: Boolean,
+    formulaCheck: FormulaCheck
+  ): XLResult[Vector[Finding]] =
     for
       wbXmlOpt <- parts.read(workbookPart)
       wbXml <- wbXmlOpt.toRight(
@@ -403,7 +442,7 @@ object WorkbookLint:
         streaming,
         autoNoTableOf(wbElem),
         chain.candidatesByPath(parts),
-        ScanContext(Set.empty, sst.table, styles.dxfTable)
+        ScanContext(Set.empty, sst.table, styles.dxfTable, formulaCheck)
       )
       externalResult <- lintExternalLinks(wbElem, wbRels, parts)
       referenced =
@@ -955,12 +994,14 @@ object WorkbookLint:
    * What a part scan needs from the workbook level: the calcChain entries attributed to this part
    * (upper-case A1, so the scan can confirm which are formula cells without a second pass —
    * GH-555), the shared-string table size (GH-567) and the `<dxfs>` size (GH-460); `None` for a
-   * table means it was unreadable, and the rule that indexes it stays silent.
+   * table means it was unreadable, and the rule that indexes it stays silent — and the formula
+   * oracle (GH-663).
    */
   private final case class ScanContext(
     chainCandidates: Set[String],
     sst: Option[SstTableFacts],
-    dxf: Option[DxfTableFacts]
+    dxf: Option[DxfTableFacts],
+    formulaCheck: FormulaCheck
   )
 
   private def scanPart(
@@ -1012,11 +1053,14 @@ object WorkbookLint:
     }
     val cellObs = nestedElems(root, "sheetData", "row")
       .flatMap(childElems(_, "c"))
-      .map(domCellObs)
+      .map(domCellObs(_, ctx.formulaCheck))
     val dataTables = cellObs.foldLeft(Vector.empty[RecordFacts])(observeCell)
     val formulaEq = formulaEqualsFindings(
       part,
       cellObs.foldLeft(LeadingEqualsFacts.empty)(_.add(_))
+    ) ++ formulaUnparseableFindings(
+      part,
+      cellObs.foldLeft(UnparseableFacts.empty)(_.add(_))
     )
     val extRefs = cellObs.foldLeft(ExternalRefFacts.empty)(_.add(_))
     val chain = cellObs.foldLeft(ChainSheetFacts.empty)(_.add(_, chainCandidates))
@@ -1058,17 +1102,18 @@ object WorkbookLint:
     walk(XlfnFacts.empty, root, None)
 
   /** One `<c>` element's per-cell facts (DOM side of the parity pair). */
-  private def domCellObs(cell: Elem): CellObs =
+  private def domCellObs(cell: Elem, formulaCheck: FormulaCheck): CellObs =
     val formula = childElems(cell, "f").headOption
     val formulaText = formula.map(_.text)
     val cellType = XmlUtil.getAttrOpt(cell, "t")
     val firstV = childElems(cell, "v").headOption
     val firstIs = childElems(cell, "is").headOption
+    val record =
+      formula.flatMap(f => dataTableKindOf(XmlUtil.getAttrOpt(f, "t"), XmlUtil.getAttrOpt(f, _)))
     CellObs(
       ref = XmlUtil.getAttrOpt(cell, "r").flatMap(ARef.parse(_).toOption),
       cellType = cellType,
-      record =
-        formula.flatMap(f => dataTableKindOf(XmlUtil.getAttrOpt(f, "t"), XmlUtil.getAttrOpt(f, _))),
+      record = record,
       hasFormula = formula.isDefined,
       hasV = firstV.isDefined,
       hasIs = firstIs.isDefined,
@@ -1076,7 +1121,8 @@ object WorkbookLint:
       leadingEquals = formulaText.exists(_.startsWith("=")),
       extOrdinals = formulaText.fold(Set.empty[Int])(externalOrdinals),
       arrayRef =
-        formula.flatMap(f => arrayRefOf(XmlUtil.getAttrOpt(f, "t"), XmlUtil.getAttrOpt(f, _)))
+        formula.flatMap(f => arrayRefOf(XmlUtil.getAttrOpt(f, "t"), XmlUtil.getAttrOpt(f, _))),
+      rejected = formulaText.flatMap(rejectedFormula(_, record, formulaCheck))
     )
 
   /**
@@ -1116,6 +1162,7 @@ object WorkbookLint:
       private val dxfs = Vector.newBuilder[Finding]
       private val ignorable = Vector.newBuilder[Finding]
       private var leadingEq: LeadingEqualsFacts = LeadingEqualsFacts.empty
+      private var unparseable: UnparseableFacts = UnparseableFacts.empty
       private var extRefs: ExternalRefFacts = ExternalRefFacts.empty
       private var dataTables: Vector[RecordFacts] = Vector.empty
       private var chain: ChainSheetFacts = ChainSheetFacts.empty
@@ -1146,7 +1193,7 @@ object WorkbookLint:
             labels.result(),
             captures.result(),
             bounds.result(),
-            formulaEqualsFindings(part, leadingEq),
+            formulaEqualsFindings(part, leadingEq) ++ formulaUnparseableFindings(part, unparseable),
             xlfnFindings(part, xlfn, "formula"),
             extRefs,
             dataTables,
@@ -1207,7 +1254,8 @@ object WorkbookLint:
               sstIndex = None,
               leadingEquals = false,
               extOrdinals = Set.empty,
-              arrayRef = None
+              arrayRef = None,
+              rejected = None
             )
           )
         else if depth == 4 && parents.headOption.contains("c") then
@@ -1282,8 +1330,12 @@ object WorkbookLint:
         if label == "f" then
           formulaText.foreach { sb =>
             val text = sb.toString
-            cell = cell.map(
-              _.copy(leadingEquals = text.startsWith("="), extOrdinals = externalOrdinals(text))
+            cell = cell.map(c =>
+              c.copy(
+                leadingEquals = text.startsWith("="),
+                extOrdinals = externalOrdinals(text),
+                rejected = rejectedFormula(text, c.record, ctx.formulaCheck)
+              )
             )
           }
           formulaText = None
@@ -1294,6 +1346,7 @@ object WorkbookLint:
           cell.foreach { obs =>
             dataTables = observeCell(dataTables, obs)
             leadingEq = leadingEq.add(obs)
+            unparseable = unparseable.add(obs)
             extRefs = extRefs.add(obs)
             chain = chain.add(obs, chainCandidates)
             emptyInline = emptyInline.add(obs)
@@ -1322,7 +1375,8 @@ object WorkbookLint:
     sstIndex: Option[Int],
     leadingEquals: Boolean,
     extOrdinals: Set[Int],
-    arrayRef: Option[CellRange]
+    arrayRef: Option[CellRange],
+    rejected: Option[RejectedFormula]
   ):
     def hasValue: Boolean = hasV || hasIs
 
@@ -1380,6 +1434,77 @@ object WorkbookLint:
             "re-writing the file with xl heals it"
         )
       )
+
+  // ===== GH-663: <f> text the formula oracle rejects =====
+
+  /** A cell `<f>`'s stored text (leading '=' removed) with the oracle's diagnostic for it. */
+  private final case class RejectedFormula(text: String, message: String)
+
+  /**
+   * The oracle's verdict on one `<f>`, or `None` when the text is not the oracle's to judge: a
+   * data-table record (its text is display, never a formula — GH-430), or an empty `<f>` (a
+   * shared-formula dependent, `<f t="shared" si="0"/>`). A leading '=' (GH-456's class) is removed
+   * first so the display form is judged as the formula it is, not doubly reported.
+   */
+  private def rejectedFormula(
+    text: String,
+    record: Option[FormulaKind.DataTable],
+    check: FormulaCheck
+  ): Option[RejectedFormula] =
+    if record.isDefined then None
+    else
+      val body = if text.startsWith("=") then text.drop(1) else text
+      if body.trim.isEmpty then None else check(body).map(RejectedFormula(body, _))
+
+  /** Sample size for the aggregated unparseable finding: the first N offending cells. */
+  private val unparseableSampleSize = 5
+
+  /**
+   * Accumulated oracle rejections for ONE sheet part: the total count plus the first
+   * [[unparseableSampleSize]] offending cells in document order, bounded by construction like
+   * [[LeadingEqualsFacts]]; folded identically by both scanners for parity.
+   */
+  private final case class UnparseableFacts(
+    sample: Vector[(Option[ARef], RejectedFormula)],
+    count: Long
+  ):
+    def add(obs: CellObs): UnparseableFacts =
+      obs.rejected match
+        case None => this
+        case Some(rejected) =>
+          UnparseableFacts(
+            if sample.sizeIs < unparseableSampleSize then sample :+ (obs.ref, rejected)
+            else sample,
+            count + 1
+          )
+
+  private object UnparseableFacts:
+    val empty: UnparseableFacts = UnparseableFacts(Vector.empty, 0L)
+
+  /**
+   * GH-663: `<f>` text the oracle rejects — `SUM(A1:A2` — the class Excel repairs on open by
+   * dropping the formula. ONE finding per part with the first [[unparseableSampleSize]] cell refs,
+   * the total count, and the first site's stored text with its diagnostic; the locator names the
+   * first offending cell.
+   */
+  private def formulaUnparseableFindings(part: String, facts: UnparseableFacts): Vector[Finding] =
+    facts.sample.headOption match
+      case None => Vector.empty
+      case Some((firstRef, first)) =>
+        val shown = facts.sample.map(_._1.fold("<f>")(_.toA1))
+        val cells =
+          if facts.count > shown.size then s"first ${shown.size}: ${shown.mkString(", ")}, …"
+          else shown.mkString(", ")
+        val firstSite = firstRef.fold("<f>")(_.toA1)
+        Vector(
+          Finding(
+            part,
+            LintCategory.FormulaUnparseable,
+            firstRef.fold("<f>")(r => s"""<c r="${r.toA1}"><f>"""),
+            s"${facts.count} formula(s) do not parse ($cells) — $firstSite <f>${first.text}</f>: " +
+              s"${first.message}; Excel shows the repair prompt on open and drops the formula"
+          )
+        )
 
   // ===== Post-2007 functions stored bare (GH-577) =====
 

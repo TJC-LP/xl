@@ -1,6 +1,7 @@
 package com.tjclp.xl.cli.commands
 
-import com.tjclp.xl.ooxml.lint.{Finding, LintSeverity}
+import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
+import com.tjclp.xl.ooxml.lint.{Finding, LintSeverity, WorkbookLint}
 
 /**
  * Output rendering for the lint command (GH-397).
@@ -10,6 +11,27 @@ import com.tjclp.xl.ooxml.lint.{Finding, LintSeverity}
  * repair findings — or any finding under `--strict` — 2 usage, 3 error).
  */
 object LintCommands:
+
+  /**
+   * GH-663: the formula oracle behind `formula-unparseable` — the evaluator's parser, the gate
+   * `putf` and batch `putf` apply before writing. A repair-tier finding must be a text no Excel
+   * dialect accepts, and the parser's grammar is narrower than Excel's (LibreOffice writes
+   * `TRUE()`, which the parser refuses as an unexpected '('; add-in names such as `BDP(…)` are
+   * `#NAME?` on recalculation, not a repair; an argument count the registry's arity model refuses
+   * opens intact), so only the classes the parser is certain of are findings: text that ends before
+   * the expression does (`SUM(A1:A2`, an unterminated string), a delimiter that closes the wrong
+   * opener, and Excel's own hard limits (8192 characters, nesting depth). Every other refusal stays
+   * `xl audit`'s to list under "Unparseable formulas".
+   */
+  val formulaCheck: WorkbookLint.FormulaCheck = text =>
+    FormulaParser.parse(s"=$text") match
+      case Right(_) => None
+      case Left(
+            err @ (_: ParseError.UnexpectedEOF | _: ParseError.UnbalancedDelimiter |
+            _: ParseError.FormulaTooLong | _: ParseError.NestingTooDeep)
+          ) =>
+        Some(ParseError.describe(err))
+      case Left(_) => None
 
   /** The findings that fail the gate: every repair, plus the hygiene tier under `--strict`. */
   def gating(findings: Vector[Finding], strict: Boolean): Vector[Finding] =

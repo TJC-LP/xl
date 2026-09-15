@@ -1,6 +1,7 @@
 package com.tjclp.xl.cli.helpers
 
 import cats.effect.{IO, Resource}
+import cats.syntax.all.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.{CellValue, Comment}
@@ -434,19 +435,29 @@ object BatchParser:
               ValueParser.dataTableFormulaError(formula) match
                 case Some(msg) => throw invalid(idx, msg)
                 case None => formula
+            // GH-663: the putf verb's gate, applied to every shape as the document is parsed, so
+            // `--dry-run` refuses the same text the write would
+            def parseable(formula: String, slot: String): String =
+              val fullFormula = s"=${CellValue.canonicalFormulaText(formula)}"
+              FormulaParser.parse(fullFormula) match
+                case Right(_) => formula
+                case Left(e) => throw unparseableFormula(idx, slot, e, fullFormula)
             // Check for explicit formulas array first
             objMap.get("values") match
               case Some(arr) if arr.arrOpt.isDefined =>
                 val formulas = arr.arr.toVector.zipWithIndex.map { case (v, i) =>
-                  rejectDataTable(
-                    v.strOpt.getOrElse(
-                      throw invalid(idx, s"'values[$i]' must be a string formula")
-                    )
+                  parseable(
+                    rejectDataTable(
+                      v.strOpt.getOrElse(
+                        throw invalid(idx, s"'values[$i]' must be a string formula")
+                      )
+                    ),
+                    s" values[$i]"
                   )
                 }
                 BatchOp.PutFormulas(ref, formulas, format)
               case _ =>
-                val formula = rejectDataTable(requireStringValue(objMap, idx))
+                val formula = parseable(rejectDataTable(requireStringValue(objMap, idx)), "")
                 // Check for 'from' field for formula dragging
                 objMap.get("from").flatMap(_.strOpt) match
                   case Some(fromRef) => BatchOp.PutFormulaDragging(ref, formula, fromRef, format)
@@ -687,6 +698,50 @@ object BatchParser:
         location = at(idx)
       )
     )
+
+  /**
+   * GH-663: a putf formula the parser rejects — `BATCH_OP_INVALID` (exit 2) carrying the verb's own
+   * diagnostic (`ParseError.formatWithContext`: the formula, the caret, the reason) behind the
+   * `Object N (putf)` prefix, the caret shifted by the prefix so it still points at the offending
+   * character; an unknown function's suggestions ride as `candidates`, as the verb's do.
+   */
+  private def unparseableFormula(
+    idx: Int,
+    slot: String,
+    error: ParseError,
+    fullFormula: String
+  ): CliException =
+    val prefix = s"Object ${idx + 1} (putf)$slot: "
+    val diagnostic = ParseError.formatWithContext(error, fullFormula).split("\n", -1).toVector
+    val shifted = diagnostic.zipWithIndex.map {
+      case (line, 0) => prefix + line
+      case (line, 1) if diagnostic.sizeIs == 3 => " " * prefix.length + line
+      case (line, _) => line
+    }
+    val candidates = error match
+      case ParseError.UnknownFunction(_, _, suggestions) => suggestions.toVector
+      case _ => Vector.empty
+    CliException(
+      CliError(
+        ErrorCode.BATCH_OP_INVALID,
+        shifted.mkString("\n"),
+        candidates = candidates,
+        location = at(idx)
+      )
+    )
+
+  /**
+   * GH-663: the apply-time form of the same gate, for ops built without [[parseBatchJson]]: the
+   * verb's diagnostic as the op failure.
+   */
+  private def requireParseable(formula: String): IO[Unit] =
+    val fullFormula = s"=$formula"
+    IO.fromEither(
+      FormulaParser
+        .parse(fullFormula)
+        .left
+        .map(e => new Exception(ParseError.formatWithContext(e, fullFormula)))
+    ).void
 
   /**
    * `value` and `values` are the schema's `oneOf` for put and putf (ADR-017 §2.6): an op carrying
@@ -1545,23 +1600,25 @@ object BatchParser:
     val formula = CellValue.canonicalFormulaText(formulaStr)
     val value = CellValue.Formula(formula, None)
 
-    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
-      case RefType.Cell(ref) =>
-        sheetFor(wb, defaultSheetName, "putf").flatMap { sheetName =>
+    requireParseable(formula) *> IO
+      .fromEither(RefType.parse(refStr).left.map(e => new Exception(e)))
+      .flatMap {
+        case RefType.Cell(ref) =>
+          sheetFor(wb, defaultSheetName, "putf").flatMap { sheetName =>
+            updateSheet(wb, sheetName)(s => applyNumFmt(s.put(ref -> value), ref, format))
+          }
+
+        case RefType.QualifiedCell(sheetName, ref) =>
           updateSheet(wb, sheetName)(s => applyNumFmt(s.put(ref -> value), ref, format))
-        }
 
-      case RefType.QualifiedCell(sheetName, ref) =>
-        updateSheet(wb, sheetName)(s => applyNumFmt(s.put(ref -> value), ref, format))
-
-      case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
-        IO.raiseError(
-          new Exception(
-            s"batch putf with single formula requires single cell ref, not range: $refStr. " +
-              "Use 'from' field for formula dragging or 'values' array for explicit formulas."
+        case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
+          IO.raiseError(
+            new Exception(
+              s"batch putf with single formula requires single cell ref, not range: $refStr. " +
+                "Use 'from' field for formula dragging or 'values' array for explicit formulas."
+            )
           )
-        )
-    }
+      }
 
   /**
    * Apply formula with dragging to a range. GH-628: also reports every target cell whose shifted
@@ -1641,6 +1698,7 @@ object BatchParser:
             )
           )
         else IO.unit
+      _ <- formulas.traverse_(f => requireParseable(CellValue.canonicalFormulaText(f)))
 
       // Apply formulas
       result <- updateSheet(wb, sheetName) { sheet =>

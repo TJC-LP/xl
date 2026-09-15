@@ -5,7 +5,10 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 
+import scala.jdk.CollectionConverters.*
+
 import cats.effect.{ExitCode, IO}
+import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{CellRange, Sheet, Workbook, given}
@@ -533,4 +536,156 @@ class LintCommandSpec extends CatsEffectSuite:
         assert(msg.contains("lint requires a file"), msg)
         assert(msg.contains("-f"), msg)
       case Right(p) => fail(s"Expected rejection when no file is given, got $p")
+  }
+
+  // ========== GH-663: formula-unparseable through the real parser ==========
+
+  /** A structurally clean one-sheet package whose A3 holds the given `<f>` text. */
+  private def formulaZip(fText: String): Path =
+    val parts = Map(
+      "[Content_Types].xml" ->
+        """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>""",
+      "_rels/.rels" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="$nsRel/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>""",
+      "xl/workbook.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="$nsMain" xmlns:r="$nsRel">
+  <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""",
+      "xl/_rels/workbook.xml.rels" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="$nsRel/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>""",
+      "xl/worksheets/sheet1.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="$nsMain"><sheetData>
+  <row r="1"><c r="A1"><v>1</v></c></row>
+  <row r="2"><c r="A2"><v>2</v></c></row>
+  <row r="3"><c r="A3"><f>$fText</f><v>3</v></c></row>
+</sheetData></worksheet>"""
+    )
+    val baos = ByteArrayOutputStream()
+    val zos = ZipOutputStream(baos)
+    parts.foreach { case (name, content) =>
+      zos.putNextEntry(ZipEntry(name))
+      zos.write(content.getBytes(StandardCharsets.UTF_8))
+      zos.closeEntry()
+    }
+    zos.close()
+    val path = Files.createTempFile("lint-cli-formula", ".xlsx")
+    Files.write(path, baos.toByteArray)
+    path
+
+  private def unparseableFindings(path: Path, stream: Boolean = false) =
+    val lint =
+      if stream then WorkbookLint.lintStream(path, LintCommands.formulaCheck)
+      else WorkbookLint.lint(path, LintCommands.formulaCheck)
+    lint
+      .fold(e => fail(s"lint errored: $e"), identity)
+      .filter(_.category == LintCategory.FormulaUnparseable)
+
+  test(
+    "GH-663: `<f>SUM(A1:A2</f>` exits 1 with formula-unparseable carrying the parser's message"
+  ) {
+    for
+      path <- IO(formulaZip("SUM(A1:A2"))
+      code <- Main.runLint(path, LintFormat.Text)
+      codeStream <- Main.runLint(path, LintFormat.Text, stream = true)
+      findings <- IO(unparseableFindings(path))
+      streamed <- IO(unparseableFindings(path, stream = true))
+      text = LintCommands.renderText(path.toString, findings)
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(code, ExitCode(1))
+      assertEquals(codeStream, ExitCode(1))
+      assertEquals(findings.size, 1, findings.mkString("\n"))
+      assertEquals(streamed, findings)
+      assert(text.contains("[formula-unparseable]"), text)
+      assert(text.contains("A3"), text)
+      assert(text.contains("<f>SUM(A1:A2</f>: Unexpected end of formula at position"), text)
+  }
+
+  test("GH-663: an unknown function is #NAME? on recalculation, not a repair — lint stays clean") {
+    for
+      path <- IO(formulaZip("FOOBAR(1)"))
+      code <- Main.runLint(path, LintFormat.Text)
+      findings <- IO(unparseableFindings(path))
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(code, ExitCode.Success)
+      assertEquals(findings, Vector.empty)
+  }
+
+  test("GH-663: formulas Excel opens that xl's parser refuses are not repairs either") {
+    // the parser's grammar is narrower than Excel's: LibreOffice writes `TRUE()` (an unexpected
+    // '(' to the parser), and the arity model is the registry's — a known name with an odd argument
+    // count opens intact (at worst #VALUE!). Neither may fail the ship gate.
+    val texts = Vector("SUM()", "TRUE()", "FALSE()")
+    for
+      paths <- IO(texts.map(formulaZip))
+      findings <- IO(paths.flatMap(unparseableFindings(_)))
+      codes <- paths.traverse(Main.runLint(_, LintFormat.Text))
+      _ <- IO(paths.foreach(Files.deleteIfExists))
+    yield
+      assertEquals(findings, Vector.empty)
+      assertEquals(codes, Vector.fill(texts.size)(ExitCode.Success))
+  }
+
+  test("GH-663: the certain classes are all findings — unterminated string, wrong closer, limits") {
+    val texts = Vector("\"abc", "(A1]", "A1+", "SUM((A1)")
+    for
+      paths <- IO(texts.map(formulaZip))
+      findings <- IO(paths.map(unparseableFindings(_)))
+      _ <- IO(paths.foreach(Files.deleteIfExists))
+    yield texts.zip(findings).foreach { (text, found) =>
+      assertEquals(found.size, 1, s"'$text' should be exactly one finding: $found")
+    }
+  }
+
+  test("GH-663: every real-file fixture in the repo lints free of formula-unparseable") {
+    val fixtures = repoRoot.resolve("xl-ooxml/test/resources/fixtures")
+    val books = Files.list(fixtures)
+    val paths =
+      try books.toList.asScala.toVector.filter(_.toString.endsWith(".xlsx")).sorted
+      finally books.close()
+    assert(paths.nonEmpty, s"no fixtures under $fixtures")
+    val flagged = paths.flatMap { p =>
+      WorkbookLint.lint(p, LintCommands.formulaCheck) match
+        case Right(findings) =>
+          findings.filter(_.category == LintCategory.FormulaUnparseable).map(f => s"$p: $f")
+        case Left(_) => Vector.empty // the deliberately malformed fixture cannot be linted at all
+    }
+    assertEquals(flagged, Vector.empty[String], flagged.mkString("\n"))
+  }
+
+  test("GH-663: a book xl writes from parsed formulas lints clean") {
+    for
+      path <- IO(Files.createTempFile("lint-cli-formulas", ".xlsx"))
+      wb = Workbook(
+        Vector(
+          Sheet("Data")
+            .put(ref"A1" -> 1, ref"A2" -> 2)
+            .put(ref"A3", CellValue.Formula("SUM(A1:A2)"))
+            .put(ref"B1", CellValue.Formula("IF(A1>1,\"big\",\"small\")"))
+            .put(ref"B2", CellValue.Formula("_xlfn.XLOOKUP(1,A1:A2,A1:A2)"))
+            .put(ref"B3", CellValue.Formula("'Data'!A1+Data!A2"))
+        )
+      )
+      _ <- ExcelIO.instance[IO].write(wb, path)
+      code <- Main.runLint(path, LintFormat.Text)
+      findings <- IO(unparseableFindings(path))
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(code, ExitCode.Success)
+      assertEquals(findings, Vector.empty)
   }

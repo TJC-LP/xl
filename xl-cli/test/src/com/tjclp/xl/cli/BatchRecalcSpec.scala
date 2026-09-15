@@ -10,7 +10,7 @@ import com.tjclp.xl.{CalcMode, CalcPr, CellRange, Workbook, Sheet, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.cli.commands.WriteCommands
-import com.tjclp.xl.cli.contract.{CliHarness, Warning, WarningCode}
+import com.tjclp.xl.cli.contract.{CliException, CliHarness, ErrorCode, Warning, WarningCode}
 import com.tjclp.xl.formula.FormulaParser
 import com.tjclp.xl.formula.eval.WorkbookAudit
 import com.tjclp.xl.io.ExcelIO
@@ -2049,12 +2049,14 @@ class BatchRecalcSpec extends FunSuite:
       Files.deleteIfExists(ops)
   }
 
-  test("GH-606: a batch that authors an unparseable formula is reported and fails --strict") {
+  test("GH-606: a batch that authors a formula that cannot evaluate is reported, fails --strict") {
     // The authored cell is a seed, hence in the cone: the #572 guarantee is untouched, while the
-    // blind formulas elsewhere still ride through cached and unreported.
+    // blind formulas elsewhere still ride through cached and unreported. The formula parses (an
+    // undefined name is a legal reference) and fails only at evaluation — GH-663 refuses an
+    // UNPARSEABLE one before any write, see the next test.
     val srcFile = blindModelOnDisk()
     val wb = readBack(srcFile)
-    val ops = writeOps("""[{"op":"putf","ref":"Cover!B16","formula":"=ZZZNOTAFUNC(A1)"}]""")
+    val ops = writeOps("""[{"op":"putf","ref":"Cover!B16","formula":"=NoSuchName*2"}]""")
     val advisoryOut = tempXlsx()
     val strictOut = tempXlsx()
     val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
@@ -2077,6 +2079,48 @@ class BatchRecalcSpec extends FunSuite:
       assertEquals(formulaOn(written, "Summary", ref"B1").cachedValue, Some(CellValue.Number(7)))
       assertEquals(formulaOn(written, "Detail", ref"C1").cachedValue, Some(CellValue.Number(9)))
       assertVerbatim(strictOut, srcFile, "xl/worksheets/sheet2.xml")
+    finally
+      Files.deleteIfExists(srcFile)
+      Files.deleteIfExists(advisoryOut)
+      Files.deleteIfExists(strictOut)
+      Files.deleteIfExists(ops)
+  }
+
+  test("GH-663: a batch that authors an UNPARSEABLE formula is refused before any write") {
+    // Before #663 this document was applied (exit 0, one RECALC_ERRORS warning, the text in the
+    // sheet XML) and --strict exited 1 but still wrote the file. Now the document is refused as
+    // the verb refuses the same text, advisory and strict alike, and no output exists.
+    val srcFile = blindModelOnDisk()
+    val wb = readBack(srcFile)
+    val ops = writeOps("""[{"op":"putf","ref":"Cover!B16","formula":"=ZZZNOTAFUNC(A1)"}]""")
+    val advisoryOut = tempXlsx()
+    val strictOut = tempXlsx()
+    Files.deleteIfExists(advisoryOut)
+    Files.deleteIfExists(strictOut)
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    def refused(io: IO[String]): CliException =
+      io.attempt.unsafeRunSync() match
+        case Left(e: CliException) => e
+        case Left(other) => fail(s"expected the batch to be refused, got $other")
+        case Right(summary) => fail(s"expected the batch to be refused, got: $summary")
+    try
+      val advisory = refused(
+        WriteCommands
+          .batch(wb, None, ops.toString, advisoryOut, config, warn = w => IO(warnings += w))
+      )
+      assertEquals(advisory.error.code, ErrorCode.BATCH_OP_INVALID)
+      assert(advisory.error.message.startsWith("Object 1 (putf): =ZZZNOTAFUNC(A1)\n"), advisory)
+      assert(advisory.error.message.contains("Unknown function 'ZZZNOTAFUNC'"), advisory)
+      assertEquals(advisory.error.location.flatMap(_.opIndex), Some(1))
+      assertEquals(warnings.toList, Nil, "a refusal carries no RECALC_ERRORS warning")
+      assert(!Files.exists(advisoryOut), "a refused batch must not write")
+
+      val strict = refused(
+        WriteCommands
+          .batch(wb, None, ops.toString, strictOut, config, policy = WritePolicy(strict = true))
+      )
+      assertEquals(strict.error.code, ErrorCode.BATCH_OP_INVALID)
+      assert(!Files.exists(strictOut), "a refused strict batch must not write either")
     finally
       Files.deleteIfExists(srcFile)
       Files.deleteIfExists(advisoryOut)

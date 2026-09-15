@@ -700,6 +700,17 @@ object StreamingWriteCommands:
           case (FormatHint.Inferred, Some(id)) if existingStyle.numFmt != NumFmt.General => id
           case _ => registerStyle(existingStyle.withNumFmt(numFmt))
 
+      /**
+       * GH-663: the putf verb's parser gate for ops that reached the streaming arm without
+       * [[BatchParser.parseBatchJson]] (which already refused every unparseable formula), so no
+       * `<f>` the parser rejects is ever patched into the sheet.
+       */
+      def requireParseable(formulaText: String): String =
+        val fullFormula = s"=$formulaText"
+        FormulaParser.parse(fullFormula) match
+          case Right(_) => formulaText
+          case Left(e) => throw new Exception(ParseError.formatWithContext(e, fullFormula))
+
       def applyOp(scoped: ScopedOp): Unit =
         val hint = scoped.hint
         scoped.op match
@@ -720,7 +731,7 @@ object StreamingWriteCommands:
             val ref = ARef.parse(refStr) match
               case Right(r) => r
               case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
-            val formulaText = CellValue.canonicalFormulaText(formula)
+            val formulaText = requireParseable(CellValue.canonicalFormulaText(formula))
             val formulaValue = CellValue.Formula(formulaText, None)
             formatOpt match
               case Some(numFmt) =>
@@ -783,7 +794,7 @@ object StreamingWriteCommands:
               )
             // GH-356: the explicit format lands on each cell's own xf (font kept, numFmt replaced)
             cells.zip(formulas).foreach { case (ref, formula) =>
-              val formulaText = CellValue.canonicalFormulaText(formula)
+              val formulaText = requireParseable(CellValue.canonicalFormulaText(formula))
               val formulaValue = CellValue.Formula(formulaText, None)
               cellPatches(ref) = formatOpt match
                 case Some(numFmt) =>

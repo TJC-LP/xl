@@ -18,7 +18,7 @@ a property answers to. An op the streaming writer cannot apply is refused by ind
 | op | aliases | stream | mutates cells | sheet key | CLI twin | since | summary |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `put` | — | yes | yes | yes | `put` | 0.1.0 | Write a value (or a row-major array of values) with optional number format. |
-| `putf` | — | yes | yes | yes | `putf` | 0.1.0 | Write a formula: one cell, dragged across a range from an anchor, or explicit per cell. |
+| `putf` | — | yes | yes | yes | `putf` | 0.1.0 | Write a formula: one cell, dragged across a range from an anchor, or explicit per cell. Every formula must parse (the putf verb's gate): an unparseable one is BATCH_OP_INVALID before anything is written, --dry-run included. |
 | `style` | — | yes | no | yes | `style` | 0.1.0 | Style a range: font, fill, alignment, number format, borders (merged unless `replace`). |
 | `merge` | — | yes | no | yes | `merge` | 0.1.0 | Merge a range into one cell. |
 | `unmerge` | — | yes | no | yes | `unmerge` | 0.1.0 | Unmerge a merged range. |
@@ -76,7 +76,7 @@ Exactly one of: {value} \| {values}.
 
 ### `putf`
 
-Write a formula: one cell, dragged across a range from an anchor, or explicit per cell.
+Write a formula: one cell, dragged across a range from an anchor, or explicit per cell. Every formula must parse (the putf verb's gate): an unparseable one is BATCH_OP_INVALID before anything is written, --dry-run included.
 
 ```json
 {"op":"putf","ref":"B2:B10","value":"=A2*2","from":"B2","format":"#,##0.0"}

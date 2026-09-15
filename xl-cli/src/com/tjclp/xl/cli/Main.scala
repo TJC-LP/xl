@@ -738,10 +738,10 @@ USAGE:
 FINDING CATEGORIES:
   child-order | unresolved-rel-id | wrong-rel-type | missing-part |
   missing-content-type | ref-out-of-bounds | data-table-torn |
-  data-table-unseeded | formula-leading-equals | external-ref-dangling |
-  defined-name-invalid | calc-chain-stale | xlfn-missing | empty-inline-str |
-  mc-ignorable-undeclared | dxf-id-out-of-range | unreferenced-part |
-  shared-string-orphan
+  data-table-unseeded | formula-leading-equals | formula-unparseable |
+  external-ref-dangling | defined-name-invalid | calc-chain-stale |
+  xlfn-missing | empty-inline-str | mc-ignorable-undeclared |
+  dxf-id-out-of-range | unreferenced-part | shared-string-orphan
 
 SEVERITY (every finding carries one; --format json: "severity"):
   repair  = Excel repairs or refuses the file, or a reader misreads a value
@@ -2700,8 +2700,11 @@ EXAMPLES:
     strict: Boolean = false
   ): IO[ExitCode] =
     // GH-638: --stream SAX-scans the sheet-class parts instead of parsing them (the same findings,
-    // pinned by the lint parity suite), so a million-row book lints in O(1) memory
-    val lint = if stream then WorkbookLint.lintStream(file) else WorkbookLint.lint(file)
+    // pinned by the lint parity suite), so a million-row book lints in O(1) memory. GH-663: the
+    // evaluator's parser is the `formula-unparseable` oracle (xl-ooxml carries none).
+    val lint =
+      if stream then WorkbookLint.lintStream(file, LintCommands.formulaCheck)
+      else WorkbookLint.lint(file, LintCommands.formulaCheck)
     IO.blocking(lint).flatMap {
       case Right(findings) =>
         val output = format match
