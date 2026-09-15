@@ -2109,7 +2109,11 @@ class BatchRecalcSpec extends FunSuite:
           .batch(wb, None, ops.toString, advisoryOut, config, warn = w => IO(warnings += w))
       )
       assertEquals(advisory.error.code, ErrorCode.BATCH_OP_INVALID)
-      assert(advisory.error.message.startsWith("Object 1 (putf): =ZZZNOTAFUNC(A1)\n"), advisory)
+      assert(
+        advisory.error.message
+          .startsWith("Object 1 (putf): the formula does not parse\n=ZZZNOTAFUNC(A1)\n"),
+        advisory
+      )
       assert(advisory.error.message.contains("Unknown function 'ZZZNOTAFUNC'"), advisory)
       assertEquals(advisory.error.location.flatMap(_.opIndex), Some(1))
       assertEquals(warnings.toList, Nil, "a refusal carries no RECALC_ERRORS warning")

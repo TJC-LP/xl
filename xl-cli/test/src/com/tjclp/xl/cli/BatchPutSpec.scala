@@ -597,21 +597,28 @@ class BatchPutSpec extends FunSuite:
     assertEquals(single.code, ErrorCode.BATCH_OP_INVALID)
     assertEquals(single.exitCode, ExitCodes.usage)
     assertEquals(single.location.flatMap(_.opIndex), Some(2))
-    assert(single.message.startsWith(s"Object 2 (putf): $unterminated\n"), single.message)
+    assert(
+      single.message.startsWith(s"Object 2 (putf): the formula does not parse\n$unterminated\n"),
+      single.message
+    )
     assert(single.message.contains("Unexpected end of formula at position"), single.message)
 
     val dragged =
       parseError(s"""[{"op":"putf","ref":"A3:A5","value":"$unterminated","from":"A3"}]""")
     assertEquals(dragged.code, ErrorCode.BATCH_OP_INVALID)
     assertEquals(dragged.location.flatMap(_.opIndex), Some(1))
-    assert(dragged.message.startsWith(s"Object 1 (putf): $unterminated\n"), dragged.message)
+    assert(
+      dragged.message.startsWith(s"Object 1 (putf): the formula does not parse\n$unterminated\n"),
+      dragged.message
+    )
 
     val listed =
       parseError(s"""[{"op":"putf","ref":"A3:A4","values":["=A1*2","$unterminated"]}]""")
     assertEquals(listed.code, ErrorCode.BATCH_OP_INVALID)
     assertEquals(listed.location.flatMap(_.opIndex), Some(1))
     assert(
-      listed.message.startsWith(s"Object 1 (putf) values[1]: $unterminated\n"),
+      listed.message
+        .startsWith(s"Object 1 (putf) values[1]: the formula does not parse\n$unterminated\n"),
       listed.message
     )
     assert(listed.message.contains("Unexpected end of formula"), listed.message)
@@ -629,12 +636,12 @@ class BatchPutSpec extends FunSuite:
     val parseFailure = FormulaParser.parse(full).swap.getOrElse(fail("the parser accepted FOOBAR"))
     val verb = ParseError.formatWithContext(parseFailure, full).split("\n").toList
     assertEquals(verb.size, 3, verb)
-    val prefix = "Object 1 (putf): "
-    // …behind the op prefix, the caret shifted by exactly the prefix so it still points at the
-    // same character
+    // …verbatim on its own lines under the op heading: the renderer prefixes only the first line
+    // with `Error: `, so an indented or shifted caret would land under the wrong character
+    // (PR #679 review)
     assertEquals(
       error.message.split("\n").toList,
-      List(prefix + verb(0), " " * prefix.length + verb(1), verb(2))
+      "Object 1 (putf): the formula does not parse" :: verb
     )
     assert(verb(2).startsWith("Unknown function 'FOOBAR' at position"), verb(2))
     assert(verb(2).contains("Did you mean: FLOOR"), verb(2))

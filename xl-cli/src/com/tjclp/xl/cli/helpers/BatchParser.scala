@@ -701,9 +701,11 @@ object BatchParser:
 
   /**
    * GH-663: a putf formula the parser rejects — `BATCH_OP_INVALID` (exit 2) carrying the verb's own
-   * diagnostic (`ParseError.formatWithContext`: the formula, the caret, the reason) behind the
-   * `Object N (putf)` prefix, the caret shifted by the prefix so it still points at the offending
-   * character; an unknown function's suggestions ride as `candidates`, as the verb's do.
+   * diagnostic (`ParseError.formatWithContext`: the formula, the caret, the reason) on its own
+   * lines under the `Object N (putf)` line. The block is never indented or shifted: the CLI
+   * renderer prefixes only the first line (`Error: `), so any padding computed here would misplace
+   * the caret (PR #679 review). An unknown function's suggestions ride as `candidates`, as the
+   * verb's do.
    */
   private def unparseableFormula(
     idx: Int,
@@ -711,20 +713,15 @@ object BatchParser:
     error: ParseError,
     fullFormula: String
   ): CliException =
-    val prefix = s"Object ${idx + 1} (putf)$slot: "
-    val diagnostic = ParseError.formatWithContext(error, fullFormula).split("\n", -1).toVector
-    val shifted = diagnostic.zipWithIndex.map {
-      case (line, 0) => prefix + line
-      case (line, 1) if diagnostic.sizeIs == 3 => " " * prefix.length + line
-      case (line, _) => line
-    }
+    val heading = s"Object ${idx + 1} (putf)$slot: the formula does not parse"
+    val diagnostic = ParseError.formatWithContext(error, fullFormula)
     val candidates = error match
       case ParseError.UnknownFunction(_, _, suggestions) => suggestions.toVector
       case _ => Vector.empty
     CliException(
       CliError(
         ErrorCode.BATCH_OP_INVALID,
-        shifted.mkString("\n"),
+        s"$heading\n$diagnostic",
         candidates = candidates,
         location = at(idx)
       )

@@ -682,23 +682,23 @@ class ErrorContractSpec extends CatsEffectSuite:
         assertEquals(error(run)("code"), ujson.Str("BATCH_OP_INVALID"))
         assertEquals(error(run)("location")("opIndex"), ujson.Num(2))
         assert(
-          error(run)("message").str.startsWith("Object 2 (putf): =SUM(A1:A2\n"),
+          error(run)("message").str
+            .startsWith("Object 2 (putf): the formula does not parse\n=SUM(A1:A2\n"),
           error(run)("message").str
         )
       // the three surfaces print the one diagnostic
       assertEquals(error(stream)("message"), error(memory)("message"))
       assertEquals(error(dry)("message"), error(memory)("message"))
-      // …and it is the verb's own parser text, exit code aside (FORMULA_ERROR is the verb's): the
-      // op prefix in front of the formula line, the caret line shifted by the same width
+      // …and it is the verb's own parser text, exit code aside (FORMULA_ERROR is the verb's),
+      // verbatim under the op heading — never indented, so the caret keeps its column (PR #679)
       assertEquals(verb.exit, 3, verb.stdout)
       val verbMessage = error(verb)("message").str
-      val prefix = "Object 2 (putf): "
-      val unshifted = error(memory)("message").str.split("\n", -1).toList match
-        case formula :: caret :: rest =>
-          (formula.stripPrefix(prefix) :: caret.stripPrefix(" " * prefix.length) :: rest)
-            .mkString("\n")
+      val underHeading = error(memory)("message").str.split("\n", -1).toList match
+        case heading :: rest =>
+          assertEquals(heading, "Object 2 (putf): the formula does not parse")
+          rest.mkString("\n")
         case other => other.mkString("\n")
-      assertEquals(unshifted, verbMessage)
+      assertEquals(underHeading, verbMessage)
       assert(!Files.exists(out("memory")), "the in-memory batch must not write on a refusal")
       assert(!Files.exists(out("stream")), "the streaming batch must not write on a refusal")
       assert(!Files.exists(out("verb")), "the verb must not write on a refusal")

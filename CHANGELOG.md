@@ -19,8 +19,10 @@ and the skill drift the dogfood read (#668).
 
 - **`xl lint` gains `formula-unparseable`** (#663): a repair-tier finding for a `<f>` whose text
   the parser refuses in the classes Excel certainly repairs — an unterminated string or formula,
-  a `]` or `}` closing a `(`, more than 8192 characters, nesting past the parser's 128-level
-  limit (Excel's own is 64; a 70-deep nest is not flagged). One finding per sheet names the
+  a `]` or `}` closing a `(`, more than 8192 characters. Nesting is not judged: the parser's
+  128-level depth budget counts every chained operator segment, so a flat 130-term `B2+B3+…`
+  chain Excel opens intact fails it while a 100-deep nest passes (PR #679 review; the parser
+  side is #680). One finding per sheet names the
   cells and quotes the first offending formula (capped at 80 characters); the DOM and SAX
   scanners fold identically. Shapes the parser does not yet accept but Excel opens — `TRUE()`
   as a call, an extra closer after a complete expression, a `,` or space inside parentheses

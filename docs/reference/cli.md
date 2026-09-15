@@ -1834,9 +1834,11 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
   (non-spec; strict readers like openpyxl misread it — re-writing the file with xl heals it)
 - **`formula-unparseable`** — a cell `<f>` whose text the formula parser is certain no Excel
   dialect accepts: it ends before the expression does (`SUM(A1:A2`, `A1+`, an unterminated
-  string), a `]` or `}` closes a `(` (`(A1]`), it exceeds Excel's 8192-character limit, or it
-  nests deeper than the parser's 128 levels (Excel's own limit is 64: a 70-deep nest is not
-  flagged) — Excel shows the repair prompt on open and drops the formula. One finding per part
+  string), a `]` or `}` closes a `(` (`(A1]`), or it exceeds Excel's 8192-character limit —
+  Excel shows the repair prompt on open and drops the formula. Nesting is not judged: the
+  parser's 128-level depth budget counts every chained operator segment, so a flat 130-term
+  `B2+B3+…` chain Excel opens intact fails it while a 100-deep nest passes (it bounds the parser,
+  not Excel's 64-level rule; the parser side is #680). One finding per part
   with the first five cells, the total count, and the first cell's text (first 80 characters)
   with the parser's reason. The rule is deliberately narrower than "the evaluator cannot parse
   it": an unknown function name (an add-in's `BDP(…)`, LibreOffice's `TRUE()`) or an argument

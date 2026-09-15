@@ -1456,7 +1456,8 @@ private class EvaluatorImpl(
     case i: Int => i.toString
     // anyToCellValue admits Long/Double runtime values into Any positions — render them as numbers
     case l: Long => ScalarCoercion.numberText(BigDecimal(l))
-    case d: Double => ScalarCoercion.numberText(BigDecimal(d))
+    // BigDecimal(NaN) and BigDecimal(±Infinity) throw; a non-finite Double falls to the catch-all
+    case d: Double if d.isFinite => ScalarCoercion.numberText(BigDecimal(d))
     // GH-561: `&` on a date yields its Excel serial ("46023"), never ISO text — dates are
     // numbers; only TEXT() formats them (the `">="&DATE(y,m,d)` criteria idiom depends on it)
     case ld: java.time.LocalDate => ScalarCoercion.dateSerialText(ld)
@@ -1624,7 +1625,7 @@ private class EvaluatorImpl(
         Right(ArrayArithmetic.ArrayOperand.Scalar(if b then BigDecimal(1) else BigDecimal(0)))
       case i: Int => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(i)))
       case l: Long => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(l)))
-      case d: Double => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(d)))
+      case d: Double if d.isFinite => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(d)))
       // GH-193: date values coerce to their Excel serial in arithmetic (dates ARE numbers),
       // e.g. a LET binding holding TODAY() used as `d+1`.
       case ld: java.time.LocalDate =>

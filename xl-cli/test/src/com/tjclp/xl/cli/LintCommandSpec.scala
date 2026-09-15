@@ -571,7 +571,7 @@ class LintCommandSpec extends CatsEffectSuite:
 <worksheet xmlns="$nsMain"><sheetData>
   <row r="1"><c r="A1"><v>1</v></c></row>
   <row r="2"><c r="A2"><v>2</v></c></row>
-  <row r="3"><c r="A3"><f>$fText</f><v>3</v></c></row>
+  <row r="3"><c r="A3"><f>${fText.replace("&", "&amp;").replace("<", "&lt;")}</f><v>3</v></c></row>
 </sheetData></worksheet>"""
     )
     val baos = ByteArrayOutputStream()
@@ -632,8 +632,18 @@ class LintCommandSpec extends CatsEffectSuite:
     // count opens intact (at worst #VALUE!). Neither may fail the ship gate. Nor may Excel's union
     // ',' and intersection ' ' reference operators, which the parser does not implement: after a
     // parenthesized expression it reports any character but ')' as an UnbalancedDelimiter, yet
-    // LibreOffice evaluates every one of these (SUM((A1,A2)) = 3, AREAS((A1,B1)) = 2, ...).
+    // LibreOffice evaluates every one of these (SUM((A1,A2)) = 3, AREAS((A1,B1)) = 2, ...). Nor may
+    // the parser's 128-level depth budget, which counts every chained operator segment as a level
+    // (GH-56): a flat 130-term chain Excel opens intact fails it as NestingTooDeep while a
+    // 130-deep SUM nest — past Excel's own 64 — is refused the same way; neither is a certain
+    // repair (PR #679 review; the parser side is its own issue).
+    val flatChain = (2 to 131).map(i => s"B$i").mkString("+")
+    val flatConcat = (1 to 130).map(i => s"A$i").mkString("&")
+    val deepNest = "SUM(" * 130 + "1" + ")" * 130
     val texts = Vector(
+      flatChain,
+      flatConcat,
+      deepNest,
       "SUM()",
       "TRUE()",
       "FALSE()",
@@ -659,11 +669,11 @@ class LintCommandSpec extends CatsEffectSuite:
   }
 
   test("GH-663: the certain classes are all findings — unterminated string, wrong closer, limits") {
-    // the two limit arms of the oracle: 9001 chars (Excel's 8192) and 130-deep nesting (the
-    // parser's 128) — and a finding for either must stay one readable line, not echo the formula
+    // the limit arm of the oracle: 9001 chars (Excel's 8192) — and its finding must stay one
+    // readable line, not echo the formula. The parser's depth budget is NOT an arm (see the
+    // "not repairs either" test: it refuses flat chains Excel opens).
     val tooLong = "1+" * 4500 + "1"
-    val tooDeep = "SUM(" * 130 + "1" + ")" * 130
-    val texts = Vector("\"abc", "(A1]", "(A1}", "A1+", "SUM((A1)", tooLong, tooDeep)
+    val texts = Vector("\"abc", "(A1]", "(A1}", "A1+", "SUM((A1)", tooLong)
     for
       paths <- IO(texts.map(formulaZip))
       findings <- IO(paths.map(unparseableFindings(_)))
@@ -685,8 +695,6 @@ class LintCommandSpec extends CatsEffectSuite:
         findings(5)
       )
       assert(findings(5).head.message.contains(s"<f>${tooLong.take(80)}…</f>"), findings(5))
-      assert(findings(6).head.message.contains("Formula nesting too deep"), findings(6))
-      assert(findings(6).head.message.contains(s"<f>${tooDeep.take(80)}…</f>"), findings(6))
   }
 
   test("GH-663: every real-file fixture in the repo lints free of formula-unparseable") {
