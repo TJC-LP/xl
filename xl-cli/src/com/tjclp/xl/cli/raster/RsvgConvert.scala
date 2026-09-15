@@ -10,7 +10,8 @@ import fs2.io.process.{ProcessBuilder, Processes}
  * rsvg-convert integration for converting SVG to raster formats.
  *
  * rsvg-convert is part of librsvg, a fast SVG rendering library written in Rust (with C bindings).
- * It's commonly available on Linux systems.
+ * It's commonly available on Linux systems. The SVG is piped on stdin with no input file named —
+ * see [[args]] for why not `-`.
  *
  * Install:
  *   - Debian/Ubuntu: apt install librsvg2-bin
@@ -71,22 +72,8 @@ object RsvgConvert extends Rasterizer:
             )
 
           case true =>
-            // Build command:
-            // rsvg-convert --format png --dpi-x 144 --dpi-y 144 -o output.png -
-            val args = List(
-              "--format",
-              formatArg,
-              "--dpi-x",
-              dpi.toString,
-              "--dpi-y",
-              dpi.toString,
-              "-o",
-              outputPath.toAbsolutePath.toString,
-              "-" // Read from stdin
-            )
-
             Processes[IO]
-              .spawn(ProcessBuilder("rsvg-convert", args))
+              .spawn(ProcessBuilder("rsvg-convert", args(formatArg, outputPath, dpi)))
               .use { process =>
                 val svgBytes = svg.getBytes(StandardCharsets.UTF_8)
 
@@ -105,3 +92,22 @@ object RsvgConvert extends Rasterizer:
                 yield ()
               }
         }
+
+  /**
+   * `rsvg-convert --format png --dpi-x 144 --dpi-y 144 -o output.png`, the SVG on stdin. No input
+   * file is named on purpose (GH-664): rsvg-convert reads stdin whenever it is given no positional
+   * argument — the C-era 2.40 and the Rust rewrite alike — whereas a bare `-` is only an alias for
+   * stdin in recent librsvg; 2.5x (Debian's 2.54.7) opens it as a file named `-` and fails with
+   * `Error opening file …/-`, which surfaced as `RASTERIZER_UNAVAILABLE` on the default PNG export.
+   */
+  private[raster] def args(formatArg: String, outputPath: Path, dpi: Int): List[String] =
+    List(
+      "--format",
+      formatArg,
+      "--dpi-x",
+      dpi.toString,
+      "--dpi-y",
+      dpi.toString,
+      "-o",
+      outputPath.toAbsolutePath.toString
+    )
