@@ -656,26 +656,3 @@ class BatchPutSpec extends FunSuite:
     )
     assertEquals(ok.ops.size, 3)
   }
-
-  test("GH-663: programmatic putf ops are guarded at apply time as well") {
-    val wb = Workbook(
-      Sheet("Test")
-        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
-        .put(ARef.from0(0, 1), CellValue.Number(BigDecimal(2)))
-    )
-    def failure(op: BatchOp): String =
-      BatchParser
-        .applyBatchOperations(wb, wb.sheets.headOption, Vector(op))
-        .attempt
-        .unsafeRunSync()
-        .fold(_.getMessage, out => fail(s"expected $op to be refused, got $out"))
-    assert(failure(BatchOp.PutFormula("A3", unterminated, None)).contains("Unexpected end"))
-    assert(
-      failure(BatchOp.PutFormulas("A3:A4", Vector("=A1", unterminated), None))
-        .contains("Unexpected end")
-    )
-    assert(
-      failure(BatchOp.PutFormulaDragging("A3:A4", unterminated, "A3", None))
-        .contains("Unexpected end")
-    )
-  }

@@ -442,7 +442,9 @@ object BatchParser:
               FormulaParser.parse(fullFormula) match
                 case Right(_) => formula
                 case Left(e) => throw unparseableFormula(idx, slot, e, fullFormula)
-            // Check for explicit formulas array first
+            // GH-663: the ONLY constructor of the three putf ops is this branch, so parsing here
+            // is the invariant — no apply-time re-parse (PR #679 review: a second gate was
+            // unreachable, cost a parse per formula, and would have reported the wrong code)
             objMap.get("values") match
               case Some(arr) if arr.arrOpt.isDefined =>
                 val formulas = arr.arr.toVector.zipWithIndex.map { case (v, i) =>
@@ -726,19 +728,6 @@ object BatchParser:
         location = at(idx)
       )
     )
-
-  /**
-   * GH-663: the apply-time form of the same gate, for ops built without [[parseBatchJson]]: the
-   * verb's diagnostic as the op failure.
-   */
-  private def requireParseable(formula: String): IO[Unit] =
-    val fullFormula = s"=$formula"
-    IO.fromEither(
-      FormulaParser
-        .parse(fullFormula)
-        .left
-        .map(e => new Exception(ParseError.formatWithContext(e, fullFormula)))
-    ).void
 
   /**
    * `value` and `values` are the schema's `oneOf` for put and putf (ADR-017 §2.6): an op carrying
@@ -1597,8 +1586,7 @@ object BatchParser:
     val formula = CellValue.canonicalFormulaText(formulaStr)
     val value = CellValue.Formula(formula, None)
 
-    requireParseable(formula) *> IO
-      .fromEither(RefType.parse(refStr).left.map(e => new Exception(e)))
+    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e)))
       .flatMap {
         case RefType.Cell(ref) =>
           sheetFor(wb, defaultSheetName, "putf").flatMap { sheetName =>
@@ -1695,7 +1683,6 @@ object BatchParser:
             )
           )
         else IO.unit
-      _ <- formulas.traverse_(f => requireParseable(CellValue.canonicalFormulaText(f)))
 
       // Apply formulas
       result <- updateSheet(wb, sheetName) { sheet =>

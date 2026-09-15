@@ -741,6 +741,77 @@ class LintCommandSpec extends CatsEffectSuite:
     complete.foreach(t => assert(!LintCommands.certainTruncation(t), s"should be complete: $t"))
   }
 
+  test("PR #679 review: the #669 grammar gaps and error literals are never formula-unparseable") {
+    // pinned so a future parser change cannot promote one into a repair-tier claim about a file
+    // Excel opens. Only the parser-backed category is asserted: on this minimal fixture the
+    // storage-form rules still speak (xlfn-missing for a bare x#, @ or LAMBDA; external-ref-dangling
+    // for [1]), which is their job, not this oracle's.
+    val texts = Vector(
+      "SUM(Table1[Amount])",
+      "(Table1[Amount])",
+      "Table1[[#This Row],[Amount]]",
+      "SUM({1,2,3})",
+      "{1,2}+A1",
+      "(A1:A3={1;2;3})",
+      "SUM([1]Sheet1!A1)",
+      "([1]Sheet1!A1)",
+      "SUM(Sheet1:Sheet3!A1)",
+      "A1#",
+      "(A1#)",
+      "@A1",
+      "#REF!",
+      "#DIV/0!",
+      "LAMBDA(x,x+1)(2)"
+    )
+    for
+      paths <- IO(texts.map(formulaZip))
+      findings <- IO(paths.flatMap(unparseableFindings(_)))
+      streamed <- IO(paths.flatMap(unparseableFindings(_, stream = true)))
+      _ <- IO(paths.foreach(Files.deleteIfExists))
+    yield
+      assertEquals(findings, Vector.empty)
+      assertEquals(streamed, findings)
+  }
+
+  test("PR #679 review: the prefiltered oracle answers exactly as the parse-backed one") {
+    val corpus = Vector(
+      "SUM(A1:A2",
+      "\"abc",
+      "A1+",
+      "'Sheet 1",
+      "(A1]",
+      "(A1}",
+      "SUM((A1)",
+      "1+" * 4500 + "1",
+      "SUM(" * 130 + "1" + ")" * 130,
+      "NOT",
+      "TotalRev",
+      "SUM(A1:A2)",
+      "SUM((A1,A2))",
+      "(A1:B2 B1:C2)",
+      "TRUE()",
+      "SUM()",
+      "A1:",
+      "Sheet1!",
+      "#REF!",
+      "\"a]b\"",
+      "\"a}b\"",
+      "A1]",
+      "SUM(A1:A2]",
+      "{1,2;3,4}",
+      "Table1[Col]",
+      "IF(A1,\"x\",",
+      ""
+    )
+    corpus.foreach { t =>
+      assertEquals(
+        LintCommands.formulaCheck(t),
+        LintCommands.formulaCheckSlow(t),
+        s"'${t.take(40)}'"
+      )
+    }
+  }
+
   test("GH-663: every real-file fixture in the repo lints free of formula-unparseable") {
     val fixtures = repoRoot.resolve("xl-ooxml/test/resources/fixtures")
     val books = Files.list(fixtures)

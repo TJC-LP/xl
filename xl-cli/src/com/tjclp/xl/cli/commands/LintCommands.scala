@@ -37,6 +37,22 @@ object LintCommands:
    * prefix operator awaiting its operand; PR #679 review) — a grammar gap, not a repair.
    */
   val formulaCheck: WorkbookLint.FormulaCheck = text =>
+    // Findings-preserving fast path (PR #679 review): each finding class has a cheap necessary
+    // precondition — UnexpectedEOF needs certainTruncation, FormulaTooLong needs the length, the
+    // `]`/`}` arm needs one of those characters in the text — so a text meeting none is exactly
+    // the None the parse would return, and a well-formed book never pays for a parse per <f>.
+    if !(certainTruncation(text) || text.length >= ExcelFormulaMaxChars ||
+        text.exists(ch => ch == ']' || ch == '}'))
+    then None
+    else formulaCheckSlow(text)
+
+  /** Excel's formula length limit; the parser refuses past it (`FormulaTooLong`). */
+  private val ExcelFormulaMaxChars = 8192
+
+  /**
+   * The parse-backed classification [[formulaCheck]] short-circuits; exposed for the parity pin.
+   */
+  private[cli] val formulaCheckSlow: WorkbookLint.FormulaCheck = text =>
     FormulaParser.parse(s"=$text") match
       case Right(_) => None
       case Left(err: ParseError.UnexpectedEOF) if certainTruncation(text) =>

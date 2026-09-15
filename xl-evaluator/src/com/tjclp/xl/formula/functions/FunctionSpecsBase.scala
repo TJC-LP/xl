@@ -340,7 +340,8 @@ trait FunctionSpecsBase:
   /** One rendering of a lookup value for text matching and diagnostics (VLOOKUP/HLOOKUP/MATCH). */
   protected def renderLookupValue(value: ExprValue): String = value match
     case ExprValue.Text(s) => s
-    case ExprValue.Number(n) => n.toString
+    // #665: the one number → text rule, so a diagnostic never says `999.0` where `&` says `999`
+    case ExprValue.Number(n) => com.tjclp.xl.formula.eval.ScalarCoercion.numberText(n)
     case ExprValue.Bool(b) => b.toString
     case ExprValue.Date(d) => d.toString
     case ExprValue.DateTime(dt) => dt.toString

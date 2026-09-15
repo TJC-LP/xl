@@ -69,7 +69,8 @@ and the skill drift the dogfood read (#668).
   `values[]` and `from`-dragging shapes, in memory and under `--stream`, and `--dry-run`, refuse
   a formula the parser rejects with `BATCH_OP_INVALID` (exit 2), the 1-based op index and the
   same caret diagnostic the `putf` verb prints; an unknown function is refused with its
-  "Did you mean" suggestion, as the verb does; no output file is created. `=SUM(A1:A2` used to
+  "Did you mean" suggestion, as the verb does; no output file is created. The `--stream putf`
+  verb, which had no gate at all, now raises the in-memory verb's `FORMULA_ERROR`. `=SUM(A1:A2` used to
   reach the file at exit 0 with `xl lint` clean and Excel's repair prompt waiting. The gate is the
   evaluator's parser, so the shapes it does not yet accept — `TRUE()`/`FALSE()` as calls, array
   constants, structured references, the union and intersection reference operators — are now

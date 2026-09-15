@@ -1852,8 +1852,8 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
   complete text the parser cannot finish (`NOT`, a legal defined name the parser reads as its
   prefix operator): truncation is judged from the text, never from the diagnostic class alone.
   Shared-formula dependents (empty `<f>`) and data-table records are never judged. xl's own
-  writers cannot produce the class: `putf` and every batch `putf` shape (`value`, `values`,
-  `from`) parse the formula before writing, `--dry-run` included
+  writers cannot produce the class: `putf` (in memory and under `--stream`) and every batch
+  `putf` shape (`value`, `values`, `from`) parse the formula before writing, `--dry-run` included
   (`BATCH_OP_INVALID`, exit 2, with the verb's caret diagnostic)
 - **`external-ref-dangling`** — a formula or defined name references external workbook `[N]`
   with no N-th `<externalReference>` entry in workbook.xml (the cross-workbook sheet-transplant

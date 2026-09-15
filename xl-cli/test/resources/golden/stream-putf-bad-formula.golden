@@ -1,0 +1,20 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+-o
+<DIR>/stream-putf-bad.xlsx
+--stream
+putf
+A5
+=SUM(
+## exit
+3
+## stdout
+## stderr
+Error: =SUM(
+    ^
+Unexpected end of formula at position 4: expected expression
+  code: FORMULA_ERROR
+  hint: check the formula with `xl eval`
