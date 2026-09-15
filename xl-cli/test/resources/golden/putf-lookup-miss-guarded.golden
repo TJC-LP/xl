@@ -1,0 +1,17 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+-o
+<DIR>/putf-guard.xlsx
+putf
+B5
+=IF(ISNA(VLOOKUP(2030,A1:B3,2,FALSE)),0,1)
+## exit
+0
+## stdout
+Put: B5 = =IF(ISNA(VLOOKUP(2030,A1:B3,2,FALSE)),0,1) (formula)
+Recalculated 1 formula
+Saved: <DIR>/putf-guard.xlsx
+## stderr

@@ -1,0 +1,17 @@
+## args
+-f
+<DIR>/simple.xlsx
+-s
+Data
+-o
+<DIR>/putf-miss.xlsx
+putf
+B5
+=VLOOKUP(2030,A1:B3,2,FALSE)
+## exit
+0
+## stdout
+Put: B5 = =VLOOKUP(2030,A1:B3,2,FALSE) (formula)
+Recalculated 1 formula (1 error value)
+Saved: <DIR>/putf-miss.xlsx
+## stderr

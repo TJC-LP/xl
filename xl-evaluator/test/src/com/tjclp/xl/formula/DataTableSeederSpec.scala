@@ -1098,6 +1098,57 @@ class DataTableSeederSpec extends FunSuite:
     assertEquals(report.warnings, Vector.empty, s"no fallback was taken: ${report.warnings}")
   }
 
+  // GH-662: a legacy-lookup miss is the #N/A the IFNA/ISNA arms of the guard walk classify. The
+  // corners below look D1 up in H1:I2, whose keys 1 and 2 never match the miss key 7.
+  private def lookupTable(sheet: Sheet, key: Int): Sheet =
+    sheet
+      .put(ref"D1", num(key))
+      .put(ref"H1", num(1))
+      .put(ref"I1", num(10))
+      .put(ref"H2", num(2))
+      .put(ref"I2", num(20))
+
+  test("GH-662: an IFNA(VLOOKUP(miss)) corner banks the fallback and reports the fired guard") {
+    val report = seedReport(
+      guardedColumnTable("IFNA(VLOOKUP(D1,$H$1:$I$2,2,FALSE),42)", lookupTable(_, 7))
+    )
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.foreach(r => assertSeededNumber(out, r, 42.0, 1e-9))
+    val guard = assertOneGuardFired(report.warnings, interiorRefs.size)
+    assert(guard.startsWith("VLOOKUP("), s"the fired guard names the protected lookup: $guard")
+  }
+
+  test("GH-662: an IF(ISNA(MATCH(miss)),…) corner banks the TRUE arm and reports the fired guard") {
+    val report = seedReport(
+      guardedColumnTable("IF(ISNA(MATCH(D1,$H$1:$H$2,0)),42,1)", lookupTable(_, 7))
+    )
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.foreach(r => assertSeededNumber(out, r, 42.0, 1e-9))
+    val guard = assertOneGuardFired(report.warnings, interiorRefs.size)
+    assert(guard.startsWith("MATCH("), s"the fired guard names the protected lookup: $guard")
+  }
+
+  test("GH-662: an IFNA(VLOOKUP(hit)) corner banks the looked-up value and reports no guard") {
+    val report = seedReport(
+      guardedColumnTable("IFNA(VLOOKUP(D1,$H$1:$I$2,2,FALSE),42)", lookupTable(_, 2))
+    )
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.foreach(r => assertSeededNumber(out, r, 20.0, 1e-9))
+    assertEquals(report.warnings, Vector.empty, s"no fallback was taken: ${report.warnings}")
+  }
+
+  test("GH-662: a miss over a key column holding #DIV/0! is still a miss — IFNA banks 42") {
+    val report = seedReport(
+      guardedColumnTable(
+        "IFNA(VLOOKUP(D1,$H$1:$I$2,2,FALSE),42)",
+        s => lookupTable(s, 7).put(ref"H2", CellValue.Error(CellError.Div0))
+      )
+    )
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.foreach(r => assertSeededNumber(out, r, 42.0, 1e-9))
+    assertOneGuardFired(report.warnings, interiorRefs.size)
+  }
+
   test("GH-493: a cone cell that cannot be re-derived is reported, never silently FLAT") {
     // Review rework: B1 is axis-DEPENDENT (it reads the what-if input) so it enters the cone, but
     // its cross-sheet leg is unresolvable — the same Left any unsupported function produces. The

@@ -8,10 +8,11 @@ import java.nio.file.{Files, Path}
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{CalcMode, CalcPr, CellRange, Workbook, Sheet, given}
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.cli.contract.{CliHarness, Warning, WarningCode}
 import com.tjclp.xl.formula.FormulaParser
+import com.tjclp.xl.formula.eval.WorkbookAudit
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -2239,4 +2240,39 @@ class BatchRecalcSpec extends FunSuite:
     assert(summary.contains("Saved:"), s"exit must stay clean: $summary")
     Files.deleteIfExists(out)
     Files.deleteIfExists(ops)
+  }
+
+  test("GH-662: the dogfood batch — IFNA/ISNA-guarded lookup misses cache 0, the bare miss #N/A") {
+    // The issue's repro plus an unguarded B20. Before: B18 uncached with RECALC_ERRORS, B19 cached 1.
+    val wb = Workbook(Sheet("Data"))
+    val ops = writeOps(
+      """[{"op":"put","ref":"A3:A7","values":[2021,2022,2023,2024,2025]},
+        | {"op":"put","ref":"B3:B7","values":[190,202,214,226,238]},
+        | {"op":"putf","ref":"B18","value":"=IFNA(VLOOKUP(2030,A3:B7,2,FALSE),0)"},
+        | {"op":"putf","ref":"B19","value":"=IF(ISNA(VLOOKUP(2030,A3:B7,2,FALSE)),0,1)"},
+        | {"op":"putf","ref":"B20","value":"=VLOOKUP(2030,A3:B7,2,FALSE)"}]""".stripMargin
+    )
+    val out = tempXlsx()
+    val warnings = scala.collection.mutable.ListBuffer.empty[Warning]
+    try
+      val summary = WriteCommands
+        .batch(wb, wb.sheets.headOption, ops.toString, out, config, warn = w => IO(warnings += w))
+        .unsafeRunSync()
+      assert(summary.contains("Recalculated 3 formulas (1 error value)"), s"summary: $summary")
+      assert(!summary.contains("not found"), s"the miss is a value, not a failure: $summary")
+      assertEquals(warnings.toList, Nil, "no RECALC_ERRORS: every formula computed a value")
+
+      val written = readBack(out)
+      assertEquals(formulaOn(written, "Data", ref"B18").cachedValue, Some(CellValue.Number(0)))
+      assertEquals(formulaOn(written, "Data", ref"B19").cachedValue, Some(CellValue.Number(0)))
+      assertEquals(
+        formulaOn(written, "Data", ref"B20").cachedValue,
+        Some(CellValue.Error(CellError.NA))
+      )
+      val audit = WorkbookAudit.of(written)
+      assertEquals(audit.errorCells.map(_._1.ref.toA1), Vector("B20"))
+      assertEquals(audit.uncachedFormulas, Vector.empty)
+    finally
+      Files.deleteIfExists(out)
+      Files.deleteIfExists(ops)
   }
