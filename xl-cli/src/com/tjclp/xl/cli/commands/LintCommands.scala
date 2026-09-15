@@ -23,15 +23,21 @@ object LintCommands:
    * 8192-character limit, and the parser's 128-level nesting limit (Excel's is 64). Every other
    * refusal stays `xl audit`'s to list under "Unparseable formulas" — including an extra or wrong
    * closer after a complete expression (`SUM(A1:A2))`, `SUM(A1:A2]`), which surfaces as an
-   * unexpected character.
+   * unexpected character, and a `,` or space inside parentheses (`SUM((A1,A2))`, `(A1:B2 B1:C2)`:
+   * Excel's union and intersection reference operators, which the parser does not implement). The
+   * parser reports ANY character but `)` after a parenthesized expression as an
+   * `UnbalancedDelimiter`, so that class is a finding only when the character is a `]` or `}`; a
+   * `,`, a space or a reference character there is a grammar gap, not a certain repair.
    */
   val formulaCheck: WorkbookLint.FormulaCheck = text =>
     FormulaParser.parse(s"=$text") match
       case Right(_) => None
       case Left(
-            err @ (_: ParseError.UnexpectedEOF | _: ParseError.UnbalancedDelimiter |
-            _: ParseError.FormulaTooLong | _: ParseError.NestingTooDeep)
+            err @ (_: ParseError.UnexpectedEOF | _: ParseError.FormulaTooLong |
+            _: ParseError.NestingTooDeep)
           ) =>
+        Some(ParseError.describe(err))
+      case Left(err @ ParseError.UnbalancedDelimiter(_, ']' | '}', _)) =>
         Some(ParseError.describe(err))
       case Left(_) => None
 

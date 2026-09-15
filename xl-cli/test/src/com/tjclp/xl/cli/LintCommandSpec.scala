@@ -629,16 +629,33 @@ class LintCommandSpec extends CatsEffectSuite:
   test("GH-663: formulas Excel opens that xl's parser refuses are not repairs either") {
     // the parser's grammar is narrower than Excel's: LibreOffice writes `TRUE()` (an unexpected
     // '(' to the parser), and the arity model is the registry's — a known name with an odd argument
-    // count opens intact (at worst #VALUE!). Neither may fail the ship gate.
-    val texts = Vector("SUM()", "TRUE()", "FALSE()")
+    // count opens intact (at worst #VALUE!). Neither may fail the ship gate. Nor may Excel's union
+    // ',' and intersection ' ' reference operators, which the parser does not implement: after a
+    // parenthesized expression it reports any character but ')' as an UnbalancedDelimiter, yet
+    // LibreOffice evaluates every one of these (SUM((A1,A2)) = 3, AREAS((A1,B1)) = 2, ...).
+    val texts = Vector(
+      "SUM()",
+      "TRUE()",
+      "FALSE()",
+      "SUM((A1,A2))",
+      "SUM((A1:A2,B1:B2))",
+      "INDEX((A1:B2,A1:C2),1,1,2)",
+      "AREAS((A1,B1))",
+      "(A1:B2 B1:C2)",
+      "SUM((A1:B2 B1:C2))"
+    )
     for
       paths <- IO(texts.map(formulaZip))
       findings <- IO(paths.flatMap(unparseableFindings(_)))
+      streamed <- IO(paths.flatMap(unparseableFindings(_, stream = true)))
       codes <- paths.traverse(Main.runLint(_, LintFormat.Text))
+      codesStream <- paths.traverse(Main.runLint(_, LintFormat.Text, stream = true))
       _ <- IO(paths.foreach(Files.deleteIfExists))
     yield
       assertEquals(findings, Vector.empty)
+      assertEquals(streamed, findings)
       assertEquals(codes, Vector.fill(texts.size)(ExitCode.Success))
+      assertEquals(codesStream, codes)
   }
 
   test("GH-663: the certain classes are all findings — unterminated string, wrong closer, limits") {
@@ -646,7 +663,7 @@ class LintCommandSpec extends CatsEffectSuite:
     // parser's 128) — and a finding for either must stay one readable line, not echo the formula
     val tooLong = "1+" * 4500 + "1"
     val tooDeep = "SUM(" * 130 + "1" + ")" * 130
-    val texts = Vector("\"abc", "(A1]", "A1+", "SUM((A1)", tooLong, tooDeep)
+    val texts = Vector("\"abc", "(A1]", "(A1}", "A1+", "SUM((A1)", tooLong, tooDeep)
     for
       paths <- IO(texts.map(formulaZip))
       findings <- IO(paths.map(unparseableFindings(_)))
@@ -661,13 +678,15 @@ class LintCommandSpec extends CatsEffectSuite:
           s"finding must stay one readable line (${found.head.message.length}): ${found.head}"
         )
       }
+      assert(findings(1).head.message.contains("']'"), findings(1))
+      assert(findings(2).head.message.contains("'}'"), findings(2))
       assert(
-        findings(4).head.message.contains("Formula too long: 9001 characters (max 8192)"),
-        findings(4)
+        findings(5).head.message.contains("Formula too long: 9001 characters (max 8192)"),
+        findings(5)
       )
-      assert(findings(4).head.message.contains(s"<f>${tooLong.take(80)}…</f>"), findings(4))
-      assert(findings(5).head.message.contains("Formula nesting too deep"), findings(5))
-      assert(findings(5).head.message.contains(s"<f>${tooDeep.take(80)}…</f>"), findings(5))
+      assert(findings(5).head.message.contains(s"<f>${tooLong.take(80)}…</f>"), findings(5))
+      assert(findings(6).head.message.contains("Formula nesting too deep"), findings(6))
+      assert(findings(6).head.message.contains(s"<f>${tooDeep.take(80)}…</f>"), findings(6))
   }
 
   test("GH-663: every real-file fixture in the repo lints free of formula-unparseable") {

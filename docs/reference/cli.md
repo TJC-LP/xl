@@ -1843,10 +1843,12 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
   count the registry's arity model refuses opens intact (`#NAME?` / `#VALUE!` at worst), so those
   stay `xl audit`'s to list under "Unparseable formulas" — as do an extra closer (`SUM(A1:A2))`)
   and a wrong closer after a complete expression (`SUM(A1:A2]`), which the parser reports as an
-  unexpected character even though Excel repairs both. Shared-formula dependents (empty `<f>`)
-  and data-table records are never judged. xl's own writers cannot produce the class: `putf` and
-  every batch `putf` shape (`value`, `values`, `from`) parse the formula before writing,
-  `--dry-run` included
+  unexpected character even though Excel repairs both, and a `,` or space inside parentheses
+  (`SUM((A1,A2))`, `(A1:B2 B1:C2)`: Excel's union and intersection reference operators, which the
+  parser does not implement — valid Excel, evaluated by LibreOffice, never a repair).
+  Shared-formula dependents (empty `<f>`) and data-table records are never judged. xl's own
+  writers cannot produce the class: `putf` and every batch `putf` shape (`value`, `values`,
+  `from`) parse the formula before writing, `--dry-run` included
   (`BATCH_OP_INVALID`, exit 2, with the verb's caret diagnostic)
 - **`external-ref-dangling`** — a formula or defined name references external workbook `[N]`
   with no N-th `<externalReference>` entry in workbook.xml (the cross-workbook sheet-transplant
