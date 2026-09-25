@@ -276,3 +276,23 @@ class RecursionGuardSpec extends FunSuite:
       assert(FormulaParser.parse("=1" + ("%" * 127)).isRight)
     }
   }
+
+  // GH-680 review: ROW/COLUMN/CELL quoted a non-reference argument through the case-class toString,
+  // which recurses along a chain's spine — `=ROW(A1+…)` of 1025 terms exhausted a 1MB stack
+  test("GH-680: ROW/COLUMN/CELL of a long chain name the argument as written, stack-safely") {
+    val chain = List.fill(1025)("A1").mkString("+")
+    val sheet = s.put(ARef.from1(1, 1), CellValue.Number(1))
+    onSmallStack {
+      for (fn, formula) <- List(
+          "ROW" -> s"=ROW($chain)",
+          "COLUMN" -> s"=COLUMN($chain)",
+          "CELL" -> s"""=CELL("row",$chain)"""
+        )
+      do
+        sheet.evaluateFormula(formula) match
+          case Left(err) =>
+            assert(err.message.contains(s"$fn requires a cell reference"), err.message.take(200))
+            assert(!err.message.contains("Add("), err.message.take(200))
+          case Right(v) => fail(s"$fn of a chain should refuse, got $v")
+    }
+  }

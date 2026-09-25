@@ -3,6 +3,7 @@ package com.tjclp.xl.formula.functions
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
 import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
+import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
@@ -79,7 +80,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
                 Left(
                   EvalError.EvalFailed(
                     "ROW requires a cell reference",
-                    Some(s"ROW($expr)")
+                    Some(s"ROW(${FormulaPrinter.print(expr, includeEquals = false)})")
                   )
                 )
           }
@@ -111,7 +112,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
                 Left(
                   EvalError.EvalFailed(
                     "COLUMN requires a cell reference",
-                    Some(s"COLUMN($expr)")
+                    Some(s"COLUMN(${FormulaPrinter.print(expr, includeEquals = false)})")
                   )
                 )
           }
@@ -270,7 +271,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
                 Left(
                   EvalError.EvalFailed(
                     "CELL requires a cell reference",
-                    Some(s"CELL($infoType, $expr)")
+                    Some(s"CELL($infoType, ${FormulaPrinter.print(expr, includeEquals = false)})")
                   )
                 )
           case None => Right((ctx.currentCell, ctx.sheet.name))
