@@ -123,6 +123,17 @@ class WorkbookAuditSpec extends FunSuite:
     assertEquals(message.linesIterator.size, 1, message)
   }
 
+  test("#676: a formula with line breaks or tabs is still ONE line in the audit") {
+    // Alt+Enter in Excel's formula bar is stored as a newline inside <f>
+    val broken = "SUM(A1,\nNOSUCHFN(1)\r\n)\t+"
+    val book = Workbook(Vector(sheetWith("S", "A1" -> cachedFormula(broken, 0))))
+    val message =
+      WorkbookAudit.of(book).unparseable.headOption.map(_._2).getOrElse(fail("no entry"))
+    assertEquals(message.linesIterator.size, 1, message)
+    assert(!message.exists(c => c == '\n' || c == '\r' || c == '\t'), message)
+    assert(message.startsWith("SUM(A1, NOSUCHFN(1) ) +: "), message)
+  }
+
   test("a clean book is clean: every bucket empty, calcPr None") {
     val clean = Workbook(
       Vector(sheetWith("S", "A1" -> num(1), "A2" -> cachedFormula("A1*2", 2)))
@@ -290,6 +301,50 @@ class WorkbookAuditSpec extends FunSuite:
       .read(com.tjclp.xl.ooxml.TestFixtures.copyToTemp("datatable-excel.xlsx"))
       .fold(err => fail(err.message), identity)
     assertEquals(WorkbookAudit.of(wb).staleDataTables, Vector.empty)
+  }
+
+  /** [[tableBook]] with the corner (and optionally a cone cell B2) given verbatim. */
+  private def volatileTableBook(corner: String, cone: Option[String]): Workbook =
+    val kind = columnTable("F10:F12", "A2")
+    Workbook(
+      Vector(
+        sheetWith(
+          "S",
+          (Vector(
+            "A2" -> num(4),
+            "F9" -> cachedFormula(corner, 400),
+            "E10" -> num(1),
+            "E11" -> num(2),
+            "E12" -> num(3),
+            "F10" -> CellValue.dataTable(kind, Some(num(-1))),
+            "F11" -> num(-1),
+            "F12" -> num(-1)
+          ) ++ cone.map(f => "B2" -> cachedFormula(f, 4)))*
+        )
+      )
+    )
+
+  test("#678: a table whose corner is volatile is never stale — the note stays deterministic") {
+    val seeded = volatileTableBook("A2*100+RAND()", None)
+      .seedDataTables()
+      .fold(err => fail(err.message), identity)
+    val first = WorkbookAudit.of(seeded)
+    assertEquals(first.staleDataTables, Vector.empty)
+    assertEquals(WorkbookAudit.of(seeded), first)
+    // the volatile bucket still names the corner, so the table is not silently trusted
+    assertEquals(first.volatile, Vector(q("S", "F9")))
+  }
+
+  test("#678: a volatile call anywhere in the corner's cone exempts the table too") {
+    val book = volatileTableBook("B2*100", Some("A2+RAND()"))
+    val seeded = book.seedDataTables().fold(err => fail(err.message), identity)
+    assertEquals(WorkbookAudit.of(seeded).staleDataTables, Vector.empty)
+    assertEquals(WorkbookAudit.of(seeded), WorkbookAudit.of(seeded))
+    // the same shape without the volatile call is still checked (the caches are -1: stale)
+    assertEquals(
+      WorkbookAudit.of(volatileTableBook("B2*100", Some("A2+1"))).staleDataTables.map(_.ref.toA1),
+      Vector("F10:F12")
+    )
   }
 
   test("buckets are in workbook order, then row, then column") {

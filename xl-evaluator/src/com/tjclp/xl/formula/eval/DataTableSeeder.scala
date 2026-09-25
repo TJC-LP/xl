@@ -245,6 +245,13 @@ object DataTableSeeder:
     recordGroups(sheet)
 
   /**
+   * #678: the corner (source-formula) cells a table's what-if substitution evaluates, and the input
+   * cells it substitutes — the two ends of the cone the audit checks for volatile calls.
+   */
+  private[eval] def whatIfEnds(kind: FormulaKind.DataTable): (Set[ARef], Set[ARef]) =
+    (sourceRefs(kind), (kind.r1.toList ++ kind.r2.toList).toSet)
+
+  /**
    * #678: the `recalc --tables` evaluation — the same lanes, cone re-derivation, cycle gate and
    * budgets as [[seedDataTablesReport]] — restricted to the interior cells `pick` names (in its
    * order), honoring the book's own `<calcPr>`. The workbook comes back with those cells seeded and

@@ -191,7 +191,12 @@ object WorkbookAudit:
         DependencyGraph.unresolvedReaders(wb).iterator.filterNot(unparseableRefs).toVector.sorted,
       calcPr = wb.metadata.calcPr,
       iterativeCycles = if iterative then cyclic else Vector.empty,
-      staleDataTables = staleDataTablesOf(wb, clock)
+      staleDataTables = staleDataTablesOf(
+        wb,
+        clock,
+        graph.dependencies,
+        scanned.iterator.collect { case Finding.Volatile(q) => q }.toSet
+      )
     )
 
   /**
@@ -199,9 +204,20 @@ object WorkbookAudit:
    * in workbook order then record-ref row-major. Cells the evaluation cannot settle (a failing
    * corner, a skipped or oversized table) come back unchanged and never read as stale; an uncached
    * cell is `uncachedFormulas`' to report, not this note's.
+   *
+   * A table whose corner reads a volatile function (RAND, NOW, …), directly or anywhere in its
+   * cone, is never checked: every re-evaluation draws new values, so a note would differ run to run
+   * and `recalc --tables` could never clear it. The `volatile` bucket already names that cell.
    */
-  private def staleDataTablesOf(wb: Workbook, clock: Clock): Vector[StaleDataTable] =
-    val tables = wb.sheets.flatMap(sheet => DataTableSeeder.dataTables(sheet).map(sheet -> _))
+  private def staleDataTablesOf(
+    wb: Workbook,
+    clock: Clock,
+    deps: Map[QualifiedRef, Set[QualifiedRef]],
+    volatile: Set[QualifiedRef]
+  ): Vector[StaleDataTable] =
+    val tables = wb.sheets
+      .flatMap(sheet => DataTableSeeder.dataTables(sheet).map(sheet -> _))
+      .filterNot { case (sheet, (_, kind)) => readsVolatile(sheet.name, kind, deps, volatile) }
     if tables.isEmpty then Vector.empty
     else
       val seeded = DataTableSeeder.seedSample(wb, clock, interior => sampleOf(interior).iterator)
@@ -217,6 +233,24 @@ object WorkbookAudit:
         }
         Option.when(stale.nonEmpty)(StaleDataTable(sheet.name, interior, sampled, stale))
       }
+
+  /**
+   * Whether the table's corner, or a cell it reads through the substituted inputs' boundary (the
+   * cone `recalc --tables` re-derives, inputs' own formulas excluded), calls a volatile function.
+   */
+  private def readsVolatile(
+    sheet: SheetName,
+    kind: FormulaKind.DataTable,
+    deps: Map[QualifiedRef, Set[QualifiedRef]],
+    volatile: Set[QualifiedRef]
+  ): Boolean =
+    volatile.nonEmpty && {
+      val (sources, inputs) = DataTableSeeder.whatIfEnds(kind)
+      val srcQ = sources.map(QualifiedRef(sheet, _))
+      val inputQ = inputs.map(QualifiedRef(sheet, _))
+      val cone = DependencyGraph.qualifiedTransitivePrecedents(deps -- inputQ, srcQ) ++ srcQ
+      cone.exists(volatile)
+    }
 
   /**
    * The cells the note re-evaluates: all of a small interior, else [[DataTableSampleSize]] cells at
@@ -291,8 +325,11 @@ object WorkbookAudit:
    * listing many cells reads one line per cell, and an 8193-character formula is never echoed.
    */
   private def unparseableMessage(text: String, err: ParseError): String =
+    // A formula typed with Alt+Enter carries newlines in <f>: flatten them (and tabs) so each cell
+    // really is one line of the report.
+    val flat = text.replaceAll("\\r\\n|[\\r\\n\\t]", " ")
     val shown =
-      if text.length > UnparseableTextSample then text.take(UnparseableTextSample) + "…" else text
+      if flat.length > UnparseableTextSample then flat.take(UnparseableTextSample) + "…" else flat
     s"$shown: ${ParseError.describe(err)}"
 
   private def cacheFindings(q: QualifiedRef, cached: Option[CellValue]): List[Finding] =
