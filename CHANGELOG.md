@@ -272,6 +272,13 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
+  of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
+  a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a
+  user name) into `_xlfn.ANCHORARRAY(Sheet1!)REF!`, which Excel does not know, and `xl lint`
+  raised a false `xlfn-missing` finding on every such book. A bare sheet qualifier is never a
+  spill operand now (`@Sheet1!#REF!` included), in every writer, the streaming paths and lint.
+  Pre-existing since the spill operator landed.
 - **A raster backend that exits early prints no stack trace** (#673): rsvg-convert, cairosvg and
   ImageMagick (conversion and availability probe) now run through one `java.lang.Process` backend
   that writes stdin while draining stdout and stderr, so a backend exiting before it reads its SVG
