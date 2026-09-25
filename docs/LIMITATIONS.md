@@ -320,8 +320,11 @@ CSV with no dates carries one unused Date xf). The component tables come from th
 writer's builder, so custom formats are declared at 164+ and a stale source `numFmtId` is
 re-pointed at its declaration (GH-471 parity). Formatted 100k+ row files no longer require the
 in-memory path. The unstyled writers ignore `RowData.cellStyles` (source-workbook xf indices, as
-readers produce them). `xl import --stream --new-sheet` into a new workbook goes through the
-styled two-pass writer, so a detected ISO date column displays as dates.
+readers produce them). CSV import's O(1) branch (`ImportCommands`, taken only for a workbook with
+no sheets) writes through `writeStreamStyledWithAutoDetect`, so a detected ISO date column displays
+as dates. The `xl` verb does not reach that branch today: `import` requires `-f` and a loaded book
+always has a sheet, so `import --stream` takes the in-memory path (`STREAM_BACKEND_ONLY`), whose
+date formatting #667 already fixed.
 
 **Remaining envelope / limitations**:
 - Memory is O(distinct strings) for the accumulator — the accepted envelope per the design doc
