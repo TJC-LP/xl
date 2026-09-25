@@ -268,9 +268,16 @@ object Cli:
             // in a positional slot
             val error = Argv.outputOnReadOnlyVerb(argv) match
               case Some((word, flag)) =>
+                // view's raster and document exports DO write a file, through --raster-output —
+                // point at it rather than saying the verb never writes (PR #679 review)
+                val writes =
+                  if word == "view" then
+                    s"$word writes no workbook; png/jpeg/webp/pdf/svg/html exports take " +
+                      "--raster-output <path>"
+                  else s"$word writes no file"
                 CliError.usage(
                   s"$word is read-only and does not take $flag",
-                  Some(s"drop $flag; $word writes no file. Run `xl $word --help` for the usage")
+                  Some(s"drop $flag; $writes. Run `xl $word --help` for the usage")
                 )
               case None =>
                 val hint = Argv.misplacedFile(argv, help.errors) match

@@ -813,6 +813,9 @@ object FormatCodeParser:
     tokens.foreach {
       case _: FormatToken.Exponent =>
         result ++= s"${exp.letter}$expSign$paddedExp"
+      // Scale (GH-666) is a pass-through here: `0.0E+00,` does not divide — Excel's behaviour on
+      // a scaling comma in a scientific or fraction section is unverified (#672); only the plain
+      // numeric renderer scales
       case FormatToken.Digit(_) | FormatToken.Decimal | FormatToken.Thousands | FormatToken.Scale =>
         if !numberEmitted then
           result ++= mantissaStr

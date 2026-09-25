@@ -1629,7 +1629,9 @@ object BatchParser:
         ARef.parse(fromRef).left.map(e => new Exception(s"Invalid 'from' reference: $e"))
       )
 
-      // Parse the formula
+      // Parse the formula for the TExpr the shift needs. The gate already ran at document-parse
+      // time (parseBatchJson is the only constructor), so this Left is unreachable — keep it a plain
+      // failure, never a second, differently-coded gate (PR #679 review)
       parsedExpr <- IO.fromEither(
         FormulaParser.parse(fullFormula).left.map { e =>
           new Exception(ParseError.formatWithContext(e, fullFormula))

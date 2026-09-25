@@ -204,14 +204,7 @@ object StreamingWriteCommands:
     val fullFormula = s"=$formula"
     FormulaParser.parse(fullFormula) match
       case Right(_) => IO.pure(formula)
-      case Left(e) =>
-        IO.raiseError(
-          CliException(
-            CliError
-              .fromXLError(ParseError.toXLError(e, fullFormula), None)
-              .copy(message = ParseError.formatWithContext(e, fullFormula))
-          )
-        )
+      case Left(e) => IO.raiseError(WriteCommands.formulaError(e, fullFormula))
 
   /**
    * Streaming putf: write formulas to cells with O(1) memory.

@@ -1,5 +1,7 @@
 package com.tjclp.xl.cli.commands
 
+import scala.annotation.tailrec
+
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.ooxml.lint.{Finding, LintSeverity, WorkbookLint}
 
@@ -46,7 +48,10 @@ object LintCommands:
     then None
     else formulaCheckSlow(text)
 
-  /** Excel's formula length limit; the parser refuses past it (`FormulaTooLong`). */
+  /**
+   * Excel's formula length limit: the parser refuses a text LONGER than this (`FormulaTooLong`);
+   * the fast path parses at exactly this length too — the conservative side.
+   */
   private val ExcelFormulaMaxChars = 8192
 
   /**
@@ -62,14 +67,6 @@ object LintCommands:
         Some(ParseError.describe(err))
       case Left(_) => None
 
-  /** The scan state of [[certainTruncation]]: which quote is open, how many groups, last token. */
-  private final case class TruncationScan(
-    quote: Option[Char],
-    quoteJustClosed: Boolean,
-    depth: Int,
-    last: Char
-  )
-
   /**
    * Does the formula TEXT itself show that it ends early? True when a `(`, `{` or `[` is still
    * open, a `"…"` string or `'…'` sheet name is unterminated (`""` and `''` are the escapes), or
@@ -77,26 +74,33 @@ object LintCommands:
    * operator, a range or sheet separator, an argument comma or an open paren. A complete text the
    * parser merely cannot finish (`NOT`, a name spelled like its prefix operator) is not a
    * truncation.
+   *
+   * A tail-recursive scan over `charAt`: this is the fast path every well-formed `<f>` in a book
+   * takes under `lint` and `lint --stream`, so it allocates nothing per character (PR #679 review).
    */
   private[cli] def certainTruncation(text: String): Boolean =
-    val end = text.foldLeft(TruncationScan(None, false, 0, ' ')) { (st, c) =>
-      st.quote match
-        case Some(q) =>
-          if c == q then st.copy(quote = None, quoteJustClosed = true) else st
-        case None =>
-          if st.quoteJustClosed && c == st.last && (c == '"' || c == '\'') then
-            // the closing quote was the first half of an escaped pair: still inside the literal
-            st.copy(quote = Some(c), quoteJustClosed = false)
-          else
-            val base = st.copy(quoteJustClosed = false)
-            c match
-              case '"' | '\'' => base.copy(quote = Some(c), last = c)
-              case '(' | '{' | '[' => base.copy(depth = base.depth + 1, last = c)
-              case ')' | '}' | ']' => base.copy(depth = base.depth - 1, last = c)
-              case ' ' | '\t' | '\n' | '\r' => base
-              case other => base.copy(last = other)
-    }
-    end.quote.isDefined || end.depth > 0 || TrailingOperators.contains(end.last)
+    @tailrec
+    def scan(i: Int, quote: Char, justClosed: Boolean, depth: Int, last: Char): Boolean =
+      if i >= text.length then quote != NoQuote || depth > 0 || TrailingOperators.contains(last)
+      else
+        val c = text.charAt(i)
+        if quote != NoQuote then
+          if c == quote then scan(i + 1, NoQuote, true, depth, last)
+          else scan(i + 1, quote, false, depth, last)
+        else if justClosed && c == last && (c == '"' || c == '\'') then
+          // the closing quote was the first half of an escaped pair: still inside the literal
+          scan(i + 1, c, false, depth, last)
+        else
+          c match
+            case '"' | '\'' => scan(i + 1, c, false, depth, c)
+            case '(' | '{' | '[' => scan(i + 1, NoQuote, false, depth + 1, c)
+            case ')' | '}' | ']' => scan(i + 1, NoQuote, false, depth - 1, c)
+            case ' ' | '\t' | '\n' | '\r' => scan(i + 1, NoQuote, false, depth, last)
+            case other => scan(i + 1, NoQuote, false, depth, other)
+    scan(0, NoQuote, false, 0, ' ')
+
+  /** "No quote open" in [[certainTruncation]]'s scan; NUL never occurs in a formula. */
+  private val NoQuote: Char = '\u0000'
 
   /** A formula cannot end on one of these outside quotes; `(` is covered by the depth count too. */
   private val TrailingOperators: Set[Char] =

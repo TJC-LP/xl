@@ -105,7 +105,7 @@ object WriteCommands:
    * A formula that does not parse: `FORMULA_ERROR` (with the evaluator's hint) keeping the message
    * the CLI has always printed — the formula, a caret under the offending position, the reason.
    */
-  private def formulaError(
+  private[cli] def formulaError(
     error: ParseError,
     fullFormula: String,
     prefix: String = ""
