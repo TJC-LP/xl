@@ -800,3 +800,48 @@ class ErrorContractSpec extends CatsEffectSuite:
       assert(!Files.exists(out("stream")), "the streaming batch must not write on a refusal")
       assert(!Files.exists(out("verb")), "the verb must not write on a refusal")
   }
+
+  test(
+    "GH-681: every putf gate caps the formula echo at 80 characters and drops the caret for FormulaTooLong"
+  ) {
+    val formula = "=SUM(" + ("A1," * 2800) + "A1)"
+    val ops = s"""[{"op":"putf","ref":"A3","value":"$formula"}]"""
+    val out = (tag: String) => fixtures().resolve(s"putf-cap-$tag.xlsx")
+    val base = List("-f", file("simple.xlsx"), "-s", "Data", "--json")
+    def putf(tag: String, extra: String*) =
+      CliHarness.run(
+        base ++ List("-o", out(tag).toString) ++ extra ++ List("putf", "A3", formula),
+        ""
+      )
+    for
+      memory <- CliHarness.run(base ++ List("-o", out("memory").toString, "batch", "-"), ops)
+      stream <- CliHarness.run(
+        base ++ List("-o", out("stream").toString, "--stream", "batch", "-"),
+        ops
+      )
+      dry <- CliHarness.run(List("--json", "batch", "--dry-run", "-"), ops)
+      verb <- putf("verb")
+      verbStream <- putf("verb-stream", "--stream")
+    yield
+      val sample = formula.take(80) + "…"
+      // the parser counts the expression, without its leading `=`
+      val reason = s"Formula too long: ${formula.length - 1} characters (max 8192)"
+      for run <- List(memory, stream, dry, verb, verbStream) do
+        val message = ujson.read(run.stdout)("error")("message").str
+        val lines = message.split("\n", -1).toList
+        assert(message.length < 400, s"${message.length} chars: ${message.take(200)}")
+        assert(lines.contains(sample), message)
+        assertEquals(lines.lastOption, Some(reason), message)
+        assert(!lines.exists(_.trim == "^"), s"no caret for FormulaTooLong: $message")
+      for run <- List(memory, stream, dry) do
+        assertEquals(run.exit, 2, run.stdout)
+        assertEquals(
+          ujson.read(run.stdout)("error")("message").str,
+          s"Object 1 (putf): the formula does not parse\n$sample\n$reason"
+        )
+      for run <- List(verb, verbStream) do
+        assertEquals(run.exit, 3, run.stdout)
+        assertEquals(ujson.read(run.stdout)("error")("message").str, s"$sample\n$reason")
+        // stderr's Error: echo carries the same capped text
+        assert(run.stderr.length < 400, run.stderr.take(200))
+  }

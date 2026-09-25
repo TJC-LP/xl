@@ -1556,6 +1556,8 @@ xl -f f.xlsx -o o.xlsx import data.csv --new-sheet "Imported"
 
 **Limitations**: entire CSV is loaded into memory (recommended <50k rows); dates must be ISO 8601 (`YYYY-MM-DD`).
 
+**Type inference is per column**: `import` samples the first 10 data rows and types a column Number, Boolean or Date when 80% of its non-blank samples parse as one (plain numbers, `true`/`false`, ISO dates — no currency or percent), else Text; a value that fails its column's type stays text (`true` in a numeric column is the text `true`). `--stream` changes only the writer, never the model. `import-md` and batch `put` instead detect each value on its own, currency and percent included, so the same data can type differently through `import` and `import-md`.
+
 ---
 
 ### `xl import-md <md-file|-> [--start ref] [options]`

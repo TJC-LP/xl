@@ -238,3 +238,34 @@ class ImportCsvSpec extends CatsEffectSuite:
       assertEquals(cells.get(ref"C2").map(_._1), Some(CellValue.Text("2026-01-15")))
       assertEquals(cells.values.flatMap(_._2).toVector, Vector.empty, "no cell is styled")
   }
+
+  test("GH-681: import --stream types a CSV by column, exactly as import does") {
+    // a mostly-numeric column holding one `true`: the column model makes it Number and keeps the
+    // odd value as text, where a per-value model would read it as a boolean (the docs' claim)
+    val csv = (1 to 9).map(_.toString).mkString("n\n", "\n", "\ntrue\n")
+    def cells(path: String) =
+      ExcelIO.instance[IO].read(Path.of(path)).map { wb =>
+        wb.sheets.find(_.name.value == "Csv").fold(Vector.empty) { sheet =>
+          (0 to 10).toVector.map { r =>
+            sheet.cells.get(ARef.from0(0, r)).map(c => (c.value, c.styleId))
+          }
+        }
+      }
+    for
+      path <- IO.blocking(Files.writeString(fixtures().resolve("column.csv"), csv))
+      base = List("-f", file("simple.xlsx"), "import", path.toString, "--new-sheet", "Csv")
+      plain <- CliHarness.run(base ++ List("-o", file("import-column.xlsx"))*)
+      streamed <- CliHarness.run(
+        base ++ List("-o", file("import-column-stream.xlsx"), "--stream")*
+      )
+      plainCells <- cells(file("import-column.xlsx"))
+      streamedCells <- cells(file("import-column-stream.xlsx"))
+    yield
+      assertEquals(plain.exit, 0, plain.stderr)
+      assertEquals(streamed.exit, 0, streamed.stderr)
+      assertEquals(streamedCells, plainCells)
+      assertEquals(
+        plainCells.lift(10).flatten.map(_._1),
+        Some(com.tjclp.xl.cells.CellValue.Text("true"))
+      )
+  }

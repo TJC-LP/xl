@@ -13,6 +13,7 @@ import com.tjclp.xl.cli.helpers.{
   CfRuleParser,
   ColumnAutoFit,
   CopyOps,
+  FormulaEcho,
   GroupingOps,
   Resolve,
   SheetResolver,
@@ -105,7 +106,8 @@ object WriteCommands:
    * A formula that does not parse: `FORMULA_ERROR` (with the evaluator's hint) — a heading line,
    * then the formula, a caret under the offending position and the reason. GH-681: the formula
    * block starts its own line because the renderer prefixes the first line with `Error: `, which
-   * would put the caret that many columns left of the character it names.
+   * would put the caret that many columns left of the character it names. The formula is capped at
+   * 80 characters ([[FormulaEcho]], GH-681).
    */
   private[cli] def formulaError(
     error: ParseError,
@@ -124,7 +126,7 @@ object WriteCommands:
     fullFormula: String,
     prefix: String
   ): String =
-    s"${prefix}the formula does not parse\n${ParseError.formatWithContext(error, fullFormula)}"
+    s"${prefix}the formula does not parse\n${FormulaEcho.diagnostic(error, fullFormula)}"
 
   /**
    * Write workbook using the standard or SAX/StAX backend based on mode.

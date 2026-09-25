@@ -758,14 +758,10 @@ object StreamingWriteCommands:
             val range = CellRange.parse(rangeStr) match
               case Right(r) => r
               case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-            val formulaText = CellValue.canonicalFormulaText(formula)
-            val fullFormula = s"=$formulaText"
-
-            // Parse formula for shifting
-            val parsedExpr = FormulaParser.parse(fullFormula) match
+            // The TExpr the shift needs (BatchParser.dragExpression: total, typed FORMULA_ERROR)
+            val parsedExpr = BatchParser.dragExpression(formula) match
               case Right(expr) => expr
-              case Left(e) =>
-                throw new Exception(WriteCommands.unparseableFormula(e, fullFormula, ""))
+              case Left(err) => throw CliException(CliError.fromXLError(err, None))
 
             // Apply formula with shifting; GH-356: the explicit format lands on each cell's own xf
             val startCol = Column.index0(fromARef.col)
