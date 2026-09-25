@@ -747,7 +747,12 @@ workbook's calcPr enables iterative calculation — `iterativeCycles` in the JSO
 `cycles` holds only findings); `Unresolved names` — formulas
 reading a defined name the graph cannot resolve. **Notes** (reported, never findings): `Volatile`
 (TODAY/NOW/RAND/RANDBETWEEN cells), `Dynamic` (INDIRECT/OFFSET readers), `External references`
-(other-workbook refs, whose caches are pinned), `Calculation` (the file's calcPr, when it has one).
+(other-workbook refs, whose caches are pinned), `Stale data tables` (#678: a data table whose
+interior caches disagree with its corner formula re-evaluated at each cell's input pair — the
+evaluation `xl recalc --tables` seeds with — on up to 8 sampled interior cells per table, named in
+the note; what an edit leaves behind on a book Excel never recomputes tables in; `dataTableStale`
+in the JSON report, each entry with its `sampled` cells and `stale` cached/recomputed pairs),
+`Calculation` (the file's calcPr, when it has one).
 
 Text mode prints the headline, then one section per non-empty bucket, findings before notes, every
 list in workbook order (sheet, row, column). `-s <sheet>` restricts the cell buckets to one sheet (a

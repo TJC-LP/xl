@@ -231,7 +231,24 @@ class ErrorContractSpec extends CatsEffectSuite:
   }
 
   test("a missing input file is IO_READ (exit 3) on every verb: sheets, names, view, cell, lint") {
-    val missing = file("missing.xlsx")
+    // #678: this case flaked once under the forked full xl-cli.test and passed alone. It shared
+    // its paths with the suite (`missing.xlsx`, also the lint case's; the staged `--stream put`
+    // output in the suite directory every other case writes into), so it now works in a
+    // directory of its own that nothing else names or cleans.
+    Resource
+      .make(IO.blocking(Files.createTempDirectory("xl-error-contract-missing-")))(dir =>
+        IO.blocking {
+          val entries = Files.list(dir)
+          try entries.forEach(p => Files.deleteIfExists(p))
+          finally entries.close()
+          Files.deleteIfExists(dir)
+        }.void
+      )
+      .use(missingInputOnEveryVerb)
+  }
+
+  private def missingInputOnEveryVerb(dir: Path): IO[Unit] =
+    val missing = dir.resolve("missing-input.xlsx").toString
     for
       sheets <- CliHarness.run("-f", missing, "sheets")
       names <- CliHarness.run("-f", missing, "names")
@@ -247,7 +264,7 @@ class ErrorContractSpec extends CatsEffectSuite:
         "-s",
         "Data",
         "-o",
-        fixtures().resolve("stream-missing-out.xlsx").toString,
+        dir.resolve("stream-missing-out.xlsx").toString,
         "put",
         "A1",
         "1"
@@ -280,7 +297,6 @@ class ErrorContractSpec extends CatsEffectSuite:
       assertEquals(error("message"), ujson.Str(s"No such file: $missing"))
       assertEquals(error("hint"), ujson.Str("check the path; the previous write may have failed"))
       assertEquals(error("location")("file"), ujson.Str(missing))
-  }
 
   test("GH-617: a refused argument is INVALID_ARGUMENT (exit 3) on the verbs and in batch") {
     val out = (tag: String) => fixtures().resolve(s"invalid-arg-$tag.xlsx").toString

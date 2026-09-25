@@ -631,6 +631,18 @@ class ScriptingPreludeTest extends FunSuite:
       SccReport(Vector.empty, converged = false, rounds = 2, maxDelta = None, stalled = true)
     assert(stalled.render.contains("stalled after 2 round(s)"))
 
+  test("#678: SccReport.errorValued, errorValuedCycles and StaleDataTable resolve"):
+    // a cycle converging ONTO #DIV/0! stays certified; the flag and the summary say so
+    val wb = Workbook(Sheet("S").put(ref"A1", fx"=1/B1").put(ref"B1", fx"=1/A1"))
+    val result: RecalcResult = wb.recalculate(IterativeCalc(50, BigDecimal("1E-6")))
+    assert(result.certified)
+    val errorValued: Vector[SccReport] = result.errorValuedCycles
+    assertEquals(errorValued.map(_.errorValued), Vector(true))
+    assert(result.summary.contains("1 cycle settled on error values"), result.summary)
+    // the audit's stale-interior note is a typed bucket, empty on a book without data tables
+    val stale: Vector[StaleDataTable] = wb.audit.staleDataTables
+    assertEquals(stale, Vector.empty)
+
   test(
     "GH-559: SheetRenamer, FormulaOps, FormulaShifter, StructuralEditor and QualifiedRef resolve"
   ):

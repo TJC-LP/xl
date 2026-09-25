@@ -4,9 +4,13 @@ import cats.effect.{IO, Resource}
 import cats.syntax.all.*
 import munit.CatsEffectSuite
 
+import com.tjclp.xl.{CellRange, Sheet, Workbook, given}
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.formula.eval.DataTableSeeder.seedDataTables
 import com.tjclp.xl.cli.contract.{Argv, CliHarness, CliRun, EnvelopeSchema, TestFixtures}
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.macros.ref
 
 /**
  * The inspection verbs of ADR-017 §2.10 through the in-process harness: `describe [--full]`,
@@ -245,7 +249,8 @@ class InspectCommandsSpec extends CatsEffectSuite:
           "externalRefs",
           "unresolvedReaders",
           "calcPr",
-          "iterativeCycles"
+          "iterativeCycles",
+          "dataTableStale"
         )
       )
       assertEquals(d("clean"), ujson.False)
@@ -336,6 +341,61 @@ class InspectCommandsSpec extends CatsEffectSuite:
       assert(out.contains("Calc!E1, Calc!F1"), out)
       assert(out.contains("iterative"), out)
     }
+  }
+
+  test("#678: an edit that moves a data table's model leaves a data-table-stale audit note") {
+    // I9 of the 0.23.0 dogfood: `put` re-solves the model and the table's corner but leaves the
+    // interior caches as they were (parity with Excel under autoNoTable); audit must say so, point
+    // at `recalc --tables`, and stay clean — and recalc --tables must clear the note
+    val kind: FormulaKind.DataTable = FormulaKind.DataTable(
+      CellRange.parse("F10:F12").fold(err => fail(err), identity),
+      dt2D = false,
+      dtr = false,
+      r1 = Some(ref"A2"),
+      r2 = None
+    )
+    val book = Workbook(
+      Sheet("Model")
+        .put(ref"A2", CellValue.Number(4))
+        .put(ref"B1", CellValue.Number(2))
+        .put(ref"F9", CellValue.Formula("A2*B1", Some(CellValue.Number(8))))
+        .put(ref"E10", CellValue.Number(1))
+        .put(ref"E11", CellValue.Number(2))
+        .put(ref"E12", CellValue.Number(3))
+        .put(ref"F10", CellValue.dataTable(kind, None))
+    ).seedDataTables().fold(err => fail(err.message), identity)
+    val source = fixtures().resolve("dt-stale-source.xlsx")
+    val edited = fixtures().resolve("dt-stale-edited.xlsx")
+    val reseeded = fixtures().resolve("dt-stale-reseeded.xlsx")
+    for
+      _ <- ExcelIO.instance[IO].write(book, source)
+      before <- CliHarness.run("-f", source.toString, "--json", "audit")
+      put <- CliHarness.run("-f", source.toString, "-o", edited.toString, "put", "B1", "3")
+      after <- CliHarness.run("-f", edited.toString, "--json", "audit")
+      text <- CliHarness.run("-f", edited.toString, "audit")
+      recalc <- CliHarness.run("-f", edited.toString, "-o", reseeded.toString, "recalc", "--tables")
+      healed <- CliHarness.run("-f", reseeded.toString, "--json", "audit")
+    yield
+      assertEquals(data(before)("dataTableStale"), ujson.Arr(), "a freshly seeded table is current")
+      assertEquals(put.exit, 0, put.stderr)
+      val d = data(after)
+      assertEquals(d("clean"), ujson.True, "a note, not a finding")
+      val stale = d("dataTableStale").arr.toVector
+      assertEquals(stale.map(t => (t("sheet").str, t("ref").str)), Vector(("Model", "F10:F12")))
+      assertEquals(names(stale.head("sampled")), Vector("F10", "F11", "F12"))
+      assertEquals(
+        stale
+          .head("stale")
+          .arr
+          .toVector
+          .map(c => (c("ref").str, c("cached").str, c("recomputed").str)),
+        Vector(("F10", "2", "3"), ("F11", "4", "6"), ("F12", "6", "9"))
+      )
+      assert(stale.head("message").str.contains("xl recalc --tables"), stale.head.toString)
+      assert(text.stdout.contains("Stale data tables (a note, not a finding) (1):"), text.stdout)
+      assert(text.stdout.contains("Model!F10:F12  3 of 3 sampled"), text.stdout)
+      assertEquals(recalc.exit, 0, recalc.stderr)
+      assertEquals(data(healed)("dataTableStale"), ujson.Arr(), "recalc --tables clears the note")
   }
 
   test("audit -s restricts the buckets to one sheet") {

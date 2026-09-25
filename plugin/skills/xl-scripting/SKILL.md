@@ -113,7 +113,7 @@ sheet.put(ref"D2", fx"=B2*C2")                     // compile-time validated lit
 wb.evaluateFormula("=SUM(Sales!A1:A9)", "Summary") // XLResult[CellValue], cross-sheet aware
 val r = wb.recalculate()                           // RecalcResult: total, per-cell errors
 r.certified; r.errors.map(_.render); r.workbook    // certified = no host error AND every cycle converged; then write r.workbook
-r.excelErrors.isEmpty                              // 0.14.0: #DIV/0!/#REF!/… are VALUES, not errors — certified stays true; gate on this too
+r.excelErrors.isEmpty                              // 0.14.0: #DIV/0!/#REF!/… are VALUES, not errors — certified stays true (even for a cycle that converged ONTO an error: SccReport.errorValued, unreleased); gate on this too
 Excel.writeChecked(wb, "out.xlsx")                 // 0.21.0: cache ONLY the uncached formulas + write + RecalcResult — THE write for a built model
 Excel.writeRecalculated(wb, "out.xlsx")            // 0.13.0: recompute EVERY formula + write + RecalcResult; both take a RecalcOptions (0.21.0)
 Excel.lint("out.xlsx")                             // 0.24.0: XLResult[Vector[Finding]]: the rules `xl lint` runs, formula-unparseable included (#674); gate on f.severity == LintSeverity.Repair

@@ -339,7 +339,23 @@ object InspectCommands:
       "unresolvedReaders" -> refs(audit.unresolvedReaders),
       "calcPr" -> calcPrJson(audit.calcPr),
       // a note, not a finding: the book declares iterative calculation, so its cycles are intended
-      "iterativeCycles" -> ujson.Arr.from(audit.iterativeCycles.map(scc => refs(scc.members)))
+      "iterativeCycles" -> ujson.Arr.from(audit.iterativeCycles.map(scc => refs(scc.members))),
+      // #678, a note: interiors whose caches disagree with the corner re-evaluated at their inputs
+      "dataTableStale" -> ujson.Arr.from(audit.staleDataTables.map { t =>
+        ujson.Obj(
+          "sheet" -> ujson.Str(t.sheet.value),
+          "ref" -> ujson.Str(t.ref.toA1),
+          "sampled" -> ujson.Arr.from(t.sampled.map(r => ujson.Str(r.toA1))),
+          "stale" -> ujson.Arr.from(t.stale.map { (r, cached, recomputed) =>
+            ujson.Obj(
+              "ref" -> ujson.Str(r.toA1),
+              "cached" -> ujson.Str(StaleDataTable.show(cached)),
+              "recomputed" -> ujson.Str(StaleDataTable.show(recomputed))
+            )
+          }),
+          "message" -> ujson.Str(t.render)
+        )
+      })
     )
 
   /** The headline, then one section per non-empty bucket: findings first, notes after. */
@@ -359,6 +375,13 @@ object InspectCommands:
         section(
           "Cycles (iterative calculation on, not a finding)",
           audit.iterativeCycles.map(scc => one(scc.members.mkString(", ")))
+        ) ++
+        section(
+          "Stale data tables (a note, not a finding)",
+          audit.staleDataTables.map { t =>
+            val where = s"${SheetName.quoteForFormula(t.sheet.value)}!${t.ref.toA1}"
+            one(s"$where  ${t.render}")
+          }
         ) ++
         section("Volatile", audit.volatile.map(q => one(q.toString))) ++
         section("Dynamic", audit.dynamic.map(q => one(q.toString))) ++

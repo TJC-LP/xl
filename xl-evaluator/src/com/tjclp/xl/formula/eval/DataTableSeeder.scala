@@ -170,7 +170,7 @@ object DataTableSeeder:
      * `<calcPr iterate="1"/>` for tables that depend on a reference cycle.
      */
     def seedDataTables(): XLResult[Workbook] =
-      Right(seedWorkbook(wb, None, Clock.system, declaredIterative(wb))._1)
+      Right(seedWorkbook(wb, None, Clock.system, declaredIterative(wb), AllCells)._1)
 
     /** Seed every data table on one sheet: `Left(SheetNotFound)` for a bad name. */
     @annotation.targetName("seedDataTablesSheet")
@@ -196,7 +196,7 @@ object DataTableSeeder:
      */
     @annotation.targetName("seedDataTablesIterative")
     def seedDataTables(iterative: IterativeCalc): XLResult[Workbook] =
-      Right(seedWorkbook(wb, None, Clock.system, Some(iterative))._1)
+      Right(seedWorkbook(wb, None, Clock.system, Some(iterative), AllCells)._1)
 
     /**
      * GH-453: scoped seeding with explicit iterative settings — `None` disables iteration entirely
@@ -210,7 +210,7 @@ object DataTableSeeder:
       iterative: Option[IterativeCalc]
     ): XLResult[Workbook] =
       if wb.sheets.exists(_.name == sheetName) then
-        Right(seedWorkbook(wb, Some((sheetName, only)), clock, iterative)._1)
+        Right(seedWorkbook(wb, Some((sheetName, only)), clock, iterative, AllCells)._1)
       else Left(XLError.SheetNotFound(sheetName.value))
 
     /**
@@ -227,12 +227,36 @@ object DataTableSeeder:
       clock: Clock,
       iterative: Option[IterativeCalc]
     ): XLResult[DataTableSeedReport] =
-      val (seeded, warnings) = seedWorkbook(wb, None, clock, iterative)
+      val (seeded, warnings) = seedWorkbook(wb, None, clock, iterative, AllCells)
       Right(DataTableSeedReport(seeded, warnings))
 
   /** The book's own iterative-calculation declaration, if any. */
   private def declaredIterative(wb: Workbook): Option[IterativeCalc] =
     wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)
+
+  /** Seeding computes every interior cell (the public entry points). */
+  private val AllCells: CellRange => Iterator[ARef] = _.cellsRowMajor
+
+  /**
+   * #678: the data tables on `sheet`, one per record ref, row-major — the groups a seeding run
+   * visits.
+   */
+  private[eval] def dataTables(sheet: Sheet): Vector[(CellRange, FormulaKind.DataTable)] =
+    recordGroups(sheet)
+
+  /**
+   * #678: the `recalc --tables` evaluation — the same lanes, cone re-derivation, cycle gate and
+   * budgets as [[seedDataTablesReport]] — restricted to the interior cells `pick` names (in its
+   * order), honoring the book's own `<calcPr>`. The workbook comes back with those cells seeded and
+   * every other interior cell as it was; the audit compares the two to find stale interiors without
+   * paying for every cell of every table.
+   */
+  private[eval] def seedSample(
+    wb: Workbook,
+    clock: Clock,
+    pick: CellRange => Iterator[ARef]
+  ): Workbook =
+    seedWorkbook(wb, None, clock, declaredIterative(wb), pick)._1
 
   /** Workbook-level graph facts shared by every group of one seeding run (GH-453). */
   private final case class CycleContext(
@@ -254,7 +278,8 @@ object DataTableSeeder:
     wb: Workbook,
     scope: Option[(SheetName, Option[CellRange])],
     clock: Clock,
-    iterative: Option[IterativeCalc]
+    iterative: Option[IterativeCalc],
+    pick: CellRange => Iterator[ARef]
   ): (Workbook, Vector[SeedTableWarning]) =
     val targets: Vector[SheetName] = scope match
       case Some((name, _)) => Vector(name)
@@ -284,7 +309,7 @@ object DataTableSeeder:
               groups.foldLeft((sheet, Vector.empty[SeedTableWarning])) {
                 case ((acc, ws), (_, kind)) =>
                   val (next, w) =
-                    seedGroup(accWb.put(acc), acc, kind, pinnedClock, iterative, cycles)
+                    seedGroup(accWb.put(acc), acc, kind, pinnedClock, iterative, cycles, pick)
                   (next, ws ++ w)
               }
             // Only a real change may mark the sheet modified — a no-op seed (already-correct
@@ -315,7 +340,8 @@ object DataTableSeeder:
     kind: FormulaKind.DataTable,
     clock: Clock,
     iterative: Option[IterativeCalc],
-    cycles: => CycleContext
+    cycles: => CycleContext,
+    pick: CellRange => Iterator[ARef]
   ): (Sheet, Vector[SeedTableWarning]) =
     val interior = kind.ref
     val startRow = interior.start.row.index0
@@ -358,7 +384,7 @@ object DataTableSeeder:
             )
           )
         else if relevantCore.isEmpty then
-          seedGroupAcyclic(wb, sheet, kind, input1, input2, clock, ctx, closure, srcQ)
+          seedGroupAcyclic(wb, sheet, kind, input1, input2, clock, ctx, closure, srcQ, pick)
         else
           iterative match
             case None =>
@@ -398,7 +424,8 @@ object DataTableSeeder:
                   ctx,
                   relevantCore,
                   closure,
-                  srcQ
+                  srcQ,
+                  pick
                 )
 
   /**
@@ -536,7 +563,8 @@ object DataTableSeeder:
     clock: Clock,
     ctx: CycleContext,
     closure: Set[QualifiedRef],
-    srcQ: Set[QualifiedRef]
+    srcQ: Set[QualifiedRef],
+    pick: CellRange => Iterator[ARef]
   ): (Sheet, Vector[SeedTableWarning]) =
     val interior = kind.ref
     val sheetIndex: Map[SheetName, Int] = wb.sheets.zipWithIndex.map((s, i) => s.name -> i).toMap
@@ -552,7 +580,7 @@ object DataTableSeeder:
           // Input-independent uncached precedents are the same for every combination.
           val prepared = resolveCone(wb, wb.sheets, cone.base, clock)
           val (seeded, skipped, guarded, guardName, unresolved, failure) =
-            interior.cellsRowMajor.foldLeft(
+            pick(interior).foldLeft(
               (sheet, 0, 0, Option.empty[String], prepared.unresolved, Option.empty[String])
             ) { case ((acc, skips, fired, named, unres, firstFailure), cellRef) =>
               computeCell(
@@ -669,7 +697,8 @@ object DataTableSeeder:
     ctx: CycleContext,
     relevantCore: Set[QualifiedRef],
     closure: Set[QualifiedRef],
-    srcQ: Set[QualifiedRef]
+    srcQ: Set[QualifiedRef],
+    pick: CellRange => Iterator[ARef]
   ): (Sheet, Vector[SeedTableWarning]) =
     val sheetIndex: Map[SheetName, Int] = wb.sheets.zipWithIndex.map((s, i) => s.name -> i).toMap
     sheetIndex.get(sheet.name) match
@@ -706,7 +735,8 @@ object DataTableSeeder:
             sheetIndex,
             tableIdx,
             resolveCone(wb, stripped, cone.base, clock),
-            cone
+            cone,
+            pick
           )
 
   /** The interior fold of the iterated lane, once the cone and temp sheets are prepared. */
@@ -724,7 +754,8 @@ object DataTableSeeder:
     sheetIndex: Map[SheetName, Int],
     tableIdx: Int,
     prepared: ConeResolution,
-    cone: WhatIfCone
+    cone: WhatIfCone,
+    pick: CellRange => Iterator[ARef]
   ): (Sheet, Vector[SeedTableWarning]) =
     // The what-if substitution PINS the input cells (Excel semantics): a cycle running
     // through an input is broken there, so the inputs are never fixpoint members — they stay
@@ -753,7 +784,7 @@ object DataTableSeeder:
     // generation, like one recalculation (GH-373) — axis values, member fixpoints, cone
     // cells and source formulas all read the same instant.
     val (seeded, unconverged, skipped, guarded, guardName, unresolved, failure) =
-      kind.ref.cellsRowMajor.foldLeft(
+      pick(kind.ref).foldLeft(
         (sheet, 0, 0, 0, Option.empty[String], prepared.unresolved, Option.empty[String])
       ) { case ((acc, fails, skips, fired, named, unres, firstFailure), cellRef) =>
         val computed = computeCellIterative(

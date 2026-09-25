@@ -182,6 +182,116 @@ class WorkbookAuditSpec extends FunSuite:
     assertEquals(audit.unresolvedReaders, Vector.empty)
   }
 
+  // ===== #678: data-table interiors stale against their corner formula =====
+
+  private def columnTable(interior: String, input: String): FormulaKind.DataTable =
+    FormulaKind.DataTable(
+      CellRange.parse(interior).fold(err => fail(err), identity),
+      dt2D = false,
+      dtr = false,
+      r1 = Some(a1(input)),
+      r2 = None
+    )
+
+  /**
+   * A2 is the input, F9 the corner (`A2*factor`), E10:E12 the axis 1..3, F10:F12 the interior with
+   * caches `cached(i)` — a record at F10, plain values below, as Excel writes a column table.
+   */
+  private def tableBook(factor: Int, cached: Int => Int): Workbook =
+    val kind = columnTable("F10:F12", "A2")
+    Workbook(
+      Vector(
+        sheetWith(
+          "S",
+          "A2" -> num(4),
+          "F9" -> cachedFormula(s"A2*$factor", 4 * factor),
+          "E10" -> num(1),
+          "E11" -> num(2),
+          "E12" -> num(3),
+          "F10" -> CellValue.dataTable(kind, Some(num(cached(1)))),
+          "F11" -> num(cached(2)),
+          "F12" -> num(cached(3))
+        )
+      )
+    )
+
+  test("#678: interiors that match the corner re-evaluated at their inputs carry no note") {
+    val audit = WorkbookAudit.of(tableBook(2, i => i * 2))
+    assertEquals(audit.staleDataTables, Vector.empty)
+  }
+
+  test("#678: an interior left behind by a model change is a data-table-stale NOTE") {
+    // the corner now triples, but the interior still holds the ×2 results — what
+    // `xl put` leaves on an iterative book (parity with Excel under autoNoTable)
+    val audit = WorkbookAudit.of(tableBook(3, i => i * 2))
+    val stale = audit.staleDataTables
+    assertEquals(stale.map(t => (t.sheet.value, t.ref.toA1)), Vector(("S", "F10:F12")))
+    val table = stale.head
+    assertEquals(table.sampled.map(_.toA1), Vector("F10", "F11", "F12"))
+    assertEquals(
+      table.stale.map((r, c, n) => (r.toA1, c, n)),
+      Vector(
+        ("F10", num(2), num(3)),
+        ("F11", num(4), num(6)),
+        ("F12", num(6), num(9))
+      )
+    )
+    assert(table.render.contains("xl recalc --tables"), table.render)
+    assert(table.render.contains("3 of 3 sampled"), table.render)
+    // a note, never a finding: the file is valid
+    assert(audit.isClean, s"stale interiors must not make the book dirty: $audit")
+    assertEquals(audit.findings, 0)
+    assertEquals(audit.restrictTo(SheetName.unsafe("S")).staleDataTables, stale)
+    assertEquals(audit.restrictTo(SheetName.unsafe("Other")).staleDataTables, Vector.empty)
+  }
+
+  test("#678: the check is SAMPLED — a bounded, named set of interior cells per table") {
+    val kind = columnTable("F10:F1009", "A2")
+    val axis = (0 until 1000).map(i => s"E${10 + i}" -> num(i))
+    val interior = (1 until 1000).map(i => s"F${10 + i}" -> num(-1))
+    val book = Workbook(
+      Vector(
+        sheetWith(
+          "S",
+          (Vector("A2" -> num(4), "F9" -> cachedFormula("A2*2", 8)) ++ axis ++ interior ++
+            Vector("F10" -> CellValue.dataTable(kind, Some(num(-1)))))*
+        )
+      )
+    )
+    val table = WorkbookAudit.of(book).staleDataTables.headOption.getOrElse(fail("no note"))
+    assertEquals(table.sampled.size, WorkbookAudit.DataTableSampleSize)
+    assertEquals(table.sampled.headOption.map(_.toA1), Some("F10"))
+    assertEquals(table.sampled.lastOption.map(_.toA1), Some("F1009"))
+    assertEquals(table.sampled.distinct, table.sampled)
+    assertEquals(table.stale.size, table.sampled.size)
+  }
+
+  test("#678: floating-point noise between Excel's cache and xl's re-evaluation is not stale") {
+    val kind = columnTable("F10:F10", "A2")
+    val book = Workbook(
+      Vector(
+        sheetWith(
+          "S",
+          "A2" -> num(0),
+          "F9" -> cachedFormula("A2+0.2", 0),
+          "E10" -> CellValue.Number(BigDecimal("0.1")),
+          "F10" -> CellValue.dataTable(
+            kind,
+            Some(CellValue.Number(BigDecimal("0.30000000000000004")))
+          )
+        )
+      )
+    )
+    assertEquals(WorkbookAudit.of(book).staleDataTables, Vector.empty)
+  }
+
+  test("#678: Excel-authored data tables (all three shapes) re-evaluate to their own caches") {
+    val wb = com.tjclp.xl.ooxml.XlsxReader
+      .read(com.tjclp.xl.ooxml.TestFixtures.copyToTemp("datatable-excel.xlsx"))
+      .fold(err => fail(err.message), identity)
+    assertEquals(WorkbookAudit.of(wb).staleDataTables, Vector.empty)
+  }
+
   test("buckets are in workbook order, then row, then column") {
     val wb = Workbook(
       Vector(

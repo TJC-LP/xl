@@ -57,7 +57,8 @@ audit
         "Calc!E1",
         "Calc!F1"
       ]
-    ]
+    ],
+    "dataTableStale": []
   },
   "warnings": [],
   "error": {
