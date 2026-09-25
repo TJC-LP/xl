@@ -1680,7 +1680,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case call: TExpr.Call[?] if call.spec == FunctionSpecs.index =>
-        val (_, _, colNumOpt) = call.args.asInstanceOf[FunctionSpecs.IndexArgs]
+        val (_, _, colNumOpt, areaNumOpt) = call.args.asInstanceOf[FunctionSpecs.IndexArgs]
+        assert(areaNumOpt.isEmpty)
         assert(colNumOpt.isEmpty)
       case _ => fail("Expected TExpr.Call(INDEX) with no column")
     }
@@ -1842,7 +1843,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     // GH-605 RRI (the CAGR idiom) and GH-604 SINGLE (the stored form of the `@` operator)
     assert(functions.contains("RRI"))
     assert(functions.contains("SINGLE"))
-    assertEquals(functions.length, 119)
+    assertEquals(functions.length, 122)
   }
 
   // ==================== INDIRECT Parsing Tests (GH-274) ====================

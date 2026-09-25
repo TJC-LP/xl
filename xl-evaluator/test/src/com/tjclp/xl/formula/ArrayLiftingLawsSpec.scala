@@ -223,7 +223,7 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
     case "text" => "\"a\""
     case "boolean" => "TRUE"
     case "date" => "DATE(2026,1,1)"
-    case "range" | "array or range" | "number or range" => "C2:D4"
+    case "range" | "reference" | "array or range" | "number or range" => "C2:D4"
     case _ => "1"
 
   private def sampleCalls(spec: FunctionSpec[?]): List[(Int, List[String])] =
@@ -264,7 +264,11 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
         _.stripPrefix("optional ").stripSuffix("...").split(", ")
       )
       parts.foreach(kind =>
-        assert(scalarKinds(kind) || kind == "range", s"${spec.name} has a '$kind' slot")
+        // GH-669: INDEX's array is a reference slot (a range, a union or an array constant)
+        assert(
+          scalarKinds(kind) || kind == "range" || kind == "reference",
+          s"${spec.name} has a '$kind' slot"
+        )
       )
       if !referenceResults(spec.name) then
         sampleCalls(spec).foreach { (_, kinds) =>

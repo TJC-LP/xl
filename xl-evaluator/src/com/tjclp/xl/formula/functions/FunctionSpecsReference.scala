@@ -180,6 +180,24 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
       case _ => (1, 1)
     }
 
+  /**
+   * AREAS(reference) — GH-669: the number of areas a reference denotes: 1 for a cell, a range, a
+   * name bound to one or a reference a function returns; the count of a union's areas (nested
+   * unions flatten, overlaps count: `AREAS(((A1,B1),C1))` is 3); the areas an intersection leaves
+   * (`AREAS((A1:A5,C1:C5) A2:C2)` is 2, an empty one `#NULL!`). A value is not a reference —
+   * `AREAS(1)` and `AREAS("A1")` are parse errors, as in Excel.
+   */
+  val areasFn: FunctionSpec[BigDecimal] { type Args = ReferenceOperators.Operand } =
+    FunctionSpec.simple[BigDecimal, ReferenceOperators.Operand](
+      "AREAS",
+      Arity.one,
+      flags = FunctionFlags(returnsNumeric = true)
+    )((operand, ctx) =>
+      ReferenceOperators.areas(operand, ctx).map(found => BigDecimal(found.size))
+    )(using
+      ReferenceOperators.referenceOperand
+    )
+
   val address: FunctionSpec[String] { type Args = AddressArgs } =
     FunctionSpec.simple[String, AddressArgs]("ADDRESS", Arity.Range(2, 5)) { (args, ctx) =>
       val (rowExpr, colExpr, absNumOpt, a1Opt, sheetOpt) = args
@@ -308,6 +326,10 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
    * Shapes that print as one primary — everything the `@` operand slot re-parses unparenthesized.
    */
   private def isPrimaryShape(expr: TExpr[?]): Boolean = expr match
+    // GH-669: an intersection spells a space, so `@(A1:B2 B1:C2)` keeps its parens (a union
+    // prints its own)
+    case ReferenceOperators.OperatorCall(call) =>
+      call.spec.name != ReferenceOperators.IntersectionName
     case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
         _: TExpr.Percent | _: TExpr.Concat | _: TExpr.UnaryPlus[?] | _: TExpr.Eq[?] |
         _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] | _: TExpr.Gt[?] | _: TExpr.Gte[?] =>

@@ -628,22 +628,18 @@ class LintCommandSpec extends CatsEffectSuite:
   }
 
   test("GH-663: formulas Excel opens that xl's parser refuses are not repairs either") {
-    // the parser's grammar is narrower than Excel's: LibreOffice writes `TRUE()` (an unexpected
-    // '(' to the parser), and the arity model is the registry's — a known name with an odd argument
-    // count opens intact (at worst #VALUE!). Neither may fail the ship gate. Nor may Excel's union
-    // ',' and intersection ' ' reference operators, which the parser does not implement: after a
-    // parenthesized expression it reports any character but ')' as an UnbalancedDelimiter, yet
-    // LibreOffice evaluates every one of these (SUM((A1,A2)) = 3, AREAS((A1,B1)) = 2, ...). Nor may
-    // the parser's 128-level depth budget, which counts every chained operator segment as a level
-    // (GH-56): a flat 130-term chain Excel opens intact fails it as NestingTooDeep while a
-    // 130-deep SUM nest — past Excel's own 64 — is refused the same way; neither is a certain
-    // repair (PR #679 review; the parser side is its own issue).
+    // the arity model is the registry's — a known name with an odd argument count opens intact
+    // (at worst #VALUE!) — so it may not fail the ship gate. The grammar these texts once hit —
+    // `TRUE()`, Excel's union ',' and intersection ' ' operators, a flat 130-term chain — parses
+    // since #669/#680 (LibreOffice evaluates them: SUM((A1,A2)) = 3, AREAS((A1,B1)) = 2, ...);
+    // they stay pinned as non-findings, and so does a 130-deep SUM nest, past Excel's own 64 and
+    // the parser's 128-level budget — a parser bound, not a certain repair.
     val flatChain = (2 to 131).map(i => s"B$i").mkString("+")
     val flatConcat = (1 to 130).map(i => s"A$i").mkString("&")
     val deepNest = "SUM(" * 130 + "1" + ")" * 130
-    // Nor may a complete text the parser merely cannot finish: `NOT` is a legal defined name Excel
-    // resolves, but the parser reads the word as its prefix operator and reports UnexpectedEOF —
-    // the oracle judges truncation from the text, not from the diagnostic class (PR #679 review).
+    // Nor may a complete text: `NOT` is a legal defined name Excel resolves (a name to the parser
+    // since #669; before, its prefix operator awaiting an operand) — the oracle judges truncation
+    // from the text, not from the diagnostic class (PR #679 review).
     val texts = Vector(
       "NOT",
       "not",
@@ -748,7 +744,8 @@ class LintCommandSpec extends CatsEffectSuite:
 
   test("PR #679 review: the #669 grammar gaps and error literals are never formula-unparseable") {
     // pinned so a future parser change cannot promote one into a repair-tier claim about a file
-    // Excel opens. Only the parser-backed category is asserted: on this minimal fixture the
+    // Excel opens (array constants parse since #669; structured and 3-D references and LAMBDA
+    // calls remain gaps). Only the parser-backed category is asserted: on this minimal fixture the
     // storage-form rules still speak (xlfn-missing for a bare x#, @ or LAMBDA; external-ref-dangling
     // for [1]), which is their job, not this oracle's.
     val texts = Vector(

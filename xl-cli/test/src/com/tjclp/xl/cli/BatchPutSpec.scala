@@ -648,6 +648,28 @@ class BatchPutSpec extends FunSuite:
     assertEquals(error.candidates, Vector("FLOOR"))
   }
 
+  test("GH-669: the grammar the gate refused in 0.23 — unions, intersections, arrays — passes") {
+    val formulas = List(
+      "=SUM((A1,A2))",
+      "=SUM((A1:A2,B1:B2))",
+      "=INDEX((A1:B2,A1:C2),1,1,2)",
+      "=AREAS((A1,B1))",
+      "=SUM((A1:B2 B1:C2))",
+      "=(A1:B2 B1:C2)",
+      "=SUM((A1~A2))",
+      "=TRUE()",
+      "=FALSE()",
+      "={1,2;3,4}",
+      "=SUM({1,2;3,4})",
+      "=Sheet1!A1:Sheet1!B2",
+      "=NOT"
+    )
+    val ops = formulas.zipWithIndex
+      .map((f, i) => s"""{"op":"putf","ref":"C${i + 1}","value":"$f"}""")
+      .mkString("[", ",", "]")
+    assertEquals(parseOk(ops).ops.size, formulas.size)
+  }
+
   test("GH-663: a parseable putf in every shape still passes, leading '=' optional") {
     val ok = parseOk(
       """[{"op":"putf","ref":"A3","value":"SUM(A1:A2)"},

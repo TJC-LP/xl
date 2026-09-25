@@ -545,8 +545,9 @@ class ErrorContractSpec extends CatsEffectSuite:
       eval <- CliHarness.run("eval", "=SUM(")
     yield
       assertFailure(putf, 3, "=SUM(", "FORMULA_ERROR")
-      // the caret block: formula, pointer, the parser's diagnostic — the formula is not repeated
-      assert(putf.stderr.contains("=SUM(\n    ^\n"), putf.stderr)
+      // the caret block: formula, pointer, the parser's diagnostic — the formula is not repeated;
+      // GH-681: the caret of a truncation sits one past the text, where the missing part belongs
+      assert(putf.stderr.contains("=SUM(\n     ^\n"), putf.stderr)
       assert(!putf.stderr.contains("Formula error in '=SUM(':"), putf.stderr)
       assert(putf.stderr.contains("  hint: check the formula with `xl eval`"), putf.stderr)
       assertEquals(eval.exit, 3, eval.stderr)

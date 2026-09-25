@@ -6,7 +6,8 @@ import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.printer.FormulaPrinter
 
 trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
   private def coerceToBigDecimal(value: ExprValue): BigDecimal =
@@ -23,7 +24,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       case _ => BigDecimal(0)
 
   /**
-   * INDEX(array, row_num, [column_num])
+   * INDEX(array, row_num, [column_num], [area_num])
    *
    * GH-654: a reference-returning function, typed `ArrayResult` like OFFSET and INDIRECT. The
    * selected cell is a 1×1 result that collapses in scalar positions; Excel's 0 — or the omitted
@@ -34,52 +35,119 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
    * first cell in a scalar position — the value it always returned there). A whole-axis selection
    * is bounded to the sheet's used range (as INDIRECT bounds "A:A"), so its cost follows the data
    * rather than the reference; a position outside the array is a descriptive `#REF!`.
+   *
+   * GH-669: area_num picks one area of a union (`INDEX((A1:B2,D1:E2),1,1,2)` is D1) or of a
+   * multi-area intersection; omitted or empty it is 1, below 1 `#VALUE!`, past the last area
+   * `#REF!`. An array constant (`INDEX({1,2;3,4},2,1)` is 3) is indexed by value — it names no
+   * cells — with the same row/column rules and one area.
    */
   val index: FunctionSpec[ArrayResult] { type Args = IndexArgs } =
+    given ArgSpec[ReferenceOperators.Operand] = ReferenceOperators.indexOperand
     FunctionSpec.referencing[ArrayResult, IndexArgs](
       "INDEX",
-      Arity.Range(2, 3),
+      Arity.Range(2, 4),
       flags = FunctionFlags(lift = ArrayLift.all)
-    )((args, ctx) => indexReference(args, ctx)) { (args, ctx) =>
-      indexReference(args, ctx).flatMap { ref =>
-        referenceResult(ref.range, ref.sheet, ctx)(indexValues(ref, ctx))
+    )((args, ctx) => indexTarget(args, ctx).map(_.fold(identity, identity))) { (args, ctx) =>
+      indexTarget(args, ctx).flatMap {
+        case Left(values) => Right(values)
+        case Right(ref) => referenceResult(ref.range, ref.sheet, ctx)(indexValues(ref, ctx))
       }
     }
 
   /**
-   * The reference INDEX returns: one cell, or a whole row or column of the array (unbounded — a
-   * reference position reads it whole, ROWS counts it). A position outside the array is a
-   * descriptive `#REF!`.
+   * What INDEX selects: the values of an array constant (`Left`), or the reference into the chosen
+   * area (`Right`) — one cell, or a whole row or column of it (unbounded — a reference position
+   * reads it whole, ROWS counts it). A position outside the array is a descriptive `#REF!`.
    */
-  private def indexReference(args: IndexArgs, ctx: EvalContext): Either[EvalError, RangeOperand] =
-    val (array, rowNumExpr, colNumOpt) = args
+  private def indexTarget(
+    args: IndexArgs,
+    ctx: EvalContext
+  ): Either[EvalError, Either[ArrayResult, RangeOperand]] =
+    val (array, rowNumExpr, colNumOpt, areaNumOpt) = args
     for
       rowNum <- ctx.evalExpr(rowNumExpr)
       colNum <- colNumOpt match
         case Some(expr) => ctx.evalExpr(expr).map(Some(_))
         case None => Right(None)
-      resolved <- Evaluator.resolveRangeLocation(array, ctx.sheet, ctx.workbook)
-      (targetSheet, arrayRange) = resolved
-      startCol = arrayRange.colStart.index0
-      startRow = arrayRange.rowStart.index0
-      numCols = arrayRange.width
-      numRows = arrayRange.height
-      call = s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})"
-      // Excel's two-argument form: the single position reads along a vector's long axis; on a
-      // 2-D array it is row_num and the whole row is selected (column_num 0)
-      (rowPos, colPos) = colNum match
-        case Some(c) => (rowNum.toInt, c.toInt)
-        case None if numRows == 1 => (1, rowNum.toInt)
-        case None => (rowNum.toInt, 0)
+      areaNum <- areaNumOpt match
+        case Some(TExpr.Missing) | Some(TExpr.Coerced(TExpr.Missing, _)) | None => Right(1)
+        case Some(expr) => ctx.evalExpr(expr).map(_.toInt)
+      operandText = array match
+        case Left(location) => location.toA1
+        case Right(expr) => FormulaPrinter.printFileForm(expr)
+      call = s"INDEX($operandText, $rowNum${colNum.map(c => s", $c").getOrElse("")}" +
+        s"${areaNumOpt.fold("")(_ => s", $areaNum")})"
+      target <- array match
+        case Right(TExpr.Lit(values: ArrayResult)) =>
+          pickArea(1, areaNum, call).flatMap(_ =>
+            selection(rowNum, colNum, values.rows, values.cols, call).map { (rows, cols) =>
+              Left(ArrayResult(rows.map(r => cols.map(c => values(r, c)))))
+            }
+          )
+        case _ =>
+          for
+            areas <- ReferenceOperators.areas(array, ctx)
+            _ <- pickArea(areas.size, areaNum, call)
+            RangeOperand(targetSheet, arrayRange) = areas(areaNum - 1)
+            (rows, cols) <- selection(rowNum, colNum, arrayRange.height, arrayRange.width, call)
+          yield
+            val startCol = arrayRange.colStart.index0
+            val startRow = arrayRange.rowStart.index0
+            Right(
+              RangeOperand(
+                targetSheet,
+                CellRange(
+                  ARef.from0(
+                    startCol + cols.headOption.getOrElse(0),
+                    startRow + rows.headOption.getOrElse(0)
+                  ),
+                  ARef.from0(
+                    startCol + cols.lastOption.getOrElse(0),
+                    startRow + rows.lastOption.getOrElse(0)
+                  )
+                )
+              )
+            )
+    yield target
+
+  /** GH-669: area_num against the number of areas — `#VALUE!` below 1, `#REF!` past the last. */
+  private def pickArea(count: Int, areaNum: Int, call: String): Either[EvalError, Unit] =
+    if areaNum < 1 then
+      Left(
+        EvalError.ErrorValue(CellError.Value, Some(s"INDEX: area_num $areaNum is below 1 ($call)"))
+      )
+    else if areaNum > count then
+      Left(
+        EvalError.ErrorValue(
+          CellError.Ref,
+          Some(s"INDEX: area_num $areaNum is past the reference's $count area(s) ($call)")
+        )
+      )
+    else Right(())
+
+  /**
+   * The 0-based rows and columns INDEX selects in an array of `numRows` × `numCols` — never empty.
+   * Excel's two-argument form: the single position reads along a vector's long axis; on a 2-D array
+   * it is row_num and the whole row is selected (column_num 0).
+   */
+  private def selection(
+    rowNum: BigDecimal,
+    colNum: Option[BigDecimal],
+    numRows: Int,
+    numCols: Int,
+    call: String
+  ): Either[EvalError, (Vector[Int], Vector[Int])] =
+    val (rowPos, colPos) = colNum match
+      case Some(c) => (rowNum.toInt, c.toInt)
+      case None if numRows == 1 => (1, rowNum.toInt)
+      case None => (rowNum.toInt, 0)
+    for
       rowSel <- indexAxis(rowPos, numRows, "row_num", "rows", call)
       colSel <- indexAxis(colPos, numCols, "col_num", "columns", call)
     yield
-      // one line of an axis, or the whole axis
-      def line(sel: Option[Int], start: Int, size: Int): (Int, Int) =
-        sel.fold((start, start + size - 1))(i => (start + i, start + i))
-      val (rr0, rr1) = line(rowSel, startRow, numRows)
-      val (rc0, rc1) = line(colSel, startCol, numCols)
-      RangeOperand(targetSheet, CellRange(ARef.from0(rc0, rr0), ARef.from0(rc1, rr1)))
+      def line(sel: Option[Int], size: Int): Vector[Int] =
+        sel.fold(Vector.range(0, size))(Vector(_))
+      (line(rowSel, numRows), line(colSel, numCols))
 
   /** None = the whole axis (Excel's 0), Some(i) = one 0-based line of it. */
   private def indexAxis(

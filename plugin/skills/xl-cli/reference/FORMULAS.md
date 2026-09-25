@@ -21,6 +21,7 @@ it are hand-written semantics worth knowing.
 | `ADDRESS` | 2–5 | number, number, optional number, optional boolean, optional text | — |
 | `ANCHORARRAY` | 1 | array or range | dynamic deps |
 | `AND` | 1+ | boolean... | — |
+| `AREAS` | 1 | reference | — |
 | `AVERAGE` | 1+ | number or range... | — |
 | `AVERAGEIF` | 2–3 | range, value, optional range | — |
 | `AVERAGEIFS` | 3+ | range, range, value... | — |
@@ -42,6 +43,7 @@ it are hand-written semantics worth knowing.
 | `EOMONTH` | 2 | date, integer | date |
 | `ERROR.TYPE` | 1 | cell | — |
 | `EXP` | 1 | number | — |
+| `FALSE` | 0 | — | — |
 | `FILTER` | 2–3 | range, array or range, optional value | — |
 | `FIND` | 2–3 | text, text, optional integer | — |
 | `FLOOR` | 2 | number, number | — |
@@ -52,7 +54,7 @@ it are hand-written semantics worth knowing.
 | `IFERROR` | 2 | cell, cell | — |
 | `IFNA` | 2 | cell, cell | — |
 | `IFS` | 2+ | value... | — |
-| `INDEX` | 2–3 | range, number, optional number | — |
+| `INDEX` | 2–4 | reference, number, optional number, optional number | — |
 | `INDIRECT` | 1–2 | text, optional boolean | dynamic deps |
 | `INT` | 1 | number | — |
 | `IRR` | 1–2 | range, optional number | — |
@@ -123,6 +125,7 @@ it are hand-written semantics worth knowing.
 | `TODAY` | 0 | — | date, volatile |
 | `TRANSPOSE` | 1 | range | — |
 | `TRIM` | 1 | text | — |
+| `TRUE` | 0 | — | — |
 | `TRUNC` | 1–2 | number, optional number | — |
 | `UNIQUE` | 1–3 | range, optional boolean, optional boolean | — |
 | `UPPER` | 1 | text | — |

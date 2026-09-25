@@ -164,12 +164,16 @@ class CacheInvalidationIntegritySpec extends FunSuite:
     assertEquals(cache(edited, "Other", ref"B2"), Some(num(2)))
   }
 
-  test("GH-507: an unsafe intersection-name rewrite is refused before mutating the workbook") {
+  test("GH-669: an intersection name is rewritten with the edit, both operands shifted") {
+    // GH-507 refused this rewrite while the parser could not read the intersection operator
     val before = namedWorkbook.withDefinedName("Multi", "Data!$A$1:$A$8 Data!$A$5:$A$10")
-    val result = StructuralEditor.deleteRowsChecked(before, SheetName.unsafe("Data"), 1, 1)
-    assert(result.isLeft)
-    assert(result.left.toOption.exists(_.message.contains("Multi")))
-    assertEquals(cache(before, "Other", ref"B2"), Some(num(33)))
+    val edited = StructuralEditor
+      .deleteRowsChecked(before, SheetName.unsafe("Data"), 1, 1)
+      .fold(error => fail(error.message), identity)
+    assertEquals(
+      edited.metadata.definedNames.find(_.name == "Multi").map(_.formula),
+      Some("Data!$A$1:$A$7 Data!$A$4:$A$9")
+    )
   }
 
   test(

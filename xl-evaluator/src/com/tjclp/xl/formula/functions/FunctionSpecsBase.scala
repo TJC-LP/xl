@@ -151,7 +151,14 @@ trait FunctionSpecsBase:
     Option[TExpr[Int]],
     Option[TExpr[Int]]
   )
-  type IndexArgs = (TExpr.RangeLocation, TExpr[BigDecimal], Option[TExpr[BigDecimal]])
+  // GH-669: the array is a location, a union/intersection (area_num picks an area) or an array
+  // constant; the fourth slot is area_num
+  type IndexArgs = (
+    ReferenceOperators.Operand,
+    TExpr[BigDecimal],
+    Option[TExpr[BigDecimal]],
+    Option[TExpr[BigDecimal]]
+  )
   type MatchArgs = (AnyExpr, TExpr.RangeLocation, Option[TExpr[BigDecimal]])
   type AddressArgs = (
     TExpr[BigDecimal],

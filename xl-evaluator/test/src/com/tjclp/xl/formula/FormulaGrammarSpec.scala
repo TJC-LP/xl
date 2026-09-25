@@ -316,10 +316,11 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     case Arity.AtLeast(n) => n
 
   /** A strict range slot refuses an empty argument (`SUMIF(,">0")` is InvalidArguments). */
-  private def isStrictRange(kind: String): Boolean = kind == "range"
+  private def isStrictRange(kind: String): Boolean = kind == "range" || kind == "reference"
 
   private def genArg(kind: String, depth: Int, scope: Scope): Gen[String] = kind match
-    case "range" => genRangeArg(scope)
+    // GH-669: a reference slot (AREAS, INDEX's array) takes every reference a range slot does
+    case "range" | "reference" => genRangeArg(scope)
     case "number or range" | "array or range" =>
       Gen.frequency(3 -> genRangeArg(scope), 3 -> Gen.lzy(genExpr(depth, scope)))
     case "boolean" =>
@@ -713,8 +714,7 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
         x => x,
         x => s"SUM($x)",
         x => s"INDEX($x, 1, 2)",
-        x => s"$x+1",
-        x => s"MATCH(1, $x, 0)"
+        x => s"$x+1"
       )
     yield wrap(cells.grouped(cols).map(_.mkString(",")).mkString("{", ";", "}"))
 
@@ -765,12 +765,15 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
   private val genRejected: Gen[String] =
     Gen.frequency(
       3 -> genThreeD.map(_._1),
-      2 -> genArrayConstant,
       2 -> genStructuredRef,
-      1 -> genUnion,
-      1 -> genIntersection,
-      1 -> genLambda
+      1 -> genLambda,
+      // a lookup over an array constant stays out of scope: MATCH's lookup_array is a range slot
+      1 -> genArrayConstant.map(constant => s"MATCH(1, $constant, 0)")
     )
+
+  /** GH-669: grammar the parser used to refuse and now accepts. */
+  private val genFormerlyRejected: Gen[String] =
+    Gen.frequency(2 -> genArrayConstant, 1 -> genUnion, 1 -> genIntersection)
 
   /** Total rejection: a Left with a position inside the text, never a throw. */
   private def assertRejected(body: String): ParseError =
@@ -820,6 +823,13 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     }
   }
 
+  property("GH-669: array constants, unions and intersections round-trip") {
+    forAllNoShrink(genFormerlyRejected) { body =>
+      assertRoundTrips(s"=$body")
+      true
+    }
+  }
+
   property(
     "GH-653: a rename touching either end of a 3-D span refuses instead of leaving an end stale"
   ) {
@@ -851,7 +861,7 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
   }
 
   private def sweepFiller(kind: String): String = kind match
-    case "range" => "A1:B2"
+    case "range" | "reference" => "A1:B2"
     case "number or range" | "array or range" => "A1:A3"
     case "boolean" => "TRUE"
     case "text" => "\"x\""
@@ -936,20 +946,16 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     assertEquals(variant("Sheet1:Sheet3!A1"), "InvalidCellRef")
     assertEquals(variant("'Q1':'Q3'!A1"), "UnexpectedChar")
     assertEquals(variant("'Sheet1:Sheet 3'!A1"), "InvalidCellRef")
-    assertEquals(variant("{1,2;3,4}"), "UnexpectedChar")
     assertEquals(variant("SUM(Table1[Col])"), "UnexpectedChar")
     assertEquals(variant("Table1[Col]"), "UnexpectedChar")
     assertEquals(variant("[@Col]"), "InvalidCellRef")
-    assertEquals(variant("(A1,B1)"), "UnbalancedDelimiter")
-    assertEquals(variant("A1:B2 B1:C3"), "UnexpectedChar")
     assertEquals(variant("LAMBDA(x,x+1)(2)"), "UnknownFunction")
+    // GH-669: array constants, unions and intersections parse now
+    List("{1,2;3,4}", "(A1,B1)", "A1:B2 B1:C3").foreach(body => assertRoundTrips(s"=$body"))
     List(
       "Sheet1:Sheet3!A1",
-      "{1,2;3,4}",
       "SUM(Table1[Col])",
       "[@Col]",
-      "(A1,B1)",
-      "A1:B2 B1:C3",
       "LAMBDA(x,x+1)(2)",
       "LET(f, LAMBDA(x, x*2), f(3))"
     ).foreach { body =>

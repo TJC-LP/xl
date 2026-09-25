@@ -8,7 +8,8 @@ import com.tjclp.xl.formula.functions.{
   EvalContext,
   FunctionSpec,
   FunctionSpecs,
-  LiftSlot
+  LiftSlot,
+  ReferenceOperators
 }
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.FormulaPrinter
@@ -412,11 +413,53 @@ object Evaluator:
 
   /**
    * The functions that return a reference (Excel's IF, IFS, CHOOSE and SWITCH return the reference
-   * they select; OFFSET, INDIRECT and INDEX compute one): in a reference position their result
-   * reaches the consumer whole, in a plain cell's value position it is implicitly intersected.
+   * they select; OFFSET, INDIRECT and INDEX compute one; GH-669: so does the intersection operator
+   * ` `): in a reference position their result reaches the consumer whole, in a plain cell's value
+   * position it is implicitly intersected.
    */
   private[formula] val referenceFunctions: Set[String] =
-    Set("IF", "IFS", "CHOOSE", "SWITCH", "OFFSET", "INDIRECT", "INDEX")
+    Set(
+      "IF",
+      "IFS",
+      "CHOOSE",
+      "SWITCH",
+      "OFFSET",
+      "INDIRECT",
+      "INDEX",
+      ReferenceOperators.IntersectionName
+    )
+
+  /**
+   * GH-669: an operator node (binary, `%` or unary `+`) whose operands are only array constants,
+   * scalar literals, error literals and single-cell references — at least one an array constant.
+   * Such an operation reads the same in a plain cell and in array mode except for Excel's legacy
+   * rule that its array survives, so the evaluator takes it in array mode. A chain's spine is
+   * walked in a loop (BinarySpine).
+   */
+  /** GH-669: an array constant, or an operation over array constants (see below). */
+  private[formula] def isArrayConstant(expr: TExpr[?]): Boolean = expr match
+    case TExpr.Lit(_: ArrayResult) => true
+    case other => arrayConstantOperation(other)
+
+  private[formula] def arrayConstantOperation(expr: TExpr[?]): Boolean =
+    // None: not such an operation; Some(sawArray)
+    def scan(e: TExpr[?]): Option[Boolean] = e match
+      case TExpr.Lit(_: ArrayResult) => Some(true)
+      case TExpr.Lit(_) | TExpr.ErrorLit(_) | TExpr.Ref(_, _, _) | TExpr.PolyRef(_, _) |
+          TExpr.SheetRef(_, _, _, _) | TExpr.SheetPolyRef(_, _, _) =>
+        Some(false)
+      case TExpr.Coerced(inner, _) => scan(inner)
+      case TExpr.UnaryPlus(inner) => scan(inner)
+      case TExpr.Percent(inner) => scan(inner)
+      case chain if BinarySpine.isBinary(chain) =>
+        BinarySpine.operandList(chain).foldLeft(Option(false)) { (saw, operand) =>
+          saw.flatMap(before => scan(operand).map(_ || before))
+        }
+      case _ => None
+    val isOperator = expr match
+      case TExpr.UnaryPlus(_) | TExpr.Percent(_) => true
+      case other => BinarySpine.isBinary(other)
+    isOperator && scan(expr).contains(true)
 
   /**
    * Whether an expression may denote a reference rather than a value: a cell, a name, a LET name, a
@@ -1037,6 +1080,14 @@ private class EvaluatorImpl(
           case _ =>
             decodeOrCarried(at, cell, decode)
 
+      // GH-669: an operator over array constants keeps its array in a plain cell, as Excel's legacy
+      // evaluation does — only a REFERENCE is implicitly intersected there, and an array constant
+      // is a value, so `SUM({1,2}*2)` is 6 and `={1,2}*10` shows 10. Such an operation (its
+      // operands array constants, scalar literals and single cells, which read the same in either
+      // mode) evaluates in array mode; the cell boundary still shows an array's top-left value.
+      case op if !allowArrayResults && Evaluator.arrayConstantOperation(op) =>
+        withArrayResults.eval(op, sheet, clock, workbook, currentCell)
+
       // ===== Arithmetic Operators =====
       // These support array arithmetic with broadcasting when operands are ranges or array results
       case TExpr.Add(x, y) =>
@@ -1418,10 +1469,14 @@ private class EvaluatorImpl(
     val slots = call.spec.argSpec.scalarSlots(call.args).zipWithIndex.map {
       case ((expr, kind), position) => (expr, kind, lift.slots.forall(_.contains(position)))
     }
-    // array mode lifts anything that may be an array; a plain cell only intersects references
+    // array mode lifts anything that may be an array; a plain cell intersects references and,
+    // GH-669, lifts over an array constant — a value, which Excel's legacy evaluation keeps
+    // (`SUM(COUNTIF(A1:A10,{1,2,3}))`, `SUM(ABS({-1,-2}))` need no array formula)
     def mayLift(expr: TExpr[?], kind: LiftSlot): Boolean =
       if allowArrayResults then !ArrayLifting.isScalarCertain(expr, bindings)
-      else ArrayLifting.referenceLocation(ArrayLifting.peel(expr, kind)._1).isDefined
+      else
+        val peeled = ArrayLifting.peel(expr, kind)._1
+        ArrayLifting.referenceLocation(peeled).isDefined || Evaluator.isArrayConstant(peeled)
     if !slots.exists((expr, kind, lifted) => lifted && mayLift(expr, kind)) then
       call.spec.eval(call.args, ctx)
     else
@@ -1525,7 +1580,14 @@ private class EvaluatorImpl(
               .map(_ => SlotValue.ErrorArg(CellError.Value))
               .toRight(failure)
     def computed: SlotValue =
-      if !allowArrayResults then SlotValue.Keep
+      // GH-669: a plain cell computes an array constant's slot in array mode (see mayLift)
+      if !allowArrayResults && Evaluator.isArrayConstant(peeled) then
+        withArrayResults.eval(peeled, sheet, clock, workbook, currentCell) match
+          case Right(array: ArrayResult) => ArrayLifting.fromArray(array, fromCells = false)
+          case Right(value) => SlotValue.Scalar(value, fromCell = false)
+          case Left(failure) =>
+            EvalError.toErrorValue(failure).fold(SlotValue.Keep)(SlotValue.ErrorArg(_))
+      else if !allowArrayResults then SlotValue.Keep
       else
         evalMaybeArray(peeled, sheet, clock, workbook, currentCell) match
           case Right(array: ArrayResult) => ArrayLifting.fromArray(array, fromCells = false)

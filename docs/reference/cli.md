@@ -2085,15 +2085,15 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
   not Excel's 64-level rule; the parser side is #680). One finding per part
   with the first five cells, the total count, and the first cell's text (first 80 characters)
   with the parser's reason. The rule is deliberately narrower than "the evaluator cannot parse
-  it": an unknown function name (an add-in's `BDP(…)`, LibreOffice's `TRUE()`) or an argument
-  count the registry's arity model refuses opens intact (`#NAME?` / `#VALUE!` at worst), so those
-  stay `xl audit`'s to list under "Unparseable formulas" — as do an extra closer (`SUM(A1:A2))`)
-  and a wrong closer after a complete expression (`SUM(A1:A2]`), which the parser reports as an
-  unexpected character even though Excel repairs both, and a `,` or space inside parentheses
-  (`SUM((A1,A2))`, `(A1:B2 B1:C2)`: Excel's union and intersection reference operators, which the
-  parser does not implement — valid Excel, evaluated by LibreOffice, never a repair), and a
-  complete text the parser cannot finish (`NOT`, a legal defined name the parser reads as its
-  prefix operator): truncation is judged from the text, never from the diagnostic class alone.
+  it": an unknown function name (an add-in's `BDP(…)`) or an argument count the registry's arity
+  model refuses opens intact (`#NAME?` / `#VALUE!` at worst), so those stay `xl audit`'s to list
+  under "Unparseable formulas" — as do an extra closer (`SUM(A1:A2))`) and a wrong closer after a
+  complete expression (`SUM(A1:A2]`), which the parser reports as an unexpected character even
+  though Excel repairs both, and the grammar the parser does not implement yet (structured and
+  3-D references, LAMBDA calls — valid Excel, never a repair); a complete text the parser cannot
+  finish is not a repair either: truncation is judged from the text, never from the diagnostic
+  class alone. (Unions, intersections, array constants, `TRUE()` and a bare `NOT` name parse
+  since GH-669.)
   Shared-formula dependents (empty `<f>`) and data-table records are never judged. xl's own
   writers cannot produce the class: `putf` (in memory and under `--stream`) and every batch
   `putf` shape (`value`, `values`, `from`) parse the formula before writing, `--dry-run` included

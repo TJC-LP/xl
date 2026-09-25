@@ -105,7 +105,7 @@ trait TExprLookupOps:
     rowNum: TExpr[BigDecimal],
     colNum: Option[TExpr[BigDecimal]] = None
   ): TExpr[ArrayResult] =
-    Call(FunctionSpecs.index, (RangeLocation.Local(array), rowNum, colNum))
+    Call(FunctionSpecs.index, (Left(RangeLocation.Local(array)), rowNum, colNum, None))
 
   /**
    * MATCH: find position of value in array.

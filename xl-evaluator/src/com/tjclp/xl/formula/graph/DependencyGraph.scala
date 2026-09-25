@@ -5,7 +5,8 @@ import com.tjclp.xl.formula.functions.{
   ArgValue,
   CriteriaRangeResize,
   FunctionRegistry,
-  FunctionSpecs
+  FunctionSpecs,
+  ReferenceOperators
 }
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
@@ -779,8 +780,12 @@ object DependencyGraph:
 
       case call: TExpr.Call[?] =>
         // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first
+        // GH-669: an intersection of static locations depends only on the cells they share
         depsFromArgValues(
-          CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
+          ReferenceOperators.dependencyValues(
+            call.spec.name,
+            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args))
+          ),
           expr => extractDependencies(expr),
           _.localCells,
           _.cells.toSet
@@ -898,8 +903,12 @@ object DependencyGraph:
 
       case call: TExpr.Call[?] =>
         // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first
+        // GH-669: an intersection of static locations depends only on the cells they share
         depsFromArgValues(
-          CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
+          ReferenceOperators.dependencyValues(
+            call.spec.name,
+            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args))
+          ),
           recurse,
           localCells,
           boundRange
@@ -2094,17 +2103,21 @@ object DependencyGraph:
         case call: TExpr.Call[?] =>
           // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first — a static
           // shape, or a defined name's resolved through the workbook when one is at hand
-          val values = CriteriaRangeResize.resizedArgs(
+          // GH-669: an intersection of static locations depends only on the cells they share
+          val values = ReferenceOperators.dependencyValues(
             call.spec.name,
-            call.spec.argSpec.toValues(call.args),
-            shapeOf = location =>
-              location.staticRange.orElse(
-                for
-                  wb <- workbook
-                  source <- wb(currentSheet).toOption
-                  resolved <- Evaluator.resolveRangeLocation(location, source, workbook).toOption
-                yield resolved._2
-              )
+            CriteriaRangeResize.resizedArgs(
+              call.spec.name,
+              call.spec.argSpec.toValues(call.args),
+              shapeOf = location =>
+                location.staticRange.orElse(
+                  for
+                    wb <- workbook
+                    source <- wb(currentSheet).toOption
+                    resolved <- Evaluator.resolveRangeLocation(location, source, workbook).toOption
+                  yield resolved._2
+                )
+            )
           )
           val selected = lookupCells(call.spec.name, values)
           values.zipWithIndex.foldLeft(Set.empty[QualifiedRef]) { case (acc, (value, index)) =>

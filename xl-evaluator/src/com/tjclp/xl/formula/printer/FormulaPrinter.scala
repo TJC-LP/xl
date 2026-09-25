@@ -1,10 +1,12 @@
 package com.tjclp.xl.formula.printer
 
 import com.tjclp.xl.formula.ast.{BinarySpine, RangeForm, TExpr}
+import com.tjclp.xl.formula.eval.ArrayResult
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, ArgPrinter}
 
 import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.{Column, Row}
+import com.tjclp.xl.cells.CellValue
 
 /**
  * Printer for TExpr AST to Excel formula strings.
@@ -104,6 +106,21 @@ object FormulaPrinter:
     case TExpr.Gte(_, _) => Some((Precedence.Comparison, ">=", Precedence.Comparison + 1))
     case _ => None
 
+  /**
+   * One element of an array constant as Excel spells it. A parsed constant only holds numbers,
+   * text, logicals and errors; a programmatic array's other values print as the nearest constant (a
+   * date as its serial, a blank as empty text).
+   */
+  private def arrayElementText(value: CellValue): String = value match
+    case CellValue.Number(n) => n.toString
+    case CellValue.Text(text) => s""""${escapeString(text)}""""
+    case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
+    case CellValue.Error(error) => error.toExcel
+    case CellValue.DateTime(dt) => BigDecimal(CellValue.dateTimeToExcelSerial(dt)).toString
+    case CellValue.Formula(_, Some(cached), _) => arrayElementText(cached)
+    case CellValue.RichText(rich) => s""""${escapeString(rich.toPlainText)}""""
+    case _ => "\"\""
+
   /** GH-680: the precedence of a chain — a binary node whose left operand shares it — or None. */
   private def chainPrecedence(expr: TExpr[?]): Option[Int] =
     for
@@ -130,6 +147,9 @@ object FormulaPrinter:
       case TExpr.Lit(value: Boolean) => if value then "TRUE" else "FALSE"
       case TExpr.Lit(value: String) => s""""${escapeString(value)}""""
       case TExpr.Lit(value: Int) => value.toString
+      // GH-669: an array constant prints as Excel spells it — `,` between columns, `;` between rows
+      case TExpr.Lit(array: ArrayResult) =>
+        array.values.map(_.map(arrayElementText).mkString(",")).mkString("{", ";", "}")
       case TExpr.Lit(value) => value.toString
 
       // Cell reference
