@@ -95,6 +95,8 @@ private[formula] object ArrayLifting:
   private def boundScalar(bindings: Map[String, Any], name: String): Boolean =
     bindings.get(name) match
       case Some(_: ArrayResult) => false
+      // a reference a plain cell's LET bound materializes in array mode (SUMPRODUCT in the body)
+      case Some(RangeOperand(_, range)) => range.height == 1 && range.width == 1
       case _ => true
 
   /**

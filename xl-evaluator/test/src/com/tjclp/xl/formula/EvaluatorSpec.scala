@@ -139,7 +139,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
         Anchor.Relative,
         _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty))
       )
-      val andExpr = TExpr.Lit(false) && errorExpr
+      // a reference argument folds by Excel's reference rule (a blank cell is ignored), so the
+      // failing operand is a value: NOT decodes the reference
+      val andExpr = TExpr.Lit(false) && !errorExpr
       val sheet = new Sheet(name = SheetName.unsafe("Empty"))
       evaluator.eval(andExpr, sheet).isLeft
     }
@@ -152,7 +154,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
         Anchor.Relative,
         _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty))
       )
-      val orExpr = TExpr.Lit(true) || errorExpr
+      val orExpr = TExpr.Lit(true) || !errorExpr
       val sheet = new Sheet(name = SheetName.unsafe("Empty"))
       evaluator.eval(orExpr, sheet).isLeft
     }
@@ -725,7 +727,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
       Anchor.Relative,
       _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty))
     )
-    val andExpr = TExpr.Lit(true) && errorExpr
+    // a value operand (NOT decodes the reference; a bare reference argument folds by the
+    // reference rule instead, a blank cell ignored)
+    val andExpr = TExpr.Lit(true) && !errorExpr
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     // First is true, so second is evaluated and error propagates
     val error = evalErr(andExpr, sheet)

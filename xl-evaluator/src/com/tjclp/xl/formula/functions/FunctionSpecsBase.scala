@@ -200,9 +200,10 @@ trait FunctionSpecsBase:
   /**
    * GH-333: evaluate an argument array-aware, materializing bare ranges.
    *
-   * Unlike evalAny (whose scalar boundary collapses arrays and rejects bare RangeRefs), this yields
-   * ArrayResults for range-shaped arguments and array-producing expressions — the IF
-   * branch/condition convention, mirroring the evaluator's own evalMaybeArray operand handling.
+   * Unlike evalAny (whose scalar boundary collapses arrays and, in a plain cell, intersects bare
+   * ranges), this yields ArrayResults for range-shaped arguments and array-producing expressions —
+   * the IF branch/condition convention in array mode, mirroring the evaluator's own evalMaybeArray
+   * operand handling.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   protected def evalMaybeArrayArg(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
@@ -235,22 +236,23 @@ trait FunctionSpecsBase:
     if ctx.arrayMode then evalMaybeArrayArg(ctx, expr) else evalAny(ctx, expr)
 
   /**
-   * The value IF, IFS, CHOOSE or SWITCH selects: array-aware in array mode; the reference itself
-   * when the call feeds a reference position (Excel's IF and CHOOSE return references, so
-   * `SUM(IF(A1:A10>2,A1:A10,0))` sums the whole range); otherwise a value.
+   * The value IF, IFS, CHOOSE or SWITCH selects: the reference itself when the call feeds a
+   * reference position (Excel's IF and CHOOSE return references, so `SUM(IF(A1:A10>2,A1:A10,0))`
+   * sums the whole range, and `SUM(IF(TRUE,C1,0))` skips a text C1 as a range would); array-aware
+   * in array mode; otherwise a value.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   protected def evalSelected(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
-    if ctx.arrayMode then evalMaybeArrayArg(ctx, expr)
-    else if ctx.selectsReference then ctx.evalReferenceArg(expr.asInstanceOf[TExpr[Any]])
+    if ctx.selectsReference then ctx.evalReference(expr.asInstanceOf[TExpr[Any]])
+    else if ctx.arrayMode then evalMaybeArrayArg(ctx, expr)
     else evalAny(ctx, expr)
 
   /**
-   * What a reference-returning function (OFFSET, INDIRECT, INDEX) yields for the reference it
-   * computed: `whole` — the range's values — in array mode or when the call feeds a reference
-   * position (`SUM(OFFSET(…))`); in a plain cell's value position, the implicitly intersected cell
-   * (`=INDIRECT("A1:A10")*2` in row 5 reads A5), `#VALUE!` where the formula's row or column does
-   * not cross the range.
+   * What a reference-returning function (OFFSET, INDIRECT, INDEX) evaluates to for the reference it
+   * computed: `whole` — the range's values — in array mode; in a plain cell's value position, the
+   * implicitly intersected cell (`=INDIRECT("A1:A10")*2` in row 5 reads A5), `#VALUE!` where the
+   * formula's row or column does not cross the range. A reference position asks the function for
+   * its reference instead ([[FunctionSpec.reference]]).
    */
   protected def referenceResult(
     range: CellRange,
@@ -265,7 +267,23 @@ trait FunctionSpecsBase:
         .implicitIntersection(range, ctx.currentCell)
         .flatMap(at => extractRangeAsMatrixEval(CellRange(at, at), target, ctx).map(ArrayResult(_)))
 
-  /** A reference IF, IFS, CHOOSE or SWITCH selected, read as the array a broadcast needs. */
+  /**
+   * A reference-returning function's value from what its [[FunctionSpec.reference]] computed: the
+   * value it computed instead of a reference (a `#REF!`) as is, a reference by [[referenceResult]]
+   * with `whole` materializing it.
+   */
+  protected def referencedValue(located: Either[ArrayResult, RangeOperand], ctx: EvalContext)(
+    whole: RangeOperand => Either[EvalError, ArrayResult]
+  ): Either[EvalError, ArrayResult] =
+    located match
+      case Left(value) => Right(value)
+      case Right(ref) => referenceResult(ref.range, ref.sheet, ctx)(whole(ref))
+
+  /**
+   * A reference IF, IFS, CHOOSE or SWITCH selected, read as the array a broadcast needs: IFS's
+   * remaining pairs under an array condition, when the IFS feeds a reference position in array mode
+   * (the `@` operand).
+   */
   protected def materializeOperand(ctx: EvalContext, value: Any): Either[EvalError, Any] =
     value match
       case RangeOperand(target, range) =>

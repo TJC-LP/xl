@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.TExpr
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator, RangeOperand}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.Arity
 
@@ -40,10 +40,13 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    * OFFSET(reference, rows, cols, [height], [width])
    *
    * Returns the range `rows`/`cols` away from the base reference, on the base's sheet, sized
-   * height×width (each defaults to the base's own, as in Excel: `OFFSET(A2:A5,0,1)` is B2:B5).
-   * Returned as an ArrayResult, so it spills standalone, collapses to a scalar when 1×1, and
-   * composes with aggregates (e.g. SUM(OFFSET(...))); a plain cell's value position intersects it.
-   * Out-of-bounds or non-positive size yields #REF!.
+   * height×width (each defaults to the base's own, as in Excel: `OFFSET(A2:A5,0,1)` is B2:B5). The
+   * base is any reference: a cell or range, either on another sheet, a defined name bound to one or
+   * computing one (a dynamic range), or a function returning one (`OFFSET(INDEX(A:B,0,2),1,0)`).
+   * OFFSET returns a reference ([[FunctionSpec.reference]]): whole in a reference position
+   * (`SUM(OFFSET(…))`, `ROWS(OFFSET(…))`), its values in array mode (a whole column bounded to the
+   * sheet's used range, as INDIRECT bounds "A:A"), and intersected in a plain cell's value
+   * position. Out-of-bounds or non-positive size yields #REF!.
    *
    * GH-301 (INDIRECT parity, #274 design §6): the static graph sees only OFFSET's ARGUMENTS (the
    * anchor and offsets), never the shifted window it actually reads — `dynamicDeps = true` defers
@@ -51,48 +54,76 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    * recalculation, and the eval-aware extractor resolves uncached/stripped formula targets fresh.
    */
   val offset: FunctionSpec[ArrayResult] { type Args = OffsetArgs } =
-    FunctionSpec.simple[ArrayResult, OffsetArgs](
+    FunctionSpec.referencing[ArrayResult, OffsetArgs](
       "OFFSET",
       Arity.Range(3, 5),
       flags = FunctionFlags(dynamicDeps = true)
-    ) { (args, ctx) =>
-      val (refExpr, rowsExpr, colsExpr, hSlot, wSlot) = args
-      // GH-654: `OFFSET(A1,0,0,,2)` — an empty height/width is omitted (an explicit 0 is #REF!)
-      val hOpt = unlessOmitted(hSlot)
-      val wOpt = unlessOmitted(wSlot)
-      offsetBase(refExpr) match
-        case None =>
-          Left(EvalError.EvalFailed("OFFSET requires a cell reference", Some("OFFSET(...)")))
-        case Some(location) =>
-          for
-            base <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
-            (target, reference) = base
-            dRows <- ctx.evalExpr(rowsExpr)
-            dCols <- ctx.evalExpr(colsExpr)
-            // Excel: an omitted height or width is the base reference's own
-            height <- hOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(reference.height))
-            width <- wOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(reference.width))
-            result <-
-              val r0 = reference.rowStart.index0 + dRows
-              val c0 = reference.colStart.index0 + dCols
-              if height < 1 || width < 1 ||
-                r0 < 0 || c0 < 0 ||
-                r0 + height - 1 > Row.MaxIndex0 || c0 + width - 1 > Column.MaxIndex0
-              then Right(ArrayResult.single(CellValue.Error(CellError.Ref)))
-              else
-                val range =
-                  CellRange(ARef.from0(c0, r0), ARef.from0(c0 + width - 1, r0 + height - 1))
-                referenceResult(range, target, ctx) {
-                  extractRangeAsMatrixEval(range, target, ctx).map(ArrayResult(_))
-                }
-          yield result
+    )((args, ctx) => offsetReference(args, ctx).map(_.merge)) { (args, ctx) =>
+      offsetReference(args, ctx).flatMap(
+        referencedValue(_, ctx)(ref => materializeBounded(ref.range, ref.sheet, ctx))
+      )
     }
 
+  /** The reference OFFSET returns, or the `#REF!` it computes instead. */
+  private def offsetReference(
+    args: OffsetArgs,
+    ctx: EvalContext
+  ): Either[EvalError, Either[ArrayResult, RangeOperand]] =
+    val (refExpr, rowsExpr, colsExpr, hSlot, wSlot) = args
+    // GH-654: `OFFSET(A1,0,0,,2)` — an empty height/width is omitted (an explicit 0 is #REF!)
+    val hOpt = unlessOmitted(hSlot)
+    val wOpt = unlessOmitted(wSlot)
+    for
+      base <- offsetBase(refExpr, ctx)
+      RangeOperand(target, reference) = base
+      dRows <- ctx.evalExpr(rowsExpr)
+      dCols <- ctx.evalExpr(colsExpr)
+      // Excel: an omitted height or width is the base reference's own
+      height <- hOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(reference.height))
+      width <- wOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(reference.width))
+    yield
+      val r0 = reference.rowStart.index0 + dRows
+      val c0 = reference.colStart.index0 + dCols
+      if height < 1 || width < 1 ||
+        r0 < 0 || c0 < 0 ||
+        r0 + height - 1 > Row.MaxIndex0 || c0 + width - 1 > Column.MaxIndex0
+      then Left(ArrayResult.single(CellValue.Error(CellError.Ref)))
+      else
+        Right(
+          RangeOperand(
+            target,
+            CellRange(ARef.from0(c0, r0), ARef.from0(c0 + width - 1, r0 + height - 1))
+          )
+        )
+
   /**
-   * The reference OFFSET moves from: a cell, a range, either on another sheet, or a defined name
-   * bound to one (resolved when OFFSET evaluates). None for any other argument.
+   * The reference OFFSET moves from. A written reference or a name bound to one resolves directly;
+   * anything else — a name computing a reference, a function returning one — is evaluated for its
+   * reference. A base that denotes no reference is `#VALUE!`, as in Excel; a literal that cannot be
+   * one stays the loud failure it always was.
    */
-  private def offsetBase(expr: TExpr[?]): Option[TExpr.RangeLocation] = expr match
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def offsetBase(expr: TExpr[?], ctx: EvalContext): Either[EvalError, RangeOperand] =
+    def computed: Either[EvalError, RangeOperand] =
+      ctx.evalReference(expr.asInstanceOf[TExpr[Any]]).flatMap {
+        case ref: RangeOperand => Right(ref)
+        case other => Left(notABase(other))
+      }
+    offsetLocation(expr) match
+      case Some(location: TExpr.RangeLocation.Name) =>
+        Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook) match
+          case Right((target, range)) => Right(RangeOperand(target, range))
+          case Left(_) => computed
+      case Some(location) =>
+        Evaluator
+          .resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+          .map((target, range) => RangeOperand(target, range))
+      case None if computesReference(expr) => computed
+      case None =>
+        Left(EvalError.EvalFailed("OFFSET requires a cell reference", Some("OFFSET(...)")))
+
+  /** A written reference, or a defined name, as OFFSET's base. None for any other argument. */
+  private def offsetLocation(expr: TExpr[?]): Option[TExpr.RangeLocation] = expr match
     case TExpr.Ref(at, _, _) => Some(TExpr.RangeLocation.Local(CellRange(at, at)))
     case TExpr.PolyRef(at, _) => Some(TExpr.RangeLocation.Local(CellRange(at, at)))
     case TExpr.SheetRef(sheet, at, _, _) =>
@@ -105,8 +136,42 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
     case TExpr.NameRef(name) => Some(TExpr.RangeLocation.Name(name, None))
     case TExpr.SheetNameRef(qualifier, name) =>
       Some(TExpr.RangeLocation.Name(name, Some(qualifier)))
-    case TExpr.Coerced(inner, _) => offsetBase(inner)
+    case TExpr.Coerced(inner, _) => offsetLocation(inner)
     case _ => None
+
+  /**
+   * A computed base that is no reference: the error value it computed (INDIRECT's #REF!), else
+   * #VALUE!.
+   */
+  private def notABase(value: Any): EvalError = value match
+    case ar: ArrayResult if ar.rows == 1 && ar.cols == 1 => notABase(ar(0, 0))
+    case CellValue.Error(err) => EvalError.ErrorValue(err)
+    case _ => EvalError.ErrorValue(CellError.Value, Some("OFFSET: the base is not a reference"))
+
+  /** An argument that may evaluate to a reference: a call, a LET name, a LET. */
+  private def computesReference(expr: TExpr[?]): Boolean = expr match
+    case _: TExpr.Call[?] | _: TExpr.BindingRef | _: TExpr.CoercedBindingRef[?] | _: TExpr.Let[?] =>
+      true
+    case TExpr.Coerced(inner, _) => computesReference(inner)
+    case _ => false
+
+  /**
+   * A range's values, a whole column or row bounded to the sheet's used range (the empty array when
+   * the two do not meet): cells past the used range are blank either way, so the cost follows the
+   * data rather than the reference.
+   */
+  private def materializeBounded(
+    range: CellRange,
+    target: Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, ArrayResult] =
+    boundedToUsed(range, target) match
+      case None => Right(ArrayResult.empty)
+      case Some(r) => extractRangeAsMatrixEval(r, target, ctx).map(ArrayResult(_))
+
+  private def boundedToUsed(range: CellRange, target: Sheet): Option[CellRange] =
+    if range.isFullColumn || range.isFullRow then target.usedRange.flatMap(range.intersect)
+    else Some(range)
 
   /**
    * INDIRECT(ref_text, [a1])
@@ -125,36 +190,45 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    * deferred-bucket ordering in `WorkbookEvaluator.recalcSheet`.
    */
   val indirect: FunctionSpec[ArrayResult] { type Args = IndirectArgs } =
-    FunctionSpec.simple[ArrayResult, IndirectArgs](
+    FunctionSpec.referencing[ArrayResult, IndirectArgs](
       "INDIRECT",
       Arity.Range(1, 2),
       flags = FunctionFlags(dynamicDeps = true)
-    ) { (args, ctx) =>
-      val (refTextExpr, a1Opt) = args
-      for
-        refText <- ctx.evalExpr(refTextExpr)
-        a1 <- a1Opt.map(e => ctx.evalExpr(e)).getOrElse(Right(true))
-        result <-
-          if !a1 then
-            Left(
-              EvalError.EvalFailed(
-                "INDIRECT: R1C1 reference style (a1=FALSE) is not supported",
-                Some(s"INDIRECT(\"$refText\", FALSE)")
-              )
-            )
-          else resolveIndirect(refText.trim, ctx)
-      yield result
+    )((args, ctx) => indirectReference(args, ctx).map(_.merge)) { (args, ctx) =>
+      indirectReference(args, ctx).flatMap(
+        referencedValue(_, ctx)(ref => materializeWhole(ref.range, ref.sheet, ctx))
+      )
     }
+
+  /** The reference INDIRECT's text names, or the `#REF!` it computes instead. */
+  private def indirectReference(
+    args: IndirectArgs,
+    ctx: EvalContext
+  ): Either[EvalError, Either[ArrayResult, RangeOperand]] =
+    val (refTextExpr, a1Opt) = args
+    for
+      refText <- ctx.evalExpr(refTextExpr)
+      a1 <- a1Opt.map(e => ctx.evalExpr(e)).getOrElse(Right(true))
+      result <-
+        if !a1 then
+          Left(
+            EvalError.EvalFailed(
+              "INDIRECT: R1C1 reference style (a1=FALSE) is not supported",
+              Some(s"INDIRECT(\"$refText\", FALSE)")
+            )
+          )
+        else resolveIndirect(refText.trim, ctx)
+    yield result
 
   /** Maximum number of cells INDIRECT will materialize (SEQUENCE-guard parity). */
   private val MaxIndirectCells = 1048576L
 
   /** The #REF! VALUE result (Excel parity for unresolvable ref_text — not an eval failure). */
-  private def indirectRefError: Either[EvalError, ArrayResult] =
-    Right(ArrayResult.single(CellValue.Error(CellError.Ref)))
+  private def indirectRefError: Either[EvalError, Either[ArrayResult, RangeOperand]] =
+    Right(Left(ArrayResult.single(CellValue.Error(CellError.Ref))))
 
   /**
-   * Resolve INDIRECT ref_text to a materialized ArrayResult.
+   * Resolve INDIRECT ref_text to the reference it names.
    *
    * Reuses FormulaParser (anchors, full columns/rows, quoted sheet names, grid bounds, GH-56
    * nesting cap all inherited) and whitelists the parsed AST down to reference shapes. Any other
@@ -166,7 +240,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
   private def resolveIndirect(
     text: String,
     ctx: EvalContext
-  ): Either[EvalError, ArrayResult] =
+  ): Either[EvalError, Either[ArrayResult, RangeOperand]] =
     if text.isEmpty then indirectRefError
     else
       FormulaParser.parse("=" + text) match
@@ -174,14 +248,14 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
         case Right(expr) =>
           whitelistedReference(expr) match
             case None => indirectRefError
-            case Some((None, range)) => materializeIndirect(range, ctx.sheet, ctx)
+            case Some((None, range)) => Right(Right(RangeOperand(ctx.sheet, range)))
             case Some((Some(sheetName), range)) =>
               ctx.workbook match
                 case None => Left(Evaluator.missingWorkbookError(text, isRange = true))
                 case Some(wb) =>
                   wb(sheetName) match
                     case Left(_) => indirectRefError
-                    case Right(target) => materializeIndirect(range, target, ctx)
+                    case Right(target) => Right(Right(RangeOperand(target, range)))
 
   /** Whitelist a parsed AST down to (optional sheet, range); None for any non-reference shape. */
   private def whitelistedReference(expr: TExpr[?]): Option[(Option[SheetName], CellRange)] =
@@ -201,22 +275,12 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    * `CellRange.empty` convention). The cell cap rejects huge non-full ranges BEFORE materializing —
    * anti-OOM, totality preserved as a Left.
    */
-  private def materializeIndirect(
-    range: CellRange,
-    target: Sheet,
-    ctx: EvalContext
-  ): Either[EvalError, ArrayResult] =
-    referenceResult(range, target, ctx)(materializeWhole(range, target, ctx))
-
   private def materializeWhole(
     range: CellRange,
     target: Sheet,
     ctx: EvalContext
   ): Either[EvalError, ArrayResult] =
-    val bounded: Option[CellRange] =
-      if range.isFullColumn || range.isFullRow then target.usedRange.flatMap(range.intersect)
-      else Some(range)
-    bounded match
+    boundedToUsed(range, target) match
       case None => Right(ArrayResult.empty)
       case Some(r) =>
         if r.width.toLong * r.height.toLong > MaxIndirectCells then

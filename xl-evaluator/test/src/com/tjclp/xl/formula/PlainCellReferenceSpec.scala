@@ -9,8 +9,9 @@ import munit.FunSuite
 
 /**
  * The references a plain formula cell passes around: IF and CHOOSE return the reference they
- * select, OFFSET a range sized like its base, a dynamic named range the reference it computes. In a
- * value position a plain cell intersects them, in an aggregate's argument they stay whole; the
+ * select, OFFSET a range sized like its base, a dynamic named range the reference it computes, a
+ * LET name the reference it was bound to. In a value position a plain cell intersects them, in an
+ * aggregate's argument they stay whole, and `@` intersects them exactly as the plain cell does; the
  * evaluation itself runs once (a selector draws RAND once). Array formulas keep array semantics
  * wherever they are evaluated, an iterative cycle included.
  */
@@ -132,4 +133,92 @@ class PlainCellReferenceSpec extends FunSuite:
       }
       assertEquals(plain(formula, ref"D11"), Right(CellValue.Error(CellError.Value)), formula)
     }
+  }
+
+  /** The reference-denoting expressions of the laws below, each A1:A10 (or one cell of it). */
+  private val references = List(
+    "A1:A10",
+    "fixed",
+    "dyn",
+    "OFFSET(A1,0,0,10,1)",
+    "INDIRECT(\"A1:A10\")",
+    "INDEX(A1:B10,0,1)",
+    "IF(TRUE,A1:A10,B1:B10)",
+    "CHOOSE(1,A1:A10,B1:B10)",
+    "A5"
+  )
+
+  test("LET never changes a value: plain(LET(x,e,b)) is plain(b with e for x)") {
+    // a binding that denotes a reference binds the reference: intersected where the body reads a
+    // value, whole in SUM and ROWS, materialized under SUMPRODUCT
+    val bodies = List("SUM(x)", "x*2", "ROWS(x)", "SUMPRODUCT(x*B1:B10)", "AVERAGE(x)", "COUNTA(x)")
+    for
+      e <- references
+      body <- bodies
+      at <- List(ref"D5", ref"D20")
+    do
+      val substituted = plain("=" + body.replace("x", e), at)
+      assert(substituted.isRight, s"$body with $e at ${at.toA1}: $substituted")
+      assertEquals(plain(s"=LET(x,$e,$body)", at), substituted, s"LET(x,$e,$body) at ${at.toA1}")
+  }
+
+  test("a LET name bound to a reference passes it on: SUM(LET(r,e,r)) and a second binding") {
+    references.foreach { e =>
+      assertEquals(
+        plain(s"=SUM(LET(r,$e,r))", ref"D20"),
+        Right(num(if e == "A5" then 5 else 55)),
+        e
+      )
+      assertEquals(plain(s"=LET(r,$e,s,r,s*2)", ref"D5"), Right(num(10)), e)
+    }
+  }
+
+  test("a LET binding that selects a reference evaluates its selector once") {
+    final class CountingRng(value: Double) extends Rng:
+      @SuppressWarnings(Array("org.wartremover.warts.Var"))
+      var draws: Int = 0
+      def nextDouble(): Double =
+        draws += 1
+        value
+    val rng = CountingRng(0.2)
+    val formula = "LET(x,IF(RAND()<0.5,A1:A10,B1:B10),SUM(x)+ROWS(x)+x)"
+    val placed = sheetS.put(ref"D5", CellValue.Formula(formula, None))
+    // SUM 55 + ROWS 10 + the row-5 cell 5
+    assertEquals(
+      placed.evaluateCell(ref"D5", Clock.system, rng, Some(book.put(placed))),
+      Right(num(70))
+    )
+    assertEquals(rng.draws, 1)
+  }
+
+  test(
+    "@ intersects the reference a function, a name or a LET name returns: plain(@e) is plain(e)"
+  ) {
+    for
+      e <- references.filterNot(_ == "A5")
+      at <- List(ref"D5", ref"D20")
+    do assertEquals(plain(s"=@$e", at), plain(s"=$e", at), s"@$e at ${at.toA1}")
+    assertEquals(plain("=LET(r,dyn,@r)", ref"D5"), Right(num(5)))
+    // an array value keeps its top-left
+    assertEquals(plain("=@SEQUENCE(3)", ref"D5"), Right(num(1)))
+  }
+
+  test("@ in an array formula intersects with the anchor's row too") {
+    val array =
+      sheetS.evaluateArrayFormula("=@OFFSET(A1,0,0,10,1)", ref"F5", Clock.system, Some(book))
+    assertEquals(array.map(_._1.cells.get(ref"F5").map(_.value)), Right(Some(num(5))))
+  }
+
+  test("OFFSET's base may be any reference; one that is none is #VALUE!") {
+    assertEquals(plain("=OFFSET(dyn,0,1)", ref"D5"), Right(num(2)))
+    assertEquals(plain("=SUM(OFFSET(INDEX(A1:B10,0,1),0,1))", ref"D5"), Right(num(20)))
+    assertEquals(plain("=SUM(OFFSET(IF(TRUE,A1:A10,B1:B10),0,1))", ref"D5"), Right(num(20)))
+    assertEquals(
+      plain("=OFFSET(IF(TRUE,5,A1),0,0)", ref"D5"),
+      Right(CellValue.Error(CellError.Value))
+    )
+    assertEquals(
+      plain("=OFFSET(INDIRECT(\"nowhere\"),0,0)", ref"D5"),
+      Right(CellValue.Error(CellError.Ref))
+    )
   }

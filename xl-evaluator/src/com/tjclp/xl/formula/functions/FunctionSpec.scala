@@ -156,21 +156,33 @@ final case class EvalContext(
   private[formula] def selectsReference: Boolean = operands.selectsReference
 
   /**
-   * An argument in Excel's reference operand class (an aggregate's, AND's, OR's). A reference — a
-   * range, a name bound to one, IF/CHOOSE's selected reference — reaches the function whole, as an
+   * An argument in Excel's reference operand class (an aggregate's, AND's, OR's, ROWS'). A
+   * reference — a cell or range, a name bound to one, a LET name bound to one, IF/CHOOSE's selected
+   * reference, the reference OFFSET, INDIRECT or INDEX return — reaches the function whole, as a
    * [[com.tjclp.xl.formula.eval.RangeOperand]]; any other expression evaluates in the formula's own
    * mode, its result not collapsed (an array-returning call folds whole), so in a plain cell its
    * references are intersected: `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel computes a legacy
    * formula. In array mode, [[evalArrayExpr]].
    */
   private[formula] def evalReferenceArg(expr: TExpr[Any]): Either[EvalError, Any] =
+    if arrayMode then evalArrayExpr(expr) else evalReference(expr)
+
+  /**
+   * The reference an expression denotes, in either mode, as a
+   * [[com.tjclp.xl.formula.eval.RangeOperand]] — for the positions that need the reference itself
+   * whatever the formula's mode: the `@` operand, OFFSET's base, the reference IF, IFS, CHOOSE or
+   * SWITCH select for a reference position. An expression that denotes no reference evaluates in
+   * the formula's mode, its result not collapsed.
+   */
+  private[formula] def evalReference(expr: TExpr[Any]): Either[EvalError, Any] =
     operands.referenceArg.fold(evalArrayExpr(expr))(_(expr))
 
 object EvalContext:
   /**
    * How a call's arguments evaluate. `arrayMode`: the formula evaluates as an array rather than as
-   * a plain cell's legacy formula. `referenceArg`: how a plain cell evaluates an argument in the
-   * reference class (None in array mode). `selectsReference`: the call feeds a reference position.
+   * a plain cell's legacy formula. `referenceArg`: how an argument evaluates in the reference class
+   * (the evaluator sets it for every call; None only for a context built outside the evaluator).
+   * `selectsReference`: the call feeds a reference position.
    */
   private[formula] final case class Operands(
     arrayMode: Boolean,
@@ -250,6 +262,16 @@ trait FunctionSpec[A]:
   def eval(args: Args, ctx: EvalContext): Either[EvalError, A]
   def flags: FunctionFlags = FunctionFlags()
 
+  /**
+   * The reference the call returns, for a function that returns one (OFFSET, INDIRECT, INDEX): a
+   * [[com.tjclp.xl.formula.eval.RangeOperand]], unread, or the value the call computes when it
+   * names no reference (a `#REF!`). The evaluator asks for it where Excel keeps a function's result
+   * a reference: an aggregate's argument, ROWS', the `@` operand, OFFSET's base, a LET binding.
+   * None for every other function.
+   */
+  private[formula] def reference(args: Args, ctx: EvalContext): Option[Either[EvalError, Any]] =
+    None
+
   def render(args: Args, printer: ArgPrinter): String =
     s"${name}(${FunctionSpec.joinSlots(argSpec.renderSlots(args, printer), printer.separator)})"
 
@@ -294,6 +316,32 @@ object FunctionSpec:
     spec: ArgSpec[A0]
   ): FunctionSpec[A] { type Args = A0 } =
     Simple(name, arity, spec, evalFn, flags, renderFn)
+
+  /** A function that returns a reference: [[FunctionSpec.reference]] is `referenceFn`. */
+  private[formula] final case class Referencing[A, A0](
+    name: String,
+    arity: Arity,
+    argSpec: ArgSpec[A0],
+    referenceFn: (A0, EvalContext) => Either[EvalError, Any],
+    evalFn: (A0, EvalContext) => Either[EvalError, A],
+    override val flags: FunctionFlags = FunctionFlags()
+  ) extends FunctionSpec[A]:
+    type Args = A0
+    def eval(args: A0, ctx: EvalContext): Either[EvalError, A] = evalFn(args, ctx)
+    override private[formula] def reference(
+      args: A0,
+      ctx: EvalContext
+    ): Option[Either[EvalError, Any]] =
+      Some(referenceFn(args, ctx))
+
+  private[formula] def referencing[A, A0](
+    name: String,
+    arity: Arity,
+    flags: FunctionFlags = FunctionFlags()
+  )(referenceFn: (A0, EvalContext) => Either[EvalError, Any])(
+    evalFn: (A0, EvalContext) => Either[EvalError, A]
+  )(using spec: ArgSpec[A0]): FunctionSpec[A] { type Args = A0 } =
+    Referencing(name, arity, spec, referenceFn, evalFn, flags)
 
 trait ExprCoercer[A]:
   def label: String
