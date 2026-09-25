@@ -59,7 +59,8 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   rangeRefs)`, `ArgSpec.scalarSlots`/`replaceScalarSlots`, `ExprCoercer.liftSlot`, `LiftSlot`);
   the policy is not yet published in `xl functions --json`. `docs/LIMITATIONS.md` lists the
   exclusions and the known divergences (whole-column trimming, numeric-text and cached-formula
-  single references, IF branches under a scalar condition).
+  single references); the selected IF branch is array-aware inside an array context
+  (`=SUMPRODUCT(IF(TRUE,ABS(r),0))` sums every element).
 - **`sheet.evaluateForRangePerCell(range[, clock, workbook])`** returns
   `RangeEvalResult(values, failures, blocked)` — the total, per-cell range evaluation behind
   `view --eval`, with `isClean` and a one-line `summary`; exported through `com.tjclp.xl.{*, given}`
@@ -120,21 +121,42 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   structure-only difference is now `DIFFERENCES_FOUND` (exit 1); `--cells-only` restores the old
   scope. The JSON gains typed keys (every existing field unchanged); markdown is byte-identical
   when nothing structural changed.
-- **A plain formula cell intersects a range in a lifted argument with its own row or column**,
-  as Excel shows the legacy formula (`=ABS(C2:C4)` in row 3 is `=ABS(@C2:C4)`, i.e. C3; outside
-  the range `#VALUE!`), where it was a "must be used within a function" error; `xl eval` without a
-  cell position reports the same loud error as `@`. A computed array in a plain cell keeps the
-  top-left value (GH-302), unlike Excel: a range under an operator or `&`, a computed argument, a
-  criterion built from a range (`COUNTIF(r,">"&r)` reads r's first cell in every row, where it
-  used to fail loudly) — write `@r` or the single cell for per-row results. Inside an aggregate's
-  argument a lifted call is an array context, as `=SUM(A1:A10*E1:E10)` always was: `=SUM(ABS(r))`
-  sums every element where Excel's legacy evaluation of a plain `<f>` intersects.
+- **Breaking: a plain formula cell evaluates as Excel's legacy formula (implicit intersection)**.
+  Excel 365 opens a plain `<f>` (what `putf`, batch `putf`, openpyxl and most writers produce) as
+  a legacy formula, and LibreOffice agrees on every value: xl now computes what they compute, pinned
+  against LibreOffice's recalculation of 207 cells inside and outside the referenced rows.
+  - A reference in a value position — an operand (`=A1:A10*2`), `&`, a scalar argument
+    (`=ROUND(A1:A10/7,1)`), a criterion (`COUNTIF(r,">"&r)`), the IF condition, the CHOOSE index,
+    NOT's operand, a bare `=A1:A10` — reads the cell in the formula's own row (a column) or
+    column (a row), and is `#VALUE!` where that row or column misses it.
+  - Before, xl read the range's first cell (GH-302) or failed with "must be used within a
+    function", and an IF condition over a range was an array whose first element decided every
+    row.
+  - An aggregate's argument (SUM, COUNT, AVERAGE, MIN, MAX, … and AND/OR) keeps a reference
+    whole but evaluates an expression as a value. **`=SUM(A1:A10*E1:E10)` in row 5 is now A5*E5,
+    and `#VALUE!` outside rows 1–10, where it was the array sum** (so was `=SUM(ABS(r))`).
+    Excel 365 gets the array sum for that typed formula only because it saves it as an array
+    formula. Write `SUMPRODUCT(...)` for array math in one cell.
+  - IF, IFS, CHOOSE and SWITCH return the reference they select, and OFFSET, INDIRECT, INDEX and
+    dynamic named ranges return theirs: whole in an aggregate (`SUM(IF(A1:A10>2,A1:A10,0))` is the
+    whole-range sum), intersected in a value position.
+  - A value passed to an aggregate follows Excel's typed-argument rule: TRUE is 1, `"5"` is 5, and
+    other text is `#VALUE!` where it failed loudly.
+  - LET bindings evaluate in the cell's mode.
+  - Array contexts keep dynamic-array semantics: array formulas (CSE and dynamic-array records),
+    `evala`, SUMPRODUCT, FILTER's include, named formulas, conditional-format formulas, and a
+    formula evaluated without a cell position (`xl eval`, `sheet.evaluateFormula(f)`: as the
+    formula typed into a new Excel 365 cell, showing its top-left value, where a lifted range
+    used to be a loud error).
+  - Recalculated books change wherever a plain cell relied on the old reading.
+  - `docs/LIMITATIONS.md` ("Plain cells are legacy formulas") lists the rules and the known
+    divergences, such as SUMPRODUCT passing the array class into IF, which legacy Excel does not.
 - **Cached values move where formulas relied on the old array collapse**: recalculated books
-  change for array contexts (SUMPRODUCT and aggregate arguments, IF conditions, LET, CSE records),
-  and a defined name bound to a single blank cell now reads as that cell (LEN 0, YEAR 1900) instead
-  of as 0. An uncached precedent evaluated on demand now runs at its own cell position and in its
-  own mode (array mode for an ArrayFormula record), whether a reference or an aggregate, criteria or
-  SUMPRODUCT range walk reads it.
+  change for array contexts (SUMPRODUCT arguments, CSE records), and a defined name bound to a
+  single blank cell now reads as that cell (LEN 0, YEAR 1900) instead of as 0. An uncached
+  precedent evaluated on demand now runs at its own cell position and in its own mode (array mode
+  for an ArrayFormula record), whether a reference or an aggregate, criteria or SUMPRODUCT range
+  walk reads it.
 - **`FunctionFlags` gains a field (`lift`)**: source-compatible, binary-incompatible for positional
   construction (the `volatile` precedent, #597).
 - **`TExpr.cond` takes a `using ExprCoercer[A]`**: the IF call is brought to `A` through the slot's
@@ -161,8 +183,8 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   reach the function body as a raw cell value and throw a `ClassCastException` (ABS, ROUND, MOD,
   RANK, RANDBETWEEN, DATE…). Every typed position now receives its type or a clean `Left`
   (`TExpr.scalarKind` drives one typed collapse). `&` broadcasts element-wise instead of
-  returning the text `ArrayResult(Vector(…))x` (in a plain cell a range under `&` takes its first
-  cell, above); `DateToSerial`/`DateTimeToSerial` are total.
+  returning the text `ArrayResult(Vector(…))x` (a plain cell intersects a range under `&`, above);
+  `DateToSerial`/`DateTimeToSerial` are total.
 - **A throwable escaping the evaluator is contained per cell** (#681): every `Evaluator` factory
   returns a guarded evaluator. A `NonFatal` throw becomes the per-cell failure `Evaluation threw
   <class>: <message> at <cell> — an internal evaluator defect, not an Excel error value; please
@@ -214,6 +236,16 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   shows 0, as `=Z1` already did in xl. `recalc`, `batch` and `view --eval` now give 0, so text to
   its left no longer spills over it in the live picture. Only the cell's value changes: inside a
   formula the reference stays blank (`ISBLANK`, `COUNTA`).
+- **OFFSET sizes its result like its base reference, on the base's sheet**: an omitted height or
+  width is the base's own, as in Excel (`=SUM(OFFSET(A1:A10,0,1))` sums B1:B10 where it read B1
+  only), and a cross-sheet base (`OFFSET(Other!A1,1,0)`) reads that sheet, not the formula's.
+- **Conditional-format formula rules evaluate as array formulas**, as Excel evaluates them
+  (`=SUM(($A$1:$A$10=A1)*1)>1`, `=OR(A1=$X$1:$X$5)`).
+- **Array formulas keep array semantics in an iterative cycle and in the write paths**: the
+  iterative fixpoint evaluated a CSE member as a plain cell every round, and `copy --values-only`,
+  `recalculateDependents`, `putf --no-recalc` / batch `putf` caching, the data-table seeder's
+  source formula and the JSON renderer's `--eval` evaluated cells without their position or
+  record kind. Every one now evaluates a cell at its own position by its kind.
 - **SUMPRODUCT's whole-column trimming (GH-192) reaches inside lifted arguments, `^` and `&`**:
   `SUMPRODUCT(--(A:A>0),ABS(B:B))` no longer mismatches dimensions. Rows past the used extent are
   dropped there too, so blanks beyond it are not counted (`SUMPRODUCT(--ISBLANK(A:A))`), as with

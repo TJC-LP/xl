@@ -23,7 +23,9 @@ import munit.FunSuite
  * repro (B2:D4 = 5,-3,1 / -2,4,-6 / 7,1,2).
  *
  * A lifted function (ArrayLiftingSpec) answers Excel's element-wise array instead; the typed
- * top-left collapse remains the rule for plain cells and for functions that do not lift.
+ * top-left collapse remains the rule for an array value in a scalar slot of a function that does
+ * not lift. A plain cell intersects its references with its own row or column first
+ * (PlainCellIntersectionSpec).
  */
 @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 class ArrayTypingLawsSpec extends FunSuite:
@@ -63,6 +65,14 @@ class ArrayTypingLawsSpec extends FunSuite:
 
   private def scalarEval(formula: String): Either[EvalError, Any] =
     Evaluator.instance.eval(parse(formula), sheet, Clock.system, Some(workbook), here)
+
+  /** The plain-cell evaluation at `at`, inside the data rows. */
+  private def scalarEvalAt(formula: String, at: ARef): Either[EvalError, Any] =
+    Evaluator.instance.eval(parse(formula), sheet, Clock.system, Some(workbook), Some(at))
+
+  private def isValueError(result: Either[EvalError, Any]): Boolean = result match
+    case Left(EvalError.ErrorValue(CellError.Value, _)) => true
+    case _ => false
 
   private def isDefect(message: String): Boolean =
     message.contains("internal evaluator defect") || message.contains("exhausted the stack")
@@ -112,11 +122,12 @@ class ArrayTypingLawsSpec extends FunSuite:
     }
   }
 
-  test("a numeric slot lifts in array mode; a plain cell takes the typed top-left value") {
+  test("a numeric slot lifts in array mode; a plain cell intersects the reference first") {
     assertEquals(arrayEval("=ABS(C2:C4+D2:D4)"), Right(column(num(2), num(2), num(3))))
     assertEquals(arrayEval("=SUM(ABS(C2:C4+D2:D4))"), Right(BigDecimal(7)))
     assertEquals(arrayEval("=SUMPRODUCT(ROUND(C2:C4/3,1))"), Right(BigDecimal("0.6")))
-    assertEquals(scalarEval("=MOD(C2:C4+0,2)"), Right(BigDecimal(1)))
+    assertEquals(scalarEvalAt("=MOD(C2:C4+0,2)", ref"H3"), Right(BigDecimal(0)))
+    assert(isValueError(scalarEval("=MOD(C2:C4+0,2)")), "row 1 does not cross C2:C4")
   }
 
   test("Weaver's F2 is Excel's 5 (ABS lifts, SUMPRODUCT sees two 3x1 arrays)") {
@@ -125,7 +136,7 @@ class ArrayTypingLawsSpec extends FunSuite:
   }
 
   test(
-    "an integer slot lifts in array mode; a plain cell collapses first (ToInt), then truncates"
+    "an integer slot lifts in array mode; a plain cell intersects first (ToInt), then truncates"
   ) {
     assertEquals(
       arrayEval("=LEFT(\"abcdef\",C2:C4+D2:D4+5)"),
@@ -141,7 +152,7 @@ class ArrayTypingLawsSpec extends FunSuite:
         )
       )
     )
-    assertEquals(scalarEval("=DATE(2020,B2:B4+0,1)"), Right(LocalDate.of(2020, 5, 1)))
+    assertEquals(scalarEvalAt("=DATE(2020,B2:B4+0,1)", ref"H3"), Right(LocalDate.of(2019, 10, 1)))
   }
 
   test("the typed collapse coerces by the node's static kind, so a text element is a clean Left") {
@@ -181,7 +192,7 @@ class ArrayTypingLawsSpec extends FunSuite:
       case _ => Vector.empty
     List("=(C2:C4+D2:D4)&\"x\"", "=TRANSPOSE(B2:B4)&\"x\"", "=\"x\"&TRANSPOSE(B2:B4)").foreach {
       f =>
-        List(arrayEval(f), scalarEval(f)).foreach { r =>
+        List(arrayEval(f), scalarEvalAt(f, ref"H3")).foreach { r =>
           val rendered = r.fold(_ => Vector.empty, texts)
           assert(rendered.nonEmpty, s"$f produced no text: $r")
           assert(!rendered.exists(_.contains("ArrayResult")), s"$f rendered an array as text: $r")
@@ -208,8 +219,10 @@ class ArrayTypingLawsSpec extends FunSuite:
     assertEquals(arrayEval("=A5:A6&\"!\""), Right(column(text("a!"), text("rich!"))))
   }
 
-  test("scalar-mode concatenation over an array takes the top-left value, like arithmetic") {
-    assertEquals(scalarEval("=(C2:C4+D2:D4)&\"x\""), Right("-2x"))
+  test("a plain cell's concatenation intersects a reference, and reads an array value's top-left") {
+    assertEquals(scalarEvalAt("=(C2:C4+D2:D4)&\"x\"", ref"H3"), Right("-2x"))
+    assert(isValueError(scalarEval("=(C2:C4+D2:D4)&\"x\"")), "row 1 does not cross C2:C4")
+    assertEquals(scalarEval("=TRANSPOSE(B2:B4)&\"x\""), Right("5x"))
     assertEquals(sheet.evaluateFormula("=B2:B4&\"x\""), Right(text("5x")))
     // two scalars are unchanged, and an error operand still propagates as that error
     assertEquals(scalarEval("=B2&\"x\""), Right("5x"))

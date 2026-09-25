@@ -110,11 +110,13 @@ object CfUnevaluated:
  *
  * Formula rules are evaluated as Excel stores them, relative to the top-left of the block's
  * bounding box (MS-XLS refBound): each is parsed once and shifted to every target cell, which is
- * also the current cell (`ROW()` banding works). A cell-value rule is lowered to one comparison
- * formula, so blanks, text, case and errors compare exactly as the evaluator's `<`/`=` do: a blank
- * matches `less than 5`, text sorts above numbers, an error never matches. A text rule is the
- * SEARCH / LEFT / RIGHT formula Excel stores ([[CfTextOp.formula]]). An expression is true for TRUE
- * and for a non-zero number or date.
+ * also the current cell (`ROW()` banding works). Like Excel, they evaluate as array formulas (a
+ * range in `=OR(A1=$X$1:$X$5)` is every cell of it, not the one in the rule cell's row), an array
+ * result reading at its top-left. A cell-value rule is lowered to one comparison formula, so
+ * blanks, text, case and errors compare exactly as the evaluator's `<`/`=` do: a blank matches
+ * `less than 5`, text sorts above numbers, an error never matches. A text rule is the SEARCH / LEFT
+ * / RIGHT formula Excel stores ([[CfTextOp.formula]]). An expression is true for TRUE and for a
+ * non-zero number or date.
  *
  * Top-N, colour scales and data bars consider numbers and dates only, over every populated cell of
  * the whole block — every range, hidden rows and cells outside the window included, each once. A
@@ -222,7 +224,9 @@ object CfEvaluator:
     val empty: Population = Population(Map.empty, None)
 
   private final class Engine(sheet: Sheet, workbook: Option[Workbook], clock: Clock):
-    private val evaluator: Evaluator = Evaluator.instance(Rng.seeded(0L))
+    // Excel evaluates conditional-format formulas as array formulas, not as a plain cell's
+    // legacy formula: `=SUM(($A$1:$A$10=A1)*1)>1` and `=OR(A1=$X$1:$X$5)` test every row
+    private val evaluator: Evaluator = Evaluator.arrayInstance(Rng.seeded(0L))
 
     private val theme: ThemePalette = workbook.fold(ThemePalette.office)(_.metadata.theme)
     private val date1904: Boolean = workbook.exists(_.metadata.date1904)

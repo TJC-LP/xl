@@ -1026,11 +1026,13 @@ class DataTableSeederSpec extends FunSuite:
     }
   }
 
-  test("GH-494: IFS materializes a range condition before choosing its banked branch") {
+  test("GH-494: IFS's banked branch follows its condition as the plain source cell reads it") {
+    // the source F9 is a plain cell: its range condition reads the cell in row 9 (implicit
+    // intersection), never the range's first cell, and the probe follows the same branch
     val selected = seedReport(
       guardedColumnTable(
-        "IFS(B1:B2,IFERROR(1/A1,0),TRUE,42)",
-        s => s.put(ref"B1", num(1)).put(ref"B2", num(0))
+        "IFS(B8:B10,IFERROR(1/A1,0),TRUE,42)",
+        s => s.put(ref"B8", num(0)).put(ref"B9", num(1)).put(ref"B10", num(0))
       )
     )
     val selectedOut = sheetNamed(selected.workbook, "S")
@@ -1039,8 +1041,8 @@ class DataTableSeederSpec extends FunSuite:
 
     val selectedAway = seedReport(
       guardedColumnTable(
-        "IFS(B1:B2,IFERROR(1/A1,0),TRUE,42)",
-        s => s.put(ref"B1", num(0)).put(ref"B2", num(1))
+        "IFS(B8:B10,IFERROR(1/A1,0),TRUE,42)",
+        s => s.put(ref"B8", num(1)).put(ref"B9", num(0)).put(ref"B10", num(1))
       )
     )
     val selectedAwayOut = sheetNamed(selectedAway.workbook, "S")
@@ -1048,7 +1050,7 @@ class DataTableSeederSpec extends FunSuite:
     assertEquals(
       selectedAway.warnings,
       Vector.empty,
-      "the guarded top-left branch was not selected"
+      "the guarded branch was not selected in row 9"
     )
   }
 

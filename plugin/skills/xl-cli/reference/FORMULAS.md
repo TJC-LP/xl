@@ -188,20 +188,28 @@ targets, so cells holding them are always recalculated. `ADDRESS` `abs_num`: 1 =
 `CELL("col", ref)` the reference parts.
 
 **Arrays (dynamic arrays).** `TRANSPOSE`, `SEQUENCE`, `SORT`, `UNIQUE` and `FILTER` return a grid.
-Use `xl evala "=..."` to display it or `--at <ref>` to spill it into the sheet; a 1×1 result
-collapses to a scalar. `SEQUENCE(rows, [cols], [start], [step])` defaults to one column starting at
+Use `xl evala "=..."` to display it (`--at <ref>` anchors the displayed spill; `evala` writes
+nothing); a 1×1 result collapses to a scalar. `SEQUENCE(rows, [cols], [start], [step])` defaults to one column starting at
 1 with step 1; `SORT(array, [sort_index], [sort_order])` sorts rows by a 1-based column, 1 =
 ascending (default), −1 = descending; `UNIQUE` keeps first-seen order; `FILTER(array, include,
 [if_empty])` keeps the rows where `include` is truthy and returns `if_empty` (else `#N/A`) when
 none match. Scalar functions lift over arrays as in Excel 365 — `=SUMPRODUCT(--(B2:B4>0),
 ABS(C2:C4+D2:D4))`, `=SUMPRODUCT(--ISNUMBER(r))`, `=SUMPRODUCT(1/COUNTIF(r,r))` (the distinct
-count of a bounded `r` without blanks) work. In a plain cell, a multi-cell reference passed
-directly as a lifted function's argument reads the cell in the formula's row (`=ABS(C2:C4)` in
-row 3 is `ABS(C3)`), but a range under an operator or `&`, or inside a computed argument, takes
-the range's FIRST cell, unlike Excel: `=C2:C4*2`, `=C2:C4&"x"`, `=ROUND(C2:C4/7,1)` and
-`COUNTIF(r,">"&r)` all read C2 / r's first cell. Write the single cell (`C3`) or `@C2:C4`
-(`=@C2:C4&"x"`, `COUNTIF(r,">"&@r)`) for per-row results. Inside SUM/MAX/AVERAGE a lifted call
-sums every element (`=SUM(ABS(r))`), as in Excel 365.
+count of a bounded `r` without blanks) work.
+
+**`putf` writes a plain (legacy) formula, and Excel evaluates it with implicit intersection.**
+Excel 365 opens a plain `<f>` as a legacy formula, and xl computes the same values. A multi-cell
+range in a value position reads the cell in the formula's own row (a column) or column (a row),
+and is `#VALUE!` where that row or column misses it. Value positions are operands, `&`, scalar
+arguments, criteria, the IF condition and the CHOOSE index. So in row 3, `=C2:C4*2` is `C3*2`,
+`=ABS(C2:C4)` is `ABS(C3)` and `COUNTIF(r,">"&r)` compares with r's row-3 cell. **Inside
+SUM/MAX/AVERAGE/COUNT an expression is still a value**: `=SUM(A1:A10*B1:B10)` in row 5 is
+`A5*B5`, and `#VALUE!` outside rows 1–10. Bare ranges and IF/CHOOSE/OFFSET/INDIRECT/INDEX
+references stay whole there: `SUM(A1:A10)`, and `SUM(IF(c,A1:A10,0))` when `c` holds in the
+formula's row. **For array math in one cell, use SUMPRODUCT**: `=SUMPRODUCT(A1:A10*B1:B10)`,
+`=SUMPRODUCT(--(r>0))`, `=SUMPRODUCT(ABS(r))`. There is no CLI flag for array formulas.
+`eval` without a cell answers as the formula typed into a new Excel 365 cell would (its top-left
+value); `evala` shows the whole array.
 EDATE/EOMONTH/WORKDAY/NETWORKDAYS/YEARFRAC/MROUND answer `#VALUE!` for a multi-cell range there
 (pass `+A2:A10` to lift). No array constants (`{1,2,3}`).
 

@@ -25,6 +25,9 @@ trait TExprCoercions:
     case _: TExpr.NameRef => true
     // GH-394: sheet-qualified names likewise (=EOMONTH(Model!named_date, 0))
     case _: TExpr.SheetNameRef => true
+    // a range in a scalar slot is a value position: a plain cell reads the implicitly intersected
+    // cell, which must coerce to the slot's type (=CHOOSE(D1:D10, ...), =OFFSET(A1, B1:B5, 0))
+    case _: TExpr.RangeRef | _: TExpr.SheetRange => true
     case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
         _: TExpr.Percent =>
       true

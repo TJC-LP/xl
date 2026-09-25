@@ -276,8 +276,9 @@ object InMemorySource:
     base.copy(rows = base.rows.map(_.map { record =>
       record.formula match
         case Some(f) if evaluable(f.kind) =>
+          // the cell as it is: at its position and by its record kind
           val result = SheetEvaluator
-            .evaluateFormula(sheet)(f.text)
+            .evaluateCell(sheet)(record.ref)
             .left
             .map(err => RendererCommon.formatEvalError(err.message))
           CellRecord.evaluated(record, result)

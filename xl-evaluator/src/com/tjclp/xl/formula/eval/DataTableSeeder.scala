@@ -915,9 +915,11 @@ object DataTableSeeder:
                 val tempWb = wb.copy(sheets = resolved.sheets)
                 val tempSheet = resolved.sheets(tableIdx)
                 val value =
-                  SheetEvaluator.evaluateFormula(tempSheet)(expression, clock, Some(tempWb), None)
+                  SheetEvaluator
+                    .evaluateFormula(tempSheet)(expression, clock, Some(tempWb), Some(sourceRef))
                 val guard =
-                  if value.isRight then firedGuard(probes.get(sourceRef), tempSheet, tempWb, clock)
+                  if value.isRight then
+                    firedGuard(probes.get(sourceRef), tempSheet, tempWb, clock, sourceRef)
                   else None
                 CellOutcome(value, converged, guard, upstream.unresolved ++ resolved.unresolved))
         }
@@ -975,9 +977,15 @@ object DataTableSeeder:
           val tempWb = wb.copy(sheets = resolved.sheets)
           val tempSheet = resolved.sheets(tableIdx)
           val value =
-            SheetEvaluator.evaluateFormula(tempSheet)(expression, clock, Some(tempWb), None)
+            SheetEvaluator.evaluateFormula(tempSheet)(
+              expression,
+              clock,
+              Some(tempWb),
+              Some(sourceRef)
+            )
           val guard =
-            if value.isRight then firedGuard(probes.get(sourceRef), tempSheet, tempWb, clock)
+            if value.isRight then
+              firedGuard(probes.get(sourceRef), tempSheet, tempWb, clock, sourceRef)
             else None
           CellOutcome(value, converged = true, guard, resolved.unresolved)
         }
@@ -1018,10 +1026,11 @@ object DataTableSeeder:
     probe: Option[TExpr[?]],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[String] =
     probe
-      .flatMap(expr => firstFiredGuard(expr, sheet, wb, clock))
+      .flatMap(expr => firstFiredGuard(expr, sheet, wb, clock, at))
       .map(guarded => FormulaPrinter.print(guarded, includeEquals = false).take(120))
 
   /**
@@ -1047,7 +1056,8 @@ object DataTableSeeder:
     expr: TExpr[?],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[TExpr[?]] =
     expr match
       case call: TExpr.Call[?] =>
@@ -1056,41 +1066,42 @@ object DataTableSeeder:
           case name @ ("IFERROR" | "IFNA") =>
             args match
               case guarded :: _ =>
-                if errorGuardFires(name, guarded, sheet, wb, clock) then Some(guarded)
-                else firstFiredGuard(guarded, sheet, wb, clock)
+                if errorGuardFires(name, guarded, sheet, wb, clock, at) then Some(guarded)
+                else firstFiredGuard(guarded, sheet, wb, clock, at)
               case Nil => None
           case "IF" =>
             args match
               case cond :: branches =>
-                firedPredicate(cond, sheet, wb, clock)
-                  .orElse(firstFiredGuard(cond, sheet, wb, clock))
+                firedPredicate(cond, sheet, wb, clock, at)
+                  .orElse(firstFiredGuard(cond, sheet, wb, clock, at))
                   .orElse(
-                    branchTaken(cond, sheet, wb, clock)
+                    branchTaken(cond, sheet, wb, clock, at)
                       .flatMap(taken => branches.drop(if taken then 0 else 1).headOption)
-                      .flatMap(branch => firstFiredGuard(branch, sheet, wb, clock))
+                      .flatMap(branch => firstFiredGuard(branch, sheet, wb, clock, at))
                   )
               case Nil => None
-          case "CHOOSE" => firstFiredChoose(args, sheet, wb, clock)
-          case "IFS" => firstFiredIfs(args, sheet, wb, clock)
-          case "SWITCH" => firstFiredSwitch(args, sheet, wb, clock)
-          case _ => firstFiredIn(args, sheet, wb, clock)
-      case other => firstFiredIn(children(other), sheet, wb, clock)
+          case "CHOOSE" => firstFiredChoose(args, sheet, wb, clock, at)
+          case "IFS" => firstFiredIfs(args, sheet, wb, clock, at)
+          case "SWITCH" => firstFiredSwitch(args, sheet, wb, clock, at)
+          case _ => firstFiredIn(args, sheet, wb, clock, at)
+      case other => firstFiredIn(children(other), sheet, wb, clock, at)
 
   /** `CHOOSE` evaluates its index and exactly one 1-based value expression. */
   private def firstFiredChoose(
     args: List[TExpr[?]],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[TExpr[?]] =
     args match
       case index :: values =>
-        firstFiredGuard(index, sheet, wb, clock).orElse {
+        firstFiredGuard(index, sheet, wb, clock, at).orElse {
           Evaluator.instance
-            .eval(TExpr.asNumericExpr(index), sheet, clock, Some(wb), None)
+            .eval(TExpr.asNumericExpr(index), sheet, clock, Some(wb), Some(at))
             .toOption
             .flatMap(n => values.lift(n.toInt - 1))
-            .flatMap(value => firstFiredGuard(value, sheet, wb, clock))
+            .flatMap(value => firstFiredGuard(value, sheet, wb, clock, at))
         }
       case Nil => None
 
@@ -1099,14 +1110,15 @@ object DataTableSeeder:
     args: List[TExpr[?]],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[TExpr[?]] =
     args match
       case cond :: value :: rest =>
-        firstFiredGuard(cond, sheet, wb, clock).orElse {
-          ifsBranchTaken(cond, sheet, wb, clock).flatMap { taken =>
-            if taken then firstFiredGuard(value, sheet, wb, clock)
-            else firstFiredIfs(rest, sheet, wb, clock)
+        firstFiredGuard(cond, sheet, wb, clock, at).orElse {
+          ifsBranchTaken(cond, sheet, wb, clock, at).flatMap { taken =>
+            if taken then firstFiredGuard(value, sheet, wb, clock, at)
+            else firstFiredIfs(rest, sheet, wb, clock, at)
           }
         }
       case _ => None
@@ -1116,9 +1128,10 @@ object DataTableSeeder:
     cond: TExpr[?],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[Boolean] =
-    evalIfsCondition(cond, sheet, wb, clock).toOption.flatMap { result =>
+    evalIfsCondition(cond, sheet, wb, clock, at).toOption.flatMap { result =>
       val scalar = result match
         case array: ArrayResult => ScalarCoercion.collapseArray(array)
         case other => other
@@ -1127,44 +1140,38 @@ object DataTableSeeder:
         case _ => None
     }
 
-  /** Evaluate an `IFS` condition with the same range materialization and array mode as `IFS`. */
+  /**
+   * Evaluate an `IFS` condition as `IFS` does in the source's plain cell: a value, its references
+   * implicitly intersected with the source cell.
+   */
   private def evalIfsCondition(
     expr: TExpr[?],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Either[EvalError, Any] =
-    expr match
-      case TExpr.RangeRef(cellRange, _) => Right(ArrayArithmetic.rangeToArray(cellRange, sheet))
-      case TExpr.SheetRange(sheetName, cellRange, _) =>
-        Evaluator
-          .resolveRangeLocation(
-            TExpr.RangeLocation.CrossSheet(sheetName, cellRange),
-            sheet,
-            Some(wb)
-          )
-          .map { case (targetSheet, _) => ArrayArithmetic.rangeToArray(cellRange, targetSheet) }
-      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef =>
-        Evaluator.arrayInstance
-          .eval(TExpr.asResolvedValueExpr(expr), sheet, clock, Some(wb), None)
-          .map(value => value: Any)
-      case other =>
-        Evaluator.arrayInstance.eval(other, sheet, clock, Some(wb), None).map(value => value: Any)
+    val resolved = expr match
+      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef | _: TExpr.UnaryPlus[?] =>
+        TExpr.asResolvedValueExpr(expr)
+      case other => other
+    Evaluator.instance.eval(resolved, sheet, clock, Some(wb), Some(at)).map(value => value: Any)
 
   /** `SWITCH` evaluates its target, cases in order, and only the selected value/default. */
   private def firstFiredSwitch(
     args: List[TExpr[?]],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[TExpr[?]] =
     args match
       case target :: cases =>
-        firstFiredGuard(target, sheet, wb, clock).orElse {
-          evalAnySelector(target, sheet, wb, clock).toOption.flatMap { targetValue =>
+        firstFiredGuard(target, sheet, wb, clock, at).orElse {
+          evalAnySelector(target, sheet, wb, clock, at).toOption.flatMap { targetValue =>
             val targetCell = ArrayArithmetic.anyToCellValue(targetValue)
             if ArrayArithmetic.carriedError(targetCell).nonEmpty then None
-            else firstFiredSwitchCase(targetCell, cases, sheet, wb, clock)
+            else firstFiredSwitchCase(targetCell, cases, sheet, wb, clock, at)
           }
         }
       case Nil => None
@@ -1175,20 +1182,21 @@ object DataTableSeeder:
     cases: List[TExpr[?]],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[TExpr[?]] =
     cases match
       case caseExpr :: value :: rest =>
-        firstFiredGuard(caseExpr, sheet, wb, clock).orElse {
-          evalAnySelector(caseExpr, sheet, wb, clock).toOption.flatMap { caseValue =>
+        firstFiredGuard(caseExpr, sheet, wb, clock, at).orElse {
+          evalAnySelector(caseExpr, sheet, wb, clock, at).toOption.flatMap { caseValue =>
             val caseCell = ArrayArithmetic.anyToCellValue(caseValue)
             if ArrayArithmetic.carriedError(caseCell).nonEmpty then None
             else if ArrayArithmetic.cellValueEquals(target, caseCell) then
-              firstFiredGuard(value, sheet, wb, clock)
-            else firstFiredSwitchCase(target, rest, sheet, wb, clock)
+              firstFiredGuard(value, sheet, wb, clock, at)
+            else firstFiredSwitchCase(target, rest, sheet, wb, clock, at)
           }
         }
-      case default :: Nil => firstFiredGuard(default, sheet, wb, clock)
+      case default :: Nil => firstFiredGuard(default, sheet, wb, clock, at)
       case _ => None
 
   /** Evaluate an Any-typed selector with the conditional functions' scalar argument boundary. */
@@ -1196,13 +1204,14 @@ object DataTableSeeder:
     expr: TExpr[?],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Either[EvalError, Any] =
     val resolved = expr match
       case _: TExpr.PolyRef | _: TExpr.SheetPolyRef | _: TExpr.UnaryPlus[?] =>
         TExpr.asResolvedValueExpr(expr)
       case other => other
-    Evaluator.instance.eval(resolved, sheet, clock, Some(wb), None).map {
+    Evaluator.instance.eval(resolved, sheet, clock, Some(wb), Some(at)).map {
       case array: ArrayResult => ScalarCoercion.collapseArray(array)
       case value => value: Any
     }
@@ -1212,9 +1221,10 @@ object DataTableSeeder:
     nodes: List[TExpr[?]],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[TExpr[?]] =
-    nodes.iterator.flatMap(node => firstFiredGuard(node, sheet, wb, clock)).nextOption()
+    nodes.iterator.flatMap(node => firstFiredGuard(node, sheet, wb, clock, at)).nextOption()
 
   /**
    * GH-494: an `IF` condition of the form `ISERROR(x)` (or `ISERR`/`ISNA`) whose predicate itself
@@ -1227,11 +1237,12 @@ object DataTableSeeder:
     cond: TExpr[?],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[TExpr[?]] =
     unwrapTransparent(cond) match
       case c: TExpr.Call[?] if ErrorPredicates.contains(c.spec.name.toUpperCase) =>
-        callArgExprs(c).headOption.filter(_ => branchTaken(c, sheet, wb, clock).contains(true))
+        callArgExprs(c).headOption.filter(_ => branchTaken(c, sheet, wb, clock, at).contains(true))
       case _ => None
 
   /**
@@ -1247,19 +1258,21 @@ object DataTableSeeder:
     guarded: TExpr[?],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Boolean =
-    if name == "IFNA" then guardedError(guarded, sheet, wb, clock).contains(CellError.NA)
-    else guardResolvesToError(guarded, sheet, wb, clock)
+    if name == "IFNA" then guardedError(guarded, sheet, wb, clock, at).contains(CellError.NA)
+    else guardResolvesToError(guarded, sheet, wb, clock, at)
 
   /** The Excel error code carried by an expression, when one can be classified. */
   private def guardedError(
     probe: TExpr[?],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[CellError] =
-    Evaluator.instance.eval(probe, sheet, clock, Some(wb), None) match
+    Evaluator.instance.eval(probe, sheet, clock, Some(wb), Some(at)) match
       case Left(error) => EvalError.toCellError(error)
       case Right(value) => ArrayArithmetic.carriedError(EvalResult.toCellValue(value))
 
@@ -1272,9 +1285,10 @@ object DataTableSeeder:
     cond: TExpr[?],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Option[Boolean] =
-    Evaluator.instance.eval(cond, sheet, clock, Some(wb), None) match
+    Evaluator.instance.eval(cond, sheet, clock, Some(wb), Some(at)) match
       case Left(_) => None
       case Right(result) =>
         val scalar = result match
@@ -1289,9 +1303,10 @@ object DataTableSeeder:
     probe: TExpr[?],
     sheet: Sheet,
     wb: Workbook,
-    clock: Clock
+    clock: Clock,
+    at: ARef
   ): Boolean =
-    Evaluator.instance.eval(probe, sheet, clock, Some(wb), None) match
+    Evaluator.instance.eval(probe, sheet, clock, Some(wb), Some(at)) match
       case Left(_) => true
       case Right(value) =>
         ArrayArithmetic.carriedError(EvalResult.toCellValue(value)).nonEmpty

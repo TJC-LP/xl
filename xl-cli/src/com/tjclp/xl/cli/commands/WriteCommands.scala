@@ -566,7 +566,10 @@ object WriteCommands:
       )
       cachedValue =
         if policy.noRecalc then
-          SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+          // evaluated as the plain cell it becomes: at its position (a legacy formula)
+          SheetEvaluator
+            .evaluateFormula(sheet)(fullFormula, workbook = Some(wb), currentCell = Some(ref))
+            .toOption
         else None
       sheetWithFormula = sheet.put(ref, CellValue.Formula(formula, cachedValue))
       // Auto-apply date format if formula involves date functions
@@ -662,7 +665,13 @@ object WriteCommands:
               ).map { _ =>
                 val cachedValue =
                   if policy.noRecalc then
-                    SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+                    SheetEvaluator
+                      .evaluateFormula(sheet)(
+                        fullFormula,
+                        workbook = Some(wb),
+                        currentCell = Some(ref)
+                      )
+                      .toOption
                   else None
                 (ref, CellValue.Formula(formula, cachedValue))
               }
@@ -709,7 +718,13 @@ object WriteCommands:
         val fullShiftedFormula = s"=$shiftedFormula"
         val cachedValue =
           if cacheFormulas then
-            SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
+            SheetEvaluator
+              .evaluateFormula(s)(
+                fullShiftedFormula,
+                workbook = Some(wb),
+                currentCell = Some(targetRef)
+              )
+              .toOption
           else None
         val recorded =
           if shifted.anyVoided then hits :+ OffGridRef(targetRef, shifted.voided) else hits
@@ -1693,7 +1708,9 @@ object WriteCommands:
       s.cells.get(ref).map(_.value) match
         case Some(CellValue.Formula(expr, None, _: FormulaKind.Normal)) =>
           val cached =
-            SheetEvaluator.evaluateFormula(s)(s"=$expr", workbook = Some(wb.put(s))).toOption
+            SheetEvaluator
+              .evaluateFormula(s)(s"=$expr", workbook = Some(wb.put(s)), currentCell = Some(ref))
+              .toOption
           s.put(ref, CellValue.Formula(expr, cached))
         case _ => s
     }

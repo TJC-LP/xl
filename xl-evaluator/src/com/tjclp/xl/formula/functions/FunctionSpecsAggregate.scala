@@ -7,7 +7,9 @@ import com.tjclp.xl.formula.eval.{
   CriteriaMatcher,
   Aggregator,
   ArrayResult,
-  ArrayArithmetic
+  ArrayArithmetic,
+  RangeOperand,
+  ScalarCoercion
 }
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -276,6 +278,26 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       .flatMap(_ => Aggregator.onErrorArgument(agg, acc))
       .toRight(err)
 
+  /**
+   * A non-numeric value passed straight to an aggregate (not read from a reference) by Excel's rule
+   * for arguments typed into the list: a logical value is 1 or 0 and numeric text its number (COUNT
+   * counts both), other text is `#VALUE!` (COUNT skips it). A range's text and logical cells are
+   * skipped instead, by the range fold.
+   */
+  private def directValue[A](agg: Aggregator[A], acc: A, value: CellValue): Either[EvalError, A] =
+    value match
+      case CellValue.Bool(b) => Right(agg.combine(acc, if b then BigDecimal(1) else BigDecimal(0)))
+      case CellValue.Text(s) =>
+        ScalarCoercion.parseNumericText(s) match
+          case Some(n) => Right(agg.combine(acc, n))
+          case None if agg.propagatesErrors =>
+            Left(
+              EvalError.ErrorValue(CellError.Value, Some(s"${agg.name}: \"$s\" is not a number"))
+            )
+          case None => Right(acc)
+      case CellValue.RichText(rt) => directValue(agg, acc, CellValue.Text(rt.toPlainText))
+      case _ => Right(acc)
+
   /** Helper to evaluate variadic aggregates with proper type handling. */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def evalVariadicAggregate[A](
@@ -325,11 +347,17 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           // Left(location) branch above) keep their pre-existing skip semantics.
           // GH-630: an argument that evaluated to an Excel error VALUE is triaged by the
           // aggregator's policy (`triageErrorArgument`), never propagated blindly.
+          // An aggregate's argument is Excel's reference class: a reference folds whole, any other
+          // expression is a value in a plain cell (`SUM(A1:A10*B1:B10)` in row 5 is A5*B5)
           ctx
-            .evalArrayExpr(expr.asInstanceOf[TExpr[Any]])
+            .evalReferenceArg(expr.asInstanceOf[TExpr[Any]])
             .fold(
               triageErrorArgument(agg, acc, _),
               {
+                // a reference IF/CHOOSE selected, or a range name: folded like a written range
+                case RangeOperand(targetSheet, range) =>
+                  val bounds = computeBounds(List((range, targetSheet)))
+                  foldRawRange(agg, targetSheet, constrainRange(range, bounds), ctx, acc)
                 case ar: ArrayResult =>
                   ar.values.iterator.flatten.foldLeft[Either[EvalError, A]](Right(acc)) {
                     case (Left(err), _) => Left(err)
@@ -381,7 +409,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       case None =>
                         extractNumericValue(cellValue) match
                           case Some(n) => Right(agg.combine(acc, n))
-                          case None => Right(acc)
+                          case None => directValue(agg, acc, cellValue)
               }
             )
       }

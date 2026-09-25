@@ -133,8 +133,54 @@ final case class EvalContext(
    * One WorkbookEvaluator recalculation generation's single-range aggregate memo. Public/direct
    * evaluation leaves this absent, preserving its one-shot semantics and allocation profile.
    */
-  aggregateMemo: Option[Evaluator.AggregateMemo] = None
-)
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  /**
+   * Excel's operand classes for this call (internal to the evaluator): see
+   * [[EvalContext.Operands]].
+   */
+  private[formula] operands: EvalContext.Operands = EvalContext.Operands.array
+):
+
+  /**
+   * Whether the formula evaluates as an array (an array formula, `evala`, SUMPRODUCT's arguments)
+   * or as a plain cell's legacy formula, where a reference in a value position is implicitly
+   * intersected with the formula's cell.
+   */
+  private[formula] def arrayMode: Boolean = operands.arrayMode
+
+  /**
+   * Whether this call's result feeds a reference position, so the value IF, IFS, CHOOSE and SWITCH
+   * select is kept as a reference (Excel's IF and CHOOSE return references):
+   * `SUM(IF(A1:A10>2,A1:A10,0))` in row 5 sums the whole range.
+   */
+  private[formula] def selectsReference: Boolean = operands.selectsReference
+
+  /**
+   * An argument in Excel's reference operand class (an aggregate's, AND's, OR's). A reference — a
+   * range, a name bound to one, IF/CHOOSE's selected reference — reaches the function whole, as an
+   * [[com.tjclp.xl.formula.eval.RangeOperand]]; any other expression evaluates in the formula's own
+   * mode, its result not collapsed (an array-returning call folds whole), so in a plain cell its
+   * references are intersected: `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel computes a legacy
+   * formula. In array mode, [[evalArrayExpr]].
+   */
+  private[formula] def evalReferenceArg(expr: TExpr[Any]): Either[EvalError, Any] =
+    operands.referenceArg.fold(evalArrayExpr(expr))(_(expr))
+
+object EvalContext:
+  /**
+   * How a call's arguments evaluate. `arrayMode`: the formula evaluates as an array rather than as
+   * a plain cell's legacy formula. `referenceArg`: how a plain cell evaluates an argument in the
+   * reference class (None in array mode). `selectsReference`: the call feeds a reference position.
+   */
+  private[formula] final case class Operands(
+    arrayMode: Boolean,
+    referenceArg: Option[TExpr[Any] => Either[EvalError, Any]],
+    selectsReference: Boolean
+  )
+
+  private[formula] object Operands:
+    /** Array evaluation: every argument may be an array; references materialize. */
+    val array: Operands = Operands(arrayMode = true, referenceArg = None, selectsReference = false)
 
 sealed trait ArgValue
 object ArgValue:

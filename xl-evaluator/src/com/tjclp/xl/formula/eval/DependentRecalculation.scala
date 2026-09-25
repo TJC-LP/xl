@@ -362,10 +362,10 @@ object DependentRecalculation:
           // the sole source of truth
           case value: CellValue.Formula if SheetEvaluator.pinnedCache(value).isDefined =>
             sheet
-          case f @ CellValue.Formula(expr, _, _) =>
-            // Evaluate the formula and update cache; .copy keeps the record kind (GH-430)
-            val fullFormula = if expr.startsWith("=") then expr else s"=$expr"
-            SheetEvaluator.evaluateFormula(sheet)(fullFormula, clock, workbook) match
+          case f @ CellValue.Formula(_, _, _) =>
+            // Evaluate the cell at its own position and by its record kind (a plain cell as a
+            // legacy formula, an array formula as an array); .copy keeps the kind (GH-430)
+            SheetEvaluator.evaluateCell(sheet)(ref, clock, workbook) match
               case Right(newValue) =>
                 sheet.put(ref, f.copy(cachedValue = Some(newValue)))
               case Left(_) =>

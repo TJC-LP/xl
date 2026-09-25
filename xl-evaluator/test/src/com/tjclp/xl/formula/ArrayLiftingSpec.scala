@@ -100,7 +100,10 @@ class ArrayLiftingSpec extends FunSuite:
   test("the brief's repro values") {
     assertEquals(number(arrayEval("=SUMPRODUCT(ABS(C2:C4+D2:D4))")), BigDecimal(7))
     assertEquals(number(arrayEval("=SUM(ABS(C2:C4+D2:D4))")), BigDecimal(7))
-    assertEquals(cellAt("=SUM(ABS(C2:C4+D2:D4))", ref"F9"), Right(num(7)))
+    // a plain cell is a legacy formula: SUM's argument is a value, its ranges read the cell's own
+    // row (F3: ABS(C3+D3)), and #VALUE! where the row misses them
+    assertEquals(cellAt("=SUM(ABS(C2:C4+D2:D4))", ref"F3"), Right(num(2)))
+    assertEquals(cellAt("=SUM(ABS(C2:C4+D2:D4))", ref"F9"), Right(err(CellError.Value)))
     assertEquals(number(arrayEval("=SUMPRODUCT(ROUND(C2:C4/3,1))")), BigDecimal("0.6"))
     assertEquals(number(arrayEval("=SUMPRODUCT(LEN(A1:D1))")), BigDecimal(8))
     assertEquals(number(arrayEval("=SUMPRODUCT(--ISNUMBER(B2:B4))")), BigDecimal(3))
@@ -393,7 +396,11 @@ class ArrayLiftingSpec extends FunSuite:
       arrayEval("=IF(B2:B4>0,ABS(C2:C4),0)"),
       Right(column(num(3), num(0), num(1)))
     )
-    assertEquals(cellAt("=LET(x,LEN(A1:D1),SUM(x))", ref"F2"), Right(num(8)))
+    // a LET binding evaluates in the formula's own mode: as an array formula it binds the whole
+    // array, in a plain cell it is the value LEN(A1:D1) has there (#VALUE! in column F)
+    assertEquals(number(arrayEval("=LET(x,LEN(A1:D1),SUM(x))")), BigDecimal(8))
+    assertEquals(cellAt("=LET(x,LEN(A1:D1),SUM(x))", ref"F2"), Right(err(CellError.Value)))
+    assertEquals(cellAt("=LET(x,LEN(A1:D1),SUM(x))", ref"B5"), Right(num(1)))
   }
 
   test("a defined name bound to a range lifts like the range; a one-cell name is that cell") {
@@ -423,8 +430,8 @@ class ArrayLiftingSpec extends FunSuite:
     assertEquals(arrayEval("=ROUND(C2,1)"), Right(BigDecimal(-3)))
     assertEquals(number(arrayEval("=SUMPRODUCT(B2:B4,C2:C4)")), BigDecimal(-15 - 8 + 7))
     assertEquals(arrayEval("=NOT(B2:B4>0)"), Right(column(bool(false), bool(true), bool(false))))
-    // a computed array in a plain cell keeps the GH-302 top-left convention
-    assertEquals(cellAt("=ABS(C2:C4+D2:D4)", ref"F4"), Right(num(2)))
+    // in a plain cell the references under an operator intersect too: row 4 reads C4+D4
+    assertEquals(cellAt("=ABS(C2:C4+D2:D4)", ref"F4"), Right(num(3)))
   }
 
   // ===== Scalar (Normal-kind) cells: implicit intersection =====

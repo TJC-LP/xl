@@ -406,6 +406,17 @@ object Evaluator:
               )
             )
 
+  /**
+   * The functions that return a reference (Excel's IF, IFS, CHOOSE and SWITCH return the reference
+   * they select; OFFSET, INDIRECT and INDEX compute one): in a reference position their result
+   * reaches the consumer whole, in a plain cell's value position it is implicitly intersected.
+   */
+  private[formula] val referenceFunctions: Set[String] =
+    Set("IF", "IFS", "CHOOSE", "SWITCH", "OFFSET", "INDIRECT", "INDEX")
+
+  /** The functions a dynamic named range is bound to: they compute the reference it names. */
+  private[formula] val dynamicRangeFunctions: Set[String] = Set("OFFSET", "INDIRECT", "INDEX")
+
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
 
@@ -943,24 +954,23 @@ private class EvaluatorImpl(
       case TExpr.ExternalRange(index, name, range, _) =>
         Left(Evaluator.externalRefUnsupported(s"[$index]$name!${range.toA1}"))
 
+      // A range where a value is needed: its values in array mode, the implicitly intersected
+      // cell in a plain cell (`=A1:A10` in row 5 is A5, as Excel computes a legacy formula)
       case TExpr.SheetRange(sheetName, range, _) =>
-        // SheetRange should be wrapped in a function (SUM, COUNT, etc.) before evaluation
-        // GH-280: quote cell-ref-shaped sheet names so diagnostics read unambiguously
-        val refStr = s"${SheetName.quoteForFormula(sheetName.value)}!${range.toA1}"
-        Left(
-          EvalError.EvalFailed(
-            s"Cross-sheet range $refStr must be used within a function like SUM or COUNT.",
-            None
+        Evaluator
+          .resolveRangeLocation(
+            TExpr.RangeLocation.CrossSheet(sheetName, range),
+            sheet,
+            workbook,
+            resolvingNames
           )
-        )
+          .flatMap { case (targetSheet, _) =>
+            derefRange(range, targetSheet, clock, workbook, currentCell)
+          }
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.RangeRef(range, _) =>
-        Left(
-          EvalError.EvalFailed(
-            s"Range ${range.toA1} must be used within a function like SUM or COUNT.",
-            None
-          )
-        )
+        derefRange(range, sheet, clock, workbook, currentCell).asInstanceOf[Either[EvalError, A]]
 
       // ===== Literals =====
       case TExpr.Lit(value) =>
@@ -1139,73 +1149,8 @@ private class EvaluatorImpl(
                   case None => evalAggregateNode(agg, range, targetSheet, clock, workbook)
 
       case call: TExpr.Call[?] =>
-        // GH-302: scalar argument positions COLLAPSE ArrayResults (implicit intersection:
-        // top-left value, Empty when empty) instead of rejecting them. Typed positions
-        // (Coerced/CoercedBindingRef) collapse-then-coerce so the value matches the position's
-        // type regardless of the evaluator's array mode; Any/CellValue positions collapse to the
-        // raw CellValue (consumers go through ExprValue.from).
-        //
-        // Any other node collapses through its STATIC scalar kind (TExpr.scalarKind): in array
-        // mode an arithmetic node (statically TExpr[BigDecimal], kept bare in numeric slots)
-        // evaluates to an ArrayResult, and its top-left element must reach the function as a
-        // number or a Left — never a raw CellValue the body would cast and throw on. Only the
-        // Either container is cast.
-        def evalArg[A](expr: TExpr[A]): Either[EvalError, A] =
-          val result: Either[EvalError, Any] = expr match
-            case TExpr.Coerced(inner, target) =>
-              evalCoercedExpr(inner, target, sheet, clock, workbook, currentCell, collapse = true)
-            case TExpr.CoercedBindingRef(name, target) =>
-              evalCoercedBinding(name, target, collapse = true)
-            case other =>
-              (eval(other, sheet, clock, workbook, currentCell): Either[EvalError, Any]).flatMap {
-                case ar: ArrayResult =>
-                  val kind = TExpr.scalarKind(other)
-                  ScalarCoercion.collapseTo(kind.fold("argument")(coercionLabel), ar, kind)
-                case value => Right(value)
-              }
-          result.asInstanceOf[Either[EvalError, A]]
-        // GH-346: functions that read uncached formula cells (aggregates, array materialization)
-        // recurse through the same memo, so a shared precedent evaluates once per pass. Created
-        // here when the pass has none yet — the ctx is per Call node, so it cannot leak across
-        // top-level evaluations.
-        val callMemo = memoOpt.getOrElse(new Evaluator.EvalMemo)
-        // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions.
-        // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
-        // (e.g. SUM over a range-valued binding) still resolve in-scope names.
-        def evalArrayArg(expr: TExpr[Any]): Either[EvalError, Any] =
-          new EvaluatorWithDepth(
-            currentDepth,
-            allowArrayResults = true,
-            bindings,
-            rng,
-            Some(callMemo),
-            resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
-            workbookPath,
-            aggregateMemoOpt
-          )
-            .eval(expr, sheet, clock, workbook, currentCell)
-
-        val ctx = EvalContext(
-          sheet,
-          clock,
-          workbook,
-          [A] => (expr: TExpr[A]) => evalArg(expr),
-          evalArrayArg,
-          currentCell,
-          currentDepth,
-          bindings,
-          rng,
-          Some(callMemo),
-          workbookPath,
-          aggregateMemoOpt
-        )
-        call.spec.flags.lift match
-          case ArrayLift.Off => call.spec.eval(call.args, ctx)
-          // in array mode the result may be an ArrayResult: its consumers handle one (the
-          // array-mode typing invariant), so only the Either container is cast
-          case lift @ ArrayLift.On(_, _) =>
-            evalLiftedCall(call, lift, ctx, sheet, clock, workbook, currentCell)
-              .asInstanceOf[Either[EvalError, A]]
+        evalCall(call, sheet, clock, workbook, currentCell, selectsReference = false)
+          .asInstanceOf[Either[EvalError, A]]
 
       // ===== GH-193: LET lexical bindings =====
       // Cast the Either container, not the value: BindingRef extends TExpr[Nothing], so the GADT
@@ -1258,6 +1203,158 @@ private class EvaluatorImpl(
       case TExpr.SheetNameRef(qualifier, name) =>
         evalNameRef(name, scope = Some(qualifier), sheet, clock, workbook, currentCell)
           .asInstanceOf[Either[EvalError, A]]
+
+  /**
+   * A function call. `selectsReference`: the call's result feeds a reference position (an
+   * aggregate's argument), so IF, IFS, CHOOSE and SWITCH keep the reference they select whole.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalCall(
+    call: TExpr.Call[?],
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef],
+    selectsReference: Boolean
+  ): Either[EvalError, Any] =
+    // GH-302: scalar argument positions COLLAPSE ArrayResults (implicit intersection:
+    // top-left value, Empty when empty) instead of rejecting them. Typed positions
+    // (Coerced/CoercedBindingRef) collapse-then-coerce so the value matches the position's
+    // type regardless of the evaluator's array mode; Any/CellValue positions collapse to the
+    // raw CellValue (consumers go through ExprValue.from).
+    //
+    // Any other node collapses through its STATIC scalar kind (TExpr.scalarKind): in array
+    // mode an arithmetic node (statically TExpr[BigDecimal], kept bare in numeric slots)
+    // evaluates to an ArrayResult, and its top-left element must reach the function as a
+    // number or a Left — never a raw CellValue the body would cast and throw on. Only the
+    // Either container is cast.
+    def evalArg[A](expr: TExpr[A]): Either[EvalError, A] =
+      val result: Either[EvalError, Any] = expr match
+        case TExpr.Coerced(inner, target) =>
+          evalCoercedExpr(inner, target, sheet, clock, workbook, currentCell, collapse = true)
+        case TExpr.CoercedBindingRef(name, target) =>
+          evalCoercedBinding(name, target, collapse = true)
+        case other =>
+          (eval(other, sheet, clock, workbook, currentCell): Either[EvalError, Any]).flatMap {
+            case ar: ArrayResult =>
+              val kind = TExpr.scalarKind(other)
+              ScalarCoercion.collapseTo(kind.fold("argument")(coercionLabel), ar, kind)
+            case value => Right(value)
+          }
+      result.asInstanceOf[Either[EvalError, A]]
+    // GH-346: functions that read uncached formula cells (aggregates, array materialization)
+    // recurse through the same memo, so a shared precedent evaluates once per pass. Created
+    // here when the pass has none yet — the ctx is per Call node, so it cannot leak across
+    // top-level evaluations.
+    val callMemo = memoOpt.getOrElse(new Evaluator.EvalMemo)
+    // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions.
+    // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
+    // (e.g. SUM over a range-valued binding) still resolve in-scope names.
+    def evalArrayArg(expr: TExpr[Any]): Either[EvalError, Any] =
+      new EvaluatorWithDepth(
+        currentDepth,
+        allowArrayResults = true,
+        bindings,
+        rng,
+        Some(callMemo),
+        resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
+        workbookPath,
+        aggregateMemoOpt
+      )
+        .eval(expr, sheet, clock, workbook, currentCell)
+
+    val ctx = EvalContext(
+      sheet,
+      clock,
+      workbook,
+      [A] => (expr: TExpr[A]) => evalArg(expr),
+      evalArrayArg,
+      currentCell,
+      currentDepth,
+      bindings,
+      rng,
+      Some(callMemo),
+      workbookPath,
+      aggregateMemoOpt,
+      operands = EvalContext.Operands(
+        arrayMode = allowArrayResults,
+        referenceArg = Option.when(!allowArrayResults)(
+          referenceArgument(_, sheet, clock, workbook, currentCell)
+        ),
+        selectsReference = selectsReference
+      )
+    )
+    call.spec.flags.lift match
+      case ArrayLift.Off => call.spec.eval(call.args, ctx)
+      // in array mode the result may be an ArrayResult: its consumers handle one (the
+      // array-mode typing invariant)
+      case lift @ ArrayLift.On(_, _) =>
+        evalLiftedCall(call, lift, ctx, sheet, clock, workbook, currentCell)
+
+  /**
+   * An argument in Excel's reference operand class, in a plain cell
+   * ([[EvalContext.evalReferenceArg]]). A reference reaches the function whole, unread (a
+   * [[RangeOperand]]): a range, a name bound to one, a LET body that is one, and the reference that
+   * IF, IFS, CHOOSE or SWITCH select; OFFSET, INDIRECT and INDEX return theirs whole. Any other
+   * expression evaluates as a value in scalar mode, its own result not collapsed:
+   * `SUM(ABS(A1:A10))` in row 5 is ABS(A5), `SUM(SEQUENCE(3))` still folds all three.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def referenceArgument(
+    expr: TExpr[Any],
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, Any] =
+    def whole(location: TExpr.RangeLocation): Either[EvalError, Any] =
+      Evaluator
+        .resolveRangeLocation(location, sheet, workbook, resolvingNames)
+        .map((target, range) => RangeOperand(target, range))
+    def name(location: TExpr.RangeLocation.Name): Either[EvalError, Any] =
+      // a name bound to a reference is that reference; one bound to a formula is its value
+      Evaluator.resolveRangeLocation(location, sheet, workbook, resolvingNames) match
+        case Right((target, range)) => Right(RangeOperand(target, range))
+        // a named formula, or a dynamic range, reaches a reference position whole: its array
+        case Left(_) =>
+          new EvaluatorWithDepth(
+            currentDepth,
+            allowArrayResults = true,
+            bindings,
+            rng,
+            memoOpt,
+            resolvingNames,
+            workbookPath,
+            aggregateMemoOpt
+          ).eval(expr, sheet, clock, workbook, currentCell)
+    expr match
+      case TExpr.RangeRef(range, _) => Right(RangeOperand(sheet, range))
+      case TExpr.SheetRange(sheetName, range, _) =>
+        whole(TExpr.RangeLocation.CrossSheet(sheetName, range))
+      case TExpr.NameRef(n) => name(TExpr.RangeLocation.Name(n, None))
+      case TExpr.SheetNameRef(qualifier, n) => name(TExpr.RangeLocation.Name(n, Some(qualifier)))
+      // a LET binding's value, and a LET whose body is the reference argument
+      case TExpr.CoercedBindingRef(bound, target) =>
+        evalCoercedBinding(bound, target, collapse = false)
+      case TExpr.Let(letBindings, body) =>
+        evalLet(letBindings, body, sheet, clock, workbook, currentCell, referenceBody = true)
+      // the slot's coercion is the consumer's: a reference, an array or a value reaches it as is,
+      // and the consumer applies Excel's rule for each (an aggregate's rule for a value typed
+      // into its argument list: `SUM("5")` is 5, `SUM("x")` is #VALUE!)
+      case TExpr.Coerced(inner, _) => referenceArgument(inner, sheet, clock, workbook, currentCell)
+      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef =>
+        eval(
+          TExpr.asResolvedValueExpr(expr).asInstanceOf[TExpr[Any]],
+          sheet,
+          clock,
+          workbook,
+          currentCell
+        )
+      case call: TExpr.Call[?] if Evaluator.referenceFunctions.contains(call.spec.name) =>
+        evalCall(call, sheet, clock, workbook, currentCell, selectsReference = true)
+      // `+range` is an operator with a value operand, not a reference (the ToolPak rule relies on
+      // it): in a plain cell it is intersected like any operand
+      case other => eval(other, sheet, clock, workbook, currentCell)
 
   // ===== Excel array lifting (FunctionFlags.lift) =====
 
@@ -1426,7 +1523,8 @@ private class EvaluatorImpl(
     sheet: Sheet,
     clock: Clock,
     workbook: Option[Workbook],
-    currentCell: Option[ARef]
+    currentCell: Option[ARef],
+    referenceBody: Boolean = false
   ): Either[EvalError, Any] =
     val envResult = letBindings.foldLeft[Either[EvalError, Map[String, Any]]](Right(bindings)) {
       case (Left(err), _) => Left(err)
@@ -1436,10 +1534,13 @@ private class EvaluatorImpl(
           case _ =>
             // Bare cell refs resolve to the cell's effective value (cached formula extracted,
             // Empty → 0) — same treatment as top-level refs and equality operands (GH-233).
+            // A binding evaluates in the formula's own mode, so LET never changes a value:
+            // plain(LET(x, e, b)) is plain(b with e for x) — in a plain cell its references
+            // intersect, while an array-returning call still binds its array.
             val resolved = TExpr.asResolvedValueExpr(valueExpr)
             new EvaluatorWithDepth(
               currentDepth,
-              allowArrayResults = true,
+              allowArrayResults,
               env,
               rng,
               memoOpt,
@@ -1483,7 +1584,7 @@ private class EvaluatorImpl(
             }
         case other =>
           val resolvedBody = TExpr.asResolvedValueExpr(other)
-          new EvaluatorWithDepth(
+          val bodyEvaluator: EvaluatorImpl = new EvaluatorWithDepth(
             currentDepth,
             allowArrayResults,
             env,
@@ -1493,7 +1594,18 @@ private class EvaluatorImpl(
             workbookPath,
             aggregateMemoOpt
           )
-            .eval(resolvedBody.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+          // in a reference position (SUM(LET(r, A1:A3, r))) the body is a reference argument
+          if referenceBody then
+            bodyEvaluator.referenceArgument(
+              resolvedBody.asInstanceOf[TExpr[Any]],
+              sheet,
+              clock,
+              workbook,
+              currentCell
+            )
+          else
+            bodyEvaluator
+              .eval(resolvedBody.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
     }
 
   // ===== GH-384: defined-name resolution =====
@@ -1563,10 +1675,11 @@ private class EvaluatorImpl(
                 case Right(target) =>
                   val definingSheet = Evaluator.definedNameScope(wb, dn).getOrElse(sheet)
                   target match
-                    // Range-shaped names materialize like literal ranges in array positions:
-                    // consumers collapse (scalar), broadcast (operands), or aggregate (SUM)
+                    // A name bound to a reference is that reference where a value is needed:
+                    // its values in array mode, the intersected cell in a plain cell (derefRange);
+                    // an aggregate's range slot reads it whole before it reaches here
                     case TExpr.RangeRef(range, _) =>
-                      materializeRange(range, definingSheet, clock, workbook)
+                      derefRange(range, definingSheet, clock, workbook, currentCell)
                     case TExpr.SheetRange(sheetName, range, _) =>
                       Evaluator
                         .resolveRangeLocation(
@@ -1576,17 +1689,23 @@ private class EvaluatorImpl(
                           resolvingNames + key
                         )
                         .flatMap { case (targetSheet, _) =>
-                          materializeRange(range, targetSheet, clock, workbook)
+                          derefRange(range, targetSheet, clock, workbook, currentCell)
                         }
                     case other =>
                       // Bare refs resolve to the cell's effective value (cached formula
                       // extracted, Empty → 0) like top-level refs; the derived evaluator
                       // carries the cycle guard and a FRESH binding environment (LET
-                      // bindings never leak into a name's definition).
+                      // bindings never leak into a name's definition). A named formula is an
+                      // array context, as in Excel — except a dynamic range (a name bound to
+                      // OFFSET, INDIRECT or INDEX), which is a reference: a plain cell's value
+                      // position intersects it (`=dyn*2` in row 5 reads the range's row 5).
                       val resolved = TExpr.asResolvedValueExpr(other)
+                      val dynamicRange = resolved match
+                        case call: TExpr.Call[?] => Evaluator.dynamicRangeFunctions(call.spec.name)
+                        case _ => false
                       new EvaluatorWithDepth(
                         currentDepth,
-                        allowArrayResults = true,
+                        allowArrayResults = allowArrayResults || !dynamicRange,
                         Map.empty,
                         rng,
                         memoOpt,
@@ -1873,6 +1992,27 @@ private class EvaluatorImpl(
       )
     )
 
+  /**
+   * A reference where a value is needed (Excel's value operand class). In array mode, the range's
+   * values. In a plain cell (scalar mode), the one cell Excel's implicit intersection picks
+   * ([[Evaluator.implicitIntersection]]: the formula's row of a column, its column of a row), as a
+   * 1×1 array that every scalar consumer already collapses and coerces for its position. A range
+   * the formula's row or column does not cross is `#VALUE!`, an Excel error value that IFERROR and
+   * ISERROR see; without the formula's position, a multi-cell range is the loud `@` failure.
+   */
+  private def derefRange(
+    range: CellRange,
+    targetSheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, ArrayResult] =
+    if allowArrayResults then materializeRange(range, targetSheet, clock, workbook)
+    else
+      Evaluator
+        .implicitIntersection(range, currentCell)
+        .flatMap(at => materializeRange(CellRange(at, at), targetSheet, clock, workbook))
+
   private def evalMaybeArray(
     expr: TExpr[?],
     sheet: Sheet,
@@ -1881,8 +2021,10 @@ private class EvaluatorImpl(
     currentCell: Option[ARef]
   ): Either[EvalError, Any] =
     expr match
+      // an operand is a value position: a range broadcasts in array mode and is implicitly
+      // intersected in a plain cell (derefRange)
       case TExpr.RangeRef(range, _) =>
-        materializeRange(range, sheet, clock, workbook)
+        derefRange(range, sheet, clock, workbook, currentCell)
       case TExpr.SheetRange(sheetName, range, _) =>
         Evaluator
           .resolveRangeLocation(
@@ -1892,7 +2034,7 @@ private class EvaluatorImpl(
             resolvingNames
           )
           .flatMap { case (targetSheet, _) =>
-            materializeRange(range, targetSheet, clock, workbook)
+            derefRange(range, targetSheet, clock, workbook, currentCell)
           }
       // GH-374: unary plus is transparent in operand positions — =+A1:A3*10 broadcasts
       // exactly like =A1:A3*10

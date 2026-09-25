@@ -64,6 +64,21 @@ class CfEvaluatorSpec extends ScalaCheckSuite:
   private def bar(p: Int, min: Cfvo = Cfvo.Min, max: Cfvo = Cfvo.Max): CfRule =
     CfRule.DataBar(min, max, blue, showValue = true, p)
 
+  // ========== Array evaluation ==========
+
+  test("a formula rule evaluates as an array formula, as Excel evaluates it (not a plain cell)") {
+    // Excel evaluates conditional-format formulas as arrays: the duplicate test and the list
+    // membership test read every cell of their ranges, not the rule cell's row of them
+    val values = column(num(3), num(5), num(3), num(9))
+    val dupes = run(withCf(values, block("A1:A4", expr("SUM(($A$1:$A$4=A1)*1)>1"))))
+    assertEquals(painted(dupes), Set("A1", "A3"))
+    val list = withCf(
+      values.put(aref("C1"), num(9)).put(aref("C2"), num(5)),
+      block("A1:A4", expr("OR(A1=$C$1:$C$2)"))
+    )
+    assertEquals(painted(run(list)), Set("A2", "A4"))
+  }
+
   // ========== Precedence ==========
 
   test("non-conflicting properties from every true rule combine") {

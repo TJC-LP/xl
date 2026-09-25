@@ -919,6 +919,8 @@ sheet. No `TRUNCATED` warning accompanies a clipped `search`: the clip is in the
 
 Evaluate a formula without modifying the file (what-if analysis). `-f` is optional for constant formulas (`xl eval "=PI()*2"`).
 
+The formula has no cell of its own, so it evaluates as it would typed into a new Excel 365 cell: as a dynamic-array formula, showing its top-left value (`evala` shows the whole array). The same text in a plain cell, as `putf` writes it, is a legacy formula that Excel evaluates with implicit intersection, so its value can differ: `eval "=SUM(A1:A10*B1:B10)"` is the array sum, while the cell `putf D5 "=SUM(A1:A10*B1:B10)"` is `A5*B5` (see [plain cells and implicit intersection](#plain-cells-and-implicit-intersection)).
+
 **Arguments**:
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
@@ -935,31 +937,46 @@ xl -f model.xlsx -s Sheet1 eval "=B1*1.1" --with "B1=100"
 
 ### `xl evala <formula> [--at <ref>]`
 
-Evaluate an **array formula** and display the result grid, or spill it into the sheet. Requires `-f` (array formulas need sheet context).
+Evaluate an **array formula** and display the result grid, optionally anchored at a cell (read-only: nothing is written). Requires `-f` (array formulas need sheet context).
 
 **Arguments**:
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
 | `formula` | string | Yes | Array formula to evaluate |
-| `--at` | string | No | Target cell for array spill (default: display only) |
+| `--at` | string | No | Cell the displayed spill is anchored at (nothing is written) |
 | `--with`, `-w` | string | No | Temporary cell overrides (repeatable) |
 
 **Examples**:
 ```bash
 xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)"          # Display result grid
-xl -f data.xlsx -s Sheet1 evala "=SEQUENCE(5)" --at E1       # Spill starting at E1
+xl -f data.xlsx -s Sheet1 evala "=SEQUENCE(5)" --at E1       # Display the spill anchored at E1
 xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                  # Array arithmetic with broadcasting
 xl -f data.xlsx -s Sheet1 evala "=ABS(C2:C4+D2:D4)"          # Scalar functions lift element-wise
 ```
 
 Scalar functions lift over arrays as in Excel 365 (`=ABS(C2:C4)` is `{3;4;1}`,
 `=SUMPRODUCT(--ISNUMBER(B2:B4))` counts), the same in `view --eval`, `eval`, `recalc` and `batch`
-wherever the formula is an array context (SUMPRODUCT and aggregate arguments, IF conditions, IF
-branches under an array condition, LET, CSE records). A plain formula cell does not spill: a
-multi-cell range in a lifted argument is implicitly intersected with the formula's row or column
-(`=ABS(C2:C4)` in row 3 reads C3, as Excel shows `=ABS(@C2:C4)`), and so is one in the branch a
-scalar IF condition selects (`=IF(TRUE,ABS(C2:C4),0)` in row 3 is 4). The lifted functions and the
-exceptions are listed in `docs/LIMITATIONS.md`.
+wherever the formula is an array context: SUMPRODUCT's arguments, FILTER's include, array (CSE and
+dynamic-array) records, named formulas, conditional-format formulas, and `eval`/`evala` without a
+cell.
+
+#### Plain cells and implicit intersection
+
+A plain formula cell — what `putf` and batch `putf` write — does not spill. Excel 365 opens it as a
+legacy formula, and xl computes the same values:
+- **Value positions.** A multi-cell reference in a value position is implicitly intersected with
+  the formula's row (a column) or column (a row), and is `#VALUE!` where it is not crossed. Value
+  positions are operands, `&`, scalar arguments, criteria, the IF condition and the CHOOSE index.
+  In row 3, `=ABS(C2:C4)` reads C3 (Excel shows `=ABS(@C2:C4)`), `=C2:C4*2` is `C3*2` and
+  `=IF(C2:C4>0,"y","n")` tests C3.
+- **Aggregates.** An aggregate's argument keeps a reference whole but evaluates an expression as a
+  value. `=SUM(A1:A10)` sums the range, while `=SUM(A1:A10*B1:B10)` in row 5 is `A5*B5`.
+  `SUM(IF(A1:A10>2,A1:A10,0))` sums the whole range when A5 > 2, because IF and CHOOSE return
+  references.
+- **Array math.** For array math in one cell, write SUMPRODUCT: `=SUMPRODUCT(A1:A10*B1:B10)`.
+
+The rules, the lifted functions and the known divergences are in `docs/LIMITATIONS.md` ("Plain
+cells are legacy formulas").
 
 ---
 

@@ -61,7 +61,11 @@ host failures keep the loud `LET binding 'x': …` wrap.
 ## Where ErrorValue is raised
 
 - `ScalarCoercion.coerce` Error arm — every typed argument position, IF/IFS scalar conditions,
-  `toIntArg`, LET/`Coerced` positions, and the scalar-entry top-left collapse.
+  `toIntArg`, LET/`Coerced` positions, and the scalar-entry top-left collapse of an array value.
+- `Evaluator.implicitIntersection` — a plain cell's reference in a value position that the
+  formula's row or column does not cross (and `@`, GH-604) is `#VALUE!`, a value IFERROR and
+  ISERROR see; an aggregate given non-numeric text as a value (`SUM("x")`, `MIN("")`) raises
+  `#VALUE!` too, as Excel does for a typed argument.
 - `ArrayArithmetic.compareCellValues` error arms (left operand first) — scalar `=1<#REF!`.
 - The scalar equality fast-path pre-check — `cellValueEquals` itself stays total fold-to-false
   (CriteriaMatcher and the lookups depend on error cells never matching).

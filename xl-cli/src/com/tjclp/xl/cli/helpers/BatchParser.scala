@@ -1647,7 +1647,13 @@ object BatchParser:
           val shifted = FormulaShifter.shiftReporting(parsedExpr, colDelta, rowDelta)
           val shiftedFormula = FormulaPrinter.printFileForm(shifted.expr)
           val cachedValue =
-            SheetEvaluator.evaluateFormula(s)(s"=$shiftedFormula", workbook = Some(wb)).toOption
+            SheetEvaluator
+              .evaluateFormula(s)(
+                s"=$shiftedFormula",
+                workbook = Some(wb),
+                currentCell = Some(targetRef)
+              )
+              .toOption
           val next = applyNumFmt(
             s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue)),
             targetRef,
@@ -1689,7 +1695,9 @@ object BatchParser:
         range.cellsRowMajor.zip(formulas.iterator).foldLeft(sheet) { case (s, (ref, formulaStr)) =>
           val formula = CellValue.canonicalFormulaText(formulaStr)
           val cachedValue =
-            SheetEvaluator.evaluateFormula(s)(s"=$formula", workbook = Some(wb)).toOption
+            SheetEvaluator
+              .evaluateFormula(s)(s"=$formula", workbook = Some(wb), currentCell = Some(ref))
+              .toOption
           applyNumFmt(s.put(ref, CellValue.Formula(formula, cachedValue)), ref, format)
         }
       }

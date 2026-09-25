@@ -113,13 +113,10 @@ object CopyOps:
           // Sheet.copyRange pastes Empty for an uncached formula; the CLI evaluates it against the
           // source sheet first and pastes the value when the evaluation succeeds.
           liveFormulas.foldLeft(pure) {
-            case (s, (src, expr, None)) =>
+            case (s, (src, _, None)) =>
+              // the source cell as it is: at its position and by its record kind
               SheetEvaluator
-                .evaluateFormula(sourceSheet)(
-                  s"=$expr",
-                  workbook = Some(wb),
-                  currentCell = Some(src)
-                )
+                .evaluateCell(sourceSheet)(src, workbook = Some(wb))
                 .fold(_ => s, value => s.put(targetOf(src), value))
             case (s, _) => s
           }

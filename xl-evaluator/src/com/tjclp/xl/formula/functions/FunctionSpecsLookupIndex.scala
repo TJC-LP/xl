@@ -105,11 +105,19 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
                 span(rowSel, startRow, numRows, used.map(u => (u.rowStart.index0, u.rowEnd.index0)))
               val colSpan =
                 span(colSel, startCol, numCols, used.map(u => (u.colStart.index0, u.colEnd.index0)))
-              (rowSpan, colSpan) match
-                case (Some((r0, r1)), Some((c0, c1))) =>
-                  val selected = CellRange(ARef.from0(c0, r0), ARef.from0(c1, r1))
-                  extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
-                case _ => Right(ArrayResult.empty)
+              // the reference INDEX returns: one line of an axis, or the whole axis (unbounded)
+              def line(sel: Option[Int], start: Int, size: Int): (Int, Int) =
+                sel.fold((start, start + size - 1))(i => (start + i, start + i))
+              val (rr0, rr1) = line(rowSel, startRow, numRows)
+              val (rc0, rc1) = line(colSel, startCol, numCols)
+              val reference = CellRange(ARef.from0(rc0, rr0), ARef.from0(rc1, rr1))
+              referenceResult(reference, targetSheet, ctx) {
+                (rowSpan, colSpan) match
+                  case (Some((r0, r1)), Some((c0, c1))) =>
+                    val selected = CellRange(ARef.from0(c0, r0), ARef.from0(c1, r1))
+                    extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
+                  case _ => Right(ArrayResult.empty)
+              }
           yield values
         }
       yield result

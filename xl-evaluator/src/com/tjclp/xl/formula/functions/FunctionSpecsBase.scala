@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.eval.{
   Evaluator,
   ArrayArithmetic,
   ArrayResult,
+  RangeOperand,
   ScalarCoercion
 }
 import com.tjclp.xl.formula.parser.ParseError
@@ -218,10 +219,64 @@ trait FunctionSpecsBase:
           .flatMap { case (targetSheet, _) =>
             extractRangeAsMatrixEval(range, targetSheet, ctx).map(ArrayResult(_))
           }
-      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef =>
+      // GH-476: the house `=+Sheet!Ref` style resolves here too (asResolvedValueExpr pushes
+      // through the transparent UnaryPlus), as it does for evalAny
+      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef | _: TExpr.UnaryPlus[?] =>
         ctx.evalArrayExpr(TExpr.asResolvedValueExpr(expr).asInstanceOf[TExpr[Any]])
       case other =>
         ctx.evalArrayExpr(other.asInstanceOf[TExpr[Any]])
+
+  /**
+   * The IF / IFS condition and NOT's operand, a value position: array-aware in array mode (it
+   * broadcasts), a value in a plain cell — its references implicitly intersected with the formula's
+   * cell, an array value read at its top-left, as Excel computes a legacy formula.
+   */
+  protected def evalCondition(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
+    if ctx.arrayMode then evalMaybeArrayArg(ctx, expr) else evalAny(ctx, expr)
+
+  /**
+   * The value IF, IFS, CHOOSE or SWITCH selects: array-aware in array mode; the reference itself
+   * when the call feeds a reference position (Excel's IF and CHOOSE return references, so
+   * `SUM(IF(A1:A10>2,A1:A10,0))` sums the whole range); otherwise a value.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  protected def evalSelected(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
+    if ctx.arrayMode then evalMaybeArrayArg(ctx, expr)
+    else if ctx.selectsReference then ctx.evalReferenceArg(expr.asInstanceOf[TExpr[Any]])
+    else evalAny(ctx, expr)
+
+  /**
+   * What a reference-returning function (OFFSET, INDIRECT, INDEX) yields for the reference it
+   * computed: `whole` — the range's values — in array mode or when the call feeds a reference
+   * position (`SUM(OFFSET(…))`); in a plain cell's value position, the implicitly intersected cell
+   * (`=INDIRECT("A1:A10")*2` in row 5 reads A5), `#VALUE!` where the formula's row or column does
+   * not cross the range.
+   */
+  protected def referenceResult(
+    range: CellRange,
+    target: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  )(
+    whole: => Either[EvalError, ArrayResult]
+  ): Either[EvalError, ArrayResult] =
+    if ctx.arrayMode || ctx.selectsReference then whole
+    else
+      Evaluator
+        .implicitIntersection(range, ctx.currentCell)
+        .flatMap(at => extractRangeAsMatrixEval(CellRange(at, at), target, ctx).map(ArrayResult(_)))
+
+  /** A reference IF, IFS, CHOOSE or SWITCH selected, read as the array a broadcast needs. */
+  protected def materializeOperand(ctx: EvalContext, value: Any): Either[EvalError, Any] =
+    value match
+      case RangeOperand(target, range) =>
+        extractRangeAsMatrixEval(range, target, ctx).map(ArrayResult(_))
+      case other => Right(other)
+
+  /** A range reference, seen through the coercion a typed slot wraps it in. */
+  protected def bareRange(expr: TExpr[?]): Option[TExpr[?]] = expr match
+    case r @ (_: TExpr.RangeRef | _: TExpr.SheetRange) => Some(r)
+    case TExpr.Coerced(inner, _) => bareRange(inner)
+    case _ => None
 
   /**
    * GH-603/GH-654: whether an argument slot was left EMPTY in the source (`SORT(rng,,-1)`): the

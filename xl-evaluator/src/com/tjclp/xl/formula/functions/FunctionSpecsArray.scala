@@ -39,10 +39,11 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
   /**
    * OFFSET(reference, rows, cols, [height], [width])
    *
-   * Returns the range `rows`/`cols` away from the anchor reference, sized height×width (both
-   * default to 1). Returned as an ArrayResult, so it spills standalone, collapses to a scalar when
-   * 1×1, and composes with aggregates (e.g. SUM(OFFSET(...))). Out-of-bounds or non-positive size
-   * yields #REF!. Note: a cross-sheet anchor's sheet is not tracked (same-sheet result).
+   * Returns the range `rows`/`cols` away from the base reference, on the base's sheet, sized
+   * height×width (each defaults to the base's own, as in Excel: `OFFSET(A2:A5,0,1)` is B2:B5).
+   * Returned as an ArrayResult, so it spills standalone, collapses to a scalar when 1×1, and
+   * composes with aggregates (e.g. SUM(OFFSET(...))); a plain cell's value position intersects it.
+   * Out-of-bounds or non-positive size yields #REF!.
    *
    * GH-301 (INDIRECT parity, #274 design §6): the static graph sees only OFFSET's ARGUMENTS (the
    * anchor and offsets), never the shifted window it actually reads — `dynamicDeps = true` defers
@@ -59,18 +60,21 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       // GH-654: `OFFSET(A1,0,0,,2)` — an empty height/width is omitted (an explicit 0 is #REF!)
       val hOpt = unlessOmitted(hSlot)
       val wOpt = unlessOmitted(wSlot)
-      extractARef(refExpr) match
+      offsetBase(refExpr) match
         case None =>
           Left(EvalError.EvalFailed("OFFSET requires a cell reference", Some("OFFSET(...)")))
-        case Some(anchor) =>
+        case Some(location) =>
           for
+            base <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+            (target, reference) = base
             dRows <- ctx.evalExpr(rowsExpr)
             dCols <- ctx.evalExpr(colsExpr)
-            height <- hOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
-            width <- wOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
+            // Excel: an omitted height or width is the base reference's own
+            height <- hOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(reference.height))
+            width <- wOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(reference.width))
             result <-
-              val r0 = anchor.row.index0 + dRows
-              val c0 = anchor.col.index0 + dCols
+              val r0 = reference.rowStart.index0 + dRows
+              val c0 = reference.colStart.index0 + dCols
               if height < 1 || width < 1 ||
                 r0 < 0 || c0 < 0 ||
                 r0 + height - 1 > Row.MaxIndex0 || c0 + width - 1 > Column.MaxIndex0
@@ -78,9 +82,31 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
               else
                 val range =
                   CellRange(ARef.from0(c0, r0), ARef.from0(c0 + width - 1, r0 + height - 1))
-                extractRangeAsMatrixEval(range, ctx.sheet, ctx).map(ArrayResult(_))
+                referenceResult(range, target, ctx) {
+                  extractRangeAsMatrixEval(range, target, ctx).map(ArrayResult(_))
+                }
           yield result
     }
+
+  /**
+   * The reference OFFSET moves from: a cell, a range, either on another sheet, or a defined name
+   * bound to one (resolved when OFFSET evaluates). None for any other argument.
+   */
+  private def offsetBase(expr: TExpr[?]): Option[TExpr.RangeLocation] = expr match
+    case TExpr.Ref(at, _, _) => Some(TExpr.RangeLocation.Local(CellRange(at, at)))
+    case TExpr.PolyRef(at, _) => Some(TExpr.RangeLocation.Local(CellRange(at, at)))
+    case TExpr.SheetRef(sheet, at, _, _) =>
+      Some(TExpr.RangeLocation.CrossSheet(sheet, CellRange(at, at)))
+    case TExpr.SheetPolyRef(sheet, at, _) =>
+      Some(TExpr.RangeLocation.CrossSheet(sheet, CellRange(at, at)))
+    case TExpr.RangeRef(range, form) => Some(TExpr.RangeLocation.Local(range, form))
+    case TExpr.SheetRange(sheet, range, form) =>
+      Some(TExpr.RangeLocation.CrossSheet(sheet, range, form))
+    case TExpr.NameRef(name) => Some(TExpr.RangeLocation.Name(name, None))
+    case TExpr.SheetNameRef(qualifier, name) =>
+      Some(TExpr.RangeLocation.Name(name, Some(qualifier)))
+    case TExpr.Coerced(inner, _) => offsetBase(inner)
+    case _ => None
 
   /**
    * INDIRECT(ref_text, [a1])
@@ -176,6 +202,13 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    * anti-OOM, totality preserved as a Left.
    */
   private def materializeIndirect(
+    range: CellRange,
+    target: Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, ArrayResult] =
+    referenceResult(range, target, ctx)(materializeWhole(range, target, ctx))
+
+  private def materializeWhole(
     range: CellRange,
     target: Sheet,
     ctx: EvalContext

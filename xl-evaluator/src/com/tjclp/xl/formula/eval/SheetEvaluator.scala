@@ -648,8 +648,13 @@ object SheetEvaluator:
     workbook: Option[Workbook],
     currentCell: Option[ARef]
   ): XLResult[CellValue] =
+    // A formula with a cell position evaluates as that plain cell would: Excel's legacy formula,
+    // references in value positions implicitly intersected. Without one there is no cell to
+    // intersect with, so it evaluates as the same formula typed into a new Excel 365 cell would:
+    // as an array, showing its top-left value. `@range` still needs the position.
+    val positioned = if currentCell.isDefined then evaluator else evaluator.withArrayResults
     parseFormula(formula).flatMap(expr =>
-      evaluateParsedWith(sheet, formula, expr, evaluator, clock, workbook, currentCell)
+      evaluateParsedWith(sheet, formula, expr, positioned, clock, workbook, currentCell)
     )
 
   /** The parse half of [[evaluateFormulaWith]]: a parse failure is the `Parse error:` XLError. */
