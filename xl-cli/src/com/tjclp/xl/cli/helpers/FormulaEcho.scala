@@ -38,9 +38,11 @@ object FormulaEcho:
         below.split("\n", 2).toList match
           case pointer :: rest if pointer.nonEmpty && pointer.trim == "^" =>
             val column = pointer.length - 1
-            val start =
+            val start = whole(
+              fullFormula,
               math.max(0, math.min(column - SampleChars / 2, fullFormula.length - SampleChars))
-            val end = start + SampleChars
+            )
+            val end = whole(fullFormula, math.min(start + SampleChars, fullFormula.length))
             val lead = if start > 0 then Ellipsis else ""
             val tail = if end < fullFormula.length then Ellipsis else ""
             val shown = lead + fullFormula.substring(start, end) + tail
@@ -50,4 +52,14 @@ object FormulaEcho:
 
   /** The first [[SampleChars]] characters, `…` when that cut the text. */
   def sample(text: String): String =
-    if text.length > SampleChars then text.take(SampleChars) + Ellipsis else text
+    if text.length > SampleChars then text.take(whole(text, SampleChars)) + Ellipsis else text
+
+  /**
+   * `cut` moved back one char when it falls between the halves of a surrogate pair, so a quoted
+   * emoji is whole or absent — never a lone surrogate that the console encodes as `?`.
+   */
+  private def whole(text: String, cut: Int): Int =
+    val splitsPair = cut > 0 && cut < text.length &&
+      Character.isHighSurrogate(text.charAt(cut - 1)) &&
+      Character.isLowSurrogate(text.charAt(cut))
+    if splitsPair then cut - 1 else cut

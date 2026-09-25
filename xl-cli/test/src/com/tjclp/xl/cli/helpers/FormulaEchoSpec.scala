@@ -72,3 +72,28 @@ class FormulaEchoSpec extends FunSuite:
     assertEquals(shown, full.take(FormulaEcho.SampleChars) + "…")
     assertEquals(shown.lift(windowed), full.lift(column))
   }
+
+  test("a cut never splits a surrogate pair: an emoji is quoted whole or not at all") {
+    def lone(text: String): Boolean =
+      text.indices.exists { i =>
+        val c = text(i)
+        (Character.isHighSurrogate(c) && !text.lift(i + 1).exists(Character.isLowSurrogate)) ||
+        (Character.isLowSurrogate(c) && !text.lift(i - 1).exists(Character.isHighSurrogate))
+      }
+    val emoji = "😀" * 100
+    // either parity of padding puts one of the cuts between a high and a low surrogate
+    for pad <- Vector("", "a") do
+      val tail = "=\"" + pad + emoji + "\"&)"
+      val head = "=FOOBAR(\"" + pad + emoji + "\")"
+      val tooLong = "=\"" + pad + ("😀" * 4200) + "\""
+      Vector(tail, head, tooLong).foreach { full =>
+        val error = failure(full)
+        val rendered = FormulaEcho.diagnostic(error, full)
+        assert(!lone(rendered), s"a lone surrogate in\n$rendered")
+        caret(ParseError.formatWithContext(error, full)).zip(caret(rendered)).foreach {
+          case ((_, column), (shown, windowed)) =>
+            assertEquals(shown.lift(windowed), full.lift(column))
+        }
+      }
+      assert(!lone(FormulaEcho.sample(pad + emoji)), pad)
+  }
