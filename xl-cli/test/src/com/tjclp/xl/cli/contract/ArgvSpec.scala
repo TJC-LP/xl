@@ -633,9 +633,13 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
       Some("sheets")
     )
     assertEquals(Argv.sheetOnSheetlessVerb(List("-s", "Data", "lint", "f.xlsx")), Some("lint"))
-    // `new --sheet` is new's own repeatable option; only the global's short form is refused
+    // `new --sheet` AFTER the verb is new's own repeatable option; before it, every spelling is
+    // the global, which new refuses
     assertEquals(Argv.sheetOnSheetlessVerb(List("new", "out.xlsx", "--sheet", "Data")), None)
+    assertEquals(Argv.sheetOnSheetlessVerb(List("new", "out.xlsx", "--sheet=Data")), None)
     assertEquals(Argv.sheetOnSheetlessVerb(List("-s", "Data", "new", "out.xlsx")), Some("new"))
+    assertEquals(Argv.sheetOnSheetlessVerb(List("--sheet", "Data", "new", "out.xlsx")), Some("new"))
+    assertEquals(Argv.sheetOnSheetlessVerb(List("--sheet=Data", "new", "out.xlsx")), Some("new"))
     // a verb that takes -s, -s as another global's value, -s behind `--`
     assertEquals(Argv.sheetOnSheetlessVerb(List("-f", "f.xlsx", "-s", "Data", "view", "A1")), None)
     assertEquals(Argv.sheetOnSheetlessVerb(List("-f", "-s", "names")), None)
@@ -672,12 +676,19 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
 
   test("GH-676: `new -o out.xlsx` points at the positional") {
     val out = file("new-by-flag.xlsx")
+    val positional = file("new-positional.xlsx")
     for
       flag <- CliHarness.run("new", "-o", out)
       eq <- CliHarness.run("--output=" + out, "new")
+      // the line already names its output positionally: -o is still the only mistake
+      beside <- CliHarness.run("new", positional, "-o", out)
+      withSheets <- CliHarness.run("new", positional, "--sheet", "Data", "-o", out)
       sheet <- CliHarness.run("-s", "Data", "new", out)
+      // before the verb, the long form is the global too; only after it is it new's option
+      long <- CliHarness.run("--sheet", "Data", "new", out)
+      longEq <- CliHarness.run("--sheet=Data", "new", out)
     yield
-      Vector(flag, eq).foreach { run =>
+      Vector(flag, eq, beside, withSheets).foreach { run =>
         assertEquals(run.exit, 2, run.stderr)
         assert(run.stderr.startsWith("Error: new does not take -o/--output\n"), run.stderr)
         assert(!run.stderr.contains("Unexpected argument"), run.stderr)
@@ -687,9 +698,12 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
         )
       }
       assert(!Files.exists(Path.of(out)), "a refused command line writes nothing")
-      assertEquals(sheet.exit, 2, sheet.stderr)
-      assert(sheet.stderr.startsWith("Error: new does not take -s/--sheet\n"), sheet.stderr)
-      assert(sheet.stderr.contains("--sheet after the verb"), sheet.stderr)
+      assert(!Files.exists(Path.of(positional)), "a refused command line writes nothing")
+      Vector(sheet, long, longEq).foreach { run =>
+        assertEquals(run.exit, 2, run.stderr)
+        assert(run.stderr.startsWith("Error: new does not take -s/--sheet\n"), run.stderr)
+        assert(run.stderr.contains("--sheet after the verb"), run.stderr)
+      }
   }
 
   test("GH-681: an unknown option beside -o on a read-only verb is reported first") {
@@ -698,12 +712,13 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
       bogus <- CliHarness.run("-f", file("simple.xlsx"), "view", "--bogus", "-o", out)
       sheetToo <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "names", "--bogus")
       newToo <- CliHarness.run("new", "-o", out, "--bogus")
+      newBeside <- CliHarness.run("new", out, "-o", out, "--bogus")
       // -o the only mistake: GH-667's message stands
       only <- CliHarness.run("-f", file("simple.xlsx"), "view", "A1", "-o", out)
       // two flag mistakes and nothing else: the first rule's message
       both <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "-o", out, "names")
     yield
-      Vector(bogus, sheetToo, newToo).foreach { run =>
+      Vector(bogus, sheetToo, newToo, newBeside).foreach { run =>
         assertEquals(run.exit, 2, run.stderr)
         assert(run.stderr.startsWith("Error: Unexpected option: --bogus\n"), run.stderr)
       }

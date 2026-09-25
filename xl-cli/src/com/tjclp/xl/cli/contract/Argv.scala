@@ -143,12 +143,13 @@ object Argv:
 
   /**
    * GH-676: the [[sheetlessVerbs]] verb given the `-s/--sheet` global, read as decline reads it (a
-   * global's value is data, nothing behind `--` counts, and `new --sheet` is new's own option).
+   * global's value is data, nothing behind `--` counts, and `--sheet` after `new` is new's own
+   * option — before the verb it is the global in either spelling).
    */
   def sheetOnSheetlessVerb(args: List[String]): Option[String] =
     for
       verb <- verbOf(args).filter(sheetlessVerbs.contains)
-      _ <- globalAmong(args, sheetGlobals -- verbOwned.getOrElse(verb, Set.empty))
+      _ <- aroundVerb(args, sheetGlobals)(globalAmong(_, _), _.orElse(_))
     yield verb
 
   /**
@@ -164,12 +165,18 @@ object Argv:
 
   /**
    * A global the verb cannot take (GH-667, GH-676): the usage error to report, and the command line
-   * with that mistake repaired — the flag dropped (for `new`, its value moved to the positional).
-   * The runner re-parses the repaired line and reports the misuse only when that parse is clean;
-   * otherwise the misuse was not the only mistake, and decline's error for the repaired line — the
-   * one naming the other mistake — is reported instead (GH-681).
+   * with that mistake repaired — the flag dropped. `new -o out.xlsx` has a second repair, its value
+   * moved to the positional, for the line that names no output otherwise. The runner re-parses the
+   * repairs and reports the misuse when either parse is clean; otherwise the misuse was not the
+   * only mistake, and decline's error for `repaired` — the one naming the other mistake — is
+   * reported instead (GH-681).
    */
-  final case class Misuse(message: String, hint: String, repaired: List[String]) derives CanEqual
+  final case class Misuse(
+    message: String,
+    hint: String,
+    repaired: List[String],
+    fallback: Option[List[String]]
+  ) derives CanEqual
 
   /**
    * Every misuse on the command line, in the order the runner reports them, each repairing the line
@@ -190,7 +197,8 @@ object Argv:
         Misuse(
           s"$verb is read-only and does not take $flag",
           s"drop $flag; $writes. Run `xl $verb --help` for the usage",
-          dropGlobals(line, outputGlobals.keySet)
+          dropGlobals(line, outputGlobals.keySet),
+          None
         )
       }
     val sheetless = (line: List[String]) =>
@@ -199,22 +207,26 @@ object Argv:
           s"$verb does not take -s/--sheet",
           s"drop -s/--sheet; ${sheetlessVerbs.getOrElse(verb, s"$verb takes no sheet")}. " +
             s"Run `xl $verb --help` for the usage",
-          dropGlobals(line, sheetGlobals -- verbOwned.getOrElse(verb, Set.empty))
+          aroundVerb(line, sheetGlobals)(dropGlobals(_, _), _ ++ _),
+          None
         )
       }
     val newOutput = (line: List[String]) =>
       outputOnNew(line).map { (flag, value) =>
         val dropped = dropGlobals(line, outputGlobals.keySet)
-        val repaired = value.fold(dropped) { file =>
-          verbIndex(dropped).fold(dropped) { at =>
-            val (upTo, after) = dropped.splitAt(at + 1)
-            upTo ++ (file :: after)
-          }
-        }
+        // a line that already names its output positionally is repaired by the drop alone;
+        // inserting the value too would make two positionals and blame the user's own
+        val positional = for
+          file <- value
+          at <- verbIndex(dropped)
+        yield
+          val (upTo, after) = dropped.splitAt(at + 1)
+          upTo ++ (file :: after)
         Misuse(
           s"new does not take $flag",
           s"new takes its output as a positional: `xl new ${value.getOrElse("<file>")}`",
-          repaired
+          dropped,
+          positional
         )
       }
     Vector(readOnlyOutput, sheetless, newOutput)
@@ -245,6 +257,23 @@ object Argv:
           case Some((_, takesValue)) => scan(if takesValue then tail.drop(1) else tail)
           case None => scan(tail)
     scan(args.takeWhile(_ != "--"))
+
+  /**
+   * `f` over the command line with the named globals, split at the verb: in front of it every
+   * spelling is the global, behind it the ones the verb owns ([[verbOwned]]) are the verb's own
+   * option (`new out.xlsx --sheet Data`), so `f` sees only the rest there. `join` combines the two
+   * halves' answers; a line without a verb is all "in front".
+   */
+  private def aroundVerb[A](args: List[String], names: Set[String])(
+    f: (List[String], Set[String]) => A,
+    join: (A, A) => A
+  ): A =
+    verbIndex(args) match
+      case Some(at) =>
+        val owned = args.lift(at).flatMap(verbOwned.get).getOrElse(Set.empty)
+        val (front, behind) = args.splitAt(at)
+        join(f(front, names), f(behind, names -- owned))
+      case None => f(args, names)
 
   /** The command line without the named globals (and their values) before any `--`. */
   private def dropGlobals(args: List[String], names: Set[String]): List[String] =

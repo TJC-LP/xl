@@ -282,9 +282,12 @@ object Cli:
             val misuses = Argv.misuses(argv)
             val error = (misuses.headOption, misuses.lastOption) match
               case (Some(first), Some(last)) =>
-                parseLine(last.repaired) match
-                  case Left(other) if other.errors.nonEmpty =>
-                    declineUsage(last.repaired, other.errors)
+                val errors = (last.repaired :: last.fallback.toList).map { line =>
+                  parseLine(line).fold(_.errors, _ => Nil)
+                }
+                errors match
+                  case repairedErrors :: _ if errors.forall(_.nonEmpty) =>
+                    declineUsage(last.repaired, repairedErrors)
                   case _ => CliError.usage(first.message, Some(first.hint))
               case _ => declineUsage(argv, help.errors)
             usageFailure(verb.getOrElse(""), error, mode, io)
