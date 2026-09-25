@@ -1333,9 +1333,8 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:B2")
 
     val ids = """<clipPath id="([^"]+)"""".r.findAllMatchIn(svg).map(_.group(1)).toList
-    // B1 is absent: A1's text overflow covers the empty B1, which is skipped entirely
-    // (pre-existing overflow behavior, orthogonal to id uniqueness)
-    assertEquals(ids, List("clip-A1", "clip-A2", "clip-B2"))
+    // B1 is present: a cell under A1's spilled text still draws its own box (and clip)
+    assertEquals(ids, List("clip-A1", "clip-B1", "clip-A2", "clip-B2"))
     assertEquals(ids.distinct, ids, s"Duplicate clipPath ids in: $svg")
     assert(ids.forall(_.matches("clip-[A-Z]+\\d+")), s"Clip ids must be ref-keyed, got: $ids")
   }

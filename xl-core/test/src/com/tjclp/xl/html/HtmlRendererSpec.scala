@@ -591,24 +591,40 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   // ========== Text Overflow Tests ==========
+  //
+  // Spilled text keeps one <td> per cell (a colspan would paint the source's fill over its
+  // neighbours and drop their borders) and draws in a box laid over the neighbours.
+
+  /** Whether any cell's text reaches past its own column, by a colspan or a spill box. */
+  private def spills(html: String): Boolean =
+    html.contains("colspan") || html.contains("""class="xl-overflow"""")
+
+  /** The width of each spilled text's box, in document order. */
+  private def spillWidths(html: String): List[Int] =
+    """<div class="xl-overflow" style="[^"]*?; width: (\d+)px""".r
+      .findAllMatchIn(html)
+      .map(_.group(1).toInt)
+      .toList
+
+  private def colPx(width: Double): Int =
+    com.tjclp.xl.render.RenderUtils.excelColWidthToPixels(width)
 
   test("toHtml: long text overflows into adjacent empty cells") {
-    // Column A is narrow (30px), B and C are empty
+    // Column A is narrow (37px), B and C are empty
     val sheet = Sheet("Test")
       .put(ref"A1" -> "This is a long text that should overflow into adjacent cells")
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // ~33px
-      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // ~75px
-      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(10.0))) // ~75px
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // 37px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // 85px
+      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(10.0))) // 85px
 
     val html = sheet.toHtml(ref"A1:C1")
-    // Should have colspan due to overflow
-    assert(html.contains("colspan="), s"Long text should overflow with colspan, got: $html")
-    // Should NOT have overflow: hidden when spanning
-    val cellMatch = """<td colspan="\d+"[^>]*>""".r.findFirstIn(html)
-    assert(
-      cellMatch.exists(!_.contains("overflow: hidden")),
-      s"Spanning cell should not have overflow: hidden, got: $html"
-    )
+    // The text spills across A1:C1 from inside A1's own <td>
+    assertEquals(spillWidths(html), List(colPx(4.0) + 2 * colPx(10.0)), html)
+    assertEquals("<td".r.findAllIn(html).length, 3, s"One <td> per cell: $html")
+    assert(!html.contains("colspan"), s"No spanning <td>: $html")
+    // The source <td> must not clip what spills out of it
+    val sourceTd = """<td[^>]*>(?=<div class="xl-overflow")""".r.findFirstIn(html)
+    assert(sourceTd.exists(!_.contains("overflow: hidden")), s"Source must not clip: $html")
   }
 
   test("toHtml: overflow stops at non-empty cell") {
@@ -616,16 +632,13 @@ class HtmlRendererSpec extends FunSuite:
     val sheet = Sheet("Test")
       .put(ref"A1" -> "This is a very long text that could overflow")
       .put(ref"C1" -> "Blocker")
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // ~33px
-      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // ~75px
-      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(10.0))) // ~75px
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // 37px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // 85px
+      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(10.0))) // 85px
 
     val html = sheet.toHtml(ref"A1:C1")
-    // Should still have colspan, but limited to A1:B1 (colspan=2, not 3)
-    assert(
-      html.contains("""colspan="2""""),
-      s"Should overflow into B1 only (colspan=2), got: $html"
-    )
+    // Limited to A1:B1, never over C1
+    assertEquals(spillWidths(html), List(colPx(4.0) + colPx(10.0)), html)
     assert(html.contains("Blocker"), "Blocker cell should still appear")
   }
 
@@ -637,9 +650,7 @@ class HtmlRendererSpec extends FunSuite:
 
     val html = sheet.toHtml(ref"A1:B1")
     // Overflow should not go past B1 even if text is longer
-    val maxColspan =
-      """colspan="(\d+)"""".r.findFirstMatchIn(html).map(_.group(1).toInt).getOrElse(1)
-    assert(maxColspan <= 2, s"Colspan should not exceed range width (2), got colspan=$maxColspan")
+    assertEquals(spillWidths(html), List(colPx(4.0) + 72), html)
   }
 
   test("toHtml: wrapText prevents overflow") {
@@ -652,24 +663,23 @@ class HtmlRendererSpec extends FunSuite:
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
 
     val html = sheet.toHtml(ref"A1:C1")
-    // With wrapText, should NOT have colspan (text wraps instead)
-    assert(!html.contains("colspan="), s"wrapText should prevent overflow, got: $html")
+    // With wrapText the text wraps instead of spilling
+    assert(!spills(html), s"wrapText should prevent overflow, got: $html")
     // Should have white-space: pre-wrap for wrapping
     assert(html.contains("white-space: pre-wrap"), s"Should have pre-wrap for wrapText, got: $html")
   }
 
   test("toHtml: short text does not overflow") {
-    // Short text should not get colspan even if adjacent cells are empty
+    // Short text should not spill even if adjacent cells are empty
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Hi")
       .setColumnProperties(
         Column.from0(0),
         ColumnProperties(width = Some(10.0))
-      ) // ~75px, enough for "Hi"
+      ) // 85px, enough for "Hi"
 
     val html = sheet.toHtml(ref"A1:C1")
-    // No colspan needed for short text
-    assert(!html.contains("colspan="), s"Short text should not overflow, got: $html")
+    assert(!spills(html), s"Short text should not overflow, got: $html")
     // Should have overflow: hidden since it's not spanning
     assert(
       html.contains("overflow: hidden"),
@@ -686,8 +696,9 @@ class HtmlRendererSpec extends FunSuite:
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(2.0))) // very narrow
 
     val html = sheet.toHtml(ref"A1:C1")
-    // Should have colspan=2 from merge, not more from overflow calculation
+    // Should have colspan=2 from merge, and no spill out of the merge
     assert(html.contains("""colspan="2""""), s"Should use merge colspan, got: $html")
+    assertEquals(spillWidths(html), Nil, s"A merged cell clips to its merge: $html")
     // Should have exactly one td with colspan=2 for the merged cell, and one for C1
     val tdCount = "<td".r.findAllIn(html).length
     assertEquals(tdCount, 2, s"Should have 2 <td> elements (merged + C1), got: $html")
@@ -699,8 +710,7 @@ class HtmlRendererSpec extends FunSuite:
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
 
     val html = sheet.toHtml(ref"A1:C1")
-    // All cells are empty, no colspan expected
-    assert(!html.contains("colspan="), s"Empty cells should not overflow, got: $html")
+    assert(!spills(html), s"Empty cells should not overflow, got: $html")
   }
 
   test("toHtml: multiple rows handle overflow independently") {
@@ -712,14 +722,13 @@ class HtmlRendererSpec extends FunSuite:
       .setColumnProperties(
         Column.from0(0),
         ColumnProperties(width = Some(8.0))
-      ) // ~61px, fits "Short"
+      ) // 69px, fits "Short"
 
     val html = sheet.toHtml(ref"A1:B2")
-    // Row 1 should have colspan
-    assert(html.contains("colspan="), s"Row 1 should have overflow colspan, got: $html")
-    // Should have 3 total td elements: 1 spanning td in row 1, 2 normal tds in row 2
-    val tdCount = "<td".r.findAllIn(html).length
-    assertEquals(tdCount, 3, s"Should have 3 <td> elements (1 spanning + 2 normal), got: $html")
+    val rows = """<tr[^>]*>.*?</tr>""".r.findAllIn(html).toList
+    assertEquals(rows.map(spillWidths), List(List(colPx(8.0) + 72), Nil), html)
+    // Two <td> per row: a spill keeps every neighbour's own cell
+    assertEquals("<td".r.findAllIn(html).length, 4, s"Should have 4 <td> elements, got: $html")
   }
 
   // ========== Renderer Edge Cases (GH-47) ==========
@@ -790,7 +799,11 @@ class HtmlRendererSpec extends FunSuite:
     assert(!html.contains("Invisible"), s"Hidden content must not render, got: $html")
     // Hidden rows are excluded entirely; hidden columns are declared at zero width
     assertEquals("<tr".r.findAllIn(html).length, 0, s"Hidden rows should be excluded, got: $html")
-    assertEquals("width: 0px".r.findAllIn(html).length, 2, s"Both cols should be 0px, got: $html")
+    assertEquals(
+      """<col style="width: 0px">""".r.findAllIn(html).length,
+      2,
+      s"Both cols should be 0px, got: $html"
+    )
     assert(html.endsWith("</table>"), "Table should be closed")
   }
 
@@ -905,10 +918,7 @@ class HtmlRendererSpec extends FunSuite:
       !html.contains("123456789012345"),
       s"No digits of the overflowing number may be rendered, got: $html"
     )
-    assert(
-      !html.contains("colspan=\"3\""),
-      s"A hashed number must not span into empty neighbours, got: $html"
-    )
+    assert(!spills(html), s"A hashed number must not span into empty neighbours, got: $html")
   }
 
   test("toHtml: left-aligned number that would cross its cell box hashes (GH-459)") {
@@ -1045,8 +1055,10 @@ class HtmlRendererSpec extends FunSuite:
 
       val html = sheet.toHtml(ref"A1:B1")
       assertEquals(htmlHashRuns(html), Nil, s"$fmt: an @-formatted number never hashes: $html")
-      val td = htmlCellTag(html, "1234567.9").getOrElse(fail(s"$fmt: digits should render: $html"))
-      assert(td.contains("colspan=\"2\""), s"$fmt: it overflows into the empty B1: $td")
+      val td = """<td[^>]*><div class="xl-overflow"[^>]*><span>1234567\.9</span>""".r
+        .findFirstIn(html)
+        .getOrElse(fail(s"$fmt: the digits should spill into the empty B1: $html"))
+      assertEquals(spillWidths(html), List(colPx(4.0) + 72), s"$fmt: it overflows into B1: $td")
       assert(td.contains("text-align: left"), s"$fmt: it takes text alignment: $td")
     }
   }
@@ -1065,7 +1077,7 @@ class HtmlRendererSpec extends FunSuite:
     val marker = htmlHashRuns(html).headOption.getOrElse(fail(s"Must hash: $html"))
     val td = htmlCellTag(html, marker).getOrElse(fail(s"No hashed <td>: $html"))
     assert(td.contains("text-align: right"), s"Stays right-aligned: $td")
-    assert(!html.contains("colspan"), s"A numeric cell never spans: $html")
+    assert(!spills(html), s"A numeric cell never spans: $html")
   }
 
   test("toHtml: left-aligned number rounded by its format claims no colspan (GH-502)") {
@@ -1079,7 +1091,7 @@ class HtmlRendererSpec extends FunSuite:
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
 
     val html = sheet.toHtml(ref"A1:C1")
-    assert(!html.contains("colspan"), s"'0.12' fits its own column, no span: $html")
+    assert(!spills(html), s"'0.12' fits its own column, no span: $html")
     assert(htmlCellTag(html, "0.12").isDefined, s"The rounded value renders: $html")
   }
 
@@ -1099,7 +1111,7 @@ class HtmlRendererSpec extends FunSuite:
     val html = sheet.toHtml(ref"A1:B1")
     val marker = htmlHashRuns(html).headOption.getOrElse(fail(s"Formatted text must hash: $html"))
     val td = htmlCellTag(html, marker).getOrElse(fail(s"No hashed <td>: $html"))
-    assert(!html.contains("colspan"), s"A number never spans into B1: $html")
+    assert(!spills(html), s"A number never spans into B1: $html")
     assert(td.contains("text-align: left"), s"The explicit alignment is kept: $td")
     assert(!html.contains("1,234"), s"No fragment of the number may render: $html")
   }
@@ -1118,7 +1130,7 @@ class HtmlRendererSpec extends FunSuite:
 
     val html = sheet.toHtml(ref"A1:B1")
     assert(htmlHashRuns(html).nonEmpty, s"The error code does not fit and must hash: $html")
-    assert(!html.contains("colspan"), s"An error never spans into B1: $html")
+    assert(!spills(html), s"An error never spans into B1: $html")
     assert(!html.contains("#DIV"), s"No fragment of the error code may render: $html")
   }
 
@@ -1138,7 +1150,7 @@ class HtmlRendererSpec extends FunSuite:
 
     val html = sheet.toHtml(ref"A1:B3")
     assertEquals(htmlHashRuns(html).size, 3, s"All three numbers must hash: $html")
-    assert(!html.contains("colspan"), s"A hashed number never spans into the empty B: $html")
+    assert(!spills(html), s"A hashed number never spans into the empty B: $html")
     assert(!html.contains("1234567"), s"No digits may render: $html")
     val tds = """<td[^>]*>#+</td>""".r.findAllIn(html).toList
     assert(tds(0).contains("text-align: left"), s"A1 keeps its explicit alignment: ${tds(0)}")
@@ -1156,7 +1168,7 @@ class HtmlRendererSpec extends FunSuite:
 
     val html = sheet.toHtml(ref"A1:B2")
     assertEquals(htmlHashRuns(html), Nil, s"Values with room to spare must not hash: $html")
-    assert(!html.contains("colspan"), s"A logical or error never spans into B: $html")
+    assert(!spills(html), s"A logical or error never spans into B: $html")
     val boolTd = htmlCellTag(html, "TRUE").getOrElse(fail(s"TRUE should render: $html"))
     val errTd = htmlCellTag(html, "#N/A").getOrElse(fail(s"#N/A should render: $html"))
     assert(boolTd.contains("text-align: center"), s"Logicals centre in their own cell: $boolTd")
@@ -1173,7 +1185,7 @@ class HtmlRendererSpec extends FunSuite:
 
     val html = sheet.toHtml(ref"A1:B2")
     assertEquals(htmlHashRuns(html).size, 2, s"Both the logical and the error must hash: $html")
-    assert(!html.contains("colspan"), s"Neither may span into the empty B: $html")
+    assert(!spills(html), s"Neither may span into the empty B: $html")
     assert(!html.contains("TRUE") && !html.contains("#DIV"), s"No fragment may render: $html")
     val tds = """<td[^>]*>#+</td>""".r.findAllIn(html).toList
     assert(tds.forall(_.contains("text-align: center")), s"Both markers are centred: $tds")

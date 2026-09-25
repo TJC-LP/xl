@@ -502,6 +502,19 @@ cells when it has none (`bounds --scan` and `sheets --stats` always the non-empt
 Why the default: `xl search` finds a value in a hidden row and `xl cell C5` reads it, so a `view`
 that silently elided the same cell read as file corruption.
 
+**Text overflow and row heights in the pictures** (`html`, `svg` and the raster formats lay a
+sheet out as Excel does): text wider than its cell spills into neighbouring cells that hold no
+value. A neighbour's fill, border, font or number format does not stop it; any value does (an
+empty string or a formula returning `""` included), as does a merged cell and the edge of the
+rendered range. Left- and General-aligned text spills right, right-aligned text left, centred text
+both ways while staying centred on its own cell; wrapped text wraps, a merged cell's text is
+clipped at the edges of its merge (still aligned within it), and a number, date, logical or error
+that does not fit shows `####` instead. Every cell under spilled text keeps its own fill
+and borders. A hidden column draws at zero width, and its text is neither shown nor spilled. A row
+with no explicit height takes the height its content needs (Excel's autofit: Calibri 11pt → 15pt,
+18pt → 23.25pt, 24pt → 31.5pt; wrapped text its line count), never less than the sheet's default
+row height, and a row with an explicit height (`xl row --height`, `rowheight`) keeps it exactly.
+
 ---
 
 ### `xl rasterizers`

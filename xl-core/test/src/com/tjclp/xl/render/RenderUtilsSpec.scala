@@ -7,7 +7,7 @@ import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.render.syntax.*
-import com.tjclp.xl.sheets.{ColumnProperties, Sheet}
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
 import com.tjclp.xl.sheets.styleSyntax.*
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.alignment.{Align, HAlign}
@@ -242,6 +242,96 @@ class RenderUtilsSpec extends ScalaCheckSuite:
         val colspan = calculateOverflowColspan(cell, ref"A1", width, colWidths, sheet, 0, 3)
         !hashable(kind) || colspan == 1
       }
+    }
+  }
+
+  // ========== Spill spans (Excel text overflow) ==========
+
+  private val longLabel = "A label far wider than three default columns put together, and then some"
+
+  private def spanOf(sheet: Sheet, colWidths: IndexedSeq[Int]): Option[OverflowSpan] =
+    sheet.cells.get(ref"B1").map { cell =>
+      overflowSpan(ResolvedCell(cell, sheet), ref"B1", colWidths(1), colWidths, sheet, 0, 2)
+    }
+
+  property("overflowSpan is none for every hashable kind, on both sides (GH-500)") {
+    forAll(genValue, genStyle, Gen.choose(1, 120)) { (v, style, width) =>
+      val base = Sheet("Test").put(ref"B1", v)
+      val sheet = style.fold(base)(s => base.withCellStyle(ref"B1", s))
+      val kind = renderedContent(v, numFmtOf(style)).kind
+      !hashable(kind) || spanOf(sheet, IndexedSeq(72, width, 72)).forall(_ == OverflowSpan.none)
+    }
+  }
+
+  property("overflowSpan: the side a text spills to follows its resolved alignment") {
+    forAll(genStyle, Gen.choose(1, 120)) { (style, width) =>
+      val base = Sheet("Test").put(ref"B1", CellValue.Text(longLabel))
+      val sheet = style.fold(base)(s => base.withCellStyle(ref"B1", s))
+      val content = renderedContent(CellValue.Text(longLabel), numFmtOf(style))
+      spanOf(sheet, IndexedSeq(72, width, 72)).forall { span =>
+        resolveHAlign(style, content) match
+          case HAlign.Left | HAlign.General => span.left == 0
+          case HAlign.Right => span.right == 0
+          case HAlign.Center | HAlign.CenterContinuous => true
+          case _ => span == OverflowSpan.none
+      }
+    }
+  }
+
+  property("overflowSpan: a neighbour's formatting never blocks a spill; any value does") {
+    forAll(Generators.genCellStyle, Gen.oneOf(HAlign.General, HAlign.Right, HAlign.Center)) {
+      (neighbour, h) =>
+        val source = CellStyle.default.withAlign(Align(horizontal = h))
+        val base =
+          Sheet("Test").put(ref"B1", CellValue.Text(longLabel)).withCellStyle(ref"B1", source)
+        val formatted = base.withCellStyle(ref"A1", neighbour).withCellStyle(ref"C1", neighbour)
+        val filled = base.put(ref"A1", CellValue.Text("")).put(ref"C1", CellValue.Text(""))
+        val widths = IndexedSeq(72, 30, 72)
+        val free = spanOf(base, widths)
+        assert(free.exists(_.spills), s"$h: the label spills into empty neighbours")
+        assertEquals(spanOf(formatted, widths), free, s"$h: formatting is not a value")
+        assertEquals(spanOf(filled, widths), Some(OverflowSpan.none), s"$h: an empty string is")
+    }
+  }
+
+  test("calculateOverflowColspan is the rightward extent of overflowSpan") {
+    val centred = CellStyle.default.withAlign(Align(horizontal = HAlign.Center))
+    val sheet =
+      Sheet("Test").put(ref"B1", CellValue.Text(longLabel)).withCellStyle(ref"B1", centred)
+    val widths = IndexedSeq(72, 30, 72)
+    val cell = sheet.cells.get(ref"B1").getOrElse(fail("B1"))
+    assertEquals(spanOf(sheet, widths), Some(OverflowSpan(1, 1)))
+    assertEquals(calculateOverflowColspan(cell, ref"B1", 30, widths, sheet, 0, 2), 2)
+  }
+
+  // ========== Row autofit ==========
+
+  test("autofitLineHeightPx: Excel's Calibri autofit rows, snapped to whole pixels") {
+    assertEquals(
+      List(11.0, 14.0, 18.0, 24.0).map(autofitLineHeightPx),
+      List(20, 25, 31, 42),
+      "15pt, 18.75pt, 23.25pt and 31.5pt at 96 DPI"
+    )
+  }
+
+  property("autofitLineHeightPx grows with the font and always fits the font's em") {
+    forAll(Gen.choose(1.0, 200.0), Gen.choose(0.0, 50.0)) { (pt, more) =>
+      val h = autofitLineHeightPx(pt)
+      h >= pt * 4.0 / 3.0 && autofitLineHeightPx(pt + more) >= h
+    }
+  }
+
+  property("calculateRowHeights: never below the default, and an explicit height is kept exactly") {
+    forAll(Gen.choose(1.0, 60.0), Gen.option(Gen.choose(1.0, 100.0))) { (pt, explicit) =>
+      val big = CellStyle.default.withFont(com.tjclp.xl.styles.font.Font.default.withSize(pt))
+      val base = Sheet("Test").put(ref"A1", CellValue.Text("x")).withCellStyle(ref"A1", big)
+      val sheet = explicit.fold(base) { h =>
+        base.setRowProperties(com.tjclp.xl.addressing.Row.from0(0), RowProperties(height = Some(h)))
+      }
+      val height = calculateRowHeights(sheet, ref"A1:A1").headOption.getOrElse(-1)
+      explicit match
+        case Some(h) => height == excelRowHeightToPixels(h)
+        case None => height == math.max(DefaultCellHeightPx, autofitLineHeightPx(pt))
     }
   }
 
