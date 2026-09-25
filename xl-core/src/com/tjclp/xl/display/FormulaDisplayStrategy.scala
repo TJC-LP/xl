@@ -1,5 +1,6 @@
 package com.tjclp.xl.display
 
+import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -53,6 +54,31 @@ trait FormulaDisplayStrategy:
     numFmt: NumFmt,
     sheet: Sheet
   ): String = format(formula, sheet)
+
+  /**
+   * Format the formula cell at `at` for display.
+   *
+   * The display layer calls this whenever it knows the cell (`displayCell`, the `excel`
+   * interpolator), so an evaluating strategy can evaluate an uncached formula as that cell: a plain
+   * formula as Excel's legacy formula at its position, an array-formula record as an array — the
+   * value `Workbook.recalculate()` caches there. [[format]] and [[formatCached]] have no position:
+   * an evaluating strategy evaluates them as a new Excel 365 cell would, as a dynamic array. The
+   * default delegates to [[formatCached]], so a strategy written without this method keeps its
+   * behaviour.
+   *
+   * @param formula
+   *   The formula cell's value: its expression, cached value and kind
+   * @param numFmt
+   *   The cell's number format (from its style; General when unstyled)
+   * @param sheet
+   *   The sheet context for evaluation (if evaluating)
+   * @param at
+   *   The cell's position on `sheet`
+   * @return
+   *   Formatted display string
+   */
+  def formatAt(formula: CellValue.Formula, numFmt: NumFmt, sheet: Sheet, at: ARef): String =
+    formatCached(formula.expression, formula.cachedValue, numFmt, sheet)
 
 /**
  * Low-priority given instances for FormulaDisplayStrategy.

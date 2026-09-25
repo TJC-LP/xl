@@ -1,8 +1,8 @@
 package com.tjclp.xl.formula.display
 
 import com.tjclp.xl.*
-import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.conversions.given
 import com.tjclp.xl.display.{DisplayConversions, ExcelInterpolator, FormulaDisplayStrategy}
@@ -262,6 +262,94 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
     assertEquals(sheet.displayCell(ref"A1").formatted, "20")
+  }
+
+  // ========== Uncached cells display as the cell they are ==========
+  // An uncached formula cell is displayed with the value evaluateCell and recalculate() give it:
+  // a plain formula is Excel's legacy formula at its position (references implicitly intersected),
+  // an array-formula record evaluates as an array. Only positionless format is a dynamic array.
+
+  /** A1:A10 and B1:B10 hold 1..10. */
+  private val columns: Sheet =
+    (1 to 10).foldLeft(Sheet(name = SheetName.unsafe("Test"))) { (sheet, i) =>
+      sheet
+        .put(ARef.from1(1, i), CellValue.Number(BigDecimal(i)))
+        .put(ARef.from1(2, i), CellValue.Number(BigDecimal(i)))
+    }
+
+  private def evaluated(sheet: Sheet, at: ARef): CellValue =
+    import com.tjclp.xl.formula.eval.SheetEvaluator.*
+    sheet.evaluateCell(at) match
+      case Right(value) => value
+      case Left(error) => fail(s"evaluateCell($at) failed: $error")
+
+  test("an uncached plain cell displays its value at its position, as evaluateCell gives it") {
+    import com.tjclp.xl.display.syntax.*
+
+    val sheet = columns
+      .put(ref"D5", CellValue.Formula("SUM(A1:A10*B1:B10)"))
+      .put(ref"C8", CellValue.Formula("IF(A1:A10>5,\"big\",\"small\")"))
+
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+    // row 5 intersects both columns at 5: 5*5; row 8 at 8, which is > 5
+    assertEquals(evaluated(sheet, ref"D5"), CellValue.Number(BigDecimal(25)))
+    assertEquals(sheet.displayCell(ref"D5").formatted, "25")
+    assertEquals(evaluated(sheet, ref"C8"), CellValue.Text("big"))
+    assertEquals(sheet.displayCell(ref"C8").formatted, "big")
+  }
+
+  test("the excel interpolator displays an uncached plain cell at its position") {
+    import ExcelInterpolator.*
+    import DisplayConversions.given
+
+    given Sheet = columns
+      .put(ref"D5", CellValue.Formula("SUM(A1:A10*B1:B10)"))
+      .put(ref"H20", CellValue.Formula("SUM(A1:A10*2)"))
+
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+    assertEquals(excel"${ref"D5"}", "25")
+    // row 20 lies outside A1:A10, so the legacy formula's intersection is #VALUE!
+    assertEquals(evaluated(summon[Sheet], ref"H20"), CellValue.Error(CellError.Value))
+    assertEquals(excel"${ref"H20"}", "#VALUE!")
+    // a Cell the sheet does not hold evaluates at its own position
+    assertEquals(excel"${Cell(ref"E5", CellValue.Formula("SUM(A1:A10*B1:B10)"))}", "25")
+  }
+
+  test("an uncached array-formula record displays its array value") {
+    import ExcelInterpolator.*
+    import DisplayConversions.given
+    import com.tjclp.xl.display.syntax.*
+
+    def cse(range: CellRange): CellValue.Formula =
+      CellValue.Formula("SUM(A1:A10*B1:B10)", None, FormulaKind.ArrayFormula(range))
+    given Sheet = columns.put(ref"D5", cse(ref"D5:D5"))
+
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+    // {=SUM(A1:A10*B1:B10)} multiplies the columns element-wise: 1² + ... + 10²
+    assertEquals(evaluated(summon[Sheet], ref"D5"), CellValue.Number(BigDecimal(385)))
+    assertEquals(summon[Sheet].displayCell(ref"D5").formatted, "385")
+    assertEquals(excel"${Cell(ref"F9", cse(ref"F9:F9"))}", "385")
+  }
+
+  test("a cached cell displays its cache without evaluating") {
+    import com.tjclp.xl.display.syntax.*
+
+    // the cache disagrees with what evaluation would give (25), so only the cache can show 999
+    val sheet = columns.put(
+      ref"D5",
+      CellValue.Formula("SUM(A1:A10*B1:B10)", Some(CellValue.Number(BigDecimal(999))))
+    )
+
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+    assertEquals(sheet.displayCell(ref"D5").formatted, "999")
+  }
+
+  test("positionless format still evaluates as a dynamic array") {
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+    val strategy = summon[FormulaDisplayStrategy]
+    // no cell to intersect with: a new Excel 365 cell's value, as sheet.evaluateFormula gives it
+    assertEquals(strategy.format("=SUM(A1:A10*B1:B10)", columns), "385")
+    assertEquals(strategy.formatCached("SUM(A1:A10*B1:B10)", None, NumFmt.General, columns), "385")
   }
 
   // ========== Edge Cases ==========

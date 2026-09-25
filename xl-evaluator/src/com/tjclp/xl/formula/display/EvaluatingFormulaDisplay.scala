@@ -1,7 +1,9 @@
 package com.tjclp.xl.formula.display
 
+import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.display.{FormulaDisplayStrategy, LowPriorityFormulaDisplay, NumFmtFormatter}
+import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.eval.SheetEvaluator
 import com.tjclp.xl.sheets.Sheet
@@ -56,19 +58,11 @@ object EvaluatingFormulaDisplay extends LowPriorityFormulaDisplay:
       import SheetEvaluator.*
 
       // Ensure formula has "=" prefix for evaluator
-      val formulaWithEquals = if formula.startsWith("=") then formula else s"=$formula"
+      val formulaWithEquals = withEquals(formula)
 
-      // Evaluate the formula using provided clock
-      sheet.evaluateFormula(formulaWithEquals, clock) match
-        case Right(result) =>
-          // Successfully evaluated - format the result
-          // Try to infer NumFmt from result type if cell has no explicit format
-          val inferredFormat = inferFormatFromValue(result)
-          NumFmtFormatter.formatValue(result, inferredFormat)
-
-        case Left(error) =>
-          // Evaluation failed - show raw formula as fallback
-          formulaWithEquals
+      // Evaluate the formula using provided clock. No cell position: it evaluates as a new
+      // Excel 365 cell would, as a dynamic array (formatAt evaluates a real cell at its position)
+      displayEvaluated(sheet.evaluateFormula(formulaWithEquals, clock), formulaWithEquals)
 
     override def formatCached(
       formula: String,
@@ -81,12 +75,48 @@ object EvaluatingFormulaDisplay extends LowPriorityFormulaDisplay:
       // formulas would degrade to raw text despite a correct cached value (GH-275).
       // Only uncached formulas fall back to local evaluation.
       cached match
-        case Some(value) =>
-          val effectiveFmt = numFmt match
-            case NumFmt.General => inferFormatFromValue(value)
-            case explicit => explicit
-          NumFmtFormatter.formatValue(value, effectiveFmt)
+        case Some(value) => displayCached(value, numFmt)
         case None => format(formula, sheet)
+
+    override def formatAt(
+      formula: CellValue.Formula,
+      numFmt: NumFmt,
+      sheet: Sheet,
+      at: ARef
+    ): String =
+      formula.cachedValue match
+        case Some(value) => displayCached(value, numFmt)
+        case None =>
+          import SheetEvaluator.*
+          // An uncached cell evaluates as recalculate() would evaluate it: at its position (a
+          // plain formula is Excel's legacy formula, its references implicitly intersected) and by
+          // its kind (an array-formula record evaluates as an array and shows element (0,0)). A
+          // cell the sheet does not hold (a detached Cell given to the interpolator) is placed at
+          // its position first.
+          val holder =
+            if sheet.cells.get(at).exists(_.value == formula) then sheet
+            else sheet.put(at, formula)
+          displayEvaluated(holder.evaluateCell(at, clock), withEquals(formula.expression))
+
+  /** The formula text with its leading `=`, the display of a formula that fails to evaluate. */
+  private def withEquals(formula: String): String =
+    if formula.startsWith("=") then formula else s"=$formula"
+
+  /**
+   * An evaluated formula formatted by the NumFmt its value suggests; a formula that fails to
+   * evaluate shows its raw text.
+   */
+  private def displayEvaluated(result: XLResult[CellValue], rawText: String): String =
+    result match
+      case Right(value) => NumFmtFormatter.formatValue(value, inferFormatFromValue(value))
+      case Left(_) => rawText
+
+  /** A cached value formatted by the cell's NumFmt, or the one its value suggests under General. */
+  private def displayCached(value: CellValue, numFmt: NumFmt): String =
+    val effectiveFmt = numFmt match
+      case NumFmt.General => inferFormatFromValue(value)
+      case explicit => explicit
+    NumFmtFormatter.formatValue(value, effectiveFmt)
 
   /**
    * Infer appropriate NumFmt from a computed value.
