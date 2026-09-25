@@ -44,4 +44,7 @@ object WritePolicy:
  * failing refs, the convergence verdict — instead of an `Error:`-prefixed one-liner, while still
  * exiting non-zero. Stack-trace free: nothing here is a defect to debug.
  */
-final class StrictFailure(val summary: String) extends Exception(summary) with NoStackTrace
+final class StrictFailure(val summary: String, val facts: Vector[(String, ujson.Value)])
+    extends Exception(summary)
+    with NoStackTrace:
+  def this(summary: String) = this(summary, Vector.empty)

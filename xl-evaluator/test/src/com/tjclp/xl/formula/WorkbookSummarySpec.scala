@@ -6,12 +6,13 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.formula.eval.{SheetSummary, WorkbookInspect, WorkbookSummary}
-import com.tjclp.xl.ooxml.{TestFixtures, XlsxReader}
+import com.tjclp.xl.ooxml.{TestFixtures, XlsxReader, XlsxWriter}
 import com.tjclp.xl.sheets.{
   AutoFilterState,
   ColumnProperties,
   DataValidation,
   FreezePane,
+  PageSetup,
   RowProperties,
   Sheet
 }
@@ -137,6 +138,39 @@ class WorkbookSummarySpec extends FunSuite:
       Vector(("Shown", false), ("Hid", true))
     )
     assertEquals(summary.date1904, true)
+  }
+
+  test("GH-674: definedNames lists the print names a read lifts into PageSetup") {
+    // the dogfood shape: a workbook-scoped name plus `_xlnm.Print_Area` scoped to Data. The read
+    // lifts the modelable Print_Area out of metadata.definedNames into Sheet.pageSetup (GH-259); the
+    // summary must still list it, in the order the writer emits the table
+    val authored = Workbook(Vector(Sheet(SheetName.unsafe("Data")).put(a1("A1"), 1)))
+      .withDefinedName("TotalRev", "Data!$B$4")
+      .withDefinedName("_xlnm.Print_Area", "Data!$A$1:$B$4", SheetName.unsafe("Data"))
+      .fold(e => fail(e.message), identity)
+    val loaded = XlsxWriter
+      .writeToBytes(authored)
+      .flatMap(XlsxReader.readFromBytes(_))
+      .fold(e => fail(e.message), identity)
+    assertEquals(loaded.metadata.definedNames.map(_.name), Vector("TotalRev"), "the read lifts it")
+    assertEquals(
+      WorkbookSummary.of(loaded).definedNames.map(dn => (dn.name, dn.formula, dn.localSheetId)),
+      Vector(
+        ("TotalRev", "Data!$B$4", None),
+        (DefinedName.PrintArea, "Data!$A$1:$B$4", Some(0))
+      )
+    )
+    // an authored PageSetup reports the same way, without a round trip
+    val setup = Workbook(
+      Vector(
+        Sheet(SheetName.unsafe("Data"))
+          .withPageSetup(PageSetup(printArea = Some(range("A1:C9")), repeatRows = Some((1, 1))))
+      )
+    )
+    assertEquals(
+      WorkbookSummary.of(setup).definedNames.map(_.formula),
+      Vector("Data!$A$1:$C$9", "Data!$1:$1")
+    )
   }
 
   test("wb.describe and wb.audit resolve through WorkbookInspect's extension block") {

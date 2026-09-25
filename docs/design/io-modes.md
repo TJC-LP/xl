@@ -77,7 +77,7 @@ Characteristics:
 Write (`writeStream` / `writeStreamsSeq`):
 - Static parts (`[Content_Types].xml`, workbook relationships, minimal `styles.xml`) are written once up front.
 - For each streamed `RowData`, `StreamingXmlWriter` emits XML events directly to a `ZipOutputStream` without building intermediate XML trees.
-- Output is compact XML with `Compression.Deflated` by default; by design it uses inline strings (no SST) and a minimal style set.
+- Output is compact XML with `Compression.Deflated` by default. Plain text goes through a shared strings table accumulated while rows stream (GH-223; `SstPolicy.Never` keeps inline strings); `styles.xml` is the minimal set, or the table passed to `writeStreamStyled` / `writeStreamStyledWithAutoDetect` (GH-675).
 
 Read (`readStream` / `readSheetStream` / `readStreamByIndex`):
 - The ZIP is opened as a `ZipFile`, and the target worksheet entry is streamed through a SAX parser (`SaxStreamingReader`; 3–4x faster than the original fs2‑data‑xml path).
@@ -87,7 +87,7 @@ Read (`readStream` / `readSheetStream` / `readStreamByIndex`):
 Characteristics:
 - Memory: **O(1)** for worksheet data (plus the in‑memory SST and minimal bookkeeping).
 - Features:
-  - Write: inline strings only, default styles, no row-stream API for merged cells or advanced sheet metadata.
+  - Write: shared strings, styles from a table declared up front, no row-stream API for merged cells or advanced sheet metadata.
   - Read: values and basic types; you typically use it for ETL/analytics rather than formatting‑preserving workflows.
   - Shared formulas: the one-pass row reader expands dependents when their master appears first. A dependent with no active master remains formula-shaped as `#REF!` with its cached value preserved. This includes a dependent that physically precedes its master; use `read` for arbitrary physical ordering. The targeted single-cell reader can scan ahead and does not share this limitation.
 

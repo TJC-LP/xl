@@ -914,20 +914,19 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case other => fail(s"Expected Text(A), got $other")
   }
 
-  test("INDEX: out of bounds returns descriptive #REF! error") {
+  test("INDEX: out of bounds is the #REF! error value with a descriptive context (#670)") {
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)), // A1
       ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)) // A2
     )
-    // Row 5 is out of bounds for a 2-row array
-    sheet.evaluateFormula("=INDEX(A1:A2, 5)") match
-      case Left(error) =>
-        val msg = error.toString
-        // Should contain descriptive info about the bounds
-        assert(msg.contains("#REF!"), s"Expected #REF! in error, got $msg")
-        assert(msg.contains("row_num 5"), s"Expected row number in error, got $msg")
-        assert(msg.contains("2 rows"), s"Expected array dimensions in error, got $msg")
-      case other => fail(s"Expected EvalError with descriptive message, got $other")
+    // Row 5 is out of bounds for a 2-row array: the cell caches #REF!
+    assertEquals(sheet.evaluateFormula("=INDEX(A1:A2, 5)"), Right(CellValue.Error(CellError.Ref)))
+    val expr = FormulaParser.parse("=INDEX(A1:A2, 5)").fold(e => fail(e.toString), identity)
+    Evaluator.instance.eval(expr, sheet) match
+      case Left(EvalError.ErrorValue(CellError.Ref, Some(msg))) =>
+        assert(msg.contains("row_num 5"), s"Expected row number in context, got $msg")
+        assert(msg.contains("2 rows"), s"Expected array dimensions in context, got $msg")
+      case other => fail(s"Expected ErrorValue(Ref, context), got $other")
   }
 
   test("MATCH: exact match finds position") {
@@ -1019,9 +1018,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
       ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2024, 1, 1, 0, 0))
       // Missing B2 date - lengths don't match
     )
-    sheet.evaluateFormula("=XNPV(0.1, A1:A2, B1:B2)") match
-      case Left(error) => assert(error.toString.contains("same length"))
-      case other => fail(s"Expected error, got $other")
+    // #670(h): Excel's #NUM!, cached
+    assertEquals(
+      sheet.evaluateFormula("=XNPV(0.1, A1:A2, B1:B2)"),
+      Right(CellValue.Error(CellError.Num))
+    )
   }
 
   test("XIRR: calculates internal rate of return with irregular dates") {
@@ -1057,9 +1058,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
       ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2024, 1, 1, 0, 0)),
       ARef.from0(1, 1) -> CellValue.DateTime(LocalDateTime.of(2024, 7, 1, 0, 0))
     )
-    sheet.evaluateFormula("=XIRR(A1:A2, B1:B2)") match
-      case Left(error) => assert(error.toString.contains("positive and one negative"))
-      case other => fail(s"Expected error, got $other")
+    // #670(h): Excel's #NUM!, cached (the dogfood's D6)
+    assertEquals(
+      sheet.evaluateFormula("=XIRR(A1:A2, B1:B2)"),
+      Right(CellValue.Error(CellError.Num))
+    )
   }
 
   test("XIRR: with custom guess") {

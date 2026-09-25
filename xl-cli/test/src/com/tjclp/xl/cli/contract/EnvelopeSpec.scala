@@ -273,6 +273,27 @@ class EnvelopeSpec extends CatsEffectSuite:
       }
   }
 
+  test("#678: recalc --json names the cycles that settled on error values as data") {
+    val out = file("error-cycle-out.xlsx")
+    CliHarness.run("-f", file("error-cycle.xlsx"), "-o", out, "--json", "recalc").map { run =>
+      assertEquals(run.exit, 0, run.stderr)
+      val data = envelope(run)("data")
+      assert(data("text").str.contains("1 cycle settled on error values"), data("text").str)
+      val cycles = data("errorValuedCycles").arr.map(_.arr.map(_.str).toSet).toVector
+      assertEquals(cycles, Vector(Set("Data!A1", "Data!B1")))
+    }
+  }
+
+  test("#678: a recalc with no error-valued cycle still carries the field, empty") {
+    val out = file("simple-recalc-out.xlsx")
+    CliHarness.run("-f", file("simple.xlsx"), "-o", out, "--json", "recalc").map { run =>
+      assertEquals(run.exit, 0, run.stderr)
+      val data = envelope(run)("data")
+      assertEquals(data("errorValuedCycles"), ujson.Arr())
+      assertEquals(data("written"), ujson.True)
+    }
+  }
+
   test("view --eval --strict --json on a cyclic book: the gate has no payload, data:null") {
     CliHarness
       .run(

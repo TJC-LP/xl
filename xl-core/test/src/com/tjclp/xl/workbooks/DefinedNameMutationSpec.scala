@@ -218,3 +218,69 @@ class DefinedNameMutationSpec extends ScalaCheckSuite:
       Right(base.metadata.definedNames)
     )
   }
+
+  // ===== GH-674: the effective table — the metadata names plus the PageSetup print names =====
+
+  private def printed(wb: Workbook, idx: Int, setup: PageSetup): Workbook =
+    wb.updateAt(idx, _.withPageSetup(setup)).fold(e => fail(e.message), identity)
+
+  test("GH-674: effectiveDefinedNames appends each sheet's PageSetup print names, in sheet order") {
+    val area = CellRange(ref"A1", ref"D20")
+    val wb = printed(
+      printed(
+        withTable(DefinedName("Total", "Model!$B$4")),
+        0,
+        PageSetup(repeatRows = Some((1, 2)))
+      ),
+      1,
+      PageSetup(printArea = Some(area), repeatRows = Some((3, 3)))
+    )
+    assertEquals(
+      wb.effectiveDefinedNames.map(dn => (dn.name, dn.formula, dn.localSheetId)),
+      Vector(
+        ("Total", "Model!$B$4", None),
+        (DefinedName.PrintTitles, "Model!$1:$2", Some(0)),
+        (DefinedName.PrintArea, "Other!$A$1:$D$20", Some(1)),
+        (DefinedName.PrintTitles, "Other!$3:$3", Some(1))
+      )
+    )
+    // the loaded table itself is untouched: the derivation is a view, not a mutation
+    assertEquals(table(wb), Vector(("Total", "Model!$B$4", None)))
+  }
+
+  test("GH-674: a PageSetup field overrides the same sheet's table entry, case-insensitively") {
+    val wb = printed(
+      withTable(
+        DefinedName("_XLNM.PRINT_AREA", "Model!$A$1:$A$2", localSheetId = Some(0)),
+        DefinedName("_xlnm.Print_Area", "Other!$A$1:$A$2", localSheetId = Some(1))
+      ),
+      0,
+      PageSetup(printArea = Some(CellRange(ref"B2", ref"C3")))
+    )
+    assertEquals(
+      wb.effectiveDefinedNames.map(dn => (dn.name, dn.formula, dn.localSheetId)),
+      Vector(
+        ("_xlnm.Print_Area", "Other!$A$1:$A$2", Some(1)),
+        (DefinedName.PrintArea, "Model!$B$2:$C$3", Some(0))
+      )
+    )
+  }
+
+  test("GH-674: the derived formula quotes a sheet name the way Excel does") {
+    val wb = printed(
+      Workbook(Vector(Sheet(SheetName.unsafe("Q1 Report")))),
+      0,
+      PageSetup(printArea = Some(CellRange(ref"A1", ref"B2")), repeatRows = Some((1, 1)))
+    )
+    assertEquals(
+      wb.effectiveDefinedNames.map(_.formula),
+      Vector("'Q1 Report'!$A$1:$B$2", "'Q1 Report'!$1:$1")
+    )
+  }
+
+  property("GH-674: without print setups the effective table IS the metadata table") {
+    forAll(Gen.listOf(genName)) { names =>
+      val wb = withTable(names.map(n => DefinedName(n, "1"))*)
+      assertEquals(wb.effectiveDefinedNames, wb.metadata.definedNames)
+    }
+  }

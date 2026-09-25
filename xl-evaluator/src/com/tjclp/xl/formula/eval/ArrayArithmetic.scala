@@ -480,7 +480,10 @@ object ArrayArithmetic:
     case n: BigDecimal => CellValue.Number(n)
     case n: Int => CellValue.Number(BigDecimal(n))
     case n: Long => CellValue.Number(BigDecimal(n))
-    case n: Double => CellValue.Number(BigDecimal(n))
+    case n: Double if n.isFinite => CellValue.Number(BigDecimal(n))
+    // #681: NaN and ±Infinity have no Excel value (BigDecimal(Double) throws on them) — the
+    // #NUM! element, which `&` and every carried-error check then propagate
+    case _: Double => CellValue.Error(CellError.Num)
     case b: Boolean => CellValue.Bool(b)
     // GH-335: date-returning calls (TODAY, DATE, ...) compare as dates, not as their toString
     case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())

@@ -338,15 +338,15 @@ class LoudParityGapsSpec extends FunSuite:
         case Left(err) => fail(s"$formula: $err")
     leftOf("=VLOOKUP(2030,A3:B7,2,FALSE)") match
       case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
-        assertEquals(ctx, "VLOOKUP exact match not found: VLOOKUP(2030, A3:B7, 2, false)")
+        assertEquals(ctx, "VLOOKUP exact match not found: VLOOKUP(2030, A3:B7, 2, FALSE)")
       case other => fail(s"expected ErrorValue(NA, ctx), got $other")
     leftOf("=VLOOKUP(2000,A3:B7,2,TRUE)") match
       case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
-        assertEquals(ctx, "VLOOKUP approximate match not found: VLOOKUP(2000, A3:B7, 2, true)")
+        assertEquals(ctx, "VLOOKUP approximate match not found: VLOOKUP(2000, A3:B7, 2, TRUE)")
       case other => fail(s"expected ErrorValue(NA, ctx), got $other")
     leftOf("=HLOOKUP(2030,D1:H2,2,FALSE)") match
       case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
-        assertEquals(ctx, "HLOOKUP exact match not found: HLOOKUP(2030, D1:H2, 2, false)")
+        assertEquals(ctx, "HLOOKUP exact match not found: HLOOKUP(2030, D1:H2, 2, FALSE)")
       case other => fail(s"expected ErrorValue(NA, ctx), got $other")
     leftOf("=MATCH(2030,A3:A7,0)") match
       case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>

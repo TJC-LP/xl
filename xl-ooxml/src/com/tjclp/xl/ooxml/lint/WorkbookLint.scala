@@ -133,6 +133,30 @@ enum LintCategory derives CanEqual:
    */
   case SharedStringOrphan
 
+  /**
+   * A sheet's hidden `_xlnm._FilterDatabase` name (scoped by `localSheetId` to the sheet's
+   * position) naming a range, sheet or `#REF!` other than the sheet's own `<autoFilter ref>` — the
+   * stale name a range edit leaves behind (#460). Hygiene, not a repair: Excel opens the file with
+   * the filter intact and re-saves the stale name verbatim, LibreOffice re-derives it from the
+   * autoFilter (both verified). A missing name (Excel re-saves the book without one) and a leftover
+   * name with no autoFilter (Excel's own output after a filter is cleared) are not findings.
+   */
+  case AutoFilterNameMismatch
+
+  /**
+   * `_xlfn.ANCHORARRAY(<qualifier>!)` — a spill operator applied to a bare sheet qualifier — in a
+   * cell `<f>`, a CF `<formula>`, a DV `<formula1>`/`<formula2>` or a `<definedName>`: xl
+   * 0.23.0–0.23.1's rewrite of Excel's `Sheet!#REF!` (a deleted target) into
+   * `_xlfn.ANCHORARRAY(Sheet!)REF!` on every in-memory write (GH-687). `ANCHORARRAY` takes a
+   * reference and a bare qualifier is none, so the text is not a formula Excel can parse:
+   * unparseable formula text is Excel's repair class (the formula or name is removed on open) —
+   * inferred, not verified in Excel; LibreOffice keeps the text as an unparsed formula and shows
+   * `#VALUE!` (verified). The rule is [[FormulaStorage.corruptSpillQualifiers]] — exactly what the
+   * reader heals back to `Sheet!#`, so any in-memory write that regenerates the part restores
+   * Excel's spelling.
+   */
+  case AnchorArrayQualifierCorrupt
+
   /** Stable kebab-case identifier used in CLI text and JSON output. */
   def slug: String = this match
     case LintCategory.ChildOrder => "child-order"
@@ -154,6 +178,8 @@ enum LintCategory derives CanEqual:
     case LintCategory.DxfIdOutOfRange => "dxf-id-out-of-range"
     case LintCategory.UnreferencedPart => "unreferenced-part"
     case LintCategory.SharedStringOrphan => "shared-string-orphan"
+    case LintCategory.AutoFilterNameMismatch => "autofilter-name-mismatch"
+    case LintCategory.AnchorArrayQualifierCorrupt => "anchorarray-qualifier-corrupt"
 
 /**
  * How much a finding matters to the recipient of the file (PR #659 review).
@@ -252,6 +278,12 @@ final case class Finding(
  *     lint log), plus `t="s"` indices past the table (the reader shows #REF!). xl's fresh writes
  *     lint clean; a surgical edit of a foreign SST book that replaces text leaves the old entry
  *     behind, which this finding reports (no compaction on write)
+ *   - a sheet-scoped `_xlnm._FilterDatabase` name disagreeing with the sheet's own `<autoFilter
+ *     ref>` (#460) — a hygiene finding on workbook.xml per stale name; see
+ *     [[LintCategory.AutoFilterNameMismatch]] for the Excel/LibreOffice evidence behind the tier
+ *   - xl 0.23.0–0.23.1's `_xlfn.ANCHORARRAY(Sheet!)REF!` in place of Excel's `Sheet!#REF!` (GH-687)
+ *     over the same formula-text sites as the bare-call check (`<f>`, CF, DV, `<definedName>`) —
+ *     the rule is the reader's heal (`FormulaStorage.corruptSpillQualifiers`); ONE finding per part
  *
  * Lint runs on the RAW ZIP PARTS, never on the parsed domain model — a full read would
  * repair/normalize the very structure lint inspects (the reader silently falls back on unresolved
@@ -321,16 +353,21 @@ object WorkbookLint:
    * GH-663: the formula-syntax oracle behind [[LintCategory.FormulaUnparseable]] — given a cell
    * `<f>`'s stored text (file form, any leading '=' already removed), the diagnostic when the text
    * does not parse, `None` when it does. xl-ooxml has no formula parser (that is xl-evaluator's),
-   * so the caller supplies one; the CLI passes the evaluator's. [[noFormulaCheck]] disables the
-   * rule, and the oracle is never shown an empty `<f>` (a shared-formula dependent) or a data-table
-   * record's text.
+   * so the caller supplies one; the CLI and the aggregate module's `Excel.lint` pass the
+   * evaluator's (`UnparseableFormula.check`, GH-674). [[noFormulaCheck]] disables the rule, and the
+   * oracle is never shown an empty `<f>` (a shared-formula dependent) or a data-table record's
+   * text.
    */
   type FormulaCheck = String => Option[String]
 
   /** The oracle that accepts every formula: the rule is off (the default). */
   val noFormulaCheck: FormulaCheck = _ => None
 
-  /** Lint an XLSX file on disk. Only the structural parts are read (workbook, worksheets, rels). */
+  /**
+   * Lint an XLSX file on disk. Only the structural parts are read (workbook, worksheets, rels). The
+   * `formula-unparseable` rule is off: pass an oracle to the two-argument form, or use `Excel.lint`
+   * from the aggregate `xl` module (GH-674), which supplies the parser the CLI uses.
+   */
   def lint(path: Path): XLResult[Vector[Finding]] = lint(path, noFormulaCheck)
 
   /** [[lint]] with a formula oracle for the `formula-unparseable` rule (GH-663). */
@@ -461,8 +498,14 @@ object WorkbookLint:
       definedNameExternalRefFindings(wbElem) ++
       definedNameValidityFindings(wbElem) ++
       definedNameXlfnFindings(wbElem) ++
+      definedNameCorruptSpillFindings(wbElem) ++
       sheetResult.findings ++ externalResult._1 ++
       calcChainFindings(chain, sheetResult.facts.view.mapValues(_.chain).toMap, parts) ++
+      autoFilterNameFindings(
+        wbElem,
+        wbRels,
+        sheetResult.facts.view.mapValues(_.autoFilterRef).toMap
+      ) ++
       styles.findings ++
       sharedStringFindings(sst, sheetResult.facts.values.map(_.sst)) ++
       ctFindings ++
@@ -707,7 +750,7 @@ object WorkbookLint:
                   parentDir(path)
                 ) ++
                 scan.boundsFindings ++ scan.formulaFindings ++ scan.xlfnFindings ++
-                scan.emptyInlineFindings ++ scan.ignorableFindings ++ scan.dxfFindings ++
+                scan.corruptSpillFindings ++ scan.emptyInlineFindings ++ scan.ignorableFindings ++ scan.dxfFindings ++
                 sstIndexFindings(path, scan.sstRefs, base.sst) ++
                 externalRefFindings(path, scan.externalRefs, declaredExternalRefs) ++
                 dataTableFindings(path, scan.dataTables, autoNoTable) ++ tableResult._1
@@ -715,7 +758,7 @@ object WorkbookLint:
             found._1 ++ findings,
             found._2 ++ presentInternalTargets(rels, parentDir(path), relsPath, parts),
             tableResult._2,
-            found._4 + (path -> SheetFacts(scan.chain, scan.sstRefs))
+            found._4 + (path -> SheetFacts(scan.chain, scan.sstRefs, scan.autoFilterRef))
           )
       }
       .map(acc => SheetsResult(acc._1, acc._2, acc._4))
@@ -727,8 +770,15 @@ object WorkbookLint:
     facts: Map[String, SheetFacts]
   )
 
-  /** The per-sheet facts consumed at workbook level (calc chain, shared-string references). */
-  private final case class SheetFacts(chain: ChainSheetFacts, sst: SstRefFacts)
+  /**
+   * The per-sheet facts consumed at workbook level (calc chain, shared-string references, the
+   * sheet's own autoFilter range for the `_xlnm._FilterDatabase` check).
+   */
+  private final case class SheetFacts(
+    chain: ChainSheetFacts,
+    sst: SstRefFacts,
+    autoFilterRef: Option[String]
+  )
 
   /**
    * Scan referenced table parts for out-of-bounds refs (`<table ref>`, nested autoFilter), dangling
@@ -970,7 +1020,8 @@ object WorkbookLint:
    * label, ordered main-namespace top-level labels (with positions among all top-level elements),
    * the captured r:id-bearing elements, the ref/sqref bounds findings, the aggregated leading-'='
    * formula finding (GH-456), the aggregated bare-post-2007-function finding over every
-   * formula-text element (GH-577), the external-workbook ordinal usage (GH-525 — findings need the
+   * formula-text element (GH-577) and the aggregated xl 0.23.x `ANCHORARRAY(Sheet!)` finding over
+   * the same elements (GH-687), the external-workbook ordinal usage (GH-525 — findings need the
    * workbook-level `<externalReference>` count, so the scan carries facts, not findings), and the
    * data-table record state accumulated over sheetData (GH-442).
    */
@@ -981,13 +1032,15 @@ object WorkbookLint:
     boundsFindings: Vector[Finding],
     formulaFindings: Vector[Finding],
     xlfnFindings: Vector[Finding],
+    corruptSpillFindings: Vector[Finding],
     externalRefs: ExternalRefFacts,
     dataTables: Vector[RecordFacts],
     chain: ChainSheetFacts,
     emptyInlineFindings: Vector[Finding],
     ignorableFindings: Vector[Finding],
     dxfFindings: Vector[Finding],
-    sstRefs: SstRefFacts
+    sstRefs: SstRefFacts,
+    autoFilterRef: Option[String]
   )
 
   /**
@@ -1066,21 +1119,31 @@ object WorkbookLint:
     val chain = cellObs.foldLeft(ChainSheetFacts.empty)(_.add(_, chainCandidates))
     val sstRefs = new SstRefBuilder(ctx.sst)
     cellObs.foreach(sstRefs.add)
+    val textFacts = formulaTextFactsOf(root)
     SheetScan(
       root.label,
       mainChildLabelsOf(root),
       captures,
       bounds,
       formulaEq,
-      xlfnFindings(part, xlfnFactsOf(root), "formula"),
+      xlfnFindings(part, textFacts.xlfn, "formula"),
+      corruptSpillFindings(part, textFacts.corruptSpill, "formula"),
       extRefs,
       dataTables,
       chain,
       emptyInlineFindings(part, cellObs.foldLeft(EmptyInlineFacts.empty)(_.add(_))),
       ignorableFindingsOf(part, root),
       dxfs,
-      sstRefs.result()
+      sstRefs.result(),
+      autoFilterRefOf(children.find(e => e.label == "autoFilter" && inMainNamespace(e)))
     )
+
+  /**
+   * #460: the `ref` of a sheet's FIRST direct-child main-namespace `<autoFilter>` — the sheet's own
+   * filter, never a table part's. The SAX scanner observes the same element (parity-pinned).
+   */
+  private def autoFilterRefOf(autoFilter: Option[Elem]): Option[String] =
+    autoFilter.flatMap(XmlUtil.getAttrOpt(_, "ref"))
 
   /**
    * The bare-call facts of a part, folded over its formula-text elements in document order: an
@@ -1089,17 +1152,17 @@ object WorkbookLint:
    * is a container — the inner element is the site. Each site's text is reduced to its bare names
    * on the spot, so the walk never holds more than one formula's text (like the sibling `CellObs`
    * scanners, which fold derived facts). The SAX scanner observes exactly the same set
-   * (parity-pinned).
+   * (parity-pinned). The same sites feed the GH-687 corrupt-qualifier facts.
    */
-  private def xlfnFactsOf(root: Elem): XlfnFacts =
-    def walk(acc: XlfnFacts, e: Elem, parent: Option[Elem]): XlfnFacts =
+  private def formulaTextFactsOf(root: Elem): FormulaTextFacts =
+    def walk(acc: FormulaTextFacts, e: Elem, parent: Option[Elem]): FormulaTextFacts =
       val children = e.child.toVector.collect { case c: Elem => c }
       parent match
         case Some(p) if formulaTextLabels.contains(e.label) && children.isEmpty =>
           val (site, locator) = xlfnSite(e.label, p.label, XmlUtil.getAttrOpt(p, "r"))
-          acc.add(site, locator, FormulaStorage.bareFutureCalls(e.text))
+          acc.add(site, locator, e.text)
         case _ => children.foldLeft(acc)(walk(_, _, Some(e)))
-    walk(XlfnFacts.empty, root, None)
+    walk(FormulaTextFacts.empty, root, None)
 
   /** One `<c>` element's per-cell facts (DOM side of the parity pair). */
   private def domCellObs(cell: Elem, formulaCheck: FormulaCheck): CellObs =
@@ -1184,7 +1247,10 @@ object WorkbookLint:
       // depth) whose text is being accumulated; the `r` of the innermost open <c> names a cell site.
       private var xlfnCapture: Option[XlfnCapture] = None
       private var cellR: Option[String] = None
-      private var xlfn: XlfnFacts = XlfnFacts.empty
+      private var textFacts: FormulaTextFacts = FormulaTextFacts.empty
+      // #460: the first depth-1 main-namespace <autoFilter> decides, with or without a ref
+      private var autoFilterSeen = false
+      private var autoFilterRef: Option[String] = None
 
       def result: Option[SheetScan] =
         rootLabel.map(
@@ -1194,14 +1260,16 @@ object WorkbookLint:
             captures.result(),
             bounds.result(),
             formulaEqualsFindings(part, leadingEq) ++ formulaUnparseableFindings(part, unparseable),
-            xlfnFindings(part, xlfn, "formula"),
+            xlfnFindings(part, textFacts.xlfn, "formula"),
+            corruptSpillFindings(part, textFacts.corruptSpill, "formula"),
             extRefs,
             dataTables,
             chain,
             emptyInlineFindings(part, emptyInline),
             ignorable.result(),
             dxfs.result(),
-            sstRefs.result()
+            sstRefs.result(),
+            autoFilterRef
           )
         )
 
@@ -1235,6 +1303,11 @@ object WorkbookLint:
           topPos += 1
           if uri.isEmpty || uri == XmlUtil.nsSpreadsheetML then labels += ((label, topPos))
           if topLevelRefLabels.contains(label) then captures += CapturedRef(label, relIdIn(atts))
+          if label == "autoFilter" && !autoFilterSeen &&
+            (uri.isEmpty || uri == XmlUtil.nsSpreadsheetML)
+          then
+            autoFilterSeen = true
+            autoFilterRef = Option(atts.getValue("", "ref"))
         else if depth == 2 then
           val parent = parents.headOption.getOrElse("")
           if (parent == "hyperlinks" && label == "hyperlink") ||
@@ -1322,8 +1395,7 @@ object WorkbookLint:
         xlfnCapture match
           case Some(open) if open.depth == depth =>
             if !open.sawChild then
-              xlfn = xlfn
-                .add(open.site, open.locator, FormulaStorage.bareFutureCalls(open.text.toString))
+              textFacts = textFacts.add(open.site, open.locator, open.text.toString)
             xlfnCapture = None
           case _ => ()
         if label == "c" then cellR = None
@@ -1498,10 +1570,13 @@ object WorkbookLint:
     facts.sample.headOption match
       case None => Vector.empty
       case Some((firstRef, first)) =>
+        // #676: a formula typed with Alt+Enter carries line breaks in <f>; flatten them (and tabs)
+        // to spaces before the cap so the finding stays one line — the audit's unparseable entry
+        // flattens the same way, so the two tools quote one formula identically
+        val flat = first.text.replaceAll("\\r\\n|[\\r\\n\\t]", " ")
         val shownText =
-          if first.text.length > unparseableTextSample then
-            first.text.take(unparseableTextSample) + "…"
-          else first.text
+          if flat.length > unparseableTextSample then flat.take(unparseableTextSample) + "…"
+          else flat
         val shown = facts.sample.map(_._1.fold("<f>")(_.toA1))
         val cells =
           if facts.count > shown.size then s"first ${shown.size}: ${shown.mkString(", ")}, …"
@@ -1649,6 +1724,70 @@ object WorkbookLint:
     }
     xlfnFindings(workbookPart, facts, "defined name")
 
+  // ===== xl 0.23.x's ANCHORARRAY(Sheet!) corruption (GH-687) =====
+
+  /**
+   * The facts both formula-text rules fold over ONE site, so the DOM and SAX scanners feed them
+   * through one `add` and cannot disagree: the GH-577 bare calls
+   * ([[FormulaStorage.bareFutureCalls]]) and the GH-687 corrupt qualifiers
+   * ([[FormulaStorage.corruptSpillQualifiers]] — the names slot of the second [[XlfnFacts]] holds
+   * the qualifiers, bounded by the distinct sheet names).
+   */
+  private final case class FormulaTextFacts(xlfn: XlfnFacts, corruptSpill: XlfnFacts):
+    def add(site: String, locator: String, text: String): FormulaTextFacts =
+      FormulaTextFacts(
+        xlfn.add(site, locator, FormulaStorage.bareFutureCalls(text)),
+        corruptSpill.add(site, locator, FormulaStorage.corruptSpillQualifiers(text))
+      )
+
+  private object FormulaTextFacts:
+    val empty: FormulaTextFacts = FormulaTextFacts(XlfnFacts.empty, XlfnFacts.empty)
+
+  /**
+   * GH-687: ONE repair finding per part for the formula-text sites carrying xl 0.23.0–0.23.1's
+   * `_xlfn.ANCHORARRAY(<qualifier>!)` in place of Excel's `<qualifier>#REF!`: the qualifiers, the
+   * first-[[xlfnSampleSize]] site sample and the total count; the locator names the first site. The
+   * remedy is what the reader's heal makes true: an in-memory edit regenerates workbook.xml (names)
+   * and every worksheet it edits (cells, CF, DV); an unedited worksheet, a write with no
+   * modification at all (the clean verbatim copy — `xl recalc` when every cache is already current)
+   * and a `--stream` write copy the part verbatim, so the finding says so.
+   */
+  private def corruptSpillFindings(part: String, facts: XlfnFacts, noun: String): Vector[Finding] =
+    if facts.count == 0L then Vector.empty
+    else
+      val sites =
+        if facts.count > facts.sample.size then
+          s"first ${facts.sample.size}: ${facts.sample.mkString(", ")}, …"
+        else facts.sample.mkString(", ")
+      val qualifiers = facts.functions.toVector.sorted.mkString(", ")
+      Vector(
+        Finding(
+          part,
+          LintCategory.AnchorArrayQualifierCorrupt,
+          facts.firstLocator.getOrElse(""),
+          s"${facts.count} $noun(s) store a sheet-qualified error literal (Sheet!#REF!, " +
+            s"Sheet!#N/A, …) as _xlfn.ANCHORARRAY(Sheet!)REF! ($qualifiers; $sites) — a spill " +
+            "of a bare sheet qualifier, which Excel cannot parse. Written by xl 0.23.0–0.23.1; " +
+            "any in-memory xl edit (e.g. `xl -f f.xlsx -s <sheet> -o f.xlsx put …`) restores " +
+            "the literal in workbook.xml and in the formulas and the rules xl models of each " +
+            "worksheet it edits; an unedited worksheet, a rule xl carries verbatim, a write that " +
+            "changes nothing (`xl recalc` with every cache current) and a --stream write keep it"
+        )
+      )
+
+  /** GH-687 at workbook level: `<definedName>` bodies carry the corruption the same way. */
+  private def definedNameCorruptSpillFindings(wbElem: Elem): Vector[Finding] =
+    val facts = nestedElems(wbElem, "definedNames", "definedName").foldLeft(XlfnFacts.empty) {
+      (acc, dn) =>
+        val name = XmlUtil.getAttrOpt(dn, "name").getOrElse("")
+        acc.add(
+          s""""$name"""",
+          s"""<definedName name="$name">""",
+          FormulaStorage.corruptSpillQualifiers(dn.text)
+        )
+    }
+    corruptSpillFindings(workbookPart, facts, "defined name")
+
   // ===== Dangling external-workbook ordinals (GH-525) =====
 
   /**
@@ -1795,6 +1934,99 @@ object WorkbookLint:
       }
     }
     collisions ++ illegal
+
+  // ===== #460 item 5: <autoFilter ref> vs the sheet-scoped _xlnm._FilterDatabase =====
+
+  private val filterDatabaseName = "_xlnm._FilterDatabase"
+
+  /**
+   * #460: for every sheet whose own `<autoFilter ref>` was scanned, the sheet-scoped
+   * `_xlnm._FilterDatabase` (`localSheetId` = the sheet's 0-based position in `<sheets>`) must name
+   * that range on that sheet. One hygiene finding per disagreeing name, in sheet order. Nothing is
+   * reported where the rule has no evidence of a problem: a sheet with no name (Excel re-saves the
+   * book so), a name whose sheet has no autoFilter (Excel leaves one behind when a filter is
+   * cleared), or a name or ref the range parser cannot read.
+   */
+  private def autoFilterNameFindings(
+    wbElem: Elem,
+    wbRels: Relationships,
+    autoFilterByPath: Map[String, Option[String]]
+  ): Vector[Finding] =
+    val names: Map[Int, String] = nestedElems(wbElem, "definedNames", "definedName")
+      .filter(dn => XmlUtil.getAttrOpt(dn, "name").exists(_.equalsIgnoreCase(filterDatabaseName)))
+      .flatMap(dn =>
+        XmlUtil.getAttrOpt(dn, "localSheetId").flatMap(_.trim.toIntOption).map(_ -> dn.text.trim)
+      )
+      .reverse // the first name for a position wins, as for the rest of the table
+      .toMap
+    nestedElems(wbElem, "sheets", "sheet").zipWithIndex.flatMap { (sheet, position) =>
+      val sheetName = XmlUtil.getAttrOpt(sheet, "name").getOrElse("")
+      val autoFilter = relIdOf(sheet)
+        .flatMap(wbRels.findById)
+        .flatMap(rel => autoFilterByPath.get(Relationships.resolveWorkbookTarget(rel.target)))
+        .flatten
+      for
+        filterRef <- autoFilter
+        body <- names.get(position)
+        reason <- filterNameDisagreement(body, sheetName, filterRef)
+      yield Finding(
+        workbookPart,
+        LintCategory.AutoFilterNameMismatch,
+        s"""<definedName name="$filterDatabaseName" localSheetId="$position">""",
+        s"""The hidden $filterDatabaseName name for sheet "$sheetName" $reason, but the """ +
+          s"sheet's <autoFilter> covers $filterRef — a stale name a range edit left behind; " +
+          "Excel opens the file with the filter intact and keeps the name as it is, so tools " +
+          "that locate the filtered range by the name see the wrong one",
+        LintSeverity.Hygiene
+      )
+    }
+
+  /**
+   * Why a `_xlnm._FilterDatabase` body does not describe `filterRef` on `sheetName`, or `None` when
+   * it does — or when either side is a spelling the range parser cannot read (never a guess). Sheet
+   * names compare case-insensitively, as Excel's do; `$` anchors are immaterial.
+   */
+  private def filterNameDisagreement(
+    body: String,
+    sheetName: String,
+    filterRef: String
+  ): Option[String] =
+    val (qualifier, rangeText) = splitSheetQualifier(body)
+    if rangeText.toUpperCase(java.util.Locale.ROOT).contains("#REF!") then Some(s"is $body (#REF!)")
+    else if qualifier.exists(q => !q.equalsIgnoreCase(sheetName)) then
+      Some(s"""names sheet "${qualifier.getOrElse("")}" ($body)""")
+    else
+      def parsed(text: String) = CellRange.parse(text.replace("$", "")).toOption
+      (parsed(rangeText), parsed(filterRef)) match
+        case (Some(named), Some(filtered))
+            if named.start != filtered.start || named.end != filtered.end =>
+          Some(s"covers ${named.toA1} ($body)")
+        case _ => None
+
+  /**
+   * `'It''s'!$A$1:$B$2` → (Some("It's"), "$A$1:$B$2"); `Sheet1!A1` → (Some("Sheet1"), "A1");
+   * `#REF!` → (None, "#REF!"). The qualifier is everything before the last `!` outside quotes, so
+   * an error literal's own `!` is never read as one.
+   */
+  private def splitSheetQualifier(body: String): (Option[String], String) =
+    if body.startsWith("'") then
+      val close = quotedNameEnd(body, 1)
+      if close + 1 < body.length && body.charAt(close + 1) == '!' then
+        (Some(body.substring(1, close).replace("''", "'")), body.substring(close + 2))
+      else (None, body)
+    else
+      body.indexOf('!') match
+        case bang if bang > 0 && !body.substring(0, bang).contains('#') =>
+          (Some(body.substring(0, bang)), body.substring(bang + 1))
+        case _ => (None, body)
+
+  /** Index of the `'` closing a quoted sheet name that opens before `from` (`''` escapes one). */
+  @scala.annotation.tailrec
+  private def quotedNameEnd(body: String, from: Int): Int =
+    body.indexOf('\'', from) match
+      case -1 => body.length
+      case i if i + 1 < body.length && body.charAt(i + 1) == '\'' => quotedNameEnd(body, i + 2)
+      case i => i
 
   // ===== GH-555: stale calculation chain =====
 

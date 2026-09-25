@@ -1,9 +1,10 @@
 package com.tjclp.xl.cli.helpers
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.cli.ColorParser
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.workbooks.DefinedName
 
 /**
  * Forwarders onto the sheet-appearance and print-setup merges of `Sheet.mergeSheetView` /
@@ -32,6 +33,30 @@ object AppearanceOps:
       case (None, false) => refuse("autofilter", "a <range> argument or --clear is required")
       case (Some(r), false) => Right(sheet.withAutoFilter(r))
       case (None, true) => Right(sheet.removeAutoFilter)
+
+  /**
+   * Keep sheet `name`'s hidden `_xlnm._FilterDatabase` name in step with a filter just set over
+   * `range` (#460): Excel rewrites that sheet-scoped name to the filter's absolute range whenever
+   * the range is set, and a name left on the old range is the stale entry `xl lint` reports. An
+   * existing entry is rewritten in place (hidden flag and position kept); none is created, and a
+   * `--clear` never calls this — Excel keeps the name after a filter is cleared.
+   */
+  def syncFilterDatabase(wb: Workbook, name: SheetName, range: CellRange): Workbook =
+    def absolute(ref: ARef): String = s"$$${ref.col.toLetter}$$${ref.row.index1}"
+    val idx = wb.sheets.indexWhere(_.name == name)
+    val body = s"${SheetName.quoteForFormula(name.value)}!${absolute(range.start)}:" +
+      absolute(range.end)
+    val names = wb.metadata.definedNames
+    val scoped = (dn: DefinedName) => idx >= 0 && dn.matches(FilterDatabase, Some(idx))
+    if !names.exists(dn => scoped(dn) && dn.formula != body) then wb
+    else
+      wb.copy(
+        metadata = wb.metadata
+          .copy(definedNames = names.map(dn => if scoped(dn) then dn.copy(formula = body) else dn)),
+        sourceContext = wb.sourceContext.map(_.markMetadataModified)
+      )
+
+  private val FilterDatabase = "_xlnm._FilterDatabase"
 
   /** Merge view options (gridlines, zoom, tab selection) into the sheet's view settings. */
   def applySheetView(

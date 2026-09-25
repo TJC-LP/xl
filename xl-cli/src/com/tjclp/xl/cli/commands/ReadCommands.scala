@@ -122,7 +122,7 @@ object ReadCommands:
         val anyRefs = DependencyGraph.containsCellReferences(expr) || overrides.nonEmpty
         (unqualified, anyRefs)
       case Left(_) =>
-        // Parse error - let SheetEvaluator handle it (it will give a better error message)
+        // a parse failure falls to the constant branch, which raises the parser's diagnostic
         (false, false)
 
     if needsSheet then
@@ -263,7 +263,10 @@ object ReadCommands:
       val sheet = sheetOpt.getOrElse(Sheet("_eval"))
       // For constant formulas, workbook context is not needed
       val wbOpt = if wb.sheets.nonEmpty then Some(wb) else None
-      for result <- IO.fromEither(
+      for
+        // the parser's own diagnostic, as the referencing branches raise it
+        _ <- IO.fromEither(FormulaParser.parse(formula).left.map(unparseable(_, formula)))
+        result <- IO.fromEither(
           SheetEvaluator
             .evaluateFormula(sheet)(formula, workbook = wbOpt)
             .left

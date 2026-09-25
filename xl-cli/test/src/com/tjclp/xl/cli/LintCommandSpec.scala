@@ -12,11 +12,15 @@ import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{CellRange, Sheet, Workbook, given}
+import com.tjclp.xl.addressing.{Column, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.LintCommands
+import com.tjclp.xl.error.XLResult
+import com.tjclp.xl.formula.parser.UnparseableFormula
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.lint.{LintCategory, WorkbookLint}
+import com.tjclp.xl.ops.FormulaSupport
 import com.tjclp.xl.sheets.dataTableSyntax.*
 
 /**
@@ -627,22 +631,18 @@ class LintCommandSpec extends CatsEffectSuite:
   }
 
   test("GH-663: formulas Excel opens that xl's parser refuses are not repairs either") {
-    // the parser's grammar is narrower than Excel's: LibreOffice writes `TRUE()` (an unexpected
-    // '(' to the parser), and the arity model is the registry's — a known name with an odd argument
-    // count opens intact (at worst #VALUE!). Neither may fail the ship gate. Nor may Excel's union
-    // ',' and intersection ' ' reference operators, which the parser does not implement: after a
-    // parenthesized expression it reports any character but ')' as an UnbalancedDelimiter, yet
-    // LibreOffice evaluates every one of these (SUM((A1,A2)) = 3, AREAS((A1,B1)) = 2, ...). Nor may
-    // the parser's 128-level depth budget, which counts every chained operator segment as a level
-    // (GH-56): a flat 130-term chain Excel opens intact fails it as NestingTooDeep while a
-    // 130-deep SUM nest — past Excel's own 64 — is refused the same way; neither is a certain
-    // repair (PR #679 review; the parser side is its own issue).
+    // the arity model is the registry's — a known name with an odd argument count opens intact
+    // (at worst #VALUE!) — so it may not fail the ship gate. The grammar these texts once hit —
+    // `TRUE()`, Excel's union ',' and intersection ' ' operators, a flat 130-term chain — parses
+    // since #669/#680 (LibreOffice evaluates them: SUM((A1,A2)) = 3, AREAS((A1,B1)) = 2, ...);
+    // they stay pinned as non-findings, and so does a 130-deep SUM nest, past Excel's own 64 and
+    // the parser's 128-level budget — a parser bound, not a certain repair.
     val flatChain = (2 to 131).map(i => s"B$i").mkString("+")
     val flatConcat = (1 to 130).map(i => s"A$i").mkString("&")
     val deepNest = "SUM(" * 130 + "1" + ")" * 130
-    // Nor may a complete text the parser merely cannot finish: `NOT` is a legal defined name Excel
-    // resolves, but the parser reads the word as its prefix operator and reports UnexpectedEOF —
-    // the oracle judges truncation from the text, not from the diagnostic class (PR #679 review).
+    // Nor may a complete text: `NOT` is a legal defined name Excel resolves (a name to the parser
+    // since #669; before, its prefix operator awaiting an operand) — the oracle judges truncation
+    // from the text, not from the diagnostic class (PR #679 review).
     val texts = Vector(
       "NOT",
       "not",
@@ -737,13 +737,18 @@ class LintCommandSpec extends CatsEffectSuite:
       "SUM((A1,A2))",
       "(A1:B2 B1:C2)"
     )
-    truncated.foreach(t => assert(LintCommands.certainTruncation(t), s"should be truncated: $t"))
-    complete.foreach(t => assert(!LintCommands.certainTruncation(t), s"should be complete: $t"))
+    truncated.foreach(t =>
+      assert(UnparseableFormula.certainTruncation(t), s"should be truncated: $t")
+    )
+    complete.foreach(t =>
+      assert(!UnparseableFormula.certainTruncation(t), s"should be complete: $t")
+    )
   }
 
   test("PR #679 review: the #669 grammar gaps and error literals are never formula-unparseable") {
     // pinned so a future parser change cannot promote one into a repair-tier claim about a file
-    // Excel opens. Only the parser-backed category is asserted: on this minimal fixture the
+    // Excel opens (array constants parse since #669; structured and 3-D references and LAMBDA
+    // calls remain gaps). Only the parser-backed category is asserted: on this minimal fixture the
     // storage-form rules still speak (xlfn-missing for a bare x#, @ or LAMBDA; external-ref-dangling
     // for [1]), which is their job, not this oracle's.
     val texts = Vector(
@@ -806,7 +811,7 @@ class LintCommandSpec extends CatsEffectSuite:
     corpus.foreach { t =>
       assertEquals(
         LintCommands.formulaCheck(t),
-        LintCommands.formulaCheckSlow(t),
+        UnparseableFormula.checkSlow(t),
         s"'${t.take(40)}'"
       )
     }
@@ -848,4 +853,119 @@ class LintCommandSpec extends CatsEffectSuite:
     yield
       assertEquals(code, ExitCode.Success)
       assertEquals(findings, Vector.empty)
+  }
+
+  // ========== #460 item 5: xl's own structural edits and the _FilterDatabase name ==========
+
+  test("#460: xl autofilter and the batch autofilter op rewrite the sheet's _FilterDatabase name") {
+    // Excel rewrites the hidden name whenever the filter range is set; xl's filter verbs must too,
+    // or `lint --strict` fails on a file xl itself produced
+    val source = repoRoot.resolve("xl-ooxml/test/resources/fixtures/autofilter.xlsx")
+    def entry(zip: Path, name: String): String =
+      val file = new java.util.zip.ZipFile(zip.toFile)
+      try new String(file.getInputStream(file.getEntry(name)).readAllBytes(), "UTF-8")
+      finally file.close()
+    // (label, the CLI args after -f/-o, stdin, the filter range the file must end up with)
+    val runs: Vector[(String, List[String], String, String)] = Vector(
+      ("autofilter verb", List("autofilter", "A1:B4"), "", "A1:B4"),
+      (
+        "batch autofilter op",
+        List("batch", "-"),
+        """[{"op":"autofilter","range":"A1:C10"}]""",
+        "A1:C10"
+      ),
+      (
+        "batch autofilter op, qualified range",
+        List("batch", "-"),
+        """[{"op":"autofilter","range":"Filtered!B2:C3"}]""",
+        "B2:C3"
+      )
+    )
+    runs.traverse_ { (label, args, stdin, range) =>
+      for
+        out <- IO(Files.createTempFile("lint-cli-filter-verb", ".xlsx"))
+        run <- contract.CliHarness
+          .run(List("-f", source.toString, "-s", "Filtered", "-o", out.toString) ++ args, stdin)
+        findings <- IO(WorkbookLint.lint(out).fold(err => fail(s"lint errored: $err"), identity))
+        sheetXml <- IO(entry(out, "xl/worksheets/sheet1.xml"))
+        workbookXml <- IO(entry(out, "xl/workbook.xml"))
+        _ <- IO(Files.deleteIfExists(out))
+      yield
+        assertEquals(run.exit, 0, s"$label: ${run.stderr}")
+        assert(sheetXml.contains(s"""<autoFilter ref="$range""""), s"$label: $sheetXml")
+        val absolute = range
+          .split(':')
+          .map(c =>
+            "$" + c.takeWhile(_.isLetter) + "$" +
+              c.dropWhile(_.isLetter)
+          )
+          .mkString(":")
+        assert(workbookXml.contains(s"!$absolute</definedName>"), s"$label: $workbookXml")
+        // still Excel's hidden sheet-scoped entry, and only one of it
+        assert(workbookXml.contains("""localSheetId="0""""), s"$label: $workbookXml")
+        assert(workbookXml.contains("""hidden="1""""), s"$label: $workbookXml")
+        assertEquals("_xlnm._FilterDatabase".r.findAllIn(workbookXml).size, 1, workbookXml)
+        val stale = findings.filter(_.category == LintCategory.AutoFilterNameMismatch)
+        assertEquals(stale, Vector.empty, s"$label: $stale")
+    }
+  }
+
+  test("#460: autofilter --clear leaves the _FilterDatabase name, as Excel does") {
+    val source = repoRoot.resolve("xl-ooxml/test/resources/fixtures/autofilter.xlsx")
+    for
+      out <- IO(Files.createTempFile("lint-cli-filter-clear", ".xlsx"))
+      run <- contract.CliHarness.run(
+        "-f",
+        source.toString,
+        "-s",
+        "Filtered",
+        "-o",
+        out.toString,
+        "autofilter",
+        "--clear"
+      )
+      wb <- ExcelIO.instance[IO].read(out)
+      _ <- IO(Files.deleteIfExists(out))
+    yield
+      assertEquals(run.exit, 0, run.stderr)
+      assertEquals(
+        wb.metadata.definedNames.filter(_.name == "_xlnm._FilterDatabase").map(_.formula),
+        Vector("'Filtered'!$A$1:$C$6")
+      )
+  }
+
+  test("#460: xl's own row/column edits keep a filtered book's _FilterDatabase name in sync") {
+    // the stale name is the class a range edit leaves behind; xl's structural verbs must not
+    // produce it (the fixture carries a matching name for its A1:C6 filter)
+    val source = repoRoot.resolve("xl-ooxml/test/resources/fixtures/autofilter.xlsx")
+    val sheet = SheetName.unsafe("Filtered")
+    val support = summon[FormulaSupport]
+    // (label, edit, the filter range the edit must move A1:C6 to)
+    val edits: Vector[(String, Workbook => XLResult[Workbook], String)] = Vector(
+      ("insert rows inside", wb => support.insertRows(wb, sheet, Row.from1(3), 2), "A1:C8"),
+      ("delete rows inside", wb => support.deleteRows(wb, sheet, Row.from1(3), 1), "A1:C5"),
+      ("insert columns left", wb => support.insertCols(wb, sheet, Column.from0(0), 1), "B1:D6")
+    )
+    def entry(zip: Path, name: String): String =
+      val file = new java.util.zip.ZipFile(zip.toFile)
+      try new String(file.getInputStream(file.getEntry(name)).readAllBytes(), "UTF-8")
+      finally file.close()
+    edits.traverse_ { (label, edit, moved) =>
+      for
+        out <- IO(Files.createTempFile("lint-cli-filter", ".xlsx"))
+        wb <- ExcelIO.instance[IO].read(source)
+        edited <- IO.fromEither(edit(wb).left.map(e => new Exception(e.message)))
+        _ <- ExcelIO.instance[IO].write(edited, out)
+        findings <- IO(WorkbookLint.lint(out).fold(err => fail(s"lint errored: $err"), identity))
+        sheetXml <- IO(entry(out, "xl/worksheets/sheet1.xml"))
+        workbookXml <- IO(entry(out, "xl/workbook.xml"))
+        _ <- IO(Files.deleteIfExists(out))
+      yield
+        // the edit really moved both sides — a vacuous pass would not
+        assert(sheetXml.contains(s"""<autoFilter ref="$moved""""), s"$label: $sheetXml")
+        val (c0, r0) = (moved.takeWhile(_.isLetter), moved.drop(1).takeWhile(_.isDigit))
+        assert(workbookXml.contains(s"$$$c0$$$r0:"), s"$label: $workbookXml")
+        val stale = findings.filter(_.category == LintCategory.AutoFilterNameMismatch)
+        assertEquals(stale, Vector.empty, s"$label: $stale")
+    }
   }

@@ -8,7 +8,7 @@ names
 2
 ## stdout
 ## stderr
-Error: Unexpected argument: names
+Error: names does not take -s/--sheet
   code: USAGE
-  hint: run `xl names --help` for the usage
+  hint: drop -s/--sheet; names lists every defined name in the workbook, each with its scope. Run `xl names --help` for the usage
 usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …

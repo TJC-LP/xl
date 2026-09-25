@@ -14,7 +14,7 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
-import com.tjclp.xl.io.{ExcelIO, RowData}
+import com.tjclp.xl.io.{ExcelIO, RowData, StyledRowData}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader}
 import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
@@ -736,6 +736,106 @@ class MemoryGuardSpec extends CatsEffectSuite:
     for
       attempt <- (rows(1) ++ Stream.raiseError[IO](missingCsv))
         .through(guarded.writeStreamWithAutoDetect(out, "Data"))
+        .compile
+        .drain
+        .attempt
+      leftovers <- scratchFiles(dir())
+    yield
+      attempt match
+        case Left(e) =>
+          assert(e eq missingCsv, s"the source's own failure, unwrapped: $e")
+          assertEquals(CliError.fromThrowable(e).code, ErrorCode.IO_READ)
+        case Right(_) => fail("the source failed; so must the write")
+      assertEquals(leftovers, Vector.empty, "the spill is released")
+      assert(!Files.exists(out), "nothing written")
+  }
+
+  // --- GH-675: the styled two-pass writer answers for the spill setting the same way ------------
+
+  private def styledRows(n: Int): Stream[IO, StyledRowData] =
+    rows(n).map(r => StyledRowData(r.rowIndex, r.cells, Map(0 -> 0)))
+
+  private val dateStyles = Vector(CellStyle.default.withNumFmt(NumFmt.Date))
+
+  test(
+    "GH-675: excel(spill = dir): the styled two-pass write spills into dir, cleans up and styles the cells"
+  ) {
+    val spillDir = dir().resolve("spill-styled")
+    val out = dir().resolve("spilled-styled.xlsx")
+    val guarded = MemoryGuard.excel(_ => IO.unit, spill = Right(Some(spillDir)))
+    for
+      _ <- IO.blocking(Files.createDirectories(spillDir))
+      seen <- Ref.of[IO, Vector[String]](Vector.empty)
+      _ <- styledRows(3)
+        .evalTap(_ => scratchFiles(spillDir).flatMap(names => seen.update(_ ++ names)))
+        .through(guarded.writeStreamStyledWithAutoDetect(out, "Data", dateStyles))
+        .compile
+        .drain
+      during <- seen.get
+      after <- scratchFiles(spillDir)
+      read <- ExcelIO.instance[IO].read(out)
+    yield
+      assert(during.nonEmpty, "the scratch file lived in the configured directory")
+      assertEquals(after, Vector.empty, "deleted when the write ended")
+      val sheet = read.sheets(0)
+      assertEquals(
+        sheet(ref"A3").styleId.flatMap(sheet.styleRegistry.get).map(_.numFmt),
+        Some(NumFmt.Date)
+      )
+  }
+
+  test(
+    "GH-675: excel(spill = missing): the styled two-pass write is IO_WRITE naming the spill directory"
+  ) {
+    val missing = dir().resolve("no-such-spill-styled")
+    val out = dir().resolve("unspilled-styled.xlsx")
+    val guarded = MemoryGuard.excel(_ => IO.unit, spill = Right(Some(missing)))
+    styledRows(2)
+      .through(guarded.writeStreamStyledWithAutoDetect(out, "Data", dateStyles))
+      .compile
+      .drain
+      .attempt
+      .map { attempt =>
+        val err = cliError(attempt)
+        assertEquals(err.code, ErrorCode.IO_WRITE)
+        assert(err.message.startsWith(s"cannot write $out: "), err.message)
+        assert(err.message.contains(s"the configured spill directory ($missing)"), err.message)
+        assertEquals(err.location, Some(Location.file(out.toString)))
+        assert(!Files.exists(out), "nothing written")
+      }
+  }
+
+  test(
+    "GH-675: excel(spill = Left): a malformed XL_SPILL_DIR fails the styled write as USAGE before a row is pulled"
+  ) {
+    val usage = MemoryGuard
+      .spillDirFrom(_ => Some("bad\u0000dir"))
+      .swap
+      .getOrElse(fail("a NUL byte is a path?"))
+    val out = dir().resolve("never-styled.xlsx")
+    val guarded = MemoryGuard.excel(_ => IO.unit, spill = Left(usage))
+    for
+      pulled <- Ref.of[IO, Boolean](false)
+      attempt <- styledRows(2)
+        .evalTap(_ => pulled.set(true))
+        .through(guarded.writeStreamStyledWithAutoDetect(out, "Data", dateStyles))
+        .compile
+        .drain
+        .attempt
+      wasPulled <- pulled.get
+    yield
+      assertEquals(cliError(attempt), usage)
+      assert(!wasPulled, "refused before the source was opened")
+      assert(!Files.exists(out), "nothing written")
+  }
+
+  test("GH-675: a failure of the styled row stream keeps its own classification") {
+    val out = dir().resolve("source-failed-styled.xlsx")
+    val guarded = MemoryGuard.excel(_ => IO.unit, spill = Right(Some(dir())))
+    val missingCsv = new NoSuchFileException("rows.csv")
+    for
+      attempt <- (styledRows(1) ++ Stream.raiseError[IO](missingCsv))
+        .through(guarded.writeStreamStyledWithAutoDetect(out, "Data", dateStyles))
         .compile
         .drain
         .attempt

@@ -48,9 +48,10 @@ final case class SheetSummary(
 
 /**
  * The whole workbook at a glance: one [[SheetSummary]] per sheet in workbook order, plus the
- * workbook facts that change how every number reads — defined names (hidden ones included), the
- * date system and the calculation properties. `WorkbookSummary.of` is total: any workbook the
- * reader accepts summarizes. This is what `xl describe --full` prints and `wb.describe` returns.
+ * workbook facts that change how every number reads — defined names (hidden ones included, and the
+ * print names each sheet's PageSetup denotes: `Workbook.effectiveDefinedNames`, GH-674), the date
+ * system and the calculation properties. `WorkbookSummary.of` is total: any workbook the reader
+ * accepts summarizes. This is what `xl describe --full` prints and `wb.describe` returns.
  */
 final case class WorkbookSummary(
   sheets: Vector[SheetSummary],
@@ -64,7 +65,7 @@ object WorkbookSummary:
   def of(wb: Workbook): WorkbookSummary =
     WorkbookSummary(
       sheets = wb.sheets.zipWithIndex.map((sheet, i) => summarize(wb, sheet, i + 1)),
-      definedNames = wb.metadata.definedNames,
+      definedNames = wb.effectiveDefinedNames,
       date1904 = wb.metadata.date1904,
       calcPr = wb.metadata.calcPr
     )

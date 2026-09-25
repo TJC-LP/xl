@@ -8,3 +8,10 @@ package com.tjclp.xl
  * never imports both (see `scripting`).
  */
 export io.ExcelRecalc.*
+
+/**
+ * GH-674: the parser-backed lint (`Excel.lint` / `Excel.lintStream`, the rule set `xl lint` runs)
+ * and the types its findings carry, beside the recalculating writes.
+ */
+export io.ExcelLint.*
+export ooxml.lint.{Finding, LintCategory, LintSeverity}

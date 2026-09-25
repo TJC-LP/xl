@@ -108,3 +108,12 @@ object BaseImportProbe:
     (sheet, range) => sheet.evaluateForRangePerCell(range)
   val perCellFailures: RangeEvalResult => Vector[CellEvalError] = _.failures
   val perCellSummary: RangeEvalResult => String = _.summary
+
+  // GH-674: the parser-backed lint reaches the base import (package-level ExcelLint export) with
+  // the finding types, beside the one-argument library lint whose formula rule is off. Never run.
+  val linted: String => XLResult[Vector[Finding]] = path => Excel.lint(path)
+  val lintedPath: java.nio.file.Path => XLResult[Vector[Finding]] = path => Excel.lint(path)
+  val lintedStream: String => XLResult[Vector[Finding]] = path => Excel.lintStream(path)
+  val repairs: Vector[Finding] => Vector[Finding] =
+    _.filter(f => f.severity == LintSeverity.Repair && f.category != LintCategory.ChildOrder)
+  val effectiveNames: Workbook => Vector[DefinedName] = _.effectiveDefinedNames

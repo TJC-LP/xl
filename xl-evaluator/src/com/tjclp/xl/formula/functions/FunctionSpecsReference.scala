@@ -3,6 +3,7 @@ package com.tjclp.xl.formula.functions
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
 import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
+import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
@@ -79,7 +80,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
                 Left(
                   EvalError.EvalFailed(
                     "ROW requires a cell reference",
-                    Some(s"ROW($expr)")
+                    Some(s"ROW(${FormulaPrinter.print(expr, includeEquals = false)})")
                   )
                 )
           }
@@ -111,7 +112,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
                 Left(
                   EvalError.EvalFailed(
                     "COLUMN requires a cell reference",
-                    Some(s"COLUMN($expr)")
+                    Some(s"COLUMN(${FormulaPrinter.print(expr, includeEquals = false)})")
                   )
                 )
           }
@@ -179,6 +180,24 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
       case ar: ArrayResult => (ar.rows, ar.cols)
       case _ => (1, 1)
     }
+
+  /**
+   * AREAS(reference) — GH-669: the number of areas a reference denotes: 1 for a cell, a range, a
+   * name bound to one or a reference a function returns; the count of a union's areas (nested
+   * unions flatten, overlaps count: `AREAS(((A1,B1),C1))` is 3); the areas an intersection leaves
+   * (`AREAS((A1:A5,C1:C5) A2:C2)` is 2, an empty one `#NULL!`). A value is not a reference —
+   * `AREAS(1)` and `AREAS("A1")` are parse errors, as in Excel.
+   */
+  val areasFn: FunctionSpec[BigDecimal] { type Args = ReferenceOperators.Operand } =
+    FunctionSpec.simple[BigDecimal, ReferenceOperators.Operand](
+      "AREAS",
+      Arity.one,
+      flags = FunctionFlags(returnsNumeric = true)
+    )((operand, ctx) =>
+      ReferenceOperators.areas(operand, ctx).map(found => BigDecimal(found.size))
+    )(using
+      ReferenceOperators.referenceOperand
+    )
 
   val address: FunctionSpec[String] { type Args = AddressArgs } =
     FunctionSpec.simple[String, AddressArgs]("ADDRESS", Arity.Range(2, 5)) { (args, ctx) =>
@@ -252,7 +271,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
                 Left(
                   EvalError.EvalFailed(
                     "CELL requires a cell reference",
-                    Some(s"CELL($infoType, $expr)")
+                    Some(s"CELL($infoType, ${FormulaPrinter.print(expr, includeEquals = false)})")
                   )
                 )
           case None => Right((ctx.currentCell, ctx.sheet.name))
@@ -308,6 +327,10 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
    * Shapes that print as one primary — everything the `@` operand slot re-parses unparenthesized.
    */
   private def isPrimaryShape(expr: TExpr[?]): Boolean = expr match
+    // GH-669: an intersection spells a space, so `@(A1:B2 B1:C2)` keeps its parens (a union
+    // prints its own)
+    case ReferenceOperators.OperatorCall(call) =>
+      call.spec.name != ReferenceOperators.IntersectionName
     case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
         _: TExpr.Percent | _: TExpr.Concat | _: TExpr.UnaryPlus[?] | _: TExpr.Eq[?] |
         _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] | _: TExpr.Gt[?] | _: TExpr.Gte[?] =>

@@ -30,7 +30,9 @@ object TestFixtures:
     "small-values-lo.xlsx",
     "styled-lo.xlsx",
     "formulas-lo.xlsx",
-    "condformat-lo.xlsx"
+    "condformat-lo.xlsx",
+    // GH-669: unions (LibreOffice spells them `(A1~A2)`), intersections, array constants, TRUE()
+    "reference-operators-lo.xlsx"
   )
 
   /**

@@ -1,7 +1,13 @@
 package com.tjclp.xl.formula.parser
 
 import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
-import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, FunctionRegistry}
+import com.tjclp.xl.formula.eval.ArrayResult
+import com.tjclp.xl.formula.functions.{
+  FunctionRegistry,
+  FunctionSpec,
+  FunctionSpecs,
+  ReferenceOperators
+}
 import com.tjclp.xl.formula.{Arity}
 
 import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
@@ -25,7 +31,10 @@ import scala.annotation.tailrec
  *   - External-workbook references (GH-353): [2]Book1!A1, [2]Book1!A1:B2, '[3]Sheet Name'!B2
  *     (unresolvable — carried as ExternalRef/ExternalRange for closed-workbook cache semantics)
  *   - Operators: +, -, *, /, ^, =, <>, <, <=, >, >=, &, postfix % (GH-355)
- *   - Functions: SUM, COUNT, IF, AND, OR, NOT, etc.
+ *   - Reference operators (GH-669): union `(A1,B2:C3)` — inside parentheses only; LibreOffice's `~`
+ *     is read as `,` — and intersection `A1:C3 B2:D4` (one or more spaces between two references)
+ *   - Array constants (GH-669): `{1,2;3,4}` — `,` between columns, `;` between rows
+ *   - Functions: SUM, COUNT, IF, AND, OR, NOT, etc.; `TRUE()`/`FALSE()` as calls (GH-669)
  *   - Parentheses for grouping
  *
  * Sheet-name leniency (GH-281): any identifier followed by `!` parses as a sheet reference,
@@ -38,17 +47,40 @@ import scala.annotation.tailrec
  * there is no strict-parity mode that rejects the unquoted form.
  *
  * Operator precedence (highest to lowest, Excel-compatible):
- *   1. Parentheses ()
- *   2. Function calls
- *   3. Postfix percent % (GH-355: binds tighter than ^, 2^3% = 2^(3%))
- *   4. Exponentiation ^ (right-associative)
- *   5. Unary minus -, unary plus +
- *   6. Multiplication *, Division /
- *   7. Addition +, Subtraction -
- *   8. Concatenation &
- *   9. Comparison =, <>, <, <=, >, >=
- *   10. Logical AND
- *   11. Logical OR
+ *   1. Parentheses (), function calls, the range colon `:`
+ *   2. Intersection ` ` (GH-669, left-associative; parseIntersection)
+ *   3. Union `,` (GH-669, only inside parentheses)
+ *   4. Unary minus -, unary plus + (GH-578: tighter than ^, -2^2 = 4)
+ *   5. Postfix percent % (GH-355: binds tighter than ^, 2^3% = 2^(3%))
+ *   6. Exponentiation ^ (left-associative, GH-480)
+ *   7. Multiplication *, Division /
+ *   8. Addition +, Subtraction -
+ *   9. Concatenation &
+ *   10. Comparison =, <>, <, <=, >, >=
+ *   11. Logical AND (xl's lenient infix keyword)
+ *   12. Logical OR (xl's lenient infix keyword)
+ *
+ * Grammar sketch (one level per line, each folding left unless noted):
+ * {{{
+ * expr        := or
+ * or          := and ("OR" or)?                       -- right-nested keyword form
+ * and         := comparison ("AND" and)?
+ * comparison  := concat (("=" | "<>" | "<" | "<=" | ">" | ">=") concat)*
+ * concat      := addsub ("&" addsub)*
+ * addsub      := muldiv (("+" | "-") muldiv)*
+ * muldiv      := unary (("*" | "/") unary)*
+ * unary       := "NOT" unary | pow                    -- NOT followed by an operand only
+ * pow         := signed ("^" signed)*
+ * signed      := ("-" | "+") signed | postfix
+ * postfix     := intersection ("%" | "#")*
+ * intersection:= primary (" "+ primary)*              -- both operands references
+ * primary     := number | string | ref | range | name | call | error | "{" array "}"
+ *              | "(" expr ("," expr)* ")"             -- two or more: a union of references
+ *              | "@" primary
+ * }}}
+ * Nesting — parentheses, arguments, prefix and postfix operators, intersections — is bounded by
+ * MaxNestingDepth; a flat chain of binary operators costs no level and the operator count is
+ * bounded instead (GH-680).
  *
  * @note
  *   Suppression rationale:
@@ -143,6 +175,11 @@ object FormulaParser:
    *   The formula string being parsed
    * @param pos
    *   Current position (0-based offset)
+   * @param depth
+   *   Nesting levels entered on the current path (parentheses, function arguments, prefix and
+   *   postfix operators) — restored on the way out, so siblings do not accumulate
+   * @param operators
+   *   GH-680: binary operators consumed so far in the whole formula — monotone, never restored
    * @param scope
    *   GH-193: lexically visible LET bindings, innermost first
    */
@@ -150,7 +187,8 @@ object FormulaParser:
     input: String,
     pos: Int,
     depth: Int = 0,
-    scope: List[LetScopeEntry] = Nil
+    scope: List[LetScopeEntry] = Nil,
+    operators: Int = 0
   ):
     def advance(n: Int = 1): ParserState = copy(pos = pos + n)
     def currentChar: Option[Char] =
@@ -165,17 +203,26 @@ object FormulaParser:
   private type ParseResult[A] = Either[ParseError, (A, ParserState)]
 
   /**
-   * Maximum formula nesting depth — a stack-overflow guard (GH-56). Well above Excel's 64-level
-   * nesting limit and any realistic formula, but far below the depth (~2000) that overflows the
-   * evaluator/parser stack. Capping the parser keeps the AST shallow enough that evaluation is also
-   * safe, so a single guard covers both the parser and the evaluator.
+   * Maximum formula nesting depth — a stack-overflow guard (GH-56): 2x Excel's own 64-level cap on
+   * nesting functions and parentheses. Each level costs a run of recursive-descent frames (the
+   * precedence ladder), and 256 levels sat at the edge of a default 1MB thread stack under
+   * interpreted execution (CI-observed StackOverflowError in the depth-guard tests themselves).
+   * GH-680: only real nesting counts — a flat operator chain costs nothing here (see
+   * [[parseChain]]); its length is bounded by [[MaxOperators]].
    */
-  // 2x Excel's own 64-level function-nesting cap. Must stay small enough that the
-  // guard fires before JVM stack exhaustion: each nesting level costs ~11 recursive-
-  // descent frames (the precedence ladder incl. the postfix tier), and 256 levels sat
-  // at the edge of a default 1MB thread stack under interpreted execution (CI-observed
-  // StackOverflowError in the depth-guard tests themselves).
   private val MaxNestingDepth = 128
+
+  /**
+   * GH-680: the most binary operators one formula may hold. A left-associative chain builds a
+   * left-nested spine one node per operator. The heavy walkers (evaluator, printer, shifter,
+   * dependency extraction, analysis) take a spine in one loop
+   * ([[com.tjclp.xl.formula.ast.BinarySpine]]), so this bound is not what keeps them on the stack;
+   * it is a margin for what still recurses along a spine — case-class `equals`/`hashCode` —
+   * measured cold (interpreted) on a 1MB thread stack clear to 2000 operators under 64 nesting
+   * levels. 1024 is eight times the 130-term chains generated books carry, and a longer chain is
+   * `TooManyOperators`: a total `Left`, never a StackOverflowError.
+   */
+  private val MaxOperators = 1024
 
   /**
    * Guarded descent into a nested sub-expression: deepen the state, or fail if already too deep.
@@ -183,6 +230,12 @@ object FormulaParser:
   private def descend(s: ParserState): Either[ParseError, ParserState] =
     if s.depth >= MaxNestingDepth then Left(ParseError.NestingTooDeep(s.depth, MaxNestingDepth))
     else Right(s.copy(depth = s.depth + 1))
+
+  /** GH-680: count one more binary operator against [[MaxOperators]]. */
+  private def countOperator(s: ParserState): Either[ParseError, ParserState] =
+    if s.operators >= MaxOperators then
+      Left(ParseError.TooManyOperators(s.operators + 1, MaxOperators, s.pos))
+    else Right(s.copy(operators = s.operators + 1))
 
   /**
    * Skip whitespace characters.
@@ -237,8 +290,19 @@ object FormulaParser:
     isKeywordAt(s, "NOT") && {
       val rem = s.remaining
       val next = rem.indexWhere(!_.isWhitespace, 3)
-      next < 0 || rem.charAt(next) != '('
+      // GH-669: with no operand after it — the end of the text, a binary operator, a closer or a
+      // separator — the word is a NAME (`=NOT`, `=NOT&"x"`, `IF(NOT,…)`; NOT is a legal defined
+      // name Excel resolves), read by parsePrimary like any other identifier
+      next >= 0 && rem.charAt(next) != '(' && startsOperand(rem.charAt(next))
     }
+
+  /**
+   * Can `c` begin an operand? Letters, digits and the characters that open a reference, a literal
+   * or a group — and the signs, which the paren-less `NOT -x` form has always read as the
+   * operand's.
+   */
+  private def startsOperand(c: Char): Boolean =
+    c.isLetterOrDigit || "._\\$'[#@\"{+-".contains(c)
 
   /**
    * Parse logical OR (lowest precedence).
@@ -286,6 +350,47 @@ object FormulaParser:
       else Right((left, s2))
     }
 
+  /** A binary operator at the cursor: the characters it spells and the node it builds. */
+  private type ChainOperator = (Int, (TExpr[?], TExpr[?]) => TExpr[?])
+
+  /**
+   * GH-680: parse a left-associative chain `operand (op operand)*` as an iterative left fold.
+   *
+   * A chain costs nothing against the nesting budget: its right operands never re-enter
+   * [[parseExpr]] (only parentheses and function arguments do), so the parser's stack is flat
+   * however long `B2+B3+…` runs, and Excel's limit is the nesting of functions and parentheses, not
+   * chain length. What a chain does deepen is the AST's left spine (GH-56's reason for once
+   * counting every segment as a level); the walkers take a spine in one loop (BinarySpine) and the
+   * per-formula operator budget ([[countOperator]]) bounds what is left.
+   *
+   * Every operand starts at the chain's entry depth. The postfix `%` and intersection loops return
+   * their operand's state still one level deeper per step — within ONE operand those steps build a
+   * real spine (`1%%%`, `A1 A1 A1`) and must count — but that spine ends with the operand, so the
+   * chain drops the leftover depth before the next operand; carried over, `=1%+1%+…` spent one
+   * level per term and failed NestingTooDeep at 128 terms (GH-680 review).
+   */
+  private def parseChain(
+    state: ParserState,
+    operand: ParserState => ParseResult[TExpr[?]],
+    operatorAt: ParserState => Option[ChainOperator]
+  ): ParseResult[TExpr[?]] =
+    operand(state).flatMap { case (first, s1) =>
+      @tailrec
+      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
+        val s2 = skipWhitespace(s)
+        operatorAt(s2) match
+          case None => Right((acc, s2))
+          case Some((consumed, build)) =>
+            countOperator(s2) match
+              case Left(err) => Left(err)
+              case Right(sc) =>
+                operand(skipWhitespace(sc.advance(consumed))) match
+                  case Right((right, s3)) =>
+                    loop(build(acc, right), s3.copy(depth = state.depth))
+                  case Left(err) => Left(err)
+      loop(first, s1.copy(depth = state.depth))
+    }
+
   /**
    * Parse comparison operators: =, <>, <, <=, >, >= (left-associative).
    *
@@ -298,43 +403,29 @@ object FormulaParser:
    * cells equal 0 / "" / FALSE like Excel, compares text lexicographically, and ranks number < text
    * < logical (numeric-only coercion would reject text operands).
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseComparison(state: ParserState): ParseResult[TExpr[?]] =
-    def mk(op: (TExpr[CellValue], TExpr[CellValue]) => TExpr[Boolean])(
-      l: TExpr[?],
-      r: TExpr[?]
-    ): TExpr[?] =
-      op(TExpr.asComparableValueExpr(l), TExpr.asComparableValueExpr(r))
-    parseConcatenation(state).flatMap { case (left, s1) =>
-      @tailrec
-      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
-        val s2 = skipWhitespace(s)
-        // (chars consumed, node constructor); None = no comparison operator here
-        val operator: Option[(Int, (TExpr[?], TExpr[?]) => TExpr[?])] = s2.currentChar match
-          case Some('=') => Some((1, mk(TExpr.Eq.apply)))
+    def op(
+      width: Int,
+      node: (TExpr[CellValue], TExpr[CellValue]) => TExpr[Boolean]
+    ): Option[ChainOperator] =
+      Some((width, (l, r) => node(TExpr.asComparableValueExpr(l), TExpr.asComparableValueExpr(r))))
+    parseChain(
+      state,
+      parseConcatenation,
+      s =>
+        s.currentChar match
+          case Some('=') => op(1, TExpr.Eq.apply)
           case Some('<') =>
-            s2.advance().currentChar match
-              case Some('>') => Some((2, mk(TExpr.Neq.apply)))
-              case Some('=') => Some((2, mk(TExpr.Lte.apply)))
-              case _ => Some((1, mk(TExpr.Lt.apply)))
+            s.advance().currentChar match
+              case Some('>') => op(2, TExpr.Neq.apply)
+              case Some('=') => op(2, TExpr.Lte.apply)
+              case _ => op(1, TExpr.Lt.apply)
           case Some('>') =>
-            s2.advance().currentChar match
-              case Some('=') => Some((2, mk(TExpr.Gte.apply)))
-              case _ => Some((1, mk(TExpr.Gt.apply)))
+            s.advance().currentChar match
+              case Some('=') => op(2, TExpr.Gte.apply)
+              case _ => op(1, TExpr.Gt.apply)
           case _ => None
-        operator match
-          case None => Right((acc, s2))
-          case Some((consumed, build)) =>
-            // GH-56: each chained comparison deepens the AST spine — count it (see parseAddSub).
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance(consumed))
-                parseConcatenation(s3) match
-                  case Right((right, s4)) => loop(build(acc, right), s4)
-                  case Left(err) => Left(err)
-      loop(left, s1)
-    }
+    )
 
   /**
    * Parse concatenation operator: & (left-associative).
@@ -344,118 +435,42 @@ object FormulaParser:
    * `=A1&B1&C1` round-trips without the printer inventing grouping parens.
    */
   private def parseConcatenation(state: ParserState): ParseResult[TExpr[?]] =
-    parseAddSub(state).flatMap { case (left, s1) =>
-      @tailrec
-      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
-        val s2 = skipWhitespace(s)
-        s2.currentChar match
-          case Some('&') =>
-            // GH-56: each chained segment deepens the AST spine — count it (see parseAddSub).
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseAddSub(s3) match
-                  case Right((right, s4)) =>
-                    loop(TExpr.Concat(TExpr.asStringExpr(acc), TExpr.asStringExpr(right)), s4)
-                  case Left(err) => Left(err)
-          case _ => Right((acc, s2))
-      loop(left, s1)
-    }
+    parseChain(
+      state,
+      parseAddSub,
+      s =>
+        Option.when(s.currentChar.contains('&'))(
+          (1, (l, r) => TExpr.Concat(TExpr.asStringExpr(l), TExpr.asStringExpr(r)))
+        )
+    )
 
-  /**
-   * Parse addition and subtraction (left-associative).
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  /** An arithmetic operator whose operands keep RangeRef for array arithmetic. */
+  private def arithmetic(node: (TExpr[BigDecimal], TExpr[BigDecimal]) => TExpr[?]): ChainOperator =
+    (1, (l, r) => node(TExpr.asNumericOrRangeExpr(l), TExpr.asNumericOrRangeExpr(r)))
+
+  /** Parse addition and subtraction (left-associative). */
   private def parseAddSub(state: ParserState): ParseResult[TExpr[?]] =
-    parseMulDiv(state).flatMap { case (left, s1) =>
-      @tailrec
-      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
-        val s2 = skipWhitespace(s)
-        s2.currentChar match
-          case Some('+') =>
-            // GH-56: each chained term deepens the left-nested AST, so count it against the depth
-            // budget — otherwise a flat `1+1+1+…` overflows the evaluator (the parser loops, but
-            // eval recurses the spine).
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseMulDiv(s3) match
-                  case Right((right, s4)) =>
-                    loop(
-                      TExpr.Add(
-                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                        TExpr.asNumericOrRangeExpr(right)
-                      ),
-                      s4
-                    )
-                  case Left(err) => Left(err)
-          case Some('-') if !s2.remaining.startsWith("->") =>
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseMulDiv(s3) match
-                  case Right((right, s4)) =>
-                    loop(
-                      TExpr.Sub(
-                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                        TExpr.asNumericOrRangeExpr(right)
-                      ),
-                      s4
-                    )
-                  case Left(err) => Left(err)
-          case _ => Right((acc, s2))
+    parseChain(
+      state,
+      parseMulDiv,
+      s =>
+        s.currentChar match
+          case Some('+') => Some(arithmetic(TExpr.Add.apply))
+          case Some('-') if !s.remaining.startsWith("->") => Some(arithmetic(TExpr.Sub.apply))
+          case _ => None
+    )
 
-      loop(left, s1)
-    }
-
-  /**
-   * Parse multiplication and division (left-associative).
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  /** Parse multiplication and division (left-associative). */
   private def parseMulDiv(state: ParserState): ParseResult[TExpr[?]] =
-    parseUnary(state).flatMap { case (left, s1) =>
-      @tailrec
-      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
-        val s2 = skipWhitespace(s)
-        s2.currentChar match
-          case Some('*') =>
-            // GH-56: count each chained factor against the depth budget (see parseAddSub).
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseUnary(s3) match
-                  case Right((right, s4)) =>
-                    loop(
-                      TExpr.Mul(
-                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                        TExpr.asNumericOrRangeExpr(right)
-                      ),
-                      s4
-                    )
-                  case Left(err) => Left(err)
-          case Some('/') =>
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseUnary(s3) match
-                  case Right((right, s4)) =>
-                    loop(
-                      TExpr.Div(
-                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                        TExpr.asNumericOrRangeExpr(right)
-                      ),
-                      s4
-                    )
-                  case Left(err) => Left(err)
-          case _ => Right((acc, s2))
-
-      loop(left, s1)
-    }
+    parseChain(
+      state,
+      parseUnary,
+      s =>
+        s.currentChar match
+          case Some('*') => Some(arithmetic(TExpr.Mul.apply))
+          case Some('/') => Some(arithmetic(TExpr.Div.apply))
+          case _ => None
+    )
 
   /**
    * Parse exponentiation (LEFT-associative, highest binary arithmetic precedence).
@@ -469,27 +484,14 @@ object FormulaParser:
    * subtraction is unaffected: 0-2^2 = -4.
    */
   private def parsePow(state: ParserState): ParseResult[TExpr[?]] =
-    parseSigned(state).flatMap { case (first, s1) =>
-      @tailrec
-      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
-        val s2 = skipWhitespace(s)
-        s2.currentChar match
-          case Some('^') =>
-            // GH-56: each chained power deepens the left-nested spine — count it (see parseAddSub)
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseSigned(s3) match
-                  case Right((right, s4)) =>
-                    loop(
-                      TExpr.Pow(TExpr.asNumericExpr(acc), TExpr.asNumericExpr(right)),
-                      s4.copy(depth = s2.depth)
-                    )
-                  case Left(err) => Left(err)
-          case _ => Right((acc, s2))
-      loop(first, s1)
-    }
+    parseChain(
+      state,
+      parseSigned,
+      s =>
+        Option.when(s.currentChar.contains('^'))(
+          (1, (l, r) => TExpr.Pow(TExpr.asNumericExpr(l), TExpr.asNumericExpr(r)))
+        )
+    )
 
   /**
    * GH-355: parse postfix percent — Excel's tightest-binding operator (value ÷ 100).
@@ -500,8 +502,52 @@ object FormulaParser:
    * postfixes nest the AST like chained '+' terms, GH-56). The operand coerces numerically with
    * ranges preserved so `=A1:A3%` broadcasts through the array machinery.
    */
-  private def parsePostfix(state: ParserState): ParseResult[TExpr[?]] =
+  /**
+   * GH-669: parse the intersection operator — one or more U+0020 spaces between two references
+   * (`A1:C3 B2:D4`, `A:A 3:3`, two names `Jan Sales`). It binds tighter than every operator but `:`
+   * (Excel's order: `:` > space > `,` > negation > `%` > `^` > the rest), so it sits between the
+   * postfix level and the primaries, and folds left.
+   *
+   * A space is an intersection only when all of these hold — otherwise it is insignificant
+   * whitespace and the state before it is returned: the operand so far is a reference; the gap is
+   * spaces only (a tab or line feed never is); the next character can start a reference (a letter,
+   * `_`, `\`, `$`, `'`, `[`, `(`, a digit for `5:5`, or `#` opening an error literal — a deletion
+   * leaves `A1:B2 #REF!`); and it is not xl's lenient infix `AND`/`OR`. Every continuation that
+   * triggers was a parse error before, so no formula that parsed changes meaning. Once triggered,
+   * the right operand must be a reference too.
+   *
+   * Each intersection keeps the nesting level it takes, as a chained `%` does: the chain builds a
+   * left spine of intersection calls that the walkers recurse along (BinarySpine covers only the
+   * binary operators), so the chain shares the nesting budget instead of the operator budget. The
+   * levels end with the operand: [[parseChain]] resets the depth before a sibling term, so
+   * `A1 A1+A1 A1+…` costs one level per space in each term, never summed across terms.
+   */
+  private def parseIntersection(state: ParserState): ParseResult[TExpr[?]] =
     parsePrimary(state).flatMap { case (first, s1) =>
+      def triggers(s: ParserState, s2: ParserState): Boolean =
+        s2.pos > s.pos && s.input.substring(s.pos, s2.pos).forall(_ == ' ') &&
+          s2.currentChar.exists { c =>
+            c.isLetterOrDigit || "_\\$'[(".contains(c) ||
+            (c == '#' && parseErrorLiteral(s2).isRight)
+          } && !isKeywordAt(s2, "AND") && !isKeywordAt(s2, "OR")
+      @tailrec
+      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
+        val s2 = skipWhitespace(s)
+        if !(ReferenceOperators.isReferenceShape(acc) && triggers(s, s2)) then Right((acc, s))
+        else
+          descend(s2) match
+            case Left(err) => Left(err)
+            case Right(sd) =>
+              parsePrimary(sd).flatMap { case (right, s3) =>
+                ReferenceOperators.mkIntersection(acc, right, s2.pos).map((_, s3))
+              } match
+                case Right((node, s3)) => loop(node, s3.copy(depth = sd.depth))
+                case Left(err) => Left(err)
+      loop(first, s1)
+    }
+
+  private def parsePostfix(state: ParserState): ParseResult[TExpr[?]] =
+    parseIntersection(state).flatMap { case (first, s1) =>
       @tailrec
       def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
         val s2 = skipWhitespace(s)
@@ -606,15 +652,28 @@ object FormulaParser:
     s.currentChar match
       case None => Left(ParseError.UnexpectedEOF(s.pos, "expected expression"))
       case Some('(') =>
-        // Parenthesized expression
+        // Parenthesized expression — or, GH-669, a union of references `(A1,B2:C3)`: after the
+        // first element a `,` (or LibreOffice's xlsx spelling `~`, accepted here only and never
+        // printed) continues the group. Each element descends through parseExpr; the group itself
+        // adds no level. Any other character keeps the unbalanced-delimiter diagnosis.
+        @tailrec
+        def elements(acc: List[TExpr[?]], st: ParserState): ParseResult[List[TExpr[?]]] =
+          val sw = skipWhitespace(st)
+          sw.currentChar match
+            case Some(')') => Right((acc.reverse, sw.advance()))
+            case Some(',' | '~') if acc.nonEmpty =>
+              parseExpr(sw.advance()) match
+                case Right((next, after)) => elements(next :: acc, after)
+                case Left(err) => Left(err)
+            case Some(c) => Left(ParseError.UnbalancedDelimiter(sw.pos, c, "expected ')'"))
+            case None => Left(ParseError.UnexpectedEOF(sw.pos, "expected ')'"))
         val s2 = skipWhitespace(s.advance())
-        parseExpr(s2).flatMap { case (expr, s3) =>
-          val s4 = skipWhitespace(s3)
-          s4.currentChar match
-            case Some(')') => Right((expr, s4.advance()))
-            case Some(c) =>
-              Left(ParseError.UnbalancedDelimiter(s4.pos, c, "expected ')'"))
-            case None => Left(ParseError.UnexpectedEOF(s4.pos, "expected ')'"))
+        parseExpr(s2).flatMap { case (first, s3) =>
+          val unionAt = skipWhitespace(s3).pos
+          elements(List(first), s3).flatMap {
+            case (List(single), after) => Right((single, after))
+            case (areas, after) => ReferenceOperators.mkUnion(areas, unionAt).map((_, after))
+          }
         }
       case Some('"') =>
         // String literal
@@ -643,6 +702,9 @@ object FormulaParser:
       case Some('#') =>
         // GH-612: error literal (#REF!, #N/A, #DIV/0!, …)
         parseErrorLiteral(s)
+      case Some('{') =>
+        // GH-669: array constant ({1,2;3,4})
+        parseArrayConstant(s)
       case Some('@') =>
         // GH-604: implicit intersection — `@x` is the formula-bar spelling of `_xlfn.SINGLE(x)`.
         // The operand is one primary (a reference, name, call, or parenthesized expression), so
@@ -797,8 +859,11 @@ object FormulaParser:
 
     // Check for boolean literals
     ident match
-      case "TRUE" => Right((TExpr.Lit(true), s2))
-      case "FALSE" => Right((TExpr.Lit(false), s2))
+      // GH-669: `TRUE()`/`FALSE()` are calls (the registry's zero-argument TRUE and FALSE), so the
+      // text prints back as written; the bare word is the literal
+      case "TRUE" if !skipWhitespace(s2).currentChar.contains('(') => Right((TExpr.Lit(true), s2))
+      case "FALSE" if !skipWhitespace(s2).currentChar.contains('(') =>
+        Right((TExpr.Lit(false), s2))
       case _ =>
         // Check for sheet-qualified reference (identifier followed by '!')
         s2.currentChar match
@@ -809,6 +874,13 @@ object FormulaParser:
             // Not a boolean - check for function call (identifier followed by '(')
             val s3 = skipWhitespace(s2)
             s3.currentChar match
+              // GH-669: `A1 (B1:C2)` — a cell reference, a space, then a parenthesized reference —
+              // is an intersection, not a call to a function named A1: an ARef-shaped identifier
+              // that names no function and is not LET, separated from `(` by whitespace, is the
+              // reference, and the state before the whitespace goes back for parseIntersection.
+              // `LOG10 (x)` and `ATAN2 (…)` stay calls; `A1(` with no space is unchanged.
+              case Some('(') if s3.pos > s2.pos && isReferenceNotCall(ident) =>
+                parseCellReference(state.input.substring(startPos, s2.pos), s2, startPos)
               case Some('(') =>
                 // Function call
                 parseFunction(ident, s3, startPos)
@@ -828,6 +900,19 @@ object FormulaParser:
                   case None =>
                     // Cell reference
                     parseCellReference(rawIdent, s2, startPos)
+
+  /**
+   * GH-669: an identifier that is a cell reference and cannot be a function name (see above) — not
+   * a registered function, not LET, and not one of Excel's own cell-shaped function names that xl
+   * does not implement (`LOG10 (x)` stays an unknown-function error, never an intersection).
+   */
+  private def isReferenceNotCall(ident: String): Boolean =
+    val bare = FormulaStorage.bareFunctionName(ident)
+    ARef.parse(Anchor.parse(ident)._1).isRight && bare != "LET" &&
+    !CellShapedExcelFunctions.contains(bare) && FunctionRegistry.lookup(bare).isEmpty
+
+  /** Excel function names that are also valid cell addresses (column letters, row digits). */
+  private val CellShapedExcelFunctions = Set("LOG10")
 
   /**
    * Parse function call: FUNC(arg1, arg2, ...)
@@ -1058,7 +1143,10 @@ object FormulaParser:
         // OOXML forbids ref-shaped defined names); name-shaped failure means NameRef; anything
         // else (e.g. '$' inside the token) keeps today's InvalidCellRef. Reuses the LET name
         // shape (letter/underscore start, [A-Za-z0-9_]*, not TRUE/FALSE/AND/OR/NOT).
-        if isValidLetName(refStr) then Right((TExpr.NameRef(refStr), state))
+        // GH-669: NOT reaches here only where it is not the prefix operator (isNotKeywordAt) —
+        // then it is a defined name, as Excel reads it
+        if isValidLetName(refStr) || refStr.equalsIgnoreCase("NOT") then
+          Right((TExpr.NameRef(refStr), state))
         else Left(ParseError.InvalidCellRef(refStr, startPos, err))
 
   /**
@@ -1157,34 +1245,86 @@ object FormulaParser:
               readRef(s.advance())
             case _ => s
 
-        val s2 = readRef(state)
-        val refPart = state.input.substring(refStartPos, s2.pos)
+        val s1 = readRef(state)
+        val written = state.input.substring(refStartPos, s1.pos)
 
-        if refPart.isEmpty then
-          Left(ParseError.InvalidCellRef(s"$sheetStr!", startPos, "missing cell reference after !"))
-        else if refPart.contains(':') then
-          // Range reference: Sheet1!A1:B10
-          CellRange.parse(refPart) match
-            case Right(range) =>
-              // GH-612: keep the whole-column / whole-row form the text spelled (a corner range
-              // over every row/column canonicalises to it, as Excel does at entry)
-              Right((TExpr.SheetRange(sheetName, range, RangeForm.of(refPart, range)), s2))
-            case Left(err) =>
-              Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
-        else
-          // Single cell reference: Sheet1!A1
-          val (cleanRef, anchor) = Anchor.parse(refPart)
-          ARef.parse(cleanRef) match
-            case Right(aref) =>
-              Right((TExpr.SheetPolyRef(sheetName, aref.asInstanceOf[ARef], anchor), s2))
-            case Left(err) =>
-              // GH-394: a name-shaped tail is a sheet-qualified defined name (=Model!case —
-              // legal Excel syntax for sheet-scoped names), resolved against the workbook at
-              // evaluation. Total disambiguation like parseCellReference: ARef success means
-              // cell ref, name-shaped failure means SheetNameRef, anything else keeps the
-              // InvalidCellRef.
-              if isValidLetName(refPart) then Right((TExpr.SheetNameRef(sheetName, refPart), s2))
-              else Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
+        // GH-669: `Sheet1!A1:Sheet1!B2` — the range's end repeats the sheet qualifier
+        // (LibreOffice and hand-written formulas spell it so): the same range as `Sheet1!A1:B2`.
+        // Two different sheets would be a 3-D reference, which xl does not implement — refused,
+        // never silently narrowed to one sheet.
+        def repeatedEnd: Either[ParseError, (String, ParserState)] =
+          val colon = written.lastIndexOf(':')
+          val qualifier: Option[(String, ParserState)] =
+            if colon < 0 then None
+            else if s1.currentChar.contains('!') && colon < written.length - 1 then
+              Some((written.substring(colon + 1), s1.advance()))
+            else if s1.currentChar.contains('\'') && colon == written.length - 1 then
+              quotedQualifier(s1)
+            else None
+          qualifier match
+            case None => Right((written, s1))
+            case Some((endSheet, afterBang)) if endSheet.equalsIgnoreCase(sheetStr) =>
+              val sEnd = readRef(afterBang)
+              val endRef = state.input.substring(afterBang.pos, sEnd.pos)
+              Right((written.substring(0, colon + 1) + endRef, sEnd))
+            case Some((endSheet, _)) =>
+              Left(
+                ParseError.InvalidCellRef(
+                  state.input.substring(startPos, s1.pos),
+                  startPos,
+                  s"a range's two ends must be on the same sheet ('$sheetStr' and '$endSheet'); " +
+                    "3-D references are not supported"
+                )
+              )
+
+        repeatedEnd match
+          case Left(err) => Left(err)
+          case Right((refPart, s2)) =>
+            if refPart.isEmpty then
+              Left(
+                ParseError.InvalidCellRef(s"$sheetStr!", startPos, "missing cell reference after !")
+              )
+            else if refPart.contains(':') then
+              // Range reference: Sheet1!A1:B10
+              CellRange.parse(refPart) match
+                case Right(range) =>
+                  // GH-612: keep the whole-column / whole-row form the text spelled (a corner range
+                  // over every row/column canonicalises to it, as Excel does at entry)
+                  Right((TExpr.SheetRange(sheetName, range, RangeForm.of(refPart, range)), s2))
+                case Left(err) =>
+                  Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
+            else
+              // Single cell reference: Sheet1!A1
+              val (cleanRef, anchor) = Anchor.parse(refPart)
+              ARef.parse(cleanRef) match
+                case Right(aref) =>
+                  Right((TExpr.SheetPolyRef(sheetName, aref.asInstanceOf[ARef], anchor), s2))
+                case Left(err) =>
+                  // GH-394: a name-shaped tail is a sheet-qualified defined name (=Model!case —
+                  // legal Excel syntax for sheet-scoped names), resolved against the workbook at
+                  // evaluation. Total disambiguation like parseCellReference: ARef success means
+                  // cell ref, name-shaped failure means SheetNameRef, anything else keeps the
+                  // InvalidCellRef.
+                  if isValidLetName(refPart) then
+                    Right((TExpr.SheetNameRef(sheetName, refPart), s2))
+                  else Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
+
+  /**
+   * GH-669: a quoted sheet qualifier at the cursor — `'My Sheet'!`, `''` escaping a quote — as the
+   * sheet name and the state after its `!`; None when the text is not one.
+   */
+  private def quotedQualifier(state: ParserState): Option[(String, ParserState)] =
+    @tailrec
+    def loop(s: ParserState, acc: StringBuilder): Option[(String, ParserState)] =
+      s.currentChar match
+        case None => None
+        case Some('\'') if s.advance().currentChar.contains('\'') =>
+          loop(s.advance(2), acc.append('\''))
+        case Some('\'') =>
+          val after = s.advance()
+          Option.when(after.currentChar.contains('!'))((acc.toString, after.advance()))
+        case Some(c) => loop(s.advance(), acc.append(c))
+    if state.currentChar.contains('\'') then loop(state.advance(), new StringBuilder) else None
 
   // ===== GH-353: external-workbook references =====
 
@@ -1396,6 +1536,87 @@ object FormulaParser:
           case _ => afterBody
         val text = state.input.substring(startPos, afterTerminator.pos)
         Left(ParseError.UnexpectedChar('#', startPos, s"unknown error literal '$text'"))
+
+  /**
+   * GH-669: parse an array constant — `{1,2;3,4}`: `,` separates the columns of a row, `;` the
+   * rows. As in Excel, every element is a constant (a number, optionally negative; text; TRUE or
+   * FALSE; an error value) and every row has the same width; a reference, an expression or an empty
+   * element is refused. The result is a literal array (`TExpr.Lit(ArrayResult)`), which the
+   * evaluator already treats as an array value and every reference walker as a leaf; the printer
+   * spells it back as written.
+   *
+   * @param state
+   *   Parser state positioned at the opening '{'
+   */
+  private def parseArrayConstant(state: ParserState): ParseResult[TExpr[?]] =
+    val startPos = state.pos
+    val expected = "an array element: a number, text, TRUE, FALSE or an error value"
+
+    // the scalar literal parsers' result as an element value
+    def constant(parsed: ParseResult[TExpr[?]], negate: Boolean) =
+      parsed.flatMap {
+        case (TExpr.Lit(n: BigDecimal), next) =>
+          Right((CellValue.Number(if negate then -n else n), next))
+        case (TExpr.Lit(text: String), next) => Right((CellValue.Text(text), next))
+        case (TExpr.ErrorLit(error), next) => Right((CellValue.Error(error), next))
+        case (_, next) => Left(ParseError.GenericError(expected, Some(next.pos)))
+      }
+
+    def element(s0: ParserState): Either[ParseError, (CellValue, ParserState)] =
+      val s = skipWhitespace(s0)
+      s.currentChar match
+        case Some('"') => constant(parseStringLiteral(s), negate = false)
+        case Some(c) if c.isDigit || c == '.' => constant(parseNumberLiteral(s), negate = false)
+        case Some('-') if s.advance().currentChar.exists(c => c.isDigit || c == '.') =>
+          constant(parseNumberLiteral(s.advance()), negate = true)
+        case Some('#') => constant(parseErrorLiteral(s), negate = false)
+        case Some(c) if c.isLetter =>
+          @tailrec
+          def word(w: ParserState): ParserState =
+            if w.currentChar.exists(ch => ch.isLetterOrDigit || ch == '_' || ch == '.') then
+              word(w.advance())
+            else w
+          val end = word(s)
+          s.input.substring(s.pos, end.pos).toUpperCase match
+            case "TRUE" => Right((CellValue.Bool(true), end))
+            case "FALSE" => Right((CellValue.Bool(false), end))
+            case _ => Left(ParseError.UnexpectedChar(c, s.pos, expected))
+        case Some(c) => Left(ParseError.UnexpectedChar(c, s.pos, expected))
+        case None => Left(ParseError.UnexpectedEOF(s.pos, expected))
+
+    @tailrec
+    def rows(
+      s: ParserState,
+      row: Vector[CellValue],
+      done: Vector[Vector[CellValue]]
+    ): Either[ParseError, (Vector[Vector[CellValue]], ParserState)] =
+      element(s) match
+        case Left(err) => Left(err)
+        case Right((value, next)) =>
+          val after = skipWhitespace(next)
+          val current = row :+ value
+          after.currentChar match
+            case Some(',') => rows(after.advance(), current, done)
+            case Some(';') => rows(after.advance(), Vector.empty, done :+ current)
+            case Some('}') => Right((done :+ current, after.advance()))
+            case Some(c) =>
+              Left(ParseError.UnexpectedChar(c, after.pos, "expected ',', ';' or '}'"))
+            case None => Left(ParseError.UnexpectedEOF(after.pos, "expected ',', ';' or '}'"))
+
+    descend(state).flatMap { sd =>
+      rows(sd.advance(), Vector.empty, Vector.empty).flatMap { case (grid, next) =>
+        val width = grid.headOption.map(_.size).getOrElse(0)
+        if grid.forall(_.size == width) then
+          Right((TExpr.Lit(ArrayResult(grid)), next.copy(depth = state.depth)))
+        else
+          Left(
+            ParseError.generic(
+              "every row of an array constant must have the same number of columns",
+              startPos
+            )
+          )
+      }
+    }
 
   /**
    * Suggest similar function names for unknown functions.

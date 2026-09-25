@@ -23,7 +23,8 @@ audit
     "externalRefs": [],
     "unresolvedReaders": [],
     "calcPr": null,
-    "iterativeCycles": []
+    "iterativeCycles": [],
+    "dataTableStale": []
   },
   "warnings": [],
   "error": null

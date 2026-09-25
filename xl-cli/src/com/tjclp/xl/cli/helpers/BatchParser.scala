@@ -7,7 +7,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, OpSpec, ScopedOp}
-import com.tjclp.xl.cli.commands.SheetCommands
+import com.tjclp.xl.cli.commands.{SheetCommands, WriteCommands}
 import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
@@ -23,7 +23,8 @@ import com.tjclp.xl.formula.{
   FormulaPrinter,
   FormulaShifter,
   ParseError,
-  SheetEvaluator
+  SheetEvaluator,
+  TExpr
 }
 import com.tjclp.xl.sheets.SheetEdits
 import com.tjclp.xl.ops.OffGridRef
@@ -437,7 +438,7 @@ object BatchParser:
                 case None => formula
             // GH-663: the putf verb's gate, applied to every shape as the document is parsed, so
             // `--dry-run` refuses the same text the write would
-            def parseable(formula: String, slot: String): String =
+            def parseable(formula: String, slot: Option[String]): String =
               val fullFormula = s"=${CellValue.canonicalFormulaText(formula)}"
               FormulaParser.parse(fullFormula) match
                 case Right(_) => formula
@@ -454,12 +455,12 @@ object BatchParser:
                         throw invalid(idx, s"'values[$i]' must be a string formula")
                       )
                     ),
-                    s" values[$i]"
+                    Some(s"values[$i]")
                   )
                 }
                 BatchOp.PutFormulas(ref, formulas, format)
               case _ =>
-                val formula = parseable(rejectDataTable(requireStringValue(objMap, idx)), "")
+                val formula = parseable(rejectDataTable(requireStringValue(objMap, idx)), None)
                 // Check for 'from' field for formula dragging
                 objMap.get("from").flatMap(_.strOpt) match
                   case Some(fromRef) => BatchOp.PutFormulaDragging(ref, formula, fromRef, format)
@@ -703,20 +704,20 @@ object BatchParser:
 
   /**
    * GH-663: a putf formula the parser rejects — `BATCH_OP_INVALID` (exit 2) carrying the verb's own
-   * diagnostic (`ParseError.formatWithContext`: the formula, the caret, the reason) on its own
-   * lines under the `Object N (putf)` line. The block is never indented or shifted: the CLI
-   * renderer prefixes only the first line (`Error: `), so any padding computed here would misplace
-   * the caret (PR #679 review). An unknown function's suggestions ride as `candidates`, as the
-   * verb's do.
+   * diagnostic ([[FormulaEcho.diagnostic]]: the formula capped at 80 characters, the caret, the
+   * reason — GH-681) on its own lines under the `Object N (putf)` line, `slot` naming the element
+   * of a `values` list. The block is never indented or shifted: the CLI renderer prefixes only the
+   * first line (`Error: `), so any padding computed here would misplace the caret (PR #679 review).
+   * An unknown function's suggestions ride as `candidates`, as the verb's do.
    */
   private def unparseableFormula(
     idx: Int,
-    slot: String,
+    slot: Option[String],
     error: ParseError,
     fullFormula: String
   ): CliException =
-    val heading = s"Object ${idx + 1} (putf)$slot: the formula does not parse"
-    val diagnostic = ParseError.formatWithContext(error, fullFormula)
+    val heading = s"Object ${idx + 1} (putf)${slot.fold("")(" " + _)}: the formula does not parse"
+    val diagnostic = FormulaEcho.diagnostic(error, fullFormula)
     val candidates = error match
       case ParseError.UnknownFunction(_, _, suggestions) => suggestions.toVector
       case _ => Vector.empty
@@ -1606,6 +1607,19 @@ object BatchParser:
       }
 
   /**
+   * The expression a putf drag shifts: the op's formula, canonicalised and parsed. Total (GH-681):
+   * `parseBatchJson`, the only constructor from the command line, already refused an unparseable
+   * formula as `BATCH_OP_INVALID`, so the Left is met only by an op built in code — and it is the
+   * putf verb's `FORMULA_ERROR`, quoting the formula capped as the gates do, never a bare
+   * `Exception` classified `INTERNAL`. Shared by the in-memory and the streaming applier.
+   */
+  private[cli] def dragExpression(formula: String): XLResult[TExpr[?]] =
+    val fullFormula = s"=${CellValue.canonicalFormulaText(formula)}"
+    FormulaParser.parse(fullFormula).left.map { e =>
+      XLError.FormulaError(FormulaEcho.sample(fullFormula), ParseError.describe(e))
+    }
+
+  /**
    * Apply formula with dragging to a range. GH-628: also reports every target cell whose shifted
    * formula gained a `#REF!` for a reference that left the grid.
    */
@@ -1617,9 +1631,6 @@ object BatchParser:
     fromRef: String,
     format: Option[NumFmt]
   ): IO[(Workbook, Vector[OffGridHit])] =
-    val formula = CellValue.canonicalFormulaText(formulaStr)
-    val fullFormula = s"=$formula"
-
     for
       rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
@@ -1629,11 +1640,9 @@ object BatchParser:
         ARef.parse(fromRef).left.map(e => new Exception(s"Invalid 'from' reference: $e"))
       )
 
-      // Parse the formula
+      // The TExpr the shift needs (dragExpression: total, typed)
       parsedExpr <- IO.fromEither(
-        FormulaParser.parse(fullFormula).left.map { e =>
-          new Exception(ParseError.formatWithContext(e, fullFormula))
-        }
+        dragExpression(formulaStr).left.map(err => CliException(CliError.fromXLError(err, None)))
       )
 
       // Apply formula with shifting, reporting the references the shift voided (GH-628)
@@ -2248,7 +2257,7 @@ object BatchParser:
           result <- updateNamedSheetE(wb, sheetName)(
             AppearanceOps.applyAutoFilter(_, Some(range), clear)
           )
-        yield result
+        yield if clear then result else AppearanceOps.syncFilterDatabase(result, sheetName, range)
       case None =>
         updateSheetE(wb, defaultSheetName, "autofilter")(
           AppearanceOps.applyAutoFilter(_, None, clear)

@@ -72,8 +72,8 @@ object ArrayLift:
 
 /**
  * How one element of a lifted array is handed to its slot — the conventions a cell reference gets
- * in that slot, so `f(range)[i]` equals `f(cell_i)` (except for numeric text and cached formula
- * cells, whose single-reference decoders predate lifting; ArrayLiftingLawsSpec pins both).
+ * in that slot, so `f(range)[i]` equals `f(cell_i)` (except for numeric text, whose
+ * single-reference numeric decoder predates lifting; ArrayLiftingLawsSpec pins it).
  */
 enum LiftSlot derives CanEqual:
   /** A typed slot: the element coerces to the target (`Coerced(Lit(element), target)`). */
@@ -324,7 +324,8 @@ object FunctionSpec:
     argSpec: ArgSpec[A0],
     referenceFn: (A0, EvalContext) => Either[EvalError, Any],
     evalFn: (A0, EvalContext) => Either[EvalError, A],
-    override val flags: FunctionFlags = FunctionFlags()
+    override val flags: FunctionFlags = FunctionFlags(),
+    renderFn: Option[(A0, ArgPrinter) => String] = None
   ) extends FunctionSpec[A]:
     type Args = A0
     def eval(args: A0, ctx: EvalContext): Either[EvalError, A] = evalFn(args, ctx)
@@ -333,15 +334,18 @@ object FunctionSpec:
       ctx: EvalContext
     ): Option[Either[EvalError, Any]] =
       Some(referenceFn(args, ctx))
+    override def render(args: A0, printer: ArgPrinter): String =
+      renderFn.map(_(args, printer)).getOrElse(super.render(args, printer))
 
   private[formula] def referencing[A, A0](
     name: String,
     arity: Arity,
-    flags: FunctionFlags = FunctionFlags()
+    flags: FunctionFlags = FunctionFlags(),
+    renderFn: Option[(A0, ArgPrinter) => String] = None
   )(referenceFn: (A0, EvalContext) => Either[EvalError, Any])(
     evalFn: (A0, EvalContext) => Either[EvalError, A]
   )(using spec: ArgSpec[A0]): FunctionSpec[A] { type Args = A0 } =
-    Referencing(name, arity, spec, referenceFn, evalFn, flags)
+    Referencing(name, arity, spec, referenceFn, evalFn, flags, renderFn)
 
 trait ExprCoercer[A]:
   def label: String

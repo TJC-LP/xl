@@ -190,9 +190,9 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
               val dfVal = df(r)
               if math.abs(dfVal) < 1e-14 then
                 Left(
-                  EvalError.EvalFailed(
+                  numError(
                     "RATE derivative is zero; cannot continue iteration",
-                    Some("RATE(nper, pmt, pv, [fv], [type], [guess])")
+                    "RATE(nper, pmt, pv, [fv], [type], [guess])"
                   )
                 )
               else

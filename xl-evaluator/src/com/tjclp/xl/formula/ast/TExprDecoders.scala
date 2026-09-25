@@ -206,7 +206,10 @@ trait TExprDecoders:
    *   - Boolean -> toString (true -> "TRUE", false -> "FALSE")
    *   - DateTime -> its Excel serial number as text (GH-561: dates are numbers; `">="&A1` with a
    *     date in A1 must read ">=46023", the form COUNTIFS/SUMIFS criteria compare against)
-   *   - Formula -> text representation
+   *   - Formula -> its cached value under these same rules (#671: Excel reads a formula cell's
+   *     value, never its text; a cached error refuses, so the caller carries it), "" when uncached
+   *     (only a data-table record reaches here uncached — the evaluator computes other formulas
+   *     before decoding)
    *   - Empty -> empty string
    */
   def decodeAsString(cell: Cell): Either[CodecError, String] =
@@ -216,7 +219,8 @@ trait TExprDecoders:
       case CellValue.Number(n) => scala.util.Right(ScalarCoercion.numberText(n))
       case CellValue.Bool(b) => scala.util.Right(if b then "TRUE" else "FALSE")
       case CellValue.DateTime(dt) => scala.util.Right(ScalarCoercion.dateSerialText(dt))
-      case CellValue.Formula(text, _, _) => scala.util.Right(text)
+      case CellValue.Formula(_, Some(cached), _) => decodeAsString(Cell(cell.ref, cached))
+      case CellValue.Formula(_, None, _) => scala.util.Right("")
       case CellValue.RichText(rt) => scala.util.Right(rt.toPlainText)
       case other => scala.util.Left(CodecError.TypeMismatch("String", other))
 

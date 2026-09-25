@@ -131,9 +131,24 @@ object StyleIndex:
     }.toMap
 
     val unifiedStyles = stylesBuilder.result()
+    val workbookDefaultFont = wb.metadata.defaultFont.getOrElse(Font.default)
+    (fromStyles(unifiedStyles, unifiedIndex, workbookDefaultFont), remappings)
 
-    // Deduplicate components using LinkedHashSet for O(1) deduplication (60-80% faster than .distinct)
-    // Optimization: Single-pass collection instead of three separate passes (was O(3n), now O(n))
+  /**
+   * The component tables of a fresh (source-less) styles.xml for an already-deduplicated cellXf
+   * list — `unified(i)` is cellXf `i`, `unified(0)` the default, `styleToIndex` its canonical-key
+   * index. Shared by the in-memory writer ([[fromWorkbookWithoutSource]]) and the streaming
+   * writer's style table (`StreamingXmlWriter.buildStyleTable`, GH-675), so the two cannot drift:
+   *   - font slot 0 is `defaultFont` and a style's `Font.default` sentinel resolves to it (GH-425);
+   *   - fonts, fills and borders dedup in first-occurrence order;
+   *   - custom number formats are declared at 164+ in first-occurrence order;
+   *   - every cellXf's numFmt reference is re-pointed through that rebuilt registry (GH-471).
+   */
+  private[xl] def fromStyles(
+    unified: Vector[CellStyle],
+    styleToIndex: Map[String, StyleId],
+    defaultFont: Font
+  ): StyleIndex =
     import scala.collection.mutable
     // GH-425: font slot 0 is the Normal font — the xfId-0 cellStyleXf hardcodes fontId=0 in
     // both serializer backends. Seed it, and resolve the Font.default sentinel on styles to
@@ -141,27 +156,23 @@ object StyleIndex:
     // table, so the emitters' fontMap.getOrElse(font, 0) resolves it to slot 0. With no
     // authored defaultFont this is byte-identical to the previous layout (CellStyle.default
     // is style 0, so Font.default already led the table).
-    val workbookDefaultFont = wb.metadata.defaultFont.getOrElse(Font.default)
     val (fontSet, fillSet, borderSet) = {
       val fonts = mutable.LinkedHashSet.empty[Font]
       val fills = mutable.LinkedHashSet.empty[Fill]
       val borders = mutable.LinkedHashSet.empty[Border]
-      fonts += workbookDefaultFont
-      unifiedStyles.foreach { style =>
-        fonts += (if style.font == Font.default then workbookDefaultFont else style.font)
+      fonts += defaultFont
+      unified.foreach { style =>
+        fonts += (if style.font == Font.default then defaultFont else style.font)
         fills += style.fill
         borders += style.border
       }
       (fonts, fills, borders)
     }
-    val uniqueFonts = fontSet.toVector
-    val uniqueFills = fillSet.toVector
-    val uniqueBorders = borderSet.toVector
 
     // Collect custom number formats (built-ins don't need entries)
     val customNumFmts = {
       val seen = mutable.LinkedHashSet.empty[String]
-      unifiedStyles.foreach { style =>
+      unified.foreach { style =>
         style.numFmt match
           case NumFmt.Custom(code) => seen += code
           case _ => ()
@@ -177,11 +188,11 @@ object StyleIndex:
     // format CODE): custom codes point at the rebuilt declaration; a raw id survives only when
     // it is a genuine built-in (< NumFmt.FirstCustomId, undeclared by definition). Without this,
     // non-contiguous source ids (194, 300, 407) ship undeclared and cells silently change
-    // display format. canonicalKey excludes numFmtId, so unifiedIndex stays valid as-is.
+    // display format. canonicalKey excludes numFmtId, so styleToIndex stays valid as-is.
     val customIdByCode: Map[String, Int] = customNumFmts.collect { case (id, NumFmt.Custom(code)) =>
       code -> id
     }.toMap
-    val remappedStyles = unifiedStyles.map { style =>
+    val remappedStyles = unified.map { style =>
       style.numFmt match
         case NumFmt.Custom(code) =>
           val rebuiltId = customIdByCode.get(code)
@@ -194,16 +205,14 @@ object StyleIndex:
           else style
     }
 
-    val styleIndex = StyleIndex(
-      uniqueFonts,
-      uniqueFills,
-      uniqueBorders,
+    StyleIndex(
+      fontSet.toVector,
+      fillSet.toVector,
+      borderSet.toVector,
       customNumFmts,
       remappedStyles,
-      unifiedIndex
+      styleToIndex
     )
-
-    (styleIndex, remappings)
 
   /**
    * Build style index for workbook with source, preserving original styles.

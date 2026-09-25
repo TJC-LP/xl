@@ -8,7 +8,6 @@ import com.tjclp.xl.cli.{Depth, Direction}
 import com.tjclp.xl.cli.contract.{CliError, CliException, CliSignal, ErrorCode, OutputMode, Payload}
 import com.tjclp.xl.cli.helpers.{Resolve, SheetResolver}
 import com.tjclp.xl.cli.output.RendererCommon
-import com.tjclp.xl.ooxml.PrintNames
 import com.tjclp.xl.ooxml.metadata.LightMetadata
 import com.tjclp.xl.sheets.FreezePane
 import com.tjclp.xl.styles.color.Color
@@ -54,15 +53,16 @@ object InspectCommands:
         Payload.text(describeText(lines, meta.definedNames, scope, meta.date1904, None))
 
   /**
-   * `describe --full`: the loaded book's [[WorkbookSummary]] — the light card plus every count. The
-   * defined names are the book's effective table ([[PrintNames.effective]]): the read lifted each
-   * sheet's modelable `_xlnm.Print_Area` / `_xlnm.Print_Titles` out of `metadata.definedNames` into
-   * its PageSetup (GH-259), so the loaded table alone omits the sheet-scoped names the light card
-   * and `names` read verbatim from workbook.xml (GH-667).
+   * `describe --full`: the loaded book's [[WorkbookSummary]] — the light card plus every count. Its
+   * defined names are the book's effective table (`Workbook.effectiveDefinedNames`, GH-674): the
+   * read lifted each sheet's modelable `_xlnm.Print_Area` / `_xlnm.Print_Titles` out of
+   * `metadata.definedNames` into its PageSetup (GH-259), and the summary re-derives them, so
+   * `--full` lists the sheet-scoped names the light card and `names` read verbatim from
+   * workbook.xml (GH-667).
    */
   def describe(wb: Workbook, mode: OutputMode): Payload =
     val summary = WorkbookSummary.of(wb)
-    val definedNames = PrintNames.effective(wb)
+    val definedNames = summary.definedNames
     val scope: Int => Option[String] = idx => wb.sheets.lift(idx).map(_.name.value)
     mode match
       case OutputMode.Json =>
@@ -339,7 +339,23 @@ object InspectCommands:
       "unresolvedReaders" -> refs(audit.unresolvedReaders),
       "calcPr" -> calcPrJson(audit.calcPr),
       // a note, not a finding: the book declares iterative calculation, so its cycles are intended
-      "iterativeCycles" -> ujson.Arr.from(audit.iterativeCycles.map(scc => refs(scc.members)))
+      "iterativeCycles" -> ujson.Arr.from(audit.iterativeCycles.map(scc => refs(scc.members))),
+      // #678, a note: interiors whose caches disagree with the corner re-evaluated at their inputs
+      "dataTableStale" -> ujson.Arr.from(audit.staleDataTables.map { t =>
+        ujson.Obj(
+          "sheet" -> ujson.Str(t.sheet.value),
+          "ref" -> ujson.Str(t.ref.toA1),
+          "sampled" -> ujson.Arr.from(t.sampled.map(r => ujson.Str(r.toA1))),
+          "stale" -> ujson.Arr.from(t.stale.map { (r, cached, recomputed) =>
+            ujson.Obj(
+              "ref" -> ujson.Str(r.toA1),
+              "cached" -> ujson.Str(StaleDataTable.show(cached)),
+              "recomputed" -> ujson.Str(StaleDataTable.show(recomputed))
+            )
+          }),
+          "message" -> ujson.Str(t.render)
+        )
+      })
     )
 
   /** The headline, then one section per non-empty bucket: findings first, notes after. */
@@ -348,10 +364,8 @@ object InspectCommands:
       if entries.isEmpty then Vector.empty
       else s"$title (${entries.size}):" +: entries.flatten.map(line => s"  $line")
     def one(text: String): Vector[String] = Vector(text)
-    // the cell on its own line, the parser's diagnostic (formula, caret, message) indented under it
-    val unparseable = audit.unparseable.map { (q, message) =>
-      q.toString +: message.linesIterator.map(line => s"  $line").toVector
-    }
+    // #676: one line per cell — the formula (capped) and the parser's reason, as lint prints it
+    val unparseable = audit.unparseable.map((q, message) => one(s"$q  $message"))
     val sections =
       section("Error values", audit.errorCells.map((q, e) => one(s"$q  ${e.toExcel}"))) ++
         section("Uncached formulas", audit.uncachedFormulas.map(q => one(q.toString))) ++
@@ -361,6 +375,13 @@ object InspectCommands:
         section(
           "Cycles (iterative calculation on, not a finding)",
           audit.iterativeCycles.map(scc => one(scc.members.mkString(", ")))
+        ) ++
+        section(
+          "Stale data tables (a note, not a finding)",
+          audit.staleDataTables.map { t =>
+            val where = s"${SheetName.quoteForFormula(t.sheet.value)}!${t.ref.toA1}"
+            one(s"$where  ${t.render}")
+          }
         ) ++
         section("Volatile", audit.volatile.map(q => one(q.toString))) ++
         section("Dynamic", audit.dynamic.map(q => one(q.toString))) ++

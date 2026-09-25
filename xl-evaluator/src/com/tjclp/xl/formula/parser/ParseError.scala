@@ -25,7 +25,8 @@ enum ParseError derives CanEqual:
    * @param context
    *   Surrounding context (e.g., "in arithmetic expression")
    *
-   * Example: "=SUM(A1@B2)" → UnexpectedChar('@', 7, "expected operator or ')'")
+   * Example: "=SUM(A1@B2)" → UnexpectedChar('@', 6, "expected ',' or ')'") — positions count from
+   * the expression after the leading '='
    */
   case UnexpectedChar(char: Char, position: Int, context: String)
 
@@ -162,6 +163,21 @@ enum ParseError derives CanEqual:
   case NestingTooDeep(depth: Int, maxDepth: Int)
 
   /**
+   * GH-680: too many binary operators in one formula — the guard on the length of the
+   * left-associative spine a flat operator chain builds (nesting is [[NestingTooDeep]]'s).
+   *
+   * @param count
+   *   The operator count reached
+   * @param maxCount
+   *   The maximum allowed per formula
+   * @param position
+   *   Character offset of the first operator over the limit
+   *
+   * Example: "=1+1+…" with 1100 `+` → TooManyOperators(1025, 1024, <offset of the 1025th `+`>)
+   */
+  case TooManyOperators(count: Int, maxCount: Int, position: Int)
+
+  /**
    * Generic parse error with custom message.
    *
    * Used for errors that don't fit other categories.
@@ -213,6 +229,8 @@ object ParseError:
         s"Formula too long: $len characters (max $max)"
       case NestingTooDeep(depth, max) =>
         s"Formula nesting too deep: $depth levels (max $max)"
+      case TooManyOperators(count, max, pos) =>
+        s"Too many chained operators at position $pos: $count in one formula (max $max)"
       case GenericError(msg, posOpt) =>
         posOpt.fold(msg)(pos => s"$msg at position $pos")
 
@@ -225,7 +243,7 @@ object ParseError:
    * {{{
    * =SUM(A1@B2)
    *        ^
-   * Unexpected character '@' at position 7: expected operator or ')'
+   * Unexpected character '@' at position 6: expected ',' or ')'
    * }}}
    */
   def formatWithContext(error: ParseError, formula: String): String =
@@ -241,13 +259,17 @@ object ParseError:
       case EmptyFormula => None
       case FormulaTooLong(_, _) => None
       case NestingTooDeep(_, _) => None
+      case TooManyOperators(_, _, pos) => Some(pos)
       case GenericError(_, pos) => pos
 
     val message = describe(error)
+    // GH-681: positions count from the expression the parser saw, which excludes the one leading
+    // '=' it strips; a position at the end of the text (a truncation) points one past it
+    val column = position.map(_ + (if formula.startsWith("=") then 1 else 0))
 
-    position match
-      case Some(pos) if pos >= 0 && pos < formula.length =>
-        val pointer = " " * pos + "^"
+    column match
+      case Some(col) if col >= 0 && col <= formula.length =>
+        val pointer = " " * col + "^"
         s"$formula\n$pointer\n$message"
       case _ =>
         s"$formula\n$message"

@@ -153,6 +153,40 @@ class GeneralTextSpec extends ScalaCheckSuite:
     }
   }
 
+  /** Unscaled values of up to 15 digits at scales across the whole Int range, both signs. */
+  private val genExtremeScale: Gen[BigDecimal] =
+    for
+      unscaled <- Gen.choose(1L, 999999999999999L)
+      scale <- Gen.oneOf(
+        Gen.choose(Int.MinValue + 64, Int.MinValue + 100000),
+        Gen.choose(Int.MaxValue - 100000, Int.MaxValue),
+        Gen.choose(-400, 400)
+      )
+      negative <- Gen.oneOf(true, false)
+    yield
+      val magnitude = BigDecimal(
+        new java.math.BigDecimal(java.math.BigInteger.valueOf(unscaled), scale)
+      )
+      if negative then -magnitude else magnitude
+
+  property(
+    "L8 extreme scales: grammar, bounded length and the sign law hold across the Int range"
+  ) {
+    // PR #679 review: the `1E-2147483647` overflow was found by inspection; this pins the whole
+    // scale range so it stays found
+    val grammar = "-?[0-9]+(\\.[0-9]+)?(E[+-][0-9]{2,})?".r
+    forAll(genExtremeScale) { (n: BigDecimal) =>
+      val text = NumFmtFormatter.generalText(n)
+      assert(grammar.matches(text), s"'$text' for $n")
+      assert(text.length <= 1 + 16 + 1 + 1 + 10, s"'$text' (${text.length} chars) for $n")
+      assertEquals(
+        NumFmtFormatter.generalText(-n),
+        if n.signum == 0 then "0" else if text.startsWith("-") then text.drop(1) else "-" + text,
+        s"$n"
+      )
+    }
+  }
+
   property("L3 sign: generalText(-n) == \"-\" + generalText(n) for n != 0; every zero is \"0\"") {
     forAll(genWideBigDecimal) { (n: BigDecimal) =>
       if n.signum == 0 then assertEquals(NumFmtFormatter.generalText(n), "0")

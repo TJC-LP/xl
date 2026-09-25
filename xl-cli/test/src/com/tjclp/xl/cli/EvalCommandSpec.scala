@@ -100,6 +100,16 @@ class EvalCommandSpec extends CatsEffectSuite:
     yield assert(result.contains("2"), s"Expected 2, got: $result")
   }
 
+  test("eval: an unparseable constant formula reads as the diagnostic, not a case class") {
+    ReadCommands.eval(Workbook.empty, None, "=FOOBAR(1)", Nil).attempt.map {
+      case Left(e) =>
+        assert(e.getMessage.contains("Unknown function 'FOOBAR' at position 0"), e.getMessage)
+        assert(e.getMessage.contains("Did you mean: FLOOR?"), e.getMessage)
+        assert(!e.getMessage.contains("UnknownFunction("), e.getMessage)
+      case Right(out) => fail(s"expected a parse failure, got $out")
+    }
+  }
+
   test("eval: only evaluates dependency closure (optimization)") {
     // Sheet with many formulas, but query only needs a few
     for
