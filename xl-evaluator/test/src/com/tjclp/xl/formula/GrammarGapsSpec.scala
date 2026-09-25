@@ -181,3 +181,9 @@ class GrammarGapsSpec extends FunSuite:
     assertEquals(plain("H21", "ISERROR({#N/A})"), Right(B(true)))
     assertEquals(plain("H23", "{#DIV/0!,1}"), Right(E("#DIV/0!")))
   }
+
+  test("GH-669 review: INDEX's refused first argument reports the call's own argument count") {
+    FormulaParser.parse("=INDEX(A1:A3+1+1,3)") match
+      case Left(ParseError.InvalidArguments("INDEX", _, _, got)) => assertEquals(got, "2 arguments")
+      case other => fail(s"expected InvalidArguments for INDEX, got $other")
+  }

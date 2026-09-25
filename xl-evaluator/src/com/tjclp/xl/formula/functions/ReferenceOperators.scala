@@ -81,8 +81,9 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
     ): Either[ParseError, (Operand, List[TExpr[?]])] =
       args match
         case head :: tail =>
-          ArgSpec.rangeLocation.parse(List(head), pos, fnName) match
-            case Right((location, _)) => Right((Left(location), tail))
+          // the whole list, so a refusal reports the call's own argument count
+          ArgSpec.rangeLocation.parse(args, pos, fnName) match
+            case Right((location, rest)) => Right((Left(location), rest))
             case Left(_) if acceptRight(head) => Right((Right(head.asInstanceOf[TExpr[Any]]), tail))
             case Left(err) => Left(err)
         case Nil => Left(ParseError.InvalidArguments(fnName, pos, describe, "0 arguments"))

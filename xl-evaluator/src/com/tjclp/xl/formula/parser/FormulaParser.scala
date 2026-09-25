@@ -78,8 +78,9 @@ import scala.annotation.tailrec
  *              | "(" expr ("," expr)* ")"             -- two or more: a union of references
  *              | "@" primary
  * }}}
- * Nesting — parentheses, arguments, prefix and postfix operators — is bounded by MaxNestingDepth; a
- * flat chain costs no level and the operator count is bounded instead (GH-680).
+ * Nesting — parentheses, arguments, prefix and postfix operators, intersections — is bounded by
+ * MaxNestingDepth; a flat chain of binary operators costs no level and the operator count is
+ * bounded instead (GH-680).
  *
  * @note
  *   Suppression rationale:
@@ -507,6 +508,10 @@ object FormulaParser:
    * leaves `A1:B2 #REF!`); and it is not xl's lenient infix `AND`/`OR`. Every continuation that
    * triggers was a parse error before, so no formula that parsed changes meaning. Once triggered,
    * the right operand must be a reference too.
+   *
+   * Each intersection keeps the nesting level it takes, as a chained `%` does: the chain builds a
+   * left spine of intersection calls that the walkers recurse along (BinarySpine covers only the
+   * binary operators), so the chain shares the nesting budget instead of the operator budget.
    */
   private def parseIntersection(state: ParserState): ParseResult[TExpr[?]] =
     parsePrimary(state).flatMap { case (first, s1) =>
@@ -527,7 +532,7 @@ object FormulaParser:
               parsePrimary(sd).flatMap { case (right, s3) =>
                 ReferenceOperators.mkIntersection(acc, right, s2.pos).map((_, s3))
               } match
-                case Right((node, s3)) => loop(node, s3.copy(depth = s2.depth))
+                case Right((node, s3)) => loop(node, s3.copy(depth = sd.depth))
                 case Left(err) => Left(err)
       loop(first, s1)
     }

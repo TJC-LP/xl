@@ -68,7 +68,9 @@ class RecursionGuardSpec extends FunSuite:
   private def assertTooDeep(formula: String): Unit =
     FormulaParser.parse(formula) match
       case Left(_: ParseError.NestingTooDeep) => ()
-      case other => fail(s"expected NestingTooDeep, got $other")
+      // never the parsed AST in the message: case-class toString recurses along a deep spine
+      case Right(_) => fail(s"expected NestingTooDeep, ${formula.take(40)}… parsed")
+      case Left(other) => fail(s"expected NestingTooDeep, got $other")
 
   test("the right-nested keyword chains still count every level") {
     assertTooDeep("=1" + (" AND 1" * 300)) // logical AND chain (a right-nested call spine)
@@ -196,5 +198,42 @@ class RecursionGuardSpec extends FunSuite:
         case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
           assertEquals(n, BigDecimal(terms))
         case other => fail(s"expected the recalculated chain, got ${other.map(_.getClass)}")
+    }
+  }
+
+  // GH-669 review: an intersection chain `A1 A1 A1 …` builds a left spine of intersection calls that
+  // the chain walkers do not unwind, so each space costs a nesting level like a postfix `%` does
+  test(
+    "GH-669: a 2700-term intersection chain is NestingTooDeep on a 1MB stack, never an overflow"
+  ) {
+    val formula = "=" + List.fill(2700)("A1").mkString(" ")
+    assert(formula.length <= 8192, formula.length)
+    val sheet = s.put(ARef.from1(1, 1), CellValue.Number(1))
+    onSmallStack {
+      assertTooDeep(formula)
+      assert(sheet.evaluateFormula(formula).isLeft)
+      val stored = sheet.put(ARef.from1(2, 2), CellValue.Formula(formula.drop(1), None))
+      assert(stored.evaluateWithDependencyCheck().isLeft)
+    }
+  }
+
+  test("GH-669: intersections share the nesting budget; the longest admitted chain walks safely") {
+    assertTooDeep("=" + List.fill(129)("A1").mkString(" "))
+    // the budget is per nesting scope: intersections in sibling chain operands add up
+    assertTooDeep("=" + List.fill(2)(List.fill(70)("A1").mkString(" ")).mkString("+"))
+    val formula = "=" + List.fill(127)("A1").mkString(" ")
+    val sheet = s.put(ARef.from1(1, 1), CellValue.Number(7))
+    onSmallStack {
+      val expr = assertRoundTrips(formula)
+      assertEquals(sheet.evaluateFormula(formula), Right(CellValue.Number(BigDecimal(7))))
+      assertEquals(DependencyGraph.extractDependencies(expr), Set(ARef.from1(1, 1)))
+      val shifted = FormulaShifter.shift(expr, 1, 1)
+      assertEquals(DependencyGraph.extractDependencies(shifted), Set(ARef.from1(2, 2)))
+      assertEquals(FormulaParser.parse(formula).map(_.hashCode), Right(expr.hashCode))
+      val stored = sheet.put(ARef.from1(2, 2), CellValue.Formula(formula.drop(1), None))
+      Workbook(stored).withCachedFormulas().sheets.headOption.map(_(ARef.from1(2, 2)).value) match
+        case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
+          assertEquals(n, BigDecimal(7))
+        case other => fail(s"expected the recalculated intersection, got ${other.map(_.getClass)}")
     }
   }
