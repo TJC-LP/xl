@@ -857,6 +857,83 @@ class LintCommandSpec extends CatsEffectSuite:
 
   // ========== #460 item 5: xl's own structural edits and the _FilterDatabase name ==========
 
+  test("#460: xl autofilter and the batch autofilter op rewrite the sheet's _FilterDatabase name") {
+    // Excel rewrites the hidden name whenever the filter range is set; xl's filter verbs must too,
+    // or `lint --strict` fails on a file xl itself produced
+    val source = repoRoot.resolve("xl-ooxml/test/resources/fixtures/autofilter.xlsx")
+    def entry(zip: Path, name: String): String =
+      val file = new java.util.zip.ZipFile(zip.toFile)
+      try new String(file.getInputStream(file.getEntry(name)).readAllBytes(), "UTF-8")
+      finally file.close()
+    // (label, the CLI args after -f/-o, stdin, the filter range the file must end up with)
+    val runs: Vector[(String, List[String], String, String)] = Vector(
+      ("autofilter verb", List("autofilter", "A1:B4"), "", "A1:B4"),
+      (
+        "batch autofilter op",
+        List("batch", "-"),
+        """[{"op":"autofilter","range":"A1:C10"}]""",
+        "A1:C10"
+      ),
+      (
+        "batch autofilter op, qualified range",
+        List("batch", "-"),
+        """[{"op":"autofilter","range":"Filtered!B2:C3"}]""",
+        "B2:C3"
+      )
+    )
+    runs.traverse_ { (label, args, stdin, range) =>
+      for
+        out <- IO(Files.createTempFile("lint-cli-filter-verb", ".xlsx"))
+        run <- contract.CliHarness
+          .run(List("-f", source.toString, "-s", "Filtered", "-o", out.toString) ++ args, stdin)
+        findings <- IO(WorkbookLint.lint(out).fold(err => fail(s"lint errored: $err"), identity))
+        sheetXml <- IO(entry(out, "xl/worksheets/sheet1.xml"))
+        workbookXml <- IO(entry(out, "xl/workbook.xml"))
+        _ <- IO(Files.deleteIfExists(out))
+      yield
+        assertEquals(run.exit, 0, s"$label: ${run.stderr}")
+        assert(sheetXml.contains(s"""<autoFilter ref="$range""""), s"$label: $sheetXml")
+        val absolute = range
+          .split(':')
+          .map(c =>
+            "$" + c.takeWhile(_.isLetter) + "$" +
+              c.dropWhile(_.isLetter)
+          )
+          .mkString(":")
+        assert(workbookXml.contains(s"!$absolute</definedName>"), s"$label: $workbookXml")
+        // still Excel's hidden sheet-scoped entry, and only one of it
+        assert(workbookXml.contains("""localSheetId="0""""), s"$label: $workbookXml")
+        assert(workbookXml.contains("""hidden="1""""), s"$label: $workbookXml")
+        assertEquals("_xlnm._FilterDatabase".r.findAllIn(workbookXml).size, 1, workbookXml)
+        val stale = findings.filter(_.category == LintCategory.AutoFilterNameMismatch)
+        assertEquals(stale, Vector.empty, s"$label: $stale")
+    }
+  }
+
+  test("#460: autofilter --clear leaves the _FilterDatabase name, as Excel does") {
+    val source = repoRoot.resolve("xl-ooxml/test/resources/fixtures/autofilter.xlsx")
+    for
+      out <- IO(Files.createTempFile("lint-cli-filter-clear", ".xlsx"))
+      run <- contract.CliHarness.run(
+        "-f",
+        source.toString,
+        "-s",
+        "Filtered",
+        "-o",
+        out.toString,
+        "autofilter",
+        "--clear"
+      )
+      wb <- ExcelIO.instance[IO].read(out)
+      _ <- IO(Files.deleteIfExists(out))
+    yield
+      assertEquals(run.exit, 0, run.stderr)
+      assertEquals(
+        wb.metadata.definedNames.filter(_.name == "_xlnm._FilterDatabase").map(_.formula),
+        Vector("'Filtered'!$A$1:$C$6")
+      )
+  }
+
   test("#460: xl's own row/column edits keep a filtered book's _FilterDatabase name in sync") {
     // the stale name is the class a range edit leaves behind; xl's structural verbs must not
     // produce it (the fixture carries a matching name for its A1:C6 filter)

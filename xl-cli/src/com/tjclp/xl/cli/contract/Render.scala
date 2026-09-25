@@ -46,7 +46,7 @@ object Render:
 
   def text(outcome: Outcome): Rendered =
     val stdout = outcome.payload.fold("") {
-      case Payload.Text(text, _, _) => text
+      case Payload.Text(text, _, _, _) => text
       case Payload.Json(value) => ujson.write(value, indent = 2)
       case Payload.Raw(json) => json
       // The rows are not in hand: [[stream]] writes them; nothing else may ask for this text

@@ -2187,7 +2187,8 @@ the verb) promotes them to the gate.
   filtered range by the name. A missing name (Excel itself re-saves the book without one) and a
   name left behind on a sheet with no autoFilter (Excel's own output after a filter is cleared)
   are not findings. xl's structural edits (`insert-rows`, `delete-cols`, …) move the name with the
-  filter, so they never introduce one
+  filter, and `autofilter <range>` (verb or batch op) rewrites an existing name to the new range as
+  Excel does; `autofilter --clear` leaves the name, which is Excel's own behaviour and not a finding
 
 **Exit codes**: `0` no repair findings (hygiene findings, if any, are listed and a `LINT_HYGIENE`
 warning counts them) · `1` repair findings reported — or, under `--strict`, any finding at all ·

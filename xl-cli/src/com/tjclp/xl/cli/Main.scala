@@ -2029,7 +2029,7 @@ EXAMPLES:
               )
               Outcome.signal(
                 cmd.verb,
-                Payload.text(summary),
+                Payload.Text(summary, None, false, strict.facts),
                 CliError(ErrorCode.RECALC_GATE, strictReason(summary)),
                 collected
               )
@@ -2068,8 +2068,8 @@ EXAMPLES:
     displayOpt: Option[Path]
   ): Payload =
     payload match
-      case Payload.Text(text, saved, written) =>
-        Payload.Text(renderWithTarget(text, outputOpt, displayOpt), saved, written)
+      case Payload.Text(text, saved, written, facts) =>
+        Payload.Text(renderWithTarget(text, outputOpt, displayOpt), saved, written, facts)
       case json: Payload.Json => json
       case raw: Payload.Raw => raw
       case streamed: Payload.Streamed => streamed // a read's table names no staging file
@@ -3029,18 +3029,24 @@ EXAMPLES:
                 case Some(query) =>
                   Reads.run(query, SheetSource.inMemory(wb), sheet.map(_.name.value), mode, warn)
                 case None =>
-                  executeCommand(
-                    wb,
-                    sheet,
-                    outputOpt,
-                    backendOpt,
-                    stream,
-                    cmd,
-                    policy,
-                    io,
-                    warn,
-                    mode
-                  ).map(Payload.text)
+                  cmd match
+                    case recalc: CliCommand.Recalc =>
+                      runRecalc(wb, outputOpt, backendOpt, stream, recalc, policy, warn).map {
+                        (text, facts) => Payload.Text(text, None, false, facts)
+                      }
+                    case _ =>
+                      executeCommand(
+                        wb,
+                        sheet,
+                        outputOpt,
+                        backendOpt,
+                        stream,
+                        cmd,
+                        policy,
+                        io,
+                        warn,
+                        mode
+                      ).map(Payload.text)
             yield payload
 
   /**
@@ -3294,7 +3300,7 @@ EXAMPLES:
             .run(query, SheetSource.inMemory(wb), sheetOpt.map(_.name.value), mode, warn)
             .flatMap(Payload.materialise(_))
             .map {
-              case Payload.Text(text, _, _) => text
+              case Payload.Text(text, _, _, _) => text
               case Payload.Raw(json) => json
               case Payload.Json(value) => ujson.write(value, indent = 2)
               case Payload.Streamed(_) => "" // gathered above: unreachable
@@ -3408,22 +3414,8 @@ EXAMPLES:
         WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy, io.stdin, warn)
       )
 
-    case CliCommand.Recalc(tables, parallel) =>
-      // A recalculation asked not to recalculate is a contradiction, not a no-op: say so rather
-      // than writing a file the caller will read as freshened (GH-468).
-      if policy.noRecalc then
-        IO.raiseError(
-          CliException(
-            CliError.usage(
-              "recalc cannot be combined with --no-recalc/--preserve-caches (it exists to rewrite caches). Drop the flag, or drop the recalc.",
-              None
-            )
-          )
-        )
-      else
-        requireOutput("recalc", outputOpt, backendOpt, stream)(
-          WriteCommands.recalc(wb, _, _, _, tables, policy, parallel, warn)
-        )
+    case recalc: CliCommand.Recalc =>
+      runRecalc(wb, outputOpt, backendOpt, stream, recalc, policy, warn).map(_._1)
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
       requireOutput("import", outputOpt, backendOpt, stream) {
@@ -3727,16 +3719,42 @@ EXAMPLES:
   private def outputRequired(message: String): CliException =
     CliException(CliError(ErrorCode.OUTPUT_REQUIRED, message))
 
-  private[cli] def requireOutput(
+  private[cli] def requireOutput[A](
     commandName: String,
     outputOpt: Option[Path],
     backendOpt: Option[XmlBackend],
     stream: Boolean = false
-  )(f: (Path, WriterConfig, Boolean) => IO[String]): IO[String] =
+  )(f: (Path, WriterConfig, Boolean) => IO[A]): IO[A] =
     val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
     outputOpt.fold(
-      IO.raiseError[String](outputRequired(missingOutputError(commandName)))
+      IO.raiseError[A](outputRequired(missingOutputError(commandName)))
     )(path => f(path, config, stream))
+
+  /** `recalc`: its summary plus the typed facts `--json` adds to it (#678). */
+  private def runRecalc(
+    wb: Workbook,
+    outputOpt: Option[Path],
+    backendOpt: Option[XmlBackend],
+    stream: Boolean,
+    cmd: CliCommand.Recalc,
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
+  ): IO[(String, Vector[(String, ujson.Value)])] =
+    // A recalculation asked not to recalculate is a contradiction, not a no-op: say so rather
+    // than writing a file the caller will read as freshened (GH-468).
+    if policy.noRecalc then
+      IO.raiseError(
+        CliException(
+          CliError.usage(
+            "recalc cannot be combined with --no-recalc/--preserve-caches (it exists to rewrite caches). Drop the flag, or drop the recalc.",
+            None
+          )
+        )
+      )
+    else
+      requireOutput("recalc", outputOpt, backendOpt, stream)(
+        WriteCommands.recalcReport(wb, _, _, _, cmd.tables, policy, cmd.parallel, warn)
+      )
 
   /**
    * Dispatch `run` with effective output path from --output / --in-place flags.

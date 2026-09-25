@@ -2250,7 +2250,7 @@ object BatchParser:
           result <- updateNamedSheetE(wb, sheetName)(
             AppearanceOps.applyAutoFilter(_, Some(range), clear)
           )
-        yield result
+        yield if clear then result else AppearanceOps.syncFilterDatabase(result, sheetName, range)
       case None =>
         updateSheetE(wb, defaultSheetName, "autofilter")(
           AppearanceOps.applyAutoFilter(_, None, clear)

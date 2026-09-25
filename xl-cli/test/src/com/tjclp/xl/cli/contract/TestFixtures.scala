@@ -56,6 +56,19 @@ object TestFixtures:
   def circularBook(): Workbook =
     Workbook(Vector(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None))))
 
+  /**
+   * #678: `A1 = 1/B1`, `B1 = 1/A1` with iterative calculation declared — the cycle converges in two
+   * rounds onto `#DIV/0!`, so `recalc` certifies it yet reports it as settled on error values.
+   */
+  def errorCycleBook(): Workbook =
+    Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"A1", CellValue.Formula("1/B1", None))
+          .put(ref"B1", CellValue.Formula("1/A1", None))
+      )
+    ).withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100)))
+
   /** `simpleBook` plus one workbook-scoped defined name, so `names` has something to list. */
   def namedBook(): Workbook = simpleBook().withDefinedName("Total", "Data!$B$4")
 
@@ -236,6 +249,7 @@ object TestFixtures:
     "single.xlsx" -> (() => singleSheetBook()),
     "inplace.xlsx" -> (() => simpleBook()),
     "circular.xlsx" -> (() => circularBook()),
+    "error-cycle.xlsx" -> (() => errorCycleBook()),
     "named.xlsx" -> (() => namedBook()),
     "linked.xlsx" -> (() => linkedBook()),
     "dirty.xlsx" -> (() => dirtyBook()),
