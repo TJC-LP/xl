@@ -1112,8 +1112,12 @@ top-left element, Excel's anchor value; the record's other cells keep their cach
 `putf` rejects a top-level `TABLE(` expression: `TABLE(...)` is a data-table record's derived display
 text, not a real function (Excel would show `#NAME?`); data-table *authoring* is tracked in GH-419.
 Writing any value or formula onto a record cell replaces the record; `copy` of a data-table cell
-pastes its cached constant (Excel's paste behavior) and `copy` of an array anchor pastes a plain
-shifted formula.
+pastes its cached constant (Excel's paste behavior). `copy`, `fill` and `sort` move a single-cell
+array formula as one, re-anchored at its target: `{=SUM($A$1:$A$3*10)}` copied to D5, or filled down
+B1:B5, is `{=...}` in every cell and computes the array value, as Excel pastes and fills it. A
+multi-cell array anchor pastes a plain shifted formula, which evaluates as a legacy formula
+(implicit intersection) and so can compute a different value from the anchor; the record's other
+cells paste their cached constants.
 
 ---
 

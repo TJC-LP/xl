@@ -274,6 +274,13 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   requires a cell reference"; a base that is no reference is `#VALUE!`.
 - **STDEV and VAR of fewer than two values are `#DIV/0!`** (STDEVP and VARP of none), as in Excel,
   where the evaluation failed and left the cell uncached.
+- **A copied, filled or sorted single-cell array formula stays an array formula**: `copy`, `fill`,
+  `sort`, the batch `copy` op and `Sheet.copyRange`/`fill`/`sort` pasted a `{=SUM($A$1:$A$3*10)}`
+  cell as a plain formula, which now evaluates as a legacy formula and computes something else
+  (`copy B1 D5` was `#VALUE!`, `fill B1 B1:B5` gave 60, 20, 30, `#VALUE!`, `#VALUE!`). As in
+  Excel, each pasted cell is `{=...}` anchored at itself, keeping the record's `aca`/`ca` flags,
+  and computes 60; `copy` and `fill --no-recalc` cache it by its kind. A multi-cell array anchor
+  still pastes a plain shifted formula.
 - **SUMPRODUCT's whole-column trimming (GH-192) reaches inside lifted arguments, `^` and `&`**:
   `SUMPRODUCT(--(A:A>0),ABS(B:B))` no longer mismatches dimensions. Rows past the used extent are
   dropped there too, so blanks beyond it are not counted (`SUMPRODUCT(--ISBLANK(A:A))`), as with

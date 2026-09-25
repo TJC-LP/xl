@@ -148,8 +148,8 @@ their variants are variadic: `=SUM(1,2,3)`, `=SUM(A1:A5, B1:B5)`, `=SUM(A1, 5, B
 nothing matches. `SUMPRODUCT` accepts array expressions such as `(A1:A5="Yes")*B1:B5`.
 
 **Statistics.** `STDEV`/`VAR` are the sample forms (n−1); `STDEVP`/`VARP` the population forms
-(n). Sample forms need at least two values, population forms at least one; both use Welford's
-algorithm for numerical stability. `LARGE`/`SMALL` take a 1-based `k`; `RANK` orders descending
+(n). With too few values (sample forms under two, population forms none) the result is `#DIV/0!`,
+as in Excel; both use Welford's algorithm for numerical stability. `LARGE`/`SMALL` take a 1-based `k`; `RANK` orders descending
 unless `order` is non-zero; `PERCENTILE` takes `p` in `[0, 1]` with inclusive interpolation;
 `QUARTILE` takes `quart` 0–4 (0 = min, 2 = median, 4 = max).
 
