@@ -23,8 +23,9 @@ import com.tjclp.xl.cli.contract.{CliError, ErrorCode, TestFixtures}
  * The shims are PATH scripts that answer the availability probe (`--version`, `--help`) and exit 1
  * with a message on stderr for a real conversion, without reading stdin. A child process is
  * resolved against its parent's PATH, so the end-to-end cases fork a JVM whose PATH starts with the
- * shim directory; the SVGs sent are larger than any pipe buffer, so the write cannot complete into
- * the buffer before the shim exits.
+ * shim directory. Each case runs with an SVG larger than any pipe buffer, so the write cannot
+ * complete into the buffer before the shim exits, and with one that fits the buffer, so the shim
+ * exits before stdin is closed (closing it then flushes into a stream the JDK has already shut).
  */
 class RasterSubprocessSpec extends FunSuite:
 
@@ -96,8 +97,8 @@ class RasterSubprocessSpec extends FunSuite:
       Files.deleteIfExists(out)
       Files.deleteIfExists(err)
 
-  /** `xl -f simple.xlsx view <a large range> --format <fmt> --rasterizer <backend>` in a fork. */
-  private def forcedView(shimDir: Path, backend: String, format: String): Forked =
+  /** `xl -f simple.xlsx view <range> --format <fmt> --rasterizer <backend>` in a fork. */
+  private def forcedView(shimDir: Path, backend: String, format: String, range: String): Forked =
     val fixtures = TestFixtures.materialize.unsafeRunSync()
     try
       fork(
@@ -108,7 +109,7 @@ class RasterSubprocessSpec extends FunSuite:
         "-s",
         "Data",
         "view",
-        "A1:Z1000",
+        range,
         "--format",
         format,
         "--raster-output",
@@ -118,43 +119,46 @@ class RasterSubprocessSpec extends FunSuite:
       )
     finally TestFixtures.delete(fixtures).unsafeRunSync()
 
-  shims.test("forced rsvg-convert that exits early: its stderr and exit, not INTERNAL") { dir =>
-    val run = forcedView(dir, "rsvg-convert", "png")
+  /** The sizes each forced case runs at: past the pipe buffer, and inside it. */
+  private val ranges = Vector("A1:Z1000" -> "large SVG", "A1:B2" -> "small SVG")
+
+  private def assertExitedEarly(run: Forked, backend: String): Unit =
     assertEquals(run.exit, 3, run.stderr)
     assert(
-      run.stderr.startsWith(s"Error: rsvg-convert conversion failed (exit 1): $shimMessage"),
+      run.stderr.startsWith(s"Error: $backend conversion failed (exit 1): $shimMessage"),
       run.stderr
     )
     assert(run.stderr.contains(s"code: ${ErrorCode.RASTERIZER_UNAVAILABLE}"), run.stderr)
     assert(!run.stderr.contains("Stream closed"), run.stderr)
     assert(!run.stderr.contains("\tat "), s"no stack trace: ${run.stderr}")
-  }
 
-  shims.test("forced cairosvg that exits early: its stderr and exit, not INTERNAL") { dir =>
-    val run = forcedView(dir, "cairosvg", "png")
-    assertEquals(run.exit, 3, run.stderr)
-    assert(
-      run.stderr.startsWith(s"Error: cairosvg conversion failed (exit 1): $shimMessage"),
-      run.stderr
-    )
-    assert(run.stderr.contains(s"code: ${ErrorCode.RASTERIZER_UNAVAILABLE}"), run.stderr)
-    assert(!run.stderr.contains("\tat "), s"no stack trace: ${run.stderr}")
-  }
+  for (range, size) <- ranges do
+    shims.test(s"forced rsvg-convert that exits early ($size): its stderr and exit, not INTERNAL") {
+      dir => assertExitedEarly(forcedView(dir, "rsvg-convert", "png", range), "rsvg-convert")
+    }
+
+    shims.test(s"forced cairosvg that exits early ($size): its stderr and exit, not INTERNAL") {
+      dir => assertExitedEarly(forcedView(dir, "cairosvg", "png", range), "cairosvg")
+    }
 
   shims.test("forced rsvg-convert asked for jpeg: a typed code, not INTERNAL") { dir =>
-    val run = forcedView(dir, "rsvg-convert", "jpeg")
+    val run = forcedView(dir, "rsvg-convert", "jpeg", "A1:Z1000")
     assertEquals(run.exit, 3, run.stderr)
     assert(run.stderr.startsWith("Error: rsvg-convert does not support jpeg format"), run.stderr)
     assert(run.stderr.contains(s"code: ${ErrorCode.RASTERIZER_UNAVAILABLE}"), run.stderr)
     assert(run.stderr.contains("--rasterizer"), run.stderr)
   }
 
-  shims.test("the default chain lists each backend's failure with its exit, not Stream closed") {
-    dir =>
+  for size <- Vector("large", "small") do
+    shims.test(
+      s"the default chain ($size SVG) lists each backend's failure with its exit, not Stream closed"
+    ) { dir =>
       val out = Files.createTempFile("xl-probe-", ".png")
       try
-        val run = fork(dir, "com.tjclp.xl.cli.raster.RasterShimProbe", out.toString)
+        val run = fork(dir, "com.tjclp.xl.cli.raster.RasterShimProbe", out.toString, size)
         assertEquals(run.exit, 0, run.stderr)
+        assert(!run.stderr.contains("\tat "), s"no stack trace: ${run.stderr}")
+        assert(!run.stderr.contains("Stream closed"), run.stderr)
         val lines = run.stdout.linesIterator.toVector
         assertEquals(lines.headOption, Some(ErrorCode.RASTERIZER_UNAVAILABLE), run.stdout)
         val message = lines.drop(1).mkString("\n")
@@ -163,7 +167,7 @@ class RasterSubprocessSpec extends FunSuite:
         assert(!message.contains("Stream closed"), message)
         assert(!message.contains("Broken pipe"), message)
       finally Files.deleteIfExists(out)
-  }
+    }
 
   test("FormatNotSupported classifies as RASTERIZER_UNAVAILABLE with the lever in the hint") {
     val err =
