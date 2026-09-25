@@ -375,6 +375,35 @@ class StreamingWriteSpec extends FunSuite:
       Files.deleteIfExists(outputPath)
   }
 
+  test("--stream putf of several formulas names the cell whose formula does not parse") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    try
+      val source = Sheet("Test").put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
+      ExcelIO.instance[IO].write(Workbook(source), sourcePath).unsafeRunSync()
+      val streamed = StreamingWriteCommands
+        .putFormula(sourcePath, outputPath, Some("Test"), "B2:B3", List("=1", "=FOOBAR(1)"))
+        .attempt
+        .unsafeRunSync()
+      // the in-memory verb's heading, so both paths name the offending cell the same way
+      val wb = Workbook(source)
+      val inMemory = WriteCommands
+        .putFormula(wb, wb.sheets.headOption, "B2:B3", List("=1", "=FOOBAR(1)"), outputPath, config)
+        .attempt
+        .unsafeRunSync()
+      (streamed, inMemory) match
+        case (Left(s), Left(m)) =>
+          assert(
+            s.getMessage.startsWith("Formula for B3: the formula does not parse"),
+            s.getMessage
+          )
+          assertEquals(s.getMessage, m.getMessage)
+        case other => fail(s"expected both paths to refuse the formula, got $other")
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+  }
+
   // ========== Style Preservation in Streaming Mode ==========
 
   test("streaming put: style preserved") {

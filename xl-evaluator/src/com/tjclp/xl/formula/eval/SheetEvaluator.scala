@@ -582,7 +582,7 @@ object SheetEvaluator:
         .map(parseError =>
           XLError.FormulaError(
             formula,
-            s"Parse error: $parseError"
+            s"Parse error: ${ParseError.describe(parseError)}"
           )
         )
 
@@ -620,7 +620,9 @@ object SheetEvaluator:
     FormulaParser
       .parse(canonical)
       .left
-      .map(parseError => XLError.FormulaError(formula, s"Parse error: $parseError"))
+      .map(parseError =>
+        XLError.FormulaError(formula, s"Parse error: ${ParseError.describe(parseError)}")
+      )
       .map { expr =>
         val withFormula = sheet.put(ref, CellValue.Formula(canonical))
         val currentStyle =
@@ -672,7 +674,7 @@ object SheetEvaluator:
       .map(parseError =>
         XLError.FormulaError(
           formula,
-          s"Parse error: $parseError"
+          s"Parse error: ${ParseError.describe(parseError)}"
         )
       )
 
