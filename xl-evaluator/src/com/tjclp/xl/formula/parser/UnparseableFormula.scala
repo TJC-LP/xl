@@ -27,23 +27,78 @@ import scala.annotation.tailrec
  * finding only when the TEXT shows the truncation — an open `(`, `{` or `[`, an unterminated `"…"`
  * or `'…'`, a trailing operator (`A1+`, `A1:`, `Sheet1!`): the parser may report it for a complete
  * text its grammar cannot finish — a grammar gap, not a repair (the bare word `NOT`, once one, is a
- * name since #669).
+ * name since #669). A text that overflows the parser's stack is a finding too ([[stackGuarded]],
+ * #681): the oracle fails closed.
  */
 object UnparseableFormula:
 
-  /**
-   * The oracle: the diagnostic for a text Excel repairs on open, `None` for every other text.
-   *
-   * Findings-preserving fast path (PR #679 review): each finding class has a cheap necessary
-   * precondition — UnexpectedEOF needs [[certainTruncation]], FormulaTooLong needs the length, the
-   * `]`/`}` arm needs one of those characters in the text — so a text meeting none is exactly the
-   * None the parse would return, and a well-formed book never pays for a parse per `<f>`.
-   */
+  /** The oracle: the diagnostic for a text Excel repairs on open, `None` for every other text. */
   val check: String => Option[String] = text =>
-    if !(certainTruncation(text) || text.length >= ExcelFormulaMaxChars ||
-        text.exists(ch => ch == ']' || ch == '}'))
-    then None
+    if !needsParse(text) then None
     else checkSlow(text)
+
+  /**
+   * Findings-preserving fast path (PR #679 review, #681): each finding class has a cheap necessary
+   * precondition — UnexpectedEOF needs [[certainTruncation]], FormulaTooLong needs the length, and
+   * the `]`/`}` arm needs such a closer met while a `(` is the innermost open bracket
+   * ([[closerMeetsParen]]) — so a text meeting none is exactly the `None` the parse would return,
+   * and a well-formed book never pays for a parse per `<f>`: not for `SUM(A1:A2)`, and not for a
+   * structured (`SUM(Table1[Amount])`) or external (`[1]Sheet1!A1`) reference either, whose `]`
+   * closes its own `[`. Parity with the parse is a property test.
+   */
+  private[xl] def needsParse(text: String): Boolean =
+    certainTruncation(text) || text.length >= ExcelFormulaMaxChars || closerMeetsParen(text)
+
+  /**
+   * True when, outside `"…"` strings and `'…'` names, a `]` or `}` arrives while a `(` is the
+   * innermost open bracket — the only place the parser reports the `UnbalancedDelimiter` arm (after
+   * a parenthesized expression, where everything opened inside it has been closed). A closer that
+   * matches no opener (`A1]`, `x)`) answers true too, so the parse decides: the scan only ever
+   * spares texts whose brackets nest cleanly. Tail-recursive, allocating one cell per open bracket.
+   */
+  private[xl] def closerMeetsParen(text: String): Boolean =
+    @tailrec
+    def scan(i: Int, quote: Char, justClosed: Char, open: List[Char]): Boolean =
+      if i >= text.length then false
+      else
+        val c = text.charAt(i)
+        if quote != NoQuote then
+          if c == quote then scan(i + 1, NoQuote, quote, open)
+          else scan(i + 1, quote, NoQuote, open)
+        else if c == justClosed then scan(i + 1, c, NoQuote, open) // `""` / `''`: still inside
+        else
+          c match
+            case '"' | '\'' => scan(i + 1, c, NoQuote, open)
+            case '(' | '[' | '{' => scan(i + 1, NoQuote, NoQuote, c :: open)
+            case ')' | ']' | '}' =>
+              open match
+                case top :: rest if top == openerOf(c) => scan(i + 1, NoQuote, NoQuote, rest)
+                case _ => true // a `(` meets `]`/`}` (the finding's shape), or a stray closer
+            case _ => scan(i + 1, NoQuote, NoQuote, open)
+    scan(0, NoQuote, NoQuote, Nil)
+
+  private def openerOf(closer: Char): Char = closer match
+    case ')' => '('
+    case ']' => '['
+    case _ => '{'
+
+  /**
+   * #681: lint is the tool pointed at untrusted files, and a `StackOverflowError` is not `NonFatal`
+   * — it would escape the lint's `XLResult` contract instead of becoming a finding. The parser's
+   * 128-level budget bounds its depth but not its frame size, so on a small thread stack (a fiber,
+   * a native image) the deepest legal nest can still overflow. The oracle fails CLOSED: a text the
+   * parser cannot hold is reported as unparseable (the gate is a ship check), with a diagnostic
+   * saying why. Only the stack overflow is converted; any other throwable is a bug and propagates.
+   */
+  private[xl] def stackGuarded(check: String => Option[String]): String => Option[String] =
+    text =>
+      try check(text)
+      catch case _: StackOverflowError => Some(StackExhausted)
+
+  /** The finding text for a `<f>` that overflowed the parser's stack. */
+  private val StackExhausted =
+    "Formula nests too deeply to verify: the parser's stack overflowed on it (treated as " +
+      "unparseable)"
 
   /**
    * Excel's formula length limit: the parser refuses a text LONGER than this (`FormulaTooLong`);
@@ -52,7 +107,7 @@ object UnparseableFormula:
   private val ExcelFormulaMaxChars = 8192
 
   /** The parse-backed classification [[check]] short-circuits; exposed for the parity pin. */
-  private[xl] val checkSlow: String => Option[String] = text =>
+  private[xl] val checkSlow: String => Option[String] = stackGuarded { text =>
     FormulaParser.parse(s"=$text") match
       case Right(_) => None
       case Left(err: ParseError.UnexpectedEOF) if certainTruncation(text) =>
@@ -61,6 +116,7 @@ object UnparseableFormula:
       case Left(err @ ParseError.UnbalancedDelimiter(_, ']' | '}', _)) =>
         Some(ParseError.describe(err))
       case Left(_) => None
+  }
 
   /**
    * Does the formula TEXT itself show that it ends early? True when a `(`, `{` or `[` is still
