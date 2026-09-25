@@ -1765,13 +1765,13 @@ object WorkbookLint:
           part,
           LintCategory.AnchorArrayQualifierCorrupt,
           facts.firstLocator.getOrElse(""),
-          s"${facts.count} $noun(s) store Excel's error literal Sheet!#REF! as " +
-            s"_xlfn.ANCHORARRAY(Sheet!)REF! ($qualifiers; $sites) — a spill of a bare sheet " +
-            "qualifier, which Excel cannot parse. Written by xl 0.23.0–0.23.1; any in-memory xl " +
-            "edit (e.g. `xl -f f.xlsx -s <sheet> -o f.xlsx put …`) restores Sheet!#REF! in " +
-            "workbook.xml and in each worksheet it edits; an unedited worksheet, a write that " +
-            "changes nothing (`xl recalc` with every cache current) and a --stream write copy " +
-            "the part verbatim and keep it"
+          s"${facts.count} $noun(s) store a sheet-qualified error literal (Sheet!#REF!, " +
+            s"Sheet!#N/A, …) as _xlfn.ANCHORARRAY(Sheet!)REF! ($qualifiers; $sites) — a spill " +
+            "of a bare sheet qualifier, which Excel cannot parse. Written by xl 0.23.0–0.23.1; " +
+            "any in-memory xl edit (e.g. `xl -f f.xlsx -s <sheet> -o f.xlsx put …`) restores " +
+            "the literal in workbook.xml and in the formulas and the rules xl models of each " +
+            "worksheet it edits; an unedited worksheet, a rule xl carries verbatim, a write that " +
+            "changes nothing (`xl recalc` with every cache current) and a --stream write keep it"
         )
       )
 

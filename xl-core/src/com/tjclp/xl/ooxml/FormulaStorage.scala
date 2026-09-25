@@ -320,8 +320,18 @@ object FormulaStorage:
    * `corruptSpillQualifiers(text).nonEmpty` holds exactly when [[fromStored]] heals something, and
    * a lint or a writer gate built on it cannot disagree with the reader.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def corruptSpillQualifiers(text: String): Vector[String] =
+    // the lint runs this per formula site: a text naming no ANCHORARRAY call skips the unwrap scan
+    if !containsIgnoreCase(text, "ANCHORARRAY(") then Vector.empty
+    else corruptSpillQualifiersScan(text)
+
+  private def containsIgnoreCase(text: String, needle: String): Boolean =
+    (0 to text.length - needle.length).exists(i =>
+      text.regionMatches(true, i, needle, 0, needle.length)
+    )
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def corruptSpillQualifiersScan(text: String): Vector[String] =
     var found = Vector.empty[String]
     fromStoredWith(text, q => found = found :+ q)
     found

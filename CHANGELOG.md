@@ -278,7 +278,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   user name) into `_xlfn.ANCHORARRAY(Sheet1!)REF!`, which Excel does not know, and `xl lint`
   raised a false `xlfn-missing` finding on every such book. A bare sheet qualifier is never a
   spill operand now (`@Sheet1!#REF!` included), in every writer, the streaming paths and lint.
-  Pre-existing since the spill operator landed.
+  Pre-existing since the spill operator landed. Files 0.23.0–0.23.1 already corrupted heal: the
+  reader turns `_xlfn.ANCHORARRAY(Sheet!)REF!` back into `Sheet!#REF!` and the next in-memory edit
+  rewrites workbook.xml and each edited worksheet with the Excel spelling, and the new repair-tier
+  lint rule `anchorarray-qualifier-corrupt` finds the corruption where no edit has healed it yet
+  (an unedited worksheet, a rule xl carries verbatim, a no-op write, `--stream`).
 - **A raster backend that exits early prints no stack trace** (#673): rsvg-convert, cairosvg and
   ImageMagick (conversion and availability probe) now run through one `java.lang.Process` backend
   that writes stdin while draining stdout and stderr, so a backend exiting before it reads its SVG
