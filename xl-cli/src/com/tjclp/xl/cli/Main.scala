@@ -756,6 +756,11 @@ lenient reader accepts silently:
   - a sheet's hidden _xlnm._FilterDatabase name naming another range, sheet
     or #REF! than its <autoFilter ref> (a stale name; Excel opens the filter
     intact and keeps the name) [hygiene]
+  - _xlfn.ANCHORARRAY(Sheet!)REF! in <f>, a CF <formula>, a DV <formula1>/
+    <formula2> or a <definedName>: xl 0.23.0-0.23.1's rewrite of Excel's
+    Sheet!#REF! (text Excel cannot parse). Any in-memory xl edit restores
+    Sheet!#REF! in workbook.xml and in each worksheet it edits; an unedited
+    worksheet, a write that changes nothing and --stream writes keep it
 
 USAGE:
   xl lint report.xlsx
@@ -770,7 +775,7 @@ FINDING CATEGORIES:
   external-ref-dangling | defined-name-invalid | calc-chain-stale |
   xlfn-missing | empty-inline-str | mc-ignorable-undeclared |
   dxf-id-out-of-range | unreferenced-part | shared-string-orphan |
-  autofilter-name-mismatch
+  autofilter-name-mismatch | anchorarray-qualifier-corrupt
 
 SEVERITY (every finding carries one; --format json: "severity"):
   repair  = Excel repairs or refuses the file, or a reader misreads a value

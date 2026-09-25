@@ -1665,6 +1665,116 @@ class WorkbookLintSpec extends FunSuite:
     }
   }
 
+  // ===== GH-687: xl 0.23.x's _xlfn.ANCHORARRAY(Sheet!)REF! (anchorarray-qualifier-corrupt) =====
+
+  /**
+   * B1, C1, the cfRule `<formula>` and the dataValidation `<formula1>` carry the corruption; A1 is
+   * Excel's own `Sheet1!#REF!`, D1 a genuine spill, E1 a genuine qualified spill, F1 the corrupt
+   * text inside a string literal only.
+   */
+  private val corruptSpillSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1">
+      <c r="A1" t="e"><f>Sheet1!#REF!+1</f><v>#REF!</v></c>
+      <c r="B1" t="e"><f>_xlfn.ANCHORARRAY(Sheet1!)REF!+1</f><v>#REF!</v></c>
+      <c r="C1" t="e"><f>_xlfn.SINGLE(_xlfn.ANCHORARRAY('My Sheet'!))N/A</f><v>#N/A</v></c>
+      <c r="D1"><f>SUM(_xlfn.ANCHORARRAY(A1))</f><v>1</v></c>
+      <c r="E1"><f>SUM(_xlfn.ANCHORARRAY(Sheet1!A1))</f><v>1</v></c>
+      <c r="F1" t="str"><f>"_xlfn.ANCHORARRAY(Sheet1!)REF!"</f><v>x</v></c>
+    </row>
+  </sheetData>
+  <conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>_xlfn.ANCHORARRAY([1]Sheet1!)REF!=1</formula></cfRule></conditionalFormatting>
+  <dataValidations count="1"><dataValidation type="custom" sqref="D1:D3"><formula1>ISERROR(_xlfn.ANCHORARRAY(Sheet1!)REF!)</formula1></dataValidation></dataValidations>"""
+  )
+
+  /** The same slots in the spelling Excel writes (and xl restores). */
+  private val healedSpillSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1">
+      <c r="B1" t="e"><f>Sheet1!#REF!+1</f><v>#REF!</v></c>
+      <c r="C1" t="e"><f>_xlfn.SINGLE('My Sheet'!#N/A)</f><v>#N/A</v></c>
+      <c r="D1"><f>SUM(_xlfn.ANCHORARRAY(A1))</f><v>1</v></c>
+    </row>
+  </sheetData>
+  <conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>[1]Sheet1!#REF!=1</formula></cfRule></conditionalFormatting>
+  <dataValidations count="1"><dataValidation type="custom" sqref="D1:D3"><formula1>ISERROR(Sheet1!#REF!)</formula1></dataValidation></dataValidations>"""
+  )
+
+  private val corruptSpillWorkbookXml = workbookWithNames(
+    filterNameXml("_xlfn.ANCHORARRAY(Sheet1!)REF!") +
+      """<definedName name="Old">_xlfn.ANCHORARRAY(Sheet1!)REF!</definedName>""" +
+      """<definedName name="Fine">Sheet1!#REF!</definedName>"""
+  )
+
+  private def corruptCategory(findings: Vector[Finding]): Vector[Finding] =
+    findings.filter(_.category == LintCategory.AnchorArrayQualifierCorrupt)
+
+  test("GH-687: the 0.23.x corruption in <f>, <formula> and <formula1> is ONE repair finding") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> corruptSpillSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.AnchorArrayQualifierCorrupt))
+    val f = findings.head
+    assertEquals(f.severity, LintSeverity.Repair)
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    assertEquals(f.locator, """<c r="B1"><f>""")
+    assert(f.message.contains("4 formula(s)"), f.toString)
+    assert(f.message.contains("B1, C1, <cfRule><formula>, <dataValidation><formula1>"), f.toString)
+    // the qualifiers found, distinct and sorted
+    assert(f.message.contains("'My Sheet'!, Sheet1!, [1]Sheet1!"), f.toString)
+    assert(f.message.contains("_xlfn.ANCHORARRAY(Sheet!)"), f.toString)
+    assert(f.message.contains("Sheet!#REF!"), f.toString)
+    assert(f.message.contains("xl 0.23.0–0.23.1"), f.toString)
+    // the remedy, and the three writes that do not heal (AnchorArrayQualifierHealCliSpec pins each)
+    assert(f.message.contains("xl -f f.xlsx -s <sheet> -o f.xlsx put"), f.toString)
+    assert(f.message.contains("unedited worksheet"), f.toString)
+    assert(f.message.contains("xl recalc"), f.toString)
+    assert(f.message.contains("--stream"), f.toString)
+    assertEquals(LintCategory.AnchorArrayQualifierCorrupt.slug, "anchorarray-qualifier-corrupt")
+  }
+
+  test("GH-687: the corruption in <definedName> bodies is a repair finding on workbook.xml") {
+    val findings = lintOf(baseParts + ("xl/workbook.xml" -> corruptSpillWorkbookXml))
+    val corrupt = corruptCategory(findings)
+    assertEquals(corrupt.size, 1, findings.toString)
+    val f = corrupt.head
+    assertEquals(f.severity, LintSeverity.Repair)
+    assertEquals(f.part, "xl/workbook.xml")
+    assertEquals(f.locator, """<definedName name="_xlnm._FilterDatabase">""")
+    assert(f.message.contains("2 defined name(s)"), f.toString)
+    assert(f.message.contains(""""_xlnm._FilterDatabase", "Old""""), f.toString)
+    assert(!f.message.contains("Fine"), f.toString)
+    // not a bare post-2007 call: xlfn-missing stays silent
+    assert(!findings.exists(_.category == LintCategory.XlfnMissing), findings.toString)
+  }
+
+  test("GH-687: Excel's own Sheet!#REF!, genuine spills and string literals are clean") {
+    assertEquals(
+      lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> healedSpillSheetXml)),
+      Vector.empty[Finding]
+    )
+    assertEquals(
+      corruptCategory(
+        lintOf(
+          baseParts + ("xl/workbook.xml" -> workbookWithNames(
+            """<definedName name="Fine">Sheet1!#REF!</definedName>""" +
+              """<definedName name="Spill">_xlfn.ANCHORARRAY(Sheet1!$A$1)</definedName>"""
+          ))
+        )
+      ),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("GH-687: streaming mode reports the corruption identically (cells, CF, DV, names)") {
+    val parts = baseParts +
+      ("xl/worksheets/sheet1.xml" -> corruptSpillSheetXml) +
+      ("xl/workbook.xml" -> corruptSpillWorkbookXml)
+    assertEquals(lintStreamOf(parts), lintOf(parts))
+    assertEquals(
+      corruptCategory(lintStreamOf(parts)).map(_.part),
+      Vector("xl/workbook.xml", "xl/worksheets/sheet1.xml")
+    )
+  }
+
   // ===== GH-460: empty inline strings (openpyxl's serialization of value="") =====
 
   private val emptyInlineSheetXml = worksheetWith(
@@ -2623,6 +2733,13 @@ class WorkbookLintSpec extends FunSuite:
     "bare xlfn defined name" -> (baseParts + ("xl/workbook.xml" -> bareNameWorkbookXml)),
     "half-prefixed LET cell" ->
       (baseParts + ("xl/worksheets/sheet1.xml" -> halfPrefixedLetSheetXml)),
+    // GH-687: the 0.23.x ANCHORARRAY(Sheet!) corruption rides the same formula-text sites
+    "corrupt anchorarray qualifiers" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> corruptSpillSheetXml)),
+    "healed anchorarray qualifiers" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> healedSpillSheetXml)),
+    "corrupt anchorarray defined names" ->
+      (baseParts + ("xl/workbook.xml" -> corruptSpillWorkbookXml)),
     // the root element is never a formula-text site, in either scanner
     "root-level formula element" ->
       (baseParts + ("xl/worksheets/sheet1.xml" -> rootFormulaSheetXml)),

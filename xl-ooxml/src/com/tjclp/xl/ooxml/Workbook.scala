@@ -397,10 +397,12 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   /**
    * GH-593: does any `<definedName>` body in the raw element still lack its storage prefix
    * ([[FormulaStorage.bareFutureCalls]] non-empty — exactly the text [[buildDefinedNames]] would
-   * spell differently)? Total; false on every Excel-authored table.
+   * spell differently)? GH-687: or carry xl 0.23.x's `_xlfn.ANCHORARRAY(Sheet!)REF!`, which the
+   * reader heals to `Sheet!#REF!` — the model then agrees, so only this check regenerates the
+   * element ([[FormulaStorage.storageNeedsHealing]]). Total; false on every Excel-authored table.
    */
   def definedNamesNeedHealing(elem: Elem): Boolean =
-    (elem \ "definedName").exists(dn => FormulaStorage.bareFutureCalls(dn.text).nonEmpty)
+    (elem \ "definedName").exists(dn => FormulaStorage.storageNeedsHealing(dn.text))
 
   /**
    * Reconcile the date1904 declaration with the model (model wins, GH-243) while every other

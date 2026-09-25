@@ -76,10 +76,13 @@ object CfCodec:
    * `<cfvo type="formula">` val — still lack its storage prefix? The writer's CLEAN gate compares
    * models, and bare `IFS(` parses to the same model as `_xlfn.IFS(`; this is the storage-form half
    * of that gate, built on the lint's rule ([[FormulaStorage.bareFutureCalls]]) so gate and lint
-   * agree by construction. Total; false on every Excel-authored block, so those ride verbatim.
+   * agree by construction. GH-687: xl 0.23.x's `_xlfn.ANCHORARRAY(Sheet!)REF!` heals on read to the
+   * model of `Sheet!#REF!`, so it needs the same storage-form check
+   * ([[FormulaStorage.storageNeedsHealing]]). Total; false on every Excel-authored block, so those
+   * ride verbatim.
    */
   def needsStorageHealing(blocks: Seq[Elem]): Boolean =
-    def bare(text: String): Boolean = FormulaStorage.bareFutureCalls(text).nonEmpty
+    def bare(text: String): Boolean = FormulaStorage.storageNeedsHealing(text)
     def elems(e: Elem): Vector[Elem] = childElems(e).getOrElse(Vector.empty)
     def bareFormula(rule: Elem): Boolean = elems(rule).exists { child =>
       child.label == "formula" && bare(XmlUtil.getTextPreservingWhitespace(child))

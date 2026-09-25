@@ -2191,6 +2191,22 @@ the verb) promotes them to the gate.
   are not findings. xl's structural edits (`insert-rows`, `delete-cols`, …) move the name with the
   filter, and `autofilter <range>` (verb or batch op) rewrites an existing name to the new range as
   Excel does; `autofilter --clear` leaves the name, which is Excel's own behaviour and not a finding
+- **`anchorarray-qualifier-corrupt`** — `_xlfn.ANCHORARRAY(<qualifier>!)` (a spill of a bare
+  sheet qualifier: `_xlfn.ANCHORARRAY(Support!)REF!`, `_xlfn.SINGLE(_xlfn.ANCHORARRAY(Sheet1!))REF!`)
+  in a cell `<f>`, a CF `<formula>`, a DV `<formula1>`/`<formula2>` or a `<definedName>`: xl
+  0.23.0–0.23.1 rewrote Excel's `Sheet!#REF!` (a deleted target — `_xlnm._FilterDatabase`, a print
+  area, a user name) into that text on every in-memory write (#687). `ANCHORARRAY` takes a
+  reference and a bare qualifier is none, so the text is not a formula Excel can parse; severity
+  `repair`, inferred from Excel's handling of unparseable formula text (removed on open with the
+  repair prompt) and not verified in Excel itself — LibreOffice keeps it as an unparsed formula and
+  shows `#VALUE!` (verified). ONE finding per part (qualifiers, first-5 site sample, total count).
+  Since #687 the reader heals the text to `Sheet!#REF!`, so any in-memory edit (`xl -f f.xlsx -s
+  <sheet> -o f.xlsx put …`, a batch, a `recalc` that refreshes a cache on the sheet) restores
+  Excel's spelling in `xl/workbook.xml` and in each worksheet it edits. Three writes keep the
+  corruption, and the finding names them: a worksheet the write does not edit (copied verbatim), a
+  write that changes nothing (the clean-book verbatim copy — e.g. `recalc` with every cache already
+  current) and any `--stream` write (untouched parts are copied verbatim, and the transformed sheet's
+  other cells pass through as read)
 
 **Exit codes**: `0` no repair findings (hygiene findings, if any, are listed and a `LINT_HYGIENE`
 warning counts them) · `1` repair findings reported — or, under `--strict`, any finding at all ·
