@@ -543,12 +543,17 @@ evaluates each cell on its own) and a chain read from its far end stop at the ev
 `xl recalc` first to cache every value and paint it (`--eval` keeps the values of the rendered
 window's cells only, so it helps when those are the cells the rule reads).
 A rule xl does not paint yet (icon sets, above/below average, duplicate/unique values, Excel 2010+
-data bars, formatting outside xl's model) or whose formula fails is named in a `CF_NOT_RENDERED`
-warning and the picture is drawn without it; so is a top/bottom, scale or bar rule over a cell xl
-cannot compute, which is never painted from the other cells' statistics. The warning is
-informational: it never changes the exit code, `--strict` included. Conditional formatting paints
-but never changes layout: text overflow and autofit row heights come from the cells' own values
-and styles.
+data bars, formatting outside xl's model) or whose formula does not parse is named in a
+`CF_NOT_RENDERED` warning and the picture is drawn without it; so is a top/bottom, scale or bar
+rule over a cell xl cannot compute, which is never painted from the other cells' statistics. A
+cell-value, formula or text rule that cannot be evaluated for some cells (a precedent on a missing
+sheet, say) is still painted on the cells where it evaluates; its warning says `partly rendered`
+and names the first cell it failed at (`not rendered` when it failed for every cell). The warning
+is informational: it never changes the exit code, `--strict` included. Conditional formatting
+never moves cells: which neighbours text may spill into and the autofit row heights come from the
+cells' own values and styles — but, as in Excel, a rule's font or number format changes what a
+cell displays, so it can widen or narrow the cell's own spill and turn a number that no longer
+fits into `####`.
 
 ---
 
@@ -2217,8 +2222,10 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 
 Two rows worth spelling out:
 
-- `view --eval` evaluates **cell by cell**: the window's formulas and their precedents evaluate in
-  dependency order, and a formula that cannot evaluate (a circular reference inside that closure,
+- `view --eval` evaluates **cell by cell**: the window's formulas and their same-sheet precedents
+  evaluate in dependency order (a formula precedent on another sheet is read from its cached value,
+  or computed when it has none — run `xl recalc` to refresh a whole book), and a formula that
+  cannot evaluate (a circular reference inside that closure,
   a missing sheet, an unsupported function) no longer sinks the render. Every other formula shows
   its live value; the failing cell and the formulas that depend on it — which are not evaluated,
   so no stale cache is mixed in — show exactly what the file holds (the cached value, or the
@@ -2232,8 +2239,10 @@ Two rows worth spelling out:
   code the write verbs' `--strict` uses. The gate's message ends `; without --strict those cells
   show the file's values` and its hint reads `drop --strict to render the other cells live and
   see the failure as a warning`. The raster formats (png, jpeg, webp, pdf) never gate: under
-  `--strict` they still export and print the one `EVAL_FAILED` warning, exit `0`. A cycle
-  elsewhere on the sheet, outside the window's closure, affects neither. An internal evaluator
+  `--strict` they still export and print the one `EVAL_FAILED` warning, exit `0`. A cycle or a
+  failing formula elsewhere on the sheet, outside the window's closure, affects neither — with an
+  `INDIRECT` or `OFFSET` on the sheet every formula is evaluated (their targets are dynamic), but
+  only failures in the window's closure are reported. An internal evaluator
   defect in one cell (a throwable the evaluator should never raise) is contained the same way, as
   `Evaluation threw <class>: … at <cell> — an internal evaluator defect, not an Excel error value;
   please report it with the formula`, never an `INTERNAL` exit.
@@ -2276,7 +2285,7 @@ with the same seven keys every time:
 | `verb` | the subcommand path, e.g. `"view"`, `"sheets hide"`, `"cf add"` (best-effort for a usage error raised before dispatch) |
 | `version` | the `xl` version that produced the envelope |
 | `data` | the verb's payload (below) — always a JSON object; `null` on a failure |
-| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict`, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `CF_NOT_RENDERED` for a conditional-format rule a picture could not paint, `READER_WARNING`); `location` when known |
+| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict` or with it on a raster format, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `CF_NOT_RENDERED` for a conditional-format rule a picture could not paint, `READER_WARNING`); `location` when known |
 | `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
 
 **What `data` holds.** `data` is always a JSON object (`null` on a failure). A listing verb keys

@@ -257,11 +257,35 @@ class CfEvaluatorSpec extends ScalaCheckSuite:
     val sheet = withCf(column(num(1), num(2), num(3)), block("A1:A3", expr("Data!$A$1>5")))
     run(sheet, "A2:A3").unevaluated match
       case Vector(
-            CfUnevaluated(Some(1), "expression", _, CfUnevaluated.Reason.FormulaFailed(f, m))
+            report @ CfUnevaluated(
+              Some(1),
+              "expression",
+              _,
+              CfUnevaluated.Reason.FailedAt(cell, _, false)
+            )
           ) =>
-        assertEquals(f, "Data!$A$1>5")
-        assert(m.endsWith("(cell A2)"), m)
+        assertEquals(cell, ref"A2")
+        assert(report.message.contains(" not rendered: it could not be evaluated at A2"), report)
       case other => fail(s"expected one report for the expression, got $other")
+  }
+
+  test("a rule that fails for some cells is painted where it evaluates, and says so") {
+    // A2 and A4 read a missing sheet, so `A<n> < 4` cannot be evaluated there; A1 and A3 can
+    val sheet = withCf(
+      column(num(1), CellValue.Formula("Missing!A1"), num(3), CellValue.Formula("Missing!A2")),
+      block("A1:A4", cellIs(CfOperator.LessThan, "4"))
+    )
+    val ev = run(sheet, "A1:A4")
+    assertEquals(painted(ev), Set("A1", "A3"))
+    ev.unevaluated match
+      case Vector(
+            report @ CfUnevaluated(_, "cellIs", _, CfUnevaluated.Reason.FailedAt(cell, _, true))
+          ) =>
+        assertEquals(cell, ref"A2")
+        assert(report.message.contains(" partly rendered: it could not be evaluated at A2"), report)
+        assert(report.message.endsWith("it is painted on the cells where it evaluates"), report)
+        assert(!report.message.contains("formula '4'"), s"the operand did not fail: $report")
+      case other => fail(s"expected one partly-rendered report, got $other")
   }
 
   test("expression: an unknown function paints nothing and is reported, never thrown") {
@@ -428,9 +452,11 @@ class CfEvaluatorSpec extends ScalaCheckSuite:
     val ev = run(withCf(chain(300, cached = false), block("A1:A300", rule)), "A295:A300")
     assertEquals(painted(ev), Set.empty[String])
     ev.unevaluated match
-      case Vector(CfUnevaluated(Some(1), "cellIs", _, CfUnevaluated.Reason.FormulaFailed(f, m))) =>
-        assertEquals(f, "290", "a cell-value rule quotes its operand")
-        assert(m.contains("depth") && m.endsWith("(cell A295)"), m)
+      case Vector(
+            CfUnevaluated(Some(1), "cellIs", _, CfUnevaluated.Reason.FailedAt(cell, m, false))
+          ) =>
+        assertEquals(cell, ref"A295")
+        assert(m.contains("depth"), m)
       case other => fail(s"expected one report for the rule, got $other")
     val cached = run(withCf(chain(300, cached = true), block("A1:A300", rule)), "A295:A300")
     assertEquals(painted(cached), (295 to 300).map(i => s"A$i").toSet)

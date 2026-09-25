@@ -28,9 +28,10 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   a chain read from its far end, stops at the 100-level recursion guard and is reported: run
   `xl recalc` first). The new informational `CF_NOT_RENDERED` warning names every rule not painted
   — a kind xl does not paint yet (icon sets, above/below average, duplicate/unique values, Excel
-  2010+ data bars), a rule whose formula fails (naming the first cell), or a numeric rule over a
-  cell xl cannot compute, which is never painted from partial statistics nor affects another rule —
-  and never gates, `--strict` included. An engine failure degrades to an unpainted picture with
+  2010+ data bars), a rule whose formula does not parse, or a numeric rule over a cell xl cannot
+  compute, which is never painted from partial statistics nor affects another rule — and every
+  rule painted only where it could be evaluated (`partly rendered`, naming the first cell it failed
+  at). It never gates, `--strict` included. An engine failure degrades to an unpainted picture with
   that warning, never `INTERNAL`.
 - **Conditional-formatting library API**: `sheet.conditionalFormatOverlay(range)` and
   `sheet.evaluateConditionalFormats(range, workbook, clock)` produce a `CfOverlay` (engine:
@@ -144,7 +145,8 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   depend on it (not evaluated, so no stale cache is mixed in — dynamic `INDIRECT` readers included)
   show what the file holds, and one `EVAL_FAILED` warning names them. Under `--strict` the
   markdown/csv/json/html/svg renders gate with `RECALC_GATE` (nothing rendered); raster formats
-  warn. A cycle outside the window's closure no longer fails the view.
+  warn. A cycle or a failing formula outside the window's closure no longer fails the view, even
+  when an `INDIRECT` on the sheet makes every formula part of the evaluation.
 - **Array arguments are type-sound**: an array-valued expression reaching a numeric, integer,
   text, boolean or date argument (in `SUMPRODUCT`/`SUM` arguments, `IF` branches, `evala`) used to
   reach the function body as a raw cell value and throw a `ClassCastException` (ABS, ROUND, MOD,

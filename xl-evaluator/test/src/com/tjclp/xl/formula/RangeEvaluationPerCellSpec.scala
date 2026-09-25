@@ -202,16 +202,33 @@ class RangeEvaluationPerCellSpec extends FunSuite:
     assertEquals(result.values.get(ref"F3"), Some(CellValue.Error(CellError.Div0)))
   }
 
-  test("dynamic references widen the closure to every formula, still reporting the window only") {
+  test("dynamic references widen the evaluation to every formula, reporting the window's only") {
     val sheet = withCells(
       ref"K1" -> formula("B2*100"),
       ref"F2" -> formula("INDIRECT(\"K1\")+1"),
-      ref"K2" -> formula("Nope!A1")
+      ref"K2" -> formula("Nope!A1"),
+      ref"Z7" -> formula("Z8+1"),
+      ref"Z8" -> formula("Z7+1"),
+      ref"Z9" -> formula("Z7*2")
     )
     val result = sheet.evaluateForRangePerCell(range("F2:F2"))
     assertEquals(result.values, Map(ref"F2" -> num(501)))
-    // K2 is outside the window but inside the widened closure: its failure is reported
-    assertEquals(result.failures.map(_.ref), Vector(ref"K2"))
+    // K2's failure and the Z7/Z8 cycle (with its dependent Z9) are evaluated — the INDIRECT makes
+    // every formula a target — but none feeds the window, so none is reported
+    assert(result.isClean, result.summary)
+  }
+
+  test("a window formula reading an outside failure through INDIRECT reports the failure itself") {
+    val sheet = withCells(
+      ref"F2" -> formula("INDIRECT(\"K2\")+1"),
+      ref"K2" -> cached("Nope!A1", num(1)),
+      ref"Z7" -> formula("Z8+1"),
+      ref"Z8" -> formula("Z7+1")
+    )
+    val result = sheet.evaluateForRangePerCell(range("F2:F2"))
+    assertEquals(result.failures.map(_.ref), Vector(ref"F2"))
+    assertEquals(result.values, Map.empty[ARef, CellValue], "F2 must not read K2's stale cache")
+    assertEquals(result.blocked, Vector.empty[ARef])
   }
 
   test("a dynamic reader of a failed cell re-derives it and fails, never reading its stale cache") {

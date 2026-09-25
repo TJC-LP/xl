@@ -25,8 +25,9 @@ object WarningCode:
   val FLAG_IGNORED: String = "FLAG_IGNORED"
 
   /**
-   * `view --eval` without `--strict` could not evaluate some formulas of the window's closure: the
-   * failing cells and the formulas blocked behind them show the file's values, the rest is live.
+   * `view --eval` could not evaluate some formulas of the window's closure (without `--strict`, or
+   * with it on a raster format, which never gates): the failing cells and the formulas blocked
+   * behind them show the file's values, the rest is live.
    */
   val EVAL_FAILED: String = "EVAL_FAILED"
 

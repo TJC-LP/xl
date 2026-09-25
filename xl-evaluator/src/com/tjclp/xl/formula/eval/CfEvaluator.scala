@@ -44,12 +44,15 @@ final case class CfUnevaluated(
   reason: CfUnevaluated.Reason
 ) derives CanEqual:
 
-  /** One line naming the rule, where it applies and why it was not painted. */
+  /** One line naming the rule, where it applies and why it was not (or only partly) painted. */
   def message: String =
     val at = priority.fold("")(p => s" (priority $p)")
     val sqref = ranges.map(r => if r.start == r.end then r.start.toA1 else r.toA1)
     val where = if ranges.isEmpty then "" else s" on ${sqref.mkString(" ")}"
-    s"conditional format $kind$at$where not rendered: ${reason.describe}"
+    val verb = reason match
+      case CfUnevaluated.Reason.FailedAt(_, _, true) => "partly rendered"
+      case _ => "not rendered"
+    s"conditional format $kind$at$where $verb: ${reason.describe}"
 
 object CfUnevaluated:
   /** Why a rule was not painted. */
@@ -67,11 +70,22 @@ object CfUnevaluated:
     /** A rule no evaluation can paint: a one-operand between, a percentile outside 0..100. */
     case InvalidRule(message: String)
 
+    /**
+     * A cell-value, formula or text rule that could not be evaluated for some target cells: the
+     * first one, row-major, and why. `evaluatedElsewhere` is whether it evaluated for another cell
+     * of the window — then it is painted wherever it did, and only these cells go without it.
+     */
+    case FailedAt(cell: ARef, message: String, evaluatedElsewhere: Boolean)
+
     def describe: String = this match
       case NotModeled => "xl does not evaluate this rule (its kind or its formatting) yet"
       case FormulaFailed(formula, message) =>
         s"formula '${quoted(formula, 200)}' failed: ${quoted(message, 400)}"
       case InvalidRule(message) => message
+      case FailedAt(cell, message, elsewhere) =>
+        val scope =
+          if elsewhere then "; it is painted on the cells where it evaluates" else ""
+        s"it could not be evaluated at ${cell.toA1}: ${quoted(message, 400)}$scope"
 
   /** At most `max` characters of `text` (a formula may run to Excel's 8,192), never half a pair. */
   private def quoted(text: String, max: Int): String =
@@ -224,16 +238,29 @@ object CfEvaluator:
         .map(e => (e, compile(e, populations.getOrElse(e.block.index, Population.empty))))
       val rules = compiled.map { case (e, (rule, _)) => (e, rule) }
       val refused = compiled.collect { case (e, (_, Some(reason))) => e.key -> report(e, reason) }
-      val (paints, failures) = targets(blocks, window).foldLeft(
-        (Map.empty[ARef, CfPaint], Map.empty[(Int, Int, Int), CfUnevaluated])
-      ) { case ((painted, failed), ref) =>
-        val (acc, failedNow) = paintCell(ref, rules, populations, failed)
+      val (paints, failures, evaluated) = targets(blocks, window).foldLeft(
+        (
+          Map.empty[ARef, CfPaint],
+          Map.empty[(Int, Int, Int), CfUnevaluated],
+          Set.empty[(Int, Int, Int)]
+        )
+      ) { case ((painted, failed, ran), ref) =>
+        val (acc, failedNow, ranNow) = paintCell(ref, rules, populations, failed, ran)
         val next =
           if acc.dxf == Dxf() && acc.bar.isEmpty then painted
           else painted.updated(ref, CfPaint(acc.dxf, acc.bar))
-        (next, failedNow)
+        (next, failedNow, ranNow)
       }
-      val unevaluated = (unreadable ++ refused ++ failures.toVector).sortBy(_._1).map(_._2)
+      // a rule that failed for some cells says whether it evaluated for any other
+      val settled = failures.map { case (key, report) =>
+        report.reason match
+          case CfUnevaluated.Reason.FailedAt(cell, message, _) =>
+            key -> report.copy(reason =
+              CfUnevaluated.Reason.FailedAt(cell, message, evaluated(key))
+            )
+          case _ => key -> report
+      }
+      val unevaluated = (unreadable ++ refused ++ settled.toVector).sortBy(_._1).map(_._2)
       CfEvaluation(CfOverlay(paints), unevaluated)
 
     private def report(e: Entry, reason: CfUnevaluated.Reason): CfUnevaluated =
@@ -252,48 +279,64 @@ object CfEvaluator:
       ref: ARef,
       rules: Vector[(Entry, Compiled)],
       populations: Map[Int, Population],
-      failed: Map[(Int, Int, Int), CfUnevaluated]
-    ): (Acc, Map[(Int, Int, Int), CfUnevaluated]) =
-      rules.foldLeft((Acc.start, failed)) { case ((acc, failures), (entry, rule)) =>
-        if acc.stopped || !entry.block.covers(ref) then (acc, failures)
-        else
-          // the number a numeric rule sees here: the block's own reading of the cell
-          def value: Option[BigDecimal] =
-            populations.get(entry.block.index).flatMap(_.numbers.get(ref))
-          rule match
-            case Compiled.Formula(expr, text, dxf, stop) =>
-              test(expr, text, entry.block.anchor, ref) match
-                case Right(true) => (acc.matched(dxf, stop), failures)
-                case Right(false) => (acc, failures)
-                case Left(message) =>
-                  // the first failure of each rule, row-major; the rest of its cells still run
-                  val first =
-                    if failures.contains(entry.key) then failures
-                    else
-                      val reason =
-                        CfUnevaluated.Reason.FormulaFailed(text, s"$message (cell ${ref.toA1})")
-                      failures.updated(entry.key, report(entry, reason))
-                  (acc, first)
-            case Compiled.Top(threshold, bottom, dxf, stop) =>
-              val hit = (value, threshold) match
-                case (Some(v), Some(t)) => if bottom then v <= t else v >= t
-                case _ => false
-              (if hit then acc.matched(dxf, stop) else acc, failures)
-            case Compiled.Scale(points) =>
-              val painted = value.flatMap(scaleColor(points, _)).fold(acc) { argb =>
-                acc.copy(dxf = acc.dxf.orElse(Dxf(fill = Some(Fill.Solid(Color.Rgb(argb))))))
-              }
-              (painted, failures)
-            case Compiled.Bar(lo, hi, color, showValue) =>
-              val barred =
-                if acc.bar.isDefined then acc
-                else
-                  value.fold(acc)(v =>
-                    acc.copy(bar = Some(CfBar(barFraction(v, lo, hi), color, showValue)))
-                  )
-              (barred, failures)
-            case Compiled.Inert => (acc, failures)
+      failed: Map[(Int, Int, Int), CfUnevaluated],
+      evaluated: Set[(Int, Int, Int)]
+    ): (Acc, Map[(Int, Int, Int), CfUnevaluated], Set[(Int, Int, Int)]) =
+      rules.foldLeft((Acc.start, failed, evaluated)) { case ((acc, failures, ran), (entry, rule)) =>
+        val (nextAcc, nextFailures, ok) =
+          paintRule(ref, entry, rule, populations, acc, failures)
+        (nextAcc, nextFailures, if ok then ran + entry.key else ran)
       }
+
+    /**
+     * One rule's contribution to `ref`'s paint (the body of [[paintCell]]'s fold), and whether a
+     * formula rule evaluated for this cell.
+     */
+    private def paintRule(
+      ref: ARef,
+      entry: Entry,
+      rule: Compiled,
+      populations: Map[Int, Population],
+      acc: Acc,
+      failures: Map[(Int, Int, Int), CfUnevaluated]
+    ): (Acc, Map[(Int, Int, Int), CfUnevaluated], Boolean) =
+      if acc.stopped || !entry.block.covers(ref) then (acc, failures, false)
+      else
+        // the number a numeric rule sees here: the block's own reading of the cell
+        def value: Option[BigDecimal] =
+          populations.get(entry.block.index).flatMap(_.numbers.get(ref))
+        rule match
+          case Compiled.Formula(expr, text, dxf, stop) =>
+            test(expr, text, entry.block.anchor, ref) match
+              case Right(true) => (acc.matched(dxf, stop), failures, true)
+              case Right(false) => (acc, failures, true)
+              case Left(message) =>
+                // the first failure of each rule, row-major; the rest of its cells still run
+                val first =
+                  if failures.contains(entry.key) then failures
+                  else
+                    val reason = CfUnevaluated.Reason.FailedAt(ref, message, false)
+                    failures.updated(entry.key, report(entry, reason))
+                (acc, first, false)
+          case Compiled.Top(threshold, bottom, dxf, stop) =>
+            val hit = (value, threshold) match
+              case (Some(v), Some(t)) => if bottom then v <= t else v >= t
+              case _ => false
+            (if hit then acc.matched(dxf, stop) else acc, failures, false)
+          case Compiled.Scale(points) =>
+            val painted = value.flatMap(scaleColor(points, _)).fold(acc) { argb =>
+              acc.copy(dxf = acc.dxf.orElse(Dxf(fill = Some(Fill.Solid(Color.Rgb(argb))))))
+            }
+            (painted, failures, false)
+          case Compiled.Bar(lo, hi, color, showValue) =>
+            val barred =
+              if acc.bar.isDefined then acc
+              else
+                value.fold(acc)(v =>
+                  acc.copy(bar = Some(CfBar(barFraction(v, lo, hi), color, showValue)))
+                )
+            (barred, failures, false)
+          case Compiled.Inert => (acc, failures, false)
 
     // ========== Compilation ==========
 

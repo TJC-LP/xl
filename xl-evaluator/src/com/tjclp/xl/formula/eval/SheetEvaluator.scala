@@ -249,7 +249,7 @@ object SheetEvaluator:
       rangePlan(sheet, range, workbook) match
         // If no formulas in range, return empty (nothing to evaluate)
         case None => scala.util.Right(Map.empty)
-        case Some(RangePlan(rangeFormulaCells, graph, targetCells, dynamic)) =>
+        case Some(RangePlan(rangeFormulaCells, graph, _, targetCells, dynamic)) =>
           // Fail fast on any cycle in the sheet: the full graph is checked, since dependencies may
           // form cycles outside the range (evaluateForRangePerCell narrows this to the closure)
           DependencyGraph.detectCycles(graph) match
@@ -407,12 +407,14 @@ object SheetEvaluator:
 
   /**
    * What a range evaluation evaluates: the range's formula cells, the sheet's dependency graph, the
-   * target formulas (the range's formulas plus their transitive formula precedents) and the sheet's
+   * range's static closure (its formulas plus their transitive formula precedents), the target
+   * formulas (the closure, or every formula when the sheet has dynamic references) and the sheet's
    * dynamic cells.
    */
   private final case class RangePlan(
     rangeFormulaCells: Set[ARef],
     graph: DependencyGraph,
+    closure: Set[ARef],
     targets: Set[ARef],
     dynamic: Set[ARef]
   )
@@ -434,10 +436,9 @@ object SheetEvaluator:
       // computed in order (correctness over narrowness; results still report only the range).
       val dynamic = dynamicCellsFor(sheet, workbook)
       val allFormulaCells = graph.dependencies.keySet
-      val targets =
-        if dynamic.isEmpty then rangeFormulaCells ++ (transitiveDeps & allFormulaCells)
-        else allFormulaCells
-      RangePlan(rangeFormulaCells, graph, targets, dynamic)
+      val closure = rangeFormulaCells ++ (transitiveDeps & allFormulaCells)
+      val targets = if dynamic.isEmpty then closure else allFormulaCells
+      RangePlan(rangeFormulaCells, graph, closure, targets, dynamic)
     }
 
   private def isFormula(value: CellValue): Boolean = value match
@@ -449,7 +450,10 @@ object SheetEvaluator:
    * targets fail as circular and block their dependents; the rest evaluates in topological order
    * against a threaded sheet. A failure blocks its transitive dependents, and every failed or
    * blocked cell loses its cache on the threaded sheet, so a dynamic reader (INDIRECT, invisible to
-   * the static graph) re-derives it and fails too instead of reading a stale value.
+   * the static graph) re-derives it and fails too instead of reading a stale value. Only failures
+   * and blocked cells in the range's static closure are reported: with dynamic references every
+   * formula is a target, but one that feeds the range only through a dynamic read makes that reader
+   * — in the closure — fail on its own, so an unrelated failure elsewhere stays silent.
    */
   private def evaluateForRangePerCellImpl(
     sheet: Sheet,
@@ -459,7 +463,7 @@ object SheetEvaluator:
   ): RangeEvalResult =
     rangePlan(sheet, range, workbook) match
       case None => RangeEvalResult(Map.empty, Vector.empty, Vector.empty)
-      case Some(RangePlan(rangeFormulaCells, graph, targets, dynamic)) =>
+      case Some(RangePlan(rangeFormulaCells, graph, closure, targets, dynamic)) =>
         def formulaText(ref: ARef): String = sheet(ref).value match
           case CellValue.Formula(expression, _, _) => expression
           case _ => ref.toA1
@@ -515,8 +519,8 @@ object SheetEvaluator:
         def rowMajor(ref: ARef): (Int, Int) = (ref.row.index0, ref.col.index0)
         RangeEvalResult(
           values,
-          failures.sortBy(failed => rowMajor(failed.ref)),
-          blocked.toVector.sortBy(rowMajor)
+          failures.filter(failed => closure(failed.ref)).sortBy(failed => rowMajor(failed.ref)),
+          blocked.filter(closure).toVector.sortBy(rowMajor)
         )
 
   /**
