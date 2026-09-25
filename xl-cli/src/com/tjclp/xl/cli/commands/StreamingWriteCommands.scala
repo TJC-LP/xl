@@ -10,7 +10,7 @@ import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
-import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, ParseError}
+import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter}
 import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
@@ -762,9 +762,7 @@ object StreamingWriteCommands:
             val parsedExpr = FormulaParser.parse(fullFormula) match
               case Right(expr) => expr
               case Left(e) =>
-                throw new Exception(
-                  s"Invalid formula '$fullFormula': ${ParseError.formatWithContext(e, fullFormula)}"
-                )
+                throw new Exception(WriteCommands.unparseableFormula(e, fullFormula, ""))
 
             // Apply formula with shifting; GH-356: the explicit format lands on each cell's own xf
             val startCol = Column.index0(fromARef.col)

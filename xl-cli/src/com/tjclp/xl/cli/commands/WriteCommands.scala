@@ -102,8 +102,10 @@ object WriteCommands:
     )
 
   /**
-   * A formula that does not parse: `FORMULA_ERROR` (with the evaluator's hint) keeping the message
-   * the CLI has always printed — the formula, a caret under the offending position, the reason.
+   * A formula that does not parse: `FORMULA_ERROR` (with the evaluator's hint) — a heading line,
+   * then the formula, a caret under the offending position and the reason. GH-681: the formula
+   * block starts its own line because the renderer prefixes the first line with `Error: `, which
+   * would put the caret that many columns left of the character it names.
    */
   private[cli] def formulaError(
     error: ParseError,
@@ -113,8 +115,16 @@ object WriteCommands:
     CliException(
       CliError
         .fromXLError(ParseError.toXLError(error, fullFormula), None)
-        .copy(message = prefix + ParseError.formatWithContext(error, fullFormula))
+        .copy(message = unparseableFormula(error, fullFormula, prefix))
     )
+
+  /** The heading line and the caret block of a formula that does not parse (GH-681). */
+  private[cli] def unparseableFormula(
+    error: ParseError,
+    fullFormula: String,
+    prefix: String
+  ): String =
+    s"${prefix}the formula does not parse\n${ParseError.formatWithContext(error, fullFormula)}"
 
   /**
    * Write workbook using the standard or SAX/StAX backend based on mode.

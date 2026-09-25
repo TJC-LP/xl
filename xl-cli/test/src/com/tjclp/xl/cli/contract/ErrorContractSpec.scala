@@ -544,14 +544,51 @@ class ErrorContractSpec extends CatsEffectSuite:
         )
       eval <- CliHarness.run("eval", "=SUM(")
     yield
-      assertFailure(putf, 3, "=SUM(", "FORMULA_ERROR")
+      assertFailure(putf, 3, "the formula does not parse", "FORMULA_ERROR")
       // the caret block: formula, pointer, the parser's diagnostic — the formula is not repeated;
-      // GH-681: the caret of a truncation sits one past the text, where the missing part belongs
-      assert(putf.stderr.contains("=SUM(\n     ^\n"), putf.stderr)
+      // GH-681: the caret of a truncation sits one past the text, where the missing part belongs.
+      // The formula starts its own line, so the caret's column is the formula's
+      assert(putf.stderr.contains("\n=SUM(\n     ^\n"), putf.stderr)
       assert(!putf.stderr.contains("Formula error in '=SUM(':"), putf.stderr)
       assert(putf.stderr.contains("  hint: check the formula with `xl eval`"), putf.stderr)
       assertEquals(eval.exit, 3, eval.stderr)
       assert(eval.stderr.contains("  code: FORMULA_ERROR"), eval.stderr)
+  }
+
+  test(
+    "GH-681: putf puts the caret under the unknown function's first letter, in memory and --stream"
+  ) {
+    def putf(extra: String*) =
+      CliHarness.run(
+        List("-f", file("simple.xlsx"), "-s", "Data", "-o", file("bad-fn.xlsx")) ++ extra ++
+          List("putf", "A1", "=FOOBAR(1)"),
+        ""
+      )
+    for
+      memory <- putf()
+      stream <- putf("--stream")
+    yield for run <- List(memory, stream) do
+      assertFailure(run, 3, "the formula does not parse", "FORMULA_ERROR")
+      assert(run.stderr.contains("\n=FOOBAR(1)\n ^\nUnknown function 'FOOBAR'"), run.stderr)
+  }
+
+  test(
+    "GH-669: a 2700-term intersection chain is a clean error on putf and batch, never a stack trace"
+  ) {
+    val chain = "=" + List.fill(2700)("A1").mkString(" ")
+    val batch = s"""[{"op":"putf","ref":"B1","value":"$chain"}]"""
+    val common = List("-f", file("simple.xlsx"), "-s", "Data", "-o", file("deep-x.xlsx"))
+    for
+      putf <- CliHarness.run(common ++ List("putf", "B1", chain), "")
+      streamed <- CliHarness.run(common ++ List("--stream", "putf", "B1", chain), "")
+      batched <- CliHarness.run(common ++ List("batch", "-"), batch)
+    yield
+      assertFailure(putf, 3, "the formula does not parse", "FORMULA_ERROR")
+      assertFailure(streamed, 3, "the formula does not parse", "FORMULA_ERROR")
+      assertFailure(batched, 2, "Object 1 (putf): the formula does not parse", "BATCH_OP_INVALID")
+      for run <- List(putf, streamed, batched) do
+        assert(run.stderr.contains("Formula nesting too deep"), run.stderr.take(2000))
+        assert(!run.stderr.contains("StackOverflowError"), run.stderr.take(2000))
   }
 
   test("a range where one cell is needed is INVALID_REFERENCE: cell, in memory and --stream") {
@@ -732,13 +769,17 @@ class ErrorContractSpec extends CatsEffectSuite:
       // …and it is the verb's own parser text, exit code aside (FORMULA_ERROR is the verb's),
       // verbatim under the op heading — never indented, so the caret keeps its column (PR #679)
       assertEquals(verb.exit, 3, verb.stdout)
-      val verbMessage = error(verb)("message").str
-      val underHeading = error(memory)("message").str.split("\n", -1).toList match
-        case heading :: rest =>
-          assertEquals(heading, "Object 2 (putf): the formula does not parse")
-          rest.mkString("\n")
-        case other => other.mkString("\n")
-      assertEquals(underHeading, verbMessage)
+      // GH-681: the verb heads its block the same way, so both carets keep the formula's column
+      def underHeading(message: String, expected: String): String =
+        message.split("\n", -1).toList match
+          case heading :: rest =>
+            assertEquals(heading, expected)
+            rest.mkString("\n")
+          case other => other.mkString("\n")
+      assertEquals(
+        underHeading(error(memory)("message").str, "Object 2 (putf): the formula does not parse"),
+        underHeading(error(verb)("message").str, "the formula does not parse")
+      )
       assert(!Files.exists(out("memory")), "the in-memory batch must not write on a refusal")
       assert(!Files.exists(out("stream")), "the streaming batch must not write on a refusal")
       assert(!Files.exists(out("verb")), "the verb must not write on a refusal")

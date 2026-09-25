@@ -7,7 +7,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, OpSpec, ScopedOp}
-import com.tjclp.xl.cli.commands.SheetCommands
+import com.tjclp.xl.cli.commands.{SheetCommands, WriteCommands}
 import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
@@ -1634,7 +1634,7 @@ object BatchParser:
       // failure, never a second, differently-coded gate (PR #679 review)
       parsedExpr <- IO.fromEither(
         FormulaParser.parse(fullFormula).left.map { e =>
-          new Exception(ParseError.formatWithContext(e, fullFormula))
+          new Exception(WriteCommands.unparseableFormula(e, fullFormula, ""))
         }
       )
 
