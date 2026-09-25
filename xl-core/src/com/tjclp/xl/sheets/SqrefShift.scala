@@ -93,9 +93,9 @@ private[xl] object SqrefShift:
   /**
    * Print one shifted sqref token in the shape Excel uses: full-column `A:C`, full-row `1:5`,
    * single cell `A1`, otherwise `A1:B2`. Only reached for tokens the shift CHANGED — identity
-   * tokens keep their original text.
+   * tokens keep their original text. The CLI diff prints its sqref keys with it.
    */
-  private def toSqrefToken(r: CellRange): String =
+  private[xl] def toSqrefToken(r: CellRange): String =
     if r.start == r.end then r.start.toA1
     else if r.isFullColumn then s"${r.start.col.toLetter}:${r.end.col.toLetter}"
     else if r.isFullRow then s"${r.start.row.index1}:${r.end.row.index1}"

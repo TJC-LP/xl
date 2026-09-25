@@ -170,7 +170,7 @@ object Cli:
     val diffOpts = (fileOpt, sheetOpt, maxSizeOpt, jsonOpt, diffCmd).mapN {
       (file, sheet, maxSize, mode, cmd) =>
         cmd match
-          case CliCommand.Diff(file2, format, formulasOnly) =>
+          case CliCommand.Diff(file2, format, formulasOnly, cellsOnly) =>
             runDiff(
               file,
               file2,
@@ -178,6 +178,7 @@ object Cli:
               maxSize,
               CliCommand.diffFormat(format, mode),
               formulasOnly,
+              cellsOnly,
               io,
               mode
             )

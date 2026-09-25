@@ -626,12 +626,24 @@ COMPARES (per sheet, refs in A1):
   - Added / removed cells
   - Sheets added / removed
   - Merged-range, comment, and hyperlink deltas
+  - Rows and columns: height / width, hidden, outlineLevel, collapsed, default style
+  - Sheet properties: defaultRowHeight, defaultColumnWidth, freezePanes, visibility
+  - Conditional formats and data validations, added / removed / changed by sqref
+  - Sheet order (of the sheets both books have) and defined names
 
 NOTES:
   - A formula cell whose text is unchanged but whose cached value differs, or is present on
     one side only, is a difference of kind "cache": what a recalculation, a --no-recalc edit
     or a cache-stripping writer produces. --formulas-only ignores caches (text-only rule).
   - Styles compare RESOLVED formatting, not raw style ids
+  - Sizes compare at 2 decimals in stored units (row points, <col width>): the explicit size,
+    else the sheet default, else Excel's stock 15pt row / 9.140625 column. A default change is
+    one sheet-property line, never a line per row
+  - Consecutive rows or columns with the same change collapse into one run: 5:200, K:XFD
+  - --cells-only compares cells, merges, comments and hyperlinks only, skipping all structure
+  - Not compared: view state (zoom, selection, scroll), tab colour, print setup, tables,
+    autofilter, drawings and charts, calculation settings, theme, document properties,
+    built-in _xlnm.* names
   - Both files load in memory (--max-size applies to each)
 
 EXIT CODES (diff-tool convention):
@@ -645,7 +657,9 @@ EXAMPLES:
   xl -f v1.xlsx diff -g v2.xlsx
   xl -f v1.xlsx diff -g v2.xlsx --format json | jq '.sheets[0].changed'
   xl -f model.xlsx diff -g recalc.xlsx --format json | jq '[.sheets[].changed[] | select(.kind == "cache")]'
+  xl -f v1.xlsx diff -g v2.xlsx --format json | jq '.sheets[].rows'
   xl -f v1.xlsx diff -g v2.xlsx --formulas-only         # text-only formula comparison
+  xl -f v1.xlsx diff -g v2.xlsx --cells-only            # cells only: skip sheet structure
   xl -f v1.xlsx diff -g v2.xlsx && echo "no changes\""""
 
   // --- Diff command (GH-137) ---
@@ -673,9 +687,19 @@ EXAMPLES:
       )
       .orFalse
 
+  private val cellsOnlyOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "cells-only",
+        "Compare cells only (values, formulas, caches, styles) plus merges, comments and " +
+          "hyperlinks: skip rows, columns, sheet properties, conditional formats, data " +
+          "validations, sheet order and defined names"
+      )
+      .orFalse
+
   val diffCmd: Opts[CliCommand] =
     Opts.subcommand("diff", diffHelp) {
-      (file2Opt, diffFormatOpt, formulasOnlyOpt).mapN(CliCommand.Diff.apply)
+      (file2Opt, diffFormatOpt, formulasOnlyOpt, cellsOnlyOpt).mapN(CliCommand.Diff.apply)
     }
 
   // --- Lint command (GH-397) ---
@@ -2595,6 +2619,7 @@ EXAMPLES:
     maxSizeOpt: Option[Long],
     format: DiffFormat,
     formulasOnly: Boolean = false,
+    cellsOnly: Boolean = false,
     io: CliIO = CliIO.system,
     mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
@@ -2614,6 +2639,7 @@ EXAMPLES:
         readerConfig,
         format,
         formulasOnly,
+        cellsOnly,
         io,
         mode
       )
@@ -2628,6 +2654,7 @@ EXAMPLES:
     readerConfig: ReaderConfig,
     format: DiffFormat,
     formulasOnly: Boolean,
+    cellsOnly: Boolean,
     io: CliIO,
     mode: OutputMode
   ): IO[ExitCode] =
@@ -2640,7 +2667,7 @@ EXAMPLES:
       )
       wbA <- readWorkbook(excel, fileA, readerConfig)
       wbB <- readWorkbook(excel, fileB, readerConfig)
-      diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter, formulasOnly) match
+      diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter, formulasOnly, cellsOnly) match
         case Right(d) => IO.pure(d)
         // The only refusal: a -s filter naming a sheet neither workbook has — SHEET_NOT_FOUND
         // with the nearest names from both books, keeping the diff's own message
@@ -3672,7 +3699,7 @@ EXAMPLES:
       IO.raiseError(new Exception("Internal: deps is dispatched in execute"))
 
     // Diff has its own runner (two input files, custom exit codes) — never reaches here
-    case CliCommand.Diff(_, _, _) =>
+    case CliCommand.Diff(_, _, _, _) =>
       IO.raiseError(new Exception("Internal: diff is dispatched via runDiff"))
 
     // Lint has its own runner (raw-zip inspection, custom exit codes) — never reaches here

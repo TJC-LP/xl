@@ -110,7 +110,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Deliverable finish | `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `autofilter`, `freeze`, `cf add`, `chart add`, `add-image` | every one but `add-image` has a batch twin |
 | Import data | `import <csv>`, `import-md <table.md\|->` | `--new-sheet`, type detection |
 | Refresh cached values | `recalc` (`--tables`, `--parallel n`) | `--strict` exits 1 and writes nothing on formula errors |
-| Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / repair findings; `lint --strict` fails on hygiene findings (shared-string orphans, unreferenced parts) too |
+| Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / repair findings. `diff` covers cells plus row/column sizes, visibility and outline, sheet properties (defaults, freeze panes, visibility), conditional formats, validations, sheet order and defined names; `--cells-only` compares cells only. `lint --strict` fails on hygiene findings (shared-string orphans, unreferenced parts) too |
 | New workbook | `new out.xlsx --sheet Data --sheet Summary` | |
 | What can the binary do? | `schema`, `functions`, `rasterizers`, `batch --schema` | no `-f` |
 

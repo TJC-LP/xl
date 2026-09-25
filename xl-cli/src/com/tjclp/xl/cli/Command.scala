@@ -244,8 +244,8 @@ enum CliCommand derives CanEqual:
   case DeleteColumns(col: String, count: Int) // Delete `count` columns starting at column `col`
   // Compare two workbooks (-f vs -g); exit code 0 = identical, 1 = differs, 3 = error
   // format None: markdown, or JSON under --json; formulasOnly (GH-607) keeps the text-only formula
-  // comparison, cached values ignored
-  case Diff(file2: Path, format: Option[DiffFormat], formulasOnly: Boolean)
+  // comparison, cached values ignored; cellsOnly skips the sheet-structure comparison
+  case Diff(file2: Path, format: Option[DiffFormat], formulasOnly: Boolean, cellsOnly: Boolean)
   // Validate package structure on the raw zip (GH-397); exit 0 = clean, 1 = findings, 3 = error
   case Lint(format: Option[LintFormat]) // None: text, or JSON under --json
 
@@ -258,7 +258,7 @@ enum CliCommand derives CanEqual:
   def takesSheet: Boolean = this match
     case Sheets(_) | Names | Search(_, _, _, _) | Describe(_) | Audit(_) | Recalc(_, _) |
         AddSheet(_, _, _) | RemoveSheet(_) | RenameSheet(_, _) | MoveSheet(_, _, _, _) |
-        CopySheet(_, _) | Name(_) | Diff(_, _, _) | Lint(_) =>
+        CopySheet(_, _) | Name(_) | Diff(_, _, _, _) | Lint(_) =>
       false
     case _ => true
 
@@ -375,7 +375,7 @@ enum CliCommand derives CanEqual:
     case DeleteRows(_, _) => "delete-rows"
     case InsertColumns(_, _) => "insert-cols"
     case DeleteColumns(_, _) => "delete-cols"
-    case Diff(_, _, _) => "diff"
+    case Diff(_, _, _, _) => "diff"
     case Lint(_) => "lint"
 
 object CliCommand:

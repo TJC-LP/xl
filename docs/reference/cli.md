@@ -1786,7 +1786,7 @@ EOF
 
 ---
 
-### `xl diff -g <file2> [--format markdown|json]`
+### `xl diff -g <file2> [--format markdown|json] [--formulas-only] [--cells-only]`
 
 Compare two workbooks and report differences. The first file comes from the global `-f`, the second from `-g/--file2`. Optional global `-s/--sheet` restricts the comparison to one sheet.
 
@@ -1796,32 +1796,106 @@ Compare two workbooks and report differences. The first file comes from the glob
 | `-g, --file2` | path | Yes | — | Second file to compare against |
 | `--format` | string | No | markdown | `markdown` (human) or `json` (stable schema) |
 | `--formulas-only` | flag | No | false | Compare formula cells by text alone, ignoring cached values (the rule before 0.22.0) |
+| `--cells-only` | flag | No | false | Compare cells, merges, comments and hyperlinks only: skip rows, columns, sheet properties, conditional formats, data validations, sheet order and defined names (the scope before sheet structure was compared) |
 
 **Exit codes**: `0` identical, `1` differences found, `3` error (unreadable file, sheet filter
 matching neither workbook, ...) — the error goes to stderr with a `code:` line (see
-[Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
+[Errors, warnings and exit codes](#errors-warnings-and-exit-codes)). Identical means every
+compared category is empty: a structure-only difference (a row height, a hidden column, a moved
+freeze pane, a retargeted name) is a difference and exits `1`; `--cells-only` restores exit `0`
+for it.
 
 **What is compared** (per sheet, refs in A1, row-major order):
 - **Changed cells** — value, formula text, cached formula value and resolved style (`styleChanged` boolean), each change tagged with its `kind`: `value` (a constant changed), `formula` (the text or record kind changed, or a constant became a formula), `cache` (same formula, a cached value that differs or is present on one side only — what a recalculation, a `--no-recalc` edit or a cache-stripping writer produces; 0.22.0) or `style` (only the formatting). `--formulas-only` ignores caches. Styles compare resolved formatting (style id lookup), so equal formatting under different ids is not a difference. Markdown renders a cache change as `B4: =SUM(B1:B3) cached 42.5 -> 43.5 [cache]` (`(none)` for a missing cache).
 - **Added / removed cells** — a cell with Empty value, default style, and no hyperlink counts as absent.
 - **Sheets added / removed** (by name).
 - **Merged ranges, comments, hyperlinks** — separate added/removed/changed deltas per sheet.
+- **Rows and columns** — effective `height` (rows) or `width` (columns), `hidden`, `outlineLevel`
+  and `collapsed`, plus the row/column default style as a `styleChanged` flag (resolved, like
+  cells). Consecutive indices with the same changes collapse into one run, written in Excel's
+  whole-row/column notation that `xl view` accepts: `5:5`, `5:200`, `C:C`, `K:XFD`.
+  - Sizes compare at 2 decimals (15, 15.0 and 15.004 are equal; 15.01 is not) in the unit the
+    file stores and `xl row --height` / `xl col --width` set: points for rows, the stored
+    `<col width>` for columns.
+  - The effective size is the explicit size, else the sheet default, else Excel's stock size:
+    15 pt rows and 9.140625-wide columns (the 64-pixel column Excel's UI shows as 8.43). A size is
+    compared only where one side states it, so a sheet-default change is reported once, as a sheet
+    property, never as a line per row; a row that states 15 against a sheet whose default became
+    20 is reported, because it really renders at a different height.
+  - `outlineLevel` absent equals `0`; a style id resolving to the default style equals no style.
+  - Columns compare per column: one `<col min="11" max="16384">` span and 16,374 single `<col>`
+    elements are the same thing.
+- **Sheet properties** (sheets in both books) — `defaultRowHeight` and `defaultColumnWidth`
+  (effective: an absent default equals the stock one, so a book and its Excel resave agree),
+  `freezePanes` (the anchor only; the scroll position is not compared) and `visibility`
+  (`visible`, `hidden`, `veryHidden`).
+- **Conditional formats and data validations** — added / removed / changed, keyed by sqref (ranges
+  sorted, so token order does not matter). A changed threshold, dropdown list or rule is a change;
+  Excel's sheet-wide renumbering of rule priorities, dxf ids and `xr:uid` revision GUIDs is not.
+- **Sheet order** — the relative order of the sheets both books have (`A, B, C -> B, A, C`); a sheet
+  inserted or removed mid-book is already `sheetsAdded` / `sheetsRemoved`, not a reorder.
+- **Defined names** — added / removed / changed (formula text or the hidden flag), keyed by scope
+  and case-insensitive name; a sheet-scoped name follows its sheet by name across a reorder, and an
+  orphaned `localSheetId` is labelled `[localSheetId N]`.
+
+`-s` computes rows, columns, sheet properties, conditional formats and data validations for that
+sheet only, skips the sheet order, and compares only names scoped to that sheet (never
+workbook-scoped ones). `--formulas-only` changes only the formula-cache rule; structure is still
+compared.
+
+**Not compared** (UI state that changes on every open and save, or outside a model review):
+view state (zoom, gridlines, selection, scroll position, view mode, active sheet), tab colour,
+print setup (page setup, print area and titles, margins, header/footer), tables, autofilter (its
+range tracks the data; the rows a filter hides already show as `hidden` rows), drawings and
+charts, calculation settings (`calcPr`), `date1904`, theme, workbook default font, document
+properties, Excel's built-in `_xlnm.*` names and defined-name comments.
+
+Markdown adds, after the cell blocks, `Rows (n):` / `Columns (n):` lines such as
+`5:5: height 15 -> 30`, `7:9: hidden false -> true, outlineLevel 0 -> 1` and `12:12: [style]`,
+a `Sheet properties (n):` block (`freezePanes (none) -> B2`), the conditional-format and
+validation deltas, and — at the top — `Sheet order:` and `Names added|removed|changed (n):`. The
+Summary line gains `; N structure change(s)` only when there are any, so a report with no
+structural change reads exactly as before:
+
+```
+Comparing old.xlsx vs new.xlsx
+
+## Data
+
+Rows (1):
+  1:1: height 15 -> 30
+
+Columns (1):
+  A:A: width 9.14 -> 20
+
+Summary: 0 changed, 0 added, 0 removed cell(s) across 1 sheet(s); 2 structure change(s)
+```
 
 ```bash
 xl -f old.xlsx diff -g new.xlsx                      # Markdown report
 xl -f old.xlsx -s Sheet1 diff -g new.xlsx            # One sheet only
 xl -f old.xlsx diff -g new.xlsx --format json        # Machine-readable
 xl -f old.xlsx diff -g new.xlsx --formulas-only      # Ignore cached values
+xl -f old.xlsx diff -g new.xlsx --cells-only         # Cells only: skip sheet structure
 xl -f model.xlsx diff -g recalc.xlsx --format json | jq '[.sheets[].changed[] | select(.kind == "cache")]'
+xl -f old.xlsx diff -g new.xlsx --format json | jq '.sheets[].rows'   # Row runs
 xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
+xl -f old.xlsx diff -g recalc.xlsx --cells-only && echo "recalc changed no cell"
 ```
 
-**JSON schema** (stable; `sheets` lists only sheets with differences):
+**JSON schema** (stable; every key is always present — empty arrays, `sheetOrder` `null`, also
+under `--cells-only`; `sheets` lists only sheets with differences):
 
 ```json
 {
   "identical": false,
   "sheetsAdded": [], "sheetsRemoved": [],
+  "sheetOrder": {"before": ["Inputs", "Model"], "after": ["Model", "Inputs"]},
+  "namesAdded":   [{"name": "Rate", "scope": null, "formula": "Model!$B$1", "hidden": false}],
+  "namesRemoved": [],
+  "namesChanged": [{"name": "LocalRate", "scope": "Model",
+                    "before": {"formula": "Model!$C$1", "hidden": false},
+                    "after":  {"formula": "Model!$C$2", "hidden": false}}],
   "sheets": [{
     "name": "Sheet1",
     "added":   [{"ref": "D5", "value": "New", "formula": null}],
@@ -1838,12 +1912,44 @@ xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
                  "kind": "cache"}],
     "mergesAdded": [], "mergesRemoved": [],
     "commentsAdded": [], "commentsRemoved": [], "commentsChanged": [],
-    "hyperlinksAdded": [], "hyperlinksRemoved": [], "hyperlinksChanged": []
+    "hyperlinksAdded": [], "hyperlinksRemoved": [], "hyperlinksChanged": [],
+    "rows": [{"ref": "5:5",
+              "changes": [{"property": "height", "before": 15, "after": 30}],
+              "styleChanged": false}],
+    "columns": [{"ref": "K:XFD",
+                 "changes": [{"property": "hidden", "before": false, "after": true}],
+                 "styleChanged": false}],
+    "properties": [{"property": "freezePanes", "before": null, "after": "B2"},
+                   {"property": "visibility", "before": "visible", "after": "hidden"}],
+    "conditionalFormatsAdded": ["H2:H5 J2:J5"], "conditionalFormatsRemoved": [],
+    "conditionalFormatsChanged": [],
+    "dataValidationsAdded": [], "dataValidationsRemoved": [], "dataValidationsChanged": ["B2:B9"]
   }]
 }
 ```
 
-**Limitations**: both workbooks load in memory (`--max-size` applies to each); no range-level filter yet.
+`sheetOrder`, `namesAdded`, `namesRemoved` and `namesChanged` sit before `sheets`; the nine
+per-sheet structure keys follow `hyperlinksChanged`; the fields that existed before are unchanged.
+Property values are typed: `height`, `width`, `defaultRowHeight` and `defaultColumnWidth` are
+numbers (2 decimals), `hidden` and `collapsed` booleans, `outlineLevel` an integer,
+`freezePanes` an anchor string or `null`, `visibility` a string. Property names inside `rows` /
+`columns` appear in the order `height`/`width`, `hidden`, `outlineLevel`, `collapsed`; sheet
+properties in the order `defaultRowHeight`, `defaultColumnWidth`, `freezePanes`, `visibility`.
+
+**Limitations**: both workbooks load in memory (`--max-size` applies to each); no range-level
+filter yet. Structure is index-aligned, like cells: an inserted row reports every later row that
+carries its own properties. A renamed sheet is removed plus added (its scoped names follow it). The
+stock column width assumes Excel's Calibri 11 Normal font; in a book without `defaultColWidth`
+whose base font differs (Mac Excel's Calibri 12), a column that gains or loses an explicit
+default-width `<col>` can show a width line. LibreOffice writes a height on every row, so an LO
+resave compared with an Excel original lists every row whose height it restated differently.
+Conditional formats and data validations report added / removed / changed per sqref, not what
+changed inside a block; `x14` extension formats are not compared. The same conditional format or
+validation held typed on one side and preserved verbatim on the other reports as changed: an
+Excel-saved validation carrying `xr:uid` (which xl keeps verbatim) against the same validation
+written by openpyxl or LibreOffice, for example. A conditional format preserved at block level
+keeps its `dxfId`, so a renumbered dxfs table flags it; an sqref that does not parse compares as
+raw text, token order included.
 
 ---
 

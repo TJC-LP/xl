@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/simple.xlsx
+diff
+-g
+<DIR>/resized.xlsx
+--cells-only
+## exit
+0
+## stdout
+Comparing <DIR>/simple.xlsx vs <DIR>/resized.xlsx
+
+Files are identical.
+## stderr

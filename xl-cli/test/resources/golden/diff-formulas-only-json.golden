@@ -18,6 +18,10 @@ diff
     "identical": false,
     "sheetsAdded": [],
     "sheetsRemoved": [],
+    "sheetOrder": null,
+    "namesAdded": [],
+    "namesRemoved": [],
+    "namesChanged": [],
     "sheets": [
       {
         "name": "Data",
@@ -45,7 +49,16 @@ diff
         "commentsChanged": [],
         "hyperlinksAdded": [],
         "hyperlinksRemoved": [],
-        "hyperlinksChanged": []
+        "hyperlinksChanged": [],
+        "rows": [],
+        "columns": [],
+        "properties": [],
+        "conditionalFormatsAdded": [],
+        "conditionalFormatsRemoved": [],
+        "conditionalFormatsChanged": [],
+        "dataValidationsAdded": [],
+        "dataValidationsRemoved": [],
+        "dataValidationsChanged": []
       }
     ]
   },

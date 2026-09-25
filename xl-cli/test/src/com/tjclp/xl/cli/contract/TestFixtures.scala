@@ -7,11 +7,11 @@ import cats.effect.IO
 import cats.syntax.all.*
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{ARef, Row, SheetName}
+import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, Comment}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.sheets.RowProperties
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.workbooks.{CalcPr, DefinedName}
 
 /**
@@ -30,6 +30,20 @@ object TestFixtures:
 
   /** `simpleBook` with `B1` bumped to 11 (so `B4` recalculates to 43.5): the `diff` counterpart. */
   def changedBook(): Workbook = book(firstQuantity = 11)
+
+  /**
+   * `simpleBook` with row 1 of `Data` 30pt tall and column A 20 wide: a structure-only `diff`
+   * counterpart (its cells are unchanged).
+   */
+  def resizedBook(): Workbook =
+    val book = simpleBook()
+    book
+      .update(
+        SheetName.unsafe("Data"),
+        _.setRowProperties(Row.from1(1), RowProperties(height = Some(30)))
+          .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(20)))
+      )
+      .getOrElse(book)
 
   /** One sheet only, so unqualified single-cell reads resolve without `-s`. */
   def singleSheetBook(): Workbook =
@@ -218,6 +232,7 @@ object TestFixtures:
     "simple.xlsx" -> (() => simpleBook()),
     "simple-copy.xlsx" -> (() => simpleBook()),
     "changed.xlsx" -> (() => changedBook()),
+    "resized.xlsx" -> (() => resizedBook()),
     "single.xlsx" -> (() => singleSheetBook()),
     "inplace.xlsx" -> (() => simpleBook()),
     "circular.xlsx" -> (() => circularBook()),

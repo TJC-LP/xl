@@ -3,7 +3,7 @@
 <DIR>/simple.xlsx
 diff
 -g
-<DIR>/changed.xlsx
+<DIR>/resized.xlsx
 --format
 json
 ## exit
@@ -22,34 +22,7 @@ json
       "name": "Data",
       "added": [],
       "removed": [],
-      "changed": [
-        {
-          "ref": "B1",
-          "before": {
-            "value": "10",
-            "formula": null
-          },
-          "after": {
-            "value": "11",
-            "formula": null
-          },
-          "styleChanged": false,
-          "kind": "value"
-        },
-        {
-          "ref": "B4",
-          "before": {
-            "value": "42.5",
-            "formula": "=SUM(B1:B3)"
-          },
-          "after": {
-            "value": "43.5",
-            "formula": "=SUM(B1:B3)"
-          },
-          "styleChanged": false,
-          "kind": "cache"
-        }
-      ],
+      "changed": [],
       "mergesAdded": [],
       "mergesRemoved": [],
       "commentsAdded": [],
@@ -58,8 +31,32 @@ json
       "hyperlinksAdded": [],
       "hyperlinksRemoved": [],
       "hyperlinksChanged": [],
-      "rows": [],
-      "columns": [],
+      "rows": [
+        {
+          "ref": "1:1",
+          "changes": [
+            {
+              "property": "height",
+              "before": 15,
+              "after": 30
+            }
+          ],
+          "styleChanged": false
+        }
+      ],
+      "columns": [
+        {
+          "ref": "A:A",
+          "changes": [
+            {
+              "property": "width",
+              "before": 9.14,
+              "after": 20
+            }
+          ],
+          "styleChanged": false
+        }
+      ],
       "properties": [],
       "conditionalFormatsAdded": [],
       "conditionalFormatsRemoved": [],
