@@ -455,7 +455,10 @@ object FormulaStorage:
       else
         var i = afterQualifier
         while i < n && (isIdentChar(text.charAt(i)) || text.charAt(i) == '!') do i += 1
-        if i == afterQualifier then start else i
+        // GH-687: a token ending in `!` is a bare sheet qualifier with no cell reference — the `#`
+        // after it opens an error literal (`Sheet1!#REF!`, Excel's spelling of a deleted target),
+        // never a spill of the qualifier
+        if i == afterQualifier || text.charAt(i - 1) == '!' then start else i
 
   /**
    * Rewrite every one-argument `SINGLE(x)` call (any storage prefix already stripped) to `@x`, and
@@ -569,6 +572,10 @@ object FormulaStorage:
               text.charAt(i) == ':')
           do i += 1
           if i == start then start
+          // GH-687: `@Sheet1!#REF!` — a `#` straight after the qualifier's `!` opens an error
+          // literal, which is the rest of the operand (not a spill suffix)
+          else if i < n && text.charAt(i) == '#' && text.charAt(i - 1) == '!' then
+            errorLiteralEnd(text, i)
           else if i < n && text.charAt(i) == '(' then orStart(closingParen(text, i))
           else if i < n && text.charAt(i) == '[' then orStart(closingBracket(text, i))
           // GH-655: `@A1#` — the spill suffix belongs to the operand

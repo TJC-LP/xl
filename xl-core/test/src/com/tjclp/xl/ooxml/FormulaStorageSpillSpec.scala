@@ -87,3 +87,57 @@ class FormulaStorageSpillSpec extends FunSuite:
     // a different call with a matching suffix is not ANCHORARRAY
     assertEquals(fromStored("MYANCHORARRAY(A1)+_xlfn.IFS(1,2)"), "MYANCHORARRAY(A1)+IFS(1,2)")
   }
+
+  // ===== GH-687: `X!#REF!` — a sheet qualifier with no cell reference is never a spill operand =====
+
+  /** Unchanged through both directions, and the lint reports nothing. */
+  private def untouched(text: String): Unit =
+    pinLintInvariant(text)
+    assertEquals(toStored(text), text.stripPrefix("="), s"toStored($text)")
+    assertEquals(fromStored(text), text, s"fromStored($text)")
+    assertEquals(bareFutureCalls(text), Vector.empty, s"bareFutureCalls($text)")
+
+  test("GH-687: Excel's Sheet!#REF! (a deleted target) is an error literal, not a spill") {
+    untouched("Sheet1!#REF!")
+    untouched("'My Sheet'!#REF!")
+    untouched("'It''s'!#REF!")
+    untouched("[1]Sheet1!#REF!")
+    untouched("[1]'My Sheet'!#REF!")
+    untouched("Support!#REF!")
+    untouched("Sheet1!$A$1,Sheet1!#REF!")
+    untouched("#REF!")
+    untouched("=SUM(Sheet1!#REF!,A1)")
+    untouched("=Sheet1!#REF!+1")
+    untouched("IF(A1,Sheet1!#REF!,1)")
+    untouched("Sheet_2.x!#REF!")
+    assertEquals(toStored("=SUM(Sheet1!#REF!,A1)"), "SUM(Sheet1!#REF!,A1)")
+    assertEquals(toStored("=Sheet1!#REF!+1"), "Sheet1!#REF!+1")
+  }
+
+  test("GH-687: every error literal after ! stays verbatim (a # right after ! has no operand)") {
+    for err <- Vector("#N/A", "#NAME?", "#DIV/0!", "#NULL!", "#NUM!", "#VALUE!", "#SPILL!") do
+      untouched(s"Sheet1!$err")
+      untouched(s"'My Sheet'!$err")
+      untouched(s"[1]Sheet1!$err")
+    // a lone '#' after '!' is not a spill of the qualifier either
+    untouched("Sheet1!#")
+  }
+
+  test("GH-687: a real spill still wraps beside a Sheet!#REF! in the same formula") {
+    roundTrip("SUM(A1#,Sheet1!#REF!)", "SUM(_xlfn.ANCHORARRAY(A1),Sheet1!#REF!)")
+    roundTrip("Sheet1!#REF!+Sheet1!A1#", "Sheet1!#REF!+_xlfn.ANCHORARRAY(Sheet1!A1)")
+    roundTrip("'My Sheet'!$B$2#", "_xlfn.ANCHORARRAY('My Sheet'!$B$2)")
+    roundTrip("SUM(A1#)", "SUM(_xlfn.ANCHORARRAY(A1))")
+    assertEquals(bareFutureCalls("SUM(A1#,Sheet1!#REF!)"), Vector("#"))
+  }
+
+  test("GH-687: an @ operand of Sheet!#REF! is the whole error literal") {
+    roundTrip("@Sheet1!#REF!", "_xlfn.SINGLE(Sheet1!#REF!)")
+    roundTrip("@'My Sheet'!#REF!+1", "_xlfn.SINGLE('My Sheet'!#REF!)+1")
+    assertEquals(bareFutureCalls("@Sheet1!#REF!"), Vector("@"))
+  }
+
+  test("GH-687: a stored ANCHORARRAY over a bare qualifier keeps the call spelling") {
+    // not a reference: never unwraps into the `Sheet1!#` that would reparse as an error literal
+    assertEquals(fromStored("_xlfn.ANCHORARRAY(Sheet1!)"), "ANCHORARRAY(Sheet1!)")
+  }
