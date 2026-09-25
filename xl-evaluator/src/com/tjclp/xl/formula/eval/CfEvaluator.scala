@@ -166,8 +166,12 @@ object CfEvaluator:
    * What the paint of `window` reads on `sheet` ([[Engine.reads]]): `view --eval` evaluates these
    * cells with the window, so the paint comes from the values the picture draws.
    */
-  private[eval] def reads(sheet: Sheet, window: CellRange): Vector[CellRange] =
-    Engine(sheet, None, Clock.system).reads(window)
+  private[eval] def reads(
+    sheet: Sheet,
+    window: CellRange,
+    workbook: Option[Workbook] = None
+  ): Vector[CellRange] =
+    Engine(sheet, workbook, Clock.system).reads(window)
 
   /** A rule and where it sits: its precedence key and its block. */
   private final case class Entry(block: Block, ruleIndex: Int, rule: CfRule):
@@ -243,12 +247,13 @@ object CfEvaluator:
      * The cells of the sheet the paint of `window` reads, as ranges never expanded (a whole-column
      * reference stays one range): every range of a block with a numeric rule, whose statistics span
      * the block; what each formula rule reads at each window cell it covers, the cell itself
-     * included; and what each value-object formula reads at the block's anchor. References to other
-     * sheets and defined names are left out, as is a formula that does not parse.
+     * included; and what each value-object formula reads at the block's anchor. Defined names
+     * resolve against the workbook, including aliases and sheet-scoped names. References to other
+     * sheets are left out, as is a formula that does not parse.
      */
     def reads(window: CellRange): Vector[CellRange] =
       def read(expr: TExpr[?]): Vector[CellRange] =
-        val (cells, ranges) = DependencyGraph.localReads(expr, sheet.name)
+        val (cells, ranges) = DependencyGraph.localReads(expr, sheet.name, workbook)
         cells.toVector.map(ref => CellRange(ref, ref)) ++ ranges.map(r => CellRange(r.start, r.end))
       def parsed(formula: String): Option[TExpr[?]] = SheetEvaluator.parseFormula(formula).toOption
       blocksOver(window).flatMap { b =>

@@ -559,7 +559,7 @@ object DiffCommands:
     else SqrefAttr.replaceFirstIn(xml, "$1sqref=\"" + Regex.quoteReplacement(key.text) + "\"")
 
   private val UidAttr = """\s[A-Za-z_][\w.-]*:uid="[^"]*"""".r
-  private val PriorityAttr = """\spriority="[^"]*"""".r
+  private val PriorityAttr = """\spriority="([^"]*)"""".r
   private val DxfIdAttr = """\sdxfId="[^"]*"""".r
 
   /** Drop revision GUIDs (`xr:uid`) and, on request, the renumbered `priority` / `dxfId`. */
@@ -569,23 +569,56 @@ object DiffCommands:
     if dropDxfId then DxfIdAttr.replaceAllIn(noPriority, "") else noPriority
 
   /**
-   * Priority zeroed (Excel renumbers sheet-wide on save); a Preserved rule keeps its dxf payload.
+   * Priority replaced by its worksheet-wide rank (Excel renumbers on save); a Preserved rule keeps
+   * its dxf payload. Relative order across blocks matters when their ranges overlap.
    */
-  private def normalizeRule(rule: CfRule): CfRule = rule match
+  private def normalizeRule(rule: CfRule, rank: Int): CfRule = rule match
     case CfRule.Preserved(xml, _, dxf) =>
-      CfRule.Preserved(stripVolatile(xml, true, true), None, dxf)
-    case typed => CfRule.withPriority(typed, 0)
+      CfRule.Preserved(stripVolatile(xml, true, true), Some(rank), dxf)
+    case typed => CfRule.withPriority(typed, rank)
+
+  /**
+   * Canonical precedence of every rule, ordered as the painter does: priority, then document order.
+   * Keys are (block index, rule index), or the priority attribute's offset in an opaque block.
+   * Counting opaque rules too keeps their precedence relative to typed blocks observable.
+   */
+  private def cfPriorityRanks(sheet: Sheet): Map[(Int, Int), Int] =
+    val priorities = sheet.conditionalFormats.zipWithIndex.flatMap {
+      case (ConditionalFormat.Rules(_, rules, _), block) =>
+        rules.zipWithIndex.map { (rule, i) =>
+          (block, i) -> CfRule.priorityOf(rule).getOrElse(Int.MaxValue)
+        }
+      case (ConditionalFormat.Preserved(xml), block) =>
+        PriorityAttr
+          .findAllMatchIn(xml)
+          .map { m =>
+            (block, m.start) -> m.group(1).toIntOption.getOrElse(Int.MaxValue)
+          }
+          .toVector
+    }
+    priorities
+      .sortBy { case ((block, rule), priority) => (priority, block, rule) }
+      .zipWithIndex
+      .map { case ((key, _), i) => key -> (i + 1) }
+      .toMap
 
   private def cfIndex(sheet: Sheet): Map[BlockKey, Vector[ConditionalFormat]] =
-    sheet.conditionalFormats
+    val ranks = cfPriorityRanks(sheet)
+    def rank(block: Int, rule: Int): Int = ranks.getOrElse((block, rule), 0)
+    sheet.conditionalFormats.zipWithIndex
       .map {
-        case ConditionalFormat.Rules(ranges, rules, pivot) =>
-          val ordered = rules.sortBy(r => CfRule.priorityOf(r).getOrElse(Int.MaxValue))
+        case (ConditionalFormat.Rules(ranges, rules, pivot), block) =>
+          val ordered = rules.zipWithIndex.sortBy((_, i) => rank(block, i))
+          val normalized = ordered.map((rule, i) => normalizeRule(rule, rank(block, i)))
           rangesKey(ranges) ->
-            ConditionalFormat.Rules(sortedRanges(ranges), ordered.map(normalizeRule), pivot)
-        case ConditionalFormat.Preserved(xml) =>
+            ConditionalFormat.Rules(sortedRanges(ranges), normalized, pivot)
+        case (ConditionalFormat.Preserved(xml), block) =>
           val key = payloadKey(xml)
-          key -> ConditionalFormat.Preserved(canonicalSqref(stripVolatile(xml, true, false), key))
+          val ordered =
+            PriorityAttr.replaceAllIn(xml, m => s" priority=\"${rank(block, m.start)}\"")
+          key -> ConditionalFormat.Preserved(
+            canonicalSqref(stripVolatile(ordered, false, false), key)
+          )
       }
       .groupMap(_._1)(_._2)
 

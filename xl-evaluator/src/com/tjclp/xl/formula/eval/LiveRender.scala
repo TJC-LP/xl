@@ -28,5 +28,6 @@ private[xl] object LiveRender:
     workbook: Option[Workbook]
   ): RangeEvalResult =
     val reads =
-      if sheet.conditionalFormats.isEmpty then Vector.empty else CfEvaluator.reads(sheet, window)
+      if sheet.conditionalFormats.isEmpty then Vector.empty
+      else CfEvaluator.reads(sheet, window, workbook)
     SheetEvaluator.evaluateForRangesPerCell(sheet, window +: reads, clock, workbook)

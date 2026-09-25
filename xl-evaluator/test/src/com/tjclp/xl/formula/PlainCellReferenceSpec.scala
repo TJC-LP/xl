@@ -30,6 +30,10 @@ class PlainCellReferenceSpec extends FunSuite:
     Workbook(Vector(sheet, other))
       .withDefinedName("dyn", "OFFSET(S!$A$1,0,0,10,1)")
       .withDefinedName("fixed", "S!$A$1:$A$10")
+      .withDefinedName("fixedAlias", "fixed")
+      .withDefinedName("fixedChain", "S!fixedAlias")
+      .withDefinedName("dynAlias", "dyn")
+      .withDefinedName("dynChain", "S!dynAlias")
 
   private def sheetS: Sheet = book.sheets.headOption.getOrElse(fail("no sheet"))
 
@@ -70,6 +74,46 @@ class PlainCellReferenceSpec extends FunSuite:
       assertEquals(result, Right(expected), s"draw $draw")
       assertEquals(rng.draws, 1, "the condition evaluates once")
     }
+  }
+
+  test("nested LET bindings preserve references until the consumer reads them") {
+    // Verified in Excel against a plain <f>: both forms sum 1+2+3, regardless of their row.
+    List(ref"D2", ref"D20").foreach { at =>
+      assertEquals(plain("=SUM(LET(y,A1:A3,y))", at), Right(num(6)))
+      assertEquals(plain("=LET(x,LET(y,A1:A3,y),SUM(x))", at), Right(num(6)))
+      assertEquals(plain("=LET(x,LET(y,OFFSET(A1,0,0,3,1),y),SUM(x))", at), Right(num(6)))
+    }
+    // A calculated body is still a value in the plain cell's mode, not promoted to an array.
+    assertEquals(plain("=LET(x,LET(y,A1:A3,y*2),SUM(x))", ref"D2"), Right(num(4)))
+  }
+
+  test("named reference aliases preserve their defining scope and name cycle guard") {
+    val scoped = book
+      .withDefinedName("localRange", "A1:A3", SheetName.unsafe("Other"))
+      .fold(err => fail(err.message), identity)
+      .withDefinedName("scopedAlias", "Other!localRange")
+      .withDefinedName("scopedChain", "scopedAlias")
+      .withDefinedName("cycleOne", "cycleTwo")
+      .withDefinedName("cycleTwo", "cycleOne")
+    assertEquals(
+      sheetS.evaluateFormula("scopedChain*2", Clock.system, Some(scoped), Some(ref"D2")),
+      Right(num(40))
+    )
+    assertEquals(
+      sheetS.evaluateFormula("SUM(scopedChain)", Clock.system, Some(scoped), Some(ref"D20")),
+      Right(num(60))
+    )
+    assert(sheetS.evaluateFormula("cycleOne", Clock.system, Some(scoped), Some(ref"D2")).isLeft)
+  }
+
+  test("aliases to named calculations keep their array semantics") {
+    val wb = book
+      .withDefinedName("calculated", "S!$A$1:$A$3*2")
+      .withDefinedName("calculatedAlias", "calculated")
+    assertEquals(
+      sheetS.evaluateFormula("SUM(calculatedAlias)", Clock.system, Some(wb), Some(ref"D20")),
+      Right(num(12))
+    )
   }
 
   test("an array formula in an iterative cycle evaluates as an array every round") {
@@ -140,6 +184,12 @@ class PlainCellReferenceSpec extends FunSuite:
     "A1:A10",
     "fixed",
     "dyn",
+    "fixedAlias",
+    "fixedChain",
+    "dynAlias",
+    "dynChain",
+    "LET(y,A1:A10,y)",
+    "LET(y,LET(z,A1:A10,z),y)",
     "OFFSET(A1,0,0,10,1)",
     "INDIRECT(\"A1:A10\")",
     "INDEX(A1:B10,0,1)",

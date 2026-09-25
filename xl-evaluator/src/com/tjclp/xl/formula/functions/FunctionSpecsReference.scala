@@ -382,7 +382,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
   private def denotesReference(expr: TExpr[?]): Boolean = expr match
     case call: TExpr.Call[?] => Evaluator.referenceFunctions.contains(call.spec.name)
     case _: TExpr.NameRef | _: TExpr.SheetNameRef | _: TExpr.BindingRef |
-        _: TExpr.CoercedBindingRef[?] =>
+        _: TExpr.CoercedBindingRef[?] | _: TExpr.Let[?] =>
       true
     case TExpr.Coerced(inner, _) => denotesReference(inner)
     case _ => false

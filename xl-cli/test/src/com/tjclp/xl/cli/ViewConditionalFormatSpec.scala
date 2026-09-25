@@ -144,6 +144,25 @@ class ViewConditionalFormatSpec extends CatsEffectSuite:
       assertEquals(rectFill(ReadTestKit.text(live), 0, 0), Some("#FFC7CE"), "live 150")
   }
 
+  test("--eval paints named precedents outside the viewport from their live values") {
+    val sheet = Sheet("Data")
+      .put(aref("A1"), num(1))
+      .put(aref("C1"), CellValue.Formula("A1+9", Some(num(0))))
+      .conditionalFormat(range("A1:A3"), CfRule.expression("thresholdAlias>5", pink))
+    val wb = Workbook(Vector(sheet))
+      .withDefinedName("threshold", "Data!$C$1")
+      .withDefinedName("thresholdAlias", "threshold")
+    for
+      cached <- view(wb, "A1:A3", ViewFormat.Svg)
+      narrow <- view(wb, "A1:A3", ViewFormat.Svg, evalFormulas = true)
+      wide <- view(wb, "A1:C3", ViewFormat.Svg, evalFormulas = true)
+    yield
+      assertEquals(rectFill(ReadTestKit.text(cached), 0, 0), Some("#FFFFFF"))
+      assertEquals(rectFill(ReadTestKit.text(narrow), 0, 0), Some("#FFC7CE"))
+      assertEquals(rectFill(ReadTestKit.text(wide), 0, 0), Some("#FFC7CE"))
+      assertEquals(narrow.warnings, Vector.empty)
+  }
+
   /**
    * B1:B10 = 1..10; A1:A10 = Bn, each cached ten times too high (saved before B changed), under a
    * red-to-green scale on A1:A10.

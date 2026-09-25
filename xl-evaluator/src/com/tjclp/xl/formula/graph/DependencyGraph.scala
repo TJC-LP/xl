@@ -2040,22 +2040,29 @@ object DependencyGraph:
 
   /**
    * What `expr`, a formula on `sheet`, reads on that sheet, never expanded: each cell it names and
-   * each range it reads (a whole column stays one range). References to other sheets or books, and
-   * defined names (no workbook resolves them here), are left out.
+   * each range it reads (a whole column stays one range). With a workbook, defined names resolve
+   * through the same scoped, cycle-guarded walk as the workbook graph. References to other sheets
+   * or books are left out.
    */
   private[formula] def localReads[A](
     expr: TExpr[A],
-    sheet: SheetName
+    sheet: SheetName,
+    workbook: Option[Workbook] = None
   ): (Set[ARef], Vector[CellRange]) =
     val ranges = Vector.newBuilder[CellRange]
+    val canonical = workbook.fold[SheetName => SheetName](identity)(sheetCanonicaliser)
+    val local = canonical(sheet)
     val cells = extractQualifiedDependencies(
       expr,
-      sheet,
+      local,
       cellsFor = (target, range) =>
-        if target == sheet then ranges += range
+        if target == local then ranges += range
         Set.empty
+      ,
+      workbook = workbook,
+      canonicalSheet = canonical
     )
-    (cells.collect { case QualifiedRef(`sheet`, ref) => ref }, ranges.result())
+    (cells.collect { case QualifiedRef(`local`, ref) => ref }, ranges.result())
 
   @nowarn("msg=Unreachable case")
   private[graph] def extractQualifiedDependencies[A](

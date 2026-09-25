@@ -25,7 +25,8 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   and Stop If True stops lower rules, scales and bars included. Relative references anchor at the
   block's top-left cell and shift per cell. Rules see the values the picture draws — cached, or live
   under `--eval`, which evaluates every formula the window's rules read with the window (a
-  top/bottom, scale or bar rule's whole range, the cells a formula rule reads), so a cell's paint
+  top/bottom, scale or bar rule's whole range, the cells a formula rule reads, including local
+  precedents reached through workbook or sheet-scoped name aliases), so a cell's paint
   never depends on the window asked for. Without `--eval` an uncached formula (as openpyxl writes
   them) is computed, and top/bottom, scale and bar statistics follow a chain filled down or across
   whatever its length (a formula rule, or a chain read from its far end, stops at the 100-level
@@ -117,7 +118,8 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   whole-row/column runs (`5:200`, `K:XFD`); sheet properties (`defaultRowHeight`,
   `defaultColumnWidth`, the `freezePanes` anchor, `visibility`); conditional formats and data
   validations as blocks keyed by sqref (token order, renumbered priorities, dxf ids and `xr:uid`s
-  ignored); the relative order of shared sheets; and defined names by scope and case-insensitive
+  ignored when rule order is unchanged; precedence is compared across blocks as well as within
+  them); the relative order of shared sheets; and defined names by scope and case-insensitive
   name (`_xlnm.*` skipped). View state, tab colour, print setup, tables, autofilter, drawings,
   `calcPr`, theme and document properties are not compared. **Behaviour change:** a
   structure-only difference is now `DIFFERENCES_FOUND` (exit 1); `--cells-only` restores the old
@@ -143,14 +145,16 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
     `--(r>0)` factors rather than IF.
   - References stay references until a position reads them. A single cell is one; IF, IFS,
     CHOOSE and SWITCH return the reference they select; OFFSET, INDIRECT and INDEX return theirs;
-    a name bound to or computing a reference (a dynamic range, a scenario switch) is it; a LET
+    a name bound to or computing a reference (a dynamic range, a scenario switch), including an
+    alias chain to that name, is it; a LET
     name bound to one is it. Whole in an aggregate (`SUM(IF(A1:A10>2,A1:A10,0))` in a row where
     the condition holds is the whole-range sum, `SUM(IF(TRUE,C1,0))` skips a text C1), counted by
     ROWS without reading it, intersected in a value position.
   - A value passed to an aggregate follows Excel's typed-argument rule: TRUE is 1, `"5"` is 5, and
     other text is `#VALUE!` where it failed loudly.
   - LET never changes a value: a binding evaluates in the cell's mode and keeps a reference a
-    reference (`LET(r,nmRef,SUM(r))` is `SUM(nmRef)`).
+    reference (`LET(r,nmRef,SUM(r))` is `SUM(nmRef)`), including a reference returned by a nested
+    LET: `LET(x,LET(y,A1:A3,y),SUM(x))` sums all three cells in a plain formula, as verified in Excel.
   - Array contexts keep dynamic-array semantics: array formulas (CSE and dynamic-array records,
     in an iterative cycle too), `evala`, SUMPRODUCT, FILTER's include, named formulas,
     conditional-format formulas, and a formula evaluated without a cell position (`xl eval`,

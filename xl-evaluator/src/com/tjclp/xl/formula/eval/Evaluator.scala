@@ -419,14 +419,14 @@ object Evaluator:
     Set("IF", "IFS", "CHOOSE", "SWITCH", "OFFSET", "INDIRECT", "INDEX")
 
   /**
-   * Whether an expression may denote a reference rather than a value: a cell, a name, a LET name,
-   * or a call to a function that returns a reference. A plain cell's LET binds such an expression's
-   * reference itself.
+   * Whether an expression may denote a reference rather than a value: a cell, a name, a LET name, a
+   * LET expression, or a call to a function that returns a reference. A plain cell's LET binds such
+   * an expression's reference itself; a LET body that computes a value still binds that value.
    */
   private[formula] def denotesReference(expr: TExpr[?]): Boolean = expr match
     case _: TExpr.Ref[?] | _: TExpr.PolyRef | _: TExpr.SheetRef[?] | _: TExpr.SheetPolyRef |
         _: TExpr.NameRef | _: TExpr.SheetNameRef | _: TExpr.BindingRef |
-        _: TExpr.CoercedBindingRef[?] =>
+        _: TExpr.CoercedBindingRef[?] | _: TExpr.Let[?] =>
       true
     case call: TExpr.Call[?] => referenceFunctions.contains(call.spec.name)
     case TExpr.Coerced(inner, _) => denotesReference(inner)
@@ -1751,32 +1751,21 @@ private class EvaluatorImpl(
                         workbookPath,
                         aggregateMemoOpt
                       )
-                      resolved match
-                        case call: TExpr.Call[?]
-                            if Evaluator.referenceFunctions.contains(call.spec.name) =>
-                          derived
-                            .evalCall(
-                              call,
-                              definingSheet,
-                              clock,
-                              workbook,
-                              currentCell,
-                              selectsReference = true
-                            )
-                            .flatMap {
-                              case RangeOperand(targetSheet, range) => read(targetSheet, range)
-                              case value => Right(unwrapBindingValue(value))
-                            }
-                        case _ =>
-                          derived
-                            .eval(
-                              resolved.asInstanceOf[TExpr[Any]],
-                              definingSheet,
-                              clock,
-                              workbook,
-                              currentCell
-                            )
-                            .map(unwrapBindingValue)
+                      // Keep references through name aliases and LET bodies too. Materializing
+                      // an alias here loses its position, so a plain consumer would read the
+                      // top-left value instead of intersecting the reference at its own row.
+                      derived
+                        .referenceArgument(
+                          resolved.asInstanceOf[TExpr[Any]],
+                          definingSheet,
+                          clock,
+                          workbook,
+                          currentCell
+                        )
+                        .flatMap {
+                          case RangeOperand(targetSheet, range) => read(targetSheet, range)
+                          case value => Right(unwrapBindingValue(value))
+                        }
 
   /**
    * Fold one raw range for the [[TExpr.Aggregate]] node. Mirrors the FunctionSpec variadic

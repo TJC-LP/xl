@@ -387,6 +387,59 @@ class DiffStructureSpec extends CatsEffectSuite:
     assertEquals(diffOf(wb(a), wb(restyled)).sheets.head.conditionalFormatsChanged, Vector("B2:B9"))
   }
 
+  test("conditional formats: precedence across overlapping blocks is a structural change") {
+    val a = cf(base, block("A1:A2", cellIs("0", 1)), block("A2:A3", cellIs("0", 2, green)))
+    val swapped = cf(base, block("A1:A2", cellIs("0", 2)), block("A2:A3", cellIs("0", 1, green)))
+    val diff = diffOf(wb(a), wb(swapped))
+    assert(!diff.identical)
+    assertEquals(diff.sheets.head.conditionalFormatsChanged, Vector("A1:A2", "A2:A3"))
+    assert(diffOf(wb(a), wb(swapped), cellsOnly = true).identical)
+
+    // Renumbering and serializing the blocks in another order preserve the same precedence.
+    val renumbered =
+      cf(base, block("A2:A3", cellIs("0", 20, green)), block("A1:A2", cellIs("0", 10)))
+    assert(diffOf(wb(a), wb(renumbered)).identical)
+  }
+
+  test("conditional formats: tied priorities keep the document-order tiebreak across blocks") {
+    val redBlock = block("A1:A2", cellIs("0", 1))
+    val greenBlock = block("A2:A3", cellIs("0", 1, green))
+    val a = cf(base, redBlock, greenBlock)
+    val b = cf(base, greenBlock, redBlock)
+    assertEquals(
+      diffOf(wb(a), wb(b)).sheets.head.conditionalFormatsChanged,
+      Vector("A1:A2", "A2:A3")
+    )
+  }
+
+  test("conditional formats: preserved rules participate in worksheet-wide precedence") {
+    def opaque(priority: Int): CfRule = CfRule.Preserved(
+      s"""<cfRule type="iconSet" priority="$priority"/>""",
+      Some(priority)
+    )
+    val a = cf(base, block("A1:A2", cellIs("0", 1)), block("A2:A3", opaque(2)))
+    val b = cf(base, block("A1:A2", cellIs("0", 2)), block("A2:A3", opaque(1)))
+    assertEquals(
+      diffOf(wb(a), wb(b)).sheets.head.conditionalFormatsChanged,
+      Vector("A1:A2", "A2:A3")
+    )
+    val renumbered = cf(base, block("A1:A2", cellIs("0", 5)), block("A2:A3", opaque(9)))
+    assert(diffOf(wb(a), wb(renumbered)).identical)
+  }
+
+  test("conditional formats: opaque blocks keep their priority relative to typed blocks") {
+    def opaque(priority: Int): ConditionalFormat = ConditionalFormat.Preserved(
+      s"""<conditionalFormatting sqref="A2:A3" x:unknown="1"><cfRule type="iconSet" priority="$priority"/></conditionalFormatting>"""
+    )
+    val a = cf(base, block("A1:A2", cellIs("0", 1)), opaque(2))
+    val b = cf(base, block("A1:A2", cellIs("0", 2)), opaque(1))
+    assertEquals(
+      diffOf(wb(a), wb(b)).sheets.head.conditionalFormatsChanged,
+      Vector("A1:A2", "A2:A3")
+    )
+    assert(diffOf(wb(a), wb(cf(base, opaque(20), block("A1:A2", cellIs("0", 10))))).identical)
+  }
+
   // ========== Data validations ==========
 
   test("data validations: added, removed and changed by sqref; xr:uid is not content") {

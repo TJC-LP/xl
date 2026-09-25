@@ -24,9 +24,13 @@ class LiveRenderSpec extends FunSuite:
   private def range(a1: String): CellRange = CellRange.parse(a1).fold(fail(_), identity)
   private def aref(a1: String): ARef = ARef.parse(a1).fold(fail(_), identity)
   private def num(n: Int): CellValue = CellValue.Number(BigDecimal(n))
-  private def reads(sheet: Sheet, window: String): Set[String] =
+  private def reads(
+    sheet: Sheet,
+    window: String,
+    workbook: Option[Workbook] = None
+  ): Set[String] =
     CfEvaluator
-      .reads(sheet, range(window))
+      .reads(sheet, range(window), workbook)
       .map(r => if r.start == r.end then r.start.toA1 else r.toA1)
       .toSet
 
@@ -65,6 +69,54 @@ class LiveRenderSpec extends FunSuite:
     val bar = CfRule.dataBar(Color.Rgb(0xff638ec6), Cfvo.Formula("$F$1"), Cfvo.Max)
     val sheet = stale.conditionalFormat(range("A1:A10"), bar)
     assertEquals(reads(sheet, "A1:A2"), Set("A1:A10", "F1"))
+  }
+
+  test("named CF reads resolve aliases, local scope and case-variant sheet qualifiers") {
+    val sheet = stale.conditionalFormat(range("A1:A3"), CfRule.expression("thresholdAlias>5", pink))
+    val wb = Workbook(Vector(sheet))
+      .withDefinedName("threshold", "S!$Z$1")
+      .withDefinedName("threshold", "s!$C$1+SUM(s!$D$1:$D$2)", sheet.name)
+      .fold(err => fail(err.message), identity)
+      .withDefinedName("thresholdAlias", "S!threshold")
+    assertEquals(reads(sheet, "A1:A3", Some(wb)), Set("C1", "D1:D2"))
+  }
+
+  test("named ranges and named value-object formulas remain symbolic reads") {
+    val bar = CfRule.dataBar(Color.Rgb(0xff638ec6), Cfvo.Formula("minimum"), Cfvo.Max)
+    val sheet = stale
+      .conditionalFormat(range("A1:A3"), CfRule.expression("COUNTIF(drivers,A1)>0", pink))
+      .conditionalFormat(range("A1:A3"), bar)
+    val wb = Workbook(Vector(sheet))
+      .withDefinedName("drivers", "S!$C:$C")
+      .withDefinedName("minimum", "S!$F$1")
+    assertEquals(reads(sheet, "A1", Some(wb)), Set("C1:C1048576", "A1", "A1:A3", "F1"))
+  }
+
+  test("a named formula outside the viewport is live before conditional formats paint") {
+    val sheet = stale
+      .put(aref("C1"), CellValue.Formula("B1+9", Some(num(0))))
+      .conditionalFormat(range("A1:A3"), CfRule.expression("threshold>5", pink))
+    val wb = Workbook(Vector(sheet)).withDefinedName("threshold", "S!$C$1")
+    def paint(window: String): CfOverlay =
+      val live = LiveRender.evaluate(sheet, range(window), Clock.system, Some(wb))
+      assertEquals(live.failures, Vector.empty)
+      assertEquals(live.values.get(aref("C1")), Some(num(10)))
+      val rendered = live.values.foldLeft(sheet) { case (s, (at, value)) => s.put(at, value) }
+      rendered
+        .evaluateConditionalFormats(range("A1:A3"), Some(wb.put(rendered)), Clock.system)
+        .overlay
+    val narrow = paint("A1:A3")
+    assertEquals(narrow.cells.keySet, Set(aref("A1"), aref("A2"), aref("A3")))
+    assertEquals(narrow, paint("A1:C3"))
+  }
+
+  test("a failing named CF precedent outside the viewport is reported") {
+    val sheet = stale
+      .put(aref("C1"), CellValue.Formula("NOSUCHFN(1)", Some(num(0))))
+      .conditionalFormat(range("A1:A3"), CfRule.expression("threshold>5", pink))
+    val wb = Workbook(Vector(sheet)).withDefinedName("threshold", "S!$C$1")
+    val result = LiveRender.evaluate(sheet, range("A1:A3"), Clock.system, Some(wb))
+    assertEquals(result.failures.map(_.ref), Vector(aref("C1")))
   }
 
   test("a formula that does not parse reads nothing") {

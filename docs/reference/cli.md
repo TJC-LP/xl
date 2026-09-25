@@ -538,7 +538,9 @@ range; top/bottom, scale and bar statistics cover the rule's whole range, not ju
 window. The rules see the values the picture draws — cached values, or live ones under `--eval`.
 Under `--eval` every formula the window's rules read is evaluated with the window: a top/bottom,
 scale or bar rule's whole range, and the same-sheet cells a formula rule reads at each window
-cell. So a cell's paint never depends on the window asked for, and a formula among them that
+cell, including precedents reached through defined names and aliases (with sheet scope respected).
+References to other sheets use those sheets' cached values. So a cell's paint never depends on
+the window asked for, and a formula among its local precedents that
 cannot evaluate is part of the one `EVAL_FAILED` warning (and of the `--strict` gate for html and
 svg). Without `--eval`, a formula with no cached value (as openpyxl writes them) is computed:
 top/bottom, scale and bar statistics follow a chain filled down or across whatever its length,
@@ -1904,6 +1906,8 @@ for it.
 - **Conditional formats and data validations** — added / removed / changed, keyed by sqref (ranges
   sorted, so token order does not matter). A changed threshold, dropdown list or rule is a change;
   Excel's sheet-wide renumbering of rule priorities, dxf ids and `xr:uid` revision GUIDs is not.
+  Relative rule precedence is compared across all blocks, including preserved rules: swapping
+  priorities between overlapping ranges is a change. Tied priorities retain document order.
 - **Sheet order** — the relative order of the sheets both books have (`A, B, C -> B, A, C`); a sheet
   inserted or removed mid-book is already `sheetsAdded` / `sheetsRemoved`, not a reorder.
 - **Defined names** — added / removed / changed (formula text or the hidden flag), keyed by scope
