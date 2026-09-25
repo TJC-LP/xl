@@ -42,7 +42,13 @@ object FormulaEcho:
               fullFormula,
               math.max(0, math.min(column - SampleChars / 2, fullFormula.length - SampleChars))
             )
-            val end = whole(fullFormula, math.min(start + SampleChars, fullFormula.length))
+            // the window always holds the caret's character: moving `start` back off a surrogate
+            // pair must not push the last character out when the caret sits on it
+            val cut = whole(
+              fullFormula,
+              math.min(math.max(start + SampleChars, column + 1), fullFormula.length)
+            )
+            val end = if cut <= column then math.min(column + 2, fullFormula.length) else cut
             val lead = if start > 0 then Ellipsis else ""
             val tail = if end < fullFormula.length then Ellipsis else ""
             val shown = lead + fullFormula.substring(start, end) + tail

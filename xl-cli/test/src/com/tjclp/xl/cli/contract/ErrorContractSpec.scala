@@ -841,7 +841,10 @@ class ErrorContractSpec extends CatsEffectSuite:
         )
       for run <- List(verb, verbStream) do
         assertEquals(run.exit, 3, run.stdout)
-        assertEquals(ujson.read(run.stdout)("error")("message").str, s"$sample\n$reason")
+        assertEquals(
+          ujson.read(run.stdout)("error")("message").str,
+          s"the formula does not parse\n$sample\n$reason"
+        )
         // stderr's Error: echo carries the same capped text
         assert(run.stderr.length < 400, run.stderr.take(200))
   }

@@ -14,7 +14,51 @@ and `deps` expanding a whole-column range cell by cell. Each was designed by ind
 implemented test-first in its own worktree and adversarially reviewed (mutation checks, headless
 Chromium for the HTML render, the LibreOffice oracle for the evaluator) before integration.
 
+Wave 31 then swept the Wave-30 follow-ups (#460, #669–#681) in six worktree clusters, each
+test-first and adversarially reviewed, with the evaluator and display changes pinned against a
+LibreOffice 25.8 recalculation: the formula grammar Excel writes and the parser refused (union and
+intersection, array constants, `TRUE()`), flat operator chains of any length, lookup and financial
+error-code parity, `LOOKUP`/`XMATCH`, Excel's 11-character General display, raster backends that
+exit early, a data-table staleness note in `audit`, and the library gaps `describe`/`lint` left.
+
 ### Added
+
+- **Union and intersection reference operators, array constants, `TRUE()`/`FALSE()`** (#669): the
+  parser now reads `=SUM((A1,A2))`, `=INDEX((A1:B2,A1:C2),1,1,2)`, `=AREAS((A1,B1))` (LibreOffice's
+  `~` union too) and `=SUM((A1:B2 B1:C2))`; the aggregates fold every area, `INDEX` gains
+  `area_num`, a union anywhere else is `#VALUE!` and an empty intersection `#NULL!`, and
+  intersection dependency edges are the shared cells. Array constants `{1,2;3,4}` (numbers,
+  negatives, text, booleans, error values) parse, print verbatim and evaluate as arrays, in plain
+  cells too (`SUM({1,2}*2)` is 6). `TRUE()`/`FALSE()` are zero-argument calls, a bare `NOT` at the end
+  or before an operator is a defined name, and `Sheet1!A1:Sheet1!B2` is the range `Sheet1!A1:B2`.
+  Batch `putf` and the `putf` verb accept all of them. Structured references, 3-D references and
+  `LAMBDA` calls remain parse errors (#669 stays open for them).
+- **`LOOKUP` and `XMATCH`** (#670): `LOOKUP` in its vector and array forms; `XMATCH` with
+  match_mode −1/0/1/2 and search_mode 1/−1/2/−2 (a 2-D array or an unknown mode is `#VALUE!`).
+  Misses are the typed `#N/A` `IFNA`/`ISNA` see. The registry holds 124 functions.
+- **`Excel.lint` / `Excel.lintStream`** (#674): the library lint runs the same parser-backed
+  `formula-unparseable` rule `xl lint` does (the oracle moved to xl-evaluator's
+  `UnparseableFormula`); exported with `Finding`/`LintCategory`/`LintSeverity` from the scripting
+  prelude and `com.tjclp.xl.{*, given}`.
+- **`Workbook.effectiveDefinedNames`** (#674): the workbook's names including the print area and
+  print titles a read lifts into `Sheet.pageSetup`, in the order the writer emits them.
+  `WorkbookSummary.definedNames` (so `wb.describe`) and `describe --full` read it.
+- **`ExcelIO.writeStreamStyledWithAutoDetect`** (#675): the O(1) two-pass writer with a style table,
+  so a CSV imported into a new workbook through the streaming branch shows its dates as dates.
+  Streaming zip entries carry time 0, so identical input writes byte-identical archives.
+- **Lint rule `autofilter-name-mismatch`** (hygiene, #460): a sheet-scoped `_xlnm._FilterDatabase`
+  naming a range other than the sheet's `<autoFilter ref>`. Probed on Excel for Mac and LibreOffice:
+  a stale name opens without repair, so it is hygiene, and a missing or leftover name is not a
+  finding. `xl autofilter` and the batch op now move the name with the filter, as Excel does.
+- **`xl audit` notes stale data tables** (#678): after `put` re-solves a model, a data table's
+  interior keeps its old caches (Excel parity under `autoNoTable`). The audit re-evaluates up to 8
+  interior cells per table through the `recalc --tables` path and reports a `dataTableStale` note
+  naming them, with the lever. Tables whose what-if cone is volatile (directly or through defined
+  names) are skipped, so two audits of one file agree.
+- **Cycles that settle on error values are named** (#678): `SccReport.errorValued`,
+  `RecalcResult.errorValuedCycles`, `recalc --json` `data.errorValuedCycles`, and the summary adds
+  `, 1 cycle settled on error values`. `certified` keeps meaning "at a fixpoint with no host errors"
+  (Excel keeps an error as a stable value).
 
 - **Conditional formatting in the pictures** (#497): `xl view --format html|svg|png|jpeg|webp|pdf`
   paints a sheet's conditional formatting as Excel does, with no flag — cell-value rules (all eight
@@ -77,6 +121,49 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
 - **`xl deps --expand`** lists a range precedent's occupied cells one by one (the pre-0.24 shape).
 
 ### Changed
+
+- **Breaking: plain lookups follow Excel's error codes** (#670): an error-typed lookup_value is the
+  answer (`VLOOKUP(1/0,…)` is `#DIV/0!`); `MATCH` reads match_type by sign (5 is 1, −3 is −1);
+  approximate matching compares text case-insensitively over sorted text and never crosses text
+  with numbers, across VLOOKUP/HLOOKUP/MATCH/XLOOKUP/XMATCH/LOOKUP; a blank lookup_value matches
+  nothing; `INDEX` past its array caches `#REF!` (negative `#VALUE!`), and an XLOOKUP shape mismatch
+  `#VALUE!`. Public API: the lookup_value slot of `MatchArgs`/`XLookupArgs` is `TExpr[CellValue]`
+  and `xl functions --json` names it `cell`; `IndexArgs` is a 4-tuple over a
+  `ReferenceOperators.Operand` (area_num).
+- **Breaking: financial failures cache `#NUM!`** (#670 h): XIRR/IRR without a sign change, XIRR/XNPV
+  count mismatches and empty ranges, zero slopes, numeric overflow and `NPV` at rate −1 were host
+  failures that left the cell uncached (so `xl audit` called inherited books uncached); they are now
+  the cached `#NUM!` Excel shows (unreadable flows or dates `#VALUE!`).
+- **Breaking: General cell display follows Excel's 11-character rule** (#672): `view`, the renders
+  and `--json` `formatted` show 0.000012345 as `1.2345E-05` and 123456789012 as `1.23457E+11`
+  (values keep every digit); the E form no longer depends on the locale, and a hostile stored
+  exponent renders bounded. `TEXT` keeps the text-conversion rule, also through a `General` keyword
+  inside a custom code.
+- **Scaling commas before the decimal point** (#672): `#,##0,.0` and `0,,.0` scale by 1,000 per
+  comma, as Excel documents. Any other stray comma is literal text (`0"x",` no longer drops it) and
+  `General0` renders the value once.
+- **A cached formula in a text position reads its value** (#671): `=""&B1` over a cached
+  `B1` is its cached value, not its formula text, without a prior recalc; boolean and date literals
+  in text positions re-print as written (`=TRUE&""`).
+- **Operator chains cost no nesting** (#680): the 128-level budget counts nesting (calls,
+  parentheses, prefix/postfix operators), so flat `+`, `&`, comparison and `*` chains of any length
+  parse, including terms ending in `%` or holding an intersection. A new per-formula budget of 1,024
+  binary operators (`TooManyOperators`) bounds what still recurses; Excel's own limit is the
+  8,192-character formula.
+- **Parse errors read the same everywhere** (#681): the caret sits under the character it names,
+  counting the `=`; `putf` leads with `the formula does not parse` and puts the formula block on its
+  own lines; every gate caps the echoed formula at 80 characters (a window around the caret for a
+  longer one, no caret for `FormulaTooLong`, never splitting a surrogate pair); a batch drag's
+  re-parse fails with a typed `FORMULA_ERROR`; `xl eval` prints the diagnostic, not the parser's
+  case class; `--stream putf` names the failing cell as the in-memory verb does; `xl audit` and
+  `xl lint` render an unparseable formula on one line, line breaks flattened (#676).
+- **A global flag a verb cannot take is named** (#676): `xl -f f.xlsx -s Data names` says
+  `names does not take -s/--sheet` (every sheetless verb), and `xl new -o out.xlsx` says so with the
+  hint `xl new out.xlsx`, each with the repaired command line; a second mistake on the line
+  (`view --bogus -o x`) is reported first. The `--json` stderr `Error:` echo stays, documented.
+- **Raster failures are typed** (#673): a forced backend that cannot write the format
+  (`--rasterizer rsvg-convert --format jpeg`) and a conversion failure are `RASTERIZER_UNAVAILABLE`
+  with the backend's stderr, not `INTERNAL`.
 
 - **Breaking: a failed `--strict` gate writes nothing, with `-o` as with `-i`** (#677): a write
   whose recalculation reports formula-evaluation errors, iterative non-convergence, data-table seed
@@ -184,6 +271,18 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   the defect wording, where it was `INTERNAL`.
 
 ### Fixed
+
+- **A raster backend that exits early prints no stack trace** (#673): rsvg-convert, cairosvg and
+  ImageMagick (conversion and availability probe) now run through one `java.lang.Process` backend
+  that writes stdin while draining stdout and stderr, so a backend exiting before it reads its SVG
+  reports `ConversionFailed` with its stderr instead of a 23-frame "Stream closed" trace.
+- **Non-finite doubles are `#NUM!`** (#681): `&` over NaN/Infinity (scalar and array elements) and
+  text coercion no longer write `NaN` or throw; `ExprValue.from` is total.
+- **Lint cannot leak a `StackOverflowError`** (#681): the formula oracle converts a parser stack
+  overflow on untrusted `<f>` text into a finding (fail closed), and structured (`Table1[Amount]`)
+  and external (`[1]Sheet1!A1`) references no longer force a parse per formula.
+- **`ROW`/`COLUMN`/`CELL` quote a non-reference argument as written**, not as the expression's
+  case class, and a long chain there no longer exhausts the stack while building the message.
 
 - **Streaming read errors print one diagnostic**: metadata, shared-string and style reads cache
   failures as values before raising them in the caller. A fast memoized failure no longer races
