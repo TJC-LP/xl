@@ -46,7 +46,8 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
    `xl -f file describe`.
 3. **Reads need `-f`; writes need `-o` (a new file) or `-i` (in place).** A write with neither is
    `OUTPUT_REQUIRED`, exit 2, before anything is read. Writes are atomic: the output appears only
-   when the whole command succeeded. **The file is never positional**: the first non-flag token
+   when the command exits 0 — a failure (2/3) or a failed `--strict` gate (1) leaves `-o` unwritten
+   and `-i`'s input byte-identical. **The file is never positional**: the first non-flag token
    is the verb, so `xl data.xlsx view A1:B4` takes `data.xlsx` for a verb and fails
    `UNKNOWN_VERB` (exit 2) — a verb's positionals are its own (the range, the ref, the formula,
    `copy`'s source and target, `delete-rows`' row and count).
@@ -67,7 +68,7 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
    | exit | meaning | file written? |
    |---|---|---|
    | `0` | ok | as requested |
-   | `1` | completed with findings or a failed gate (`diff` differs, `lint` findings, `audit --fail-on-findings`, `--strict`) — **never a failure** | `-o`: yes; `-i`: no |
+   | `1` | completed with findings or a failed gate (`diff` differs, `lint` findings, `audit --fail-on-findings`, `--strict`) — **never a failure** | no |
    | `2` | usage — the command line is wrong (unknown verb, `-o` missing, `-i` with `-o`, unsupported under `--stream`) | no |
    | `3` | failed — the operation could not complete (sheet not found, bad ref, formula error, unreadable file) | no |
 
@@ -108,7 +109,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Sheets | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide\|show`, `name add\|rm` | `rename-sheet` rewrites every reference to the sheet. `name add\|rm` are workbook-scoped unless `-s` names the scope sheet: `-s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20'` sets that sheet's print area; names match case-insensitively (`case` replaces `CASE`) |
 | Deliverable finish | `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `autofilter`, `freeze`, `cf add`, `chart add`, `add-image` | every one but `add-image` has a batch twin |
 | Import data | `import <csv>`, `import-md <table.md\|->` | `--new-sheet`, type detection |
-| Refresh cached values | `recalc` (`--tables`, `--parallel n`) | `--strict` exits 1 on formula errors |
+| Refresh cached values | `recalc` (`--tables`, `--parallel n`) | `--strict` exits 1 and writes nothing on formula errors |
 | Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / repair findings; `lint --strict` fails on hygiene findings (shared-string orphans, unreferenced parts) too |
 | New workbook | `new out.xlsx --sheet Data --sheet Summary` | |
 | What can the binary do? | `schema`, `functions`, `rasterizers`, `batch --schema` | no `-f` |
@@ -262,8 +263,10 @@ xl -Xmx32g -f huge.xlsx --max-size 0 audit          # native image: -Xmx anywher
 ### Cache posture and strict pipelines
 
 Writes recalculate the edit's dependency cone and report formula errors advisorily (exit 0).
-`--strict` turns those reports into exit 1 (`RECALC_GATE`): with `-o` the file is still written,
-with `-i` the input is left untouched. `--no-recalc` (`--preserve-caches`) applies the edit and
+`--strict` turns those reports into exit 1 (`RECALC_GATE`) and writes nothing: `-o` is not created
+(an existing file there is left as it was), `-i` leaves the input untouched; the summary still
+names the failing cells. To keep the file, run the same command without `--strict` (identical
+bytes, exit 0). `--no-recalc` (`--preserve-caches`) applies the edit and
 recalculates nothing — for books whose numbers come from another engine; structural edits then
 keep only the caches the edit provably left unchanged, write every formula it could have changed
 without a `<v>` (the summary counts both), and mark the workbook `fullCalcOnLoad`: Excel recomputes

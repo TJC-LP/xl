@@ -1404,7 +1404,9 @@ object WriteCommands:
     }
 
   /**
-   * GH-496: the `--strict` gate. The write has already happened; this only decides the exit code.
+   * GH-496: the `--strict` gate. The verb has already written its output path — in the CLI always a
+   * staging file; this only decides the outcome, and the runner publishes the staged file only on
+   * exit 0 (#677).
    *
    * Advisory by default (the summary is returned as-is, exit 0). Under `--strict` a recalculation
    * that reported formula errors, left a cyclic component unconverged (exhausted its budget or
@@ -1528,7 +1530,8 @@ object WriteCommands:
    * Formula errors (circular references, bad refs) are data conditions, not tool failures: failing
    * cells are left uncached — exactly as Excel leaves them — the workbook is still written, and the
    * errors are reported in the summary. Callers exit 0 unless `--strict` is set (GH-496), which
-   * promotes errors, non-convergence and seed warnings to exit 1 — the file is written either way.
+   * promotes errors, non-convergence and seed warnings to exit 1 — the staged file is written
+   * either way; the runner withholds it on a gate failure (#677).
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer

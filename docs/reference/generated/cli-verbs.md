@@ -32,7 +32,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `--stream` | — | no | O(1)-memory streaming for large files: search, stats, bounds, view, cell, filter, describe, sheets, names, lint; put, putf, style and the streamable batch ops (other write verbs accept the flag but load the workbook; each verb's `stream` says which — o1, backend, refused) |
 | `--no-recalc` | — | no | Write verbs: apply the edit and recalculate nothing; structural edits keep only the caches the edit provably left unchanged, leave the rest uncached and mark the workbook fullCalcOnLoad (Excel recomputes on open; LibreOffice and cache-only readers display what is cached) |
 | `--preserve-caches` | — | no | Alias for --no-recalc |
-| `--strict` | — | no | Write verbs: exit 1 when the recalculation reports formula errors, non-convergence or data-table seed warnings; lint: exit 1 on hygiene findings too, not only repairs (after `view` it is view's own --eval gate) |
+| `--strict` | — | no | Write verbs: exit 1 and write nothing when the recalculation reports formula errors, non-convergence or data-table seed warnings; lint: exit 1 on hygiene findings too, not only repairs (after `view` it is view's own --eval gate) |
 
 ## Verbs
 

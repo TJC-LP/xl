@@ -12,7 +12,8 @@ enum Payload derives CanEqual:
    * The legacy bridge for prose verbs: the text exactly as text mode prints it, plus the two facts
    * every write knows — the path the run committed to (the user-visible one, never the staging
    * temp) and whether it committed at all. `saved = None`, `written = false` when nothing was
-   * committed: a read verb, or an `-i` run whose strict gate discarded the staged output.
+   * committed: a read verb, or a run whose `--strict` gate withheld the staged output (`-o` or
+   * `-i`).
    */
   case Text(text: String, saved: Option[String], written: Boolean)
 

@@ -11,6 +11,6 @@ message text.
 | exit | meaning |
 | --- | --- |
 | `0` | ok |
-| `1` | completed with findings or a failed gate (diff differs, lint findings, audit --fail-on-findings, --strict) — never a failure; with -o the file is written, with -i the input is left untouched |
+| `1` | completed with findings or a failed gate (diff differs, lint findings, audit --fail-on-findings, --strict) — never a failure; nothing written (a --strict gate leaves -o unwritten and -i untouched) |
 | `2` | usage — the command line is wrong; nothing read, nothing written |
 | `3` | failed — the operation could not complete; nothing written |

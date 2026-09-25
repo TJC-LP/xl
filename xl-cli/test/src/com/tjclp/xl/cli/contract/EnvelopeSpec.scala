@@ -252,7 +252,8 @@ class EnvelopeSpec extends CatsEffectSuite:
   }
 
   test(
-    "-o --strict recalc --json on a cyclic book: exit 1 but the output is written and recorded"
+    "-o --strict recalc --json on a cyclic book: exit 1, RECALC_GATE, saved:null, written:false, " +
+      "no file (#677)"
   ) {
     val out = file("strict-json-out.xlsx")
     CliHarness
@@ -260,11 +261,15 @@ class EnvelopeSpec extends CatsEffectSuite:
       .map { run =>
         assertEquals(run.exit, 1, run.stderr)
         val e = envelope(run)
+        assertEquals(e("ok"), ujson.False)
         assertEquals(e("error")("code"), ujson.Str("RECALC_GATE"))
-        assertEquals(e("data")("saved"), ujson.Str(out))
-        assertEquals(e("data")("written"), ujson.True)
-        assert(e("data")("text").str.contains(s"Saved: $out"), e("data")("text").str)
-        assert(Files.size(Path.of(out)) > 0L)
+        assertEquals(e("data")("saved"), ujson.Null)
+        assertEquals(e("data")("written"), ujson.False)
+        val text = e("data")("text").str
+        assert(text.contains(s"NOT saved (--strict failure): nothing written to $out"), text)
+        assert(text.contains("STRICT FAILURE (--strict)"), text)
+        assertEquals(run.stderr, "", "a gate keeps its report as data and prints no Error: line")
+        assert(!Files.exists(Path.of(out)), "a failed --strict gate must not create the -o file")
       }
   }
 

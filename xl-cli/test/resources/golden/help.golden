@@ -71,7 +71,7 @@ LLM-friendly Excel operations (stateless)
 
 Exit codes:
   0  ok
-  1  completed with findings or a failed gate (diff differs, lint findings, --strict) — never a failure
+  1  completed with findings or a failed gate (diff differs, lint findings, --strict) — never a failure; nothing written
   2  usage — the command line is wrong; nothing read, nothing written
   3  failed — the operation could not complete; nothing written
 Results go to stdout; errors (Error: <message>, then code:/hint: lines) and warnings go to stderr.
@@ -94,7 +94,7 @@ Options and flags:
     --stream
         Use O(1) memory streaming for large files (100k+ rows). Supports: search, stats, bounds, view (markdown/csv/json). 7-8x faster than in-memory.
     --strict
-        Writes: exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0); with -o the output is written, with -i a strict failure leaves the input unchanged. lint: exit 1 on hygiene findings too (default: repair findings only).
+        Writes: exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0); a strict failure writes nothing: -o is neither created nor replaced, -i leaves the input unchanged. lint: exit 1 on hygiene findings too (default: repair findings only).
     --output <path>, -o <path>
         Output file (required)
     --in-place, -i
@@ -647,7 +647,7 @@ Subcommands:
         Formula errors (e.g. circular references) are data conditions, not tool
         failures: affected cells are left uncached, the file is still written, the
         errors are listed in the summary, and the exit code is 0. Pass the global
-        --strict flag (before the verb) to exit 1 instead when the summary carries
+        --strict flag to exit 1 and write nothing instead when the summary carries
         formula errors, iterative non-convergence, or --tables seed warnings.
 
         Data-table records (<f t="dataTable">) keep their PINNED caches by default —

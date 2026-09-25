@@ -2,7 +2,10 @@ package com.tjclp.xl.cli
 
 import java.nio.file.{Files, Path}
 
+import scala.jdk.CollectionConverters.*
+
 import cats.effect.IO
+import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
@@ -1433,19 +1436,41 @@ class MainSpec extends CatsEffectSuite:
       assertEquals(recalculated, Some(BigDecimal(12)), "the default still refreshes the cone")
   }
 
-  test("GH-496: --strict exits 1 on a failing recalc; the same run without it exits 0") {
+  /** The names in `dir`, so a leftover `.xl-output-*` staging file shows up in an assertion. */
+  private def dirEntries(dir: Path): List[String] =
+    val stream = Files.list(dir)
+    try stream.iterator.asScala.map(_.getFileName.toString).toList.sorted
+    finally stream.close()
+
+  test("GH-496/#677: --strict exits 1 on a failing recalc and writes nothing; without it, exit 0") {
     val wb = Workbook(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None)))
     for
-      in <- IO.blocking(Files.createTempFile("strict-in", ".xlsx"))
+      dir <- IO.blocking(Files.createTempDirectory("strict-recalc"))
+      in = dir.resolve("in.xlsx")
+      advisoryOut = dir.resolve("advisory.xlsx")
+      strictOut = dir.resolve("strict.xlsx")
       _ <- ExcelIO.instance[IO].write(wb, in)
-      out <- IO.blocking(Files.createTempFile("strict-out", ".xlsx"))
-      advisory <- runCli("-f", in.toString, "-o", out.toString, "recalc")
-      strict <- runCli("-f", in.toString, "-o", out.toString, "--strict", "recalc")
-      written <- IO.blocking(Files.size(out))
+      advisory <- runCli("-f", in.toString, "-o", advisoryOut.toString, "recalc")
+      written <- IO.blocking(Files.size(advisoryOut))
+      strict <- runCli("-f", in.toString, "-o", strictOut.toString, "--strict", "recalc")
+      strictExists <- IO.blocking(Files.exists(strictOut))
+      before <- IO.blocking(Files.readAllBytes(advisoryOut))
+      onto <- runCli("-f", in.toString, "-o", advisoryOut.toString, "--strict", "recalc")
+      after <- IO.blocking(Files.readAllBytes(advisoryOut))
+      left <- IO.blocking(dirEntries(dir))
+      _ <- IO.blocking(left.foreach(name => Files.deleteIfExists(dir.resolve(name)))) *>
+        IO.blocking(Files.deleteIfExists(dir))
     yield
       assertEquals(advisory, cats.effect.ExitCode.Success)
+      assert(written > 0L, "the advisory run writes the output file")
       assertEquals(strict, cats.effect.ExitCode(1))
-      assert(written > 0L, "--strict still writes the output file")
+      assert(!strictExists, "a failed --strict gate must not create the -o file")
+      assertEquals(onto, cats.effect.ExitCode(1))
+      assert(
+        java.util.Arrays.equals(before, after),
+        "a failed --strict gate must leave an existing -o file byte-identical"
+      )
+      assertEquals(left, List("advisory.xlsx", "in.xlsx"), "no staging file may be left behind")
   }
 
   /** Run a parsed command line with stdout redirected, so printed lines can be asserted on. */
@@ -1461,19 +1486,33 @@ class MainSpec extends CatsEffectSuite:
         .map(code => (code, buffer.toString(java.nio.charset.StandardCharsets.UTF_8)))
     }
 
-  test("GH-496: a strict failure says Saved with -o and NOT saved with -i") {
+  test("#677: a strict failure says NOT saved with -o and with -i, and writes neither") {
     val wb = Workbook(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None)))
     for
       in <- IO.blocking(Files.createTempFile("strict-msg-in", ".xlsx"))
       _ <- ExcelIO.instance[IO].write(wb, in)
       out <- IO.blocking(Files.createTempFile("strict-msg-out", ".xlsx"))
+      outBefore <- IO.blocking(Files.readAllBytes(out))
       viaOutput <- runCliCaptured("-f", in.toString, "-o", out.toString, "--strict", "recalc")
+      outAfter <- IO.blocking(Files.readAllBytes(out))
       before <- IO.blocking(Files.readAllBytes(in))
       viaInPlace <- runCliCaptured("-f", in.toString, "-i", "--strict", "recalc")
       after <- IO.blocking(Files.readAllBytes(in))
+      _ <- IO.blocking { Files.deleteIfExists(in); Files.deleteIfExists(out) }
     yield
       assertEquals(viaOutput._1, cats.effect.ExitCode(1))
-      assert(viaOutput._2.contains(s"Saved: $out"), s"-o really writes:\n${viaOutput._2}")
+      assert(
+        !viaOutput._2.contains("Saved:"),
+        s"-o withholds the staged file, so it must not claim a save:\n${viaOutput._2}"
+      )
+      assert(
+        viaOutput._2.contains(s"NOT saved (--strict failure): nothing written to $out"),
+        s"-o must say what actually happened:\n${viaOutput._2}"
+      )
+      assert(
+        java.util.Arrays.equals(outBefore, outAfter),
+        "a strict failure under -o must leave the existing destination byte-identical"
+      )
       assertEquals(viaInPlace._1, cats.effect.ExitCode(1))
       assert(
         !viaInPlace._2.contains("Saved:"),
@@ -1499,13 +1538,74 @@ class MainSpec extends CatsEffectSuite:
     yield assertEquals(code, cats.effect.ExitCode.Success)
   }
 
-  test("GH-504: strict putf exits 1 and rolls back an in-place write") {
+  test("#677: every gating write verb withholds -o on a failed --strict gate; advisory writes") {
+    // B1 parses (an undefined name is a legal reference) but cannot evaluate, so every verb's
+    // recalculation reports it: authored (putf, batch), a dependent (put), copied (fill, copy),
+    // left uncached (structural, recalc) or re-read after a name edit (name add)
+    val wb = Workbook(
+      Sheet("Data").put(ref"A1" -> 1).put(ref"B1", CellValue.Formula("A1+NoSuchName", None))
+    )
+    for
+      dir <- IO.blocking(Files.createTempDirectory("strict-verbs"))
+      in = dir.resolve("in.xlsx")
+      ops = dir.resolve("ops.json")
+      _ <- ExcelIO.instance[IO].write(wb, in)
+      _ <- IO.blocking(
+        Files.writeString(ops, """[{"op":"putf","ref":"C1","formula":"=NoSuchName*2"}]""")
+      )
+      verbs = List(
+        List("put", "A1", "2"),
+        List("putf", "C1", "=NoSuchName*2"),
+        List("fill", "B1", "B1:B3"),
+        List("copy", "B1", "D1"),
+        List("insert-rows", "5", "1"),
+        List("delete-cols", "D", "1"),
+        List("name", "add", "Tax", "0.2"),
+        List("recalc"),
+        List("batch", ops.toString)
+      )
+      runs <- verbs.zipWithIndex.traverse { (verb, i) =>
+        val strictOut = dir.resolve(s"strict-$i.xlsx")
+        val advisoryOut = dir.resolve(s"advisory-$i.xlsx")
+        for
+          strict <- contract.CliHarness.run(
+            List("-f", in.toString, "-s", "Data", "-o", strictOut.toString, "--strict") ++ verb,
+            ""
+          )
+          created <- IO.blocking(Files.exists(strictOut))
+          advisory <- contract.CliHarness.run(
+            List("-f", in.toString, "-s", "Data", "-o", advisoryOut.toString) ++ verb,
+            ""
+          )
+          written <- IO.blocking(Files.exists(advisoryOut))
+        yield (verb.mkString(" "), strictOut, strict, created, advisory, written)
+      }
+      left <- IO.blocking(dirEntries(dir))
+      _ <- IO.blocking(left.foreach(name => Files.deleteIfExists(dir.resolve(name)))) *>
+        IO.blocking(Files.deleteIfExists(dir))
+    yield
+      runs.foreach { (verb, strictOut, strict, created, advisory, written) =>
+        assertEquals(strict.exit, 1, s"$verb --strict: ${strict.stdout}${strict.stderr}")
+        assert(!created, s"$verb --strict must not create the -o file")
+        assert(!strict.stdout.contains("Saved"), s"$verb --strict:\n${strict.stdout}")
+        assert(
+          strict.stdout.contains(s"NOT saved (--strict failure): nothing written to $strictOut"),
+          s"$verb --strict:\n${strict.stdout}"
+        )
+        assertEquals(advisory.exit, 0, s"$verb advisory: ${advisory.stderr}")
+        assert(written, s"$verb without --strict writes the file")
+      }
+      assert(!left.exists(_.startsWith(".xl-output-")), s"no staging file may be left: $left")
+  }
+
+  test("GH-504/#677: strict putf exits 1 and writes nothing, with -o or -i") {
     val wb = Workbook(Sheet("Data").put(ref"A1" -> 1))
     for
       in <- IO.blocking(Files.createTempFile("strict-putf-in", ".xlsx"))
       out <- IO.blocking(Files.createTempFile("strict-putf-out", ".xlsx"))
       _ <- ExcelIO.instance[IO].write(wb, in)
       before <- IO.blocking(Files.readAllBytes(in))
+      outBefore <- IO.blocking(Files.readAllBytes(out))
       outputCode <- runCli(
         "-f",
         in.toString,
@@ -1530,6 +1630,19 @@ class MainSpec extends CatsEffectSuite:
         "=C1+1"
       )
       after <- IO.blocking(Files.readAllBytes(in))
+      outAfter <- IO.blocking(Files.readAllBytes(out))
+      // without --strict the same write is advisory: exit 0, the authored cycle left uncached
+      advisoryCode <- runCli(
+        "-f",
+        in.toString,
+        "-s",
+        "Data",
+        "-o",
+        out.toString,
+        "putf",
+        "C1",
+        "=C1+1"
+      )
       written <- ExcelIO.instance[IO].read(out)
       _ <- IO.blocking { Files.deleteIfExists(in); Files.deleteIfExists(out) }
     yield
@@ -1539,6 +1652,11 @@ class MainSpec extends CatsEffectSuite:
         java.util.Arrays.equals(before, after),
         "in-place strict failure must leave the input unchanged"
       )
+      assert(
+        java.util.Arrays.equals(outBefore, outAfter),
+        "a strict failure under -o must leave the destination unchanged"
+      )
+      assertEquals(advisoryCode, cats.effect.ExitCode.Success)
       written.sheets.head(ref"C1").value match
         case CellValue.Formula(_, cached, _) => assertEquals(cached, None)
         case other => fail(s"Expected an uncached formula, got $other")

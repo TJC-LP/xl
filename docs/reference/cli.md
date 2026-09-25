@@ -45,9 +45,9 @@ export PATH="$HOME/.local/bin:$PATH"
 --backend <name>      # XML backend: scalaxml (default) or saxstax (faster)
 --no-recalc           # Write verbs: apply the edit, recalculate nothing (alias --preserve-caches)
 --preserve-caches     # Same flag, spelled for the intent
---strict              # Write verbs: exit 1 when the write's recalculation reports problems
+--strict              # Write verbs: exit 1 when the write's recalculation reports problems, and write nothing
 
-# Exit codes: 0 ok · 1 findings/gate (diff, lint, --strict; never a failure) · 2 usage · 3 failed
+# Exit codes: 0 ok · 1 findings/gate (diff, lint, --strict; never a failure) · 2 usage · 3 failed — only 0 writes a file
 # Results on stdout; errors (Error: <message> + code:/hint: lines) and warnings on stderr
 
 # Read-only operations
@@ -235,11 +235,11 @@ xl -f external-model.xlsx -s Data -o out.xlsx --preserve-caches batch ops.json
 
 By default a write reports formula-evaluation errors, iterative non-convergence and data-table seed
 warnings in its summary and still exits 0. `--strict` promotes those to **exit 1** while printing
-the same summary — for CI and scripted pipelines. Excel error *values* (`#DIV/0!`, `#N/A`) are data
-conditions, not failures, and never gate.
+the same summary and writing nothing — for CI and scripted pipelines. Excel error *values*
+(`#DIV/0!`, `#N/A`) are data conditions, not failures, and never gate.
 
 ```bash
-xl -f model.xlsx -o out.xlsx --strict recalc    # exit 1 if any formula failed to evaluate
+xl -f model.xlsx -o out.xlsx --strict recalc    # exit 1, and no out.xlsx, if any formula failed to evaluate
 ```
 
 `recalc --parallel N` evaluates statically independent formula waves on up to `N` workers, then
@@ -249,13 +249,22 @@ books can be limited by allocation and memory bandwidth. If the workbook declare
 calculation (`<calcPr iterate="1"/>`), xl keeps the sequential fixpoint path and reports that
 `--parallel` was ignored in the command summary.
 
-With `-o` the output file is written even on a strict failure (the gate only sets the exit code).
-With `-i` the temp file is discarded and the input is left byte-identical; the summary then says
-`NOT saved (--strict failure): <file> left untouched` instead of `Saved:`. `--strict` is refused
-together with `--stream` (streaming writes never recalculate, so the gate could never fire). Verbs
-that perform no recalculation, such as presentation-only verbs, have no calculation outcome to
-gate. `put`, `putf`, `fill`, and `copy` include authored formulas and affected dependents in their
-reported outcomes. Structural and batch writes recalculate the whole book but report a failure only
+A strict failure writes nothing (#677): with `-o` the staged file is discarded — the target is not
+created, and a file already at that path (the input itself when `-o` names `-f`) is left
+byte-identical — and with `-i` the input is left byte-identical. The summary says
+`NOT saved (--strict failure): nothing written to <out>` (`-o`) or
+`NOT saved (--strict failure): <file> left untouched` (`-i`, or `-o` naming `-f`) instead of
+`Saved:`, and under `--json` `data.saved` is `null` and `data.written` `false`. Every write follows
+one rule — a file is published only by a run that exits 0 — so branch on the exit code or
+`data.written`: a file left at the `-o` path by an earlier run is not replaced, so its existence
+proves nothing. To keep the output for inspection, run the same command without `--strict`: the
+flag decides only the verdict, so the advisory run writes the identical workbook, exits 0 and
+prints the same summary. `--strict` is refused together with `--stream` on the O(1) streaming
+writes (`put`, `putf`, `style`, `batch`: they never recalculate, so the gate could never fire); the
+verbs whose `--stream` run loads the book on a backend (`recalc`, `fill`, `copy`, `name`, the
+structural verbs) accept it, gate and withhold like any other write. Verbs that perform no
+recalculation, such as presentation-only verbs, have no calculation outcome to gate. `put`, `putf`,
+`fill`, and `copy` include authored formulas and affected dependents in their reported outcomes. Structural and batch writes recalculate the whole book but report a failure only
 for a cell inside the cache-write cone or one the written file leaves uncached; a formula outside
 the cone whose cache was kept is never reported as "left uncached" (#606). Use `--strict` without
 `--no-recalc` when the command must validate calculation results.
@@ -2018,7 +2027,7 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 | exit | meaning | examples | file written? |
 |---|---|---|---|
 | `0` | ok | | as requested |
-| `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | `-o`: yes; `-i`: no |
+| `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | no (a `--strict` gate: `-o` not written, an existing file and `-i`'s input left byte-identical) |
 | `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, `--limit` below 0, `--stream` with a verb or flag that refuses it (`UNSUPPORTED_IN_STREAM`; `xl schema --json` publishes each verb's `stream`) | no |
 | `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit, a workbook that does not fit in memory (`RESOURCE_LIMIT`) | no |
 
@@ -2105,7 +2114,7 @@ otherwise:
 - Every other verb (`view` in a text format, and all writes) yields
   `{"text": <what text mode prints>, "saved": <path or null>, "written": <bool>}`. `saved` is the
   user-visible output path once the write was committed; it is `null` (and `written` is `false`)
-  when nothing was — a read, or an `-i` run whose `--strict` gate discarded the staged file.
+  when nothing was — a read, or a run whose `--strict` gate withheld the staged file (`-o` or `-i`).
 
 **Findings and gates are `ok: false` with the report kept.** `diff` with differences, `lint` with
 findings, `audit --fail-on-findings` on a dirty book and a `--strict` write that fails its gate exit
