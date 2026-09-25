@@ -36,7 +36,13 @@ A1:A1
   "warnings": [
     {
       "code": "EVAL_FAILED",
-      "message": "Formula evaluation failed: Formula error in '': Circular reference detected: cell_0 → cell_0"
+      "message": "Formula evaluation failed: Data!A1: Formula error in 'A1+1': Circular reference; those cells show the file's values",
+      "location": {
+        "file": null,
+        "sheet": "Data",
+        "ref": "A1",
+        "opIndex": null
+      }
     }
   ],
   "error": null

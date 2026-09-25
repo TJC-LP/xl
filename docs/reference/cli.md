@@ -434,8 +434,8 @@ Without a range, the sheet's used range; `--offset` and `--limit` page through t
 | `range` | string | No | used range | Cell range (e.g., "A1:D20"), or a whole-column/whole-row span (`B:B`, `A:C`, `3:3`; bare or sheet-qualified, 0.22.0) clamped to the sheet's used range on the open axis — `view B:B` renders column B over the used rows, `totalRows` counting those rows, never the 1,048,576-row axis; absent, the sheet's used range. From the loaded workbook that is the bounding box of every stored cell, styled-but-empty ones included (the `<dimension>` the library's writer records); `--stream` trusts the worksheet's `<dimension>` as written — a stale one, or openpyxl's merged-extent one, can differ from the stored-cell box — and when the file has no readable `<dimension>`, or it names a single cell (Excel's `A1` on an empty sheet), uses the bounding box of the non-empty cells. An empty sheet renders `(empty sheet)`, `""` for csv, `{"sheet", "range": null, "rows": []}` for json from both sources |
 | `--format` | string | No | markdown | Output format: markdown, json, csv, html, svg, png, jpeg, webp, pdf |
 | `--formulas` | flag | No | false | Show formulas instead of values |
-| `--eval` | flag | No | false | Evaluate formulas (compute live values) |
-| `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
+| `--eval` | flag | No | false | Evaluate formulas (compute live values), cell by cell: a formula that cannot evaluate keeps the file's value and is reported as one `EVAL_FAILED` warning (see [errors, warnings and exit codes](#errors-warnings-and-exit-codes)) |
+| `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`): for markdown, json, csv, html and svg any failure is the `RECALC_GATE` gate, exit 1, nothing rendered. Raster formats (png, jpeg, webp, pdf) never gate: they still export and print the one `EVAL_FAILED` warning, exit 0 |
 | `--limit` | int | No | 50 | Max rows to display (0 = no limit; below 0 is a usage error). `--limit 0` streams: the rows are written as the source produces them — for csv and json from the first row, for markdown (and csv with `--skip-empty`) after one pass over the window for the column widths — so a whole-sheet dump runs in constant memory under `--stream` (since 0.22.0, [#635](https://github.com/TJC-LP/xl/issues/635)); under `--json` the table streams too (csv and markdown as `data.text`, escaped line by line; json spliced into `data`). A failure before the first row is the ordinary failure envelope; one after bytes went out leaves the envelope unterminated, the exit code and stderr carrying it. When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (under `--stream` too, since 0.21.0); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
 | `--offset` | int | No | 0 | Rows to skip from the top of the range before `--limit` applies; the trailer then reads "… showing rows X–Y of N". An offset past the last row is a usage error |
 | `--max-cols` | int | No | 0 | Max columns to display, from the left (0 = all); json adds `totalCols` when clipped, the other formats report "… showing X of Y columns" like the row notice |
@@ -2178,10 +2178,26 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 
 Two rows worth spelling out:
 
-- `view --eval --strict` whose evaluation fails (a circular reference, an unsupported function) is
-  a **gate**, not a failure: exit `1` with `code: RECALC_GATE` on stderr and nothing rendered on
-  stdout — the same code the write verbs' `--strict` uses. Without `--strict` the view renders the
-  cached values and the failure is a stderr warning, exit `0`.
+- `view --eval` evaluates **cell by cell**: the window's formulas and their precedents evaluate in
+  dependency order, and a formula that cannot evaluate (a circular reference inside that closure,
+  a missing sheet, an unsupported function) no longer sinks the render. Every other formula shows
+  its live value; the failing cell and the formulas that depend on it — which are not evaluated,
+  so no stale cache is mixed in — show exactly what the file holds (the cached value, or the
+  formula text / JSON `value: null` when uncached). One stderr warning names them, located at the
+  first failing cell, and the exit is `0`:
+  `Warning[EVAL_FAILED]: Formula evaluation failed: Sheet1!F2: Formula error in 'Missing!A1+1':
+  …; 1 dependent formula not evaluated (G2); those cells show the file's values` (the first three
+  failures, `… and N more`, then the blocked dependents). With `--strict`, the markdown, csv,
+  json, html and svg renders turn an evaluation failure into a **gate** rather than a failure
+  exit: exit `1` with `code: RECALC_GATE` on stderr and nothing rendered on stdout — the same
+  code the write verbs' `--strict` uses. The gate's message ends `; without --strict those cells
+  show the file's values` and its hint reads `drop --strict to render the other cells live and
+  see the failure as a warning`. The raster formats (png, jpeg, webp, pdf) never gate: under
+  `--strict` they still export and print the one `EVAL_FAILED` warning, exit `0`. A cycle
+  elsewhere on the sheet, outside the window's closure, affects neither. An internal evaluator
+  defect in one cell (a throwable the evaluator should never raise) is contained the same way, as
+  `Evaluation threw <class>: … at <cell> — an internal evaluator defect, not an Excel error value;
+  please report it with the formula`, never an `INTERNAL` exit.
 - A missing or unreadable input file is `code: IO_READ`, exit `3`, on every verb — `sheets`,
   `names`, `view`, `cell`, `diff`, `lint` alike. A file that does not exist is the one message
   `No such file: <path>` with the hint `check the path; the previous write may have failed`

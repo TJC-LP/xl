@@ -246,76 +246,83 @@ object SheetEvaluator:
       clock: Clock = Clock.system,
       workbook: Option[Workbook] = None
     ): XLResult[Map[ARef, CellValue]] =
-      // 1. Find formula cells within the range (using pattern match, not isInstanceOf)
-      val rangeFormulaCells = sheet.cells
-        .collect {
-          case (ref, cell) if range.contains(ref) =>
-            cell.value match
-              case _: CellValue.Formula => Some(ref)
-              case _ => None
-        }
-        .flatten
-        .toSet
+      rangePlan(sheet, range, workbook) match
+        // If no formulas in range, return empty (nothing to evaluate)
+        case None => scala.util.Right(Map.empty)
+        case Some(RangePlan(rangeFormulaCells, graph, targetCells, dynamic)) =>
+          // Fail fast on any cycle in the sheet: the full graph is checked, since dependencies may
+          // form cycles outside the range (evaluateForRangePerCell narrows this to the closure)
+          DependencyGraph.detectCycles(graph) match
+            case scala.util.Left(circularRef) =>
+              scala.util.Left(evalErrorToXLError(circularRef, None))
+            case scala.util.Right(_) =>
+              // Topological order from the full graph, filtered to the target cells
+              DependencyGraph.topologicalSort(graph) match
+                case scala.util.Left(circularRef) =>
+                  scala.util.Left(evalErrorToXLError(circularRef, None))
+                case scala.util.Right(fullEvalOrder) =>
+                  // Filter to only include cells we need to evaluate
+                  // GH-274: dynamic cells + their static dependents evaluate last (caches stripped)
+                  val (evalOrder, initial) = deferDynamicWithStrip(
+                    sheet,
+                    graph,
+                    fullEvalOrder.filter(targetCells.contains),
+                    dynamic
+                  )
 
-      // If no formulas in range, return empty (nothing to evaluate)
-      if rangeFormulaCells.isEmpty then scala.util.Right(Map.empty)
-      else
-        // 2. Build full dependency graph
-        val graph = DependencyGraph.fromSheet(sheet)
+                  // Evaluate in dependency order, threading the partially evaluated sheet.
+                  // Fail-fast on first error; only cells in the original range are reported.
+                  val evalResult = evalOrder.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
+                    scala.util.Right((initial, Map.empty))
+                  ) {
+                    case (scala.util.Right((tempSheet, results)), ref) =>
+                      val currentWorkbook = workbook.map(_.put(tempSheet))
+                      tempSheet.evaluateCell(ref, clock, currentWorkbook) match
+                        case scala.util.Right(value) =>
+                          val nextResults =
+                            if rangeFormulaCells.contains(ref) then results + (ref -> value)
+                            else results
+                          scala.util.Right((tempSheet.put(ref, value), nextResults))
+                        case scala.util.Left(error) =>
+                          scala.util.Left(error)
+                    case (left, _) => left
+                  }
 
-        // 3. Find all transitive dependencies (cells that range formulas depend on)
-        val transitiveDeps = DependencyGraph.transitiveDependencies(graph, rangeFormulaCells)
+                  evalResult.map(_._2)
 
-        // 4. Target cells = range formulas + (transitive deps that are also formulas).
-        // GH-274: when the sheet has dynamic references (INDIRECT), widen to EVERY formula
-        // cell — dynamic targets are invisible to the static walk, so correctness requires
-        // the whole sheet computed in order (correctness over narrowness; results still
-        // report only the requested range).
-        val dynamic = dynamicCellsFor(sheet, workbook)
-        val allFormulaCells = graph.dependencies.keySet
-        val targetCells =
-          if dynamic.isEmpty then rangeFormulaCells ++ (transitiveDeps & allFormulaCells)
-          else allFormulaCells
+    /**
+     * Evaluate the formulas of a range cell by cell — the total counterpart of
+     * [[evaluateForRange]], and what `xl view --eval` renders.
+     *
+     * The same formulas evaluate (the range's formulas plus their transitive formula precedents, or
+     * every formula when the sheet has dynamic references), in dependency order, but a formula that
+     * cannot evaluate no longer fails the range: it is listed in [[RangeEvalResult.failures]] and
+     * the formulas depending on it are listed in [[RangeEvalResult.blocked]], never evaluated (no
+     * stale cache is mixed into a live value). A cycle fails its members — and blocks their
+     * dependents — only when it lies inside that closure; a cycle elsewhere on the sheet no longer
+     * affects the range. Never throws.
+     *
+     * Note: explicit overloads instead of default parameters — extension methods with default
+     * arguments crash the compiler when merged through the formulaExports wildcard export.
+     *
+     * @param range
+     *   the cell range whose formula values to report
+     * @param clock
+     *   Clock for date/time functions
+     * @param workbook
+     *   workbook context for cross-sheet references
+     */
+    def evaluateForRangePerCell(
+      range: CellRange,
+      clock: Clock,
+      workbook: Option[Workbook]
+    ): RangeEvalResult =
+      evaluateForRangePerCellImpl(sheet, range, clock, workbook)
 
-        // 5. Check for cycles in the subgraph (could still have cycles if dependencies have cycles)
-        // We use the full graph for cycle detection since dependencies may form cycles outside the range
-        DependencyGraph.detectCycles(graph) match
-          case scala.util.Left(circularRef) =>
-            scala.util.Left(evalErrorToXLError(circularRef, None))
-          case scala.util.Right(_) =>
-            // 6. Get topological order from full graph, but filter to only our target cells
-            DependencyGraph.topologicalSort(graph) match
-              case scala.util.Left(circularRef) =>
-                scala.util.Left(evalErrorToXLError(circularRef, None))
-              case scala.util.Right(fullEvalOrder) =>
-                // Filter to only include cells we need to evaluate
-                // GH-274: dynamic cells + their static dependents evaluate last (caches stripped)
-                val (evalOrder, initial) = deferDynamicWithStrip(
-                  sheet,
-                  graph,
-                  fullEvalOrder.filter(targetCells.contains),
-                  dynamic
-                )
-
-                // 7. Evaluate in dependency order, threading the partially evaluated sheet.
-                // Fail-fast on first error; only cells in the original range are reported.
-                val evalResult = evalOrder.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
-                  scala.util.Right((initial, Map.empty))
-                ) {
-                  case (scala.util.Right((tempSheet, results)), ref) =>
-                    val currentWorkbook = workbook.map(_.put(tempSheet))
-                    tempSheet.evaluateCell(ref, clock, currentWorkbook) match
-                      case scala.util.Right(value) =>
-                        val nextResults =
-                          if rangeFormulaCells.contains(ref) then results + (ref -> value)
-                          else results
-                        scala.util.Right((tempSheet.put(ref, value), nextResults))
-                      case scala.util.Left(error) =>
-                        scala.util.Left(error)
-                  case (left, _) => left
-                }
-
-                evalResult.map(_._2)
+    /** [[evaluateForRangePerCell]] with the system clock and no workbook context. */
+    @annotation.targetName("evaluateForRangePerCellDefault")
+    def evaluateForRangePerCell(range: CellRange): RangeEvalResult =
+      evaluateForRangePerCellImpl(sheet, range, Clock.system, None)
 
     /**
      * Evaluate an array formula and spill results into adjacent cells.
@@ -397,6 +404,120 @@ object SheetEvaluator:
       putFormulaInheritingImpl(sheet, ref, formula, Some(workbook))
 
   // ========== Implementation shared by the public overloads ==========
+
+  /**
+   * What a range evaluation evaluates: the range's formula cells, the sheet's dependency graph, the
+   * target formulas (the range's formulas plus their transitive formula precedents) and the sheet's
+   * dynamic cells.
+   */
+  private final case class RangePlan(
+    rangeFormulaCells: Set[ARef],
+    graph: DependencyGraph,
+    targets: Set[ARef],
+    dynamic: Set[ARef]
+  )
+
+  /** The [[RangePlan]] of `range`, None when the range holds no formula. */
+  private def rangePlan(
+    sheet: Sheet,
+    range: CellRange,
+    workbook: Option[Workbook]
+  ): Option[RangePlan] =
+    val rangeFormulaCells = sheet.cells.iterator.collect {
+      case (ref, cell) if range.contains(ref) && isFormula(cell.value) => ref
+    }.toSet
+    Option.when(rangeFormulaCells.nonEmpty) {
+      val graph = DependencyGraph.fromSheet(sheet)
+      val transitiveDeps = DependencyGraph.transitiveDependencies(graph, rangeFormulaCells)
+      // GH-274: when the sheet has dynamic references (INDIRECT), widen to EVERY formula cell —
+      // dynamic targets are invisible to the static walk, so correctness requires the whole sheet
+      // computed in order (correctness over narrowness; results still report only the range).
+      val dynamic = dynamicCellsFor(sheet, workbook)
+      val allFormulaCells = graph.dependencies.keySet
+      val targets =
+        if dynamic.isEmpty then rangeFormulaCells ++ (transitiveDeps & allFormulaCells)
+        else allFormulaCells
+      RangePlan(rangeFormulaCells, graph, targets, dynamic)
+    }
+
+  private def isFormula(value: CellValue): Boolean = value match
+    case _: CellValue.Formula => true
+    case _ => false
+
+  /**
+   * The per-cell range evaluation behind [[evaluateForRangePerCell]]. Cycle members inside the
+   * targets fail as circular and block their dependents; the rest evaluates in topological order
+   * against a threaded sheet. A failure blocks its transitive dependents, and every failed or
+   * blocked cell loses its cache on the threaded sheet, so a dynamic reader (INDIRECT, invisible to
+   * the static graph) re-derives it and fails too instead of reading a stale value.
+   */
+  private def evaluateForRangePerCellImpl(
+    sheet: Sheet,
+    range: CellRange,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): RangeEvalResult =
+    rangePlan(sheet, range, workbook) match
+      case None => RangeEvalResult(Map.empty, Vector.empty, Vector.empty)
+      case Some(RangePlan(rangeFormulaCells, graph, targets, dynamic)) =>
+        def formulaText(ref: ARef): String = sheet(ref).value match
+          case CellValue.Formula(expression, _, _) => expression
+          case _ => ref.toA1
+        def failure(ref: ARef, reason: String): CellEvalError =
+          CellEvalError(sheet.name, ref, XLError.FormulaError(formulaText(ref), reason))
+        def dependentsOf(refs: Set[ARef]): Set[ARef] =
+          (DependencyGraph.transitiveDependents(graph, refs) & targets) -- refs
+
+        val cyclic = DependencyGraph.cyclicNodes(graph) & targets
+        val cycleBlocked = if cyclic.isEmpty then Set.empty[ARef] else dependentsOf(cyclic)
+        val live = targets -- cyclic -- cycleBlocked
+        // Every formula a live target depends on is live: a dependent of a cycle member is itself
+        // cycle-blocked, and the targets are closed under formula precedents (all formulas when
+        // dynamic). Kahn's ordering counts only the nodes it is given, so the live subgraph sorts.
+        val liveGraph =
+          DependencyGraph(graph.dependencies.filter((ref, _) => live(ref)), graph.dependents)
+
+        type State = (Sheet, Map[ARef, CellValue], Vector[CellEvalError], Set[ARef])
+        val start: State =
+          (
+            stripFormulaCaches(sheet, cyclic ++ cycleBlocked),
+            Map.empty,
+            cyclic.toVector.map(failure(_, "Circular reference")),
+            cycleBlocked
+          )
+        val (_, values, failures, blocked) = DependencyGraph.topologicalSort(liveGraph) match
+          // Unreachable by the argument above; kept total rather than trusted.
+          case scala.util.Left(circular) =>
+            val (_, reported, failed, blockedSoFar) = start
+            val unordered = live.toVector.map(failure(_, s"Unresolvable order: $circular"))
+            (sheet, reported, failed ++ unordered, blockedSoFar)
+          case scala.util.Right(order) =>
+            val (tempSheet, reported, failed, blockedSoFar) = start
+            // GH-274: dynamic cells and their static dependents evaluate last, caches stripped
+            val (evalOrder, initial) = deferDynamicWithStrip(tempSheet, graph, order, dynamic)
+            evalOrder.foldLeft[State]((initial, reported, failed, blockedSoFar)) {
+              case (state @ (_, _, _, blockedNow), ref) if blockedNow(ref) => state
+              case ((current, results, failedNow, blockedNow), ref) =>
+                current.evaluateCell(ref, clock, workbook.map(_.put(current))) match
+                  case scala.util.Right(value) =>
+                    val next =
+                      if rangeFormulaCells.contains(ref) then results + (ref -> value) else results
+                    (current.put(ref, value), next, failedNow, blockedNow)
+                  case scala.util.Left(error) =>
+                    val newlyBlocked = dependentsOf(Set(ref)) -- blockedNow
+                    (
+                      stripFormulaCaches(current, newlyBlocked + ref),
+                      results,
+                      failedNow :+ CellEvalError(sheet.name, ref, error),
+                      blockedNow ++ newlyBlocked
+                    )
+            }
+        def rowMajor(ref: ARef): (Int, Int) = (ref.row.index0, ref.col.index0)
+        RangeEvalResult(
+          values,
+          failures.sortBy(failed => rowMajor(failed.ref)),
+          blocked.toVector.sortBy(rowMajor)
+        )
 
   /**
    * Internal cell-evaluation boundary for WorkbookEvaluator.

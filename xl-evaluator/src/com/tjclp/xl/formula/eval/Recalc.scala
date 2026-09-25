@@ -30,6 +30,61 @@ final case class CellEvalError(
   def render: String = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}: ${error.message}"
 
 /**
+ * The per-cell answer of `sheet.evaluateForRangePerCell` — the total range evaluation behind `xl
+ * view --eval`. Unlike the fail-fast `evaluateForRange`, one formula that cannot evaluate does not
+ * sink the rest: it is reported in `failures`, and the formulas that depend on it inside the
+ * evaluation closure are `blocked` — never evaluated, so no stale cache is mixed into a live value
+ * (the `RecalcResult` contract, GH-563).
+ *
+ * @param values
+ *   the computed value of every formula cell inside the requested range that evaluated (an Excel
+ *   error value such as #DIV/0! is a value, not a failure)
+ * @param failures
+ *   the formulas of the evaluation closure that could not evaluate — the range's own and the
+ *   precedents outside it, cycle members inside the closure included — in row-major order
+ * @param blocked
+ *   the formulas of the closure left unevaluated because a formula they depend on failed, in
+ *   row-major order
+ */
+final case class RangeEvalResult(
+  values: Map[ARef, CellValue],
+  failures: Vector[CellEvalError],
+  blocked: Vector[ARef]
+) derives CanEqual:
+
+  /** True when every formula of the evaluation closure computed a value. */
+  def isClean: Boolean = failures.isEmpty && blocked.isEmpty
+
+  /**
+   * One line naming what did not evaluate — the first three failures rendered with their location,
+   * the rest counted, then the blocked dependents — or, when clean, the count of formulas the range
+   * evaluated:
+   * {{{
+   * Evaluated 12 formulas
+   * Sheet1!F2: Formula error in '=Missing!A1+1': ...; 1 dependent formula not evaluated (G2)
+   * Sheet1!F2: ...; Sheet1!F3: ...; Sheet1!F4: ...; … and 2 more; 3 dependent formulas not evaluated (G2, G3, G4)
+   * }}}
+   */
+  def summary: String =
+    def plural(n: Int, one: String, many: String): String = if n == 1 then one else many
+    if isClean then s"Evaluated ${values.size} ${plural(values.size, "formula", "formulas")}"
+    else
+      val maxShown = 3
+      val shown = failures.take(maxShown).map(_.render)
+      val more =
+        if failures.sizeIs > maxShown then Vector(s"… and ${failures.size - maxShown} more")
+        else Vector.empty
+      val maxBlocked = 5
+      val dependents =
+        if blocked.isEmpty then Vector.empty
+        else
+          val refs = blocked.take(maxBlocked).map(_.toA1) ++
+            (if blocked.sizeIs > maxBlocked then Vector("…") else Vector.empty)
+          val label = plural(blocked.size, "dependent formula", "dependent formulas")
+          Vector(s"${blocked.size} $label not evaluated (${refs.mkString(", ")})")
+      (shown ++ more ++ dependents).mkString("; ")
+
+/**
  * GH-482: how the members of ONE cyclic component read each other within an iterative round.
  */
 enum IterationScheme derives CanEqual:

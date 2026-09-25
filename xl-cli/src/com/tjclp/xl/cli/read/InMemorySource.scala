@@ -9,11 +9,11 @@ import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.ViewFormat
-import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Warning, WarningCode}
+import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.cli.helpers.Resolve
 import com.tjclp.xl.cli.output.RendererCommon
 import com.tjclp.xl.cli.raster.{RasterFormat, RasterizerChain}
-import com.tjclp.xl.formula.{DependencyGraph, SheetEvaluator}
+import com.tjclp.xl.formula.{Clock, DependencyGraph, SheetEvaluator}
 import com.tjclp.xl.styles.CellStyle
 
 /**
@@ -47,7 +47,7 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
   ): IO[RecordGrid] =
     named(sheet).flatMap { s =>
       InMemorySource
-        .evaluateSheetFormulas(s, Some(wb), Some(window), strict, warn)
+        .evaluateSheetFormulas(s, Some(wb), window, strict, warn)
         .map(InMemorySource.grid(_, window))
     }
 
@@ -121,7 +121,7 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
       // `gate` is whether an evaluation failure is the --strict gate or an EVAL_FAILED warning
       def evaluated(gate: Boolean): IO[Sheet] =
         if spec.evalFormulas then
-          InMemorySource.evaluateSheetFormulas(s, Some(wb), Some(window), gate, warn)
+          InMemorySource.evaluateSheetFormulas(s, Some(wb), window, gate, warn)
         else IO.pure(s)
       spec.format match
         // The renders build the whole window's markup at once: under the memory guard (GH-636)
@@ -365,49 +365,60 @@ object InMemorySource:
       a.start.row.index0 <= b.end.row.index0 && b.start.row.index0 <= a.end.row.index0
 
   /**
-   * Evaluate the formula cells of a sheet, replacing them with their computed values so a render
-   * shows live numbers (`view --eval`). Dependency-aware: formulas are evaluated in topological
-   * order, and with a range only the formulas inside it (plus their transitive dependencies) are
-   * evaluated.
+   * Evaluate the formula cells of a window, replacing them with their computed values so a render
+   * shows live numbers (`view --eval`). Dependency-aware and per cell: the window's formulas and
+   * their transitive precedents evaluate in topological order, and a formula that cannot evaluate
+   * no longer sinks the render — it and the formulas blocked behind it keep exactly what the file
+   * holds (the cached value, or the uncached formula), every other formula shows its live value.
    *
    * @param strict
-   *   whether an evaluation failure is the `--strict` gate (`RECALC_GATE`, exit 1) or an
-   *   `EVAL_FAILED` warning through `warn`, with the original sheet rendered from its caches
+   *   whether an evaluation failure is the `--strict` gate (`RECALC_GATE`, exit 1, nothing
+   *   rendered) or one `EVAL_FAILED` warning through `warn`, located at the first failing cell
    */
   def evaluateSheetFormulas(
     sheet: Sheet,
     workbook: Option[Workbook],
-    range: Option[CellRange],
+    range: CellRange,
     strict: Boolean,
     warn: Warning => IO[Unit]
   ): IO[Sheet] =
     // GH-636: the evaluation builds the dependency graph and every result at once — under the
     // memory guard, so a heap it exhausts is RESOURCE_LIMIT rather than a fatal error
     MemoryGuard
-      .blocking {
-        range match
-          case Some(r) => SheetEvaluator.evaluateForRange(sheet)(r, workbook = workbook)
-          case None => SheetEvaluator.evaluateWithDependencyCheck(sheet)(workbook = workbook)
-      }
-      .flatMap {
-        case Right(results) =>
-          // Sheet.put preserves the existing cell styleId
-          IO.pure(results.foldLeft(sheet) { case (acc, (ref, value)) => acc.put(ref, value) })
-        case Left(error) =>
-          // `view --eval --strict` is a user-requested gate (ADR-017 invariant 5): exit 1 with
-          // RECALC_GATE, never a failure. The message text is unchanged.
-          if strict then
-            IO.raiseError(
-              CliException(
-                CliError(
-                  ErrorCode.RECALC_GATE,
-                  s"Formula evaluation failed: ${error.message}",
-                  hint =
-                    Some("drop --strict to render cached values and see the failure as a warning")
+      .blocking(SheetEvaluator.evaluateForRangePerCell(sheet)(range, Clock.system, workbook))
+      .flatMap { result =>
+        // Sheet.put preserves the existing cell styleId
+        val evaluated = result.values.foldLeft(sheet) { case (acc, (ref, value)) =>
+          acc.put(ref, value)
+        }
+        result.failures.headOption match
+          case None => IO.pure(evaluated)
+          case Some(first) =>
+            val failed = s"Formula evaluation failed: ${result.summary}"
+            val location = Location(None, Some(first.sheet.value), Some(first.ref.toA1), None)
+            // `view --eval --strict` is a user-requested gate (ADR-017 invariant 5): exit 1 with
+            // RECALC_GATE, never a failure. Nothing renders under the gate, so its message says
+            // what the render without --strict shows.
+            if strict then
+              IO.raiseError(
+                CliException(
+                  CliError(
+                    ErrorCode.RECALC_GATE,
+                    s"$failed; without --strict those cells show the file's values",
+                    hint = Some(
+                      "drop --strict to render the other cells live and see the failure as a " +
+                        "warning"
+                    ),
+                    location = Some(location)
+                  )
                 )
               )
-            )
-          else
-            warn(Warning(WarningCode.EVAL_FAILED, s"Formula evaluation failed: ${error.message}"))
-              .as(sheet)
+            else
+              warn(
+                Warning(
+                  WarningCode.EVAL_FAILED,
+                  s"$failed; those cells show the file's values",
+                  Some(location)
+                )
+              ).as(evaluated)
       }

@@ -27,9 +27,9 @@ import scala.math.BigDecimal
  * CellValue inputs unwrap first (cached formula values extracted), so call results that surface raw
  * cell values (IF branches, lookup results) coerce identically to primitives. Error VALUES (#REF!
  * and friends) refuse to coerce with a clean per-cell error naming the Excel error code.
- * ArrayResult is deliberately NOT handled here — the collapse-vs-broadcast policy belongs to the
- * evaluation positions (scalar argument positions collapse to top-left, operand positions pass
- * arrays through to the broadcasting machinery).
+ * ArrayResult is deliberately NOT handled by [[coerce]] — the collapse-vs-broadcast policy belongs
+ * to the evaluation positions (scalar argument positions collapse to top-left through
+ * [[collapseTo]], operand positions pass arrays through to the broadcasting machinery).
  *
  * Total: every input yields Right(coerced) or Left(TypeMismatch/EvalFailed); never a thrown
  * exception, never a ClassCastException deferred to the consuming function.
@@ -85,6 +85,44 @@ private[formula] object ScalarCoercion:
   /** Collapse an ArrayResult to its scalar value: top-left, Empty when empty (GH-302). */
   def collapseArray(ar: ArrayResult): CellValue =
     if ar.isEmpty then CellValue.Empty else ar(0, 0)
+
+  /**
+   * The typed scalar collapse: an array reaching a scalar position yields its top-left value,
+   * coerced to `kind` — the static scalar kind of the node that produced it (TExpr.scalarKind) — so
+   * an arithmetic node's collapsed element reaches its consumer as a number or a Left, never as the
+   * raw CellValue a typed function body would cast. With no kind (Any and CellValue positions,
+   * tolerant by design) the raw element passes through.
+   */
+  def collapseTo(
+    label: String,
+    ar: ArrayResult,
+    kind: Option[BindingCoercion]
+  ): Either[EvalError, Any] =
+    val top = collapseArray(ar)
+    kind.fold[Either[EvalError, Any]](Right(top))(coerce(label, top, _))
+
+  /**
+   * Total text coercion for '&' operands and elements, mirroring the decodeAsString conventions:
+   * Number → General text via [[numberText]] (GH-665: 2.0 → "2", never the stored scale), Bool →
+   * TRUE/FALSE, DateTime → Excel serial (GH-561), Empty → "", rich text → its plain text, a cached
+   * formula → its cached value. Callers check carried error values first (they propagate, never
+   * stringify); arrays broadcast element-wise before reaching here.
+   */
+  def concatText(value: Any): String = unwrapCellValue(value) match
+    case s: String => s
+    case b: Boolean => if b then "TRUE" else "FALSE"
+    case bd: BigDecimal => numberText(bd)
+    case i: Int => i.toString
+    // anyToCellValue admits Long/Double runtime values into Any positions — render them as numbers
+    case l: Long => numberText(BigDecimal(l))
+    // BigDecimal(NaN) and BigDecimal(±Infinity) throw; a non-finite Double falls to the catch-all
+    case d: Double if d.isFinite => numberText(BigDecimal(d))
+    // GH-561: `&` on a date yields its Excel serial ("46023"), never ISO text — dates are
+    // numbers; only TEXT() formats them (the `">="&DATE(y,m,d)` criteria idiom depends on it)
+    case ld: java.time.LocalDate => dateSerialText(ld)
+    case ldt: java.time.LocalDateTime => dateSerialText(ldt)
+    case CellValue.Empty => ""
+    case other => other.toString
 
   /**
    * GH-344 item 5: Excel coerces exactly the text literals "TRUE"/"FALSE" (case-insensitive, NO

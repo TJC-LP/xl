@@ -139,6 +139,20 @@ class ScriptingPreludeTest extends FunSuite:
     val clock = Clock.system
     assert(clock != null || true)
 
+  test("per-cell range evaluation (view --eval) resolves through the prelude, both overloads"):
+    val sheet = Sheet("Calc")
+      .put(ref"A1", 2)
+      .put(ref"B1", fx"=A1*10")
+      .put(ref"B2", fx"=Missing!A1")
+      .put(ref"B3", fx"=B2+1")
+    val result: RangeEvalResult = sheet.evaluateForRangePerCell(ref"A1:B3", Clock.system, None)
+    assertEquals(result.values.get(ref"B1"), Some(CellValue.Number(BigDecimal(20))))
+    assertEquals(result.failures.map(_.ref), Vector(ref"B2"))
+    assertEquals(result.blocked, Vector(ref"B3"))
+    assert(!result.isClean)
+    assert(result.summary.startsWith("Calc!B2: "), result.summary)
+    assertEquals(sheet.evaluateForRangePerCell(ref"A1:B3"), result)
+
   test("GH-612: RangeForm resolves and whole-column references survive shift and print"):
     assertEquals(FormulaOps.shift("=COUNTIF($A:$A,B1)", 0, 2), Right("=COUNTIF($A:$A,B3)"))
     assertEquals(FormulaOps.shift("=SUM(1:1)", 3, 0), Right("=SUM(1:1)"))

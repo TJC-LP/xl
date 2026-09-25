@@ -390,7 +390,7 @@ object WorkbookEvaluator:
                 case None => state
                 case Some(idx) =>
                   val result =
-                    try
+                    EvalDefect.xlGuard(formulaText(q), Some(q.ref)) {
                       SheetEvaluator.evaluateCellWithEvaluator(
                         sheets(idx),
                         q.ref,
@@ -398,14 +398,7 @@ object WorkbookEvaluator:
                         calculationClock,
                         Some(wb.copy(sheets = sheets))
                       )
-                    catch
-                      case NonFatal(e) =>
-                        Left(
-                          XLError.FormulaError(
-                            formulaText(q),
-                            s"Evaluation threw ${e.getClass.getName}"
-                          )
-                        )
+                    }
                   result match
                     case Right(value) =>
                       (
@@ -585,8 +578,9 @@ object WorkbookEvaluator:
             // GH-388 defense in depth: recalculate is documented total — a numeric blowup
             // escaping a function implementation (e.g. BigDecimal scale overflow in a
             // diverging Newton loop) must degrade to this cell's per-cell error, never
-            // unwind the whole recalculation.
-            try
+            // unwind the whole recalculation. The guarded evaluator contains throws from the
+            // evaluation itself (#681); this catches anything around it.
+            EvalDefect.xlGuard(formulaText(q), Some(q.ref)) {
               SheetEvaluator.evaluateCellWithEvaluator(
                 tempSheet,
                 q.ref,
@@ -594,14 +588,7 @@ object WorkbookEvaluator:
                 clk,
                 Some(tempWb)
               )
-            catch
-              case NonFatal(e) =>
-                Left(
-                  XLError.FormulaError(
-                    formulaText(q),
-                    s"Evaluation threw ${e.getClass.getName}"
-                  )
-                )
+            }
           }
 
         def foldResult(
@@ -1136,7 +1123,7 @@ object WorkbookEvaluator:
       pinnedConstant.get(q) match
         case Some(constant) => Right(constant)
         case None =>
-          try
+          EvalDefect.xlGuard(text, Some(q.ref)) {
             parsed(q).flatMap(expr =>
               SheetEvaluator.evaluateParsedWith(
                 sheets(idx),
@@ -1148,9 +1135,7 @@ object WorkbookEvaluator:
                 Some(q.ref)
               )
             )
-          catch
-            case NonFatal(e) =>
-              Left(XLError.FormulaError(text, s"Evaluation threw ${e.getClass.getName}"))
+          }
 
     @annotation.tailrec
     def loop(round: Int, prev: Map[QualifiedRef, CellValue]): FixpointOutcome =

@@ -1,7 +1,5 @@
 package com.tjclp.xl.formula.eval
 
-import scala.util.control.NonFatal
-
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
@@ -107,7 +105,7 @@ object DependentRecalculation:
                 case None => state
                 case Some(position) =>
                   val result =
-                    try
+                    EvalDefect.xlGuard(expression(q), Some(q.ref)) {
                       SheetEvaluator.evaluateCellWithEvaluator(
                         sheets(position),
                         q.ref,
@@ -115,14 +113,7 @@ object DependentRecalculation:
                         calculationClock,
                         Some(wb.copy(sheets = sheets))
                       )
-                    catch
-                      case NonFatal(error) =>
-                        Left(
-                          XLError.FormulaError(
-                            expression(q),
-                            s"Evaluation threw ${error.getClass.getName}"
-                          )
-                        )
+                    }
                   result match
                     case Right(value) =>
                       (

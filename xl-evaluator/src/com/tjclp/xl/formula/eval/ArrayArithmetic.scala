@@ -519,6 +519,36 @@ object ArrayArithmetic:
     yield ArrayResult(result)
 
   /**
+   * N-ary element-wise broadcast under the same shape rules as the binary broadcasts: an axis of
+   * extent 1 repeats, unequal extents take the larger and pad the missing positions with #N/A
+   * (GH-344 4b). `elem` receives one element per operand, in operand order; a Left from it fails
+   * the whole broadcast (element-local failures should come back as error ELEMENTS instead).
+   */
+  private[formula] def broadcastN(operands: Vector[ArrayResult])(
+    elem: Vector[CellValue] => Either[EvalError, CellValue]
+  ): Either[EvalError, ArrayResult] =
+    val outRows = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.rows))
+    val outCols = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.cols))
+    traverseVV(
+      (0 until outRows).toVector.map(row => (0 until outCols).toVector.map(col => (row, col)))
+    ) { case (row, col) =>
+      elem(operands.map(op => getWithBroadcastCV(op.values, row, col, op.rows, op.cols)))
+    }.map(ArrayResult(_))
+
+  /**
+   * One `&` output element: a carried error on either side wins (left first) — errors propagate,
+   * never stringify — otherwise the two texts join under [[ScalarCoercion.concatText]].
+   */
+  private[formula] def concatElement(l: CellValue, r: CellValue): CellValue =
+    carriedError(l).orElse(carriedError(r)) match
+      case Some(err) => CellValue.Error(err)
+      case None => CellValue.Text(ScalarCoercion.concatText(l) + ScalarCoercion.concatText(r))
+
+  /** The total form of [[broadcastDim]] for the N-ary fold. */
+  private def broadcastExtent(l: Int, r: Int): Int =
+    if l == r then l else if l == 1 then r else if r == 1 then l else math.max(l, r)
+
+  /**
    * Compute broadcast output dimension for a single axis. GH-344 4b: unequal non-1 dimensions no
    * longer fail — the output extends to the larger extent and [[getWithBroadcastCV]] pads the
    * beyond-extent positions with #N/A (Excel's array-mismatch semantics). The Either shape is kept
@@ -526,10 +556,7 @@ object ArrayArithmetic:
    * NOT ride this law — it enforces exact dimensions as #VALUE! (Excel).
    */
   private def broadcastDim(l: Int, r: Int, dimName: String): Either[EvalError, Int] =
-    if l == r then Right(l)
-    else if l == 1 then Right(r)
-    else if r == 1 then Right(l)
-    else Right(math.max(l, r))
+    Right(broadcastExtent(l, r))
 
   // ===== Helper: traverse for Vector[Vector[A]] =====
   // We don't have Cats, so implement manually

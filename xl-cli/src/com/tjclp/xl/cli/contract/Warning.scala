@@ -24,7 +24,10 @@ object WarningCode:
   val SHEET_AUTOSELECTED: String = "SHEET_AUTOSELECTED"
   val FLAG_IGNORED: String = "FLAG_IGNORED"
 
-  /** `view --eval` without `--strict` could not evaluate the range; cached values were rendered. */
+  /**
+   * `view --eval` without `--strict` could not evaluate some formulas of the window's closure: the
+   * failing cells and the formulas blocked behind them show the file's values, the rest is live.
+   */
   val EVAL_FAILED: String = "EVAL_FAILED"
 
   /**

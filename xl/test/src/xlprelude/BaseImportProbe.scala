@@ -72,3 +72,13 @@ object BaseImportProbe:
       .expandRows(Row.from1(2), Row.from1(4))
   val viaRange: XLResult[Sheet] =
     colRange.left.map(XLError.InvalidReference(_)).flatMap(r => collapsed.expandCols(r))
+
+  // The per-cell range evaluation behind `view --eval`: RangeEvalResult and both overloads of
+  // evaluateForRangePerCell resolve through the base import (no default arguments: the
+  // wildcard-export landmine). Never invoked.
+  val perCell: (Sheet, CellRange) => RangeEvalResult =
+    (sheet, range) => sheet.evaluateForRangePerCell(range, Clock.system, None)
+  val perCellDefault: (Sheet, CellRange) => RangeEvalResult =
+    (sheet, range) => sheet.evaluateForRangePerCell(range)
+  val perCellFailures: RangeEvalResult => Vector[CellEvalError] = _.failures
+  val perCellSummary: RangeEvalResult => String = _.summary

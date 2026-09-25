@@ -11,7 +11,7 @@ import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 import com.tjclp.xl.SheetName
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
@@ -47,6 +47,10 @@ trait Evaluator:
   /**
    * Evaluate expression against sheet.
    *
+   * Every factory on the companion returns a guarded evaluator: a throwable escaping evaluation (an
+   * internal defect or a failing Clock/Rng capability) comes back as `EvalError.EvalFailed` naming
+   * it, and a StackOverflowError likewise; OutOfMemoryError and InterruptedException propagate.
+   *
    * @param expr
    *   The expression to evaluate
    * @param sheet
@@ -74,14 +78,14 @@ object Evaluator:
    *
    * Pure functional implementation with short-circuit evaluation for And/Or.
    */
-  def instance: Evaluator = new EvaluatorImpl()
+  def instance: Evaluator = TotalEvaluator(new EvaluatorImpl())
 
   /**
    * Evaluator instance with an explicit randomness source (GH-115).
    *
    * Use `Evaluator.instance(Rng.seeded(seed))` for deterministic RAND/RANDBETWEEN.
    */
-  def instance(rng: Rng): Evaluator = new EvaluatorImpl(rng = rng)
+  def instance(rng: Rng): Evaluator = TotalEvaluator(new EvaluatorImpl(rng = rng))
 
   /**
    * Evaluator instance that knows the workbook's saved location (GH-424).
@@ -90,7 +94,7 @@ object Evaluator:
    * empty string — Excel's behavior for a never-saved workbook.
    */
   def instance(workbookPath: Option[String]): Evaluator =
-    new EvaluatorImpl(workbookPath = workbookPath)
+    TotalEvaluator(new EvaluatorImpl(workbookPath = workbookPath))
 
   /**
    * Internal evaluator for one workbook-recalculation generation.
@@ -103,17 +107,18 @@ object Evaluator:
     rng: Rng,
     aggregateMemo: AggregateMemo
   ): Evaluator =
-    new EvaluatorImpl(rng = rng, aggregateMemo = Some(aggregateMemo))
+    TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(aggregateMemo)))
 
   /**
    * Evaluator instance that allows array results to propagate.
    *
    * Used for array formula evaluation where arithmetic over ranges should spill arrays.
    */
-  def arrayInstance: Evaluator = new EvaluatorImpl(allowArrayResults = true)
+  def arrayInstance: Evaluator = TotalEvaluator(new EvaluatorImpl(allowArrayResults = true))
 
   /** Array-result evaluator with an explicit randomness source (GH-115). */
-  def arrayInstance(rng: Rng): Evaluator = new EvaluatorImpl(allowArrayResults = true, rng = rng)
+  def arrayInstance(rng: Rng): Evaluator =
+    TotalEvaluator(new EvaluatorImpl(allowArrayResults = true, rng = rng))
 
   /**
    * Convenience method for direct evaluation (forwards to instance.eval).
@@ -709,6 +714,23 @@ private[formula] object EvalResult:
     case other => CellValue.Text(other.toString)
 
 /**
+ * The evaluation boundary every [[Evaluator]] factory returns (#681 item 5): the outermost frame of
+ * one evaluation, containing a throwable that escapes it as `EvalError.EvalFailed`
+ * ([[EvalDefect]]). The implementation recurses through its own unguarded `eval` and derives
+ * unguarded [[EvaluatorWithDepth]] instances, so this is the only frame that catches — no formula
+ * construct (IFERROR, ISERROR, the array broadcasts) can swallow a defect as an ordinary Left.
+ */
+private final class TotalEvaluator(underlying: Evaluator) extends Evaluator:
+  def eval[A](
+    expr: TExpr[A],
+    sheet: Sheet,
+    clock: Clock = Clock.system,
+    workbook: Option[Workbook] = None,
+    currentCell: Option[ARef] = None
+  ): Either[EvalError, A] =
+    EvalDefect.guard(currentCell)(underlying.eval(expr, sheet, clock, workbook, currentCell))
+
+/**
  * Private implementation of Evaluator.
  *
  * Implements all TExpr cases with proper error handling and short-circuit semantics.
@@ -955,19 +977,7 @@ private class EvaluatorImpl(
 
       // ===== String Operators =====
       case TExpr.Concat(x, y) =>
-        // Concatenate: join two strings. Operands are statically String, but erased upstream
-        // casts (e.g. a numeric LET binding or a numeric-returning call coerced via
-        // asStringExpr) can deliver non-String runtime values — evaluate as Any (a String-typed
-        // binder would checkcast and throw) and coerce totally with the decodeAsString
-        // conventions instead of crashing (GH-193). GH-344: an operand carrying an Excel error
-        // VALUE (an Any-typed call result holding CellValue.Error) propagates the error instead
-        // of silently stringifying it.
-        for
-          xv <- eval(x.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
-          _ <- carriedOperandError("text concatenation", xv)
-          yv <- eval(y.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
-          _ <- carriedOperandError("text concatenation", yv)
-        yield concatText(xv) + concatText(yv)
+        evalConcat(x, y, sheet, clock, workbook, currentCell).asInstanceOf[Either[EvalError, A]]
 
       // ===== Comparison Operators =====
       // GH-197: Use evalComparison for array-aware comparisons
@@ -1005,20 +1015,24 @@ private class EvaluatorImpl(
         // upstream casts can deliver other runtime values — evaluate as Any and coerce with the
         // shared Integer conventions (GH-307: fractional values TRUNCATE toward zero like Excel,
         // numeric text parses, anything else is a clean Left) per GH-193 totality.
+        // An array operand (array mode) collapses to its top-left value first: an integer slot
+        // takes one integer.
         eval(expr.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
-          .flatMap(value => ScalarCoercion.coerce("ToInt", value, BindingCoercion.Integer))
+          .flatMap {
+            case ar: ArrayResult =>
+              ScalarCoercion.collapseTo("ToInt", ar, Some(BindingCoercion.Integer))
+            case value => ScalarCoercion.coerce("ToInt", value, BindingCoercion.Integer)
+          }
           .asInstanceOf[Either[EvalError, A]]
 
       // ===== Date/Time Conversions =====
       case TExpr.DateToSerial(dateExpr) =>
-        eval(dateExpr, sheet, clock, workbook, currentCell).map { date =>
-          BigDecimal(CellValue.dateTimeToExcelSerial(date.atStartOfDay()))
-        }
+        evalDateSerial(dateExpr, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.DateTimeToSerial(dtExpr) =>
-        eval(dtExpr, sheet, clock, workbook, currentCell).map { dt =>
-          BigDecimal(CellValue.dateTimeToExcelSerial(dt))
-        }
+        evalDateSerial(dtExpr, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Aggregate(aggregatorId, location) =>
         // Use Aggregator typeclass to evaluate any registered aggregate function
@@ -1051,17 +1065,26 @@ private class EvaluatorImpl(
         // (Coerced/CoercedBindingRef) collapse-then-coerce so the value matches the position's
         // type regardless of the evaluator's array mode; Any/CellValue positions collapse to the
         // raw CellValue (consumers go through ExprValue.from).
+        //
+        // Any other node collapses through its STATIC scalar kind (TExpr.scalarKind): in array
+        // mode an arithmetic node (statically TExpr[BigDecimal], kept bare in numeric slots)
+        // evaluates to an ArrayResult, and its top-left element must reach the function as a
+        // number or a Left — never a raw CellValue the body would cast and throw on. Only the
+        // Either container is cast.
         def evalArg[A](expr: TExpr[A]): Either[EvalError, A] =
-          val result = expr match
+          val result: Either[EvalError, Any] = expr match
             case TExpr.Coerced(inner, target) =>
               evalCoercedExpr(inner, target, sheet, clock, workbook, currentCell, collapse = true)
             case TExpr.CoercedBindingRef(name, target) =>
               evalCoercedBinding(name, target, collapse = true)
-            case other => eval(other, sheet, clock, workbook, currentCell)
-          result.map {
-            case ar: ArrayResult => ScalarCoercion.collapseArray(ar).asInstanceOf[A]
-            case value => value.asInstanceOf[A]
-          }
+            case other =>
+              (eval(other, sheet, clock, workbook, currentCell): Either[EvalError, Any]).flatMap {
+                case ar: ArrayResult =>
+                  val kind = TExpr.scalarKind(other)
+                  ScalarCoercion.collapseTo(kind.fold("argument")(coercionLabel), ar, kind)
+                case value => Right(value)
+              }
+          result.asInstanceOf[Either[EvalError, A]]
         // GH-346: functions that read uncached formula cells (aggregates, array materialization)
         // recurse through the same memo, so a shared precedent evaluates once per pass. Created
         // here when the pass has none yet — the ctx is per Call node, so it cannot leak across
@@ -1445,29 +1468,78 @@ private class EvaluatorImpl(
       case None => Right(())
 
   /**
-   * Total text coercion for '&' operands, mirroring the decodeAsString conventions (Number →
-   * General text via ScalarCoercion.numberText (GH-665: 2.0 → "2", never the stored scale), Bool →
-   * TRUE/FALSE, DateTime → Excel serial (GH-561), Empty → "").
+   * `&`: both operands evaluate like arithmetic operands (evalMaybeArray — a bare range
+   * materializes, a Coerced operand passes its array through). An array on either side broadcasts
+   * element-wise ([[ArrayArithmetic.concatElement]]: a carried error wins, left first; mismatched
+   * shapes pad #N/A) and collapses to its top-left text in scalar mode, the operators' shared
+   * GH-302 policy. Two scalars join under the decodeAsString conventions (GH-193: operands are
+   * statically String but erased casts can deliver other runtime values, so they are read as Any
+   * and coerced totally); GH-344: a scalar operand carrying an Excel error VALUE propagates it
+   * instead of stringifying it.
    */
-  private def concatText(value: Any): String = value match
-    case s: String => s
-    case b: Boolean => if b then "TRUE" else "FALSE"
-    case bd: BigDecimal => ScalarCoercion.numberText(bd)
-    case i: Int => i.toString
-    // anyToCellValue admits Long/Double runtime values into Any positions — render them as numbers
-    case l: Long => ScalarCoercion.numberText(BigDecimal(l))
-    // BigDecimal(NaN) and BigDecimal(±Infinity) throw; a non-finite Double falls to the catch-all
-    case d: Double if d.isFinite => ScalarCoercion.numberText(BigDecimal(d))
-    // GH-561: `&` on a date yields its Excel serial ("46023"), never ISO text — dates are
-    // numbers; only TEXT() formats them (the `">="&DATE(y,m,d)` criteria idiom depends on it)
-    case ld: java.time.LocalDate => ScalarCoercion.dateSerialText(ld)
-    case ldt: java.time.LocalDateTime => ScalarCoercion.dateSerialText(ldt)
-    case CellValue.Text(s) => s
-    case CellValue.Number(n) => ScalarCoercion.numberText(n)
-    case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-    case CellValue.DateTime(dt) => ScalarCoercion.dateSerialText(dt)
-    case CellValue.Empty => ""
-    case other => other.toString
+  private def evalConcat(
+    xExpr: TExpr[String],
+    yExpr: TExpr[String],
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, Any] =
+    val label = "text concatenation"
+    def asArray(value: Any): ArrayResult = value match
+      case ar: ArrayResult => ar
+      case scalar => ArrayResult.single(ArrayArithmetic.anyToCellValue(scalar))
+    def joined(elements: Vector[CellValue]): Either[EvalError, CellValue] =
+      Right(
+        ArrayArithmetic.concatElement(
+          elements.headOption.getOrElse(CellValue.Empty),
+          elements.lift(1).getOrElse(CellValue.Empty)
+        )
+      )
+    for
+      xv <- evalMaybeArray(xExpr, sheet, clock, workbook, currentCell)
+      yv <- evalMaybeArray(yExpr, sheet, clock, workbook, currentCell)
+      result <- (xv, yv) match
+        case (_: ArrayResult, _) | (_, _: ArrayResult) =>
+          ArrayArithmetic
+            .broadcastN(Vector(asArray(xv), asArray(yv)))(joined)
+            .flatMap(collapseUnlessArrayMode(label, BindingCoercion.Text))
+        case (x, y) =>
+          for
+            _ <- carriedOperandError(label, x)
+            _ <- carriedOperandError(label, y)
+          yield ScalarCoercion.concatText(x) + ScalarCoercion.concatText(y)
+    yield result
+
+  /**
+   * DateToSerial / DateTimeToSerial, total over whatever the operand evaluates to: a date or
+   * date-time becomes its Excel serial; an array (a date function's result in array mode) maps
+   * element-wise to serials in array mode — error elements carry, uncoercible elements become error
+   * elements — and collapses to its top-left serial in scalar mode; anything else coerces under the
+   * Numeric conventions (dates ARE numbers), so an erased-cast operand is a clean Left.
+   */
+  private def evalDateSerial(
+    operand: TExpr[?],
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, Any] =
+    val label = "date serial"
+    def serialElement(cv: CellValue): CellValue =
+      ArrayArithmetic.carriedError(cv) match
+        case Some(err) => CellValue.Error(err)
+        case None =>
+          ScalarCoercion.coerce(label, cv, BindingCoercion.Numeric) match
+            case Right(serial: BigDecimal) => CellValue.Number(serial)
+            case Right(_) => CellValue.Error(CellError.Value)
+            case Left(e) => CellValue.Error(EvalError.toCellError(e).getOrElse(CellError.Value))
+    eval(operand.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell).flatMap {
+      case ar: ArrayResult if allowArrayResults =>
+        Right(ArrayResult(ar.values.map(_.map(serialElement))))
+      case ar: ArrayResult => ScalarCoercion.collapseTo(label, ar, Some(BindingCoercion.Numeric))
+      case value => ScalarCoercion.coerce(label, value, BindingCoercion.Numeric)
+    }
 
   /**
    * Unwrap a CellValue binding result to its primitive so bound values compose with arithmetic,

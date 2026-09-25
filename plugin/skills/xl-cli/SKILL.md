@@ -300,7 +300,9 @@ interiors).
 - **Negative numbers** look like flags: `put A1 --value "-100"` or `put A1 -- -5`. After `--`
   every token is data, so `search -- --json` searches for the text `--json`.
 - **`--strict` after `view`** is view's `--eval` gate (exit 1 on evaluation failure, nothing
-  rendered); everywhere else it is the write gate.
+  rendered; png/jpeg/webp/pdf never gate, they export and warn); everywhere else it is the write
+  gate. Without it `--eval` degrades per cell: cells that cannot evaluate (and their dependents)
+  show the file's values, one `EVAL_FAILED` warning names them, the rest is live.
 - **PNG/PDF on the native binary needs an external rasterizer** — `xl rasterizers` tells you.
   `RASTERIZER_UNAVAILABLE` (exit 3) while a backend shows `available` means that backend failed
   to run: retry with `--rasterizer imagemagick` (png/jpeg/webp) and report the stderr.
