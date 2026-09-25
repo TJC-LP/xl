@@ -219,11 +219,14 @@ class RecursionGuardSpec extends FunSuite:
 
   test("GH-669: intersections share the nesting budget; the longest admitted chain walks safely") {
     assertTooDeep("=" + List.fill(129)("A1").mkString(" "))
-    // the budget is per nesting scope: intersections in sibling chain operands add up
-    assertTooDeep("=" + List.fill(2)(List.fill(70)("A1").mkString(" ")).mkString("+"))
+    // GH-680 review: the levels are the operand's own spine; sibling operands of a flat chain do
+    // not add up, so two 70-term chains joined by `+` parse
+    val siblings = "=" + List.fill(2)(List.fill(70)("A1").mkString(" ")).mkString("+")
     val formula = "=" + List.fill(127)("A1").mkString(" ")
     val sheet = s.put(ARef.from1(1, 1), CellValue.Number(7))
     onSmallStack {
+      assertRoundTrips(siblings)
+      assertEquals(sheet.evaluateFormula(siblings), Right(CellValue.Number(BigDecimal(14))))
       val expr = assertRoundTrips(formula)
       assertEquals(sheet.evaluateFormula(formula), Right(CellValue.Number(BigDecimal(7))))
       assertEquals(DependencyGraph.extractDependencies(expr), Set(ARef.from1(1, 1)))
@@ -235,5 +238,41 @@ class RecursionGuardSpec extends FunSuite:
         case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
           assertEquals(n, BigDecimal(7))
         case other => fail(s"expected the recalculated intersection, got ${other.map(_.getClass)}")
+    }
+  }
+
+  // GH-680 review: a postfix `%` or an intersection spends a nesting level only within its own
+  // operand — the spine it builds — never summed across the terms of a flat chain
+  test("GH-680: a 200-term chain of percent operands parses, evaluates and prints back") {
+    val formula = "=" + List.fill(200)("1%").mkString("+")
+    onSmallStack {
+      assertRoundTrips(formula)
+      assertEquals(s.evaluateFormula(formula), Right(CellValue.Number(BigDecimal(2))))
+    }
+  }
+
+  test("GH-680: a 200-term chain of A1*5% products parses, evaluates and prints back") {
+    val formula = "=" + List.fill(200)("A1*5%").mkString("+")
+    val sheet = s.put(ARef.from1(1, 1), CellValue.Number(2))
+    onSmallStack {
+      assertRoundTrips(formula)
+      assertEquals(sheet.evaluateFormula(formula), Right(CellValue.Number(BigDecimal(20))))
+    }
+  }
+
+  test("GH-680: a 200-term chain of intersection operands parses and evaluates") {
+    val formula = "=" + List.fill(200)("A1 A1").mkString("+")
+    val sheet = s.put(ARef.from1(1, 1), CellValue.Number(7))
+    onSmallStack {
+      assert(FormulaParser.parse(formula).isRight, formula.take(40))
+      assertEquals(sheet.evaluateFormula(formula), Right(CellValue.Number(BigDecimal(1400))))
+    }
+  }
+
+  test("GH-680: 129 percents on ONE operand still spend a level each") {
+    onSmallStack {
+      assertTooDeep("=1" + ("%" * 129))
+      assertTooDeep("=1+1" + ("%" * 129))
+      assert(FormulaParser.parse("=1" + ("%" * 127)).isRight)
     }
   }

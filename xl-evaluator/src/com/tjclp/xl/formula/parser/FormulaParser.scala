@@ -362,6 +362,12 @@ object FormulaParser:
    * chain length. What a chain does deepen is the AST's left spine (GH-56's reason for once
    * counting every segment as a level); the walkers take a spine in one loop (BinarySpine) and the
    * per-formula operator budget ([[countOperator]]) bounds what is left.
+   *
+   * Every operand starts at the chain's entry depth. The postfix `%` and intersection loops return
+   * their operand's state still one level deeper per step — within ONE operand those steps build a
+   * real spine (`1%%%`, `A1 A1 A1`) and must count — but that spine ends with the operand, so the
+   * chain drops the leftover depth before the next operand; carried over, `=1%+1%+…` spent one
+   * level per term and failed NestingTooDeep at 128 terms (GH-680 review).
    */
   private def parseChain(
     state: ParserState,
@@ -379,9 +385,10 @@ object FormulaParser:
               case Left(err) => Left(err)
               case Right(sc) =>
                 operand(skipWhitespace(sc.advance(consumed))) match
-                  case Right((right, s3)) => loop(build(acc, right), s3)
+                  case Right((right, s3)) =>
+                    loop(build(acc, right), s3.copy(depth = state.depth))
                   case Left(err) => Left(err)
-      loop(first, s1)
+      loop(first, s1.copy(depth = state.depth))
     }
 
   /**
@@ -511,7 +518,9 @@ object FormulaParser:
    *
    * Each intersection keeps the nesting level it takes, as a chained `%` does: the chain builds a
    * left spine of intersection calls that the walkers recurse along (BinarySpine covers only the
-   * binary operators), so the chain shares the nesting budget instead of the operator budget.
+   * binary operators), so the chain shares the nesting budget instead of the operator budget. The
+   * levels end with the operand: [[parseChain]] resets the depth before a sibling term, so
+   * `A1 A1+A1 A1+…` costs one level per space in each term, never summed across terms.
    */
   private def parseIntersection(state: ParserState): ParseResult[TExpr[?]] =
     parsePrimary(state).flatMap { case (first, s1) =>
