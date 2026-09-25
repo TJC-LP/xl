@@ -72,25 +72,12 @@ object RsvgConvert extends Rasterizer:
             )
 
           case true =>
-            Processes[IO]
-              .spawn(ProcessBuilder("rsvg-convert", args(formatArg, outputPath, dpi)))
-              .use { process =>
-                val svgBytes = svg.getBytes(StandardCharsets.UTF_8)
-
-                for
-                  // Write SVG to stdin
-                  _ <- fs2.Stream.emits(svgBytes).through(process.stdin).compile.drain
-                  // Always drain stderr to prevent hanging
-                  stderr <- process.stderr.through(fs2.text.utf8.decode).compile.string
-                  exitCode <- process.exitValue
-                  _ <-
-                    if exitCode == 0 then IO.unit
-                    else
-                      IO.raiseError(
-                        RasterError.ConversionFailed(name, stderr, exitCode)
-                      )
-                yield ()
-              }
+            PipedBackend.run(
+              name,
+              "rsvg-convert",
+              args(formatArg, outputPath, dpi),
+              svg.getBytes(StandardCharsets.UTF_8)
+            )
         }
 
   /**

@@ -581,7 +581,7 @@ apt install librsvg2-bin      # rsvg-convert (Debian/Ubuntu); brew install librs
 cargo install resvg           # or a prebuilt binary: github.com/linebender/resvg/releases
 ```
 
-When no backend is available, raster exports fail with an error naming the probed chain and pointing back at `xl rasterizers`. `--format svg` always works (pure vector, no backend needed).
+When no backend is available, raster exports fail with an error naming the probed chain and pointing back at `xl rasterizers`. `--format svg` always works (pure vector, no backend needed). A backend forced with `--rasterizer` that cannot write the format (`--rasterizer rsvg-convert --format jpeg`), or that runs and fails, is `RASTERIZER_UNAVAILABLE` (exit 3) too; a failure's message carries the backend's exit code and stderr (`rsvg-convert conversion failed (exit 1): …`), so retry with another backend and report that message.
 
 ---
 
