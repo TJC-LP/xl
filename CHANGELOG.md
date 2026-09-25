@@ -185,6 +185,11 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
 
 ### Fixed
 
+- **Streaming read errors print one diagnostic**: metadata, shared-string and style reads cache
+  failures as values before raising them in the caller. A fast memoized failure no longer races
+  the caller's join and prints a raw exception ahead of the normal `IO_READ` diagnostic. The
+  streaming missing-file golden remains unchanged; deterministic scheduling tests cover all three
+  memoized reads.
 - **`view --eval` no longer crashes on a cell xl cannot evaluate, and degrades cell by cell**:
   a sheet holding `=SUMPRODUCT(--(B2:B4>0),ABS(C2:C4+D2:D4))` made `view --eval` exit 3 `INTERNAL`
   ("stack trace is imprecise" in the native image, a `ClassCastException` on the JVM), `evala`

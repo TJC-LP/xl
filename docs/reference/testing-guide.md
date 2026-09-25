@@ -233,11 +233,11 @@ As of the 2026-09-25 Weaver wave, from the full-suite JUnit reports; macros are 
 | xl-evaluator | 3151 |
 | xl-core | 1794 |
 | xl-ooxml | 1290 |
-| xl-cli | 1626 |
+| xl-cli | 1629 |
 | xl-cats-effect | 183 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 61 |
-| **Total** | **8,252** |
+| **Total** | **8,255** |
 
 ## Test Quality Metrics
 

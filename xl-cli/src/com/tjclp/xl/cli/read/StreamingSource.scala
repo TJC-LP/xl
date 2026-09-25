@@ -169,10 +169,19 @@ object StreamingSource:
    */
   def apply(path: Path, excel: ExcelIO[IO], config: ReaderConfig): IO[StreamingSource] =
     (
-      metadata(path, excel).memoize,
-      sharedStrings(path, excel, config).memoize,
-      excel.loadStyles(path).memoize
+      memoizedRead(metadata(path, excel)),
+      memoizedRead(sharedStrings(path, excel, config)),
+      memoizedRead(excel.loadStyles(path))
     ).mapN(new StreamingSource(path, excel, _, _, _))
+
+  /**
+   * Cache failures as values in the memo's worker, then raise them in the consuming fiber. A fast
+   * failing worker can finish before memoize attaches its join, causing the runtime to report the
+   * handled error to stderr as well as the caller's normal CLI diagnostic. The worker now always
+   * succeeds with its Either; laziness, cancellation and caching of both outcomes stay unchanged.
+   */
+  private def memoizedRead[A](read: IO[A]): IO[IO[A]] =
+    read.attempt.memoize.map(_.rethrow)
 
   /** The refusal every styled format gets under `--stream`: today's exact text. */
   def renderUnsupported(spec: RenderSpec): CliException =
