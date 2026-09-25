@@ -9,7 +9,9 @@ import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.formula.graph.DependencyGraph.{QualifiedRef, Scc}
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.workbooks.{CalcPr, Workbook}
+import com.tjclp.xl.workbooks.{CalcPr, DefinedName, Workbook}
+
+import scala.collection.mutable
 
 /**
  * #678: one data table whose interior caches disagree with the corner formula re-evaluated at each
@@ -72,9 +74,10 @@ object StaleDataTable:
  * `calcPr.iterativeCalculation` is on — an intentional circular model converges by design, so
  * `audit --fail-on-findings` must not fail it forever; every cycle lands in exactly one of `cycles`
  * and `iterativeCycles`), `volatile` (a call to a function flagged `FunctionFlags.volatile` —
- * TODAY, NOW, RAND, RANDBETWEEN — read off the parsed call, GH-588), `dynamic` (INDIRECT/OFFSET
- * readers, [[DependencyGraph.dynamicCells]]), `externalRefs` (formulas touching another workbook,
- * whose caches are pinned) and the file's `calcPr`.
+ * TODAY, NOW, RAND, RANDBETWEEN — read off the parsed call, GH-588, directly or through defined
+ * names whose bodies make one, #678), `dynamic` (INDIRECT/OFFSET readers,
+ * [[DependencyGraph.dynamicCells]]), `externalRefs` (formulas touching another workbook, whose
+ * caches are pinned) and the file's `calcPr`.
  *
  * Every bucket is in workbook order — sheet position, then row, then column — so two runs on the
  * same file print the same report. Pure and total.
@@ -166,9 +169,10 @@ object WorkbookAudit:
         (position.getOrElse(q.sheet, Int.MaxValue), q.ref.row.index0, q.ref.col.index0)
       )
 
+    val viaName = volatileNames(wb)
     val scanned: Vector[Finding] = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.iterator.flatMap { (ref, cell) =>
-        classify(QualifiedRef(sheet.name, ref), cell.value)
+        classify(QualifiedRef(sheet.name, ref), cell.value, viaName(sheet.name, _, _))
       }
     }.toVector
     val unparseable = scanned.collect { case Finding.Unparseable(q, message) => (q, message) }
@@ -205,9 +209,10 @@ object WorkbookAudit:
    * corner, a skipped or oversized table) come back unchanged and never read as stale; an uncached
    * cell is `uncachedFormulas`' to report, not this note's.
    *
-   * A table whose corner reads a volatile function (RAND, NOW, …), directly or anywhere in its
-   * cone, is never checked: every re-evaluation draws new values, so a note would differ run to run
-   * and `recalc --tables` could never clear it. The `volatile` bucket already names that cell.
+   * A table whose corner reads a volatile function (RAND, NOW, …), directly, through a defined
+   * name, or anywhere in its cone, is never checked: every re-evaluation draws new values, so a
+   * note would differ run to run and `recalc --tables` could never clear it. The `volatile` bucket
+   * already names that cell.
    */
   private def staleDataTablesOf(
     wb: Workbook,
@@ -235,8 +240,10 @@ object WorkbookAudit:
       }
 
   /**
-   * Whether the table's corner, or a cell it reads through the substituted inputs' boundary (the
-   * cone `recalc --tables` re-derives, inputs' own formulas excluded), calls a volatile function.
+   * Whether the table's corner, or a cell it reads, calls a volatile function — over the cone
+   * `recalc --tables` re-derives: the substituted input cells and everything only they read are
+   * excluded, since what-if evaluation replaces each input with a row/column value (an input
+   * `=RAND()` is never drawn, so its table is deterministic and still checked).
    */
   private def readsVolatile(
     sheet: SheetName,
@@ -249,7 +256,7 @@ object WorkbookAudit:
       val srcQ = sources.map(QualifiedRef(sheet, _))
       val inputQ = inputs.map(QualifiedRef(sheet, _))
       val cone = DependencyGraph.qualifiedTransitivePrecedents(deps -- inputQ, srcQ) ++ srcQ
-      cone.exists(volatile)
+      (cone -- inputQ).exists(volatile)
     }
 
   /**
@@ -298,7 +305,15 @@ object WorkbookAudit:
     case Volatile(ref: QualifiedRef)
     case External(ref: QualifiedRef)
 
-  private def classify(q: QualifiedRef, value: CellValue): List[Finding] = value match
+  /**
+   * `viaName(qualifier, name)`: whether the defined name a formula on the cell's sheet references
+   * (sheet-qualified or not) is volatile — see [[volatileNames]].
+   */
+  private def classify(
+    q: QualifiedRef,
+    value: CellValue,
+    viaName: (Option[SheetName], String) => Boolean
+  ): List[Finding] = value match
     case CellValue.Error(e) => List(Finding.ErrorValue(q, e))
     // A data-table record is a pinned value source: its cache is audited, its text never parsed
     case CellValue.Formula(_, cached, _: FormulaKind.DataTable) => cacheFindings(q, cached)
@@ -306,7 +321,7 @@ object WorkbookAudit:
       val parsed = FormulaParser.parse(text) match
         case Left(err) => List(Finding.Unparseable(q, unparseableMessage(text, err)))
         case Right(expr) =>
-          val volatile = if callsVolatile(expr) then List(Finding.Volatile(q)) else Nil
+          val volatile = if callsVolatile(expr, viaName) then List(Finding.Volatile(q)) else Nil
           val external = if TExpr.containsExternalRef(expr) then List(Finding.External(q)) else Nil
           volatile ++ external
       cacheFindings(q, cached) ++ parsed
@@ -338,25 +353,70 @@ object WorkbookAudit:
       case Some(_) => Nil
       case None => List(Finding.Uncached(q))
 
-  /** Whether the expression calls a function flagged `FunctionFlags.volatile`, at any depth. */
-  private def callsVolatile(expr: TExpr[?]): Boolean = expr match
-    case call: TExpr.Call[?] =>
-      call.spec.flags.volatile ||
-      call.spec.argSpec.toValues(call.args).exists {
-        case ArgValue.Expr(e) => callsVolatile(e)
-        case _ => false
-      }
-    // GH-680: a chain's left spine in one loop, not one recursion per operator
-    case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
-        _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
-        _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
-      BinarySpine.existsOperand(chain)(callsVolatile(_))
-    case TExpr.ToInt(e) => callsVolatile(e)
-    case TExpr.UnaryPlus(e) => callsVolatile(e)
-    case TExpr.Percent(e) => callsVolatile(e)
-    case TExpr.DateToSerial(e) => callsVolatile(e)
-    case TExpr.DateTimeToSerial(e) => callsVolatile(e)
-    case TExpr.Let(bindings, body) =>
-      bindings.exists((_, value) => callsVolatile(value)) || callsVolatile(body)
-    case TExpr.Coerced(inner, _) => callsVolatile(inner)
-    case _ => false
+  /**
+   * Whether the expression calls a function flagged `FunctionFlags.volatile`, at any depth — the
+   * one volatility predicate. A defined-name reference (an expression, or a range slot) is answered
+   * by `viaName(qualifier, name)`, which applies this same predicate to the name's parsed body.
+   */
+  private def callsVolatile(
+    expr: TExpr[?],
+    viaName: (Option[SheetName], String) => Boolean
+  ): Boolean =
+    def go(e: TExpr[?]): Boolean = callsVolatile(e, viaName)
+    expr match
+      case call: TExpr.Call[?] =>
+        call.spec.flags.volatile ||
+        call.spec.argSpec.toValues(call.args).exists {
+          case ArgValue.Expr(e) => go(e)
+          case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) => viaName(scope, name)
+          case _ => false
+        }
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+          _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+          _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+        BinarySpine.existsOperand(chain)(go(_))
+      case TExpr.ToInt(e) => go(e)
+      case TExpr.UnaryPlus(e) => go(e)
+      case TExpr.Percent(e) => go(e)
+      case TExpr.DateToSerial(e) => go(e)
+      case TExpr.DateTimeToSerial(e) => go(e)
+      case TExpr.Let(bindings, body) =>
+        bindings.exists((_, value) => go(value)) || go(body)
+      case TExpr.Coerced(inner, _) => go(inner)
+      case TExpr.NameRef(name) => viaName(None, name)
+      case TExpr.SheetNameRef(qualifier, name) => viaName(Some(qualifier), name)
+      case TExpr.Aggregate(_, TExpr.RangeLocation.Name(name, scope)) => viaName(scope, name)
+      case _ => false
+
+  /**
+   * #678: whether a defined name, referenced from a formula on `from` (looked up from `qualifier`
+   * when the reference is sheet-qualified), is volatile — its parsed body calls a volatile
+   * function, directly or through further names. Resolution is the dependency graph's: the scoped
+   * lookup, a name's own references resolved from its defining sheet, and the same cycle guard
+   * (UPPERCASED names on the current path contribute nothing). An unresolvable or unparseable name
+   * is not volatile. Answers for a top-level reference are memoised per (name, sheet it resolves
+   * from); answers computed under the cycle guard are not, since the guard may have cut them short.
+   */
+  private def volatileNames(wb: Workbook): (SheetName, Option[SheetName], String) => Boolean =
+    if wb.metadata.definedNames.isEmpty then (_, _, _) => false
+    else
+      val canonical = DependencyGraph.sheetCanonicaliser(wb)
+      val memo = mutable.HashMap.empty[(DefinedName, SheetName), Boolean]
+      def walk(
+        from: SheetName,
+        qualifier: Option[SheetName],
+        name: String,
+        visiting: Set[String]
+      ): Boolean =
+        val key = name.toUpperCase
+        !visiting.contains(key) &&
+        Evaluator.lookupDefinedName(wb, qualifier.fold(from)(canonical), name).exists { dn =>
+          val defining = Evaluator.definedNameScope(wb, dn).map(_.name).getOrElse(from)
+          def body: Boolean = FormulaParser
+            .parse(dn.formula)
+            .toOption
+            .exists(callsVolatile(_, (q, n) => walk(defining, q, n, visiting + key)))
+          if visiting.isEmpty then memo.getOrElseUpdate((dn, defining), body) else body
+        }
+      (from, qualifier, name) => walk(from, qualifier, name, Set.empty)

@@ -1547,10 +1547,13 @@ object WorkbookLint:
     facts.sample.headOption match
       case None => Vector.empty
       case Some((firstRef, first)) =>
+        // #676: a formula typed with Alt+Enter carries line breaks in <f>; flatten them (and tabs)
+        // to spaces before the cap so the finding stays one line — the audit's unparseable entry
+        // flattens the same way, so the two tools quote one formula identically
+        val flat = first.text.replaceAll("\\r\\n|[\\r\\n\\t]", " ")
         val shownText =
-          if first.text.length > unparseableTextSample then
-            first.text.take(unparseableTextSample) + "…"
-          else first.text
+          if flat.length > unparseableTextSample then flat.take(unparseableTextSample) + "…"
+          else flat
         val shown = facts.sample.map(_._1.fold("<f>")(_.toA1))
         val cells =
           if facts.count > shown.size then s"first ${shown.size}: ${shown.mkString(", ")}, …"

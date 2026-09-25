@@ -2892,6 +2892,27 @@ class WorkbookLintSpec extends FunSuite:
     assert(!shortF.message.contains("…</f>"), s"no ellipsis under the cap: $shortF")
   }
 
+  test(
+    "#676: an Alt+Enter formula is quoted on ONE line — line breaks and tabs flatten to spaces"
+  ) {
+    // the same flattening the audit's unparseable entry applies, so the two print it identically
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> worksheetWith(
+      """<sheetData>
+    <row r="1"><c r="A1"><f>SUM(A2,&#13;&#10;A3,&#10;&#9;A4</f><v>1</v></c></row>
+  </sheetData>"""
+    ))
+    val bytes = zipBytes(parts)
+    val unbalanced: WorkbookLint.FormulaCheck =
+      text => Option.when(text.count(_ == '(') != text.count(_ == ')'))("unbalanced parentheses")
+    val dom = WorkbookLint.lintBytes(bytes, unbalanced).fold(e => fail(s"$e"), identity)
+    val sax = WorkbookLint.lintStreamBytes(bytes, unbalanced).fold(e => fail(s"$e"), identity)
+    assertEquals(sax, dom)
+    assertEquals(dom.map(_.category), Vector(LintCategory.FormulaUnparseable))
+    val f = dom.head
+    assert(f.message.contains("<f>SUM(A2, A3,  A4</f>"), s"flattened quote: $f")
+    assert(!f.message.exists(c => c == '\n' || c == '\r' || c == '\t'), s"one line: $f")
+  }
+
   test("GH-663: the slug is formula-unparseable") {
     assertEquals(LintCategory.FormulaUnparseable.slug, "formula-unparseable")
   }

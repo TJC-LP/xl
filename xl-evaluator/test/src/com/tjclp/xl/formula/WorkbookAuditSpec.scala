@@ -304,14 +304,18 @@ class WorkbookAuditSpec extends FunSuite:
   }
 
   /** [[tableBook]] with the corner (and optionally a cone cell B2) given verbatim. */
-  private def volatileTableBook(corner: String, cone: Option[String]): Workbook =
+  private def volatileTableBook(
+    corner: String,
+    cone: Option[String],
+    input: CellValue = num(4)
+  ): Workbook =
     val kind = columnTable("F10:F12", "A2")
     Workbook(
       Vector(
         sheetWith(
           "S",
           (Vector(
-            "A2" -> num(4),
+            "A2" -> input,
             "F9" -> cachedFormula(corner, 400),
             "E10" -> num(1),
             "E11" -> num(2),
@@ -345,6 +349,69 @@ class WorkbookAuditSpec extends FunSuite:
       WorkbookAudit.of(volatileTableBook("B2*100", Some("A2+1"))).staleDataTables.map(_.ref.toA1),
       Vector("F10:F12")
     )
+  }
+
+  test("#678: a corner reaching RAND through a defined name is volatile, and never stale") {
+    // the Monte Carlo shape: the draw lives in a name, not in the corner's text
+    val seeded = volatileTableBook("A2*100+Rnd", None)
+      .withDefinedName("Rnd", "RAND()")
+      .seedDataTables()
+      .fold(err => fail(err.message), identity)
+    val first = WorkbookAudit.of(seeded)
+    assertEquals(first.staleDataTables, Vector.empty)
+    assertEquals(WorkbookAudit.of(seeded), first)
+    // the volatile bucket names the corner: volatility follows the name
+    assertEquals(first.volatile, Vector(q("S", "F9")))
+  }
+
+  test("#678: volatility follows a chain of defined names, and a cyclic chain terminates") {
+    val seeded = volatileTableBook("A2*100+Shock", None)
+      .withDefinedName("Shock", "(Draw-0.5)*Vol")
+      .withDefinedName("Draw", "RAND()")
+      .withDefinedName("Vol", "0.2")
+      .seedDataTables()
+      .fold(err => fail(err.message), identity)
+    val first = WorkbookAudit.of(seeded)
+    assertEquals(first.staleDataTables, Vector.empty)
+    assertEquals(WorkbookAudit.of(seeded), first)
+    assertEquals(first.volatile, Vector(q("S", "F9")))
+
+    // a name chain with no volatile call is NOT volatile: the stale table is still reported
+    val steady = volatileTableBook("A2*100+Rate", None)
+      .withDefinedName("Rate", "Base")
+      .withDefinedName("Base", "0.05")
+    val audit = WorkbookAudit.of(steady)
+    assertEquals(audit.volatile, Vector.empty)
+    assertEquals(audit.staleDataTables.map(_.ref.toA1), Vector("F10:F12"))
+
+    // cyclic definitions: the walk is guarded, and a cycle with no volatile call is not volatile
+    val loop = Workbook(Vector(sheetWith("S", "A1" -> cachedFormula("Loop1+1", 0))))
+      .withDefinedName("Loop1", "Loop2")
+      .withDefinedName("Loop2", "Loop1")
+    assertEquals(WorkbookAudit.of(loop).volatile, Vector.empty)
+    val loopRand = Workbook(Vector(sheetWith("S", "A1" -> cachedFormula("Loop1+1", 0))))
+      .withDefinedName("Loop1", "Loop2")
+      .withDefinedName("Loop2", "Loop1+RAND()")
+    assertEquals(WorkbookAudit.of(loopRand).volatile, Vector(q("S", "A1")))
+
+    // a name body this evaluator cannot parse (NORM.INV is not implemented) hides its calls, but
+    // the corner is an unresolved reader (a finding) and cannot be re-evaluated, so the note is
+    // still deterministic: nothing is stale
+    val opaque = volatileTableBook("A2*100+Shock", None)
+      .withDefinedName("Shock", "NORM.INV(RAND(),0,1)")
+    val opaqueAudit = WorkbookAudit.of(opaque)
+    assertEquals(opaqueAudit.unresolvedReaders, Vector(q("S", "F9")))
+    assertEquals(opaqueAudit.staleDataTables, Vector.empty)
+    assertEquals(WorkbookAudit.of(opaque), opaqueAudit)
+  }
+
+  test("#678: a volatile INPUT cell does not exempt the table — substitution replaces it") {
+    // what-if evaluation overwrites A2 with each row input, so RAND() in A2 is never drawn
+    val book = volatileTableBook("A2*100", None, input = cachedFormula("RAND()", 0))
+    val audit = WorkbookAudit.of(book)
+    assertEquals(audit.volatile, Vector(q("S", "A2")))
+    assertEquals(audit.staleDataTables.map(_.ref.toA1), Vector("F10:F12"))
+    assertEquals(WorkbookAudit.of(book), audit)
   }
 
   test("buckets are in workbook order, then row, then column") {
