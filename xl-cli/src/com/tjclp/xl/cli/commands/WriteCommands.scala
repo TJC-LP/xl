@@ -1700,18 +1700,23 @@ object WriteCommands:
 
   /**
    * `--no-recalc` (GH-468) leaves every cache in the book as it was but still caches the formulas
-   * the fill wrote: each uncached plain formula in the target is evaluated in row-major order
-   * against the filled sheet, so a filled cell sees the filled cells before it.
+   * the fill wrote: each uncached plain or array formula in the target is evaluated in row-major
+   * order against the filled sheet, so a filled cell sees the filled cells before it. A cell
+   * evaluates at its position and by its record kind, so a filled single-cell array formula caches
+   * the array value and stays an array formula.
    */
   private def cacheFilledFormulas(filled: Sheet, wb: Workbook, target: CellRange): Sheet =
     target.cellsRowMajor.foldLeft(filled) { (s, ref) =>
       s.cells.get(ref).map(_.value) match
-        case Some(CellValue.Formula(expr, None, _: FormulaKind.Normal)) =>
-          val cached =
-            SheetEvaluator
-              .evaluateFormula(s)(s"=$expr", workbook = Some(wb.put(s)), currentCell = Some(ref))
-              .toOption
-          s.put(ref, CellValue.Formula(expr, cached))
+        case Some(
+              formula @ CellValue.Formula(
+                _,
+                None,
+                _: (FormulaKind.Normal | FormulaKind.ArrayFormula)
+              )
+            ) =>
+          val cached = SheetEvaluator.evaluateCell(s)(ref, workbook = Some(wb.put(s))).toOption
+          s.put(ref, formula.copy(cachedValue = cached))
         case _ => s
     }
 

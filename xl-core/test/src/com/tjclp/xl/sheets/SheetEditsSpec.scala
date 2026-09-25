@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{CellValue, Comment}
+import com.tjclp.xl.cells.{CellValue, Comment, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, OffGridRef, RowSpan}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
@@ -190,6 +190,65 @@ class SheetEditsSpec extends FunSuite:
     assertEquals(cross.getCellStyle(a1("B1")).map(_.numFmt), Some(NumFmt.Currency))
   }
 
+  private def arrayFormula(text: String, anchor: String, cached: Option[CellValue]): CellValue =
+    CellValue.Formula(text, cached, FormulaKind.ArrayFormula(rng(anchor)))
+
+  test("a single-cell array formula copies and fills as one, re-anchored at each target") {
+    // Excel pastes and fills {=...} as {=...}: a plain paste would be a legacy formula (implicit
+    // intersection) computing another value than its source
+    val cse = CellValue.Formula(
+      "SUM($A$1:$A$3*10)",
+      Some(num(60)),
+      FormulaKind.ArrayFormula(rng("B1:B1"), aca = true)
+    )
+    val s = Sheet(name).put(a1("B1"), cse)
+    val copied = ok(s.copyRange(rng("B1"), rng("D5"), valuesOnly = false)(using marking))
+    // the record's flags ride with it; the cache is dropped exactly as for a plain formula
+    assertEquals(
+      copied(a1("D5")).value,
+      CellValue.Formula(
+        "SUM($A$1:$A$3*10)|2,4",
+        None,
+        FormulaKind.ArrayFormula(rng("D5:D5"), aca = true)
+      )
+    )
+    val cross = ok(
+      Sheet(SheetName.unsafe("T"))
+        .copyRangeFrom(s, rng("B1"), rng("C2"), valuesOnly = false)(using marking)
+    )
+    assertEquals(
+      cross(a1("C2")).value,
+      CellValue.Formula(
+        "SUM($A$1:$A$3*10)|1,1",
+        None,
+        FormulaKind.ArrayFormula(rng("C2:C2"), aca = true)
+      )
+    )
+    val bare = Sheet(name).put(a1("B1"), arrayFormula("SUM(A1:A3*10)", "B1:B1", Some(num(60))))
+    val down = ok(bare.fill(rng("B1"), rng("B1:B3"), Edit.FillDir.Down)(using marking))
+    assertEquals(down(a1("B1")).value, arrayFormula("SUM(A1:A3*10)", "B1:B1", Some(num(60))))
+    assertEquals(down(a1("B2")).value, arrayFormula("SUM(A1:A3*10)|0,1", "B2:B2", None))
+    assertEquals(down(a1("B3")).value, arrayFormula("SUM(A1:A3*10)|0,2", "B3:B3", None))
+    val right = ok(bare.fill(rng("B1"), rng("B1:C1"), Edit.FillDir.Right)(using marking))
+    assertEquals(right(a1("C1")).value, arrayFormula("SUM(A1:A3*10)|1,0", "C1:C1", None))
+    // values-only still pastes the cached value
+    val values = ok(bare.copyRange(rng("B1"), rng("D5"), valuesOnly = true))
+    assertEquals(values(a1("D5")).value, num(60))
+  }
+
+  test("a multi-cell array anchor pastes a plain formula and its members their constants") {
+    val s = Sheet(name)
+      .put(a1("B1"), arrayFormula("A1:A2*10", "B1:B2", Some(num(10))))
+      .put(a1("B2"), num(20))
+    val copied = ok(s.copyRange(rng("B1:B2"), rng("D1:D2"), valuesOnly = false)(using marking))
+    assertEquals(copied(a1("D1")).value, formula("A1:A2*10|2,0"))
+    assertEquals(copied(a1("D2")).value, num(20))
+    val right = ok(s.fill(rng("B1"), rng("B1:C1"), Edit.FillDir.Right)(using marking))
+    assertEquals(right(a1("C1")).value, formula("A1:A2*10|1,0"))
+    // the source record is untouched
+    assertEquals(right(a1("B1")).value, arrayFormula("A1:A2*10", "B1:B2", Some(num(10))))
+  }
+
   // ========== sort ==========
 
   test("sort is stable, keeps the header, moves styles and comments, and sorts empties last") {
@@ -255,6 +314,16 @@ class SheetEditsSpec extends FunSuite:
       Vector(num(1), CellValue.Text("9"), CellValue.Text("10"), CellValue.Text("x"))
     )
     assertEquals(numeric(a1("B3")).value, formula("A1*2|0,2"))
+    // a single-cell array formula moves as one, re-anchored at its new row
+    val cse = s.put(a1("B1"), arrayFormula("A1*2", "B1:B1", Some(num(20))))
+    val sortedCse = ok(
+      cse.sort(
+        rng("A1:B4"),
+        Vector(Edit.SortKeySpec(Column.from0(0), Edit.SortDir.Ascending, Edit.SortMode.Numeric)),
+        hasHeader = false
+      )(using marking)
+    )
+    assertEquals(sortedCse(a1("B3")).value, arrayFormula("A1*2|0,2", "B3:B3", None))
     assertEquals(
       s.sort(rng("A1:A4"), Vector(Edit.SortKeySpec.ascending(Column.from0(1))), false),
       Left(XLError.InvalidReference("Sort column B is outside range A1:A4"))

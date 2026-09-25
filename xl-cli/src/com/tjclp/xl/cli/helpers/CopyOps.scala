@@ -150,10 +150,11 @@ object CopyOps:
     def loop(currentSheet: Sheet, passesRemaining: Int): Sheet =
       val nextSheet = refs.foldLeft(currentSheet) { (s, ref) =>
         s.cells.get(ref).map(_.value) match
-          case Some(CellValue.Formula(expr, _, _)) =>
+          // the pasted record keeps its kind: a single-cell array formula stays one
+          case Some(formula: CellValue.Formula) =>
             val cached =
               SheetEvaluator.evaluateCell(s)(ref, workbook = Some(wb.put(s))).toOption
-            s.put(ref, CellValue.Formula(expr, cached))
+            s.put(ref, formula.copy(cachedValue = cached))
           case _ => s
       }
       if nextSheet == currentSheet || passesRemaining <= 1 then nextSheet

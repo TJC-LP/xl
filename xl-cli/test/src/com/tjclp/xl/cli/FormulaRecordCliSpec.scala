@@ -177,25 +177,107 @@ class FormulaRecordCliSpec extends FunSuite:
     assertEquals(cells.get(aref("F1")).map(_.value), Some(num(42)))
   }
 
-  test("copy of an array anchor pastes a plain (Normal) shifted formula") {
-    val sheet = recordSheet
+  /**
+   * A1:A3 = 1,2,3 and B1 = {=SUM($A$1:$A$3*10)} = 60. As a plain (legacy) formula the same text
+   * intersects the column with its own row: 20 on row 2, 30 on row 3, #VALUE! below row 3.
+   */
+  private def cseSheet: Sheet =
+    Sheet("S")
+      .put(aref("A1"), num(1))
+      .put(aref("A2"), num(2))
+      .put(aref("A3"), num(3))
+      .put(
+        aref("B1"),
+        CellValue.Formula(
+          "SUM($A$1:$A$3*10)",
+          Some(num(60)),
+          FormulaKind.ArrayFormula(range("B1:B1"))
+        )
+      )
+
+  private def pastedArray(sheet: Sheet, a1: String): (String, Option[CellValue]) =
+    sheet.cells.get(aref(a1)).map(_.value) match
+      case Some(CellValue.Formula(expr, cached, kind)) =>
+        assertEquals(kind, FormulaKind.ArrayFormula(range(s"$a1:$a1")), s"$a1 kind")
+        (expr, cached)
+      case other => fail(s"expected an array formula at $a1, got $other")
+
+  private def outputSheet: Sheet =
+    ExcelIO
+      .instance[IO]
+      .read(outputPath)
+      .unsafeRunSync()
+      .sheets
+      .headOption
+      .getOrElse(fail("missing output sheet"))
+
+  test("copy of a single-cell array anchor pastes an array formula; a multi-cell anchor a plain") {
+    val sheet = cseSheet
     val wb = Workbook(sheet)
-    val out = CopyOps.copyRange(
-      wb,
-      sheet,
-      range("C1:C1"),
-      sheet,
-      range("C5:C5"),
-      valuesOnly = false
-    )
+    val out =
+      CopyOps.copyRange(wb, sheet, range("B1:B1"), sheet, range("D5:D5"), valuesOnly = false)
     val s2 = out
       .fold(e => fail(e.message), _.sheets.find(_.name == SheetName.unsafe("S")))
       .getOrElse(fail("missing S"))
-    s2(aref("C5")).value match
+    // the copy phase caches the pasted record by its kind: the array value, not the legacy #VALUE!
+    assertEquals(pastedArray(s2, "D5"), ("SUM($A$1:$A$3*10)", Some(num(60))))
+
+    val multi = cseSheet
+      .put(
+        aref("C1"),
+        CellValue.Formula("A1:A2*10", Some(num(10)), FormulaKind.ArrayFormula(range("C1:C2")))
+      )
+      .put(aref("C2"), num(20))
+    val multiOut = CopyOps.copyRange(
+      Workbook(multi),
+      multi,
+      range("C1:C2"),
+      multi,
+      range("E1:E2"),
+      valuesOnly = false
+    )
+    val s3 = multiOut
+      .fold(e => fail(e.message), _.sheets.find(_.name == SheetName.unsafe("S")))
+      .getOrElse(fail("missing S"))
+    s3(aref("E1")).value match
       case CellValue.Formula(expr, _, kind) =>
-        assertEquals(expr, "SUM(A5:A6*10)")
+        assertEquals(expr, "C1:C2*10")
         assertEquals(kind, FormulaKind.Normal())
       case other => fail(s"expected pasted Normal formula, got $other")
+    assertEquals(s3(aref("E2")).value, num(20))
+  }
+
+  test("copy verb: a pasted single-cell array formula computes its source's value") {
+    val sheet = cseSheet
+    WriteCommands
+      .copyRange(Workbook(sheet), Some(sheet), "B1", "D5", valuesOnly = false, outputPath, config)
+      .unsafeRunSync()
+    assertEquals(pastedArray(outputSheet, "D5"), ("SUM($A$1:$A$3*10)", Some(num(60))))
+  }
+
+  test("fill verb: a filled single-cell array formula stays one in every cell, recalc or not") {
+    for policy <- List(WritePolicy.default, WritePolicy(noRecalc = true)) do
+      val sheet = cseSheet
+      WriteCommands
+        .fill(
+          Workbook(sheet),
+          Some(sheet),
+          "B1",
+          "B1:B5",
+          FillDirection.Down,
+          outputPath,
+          config,
+          policy = policy
+        )
+        .unsafeRunSync()
+      val filled = outputSheet
+      (1 to 5).foreach { row =>
+        assertEquals(
+          pastedArray(filled, s"B$row"),
+          ("SUM($A$1:$A$3*10)", Some(num(60))),
+          s"B$row under $policy"
+        )
+      }
   }
 
   test("diff compares formula record kinds and payloads while ignoring cached values") {
