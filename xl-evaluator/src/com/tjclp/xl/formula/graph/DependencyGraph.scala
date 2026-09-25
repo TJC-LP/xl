@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.graph
 
-import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
+import com.tjclp.xl.formula.ast.{BinarySpine, BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.{
   ArgValue,
   CriteriaRangeResize,
@@ -181,18 +181,11 @@ object DependencyGraph:
           }
 
       // Binary operators - check both sides
-      case TExpr.Add(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Sub(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Mul(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Div(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Pow(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Concat(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Eq(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Neq(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Lt(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Lte(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Gt(l, r) => containsCellReferences(l) || containsCellReferences(r)
-      case TExpr.Gte(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+          _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+          _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+        BinarySpine.existsOperand(chain)(containsCellReferences(_))
 
       // Unary operators
       case TExpr.ToInt(e) => containsCellReferences(e)
@@ -248,42 +241,11 @@ object DependencyGraph:
             case ArgValue.Range(_) => false
             case ArgValue.Cells(_) => false
           }
-      case TExpr.Add(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Sub(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Mul(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Div(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Pow(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Concat(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Eq(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Neq(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Lt(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Lte(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Gt(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
-      case TExpr.Gte(l, r) =>
-        referencesMatching(l, resolveName, includeDynamicCalls) ||
-        referencesMatching(r, resolveName, includeDynamicCalls)
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+          _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+          _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+        BinarySpine.existsOperand(chain)(referencesMatching(_, resolveName, includeDynamicCalls))
       case TExpr.ToInt(e) => referencesMatching(e, resolveName, includeDynamicCalls)
       case TExpr.UnaryPlus(e) => referencesMatching(e, resolveName, includeDynamicCalls)
       case TExpr.Percent(e) => referencesMatching(e, resolveName, includeDynamicCalls)
@@ -737,30 +699,11 @@ object DependencyGraph:
           }
 
       // Binary operators - check both sides
-      case TExpr.Add(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Sub(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Mul(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Div(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Pow(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Concat(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Eq(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Neq(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Lt(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Lte(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Gt(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
-      case TExpr.Gte(l, r) =>
-        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+          _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+          _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+        BinarySpine.existsOperand(chain)(containsUnqualifiedCellReferences(_))
 
       // Unary operators
       case TExpr.ToInt(e) => containsUnqualifiedCellReferences(e)
@@ -844,18 +787,11 @@ object DependencyGraph:
         )
 
       // Recursive cases (binary operators)
-      case TExpr.Add(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Sub(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Mul(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Div(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Pow(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Concat(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Eq(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Neq(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Lt(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Lte(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Gt(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Gte(l, r) => extractDependencies(l) ++ extractDependencies(r)
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+          _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+          _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+        BinarySpine.operandList(chain).foldLeft(Set.empty[ARef])(_ ++ extractDependencies(_))
       case TExpr.ToInt(expr) =>
         extractDependencies(expr) // Type conversion - extract from wrapped expr
       // GH-374: unary plus is transparent — dependencies under it feed recalc edges
@@ -950,30 +886,11 @@ object DependencyGraph:
       case TExpr.RangeRef(range, _) => boundRange(range)
 
       // Recursive cases (binary operators)
-      case TExpr.Add(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Sub(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Mul(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Div(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Pow(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Concat(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Eq(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Neq(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Lt(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Lte(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Gt(l, r) =>
-        recurse(l) ++ recurse(r)
-      case TExpr.Gte(l, r) =>
-        recurse(l) ++ recurse(r)
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+          _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+          _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+        BinarySpine.operandList(chain).foldLeft(Set.empty[ARef])(_ ++ recurse(_))
       case TExpr.ToInt(expr) => recurse(expr)
       case TExpr.UnaryPlus(expr) => recurse(expr)
       case TExpr.Percent(expr) => recurse(expr)
@@ -2159,18 +2076,13 @@ object DependencyGraph:
         // GH-353: external-workbook refs target cells OUTSIDE the workbook — no edges ever
         case TExpr.ExternalRef(_, _, _, _) => Set.empty
         case TExpr.ExternalRange(_, _, _, _) => Set.empty
-        case TExpr.Add(l, r) => union(go(l), go(r))
-        case TExpr.Sub(l, r) => union(go(l), go(r))
-        case TExpr.Mul(l, r) => union(go(l), go(r))
-        case TExpr.Div(l, r) => union(go(l), go(r))
-        case TExpr.Pow(l, r) => union(go(l), go(r))
-        case TExpr.Concat(l, r) => union(go(l), go(r))
-        case TExpr.Eq(l, r) => union(go(l), go(r))
-        case TExpr.Neq(l, r) => union(go(l), go(r))
-        case TExpr.Lt(l, r) => union(go(l), go(r))
-        case TExpr.Lte(l, r) => union(go(l), go(r))
-        case TExpr.Gt(l, r) => union(go(l), go(r))
-        case TExpr.Gte(l, r) => union(go(l), go(r))
+        // GH-680: a chain's left spine in one loop, not one recursion per operator
+        case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+            _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+            _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+          BinarySpine
+            .operandList(chain)
+            .foldLeft(Set.empty[QualifiedRef])((acc, e) => union(acc, go(e)))
         // Unary operators
         case TExpr.ToInt(x) => go(x)
         case TExpr.UnaryPlus(x) => go(x)

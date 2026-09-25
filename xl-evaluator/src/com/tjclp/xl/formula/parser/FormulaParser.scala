@@ -143,6 +143,11 @@ object FormulaParser:
    *   The formula string being parsed
    * @param pos
    *   Current position (0-based offset)
+   * @param depth
+   *   Nesting levels entered on the current path (parentheses, function arguments, prefix and
+   *   postfix operators) — restored on the way out, so siblings do not accumulate
+   * @param operators
+   *   GH-680: binary operators consumed so far in the whole formula — monotone, never restored
    * @param scope
    *   GH-193: lexically visible LET bindings, innermost first
    */
@@ -150,7 +155,8 @@ object FormulaParser:
     input: String,
     pos: Int,
     depth: Int = 0,
-    scope: List[LetScopeEntry] = Nil
+    scope: List[LetScopeEntry] = Nil,
+    operators: Int = 0
   ):
     def advance(n: Int = 1): ParserState = copy(pos = pos + n)
     def currentChar: Option[Char] =
@@ -165,17 +171,26 @@ object FormulaParser:
   private type ParseResult[A] = Either[ParseError, (A, ParserState)]
 
   /**
-   * Maximum formula nesting depth — a stack-overflow guard (GH-56). Well above Excel's 64-level
-   * nesting limit and any realistic formula, but far below the depth (~2000) that overflows the
-   * evaluator/parser stack. Capping the parser keeps the AST shallow enough that evaluation is also
-   * safe, so a single guard covers both the parser and the evaluator.
+   * Maximum formula nesting depth — a stack-overflow guard (GH-56): 2x Excel's own 64-level cap on
+   * nesting functions and parentheses. Each level costs a run of recursive-descent frames (the
+   * precedence ladder), and 256 levels sat at the edge of a default 1MB thread stack under
+   * interpreted execution (CI-observed StackOverflowError in the depth-guard tests themselves).
+   * GH-680: only real nesting counts — a flat operator chain costs nothing here (see
+   * [[parseChain]]); its length is bounded by [[MaxOperators]].
    */
-  // 2x Excel's own 64-level function-nesting cap. Must stay small enough that the
-  // guard fires before JVM stack exhaustion: each nesting level costs ~11 recursive-
-  // descent frames (the precedence ladder incl. the postfix tier), and 256 levels sat
-  // at the edge of a default 1MB thread stack under interpreted execution (CI-observed
-  // StackOverflowError in the depth-guard tests themselves).
   private val MaxNestingDepth = 128
+
+  /**
+   * GH-680: the most binary operators one formula may hold. A left-associative chain builds a
+   * left-nested spine one node per operator. The heavy walkers (evaluator, printer, shifter,
+   * dependency extraction, analysis) take a spine in one loop
+   * ([[com.tjclp.xl.formula.ast.BinarySpine]]), so this bound is not what keeps them on the stack;
+   * it is a margin for what still recurses along a spine — case-class `equals`/`hashCode` —
+   * measured cold (interpreted) on a 1MB thread stack clear to 2000 operators under 64 nesting
+   * levels. 1024 is eight times the 130-term chains generated books carry, and a longer chain is
+   * `TooManyOperators`: a total `Left`, never a StackOverflowError.
+   */
+  private val MaxOperators = 1024
 
   /**
    * Guarded descent into a nested sub-expression: deepen the state, or fail if already too deep.
@@ -183,6 +198,12 @@ object FormulaParser:
   private def descend(s: ParserState): Either[ParseError, ParserState] =
     if s.depth >= MaxNestingDepth then Left(ParseError.NestingTooDeep(s.depth, MaxNestingDepth))
     else Right(s.copy(depth = s.depth + 1))
+
+  /** GH-680: count one more binary operator against [[MaxOperators]]. */
+  private def countOperator(s: ParserState): Either[ParseError, ParserState] =
+    if s.operators >= MaxOperators then
+      Left(ParseError.TooManyOperators(s.operators + 1, MaxOperators, s.pos))
+    else Right(s.copy(operators = s.operators + 1))
 
   /**
    * Skip whitespace characters.
@@ -286,6 +307,40 @@ object FormulaParser:
       else Right((left, s2))
     }
 
+  /** A binary operator at the cursor: the characters it spells and the node it builds. */
+  private type ChainOperator = (Int, (TExpr[?], TExpr[?]) => TExpr[?])
+
+  /**
+   * GH-680: parse a left-associative chain `operand (op operand)*` as an iterative left fold.
+   *
+   * A chain costs nothing against the nesting budget: its right operands never re-enter
+   * [[parseExpr]] (only parentheses and function arguments do), so the parser's stack is flat
+   * however long `B2+B3+…` runs, and Excel's limit is the nesting of functions and parentheses, not
+   * chain length. What a chain does deepen is the AST's left spine (GH-56's reason for once
+   * counting every segment as a level); the walkers take a spine in one loop (BinarySpine) and the
+   * per-formula operator budget ([[countOperator]]) bounds what is left.
+   */
+  private def parseChain(
+    state: ParserState,
+    operand: ParserState => ParseResult[TExpr[?]],
+    operatorAt: ParserState => Option[ChainOperator]
+  ): ParseResult[TExpr[?]] =
+    operand(state).flatMap { case (first, s1) =>
+      @tailrec
+      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
+        val s2 = skipWhitespace(s)
+        operatorAt(s2) match
+          case None => Right((acc, s2))
+          case Some((consumed, build)) =>
+            countOperator(s2) match
+              case Left(err) => Left(err)
+              case Right(sc) =>
+                operand(skipWhitespace(sc.advance(consumed))) match
+                  case Right((right, s3)) => loop(build(acc, right), s3)
+                  case Left(err) => Left(err)
+      loop(first, s1)
+    }
+
   /**
    * Parse comparison operators: =, <>, <, <=, >, >= (left-associative).
    *
@@ -298,43 +353,29 @@ object FormulaParser:
    * cells equal 0 / "" / FALSE like Excel, compares text lexicographically, and ranks number < text
    * < logical (numeric-only coercion would reject text operands).
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseComparison(state: ParserState): ParseResult[TExpr[?]] =
-    def mk(op: (TExpr[CellValue], TExpr[CellValue]) => TExpr[Boolean])(
-      l: TExpr[?],
-      r: TExpr[?]
-    ): TExpr[?] =
-      op(TExpr.asComparableValueExpr(l), TExpr.asComparableValueExpr(r))
-    parseConcatenation(state).flatMap { case (left, s1) =>
-      @tailrec
-      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
-        val s2 = skipWhitespace(s)
-        // (chars consumed, node constructor); None = no comparison operator here
-        val operator: Option[(Int, (TExpr[?], TExpr[?]) => TExpr[?])] = s2.currentChar match
-          case Some('=') => Some((1, mk(TExpr.Eq.apply)))
+    def op(
+      width: Int,
+      node: (TExpr[CellValue], TExpr[CellValue]) => TExpr[Boolean]
+    ): Option[ChainOperator] =
+      Some((width, (l, r) => node(TExpr.asComparableValueExpr(l), TExpr.asComparableValueExpr(r))))
+    parseChain(
+      state,
+      parseConcatenation,
+      s =>
+        s.currentChar match
+          case Some('=') => op(1, TExpr.Eq.apply)
           case Some('<') =>
-            s2.advance().currentChar match
-              case Some('>') => Some((2, mk(TExpr.Neq.apply)))
-              case Some('=') => Some((2, mk(TExpr.Lte.apply)))
-              case _ => Some((1, mk(TExpr.Lt.apply)))
+            s.advance().currentChar match
+              case Some('>') => op(2, TExpr.Neq.apply)
+              case Some('=') => op(2, TExpr.Lte.apply)
+              case _ => op(1, TExpr.Lt.apply)
           case Some('>') =>
-            s2.advance().currentChar match
-              case Some('=') => Some((2, mk(TExpr.Gte.apply)))
-              case _ => Some((1, mk(TExpr.Gt.apply)))
+            s.advance().currentChar match
+              case Some('=') => op(2, TExpr.Gte.apply)
+              case _ => op(1, TExpr.Gt.apply)
           case _ => None
-        operator match
-          case None => Right((acc, s2))
-          case Some((consumed, build)) =>
-            // GH-56: each chained comparison deepens the AST spine — count it (see parseAddSub).
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance(consumed))
-                parseConcatenation(s3) match
-                  case Right((right, s4)) => loop(build(acc, right), s4)
-                  case Left(err) => Left(err)
-      loop(left, s1)
-    }
+    )
 
   /**
    * Parse concatenation operator: & (left-associative).
@@ -344,118 +385,42 @@ object FormulaParser:
    * `=A1&B1&C1` round-trips without the printer inventing grouping parens.
    */
   private def parseConcatenation(state: ParserState): ParseResult[TExpr[?]] =
-    parseAddSub(state).flatMap { case (left, s1) =>
-      @tailrec
-      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
-        val s2 = skipWhitespace(s)
-        s2.currentChar match
-          case Some('&') =>
-            // GH-56: each chained segment deepens the AST spine — count it (see parseAddSub).
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseAddSub(s3) match
-                  case Right((right, s4)) =>
-                    loop(TExpr.Concat(TExpr.asStringExpr(acc), TExpr.asStringExpr(right)), s4)
-                  case Left(err) => Left(err)
-          case _ => Right((acc, s2))
-      loop(left, s1)
-    }
+    parseChain(
+      state,
+      parseAddSub,
+      s =>
+        Option.when(s.currentChar.contains('&'))(
+          (1, (l, r) => TExpr.Concat(TExpr.asStringExpr(l), TExpr.asStringExpr(r)))
+        )
+    )
 
-  /**
-   * Parse addition and subtraction (left-associative).
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  /** An arithmetic operator whose operands keep RangeRef for array arithmetic. */
+  private def arithmetic(node: (TExpr[BigDecimal], TExpr[BigDecimal]) => TExpr[?]): ChainOperator =
+    (1, (l, r) => node(TExpr.asNumericOrRangeExpr(l), TExpr.asNumericOrRangeExpr(r)))
+
+  /** Parse addition and subtraction (left-associative). */
   private def parseAddSub(state: ParserState): ParseResult[TExpr[?]] =
-    parseMulDiv(state).flatMap { case (left, s1) =>
-      @tailrec
-      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
-        val s2 = skipWhitespace(s)
-        s2.currentChar match
-          case Some('+') =>
-            // GH-56: each chained term deepens the left-nested AST, so count it against the depth
-            // budget — otherwise a flat `1+1+1+…` overflows the evaluator (the parser loops, but
-            // eval recurses the spine).
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseMulDiv(s3) match
-                  case Right((right, s4)) =>
-                    loop(
-                      TExpr.Add(
-                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                        TExpr.asNumericOrRangeExpr(right)
-                      ),
-                      s4
-                    )
-                  case Left(err) => Left(err)
-          case Some('-') if !s2.remaining.startsWith("->") =>
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseMulDiv(s3) match
-                  case Right((right, s4)) =>
-                    loop(
-                      TExpr.Sub(
-                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                        TExpr.asNumericOrRangeExpr(right)
-                      ),
-                      s4
-                    )
-                  case Left(err) => Left(err)
-          case _ => Right((acc, s2))
+    parseChain(
+      state,
+      parseMulDiv,
+      s =>
+        s.currentChar match
+          case Some('+') => Some(arithmetic(TExpr.Add.apply))
+          case Some('-') if !s.remaining.startsWith("->") => Some(arithmetic(TExpr.Sub.apply))
+          case _ => None
+    )
 
-      loop(left, s1)
-    }
-
-  /**
-   * Parse multiplication and division (left-associative).
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  /** Parse multiplication and division (left-associative). */
   private def parseMulDiv(state: ParserState): ParseResult[TExpr[?]] =
-    parseUnary(state).flatMap { case (left, s1) =>
-      @tailrec
-      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
-        val s2 = skipWhitespace(s)
-        s2.currentChar match
-          case Some('*') =>
-            // GH-56: count each chained factor against the depth budget (see parseAddSub).
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseUnary(s3) match
-                  case Right((right, s4)) =>
-                    loop(
-                      TExpr.Mul(
-                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                        TExpr.asNumericOrRangeExpr(right)
-                      ),
-                      s4
-                    )
-                  case Left(err) => Left(err)
-          case Some('/') =>
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseUnary(s3) match
-                  case Right((right, s4)) =>
-                    loop(
-                      TExpr.Div(
-                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                        TExpr.asNumericOrRangeExpr(right)
-                      ),
-                      s4
-                    )
-                  case Left(err) => Left(err)
-          case _ => Right((acc, s2))
-
-      loop(left, s1)
-    }
+    parseChain(
+      state,
+      parseUnary,
+      s =>
+        s.currentChar match
+          case Some('*') => Some(arithmetic(TExpr.Mul.apply))
+          case Some('/') => Some(arithmetic(TExpr.Div.apply))
+          case _ => None
+    )
 
   /**
    * Parse exponentiation (LEFT-associative, highest binary arithmetic precedence).
@@ -469,27 +434,14 @@ object FormulaParser:
    * subtraction is unaffected: 0-2^2 = -4.
    */
   private def parsePow(state: ParserState): ParseResult[TExpr[?]] =
-    parseSigned(state).flatMap { case (first, s1) =>
-      @tailrec
-      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
-        val s2 = skipWhitespace(s)
-        s2.currentChar match
-          case Some('^') =>
-            // GH-56: each chained power deepens the left-nested spine — count it (see parseAddSub)
-            descend(s2) match
-              case Left(err) => Left(err)
-              case Right(sd) =>
-                val s3 = skipWhitespace(sd.advance())
-                parseSigned(s3) match
-                  case Right((right, s4)) =>
-                    loop(
-                      TExpr.Pow(TExpr.asNumericExpr(acc), TExpr.asNumericExpr(right)),
-                      s4.copy(depth = s2.depth)
-                    )
-                  case Left(err) => Left(err)
-          case _ => Right((acc, s2))
-      loop(first, s1)
-    }
+    parseChain(
+      state,
+      parseSigned,
+      s =>
+        Option.when(s.currentChar.contains('^'))(
+          (1, (l, r) => TExpr.Pow(TExpr.asNumericExpr(l), TExpr.asNumericExpr(r)))
+        )
+    )
 
   /**
    * GH-355: parse postfix percent — Excel's tightest-binding operator (value ÷ 100).

@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.eval
 
-import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
+import com.tjclp.xl.formula.ast.{BinarySpine, BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.LiftSlot
 
 import com.tjclp.xl.cells.{CellError, CellValue}
@@ -78,18 +78,10 @@ private[formula] object ArrayLifting:
     case TExpr.DateTimeToSerial(inner) => isScalarCertain(inner, bindings)
     case TExpr.UnaryPlus(inner) => isScalarCertain(inner, bindings)
     case TExpr.Percent(inner) => isScalarCertain(inner, bindings)
-    case TExpr.Add(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Sub(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Mul(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Div(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Pow(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Concat(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Eq(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Neq(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Lt(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Lte(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Gt(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
-    case TExpr.Gte(x, y) => isScalarCertain(x, bindings) && isScalarCertain(y, bindings)
+    // GH-680: a binary chain is scalar when every operand of its left spine is (BinarySpine walks
+    // the spine in a loop, so a long chain costs no stack)
+    case chain if BinarySpine.isBinary(chain) =>
+      BinarySpine.operandList(chain).forall(isScalarCertain(_, bindings))
     case _ => false
 
   private def boundScalar(bindings: Map[String, Any], name: String): Boolean =

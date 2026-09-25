@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.printer
 
-import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
+import com.tjclp.xl.formula.ast.{BinarySpine, RangeForm, TExpr}
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, ArgPrinter}
 
 import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
@@ -84,6 +84,36 @@ object FormulaPrinter:
     val Primary = 10
 
   /**
+   * A binary operator as the printer spells it: its precedence, symbol and the precedence its RIGHT
+   * operand prints at (GH-455: one level tighter for the left-associative operators). None for any
+   * other node — including `0-x`, which prints as unary minus.
+   */
+  private def binaryAt(expr: TExpr[?]): Option[(Int, String, Int)] = expr match
+    case TExpr.Add(_, _) => Some((Precedence.AddSub, "+", Precedence.AddSub + 1))
+    case TExpr.Sub(TExpr.Lit(n: BigDecimal), _) if n == BigDecimal(0) => None
+    case TExpr.Sub(_, _) => Some((Precedence.AddSub, "-", Precedence.AddSub + 1))
+    case TExpr.Mul(_, _) => Some((Precedence.MulDiv, "*", Precedence.MulDiv + 1))
+    case TExpr.Div(_, _) => Some((Precedence.MulDiv, "/", Precedence.MulDiv + 1))
+    case TExpr.Pow(_, _) => Some((Precedence.Pow, "^", Precedence.PowExponent))
+    case TExpr.Concat(_, _) => Some((Precedence.Concat, "&", Precedence.Concat + 1))
+    case TExpr.Eq(_, _) => Some((Precedence.Comparison, "=", Precedence.Comparison + 1))
+    case TExpr.Neq(_, _) => Some((Precedence.Comparison, "<>", Precedence.Comparison + 1))
+    case TExpr.Lt(_, _) => Some((Precedence.Comparison, "<", Precedence.Comparison + 1))
+    case TExpr.Lte(_, _) => Some((Precedence.Comparison, "<=", Precedence.Comparison + 1))
+    case TExpr.Gt(_, _) => Some((Precedence.Comparison, ">", Precedence.Comparison + 1))
+    case TExpr.Gte(_, _) => Some((Precedence.Comparison, ">=", Precedence.Comparison + 1))
+    case _ => None
+
+  /** GH-680: the precedence of a chain — a binary node whose left operand shares it — or None. */
+  private def chainPrecedence(expr: TExpr[?]): Option[Int] =
+    for
+      (level, _, _) <- binaryAt(expr)
+      (left, _) <- BinarySpine.operands(expr)
+      (leftLevel, _, _) <- binaryAt(left)
+      if leftLevel == level
+    yield level
+
+  /**
    * Print expression with appropriate parentheses based on precedence.
    *
    * @param expr
@@ -127,6 +157,20 @@ object FormulaPrinter:
 
       // GH-603: an omitted argument is the empty slot (FunctionSpec.joinSlots keeps its comma)
       case TExpr.Missing => ""
+
+      // GH-680: a chain — a binary node whose left operand is one of the same precedence — prints
+      // its whole left spine in one loop, exactly what the per-operator arms below produce
+      // recursively (the left operand of a same-precedence operator never needs parens)
+      case chained if chainPrecedence(chained).isDefined =>
+        val level = chainPrecedence(chained).getOrElse(Precedence.Primary)
+        val (leftmost, spine) = BinarySpine.unwind(chained, binaryAt(_).exists(_._1 == level))
+        val text = spine.foldLeft(new StringBuilder(printExpr(leftmost, level, sep))) {
+          (acc, node) =>
+            binaryAt(node).fold(acc) { case (_, symbol, rightLevel) =>
+              acc.append(symbol).append(printExpr(BinarySpine.right(node), rightLevel, sep))
+            }
+        }
+        parenthesizeIf(text.toString, precedence > level)
 
       // Arithmetic operators.
       //

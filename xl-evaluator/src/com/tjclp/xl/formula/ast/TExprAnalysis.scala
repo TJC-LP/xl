@@ -12,6 +12,13 @@ trait TExprAnalysis:
   // ===== Date Function Detection =====
   // Used by CLI to auto-apply date formatting when writing formulas
 
+  /** The operators the date/time detection looks through: arithmetic but `^`, and comparisons. */
+  private def isDateTimeOperator(e: TExpr[?]): Boolean = e match
+    case _: Add | _: Sub | _: Mul | _: Div | _: Eq[?] | _: Neq[?] | _: Lt[?] | _: Lte[?] |
+        _: Gt[?] | _: Gte[?] =>
+      true
+    case _ => false
+
   /**
    * Check if expression contains any date-returning functions.
    *
@@ -27,19 +34,10 @@ trait TExprAnalysis:
         .exists(identity)
     // Date-to-serial wrappers (for arithmetic)
     case DateToSerial(_) | DateTimeToSerial(_) => true
-    // Arithmetic - recursively check operands
-    case Add(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    case Sub(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    case Mul(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    case Div(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    // Conditionals and logical functions handled via Call args
-    // Comparisons
-    case Eq(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    case Neq(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    case Lt(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    case Lte(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    case Gt(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    case Gte(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    // Arithmetic and comparisons - check operands (GH-680: a chain's left spine in one loop)
+    case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Eq[?] | _: Neq[?] | _: Lt[?] | _: Lte[?] |
+        _: Gt[?] | _: Gte[?]) =>
+      BinarySpine.existsOperand(chain, isDateTimeOperator)(containsDateFunction(_))
     // Error handling
     // Type conversion
     case ToInt(e) => containsDateFunction(e)
@@ -68,19 +66,10 @@ trait TExprAnalysis:
         .collect { case ArgValue.Expr(e) => containsTimeFunction(e) }
         .exists(identity)
     case DateTimeToSerial(_) => true
-    // Arithmetic - recursively check operands
-    case Add(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    case Sub(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    case Mul(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    case Div(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    // Conditionals and logical functions handled via Call args
-    // Comparisons
-    case Eq(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    case Neq(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    case Lt(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    case Lte(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    case Gt(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    case Gte(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    // Arithmetic and comparisons - check operands (GH-680: a chain's left spine in one loop)
+    case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Eq[?] | _: Neq[?] | _: Lt[?] | _: Lte[?] |
+        _: Gt[?] | _: Gte[?]) =>
+      BinarySpine.existsOperand(chain, isDateTimeOperator)(containsTimeFunction(_))
     // Error handling
     // Type conversion
     case ToInt(e) => containsTimeFunction(e)
@@ -118,18 +107,10 @@ trait TExprAnalysis:
           case _ => false
         }
     case Aggregate(_, RangeLocation.External(_, _, _, _)) => true
-    case Add(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Sub(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Mul(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Div(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Pow(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Concat(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Eq(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Neq(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Lt(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Lte(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Gt(l, r) => containsExternalRef(l) || containsExternalRef(r)
-    case Gte(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    // GH-680: a chain's left spine in one loop, not one recursion per operator
+    case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
+        _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
+      BinarySpine.existsOperand(chain)(containsExternalRef(_))
     case ToInt(e) => containsExternalRef(e)
     case UnaryPlus(e) => containsExternalRef(e)
     case Percent(e) => containsExternalRef(e)
@@ -166,20 +147,10 @@ trait TExprAnalysis:
           case ArgValue.Range(_) => Nil
           case _ => Nil
         }
-    // Arithmetic - recursively collect from operands
-    case Add(l, r) => collectRanges(l) ++ collectRanges(r)
-    case Sub(l, r) => collectRanges(l) ++ collectRanges(r)
-    case Mul(l, r) => collectRanges(l) ++ collectRanges(r)
-    case Div(l, r) => collectRanges(l) ++ collectRanges(r)
-    case Pow(l, r) => collectRanges(l) ++ collectRanges(r)
-    case Concat(l, r) => collectRanges(l) ++ collectRanges(r)
-    // Comparisons
-    case Eq(l, r) => collectRanges(l) ++ collectRanges(r)
-    case Neq(l, r) => collectRanges(l) ++ collectRanges(r)
-    case Lt(l, r) => collectRanges(l) ++ collectRanges(r)
-    case Lte(l, r) => collectRanges(l) ++ collectRanges(r)
-    case Gt(l, r) => collectRanges(l) ++ collectRanges(r)
-    case Gte(l, r) => collectRanges(l) ++ collectRanges(r)
+    // Binary operators - collect from operands (GH-680: a chain's left spine in one loop)
+    case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
+        _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
+      BinarySpine.operandList(chain).flatMap(collectRanges)
     // Type conversion
     case ToInt(e) => collectRanges(e)
     case DateToSerial(e) => collectRanges(e)
@@ -219,32 +190,10 @@ trait TExprAnalysis:
       case SheetRange(sheet, range, form) =>
         val bounded = f(Some(sheet), range)
         SheetRange(sheet, bounded, if bounded == range then form else RangeForm.Cells)
-      // Arithmetic - recursively transform operands
-      case Add(l, r) =>
-        Add(transformRanges(l, f), transformRanges(r, f))
-      case Sub(l, r) =>
-        Sub(transformRanges(l, f), transformRanges(r, f))
-      case Mul(l, r) =>
-        Mul(transformRanges(l, f), transformRanges(r, f))
-      case Div(l, r) =>
-        Div(transformRanges(l, f), transformRanges(r, f))
-      case Pow(l, r) =>
-        Pow(transformRanges(l, f), transformRanges(r, f))
-      case Concat(l, r) =>
-        Concat(transformRanges(l, f), transformRanges(r, f))
-      // Comparisons
-      case Eq(l, r) =>
-        Eq(transformRanges(l, f), transformRanges(r, f))
-      case Neq(l, r) =>
-        Neq(transformRanges(l, f), transformRanges(r, f))
-      case Lt(l, r) =>
-        Lt(transformRanges(l, f), transformRanges(r, f))
-      case Lte(l, r) =>
-        Lte(transformRanges(l, f), transformRanges(r, f))
-      case Gt(l, r) =>
-        Gt(transformRanges(l, f), transformRanges(r, f))
-      case Gte(l, r) =>
-        Gte(transformRanges(l, f), transformRanges(r, f))
+      // Binary operators - transform operands (GH-680: a chain's left spine in one loop)
+      case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
+          _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
+        BinarySpine.mapOperands(chain)(transformRanges(_, f))
       // Type conversion
       case ToInt(e) =>
         ToInt(transformRanges(e, f))

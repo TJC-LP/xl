@@ -4,7 +4,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.{Clock, Rng}
-import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
+import com.tjclp.xl.formula.ast.{BinarySpine, BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.ArgValue
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -1405,18 +1405,11 @@ object DataTableSeeder:
   private def children(expr: TExpr[?]): List[TExpr[?]] =
     expr match
       case call: TExpr.Call[?] => callArgExprs(call)
-      case TExpr.Add(l, r) => List(l, r)
-      case TExpr.Sub(l, r) => List(l, r)
-      case TExpr.Mul(l, r) => List(l, r)
-      case TExpr.Div(l, r) => List(l, r)
-      case TExpr.Pow(l, r) => List(l, r)
-      case TExpr.Concat(l, r) => List(l, r)
-      case TExpr.Eq(l, r) => List(l, r)
-      case TExpr.Neq(l, r) => List(l, r)
-      case TExpr.Lt(l, r) => List(l, r)
-      case TExpr.Lte(l, r) => List(l, r)
-      case TExpr.Gt(l, r) => List(l, r)
-      case TExpr.Gte(l, r) => List(l, r)
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+          _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+          _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+        BinarySpine.operandList(chain)
       case TExpr.ToInt(e) => List(e)
       case TExpr.UnaryPlus(e) => List(e)
       case TExpr.Percent(e) => List(e)

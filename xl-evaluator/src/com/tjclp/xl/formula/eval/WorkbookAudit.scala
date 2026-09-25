@@ -2,7 +2,7 @@ package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
-import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
 import com.tjclp.xl.formula.functions.{ArgValue, FunctionRegistry}
 import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.formula.graph.DependencyGraph.{QualifiedRef, Scc}
@@ -168,18 +168,11 @@ object WorkbookAudit:
         case ArgValue.Expr(e) => callsVolatile(e)
         case _ => false
       }
-    case TExpr.Add(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Sub(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Mul(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Div(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Pow(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Concat(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Eq(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Neq(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Lt(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Lte(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Gt(l, r) => callsVolatile(l) || callsVolatile(r)
-    case TExpr.Gte(l, r) => callsVolatile(l) || callsVolatile(r)
+    // GH-680: a chain's left spine in one loop, not one recursion per operator
+    case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+        _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+        _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+      BinarySpine.existsOperand(chain)(callsVolatile(_))
     case TExpr.ToInt(e) => callsVolatile(e)
     case TExpr.UnaryPlus(e) => callsVolatile(e)
     case TExpr.Percent(e) => callsVolatile(e)

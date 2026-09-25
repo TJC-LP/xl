@@ -2,7 +2,7 @@ package com.tjclp.xl.formula.eval
 
 import java.util.concurrent.atomic.AtomicLong
 
-import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
+import com.tjclp.xl.formula.ast.{BinarySpine, BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.{
   ArrayLift,
   EvalContext,
@@ -2116,6 +2116,24 @@ private class EvaluatorImpl(
         evalCoercedExpr(inner, target, sheet, clock, workbook, currentCell, collapse = false)
       case TExpr.CoercedBindingRef(name, target) =>
         evalCoercedBinding(name, target, collapse = false, clock, workbook, currentCell)
+      // GH-680: a chained operand — `a+b+…+y`, the left operand of the next operator — evaluates
+      // its left spine in one loop rather than one recursion per operator, so a chain as long as
+      // the parser admits cannot exhaust the stack. Every binary operator evaluates its left
+      // operand first through this method and returns its error unchanged, so evaluating the
+      // innermost node, then each node above with its left operand replaced by the value below
+      // (a literal evaluates to exactly that value), is the recursive evaluation step for step.
+      case chained if BinarySpine.isChained(chained) =>
+        BinarySpine.unwind(chained, BinarySpine.isBinary)._2 match
+          case innermost :: above =>
+            above.foldLeft(evalMaybeArray(innermost, sheet, clock, workbook, currentCell)) {
+              (below, node) =>
+                below.flatMap { value =>
+                  val step = BinarySpine.rebuild(node, TExpr.Lit(value), BinarySpine.right(node))
+                  evalMaybeArray(step, sheet, clock, workbook, currentCell)
+                }
+            }
+          // unreachable: a chained node unwinds to at least itself
+          case Nil => eval(chained.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
       case other =>
         eval(other.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
 

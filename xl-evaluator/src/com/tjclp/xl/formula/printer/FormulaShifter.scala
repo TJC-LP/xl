@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.printer
 
-import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
+import com.tjclp.xl.formula.ast.{BinarySpine, RangeForm, TExpr}
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
 
 import scala.annotation.nowarn
@@ -194,23 +194,10 @@ object FormulaShifter:
       case err: ErrorLit => err.asInstanceOf[TExpr[A]]
       case Missing => expr
 
-      // Arithmetic operators
-      case Add(x, y) => Add(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Sub(x, y) => Sub(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Mul(x, y) => Mul(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Div(x, y) => Div(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Pow(x, y) => Pow(go(x), go(y)).asInstanceOf[TExpr[A]]
-
-      // String operators
-      case Concat(x, y) => Concat(go(x), go(y)).asInstanceOf[TExpr[A]]
-
-      // Comparison operators
-      case Eq(x, y) => Eq(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Neq(x, y) => Neq(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Lt(x, y) => Lt(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Lte(x, y) => Lte(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Gt(x, y) => Gt(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Gte(x, y) => Gte(go(x), go(y)).asInstanceOf[TExpr[A]]
+      // Binary operators (GH-680: a chain's left spine in one loop, not one recursion per operator)
+      case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
+          _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
+        BinarySpine.mapOperands(chain)(go(_)).asInstanceOf[TExpr[A]]
 
       // Type conversion
       case ToInt(e) => ToInt(go(e)).asInstanceOf[TExpr[A]]
@@ -416,18 +403,10 @@ object FormulaShifter:
           range => range
         )
         found
-      case Add(x, y) => go(x) || go(y)
-      case Sub(x, y) => go(x) || go(y)
-      case Mul(x, y) => go(x) || go(y)
-      case Div(x, y) => go(x) || go(y)
-      case Pow(x, y) => go(x) || go(y)
-      case Concat(x, y) => go(x) || go(y)
-      case Eq(x, y) => go(x) || go(y)
-      case Neq(x, y) => go(x) || go(y)
-      case Lt(x, y) => go(x) || go(y)
-      case Lte(x, y) => go(x) || go(y)
-      case Gt(x, y) => go(x) || go(y)
-      case Gte(x, y) => go(x) || go(y)
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
+          _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
+        BinarySpine.existsOperand(chain)(go)
       case ToInt(inner) => go(inner)
       case UnaryPlus(inner) => go(inner)
       case Percent(inner) => go(inner)
@@ -474,18 +453,10 @@ object FormulaShifter:
           range => range
         )
         found
-      case Add(x, y) => go(x) || go(y)
-      case Sub(x, y) => go(x) || go(y)
-      case Mul(x, y) => go(x) || go(y)
-      case Div(x, y) => go(x) || go(y)
-      case Pow(x, y) => go(x) || go(y)
-      case Concat(x, y) => go(x) || go(y)
-      case Eq(x, y) => go(x) || go(y)
-      case Neq(x, y) => go(x) || go(y)
-      case Lt(x, y) => go(x) || go(y)
-      case Lte(x, y) => go(x) || go(y)
-      case Gt(x, y) => go(x) || go(y)
-      case Gte(x, y) => go(x) || go(y)
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
+          _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
+        BinarySpine.existsOperand(chain)(go)
       case ToInt(inner) => go(inner)
       case UnaryPlus(inner) => go(inner)
       case Percent(inner) => go(inner)
@@ -541,18 +512,10 @@ object FormulaShifter:
       case _: Ref[?] | _: PolyRef | _: RangeRef | _: ExternalRef | _: ExternalRange | _: Lit[?] |
           _: ErrorLit | Missing | _: BindingRef | _: NameRef | _: CoercedBindingRef[?] =>
         expr
-      case Add(x, y) => Add(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Sub(x, y) => Sub(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Mul(x, y) => Mul(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Div(x, y) => Div(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Pow(x, y) => Pow(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Concat(x, y) => Concat(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Eq(x, y) => Eq(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Neq(x, y) => Neq(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Lt(x, y) => Lt(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Lte(x, y) => Lte(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Gt(x, y) => Gt(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Gte(x, y) => Gte(go(x), go(y)).asInstanceOf[TExpr[A]]
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
+          _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
+        BinarySpine.mapOperands(chain)(go(_)).asInstanceOf[TExpr[A]]
       case ToInt(e) => ToInt(go(e)).asInstanceOf[TExpr[A]]
       case UnaryPlus(e) => UnaryPlus(go(e))
       case Percent(e) => Percent(go(e)).asInstanceOf[TExpr[A]]
@@ -809,18 +772,10 @@ object FormulaShifter:
       // GH-612: an error literal has no coordinates; GH-603: neither has an omitted argument
       case _: ErrorLit => expr
       case Missing => expr
-      case Add(x, y) => Add(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Sub(x, y) => Sub(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Mul(x, y) => Mul(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Div(x, y) => Div(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Pow(x, y) => Pow(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Concat(x, y) => Concat(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Eq(x, y) => Eq(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Neq(x, y) => Neq(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Lt(x, y) => Lt(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Lte(x, y) => Lte(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Gt(x, y) => Gt(go(x), go(y)).asInstanceOf[TExpr[A]]
-      case Gte(x, y) => Gte(go(x), go(y)).asInstanceOf[TExpr[A]]
+      // GH-680: a chain's left spine in one loop, not one recursion per operator
+      case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
+          _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
+        BinarySpine.mapOperands(chain)(go(_)).asInstanceOf[TExpr[A]]
       case ToInt(e) => ToInt(go(e)).asInstanceOf[TExpr[A]]
       // GH-374: unary plus is transparent — recurse so refs under it move/void structurally
       case UnaryPlus(e) => UnaryPlus(go(e))

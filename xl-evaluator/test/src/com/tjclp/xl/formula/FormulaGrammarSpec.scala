@@ -121,6 +121,7 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     case ParseError.InvalidArguments(_, pos, _, _) => Some(pos)
     case ParseError.InvalidOperator(_, pos, _) => Some(pos)
     case ParseError.GenericError(_, pos) => pos
+    case ParseError.TooManyOperators(_, _, pos) => Some(pos)
     case ParseError.EmptyFormula | ParseError.FormulaTooLong(_, _) |
         ParseError.NestingTooDeep(_, _) =>
       None

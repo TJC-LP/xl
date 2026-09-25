@@ -15,21 +15,21 @@ import scala.annotation.tailrec
  * '('; add-in names such as `BDP(…)` are `#NAME?` on recalculation, not a repair; an argument count
  * the registry's arity model refuses opens intact), so only the classes the parser is certain of
  * are findings: text that ends before the expression does (`SUM(A1:A2`, an unterminated string), a
- * `]` or `}` closing a `(`, and Excel's 8192-character limit. The parser's 128-level depth budget
- * is NOT a finding: it counts every chained operator segment as a level (GH-56), so a flat 130-term
- * `B2+B3+…` chain that Excel opens intact fails it while a 100-deep `SUM(SUM(…))` nest passes — it
- * bounds the parser, not Excel's 64-level nesting rule (#680). Every other refusal stays `xl
- * audit`'s to list under "Unparseable formulas" — including an extra or wrong closer after a
- * complete expression (`SUM(A1:A2))`, `SUM(A1:A2]`), which surfaces as an unexpected character, and
- * a `,` or space inside parentheses (`SUM((A1,A2))`, `(A1:B2 B1:C2)`: Excel's union and
- * intersection reference operators, which the parser does not implement). The parser reports ANY
- * character but `)` after a parenthesized expression as an `UnbalancedDelimiter`, so that class is
- * a finding only when the character is a `]` or `}`; a `,`, a space or a reference character there
- * is a grammar gap, not a certain repair. Likewise an `UnexpectedEOF` is a finding only when the
- * TEXT shows the truncation — an open `(`, `{` or `[`, an unterminated `"…"` or `'…'`, a trailing
- * operator (`A1+`, `A1:`, `Sheet1!`): the parser also reports it for a complete text its grammar
- * cannot finish, such as the bare word `NOT` (a legal defined name Excel resolves, read here as the
- * prefix operator awaiting its operand; PR #679 review) — a grammar gap, not a repair.
+ * `]` or `}` closing a `(`, and Excel's 8192-character limit. The parser's stack guards are NOT
+ * findings: its 128-level nesting budget is twice Excel's 64-level rule and its 1024-operator
+ * budget (#680) bounds a flat chain's length, which Excel does not — both bound the parser, not a
+ * certain repair. Every other refusal stays `xl audit`'s to list under "Unparseable formulas" —
+ * including an extra or wrong closer after a complete expression (`SUM(A1:A2))`, `SUM(A1:A2]`),
+ * which surfaces as an unexpected character, and a `,` or space inside parentheses (`SUM((A1,A2))`,
+ * `(A1:B2 B1:C2)`: Excel's union and intersection reference operators, which the parser does not
+ * implement). The parser reports ANY character but `)` after a parenthesized expression as an
+ * `UnbalancedDelimiter`, so that class is a finding only when the character is a `]` or `}`; a `,`,
+ * a space or a reference character there is a grammar gap, not a certain repair. Likewise an
+ * `UnexpectedEOF` is a finding only when the TEXT shows the truncation — an open `(`, `{` or `[`,
+ * an unterminated `"…"` or `'…'`, a trailing operator (`A1+`, `A1:`, `Sheet1!`): the parser also
+ * reports it for a complete text its grammar cannot finish, such as the bare word `NOT` (a legal
+ * defined name Excel resolves, read here as the prefix operator awaiting its operand; PR #679
+ * review) — a grammar gap, not a repair.
  */
 object UnparseableFormula:
 
