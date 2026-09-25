@@ -1234,6 +1234,21 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(fmt("0,\"k\"", BigDecimal(12345)), "12k")
   }
 
+  test(
+    "applyFormat: a comma before the first digit placeholder is literal text (LO oracle, #672)"
+  ) {
+    // LibreOffice 25.8: `,0` on 1234 is ",1234", `,##0` on 1234567 is ",1234567", `,0.0` on
+    // 1234.5 is ",1234.5" — no placeholder precedes the comma, so it neither groups nor scales
+    assertEquals(fmt(",0", BigDecimal(1234)), ",1234")
+    assertEquals(fmt(",0", BigDecimal(1234567)), ",1234567")
+    assertEquals(fmt(",#", BigDecimal(1234)), ",1234")
+    assertEquals(fmt(",##0", BigDecimal(1234567)), ",1234567")
+    assertEquals(fmt(",0.0", BigDecimal("1234.5")), ",1234.5")
+    assertEquals(fmt("\",\"0", BigDecimal(1234)), ",1234")
+    // between placeholders it still groups
+    assertEquals(fmt("0,0", BigDecimal(1234)), "1,234")
+  }
+
   test("applyFormat: 0\"x\", keeps its comma as literal text (#681)") {
     // PR #679 review: the comma after a quoted literal was dropped (neither grouping nor scaling)
     assertEquals(fmt("0\"x\",", BigDecimal(12345678)), "12345678x,")

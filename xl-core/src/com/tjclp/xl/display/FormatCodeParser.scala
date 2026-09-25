@@ -481,8 +481,9 @@ object FormatCodeParser:
    * by 1000 (Excel: "a comma that follows a digit placeholder scales the number by 1,000"). The
    * decimal point ends the integer part, so `#,##0,.0` and `0,,.0` scale like `#,##0,` and
    * `0.0,,"mm"`. Any other comma — after a literal, a space, `%`, the decimal point, `General`, a
-   * date part or `@` — is literal text (LibreOffice: `0 ,` → `12345678 ,`, `0"x",` → `12345678x,`,
-   * `General,` → `12345,`, `mmm d, yyyy` → `Mar 4, 2021`).
+   * date part, `@`, or nothing (a leading `,0`) — is literal text (LibreOffice: `0 ,` →
+   * `12345678 ,`, `0"x",` → `12345678x,`, `,0` → `,1234`, `General,` → `12345,`, `mmm d, yyyy` →
+   * `Mar 4, 2021`).
    */
   private def classifyScalingCommas(tokens: Vector[FormatToken]): Vector[FormatToken] =
     val decimalIdx = tokens.indexOf(FormatToken.Decimal)
@@ -539,9 +540,20 @@ object FormatCodeParser:
    *   Tuple of (formatted string, optional color)
    */
   def applyFormat(value: BigDecimal, format: FormatCode): (String, Option[String]) =
+    applyFormat(value, format, NumFmtFormatter.GeneralRule.CellDisplay)
+
+  /**
+   * [[applyFormat]] with the `General` keyword rendered under `rule` (#672): cell display by
+   * default, the text-conversion rule for TEXT(x, fmt).
+   */
+  def applyFormat(
+    value: BigDecimal,
+    format: FormatCode,
+    rule: NumFmtFormatter.GeneralRule
+  ): (String, Option[String]) =
     val section = selectSection(value, format).getOrElse(format.positive)
     val color = section.conditions.collectFirst { case Condition.Color(c) => c }
-    val formatted = applyPattern(value, section.pattern)
+    val formatted = applyPattern(value, section.pattern, rule)
     val withDefaultSign =
       if value < 0 && numericSections(format).sizeIs <= 1 && formatted.nonEmpty &&
         !formatted.startsWith("-")
@@ -623,7 +635,11 @@ object FormatCodeParser:
    * Uses a simplified approach: collect pre-number literals, format the number, collect post-number
    * literals.
    */
-  private def applyPattern(value: BigDecimal, pattern: FormatPattern): String =
+  private def applyPattern(
+    value: BigDecimal,
+    pattern: FormatPattern,
+    rule: NumFmtFormatter.GeneralRule
+  ): String =
     val fracIdx = pattern.tokens.indexWhere {
       case _: FormatToken.Fraction => true
       case _ => false
@@ -638,9 +654,13 @@ object FormatCodeParser:
         pattern.tokens.lift(expIdx) match
           case Some(e: FormatToken.Exponent) =>
             applyScientificPattern(value, pattern, expIdx, e)
-          case _ => applyNumericPattern(value, pattern)
+          case _ => applyNumericPattern(value, pattern, rule)
 
-  private def applyNumericPattern(value: BigDecimal, pattern: FormatPattern): String =
+  private def applyNumericPattern(
+    value: BigDecimal,
+    pattern: FormatPattern,
+    rule: NumFmtFormatter.GeneralRule
+  ): String =
     val tokens = pattern.tokens
     // Percent multiplies by 100; each scaling comma divides by 1000 (exact: a decimal-point
     // move, so the rounding below sees the true scaled value, GH-666)
@@ -717,7 +737,7 @@ object FormatCodeParser:
         case FormatToken.General =>
           // The keyword renders |x| in General style in place; applyFormat owns the sign, as
           // for digit patterns (GH-666)
-          result ++= NumFmtFormatter.generalDisplay(adjustedValue.abs)
+          result ++= NumFmtFormatter.generalKeyword(adjustedValue.abs, rule)
 
         case FormatToken.Percent =>
           result += '%'

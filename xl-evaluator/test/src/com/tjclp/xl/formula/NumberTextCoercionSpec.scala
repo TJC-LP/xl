@@ -129,6 +129,18 @@ class NumberTextCoercionSpec extends ScalaCheckSuite:
     assertScalar("=TEXT(1/3,\"General\")=1/3&\"\"", CellValue.Bool(true))
   }
 
+  test("#672: the General keyword inside a TEXT code follows the text rule, not cell display") {
+    // a second section cannot change a positive value, so the codes must agree
+    assertScalar("=TEXT(123456789012,\"General\")", text("123456789012"))
+    assertScalar("=TEXT(123456789012,\"General;-General\")", text("123456789012"))
+    assertScalar("=TEXT(123456789012,\"General\"\" u\"\"\")", text("123456789012 u"))
+    assertScalar("=TEXT(0.000012345,\"General;-General\")", text("0.000012345"))
+    assertScalar("=TEXT(-5,\"General;-General\")", text("-5"))
+    assertScalar("=TEXT(1/3,\"General;-General\")", text("0.333333333333333"))
+    // a text-only code renders a number as General too
+    assertScalar("=TEXT(123456789012,\"@\")", text("123456789012"))
+  }
+
   test("GH-665: TEXT with an explicit format is unchanged") {
     assertScalar("=TEXT(A1,\"0.00\")", text("2.00"))
     assertScalar("=TEXT(A1,\"0\")", text("2"))
