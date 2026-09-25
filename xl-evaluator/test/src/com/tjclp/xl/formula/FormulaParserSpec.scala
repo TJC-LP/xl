@@ -2431,3 +2431,19 @@ class FormulaParserSpec extends ScalaCheckSuite:
       case Left(err) => assert(err.toString.contains("#BOGUS!"), err.toString)
       case Right(expr) => fail(s"#BOGUS! is not a CellError, got $expr")
   }
+
+  test("GH-681: the caret sits under the offending character of the formula as written") {
+    def caretColumn(formula: String): Int =
+      val err = FormulaParser.parse(formula).swap.getOrElse(fail(s"$formula should not parse"))
+      val lines = ParseError.formatWithContext(err, formula).split("\n").toList
+      assertEquals(lines.size, 3, lines)
+      assertEquals(lines(0), formula)
+      lines(1).indexOf('^')
+    // the parser strips the leading '='; its positions count from the bare expression
+    assertEquals(caretColumn("=FOOBAR(1)"), 1)
+    assertEquals(caretColumn("FOOBAR(1)"), 0)
+    assertEquals(caretColumn("=SUM(A1;B2)"), "=SUM(A1".length)
+    // a truncated formula points one past its last character, where the missing text belongs
+    assertEquals(caretColumn("=SUM(A1:A2"), "=SUM(A1:A2".length)
+    assertEquals(caretColumn("SUM(A1:A2"), "SUM(A1:A2".length)
+  }

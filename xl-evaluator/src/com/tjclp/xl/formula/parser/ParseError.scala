@@ -25,7 +25,8 @@ enum ParseError derives CanEqual:
    * @param context
    *   Surrounding context (e.g., "in arithmetic expression")
    *
-   * Example: "=SUM(A1@B2)" → UnexpectedChar('@', 7, "expected operator or ')'")
+   * Example: "=SUM(A1@B2)" → UnexpectedChar('@', 6, "expected ',' or ')'") — positions count from
+   * the expression after the leading '='
    */
   case UnexpectedChar(char: Char, position: Int, context: String)
 
@@ -225,7 +226,7 @@ object ParseError:
    * {{{
    * =SUM(A1@B2)
    *        ^
-   * Unexpected character '@' at position 7: expected operator or ')'
+   * Unexpected character '@' at position 6: expected ',' or ')'
    * }}}
    */
   def formatWithContext(error: ParseError, formula: String): String =
@@ -244,10 +245,13 @@ object ParseError:
       case GenericError(_, pos) => pos
 
     val message = describe(error)
+    // GH-681: positions count from the expression the parser saw, which excludes the one leading
+    // '=' it strips; a position at the end of the text (a truncation) points one past it
+    val column = position.map(_ + (if formula.startsWith("=") then 1 else 0))
 
-    position match
-      case Some(pos) if pos >= 0 && pos < formula.length =>
-        val pointer = " " * pos + "^"
+    column match
+      case Some(col) if col >= 0 && col <= formula.length =>
+        val pointer = " " * col + "^"
         s"$formula\n$pointer\n$message"
       case _ =>
         s"$formula\n$message"

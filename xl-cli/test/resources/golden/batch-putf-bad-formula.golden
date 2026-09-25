@@ -15,6 +15,6 @@ batch
 ## stderr
 Error: Object 2 (putf): the formula does not parse
 =SUM(A1:A2
-         ^
+          ^
 Unexpected end of formula at position 9: expected ',' or ')'
   code: BATCH_OP_INVALID
