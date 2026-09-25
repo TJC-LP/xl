@@ -304,10 +304,44 @@ object FormulaStorage:
    * The model form of a stored formula: `_xlfn.` / `_xlfn._xlws.` stripped from calls to functions
    * in [[FutureFunctions]], `_xlpm.` stripped from LET/LAMBDA parameters. A prefix on any other
    * function, or a `_xlpm.` outside a recognized parameter position, is kept verbatim (the writer
-   * would not restore it), so `fromStored` then `toStored` reproduces the file's text.
+   * would not restore it), so `fromStored` then `toStored` reproduces the file's text — with one
+   * deliberate exception (GH-687): xl 0.23.0–0.23.1's `_xlfn.ANCHORARRAY(Sheet!)REF!` reads back as
+   * Excel's `Sheet!#REF!`, so the next write restores the spelling Excel wrote (see
+   * [[corruptSpillQualifiers]]).
+   */
+  def fromStored(text: String): String = fromStoredWith(text, _ => ())
+
+  /**
+   * GH-687: the sheet qualifiers of every `_xlfn.ANCHORARRAY(<qualifier>!)` in a stored formula —
+   * `Support!` for `_xlfn.ANCHORARRAY(Support!)REF!` — in order of appearance. xl 0.23.0–0.23.1
+   * wrote Excel's `Sheet!#REF!` (a deleted target) that way on every in-memory write; Excel never
+   * does (`ANCHORARRAY` takes a reference, and a bare qualifier is none). [[fromStored]] heals each
+   * one back to `<qualifier>#`, so this runs the SAME scan with a recording callback:
+   * `corruptSpillQualifiers(text).nonEmpty` holds exactly when [[fromStored]] heals something, and
+   * a lint or a writer gate built on it cannot disagree with the reader.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def fromStored(text: String): String =
+  def corruptSpillQualifiers(text: String): Vector[String] =
+    var found = Vector.empty[String]
+    fromStoredWith(text, q => found = found :+ q)
+    found
+
+  /**
+   * True when the writer must spell `text` differently from the file: a post-2007 call still
+   * missing its storage prefix ([[bareFutureCalls]], GH-593) or an xl 0.23.x
+   * `_xlfn.ANCHORARRAY(Sheet!)` corruption the reader heals ([[corruptSpillQualifiers]], GH-687).
+   * The CLEAN gates that keep preserved defined-name / CF / DV bytes compare MODELS, and both
+   * spellings parse to the model of the correct text — this is the storage-form half of the gate.
+   */
+  def storageNeedsHealing(text: String): Boolean =
+    bareFutureCalls(text).nonEmpty || corruptSpillQualifiers(text).nonEmpty
+
+  /**
+   * [[fromStored]] with a callback receiving the qualifier of every corrupted
+   * `ANCHORARRAY(<qualifier>!)` healed on the way (GH-687).
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def fromStoredWith(text: String, onHeal: String => Unit): String =
     // Fast path: every storage prefix starts with "_xl"; a formula without it is already bare
     if !containsStoragePrefix(text) then text
     else
@@ -325,7 +359,7 @@ object FormulaStorage:
         ,
         (token, _) => modelParam(token)
       )
-      if sawOperatorCall then unwrapOperators(bare) else bare
+      if sawOperatorCall then unwrapOperators(bare, onHeal) else bare
 
   // ===== GH-604 / GH-655: the implicit-intersection and spill-reference operators =====
   //
@@ -461,13 +495,42 @@ object FormulaStorage:
         if i == afterQualifier || text.charAt(i - 1) == '!' then start else i
 
   /**
+   * GH-687: index just past a bare sheet qualifier at `start` — `Sheet1!`, `'My Sheet'!`,
+   * `'It''s'!`, `[1]Sheet1!`, `[1]'My Sheet'!`, `'[1]My Sheet'!` — or `start` when the text there
+   * is not one. Read side only: [[unwrapOperators]] heals xl 0.23.x's `ANCHORARRAY(<qualifier>)`
+   * with it. The write side ([[spillOperandEnd]]) refuses a bare qualifier, so the heal can never
+   * be undone.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def bareQualifierEnd(text: String, start: Int): Int =
+    val n = text.length
+    val afterBook =
+      if start < n && text.charAt(start) == '[' then closingBracket(text, start) else start
+    if afterBook < 0 || afterBook >= n then start
+    else if text.charAt(afterBook) == '\'' then
+      val q = closingQuote(text, afterBook, '\'')
+      // a quoted name holds at least one character: `''!` is not a qualifier
+      if q > afterBook + 2 && q < n && text.charAt(q - 1) == '\'' && text.charAt(q) == '!' then
+        q + 1
+      else start
+    else
+      var i = afterBook
+      while i < n && isIdentChar(text.charAt(i)) do i += 1
+      if i > afterBook && i < n && text.charAt(i) == '!' then i + 1 else start
+
+  /**
    * Rewrite every one-argument `SINGLE(x)` call (any storage prefix already stripped) to `@x`, and
    * every `ANCHORARRAY(reference)` to `reference#`. A `SINGLE` argument is rescanned rather than
    * copied, so a nested `SINGLE(` / `ANCHORARRAY(` unwraps too; an `ANCHORARRAY` argument is one
    * reference token and is copied verbatim (a call with any other argument keeps its spelling).
+   *
+   * GH-687: an `ANCHORARRAY` whose argument is a bare sheet qualifier ([[bareQualifierEnd]]) —
+   * never valid Excel, only ever written by xl 0.23.0–0.23.1 in place of `Sheet!#REF!` — unwraps to
+   * `<qualifier>#` too, so the error literal that follows the call reads back whole
+   * (`ANCHORARRAY(Support!)REF!` → `Support!#REF!`); `onHeal` receives the qualifier.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  private def unwrapOperators(text: String): String =
+  private def unwrapOperators(text: String, onHeal: String => Unit): String =
     val n = text.length
     val sb = new java.lang.StringBuilder(n)
     var i = 0
@@ -523,6 +586,11 @@ object FormulaStorage:
         if close > 0 && inner.nonEmpty && singleArgument(inner) &&
           spillOperandEnd(inner, 0) == inner.length
         then
+          sb.append(inner).append('#')
+          i = close
+        else if close > 0 && inner.nonEmpty && bareQualifierEnd(inner, 0) == inner.length then
+          // GH-687: xl 0.23.x's `ANCHORARRAY(Sheet!)` — heal to `Sheet!#`
+          onHeal(inner)
           sb.append(inner).append('#')
           i = close
         else
