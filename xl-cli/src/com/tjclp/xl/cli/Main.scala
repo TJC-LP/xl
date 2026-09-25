@@ -1106,14 +1106,19 @@ USAGE:
 
   private val depsHelp = """Trace one cell's precedents and dependents, hop by hop.
 
-Precedents are the cells the formula reads (single refs exactly, ranges as their occupied cells);
-dependents are the formulas that read the cell, by name or through a range that contains it.
-Each node carries its depth, formula and value. The ref follows the sheet rule: a qualified ref
-('Q1 Data'!B4) names the sheet, else -s, else the only sheet of a single-sheet book.
+Precedents are what the formula reads, as Excel's Trace Precedents draws it: each cell it names,
+and each range as ONE node with its counts, whatever its size:
+  1  Data!A:A  range, 9357 occupied cells (12 formulas)
+The walk continues through the formulas inside a range; --expand lists a range's occupied cells
+one by one instead. Dependents are the formulas that read the cell, by name or through a range
+that contains it. Each cell node carries its depth, formula and value. The ref follows the sheet
+rule: a qualified ref ('Q1 Data'!B4) names the sheet, else -s, else the only sheet of a
+single-sheet book.
 
 USAGE:
   xl -f model.xlsx deps Summary!B4                          # both directions, one hop
   xl -f model.xlsx -s Data deps B4 --direction precedents --depth 3
+  xl -f model.xlsx deps Summary!B4 --direction precedents --expand   # each range's cells
   xl -f model.xlsx --json deps Summary!B4 --direction dependents --depth all
 """
 
@@ -1149,9 +1154,17 @@ USAGE:
       }
       .withDefault(Depth.Hops(1))
 
+  private val expandOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "expand",
+        "List each precedent range's occupied cells one by one instead of one node per range"
+      )
+      .orFalse
+
   val depsCmd: Opts[CliCommand] =
     Opts.subcommand("deps", depsHelp) {
-      (refArg, directionOpt, depthOpt).mapN(CliCommand.Deps.apply)
+      (refArg, directionOpt, depthOpt, expandOpt).mapN(CliCommand.Deps.apply)
     }
 
   // --- Analyze ---
@@ -2916,11 +2929,11 @@ EXAMPLES:
           payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
         yield payload
 
-      case CliCommand.Deps(refStr, direction, depth) =>
+      case CliCommand.Deps(refStr, direction, depth, expand) =>
         for
           wb <- readWorkbook(excel, filePath, readerConfig)
           sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-          payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, mode)
+          payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, expand, mode)
         yield payload
 
       // Other commands: regular execution path
@@ -3655,7 +3668,7 @@ EXAMPLES:
       IO.raiseError(new Exception("Internal: describe is dispatched in execute"))
     case CliCommand.Audit(_) =>
       IO.raiseError(new Exception("Internal: audit is dispatched in execute"))
-    case CliCommand.Deps(_, _, _) =>
+    case CliCommand.Deps(_, _, _, _) =>
       IO.raiseError(new Exception("Internal: deps is dispatched in execute"))
 
     // Diff has its own runner (two input files, custom exit codes) — never reaches here

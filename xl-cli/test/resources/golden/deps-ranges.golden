@@ -1,0 +1,23 @@
+## args
+-f
+<DIR>/ranges.xlsx
+deps
+Summary!B1
+--direction
+precedents
+--depth
+2
+## exit
+0
+## stdout
+Cell: Summary!B1
+Formula: =SUMIFS(Data!B:B,Data!A:A,A1)+SUM(Data!C2:C4)+Data!B2
+Value: 170
+Precedents (depth 2): 6
+  1  Data!A:A  range, 4 occupied cells
+  1  Data!B:B  range, 4 occupied cells
+  1  Data!B2  10
+  1  Data!C2:C4  range, 3 occupied cells (3 formulas)
+  1  Summary!A1  "North"
+  2  Data!E1  2
+## stderr

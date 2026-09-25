@@ -122,7 +122,7 @@ class StreamingReadSpec extends CatsEffectSuite:
       yield
         val loaded = ReadTestKit.text(inMemory)
         val streamed = ReadTestKit.text(streaming)
-        assert(loaded.contains("Dependencies: A1, A2"), loaded)
+        assert(loaded.contains("Dependencies: A1:A2\n"), loaded)
         assert(streamed.contains("Dependencies: (not available in streaming mode)"), streamed)
         assert(streamed.contains("Dependents: (not available in streaming mode)"), streamed)
         // and never the reader's token list (`A1, A1:A2, A2`) that pre-0.21.0 streaming printed

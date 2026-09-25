@@ -692,6 +692,32 @@ class ScriptingPreludeTest extends FunSuite:
     // the same cycle without the declaration is a finding
     assertEquals(model.withCalcPr(CalcPr()).audit.cycles.map(_.members.size), Vector(1))
 
+  test(
+    "ADR-017 §2.10: the declared precedent view (a range is one node) resolves through the prelude"
+  ):
+    val data = SheetName.unsafe("Data")
+    val wb = Workbook(Sheet("Data").put(ref"A1", 1).put(ref"A2", 2).put(ref"B1", fx"=SUM(A:A)+A2"))
+    val graph: QualifiedGraph = QualifiedGraph.of(wb)
+    val b1 = QualifiedRef(data, ref"B1")
+    val nodes: Vector[QualifiedGraph.Node] = graph.declaredPrecedentsOf(b1)
+    assertEquals(nodes.map(_.label), Vector("Data!A:A", "Data!A2"))
+    assertEquals(nodes, nodes.sorted(using QualifiedGraph.nodeOrder))
+    // a nested enum and case class reached through `export formula.graph.QualifiedGraph`
+    val column: Option[QualifiedGraph.DeclaredRange] =
+      nodes.collectFirst { case QualifiedGraph.Node.Range(r) => r }
+    assertEquals(column.map(_.a1), Some("A:A"))
+    assertEquals(column.map(graph.occupiedIn(_).size), Some(2))
+    assertEquals(
+      graph.declaredPrecedents(b1, 0),
+      Vector(
+        Vector(
+          QualifiedGraph.Node.Range(QualifiedGraph.DeclaredRange.of(data, ref"A1:A1048576")),
+          QualifiedGraph.Node.Cell(QualifiedRef(data, ref"A2"))
+        )
+      )
+    )
+    assertEquals(graph.rangeCells.keySet.map(_.toString), Set("Data!A:A"))
+
   // ===== GH-589 (W2.8): scripting completions — one probe per new name =====
 
   private def tempDir(prefix: String): java.nio.file.Path =

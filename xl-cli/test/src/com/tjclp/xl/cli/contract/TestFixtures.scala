@@ -7,7 +7,7 @@ import cats.effect.IO
 import cats.syntax.all.*
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{Row, SheetName}
+import com.tjclp.xl.addressing.{ARef, Row, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, Comment}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
@@ -110,8 +110,9 @@ object TestFixtures:
   /**
    * The `cell` range-gap fixture (ADR-017 §2.10): `B1 = SUM(A1:A5)` over a column with only A1 and
    * A3 occupied, and `C1 = SUM(Missing!A1:A3)` over a sheet the workbook does not have. Pins that
-   * `Dependencies` lists a range's OCCUPIED cells — empty cells and absent-sheet ranges are not
-   * listed. Caches authored explicitly (no recalculation): the graph, not the values, is the point.
+   * `Dependencies` lists each range once, as declared (`A1:A5`), and still lists a range with no
+   * occupied cell (`Missing!A1:A3`). Caches authored explicitly (no recalculation): the graph, not
+   * the values, is the point.
    */
   def gapsBook(): Workbook =
     val data = Sheet("Data")
@@ -147,6 +148,58 @@ object TestFixtures:
       .put(ref"I23", cached("IF(ZZZNOTAFUNC(1)=1,'M&A'!I12,0)", 0))
     Workbook(Vector(onPremise, deals, summary))
 
+  /**
+   * The range-precedent fixture:
+   * `Summary!B1 = SUMIFS(Data!B:B,Data!A:A,A1)+SUM(Data!C2:C4)+Data!B2` reads two whole columns, a
+   * block of three formulas (`Data!C2:C4 = B*$E$1`), a point and a same-sheet criterion;
+   * `Summary!C1 = SUM(Data!C4:E4)` covers one occupied cell, a formula. A style-only blank at
+   * `Data!B6` sits inside `Data!B:B` and must not count as occupied. Recalculated before the write
+   * (`B1` = 170).
+   */
+  def rangesBook(): Workbook =
+    val data = Sheet("Data")
+      .put(ref"A1", "Region")
+      .put(ref"B1", "Amount")
+      .put(ref"C1", "Double")
+      .put(ref"E1", 2)
+      .put(ref"A2", "North")
+      .put(ref"A3", "South")
+      .put(ref"A4", "North")
+      .put(ref"B2", 10)
+      .put(ref"B3", 20)
+      .put(ref"B4", 30)
+      .put(ref"C2", CellValue.Formula("B2*$E$1", None))
+      .put(ref"C3", CellValue.Formula("B3*$E$1", None))
+      .put(ref"C4", CellValue.Formula("B4*$E$1", None))
+      .style(ref"B6", CellStyle.default.withNumFmt(NumFmt.Percent))
+    val summary = Sheet("Summary")
+      .put(ref"A1", "North")
+      .put(
+        ref"B1",
+        CellValue.Formula("SUMIFS(Data!B:B,Data!A:A,A1)+SUM(Data!C2:C4)+Data!B2", None)
+      )
+      .put(ref"C1", CellValue.Formula("SUM(Data!C4:E4)", None))
+    Workbook(Vector(data, summary)).recalculate().workbook
+
+  /**
+   * The shape Weaver traced: 400 rows of `Data` (region, amount, `C = B*2`) under a header, and
+   * `Summary!B1 = SUMIFS(Data!B:B,Data!A:A,A1)`, `Summary!B2 = SUM(Data!C:C)+B1`. Recalculated.
+   */
+  def sumifsBook(): Workbook =
+    val regions = Vector("East", "North", "South")
+    val data = (2 to 401).foldLeft(Sheet("Data").put(ref"A1", "Region").put(ref"B1", "Amount")) {
+      (sheet, row) =>
+        sheet
+          .put(ARef.from1(1, row), regions((row - 2) % 3))
+          .put(ARef.from1(2, row), row * 10)
+          .put(ARef.from1(3, row), CellValue.Formula(s"B$row*2", None))
+    }
+    val summary = Sheet("Summary")
+      .put(ref"A1", "North")
+      .put(ref"B1", CellValue.Formula("SUMIFS(Data!B:B,Data!A:A,A1)", None))
+      .put(ref"B2", CellValue.Formula("SUM(Data!C:C)+B1", None))
+    Workbook(Vector(data, summary)).recalculate().workbook
+
   private def book(firstQuantity: Int): Workbook =
     val data = Sheet("Data")
       .put(ref"A1", "Hello")
@@ -173,7 +226,9 @@ object TestFixtures:
     "dirty.xlsx" -> (() => dirtyBook()),
     "gaps.xlsx" -> (() => gapsBook()),
     "precise.xlsx" -> (() => preciseBook()),
-    "qualified.xlsx" -> (() => qualifiedBook())
+    "qualified.xlsx" -> (() => qualifiedBook()),
+    "ranges.xlsx" -> (() => rangesBook()),
+    "sumifs.xlsx" -> (() => sumifsBook())
   )
 
   /** Write every fixture into a fresh temp directory and return it. */

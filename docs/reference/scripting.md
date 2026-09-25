@@ -666,6 +666,7 @@ audit.restrictTo(SheetName.unsafe("Summary"))       // what `xl audit -s Summary
 val graph = QualifiedGraph.of(wb)                   // bounded: a full-column reader expands only to occupied cells
 val b4 = QualifiedRef(SheetName.unsafe("Summary"), ref"B4")
 graph.precedents(b4, 2)                             // Vector of layers: exactly 1 hop, exactly 2 hops
+graph.declaredPrecedents(b4, 2)                     // since 0.24.0: the same layers, a range read as ONE Node.Range
 graph.dependents(b4, 0)                             // 0 = every layer; an empty cell inside a summed range still names the sum
 graph.sccs.filter(_.cyclic)                         // the circular references
 ```
@@ -674,7 +675,14 @@ graph.sccs.filter(_.cyclic)                         // the circular references
 `hyperlinks`, `freeze`, `tabColor`, `autoFilter`, `tables`, `charts`, `pictures`,
 `conditionalFormats`, `dataValidations`, `hiddenRows`, `hiddenCols` plus `state` and `dimension`.
 `QualifiedGraph.precedentsOf`/`dependentsOf` are the single-hop sets; the `dependencies` map is the
-forward graph and `rangeReaders` the symbolic range index behind the reverse question.
+forward graph and `rangeReaders` the symbolic range index behind the reverse question. The declared
+view (since 0.24.0) is what `xl deps` and `xl cell` list: `declaredPrecedentsOf(q)` returns what a
+formula reads as `QualifiedGraph.Node`s — `Node.Cell(ref)` for each cell it names, `Node.Range(r)`
+for each range, whatever its size, where `r: QualifiedGraph.DeclaredRange` is the range's corners on
+its sheet (`r.a1` is Excel's spelling, `A:A`; `node.label` the qualified one, `Data!A:A`) — and
+`occupiedIn(r)` its value-holding cells (a style-only blank is not one), from `rangeCells`. Layers
+are sorted by `QualifiedGraph.nodeOrder`. `QualifiedGraph`'s constructor gained the `rangeCells`
+field in 0.24.0; build graphs with `QualifiedGraph.of`.
 
 ## Typed extraction
 

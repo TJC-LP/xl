@@ -628,14 +628,17 @@ Type: Text
 Value: Revenue
 ```
 
-`Dependencies` lists the cells the formula reads — single references exactly, ranges as their
-occupied cells — and `Dependents` the formulas that read the cell, by name or through a range that
-contains it (an empty cell inside a summed range still names the sum). Empty cells inside a range
-and ranges over a sheet the workbook does not have are not listed (since 0.20.0; before, `SUM(A:A)`
-listed 1,048,576 entries). Same-sheet refs are unqualified; cross-sheet ones carry the sheet
-quoted as a formula would spell it (`'On-Premise'!G9`, `Sheet2!A1`), the same rendering `deps` and
-`search` use, so the text pastes into `putf`/`eval`; both lists are ordered by sheet, then row, then
-column. For more than one hop, use `deps`. Under `--stream` the graph is not built and both lines
+`Dependencies` lists what the formula reads as declared — each cell it names, and each range as ONE
+entry spelled as `deps` spells it (`B1:B3`, `Data!A:A`), what `deps --depth 1 --direction
+precedents` lists without its counts — and `Dependents` the formulas that read the cell, by name or
+through a range that contains it (an empty cell inside a summed range still names the sum). A range
+with no occupied cell, even one over a sheet the workbook does not have, is still listed: it
+explains a zero (since 0.24.0; from 0.20.0 a range was listed as its occupied cells, which `deps
+--expand` still prints, and before 0.20.0 `SUM(A:A)` listed 1,048,576 entries). Same-sheet refs are
+unqualified; cross-sheet ones carry the sheet quoted as a formula would spell it (`'On-Premise'!G9`,
+`Sheet2!A1`), the same rendering `deps` and `search` use, so the text pastes into `putf`/`eval`;
+both lists are ordered by sheet, then row, then column (a cell before a range at the same corner).
+For more than one hop, use `deps`. Under `--stream` the graph is not built and both lines
 say so:
 `Dependencies: (not available in streaming mode)` / `Dependents: (not available in streaming mode)`
 (before 0.21.0 streaming listed the formula's reference tokens — `B1, B1:B3, B3` for
@@ -643,7 +646,8 @@ say so:
 
 `--json`: `{ref, sheet, kind, value, formatted, formula, hidden, mergedInto, style, comment,
 hyperlink, dependencies, dependents}` — the typed cell record plus what the sheet attaches to it;
-`style` is `{font, fill, numFmt, align, border}` or `null` (`--no-style`). Under `--stream`
+`dependencies` is an array of strings, each a cell or a range (`["Data!A:A", "A1"]`); `style` is
+`{font, fill, numFmt, align, border}` or `null` (`--no-style`). Under `--stream`
 `dependencies`, `dependents` and `hidden` are `null` (unknown), and `mergedInto`/`hyperlink` are
 `null` whether absent or unknown. The comment text is the same from both sources (the author-prefix
 run XL's writer adds is stripped on both paths).
@@ -754,20 +758,32 @@ unresolvedReaders: [ref], calcPr}` — refs as `Sheet!A1` (quoted when the name 
 
 ---
 
-### `xl deps <ref> [--direction precedents|dependents|both] [--depth n|all]`
+### `xl deps <ref> [--direction precedents|dependents|both] [--depth n|all] [--expand]`
 
-Trace one cell hop by hop. **Precedents** are the cells the formula reads — single references
-exactly, ranges as their occupied cells (a full-column reference never expands to a million rows);
-**dependents** are the formulas that read the cell, by name or through a range that contains it.
-Layer k holds the cells exactly k hops away that no earlier layer listed; each node carries its
-depth, formula and value. `--depth` defaults to `1`; `all` (or `0`) follows the whole cone (a cycle
-ends the walk once every member is seen). The ref follows the sheet rule: a qualified ref names the sheet,
-else `-s`, else the only sheet of a single-sheet book (`SHEET_REQUIRED` otherwise); a range is
-refused. Not available under `--stream`.
+Trace one cell hop by hop. **Precedents** are what the formula reads, the way Excel's Trace
+Precedents draws it: each cell it names, and each range as ONE node whatever its size, carrying
+how many of its cells hold a value (`occupied`) and how many of those are formulas. A range is
+spelled as Excel displays it, anchors dropped: `Data!A:A`, `Data!3:5`, `Data!1:1048576` for the
+whole sheet, `Data!B2:B9` otherwise; a one-cell range slot (`COUNTIF(C1,…)`) is a cell node; a
+SUMIF/AVERAGEIF sum range shows at the size Excel reads it and a defined name as its resolved range.
+A range with no occupied cell — even one over a sheet the workbook does not have — is listed with
+`0 occupied cells`: it explains a zero. **Dependents** are the formulas that read the cell, by name
+or through a range that contains it. Layer k holds the nodes exactly k hops away: a range node at
+depth k stands for all its occupied cells, the formulas among them continue the walk at k+1 (counted
+in the range, not listed) and its constants are leaves. A cell an earlier layer listed or covered is
+never listed again; a range reached later is still listed once; in one layer a cell and a range
+containing it are both listed. `--expand` lists each range's occupied cells one by one instead (the
+listing before 0.24.0, which also counted a style-only blank as occupied); it affects precedents
+only and is accepted, without effect, with
+`--direction dependents`. `--depth` defaults to `1`; `all` (or `0`) follows the whole cone (a cycle
+ends the walk once every member is seen). The ref follows the sheet rule: a qualified ref names the
+sheet, else `-s`, else the only sheet of a single-sheet book (`SHEET_REQUIRED` otherwise); a range
+is refused. Not available under `--stream`.
 
 ```bash
 xl -f model.xlsx deps Summary!B4                                   # both directions, one hop
 xl -f model.xlsx -s Data deps B4 --direction precedents --depth 3
+xl -f model.xlsx deps Summary!B4 --direction precedents --expand   # each range's cells, one by one
 xl -f model.xlsx --json deps Summary!B4 --direction dependents --depth all | jq '.data.dependents[].ref'
 ```
 
@@ -781,12 +797,35 @@ Precedents (depth 1): 1
 Dependents (depth 1): 1
   1  Sheet2!B1  =A1+1 -> 11
 ```
-Each node line is `<depth>  <ref>  <value>` for a constant and `<depth>  <ref>  <formula> -> <cached
-value>` for a formula (`(uncached)` when it has none); an empty side prints `(none)`.
 
-**JSON** (`--json`): `data` = `{ref, formula, value, direction, depth, precedents, dependents}` —
-`depth` is the number or `"all"`, each side is `[{ref, depth, formula, value}]` or `null` when the
-direction was not requested; `formula` is `null` for a constant, `value` a formula's cached value.
+**Output** (ranges, `--direction precedents --depth 2`):
+```
+Cell: Summary!B1
+Formula: =SUMIFS(Data!B:B,Data!A:A,A1)+SUM(Data!C2:C4)+Data!B2
+Value: 170
+Precedents (depth 2): 6
+  1  Data!A:A  range, 4 occupied cells
+  1  Data!B:B  range, 4 occupied cells
+  1  Data!B2  10
+  1  Data!C2:C4  range, 3 occupied cells (3 formulas)
+  1  Summary!A1  "North"
+  2  Data!E1  2
+```
+Each node line is `<depth>  <ref>  <value>` for a constant, `<depth>  <ref>  <formula> -> <cached
+value>` for a formula (`(uncached)` when it has none) and `<depth>  <range>  range, <n> occupied
+cell(s)[ (<m> formula(s))]` for a range (plain digits; the formula count is omitted when it is 0;
+text values are always quoted, so the forms cannot be confused). The header counts the nodes
+listed; an empty side prints `(none)`. Within a layer nodes are ordered by sheet, top row, left
+column, a cell before a range at the same corner.
+
+**JSON** (`--json`): `data` = `{ref, formula, value, direction, depth, expand, precedents,
+dependents}` — `depth` is the number or `"all"`, `expand` the flag; each side is an array of nodes
+or `null` when the direction was not requested. A cell node is `{ref, kind: "cell", depth, formula,
+value}` (`formula` `null` for a constant, `value` a formula's cached value); a range node is `{ref,
+kind: "range", depth, formula: null, value: null, occupied, formulas}`, its counts describing the
+whole range (cells an earlier layer listed included). Dependents are always cell nodes. Before
+0.24.0 nodes had no `kind`, there was no `expand`, and a range was listed cell by cell (what
+`--expand` prints).
 
 ---
 
@@ -2106,7 +2145,7 @@ otherwise:
   [`xl schema`](#xl-schema---json)); `describe` → `{sheets, definedNames, date1904}` (`--full`
   adds per-sheet counts and `calcPr`); `audit` → `{clean, findings, errorCells,
   uncachedFormulas, unparseable, volatile, dynamic, cycles, externalRefs, unresolvedReaders,
-  calcPr}`; `deps` → `{ref, formula, value, direction, depth, precedents, dependents}`.
+  calcPr}`; `deps` → `{ref, formula, value, direction, depth, expand, precedents, dependents}`.
 - The record-based reads are typed too (since 0.21.0): `cell` → the cell record with `style`,
   `comment`, `hyperlink`, `dependencies`, `dependents`; `search` → `{pattern, sheets, count,
   total, totalExact, matches}`; `stats` → `{sheet, range, count, sum, min, max, mean}` — every

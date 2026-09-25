@@ -10,6 +10,6 @@ Cell: B1
 Type: formula
 Formula: =SUM(A1:A5)
 Cached: 4
-Dependencies: A1, A3
+Dependencies: A1:A5
 Dependents: (none)
 ## stderr

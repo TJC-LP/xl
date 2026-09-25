@@ -34,7 +34,7 @@ stats           -f -s --stream        o1                                        
 filter          -f -s --stream        o1                                                    0 2 3    -               0.11.3  Filter rows of the used range with a --where predicate (read-only)
 describe        -f --stream           o1 (not --full)                                       0 2 3    -               0.20.0  Orient in a workbook: sheets, defined names, date system (--full adds per-sheet counts)
 audit           -f                    refused                                               0 1 2 3  -               0.20.0  Find every reason a number can be wrong, in one pass (--fail-on-findings exits 1)
-deps            -f -s                 refused                                               0 2 3    -               0.20.0  Trace one cell's precedents and dependents, hop by hop (--direction, --depth)
+deps            -f -s                 refused                                               0 2 3    -               0.20.0  Trace one cell's precedents and dependents, hop by hop (--direction, --depth, --expand)
 batch           -f -s -o|-i --stream  o1 (not --strict)                                     0 1 2 3  -               0.1.0   Apply multiple operations atomically from JSON (--dry-run validates; --schema prints the op schema)
 put             -f -s -o|-i --stream  o1 (not --csv, --strict)                              0 1 2 3  put             0.1.0   Write value(s) to a cell or range with smart type detection (--no-detect, --csv)
 putf            -f -s -o|-i --stream  o1 (not --strict)                                     0 1 2 3  putf            0.1.0   Write formula(s) to a cell or range; one formula over a range drags with $ anchoring

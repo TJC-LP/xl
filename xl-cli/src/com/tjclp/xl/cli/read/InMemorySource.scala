@@ -85,8 +85,9 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
         Some(InMemorySource.isHidden(s, ref)),
         s.getMergedRange(ref)
       )
-      // ADR-017 §2.10: the bounded cross-sheet graph — precedents at cell granularity (ranges as
-      // their occupied cells), dependents through the symbolic range index. Same-sheet refs are
+      // ADR-017 §2.10: the bounded cross-sheet graph — precedents as declared (each named cell,
+      // each range as one entry: what `deps --depth 1` lists, without its counts, so the line
+      // stays pasteable), dependents through the symbolic range index. Same-sheet refs are
       // unqualified; cross-sheet ones carry the sheet spelled as a formula would (`QualifiedRef`'s
       // own rendering, the printer `deps` uses): `'On-Premise'!G9`, not `On-Premise!G9` (GH-609).
       // Ordered by (sheet, row, column) BEFORE rendering, so the order owes nothing to quoting.
@@ -96,11 +97,15 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
         if q.sheet == s.name then q.ref.toA1 else q.toString
       def listed(qs: Iterable[DependencyGraph.QualifiedRef]): Vector[String] =
         qs.toVector.sortBy(q => (q.sheet.value, q.ref.row.index0, q.ref.col.index0)).map(show)
+      val declared = graph.declaredPrecedentsOf(current).map {
+        case QualifiedGraph.Node.Cell(q) => show(q)
+        case QualifiedGraph.Node.Range(r) => if r.sheet == s.name then r.a1 else r.toString
+      }
       CellDetail(
         record,
         s.getComment(ref),
         cell.flatMap(_.hyperlink),
-        Some(listed(graph.precedentsOf(current))),
+        Some(declared),
         Some(listed(graph.dependentsOf(current)))
       )
     }

@@ -102,7 +102,8 @@ enum CliCommand derives CanEqual:
   // Inspect (ADR-017 §2.10, read-only): orient, find every reason a number is wrong, trace one
   case Describe(full: Boolean) // metadata only unless --full (then the loaded WorkbookSummary)
   case Audit(failOnFindings: Boolean) // exit 1 AUDIT_FINDINGS when asked and the book is dirty
-  case Deps(ref: String, direction: Direction, depth: Depth) // deps <ref> [--direction] [--depth]
+  // deps <ref> [--direction] [--depth] [--expand]; expand lists a precedent range's cells
+  case Deps(ref: String, direction: Direction, depth: Depth, expand: Boolean)
   // Analyze
   case Eval(formula: String, overrides: List[String])
   case EvalArray(formula: String, targetRef: Option[String], overrides: List[String])
@@ -269,7 +270,7 @@ enum CliCommand derives CanEqual:
     case v: View => v.range.toList
     case Cell(ref, _) => List(ref)
     case Stats(ref) => List(ref)
-    case Deps(ref, _, _) => List(ref)
+    case Deps(ref, _, _, _) => List(ref)
     case p: Put => List(p.ref)
     case PutFormula(ref, _) => List(ref)
     case s: Style => List(s.range)
@@ -329,7 +330,7 @@ enum CliCommand derives CanEqual:
     case _: Filter => "filter"
     case Describe(_) => "describe"
     case Audit(_) => "audit"
-    case Deps(_, _, _) => "deps"
+    case Deps(_, _, _, _) => "deps"
     case Eval(_, _) => "eval"
     case EvalArray(_, _, _) => "evala"
     case _: Put => "put"

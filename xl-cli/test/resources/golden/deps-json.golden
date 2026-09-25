@@ -18,9 +18,11 @@ Sheet2!A1
     "value": 10,
     "direction": "both",
     "depth": 1,
+    "expand": false,
     "precedents": [
       {
         "ref": "Sheet1!A1",
+        "kind": "cell",
         "depth": 1,
         "formula": null,
         "value": 5
@@ -29,6 +31,7 @@ Sheet2!A1
     "dependents": [
       {
         "ref": "Sheet2!B1",
+        "kind": "cell",
         "depth": 1,
         "formula": "=A1+1",
         "value": 11

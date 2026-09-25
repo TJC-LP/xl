@@ -1,0 +1,15 @@
+## args
+-f
+<DIR>/ranges.xlsx
+cell
+Summary!B1
+## exit
+0
+## stdout
+Cell: B1
+Type: formula
+Formula: =SUMIFS(Data!B:B,Data!A:A,A1)+SUM(Data!C2:C4)+Data!B2
+Cached: 170
+Dependencies: Data!A:A, Data!B:B, Data!B2, Data!C2:C4, A1
+Dependents: (none)
+## stderr

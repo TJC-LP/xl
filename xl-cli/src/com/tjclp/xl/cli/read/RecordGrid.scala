@@ -176,8 +176,9 @@ final case class RecordGrid(
  * @param hyperlink
  *   the cell's hyperlink — `None` when it has none, and also when the source lacks `hyperlinks`
  * @param dependencies
- *   the cells the formula reads, as `A1` / `Sheet!A1` text (ranges as their occupied cells) —
- *   `None` when the source cannot know (no `graph` capability)
+ *   what the formula reads as declared, as `A1` / `Sheet!A1` text for a cell and `A1:A5` /
+ *   `Data!A:A` for a range (one entry per range, not its cells) — `None` when the source cannot
+ *   know (no `graph` capability)
  * @param dependents
  *   the formulas that read the cell — `None` when the source cannot know (no `graph` capability)
  */

@@ -29,9 +29,7 @@ Data!B4
     "comment": null,
     "hyperlink": null,
     "dependencies": [
-      "B1",
-      "B2",
-      "B3"
+      "B1:B3"
     ],
     "dependents": []
   },

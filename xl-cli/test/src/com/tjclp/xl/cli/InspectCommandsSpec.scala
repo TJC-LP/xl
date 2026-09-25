@@ -10,10 +10,10 @@ import com.tjclp.xl.io.ExcelIO
 
 /**
  * The inspection verbs of ADR-017 §2.10 through the in-process harness: `describe [--full]`,
- * `audit [--fail-on-findings]` and `deps <ref> [--direction] [--depth]`, each typed under `--json`
- * and readable otherwise; plus the pin that `cell`'s text is unchanged by its move to the bounded
- * graph. Byte-level renderings are pinned by the goldens (`describe*`, `audit*`, `deps*`); this
- * suite pins the shapes and the exit-code contract.
+ * `audit [--fail-on-findings]` and `deps <ref> [--direction] [--depth] [--expand]`, each typed
+ * under `--json` and readable otherwise; plus `cell`'s graph lines, which list a formula's inputs
+ * as declared (a range is one entry, as in `deps`). Byte-level renderings are pinned by the goldens
+ * (`describe*`, `audit*`, `deps*`, `cell*`); this suite pins the shapes and the exit-code contract.
  */
 class InspectCommandsSpec extends CatsEffectSuite:
 
@@ -362,20 +362,27 @@ class InspectCommandsSpec extends CatsEffectSuite:
       val d = data(run)
       assertEquals(
         d.obj.keys.toList,
-        List("ref", "formula", "value", "direction", "depth", "precedents", "dependents")
+        List("ref", "formula", "value", "direction", "depth", "expand", "precedents", "dependents")
       )
       assertEquals(d("ref"), ujson.Str("Sheet2!A1"))
       assertEquals(d("formula"), ujson.Str("=Sheet1!A1*2"))
       assertEquals(d("value"), ujson.Num(10))
       assertEquals(d("direction"), ujson.Str("both"))
       assertEquals(d("depth"), ujson.Num(1))
+      assertEquals(d("expand"), ujson.False)
       val precedents = d("precedents").arr.toVector
+      assertEquals(
+        precedents.map(_.obj.keys.toList),
+        Vector(List("ref", "kind", "depth", "formula", "value"))
+      )
+      assertEquals(precedents.map(_("kind").str), Vector("cell"))
       assertEquals(precedents.map(_("ref").str), Vector("Sheet1!A1"))
       assertEquals(precedents.map(_("depth").num.toInt), Vector(1))
       assertEquals(precedents.map(_("formula")), Vector(ujson.Null))
       assertEquals(precedents.map(_("value")), Vector(ujson.Num(5)))
       val dependents = d("dependents").arr.toVector
       assertEquals(dependents.map(_("ref").str), Vector("Sheet2!B1"))
+      assertEquals(dependents.map(_("kind").str), Vector("cell"))
       assertEquals(dependents.map(_("formula")), Vector(ujson.Str("=A1+1")))
       assertEquals(dependents.map(_("value")), Vector(ujson.Num(11)))
     }
@@ -545,6 +552,225 @@ class InspectCommandsSpec extends CatsEffectSuite:
       assertEquals(garbage.exit, 2, garbage.stderr)
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // deps: a range is one precedent node
+  // ---------------------------------------------------------------------------------------------
+
+  private def refsAndKinds(nodes: ujson.Value): Vector[(String, String)] =
+    nodes.arr.toVector.map(n => (n("ref").str, n("kind").str))
+
+  test("the ranges fixture really carries a style-only blank inside Data!B:B") {
+    ExcelIO.instance[IO].read(fixtures().resolve("ranges.xlsx")).map { wb =>
+      val data = wb.sheets.find(_.name == SheetName.unsafe("Data"))
+      val b6 = data.flatMap(_.cells.get(com.tjclp.xl.addressing.ARef.from1(2, 6)))
+      assertEquals(b6.map(_.value), Some(com.tjclp.xl.cells.CellValue.Empty))
+      assert(b6.exists(_.styleId.isDefined), s"B6 must be a styled record: $b6")
+    }
+  }
+
+  test("deps --json collapses each range the formula reads into ONE node with its counts") {
+    CliHarness
+      .run("-f", file("ranges.xlsx"), "--json", "deps", "Summary!B1", "--direction", "precedents")
+      .map { run =>
+        assertEquals(run.exit, 0, run.stderr)
+        val d = data(run)
+        assertEquals(d("value"), ujson.Num(170))
+        val nodes = d("precedents").arr.toVector
+        assertEquals(
+          refsAndKinds(d("precedents")),
+          Vector(
+            ("Data!A:A", "range"),
+            ("Data!B:B", "range"),
+            ("Data!B2", "cell"),
+            ("Data!C2:C4", "range"),
+            ("Summary!A1", "cell")
+          )
+        )
+        val ranges = nodes.filter(_("kind").str == "range")
+        assertEquals(
+          ranges.map(_.obj.keys.toList).distinct,
+          Vector(List("ref", "kind", "depth", "formula", "value", "occupied", "formulas"))
+        )
+        // occupied counts value-holding cells only: B:B's style-only B6 is not one
+        assertEquals(
+          ranges.map(n => (n("ref").str, n("occupied").num.toInt, n("formulas").num.toInt)),
+          Vector(("Data!A:A", 4, 0), ("Data!B:B", 4, 0), ("Data!C2:C4", 3, 3))
+        )
+        assert(ranges.forall(n => n("formula") == ujson.Null && n("value") == ujson.Null))
+        assert(ranges.forall(_("depth") == ujson.Num(1)))
+        val cells = nodes.filter(_("kind").str == "cell")
+        assertEquals(
+          cells.map(_.obj.keys.toList).distinct,
+          Vector(List("ref", "kind", "depth", "formula", "value"))
+        )
+        assertEquals(cells.map(_("value")), Vector(ujson.Num(10), ujson.Str("North")))
+      }
+  }
+
+  test("deps --depth 2 continues through a range's formulas without relisting its cells") {
+    CliHarness
+      .run(
+        "-f",
+        file("ranges.xlsx"),
+        "--json",
+        "deps",
+        "Summary!B1",
+        "--direction",
+        "precedents",
+        "--depth",
+        "2"
+      )
+      .map { run =>
+        assertEquals(run.exit, 0, run.stderr)
+        val nodes = data(run)("precedents").arr.toVector
+        // C2:C4 read B2..B4 (covered by Data!B:B at depth 1) and E1: only E1 is new
+        assertEquals(
+          nodes.filter(_("depth") == ujson.Num(2)).map(n => (n("ref").str, n("kind").str)),
+          Vector(("Data!E1", "cell"))
+        )
+        assert(!nodes.exists(_("ref").str == "Data!B3"), nodes.toString)
+      }
+  }
+
+  test("deps --expand lists every occupied cell one by one and echoes expand: true") {
+    CliHarness
+      .run(
+        "-f",
+        file("ranges.xlsx"),
+        "--json",
+        "deps",
+        "Summary!B1",
+        "--direction",
+        "precedents",
+        "--depth",
+        "2",
+        "--expand"
+      )
+      .map { run =>
+        assertEquals(run.exit, 0, run.stderr)
+        val d = data(run)
+        assertEquals(d("expand"), ujson.True)
+        val nodes = d("precedents").arr.toVector
+        assert(nodes.forall(_("kind").str == "cell"), nodes.toString)
+        assertEquals(
+          nodes.map(n => (n("ref").str, n("depth").num.toInt)),
+          Vector(
+            "Data!A1",
+            "Data!B1",
+            "Data!A2",
+            "Data!B2",
+            "Data!C2",
+            "Data!A3",
+            "Data!B3",
+            "Data!C3",
+            "Data!A4",
+            "Data!B4",
+            "Data!C4",
+            "Summary!A1"
+          ).map(_ -> 1) :+ ("Data!E1" -> 2)
+        )
+      }
+  }
+
+  test("--expand leaves dependents alone and parses before the ref too") {
+    def dependents(extra: String*) =
+      CliHarness.run(
+        List("-f", file("ranges.xlsx"), "--json", "deps") ++ extra ++
+          List("--direction", "dependents"),
+        ""
+      )
+    for
+      plain <- dependents("Data!B3")
+      expanded <- dependents("--expand", "Data!B3")
+    yield
+      assertEquals(plain.exit, 0, plain.stderr)
+      assertEquals(expanded.exit, 0, expanded.stderr)
+      assertEquals(data(expanded)("expand"), ujson.True)
+      assertEquals(data(expanded)("dependents"), data(plain)("dependents"))
+      assertEquals(
+        refsAndKinds(data(plain)("dependents")),
+        Vector(("Data!C3", "cell"), ("Summary!B1", "cell"))
+      )
+  }
+
+  test("deps text prints a range as one line with its occupied cells and formulas") {
+    for
+      text <- CliHarness.run("-f", file("ranges.xlsx"), "deps", "Summary!B1")
+      single <- CliHarness.run("-f", file("ranges.xlsx"), "deps", "Summary!C1")
+      empty <- CliHarness.run("-f", file("gaps.xlsx"), "deps", "Data!C1")
+    yield
+      assertEquals(text.exit, 0, text.stderr)
+      val lines = text.stdout.linesIterator.toVector
+      assert(lines.contains("Precedents (depth 1): 5"), text.stdout)
+      assert(lines.contains("  1  Data!A:A  range, 4 occupied cells"), text.stdout)
+      assert(lines.contains("  1  Data!C2:C4  range, 3 occupied cells (3 formulas)"), text.stdout)
+      assert(lines.contains("  1  Data!B2  10"), text.stdout)
+      assertEquals(single.exit, 0, single.stderr)
+      assert(
+        single.stdout.contains("  1  Data!C4:E4  range, 1 occupied cell (1 formula)\n"),
+        single.stdout
+      )
+      // an empty range explains a zero: it is listed, never dropped
+      assertEquals(empty.exit, 0, empty.stderr)
+      assert(
+        empty.stdout.contains(
+          "Precedents (depth 1): 1\n  1  Missing!A1:A3  range, 0 occupied cells"
+        ),
+        empty.stdout
+      )
+  }
+
+  test("Weaver's whole-column SUMIFS: three precedents, not every cell of two columns") {
+    for
+      direct <- CliHarness.run("-f", file("sumifs.xlsx"), "-s", "Summary", "deps", "B1")
+      json <- CliHarness.run("-f", file("sumifs.xlsx"), "-s", "Summary", "--json", "deps", "B1")
+      deep <- CliHarness.run(
+        "-f",
+        file("sumifs.xlsx"),
+        "-s",
+        "Summary",
+        "deps",
+        "B2",
+        "--direction",
+        "precedents",
+        "--depth",
+        "2"
+      )
+      cell <- CliHarness.run("-f", file("sumifs.xlsx"), "-s", "Summary", "cell", "B1")
+    yield
+      assertEquals(direct.exit, 0, direct.stderr)
+      assert(
+        direct.stdout.contains(
+          "Precedents (depth 1): 3\n" +
+            "  1  Data!A:A  range, 401 occupied cells\n" +
+            "  1  Data!B:B  range, 401 occupied cells\n" +
+            "  1  Summary!A1  \"North\"\n"
+        ),
+        direct.stdout
+      )
+      assertEquals(
+        refsAndKinds(data(json)("precedents")),
+        Vector(("Data!A:A", "range"), ("Data!B:B", "range"), ("Summary!A1", "cell"))
+      )
+      assertEquals(deep.exit, 0, deep.stderr)
+      val deepLines = deep.stdout.linesIterator.toVector
+      assert(
+        deepLines.contains("  1  Data!C:C  range, 400 occupied cells (400 formulas)"),
+        deep.stdout
+      )
+      // depth 2: the two columns SUMIFS reads stay one line each; what remains is the 400 cells
+      // the filled-down C formulas name one by one (was 1,204 nodes, every cell of A, B and C)
+      assert(deepLines.contains("  2  Data!A:A  range, 401 occupied cells"), deep.stdout)
+      assert(deepLines.contains("  2  Data!B:B  range, 401 occupied cells"), deep.stdout)
+      assert(!deepLines.exists(_.startsWith("  2  Data!A2 ")), deep.stdout)
+      assert(deepLines.contains("Precedents (depth 2): 405"), deep.stdout)
+      assertEquals(cell.exit, 0, cell.stderr)
+      assert(
+        cell.stdout.endsWith("Dependencies: Data!A:A, Data!B:B, A1\nDependents: B2\n"),
+        cell.stdout
+      )
+  }
+
   test("--stream deps is refused: UNSUPPORTED_IN_STREAM, exit 2") {
     CliHarness.run("-f", file("linked.xlsx"), "--stream", "--json", "deps", "Sheet2!A1").map {
       run =>
@@ -554,33 +780,49 @@ class InspectCommandsSpec extends CatsEffectSuite:
   }
 
   // ---------------------------------------------------------------------------------------------
-  // cell keeps its text while moving to the bounded graph
+  // cell lists what a formula reads as declared, a range as one entry
   // ---------------------------------------------------------------------------------------------
 
-  test("cell lists a range's OCCUPIED cells: gaps and absent-sheet ranges are not Dependencies") {
-    // The declared behaviour change from the unbounded fromWorkbook expansion (ADR-017 §2.10):
-    // the old listing named every cell of the range (SUM(A:A) printed 1,048,576 entries) and
-    // three refs on a sheet the workbook does not have; Dependents lines are unchanged.
+  test("cell lists a formula's ranges as declared: an empty stretch or a missing sheet included") {
+    // Since 0.24.0 a range is one Dependencies entry, spelled as deps spells it (before: its
+    // occupied cells one by one, which `deps --expand` still lists); Dependents are unchanged.
     for
       gaps <- CliHarness.run("-f", file("gaps.xlsx"), "cell", "Data!B1")
       absent <- CliHarness.run("-f", file("gaps.xlsx"), "cell", "Data!C1")
       constant <- CliHarness.run("-f", file("gaps.xlsx"), "cell", "Data!A3")
       empty <- CliHarness.run("-f", file("gaps.xlsx"), "cell", "Data!A2")
+      declared <- CliHarness.run("-f", file("ranges.xlsx"), "cell", "Summary!B1")
+      json <- CliHarness.run("-f", file("ranges.xlsx"), "--json", "cell", "Summary!B1")
     yield
       assertEquals(gaps.exit, 0, gaps.stderr)
       assert(gaps.stdout.contains("Formula: =SUM(A1:A5)\n"), gaps.stdout)
-      assert(gaps.stdout.endsWith("Dependencies: A1, A3\nDependents: (none)\n"), gaps.stdout)
+      assert(gaps.stdout.endsWith("Dependencies: A1:A5\nDependents: (none)\n"), gaps.stdout)
       assertEquals(absent.exit, 0, absent.stderr)
       assert(absent.stdout.contains("Formula: =SUM(Missing!A1:A3)\n"), absent.stdout)
-      assert(absent.stdout.endsWith("Dependencies: (none)\nDependents: (none)\n"), absent.stdout)
+      assert(
+        absent.stdout.endsWith("Dependencies: Missing!A1:A3\nDependents: (none)\n"),
+        absent.stdout
+      )
       // an occupied cell inside the range is read by B1; so is the empty one (symbolic index)
       assertEquals(constant.exit, 0, constant.stderr)
       assert(constant.stdout.endsWith("Dependencies: (none)\nDependents: B1\n"), constant.stdout)
       assertEquals(empty.exit, 0, empty.stderr)
       assert(empty.stdout.endsWith("Dependencies: (none)\nDependents: B1\n"), empty.stdout)
+      // same-sheet entries unqualified, cross-sheet ones qualified, in deps' node order
+      assertEquals(declared.exit, 0, declared.stderr)
+      assert(
+        declared.stdout.endsWith(
+          "Dependencies: Data!A:A, Data!B:B, Data!B2, Data!C2:C4, A1\nDependents: (none)\n"
+        ),
+        declared.stdout
+      )
+      assertEquals(
+        names(data(json)("dependencies")),
+        Vector("Data!A:A", "Data!B:B", "Data!B2", "Data!C2:C4", "A1")
+      )
   }
 
-  test("cell text output is unchanged: a formula's range inputs and a constant's range reader") {
+  test("cell: a formula's range input is one entry; a constant's range reader is unchanged") {
     for
       formula <- CliHarness.run("-f", file("simple.xlsx"), "cell", "Data!B4")
       constant <- CliHarness.run("-f", file("simple.xlsx"), "cell", "Data!B1")
@@ -589,7 +831,7 @@ class InspectCommandsSpec extends CatsEffectSuite:
       assertEquals(formula.exit, 0, formula.stderr)
       assertEquals(
         formula.stdout,
-        "Cell: B4\nType: formula\nFormula: =SUM(B1:B3)\nCached: 42.5\nDependencies: B1, B2, B3\nDependents: (none)\n"
+        "Cell: B4\nType: formula\nFormula: =SUM(B1:B3)\nCached: 42.5\nDependencies: B1:B3\nDependents: (none)\n"
       )
       assertEquals(constant.exit, 0, constant.stderr)
       assert(constant.stdout.endsWith("Dependencies: (none)\nDependents: B4\n"), constant.stdout)

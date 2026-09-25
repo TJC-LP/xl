@@ -343,7 +343,7 @@ object Schema:
     ),
     read(
       "deps",
-      "Trace one cell's precedents and dependents, hop by hop (--direction, --depth)",
+      "Trace one cell's precedents and dependents, hop by hop (--direction, --depth, --expand)",
       sheet = true,
       streaming = false,
       "0.20.0",

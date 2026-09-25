@@ -10,6 +10,6 @@ Cell: C1
 Type: formula
 Formula: =SUM(Missing!A1:A3)
 Cached: #REF!
-Dependencies: (none)
+Dependencies: Missing!A1:A3
 Dependents: (none)
 ## stderr
