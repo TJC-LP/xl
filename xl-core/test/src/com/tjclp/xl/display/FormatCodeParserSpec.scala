@@ -1159,7 +1159,8 @@ class FormatCodeParserSpec extends FunSuite:
   test("applyFormat: scaled multi-section code routes by the raw value, like Excel (GH-666)") {
     // Excel picks the section from the stored value (SSF choose_fmt): only a true zero fires
     // the dash section; 400 under a millions scale rounds to 0.0 in the positive section — the
-    // same rule that makes Excel display "-0.00" for -0.001 under 0.00.
+    // same rule that makes Excel display "-0.00" for -0.001 under 0.00. LibreOffice 25.8
+    // oracle (#672): 400 → 0.0, -400 → (0.0), 0 → -.
     val code = FormatCodeParser.parse("0.0,,;(0.0,,);\"-\"").toOption.get
     assertEquals(FormatCodeParser.applyFormat(BigDecimal(0), code)._1, "-")
     assertEquals(FormatCodeParser.applyFormat(BigDecimal(1500000), code)._1, "1.5")
@@ -1183,4 +1184,93 @@ class FormatCodeParserSpec extends FunSuite:
       FormatCodeParser.applyFormat(BigDecimal("1234567.891"), grouped)._1,
       "1,234,567.89"
     )
+  }
+
+  // ========== Comma roles past GH-666 (#672, #681) ==========
+  // A comma after a digit placeholder (or another scaling comma) groups when a digit placeholder
+  // of the INTEGER part follows it and scales by 1000 otherwise; the decimal point ends the
+  // integer part, so `#,##0,.0` scales (Excel: "a comma that follows a digit placeholder scales
+  // the number by 1,000"). A comma after anything else is literal text. LibreOffice 25.8 is the
+  // oracle for the literal rows; it refuses `0,.0`-shaped codes outright (renders them General),
+  // so the before-the-point rows follow Excel's documented rule.
+
+  private def fmt(code: String, n: BigDecimal): String =
+    FormatCodeParser.applyFormat(n, FormatCodeParser.parse(code).toOption.get)._1
+
+  test("parse: a comma before the decimal point scales; the interior comma still groups (#672)") {
+    val tokens = FormatCodeParser.parse("#,##0,.0").toOption.get.positive.pattern.tokens
+    assertEquals(tokens.count(_ == FormatToken.Scale), 1)
+    assertEquals(tokens.count(_ == FormatToken.Thousands), 1)
+    val twice = FormatCodeParser.parse("0,,.0").toOption.get.positive.pattern
+    assertEquals(twice.tokens.count(_ == FormatToken.Scale), 2)
+    assert(!twice.hasThousands, "scaling commas before the point are not grouping")
+  }
+
+  test("applyFormat: scaling commas before the decimal point divide by 1000 each (#672)") {
+    assertEquals(fmt("#,##0,.0", BigDecimal(1234567)), "1,234.6")
+    assertEquals(fmt("0,,.0", BigDecimal(123456789)), "123.5")
+    assertEquals(fmt("0,,.0", BigDecimal(450000)), "0.5")
+    assertEquals(fmt("0,.0", BigDecimal(1234567)), "1234.6")
+    assertEquals(fmt("0,.0", BigDecimal(-1234567)), "-1234.6")
+    assertEquals(fmt("0,.0", BigDecimal(999)), "1.0")
+    assertEquals(fmt("#,##0,,.00", BigDecimal(123456789)), "123.46")
+    assertEquals(fmt("#,##0,.00", BigDecimal("0.5")), "0.00")
+    // before and after the point: both scale
+    assertEquals(fmt("#,##0,.0,", BigDecimal(123456789)), "123.5")
+    // a digit placeholder of the decimal part does not make a comma group
+    assertEquals(fmt("0,.0;(0,.0)", BigDecimal(-2500)), "(2.5)")
+  }
+
+  test("applyFormat: a comma after a literal or a space is literal text (LO oracle, #672)") {
+    // Was a grouping comma rendered nowhere: `0 ,` on 12345678 showed "12,345,678 "
+    assertEquals(fmt("0 ,", BigDecimal(12345678)), "12345678 ,")
+    assertEquals(fmt("0\" \",", BigDecimal(12345678)), "12345678 ,")
+    assertEquals(fmt("0 ,", BigDecimal(1234)), "1234 ,")
+    assertEquals(fmt("#,##0 ,", BigDecimal(1234567)), "1,234,567 ,")
+    assertEquals(fmt("0,,\"x\",", BigDecimal(123456789)), "123x,")
+    assertEquals(fmt("0%,", BigDecimal(12345)), "1234500%,")
+    // a comma directly after a digit placeholder, then a literal, still scales
+    assertEquals(fmt("0,\" \"", BigDecimal(12345678)), "12346 ")
+    assertEquals(fmt("0,\"k\"", BigDecimal(12345)), "12k")
+  }
+
+  test("applyFormat: 0\"x\", keeps its comma as literal text (#681)") {
+    // PR #679 review: the comma after a quoted literal was dropped (neither grouping nor scaling)
+    assertEquals(fmt("0\"x\",", BigDecimal(12345678)), "12345678x,")
+    assertEquals(fmt("0\"x\",", BigDecimal(1234)), "1234x,")
+  }
+
+  test("applyFormat: a scaling comma in a scientific or fraction section is inert (LO, #672)") {
+    // LibreOffice 25.8: `0.0E+00,` and `0.0E+00,,` on 12345 are 1.2E+04; `# ?/?,` on 12.5 is
+    // 12 1/2 — no division, no literal comma
+    assertEquals(fmt("0.0E+00,", BigDecimal(12345)), "1.2E+04")
+    assertEquals(fmt("0.0E+00,,", BigDecimal(12345)), "1.2E+04")
+    assertEquals(fmt("# ?/?,", BigDecimal("12.5")), "12 1/2")
+  }
+
+  test("applyFormat: General mixed with digit placeholders renders the number once (#681)") {
+    // PR #679 review: `General0` emitted the number twice (55, 1.52). Excel's behaviour on such a
+    // code is undefined; LibreOffice 25.8 renders `General0` and `General.00` as the General value
+    // alone (5, 1.5). xl's rule: the General keyword owns the number, and digit placeholders,
+    // decimal points and commas beside it render nothing; literals still render.
+    assertEquals(fmt("General0", BigDecimal(5)), "5")
+    assertEquals(fmt("General0", BigDecimal("1.5")), "1.5")
+    assertEquals(fmt("General.00", BigDecimal("1.5")), "1.5")
+    assertEquals(fmt("0General", BigDecimal(5)), "5")
+    assertEquals(fmt("\"a\"General0\"b\"", BigDecimal(5)), "a5b")
+    assertEquals(fmt("General0", BigDecimal(-5)), "-5")
+  }
+
+  test("applyFormat: a comma after the General keyword is literal text (LO oracle, #681)") {
+    // Was the number twice: General rendered 12345, then the comma emitted the grouped digits
+    assertEquals(fmt("General,", BigDecimal(12345)), "12345,")
+  }
+
+  test("parse: commas in date and text sections render as commas (LO oracle, #672)") {
+    // LibreOffice 25.8: `mmm d, yyyy` → Mar 4, 2021; "abc" under `0;-0;0;@,` and `@,` → abc,
+    val dt = java.time.LocalDateTime.of(2021, 3, 4, 0, 0)
+    val date = FormatCodeParser.parse("mmm d, yyyy").toOption.get
+    assertEquals(FormatCodeParser.applyDateFormat(dt, date), "Mar 4, 2021")
+    val text = FormatCodeParser.parse("0;-0;0;@,").toOption.get
+    assertEquals(FormatCodeParser.applyTextFormat("abc", text), "abc,")
   }

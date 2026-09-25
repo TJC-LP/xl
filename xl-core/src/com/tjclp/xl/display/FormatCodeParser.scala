@@ -111,8 +111,9 @@ object FormatCodeParser:
     case Thousands
 
     /**
-     * Scaling comma: a comma after the last digit placeholder of a section divides the value by
-     * 1000 (`#,##0,` shows thousands, `0.0,,` millions; ECMA-376 §18.8.31, GH-666).
+     * Scaling comma: a comma after a digit placeholder with no integer-part placeholder after it
+     * divides the value by 1000 (`#,##0,` and `#,##0,.0` show thousands, `0.0,,` millions; ECMA-376
+     * §18.8.31, GH-666, #672).
      */
     case Scale
 
@@ -310,8 +311,8 @@ object FormatCodeParser:
           i += 1
 
         case ',' =>
-          // Lexed as grouping; the post-pass below reclassifies commas that trail the last
-          // digit placeholder as FormatToken.Scale (÷1000 each, GH-666)
+          // Lexed as grouping; the post-pass below gives each comma its role: grouping, Scale
+          // (÷1000 each, GH-666) or literal text (#672)
           tokens += FormatToken.Thousands
           i += 1
 
@@ -474,27 +475,37 @@ object FormatCodeParser:
     FormatPattern(classified, hasThousands, hasPercent)
 
   /**
-   * Reclassify the commas that scale rather than group (ECMA-376 §18.8.31, GH-666): a comma
-   * directly after a digit placeholder (or after another scaling comma) with no digit placeholder
-   * anywhere later in the section divides the value by 1000. `#,##0,` keeps its grouping comma and
-   * gains one scale; `0.0,,"mm"` scales twice; `mmm d, yyyy` has no digit placeholders and its
-   * comma stays a literal comma for the date renderer.
+   * Give every comma its role (ECMA-376 §18.8.31; GH-666, #672). A comma directly after a digit
+   * placeholder — or after a scaling comma, an exponent or a fraction, which end in placeholders —
+   * groups when a digit placeholder of the integer part follows it, and otherwise divides the value
+   * by 1000 (Excel: "a comma that follows a digit placeholder scales the number by 1,000"). The
+   * decimal point ends the integer part, so `#,##0,.0` and `0,,.0` scale like `#,##0,` and
+   * `0.0,,"mm"`. Any other comma — after a literal, a space, `%`, the decimal point, `General`, a
+   * date part or `@` — is literal text (LibreOffice: `0 ,` → `12345678 ,`, `0"x",` → `12345678x,`,
+   * `General,` → `12345,`, `mmm d, yyyy` → `Mar 4, 2021`).
    */
   private def classifyScalingCommas(tokens: Vector[FormatToken]): Vector[FormatToken] =
-    val lastDigit = tokens.lastIndexWhere {
+    val decimalIdx = tokens.indexOf(FormatToken.Decimal)
+    def isDigit(token: FormatToken): Boolean = token match
       case FormatToken.Digit(_) => true
       case _ => false
+    tokens.zipWithIndex.foldLeft(Vector.empty[FormatToken]) { case (acc, (token, idx)) =>
+      if token != FormatToken.Thousands then acc :+ token
+      else
+        val followsPlaceholder = acc.lastOption.exists {
+          case FormatToken.Digit(_) | FormatToken.Scale | _: FormatToken.Exponent |
+              _: FormatToken.Fraction =>
+            true
+          case _ => false
+        }
+        val integerEnd = if decimalIdx > idx then decimalIdx else tokens.length
+        val groups = tokens.slice(idx + 1, integerEnd).exists(isDigit)
+        acc :+ (
+          if !followsPlaceholder then FormatToken.Literal(",")
+          else if groups then FormatToken.Thousands
+          else FormatToken.Scale
+        )
     }
-    if lastDigit < 0 then tokens
-    else
-      tokens.zipWithIndex.foldLeft(Vector.empty[FormatToken]) { case (acc, (token, idx)) =>
-        val scales = token == FormatToken.Thousands && idx > lastDigit &&
-          acc.lastOption.exists {
-            case FormatToken.Digit(_) | FormatToken.Scale => true
-            case _ => false
-          }
-        acc :+ (if scales then FormatToken.Scale else token)
-      }
 
   /** Characters that may appear in a fraction numerator/denominator run. */
   private def isFractionChar(c: Char): Boolean =
@@ -684,10 +695,11 @@ object FormatCodeParser:
       if decimalDigits > 0 then decPart.toString.reverse.padTo(decimalDigits, '0').reverse
       else ""
 
-    // Build result: prefix + number + suffix
+    // Build result: prefix + number + suffix. A section with the General keyword renders the number
+    // through it alone; placeholders beside it emit nothing (#681: `General0` printed the number
+    // twice; Excel leaves such codes undefined, LibreOffice shows the General value alone)
     val result = new StringBuilder
-    var inNumber = false
-    var numberEmitted = false
+    var numberEmitted = tokens.contains(FormatToken.General)
 
     for token <- tokens do
       token match
@@ -813,8 +825,8 @@ object FormatCodeParser:
     tokens.foreach {
       case _: FormatToken.Exponent =>
         result ++= s"${exp.letter}$expSign$paddedExp"
-      // Scale (GH-666) is a pass-through here: `0.0E+00,` does not divide — Excel's behaviour on
-      // a scaling comma in a scientific or fraction section is unverified (#672); only the plain
+      // Scale (GH-666) is a pass-through here: `0.0E+00,` does not divide and prints no comma
+      // (LibreOffice: `0.0E+00,,` on 12345 is 1.2E+04; #672). Excel unverified; only the plain
       // numeric renderer scales
       case FormatToken.Digit(_) | FormatToken.Decimal | FormatToken.Thousands | FormatToken.Scale =>
         if !numberEmitted then
