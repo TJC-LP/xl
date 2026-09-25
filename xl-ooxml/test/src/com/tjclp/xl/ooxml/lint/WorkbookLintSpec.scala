@@ -2238,7 +2238,8 @@ class WorkbookLintSpec extends FunSuite:
     LintCategory.IgnorableUndeclared,
     LintCategory.DxfIdOutOfRange,
     LintCategory.UnreferencedPart,
-    LintCategory.SharedStringOrphan
+    LintCategory.SharedStringOrphan,
+    LintCategory.AutoFilterNameMismatch
   )
 
   test("GH-460/567: over the committed corpus, only named-styles-excel trips a new rule") {
@@ -2300,6 +2301,136 @@ class WorkbookLintSpec extends FunSuite:
     // a Finding built without a tier is a repair — the conservative default for every rule that
     // does not say otherwise
     assertEquals(Finding("p", LintCategory.ChildOrder, "<x>", "m").severity, LintSeverity.Repair)
+  }
+
+  // ===== #460 item 5: <autoFilter ref> vs the sheet-scoped _xlnm._FilterDatabase name =====
+  //
+  // Evidence behind the tier (Excel for Mac 16.113.2 and LibreOffice 25.8, driven over probes of
+  // the committed autofilter.xlsx fixture, plain and with an active filterColumn): a name naming
+  // another range, another sheet or #REF!, a missing name, and a name with no autoFilter all open
+  // with no repair prompt and the filter intact. Excel re-saves a stale name VERBATIM (and writes
+  // no name where none was), LibreOffice re-derives it from the autoFilter. So a stale name is
+  // misleading metadata, never a repair; a missing one is what Excel itself re-saves, and a
+  // leftover name without a filter is what Excel leaves behind after a filter is cleared (62 of
+  // the Excel-authored books in a local corpus of ~260 carry one) — neither is a finding.
+
+  private def filteredSheetXml(ref: String): String = worksheetWith(
+    s"""<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Region</t></is></c></row></sheetData>
+  <autoFilter ref="$ref"/>"""
+  )
+
+  private def filterNameXml(body: String, localSheetId: Int = 0): String =
+    s"""<definedName name="_xlnm._FilterDatabase" localSheetId="$localSheetId" hidden="1">$body</definedName>"""
+
+  private def autoFilterParts(ref: Option[String], names: String): Map[String, String] =
+    baseParts ++ Map(
+      "xl/workbook.xml" -> workbookWithNames(names),
+      "xl/worksheets/sheet1.xml" -> ref.fold(worksheetXml)(filteredSheetXml)
+    )
+
+  private val staleFilterNameParts =
+    autoFilterParts(Some("A1:C6"), filterNameXml("Sheet1!$A$1:$C$3"))
+
+  test("#460: an autoFilter whose _xlnm._FilterDatabase names the same range is clean") {
+    val clean = Vector(
+      autoFilterParts(Some("A1:C6"), filterNameXml("Sheet1!$A$1:$C$6")),
+      autoFilterParts(Some("A1:C6"), filterNameXml("'Sheet1'!$A$1:$C$6")),
+      autoFilterParts(Some("A1:C6"), filterNameXml("sheet1!A1:C6")),
+      // Excel writes a one-cell filter's name as a degenerate range (LibreOffice's corpus)
+      autoFilterParts(Some("B2"), filterNameXml("Sheet1!$B$2:$B$2")),
+      // the name's own spelling is case-insensitive, as Excel matches built-in names
+      autoFilterParts(
+        Some("A1:C6"),
+        filterNameXml("Sheet1!$A$1:$C$6").replace("_xlnm._FilterDatabase", "_XLNM._FILTERDATABASE")
+      )
+    )
+    clean.foreach { parts =>
+      assertEquals(lintOf(parts), Vector.empty[Finding])
+      assertEquals(lintStreamOf(parts), Vector.empty[Finding])
+    }
+  }
+
+  test("#460: a _FilterDatabase naming another range is a hygiene autofilter-name-mismatch") {
+    val findings = lintOf(staleFilterNameParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.AutoFilterNameMismatch))
+    val f = findings.head
+    assertEquals(f.severity, LintSeverity.Hygiene)
+    assertEquals(f.part, "xl/workbook.xml")
+    assertEquals(f.locator, """<definedName name="_xlnm._FilterDatabase" localSheetId="0">""")
+    assert(f.message.contains("\"Sheet1\""), f.message)
+    assert(f.message.contains("A1:C3"), f.message)
+    assert(f.message.contains("A1:C6"), f.message)
+    assertEquals(LintCategory.AutoFilterNameMismatch.slug, "autofilter-name-mismatch")
+  }
+
+  test("#460: a _FilterDatabase naming another sheet or #REF! is the same hygiene finding") {
+    val otherSheet = lintOf(autoFilterParts(Some("A1:C6"), filterNameXml("Other!$A$1:$C$6")))
+    assertEquals(otherSheet.map(_.category), Vector(LintCategory.AutoFilterNameMismatch))
+    assert(otherSheet.head.message.contains("\"Other\""), otherSheet.head.message)
+    // (only this rule's findings: the xlfn rule reads `Sheet1!#` as a bare spill operator — a
+    // separate defect of FormulaStorage's spill scanner, not this rule's)
+    val broken = lintOf(autoFilterParts(Some("A1:C6"), filterNameXml("Sheet1!#REF!")))
+      .filter(_.category == LintCategory.AutoFilterNameMismatch)
+    assertEquals(broken.map(_.category), Vector(LintCategory.AutoFilterNameMismatch))
+    assert(broken.head.message.contains("#REF!"), broken.head.message)
+    assertEquals(broken.map(_.severity), Vector(LintSeverity.Hygiene))
+  }
+
+  test("#460: a missing name, or a name with no autoFilter, is not a finding (Excel evidence)") {
+    // an autoFilter with no _FilterDatabase: Excel opens it intact and re-saves it without one
+    assertEquals(lintOf(autoFilterParts(Some("A1:C6"), "")), Vector.empty[Finding])
+    // a leftover name after the filter was cleared: Excel's own output
+    assertEquals(
+      lintOf(autoFilterParts(None, filterNameXml("Sheet1!$A$1:$C$6"))),
+      Vector.empty[Finding]
+    )
+    // a name scoped to ANOTHER sheet position says nothing about this sheet's filter
+    assertEquals(
+      lintOf(autoFilterParts(Some("A1:C6"), filterNameXml("Sheet1!$A$1:$C$3", localSheetId = 1))),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("#460: localSheetId is the sheet's position in <sheets>, not its sheetId") {
+    val parts = withSecondSheet(
+      "worksheet",
+      "worksheets/sheet2.xml",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
+      filteredSheetXml("A1:C6")
+    )
+    val named = (body: String) =>
+      parts + ("xl/workbook.xml" -> parts("xl/workbook.xml").replace(
+        "<definedNames><definedName name=\"MyName\">Sheet1!$A$1</definedName></definedNames>",
+        s"<definedNames>${filterNameXml(body, localSheetId = 1)}</definedNames>"
+      ))
+    assertEquals(lintOf(named("Extra!$A$1:$C$6")), Vector.empty[Finding])
+    val stale = lintOf(named("Extra!$A$1:$C$9"))
+    assertEquals(stale.map(_.category), Vector(LintCategory.AutoFilterNameMismatch))
+    assertEquals(
+      stale.head.locator,
+      """<definedName name="_xlnm._FilterDatabase" localSheetId="1">"""
+    )
+    assertEquals(lintStreamOf(named("Extra!$A$1:$C$9")), stale)
+  }
+
+  test("#460: a table part's own autoFilter is not the sheet's filter") {
+    // the name is compared with the worksheet's direct-child <autoFilter> only
+    val parts = overMaxTableParts ++ Map(
+      "xl/workbook.xml" -> workbookWithNames(filterNameXml("Sheet1!$A$1:$C$3")),
+      "xl/tables/table1.xml" ->
+        s"""<table xmlns="$nsMain" id="1" name="T1" displayName="T1" ref="A1:C6"><autoFilter ref="A1:C6"/></table>"""
+    )
+    assertEquals(lintOf(parts), Vector.empty[Finding])
+    assertEquals(lintStreamOf(parts), Vector.empty[Finding])
+  }
+
+  test("#460: over the Excel/LibreOffice-authored autofilter fixture the rule is silent") {
+    val path = TestFixtures.copyToTemp("autofilter.xlsx")
+    val findings = WorkbookLint.lint(path).fold(err => fail(err.message), identity)
+    assertEquals(
+      findings.filter(_.category == LintCategory.AutoFilterNameMismatch),
+      Vector.empty[Finding]
+    )
   }
 
   // ===== Macro sheets (Excel 4.0 XLM, PR #659 review): a sheet kind of their own =====
@@ -2537,7 +2668,12 @@ class WorkbookLintSpec extends FunSuite:
     "unioned shared strings" -> unionSstParts,
     "past-table shared-string index" -> pastTableSstParts,
     "t=s without a shared-string part" -> noSstPartParts,
-    "malformed shared strings" -> malformedSstParts
+    "malformed shared strings" -> malformedSstParts,
+    // #460 item 5: the sheet's direct-child <autoFilter ref> capture (SAX depth 1 vs DOM children)
+    "stale _FilterDatabase name" -> staleFilterNameParts,
+    "matching _FilterDatabase name" ->
+      autoFilterParts(Some("A1:C6"), filterNameXml("'Sheet1'!$A$1:$C$6")),
+    "autoFilter without a name" -> autoFilterParts(Some("A1:C6"), "")
   )
 
   test("GH-413: lintStreamBytes agrees with lintBytes on every fixture (SAX/DOM parity)") {

@@ -2053,9 +2053,10 @@ identical (pinned by the lint parity suite).
 `.findings[].severity`; text: hygiene lines are tagged `(hygiene)` and the header counts both).
 `repair` is the class the lint exists for — Excel repairs or refuses the file, or a reader misreads
 a value — and fails the gate. `hygiene` is a valid file that opens intact everywhere but carries
-dead weight or a privacy hazard: `unreferenced-part`, and the orphan half of
-`shared-string-orphan`. Hygiene findings are reported (with a `LINT_HYGIENE` warning) but exit `0`
-unless `--strict` (the global flag, accepted before or after the verb) promotes them to the gate.
+dead weight, stale metadata or a privacy hazard: `unreferenced-part`, the orphan half of
+`shared-string-orphan`, and `autofilter-name-mismatch`. Hygiene findings are reported (with a
+`LINT_HYGIENE` warning) but exit `0` unless `--strict` (the global flag, accepted before or after
+the verb) promotes them to the gate.
 
 **What it flags** (the complete `LintCategory` roster — a test pins this list against
 `LintCategory.slug`, so it cannot drift):
@@ -2174,6 +2175,16 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
   the table is SAX-counted and the references are a bit set of its size: O(1) in the row count,
   O(uniqueCount) bits in the table. Cells on Excel 4.0 macro sheets (`xl/macrosheets/`, rel type
   `xlMacrosheet`) count as references like any worksheet's
+- **`autofilter-name-mismatch`** — a sheet's hidden `_xlnm._FilterDatabase` name (scoped by
+  `localSheetId` to the sheet's position in `<sheets>`) names a different range, another sheet or
+  `#REF!` instead of the sheet's own `<autoFilter ref>`: the stale name a range edit leaves
+  behind. Severity `hygiene` — Excel opens such a file with the filter intact and re-saves the
+  stale name verbatim, LibreOffice re-derives the name from the autoFilter (both verified on
+  probes of plain and actively filtered sheets), so it misleads only tools that locate the
+  filtered range by the name. A missing name (Excel itself re-saves the book without one) and a
+  name left behind on a sheet with no autoFilter (Excel's own output after a filter is cleared)
+  are not findings. xl's structural edits (`insert-rows`, `delete-cols`, …) move the name with the
+  filter, so they never introduce one
 
 **Exit codes**: `0` no repair findings (hygiene findings, if any, are listed and a `LINT_HYGIENE`
 warning counts them) · `1` repair findings reported — or, under `--strict`, any finding at all ·

@@ -753,6 +753,9 @@ lenient reader accepts silently:
     (#REF!); xl never prunes a preserved table, so a text-replacing edit of
     a foreign shared-string book reports the orphan until the table is
     rebuilt
+  - a sheet's hidden _xlnm._FilterDatabase name naming another range, sheet
+    or #REF! than its <autoFilter ref> (a stale name; Excel opens the filter
+    intact and keeps the name) [hygiene]
 
 USAGE:
   xl lint report.xlsx
@@ -766,13 +769,14 @@ FINDING CATEGORIES:
   data-table-unseeded | formula-leading-equals | formula-unparseable |
   external-ref-dangling | defined-name-invalid | calc-chain-stale |
   xlfn-missing | empty-inline-str | mc-ignorable-undeclared |
-  dxf-id-out-of-range | unreferenced-part | shared-string-orphan
+  dxf-id-out-of-range | unreferenced-part | shared-string-orphan |
+  autofilter-name-mismatch
 
 SEVERITY (every finding carries one; --format json: "severity"):
   repair  = Excel repairs or refuses the file, or a reader misreads a value
   hygiene = the file is valid and opens intact; dead weight or a privacy
             hazard the package still carries (unreferenced-part, the orphan
-            half of shared-string-orphan)
+            half of shared-string-orphan, autofilter-name-mismatch)
 
 EXIT CODES:
   0 = no repair findings (hygiene findings, if any, are still listed)

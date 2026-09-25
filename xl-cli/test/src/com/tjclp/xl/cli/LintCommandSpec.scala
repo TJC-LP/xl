@@ -12,12 +12,15 @@ import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{CellRange, Sheet, Workbook, given}
+import com.tjclp.xl.addressing.{Column, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.LintCommands
+import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.formula.parser.UnparseableFormula
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.lint.{LintCategory, WorkbookLint}
+import com.tjclp.xl.ops.FormulaSupport
 import com.tjclp.xl.sheets.dataTableSyntax.*
 
 /**
@@ -850,4 +853,42 @@ class LintCommandSpec extends CatsEffectSuite:
     yield
       assertEquals(code, ExitCode.Success)
       assertEquals(findings, Vector.empty)
+  }
+
+  // ========== #460 item 5: xl's own structural edits and the _FilterDatabase name ==========
+
+  test("#460: xl's own row/column edits keep a filtered book's _FilterDatabase name in sync") {
+    // the stale name is the class a range edit leaves behind; xl's structural verbs must not
+    // produce it (the fixture carries a matching name for its A1:C6 filter)
+    val source = repoRoot.resolve("xl-ooxml/test/resources/fixtures/autofilter.xlsx")
+    val sheet = SheetName.unsafe("Filtered")
+    val support = summon[FormulaSupport]
+    // (label, edit, the filter range the edit must move A1:C6 to)
+    val edits: Vector[(String, Workbook => XLResult[Workbook], String)] = Vector(
+      ("insert rows inside", wb => support.insertRows(wb, sheet, Row.from1(3), 2), "A1:C8"),
+      ("delete rows inside", wb => support.deleteRows(wb, sheet, Row.from1(3), 1), "A1:C5"),
+      ("insert columns left", wb => support.insertCols(wb, sheet, Column.from0(0), 1), "B1:D6")
+    )
+    def entry(zip: Path, name: String): String =
+      val file = new java.util.zip.ZipFile(zip.toFile)
+      try new String(file.getInputStream(file.getEntry(name)).readAllBytes(), "UTF-8")
+      finally file.close()
+    edits.traverse_ { (label, edit, moved) =>
+      for
+        out <- IO(Files.createTempFile("lint-cli-filter", ".xlsx"))
+        wb <- ExcelIO.instance[IO].read(source)
+        edited <- IO.fromEither(edit(wb).left.map(e => new Exception(e.message)))
+        _ <- ExcelIO.instance[IO].write(edited, out)
+        findings <- IO(WorkbookLint.lint(out).fold(err => fail(s"lint errored: $err"), identity))
+        sheetXml <- IO(entry(out, "xl/worksheets/sheet1.xml"))
+        workbookXml <- IO(entry(out, "xl/workbook.xml"))
+        _ <- IO(Files.deleteIfExists(out))
+      yield
+        // the edit really moved both sides — a vacuous pass would not
+        assert(sheetXml.contains(s"""<autoFilter ref="$moved""""), s"$label: $sheetXml")
+        val (c0, r0) = (moved.takeWhile(_.isLetter), moved.drop(1).takeWhile(_.isDigit))
+        assert(workbookXml.contains(s"$$$c0$$$r0:"), s"$label: $workbookXml")
+        val stale = findings.filter(_.category == LintCategory.AutoFilterNameMismatch)
+        assertEquals(stale, Vector.empty, s"$label: $stale")
+    }
   }
