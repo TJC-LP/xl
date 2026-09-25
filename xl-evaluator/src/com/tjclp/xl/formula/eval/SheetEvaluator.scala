@@ -534,13 +534,18 @@ object SheetEvaluator:
     workbook: Option[Workbook]
   ): XLResult[CellValue] =
     sheet(ref).value match
-      case value @ CellValue.Formula(expr, _, _) =>
+      case value @ CellValue.Formula(expr, _, kind) =>
         pinnedCache(value) match
           // GH-353/GH-430: pinned-cache semantics — the Excel-written cache IS the value
           case Some(cached) => scala.util.Right(cached)
           case None =>
+            // an ArrayFormula record (CSE or dynamic-array anchor) evaluates as an array and the
+            // anchor holds element (0,0); a plain formula evaluates as a scalar cell
+            val cellEvaluator = kind match
+              case _: FormulaKind.ArrayFormula => evaluator.withArrayResults
+              case _ => evaluator
             // Pass the current cell ref for ROW()/COLUMN() without arguments
-            evaluateFormulaWith(sheet, expr, evaluator, clock, workbook, Some(ref))
+            evaluateFormulaWith(sheet, expr, cellEvaluator, clock, workbook, Some(ref))
       case other => scala.util.Right(other)
 
   private def evaluateArrayFormulaImpl(
@@ -753,8 +758,8 @@ object SheetEvaluator:
    * GH-430: the generalized GH-353 seam. A data-table record's cache is its only truthful value —
    * xl does not evaluate `TABLE(...)` (the record, not the text, is the formula), so evaluation
    * pins the Excel-written cache exactly like closed-workbook externals; an uncached record pins to
-   * Empty rather than parse-failing. ArrayFormula kinds are NOT pinned: their text evaluates
-   * scalar-wise as before GH-430.
+   * Empty rather than parse-failing. ArrayFormula kinds are NOT pinned: their text evaluates as an
+   * array and the anchor takes element (0,0) (evaluateCellWithEvaluator).
    */
   private[eval] def pinnedCache(value: CellValue): Option[CellValue] =
     value match

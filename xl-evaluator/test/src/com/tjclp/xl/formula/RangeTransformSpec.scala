@@ -51,3 +51,53 @@ class RangeTransformSpec extends FunSuite:
       case Left(err) =>
         fail(s"Parse failed: $err")
   }
+
+  // ===== Array lifting: ranges inside lifted slots are element sources =====
+
+  private def bounded(formula: String): List[String] =
+    FormulaParser.parse(formula) match
+      case Right(expr) =>
+        val transformed = TExpr.transformRanges(
+          expr,
+          (_, range) => if range.isFullColumn then CellRange(range.start, range.start) else range
+        )
+        TExpr.collectRanges(transformed).map(_._2.toA1)
+      case Left(err) => fail(s"Parse failed: $err")
+
+  // the argument expressions SUMPRODUCT bounds before evaluating them
+  test("transformRanges bounds ranges in lifted scalar slots, powers and concatenations") {
+    assertEquals(bounded("=ABS(B:B)"), List("B1:B1"))
+    assertEquals(bounded("=ROUND(B:B/A:A,2)"), List("B1:B1", "A1:A1"))
+    assertEquals(bounded("=(A:A)^2"), List("A1:A1"))
+    assertEquals(bounded("=LEN(A:A&\"\")"), List("A1:A1"))
+    // IFERROR lifts its value only: the fallback keeps its shape
+    assertEquals(bounded("=IFERROR(A:A,B:B)"), List("A1:A1", "B1:B1048576"))
+  }
+
+  test("transformRanges leaves shape-sensitive calls alone") {
+    assertEquals(bounded("=ROWS(A:A)"), List("A1:A1048576"))
+    // a lifted call keeps its range slots whole: only its scalar slots are element sources
+    assertEquals(bounded("=INDEX(A:A,B:B)"), List("A1:A1048576", "B1:B1"))
+  }
+
+  test("SUMPRODUCT trims whole columns inside lifted slots to the used extent") {
+    val sheet = Sheet("S")
+      .put(ref"A1", CellValue.Number(BigDecimal(1)))
+      .put(ref"A2", CellValue.Number(BigDecimal(-2)))
+      .put(ref"A3", CellValue.Number(BigDecimal(3)))
+      .put(ref"B1", CellValue.Number(BigDecimal(-4)))
+      .put(ref"B2", CellValue.Number(BigDecimal(5)))
+      .put(ref"B3", CellValue.Number(BigDecimal(-6)))
+    def eval(formula: String) = sheet.evaluateFormula(formula)
+    assertEquals(
+      eval("=SUMPRODUCT(--(A:A>0),ABS(B:B))"),
+      Right(CellValue.Number(BigDecimal(10))),
+      "must not be #VALUE! for mismatched dimensions"
+    )
+    assertEquals(
+      eval("=SUMPRODUCT(--(A:A>0),ABS(B:B))"),
+      eval("=SUMPRODUCT(--(A1:A3>0),ABS(B1:B3))")
+    )
+    assertEquals(eval("=SUMPRODUCT((A:A)^2)"), Right(CellValue.Number(BigDecimal(14))))
+    assertEquals(eval("=SUMPRODUCT(LEN(A:A&\"\"))"), Right(CellValue.Number(BigDecimal(4))))
+  }

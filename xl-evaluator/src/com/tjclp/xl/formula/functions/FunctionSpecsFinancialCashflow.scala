@@ -133,7 +133,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, NpvArgs](
       "NPV",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rateExpr, range) = args
       ctx.evalExpr(rateExpr).flatMap { rate =>

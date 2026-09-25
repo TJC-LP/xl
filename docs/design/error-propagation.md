@@ -32,6 +32,13 @@ absent from the boundary table so infrastructure failures never launder into `#V
 `DivByZero` promotes because every raise site is a genuine Excel `#DIV/0!` and scalar `=1/0`
 must agree with the array path's element carriage.
 
+A lifted call (array lifting, `FunctionFlags.lift`) sits between the two:
+`ArrayLifting.elementResult` is the boundary table plus `TypeMismatch/CodecFailed → #VALUE!` (an
+element that failed to coerce is Excel's `#VALUE!`), and `EvalFailed`, `RefError` and
+`CircularRef` fail the whole call — each element is a whole function call, so a host failure in
+one (a missing lookup sheet) is the call's failure, never a `#VALUE!` element. Keep it the strict
+table plus the coercion arms; it must not drift toward `toCellError`.
+
 ## Promotion sites (exhaustive)
 
 1. `SheetEvaluator.evaluateFormulaWith` — funnels every `evaluateFormula` overload,

@@ -296,38 +296,6 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     case _ => None
 
   /**
-   * Excel's implicit intersection of `range` with the formula's own cell: a single cell is itself;
-   * a one-row range yields the cell in the formula's column, a one-column range the cell in the
-   * formula's row; anything else — a 2-D range, or a vector the formula's row/column does not cross
-   * — is `#VALUE!`.
-   */
-  private def intersectionCell(range: CellRange, current: Option[ARef]): Either[EvalError, ARef] =
-    if range.width == 1 && range.height == 1 then Right(range.start)
-    else
-      current match
-        case None =>
-          Left(
-            EvalError.EvalFailed(
-              s"@${range.toA1} (implicit intersection) needs the formula's cell position",
-              Some("@range")
-            )
-          )
-        case Some(cell) =>
-          val col = cell.col.index0
-          val row = cell.row.index0
-          if range.height == 1 && col >= range.colStart.index0 && col <= range.colEnd.index0 then
-            Right(ARef.from0(col, range.rowStart.index0))
-          else if range.width == 1 && row >= range.rowStart.index0 && row <= range.rowEnd.index0
-          then Right(ARef.from0(range.colStart.index0, row))
-          else
-            Left(
-              EvalError.ErrorValue(
-                CellError.Value,
-                Some(s"@${range.toA1}: no cell in the formula's row or column (${cell.toA1})")
-              )
-            )
-
-  /**
    * Shapes that print as one primary — everything the `@` operand slot re-parses unparenthesized.
    */
   private def isPrimaryShape(expr: TExpr[?]): Boolean = expr match
@@ -354,9 +322,9 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
    * printer emits `@x`, `FormulaStorage` maps the two at the `<f>` boundary).
    *
    * Semantics: a scalar or a single cell is itself; a range intersects with the formula's cell (see
-   * [[intersectionCell]]) — the cell in the formula's row for a column vector, in its column for a
-   * row vector, `#VALUE!` otherwise; a defined name bound to a range intersects the same way; an
-   * array VALUE (a call result, not a reference) collapses to its top-left element.
+   * [[Evaluator.implicitIntersection]]) — the cell in the formula's row for a column vector, in its
+   * column for a row vector, `#VALUE!` otherwise; a defined name bound to a range intersects the
+   * same way; an array VALUE (a call result, not a reference) collapses to its top-left element.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   val single: FunctionSpec[CellValue] { type Args = ArgSpec.SumProductArg } =
@@ -366,7 +334,9 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
       renderFn = Some((arg, printer) => s"@${renderIntersectionOperand(arg, printer)}")
     ) { (arg, ctx) =>
       def intersect(targetSheet: Sheet, range: CellRange): Either[EvalError, CellValue] =
-        intersectionCell(range, ctx.currentCell).flatMap(rangeCellReader(targetSheet, ctx))
+        Evaluator
+          .implicitIntersection(range, ctx.currentCell)
+          .flatMap(rangeCellReader(targetSheet, ctx))
       def resolved(location: TExpr.RangeLocation): Option[(Sheet, CellRange)] =
         Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).toOption
       arg match

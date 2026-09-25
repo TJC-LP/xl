@@ -171,7 +171,14 @@ trait TExprDecoders:
    * This matches Excel semantics for standalone cell references.
    */
   def decodeResolvedValue(cell: Cell): Either[CodecError, CellValue] =
-    val resolved = cell.value match
+    scala.util.Right(resolvedValue(cell.value))
+
+  /**
+   * The table behind [[decodeResolvedValue]], for values that are not in a cell: an array element
+   * lifted into a value slot reads exactly as a reference to its cell would.
+   */
+  private[formula] def resolvedValue(value: CellValue): CellValue =
+    value match
       case CellValue.Number(n) => CellValue.Number(n)
       case CellValue.Text(s) => CellValue.Text(s)
       case CellValue.Bool(b) => CellValue.Bool(b)
@@ -187,7 +194,6 @@ trait TExprDecoders:
           case _ => CellValue.Number(BigDecimal(0))
       case CellValue.Error(err) => CellValue.Error(err)
       case CellValue.Empty => CellValue.Number(BigDecimal(0))
-    scala.util.Right(resolved)
 
   // ===== Type-Coercing Decoders (Excel-compatible automatic conversion) =====
 

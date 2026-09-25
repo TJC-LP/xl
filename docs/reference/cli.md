@@ -915,7 +915,17 @@ Evaluate an **array formula** and display the result grid, or spill it into the 
 xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)"          # Display result grid
 xl -f data.xlsx -s Sheet1 evala "=SEQUENCE(5)" --at E1       # Spill starting at E1
 xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                  # Array arithmetic with broadcasting
+xl -f data.xlsx -s Sheet1 evala "=ABS(C2:C4+D2:D4)"          # Scalar functions lift element-wise
 ```
+
+Scalar functions lift over arrays as in Excel 365 (`=ABS(C2:C4)` is `{3;4;1}`,
+`=SUMPRODUCT(--ISNUMBER(B2:B4))` counts), the same in `view --eval`, `eval`, `recalc` and `batch`
+wherever the formula is an array context (SUMPRODUCT and aggregate arguments, IF conditions, IF
+branches under an array condition, LET, CSE records). A plain formula cell does not spill: a
+multi-cell range in a lifted argument is implicitly intersected with the formula's row or column
+(`=ABS(C2:C4)` in row 3 reads C3, as Excel shows `=ABS(@C2:C4)`), and so is one in the branch a
+scalar IF condition selects (`=IF(TRUE,ABS(C2:C4),0)` in row 3 is 4). The lifted functions and the
+exceptions are listed in `docs/LIMITATIONS.md`.
 
 ---
 
@@ -1042,6 +1052,8 @@ xl -f input.xlsx -s S1 -o output.xlsx putf C2:C10 "=SUM(\$B\$2:B2)"   # Running 
 **Formula records (GH-430)**: legacy CSE array formulas (`{=...}`) and Data Table cells read from a file
 survive all rewrites — `view --formulas` and `cell` render them braced (`{=SUM(A1:A3*10)}`,
 `{=TABLE(A1,A2)}`) and JSON output carries an additive `"formulaKind": "array" | "dataTable"` field.
+An array record evaluates as an array (`recalc`, `view --eval`) and its anchor caches the array's
+top-left element, Excel's anchor value; the record's other cells keep their cached constants.
 `putf` rejects a top-level `TABLE(` expression: `TABLE(...)` is a data-table record's derived display
 text, not a real function (Excel would show `#NAME?`); data-table *authoring* is tracked in GH-419.
 Writing any value or formula onto a record cell replaces the record; `copy` of a data-table cell

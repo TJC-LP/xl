@@ -22,8 +22,8 @@ import munit.FunSuite
  * Left) — never a mistyped value that throws inside a function body. The fixture is the Weaver
  * repro (B2:D4 = 5,-3,1 / -2,4,-6 / 7,1,2).
  *
- * The "interim" expectations are the typed top-left collapse; element-wise array lifting of scalar
- * functions (a follow-on change) replaces them with Excel's array answers.
+ * A lifted function (ArrayLiftingSpec) answers Excel's element-wise array instead; the typed
+ * top-left collapse remains the rule for plain cells and for functions that do not lift.
  */
 @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 class ArrayTypingLawsSpec extends FunSuite:
@@ -112,29 +112,51 @@ class ArrayTypingLawsSpec extends FunSuite:
     }
   }
 
-  test("interim: a numeric slot takes the array's typed top-left value (lifting is a follow-on)") {
-    assertEquals(arrayEval("=ABS(C2:C4+D2:D4)"), Right(BigDecimal(2)))
-    assertEquals(arrayEval("=SUM(ABS(C2:C4+D2:D4))"), Right(BigDecimal(2)))
-    assertEquals(arrayEval("=SUMPRODUCT(ROUND(C2:C4/3,1))"), Right(BigDecimal(-1)))
+  test("a numeric slot lifts in array mode; a plain cell takes the typed top-left value") {
+    assertEquals(arrayEval("=ABS(C2:C4+D2:D4)"), Right(column(num(2), num(2), num(3))))
+    assertEquals(arrayEval("=SUM(ABS(C2:C4+D2:D4))"), Right(BigDecimal(7)))
+    assertEquals(arrayEval("=SUMPRODUCT(ROUND(C2:C4/3,1))"), Right(BigDecimal("0.6")))
     assertEquals(scalarEval("=MOD(C2:C4+0,2)"), Right(BigDecimal(1)))
   }
 
-  test("interim: Weaver's F2 is #VALUE! (ABS collapses to a scalar, SUMPRODUCT sizes differ)") {
+  test("Weaver's F2 is Excel's 5 (ABS lifts, SUMPRODUCT sees two 3x1 arrays)") {
     val withF2 = sheet.put(ref"F2", CellValue.Formula("SUMPRODUCT(--(B2:B4>0),ABS(C2:C4+D2:D4))"))
-    assertEquals(withF2.evaluateCell(ref"F2"), Right(CellValue.Error(CellError.Value)))
+    assertEquals(withF2.evaluateCell(ref"F2"), Right(num(5)))
   }
 
-  test("interim: an integer slot collapses first (ToInt), then truncates") {
-    assertEquals(arrayEval("=LEFT(\"abcdef\",C2:C4+D2:D4+5)"), Right("abc"))
-    assertEquals(arrayEval("=DATE(2020,B2:B4+0,1)"), Right(LocalDate.of(2020, 5, 1)))
+  test(
+    "an integer slot lifts in array mode; a plain cell collapses first (ToInt), then truncates"
+  ) {
+    assertEquals(
+      arrayEval("=LEFT(\"abcdef\",C2:C4+D2:D4+5)"),
+      Right(column(text("abc"), text("abc"), text("abcdef")))
+    )
+    assertEquals(
+      arrayEval("=DATE(2020,B2:B4+0,1)"),
+      Right(
+        column(
+          CellValue.DateTime(LocalDate.of(2020, 5, 1).atStartOfDay()),
+          CellValue.DateTime(LocalDate.of(2019, 10, 1).atStartOfDay()),
+          CellValue.DateTime(LocalDate.of(2020, 7, 1).atStartOfDay())
+        )
+      )
+    )
     assertEquals(scalarEval("=DATE(2020,B2:B4+0,1)"), Right(LocalDate.of(2020, 5, 1)))
   }
 
   test("the typed collapse coerces by the node's static kind, so a text element is a clean Left") {
-    // A1:A2 top-left is "Label": the numeric slot of ABS refuses it as a type mismatch
-    arrayEval("=ABS(A1:A2&\"\")") match
+    // A1:A2 top-left is "Label": a numeric slot that does not lift refuses it as a type
+    // mismatch, and so does a plain cell's ABS; a lifting ABS answers #VALUE! per element
+    arrayEval("=SEQUENCE(A1:A2&\"\")") match
       case Left(EvalError.TypeMismatch(_, _, _)) => ()
       case other => fail(s"expected a TypeMismatch, got $other")
+    scalarEval("=ABS(A1:A2&\"\")") match
+      case Left(EvalError.TypeMismatch(_, _, _)) => ()
+      case other => fail(s"expected a TypeMismatch, got $other")
+    assertEquals(
+      arrayEval("=ABS(A1:A2&\"\")"),
+      Right(column(CellValue.Error(CellError.Value), CellValue.Error(CellError.Value)))
+    )
   }
 
   // ===== Concat broadcasts element-wise =====

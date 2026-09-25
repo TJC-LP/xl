@@ -12,7 +12,7 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, TvmArgs](
       "PMT",
       Arity.Range(3, 5),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rateExpr, nperExpr, pvExpr, fvOpt, typeOpt) = args
       for
@@ -43,7 +43,7 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, TvmArgs](
       "FV",
       Arity.Range(3, 5),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rateExpr, nperExpr, pmtExpr, pvOpt, typeOpt) = args
       for
@@ -73,7 +73,7 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, TvmArgs](
       "PV",
       Arity.Range(3, 5),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rateExpr, nperExpr, pmtExpr, fvOpt, typeOpt) = args
       for
@@ -103,7 +103,7 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, TvmArgs](
       "NPER",
       Arity.Range(3, 5),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rateExpr, pmtExpr, pvExpr, fvOpt, typeOpt) = args
       for
@@ -137,7 +137,7 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, RateArgs](
       "RATE",
       Arity.Range(3, 6),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (nperExpr, pmtExpr, pvExpr, fvOpt, typeOpt, guessOpt) = args
       for
@@ -216,7 +216,7 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, RriArgs](
       "RRI",
       Arity.three,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (nperExpr, pvExpr, fvExpr) = args
       def num(detail: String): Either[EvalError, BigDecimal] =

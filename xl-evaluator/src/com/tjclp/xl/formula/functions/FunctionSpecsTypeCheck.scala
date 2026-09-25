@@ -9,7 +9,11 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 
 trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
   val iferror: FunctionSpec[CellValue] { type Args = IfErrorArgs } =
-    FunctionSpec.simple[CellValue, IfErrorArgs]("IFERROR", Arity.two) { (args, ctx) =>
+    FunctionSpec.simple[CellValue, IfErrorArgs](
+      "IFERROR",
+      Arity.two,
+      flags = FunctionFlags(lift = ArrayLift.slots(0))
+    ) { (args, ctx) =>
       val (valueExpr, valueIfErrorExpr) = args
       evalValue(ctx, valueExpr) match
         case Left(_) =>
@@ -37,7 +41,11 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
    * below) — so both are matched.
    */
   val ifna: FunctionSpec[CellValue] { type Args = IfErrorArgs } =
-    FunctionSpec.simple[CellValue, IfErrorArgs]("IFNA", Arity.two) { (args, ctx) =>
+    FunctionSpec.simple[CellValue, IfErrorArgs](
+      "IFNA",
+      Arity.two,
+      flags = FunctionFlags(lift = ArrayLift.slots(0))
+    ) { (args, ctx) =>
       val (valueExpr, valueIfNaExpr) = args
       evalValue(ctx, valueExpr) match
         case Left(EvalError.ErrorValue(CellError.NA, _)) =>
@@ -66,7 +74,11 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
    * one (`ERROR.TYPE(1/0)` is 2); host failures stay loud.
    */
   val errorType: FunctionSpec[CellValue] { type Args = UnaryCellValue } =
-    FunctionSpec.simple[CellValue, UnaryCellValue]("ERROR.TYPE", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[CellValue, UnaryCellValue](
+      "ERROR.TYPE",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       def number(err: CellError): CellValue = CellValue.Number(BigDecimal(err.errorTypeNumber))
       evalValue(ctx, expr) match
         case Left(failure) =>
@@ -77,7 +89,11 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
     }
 
   val iserror: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
-    FunctionSpec.simple[Boolean, UnaryCellValue]("ISERROR", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[Boolean, UnaryCellValue](
+      "ISERROR",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       evalValue(ctx, expr) match
         case Left(_) => Right(true)
         case Right(ExprValue.Cell(cv)) => Right(ArrayArithmetic.carriedError(cv).isDefined)
@@ -85,7 +101,11 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
     }
 
   val iserr: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
-    FunctionSpec.simple[Boolean, UnaryCellValue]("ISERR", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[Boolean, UnaryCellValue](
+      "ISERR",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       evalValue(ctx, expr) match
         // GH-344: Excel's ISERR excludes #N/A on the Left channel too (`=ISERR(1<na-cell)` is
         // FALSE); every other failure — error value or host — stays TRUE like ISERROR.
@@ -102,7 +122,11 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
    * unreachable branch for it.
    */
   val isna: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
-    FunctionSpec.simple[Boolean, UnaryCellValue]("ISNA", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[Boolean, UnaryCellValue](
+      "ISNA",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       evalValue(ctx, expr) match
         case Left(EvalError.ErrorValue(CellError.NA, _)) => Right(true)
         case Left(_) => Right(false)
@@ -112,7 +136,11 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
     }
 
   val isnumber: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
-    FunctionSpec.simple[Boolean, UnaryCellValue]("ISNUMBER", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[Boolean, UnaryCellValue](
+      "ISNUMBER",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       evalValue(ctx, expr) match
         case Left(_) => Right(false)
         case Right(ExprValue.Cell(CellValue.Number(_))) => Right(true)
@@ -123,7 +151,11 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
     }
 
   val istext: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
-    FunctionSpec.simple[Boolean, UnaryCellValue]("ISTEXT", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[Boolean, UnaryCellValue](
+      "ISTEXT",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       evalValue(ctx, expr) match
         case Left(_) => Right(false)
         case Right(ExprValue.Cell(CellValue.Text(_))) => Right(true)
@@ -134,7 +166,11 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
     }
 
   val isblank: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
-    FunctionSpec.simple[Boolean, UnaryCellValue]("ISBLANK", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[Boolean, UnaryCellValue](
+      "ISBLANK",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       evalValue(ctx, expr) match
         case Left(_) => Right(false)
         case Right(ExprValue.Cell(CellValue.Empty)) => Right(true)
@@ -153,7 +189,7 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryCellValue](
       "N",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       evalValue(ctx, expr).flatMap(numericCoercionN)
     }

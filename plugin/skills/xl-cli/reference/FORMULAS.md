@@ -193,7 +193,12 @@ collapses to a scalar. `SEQUENCE(rows, [cols], [start], [step])` defaults to one
 1 with step 1; `SORT(array, [sort_index], [sort_order])` sorts rows by a 1-based column, 1 =
 ascending (default), −1 = descending; `UNIQUE` keeps first-seen order; `FILTER(array, include,
 [if_empty])` keeps the rows where `include` is truthy and returns `if_empty` (else `#N/A`) when
-none match.
+none match. Scalar functions lift over arrays as in Excel 365 — `=SUMPRODUCT(--(B2:B4>0),
+ABS(C2:C4+D2:D4))`, `=SUMPRODUCT(--ISNUMBER(r))`, `=SUMPRODUCT(1/COUNTIF(r,r))` (the distinct
+count of a bounded `r` without blanks) work — while a range in a plain cell's scalar argument
+reads the cell in the formula's row (`=ABS(C2:C4)` in row 3 is `ABS(C3)`).
+EDATE/EOMONTH/WORKDAY/NETWORKDAYS/YEARFRAC/MROUND answer `#VALUE!` for a multi-cell range there
+(pass `+A2:A10` to lift). No array constants (`{1,2,3}`).
 
 **Randomness.** `RAND()` and `RANDBETWEEN(lo, hi)` are volatile; `xl recalc` and `--eval` draw fresh
 values on every run.

@@ -94,9 +94,10 @@ class ViewEvalDegradeSpec extends CatsEffectSuite:
       assert(row3.contains("| 10 "), row3)
       val row4 = lines(run.stdout).find(_.startsWith("| 4 ")).getOrElse(fail(run.stdout))
       assert(row4.contains("| 9 "), row4)
-      // interim until array lifting: ABS collapses to a scalar, so SUMPRODUCT's sizes differ
+      // ABS lifts over C2:C4+D2:D4 = {-2;-2;3}: SUMPRODUCT(1*2 + 0*2 + 1*3) is Excel's 5
       val row2 = lines(run.stdout).find(_.startsWith("| 2 ")).getOrElse(fail(run.stdout))
-      assert(row2.contains("#VALUE!"), row2)
+      assert(row2.contains("| 5 "), row2)
+      assert(!row2.contains("#VALUE!"), row2)
       assertEquals(json.exit, 0, json.stderr)
       val e = ujson.read(json.stdout)
       assertEquals(e("ok"), ujson.True)
@@ -104,6 +105,31 @@ class ViewEvalDegradeSpec extends CatsEffectSuite:
         e("warnings").arr.forall(_("code").str != "EVAL_FAILED"),
         e("warnings").toString
       )
+      val f2 = e("data")("rows").arr
+        .flatMap(_("cells").arr)
+        .find(_("ref").str == "F2")
+        .getOrElse(fail(json.stdout))
+      assertEquals(f2("value"), ujson.Num(5))
+  }
+
+  test("recalc and batch cache the Weaver formula as 5, with no RECALC_ERRORS") {
+    val recalcOut = fixtures().resolve("weaver-recalc.xlsx").toString
+    val batchOut = fixtures().resolve("weaver-batch.xlsx").toString
+    val ops =
+      """[{"op":"putf","ref":"G2","formula":"=SUMPRODUCT(--(B2:B4>0),ABS(C2:C4+D2:D4))"}]"""
+    for
+      recalc <- CliHarness.run("-f", file("weaver.xlsx"), "-o", recalcOut, "recalc")
+      recalcCell <- CliHarness.run("-f", recalcOut, "cell", "F2")
+      batch <- CliHarness.run(List("-f", file("weaver.xlsx"), "-o", batchOut, "batch", "-"), ops)
+      batchCell <- CliHarness.run("-f", batchOut, "cell", "G2")
+    yield
+      assertEquals(recalc.exit, 0, recalc.stderr)
+      assert(!recalc.stderr.contains("RECALC_ERRORS"), recalc.stderr)
+      assert(!recalc.stdout.contains("error"), recalc.stdout)
+      assert(recalcCell.stdout.contains("Cached: 5"), recalcCell.stdout)
+      assertEquals(batch.exit, 0, batch.stderr)
+      assert(!batch.stderr.contains("RECALC_ERRORS"), batch.stderr)
+      assert(batchCell.stdout.contains("Cached: 5"), batchCell.stdout)
   }
 
   test("a failing cell keeps the file's value, the rest is live, and ONE warning names it") {
@@ -243,6 +269,7 @@ class ViewEvalDegradeSpec extends CatsEffectSuite:
       concat <- CliHarness.run("-f", file("weaver.xlsx"), "evala", "=(C2:C4+D2:D4)&\"x\"")
     yield
       assertEquals(abs.exit, 0, abs.stderr)
+      assert(abs.stdout.contains("| 7 "), s"ABS lifts: 2+2+3 is 7\n${abs.stdout}")
       assertEquals(concat.exit, 0, concat.stderr)
       assert(concat.stdout.contains("-2x"), concat.stdout)
       assert(concat.stdout.contains("3x"), concat.stdout)

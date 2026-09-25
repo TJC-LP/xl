@@ -58,6 +58,20 @@ trait FunctionSpecsBase:
     def toValues(args: TExpr[Any]): List[ArgValue] =
       List(ArgValue.Expr(args))
 
+    // a value slot takes any element: offered to the flagged functions (criteria, MATCH/TEXT
+    // values); IF branches, CHOOSE and OFFSET's anchor are Any slots too, but those functions
+    // carry their own array semantics and are never flagged
+    override def scalarSlots(args: TExpr[Any]): List[(TExpr[?], LiftSlot)] =
+      List((args, LiftSlot.Value))
+
+    override def replaceScalarSlots(
+      args: TExpr[Any],
+      replacements: List[TExpr[?]]
+    ): (TExpr[Any], List[TExpr[?]]) =
+      replacements match
+        case head :: rest => (head.asInstanceOf[TExpr[Any]], rest)
+        case Nil => (args, Nil)
+
     def map(
       args: TExpr[Any]
     )(

@@ -111,13 +111,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * not a number). Non-error values keep the numeric extract-or-skip semantics.
    */
   private def resolveNumericPolicing(
-    cellValue: CellValue,
     targetSheet: com.tjclp.xl.sheets.Sheet,
+    at: ARef,
     ctx: EvalContext,
     fnName: String,
     propagateErrors: Boolean
   ): Either[EvalError, Option[BigDecimal]] =
-    evalCellValueForMatch(cellValue, targetSheet, ctx).flatMap { resolved =>
+    evalCellValueForMatch(targetSheet, at, ctx).flatMap { resolved =>
       ArrayArithmetic.carriedError(resolved) match
         case Some(err) if propagateErrors => Left(propagatedElementError(fnName, err))
         case Some(_) => Right(None) // COUNT: errors are not numbers
@@ -129,11 +129,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   // GH-344 item 6: carried error cells propagate as the error VALUE (the raw-range coerce-to-0
   // leniency produced wrong sums); non-error non-numerics keep coercing to 0.
   private def coerceToNumericWithEval(
-    cellValue: CellValue,
     targetSheet: com.tjclp.xl.sheets.Sheet,
+    at: ARef,
     ctx: EvalContext
   ): Either[EvalError, BigDecimal] =
-    evalCellValueForMatch(cellValue, targetSheet, ctx).flatMap { resolved =>
+    evalCellValueForMatch(targetSheet, at, ctx).flatMap { resolved =>
       ArrayArithmetic.carriedError(resolved) match
         case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
         case None => Right(coerceToNumeric(resolved))
@@ -142,13 +142,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   // GH-187: Helper to evaluate cell value for criteria matching.
   // Evaluates uncached formulas before matching, returning the resolved CellValue.
   private def evalCellValueForMatch(
-    cellValue: CellValue,
     targetSheet: com.tjclp.xl.sheets.Sheet,
+    at: ARef,
     ctx: EvalContext
   ): Either[EvalError, CellValue] =
-    cellValue match
-      case CellValue.Formula(formulaStr, None, _) =>
-        // Recursively evaluate uncached formula (GH-346: memoized once per pass)
+    targetSheet(at).value match
+      case CellValue.Formula(formulaStr, None, kind) =>
+        // Recursively evaluate uncached formula (GH-346: memoized once per pass), at its own
+        // position and in its own mode, exactly as a direct reference to the cell evaluates it
         Evaluator
           .evalCrossSheetFormula(
             formulaStr,
@@ -158,7 +159,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             ctx.depth + 1,
             ctx.rng,
             ctx.memo.getOrElse(new Evaluator.EvalMemo),
-            aggregateMemo = ctx.aggregateMemo
+            ctx.workbookPath,
+            ctx.aggregateMemo,
+            currentCell = Some(at),
+            arrayRecord = Evaluator.isArrayRecord(kind)
           )
       case CellValue.Formula(_, Some(cached), _) =>
         // Use cached value
@@ -197,11 +201,12 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    */
   private def triageCellForAggregate[A](
     agg: Aggregator[A],
-    cellValue: CellValue,
     targetSheet: com.tjclp.xl.sheets.Sheet,
+    at: ARef,
     ctx: EvalContext,
     acc: A
   ): Either[EvalError, A] =
+    val cellValue = targetSheet(at).value
     if agg.countsNonEmpty then
       // COUNTA mode: count any non-empty cell
       cellValue match
@@ -216,8 +221,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       // Standard numeric mode: resolve the effective value, police carried errors
       // per the aggregator's policy (GH-344 item 6), then extract-or-skip
       resolveNumericPolicing(
-        cellValue,
         targetSheet,
+        at,
         ctx,
         agg.name,
         agg.propagatesErrors
@@ -249,7 +254,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     range.cells.foldLeft[Either[EvalError, A]](Right(initial)) {
       case (Left(err), _) => Left(err)
       case (Right(current), cellRef) =>
-        triageCellForAggregate(agg, targetSheet(cellRef).value, targetSheet, ctx, current)
+        triageCellForAggregate(agg, targetSheet, cellRef, ctx, current)
     }
 
   /**
@@ -300,7 +305,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         // scalar decode), a text cell skips like the range fold, and COUNTBLANK still counts
         // the blank.
         case (Right(acc), Right(TExpr.Ref(at, _, _))) =>
-          triageCellForAggregate(agg, ctx.sheet(at).value, ctx.sheet, ctx, acc)
+          triageCellForAggregate(agg, ctx.sheet, at, ctx, acc)
         case (Right(acc), Right(TExpr.SheetRef(sheetName, at, _, _))) =>
           Evaluator
             .resolveRangeLocation(
@@ -309,7 +314,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               ctx.workbook
             )
             .flatMap { case (targetSheet, _) =>
-              triageCellForAggregate(agg, targetSheet(at).value, targetSheet, ctx, acc)
+              triageCellForAggregate(agg, targetSheet, at, ctx, acc)
             }
         case (Right(acc), Right(expr)) =>
           // GH-122: evaluate array-aware so a range-returning call (e.g. OFFSET) flattens into the
@@ -516,8 +521,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             case (Left(err), _) => Left(err)
             case (Right(values), cellRef) =>
               resolveNumericPolicing(
-                targetSheet(cellRef).value,
                 targetSheet,
+                cellRef,
                 ctx,
                 fnName,
                 propagateErrors = true
@@ -533,7 +538,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, RangeIntArgs](
       "LARGE",
       Arity.Exact(2),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (loc, kExpr) = args
       for
@@ -552,7 +557,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, RangeIntArgs](
       "SMALL",
       Arity.Exact(2),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (loc, kExpr) = args
       for
@@ -571,7 +576,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, RankArgs](
       "RANK",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (numExpr, loc, orderOpt) = args
       for
@@ -608,7 +613,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, RangeNumArgs](
       "PERCENTILE",
       Arity.Exact(2),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (loc, pExpr) = args
       for
@@ -629,7 +634,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, RangeIntArgs](
       "QUARTILE",
       Arity.Exact(2),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (loc, qExpr) = args
       for
@@ -651,7 +656,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, SumIfArgs](
       "SUMIF",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rangeLocation, criteria, sumRangeLocationOpt) = args
       evalValue(ctx, criteria).flatMap { criteriaValue =>
@@ -689,15 +694,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case (Left(err), _) => Left(err)
                 case (Right(acc), testRef) =>
                   // Evaluate test cell value (may be uncached formula)
-                  evalCellValueForMatch(criteriaSheet(testRef).value, criteriaSheet, ctx)
+                  evalCellValueForMatch(criteriaSheet, testRef, ctx)
                     .flatMap { testValue =>
                       // GH-631: the summed cell sits at the same offset from sum_range's origin as
                       // testRef from range's origin; one past the grid edge contributes nothing
                       CriteriaRangeResize.pairedCell(testRef, criteriaRange0, sumRange0) match
                         case Some(sumRef) if CriteriaMatcher.matches(testValue, criterion) =>
                           resolveNumericPolicing(
-                            sumSheet(sumRef).value,
                             sumSheet,
+                            sumRef,
                             ctx,
                             "SUMIF",
                             propagateErrors = true
@@ -717,7 +722,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, CountIfArgs](
       "COUNTIF",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rangeLocation, criteria) = args
       evalValue(ctx, criteria).flatMap { criteriaValue =>
@@ -733,9 +738,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               .foldLeft[Either[EvalError, Int]](Right(0)) {
                 case (Left(err), _) => Left(err)
                 case (Right(count), ref) =>
-                  evalCellValueForMatch(criteriaSheet(ref).value, criteriaSheet, ctx).map {
-                    testValue =>
-                      if CriteriaMatcher.matches(testValue, criterion) then count + 1 else count
+                  evalCellValueForMatch(criteriaSheet, ref, ctx).map { testValue =>
+                    if CriteriaMatcher.matches(testValue, criterion) then count + 1 else count
                   }
               }
               .map(BigDecimal(_))
@@ -747,7 +751,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, SumIfsArgs](
       "SUMIFS",
       Arity.AtLeast(3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (sumRangeLocation, conditions) = args
       evalCriteriaValues(ctx, conditions)
@@ -809,19 +813,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       case (Right(false), _) => Right(false) // Short-circuit
                       case (Right(true), (criteriaSheet, cells, criterion)) =>
                         val testRef = cells(idx)
-                        evalCellValueForMatch(
-                          criteriaSheet(testRef).value,
-                          criteriaSheet,
-                          ctx
-                        ).map { testValue =>
+                        evalCellValueForMatch(criteriaSheet, testRef, ctx).map { testValue =>
                           CriteriaMatcher.matches(testValue, criterion)
                         }
                     }
                   matchResult.flatMap { allMatch =>
                     if allMatch then
                       resolveNumericPolicing(
-                        sumSheet(sumCells(idx)).value,
                         sumSheet,
+                        sumCells(idx),
                         ctx,
                         "SUMIFS",
                         propagateErrors = true
@@ -894,17 +894,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   case (Left(err), _) => Left(err)
                   case (Right(false), _) => Right(false)
                   case (Right(true), (criteriaSheet, cells, criterion)) =>
-                    evalCellValueForMatch(
-                      criteriaSheet(cells(idx)).value,
-                      criteriaSheet,
-                      ctx
-                    ).map(tv => CriteriaMatcher.matches(tv, criterion))
+                    evalCellValueForMatch(criteriaSheet, cells(idx), ctx).map(tv =>
+                      CriteriaMatcher.matches(tv, criterion)
+                    )
                 }
               matchResult.flatMap { allMatch =>
                 if allMatch then
                   resolveNumericPolicing(
-                    valueSheet(valueCells(idx)).value,
                     valueSheet,
+                    valueCells(idx),
                     ctx,
                     fnName,
                     propagateErrors = true
@@ -925,7 +923,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, SumIfsArgs](
       "MAXIFS",
       Arity.AtLeast(3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (valueRange, conditions) = args
       collectIfsValues(valueRange, conditions, "MAXIFS", ctx).map { vs =>
@@ -938,7 +936,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, SumIfsArgs](
       "MINIFS",
       Arity.AtLeast(3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (valueRange, conditions) = args
       collectIfsValues(valueRange, conditions, "MINIFS", ctx).map { vs =>
@@ -950,7 +948,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, CountIfsArgs](
       "COUNTIFS",
       Arity.AtLeast(2),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (conditions, ctx) =>
       evalCriteriaValues(ctx, conditions)
         .flatMap { criteriaValues =>
@@ -1009,11 +1007,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                             case (Right(false), _) => Right(false) // Short-circuit
                             case (Right(true), (criteriaSheet, cells, criterion)) =>
                               val testRef = cells(idx)
-                              evalCellValueForMatch(
-                                criteriaSheet(testRef).value,
-                                criteriaSheet,
-                                ctx
-                              )
+                              evalCellValueForMatch(criteriaSheet, testRef, ctx)
                                 .map { testValue =>
                                   CriteriaMatcher.matches(testValue, criterion)
                                 }
@@ -1031,7 +1025,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, AverageIfArgs](
       "AVERAGEIF",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rangeLocation, criteria, avgRangeLocationOpt) = args
       evalValue(ctx, criteria).flatMap { criteriaValue =>
@@ -1065,13 +1059,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case (Left(err), _) => Left(err)
                 case (Right((accSum, accCount)), testRef) =>
                   // Evaluate test cell value (may be uncached formula)
-                  evalCellValueForMatch(criteriaSheet(testRef).value, criteriaSheet, ctx)
+                  evalCellValueForMatch(criteriaSheet, testRef, ctx)
                     .flatMap { testValue =>
                       CriteriaRangeResize.pairedCell(testRef, criteriaRange0, avgRange0) match
                         case Some(avgRef) if CriteriaMatcher.matches(testValue, criterion) =>
                           resolveNumericPolicing(
-                            avgSheet(avgRef).value,
                             avgSheet,
+                            avgRef,
                             ctx,
                             "AVERAGEIF",
                             propagateErrors = true
@@ -1096,7 +1090,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, AverageIfsArgs](
       "AVERAGEIFS",
       Arity.AtLeast(3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (avgRangeLocation, conditions) = args
       evalCriteriaValues(ctx, conditions)
@@ -1157,19 +1151,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                         case (Right(false), _) => Right(false) // Short-circuit
                         case (Right(true), (criteriaSheet, cells, criterion)) =>
                           val testRef = cells(idx)
-                          evalCellValueForMatch(
-                            criteriaSheet(testRef).value,
-                            criteriaSheet,
-                            ctx
-                          ).map { testValue =>
+                          evalCellValueForMatch(criteriaSheet, testRef, ctx).map { testValue =>
                             CriteriaMatcher.matches(testValue, criterion)
                           }
                       }
                     matchResult.flatMap { allMatch =>
                       if allMatch then
                         resolveNumericPolicing(
-                          avgSheet(avgCells(idx)).value,
                           avgSheet,
+                          avgCells(idx),
                           ctx,
                           "AVERAGEIFS",
                           propagateErrors = true
@@ -1213,7 +1203,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     def cols: Int = range.width
     def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
       val ref = ARef.from0(range.colStart.index0 + col, range.rowStart.index0 + row)
-      coerceToNumericWithEval(sheet(ref).value, sheet, ctx)
+      coerceToNumericWithEval(sheet, ref, ctx)
 
   private final case class MatrixArray(matrix: Vector[Vector[BigDecimal]]) extends ResolvedArray:
     def rows: Int = matrix.length

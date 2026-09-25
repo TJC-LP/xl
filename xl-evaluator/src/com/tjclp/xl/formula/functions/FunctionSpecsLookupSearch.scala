@@ -99,7 +99,11 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       case _ => None
 
   val vlookup: FunctionSpec[CellValue] { type Args = VlookupArgs } =
-    FunctionSpec.simple[CellValue, VlookupArgs]("VLOOKUP", Arity.Range(3, 4)) { (args, ctx) =>
+    FunctionSpec.simple[CellValue, VlookupArgs](
+      "VLOOKUP",
+      Arity.Range(3, 4),
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (lookupExpr, table, colIndexExpr, rangeLookupOpt) = args
       val rangeLookupExpr = rangeLookupOpt.getOrElse(TExpr.Lit(true))
       for
@@ -202,7 +206,11 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
    * 1-based row_index_num in the matched COLUMN. range_lookup TRUE (default) = approximate.
    */
   val hlookup: FunctionSpec[CellValue] { type Args = VlookupArgs } =
-    FunctionSpec.simple[CellValue, VlookupArgs]("HLOOKUP", Arity.Range(3, 4)) { (args, ctx) =>
+    FunctionSpec.simple[CellValue, VlookupArgs](
+      "HLOOKUP",
+      Arity.Range(3, 4),
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (lookupExpr, table, rowIndexExpr, rangeLookupOpt) = args
       val rangeLookupExpr = rangeLookupOpt.getOrElse(TExpr.Lit(true))
       for
@@ -290,7 +298,11 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     }
 
   val xlookup: FunctionSpec[CellValue] { type Args = XLookupArgs } =
-    FunctionSpec.simple[CellValue, XLookupArgs]("XLOOKUP", Arity.Range(3, 6)) { (args, ctx) =>
+    FunctionSpec.simple[CellValue, XLookupArgs](
+      "XLOOKUP",
+      Arity.Range(3, 6),
+      flags = FunctionFlags(lift = ArrayLift.slots(0))
+    ) { (args, ctx) =>
       val (lookupValue, lookupLoc, returnLoc, ifNotFoundSlot, matchModeSlot, searchModeSlot) =
         args
       // GH-654: XLOOKUP reads an empty optional slot as omitted — `XLOOKUP(x,a,b,,0)` is #N/A

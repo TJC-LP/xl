@@ -3,7 +3,13 @@ package com.tjclp.xl.formula.eval
 import java.util.concurrent.atomic.AtomicLong
 
 import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
-import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, EvalContext}
+import com.tjclp.xl.formula.functions.{
+  ArrayLift,
+  EvalContext,
+  FunctionSpec,
+  FunctionSpecs,
+  LiftSlot
+}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
@@ -71,6 +77,13 @@ trait Evaluator:
     workbook: Option[Workbook] = None,
     currentCell: Option[ARef] = None
   ): Either[EvalError, A]
+
+  /**
+   * This evaluator in array mode — what an ArrayFormula record (a CSE or dynamic-array anchor)
+   * evaluates with, so its value is the array's element (0,0), the Excel anchor. Implementations
+   * outside the evaluator keep their own mode.
+   */
+  private[formula] def withArrayResults: Evaluator = this
 
 object Evaluator:
   /**
@@ -356,6 +369,43 @@ object Evaluator:
   private[formula] def definedNameScope(wb: Workbook, dn: DefinedName): Option[Sheet] =
     dn.localSheetId.flatMap(idx => wb.sheets.lift(idx))
 
+  /**
+   * Excel's implicit intersection of `range` with the formula's own cell — the `@` operator
+   * (GH-604) and a multi-cell reference in a lifted scalar slot of a plain formula cell: a single
+   * cell is itself; a one-row range yields the cell in the formula's column, a one-column range the
+   * cell in the formula's row; anything else — a 2-D range, or a vector the formula's row/column
+   * does not cross — is `#VALUE!`. Without the formula's position (ad-hoc evaluation) it is a loud
+   * failure.
+   */
+  private[formula] def implicitIntersection(
+    range: CellRange,
+    current: Option[ARef]
+  ): Either[EvalError, ARef] =
+    if range.width == 1 && range.height == 1 then Right(range.start)
+    else
+      current match
+        case None =>
+          Left(
+            EvalError.EvalFailed(
+              s"@${range.toA1} (implicit intersection) needs the formula's cell position",
+              Some("@range")
+            )
+          )
+        case Some(cell) =>
+          val col = cell.col.index0
+          val row = cell.row.index0
+          if range.height == 1 && col >= range.colStart.index0 && col <= range.colEnd.index0 then
+            Right(ARef.from0(col, range.rowStart.index0))
+          else if range.width == 1 && row >= range.rowStart.index0 && row <= range.rowEnd.index0
+          then Right(ARef.from0(range.colStart.index0, row))
+          else
+            Left(
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"@${range.toA1}: no cell in the formula's row or column (${cell.toA1})")
+              )
+            )
+
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
 
@@ -373,7 +423,7 @@ object Evaluator:
     targetSheet(at).value match
       case CellValue.Formula(_, Some(cached), _) => Right(cached)
       case CellValue.Formula(_, None, _: FormulaKind.DataTable) => Right(CellValue.Empty)
-      case CellValue.Formula(expression, None, _) =>
+      case CellValue.Formula(expression, None, kind) =>
         memo.getOrCompute(targetSheet, at) {
           evalCrossSheetFormula(
             expression,
@@ -385,10 +435,16 @@ object Evaluator:
             memo,
             workbookPath,
             aggregateMemo,
-            Some(at)
+            Some(at),
+            isArrayRecord(kind)
           )
         }
       case value => Right(value)
+
+  /** An ArrayFormula record (CSE or dynamic-array anchor) evaluates in array mode. */
+  private[formula] def isArrayRecord(kind: FormulaKind): Boolean = kind match
+    case _: FormulaKind.ArrayFormula => true
+    case _ => false
 
   /**
    * Evaluate a formula string from a cross-sheet reference (GH-161).
@@ -406,6 +462,8 @@ object Evaluator:
    *   Workbook context for nested cross-sheet references
    * @param depth
    *   Current recursion depth (for cycle protection)
+   * @param arrayRecord
+   *   the cell is an ArrayFormula record: it evaluates in array mode and reads as element (0,0)
    * @return
    *   Either evaluation error or computed CellValue
    */
@@ -419,7 +477,8 @@ object Evaluator:
     memo: EvalMemo = new EvalMemo,
     workbookPath: Option[String] = None,
     aggregateMemo: Option[AggregateMemo] = None,
-    currentCell: Option[ARef] = None
+    currentCell: Option[ARef] = None,
+    arrayRecord: Boolean = false
   ): Either[EvalError, CellValue] =
     boundary:
       // GH-161 review: Add recursion depth limit to prevent stack overflow on circular refs
@@ -449,6 +508,7 @@ object Evaluator:
           // the workbook path (GH-424) so nested CELL("filename") calls see the same location.
           new EvaluatorWithDepth(
             depth + 1,
+            allowArrayResults = arrayRecord,
             rng = rng,
             memo = Some(memo),
             workbookPath = workbookPath,
@@ -730,6 +790,9 @@ private final class TotalEvaluator(underlying: Evaluator) extends Evaluator:
   ): Either[EvalError, A] =
     EvalDefect.guard(currentCell)(underlying.eval(expr, sheet, clock, workbook, currentCell))
 
+  override private[formula] def withArrayResults: Evaluator =
+    TotalEvaluator(underlying.withArrayResults)
+
 /**
  * Private implementation of Evaluator.
  *
@@ -771,6 +834,16 @@ private class EvaluatorImpl(
 
   /** One workbook recalculation generation's raw-range aggregate memo, absent for public eval. */
   protected def aggregateMemoOpt: Option[Evaluator.AggregateMemo] = aggregateMemo
+
+  override private[formula] def withArrayResults: Evaluator =
+    new EvaluatorImpl(
+      allowArrayResults = true,
+      bindings,
+      rng,
+      resolvingNames,
+      workbookPath,
+      aggregateMemo
+    )
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def eval[A](
@@ -830,7 +903,7 @@ private class EvaluatorImpl(
                   // the uncached record like any cached formula (pinned semantics, no parse)
                   case CellValue.Formula(_, None, _: FormulaKind.DataTable) =>
                     decodeOrCarried(at, cell, decode)
-                  case CellValue.Formula(formulaStr, None, _) =>
+                  case CellValue.Formula(formulaStr, None, kind) =>
                     // Formula has no cached value - parse and evaluate against target sheet
                     // GH-161 review: Apply decoder to Cell with evaluated result (type-safe)
                     // GH-161 review: Pass currentDepth for cycle protection
@@ -838,6 +911,7 @@ private class EvaluatorImpl(
                     val memo = memoOpt.getOrElse(new Evaluator.EvalMemo)
                     memo
                       .getOrCompute(targetSheet, at) {
+                        // at its own position: an implicit intersection there reads its own row
                         Evaluator.evalCrossSheetFormula(
                           formulaStr,
                           targetSheet,
@@ -847,7 +921,9 @@ private class EvaluatorImpl(
                           rng,
                           memo,
                           workbookPath,
-                          aggregateMemoOpt
+                          aggregateMemoOpt,
+                          Some(at),
+                          Evaluator.isArrayRecord(kind)
                         )
                       }
                       .flatMap(evaluatedValue =>
@@ -911,11 +987,12 @@ private class EvaluatorImpl(
           // GH-430: TABLE(...) display text is not evaluable — decoder path, pinned semantics
           case CellValue.Formula(_, None, _: FormulaKind.DataTable) =>
             decodeOrCarried(at, cell, decode)
-          case CellValue.Formula(formulaStr, None, _) =>
+          case CellValue.Formula(formulaStr, None, kind) =>
             // GH-346: memoized per pass — a cell evaluates once, not once per path
             val memo = memoOpt.getOrElse(new Evaluator.EvalMemo)
             memo
               .getOrCompute(sheet, at) {
+                // at its own position: an implicit intersection there reads its own row
                 Evaluator
                   .evalCrossSheetFormula(
                     formulaStr,
@@ -926,7 +1003,9 @@ private class EvaluatorImpl(
                     rng,
                     memo,
                     workbookPath,
-                    aggregateMemoOpt
+                    aggregateMemoOpt,
+                    Some(at),
+                    Evaluator.isArrayRecord(kind)
                   )
               }
               .flatMap(evaluatedValue => decodeOrCarried(at, Cell(at, evaluatedValue), decode))
@@ -1120,7 +1199,13 @@ private class EvaluatorImpl(
           workbookPath,
           aggregateMemoOpt
         )
-        call.spec.eval(call.args, ctx)
+        call.spec.flags.lift match
+          case ArrayLift.Off => call.spec.eval(call.args, ctx)
+          // in array mode the result may be an ArrayResult: its consumers handle one (the
+          // array-mode typing invariant), so only the Either container is cast
+          case lift @ ArrayLift.On(_, _) =>
+            evalLiftedCall(call, lift, ctx, sheet, clock, workbook, currentCell)
+              .asInstanceOf[Either[EvalError, A]]
 
       // ===== GH-193: LET lexical bindings =====
       // Cast the Either container, not the value: BindingRef extends TExpr[Nothing], so the GADT
@@ -1173,6 +1258,157 @@ private class EvaluatorImpl(
       case TExpr.SheetNameRef(qualifier, name) =>
         evalNameRef(name, scope = Some(qualifier), sheet, clock, workbook, currentCell)
           .asInstanceOf[Either[EvalError, A]]
+
+  // ===== Excel array lifting (FunctionFlags.lift) =====
+
+  /**
+   * A call to a function flagged [[FunctionFlags.lift]]: every lifted scalar slot is classified
+   * once ([[classifyLiftedSlot]]) — so each is evaluated at most once and RAND draws once — then
+   * the function runs once with the slots' values substituted, or, when a slot holds an array, once
+   * per element of the broadcast shape (an axis of extent 1 repeats, a mismatched extent pads #N/A,
+   * the GH-344 4b rule). Scalar-certain slots take the unlifted path untouched.
+   */
+  private def evalLiftedCall(
+    call: TExpr.Call[?],
+    lift: ArrayLift.On,
+    ctx: EvalContext,
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, Any] =
+    import ArrayLifting.SlotValue
+    val slots = call.spec.argSpec.scalarSlots(call.args).zipWithIndex.map {
+      case ((expr, kind), position) => (expr, kind, lift.slots.forall(_.contains(position)))
+    }
+    // array mode lifts anything that may be an array; a plain cell only intersects references
+    def mayLift(expr: TExpr[?], kind: LiftSlot): Boolean =
+      if allowArrayResults then !ArrayLifting.isScalarCertain(expr, bindings)
+      else ArrayLifting.referenceLocation(ArrayLifting.peel(expr, kind)._1).isDefined
+    if !slots.exists((expr, kind, lifted) => lifted && mayLift(expr, kind)) then
+      call.spec.eval(call.args, ctx)
+    else
+      val planned = slots.foldLeft[Either[EvalError, Vector[(TExpr[?], LiftSlot, SlotValue)]]](
+        Right(Vector.empty)
+      ) {
+        case (Left(err), _) => Left(err)
+        case (Right(acc), (expr, kind, lifted)) =>
+          val classified =
+            if lifted && mayLift(expr, kind) then
+              classifyLiftedSlot(
+                call.spec.name,
+                lift.rangeRefs,
+                expr,
+                kind,
+                sheet,
+                clock,
+                workbook,
+                currentCell
+              )
+            else Right((kind, SlotValue.Keep))
+          classified.map((slotKind, value) => acc :+ (expr, slotKind, value))
+      }
+      planned.flatMap { plan =>
+        // the slot expressions for one call; `elements` holds one element per array slot, in order
+        def argsFor(elements: Vector[CellValue]) =
+          val (replacements, _) =
+            plan.foldLeft((Vector.empty[TExpr[?]], elements)) {
+              case ((acc, remaining), (expr, kind, value)) =>
+                value match
+                  case SlotValue.Keep => (acc :+ expr, remaining)
+                  case SlotValue.Scalar(v, fromCell) =>
+                    (acc :+ ArrayLifting.substitute(v, kind, fromCell), remaining)
+                  case SlotValue.ErrorArg(code) => (acc :+ TExpr.ErrorLit(code), remaining)
+                  case SlotValue.Elements(_, fromCells) =>
+                    val element = remaining.headOption.getOrElse(CellValue.Empty)
+                    (acc :+ ArrayLifting.substitute(element, kind, fromCells), remaining.drop(1))
+            }
+          call.spec.argSpec.replaceScalarSlots(call.args, replacements.toList)._1
+        val arrays = plan.collect { case (_, _, SlotValue.Elements(array, _)) => array }
+        if arrays.isEmpty then call.spec.eval(argsFor(Vector.empty), ctx)
+        else
+          ArrayArithmetic.broadcastN(arrays) { elements =>
+            ArrayLifting.elementResult(call.spec.eval(argsFor(elements), ctx))
+          }
+      }
+
+  /**
+   * Classify one lifted slot, returning the kind its substitutes take (the peeled wrapper's target
+   * — [[ArrayLifting.peel]]) and its value.
+   *
+   * A reference (a range, or a name bound to one; never under unary plus) resolves: one cell is
+   * read as a scalar (a name bound to one cell reads as a reference to that cell would); a
+   * multi-cell reference is `#VALUE!` for the Analysis ToolPak lineage (`rangeRefs = false`),
+   * materializes in array mode, and in a plain cell intersects the formula's cell like `@` — a
+   * failed intersection reaches the function as `#VALUE!` (ISERROR sees it), a missing position is
+   * loud. A computed slot evaluates once in array mode and is kept as is in a plain cell (the
+   * GH-302 top-left collapse). An error value becomes an error argument; a host failure keeps the
+   * slot's expression, so the function evaluates it lazily exactly as it would unlifted (IFERROR
+   * still catches it).
+   */
+  private def classifyLiftedSlot(
+    fnName: String,
+    rangeRefs: Boolean,
+    expr: TExpr[?],
+    kind: LiftSlot,
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, (LiftSlot, ArrayLifting.SlotValue)] =
+    import ArrayLifting.SlotValue
+    val (peeled, peeledKind) = ArrayLifting.peel(expr, kind)
+    def readCell(target: Sheet, at: ARef): Either[EvalError, CellValue] =
+      Evaluator.cellValueReader(
+        target,
+        clock,
+        workbook,
+        currentDepth,
+        rng,
+        memoOpt.getOrElse(new Evaluator.EvalMemo),
+        workbookPath,
+        aggregateMemoOpt
+      )(at)
+    def reference(
+      location: TExpr.RangeLocation,
+      target: Sheet,
+      range: CellRange
+    ): Either[EvalError, SlotValue] =
+      if range.width == 1 && range.height == 1 then
+        readCell(target, range.start).map(SlotValue.Scalar(_, fromCell = true))
+      else if !rangeRefs then Left(ArrayLifting.rangeReferenceRefused(fnName, location))
+      else if allowArrayResults then
+        materializeRange(range, target, clock, workbook).map(ArrayLifting.fromArray(_, true))
+      else
+        Evaluator.implicitIntersection(range, currentCell) match
+          case Right(at) => readCell(target, at).map(SlotValue.Scalar(_, fromCell = true))
+          case Left(failure) =>
+            EvalError
+              .toErrorValue(failure)
+              .map(_ => SlotValue.ErrorArg(CellError.Value))
+              .toRight(failure)
+    def computed: SlotValue =
+      if !allowArrayResults then SlotValue.Keep
+      else
+        evalMaybeArray(peeled, sheet, clock, workbook, currentCell) match
+          case Right(array: ArrayResult) => ArrayLifting.fromArray(array, fromCells = false)
+          case Right(value) => SlotValue.Scalar(value, fromCell = false)
+          case Left(failure) =>
+            EvalError.toErrorValue(failure).fold(SlotValue.Keep)(SlotValue.ErrorArg(_))
+    val value = ArrayLifting.referenceLocation(peeled) match
+      case Some(location) =>
+        Evaluator.resolveRangeLocation(location, sheet, workbook, resolvingNames) match
+          case Right((target, range)) => reference(location, target, range)
+          case Left(_) =>
+            location match
+              // a name bound to a constant or formula is a computed value, not a reference
+              case TExpr.RangeLocation.Name(_, _) => Right(computed)
+              case _ => Right(SlotValue.Keep)
+      case None => Right(computed)
+    value.map {
+      case SlotValue.Keep => (kind, SlotValue.Keep)
+      case other => (peeledKind, other)
+    }
 
   // ===== GH-193: LET evaluation =====
 
@@ -1885,3 +2121,14 @@ private class EvaluatorWithDepth(
     ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
+  override private[formula] def withArrayResults: Evaluator =
+    new EvaluatorWithDepth(
+      depth,
+      allowArrayResults = true,
+      bindings,
+      rng,
+      memo,
+      resolvingNames,
+      workbookPath,
+      aggregateMemo
+    )

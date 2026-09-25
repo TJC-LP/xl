@@ -24,7 +24,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryNumeric](
       "ABS",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(_.abs)
     }
@@ -33,7 +33,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryNumeric](
       "SQRT",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).flatMap { value =>
         if value < 0 then
@@ -52,7 +52,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumeric](
       "ROUND",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (valueExpr, numDigitsExpr) = args
       for
@@ -65,7 +65,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumeric](
       "ROUNDUP",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (valueExpr, numDigitsExpr) = args
       for
@@ -82,7 +82,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumeric](
       "ROUNDDOWN",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (valueExpr, numDigitsExpr) = args
       for
@@ -99,7 +99,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumeric](
       "MOD",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (numberExpr, divisorExpr) = args
       for
@@ -122,7 +122,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumeric](
       "POWER",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (numberExpr, powerExpr) = args
       for
@@ -135,7 +135,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumericOpt](
       "LOG",
       Arity.Range(1, 2),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (numberExpr, baseExprOpt) = args
       val baseExpr = baseExprOpt.getOrElse(TExpr.Lit(BigDecimal(10)))
@@ -160,7 +160,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryNumeric](
       "LN",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).flatMap { value =>
         if value <= 0 then
@@ -174,7 +174,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryNumeric](
       "EXP",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).map { value =>
         BigDecimal(Math.exp(value.toDouble))
@@ -185,7 +185,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumeric](
       "FLOOR",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (numberExpr, significanceExpr) = args
       for
@@ -216,7 +216,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumeric](
       "CEILING",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (numberExpr, significanceExpr) = args
       for
@@ -248,7 +248,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumeric](
       "MROUND",
       Arity.two,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.arraysOnly)
     ) { (args, ctx) =>
       val (numberExpr, multipleExpr) = args
       for
@@ -276,7 +276,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, BinaryNumericOpt](
       "TRUNC",
       Arity.Range(1, 2),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (numberExpr, numDigitsExprOpt) = args
       val numDigitsExpr = numDigitsExprOpt.getOrElse(TExpr.Lit(BigDecimal(0)))
@@ -290,7 +290,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryNumeric](
       "SIGN",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).map { value =>
         if value > 0 then BigDecimal(1)
@@ -303,7 +303,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryNumeric](
       "INT",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(_.setScale(0, BigDecimal.RoundingMode.FLOOR))
     }

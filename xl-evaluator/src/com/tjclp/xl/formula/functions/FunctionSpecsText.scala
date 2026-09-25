@@ -10,7 +10,11 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 
 trait FunctionSpecsText extends FunctionSpecsBase:
   val concatenate: FunctionSpec[String] { type Args = TextList } =
-    FunctionSpec.simple[String, TextList]("CONCATENATE", Arity.atLeastOne) { (args, ctx) =>
+    FunctionSpec.simple[String, TextList](
+      "CONCATENATE",
+      Arity.atLeastOne,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       args.foldLeft[Either[EvalError, String]](Right("")) { (accEither, expr) =>
         for
           acc <- accEither
@@ -20,7 +24,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     }
 
   val left: FunctionSpec[String] { type Args = BinaryTextInt } =
-    FunctionSpec.simple[String, BinaryTextInt]("LEFT", Arity.two) { (args, ctx) =>
+    FunctionSpec.simple[String, BinaryTextInt](
+      "LEFT",
+      Arity.two,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (textExpr, nExpr) = args
       for
         text <- ctx.evalExpr(textExpr)
@@ -34,7 +42,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     }
 
   val right: FunctionSpec[String] { type Args = BinaryTextInt } =
-    FunctionSpec.simple[String, BinaryTextInt]("RIGHT", Arity.two) { (args, ctx) =>
+    FunctionSpec.simple[String, BinaryTextInt](
+      "RIGHT",
+      Arity.two,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (textExpr, nExpr) = args
       for
         text <- ctx.evalExpr(textExpr)
@@ -51,23 +63,35 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryText](
       "LEN",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(text => BigDecimal(text.length))
     }
 
   val upper: FunctionSpec[String] { type Args = UnaryText } =
-    FunctionSpec.simple[String, UnaryText]("UPPER", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[String, UnaryText](
+      "UPPER",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(_.toUpperCase)
     }
 
   val lower: FunctionSpec[String] { type Args = UnaryText } =
-    FunctionSpec.simple[String, UnaryText]("LOWER", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[String, UnaryText](
+      "LOWER",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(_.toLowerCase)
     }
 
   val trim: FunctionSpec[String] { type Args = UnaryText } =
-    FunctionSpec.simple[String, UnaryText]("TRIM", Arity.one) { (textExpr, ctx) =>
+    FunctionSpec.simple[String, UnaryText](
+      "TRIM",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (textExpr, ctx) =>
       ctx.evalExpr(textExpr).map(trimAsciiSpaces)
     }
 
@@ -79,7 +103,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     s.split(' ').iterator.filter(_.nonEmpty).mkString(" ")
 
   val mid: FunctionSpec[String] { type Args = TextIntInt } =
-    FunctionSpec.simple[String, TextIntInt]("MID", Arity.three) { (args, ctx) =>
+    FunctionSpec.simple[String, TextIntInt](
+      "MID",
+      Arity.three,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (textExpr, startExpr, lengthExpr) = args
       for
         text <- ctx.evalExpr(textExpr)
@@ -101,7 +129,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, FindArgs](
       "FIND",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (findExpr, withinExpr, startOpt) = args
       for
@@ -135,7 +163,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, FindArgs](
       "SEARCH",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (findExpr, withinExpr, startOpt) = args
       for
@@ -176,7 +204,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
       Option.when(idx >= 0)(idx + 1)
 
   val substitute: FunctionSpec[String] { type Args = SubstituteArgs } =
-    FunctionSpec.simple[String, SubstituteArgs]("SUBSTITUTE", Arity.Range(3, 4)) { (args, ctx) =>
+    FunctionSpec.simple[String, SubstituteArgs](
+      "SUBSTITUTE",
+      Arity.Range(3, 4),
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (textExpr, oldExpr, newExpr, instExpr) = args
       for
         text <- ctx.evalExpr(textExpr)
@@ -219,7 +251,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryText](
       "VALUE",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (textExpr, ctx) =>
       ctx.evalExpr(textExpr).flatMap(parseExcelNumber)
     }
@@ -271,7 +303,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
             Left(unparseableValue(input))
 
   val text: FunctionSpec[String] { type Args = TextArgs } =
-    FunctionSpec.simple[String, TextArgs]("TEXT", Arity.two) { (args, ctx) =>
+    FunctionSpec.simple[String, TextArgs](
+      "TEXT",
+      Arity.two,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (valueExpr, formatExpr) = args
       for
         formatStr <- ctx.evalExpr(formatExpr)

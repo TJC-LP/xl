@@ -36,7 +36,11 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
    * rather than the reference; a position outside the array is a descriptive `#REF!`.
    */
   val index: FunctionSpec[ArrayResult] { type Args = IndexArgs } =
-    FunctionSpec.simple[ArrayResult, IndexArgs]("INDEX", Arity.Range(2, 3)) { (args, ctx) =>
+    FunctionSpec.simple[ArrayResult, IndexArgs](
+      "INDEX",
+      Arity.Range(2, 3),
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (array, rowNumExpr, colNumOpt) = args
       for
         rowNum <- ctx.evalExpr(rowNumExpr)
@@ -115,7 +119,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, MatchArgs](
       "MATCH",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (lookupValue, lookupArray, matchTypeOpt) = args
       val matchTypeExpr = matchTypeOpt.getOrElse(TExpr.Lit(BigDecimal(1)))

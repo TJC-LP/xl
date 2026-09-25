@@ -83,6 +83,26 @@ class ImplicitIntersectionSpec extends FunSuite:
     assertEquals(at("=IF(@flag=1,A2,0)", ref"D3"), num(20))
   }
 
+  test("a plain cell intersects a range in a lifted scalar slot exactly as @ does") {
+    // Excel shows the legacy formula as =ABS(@A1:A3): the cell in the formula's row
+    assertEquals(at("=ABS(A1:A3)", ref"D2"), num(20))
+    assertEquals(at("=ABS(A1:A3)", ref"D3"), at("=ABS(@A1:A3)", ref"D3"))
+    assertEquals(at("=ABS(A1:C1)", ref"C4"), num(2))
+    assertEquals(at("=ABS(rng)", ref"D3"), num(30), "a name bound to a range intersects too")
+    assertEquals(at("=ABS(flag)", ref"D3"), num(1), "a name bound to one cell is that cell")
+    assertEquals(at("=ABS(k)", ref"D3"), num(5), "a constant name is its value")
+    assertEquals(at("=ABS(A1:A3)", ref"D5"), Right(CellValue.Error(CellError.Value)))
+    assertEquals(at("=ISERROR(ABS(A1:A3))", ref"D5"), Right(CellValue.Bool(true)))
+    assertEquals(at("=ISNUMBER(A1:A3)", ref"D1"), Right(CellValue.Bool(true)))
+  }
+
+  test("an ad-hoc lifted intersection without a position is the loud @ error") {
+    val expr = FormulaParser.parse("=ABS(A1:A3)").fold(e => fail(e.toString), identity)
+    Evaluator.eval(expr, sheet) match
+      case Left(EvalError.EvalFailed(msg, _)) => assert(msg.contains("cell position"), msg)
+      case other => fail(s"expected EvalFailed, got $other")
+  }
+
   test("@ binds as a primary: @A1:A3*2 is (@A1:A3)*2, @A1:A3% is (@A1:A3)%") {
     assertEquals(at("=@A1:A3*2", ref"D2"), num(40))
     assertEquals(at("=@A1:A3%", ref"D2"), Right(CellValue.Number(BigDecimal("0.2"))))
